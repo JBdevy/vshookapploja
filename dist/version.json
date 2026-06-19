@@ -1,0 +1,7 @@
+{
+  "version": "1.8.1-mobile-store-qr-base",
+  "updatedAt": "2026-06-19T19:55:00Z",
+  "build": "1.8.1-mobile-store-qr-base",
+  "notes": "Base atualizada a partir do QR app. Mantém tela inicial do app de loja com busca automática na rede e entrada manual por IP; depois entra em Diretor, Músico ou Recados com o fluxo igual ao QR.",
+  "cacheBust": "1781850900"
+}
