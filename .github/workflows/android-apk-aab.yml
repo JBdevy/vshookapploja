@@ -66,13 +66,35 @@ jobs:
             echo "Faltam KEYSTORE_PASSWORD, KEY_ALIAS ou KEY_PASSWORD."
             exit 1
           fi
-          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/vshook-upload-key.jks
-          cat > android/keystore.properties <<EOF
-          storeFile=vshook-upload-key.jks
-          storePassword=$KEYSTORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
-          EOF
+          python3 - <<'PY'
+          import base64, os, re, sys
+          raw = os.environ.get('KEYSTORE_BASE64', '')
+          raw = raw.replace('-----BEGIN CERTIFICATE-----', '')
+          raw = raw.replace('-----END CERTIFICATE-----', '')
+          raw = re.sub(r'\s+', '', raw)
+          raw = ''.join(ch for ch in raw if ch.isalnum() or ch in '+/=')
+          if not raw:
+              print('KEYSTORE_BASE64 ficou vazio depois da limpeza.')
+              sys.exit(1)
+          raw += '=' * (-len(raw) % 4)
+          try:
+              data = base64.b64decode(raw, validate=False)
+          except Exception as exc:
+              print('KEYSTORE_BASE64 inválido. Gere novamente pelo PowerShell sem header.')
+              print(exc)
+              sys.exit(1)
+          if len(data) < 1000:
+              print(f'Keystore decodificada pequena demais ({len(data)} bytes). Secret incorreto.')
+              sys.exit(1)
+          open('android/app/vshook-upload-key.jks', 'wb').write(data)
+          print(f'Keystore Android decodificada: {len(data)} bytes')
+          PY
+          {
+            echo "storeFile=vshook-upload-key.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > android/keystore.properties
           python3 scripts/configure-android-signing.py
 
       - name: Gerar APK e AAB
