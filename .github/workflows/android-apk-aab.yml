@@ -1,4 +1,4 @@
-name: Build VS Hook Android APK AAB
+name: VS Hook Mobile - Android
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
       - 'mobile-v*'
 
 jobs:
-  build-android:
+  android-apk-aab:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,13 +31,13 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
+      - name: Instalar dependências
         run: npm install
 
-      - name: Build web app
+      - name: Preparar app web
         run: npm run build
 
-      - name: Add/sync Android
+      - name: Sincronizar Android
         run: |
           if [ ! -d android ]; then
             npx cap add android
@@ -45,20 +45,27 @@ jobs:
           npx cap sync android
           cp -R android-icons/* android/app/src/main/res/ || true
 
-      - name: Set Android version
+      - name: Definir versão Android
         run: |
           VERSION_NAME="${{ github.event.inputs.version_name || '1.8.1' }}"
           VERSION_CODE="${{ github.event.inputs.version_code || '18' }}"
           python3 scripts/set-android-version.py --version-name "$VERSION_NAME" --version-code "$VERSION_CODE"
 
-      - name: Configure Android signing
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+      - name: Configurar assinatura Android
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "KEYSTORE_BASE64 vazio; assinatura Android ignorada. Será gerado APK debug."
+            exit 0
+          fi
+          if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "Faltam KEYSTORE_PASSWORD, KEY_ALIAS ou KEY_PASSWORD."
+            exit 1
+          fi
           echo "$KEYSTORE_BASE64" | base64 --decode > android/app/vshook-upload-key.jks
           cat > android/keystore.properties <<EOF
           storeFile=vshook-upload-key.jks
@@ -68,7 +75,7 @@ jobs:
           EOF
           python3 scripts/configure-android-signing.py
 
-      - name: Build APK and AAB
+      - name: Gerar APK e AAB
         run: |
           cd android
           chmod +x ./gradlew
@@ -78,10 +85,10 @@ jobs:
             ./gradlew assembleDebug
           fi
 
-      - name: Upload Android artifacts
+      - name: Enviar APK/AAB
         uses: actions/upload-artifact@v4
         with:
-          name: VS-Hook-Android-APK-AAB
+          name: VS-Hook-Android
           path: |
             android/app/build/outputs/apk/**/*.apk
             android/app/build/outputs/bundle/**/*.aab

@@ -1,4 +1,4 @@
-name: Build VS Hook iOS IPA
+name: VS Hook Mobile - iOS
 
 on:
   workflow_dispatch:
@@ -11,9 +11,13 @@ on:
         description: 'Build number inteiro, aumente a cada envio para App Store'
         required: true
         default: '18'
+  push:
+    tags:
+      - 'ios-v*'
+      - 'mobile-v*'
 
 jobs:
-  build-ios:
+  ios-ipa:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -22,20 +26,20 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
+      - name: Instalar dependências
         run: npm install
 
-      - name: Build web app
+      - name: Preparar app web
         run: npm run build
 
-      - name: Add/sync iOS
+      - name: Sincronizar iOS
         run: |
           if [ ! -d ios ]; then
             npx cap add ios
           fi
           npx cap sync ios
 
-      - name: Import iOS signing certificate
+      - name: Importar certificado iOS
         env:
           IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
           IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
@@ -53,7 +57,7 @@ jobs:
           security import "$CERT_PATH" -P "$IOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
 
-      - name: Install provisioning profile
+      - name: Instalar provisioning profile
         env:
           IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
         run: |
@@ -63,19 +67,40 @@ jobs:
           fi
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           PROFILE_PATH="$RUNNER_TEMP/vshook.mobileprovision"
-          echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
-          PROFILE_UUID=$(/usr/bin/security cms -D -i "$PROFILE_PATH" | /usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin)
-          PROFILE_NAME=$(/usr/bin/security cms -D -i "$PROFILE_PATH" | /usr/libexec/PlistBuddy -c 'Print Name' /dev/stdin)
+          PROFILE_PLIST="$RUNNER_TEMP/vshook-profile.plist"
+
+          printf '%s' "$IOS_PROVISION_PROFILE_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$PROFILE_PATH"
+
+          if [ ! -s "$PROFILE_PATH" ]; then
+            echo "O arquivo mobileprovision decodificado ficou vazio. Confira o secret IOS_PROVISION_PROFILE_BASE64."
+            exit 1
+          fi
+
+          /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+
+          if [ ! -s "$PROFILE_PLIST" ]; then
+            echo "O IOS_PROVISION_PROFILE_BASE64 não parece ser um .mobileprovision App Store válido."
+            echo "Gere novamente o Base64 a partir do arquivo .mobileprovision, não do .cer nem do .p12."
+            file "$PROFILE_PATH" || true
+            exit 1
+          fi
+
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
           cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
           echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
           echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "Provisioning profile instalado: $PROFILE_NAME ($PROFILE_UUID)"
 
-      - name: Set iOS version
+      - name: Definir versão iOS
+        env:
+          VERSION_NAME: ${{ github.event.inputs.version_name || '1.8.1' }}
+          BUILD_NUMBER: ${{ github.event.inputs.build_number || '18' }}
         run: |
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ github.event.inputs.version_name }}" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.event.inputs.build_number }}" ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION_NAME" ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" ios/App/App/Info.plist
 
-      - name: Archive iOS app
+      - name: Arquivar app iOS
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
         run: |
@@ -94,7 +119,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
 
-      - name: Export IPA
+      - name: Gerar IPA
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
         run: |
@@ -122,7 +147,7 @@ jobs:
             -exportPath "$PWD/build/export" \
             -exportOptionsPlist ExportOptions.plist
 
-      - name: Upload IPA
+      - name: Enviar IPA
         uses: actions/upload-artifact@v4
         with:
           name: VS-Hook-iOS-IPA
