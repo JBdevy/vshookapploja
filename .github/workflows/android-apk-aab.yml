@@ -125,8 +125,7 @@ jobs:
           echo "ANDROID_STORE_FILE=$GITHUB_WORKSPACE/$FINAL_KEYSTORE" >> "$GITHUB_ENV"
           {
             echo "ANDROID_KEY_PASSWORD_EFFECTIVE<<EOF"
-            printf '%s
-' "$KEYSTORE_PASSWORD"
+            echo "$KEYSTORE_PASSWORD"
             echo "EOF"
           } >> "$GITHUB_ENV"
       - name: Gerar APK e AAB
