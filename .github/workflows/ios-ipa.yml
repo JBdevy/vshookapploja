@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Version name, exemplo: 1.8.1'
+        description: 'Version name, exemplo: 1.8.2'
         required: true
-        default: '1.8.1'
+        default: '1.8.2'
       build_number:
         description: 'Build number inteiro, aumente a cada envio para App Store'
         required: true
-        default: '18'
+        default: '19'
   push:
     tags:
       - 'ios-v*'
@@ -97,8 +97,8 @@ jobs:
 
       - name: Definir versão iOS
         env:
-          VERSION_NAME: ${{ github.event.inputs.version_name || '1.8.1' }}
-          BUILD_NUMBER: ${{ github.event.inputs.build_number || '18' }}
+          VERSION_NAME: ${{ github.event.inputs.version_name || '1.8.2' }}
+          BUILD_NUMBER: ${{ github.event.inputs.build_number || '19' }}
         run: |
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION_NAME" ios/App/App/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" ios/App/App/Info.plist
