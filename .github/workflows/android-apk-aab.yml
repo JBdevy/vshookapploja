@@ -51,7 +51,7 @@ jobs:
           VERSION_CODE="${{ github.event.inputs.version_code || '18' }}"
           python3 scripts/set-android-version.py --version-name "$VERSION_NAME" --version-code "$VERSION_CODE"
 
-      - name: Configurar assinatura Android
+      - name: Preparar assinatura Android
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -59,28 +59,25 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "KEYSTORE_BASE64 vazio; assinatura Android ignorada. Será gerado APK debug."
+            echo "KEYSTORE_BASE64 vazio; será gerado APK debug."
+            echo "ANDROID_SIGNED=0" >> "$GITHUB_ENV"
             exit 0
           fi
           if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
             echo "Faltam KEYSTORE_PASSWORD, KEY_ALIAS ou KEY_PASSWORD."
             exit 1
           fi
+          mkdir -p android/app
           python3 - <<'PY'
           import base64, os, re, sys
           raw = os.environ.get('KEYSTORE_BASE64', '')
-          raw = raw.replace('-----BEGIN CERTIFICATE-----', '')
-          raw = raw.replace('-----END CERTIFICATE-----', '')
           raw = re.sub(r'\s+', '', raw)
           raw = ''.join(ch for ch in raw if ch.isalnum() or ch in '+/=')
-          if not raw:
-              print('KEYSTORE_BASE64 ficou vazio depois da limpeza.')
-              sys.exit(1)
           raw += '=' * (-len(raw) % 4)
           try:
               data = base64.b64decode(raw, validate=False)
           except Exception as exc:
-              print('KEYSTORE_BASE64 inválido. Gere novamente pelo PowerShell sem header.')
+              print('KEYSTORE_BASE64 inválido. Gere novamente o Base64 do arquivo .keystore/.jks.')
               print(exc)
               sys.exit(1)
           if len(data) < 1000:
@@ -89,20 +86,23 @@ jobs:
           open('android/app/vshook-upload-key.jks', 'wb').write(data)
           print(f'Keystore Android decodificada: {len(data)} bytes')
           PY
-          {
-            echo "storeFile=vshook-upload-key.jks"
-            echo "storePassword=$KEYSTORE_PASSWORD"
-            echo "keyAlias=$KEY_ALIAS"
-            echo "keyPassword=$KEY_PASSWORD"
-          } > android/keystore.properties
-          python3 scripts/configure-android-signing.py
+          echo "ANDROID_SIGNED=1" >> "$GITHUB_ENV"
 
       - name: Gerar APK e AAB
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           cd android
           chmod +x ./gradlew
-          if [ -f keystore.properties ]; then
-            ./gradlew assembleRelease bundleRelease
+          if [ "$ANDROID_SIGNED" = "1" ]; then
+            STORE_FILE="$PWD/app/vshook-upload-key.jks"
+            ./gradlew assembleRelease bundleRelease \
+              -Pandroid.injected.signing.store.file="$STORE_FILE" \
+              -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+              -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+              -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
           else
             ./gradlew assembleDebug
           fi

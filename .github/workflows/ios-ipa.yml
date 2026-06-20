@@ -50,7 +50,7 @@ jobs:
           fi
           CERT_PATH="$RUNNER_TEMP/ios_distribution.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
-          echo "$IOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          printf '%s' "$IOS_CERT_P12_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$CERT_PATH"
           security create-keychain -p "temp-pass" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "temp-pass" "$KEYCHAIN_PATH"
