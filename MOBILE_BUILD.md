@@ -40,3 +40,8 @@ IOS_TEAM_ID
 ```
 
 Observação: o certificado Developer ID usado no Hook Center macOS não serve para IPA. IPA precisa de certificado Apple Distribution e provisioning profile do bundle `com.hookdeveloper.vshook`.
+
+
+## Ícone VS Hook
+
+O workflow aplica automaticamente os ícones nativos do VS Hook no Android e no iOS após o `npx cap sync`.
