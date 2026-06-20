@@ -12,9 +12,10 @@ def copytree_contents(src: Path, dst: Path):
     for item in src.iterdir():
         target = dst / item.name
         if item.is_dir():
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(item, target)
+            # Merge directories instead of replacing them. Android's res/values
+            # contains strings.xml and styles.xml created by Capacitor; deleting
+            # that folder breaks app_name/AppTheme resources.
+            copytree_contents(item, target)
         else:
             shutil.copy2(item, target)
 

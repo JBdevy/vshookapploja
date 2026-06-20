@@ -109,17 +109,7 @@ jobs:
           try_import() {
             SRC_KEY_PASS="$1"
             rm -f "$FINAL_KEYSTORE"
-            keytool -importkeystore -noprompt \
-              -srckeystore "$ORIGINAL_KEYSTORE" \
-              -srcstoretype "$DETECTED_TYPE" \
-              -srcstorepass "$KEYSTORE_PASSWORD" \
-              -srcalias "$KEY_ALIAS" \
-              -srckeypass "$SRC_KEY_PASS" \
-              -destkeystore "$FINAL_KEYSTORE" \
-              -deststoretype PKCS12 \
-              -deststorepass "$KEYSTORE_PASSWORD" \
-              -destkeypass "$KEYSTORE_PASSWORD" \
-              -destalias "$KEY_ALIAS" >/dev/null 2>&1
+            keytool -importkeystore -noprompt               -srckeystore "$ORIGINAL_KEYSTORE"               -srcstoretype "$DETECTED_TYPE"               -srcstorepass "$KEYSTORE_PASSWORD"               -srcalias "$KEY_ALIAS"               -srckeypass "$SRC_KEY_PASS"               -destkeystore "$FINAL_KEYSTORE"               -deststoretype PKCS12               -deststorepass "$KEYSTORE_PASSWORD"               -destkeypass "$KEYSTORE_PASSWORD"               -destalias "$KEY_ALIAS" >/dev/null 2>&1
           }
 
           if try_import "$KEY_PASSWORD"; then
@@ -135,10 +125,10 @@ jobs:
           echo "ANDROID_STORE_FILE=$GITHUB_WORKSPACE/$FINAL_KEYSTORE" >> "$GITHUB_ENV"
           {
             echo "ANDROID_KEY_PASSWORD_EFFECTIVE<<EOF"
-            echo "$KEYSTORE_PASSWORD"
+            printf '%s
+' "$KEYSTORE_PASSWORD"
             echo "EOF"
           } >> "$GITHUB_ENV"
-
       - name: Gerar APK e AAB
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -147,16 +137,10 @@ jobs:
           cd android
           chmod +x ./gradlew
           if [ "$ANDROID_SIGNED" = "1" ]; then
-            ./gradlew assembleRelease bundleRelease \
-              -Pandroid.injected.signing.store.file="$ANDROID_STORE_FILE" \
-              -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
-              -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-              -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD_EFFECTIVE" \
-              -Pandroid.injected.signing.store.type=pkcs12
+            ./gradlew assembleRelease bundleRelease               -Pandroid.injected.signing.store.file="$ANDROID_STORE_FILE"               -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD"               -Pandroid.injected.signing.key.alias="$KEY_ALIAS"               -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD_EFFECTIVE"               -Pandroid.injected.signing.store.type=pkcs12
           else
             ./gradlew assembleDebug
           fi
-
       - name: Enviar APK/AAB
         uses: actions/upload-artifact@v4
         with:
