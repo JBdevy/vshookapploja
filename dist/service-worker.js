@@ -1,23 +1,21 @@
-const CACHE_NAME = 'vshook-mobile-store-1-8-2-20260620-1';
+const CACHE_NAME = 'vshook-mobile-3.0.2-queue-musician-layout-v88';
 const APP_ASSETS = [
   './',
   './index.html',
   './app-shell.js',
+  './app-shell.css',
   './stylediretor.css',
   './stylediretor-app.css',
   './vsdiretor.js',
   './vsdiretor.webmanifest',
   './musicos.html',
-  './musicos.css',
-  './musicos-app.css',
-  './vsmusicos.js',
   './musicos.webmanifest',
   './recados.html',
   './recados.js',
   './recados-app.css',
   './recados.webmanifest',
-  './vshook-icon.png',
-  './vshook-icon-512.png',
+  './vshook-2.0.67',
+  './vshook-2.0.67',
   './vsdiretor-icon-180.png',
   './vsdiretor-icon-192.png',
   './vsdiretor-icon-512.png',
@@ -54,7 +52,8 @@ self.addEventListener('fetch', (event) => {
     '/state', '/state.json',
     '/lyrics', '/lyrics.json',
     '/command', '/technical-notice', '/recados-notice',
-    '/health', '/ping', '/bridge-info', '/qr.svg', '/app-qr.svg'
+    '/health', '/ping', '/bridge-info', '/qr.svg', '/app-qr.svg',
+    '/media', '/tp-media', '/teleprompt-media'
   ];
 
   if (apiPaths.includes(url.pathname)) {

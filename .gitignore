@@ -1,0 +1,14 @@
+node_modules/
+android/
+ios/
+build/
+
+.env
+.env.local
+.env.production
+
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+ExportOptions.plist

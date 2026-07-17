@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Version name, exemplo: 1.8.2'
+        description: 'Version name, exemplo: 3.0.2'
         required: true
-        default: '1.8.2'
+        default: '3.0.2'
       build_number:
         description: 'Build number inteiro, aumente a cada envio para App Store'
         required: true
-        default: '19'
+        default: '20'
   push:
     tags:
       - 'ios-v*'
@@ -96,10 +96,23 @@ jobs:
           echo "Provisioning profile instalado: $PROFILE_NAME ($PROFILE_UUID)"
 
       - name: Definir versão iOS
-        env:
-          VERSION_NAME: ${{ github.event.inputs.version_name || '1.8.2' }}
-          BUILD_NUMBER: ${{ github.event.inputs.build_number || '19' }}
         run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION_NAME="${{ inputs.version_name }}"
+            BUILD_NUMBER="${{ inputs.build_number }}"
+          else
+            RELEASE_DATA="${GITHUB_REF_NAME#mobile-v}"
+            RELEASE_DATA="${RELEASE_DATA#ios-v}"
+            VERSION_NAME="${RELEASE_DATA%-build*}"
+            BUILD_NUMBER="${RELEASE_DATA##*-build}"
+            if [ "$VERSION_NAME" = "$RELEASE_DATA" ]; then
+              echo "Tag invalida. Use mobile-v3.0.2-build20 ou ios-v3.0.2-build20."
+              exit 1
+            fi
+          fi
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION_NAME invalido: $VERSION_NAME"; exit 1; }
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "BUILD_NUMBER invalido: $BUILD_NUMBER"; exit 1; }
+          echo "iOS: versao $VERSION_NAME, build $BUILD_NUMBER"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION_NAME" ios/App/App/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" ios/App/App/Info.plist
 
