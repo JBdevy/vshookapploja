@@ -58,12 +58,6 @@ echo.
 choice /c SN /n /m "Confirma o build, commit, push e disparo dos dois apps? [S/N]: "
 if errorlevel 2 goto cancelado
 
-git show-ref --tags --verify --quiet "refs/tags/%TAG_NAME%"
-if not errorlevel 1 goto tag_existente
-
-git ls-remote --exit-code --tags origin "refs/tags/%TAG_NAME%" >nul 2>nul
-if not errorlevel 1 goto tag_existente
-
 echo.
 echo ==========================================
 echo   GERANDO DIST
@@ -99,6 +93,27 @@ echo.
 echo ==========================================
 echo   CRIANDO TAG E DISPARANDO ACTIONS
 echo ==========================================
+
+git show-ref --tags --verify --quiet "refs/tags/%TAG_NAME%"
+if errorlevel 1 goto verificar_tag_remota
+
+echo Removendo a tag local existente %TAG_NAME%...
+git tag -d "%TAG_NAME%"
+if errorlevel 1 goto erro
+
+:verificar_tag_remota
+git ls-remote --exit-code --tags origin "refs/tags/%TAG_NAME%" >nul 2>nul
+set "REMOTE_TAG_CHECK=%ERRORLEVEL%"
+if "%REMOTE_TAG_CHECK%"=="0" goto excluir_tag_remota
+if "%REMOTE_TAG_CHECK%"=="2" goto criar_tag
+goto erro_consulta_tag
+
+:excluir_tag_remota
+echo Removendo a tag remota existente %TAG_NAME%...
+git push origin --delete "%TAG_NAME%"
+if errorlevel 1 goto erro
+
+:criar_tag
 git tag -a "%TAG_NAME%" -m "%COMMIT_MSG%"
 if errorlevel 1 goto erro
 
@@ -118,10 +133,9 @@ echo.
 pause
 exit /b 0
 
-:tag_existente
+:erro_consulta_tag
 echo.
-echo ERRO: a tag %TAG_NAME% ja existe.
-echo Use um numero de build maior.
+echo ERRO: nao foi possivel consultar a tag %TAG_NAME% no GitHub.
 goto erro
 
 :cancelado
