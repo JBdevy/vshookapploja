@@ -1,0 +1,28 @@
+{
+  "name": "vshook-local-network",
+  "version": "1.0.0",
+  "description": "Leitura nativa dos enderecos IPv4 ativos para descoberta local do VS Hook.",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "ios/Sources",
+    "Package.swift",
+    "VSHookLocalNetwork.podspec",
+    "dist/"
+  ],
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "@capacitor/core": "^6.0.0"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}

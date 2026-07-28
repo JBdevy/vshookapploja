@@ -2,7 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const root = path.resolve(__dirname, '..')
 const dist = path.join(root, 'dist')
-const skip = new Set(['dist', 'node_modules', 'android', 'ios', '.git', '.github', 'scripts'])
+const skip = new Set(['dist', 'node_modules', 'android', 'ios', '.git', '.github', 'scripts', 'plugins'])
 function rm(target){ if(fs.existsSync(target)) fs.rmSync(target,{recursive:true,force:true}) }
 function mkdir(target){ fs.mkdirSync(target,{recursive:true}) }
 function copyRecursive(src,dest){

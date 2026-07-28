@@ -43,6 +43,7 @@ jobs:
           fi
           npx cap sync ios
           python3 scripts/apply-native-icons.py ios
+          python3 scripts/configure-local-network.py ios
 
       - name: Importar certificado iOS
         env:

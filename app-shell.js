@@ -5,11 +5,12 @@ const VSHOOK_SAVED_PROBE_TIMEOUT_MS = 650
 const VSHOOK_MANUAL_IP_TIMEOUT_MS = 2800
 const VSHOOK_SCAN_BATCH_SIZE = 72
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v130'
+const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v131'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
 let vshookProjectsRefreshRunId = 0
+let vshookLocalNetworkPlugin = null
 let vshookDirectorDeviceMode = 'phone'
 let vshookDirectorTabletStableViewport = null
 let vshookDirectorTabletViewportRestoreTimer = 0
@@ -419,7 +420,8 @@ async function refreshProjectSelector() {
     projects = await fetchBridgeBrowserProjects()
   } else {
     const savedProjects = await probeStoredBridgeHosts()
-    projects = savedProjects.length ? savedProjects : await scanInBatches(buildCandidateIps())
+    const localAddresses = savedProjects.length ? [] : await getNativeLocalNetworkAddresses()
+    projects = savedProjects.length ? savedProjects : await scanInBatches(buildCandidateIps(localAddresses))
   }
 
   if (runId !== vshookProjectsRefreshRunId) return
@@ -609,6 +611,31 @@ function subnetFromIp(ip) {
   return `${parts[0]}.${parts[1]}.${parts[2]}`
 }
 
+function isPrivateIpv4(ip) {
+  const clean = normalizeIp(ip)
+  if (!clean) return false
+  const parts = clean.split('.').map(Number)
+  if (parts[0] === 10) return true
+  if (parts[0] === 192 && parts[1] === 168) return true
+  return parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31
+}
+
+async function getNativeLocalNetworkAddresses() {
+  if (!isVshookInstalledNativeApp()) return []
+  try {
+    if (!vshookLocalNetworkPlugin) {
+      const registerPlugin = window.Capacitor?.registerPlugin
+      if (typeof registerPlugin !== 'function') return []
+      vshookLocalNetworkPlugin = registerPlugin('VSHookLocalNetwork')
+    }
+    const result = await vshookLocalNetworkPlugin.getAddresses()
+    const addresses = Array.isArray(result?.addresses) ? result.addresses : []
+    return [...new Set(addresses.map(normalizeIp).filter(isPrivateIpv4))]
+  } catch (error) {
+    return []
+  }
+}
+
 function uniquePush(list, seen, value) {
   const text = String(value || '').trim()
   if (!text || seen.has(text)) return
@@ -669,28 +696,19 @@ async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS
   if (!cleanIp) return null
   const baseUrl = `http://${cleanIp}:${port}`
 
-  const discovery =
-    await fetchJsonWithTimeout(`${baseUrl}/discovery`, timeoutMs) ||
-    await fetchJsonWithTimeout(`${baseUrl}/discovery.json`, timeoutMs) ||
-    null
-
-  const projectsPayload =
-    await fetchJsonWithTimeout(`${baseUrl}/projects`, timeoutMs) ||
-    await fetchJsonWithTimeout(`${baseUrl}/projects.json`, timeoutMs) ||
-    await fetchJsonWithTimeout(`${baseUrl}/state`, timeoutMs) ||
-    await fetchJsonWithTimeout(`${baseUrl}/state.json`, timeoutMs) ||
-    discovery
-
-  if (!discovery && !projectsPayload) return null
+  // /discovery já contém as sessões abertas. Durante uma varredura não tente
+  // várias rotas em sequência para cada IP inexistente, pois isso multiplicava
+  // o tempo da busca por toda a rede.
+  const discovery = await fetchJsonWithTimeout(`${baseUrl}/discovery`, timeoutMs)
+  if (!discovery) return null
 
   const isVsHook =
     discovery?.app === 'VS Hook' ||
-    projectsPayload?.app === 'VS Hook' ||
-    String(discovery?.appName || projectsPayload?.appName || '').toLowerCase().includes('diretor') ||
-    String(discovery?.appName || projectsPayload?.appName || '').toLowerCase().includes('músicos') ||
-    String(discovery?.appName || projectsPayload?.appName || '').toLowerCase().includes('musicos')
+    String(discovery?.appName || '').toLowerCase().includes('diretor') ||
+    String(discovery?.appName || '').toLowerCase().includes('músicos') ||
+    String(discovery?.appName || '').toLowerCase().includes('musicos')
 
-  const projects = extractProjectList(projectsPayload || discovery, discovery || projectsPayload, cleanIp)
+  const projects = extractProjectList(discovery, discovery, cleanIp)
   if (!projects.length) return null
   if (!isVsHook && !projects.some((project) => project.projectName)) return null
   return projects
@@ -699,11 +717,10 @@ async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS
 async function fetchDiscovery(ip, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, preferredPort = null) {
   const cleanIp = normalizeIp(ip)
   if (!cleanIp) return null
-  for (const port of getPortsToTry(preferredPort)) {
-    const projects = await fetchDiscoveryOnPort(cleanIp, port, timeoutMs)
-    if (projects && projects.length) return projects
-  }
-  return null
+  const results = await Promise.all(
+    getPortsToTry(preferredPort).map((port) => fetchDiscoveryOnPort(cleanIp, port, timeoutMs))
+  )
+  return results.find((projects) => projects && projects.length) || null
 }
 
 async function probeStoredBridgeHosts() {
@@ -772,17 +789,28 @@ function extractProjectList(payload, baseInfo, ip) {
   return fallback ? [fallback] : []
 }
 
-function buildCandidateIps() {
+function buildCandidateIps(localAddresses = []) {
   const ips = []
   const seenIps = new Set()
   const seenSubnets = new Set()
+  const localSubnets = []
   const prioritySubnets = []
   const secondarySubnets = []
+
+  for (const address of localAddresses) {
+    if (!isPrivateIpv4(address)) continue
+    uniquePush(localSubnets, seenSubnets, subnetFromIp(address))
+  }
+
+  try {
+    const browserHost = normalizeIp(window.location.hostname || '')
+    if (isPrivateIpv4(browserHost)) uniquePush(localSubnets, seenSubnets, subnetFromIp(browserHost))
+  } catch (error) {}
 
   const storedHosts = getStoredBridgeHosts()
   for (const host of storedHosts) {
     uniquePush(ips, seenIps, host)
-    uniquePush(prioritySubnets, seenSubnets, subnetFromIp(host))
+    uniquePush(localSubnets, seenSubnets, subnetFromIp(host))
   }
 
   // Faixas comuns em roteadores. Não fixa IP específico de cliente; o usuário
@@ -806,6 +834,14 @@ function buildCandidateIps() {
 
   // Primeiro testa hosts comuns em TODAS as sub-redes; só depois faz a varredura completa.
   const preferredHosts = [1, 2, 10, 11, 15, 20, 30, 50, 80, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 120, 150, 180, 200, 220, 254]
+  // A faixa real do aparelho sempre vem primeiro e é concluída antes das
+  // tentativas genéricas. Assim qualquer IP válido da rede ativa é encontrado.
+  for (const subnet of localSubnets) {
+    for (const host of preferredHosts) uniquePush(ips, seenIps, `${subnet}.${host}`)
+  }
+  for (const subnet of localSubnets) {
+    for (let host = 1; host <= 254; host += 1) uniquePush(ips, seenIps, `${subnet}.${host}`)
+  }
   for (const subnet of prioritySubnets) {
     for (const host of preferredHosts) uniquePush(ips, seenIps, `${subnet}.${host}`)
   }
@@ -913,7 +949,9 @@ async function startDiscovery() {
     renderModeFirst(savedProjects)
     return
   }
-  const projects = await scanInBatches(buildCandidateIps())
+  const localAddresses = await getNativeLocalNetworkAddresses()
+  if (runId !== vshookDiscoveryRunId) return
+  const projects = await scanInBatches(buildCandidateIps(localAddresses))
   if (runId !== vshookDiscoveryRunId) return
   if (projects.length) renderModeFirst(projects)
   else renderNoProjects()
