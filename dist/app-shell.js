@@ -5,12 +5,15 @@ const VSHOOK_SAVED_PROBE_TIMEOUT_MS = 650
 const VSHOOK_MANUAL_IP_TIMEOUT_MS = 1500
 const VSHOOK_SCAN_BATCH_SIZE = 72
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v132'
+const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v133'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
 let vshookProjectsRefreshRunId = 0
 let vshookLocalNetworkPlugin = null
+let vshookScreenOrientationPlugin = null
+let vshookNativeOrientationMode = ''
+let vshookNativeOrientationPromise = Promise.resolve(false)
 let vshookDirectorDeviceMode = 'phone'
 let vshookDirectorTabletStableViewport = null
 let vshookDirectorTabletViewportRestoreTimer = 0
@@ -37,6 +40,42 @@ function normalizeDirectorDeviceMode(value) {
   return String(value || '').toLowerCase() === 'tablet' ? 'tablet' : 'phone'
 }
 
+function getNativeScreenOrientationPlugin() {
+  if (!isVshookInstalledNativeApp()) return null
+  if (vshookScreenOrientationPlugin) return vshookScreenOrientationPlugin
+  vshookScreenOrientationPlugin = window.Capacitor?.Plugins?.ScreenOrientation || null
+  if (!vshookScreenOrientationPlugin) {
+    const registerPlugin = window.Capacitor?.registerPlugin
+    if (typeof registerPlugin === 'function') {
+      vshookScreenOrientationPlugin = registerPlugin('ScreenOrientation')
+    }
+  }
+  return vshookScreenOrientationPlugin
+}
+
+function syncNativeDirectorOrientation(value, force = false) {
+  if (!isVshookInstalledNativeApp()) return Promise.resolve(false)
+  const mode = normalizeDirectorDeviceMode(value)
+  if (!force && mode === vshookNativeOrientationMode) return vshookNativeOrientationPromise
+  vshookNativeOrientationMode = mode
+  vshookNativeOrientationPromise = (async () => {
+    try {
+      const plugin = getNativeScreenOrientationPlugin()
+      if (!plugin) return false
+      if (mode === 'tablet') {
+        await plugin.lock({ orientation: 'landscape' })
+      } else {
+        await plugin.unlock()
+      }
+      return true
+    } catch (error) {
+      if (vshookNativeOrientationMode === mode) vshookNativeOrientationMode = ''
+      return false
+    }
+  })()
+  return vshookNativeOrientationPromise
+}
+
 function applyDirectorDeviceMode(value) {
   vshookDirectorDeviceMode = normalizeDirectorDeviceMode(value)
   document.documentElement.dataset.directorDevice = vshookDirectorDeviceMode
@@ -44,6 +83,7 @@ function applyDirectorDeviceMode(value) {
   try {
     localStorage.setItem('vshook_director_device_mode', vshookDirectorDeviceMode)
   } catch (error) {}
+  void syncNativeDirectorOrientation(vshookDirectorDeviceMode)
   updateDirectorTabletWebViewport()
   updateDirectorTabletOrientationGuard()
 }
@@ -78,11 +118,16 @@ function renderDirectorTabletOrientationRequired() {
   })
 }
 
-function requireDirectorTabletLandscape(continuation) {
+async function requireDirectorTabletLandscape(continuation) {
   applyDirectorDeviceMode('tablet')
-  // APK/IPA controlam a orientação da própria Activity/ViewController. A
-  // confirmação manual só é necessária quando o Diretor roda no navegador.
-  if (isVshookInstalledNativeApp() || isDirectorTabletLandscape()) {
+  if (isVshookInstalledNativeApp()) {
+    vshookDirectorTabletLandscapeContinuation = null
+    await syncNativeDirectorOrientation('tablet')
+    continuation?.()
+    return true
+  }
+  // A confirmação manual só é necessária quando o Diretor roda no navegador.
+  if (isDirectorTabletLandscape()) {
     vshookDirectorTabletLandscapeContinuation = null
     continuation?.()
     return true
@@ -506,6 +551,7 @@ async function enterApp(project, mode, options = {}) {
     applyDirectorDeviceMode(vshookDirectorDeviceMode)
   } else {
     vshookDirectorAppActive = false
+    void syncNativeDirectorOrientation('phone')
     document.documentElement.classList.remove('directorShellPortraitMode')
     document.documentElement.removeAttribute('data-director-device')
     document.body?.classList.remove('vshook-director-tablet')
@@ -989,7 +1035,12 @@ async function keepScreenAwake() {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') keepScreenAwake()
+  if (document.visibilityState === 'visible') {
+    keepScreenAwake()
+    if (vshookDirectorAppActive) {
+      void syncNativeDirectorOrientation(vshookDirectorDeviceMode, true)
+    }
+  }
 })
 
 
@@ -1051,7 +1102,12 @@ window.vshookExitToProjectSelector = function () {
     localStorage.removeItem('vshook_selected_mode')
     // Mantém vshook_access_session para voltar ao Diretor sem pedir a senha novamente.
   } catch (error) {}
-  window.location.reload()
+  const reload = () => window.location.reload()
+  if (isVshookInstalledNativeApp()) {
+    syncNativeDirectorOrientation('phone', true).finally(reload)
+  } else {
+    reload()
+  }
 }
 
 window.addEventListener('load', () => {

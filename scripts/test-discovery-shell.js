@@ -4,6 +4,7 @@ const vm = require('vm')
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'app-shell.js'), 'utf8')
 const storage = new Map()
+const orientationCalls = []
 const fastDiscovery = {
   app: 'VS Hook',
   appName: 'VS Hook Diretor',
@@ -74,6 +75,10 @@ const context = {
         VSHookLocalNetwork: {
           getAddresses: async () => ({ addresses: ['192.168.77.42'] }),
         },
+        ScreenOrientation: {
+          lock: async (options) => orientationCalls.push(`lock:${options?.orientation || ''}`),
+          unlock: async () => orientationCalls.push('unlock'),
+        },
       },
     },
     addEventListener: () => {},
@@ -103,7 +108,13 @@ async function run() {
     throw new Error(`A descoberta esperou a segunda porta (${elapsed} ms).`)
   }
 
-  console.log(`Discovery ok: ${addresses[0]}, resposta em ${elapsed} ms.`)
+  await vm.runInContext('syncNativeDirectorOrientation("tablet")', context)
+  await vm.runInContext('syncNativeDirectorOrientation("phone")', context)
+  if (orientationCalls.join('|') !== 'lock:landscape|unlock') {
+    throw new Error(`Rotacao nativa incorreta: ${orientationCalls.join('|')}`)
+  }
+
+  console.log(`Discovery ok: ${addresses[0]}, resposta em ${elapsed} ms; rotacao nativa ok.`)
 }
 
 run().catch((error) => {

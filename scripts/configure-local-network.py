@@ -14,6 +14,8 @@ def configure_ios(root: Path) -> None:
     data["NSLocalNetworkUsageDescription"] = (
         "O VS Hook procura a Hook Center e a extensao VS Hook na sua rede local."
     )
+    # O bloqueio de orientação no iPad só funciona fora do multitasking.
+    data["UIRequiresFullScreen"] = True
     with plist_path.open("wb") as target:
         plistlib.dump(data, target, sort_keys=False)
     print(f"Permissao de rede local configurada: {plist_path}")
