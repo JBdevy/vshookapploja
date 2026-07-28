@@ -5,7 +5,7 @@ const VSHOOK_SAVED_PROBE_TIMEOUT_MS = 650
 const VSHOOK_MANUAL_IP_TIMEOUT_MS = 2800
 const VSHOOK_SCAN_BATCH_SIZE = 72
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v126'
+const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v130'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
@@ -15,6 +15,22 @@ let vshookDirectorTabletStableViewport = null
 let vshookDirectorTabletViewportRestoreTimer = 0
 let vshookDirectorTabletLandscapeContinuation = null
 let vshookDirectorAppActive = false
+
+function isVshookInstalledNativeApp() {
+  try {
+    const capacitor = window.Capacitor
+    if (typeof capacitor?.isNativePlatform === 'function') {
+      return capacitor.isNativePlatform()
+    }
+    const platform = typeof capacitor?.getPlatform === 'function'
+      ? String(capacitor.getPlatform() || '').toLowerCase()
+      : ''
+    if (platform === 'android' || platform === 'ios') return true
+  } catch (error) {}
+
+  const protocol = String(window.location?.protocol || '').toLowerCase()
+  return protocol === 'capacitor:' || protocol === 'ionic:'
+}
 
 function normalizeDirectorDeviceMode(value) {
   return String(value || '').toLowerCase() === 'tablet' ? 'tablet' : 'phone'
@@ -63,7 +79,9 @@ function renderDirectorTabletOrientationRequired() {
 
 function requireDirectorTabletLandscape(continuation) {
   applyDirectorDeviceMode('tablet')
-  if (isDirectorTabletLandscape()) {
+  // APK/IPA controlam a orientação da própria Activity/ViewController. A
+  // confirmação manual só é necessária quando o Diretor roda no navegador.
+  if (isVshookInstalledNativeApp() || isDirectorTabletLandscape()) {
     vshookDirectorTabletLandscapeContinuation = null
     continuation?.()
     return true
@@ -94,7 +112,8 @@ function ensureDirectorTabletOrientationOverlay() {
 }
 
 function updateDirectorTabletOrientationGuard() {
-  const blocked = vshookDirectorAppActive
+  const blocked = !isVshookInstalledNativeApp()
+    && vshookDirectorAppActive
     && vshookDirectorDeviceMode === 'tablet'
     && !isDirectorTabletLandscape()
   document.documentElement.classList.toggle('directorTabletOrientationBlocked', blocked)
