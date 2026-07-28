@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Version name, exemplo: 3.0.2'
+        description: 'Version name, exemplo: 1.0.0'
         required: true
-        default: '3.0.2'
+        default: '1.0.0'
       build_number:
         description: 'Build number inteiro, aumente a cada envio para App Store'
         required: true
@@ -106,7 +106,7 @@ jobs:
             VERSION_NAME="${RELEASE_DATA%-build*}"
             BUILD_NUMBER="${RELEASE_DATA##*-build}"
             if [ "$VERSION_NAME" = "$RELEASE_DATA" ]; then
-              echo "Tag invalida. Use mobile-v3.0.2-build20 ou ios-v3.0.2-build20."
+              echo "Tag invalida. Use mobile-v1.0.0-build20 ou ios-v1.0.0-build20."
               exit 1
             fi
           fi

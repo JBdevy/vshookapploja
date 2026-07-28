@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Version name, exemplo: 3.0.2'
+        description: 'Version name, exemplo: 1.0.0'
         required: true
-        default: '3.0.2'
+        default: '1.0.0'
       version_code:
         description: 'Version code inteiro, aumente a cada envio para Play Store'
         required: true
@@ -56,7 +56,7 @@ jobs:
             VERSION_NAME="${RELEASE_DATA%-build*}"
             VERSION_CODE="${RELEASE_DATA##*-build}"
             if [ "$VERSION_NAME" = "$RELEASE_DATA" ]; then
-              echo "Tag invalida. Use mobile-v3.0.2-build20 ou android-v3.0.2-build20."
+              echo "Tag invalida. Use mobile-v1.0.0-build20 ou android-v1.0.0-build20."
               exit 1
             fi
           fi

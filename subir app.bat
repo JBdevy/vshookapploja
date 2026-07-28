@@ -27,7 +27,7 @@ if not defined VERSION_NAME set "VERSION_NAME=%PACKAGE_VERSION%"
 
 echo(%VERSION_NAME%| findstr /r /x "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
 if errorlevel 1 (
-  echo ERRO: use uma versao como 3.0.2.
+  echo ERRO: use uma versao como 1.0.0.
   goto erro
 )
 
