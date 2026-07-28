@@ -10,7 +10,7 @@
     "android/build.gradle",
     "ios/Sources",
     "Package.swift",
-    "VSHookLocalNetwork.podspec",
+    "VshookLocalNetwork.podspec",
     "dist/"
   ],
   "license": "UNLICENSED",

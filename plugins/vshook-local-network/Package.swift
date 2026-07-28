@@ -3,10 +3,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "VSHookLocalNetwork",
+    name: "VshookLocalNetwork",
     platforms: [.iOS(.v13)],
     products: [
-        .library(name: "VSHookLocalNetwork", targets: ["VSHookLocalNetworkPlugin"])
+        .library(name: "VshookLocalNetwork", targets: ["VSHookLocalNetworkPlugin"])
     ],
     dependencies: [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "6.0.0")
