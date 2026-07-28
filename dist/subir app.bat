@@ -127,8 +127,13 @@ echo ==========================================
 echo Android e iOS foram disparados pela tag:
 echo %TAG_NAME%
 echo.
-echo Acompanhe em:
+echo APK, AAB e IPA serao publicados juntos no mesmo GitHub Release.
+echo.
+echo Acompanhe os builds em:
 echo https://github.com/JBdevy/vshookapploja/actions
+echo.
+echo Release final:
+echo https://github.com/JBdevy/vshookapploja/releases
 echo.
 pause
 exit /b 0

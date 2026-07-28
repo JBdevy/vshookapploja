@@ -1,6 +1,14 @@
 name: VS Hook Mobile - iOS
 
 on:
+  workflow_call:
+    inputs:
+      version_name:
+        required: true
+        type: string
+      build_number:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version_name:
@@ -11,10 +19,6 @@ on:
         description: 'Build number inteiro, aumente a cada envio para App Store'
         required: true
         default: '20'
-  push:
-    tags:
-      - 'ios-v*'
-      - 'mobile-v*'
 
 jobs:
   ios-ipa:
@@ -102,11 +106,10 @@ jobs:
             BUILD_NUMBER="${{ inputs.build_number }}"
           else
             RELEASE_DATA="${GITHUB_REF_NAME#mobile-v}"
-            RELEASE_DATA="${RELEASE_DATA#ios-v}"
             VERSION_NAME="${RELEASE_DATA%-build*}"
             BUILD_NUMBER="${RELEASE_DATA##*-build}"
             if [ "$VERSION_NAME" = "$RELEASE_DATA" ]; then
-              echo "Tag invalida. Use mobile-v1.0.0-build20 ou ios-v1.0.0-build20."
+              echo "Tag invalida. Use mobile-v1.0.0-build20."
               exit 1
             fi
           fi

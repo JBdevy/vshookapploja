@@ -1,20 +1,24 @@
 name: VS Hook Mobile - Android
 
 on:
+  workflow_call:
+    inputs:
+      version_name:
+        required: true
+        type: string
+      build_number:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version_name:
         description: 'Version name, exemplo: 1.0.0'
         required: true
         default: '1.0.0'
-      version_code:
+      build_number:
         description: 'Version code inteiro, aumente a cada envio para Play Store'
         required: true
         default: '20'
-  push:
-    tags:
-      - 'android-v*'
-      - 'mobile-v*'
 
 jobs:
   android-apk-aab:
@@ -49,14 +53,13 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION_NAME="${{ inputs.version_name }}"
-            VERSION_CODE="${{ inputs.version_code }}"
+            VERSION_CODE="${{ inputs.build_number }}"
           else
             RELEASE_DATA="${GITHUB_REF_NAME#mobile-v}"
-            RELEASE_DATA="${RELEASE_DATA#android-v}"
             VERSION_NAME="${RELEASE_DATA%-build*}"
             VERSION_CODE="${RELEASE_DATA##*-build}"
             if [ "$VERSION_NAME" = "$RELEASE_DATA" ]; then
-              echo "Tag invalida. Use mobile-v1.0.0-build20 ou android-v1.0.0-build20."
+              echo "Tag invalida. Use mobile-v1.0.0-build20."
               exit 1
             fi
           fi

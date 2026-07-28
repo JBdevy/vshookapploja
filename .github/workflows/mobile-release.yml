@@ -1,0 +1,93 @@
+name: VS Hook Mobile - Release Android e iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Versão dos apps, exemplo: 1.0.0'
+        required: true
+        default: '1.0.0'
+      build_number:
+        description: 'Build único para Play Store e App Store'
+        required: true
+        default: '20'
+  push:
+    tags:
+      - 'mobile-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    uses: ./.github/workflows/android-apk-aab.yml
+    with:
+      version_name: ${{ inputs.version_name || '1.0.0' }}
+      build_number: ${{ inputs.build_number || '1' }}
+    secrets: inherit
+
+  ios:
+    uses: ./.github/workflows/ios-ipa.yml
+    with:
+      version_name: ${{ inputs.version_name || '1.0.0' }}
+      build_number: ${{ inputs.build_number || '1' }}
+    secrets: inherit
+
+  release:
+    name: Publicar APK, AAB e IPA juntos
+    needs:
+      - android
+      - ios
+    runs-on: ubuntu-latest
+    steps:
+      - name: Definir versão e tag do Release
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION_NAME="${{ inputs.version_name }}"
+            BUILD_NUMBER="${{ inputs.build_number }}"
+            TAG_NAME="mobile-v${VERSION_NAME}-build${BUILD_NUMBER}"
+          else
+            TAG_NAME="$GITHUB_REF_NAME"
+            RELEASE_DATA="${TAG_NAME#mobile-v}"
+            VERSION_NAME="${RELEASE_DATA%-build*}"
+            BUILD_NUMBER="${RELEASE_DATA##*-build}"
+          fi
+
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Versão inválida: $VERSION_NAME"
+            exit 1
+          }
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Build inválido: $BUILD_NUMBER"
+            exit 1
+          }
+
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+          echo "TAG_NAME=$TAG_NAME" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=VS Hook Mobile $VERSION_NAME - Build $BUILD_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Baixar todos os arquivos produzidos
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Conferir arquivos do Release
+        shell: bash
+        run: |
+          find release-assets -type f -print
+          find release-assets -type f \( -name '*.apk' -o -name '*.aab' \) | grep -q .
+          find release-assets -type f -name '*.ipa' | grep -q .
+
+      - name: Publicar um único GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.RELEASE_NAME }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/**/*.apk
+            release-assets/**/*.aab
+            release-assets/**/*.ipa
