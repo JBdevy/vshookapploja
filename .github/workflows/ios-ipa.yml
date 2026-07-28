@@ -34,7 +34,9 @@ jobs:
         run: npm install
 
       - name: Preparar app web
-        run: npm run build
+        run: |
+          npm run build
+          npm run test:discovery
 
       - name: Sincronizar iOS
         run: |

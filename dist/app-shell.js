@@ -2,10 +2,10 @@ const VSHOOK_DIRECTOR_PORT = 47831
 const VSHOOK_MUSICIANS_PORT = 47832
 const VSHOOK_SCAN_TIMEOUT_MS = 650
 const VSHOOK_SAVED_PROBE_TIMEOUT_MS = 650
-const VSHOOK_MANUAL_IP_TIMEOUT_MS = 2800
+const VSHOOK_MANUAL_IP_TIMEOUT_MS = 1500
 const VSHOOK_SCAN_BATCH_SIZE = 72
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v131'
+const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v132'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
@@ -624,9 +624,17 @@ async function getNativeLocalNetworkAddresses() {
   if (!isVshookInstalledNativeApp()) return []
   try {
     if (!vshookLocalNetworkPlugin) {
-      const registerPlugin = window.Capacitor?.registerPlugin
-      if (typeof registerPlugin !== 'function') return []
-      vshookLocalNetworkPlugin = registerPlugin('VSHookLocalNetwork')
+      // Em páginas estáticas o bridge nativo já injeta os plugins neste
+      // objeto; registerPlugin só existe quando o bundle JS do Capacitor foi
+      // importado pela aplicação.
+      vshookLocalNetworkPlugin = window.Capacitor?.Plugins?.VSHookLocalNetwork || null
+      if (!vshookLocalNetworkPlugin) {
+        const registerPlugin = window.Capacitor?.registerPlugin
+        if (typeof registerPlugin === 'function') {
+          vshookLocalNetworkPlugin = registerPlugin('VSHookLocalNetwork')
+        }
+      }
+      if (!vshookLocalNetworkPlugin) return []
     }
     const result = await vshookLocalNetworkPlugin.getAddresses()
     const addresses = Array.isArray(result?.addresses) ? result.addresses : []
@@ -717,10 +725,27 @@ async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS
 async function fetchDiscovery(ip, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, preferredPort = null) {
   const cleanIp = normalizeIp(ip)
   if (!cleanIp) return null
-  const results = await Promise.all(
-    getPortsToTry(preferredPort).map((port) => fetchDiscoveryOnPort(cleanIp, port, timeoutMs))
-  )
-  return results.find((projects) => projects && projects.length) || null
+  const ports = getPortsToTry(preferredPort)
+  return await new Promise((resolve) => {
+    let pending = ports.length
+    let settled = false
+    const finish = (projects) => {
+      if (settled) return
+      if (projects && projects.length) {
+        settled = true
+        resolve(projects)
+        return
+      }
+      pending -= 1
+      if (pending <= 0) {
+        settled = true
+        resolve(null)
+      }
+    }
+    for (const port of ports) {
+      fetchDiscoveryOnPort(cleanIp, port, timeoutMs).then(finish).catch(() => finish(null))
+    }
+  })
 }
 
 async function probeStoredBridgeHosts() {

@@ -5,6 +5,7 @@
   "description": "VS Hook Mobile - Android/iOS",
   "scripts": {
     "build": "node scripts/build-static.js",
+    "test:discovery": "node scripts/test-discovery-shell.js",
     "start": "vite --host 0.0.0.0",
     "sync:android": "npm run build && npx cap sync android",
     "sync:ios": "npm run build && npx cap sync ios",
