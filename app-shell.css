@@ -58,6 +58,7 @@ button, input { font: inherit; }
 }
 .vshook-manual-ip-input:focus { border-color:#f7c948; box-shadow:0 0 0 3px rgba(247,201,72,.14); }
 .vshook-manual-ip-input::placeholder { color:rgba(226,232,240,.58); }
+.vshook-discovery-search-button { margin-top:18px; }
 .vshook-project-actions { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px; }
 .vshook-project-actions .vshook-back-button, .vshook-project-actions .vshook-secondary-button { width:100%; margin:0; }
 .vshook-app-version { margin-top:18px; color:#94a3b8; font-size:14px; font-weight:800; text-align:center; }

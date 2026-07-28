@@ -108,13 +108,30 @@ async function run() {
     throw new Error(`A descoberta esperou a segunda porta (${elapsed} ms).`)
   }
 
+  const searchButton = vm.runInContext('renderDiscoverySearchButton()', context)
+  if (!searchButton.includes('id="searchProjectsBtn"') || !searchButton.includes('>Buscar<')) {
+    throw new Error('O botão Buscar não foi renderizado na tela inicial.')
+  }
+
+  const abortStartedAt = Date.now()
+  const cancelled = await vm.runInContext(`(() => {
+    const controller = new AbortController()
+    const pending = fetchDiscovery("192.168.77.99", 800, null, controller.signal)
+    controller.abort()
+    return pending
+  })()`, context)
+  const abortElapsed = Date.now() - abortStartedAt
+  if (cancelled !== null || abortElapsed >= 200) {
+    throw new Error(`A busca anterior não foi cancelada rapidamente (${abortElapsed} ms).`)
+  }
+
   await vm.runInContext('syncNativeDirectorOrientation("tablet")', context)
   await vm.runInContext('syncNativeDirectorOrientation("phone")', context)
   if (orientationCalls.join('|') !== 'lock:landscape|unlock') {
     throw new Error(`Rotacao nativa incorreta: ${orientationCalls.join('|')}`)
   }
 
-  console.log(`Discovery ok: ${addresses[0]}, resposta em ${elapsed} ms; rotacao nativa ok.`)
+  console.log(`Discovery ok: ${addresses[0]}, resposta em ${elapsed} ms; botão Buscar e cancelamento ok; rotacao nativa ok.`)
 }
 
 run().catch((error) => {

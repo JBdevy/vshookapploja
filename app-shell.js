@@ -5,10 +5,11 @@ const VSHOOK_SAVED_PROBE_TIMEOUT_MS = 650
 const VSHOOK_MANUAL_IP_TIMEOUT_MS = 1500
 const VSHOOK_SCAN_BATCH_SIZE = 72
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v133'
+const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v134'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
+let vshookDiscoveryAbortController = null
 let vshookProjectsRefreshRunId = 0
 let vshookLocalNetworkPlugin = null
 let vshookScreenOrientationPlugin = null
@@ -352,6 +353,16 @@ function renderManualIpBox() {
   `
 }
 
+function renderDiscoverySearchButton() {
+  return '<button class="vshook-mode-button vshook-discovery-search-button" id="searchProjectsBtn">Buscar</button>'
+}
+
+function attachDiscoverySearchHandler(handler = startDiscovery) {
+  document.getElementById('searchProjectsBtn')?.addEventListener('click', () => {
+    void handler()
+  })
+}
+
 function attachManualIpHandler() {
   document.getElementById('manualIpBtn')?.addEventListener('click', () => attemptManualIpEntry())
   document.getElementById('manualIpInput')?.addEventListener('keydown', (event) => {
@@ -365,8 +376,10 @@ function renderSearching() {
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Procurando sessões VS Hook disponíveis na rede Wi‑Fi...</p>
     <p class="vshook-shell-status">A busca continua em segundo plano. Se preferir, digite o IP do computador agora.</p>
+    ${renderDiscoverySearchButton()}
     ${renderManualIpBox()}
   `)
+  attachDiscoverySearchHandler()
   attachManualIpHandler()
 }
 
@@ -376,8 +389,10 @@ function renderNoProjects() {
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Nenhuma sessão VS Hook foi encontrada.</p>
     <p class="vshook-shell-status">Abra o REAPER ou uma sessão no REAPER e verifique se o Hook Center está aberto.</p>
+    ${renderDiscoverySearchButton()}
     ${renderManualIpBox()}
   `)
+  attachDiscoverySearchHandler()
   attachManualIpHandler()
 }
 
@@ -583,10 +598,22 @@ async function enterApp(project, mode, options = {}) {
   document.body.appendChild(script)
 }
 
-function timeoutSignal(ms) {
+function timeoutSignal(ms, parentSignal = null) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ms)
-  return { signal: controller.signal, cancel: () => clearTimeout(timer) }
+  const abortFromParent = () => controller.abort()
+  if (parentSignal?.aborted) {
+    controller.abort()
+  } else {
+    parentSignal?.addEventListener?.('abort', abortFromParent, { once: true })
+  }
+  return {
+    signal: controller.signal,
+    cancel: () => {
+      clearTimeout(timer)
+      parentSignal?.removeEventListener?.('abort', abortFromParent)
+    },
+  }
 }
 
 function normalizeIp(value) {
@@ -620,6 +647,9 @@ async function attemptManualIpEntry() {
     return
   }
 
+  if (vshookDiscoveryAbortController) vshookDiscoveryAbortController.abort()
+  const discoveryController = new AbortController()
+  vshookDiscoveryAbortController = discoveryController
   const runId = ++vshookDiscoveryRunId
   setShell(`
     ${getLogoHtml()}
@@ -628,16 +658,27 @@ async function attemptManualIpEntry() {
     <p class="vshook-shell-status">${vshookEscape(parsed.port ? `${ip}:${parsed.port}` : ip)}</p>
   `)
 
-  const projects = await fetchDiscovery(ip, VSHOOK_MANUAL_IP_TIMEOUT_MS, parsed.port)
-  if (runId !== vshookDiscoveryRunId) return
-  if (projects && projects.length) {
-    renderModeFirst(projects)
-  } else {
-    renderNoProjects()
-    const nextInput = document.getElementById('manualIpInput')
-    if (nextInput) {
-      nextInput.value = parsed.port ? `${ip}:${parsed.port}` : ip
-      nextInput.focus()
+  try {
+    const projects = await fetchDiscovery(
+      ip,
+      VSHOOK_MANUAL_IP_TIMEOUT_MS,
+      parsed.port,
+      discoveryController.signal,
+    )
+    if (runId !== vshookDiscoveryRunId || discoveryController.signal.aborted) return
+    if (projects && projects.length) {
+      renderModeFirst(projects)
+    } else {
+      renderNoProjects()
+      const nextInput = document.getElementById('manualIpInput')
+      if (nextInput) {
+        nextInput.value = parsed.port ? `${ip}:${parsed.port}` : ip
+        nextInput.focus()
+      }
+    }
+  } finally {
+    if (vshookDiscoveryAbortController === discoveryController) {
+      vshookDiscoveryAbortController = null
     }
   }
 }
@@ -714,8 +755,8 @@ function getStoredBridgeHosts() {
   return hosts
 }
 
-async function fetchJsonWithTimeout(url, timeoutMs) {
-  const t = timeoutSignal(timeoutMs)
+async function fetchJsonWithTimeout(url, timeoutMs, parentSignal = null) {
+  const t = timeoutSignal(timeoutMs, parentSignal)
   try {
     const response = await fetch(url, {
       cache: 'no-store',
@@ -745,7 +786,7 @@ function getPortsToTry(preferredPort) {
   return ports
 }
 
-async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS) {
+async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, signal = null) {
   const cleanIp = normalizeIp(ip)
   if (!cleanIp) return null
   const baseUrl = `http://${cleanIp}:${port}`
@@ -753,7 +794,7 @@ async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS
   // /discovery já contém as sessões abertas. Durante uma varredura não tente
   // várias rotas em sequência para cada IP inexistente, pois isso multiplicava
   // o tempo da busca por toda a rede.
-  const discovery = await fetchJsonWithTimeout(`${baseUrl}/discovery`, timeoutMs)
+  const discovery = await fetchJsonWithTimeout(`${baseUrl}/discovery`, timeoutMs, signal)
   if (!discovery) return null
 
   const isVsHook =
@@ -768,7 +809,7 @@ async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS
   return projects
 }
 
-async function fetchDiscovery(ip, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, preferredPort = null) {
+async function fetchDiscovery(ip, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, preferredPort = null, signal = null) {
   const cleanIp = normalizeIp(ip)
   if (!cleanIp) return null
   const ports = getPortsToTry(preferredPort)
@@ -789,15 +830,16 @@ async function fetchDiscovery(ip, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, preferredP
       }
     }
     for (const port of ports) {
-      fetchDiscoveryOnPort(cleanIp, port, timeoutMs).then(finish).catch(() => finish(null))
+      fetchDiscoveryOnPort(cleanIp, port, timeoutMs, signal).then(finish).catch(() => finish(null))
     }
   })
 }
 
-async function probeStoredBridgeHosts() {
+async function probeStoredBridgeHosts(signal = null) {
   const storedHosts = getStoredBridgeHosts()
   for (const ip of storedHosts) {
-    const projects = await fetchDiscovery(ip, VSHOOK_SAVED_PROBE_TIMEOUT_MS)
+    if (signal?.aborted) return []
+    const projects = await fetchDiscovery(ip, VSHOOK_SAVED_PROBE_TIMEOUT_MS, null, signal)
     if (projects && projects.length) return projects
   }
   return []
@@ -929,12 +971,16 @@ function buildCandidateIps(localAddresses = []) {
   return ips
 }
 
-async function scanInBatches(ips, batchSize = VSHOOK_SCAN_BATCH_SIZE) {
+async function scanInBatches(ips, batchSize = VSHOOK_SCAN_BATCH_SIZE, signal = null) {
   const found = []
   const seen = new Set()
   for (let i = 0; i < ips.length; i += batchSize) {
+    if (signal?.aborted) return []
     const batch = ips.slice(i, i + batchSize)
-    const results = await Promise.all(batch.map((ip) => fetchDiscovery(ip)))
+    const results = await Promise.all(
+      batch.map((ip) => fetchDiscovery(ip, VSHOOK_SCAN_TIMEOUT_MS, null, signal)),
+    )
+    if (signal?.aborted) return []
     for (const result of results) {
       const items = Array.isArray(result) ? result : (result ? [result] : [])
       for (const item of items) {
@@ -994,9 +1040,9 @@ function renderBridgeNoProjects() {
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Nenhuma sessão VS Hook foi encontrada.</p>
     <p class="vshook-shell-status">Abra o REAPER ou uma sessão no REAPER e verifique se o Hook Center está aberto.</p>
-    <button class="vshook-secondary-button" id="refreshProjectsBtn">Atualizar</button>
+    ${renderDiscoverySearchButton()}
   `)
-  document.getElementById('refreshProjectsBtn')?.addEventListener('click', startBridgeBrowserMode)
+  attachDiscoverySearchHandler(startBridgeBrowserMode)
 }
 
 async function startBridgeBrowserMode() {
@@ -1012,20 +1058,33 @@ async function startBridgeBrowserMode() {
 }
 
 async function startDiscovery() {
+  if (vshookDiscoveryAbortController) vshookDiscoveryAbortController.abort()
+  const discoveryController = new AbortController()
+  vshookDiscoveryAbortController = discoveryController
   const runId = ++vshookDiscoveryRunId
   renderSearching()
-  const savedProjects = await probeStoredBridgeHosts()
-  if (runId !== vshookDiscoveryRunId) return
-  if (savedProjects.length) {
-    renderModeFirst(savedProjects)
-    return
+  try {
+    const savedProjects = await probeStoredBridgeHosts(discoveryController.signal)
+    if (runId !== vshookDiscoveryRunId || discoveryController.signal.aborted) return
+    if (savedProjects.length) {
+      renderModeFirst(savedProjects)
+      return
+    }
+    const localAddresses = await getNativeLocalNetworkAddresses()
+    if (runId !== vshookDiscoveryRunId || discoveryController.signal.aborted) return
+    const projects = await scanInBatches(
+      buildCandidateIps(localAddresses),
+      VSHOOK_SCAN_BATCH_SIZE,
+      discoveryController.signal,
+    )
+    if (runId !== vshookDiscoveryRunId || discoveryController.signal.aborted) return
+    if (projects.length) renderModeFirst(projects)
+    else renderNoProjects()
+  } finally {
+    if (vshookDiscoveryAbortController === discoveryController) {
+      vshookDiscoveryAbortController = null
+    }
   }
-  const localAddresses = await getNativeLocalNetworkAddresses()
-  if (runId !== vshookDiscoveryRunId) return
-  const projects = await scanInBatches(buildCandidateIps(localAddresses))
-  if (runId !== vshookDiscoveryRunId) return
-  if (projects.length) renderModeFirst(projects)
-  else renderNoProjects()
 }
 
 async function keepScreenAwake() {
