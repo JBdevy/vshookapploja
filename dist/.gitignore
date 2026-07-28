@@ -3,6 +3,13 @@ android/
 ios/
 build/
 
+# As plataformas geradas do app continuam ignoradas, mas o código nativo do
+# plugin de descoberta precisa fazer parte do repositório.
+!plugins/vshook-local-network/android/
+!plugins/vshook-local-network/android/**
+!plugins/vshook-local-network/ios/
+!plugins/vshook-local-network/ios/**
+
 .env
 .env.local
 .env.production
