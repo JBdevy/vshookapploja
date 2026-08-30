@@ -4,7 +4,6 @@ const vm = require('vm')
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'app-shell.js'), 'utf8')
 const storage = new Map()
-const orientationCalls = []
 const fastDiscovery = {
   app: 'VS Hook',
   appName: 'VS Hook Diretor',
@@ -75,10 +74,6 @@ const context = {
         VSHookLocalNetwork: {
           getAddresses: async () => ({ addresses: ['192.168.77.42'] }),
         },
-        ScreenOrientation: {
-          lock: async (options) => orientationCalls.push(`lock:${options?.orientation || ''}`),
-          unlock: async () => orientationCalls.push('unlock'),
-        },
       },
     },
     addEventListener: () => {},
@@ -88,12 +83,12 @@ vm.createContext(context)
 vm.runInContext(source, context)
 
 async function run() {
-  const addresses = await vm.runInContext('getNativeLocalNetworkAddresses()', context)
+  const addresses = await vm.runInContext('getVshookStoreLocalNetworkAddresses()', context)
   if (addresses.length !== 1 || addresses[0] !== '192.168.77.42') {
     throw new Error(`O bridge nativo nao entregou o IP esperado: ${JSON.stringify(addresses)}`)
   }
 
-  const candidates = vm.runInContext('buildCandidateIps(["192.168.77.42"])', context)
+  const candidates = vm.runInContext('buildVshookStoreCandidateIps(["192.168.77.42"])', context)
   if (!candidates.slice(0, 254).every((ip) => ip.startsWith('192.168.77.'))) {
     throw new Error('A faixa da rede ativa nao ficou em primeiro lugar.')
   }
@@ -108,30 +103,15 @@ async function run() {
     throw new Error(`A descoberta esperou a segunda porta (${elapsed} ms).`)
   }
 
-  const searchButton = vm.runInContext('renderDiscoverySearchButton()', context)
-  if (!searchButton.includes('id="searchProjectsBtn"') || !searchButton.includes('>Buscar<')) {
-    throw new Error('O botão Buscar não foi renderizado na tela inicial.')
+  const hasStoreDiscoveryOverride = vm.runInContext(
+    'startDiscovery !== vshookStoreDefaultDiscovery',
+    context,
+  )
+  if (!hasStoreDiscoveryOverride) {
+    throw new Error('A descoberta automatica exclusiva do app da loja nao foi instalada.')
   }
 
-  const abortStartedAt = Date.now()
-  const cancelled = await vm.runInContext(`(() => {
-    const controller = new AbortController()
-    const pending = fetchDiscovery("192.168.77.99", 800, null, controller.signal)
-    controller.abort()
-    return pending
-  })()`, context)
-  const abortElapsed = Date.now() - abortStartedAt
-  if (cancelled !== null || abortElapsed >= 200) {
-    throw new Error(`A busca anterior não foi cancelada rapidamente (${abortElapsed} ms).`)
-  }
-
-  await vm.runInContext('syncNativeDirectorOrientation("tablet")', context)
-  await vm.runInContext('syncNativeDirectorOrientation("phone")', context)
-  if (orientationCalls.join('|') !== 'lock:landscape|unlock') {
-    throw new Error(`Rotacao nativa incorreta: ${orientationCalls.join('|')}`)
-  }
-
-  console.log(`Discovery ok: ${addresses[0]}, resposta em ${elapsed} ms; botão Buscar e cancelamento ok; rotacao nativa ok.`)
+  console.log(`Discovery automática ok: ${addresses[0]}, resposta em ${elapsed} ms.`)
 }
 
 run().catch((error) => {

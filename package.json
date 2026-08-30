@@ -1,6 +1,6 @@
 {
   "name": "vs-hook-mobile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "VS Hook Mobile - Android/iOS",
   "scripts": {
@@ -18,6 +18,8 @@
     "@capacitor/core": "^6.2.0",
     "@capacitor/ios": "^6.2.0",
     "@capacitor/keyboard": "^6.0.4",
+    "@capacitor/local-notifications": "^6.1.3",
+    "@capacitor/push-notifications": "^6.0.5",
     "@capacitor/screen-orientation": "^6.0.4",
     "@capacitor/status-bar": "^6.0.1",
     "vshook-local-network": "file:plugins/vshook-local-network"

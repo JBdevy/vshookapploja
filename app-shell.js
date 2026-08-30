@@ -2,79 +2,268 @@ const VSHOOK_DIRECTOR_PORT = 47831
 const VSHOOK_MUSICIANS_PORT = 47832
 const VSHOOK_SCAN_TIMEOUT_MS = 650
 const VSHOOK_SAVED_PROBE_TIMEOUT_MS = 650
-const VSHOOK_MANUAL_IP_TIMEOUT_MS = 1500
+const VSHOOK_MANUAL_IP_TIMEOUT_MS = 2800
+const VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS = 4500
 const VSHOOK_SCAN_BATCH_SIZE = 72
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-0-native-single-motor-v134'
+const VSHOOK_ASSET_VERSION = '1-0-1-cifras-v41'
+const VSHOOK_CHAT_BOOTSTRAP_KEY = 'vshook_chat_bootstrap_key'
+const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
+const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
+const VSHOOK_CHAT_PUSH_TOKEN_KEY = 'vshook_chat_push_token'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
-let vshookDiscoveryAbortController = null
 let vshookProjectsRefreshRunId = 0
-let vshookLocalNetworkPlugin = null
-let vshookScreenOrientationPlugin = null
-let vshookNativeOrientationMode = ''
-let vshookNativeOrientationPromise = Promise.resolve(false)
 let vshookDirectorDeviceMode = 'phone'
 let vshookDirectorTabletStableViewport = null
 let vshookDirectorTabletViewportRestoreTimer = 0
 let vshookDirectorTabletLandscapeContinuation = null
 let vshookDirectorAppActive = false
 
-function isVshookInstalledNativeApp() {
+function captureChatBootstrapKey() {
   try {
-    const capacitor = window.Capacitor
-    if (typeof capacitor?.isNativePlatform === 'function') {
-      return capacitor.isNativePlatform()
+    const url = new URL(window.location.href)
+    const bootstrapKey = String(url.searchParams.get('chatKey') || '').trim()
+    if (/^[a-f0-9]{64}$/i.test(bootstrapKey)) {
+      localStorage.setItem(VSHOOK_CHAT_BOOTSTRAP_KEY, bootstrapKey.toLowerCase())
+      url.searchParams.delete('chatKey')
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
     }
-    const platform = typeof capacitor?.getPlatform === 'function'
-      ? String(capacitor.getPlatform() || '').toLowerCase()
-      : ''
-    if (platform === 'android' || platform === 'ios') return true
   } catch (error) {}
-
-  const protocol = String(window.location?.protocol || '').toLowerCase()
-  return protocol === 'capacitor:' || protocol === 'ionic:'
 }
+
+function getStoredChatMobileSession() {
+  try {
+    const session = JSON.parse(localStorage.getItem(VSHOOK_CHAT_MOBILE_SESSION_KEY) || 'null')
+    if (!session || !String(session.accessToken || '').startsWith('vshcm_') || !/^https?:\/\//i.test(String(session.backendUrl || ''))) return null
+    if (session.expiresAt && Date.parse(session.expiresAt) <= Date.now()) {
+      localStorage.removeItem(VSHOOK_CHAT_MOBILE_SESSION_KEY)
+      return null
+    }
+    return session
+  } catch (error) {
+    return null
+  }
+}
+
+async function bootstrapChatMobileSessionFromQr() {
+  if (getStoredChatMobileSession()) return true
+  let bootstrapKey = ''
+  try { bootstrapKey = String(localStorage.getItem(VSHOOK_CHAT_BOOTSTRAP_KEY) || '').trim() }
+  catch (error) {}
+  if (!/^[a-f0-9]{64}$/i.test(bootstrapKey)) return false
+
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 20000)
+  try {
+    const response = await fetch(`${window.location.origin}/chat/bootstrap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bootstrapKey }),
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+    const result = await response.json().catch(() => ({}))
+    const created = result?.mobileSession
+    if (!response.ok || !created?.accessToken || !created?.backendUrl) return false
+    localStorage.setItem(VSHOOK_CHAT_MOBILE_SESSION_KEY, JSON.stringify({
+      accessToken: String(created.accessToken),
+      backendUrl: String(created.backendUrl).replace(/\/+$/, ''),
+      expiresAt: String(created.expiresAt || ''),
+      bridgeBaseUrl: String(window.location.origin || '').replace(/\/+$/, ''),
+    }))
+    localStorage.removeItem(VSHOOK_CHAT_BOOTSTRAP_KEY)
+    return true
+  } catch (error) {
+    return false
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+function hasStoredChatBootstrapKey() {
+  try { return /^[a-f0-9]{64}$/i.test(String(localStorage.getItem(VSHOOK_CHAT_BOOTSTRAP_KEY) || '').trim()) }
+  catch (error) { return false }
+}
+
+function renderStoredChatButton() {
+  if (getStoredChatMobileSession()) return '<button class="vshook-mode-button" id="openStoredChatBtn">Abrir Chat Hook pela internet</button>'
+  if (hasStoredChatBootstrapKey()) return '<button class="vshook-mode-button" id="openStoredChatBtn">Abrir Chat Hook</button>'
+  return ''
+}
+
+function enterStoredChat() {
+  const session = getStoredChatMobileSession()
+  if (!session && !hasStoredChatBootstrapKey()) return false
+  vshookDiscoveryRunId += 1
+  vshookProjectsRefreshRunId += 1
+  const bridgeBaseUrl = String(session?.bridgeBaseUrl || window.location.origin || '').replace(/\/+$/, '')
+  enterApp({
+    id: 'chat-hook-internet',
+    projectName: 'Chat Hook',
+    directorUrl: bridgeBaseUrl,
+    musiciansUrl: bridgeBaseUrl,
+    projectTabIndex: 0,
+  }, 'chat', { skipProjectSwitch: true })
+  return true
+}
+
+function markChatNotificationTarget() {
+  try { localStorage.setItem(VSHOOK_CHAT_NOTIFICATION_TARGET_KEY, '1') } catch (error) {}
+}
+
+function consumeChatNotificationTarget() {
+  try {
+    const pending = localStorage.getItem(VSHOOK_CHAT_NOTIFICATION_TARGET_KEY) === '1'
+    if (pending) localStorage.removeItem(VSHOOK_CHAT_NOTIFICATION_TARGET_KEY)
+    return pending
+  } catch (error) {
+    return false
+  }
+}
+
+function openChatFromNativeNotification() {
+  markChatNotificationTarget()
+  if (getStoredChatMobileSession() && enterStoredChat()) {
+    try { localStorage.removeItem(VSHOOK_CHAT_NOTIFICATION_TARGET_KEY) } catch (error) {}
+  }
+}
+
+let vshookChatPushListenersReady = false
+
+async function postChatPushToken(session, pushToken, platform) {
+  if (!session?.accessToken || !session?.backendUrl || !pushToken) return false
+  const response = await fetch(`${String(session.backendUrl).replace(/\/+$/, '')}/api/chat/push/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chatMobileToken: session.accessToken,
+      pushToken,
+      platform,
+    }),
+    cache: 'no-store',
+  })
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok || result.ok === false) throw new Error(result.error || 'Não foi possível ativar as notificações do Chat Hook.')
+  try { localStorage.setItem(VSHOOK_CHAT_PUSH_TOKEN_KEY, pushToken) } catch (error) {}
+  return true
+}
+
+async function showForegroundChatNotification(notification) {
+  const platform = String(window.Capacitor?.getPlatform?.() || '').toLowerCase()
+  if (platform !== 'android') return
+  const LocalNotifications = window.Capacitor?.Plugins?.LocalNotifications
+  if (!LocalNotifications) return
+  try {
+    const permission = await LocalNotifications.checkPermissions()
+    if (permission?.display !== 'granted') await LocalNotifications.requestPermissions()
+    await LocalNotifications.schedule({ notifications: [{
+      id: Math.max(1, Math.floor(Date.now() % 2147483000)),
+      title: String(notification?.title || 'Chat Hook'),
+      body: String(notification?.body || 'Nova mensagem'),
+      channelId: 'chat_hook_messages',
+      sound: 'default',
+      extra: { target: 'chat-hook' },
+    }] })
+  } catch (error) {}
+}
+
+async function setupNativeChatPushNotifications() {
+  if (!isVshookInstalledNativeApp()) return false
+  const session = getStoredChatMobileSession()
+  if (!session) return false
+  const PushNotifications = window.Capacitor?.Plugins?.PushNotifications
+  if (!PushNotifications) return false
+  const platform = String(window.Capacitor?.getPlatform?.() || '').toLowerCase()
+
+  if (!vshookChatPushListenersReady) {
+    vshookChatPushListenersReady = true
+    await PushNotifications.addListener('registration', (token) => {
+      const currentSession = getStoredChatMobileSession()
+      postChatPushToken(currentSession, String(token?.value || ''), platform).catch(() => {})
+    })
+    await PushNotifications.addListener('registrationError', (error) => {
+      console.warn('Chat Hook push registration error', error)
+    })
+    await PushNotifications.addListener('pushNotificationReceived', (notification) => {
+      showForegroundChatNotification(notification).catch(() => {})
+    })
+    await PushNotifications.addListener('pushNotificationActionPerformed', () => {
+      openChatFromNativeNotification()
+    })
+    const LocalNotifications = window.Capacitor?.Plugins?.LocalNotifications
+    if (LocalNotifications) {
+      await LocalNotifications.addListener('localNotificationActionPerformed', () => {
+        openChatFromNativeNotification()
+      })
+    }
+  }
+
+  try {
+    if (platform === 'android' && typeof PushNotifications.createChannel === 'function') {
+      await PushNotifications.createChannel({
+        id: 'chat_hook_messages',
+        name: 'Mensagens do Chat Hook',
+        description: 'Novas mensagens recebidas no Chat Hook',
+        importance: 5,
+        visibility: 1,
+        vibration: true,
+        sound: 'default',
+      })
+    }
+    let permission = await PushNotifications.checkPermissions()
+    if (permission?.receive === 'prompt' || permission?.receive === 'prompt-with-rationale') {
+      permission = await PushNotifications.requestPermissions()
+    }
+    if (permission?.receive !== 'granted') return false
+    await PushNotifications.register()
+    return true
+  } catch (error) {
+    console.warn('Não foi possível ativar notificações do Chat Hook', error)
+    return false
+  }
+}
+
+window.vshookSetupNativeChatPushNotifications = setupNativeChatPushNotifications
+
+function attachStoredChatHandler() {
+  document.getElementById('openStoredChatBtn')?.addEventListener('click', enterStoredChat)
+}
+
+function renderStandaloneTransferHookButton() {
+  return '<button class="vshook-mode-button" id="openStandaloneTransferHookBtn">Abrir Drop Hook</button>'
+}
+
+function enterStandaloneTransferHook() {
+  let host = ''
+  try { host = normalizeIp(localStorage.getItem('vshook_transfer_host') || '') } catch (_) {}
+  if (!host) host = normalizeIp(window.location.hostname)
+  if (!host) {
+    host = normalizeIp(window.prompt('Digite o IP do computador com a Hook Center aberta:') || '')
+  }
+  if (!host) return false
+  try { localStorage.setItem('vshook_transfer_host', host) } catch (_) {}
+  vshookDiscoveryRunId += 1
+  vshookProjectsRefreshRunId += 1
+  enterApp({
+    id: 'transfer-hook-local',
+    projectName: 'Drop Hook',
+    directorUrl: `http://${host}:${VSHOOK_DIRECTOR_PORT}`,
+    musiciansUrl: `http://${host}:${VSHOOK_MUSICIANS_PORT}`,
+    projectTabIndex: 0,
+  }, 'transfer-hook', { skipProjectSwitch: true })
+  return true
+}
+
+function attachStandaloneTransferHookHandler() {
+  document.getElementById('openStandaloneTransferHookBtn')?.addEventListener('click', enterStandaloneTransferHook)
+}
+
+captureChatBootstrapKey()
 
 function normalizeDirectorDeviceMode(value) {
   return String(value || '').toLowerCase() === 'tablet' ? 'tablet' : 'phone'
-}
-
-function getNativeScreenOrientationPlugin() {
-  if (!isVshookInstalledNativeApp()) return null
-  if (vshookScreenOrientationPlugin) return vshookScreenOrientationPlugin
-  vshookScreenOrientationPlugin = window.Capacitor?.Plugins?.ScreenOrientation || null
-  if (!vshookScreenOrientationPlugin) {
-    const registerPlugin = window.Capacitor?.registerPlugin
-    if (typeof registerPlugin === 'function') {
-      vshookScreenOrientationPlugin = registerPlugin('ScreenOrientation')
-    }
-  }
-  return vshookScreenOrientationPlugin
-}
-
-function syncNativeDirectorOrientation(value, force = false) {
-  if (!isVshookInstalledNativeApp()) return Promise.resolve(false)
-  const mode = normalizeDirectorDeviceMode(value)
-  if (!force && mode === vshookNativeOrientationMode) return vshookNativeOrientationPromise
-  vshookNativeOrientationMode = mode
-  vshookNativeOrientationPromise = (async () => {
-    try {
-      const plugin = getNativeScreenOrientationPlugin()
-      if (!plugin) return false
-      if (mode === 'tablet') {
-        await plugin.lock({ orientation: 'landscape' })
-      } else {
-        await plugin.unlock()
-      }
-      return true
-    } catch (error) {
-      if (vshookNativeOrientationMode === mode) vshookNativeOrientationMode = ''
-      return false
-    }
-  })()
-  return vshookNativeOrientationPromise
 }
 
 function applyDirectorDeviceMode(value) {
@@ -84,7 +273,6 @@ function applyDirectorDeviceMode(value) {
   try {
     localStorage.setItem('vshook_director_device_mode', vshookDirectorDeviceMode)
   } catch (error) {}
-  void syncNativeDirectorOrientation(vshookDirectorDeviceMode)
   updateDirectorTabletWebViewport()
   updateDirectorTabletOrientationGuard()
 }
@@ -119,15 +307,8 @@ function renderDirectorTabletOrientationRequired() {
   })
 }
 
-async function requireDirectorTabletLandscape(continuation) {
+function requireDirectorTabletLandscape(continuation) {
   applyDirectorDeviceMode('tablet')
-  if (isVshookInstalledNativeApp()) {
-    vshookDirectorTabletLandscapeContinuation = null
-    await syncNativeDirectorOrientation('tablet')
-    continuation?.()
-    return true
-  }
-  // A confirmação manual só é necessária quando o Diretor roda no navegador.
   if (isDirectorTabletLandscape()) {
     vshookDirectorTabletLandscapeContinuation = null
     continuation?.()
@@ -159,8 +340,7 @@ function ensureDirectorTabletOrientationOverlay() {
 }
 
 function updateDirectorTabletOrientationGuard() {
-  const blocked = !isVshookInstalledNativeApp()
-    && vshookDirectorAppActive
+  const blocked = vshookDirectorAppActive
     && vshookDirectorDeviceMode === 'tablet'
     && !isDirectorTabletLandscape()
   document.documentElement.classList.toggle('directorTabletOrientationBlocked', blocked)
@@ -314,9 +494,7 @@ function isVSHookFakeProjectName(value) {
   const name = String(value || '').trim().toLowerCase()
   if (!name) return true
   const compact = name.replace(/\s+/g, ' ')
-  return compact === 'projeto 1'
-    || compact === 'project 1'
-    || compact === 'projeto vs hook'
+  return compact === 'projeto vs hook'
     || compact === 'vs hook'
     || compact === 'demo'
     || compact === 'projeto demo'
@@ -353,16 +531,6 @@ function renderManualIpBox() {
   `
 }
 
-function renderDiscoverySearchButton() {
-  return '<button class="vshook-mode-button vshook-discovery-search-button" id="searchProjectsBtn">Buscar</button>'
-}
-
-function attachDiscoverySearchHandler(handler = startDiscovery) {
-  document.getElementById('searchProjectsBtn')?.addEventListener('click', () => {
-    void handler()
-  })
-}
-
 function attachManualIpHandler() {
   document.getElementById('manualIpBtn')?.addEventListener('click', () => attemptManualIpEntry())
   document.getElementById('manualIpInput')?.addEventListener('keydown', (event) => {
@@ -376,10 +544,12 @@ function renderSearching() {
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Procurando sessões VS Hook disponíveis na rede Wi‑Fi...</p>
     <p class="vshook-shell-status">A busca continua em segundo plano. Se preferir, digite o IP do computador agora.</p>
-    ${renderDiscoverySearchButton()}
+    ${renderStoredChatButton()}
+    ${renderStandaloneTransferHookButton()}
     ${renderManualIpBox()}
   `)
-  attachDiscoverySearchHandler()
+  attachStoredChatHandler()
+  attachStandaloneTransferHookHandler()
   attachManualIpHandler()
 }
 
@@ -388,11 +558,13 @@ function renderNoProjects() {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Nenhuma sessão VS Hook foi encontrada.</p>
-    <p class="vshook-shell-status">Abra o REAPER ou uma sessão no REAPER e verifique se o Hook Center está aberto.</p>
-    ${renderDiscoverySearchButton()}
+    <p class="vshook-shell-status">Diretor e Músico precisam do REAPER. O Drop Hook funciona somente com a Hook Center aberta.</p>
+    ${renderStoredChatButton()}
+    ${renderStandaloneTransferHookButton()}
     ${renderManualIpBox()}
   `)
-  attachDiscoverySearchHandler()
+  attachStoredChatHandler()
+  attachStandaloneTransferHookHandler()
   attachManualIpHandler()
 }
 
@@ -412,8 +584,10 @@ function renderModeFirst(projects) {
       <button class="vshook-mode-button" id="chooseDirectorBtn">Entrar como Diretor</button>
       <button class="vshook-mode-button" id="chooseMusicianBtn">Entrar como Músico</button>
       <button class="vshook-mode-button" id="chooseRecadosBtn">Entrar como Recados</button>
+      <button class="vshook-mode-button" id="chooseChatHookBtn">Entrar no Chat Hook</button>
+      <button class="vshook-mode-button" id="chooseTransferHookBtn">Entrar no Drop Hook</button>
     </div>
-    <div class="vshook-app-version">Versão 1.0.0 app</div>
+    <div class="vshook-app-version">Versão 1.0.1 app</div>
   `)
 
   document.getElementById('chooseDirectorBtn')?.addEventListener('click', () => {
@@ -428,6 +602,16 @@ function renderModeFirst(projects) {
   document.getElementById('chooseRecadosBtn')?.addEventListener('click', () => {
     const selected = getDefaultMusicianProject(vshookDiscoveredProjects)
     if (selected) enterApp(selected, 'recados', { skipProjectSwitch: true })
+  })
+
+  document.getElementById('chooseChatHookBtn')?.addEventListener('click', () => {
+    const selected = getDefaultMusicianProject(vshookDiscoveredProjects)
+    if (selected) enterApp(selected, 'chat', { skipProjectSwitch: true })
+  })
+
+  document.getElementById('chooseTransferHookBtn')?.addEventListener('click', () => {
+    const selected = getDefaultMusicianProject(vshookDiscoveredProjects)
+    if (selected) enterApp(selected, 'transfer-hook', { skipProjectSwitch: true })
   })
 
 }
@@ -480,8 +664,7 @@ async function refreshProjectSelector() {
     projects = await fetchBridgeBrowserProjects()
   } else {
     const savedProjects = await probeStoredBridgeHosts()
-    const localAddresses = savedProjects.length ? [] : await getNativeLocalNetworkAddresses()
-    projects = savedProjects.length ? savedProjects : await scanInBatches(buildCandidateIps(localAddresses))
+    projects = savedProjects.length ? savedProjects : await scanInBatches(buildCandidateIps())
   }
 
   if (runId !== vshookProjectsRefreshRunId) return
@@ -543,7 +726,13 @@ function renderModeSelection(project) {
 
 function loadModeStyles(mode) {
   document.querySelectorAll('[data-vshook-mode-style]').forEach((el) => el.remove())
-  const cssFile = mode === 'recados' ? './recados-app.css' : './stylediretor-app.css'
+  const cssFile = mode === 'recados'
+    ? './recados-app.css'
+    : mode === 'chat'
+      ? './chat-app.css'
+      : mode === 'transfer-hook'
+        ? './transfer-hook-app.css'
+      : './stylediretor-app.css'
   const link = document.createElement('link')
   link.rel = 'stylesheet'
   link.href = `${cssFile}?v=${VSHOOK_ASSET_VERSION}`
@@ -566,7 +755,6 @@ async function enterApp(project, mode, options = {}) {
     applyDirectorDeviceMode(vshookDirectorDeviceMode)
   } else {
     vshookDirectorAppActive = false
-    void syncNativeDirectorOrientation('phone')
     document.documentElement.classList.remove('directorShellPortraitMode')
     document.documentElement.removeAttribute('data-director-device')
     document.body?.classList.remove('vshook-director-tablet')
@@ -593,27 +781,22 @@ async function enterApp(project, mode, options = {}) {
 
   document.querySelectorAll('[data-vshook-mode-script]').forEach((el) => el.remove())
   const script = document.createElement('script')
-  script.src = `${mode === 'recados' ? './recados.js' : './vsdiretor.js'}?v=${VSHOOK_ASSET_VERSION}`
+  const scriptFile = mode === 'recados'
+    ? './recados.js'
+    : mode === 'chat'
+      ? './chat.js'
+      : mode === 'transfer-hook'
+        ? './transfer-hook.js'
+      : './vsdiretor.js'
+  script.src = `${scriptFile}?v=${VSHOOK_ASSET_VERSION}`
   script.setAttribute('data-vshook-mode-script', mode)
   document.body.appendChild(script)
 }
 
-function timeoutSignal(ms, parentSignal = null) {
+function timeoutSignal(ms) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ms)
-  const abortFromParent = () => controller.abort()
-  if (parentSignal?.aborted) {
-    controller.abort()
-  } else {
-    parentSignal?.addEventListener?.('abort', abortFromParent, { once: true })
-  }
-  return {
-    signal: controller.signal,
-    cancel: () => {
-      clearTimeout(timer)
-      parentSignal?.removeEventListener?.('abort', abortFromParent)
-    },
-  }
+  return { signal: controller.signal, cancel: () => clearTimeout(timer) }
 }
 
 function normalizeIp(value) {
@@ -647,9 +830,6 @@ async function attemptManualIpEntry() {
     return
   }
 
-  if (vshookDiscoveryAbortController) vshookDiscoveryAbortController.abort()
-  const discoveryController = new AbortController()
-  vshookDiscoveryAbortController = discoveryController
   const runId = ++vshookDiscoveryRunId
   setShell(`
     ${getLogoHtml()}
@@ -658,27 +838,17 @@ async function attemptManualIpEntry() {
     <p class="vshook-shell-status">${vshookEscape(parsed.port ? `${ip}:${parsed.port}` : ip)}</p>
   `)
 
-  try {
-    const projects = await fetchDiscovery(
-      ip,
-      VSHOOK_MANUAL_IP_TIMEOUT_MS,
-      parsed.port,
-      discoveryController.signal,
-    )
-    if (runId !== vshookDiscoveryRunId || discoveryController.signal.aborted) return
-    if (projects && projects.length) {
-      renderModeFirst(projects)
-    } else {
-      renderNoProjects()
-      const nextInput = document.getElementById('manualIpInput')
-      if (nextInput) {
-        nextInput.value = parsed.port ? `${ip}:${parsed.port}` : ip
-        nextInput.focus()
-      }
-    }
-  } finally {
-    if (vshookDiscoveryAbortController === discoveryController) {
-      vshookDiscoveryAbortController = null
+  const projects = await fetchDiscovery(ip, VSHOOK_MANUAL_IP_TIMEOUT_MS, parsed.port)
+  if (runId !== vshookDiscoveryRunId) return
+  if (projects && projects.length) {
+    renderModeFirst(projects)
+  } else {
+    try { localStorage.setItem('vshook_transfer_host', ip) } catch (_) {}
+    renderNoProjects()
+    const nextInput = document.getElementById('manualIpInput')
+    if (nextInput) {
+      nextInput.value = parsed.port ? `${ip}:${parsed.port}` : ip
+      nextInput.focus()
     }
   }
 }
@@ -696,39 +866,6 @@ function subnetFromIp(ip) {
   if (!clean) return ''
   const parts = clean.split('.')
   return `${parts[0]}.${parts[1]}.${parts[2]}`
-}
-
-function isPrivateIpv4(ip) {
-  const clean = normalizeIp(ip)
-  if (!clean) return false
-  const parts = clean.split('.').map(Number)
-  if (parts[0] === 10) return true
-  if (parts[0] === 192 && parts[1] === 168) return true
-  return parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31
-}
-
-async function getNativeLocalNetworkAddresses() {
-  if (!isVshookInstalledNativeApp()) return []
-  try {
-    if (!vshookLocalNetworkPlugin) {
-      // Em páginas estáticas o bridge nativo já injeta os plugins neste
-      // objeto; registerPlugin só existe quando o bundle JS do Capacitor foi
-      // importado pela aplicação.
-      vshookLocalNetworkPlugin = window.Capacitor?.Plugins?.VSHookLocalNetwork || null
-      if (!vshookLocalNetworkPlugin) {
-        const registerPlugin = window.Capacitor?.registerPlugin
-        if (typeof registerPlugin === 'function') {
-          vshookLocalNetworkPlugin = registerPlugin('VSHookLocalNetwork')
-        }
-      }
-      if (!vshookLocalNetworkPlugin) return []
-    }
-    const result = await vshookLocalNetworkPlugin.getAddresses()
-    const addresses = Array.isArray(result?.addresses) ? result.addresses : []
-    return [...new Set(addresses.map(normalizeIp).filter(isPrivateIpv4))]
-  } catch (error) {
-    return []
-  }
 }
 
 function uniquePush(list, seen, value) {
@@ -755,8 +892,8 @@ function getStoredBridgeHosts() {
   return hosts
 }
 
-async function fetchJsonWithTimeout(url, timeoutMs, parentSignal = null) {
-  const t = timeoutSignal(timeoutMs, parentSignal)
+async function fetchJsonWithTimeout(url, timeoutMs) {
+  const t = timeoutSignal(timeoutMs)
   try {
     const response = await fetch(url, {
       cache: 'no-store',
@@ -786,60 +923,52 @@ function getPortsToTry(preferredPort) {
   return ports
 }
 
-async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, signal = null) {
+async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS) {
   const cleanIp = normalizeIp(ip)
   if (!cleanIp) return null
   const baseUrl = `http://${cleanIp}:${port}`
 
-  // /discovery já contém as sessões abertas. Durante uma varredura não tente
-  // várias rotas em sequência para cada IP inexistente, pois isso multiplicava
-  // o tempo da busca por toda a rede.
-  const discovery = await fetchJsonWithTimeout(`${baseUrl}/discovery`, timeoutMs, signal)
-  if (!discovery) return null
+  const discovery =
+    await fetchJsonWithTimeout(`${baseUrl}/discovery`, timeoutMs) ||
+    await fetchJsonWithTimeout(`${baseUrl}/discovery.json`, timeoutMs) ||
+    null
+
+  const projectsPayload =
+    await fetchJsonWithTimeout(`${baseUrl}/projects`, timeoutMs) ||
+    await fetchJsonWithTimeout(`${baseUrl}/projects.json`, timeoutMs) ||
+    await fetchJsonWithTimeout(`${baseUrl}/state`, timeoutMs) ||
+    await fetchJsonWithTimeout(`${baseUrl}/state.json`, timeoutMs) ||
+    discovery
+
+  if (!discovery && !projectsPayload) return null
 
   const isVsHook =
     discovery?.app === 'VS Hook' ||
-    String(discovery?.appName || '').toLowerCase().includes('diretor') ||
-    String(discovery?.appName || '').toLowerCase().includes('músicos') ||
-    String(discovery?.appName || '').toLowerCase().includes('musicos')
+    projectsPayload?.app === 'VS Hook' ||
+    String(discovery?.appName || projectsPayload?.appName || '').toLowerCase().includes('diretor') ||
+    String(discovery?.appName || projectsPayload?.appName || '').toLowerCase().includes('músicos') ||
+    String(discovery?.appName || projectsPayload?.appName || '').toLowerCase().includes('musicos')
 
-  const projects = extractProjectList(discovery, discovery, cleanIp)
+  const projects = extractProjectList(projectsPayload || discovery, discovery || projectsPayload, cleanIp)
   if (!projects.length) return null
   if (!isVsHook && !projects.some((project) => project.projectName)) return null
   return projects
 }
 
-async function fetchDiscovery(ip, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, preferredPort = null, signal = null) {
+async function fetchDiscovery(ip, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, preferredPort = null) {
   const cleanIp = normalizeIp(ip)
   if (!cleanIp) return null
-  const ports = getPortsToTry(preferredPort)
-  return await new Promise((resolve) => {
-    let pending = ports.length
-    let settled = false
-    const finish = (projects) => {
-      if (settled) return
-      if (projects && projects.length) {
-        settled = true
-        resolve(projects)
-        return
-      }
-      pending -= 1
-      if (pending <= 0) {
-        settled = true
-        resolve(null)
-      }
-    }
-    for (const port of ports) {
-      fetchDiscoveryOnPort(cleanIp, port, timeoutMs, signal).then(finish).catch(() => finish(null))
-    }
-  })
+  for (const port of getPortsToTry(preferredPort)) {
+    const projects = await fetchDiscoveryOnPort(cleanIp, port, timeoutMs)
+    if (projects && projects.length) return projects
+  }
+  return null
 }
 
-async function probeStoredBridgeHosts(signal = null) {
+async function probeStoredBridgeHosts() {
   const storedHosts = getStoredBridgeHosts()
   for (const ip of storedHosts) {
-    if (signal?.aborted) return []
-    const projects = await fetchDiscovery(ip, VSHOOK_SAVED_PROBE_TIMEOUT_MS, null, signal)
+    const projects = await fetchDiscovery(ip, VSHOOK_SAVED_PROBE_TIMEOUT_MS)
     if (projects && projects.length) return projects
   }
   return []
@@ -902,28 +1031,17 @@ function extractProjectList(payload, baseInfo, ip) {
   return fallback ? [fallback] : []
 }
 
-function buildCandidateIps(localAddresses = []) {
+function buildCandidateIps() {
   const ips = []
   const seenIps = new Set()
   const seenSubnets = new Set()
-  const localSubnets = []
   const prioritySubnets = []
   const secondarySubnets = []
-
-  for (const address of localAddresses) {
-    if (!isPrivateIpv4(address)) continue
-    uniquePush(localSubnets, seenSubnets, subnetFromIp(address))
-  }
-
-  try {
-    const browserHost = normalizeIp(window.location.hostname || '')
-    if (isPrivateIpv4(browserHost)) uniquePush(localSubnets, seenSubnets, subnetFromIp(browserHost))
-  } catch (error) {}
 
   const storedHosts = getStoredBridgeHosts()
   for (const host of storedHosts) {
     uniquePush(ips, seenIps, host)
-    uniquePush(localSubnets, seenSubnets, subnetFromIp(host))
+    uniquePush(prioritySubnets, seenSubnets, subnetFromIp(host))
   }
 
   // Faixas comuns em roteadores. Não fixa IP específico de cliente; o usuário
@@ -947,14 +1065,6 @@ function buildCandidateIps(localAddresses = []) {
 
   // Primeiro testa hosts comuns em TODAS as sub-redes; só depois faz a varredura completa.
   const preferredHosts = [1, 2, 10, 11, 15, 20, 30, 50, 80, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 120, 150, 180, 200, 220, 254]
-  // A faixa real do aparelho sempre vem primeiro e é concluída antes das
-  // tentativas genéricas. Assim qualquer IP válido da rede ativa é encontrado.
-  for (const subnet of localSubnets) {
-    for (const host of preferredHosts) uniquePush(ips, seenIps, `${subnet}.${host}`)
-  }
-  for (const subnet of localSubnets) {
-    for (let host = 1; host <= 254; host += 1) uniquePush(ips, seenIps, `${subnet}.${host}`)
-  }
   for (const subnet of prioritySubnets) {
     for (const host of preferredHosts) uniquePush(ips, seenIps, `${subnet}.${host}`)
   }
@@ -971,16 +1081,12 @@ function buildCandidateIps(localAddresses = []) {
   return ips
 }
 
-async function scanInBatches(ips, batchSize = VSHOOK_SCAN_BATCH_SIZE, signal = null) {
+async function scanInBatches(ips, batchSize = VSHOOK_SCAN_BATCH_SIZE) {
   const found = []
   const seen = new Set()
   for (let i = 0; i < ips.length; i += batchSize) {
-    if (signal?.aborted) return []
     const batch = ips.slice(i, i + batchSize)
-    const results = await Promise.all(
-      batch.map((ip) => fetchDiscovery(ip, VSHOOK_SCAN_TIMEOUT_MS, null, signal)),
-    )
-    if (signal?.aborted) return []
+    const results = await Promise.all(batch.map((ip) => fetchDiscovery(ip)))
     for (const result of results) {
       const items = Array.isArray(result) ? result : (result ? [result] : [])
       for (const item of items) {
@@ -1025,9 +1131,9 @@ async function fetchBridgeBrowserProjects() {
   if (!host) return []
 
   const payload =
-    await fetchJsonWithTimeout(`${window.location.origin}/projects`, VSHOOK_SCAN_TIMEOUT_MS) ||
-    await fetchJsonWithTimeout(`${window.location.origin}/discovery`, VSHOOK_SCAN_TIMEOUT_MS) ||
-    await fetchJsonWithTimeout(`${window.location.origin}/state`, VSHOOK_SCAN_TIMEOUT_MS)
+    await fetchJsonWithTimeout(`${window.location.origin}/projects`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS) ||
+    await fetchJsonWithTimeout(`${window.location.origin}/discovery`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS) ||
+    await fetchJsonWithTimeout(`${window.location.origin}/state`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS)
 
   if (!payload) return []
   return extractProjectList(payload, payload, host)
@@ -1039,10 +1145,14 @@ function renderBridgeNoProjects() {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Nenhuma sessão VS Hook foi encontrada.</p>
-    <p class="vshook-shell-status">Abra o REAPER ou uma sessão no REAPER e verifique se o Hook Center está aberto.</p>
-    ${renderDiscoverySearchButton()}
+    <p class="vshook-shell-status">Diretor e Músico precisam do REAPER. O Drop Hook funciona somente com a Hook Center aberta.</p>
+    ${renderStoredChatButton()}
+    ${renderStandaloneTransferHookButton()}
+    <button class="vshook-secondary-button" id="refreshProjectsBtn">Atualizar</button>
   `)
-  attachDiscoverySearchHandler(startBridgeBrowserMode)
+  attachStoredChatHandler()
+  attachStandaloneTransferHookHandler()
+  document.getElementById('refreshProjectsBtn')?.addEventListener('click', startBridgeBrowserMode)
 }
 
 async function startBridgeBrowserMode() {
@@ -1058,33 +1168,18 @@ async function startBridgeBrowserMode() {
 }
 
 async function startDiscovery() {
-  if (vshookDiscoveryAbortController) vshookDiscoveryAbortController.abort()
-  const discoveryController = new AbortController()
-  vshookDiscoveryAbortController = discoveryController
   const runId = ++vshookDiscoveryRunId
   renderSearching()
-  try {
-    const savedProjects = await probeStoredBridgeHosts(discoveryController.signal)
-    if (runId !== vshookDiscoveryRunId || discoveryController.signal.aborted) return
-    if (savedProjects.length) {
-      renderModeFirst(savedProjects)
-      return
-    }
-    const localAddresses = await getNativeLocalNetworkAddresses()
-    if (runId !== vshookDiscoveryRunId || discoveryController.signal.aborted) return
-    const projects = await scanInBatches(
-      buildCandidateIps(localAddresses),
-      VSHOOK_SCAN_BATCH_SIZE,
-      discoveryController.signal,
-    )
-    if (runId !== vshookDiscoveryRunId || discoveryController.signal.aborted) return
-    if (projects.length) renderModeFirst(projects)
-    else renderNoProjects()
-  } finally {
-    if (vshookDiscoveryAbortController === discoveryController) {
-      vshookDiscoveryAbortController = null
-    }
+  const savedProjects = await probeStoredBridgeHosts()
+  if (runId !== vshookDiscoveryRunId) return
+  if (savedProjects.length) {
+    renderModeFirst(savedProjects)
+    return
   }
+  const projects = await scanInBatches(buildCandidateIps())
+  if (runId !== vshookDiscoveryRunId) return
+  if (projects.length) renderModeFirst(projects)
+  else renderNoProjects()
 }
 
 async function keepScreenAwake() {
@@ -1094,12 +1189,7 @@ async function keepScreenAwake() {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    keepScreenAwake()
-    if (vshookDirectorAppActive) {
-      void syncNativeDirectorOrientation(vshookDirectorDeviceMode, true)
-    }
-  }
+  if (document.visibilityState === 'visible') keepScreenAwake()
 })
 
 
@@ -1161,17 +1251,106 @@ window.vshookExitToProjectSelector = function () {
     localStorage.removeItem('vshook_selected_mode')
     // Mantém vshook_access_session para voltar ao Diretor sem pedir a senha novamente.
   } catch (error) {}
-  const reload = () => window.location.reload()
-  if (isVshookInstalledNativeApp()) {
-    syncNativeDirectorOrientation('phone', true).finally(reload)
-  } else {
-    reload()
+  window.location.reload()
+}
+
+
+
+// Única diferença do app da loja: descoberta automática usando a interface
+// de rede informada pelo Android/iOS. Todo o restante vem da Hook Center.
+let vshookStoreLocalNetworkPlugin = null
+
+function isVshookInstalledNativeApp() {
+  try {
+    const capacitor = window.Capacitor
+    if (typeof capacitor?.isNativePlatform === 'function') return capacitor.isNativePlatform()
+    const platform = typeof capacitor?.getPlatform === 'function'
+      ? String(capacitor.getPlatform() || '').toLowerCase()
+      : ''
+    if (platform === 'android' || platform === 'ios') return true
+  } catch (error) {}
+  const protocol = String(window.location?.protocol || '').toLowerCase()
+  return protocol === 'capacitor:' || protocol === 'ionic:'
+}
+
+function isVshookStorePrivateIpv4(value) {
+  const ip = normalizeIp(value)
+  if (!ip) return false
+  const parts = ip.split('.').map(Number)
+  if (parts[0] === 10) return true
+  if (parts[0] === 192 && parts[1] === 168) return true
+  return parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31
+}
+
+async function getVshookStoreLocalNetworkAddresses() {
+  if (!isVshookInstalledNativeApp()) return []
+  try {
+    if (!vshookStoreLocalNetworkPlugin) {
+      vshookStoreLocalNetworkPlugin = window.Capacitor?.Plugins?.VSHookLocalNetwork || null
+      if (!vshookStoreLocalNetworkPlugin && typeof window.Capacitor?.registerPlugin === 'function') {
+        vshookStoreLocalNetworkPlugin = window.Capacitor.registerPlugin('VSHookLocalNetwork')
+      }
+    }
+    if (!vshookStoreLocalNetworkPlugin) return []
+    const result = await vshookStoreLocalNetworkPlugin.getAddresses()
+    const addresses = Array.isArray(result?.addresses) ? result.addresses : []
+    return [...new Set(addresses.map(normalizeIp).filter(isVshookStorePrivateIpv4))]
+  } catch (error) {
+    return []
   }
 }
 
-window.addEventListener('load', () => {
+function buildVshookStoreCandidateIps(localAddresses) {
+  const result = []
+  const seen = new Set()
+  const push = (value) => {
+    const ip = normalizeIp(value)
+    if (!ip || seen.has(ip)) return
+    seen.add(ip)
+    result.push(ip)
+  }
+  const subnets = [...new Set(localAddresses.map(subnetFromIp).filter(Boolean))]
+  const preferredHosts = [1, 2, 10, 11, 15, 20, 30, 50, 80, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 120, 150, 180, 200, 220, 254]
+  for (const subnet of subnets) {
+    for (const host of preferredHosts) push(subnet + '.' + host)
+  }
+  for (const subnet of subnets) {
+    for (let host = 1; host <= 254; host += 1) push(subnet + '.' + host)
+  }
+  for (const ip of buildCandidateIps()) push(ip)
+  return result
+}
+
+const vshookStoreDefaultDiscovery = startDiscovery
+startDiscovery = async function () {
+  if (!isVshookInstalledNativeApp()) return vshookStoreDefaultDiscovery()
+  const runId = ++vshookDiscoveryRunId
+  renderSearching()
+  const savedProjects = await probeStoredBridgeHosts()
+  if (runId !== vshookDiscoveryRunId) return
+  if (savedProjects.length) {
+    renderModeFirst(savedProjects)
+    return
+  }
+  const localAddresses = await getVshookStoreLocalNetworkAddresses()
+  if (runId !== vshookDiscoveryRunId) return
+  const projects = await scanInBatches(buildVshookStoreCandidateIps(localAddresses))
+  if (runId !== vshookDiscoveryRunId) return
+  if (projects.length) renderModeFirst(projects)
+  else renderNoProjects()
+}
+
+window.addEventListener('load', async () => {
   keepScreenAwake()
   consumeVSHookForcedModeSelection()
+  await bootstrapChatMobileSessionFromQr()
+  await setupNativeChatPushNotifications()
+  try {
+    if ((consumeChatNotificationTarget() || localStorage.getItem('vshook_selected_mode') === 'chat') && getStoredChatMobileSession()) {
+      enterStoredChat()
+      return
+    }
+  } catch (error) {}
   if (isBridgeBrowserMode()) startBridgeBrowserMode()
   else startDiscovery()
 })

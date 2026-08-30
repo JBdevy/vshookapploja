@@ -46,6 +46,7 @@ jobs:
           npx cap sync ios
           python3 scripts/apply-native-icons.py ios
           python3 scripts/configure-local-network.py ios
+          python3 scripts/configure-push-notifications.py ios
 
       - name: Importar certificado iOS
         env:

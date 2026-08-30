@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vshook-mobile-1.0.0-native-single-motor-v36';
+const CACHE_NAME = 'vshook-mobile-1.0.1-cifras-v41';
 const APP_ASSETS = [
   './',
   './index.html',
@@ -14,8 +14,10 @@ const APP_ASSETS = [
   './recados.js',
   './recados-app.css',
   './recados.webmanifest',
-  './vshook-2.0.67',
-  './vshook-2.0.67',
+  './chat.js',
+  './chat-app.css',
+  './transfer-hook.js',
+  './transfer-hook-app.css',
   './vsdiretor-icon-180.png',
   './vsdiretor-icon-192.png',
   './vsdiretor-icon-512.png',
@@ -52,11 +54,13 @@ self.addEventListener('fetch', (event) => {
     '/state', '/state.json',
     '/lyrics', '/lyrics.json',
     '/command', '/technical-notice', '/recados-notice', '/recados-templates',
+    '/chat/state', '/chat/messages', '/chat/pin', '/chat/delete', '/chat/bootstrap',
+    '/api/chat/push/register', '/api/chat/push/unregister',
     '/health', '/ping', '/bridge-info', '/qr.svg', '/app-qr.svg',
     '/media', '/tp-media', '/teleprompt-media'
   ];
 
-  if (apiPaths.includes(url.pathname)) {
+  if (apiPaths.includes(url.pathname) || url.pathname.startsWith('/transfer-hook/')) {
     event.respondWith(fetch(req));
     return;
   }
