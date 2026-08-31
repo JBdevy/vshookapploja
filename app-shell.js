@@ -12,6 +12,7 @@ const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
 const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
 const VSHOOK_CHAT_PUSH_TOKEN_KEY = 'vshook_chat_push_token'
 const VSHOOK_CHAT_PUSH_MUTED_KEY = 'vshook_chat_push_muted'
+const VSHOOK_CHAT_BACKEND_URL = 'https://hookupdate7.up.railway.app'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
@@ -91,7 +92,7 @@ function hasStoredChatBootstrapKey() {
 function renderStoredChatButton() {
   if (getStoredChatMobileSession()) return '<button class="vshook-mode-button" id="openStoredChatBtn">Abrir Chat Hook pela internet</button>'
   if (hasStoredChatBootstrapKey()) return '<button class="vshook-mode-button" id="openStoredChatBtn">Abrir Chat Hook</button>'
-  return ''
+  return '<button class="vshook-mode-button" id="openStoredChatBtn">Entrar no Chat Hook</button>'
 }
 
 function enterStoredChat() {
@@ -297,7 +298,52 @@ window.addEventListener('online', () => {
 })
 
 function attachStoredChatHandler() {
-  document.getElementById('openStoredChatBtn')?.addEventListener('click', enterStoredChat)
+  document.getElementById('openStoredChatBtn')?.addEventListener('click', () => {
+    if (getStoredChatMobileSession() || hasStoredChatBootstrapKey()) enterStoredChat()
+    else renderChatLogin()
+  })
+}
+
+function renderChatLogin() {
+  setShell(`
+    ${getLogoHtml()}
+    <h1 class="vshook-shell-title">Entrar no Chat Hook</h1>
+    <p class="vshook-shell-subtitle">Use o mesmo e-mail informado na compra do VS Hook.</p>
+    <form id="chatLoginForm" class="vshook-login-form">
+      <input id="chatLoginEmail" class="vshook-manual-ip-input" type="email" autocomplete="email" placeholder="E-mail da compra" required />
+      <div id="chatLoginStatus" class="vshook-shell-status"></div>
+      <button class="vshook-mode-button" type="submit">Entrar</button>
+    </form>
+    <button class="vshook-back-button" id="chatLoginBackBtn" type="button">Voltar</button>
+  `)
+  document.getElementById('chatLoginBackBtn')?.addEventListener('click', () => renderModeFirst(vshookDiscoveredProjects))
+  document.getElementById('chatLoginForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const email = String(document.getElementById('chatLoginEmail')?.value || '').trim().toLowerCase()
+    const status = document.getElementById('chatLoginStatus')
+    const button = event.currentTarget.querySelector('button[type="submit"]')
+    if (!email) return
+    button.disabled = true
+    if (status) status.textContent = 'Validando e-mail...'
+    try {
+      const response = await fetch(`${VSHOOK_CHAT_BACKEND_URL}/api/chat/mobile/session`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, mobileLogin: true }), cache: 'no-store'
+      })
+      const result = await response.json().catch(() => ({}))
+      const created = result?.mobileSession
+      if (!response.ok || !created?.accessToken) throw new Error(result?.error || 'E-mail não encontrado ou licença inativa.')
+      localStorage.setItem(VSHOOK_CHAT_MOBILE_SESSION_KEY, JSON.stringify({
+        accessToken: String(created.accessToken), backendUrl: VSHOOK_CHAT_BACKEND_URL,
+        expiresAt: String(created.expiresAt || ''), bridgeBaseUrl: VSHOOK_CHAT_BACKEND_URL
+      }))
+      enterStoredChat()
+    } catch (error) {
+      if (status) status.textContent = error.message || 'Não foi possível entrar no Chat Hook.'
+    } finally {
+      button.disabled = false
+    }
+  })
 }
 
 function renderStandaloneTransferHookButton() {
@@ -674,8 +720,8 @@ function renderModeFirst(projects) {
   })
 
   document.getElementById('chooseChatHookBtn')?.addEventListener('click', () => {
-    const selected = getDefaultMusicianProject(vshookDiscoveredProjects)
-    if (selected) enterApp(selected, 'chat', { skipProjectSwitch: true })
+    if (getStoredChatMobileSession() || hasStoredChatBootstrapKey()) enterStoredChat()
+    else renderChatLogin()
   })
 
   document.getElementById('chooseTransferHookBtn')?.addEventListener('click', () => {

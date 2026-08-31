@@ -73,12 +73,25 @@ jobs:
         with:
           path: release-assets
 
+      - name: Padronizar nomes dos arquivos do Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(find release-assets -type f -name '*.apk' -print -quit)"
+          aab="$(find release-assets -type f -name '*.aab' -print -quit)"
+          ipa="$(find release-assets -type f -name '*.ipa' -print -quit)"
+          test -n "$apk" && test -n "$aab" && test -n "$ipa"
+          mv "$apk" 'release-assets/VS Hook.apk'
+          mv "$aab" 'release-assets/VS Hook.aab'
+          mv "$ipa" 'release-assets/VS Hook.ipa'
+
       - name: Conferir arquivos do Release
         shell: bash
         run: |
           find release-assets -type f -print
-          find release-assets -type f \( -name '*.apk' -o -name '*.aab' \) | grep -q .
-          find release-assets -type f -name '*.ipa' | grep -q .
+          test -f 'release-assets/VS Hook.apk'
+          test -f 'release-assets/VS Hook.aab'
+          test -f 'release-assets/VS Hook.ipa'
 
       - name: Publicar um único GitHub Release
         uses: softprops/action-gh-release@v2
@@ -88,6 +101,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            release-assets/**/*.apk
-            release-assets/**/*.aab
-            release-assets/**/*.ipa
+            release-assets/VS Hook.apk
+            release-assets/VS Hook.aab
+            release-assets/VS Hook.ipa
