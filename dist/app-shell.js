@@ -6,11 +6,12 @@ const VSHOOK_MANUAL_IP_TIMEOUT_MS = 2800
 const VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS = 4500
 const VSHOOK_SCAN_BATCH_SIZE = 72
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-1-cifras-v41'
+const VSHOOK_ASSET_VERSION = '1-0-1-cifras-v42'
 const VSHOOK_CHAT_BOOTSTRAP_KEY = 'vshook_chat_bootstrap_key'
 const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
 const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
 const VSHOOK_CHAT_PUSH_TOKEN_KEY = 'vshook_chat_push_token'
+const VSHOOK_CHAT_PUSH_MUTED_KEY = 'vshook_chat_push_muted'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
@@ -132,8 +133,30 @@ function openChatFromNativeNotification() {
 
 let vshookChatPushListenersReady = false
 
+function isChatPushMuted() {
+  try { return localStorage.getItem(VSHOOK_CHAT_PUSH_MUTED_KEY) === '1' }
+  catch (error) { return false }
+}
+
+async function postChatPushUnregister(session, pushToken) {
+  if (!session?.accessToken || !session?.backendUrl || !pushToken) return false
+  const response = await fetch(`${String(session.backendUrl).replace(/\/+$/, '')}/api/chat/push/unregister`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chatMobileToken: session.accessToken, pushToken }),
+    cache: 'no-store',
+  })
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok || result.ok === false) throw new Error(result.error || 'Não foi possível silenciar as notificações do Chat Hook.')
+  return true
+}
+
 async function postChatPushToken(session, pushToken, platform) {
   if (!session?.accessToken || !session?.backendUrl || !pushToken) return false
+  if (isChatPushMuted()) {
+    await postChatPushUnregister(session, pushToken)
+    return false
+  }
   const response = await fetch(`${String(session.backendUrl).replace(/\/+$/, '')}/api/chat/push/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -151,6 +174,7 @@ async function postChatPushToken(session, pushToken, platform) {
 }
 
 async function showForegroundChatNotification(notification) {
+  if (isChatPushMuted()) return
   const platform = String(window.Capacitor?.getPlatform?.() || '').toLowerCase()
   if (platform !== 'android') return
   const LocalNotifications = window.Capacitor?.Plugins?.LocalNotifications
@@ -173,6 +197,13 @@ async function setupNativeChatPushNotifications() {
   if (!isVshookInstalledNativeApp()) return false
   const session = getStoredChatMobileSession()
   if (!session) return false
+  if (isChatPushMuted()) {
+    let storedToken = ''
+    try { storedToken = String(localStorage.getItem(VSHOOK_CHAT_PUSH_TOKEN_KEY) || '') }
+    catch (error) {}
+    if (storedToken) await postChatPushUnregister(session, storedToken).catch(() => false)
+    return false
+  }
   const PushNotifications = window.Capacitor?.Plugins?.PushNotifications
   if (!PushNotifications) return false
   const platform = String(window.Capacitor?.getPlatform?.() || '').toLowerCase()
@@ -226,6 +257,44 @@ async function setupNativeChatPushNotifications() {
 }
 
 window.vshookSetupNativeChatPushNotifications = setupNativeChatPushNotifications
+window.vshookIsChatPushMuted = isChatPushMuted
+window.vshookSetChatPushMuted = async function (muted) {
+  const shouldMute = muted === true
+  try {
+    if (shouldMute) localStorage.setItem(VSHOOK_CHAT_PUSH_MUTED_KEY, '1')
+    else localStorage.removeItem(VSHOOK_CHAT_PUSH_MUTED_KEY)
+  } catch (error) {}
+
+  const session = getStoredChatMobileSession()
+  let storedToken = ''
+  try { storedToken = String(localStorage.getItem(VSHOOK_CHAT_PUSH_TOKEN_KEY) || '') }
+  catch (error) {}
+
+  if (shouldMute) {
+    if (!session || !storedToken) return { muted: true, synced: true }
+    try {
+      await postChatPushUnregister(session, storedToken)
+      return { muted: true, synced: true }
+    } catch (error) {
+      return { muted: true, synced: false, error: error.message }
+    }
+  }
+
+  try {
+    const platform = String(window.Capacitor?.getPlatform?.() || '').toLowerCase()
+    if (session && storedToken && (platform === 'android' || platform === 'ios')) {
+      await postChatPushToken(session, storedToken, platform)
+    }
+    await setupNativeChatPushNotifications()
+    return { muted: false, synced: true }
+  } catch (error) {
+    return { muted: false, synced: false, error: error.message }
+  }
+}
+
+window.addEventListener('online', () => {
+  setupNativeChatPushNotifications().catch(() => false)
+})
 
 function attachStoredChatHandler() {
   document.getElementById('openStoredChatBtn')?.addEventListener('click', enterStoredChat)
