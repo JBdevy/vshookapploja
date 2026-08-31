@@ -152,6 +152,7 @@
           </div>
           <div class="chatMobileHeaderActions">
             <button id="chatMobileMuteButton" class="chatMobileMuteButton" type="button" aria-label="Silenciar notificações push do Chat Hook" aria-pressed="false" hidden><span>Silenciar</span><i aria-hidden="true"></i></button>
+            <button id="chatMobileLogoutButton" class="chatMobileHeaderButton chatMobileLogoutButton" type="button">Sair</button>
             <button id="chatMobileAdminMenu" class="chatMobileHeaderButton" type="button" aria-label="Configurar chat" hidden>☰</button>
             <button id="chatMobileAvatarButton" class="chatMobileHeaderButton" type="button" hidden>Foto</button>
             <input id="chatMobileAvatarInput" type="file" accept="image/*" hidden />
@@ -695,6 +696,18 @@
     return setChatPushMuted(!chatPushMuted(), statusElement)
   }
 
+  async function logoutChat() {
+    const button = document.getElementById('chatMobileLogoutButton')
+    if (button) button.disabled = true
+    try {
+      if (typeof window.vshookLogoutChat === 'function') await window.vshookLogoutChat()
+      else clearMobileSession()
+      window.vshookExitToProjectSelector?.()
+    } finally {
+      if (button?.isConnected) button.disabled = false
+    }
+  }
+
   async function saveAdminSettings() {
     const status = document.getElementById('chatMobileAdminStatus')
     try {
@@ -739,6 +752,7 @@
   function bindEvents() {
     document.getElementById('chatMobileBack')?.addEventListener('click', () => window.vshookExitToProjectSelector?.())
     document.getElementById('chatMobileMuteButton')?.addEventListener('click', () => toggleChatPushMute())
+    document.getElementById('chatMobileLogoutButton')?.addEventListener('click', logoutChat)
     document.getElementById('chatMobileAdminMenu')?.addEventListener('click', openAdminSettings)
     document.getElementById('chatMobileAdminClose')?.addEventListener('click', () => { document.getElementById('chatMobileAdminModal').hidden = true })
     document.getElementById('chatMobileAdminSave')?.addEventListener('click', saveAdminSettings)

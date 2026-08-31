@@ -70,6 +70,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .chatMobileMuteButton.is-muted i{background:#d88b16}
 .chatMobileMuteButton.is-muted i::after{transform:translateX(12px)}
 .chatMobileMuteButton:disabled{opacity:.55}
+.chatMobileLogoutButton{color:#fca5a5;border-color:rgba(248,113,113,.5)}
 
 .chatMobileAvatar {
   display: grid;

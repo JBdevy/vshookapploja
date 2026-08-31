@@ -293,6 +293,20 @@ window.vshookSetChatPushMuted = async function (muted) {
   }
 }
 
+window.vshookLogoutChat = async function () {
+  const session = getStoredChatMobileSession()
+  let storedToken = ''
+  try { storedToken = String(localStorage.getItem(VSHOOK_CHAT_PUSH_TOKEN_KEY) || '') } catch (error) {}
+  if (session && storedToken) {
+    try { await postChatPushUnregister(session, storedToken) } catch (error) {}
+  }
+  try {
+    localStorage.removeItem(VSHOOK_CHAT_MOBILE_SESSION_KEY)
+    localStorage.removeItem(VSHOOK_CHAT_BOOTSTRAP_KEY)
+  } catch (error) {}
+  return true
+}
+
 window.addEventListener('online', () => {
   setupNativeChatPushNotifications().catch(() => false)
 })
