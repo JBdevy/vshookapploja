@@ -14,7 +14,6 @@
   let polling = false
   let sending = false
   let selectedMedia = null
-  let adminPassword = ''
   let pushMuteBusy = false
   let pollTimer = 0
   let mobileSession = readMobileSession()
@@ -202,7 +201,7 @@
             <label><span>Limpar depois de quantos dias</span><input id="chatMobileAdminRetention" type="number" min="1" max="30" /></label>
             <label><span>Silenciar notificações push</span><input id="chatMobileAdminMute" type="checkbox" /></label>
             <div id="chatMobileAdminStatus" class="chatMobileStatus"></div>
-            <div class="chatMobileAdminActions"><button id="chatMobileAdminClear" type="button">Limpar chat</button><button id="chatMobileAdminClose" type="button">Cancelar</button><button id="chatMobileAdminSave" type="button">Salvar</button></div>
+            <div class="chatMobileAdminActions"><button id="chatMobileAdminClear" type="button">Limpar chat</button><button id="chatMobileAdminLogout" class="chatMobileAdminLogout" type="button">Sair</button><button id="chatMobileAdminClose" type="button">Cancelar</button><button id="chatMobileAdminSave" type="button">Salvar</button></div>
           </section>
         </div>
       </main>`
@@ -320,9 +319,11 @@
     const adminMenu = document.getElementById('chatMobileAdminMenu')
     const avatarButton = document.getElementById('chatMobileAvatarButton')
     const muteButton = document.getElementById('chatMobileMuteButton')
+    const logoutButton = document.getElementById('chatMobileLogoutButton')
     if (adminMenu) adminMenu.hidden = user.isAdmin !== true
     if (avatarButton) avatarButton.hidden = user.isAdmin !== true
     if (muteButton) muteButton.hidden = user.isAdmin === true
+    if (logoutButton) logoutButton.hidden = user.isAdmin === true
     renderPushMuteControls()
     const videoChoice = document.getElementById('chatMobileVideoChoice')
     if (videoChoice) videoChoice.hidden = user.isAdmin !== true
@@ -619,23 +620,8 @@
     }
   }
 
-  async function ensureAdminUnlocked() {
-    if (adminPassword) return true
-    const password = window.prompt('Digite a mesma senha usada para entrar no painel:')
-    if (!password) return false
-    try {
-      await post('/chat/admin/unlock', { adminPassword: password })
-      adminPassword = password
-      return true
-    } catch (error) {
-      document.getElementById('chatMobileStatus').textContent = error.message
-      return false
-    }
-  }
-
   async function openAdminSettings() {
     if (chatState?.user?.isAdmin !== true) return
-    if (!(await ensureAdminUnlocked())) return
     const settings = chatState.chat || {}
     document.getElementById('chatMobileAdminOpen').checked = settings.open !== false
     document.getElementById('chatMobileAdminLimit').value = String(settings.dailyMessageLimit || 10)
@@ -712,7 +698,6 @@
     const status = document.getElementById('chatMobileAdminStatus')
     try {
       const result = await post('/chat/admin/settings', {
-        adminPassword,
         open: document.getElementById('chatMobileAdminOpen').checked,
         dailyMessageLimit: Number(document.getElementById('chatMobileAdminLimit').value),
         dailyMessageUnlimited: document.getElementById('chatMobileAdminUnlimited').checked,
@@ -728,7 +713,7 @@
   async function clearChatAsAdmin() {
     if (!window.confirm('Apagar todas as mensagens e mídias do Chat Hook?')) return
     try {
-      const result = await post('/chat/admin/clear', { adminPassword })
+      const result = await post('/chat/admin/clear')
       applyState(result, true)
       document.getElementById('chatMobileAdminStatus').textContent = 'Chat limpo.'
     } catch (error) {
@@ -753,6 +738,7 @@
     document.getElementById('chatMobileBack')?.addEventListener('click', () => window.vshookExitToProjectSelector?.())
     document.getElementById('chatMobileMuteButton')?.addEventListener('click', () => toggleChatPushMute())
     document.getElementById('chatMobileLogoutButton')?.addEventListener('click', logoutChat)
+    document.getElementById('chatMobileAdminLogout')?.addEventListener('click', logoutChat)
     document.getElementById('chatMobileAdminMenu')?.addEventListener('click', openAdminSettings)
     document.getElementById('chatMobileAdminClose')?.addEventListener('click', () => { document.getElementById('chatMobileAdminModal').hidden = true })
     document.getElementById('chatMobileAdminSave')?.addEventListener('click', saveAdminSettings)
