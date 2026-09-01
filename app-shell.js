@@ -262,26 +262,6 @@ async function rotateNativeChatPushToken(PushNotifications, rejectedToken, platf
   }
 }
 
-async function showForegroundChatNotification(notification) {
-  if (isChatPushMuted()) return
-  const platform = String(window.Capacitor?.getPlatform?.() || '').toLowerCase()
-  if (platform !== 'android') return
-  const LocalNotifications = window.Capacitor?.Plugins?.LocalNotifications
-  if (!LocalNotifications) return
-  try {
-    const permission = await LocalNotifications.checkPermissions()
-    if (permission?.display !== 'granted') await LocalNotifications.requestPermissions()
-    await LocalNotifications.schedule({ notifications: [{
-      id: Math.max(1, Math.floor(Date.now() % 2147483000)),
-      title: String(notification?.title || 'Chat Hook'),
-      body: String(notification?.body || 'Nova mensagem'),
-      channelId: 'chat_hook_messages',
-      sound: 'default',
-      extra: { target: 'chat-hook' },
-    }] })
-  } catch (error) {}
-}
-
 async function setupNativeChatPushNotifications() {
   if (!isVshookInstalledNativeApp()) return false
   const session = getStoredChatMobileSession()
@@ -327,18 +307,9 @@ async function setupNativeChatPushNotifications() {
       reportChatPushDiagnostic(currentSession, 'registration_error', detail).catch(() => false)
       console.warn('Chat Hook push registration error', error)
     })
-    await PushNotifications.addListener('pushNotificationReceived', (notification) => {
-      showForegroundChatNotification(notification).catch(() => {})
-    })
     await PushNotifications.addListener('pushNotificationActionPerformed', () => {
       openChatFromNativeNotification()
     })
-    const LocalNotifications = window.Capacitor?.Plugins?.LocalNotifications
-    if (LocalNotifications) {
-      await LocalNotifications.addListener('localNotificationActionPerformed', () => {
-        openChatFromNativeNotification()
-      })
-    }
   }
 
   try {
