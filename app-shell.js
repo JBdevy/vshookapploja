@@ -751,15 +751,26 @@ function renderManualIpBox() {
     <div class="vshook-manual-ip-box">
       <input class="vshook-manual-ip-input" id="manualIpInput" inputmode="decimal" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="IP do computador. Ex: 192.168.0.10" />
       <button class="vshook-secondary-button" id="manualIpBtn">Entrar pelo IP</button>
+      <button class="vshook-secondary-button" id="searchAgainBtn">Procurar</button>
     </div>
   `
 }
 
 function attachManualIpHandler() {
   document.getElementById('manualIpBtn')?.addEventListener('click', () => attemptManualIpEntry())
+  document.getElementById('searchAgainBtn')?.addEventListener('click', () => restartDiscovery())
   document.getElementById('manualIpInput')?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') attemptManualIpEntry()
   })
+}
+
+function restartDiscovery() {
+  // Invalida imediatamente a execução anterior e descarta apenas resultados
+  // temporários. O próximo startDiscovery consulta de novo a rede ativa.
+  vshookDiscoveryRunId += 1
+  vshookDiscoveredProjects = []
+  try { localStorage.removeItem('vshook_cached_mode_projects') } catch (error) {}
+  startDiscovery()
 }
 
 function renderSearching() {
@@ -767,7 +778,8 @@ function renderSearching() {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Procurando sessões VS Hook disponíveis na rede Wi‑Fi...</p>
-    <p class="vshook-shell-status">A busca continua em segundo plano. Se preferir, digite o IP do computador agora.</p>
+    <div class="vshook-search-spinner" role="status" aria-label="Procurando"></div>
+    <p class="vshook-shell-status">Abra o projeto no REAPER. A busca usa o Wi‑Fi atual e continua em segundo plano. Se preferir, digite o IP do computador.</p>
     ${renderStoredChatButton()}
     ${renderStandaloneTransferHookButton()}
     ${renderManualIpBox()}
@@ -782,7 +794,7 @@ function renderNoProjects() {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Nenhuma sessão VS Hook foi encontrada.</p>
-    <p class="vshook-shell-status">Diretor e Músico precisam do REAPER. O Drop Hook funciona somente com a Hook Center aberta.</p>
+    <p class="vshook-shell-status">Abra o projeto no REAPER e toque em Procurar. O Drop Hook funciona somente com a Hook Center aberta.</p>
     ${renderStoredChatButton()}
     ${renderStandaloneTransferHookButton()}
     ${renderManualIpBox()}
@@ -900,7 +912,7 @@ async function refreshProjectSelector() {
       localStorage.removeItem('vshook_selected_project')
       localStorage.removeItem('vshook_cached_mode_projects')
     } catch (error) {}
-    renderProjects([], { status: 'Abra o REAPER ou uma sessão no REAPER e verifique se o Hook Center está aberto.' })
+    renderProjects([], { status: 'Abra o projeto no REAPER e verifique se a sessão está disponível.' })
   }
 }
 
@@ -918,7 +930,7 @@ function renderProjects(projects, options = {}) {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">Modo Diretor</h1>
     <p class="vshook-shell-subtitle">Selecione a sessão disponível na rede Wi‑Fi.</p>
-    <div class="vshook-project-list">${rows || `<div class="vshook-shell-status">Abra o REAPER ou uma sessão no REAPER e verifique se o Hook Center está aberto.</div>`}</div>
+    <div class="vshook-project-list">${rows || `<div class="vshook-shell-status">Abra o projeto no REAPER e verifique se a sessão está disponível.</div>`}</div>
     ${status ? `<p class="vshook-shell-status">${vshookEscape(status)}</p>` : ''}
     <div class="vshook-project-actions">
       <button class="vshook-back-button" id="backModeBtn">Voltar</button>
@@ -1369,7 +1381,7 @@ function renderBridgeNoProjects() {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Nenhuma sessão VS Hook foi encontrada.</p>
-    <p class="vshook-shell-status">Diretor e Músico precisam do REAPER. O Drop Hook funciona somente com a Hook Center aberta.</p>
+    <p class="vshook-shell-status">Abra o projeto no REAPER. O Drop Hook funciona somente com a Hook Center aberta.</p>
     ${renderStoredChatButton()}
     ${renderStandaloneTransferHookButton()}
     <button class="vshook-secondary-button" id="refreshProjectsBtn">Atualizar</button>
@@ -1534,6 +1546,11 @@ function buildVshookStoreCandidateIps(localAddresses) {
     result.push(ip)
   }
   const subnets = [...new Set(localAddresses.map(subnetFromIp).filter(Boolean))]
+  // Se um computador salvo ainda pertence ao Wi-Fi atual, ele é o primeiro
+  // candidato. Endereços de redes antigas ficam somente na busca de reserva.
+  for (const host of getStoredBridgeHosts()) {
+    if (subnets.includes(subnetFromIp(host))) push(host)
+  }
   const preferredHosts = [1, 2, 10, 11, 15, 20, 30, 50, 80, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 120, 150, 180, 200, 220, 254]
   for (const subnet of subnets) {
     for (const host of preferredHosts) push(subnet + '.' + host)
@@ -1550,12 +1567,6 @@ startDiscovery = async function () {
   if (!isVshookInstalledNativeApp()) return vshookStoreDefaultDiscovery()
   const runId = ++vshookDiscoveryRunId
   renderSearching()
-  const savedProjects = await probeStoredBridgeHosts()
-  if (runId !== vshookDiscoveryRunId) return
-  if (savedProjects.length) {
-    renderModeFirst(savedProjects)
-    return
-  }
   const localAddresses = await getVshookStoreLocalNetworkAddresses()
   if (runId !== vshookDiscoveryRunId) return
   const projects = await scanInBatches(buildVshookStoreCandidateIps(localAddresses))

@@ -879,17 +879,6 @@
   }
 
   function bindEvents() {
-    window.addEventListener('vshook-chat-push-status', (event) => {
-      const pushStatus = event?.detail || {}
-      if (!pushStatus.message || pushStatus.code === 'registered') return
-      const status = document.getElementById('chatMobileStatus')
-      if (status) status.textContent = pushStatus.message
-    })
-    if (window.vshookChatPushStatus?.message &&
-        window.vshookChatPushStatus?.code !== 'registered') {
-      const status = document.getElementById('chatMobileStatus')
-      if (status) status.textContent = window.vshookChatPushStatus.message
-    }
     document.getElementById('chatMobileBack')?.addEventListener('click', () => window.vshookExitToProjectSelector?.())
     document.getElementById('chatMobileMuteButton')?.addEventListener('click', () => toggleChatPushMute())
     document.getElementById('chatMobileLogoutButton')?.addEventListener('click', logoutChat)

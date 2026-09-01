@@ -93,6 +93,19 @@ async function run() {
     throw new Error('A faixa da rede ativa nao ficou em primeiro lugar.')
   }
 
+  storage.set('vshook_director_url', 'http://10.0.0.8:47831')
+  storage.set('vshook_musicians_url', 'http://192.168.77.99:47832')
+  const candidatesWithHistory = vm.runInContext(
+    'buildVshookStoreCandidateIps(["192.168.77.42"])',
+    context,
+  )
+  if (candidatesWithHistory[0] !== '192.168.77.99' ||
+      candidatesWithHistory.indexOf('10.0.0.8') < 254) {
+    throw new Error('Um IP antigo de outra rede passou na frente do Wi-Fi atual.')
+  }
+  storage.delete('vshook_director_url')
+  storage.delete('vshook_musicians_url')
+
   const startedAt = Date.now()
   const projects = await vm.runInContext('fetchDiscovery("192.168.77.10", 800)', context)
   const elapsed = Date.now() - startedAt
