@@ -11,6 +11,8 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.messaging.FirebaseMessaging;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -20,6 +22,49 @@ import java.util.Set;
 
 @CapacitorPlugin(name = "VSHookLocalNetwork")
 public class VSHookLocalNetworkPlugin extends Plugin {
+
+    @PluginMethod
+    public void getFirebaseConfiguration(PluginCall call) {
+        try {
+            FirebaseApp app = FirebaseApp.getInstance();
+            JSObject result = new JSObject();
+            result.put("projectId", app.getOptions().getProjectId());
+            result.put("senderId", app.getOptions().getGcmSenderId());
+            result.put("applicationId", app.getOptions().getApplicationId());
+            result.put("packageName", getContext().getPackageName());
+            call.resolve(result);
+        } catch (Exception error) {
+            call.reject("Firebase Android não inicializado.", error);
+        }
+    }
+
+    @PluginMethod
+    public void renewFirebasePushToken(PluginCall call) {
+        FirebaseMessaging messaging = FirebaseMessaging.getInstance();
+        messaging.setAutoInitEnabled(false);
+        messaging.deleteToken().addOnCompleteListener(deleteTask -> {
+            if (!deleteTask.isSuccessful()) {
+                String message = deleteTask.getException() != null
+                    ? deleteTask.getException().getLocalizedMessage()
+                    : "Não foi possível apagar o token anterior.";
+                call.reject(message);
+                return;
+            }
+            messaging.setAutoInitEnabled(true);
+            messaging.getToken().addOnCompleteListener(tokenTask -> {
+                if (!tokenTask.isSuccessful() || tokenTask.getResult() == null || tokenTask.getResult().isEmpty()) {
+                    String message = tokenTask.getException() != null
+                        ? tokenTask.getException().getLocalizedMessage()
+                        : "O Firebase não gerou um novo token.";
+                    call.reject(message);
+                    return;
+                }
+                JSObject result = new JSObject();
+                result.put("token", tokenTask.getResult());
+                call.resolve(result);
+            });
+        });
+    }
 
     @PluginMethod
     public void getAddresses(PluginCall call) {

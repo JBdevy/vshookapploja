@@ -1,5 +1,6 @@
 ext {
     capacitorVersion = System.getenv('CAPACITOR_VERSION')
+    firebaseMessagingVersion = project.hasProperty('firebaseMessagingVersion') ? rootProject.ext.firebaseMessagingVersion : '23.3.1'
 }
 
 buildscript {
@@ -18,7 +19,7 @@ android {
     namespace "com.hookdeveloper.vshook.localnetwork"
     compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 34
     defaultConfig {
-        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 22
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 30
         targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 34
         versionCode 1
         versionName "1.0"
@@ -36,4 +37,5 @@ repositories {
 
 dependencies {
     implementation project(':capacitor-android')
+    implementation "com.google.firebase:firebase-messaging:$firebaseMessagingVersion"
 }

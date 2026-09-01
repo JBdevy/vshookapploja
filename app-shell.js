@@ -154,7 +154,7 @@ async function postChatPushUnregister(session, pushToken) {
   return true
 }
 
-async function postChatPushToken(session, pushToken, platform) {
+async function postChatPushToken(session, pushToken, platform, firebaseProjectId = '') {
   if (!session?.accessToken || !session?.backendUrl || !pushToken) return false
   if (isChatPushMuted()) {
     await postChatPushUnregister(session, pushToken)
@@ -167,6 +167,7 @@ async function postChatPushToken(session, pushToken, platform) {
       chatMobileToken: session.accessToken,
       pushToken,
       platform,
+      firebaseProjectId: String(firebaseProjectId || '').trim(),
     }),
     cache: 'no-store',
   })
@@ -181,16 +182,47 @@ async function postChatPushToken(session, pushToken, platform) {
   return true
 }
 
-async function rotateNativeChatPushToken(PushNotifications) {
+async function getNativeFirebaseProjectId(platform) {
+  if (platform !== 'android') return ''
+  try {
+    let nativePlugin = window.Capacitor?.Plugins?.VSHookLocalNetwork || null
+    if (!nativePlugin && typeof window.Capacitor?.registerPlugin === 'function') {
+      nativePlugin = window.Capacitor.registerPlugin('VSHookLocalNetwork')
+    }
+    if (typeof nativePlugin?.getFirebaseConfiguration !== 'function') return ''
+    const configuration = await nativePlugin.getFirebaseConfiguration()
+    return String(configuration?.projectId || '').trim()
+  } catch (error) {
+    console.warn('Não foi possível identificar o projeto Firebase do aplicativo', error)
+    return ''
+  }
+}
+
+async function rotateNativeChatPushToken(PushNotifications, rejectedToken, platform) {
   if (vshookChatPushTokenRotationRunning || vshookChatPushTokenRotationAttempts >= 2 || !PushNotifications) return false
   vshookChatPushTokenRotationRunning = true
   vshookChatPushTokenRotationAttempts += 1
   try {
     try { localStorage.removeItem(VSHOOK_CHAT_PUSH_TOKEN_KEY) } catch (error) {}
+    if (platform === 'android') {
+      let nativePlugin = window.Capacitor?.Plugins?.VSHookLocalNetwork || null
+      if (!nativePlugin && typeof window.Capacitor?.registerPlugin === 'function') {
+        nativePlugin = window.Capacitor.registerPlugin('VSHookLocalNetwork')
+      }
+      if (typeof nativePlugin?.renewFirebasePushToken !== 'function') {
+        throw new Error('Renovação nativa do token Firebase indisponível.')
+      }
+      const renewed = await nativePlugin.renewFirebasePushToken()
+      const newToken = String(renewed?.token || '').trim()
+      if (!newToken || newToken === String(rejectedToken || '').trim()) {
+        throw new Error('O Firebase não substituiu o token recusado.')
+      }
+      const currentSession = getStoredChatMobileSession()
+      await postChatPushToken(currentSession, newToken, platform, await getNativeFirebaseProjectId(platform))
+      return true
+    }
     if (typeof PushNotifications.unregister === 'function') {
       await PushNotifications.unregister()
-      // No Android, a exclusão do token termina em segundo plano.
-      await new Promise((resolve) => setTimeout(resolve, 1500))
     }
     await PushNotifications.register()
     return true
@@ -239,10 +271,12 @@ async function setupNativeChatPushNotifications() {
 
   if (!vshookChatPushListenersReady) {
     vshookChatPushListenersReady = true
-    await PushNotifications.addListener('registration', (token) => {
+    await PushNotifications.addListener('registration', async (token) => {
       const currentSession = getStoredChatMobileSession()
-      postChatPushToken(currentSession, String(token?.value || ''), platform).catch((error) => {
-        if (error?.rotatePushToken === true) rotateNativeChatPushToken(PushNotifications).catch(() => false)
+      const receivedToken = String(token?.value || '')
+      const firebaseProjectId = await getNativeFirebaseProjectId(platform)
+      postChatPushToken(currentSession, receivedToken, platform, firebaseProjectId).catch((error) => {
+        if (error?.rotatePushToken === true) rotateNativeChatPushToken(PushNotifications, receivedToken, platform).catch(() => false)
         else console.warn('Não foi possível registrar o token do Chat Hook', error)
       })
     })
