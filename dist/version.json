@@ -9,7 +9,7 @@
   "updateId": "1.0.1-chat-video-multiloop4-v18",
   "minBridgeVersion": "1.0.1",
   "cacheVersion": "1.0.1-chat-video-multiloop4-v18",
-  "chatHookMobile": "hold-actions-reply-edit-own-push-v6",
+  "chatHookMobile": "hold-actions-reply-edit-own-push-background-v7",
   "multiLoopSlots": 4,
   "directorTablet": "grid-safari-sync-buttons-v1",
   "renderFix": "director-premix-longpress-items-v1",
