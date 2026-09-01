@@ -43,7 +43,9 @@ jobs:
           if [ ! -d ios ]; then
             npx cap add ios
           fi
+          python3 scripts/configure-ios-minimum.py
           npx cap sync ios
+          python3 scripts/configure-ios-minimum.py
           python3 scripts/apply-native-icons.py ios
           python3 scripts/configure-local-network.py ios
           python3 scripts/configure-push-notifications.py ios

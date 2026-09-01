@@ -133,6 +133,8 @@ function openChatFromNativeNotification() {
 }
 
 let vshookChatPushListenersReady = false
+let vshookChatPushTokenRotationRunning = false
+let vshookChatPushTokenRotationAttempts = 0
 
 function isChatPushMuted() {
   try { return localStorage.getItem(VSHOOK_CHAT_PUSH_MUTED_KEY) === '1' }
@@ -169,9 +171,35 @@ async function postChatPushToken(session, pushToken, platform) {
     cache: 'no-store',
   })
   const result = await response.json().catch(() => ({}))
-  if (!response.ok || result.ok === false) throw new Error(result.error || 'Não foi possível ativar as notificações do Chat Hook.')
+  if (!response.ok || result.ok === false) {
+    const error = new Error(result.error || 'Não foi possível ativar as notificações do Chat Hook.')
+    error.rotatePushToken = result.rotatePushToken === true
+    throw error
+  }
   try { localStorage.setItem(VSHOOK_CHAT_PUSH_TOKEN_KEY, pushToken) } catch (error) {}
+  vshookChatPushTokenRotationAttempts = 0
   return true
+}
+
+async function rotateNativeChatPushToken(PushNotifications) {
+  if (vshookChatPushTokenRotationRunning || vshookChatPushTokenRotationAttempts >= 2 || !PushNotifications) return false
+  vshookChatPushTokenRotationRunning = true
+  vshookChatPushTokenRotationAttempts += 1
+  try {
+    try { localStorage.removeItem(VSHOOK_CHAT_PUSH_TOKEN_KEY) } catch (error) {}
+    if (typeof PushNotifications.unregister === 'function') {
+      await PushNotifications.unregister()
+      // No Android, a exclusão do token termina em segundo plano.
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+    }
+    await PushNotifications.register()
+    return true
+  } catch (error) {
+    console.warn('Não foi possível renovar o token do Chat Hook', error)
+    return false
+  } finally {
+    vshookChatPushTokenRotationRunning = false
+  }
 }
 
 async function showForegroundChatNotification(notification) {
@@ -213,7 +241,10 @@ async function setupNativeChatPushNotifications() {
     vshookChatPushListenersReady = true
     await PushNotifications.addListener('registration', (token) => {
       const currentSession = getStoredChatMobileSession()
-      postChatPushToken(currentSession, String(token?.value || ''), platform).catch(() => {})
+      postChatPushToken(currentSession, String(token?.value || ''), platform).catch((error) => {
+        if (error?.rotatePushToken === true) rotateNativeChatPushToken(PushNotifications).catch(() => false)
+        else console.warn('Não foi possível registrar o token do Chat Hook', error)
+      })
     })
     await PushNotifications.addListener('registrationError', (error) => {
       console.warn('Chat Hook push registration error', error)
