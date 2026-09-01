@@ -98,6 +98,7 @@ function renderStoredChatButton() {
 function enterStoredChat() {
   const session = getStoredChatMobileSession()
   if (!session && !hasStoredChatBootstrapKey()) return false
+  if (session) setupNativeChatPushNotifications().catch(() => false)
   vshookDiscoveryRunId += 1
   vshookProjectsRefreshRunId += 1
   const bridgeBaseUrl = String(session?.bridgeBaseUrl || window.location.origin || '').replace(/\/+$/, '')
@@ -152,6 +153,33 @@ async function postChatPushUnregister(session, pushToken) {
   const result = await response.json().catch(() => ({}))
   if (!response.ok || result.ok === false) throw new Error(result.error || 'Não foi possível silenciar as notificações do Chat Hook.')
   return true
+}
+
+async function reportChatPushDiagnostic(session, stage, detail = '') {
+  if (!session?.accessToken || !session?.backendUrl) return false
+  try {
+    await fetch(`${String(session.backendUrl).replace(/\/+$/, '')}/api/chat/push/diagnostic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatMobileToken: session.accessToken,
+        platform: String(window.Capacitor?.getPlatform?.() || '').toLowerCase(),
+        stage: String(stage || '').slice(0, 80),
+        detail: String(detail || '').slice(0, 500),
+      }),
+      cache: 'no-store',
+    })
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
+function publishChatPushStatus(code, message) {
+  const status = { code: String(code || ''), message: String(message || '') }
+  window.vshookChatPushStatus = status
+  try { window.dispatchEvent(new CustomEvent('vshook-chat-push-status', { detail: status })) }
+  catch (error) {}
 }
 
 async function postChatPushToken(session, pushToken, platform, firebaseProjectId = '') {
@@ -259,6 +287,8 @@ async function setupNativeChatPushNotifications() {
   const session = getStoredChatMobileSession()
   if (!session) return false
   if (isChatPushMuted()) {
+    publishChatPushStatus('muted', 'Notificações push silenciadas neste aparelho.')
+    reportChatPushDiagnostic(session, 'muted').catch(() => false)
     let storedToken = ''
     try { storedToken = String(localStorage.getItem(VSHOOK_CHAT_PUSH_TOKEN_KEY) || '') }
     catch (error) {}
@@ -266,7 +296,11 @@ async function setupNativeChatPushNotifications() {
     return false
   }
   const PushNotifications = window.Capacitor?.Plugins?.PushNotifications
-  if (!PushNotifications) return false
+  if (!PushNotifications) {
+    publishChatPushStatus('plugin_unavailable', 'Este aplicativo foi compilado sem o módulo de notificações push.')
+    reportChatPushDiagnostic(session, 'plugin_unavailable').catch(() => false)
+    return false
+  }
   const platform = String(window.Capacitor?.getPlatform?.() || '').toLowerCase()
 
   if (!vshookChatPushListenersReady) {
@@ -277,10 +311,20 @@ async function setupNativeChatPushNotifications() {
       const firebaseProjectId = await getNativeFirebaseProjectId(platform)
       postChatPushToken(currentSession, receivedToken, platform, firebaseProjectId).catch((error) => {
         if (error?.rotatePushToken === true) rotateNativeChatPushToken(PushNotifications, receivedToken, platform).catch(() => false)
-        else console.warn('Não foi possível registrar o token do Chat Hook', error)
+        else {
+          publishChatPushStatus('registration_rejected', error?.message || 'O servidor recusou o token de notificação.')
+          reportChatPushDiagnostic(currentSession, 'registration_rejected', error?.message || '').catch(() => false)
+          console.warn('Não foi possível registrar o token do Chat Hook', error)
+        }
+      }).then((registered) => {
+        if (registered === true) publishChatPushStatus('registered', 'Notificações push ativadas neste aparelho.')
       })
     })
     await PushNotifications.addListener('registrationError', (error) => {
+      const currentSession = getStoredChatMobileSession()
+      const detail = error?.error || error?.message || JSON.stringify(error || {})
+      publishChatPushStatus('registration_error', `Falha ao registrar notificações: ${detail || 'erro desconhecido'}`)
+      reportChatPushDiagnostic(currentSession, 'registration_error', detail).catch(() => false)
       console.warn('Chat Hook push registration error', error)
     })
     await PushNotifications.addListener('pushNotificationReceived', (notification) => {
@@ -310,13 +354,22 @@ async function setupNativeChatPushNotifications() {
       })
     }
     let permission = await PushNotifications.checkPermissions()
-    if (permission?.receive === 'prompt' || permission?.receive === 'prompt-with-rationale') {
+    if (permission?.receive !== 'granted') {
       permission = await PushNotifications.requestPermissions()
     }
-    if (permission?.receive !== 'granted') return false
+    if (permission?.receive !== 'granted') {
+      const permissionState = String(permission?.receive || 'unknown')
+      publishChatPushStatus('permission_denied', 'Notificações desativadas no Android. Ative a permissão nas configurações do aplicativo.')
+      reportChatPushDiagnostic(session, 'permission_denied', permissionState).catch(() => false)
+      return false
+    }
     await PushNotifications.register()
+    publishChatPushStatus('register_requested', 'Ativando notificações push...')
+    reportChatPushDiagnostic(session, 'register_requested', platform).catch(() => false)
     return true
   } catch (error) {
+    publishChatPushStatus('setup_error', `Não foi possível ativar notificações: ${error?.message || 'erro desconhecido'}`)
+    reportChatPushDiagnostic(session, 'setup_error', error?.message || '').catch(() => false)
     console.warn('Não foi possível ativar notificações do Chat Hook', error)
     return false
   }
@@ -349,7 +402,13 @@ window.vshookSetChatPushMuted = async function (muted) {
   try {
     const platform = String(window.Capacitor?.getPlatform?.() || '').toLowerCase()
     if (session && storedToken && (platform === 'android' || platform === 'ios')) {
-      await postChatPushToken(session, storedToken, platform)
+      try {
+        await postChatPushToken(session, storedToken, platform, await getNativeFirebaseProjectId(platform))
+      } catch (error) {
+        if (error?.rotatePushToken !== true) throw error
+        const PushNotifications = window.Capacitor?.Plugins?.PushNotifications
+        await rotateNativeChatPushToken(PushNotifications, storedToken, platform)
+      }
     }
     await setupNativeChatPushNotifications()
     return { muted: false, synced: true }
