@@ -16,6 +16,7 @@ const VSHOOK_CHAT_BACKEND_URL = 'https://hookupdate7.up.railway.app'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
 let vshookDiscoveryRunId = 0
+let vshookRestartDiscoveryTimer = 0
 let vshookProjectsRefreshRunId = 0
 let vshookDirectorDeviceMode = 'phone'
 let vshookDirectorTabletStableViewport = null
@@ -751,7 +752,7 @@ function renderManualIpBox() {
     <div class="vshook-manual-ip-box">
       <input class="vshook-manual-ip-input" id="manualIpInput" inputmode="decimal" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="IP do computador. Ex: 192.168.0.10" />
       <button class="vshook-secondary-button" id="manualIpBtn">Entrar pelo IP</button>
-      <button class="vshook-secondary-button" id="searchAgainBtn">Procurar</button>
+      <button class="vshook-secondary-button vshook-search-button" id="searchAgainBtn">Procurar</button>
     </div>
   `
 }
@@ -770,7 +771,13 @@ function restartDiscovery() {
   vshookDiscoveryRunId += 1
   vshookDiscoveredProjects = []
   try { localStorage.removeItem('vshook_cached_mode_projects') } catch (error) {}
-  startDiscovery()
+  const button = document.getElementById('searchAgainBtn')
+  button?.classList.add('is-pressed')
+  if (vshookRestartDiscoveryTimer) window.clearTimeout(vshookRestartDiscoveryTimer)
+  vshookRestartDiscoveryTimer = window.setTimeout(() => {
+    vshookRestartDiscoveryTimer = 0
+    startDiscovery()
+  }, 120)
 }
 
 function renderSearching() {
@@ -1318,24 +1325,35 @@ function buildCandidateIps() {
 }
 
 async function scanInBatches(ips, batchSize = VSHOOK_SCAN_BATCH_SIZE) {
-  const found = []
-  const seen = new Set()
   for (let i = 0; i < ips.length; i += batchSize) {
     const batch = ips.slice(i, i + batchSize)
-    const results = await Promise.all(batch.map((ip) => fetchDiscovery(ip)))
-    for (const result of results) {
-      const items = Array.isArray(result) ? result : (result ? [result] : [])
-      for (const item of items) {
-        if (!item) continue
-        const key = `${item.directorUrl}|${item.projectTabIndex ?? ''}|${item.projectName}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        found.push(item)
+    const firstResult = await new Promise((resolve) => {
+      if (!batch.length) {
+        resolve(null)
+        return
       }
-    }
-    if (found.length > 0) break
+      let pending = batch.length
+      let settled = false
+      const finishMiss = () => {
+        pending -= 1
+        if (!settled && pending <= 0) resolve(null)
+      }
+      for (const ip of batch) {
+        fetchDiscovery(ip).then((result) => {
+          if (settled) return
+          const items = Array.isArray(result) ? result.filter(Boolean) : (result ? [result] : [])
+          if (items.length) {
+            settled = true
+            resolve(items)
+            return
+          }
+          finishMiss()
+        }).catch(finishMiss)
+      }
+    })
+    if (firstResult?.length) return firstResult
   }
-  return found
+  return []
 }
 
 
@@ -1464,7 +1482,7 @@ function prepareVSHookModeSelectionAfterReload() {
   const projects = getVSHookModeSelectionFallbackProjects()
   try {
     localStorage.setItem('vshook_force_mode_selection', '1')
-    localStorage.removeItem('vshook_cached_mode_projects')
+    localStorage.setItem('vshook_cached_mode_projects', JSON.stringify(projects))
   } catch (error) {}
   return projects
 }
@@ -1474,6 +1492,7 @@ function consumeVSHookForcedModeSelection() {
     if (localStorage.getItem('vshook_force_mode_selection') !== '1') return null
     localStorage.removeItem('vshook_force_mode_selection')
     const cached = JSON.parse(localStorage.getItem('vshook_cached_mode_projects') || '[]')
+    localStorage.removeItem('vshook_cached_mode_projects')
     return Array.isArray(cached) ? cached : []
   } catch (error) {
     return null
@@ -1577,9 +1596,13 @@ startDiscovery = async function () {
 
 window.addEventListener('load', async () => {
   keepScreenAwake()
-  consumeVSHookForcedModeSelection()
+  const forcedModeProjects = consumeVSHookForcedModeSelection()
   await bootstrapChatMobileSessionFromQr()
   await setupNativeChatPushNotifications()
+  if (forcedModeProjects !== null) {
+    renderModeFirst(forcedModeProjects)
+    return
+  }
   try {
     if ((consumeChatNotificationTarget() || localStorage.getItem('vshook_selected_mode') === 'chat') && getStoredChatMobileSession()) {
       enterStoredChat()

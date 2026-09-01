@@ -48,6 +48,16 @@ button, input { font: inherit; }
 .vshook-project-button, .vshook-mode-button { background: linear-gradient(135deg,#f7c948,#f59e0b); color:#111827; }
 #openStandaloneTransferHookBtn { margin-top:16px; }
 .vshook-secondary-button { margin-top:14px; background:rgba(255,255,255,.08); color:#f8fafc; border:1px solid rgba(255,255,255,.10); }
+.vshook-search-button {
+  background:linear-gradient(135deg,#22c55e,#15803d); color:#fff;
+  border-color:rgba(134,239,172,.55); box-shadow:0 8px 22px rgba(21,128,61,.24);
+  transition:background .08s ease,filter .08s ease,transform .08s ease;
+}
+.vshook-search-button:active,
+.vshook-search-button.is-pressed {
+  background:linear-gradient(135deg,#16a34a,#166534); filter:brightness(.90);
+  transform:translateY(1px);
+}
 .vshook-shell-status { color:#aab2c0; font-size:15px; line-height:1.45; margin:18px 0 0; }
 .vshook-search-spinner {
   width:34px; height:34px; margin:2px auto 4px; border-radius:50%;

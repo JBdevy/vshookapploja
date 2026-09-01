@@ -11,12 +11,14 @@ const fastDiscovery = {
 }
 
 function mockFetch(url, options = {}) {
-  const port = Number(new URL(url).port)
-  const delay = port === 47831 ? 5 : 500
+  const parsedUrl = new URL(url)
+  const port = Number(parsedUrl.port)
+  const responds = parsedUrl.hostname === '192.168.77.10' && port === 47831
+  const delay = responds ? 5 : 500
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       resolve({
-        ok: port === 47831,
+        ok: responds,
         json: async () => fastDiscovery,
       })
     }, delay)
@@ -116,6 +118,34 @@ async function run() {
     throw new Error(`A descoberta esperou a segunda porta (${elapsed} ms).`)
   }
 
+  const batchStartedAt = Date.now()
+  const batchProjects = await vm.runInContext(
+    'scanInBatches(["192.168.77.2", "192.168.77.10", "192.168.77.200"])',
+    context,
+  )
+  const batchElapsed = Date.now() - batchStartedAt
+  if (!Array.isArray(batchProjects) || batchProjects[0]?.projectName !== 'Teste') {
+    throw new Error('A busca em lote não retornou a primeira sessão encontrada.')
+  }
+  if (batchElapsed >= 200) {
+    throw new Error(`A busca em lote esperou os outros IPs (${batchElapsed} ms).`)
+  }
+
+  vm.runInContext(`vshookDiscoveredProjects = [{
+    projectName: 'Projeto aberto',
+    directorUrl: 'http://192.168.77.10:47831',
+    musiciansUrl: 'http://192.168.77.10:47832',
+    projectTabIndex: 0
+  }]`, context)
+  vm.runInContext('prepareVSHookModeSelectionAfterReload()', context)
+  const restoredProjects = vm.runInContext('consumeVSHookForcedModeSelection()', context)
+  if (!Array.isArray(restoredProjects) || restoredProjects[0]?.projectName !== 'Projeto aberto') {
+    throw new Error('A saída do app não preservou a tela dos cinco modos.')
+  }
+  if (vm.runInContext('consumeVSHookForcedModeSelection()', context) !== null) {
+    throw new Error('A restauração da tela dos modos deveria ser usada uma única vez.')
+  }
+
   const hasStoreDiscoveryOverride = vm.runInContext(
     'startDiscovery !== vshookStoreDefaultDiscovery',
     context,
@@ -124,7 +154,7 @@ async function run() {
     throw new Error('A descoberta automatica exclusiva do app da loja nao foi instalada.')
   }
 
-  console.log(`Discovery automática ok: ${addresses[0]}, resposta em ${elapsed} ms.`)
+  console.log(`Discovery automática ok: ${addresses[0]}, resposta em ${batchElapsed} ms.`)
 }
 
 run().catch((error) => {
