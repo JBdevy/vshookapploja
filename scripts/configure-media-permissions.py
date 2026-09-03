@@ -34,8 +34,16 @@ def configure_ios(root: Path) -> None:
         raise SystemExit(f"Info.plist nao encontrado: {plist_path}")
     with plist_path.open("rb") as source:
         data = plistlib.load(source)
+    data["NSCameraUsageDescription"] = (
+        "O VS Hook usa a câmera quando você tira uma foto para enviar no Chat Hook "
+        "ou definir sua foto de perfil."
+    )
+    data["NSPhotoLibraryUsageDescription"] = (
+        "O VS Hook acessa sua fototeca quando você escolhe uma imagem para enviar "
+        "no Chat Hook ou usar como foto de perfil."
+    )
     data["NSMicrophoneUsageDescription"] = (
-        "O VS Hook usa o microfone somente quando voce grava uma mensagem de voz no Chat Hook."
+        "O VS Hook usa o microfone somente quando você grava uma mensagem de voz no Chat Hook."
     )
     with plist_path.open("wb") as target:
         plistlib.dump(data, target, sort_keys=False)

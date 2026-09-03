@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 
-MINIMUM_IOS_VERSION = "13.4"
+MINIMUM_IOS_VERSION = "15.0"
 
 
 def replace_required(path: Path, pattern: str, replacement: str) -> None:
