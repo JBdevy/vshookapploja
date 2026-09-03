@@ -40,6 +40,7 @@ jobs:
 
       - name: Sincronizar iOS
         run: |
+          node scripts/set-capacitor-app-id.js com.hookdeveloper.vshook
           if [ ! -d ios ]; then
             npx cap add ios
           fi
