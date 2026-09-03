@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vshook-mobile-1.0.1-chat-push-background-v43';
+const CACHE_NAME = 'vshook-mobile-1.0.1-chat-avatar-v46';
 const APP_ASSETS = [
   './',
   './index.html',
@@ -15,6 +15,7 @@ const APP_ASSETS = [
   './recados-app.css',
   './recados.webmanifest',
   './chat.js',
+  './chat-voice-recorder.js',
   './chat-app.css',
   './transfer-hook.js',
   './transfer-hook-app.css',
