@@ -45,6 +45,7 @@ def configure_ios(root: Path) -> None:
     data["NSMicrophoneUsageDescription"] = (
         "O VS Hook usa o microfone somente quando você grava uma mensagem de voz no Chat Hook."
     )
+    data["ITSAppUsesNonExemptEncryption"] = False
     with plist_path.open("wb") as target:
         plistlib.dump(data, target, sort_keys=False)
     print(f"Permissao de microfone iOS configurada: {plist_path}")

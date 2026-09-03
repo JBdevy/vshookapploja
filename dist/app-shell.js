@@ -23,6 +23,8 @@ let vshookDirectorTabletStableViewport = null
 let vshookDirectorTabletViewportRestoreTimer = 0
 let vshookDirectorTabletLandscapeContinuation = null
 let vshookDirectorAppActive = false
+let vshookNativeKeepAwakePlugin = null
+let vshookNativeScreenOrientationPlugin = null
 
 function captureChatBootstrapKey() {
   try {
@@ -498,6 +500,7 @@ function applyDirectorDeviceMode(value) {
   try {
     localStorage.setItem('vshook_director_device_mode', vshookDirectorDeviceMode)
   } catch (error) {}
+  if (vshookDirectorDeviceMode !== 'tablet') void setDirectorNativeOrientation('phone')
   updateDirectorTabletWebViewport()
   updateDirectorTabletOrientationGuard()
 }
@@ -505,6 +508,35 @@ function applyDirectorDeviceMode(value) {
 function isDirectorTabletLandscape() {
   if (window.matchMedia) return window.matchMedia('(orientation: landscape)').matches
   return Number(window.innerWidth || 0) > Number(window.innerHeight || 0)
+}
+
+async function setDirectorNativeOrientation(mode) {
+  if (!isVshookInstalledNativeApp()) return false
+  try {
+    if (!vshookNativeScreenOrientationPlugin) {
+      vshookNativeScreenOrientationPlugin = window.Capacitor?.Plugins?.ScreenOrientation || null
+      if (!vshookNativeScreenOrientationPlugin && typeof window.Capacitor?.registerPlugin === 'function') {
+        vshookNativeScreenOrientationPlugin = window.Capacitor.registerPlugin('ScreenOrientation')
+      }
+    }
+    if (!vshookNativeScreenOrientationPlugin) return false
+    if (mode === 'tablet') {
+      await vshookNativeScreenOrientationPlugin.lock({ orientation: 'landscape' })
+    } else {
+      await vshookNativeScreenOrientationPlugin.unlock()
+    }
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
+async function waitForDirectorTabletLandscape(timeoutMs = 1600) {
+  const deadline = Date.now() + timeoutMs
+  while (!isDirectorTabletLandscape() && Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 80))
+  }
+  return isDirectorTabletLandscape()
 }
 
 function continueDirectorTabletAfterRotation() {
@@ -515,16 +547,20 @@ function continueDirectorTabletAfterRotation() {
 }
 
 function renderDirectorTabletOrientationRequired() {
+  const nativeApp = isVshookInstalledNativeApp()
   setShell(`
     ${getLogoHtml()}
-    <h1 class="vshook-shell-title">Desbloqueie a rotação</h1>
-    <p class="vshook-shell-subtitle">Para usar o modo Tablet, desbloqueie a rotação do dispositivo e vire a tela para a posição horizontal.</p>
-    <p class="vshook-shell-status">No navegador, o VS Hook continua automaticamente assim que detectar a tela horizontal.</p>
-    <button class="vshook-mode-button" id="retryTabletOrientationBtn">Já desbloqueei</button>
+    <h1 class="vshook-shell-title">${nativeApp ? 'Não foi possível girar a tela' : 'Desbloqueie a rotação'}</h1>
+    <p class="vshook-shell-subtitle">${nativeApp ? 'Toque abaixo para o VS Hook tentar abrir o modo Tablet na horizontal novamente.' : 'Para usar o modo Tablet no navegador, desbloqueie a rotação do dispositivo e vire a tela para a posição horizontal.'}</p>
+    <p class="vshook-shell-status">${nativeApp ? 'O aplicativo gira a tela automaticamente no Android e no iOS.' : 'O VS Hook continua automaticamente assim que detectar a tela horizontal.'}</p>
+    <button class="vshook-mode-button" id="retryTabletOrientationBtn">${nativeApp ? 'Tentar novamente' : 'Já desbloqueei'}</button>
     <button class="vshook-back-button" id="backTabletOrientationBtn">Voltar</button>
   `)
 
-  document.getElementById('retryTabletOrientationBtn')?.addEventListener('click', continueDirectorTabletAfterRotation)
+  document.getElementById('retryTabletOrientationBtn')?.addEventListener('click', () => {
+    if (nativeApp) requireDirectorTabletLandscape(vshookDirectorTabletLandscapeContinuation)
+    else continueDirectorTabletAfterRotation()
+  })
   document.getElementById('backTabletOrientationBtn')?.addEventListener('click', () => {
     vshookDirectorTabletLandscapeContinuation = null
     applyDirectorDeviceMode('phone')
@@ -532,14 +568,28 @@ function renderDirectorTabletOrientationRequired() {
   })
 }
 
-function requireDirectorTabletLandscape(continuation) {
+async function requireDirectorTabletLandscape(continuation) {
   applyDirectorDeviceMode('tablet')
+  const pendingContinuation = continuation
+  vshookDirectorTabletLandscapeContinuation = pendingContinuation
+
+  if (isVshookInstalledNativeApp()) {
+    const locked = await setDirectorNativeOrientation('tablet')
+    if (vshookDirectorTabletLandscapeContinuation !== pendingContinuation) return locked
+    if (locked) {
+      await waitForDirectorTabletLandscape()
+      if (vshookDirectorTabletLandscapeContinuation !== pendingContinuation) return true
+      vshookDirectorTabletLandscapeContinuation = null
+      pendingContinuation?.()
+      return true
+    }
+  }
+
   if (isDirectorTabletLandscape()) {
     vshookDirectorTabletLandscapeContinuation = null
-    continuation?.()
+    pendingContinuation?.()
     return true
   }
-  vshookDirectorTabletLandscapeContinuation = continuation
   renderDirectorTabletOrientationRequired()
   return false
 }
@@ -567,6 +617,7 @@ function ensureDirectorTabletOrientationOverlay() {
 function updateDirectorTabletOrientationGuard() {
   const blocked = vshookDirectorAppActive
     && vshookDirectorDeviceMode === 'tablet'
+    && !isVshookInstalledNativeApp()
     && !isDirectorTabletLandscape()
   document.documentElement.classList.toggle('directorTabletOrientationBlocked', blocked)
   const current = document.getElementById('vshookTabletOrientationOverlay')
@@ -958,7 +1009,10 @@ function renderProjects(projects, options = {}) {
     })
   })
 
-  document.getElementById('backModeBtn')?.addEventListener('click', renderDirectorDeviceSelection)
+  document.getElementById('backModeBtn')?.addEventListener('click', () => {
+    applyDirectorDeviceMode('phone')
+    renderDirectorDeviceSelection()
+  })
   document.getElementById('refreshProjectsBtn')?.addEventListener('click', refreshProjectSelector)
 }
 
@@ -998,6 +1052,7 @@ async function enterApp(project, mode, options = {}) {
     applyDirectorDeviceMode(vshookDirectorDeviceMode)
   } else {
     vshookDirectorAppActive = false
+    void setDirectorNativeOrientation('phone')
     document.documentElement.classList.remove('directorShellPortraitMode')
     document.documentElement.removeAttribute('data-director-device')
     document.body?.classList.remove('vshook-director-tablet')
@@ -1438,12 +1493,32 @@ async function startDiscovery() {
 
 async function keepScreenAwake() {
   try {
-    if ('wakeLock' in navigator) window.__vshookWakeLock = await navigator.wakeLock.request('screen')
+    if (isVshookInstalledNativeApp()) {
+      if (!vshookNativeKeepAwakePlugin) {
+        vshookNativeKeepAwakePlugin = window.Capacitor?.Plugins?.KeepAwake || null
+        if (!vshookNativeKeepAwakePlugin && typeof window.Capacitor?.registerPlugin === 'function') {
+          vshookNativeKeepAwakePlugin = window.Capacitor.registerPlugin('KeepAwake')
+        }
+      }
+      if (typeof vshookNativeKeepAwakePlugin?.keepAwake === 'function') {
+        await vshookNativeKeepAwakePlugin.keepAwake()
+        return
+      }
+    }
+  } catch (error) {}
+
+  try {
+    if ('wakeLock' in navigator && (!window.__vshookWakeLock || window.__vshookWakeLock.released)) {
+      window.__vshookWakeLock = await navigator.wakeLock.request('screen')
+    }
   } catch (error) {}
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') keepScreenAwake()
+  if (document.visibilityState === 'visible') {
+    keepScreenAwake()
+    if (vshookDirectorDeviceMode === 'tablet') void setDirectorNativeOrientation('tablet')
+  }
 })
 
 
@@ -1595,6 +1670,7 @@ startDiscovery = async function () {
 }
 
 window.addEventListener('load', async () => {
+  await setDirectorNativeOrientation('phone')
   keepScreenAwake()
   const forcedModeProjects = consumeVSHookForcedModeSelection()
   await bootstrapChatMobileSessionFromQr()
