@@ -959,6 +959,10 @@ async function buildDiscoveryCandidateIps() {
   return buildVshookStoreCandidateIps(localAddresses)
 }
 
+async function discoverProjectsFromActiveNetwork() {
+  return scanInBatches(await buildDiscoveryCandidateIps())
+}
+
 async function refreshProjectSelector() {
   const runId = ++vshookProjectsRefreshRunId
   renderProjects([], { loading: true, status: 'Procurando sessão ativa...' })
@@ -967,8 +971,10 @@ async function refreshProjectSelector() {
   if (vshookBridgeBrowserMode) {
     projects = await fetchBridgeBrowserProjects()
   } else {
-    const savedProjects = await probeStoredBridgeHosts()
-    projects = savedProjects.length ? savedProjects : await scanInBatches(await buildDiscoveryCandidateIps())
+    // Repete a mesma descoberta da tela inicial do app instalado. O plugin
+    // consulta novamente a interface ativa, portanto uma troca de Wi-Fi entre
+    // a entrada e este botão não reaproveita primeiro o endereço da rede velha.
+    projects = await discoverProjectsFromActiveNetwork()
   }
 
   if (runId !== vshookProjectsRefreshRunId) return
@@ -1671,9 +1677,7 @@ startDiscovery = async function () {
   if (!isVshookInstalledNativeApp()) return vshookStoreDefaultDiscovery()
   const runId = ++vshookDiscoveryRunId
   renderSearching()
-  const localAddresses = await getVshookStoreLocalNetworkAddresses()
-  if (runId !== vshookDiscoveryRunId) return
-  const projects = await scanInBatches(buildVshookStoreCandidateIps(localAddresses))
+  const projects = await discoverProjectsFromActiveNetwork()
   if (runId !== vshookDiscoveryRunId) return
   if (projects.length) renderModeFirst(projects)
   else renderNoProjects()

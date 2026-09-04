@@ -9,11 +9,16 @@ const fastDiscovery = {
   appName: 'VS Hook Diretor',
   projects: [{ name: 'Teste', index: 0, active: true }],
 }
+let localNetworkAddressReads = 0
+let activeLocalAddresses = ['192.168.77.42']
+let respondingHost = '192.168.77.10'
+let requestedHosts = []
 
 function mockFetch(url, options = {}) {
   const parsedUrl = new URL(url)
   const port = Number(parsedUrl.port)
-  const responds = parsedUrl.hostname === '192.168.77.10' && port === 47831
+  requestedHosts.push(parsedUrl.hostname)
+  const responds = parsedUrl.hostname === respondingHost && port === 47831
   const delay = responds ? 5 : 500
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -74,7 +79,10 @@ const context = {
       isNativePlatform: () => true,
       Plugins: {
         VSHookLocalNetwork: {
-          getAddresses: async () => ({ addresses: ['192.168.77.42'] }),
+          getAddresses: async () => {
+            localNetworkAddressReads += 1
+            return { addresses: activeLocalAddresses }
+          },
         },
       },
     },
@@ -152,6 +160,23 @@ async function run() {
   )
   if (!hasStoreDiscoveryOverride) {
     throw new Error('A descoberta automatica exclusiva do app da loja nao foi instalada.')
+  }
+
+  activeLocalAddresses = ['192.168.88.42']
+  respondingHost = '192.168.88.10'
+  requestedHosts = []
+  const refreshedProjects = await vm.runInContext(
+    'discoverProjectsFromActiveNetwork()',
+    context,
+  )
+  if (!Array.isArray(refreshedProjects) || refreshedProjects[0]?.projectName !== 'Teste') {
+    throw new Error('O Atualizar nao repetiu a descoberta pela rede ativa.')
+  }
+  if (localNetworkAddressReads < 2) {
+    throw new Error('O Atualizar nao consultou novamente o endereco do Wi-Fi conectado.')
+  }
+  if (!requestedHosts.length || requestedHosts.some((host) => !host.startsWith('192.168.88.'))) {
+    throw new Error('O Atualizar nao iniciou a busca pela nova faixa do Wi-Fi conectado.')
   }
 
   console.log(`Discovery automática ok: ${addresses[0]}, resposta em ${batchElapsed} ms.`)
