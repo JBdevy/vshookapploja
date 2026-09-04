@@ -1,0 +1,28 @@
+{
+  "name": "vshook-silent-switch",
+  "version": "1.0.0",
+  "description": "Leitura nativa do modo silencioso para o retorno de toque do VS Hook respeitar a escolha do usuario.",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "ios/Sources",
+    "Package.swift",
+    "VshookSilentSwitch.podspec",
+    "dist/"
+  ],
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "@capacitor/core": "^6.0.0"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}
