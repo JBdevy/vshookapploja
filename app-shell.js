@@ -949,6 +949,16 @@ function renderDirectorDeviceSelection() {
 }
 
 
+// O "Atualizar" precisa varrer a rede do mesmo jeito que a tela inicial. No app
+// instalado a tela inicial monta os candidatos a partir dos IPs locais reais
+// (plugin nativo); sem isso o botao varria a faixa generica e nao encontrava o
+// projeto aberto no REAPER depois que a tela de sessoes ja estava na frente.
+async function buildDiscoveryCandidateIps() {
+  if (!isVshookInstalledNativeApp()) return buildCandidateIps()
+  const localAddresses = await getVshookStoreLocalNetworkAddresses()
+  return buildVshookStoreCandidateIps(localAddresses)
+}
+
 async function refreshProjectSelector() {
   const runId = ++vshookProjectsRefreshRunId
   renderProjects([], { loading: true, status: 'Procurando sessão ativa...' })
@@ -958,7 +968,7 @@ async function refreshProjectSelector() {
     projects = await fetchBridgeBrowserProjects()
   } else {
     const savedProjects = await probeStoredBridgeHosts()
-    projects = savedProjects.length ? savedProjects : await scanInBatches(buildCandidateIps())
+    projects = savedProjects.length ? savedProjects : await scanInBatches(await buildDiscoveryCandidateIps())
   }
 
   if (runId !== vshookProjectsRefreshRunId) return
