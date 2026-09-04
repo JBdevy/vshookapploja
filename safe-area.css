@@ -34,3 +34,30 @@
   --vsh-safe-bottom: env(safe-area-inset-bottom, 0px);
   --vsh-safe-left: env(safe-area-inset-left, 0px);
 }
+
+/* A CAIXA DA TELA PRINCIPAL.
+
+   A tela principal (.app) e a referencia: ela ja para no limite seguro e e
+   assim que o app deve parecer. Toda camada que cobre a tela — modal, tela de
+   Teleprompt, painel de partes, tela cheia — tem que ocupar exatamente essa
+   mesma caixa, senao o conteudo comeca colado no topo e some embaixo do notch
+   ou da Dynamic Island.
+
+   Use o atalho pronto em vez de repetir a formula:
+
+     padding: var(--vsh-app-pad);
+
+   Quando o desenho precisar de um recuo maior que os 8px minimos, troque so o
+   minimo com os tokens de lado:
+
+     padding: max(16px, var(--vsh-safe-top)) ... ;
+
+   Nunca escreva "padding: 6px" numa camada de tela cheia: isso apaga a area
+   segura e devolve o bug do conteudo embaixo do recorte. */
+:root {
+  --vsh-app-pad-top: max(8px, var(--vsh-safe-top));
+  --vsh-app-pad-right: max(8px, var(--vsh-safe-right));
+  --vsh-app-pad-bottom: max(8px, var(--vsh-safe-bottom));
+  --vsh-app-pad-left: max(8px, var(--vsh-safe-left));
+  --vsh-app-pad: var(--vsh-app-pad-top) var(--vsh-app-pad-right) var(--vsh-app-pad-bottom) var(--vsh-app-pad-left);
+}
