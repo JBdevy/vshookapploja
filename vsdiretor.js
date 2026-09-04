@@ -10,6 +10,7 @@
   const POLL_TIMEOUT_MS = 2200
   const RECADO_IMAGE_UPLOAD_TIMEOUT_MS = 60000
   const TAP_DEDUPE_MS = 180
+  const APP_CONFIG_COLOR_GUARD_MS = 500
   const DIRECTOR_VISUAL_FRAME_MS = 25
 
   const root = document.getElementById('app') || document.body
@@ -31,6 +32,9 @@
   let interfaceAccessButtonTimer = 0
   let liveMarkIndexSnapshot = null
   let liveMarkIndex = null
+  let appConfigColorGuardUntil = 0
+  let appConfigColorPointerTarget = null
+  let appConfigColorPointerAt = 0
 
   const state = {
     snapshot: null,
@@ -13483,15 +13487,18 @@
       case 'teleprompt-config-tp1':
         state.telepromptSettingsSlot = 1
         state.settingsSection = 'teleprompt-1'
+        armAppConfigColorGuard()
         scheduleRender(true)
         break
       case 'teleprompt-config-tp2':
         state.telepromptSettingsSlot = 2
         state.settingsSection = 'teleprompt-2'
+        armAppConfigColorGuard()
         scheduleRender(true)
         break
       case 'teleprompt-config-recados':
         state.settingsSection = 'recados'
+        armAppConfigColorGuard()
         scheduleRender(true)
         break
       case 'teleprompt-font-set': setTelepromptFont(el.getAttribute('data-value')); break
@@ -14040,6 +14047,45 @@
     state.lastTapKey = key
     state.lastTapAt = t
     return false
+  }
+
+  function getAppConfigColorInput(target) {
+    if (!target?.closest) return null
+    const directInput = target.closest('.appTpConfigModal input[type="color"]')
+    if (directInput) return directInput
+    return target.closest('.appTpConfigColor')?.querySelector?.('input[type="color"]') || null
+  }
+
+  function armAppConfigColorGuard() {
+    if (document.documentElement.dataset.directorPlatform !== 'android') return
+    appConfigColorGuardUntil = now() + APP_CONFIG_COLOR_GUARD_MS
+    appConfigColorPointerTarget = null
+    appConfigColorPointerAt = 0
+  }
+
+  function trackAppConfigColorPointerDown(event) {
+    if (document.documentElement.dataset.directorPlatform !== 'android') return
+    const input = getAppConfigColorInput(event.target)
+    if (!input) return
+    appConfigColorPointerTarget = input
+    appConfigColorPointerAt = now()
+  }
+
+  function guardAppConfigColorClick(event) {
+    if (document.documentElement.dataset.directorPlatform !== 'android' ||
+        now() >= appConfigColorGuardUntil) return
+    const input = getAppConfigColorInput(event.target)
+    if (!input) return
+    const intentionalTouch = appConfigColorPointerTarget === input &&
+      (now() - appConfigColorPointerAt) < 1000
+    if (intentionalTouch) return
+    appConfigColorPointerTarget = null
+    appConfigColorPointerAt = 0
+    // O WebView pode entregar um clique sintetico depois que o pointerup do
+    // botao anterior ja abriu esta tela. Sem um novo pointerdown no campo, esse
+    // clique e residual e nao deve abrir sozinho o seletor nativo de cores.
+    event.preventDefault?.()
+    event.stopImmediatePropagation?.()
   }
 
   function toggleHashFamilyDrawer(parentKey, itemType) {
@@ -14893,6 +14939,8 @@
     document.addEventListener('touchmove', handleTransportTouchMove, { passive: false, capture: true })
     document.addEventListener('touchend', handleTransportTouchEnd, { passive: false, capture: true })
     document.addEventListener('touchcancel', handleTransportTouchCancel, { passive: false, capture: true })
+    document.addEventListener('pointerdown', trackAppConfigColorPointerDown, true)
+    document.addEventListener('click', guardAppConfigColorClick, true)
     document.addEventListener('contextmenu', (event) => {
       if (event.target?.closest?.('.transportSeekHoldTarget,.transportSeekPremixChildTarget,.mixerRow[data-mixer-id],[data-action="tablet-multiloop-track"][data-mode="auto"]')) event.preventDefault()
     }, { passive: false })
