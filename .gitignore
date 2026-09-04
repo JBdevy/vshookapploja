@@ -1,14 +1,12 @@
 node_modules/
-android/
-ios/
 build/
 
-# As plataformas geradas do app continuam ignoradas, mas o código nativo do
-# plugin de descoberta precisa fazer parte do repositório.
-!plugins/vshook-local-network/android/
-!plugins/vshook-local-network/android/**
-!plugins/vshook-local-network/ios/
-!plugins/vshook-local-network/ios/**
+# As plataformas nativas geradas pelo Capacitor ficam na RAIZ do repositorio e
+# continuam ignoradas. As regras abaixo sao ancoradas com "/" justamente para
+# nao engolir o codigo nativo dos plugins locais em plugins/*/android e
+# plugins/*/ios, que precisa estar versionado para o `npx cap sync` do CI.
+/android/
+/ios/
 
 .env
 .env.local
