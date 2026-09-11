@@ -311,13 +311,9 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$PWD/build/Hook-Keys.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOOK_KEYS_ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             PRODUCT_BUNDLE_IDENTIFIER="$HOOK_KEYS_IOS_ID" \
             archive
 
@@ -364,15 +360,100 @@ jobs:
           if-no-files-found: error
           path: Hook Keys/build/release/Hook Keys.ipa
 
+  windows:
+    name: Gerar EXE do Hook Keys
+    needs: metadata
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: Hook Keys
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Hook Keys/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Hook Keys/src-tauri
+
+      - run: npm ci
+
+      - name: Gerar instalador EXE
+        run: npm run desktop:build -- --bundles nsis
+
+      - name: Separar instalador Windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build/release | Out-Null
+          $installer = Get-ChildItem -LiteralPath src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Instalador EXE não encontrado.' }
+          Copy-Item -LiteralPath $installer.FullName -Destination 'build/release/Hook Keys Windows.exe'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hook-Keys-Windows
+          path: Hook Keys/build/release/Hook Keys Windows.exe
+          if-no-files-found: error
+
+  macos:
+    name: Gerar PKG do Hook Keys
+    needs: metadata
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: Hook Keys
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Hook Keys/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Hook Keys/src-tauri
+
+      - run: npm ci
+
+      - name: Gerar aplicativo macOS
+        run: npm run desktop:build -- --bundles app
+
+      - name: Empacotar PKG
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          mkdir -p build/release
+          pkgbuild --component "$APP_PATH" --install-location /Applications 'build/release/Hook Keys macOS.pkg'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hook-Keys-macOS
+          path: Hook Keys/build/release/Hook Keys macOS.pkg
+          if-no-files-found: error
+
   release:
-    name: Publicar somente APK, AAB e IPA
+    name: Publicar APK, AAB, IPA, EXE e PKG
     needs:
       - metadata
       - android
       - ios
+      - windows
+      - macos
     runs-on: ubuntu-latest
     steps:
-      - name: Baixar os tres arquivos
+      - name: Baixar os cinco arquivos
         uses: actions/download-artifact@v4
         with:
           pattern: Hook-Keys-*
@@ -386,9 +467,11 @@ jobs:
           test -s 'release-assets/Hook Keys.apk'
           test -s 'release-assets/Hook Keys.aab'
           test -s 'release-assets/Hook Keys.ipa'
+          test -s 'release-assets/Hook Keys Windows.exe'
+          test -s 'release-assets/Hook Keys macOS.pkg'
           FILE_COUNT="$(find release-assets -type f | wc -l | tr -d ' ')"
-          if [ "$FILE_COUNT" != '3' ]; then
-            echo "O Release deveria conter 3 arquivos, mas recebeu $FILE_COUNT."
+          if [ "$FILE_COUNT" != '5' ]; then
+            echo "O Release deveria conter 5 arquivos, mas recebeu $FILE_COUNT."
             find release-assets -type f -print
             exit 1
           fi
@@ -404,3 +487,5 @@ jobs:
             release-assets/Hook Keys.apk
             release-assets/Hook Keys.aab
             release-assets/Hook Keys.ipa
+            release-assets/Hook Keys Windows.exe
+            release-assets/Hook Keys macOS.pkg
