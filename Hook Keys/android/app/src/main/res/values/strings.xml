@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Hook Keys</string>
+    <string name="title_activity_main">Hook Keys</string>
+    <string name="package_name">com.hookdeveloper.hookkeys</string>
+    <string name="custom_url_scheme">com.hookdeveloper.hookkeys</string>
+</resources>

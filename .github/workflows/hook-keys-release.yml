@@ -1,0 +1,405 @@
+name: Hook Keys - APK, AAB e IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Versao, exemplo: 1.0.0"
+        required: true
+        default: "1.0.0"
+      build_number:
+        description: "Build inteiro e unico para Android e iOS"
+        required: true
+        default: "1"
+  push:
+    tags:
+      - "hook-keys-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hook-keys-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  HOOK_KEYS_ANDROID_ID: com.hookdeveloper.hookkeys
+  HOOK_KEYS_IOS_ID: com.hookdeveloper.hookkeys
+
+jobs:
+  metadata:
+    name: Validar versao do Hook Keys
+    runs-on: ubuntu-latest
+    outputs:
+      version_name: ${{ steps.version.outputs.version_name }}
+      build_number: ${{ steps.version.outputs.build_number }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+      release_name: ${{ steps.version.outputs.release_name }}
+    steps:
+      - id: version
+        name: Definir versao e build
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version_name }}
+          INPUT_BUILD: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION_NAME="$INPUT_VERSION"
+            BUILD_NUMBER="$INPUT_BUILD"
+            TAG_NAME="hook-keys-v${VERSION_NAME}-build${BUILD_NUMBER}"
+          else
+            TAG_NAME="$GITHUB_REF_NAME"
+            if [[ ! "$TAG_NAME" =~ ^hook-keys-v([0-9]+\.[0-9]+\.[0-9]+)-build([1-9][0-9]*)$ ]]; then
+              echo "Tag invalida. Use hook-keys-v1.0.0-build1."
+              exit 1
+            fi
+            VERSION_NAME="${BASH_REMATCH[1]}"
+            BUILD_NUMBER="${BASH_REMATCH[2]}"
+          fi
+
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Versao invalida: $VERSION_NAME"
+            exit 1
+          }
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Build invalido: $BUILD_NUMBER"
+            exit 1
+          }
+
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_name=Hook Keys $VERSION_NAME - Build $BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+
+  android:
+    name: Gerar APK e AAB do Hook Keys
+    needs: metadata
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Hook Keys
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Hook Keys/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Preparar Android SDK, NDK e CMake
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar ferramentas nativas Android
+        shell: bash
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' \
+            'ndk;27.2.12479018' 'cmake;3.22.1'
+
+      - name: Instalar dependencias e compilar interface
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+          node scripts/set-native-version.mjs \
+            --platform android \
+            --version-name '${{ needs.metadata.outputs.version_name }}' \
+            --build-number '${{ needs.metadata.outputs.build_number }}'
+
+      - name: Preparar assinatura Android
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for secret_name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "Secret obrigatorio ausente: $secret_name"
+              exit 1
+            fi
+          done
+
+          ORIGINAL_KEYSTORE="$RUNNER_TEMP/hook-keys-original.keystore"
+          FINAL_KEYSTORE="$RUNNER_TEMP/hook-keys-upload.p12"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$ORIGINAL_KEYSTORE"
+          test -s "$ORIGINAL_KEYSTORE"
+
+          DETECTED_TYPE=''
+          for store_type in JKS PKCS12; do
+            if keytool -list -keystore "$ORIGINAL_KEYSTORE" \
+                -storetype "$store_type" -storepass "$KEYSTORE_PASSWORD" \
+                -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+              DETECTED_TYPE="$store_type"
+              break
+            fi
+          done
+          if [ -z "$DETECTED_TYPE" ]; then
+            echo 'Nao foi possivel abrir a keystore com a senha e o alias configurados.'
+            exit 1
+          fi
+
+          import_key() {
+            local source_key_password="$1"
+            rm -f "$FINAL_KEYSTORE"
+            keytool -importkeystore -noprompt \
+              -srckeystore "$ORIGINAL_KEYSTORE" \
+              -srcstoretype "$DETECTED_TYPE" \
+              -srcstorepass "$KEYSTORE_PASSWORD" \
+              -srcalias "$KEY_ALIAS" \
+              -srckeypass "$source_key_password" \
+              -destkeystore "$FINAL_KEYSTORE" \
+              -deststoretype PKCS12 \
+              -deststorepass "$KEYSTORE_PASSWORD" \
+              -destkeypass "$KEYSTORE_PASSWORD" \
+              -destalias "$KEY_ALIAS" >/dev/null 2>&1
+          }
+
+          if import_key "$KEY_PASSWORD"; then
+            true
+          elif [ "$KEY_PASSWORD" != "$KEYSTORE_PASSWORD" ] && \
+               import_key "$KEYSTORE_PASSWORD"; then
+            true
+          else
+            echo 'KEY_PASSWORD nao abre a chave do alias informado.'
+            exit 1
+          fi
+
+          echo "HOOK_KEYS_STORE_FILE=$FINAL_KEYSTORE" >> "$GITHUB_ENV"
+          {
+            echo 'HOOK_KEYS_KEY_PASSWORD<<EOF'
+            echo "$KEYSTORE_PASSWORD"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+      - name: Compilar APK e AAB assinados
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          chmod +x android/gradlew
+          cd android
+          ./gradlew --no-daemon assembleRelease bundleRelease \
+            -Pandroid.injected.signing.store.file="$HOOK_KEYS_STORE_FILE" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$HOOK_KEYS_KEY_PASSWORD" \
+            -Pandroid.injected.signing.store.type=pkcs12
+
+      - name: Conferir e separar arquivos Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='android/app/build/outputs/apk/release/app-release.apk'
+          AAB='android/app/build/outputs/bundle/release/app-release.aab'
+          test -s "$APK"
+          test -s "$AAB"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          "$APKSIGNER" verify --verbose "$APK"
+          jarsigner -verify "$AAB" >/dev/null
+          mkdir -p build/release
+          cp "$APK" 'build/release/Hook Keys.apk'
+          cp "$AAB" 'build/release/Hook Keys.aab'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hook-Keys-Android
+          if-no-files-found: error
+          path: |
+            Hook Keys/build/release/Hook Keys.apk
+            Hook Keys/build/release/Hook Keys.aab
+
+  ios:
+    name: Gerar IPA do Hook Keys
+    needs: metadata
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: Hook Keys
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Hook Keys/package-lock.json
+
+      - name: Instalar dependencias e compilar interface
+        run: |
+          npm ci
+          npm run build
+          npx cap sync ios
+          node scripts/fix-ios-spm-paths.mjs
+          node scripts/set-native-version.mjs \
+            --platform ios \
+            --version-name '${{ needs.metadata.outputs.version_name }}' \
+            --build-number '${{ needs.metadata.outputs.build_number }}'
+
+      - name: Importar certificado iOS
+        shell: bash
+        env:
+          IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
+          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$IOS_CERT_P12_BASE64" ] || [ -z "$IOS_CERT_PASSWORD" ]; then
+            echo 'Faltam IOS_CERT_P12_BASE64 ou IOS_CERT_PASSWORD.'
+            exit 1
+          fi
+          CERT_PATH="$RUNNER_TEMP/hook-keys-distribution.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/hook-keys-signing.keychain-db"
+          printf '%s' "$IOS_CERT_P12_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$CERT_PATH"
+          test -s "$CERT_PATH"
+          security create-keychain -p 'hook-keys-ci' "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p 'hook-keys-ci' "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k 'hook-keys-ci' "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Preparar autorizacao da Apple para assinatura automatica
+        shell: bash
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || \
+             [ -z "$ASC_API_KEY_P8_BASE64" ]; then
+            echo 'Faltam os secrets da App Store Connect usados pelo VS Hook.'
+            exit 1
+          fi
+          ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_API_KEY_P8_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$ASC_KEY_PATH"
+          test -s "$ASC_KEY_PATH"
+          chmod 600 "$ASC_KEY_PATH"
+          echo "HOOK_KEYS_ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Arquivar Hook Keys para iOS
+        shell: bash
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$IOS_TEAM_ID" ]; then
+            echo 'Falta IOS_TEAM_ID.'
+            exit 1
+          fi
+          xcodebuild -resolvePackageDependencies \
+            -project ios/App/App.xcodeproj \
+            -scheme App
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/Hook-Keys.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOOK_KEYS_ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            PRODUCT_BUNDLE_IDENTIFIER="$HOOK_KEYS_IOS_ID" \
+            archive
+
+      - name: Gerar IPA assinado
+        shell: bash
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/HookKeysExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>$IOS_TEAM_ID</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$PWD/build/Hook-Keys.xcarchive" \
+            -exportPath "$PWD/build/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/HookKeysExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOOK_KEYS_ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          IPA_PATH="$(find build/export -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+          test -n "$IPA_PATH"
+          mkdir -p build/release
+          cp "$IPA_PATH" 'build/release/Hook Keys.ipa'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hook-Keys-iOS
+          if-no-files-found: error
+          path: Hook Keys/build/release/Hook Keys.ipa
+
+  release:
+    name: Publicar somente APK, AAB e IPA
+    needs:
+      - metadata
+      - android
+      - ios
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar os tres arquivos
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Hook-Keys-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Validar conteudo do Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s 'release-assets/Hook Keys.apk'
+          test -s 'release-assets/Hook Keys.aab'
+          test -s 'release-assets/Hook Keys.ipa'
+          FILE_COUNT="$(find release-assets -type f | wc -l | tr -d ' ')"
+          if [ "$FILE_COUNT" != '3' ]; then
+            echo "O Release deveria conter 3 arquivos, mas recebeu $FILE_COUNT."
+            find release-assets -type f -print
+            exit 1
+          fi
+
+      - name: Publicar Release do Hook Keys
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.metadata.outputs.tag_name }}
+          name: ${{ needs.metadata.outputs.release_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/Hook Keys.apk
+            release-assets/Hook Keys.aab
+            release-assets/Hook Keys.ipa

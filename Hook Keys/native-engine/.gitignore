@@ -1,0 +1,6 @@
+/build/
+/out/
+/.vs/
+/third_party/TinySoundFont/_upstream_git_metadata/
+*.user
+*.suo

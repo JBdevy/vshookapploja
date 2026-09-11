@@ -1,0 +1,5 @@
+Hook Keys vendors TinySoundFont from:
+https://github.com/schellingb/TinySoundFont
+
+Pinned commit:
+853a0a171759f1ddba0de1442133a75912bbeffa

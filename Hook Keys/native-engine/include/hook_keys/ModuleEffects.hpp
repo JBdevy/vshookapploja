@@ -1,0 +1,120 @@
+#pragma once
+
+#include "hook_keys/DspTypes.hpp"
+
+#include <array>
+#include <cstddef>
+#include <vector>
+
+namespace hook_keys {
+
+class ModuleEffects final {
+public:
+  ModuleEffects() = default;
+
+  // Call before starting audio. All delay and reverb memory is allocated here.
+  void prepare(double sampleRate);
+  void reset() noexcept;
+
+  // Audio thread only. These operations are bounded and never allocate.
+  void setConfig(ModuleEffectsConfig config, float tempoBpm) noexcept;
+  void setTempo(float tempoBpm) noexcept;
+  void process(float* left, float* right, std::size_t frames) noexcept;
+
+private:
+  struct Biquad final {
+    float b0 = 1.0f;
+    float b1 = 0.0f;
+    float b2 = 0.0f;
+    float a1 = 0.0f;
+    float a2 = 0.0f;
+    float z1Left = 0.0f;
+    float z2Left = 0.0f;
+    float z1Right = 0.0f;
+    float z2Right = 0.0f;
+    bool enabled = false;
+
+    void configure(const EqBandConfig& config, double sampleRate) noexcept;
+    void reset() noexcept;
+    void process(float& left, float& right) noexcept;
+  };
+
+  struct Equalizer final {
+    static constexpr std::size_t maximumCutStages = 8;
+    std::array<std::array<Biquad, maximumCutStages>, 5> bands{};
+    bool enabled = false;
+
+    void configure(const EqConfig& config, double sampleRate) noexcept;
+    void reset() noexcept;
+    void process(float* left, float* right, std::size_t frames) noexcept;
+  };
+
+  struct Compressor final {
+    CompressorConfig config{};
+    double sampleRate = 48000.0;
+    float envelope = 0.0f;
+    float attackCoefficient = 0.0f;
+    float releaseCoefficient = 0.0f;
+    float outputGain = 1.0f;
+
+    void configure(CompressorConfig next, double nextSampleRate) noexcept;
+    void reset() noexcept;
+    void process(float* left, float* right, std::size_t frames) noexcept;
+  };
+
+  struct StereoDelay final {
+    DelayConfig config{};
+    double sampleRate = 48000.0;
+    float tempoBpm = 120.0f;
+    std::vector<float> leftBuffer;
+    std::vector<float> rightBuffer;
+    std::size_t writeIndex = 0;
+    float currentDelaySamples = 1.0f;
+
+    void prepare(double nextSampleRate);
+    void configure(DelayConfig next, float nextTempoBpm) noexcept;
+    void setTempo(float nextTempoBpm) noexcept;
+    void reset() noexcept;
+    void process(float* left, float* right, std::size_t frames) noexcept;
+    [[nodiscard]] float targetDelaySamples() const noexcept;
+  };
+
+  struct ReverbDelayLine final {
+    std::vector<float> buffer;
+    std::size_t index = 0;
+    std::size_t length = 1;
+    float filtered = 0.0f;
+
+    void prepare(std::size_t maximumLength);
+    void setLength(std::size_t nextLength) noexcept;
+    void reset() noexcept;
+    float processComb(float input, float feedback, float dampen) noexcept;
+    float processAllPass(float input) noexcept;
+  };
+
+  struct Reverb final {
+    ReverbConfig config{};
+    double sampleRate = 48000.0;
+    std::array<ReverbDelayLine, 4> combLeft{};
+    std::array<ReverbDelayLine, 4> combRight{};
+    std::array<ReverbDelayLine, 2> allPassLeft{};
+    std::array<ReverbDelayLine, 2> allPassRight{};
+
+    void prepare(double nextSampleRate);
+    void configure(ReverbConfig next) noexcept;
+    void reset() noexcept;
+    void process(float* left, float* right, std::size_t frames) noexcept;
+    void updateLengths() noexcept;
+  };
+
+  double sampleRate_ = 48000.0;
+  float tempoBpm_ = 120.0f;
+  ModuleEffectsConfig config_{};
+  Biquad cutoff_{};
+  Equalizer equalizer_{};
+  Compressor compressor_{};
+  StereoDelay delay_{};
+  Reverb reverb_{};
+};
+
+} // namespace hook_keys

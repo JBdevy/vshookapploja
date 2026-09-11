@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Gerados pelo Capacitor na etapa de criação dos projetos nativos.
+android/.gradle/
+android/local.properties
+android/app/build/
+ios/App/Pods/
+ios/App/DerivedData/
