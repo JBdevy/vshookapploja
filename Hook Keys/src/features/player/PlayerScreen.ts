@@ -126,6 +126,7 @@ import {
   type AudioOutputDevice,
 } from '../audio/AudioOutputService';
 import { hookKeysNative } from '../../platform/native/HookKeysNative';
+import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
 import {
   createPerformanceKeyboardMarkup,
   createPerformanceKeyboardSettingsMarkup,
@@ -3525,7 +3526,7 @@ export class PlayerScreen {
       if (modalAction === 'open-support') {
         const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
         const url = button?.dataset.supportUrl;
-        if (url) window.open(url, '_blank', 'noopener,noreferrer');
+        if (url) void openWhatsAppSupport(url);
         return;
       }
 
@@ -4099,7 +4100,7 @@ export class PlayerScreen {
     if (!button) return;
     try {
       const url = await this.accountControls.getSupportUrl();
-      if (!modal.isConnected || !/^https:\/\/wa\.me\/\d{8,15}$/.test(url)) return;
+      if (!modal.isConnected || !isWhatsAppSupportUrl(url)) return;
       button.dataset.supportUrl = url;
       button.disabled = false;
     } catch {

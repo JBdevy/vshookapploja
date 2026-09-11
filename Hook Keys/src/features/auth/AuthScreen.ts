@@ -1,4 +1,5 @@
 import { ApiError } from '../../shared/api/ApiError';
+import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
 import type { AuthSessionService } from './AuthSessionService';
 import type {
   AuthenticatedSession,
@@ -101,7 +102,7 @@ export class AuthScreen {
   private async loadSupportUrl(): Promise<void> {
     try {
       const url = await this.getSupportUrl();
-      if (!/^https:\/\/wa\.me\/\d{8,15}$/.test(url)) return;
+      if (!isWhatsAppSupportUrl(url)) return;
       this.supportUrl = url;
       this.supportButton.disabled = false;
     } catch {
@@ -112,7 +113,7 @@ export class AuthScreen {
 
   private openSupport(): void {
     if (!this.supportUrl) return;
-    window.open(this.supportUrl, '_blank', 'noopener,noreferrer');
+    void openWhatsAppSupport(this.supportUrl);
   }
 
   private renderLoading(): void {
