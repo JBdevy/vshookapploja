@@ -363,6 +363,60 @@ jobs:
           mkdir -p build/release
           cp "$IPA_PATH" 'build/release/Hook Keys.ipa'
 
+      - name: Preparar chave da App Store Connect
+        shell: bash
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          for secret_name in ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8_BASE64; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "Secret obrigatorio ausente: $secret_name"
+              exit 1
+            fi
+          done
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          mkdir -p "$KEY_DIR"
+          printf '%s' "$ASC_API_KEY_P8_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$KEY_PATH"
+          test -s "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+
+      - name: Validar IPA na App Store Connect
+        shell: bash
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA_PATH="$(find build/release -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+          test -n "$IPA_PATH"
+          xcrun altool \
+            --validate-app \
+            --file "$IPA_PATH" \
+            --type ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Enviar Hook Keys para a App Store Connect
+        shell: bash
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA_PATH="$(find build/release -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+          test -n "$IPA_PATH"
+          xcrun altool \
+            --upload-app \
+            --file "$IPA_PATH" \
+            --type ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+          echo 'IPA do Hook Keys enviado. Aguarde o processamento na App Store Connect.'
+
       - uses: actions/upload-artifact@v4
         with:
           name: Hook-Keys-iOS
