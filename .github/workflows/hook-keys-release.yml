@@ -271,31 +271,40 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
-      - name: Preparar autorizacao da Apple para assinatura automatica
+      - name: Instalar provisioning profile do Hook Keys
         shell: bash
         env:
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          ASC_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+          HOOK_KEYS_IOS_PROVISION_PROFILE_BASE64: ${{ secrets.HOOK_KEYS_IOS_PROVISION_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
-          if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || \
-             [ -z "$ASC_API_KEY_P8_BASE64" ]; then
-            echo 'Faltam os secrets da App Store Connect usados pelo VS Hook.'
+          if [ -z "$HOOK_KEYS_IOS_PROVISION_PROFILE_BASE64" ]; then
+            echo 'Falta o secret HOOK_KEYS_IOS_PROVISION_PROFILE_BASE64.'
             exit 1
           fi
-          ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_API_KEY_P8_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$ASC_KEY_PATH"
-          test -s "$ASC_KEY_PATH"
-          chmod 600 "$ASC_KEY_PATH"
-          echo "HOOK_KEYS_ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
+          PROFILE_PATH="$RUNNER_TEMP/hook-keys.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/hook-keys-profile.plist"
+          printf '%s' "$HOOK_KEYS_IOS_PROVISION_PROFILE_BASE64" | tr -d '\r\n\t ' | base64 --decode > "$PROFILE_PATH"
+          test -s "$PROFILE_PATH"
+          /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
+          PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST")
+          case "$PROFILE_APP_ID" in
+            *.$HOOK_KEYS_IOS_ID) ;;
+            *)
+              echo "O profile pertence a $PROFILE_APP_ID, nao a $HOOK_KEYS_IOS_ID."
+              exit 1
+              ;;
+          esac
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          echo "HOOK_KEYS_PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "Provisioning profile instalado: $PROFILE_NAME ($PROFILE_UUID)"
 
       - name: Arquivar Hook Keys para iOS
         shell: bash
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           set -euo pipefail
           if [ -z "$IOS_TEAM_ID" ]; then
@@ -312,8 +321,9 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$PWD/build/Hook-Keys.xcarchive" \
             DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY='Apple Distribution' \
+            PROVISIONING_PROFILE_SPECIFIER="$HOOK_KEYS_PROFILE_NAME" \
             PRODUCT_BUNDLE_IDENTIFIER="$HOOK_KEYS_IOS_ID" \
             archive
 
@@ -321,8 +331,6 @@ jobs:
         shell: bash
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/HookKeysExportOptions.plist" <<EOF
@@ -335,20 +343,21 @@ jobs:
             <key>destination</key>
             <string>export</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
             <key>teamID</key>
             <string>$IOS_TEAM_ID</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$HOOK_KEYS_IOS_ID</key>
+              <string>$HOOK_KEYS_PROFILE_NAME</string>
+            </dict>
           </dict>
           </plist>
           EOF
           xcodebuild -exportArchive \
             -archivePath "$PWD/build/Hook-Keys.xcarchive" \
             -exportPath "$PWD/build/export" \
-            -exportOptionsPlist "$RUNNER_TEMP/HookKeysExportOptions.plist" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOOK_KEYS_ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+            -exportOptionsPlist "$RUNNER_TEMP/HookKeysExportOptions.plist"
           IPA_PATH="$(find build/export -maxdepth 1 -type f -name '*.ipa' -print -quit)"
           test -n "$IPA_PATH"
           mkdir -p build/release
