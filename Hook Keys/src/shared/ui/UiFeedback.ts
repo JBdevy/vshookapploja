@@ -16,6 +16,7 @@ const DRAG_CONTROL_SELECTOR = [
   '[data-output-fader]',
   '.module-envelope-knob',
   '.module-effect-knob',
+  '.player-output-knob',
   '.module-eq-q-control',
   '.effect-pad-volume__control',
 ].join(',');

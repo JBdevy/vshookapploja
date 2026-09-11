@@ -204,6 +204,14 @@ void HookKeysEngine::routeNoteOn(
     }
     const auto targetNote = translatedNote(sourceNote, config.octaveShift);
     const auto previousTarget = activeNotes_[index][inputSlot][sourceNote];
+    if (previousTarget < 0) {
+      std::size_t activeCount = 0;
+      for (const auto& inputNotes : activeNotes_[index]) {
+        activeCount += static_cast<std::size_t>(std::count_if(
+            inputNotes.begin(), inputNotes.end(), [](std::int16_t note) { return note >= 0; }));
+      }
+      if (activeCount >= config.polyphony) continue;
+    }
     if (previousTarget >= 0) synth->noteOff(static_cast<std::uint8_t>(previousTarget));
     activeNotes_[index][inputSlot][sourceNote] = targetNote;
     synth->noteOn(targetNote, velocity);

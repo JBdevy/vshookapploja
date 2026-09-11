@@ -26,7 +26,8 @@ interface HTML, do Capacitor, do JUCE ou do FluidSynth.
 - delay livre em milissegundos ou sincronizado ao BPM geral do aplicativo;
 - ganho Master atômico, incluindo silêncio real na posição −∞;
 - buffers de delay e reverb pré-alocados antes de iniciar o áudio;
-- runtime compartilhado pelas pontes AAudio/Android e AVAudioEngine/CoreMIDI/iOS;
+- roteamento mono ou estéreo de cada módulo para até 32 canais físicos;
+- runtime compartilhado por AAudio/Android, AVAudioEngine/CoreMIDI/iOS e CPAL/Midir/Tauri no desktop;
 - testes do caminho completo SF2 + MIDI + áudio sem depender de hardware.
 
 ## Dependências fornecidas

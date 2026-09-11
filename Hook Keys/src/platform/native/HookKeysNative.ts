@@ -21,6 +21,9 @@ export interface NativeModuleConfig {
   sustain: boolean;
   modulation: boolean;
   volumeDb: number;
+  polyphony: number;
+  outputChannelStart: number;
+  outputChannelCount: 1 | 2;
 }
 
 export interface NativeModuleEffectsConfig {
@@ -74,6 +77,7 @@ interface HookKeysNativePlugin {
   initialize(options: { bufferSize: number }): Promise<{ ready: boolean }>;
   listMidiDevices(): Promise<{ devices: NativeMidiDevice[] }>;
   listAudioOutputDevices(): Promise<{ devices: NativeAudioOutputDevice[] }>;
+  setAudioOutputDevice(options: { deviceId: string; channels: number; bufferSize: number }): Promise<void>;
   setMidiInputs(options: { deviceIds: Array<string | null> }): Promise<void>;
   configureModule(options: NativeModuleConfig): Promise<void>;
   configureModuleEffects(options: NativeModuleEffectsConfig): Promise<void>;
@@ -107,15 +111,16 @@ class HookKeysNativeBridge {
   private lastTempo: number | null = null;
   private lastOutputGainKey: string | null = null;
   private lastCompatibilityMode: boolean | null = null;
+  private lastAudioDeviceKey: string | null = null;
 
   isAvailable(): boolean {
-    return Capacitor.isNativePlatform();
+    return Capacitor.isNativePlatform() || this.tauriInvoke() !== null;
   }
 
   initialize(bufferSize = 128): Promise<boolean> {
     if (!this.isAvailable()) return Promise.resolve(false);
     if (!this.initializePromise) {
-      this.initializePromise = plugin.initialize({ bufferSize })
+      this.initializePromise = this.call<{ ready: boolean }>('initialize', { bufferSize }, () => plugin.initialize({ bufferSize }))
         .then(({ ready }) => ready)
         .catch(() => false);
       void this.attachEventForwarders();
@@ -125,31 +130,55 @@ class HookKeysNativeBridge {
 
   async listMidiDevices(): Promise<NativeMidiDevice[]> {
     if (!await this.initialize()) return [];
-    const { devices } = await plugin.listMidiDevices();
+    const result = await this.call<{ devices: NativeMidiDevice[] } | NativeMidiDevice[]>(
+      'list_midi_devices', {}, () => plugin.listMidiDevices(),
+    );
+    const devices = Array.isArray(result) ? result : result.devices;
     return Array.isArray(devices) ? devices : [];
   }
 
   async listAudioOutputDevices(): Promise<NativeAudioOutputDevice[]> {
     if (!await this.initialize()) return [];
-    const { devices } = await plugin.listAudioOutputDevices();
+    const result = await this.call<{ devices: NativeAudioOutputDevice[] } | NativeAudioOutputDevice[]>(
+      'list_audio_output_devices', {}, () => plugin.listAudioOutputDevices(),
+    );
+    const devices = Array.isArray(result) ? result : result.devices;
     return Array.isArray(devices) ? devices : [];
+  }
+
+  async setAudioOutputDevice(deviceId: string, channels: number, bufferSize: number): Promise<boolean> {
+    if (!await this.initialize(bufferSize)) return false;
+    const key = `${deviceId}:${channels}:${bufferSize}`;
+    if (key === this.lastAudioDeviceKey) return false;
+    try {
+      await this.call('set_audio_output_device', { deviceId, channels, bufferSize }, () => (
+        plugin.setAudioOutputDevice({ deviceId, channels, bufferSize })
+      ));
+      this.lastAudioDeviceKey = key;
+      return true;
+    } finally {
+      this.resetSynchronizationCache();
+    }
   }
 
   async setMidiInputs(deviceIds: readonly (string | null)[]): Promise<void> {
     if (!await this.initialize()) return;
-    await plugin.setMidiInputs({ deviceIds: [...deviceIds].slice(0, 3) });
+    const normalized = [...deviceIds].slice(0, 3);
+    await this.call('set_midi_inputs', { deviceIds: normalized }, () => plugin.setMidiInputs({ deviceIds: normalized }));
   }
 
   async sendMidi(inputSlot: number, status: number, data1: number, data2: number): Promise<void> {
     if (!await this.initialize()) return;
-    await plugin.sendMidi({ inputSlot, status, data1, data2 });
+    await this.call('send_midi', { inputSlot, status, data1, data2 }, () => (
+      plugin.sendMidi({ inputSlot, status, data1, data2 })
+    ));
   }
 
   async configureModule(config: NativeModuleConfig): Promise<void> {
     if (!await this.initialize()) return;
     const key = JSON.stringify(config);
     if (this.moduleConfigKeys[config.moduleIndex] === key) return;
-    await plugin.configureModule(config);
+    await this.call('configure_module', { config }, () => plugin.configureModule(config));
     this.moduleConfigKeys[config.moduleIndex] = key;
   }
 
@@ -157,7 +186,7 @@ class HookKeysNativeBridge {
     if (!await this.initialize()) return;
     const key = JSON.stringify(config);
     if (this.moduleEffectsKeys[config.moduleIndex] === key) return;
-    await plugin.configureModuleEffects(config);
+    await this.call('configure_module_effects', { config }, () => plugin.configureModuleEffects(config));
     this.moduleEffectsKeys[config.moduleIndex] = key;
   }
 
@@ -165,14 +194,14 @@ class HookKeysNativeBridge {
     if (!await this.initialize()) return;
     const key = JSON.stringify(config);
     if (this.moduleEnvelopeKeys[config.moduleIndex] === key) return;
-    await plugin.configureModuleEnvelope(config);
+    await this.call('configure_module_envelope', { config }, () => plugin.configureModuleEnvelope(config));
     this.moduleEnvelopeKeys[config.moduleIndex] = key;
   }
 
   async setTempo(bpm: number): Promise<void> {
     if (!await this.initialize()) return;
     if (this.lastTempo === bpm) return;
-    await plugin.setTempo({ bpm });
+    await this.call('set_tempo', { bpm }, () => plugin.setTempo({ bpm }));
     this.lastTempo = bpm;
   }
 
@@ -180,20 +209,20 @@ class HookKeysNativeBridge {
     if (!await this.initialize()) return;
     const key = `${db}:${enabled}`;
     if (this.lastOutputGainKey === key) return;
-    await plugin.setOutputGain({ db, enabled });
+    await this.call('set_output_gain', { db, enabled }, () => plugin.setOutputGain({ db, enabled }));
     this.lastOutputGainKey = key;
   }
 
   async setCompatibilityMode(enabled: boolean): Promise<void> {
     if (!await this.initialize()) return;
     if (this.lastCompatibilityMode === enabled) return;
-    await plugin.setCompatibilityMode({ enabled });
+    await this.call('set_compatibility_mode', { enabled }, () => plugin.setCompatibilityMode({ enabled }));
     this.lastCompatibilityMode = enabled;
   }
 
   async stopAllNotes(): Promise<void> {
     if (!this.isAvailable()) return;
-    await plugin.stopAllNotes();
+    await this.call('stop_all_notes', {}, () => plugin.stopAllNotes());
   }
 
   async performHaptic(strength: 'light' | 'medium'): Promise<boolean> {
@@ -208,16 +237,35 @@ class HookKeysNativeBridge {
 
   async loadSoundFont(moduleIndex: number, file: Blob): Promise<void> {
     if (!await this.initialize()) throw new Error('native_engine_unavailable');
-    await plugin.beginSoundFontUpload({ moduleIndex });
+    await this.call('begin_sound_font_upload', { moduleIndex }, () => plugin.beginSoundFontUpload({ moduleIndex }));
     for (let offset = 0; offset < file.size; offset += SOUNDFONT_CHUNK_BYTES) {
       const bytes = new Uint8Array(await file.slice(offset, offset + SOUNDFONT_CHUNK_BYTES).arrayBuffer());
-      await plugin.appendSoundFontChunk({ moduleIndex, base64: bytesToBase64(bytes) });
+      const base64 = bytesToBase64(bytes);
+      await this.call('append_sound_font_chunk', { moduleIndex, base64 }, () => (
+        plugin.appendSoundFontChunk({ moduleIndex, base64 })
+      ));
     }
-    await plugin.finishSoundFontUpload({ moduleIndex });
+    await this.call('finish_sound_font_upload', { moduleIndex }, () => plugin.finishSoundFontUpload({ moduleIndex }));
   }
 
   private attachEventForwarders(): Promise<void> {
     if (this.listenersPromise) return this.listenersPromise;
+    if (this.tauriInvoke()) {
+      this.listenersPromise = import('@tauri-apps/api/event').then(async ({ listen }) => {
+        await Promise.all([
+          listen<NativeMidiNoteEvent>('midiNote', ({ payload }) => {
+            window.dispatchEvent(new CustomEvent('hookkeys:native-midi-note', { detail: payload }));
+          }),
+          listen<NativeMidiControlChangeEvent>('midiControlChange', ({ payload }) => {
+            window.dispatchEvent(new CustomEvent('hookkeys:native-midi-control-change', { detail: payload }));
+          }),
+          listen('midiDevicesChanged', () => {
+            window.dispatchEvent(new Event('hookkeys:native-midi-devices-changed'));
+          }),
+        ]);
+      });
+      return this.listenersPromise;
+    }
     this.listenersPromise = Promise.all([
       plugin.addListener('midiNote', (event) => {
         window.dispatchEvent(new CustomEvent('hookkeys:native-midi-note', { detail: event }));
@@ -230,6 +278,30 @@ class HookKeysNativeBridge {
       }),
     ]).then(() => undefined);
     return this.listenersPromise;
+  }
+
+  private tauriInvoke(): ((command: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
+    return (window as unknown as {
+      __TAURI_INTERNALS__?: { invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+    }).__TAURI_INTERNALS__?.invoke ?? null;
+  }
+
+  private call<T>(
+    command: string,
+    args: Record<string, unknown>,
+    capacitorCall: () => Promise<T>,
+  ): Promise<T> {
+    const invoke = this.tauriInvoke();
+    return invoke ? invoke(command, args) as Promise<T> : capacitorCall();
+  }
+
+  private resetSynchronizationCache(): void {
+    this.moduleConfigKeys.fill(null);
+    this.moduleEffectsKeys.fill(null);
+    this.moduleEnvelopeKeys.fill(null);
+    this.lastTempo = null;
+    this.lastOutputGainKey = null;
+    this.lastCompatibilityMode = null;
   }
 }
 

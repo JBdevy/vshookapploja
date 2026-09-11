@@ -21,36 +21,23 @@ constexpr std::size_t kRenderChunkFrames = 512;
 
 class AndroidAudioEngine final {
 public:
-  bool start(int requestedBufferFrames) noexcept {
+  bool start(int requestedBufferFrames, int requestedDeviceId = AAUDIO_UNSPECIFIED,
+             int requestedChannels = 2) noexcept {
     std::scoped_lock lock(controlMutex_);
     if (stream_ != nullptr && runtime_ != nullptr) return true;
-
-    AAudioStreamBuilder* builder = nullptr;
-    if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK || builder == nullptr) return false;
-    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
-    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
-    AAudioStreamBuilder_setChannelCount(builder, 2);
-    // Let AAudio choose the hardware-native rate to avoid an unnecessary
-    // resampler and the jitter it can introduce on older devices.
-    AAudioStreamBuilder_setSampleRate(builder, AAUDIO_UNSPECIFIED);
-    AAudioStreamBuilder_setFramesPerDataCallback(
-        builder, std::clamp(requestedBufferFrames, 64, static_cast<int>(kRenderChunkFrames)));
-    AAudioStreamBuilder_setDataCallback(builder, &AndroidAudioEngine::dataCallback, this);
-    AAudioStreamBuilder_setErrorCallback(builder, &AndroidAudioEngine::errorCallback, this);
-
-    auto result = AAudioStreamBuilder_openStream(builder, &stream_);
+    requestedChannels = std::clamp(requestedChannels, 1, 32);
+    auto result = openStream(requestedBufferFrames, requestedDeviceId, requestedChannels,
+                             AAUDIO_SHARING_MODE_EXCLUSIVE);
     if (result != AAUDIO_OK) {
-      AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
-      result = AAudioStreamBuilder_openStream(builder, &stream_);
+      result = openStream(requestedBufferFrames, requestedDeviceId, requestedChannels,
+                          AAUDIO_SHARING_MODE_SHARED);
     }
-    AAudioStreamBuilder_delete(builder);
     if (result != AAUDIO_OK || stream_ == nullptr) {
       stream_ = nullptr;
       return false;
     }
 
+    channelCount_ = std::clamp(AAudioStream_getChannelCount(stream_), 1, 32);
     const auto sampleRate = static_cast<double>(AAudioStream_getSampleRate(stream_));
     runtime_ = std::make_unique<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
     activeRuntime_.store(runtime_.get(), std::memory_order_release);
@@ -74,6 +61,7 @@ public:
       stream_ = nullptr;
     }
     runtime_.reset();
+    channelCount_ = 2;
   }
 
   bool loadSoundFont(std::size_t moduleIndex, const char* path) noexcept {
@@ -100,7 +88,10 @@ public:
       std::int8_t octave,
       bool sustain,
       bool modulation,
-      float volumeDb) noexcept {
+      float volumeDb,
+      int polyphony,
+      int outputChannelStart,
+      int outputChannelCount) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     hook_keys::ModuleConfig config;
@@ -114,6 +105,9 @@ public:
     config.sustainInputEnabled = sustain;
     config.modulationInputEnabled = modulation;
     config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
+    config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
+    config.outputChannelStart = static_cast<std::uint8_t>(std::clamp(outputChannelStart, 0, 31));
+    config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
     return runtime->setModuleConfig(moduleIndex, config);
   }
 
@@ -189,6 +183,32 @@ public:
   }
 
 private:
+  aaudio_result_t openStream(int requestedBufferFrames, int requestedDeviceId,
+                             int requestedChannels, aaudio_sharing_mode_t sharingMode) noexcept {
+    if (stream_ != nullptr) {
+      AAudioStream_close(stream_);
+      stream_ = nullptr;
+    }
+    AAudioStreamBuilder* builder = nullptr;
+    if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK || builder == nullptr) {
+      return AAUDIO_ERROR_INTERNAL;
+    }
+    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setSharingMode(builder, sharingMode);
+    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+    AAudioStreamBuilder_setChannelCount(builder, requestedChannels);
+    AAudioStreamBuilder_setDeviceId(builder, requestedDeviceId);
+    AAudioStreamBuilder_setSampleRate(builder, AAUDIO_UNSPECIFIED);
+    AAudioStreamBuilder_setFramesPerDataCallback(
+        builder, std::clamp(requestedBufferFrames, 32, static_cast<int>(kRenderChunkFrames)));
+    AAudioStreamBuilder_setDataCallback(builder, &AndroidAudioEngine::dataCallback, this);
+    AAudioStreamBuilder_setErrorCallback(builder, &AndroidAudioEngine::errorCallback, this);
+    const auto result = AAudioStreamBuilder_openStream(builder, &stream_);
+    AAudioStreamBuilder_delete(builder);
+    return result;
+  }
+
   static aaudio_data_callback_result_t dataCallback(
       AAudioStream*, void* userData, void* audioData, int32_t frames) noexcept {
     return static_cast<AndroidAudioEngine*>(userData)->render(static_cast<float*>(audioData), frames);
@@ -202,17 +222,13 @@ private:
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (interleaved == nullptr || frameCount <= 0) return AAUDIO_CALLBACK_RESULT_CONTINUE;
     if (runtime == nullptr) {
-      std::fill_n(interleaved, static_cast<std::size_t>(frameCount) * 2, 0.0f);
+      std::fill_n(interleaved, static_cast<std::size_t>(frameCount) * channelCount_, 0.0f);
       return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
     std::size_t offset = 0;
     while (offset < static_cast<std::size_t>(frameCount)) {
       const auto frames = std::min(kRenderChunkFrames, static_cast<std::size_t>(frameCount) - offset);
-      runtime->render(left_.data(), right_.data(), frames);
-      for (std::size_t index = 0; index < frames; ++index) {
-        interleaved[(offset + index) * 2] = left_[index];
-        interleaved[(offset + index) * 2 + 1] = right_[index];
-      }
+      runtime->renderInterleaved(interleaved + offset * channelCount_, frames, channelCount_);
       offset += frames;
     }
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
@@ -222,8 +238,7 @@ private:
   AAudioStream* stream_ = nullptr;
   std::unique_ptr<hook_keys::NativeEngineRuntime> runtime_;
   std::atomic<hook_keys::NativeEngineRuntime*> activeRuntime_{nullptr};
-  std::array<float, kRenderChunkFrames> left_{};
-  std::array<float, kRenderChunkFrames> right_{};
+  std::size_t channelCount_ = 2;
 };
 
 AndroidAudioEngine gEngine;
@@ -253,6 +268,15 @@ std::array<Value, Size> javaArray(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeStart(JNIEnv*, jclass, jint bufferFrames) {
   return gEngine.start(bufferFrames) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeRestart(
+    JNIEnv*, jclass, jint bufferFrames, jint deviceId, jint channels) {
+  gEngine.stop();
+  if (gEngine.start(bufferFrames, deviceId, channels)) return JNI_TRUE;
+  static_cast<void>(gEngine.start(bufferFrames));
+  return JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -292,7 +316,10 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
     jint octave,
     jboolean sustain,
     jboolean modulation,
-    jfloat volumeDb) {
+    jfloat volumeDb,
+    jint polyphony,
+    jint outputChannelStart,
+    jint outputChannelCount) {
   return gEngine.configureModule(
              static_cast<std::size_t>(moduleIndex),
              enabled == JNI_TRUE,
@@ -302,7 +329,10 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
              static_cast<std::int8_t>(octave),
              sustain == JNI_TRUE,
              modulation == JNI_TRUE,
-             volumeDb)
+             volumeDb,
+             static_cast<int>(polyphony),
+             static_cast<int>(outputChannelStart),
+             static_cast<int>(outputChannelCount))
              ? JNI_TRUE
              : JNI_FALSE;
 }

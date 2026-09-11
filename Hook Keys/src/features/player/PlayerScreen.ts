@@ -91,7 +91,8 @@ import {
   type ModuleEffectKind,
 } from './ModuleEffectsView';
 import {
-  createOutputControlMarkup,
+  createOutputKnobMarkup,
+  createMetronomeKnobMarkup,
   DEFAULT_OUTPUT_ENABLED,
   DEFAULT_OUTPUT_LEVELS,
   formatOutputDb,
@@ -115,7 +116,6 @@ import { DoubleTapTracker } from '../../shared/gestures/DoubleTapTracker';
 import { EffectAudioStore, isSupportedEffectFile } from '../effects/EffectAudioStore';
 import { MetronomeEngine, type MetronomeClickSound } from '../metronome/MetronomeEngine';
 import { TabletInputKeyboardController } from '../../shared/ui/TabletInputKeyboardController';
-import { UiFeedback } from '../../shared/ui/UiFeedback';
 import {
   AudioOutputService,
   createAudioRouteOptions,
@@ -136,7 +136,7 @@ import {
 } from './PerformanceKeyboard';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
 type BankId = 'A' | 'B';
 type PlayerView = 'bank' | 'pads-effects';
 
@@ -487,48 +487,6 @@ function createPresetMarkup(
   `;
 }
 
-function createFooterControlsMarkup(
-  levels: OutputLevels,
-  enabled: OutputEnabledState,
-): string {
-  return `
-    <section class="player-output-controls" aria-label="Volumes do rodapé">
-      ${createOutputControlMarkup('music', 'Músicas', levels.music, enabled.music)}
-      ${createOutputControlMarkup('pads', 'Pads', levels.pads, enabled.pads)}
-      ${createOutputControlMarkup('effects', 'Efects', levels.effects, enabled.effects)}
-    </section>
-  `;
-}
-
-function createMetronomeOutputControlMarkup(
-  metronomeVolume: number,
-  className = '',
-): string {
-  const volumePercent = Math.round(metronomeVolume * 100);
-  return `
-    <div class="player-output-control player-output-control--metronome${className ? ` ${className}` : ''}">
-      <span>Metrônomo</span>
-      <div
-        class="player-output-control__slider"
-        data-metronome-output-fader
-        style="--output-position: ${volumePercent}%"
-      >
-        <input
-          type="range"
-          min="0"
-          max="100"
-          step="1"
-          value="${volumePercent}"
-          data-metronome-output-volume
-          aria-label="Volume do metrônomo"
-          aria-valuetext="${volumePercent}%"
-        >
-      </div>
-      <output data-metronome-output-value>${volumePercent}%</output>
-    </div>
-  `;
-}
-
 function createPresetRowsMarkup(selectedPreset: number | null): string {
   return Array.from({ length: PRESET_COUNT / PRESETS_PER_ROW }, (_, rowIndex) => {
     const firstPreset = rowIndex * PRESETS_PER_ROW + 1;
@@ -741,7 +699,6 @@ export class PlayerScreen {
   private readonly trackLibrary: TrackLibraryStore;
   private readonly effectAudioLibrary: EffectAudioStore;
   private readonly metronome = new MetronomeEngine(() => this.renderMetronomeState());
-  private readonly uiFeedback = new UiFeedback();
   private readonly midiInput = new MidiInputService((input) => {
     this.handleMidiNote(input);
   }, (input) => {
@@ -764,7 +721,7 @@ export class PlayerScreen {
   private readonly outputFaderLearnGesture = new LongPressGesture(2_000);
   private readonly metronomeFaderLearnGesture = new LongPressGesture(2_000);
   private readonly ccControlHoldGesture = new LongPressGesture();
-  private readonly knobCcLearnGesture = new LongPressGesture(650, 8);
+  private readonly knobCcLearnGesture = new LongPressGesture(2_000, 8);
   private readonly faderDoubleTap = new DoubleTapTracker();
   private readonly bankKeyboardDoubleTap = new DoubleTapTracker();
   private readonly metronomeHoldGesture = new LongPressGesture();
@@ -788,6 +745,7 @@ export class PlayerScreen {
   private stateChangedBeforeRestore = false;
   private nativeSyncTimer: number | null = null;
   private nativeSoundfontSync: Promise<void> = Promise.resolve();
+  private nativeAudioOutputSync: Promise<void> = Promise.resolve();
   private readonly nativeLoadedTimbres: (string | null)[] = Array.from({ length: MODULE_COUNT }, () => null);
   private selectedMidiInputIds: (string | null)[] = [null, null, null];
   private readonly audioOutput = new AudioOutputService();
@@ -891,17 +849,13 @@ export class PlayerScreen {
               data-action="show-pads-effects"
               aria-pressed="false"
             >Pads - Efects</button>
-            ${createOutputControlMarkup(
-              'master',
-              'Master',
-              this.outputLevels.master,
-              this.outputEnabled.master,
-              { className: 'player-output-control--header player-output-control--master-header', showPower: false },
-            )}
-            ${createMetronomeOutputControlMarkup(
-              this.metronome.getVolume(),
-              'player-output-control--header player-output-control--metronome-header',
-            )}
+            <section class="player-header-knobs" aria-label="Volumes principais">
+              ${createOutputKnobMarkup('music', 'Playlist', this.outputLevels.music)}
+              ${createOutputKnobMarkup('pads', 'Pads', this.outputLevels.pads)}
+              ${createOutputKnobMarkup('effects', 'Efects', this.outputLevels.effects)}
+              ${createMetronomeKnobMarkup(this.metronome.getVolume())}
+              ${createOutputKnobMarkup('master', 'Master', this.outputLevels.master)}
+            </section>
           </nav>
 
           <div class="player-account">
@@ -935,19 +889,18 @@ export class PlayerScreen {
 
           ${createPadsEffectsMarkup()}
 
-          <footer class="player-bottom-bar">
-            ${createFooterControlsMarkup(
-              this.outputLevels,
-              this.outputEnabled,
-            )}
-          </footer>
         </div>
 
         <p class="player-screen__status" role="status" aria-live="polite"></p>
       </main>
+      <div class="knob-focus" data-knob-focus aria-hidden="true">
+        <div class="knob-focus__card">
+          <strong data-knob-focus-label></strong>
+          <span class="knob-focus__face"><i></i></span>
+          <output data-knob-focus-value></output>
+        </div>
+      </div>
     `;
-    this.uiFeedback.mount(this.root);
-
     for (const faderRoot of this.root.querySelectorAll<HTMLElement>('[data-module-fader]')) {
       const moduleNumber = Number.parseInt(faderRoot.dataset.moduleFader ?? '', 10);
       if (!Number.isInteger(moduleNumber)) continue;
@@ -998,8 +951,9 @@ export class PlayerScreen {
     this.root.addEventListener('contextmenu', this.handleRootContextMenu);
     this.root.addEventListener('input', this.handleRootInput);
     this.midiInput.mount();
-    void hookKeysNative.initialize(this.bufferSize).then((ready) => {
+    void hookKeysNative.initialize(this.bufferSize).then(async (ready) => {
       if (!ready || !this.mounted) return;
+      await this.applyNativeAudioOutput();
       this.applySelectedMidiInputs();
       this.syncNativeEngine();
     });
@@ -1056,7 +1010,6 @@ export class PlayerScreen {
     this.soundDownloadAbort?.abort();
     this.soundDownloadAbort = null;
     this.soundLibraryEngine.destroy();
-    this.uiFeedback.destroy();
     this.outputFaderDrag = null;
     this.metronomeFaderDrag = null;
     this.faderDoubleTap.reset();
@@ -1292,13 +1245,16 @@ export class PlayerScreen {
     const input = event.target;
     if (!(input instanceof HTMLInputElement)) return;
     if (input.matches('[data-metronome-output-volume]')) {
-      const volume = Math.min(100, Math.max(0, Number(input.value)));
-      if (!Number.isFinite(volume)) return;
-      this.metronome.setVolume(volume / 100);
-      input.parentElement?.style.setProperty('--output-position', `${volume}%`);
-      input.setAttribute('aria-valuetext', `${Math.round(volume)}%`);
+      const position = Math.min(100, Math.max(0, Number(input.value)));
+      if (!Number.isFinite(position)) return;
+      const levelDb = outputDbFromPosition(position);
+      this.metronome.setVolume(position <= 0 ? 0 : 10 ** (levelDb / 20));
+      input.parentElement?.style.setProperty('--output-position', `${position}%`);
+      input.closest<HTMLElement>('.player-output-knob')?.style.setProperty('--knob-angle', `${-135 + (position / 100) * 270}deg`);
+      input.closest<HTMLElement>('.player-output-knob')?.style.setProperty('--knob-progress', String(position / 100));
+      input.setAttribute('aria-valuetext', formatOutputDb(levelDb));
       const output = this.root.querySelector<HTMLOutputElement>('[data-metronome-output-value]');
-      if (output) output.value = `${Math.round(volume)}%`;
+      if (output) output.value = formatOutputDb(levelDb);
       this.markPlayerStateChanged();
       return;
     }
@@ -1310,6 +1266,8 @@ export class PlayerScreen {
     const value = outputDbFromPosition(position);
     this.outputLevels[outputBus] = value;
     input.parentElement?.style.setProperty('--output-position', `${outputPosition(value)}%`);
+    input.closest<HTMLElement>('.player-output-knob')?.style.setProperty('--knob-angle', `${-135 + (outputPosition(value) / 100) * 270}deg`);
+    input.closest<HTMLElement>('.player-output-knob')?.style.setProperty('--knob-progress', String(outputPosition(value) / 100));
     input.setAttribute('aria-valuetext', formatOutputDb(value));
     const output = this.root.querySelector<HTMLOutputElement>(`[data-output-value="${outputBus}"]`);
     if (output) output.value = formatOutputDb(value);
@@ -1319,7 +1277,8 @@ export class PlayerScreen {
 
   private renderOutputLevels(): void {
     for (const outputBus of ['music', 'pads', 'effects', 'master'] as const) {
-      const value = this.outputLevels[outputBus];
+      const value = Math.min(0, this.outputLevels[outputBus]);
+      this.outputLevels[outputBus] = value;
       const input = this.root.querySelector<HTMLInputElement>(`[data-output-level="${outputBus}"]`);
       const output = this.root.querySelector<HTMLOutputElement>(`[data-output-value="${outputBus}"]`);
       const power = this.root.querySelector<HTMLButtonElement>(
@@ -1328,6 +1287,8 @@ export class PlayerScreen {
       if (input) {
         input.value = String(outputPosition(value));
         input.parentElement?.style.setProperty('--output-position', `${outputPosition(value)}%`);
+        input.closest<HTMLElement>('.player-output-knob')?.style.setProperty('--knob-angle', `${-135 + (outputPosition(value) / 100) * 270}deg`);
+        input.closest<HTMLElement>('.player-output-knob')?.style.setProperty('--knob-progress', String(outputPosition(value) / 100));
         input.setAttribute('aria-valuetext', formatOutputDb(value));
       }
       if (output) output.value = formatOutputDb(value);
@@ -1362,15 +1323,19 @@ export class PlayerScreen {
         metronomeButton.textContent = running ? 'ON' : 'OFF';
       }
     }
-    const volume = Math.round(this.metronome.getVolume() * 100);
+    const linearVolume = this.metronome.getVolume();
+    const levelDb = linearVolume <= 0 ? -60 : Math.max(-60, Math.min(0, 20 * Math.log10(linearVolume)));
+    const volume = outputPosition(levelDb);
     const volumeInput = this.root.querySelector<HTMLInputElement>('[data-metronome-output-volume]');
     const volumeOutput = this.root.querySelector<HTMLOutputElement>('[data-metronome-output-value]');
     if (volumeInput) {
       volumeInput.value = String(volume);
       volumeInput.parentElement?.style.setProperty('--output-position', `${volume}%`);
-      volumeInput.setAttribute('aria-valuetext', `${volume}%`);
+      volumeInput.closest<HTMLElement>('.player-output-knob')?.style.setProperty('--knob-angle', `${-135 + (volume / 100) * 270}deg`);
+      volumeInput.closest<HTMLElement>('.player-output-knob')?.style.setProperty('--knob-progress', String(volume / 100));
+      volumeInput.setAttribute('aria-valuetext', formatOutputDb(levelDb));
     }
-    if (volumeOutput) volumeOutput.value = `${volume}%`;
+    if (volumeOutput) volumeOutput.value = formatOutputDb(levelDb);
     if (this.currentModalKind === 'module-delay' && this.currentModalModuleNumber !== null && this.modal) {
       this.renderModuleDelaySyncState(this.modal, this.currentModalModuleNumber);
     }
@@ -1385,10 +1350,27 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
+  private commitModulePolyphony(modal: HTMLElement, moduleNumber: number): void {
+    const input = modal.querySelector<HTMLInputElement>('[data-module-polyphony-input]');
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!input || !moduleState) return;
+    const parsed = Math.round(Number(input.value));
+    const polyphony = Number.isFinite(parsed) ? Math.min(128, Math.max(1, parsed)) : 64;
+    input.value = String(polyphony);
+    moduleState.settings.polyphony = polyphony;
+    this.markPlayerStateChanged();
+  }
+
   private onRootPointerDown(event: PointerEvent): void {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const eventTarget = event.target;
     if (!(eventTarget instanceof Element)) return;
+
+    const outputKnob = eventTarget.closest<HTMLInputElement>('.player-output-knob input[type="range"]');
+    if (outputKnob && this.root.contains(outputKnob)) {
+      this.startKnobDrag(event, null);
+      return;
+    }
 
     const octaveButton = eventTarget.closest<HTMLButtonElement>('[data-action="octave-up"], [data-action="octave-down"]');
     if (octaveButton && this.root.contains(octaveButton)) {
@@ -1548,6 +1530,11 @@ export class PlayerScreen {
     this.metronomeHoldGesture.move(event);
     this.tempoHoldGesture.move(event);
     this.ccControlHoldGesture.move(event);
+    if (this.knobDrag?.pointerId === event.pointerId) {
+      this.knobCcLearnGesture.move(event);
+      this.moveKnobDrag(event);
+      return;
+    }
     if (this.outputFaderDrag?.pointerId === event.pointerId) {
       event.preventDefault();
       if (Math.hypot(event.clientX - this.outputFaderDrag.startX, event.clientY - this.outputFaderDrag.startY) > 8) {
@@ -1593,6 +1580,11 @@ export class PlayerScreen {
     this.metronomeHoldGesture.end(event);
     this.tempoHoldGesture.end(event);
     this.ccControlHoldGesture.end(event);
+    if (this.knobDrag?.pointerId === event.pointerId) {
+      this.knobCcLearnGesture.end(event);
+      this.endKnobDrag(event);
+      return;
+    }
     const bankButton = event.target instanceof Element
       ? event.target.closest<HTMLButtonElement>('[data-action="show-bank"]')
       : null;
@@ -2640,7 +2632,7 @@ export class PlayerScreen {
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     modal.setAttribute('aria-labelledby', titleId);
-    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay'];
+    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay'];
     const moduleState = !moduleKinds.includes(kind) || moduleNumber === null
       ? null
       : this.getActivePresetState()?.modules[moduleNumber - 1] ?? null;
@@ -2683,6 +2675,17 @@ export class PlayerScreen {
           ? moduleState.settings.outputRoute as AudioBusRoute
           : 'stereo:0',
       );
+    } else if (kind === 'module-polyphony') {
+      const polyphony = Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 64)));
+      bodyMarkup = `
+        <section class="module-polyphony-panel">
+          <label>
+            <span>Quantidade máxima de vozes</span>
+            <input type="number" min="1" max="128" step="1" inputmode="numeric" value="${polyphony}" data-module-polyphony-input>
+          </label>
+          <p>Escolha entre 1 e 128 vozes simultâneas para este módulo.</p>
+        </section>
+      `;
     } else if (kind === 'module-eq') {
       bodyMarkup = createModuleEqMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-compressor') {
@@ -2696,8 +2699,6 @@ export class PlayerScreen {
         this.compatibilityMode,
         this.bottomView,
         true,
-        this.uiFeedback.isSoundEnabled(),
-        this.uiFeedback.isVibrationEnabled(),
       );
     } else if (kind === 'app-settings-midi') {
       bodyMarkup = createMidiSettingsMarkup(this.midiInput.getInputDevices(), this.selectedMidiInputIds);
@@ -2943,6 +2944,19 @@ export class PlayerScreen {
     } else if (kind === 'tracks') {
       bodyMarkup = createTracksPanelMarkup();
     }
+    const processorKind = kind === 'module-eq' ? 'eq'
+      : kind === 'module-compressor' ? 'compressor'
+        : kind === 'module-reverb' ? 'reverb'
+          : kind === 'module-delay' ? 'delay' : null;
+    const processorEnabled = processorKind === 'eq'
+      ? moduleState?.settings.eqEnabled !== false
+      : processorKind === 'compressor'
+        ? readModuleCompressorSettings(moduleState?.settings.compressor).enabled
+        : processorKind === 'reverb'
+          ? readModuleReverbSettings(moduleState?.settings.reverb).enabled
+          : processorKind === 'delay'
+            ? readModuleDelaySettings(moduleState?.settings.delay).enabled
+            : false;
     const footerMarkup = kind === 'user'
       ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
@@ -2970,6 +2984,12 @@ export class PlayerScreen {
         ? `<button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>`
       : kind === 'cc-learn'
         ? `<button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>`
+      : processorKind
+        ? `
+          <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
+          <button class="module-effect-power ${processorEnabled ? 'is-on' : 'is-off'}" type="button" data-module-effect-power="${processorKind}" aria-pressed="${processorEnabled}">${processorEnabled ? 'ON' : 'OFF'}</button>
+          <button class="player-modal__confirm-button" type="button" data-modal-action="confirm">OK</button>
+        `
       : `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
           <button class="player-modal__confirm-button" type="button" data-modal-action="confirm">OK</button>
@@ -2995,6 +3015,9 @@ export class PlayerScreen {
               <small>${this.ccMappingLabel({ kind: 'tap-tempo' })}</small>
             </button>
           ` : ''}
+          ${processorKind ? `
+            <button class="module-processor-reset-button" type="button" data-modal-action="reset-processor" data-reset-processor="${processorKind}">Reset</button>
+          ` : ''}
           <p class="player-modal__description"></p>
         </header>
 
@@ -3016,6 +3039,11 @@ export class PlayerScreen {
       title.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
         : 'Timbre';
+    } else if (kind === 'module-polyphony') {
+      eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
+        ? moduleState.timbreName
+        : 'Timbre';
+      title.textContent = 'Polifonia';
     } else if (kind === 'module-eq') {
       eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
@@ -3179,12 +3207,24 @@ export class PlayerScreen {
           ? 'module-compressor'
           : moduleSettingAction === 'open-reverb'
             ? 'module-reverb'
-            : moduleSettingAction === 'open-delay' ? 'module-delay' : null;
+            : moduleSettingAction === 'open-delay' ? 'module-delay'
+              : moduleSettingAction === 'open-polyphony' ? 'module-polyphony' : null;
         const button = childKind && target instanceof Element
           ? target.closest<HTMLButtonElement>('button[data-module-setting-action]')
           : null;
         if (childKind && button) this.openChildModal(childKind, moduleNumber, button);
         if (childKind) return;
+      }
+      const effectPowerButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-module-effect-power]')
+        : null;
+      if (
+        moduleNumber !== null
+        && (kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay')
+        && effectPowerButton
+      ) {
+        this.toggleModuleEffectPower(effectPowerButton, moduleNumber);
+        return;
       }
       const delayDivisionButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-module-delay-division]')
@@ -3260,7 +3300,7 @@ export class PlayerScreen {
         : null;
       if (categoryButton && moduleNumber !== null) {
         const category = categoryButton.dataset.soundCategory;
-        if (isSoundCategoryId(category)) {
+        if (typeof category === 'string' && category.length > 0) {
           this.selectSoundCategory(modal, moduleNumber, category);
         }
         return;
@@ -3343,6 +3383,18 @@ export class PlayerScreen {
       if (kind === 'sound-selection' && modalAction === 'download-all-sounds') {
         const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
         if (button) void this.downloadAllOfficialSounds(modal, button);
+        return;
+      }
+      if (processorKind && moduleNumber !== null && modalAction === 'reset-processor') {
+        this.showProcessorResetConfirmation(modal, moduleNumber, processorKind);
+        return;
+      }
+      const processorResetChoice = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-processor-reset-choice]')?.dataset.processorResetChoice
+        : null;
+      if (processorKind && moduleNumber !== null && processorResetChoice) {
+        if (processorResetChoice === 'confirm') this.confirmProcessorReset(moduleNumber, processorKind);
+        else modal.querySelector('[data-processor-reset-confirmation]')?.remove();
         return;
       }
       if (modalAction === 'learn-preset-cc' && kind === 'preset-name' && moduleNumber !== null) {
@@ -3467,7 +3519,10 @@ export class PlayerScreen {
           this.commitEffectPad(modal, moduleNumber);
         }
         if (modalAction === 'confirm' && kind === 'tempo-edit') this.commitTempo(modal);
-        if (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay') && this.modalHistory.length > 0) {
+        if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
+          this.commitModulePolyphony(modal, moduleNumber);
+        }
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && (kind === 'module-polyphony' || (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -4263,16 +4318,6 @@ export class PlayerScreen {
 
   private handleAppSettingsChange(event: Event): void {
     const target = event.target;
-    if (target instanceof HTMLInputElement && target.dataset.setting === 'ui-sound') {
-      this.uiFeedback.setSoundEnabled(target.checked);
-      this.markPlayerStateChanged();
-      return;
-    }
-    if (target instanceof HTMLInputElement && target.dataset.setting === 'ui-vibration') {
-      this.uiFeedback.setVibrationEnabled(target.checked);
-      this.markPlayerStateChanged();
-      return;
-    }
     if (target instanceof HTMLInputElement && target.dataset.setting === 'compatibility-mode') {
       const requestedMode = target.checked;
       target.checked = this.compatibilityMode;
@@ -4300,6 +4345,7 @@ export class PlayerScreen {
       if (isBufferSize(value)) {
         this.bufferSize = value;
         this.markPlayerStateChanged();
+        void this.applyNativeAudioOutput();
       }
       return;
     }
@@ -4308,6 +4354,7 @@ export class PlayerScreen {
       this.normalizeAudioRoutes();
       this.refreshAudioRoutingSelects(this.modal);
       this.markPlayerStateChanged();
+      void this.applyNativeAudioOutput();
       return;
     }
     if (select.dataset.setting === 'audio-route') {
@@ -4367,6 +4414,7 @@ export class PlayerScreen {
     moduleState.settings[parameter] = value;
     const angle = -135 + ((value / maximum) * 270);
     input.closest<HTMLElement>('.module-envelope-knob')?.style.setProperty('--knob-angle', `${angle}deg`);
+    input.closest<HTMLElement>('.module-envelope-knob')?.style.setProperty('--knob-progress', String(value / maximum));
     input.setAttribute('aria-valuetext', formatEnvelopeTime(value));
     const output = modal?.querySelector<HTMLOutputElement>(`[data-module-envelope-value="${parameter}"]`);
     if (output) output.value = formatEnvelopeTime(value);
@@ -4386,6 +4434,7 @@ export class PlayerScreen {
     moduleState.settings.cutoffHz = frequency;
     const angle = -135 + ratio * 270;
     input.closest<HTMLElement>('.module-envelope-knob')?.style.setProperty('--knob-angle', `${angle}deg`);
+    input.closest<HTMLElement>('.module-envelope-knob')?.style.setProperty('--knob-progress', String(ratio));
     const formatted = formatCutoffFrequency(frequency);
     input.setAttribute('aria-valuetext', formatted);
     const output = modal?.querySelector<HTMLOutputElement>('[data-module-cutoff-value]');
@@ -4395,7 +4444,7 @@ export class PlayerScreen {
   private startKnobDrag(event: PointerEvent, moduleNumber: number | null): void {
     if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
     const input = event.target instanceof Element
-      ? event.target.closest<HTMLInputElement>('.module-envelope-knob input[type="range"], .module-effect-knob input[type="range"]')
+      ? event.target.closest<HTMLInputElement>('.module-envelope-knob input[type="range"], .module-effect-knob input[type="range"], .player-output-knob input[type="range"]')
       : null;
     if (!input || input.disabled) return;
     const startValue = Number(input.value);
@@ -4414,11 +4463,13 @@ export class PlayerScreen {
       travelPixels: Math.max(140, Math.min(260, window.innerHeight * 0.42)),
       moved: false,
     };
-    const learnTarget = moduleNumber === null ? null : this.ccLearnTargetForKnob(input, moduleNumber);
+    this.showKnobFocus(input);
+    const learnTarget = moduleNumber === null ? this.ccLearnTargetForOutputKnob(input) : this.ccLearnTargetForKnob(input, moduleNumber);
     if (learnTarget) {
       this.knobCcLearnGesture.start(event, () => {
         if (input.hasPointerCapture(event.pointerId)) input.releasePointerCapture(event.pointerId);
         this.knobDrag = null;
+        this.hideKnobFocus();
         this.openCcLearn(learnTarget, input);
       });
     }
@@ -4444,6 +4495,7 @@ export class PlayerScreen {
     drag.moved = true;
     drag.input.value = serializedValue;
     drag.input.dispatchEvent(new Event('input', { bubbles: true }));
+    this.syncKnobFocus(drag.input);
   }
 
   private endKnobDrag(event: PointerEvent): void {
@@ -4453,6 +4505,40 @@ export class PlayerScreen {
     if (drag.input.hasPointerCapture(event.pointerId)) drag.input.releasePointerCapture(event.pointerId);
     if (drag.moved) drag.input.dispatchEvent(new Event('change', { bubbles: true }));
     this.knobDrag = null;
+    this.hideKnobFocus();
+  }
+
+  private ccLearnTargetForOutputKnob(input: HTMLInputElement): CcLearnTarget | null {
+    const bus = input.dataset.outputLevel;
+    if (isOutputBus(bus)) return { kind: 'output-volume', bus };
+    if (input.matches('[data-metronome-output-volume]')) return { kind: 'metronome-volume' };
+    return null;
+  }
+
+  private showKnobFocus(input: HTMLInputElement): void {
+    const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
+    const knob = input.closest<HTMLElement>('.module-envelope-knob, .module-effect-knob, .player-output-knob');
+    if (!overlay || !knob) return;
+    const label = knob.querySelector<HTMLElement>(':scope > span:not([class$="__face"])');
+    const accent = getComputedStyle(knob).getPropertyValue('--knob-accent').trim();
+    if (accent) overlay.style.setProperty('--knob-accent', accent);
+    overlay.querySelector<HTMLElement>('[data-knob-focus-label]')!.textContent = label?.textContent?.trim() || input.ariaLabel || '';
+    overlay.classList.add('is-visible');
+    this.syncKnobFocus(input);
+  }
+
+  private syncKnobFocus(input: HTMLInputElement): void {
+    const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
+    const knob = input.closest<HTMLElement>('.module-envelope-knob, .module-effect-knob, .player-output-knob');
+    if (!overlay || !knob) return;
+    overlay.style.setProperty('--knob-angle', getComputedStyle(knob).getPropertyValue('--knob-angle'));
+    overlay.style.setProperty('--knob-progress', getComputedStyle(knob).getPropertyValue('--knob-progress'));
+    const sourceOutput = knob.querySelector<HTMLOutputElement>('output');
+    overlay.querySelector<HTMLOutputElement>('[data-knob-focus-value]')!.value = sourceOutput?.value || input.getAttribute('aria-valuetext') || input.value;
+  }
+
+  private hideKnobFocus(): void {
+    this.root.querySelector<HTMLElement>('[data-knob-focus]')?.classList.remove('is-visible');
   }
 
   private ccLearnTargetForKnob(input: HTMLInputElement, moduleNumber: number): CcLearnTarget | null {
@@ -4691,6 +4777,8 @@ export class PlayerScreen {
     const progress = maximum > minimum ? (value - minimum) / (maximum - minimum) : 0;
     input.closest<HTMLElement>('.module-effect-knob')
       ?.style.setProperty('--knob-angle', `${-135 + Math.min(1, Math.max(0, progress)) * 270}deg`);
+    input.closest<HTMLElement>('.module-effect-knob')
+      ?.style.setProperty('--knob-progress', String(Math.min(1, Math.max(0, progress))));
     const formatted = formatModuleEffectValue(kind, key, value);
     input.setAttribute('aria-valuetext', formatted);
     const output = input.closest<HTMLElement>('.module-effect-knob')
@@ -4705,6 +4793,82 @@ export class PlayerScreen {
       if (display) display.value = `${Math.round(value)} ms`;
     }
     this.markPlayerStateChanged();
+  }
+
+  private toggleModuleEffectPower(button: HTMLButtonElement, moduleNumber: number): void {
+    const kind = button.dataset.moduleEffectPower;
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState || !kind) return;
+    if (kind === 'eq') {
+      const enabled = moduleState.settings.eqEnabled === false;
+      moduleState.settings.eqEnabled = enabled;
+      button.classList.toggle('is-on', enabled);
+      button.classList.toggle('is-off', !enabled);
+      button.textContent = enabled ? 'ON' : 'OFF';
+      button.setAttribute('aria-pressed', String(enabled));
+      this.markPlayerStateChanged();
+      return;
+    }
+    if (!isModuleEffectKind(kind)) return;
+    const settings = kind === 'compressor'
+      ? readModuleCompressorSettings(moduleState.settings.compressor)
+      : kind === 'reverb'
+        ? readModuleReverbSettings(moduleState.settings.reverb)
+        : readModuleDelaySettings(moduleState.settings.delay);
+    settings.enabled = !settings.enabled;
+    moduleState.settings[kind] = settings;
+    button.classList.toggle('is-on', settings.enabled);
+    button.classList.toggle('is-off', !settings.enabled);
+    button.textContent = settings.enabled ? 'ON' : 'OFF';
+    button.setAttribute('aria-pressed', String(settings.enabled));
+    button.closest<HTMLElement>('[data-module-effect-editor]')?.classList.toggle('is-disabled', !settings.enabled);
+    this.markPlayerStateChanged();
+  }
+
+  private showProcessorResetConfirmation(
+    modal: HTMLElement,
+    moduleNumber: number,
+    processor: 'eq' | ModuleEffectKind,
+  ): void {
+    if (modal.querySelector('[data-processor-reset-confirmation]')) return;
+    const label = processor === 'eq' ? 'EQ'
+      : processor === 'compressor' ? 'Compressor'
+        : processor === 'reverb' ? 'Reverb' : 'Delay';
+    const confirmation = document.createElement('div');
+    confirmation.className = 'module-processor-reset-confirmation';
+    confirmation.dataset.processorResetConfirmation = '';
+    confirmation.setAttribute('role', 'alertdialog');
+    confirmation.setAttribute('aria-modal', 'true');
+    confirmation.setAttribute('aria-label', `Confirmar reset de ${label} do módulo ${moduleNumber}`);
+    confirmation.innerHTML = `
+      <div>
+        <span>${label}</span>
+        <strong>Resetar ${label}?</strong>
+        <p>${processor === 'eq' ? 'Todas as cinco bandas voltarão para flat.' : 'Todos os parâmetros voltarão aos valores iniciais e o processador será desligado.'}</p>
+        <footer>
+          <button type="button" data-processor-reset-choice="cancel">Cancelar</button>
+          <button class="is-danger" type="button" data-processor-reset-choice="confirm">Resetar</button>
+        </footer>
+      </div>
+    `;
+    modal.querySelector('.player-modal__surface')?.append(confirmation);
+    confirmation.querySelector<HTMLButtonElement>('[data-processor-reset-choice="cancel"]')?.focus();
+  }
+
+  private confirmProcessorReset(moduleNumber: number, processor: 'eq' | ModuleEffectKind): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState) return;
+    if (processor === 'eq') moduleState.settings.eqBands = readModuleEqBands(undefined);
+    else if (processor === 'compressor') moduleState.settings.compressor = readModuleCompressorSettings(undefined);
+    else if (processor === 'reverb') moduleState.settings.reverb = readModuleReverbSettings(undefined);
+    else moduleState.settings.delay = readModuleDelaySettings(undefined);
+    const trigger = this.modalTrigger ?? this.root;
+    this.markPlayerStateChanged();
+    const modalKind: ModalKind = processor === 'eq' ? 'module-eq'
+      : processor === 'compressor' ? 'module-compressor'
+        : processor === 'reverb' ? 'module-reverb' : 'module-delay';
+    this.openModal(modalKind, moduleNumber, trigger, true);
+    this.setStatus(`${processor === 'eq' ? 'EQ resetado para flat' : `${processor} resetado`} no módulo ${moduleNumber}.`);
   }
 
   private selectModuleDelayDivision(modal: HTMLElement, button: HTMLButtonElement, moduleNumber: number): void {
@@ -4800,6 +4964,31 @@ export class PlayerScreen {
 
   private applySelectedMidiInputs(): void {
     this.midiInput.setSelectedInputIds(this.selectedMidiInputIds);
+  }
+
+  private applyNativeAudioOutput(): Promise<void> {
+    if (!hookKeysNative.isAvailable()) return Promise.resolve();
+    this.nativeAudioOutputSync = this.nativeAudioOutputSync.then(async () => {
+      if (this.selectedAudioDeviceId && this.audioDevices.length === 0) {
+        this.audioDevices = await this.audioOutput.listDevices();
+      }
+      const device = this.audioDevices.find(({ id }) => id === this.selectedAudioDeviceId);
+      if (this.selectedAudioDeviceId && !device) this.selectedAudioDeviceId = '';
+      const restarted = await hookKeysNative.setAudioOutputDevice(
+        device?.id ?? '',
+        device?.channels ?? 2,
+        this.bufferSize,
+      );
+      if (!restarted || !this.mounted) return;
+      this.nativeLoadedTimbres.fill(null);
+      this.applySelectedMidiInputs();
+      this.syncNativeEngine();
+    }).catch(() => {
+      this.nativeLoadedTimbres.fill(null);
+      this.syncNativeEngine();
+      this.setStatus('Não foi possível aplicar a saída de áudio selecionada.');
+    });
+    return this.nativeAudioOutputSync;
   }
 
   private activeAudioChannelCount(): number {
@@ -5048,9 +5237,10 @@ export class PlayerScreen {
     const categories = this.soundCategoriesForModule(moduleNumber);
     if (category !== 'user' && !categories.some(({ id }) => id === category)) return;
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
-    if (!moduleState) return;
-    moduleState.category = category;
-    this.markPlayerStateChanged();
+    if (moduleState) {
+      moduleState.category = category;
+      this.markPlayerStateChanged();
+    }
 
     for (const button of modal.querySelectorAll<HTMLButtonElement>('[data-sound-category]')) {
       const isSelected = button.dataset.soundCategory === category;
@@ -5399,6 +5589,7 @@ export class PlayerScreen {
       this.renderActivePadBank();
       this.renderActiveEffectBank();
       this.updateVisibleView();
+      void this.applyNativeAudioOutput();
     } catch {
       this.setStatus('Suas configurações serão sincronizadas quando houver conexão.');
     }
@@ -5428,6 +5619,10 @@ export class PlayerScreen {
       const selectedSlot = moduleState?.midiInputId
         ? this.selectedMidiInputIds.indexOf(moduleState.midiInputId)
         : -1;
+      const outputRoute = isAudioBusRoute(moduleState?.settings.outputRoute, this.activeAudioChannelCount())
+        ? moduleState.settings.outputRoute as AudioBusRoute
+        : 'stereo:0';
+      const nativeOutputRoute = parseAudioBusRoute(outputRoute);
       void hookKeysNative.configureModule({
         moduleIndex,
         enabled: Boolean(moduleState?.enabled && moduleState.timbreId),
@@ -5438,6 +5633,9 @@ export class PlayerScreen {
         sustain: moduleState?.sustainInputEnabled ?? true,
         modulation: moduleState?.modulationInputEnabled ?? true,
         volumeDb: moduleState?.volumeDb ?? 0,
+        polyphony: Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 64))),
+        outputChannelStart: nativeOutputRoute.start,
+        outputChannelCount: nativeOutputRoute.count,
       });
       if (moduleState) {
         void hookKeysNative.configureModuleEnvelope({
@@ -5448,16 +5646,17 @@ export class PlayerScreen {
           releaseMs: optionalBoundedNumber(moduleState.settings.releaseMs, 0, 25_000),
         });
         const eqBands = readModuleEqBands(moduleState.settings.eqBands);
+        const eqEnabled = moduleState.settings.eqEnabled !== false;
         const compressor = readModuleCompressorSettings(moduleState.settings.compressor);
         const delay = readModuleDelaySettings(moduleState.settings.delay);
         const reverb = readModuleReverbSettings(moduleState.settings.reverb);
         void hookKeysNative.configureModuleEffects({
           moduleIndex,
           cutoffHz: readModuleCutoffFrequency(moduleState.settings.cutoffHz),
-          eqTypes: eqBands.map(({ type }) => type === 'low-cut' ? 0
+          eqTypes: eqBands.map(({ type }) => !eqEnabled ? 2 : type === 'low-cut' ? 0
             : type === 'low-shelf' ? 1 : type === 'high-shelf' ? 3 : type === 'high-cut' ? 4 : 2),
           eqFrequencies: eqBands.map(({ frequency }) => frequency),
-          eqGains: eqBands.map(({ gain }) => gain),
+          eqGains: eqBands.map(({ gain }) => eqEnabled ? gain : 0),
           eqQualities: eqBands.map(({ q }) => q),
           eqCutStages: eqBands.map(({ cutSlope }) => cutSlope),
           compressorThresholdDb: compressor.thresholdDb,
@@ -5465,16 +5664,16 @@ export class PlayerScreen {
           compressorAttackMs: compressor.attackMs,
           compressorReleaseMs: compressor.releaseMs,
           compressorGainDb: compressor.gainDb,
-          compressorMix: compressor.mix / 100,
+          compressorMix: compressor.enabled ? compressor.mix / 100 : 0,
           delaySync: delay.sync,
           delayMs: delay.milliseconds,
           delayBeatMultiplier: delayDivisionMultiplier(delay.division),
           delayFeedback: delay.feedback / 100,
-          delayMix: delay.mix / 100,
+          delayMix: delay.enabled ? delay.mix / 100 : 0,
           reverbDecay: (reverb.decay - 0.1) / 19.9,
           reverbDampen: reverb.dampen / 100,
           reverbSize: reverb.size / 100,
-          reverbMix: reverb.mix / 100,
+          reverbMix: reverb.enabled ? reverb.mix / 100 : 0,
         });
       }
     }
@@ -5493,7 +5692,7 @@ export class PlayerScreen {
       if (!timbreId || timbreId === this.nativeLoadedTimbres[moduleIndex]) continue;
       const blob = timbreId.startsWith('user:')
         ? await this.soundLibrary.getUserFile(timbreId.slice(5))
-        : (await this.soundLibrary.getFixed(timbreId))?.file ?? null;
+        : (await this.soundLibrary.getFixed(timbreId.replace(/^fixed:/, '')))?.file ?? null;
       if (!blob) continue;
       try {
         await hookKeysNative.loadSoundFont(moduleIndex, blob);
@@ -5512,8 +5711,6 @@ export class PlayerScreen {
       activeEffectBank: this.activeEffectBank,
       bufferSize: this.bufferSize,
       compatibilityMode: this.compatibilityMode,
-      uiSoundEnabled: this.uiFeedback.isSoundEnabled(),
-      uiVibrationEnabled: this.uiFeedback.isVibrationEnabled(),
       bottomView: this.bottomView,
       keyboardMidiSlot: this.keyboardMidiSlot,
       keyboardStyle: this.keyboardStyle,
@@ -5566,8 +5763,6 @@ export class PlayerScreen {
     };
     this.compatibilityMode = value.compatibilityMode === true;
     this.midiInput.setCompatibilityMode(this.compatibilityMode);
-    this.uiFeedback.setSoundEnabled(value.uiSoundEnabled === true, false);
-    this.uiFeedback.setVibrationEnabled(value.uiVibrationEnabled === true, false);
     this.bottomView = value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
     const savedKeyboardMidiSlot = Number(value.keyboardMidiSlot);
     this.keyboardMidiSlot = savedKeyboardMidiSlot === 2 || savedKeyboardMidiSlot === 3 ? savedKeyboardMidiSlot : 1;
@@ -5767,6 +5962,8 @@ function createDefaultModuleSettings(): Record<string, unknown> {
   return {
     ...MODULE_ENVELOPE_DEFAULTS,
     cutoffHz: 20_000,
+    eqEnabled: true,
+    polyphony: 64,
   };
 }
 
@@ -5814,6 +6011,14 @@ function formatSoundfontTotal(bytes: number): string {
 
 function performanceStorageId(assetId: string): string {
   return `performance:${assetId}`;
+}
+
+function parseAudioBusRoute(route: AudioBusRoute): { start: number; count: 1 | 2 } {
+  const [mode, channel] = route.split(':');
+  return {
+    start: Math.max(0, Math.min(31, Number.parseInt(channel ?? '0', 10) || 0)),
+    count: mode === 'mono' ? 1 : 2,
+  };
 }
 
 async function sha256ForBlob(file: Blob): Promise<string> {

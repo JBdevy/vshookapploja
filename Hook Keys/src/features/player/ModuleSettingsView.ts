@@ -94,6 +94,11 @@ export function createModuleSettingsMarkup(
             ${createAudioRouteOptions(audioChannelCount, audioRoute)}
           </select>
         </label>
+
+        <button class="module-polyphony-button" type="button" data-module-setting-action="open-polyphony">
+          <span>Polifonia</span>
+          <strong>${Math.round(Math.min(128, Math.max(1, Number(settings.polyphony) || 64)))}</strong>
+        </button>
       </div>
 
       <div class="module-settings-workspace">
@@ -433,7 +438,7 @@ function createEnvelopeControl(
   return `
     <article class="module-envelope-control">
       <h3>${label}</h3>
-      <label class="module-envelope-knob" style="--knob-angle:${angle}deg">
+      <label class="module-envelope-knob" style="--knob-angle:${angle}deg;--knob-progress:${value / maximum}">
         <span class="module-envelope-knob__face" aria-hidden="true"><i></i></span>
         <input
           type="range"
@@ -457,7 +462,7 @@ function createCutoffControl(frequency: number): string {
   return `
     <article class="module-envelope-control module-cutoff-control">
       <h3>Cutoff</h3>
-      <label class="module-envelope-knob" style="--knob-angle:${angle}deg">
+      <label class="module-envelope-knob" style="--knob-angle:${angle}deg;--knob-progress:${ratio}">
         <span class="module-envelope-knob__face" aria-hidden="true"><i></i></span>
         <input
           type="range"

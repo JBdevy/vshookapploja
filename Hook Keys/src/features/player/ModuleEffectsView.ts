@@ -1,6 +1,7 @@
 export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay';
 
 export interface ModuleCompressorSettings {
+  enabled: boolean;
   thresholdDb: number;
   ratio: number;
   gainDb: number;
@@ -10,6 +11,7 @@ export interface ModuleCompressorSettings {
 }
 
 export interface ModuleReverbSettings {
+  enabled: boolean;
   decay: number;
   dampen: number;
   size: number;
@@ -17,6 +19,7 @@ export interface ModuleReverbSettings {
 }
 
 export interface ModuleDelaySettings {
+  enabled: boolean;
   feedback: number;
   mix: number;
   division: string;
@@ -27,6 +30,7 @@ export interface ModuleDelaySettings {
 export const DELAY_DIVISIONS = ['1/1', '1/2', '1/4', '1/8', '1/16', '1/8 D', '1/8 T'] as const;
 
 const DEFAULT_COMPRESSOR: ModuleCompressorSettings = {
+  enabled: false,
   thresholdDb: -18,
   ratio: 4,
   gainDb: 0,
@@ -36,6 +40,7 @@ const DEFAULT_COMPRESSOR: ModuleCompressorSettings = {
 };
 
 const DEFAULT_REVERB: ModuleReverbSettings = {
+  enabled: false,
   decay: 2.5,
   dampen: 50,
   size: 60,
@@ -43,6 +48,7 @@ const DEFAULT_REVERB: ModuleReverbSettings = {
 };
 
 const DEFAULT_DELAY: ModuleDelaySettings = {
+  enabled: false,
   feedback: 35,
   mix: 25,
   division: '1/4',
@@ -66,7 +72,7 @@ export function createModuleEffectCardsMarkup(settings: Readonly<Record<string, 
   const delay = readModuleDelaySettings(settings.delay);
   const delayMilliseconds = delay.sync ? delayMillisecondsForBpm(bpm, delay.division) : delay.milliseconds;
   return `
-      <article class="module-effect-card module-effect-card--compressor">
+      <article class="module-effect-card module-effect-card--compressor${compressor.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-compressor">Compressor</button>
         <div class="module-compressor-preview" aria-label="Prévia do compressor">
           <span class="module-compressor-preview__meter"><i style="--effect-meter:0%"></i></span>
@@ -78,7 +84,7 @@ export function createModuleEffectCardsMarkup(settings: Readonly<Record<string, 
         </div>
       </article>
 
-      <article class="module-effect-card module-effect-card--reverb">
+      <article class="module-effect-card module-effect-card--reverb${reverb.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-reverb">Reverb</button>
         <div class="module-reverb-preview" aria-label="Prévia do reverb">
           ${createPreviewKnob('Decay', compressorRatio(reverb.decay, 0.1, 20))}
@@ -88,7 +94,7 @@ export function createModuleEffectCardsMarkup(settings: Readonly<Record<string, 
         </div>
       </article>
 
-      <article class="module-effect-card module-effect-card--delay">
+      <article class="module-effect-card module-effect-card--delay${delay.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-delay">Delay</button>
         <div class="module-delay-preview" aria-label="Prévia do delay">
           <span><strong>${delay.division}</strong><small>Divisão</small></span>
@@ -175,6 +181,7 @@ export function createModuleDelayMarkup(settings: Readonly<Record<string, unknow
 export function readModuleCompressorSettings(value: unknown): ModuleCompressorSettings {
   const source = record(value);
   return {
+    enabled: source.enabled === true,
     thresholdDb: numberInRange(source.thresholdDb, -60, 0, DEFAULT_COMPRESSOR.thresholdDb),
     ratio: numberInRange(source.ratio, 1, 20, DEFAULT_COMPRESSOR.ratio),
     gainDb: numberInRange(source.gainDb, 0, 24, DEFAULT_COMPRESSOR.gainDb),
@@ -187,6 +194,7 @@ export function readModuleCompressorSettings(value: unknown): ModuleCompressorSe
 export function readModuleReverbSettings(value: unknown): ModuleReverbSettings {
   const source = record(value);
   return {
+    enabled: source.enabled === true,
     decay: numberInRange(source.decay, 0.1, 20, DEFAULT_REVERB.decay),
     dampen: numberInRange(source.dampen, 0, 100, DEFAULT_REVERB.dampen),
     size: numberInRange(source.size, 0, 100, DEFAULT_REVERB.size),
@@ -200,6 +208,7 @@ export function readModuleDelaySettings(value: unknown): ModuleDelaySettings {
     ? source.division
     : DEFAULT_DELAY.division;
   return {
+    enabled: source.enabled === true,
     feedback: numberInRange(source.feedback, 0, 95, DEFAULT_DELAY.feedback),
     mix: numberInRange(source.mix, 0, 100, DEFAULT_DELAY.mix),
     division,
@@ -223,7 +232,7 @@ function createEffectKnob(kind: ModuleEffectKind, item: EffectControlDefinition,
   const progress = (item.value - item.min) / (item.max - item.min);
   const angle = -135 + progress * 270;
   return `
-    <label class="module-effect-knob" style="--knob-angle:${angle}deg">
+    <label class="module-effect-knob" style="--knob-angle:${angle}deg;--knob-progress:${progress}">
       <span>${item.label}</span>
       <span class="module-effect-knob__face" aria-hidden="true"><i></i></span>
       <input type="range" min="${item.min}" max="${item.max}" step="${item.step}" value="${item.value}" data-module-effect-kind="${kind}" data-module-effect-control="${item.key}" aria-label="${item.label}" aria-valuetext="${item.formatted}"${disabled ? ' disabled' : ''}>

@@ -35,8 +35,6 @@ export function createAppSettingsMarkup(
   compatibilityMode: boolean,
   bottomView: PlayerBottomView,
   allowKeyboardView: boolean,
-  uiSoundEnabled: boolean,
-  uiVibrationEnabled: boolean,
 ): string {
   return `
     <section class="app-settings-panel app-settings-panel--main" aria-label="Configurações">
@@ -56,24 +54,6 @@ export function createAppSettingsMarkup(
           <small>Para teclados que não são controladores MIDI.</small>
         </span>
         <input type="checkbox" data-setting="compatibility-mode"${compatibilityMode ? ' checked' : ''}>
-        <i aria-hidden="true"></i>
-      </label>
-
-      <label class="app-settings-toggle app-settings-toggle--sound">
-        <span>
-          <strong>Som da interface</strong>
-          <small>Som ao tocar em botões, músicas e controles.</small>
-        </span>
-        <input type="checkbox" data-setting="ui-sound"${uiSoundEnabled ? ' checked' : ''}>
-        <i aria-hidden="true"></i>
-      </label>
-
-      <label class="app-settings-toggle app-settings-toggle--vibration">
-        <span>
-          <strong>Vibração da interface</strong>
-          <small>Resposta tátil ao tocar e mover controles.</small>
-        </span>
-        <input type="checkbox" data-setting="ui-vibration"${uiVibrationEnabled ? ' checked' : ''}>
         <i aria-hidden="true"></i>
       </label>
 
@@ -138,7 +118,6 @@ export function createAudioSettingsMarkup(
       </label>
 
       ${([
-        ['timbres', 'Saídas - Timbres'],
         ['pads', 'Saídas - Pads'],
         ['effects', 'Saídas - Effects'],
       ] as const).map(([bus, label]) => `

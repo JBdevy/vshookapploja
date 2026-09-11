@@ -13,7 +13,7 @@ export class MetronomeEngine {
   private nextBeatTime = 0;
   private tapTimes: number[] = [];
   private bpm = 120;
-  private volume = 0.7;
+  private volume = 1;
   private clickSound: MetronomeClickSound = 1;
   private accentEnabled = false;
   private doubleTimeEnabled = false;

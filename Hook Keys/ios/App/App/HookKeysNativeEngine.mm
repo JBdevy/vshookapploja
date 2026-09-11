@@ -27,8 +27,7 @@ struct MidiParser final {
 struct AudioState final {
   std::atomic<hook_keys::NativeEngineRuntime*> activeRuntime{nullptr};
   std::unique_ptr<hook_keys::NativeEngineRuntime> runtime;
-  std::array<float, kRenderChunkFrames> left{};
-  std::array<float, kRenderChunkFrames> right{};
+  std::array<float, kRenderChunkFrames * 32> interleaved{};
 };
 
 NSString* endpointId(MIDIEndpointRef endpoint) {
@@ -57,6 +56,7 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   std::array<MidiParser, kMidiSlotCount> _parsers;
   NSArray *_selectedDeviceIds;
   std::atomic<bool> _compatibilityMode;
+  NSInteger _requestedOutputChannels;
 }
 - (void)createMidiClient;
 - (void)reconnectMidiSources;
@@ -74,6 +74,7 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
     _midiInputPort = 0;
     _selectedDeviceIds = @[[NSNull null], [NSNull null], [NSNull null]];
     _compatibilityMode.store(false, std::memory_order_relaxed);
+    _requestedOutputChannels = 2;
     [self createMidiClient];
   }
   return self;
@@ -92,17 +93,22 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   AVAudioSession *session = AVAudioSession.sharedInstance;
   NSError *sessionError = nil;
   if (![session setCategory:AVAudioSessionCategoryPlayback
-                       mode:AVAudioSessionModeDefault
-                    options:AVAudioSessionCategoryOptionMixWithOthers
-                      error:&sessionError] ||
-      ![session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / 48000.0)
+                        mode:AVAudioSessionModeDefault
+                     options:(AVAudioSessionCategoryOptionMixWithOthers |
+                              AVAudioSessionCategoryOptionAllowBluetooth |
+                              AVAudioSessionCategoryOptionAllowBluetoothA2DP)
+                       error:&sessionError] ||
+      ![session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 32, 512) / 48000.0)
                                        error:&sessionError] ||
       ![session setActive:YES error:&sessionError]) {
     return NO;
   }
 
   const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
-  AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channels:2];
+  const AVAudioChannelCount channelCount = static_cast<AVAudioChannelCount>(
+      std::clamp<NSInteger>(_requestedOutputChannels, 1, 32));
+  AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate
+                                                                         channels:channelCount];
   if (format == nil) return NO;
 
   auto state = std::make_shared<AudioState>();
@@ -125,22 +131,24 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
     std::size_t offset = 0;
     while (offset < frameCount) {
       const auto frames = std::min(kRenderChunkFrames, static_cast<std::size_t>(frameCount) - offset);
-      runtime->render(state->left.data(), state->right.data(), frames);
-      if (outputData->mNumberBuffers >= 2) {
-        auto *left = static_cast<float *>(outputData->mBuffers[0].mData);
-        auto *right = static_cast<float *>(outputData->mBuffers[1].mData);
-        if (left && right) {
-          std::copy_n(state->left.data(), frames, left + offset);
-          std::copy_n(state->right.data(), frames, right + offset);
-        }
-      } else if (outputData->mNumberBuffers == 1) {
-        auto *samples = static_cast<float *>(outputData->mBuffers[0].mData);
-        if (samples) {
-          for (std::size_t index = 0; index < frames; ++index) {
-            samples[(offset + index) * 2] = state->left[index];
-            samples[(offset + index) * 2 + 1] = state->right[index];
+      runtime->renderInterleaved(state->interleaved.data(), frames, channelCount);
+      std::size_t firstChannel = 0;
+      for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
+        auto &buffer = outputData->mBuffers[bufferIndex];
+        auto *samples = static_cast<float *>(buffer.mData);
+        const std::size_t bufferChannels = std::max<UInt32>(1, buffer.mNumberChannels);
+        if (samples != nullptr) {
+          for (std::size_t frame = 0; frame < frames; ++frame) {
+            for (std::size_t localChannel = 0; localChannel < bufferChannels; ++localChannel) {
+              const auto sourceChannel = firstChannel + localChannel;
+              if (sourceChannel < channelCount) {
+                samples[(offset + frame) * bufferChannels + localChannel] =
+                    state->interleaved[frame * channelCount + sourceChannel];
+              }
+            }
           }
         }
+        firstChannel += bufferChannels;
       }
       offset += frames;
     }
@@ -160,6 +168,30 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   }
   _audioState = std::move(state);
   return YES;
+}
+
+- (BOOL)setAudioOutputDeviceId:(NSString *)deviceId channels:(NSInteger)channels
+                  bufferFrames:(NSInteger)bufferFrames {
+  AVAudioSession *session = AVAudioSession.sharedInstance;
+  if (deviceId.length > 0) {
+    BOOL currentRouteContainsDevice = NO;
+    for (AVAudioSessionPortDescription *output in session.currentRoute.outputs) {
+      if ([output.UID isEqualToString:deviceId]) { currentRouteContainsDevice = YES; break; }
+    }
+    if (!currentRouteContainsDevice) return NO;
+  }
+  _requestedOutputChannels = std::clamp<NSInteger>(channels, 1, 32);
+  NSError *error = nil;
+  if (session.maximumOutputNumberOfChannels > 0) {
+    const NSInteger preferred = std::min(_requestedOutputChannels, session.maximumOutputNumberOfChannels);
+    if (![session setPreferredOutputNumberOfChannels:preferred error:&error]) return NO;
+    _requestedOutputChannels = preferred;
+  }
+  [self stop];
+  if ([self startWithBufferFrames:bufferFrames]) return YES;
+  _requestedOutputChannels = 2;
+  static_cast<void>([self startWithBufferFrames:bufferFrames]);
+  return NO;
 }
 
 - (void)stop {
@@ -203,7 +235,9 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
 
 - (BOOL)configureModule:(NSInteger)moduleIndex enabled:(BOOL)enabled inputSlot:(NSInteger)inputSlot
                  lowNote:(NSInteger)lowNote highNote:(NSInteger)highNote octave:(NSInteger)octave
-                 sustain:(BOOL)sustain modulation:(BOOL)modulation volumeDb:(float)volumeDb {
+                 sustain:(BOOL)sustain modulation:(BOOL)modulation volumeDb:(float)volumeDb
+                polyphony:(NSInteger)polyphony outputChannelStart:(NSInteger)outputChannelStart
+       outputChannelCount:(NSInteger)outputChannelCount {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
   hook_keys::ModuleConfig config;
@@ -217,6 +251,9 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   config.sustainInputEnabled = sustain;
   config.modulationInputEnabled = modulation;
   config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
+  config.polyphony = static_cast<std::uint16_t>(std::clamp<NSInteger>(polyphony, 1, 128));
+  config.outputChannelStart = static_cast<std::uint8_t>(std::clamp<NSInteger>(outputChannelStart, 0, 31));
+  config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
   return runtime->setModuleConfig(static_cast<std::size_t>(moduleIndex), config);
 }
 

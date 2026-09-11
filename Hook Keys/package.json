@@ -21,6 +21,7 @@
     "native:open:ios": "cap open ios"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
     "@capacitor-community/keep-awake": "^8.0.1",
     "@capacitor/android": "8.4.2",
     "@capacitor/app-launcher": "^8.0.1",

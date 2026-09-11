@@ -1,5 +1,6 @@
 package com.hookdeveloper.hookkeys;
 
+import android.Manifest;
 import android.content.Context;
 import android.media.midi.MidiDevice;
 import android.media.midi.MidiDeviceInfo;
@@ -11,6 +12,7 @@ import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Build;
 import android.util.Base64;
 import android.view.HapticFeedbackConstants;
 import com.getcapacitor.JSArray;
@@ -18,7 +20,10 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -27,7 +32,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-@CapacitorPlugin(name = "HookKeysNative")
+@CapacitorPlugin(
+    name = "HookKeysNative",
+    permissions = {
+        @Permission(
+            alias = "bluetoothMidi",
+            strings = { Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN }
+        )
+    }
+)
 public class HookKeysNativePlugin extends Plugin {
     private static final int MIDI_SLOT_COUNT = 3;
     private static final int MODULE_COUNT = 8;
@@ -44,6 +57,7 @@ public class HookKeysNativePlugin extends Plugin {
     private String[] selectedDeviceIds = new String[MIDI_SLOT_COUNT];
     private int connectionGeneration = 0;
     private volatile boolean compatibilityMode = false;
+    private int currentBufferSize = 128;
 
     private final MidiManager.DeviceCallback deviceCallback = new MidiManager.DeviceCallback() {
         @Override
@@ -80,7 +94,8 @@ public class HookKeysNativePlugin extends Plugin {
 
     @PluginMethod
     public void initialize(PluginCall call) {
-        int bufferSize = Math.max(64, Math.min(512, call.getInt("bufferSize", 128)));
+        int bufferSize = Math.max(32, Math.min(512, call.getInt("bufferSize", 128)));
+        currentBufferSize = bufferSize;
         if (!nativeStart(bufferSize)) {
             call.reject("Não foi possível iniciar o áudio nativo.");
             return;
@@ -92,7 +107,35 @@ public class HookKeysNativePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setAudioOutputDevice(PluginCall call) {
+        String requestedId = call.getString("deviceId", "");
+        int deviceId = 0;
+        if (requestedId != null && !requestedId.isBlank()) {
+            try { deviceId = Integer.parseInt(requestedId); }
+            catch (NumberFormatException error) { call.reject("Dispositivo de áudio inválido."); return; }
+        }
+        currentBufferSize = Math.max(32, Math.min(512, call.getInt("bufferSize", currentBufferSize)));
+        int channels = Math.max(1, Math.min(32, call.getInt("channels", 2)));
+        if (nativeRestart(currentBufferSize, deviceId, channels)) call.resolve();
+        else call.reject("Não foi possível abrir o dispositivo de áudio selecionado.");
+    }
+
+    @PluginMethod
     public void listMidiDevices(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            getPermissionState("bluetoothMidi") != PermissionState.GRANTED) {
+            requestPermissionForAlias("bluetoothMidi", call, "bluetoothMidiPermissionCallback");
+            return;
+        }
+        resolveMidiDevices(call);
+    }
+
+    @PermissionCallback
+    private void bluetoothMidiPermissionCallback(PluginCall call) {
+        resolveMidiDevices(call);
+    }
+
+    private void resolveMidiDevices(PluginCall call) {
         JSArray devices = new JSArray();
         if (midiManager != null) {
             for (MidiDeviceInfo info : midiManager.getDevices()) {
@@ -175,7 +218,10 @@ public class HookKeysNativePlugin extends Plugin {
             Math.max(-3, Math.min(3, call.getInt("octave", 0))),
             call.getBoolean("sustain", true),
             call.getBoolean("modulation", true),
-            call.getFloat("volumeDb", 0.0f)
+            call.getFloat("volumeDb", 0.0f),
+            Math.max(1, Math.min(128, call.getInt("polyphony", 64))),
+            Math.max(0, Math.min(31, call.getInt("outputChannelStart", 0))),
+            call.getInt("outputChannelCount", 2) == 1 ? 1 : 2
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -494,6 +540,7 @@ public class HookKeysNativePlugin extends Plugin {
     }
 
     private static native boolean nativeStart(int bufferFrames);
+    private static native boolean nativeRestart(int bufferFrames, int deviceId, int channels);
     private static native void nativeStop();
     private static native boolean nativeLoadSoundFont(int moduleIndex, String path);
     private static native boolean nativeSendMidi(int inputSlot, int status, int data1, int data2, long timestamp);
@@ -506,7 +553,10 @@ public class HookKeysNativePlugin extends Plugin {
         int octave,
         boolean sustain,
         boolean modulation,
-        float volumeDb
+        float volumeDb,
+        int polyphony,
+        int outputChannelStart,
+        int outputChannelCount
     );
     private static native boolean nativeConfigureModuleEffects(
         int moduleIndex,

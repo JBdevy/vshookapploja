@@ -11,6 +11,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "initialize", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "listMidiDevices", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "listAudioOutputDevices", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setAudioOutputDevice", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMidiInputs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureModule", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureModuleEffects", returnType: CAPPluginReturnPromise),
@@ -79,6 +80,15 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve(["devices": devices])
     }
 
+    @objc func setAudioOutputDevice(_ call: CAPPluginCall) {
+        let ok = engine.setAudioOutputDeviceId(
+            call.getString("deviceId", ""),
+            channels: min(32, max(1, call.getInt("channels", 2))),
+            bufferFrames: min(512, max(32, call.getInt("bufferSize", 128)))
+        )
+        if ok { call.resolve() } else { call.reject("Não foi possível abrir o dispositivo de áudio selecionado.") }
+    }
+
     @objc func setMidiInputs(_ call: CAPPluginCall) {
         engine.setMidiDeviceIds(call.getArray("deviceIds", []))
         call.resolve()
@@ -94,7 +104,10 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
             octave: call.getInt("octave", 0),
             sustain: call.getBool("sustain", true),
             modulation: call.getBool("modulation", true),
-            volumeDb: call.getFloat("volumeDb", 0)
+            volumeDb: call.getFloat("volumeDb", 0),
+            polyphony: min(128, max(1, call.getInt("polyphony", 64))),
+            outputChannelStart: min(31, max(0, call.getInt("outputChannelStart", 0))),
+            outputChannelCount: call.getInt("outputChannelCount", 2) == 1 ? 1 : 2
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }

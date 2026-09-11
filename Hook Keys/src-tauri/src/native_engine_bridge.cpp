@@ -1,0 +1,108 @@
+#include "hook_keys/NativeEngineRuntime.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <new>
+
+namespace {
+hook_keys::NativeEngineRuntime* runtime(void* handle) noexcept {
+  return static_cast<hook_keys::NativeEngineRuntime*>(handle);
+}
+}
+
+extern "C" {
+
+void* hk_runtime_create(double sampleRate, std::size_t maximumBlockFrames) noexcept {
+  try { return new hook_keys::NativeEngineRuntime(sampleRate, maximumBlockFrames); }
+  catch (...) { return nullptr; }
+}
+
+void hk_runtime_destroy(void* handle) noexcept { delete runtime(handle); }
+
+int hk_runtime_load_soundfont(void* handle, std::size_t moduleIndex, const char* path) noexcept {
+  return handle && path && runtime(handle)->loadSoundFont(moduleIndex, path) ? 1 : 0;
+}
+
+int hk_runtime_send_midi(void* handle, std::uint8_t inputSlot, std::uint8_t status,
+                         std::uint8_t data1, std::uint8_t data2) noexcept {
+  return handle && runtime(handle)->sendMidi(inputSlot, status, data1, data2) ? 1 : 0;
+}
+
+int hk_runtime_configure_module(
+    void* handle, std::size_t moduleIndex, int enabled, int inputSlot, int lowNote,
+    int highNote, int octave, int sustain, int modulation, float volumeDb,
+    int polyphony, int outputChannelStart, int outputChannelCount) noexcept {
+  if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
+  hook_keys::ModuleConfig config;
+  config.enabled = enabled != 0;
+  config.midiInputSlot = inputSlot >= 0 && inputSlot < static_cast<int>(hook_keys::kMidiInputCount)
+      ? static_cast<std::uint8_t>(inputSlot) : hook_keys::kAllMidiInputs;
+  config.lowNote = static_cast<std::uint8_t>(std::clamp(lowNote, 0, 127));
+  config.highNote = static_cast<std::uint8_t>(std::clamp(highNote, 0, 127));
+  config.octaveShift = static_cast<std::int8_t>(std::clamp(octave, -3, 3));
+  config.sustainInputEnabled = sustain != 0;
+  config.modulationInputEnabled = modulation != 0;
+  config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
+  config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
+  config.outputChannelStart = static_cast<std::uint8_t>(std::clamp(outputChannelStart, 0, 31));
+  config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
+  return runtime(handle)->setModuleConfig(moduleIndex, config) ? 1 : 0;
+}
+
+int hk_runtime_configure_effects(
+    void* handle, std::size_t moduleIndex, float cutoffHz, const int* eqTypes,
+    const float* eqFrequencies, const float* eqGains, const float* eqQualities,
+    const int* eqCutStages, float compressorThresholdDb, float compressorRatio,
+    float compressorAttackMs, float compressorReleaseMs, float compressorGainDb,
+    float compressorMix, int delaySync, float delayMs, float delayBeatMultiplier,
+    float delayFeedback, float delayMix, float reverbDecay, float reverbDampen,
+    float reverbSize, float reverbMix) noexcept {
+  if (!handle || moduleIndex >= hook_keys::kModuleCount || !eqTypes || !eqFrequencies ||
+      !eqGains || !eqQualities || !eqCutStages) return 0;
+  hook_keys::ModuleEffectsConfig effects;
+  effects.cutoff.enabled = true;
+  effects.cutoff.frequencyHz = cutoffHz;
+  effects.equalizer.enabled = true;
+  for (std::size_t index = 0; index < effects.equalizer.bands.size(); ++index) {
+    auto& band = effects.equalizer.bands[index];
+    band.enabled = true;
+    band.type = static_cast<hook_keys::EqBandType>(std::clamp(eqTypes[index], 0, 4));
+    band.frequencyHz = eqFrequencies[index];
+    band.gainDb = eqGains[index];
+    band.quality = eqQualities[index];
+    band.cutStages = static_cast<std::uint8_t>(std::clamp(eqCutStages[index], 1, 8));
+  }
+  effects.compressor = {true, compressorThresholdDb, compressorRatio, compressorAttackMs,
+                        compressorReleaseMs, compressorGainDb, compressorMix};
+  effects.delay = {true, delaySync != 0, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
+  effects.reverb = {true, reverbDecay, reverbDampen, reverbSize, reverbMix};
+  return runtime(handle)->setModuleEffects(moduleIndex, effects) ? 1 : 0;
+}
+
+int hk_runtime_configure_envelope(void* handle, std::size_t moduleIndex, float attackMs,
+                                  float holdMs, float decayMs, float releaseMs) noexcept {
+  return handle && runtime(handle)->setModuleEnvelope(
+      moduleIndex, attackMs, holdMs, decayMs, releaseMs) ? 1 : 0;
+}
+
+int hk_runtime_set_tempo(void* handle, float bpm) noexcept {
+  return handle && runtime(handle)->setTempo(bpm) ? 1 : 0;
+}
+
+void hk_runtime_set_output_gain(void* handle, float db, int enabled) noexcept {
+  if (handle) runtime(handle)->setOutputGainDb(db, enabled != 0);
+}
+
+void hk_runtime_stop_all_notes(void* handle) noexcept {
+  if (handle) runtime(handle)->stopAllNotes();
+}
+
+void hk_runtime_render(void* handle, float* output, std::size_t frames,
+                       std::size_t channels) noexcept {
+  if (handle) runtime(handle)->renderInterleaved(output, frames, channels);
+}
+
+}

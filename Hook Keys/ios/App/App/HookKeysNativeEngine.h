@@ -15,6 +15,9 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
 @property(nonatomic, copy, nullable) HKMidiDevicesChangedHandler onMidiDevicesChanged;
 
 - (BOOL)startWithBufferFrames:(NSInteger)bufferFrames;
+- (BOOL)setAudioOutputDeviceId:(NSString *)deviceId
+                      channels:(NSInteger)channels
+                  bufferFrames:(NSInteger)bufferFrames;
 - (void)stop;
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)listMidiDevices;
 - (void)setMidiDeviceIds:(NSArray *)deviceIds;
@@ -27,7 +30,10 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
                   octave:(NSInteger)octave
                  sustain:(BOOL)sustain
               modulation:(BOOL)modulation
-                volumeDb:(float)volumeDb;
+                volumeDb:(float)volumeDb
+               polyphony:(NSInteger)polyphony
+      outputChannelStart:(NSInteger)outputChannelStart
+      outputChannelCount:(NSInteger)outputChannelCount;
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex
                        cutoffHz:(float)cutoffHz
                         eqTypes:(NSArray<NSNumber *> *)eqTypes
