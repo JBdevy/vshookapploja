@@ -98,6 +98,14 @@ void NativeEngineRuntime::render(float* left, float* right, std::size_t frames) 
   }
 }
 
+void NativeEngineRuntime::renderInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept {
+  if (engine_ == nullptr || output == nullptr) return;
+  engine_->renderInterleaved(output, frames, channels);
+  const auto gain = outputGainLinear_.load(std::memory_order_acquire);
+  if (gain == 1.0f) return;
+  for (std::size_t index = 0; index < frames * channels; ++index) output[index] *= gain;
+}
+
 HookKeysEngine::SynthModules NativeEngineRuntime::modulePointers(
     const std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount>& modules) noexcept {
   HookKeysEngine::SynthModules pointers{};

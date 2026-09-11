@@ -2502,6 +2502,23 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   margin: 0 auto;
 }
 
+.app-settings-field--audio-device {
+  grid-column: 1 / -1;
+}
+
+.module-settings-io-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(150px, 0.65fr);
+  align-items: end;
+  gap: clamp(8px, 1.2vw, 14px);
+  width: min(100%, 850px);
+}
+
+.module-settings-io-row .module-settings-device,
+.module-settings-io-row .module-settings-audio-route {
+  width: 100%;
+}
+
 .module-settings-panel {
   display: grid;
   align-content: start;

@@ -1,5 +1,6 @@
 import Foundation
 import Capacitor
+import AVFAudio
 import UIKit
 
 @objc(HookKeysNativePlugin)
@@ -9,6 +10,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "initialize", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "listMidiDevices", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "listAudioOutputDevices", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMidiInputs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureModule", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureModuleEffects", returnType: CAPPluginReturnPromise),
@@ -61,6 +63,20 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func listMidiDevices(_ call: CAPPluginCall) {
         call.resolve(["devices": engine.listMidiDevices()])
+    }
+
+    @objc func listAudioOutputDevices(_ call: CAPPluginCall) {
+        let session = AVAudioSession.sharedInstance()
+        let maximum = max(1, min(32, session.maximumOutputNumberOfChannels))
+        let devices: [[String: Any]] = session.currentRoute.outputs.map { output in
+            let channelCount = output.channels?.count ?? maximum
+            return [
+                "id": output.uid,
+                "name": output.portName,
+                "channels": max(1, min(32, channelCount))
+            ]
+        }
+        call.resolve(["devices": devices])
     }
 
     @objc func setMidiInputs(_ call: CAPPluginCall) {

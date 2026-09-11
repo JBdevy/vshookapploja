@@ -30,6 +30,8 @@ struct ModuleConfig final {
   std::uint8_t highNote = 127;
   std::uint8_t midiInputSlot = 0;
   std::int8_t octaveShift = 0;
+  std::uint8_t outputChannelStart = 0;
+  std::uint8_t outputChannelCount = 2;
   float gainLinear = 1.0f;
   ModuleEffectsConfig effects{};
 
@@ -41,6 +43,8 @@ struct ModuleConfig final {
       midiInputSlot = std::min<std::uint8_t>(midiInputSlot, static_cast<std::uint8_t>(kMidiInputCount - 1));
     }
     octaveShift = std::clamp<std::int8_t>(octaveShift, -3, 3);
+    outputChannelStart = std::min<std::uint8_t>(outputChannelStart, 31);
+    outputChannelCount = outputChannelCount == 1 ? 1 : 2;
     gainLinear = std::clamp(gainLinear, 0.0f, 2.0f);
     effects.normalize();
   }

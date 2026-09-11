@@ -12,6 +12,8 @@
     "typecheck": "tsc -b",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
     "native:sync": "npm run build && cap sync && node scripts/fix-ios-spm-paths.mjs",
     "native:add:android": "cap add android",
     "native:add:ios": "cap add ios",
@@ -30,6 +32,7 @@
     "@capacitor/cli": "8.4.2",
     "@types/node": "^24.3.0",
     "@types/qrcode": "^1.5.5",
+    "@tauri-apps/cli": "^2.8.5",
     "qrcode": "^1.5.4",
     "typescript": "^5.9.3",
     "vite": "^7.1.5"

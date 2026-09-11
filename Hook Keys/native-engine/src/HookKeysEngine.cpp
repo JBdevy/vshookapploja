@@ -84,6 +84,40 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
   }
 }
 
+void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept {
+  if (output == nullptr || frames == 0 || channels == 0) return;
+  channels = std::min<std::size_t>(channels, 32);
+  std::fill_n(output, frames * channels, 0.0f);
+  for (auto* synth : modules_) if (synth != nullptr) synth->beginBlock();
+  EngineCommand command;
+  while (commands_.tryPop(command)) applyCommand(command);
+  std::size_t rendered = 0;
+  while (rendered < frames) {
+    const auto blockFrames = std::min(settings_.maximumBlockFrames, frames - rendered);
+    for (std::size_t index = 0; index < kModuleCount; ++index) {
+      auto* synth = modules_[index];
+      const auto& config = configs_[index];
+      if (synth == nullptr || !config.enabled || config.outputChannelStart >= channels) continue;
+      std::fill_n(scratchLeft_.data(), blockFrames, 0.0f);
+      std::fill_n(scratchRight_.data(), blockFrames, 0.0f);
+      synth->renderAdd(scratchLeft_.data(), scratchRight_.data(), blockFrames, 1.0f);
+      effects_[index].process(scratchLeft_.data(), scratchRight_.data(), blockFrames);
+      const auto first = static_cast<std::size_t>(config.outputChannelStart);
+      const bool stereo = config.outputChannelCount == 2 && first + 1 < channels;
+      for (std::size_t frame = 0; frame < blockFrames; ++frame) {
+        auto* destination = output + (rendered + frame) * channels;
+        if (stereo) {
+          destination[first] += scratchLeft_[frame] * config.gainLinear;
+          destination[first + 1] += scratchRight_[frame] * config.gainLinear;
+        } else {
+          destination[first] += (scratchLeft_[frame] + scratchRight_[frame]) * 0.5f * config.gainLinear;
+        }
+      }
+    }
+    rendered += blockFrames;
+  }
+}
+
 std::uint64_t HookKeysEngine::droppedCommandCount() const noexcept {
   return droppedCommands_.load(std::memory_order_relaxed);
 }

@@ -5,6 +5,12 @@ export interface NativeMidiDevice {
   name: string;
 }
 
+export interface NativeAudioOutputDevice {
+  id: string;
+  name: string;
+  channels: number;
+}
+
 export interface NativeModuleConfig {
   moduleIndex: number;
   enabled: boolean;
@@ -67,6 +73,7 @@ interface NativeMidiControlChangeEvent {
 interface HookKeysNativePlugin {
   initialize(options: { bufferSize: number }): Promise<{ ready: boolean }>;
   listMidiDevices(): Promise<{ devices: NativeMidiDevice[] }>;
+  listAudioOutputDevices(): Promise<{ devices: NativeAudioOutputDevice[] }>;
   setMidiInputs(options: { deviceIds: Array<string | null> }): Promise<void>;
   configureModule(options: NativeModuleConfig): Promise<void>;
   configureModuleEffects(options: NativeModuleEffectsConfig): Promise<void>;
@@ -119,6 +126,12 @@ class HookKeysNativeBridge {
   async listMidiDevices(): Promise<NativeMidiDevice[]> {
     if (!await this.initialize()) return [];
     const { devices } = await plugin.listMidiDevices();
+    return Array.isArray(devices) ? devices : [];
+  }
+
+  async listAudioOutputDevices(): Promise<NativeAudioOutputDevice[]> {
+    if (!await this.initialize()) return [];
+    const { devices } = await plugin.listAudioOutputDevices();
     return Array.isArray(devices) ? devices : [];
   }
 

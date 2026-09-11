@@ -41,6 +41,7 @@ public:
   void setOutputGainDb(float db, bool enabled) noexcept;
   void stopAllNotes() noexcept;
   void render(float* left, float* right, std::size_t frames) noexcept;
+  void renderInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
 
   [[nodiscard]] double sampleRate() const noexcept { return sampleRate_; }
   [[nodiscard]] std::size_t maximumBlockFrames() const noexcept { return maximumBlockFrames_; }

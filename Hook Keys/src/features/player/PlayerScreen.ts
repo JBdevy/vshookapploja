@@ -114,6 +114,15 @@ import { EffectAudioStore, isSupportedEffectFile } from '../effects/EffectAudioS
 import { MetronomeEngine, type MetronomeClickSound } from '../metronome/MetronomeEngine';
 import { TabletInputKeyboardController } from '../../shared/ui/TabletInputKeyboardController';
 import { UiFeedback } from '../../shared/ui/UiFeedback';
+import {
+  AudioOutputService,
+  createAudioRouteOptions,
+  DEFAULT_AUDIO_ROUTING,
+  isAudioBusRoute,
+  type AudioBusRoute,
+  type AudioBusRouting,
+  type AudioOutputDevice,
+} from '../audio/AudioOutputService';
 import { hookKeysNative } from '../../platform/native/HookKeysNative';
 import {
   createPerformanceKeyboardMarkup,
@@ -773,6 +782,10 @@ export class PlayerScreen {
   private nativeSoundfontSync: Promise<void> = Promise.resolve();
   private readonly nativeLoadedTimbres: (string | null)[] = Array.from({ length: MODULE_COUNT }, () => null);
   private selectedMidiInputIds: (string | null)[] = [null, null, null];
+  private readonly audioOutput = new AudioOutputService();
+  private audioDevices: AudioOutputDevice[] = [];
+  private selectedAudioDeviceId = '';
+  private audioRouting: AudioBusRouting = { ...DEFAULT_AUDIO_ROUTING };
   private bufferSize: BufferSize = DEFAULT_BUFFER_SIZE;
   private compatibilityMode = false;
   private bottomView: PlayerBottomView = 'presets';
@@ -2643,6 +2656,10 @@ export class PlayerScreen {
         moduleState?.midiInputId ?? null,
         moduleState?.settings ?? {},
         this.metronome.getBpm(),
+        this.activeAudioChannelCount(),
+        isAudioBusRoute(moduleState?.settings.outputRoute, this.activeAudioChannelCount())
+          ? moduleState.settings.outputRoute as AudioBusRoute
+          : 'stereo:0',
       );
     } else if (kind === 'module-eq') {
       bodyMarkup = createModuleEqMarkup(moduleState?.settings ?? {});
@@ -2662,6 +2679,9 @@ export class PlayerScreen {
         true,
         this.uiFeedback.isSoundEnabled(),
         this.uiFeedback.isVibrationEnabled(),
+        this.audioDevices,
+        this.selectedAudioDeviceId,
+        this.audioRouting,
       );
     } else if (kind === 'keyboard-settings') {
       bodyMarkup = createPerformanceKeyboardSettingsMarkup(this.keyboardMidiSlot, this.keyboardStyle);
@@ -3636,6 +3656,7 @@ export class PlayerScreen {
     }
     if (kind === 'app-settings') {
       void this.midiInput.requestAccess().then(() => this.refreshMidiDeviceOptions(modal));
+      void this.refreshAudioDeviceOptions(modal);
       void this.loadCompatibilityVideoUrl();
     } else if (kind === 'module-settings') {
       void this.midiInput.requestAccess().then(() => this.refreshModuleMidiOptions(modal, moduleNumber));
@@ -4184,6 +4205,22 @@ export class PlayerScreen {
         this.bufferSize = value;
         this.markPlayerStateChanged();
       }
+      return;
+    }
+    if (select.dataset.setting === 'audio-device') {
+      this.selectedAudioDeviceId = select.value;
+      this.normalizeAudioRoutes();
+      this.refreshAudioRoutingSelects(this.modal);
+      this.markPlayerStateChanged();
+      return;
+    }
+    if (select.dataset.setting === 'audio-route') {
+      const bus = select.dataset.audioBus;
+      const channels = this.activeAudioChannelCount();
+      if ((bus === 'timbres' || bus === 'pads' || bus === 'effects') && isAudioBusRoute(select.value, channels)) {
+        this.audioRouting[bus] = select.value;
+        this.markPlayerStateChanged();
+      }
     }
   }
 
@@ -4202,7 +4239,15 @@ export class PlayerScreen {
       return;
     }
     const select = target;
-    if (!(select instanceof HTMLSelectElement) || select.dataset.moduleSetting !== 'midi-device') return;
+    if (!(select instanceof HTMLSelectElement)) return;
+    if (select.dataset.moduleSetting === 'audio-route') {
+      if (isAudioBusRoute(select.value, this.activeAudioChannelCount())) {
+        moduleState.settings.outputRoute = select.value;
+        this.markPlayerStateChanged();
+      }
+      return;
+    }
+    if (select.dataset.moduleSetting !== 'midi-device') return;
     const deviceId = select.value || null;
     moduleState.midiInputId = deviceId && this.selectedMidiInputIds.includes(deviceId)
       ? deviceId
@@ -4567,6 +4612,46 @@ export class PlayerScreen {
 
   private applySelectedMidiInputs(): void {
     this.midiInput.setSelectedInputIds(this.selectedMidiInputIds);
+  }
+
+  private activeAudioChannelCount(): number {
+    return this.audioDevices.find(({ id }) => id === this.selectedAudioDeviceId)?.channels ?? 2;
+  }
+
+  private normalizeAudioRoutes(): void {
+    const channels = this.activeAudioChannelCount();
+    for (const bus of ['timbres', 'pads', 'effects'] as const) {
+      if (!isAudioBusRoute(this.audioRouting[bus], channels)) this.audioRouting[bus] = 'stereo:0';
+    }
+  }
+
+  private async refreshAudioDeviceOptions(modal: HTMLElement): Promise<void> {
+    try {
+      this.audioDevices = await this.audioOutput.listDevices();
+      if (!modal.isConnected) return;
+      if (this.selectedAudioDeviceId && !this.audioDevices.some(({ id }) => id === this.selectedAudioDeviceId)) {
+        this.selectedAudioDeviceId = '';
+      }
+      this.normalizeAudioRoutes();
+      const select = modal.querySelector<HTMLSelectElement>('[data-setting="audio-device"]');
+      if (select) {
+        select.innerHTML = `<option value="">Padrão</option>${this.audioDevices.map((device) => `<option value="${escapeMarkup(device.id)}">${escapeMarkup(device.name)} · ${device.channels} canais</option>`).join('')}`;
+        select.value = this.selectedAudioDeviceId;
+      }
+      this.refreshAudioRoutingSelects(modal);
+    } catch {
+      // Mantém a saída padrão se o ambiente não permitir enumerar dispositivos.
+    }
+  }
+
+  private refreshAudioRoutingSelects(modal: HTMLElement | null): void {
+    if (!modal) return;
+    const channels = this.activeAudioChannelCount();
+    for (const select of modal.querySelectorAll<HTMLSelectElement>('[data-setting="audio-route"]')) {
+      const bus = select.dataset.audioBus;
+      if (bus !== 'timbres' && bus !== 'pads' && bus !== 'effects') continue;
+      select.innerHTML = createAudioRouteOptions(channels, this.audioRouting[bus]);
+    }
   }
 
   private refreshMidiDeviceOptions(modal: HTMLElement): void {
@@ -5198,6 +5283,8 @@ export class PlayerScreen {
       keyboardMidiSlot: this.keyboardMidiSlot,
       keyboardStyle: this.keyboardStyle,
       midiInputIds: [...this.selectedMidiInputIds],
+      audioDeviceId: this.selectedAudioDeviceId,
+      audioRouting: { ...this.audioRouting },
       outputLevels: { ...this.outputLevels },
       outputEnabled: { ...this.outputEnabled },
       metronome: {
@@ -5235,6 +5322,13 @@ export class PlayerScreen {
     });
     const savedBufferSize = Number(value.bufferSize);
     if (isBufferSize(savedBufferSize)) this.bufferSize = savedBufferSize;
+    this.selectedAudioDeviceId = asString(value.audioDeviceId).slice(0, 500);
+    const savedAudioRouting = isRecord(value.audioRouting) ? value.audioRouting : {};
+    this.audioRouting = {
+      timbres: isAudioBusRoute(savedAudioRouting.timbres) ? savedAudioRouting.timbres : 'stereo:0',
+      pads: isAudioBusRoute(savedAudioRouting.pads) ? savedAudioRouting.pads : 'stereo:0',
+      effects: isAudioBusRoute(savedAudioRouting.effects) ? savedAudioRouting.effects : 'stereo:0',
+    };
     this.compatibilityMode = value.compatibilityMode === true;
     this.midiInput.setCompatibilityMode(this.compatibilityMode);
     this.uiFeedback.setSoundEnabled(value.uiSoundEnabled === true, false);

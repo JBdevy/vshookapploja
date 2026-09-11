@@ -1,5 +1,6 @@
 import type { MidiInputDevice } from '../midi/MidiInputService';
 import type { PlayerBottomView } from './PerformanceKeyboard';
+import { createAudioRouteOptions, type AudioBusRouting, type AudioOutputDevice } from '../audio/AudioOutputService';
 
 export const BUFFER_SIZES = [32, 64, 128, 256, 512] as const;
 export type BufferSize = (typeof BUFFER_SIZES)[number];
@@ -39,10 +40,18 @@ export function createAppSettingsMarkup(
   allowKeyboardView: boolean,
   uiSoundEnabled: boolean,
   uiVibrationEnabled: boolean,
+  audioDevices: readonly AudioOutputDevice[],
+  selectedAudioDeviceId: string,
+  audioRouting: AudioBusRouting,
 ): string {
   const bufferOptions = BUFFER_SIZES.map((size) =>
     `<option value="${size}"${size === bufferSize ? ' selected' : ''}>${size}</option>`,
   ).join('');
+  const selectedAudioDevice = audioDevices.find(({ id }) => id === selectedAudioDeviceId);
+  const channelCount = selectedAudioDevice?.channels ?? 2;
+  const audioDeviceOptions = audioDevices.map((device) => `
+    <option value="${escapeHtml(device.id)}"${device.id === selectedAudioDeviceId ? ' selected' : ''}>${escapeHtml(device.name)} · ${device.channels} canais</option>
+  `).join('');
 
   return `
     <section class="app-settings-panel" aria-label="Configurações">
@@ -61,6 +70,27 @@ export function createAppSettingsMarkup(
           ${bufferOptions}
         </select>
       </label>
+
+      <label class="app-settings-field app-settings-field--audio-device">
+        <span>Dispositivo de áudio</span>
+        <select data-setting="audio-device">
+          <option value=""${selectedAudioDeviceId === '' ? ' selected' : ''}>Padrão</option>
+          ${audioDeviceOptions}
+        </select>
+      </label>
+
+      ${([
+        ['timbres', 'Saídas - Timbres'],
+        ['pads', 'Saídas - Pads'],
+        ['effects', 'Saídas - Effects'],
+      ] as const).map(([bus, label]) => `
+        <label class="app-settings-field app-settings-field--audio-route">
+          <span>${label}</span>
+          <select data-setting="audio-route" data-audio-bus="${bus}">
+            ${createAudioRouteOptions(channelCount, audioRouting[bus])}
+          </select>
+        </label>
+      `).join('')}
 
       <label class="app-settings-toggle">
         <span>

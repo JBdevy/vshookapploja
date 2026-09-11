@@ -91,7 +91,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: zulu
-          java-version: "17"
+          java-version: "21"
 
       - name: Preparar Android SDK, NDK e CMake
         uses: android-actions/setup-android@v3
@@ -317,6 +317,7 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
             CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             PRODUCT_BUNDLE_IDENTIFIER="$HOOK_KEYS_IOS_ID" \
             archive
 

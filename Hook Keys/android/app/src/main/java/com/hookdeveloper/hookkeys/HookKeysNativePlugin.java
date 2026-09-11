@@ -7,6 +7,8 @@ import android.media.midi.MidiDeviceStatus;
 import android.media.midi.MidiManager;
 import android.media.midi.MidiOutputPort;
 import android.media.midi.MidiReceiver;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
@@ -98,6 +100,28 @@ public class HookKeysNativePlugin extends Plugin {
                 JSObject device = new JSObject();
                 device.put("id", Integer.toString(info.getId()));
                 device.put("name", midiDeviceName(info));
+                devices.put(device);
+            }
+        }
+        JSObject result = new JSObject();
+        result.put("devices", devices);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void listAudioOutputDevices(PluginCall call) {
+        JSArray devices = new JSArray();
+        AudioManager audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) {
+            for (AudioDeviceInfo info : audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                int channels = 0;
+                for (int count : info.getChannelCounts()) channels = Math.max(channels, count);
+                if (channels <= 0) channels = 2;
+                JSObject device = new JSObject();
+                device.put("id", Integer.toString(info.getId()));
+                CharSequence productName = info.getProductName();
+                device.put("name", productName == null || productName.length() == 0 ? "Saída de áudio" : productName.toString());
+                device.put("channels", Math.min(32, channels));
                 devices.put(device);
             }
         }

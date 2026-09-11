@@ -28,6 +28,7 @@ public:
 
   // Consumer side: audio callback only.
   void render(float* left, float* right, std::size_t frames) noexcept;
+  void renderInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
 
   [[nodiscard]] std::uint64_t droppedCommandCount() const noexcept;
 

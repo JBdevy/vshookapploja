@@ -1,5 +1,6 @@
 import type { MidiInputDevice } from '../midi/MidiInputService';
 import { createModuleEffectCardsMarkup } from './ModuleEffectsView';
+import { createAudioRouteOptions, type AudioBusRoute } from '../audio/AudioOutputService';
 
 export type ModuleEnvelopeParameter = 'attackMs' | 'releaseMs' | 'holdMs' | 'decayMs';
 
@@ -61,6 +62,8 @@ export function createModuleSettingsMarkup(
   selectedDeviceId: string | null,
   settings: Readonly<Record<string, unknown>>,
   bpm: number,
+  audioChannelCount: number,
+  audioRoute: AudioBusRoute,
 ): string {
   const deviceNames = new Map(devices.map((device) => [device.id, device.name]));
   const options = activeDeviceIds.map((deviceId, index) => {
@@ -76,13 +79,22 @@ export function createModuleSettingsMarkup(
 
   return `
     <section class="module-settings-panel" aria-label="Configurações do timbre">
-      <label class="app-settings-field module-settings-device">
-        <span>Dispositivo MIDI</span>
-        <select data-module-setting="midi-device">
-          <option value=""${selectedDeviceId === null ? ' selected' : ''}>Todos os dispositivos ativos</option>
-          ${options}
-        </select>
-      </label>
+      <div class="module-settings-io-row">
+        <label class="app-settings-field module-settings-device">
+          <span>Dispositivo MIDI</span>
+          <select data-module-setting="midi-device">
+            <option value=""${selectedDeviceId === null ? ' selected' : ''}>Todos os dispositivos ativos</option>
+            ${options}
+          </select>
+        </label>
+
+        <label class="app-settings-field module-settings-audio-route">
+          <span>Saída do módulo</span>
+          <select data-module-setting="audio-route">
+            ${createAudioRouteOptions(audioChannelCount, audioRoute)}
+          </select>
+        </label>
+      </div>
 
       <div class="module-settings-workspace">
         <div class="module-envelope-grid" aria-label="Envelope do timbre">
