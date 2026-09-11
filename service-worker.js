@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vshook-mobile-1.0.1-director-performance-v53';
+const CACHE_NAME = 'vshook-mobile-1.0.2-director-performance-v57';
 const APP_ASSETS = [
   './',
   './index.html',
@@ -18,7 +18,6 @@ const APP_ASSETS = [
   './recados-app.css',
   './recados.webmanifest',
   './chat.js',
-  './chat-voice-recorder.js',
   './chat-app.css',
   './transfer-hook.js',
   './transfer-hook-app.css',
@@ -59,7 +58,6 @@ self.addEventListener('fetch', (event) => {
     '/lyrics', '/lyrics.json',
     '/command', '/technical-notice', '/recados-notice', '/recados-templates',
     '/chat/state', '/chat/messages', '/chat/pin', '/chat/delete', '/chat/bootstrap',
-    '/api/chat/push/register', '/api/chat/push/unregister',
     '/health', '/ping', '/bridge-info', '/qr.svg', '/app-qr.svg',
     '/media', '/tp-media', '/teleprompt-media'
   ];
