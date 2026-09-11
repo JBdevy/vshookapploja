@@ -1,6 +1,7 @@
 import { ApiError } from '../../shared/api/ApiError';
 import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
 import type { AuthSessionService } from './AuthSessionService';
+import type { PublicAppSettingsResponse } from '../account/AccountApi';
 import type {
   AuthenticatedSession,
   DeviceRemovalRequiredResponse,
@@ -34,25 +35,31 @@ export class AuthScreen {
   private countdownTimer: number | null = null;
   private resendBusy = false;
   private supportUrl = '';
+  private purchaseUrl = '';
   private readonly supportButton: HTMLButtonElement;
+  private readonly purchaseButton: HTMLButtonElement;
+  private keyboardPerformerDestroy: (() => void) | null = null;
+  private authenticationFinished = false;
 
   constructor(
     root: HTMLElement,
     private readonly sessions: AuthSessionService,
     private readonly onAuthenticated: (session: AuthenticatedSession) => void,
-    private readonly getSupportUrl: () => Promise<string>,
+    private readonly getPublicAppSettings: () => Promise<PublicAppSettingsResponse>,
   ) {
     this.deviceName = sessions.getDeviceName();
     root.innerHTML = `
       <main class="app-screen app-shell">
         <section class="brand-stage" aria-labelledby="brand-title">
           <div class="brand-lockup">
-            <img
-              class="brand-symbol-image"
-              src="/assets/icons/icon-256.webp"
-              alt=""
-              aria-hidden="true"
-            >
+            <div class="brand-visual" aria-hidden="true">
+              <img
+                class="brand-symbol-image"
+                src="/assets/icons/icon-256.webp"
+                alt=""
+              >
+              <span class="keyboard-performer-3d login-keyboard-performer" data-login-keyboard-performer></span>
+            </div>
             <p class="brand-kicker">ReiVs apresenta</p>
             <h1 id="brand-title"><span>Hook</span> Keys</h1>
             <p class="brand-line">Seu instrumento. Em qualquer palco.</p>
@@ -72,7 +79,10 @@ export class AuthScreen {
               <span>Hook Keys</span>
             </div>
             <div id="auth-content" class="auth-content"></div>
-            <button class="login-support-button" type="button" disabled>Suporte</button>
+            <div class="login-access-actions">
+              <button class="login-purchase-button" type="button" disabled>Comprar acesso</button>
+              <button class="login-support-button" type="button" disabled>Suporte</button>
+            </div>
           </div>
           <p class="access-footer">Acesso protegido pela sua senha</p>
         </section>
@@ -80,12 +90,26 @@ export class AuthScreen {
     `;
 
     this.content = select(root, '#auth-content');
+    this.purchaseButton = select(root, '.login-purchase-button');
     this.supportButton = select(root, '.login-support-button');
+    this.purchaseButton.addEventListener('click', () => this.openPurchasePage());
     this.supportButton.addEventListener('click', () => this.openSupport());
+    this.mountKeyboardPerformer();
+  }
+
+  private mountKeyboardPerformer(): void {
+    const performerRoot = document.querySelector<HTMLElement>('[data-login-keyboard-performer]');
+    if (!performerRoot) return;
+    void import('../player/KeyboardPerformer3D').then(({ KeyboardPerformer3D }) => {
+      if (this.authenticationFinished || !performerRoot.isConnected) return;
+      const performer = new KeyboardPerformer3D(performerRoot);
+      performer.mount();
+      this.keyboardPerformerDestroy = () => performer.destroy();
+    });
   }
 
   async start(): Promise<void> {
-    void this.loadSupportUrl();
+    void this.loadPublicAppSettings();
     this.renderLoading();
     try {
       const session = await this.sessions.restoreSession();
@@ -99,15 +123,36 @@ export class AuthScreen {
     }
   }
 
-  private async loadSupportUrl(): Promise<void> {
+  private async loadPublicAppSettings(): Promise<void> {
     try {
-      const url = await this.getSupportUrl();
-      if (!isWhatsAppSupportUrl(url)) return;
-      this.supportUrl = url;
-      this.supportButton.disabled = false;
+      const settings = await this.getPublicAppSettings();
+      if (isWhatsAppSupportUrl(settings.supportUrl)) {
+        this.supportUrl = settings.supportUrl;
+        this.supportButton.disabled = false;
+      }
+      if (this.isPublicHttpUrl(settings.acquireLicenseUrl)) {
+        this.purchaseUrl = settings.acquireLicenseUrl;
+        this.purchaseButton.disabled = false;
+      }
     } catch {
       this.supportUrl = '';
+      this.purchaseUrl = '';
       this.supportButton.disabled = true;
+      this.purchaseButton.disabled = true;
+    }
+  }
+
+  private openPurchasePage(): void {
+    if (!this.purchaseUrl) return;
+    window.open(this.purchaseUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  private isPublicHttpUrl(value: string): boolean {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' || url.protocol === 'http:';
+    } catch {
+      return false;
     }
   }
 
@@ -193,7 +238,7 @@ export class AuthScreen {
 
   private renderPasswordLogin(): void {
     this.replaceContent(`
-      <header class="form-heading form-heading--compact">
+      <header class="form-heading form-heading--compact form-heading--with-back">
         <button class="back-button" type="button" aria-label="Voltar para o e-mail">←</button>
         <p class="eyebrow">Bem-vindo de volta</p>
         <h2>Digite sua senha</h2>
@@ -295,7 +340,7 @@ export class AuthScreen {
     }
 
     this.replaceContent(`
-      <header class="form-heading form-heading--code">
+      <header class="form-heading form-heading--code form-heading--with-back">
         <button class="back-button" type="button" aria-label="Voltar para o e-mail">←</button>
         <p class="eyebrow">Confirme seu acesso</p>
         <h2>Confira seu e-mail</h2>
@@ -586,6 +631,9 @@ export class AuthScreen {
       window.clearInterval(this.countdownTimer);
       this.countdownTimer = null;
     }
+    this.authenticationFinished = true;
+    this.keyboardPerformerDestroy?.();
+    this.keyboardPerformerDestroy = null;
     this.onAuthenticated(session);
   }
 

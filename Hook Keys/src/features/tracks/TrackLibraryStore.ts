@@ -153,6 +153,21 @@ export class TrackLibraryStore {
     return true;
   }
 
+  async renameBlock(id: string, name: string): Promise<LocalTrackBlock> {
+    const normalizedName = name.trim().slice(0, 12);
+    if (!normalizedName) throw new Error('block_name_required');
+    const database = await this.openDatabase();
+    const store = database.transaction(BLOCK_STORE_NAME, 'readonly').objectStore(BLOCK_STORE_NAME);
+    const current = await requestResult<StoredTrackBlock | undefined>(store.get(id));
+    if (!current || current.accountKey !== this.accountKey) throw new Error('block_not_found');
+    const updated: StoredTrackBlock = { ...current, name: normalizedName };
+    await requestResult(
+      database.transaction(BLOCK_STORE_NAME, 'readwrite').objectStore(BLOCK_STORE_NAME).put(updated),
+    );
+    const { accountKey: _accountKey, ...localBlock } = updated;
+    return localBlock;
+  }
+
   async saveBlockOrder(scopeId: string, orderedItemIds: readonly string[]): Promise<LocalTrackBlock[]> {
     const blocks = await this.listBlocks(scopeId);
     const order = new Map(orderedItemIds.map((itemId, index) => [itemId, index]));
@@ -167,7 +182,6 @@ export class TrackLibraryStore {
     const updatedBlocks = orderedBlocks.map((block, index) => ({
       ...block,
       sequence: index + 1,
-      name: `Bloco ${(index + 1).toString().padStart(2, '0')}`,
     }));
     if (updatedBlocks.length === 0) return [];
 

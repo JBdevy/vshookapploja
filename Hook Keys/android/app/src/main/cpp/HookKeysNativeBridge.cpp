@@ -90,6 +90,11 @@ public:
       bool modulation,
       float volumeDb,
       int polyphony,
+      int velocityCurve0,
+      int velocityCurve1,
+      int velocityCurve2,
+      int velocityCurve3,
+      int velocityCurve4,
       int outputChannelStart,
       int outputChannelCount) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
@@ -106,6 +111,12 @@ public:
     config.modulationInputEnabled = modulation;
     config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
     config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
+    config.velocityCurve = {
+        static_cast<std::uint8_t>(std::clamp(velocityCurve0, 0, 127)),
+        static_cast<std::uint8_t>(std::clamp(velocityCurve1, 0, 127)),
+        static_cast<std::uint8_t>(std::clamp(velocityCurve2, 0, 127)),
+        static_cast<std::uint8_t>(std::clamp(velocityCurve3, 0, 127)),
+        static_cast<std::uint8_t>(std::clamp(velocityCurve4, 0, 127))};
     config.outputChannelStart = static_cast<std::uint8_t>(std::clamp(outputChannelStart, 0, 31));
     config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
     return runtime->setModuleConfig(moduleIndex, config);
@@ -167,6 +178,19 @@ public:
   bool setTempo(float bpm) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     return runtime != nullptr && runtime->setTempo(bpm);
+  }
+
+  bool configureMetronome(
+      bool enabled, float bpm, float volume, int clickSound,
+      bool accentEnabled, bool doubleTimeEnabled, int numerator) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    if (runtime == nullptr) return false;
+    runtime->setMetronome(
+        enabled, bpm, volume,
+        static_cast<std::uint8_t>(std::clamp(clickSound, 1, 3)),
+        accentEnabled, doubleTimeEnabled,
+        static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)));
+    return true;
   }
 
   bool setOutputGain(float db, bool enabled) noexcept {
@@ -318,6 +342,11 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
     jboolean modulation,
     jfloat volumeDb,
     jint polyphony,
+    jint velocityCurve0,
+    jint velocityCurve1,
+    jint velocityCurve2,
+    jint velocityCurve3,
+    jint velocityCurve4,
     jint outputChannelStart,
     jint outputChannelCount) {
   return gEngine.configureModule(
@@ -331,6 +360,11 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
              modulation == JNI_TRUE,
              volumeDb,
              static_cast<int>(polyphony),
+             static_cast<int>(velocityCurve0),
+             static_cast<int>(velocityCurve1),
+             static_cast<int>(velocityCurve2),
+             static_cast<int>(velocityCurve3),
+             static_cast<int>(velocityCurve4),
              static_cast<int>(outputChannelStart),
              static_cast<int>(outputChannelCount))
              ? JNI_TRUE
@@ -399,6 +433,17 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEnvelo
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetTempo(JNIEnv*, jclass, jfloat bpm) {
   return gEngine.setTempo(bpm) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureMetronome(
+    JNIEnv*, jclass, jboolean enabled, jfloat bpm, jfloat volume, jint clickSound,
+    jboolean accentEnabled, jboolean doubleTimeEnabled, jint numerator) {
+  return gEngine.configureMetronome(
+             enabled == JNI_TRUE, bpm, volume, clickSound,
+             accentEnabled == JNI_TRUE, doubleTimeEnabled == JNI_TRUE, numerator)
+             ? JNI_TRUE
+             : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

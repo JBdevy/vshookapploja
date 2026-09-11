@@ -4,6 +4,7 @@
 #include "hook_keys/RealtimeCommandQueue.hpp"
 #include "hook_keys/TinySoundFontModule.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -276,6 +277,97 @@ void testNativeRuntimeSignalPath() {
   expect(mutedEnergy == 0.0, "native runtime maps the minimum fader position to silence");
 }
 
+// Collects the frame index of every metronome attack, rendering the runtime in
+// blocks of `blockFrames` so the caller can compare different callback sizes.
+// A click is an oscillator, so its samples cross zero constantly: a new onset
+// only counts after a silent gap longer than any of those crossings.
+std::vector<std::size_t> metronomeOnsets(
+    hook_keys::NativeEngineRuntime& runtime, std::size_t totalFrames, std::size_t blockFrames) {
+  constexpr std::size_t silenceGapFrames = 480; // 10 ms at 48 kHz.
+  std::vector<float> left(blockFrames, 0.0f);
+  std::vector<float> right(blockFrames, 0.0f);
+  std::vector<std::size_t> onsets;
+  std::size_t silentFrames = silenceGapFrames;
+  for (std::size_t offset = 0; offset < totalFrames; offset += blockFrames) {
+    // The last block is clamped so every block size covers the same span.
+    const auto rendered = std::min(blockFrames, totalFrames - offset);
+    std::fill(left.begin(), left.end(), 0.0f);
+    std::fill(right.begin(), right.end(), 0.0f);
+    runtime.render(left.data(), right.data(), rendered);
+    for (std::size_t frame = 0; frame < rendered; ++frame) {
+      if (std::abs(left[frame]) <= 0.0005f) {
+        ++silentFrames;
+        continue;
+      }
+      if (silentFrames >= silenceGapFrames) onsets.push_back(offset + frame);
+      silentFrames = 0;
+    }
+  }
+  return onsets;
+}
+
+void testMetronomeRunsOnTheAudioCallback() {
+  constexpr double sampleRate = 48000.0;
+  constexpr std::size_t totalFrames = 48000 * 2;
+
+  hook_keys::NativeEngineRuntime idle(sampleRate, 512);
+  expect(metronomeOnsets(idle, 4096, 512).empty(), "a disabled metronome stays silent");
+
+  hook_keys::NativeEngineRuntime small(sampleRate, 512);
+  hook_keys::NativeEngineRuntime large(sampleRate, 2048);
+  small.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  large.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+
+  const auto smallOnsets = metronomeOnsets(small, totalFrames, 64);
+  const auto largeOnsets = metronomeOnsets(large, totalFrames, 2048);
+  expect(smallOnsets.size() == 4, "120 BPM produces four clicks in two seconds");
+  expect(smallOnsets == largeOnsets, "click timing ignores the render block size");
+  for (std::size_t index = 1; index < smallOnsets.size(); ++index) {
+    const auto interval = smallOnsets[index] - smallOnsets[index - 1];
+    expect(interval == static_cast<std::size_t>(sampleRate * 0.5),
+           "clicks keep an exact beat interval");
+  }
+
+  hook_keys::NativeEngineRuntime doubled(sampleRate, 512);
+  doubled.setMetronome(true, 120.0f, 1.0f, 1, false, true, 4);
+  expect(metronomeOnsets(doubled, totalFrames, 256).size() == 8,
+         "double time doubles the click rate");
+
+  hook_keys::NativeEngineRuntime quiet(sampleRate, 512);
+  quiet.setMetronome(true, 120.0f, 0.0f, 1, false, false, 4);
+  expect(metronomeOnsets(quiet, totalFrames, 256).empty(), "zero volume silences the click");
+}
+
+void testVelocityCurveMapping() {
+  RecordingSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+
+  hook_keys::ModuleConfig config;
+  config.velocityCurve = {0, 8, 32, 72, 127};
+  expect(engine.setModuleConfig(0, config), "configure the user velocity curve");
+  // Velocity 0 is a note-off in MIDI, so 1 is the softest touch the curve sees.
+  expect(engine.enqueueMidi(midi(0x90, 60, 1)), "queue the softest note");
+  expect(engine.enqueueMidi(midi(0x90, 62, 64)), "queue a mid note");
+  expect(engine.enqueueMidi(midi(0x90, 64, 127)), "queue the hardest note");
+  process(engine);
+
+  expect(synth.events.size() == 3, "every note reaches the module");
+  expect(synth.events[0].data2 == 1, "the curve never mutes a note");
+  expect(synth.events[1].data2 == 33, "the curve bends the middle of the range");
+  expect(synth.events[2].data2 == 127, "the curve keeps full velocity at the top");
+
+  config.velocityCurve = {100, 100, 100, 100, 100};
+  expect(engine.setModuleConfig(0, config), "configure a fixed velocity curve");
+  synth.events.clear();
+  expect(engine.enqueueMidi(midi(0x90, 65, 10)), "queue a soft note");
+  expect(engine.enqueueMidi(midi(0x90, 67, 120)), "queue a hard note");
+  process(engine);
+  expect(synth.events.size() == 2 && synth.events[0].data2 == 100 && synth.events[1].data2 == 100,
+         "a flat curve maps every touch to the same velocity");
+}
+
 void testEqualizerProcessing() {
   hook_keys::ModuleEffects effects;
   effects.prepare(48000.0);
@@ -412,6 +504,8 @@ int main() {
   testConcurrentProducers();
   testTinySoundFontRendering();
   testNativeRuntimeSignalPath();
+  testMetronomeRunsOnTheAudioCallback();
+  testVelocityCurveMapping();
   testCutoffProcessing();
   testEqualizerProcessing();
   testEqualizerCutSlope();

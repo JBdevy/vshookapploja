@@ -91,6 +91,15 @@ import {
   type ModuleEffectKind,
 } from './ModuleEffectsView';
 import {
+  createVelocityCurveMarkup,
+  isVelocityCurveMode,
+  readVelocityCurveSettings,
+  updateVelocityCurveMarkup,
+  velocityCurvePreset,
+  velocityFromClientY,
+  type VelocityCurveMode,
+} from './VelocityCurveView';
+import {
   createOutputKnobMarkup,
   createMetronomeKnobMarkup,
   DEFAULT_OUTPUT_ENABLED,
@@ -136,7 +145,7 @@ import {
 } from './PerformanceKeyboard';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
 type BankId = 'A' | 'B';
 type PlayerView = 'bank' | 'pads-effects';
 
@@ -661,6 +670,10 @@ export class PlayerScreen {
   private readonly handleRootPointerEnd = (event: PointerEvent) => this.onRootPointerEnd(event);
   private readonly handleRootContextMenu = (event: Event) => this.onRootContextMenu(event);
   private readonly handleRootInput = (event: Event) => this.onRootInput(event);
+  private readonly handlePageHide = () => this.flushPlayerStateSave(true);
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState === 'hidden') this.flushPlayerStateSave(true);
+  };
   private readonly handleModalKeydown = (event: KeyboardEvent) => this.onModalKeydown(event);
   private modal: HTMLElement | null = null;
   private modalTrigger: HTMLElement | null = null;
@@ -744,6 +757,8 @@ export class PlayerScreen {
   private currentModalModuleNumber: number | null = null;
   private stateChangedBeforeRestore = false;
   private nativeSyncTimer: number | null = null;
+  private playerStateSaveTimer: number | null = null;
+  private playerStateDirty = false;
   private nativeSoundfontSync: Promise<void> = Promise.resolve();
   private nativeAudioOutputSync: Promise<void> = Promise.resolve();
   private readonly nativeLoadedTimbres: (string | null)[] = Array.from({ length: MODULE_COUNT }, () => null);
@@ -950,6 +965,8 @@ export class PlayerScreen {
     this.root.addEventListener('pointercancel', this.handleRootPointerEnd);
     this.root.addEventListener('contextmenu', this.handleRootContextMenu);
     this.root.addEventListener('input', this.handleRootInput);
+    window.addEventListener('pagehide', this.handlePageHide);
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.midiInput.mount();
     void hookKeysNative.initialize(this.bufferSize).then(async (ready) => {
       if (!ready || !this.mounted) return;
@@ -1018,6 +1035,9 @@ export class PlayerScreen {
     this.midiInput.destroy();
     if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
     this.nativeSyncTimer = null;
+    window.removeEventListener('pagehide', this.handlePageHide);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    this.flushPlayerStateSave(true);
     void hookKeysNative.stopAllNotes();
     this.metronome.destroy();
     this.playerState.destroy();
@@ -1359,6 +1379,49 @@ export class PlayerScreen {
     input.value = String(polyphony);
     moduleState.settings.polyphony = polyphony;
     this.markPlayerStateChanged();
+  }
+
+  private selectModuleVelocityMode(modal: HTMLElement, moduleNumber: number, mode: VelocityCurveMode): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    const editor = modal.querySelector<HTMLElement>('.velocity-curve-editor');
+    if (!editor) return;
+    const current = readVelocityCurveSettings(moduleState?.settings.velocityCurve);
+    const next = velocityCurvePreset(mode, current);
+    updateVelocityCurveMarkup(editor, next);
+    if (!moduleState) return;
+    moduleState.settings.velocityCurve = next;
+    this.markPlayerStateChanged();
+  }
+
+  private setModuleVelocityPoint(
+    modal: HTMLElement,
+    moduleNumber: number,
+    pointIndex: number,
+    clientY: number,
+    persist: boolean,
+  ): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    const editor = modal.querySelector<HTMLElement>('.velocity-curve-editor');
+    const plot = modal.querySelector<HTMLElement>('[data-velocity-curve-plot]');
+    if (!moduleState || !editor || !plot || pointIndex < 0 || pointIndex > 4) return;
+    const current = readVelocityCurveSettings(moduleState.settings.velocityCurve);
+    if (current.mode !== 'user') return;
+    current.points[pointIndex] = velocityFromClientY(plot, clientY);
+    moduleState.settings.velocityCurve = current;
+    updateVelocityCurveMarkup(editor, current);
+    this.scheduleNativeEngineSync();
+    if (persist) this.markPlayerStateChanged();
+  }
+
+  private setFixedModuleVelocity(modal: HTMLElement, moduleNumber: number, value: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    const editor = modal.querySelector<HTMLElement>('.velocity-curve-editor');
+    if (!moduleState || !editor) return;
+    const fixed = Math.round(Math.min(127, Math.max(0, value)));
+    const next = { mode: 'fixed' as const, points: [fixed, fixed, fixed, fixed, fixed] as [number, number, number, number, number] };
+    moduleState.settings.velocityCurve = next;
+    updateVelocityCurveMarkup(editor, next);
+    this.scheduleNativeEngineSync();
   }
 
   private onRootPointerDown(event: PointerEvent): void {
@@ -2175,6 +2238,17 @@ export class PlayerScreen {
     return bank.presets[bank.selectedPreset - 1] ?? null;
   }
 
+  private ensureActivePresetState(): PresetState | null {
+    const active = this.getActivePresetState();
+    if (active) return active;
+    const bank = this.bankStates.get(this.activeBank);
+    if (!bank) return null;
+    for (const state of this.bankStates.values()) state.selectedPreset = null;
+    bank.selectedPreset = 1;
+    this.restoreActivePresetState();
+    return bank.presets[0] ?? null;
+  }
+
   private saveActivePresetState(): void {
     const preset = this.getActivePresetState();
     if (!preset) return;
@@ -2251,7 +2325,7 @@ export class PlayerScreen {
   }
 
   private toggleModule(moduleNumber: number, button: HTMLButtonElement): void {
-    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    const moduleState = this.ensureActivePresetState()?.modules[moduleNumber - 1];
     if (!moduleState) return;
     moduleState.enabled = !moduleState.enabled;
     this.renderModulePowerButton(button, moduleNumber, moduleState.enabled);
@@ -2627,15 +2701,16 @@ export class PlayerScreen {
 
     const titleId = `player-modal-title-${this.instanceId}`;
     const modal = document.createElement('section');
+    let velocityCurveDrag: { pointerId: number; pointIndex: number; plot: HTMLElement } | null = null;
     const settingsDetail = kind === 'app-settings-midi' || kind === 'app-settings-audio';
     modal.className = `player-modal player-modal--${kind}${settingsDetail ? ' player-modal--app-settings' : ''}`;
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     modal.setAttribute('aria-labelledby', titleId);
-    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay'];
+    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-velocity', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay'];
     const moduleState = !moduleKinds.includes(kind) || moduleNumber === null
       ? null
-      : this.getActivePresetState()?.modules[moduleNumber - 1] ?? null;
+      : this.ensureActivePresetState()?.modules[moduleNumber - 1] ?? null;
     const presetState = kind !== 'preset-name' || moduleNumber === null
       ? null
       : this.bankStates.get(this.activeBank)?.presets[moduleNumber - 1] ?? null;
@@ -2686,6 +2761,8 @@ export class PlayerScreen {
           <p>Escolha entre 1 e 128 vozes simultâneas para este módulo.</p>
         </section>
       `;
+    } else if (kind === 'module-velocity') {
+      bodyMarkup = createVelocityCurveMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-eq') {
       bodyMarkup = createModuleEqMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-compressor') {
@@ -3044,6 +3121,11 @@ export class PlayerScreen {
         ? moduleState.timbreName
         : 'Timbre';
       title.textContent = 'Polifonia';
+    } else if (kind === 'module-velocity') {
+      eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
+        ? moduleState.timbreName
+        : 'Timbre';
+      title.textContent = 'Velocity';
     } else if (kind === 'module-eq') {
       eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
@@ -3208,12 +3290,21 @@ export class PlayerScreen {
           : moduleSettingAction === 'open-reverb'
             ? 'module-reverb'
             : moduleSettingAction === 'open-delay' ? 'module-delay'
-              : moduleSettingAction === 'open-polyphony' ? 'module-polyphony' : null;
+              : moduleSettingAction === 'open-polyphony' ? 'module-polyphony'
+                : moduleSettingAction === 'open-velocity' ? 'module-velocity' : null;
         const button = childKind && target instanceof Element
           ? target.closest<HTMLButtonElement>('button[data-module-setting-action]')
           : null;
         if (childKind && button) this.openChildModal(childKind, moduleNumber, button);
         if (childKind) return;
+      }
+      const velocityModeButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-velocity-mode-option]')
+        : null;
+      if (kind === 'module-velocity' && moduleNumber !== null && velocityModeButton) {
+        const mode = velocityModeButton.dataset.velocityModeOption;
+        if (isVelocityCurveMode(mode)) this.selectModuleVelocityMode(modal, moduleNumber, mode);
+        return;
       }
       const effectPowerButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-module-effect-power]')
@@ -3522,7 +3613,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
           this.commitModulePolyphony(modal, moduleNumber);
         }
-        if ((modalAction === 'cancel' || modalAction === 'confirm') && (kind === 'module-polyphony' || (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity') || (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -3610,6 +3701,57 @@ export class PlayerScreen {
       modal.addEventListener('pointerup', (event) => this.endEqBandDrag(event));
       modal.addEventListener('pointercancel', (event) => this.endEqBandDrag(event));
     }
+    if (kind === 'module-velocity' && moduleNumber !== null) {
+      for (const button of modal.querySelectorAll<HTMLButtonElement>('[data-velocity-mode-option]')) {
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const mode = button.dataset.velocityModeOption;
+          if (isVelocityCurveMode(mode)) this.selectModuleVelocityMode(modal, moduleNumber, mode);
+        });
+      }
+      const fixedInput = modal.querySelector<HTMLInputElement>('[data-velocity-fixed-value]');
+      fixedInput?.addEventListener('input', (event) => {
+        event.stopPropagation();
+        this.setFixedModuleVelocity(modal, moduleNumber, Number(fixedInput.value));
+      });
+      fixedInput?.addEventListener('change', (event) => {
+        event.stopPropagation();
+        this.setFixedModuleVelocity(modal, moduleNumber, Number(fixedInput.value));
+        this.markPlayerStateChanged();
+      });
+      modal.addEventListener('pointerdown', (event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        const handle = event.target instanceof Element
+          ? event.target.closest<SVGCircleElement>('[data-velocity-point]')
+          : null;
+        const plot = handle?.closest<HTMLElement>('[data-velocity-curve-plot]');
+        const editor = plot?.closest<HTMLElement>('.velocity-curve-editor');
+        const pointIndex = Number(handle?.dataset.velocityPoint);
+        if (!handle || !plot || editor?.dataset.velocityMode !== 'user' || !Number.isInteger(pointIndex)) return;
+        event.preventDefault();
+        plot.setPointerCapture(event.pointerId);
+        velocityCurveDrag = { pointerId: event.pointerId, pointIndex, plot };
+        this.setModuleVelocityPoint(modal, moduleNumber, pointIndex, event.clientY, false);
+      });
+      modal.addEventListener('pointermove', (event) => {
+        if (velocityCurveDrag?.pointerId !== event.pointerId) return;
+        event.preventDefault();
+        this.setModuleVelocityPoint(modal, moduleNumber, velocityCurveDrag.pointIndex, event.clientY, false);
+      });
+      const endVelocityDrag = (event: PointerEvent) => {
+        if (velocityCurveDrag?.pointerId !== event.pointerId) return;
+        // A cancelled pointer carries no meaningful position: keep the point
+        // where the last move left it and just persist that.
+        if (event.type === 'pointercancel') this.markPlayerStateChanged();
+        else this.setModuleVelocityPoint(modal, moduleNumber, velocityCurveDrag.pointIndex, event.clientY, true);
+        if (velocityCurveDrag.plot.hasPointerCapture(event.pointerId)) {
+          velocityCurveDrag.plot.releasePointerCapture(event.pointerId);
+        }
+        velocityCurveDrag = null;
+      };
+      modal.addEventListener('pointerup', endVelocityDrag);
+      modal.addEventListener('pointercancel', endVelocityDrag);
+    }
     modal.addEventListener('pointerdown', (event) => this.startKnobDrag(event, moduleNumber));
     modal.addEventListener('pointermove', (event) => {
       this.knobCcLearnGesture.move(event);
@@ -3689,6 +3831,11 @@ export class PlayerScreen {
         if (file) void this.restorePlayerBackup(modal, file);
         return;
       }
+      if (kind === 'module-velocity' && moduleNumber !== null && input instanceof HTMLInputElement && input.matches('[data-velocity-fixed-value]')) {
+        this.setFixedModuleVelocity(modal, moduleNumber, Number(input.value));
+        this.markPlayerStateChanged();
+        return;
+      }
       if (kind === 'app-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio') this.handleAppSettingsChange(event);
       if (kind === 'module-settings' && moduleNumber !== null) {
         this.handleModuleSettingsChange(event, moduleNumber);
@@ -3718,6 +3865,8 @@ export class PlayerScreen {
         if (preview) preview.textContent = input.value || `Efeito ${moduleNumber ?? ''}`;
       } else if (kind === 'effect-pad' && input.matches('[data-effect-pad-volume]')) {
         this.updateEffectPadVolumeControl(modal, input);
+      } else if (kind === 'module-velocity' && moduleNumber !== null && input.matches('[data-velocity-fixed-value]')) {
+        this.setFixedModuleVelocity(modal, moduleNumber, Number(input.value));
       } else if (kind === 'password-reset' && input.matches('[data-password-reset-code]')) {
         input.value = input.value.replace(/\D/g, '').slice(0, 6);
         positionPasswordResetCodeCaret(input);
@@ -4982,9 +5131,11 @@ export class PlayerScreen {
       if (!restarted || !this.mounted) return;
       this.nativeLoadedTimbres.fill(null);
       this.applySelectedMidiInputs();
+      this.metronome.syncNativeState();
       this.syncNativeEngine();
     }).catch(() => {
       this.nativeLoadedTimbres.fill(null);
+      this.metronome.syncNativeState();
       this.syncNativeEngine();
       this.setStatus('Não foi possível aplicar a saída de áudio selecionada.');
     });
@@ -5597,9 +5748,27 @@ export class PlayerScreen {
 
   private markPlayerStateChanged(): void {
     this.stateChangedBeforeRestore = true;
+    this.playerStateDirty = true;
     this.saveActivePresetState();
-    this.playerState.save(this.createSavedPlayerState());
+    if (this.playerStateSaveTimer !== null) window.clearTimeout(this.playerStateSaveTimer);
+    this.playerStateSaveTimer = window.setTimeout(() => this.flushPlayerStateSave(), 180);
     this.scheduleNativeEngineSync();
+  }
+
+  // `immediate` is for the paths where the app is going away, so the debounced
+  // writes further down the chain would never get their turn.
+  private flushPlayerStateSave(immediate = false): void {
+    if (this.playerStateSaveTimer !== null) window.clearTimeout(this.playerStateSaveTimer);
+    this.playerStateSaveTimer = null;
+    if (!this.stateChangedBeforeRestore || !this.playerStateDirty) {
+      if (immediate) this.playerState.persistNow();
+      return;
+    }
+    this.playerStateDirty = false;
+    this.saveActivePresetState();
+    const state = this.createSavedPlayerState();
+    if (immediate) this.playerState.saveNow(state);
+    else this.playerState.save(state);
   }
 
   private scheduleNativeEngineSync(): void {
@@ -5608,7 +5777,7 @@ export class PlayerScreen {
     this.nativeSyncTimer = window.setTimeout(() => {
       this.nativeSyncTimer = null;
       this.syncNativeEngine();
-    }, 24);
+    }, 48);
   }
 
   private syncNativeEngine(): void {
@@ -5623,6 +5792,7 @@ export class PlayerScreen {
         ? moduleState.settings.outputRoute as AudioBusRoute
         : 'stereo:0';
       const nativeOutputRoute = parseAudioBusRoute(outputRoute);
+      const velocityCurve = readVelocityCurveSettings(moduleState?.settings.velocityCurve);
       void hookKeysNative.configureModule({
         moduleIndex,
         enabled: Boolean(moduleState?.enabled && moduleState.timbreId),
@@ -5634,6 +5804,11 @@ export class PlayerScreen {
         modulation: moduleState?.modulationInputEnabled ?? true,
         volumeDb: moduleState?.volumeDb ?? 0,
         polyphony: Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 64))),
+        velocityCurve0: velocityCurve.points[0],
+        velocityCurve1: velocityCurve.points[1],
+        velocityCurve2: velocityCurve.points[2],
+        velocityCurve3: velocityCurve.points[3],
+        velocityCurve4: velocityCurve.points[4],
         outputChannelStart: nativeOutputRoute.start,
         outputChannelCount: nativeOutputRoute.count,
       });
@@ -5706,6 +5881,7 @@ export class PlayerScreen {
   private createSavedPlayerState(): object {
     return {
       version: 1,
+      velocityCurveDefault: 'soft-v2',
       activeBank: this.activeBank,
       activePadBank: this.activePadBank,
       activeEffectBank: this.activeEffectBank,
@@ -5747,6 +5923,7 @@ export class PlayerScreen {
 
   private applySavedPlayerState(value: unknown): void {
     if (!isRecord(value) || value.version !== 1) return;
+    const migrateLegacyVelocityDefault = value.velocityCurveDefault !== 'soft-v2';
     const savedMidiInputIds = Array.isArray(value.midiInputIds) ? value.midiInputIds : [];
     this.selectedMidiInputIds = Array.from({ length: 3 }, (_, index) => {
       const deviceId = savedMidiInputIds[index];
@@ -5883,6 +6060,19 @@ export class PlayerScreen {
             const source = isRecord(sourceModules[moduleIndex]) ? sourceModules[moduleIndex] : null;
             if (!source) return module;
             const category = asString(source.category);
+            const restoredSettings = isRecord(source.settings)
+              ? { ...module.settings, ...source.settings }
+              : module.settings;
+            if (migrateLegacyVelocityDefault) {
+              const velocity = readVelocityCurveSettings(restoredSettings.velocityCurve);
+              const legacyMiddle = velocity.mode === 'middle'
+                && velocity.points.every((point, index) => point === [0, 32, 64, 96, 127][index]);
+              const invertedSoft = velocity.mode === 'soft'
+                && velocity.points.every((point, index) => point === [0, 52, 84, 108, 127][index]);
+              if (legacyMiddle || invertedSoft) {
+                restoredSettings.velocityCurve = { mode: 'soft', points: [0, 8, 32, 72, 127] };
+              }
+            }
             return {
               category: isSoundCategoryId(category) ? category : module.category,
               enabled: typeof source.enabled === 'boolean' ? source.enabled : module.enabled,
@@ -5899,9 +6089,7 @@ export class PlayerScreen {
               timbreName: typeof source.timbreName === 'string'
                 ? source.timbreName.slice(0, 120) : module.timbreName,
               volumeDb: boundedNumber(source.volumeDb, -60, 6, module.volumeDb),
-              settings: isRecord(source.settings)
-                ? { ...module.settings, ...source.settings }
-                : module.settings,
+              settings: restoredSettings,
             };
           }),
         };
@@ -5964,6 +6152,7 @@ function createDefaultModuleSettings(): Record<string, unknown> {
     cutoffHz: 20_000,
     eqEnabled: true,
     polyphony: 64,
+    velocityCurve: { mode: 'soft', points: [0, 8, 32, 72, 127] },
   };
 }
 

@@ -1,6 +1,7 @@
 import type { MidiInputDevice } from '../midi/MidiInputService';
 import { createModuleEffectCardsMarkup } from './ModuleEffectsView';
 import { createAudioRouteOptions, type AudioBusRoute } from '../audio/AudioOutputService';
+import { createVelocityCardMarkup } from './VelocityCurveView';
 
 export type ModuleEnvelopeParameter = 'attackMs' | 'releaseMs' | 'holdMs' | 'decayMs';
 
@@ -144,6 +145,7 @@ export function createModuleSettingsMarkup(
           ${createModuleEffectCardsMarkup(settings, bpm)}
         </div>
       </div>
+      ${createVelocityCardMarkup(settings)}
     </section>
   `;
 }

@@ -1,3 +1,5 @@
+import { hookKeysNative } from '../../platform/native/HookKeysNative';
+
 export type MetronomeClickSound = 1 | 2 | 3;
 
 const MIN_BPM = 60;
@@ -21,6 +23,7 @@ export class MetronomeEngine {
   private timeSignatureDenominator = 4;
   private beatIndex = 0;
   private running = false;
+  private nativeSyncTimer: number | null = null;
 
   constructor(private readonly onStateChanged: () => void = () => {}) {}
 
@@ -33,8 +36,13 @@ export class MetronomeEngine {
   getTimeSignatureDenominator(): number { return this.timeSignatureDenominator; }
   isRunning(): boolean { return this.running; }
 
+  syncNativeState(): void {
+    this.scheduleNativeSync(true);
+  }
+
   setBpm(value: number): void {
     this.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(value)));
+    this.scheduleNativeSync();
     this.onStateChanged();
   }
 
@@ -43,23 +51,27 @@ export class MetronomeEngine {
     if (this.audioContext && this.masterGain) {
       this.masterGain.gain.setTargetAtTime(this.volume * 0.42, this.audioContext.currentTime, 0.008);
     }
+    this.scheduleNativeSync();
     this.onStateChanged();
   }
 
   setClickSound(value: MetronomeClickSound): void {
     this.clickSound = value;
-    if (!this.running) this.previewClick();
+    if (!this.running && !hookKeysNative.isAvailable()) this.previewClick();
+    this.scheduleNativeSync();
     this.onStateChanged();
   }
 
   setAccentEnabled(enabled: boolean): void {
     this.accentEnabled = enabled;
+    this.scheduleNativeSync();
     this.onStateChanged();
   }
 
   setDoubleTimeEnabled(enabled: boolean): void {
     this.doubleTimeEnabled = enabled;
     this.beatIndex = 0;
+    this.scheduleNativeSync();
     this.onStateChanged();
   }
 
@@ -69,6 +81,7 @@ export class MetronomeEngine {
       ? Math.round(denominator)
       : 4;
     this.beatIndex %= this.timeSignatureNumerator;
+    this.scheduleNativeSync();
     this.onStateChanged();
   }
 
@@ -91,6 +104,13 @@ export class MetronomeEngine {
 
   start(): void {
     if (this.running) return;
+    if (hookKeysNative.isAvailable()) {
+      this.running = true;
+      this.beatIndex = 0;
+      this.scheduleNativeSync(true);
+      this.onStateChanged();
+      return;
+    }
     const context = this.getAudioContext();
     void context.resume();
     this.running = true;
@@ -106,6 +126,7 @@ export class MetronomeEngine {
     this.running = false;
     if (this.timer !== null) window.clearInterval(this.timer);
     this.timer = null;
+    this.scheduleNativeSync(true);
     this.onStateChanged();
   }
 
@@ -130,15 +151,42 @@ export class MetronomeEngine {
     if (this.audioContext && this.masterGain) {
       this.masterGain.gain.setValueAtTime(this.volume * 0.42, this.audioContext.currentTime);
     }
+    this.scheduleNativeSync();
     this.onStateChanged();
   }
 
   destroy(): void {
     this.stop();
+    if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
+    this.nativeSyncTimer = null;
+    if (hookKeysNative.isAvailable()) {
+      void hookKeysNative.configureMetronome(this.nativeConfig(false));
+    }
     if (this.audioContext) void this.audioContext.close();
     this.audioContext = null;
     this.clickBuffers = null;
     this.masterGain = null;
+  }
+
+  private scheduleNativeSync(immediate = false): void {
+    if (!hookKeysNative.isAvailable()) return;
+    if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
+    this.nativeSyncTimer = window.setTimeout(() => {
+      this.nativeSyncTimer = null;
+      void hookKeysNative.configureMetronome(this.nativeConfig());
+    }, immediate ? 0 : 32);
+  }
+
+  private nativeConfig(enabled = this.running) {
+    return {
+      enabled,
+      bpm: this.bpm,
+      volume: this.volume,
+      clickSound: this.clickSound,
+      accentEnabled: this.accentEnabled,
+      doubleTimeEnabled: this.doubleTimeEnabled,
+      timeSignatureNumerator: this.timeSignatureNumerator,
+    };
   }
 
   private previewClick(): void {

@@ -53,6 +53,21 @@ export class PlayerStateService {
     }, 500);
   }
 
+  // Writes to the local cache before returning, for the moments where the app is
+  // going away and a debounced save would never run.
+  saveNow(state: unknown): void {
+    this.pendingState = state;
+    this.persistNow();
+  }
+
+  // Drains whatever a debounced save still holds. Cheap when nothing is queued.
+  persistNow(): void {
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    this.persistPendingLocally();
+    void this.flush();
+  }
+
   async flush(): Promise<void> {
     if (this.destroyed || this.saving || !navigator.onLine || this.pendingState === null) return;
     const state = this.pendingState;

@@ -22,6 +22,11 @@ export interface NativeModuleConfig {
   modulation: boolean;
   volumeDb: number;
   polyphony: number;
+  velocityCurve0: number;
+  velocityCurve1: number;
+  velocityCurve2: number;
+  velocityCurve3: number;
+  velocityCurve4: number;
   outputChannelStart: number;
   outputChannelCount: 1 | 2;
 }
@@ -59,6 +64,16 @@ export interface NativeModuleEnvelopeConfig {
   releaseMs: number;
 }
 
+export interface NativeMetronomeConfig {
+  enabled: boolean;
+  bpm: number;
+  volume: number;
+  clickSound: 1 | 2 | 3;
+  accentEnabled: boolean;
+  doubleTimeEnabled: boolean;
+  timeSignatureNumerator: number;
+}
+
 interface NativeMidiNoteEvent {
   channel: number;
   inputId: string;
@@ -84,6 +99,7 @@ interface HookKeysNativePlugin {
   configureModuleEnvelope(options: NativeModuleEnvelopeConfig): Promise<void>;
   sendMidi(options: { inputSlot: number; status: number; data1: number; data2: number }): Promise<void>;
   setTempo(options: { bpm: number }): Promise<void>;
+  configureMetronome(options: NativeMetronomeConfig): Promise<void>;
   setOutputGain(options: { db: number; enabled: boolean }): Promise<void>;
   setCompatibilityMode(options: { enabled: boolean }): Promise<void>;
   stopAllNotes(): Promise<void>;
@@ -109,6 +125,7 @@ class HookKeysNativeBridge {
   private readonly moduleEffectsKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private readonly moduleEnvelopeKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private lastTempo: number | null = null;
+  private lastMetronomeKey: string | null = null;
   private lastOutputGainKey: string | null = null;
   private lastCompatibilityMode: boolean | null = null;
   private lastAudioDeviceKey: string | null = null;
@@ -203,6 +220,23 @@ class HookKeysNativeBridge {
     if (this.lastTempo === bpm) return;
     await this.call('set_tempo', { bpm }, () => plugin.setTempo({ bpm }));
     this.lastTempo = bpm;
+  }
+
+  async configureMetronome(config: NativeMetronomeConfig): Promise<void> {
+    if (!await this.initialize()) return;
+    const normalized: NativeMetronomeConfig = {
+      enabled: Boolean(config.enabled),
+      bpm: Math.min(600, Math.max(60, Math.round(config.bpm))),
+      volume: Math.min(1, Math.max(0, config.volume)),
+      clickSound: Math.min(3, Math.max(1, Math.round(config.clickSound))) as 1 | 2 | 3,
+      accentEnabled: Boolean(config.accentEnabled),
+      doubleTimeEnabled: Boolean(config.doubleTimeEnabled),
+      timeSignatureNumerator: Math.min(16, Math.max(1, Math.round(config.timeSignatureNumerator))),
+    };
+    const key = JSON.stringify(normalized);
+    if (key === this.lastMetronomeKey) return;
+    await this.call('configure_metronome', { ...normalized }, () => plugin.configureMetronome(normalized));
+    this.lastMetronomeKey = key;
   }
 
   async setOutputGain(db: number, enabled: boolean): Promise<void> {
@@ -300,6 +334,7 @@ class HookKeysNativeBridge {
     this.moduleEffectsKeys.fill(null);
     this.moduleEnvelopeKeys.fill(null);
     this.lastTempo = null;
+    this.lastMetronomeKey = null;
     this.lastOutputGainKey = null;
     this.lastCompatibilityMode = null;
   }

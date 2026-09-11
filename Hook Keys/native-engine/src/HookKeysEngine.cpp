@@ -1,6 +1,7 @@
 #include "hook_keys/HookKeysEngine.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 
 namespace hook_keys {
@@ -15,6 +16,16 @@ constexpr std::uint8_t kModulationController = 1;
 constexpr std::uint8_t kSustainController = 64;
 constexpr std::uint8_t kAllSoundOffController = 120;
 constexpr std::uint8_t kAllNotesOffController = 123;
+
+std::uint8_t applyVelocityCurve(
+    std::uint8_t velocity, const std::array<std::uint8_t, 5>& curve) noexcept {
+  const auto position = (static_cast<float>(velocity) / 127.0f) * 4.0f;
+  const auto segment = std::min<std::size_t>(3, static_cast<std::size_t>(position));
+  const auto fraction = position - static_cast<float>(segment);
+  const auto mapped = static_cast<float>(curve[segment]) +
+      (static_cast<float>(curve[segment + 1]) - static_cast<float>(curve[segment])) * fraction;
+  return static_cast<std::uint8_t>(std::clamp(std::lround(mapped), 1L, 127L));
+}
 }
 
 HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
@@ -214,7 +225,7 @@ void HookKeysEngine::routeNoteOn(
     }
     if (previousTarget >= 0) synth->noteOff(static_cast<std::uint8_t>(previousTarget));
     activeNotes_[index][inputSlot][sourceNote] = targetNote;
-    synth->noteOn(targetNote, velocity);
+    synth->noteOn(targetNote, applyVelocityCurve(velocity, config.velocityCurve));
   }
 }
 

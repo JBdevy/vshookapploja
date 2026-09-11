@@ -236,7 +236,10 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
 - (BOOL)configureModule:(NSInteger)moduleIndex enabled:(BOOL)enabled inputSlot:(NSInteger)inputSlot
                  lowNote:(NSInteger)lowNote highNote:(NSInteger)highNote octave:(NSInteger)octave
                  sustain:(BOOL)sustain modulation:(BOOL)modulation volumeDb:(float)volumeDb
-                polyphony:(NSInteger)polyphony outputChannelStart:(NSInteger)outputChannelStart
+                polyphony:(NSInteger)polyphony velocityCurve0:(NSInteger)velocityCurve0
+           velocityCurve1:(NSInteger)velocityCurve1 velocityCurve2:(NSInteger)velocityCurve2
+           velocityCurve3:(NSInteger)velocityCurve3 velocityCurve4:(NSInteger)velocityCurve4
+       outputChannelStart:(NSInteger)outputChannelStart
        outputChannelCount:(NSInteger)outputChannelCount {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
@@ -252,6 +255,12 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   config.modulationInputEnabled = modulation;
   config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
   config.polyphony = static_cast<std::uint16_t>(std::clamp<NSInteger>(polyphony, 1, 128));
+  config.velocityCurve = {
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve0, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve1, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve2, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve3, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve4, 0, 127))};
   config.outputChannelStart = static_cast<std::uint8_t>(std::clamp<NSInteger>(outputChannelStart, 0, 31));
   config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
   return runtime->setModuleConfig(static_cast<std::size_t>(moduleIndex), config);
@@ -315,6 +324,20 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
 - (BOOL)setTempo:(float)bpm {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && runtime->setTempo(bpm);
+}
+
+- (BOOL)configureMetronomeEnabled:(BOOL)enabled bpm:(float)bpm volume:(float)volume
+                       clickSound:(NSInteger)clickSound accentEnabled:(BOOL)accentEnabled
+                doubleTimeEnabled:(BOOL)doubleTimeEnabled
+           timeSignatureNumerator:(NSInteger)timeSignatureNumerator {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr) return NO;
+  runtime->setMetronome(
+      enabled, bpm, volume,
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(clickSound, 1, 3)),
+      accentEnabled, doubleTimeEnabled,
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(timeSignatureNumerator, 1, 16)));
+  return YES;
 }
 
 - (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled {

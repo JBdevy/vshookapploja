@@ -6,6 +6,7 @@ const VIEWPORT_SETTLE_DELAY_MS = 80;
 
 let initialized = false;
 let largestViewportHeight = 0;
+let lastViewportWidth = 0;
 let nativeKeyboardOpen = false;
 let nativeKeyboardHeight = 0;
 let viewportFrame: number | null = null;
@@ -62,7 +63,20 @@ function setKeyboardState(open: boolean, keyboardHeight = 0): void {
 function updateVisualViewport(): void {
   const viewport = window.visualViewport;
   const height = Math.round(viewport?.height ?? window.innerHeight);
+  const width = Math.round(viewport?.width ?? window.innerWidth);
   const offsetTop = Math.round(viewport?.offsetTop ?? 0);
+
+  // Mudou a largura, a tela girou. A maior altura da orientação anterior vira
+  // uma referência falsa: em paisagem ela faria o app inferir um teclado aberto
+  // do tamanho da diferença entre as duas orientações. O giro do login para o
+  // player é programático e nem sempre emite orientationchange, então a
+  // largura é a única pista confiável.
+  if (width !== lastViewportWidth) {
+    lastViewportWidth = width;
+    largestViewportHeight = nativeKeyboardOpen
+      ? height + Math.max(0, Math.round(nativeKeyboardHeight))
+      : height;
+  }
   largestViewportHeight = Math.max(largestViewportHeight, height);
 
   document.documentElement.style.setProperty('--app-viewport-height', `${height}px`);
@@ -80,11 +94,10 @@ function updateVisualViewport(): void {
 }
 
 function onOrientationChange(): void {
+  // updateVisualViewport() refaz a referência de altura ao ver a largura mudar.
   window.setTimeout(() => {
-    if (!activeEditable() && !nativeKeyboardOpen) {
-      largestViewportHeight = Math.round(window.visualViewport?.height ?? window.innerHeight);
-    }
     scheduleViewportUpdate();
+    scheduleSettledReveal(80);
   }, 300);
 }
 
@@ -170,6 +183,7 @@ export async function initializeKeyboardExperience(): Promise<void> {
   document.documentElement.dataset.keyboard = 'closed';
   document.documentElement.dataset.inputFocused = 'false';
   largestViewportHeight = Math.round(window.visualViewport?.height ?? window.innerHeight);
+  lastViewportWidth = Math.round(window.visualViewport?.width ?? window.innerWidth);
   updateVisualViewport();
 
   document.addEventListener('focusin', onFocusIn);

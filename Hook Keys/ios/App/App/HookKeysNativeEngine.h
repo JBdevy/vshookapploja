@@ -32,6 +32,11 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
               modulation:(BOOL)modulation
                 volumeDb:(float)volumeDb
                polyphony:(NSInteger)polyphony
+          velocityCurve0:(NSInteger)velocityCurve0
+          velocityCurve1:(NSInteger)velocityCurve1
+          velocityCurve2:(NSInteger)velocityCurve2
+          velocityCurve3:(NSInteger)velocityCurve3
+          velocityCurve4:(NSInteger)velocityCurve4
       outputChannelStart:(NSInteger)outputChannelStart
       outputChannelCount:(NSInteger)outputChannelCount;
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex
@@ -67,6 +72,13 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
                    data2:(NSInteger)data2
                timestamp:(uint64_t)timestamp;
 - (BOOL)setTempo:(float)bpm;
+- (BOOL)configureMetronomeEnabled:(BOOL)enabled
+                              bpm:(float)bpm
+                           volume:(float)volume
+                       clickSound:(NSInteger)clickSound
+                    accentEnabled:(BOOL)accentEnabled
+                doubleTimeEnabled:(BOOL)doubleTimeEnabled
+           timeSignatureNumerator:(NSInteger)timeSignatureNumerator;
 - (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled;
 - (void)setCompatibilityMode:(BOOL)enabled;
 - (void)stopAllNotes;

@@ -46,6 +46,11 @@ unsafe extern "C" {
         modulation: i32,
         volume_db: f32,
         polyphony: i32,
+        velocity_curve0: i32,
+        velocity_curve1: i32,
+        velocity_curve2: i32,
+        velocity_curve3: i32,
+        velocity_curve4: i32,
         output_channel_start: i32,
         output_channel_count: i32,
     ) -> i32;
@@ -83,6 +88,16 @@ unsafe extern "C" {
         release_ms: f32,
     ) -> i32;
     fn hk_runtime_set_tempo(handle: *mut c_void, bpm: f32) -> i32;
+    fn hk_runtime_configure_metronome(
+        handle: *mut c_void,
+        enabled: i32,
+        bpm: f32,
+        volume: f32,
+        click_sound: i32,
+        accent_enabled: i32,
+        double_time_enabled: i32,
+        numerator: i32,
+    );
     fn hk_runtime_set_output_gain(handle: *mut c_void, db: f32, enabled: i32);
     fn hk_runtime_stop_all_notes(handle: *mut c_void);
     fn hk_runtime_render(handle: *mut c_void, output: *mut f32, frames: usize, channels: usize);
@@ -197,6 +212,11 @@ struct ModuleConfig {
     modulation: bool,
     volume_db: f32,
     polyphony: i32,
+    velocity_curve0: i32,
+    velocity_curve1: i32,
+    velocity_curve2: i32,
+    velocity_curve3: i32,
+    velocity_curve4: i32,
     output_channel_start: i32,
     output_channel_count: i32,
 }
@@ -484,6 +504,11 @@ fn configure_module(config: ModuleConfig, state: State<'_, AppState>) -> Result<
             config.modulation as i32,
             config.volume_db,
             config.polyphony,
+            config.velocity_curve0,
+            config.velocity_curve1,
+            config.velocity_curve2,
+            config.velocity_curve3,
+            config.velocity_curve4,
             config.output_channel_start,
             config.output_channel_count,
         )
@@ -595,6 +620,33 @@ fn set_tempo(bpm: f32, state: State<'_, AppState>) -> Result<(), String> {
     } else {
         Err("Não foi possível alterar o tempo.".into())
     }
+}
+
+#[tauri::command]
+fn configure_metronome(
+    enabled: bool,
+    bpm: f32,
+    volume: f32,
+    click_sound: i32,
+    accent_enabled: bool,
+    double_time_enabled: bool,
+    time_signature_numerator: i32,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    unsafe {
+        hk_runtime_configure_metronome(
+            engine.pointer(),
+            enabled as i32,
+            bpm.clamp(60.0, 600.0),
+            volume.clamp(0.0, 1.0),
+            click_sound.clamp(1, 3),
+            accent_enabled as i32,
+            double_time_enabled as i32,
+            time_signature_numerator.clamp(1, 16),
+        )
+    };
+    Ok(())
 }
 
 #[tauri::command]
@@ -799,6 +851,7 @@ fn main() {
             configure_module_envelope,
             send_midi,
             set_tempo,
+            configure_metronome,
             set_output_gain,
             set_compatibility_mode,
             stop_all_notes,

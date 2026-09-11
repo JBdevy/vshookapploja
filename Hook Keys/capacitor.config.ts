@@ -12,7 +12,10 @@ const config: CapacitorConfig = {
   },
   ios: {
     backgroundColor: '#070504',
-    contentInset: 'always',
+    // O layout ja reserva a safe area no CSS (viewport-fit=cover + env()).
+    // Com 'always' a WKWebView reservava a mesma margem de novo e o app
+    // ficava afastado das bordas nos dois lados.
+    contentInset: 'never',
   },
   plugins: {
     Keyboard: {

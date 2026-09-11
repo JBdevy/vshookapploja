@@ -44,6 +44,7 @@ interface TracksPanelOptions {
 }
 
 const PLAYLIST_NAME_LIMIT = 40;
+const BLOCK_NAME_LIMIT = 12;
 
 export function createTracksPanelMarkup(): string {
   return `
@@ -98,6 +99,7 @@ export class TracksPanelController {
   private reorderGesture: TrackReorderGesture | null = null;
   private suppressNextPlaylistClick = false;
   private managedBlockId: string | null = null;
+  private managedBlockNameDraft = '';
   private autoEnabled: boolean;
   private editMode = false;
   private setMenuOpen = false;
@@ -140,7 +142,7 @@ export class TracksPanelController {
     if (!(target instanceof Element)) return;
 
     const keyButton = target.closest<HTMLButtonElement>('button[data-on-screen-key]');
-    const nameField = target.closest<HTMLElement>('[data-playlist-name-field]');
+    const nameField = target.closest<HTMLElement>('[data-playlist-name-field], [data-block-name-field]');
     if (nameField && this.root.contains(nameField)) {
       this.setNameKeyboardOpen(true, nameField);
       return;
@@ -148,14 +150,23 @@ export class TracksPanelController {
     if (!keyButton) this.setNameKeyboardOpen(false);
 
     const rawKey = keyButton?.dataset.onScreenKey;
-    if (keyButton && rawKey && this.draft) {
+    if (keyButton && rawKey && (this.draft || this.managedBlockId)) {
       const key = resolveOnScreenKey(keyButton, rawKey);
-      if (key === 'enter') {
+      if (this.managedBlockId && !this.draft) {
+        if (key === 'enter') void this.saveManagedBlockName();
+        else if (key) {
+          this.managedBlockNameDraft = applyOnScreenKey(this.managedBlockNameDraft, key, BLOCK_NAME_LIMIT);
+          this.renderManagedBlockName();
+          this.clearMessage();
+        }
+      } else if (key === 'enter') {
         this.setNameKeyboardOpen(false);
         this.openTrackSelector();
       }
       else if (key) {
-        this.draft.name = applyOnScreenKey(this.draft.name, key, PLAYLIST_NAME_LIMIT);
+        const draft = this.draft;
+        if (!draft) return;
+        draft.name = applyOnScreenKey(draft.name, key, PLAYLIST_NAME_LIMIT);
         this.renderDraftName();
         this.clearMessage();
       }
@@ -240,6 +251,12 @@ export class TracksPanelController {
       this.closeEditor();
     } else if (action === 'block-delete-confirm') {
       void this.deleteManagedBlock();
+    } else if (action === 'block-rename') {
+      this.renderBlockNameEditor();
+    } else if (action === 'block-rename-cancel') {
+      if (this.managedBlockId) this.openBlockManager(this.managedBlockId);
+    } else if (action === 'block-rename-save') {
+      void this.saveManagedBlockName();
     }
   }
 
@@ -729,20 +746,68 @@ export class TracksPanelController {
     const block = (this.blocksByScope.get(scopeId) ?? []).find(({ id }) => id === blockId);
     if (!block) return;
     this.managedBlockId = block.id;
+    this.managedBlockNameDraft = block.name.slice(0, BLOCK_NAME_LIMIT);
     const editor = this.getEditor();
     editor.hidden = false;
     editor.innerHTML = `
       <div class="tracks-playlist-manager">
         <span>Organização da lista</span>
         <h3>${escapeMarkup(block.name)}</h3>
-        <p>O bloco será apagado. As músicas continuarão na lista.</p>
+        <p>Renomeie o bloco ou apague apenas esta divisão da lista.</p>
         <p data-playlist-message role="alert"></p>
         <div class="tracks-playlist-editor__actions">
           <button type="button" data-tracks-action="block-delete-cancel">Voltar</button>
+          <button type="button" data-tracks-action="block-rename">Renomear</button>
           <button class="is-danger" type="button" data-tracks-action="block-delete-confirm">Apagar</button>
         </div>
       </div>
     `;
+  }
+
+  private renderBlockNameEditor(): void {
+    if (!this.managedBlockId) return;
+    const editor = this.getEditor();
+    editor.hidden = false;
+    editor.innerHTML = `
+      <div class="tracks-playlist-name-stage tracks-block-name-stage">
+        <label>
+          <span>Nome do bloco · máximo ${BLOCK_NAME_LIMIT} caracteres</span>
+          <span class="on-screen-text-field is-input-active" role="textbox" tabindex="0" aria-label="Nome do bloco" aria-readonly="true" data-block-name-field>
+            <span data-block-name-value>${escapeMarkup(this.managedBlockNameDraft)}</span><i aria-hidden="true"></i>
+          </span>
+        </label>
+        <p data-playlist-message role="alert"></p>
+        <div class="tracks-playlist-editor__actions">
+          <button type="button" data-tracks-action="block-rename-cancel">Voltar</button>
+          <button type="button" data-tracks-action="block-rename-save">Salvar</button>
+        </div>
+        ${createOnScreenKeyboardMarkup('Teclado para o nome do bloco', true)}
+      </div>
+    `;
+  }
+
+  private renderManagedBlockName(): void {
+    const value = this.getEditor().querySelector<HTMLElement>('[data-block-name-value]');
+    if (value) value.textContent = this.managedBlockNameDraft;
+  }
+
+  private async saveManagedBlockName(): Promise<void> {
+    const blockId = this.managedBlockId;
+    const name = this.managedBlockNameDraft.trim().slice(0, BLOCK_NAME_LIMIT);
+    if (!blockId || !name) {
+      this.setEditorMessage('Digite um nome para o bloco.');
+      return;
+    }
+    try {
+      const updated = await this.library.renameBlock(blockId, name);
+      const scopeBlocks = this.blocksByScope.get(updated.scopeId) ?? [];
+      this.blocksByScope.set(updated.scopeId, scopeBlocks.map((block) => block.id === updated.id ? updated : block));
+      this.closeEditor();
+      this.renderLibrary();
+      this.setMessage('Bloco renomeado.');
+    } catch {
+      this.setEditorMessage('Não foi possível renomear o bloco.');
+    }
   }
 
   private async deleteManagedBlock(): Promise<void> {
@@ -778,6 +843,7 @@ export class TracksPanelController {
     editor.innerHTML = '';
     this.draft = null;
     this.managedBlockId = null;
+    this.managedBlockNameDraft = '';
   }
 
   private getEditor(): HTMLElement {

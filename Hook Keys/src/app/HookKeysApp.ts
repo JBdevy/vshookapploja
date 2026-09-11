@@ -13,10 +13,41 @@ function requiredElement<T extends Element>(parent: ParentNode, selector: string
   return element;
 }
 
+type OctaveTransitionDirection = 'enter' | 'exit';
+
+function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): string {
+  const blackKeyAfter = new Set([0, 1, 3, 4, 5]);
+  const octaves = Array.from({ length: 7 }, (_, octaveIndex) => {
+    const angle = (octaveIndex / 7) * Math.PI * 2 - Math.PI / 2;
+    const spiralX = Math.round(Math.cos(angle) * (48 + octaveIndex * 5));
+    const spiralY = Math.round(Math.sin(angle) * (42 + octaveIndex * 4));
+    const keys = Array.from({ length: 7 }, (_, keyIndex) => `
+      <i class="octave-transition__white-key" style="--key-index:${keyIndex}">
+        ${blackKeyAfter.has(keyIndex) ? '<b aria-hidden="true"></b>' : ''}
+      </i>
+    `).join('');
+    return `
+      <span
+        class="octave-transition__octave"
+        style="--octave-index:${octaveIndex};--octave-reverse-index:${6 - octaveIndex};--spiral-x:${spiralX}vw;--spiral-y:${spiralY}vh;--spiral-rotation:${octaveIndex % 2 ? 620 : -620}deg"
+      >${keys}</span>
+    `;
+  }).join('');
+  return `
+    <div class="octave-transition octave-transition--${direction}" data-octave-transition aria-hidden="true">
+      <div class="octave-transition__rings"><i></i><i></i><i></i></div>
+      <div class="octave-transition__brand"><span>HOOK</span> KEYS</div>
+      <div class="octave-transition__keyboard">${octaves}</div>
+      <div class="octave-transition__flare"></div>
+    </div>
+  `;
+}
+
 export class HookKeysApp {
   private readonly screenRoot: HTMLElement;
   private playerScreen: PlayerScreen | null = null;
   private stopLicenseMonitoring: (() => void) | null = null;
+  private octaveTransition: HTMLElement | null = null;
 
   constructor(
     root: HTMLElement,
@@ -48,7 +79,7 @@ export class HookKeysApp {
       this.screenRoot,
       this.sessions,
       (session) => this.showPlayer(session),
-      async () => (await this.accountApi.getPublicAppSettings()).supportUrl,
+      () => this.accountApi.getPublicAppSettings(),
     );
     void authScreen.start();
   }
@@ -88,10 +119,48 @@ export class HookKeysApp {
       playerBackup,
     );
     this.playerScreen.mount();
+    void this.playOctaveTransition('enter');
   }
 
   private async logout(session: AuthenticatedSession): Promise<void> {
     await this.sessions.logout(session);
-    this.showLogin();
+    await this.playOctaveTransition('exit', () => this.showLogin());
+  }
+
+  private playOctaveTransition(
+    direction: OctaveTransitionDirection,
+    swapScreen?: () => void,
+  ): Promise<void> {
+    this.octaveTransition?.remove();
+    const holder = document.createElement('div');
+    holder.innerHTML = createOctaveTransitionMarkup(direction).trim();
+    const overlay = holder.firstElementChild as HTMLElement | null;
+    if (!overlay) {
+      swapScreen?.();
+      return Promise.resolve();
+    }
+    this.octaveTransition = overlay;
+    document.body.append(overlay);
+
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const totalDuration = reducedMotion ? 260 : 3000;
+    const swapDelay = reducedMotion ? 100 : 2200;
+    window.requestAnimationFrame(() => overlay.classList.add('is-running'));
+
+    return new Promise((resolve) => {
+      let swapped = false;
+      const swap = () => {
+        if (swapped) return;
+        swapped = true;
+        swapScreen?.();
+      };
+      if (swapScreen) window.setTimeout(swap, swapDelay);
+      window.setTimeout(() => {
+        swap();
+        overlay.remove();
+        if (this.octaveTransition === overlay) this.octaveTransition = null;
+        resolve();
+      }, totalDuration);
+    });
   }
 }

@@ -32,6 +32,7 @@ struct ModuleConfig final {
   std::int8_t octaveShift = 0;
   std::uint8_t outputChannelStart = 0;
   std::uint8_t outputChannelCount = 2;
+  std::array<std::uint8_t, 5> velocityCurve{0, 32, 64, 96, 127};
   std::uint16_t polyphony = 64;
   float gainLinear = 1.0f;
   ModuleEffectsConfig effects{};
@@ -46,6 +47,7 @@ struct ModuleConfig final {
     octaveShift = std::clamp<std::int8_t>(octaveShift, -3, 3);
     outputChannelStart = std::min<std::uint8_t>(outputChannelStart, 31);
     outputChannelCount = outputChannelCount == 1 ? 1 : 2;
+    for (auto& point : velocityCurve) point = std::min<std::uint8_t>(point, 127);
     polyphony = std::clamp<std::uint16_t>(polyphony, 1, 128);
     gainLinear = std::clamp(gainLinear, 0.0f, 2.0f);
     effects.normalize();

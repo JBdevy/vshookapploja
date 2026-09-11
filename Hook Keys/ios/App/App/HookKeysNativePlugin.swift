@@ -18,6 +18,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "configureModuleEnvelope", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sendMidi", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTempo", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "configureMetronome", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setOutputGain", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setCompatibilityMode", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopAllNotes", returnType: CAPPluginReturnPromise),
@@ -106,6 +107,11 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
             modulation: call.getBool("modulation", true),
             volumeDb: call.getFloat("volumeDb", 0),
             polyphony: min(128, max(1, call.getInt("polyphony", 64))),
+            velocityCurve0: min(127, max(0, call.getInt("velocityCurve0", 0))),
+            velocityCurve1: min(127, max(0, call.getInt("velocityCurve1", 32))),
+            velocityCurve2: min(127, max(0, call.getInt("velocityCurve2", 64))),
+            velocityCurve3: min(127, max(0, call.getInt("velocityCurve3", 96))),
+            velocityCurve4: min(127, max(0, call.getInt("velocityCurve4", 127))),
             outputChannelStart: min(31, max(0, call.getInt("outputChannelStart", 0))),
             outputChannelCount: call.getInt("outputChannelCount", 2) == 1 ? 1 : 2
         )
@@ -168,6 +174,19 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         } else {
             call.reject("O motor ainda não foi inicializado.")
         }
+    }
+
+    @objc func configureMetronome(_ call: CAPPluginCall) {
+        let ok = engine.configureMetronomeEnabled(
+            call.getBool("enabled", false),
+            bpm: call.getFloat("bpm", 120),
+            volume: min(1, max(0, call.getFloat("volume", 1))),
+            clickSound: min(3, max(1, call.getInt("clickSound", 1))),
+            accentEnabled: call.getBool("accentEnabled", false),
+            doubleTimeEnabled: call.getBool("doubleTimeEnabled", false),
+            timeSignatureNumerator: min(16, max(1, call.getInt("timeSignatureNumerator", 4)))
+        )
+        if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }
 
     @objc func stopAllNotes(_ call: CAPPluginCall) {

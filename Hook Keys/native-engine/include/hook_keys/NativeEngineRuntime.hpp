@@ -38,6 +38,10 @@ public:
       std::size_t moduleIndex, float attackMs, float holdMs,
       float decayMs, float releaseMs) noexcept;
   [[nodiscard]] bool setTempo(float bpm) noexcept;
+  void setMetronome(
+      bool enabled, float bpm, float volume, std::uint8_t clickSound,
+      bool accentEnabled, bool doubleTimeEnabled,
+      std::uint8_t timeSignatureNumerator) noexcept;
   void setOutputGainDb(float db, bool enabled) noexcept;
   void stopAllNotes() noexcept;
   void render(float* left, float* right, std::size_t frames) noexcept;
@@ -56,7 +60,27 @@ private:
   std::unique_ptr<HookKeysEngine> engine_;
   std::array<ModuleConfig, kModuleCount> configs_{};
   std::mutex configMutex_;
+  std::atomic<bool> metronomeEnabled_{false};
+  std::atomic<float> metronomeBpm_{120.0f};
+  std::atomic<float> metronomeVolume_{1.0f};
+  std::atomic<std::uint8_t> metronomeClickSound_{1};
+  std::atomic<bool> metronomeAccentEnabled_{false};
+  std::atomic<bool> metronomeDoubleTimeEnabled_{false};
+  std::atomic<std::uint8_t> metronomeNumerator_{4};
+  bool metronomeWasEnabled_ = false;
+  double metronomeFramesUntilBeat_ = 0.0;
+  std::size_t metronomeBeatIndex_ = 0;
+  std::size_t metronomeClickFrame_ = 0;
+  std::size_t metronomeClickLength_ = 0;
+  float metronomeClickFrequency_ = 1350.0f;
+  float metronomeClickAmplitude_ = 0.0f;
+  std::uint8_t metronomeClickWaveform_ = 1;
   std::atomic<float> outputGainLinear_{1.0f};
+
+  [[nodiscard]] bool beginMetronomeBlock() noexcept;
+  void addMetronome(float* left, float* right, std::size_t frames) noexcept;
+  void addMetronomeInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
+  [[nodiscard]] float renderMetronomeSample() noexcept;
 };
 
 } // namespace hook_keys

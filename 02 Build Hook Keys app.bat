@@ -63,7 +63,7 @@ echo.
 echo ==========================================
 echo   PREPARANDO SOMENTE O HOOK KEYS
 echo ==========================================
-git add -- ".github/workflows/hook-keys-release.yml" "Build Hook Keys.bat" "Hook Keys"
+git add -- ".github/workflows/hook-keys-release.yml" "Hook Keys"
 if errorlevel 1 goto erro
 
 git diff --cached --quiet

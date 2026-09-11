@@ -220,6 +220,11 @@ public class HookKeysNativePlugin extends Plugin {
             call.getBoolean("modulation", true),
             call.getFloat("volumeDb", 0.0f),
             Math.max(1, Math.min(128, call.getInt("polyphony", 64))),
+            Math.max(0, Math.min(127, call.getInt("velocityCurve0", 0))),
+            Math.max(0, Math.min(127, call.getInt("velocityCurve1", 32))),
+            Math.max(0, Math.min(127, call.getInt("velocityCurve2", 64))),
+            Math.max(0, Math.min(127, call.getInt("velocityCurve3", 96))),
+            Math.max(0, Math.min(127, call.getInt("velocityCurve4", 127))),
             Math.max(0, Math.min(31, call.getInt("outputChannelStart", 0))),
             call.getInt("outputChannelCount", 2) == 1 ? 1 : 2
         );
@@ -291,6 +296,21 @@ public class HookKeysNativePlugin extends Plugin {
     @PluginMethod
     public void setTempo(PluginCall call) {
         if (nativeSetTempo(call.getFloat("bpm", 120.0f))) call.resolve();
+        else call.reject("O motor ainda não foi inicializado.");
+    }
+
+    @PluginMethod
+    public void configureMetronome(PluginCall call) {
+        boolean ok = nativeConfigureMetronome(
+            call.getBoolean("enabled", false),
+            call.getFloat("bpm", 120.0f),
+            Math.max(0.0f, Math.min(1.0f, call.getFloat("volume", 1.0f))),
+            Math.max(1, Math.min(3, call.getInt("clickSound", 1))),
+            call.getBoolean("accentEnabled", false),
+            call.getBoolean("doubleTimeEnabled", false),
+            Math.max(1, Math.min(16, call.getInt("timeSignatureNumerator", 4)))
+        );
+        if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
     }
 
@@ -555,6 +575,11 @@ public class HookKeysNativePlugin extends Plugin {
         boolean modulation,
         float volumeDb,
         int polyphony,
+        int velocityCurve0,
+        int velocityCurve1,
+        int velocityCurve2,
+        int velocityCurve3,
+        int velocityCurve4,
         int outputChannelStart,
         int outputChannelCount
     );
@@ -586,6 +611,10 @@ public class HookKeysNativePlugin extends Plugin {
         int moduleIndex, float attackMs, float holdMs, float decayMs, float releaseMs
     );
     private static native boolean nativeSetTempo(float bpm);
+    private static native boolean nativeConfigureMetronome(
+        boolean enabled, float bpm, float volume, int clickSound,
+        boolean accentEnabled, boolean doubleTimeEnabled, int timeSignatureNumerator
+    );
     private static native boolean nativeSetOutputGain(float db, boolean enabled);
     private static native void nativeStopAllNotes();
 }

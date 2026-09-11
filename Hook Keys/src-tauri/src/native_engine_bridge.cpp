@@ -34,7 +34,9 @@ int hk_runtime_send_midi(void* handle, std::uint8_t inputSlot, std::uint8_t stat
 int hk_runtime_configure_module(
     void* handle, std::size_t moduleIndex, int enabled, int inputSlot, int lowNote,
     int highNote, int octave, int sustain, int modulation, float volumeDb,
-    int polyphony, int outputChannelStart, int outputChannelCount) noexcept {
+    int polyphony, int velocityCurve0, int velocityCurve1, int velocityCurve2,
+    int velocityCurve3, int velocityCurve4, int outputChannelStart,
+    int outputChannelCount) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
   hook_keys::ModuleConfig config;
   config.enabled = enabled != 0;
@@ -47,6 +49,12 @@ int hk_runtime_configure_module(
   config.modulationInputEnabled = modulation != 0;
   config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
   config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
+  config.velocityCurve = {
+      static_cast<std::uint8_t>(std::clamp(velocityCurve0, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp(velocityCurve1, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp(velocityCurve2, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp(velocityCurve3, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp(velocityCurve4, 0, 127))};
   config.outputChannelStart = static_cast<std::uint8_t>(std::clamp(outputChannelStart, 0, 31));
   config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
   return runtime(handle)->setModuleConfig(moduleIndex, config) ? 1 : 0;
@@ -90,6 +98,17 @@ int hk_runtime_configure_envelope(void* handle, std::size_t moduleIndex, float a
 
 int hk_runtime_set_tempo(void* handle, float bpm) noexcept {
   return handle && runtime(handle)->setTempo(bpm) ? 1 : 0;
+}
+
+void hk_runtime_configure_metronome(
+    void* handle, int enabled, float bpm, float volume, int clickSound,
+    int accentEnabled, int doubleTimeEnabled, int numerator) noexcept {
+  if (!handle) return;
+  runtime(handle)->setMetronome(
+      enabled != 0, bpm, volume,
+      static_cast<std::uint8_t>(std::clamp(clickSound, 1, 3)),
+      accentEnabled != 0, doubleTimeEnabled != 0,
+      static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)));
 }
 
 void hk_runtime_set_output_gain(void* handle, float db, int enabled) noexcept {

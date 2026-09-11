@@ -17,6 +17,7 @@ export interface AppSettingsResponse {
 
 export interface PublicAppSettingsResponse {
   ok: true;
+  acquireLicenseUrl: string;
   supportUrl: string;
 }
 
