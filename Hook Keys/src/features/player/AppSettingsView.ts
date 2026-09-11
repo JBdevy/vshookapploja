@@ -32,67 +32,25 @@ function createDeviceOptions(
 }
 
 export function createAppSettingsMarkup(
-  devices: readonly MidiInputDevice[],
-  selectedDeviceIds: readonly (string | null)[],
-  bufferSize: BufferSize,
   compatibilityMode: boolean,
   bottomView: PlayerBottomView,
   allowKeyboardView: boolean,
   uiSoundEnabled: boolean,
   uiVibrationEnabled: boolean,
-  audioDevices: readonly AudioOutputDevice[],
-  selectedAudioDeviceId: string,
-  audioRouting: AudioBusRouting,
 ): string {
-  const bufferOptions = BUFFER_SIZES.map((size) =>
-    `<option value="${size}"${size === bufferSize ? ' selected' : ''}>${size}</option>`,
-  ).join('');
-  const selectedAudioDevice = audioDevices.find(({ id }) => id === selectedAudioDeviceId);
-  const channelCount = selectedAudioDevice?.channels ?? 2;
-  const audioDeviceOptions = audioDevices.map((device) => `
-    <option value="${escapeHtml(device.id)}"${device.id === selectedAudioDeviceId ? ' selected' : ''}>${escapeHtml(device.name)} · ${device.channels} canais</option>
-  `).join('');
-
   return `
-    <section class="app-settings-panel" aria-label="Configurações">
-      ${Array.from({ length: 3 }, (_, index) => `
-        <label class="app-settings-field">
-          <span>Dispositivo MIDI ${index + 1}</span>
-          <select data-setting="midi-device" data-midi-slot="${index}">
-            ${createDeviceOptions(devices, selectedDeviceIds[index] ?? null)}
-          </select>
-        </label>
-      `).join('')}
+    <section class="app-settings-panel app-settings-panel--main" aria-label="Configurações">
+      <button class="app-settings-navigation-card" type="button" data-settings-page="midi">
+        <strong>Dispositivos MIDI</strong>
+        <small>Entradas MIDI e tamanho do buffer</small>
+      </button>
 
-      <label class="app-settings-field">
-        <span>Buffer Size</span>
-        <select data-setting="buffer-size">
-          ${bufferOptions}
-        </select>
-      </label>
+      <button class="app-settings-navigation-card" type="button" data-settings-page="audio">
+        <strong>Dispositivo de áudio</strong>
+        <small>Placa de áudio e canais de saída</small>
+      </button>
 
-      <label class="app-settings-field app-settings-field--audio-device">
-        <span>Dispositivo de áudio</span>
-        <select data-setting="audio-device">
-          <option value=""${selectedAudioDeviceId === '' ? ' selected' : ''}>Padrão</option>
-          ${audioDeviceOptions}
-        </select>
-      </label>
-
-      ${([
-        ['timbres', 'Saídas - Timbres'],
-        ['pads', 'Saídas - Pads'],
-        ['effects', 'Saídas - Effects'],
-      ] as const).map(([bus, label]) => `
-        <label class="app-settings-field app-settings-field--audio-route">
-          <span>${label}</span>
-          <select data-setting="audio-route" data-audio-bus="${bus}">
-            ${createAudioRouteOptions(channelCount, audioRouting[bus])}
-          </select>
-        </label>
-      `).join('')}
-
-      <label class="app-settings-toggle">
+      <label class="app-settings-toggle app-settings-toggle--compatibility">
         <span>
           <strong>Modo compatibilidade</strong>
           <small>Para teclados que não são controladores MIDI.</small>
@@ -101,7 +59,7 @@ export function createAppSettingsMarkup(
         <i aria-hidden="true"></i>
       </label>
 
-      <label class="app-settings-toggle">
+      <label class="app-settings-toggle app-settings-toggle--sound">
         <span>
           <strong>Som da interface</strong>
           <small>Som ao tocar em botões, músicas e controles.</small>
@@ -110,7 +68,7 @@ export function createAppSettingsMarkup(
         <i aria-hidden="true"></i>
       </label>
 
-      <label class="app-settings-toggle">
+      <label class="app-settings-toggle app-settings-toggle--vibration">
         <span>
           <strong>Vibração da interface</strong>
           <small>Resposta tátil ao tocar e mover controles.</small>
@@ -126,6 +84,72 @@ export function createAppSettingsMarkup(
           <button type="button" data-setting-view="keyboard" class="${bottomView === 'keyboard' ? 'is-selected' : ''}" aria-pressed="${bottomView === 'keyboard'}">Keyboard</button>
         </div>
       </article>` : ''}
+    </section>
+  `;
+}
+
+export function createMidiSettingsMarkup(
+  devices: readonly MidiInputDevice[],
+  selectedDeviceIds: readonly (string | null)[],
+): string {
+  return `
+    <section class="app-settings-panel app-settings-panel--devices" aria-label="Dispositivos MIDI">
+      ${Array.from({ length: 3 }, (_, index) => `
+        <label class="app-settings-field app-settings-field--midi" data-midi-field="${index + 1}">
+          <span>Dispositivo MIDI ${index + 1}</span>
+          <select data-setting="midi-device" data-midi-slot="${index}">
+            ${createDeviceOptions(devices, selectedDeviceIds[index] ?? null)}
+          </select>
+        </label>
+      `).join('')}
+
+    </section>
+  `;
+}
+
+export function createAudioSettingsMarkup(
+  audioDevices: readonly AudioOutputDevice[],
+  selectedAudioDeviceId: string,
+  audioRouting: AudioBusRouting,
+  bufferSize: BufferSize,
+): string {
+  const bufferOptions = BUFFER_SIZES.map((size) =>
+    `<option value="${size}"${size === bufferSize ? ' selected' : ''}>${size}</option>`,
+  ).join('');
+  const selectedAudioDevice = audioDevices.find(({ id }) => id === selectedAudioDeviceId);
+  const channelCount = selectedAudioDevice?.channels ?? 2;
+  const audioDeviceOptions = audioDevices.map((device) => `
+    <option value="${escapeHtml(device.id)}"${device.id === selectedAudioDeviceId ? ' selected' : ''}>${escapeHtml(device.name)} · ${device.channels} canais</option>
+  `).join('');
+
+  return `
+    <section class="app-settings-panel app-settings-panel--devices" aria-label="Dispositivo de áudio">
+      <label class="app-settings-field app-settings-field--audio-device">
+        <span>Dispositivo de áudio</span>
+        <select data-setting="audio-device">
+          <option value=""${selectedAudioDeviceId === '' ? ' selected' : ''}>Padrão</option>
+          ${audioDeviceOptions}
+        </select>
+      </label>
+
+      <label class="app-settings-field app-settings-field--buffer">
+        <span>Buffer Size</span>
+        <select data-setting="buffer-size">${bufferOptions}</select>
+      </label>
+
+      ${([
+        ['timbres', 'Saídas - Timbres'],
+        ['pads', 'Saídas - Pads'],
+        ['effects', 'Saídas - Effects'],
+      ] as const).map(([bus, label]) => `
+        <label class="app-settings-field app-settings-field--audio-route" data-audio-route-field="${bus}">
+          <span>${label}</span>
+          <select data-setting="audio-route" data-audio-bus="${bus}">
+            ${createAudioRouteOptions(channelCount, audioRouting[bus])}
+          </select>
+        </label>
+      `).join('')}
+
     </section>
   `;
 }

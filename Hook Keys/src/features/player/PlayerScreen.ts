@@ -11,7 +11,9 @@ import {
 } from '../midi/MidiInputService';
 import { createModuleFaderMarkup, ModuleFader, visualPositionToFaderDb } from './ModuleFader';
 import {
+  createAudioSettingsMarkup,
   createAppSettingsMarkup,
+  createMidiSettingsMarkup,
   DEFAULT_BUFFER_SIZE,
   isBufferSize,
   type BufferSize,
@@ -133,7 +135,7 @@ import {
 } from './PerformanceKeyboard';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
+type ModalKind = 'module-settings' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
 type BankId = 'A' | 'B';
 type PlayerView = 'bank' | 'pads-effects';
 
@@ -227,6 +229,7 @@ interface KnobDrag {
 
 type CcLearnTarget =
   | { kind: 'module-volume'; moduleNumber: number }
+  | { kind: 'module-control'; moduleNumber: number; control: string; label: string }
   | { kind: 'module-octave'; moduleNumber: number; direction: -1 | 1 }
   | { kind: 'output-volume'; bus: OutputBus }
   | { kind: 'metronome-volume' }
@@ -296,6 +299,7 @@ const PRESET_COLORS = [
 
 function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'module-volume') return `module:${target.moduleNumber}`;
+  if (target.kind === 'module-control') return `module-control:${target.moduleNumber}:${target.control}`;
   if (target.kind === 'module-octave') return `octave:${target.moduleNumber}:${target.direction > 0 ? 'up' : 'down'}`;
   if (target.kind === 'output-volume') return `output:${target.bus}`;
   if (target.kind === 'metronome-volume') return 'metronome:volume';
@@ -308,6 +312,7 @@ function ccMappingKey(target: CcLearnTarget): string {
 
 function ccLearnTargetLabel(target: CcLearnTarget): string {
   if (target.kind === 'module-volume') return `Volume do módulo ${target.moduleNumber}`;
+  if (target.kind === 'module-control') return `Módulo ${target.moduleNumber} · ${target.label}`;
   if (target.kind === 'output-volume') {
     const label = target.bus === 'effects'
       ? 'Efects'
@@ -331,6 +336,7 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
 
 function isCcMappingKey(value: string): boolean {
   if (/^module:[1-8]$/.test(value)) return true;
+  if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|compressor:[A-Za-z]+|reverb:[A-Za-z]+|delay:[A-Za-z]+)$/.test(value)) return true;
   if (/^octave:[1-8]:(up|down)$/.test(value)) return true;
   if (/^output:(music|pads|effects|master)$/.test(value)) return true;
   if (value === 'metronome:volume' || value === 'metronome:tap') return true;
@@ -757,6 +763,7 @@ export class PlayerScreen {
   private readonly outputFaderLearnGesture = new LongPressGesture(2_000);
   private readonly metronomeFaderLearnGesture = new LongPressGesture(2_000);
   private readonly ccControlHoldGesture = new LongPressGesture();
+  private readonly knobCcLearnGesture = new LongPressGesture(650, 8);
   private readonly faderDoubleTap = new DoubleTapTracker();
   private readonly bankKeyboardDoubleTap = new DoubleTapTracker();
   private readonly metronomeHoldGesture = new LongPressGesture();
@@ -1040,6 +1047,7 @@ export class PlayerScreen {
     this.outputFaderLearnGesture.cancel();
     this.metronomeFaderLearnGesture.cancel();
     this.ccControlHoldGesture.cancel();
+    this.knobCcLearnGesture.cancel();
     this.metronomeHoldGesture.cancel();
     this.tempoHoldGesture.cancel();
     this.keyboardAccentGesture.cancel();
@@ -2357,6 +2365,18 @@ export class PlayerScreen {
         continue;
       }
 
+      const moduleControlMatch = /^module-control:([1-8]):(.+)$/.exec(targetKey);
+      if (moduleControlMatch) {
+        const moduleNumber = Number(moduleControlMatch[1]);
+        const control = moduleControlMatch[2] ?? '';
+        if (control === 'delay:tap') {
+          if (risingEdge) this.tapMappedModuleDelay(moduleNumber);
+        } else {
+          this.applyMappedModuleControl(moduleNumber, control, input.value / 127);
+        }
+        continue;
+      }
+
       const octaveMatch = /^octave:([1-8]):(up|down)$/.exec(targetKey);
       if (octaveMatch && risingEdge) {
         this.shiftModuleOctave(Number(octaveMatch[1]), octaveMatch[2] === 'up' ? 1 : -1);
@@ -2614,7 +2634,8 @@ export class PlayerScreen {
 
     const titleId = `player-modal-title-${this.instanceId}`;
     const modal = document.createElement('section');
-    modal.className = `player-modal player-modal--${kind}`;
+    const settingsDetail = kind === 'app-settings-midi' || kind === 'app-settings-audio';
+    modal.className = `player-modal player-modal--${kind}${settingsDetail ? ' player-modal--app-settings' : ''}`;
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     modal.setAttribute('aria-labelledby', titleId);
@@ -2671,18 +2692,16 @@ export class PlayerScreen {
       bodyMarkup = createModuleDelayMarkup(moduleState?.settings ?? {}, this.metronome.getBpm());
     } else if (kind === 'app-settings') {
       bodyMarkup = createAppSettingsMarkup(
-        this.midiInput.getInputDevices(),
-        this.selectedMidiInputIds,
-        this.bufferSize,
         this.compatibilityMode,
         this.bottomView,
         true,
         this.uiFeedback.isSoundEnabled(),
         this.uiFeedback.isVibrationEnabled(),
-        this.audioDevices,
-        this.selectedAudioDeviceId,
-        this.audioRouting,
       );
+    } else if (kind === 'app-settings-midi') {
+      bodyMarkup = createMidiSettingsMarkup(this.midiInput.getInputDevices(), this.selectedMidiInputIds);
+    } else if (kind === 'app-settings-audio') {
+      bodyMarkup = createAudioSettingsMarkup(this.audioDevices, this.selectedAudioDeviceId, this.audioRouting, this.bufferSize);
     } else if (kind === 'keyboard-settings') {
       bodyMarkup = createPerformanceKeyboardSettingsMarkup(this.keyboardMidiSlot, this.keyboardStyle);
     } else if (kind === 'password-reset') {
@@ -2906,6 +2925,7 @@ export class PlayerScreen {
             <nav class="user-panel__buttons" aria-label="Opções da conta">
               <button class="user-panel__action-button" type="button" data-modal-action="make-backup">Fazer backup</button>
               <button class="user-panel__action-button" type="button" data-modal-action="restore-backup">Restaurar backup</button>
+              <input type="file" accept="application/json,.json" data-player-backup-file hidden>
               <button class="user-panel__action-button" type="button" data-modal-action="reset-password">Redefinir senha</button>
               <button class="user-panel__action-button" type="button" data-modal-action="show-devices">Dispositivos</button>
               <button class="user-panel__action-button" type="button" data-modal-action="acquire-license" disabled>Adquirir mais licença</button>
@@ -3027,6 +3047,12 @@ export class PlayerScreen {
     } else if (kind === 'app-settings') {
       eyebrow.textContent = 'Hook Keys';
       title.textContent = 'Configurações';
+    } else if (kind === 'app-settings-midi') {
+      eyebrow.textContent = 'Configurações';
+      title.textContent = 'Dispositivos MIDI';
+    } else if (kind === 'app-settings-audio') {
+      eyebrow.textContent = 'Configurações';
+      title.textContent = 'Dispositivo de áudio';
     } else if (kind === 'keyboard-settings') {
       eyebrow.textContent = 'Keyboard';
       title.textContent = 'Configurar teclado';
@@ -3067,6 +3093,35 @@ export class PlayerScreen {
 
     modal.addEventListener('click', (event) => {
       const target = event.target;
+      const customSelectOption = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-app-select-value]')
+        : null;
+      if (customSelectOption) {
+        const customSelect = customSelectOption.closest<HTMLElement>('.app-select');
+        const select = customSelect?.parentElement?.querySelector<HTMLSelectElement>('select[data-setting]');
+        if (select && !customSelectOption.disabled) {
+          select.value = customSelectOption.dataset.appSelectValue ?? '';
+          this.syncAppSelect(select);
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        this.closeAppSelectMenus(modal);
+        return;
+      }
+      const customSelectToggle = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-app-select-toggle]')
+        : null;
+      if (customSelectToggle) {
+        const customSelect = customSelectToggle.closest<HTMLElement>('.app-select');
+        const menu = customSelect?.querySelector<HTMLElement>('.app-select__menu');
+        const opening = menu?.hidden ?? false;
+        this.closeAppSelectMenus(modal);
+        if (menu && opening) {
+          menu.hidden = false;
+          customSelectToggle.setAttribute('aria-expanded', 'true');
+        }
+        return;
+      }
+      this.closeAppSelectMenus(modal);
       const viewButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-setting-view]')
         : null;
@@ -3079,6 +3134,15 @@ export class PlayerScreen {
         if (view === 'presets' || view === 'keyboard') {
           this.selectBottomView(view, modal);
         }
+        return;
+      }
+      const settingsPageButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-settings-page]')
+        : null;
+      if (kind === 'app-settings' && settingsPageButton) {
+        const page = settingsPageButton.dataset.settingsPage;
+        if (page === 'midi') this.openChildModal('app-settings-midi', null, settingsPageButton);
+        if (page === 'audio') this.openChildModal('app-settings-audio', null, settingsPageButton);
         return;
       }
       const keyboardMidiButton = target instanceof Element
@@ -3402,7 +3466,7 @@ export class PlayerScreen {
           this.commitEffectPad(modal, moduleNumber);
         }
         if (modalAction === 'confirm' && kind === 'tempo-edit') this.commitTempo(modal);
-        if (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay') && this.modalHistory.length > 0) {
+        if (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay') && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -3425,8 +3489,11 @@ export class PlayerScreen {
       }
 
       if (kind === 'user' && modalAction === 'restore-backup') {
-        const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
-        if (button) void this.restorePlayerBackup(modal, button);
+        const input = modal.querySelector<HTMLInputElement>('[data-player-backup-file]');
+        if (input) {
+          input.value = '';
+          input.click();
+        }
         return;
       }
 
@@ -3487,10 +3554,19 @@ export class PlayerScreen {
       modal.addEventListener('pointerup', (event) => this.endEqBandDrag(event));
       modal.addEventListener('pointercancel', (event) => this.endEqBandDrag(event));
     }
-    modal.addEventListener('pointerdown', (event) => this.startKnobDrag(event));
-    modal.addEventListener('pointermove', (event) => this.moveKnobDrag(event));
-    modal.addEventListener('pointerup', (event) => this.endKnobDrag(event));
-    modal.addEventListener('pointercancel', (event) => this.endKnobDrag(event));
+    modal.addEventListener('pointerdown', (event) => this.startKnobDrag(event, moduleNumber));
+    modal.addEventListener('pointermove', (event) => {
+      this.knobCcLearnGesture.move(event);
+      this.moveKnobDrag(event);
+    });
+    modal.addEventListener('pointerup', (event) => {
+      this.knobCcLearnGesture.end(event);
+      this.endKnobDrag(event);
+    });
+    modal.addEventListener('pointercancel', (event) => {
+      this.knobCcLearnGesture.end(event);
+      this.endKnobDrag(event);
+    });
     if (kind === 'module-delay' && moduleNumber !== null) {
       modal.addEventListener('pointerdown', (event) => {
         const target = event.target;
@@ -3498,6 +3574,9 @@ export class PlayerScreen {
         if (!button || (event.pointerType === 'mouse' && event.button !== 0)) return;
         event.preventDefault();
         this.tapModuleDelay(modal, moduleNumber, event.timeStamp);
+        this.knobCcLearnGesture.start(event, () => {
+          this.openCcLearn({ kind: 'module-control', moduleNumber, control: 'delay:tap', label: 'Tap do Delay' }, button);
+        });
       });
     }
     if (kind === 'app-settings') {
@@ -3549,7 +3628,12 @@ export class PlayerScreen {
         void this.uploadUserProfilePhoto(modal, input);
         return;
       }
-      if (kind === 'app-settings') this.handleAppSettingsChange(event);
+      if (kind === 'user' && input instanceof HTMLInputElement && input.matches('[data-player-backup-file]')) {
+        const file = input.files?.[0];
+        if (file) void this.restorePlayerBackup(modal, file);
+        return;
+      }
+      if (kind === 'app-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio') this.handleAppSettingsChange(event);
       if (kind === 'module-settings' && moduleNumber !== null) {
         this.handleModuleSettingsChange(event, moduleNumber);
       }
@@ -3602,6 +3686,9 @@ export class PlayerScreen {
     screen.setAttribute('aria-hidden', 'true');
     this.root.append(modal);
     this.modal = modal;
+    if (kind === 'app-settings-midi' || kind === 'app-settings-audio') {
+      this.enhanceAppSelects(modal);
+    }
     this.tabletInputKeyboardController = new TabletInputKeyboardController(modal);
     this.tabletInputKeyboardController.mount();
     if (kind === 'tracks') {
@@ -3655,9 +3742,11 @@ export class PlayerScreen {
       requiredElement<HTMLButtonElement>(modal, '.player-modal__back-button').focus();
     }
     if (kind === 'app-settings') {
-      void this.midiInput.requestAccess().then(() => this.refreshMidiDeviceOptions(modal));
-      void this.refreshAudioDeviceOptions(modal);
       void this.loadCompatibilityVideoUrl();
+    } else if (kind === 'app-settings-midi') {
+      void this.midiInput.requestAccess().then(() => this.refreshMidiDeviceOptions(modal));
+    } else if (kind === 'app-settings-audio') {
+      void this.refreshAudioDeviceOptions(modal);
     } else if (kind === 'module-settings') {
       void this.midiInput.requestAccess().then(() => this.refreshModuleMidiOptions(modal, moduleNumber));
     } else if (kind === 'sound-selection' && moduleState?.category === 'user') {
@@ -3691,9 +3780,7 @@ export class PlayerScreen {
       const result = await this.playerBackup.backupNow(this.createSavedPlayerState());
       if (!modal.isConnected) return;
       if (message) {
-        message.textContent = result.savedOnline
-          ? 'Backup concluído.'
-          : 'Backup salvo neste dispositivo. Ele será enviado quando houver internet.';
+        message.textContent = `Backup enviado para ${result.emailedTo}.`;
       }
     } catch {
       if (message) message.textContent = 'Não foi possível fazer o backup agora.';
@@ -3702,17 +3789,15 @@ export class PlayerScreen {
     }
   }
 
-  private async restorePlayerBackup(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
+  private async restorePlayerBackup(modal: HTMLElement, file: File): Promise<void> {
     const message = modal.querySelector<HTMLElement>('[data-user-profile-message]');
+    const button = modal.querySelector<HTMLButtonElement>('[data-modal-action="restore-backup"]');
+    if (!button) return;
     button.disabled = true;
     if (message) message.textContent = 'Restaurando backup...';
     try {
-      const state = await this.playerBackup.restore();
+      const state = await this.playerBackup.restore(file);
       if (!modal.isConnected) return;
-      if (!state) {
-        if (message) message.textContent = 'Ainda não existe um backup para restaurar.';
-        return;
-      }
       this.applySavedPlayerState(state);
       const restorePlan = await new PresetBackupPlanner(this.soundCatalog, this.soundLibrary).createPlan(state);
       this.missingUserSoundfonts = restorePlan.missingUserSoundfonts;
@@ -3795,6 +3880,12 @@ export class PlayerScreen {
       this.setUserSoundfontKeyboardOpen(modal, false);
       namePanel.hidden = true;
       nameInput.value = '';
+      const fileInput = modal.querySelector<HTMLInputElement>('[data-user-sf2-file]');
+      if (fileInput) {
+        fileInput.value = '';
+        delete fileInput.dataset.soundfontName;
+        delete fileInput.dataset.restoreSoundfontId;
+      }
       this.renderUserSoundfontName(modal);
       if (message) message.textContent = '';
       return;
@@ -3808,6 +3899,9 @@ export class PlayerScreen {
     }
     const fileInput = modal.querySelector<HTMLInputElement>('[data-user-sf2-file]');
     if (!fileInput) return;
+    this.setUserSoundfontKeyboardOpen(modal, false);
+    fileInput.value = '';
+    delete fileInput.dataset.restoreSoundfontId;
     fileInput.dataset.soundfontName = name;
     fileInput.click();
   }
@@ -3848,6 +3942,7 @@ export class PlayerScreen {
     const restoredId = input.dataset.restoreSoundfontId;
     input.value = '';
     delete input.dataset.restoreSoundfontId;
+    delete input.dataset.soundfontName;
     if (!file || !name) return;
     const message = modal.querySelector<HTMLElement>('[data-user-sf2-message]');
     if (!file.name.toLowerCase().endsWith('.sf2')) {
@@ -4296,7 +4391,7 @@ export class PlayerScreen {
     if (output) output.value = formatted;
   }
 
-  private startKnobDrag(event: PointerEvent): void {
+  private startKnobDrag(event: PointerEvent, moduleNumber: number | null): void {
     if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
     const input = event.target instanceof Element
       ? event.target.closest<HTMLInputElement>('.module-envelope-knob input[type="range"], .module-effect-knob input[type="range"]')
@@ -4318,6 +4413,14 @@ export class PlayerScreen {
       travelPixels: Math.max(140, Math.min(260, window.innerHeight * 0.42)),
       moved: false,
     };
+    const learnTarget = moduleNumber === null ? null : this.ccLearnTargetForKnob(input, moduleNumber);
+    if (learnTarget) {
+      this.knobCcLearnGesture.start(event, () => {
+        if (input.hasPointerCapture(event.pointerId)) input.releasePointerCapture(event.pointerId);
+        this.knobDrag = null;
+        this.openCcLearn(learnTarget, input);
+      });
+    }
   }
 
   private moveKnobDrag(event: PointerEvent): void {
@@ -4349,6 +4452,90 @@ export class PlayerScreen {
     if (drag.input.hasPointerCapture(event.pointerId)) drag.input.releasePointerCapture(event.pointerId);
     if (drag.moved) drag.input.dispatchEvent(new Event('change', { bubbles: true }));
     this.knobDrag = null;
+  }
+
+  private ccLearnTargetForKnob(input: HTMLInputElement, moduleNumber: number): CcLearnTarget | null {
+    const envelope = input.dataset.moduleEnvelope;
+    if (isModuleEnvelopeParameter(envelope)) {
+      return { kind: 'module-control', moduleNumber, control: envelope, label: input.ariaLabel || envelope };
+    }
+    if (input.matches('[data-module-cutoff]')) {
+      return { kind: 'module-control', moduleNumber, control: 'cutoff', label: 'Cutoff' };
+    }
+    const effectKind = input.dataset.moduleEffectKind;
+    const effectControl = input.dataset.moduleEffectControl;
+    if (isModuleEffectKind(effectKind) && effectControl) {
+      return {
+        kind: 'module-control',
+        moduleNumber,
+        control: `${effectKind}:${effectControl}`,
+        label: input.ariaLabel || effectControl,
+      };
+    }
+    return null;
+  }
+
+  private applyMappedModuleControl(moduleNumber: number, control: string, ratio: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState) return;
+    const progress = Math.min(1, Math.max(0, ratio));
+    if (isModuleEnvelopeParameter(control)) {
+      moduleState.settings[control] = MODULE_ENVELOPE_LIMITS[control] * progress;
+      this.markPlayerStateChanged();
+      return;
+    }
+    if (control === 'cutoff') {
+      moduleState.settings.cutoffHz = cutoffFrequencyFromRatio(progress);
+      this.markPlayerStateChanged();
+      return;
+    }
+
+    const separator = control.indexOf(':');
+    const effectKind = control.slice(0, separator);
+    const effectControl = control.slice(separator + 1);
+    if (!isModuleEffectKind(effectKind) || !effectControl) return;
+    const ranges: Record<string, readonly [number, number]> = {
+      'compressor:thresholdDb': [-60, 0],
+      'compressor:ratio': [1, 20],
+      'compressor:gainDb': [0, 24],
+      'compressor:attackMs': [0.1, 100],
+      'compressor:releaseMs': [10, 1_000],
+      'compressor:mix': [0, 100],
+      'reverb:decay': [0.1, 20],
+      'reverb:dampen': [0, 100],
+      'reverb:size': [0, 100],
+      'reverb:mix': [0, 100],
+      'delay:feedback': [0, 95],
+      'delay:mix': [0, 100],
+      'delay:milliseconds': [1, 2_000],
+    };
+    const range = ranges[control];
+    if (!range) return;
+    const value = range[0] + (range[1] - range[0]) * progress;
+    const settings = effectKind === 'compressor'
+      ? readModuleCompressorSettings(moduleState.settings.compressor)
+      : effectKind === 'reverb'
+        ? readModuleReverbSettings(moduleState.settings.reverb)
+        : readModuleDelaySettings(moduleState.settings.delay);
+    (settings as unknown as Record<string, number | string | boolean>)[effectControl] = value;
+    moduleState.settings[effectKind] = settings;
+    this.markPlayerStateChanged();
+  }
+
+  private tapMappedModuleDelay(moduleNumber: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState) return;
+    const settings = readModuleDelaySettings(moduleState.settings.delay);
+    if (settings.sync) return;
+    const timestamp = performance.now();
+    const previousTap = this.lastDelayTapAt;
+    this.lastDelayTapAt = timestamp;
+    if (previousTap === null) return;
+    const interval = Math.round(timestamp - previousTap);
+    if (interval < 120 || interval > 2_000) return;
+    settings.milliseconds = interval;
+    moduleState.settings.delay = settings;
+    this.markPlayerStateChanged();
   }
 
   private handleModuleEqTypeButton(button: HTMLButtonElement, moduleNumber: number): void {
@@ -4618,6 +4805,50 @@ export class PlayerScreen {
     return this.audioDevices.find(({ id }) => id === this.selectedAudioDeviceId)?.channels ?? 2;
   }
 
+  private enhanceAppSelects(modal: HTMLElement): void {
+    for (const select of modal.querySelectorAll<HTMLSelectElement>('select[data-setting]')) {
+      if (select.dataset.appSelectEnhanced === 'true') continue;
+      select.dataset.appSelectEnhanced = 'true';
+      select.classList.add('app-select__native');
+      const custom = document.createElement('div');
+      custom.className = 'app-select';
+      custom.innerHTML = `
+        <button class="app-select__toggle" type="button" data-app-select-toggle aria-haspopup="listbox" aria-expanded="false">
+          <span></span><i aria-hidden="true"></i>
+        </button>
+        <div class="app-select__menu" role="listbox" hidden></div>
+      `;
+      select.insertAdjacentElement('afterend', custom);
+      this.syncAppSelect(select);
+    }
+  }
+
+  private syncAppSelect(select: HTMLSelectElement): void {
+    const custom = select.parentElement?.querySelector<HTMLElement>('.app-select');
+    const label = custom?.querySelector<HTMLElement>('.app-select__toggle span');
+    const menu = custom?.querySelector<HTMLElement>('.app-select__menu');
+    if (!custom || !label || !menu) return;
+    label.textContent = select.selectedOptions[0]?.textContent?.trim() || 'Selecionar';
+    menu.replaceChildren(...Array.from(select.options, (option) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.appSelectValue = option.value;
+      button.textContent = option.textContent?.trim() || option.value;
+      button.disabled = option.disabled;
+      button.classList.toggle('is-selected', option.value === select.value);
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', String(option.value === select.value));
+      return button;
+    }));
+  }
+
+  private closeAppSelectMenus(modal: HTMLElement): void {
+    for (const menu of modal.querySelectorAll<HTMLElement>('.app-select__menu')) menu.hidden = true;
+    for (const toggle of modal.querySelectorAll<HTMLButtonElement>('[data-app-select-toggle]')) {
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+  }
+
   private normalizeAudioRoutes(): void {
     const channels = this.activeAudioChannelCount();
     for (const bus of ['timbres', 'pads', 'effects'] as const) {
@@ -4637,6 +4868,7 @@ export class PlayerScreen {
       if (select) {
         select.innerHTML = `<option value="">Padrão</option>${this.audioDevices.map((device) => `<option value="${escapeMarkup(device.id)}">${escapeMarkup(device.name)} · ${device.channels} canais</option>`).join('')}`;
         select.value = this.selectedAudioDeviceId;
+        this.syncAppSelect(select);
       }
       this.refreshAudioRoutingSelects(modal);
     } catch {
@@ -4651,6 +4883,7 @@ export class PlayerScreen {
       const bus = select.dataset.audioBus;
       if (bus !== 'timbres' && bus !== 'pads' && bus !== 'effects') continue;
       select.innerHTML = createAudioRouteOptions(channels, this.audioRouting[bus]);
+      this.syncAppSelect(select);
     }
   }
 
@@ -4671,6 +4904,7 @@ export class PlayerScreen {
         select.append(new Option('Dispositivo indisponível', selectedId));
       }
       select.value = selectedId ?? '';
+      this.syncAppSelect(select);
     }
   }
 

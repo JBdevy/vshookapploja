@@ -79,7 +79,13 @@ export function createUserSoundfontMarkup(useTabletKeyboard: boolean): string {
       </header>
       <div class="user-sf2-list" data-user-sf2-list><span class="loading-orbit" aria-hidden="true"></span></div>
       <button class="user-sf2-add" type="button" data-user-sf2-action="name"><span>Add SF2</span><strong aria-hidden="true">+</strong></button>
-      <input class="user-sf2-file" type="file" accept=".sf2" data-user-sf2-file hidden>
+      <input
+        class="user-sf2-file"
+        type="file"
+        accept="application/octet-stream"
+        data-user-sf2-file
+        hidden
+      >
       <div class="user-sf2-name user-sf2-name--${useTabletKeyboard ? 'custom' : 'system'}" data-user-sf2-name hidden>
         <label>
           <span>Nome do timbre</span>

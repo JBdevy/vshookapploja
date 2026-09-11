@@ -8,17 +8,6 @@ export interface PlayerStateResponse {
   updatedAt?: string;
 }
 
-export interface PlayerBackupResponse extends PlayerStateResponse {
-  createdAt?: string;
-}
-
-export interface SavePlayerBackupResponse {
-  ok: true;
-  revision: number;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
 export interface AppSettingsResponse {
   ok: true;
   acquireLicenseUrl: string;
@@ -62,16 +51,9 @@ export class AccountApi {
     });
   }
 
-  getPlayerBackup(token: string): Promise<PlayerBackupResponse> {
-    return this.http.request('/api/orangekey/account/player-backup', {
-      method: 'GET',
-      token,
-    });
-  }
-
-  savePlayerBackup(token: string, state: unknown): Promise<SavePlayerBackupResponse> {
-    return this.http.request('/api/orangekey/account/player-backup', {
-      method: 'PUT',
+  emailPlayerBackup(token: string, state: unknown): Promise<{ ok: true; createdAt: string; emailedTo: string }> {
+    return this.http.request('/api/orangekey/account/player-backup/email', {
+      method: 'POST',
       token,
       body: { state },
     });
