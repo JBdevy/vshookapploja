@@ -64,6 +64,26 @@ export interface NativeModuleEnvelopeConfig {
   releaseMs: number;
 }
 
+export interface NativeSynthConfig {
+  oscillator1: number;
+  oscillator2: number;
+  voiceMode: number;
+  lfoTarget: number;
+  oscillatorMix: number;
+  detuneCents: number;
+  attackMs: number;
+  holdMs: number;
+  decayMs: number;
+  sustain: number;
+  releaseMs: number;
+  filterCutoffHz: number;
+  filterResonance: number;
+  filterEnvelope: number;
+  lfoRateHz: number;
+  lfoDepth: number;
+  glideMs: number;
+}
+
 export interface NativeMetronomeConfig {
   enabled: boolean;
   bpm: number;
@@ -97,6 +117,7 @@ interface HookKeysNativePlugin {
   configureModule(options: NativeModuleConfig): Promise<void>;
   configureModuleEffects(options: NativeModuleEffectsConfig): Promise<void>;
   configureModuleEnvelope(options: NativeModuleEnvelopeConfig): Promise<void>;
+  configureSynth(options: NativeSynthConfig): Promise<void>;
   sendMidi(options: { inputSlot: number; status: number; data1: number; data2: number }): Promise<void>;
   setTempo(options: { bpm: number }): Promise<void>;
   configureMetronome(options: NativeMetronomeConfig): Promise<void>;
@@ -124,6 +145,7 @@ class HookKeysNativeBridge {
   private readonly moduleConfigKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private readonly moduleEffectsKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private readonly moduleEnvelopeKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
+  private lastSynthKey: string | null = null;
   private lastTempo: number | null = null;
   private lastMetronomeKey: string | null = null;
   private lastOutputGainKey: string | null = null;
@@ -213,6 +235,14 @@ class HookKeysNativeBridge {
     if (this.moduleEnvelopeKeys[config.moduleIndex] === key) return;
     await this.call('configure_module_envelope', { config }, () => plugin.configureModuleEnvelope(config));
     this.moduleEnvelopeKeys[config.moduleIndex] = key;
+  }
+
+  async configureSynth(config: NativeSynthConfig): Promise<void> {
+    if (!await this.initialize()) return;
+    const key = JSON.stringify(config);
+    if (this.lastSynthKey === key) return;
+    await this.call('configure_synth', { config }, () => plugin.configureSynth(config));
+    this.lastSynthKey = key;
   }
 
   async setTempo(bpm: number): Promise<void> {
@@ -333,6 +363,7 @@ class HookKeysNativeBridge {
     this.moduleConfigKeys.fill(null);
     this.moduleEffectsKeys.fill(null);
     this.moduleEnvelopeKeys.fill(null);
+    this.lastSynthKey = null;
     this.lastTempo = null;
     this.lastMetronomeKey = null;
     this.lastOutputGainKey = null;

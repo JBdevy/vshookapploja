@@ -11,10 +11,16 @@ NativeEngineRuntime::NativeEngineRuntime(double sampleRate, std::size_t maximumB
   for (auto& module : modules_) {
     module = std::make_unique<TinySoundFontModule>(sampleRate_, maximumBlockFrames_);
   }
+  synth_ = std::make_unique<AnalogSynthModule>(sampleRate_);
   EngineSettings settings;
   settings.sampleRate = sampleRate_;
   settings.maximumBlockFrames = maximumBlockFrames_;
-  engine_ = std::make_unique<HookKeysEngine>(modulePointers(modules_), settings);
+  engine_ = std::make_unique<HookKeysEngine>(modulePointers(modules_, synth_.get()), settings);
+  // O Synth não depende de SF2 e portanto já consegue produzir áudio assim
+  // que o runtime nasce. Mantenha-o mudo até a interface enviar o estado do
+  // módulo 8, como já acontece naturalmente com os módulos sem timbre.
+  configs_[kModuleCount - 1].enabled = false;
+  (void)engine_->setModuleConfig(kModuleCount - 1, configs_[kModuleCount - 1]);
 }
 
 NativeEngineRuntime::~NativeEngineRuntime() {
@@ -71,6 +77,10 @@ bool NativeEngineRuntime::setModuleEnvelope(
   if (moduleIndex >= modules_.size() || modules_[moduleIndex] == nullptr) return false;
   modules_[moduleIndex]->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs);
   return true;
+}
+
+bool NativeEngineRuntime::setSynthConfig(AnalogSynthConfig config) noexcept {
+  return synth_ != nullptr && synth_->setConfig(config);
 }
 
 bool NativeEngineRuntime::setTempo(float bpm) noexcept {
@@ -210,9 +220,11 @@ float NativeEngineRuntime::renderMetronomeSample() noexcept {
 }
 
 HookKeysEngine::SynthModules NativeEngineRuntime::modulePointers(
-    const std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount>& modules) noexcept {
+    const std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount - 1>& modules,
+    AnalogSynthModule* synth) noexcept {
   HookKeysEngine::SynthModules pointers{};
   for (std::size_t index = 0; index < modules.size(); ++index) pointers[index] = modules[index].get();
+  pointers[kModuleCount - 1] = synth;
   return pointers;
 }
 

@@ -16,6 +16,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "configureModule", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureModuleEffects", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureModuleEnvelope", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "configureSynth", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sendMidi", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTempo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureMetronome", returnType: CAPPluginReturnPromise),
@@ -164,6 +165,29 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
             holdMs: call.getFloat("holdMs", 0),
             decayMs: call.getFloat("decayMs", 0),
             releaseMs: call.getFloat("releaseMs", 0)
+        )
+        if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
+    }
+
+    @objc func configureSynth(_ call: CAPPluginCall) {
+        let ok = engine.configureSynth(
+            call.getInt("oscillator1", 1),
+            oscillator2: call.getInt("oscillator2", 2),
+            voiceMode: call.getInt("voiceMode", 1),
+            lfoTarget: call.getInt("lfoTarget", 0),
+            oscillatorMix: call.getFloat("oscillatorMix", 0.5),
+            detuneCents: call.getFloat("detuneCents", 7),
+            attackMs: call.getFloat("attackMs", 0),
+            holdMs: call.getFloat("holdMs", 15_000),
+            decayMs: call.getFloat("decayMs", 25_000),
+            sustain: call.getFloat("sustain", 1),
+            releaseMs: call.getFloat("releaseMs", 100),
+            filterCutoffHz: call.getFloat("filterCutoffHz", 20_000),
+            filterResonance: call.getFloat("filterResonance", 0.12),
+            filterEnvelope: call.getFloat("filterEnvelope", 0.35),
+            lfoRateHz: call.getFloat("lfoRateHz", 4.5),
+            lfoDepth: call.getFloat("lfoDepth", 0),
+            glideMs: call.getFloat("glideMs", 80)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }

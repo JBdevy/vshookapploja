@@ -87,6 +87,26 @@ unsafe extern "C" {
         decay_ms: f32,
         release_ms: f32,
     ) -> i32;
+    fn hk_runtime_configure_synth(
+        handle: *mut c_void,
+        oscillator1: i32,
+        oscillator2: i32,
+        voice_mode: i32,
+        lfo_target: i32,
+        oscillator_mix: f32,
+        detune_cents: f32,
+        attack_ms: f32,
+        hold_ms: f32,
+        decay_ms: f32,
+        sustain: f32,
+        release_ms: f32,
+        filter_cutoff_hz: f32,
+        filter_resonance: f32,
+        filter_envelope: f32,
+        lfo_rate_hz: f32,
+        lfo_depth: f32,
+        glide_ms: f32,
+    ) -> i32;
     fn hk_runtime_set_tempo(handle: *mut c_void, bpm: f32) -> i32;
     fn hk_runtime_configure_metronome(
         handle: *mut c_void,
@@ -229,6 +249,28 @@ struct EnvelopeConfig {
     hold_ms: f32,
     decay_ms: f32,
     release_ms: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SynthConfig {
+    oscillator1: i32,
+    oscillator2: i32,
+    voice_mode: i32,
+    lfo_target: i32,
+    oscillator_mix: f32,
+    detune_cents: f32,
+    attack_ms: f32,
+    hold_ms: f32,
+    decay_ms: f32,
+    sustain: f32,
+    release_ms: f32,
+    filter_cutoff_hz: f32,
+    filter_resonance: f32,
+    filter_envelope: f32,
+    lfo_rate_hz: f32,
+    lfo_depth: f32,
+    glide_ms: f32,
 }
 
 #[derive(Deserialize)]
@@ -597,6 +639,34 @@ fn configure_module_envelope(
 }
 
 #[tauri::command]
+fn configure_synth(config: SynthConfig, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    let ok = unsafe {
+        hk_runtime_configure_synth(
+            engine.pointer(),
+            config.oscillator1,
+            config.oscillator2,
+            config.voice_mode,
+            config.lfo_target,
+            config.oscillator_mix,
+            config.detune_cents,
+            config.attack_ms,
+            config.hold_ms,
+            config.decay_ms,
+            config.sustain,
+            config.release_ms,
+            config.filter_cutoff_hz,
+            config.filter_resonance,
+            config.filter_envelope,
+            config.lfo_rate_hz,
+            config.lfo_depth,
+            config.glide_ms,
+        )
+    };
+    if ok != 0 { Ok(()) } else { Err("Não foi possível configurar o Synth.".into()) }
+}
+
+#[tauri::command]
 fn send_midi(
     input_slot: u8,
     status: u8,
@@ -849,6 +919,7 @@ fn main() {
             configure_module,
             configure_module_effects,
             configure_module_envelope,
+            configure_synth,
             send_midi,
             set_tempo,
             configure_metronome,
@@ -914,5 +985,26 @@ mod tests {
         assert!(output
             .chunks_exact(4)
             .any(|frame| frame[2].abs() > 0.00001 || frame[3].abs() > 0.00001));
+    }
+
+    #[test]
+    fn synth_module_renders_without_a_soundfont() {
+        let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
+        assert_ne!(unsafe {
+            hk_runtime_configure_module(
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
+                0, 32, 64, 96, 127, 0, 2,
+            )
+        }, 0);
+        assert_ne!(unsafe {
+            hk_runtime_configure_synth(
+                engine.pointer(), 1, 2, 1, 1, 0.35, 7.0, 0.0, 0.0,
+                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0,
+            )
+        }, 0);
+        assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, 60, 110) }, 0);
+        let mut output = vec![0.0_f32; 4096 * 2];
+        unsafe { hk_runtime_render(engine.pointer(), output.as_mut_ptr(), 4096, 2) };
+        assert!(output.iter().any(|sample| sample.abs() > 0.00001));
     }
 }

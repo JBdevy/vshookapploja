@@ -96,6 +96,34 @@ int hk_runtime_configure_envelope(void* handle, std::size_t moduleIndex, float a
       moduleIndex, attackMs, holdMs, decayMs, releaseMs) ? 1 : 0;
 }
 
+int hk_runtime_configure_synth(
+    void* handle, int oscillator1, int oscillator2, int voiceMode, int lfoTarget,
+    float oscillatorMix, float detuneCents, float attackMs, float holdMs,
+    float decayMs, float sustain, float releaseMs, float filterCutoffHz,
+    float filterResonance, float filterEnvelope, float lfoRateHz, float lfoDepth,
+    float glideMs) noexcept {
+  if (!handle) return 0;
+  hook_keys::AnalogSynthConfig config;
+  config.oscillator1 = static_cast<std::uint8_t>(std::clamp(oscillator1, 0, 3));
+  config.oscillator2 = static_cast<std::uint8_t>(std::clamp(oscillator2, 0, 3));
+  config.voiceMode = static_cast<std::uint8_t>(std::clamp(voiceMode, 0, 2));
+  config.lfoTarget = static_cast<std::uint8_t>(std::clamp(lfoTarget, 0, 2));
+  config.oscillatorMix = oscillatorMix;
+  config.detuneCents = detuneCents;
+  config.attackMs = attackMs;
+  config.holdMs = holdMs;
+  config.decayMs = decayMs;
+  config.sustain = sustain;
+  config.releaseMs = releaseMs;
+  config.filterCutoffHz = filterCutoffHz;
+  config.filterResonance = filterResonance;
+  config.filterEnvelope = filterEnvelope;
+  config.lfoRateHz = lfoRateHz;
+  config.lfoDepth = lfoDepth;
+  config.glideMs = glideMs;
+  return runtime(handle)->setSynthConfig(config) ? 1 : 0;
+}
+
 int hk_runtime_set_tempo(void* handle, float bpm) noexcept {
   return handle && runtime(handle)->setTempo(bpm) ? 1 : 0;
 }

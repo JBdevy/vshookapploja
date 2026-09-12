@@ -1,5 +1,6 @@
 #pragma once
 
+#include "hook_keys/AnalogSynthModule.hpp"
 #include "hook_keys/HookKeysEngine.hpp"
 #include "hook_keys/TinySoundFontModule.hpp"
 
@@ -37,6 +38,7 @@ public:
   [[nodiscard]] bool setModuleEnvelope(
       std::size_t moduleIndex, float attackMs, float holdMs,
       float decayMs, float releaseMs) noexcept;
+  [[nodiscard]] bool setSynthConfig(AnalogSynthConfig config) noexcept;
   [[nodiscard]] bool setTempo(float bpm) noexcept;
   void setMetronome(
       bool enabled, float bpm, float volume, std::uint8_t clickSound,
@@ -52,11 +54,13 @@ public:
 
 private:
   static HookKeysEngine::SynthModules modulePointers(
-      const std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount>& modules) noexcept;
+      const std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount - 1>& modules,
+      AnalogSynthModule* synth) noexcept;
 
   double sampleRate_ = 48000.0;
   std::size_t maximumBlockFrames_ = 512;
-  std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount> modules_{};
+  std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount - 1> modules_{};
+  std::unique_ptr<AnalogSynthModule> synth_;
   std::unique_ptr<HookKeysEngine> engine_;
   std::array<ModuleConfig, kModuleCount> configs_{};
   std::mutex configMutex_;

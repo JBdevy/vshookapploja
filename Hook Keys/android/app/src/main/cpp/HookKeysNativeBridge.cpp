@@ -175,6 +175,35 @@ public:
         moduleIndex, attackMs, holdMs, decayMs, releaseMs);
   }
 
+  bool configureSynth(
+      int oscillator1, int oscillator2, int voiceMode, int lfoTarget,
+      float oscillatorMix, float detuneCents, float attackMs, float holdMs,
+      float decayMs, float sustain, float releaseMs, float filterCutoffHz,
+      float filterResonance, float filterEnvelope, float lfoRateHz,
+      float lfoDepth, float glideMs) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    if (runtime == nullptr) return false;
+    hook_keys::AnalogSynthConfig config;
+    config.oscillator1 = static_cast<std::uint8_t>(std::clamp(oscillator1, 0, 3));
+    config.oscillator2 = static_cast<std::uint8_t>(std::clamp(oscillator2, 0, 3));
+    config.voiceMode = static_cast<std::uint8_t>(std::clamp(voiceMode, 0, 2));
+    config.lfoTarget = static_cast<std::uint8_t>(std::clamp(lfoTarget, 0, 2));
+    config.oscillatorMix = oscillatorMix;
+    config.detuneCents = detuneCents;
+    config.attackMs = attackMs;
+    config.holdMs = holdMs;
+    config.decayMs = decayMs;
+    config.sustain = sustain;
+    config.releaseMs = releaseMs;
+    config.filterCutoffHz = filterCutoffHz;
+    config.filterResonance = filterResonance;
+    config.filterEnvelope = filterEnvelope;
+    config.lfoRateHz = lfoRateHz;
+    config.lfoDepth = lfoDepth;
+    config.glideMs = glideMs;
+    return runtime->setSynthConfig(config);
+  }
+
   bool setTempo(float bpm) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     return runtime != nullptr && runtime->setTempo(bpm);
@@ -426,6 +455,22 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEnvelo
     jfloat decayMs, jfloat releaseMs) {
   return gEngine.configureModuleEnvelope(
              static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs)
+             ? JNI_TRUE
+             : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureSynth(
+    JNIEnv*, jclass, jint oscillator1, jint oscillator2, jint voiceMode,
+    jint lfoTarget, jfloat oscillatorMix, jfloat detuneCents, jfloat attackMs,
+    jfloat holdMs, jfloat decayMs, jfloat sustain, jfloat releaseMs,
+    jfloat filterCutoffHz, jfloat filterResonance, jfloat filterEnvelope,
+    jfloat lfoRateHz, jfloat lfoDepth, jfloat glideMs) {
+  return gEngine.configureSynth(
+             oscillator1, oscillator2, voiceMode, lfoTarget, oscillatorMix,
+             detuneCents, attackMs, holdMs, decayMs, sustain, releaseMs,
+             filterCutoffHz, filterResonance, filterEnvelope, lfoRateHz,
+             lfoDepth, glideMs)
              ? JNI_TRUE
              : JNI_FALSE;
 }

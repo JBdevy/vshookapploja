@@ -66,6 +66,23 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
                           holdMs:(float)holdMs
                          decayMs:(float)decayMs
                        releaseMs:(float)releaseMs;
+- (BOOL)configureSynth:(NSInteger)oscillator1
+                           oscillator2:(NSInteger)oscillator2
+                              voiceMode:(NSInteger)voiceMode
+                              lfoTarget:(NSInteger)lfoTarget
+                          oscillatorMix:(float)oscillatorMix
+                            detuneCents:(float)detuneCents
+                               attackMs:(float)attackMs
+                                 holdMs:(float)holdMs
+                                decayMs:(float)decayMs
+                                sustain:(float)sustain
+                              releaseMs:(float)releaseMs
+                         filterCutoffHz:(float)filterCutoffHz
+                        filterResonance:(float)filterResonance
+                         filterEnvelope:(float)filterEnvelope
+                              lfoRateHz:(float)lfoRateHz
+                               lfoDepth:(float)lfoDepth
+                                glideMs:(float)glideMs;
 - (BOOL)sendMidiFromSlot:(NSInteger)slot
                   status:(NSInteger)status
                    data1:(NSInteger)data1

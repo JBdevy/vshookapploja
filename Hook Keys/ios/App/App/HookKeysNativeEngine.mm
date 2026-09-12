@@ -312,6 +312,46 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
              static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs);
 }
 
+- (BOOL)configureSynth:(NSInteger)oscillator1
+                           oscillator2:(NSInteger)oscillator2
+                              voiceMode:(NSInteger)voiceMode
+                              lfoTarget:(NSInteger)lfoTarget
+                          oscillatorMix:(float)oscillatorMix
+                            detuneCents:(float)detuneCents
+                               attackMs:(float)attackMs
+                                 holdMs:(float)holdMs
+                                decayMs:(float)decayMs
+                                sustain:(float)sustain
+                              releaseMs:(float)releaseMs
+                         filterCutoffHz:(float)filterCutoffHz
+                        filterResonance:(float)filterResonance
+                         filterEnvelope:(float)filterEnvelope
+                              lfoRateHz:(float)lfoRateHz
+                               lfoDepth:(float)lfoDepth
+                                glideMs:(float)glideMs {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr) return NO;
+  hook_keys::AnalogSynthConfig config;
+  config.oscillator1 = static_cast<std::uint8_t>(std::clamp<NSInteger>(oscillator1, 0, 3));
+  config.oscillator2 = static_cast<std::uint8_t>(std::clamp<NSInteger>(oscillator2, 0, 3));
+  config.voiceMode = static_cast<std::uint8_t>(std::clamp<NSInteger>(voiceMode, 0, 2));
+  config.lfoTarget = static_cast<std::uint8_t>(std::clamp<NSInteger>(lfoTarget, 0, 2));
+  config.oscillatorMix = oscillatorMix;
+  config.detuneCents = detuneCents;
+  config.attackMs = attackMs;
+  config.holdMs = holdMs;
+  config.decayMs = decayMs;
+  config.sustain = sustain;
+  config.releaseMs = releaseMs;
+  config.filterCutoffHz = filterCutoffHz;
+  config.filterResonance = filterResonance;
+  config.filterEnvelope = filterEnvelope;
+  config.lfoRateHz = lfoRateHz;
+  config.lfoDepth = lfoDepth;
+  config.glideMs = glideMs;
+  return runtime->setSynthConfig(config);
+}
+
 - (BOOL)sendMidiFromSlot:(NSInteger)slot status:(NSInteger)status data1:(NSInteger)data1
                    data2:(NSInteger)data2 timestamp:(uint64_t)timestamp {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;

@@ -65,6 +65,7 @@ export function createModuleSettingsMarkup(
   bpm: number,
   audioChannelCount: number,
   audioRoute: AudioBusRoute,
+  isSynthModule = false,
 ): string {
   const deviceNames = new Map(devices.map((device) => [device.id, device.name]));
   const options = activeDeviceIds.map((deviceId, index) => {
@@ -79,7 +80,7 @@ export function createModuleSettingsMarkup(
   const eqBands = readModuleEqBands(settings.eqBands);
 
   return `
-    <section class="module-settings-panel" aria-label="Configurações do timbre">
+    <section class="module-settings-panel${isSynthModule ? ' module-settings-panel--synth' : ''}" aria-label="Configurações do timbre">
       <div class="module-settings-io-row">
         <label class="app-settings-field module-settings-device">
           <span>Dispositivo MIDI</span>
@@ -103,7 +104,7 @@ export function createModuleSettingsMarkup(
       </div>
 
       <div class="module-settings-workspace">
-        <div class="module-envelope-grid" aria-label="Envelope do timbre">
+        ${isSynthModule ? '' : `<div class="module-envelope-grid" aria-label="Envelope do timbre">
           ${ENVELOPE_CONTROLS.map(({ parameter, label }) => createEnvelopeControl(
             parameter,
             label,
@@ -114,7 +115,7 @@ export function createModuleSettingsMarkup(
             ),
           )).join('')}
           ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz))}
-        </div>
+        </div>`}
 
         <div class="module-processors-grid">
           <article class="module-eq-card">
@@ -142,7 +143,7 @@ export function createModuleSettingsMarkup(
               <span>20 kHz</span>
             </div>
           </article>
-          ${createModuleEffectCardsMarkup(settings, bpm)}
+          ${createModuleEffectCardsMarkup(settings, bpm, isSynthModule)}
         </div>
       </div>
       ${createVelocityCardMarkup(settings)}

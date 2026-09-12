@@ -66,12 +66,27 @@ interface EffectControlDefinition {
   formatted: string;
 }
 
-export function createModuleEffectCardsMarkup(settings: Readonly<Record<string, unknown>>, bpm: number): string {
+export function createModuleEffectCardsMarkup(
+  settings: Readonly<Record<string, unknown>>,
+  bpm: number,
+  replaceCompressorWithSynth = false,
+): string {
   const compressor = readModuleCompressorSettings(settings.compressor);
   const reverb = readModuleReverbSettings(settings.reverb);
   const delay = readModuleDelaySettings(settings.delay);
   const delayMilliseconds = delay.sync ? delayMillisecondsForBpm(bpm, delay.division) : delay.milliseconds;
   return `
+      ${replaceCompressorWithSynth ? `
+      <article class="module-effect-card module-effect-card--synth is-enabled">
+        <button type="button" data-module-setting-action="open-synth">Synth</button>
+        <div class="module-synth-preview" aria-label="Abrir os parâmetros do sintetizador">
+          <span class="module-synth-preview__wave">∿</span>
+          <span class="module-synth-preview__plus">+</span>
+          <span class="module-synth-preview__wave module-synth-preview__wave--square">⊓</span>
+          <small>OSC 1</small><strong>DUAL</strong><small>OSC 2</small>
+        </div>
+      </article>
+      ` : `
       <article class="module-effect-card module-effect-card--compressor${compressor.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-compressor">Compressor</button>
         <div class="module-compressor-preview" aria-label="Prévia do compressor">
@@ -83,6 +98,7 @@ export function createModuleEffectCardsMarkup(settings: Readonly<Record<string, 
           <small>${formatSignedDb(compressor.gainDb)}</small>
         </div>
       </article>
+      `}
 
       <article class="module-effect-card module-effect-card--reverb${reverb.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-reverb">Reverb</button>

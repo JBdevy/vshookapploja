@@ -17,28 +17,47 @@ type OctaveTransitionDirection = 'enter' | 'exit';
 
 function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): string {
   const blackKeyAfter = new Set([0, 1, 3, 4, 5]);
-  const octaves = Array.from({ length: 7 }, (_, octaveIndex) => {
-    const angle = (octaveIndex / 7) * Math.PI * 2 - Math.PI / 2;
-    const spiralX = Math.round(Math.cos(angle) * (48 + octaveIndex * 5));
-    const spiralY = Math.round(Math.sin(angle) * (42 + octaveIndex * 4));
-    const keys = Array.from({ length: 7 }, (_, keyIndex) => `
-      <i class="octave-transition__white-key" style="--key-index:${keyIndex}">
-        ${blackKeyAfter.has(keyIndex) ? '<b aria-hidden="true"></b>' : ''}
-      </i>
-    `).join('');
-    return `
-      <span
-        class="octave-transition__octave"
-        style="--octave-index:${octaveIndex};--octave-reverse-index:${6 - octaveIndex};--spiral-x:${spiralX}vw;--spiral-y:${spiralY}vh;--spiral-rotation:${octaveIndex % 2 ? 620 : -620}deg"
-      >${keys}</span>
-    `;
-  }).join('');
+  const keys = Array.from({ length: 28 }, (_, keyIndex) => `
+    <i class="octave-transition__white-key" style="--key-index:${keyIndex}">
+      ${blackKeyAfter.has(keyIndex % 7) ? '<b aria-hidden="true"></b>' : ''}
+    </i>
+  `).join('');
+  const meter = Array.from({ length: 19 }, (_, index) => (
+    `<i style="--meter-index:${index};--meter-height:${34 + ((index * 29) % 63)}%"></i>`
+  )).join('');
+  const entering = direction === 'enter';
   return `
     <div class="octave-transition octave-transition--${direction}" data-octave-transition aria-hidden="true">
-      <div class="octave-transition__rings"><i></i><i></i><i></i></div>
-      <div class="octave-transition__brand"><span>HOOK</span> KEYS</div>
-      <div class="octave-transition__keyboard">${octaves}</div>
-      <div class="octave-transition__flare"></div>
+      <div class="octave-transition__atmosphere">
+        <i></i><i></i><i></i>
+      </div>
+      <div class="octave-transition__deck">
+        <header class="octave-transition__header">
+          <div class="octave-transition__identity">
+            <img src="/assets/icons/icon-256.webp" alt="">
+            <div><span>HOOK KEYS</span><small>PERFORMANCE INSTRUMENT</small></div>
+          </div>
+          <span class="octave-transition__engine-state"><i></i>${entering ? 'ENGINE ONLINE' : 'FINALIZANDO'}</span>
+        </header>
+        <div class="octave-transition__stage">
+          <div class="octave-transition__meter">${meter}</div>
+          <div class="octave-transition__keyboard-shell">
+            <div class="octave-transition__keyboard">${keys}</div>
+            <div class="octave-transition__keyboard-glow"></div>
+          </div>
+          <div class="octave-transition__title">
+            <span>${entering ? 'INICIALIZANDO' : 'ENCERRANDO SESSÃO'}</span>
+            <strong><b>HOOK</b> KEYS</strong>
+            <small>${entering ? 'Preparando sua performance' : 'Salvando sua performance'}</small>
+          </div>
+        </div>
+        <footer class="octave-transition__footer">
+          <div class="octave-transition__progress"><i></i></div>
+          <span>HOOK AUDIO ENGINE</span>
+          <strong>${entering ? 'READY' : 'SAFE EXIT'}</strong>
+        </footer>
+      </div>
+      <div class="octave-transition__scan"></div>
     </div>
   `;
 }

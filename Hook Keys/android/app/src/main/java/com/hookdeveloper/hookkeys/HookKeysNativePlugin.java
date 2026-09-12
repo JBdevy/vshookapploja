@@ -281,6 +281,31 @@ public class HookKeysNativePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void configureSynth(PluginCall call) {
+        boolean ok = nativeConfigureSynth(
+            Math.max(0, Math.min(3, call.getInt("oscillator1", 1))),
+            Math.max(0, Math.min(3, call.getInt("oscillator2", 2))),
+            Math.max(0, Math.min(2, call.getInt("voiceMode", 1))),
+            Math.max(0, Math.min(2, call.getInt("lfoTarget", 1))),
+            call.getFloat("oscillatorMix", 0.35f),
+            call.getFloat("detuneCents", 7.0f),
+            call.getFloat("attackMs", 0.0f),
+            call.getFloat("holdMs", 15000.0f),
+            call.getFloat("decayMs", 25000.0f),
+            call.getFloat("sustain", 1.0f),
+            call.getFloat("releaseMs", 100.0f),
+            call.getFloat("filterCutoffHz", 20000.0f),
+            call.getFloat("filterResonance", 0.18f),
+            call.getFloat("filterEnvelope", 0.24f),
+            call.getFloat("lfoRateHz", 4.0f),
+            call.getFloat("lfoDepth", 0.0f),
+            call.getFloat("glideMs", 45.0f)
+        );
+        if (ok) call.resolve();
+        else call.reject("O motor ainda não foi inicializado.");
+    }
+
+    @PluginMethod
     public void sendMidi(PluginCall call) {
         boolean ok = nativeSendMidi(
             Math.max(0, Math.min(2, call.getInt("inputSlot", 0))),
@@ -609,6 +634,13 @@ public class HookKeysNativePlugin extends Plugin {
     );
     private static native boolean nativeConfigureModuleEnvelope(
         int moduleIndex, float attackMs, float holdMs, float decayMs, float releaseMs
+    );
+    private static native boolean nativeConfigureSynth(
+        int oscillator1, int oscillator2, int voiceMode, int lfoTarget,
+        float oscillatorMix, float detuneCents, float attackMs, float holdMs,
+        float decayMs, float sustain, float releaseMs, float filterCutoffHz,
+        float filterResonance, float filterEnvelope, float lfoRateHz,
+        float lfoDepth, float glideMs
     );
     private static native boolean nativeSetTempo(float bpm);
     private static native boolean nativeConfigureMetronome(

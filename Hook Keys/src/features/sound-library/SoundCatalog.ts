@@ -58,9 +58,7 @@ export class SoundCatalog {
     return this.categories.find((category) => category.id === categoryId) ?? null;
   }
 
-  categoriesForModule(moduleNumber: number | null): readonly SoundCatalogCategory[] {
-    if (moduleNumber === 7) return this.categories.filter(({ moduleRole }) => moduleRole === 'sequencer');
-    if (moduleNumber === 8) return this.categories.filter(({ moduleRole }) => moduleRole === 'mono');
+  categoriesForModule(_moduleNumber: number | null): readonly SoundCatalogCategory[] {
     return this.categories;
   }
 

@@ -144,9 +144,20 @@ import {
   type PerformanceKeyboardStyle,
   type PlayerBottomView,
 } from './PerformanceKeyboard';
+import {
+  createSynthModuleMarkup,
+  DEFAULT_SYNTH_SETTINGS,
+  readSynthSettings,
+  synthLfoTargetIndex,
+  synthOscillatorIndex,
+  updateSynthRangeOutput,
+  type SynthLfoTarget,
+  type SynthModuleSettings,
+  type SynthOscillator,
+} from './SynthModuleView';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
 type BankId = 'A' | 'B';
 type PlayerView = 'bank' | 'pads-effects';
 
@@ -347,7 +358,7 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
 
 function isCcMappingKey(value: string): boolean {
   if (/^module:[1-8]$/.test(value)) return true;
-  if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|compressor:[A-Za-z]+|reverb:[A-Za-z]+|delay:[A-Za-z]+)$/.test(value)) return true;
+  if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|compressor:[A-Za-z]+|reverb:[A-Za-z]+|delay:[A-Za-z]+|synth:[A-Za-z]+)$/.test(value)) return true;
   if (/^octave:[1-8]:(up|down)$/.test(value)) return true;
   if (/^output:(music|pads|effects|master)$/.test(value)) return true;
   if (value === 'metronome:volume' || value === 'metronome:tap') return true;
@@ -380,7 +391,8 @@ function requiredElement<T extends Element>(parent: ParentNode, selector: string
 function createModuleMarkup(moduleNumber: number): string {
   const emptySoundName = moduleEmptySoundName(moduleNumber);
   const displayName = moduleDisplayName(moduleNumber);
-  const namedModule = moduleNumber >= 7;
+  const namedModule = moduleNumber >= 6;
+  const synthModule = moduleNumber === 8;
   return `
     <article class="player-module${namedModule ? ' player-module--named' : ''}" data-module="${moduleNumber}" aria-label="Módulo ${displayName}">
       <span class="player-module__number${namedModule ? ' player-module__number--named' : ''}" aria-hidden="true">${displayName}</span>
@@ -393,13 +405,13 @@ function createModuleMarkup(moduleNumber: number): string {
       >Param</button>
 
       <button
-        class="player-module__sound-button"
+        class="player-module__sound-button${synthModule ? ' player-module__synth-mode is-mono' : ''}"
         type="button"
-        data-action="open-sound-selection"
+        data-action="${synthModule ? 'toggle-synth-mode' : 'open-sound-selection'}"
         data-module="${moduleNumber}"
-        aria-label="Escolher timbre do módulo ${moduleNumber}. Atual: ${emptySoundName}"
+        aria-label="${synthModule ? 'Alternar Synth de Mono para Poly' : `Escolher timbre do módulo ${moduleNumber}. Atual: ${emptySoundName}`}"
       >
-        <span class="player-module__sound-label">${emptySoundName}</span>
+        <span class="player-module__sound-label">${synthModule ? 'Mono' : emptySoundName}</span>
       </button>
 
       <div class="player-module__control-body">
@@ -1192,6 +1204,11 @@ export class PlayerScreen {
       return;
     }
 
+    if (action === 'toggle-synth-mode') {
+      this.toggleSynthMode(actionButton);
+      return;
+    }
+
     if (action === 'learn-note-range') {
       const moduleNumber = Number.parseInt(actionButton.dataset.module ?? '', 10);
       const bound = actionButton.dataset.bound;
@@ -1758,6 +1775,17 @@ export class PlayerScreen {
 
   private onRootContextMenu(event: Event): void {
     const target = event.target;
+    const knobInput = target instanceof Element
+      ? target.closest<HTMLInputElement>('.module-envelope-knob input[type="range"], .module-effect-knob input[type="range"], .player-output-knob input[type="range"]')
+      : null;
+    if (knobInput) {
+      event.preventDefault();
+      const learnTarget = this.currentModalModuleNumber === null
+        ? this.ccLearnTargetForOutputKnob(knobInput)
+        : this.ccLearnTargetForKnob(knobInput, this.currentModalModuleNumber);
+      if (learnTarget) this.openCcLearn(learnTarget, knobInput);
+      return;
+    }
     if (
       target instanceof Element
       && target.closest('.player-preset-button, [data-on-screen-character], [data-module-fader], [data-horizontal-output-fader], [data-metronome-output-fader], [data-output-fader], [data-action="toggle-metronome"], [data-action="tap-tempo"], [data-action="open-tracks"], [data-action="show-bank"], [data-action="octave-up"], [data-action="octave-down"], [data-action="select-effect-bank"], [data-performance-kind="note"]')
@@ -2289,11 +2317,15 @@ export class PlayerScreen {
         const soundLabel = requiredElement<HTMLElement>(moduleElement, '.player-module__sound-label');
         const soundButton = requiredElement<HTMLButtonElement>(moduleElement, '.player-module__sound-button');
         const powerButton = requiredElement<HTMLButtonElement>(moduleElement, '.player-module__power-button');
-        soundLabel.textContent = moduleState.timbreName;
-        soundButton.setAttribute(
-          'aria-label',
-          `Escolher timbre do módulo ${moduleNumber}. Atual: ${moduleState.timbreName}`,
-        );
+        if (moduleNumber === 8) {
+          this.renderSynthModeButton(soundButton, moduleState);
+        } else {
+          soundLabel.textContent = moduleState.timbreName;
+          soundButton.setAttribute(
+            'aria-label',
+            `Escolher timbre do módulo ${moduleNumber}. Atual: ${moduleState.timbreName}`,
+          );
+        }
         this.renderModulePowerButton(powerButton, moduleNumber, moduleState.enabled);
         this.renderModuleActionState(moduleElement, moduleNumber, moduleState);
       }
@@ -2338,6 +2370,87 @@ export class PlayerScreen {
     if (!moduleState) return;
     moduleState.enabled = !moduleState.enabled;
     this.renderModulePowerButton(button, moduleNumber, moduleState.enabled);
+    this.markPlayerStateChanged();
+  }
+
+  private toggleSynthMode(button: HTMLButtonElement): void {
+    const moduleState = this.ensureActivePresetState()?.modules[7];
+    if (!moduleState) return;
+    const settings = readSynthSettings(moduleState.settings.synth);
+    settings.voiceMode = settings.voiceMode === 'mono' ? 'poly' : 'mono';
+    moduleState.settings.synth = settings;
+    this.renderSynthModeButton(button, moduleState);
+    this.markPlayerStateChanged();
+  }
+
+  private renderSynthModeButton(button: HTMLButtonElement, moduleState: ModulePresetState): void {
+    const mode = readSynthSettings(moduleState.settings.synth).voiceMode;
+    const mono = mode === 'mono';
+    button.classList.toggle('is-mono', mono);
+    button.classList.toggle('is-poly', !mono);
+    button.setAttribute('aria-pressed', String(!mono));
+    button.setAttribute('aria-label', `Synth em ${mono ? 'Mono' : 'Poly'}. Alternar para ${mono ? 'Poly' : 'Mono'}`);
+    const label = button.querySelector<HTMLElement>('.player-module__sound-label');
+    if (label) label.textContent = mono ? 'Mono' : 'Poly';
+  }
+
+  private updateSynthParameter(input: HTMLInputElement): void {
+    const parameter = input.dataset.synthParameter as keyof SynthModuleSettings | undefined;
+    const moduleState = this.getActivePresetState()?.modules[7];
+    if (!parameter || !moduleState) return;
+    const settings = readSynthSettings(moduleState.settings.synth);
+    const value = updateSynthRangeOutput(input);
+    if (parameter === 'oscillatorMix' || parameter === 'detuneCents'
+        || parameter === 'attackMs' || parameter === 'holdMs' || parameter === 'decayMs'
+        || parameter === 'sustain' || parameter === 'releaseMs' || parameter === 'filterCutoffHz'
+        || parameter === 'filterResonance' || parameter === 'filterEnvelope'
+        || parameter === 'lfoRateHz' || parameter === 'lfoDepth' || parameter === 'glideMs') {
+      settings[parameter] = value;
+      moduleState.settings.synth = settings;
+      this.markPlayerStateChanged();
+    }
+  }
+
+  private selectSynthOscillator(
+    modal: HTMLElement,
+    parameter: 'oscillator1' | 'oscillator2',
+    oscillator: SynthOscillator,
+  ): void {
+    const moduleState = this.getActivePresetState()?.modules[7];
+    if (!moduleState) return;
+    const settings = readSynthSettings(moduleState.settings.synth);
+    settings[parameter] = oscillator;
+    moduleState.settings.synth = settings;
+    for (const button of modal.querySelectorAll<HTMLButtonElement>(`[data-synth-oscillator^="${parameter}:"]`)) {
+      const selected = button.dataset.synthOscillator === `${parameter}:${oscillator}`;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    }
+    this.markPlayerStateChanged();
+  }
+
+  private selectSynthLfoTarget(modal: HTMLElement, target: SynthLfoTarget): void {
+    const moduleState = this.getActivePresetState()?.modules[7];
+    if (!moduleState) return;
+    const settings = readSynthSettings(moduleState.settings.synth);
+    settings.lfoTarget = target;
+    moduleState.settings.synth = settings;
+    for (const button of modal.querySelectorAll<HTMLButtonElement>('[data-synth-lfo-target]')) {
+      const selected = button.dataset.synthLfoTarget === target;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    }
+    this.markPlayerStateChanged();
+  }
+
+  private toggleSynthLegato(button: HTMLButtonElement): void {
+    const moduleState = this.getActivePresetState()?.modules[7];
+    if (!moduleState) return;
+    const settings = readSynthSettings(moduleState.settings.synth);
+    settings.legato = !settings.legato;
+    moduleState.settings.synth = settings;
+    button.classList.toggle('is-selected', settings.legato);
+    button.setAttribute('aria-pressed', String(settings.legato));
     this.markPlayerStateChanged();
   }
 
@@ -2716,7 +2829,7 @@ export class PlayerScreen {
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     modal.setAttribute('aria-labelledby', titleId);
-    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-velocity', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay'];
+    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-velocity', 'module-synth', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay'];
     const moduleState = !moduleKinds.includes(kind) || moduleNumber === null
       ? null
       : this.ensureActivePresetState()?.modules[moduleNumber - 1] ?? null;
@@ -2758,6 +2871,7 @@ export class PlayerScreen {
         isAudioBusRoute(moduleState?.settings.outputRoute, this.activeAudioChannelCount())
           ? moduleState.settings.outputRoute as AudioBusRoute
           : 'stereo:0',
+        moduleNumber === 8,
       );
     } else if (kind === 'module-polyphony') {
       const polyphony = Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 64)));
@@ -2772,6 +2886,8 @@ export class PlayerScreen {
       `;
     } else if (kind === 'module-velocity') {
       bodyMarkup = createVelocityCurveMarkup(moduleState?.settings ?? {});
+    } else if (kind === 'module-synth') {
+      bodyMarkup = createSynthModuleMarkup(moduleState?.settings.synth);
     } else if (kind === 'module-eq') {
       bodyMarkup = createModuleEqMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-compressor') {
@@ -3122,7 +3238,9 @@ export class PlayerScreen {
     const description = requiredElement<HTMLElement>(modal, '.player-modal__description');
     if (kind === 'module-settings') {
       eyebrow.textContent = '';
-      title.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
+      title.textContent = moduleNumber === 8
+        ? 'Synth'
+        : moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
         : 'Timbre';
     } else if (kind === 'module-polyphony') {
@@ -3135,6 +3253,9 @@ export class PlayerScreen {
         ? moduleState.timbreName
         : 'Timbre';
       title.textContent = 'Velocity';
+    } else if (kind === 'module-synth') {
+      eyebrow.textContent = 'Módulo 08';
+      title.textContent = 'Synth';
     } else if (kind === 'module-eq') {
       eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
@@ -3296,6 +3417,8 @@ export class PlayerScreen {
       if (kind === 'module-settings' && moduleNumber !== null && moduleSettingAction) {
         const childKind = moduleSettingAction === 'open-compressor'
           ? 'module-compressor'
+          : moduleSettingAction === 'open-synth'
+            ? 'module-synth'
           : moduleSettingAction === 'open-reverb'
             ? 'module-reverb'
             : moduleSettingAction === 'open-delay' ? 'module-delay'
@@ -3306,6 +3429,34 @@ export class PlayerScreen {
           : null;
         if (childKind && button) this.openChildModal(childKind, moduleNumber, button);
         if (childKind) return;
+      }
+      if (kind === 'module-synth' && moduleNumber === 8) {
+        const oscillatorButton = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-synth-oscillator]')
+          : null;
+        if (oscillatorButton?.dataset.synthOscillator) {
+          const [parameter, oscillator] = oscillatorButton.dataset.synthOscillator.split(':');
+          if ((parameter === 'oscillator1' || parameter === 'oscillator2')
+              && (oscillator === 'sine' || oscillator === 'saw' || oscillator === 'square' || oscillator === 'triangle')) {
+            this.selectSynthOscillator(modal, parameter, oscillator);
+          }
+          return;
+        }
+        const targetButton = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-synth-lfo-target]')
+          : null;
+        const lfoTarget = targetButton?.dataset.synthLfoTarget;
+        if (targetButton && (lfoTarget === 'pitch' || lfoTarget === 'filter' || lfoTarget === 'volume')) {
+          this.selectSynthLfoTarget(modal, lfoTarget);
+          return;
+        }
+        const toggleButton = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-synth-toggle="legato"]')
+          : null;
+        if (toggleButton) {
+          this.toggleSynthLegato(toggleButton);
+          return;
+        }
       }
       const velocityModeButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-velocity-mode-option]')
@@ -3622,7 +3773,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
           this.commitModulePolyphony(modal, moduleNumber);
         }
-        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity') || (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-synth') || (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -3853,7 +4004,9 @@ export class PlayerScreen {
     modal.addEventListener('input', (event) => {
       const input = event.target;
       if (!(input instanceof HTMLInputElement)) return;
-      if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-envelope]')) {
+      if (kind === 'module-synth' && moduleNumber === 8 && input.matches('[data-synth-parameter]')) {
+        this.updateSynthParameter(input);
+      } else if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-envelope]')) {
         this.updateModuleEnvelopeControl(modal, input, moduleNumber);
       } else if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-cutoff]')) {
         this.updateModuleCutoffControl(modal, input, moduleNumber);
@@ -4707,6 +4860,15 @@ export class PlayerScreen {
     if (input.matches('[data-module-cutoff]')) {
       return { kind: 'module-control', moduleNumber, control: 'cutoff', label: 'Cutoff' };
     }
+    const synthParameter = input.dataset.synthParameter;
+    if (moduleNumber === 8 && synthParameter) {
+      return {
+        kind: 'module-control',
+        moduleNumber,
+        control: `synth:${synthParameter}`,
+        label: input.ariaLabel || synthParameter,
+      };
+    }
     const effectKind = input.dataset.moduleEffectKind;
     const effectControl = input.dataset.moduleEffectControl;
     if (isModuleEffectKind(effectKind) && effectControl) {
@@ -4731,6 +4893,35 @@ export class PlayerScreen {
     }
     if (control === 'cutoff') {
       moduleState.settings.cutoffHz = cutoffFrequencyFromRatio(progress);
+      this.markPlayerStateChanged();
+      return;
+    }
+
+    if (moduleNumber === 8 && control.startsWith('synth:')) {
+      const parameter = control.slice('synth:'.length);
+      const ranges: Record<string, readonly [number, number]> = {
+        oscillatorMix: [0, 100],
+        detuneCents: [-100, 100],
+        attackMs: [0, 15_000],
+        holdMs: [0, 15_000],
+        decayMs: [0, 25_000],
+        sustain: [0, 100],
+        releaseMs: [0, 25_000],
+        filterCutoffHz: [20, 20_000],
+        filterResonance: [0, 98],
+        filterEnvelope: [-100, 100],
+        lfoRateHz: [0.05, 30],
+        lfoDepth: [0, 100],
+        glideMs: [0, 5_000],
+      };
+      const range = ranges[parameter];
+      if (!range) return;
+      const synth = readSynthSettings(moduleState.settings.synth);
+      const value = parameter === 'filterCutoffHz'
+        ? 20 * (1_000 ** progress)
+        : range[0] + (range[1] - range[0]) * progress;
+      (synth as unknown as Record<string, number | string | boolean>)[parameter] = value;
+      moduleState.settings.synth = synth;
       this.markPlayerStateChanged();
       return;
     }
@@ -5802,9 +5993,10 @@ export class PlayerScreen {
         : 'stereo:0';
       const nativeOutputRoute = parseAudioBusRoute(outputRoute);
       const velocityCurve = readVelocityCurveSettings(moduleState?.settings.velocityCurve);
+      const synthSettings = moduleIndex === 7 ? readSynthSettings(moduleState?.settings.synth) : null;
       void hookKeysNative.configureModule({
         moduleIndex,
-        enabled: Boolean(moduleState?.enabled && moduleState.timbreId),
+        enabled: Boolean(moduleState?.enabled && (moduleIndex === 7 || moduleState.timbreId)),
         inputSlot: selectedSlot >= 0 ? selectedSlot : 3,
         lowNote: moduleState?.lowNote ?? 0,
         highNote: moduleState?.highNote ?? 127,
@@ -5812,6 +6004,8 @@ export class PlayerScreen {
         sustain: moduleState?.sustainInputEnabled ?? true,
         modulation: moduleState?.modulationInputEnabled ?? true,
         volumeDb: moduleState?.volumeDb ?? 0,
+        // O próprio sintetizador administra Mono/Poly. O roteador precisa
+        // encaminhar todas as notas para preservar prioridade e legato no Mono.
         polyphony: Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 64))),
         velocityCurve0: velocityCurve.points[0],
         velocityCurve1: velocityCurve.points[1],
@@ -5822,13 +6016,35 @@ export class PlayerScreen {
         outputChannelCount: nativeOutputRoute.count,
       });
       if (moduleState) {
-        void hookKeysNative.configureModuleEnvelope({
-          moduleIndex,
-          attackMs: optionalBoundedNumber(moduleState.settings.attackMs, 0, 15_000),
-          holdMs: optionalBoundedNumber(moduleState.settings.holdMs, 0, 15_000),
-          decayMs: optionalBoundedNumber(moduleState.settings.decayMs, 0, 25_000),
-          releaseMs: optionalBoundedNumber(moduleState.settings.releaseMs, 0, 25_000),
-        });
+        if (moduleIndex === 7 && synthSettings) {
+          void hookKeysNative.configureSynth({
+            oscillator1: synthOscillatorIndex(synthSettings.oscillator1),
+            oscillator2: synthOscillatorIndex(synthSettings.oscillator2),
+            voiceMode: synthSettings.voiceMode === 'poly' ? 0 : synthSettings.legato ? 2 : 1,
+            lfoTarget: synthLfoTargetIndex(synthSettings.lfoTarget),
+            oscillatorMix: synthSettings.oscillatorMix / 100,
+            detuneCents: synthSettings.detuneCents,
+            attackMs: synthSettings.attackMs,
+            holdMs: synthSettings.holdMs,
+            decayMs: synthSettings.decayMs,
+            sustain: synthSettings.sustain / 100,
+            releaseMs: synthSettings.releaseMs,
+            filterCutoffHz: synthSettings.filterCutoffHz,
+            filterResonance: synthSettings.filterResonance / 100,
+            filterEnvelope: synthSettings.filterEnvelope / 100,
+            lfoRateHz: synthSettings.lfoRateHz,
+            lfoDepth: synthSettings.lfoDepth / 100,
+            glideMs: synthSettings.glideMs,
+          });
+        } else {
+          void hookKeysNative.configureModuleEnvelope({
+            moduleIndex,
+            attackMs: optionalBoundedNumber(moduleState.settings.attackMs, 0, 15_000),
+            holdMs: optionalBoundedNumber(moduleState.settings.holdMs, 0, 15_000),
+            decayMs: optionalBoundedNumber(moduleState.settings.decayMs, 0, 25_000),
+            releaseMs: optionalBoundedNumber(moduleState.settings.releaseMs, 0, 25_000),
+          });
+        }
         const eqBands = readModuleEqBands(moduleState.settings.eqBands);
         const eqEnabled = moduleState.settings.eqEnabled !== false;
         const compressor = readModuleCompressorSettings(moduleState.settings.compressor);
@@ -5848,7 +6064,7 @@ export class PlayerScreen {
           compressorAttackMs: compressor.attackMs,
           compressorReleaseMs: compressor.releaseMs,
           compressorGainDb: compressor.gainDb,
-          compressorMix: compressor.enabled ? compressor.mix / 100 : 0,
+          compressorMix: moduleIndex === 7 ? 0 : compressor.enabled ? compressor.mix / 100 : 0,
           delaySync: delay.sync,
           delayMs: delay.milliseconds,
           delayBeatMultiplier: delayDivisionMultiplier(delay.division),
@@ -5872,6 +6088,7 @@ export class PlayerScreen {
   private async syncNativeSoundfonts(): Promise<void> {
     const preset = this.getActivePresetState();
     for (let moduleIndex = 0; moduleIndex < MODULE_COUNT; moduleIndex += 1) {
+      if (moduleIndex === 7) continue;
       const timbreId = preset?.modules[moduleIndex]?.timbreId ?? null;
       if (!timbreId || timbreId === this.nativeLoadedTimbres[moduleIndex]) continue;
       const blob = timbreId.startsWith('user:')
@@ -6098,9 +6315,15 @@ export class PlayerScreen {
               octaveShift: boundedNumber(source.octaveShift, -3, 3, module.octaveShift),
               sustainInputEnabled: typeof source.sustainInputEnabled === 'boolean'
                 ? source.sustainInputEnabled : module.sustainInputEnabled,
-              timbreId: typeof source.timbreId === 'string' ? source.timbreId.slice(0, 200) : null,
-              timbreName: typeof source.timbreName === 'string'
-                ? source.timbreName.slice(0, 120) : module.timbreName,
+              timbreId: moduleIndex === 7
+                ? null
+                : typeof source.timbreId === 'string' ? source.timbreId.slice(0, 200) : null,
+              timbreName: moduleIndex === 7
+                ? 'Synth'
+                : !source.timbreId
+                ? moduleEmptySoundName(moduleIndex + 1)
+                : typeof source.timbreName === 'string'
+                  ? source.timbreName.slice(0, 120) : module.timbreName,
               volumeDb: boundedNumber(source.volumeDb, -60, 6, module.volumeDb),
               settings: restoredSettings,
             };
@@ -6154,8 +6377,9 @@ function delayDivisionMultiplier(division: string): number {
 }
 
 function moduleEmptySoundName(moduleNumber: number): string {
+  if (moduleNumber === 6) return 'Arpeggiator';
   if (moduleNumber === 7) return 'Sequencer';
-  if (moduleNumber === 8) return 'Mono';
+  if (moduleNumber === 8) return 'Synth';
   return 'Sem timbre';
 }
 
@@ -6165,6 +6389,7 @@ function createDefaultModuleSettings(): Record<string, unknown> {
     cutoffHz: 20_000,
     eqEnabled: true,
     polyphony: 64,
+    synth: { ...DEFAULT_SYNTH_SETTINGS },
     velocityCurve: {
       ...DEFAULT_VELOCITY_CURVE,
       points: [...DEFAULT_VELOCITY_CURVE.points],
@@ -6174,8 +6399,9 @@ function createDefaultModuleSettings(): Record<string, unknown> {
 }
 
 function moduleDisplayName(moduleNumber: number): string {
+  if (moduleNumber === 6) return 'Arpeggiator';
   if (moduleNumber === 7) return 'Sequencer';
-  if (moduleNumber === 8) return 'Mono';
+  if (moduleNumber === 8) return 'Synth';
   return String(moduleNumber);
 }
 
