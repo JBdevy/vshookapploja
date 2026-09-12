@@ -42,6 +42,7 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version_name }}
           INPUT_BUILD: ${{ inputs.build_number }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -70,7 +71,14 @@ jobs:
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
-          echo "release_name=Hook Keys $VERSION_NAME - Build $BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          # O titulo do Release passa a ser a mensagem do commit que a tag
+          # aponta, ou seja a que voce digita no .bat. Se nao houver mensagem
+          # (disparo manual pelo Actions) volta para o nome padrao.
+          RELEASE_NAME="$(printf '%s' "${COMMIT_MESSAGE:-}" | head -n 1)"
+          if [ -z "$RELEASE_NAME" ]; then
+            RELEASE_NAME="Hook Keys $VERSION_NAME - Build $BUILD_NUMBER"
+          fi
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
 
   android:
     name: Gerar APK e AAB do Hook Keys

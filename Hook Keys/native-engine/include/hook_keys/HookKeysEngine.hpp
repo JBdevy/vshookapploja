@@ -49,7 +49,7 @@ private:
   std::array<ModuleEffects, kModuleCount> effects_{};
   std::vector<float> scratchLeft_;
   std::vector<float> scratchRight_;
-  using ActiveNotesByInput = std::array<std::array<std::int16_t, kMidiNoteCount>, kMidiInputCount>;
+  using ActiveNotesByInput = std::array<std::array<std::int16_t, kMidiNoteCount>, kRoutableMidiInputCount>;
   std::array<ActiveNotesByInput, kModuleCount> activeNotes_{};
   RealtimeCommandQueue<EngineCommand, 2048> commands_{};
   std::atomic<std::uint64_t> droppedCommands_{0};

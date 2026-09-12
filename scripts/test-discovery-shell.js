@@ -18,6 +18,7 @@ let pendingRequests = new Set()
 let abortedRequests = 0
 let fetchOverride = null
 let addressOverride = null
+const orientationLocks = []
 const windowListeners = new Map()
 const elements = new Map()
 
@@ -117,6 +118,10 @@ const context = {
     Capacitor: {
       isNativePlatform: () => true,
       Plugins: {
+        ScreenOrientation: {
+          lock: async ({ orientation }) => { orientationLocks.push(orientation) },
+          unlock: async () => { throw new Error('O app nativo não deve desbloquear a orientação') },
+        },
         VSHookLocalNetwork: {
           getAddresses: async () => {
             localNetworkAddressReads += 1
@@ -149,6 +154,11 @@ async function until(predicate, message) {
 }
 
 async function run() {
+  await evaluate("setDirectorNativeOrientation('phone')")
+  await evaluate("setDirectorNativeOrientation('tablet')")
+  assert.deepEqual(orientationLocks, ['portrait', 'landscape'],
+    'o app nativo deve manter retrato fora do Diretor Tablet')
+
   const addresses = await vm.runInContext('getVshookStoreLocalNetworkAddresses()', context)
   if (addresses.length !== 1 || addresses[0] !== '192.168.77.42') {
     throw new Error(`O bridge nativo nao entregou o IP esperado: ${JSON.stringify(addresses)}`)

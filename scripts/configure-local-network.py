@@ -18,7 +18,38 @@ def configure_ios(root: Path) -> None:
     data["UIRequiresFullScreen"] = True
     with plist_path.open("wb") as target:
         plistlib.dump(data, target, sort_keys=False)
-    print(f"Permissao de rede local configurada: {plist_path}")
+
+    # Antes do JavaScript iniciar, o iOS consulta o AppDelegate. A política
+    # abaixo mantém a abertura em retrato, mas libera a máscara de paisagem
+    # quando o plugin ScreenOrientation recebe o modo Diretor Tablet.
+    app_delegate_path = root / "ios" / "App" / "App" / "AppDelegate.swift"
+    if not app_delegate_path.exists():
+        raise SystemExit(f"AppDelegate não encontrado: {app_delegate_path}")
+    marker = "VSHOOK_NATIVE_ORIENTATION_POLICY"
+    app_delegate = app_delegate_path.read_text(encoding="utf-8")
+    if marker not in app_delegate:
+        if "supportedInterfaceOrientationsFor window" in app_delegate:
+            raise SystemExit(
+                "AppDelegate já possui uma política de orientação não gerenciada pelo VS Hook"
+            )
+        app_delegate += '''
+
+// VSHOOK_NATIVE_ORIENTATION_POLICY
+extension AppDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        guard let bridgeController = window?.rootViewController as? CAPBridgeViewController else {
+            return .portrait
+        }
+        let requested = bridgeController.supportedInterfaceOrientations
+        if requested == .landscape || requested == .landscapeLeft || requested == .landscapeRight {
+            return requested
+        }
+        return .portrait
+    }
+}
+'''
+        app_delegate_path.write_text(app_delegate, encoding="utf-8")
+    print(f"Rede local e orientação inicial iOS configuradas: {plist_path}")
 
 
 def main() -> None:

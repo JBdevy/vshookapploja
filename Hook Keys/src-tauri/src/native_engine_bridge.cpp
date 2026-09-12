@@ -40,8 +40,11 @@ int hk_runtime_configure_module(
   if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
   hook_keys::ModuleConfig config;
   config.enabled = enabled != 0;
-  config.midiInputSlot = inputSlot >= 0 && inputSlot < static_cast<int>(hook_keys::kMidiInputCount)
-      ? static_cast<std::uint8_t>(inputSlot) : hook_keys::kAllMidiInputs;
+  config.midiInputSlot = inputSlot == static_cast<int>(hook_keys::kArpeggiatorInput) ||
+          inputSlot == static_cast<int>(hook_keys::kSequencerInput)
+      ? static_cast<std::uint8_t>(inputSlot)
+      : inputSlot >= 0 && inputSlot < static_cast<int>(hook_keys::kMidiInputCount)
+          ? static_cast<std::uint8_t>(inputSlot) : hook_keys::kAllMidiInputs;
   config.lowNote = static_cast<std::uint8_t>(std::clamp(lowNote, 0, 127));
   config.highNote = static_cast<std::uint8_t>(std::clamp(highNote, 0, 127));
   config.octaveShift = static_cast<std::int8_t>(std::clamp(octave, -3, 3));

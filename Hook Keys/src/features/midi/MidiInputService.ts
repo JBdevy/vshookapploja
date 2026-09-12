@@ -172,6 +172,7 @@ export class MidiInputService {
     }
     const devices: MidiInputDevice[] = [];
     this.access?.inputs.forEach((input) => {
+      if (input.state === 'disconnected') return;
       devices.push({
         id: input.id,
         name: input.name?.trim() || input.manufacturer?.trim() || 'Controlador MIDI',

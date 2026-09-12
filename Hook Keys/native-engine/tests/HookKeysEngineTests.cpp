@@ -98,6 +98,82 @@ void testRangeAndOctaveRouting() {
   expect(first.events.back().type == Event::Type::noteOff && first.events.back().data1 == 72, "note-off uses original routed note");
 }
 
+void testKeyboardBroadcastRouting() {
+  std::array<RecordingSynth, 4> synths;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  for (std::size_t index = 0; index < synths.size(); ++index) modules[index] = &synths[index];
+  hook_keys::HookKeysEngine engine(modules);
+  for (std::size_t index = 0; index < synths.size(); ++index) {
+    hook_keys::ModuleConfig config;
+    config.midiInputSlot = index == 3 ? hook_keys::kAllMidiInputs : static_cast<std::uint8_t>(index);
+    expect(engine.setModuleConfig(index, config), "configure keyboard routing");
+  }
+  expect(engine.enqueueMidi(midi(0x90, 60, 110, 1)), "keyboard on MIDI 2");
+  process(engine);
+  expect(synths[0].events.empty() && synths[2].events.empty(), "MIDI 2 excludes MIDI 1 and 3 modules");
+  expect(synths[1].events.size() == 1 && synths[3].events.size() == 1, "MIDI 2 includes matching and all-input modules once");
+  expect(engine.enqueueMidi(midi(0x80, 60, 0, 1)), "release MIDI 2");
+  process(engine);
+  for (auto& synth : synths) synth.events.clear();
+  expect(engine.enqueueMidi(midi(0x90, 64, 110, hook_keys::kKeyboardBroadcastInput)), "broadcast keyboard without hardware");
+  process(engine);
+  for (auto& synth : synths) expect(synth.events.size() == 1, "broadcast plays each module exactly once");
+  expect(engine.enqueueMidi(midi(0x80, 64, 0, hook_keys::kKeyboardBroadcastInput)), "release broadcast keyboard");
+  process(engine);
+  for (auto& synth : synths) expect(synth.events.size() == 2 && synth.events.back().type == Event::Type::noteOff, "broadcast releases each note");
+  expect(!engine.enqueueMidi(midi(0x90, 64, 110, 6)), "reject invalid virtual input");
+}
+
+void testPatternGeneratorRouting() {
+  std::array<RecordingSynth, hook_keys::kModuleCount> synths;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  for (std::size_t index = 0; index < synths.size(); ++index) {
+    modules[index] = &synths[index];
+  }
+  hook_keys::HookKeysEngine engine(modules);
+  for (std::size_t index = 0; index < synths.size(); ++index) {
+    hook_keys::ModuleConfig config;
+    config.midiInputSlot = index == 5 ? hook_keys::kArpeggiatorInput
+        : index == 6 ? hook_keys::kSequencerInput : hook_keys::kAllMidiInputs;
+    expect(engine.setModuleConfig(index, config), "configure generated-note routing");
+  }
+  expect(engine.enqueueMidi(midi(0x90, 67, 108, hook_keys::kArpeggiatorInput)), "queue arpeggiator note");
+  expect(engine.enqueueMidi(midi(0x90, 72, 105, hook_keys::kSequencerInput)), "queue sequencer note");
+  process(engine);
+  for (std::size_t index = 0; index < synths.size(); ++index) {
+    const auto expected = index == 5 || index == 6 ? 1U : 0U;
+    expect(synths[index].events.size() == expected, "generated notes stay inside their module");
+  }
+  expect(synths[5].events[0].data1 == 67, "arpeggiator reaches module 6");
+  expect(synths[6].events[0].data1 == 72, "sequencer reaches module 7");
+  for (auto& synth : synths) synth.events.clear();
+  expect(engine.enqueueMidi(midi(0x90, 60, 100, hook_keys::kKeyboardBroadcastInput)),
+         "queue touch keyboard broadcast while patterns are active");
+  process(engine);
+  expect(synths[5].events.empty() && synths[6].events.empty(),
+         "touch keyboard roots do not bypass enabled pattern processors");
+  expect(synths[0].events.size() == 1 && synths[7].events.size() == 1,
+         "touch keyboard still broadcasts to ordinary modules");
+
+}
+
+void testMonoVoiceSteal() {
+  RecordingSynth mono;
+  hook_keys::HookKeysEngine::SynthModules monoModules{};
+  monoModules[0] = &mono;
+  hook_keys::HookKeysEngine monoEngine(monoModules);
+  hook_keys::ModuleConfig monoConfig;
+  monoConfig.midiInputSlot = hook_keys::kAllMidiInputs;
+  monoConfig.polyphony = 1;
+  expect(monoEngine.setModuleConfig(0, monoConfig), "configure mono module");
+  expect(monoEngine.enqueueMidi(midi(0x90, 60, 100)), "queue first mono note");
+  expect(monoEngine.enqueueMidi(midi(0x90, 64, 100)), "queue replacing mono note");
+  process(monoEngine);
+  expect(mono.events.size() >= 3, "mono voice is replaced instead of rejecting the next note");
+  expect(mono.events.back().type == Event::Type::noteOn && mono.events.back().data1 == 64,
+         "latest mono note wins");
+}
+
 void testPerModuleControllerFilters() {
   RecordingSynth first;
   RecordingSynth second;
@@ -166,7 +242,7 @@ void testMidiInputRouting() {
   expect(engine.setModuleConfig(0, config), "switch MIDI input");
   process(engine);
   expect(synth.events.back().type == Event::Type::allNotesOff, "switching MIDI input releases old voices");
-  expect(!engine.enqueueMidi(midi(0x90, 64, 100, 3)), "reject invalid MIDI input slot");
+  expect(!engine.enqueueMidi(midi(0x90, 64, 100, 6)), "reject invalid MIDI input slot");
 }
 
 void testAllMidiInputsRouting() {
@@ -497,6 +573,9 @@ void testReverbProcessing() {
 
 int main() {
   testRangeAndOctaveRouting();
+  testKeyboardBroadcastRouting();
+  testPatternGeneratorRouting();
+  testMonoVoiceSteal();
   testPerModuleControllerFilters();
   testDisableAndPanic();
   testMidiInputRouting();

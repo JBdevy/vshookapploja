@@ -245,9 +245,11 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
   hook_keys::ModuleConfig config;
   config.enabled = enabled;
-  config.midiInputSlot = inputSlot >= 0 && inputSlot < kMidiSlotCount
-                             ? static_cast<std::uint8_t>(inputSlot)
-                             : hook_keys::kAllMidiInputs;
+  config.midiInputSlot = inputSlot == hook_keys::kArpeggiatorInput ||
+          inputSlot == hook_keys::kSequencerInput
+      ? static_cast<std::uint8_t>(inputSlot)
+      : inputSlot >= 0 && inputSlot < kMidiSlotCount
+          ? static_cast<std::uint8_t>(inputSlot) : hook_keys::kAllMidiInputs;
   config.lowNote = static_cast<std::uint8_t>(std::clamp<NSInteger>(lowNote, 0, 127));
   config.highNote = static_cast<std::uint8_t>(std::clamp<NSInteger>(highNote, 0, 127));
   config.octaveShift = static_cast<std::int8_t>(std::clamp<NSInteger>(octave, -3, 3));
@@ -356,7 +358,7 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
                    data2:(NSInteger)data2 timestamp:(uint64_t)timestamp {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && runtime->sendMidi(
-      static_cast<std::uint8_t>(std::clamp<NSInteger>(slot, 0, 2)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(slot, 0, hook_keys::kSequencerInput)),
       static_cast<std::uint8_t>(status), static_cast<std::uint8_t>(data1),
       static_cast<std::uint8_t>(data2), timestamp);
 }

@@ -72,13 +72,12 @@ echo ==========================================
 git add -A
 if errorlevel 1 goto erro
 
-git diff --cached --quiet
-if not errorlevel 1 goto sem_alteracoes
-
-git commit -m "%COMMIT_MSG%"
+rem Sempre cria um commit proprio para este disparo. Sem --allow-empty, quando
+rem outro script ja tinha commitado as mesmas pastas, nada ficava staged, o
+rem commit era pulado e a tag apontava para o commit anterior. Por isso o
+rem Actions mostrava a mensagem do build anterior no lugar da digitada aqui.
+git commit --allow-empty -m "%COMMIT_MSG%"
 if errorlevel 1 goto erro
-
-:sem_alteracoes
 for /f "usebackq delims=" %%B in (`git branch --show-current`) do set "BRANCH=%%B"
 if not defined BRANCH set "BRANCH=main"
 

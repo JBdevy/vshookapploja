@@ -101,9 +101,10 @@ public:
     if (runtime == nullptr) return false;
     hook_keys::ModuleConfig config;
     config.enabled = enabled;
-    config.midiInputSlot = inputSlot >= hook_keys::kMidiInputCount
-                               ? hook_keys::kAllMidiInputs
-                               : inputSlot;
+    config.midiInputSlot = inputSlot == hook_keys::kArpeggiatorInput ||
+            inputSlot == hook_keys::kSequencerInput
+        ? inputSlot
+        : inputSlot >= hook_keys::kMidiInputCount ? hook_keys::kAllMidiInputs : inputSlot;
     config.lowNote = lowNote;
     config.highNote = highNote;
     config.octaveShift = octave;

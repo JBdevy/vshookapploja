@@ -1,4 +1,5 @@
 export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay';
+export type ModuleProcessorReplacement = 'compressor' | 'arpeggiator' | 'sequencer' | 'synth';
 
 export interface ModuleCompressorSettings {
   enabled: boolean;
@@ -69,24 +70,14 @@ interface EffectControlDefinition {
 export function createModuleEffectCardsMarkup(
   settings: Readonly<Record<string, unknown>>,
   bpm: number,
-  replaceCompressorWithSynth = false,
+  replacement: ModuleProcessorReplacement = 'compressor',
 ): string {
   const compressor = readModuleCompressorSettings(settings.compressor);
   const reverb = readModuleReverbSettings(settings.reverb);
   const delay = readModuleDelaySettings(settings.delay);
   const delayMilliseconds = delay.sync ? delayMillisecondsForBpm(bpm, delay.division) : delay.milliseconds;
   return `
-      ${replaceCompressorWithSynth ? `
-      <article class="module-effect-card module-effect-card--synth is-enabled">
-        <button type="button" data-module-setting-action="open-synth">Synth</button>
-        <div class="module-synth-preview" aria-label="Abrir os parâmetros do sintetizador">
-          <span class="module-synth-preview__wave">∿</span>
-          <span class="module-synth-preview__plus">+</span>
-          <span class="module-synth-preview__wave module-synth-preview__wave--square">⊓</span>
-          <small>OSC 1</small><strong>DUAL</strong><small>OSC 2</small>
-        </div>
-      </article>
-      ` : `
+      ${replacement === 'compressor' ? `
       <article class="module-effect-card module-effect-card--compressor${compressor.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-compressor">Compressor</button>
         <div class="module-compressor-preview" aria-label="Prévia do compressor">
@@ -98,7 +89,7 @@ export function createModuleEffectCardsMarkup(
           <small>${formatSignedDb(compressor.gainDb)}</small>
         </div>
       </article>
-      `}
+      ` : createProcessorShortcutCard(replacement)}
 
       <article class="module-effect-card module-effect-card--reverb${reverb.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-reverb">Reverb</button>
@@ -119,6 +110,18 @@ export function createModuleEffectCardsMarkup(
           <span><strong>${Math.round(delay.mix)}%</strong><small>Mix</small></span>
         </div>
       </article>
+  `;
+}
+
+function createProcessorShortcutCard(replacement: Exclude<ModuleProcessorReplacement, 'compressor'>): string {
+  const label = replacement === 'arpeggiator'
+    ? 'Arpeggiator'
+    : replacement === 'sequencer' ? 'Sequencer' : 'Synth';
+  return `
+    <article class="module-effect-card module-effect-card--processor-shortcuts" aria-label="Processadores do módulo">
+      <button class="module-processor-shortcut module-processor-shortcut--compressor" type="button" data-module-setting-action="open-compressor">Compressor</button>
+      <button class="module-processor-shortcut module-processor-shortcut--${replacement}" type="button" data-module-setting-action="open-${replacement}">${label}</button>
+    </article>
   `;
 }
 

@@ -212,7 +212,7 @@ public class HookKeysNativePlugin extends Plugin {
         boolean ok = nativeConfigureModule(
             moduleIndex,
             call.getBoolean("enabled", true),
-            Math.max(0, Math.min(3, call.getInt("inputSlot", 3))),
+            Math.max(0, Math.min(5, call.getInt("inputSlot", 3))),
             Math.max(0, Math.min(127, call.getInt("lowNote", 0))),
             Math.max(0, Math.min(127, call.getInt("highNote", 127))),
             Math.max(-3, Math.min(3, call.getInt("octave", 0))),
@@ -308,7 +308,7 @@ public class HookKeysNativePlugin extends Plugin {
     @PluginMethod
     public void sendMidi(PluginCall call) {
         boolean ok = nativeSendMidi(
-            Math.max(0, Math.min(2, call.getInt("inputSlot", 0))),
+            Math.max(0, Math.min(5, call.getInt("inputSlot", 0))),
             call.getInt("status", 0),
             call.getInt("data1", 0),
             call.getInt("data2", 0),

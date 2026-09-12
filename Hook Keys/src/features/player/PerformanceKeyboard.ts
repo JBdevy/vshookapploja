@@ -57,7 +57,7 @@ export function createPerformanceKeyboardSettingsMarkup(
     <section class="performance-keyboard-settings">
       <article>
         <strong>Dispositivo</strong>
-        <div role="group" aria-label="Dispositivo MIDI que ilumina o teclado">
+        <div role="group" aria-label="Dispositivo MIDI para tocar e iluminar o teclado">
           ${[1, 2, 3].map((slot) => createChoiceButton('keyboard-midi-slot', String(slot), `MIDI ${slot}`, slot === midiSlot)).join('')}
         </div>
       </article>
@@ -74,7 +74,7 @@ export function createPerformanceKeyboardSettingsMarkup(
 }
 
 export class PerformanceKeyboardController {
-  private readonly activePointers = new Map<number, number>();
+  private readonly activePointers = new Map<number, number | null>();
   private readonly pointerStartedAt = new Map<number, number>();
   private readonly pointerStartX = new Map<number, number>();
   private readonly pointerCurrentX = new Map<number, number>();
@@ -89,7 +89,7 @@ export class PerformanceKeyboardController {
   constructor(
     private readonly root: HTMLElement,
     private readonly onTwoFingerSpread: () => void = () => {},
-    private readonly onNote: (noteNumber: number, pressed: boolean, velocity: number) => void = () => {},
+    private readonly onNote: (noteNumber: number, pressed: boolean, velocity: number) => string | null | void = () => {},
   ) {}
 
   mount(): void {
@@ -97,6 +97,7 @@ export class PerformanceKeyboardController {
     this.root.addEventListener('pointermove', this.handlePointerMove);
     this.root.addEventListener('pointerup', this.handlePointerEnd);
     this.root.addEventListener('pointercancel', this.handlePointerEnd);
+    this.root.addEventListener('lostpointercapture', this.handlePointerEnd);
   }
 
   destroy(): void {
@@ -104,7 +105,11 @@ export class PerformanceKeyboardController {
     this.root.removeEventListener('pointermove', this.handlePointerMove);
     this.root.removeEventListener('pointerup', this.handlePointerEnd);
     this.root.removeEventListener('pointercancel', this.handlePointerEnd);
-    for (const note of this.activePointers.values()) this.setPressed(note, false);
+    this.root.removeEventListener('lostpointercapture', this.handlePointerEnd);
+    for (const pointerId of this.activePointers.keys()) {
+      this.changePointerNote(pointerId, null);
+      if (this.root.hasPointerCapture(pointerId)) this.root.releasePointerCapture(pointerId);
+    }
     this.activePointers.clear();
     this.pointerStartedAt.clear();
     this.pointerStartX.clear();
@@ -131,13 +136,12 @@ export class PerformanceKeyboardController {
     const noteNumber = Number(target?.dataset.keyboardNote);
     if (!target || !Number.isInteger(noteNumber)) return;
     event.preventDefault();
-    target.setPointerCapture(event.pointerId);
-    this.activePointers.set(event.pointerId, noteNumber);
+    this.root.setPointerCapture(event.pointerId);
+    this.activePointers.set(event.pointerId, null);
     this.pointerStartedAt.set(event.pointerId, event.timeStamp);
     this.pointerStartX.set(event.pointerId, event.clientX);
     this.pointerCurrentX.set(event.pointerId, event.clientX);
-    this.setPressed(noteNumber, true);
-    this.dispatchNote(noteNumber, true);
+    this.changePointerNote(event.pointerId, noteNumber);
     if (event.pointerType === 'touch' && this.activePointers.size === 2) {
       const pointerIds = [...this.activePointers.keys()];
       const firstStartedAt = this.pointerStartedAt.get(pointerIds[0] ?? -1) ?? 0;
@@ -147,11 +151,6 @@ export class PerformanceKeyboardController {
         this.twoFingerGestureTriggered = false;
         for (const pointerId of pointerIds) {
           this.twoFingerGesturePointers.add(pointerId);
-          const activeNote = this.activePointers.get(pointerId);
-          if (activeNote !== undefined) {
-            this.setPressed(activeNote, false);
-            this.dispatchNote(activeNote, false);
-          }
         }
       }
     }
@@ -159,8 +158,17 @@ export class PerformanceKeyboardController {
 
   private onPointerMove(event: PointerEvent): void {
     if (!this.activePointers.has(event.pointerId)) return;
+    event.preventDefault();
     this.pointerCurrentX.set(event.pointerId, event.clientX);
-    if (this.twoFingerGestureTriggered || this.twoFingerGesturePointers.size !== 2) return;
+    if (this.twoFingerGestureTriggered) return;
+    // Pointer capture keeps the original event target while dragging. Hit-test
+    // the visible key instead so black keys and movement outside the keyboard
+    // release/retrigger the correct notes.
+    const target = this.root.ownerDocument.elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLButtonElement>('[data-keyboard-note]');
+    const noteNumber = target && this.root.contains(target) ? Number(target.dataset.keyboardNote) : null;
+    this.changePointerNote(event.pointerId, noteNumber !== null && Number.isInteger(noteNumber) ? noteNumber : null);
+    if (this.twoFingerGesturePointers.size !== 2) return;
     const pointers = [...this.twoFingerGesturePointers];
     const firstId = pointers[0];
     const secondId = pointers[1];
@@ -180,18 +188,21 @@ export class PerformanceKeyboardController {
     if (leftCurrent <= leftStart - 24 && rightCurrent >= rightStart + 24 && openingDistance >= 64) {
       event.preventDefault();
       this.twoFingerGestureTriggered = true;
+      for (const pointerId of this.twoFingerGesturePointers) this.changePointerNote(pointerId, null);
     }
   }
 
   private onPointerEnd(event: PointerEvent): void {
-    const noteNumber = this.activePointers.get(event.pointerId);
-    if (noteNumber === undefined) return;
+    if (!this.activePointers.has(event.pointerId)) return;
     event.preventDefault();
+    this.changePointerNote(event.pointerId, null);
     this.activePointers.delete(event.pointerId);
+    if (this.root.hasPointerCapture(event.pointerId)) this.root.releasePointerCapture(event.pointerId);
     this.pointerStartedAt.delete(event.pointerId);
     this.pointerStartX.delete(event.pointerId);
     this.pointerCurrentX.delete(event.pointerId);
     if (this.twoFingerGesturePointers.has(event.pointerId)) {
+      if (event.type !== 'pointerup') this.twoFingerGestureTriggered = false;
       this.twoFingerGesturePointers.delete(event.pointerId);
       if (this.twoFingerGesturePointers.size === 0) {
         const shouldCommitSpread = this.twoFingerGestureTriggered;
@@ -207,8 +218,22 @@ export class PerformanceKeyboardController {
       }
       return;
     }
-    this.setPressed(noteNumber, false);
-    this.dispatchNote(noteNumber, false);
+  }
+
+  private changePointerNote(pointerId: number, noteNumber: number | null): void {
+    const previous = this.activePointers.get(pointerId);
+    if (previous === noteNumber) return;
+    this.activePointers.set(pointerId, noteNumber);
+    // Two fingers on the same key share one held note. Lifting or moving one
+    // finger must not silence the note still held by the other.
+    if (previous !== undefined && previous !== null && ![...this.activePointers.values()].includes(previous)) {
+      this.setPressed(previous, false);
+      this.dispatchNote(previous, false);
+    }
+    if (noteNumber !== null && ![...this.activePointers].some(([id, note]) => id !== pointerId && note === noteNumber)) {
+      this.setPressed(noteNumber, true);
+      this.dispatchNote(noteNumber, true);
+    }
   }
 
   private setPressed(noteNumber: number, pressed: boolean): void {
@@ -218,11 +243,11 @@ export class PerformanceKeyboardController {
   }
 
   private dispatchNote(noteNumber: number, pressed: boolean): void {
-    this.onNote(noteNumber, pressed, pressed ? 110 : 0);
+    const inputId = this.onNote(noteNumber, pressed, pressed ? 110 : 0) ?? null;
     window.dispatchEvent(new CustomEvent<PerformanceNoteDetail>('hookkeys:performance-note', {
       detail: {
         channel: 1,
-        inputId: null,
+        inputId,
         noteNumber,
         pressed,
         velocity: pressed ? 110 : 0,

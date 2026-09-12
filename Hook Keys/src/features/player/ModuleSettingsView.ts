@@ -1,5 +1,5 @@
 import type { MidiInputDevice } from '../midi/MidiInputService';
-import { createModuleEffectCardsMarkup } from './ModuleEffectsView';
+import { createModuleEffectCardsMarkup, type ModuleProcessorReplacement } from './ModuleEffectsView';
 import { createAudioRouteOptions, type AudioBusRoute } from '../audio/AudioOutputService';
 import { createVelocityCardMarkup } from './VelocityCurveView';
 
@@ -65,7 +65,7 @@ export function createModuleSettingsMarkup(
   bpm: number,
   audioChannelCount: number,
   audioRoute: AudioBusRoute,
-  isSynthModule = false,
+  processorReplacement: ModuleProcessorReplacement = 'compressor',
 ): string {
   const deviceNames = new Map(devices.map((device) => [device.id, device.name]));
   const options = activeDeviceIds.map((deviceId, index) => {
@@ -78,9 +78,10 @@ export function createModuleSettingsMarkup(
     `;
   }).join('');
   const eqBands = readModuleEqBands(settings.eqBands);
+  const voiceMode = settings.voiceMode === 'mono' ? 'mono' : 'poly';
 
   return `
-    <section class="module-settings-panel${isSynthModule ? ' module-settings-panel--synth' : ''}" aria-label="Configurações do timbre">
+    <section class="module-settings-panel${processorReplacement === 'synth' ? ' module-settings-panel--synth' : ''}${processorReplacement === 'compressor' ? ' module-settings-panel--voice-switch' : ''}" aria-label="Configurações do timbre">
       <div class="module-settings-io-row">
         <label class="app-settings-field module-settings-device">
           <span>Dispositivo MIDI</span>
@@ -101,10 +102,17 @@ export function createModuleSettingsMarkup(
           <span>Polifonia</span>
           <strong>${Math.round(Math.min(128, Math.max(1, Number(settings.polyphony) || 64)))}</strong>
         </button>
+
+        ${processorReplacement === 'compressor' ? `
+          <button class="module-voice-mode-button is-${voiceMode}" type="button" data-module-setting-action="toggle-voice-mode" aria-pressed="${voiceMode === 'mono'}">
+            <span>Modo</span>
+            <strong>${voiceMode === 'mono' ? 'Mono' : 'Poly'}</strong>
+          </button>
+        ` : ''}
       </div>
 
       <div class="module-settings-workspace">
-        ${isSynthModule ? '' : `<div class="module-envelope-grid" aria-label="Envelope do timbre">
+        ${processorReplacement === 'synth' ? '' : `<div class="module-envelope-grid" aria-label="Envelope do timbre">
           ${ENVELOPE_CONTROLS.map(({ parameter, label }) => createEnvelopeControl(
             parameter,
             label,
@@ -143,7 +151,7 @@ export function createModuleSettingsMarkup(
               <span>20 kHz</span>
             </div>
           </article>
-          ${createModuleEffectCardsMarkup(settings, bpm, isSynthModule)}
+          ${createModuleEffectCardsMarkup(settings, bpm, processorReplacement)}
         </div>
       </div>
       ${createVelocityCardMarkup(settings)}

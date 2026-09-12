@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -174,6 +176,7 @@ struct AppState {
     midi: Mutex<Vec<MidiInputConnection<()>>>,
     uploads: Mutex<HashMap<usize, UploadSession>>,
     compatibility_mode: Arc<AtomicBool>,
+    allow_close: AtomicBool,
 }
 
 impl Default for AppState {
@@ -184,6 +187,7 @@ impl Default for AppState {
             midi: Mutex::new(Vec::new()),
             uploads: Mutex::new(HashMap::new()),
             compatibility_mode: Arc::new(AtomicBool::new(false)),
+            allow_close: AtomicBool::new(false),
         }
     }
 }
@@ -907,9 +911,24 @@ fn finish_sound_font_upload(module_index: usize, state: State<'_, AppState>) -> 
     }
 }
 
+#[tauri::command]
+fn confirm_app_close(app: AppHandle, state: State<'_, AppState>) {
+    state.allow_close.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                if !state.allow_close.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = window.emit("hook-keys://close-requested", ());
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             initialize,
             list_audio_output_devices,
@@ -929,6 +948,7 @@ fn main() {
             begin_sound_font_upload,
             append_sound_font_chunk,
             finish_sound_font_upload,
+            confirm_app_close,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Hook Keys");

@@ -43,7 +43,12 @@ HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
 }
 
 bool HookKeysEngine::enqueueMidi(MidiMessage message) noexcept {
-  if (message.inputSlot >= kMidiInputCount) return false;
+  if (message.inputSlot >= kMidiInputCount) {
+    const auto type = static_cast<std::uint8_t>(message.status & kMessageTypeMask);
+    const auto virtualNoteInput = message.inputSlot == kKeyboardBroadcastInput ||
+        message.inputSlot == kArpeggiatorInput || message.inputSlot == kSequencerInput;
+    if (!virtualNoteInput || (type != kNoteOn && type != kNoteOff)) return false;
+  }
   message.data1 = std::min<std::uint8_t>(message.data1, 127);
   message.data2 = std::min<std::uint8_t>(message.data2, 127);
   return push(EngineCommand::midiMessage(message));
@@ -205,12 +210,22 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
 
 void HookKeysEngine::routeNoteOn(
     std::uint8_t inputSlot, std::uint8_t sourceNote, std::uint8_t velocity) noexcept {
+  const auto generatedModule = inputSlot == kArpeggiatorInput ? 5
+      : inputSlot == kSequencerInput ? 6 : -1;
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     auto* synth = modules_[index];
     const auto& config = configs_[index];
+    const auto generatedForDifferentModule = generatedModule >= 0 &&
+        index != static_cast<std::size_t>(generatedModule);
+    const auto generatedConfig = config.midiInputSlot == kArpeggiatorInput ||
+        config.midiInputSlot == kSequencerInput;
+    const auto regularInputMismatch = generatedModule < 0 && (
+        (inputSlot == kKeyboardBroadcastInput && generatedConfig) ||
+        (inputSlot != kKeyboardBroadcastInput && config.midiInputSlot != kAllMidiInputs &&
+         inputSlot != config.midiInputSlot));
     if (synth == nullptr || !config.enabled ||
-        (config.midiInputSlot != kAllMidiInputs && inputSlot != config.midiInputSlot) ||
-        sourceNote < config.lowNote || sourceNote > config.highNote) {
+        generatedForDifferentModule || regularInputMismatch ||
+        (generatedModule < 0 && (sourceNote < config.lowNote || sourceNote > config.highNote))) {
       continue;
     }
     const auto targetNote = translatedNote(sourceNote, config.octaveShift);
@@ -221,7 +236,11 @@ void HookKeysEngine::routeNoteOn(
         activeCount += static_cast<std::size_t>(std::count_if(
             inputNotes.begin(), inputNotes.end(), [](std::int16_t note) { return note >= 0; }));
       }
-      if (activeCount >= config.polyphony) continue;
+      if (activeCount >= config.polyphony) {
+        if (config.polyphony != 1) continue;
+        synth->allNotesOff();
+        for (auto& inputNotes : activeNotes_[index]) inputNotes.fill(-1);
+      }
     }
     if (previousTarget >= 0) synth->noteOff(static_cast<std::uint8_t>(previousTarget));
     activeNotes_[index][inputSlot][sourceNote] = targetNote;
