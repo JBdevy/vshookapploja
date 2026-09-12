@@ -2,8 +2,20 @@ const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
 const assert = require('node:assert/strict')
+const { getEventListeners, setMaxListeners } = require('node:events')
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'app-shell.js'), 'utf8')
+const scanBatchSize = Number(source.match(/const VSHOOK_SCAN_BATCH_SIZE = (\d+)/)[1])
+const abortControllers = new Set()
+class DiscoveryTestAbortController extends AbortController {
+  constructor() {
+    super()
+    // A varredura tem um lote limitado de requisições paralelas. No Node 20,
+    // o limite padrão (10) é menor que o lote; verificamos a limpeza ao final.
+    setMaxListeners(scanBatchSize + 2, this.signal)
+    abortControllers.add(this)
+  }
+}
 const storage = new Map()
 const fastDiscovery = {
   app: 'VS Hook',
@@ -88,7 +100,7 @@ const context = {
   console,
   setTimeout,
   clearTimeout,
-  AbortController,
+  AbortController: DiscoveryTestAbortController,
   URL,
   URLSearchParams,
   fetch: mockFetch,
@@ -145,8 +157,9 @@ vm.runInContext(source, context)
 
 const evaluate = (code) => vm.runInContext(code, context)
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-async function until(predicate, message) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+async function until(predicate, message, timeoutMs = 1500) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     if (predicate()) return
     await wait(5)
   }
@@ -165,9 +178,10 @@ async function run() {
   }
 
   const candidates = vm.runInContext('buildVshookStoreCandidateIps(["192.168.77.42"])', context)
-  if (!candidates.slice(0, 254).every((ip) => ip.startsWith('192.168.77.'))) {
-    throw new Error('A faixa da rede ativa nao ficou em primeiro lugar.')
-  }
+  assert.equal(candidates.length, 253, 'A busca deve excluir o próprio aparelho, rede e broadcast.')
+  assert.ok(candidates.every((ip) => ip.startsWith('192.168.77.')),
+    'A busca automática não pode incluir outra rede.')
+  assert.equal(evaluate('buildVshookStoreCandidateIps([]).length'), 0)
 
   storage.set('vshook_director_url', 'http://10.0.0.8:47831')
   storage.set('vshook_musicians_url', 'http://192.168.77.99:47832')
@@ -176,11 +190,108 @@ async function run() {
     context,
   )
   if (candidatesWithHistory[0] !== '192.168.77.99' ||
-      candidatesWithHistory.indexOf('10.0.0.8') < 254) {
-    throw new Error('Um IP antigo de outra rede passou na frente do Wi-Fi atual.')
+      candidatesWithHistory.includes('10.0.0.8')) {
+    throw new Error('Um IP antigo de outra rede entrou na busca do Wi-Fi atual.')
   }
   storage.delete('vshook_director_url')
   storage.delete('vshook_musicians_url')
+
+  // A máscara vem do SO: hotspot /28 não é /24, e uma LAN /23 atravessa
+  // dois blocos de último octeto. Nunca pesquisar rede, broadcast ou o celular.
+  const hotspotCandidates = evaluate(`buildVshookStoreCandidateIps([
+    { address: '172.20.10.1', prefixLength: 28, interfaceName: 'bridge100' }
+  ])`)
+  assert.equal(hotspotCandidates.length, 13)
+  assert.ok(hotspotCandidates.includes('172.20.10.2') && hotspotCandidates.includes('172.20.10.14'))
+  assert.ok(hotspotCandidates.every((ip) => {
+    const last = Number(ip.split('.').pop())
+    return ip.startsWith('172.20.10.') && last >= 2 && last <= 14
+  }))
+  const androidHotspotCandidates = evaluate(`buildVshookStoreCandidateIps([
+    { address: '192.168.137.1', prefixLength: 24, interfaceName: 'ap0' }
+  ])`)
+  assert.equal(androidHotspotCandidates.length, 253)
+  assert.ok(androidHotspotCandidates.includes('192.168.137.80'))
+  const wideNetwork = evaluate(`buildVshookStoreCandidateIps([
+    { address: '192.168.80.12', prefixLength: 23 }
+  ])`)
+  assert.equal(wideNetwork.length, 509)
+  assert.ok(wideNetwork.includes('192.168.81.254'))
+  assert.ok(wideNetwork.includes('192.168.80.255') && wideNetwork.includes('192.168.81.0'))
+  assert.ok(!wideNetwork.includes('192.168.80.0') && !wideNetwork.includes('192.168.81.255'))
+  const narrowNetwork = evaluate(`buildVshookStoreCandidateIps([
+    { address: '192.168.90.10', prefixLength: 28 }
+  ])`)
+  assert.equal(narrowNetwork.length, 13)
+  assert.ok(!narrowNetwork.includes('192.168.90.16'))
+  const shiftedHotspot = evaluate(`buildVshookStoreCandidateIps([
+    { address: '192.168.7.129', prefixLength: 28 }
+  ])`)
+  assert.equal(shiftedHotspot.length, 13)
+  assert.ok(shiftedHotspot.includes('192.168.7.130') && shiftedHotspot.includes('192.168.7.142'))
+  assert.ok(!shiftedHotspot.includes('192.168.7.1') && !shiftedHotspot.includes('192.168.7.143'))
+  assert.equal(evaluate(`buildVshookStoreCandidateIps([
+    { address: '192.168.7.5', prefixLength: 32 }
+  ]).length`), 0)
+  assert.equal(evaluate(`buildVshookStoreCandidateIps([
+    { address: '10.0.0.1', prefixLength: 8 },
+    { address: '192.168.1.1', prefixLength: '24' },
+    { address: '192.168.1.1', prefixLength: 0 },
+    { address: '8.8.8.8', prefixLength: 24 }
+  ]).length`), 0, 'Dados inválidos/rede ampla não podem acionar uma busca genérica.')
+  const overlappingNetwork = evaluate(`buildVshookStoreCandidateIps([
+    { address: '192.168.50.1', prefixLength: 24 },
+    { address: '192.168.50.2', prefixLength: 24 }
+  ])`)
+  assert.equal(overlappingNetwork.length, 252)
+
+  // Sem sessão ou sem interface LAN, não há fallback para internet/IP antigo.
+  fetchOverride = async () => ({ ok: false })
+  requestedHosts = []
+  activeLocalAddresses = ['192.168.77.42']
+  assert.equal((await evaluate('discoverProjectsFromActiveNetwork()')).length, 0)
+  assert.equal(new Set(requestedHosts).size, 253)
+  assert.ok(requestedHosts.every((ip) => ip.startsWith('192.168.77.')))
+  addressOverride = async () => ({ addresses: ['10.30.40.50'], networks: [] })
+  requestedHosts = []
+  assert.equal((await evaluate('discoverProjectsFromActiveNetwork()')).length, 0)
+  assert.equal(requestedHosts.length, 0, 'Sem LAN não pode varrer o IP celular nem faixas genéricas.')
+  addressOverride = async () => { throw new Error('Plugin indisponível') }
+  assert.equal((await evaluate('discoverProjectsFromActiveNetwork()')).length, 0)
+  assert.equal(requestedHosts.length, 0)
+
+  // PC conectado no hotspot criado pelo próprio aparelho, com internet móvel.
+  addressOverride = async () => ({ addresses: ['172.20.10.1'], networks: [
+    { address: '172.20.10.1', prefixLength: 28, interfaceName: 'bridge100' }
+  ] })
+  fetchOverride = async (url) => ({
+    ok: new URL(url).hostname === '172.20.10.14', json: async () => fastDiscovery,
+  })
+  requestedHosts = []
+  assert.equal((await evaluate('discoverProjectsFromActiveNetwork()'))[0]?.projectName, 'Teste')
+  assert.equal(new Set(requestedHosts).size, 13)
+  assert.ok(requestedHosts.every((ip) => hotspotCandidates.includes(ip)))
+  fetchOverride = async (url) => {
+    const host = new URL(url).hostname
+    return { ok: host === '172.20.10.2' || host === '172.20.10.14',
+      json: async () => ({ ...fastDiscovery, deviceName: host.endsWith('.2') ? 'PC A HOTSPOT' : 'PC B HOTSPOT' }) }
+  }
+  const hotspotComputers = await evaluate('discoverProjectsFromActiveNetwork()')
+  assert.equal(hotspotComputers.length, 2, 'Hotspot também deve descobrir os dois computadores.')
+  assert.deepEqual(Array.from(hotspotComputers, (project) => project.computerName),
+    ['PC A HOTSPOT', 'PC B HOTSPOT'])
+  addressOverride = async () => ({ addresses: ['192.168.137.1'], networks: [
+    { address: '192.168.137.1', prefixLength: 24, interfaceName: 'ap0' }
+  ] })
+  fetchOverride = async (url) => ({
+    ok: new URL(url).hostname === '192.168.137.80', json: async () => fastDiscovery,
+  })
+  requestedHosts = []
+  assert.equal((await evaluate('discoverProjectsFromActiveNetwork()'))[0]?.projectName, 'Teste')
+  assert.equal(new Set(requestedHosts).size, 253)
+  assert.ok(requestedHosts.every((ip) => androidHotspotCandidates.includes(ip)))
+  addressOverride = null
+  fetchOverride = null
 
   const startedAt = Date.now()
   const projects = await vm.runInContext('fetchDiscovery("192.168.77.10", 800)', context)
@@ -236,6 +347,12 @@ async function run() {
     vshookRedundancyProject = redundantProjects[0];
     vshookRedundancyMode = 'director';
     vshookRedundancyFailureCount = 0`)
+  addressOverride = async () => ({ addresses: [], networks: [] })
+  requestedHosts = []
+  assert.equal((await evaluate('findVshookRedundancyFallbacks(redundantProjects[0])')).length, 0)
+  assert.equal(requestedHosts.length, 0,
+    'A redundância não pode procurar PCs antigos fora da rede local ativa.')
+  addressOverride = null
   fetchOverride = async (url) => {
     const parsed = new URL(url)
     const online = parsed.hostname === '192.168.77.11'
@@ -301,12 +418,12 @@ async function run() {
     throw new Error('O Atualizar nao iniciou a busca pela nova faixa do Wi-Fi conectado.')
   }
 
-  assert.equal(pendingRequests.size, 0, 'Ao encontrar a sessão, os demais IPs do lote devem ser abortados.')
+  assert.equal(pendingRequests.size, 0, 'Ao concluir a busca, não podem restar requisições pendentes.')
 
   // Cancelamento no meio de um lote não pode testar fallback nem iniciar o próximo lote.
   respondingHost = ''
   requestedHosts = []
-  context.testAbort = new AbortController()
+  context.testAbort = new DiscoveryTestAbortController()
   const scan = evaluate('scanInBatches(["192.168.88.1", "192.168.88.2"], 1, testAbort.signal)')
   assert.equal(pendingRequests.size, 1)
   context.testAbort.abort()
@@ -327,9 +444,13 @@ async function run() {
   assert.ok(abortedRequests > abortsBeforeRestart)
   requestedHosts = []
   await oldSearch
-  await until(() => shellHtml.includes('Escolha como vai entrar'), 'Nova busca não abriu os modos.')
+  // A Loja percorre toda a sub-rede para descobrir também os PCs redundantes.
+  // São quatro lotes de até 650 ms, além do reagendamento de 120 ms.
+  await until(() => shellHtml.includes('Escolha como vai entrar'), 'Nova busca não abriu os modos.', 5000)
   assert.ok(requestedHosts.length > 0)
   assert.ok(requestedHosts.every((host) => host.startsWith('192.168.99.')))
+  assert.equal(new Set(requestedHosts).size, 253,
+    'A nova busca deve conferir toda a rede ativa, não só o primeiro PC.')
   assert.equal(pendingRequests.size, 0)
 
   // Simula um corpo JSON que ainda resolve após abort: Voltar precisa vencer a resposta tardia.
@@ -411,7 +532,13 @@ async function run() {
   assert.equal(pendingRequests.size, 0)
   assert.equal(requestedHosts.length, 1, 'Sair da página deixou a busca do navegador continuar.')
 
+  for (const controller of abortControllers) {
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0,
+      'A descoberta deixou listeners de cancelamento depois de concluir ou sair.')
+  }
+
   console.log('Cancelamento ok: lotes, Procurar, Wi-Fi trocado, Voltar, JSON/plugin tardios, IP manual, modos, bridge e pagehide.')
+  console.log('Rede local ok: sem fallback, máscara real, hotspot próprio Android/iOS e histórico filtrado.')
 
   console.log(`Discovery automática ok: ${addresses[0]}, resposta em ${batchElapsed} ms.`)
 }

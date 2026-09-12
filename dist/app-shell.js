@@ -8,7 +8,7 @@ const VSHOOK_SCAN_BATCH_SIZE = 72
 const VSHOOK_REDUNDANCY_POLL_MS = 700
 const VSHOOK_REDUNDANCY_TIMEOUT_MS = 600
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-1-director-performance-v60'
+const VSHOOK_ASSET_VERSION = '1-0-1-director-performance-v63'
 const VSHOOK_CHAT_BOOTSTRAP_KEY = 'vshook_chat_bootstrap_key'
 const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
 const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
@@ -1086,26 +1086,19 @@ function renderDirectorComputers(projects, options = {}) {
 // projeto aberto no REAPER depois que a tela de sessoes ja estava na frente.
 async function buildDiscoveryCandidateIps() {
   if (!isVshookInstalledNativeApp()) return buildCandidateIps()
-  const localAddresses = await getVshookStoreLocalNetworkAddresses()
-  return buildVshookStoreCandidateIps(localAddresses)
+  const localNetworks = await getVshookStoreLocalNetworks()
+  return buildVshookStoreCandidateIps(localNetworks)
 }
 
 async function discoverProjectsFromActiveNetwork(signal) {
   if (signal?.aborted) return []
-  if (isVshookInstalledNativeApp()) {
-    const localAddresses = await getVshookStoreLocalNetworkAddresses()
-    if (signal?.aborted) return []
-    const activeSubnets = [...new Set(localAddresses.map(subnetFromIp).filter(Boolean))]
-    if (activeSubnets.length) {
-      const activeIps = buildVshookStoreCandidateIps(localAddresses)
-        .filter((ip) => activeSubnets.includes(subnetFromIp(ip)))
-      const allProjects = await scanAllVshookStoreComputers(
-        activeIps, VSHOOK_SCAN_BATCH_SIZE, signal)
-      if (signal?.aborted || allProjects.length) return allProjects
-    }
-  }
   const ips = await buildDiscoveryCandidateIps()
   if (signal?.aborted) return []
+  // No app instalado, não há fallback para faixas genéricas ou IPs antigos.
+  // Sem uma rede local identificada, a entrada manual continua disponível.
+  if (isVshookInstalledNativeApp()) {
+    return scanAllVshookStoreComputers(ips, VSHOOK_SCAN_BATCH_SIZE, signal)
+  }
   return scanInBatches(ips, VSHOOK_SCAN_BATCH_SIZE, signal)
 }
 
@@ -1288,7 +1281,8 @@ function normalizeIp(value) {
   const text = String(value || '').trim()
   const parts = text.split('.').map((part) => Number(part))
   if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return ''
-  if (parts[0] === 0 || parts[0] === 127 || parts[3] === 0 || parts[3] === 255) return ''
+  // Rede/broadcast dependem da máscara, não apenas do último octeto.
+  if (parts[0] === 0 || parts[0] === 127) return ''
   return parts.join('.')
 }
 
@@ -1891,7 +1885,7 @@ function isVshookStorePrivateIpv4(value) {
   return parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31
 }
 
-async function getVshookStoreLocalNetworkAddresses() {
+async function getVshookStoreLocalNetworks() {
   if (!isVshookInstalledNativeApp()) return []
   try {
     if (!vshookStoreLocalNetworkPlugin) {
@@ -1902,36 +1896,74 @@ async function getVshookStoreLocalNetworkAddresses() {
     }
     if (!vshookStoreLocalNetworkPlugin) return []
     const result = await vshookStoreLocalNetworkPlugin.getAddresses()
-    const addresses = Array.isArray(result?.addresses) ? result.addresses : []
-    return [...new Set(addresses.map(normalizeIp).filter(isVshookStorePrivateIpv4))]
+    // Plugins antigos retornavam somente addresses; os novos incluem a máscara.
+    const networks = Array.isArray(result?.networks) ? result.networks : result?.addresses
+    return normalizeVshookLocalNetworks(networks)
   } catch (error) {
     return []
   }
 }
 
-function buildVshookStoreCandidateIps(localAddresses) {
+async function getVshookStoreLocalNetworkAddresses() {
+  return [...new Set((await getVshookStoreLocalNetworks()).map((network) => network.address))]
+}
+
+function vshookIpv4Number(value) {
+  return String(value).split('.').reduce((number, part) => number * 256 + Number(part), 0)
+}
+
+function vshookNumberIpv4(value) {
+  return [24, 16, 8, 0].map((shift) => Math.floor(value / 2 ** shift) % 256).join('.')
+}
+
+function normalizeVshookLocalNetworks(networks) {
   const result = []
   const seen = new Set()
+  for (const entry of Array.isArray(networks) ? networks : []) {
+    const address = normalizeIp(typeof entry === 'string' ? entry : entry?.address)
+    const prefixLength = typeof entry === 'string' ? 24 : entry?.prefixLength
+    if (!isVshookStorePrivateIpv4(address) || !Number.isInteger(prefixLength) ||
+        prefixLength < 1 || prefixLength > 32) continue
+    const key = `${address}/${prefixLength}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push({ address, prefixLength })
+  }
+  return result
+}
+
+function buildVshookStoreCandidateIps(localNetworks) {
+  const result = []
+  const seen = new Set()
+  const networks = normalizeVshookLocalNetworks(localNetworks)
+  const ownAddresses = new Set(networks.map((network) => network.address))
+  const ranges = networks.flatMap(({ address, prefixLength }) => {
+    const size = 2 ** (32 - prefixLength)
+    // Evita milhões de requisições em redes muito amplas. Nelas usa-se IP manual.
+    if (size > 65536) return []
+    const start = Math.floor(vshookIpv4Number(address) / size) * size
+    return [{ first: start + (prefixLength <= 30 ? 1 : 0),
+      last: start + size - 1 - (prefixLength <= 30 ? 1 : 0) }]
+  })
   const push = (value) => {
     const ip = normalizeIp(value)
-    if (!ip || seen.has(ip)) return
+    if (!ip || seen.has(ip) || ownAddresses.has(ip)) return
+    const number = vshookIpv4Number(ip)
+    if (!ranges.some((range) => number >= range.first && number <= range.last)) return
     seen.add(ip)
     result.push(ip)
   }
-  const subnets = [...new Set(localAddresses.map(subnetFromIp).filter(Boolean))]
-  // Se um computador salvo ainda pertence ao Wi-Fi atual, ele é o primeiro
-  // candidato. Endereços de redes antigas ficam somente na busca de reserva.
-  for (const host of getStoredBridgeHosts()) {
-    if (subnets.includes(subnetFromIp(host))) push(host)
-  }
+  // Histórico só tem prioridade se ainda pertence à rede local atual.
+  for (const host of getStoredBridgeHosts()) push(host)
   const preferredHosts = [1, 2, 10, 11, 15, 20, 30, 50, 80, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 120, 150, 180, 200, 220, 254]
-  for (const subnet of subnets) {
-    for (const host of preferredHosts) push(subnet + '.' + host)
+  for (const range of ranges) {
+    for (let block = Math.floor(range.first / 256) * 256; block <= range.last; block += 256) {
+      for (const host of preferredHosts) push(vshookNumberIpv4(block + host))
+    }
   }
-  for (const subnet of subnets) {
-    for (let host = 1; host <= 254; host += 1) push(subnet + '.' + host)
+  for (const range of ranges) {
+    for (let host = range.first; host <= range.last; host += 1) push(vshookNumberIpv4(host))
   }
-  for (const ip of buildCandidateIps()) push(ip)
   return result
 }
 
@@ -2006,7 +2038,16 @@ function getVshookFallbackComputerProjects(currentProject) {
 }
 
 async function findVshookRedundancyFallbacks(currentProject, signal) {
-  let computers = getVshookFallbackComputerProjects(currentProject)
+  const activeHosts = isVshookInstalledNativeApp()
+    ? new Set(await buildDiscoveryCandidateIps()) : null
+  if (signal?.aborted) return []
+  const onActiveNetwork = (computer) => {
+    if (!activeHosts) return true
+    try {
+      return activeHosts.has(new URL(computer.projects[0]?.directorUrl).hostname)
+    } catch (error) { return false }
+  }
+  let computers = getVshookFallbackComputerProjects(currentProject).filter(onActiveNetwork)
   if (!computers.length) {
     const refreshed = await discoverProjectsFromActiveNetwork(signal)
     if (signal?.aborted) return []
@@ -2015,7 +2056,7 @@ async function findVshookRedundancyFallbacks(currentProject, signal) {
         ...vshookDiscoveredProjects,
         ...refreshed,
       ])
-      computers = getVshookFallbackComputerProjects(currentProject)
+      computers = getVshookFallbackComputerProjects(currentProject).filter(onActiveNetwork)
     }
   }
 

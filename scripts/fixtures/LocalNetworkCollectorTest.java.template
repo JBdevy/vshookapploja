@@ -1,0 +1,133 @@
+package com.hookdeveloper.vshook.localnetwork;
+
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.util.*;
+
+/** Executa os métodos reais do plugin contra snapshots simulados do Android. */
+public final class LocalNetworkCollectorTest {
+    static final class JSArray extends ArrayList<Object> { void put(Object value) { add(value); } }
+    static final class JSObject extends LinkedHashMap<String, Object> {
+        String getString(String key) { return (String) get(key); }
+    }
+    static final class PluginCall { JSObject result; void resolve(JSObject value) { result = value; } }
+    static final class Context {
+        static final String CONNECTIVITY_SERVICE = "connectivity";
+        Object getSystemService(String ignored) { return manager; }
+    }
+    static final class NetworkCapabilities {
+        static final int TRANSPORT_CELLULAR = 0, TRANSPORT_WIFI = 1, TRANSPORT_ETHERNET = 3,
+            TRANSPORT_VPN = 4, TRANSPORT_BLUETOOTH = 2;
+        final Set<Integer> transports = new HashSet<>();
+        NetworkCapabilities(int... values) { for (int value : values) transports.add(value); }
+        boolean hasTransport(int value) { return transports.contains(value); }
+    }
+    static final class LinkAddress {
+        final InetAddress address; final int prefix;
+        LinkAddress(String address, int prefix) throws Exception { this.address = InetAddress.getByName(address); this.prefix = prefix; }
+        InetAddress getAddress() { return address; }
+        int getPrefixLength() { return prefix; }
+    }
+    static final class LinkProperties {
+        final String name; final List<LinkAddress> addresses;
+        LinkProperties(String name, LinkAddress... addresses) { this.name = name; this.addresses = Arrays.asList(addresses); }
+        String getInterfaceName() { return name; }
+        List<LinkAddress> getLinkAddresses() { return addresses; }
+    }
+    static final class Network {
+        final NetworkCapabilities capabilities; final LinkProperties properties;
+        Network(NetworkCapabilities capabilities, LinkProperties properties) { this.capabilities = capabilities; this.properties = properties; }
+    }
+    static final class ConnectivityManager {
+        Network active; Network[] networks = new Network[0];
+        Network getActiveNetwork() { return active; }
+        Network[] getAllNetworks() { return networks; }
+        NetworkCapabilities getNetworkCapabilities(Network value) { return value.capabilities; }
+        LinkProperties getLinkProperties(Network value) { return value.properties; }
+    }
+    static final class InterfaceAddress {
+        final InetAddress address; final short prefix;
+        InterfaceAddress(String address, int prefix) throws Exception { this.address = InetAddress.getByName(address); this.prefix = (short) prefix; }
+        InetAddress getAddress() { return address; }
+        short getNetworkPrefixLength() { return prefix; }
+    }
+    static final class NetworkInterface {
+        static List<NetworkInterface> interfaces = new ArrayList<>();
+        final String name; final List<InterfaceAddress> addresses;
+        boolean up = true, loopback, pointToPoint, fail;
+        NetworkInterface(String name, InterfaceAddress... addresses) { this.name = name; this.addresses = Arrays.asList(addresses); }
+        static Enumeration<NetworkInterface> getNetworkInterfaces() { return Collections.enumeration(interfaces); }
+        boolean isUp() { if (fail) throw new IllegalStateException("Snapshot inacessível"); return up; }
+        boolean isLoopback() { return loopback; }
+        boolean isPointToPoint() { return pointToPoint; }
+        String getName() { return name; }
+        List<InterfaceAddress> getInterfaceAddresses() { return addresses; }
+    }
+    static ConnectivityManager manager;
+    Context getContext() { return new Context(); }
+
+    // ACTUAL_PLUGIN_NETWORK_METHODS
+
+    static void verify(String address, int prefix, String name) {
+        PluginCall call = new PluginCall();
+        new LocalNetworkCollectorTest().getAddresses(call);
+        JSArray networks = (JSArray) call.result.get("networks");
+        JSArray addresses = (JSArray) call.result.get("addresses");
+        if (address == null) {
+            if (!networks.isEmpty() || !addresses.isEmpty()) throw new AssertionError("Sem LAN deveria ser vazio");
+            return;
+        }
+        if (networks.size() != 1 || addresses.size() != 1) throw new AssertionError(call.result.toString());
+        JSObject network = (JSObject) networks.get(0);
+        if (!address.equals(network.get("address")) || !Integer.valueOf(prefix).equals(network.get("prefixLength")) ||
+            !name.equals(network.get("interfaceName")) || !address.equals(addresses.get(0))) throw new AssertionError(call.result.toString());
+    }
+
+    public static void main(String[] ignored) throws Exception {
+        manager = new ConnectivityManager();
+        // Hotspot próprio não está no ConnectivityManager: internet padrão é 4G.
+        Network cellular = new Network(new NetworkCapabilities(NetworkCapabilities.TRANSPORT_CELLULAR),
+            new LinkProperties("rmnet_data0", new LinkAddress("10.30.40.50", 30)));
+        manager.active = cellular; manager.networks = new Network[] {cellular};
+        NetworkInterface.interfaces = Arrays.asList(
+            new NetworkInterface("rmnet_data0", new InterfaceAddress("10.30.40.50", 30)),
+            new NetworkInterface("ap0", new InterfaceAddress("192.168.137.1", 24)));
+        verify("192.168.137.1", 24, "ap0");
+
+        // AP virtual/bridge também participa; /28 é preservado sem fixar /24.
+        NetworkInterface.interfaces = Arrays.asList(new NetworkInterface("br0", new InterfaceAddress("172.20.10.1", 28)));
+        verify("172.20.10.1", 28, "br0");
+
+        // VPN padrão não pode ocultar o Wi-Fi real, nem entrar na busca.
+        Network vpn = new Network(new NetworkCapabilities(NetworkCapabilities.TRANSPORT_VPN),
+            new LinkProperties("tun0", new LinkAddress("10.8.0.2", 24)));
+        Network wifi = new Network(new NetworkCapabilities(NetworkCapabilities.TRANSPORT_WIFI),
+            new LinkProperties("wlan0", new LinkAddress("192.168.80.12", 23)));
+        manager.active = vpn; manager.networks = new Network[] {vpn, cellular, wifi};
+        NetworkInterface.interfaces = Arrays.asList(
+            new NetworkInterface("tun0", new InterfaceAddress("10.8.0.2", 24)),
+            new NetworkInterface("wlan0", new InterfaceAddress("192.168.80.12", 23)));
+        verify("192.168.80.12", 23, "wlan0");
+
+        // Wi-Fi/Ethernet sem INTERNET continuam sendo LAN válida.
+        Network ethernet = new Network(new NetworkCapabilities(NetworkCapabilities.TRANSPORT_ETHERNET),
+            new LinkProperties("eth0", new LinkAddress("192.168.50.10", 24)));
+        manager.active = ethernet; manager.networks = new Network[] {ethernet};
+        NetworkInterface.interfaces = Collections.emptyList();
+        verify("192.168.50.10", 24, "eth0");
+
+        // ROM sem LinkProperties: fallback é enumeração LAN, não faixa genérica.
+        manager.active = null; manager.networks = new Network[0];
+        NetworkInterface broken = new NetworkInterface("wlan0"); broken.fail = true;
+        NetworkInterface tunnel = new NetworkInterface("unknownVpn", new InterfaceAddress("10.5.0.2", 24)); tunnel.pointToPoint = true;
+        NetworkInterface down = new NetworkInterface("ap0", new InterfaceAddress("192.168.10.1", 24)); down.up = false;
+        NetworkInterface.interfaces = Arrays.asList(broken, tunnel, down,
+            new NetworkInterface("eth0", new InterfaceAddress("8.8.8.8", 24)),
+            new NetworkInterface("wlan1", new InterfaceAddress("192.168.5.3", 0)),
+            new NetworkInterface("ap1", new InterfaceAddress("192.168.2.1", 24)));
+        verify("192.168.2.1", 24, "ap1");
+        NetworkInterface.interfaces = Arrays.asList(tunnel, down);
+        verify(null, 0, null);
+        System.out.println("LOCAL_NETWORK_NATIVE_COLLECTOR_OK: hotspot próprio, máscaras, 4G, VPN, Wi-Fi offline e ausência de LAN.");
+    }
+}

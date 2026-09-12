@@ -1,5 +1,8 @@
 export interface VSHookLocalNetworkPlugin {
-  getAddresses(): Promise<{ addresses: string[] }>;
+  getAddresses(): Promise<{
+    addresses: string[];
+    networks: { address: string; prefixLength: number; interfaceName: string }[];
+  }>;
   getFirebaseConfiguration(): Promise<{
     projectId: string;
     senderId: string;
