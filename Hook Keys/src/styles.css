@@ -106,14 +106,6 @@ button {
   margin-bottom: auto;
 }
 
-.brand-visual {
-  display: flex;
-  align-items: center;
-  gap: clamp(18px, 3vw, 42px);
-  width: 100%;
-  margin-bottom: 24px;
-}
-
 .brand-symbol-image {
   display: block;
   width: clamp(82px, 9vw, 126px);
@@ -939,14 +931,6 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
     width: 76px;
   }
 
-  .brand-visual {
-    gap: 14px;
-  }
-
-  .login-keyboard-performer {
-    min-width: 165px;
-    height: clamp(108px, 16vw, 150px);
-  }
 }
 
 @media (max-height: 560px) and (orientation: landscape) {
@@ -958,15 +942,6 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   .brand-symbol-image {
     width: 70px;
     height: 70px;
-  }
-
-  .brand-visual {
-    margin-bottom: 10px;
-  }
-
-  .login-keyboard-performer {
-    min-width: 150px;
-    height: 92px;
   }
 
   .brand-kicker {
@@ -2066,63 +2041,6 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .player-top-brand-actions .player-brand__name {
   font-size: clamp(14px, 1.55vw, 20px);
-}
-
-.keyboard-performer-3d {
-  position: relative;
-  display: block;
-  overflow: hidden;
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at 52% 65%, rgba(255, 97, 17, .15), transparent 62%),
-    linear-gradient(135deg, rgba(255,255,255,.025), rgba(0,0,0,.08));
-  box-shadow: inset 0 0 0 1px rgba(255, 118, 31, .12);
-  pointer-events: none;
-}
-
-.login-keyboard-performer {
-  flex: 1 1 auto;
-  width: min(27vw, 350px);
-  min-width: 210px;
-  height: clamp(135px, 17vw, 215px);
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.login-keyboard-performer::after {
-  display: none;
-}
-
-.keyboard-performer-3d::after {
-  position: absolute;
-  right: 7%;
-  bottom: 7%;
-  left: 7%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 103, 18, .9), transparent);
-  box-shadow: 0 0 8px #ff5d00;
-  content: "";
-}
-
-.keyboard-performer-3d canvas {
-  position: relative;
-  z-index: 1;
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.keyboard-performer-3d.is-webgl-unavailable::before {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: #ff7a18;
-  content: "♫";
-  font-size: 22px;
 }
 
 .player-top-brand-actions .player-navigation__tracks-button {
@@ -8368,18 +8286,6 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
     margin: 0;
   }
 
-  html[data-app-mode="login"] .brand-visual {
-    justify-content: center;
-    margin-bottom: 13px;
-  }
-
-  html[data-app-mode="login"] .login-keyboard-performer {
-    flex: 0 1 180px;
-    width: min(46vw, 180px);
-    min-width: 130px;
-    height: 105px;
-  }
-
   html[data-app-mode="login"] .brand-lockup h1 {
     font-size: clamp(48px, 15vw, 72px);
   }
@@ -8461,6 +8367,47 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
     content: "";
   }
 }
+
+/* Celular curto em pe: o cartao de acesso tem altura propria e nao encolhe,
+   entao os botoes Comprar/Suporte caiam abaixo da dobra num iPhone SE.
+   Aperta so os respiros; nenhum texto sai da tela. */
+@media (orientation: portrait) and (max-height: 700px) {
+  html[data-app-mode="login"] .brand-kicker {
+    margin-bottom: 6px;
+  }
+
+  html[data-app-mode="login"] .brand-line {
+    margin-top: 8px;
+  }
+
+  html[data-app-mode="login"] .access-stage {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  html[data-app-mode="login"] .access-card {
+    padding: 16px 22px 10px;
+  }
+
+  html[data-app-mode="login"] .access-card__topline {
+    margin-bottom: 14px;
+  }
+
+  html[data-app-mode="login"] .form-heading {
+    margin-bottom: 18px;
+  }
+}
+
+/* Celular baixo (360x640 e parecidos): reduz a marca para o cartao caber inteiro. */
+@media (orientation: portrait) and (max-height: 660px) {
+  html[data-app-mode="login"] .brand-symbol-image {
+    width: 62px;
+  }
+
+  html[data-app-mode="login"] .brand-lockup h1 {
+    font-size: clamp(38px, 12vw, 52px);
+  }
+}
+
 
 /* Ajuste final de densidade do Settings por tamanho físico da tela. */
 @media (orientation: landscape) and (max-width: 760px) {

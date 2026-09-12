@@ -28,15 +28,13 @@
     "@capacitor/ios": "8.4.2",
     "@capacitor/keyboard": "8.0.5",
     "@capacitor/screen-orientation": "^8.0.0",
-    "@tauri-apps/api": "^2.8.0",
-    "three": "^0.186.0"
+    "@tauri-apps/api": "^2.8.0"
   },
   "devDependencies": {
     "@capacitor/cli": "8.4.2",
     "@tauri-apps/cli": "^2.8.5",
     "@types/node": "^24.3.0",
     "@types/qrcode": "^1.5.5",
-    "@types/three": "^0.186.0",
     "qrcode": "^1.5.4",
     "typescript": "^5.9.3",
     "vite": "^7.1.5"

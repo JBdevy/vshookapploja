@@ -38,8 +38,6 @@ export class AuthScreen {
   private purchaseUrl = '';
   private readonly supportButton: HTMLButtonElement;
   private readonly purchaseButton: HTMLButtonElement;
-  private keyboardPerformerDestroy: (() => void) | null = null;
-  private authenticationFinished = false;
 
   constructor(
     root: HTMLElement,
@@ -52,14 +50,12 @@ export class AuthScreen {
       <main class="app-screen app-shell">
         <section class="brand-stage" aria-labelledby="brand-title">
           <div class="brand-lockup">
-            <div class="brand-visual" aria-hidden="true">
-              <img
-                class="brand-symbol-image"
-                src="/assets/icons/icon-256.webp"
-                alt=""
-              >
-              <span class="keyboard-performer-3d login-keyboard-performer" data-login-keyboard-performer></span>
-            </div>
+            <img
+              class="brand-symbol-image"
+              src="/assets/icons/icon-256.webp"
+              alt=""
+              aria-hidden="true"
+            >
             <p class="brand-kicker">ReiVs apresenta</p>
             <h1 id="brand-title"><span>Hook</span> Keys</h1>
             <p class="brand-line">Seu instrumento. Em qualquer palco.</p>
@@ -94,18 +90,6 @@ export class AuthScreen {
     this.supportButton = select(root, '.login-support-button');
     this.purchaseButton.addEventListener('click', () => this.openPurchasePage());
     this.supportButton.addEventListener('click', () => this.openSupport());
-    this.mountKeyboardPerformer();
-  }
-
-  private mountKeyboardPerformer(): void {
-    const performerRoot = document.querySelector<HTMLElement>('[data-login-keyboard-performer]');
-    if (!performerRoot) return;
-    void import('../player/KeyboardPerformer3D').then(({ KeyboardPerformer3D }) => {
-      if (this.authenticationFinished || !performerRoot.isConnected) return;
-      const performer = new KeyboardPerformer3D(performerRoot);
-      performer.mount();
-      this.keyboardPerformerDestroy = () => performer.destroy();
-    });
   }
 
   async start(): Promise<void> {
@@ -631,9 +615,6 @@ export class AuthScreen {
       window.clearInterval(this.countdownTimer);
       this.countdownTimer = null;
     }
-    this.authenticationFinished = true;
-    this.keyboardPerformerDestroy?.();
-    this.keyboardPerformerDestroy = null;
     this.onAuthenticated(session);
   }
 
