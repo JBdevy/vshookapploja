@@ -92,6 +92,7 @@ import {
 } from './ModuleEffectsView';
 import {
   createVelocityCurveMarkup,
+  DEFAULT_VELOCITY_CURVE,
   isVelocityCurveMode,
   readVelocityCurveSettings,
   updateVelocityCurveMarkup,
@@ -1407,6 +1408,7 @@ export class PlayerScreen {
     const current = readVelocityCurveSettings(moduleState.settings.velocityCurve);
     if (current.mode !== 'user') return;
     current.points[pointIndex] = velocityFromClientY(plot, clientY);
+    current.userPoints = [...current.points];
     moduleState.settings.velocityCurve = current;
     updateVelocityCurveMarkup(editor, current);
     this.scheduleNativeEngineSync();
@@ -1417,8 +1419,15 @@ export class PlayerScreen {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     const editor = modal.querySelector<HTMLElement>('.velocity-curve-editor');
     if (!moduleState || !editor) return;
+    const current = readVelocityCurveSettings(moduleState.settings.velocityCurve);
+    if (current.mode !== 'fixed' || editor.dataset.velocityMode !== 'fixed') return;
     const fixed = Math.round(Math.min(127, Math.max(0, value)));
-    const next = { mode: 'fixed' as const, points: [fixed, fixed, fixed, fixed, fixed] as [number, number, number, number, number] };
+    const next = {
+      ...current,
+      mode: 'fixed' as const,
+      points: [fixed, fixed, fixed, fixed, fixed] as [number, number, number, number, number],
+      fixedValue: fixed,
+    };
     moduleState.settings.velocityCurve = next;
     updateVelocityCurveMarkup(editor, next);
     this.scheduleNativeEngineSync();
@@ -6070,7 +6079,11 @@ export class PlayerScreen {
               const invertedSoft = velocity.mode === 'soft'
                 && velocity.points.every((point, index) => point === [0, 52, 84, 108, 127][index]);
               if (legacyMiddle || invertedSoft) {
-                restoredSettings.velocityCurve = { mode: 'soft', points: [0, 8, 32, 72, 127] };
+                restoredSettings.velocityCurve = {
+                  ...DEFAULT_VELOCITY_CURVE,
+                  points: [...DEFAULT_VELOCITY_CURVE.points],
+                  userPoints: [...DEFAULT_VELOCITY_CURVE.userPoints],
+                };
               }
             }
             return {
@@ -6152,7 +6165,11 @@ function createDefaultModuleSettings(): Record<string, unknown> {
     cutoffHz: 20_000,
     eqEnabled: true,
     polyphony: 64,
-    velocityCurve: { mode: 'soft', points: [0, 8, 32, 72, 127] },
+    velocityCurve: {
+      ...DEFAULT_VELOCITY_CURVE,
+      points: [...DEFAULT_VELOCITY_CURVE.points],
+      userPoints: [...DEFAULT_VELOCITY_CURVE.userPoints],
+    },
   };
 }
 

@@ -9397,7 +9397,8 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   --button-color-a: #37dc78 !important;
   --button-color-b: #087435 !important;
   --button-border: #76ffa8 !important;
-  color: #06130a !important;
+  color: #fff !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .72);
 }
 
 .velocity-curve-plot {
@@ -9488,6 +9489,10 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   gap: 12px;
   color: #d9d1e8;
   font-weight: 850;
+}
+
+.velocity-fixed-control[hidden] {
+  display: none !important;
 }
 
 .velocity-fixed-control input {

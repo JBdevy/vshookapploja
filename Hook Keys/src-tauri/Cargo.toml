@@ -10,8 +10,8 @@ cc = "1"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
-cpal = "0.16"
-midir = "0.10"
+cpal = "0.17.3"
+midir = "0.11"
 base64 = "0.22"
 
 [profile.release]

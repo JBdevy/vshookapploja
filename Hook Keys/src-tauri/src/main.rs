@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    BufferSize, BuildStreamError, Device, SampleFormat, SampleRate, Stream, StreamConfig,
+    BufferSize, BuildStreamError, Device, SampleFormat, Stream, StreamConfig,
 };
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use serde::{Deserialize, Serialize};
@@ -265,7 +265,7 @@ fn audio_devices() -> Vec<(Device, AudioDevice)> {
             devices
                 .enumerate()
                 .filter_map(|(index, device)| {
-                    let name = device.name().ok()?;
+                    let name = device.description().ok()?.name().to_owned();
                     let channels = device
                         .supported_output_configs()
                         .ok()?
@@ -333,9 +333,9 @@ fn start_audio(
         .map_err(|error| error.to_string())?;
     let selected = supported
         .filter(|config| config.channels() == requested_channels)
-        .max_by_key(|config| config.max_sample_rate().0)
+        .max_by_key(|config| config.max_sample_rate())
         .map(|config| {
-            let preferred = SampleRate(48_000);
+            let preferred = 48_000;
             if config.min_sample_rate() <= preferred && config.max_sample_rate() >= preferred {
                 config.with_sample_rate(preferred)
             } else {
@@ -347,7 +347,7 @@ fn start_audio(
         })?;
 
     let channels = selected.channels();
-    let sample_rate = selected.sample_rate().0;
+    let sample_rate = selected.sample_rate();
     let sample_format = selected.sample_format();
     let engine = Arc::new(NativeRuntime::new(
         sample_rate as f64,
@@ -891,6 +891,11 @@ mod tests {
                     1,
                     0.0,
                     64,
+                    0,
+                    8,
+                    32,
+                    72,
+                    127,
                     2,
                     2,
                 )

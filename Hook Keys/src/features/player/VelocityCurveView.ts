@@ -3,11 +3,15 @@ export type VelocityCurveMode = 'soft' | 'middle' | 'hard' | 'fixed' | 'user';
 export interface VelocityCurveSettings {
   mode: VelocityCurveMode;
   points: [number, number, number, number, number];
+  userPoints: [number, number, number, number, number];
+  fixedValue: number;
 }
 
 export const DEFAULT_VELOCITY_CURVE: VelocityCurveSettings = {
   mode: 'soft',
   points: [0, 8, 32, 72, 127],
+  userPoints: [0, 32, 64, 96, 127],
+  fixedValue: 100,
 };
 
 const VELOCITY_CURVES: Record<Exclude<VelocityCurveMode, 'user'>, VelocityCurveSettings['points']> = {
@@ -27,17 +31,28 @@ const MODE_LABELS: Record<VelocityCurveMode, string> = {
 
 export function readVelocityCurveSettings(value: unknown): VelocityCurveSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { ...DEFAULT_VELOCITY_CURVE, points: [...DEFAULT_VELOCITY_CURVE.points] };
+    return cloneDefaultVelocityCurve();
   }
   const record = value as Record<string, unknown>;
   const mode = isVelocityCurveMode(record.mode) ? record.mode : 'soft';
-  const source = Array.isArray(record.points) ? record.points : [];
-  if (source.length !== 5 || source.some((point) => !Number.isFinite(Number(point)))) {
-    return velocityCurvePreset(mode);
-  }
+  const points = readVelocityPoints(record.points);
+  // Compatibilidade com estados salvos antes de User ter memória própria:
+  // se o modo salvo já era User, os pontos atuais são sua curva personalizada.
+  const userPoints = readVelocityPoints(record.userPoints)
+    ?? (mode === 'user' ? points : null)
+    ?? [...DEFAULT_VELOCITY_CURVE.userPoints];
+  const savedFixedValue = Number(record.fixedValue);
+  const fixedValue = Number.isFinite(savedFixedValue)
+    ? clampVelocity(savedFixedValue)
+    : mode === 'fixed' && points
+      ? clampVelocity(points[0])
+      : DEFAULT_VELOCITY_CURVE.fixedValue;
+  const activePoints = points ?? velocityCurvePointsForMode(mode, userPoints, fixedValue);
   return {
     mode,
-    points: source.map(clampVelocity) as VelocityCurveSettings['points'],
+    points: activePoints,
+    userPoints,
+    fixedValue,
   };
 }
 
@@ -48,14 +63,26 @@ export function velocityCurvePreset(
   if (mode === 'user') {
     return {
       mode,
-      points: [...(current?.points ?? DEFAULT_VELOCITY_CURVE.points)],
+      points: [...(current?.userPoints ?? DEFAULT_VELOCITY_CURVE.userPoints)],
+      userPoints: [...(current?.userPoints ?? DEFAULT_VELOCITY_CURVE.userPoints)],
+      fixedValue: current?.fixedValue ?? DEFAULT_VELOCITY_CURVE.fixedValue,
     };
   }
-  if (mode === 'fixed' && current?.mode === 'fixed') {
-    const value = clampVelocity(current.points[0]);
-    return { mode, points: [value, value, value, value, value] };
+  if (mode === 'fixed') {
+    const value = clampVelocity(current?.fixedValue ?? DEFAULT_VELOCITY_CURVE.fixedValue);
+    return {
+      mode,
+      points: [value, value, value, value, value],
+      userPoints: [...(current?.userPoints ?? DEFAULT_VELOCITY_CURVE.userPoints)],
+      fixedValue: value,
+    };
   }
-  return { mode, points: [...VELOCITY_CURVES[mode]] };
+  return {
+    mode,
+    points: [...VELOCITY_CURVES[mode]],
+    userPoints: [...(current?.userPoints ?? DEFAULT_VELOCITY_CURVE.userPoints)],
+    fixedValue: current?.fixedValue ?? DEFAULT_VELOCITY_CURVE.fixedValue,
+  };
 }
 
 export function createVelocityCardMarkup(settings: Readonly<Record<string, unknown>>): string {
@@ -172,6 +199,30 @@ function velocityPointY(value: number): number {
 function clampVelocity(value: unknown): number {
   const parsed = Number(value);
   return Math.round(Math.min(127, Math.max(0, Number.isFinite(parsed) ? parsed : 0)));
+}
+
+function readVelocityPoints(value: unknown): VelocityCurveSettings['points'] | null {
+  if (!Array.isArray(value) || value.length !== 5
+    || value.some((point) => !Number.isFinite(Number(point)))) return null;
+  return value.map(clampVelocity) as VelocityCurveSettings['points'];
+}
+
+function velocityCurvePointsForMode(
+  mode: VelocityCurveMode,
+  userPoints: VelocityCurveSettings['points'],
+  fixedValue: number,
+): VelocityCurveSettings['points'] {
+  if (mode === 'user') return [...userPoints];
+  if (mode === 'fixed') return [fixedValue, fixedValue, fixedValue, fixedValue, fixedValue];
+  return [...VELOCITY_CURVES[mode]];
+}
+
+function cloneDefaultVelocityCurve(): VelocityCurveSettings {
+  return {
+    ...DEFAULT_VELOCITY_CURVE,
+    points: [...DEFAULT_VELOCITY_CURVE.points],
+    userPoints: [...DEFAULT_VELOCITY_CURVE.userPoints],
+  };
 }
 
 function round(value: number): number {
