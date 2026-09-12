@@ -143,7 +143,10 @@ export class HookKeysApp {
 
   private async logout(session: AuthenticatedSession): Promise<void> {
     await this.sessions.logout(session);
-    await this.playOctaveTransition('exit', () => this.showLogin());
+    // A despedida inteira continua em paisagem. Só depois que ela some a tela
+    // de autenticação volta e o sistema trava novamente em retrato.
+    await this.playOctaveTransition('exit');
+    this.showLogin();
   }
 
   private playOctaveTransition(

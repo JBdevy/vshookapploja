@@ -5,8 +5,10 @@ const VSHOOK_SAVED_PROBE_TIMEOUT_MS = 650
 const VSHOOK_MANUAL_IP_TIMEOUT_MS = 2800
 const VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS = 4500
 const VSHOOK_SCAN_BATCH_SIZE = 72
+const VSHOOK_REDUNDANCY_POLL_MS = 700
+const VSHOOK_REDUNDANCY_TIMEOUT_MS = 600
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-1-director-performance-v54'
+const VSHOOK_ASSET_VERSION = '1-0-1-director-performance-v60'
 const VSHOOK_CHAT_BOOTSTRAP_KEY = 'vshook_chat_bootstrap_key'
 const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
 const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
@@ -24,6 +26,15 @@ let vshookDirectorTabletLandscapeContinuation = null
 let vshookDirectorAppActive = false
 let vshookNativeKeepAwakePlugin = null
 let vshookNativeScreenOrientationPlugin = null
+let vshookDirectorComputerKey = ''
+let vshookRedundancyTimer = 0
+let vshookRedundancyController = null
+let vshookRedundancyProject = null
+let vshookRedundancyMode = ''
+let vshookRedundancyFailureCount = 0
+let vshookRedundancyPromptElement = null
+let vshookRedundancyFallbackOptions = []
+let vshookRedundancyDismissedUntil = 0
 
 // Todas as entradas usam a mesma busca. Sair da tela ou iniciar outra busca
 // cancela tanto os resultados pendentes quanto as requisições de rede.
@@ -47,8 +58,14 @@ function isCurrentDiscovery(signal) {
   return !signal.aborted && vshookDiscoveryController?.signal === signal
 }
 
-window.addEventListener('pagehide', cancelDiscovery)
-window.addEventListener('beforeunload', cancelDiscovery)
+window.addEventListener('pagehide', () => {
+  cancelDiscovery()
+  stopVshookRedundancyMonitor()
+})
+window.addEventListener('beforeunload', () => {
+  cancelDiscovery()
+  stopVshookRedundancyMonitor()
+})
 
 function captureChatBootstrapKey() {
   try {
@@ -810,6 +827,36 @@ function isVSHookRealProject(project) {
   return true
 }
 
+function getVshookProjectComputerKey(project) {
+  const explicit = String(project?.computerId || '').trim()
+  if (explicit) return explicit
+  return hostFromUrl(project?.directorUrl || project?.musiciansUrl || project?.host || project?.lanHost)
+}
+
+function getVshookProjectComputerName(project) {
+  return String(
+    project?.computerName || project?.deviceName || project?.hostName ||
+    getVshookProjectComputerKey(project) || 'Hook Center'
+  ).trim()
+}
+
+function groupVshookProjectsByComputer(projects) {
+  const groups = []
+  const byKey = new Map()
+  for (const project of Array.isArray(projects) ? projects.filter(isVSHookRealProject) : []) {
+    const key = getVshookProjectComputerKey(project)
+    if (!key) continue
+    let group = byKey.get(key)
+    if (!group) {
+      group = { key, name: getVshookProjectComputerName(project), projects: [] }
+      byKey.set(key, group)
+      groups.push(group)
+    }
+    group.projects.push(project)
+  }
+  return groups
+}
+
 function setShell(html, cardClass = '') {
   cancelDiscovery()
   // A escolha de dispositivo/projeto ainda faz parte da entrada. No tablet ela
@@ -938,6 +985,7 @@ function renderModeFirst(projects) {
 }
 
 function renderDirectorDeviceSelection() {
+  vshookDirectorComputerKey = ''
   setShell(`
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">Modo Diretor</h1>
@@ -964,15 +1012,71 @@ function renderDirectorDeviceSelection() {
 
   document.getElementById('chooseDirectorPhoneBtn')?.addEventListener('click', () => {
     applyDirectorDeviceMode('phone')
-    renderProjects(vshookDiscoveredProjects)
+    renderDirectorComputerOrProjects(vshookDiscoveredProjects)
   })
   document.getElementById('chooseDirectorTabletBtn')?.addEventListener('click', () => {
-    requireDirectorTabletLandscape(() => renderProjects(vshookDiscoveredProjects))
+    requireDirectorTabletLandscape(() => renderDirectorComputerOrProjects(vshookDiscoveredProjects))
   })
   document.getElementById('backModeBtn')?.addEventListener('click', () => {
     applyDirectorDeviceMode('phone')
     renderModeFirst(vshookDiscoveredProjects)
   })
+}
+
+function renderDirectorComputerOrProjects(projects, options = {}) {
+  const list = Array.isArray(projects) ? projects.filter(isVSHookRealProject) : []
+  vshookDiscoveredProjects = list.slice()
+  const computers = groupVshookProjectsByComputer(list)
+  if (computers.length > 1) {
+    renderDirectorComputers(list, options)
+    return
+  }
+  vshookDirectorComputerKey = computers[0]?.key || ''
+  renderProjects(computers[0]?.projects || list, {
+    ...options,
+    preserveDiscoveredProjects: true,
+    fromComputerSelection: false,
+  })
+}
+
+function renderDirectorComputers(projects, options = {}) {
+  const list = Array.isArray(projects) ? projects.filter(isVSHookRealProject) : []
+  vshookDiscoveredProjects = list.slice()
+  vshookDirectorComputerKey = ''
+  const computers = groupVshookProjectsByComputer(list)
+  const rows = computers.map((computer, index) => `
+    <button class="vshook-computer-button" data-computer-index="${index}">
+      <span class="vshook-computer-icon" aria-hidden="true">▣</span>
+      <span class="vshook-computer-copy">
+        <strong>${vshookEscape(computer.name)}</strong>
+        <small>${computer.projects.length} ${computer.projects.length === 1 ? 'projeto disponível' : 'projetos disponíveis'}</small>
+      </span>
+    </button>`).join('')
+  setShell(`
+    ${getLogoHtml()}
+    <h1 class="vshook-shell-title">Escolha o computador</h1>
+    <p class="vshook-shell-subtitle">Foram encontradas ${computers.length} Hook Centers na rede. Selecione qual PC deseja controlar.</p>
+    <div class="vshook-computer-list">${rows}</div>
+    ${options.status ? `<p class="vshook-shell-status">${vshookEscape(options.status)}</p>` : ''}
+    <div class="vshook-project-actions">
+      <button class="vshook-back-button" id="backModeBtn">Voltar</button>
+      <button class="vshook-secondary-button" id="refreshProjectsBtn">Atualizar</button>
+    </div>
+  `, 'vshook-project-shell-card')
+
+  document.querySelectorAll('[data-computer-index]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const computer = computers[Number(button.getAttribute('data-computer-index'))]
+      if (!computer) return
+      vshookDirectorComputerKey = computer.key
+      renderProjects(computer.projects, {
+        preserveDiscoveredProjects: true,
+        fromComputerSelection: true,
+      })
+    })
+  })
+  document.getElementById('backModeBtn')?.addEventListener('click', renderDirectorDeviceSelection)
+  document.getElementById('refreshProjectsBtn')?.addEventListener('click', refreshProjectSelector)
 }
 
 
@@ -988,13 +1092,34 @@ async function buildDiscoveryCandidateIps() {
 
 async function discoverProjectsFromActiveNetwork(signal) {
   if (signal?.aborted) return []
+  if (isVshookInstalledNativeApp()) {
+    const localAddresses = await getVshookStoreLocalNetworkAddresses()
+    if (signal?.aborted) return []
+    const activeSubnets = [...new Set(localAddresses.map(subnetFromIp).filter(Boolean))]
+    if (activeSubnets.length) {
+      const activeIps = buildVshookStoreCandidateIps(localAddresses)
+        .filter((ip) => activeSubnets.includes(subnetFromIp(ip)))
+      const allProjects = await scanAllVshookStoreComputers(
+        activeIps, VSHOOK_SCAN_BATCH_SIZE, signal)
+      if (signal?.aborted || allProjects.length) return allProjects
+    }
+  }
   const ips = await buildDiscoveryCandidateIps()
   if (signal?.aborted) return []
   return scanInBatches(ips, VSHOOK_SCAN_BATCH_SIZE, signal)
 }
 
 async function refreshProjectSelector() {
-  renderProjects([], { loading: true, status: 'Procurando sessão ativa...' })
+  const selectedComputerKey = vshookDirectorComputerKey
+  const visibleProjects = selectedComputerKey
+    ? vshookDiscoveredProjects.filter((project) => getVshookProjectComputerKey(project) === selectedComputerKey)
+    : vshookDiscoveredProjects
+  renderProjects(visibleProjects, {
+    loading: true,
+    status: 'Procurando sessões ativas...',
+    preserveDiscoveredProjects: true,
+    fromComputerSelection: !!selectedComputerKey,
+  })
   const signal = beginDiscovery()
 
   let projects = []
@@ -1010,7 +1135,7 @@ async function refreshProjectSelector() {
   if (!isCurrentDiscovery(signal)) return
 
   if (projects && projects.length) {
-    renderProjects(projects, { status: 'Sessões atualizadas.' })
+    renderDirectorComputerOrProjects(projects, { status: 'Sessões atualizadas.' })
   } else {
     try {
       localStorage.removeItem('vshook_selected_project')
@@ -1022,7 +1147,7 @@ async function refreshProjectSelector() {
 
 function renderProjects(projects, options = {}) {
   const list = Array.isArray(projects) ? projects.filter(isVSHookRealProject) : []
-  vshookDiscoveredProjects = list.slice()
+  if (!options.preserveDiscoveredProjects) vshookDiscoveredProjects = list.slice()
   const loading = options && options.loading
   const status = options && options.status
   const rows = list.map((project, index) => {
@@ -1056,6 +1181,10 @@ function renderProjects(projects, options = {}) {
   })
 
   document.getElementById('backModeBtn')?.addEventListener('click', () => {
+    if (options.fromComputerSelection && groupVshookProjectsByComputer(vshookDiscoveredProjects).length > 1) {
+      renderDirectorComputers(vshookDiscoveredProjects)
+      return
+    }
     applyDirectorDeviceMode('phone')
     renderDirectorDeviceSelection()
   })
@@ -1136,6 +1265,8 @@ async function enterApp(project, mode, options = {}) {
   script.src = `${scriptFile}?v=${VSHOOK_ASSET_VERSION}`
   script.setAttribute('data-vshook-mode-script', mode)
   document.body.appendChild(script)
+  if (mode === 'director') startVshookRedundancyMonitor(project, mode)
+  else stopVshookRedundancyMonitor()
 }
 
 function timeoutSignal(ms, parentSignal) {
@@ -1255,8 +1386,22 @@ async function fetchJsonWithTimeout(url, timeoutMs, signal) {
       signal: t.signal,
     })
     if (t.signal.aborted || !response.ok) return null
-    const payload = await response.json()
-    return t.signal.aborted ? null : payload
+    const aborted = Symbol('aborted')
+    let removeAbortListener = () => {}
+    const payload = await Promise.race([
+      Promise.resolve().then(() => response.json()),
+      new Promise((resolve) => {
+        const onAbort = () => resolve(aborted)
+        if (t.signal.aborted) {
+          resolve(aborted)
+          return
+        }
+        t.signal.addEventListener('abort', onAbort, { once: true })
+        removeAbortListener = () => t.signal.removeEventListener('abort', onAbort)
+      }),
+    ])
+    removeAbortListener()
+    return t.signal.aborted || payload === aborted ? null : payload
   } catch (error) {
     return null
   } finally {
@@ -1297,6 +1442,7 @@ async function fetchDiscoveryOnPort(ip, port, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS
     discovery
 
   if (signal?.aborted || (!discovery && !projectsPayload)) return null
+  if (discovery?.reaperOnline === false || projectsPayload?.reaperOnline === false) return null
 
   const isVsHook =
     discovery?.app === 'VS Hook' ||
@@ -1348,12 +1494,26 @@ function normalizeProjectEntry(rawProject, fallbackIndex, baseInfo, ip) {
   if (!projectName) return null
   if (isVSHookFakeProjectName(projectName)) return null
 
+  const computerName = String(
+    source.computerName || source.deviceName || source.hostName ||
+    baseInfo?.computerName || baseInfo?.deviceName || baseInfo?.hostName ||
+    `PC ${ip}`
+  ).trim()
+  const computerId = String(
+    source.computerId || baseInfo?.computerId || baseInfo?.deviceId || ip
+  ).trim()
+
   return {
     projectName,
     projectId: String(source.id ?? source.projectId ?? source.tabId ?? projectTabIndex),
     projectTabIndex,
     projectPath: source.path || source.projectPath || '',
     active: !!(source.active || source.isCurrent || source.current),
+    computerName,
+    deviceName: computerName,
+    computerId,
+    host: ip,
+    lanHost: ip,
     directorUrl: `http://${ip}:${VSHOOK_DIRECTOR_PORT}`,
     musiciansUrl: `http://${ip}:${VSHOOK_MUSICIANS_PORT}`,
   }
@@ -1480,6 +1640,50 @@ async function scanInBatches(ips, batchSize = VSHOOK_SCAN_BATCH_SIZE, signal) {
     if (firstResult?.length) return firstResult
   }
   return []
+}
+
+function dedupeVshookDiscoveredProjects(projects) {
+  const result = []
+  const seen = new Set()
+  for (const project of Array.isArray(projects) ? projects : []) {
+    if (!isVSHookRealProject(project)) continue
+    const key = [
+      getVshookProjectComputerKey(project),
+      project.projectTabIndex ?? '',
+      project.projectId || '',
+      project.projectName || '',
+    ].join('|')
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(project)
+  }
+  return result
+}
+
+async function fetchVshookStoreComputer(ip, timeoutMs = VSHOOK_SCAN_TIMEOUT_MS, signal) {
+  const cleanIp = normalizeIp(ip)
+  if (!cleanIp || signal?.aborted) return []
+  const discovery = await fetchJsonWithTimeout(
+    `http://${cleanIp}:${VSHOOK_DIRECTOR_PORT}/discovery`, timeoutMs, signal)
+  if (!discovery || signal?.aborted || discovery.reaperOnline === false) return []
+  const isVsHook = discovery.app === 'VS Hook' ||
+    String(discovery.appName || '').toLowerCase().includes('diretor')
+  if (!isVsHook) return []
+  return extractProjectList(discovery, discovery, cleanIp)
+}
+
+async function scanAllVshookStoreComputers(ips, batchSize = VSHOOK_SCAN_BATCH_SIZE, signal) {
+  const found = []
+  const safeBatchSize = Math.max(1, Number(batchSize) || VSHOOK_SCAN_BATCH_SIZE)
+  for (let index = 0; index < ips.length; index += safeBatchSize) {
+    if (signal?.aborted) return []
+    const batch = ips.slice(index, index + safeBatchSize)
+    const responses = await Promise.all(batch.map((ip) =>
+      fetchVshookStoreComputer(ip, VSHOOK_SCAN_TIMEOUT_MS, signal).catch(() => [])))
+    if (signal?.aborted) return []
+    for (const projects of responses) found.push(...projects)
+  }
+  return dedupeVshookDiscoveredProjects(found)
 }
 
 
@@ -1649,6 +1853,7 @@ function consumeVSHookForcedModeSelection() {
 
 window.vshookExitToProjectSelector = function () {
   cancelDiscovery()
+  stopVshookRedundancyMonitor()
   prepareVSHookModeSelectionAfterReload()
   try {
     localStorage.removeItem('vshook_selected_project')
@@ -1728,6 +1933,235 @@ function buildVshookStoreCandidateIps(localAddresses) {
   }
   for (const ip of buildCandidateIps()) push(ip)
   return result
+}
+
+function stopVshookRedundancyMonitor() {
+  if (vshookRedundancyTimer) window.clearTimeout(vshookRedundancyTimer)
+  vshookRedundancyTimer = 0
+  vshookRedundancyController?.abort()
+  vshookRedundancyController = null
+  vshookRedundancyProject = null
+  vshookRedundancyMode = ''
+  vshookRedundancyFailureCount = 0
+  vshookRedundancyFallbackOptions = []
+  vshookRedundancyDismissedUntil = 0
+  vshookRedundancyPromptElement?.remove()
+  vshookRedundancyPromptElement = null
+  window.__VSHOOK_REDUNDANCY_PROMPT__ = []
+}
+
+function scheduleVshookRedundancyCheck(delayMs = VSHOOK_REDUNDANCY_POLL_MS) {
+  if (!vshookRedundancyProject || vshookRedundancyMode !== 'director') return
+  if (vshookRedundancyTimer) window.clearTimeout(vshookRedundancyTimer)
+  vshookRedundancyTimer = window.setTimeout(() => {
+    vshookRedundancyTimer = 0
+    runVshookRedundancyCheck()
+  }, Math.max(80, Number(delayMs) || VSHOOK_REDUNDANCY_POLL_MS))
+}
+
+function startVshookRedundancyMonitor(project, mode) {
+  stopVshookRedundancyMonitor()
+  if (!isVshookInstalledNativeApp() || mode !== 'director' || !project) return
+  vshookRedundancyProject = { ...project }
+  vshookRedundancyMode = mode
+  window.__VSHOOK_REDUNDANCY__ = {
+    active: true,
+    computerName: getVshookProjectComputerName(project),
+    host: hostFromUrl(project.directorUrl),
+  }
+  scheduleVshookRedundancyCheck(350)
+}
+
+async function fetchVshookComputerStatus(project, signal) {
+  const baseUrl = String(project?.directorUrl || '').replace(/\/+$/, '')
+  const host = hostFromUrl(baseUrl)
+  if (!baseUrl || !host || signal?.aborted) return null
+  const payload = await fetchJsonWithTimeout(
+    `${baseUrl}/discovery`, VSHOOK_REDUNDANCY_TIMEOUT_MS, signal)
+  if (!payload || signal?.aborted) return null
+  const projects = extractProjectList(payload, payload, host)
+  const explicitOffline = payload.reaperOnline === false || payload.connected === false
+  return {
+    payload,
+    projects,
+    online: !explicitOffline && projects.length > 0,
+    explicitOffline,
+  }
+}
+
+function sameVshookProject(left, right) {
+  const normalize = (value) => String(value || '').trim().toLocaleLowerCase('pt-BR')
+  const leftName = normalize(left?.projectName || left?.name)
+  const rightName = normalize(right?.projectName || right?.name)
+  if (leftName && rightName) return leftName === rightName
+  const leftId = String(left?.projectId || '').trim()
+  const rightId = String(right?.projectId || '').trim()
+  return !!leftId && leftId === rightId
+}
+
+function getVshookFallbackComputerProjects(currentProject) {
+  const currentKey = getVshookProjectComputerKey(currentProject)
+  return groupVshookProjectsByComputer(vshookDiscoveredProjects)
+    .filter((computer) => computer.key !== currentKey)
+}
+
+async function findVshookRedundancyFallbacks(currentProject, signal) {
+  let computers = getVshookFallbackComputerProjects(currentProject)
+  if (!computers.length) {
+    const refreshed = await discoverProjectsFromActiveNetwork(signal)
+    if (signal?.aborted) return []
+    if (refreshed.length) {
+      vshookDiscoveredProjects = dedupeVshookDiscoveredProjects([
+        ...vshookDiscoveredProjects,
+        ...refreshed,
+      ])
+      computers = getVshookFallbackComputerProjects(currentProject)
+    }
+  }
+
+  const statuses = await Promise.all(computers.map(async (computer) => {
+    const status = await fetchVshookComputerStatus(computer.projects[0], signal)
+    return { computer, status }
+  }))
+  if (signal?.aborted) return []
+  const fallbacks = []
+  for (const { computer, status } of statuses) {
+    if (!status?.online) continue
+    const available = status.projects.length ? status.projects : computer.projects
+    const matched = available.find((project) => sameVshookProject(project, currentProject))
+    if (matched) fallbacks.push(matched)
+  }
+  return fallbacks
+}
+
+function closeVshookRedundancyPrompt(waitBeforeRetry = false) {
+  vshookRedundancyPromptElement?.remove()
+  vshookRedundancyPromptElement = null
+  vshookRedundancyFallbackOptions = []
+  window.__VSHOOK_REDUNDANCY_PROMPT__ = []
+  if (waitBeforeRetry) vshookRedundancyDismissedUntil = Date.now() + 5000
+}
+
+function showVshookRedundancyPrompt(fallbacks) {
+  const options = dedupeVshookDiscoveredProjects(fallbacks)
+  if (!options.length || vshookRedundancyPromptElement) return
+  vshookRedundancyFallbackOptions = options
+  const overlay = document.createElement('div')
+  overlay.className = 'vshook-redundancy-overlay'
+  overlay.setAttribute('role', 'dialog')
+  overlay.setAttribute('aria-modal', 'true')
+  overlay.setAttribute('aria-labelledby', 'vshookRedundancyTitle')
+  overlay.innerHTML = `
+    <div class="vshook-redundancy-card">
+      <div class="vshook-redundancy-signal" aria-hidden="true">!</div>
+      <h2 id="vshookRedundancyTitle">Queda de conexão</h2>
+      <p>Deseja se conectar ao PC:</p>
+      <div class="vshook-redundancy-options">
+        ${options.map((project, index) => `
+          <button type="button" data-vshook-redundancy-index="${index}">
+            ${vshookEscape(getVshookProjectComputerName(project))}
+          </button>`).join('')}
+      </div>
+      <button type="button" class="vshook-redundancy-wait" data-vshook-redundancy-wait>Aguardar</button>
+    </div>`
+  overlay.addEventListener('click', (event) => {
+    const option = event.target?.closest?.('[data-vshook-redundancy-index]')
+    if (option) {
+      const index = Number(option.getAttribute('data-vshook-redundancy-index'))
+      window.vshookChooseRedundancyComputer(index)
+      return
+    }
+    if (event.target?.closest?.('[data-vshook-redundancy-wait]')) {
+      closeVshookRedundancyPrompt(true)
+    }
+  })
+  document.body.appendChild(overlay)
+  vshookRedundancyPromptElement = overlay
+  window.__VSHOOK_REDUNDANCY_PROMPT__ = options.map((project) => ({
+    computerName: getVshookProjectComputerName(project),
+    projectName: project.projectName || project.name || '',
+  }))
+}
+
+window.vshookChooseRedundancyComputer = function (index) {
+  const next = vshookRedundancyFallbackOptions[Number(index)]
+  if (!next) return false
+  closeVshookRedundancyPrompt(false)
+  applyVshookRedundancyFallback(next)
+  return true
+}
+
+function notifyVshookBridgeFailover(previous, next) {
+  if (typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return
+  window.dispatchEvent(new CustomEvent('vshook:bridge-failover', {
+    detail: {
+      previousComputerName: getVshookProjectComputerName(previous),
+      computerName: getVshookProjectComputerName(next),
+      projectName: next.projectName || next.name || '',
+      directorUrl: next.directorUrl,
+    },
+  }))
+}
+
+async function applyVshookRedundancyFallback(nextProject) {
+  const previous = vshookRedundancyProject
+  vshookRedundancyProject = { ...nextProject }
+  vshookRedundancyFailureCount = 0
+  try {
+    localStorage.setItem('vshook_selected_project', JSON.stringify(nextProject))
+    localStorage.setItem('vshook_selected_project_tab_index', String(nextProject.projectTabIndex ?? 0))
+    localStorage.setItem('vshook_director_url', nextProject.directorUrl)
+    localStorage.setItem('vshook_musicians_url', nextProject.musiciansUrl)
+    localStorage.setItem('vshook_transfer_host', hostFromUrl(nextProject.directorUrl))
+  } catch (error) {}
+  window.__VSHOOK_REDUNDANCY__ = {
+    active: true,
+    computerName: getVshookProjectComputerName(nextProject),
+    host: hostFromUrl(nextProject.directorUrl),
+    switchedAt: Date.now(),
+  }
+  notifyVshookBridgeFailover(previous, nextProject)
+  const tabIndex = Number(nextProject.projectTabIndex)
+  if (Number.isFinite(tabIndex)) {
+    void fetch(`${nextProject.directorUrl}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'set_project_tab',
+        payload: { projectTabIndex: tabIndex, index: tabIndex },
+      }),
+    }).catch(() => {})
+  }
+}
+
+async function runVshookRedundancyCheck() {
+  if (!vshookRedundancyProject || vshookRedundancyMode !== 'director') return
+  if (vshookRedundancyPromptElement || Date.now() < vshookRedundancyDismissedUntil) {
+    scheduleVshookRedundancyCheck()
+    return
+  }
+  vshookRedundancyController?.abort()
+  const controller = new AbortController()
+  vshookRedundancyController = controller
+  try {
+    const current = vshookRedundancyProject
+    const status = await fetchVshookComputerStatus(current, controller.signal)
+    if (controller.signal.aborted || current !== vshookRedundancyProject) return
+    if (status?.online) {
+      vshookRedundancyFailureCount = 0
+      return
+    }
+    vshookRedundancyFailureCount = status?.explicitOffline
+      ? 2
+      : vshookRedundancyFailureCount + 1
+    if (vshookRedundancyFailureCount < 2) return
+    const fallbacks = await findVshookRedundancyFallbacks(current, controller.signal)
+    if (controller.signal.aborted || !fallbacks.length || current !== vshookRedundancyProject) return
+    showVshookRedundancyPrompt(fallbacks)
+  } finally {
+    if (vshookRedundancyController === controller) vshookRedundancyController = null
+    scheduleVshookRedundancyCheck()
+  }
 }
 
 const vshookStoreDefaultDiscovery = startDiscovery

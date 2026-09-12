@@ -1,5 +1,6 @@
 import { type LocalTrack, TrackLibraryStore } from './TrackLibraryStore';
 import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
+import { isDesktopRuntime } from '../../platform/runtime';
 
 export type TrackPlaybackState = 'empty' | 'loading' | 'stopped' | 'playing' | 'paused';
 export type TrackQueueSource = 'manual' | 'auto';
@@ -36,6 +37,7 @@ export class TrackTransportController {
   private readonly handlePointerDown = (event: PointerEvent) => this.onPointerDown(event);
   private readonly handlePointerMove = (event: PointerEvent) => this.nameHoldGesture.move(event);
   private readonly handlePointerEnd = (event: PointerEvent) => this.nameHoldGesture.end(event);
+  private readonly handleContextMenu = (event: MouseEvent) => this.onContextMenu(event);
   private readonly nameHoldGesture = new LongPressGesture(620);
   private objectUrl: string | null = null;
   private queuedAudio: HTMLAudioElement | null = null;
@@ -72,6 +74,7 @@ export class TrackTransportController {
     this.root.addEventListener('pointermove', this.handlePointerMove);
     this.root.addEventListener('pointerup', this.handlePointerEnd);
     this.root.addEventListener('pointercancel', this.handlePointerEnd);
+    this.root.addEventListener('contextmenu', this.handleContextMenu);
     this.bindCurrentAudio();
     this.render();
   }
@@ -87,6 +90,7 @@ export class TrackTransportController {
     this.root.removeEventListener('pointermove', this.handlePointerMove);
     this.root.removeEventListener('pointerup', this.handlePointerEnd);
     this.root.removeEventListener('pointercancel', this.handlePointerEnd);
+    this.root.removeEventListener('contextmenu', this.handleContextMenu);
     this.nameHoldGesture.cancel();
     this.releaseCurrentSource();
     this.clearQueuedTrack();
@@ -200,7 +204,21 @@ export class TrackTransportController {
       : null;
     if (!nameButton || nameButton.disabled || !this.selectedTrack) return;
     event.preventDefault();
-    this.nameHoldGesture.start(event, () => this.onPositionRequested(nameButton));
+    if (!isDesktopRuntime()) {
+      this.nameHoldGesture.start(event, () => this.onPositionRequested(nameButton));
+    }
+  }
+
+  private onContextMenu(event: MouseEvent): void {
+    if (!isDesktopRuntime()) return;
+    const nameButton = event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>('[data-transport-track-name]')
+      : null;
+    if (!nameButton || nameButton.disabled || !this.selectedTrack) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.nameHoldGesture.cancel();
+    this.onPositionRequested(nameButton);
   }
 
   private onInput(event: Event): void {

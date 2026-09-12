@@ -82,7 +82,7 @@ export function createUserSoundfontMarkup(useTabletKeyboard: boolean): string {
       <input
         class="user-sf2-file"
         type="file"
-        accept="application/octet-stream"
+        accept=".sf2"
         data-user-sf2-file
         hidden
       >

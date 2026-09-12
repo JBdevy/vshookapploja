@@ -220,7 +220,8 @@ export class AuthScreen {
     });
   }
 
-  private renderPasswordLogin(): void {
+  private renderPasswordLogin(successMessage = ''): void {
+    this.challenge = null;
     this.replaceContent(`
       <header class="form-heading form-heading--compact form-heading--with-back">
         <button class="back-button" type="button" aria-label="Voltar para o e-mail">←</button>
@@ -228,6 +229,7 @@ export class AuthScreen {
         <h2>Digite sua senha</h2>
         <p>${this.escape(this.email)}</p>
       </header>
+      ${successMessage ? `<p class="form-success" role="status">${this.escape(successMessage)}</p>` : ''}
       <form class="auth-form" novalidate>
         <label class="field-label" for="account-password">Senha</label>
         <div class="input-shell">
@@ -236,18 +238,44 @@ export class AuthScreen {
         </div>
         <p class="form-error" role="alert" aria-live="polite"></p>
         <button class="primary-button" type="submit">Entrar</button>
+        <button class="text-button password-recovery-button" type="button">Redefinir senha</button>
       </form>
     `);
     const form = select<HTMLFormElement>(this.content, 'form');
     const input = select<HTMLInputElement>(form, '#account-password');
     const button = select<HTMLButtonElement>(form, '.primary-button');
-    select<HTMLButtonElement>(this.content, '.back-button').addEventListener('click', () => this.renderEmail());
+    const backButton = select<HTMLButtonElement>(this.content, '.back-button');
+    const recoveryButton = select<HTMLButtonElement>(form, '.password-recovery-button');
+    backButton.addEventListener('click', () => this.renderEmail());
+    recoveryButton.addEventListener('click', async () => {
+      if (recoveryButton.disabled || button.disabled) return;
+      this.setError('');
+      input.value = '';
+      input.disabled = true;
+      button.disabled = true;
+      backButton.disabled = true;
+      this.setButtonBusy(recoveryButton, true, 'Enviando código...');
+      try {
+        const response = await this.sessions.requestPasswordRecovery(this.email);
+        this.activateChallenge(response);
+        this.renderCode(true);
+      } catch (error) {
+        input.disabled = false;
+        button.disabled = false;
+        backButton.disabled = false;
+        this.setButtonBusy(recoveryButton, false);
+        this.setError(this.toUserMessage(error));
+      }
+    });
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (button.disabled) return;
       if (!input.checkValidity()) return input.reportValidity();
       this.setError('');
       this.setButtonBusy(button, true, 'Entrando...');
       input.disabled = true;
+      backButton.disabled = true;
+      recoveryButton.disabled = true;
       try {
         const result = await this.sessions.loginWithPassword(this.email, input.value);
         input.value = '';
@@ -255,6 +283,8 @@ export class AuthScreen {
         else this.finishAuthentication(result);
       } catch (error) {
         input.disabled = false;
+        backButton.disabled = false;
+        recoveryButton.disabled = false;
         input.value = '';
         this.setButtonBusy(button, false);
         this.setError(this.toUserMessage(error, 'E-mail ou senha incorretos.'));
@@ -264,11 +294,12 @@ export class AuthScreen {
     window.setTimeout(() => input.focus({ preventScroll: true }), 0);
   }
 
-  private renderPasswordSetup(passwordToken: string): void {
+  private renderPasswordSetup(passwordToken: string, recovery = false): void {
     this.replaceContent(`
-      <header class="form-heading form-heading--compact">
-        <p class="eyebrow">Primeiro acesso</p>
-        <h2>Crie sua senha</h2>
+      <header class="form-heading form-heading--compact${recovery ? ' form-heading--with-back' : ''}">
+        ${recovery ? '<button class="back-button" type="button" aria-label="Voltar para entrar">←</button>' : ''}
+        <p class="eyebrow">${recovery ? 'Redefinir senha' : 'Primeiro acesso'}</p>
+        <h2>${recovery ? 'Defina sua nova senha' : 'Crie sua senha'}</h2>
         <p>Use pelo menos 8 caracteres. Não é obrigatório usar letra maiúscula ou caractere especial.</p>
       </header>
       <form class="auth-form" novalidate>
@@ -283,24 +314,38 @@ export class AuthScreen {
           <input id="confirm-account-password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
         </div>
         <p class="form-error" role="alert" aria-live="polite"></p>
-        <button class="primary-button" type="submit">Criar senha</button>
+        <button class="primary-button" type="submit">${recovery ? 'Salvar nova senha' : 'Criar senha'}</button>
       </form>
     `);
     const form = select<HTMLFormElement>(this.content, 'form');
     const password = select<HTMLInputElement>(form, '#new-account-password');
     const confirmation = select<HTMLInputElement>(form, '#confirm-account-password');
     const button = select<HTMLButtonElement>(form, '.primary-button');
+    const backButton = this.content.querySelector<HTMLButtonElement>('.back-button');
+    backButton?.addEventListener('click', () => this.renderPasswordLogin());
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (!password.checkValidity() || !confirmation.checkValidity()) return password.reportValidity();
+      if (button.disabled) return;
+      this.setError('');
+      if (!password.checkValidity()) return password.reportValidity();
+      if (!confirmation.checkValidity()) return confirmation.reportValidity();
       if (password.value !== confirmation.value) {
         this.setError('As senhas não são iguais.');
+        confirmation.focus({ preventScroll: true });
         return;
       }
-      this.setButtonBusy(button, true, 'Criando...');
+      this.setButtonBusy(button, true, recovery ? 'Salvando...' : 'Criando...');
       password.disabled = true;
       confirmation.disabled = true;
+      if (backButton) backButton.disabled = true;
       try {
+        if (recovery) {
+          await this.sessions.completePasswordRecovery(passwordToken, password.value, confirmation.value);
+          password.value = '';
+          confirmation.value = '';
+          this.renderPasswordLogin('Senha redefinida. Entre com sua nova senha.');
+          return;
+        }
         const result = await this.sessions.completePasswordSetup(passwordToken, password.value);
         password.value = '';
         confirmation.value = '';
@@ -309,6 +354,7 @@ export class AuthScreen {
       } catch (error) {
         password.disabled = false;
         confirmation.disabled = false;
+        if (backButton) backButton.disabled = false;
         this.setButtonBusy(button, false);
         this.setError(this.toUserMessage(error));
         password.focus({ preventScroll: true });
@@ -317,7 +363,7 @@ export class AuthScreen {
     window.setTimeout(() => password.focus({ preventScroll: true }), 0);
   }
 
-  private renderCode(): void {
+  private renderCode(recovery = false): void {
     if (!this.challenge) {
       this.renderEmail();
       return;
@@ -325,14 +371,14 @@ export class AuthScreen {
 
     this.replaceContent(`
       <header class="form-heading form-heading--code form-heading--with-back">
-        <button class="back-button" type="button" aria-label="Voltar para o e-mail">←</button>
-        <p class="eyebrow">Confirme seu acesso</p>
+        <button class="back-button" type="button" aria-label="${recovery ? 'Voltar para entrar' : 'Voltar para o e-mail'}">←</button>
+        <p class="eyebrow">${recovery ? 'Redefinir senha' : 'Confirme seu acesso'}</p>
         <h2>Confira seu e-mail</h2>
         <p>Digite o código de 6 dígitos enviado para <strong id="confirmation-email"></strong>.</p>
       </header>
 
       <form class="auth-form" novalidate>
-        <label class="field-label" for="access-code">Código de acesso</label>
+        <label class="field-label" for="access-code">${recovery ? 'Código de verificação' : 'Código de acesso'}</label>
         <input
           class="code-input"
           id="access-code"
@@ -350,7 +396,7 @@ export class AuthScreen {
           <button id="resend-button" class="text-button" type="button"></button>
         </div>
         <p class="form-error" role="alert" aria-live="polite"></p>
-        <button class="primary-button" type="submit" disabled>Entrar</button>
+        <button class="primary-button" type="submit" disabled>${recovery ? 'Confirmar código' : 'Entrar'}</button>
       </form>
     `);
 
@@ -363,18 +409,18 @@ export class AuthScreen {
     const expiration = select<HTMLElement>(form, '#code-expiration');
 
     confirmationEmail.textContent = this.email;
-    backButton.addEventListener('click', () => this.renderEmail());
+    backButton.addEventListener('click', () => recovery ? this.renderPasswordLogin() : this.renderEmail());
     codeInput.addEventListener('input', () => {
       codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6);
       this.setError('');
       this.refreshChallengeControls(codeInput, submitButton, resendButton, expiration);
     });
     resendButton.addEventListener('click', () => {
-      void this.resendCode(codeInput, submitButton, resendButton, expiration);
+      void this.resendCode(codeInput, submitButton, resendButton, expiration, recovery);
     });
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (!this.challenge || codeInput.value.length !== 6 || Date.now() >= this.challenge.expiresAt) {
+      if (submitButton.disabled || this.resendBusy || !this.challenge || codeInput.value.length !== 6 || Date.now() >= this.challenge.expiresAt) {
         return;
       }
 
@@ -382,15 +428,16 @@ export class AuthScreen {
       this.setButtonBusy(submitButton, true, 'Confirmando...');
       codeInput.disabled = true;
       resendButton.disabled = true;
+      backButton.disabled = true;
       try {
-        const result = await this.sessions.verifyCode(
-          this.challenge.data.challengeId,
-          codeInput.value,
-        );
-        this.renderPasswordSetup(result.passwordToken);
+        const result = recovery
+          ? await this.sessions.verifyPasswordRecoveryCode(this.challenge.data.challengeId, codeInput.value)
+          : await this.sessions.verifyCode(this.challenge.data.challengeId, codeInput.value);
+        this.renderPasswordSetup(result.passwordToken, recovery);
       } catch (error) {
         this.setError(this.toUserMessage(error, 'Código inválido ou expirado. Tente novamente.'));
         codeInput.disabled = false;
+        backButton.disabled = false;
         codeInput.value = '';
         this.setButtonBusy(submitButton, false);
         this.refreshChallengeControls(codeInput, submitButton, resendButton, expiration);
@@ -514,21 +561,27 @@ export class AuthScreen {
     submitButton: HTMLButtonElement,
     resendButton: HTMLButtonElement,
     expiration: HTMLElement,
+    recovery = false,
   ): Promise<void> {
     if (!this.challenge || Date.now() < this.challenge.resendAt || this.resendBusy) return;
 
     this.resendBusy = true;
+    const backButton = this.content.querySelector<HTMLButtonElement>('.back-button');
+    if (backButton) backButton.disabled = true;
     this.setError('');
     this.refreshChallengeControls(codeInput, submitButton, resendButton, expiration);
     try {
-      const response = await this.sessions.startLogin(this.email);
+      const response = recovery
+        ? await this.sessions.requestPasswordRecovery(this.email)
+        : await this.sessions.startLogin(this.email);
       if ('passwordRequired' in response) this.renderPasswordLogin();
       else {
         this.activateChallenge(response);
-        this.renderCode();
+        this.renderCode(recovery);
       }
     } catch (error) {
       this.resendBusy = false;
+      if (backButton) backButton.disabled = false;
       this.setError(this.toUserMessage(error));
       this.refreshChallengeControls(codeInput, submitButton, resendButton, expiration);
     }
@@ -593,8 +646,8 @@ export class AuthScreen {
     expiration.textContent = isExpired
       ? 'Este código expirou.'
       : `Expira em ${formatCountdown(expiresIn)}`;
-    submitButton.disabled = codeInput.disabled || codeInput.value.length !== 6 || isExpired;
-    resendButton.disabled = this.resendBusy || resendIn > 0;
+    submitButton.disabled = this.resendBusy || codeInput.disabled || codeInput.value.length !== 6 || isExpired;
+    resendButton.disabled = codeInput.disabled || this.resendBusy || resendIn > 0;
     resendButton.textContent = this.resendBusy
       ? 'Enviando...'
       : resendIn > 0

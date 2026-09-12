@@ -1,5 +1,6 @@
 import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
 import { DoubleTapTracker } from '../../shared/gestures/DoubleTapTracker';
+import { isDesktopRuntime } from '../../platform/runtime';
 
 const MIN_DB = -60;
 const MAX_DB = 6;
@@ -129,6 +130,7 @@ export class ModuleFader {
   private readonly handlePointerMove = (event: PointerEvent) => this.onPointerMove(event);
   private readonly handlePointerEnd = (event: PointerEvent) => this.onPointerEnd(event);
   private readonly handleKeyDown = (event: KeyboardEvent) => this.onKeyDown(event);
+  private readonly handleContextMenu = (event: MouseEvent) => this.onContextMenu(event);
 
   constructor(
     private readonly root: HTMLElement,
@@ -150,6 +152,7 @@ export class ModuleFader {
     this.rail.addEventListener('pointerup', this.handlePointerEnd);
     this.rail.addEventListener('pointercancel', this.handlePointerEnd);
     this.rail.addEventListener('keydown', this.handleKeyDown);
+    this.rail.addEventListener('contextmenu', this.handleContextMenu);
     this.renderValue();
     this.setMeterLevel(MIN_DB);
   }
@@ -160,6 +163,7 @@ export class ModuleFader {
     this.rail.removeEventListener('pointerup', this.handlePointerEnd);
     this.rail.removeEventListener('pointercancel', this.handlePointerEnd);
     this.rail.removeEventListener('keydown', this.handleKeyDown);
+    this.rail.removeEventListener('contextmenu', this.handleContextMenu);
     this.learnGesture.cancel();
     this.doubleTap.reset();
     this.activePointerId = null;
@@ -184,12 +188,22 @@ export class ModuleFader {
     this.pointerMoved = false;
     this.rail.setPointerCapture(event.pointerId);
     this.rail.focus({ preventScroll: true });
-    this.learnGesture.start(event, () => {
-      if (this.rail.hasPointerCapture(event.pointerId)) this.rail.releasePointerCapture(event.pointerId);
-      this.activePointerId = null;
-      this.onLearnRequested(this.moduleNumber, this.rail);
-    });
+    if (!isDesktopRuntime()) {
+      this.learnGesture.start(event, () => {
+        if (this.rail.hasPointerCapture(event.pointerId)) this.rail.releasePointerCapture(event.pointerId);
+        this.activePointerId = null;
+        this.onLearnRequested(this.moduleNumber, this.rail);
+      });
+    }
     this.updateFromPointer(event);
+  }
+
+  private onContextMenu(event: MouseEvent): void {
+    if (!isDesktopRuntime()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.learnGesture.cancel();
+    this.onLearnRequested(this.moduleNumber, this.rail);
   }
 
   private onPointerMove(event: PointerEvent): void {

@@ -9,6 +9,7 @@ import {
 import { visualPositionToFaderDb } from './ModuleFader';
 import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
 import { DoubleTapTracker } from '../../shared/gestures/DoubleTapTracker';
+import { isDesktopRuntime } from '../../platform/runtime';
 
 type OutputChangeHandler = (bus: OutputBus, db: number, enabled: boolean) => void;
 
@@ -52,6 +53,7 @@ export class OutputFaderPanelController {
   private readonly handlePointerMove = (event: PointerEvent) => this.onPointerMove(event);
   private readonly handlePointerEnd = (event: PointerEvent) => this.onPointerEnd(event);
   private readonly handleClick = (event: Event) => this.onClick(event);
+  private readonly handleContextMenu = (event: MouseEvent) => this.onContextMenu(event);
 
   constructor(
     private readonly root: HTMLElement,
@@ -67,6 +69,7 @@ export class OutputFaderPanelController {
     this.root.addEventListener('pointerup', this.handlePointerEnd);
     this.root.addEventListener('pointercancel', this.handlePointerEnd);
     this.root.addEventListener('click', this.handleClick);
+    this.root.addEventListener('contextmenu', this.handleContextMenu);
   }
 
   destroy(): void {
@@ -75,6 +78,7 @@ export class OutputFaderPanelController {
     this.root.removeEventListener('pointerup', this.handlePointerEnd);
     this.root.removeEventListener('pointercancel', this.handlePointerEnd);
     this.root.removeEventListener('click', this.handleClick);
+    this.root.removeEventListener('contextmenu', this.handleContextMenu);
     this.learnGesture.cancel();
     this.doubleTap.reset();
     this.activeDrag = null;
@@ -97,12 +101,27 @@ export class OutputFaderPanelController {
       startY: event.clientY,
       moved: false,
     };
-    this.learnGesture.start(event, () => {
-      if (rail.hasPointerCapture(event.pointerId)) rail.releasePointerCapture(event.pointerId);
-      this.activeDrag = null;
-      this.onLearnRequested(bus, rail);
-    });
+    if (!isDesktopRuntime()) {
+      this.learnGesture.start(event, () => {
+        if (rail.hasPointerCapture(event.pointerId)) rail.releasePointerCapture(event.pointerId);
+        this.activeDrag = null;
+        this.onLearnRequested(bus, rail);
+      });
+    }
     this.updateFromPointer(this.activeDrag, event.clientY);
+  }
+
+  private onContextMenu(event: MouseEvent): void {
+    if (!isDesktopRuntime()) return;
+    const rail = event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-output-fader]')
+      : null;
+    const bus = rail?.dataset.outputFader;
+    if (!rail || !isBus(bus)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.learnGesture.cancel();
+    this.onLearnRequested(bus, rail);
   }
 
   private onPointerMove(event: PointerEvent): void {

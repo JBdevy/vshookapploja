@@ -205,6 +205,62 @@ async function run() {
     throw new Error(`A busca em lote esperou os outros IPs (${batchElapsed} ms).`)
   }
 
+  fetchOverride = async (url) => {
+    const parsed = new URL(url)
+    const host = parsed.hostname
+    const online = host === '192.168.77.10' || host === '192.168.77.11'
+    return {
+      ok: online,
+      json: async () => ({
+        app: 'VS Hook',
+        appName: 'Diretor',
+        connected: online,
+        reaperOnline: online,
+        deviceName: host.endsWith('.10') ? 'PC PALCO A' : 'PC PALCO B',
+        projects: online ? [{ name: 'Show Redundante', index: 0, active: true }] : [],
+      }),
+    }
+  }
+  const redundantProjects = await evaluate(
+    'scanAllVshookStoreComputers(["192.168.77.10", "192.168.77.11", "192.168.77.12"], 3)')
+  assert.equal(redundantProjects.length, 2, 'A busca da Loja deve acumular os dois PCs.')
+  assert.deepEqual(
+    Array.from(redundantProjects, (project) => project.computerName),
+    ['PC PALCO A', 'PC PALCO B'])
+  context.redundantProjects = redundantProjects
+  evaluate('renderDirectorComputerOrProjects(redundantProjects)')
+  assert.ok(shellHtml.includes('Escolha o computador'))
+  assert.ok(shellHtml.includes('PC PALCO A') && shellHtml.includes('PC PALCO B'))
+
+  evaluate(`vshookDiscoveredProjects = redundantProjects;
+    vshookRedundancyProject = redundantProjects[0];
+    vshookRedundancyMode = 'director';
+    vshookRedundancyFailureCount = 0`)
+  fetchOverride = async (url) => {
+    const parsed = new URL(url)
+    const online = parsed.hostname === '192.168.77.11'
+    return {
+      ok: true,
+      json: async () => ({
+        app: 'VS Hook', appName: 'Diretor', connected: online,
+        reaperOnline: online,
+        deviceName: online ? 'PC PALCO B' : 'PC PALCO A',
+        projects: [{ name: 'Show Redundante', index: 0, active: true }],
+      }),
+    }
+  }
+  await evaluate('runVshookRedundancyCheck()')
+  assert.equal(storage.get('vshook_director_url') || '', '',
+    'A redundância não pode trocar de PC sem confirmação.')
+  const redundancyPrompt = evaluate('window.__VSHOOK_REDUNDANCY_PROMPT__')
+  assert.equal(redundancyPrompt.length, 1)
+  assert.equal(redundancyPrompt[0].computerName, 'PC PALCO B')
+  assert.equal(evaluate('window.vshookChooseRedundancyComputer(0)'), true)
+  assert.equal(storage.get('vshook_director_url'), 'http://192.168.77.11:47831',
+    'O Diretor deve assumir o PC redundante somente depois da escolha.')
+  evaluate('stopVshookRedundancyMonitor()')
+  fetchOverride = null
+
   vm.runInContext(`vshookDiscoveredProjects = [{
     projectName: 'Projeto aberto',
     directorUrl: 'http://192.168.77.10:47831',

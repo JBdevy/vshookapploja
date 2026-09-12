@@ -24,6 +24,9 @@ O launcher abre somente uma página auxiliar com o QR code. O endereço lido apo
 - `POST /api/orangekey/auth/password/setup` para criar a senha no primeiro acesso
 - `POST /api/orangekey/auth/password/login` para os acessos seguintes
 - `POST /api/orangekey/account/password/reset/*` para redefinir a senha dentro da conta
+- `POST /api/orangekey/auth/password/reset/request-code` com `{ "email": "..." }` para recuperar a senha antes do login
+- `POST /api/orangekey/auth/password/reset/verify-code` com `{ "challengeId": "...", "code": "123456" }`
+- `POST /api/orangekey/auth/password/reset/complete` com `{ "passwordToken": "...", "password": "...", "passwordConfirmation": "..." }` (senhas obrigatórias, iguais e entre 8 e 128 caracteres)
 - `GET /api/orangekey/auth/me` com `Authorization: Bearer <token>`
 - `POST /api/orangekey/auth/logout` com `Authorization: Bearer <token>`
 

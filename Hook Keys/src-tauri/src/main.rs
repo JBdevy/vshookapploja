@@ -378,8 +378,21 @@ fn start_audio(
         .supported_output_configs()
         .map_err(|error| error.to_string())?;
     let selected = supported
-        .filter(|config| config.channels() == requested_channels)
-        .max_by_key(|config| config.max_sample_rate())
+        .filter(|config| {
+            config.channels() == requested_channels
+                && matches!(
+                    config.sample_format(),
+                    SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+                )
+        })
+        // Algumas interfaces anunciam primeiro formatos inteiros que o nosso
+        // callback não renderiza. Prefira float e só depois a maior taxa.
+        .max_by_key(|config| {
+            (
+                u8::from(config.sample_format() == SampleFormat::F32),
+                config.max_sample_rate(),
+            )
+        })
         .map(|config| {
             let preferred = 48_000;
             if config.min_sample_rate() <= preferred && config.max_sample_rate() >= preferred {

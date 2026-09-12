@@ -32,9 +32,10 @@ if errorlevel 1 (
 )
 
 set "BUILD_NUMBER="
-set /p "BUILD_NUMBER=Numero do build para Android e iOS: "
+echo Consultando tags locais e do GitHub para calcular o proximo build...
+for /f "usebackq delims=" %%B in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0proximo-build.ps1" -TagPrefix hook-keys`) do set "BUILD_NUMBER=%%B"
 if not defined BUILD_NUMBER (
-  echo ERRO: o numero do build e obrigatorio.
+  echo ERRO: nao foi possivel calcular o proximo build automaticamente.
   goto erro
 )
 
@@ -53,7 +54,7 @@ if defined CUSTOM_MSG set "COMMIT_MSG=%CUSTOM_MSG%"
 echo.
 echo Projeto:       Hook Keys
 echo Versao:        %VERSION_NAME%
-echo Build:         %BUILD_NUMBER%
+echo Proximo build: %BUILD_NUMBER% (automatico)
 echo Tag exclusiva: %TAG_NAME%
 echo.
 choice /c SN /n /m "Confirma o commit, push e build do Hook Keys no GitHub? [S/N]: "
@@ -63,7 +64,7 @@ echo.
 echo ==========================================
 echo   PREPARANDO SOMENTE O HOOK KEYS
 echo ==========================================
-git add -- ".github/workflows/hook-keys-release.yml" "Hook Keys"
+git add -- ".github/workflows/hook-keys-release.yml" "Hook Keys" "02 Build Hook Keys app.bat" "proximo-build.ps1"
 if errorlevel 1 goto erro
 
 rem Sempre cria um commit proprio para este disparo. Sem --allow-empty, quando

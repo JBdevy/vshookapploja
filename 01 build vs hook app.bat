@@ -32,9 +32,10 @@ if errorlevel 1 (
 )
 
 set "BUILD_NUMBER="
-set /p "BUILD_NUMBER=Numero do build para Play Store e App Store: "
+echo Consultando tags locais e do GitHub para calcular o proximo build...
+for /f "usebackq delims=" %%B in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0proximo-build.ps1" -TagPrefix mobile`) do set "BUILD_NUMBER=%%B"
 if not defined BUILD_NUMBER (
-  echo ERRO: o numero do build e obrigatorio.
+  echo ERRO: nao foi possivel calcular o proximo build automaticamente.
   goto erro
 )
 
@@ -52,7 +53,7 @@ if defined CUSTOM_MSG set "COMMIT_MSG=%CUSTOM_MSG%"
 
 echo.
 echo Versao Android/iOS: %VERSION_NAME%
-echo Version code/build:  %BUILD_NUMBER%
+echo Proximo build automatico: %BUILD_NUMBER%
 echo Tag de disparo:      %TAG_NAME%
 echo.
 choice /c SN /n /m "Confirma o build, commit, push e disparo dos dois apps? [S/N]: "
@@ -94,23 +95,22 @@ echo   CRIANDO TAG E DISPARANDO ACTIONS
 echo ==========================================
 
 git show-ref --tags --verify --quiet "refs/tags/%TAG_NAME%"
-if errorlevel 1 goto verificar_tag_remota
-
-echo Removendo a tag local existente %TAG_NAME%...
-git tag -d "%TAG_NAME%"
-if errorlevel 1 goto erro
+if not errorlevel 1 (
+  echo ERRO: a tag %TAG_NAME% ja existe localmente. Execute o arquivo novamente.
+  goto erro
+)
 
 :verificar_tag_remota
 git ls-remote --exit-code --tags origin "refs/tags/%TAG_NAME%" >nul 2>nul
 set "REMOTE_TAG_CHECK=%ERRORLEVEL%"
-if "%REMOTE_TAG_CHECK%"=="0" goto excluir_tag_remota
+if "%REMOTE_TAG_CHECK%"=="0" goto tag_em_uso
 if "%REMOTE_TAG_CHECK%"=="2" goto criar_tag
 goto erro_consulta_tag
 
-:excluir_tag_remota
-echo Removendo a tag remota existente %TAG_NAME%...
-git push origin --delete "%TAG_NAME%"
-if errorlevel 1 goto erro
+:tag_em_uso
+echo ERRO: a tag %TAG_NAME% acabou de ser usada no GitHub.
+echo Execute o arquivo novamente para ele calcular o proximo numero.
+goto erro
 
 :criar_tag
 git tag -a "%TAG_NAME%" -m "%COMMIT_MSG%"

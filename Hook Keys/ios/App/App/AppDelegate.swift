@@ -31,7 +31,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         guard let bridgeViewController = self.window?.rootViewController as? CAPBridgeViewController else {
-            return .landscape
+            // Durante o lançamento a bridge ainda pode não existir. O login é
+            // sempre retrato; o plugin libera paisagem ao entrar no player.
+            return .portrait
         }
         return bridgeViewController.supportedInterfaceOrientations
     }

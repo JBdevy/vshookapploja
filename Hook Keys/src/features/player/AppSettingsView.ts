@@ -35,6 +35,7 @@ export function createAppSettingsMarkup(
   compatibilityMode: boolean,
   bottomView: PlayerBottomView,
   allowKeyboardView: boolean,
+  keyboardMidiSlot: number = 1,
 ): string {
   return `
     <section class="app-settings-panel app-settings-panel--main" aria-label="Configurações">
@@ -63,7 +64,12 @@ export function createAppSettingsMarkup(
           <button type="button" data-setting-view="presets" class="${bottomView === 'presets' ? 'is-selected' : ''}" aria-pressed="${bottomView === 'presets'}">Presets</button>
           <button type="button" data-setting-view="keyboard" class="${bottomView === 'keyboard' ? 'is-selected' : ''}" aria-pressed="${bottomView === 'keyboard'}">Keyboard</button>
         </div>
-      </article>` : ''}
+      </article>` : `<article class="app-settings-display-card app-settings-display-card--desktop-keyboard">
+        <strong>Teclado do computador</strong>
+        <div role="group" aria-label="Roteamento do teclado do computador">
+          ${[1, 2, 3].map((slot) => `<button type="button" data-desktop-keyboard-midi-slot="${slot}" class="${slot === keyboardMidiSlot ? 'is-selected' : ''}" aria-pressed="${slot === keyboardMidiSlot}">Keyboard ${slot}</button>`).join('')}
+        </div>
+      </article>`}
     </section>
   `;
 }

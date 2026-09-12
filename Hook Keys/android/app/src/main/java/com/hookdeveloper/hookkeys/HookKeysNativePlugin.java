@@ -12,7 +12,6 @@ import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.Build;
 import android.util.Base64;
 import android.view.HapticFeedbackConstants;
 import com.getcapacitor.JSArray;
@@ -20,10 +19,8 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
-import com.getcapacitor.PermissionState;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
-import com.getcapacitor.annotation.PermissionCallback;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -122,16 +119,10 @@ public class HookKeysNativePlugin extends Plugin {
 
     @PluginMethod
     public void listMidiDevices(PluginCall call) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            getPermissionState("bluetoothMidi") != PermissionState.GRANTED) {
-            requestPermissionForAlias("bluetoothMidi", call, "bluetoothMidiPermissionCallback");
-            return;
-        }
-        resolveMidiDevices(call);
-    }
-
-    @PermissionCallback
-    private void bluetoothMidiPermissionCallback(PluginCall call) {
+        // MIDI USB e MIDI virtual não podem depender da autorização de busca
+        // Bluetooth. O sistema já expõe aqui somente endpoints disponíveis;
+        // pedir BLUETOOTH_SCAN antes da enumeração fazia controladores com fio
+        // desaparecerem quando essa permissão era negada.
         resolveMidiDevices(call);
     }
 

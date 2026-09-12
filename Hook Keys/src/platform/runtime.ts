@@ -6,6 +6,14 @@ let initialized = false;
 export type AppOrientationMode = 'login' | 'tablet';
 let currentMode: AppOrientationMode = 'login';
 
+type TauriRuntimeWindow = Window & {
+  __TAURI_INTERNALS__?: unknown;
+};
+
+export function isDesktopRuntime(): boolean {
+  return Boolean((window as TauriRuntimeWindow).__TAURI_INTERNALS__);
+}
+
 async function reinforceNativeRuntime(): Promise<void> {
   const keepScreenAwake = async () => {
     const support = await KeepAwake.isSupported();
@@ -22,9 +30,17 @@ export async function initializePlatformRuntime(): Promise<void> {
   if (initialized) return;
   initialized = true;
 
+  const isDesktop = isDesktopRuntime();
   const isNative = Capacitor.isNativePlatform();
-  document.documentElement.dataset.runtime = isNative ? 'native' : 'web';
+  document.documentElement.dataset.runtime = isDesktop ? 'desktop' : isNative ? 'native' : 'web';
   document.documentElement.dataset.appMode = currentMode;
+  if (isDesktop) {
+    // O WebView do desktop não deve expor o menu de navegador em um app
+    // comercial. Os controles que usam o botão direito continuam recebendo o
+    // evento e tratam suas próprias ações antes que o menu pudesse aparecer.
+    document.addEventListener('contextmenu', (event) => event.preventDefault());
+    return;
+  }
   if (!isNative) return;
 
   await reinforceNativeRuntime();

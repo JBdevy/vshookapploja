@@ -70,6 +70,24 @@ export class AuthApi {
     return this.http.request('/api/orangekey/account/password/reset/request-code', { method: 'POST', token });
   }
 
+  requestPasswordRecovery(email: string): Promise<RequestCodeResponse> {
+    return this.http.request('/api/orangekey/auth/password/reset/request-code', {
+      method: 'POST', body: { email },
+    });
+  }
+
+  verifyPasswordRecoveryCode(challengeId: string, code: string): Promise<PasswordResetTokenResponse> {
+    return this.http.request('/api/orangekey/auth/password/reset/verify-code', {
+      method: 'POST', body: { challengeId, code },
+    });
+  }
+
+  completePasswordRecovery(passwordToken: string, password: string, passwordConfirmation: string): Promise<{ ok: true }> {
+    return this.http.request('/api/orangekey/auth/password/reset/complete', {
+      method: 'POST', body: { passwordToken, password, passwordConfirmation },
+    });
+  }
+
   verifyPasswordResetCode(token: string, challengeId: string, code: string): Promise<PasswordResetTokenResponse> {
     return this.http.request('/api/orangekey/account/password/reset/verify-code', {
       method: 'POST', token, body: { challengeId, code },

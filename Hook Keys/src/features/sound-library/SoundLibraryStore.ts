@@ -4,6 +4,7 @@ export interface UserSoundfont {
   fileName: string;
   size: number;
   createdAt: string;
+  colorIndex: number;
 }
 
 export interface InstalledFixedSound {
@@ -43,6 +44,7 @@ const DATABASE_VERSION = 3;
 const USER_STORE_NAME = 'soundfonts';
 const FIXED_STORE_NAME = 'fixed-soundfonts';
 const PREVIEW_STORE_NAME = 'sound-previews';
+export const USER_SOUNDFONT_COLOR_COUNT = 16;
 
 export class SoundLibraryStore {
   private databasePromise: Promise<IDBDatabase> | null = null;
@@ -57,7 +59,16 @@ export class SoundLibraryStore {
     return records
       .filter((record) => record.accountKey === this.accountKey)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .map(({ id, name, fileName, size, createdAt }) => ({ id, name, fileName, size, createdAt }));
+      .map(({ id, name, fileName, size, createdAt, colorIndex }) => ({
+        id,
+        name,
+        fileName,
+        size,
+        createdAt,
+        colorIndex: Number.isInteger(colorIndex)
+          ? Math.abs(colorIndex) % USER_SOUNDFONT_COLOR_COUNT
+          : stableColorIndex(id),
+      }));
   }
 
   async addUser(name: string, file: File, restoredId?: string): Promise<UserSoundfont> {
@@ -68,6 +79,7 @@ export class SoundLibraryStore {
       fileName: file.name,
       size: file.size,
       createdAt: new Date().toISOString(),
+      colorIndex: randomColorIndex(),
       file,
     };
     await this.put(USER_STORE_NAME, soundfont);
@@ -80,6 +92,16 @@ export class SoundLibraryStore {
       database.transaction(USER_STORE_NAME, 'readonly').objectStore(USER_STORE_NAME).get(id),
     );
     return record?.accountKey === this.accountKey ? record.file : null;
+  }
+
+  async removeUser(id: string): Promise<boolean> {
+    const database = await this.openDatabase();
+    const existing = await requestResult<StoredUserSoundfont | undefined>(
+      database.transaction(USER_STORE_NAME, 'readonly').objectStore(USER_STORE_NAME).get(id),
+    );
+    if (!existing || existing.accountKey !== this.accountKey) return false;
+    await transactionComplete(database, USER_STORE_NAME, 'readwrite', (store) => store.delete(id));
+    return true;
   }
 
   async listInstalledFixedIds(): Promise<Set<string>> {
@@ -204,4 +226,19 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
 function createId(): string {
   return globalThis.crypto?.randomUUID?.()
     ?? `sf2-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function randomColorIndex(): number {
+  const random = new Uint32Array(1);
+  globalThis.crypto?.getRandomValues?.(random);
+  return (random[0] ?? Math.floor(Math.random() * 0xffffffff)) % USER_SOUNDFONT_COLOR_COUNT;
+}
+
+function stableColorIndex(id: string): number {
+  let hash = 2166136261;
+  for (const character of id) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash) % USER_SOUNDFONT_COLOR_COUNT;
 }

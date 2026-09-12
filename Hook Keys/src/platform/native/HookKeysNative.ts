@@ -161,14 +161,21 @@ class HookKeysNativeBridge {
     if (!this.initializePromise) {
       this.initializePromise = this.call<{ ready: boolean }>('initialize', { bufferSize }, () => plugin.initialize({ bufferSize }))
         .then(({ ready }) => ready)
-        .catch(() => false);
+        .catch(() => {
+          // Uma saída de áudio pode estar temporariamente ocupada durante o
+          // boot. Não memorize a falha: a próxima nota/alteração pode tentar
+          // iniciar o motor novamente.
+          this.initializePromise = null;
+          return false;
+        });
       void this.attachEventForwarders();
     }
     return this.initializePromise;
   }
 
   async listMidiDevices(): Promise<NativeMidiDevice[]> {
-    if (!await this.initialize()) return [];
+    if (!this.isAvailable()) return [];
+    await this.attachEventForwarders().catch(() => undefined);
     const result = await this.call<{ devices: NativeMidiDevice[] } | NativeMidiDevice[]>(
       'list_midi_devices', {}, () => plugin.listMidiDevices(),
     );
@@ -201,7 +208,8 @@ class HookKeysNativeBridge {
   }
 
   async setMidiInputs(deviceIds: readonly (string | null)[]): Promise<void> {
-    if (!await this.initialize()) return;
+    if (!this.isAvailable()) return;
+    await this.attachEventForwarders().catch(() => undefined);
     const normalized = [...deviceIds].slice(0, 3);
     await this.call('set_midi_inputs', { deviceIds: normalized }, () => plugin.setMidiInputs({ deviceIds: normalized }));
   }
@@ -327,6 +335,9 @@ class HookKeysNativeBridge {
             window.dispatchEvent(new Event('hookkeys:native-midi-devices-changed'));
           }),
         ]);
+      }).catch((error) => {
+        this.listenersPromise = null;
+        throw error;
       });
       return this.listenersPromise;
     }
@@ -340,7 +351,10 @@ class HookKeysNativeBridge {
       plugin.addListener('midiDevicesChanged', () => {
         window.dispatchEvent(new Event('hookkeys:native-midi-devices-changed'));
       }),
-    ]).then(() => undefined);
+    ]).then(() => undefined).catch((error) => {
+      this.listenersPromise = null;
+      throw error;
+    });
     return this.listenersPromise;
   }
 

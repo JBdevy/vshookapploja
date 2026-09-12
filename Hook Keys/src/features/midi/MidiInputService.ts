@@ -55,11 +55,10 @@ export class MidiInputService {
   private selectedInputOrder: (string | null)[] = [null, null, null];
   private compatibilityMode = false;
   private nativeDevices: NativeMidiDevice[] = [];
+  private nativeRefreshTimer: number | null = null;
 
   private readonly handleNativeDevicesChanged = () => {
-    void hookKeysNative.listMidiDevices().then((devices) => {
-      this.nativeDevices = devices;
-    });
+    void this.refreshNativeDevices(true);
   };
 
   private readonly handleNativeNote = (event: Event) => {
@@ -92,13 +91,22 @@ export class MidiInputService {
   constructor(
     private readonly onNote: MidiNoteHandler,
     private readonly onControlChange: MidiControlChangeHandler = () => {},
+    private readonly onDevicesChanged: () => void = () => {},
   ) {}
 
   mount(): void {
     window.addEventListener('hookkeys:native-midi-note', this.handleNativeNote);
     window.addEventListener('hookkeys:native-midi-control-change', this.handleNativeControlChange);
     window.addEventListener('hookkeys:native-midi-devices-changed', this.handleNativeDevicesChanged);
-    if (hookKeysNative.isAvailable()) void this.requestAccess();
+    if (hookKeysNative.isAvailable()) {
+      void this.requestAccess();
+      // Tauri/midir não oferece uma notificação uniforme de hot-plug em todos
+      // os backends. A verificação leve também cobre controladores USB que são
+      // ligados depois de abrir o app.
+      this.nativeRefreshTimer = window.setInterval(() => {
+        void this.refreshNativeDevices(true);
+      }, 1_500);
+    }
   }
 
   destroy(): void {
@@ -113,16 +121,20 @@ export class MidiInputService {
     }
     this.access = null;
     this.accessRequest = null;
+    if (this.nativeRefreshTimer !== null) window.clearInterval(this.nativeRefreshTimer);
+    this.nativeRefreshTimer = null;
   }
 
   requestAccess(): Promise<boolean> {
     if (hookKeysNative.isAvailable()) {
       if (this.accessRequest) return this.accessRequest;
-      this.accessRequest = hookKeysNative.initialize()
-        .then(async (ready) => {
-          if (!ready) return false;
-          this.nativeDevices = await hookKeysNative.listMidiDevices();
+      this.accessRequest = this.refreshNativeDevices(false)
+        .then(async () => {
           await hookKeysNative.setMidiInputs(this.selectedInputOrder);
+          // MIDI continua disponível mesmo se o dispositivo de áudio estiver
+          // ocupado. A inicialização sonora acontece em paralelo e pode tentar
+          // novamente depois.
+          void hookKeysNative.initialize();
           return true;
         })
         .catch(() => false)
@@ -200,6 +212,16 @@ export class MidiInputService {
         if (event.data) this.processMidiMessage(event.data, input.id);
       };
     });
+  }
+
+  private async refreshNativeDevices(reconnectSelection: boolean): Promise<void> {
+    const devices = await hookKeysNative.listMidiDevices();
+    const previousKey = this.nativeDevices.map(({ id, name }) => `${id}\u0000${name}`).join('\u0001');
+    const nextKey = devices.map(({ id, name }) => `${id}\u0000${name}`).join('\u0001');
+    this.nativeDevices = devices;
+    if (previousKey === nextKey) return;
+    if (reconnectSelection) await hookKeysNative.setMidiInputs(this.selectedInputOrder);
+    this.onDevicesChanged();
   }
 
   private processMidiMessage(data: Uint8Array, inputId: string): void {

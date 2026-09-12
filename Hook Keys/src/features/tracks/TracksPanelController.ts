@@ -10,6 +10,7 @@ import {
   type LocalTrackBlock,
 } from './TrackLibraryStore';
 import type { TrackPlaybackSnapshot } from './TrackTransport';
+import { isDesktopRuntime } from '../../platform/runtime';
 
 interface PlaylistDraft {
   id: string | null;
@@ -90,9 +91,11 @@ export function createTracksSplitPanelMarkup(): string {
 export class TracksPanelController {
   private readonly handleClick = (event: Event) => this.onClick(event);
   private readonly handleChange = (event: Event) => this.onChange(event);
+  private readonly handleInput = (event: Event) => this.onInput(event);
   private readonly handlePointerDown = (event: PointerEvent) => this.onPointerDown(event);
   private readonly handlePointerMove = (event: PointerEvent) => this.onPointerMove(event);
   private readonly handlePointerEnd = (event: PointerEvent) => this.onPointerEnd(event);
+  private readonly handleContextMenu = (event: MouseEvent) => this.onContextMenu(event);
   private activePlaylistId: string | null = null;
   private draft: PlaylistDraft | null = null;
   private holdGesture: HoldGesture | null = null;
@@ -119,10 +122,12 @@ export class TracksPanelController {
   mount(): void {
     this.root.addEventListener('click', this.handleClick);
     this.root.addEventListener('change', this.handleChange);
+    this.root.addEventListener('input', this.handleInput);
     this.root.addEventListener('pointerdown', this.handlePointerDown);
     this.root.addEventListener('pointermove', this.handlePointerMove);
     this.root.addEventListener('pointerup', this.handlePointerEnd);
     this.root.addEventListener('pointercancel', this.handlePointerEnd);
+    this.root.addEventListener('contextmenu', this.handleContextMenu);
     void this.refresh();
   }
 
@@ -131,10 +136,12 @@ export class TracksPanelController {
     this.clearReorderGesture();
     this.root.removeEventListener('click', this.handleClick);
     this.root.removeEventListener('change', this.handleChange);
+    this.root.removeEventListener('input', this.handleInput);
     this.root.removeEventListener('pointerdown', this.handlePointerDown);
     this.root.removeEventListener('pointermove', this.handlePointerMove);
     this.root.removeEventListener('pointerup', this.handlePointerEnd);
     this.root.removeEventListener('pointercancel', this.handlePointerEnd);
+    this.root.removeEventListener('contextmenu', this.handleContextMenu);
   }
 
   private onClick(event: Event): void {
@@ -267,6 +274,18 @@ export class TracksPanelController {
     }
   }
 
+  private onInput(event: Event): void {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || !isDesktopRuntime()) return;
+    if (input.matches('[data-playlist-name-input]') && this.draft) {
+      this.draft.name = input.value.slice(0, PLAYLIST_NAME_LIMIT);
+      return;
+    }
+    if (input.matches('[data-block-name-input]') && this.managedBlockId) {
+      this.managedBlockNameDraft = input.value.slice(0, BLOCK_NAME_LIMIT);
+    }
+  }
+
   private onPointerDown(event: PointerEvent): void {
     const target = event.target;
     const track = target instanceof Element
@@ -291,6 +310,7 @@ export class TracksPanelController {
       : null;
     const holdTarget = button ?? block;
     if (!holdTarget) return;
+    if (isDesktopRuntime()) return;
     this.clearHoldGesture();
     const timer = window.setTimeout(() => {
       this.holdGesture = null;
@@ -310,6 +330,29 @@ export class TracksPanelController {
       startY: event.clientY,
       timer,
     };
+  }
+
+  private onContextMenu(event: MouseEvent): void {
+    if (!isDesktopRuntime()) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const playlistButton = target.closest<HTMLButtonElement>('button[data-playlist-id]');
+    if (playlistButton) {
+      const id = playlistButton.dataset.playlistId;
+      if (!id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.clearHoldGesture();
+      this.openPlaylistManager(id);
+      return;
+    }
+    const block = target.closest<HTMLElement>('.track-block[data-list-item-id]');
+    const blockId = block?.dataset.listItemId;
+    if (!block || !blockId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.clearHoldGesture();
+    this.openBlockManager(blockId);
   }
 
   private onPointerMove(event: PointerEvent): void {
@@ -610,16 +653,14 @@ export class TracksPanelController {
       <div class="tracks-playlist-name-stage">
         <label>
           <span>${this.draft.id ? 'Nome da playlist' : 'Nova playlist'}</span>
-          <span class="on-screen-text-field" role="textbox" tabindex="0" aria-label="Nome da playlist" aria-readonly="true" data-playlist-name-field>
-            <span data-playlist-name-value></span><i aria-hidden="true"></i>
-          </span>
+          ${this.createPlaylistNameFieldMarkup(this.draft.name)}
         </label>
         <p data-playlist-message role="alert"></p>
         <div class="tracks-playlist-editor__actions">
           <button type="button" data-tracks-action="playlist-editor-cancel">Cancelar</button>
           <button type="button" data-tracks-action="playlist-name-next">Continuar</button>
         </div>
-        ${createOnScreenKeyboardMarkup('Teclado para o nome da playlist', true)}
+        ${isDesktopRuntime() ? '' : createOnScreenKeyboardMarkup('Teclado para o nome da playlist', true)}
       </div>
     `;
     this.renderDraftName();
@@ -628,6 +669,8 @@ export class TracksPanelController {
   private renderDraftName(): void {
     const value = this.root.querySelector<HTMLElement>('[data-playlist-name-value]');
     if (value) value.textContent = this.draft?.name ?? '';
+    const input = this.root.querySelector<HTMLInputElement>('[data-playlist-name-input]');
+    if (input && input.value !== (this.draft?.name ?? '')) input.value = this.draft?.name ?? '';
   }
 
   private openTrackSelector(): void {
@@ -684,9 +727,7 @@ export class TracksPanelController {
       <div class="tracks-playlist-name-stage tracks-playlist-manage-stage">
         <label>
           <span>Nome da playlist</span>
-          <span class="on-screen-text-field" role="textbox" tabindex="0" aria-label="Nome da playlist" aria-readonly="true" data-playlist-name-field>
-            <span data-playlist-name-value>${escapeMarkup(playlist.name)}</span><i aria-hidden="true"></i>
-          </span>
+          ${this.createPlaylistNameFieldMarkup(playlist.name)}
         </label>
         <p data-playlist-message role="alert"></p>
         <div class="tracks-playlist-editor__actions">
@@ -694,12 +735,13 @@ export class TracksPanelController {
           <button type="button" data-tracks-action="playlist-manage-edit">Editar</button>
           <button class="is-danger" type="button" data-tracks-action="playlist-manage-delete">Apagar playlist</button>
         </div>
-        ${createOnScreenKeyboardMarkup('Teclado para o nome da playlist', true)}
+        ${isDesktopRuntime() ? '' : createOnScreenKeyboardMarkup('Teclado para o nome da playlist', true)}
       </div>
     `;
   }
 
   private setNameKeyboardOpen(open: boolean, requestedField?: HTMLElement): void {
+    if (isDesktopRuntime()) return;
     const editor = this.getEditor();
     const field = requestedField ?? editor.querySelector<HTMLElement>('[data-playlist-name-field]');
     const keyboard = editor.querySelector<HTMLElement>('.on-screen-keyboard');
@@ -772,16 +814,18 @@ export class TracksPanelController {
       <div class="tracks-playlist-name-stage tracks-block-name-stage">
         <label>
           <span>Nome do bloco · máximo ${BLOCK_NAME_LIMIT} caracteres</span>
-          <span class="on-screen-text-field is-input-active" role="textbox" tabindex="0" aria-label="Nome do bloco" aria-readonly="true" data-block-name-field>
-            <span data-block-name-value>${escapeMarkup(this.managedBlockNameDraft)}</span><i aria-hidden="true"></i>
-          </span>
+          ${isDesktopRuntime()
+            ? `<input type="text" maxlength="${BLOCK_NAME_LIMIT}" value="${escapeMarkup(this.managedBlockNameDraft)}" data-block-name-input autofocus>`
+            : `<span class="on-screen-text-field is-input-active" role="textbox" tabindex="0" aria-label="Nome do bloco" aria-readonly="true" data-block-name-field>
+                <span data-block-name-value>${escapeMarkup(this.managedBlockNameDraft)}</span><i aria-hidden="true"></i>
+              </span>`}
         </label>
         <p data-playlist-message role="alert"></p>
         <div class="tracks-playlist-editor__actions">
           <button type="button" data-tracks-action="block-rename-cancel">Voltar</button>
           <button type="button" data-tracks-action="block-rename-save">Salvar</button>
         </div>
-        ${createOnScreenKeyboardMarkup('Teclado para o nome do bloco', true)}
+        ${isDesktopRuntime() ? '' : createOnScreenKeyboardMarkup('Teclado para o nome do bloco', true)}
       </div>
     `;
   }
@@ -789,6 +833,17 @@ export class TracksPanelController {
   private renderManagedBlockName(): void {
     const value = this.getEditor().querySelector<HTMLElement>('[data-block-name-value]');
     if (value) value.textContent = this.managedBlockNameDraft;
+    const input = this.getEditor().querySelector<HTMLInputElement>('[data-block-name-input]');
+    if (input && input.value !== this.managedBlockNameDraft) input.value = this.managedBlockNameDraft;
+  }
+
+  private createPlaylistNameFieldMarkup(value: string): string {
+    if (isDesktopRuntime()) {
+      return `<input type="text" maxlength="${PLAYLIST_NAME_LIMIT}" value="${escapeMarkup(value)}" data-playlist-name-input autofocus>`;
+    }
+    return `<span class="on-screen-text-field" role="textbox" tabindex="0" aria-label="Nome da playlist" aria-readonly="true" data-playlist-name-field>
+      <span data-playlist-name-value>${escapeMarkup(value)}</span><i aria-hidden="true"></i>
+    </span>`;
   }
 
   private async saveManagedBlockName(): Promise<void> {

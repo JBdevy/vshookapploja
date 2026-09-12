@@ -149,6 +149,18 @@ export class AuthSessionService {
     return this.api.requestPasswordReset(session.token);
   }
 
+  requestPasswordRecovery(email: string): Promise<import('./types').RequestCodeResponse> {
+    return this.api.requestPasswordRecovery(email.trim().toLowerCase());
+  }
+
+  verifyPasswordRecoveryCode(challengeId: string, code: string): Promise<PasswordResetTokenResponse> {
+    return this.api.verifyPasswordRecoveryCode(challengeId, code);
+  }
+
+  completePasswordRecovery(passwordToken: string, password: string, passwordConfirmation: string): Promise<{ ok: true }> {
+    return this.api.completePasswordRecovery(passwordToken, password, passwordConfirmation);
+  }
+
   verifyPasswordResetCode(session: AuthenticatedSession, challengeId: string, code: string): Promise<PasswordResetTokenResponse> {
     return this.api.verifyPasswordResetCode(session.token, challengeId, code);
   }

@@ -10,6 +10,7 @@
     "dev": "vite",
     "dev:qr": "node scripts/dev-preview.mjs",
     "typecheck": "tsc -b",
+    "test:password-recovery": "node scripts/test-password-recovery.mjs",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "desktop:dev": "tauri dev",

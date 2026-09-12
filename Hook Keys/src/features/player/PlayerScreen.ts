@@ -137,6 +137,7 @@ import {
   type AudioOutputDevice,
 } from '../audio/AudioOutputService';
 import { hookKeysNative } from '../../platform/native/HookKeysNative';
+import { isDesktopRuntime } from '../../platform/runtime';
 import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
 import {
   createPerformanceKeyboardMarkup,
@@ -145,6 +146,7 @@ import {
   type PerformanceKeyboardStyle,
   type PlayerBottomView,
 } from './PerformanceKeyboard';
+import { ComputerKeyboardController } from './ComputerKeyboardController';
 import {
   createSynthModuleMarkup,
   DEFAULT_SYNTH_SETTINGS,
@@ -699,6 +701,7 @@ function createBankNavigationMarkup(): string {
 
 export class PlayerScreen {
   private readonly instanceId = ++playerScreenSequence;
+  private readonly desktopRuntime = isDesktopRuntime();
   private readonly handleRootClick = (event: Event) => this.onRootClick(event);
   private readonly handleRootPointerDown = (event: PointerEvent) => this.onRootPointerDown(event);
   private readonly handleRootPointerMove = (event: PointerEvent) => this.onRootPointerMove(event);
@@ -742,7 +745,9 @@ export class PlayerScreen {
   private backupDownloadLimit = 0;
   private soundDownloadAbort: AbortController | null = null;
   private readonly fixedSoundHoldGesture = new LongPressGesture(700, 10);
+  private readonly userSoundfontHoldGesture = new LongPressGesture(700, 10);
   private suppressNextFixedSoundClick = false;
+  private suppressNextUserSoundfontClick = false;
   private missingUserSoundfonts: MissingUserSoundfont[] = [];
   private readonly trackLibrary: TrackLibraryStore;
   private readonly effectAudioLibrary: EffectAudioStore;
@@ -756,6 +761,12 @@ export class PlayerScreen {
     this.handleMidiNote(input);
   }, (input) => {
     this.handleMidiControlChange(input);
+  }, () => {
+    if (this.currentModalKind === 'app-settings-midi' && this.modal) {
+      this.refreshMidiDeviceOptions(this.modal);
+    } else if (this.currentModalKind === 'module-settings' && this.modal) {
+      this.refreshModuleMidiOptions(this.modal, this.currentModalModuleNumber);
+    }
   });
   private mounted = false;
   private logoutBusy = false;
@@ -769,6 +780,8 @@ export class PlayerScreen {
   private knobDrag: KnobDrag | null = null;
   private lastDelayTapAt: number | null = null;
   private performanceKeyboard: PerformanceKeyboardController | null = null;
+  private computerKeyboard: ComputerKeyboardController | null = null;
+  private keyboardMidiRouter: KeyboardMidiRouter | null = null;
   private readonly keyboardSettingsHoldGesture = new LongPressGesture();
   private suppressNextKeyboardViewClick = false;
   private readonly outputFaderLearnGesture = new LongPressGesture(2_000);
@@ -938,7 +951,7 @@ export class PlayerScreen {
                 ${createBankNavigationMarkup()}
               </nav>
               <div class="player-presets__grid">${createPresetRowsMarkup(1)}</div>
-              ${createPerformanceKeyboardMarkup(this.keyboardStyle)}
+              ${this.desktopRuntime ? '' : createPerformanceKeyboardMarkup(this.keyboardStyle)}
             </section>
           </div>
 
@@ -973,22 +986,32 @@ export class PlayerScreen {
       fader.mount();
       this.faders.set(moduleNumber, fader);
     }
+    this.keyboardMidiRouter = new KeyboardMidiRouter(
+      () => keyboardMidiRoute(this.keyboardMidiSlot, this.selectedMidiInputIds, this.midiInput.getInputDevices().length),
+      (slot, status, note, velocity) => { void hookKeysNative.sendMidi(slot, status, note, velocity); },
+    );
     const keyboardRoot = this.root.querySelector<HTMLElement>('[data-performance-keyboard]');
     if (keyboardRoot) {
-      const keyboardRouter = new KeyboardMidiRouter(
-        () => keyboardMidiRoute(this.keyboardMidiSlot, this.selectedMidiInputIds, this.midiInput.getInputDevices().length),
-        (slot, status, note, velocity) => { void hookKeysNative.sendMidi(slot, status, note, velocity); },
-      );
       this.performanceKeyboard = new PerformanceKeyboardController(
         keyboardRoot,
         () => this.selectBottomView('presets'),
         (noteNumber, pressed, velocity) => {
-          const inputId = keyboardRouter.note(noteNumber, pressed, velocity);
+          const inputId = this.keyboardMidiRouter?.note(noteNumber, pressed, velocity) ?? null;
           this.patternPlayback.handleInput({ inputId, noteNumber, pressed, velocity });
           return inputId;
         },
       );
       this.performanceKeyboard.mount();
+    }
+    if (this.desktopRuntime) {
+      this.bottomView = 'presets';
+      this.computerKeyboard = new ComputerKeyboardController((noteNumber, pressed, velocity) => {
+        const inputId = this.keyboardMidiRouter?.note(noteNumber, pressed, velocity) ?? null;
+        const detail = { channel: 1, inputId, noteNumber, pressed, velocity };
+        this.patternPlayback.handleInput(detail);
+        window.dispatchEvent(new CustomEvent('hookkeys:performance-note', { detail }));
+      });
+      this.computerKeyboard.mount();
     }
     this.trackTransport = new TrackTransportController(
       this.root,
@@ -1052,6 +1075,9 @@ export class PlayerScreen {
     this.closeTracksSplitView();
     this.performanceKeyboard?.destroy();
     this.performanceKeyboard = null;
+    this.computerKeyboard?.destroy();
+    this.computerKeyboard = null;
+    this.keyboardMidiRouter = null;
     this.patternPlayback.destroy();
     this.keyboardSettingsHoldGesture.cancel();
     this.clearPresetHoldGesture();
@@ -1066,6 +1092,7 @@ export class PlayerScreen {
     this.tempoHoldGesture.cancel();
     this.keyboardAccentGesture.cancel();
     this.fixedSoundHoldGesture.cancel();
+    this.userSoundfontHoldGesture.cancel();
     this.soundDownloadAbort?.abort();
     this.soundDownloadAbort = null;
     this.soundLibraryEngine.destroy();
@@ -1531,11 +1558,13 @@ export class PlayerScreen {
 
     const metronomeButton = eventTarget.closest<HTMLButtonElement>('.player-metronome-button[data-action="toggle-metronome"]');
     if (metronomeButton) {
-      this.metronomeHoldGesture.start(event, () => {
-        this.suppressNextMetronomeClick = true;
-        window.setTimeout(() => { this.suppressNextMetronomeClick = false; }, 900);
-        this.openModal('metronome', null, metronomeButton);
-      });
+      if (!this.desktopRuntime) {
+        this.metronomeHoldGesture.start(event, () => {
+          this.suppressNextMetronomeClick = true;
+          window.setTimeout(() => { this.suppressNextMetronomeClick = false; }, 900);
+          this.openModal('metronome', null, metronomeButton);
+        });
+      }
       return;
     }
 
@@ -1543,11 +1572,13 @@ export class PlayerScreen {
     if (tempoButton) {
       this.metronome.tap(event.timeStamp);
       this.markPlayerStateChanged();
-      this.tempoHoldGesture.start(event, () => {
-        this.suppressNextTempoClick = true;
-        window.setTimeout(() => { this.suppressNextTempoClick = false; }, 900);
-        this.openModal('tempo-edit', null, tempoButton);
-      });
+      if (!this.desktopRuntime) {
+        this.tempoHoldGesture.start(event, () => {
+          this.suppressNextTempoClick = true;
+          window.setTimeout(() => { this.suppressNextTempoClick = false; }, 900);
+          this.openModal('tempo-edit', null, tempoButton);
+        });
+      }
       return;
     }
 
@@ -1567,7 +1598,7 @@ export class PlayerScreen {
       outputFader.setPointerCapture(event.pointerId);
       input.focus({ preventScroll: true });
       const outputBus = input.dataset.outputLevel;
-      if (isOutputBus(outputBus)) {
+      if (!this.desktopRuntime && isOutputBus(outputBus)) {
         this.outputFaderLearnGesture.start(event, () => {
           if (outputFader.hasPointerCapture(event.pointerId)) outputFader.releasePointerCapture(event.pointerId);
           this.outputFaderDrag = null;
@@ -1593,11 +1624,13 @@ export class PlayerScreen {
       };
       metronomeFader.setPointerCapture(event.pointerId);
       input.focus({ preventScroll: true });
-      this.metronomeFaderLearnGesture.start(event, () => {
-        if (metronomeFader.hasPointerCapture(event.pointerId)) metronomeFader.releasePointerCapture(event.pointerId);
-        this.metronomeFaderDrag = null;
-        this.openCcLearn({ kind: 'metronome-volume' }, metronomeFader);
-      });
+      if (!this.desktopRuntime) {
+        this.metronomeFaderLearnGesture.start(event, () => {
+          if (metronomeFader.hasPointerCapture(event.pointerId)) metronomeFader.releasePointerCapture(event.pointerId);
+          this.metronomeFaderDrag = null;
+          this.openCcLearn({ kind: 'metronome-volume' }, metronomeFader);
+        });
+      }
       this.updateMetronomeFaderFromPointer(this.metronomeFaderDrag, event.clientX);
       return;
     }
@@ -1759,6 +1792,7 @@ export class PlayerScreen {
     target: CcLearnTarget,
     suppressClick = true,
   ): void {
+    if (this.desktopRuntime) return;
     this.ccControlHoldGesture.start(event, () => {
       if (suppressClick) {
         this.suppressNextCcControlClick = trigger;
@@ -1804,24 +1838,150 @@ export class PlayerScreen {
 
   private onRootContextMenu(event: Event): void {
     const target = event.target;
+    if (!this.desktopRuntime || !(target instanceof Element)) return;
+    event.preventDefault();
+
+    const userSoundfont = target.closest<HTMLButtonElement>('[data-user-soundfont-id]');
+    if (userSoundfont && this.modal && this.currentModalKind === 'sound-selection') {
+      this.showUserSoundfontRemoveConfirmation(this.modal, userSoundfont);
+      return;
+    }
+
+    const fixedSound = target.closest<HTMLButtonElement>('[data-fixed-sound-id]');
+    const fixedSoundId = fixedSound?.dataset.fixedSoundId;
+    if (
+      fixedSound
+      && fixedSoundId
+      && this.installedFixedSoundIds.has(fixedSoundId)
+      && this.modal
+      && this.currentModalKind === 'sound-selection'
+    ) {
+      this.selectedCatalogSoundId = fixedSoundId;
+      this.openChildModal('sound-download', this.currentModalModuleNumber, fixedSound);
+      return;
+    }
+
     const knobInput = target instanceof Element
       ? target.closest<HTMLInputElement>('.module-envelope-knob input[type="range"], .module-effect-knob input[type="range"], .player-output-knob input[type="range"]')
       : null;
     if (knobInput) {
-      event.preventDefault();
       const learnTarget = this.currentModalModuleNumber === null
         ? this.ccLearnTargetForOutputKnob(knobInput)
         : this.ccLearnTargetForKnob(knobInput, this.currentModalModuleNumber);
       if (learnTarget) this.openCcLearn(learnTarget, knobInput);
       return;
     }
-    if (
-      target instanceof Element
-      && target.closest('.player-preset-button, [data-on-screen-character], [data-module-fader], [data-horizontal-output-fader], [data-metronome-output-fader], [data-output-fader], [data-action="toggle-metronome"], [data-action="tap-tempo"], [data-action="open-tracks"], [data-action="show-bank"], [data-action="octave-up"], [data-action="octave-down"], [data-action="select-effect-bank"], [data-performance-kind="note"]')
-    ) event.preventDefault();
+
+    const moduleFader = target.closest<HTMLElement>('[data-module-fader]');
+    const moduleNumber = Number(moduleFader?.dataset.moduleFader);
+    if (moduleFader && Number.isInteger(moduleNumber)) {
+      this.openCcLearn({ kind: 'module-volume', moduleNumber }, moduleFader);
+      return;
+    }
+
+    const outputFader = target.closest<HTMLElement>('[data-horizontal-output-fader], [data-output-fader]');
+    const outputBus = outputFader?.dataset.horizontalOutputFader ?? outputFader?.dataset.outputFader;
+    if (outputFader && isOutputBus(outputBus)) {
+      this.openCcLearn({ kind: 'output-volume', bus: outputBus }, outputFader);
+      return;
+    }
+
+    const metronomeFader = target.closest<HTMLElement>('[data-metronome-output-fader]');
+    if (metronomeFader) {
+      this.openCcLearn({ kind: 'metronome-volume' }, metronomeFader);
+      return;
+    }
+
+    const delayTap = target.closest<HTMLElement>('[data-module-delay-tap]');
+    if (delayTap && this.currentModalModuleNumber !== null) {
+      this.openCcLearn({
+        kind: 'module-control',
+        moduleNumber: this.currentModalModuleNumber,
+        control: 'delay:tap',
+        label: 'Tap do Delay',
+      }, delayTap);
+      return;
+    }
+
+    const octave = target.closest<HTMLButtonElement>('[data-action="octave-up"], [data-action="octave-down"]');
+    if (octave) {
+      const octaveModule = Number(octave.dataset.module);
+      if (Number.isInteger(octaveModule)) {
+        this.openCcLearn({
+          kind: 'module-octave',
+          moduleNumber: octaveModule,
+          direction: octave.dataset.action === 'octave-up' ? 1 : -1,
+        }, octave);
+      }
+      return;
+    }
+
+    const bankButton = target.closest<HTMLButtonElement>('[data-action="show-bank"]');
+    const bank = bankButton?.dataset.bank;
+    if (bankButton && this.isBankId(bank)) {
+      this.openCcLearn({ kind: 'bank', bank }, bankButton);
+      return;
+    }
+
+    const tempoButton = target.closest<HTMLButtonElement>('[data-action="tap-tempo"], [data-modal-action="learn-tempo-cc"]');
+    if (tempoButton) {
+      this.openCcLearn({ kind: 'tap-tempo' }, tempoButton);
+      return;
+    }
+
+    const metronomeButton = target.closest<HTMLButtonElement>('[data-action="toggle-metronome"]');
+    if (metronomeButton) {
+      this.openModal('metronome', null, metronomeButton);
+      return;
+    }
+
+    const tracksButton = target.closest<HTMLButtonElement>('[data-action="open-tracks"]');
+    if (tracksButton) {
+      if (!this.splitTracksController) this.openTracksSplitView();
+      return;
+    }
+
+    const trackName = target.closest<HTMLButtonElement>('[data-transport-track-name]');
+    if (trackName && !trackName.disabled) {
+      this.openModal('track-position', null, trackName);
+      return;
+    }
+
+    const effectBankButton = target.closest<HTMLButtonElement>('[data-action="select-effect-bank"]');
+    const effectBank = effectBankButton?.dataset.effectBank;
+    if (effectBankButton && this.isEffectBankId(effectBank)) {
+      this.activeEffectBank = effectBank;
+      this.effectEditMode = !this.effectEditMode;
+      this.renderActiveEffectBank();
+      return;
+    }
+
+    const presetButton = target.closest<HTMLButtonElement>('.player-preset-button');
+    const presetNumber = Number(presetButton?.dataset.preset);
+    if (presetButton && Number.isInteger(presetNumber)) {
+      this.openModal('preset-name', presetNumber, presetButton);
+      return;
+    }
+
+    const performanceButton = target.closest<HTMLButtonElement>('[data-performance-kind]');
+    const performance = performanceButton ? readPerformanceTrigger(performanceButton) : null;
+    if (performanceButton && performance?.kind === 'note') {
+      this.openCcLearn({ kind: 'pad', bank: this.activePadBank, note: performance.value }, performanceButton);
+    } else if (
+      performanceButton
+      && performance?.kind === 'effect'
+      && Number.isInteger(Number(performance.value))
+    ) {
+      this.openCcLearn({
+        kind: 'effect',
+        bank: this.activeEffectBank,
+        effectNumber: Number(performance.value),
+      }, performanceButton);
+    }
   }
 
   private startEffectEditHoldGesture(button: HTMLButtonElement, event: PointerEvent): void {
+    if (this.desktopRuntime) return;
     this.clearEffectEditHoldGesture();
     const bank = button.dataset.effectBank;
     if (!this.isEffectBankId(bank)) return;
@@ -1852,6 +2012,7 @@ export class PlayerScreen {
   }
 
   private startTracksHoldGesture(button: HTMLButtonElement, event: PointerEvent): void {
+    if (this.desktopRuntime) return;
     this.clearTracksHoldGesture();
     this.releaseCapturedTracksPointer();
     button.setPointerCapture(event.pointerId);
@@ -2015,6 +2176,7 @@ export class PlayerScreen {
   }
 
   private startPresetHoldGesture(button: HTMLButtonElement, event: PointerEvent): void {
+    if (this.desktopRuntime) return;
     this.clearPresetHoldGesture();
     const presetNumber = Number.parseInt(button.dataset.preset ?? '', 10);
     if (!Number.isInteger(presetNumber)) return;
@@ -3102,7 +3264,7 @@ export class PlayerScreen {
           ? moduleState.category
           : allowedCategories[0]?.id ?? 'user',
         allowedCategories,
-        true,
+        !this.desktopRuntime,
         this.installedFixedSoundIds,
       );
     } else if (kind === 'sound-download') {
@@ -3158,7 +3320,8 @@ export class PlayerScreen {
       bodyMarkup = createAppSettingsMarkup(
         this.compatibilityMode,
         this.bottomView,
-        true,
+        !this.desktopRuntime,
+        this.keyboardMidiSlot,
       );
     } else if (kind === 'app-settings-midi') {
       bodyMarkup = createMidiSettingsMarkup(this.midiInput.getInputDevices(), this.selectedMidiInputIds);
@@ -3168,7 +3331,7 @@ export class PlayerScreen {
       bodyMarkup = createPerformanceKeyboardSettingsMarkup(this.keyboardMidiSlot, this.keyboardStyle);
     } else if (kind === 'password-reset') {
       bodyMarkup = this.passwordResetToken
-        ? createNewPasswordMarkup(true)
+        ? createNewPasswordMarkup(!this.desktopRuntime)
         : createPasswordResetCodeMarkup(this.account.email);
     } else if (kind === 'compatibility-mode' && this.pendingCompatibilityMode !== null) {
       bodyMarkup = this.pendingCompatibilityMode
@@ -3649,6 +3812,22 @@ export class PlayerScreen {
         }
         return;
       }
+      const desktopKeyboardButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-desktop-keyboard-midi-slot]')
+        : null;
+      if (kind === 'app-settings' && this.desktopRuntime && desktopKeyboardButton) {
+        const slot = Number(desktopKeyboardButton.dataset.desktopKeyboardMidiSlot);
+        if (slot === 1 || slot === 2 || slot === 3) {
+          this.keyboardMidiSlot = slot;
+          for (const button of modal.querySelectorAll<HTMLButtonElement>('[data-desktop-keyboard-midi-slot]')) {
+            const selected = Number(button.dataset.desktopKeyboardMidiSlot) === slot;
+            button.classList.toggle('is-selected', selected);
+            button.setAttribute('aria-pressed', String(selected));
+          }
+          this.markPlayerStateChanged();
+        }
+        return;
+      }
       const settingsPageButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-settings-page]')
         : null;
@@ -3877,6 +4056,19 @@ export class PlayerScreen {
       }
       if (kind === 'sound-selection' && !userSoundfontInlineKey) {
         this.setUserSoundfontKeyboardOpen(modal, false);
+      }
+      const userSoundfontRemoveChoice = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-user-sf2-remove-choice]')
+        : null;
+      if (kind === 'sound-selection' && userSoundfontRemoveChoice) {
+        const confirmation = userSoundfontRemoveChoice.closest<HTMLElement>('[data-user-sf2-remove-confirmation]');
+        if (userSoundfontRemoveChoice.dataset.userSf2RemoveChoice === 'confirm') {
+          const id = confirmation?.dataset.userSoundfontId;
+          if (id) void this.removeUserSoundfont(modal, id, userSoundfontRemoveChoice);
+        } else {
+          confirmation?.remove();
+        }
+        return;
       }
       const categoryButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('button[data-sound-category]')
@@ -4264,9 +4456,11 @@ export class PlayerScreen {
         if (!button || (event.pointerType === 'mouse' && event.button !== 0)) return;
         event.preventDefault();
         this.tapModuleDelay(modal, moduleNumber, event.timeStamp);
-        this.knobCcLearnGesture.start(event, () => {
-          this.openCcLearn({ kind: 'module-control', moduleNumber, control: 'delay:tap', label: 'Tap do Delay' }, button);
-        });
+        if (!this.desktopRuntime) {
+          this.knobCcLearnGesture.start(event, () => {
+            this.openCcLearn({ kind: 'module-control', moduleNumber, control: 'delay:tap', label: 'Tap do Delay' }, button);
+          });
+        }
       });
     }
     if (kind === 'app-settings') {
@@ -4275,11 +4469,13 @@ export class PlayerScreen {
           ? event.target.closest<HTMLButtonElement>('[data-setting-view="keyboard"]')
           : null;
         if (!target || (event.pointerType === 'mouse' && event.button !== 0)) return;
-        this.keyboardSettingsHoldGesture.start(event, () => {
-          this.suppressNextKeyboardViewClick = true;
-          window.setTimeout(() => { this.suppressNextKeyboardViewClick = false; }, 500);
-          this.openChildModal('keyboard-settings', null, target);
-        });
+        if (!this.desktopRuntime) {
+          this.keyboardSettingsHoldGesture.start(event, () => {
+            this.suppressNextKeyboardViewClick = true;
+            window.setTimeout(() => { this.suppressNextKeyboardViewClick = false; }, 500);
+            this.openChildModal('keyboard-settings', null, target);
+          });
+        }
       });
       modal.addEventListener('pointermove', (event) => this.keyboardSettingsHoldGesture.move(event));
       modal.addEventListener('pointerup', (event) => this.keyboardSettingsHoldGesture.end(event));
@@ -4293,16 +4489,35 @@ export class PlayerScreen {
         const soundId = button?.dataset.fixedSoundId;
         if (!button || !soundId || !this.installedFixedSoundIds.has(soundId)) return;
         if (event.pointerType === 'mouse' && event.button !== 0) return;
-        this.fixedSoundHoldGesture.start(event, () => {
-          this.suppressNextFixedSoundClick = true;
-          window.setTimeout(() => { this.suppressNextFixedSoundClick = false; }, 650);
-          this.selectedCatalogSoundId = soundId;
-          this.openChildModal('sound-download', moduleNumber, button);
-        });
+        if (!this.desktopRuntime) {
+          this.fixedSoundHoldGesture.start(event, () => {
+            this.suppressNextFixedSoundClick = true;
+            window.setTimeout(() => { this.suppressNextFixedSoundClick = false; }, 650);
+            this.selectedCatalogSoundId = soundId;
+            this.openChildModal('sound-download', moduleNumber, button);
+          });
+        }
       });
       modal.addEventListener('pointermove', (event) => this.fixedSoundHoldGesture.move(event));
       modal.addEventListener('pointerup', (event) => this.fixedSoundHoldGesture.end(event));
       modal.addEventListener('pointercancel', (event) => this.fixedSoundHoldGesture.end(event));
+
+      modal.addEventListener('pointerdown', (event) => {
+        const button = event.target instanceof Element
+          ? event.target.closest<HTMLButtonElement>('button[data-user-soundfont-id]')
+          : null;
+        if (!button || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        if (!this.desktopRuntime) {
+          this.userSoundfontHoldGesture.start(event, () => {
+            this.suppressNextUserSoundfontClick = true;
+            window.setTimeout(() => { this.suppressNextUserSoundfontClick = false; }, 900);
+            this.showUserSoundfontRemoveConfirmation(modal, button);
+          });
+        }
+      });
+      modal.addEventListener('pointermove', (event) => this.userSoundfontHoldGesture.move(event));
+      modal.addEventListener('pointerup', (event) => this.userSoundfontHoldGesture.end(event));
+      modal.addEventListener('pointercancel', (event) => this.userSoundfontHoldGesture.end(event));
     }
     modal.addEventListener('change', (event) => {
       const input = event.target;
@@ -4392,8 +4607,10 @@ export class PlayerScreen {
     if (kind === 'app-settings-midi' || kind === 'app-settings-audio') {
       this.enhanceAppSelects(modal);
     }
-    this.tabletInputKeyboardController = new TabletInputKeyboardController(modal);
-    this.tabletInputKeyboardController.mount();
+    if (!this.desktopRuntime) {
+      this.tabletInputKeyboardController = new TabletInputKeyboardController(modal);
+      this.tabletInputKeyboardController.mount();
+    }
     if (kind === 'tracks') {
       this.tracksPanelController = new TracksPanelController(
         modal,
@@ -4674,7 +4891,7 @@ export class PlayerScreen {
       if (!modal.isConnected) return;
       this.renderSoundLibraryTotals(modal, soundfonts);
       const installedMarkup = soundfonts.map((soundfont) => `
-            <button type="button" data-user-soundfont-id="${soundfont.id}" data-user-soundfont-name="${escapeMarkup(soundfont.name)}">
+            <button type="button" data-user-soundfont-id="${escapeMarkup(soundfont.id)}" data-user-soundfont-name="${escapeMarkup(soundfont.name)}" style="--user-sf2-color-a:${PRESET_COLORS[soundfont.colorIndex]?.[0] ?? PRESET_COLORS[0]?.[0]};--user-sf2-color-b:${PRESET_COLORS[soundfont.colorIndex]?.[1] ?? PRESET_COLORS[0]?.[1]}">
               <strong>${escapeMarkup(soundfont.name)}</strong>
               <small>${escapeMarkup(soundfont.fileName)}</small>
             </button>
@@ -4690,6 +4907,59 @@ export class PlayerScreen {
         : '<p>Nenhum SF2 adicionado.</p>';
     } catch {
       list.innerHTML = '<p>Não foi possível carregar seus SF2.</p>';
+    }
+  }
+
+  private showUserSoundfontRemoveConfirmation(modal: HTMLElement, button: HTMLButtonElement): void {
+    const id = button.dataset.userSoundfontId;
+    const name = button.dataset.userSoundfontName;
+    if (!id || !name) return;
+    modal.querySelector('[data-user-sf2-remove-confirmation]')?.remove();
+    const confirmation = document.createElement('section');
+    confirmation.className = 'user-sf2-remove-confirmation';
+    confirmation.dataset.userSf2RemoveConfirmation = '';
+    confirmation.dataset.userSoundfontId = id;
+    confirmation.setAttribute('role', 'alertdialog');
+    confirmation.setAttribute('aria-modal', 'true');
+    confirmation.innerHTML = `
+      <div>
+        <small>SF2 do usuário</small>
+        <strong>Remover ${escapeMarkup(name)}?</strong>
+        <p>O timbre será apagado deste dispositivo e retirado dos presets que o utilizam.</p>
+        <span>
+          <button type="button" data-user-sf2-remove-choice="cancel">Cancelar</button>
+          <button type="button" data-user-sf2-remove-choice="confirm">Remover</button>
+        </span>
+      </div>
+    `;
+    modal.append(confirmation);
+    confirmation.querySelector<HTMLButtonElement>('[data-user-sf2-remove-choice="cancel"]')?.focus();
+  }
+
+  private async removeUserSoundfont(modal: HTMLElement, id: string, button: HTMLButtonElement): Promise<void> {
+    button.disabled = true;
+    try {
+      if (!await this.soundLibrary.removeUser(id)) throw new Error('soundfont_not_found');
+      const reference = `user:${id}`;
+      for (const bank of this.bankStates.values()) {
+        for (const preset of bank.presets) {
+          for (let moduleIndex = 0; moduleIndex < preset.modules.length; moduleIndex += 1) {
+            const module = preset.modules[moduleIndex];
+            if (!module || module.timbreId !== reference) continue;
+            module.timbreId = null;
+            module.timbreName = moduleEmptySoundName(moduleIndex + 1);
+          }
+        }
+      }
+      this.nativeLoadedTimbres.fill(null);
+      modal.querySelector('[data-user-sf2-remove-confirmation]')?.remove();
+      this.restoreActivePresetState();
+      this.markPlayerStateChanged();
+      await this.renderUserSoundfonts(modal);
+    } catch {
+      button.disabled = false;
+      const message = modal.querySelector<HTMLElement>('[data-user-sf2-message]');
+      if (message) message.textContent = 'Não foi possível remover este SF2.';
     }
   }
 
@@ -4772,6 +5042,10 @@ export class PlayerScreen {
   }
 
   private selectUserSoundfont(moduleNumber: number, button: HTMLButtonElement): void {
+    if (this.suppressNextUserSoundfontClick) {
+      this.suppressNextUserSoundfontClick = false;
+      return;
+    }
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     const id = button.dataset.userSoundfontId;
     const name = button.dataset.userSoundfontName;
@@ -5112,7 +5386,7 @@ export class PlayerScreen {
     };
     this.showKnobFocus(input);
     const learnTarget = moduleNumber === null ? this.ccLearnTargetForOutputKnob(input) : this.ccLearnTargetForKnob(input, moduleNumber);
-    if (learnTarget) {
+    if (!this.desktopRuntime && learnTarget) {
       this.knobCcLearnGesture.start(event, () => {
         if (input.hasPointerCapture(event.pointerId)) input.releasePointerCapture(event.pointerId);
         this.knobDrag = null;
@@ -6583,7 +6857,7 @@ export class PlayerScreen {
     };
     this.compatibilityMode = value.compatibilityMode === true;
     this.midiInput.setCompatibilityMode(this.compatibilityMode);
-    this.bottomView = value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
+    this.bottomView = !this.desktopRuntime && value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
     const savedKeyboardMidiSlot = Number(value.keyboardMidiSlot);
     this.keyboardMidiSlot = savedKeyboardMidiSlot === 2 || savedKeyboardMidiSlot === 3 ? savedKeyboardMidiSlot : 1;
     const savedKeyboardStyle = asString(value.keyboardStyle);

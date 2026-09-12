@@ -517,6 +517,21 @@ button {
   cursor: default;
 }
 
+.password-recovery-button {
+  width: 100%;
+  margin-top: 6px;
+  min-height: 36px;
+  color: #ffd0a1;
+  text-align: center;
+}
+
+.form-success {
+  margin: 0 0 12px;
+  color: #a2efb8;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .form-footnote {
   margin: 18px 0 0;
   color: #756860;
@@ -6292,6 +6307,34 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
   font-weight: 800;
 }
 
+.tracks-playlist-name-stage > label > input[data-playlist-name-input],
+.tracks-playlist-name-stage > label > input[data-block-name-input] {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  color: #fff;
+  border: 1.5px solid rgba(255, 129, 37, 0.72);
+  border-radius: 9px;
+  outline: none;
+  background: linear-gradient(180deg, #252329, #0e0e11);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  font: inherit;
+}
+
+.tracks-playlist-name-stage > label > input:focus {
+  border-color: #ff9a3d;
+  box-shadow: 0 0 0 3px rgba(255, 121, 0, 0.17);
+}
+
+html[data-runtime="desktop"] .tracks-playlist-name-stage {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "field"
+    "message"
+    "actions"
+    ".";
+}
+
 .tracks-playlist-name-stage > p,
 .tracks-playlist-selection-stage > p {
   grid-area: message;
@@ -7477,7 +7520,8 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 
 .user-sf2-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(46px, auto);
   align-content: start;
   gap: 7px;
   min-height: 0;
@@ -7515,6 +7559,23 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   text-align: left;
 }
 
+.user-sf2-list > button[data-user-soundfont-id] {
+  border-color: color-mix(in srgb, var(--user-sf2-color-a, #ff7900) 78%, white);
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--user-sf2-color-a, #ff7900) 88%, #151117) 0%,
+      color-mix(in srgb, var(--user-sf2-color-b, #ff3d00) 68%, #08080b) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 5px 12px color-mix(in srgb, var(--user-sf2-color-b, #ff3d00) 22%, transparent);
+}
+
+.user-sf2-list > button[data-user-soundfont-id] strong,
+.user-sf2-list > button[data-user-soundfont-id] small {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.86);
+}
+
 .user-sf2-list > button strong,
 .user-sf2-list > button small {
   overflow: hidden;
@@ -7542,6 +7603,65 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 .user-sf2-add strong {
   color: var(--orange-bright);
   font-size: 24px;
+}
+
+.user-sf2-remove-confirmation {
+  position: fixed;
+  z-index: 190;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.76);
+  backdrop-filter: blur(8px);
+}
+
+.user-sf2-remove-confirmation > div {
+  display: grid;
+  gap: 10px;
+  width: min(440px, 92vw);
+  padding: 22px;
+  border: 1.5px solid rgba(255, 121, 0, 0.82);
+  border-radius: 16px;
+  color: #fff;
+  background: linear-gradient(145deg, #242126, #0b0b0d 72%);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.72), 0 0 24px rgba(255, 90, 0, 0.2);
+}
+
+.user-sf2-remove-confirmation small {
+  color: #ff9b45;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.user-sf2-remove-confirmation strong {
+  font-size: clamp(18px, 2vw, 25px);
+}
+
+.user-sf2-remove-confirmation p {
+  margin: 0;
+  color: #d6cbc4;
+}
+
+.user-sf2-remove-confirmation span {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.user-sf2-remove-confirmation button {
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 9px;
+  color: #090909;
+  font-weight: 950;
+  background: linear-gradient(180deg, #f1f1f3, #9d9da4);
+}
+
+.user-sf2-remove-confirmation button[data-user-sf2-remove-choice="confirm"] {
+  background: linear-gradient(180deg, #ff9847, #e8450c);
 }
 
 .user-sf2-name {
@@ -10168,13 +10288,15 @@ html[data-keyboard="open"][data-app-mode="login"] .access-stage {
   width: 100%;
   min-width: 0;
   place-items: start center;
-  padding: 8px max(18px, env(safe-area-inset-right)) 8px max(18px, env(safe-area-inset-left));
+  --login-keyboard-top-gap: clamp(16px, calc(var(--app-viewport-height) * 0.045), 32px);
+  padding: max(var(--login-keyboard-top-gap), env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 8px max(18px, env(safe-area-inset-left));
   border-left: 0;
 }
 
 html[data-keyboard="open"][data-app-mode="login"] .access-card {
   width: min(100%, 520px);
   margin-inline: auto;
+  max-height: calc(var(--app-viewport-height) - max(var(--login-keyboard-top-gap), env(safe-area-inset-top)) - 8px);
 }
 
 .module-velocity-card {
