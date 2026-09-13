@@ -5425,6 +5425,10 @@ body.boot-loading {
   -webkit-overflow-scrolling: touch;
 }
 
+.listBox {
+  overscroll-behavior-y: none !important;
+}
+
 [data-action] {
   touch-action: manipulation;
 }

@@ -316,6 +316,7 @@
     regionSelectionLocalUntil: 0,
     directorSongListScrollingUntil: 0,
     directorListScrollingUntil: 0,
+    directorListPointerActive: false,
     directorListDeferredRenderTimer: 0,
   }
 
@@ -12612,7 +12613,8 @@
   }
 
   function isDirectorListScrolling(sampledAt = now()) {
-    return sampledAt < Number(state.directorListScrollingUntil || 0)
+    return state.directorListPointerActive === true ||
+      sampledAt < Number(state.directorListScrollingUntil || 0)
   }
 
   function deferRenderUntilListStops(forceRender) {
@@ -16944,14 +16946,16 @@
   function handlePlaylistScrollGesture(event) {
     if (event.type === 'pointerdown') {
       const songRow = event.target?.closest?.('.listBox .item[data-action="select-item"][data-item-type="playlist"], .listBox .item[data-action="select-item"][data-item-type="region"]')
+      const touchedList = event.target?.closest?.('.listBox')
       const otherScrollable = event.target?.closest?.('.playlistModalBox .playlistSelectList, .settingsModalBox, .premixFullList, .premixMixerRow')
-      if (!songRow && !otherScrollable) return
+      if (!songRow && !touchedList && !otherScrollable) return
       playlistScrollPointerId = event.pointerId
       playlistScrollStartX = Number(event.clientX) || 0
       playlistScrollStartY = Number(event.clientY) || 0
       playlistScrollMoved = false
-      playlistScrollIsSongList = !!songRow
+      playlistScrollIsSongList = !!touchedList
       if (playlistScrollIsSongList) {
+        state.directorListPointerActive = true
         // Desde o primeiro contato, nenhum retorno do Bridge pode reconstruir
         // a lista entre o pointerdown e o primeiro movimento. Era essa janela
         // curta que devolvia a rolagem para a musica recém-selecionada.
@@ -17005,6 +17009,7 @@
     playlistScrollPointerId = null
     playlistScrollMoved = false
     playlistScrollIsSongList = false
+    state.directorListPointerActive = false
   }
 
   function handleDirectorSongListScroll(event) {

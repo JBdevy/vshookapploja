@@ -278,9 +278,18 @@ const playlistScrollGestureBlock = extractFunction('handlePlaylistScrollGesture'
 assert.match(playlistScrollGestureBlock,
   /event\.type\s*===\s*'pointerdown'[\s\S]*?gestureGuardUntil[\s\S]*?directorListScrollingUntil/,
   'pointerdown da lista deve impedir render antes do primeiro movimento')
+assert.match(playlistScrollGestureBlock,
+  /closest\?\.\('\.listBox'\)[\s\S]*?directorListPointerActive\s*=\s*true/,
+  'tocar qualquer espaço da lista deve bloquear a restauração do scroll')
+assert.match(extractFunction('isDirectorListScrolling'),
+  /directorListPointerActive\s*===\s*true/,
+  'o render deve permanecer suspenso enquanto o dedo controla a lista')
 assert.match(styles,
   /\.musicListRenderCache\s*\{[\s\S]{0,100}?overflow-anchor:\s*none/,
   'lista musical nao deve ancorar novamente a linha selecionada')
+assert.match(styles,
+  /\.listBox\s*\{[\s\S]{0,160}?overscroll-behavior-y:\s*none\s*!important/,
+  'as extremidades da lista nao devem prender o primeiro gesto de retorno')
 
 const onTapBlock = extractFunction('onTap')
 assert.doesNotMatch(onTapBlock,

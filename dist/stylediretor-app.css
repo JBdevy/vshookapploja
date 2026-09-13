@@ -5458,6 +5458,12 @@ body.boot-loading {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Evita o efeito elástico consumir a primeira tentativa de sair do começo ou
+   do fim da lista. A rolagem continua livre dentro do próprio painel. */
+.listBox {
+  overscroll-behavior-y: none !important;
+}
+
 /* A selecao muda apenas a pintura da linha. O navegador nao pode usar essa
    linha como ancora e desfazer uma rolagem manual iniciada logo depois. */
 .musicListRenderCache {
