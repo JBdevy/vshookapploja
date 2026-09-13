@@ -7,11 +7,13 @@ typedef void (^HKMidiNoteHandler)(NSInteger slot, NSString *deviceId, NSInteger 
 typedef void (^HKMidiControlHandler)(NSInteger slot, NSString *deviceId, NSInteger channel,
                                      NSInteger controller, NSInteger value);
 typedef void (^HKMidiDevicesChangedHandler)(void);
+typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger channel, NSInteger value);
 
 @interface HookKeysNativeEngine : NSObject
 
 @property(nonatomic, copy, nullable) HKMidiNoteHandler onMidiNote;
 @property(nonatomic, copy, nullable) HKMidiControlHandler onMidiControl;
+@property(nonatomic, copy, nullable) HKMidiPitchHandler onMidiPitch;
 @property(nonatomic, copy, nullable) HKMidiDevicesChangedHandler onMidiDevicesChanged;
 
 - (BOOL)startWithBufferFrames:(NSInteger)bufferFrames;
@@ -60,7 +62,15 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
                     reverbDecay:(float)reverbDecay
                    reverbDampen:(float)reverbDampen
                      reverbSize:(float)reverbSize
-                      reverbMix:(float)reverbMix;
+                      reverbMix:(float)reverbMix
+                  rotaryEnabled:(BOOL)rotaryEnabled
+                    rotarySpeed:(NSInteger)rotarySpeed
+                   rotarySlowHz:(float)rotarySlowHz
+                   rotaryFastHz:(float)rotaryFastHz
+              rotaryRampSeconds:(float)rotaryRampSeconds
+                    rotaryDepth:(float)rotaryDepth
+                      rotaryMix:(float)rotaryMix
+        rotaryModulationEnabled:(BOOL)rotaryModulationEnabled;
 - (BOOL)configureModuleEnvelope:(NSInteger)moduleIndex
                         attackMs:(float)attackMs
                           holdMs:(float)holdMs
@@ -68,9 +78,12 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
                        releaseMs:(float)releaseMs;
 - (BOOL)configureSynth:(NSInteger)oscillator1
                            oscillator2:(NSInteger)oscillator2
+                    oscillator1Enabled:(BOOL)oscillator1Enabled
+                    oscillator2Enabled:(BOOL)oscillator2Enabled
                               voiceMode:(NSInteger)voiceMode
                               lfoTarget:(NSInteger)lfoTarget
-                          oscillatorMix:(float)oscillatorMix
+                      oscillator1Volume:(float)oscillator1Volume
+                      oscillator2Volume:(float)oscillator2Volume
                             detuneCents:(float)detuneCents
                                attackMs:(float)attackMs
                                  holdMs:(float)holdMs
@@ -82,7 +95,9 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
                          filterEnvelope:(float)filterEnvelope
                               lfoRateHz:(float)lfoRateHz
                                lfoDepth:(float)lfoDepth
-                                glideMs:(float)glideMs;
+                                glideMs:(float)glideMs
+                      oscillator1Octave:(NSInteger)oscillator1Octave
+                      oscillator2Octave:(NSInteger)oscillator2Octave;
 - (BOOL)sendMidiFromSlot:(NSInteger)slot
                   status:(NSInteger)status
                    data1:(NSInteger)data1

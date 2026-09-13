@@ -16,12 +16,6 @@ function requiredElement<T extends Element>(parent: ParentNode, selector: string
 type OctaveTransitionDirection = 'enter' | 'exit';
 
 function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): string {
-  const blackKeyAfter = new Set([0, 1, 3, 4, 5]);
-  const keys = Array.from({ length: 28 }, (_, keyIndex) => `
-    <i class="octave-transition__white-key" style="--key-index:${keyIndex}">
-      ${blackKeyAfter.has(keyIndex % 7) ? '<b aria-hidden="true"></b>' : ''}
-    </i>
-  `).join('');
   const meter = Array.from({ length: 19 }, (_, index) => (
     `<i style="--meter-index:${index};--meter-height:${34 + ((index * 29) % 63)}%"></i>`
   )).join('');
@@ -41,10 +35,6 @@ function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): str
         </header>
         <div class="octave-transition__stage">
           <div class="octave-transition__meter">${meter}</div>
-          <div class="octave-transition__keyboard-shell">
-            <div class="octave-transition__keyboard">${keys}</div>
-            <div class="octave-transition__keyboard-glow"></div>
-          </div>
           <div class="octave-transition__title">
             <span>${entering ? 'INICIALIZANDO' : 'ENCERRANDO SESSÃO'}</span>
             <strong><b>HOOK</b> KEYS</strong>
@@ -165,8 +155,8 @@ export class HookKeysApp {
     document.body.append(overlay);
 
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const totalDuration = reducedMotion ? 260 : 3000;
-    const swapDelay = reducedMotion ? 100 : 2200;
+    const totalDuration = reducedMotion ? 260 : 6000;
+    const swapDelay = reducedMotion ? 100 : 4400;
     window.requestAnimationFrame(() => overlay.classList.add('is-running'));
 
     return new Promise((resolve) => {

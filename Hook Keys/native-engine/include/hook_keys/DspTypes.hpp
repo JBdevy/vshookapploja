@@ -104,12 +104,33 @@ struct ReverbConfig final {
   }
 };
 
+struct RotaryConfig final {
+  bool enabled = false;
+  std::uint8_t speed = 1; // brake, slow, fast
+  float slowHz = 0.8f;
+  float fastHz = 6.4f;
+  float rampSeconds = 1.2f;
+  float depth = 0.7f;
+  float mix = 1.0f;
+  bool modulationEnabled = false;
+
+  void normalize() noexcept {
+    speed = std::min<std::uint8_t>(speed, 2);
+    slowHz = std::clamp(slowHz, 0.2f, 2.0f);
+    fastHz = std::clamp(fastHz, 2.0f, 10.0f);
+    rampSeconds = std::clamp(rampSeconds, 0.1f, 10.0f);
+    depth = std::clamp(depth, 0.0f, 1.0f);
+    mix = std::clamp(mix, 0.0f, 1.0f);
+  }
+};
+
 struct ModuleEffectsConfig final {
   CutoffConfig cutoff{};
   EqConfig equalizer{};
   CompressorConfig compressor{};
   DelayConfig delay{};
   ReverbConfig reverb{};
+  RotaryConfig rotary{};
 
   void normalize() noexcept {
     cutoff.normalize();
@@ -117,6 +138,7 @@ struct ModuleEffectsConfig final {
     compressor.normalize();
     delay.normalize();
     reverb.normalize();
+    rotary.normalize();
   }
 };
 

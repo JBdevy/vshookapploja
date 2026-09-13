@@ -45,9 +45,12 @@ HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
 bool HookKeysEngine::enqueueMidi(MidiMessage message) noexcept {
   if (message.inputSlot >= kMidiInputCount) {
     const auto type = static_cast<std::uint8_t>(message.status & kMessageTypeMask);
-    const auto virtualNoteInput = message.inputSlot == kKeyboardBroadcastInput ||
+    const auto virtualInput = message.inputSlot == kKeyboardBroadcastInput ||
         message.inputSlot == kArpeggiatorInput || message.inputSlot == kSequencerInput;
-    if (!virtualNoteInput || (type != kNoteOn && type != kNoteOff)) return false;
+    const auto virtualMessage = type == kNoteOn || type == kNoteOff ||
+        (message.inputSlot == kKeyboardBroadcastInput &&
+         (type == kControlChange || type == kPitchBend));
+    if (!virtualInput || !virtualMessage) return false;
   }
   message.data1 = std::min<std::uint8_t>(message.data1, 127);
   message.data2 = std::min<std::uint8_t>(message.data2, 127);
@@ -188,10 +191,14 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
       const auto& config = configs_[index];
       if (synth == nullptr || !config.enabled) continue;
       const auto acceptsInput = config.midiInputSlot == kAllMidiInputs ||
+                                (message.inputSlot == kKeyboardBroadcastInput &&
+                                 config.midiInputSlot != kArpeggiatorInput &&
+                                 config.midiInputSlot != kSequencerInput) ||
                                 message.inputSlot == config.midiInputSlot;
       if (!acceptsInput) continue;
       if (message.data1 == kSustainController && !config.sustainInputEnabled) continue;
       if (message.data1 == kModulationController && !config.modulationInputEnabled) continue;
+      if (message.data1 == kModulationController) effects_[index].setModulation(message.data2);
       synth->controlChange(message.data1, message.data2);
     }
     return;
@@ -201,6 +208,9 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
     for (std::size_t index = 0; index < kModuleCount; ++index) {
       if (modules_[index] != nullptr && configs_[index].enabled &&
           (configs_[index].midiInputSlot == kAllMidiInputs ||
+           (message.inputSlot == kKeyboardBroadcastInput &&
+            configs_[index].midiInputSlot != kArpeggiatorInput &&
+            configs_[index].midiInputSlot != kSequencerInput) ||
            message.inputSlot == configs_[index].midiInputSlot)) {
         modules_[index]->pitchBend(value);
       }

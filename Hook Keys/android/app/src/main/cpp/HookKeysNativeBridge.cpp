@@ -145,7 +145,9 @@ public:
       float reverbDecay,
       float reverbDampen,
       float reverbSize,
-      float reverbMix) noexcept {
+      float reverbMix, bool rotaryEnabled, int rotarySpeed,
+      float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
+      float rotaryDepth, float rotaryMix, bool rotaryModulationEnabled) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     hook_keys::ModuleEffectsConfig effects;
@@ -165,6 +167,9 @@ public:
                           compressorReleaseMs, compressorGainDb, compressorMix};
     effects.delay = {true, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
     effects.reverb = {true, reverbDecay, reverbDampen, reverbSize, reverbMix};
+    effects.rotary = {rotaryEnabled, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
+                      rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
+                      rotaryModulationEnabled};
     return runtime->setModuleEffects(moduleIndex, effects);
   }
 
@@ -177,19 +182,23 @@ public:
   }
 
   bool configureSynth(
-      int oscillator1, int oscillator2, int voiceMode, int lfoTarget,
-      float oscillatorMix, float detuneCents, float attackMs, float holdMs,
+      int oscillator1, int oscillator2, bool oscillator1Enabled,
+      bool oscillator2Enabled, int voiceMode, int lfoTarget,
+      float oscillator1Volume, float oscillator2Volume, float detuneCents, float attackMs, float holdMs,
       float decayMs, float sustain, float releaseMs, float filterCutoffHz,
       float filterResonance, float filterEnvelope, float lfoRateHz,
-      float lfoDepth, float glideMs) noexcept {
+      float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     hook_keys::AnalogSynthConfig config;
     config.oscillator1 = static_cast<std::uint8_t>(std::clamp(oscillator1, 0, 3));
     config.oscillator2 = static_cast<std::uint8_t>(std::clamp(oscillator2, 0, 3));
+    config.oscillator1Enabled = oscillator1Enabled;
+    config.oscillator2Enabled = oscillator2Enabled;
     config.voiceMode = static_cast<std::uint8_t>(std::clamp(voiceMode, 0, 2));
     config.lfoTarget = static_cast<std::uint8_t>(std::clamp(lfoTarget, 0, 2));
-    config.oscillatorMix = oscillatorMix;
+    config.oscillator1Volume = oscillator1Volume;
+    config.oscillator2Volume = oscillator2Volume;
     config.detuneCents = detuneCents;
     config.attackMs = attackMs;
     config.holdMs = holdMs;
@@ -202,6 +211,8 @@ public:
     config.lfoRateHz = lfoRateHz;
     config.lfoDepth = lfoDepth;
     config.glideMs = glideMs;
+    config.oscillator1Octave = static_cast<std::int8_t>(std::clamp(oscillator1Octave, -3, 3));
+    config.oscillator2Octave = static_cast<std::int8_t>(std::clamp(oscillator2Octave, -3, 3));
     return runtime->setSynthConfig(config);
   }
 
@@ -426,7 +437,9 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jfloat reverbDecay,
     jfloat reverbDampen,
     jfloat reverbSize,
-    jfloat reverbMix) {
+    jfloat reverbMix, jboolean rotaryEnabled, jint rotarySpeed,
+    jfloat rotarySlowHz, jfloat rotaryFastHz, jfloat rotaryRampSeconds,
+    jfloat rotaryDepth, jfloat rotaryMix, jboolean rotaryModulationEnabled) {
   const auto readInts = [](JNIEnv* env, jintArray source, jsize start, jsize count, int* target) {
     env->GetIntArrayRegion(source, start, count, reinterpret_cast<jint*>(target));
   };
@@ -445,7 +458,9 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
              cutStages, compressorThresholdDb, compressorRatio, compressorAttackMs,
              compressorReleaseMs, compressorGainDb, compressorMix, delaySync == JNI_TRUE,
              delayMs, delayBeatMultiplier, delayFeedback, delayMix, reverbDecay, reverbDampen,
-             reverbSize, reverbMix)
+             reverbSize, reverbMix, rotaryEnabled == JNI_TRUE, rotarySpeed,
+             rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
+             rotaryModulationEnabled == JNI_TRUE)
              ? JNI_TRUE
              : JNI_FALSE;
 }
@@ -462,16 +477,18 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEnvelo
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureSynth(
-    JNIEnv*, jclass, jint oscillator1, jint oscillator2, jint voiceMode,
-    jint lfoTarget, jfloat oscillatorMix, jfloat detuneCents, jfloat attackMs,
+    JNIEnv*, jclass, jint oscillator1, jint oscillator2, jboolean oscillator1Enabled,
+    jboolean oscillator2Enabled, jint voiceMode, jint lfoTarget,
+    jfloat oscillator1Volume, jfloat oscillator2Volume, jfloat detuneCents, jfloat attackMs,
     jfloat holdMs, jfloat decayMs, jfloat sustain, jfloat releaseMs,
     jfloat filterCutoffHz, jfloat filterResonance, jfloat filterEnvelope,
-    jfloat lfoRateHz, jfloat lfoDepth, jfloat glideMs) {
+    jfloat lfoRateHz, jfloat lfoDepth, jfloat glideMs, jint oscillator1Octave, jint oscillator2Octave) {
   return gEngine.configureSynth(
-             oscillator1, oscillator2, voiceMode, lfoTarget, oscillatorMix,
+             oscillator1, oscillator2, oscillator1Enabled == JNI_TRUE,
+             oscillator2Enabled == JNI_TRUE, voiceMode, lfoTarget, oscillator1Volume, oscillator2Volume,
              detuneCents, attackMs, holdMs, decayMs, sustain, releaseMs,
              filterCutoffHz, filterResonance, filterEnvelope, lfoRateHz,
-             lfoDepth, glideMs)
+             lfoDepth, glideMs, oscillator1Octave, oscillator2Octave)
              ? JNI_TRUE
              : JNI_FALSE;
 }

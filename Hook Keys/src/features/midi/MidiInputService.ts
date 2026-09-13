@@ -22,6 +22,11 @@ export interface MidiControlChangeInput {
 
 type MidiNoteHandler = (input: MidiNoteInput) => void;
 type MidiControlChangeHandler = (input: MidiControlChangeInput) => void;
+export interface MidiPitchBendInput {
+  channel: number;
+  inputId: string | null;
+  value: number;
+}
 
 interface NativeMidiNoteDetail {
   channel?: number;
@@ -88,15 +93,28 @@ export class MidiInputService {
     });
   };
 
+  private readonly handleNativePitchBend = (event: Event) => {
+    const detail = (event as CustomEvent<NativeMidiControlChangeDetail>).detail;
+    if (!detail || !Number.isFinite(detail.value)) return;
+    this.emitPitchBend({
+      channel: Number.isFinite(detail.channel) ? Number(detail.channel) : 1,
+      inputId: typeof detail.inputId === 'string' ? detail.inputId
+        : typeof detail.deviceId === 'string' ? detail.deviceId : null,
+      value: Number(detail.value),
+    });
+  };
+
   constructor(
     private readonly onNote: MidiNoteHandler,
     private readonly onControlChange: MidiControlChangeHandler = () => {},
     private readonly onDevicesChanged: () => void = () => {},
+    private readonly onPitchBend: (input: MidiPitchBendInput) => void = () => {},
   ) {}
 
   mount(): void {
     window.addEventListener('hookkeys:native-midi-note', this.handleNativeNote);
     window.addEventListener('hookkeys:native-midi-control-change', this.handleNativeControlChange);
+    window.addEventListener('hookkeys:native-midi-pitch-bend', this.handleNativePitchBend);
     window.addEventListener('hookkeys:native-midi-devices-changed', this.handleNativeDevicesChanged);
     if (hookKeysNative.isAvailable()) {
       void this.requestAccess();
@@ -112,6 +130,7 @@ export class MidiInputService {
   destroy(): void {
     window.removeEventListener('hookkeys:native-midi-note', this.handleNativeNote);
     window.removeEventListener('hookkeys:native-midi-control-change', this.handleNativeControlChange);
+    window.removeEventListener('hookkeys:native-midi-pitch-bend', this.handleNativePitchBend);
     window.removeEventListener('hookkeys:native-midi-devices-changed', this.handleNativeDevicesChanged);
     if (this.access) {
       this.access.onstatechange = null;
@@ -230,6 +249,10 @@ export class MidiInputService {
     const data2 = data[2];
     if (status === undefined || data1 === undefined || data2 === undefined) return;
     const messageType = status & 0xf0;
+    if (messageType === 0xe0) {
+      this.emitPitchBend({ channel: (status & 0x0f) + 1, inputId, value: (data1 & 0x7f) | ((data2 & 0x7f) << 7) });
+      return;
+    }
     if (messageType === 0xb0) {
       this.emitControlChange({
         channel: (status & 0x0f) + 1,
@@ -268,6 +291,15 @@ export class MidiInputService {
       if ([0, 6, 10, 16, 32, 100, 101].includes(normalized.controller)) return;
     }
     this.onControlChange(normalized);
+  }
+
+  private emitPitchBend(input: MidiPitchBendInput): void {
+    if (!Number.isFinite(input.value) || (input.inputId && !this.selectedInputIds.has(input.inputId))) return;
+    this.onPitchBend({
+      channel: Math.min(16, Math.max(1, Math.round(input.channel))),
+      inputId: input.inputId,
+      value: Math.min(16383, Math.max(0, Math.round(input.value))),
+    });
   }
 
   private emitNote(input: MidiNoteInput): void {

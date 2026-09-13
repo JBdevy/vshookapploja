@@ -14,6 +14,7 @@ export interface FixedSoundDefinition {
 
 export interface SoundCatalogCategory extends SoundCategoryDefinition {
   sounds: readonly FixedSoundDefinition[];
+  visibleModule?: number | null;
 }
 
 export interface PerformanceAssetDefinition {
@@ -58,8 +59,9 @@ export class SoundCatalog {
     return this.categories.find((category) => category.id === categoryId) ?? null;
   }
 
-  categoriesForModule(_moduleNumber: number | null): readonly SoundCatalogCategory[] {
-    return this.categories;
+  categoriesForModule(moduleNumber: number | null): readonly SoundCatalogCategory[] {
+    if (moduleNumber === null) return this.categories;
+    return this.categories.filter((category) => category.visibleModule == null || category.visibleModule === moduleNumber);
   }
 
   listByCategory(category: SoundCategoryId): readonly FixedSoundDefinition[] {
@@ -109,6 +111,7 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
       order: positiveInteger(rawCategory.order, categoryIndex + 1),
       moduleRole: rawCategory.moduleRole === 'sequencer' || rawCategory.moduleRole === 'mono'
         ? rawCategory.moduleRole : null,
+      visibleModule: visibleModule(rawCategory.visibleModule),
       sounds,
     });
   }).sort((left, right) => left.order - right.order);
@@ -141,6 +144,14 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function visibleModule(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 8) {
+    throw new Error('sound_category_module_invalid');
+  }
+  return value;
 }
 
 function safeId(value: unknown): string {

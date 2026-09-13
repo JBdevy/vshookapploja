@@ -281,7 +281,15 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
             delayBeatMultiplier:(float)delayBeatMultiplier delayFeedback:(float)delayFeedback
                        delayMix:(float)delayMix reverbDecay:(float)reverbDecay
                    reverbDampen:(float)reverbDampen reverbSize:(float)reverbSize
-                      reverbMix:(float)reverbMix {
+                      reverbMix:(float)reverbMix
+                  rotaryEnabled:(BOOL)rotaryEnabled
+                    rotarySpeed:(NSInteger)rotarySpeed
+                   rotarySlowHz:(float)rotarySlowHz
+                   rotaryFastHz:(float)rotaryFastHz
+              rotaryRampSeconds:(float)rotaryRampSeconds
+                    rotaryDepth:(float)rotaryDepth
+                      rotaryMix:(float)rotaryMix
+        rotaryModulationEnabled:(BOOL)rotaryModulationEnabled {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
   hook_keys::ModuleEffectsConfig effects;
@@ -303,6 +311,9 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
                         compressorReleaseMs, compressorGainDb, compressorMix};
   effects.delay = {true, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
   effects.reverb = {true, reverbDecay, reverbDampen, reverbSize, reverbMix};
+  effects.rotary = {rotaryEnabled != NO, static_cast<std::uint8_t>(std::clamp<NSInteger>(rotarySpeed, 0, 2)),
+                    rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
+                    rotaryModulationEnabled != NO};
   return runtime->setModuleEffects(static_cast<std::size_t>(moduleIndex), effects);
 }
 
@@ -316,9 +327,12 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
 
 - (BOOL)configureSynth:(NSInteger)oscillator1
                            oscillator2:(NSInteger)oscillator2
+                    oscillator1Enabled:(BOOL)oscillator1Enabled
+                    oscillator2Enabled:(BOOL)oscillator2Enabled
                               voiceMode:(NSInteger)voiceMode
                               lfoTarget:(NSInteger)lfoTarget
-                          oscillatorMix:(float)oscillatorMix
+                      oscillator1Volume:(float)oscillator1Volume
+                      oscillator2Volume:(float)oscillator2Volume
                             detuneCents:(float)detuneCents
                                attackMs:(float)attackMs
                                  holdMs:(float)holdMs
@@ -330,15 +344,20 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
                          filterEnvelope:(float)filterEnvelope
                               lfoRateHz:(float)lfoRateHz
                                lfoDepth:(float)lfoDepth
-                                glideMs:(float)glideMs {
+                                glideMs:(float)glideMs
+                      oscillator1Octave:(NSInteger)oscillator1Octave
+                      oscillator2Octave:(NSInteger)oscillator2Octave {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr) return NO;
   hook_keys::AnalogSynthConfig config;
   config.oscillator1 = static_cast<std::uint8_t>(std::clamp<NSInteger>(oscillator1, 0, 3));
   config.oscillator2 = static_cast<std::uint8_t>(std::clamp<NSInteger>(oscillator2, 0, 3));
+  config.oscillator1Enabled = oscillator1Enabled;
+  config.oscillator2Enabled = oscillator2Enabled;
   config.voiceMode = static_cast<std::uint8_t>(std::clamp<NSInteger>(voiceMode, 0, 2));
   config.lfoTarget = static_cast<std::uint8_t>(std::clamp<NSInteger>(lfoTarget, 0, 2));
-  config.oscillatorMix = oscillatorMix;
+  config.oscillator1Volume = oscillator1Volume;
+  config.oscillator2Volume = oscillator2Volume;
   config.detuneCents = detuneCents;
   config.attackMs = attackMs;
   config.holdMs = holdMs;
@@ -351,6 +370,8 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   config.lfoRateHz = lfoRateHz;
   config.lfoDepth = lfoDepth;
   config.glideMs = glideMs;
+  config.oscillator1Octave = static_cast<std::int8_t>(std::clamp<NSInteger>(oscillator1Octave, -3, 3));
+  config.oscillator2Octave = static_cast<std::int8_t>(std::clamp<NSInteger>(oscillator2Octave, -3, 3));
   return runtime->setSynthConfig(config);
 }
 
@@ -480,6 +501,8 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
     self.onMidiNote(slot, deviceId, channel, data1, velocity);
   } else if (type == 0xb0 && self.onMidiControl) {
     self.onMidiControl(slot, deviceId, channel, data1, data2);
+  } else if (type == 0xe0 && self.onMidiPitch) {
+    self.onMidiPitch(slot, deviceId, channel, (data1 & 0x7f) | ((data2 & 0x7f) << 7));
   }
 }
 

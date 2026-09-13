@@ -252,7 +252,15 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("reverbDecay", 0.5f),
             call.getFloat("reverbDampen", 0.5f),
             call.getFloat("reverbSize", 0.6f),
-            call.getFloat("reverbMix", 0.25f)
+            call.getFloat("reverbMix", 0.25f),
+            call.getBoolean("rotaryEnabled", false),
+            call.getInt("rotarySpeed", 1),
+            call.getFloat("rotarySlowHz", 0.8f),
+            call.getFloat("rotaryFastHz", 6.4f),
+            call.getFloat("rotaryRampSeconds", 1.2f),
+            call.getFloat("rotaryDepth", 0.7f),
+            call.getFloat("rotaryMix", 1.0f),
+            call.getBoolean("rotaryModulationEnabled", false)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -263,9 +271,9 @@ public class HookKeysNativePlugin extends Plugin {
         boolean ok = nativeConfigureModuleEnvelope(
             call.getInt("moduleIndex", -1),
             call.getFloat("attackMs", 0.0f),
-            call.getFloat("holdMs", 0.0f),
-            call.getFloat("decayMs", 0.0f),
-            call.getFloat("releaseMs", 0.0f)
+            call.getFloat("holdMs", 15000.0f),
+            call.getFloat("decayMs", 25000.0f),
+            call.getFloat("releaseMs", 90.0f)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -276,21 +284,26 @@ public class HookKeysNativePlugin extends Plugin {
         boolean ok = nativeConfigureSynth(
             Math.max(0, Math.min(3, call.getInt("oscillator1", 1))),
             Math.max(0, Math.min(3, call.getInt("oscillator2", 2))),
+            call.getBoolean("oscillator1Enabled", true),
+            call.getBoolean("oscillator2Enabled", true),
             Math.max(0, Math.min(2, call.getInt("voiceMode", 1))),
             Math.max(0, Math.min(2, call.getInt("lfoTarget", 1))),
-            call.getFloat("oscillatorMix", 0.35f),
+            call.getFloat("oscillator1Volume", 1.0f),
+            call.getFloat("oscillator2Volume", 1.0f),
             call.getFloat("detuneCents", 7.0f),
             call.getFloat("attackMs", 0.0f),
             call.getFloat("holdMs", 15000.0f),
             call.getFloat("decayMs", 25000.0f),
             call.getFloat("sustain", 1.0f),
-            call.getFloat("releaseMs", 100.0f),
+            call.getFloat("releaseMs", 90.0f),
             call.getFloat("filterCutoffHz", 20000.0f),
             call.getFloat("filterResonance", 0.18f),
             call.getFloat("filterEnvelope", 0.24f),
             call.getFloat("lfoRateHz", 4.0f),
             call.getFloat("lfoDepth", 0.0f),
-            call.getFloat("glideMs", 45.0f)
+            call.getFloat("glideMs", 45.0f),
+            call.getInt("oscillator1Octave", 0),
+            call.getInt("oscillator2Octave", 0)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -559,6 +572,12 @@ public class HookKeysNativePlugin extends Plugin {
                 event.put("controller", data1);
                 event.put("value", data2);
                 notifyListeners("midiControlChange", event, true);
+            } else if (type == 0xe0) {
+                JSObject event = new JSObject();
+                event.put("channel", (status & 0x0f) + 1);
+                event.put("inputId", deviceId);
+                event.put("value", (data1 & 0x7f) | ((data2 & 0x7f) << 7));
+                notifyListeners("midiPitchBend", event, true);
             }
         }
     }
@@ -621,17 +640,20 @@ public class HookKeysNativePlugin extends Plugin {
         float reverbDecay,
         float reverbDampen,
         float reverbSize,
-        float reverbMix
+        float reverbMix, boolean rotaryEnabled, int rotarySpeed,
+        float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
+        float rotaryDepth, float rotaryMix, boolean rotaryModulationEnabled
     );
     private static native boolean nativeConfigureModuleEnvelope(
         int moduleIndex, float attackMs, float holdMs, float decayMs, float releaseMs
     );
     private static native boolean nativeConfigureSynth(
-        int oscillator1, int oscillator2, int voiceMode, int lfoTarget,
-        float oscillatorMix, float detuneCents, float attackMs, float holdMs,
+        int oscillator1, int oscillator2, boolean oscillator1Enabled,
+        boolean oscillator2Enabled, int voiceMode, int lfoTarget,
+        float oscillator1Volume, float oscillator2Volume, float detuneCents, float attackMs, float holdMs,
         float decayMs, float sustain, float releaseMs, float filterCutoffHz,
         float filterResonance, float filterEnvelope, float lfoRateHz,
-        float lfoDepth, float glideMs
+        float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave
     );
     private static native boolean nativeSetTempo(float bpm);
     private static native boolean nativeConfigureMetronome(

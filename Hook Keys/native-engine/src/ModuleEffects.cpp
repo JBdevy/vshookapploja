@@ -44,12 +44,20 @@ bool sameReverb(const ReverbConfig& left, const ReverbConfig& right) noexcept {
   return left.enabled == right.enabled && left.decay == right.decay && left.dampen == right.dampen &&
          left.size == right.size && left.mix == right.mix;
 }
+
+bool sameRotary(const RotaryConfig& left, const RotaryConfig& right) noexcept {
+  return left.enabled == right.enabled && left.speed == right.speed && left.slowHz == right.slowHz &&
+         left.fastHz == right.fastHz && left.rampSeconds == right.rampSeconds &&
+         left.depth == right.depth && left.mix == right.mix &&
+         left.modulationEnabled == right.modulationEnabled;
+}
 } // namespace
 
 void ModuleEffects::prepare(double sampleRate) {
   sampleRate_ = std::clamp(sampleRate, 8000.0, 384000.0);
   delay_.prepare(sampleRate_);
   reverb_.prepare(sampleRate_);
+  rotary_.prepare(sampleRate_);
   cutoff_.configure(
       {config_.cutoff.enabled && config_.cutoff.frequencyHz < 19999.0f,
        EqBandType::highCut,
@@ -62,6 +70,7 @@ void ModuleEffects::prepare(double sampleRate) {
   compressor_.configure(config_.compressor, sampleRate_);
   delay_.configure(config_.delay, tempoBpm_);
   reverb_.configure(config_.reverb);
+  rotary_.configure(config_.rotary);
 }
 
 void ModuleEffects::reset() noexcept {
@@ -70,6 +79,7 @@ void ModuleEffects::reset() noexcept {
   compressor_.reset();
   delay_.reset();
   reverb_.reset();
+  rotary_.reset();
 }
 
 void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexcept {
@@ -91,6 +101,7 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
   }
   if (!sameDelay(config_.delay, config.delay)) delay_.configure(config.delay, tempoBpm_);
   if (!sameReverb(config_.reverb, config.reverb)) reverb_.configure(config.reverb);
+  if (!sameRotary(config_.rotary, config.rotary)) rotary_.configure(config.rotary);
   config_ = config;
 }
 
@@ -104,8 +115,93 @@ void ModuleEffects::process(float* left, float* right, std::size_t frames) noexc
   for (std::size_t frame = 0; frame < frames; ++frame) cutoff_.process(left[frame], right[frame]);
   equalizer_.process(left, right, frames);
   compressor_.process(left, right, frames);
+  rotary_.process(left, right, frames);
   delay_.process(left, right, frames);
   reverb_.process(left, right, frames);
+}
+
+void ModuleEffects::RotarySpeaker::prepare(double nextSampleRate) {
+  sampleRate = nextSampleRate;
+  const auto capacity = static_cast<std::size_t>(std::ceil(sampleRate * 0.004)) + 4;
+  hornBuffer.assign(capacity, 0.0f);
+  drumBuffer.assign(capacity, 0.0f);
+  crossover = 1.0f - std::exp(static_cast<float>(-2.0 * kPi * 800.0 / sampleRate));
+  reset();
+  configure(config);
+}
+
+void ModuleEffects::RotarySpeaker::configure(RotaryConfig next) noexcept {
+  next.normalize();
+  if (next.speed != config.speed || next.modulationEnabled != config.modulationEnabled)
+    effectiveSpeed = next.speed;
+  // Clear old delay samples on bypass transitions; retain inertia for speed changes.
+  if (config.enabled != next.enabled) reset();
+  config = next;
+  hornSmoothing = 1.0f - std::exp(-1.0f / (config.rampSeconds * static_cast<float>(sampleRate)));
+  drumSmoothing = 1.0f - std::exp(-1.0f / (config.rampSeconds * 1.7f * static_cast<float>(sampleRate)));
+}
+
+void ModuleEffects::setModulation(std::uint8_t value) noexcept {
+  rotary_.setModulation(value);
+}
+
+void ModuleEffects::RotarySpeaker::setModulation(std::uint8_t value) noexcept {
+  // Manual Brake/Slow/Fast remains available; a new CC 1 message takes over.
+  if (config.modulationEnabled) effectiveSpeed = value >= 64 ? 2 : 1;
+}
+
+void ModuleEffects::RotarySpeaker::reset() noexcept {
+  std::fill(hornBuffer.begin(), hornBuffer.end(), 0.0f);
+  std::fill(drumBuffer.begin(), drumBuffer.end(), 0.0f);
+  writeIndex = 0;
+  hornPhase = 0.0;
+  drumPhase = 0.25;
+  hornHz = drumHz = lowPass = 0.0f;
+}
+
+float ModuleEffects::RotarySpeaker::read(const std::vector<float>& buffer, float delaySamples) const noexcept {
+  const auto capacity = buffer.size();
+  auto position = static_cast<float>(writeIndex) - delaySamples;
+  if (position < 0.0f) position += static_cast<float>(capacity);
+  const auto first = static_cast<std::size_t>(position) % capacity;
+  const auto second = (first + 1) % capacity;
+  const auto fraction = position - std::floor(position);
+  return buffer[first] + (buffer[second] - buffer[first]) * fraction;
+}
+
+void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_t frames) noexcept {
+  if (!config.enabled || hornBuffer.empty() || drumBuffer.empty()) return;
+  const auto targetHz = effectiveSpeed == 0 ? 0.0f : effectiveSpeed == 2 ? config.fastHz : config.slowHz;
+  const auto samplesPerMs = static_cast<float>(sampleRate * 0.001);
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    hornHz += (targetHz - hornHz) * hornSmoothing;
+    drumHz += (targetHz * 0.76f - drumHz) * drumSmoothing;
+    hornPhase += hornHz / sampleRate;
+    drumPhase += drumHz / sampleRate;
+    if (hornPhase >= 1.0) hornPhase -= 1.0;
+    if (drumPhase >= 1.0) drumPhase -= 1.0;
+    const auto hornMotion = static_cast<float>(std::sin(2.0 * kPi * hornPhase));
+    const auto drumMotion = static_cast<float>(std::sin(2.0 * kPi * drumPhase));
+    const auto hornDoppler = static_cast<float>(std::cos(2.0 * kPi * hornPhase)) * config.depth;
+    const auto drumDoppler = static_cast<float>(std::cos(2.0 * kPi * drumPhase)) * config.depth;
+    const auto dryLeft = left[frame];
+    const auto dryRight = right[frame];
+    const auto mono = (dryLeft + dryRight) * 0.5f;
+    lowPass += crossover * (mono - lowPass);
+    drumBuffer[writeIndex] = lowPass;
+    hornBuffer[writeIndex] = mono - lowPass;
+    const auto hornLeft = read(hornBuffer, (0.8f + 0.35f * hornDoppler) * samplesPerMs);
+    const auto hornRight = read(hornBuffer, (0.8f - 0.35f * hornDoppler) * samplesPerMs);
+    const auto drumLeft = read(drumBuffer, (0.8f + 0.18f * drumDoppler) * samplesPerMs);
+    const auto drumRight = read(drumBuffer, (0.8f - 0.18f * drumDoppler) * samplesPerMs);
+    const auto hornPan = hornMotion * config.depth * 0.6f;
+    const auto drumPan = drumMotion * config.depth * 0.35f;
+    const auto wetLeft = hornLeft * (1.0f - hornPan) + drumLeft * (1.0f - drumPan);
+    const auto wetRight = hornRight * (1.0f + hornPan) + drumRight * (1.0f + drumPan);
+    left[frame] = dryLeft + (wetLeft - dryLeft) * config.mix;
+    right[frame] = dryRight + (wetRight - dryRight) * config.mix;
+    writeIndex = (writeIndex + 1) % hornBuffer.size();
+  }
 }
 
 void ModuleEffects::Biquad::configure(const EqBandConfig& config, double sampleRate) noexcept {

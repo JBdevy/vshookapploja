@@ -2,6 +2,7 @@ import type { MidiInputDevice } from '../midi/MidiInputService';
 import { createModuleEffectCardsMarkup, type ModuleProcessorReplacement } from './ModuleEffectsView';
 import { createAudioRouteOptions, type AudioBusRoute } from '../audio/AudioOutputService';
 import { createVelocityCardMarkup } from './VelocityCurveView';
+import { createParameterKnobMarkup } from './ParameterKnobView';
 
 export type ModuleEnvelopeParameter = 'attackMs' | 'releaseMs' | 'holdMs' | 'decayMs';
 
@@ -14,7 +15,7 @@ export const MODULE_ENVELOPE_LIMITS: Readonly<Record<ModuleEnvelopeParameter, nu
 
 export const MODULE_ENVELOPE_DEFAULTS: Readonly<Record<ModuleEnvelopeParameter, number>> = {
   attackMs: 0,
-  releaseMs: 100,
+  releaseMs: 90,
   holdMs: MODULE_ENVELOPE_LIMITS.holdMs,
   decayMs: MODULE_ENVELOPE_LIMITS.decayMs,
 };
@@ -79,9 +80,10 @@ export function createModuleSettingsMarkup(
   }).join('');
   const eqBands = readModuleEqBands(settings.eqBands);
   const voiceMode = settings.voiceMode === 'mono' ? 'mono' : 'poly';
+  const hasVoiceSwitch = processorReplacement === 'compressor' || processorReplacement === 'rotary';
 
   return `
-    <section class="module-settings-panel${processorReplacement === 'synth' ? ' module-settings-panel--synth' : ''}${processorReplacement === 'compressor' ? ' module-settings-panel--voice-switch' : ''}" aria-label="Configurações do timbre">
+    <section class="module-settings-panel${processorReplacement === 'synth' ? ' module-settings-panel--synth' : ''}${hasVoiceSwitch ? ' module-settings-panel--voice-switch' : ''}" aria-label="Configurações do timbre">
       <div class="module-settings-io-row">
         <label class="app-settings-field module-settings-device">
           <span>Dispositivo MIDI</span>
@@ -103,7 +105,7 @@ export function createModuleSettingsMarkup(
           <strong>${Math.round(Math.min(128, Math.max(1, Number(settings.polyphony) || 64)))}</strong>
         </button>
 
-        ${processorReplacement === 'compressor' ? `
+        ${hasVoiceSwitch ? `
           <button class="module-voice-mode-button is-${voiceMode}" type="button" data-module-setting-action="toggle-voice-mode" aria-pressed="${voiceMode === 'mono'}">
             <span>Modo</span>
             <strong>${voiceMode === 'mono' ? 'Mono' : 'Poly'}</strong>
@@ -445,12 +447,10 @@ function createEnvelopeControl(
   value: number,
 ): string {
   const maximum = MODULE_ENVELOPE_LIMITS[parameter];
-  const angle = -135 + ((value / maximum) * 270);
   return `
     <article class="module-envelope-control">
       <h3>${label}</h3>
-      <label class="module-envelope-knob" style="--knob-angle:${angle}deg;--knob-progress:${value / maximum}">
-        <span class="module-envelope-knob__face" aria-hidden="true"><i></i></span>
+      ${createParameterKnobMarkup(value / maximum, `
         <input
           type="range"
           min="0"
@@ -461,7 +461,7 @@ function createEnvelopeControl(
           aria-label="${label}"
           aria-valuetext="${formatEnvelopeTime(value)}"
         >
-      </label>
+      `)}
       <output data-module-envelope-value="${parameter}">${formatEnvelopeTime(value)}</output>
     </article>
   `;
@@ -469,12 +469,10 @@ function createEnvelopeControl(
 
 function createCutoffControl(frequency: number): string {
   const ratio = cutoffRatioFromFrequency(frequency);
-  const angle = -135 + ratio * 270;
   return `
     <article class="module-envelope-control module-cutoff-control">
       <h3>Cutoff</h3>
-      <label class="module-envelope-knob" style="--knob-angle:${angle}deg;--knob-progress:${ratio}">
-        <span class="module-envelope-knob__face" aria-hidden="true"><i></i></span>
+      ${createParameterKnobMarkup(ratio, `
         <input
           type="range"
           min="0"
@@ -485,7 +483,7 @@ function createCutoffControl(frequency: number): string {
           aria-label="Cutoff"
           aria-valuetext="${formatCutoffFrequency(frequency)}"
         >
-      </label>
+      `)}
       <output data-module-cutoff-value>${formatCutoffFrequency(frequency)}</output>
     </article>
   `;

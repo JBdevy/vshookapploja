@@ -12,13 +12,14 @@ class ModuleEffects final {
 public:
   ModuleEffects() = default;
 
-  // Call before starting audio. All delay and reverb memory is allocated here.
+  // Call before starting audio. All delay, reverb and rotary memory is allocated here.
   void prepare(double sampleRate);
   void reset() noexcept;
 
   // Audio thread only. These operations are bounded and never allocate.
   void setConfig(ModuleEffectsConfig config, float tempoBpm) noexcept;
   void setTempo(float tempoBpm) noexcept;
+  void setModulation(std::uint8_t value) noexcept;
   void process(float* left, float* right, std::size_t frames) noexcept;
 
 private:
@@ -107,6 +108,31 @@ private:
     void updateLengths() noexcept;
   };
 
+  // Two-band rotating speaker: horn/drum inertia, Doppler delay and stereo motion.
+  struct RotarySpeaker final {
+    RotaryConfig config{};
+    std::uint8_t effectiveSpeed = 1;
+    double sampleRate = 48000.0;
+    std::vector<float> hornBuffer;
+    std::vector<float> drumBuffer;
+    std::size_t writeIndex = 0;
+    double hornPhase = 0.0;
+    double drumPhase = 0.25;
+    float hornHz = 0.0f;
+    float drumHz = 0.0f;
+    float hornSmoothing = 0.0f;
+    float drumSmoothing = 0.0f;
+    float crossover = 0.0f;
+    float lowPass = 0.0f;
+
+    void prepare(double nextSampleRate);
+    void configure(RotaryConfig next) noexcept;
+    void setModulation(std::uint8_t value) noexcept;
+    void reset() noexcept;
+    void process(float* left, float* right, std::size_t frames) noexcept;
+    [[nodiscard]] float read(const std::vector<float>& buffer, float delaySamples) const noexcept;
+  };
+
   double sampleRate_ = 48000.0;
   float tempoBpm_ = 120.0f;
   ModuleEffectsConfig config_{};
@@ -115,6 +141,7 @@ private:
   Compressor compressor_{};
   StereoDelay delay_{};
   Reverb reverb_{};
+  RotarySpeaker rotary_{};
 };
 
 } // namespace hook_keys

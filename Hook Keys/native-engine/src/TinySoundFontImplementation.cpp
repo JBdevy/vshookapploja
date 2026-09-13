@@ -8,6 +8,7 @@ extern "C" void hook_keys_tsf_set_volume_envelope(
   auto& preset = synth->presets[0];
   for (int index = 0; index < preset.regionNum; ++index) {
     auto& envelope = preset.regions[index].ampenv;
+    envelope.sustain = 1.0f; // Full gain, independent of the SF2's own sustain setting.
     if (attackSeconds >= 0.0f) envelope.attack = attackSeconds;
     if (holdSeconds >= 0.0f) { envelope.hold = holdSeconds; envelope.keynumToHold = 0.0f; }
     if (decaySeconds >= 0.0f) { envelope.decay = decaySeconds; envelope.keynumToDecay = 0.0f; }
@@ -16,6 +17,7 @@ extern "C" void hook_keys_tsf_set_volume_envelope(
   for (int index = 0; index < synth->voiceNum; ++index) {
     auto& voice = synth->voices[index];
     if (voice.playingPreset != 0) continue;
+    voice.ampenv.parameters.sustain = 1.0f;
     if (attackSeconds >= 0.0f) voice.ampenv.parameters.attack = attackSeconds;
     if (holdSeconds >= 0.0f) {
       voice.ampenv.parameters.hold = holdSeconds;

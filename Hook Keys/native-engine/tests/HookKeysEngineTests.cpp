@@ -1,4 +1,5 @@
 #include "hook_keys/HookKeysEngine.hpp"
+#include "hook_keys/AnalogSynthModule.hpp"
 #include "hook_keys/ModuleEffects.hpp"
 #include "hook_keys/NativeEngineRuntime.hpp"
 #include "hook_keys/RealtimeCommandQueue.hpp"
@@ -330,6 +331,44 @@ void testTinySoundFontRendering() {
   synth.collectRetiredSoundFonts();
 }
 
+void testDefaultVolumeEnvelopes() {
+  hook_keys::AnalogSynthConfig defaults;
+  expect(defaults.attackMs == 0.0f && defaults.releaseMs == 90.0f, "Synth defaults to zero Attack and 90 ms Release");
+  expect(defaults.holdMs == 15000.0f && defaults.decayMs == 25000.0f && defaults.filterCutoffHz == 20000.0f,
+      "Synth Hold, Decay and Cutoff default to maximum");
+  defaults.sustain = 0.25f;
+  defaults.normalize(48000.0);
+  expect(defaults.sustain == 1.0f, "native Synth Sustain is always fixed to full gain");
+
+  hook_keys::AnalogSynthModule synth(48000.0);
+  synth.noteOn(60, 127);
+  std::array<float, 256> left{};
+  std::array<float, 256> right{};
+  synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+  expect(std::any_of(left.begin(), left.end(), [](float value) { return value != 0.0f; }), "zero Attack sounds immediately");
+  synth.noteOff(60);
+  std::vector<float> tailLeft(4800, 0.0f);
+  std::vector<float> tailRight(4800, 0.0f);
+  synth.renderAdd(tailLeft.data(), tailRight.data(), tailLeft.size(), 1.0f);
+  const auto tailEnd = std::find_if(tailLeft.rbegin(), tailLeft.rend(), [](float value) { return value != 0.0f; });
+  const auto releaseFrames = static_cast<std::size_t>(std::distance(tailLeft.begin(), tailEnd.base()));
+  expect(releaseFrames >= 4300 && releaseFrames <= 4330, "native Synth Release lasts 90 ms at 48 kHz");
+
+  const auto renderSoundFont = [](bool explicitDefaults) {
+    hook_keys::TinySoundFontModule sf2(48000.0, 128);
+    if (explicitDefaults) sf2.setVolumeEnvelope(0.0f, 15000.0f, 25000.0f, 90.0f);
+    expect(sf2.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load SF2 for envelope default test");
+    sf2.beginBlock();
+    sf2.noteOn(60, 127);
+    std::array<std::vector<float>, 2> audio{std::vector<float>(8192), std::vector<float>(8192)};
+    sf2.renderAdd(audio[0].data(), audio[1].data(), 2048, 1.0f);
+    sf2.noteOff(60);
+    sf2.renderAdd(audio[0].data() + 2048, audio[1].data() + 2048, 6144, 1.0f);
+    return audio;
+  };
+  expect(renderSoundFont(false) == renderSoundFont(true), "SF2 receives the requested defaults on load even without a frontend configuration call");
+}
+
 void testNativeRuntimeSignalPath() {
   hook_keys::NativeEngineRuntime runtime(48000.0, 128);
   expect(runtime.loadSoundFont(0, "third_party/TinySoundFont/examples/florestan-subset.sf2"),
@@ -569,6 +608,195 @@ void testReverbProcessing() {
   expect(tailEnergy > 0.01, "reverb creates an audible tail");
 }
 
+void testIndependentOscillatorVolumes() {
+  const auto render = [](float volume1, float volume2, bool enabled1, bool enabled2) {
+    hook_keys::AnalogSynthModule synth(48000.0);
+    hook_keys::AnalogSynthConfig config;
+    config.oscillator1 = 0;
+    config.oscillator2 = 3;
+    config.oscillator1Volume = volume1;
+    config.oscillator2Volume = volume2;
+    config.oscillator1Enabled = enabled1;
+    config.oscillator2Enabled = enabled2;
+    config.filterEnvelope = 0.0f;
+    config.filterResonance = 0.0f;
+    config.lfoDepth = 0.0f;
+    expect(synth.setConfig(config), "oscillator volumes enter the realtime config queue");
+    synth.beginBlock();
+    synth.noteOn(69, 127);
+    std::array<float, 1024> left{};
+    std::array<float, 1024> right{};
+    synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    expect(left == right, "oscillator gain reaches both output channels");
+    return left;
+  };
+  const auto energy = [](const auto& samples) {
+    double sum = 0.0;
+    for (const auto sample : samples) sum += std::abs(sample);
+    return sum;
+  };
+  const auto firstOnly = render(1.0f, 0.8f, true, false);
+  const auto secondOnly = render(0.8f, 1.0f, false, true);
+  expect(energy(firstOnly) > 1.0 && energy(secondOnly) > 1.0, "each oscillator produces audio alone");
+  expect(firstOnly == render(1.0f, 0.0f, true, true),
+      "enabling a silent OSC 2 does not change OSC 1 gain");
+  expect(secondOnly == render(0.0f, 1.0f, true, true),
+      "enabling a silent OSC 1 does not change OSC 2 gain");
+  const auto firstHalf = energy(render(0.5f, 1.0f, true, false));
+  const auto secondHalf = energy(render(1.0f, 0.5f, false, true));
+  expect(firstHalf > energy(firstOnly) * 0.49 && firstHalf < energy(firstOnly) * 0.53,
+      "OSC 1 volume works even with OSC 2 switched off");
+  expect(secondHalf > energy(secondOnly) * 0.49 && secondHalf < energy(secondOnly) * 0.53,
+      "OSC 2 volume works even with OSC 1 switched off");
+  expect(energy(render(0.0f, 0.0f, true, true)) == 0.0, "zero volume silences both oscillators");
+  expect(energy(render(1.0f, 1.0f, false, false)) == 0.0, "ON/OFF silences independently of stored volume");
+  expect(firstOnly == render(2.0f, -1.0f, true, true), "volume gains clamp to zero through unity");
+}
+
+void testRotarySpeakerProcessing() {
+  constexpr std::size_t frames = 48000;
+  const auto input = [frames]() {
+    std::vector<float> samples(frames);
+    for (std::size_t index = 0; index < frames; ++index) {
+      const auto seconds = static_cast<double>(index) / 48000.0;
+      samples[index] = static_cast<float>(0.15 * std::sin(6.283185307179586 * 220.0 * seconds)
+          + 0.15 * std::sin(6.283185307179586 * 2500.0 * seconds));
+    }
+    return samples;
+  }();
+  const auto render = [&input](bool enabled, std::uint8_t speed, float depth, float mix, std::size_t blockSize,
+                              bool modulationEnabled = false, int modulation = -1) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0);
+    hook_keys::ModuleEffectsConfig config;
+    config.rotary = {enabled, speed, 0.8f, 6.4f, 0.1f, depth, mix};
+    config.rotary.modulationEnabled = modulationEnabled;
+    effects.setConfig(config, 120.0f);
+    if (modulation >= 0) effects.setModulation(static_cast<std::uint8_t>(modulation));
+    auto left = input;
+    auto right = input;
+    for (std::size_t offset = 0; offset < input.size(); offset += blockSize) {
+      effects.process(left.data() + offset, right.data() + offset, std::min(blockSize, input.size() - offset));
+    }
+    for (std::size_t index = 0; index < input.size(); ++index) {
+      expect(std::isfinite(left[index]) && std::isfinite(right[index]), "rotary output stays finite");
+      expect(std::abs(left[index]) < 1.0f && std::abs(right[index]) < 1.0f, "rotary has bounded output gain");
+    }
+    return std::array<std::vector<float>, 2>{left, right};
+  };
+  const auto bypass = render(false, 1, 0.7f, 1.0f, 128);
+  expect(bypass[0] == input && bypass[1] == input, "rotary OFF preserves audio bit for bit");
+  const auto dry = render(true, 1, 0.7f, 0.0f, 128);
+  expect(dry[0] == input && dry[1] == input, "rotary zero Mix preserves dry audio");
+  const auto slow = render(true, 1, 0.7f, 1.0f, 128);
+  const auto fast = render(true, 2, 0.7f, 1.0f, 128);
+  const auto brake = render(true, 0, 0.7f, 1.0f, 128);
+  double stereoMotion = 0.0;
+  double speedDifference = 0.0;
+  double brakeDifference = 0.0;
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    stereoMotion += std::abs(slow[0][index] - slow[1][index]);
+    speedDifference += std::abs(slow[0][index] - fast[0][index]);
+    brakeDifference += std::abs(slow[0][index] - brake[0][index]);
+  }
+  expect(stereoMotion > 1.0, "rotary creates stereo motion from a mono source");
+  expect(speedDifference > 1.0 && brakeDifference > 1.0, "Slow, Fast and Brake have different rotation");
+  expect(fast == render(true, 2, 0.7f, 1.0f, 127), "rotary phase and inertia stay coherent across block boundaries");
+  expect(slow == render(true, 2, 0.7f, 1.0f, 128, true, 63), "Modulation ON: CC 1 below 64 selects Slow directly in DSP");
+  expect(fast == render(true, 1, 0.7f, 1.0f, 128, true, 64), "Modulation ON: CC 1 from 64 selects Fast directly in DSP");
+  expect(slow == render(true, 1, 0.7f, 1.0f, 128, false, 127), "Modulation OFF ignores CC 1 for rotary speed");
+  expect(render(true, 1, 0.0f, 1.0f, 128) == render(true, 2, 0.0f, 1.0f, 128),
+      "zero Depth removes rotation modulation independent of speed");
+}
+
+void testIndependentOscillatorOctaves() {
+  hook_keys::AnalogSynthConfig defaults;
+  expect(defaults.oscillator1Octave == 0 && defaults.oscillator2Octave == 0, "both oscillators default to octave zero");
+  defaults.oscillator1Octave = -10;
+  defaults.oscillator2Octave = 10;
+  defaults.normalize(48000.0);
+  expect(defaults.oscillator1Octave == -3 && defaults.oscillator2Octave == 3, "oscillator octave bounds are -3 to +3");
+  const auto render = [](int oscillator, int octave1, int octave2, int note) {
+    hook_keys::AnalogSynthModule synth(48000.0);
+    hook_keys::AnalogSynthConfig config;
+    config.oscillator1 = config.oscillator2 = 0;
+    config.oscillator1Enabled = oscillator == 1;
+    config.oscillator2Enabled = oscillator == 2;
+    config.oscillator1Octave = static_cast<std::int8_t>(octave1);
+    config.oscillator2Octave = static_cast<std::int8_t>(octave2);
+    config.detuneCents = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+    expect(synth.setConfig(config), "queue independent oscillator octaves");
+    synth.beginBlock();
+    synth.noteOn(static_cast<std::uint8_t>(note), 100);
+    std::vector<float> left(4800), right(4800);
+    synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    return left;
+  };
+  for (int oscillator = 1; oscillator <= 2; ++oscillator) {
+    const auto base = render(oscillator, 0, 0, 60);
+    expect(base == render(oscillator, oscillator == 1 ? 0 : 3, oscillator == 2 ? 0 : -3, 60),
+        "octave of muted oscillator does not change the audible oscillator");
+    for (int octave = -3; octave <= 3; ++octave) {
+      const auto shifted = render(oscillator, oscillator == 1 ? octave : 0, oscillator == 2 ? octave : 0, 60);
+      const auto reference = render(oscillator, 0, 0, 60 + octave * 12);
+      for (std::size_t i = 0; i < shifted.size(); ++i) {
+        expect(std::isfinite(shifted[i]), "octave transposition keeps audio finite");
+        expect(std::abs(shifted[i] - reference[i]) < 0.0001f, "octave transposition matches the equivalent MIDI note");
+      }
+    }
+  }
+}
+
+void testRotaryMidiEngineRouting() {
+  class Tone final : public hook_keys::ModuleSynth {
+  public:
+    void noteOn(std::uint8_t, std::uint8_t) noexcept override {}
+    void noteOff(std::uint8_t) noexcept override {}
+    void controlChange(std::uint8_t, std::uint8_t) noexcept override {}
+    void pitchBend(std::uint16_t) noexcept override {}
+    void allNotesOff() noexcept override {}
+    void renderAdd(float* left, float* right, std::size_t frames, float gain) noexcept override {
+      for (std::size_t i = 0; i < frames; ++i, ++sample) {
+        const auto value = static_cast<float>(0.2 * std::sin(6.283185307179586 * 1700.0 * sample / 48000.0)) * gain;
+        left[i] += value;
+        right[i] += value;
+      }
+    }
+    std::size_t sample = 0;
+  };
+  const auto render = [](std::uint8_t speed, bool modulationEnabled, int controllerValue,
+                         std::uint8_t inputSlot, bool moduleModulation = true, int manualSpeed = -1) {
+    Tone tone;
+    hook_keys::HookKeysEngine::SynthModules modules{};
+    modules[4] = &tone;
+    hook_keys::HookKeysEngine engine(modules);
+    hook_keys::ModuleConfig config;
+    config.midiInputSlot = 1;
+    config.modulationInputEnabled = moduleModulation;
+    config.effects.rotary = {true, speed, 0.8f, 6.4f, 0.1f, 0.7f, 1.0f, modulationEnabled};
+    expect(engine.setModuleConfig(4, config), "configure module 5 rotary for MIDI test");
+    if (controllerValue >= 0) {
+      expect(engine.enqueueMidi(midi(0xB0, 1, static_cast<std::uint8_t>(controllerValue), inputSlot)),
+          "native engine accepts physical and virtual Mod CC 1");
+    }
+    if (manualSpeed >= 0) {
+      config.effects.rotary.speed = static_cast<std::uint8_t>(manualSpeed);
+      expect(engine.setModuleConfig(4, config), "manual rotary speed remains available with Modulation ON");
+    }
+    std::array<std::vector<float>, 2> audio{std::vector<float>(48000), std::vector<float>(48000)};
+    engine.render(audio[0].data(), audio[1].data(), audio[0].size());
+    return audio;
+  };
+  const auto slow = render(1, false, -1, 1);
+  const auto fast = render(2, false, -1, 1);
+  expect(fast == render(1, true, 127, 1), "physical CC 1 changes Rotary without frontend updates");
+  expect(fast == render(1, true, 64, hook_keys::kKeyboardBroadcastInput), "virtual Mod wheel reaches assigned Rotary when no MIDI is connected");
+  expect(slow == render(1, true, 127, 0), "Rotary rejects CC 1 from a different assigned MIDI input");
+  expect(slow == render(1, true, 127, 1, false), "module MOD OFF prevents Rotary modulation");
+  expect(fast == render(2, false, 0, 1), "Rotary Modulation OFF leaves manual Fast untouched");
+  expect(render(0, false, -1, 1) == render(1, true, 127, 1, true, 0), "manual Brake takes over after a Modulation message");
+}
+
 } // namespace
 
 int main() {
@@ -582,7 +810,10 @@ int main() {
   testAllMidiInputsRouting();
   testConcurrentProducers();
   testTinySoundFontRendering();
+  testDefaultVolumeEnvelopes();
   testNativeRuntimeSignalPath();
+  testIndependentOscillatorVolumes();
+  testIndependentOscillatorOctaves();
   testMetronomeRunsOnTheAudioCallback();
   testVelocityCurveMapping();
   testCutoffProcessing();
@@ -591,6 +822,8 @@ int main() {
   testCompressorProcessing();
   testDelayProcessing();
   testReverbProcessing();
+  testRotarySpeakerProcessing();
+  testRotaryMidiEngineRouting();
   std::cout << "Hook Keys engine tests passed\n";
   return EXIT_SUCCESS;
 }

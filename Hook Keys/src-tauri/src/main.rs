@@ -80,6 +80,14 @@ unsafe extern "C" {
         reverb_dampen: f32,
         reverb_size: f32,
         reverb_mix: f32,
+        rotary_enabled: i32,
+        rotary_speed: i32,
+        rotary_slow_hz: f32,
+        rotary_fast_hz: f32,
+        rotary_ramp_seconds: f32,
+        rotary_depth: f32,
+        rotary_mix: f32,
+        rotary_modulation_enabled: i32,
     ) -> i32;
     fn hk_runtime_configure_envelope(
         handle: *mut c_void,
@@ -93,9 +101,12 @@ unsafe extern "C" {
         handle: *mut c_void,
         oscillator1: i32,
         oscillator2: i32,
+        oscillator1_enabled: i32,
+        oscillator2_enabled: i32,
         voice_mode: i32,
         lfo_target: i32,
-        oscillator_mix: f32,
+        oscillator1_volume: f32,
+        oscillator2_volume: f32,
         detune_cents: f32,
         attack_ms: f32,
         hold_ms: f32,
@@ -108,6 +119,8 @@ unsafe extern "C" {
         lfo_rate_hz: f32,
         lfo_depth: f32,
         glide_ms: f32,
+        oscillator1_octave: i32,
+        oscillator2_octave: i32,
     ) -> i32;
     fn hk_runtime_set_tempo(handle: *mut c_void, bpm: f32) -> i32;
     fn hk_runtime_configure_metronome(
@@ -150,6 +163,7 @@ impl Drop for NativeRuntime {
 struct AudioRuntime {
     _stream: Stream,
     _engine: Arc<NativeRuntime>,
+    failed: Arc<AtomicBool>,
 }
 
 struct EngineHub(RwLock<Option<Arc<NativeRuntime>>>);
@@ -223,6 +237,14 @@ struct MidiControlEvent {
     value: u8,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MidiPitchBendEvent {
+    channel: u8,
+    input_id: String,
+    value: u16,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ModuleConfig {
@@ -260,9 +282,12 @@ struct EnvelopeConfig {
 struct SynthConfig {
     oscillator1: i32,
     oscillator2: i32,
+    oscillator1_enabled: bool,
+    oscillator2_enabled: bool,
     voice_mode: i32,
     lfo_target: i32,
-    oscillator_mix: f32,
+    oscillator1_volume: f32,
+    oscillator2_volume: f32,
     detune_cents: f32,
     attack_ms: f32,
     hold_ms: f32,
@@ -275,6 +300,10 @@ struct SynthConfig {
     lfo_rate_hz: f32,
     lfo_depth: f32,
     glide_ms: f32,
+    #[serde(default)]
+    oscillator1_octave: i32,
+    #[serde(default)]
+    oscillator2_octave: i32,
 }
 
 #[derive(Deserialize)]
@@ -302,6 +331,15 @@ struct EffectsConfig {
     reverb_dampen: f32,
     reverb_size: f32,
     reverb_mix: f32,
+    rotary_enabled: bool,
+    rotary_speed: i32,
+    rotary_slow_hz: f32,
+    rotary_fast_hz: f32,
+    rotary_ramp_seconds: f32,
+    rotary_depth: f32,
+    rotary_mix: f32,
+    #[serde(default)]
+    rotary_modulation_enabled: bool,
 }
 
 fn audio_devices() -> Vec<(Device, AudioDevice)> {
@@ -412,6 +450,7 @@ fn start_audio(
         sample_rate as f64,
         buffer_size.max(512) as usize,
     )?);
+    let failed = Arc::new(AtomicBool::new(false));
     let mut config: StreamConfig = selected.into();
     config.buffer_size = BufferSize::Fixed(buffer_size.clamp(32, 512));
 
@@ -420,6 +459,7 @@ fn start_audio(
         &config,
         sample_format,
         Arc::clone(&engine),
+        Arc::clone(&failed),
         channels,
     )
     .or_else(|_| {
@@ -429,6 +469,7 @@ fn start_audio(
             &config,
             sample_format,
             Arc::clone(&engine),
+            Arc::clone(&failed),
             channels,
         )
     })
@@ -447,6 +488,7 @@ fn start_audio(
     *audio = Some(AudioRuntime {
         _stream: stream,
         _engine: engine,
+        failed,
     });
     Ok(())
 }
@@ -456,6 +498,7 @@ fn build_audio_stream(
     config: &StreamConfig,
     sample_format: SampleFormat,
     engine: Arc<NativeRuntime>,
+    failed: Arc<AtomicBool>,
     channels: u16,
 ) -> Result<Stream, BuildStreamError> {
     let channel_count = channels as usize;
@@ -470,11 +513,15 @@ fn build_audio_stream(
                     channel_count,
                 )
             },
-            |error| eprintln!("Hook Keys audio: {error}"),
+            move |error| {
+                failed.store(true, Ordering::Release);
+                eprintln!("Hook Keys audio: {error}");
+            },
             None,
         ),
         SampleFormat::I16 => {
             let mut scratch = Vec::<f32>::new();
+            let stream_failed = Arc::clone(&failed);
             device.build_output_stream(
                 config,
                 move |output: &mut [i16], _| {
@@ -491,12 +538,16 @@ fn build_audio_stream(
                         *target = (source.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                     }
                 },
-                |error| eprintln!("Hook Keys audio: {error}"),
+                move |error| {
+                    stream_failed.store(true, Ordering::Release);
+                    eprintln!("Hook Keys audio: {error}");
+                },
                 None,
             )
         }
         SampleFormat::U16 => {
             let mut scratch = Vec::<f32>::new();
+            let stream_failed = Arc::clone(&failed);
             device.build_output_stream(
                 config,
                 move |output: &mut [u16], _| {
@@ -513,7 +564,10 @@ fn build_audio_stream(
                         *target = ((source.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
                     }
                 },
-                |error| eprintln!("Hook Keys audio: {error}"),
+                move |error| {
+                    stream_failed.store(true, Ordering::Release);
+                    eprintln!("Hook Keys audio: {error}");
+                },
                 None,
             )
         }
@@ -545,6 +599,19 @@ fn set_audio_output_device(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     start_audio(&state, &device_id, channels, buffer_size)
+}
+
+#[tauri::command]
+fn audio_output_status(state: State<'_, AppState>) -> Result<HashMap<&'static str, bool>, String> {
+    let audio = state
+        .audio
+        .lock()
+        .map_err(|_| "Motor de áudio indisponível.".to_string())?;
+    let failed = audio
+        .as_ref()
+        .map(|runtime| runtime.failed.load(Ordering::Acquire))
+        .unwrap_or(true);
+    Ok(HashMap::from([("failed", failed)]))
 }
 
 #[tauri::command]
@@ -623,6 +690,14 @@ fn configure_module_effects(
             config.reverb_dampen,
             config.reverb_size,
             config.reverb_mix,
+            if config.rotary_enabled { 1 } else { 0 },
+            config.rotary_speed,
+            config.rotary_slow_hz,
+            config.rotary_fast_hz,
+            config.rotary_ramp_seconds,
+            config.rotary_depth,
+            config.rotary_mix,
+            if config.rotary_modulation_enabled { 1 } else { 0 },
         )
     };
     if ok != 0 {
@@ -663,9 +738,12 @@ fn configure_synth(config: SynthConfig, state: State<'_, AppState>) -> Result<()
             engine.pointer(),
             config.oscillator1,
             config.oscillator2,
+            if config.oscillator1_enabled { 1 } else { 0 },
+            if config.oscillator2_enabled { 1 } else { 0 },
             config.voice_mode,
             config.lfo_target,
-            config.oscillator_mix,
+            config.oscillator1_volume,
+            config.oscillator2_volume,
             config.detune_cents,
             config.attack_ms,
             config.hold_ms,
@@ -678,6 +756,8 @@ fn configure_synth(config: SynthConfig, state: State<'_, AppState>) -> Result<()
             config.lfo_rate_hz,
             config.lfo_depth,
             config.glide_ms,
+            config.oscillator1_octave,
+            config.oscillator2_octave,
         )
     };
     if ok != 0 { Ok(()) } else { Err("Não foi possível configurar o Synth.".into()) }
@@ -830,6 +910,15 @@ fn set_midi_inputs(
                                 value: data2,
                             },
                         );
+                    } else if message_type == 0xe0 {
+                        let _ = event_app.emit(
+                            "midiPitchBend",
+                            MidiPitchBendEvent {
+                                channel: (status & 0x0f) + 1,
+                                input_id: event_input_id.clone(),
+                                value: u16::from(data1 & 0x7f) | (u16::from(data2 & 0x7f) << 7),
+                            },
+                        );
                     }
                 },
                 (),
@@ -947,6 +1036,7 @@ fn main() {
             list_audio_output_devices,
             list_midi_devices,
             set_audio_output_device,
+            audio_output_status,
             set_midi_inputs,
             configure_module,
             configure_module_effects,
@@ -1031,13 +1121,55 @@ mod tests {
         }, 0);
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 1, 2, 1, 1, 0.35, 7.0, 0.0, 0.0,
-                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0,
+                engine.pointer(), 1, 2, 1, 1, 1, 1, 0.65, 0.35, 7.0, 0.0, 0.0,
+                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0,
             )
         }, 0);
         assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, 60, 110) }, 0);
         let mut output = vec![0.0_f32; 4096 * 2];
         unsafe { hk_runtime_render(engine.pointer(), output.as_mut_ptr(), 4096, 2) };
+        assert!(output.iter().any(|sample| sample.abs() > 0.00001));
+    }
+
+    #[test]
+    fn synth_oscillators_can_be_disabled_independently() {
+        let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
+        assert_ne!(unsafe {
+            hk_runtime_configure_module(
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
+                0, 32, 64, 96, 127, 0, 2,
+            )
+        }, 0);
+        assert_ne!(unsafe {
+            hk_runtime_configure_synth(
+                engine.pointer(), 1, 2, 0, 0, 1, 1, 0.65, 0.35, 7.0, 0.0, 0.0,
+                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0,
+            )
+        }, 0);
+        assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, 60, 110) }, 0);
+        let mut muted = vec![0.0_f32; 1024 * 2];
+        unsafe { hk_runtime_render(engine.pointer(), muted.as_mut_ptr(), 1024, 2) };
+        assert!(muted.iter().all(|sample| sample.abs() <= 0.00001));
+
+        assert_ne!(unsafe {
+            hk_runtime_configure_synth(
+                engine.pointer(), 1, 2, 1, 0, 1, 1, 0.65, 0.35, 7.0, 0.0, 0.0,
+                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0,
+            )
+        }, 0);
+        let mut audible = vec![0.0_f32; 1024 * 2];
+        unsafe { hk_runtime_render(engine.pointer(), audible.as_mut_ptr(), 1024, 2) };
+        assert!(audible.iter().any(|sample| sample.abs() > 0.00001));
+    }
+
+    #[test]
+    fn metronome_renders_through_the_shared_output() {
+        let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
+        unsafe {
+            hk_runtime_configure_metronome(engine.pointer(), 1, 120.0, 1.0, 1, 1, 0, 4);
+        }
+        let mut output = vec![0.0_f32; 2048 * 2];
+        unsafe { hk_runtime_render(engine.pointer(), output.as_mut_ptr(), 2048, 2) };
         assert!(output.iter().any(|sample| sample.abs() > 0.00001));
     }
 }

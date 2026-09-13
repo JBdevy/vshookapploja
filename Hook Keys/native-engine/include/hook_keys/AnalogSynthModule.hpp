@@ -14,33 +14,39 @@ namespace hook_keys {
 struct AnalogSynthConfig final {
   std::uint8_t oscillator1 = 1; // sine, saw, square, triangle
   std::uint8_t oscillator2 = 2;
+  bool oscillator1Enabled = true;
+  bool oscillator2Enabled = true;
   std::uint8_t voiceMode = 1;   // poly, mono, legato
   std::uint8_t lfoTarget = 1;   // pitch, filter, volume
-  float oscillatorMix = 0.35f;
+  float oscillator1Volume = 1.0f;
+  float oscillator2Volume = 1.0f;
   float detuneCents = 7.0f;
   float attackMs = 0.0f;
   float holdMs = 15000.0f;
   float decayMs = 25000.0f;
   float sustain = 1.0f;
-  float releaseMs = 100.0f;
+  float releaseMs = 90.0f;
   float filterCutoffHz = 20000.0f;
   float filterResonance = 0.18f;
   float filterEnvelope = 0.24f;
   float lfoRateHz = 4.0f;
   float lfoDepth = 0.0f;
   float glideMs = 45.0f;
+  std::int8_t oscillator1Octave = 0;
+  std::int8_t oscillator2Octave = 0;
 
   void normalize(double sampleRate) noexcept {
     oscillator1 = std::min<std::uint8_t>(oscillator1, 3);
     oscillator2 = std::min<std::uint8_t>(oscillator2, 3);
     voiceMode = std::min<std::uint8_t>(voiceMode, 2);
     lfoTarget = std::min<std::uint8_t>(lfoTarget, 2);
-    oscillatorMix = std::clamp(oscillatorMix, 0.0f, 1.0f);
+    oscillator1Volume = std::clamp(oscillator1Volume, 0.0f, 1.0f);
+    oscillator2Volume = std::clamp(oscillator2Volume, 0.0f, 1.0f);
     detuneCents = std::clamp(detuneCents, -100.0f, 100.0f);
     attackMs = std::clamp(attackMs, 0.0f, 15000.0f);
     holdMs = std::clamp(holdMs, 0.0f, 15000.0f);
     decayMs = std::clamp(decayMs, 0.0f, 25000.0f);
-    sustain = std::clamp(sustain, 0.0f, 1.0f);
+    sustain = 1.0f; // Fixed full envelope sustain; no user control.
     releaseMs = std::clamp(releaseMs, 0.0f, 25000.0f);
     filterCutoffHz = std::clamp(filterCutoffHz, 20.0f,
         static_cast<float>(std::min(20000.0, sampleRate * 0.45)));
@@ -49,6 +55,8 @@ struct AnalogSynthConfig final {
     lfoRateHz = std::clamp(lfoRateHz, 0.05f, 30.0f);
     lfoDepth = std::clamp(lfoDepth, 0.0f, 1.0f);
     glideMs = std::clamp(glideMs, 0.0f, 5000.0f);
+    oscillator1Octave = std::clamp<std::int8_t>(oscillator1Octave, -3, 3);
+    oscillator2Octave = std::clamp<std::int8_t>(oscillator2Octave, -3, 3);
   }
 };
 
@@ -147,16 +155,19 @@ public:
         const auto lfoAmount = config_.lfoDepth * (0.35f + modulation_ * 0.65f);
         const auto pitchLfo = config_.lfoTarget == 0 ? lfo * lfoAmount * 2.0f : 0.0f;
         const auto bendRatio = std::pow(2.0, static_cast<double>(pitchBendSemitones_ + pitchLfo) / 12.0);
-        const auto frequency1 = voice.currentFrequency * bendRatio;
-        const auto frequency2 = frequency1 * std::pow(2.0, static_cast<double>(config_.detuneCents) / 1200.0);
+        const auto baseFrequency = voice.currentFrequency * bendRatio;
+        const auto frequency1 = std::ldexp(baseFrequency, config_.oscillator1Octave);
+        const auto frequency2 = std::ldexp(baseFrequency
+            * std::pow(2.0, static_cast<double>(config_.detuneCents) / 1200.0), config_.oscillator2Octave);
         voice.phase1 = advancePhase(voice.phase1, frequency1);
         voice.phase2 = advancePhase(voice.phase2, frequency2);
         const auto osc1 = waveform(config_.oscillator1, voice.phase1);
         const auto osc2 = waveform(config_.oscillator2, voice.phase2);
         const auto envelope = advanceEnvelope(voice);
         if (!voice.active) continue;
-        auto sample = (osc1 * (1.0f - config_.oscillatorMix) + osc2 * config_.oscillatorMix)
-            * envelope * voice.velocity;
+        const auto oscillatorSignal = (config_.oscillator1Enabled ? osc1 * config_.oscillator1Volume : 0.0f)
+            + (config_.oscillator2Enabled ? osc2 * config_.oscillator2Volume : 0.0f);
+        auto sample = oscillatorSignal * envelope * voice.velocity;
         const auto filterLfo = config_.lfoTarget == 1 ? lfo * lfoAmount * 4.0f : 0.0f;
         const auto envelopeOctaves = config_.filterEnvelope * envelope * 5.0f;
         const auto cutoff = config_.filterCutoffHz * std::pow(2.0f, envelopeOctaves + filterLfo);

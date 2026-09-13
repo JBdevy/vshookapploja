@@ -70,7 +70,9 @@ int hk_runtime_configure_effects(
     float compressorAttackMs, float compressorReleaseMs, float compressorGainDb,
     float compressorMix, int delaySync, float delayMs, float delayBeatMultiplier,
     float delayFeedback, float delayMix, float reverbDecay, float reverbDampen,
-    float reverbSize, float reverbMix) noexcept {
+    float reverbSize, float reverbMix, int rotaryEnabled, int rotarySpeed,
+    float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
+    float rotaryDepth, float rotaryMix, int rotaryModulationEnabled) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount || !eqTypes || !eqFrequencies ||
       !eqGains || !eqQualities || !eqCutStages) return 0;
   hook_keys::ModuleEffectsConfig effects;
@@ -90,6 +92,9 @@ int hk_runtime_configure_effects(
                         compressorReleaseMs, compressorGainDb, compressorMix};
   effects.delay = {true, delaySync != 0, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
   effects.reverb = {true, reverbDecay, reverbDampen, reverbSize, reverbMix};
+  effects.rotary = {rotaryEnabled != 0, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
+                    rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
+                    rotaryModulationEnabled != 0};
   return runtime(handle)->setModuleEffects(moduleIndex, effects) ? 1 : 0;
 }
 
@@ -100,18 +105,22 @@ int hk_runtime_configure_envelope(void* handle, std::size_t moduleIndex, float a
 }
 
 int hk_runtime_configure_synth(
-    void* handle, int oscillator1, int oscillator2, int voiceMode, int lfoTarget,
-    float oscillatorMix, float detuneCents, float attackMs, float holdMs,
+    void* handle, int oscillator1, int oscillator2, int oscillator1Enabled,
+    int oscillator2Enabled, int voiceMode, int lfoTarget,
+    float oscillator1Volume, float oscillator2Volume, float detuneCents, float attackMs, float holdMs,
     float decayMs, float sustain, float releaseMs, float filterCutoffHz,
     float filterResonance, float filterEnvelope, float lfoRateHz, float lfoDepth,
-    float glideMs) noexcept {
+    float glideMs, int oscillator1Octave, int oscillator2Octave) noexcept {
   if (!handle) return 0;
   hook_keys::AnalogSynthConfig config;
   config.oscillator1 = static_cast<std::uint8_t>(std::clamp(oscillator1, 0, 3));
   config.oscillator2 = static_cast<std::uint8_t>(std::clamp(oscillator2, 0, 3));
+  config.oscillator1Enabled = oscillator1Enabled != 0;
+  config.oscillator2Enabled = oscillator2Enabled != 0;
   config.voiceMode = static_cast<std::uint8_t>(std::clamp(voiceMode, 0, 2));
   config.lfoTarget = static_cast<std::uint8_t>(std::clamp(lfoTarget, 0, 2));
-  config.oscillatorMix = oscillatorMix;
+  config.oscillator1Volume = oscillator1Volume;
+  config.oscillator2Volume = oscillator2Volume;
   config.detuneCents = detuneCents;
   config.attackMs = attackMs;
   config.holdMs = holdMs;
@@ -124,6 +133,8 @@ int hk_runtime_configure_synth(
   config.lfoRateHz = lfoRateHz;
   config.lfoDepth = lfoDepth;
   config.glideMs = glideMs;
+  config.oscillator1Octave = static_cast<std::int8_t>(std::clamp(oscillator1Octave, -3, 3));
+  config.oscillator2Octave = static_cast<std::int8_t>(std::clamp(oscillator2Octave, -3, 3));
   return runtime(handle)->setSynthConfig(config) ? 1 : 0;
 }
 

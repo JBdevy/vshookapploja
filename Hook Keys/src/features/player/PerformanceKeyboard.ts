@@ -39,6 +39,15 @@ export function createPerformanceKeyboardMarkup(style: PerformanceKeyboardStyle)
   }
   return `
     <div class="performance-keyboard performance-keyboard--${style}" data-performance-keyboard hidden>
+      <div class="performance-keyboard__expression" aria-label="Controles de expressão do teclado">
+        ${(['pitch', 'mod'] as const).map((kind) => `
+          <label class="keyboard-expression keyboard-expression--${kind}" style="--wheel-position:${kind === 'pitch' ? 50 : 0}%">
+            <span>${kind === 'pitch' ? 'Pitch' : 'Mod'}</span>
+            <span class="keyboard-expression__track" aria-hidden="true"><i></i></span>
+            <input type="range" min="0" max="${kind === 'pitch' ? 16383 : 127}" step="1" value="${kind === 'pitch' ? 8192 : 0}" data-keyboard-expression="${kind}" aria-label="${kind === 'pitch' ? 'Pitch bend' : 'Modulação'}" aria-valuetext="${kind === 'pitch' ? '0%' : '0'}">
+          </label>
+        `).join('')}
+      </div>
       <div class="performance-keyboard__scroller">
         <div class="performance-keyboard__keys">
           <div class="performance-keyboard__white-keys">${whiteKeys.join('')}</div>

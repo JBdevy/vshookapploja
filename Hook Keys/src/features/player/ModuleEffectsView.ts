@@ -1,5 +1,19 @@
-export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay';
-export type ModuleProcessorReplacement = 'compressor' | 'arpeggiator' | 'sequencer' | 'synth';
+import { createParameterKnobMarkup } from './ParameterKnobView';
+
+export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary';
+export type ModuleProcessorReplacement = 'compressor' | 'rotary' | 'arpeggiator' | 'sequencer' | 'synth';
+
+export type RotarySpeed = 'brake' | 'slow' | 'fast';
+export interface ModuleRotarySettings {
+  enabled: boolean;
+  modulationEnabled: boolean;
+  speed: RotarySpeed;
+  slowHz: number;
+  fastHz: number;
+  rampSeconds: number;
+  depth: number;
+  mix: number;
+}
 
 export interface ModuleCompressorSettings {
   enabled: boolean;
@@ -55,6 +69,17 @@ const DEFAULT_DELAY: ModuleDelaySettings = {
   division: '1/4',
   milliseconds: 500,
   sync: false,
+};
+
+const DEFAULT_ROTARY: ModuleRotarySettings = {
+  enabled: false,
+  modulationEnabled: false,
+  speed: 'slow',
+  slowHz: 0.8,
+  fastHz: 6.4,
+  rampSeconds: 1.2,
+  depth: 70,
+  mix: 100,
 };
 
 interface EffectControlDefinition {
@@ -116,7 +141,8 @@ export function createModuleEffectCardsMarkup(
 function createProcessorShortcutCard(replacement: Exclude<ModuleProcessorReplacement, 'compressor'>): string {
   const label = replacement === 'arpeggiator'
     ? 'Arpeggiator'
-    : replacement === 'sequencer' ? 'Sequencer' : 'Synth';
+    : replacement === 'sequencer' ? 'Sequencer'
+      : replacement === 'rotary' ? 'Rotary' : 'Synth';
   return `
     <article class="module-effect-card module-effect-card--processor-shortcuts" aria-label="Processadores do módulo">
       <button class="module-processor-shortcut module-processor-shortcut--compressor" type="button" data-module-setting-action="open-compressor">Compressor</button>
@@ -165,6 +191,30 @@ export function createModuleReverbMarkup(settings: Readonly<Record<string, unkno
     <section class="module-effect-editor module-reverb-editor" data-module-effect-editor="reverb">
       <div class="module-effect-controls module-effect-controls--reverb">
         ${controls.map((item) => createEffectKnob('reverb', item)).join('')}
+      </div>
+    </section>
+  `;
+}
+
+export function createModuleRotaryMarkup(settings: Readonly<Record<string, unknown>>): string {
+  const value = readModuleRotarySettings(settings.rotary);
+  const controls = [
+    control('slowHz', 'Slow', 0.2, 2, 0.01, value.slowHz, `${value.slowHz.toFixed(2)} Hz`),
+    control('fastHz', 'Fast', 2, 10, 0.01, value.fastHz, `${value.fastHz.toFixed(2)} Hz`),
+    control('rampSeconds', 'Acceleration', 0.1, 10, 0.1, value.rampSeconds, `${value.rampSeconds.toFixed(1)} s`),
+    control('depth', 'Depth', 0, 100, 1, value.depth, `${Math.round(value.depth)}%`),
+    control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
+  ];
+  return `
+    <section class="module-effect-editor module-rotary-editor" data-module-effect-editor="rotary">
+      <div class="module-rotary-speed" role="group" aria-label="Velocidade do Rotary">
+        ${(['brake', 'slow', 'fast'] as const).map((speed) => `<button type="button" data-module-rotary-speed="${speed}" class="${value.speed === speed ? 'is-selected' : ''}" aria-pressed="${value.speed === speed}">${speed === 'brake' ? 'Brake' : speed === 'slow' ? 'Slow' : 'Fast'}</button>`).join('')}
+      </div>
+      <div class="module-rotary-modulation-row">
+        <button type="button" class="module-effect-power module-rotary-modulation ${value.modulationEnabled ? 'is-on' : 'is-off'}" data-module-rotary-modulation aria-pressed="${value.modulationEnabled}">Modulation ${value.modulationEnabled ? 'On' : 'Off'}</button>
+      </div>
+      <div class="module-effect-controls module-effect-controls--rotary">
+        ${controls.map((item) => createEffectKnob('rotary', item)).join('')}
       </div>
     </section>
   `;
@@ -236,7 +286,33 @@ export function readModuleDelaySettings(value: unknown): ModuleDelaySettings {
   };
 }
 
+export function readModuleRotarySettings(value: unknown): ModuleRotarySettings {
+  const source = record(value);
+  return {
+    enabled: source.enabled === true,
+    modulationEnabled: source.modulationEnabled === true,
+    speed: source.speed === 'brake' || source.speed === 'fast' ? source.speed : 'slow',
+    slowHz: numberInRange(source.slowHz, 0.2, 2, DEFAULT_ROTARY.slowHz),
+    fastHz: numberInRange(source.fastHz, 2, 10, DEFAULT_ROTARY.fastHz),
+    rampSeconds: numberInRange(source.rampSeconds, 0.1, 10, DEFAULT_ROTARY.rampSeconds),
+    depth: numberInRange(source.depth, 0, 100, DEFAULT_ROTARY.depth),
+    mix: numberInRange(source.mix, 0, 100, DEFAULT_ROTARY.mix),
+  };
+}
+
+export function readModuleEffectSettings(kind: ModuleEffectKind, value: unknown) {
+  if (kind === 'compressor') return readModuleCompressorSettings(value);
+  if (kind === 'reverb') return readModuleReverbSettings(value);
+  if (kind === 'rotary') return readModuleRotarySettings(value);
+  return readModuleDelaySettings(value);
+}
+
 export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, value: number): string {
+  if (kind === 'rotary') {
+    if (key === 'slowHz' || key === 'fastHz') return `${value.toFixed(2)} Hz`;
+    if (key === 'rampSeconds') return `${value.toFixed(1)} s`;
+    return `${Math.round(value)}%`;
+  }
   if (kind === 'compressor') {
     if (key === 'ratio') return `${value.toFixed(1)}:1`;
     if (key === 'thresholdDb' || key === 'gainDb') return formatSignedDb(value);
@@ -265,8 +341,7 @@ function createVerticalMeter(label: string): string {
 }
 
 function createPreviewKnob(label: string, progress: number): string {
-  const angle = -135 + Math.min(1, Math.max(0, progress)) * 270;
-  return `<span class="module-effect-preview-knob" style="--knob-angle:${angle}deg"><i></i><small>${label}</small></span>`;
+  return `<span class="module-effect-preview-knob">${createParameterKnobMarkup(progress, '')}<small>${label}</small></span>`;
 }
 
 function control(key: string, label: string, min: number, max: number, step: number, value: number, formatted: string): EffectControlDefinition {

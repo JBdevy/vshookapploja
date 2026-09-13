@@ -49,6 +49,11 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         engine.onMidiDevicesChanged = { [weak self] in
             self?.notifyListeners("midiDevicesChanged", data: [:])
         }
+        engine.onMidiPitch = { [weak self] _, deviceId, channel, value in
+            self?.notifyListeners("midiPitchBend", data: [
+                "inputId": deviceId, "channel": channel, "value": value
+            ])
+        }
     }
 
     deinit {
@@ -153,7 +158,15 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
             reverbDecay: call.getFloat("reverbDecay", 0.5),
             reverbDampen: call.getFloat("reverbDampen", 0.5),
             reverbSize: call.getFloat("reverbSize", 0.6),
-            reverbMix: call.getFloat("reverbMix", 0.25)
+            reverbMix: call.getFloat("reverbMix", 0.25),
+            rotaryEnabled: call.getBool("rotaryEnabled", false),
+            rotarySpeed: call.getInt("rotarySpeed", 1),
+            rotarySlowHz: call.getFloat("rotarySlowHz", 0.8),
+            rotaryFastHz: call.getFloat("rotaryFastHz", 6.4),
+            rotaryRampSeconds: call.getFloat("rotaryRampSeconds", 1.2),
+            rotaryDepth: call.getFloat("rotaryDepth", 0.7),
+            rotaryMix: call.getFloat("rotaryMix", 1),
+            rotaryModulationEnabled: call.getBool("rotaryModulationEnabled", false)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }
@@ -162,9 +175,9 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         let ok = engine.configureModuleEnvelope(
             call.getInt("moduleIndex", -1),
             attackMs: call.getFloat("attackMs", 0),
-            holdMs: call.getFloat("holdMs", 0),
-            decayMs: call.getFloat("decayMs", 0),
-            releaseMs: call.getFloat("releaseMs", 0)
+            holdMs: call.getFloat("holdMs", 15000),
+            decayMs: call.getFloat("decayMs", 25000),
+            releaseMs: call.getFloat("releaseMs", 90)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }
@@ -173,21 +186,26 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         let ok = engine.configureSynth(
             call.getInt("oscillator1", 1),
             oscillator2: call.getInt("oscillator2", 2),
+            oscillator1Enabled: call.getBool("oscillator1Enabled", true),
+            oscillator2Enabled: call.getBool("oscillator2Enabled", true),
             voiceMode: call.getInt("voiceMode", 1),
             lfoTarget: call.getInt("lfoTarget", 0),
-            oscillatorMix: call.getFloat("oscillatorMix", 0.5),
+            oscillator1Volume: call.getFloat("oscillator1Volume", 1),
+            oscillator2Volume: call.getFloat("oscillator2Volume", 1),
             detuneCents: call.getFloat("detuneCents", 7),
             attackMs: call.getFloat("attackMs", 0),
             holdMs: call.getFloat("holdMs", 15_000),
             decayMs: call.getFloat("decayMs", 25_000),
             sustain: call.getFloat("sustain", 1),
-            releaseMs: call.getFloat("releaseMs", 100),
+            releaseMs: call.getFloat("releaseMs", 90),
             filterCutoffHz: call.getFloat("filterCutoffHz", 20_000),
             filterResonance: call.getFloat("filterResonance", 0.12),
             filterEnvelope: call.getFloat("filterEnvelope", 0.35),
             lfoRateHz: call.getFloat("lfoRateHz", 4.5),
             lfoDepth: call.getFloat("lfoDepth", 0),
-            glideMs: call.getFloat("glideMs", 80)
+            glideMs: call.getFloat("glideMs", 80),
+            oscillator1Octave: call.getInt("oscillator1Octave", 0),
+            oscillator2Octave: call.getInt("oscillator2Octave", 0)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }

@@ -54,6 +54,14 @@ export interface NativeModuleEffectsConfig {
   reverbDampen: number;
   reverbSize: number;
   reverbMix: number;
+  rotaryEnabled: boolean;
+  rotarySpeed: number;
+  rotarySlowHz: number;
+  rotaryFastHz: number;
+  rotaryRampSeconds: number;
+  rotaryDepth: number;
+  rotaryMix: number;
+  rotaryModulationEnabled: boolean;
 }
 
 export interface NativeModuleEnvelopeConfig {
@@ -67,9 +75,12 @@ export interface NativeModuleEnvelopeConfig {
 export interface NativeSynthConfig {
   oscillator1: number;
   oscillator2: number;
+  oscillator1Enabled: boolean;
+  oscillator2Enabled: boolean;
   voiceMode: number;
   lfoTarget: number;
-  oscillatorMix: number;
+  oscillator1Volume: number;
+  oscillator2Volume: number;
   detuneCents: number;
   attackMs: number;
   holdMs: number;
@@ -82,6 +93,8 @@ export interface NativeSynthConfig {
   lfoRateHz: number;
   lfoDepth: number;
   glideMs: number;
+  oscillator1Octave: number;
+  oscillator2Octave: number;
 }
 
 export interface NativeMetronomeConfig {
@@ -105,6 +118,12 @@ interface NativeMidiControlChangeEvent {
   channel: number;
   inputId: string;
   controller: number;
+  value: number;
+}
+
+interface NativeMidiPitchBendEvent {
+  channel: number;
+  inputId: string;
   value: number;
 }
 
@@ -134,6 +153,7 @@ interface HookKeysNativePlugin {
     listener: (event: NativeMidiControlChangeEvent) => void,
   ): Promise<PluginListenerHandle>;
   addListener(eventName: 'midiDevicesChanged', listener: () => void): Promise<PluginListenerHandle>;
+  addListener(eventName: 'midiPitchBend', listener: (event: NativeMidiPitchBendEvent) => void): Promise<PluginListenerHandle>;
 }
 
 const plugin = registerPlugin<HookKeysNativePlugin>('HookKeysNative');
@@ -160,7 +180,16 @@ class HookKeysNativeBridge {
     if (!this.isAvailable()) return Promise.resolve(false);
     if (!this.initializePromise) {
       this.initializePromise = this.call<{ ready: boolean }>('initialize', { bufferSize }, () => plugin.initialize({ bufferSize }))
-        .then(({ ready }) => ready)
+        .then(({ ready }) => {
+          // initialize já abre a saída padrão com dois canais. Registrar essa
+          // rota evita destruir e recriar o stream imediatamente durante o
+          // boot — em Android, iOS e drivers exclusivos do desktop essa
+          // segunda abertura podia deixar o motor sem uma saída ativa.
+          if (ready && this.lastAudioDeviceKey === null) {
+            this.lastAudioDeviceKey = `:2:${bufferSize}`;
+          }
+          return ready;
+        })
         .catch(() => {
           // Uma saída de áudio pode estar temporariamente ocupada durante o
           // boot. Não memorize a falha: a próxima nota/alteração pode tentar
@@ -205,6 +234,22 @@ class HookKeysNativeBridge {
     } finally {
       this.resetSynchronizationCache();
     }
+  }
+
+  async audioOutputFailed(): Promise<boolean> {
+    const invoke = this.tauriInvoke();
+    if (!invoke) return false;
+    try {
+      const result = await invoke('audio_output_status') as { failed?: boolean };
+      return result.failed === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async recoverDefaultAudioOutput(bufferSize: number): Promise<boolean> {
+    this.lastAudioDeviceKey = null;
+    return this.setAudioOutputDevice('', 2, bufferSize);
   }
 
   async setMidiInputs(deviceIds: readonly (string | null)[]): Promise<void> {
@@ -334,6 +379,9 @@ class HookKeysNativeBridge {
           listen('midiDevicesChanged', () => {
             window.dispatchEvent(new Event('hookkeys:native-midi-devices-changed'));
           }),
+          listen<NativeMidiPitchBendEvent>('midiPitchBend', ({ payload }) => {
+            window.dispatchEvent(new CustomEvent('hookkeys:native-midi-pitch-bend', { detail: payload }));
+          }),
         ]);
       }).catch((error) => {
         this.listenersPromise = null;
@@ -350,6 +398,9 @@ class HookKeysNativeBridge {
       }),
       plugin.addListener('midiDevicesChanged', () => {
         window.dispatchEvent(new Event('hookkeys:native-midi-devices-changed'));
+      }),
+      plugin.addListener('midiPitchBend', (event) => {
+        window.dispatchEvent(new CustomEvent('hookkeys:native-midi-pitch-bend', { detail: event }));
       }),
     ]).then(() => undefined).catch((error) => {
       this.listenersPromise = null;

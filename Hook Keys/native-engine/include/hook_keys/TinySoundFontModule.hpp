@@ -55,11 +55,11 @@ private:
   tsf* active_ = nullptr;
   tsf* deferredRetired_ = nullptr;
   std::atomic<tsf*> pending_{nullptr};
-  std::atomic<float> attackMs_{-1.0f};
-  std::atomic<float> holdMs_{-1.0f};
-  std::atomic<float> decayMs_{-1.0f};
-  std::atomic<float> releaseMs_{-1.0f};
-  std::atomic<std::uint32_t> envelopeGeneration_{0};
+  std::atomic<float> attackMs_{0.0f};
+  std::atomic<float> holdMs_{15000.0f};
+  std::atomic<float> decayMs_{25000.0f};
+  std::atomic<float> releaseMs_{90.0f};
+  std::atomic<std::uint32_t> envelopeGeneration_{1};
   std::uint32_t appliedEnvelopeGeneration_ = 0;
   RealtimeCommandQueue<tsf*, 64> retired_{};
 };
