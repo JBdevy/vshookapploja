@@ -36,8 +36,11 @@ export class MetronomeEngine {
   getTimeSignatureDenominator(): number { return this.timeSignatureDenominator; }
   isRunning(): boolean { return this.running; }
 
-  syncNativeState(): void {
-    this.scheduleNativeSync(true);
+  syncNativeState(): Promise<void> {
+    if (!hookKeysNative.isAvailable()) return Promise.resolve();
+    if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
+    this.nativeSyncTimer = null;
+    return hookKeysNative.configureMetronome(this.nativeConfig());
   }
 
   setBpm(value: number): void {
@@ -173,7 +176,7 @@ export class MetronomeEngine {
     if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
     this.nativeSyncTimer = window.setTimeout(() => {
       this.nativeSyncTimer = null;
-      void hookKeysNative.configureMetronome(this.nativeConfig());
+      void hookKeysNative.configureMetronome(this.nativeConfig()).catch(() => undefined);
     }, immediate ? 0 : 32);
   }
 

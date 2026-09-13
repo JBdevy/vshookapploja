@@ -118,6 +118,15 @@ public class HookKeysNativePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void audioOutputStatus(PluginCall call) {
+        boolean ready = nativeAudioOutputReady();
+        JSObject result = new JSObject();
+        result.put("ready", ready);
+        result.put("failed", !ready);
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void listMidiDevices(PluginCall call) {
         // MIDI USB e MIDI virtual não podem depender da autorização de busca
         // Bluetooth. O sistema já expõe aqui somente endpoints disponíveis;
@@ -597,6 +606,7 @@ public class HookKeysNativePlugin extends Plugin {
     private static native boolean nativeStart(int bufferFrames);
     private static native boolean nativeRestart(int bufferFrames, int deviceId, int channels);
     private static native void nativeStop();
+    private static native boolean nativeAudioOutputReady();
     private static native boolean nativeLoadSoundFont(int moduleIndex, String path);
     private static native boolean nativeSendMidi(int inputSlot, int status, int data1, int data2, long timestamp);
     private static native boolean nativeConfigureModule(

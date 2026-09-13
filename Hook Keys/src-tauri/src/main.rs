@@ -164,6 +164,7 @@ struct AudioRuntime {
     _stream: Stream,
     _engine: Arc<NativeRuntime>,
     failed: Arc<AtomicBool>,
+    callback_seen: Arc<AtomicBool>,
 }
 
 struct EngineHub(RwLock<Option<Arc<NativeRuntime>>>);
@@ -412,36 +413,53 @@ fn start_audio(
 ) -> Result<(), String> {
     let device = select_device(device_id)?;
     let requested_channels = requested_channels.clamp(1, 32);
-    let supported = device
-        .supported_output_configs()
-        .map_err(|error| error.to_string())?;
-    let selected = supported
-        .filter(|config| {
-            config.channels() == requested_channels
-                && matches!(
-                    config.sample_format(),
-                    SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
-                )
-        })
-        // Algumas interfaces anunciam primeiro formatos inteiros que o nosso
-        // callback não renderiza. Prefira float e só depois a maior taxa.
-        .max_by_key(|config| {
-            (
-                u8::from(config.sample_format() == SampleFormat::F32),
-                config.max_sample_rate(),
+    // Para a saída padrão, use primeiro a configuração que o próprio sistema
+    // operacional já validou. Escolher a maior taxa anunciada pelo driver
+    // podia abrir um stream formalmente válido, mas sem áudio em alguns drivers
+    // WASAPI/CoreAudio. Interfaces selecionadas continuam respeitando o total
+    // de canais pedido para manter as rotas 1+2, 3+4 etc.
+    let system_default = device.default_output_config().ok().filter(|config| {
+        device_id.is_empty()
+            && config.channels() <= 32
+            && matches!(
+                config.sample_format(),
+                SampleFormat::F32 | SampleFormat::F64 | SampleFormat::I16 | SampleFormat::U16
             )
-        })
-        .map(|config| {
-            let preferred = 48_000;
-            if config.min_sample_rate() <= preferred && config.max_sample_rate() >= preferred {
-                config.with_sample_rate(preferred)
-            } else {
-                config.with_max_sample_rate()
-            }
-        })
-        .ok_or_else(|| {
-            "A saída selecionada não oferece a quantidade de canais solicitada.".to_string()
-        })?;
+    });
+    let selected = if let Some(config) = system_default {
+        config
+    } else {
+        device
+            .supported_output_configs()
+            .map_err(|error| error.to_string())?
+            .filter(|config| {
+                config.channels() == requested_channels
+                    && matches!(
+                        config.sample_format(),
+                        SampleFormat::F32 | SampleFormat::F64 | SampleFormat::I16 | SampleFormat::U16
+                    )
+            })
+            // Float evita conversões no callback; 48 kHz é a taxa mais segura
+            // para interfaces de palco quando ela está disponível.
+            .max_by_key(|config| {
+                (
+                    u8::from(config.sample_format() == SampleFormat::F32),
+                    u8::from(config.sample_format() == SampleFormat::F64),
+                    config.max_sample_rate(),
+                )
+            })
+            .map(|config| {
+                let preferred = 48_000;
+                if config.min_sample_rate() <= preferred && config.max_sample_rate() >= preferred {
+                    config.with_sample_rate(preferred)
+                } else {
+                    config.with_max_sample_rate()
+                }
+            })
+            .ok_or_else(|| {
+                "A saída selecionada não oferece a quantidade de canais solicitada.".to_string()
+            })?
+    };
 
     let channels = selected.channels();
     let sample_rate = selected.sample_rate();
@@ -451,6 +469,7 @@ fn start_audio(
         buffer_size.max(512) as usize,
     )?);
     let failed = Arc::new(AtomicBool::new(false));
+    let callback_seen = Arc::new(AtomicBool::new(false));
     let mut config: StreamConfig = selected.into();
     config.buffer_size = BufferSize::Fixed(buffer_size.clamp(32, 512));
 
@@ -460,6 +479,7 @@ fn start_audio(
         sample_format,
         Arc::clone(&engine),
         Arc::clone(&failed),
+        Arc::clone(&callback_seen),
         channels,
     )
     .or_else(|_| {
@@ -470,6 +490,7 @@ fn start_audio(
             sample_format,
             Arc::clone(&engine),
             Arc::clone(&failed),
+            Arc::clone(&callback_seen),
             channels,
         )
     })
@@ -489,6 +510,7 @@ fn start_audio(
         _stream: stream,
         _engine: engine,
         failed,
+        callback_seen,
     });
     Ok(())
 }
@@ -499,6 +521,7 @@ fn build_audio_stream(
     sample_format: SampleFormat,
     engine: Arc<NativeRuntime>,
     failed: Arc<AtomicBool>,
+    callback_seen: Arc<AtomicBool>,
     channels: u16,
 ) -> Result<Stream, BuildStreamError> {
     let channel_count = channels as usize;
@@ -506,6 +529,7 @@ fn build_audio_stream(
         SampleFormat::F32 => device.build_output_stream(
             config,
             move |output: &mut [f32], _| unsafe {
+                callback_seen.store(true, Ordering::Release);
                 hk_runtime_render(
                     engine.pointer(),
                     output.as_mut_ptr(),
@@ -519,12 +543,40 @@ fn build_audio_stream(
             },
             None,
         ),
+        SampleFormat::F64 => {
+            let mut scratch = Vec::<f32>::new();
+            let stream_failed = Arc::clone(&failed);
+            device.build_output_stream(
+                config,
+                move |output: &mut [f64], _| {
+                    callback_seen.store(true, Ordering::Release);
+                    scratch.resize(output.len(), 0.0);
+                    unsafe {
+                        hk_runtime_render(
+                            engine.pointer(),
+                            scratch.as_mut_ptr(),
+                            output.len() / channel_count,
+                            channel_count,
+                        )
+                    };
+                    for (target, source) in output.iter_mut().zip(&scratch) {
+                        *target = source.clamp(-1.0, 1.0) as f64;
+                    }
+                },
+                move |error| {
+                    stream_failed.store(true, Ordering::Release);
+                    eprintln!("Hook Keys audio: {error}");
+                },
+                None,
+            )
+        }
         SampleFormat::I16 => {
             let mut scratch = Vec::<f32>::new();
             let stream_failed = Arc::clone(&failed);
             device.build_output_stream(
                 config,
                 move |output: &mut [i16], _| {
+                    callback_seen.store(true, Ordering::Release);
                     scratch.resize(output.len(), 0.0);
                     unsafe {
                         hk_runtime_render(
@@ -551,6 +603,7 @@ fn build_audio_stream(
             device.build_output_stream(
                 config,
                 move |output: &mut [u16], _| {
+                    callback_seen.store(true, Ordering::Release);
                     scratch.resize(output.len(), 0.0);
                     unsafe {
                         hk_runtime_render(
@@ -607,11 +660,11 @@ fn audio_output_status(state: State<'_, AppState>) -> Result<HashMap<&'static st
         .audio
         .lock()
         .map_err(|_| "Motor de áudio indisponível.".to_string())?;
-    let failed = audio
-        .as_ref()
-        .map(|runtime| runtime.failed.load(Ordering::Acquire))
-        .unwrap_or(true);
-    Ok(HashMap::from([("failed", failed)]))
+    let ready = audio.as_ref().is_some_and(|runtime| {
+        !runtime.failed.load(Ordering::Acquire)
+            && runtime.callback_seen.load(Ordering::Acquire)
+    });
+    Ok(HashMap::from([("ready", ready), ("failed", !ready)]))
 }
 
 #[tauri::command]

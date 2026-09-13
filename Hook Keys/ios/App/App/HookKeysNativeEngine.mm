@@ -26,6 +26,7 @@ struct MidiParser final {
 
 struct AudioState final {
   std::atomic<hook_keys::NativeEngineRuntime*> activeRuntime{nullptr};
+  std::atomic<bool> callbackSeen{false};
   std::unique_ptr<hook_keys::NativeEngineRuntime> runtime;
   std::array<float, kRenderChunkFrames * 32> interleaved{};
 };
@@ -128,6 +129,7 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
       }
     }
     if (runtime == nullptr) return noErr;
+    state->callbackSeen.store(true, std::memory_order_release);
     std::size_t offset = 0;
     while (offset < frameCount) {
       const auto frames = std::min(kRenderChunkFrames, static_cast<std::size_t>(frameCount) - offset);
@@ -192,6 +194,13 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   _requestedOutputChannels = 2;
   static_cast<void>([self startWithBufferFrames:bufferFrames]);
   return NO;
+}
+
+- (BOOL)audioOutputReady {
+  std::scoped_lock lock(_controlMutex);
+  return _audioEngine != nil && _audioEngine.isRunning && _audioState &&
+      _audioState->callbackSeen.load(std::memory_order_acquire) &&
+      _audioState->activeRuntime.load(std::memory_order_acquire) != nullptr;
 }
 
 - (void)stop {

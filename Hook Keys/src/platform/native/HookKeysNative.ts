@@ -11,6 +11,11 @@ export interface NativeAudioOutputDevice {
   channels: number;
 }
 
+export interface NativeAudioOutputStatus {
+  ready: boolean;
+  failed: boolean;
+}
+
 export interface NativeModuleConfig {
   moduleIndex: number;
   enabled: boolean;
@@ -132,6 +137,7 @@ interface HookKeysNativePlugin {
   listMidiDevices(): Promise<{ devices: NativeMidiDevice[] }>;
   listAudioOutputDevices(): Promise<{ devices: NativeAudioOutputDevice[] }>;
   setAudioOutputDevice(options: { deviceId: string; channels: number; bufferSize: number }): Promise<void>;
+  audioOutputStatus(): Promise<NativeAudioOutputStatus>;
   setMidiInputs(options: { deviceIds: Array<string | null> }): Promise<void>;
   configureModule(options: NativeModuleConfig): Promise<void>;
   configureModuleEffects(options: NativeModuleEffectsConfig): Promise<void>;
@@ -236,18 +242,28 @@ class HookKeysNativeBridge {
     }
   }
 
-  async audioOutputFailed(): Promise<boolean> {
-    const invoke = this.tauriInvoke();
-    if (!invoke) return false;
+  async audioOutputStatus(): Promise<NativeAudioOutputStatus> {
+    if (!this.isAvailable()) return { ready: false, failed: false };
     try {
-      const result = await invoke('audio_output_status') as { failed?: boolean };
-      return result.failed === true;
+      const result = await this.call<Partial<NativeAudioOutputStatus>>(
+        'audio_output_status', {}, () => plugin.audioOutputStatus(),
+      );
+      const failed = result.failed === true;
+      return { ready: result.ready === true && !failed, failed };
     } catch {
-      return false;
+      // A ponte não responder também significa que não existe uma saída
+      // confiável para receber Synth, SF2 e metrônomo.
+      return { ready: false, failed: true };
     }
   }
 
+  async audioOutputFailed(): Promise<boolean> {
+    return !(await this.audioOutputStatus()).ready;
+  }
+
   async recoverDefaultAudioOutput(bufferSize: number): Promise<boolean> {
+    // Força uma abertura real mesmo que a rota padrão continue com a mesma
+    // chave. Isso recupera stream interrompido e troca de placa/fone.
     this.lastAudioDeviceKey = null;
     return this.setAudioOutputDevice('', 2, bufferSize);
   }

@@ -720,7 +720,14 @@ export class PlayerScreen {
   private readonly handleRootInput = (event: Event) => this.onRootInput(event);
   private readonly handlePageHide = () => this.flushPlayerStateSave(true);
   private readonly handleVisibilityChange = () => {
-    if (document.visibilityState === 'hidden') this.flushPlayerStateSave(true);
+    if (document.visibilityState === 'hidden') {
+      this.flushPlayerStateSave(true);
+      return;
+    }
+    // iOS/Android podem suspender a rota enquanto o app fica em segundo plano.
+    // Ao voltar, valide e recupere antes do próximo toque do músico.
+    this.nativeEngineReady = false;
+    void this.ensureNativeAudioReady().catch(() => undefined);
   };
   private readonly handleModalKeydown = (event: KeyboardEvent) => this.onModalKeydown(event);
   private modal: HTMLElement | null = null;
@@ -766,7 +773,7 @@ export class PlayerScreen {
   private readonly metronome = new MetronomeEngine(() => this.renderMetronomeState());
   private readonly patternPlayback = new PatternPlaybackController(
     () => this.createPatternPlaybackSnapshot(),
-    (slot, status, note, velocity) => { void hookKeysNative.sendMidi(slot, status, note, velocity); },
+    (slot, status, note, velocity) => this.sendNativeMidi(slot, status, note, velocity),
     (kind, step) => this.renderPatternPulse(kind, step),
   );
   private readonly midiInput = new MidiInputService((input) => {
@@ -832,7 +839,10 @@ export class PlayerScreen {
   private audioDeviceMonitorTimer: number | null = null;
   private playerStateSaveTimer: number | null = null;
   private playerStateDirty = false;
-  private nativeSoundfontSync: Promise<void> = Promise.resolve();
+  private nativeEngineSyncQueue: Promise<void> = Promise.resolve();
+  private nativeMidiQueue: Promise<void> = Promise.resolve();
+  private nativeBootPromise: Promise<void> = Promise.resolve();
+  private nativeEngineReady = false;
   private nativeAudioOutputSync: Promise<void> = Promise.resolve();
   private readonly nativeLoadedTimbres: (string | null)[] = Array.from({ length: MODULE_COUNT }, () => null);
   private selectedMidiInputIds: (string | null)[] = [null, null, null];
@@ -1009,7 +1019,7 @@ export class PlayerScreen {
     this.keyboardMidiRouter = new KeyboardMidiRouter(
       () => keyboardMidiRoute(this.keyboardMidiSlot, this.selectedMidiInputIds, this.midiInput.getInputDevices().length),
       (slot, status, note, velocity) => {
-        void hookKeysNative.sendMidi(slot, status, note, velocity);
+        this.sendNativeMidi(slot, status, note, velocity);
         if ((status & 0xf0) === 0xb0 && note === 1) {
           this.receiveRotaryModulation(velocity, slot === 3 ? null : this.selectedMidiInputIds[slot] ?? null);
         }
@@ -1063,18 +1073,29 @@ export class PlayerScreen {
     window.addEventListener('pagehide', this.handlePageHide);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.midiInput.mount();
-    void hookKeysNative.initialize(this.bufferSize).then(async (ready) => {
-      if (!ready || !this.mounted) return;
-      await this.applyNativeAudioOutput();
-      this.applySelectedMidiInputs();
-      this.syncNativeEngine();
-    });
     void this.loadCompatibilityVideoUrl();
     void this.refreshSoundCatalog();
     this.renderMetronomeState();
     this.renderBottomView();
-    void this.restoreSavedPlayerState().finally(() => {
+    const restorePromise = this.restoreSavedPlayerState();
+    void restorePromise.finally(() => {
       this.playerBackup.start(() => this.createSavedPlayerState());
+    });
+    const initializePromise = hookKeysNative.initialize(this.bufferSize);
+    this.nativeBootPromise = Promise.all([
+      initializePromise,
+      restorePromise.catch(() => undefined),
+    ]).then(async ([ready]) => {
+      if (!ready || !this.mounted) {
+        if (this.mounted && hookKeysNative.isAvailable()) {
+          this.setStatus('A saída de áudio ainda não ficou disponível. Tentando recuperar...');
+        }
+        return;
+      }
+      await this.applyNativeAudioOutput();
+      if (!this.mounted) return;
+      this.applySelectedMidiInputs();
+      await this.syncNativeEngine();
     });
     this.scheduleAudioDeviceMonitor();
   }
@@ -1239,6 +1260,11 @@ export class PlayerScreen {
         return;
       }
       this.metronome.toggle();
+      if (this.metronome.isRunning()) {
+        void this.ensureNativeAudioReady()
+          .then(() => this.metronome.syncNativeState())
+          .catch(() => this.setStatus('Não foi possível iniciar a saída de áudio.'));
+      }
       return;
     }
 
@@ -6394,6 +6420,8 @@ export class PlayerScreen {
   }
 
   private async monitorSelectedAudioDevice(): Promise<void> {
+    await this.nativeBootPromise.catch(() => undefined);
+    if (!this.mounted) return;
     const selectedId = this.selectedAudioDeviceId;
     if (!hookKeysNative.isAvailable()) return;
     if (await hookKeysNative.audioOutputFailed()) {
@@ -6422,9 +6450,9 @@ export class PlayerScreen {
     if (forceRestart) {
       const restarted = await hookKeysNative.recoverDefaultAudioOutput(this.bufferSize);
       if (restarted) {
+        this.nativeEngineReady = false;
         this.applySelectedMidiInputs();
-        this.metronome.syncNativeState();
-        this.syncNativeEngine();
+        await this.syncNativeEngine();
       }
     } else {
       await this.applyNativeAudioOutput();
@@ -6437,26 +6465,28 @@ export class PlayerScreen {
 
   private applyNativeAudioOutput(): Promise<void> {
     if (!hookKeysNative.isAvailable()) return Promise.resolve();
-    this.nativeAudioOutputSync = this.nativeAudioOutputSync.then(async () => {
+    this.nativeAudioOutputSync = this.nativeAudioOutputSync.catch(() => undefined).then(async () => {
       if (this.selectedAudioDeviceId && this.audioDevices.length === 0) {
         this.audioDevices = await this.audioOutput.listDevices();
       }
       const device = this.audioDevices.find(({ id }) => id === this.selectedAudioDeviceId);
       if (this.selectedAudioDeviceId && !device) this.selectedAudioDeviceId = '';
+      // Nenhuma configuração pode atravessar a troca do stream: aguarde o
+      // lote anterior e só então crie o runtime seguinte.
+      await this.nativeEngineSyncQueue.catch(() => undefined);
       const restarted = await hookKeysNative.setAudioOutputDevice(
         device?.id ?? '',
         device?.channels ?? 2,
         this.bufferSize,
       );
       if (!restarted || !this.mounted) return;
+      this.nativeEngineReady = false;
       this.nativeLoadedTimbres.fill(null);
       this.applySelectedMidiInputs();
-      this.metronome.syncNativeState();
-      this.syncNativeEngine();
+      await this.syncNativeEngine();
     }).catch(() => {
+      this.nativeEngineReady = false;
       this.nativeLoadedTimbres.fill(null);
-      this.metronome.syncNativeState();
-      this.syncNativeEngine();
       this.setStatus('Não foi possível aplicar a saída de áudio selecionada.');
     });
     return this.nativeAudioOutputSync;
@@ -7078,7 +7108,6 @@ export class PlayerScreen {
       this.renderActivePadBank();
       this.renderActiveEffectBank();
       this.updateVisibleView();
-      void this.applyNativeAudioOutput();
     } catch {
       this.setStatus('Suas configurações serão sincronizadas quando houver conexão.');
     }
@@ -7111,6 +7140,7 @@ export class PlayerScreen {
 
   private scheduleNativeEngineSync(): void {
     if (!hookKeysNative.isAvailable()) return;
+    this.nativeEngineReady = false;
     if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
     this.nativeSyncTimer = window.setTimeout(() => {
       this.nativeSyncTimer = null;
@@ -7118,10 +7148,72 @@ export class PlayerScreen {
     }, 48);
   }
 
+  private sendNativeMidi(inputSlot: number, status: number, data1: number, data2: number): void {
+    if (!hookKeysNative.isAvailable()) return;
+    if (this.nativeEngineReady) {
+      // O caminho de execução ao vivo não espera round-trip da WebView: o
+      // callback nativo recebe a mensagem imediatamente e o áudio continua
+      // independente de qualquer trabalho da interface.
+      void hookKeysNative.sendMidi(inputSlot, status, data1, data2).catch(() => {
+        this.nativeEngineReady = false;
+      });
+      return;
+    }
+    // Mantém Note On/Off e expressão na ordem exata. No primeiro toque (ou
+    // depois de uma desconexão), espera a rota e o estado do motor terminarem
+    // de sincronizar para a nota não desaparecer no runtime anterior.
+    this.nativeMidiQueue = this.nativeMidiQueue
+      .catch(() => undefined)
+      .then(async () => {
+        await this.nativeBootPromise.catch(() => undefined);
+        if (!this.mounted) return;
+        await this.ensureNativeAudioReady();
+        await hookKeysNative.sendMidi(inputSlot, status, data1, data2);
+      })
+      .catch(() => {
+        this.nativeEngineReady = false;
+        this.setStatus('A saída de áudio está sendo recuperada.');
+      });
+  }
+
+  private async ensureNativeAudioReady(): Promise<void> {
+    if (!hookKeysNative.isAvailable() || !this.mounted) return;
+    await this.nativeBootPromise.catch(() => undefined);
+    if (!this.mounted) return;
+    // Caminho normal de performance: nenhuma consulta JS/nativa extra por
+    // nota. O monitor de rota invalida esta flag quando a saída cai.
+    if (this.nativeEngineReady) return;
+    const status = await hookKeysNative.audioOutputStatus();
+    if (!status.ready) {
+      this.nativeEngineReady = false;
+      await this.fallbackToDefaultAudioOutput(true);
+    }
+    if (!this.nativeEngineReady) await this.syncNativeEngine();
+    if (!this.nativeEngineReady) throw new Error('native_engine_not_synchronized');
+  }
+
   private syncNativeEngine(): Promise<void> {
     if (!hookKeysNative.isAvailable()) return Promise.resolve();
+    this.nativeEngineReady = false;
+    this.nativeEngineSyncQueue = this.nativeEngineSyncQueue
+      .catch(() => undefined)
+      .then(() => this.performNativeEngineSync())
+      .then(() => {
+        if (this.mounted) this.nativeEngineReady = true;
+      })
+      .catch(() => {
+        this.nativeEngineReady = false;
+        this.setStatus('O motor de áudio será sincronizado novamente.');
+      });
+    return this.nativeEngineSyncQueue;
+  }
+
+  private async performNativeEngineSync(): Promise<void> {
+    if (!await hookKeysNative.initialize(this.bufferSize)) {
+      throw new Error('native_audio_unavailable');
+    }
     const preset = this.getActivePresetState();
-    const moduleConfigurationTasks: Promise<void>[] = [];
+    const configurationTasks: Promise<void>[] = [];
     for (let moduleIndex = 0; moduleIndex < MODULE_COUNT; moduleIndex += 1) {
       const moduleState = preset?.modules[moduleIndex];
       const selectedSlot = moduleState?.midiInputId
@@ -7140,7 +7232,7 @@ export class PlayerScreen {
       const patternInputSlot = arpeggiatorSettings?.enabled
         ? ARPEGGIATOR_ENGINE_INPUT
         : sequencerSettings?.enabled ? SEQUENCER_ENGINE_INPUT : null;
-      moduleConfigurationTasks.push(hookKeysNative.configureModule({
+      configurationTasks.push(hookKeysNative.configureModule({
         moduleIndex,
         enabled: Boolean(moduleState?.enabled && (moduleIndex === 7 || moduleState.timbreId)),
         inputSlot: patternInputSlot ?? (selectedSlot >= 0 ? selectedSlot : 3),
@@ -7165,7 +7257,7 @@ export class PlayerScreen {
       }));
       if (moduleState) {
         if (moduleIndex === 7 && synthSettings) {
-          void hookKeysNative.configureSynth({
+          configurationTasks.push(hookKeysNative.configureSynth({
             oscillator1: synthOscillatorIndex(synthSettings.oscillator1),
             oscillator2: synthOscillatorIndex(synthSettings.oscillator2),
             oscillator1Enabled: synthSettings.oscillator1Enabled,
@@ -7188,15 +7280,15 @@ export class PlayerScreen {
             glideMs: synthSettings.glideMs,
             oscillator1Octave: synthSettings.oscillator1Octave,
             oscillator2Octave: synthSettings.oscillator2Octave,
-          });
+          }));
         } else {
-          void hookKeysNative.configureModuleEnvelope({
+          configurationTasks.push(hookKeysNative.configureModuleEnvelope({
             moduleIndex,
             attackMs: optionalBoundedNumber(moduleState.settings.attackMs, 0, 15_000),
             holdMs: optionalBoundedNumber(moduleState.settings.holdMs, 0, 15_000),
             decayMs: optionalBoundedNumber(moduleState.settings.decayMs, 0, 25_000),
             releaseMs: optionalBoundedNumber(moduleState.settings.releaseMs, 0, 25_000),
-          });
+          }));
         }
         const eqBands = readModuleEqBands(moduleState.settings.eqBands);
         const eqEnabled = moduleState.settings.eqEnabled !== false;
@@ -7204,7 +7296,7 @@ export class PlayerScreen {
         const delay = readModuleDelaySettings(moduleState.settings.delay);
         const reverb = readModuleReverbSettings(moduleState.settings.reverb);
         const rotary = readModuleRotarySettings(moduleState.settings.rotary);
-        void hookKeysNative.configureModuleEffects({
+        configurationTasks.push(hookKeysNative.configureModuleEffects({
           moduleIndex,
           cutoffHz: readModuleCutoffFrequency(moduleState.settings.cutoffHz),
           eqTypes: eqBands.map(({ type }) => !eqEnabled ? 2 : type === 'low-cut' ? 0
@@ -7236,21 +7328,19 @@ export class PlayerScreen {
           rotaryDepth: rotary.depth / 100,
           rotaryMix: rotary.mix / 100,
           rotaryModulationEnabled: rotary.modulationEnabled,
-        });
+        }));
       }
     }
-    void hookKeysNative.setTempo(this.metronome.getBpm());
-    void hookKeysNative.setOutputGain(this.outputLevels.master, this.outputEnabled.master);
-    void hookKeysNative.setCompatibilityMode(this.compatibilityMode);
-    this.nativeSoundfontSync = this.nativeSoundfontSync
-      .then(async () => {
-        // A selected SF2 must never become available before its module is
-        // enabled/routed in the native engine.
-        await Promise.all(moduleConfigurationTasks);
-        await this.syncNativeSoundfonts();
-      })
-      .catch(() => undefined);
-    return this.nativeSoundfontSync;
+    configurationTasks.push(
+      hookKeysNative.setTempo(this.metronome.getBpm()),
+      hookKeysNative.setOutputGain(this.outputLevels.master, this.outputEnabled.master),
+      hookKeysNative.setCompatibilityMode(this.compatibilityMode),
+      this.metronome.syncNativeState(),
+    );
+    // Synth, master, metrônomo, módulos e efeitos pertencem ao mesmo lote.
+    // Só depois desse lote os SF2 são entregues e o motor aceita notas.
+    await Promise.all(configurationTasks);
+    await this.syncNativeSoundfonts();
   }
 
   private async syncNativeSoundfonts(): Promise<void> {

@@ -24,7 +24,21 @@ public:
   bool start(int requestedBufferFrames, int requestedDeviceId = AAUDIO_UNSPECIFIED,
              int requestedChannels = 2) noexcept {
     std::scoped_lock lock(controlMutex_);
-    if (stream_ != nullptr && runtime_ != nullptr) return true;
+    if (stream_ != nullptr && runtime_ != nullptr && streamReady_.load(std::memory_order_acquire)) {
+      return true;
+    }
+    // Um erro assíncrono do AAudio deixa o ponteiro do stream existente, mas
+    // ele já não entrega callbacks. Descarte essa instância antes da tentativa
+    // de recuperação em vez de declarar o motor pronto.
+    activeRuntime_.store(nullptr, std::memory_order_release);
+    streamReady_.store(false, std::memory_order_release);
+    callbackSeen_.store(false, std::memory_order_release);
+    if (stream_ != nullptr) {
+      AAudioStream_requestStop(stream_);
+      AAudioStream_close(stream_);
+      stream_ = nullptr;
+    }
+    runtime_.reset();
     requestedChannels = std::clamp(requestedChannels, 1, 32);
     auto result = openStream(requestedBufferFrames, requestedDeviceId, requestedChannels,
                              AAUDIO_SHARING_MODE_EXCLUSIVE);
@@ -49,11 +63,14 @@ public:
       stream_ = nullptr;
       return false;
     }
+    streamReady_.store(true, std::memory_order_release);
     return true;
   }
 
   void stop() noexcept {
     std::scoped_lock lock(controlMutex_);
+    streamReady_.store(false, std::memory_order_release);
+    callbackSeen_.store(false, std::memory_order_release);
     activeRuntime_.store(nullptr, std::memory_order_release);
     if (stream_ != nullptr) {
       AAudioStream_requestStop(stream_);
@@ -62,6 +79,12 @@ public:
     }
     runtime_.reset();
     channelCount_ = 2;
+  }
+
+  bool audioOutputReady() const noexcept {
+    return streamReady_.load(std::memory_order_acquire) &&
+        callbackSeen_.load(std::memory_order_acquire) &&
+        activeRuntime_.load(std::memory_order_acquire) != nullptr;
   }
 
   bool loadSoundFont(std::size_t moduleIndex, const char* path) noexcept {
@@ -279,7 +302,11 @@ private:
     return static_cast<AndroidAudioEngine*>(userData)->render(static_cast<float*>(audioData), frames);
   }
 
-  static void errorCallback(AAudioStream*, void*, aaudio_result_t error) noexcept {
+  static void errorCallback(AAudioStream*, void* userData, aaudio_result_t error) noexcept {
+    auto* engine = static_cast<AndroidAudioEngine*>(userData);
+    engine->streamReady_.store(false, std::memory_order_release);
+    engine->callbackSeen_.store(false, std::memory_order_release);
+    engine->activeRuntime_.store(nullptr, std::memory_order_release);
     __android_log_print(ANDROID_LOG_ERROR, kLogTag, "AAudio stream error: %s", AAudio_convertResultToText(error));
   }
 
@@ -290,6 +317,7 @@ private:
       std::fill_n(interleaved, static_cast<std::size_t>(frameCount) * channelCount_, 0.0f);
       return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
+    callbackSeen_.store(true, std::memory_order_release);
     std::size_t offset = 0;
     while (offset < static_cast<std::size_t>(frameCount)) {
       const auto frames = std::min(kRenderChunkFrames, static_cast<std::size_t>(frameCount) - offset);
@@ -303,6 +331,8 @@ private:
   AAudioStream* stream_ = nullptr;
   std::unique_ptr<hook_keys::NativeEngineRuntime> runtime_;
   std::atomic<hook_keys::NativeEngineRuntime*> activeRuntime_{nullptr};
+  std::atomic<bool> streamReady_{false};
+  std::atomic<bool> callbackSeen_{false};
   std::size_t channelCount_ = 2;
 };
 
@@ -347,6 +377,11 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeRestart(
 extern "C" JNIEXPORT void JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeStop(JNIEnv*, jclass) {
   gEngine.stop();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeAudioOutputReady(JNIEnv*, jclass) {
+  return gEngine.audioOutputReady() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

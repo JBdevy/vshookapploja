@@ -12,6 +12,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "listMidiDevices", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "listAudioOutputDevices", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setAudioOutputDevice", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "audioOutputStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMidiInputs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureModule", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureModuleEffects", returnType: CAPPluginReturnPromise),
@@ -94,6 +95,11 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin {
             bufferFrames: min(512, max(32, call.getInt("bufferSize", 128)))
         )
         if ok { call.resolve() } else { call.reject("Não foi possível abrir o dispositivo de áudio selecionado.") }
+    }
+
+    @objc func audioOutputStatus(_ call: CAPPluginCall) {
+        let ready = engine.audioOutputReady()
+        call.resolve(["ready": ready, "failed": !ready])
     }
 
     @objc func setMidiInputs(_ call: CAPPluginCall) {

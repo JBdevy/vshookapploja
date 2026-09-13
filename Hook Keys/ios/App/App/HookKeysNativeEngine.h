@@ -20,6 +20,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 - (BOOL)setAudioOutputDeviceId:(NSString *)deviceId
                       channels:(NSInteger)channels
                   bufferFrames:(NSInteger)bufferFrames;
+- (BOOL)audioOutputReady;
 - (void)stop;
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)listMidiDevices;
 - (void)setMidiDeviceIds:(NSArray *)deviceIds;
