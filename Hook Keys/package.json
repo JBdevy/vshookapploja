@@ -11,6 +11,8 @@
     "dev:qr": "node scripts/dev-preview.mjs",
     "typecheck": "tsc -b",
     "test:password-recovery": "node scripts/test-password-recovery.mjs",
+    "test:sf2-flow": "node scripts/test-sf2-flow.mjs",
+    "test:macos-pkg-sign": "node scripts/test-macos-pkg-sign.mjs",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "desktop:dev": "tauri dev",

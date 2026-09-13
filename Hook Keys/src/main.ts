@@ -9,6 +9,7 @@ import { initializeKeyboardExperience } from './platform/keyboard';
 import { createSessionVault } from './platform/session/createSessionVault';
 import { installDesktopCloseConfirmation } from './platform/desktop/installDesktopCloseConfirmation';
 import { HttpClient } from './shared/api/HttpClient';
+import { ResilientTapController } from './shared/gestures/ResilientTapController';
 
 const PRODUCTION_API_URL = 'https://hookupdate7.up.railway.app';
 
@@ -19,6 +20,9 @@ async function bootstrap(): Promise<void> {
   await initializePlatformRuntime();
   await initializeKeyboardExperience();
   await installDesktopCloseConfirmation();
+
+  const resilientTaps = new ResilientTapController(root);
+  resilientTaps.mount();
 
   const configuredApiUrl = import.meta.env.VITE_HOOK_KEYS_API_URL?.trim();
   const apiUrl = configuredApiUrl || (import.meta.env.PROD ? PRODUCTION_API_URL : '');

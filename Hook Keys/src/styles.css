@@ -10079,6 +10079,11 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 .player-account__user-button,
 [data-action="open-user"] { --button-color-a: #ff765f !important; --button-color-b: #a42920 !important; --button-border: #ffa392 !important; }
 .player-module__sound-button { --button-color-a: #2ddd79 !important; --button-color-b: #08753a !important; --button-border: #83f5ad !important; }
+.player-module__sound-button.has-selected-timbre {
+  --button-color-a: color-mix(in srgb, var(--module-sound-color) 78%, white) !important;
+  --button-color-b: color-mix(in srgb, var(--module-sound-color) 57%, black) !important;
+  --button-border: color-mix(in srgb, var(--module-sound-color) 75%, white) !important;
+}
 .player-module__sound-button.player-module__synth-mode.is-mono {
   --button-color-a: #b759ff !important;
   --button-color-b: #5a158f !important;

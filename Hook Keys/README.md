@@ -57,3 +57,21 @@ iPhone/iPad aceitam somente paisagem, com tela cheia obrigatória no iPad. Isso
 evita um quadro inicial em retrato antes do runtime carregar.
 
 O iOS é compilado em macOS com Xcode. O Android exige o SDK 36, NDK e CMake 3.22.1 instalados pelo Android Studio; a versão mínima do aparelho é Android 11 (API 30).
+
+## Assinatura do instalador macOS
+
+O workflow desktop está na Hook Center, mas utiliza `scripts/macos-pkg-sign.mjs`
+desta fonte. O certificado Installer é testado com um PKG mínimo sem payload e
+sem timestamp antes de compilar o aplicativo. Isso diferencia problemas de
+assinatura local de lentidão ao empacotar o aplicativo completo. O instalador
+distribuído continua exigindo timestamp seguro, assinatura válida e notarização.
+
+A importação inclui os intermediários Developer ID G1/G2 da [Apple PKI](https://www.apple.com/certificateauthority/)
+e verifica a cadeia localmente. Timeout, isoladamente, não confirma chave
+bloqueada. Em caso de timeout, o watchdog encerra também os helpers e guarda
+um stack sample no artifact `Signing-Diagnostics-Hook-Keys-macOS`, separado dos
+dois instaladores publicados na release.
+
+`npm run test:macos-pkg-sign` testa identidade, timestamp e watchdog sem precisar
+de Mac ou certificado real. A assinatura real só pode ser confirmada no runner
+macOS com os secrets configurados.

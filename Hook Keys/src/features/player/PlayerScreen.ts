@@ -138,6 +138,7 @@ import {
 } from '../audio/AudioOutputService';
 import { hookKeysNative } from '../../platform/native/HookKeysNative';
 import { isDesktopRuntime } from '../../platform/runtime';
+import { Capacitor } from '@capacitor/core';
 import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
 import {
   createPerformanceKeyboardMarkup,
@@ -212,6 +213,7 @@ interface ModulePresetState {
   sustainInputEnabled: boolean;
   timbreId: string | null;
   timbreName: string;
+  timbreColor: string | null;
   volumeDb: number;
   settings: Record<string, unknown>;
 }
@@ -680,6 +682,7 @@ function createBankState(selectedPreset: number | null = null): BankState {
         sustainInputEnabled: true,
         timbreId: null,
         timbreName: moduleEmptySoundName(moduleIndex + 1),
+        timbreColor: null,
         volumeDb: 0,
         settings: createDefaultModuleSettings(),
       })),
@@ -2514,11 +2517,21 @@ export class PlayerScreen {
         if (moduleNumber === 8) {
           this.renderSynthModeButton(soundButton, moduleState);
         } else {
-          soundLabel.textContent = moduleState.timbreName;
+          const displayedTimbreName = moduleState.timbreId
+            ? moduleState.timbreName
+            : moduleEmptySoundName(moduleNumber);
+          soundLabel.textContent = displayedTimbreName;
           soundButton.setAttribute(
             'aria-label',
-            `Escolher timbre do módulo ${moduleNumber}. Atual: ${moduleState.timbreName}`,
+            `Escolher timbre do módulo ${moduleNumber}. Atual: ${displayedTimbreName}`,
           );
+          const fixedTimbreColor = moduleState.timbreId?.startsWith('fixed:')
+            ? this.soundCatalog.get(moduleState.timbreId.slice(6))?.color ?? null
+            : null;
+          const timbreColor = normalizeSoundColor(moduleState.timbreColor) ?? fixedTimbreColor;
+          soundButton.classList.toggle('has-selected-timbre', Boolean(moduleState.timbreId && timbreColor));
+          if (moduleState.timbreId && timbreColor) soundButton.style.setProperty('--module-sound-color', timbreColor);
+          else soundButton.style.removeProperty('--module-sound-color');
         }
         this.renderModulePowerButton(powerButton, moduleNumber, moduleState.enabled);
         this.renderModuleActionState(moduleElement, moduleNumber, moduleState);
@@ -4133,7 +4146,7 @@ export class PlayerScreen {
         ? target.closest<HTMLButtonElement>('button[data-user-soundfont-id]')
         : null;
       if (kind === 'sound-selection' && moduleNumber !== null && userSoundfontButton) {
-        this.selectUserSoundfont(moduleNumber, userSoundfontButton);
+        void this.selectUserSoundfont(moduleNumber, userSoundfontButton);
         return;
       }
 
@@ -4145,6 +4158,7 @@ export class PlayerScreen {
         const id = missingUserSoundfontButton.dataset.missingUserSoundfontId;
         const name = missingUserSoundfontButton.dataset.missingUserSoundfontName;
         if (input && id && name) {
+          input.accept = Capacitor.isNativePlatform() ? 'application/octet-stream,.sf2' : '.sf2';
           input.dataset.restoreSoundfontId = id;
           input.dataset.soundfontName = name;
           input.click();
@@ -4823,6 +4837,11 @@ export class PlayerScreen {
     fileInput.value = '';
     delete fileInput.dataset.restoreSoundfontId;
     fileInput.dataset.soundfontName = name;
+    // iOS only skips Foto/Tirar foto when `accept` resolves to a non-media
+    // document type. Android then opens its document picker as well. Keep the
+    // strict extension-only filter on desktop, where octet-stream is displayed
+    // as unrelated executable extensions by the Windows picker.
+    fileInput.accept = Capacitor.isNativePlatform() ? 'application/octet-stream,.sf2' : '.sf2';
     fileInput.click();
   }
 
@@ -4878,6 +4897,7 @@ export class PlayerScreen {
       const namePanel = modal.querySelector<HTMLElement>('[data-user-sf2-name]');
       if (namePanel) namePanel.hidden = true;
       await this.renderUserSoundfonts(modal);
+      if (message) message.textContent = `${name} adicionado. Toque no timbre para selecionar neste módulo.`;
     } catch {
       if (message) message.textContent = 'Não foi possível adicionar este SF2.';
     }
@@ -4891,7 +4911,7 @@ export class PlayerScreen {
       if (!modal.isConnected) return;
       this.renderSoundLibraryTotals(modal, soundfonts);
       const installedMarkup = soundfonts.map((soundfont) => `
-            <button type="button" data-user-soundfont-id="${escapeMarkup(soundfont.id)}" data-user-soundfont-name="${escapeMarkup(soundfont.name)}" style="--user-sf2-color-a:${PRESET_COLORS[soundfont.colorIndex]?.[0] ?? PRESET_COLORS[0]?.[0]};--user-sf2-color-b:${PRESET_COLORS[soundfont.colorIndex]?.[1] ?? PRESET_COLORS[0]?.[1]}">
+            <button type="button" data-user-soundfont-id="${escapeMarkup(soundfont.id)}" data-user-soundfont-name="${escapeMarkup(soundfont.name)}" data-user-soundfont-color="${PRESET_COLORS[soundfont.colorIndex]?.[0] ?? PRESET_COLORS[0]?.[0]}" style="--user-sf2-color-a:${PRESET_COLORS[soundfont.colorIndex]?.[0] ?? PRESET_COLORS[0]?.[0]};--user-sf2-color-b:${PRESET_COLORS[soundfont.colorIndex]?.[1] ?? PRESET_COLORS[0]?.[1]}">
               <strong>${escapeMarkup(soundfont.name)}</strong>
               <small>${escapeMarkup(soundfont.fileName)}</small>
             </button>
@@ -4948,6 +4968,7 @@ export class PlayerScreen {
             if (!module || module.timbreId !== reference) continue;
             module.timbreId = null;
             module.timbreName = moduleEmptySoundName(moduleIndex + 1);
+            module.timbreColor = null;
           }
         }
       }
@@ -5030,7 +5051,7 @@ export class PlayerScreen {
         }
       }
       button.textContent = 'Tudo baixado';
-      this.syncNativeEngine();
+      void this.syncNativeEngine();
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError') && button.isConnected) {
         button.textContent = completed > 0 ? `Continuar (${sounds.length - completed})` : 'Tentar novamente';
@@ -5041,7 +5062,7 @@ export class PlayerScreen {
     }
   }
 
-  private selectUserSoundfont(moduleNumber: number, button: HTMLButtonElement): void {
+  private async selectUserSoundfont(moduleNumber: number, button: HTMLButtonElement): Promise<void> {
     if (this.suppressNextUserSoundfontClick) {
       this.suppressNextUserSoundfontClick = false;
       return;
@@ -5050,11 +5071,43 @@ export class PlayerScreen {
     const id = button.dataset.userSoundfontId;
     const name = button.dataset.userSoundfontName;
     if (!moduleState || !id || !name) return;
+    const previousSelection = {
+      category: moduleState.category,
+      timbreId: moduleState.timbreId,
+      timbreName: moduleState.timbreName,
+      timbreColor: moduleState.timbreColor,
+    };
     moduleState.category = 'user';
     moduleState.timbreId = `user:${id}`;
     moduleState.timbreName = name;
+    moduleState.timbreColor = normalizeSoundColor(button.dataset.userSoundfontColor);
     this.restoreActivePresetState();
     this.markPlayerStateChanged();
+    if (!hookKeysNative.isAvailable()) {
+      this.closeModal();
+      return;
+    }
+    const message = this.modal?.querySelector<HTMLElement>('[data-user-sf2-message]');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    if (message) message.textContent = `Carregando ${name} no módulo ${moduleNumber}...`;
+    if (this.nativeSyncTimer !== null) {
+      window.clearTimeout(this.nativeSyncTimer);
+      this.nativeSyncTimer = null;
+    }
+    this.nativeLoadedTimbres[moduleNumber - 1] = null;
+    await this.syncNativeEngine();
+    if (!button.isConnected) return;
+    button.disabled = false;
+    button.removeAttribute('aria-busy');
+    if (this.nativeLoadedTimbres[moduleNumber - 1] !== moduleState.timbreId) {
+      Object.assign(moduleState, previousSelection);
+      this.restoreActivePresetState();
+      this.markPlayerStateChanged();
+      if (message) message.textContent = `Não foi possível carregar ${name}. Confira se o arquivo SF2 é válido.`;
+      return;
+    }
+    this.setStatus(`${name} carregado no módulo ${moduleNumber}.`);
     this.closeModal();
   }
 
@@ -6300,6 +6353,7 @@ export class PlayerScreen {
     moduleState.category = sound.category;
     moduleState.timbreId = `fixed:${sound.id}`;
     moduleState.timbreName = sound.name;
+    moduleState.timbreColor = sound.color;
     this.restoreActivePresetState();
     this.markPlayerStateChanged();
     this.closeModal();
@@ -6368,6 +6422,21 @@ export class PlayerScreen {
     try {
       await this.soundLibraryEngine.remove(soundId);
       this.installedFixedSoundIds.delete(soundId);
+      const reference = `fixed:${soundId}`;
+      for (const bank of this.bankStates.values()) {
+        for (const preset of bank.presets) {
+          for (let moduleIndex = 0; moduleIndex < preset.modules.length; moduleIndex += 1) {
+            const module = preset.modules[moduleIndex];
+            if (!module || module.timbreId !== reference) continue;
+            module.timbreId = null;
+            module.timbreName = moduleEmptySoundName(moduleIndex + 1);
+            module.timbreColor = null;
+          }
+        }
+      }
+      this.nativeLoadedTimbres.fill(null);
+      this.restoreActivePresetState();
+      this.markPlayerStateChanged();
       this.returnToPreviousModal();
     } catch {
       this.updateSoundDownloadMessage('Não foi possível desinstalar este timbre.');
@@ -6662,9 +6731,10 @@ export class PlayerScreen {
     }, 48);
   }
 
-  private syncNativeEngine(): void {
-    if (!hookKeysNative.isAvailable()) return;
+  private syncNativeEngine(): Promise<void> {
+    if (!hookKeysNative.isAvailable()) return Promise.resolve();
     const preset = this.getActivePresetState();
+    const moduleConfigurationTasks: Promise<void>[] = [];
     for (let moduleIndex = 0; moduleIndex < MODULE_COUNT; moduleIndex += 1) {
       const moduleState = preset?.modules[moduleIndex];
       const selectedSlot = moduleState?.midiInputId
@@ -6683,7 +6753,7 @@ export class PlayerScreen {
       const patternInputSlot = arpeggiatorSettings?.enabled
         ? ARPEGGIATOR_ENGINE_INPUT
         : sequencerSettings?.enabled ? SEQUENCER_ENGINE_INPUT : null;
-      void hookKeysNative.configureModule({
+      moduleConfigurationTasks.push(hookKeysNative.configureModule({
         moduleIndex,
         enabled: Boolean(moduleState?.enabled && (moduleIndex === 7 || moduleState.timbreId)),
         inputSlot: patternInputSlot ?? (selectedSlot >= 0 ? selectedSlot : 3),
@@ -6705,7 +6775,7 @@ export class PlayerScreen {
         velocityCurve4: velocityCurve.points[4],
         outputChannelStart: nativeOutputRoute.start,
         outputChannelCount: nativeOutputRoute.count,
-      });
+      }));
       if (moduleState) {
         if (moduleIndex === 7 && synthSettings) {
           void hookKeysNative.configureSynth({
@@ -6772,8 +6842,14 @@ export class PlayerScreen {
     void hookKeysNative.setOutputGain(this.outputLevels.master, this.outputEnabled.master);
     void hookKeysNative.setCompatibilityMode(this.compatibilityMode);
     this.nativeSoundfontSync = this.nativeSoundfontSync
-      .then(() => this.syncNativeSoundfonts())
+      .then(async () => {
+        // A selected SF2 must never become available before its module is
+        // enabled/routed in the native engine.
+        await Promise.all(moduleConfigurationTasks);
+        await this.syncNativeSoundfonts();
+      })
       .catch(() => undefined);
+    return this.nativeSoundfontSync;
   }
 
   private async syncNativeSoundfonts(): Promise<void> {
@@ -7015,6 +7091,7 @@ export class PlayerScreen {
                 ? moduleEmptySoundName(moduleIndex + 1)
                 : typeof source.timbreName === 'string'
                   ? source.timbreName.slice(0, 120) : module.timbreName,
+              timbreColor: moduleIndex === 7 ? null : normalizeSoundColor(source.timbreColor),
               volumeDb: boundedNumber(source.volumeDb, -60, 6, module.volumeDb),
               settings: restoredSettings,
             };
@@ -7076,8 +7153,6 @@ function delayDivisionMultiplier(division: string): number {
 }
 
 function moduleEmptySoundName(moduleNumber: number): string {
-  if (moduleNumber === 6) return 'Arpeggiator';
-  if (moduleNumber === 7) return 'Sequencer';
   if (moduleNumber === 8) return 'Synth';
   return 'Sem timbre';
 }
@@ -7112,6 +7187,10 @@ function moduleDisplayName(moduleNumber: number): string {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function normalizeSoundColor(value: unknown): string | null {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : null;
 }
 
 function boundedNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {
