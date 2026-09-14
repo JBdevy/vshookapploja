@@ -686,8 +686,12 @@ try {
     'EQ permanece leve e sem RTA');
   player.openModal('module-compressor', 1, master);
   await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(window.document.querySelector('[data-compressor-meter="input"] i b').style.height, '0%',
+    'compressor desligado não processa nem mostra medidor');
+  window.document.querySelector('[data-module-effect-power="compressor"]').click();
+  await new Promise(resolve => setTimeout(resolve, 80));
   assert.notEqual(window.document.querySelector('[data-compressor-meter="input"] i b').style.height, '0%',
-    'medidor Input do compressor recebe sinal real');
+    'medidor Input do compressor ligado recebe sinal real');
   const cpuMeter = window.document.querySelector('[data-cpu-meter]');
   assert(cpuMeter, 'o desktop mostra o medidor de carga do audio ao lado de User');
   assert.equal(cpuMeter.querySelector('[data-cpu-meter-value]').textContent, '12%',

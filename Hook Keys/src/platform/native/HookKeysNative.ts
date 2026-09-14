@@ -244,6 +244,7 @@ const SOUNDFONT_CHUNK_BYTES = 4 * 1024 * 1024;
 
 class HookKeysNativeBridge {
   private initializePromise: Promise<boolean> | null = null;
+  private lastInitializationError: unknown = null;
   private listenersPromise: Promise<void> | null = null;
   private readonly moduleConfigKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private readonly tranceGateKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
@@ -279,12 +280,14 @@ class HookKeysNativeBridge {
             this.lastAudioDeviceKey = `:2:${bufferSize}`;
           }
           if (!ready) this.initializePromise = null;
+          if (ready) this.lastInitializationError = null;
           return ready;
         })
-        .catch(() => {
+        .catch((error) => {
           // Uma saída de áudio pode estar temporariamente ocupada durante o
           // boot. Não memorize a falha: a próxima nota/alteração pode tentar
           // iniciar o motor novamente.
+          this.lastInitializationError = error;
           this.initializePromise = null;
           return false;
         });
@@ -402,7 +405,16 @@ class HookKeysNativeBridge {
     // Força uma abertura real mesmo que a rota padrão continue com a mesma
     // chave. Isso recupera stream interrompido e troca de placa/fone.
     this.lastAudioDeviceKey = null;
+    // initialize() registra a chave padrão quando consegue reabrir uma sessão
+    // que falhou no boot. Limpe novamente depois dele para que o passo seguinte
+    // não confunda "inicializou" com "a recuperação forçada já foi feita".
+    if (!await this.initialize(bufferSize)) return false;
+    this.lastAudioDeviceKey = null;
     return this.setAudioOutputDevice('', 2, bufferSize);
+  }
+
+  initializationErrorMessage(): string | null {
+    return errorMessage(this.lastInitializationError);
   }
 
   async setMidiInputs(deviceIds: readonly (string | null)[]): Promise<void> {
@@ -786,6 +798,16 @@ function blobToBase64(blob: Blob): Promise<string> {
     };
     reader.readAsDataURL(blob);
   });
+}
+
+function errorMessage(error: unknown): string | null {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return null;
 }
 
 export const hookKeysNative = new HookKeysNativeBridge();

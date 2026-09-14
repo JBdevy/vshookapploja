@@ -908,6 +908,7 @@ export class PlayerScreen {
   private nativeBootPromise: Promise<void> = Promise.resolve();
   private catalogReady: Promise<void> = Promise.resolve();
   private nativeEngineReady = false;
+  private nativeEngineSyncError: unknown = null;
   private nativeAudioOutputSync: Promise<void> = Promise.resolve();
   private audioRestartOverlay: HTMLElement | null = null;
   private audioRestartFeedbackDepth = 0;
@@ -8367,13 +8368,34 @@ export class PlayerScreen {
     // Caminho normal de performance: nenhuma consulta JS/nativa extra por
     // nota. O monitor de rota invalida esta flag quando a saída cai.
     if (this.nativeEngineReady) return;
-    const status = await hookKeysNative.audioOutputStatus();
+    let status = await hookKeysNative.audioOutputStatus();
+    // Na primeira abertura o AVAudioEngine pode já estar rodando enquanto o
+    // primeiro callback ainda não chegou. Dê tempo à rota antes de destruí-la
+    // e criar outra — especialmente após login/orientação no iPhone.
+    for (let attempt = 0; !status.ready && attempt < 8; attempt += 1) {
+      await new Promise(resolve => window.setTimeout(resolve, 100));
+      if (!this.mounted) return;
+      status = await hookKeysNative.audioOutputStatus();
+    }
     if (!status.ready) {
       this.nativeEngineReady = false;
       await this.fallbackToDefaultAudioOutput(true);
     }
     if (!this.nativeEngineReady) await this.syncNativeEngine();
-    if (!this.nativeEngineReady) throw new Error('native_engine_not_synchronized');
+    if (!this.nativeEngineReady) {
+      throw new Error(this.nativeStartupErrorMessage());
+    }
+  }
+
+  private nativeStartupErrorMessage(): string {
+    const raw = nativeErrorMessage(this.nativeEngineSyncError) ?? hookKeysNative.initializationErrorMessage();
+    if (!raw || raw === 'native_audio_unavailable') {
+      return 'O áudio nativo do iPhone não iniciou. Toque em Tentar novamente.';
+    }
+    if (/not implemented|plugin.*unavailable|not available/i.test(raw)) {
+      return 'A interface e o motor nativo são de versões diferentes. Instale novamente este build.';
+    }
+    return raw;
   }
 
   private syncNativeEngine(): Promise<void> {
@@ -8410,10 +8432,14 @@ export class PlayerScreen {
       .catch(() => undefined)
       .then(() => this.performNativeEngineSync())
       .then(() => {
-        if (this.mounted) this.nativeEngineReady = true;
+        if (this.mounted) {
+          this.nativeEngineReady = true;
+          this.nativeEngineSyncError = null;
+        }
       })
-      .catch(() => {
+      .catch((error) => {
         this.nativeEngineReady = false;
+        this.nativeEngineSyncError = error;
         this.setStatus('O motor de áudio será sincronizado novamente.');
       });
     return this.nativeEngineSyncQueue;
@@ -9227,6 +9253,16 @@ function optionalBoundedNumber(value: unknown, minimum: number, maximum: number)
   return value !== null && value !== undefined && Number.isFinite(number)
     ? Math.min(maximum, Math.max(minimum, number))
     : -1;
+}
+
+function nativeErrorMessage(error: unknown): string | null {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return null;
 }
 
 function escapeMarkup(value: string): string {

@@ -171,8 +171,19 @@ private:
   if (_audioEngine != nil && _audioState && _audioState->runtime) {
     if (_audioEngine.isRunning) return YES;
     NSError *restartError = nil;
-    if (![AVAudioSession.sharedInstance setActive:YES error:&restartError]) return NO;
-    return [_audioEngine startAndReturnError:&restartError];
+    AVAudioSession *session = AVAudioSession.sharedInstance;
+    const double preferredRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
+    // Tamanho de buffer é uma preferência, não uma condição para existir áudio.
+    // Algumas rotas do iOS recusam a preferência enquanto estão sendo ativadas;
+    // o sistema continua perfeitamente capaz de abrir usando o buffer da rota.
+    [session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / preferredRate)
+                                    error:nil];
+    if (![session setActive:YES error:&restartError]) return NO;
+    _audioState->callbackSeen.store(false, std::memory_order_release);
+    _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
+    if ([_audioEngine startAndReturnError:&restartError]) return YES;
+    _audioState->activeRuntime.store(nullptr, std::memory_order_release);
+    return NO;
   }
 
   AVAudioSession *session = AVAudioSession.sharedInstance;
@@ -180,16 +191,20 @@ private:
   if (![session setCategory:AVAudioSessionCategoryPlayback
                         mode:AVAudioSessionModeDefault
                      options:AVAudioSessionCategoryOptionMixWithOthers
-                       error:&sessionError] ||
-      ![session setActive:YES error:&sessionError]) {
+                       error:&sessionError]) {
     return NO;
   }
 
+  // A Apple recomenda configurar preferências antes de ativar a sessão. A
+  // duração pode ser recusada por AirPlay, Bluetooth ou durante uma mudança de
+  // rota; isso não deve impedir o Hook Keys de iniciar com o valor do sistema.
+  const double preferredRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
+  [session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / preferredRate)
+                                  error:nil];
+  if (![session setActive:YES error:&sessionError]) return NO;
+
+  // Somente depois da ativação a taxa da rota é definitiva.
   const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
-  // A rota ativa determina a taxa real; 512 frames em 44,1 kHz precisam de
-  // outra duração que os mesmos 512 frames em 48 kHz.
-  if (![session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / sampleRate)
-                                       error:&sessionError]) return NO;
   const AVAudioChannelCount channelCount = static_cast<AVAudioChannelCount>(
       std::clamp<NSInteger>(_requestedOutputChannels, 1, 32));
   AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate
@@ -287,11 +302,10 @@ private:
       return NO;
     }
     const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
-    if (![session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / sampleRate)
-                                         error:&error]) {
-      _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
-      return NO;
-    }
+    // Assim como no boot, rejeitar uma preferência de buffer não significa que
+    // a rota esteja indisponível. Reinicie usando o tamanho aceito pelo iOS.
+    [session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / sampleRate)
+                                    error:nil];
     [_audioEngine prepare];
     _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
     if ([_audioEngine startAndReturnError:&error]) return YES;

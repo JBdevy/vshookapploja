@@ -28,6 +28,7 @@
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "native:sync": "npm run build && cap sync && node scripts/fix-ios-spm-paths.mjs",
+    "native:sync:ios": "npm run build && cap sync ios && node scripts/fix-ios-spm-paths.mjs",
     "native:add:android": "cap add android",
     "native:add:ios": "cap add ios",
     "native:open:android": "cap open android",

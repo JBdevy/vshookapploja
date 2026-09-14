@@ -250,9 +250,7 @@ jobs:
       - name: Instalar dependencias e compilar interface
         run: |
           npm ci
-          npm run build
-          npx cap sync ios
-          node scripts/fix-ios-spm-paths.mjs
+          npm run native:sync:ios
           node scripts/set-native-version.mjs \
             --platform ios \
             --version-name '${{ needs.metadata.outputs.version_name }}' \
