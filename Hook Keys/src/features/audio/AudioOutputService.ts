@@ -10,12 +10,14 @@ export interface AudioBusRouting {
   timbres: AudioBusRoute;
   pads: AudioBusRoute;
   effects: AudioBusRoute;
+  metronome: AudioBusRoute;
 }
 
 export const DEFAULT_AUDIO_ROUTING: AudioBusRouting = {
   timbres: 'stereo:0',
   pads: 'stereo:0',
   effects: 'stereo:0',
+  metronome: 'stereo:0',
 };
 
 export class AudioOutputService {

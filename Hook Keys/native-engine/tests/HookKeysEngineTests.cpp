@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
@@ -721,6 +722,184 @@ void testMetronomeRunsOnTheAudioCallback() {
   hook_keys::NativeEngineRuntime quiet(sampleRate, 512);
   quiet.setMetronome(true, 120.0f, 0.0f, 1, false, false, 4);
   expect(metronomeOnsets(quiet, totalFrames, 256).empty(), "zero volume silences the click");
+}
+
+void testMetronomeOutputRoute() {
+  static constexpr std::size_t channels = 4;
+  static constexpr std::size_t frames = 4096;
+  const auto energyPerChannel = [](hook_keys::NativeEngineRuntime& runtime) {
+    std::vector<float> audio(frames * channels, 0.0f);
+    runtime.renderInterleaved(audio.data(), frames, channels);
+    std::array<double, channels> energy{};
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      for (std::size_t channel = 0; channel < channels; ++channel) {
+        energy[channel] += std::abs(audio[frame * channels + channel]);
+      }
+    }
+    return energy;
+  };
+
+  hook_keys::NativeEngineRuntime main(48000.0, 512);
+  main.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  const auto mainEnergy = energyPerChannel(main);
+  expect(mainEnergy[0] > 0.0 && mainEnergy[1] > 0.0, "the default metronome route plays on outputs 1+2");
+  expect(mainEnergy[2] == 0.0 && mainEnergy[3] == 0.0, "the default metronome route leaves outputs 3+4 silent");
+
+  hook_keys::NativeEngineRuntime cue(48000.0, 512);
+  cue.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  cue.setMetronomeOutput(2, 2);
+  const auto cueEnergy = energyPerChannel(cue);
+  expect(cueEnergy[0] == 0.0 && cueEnergy[1] == 0.0, "a 3+4 metronome route leaves outputs 1+2 silent");
+  expect(cueEnergy[2] > 0.0 && cueEnergy[3] > 0.0, "a 3+4 metronome route plays on outputs 3+4");
+
+  hook_keys::NativeEngineRuntime mono(48000.0, 512);
+  mono.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  mono.setMetronomeOutput(3, 1);
+  const auto monoEnergy = energyPerChannel(mono);
+  expect(monoEnergy[3] > 0.0 && monoEnergy[0] == 0.0 && monoEnergy[1] == 0.0 && monoEnergy[2] == 0.0,
+         "a mono metronome route plays only on its output");
+
+  hook_keys::NativeEngineRuntime missing(48000.0, 512);
+  missing.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  missing.setMetronomeOutput(8, 2);
+  const auto missingEnergy = energyPerChannel(missing);
+  expect(missingEnergy[0] > 0.0 && missingEnergy[1] > 0.0,
+         "a route beyond the interface falls back to outputs 1+2");
+}
+
+class ConstantTrackDecoder final : public hook_keys::TrackDecoder {
+public:
+  ConstantTrackDecoder(std::uint64_t frames, float left, float right) noexcept
+      : frames_(frames), left_(left), right_(right) {}
+  [[nodiscard]] std::uint64_t frameCount() const noexcept override { return frames_; }
+  [[nodiscard]] bool seek(std::uint64_t frame) noexcept override {
+    position_ = std::min(frame, frames_);
+    return true;
+  }
+  [[nodiscard]] std::size_t read(float* stereo, std::size_t frames) noexcept override {
+    const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(frames, frames_ - position_));
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      stereo[frame * 2] = left_;
+      stereo[frame * 2 + 1] = right_;
+    }
+    position_ += count;
+    return count;
+  }
+
+private:
+  std::uint64_t frames_;
+  std::uint64_t position_ = 0;
+  float left_;
+  float right_;
+};
+
+// Renderiza até a condição valer: a thread de leitura enche a fila por conta própria.
+template <typename Condition>
+bool renderTracksUntil(hook_keys::TrackPlayer& player, std::vector<float>& audio, std::size_t channels,
+                       Condition condition, int maximumBlocks = 400) {
+  static constexpr std::size_t frames = 256;
+  for (int block = 0; block < maximumBlocks; ++block) {
+    audio.assign(frames * channels, 0.0f);
+    player.render(audio.data(), frames, channels);
+    if (condition()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return false;
+}
+
+void testTrackPlayerPlaysRoutesLoopsAndEnds() {
+  static constexpr std::size_t channels = 4;
+  std::vector<float> audio;
+  const auto channelEnergy = [&](std::size_t channel) {
+    double energy = 0.0;
+    for (std::size_t frame = 0; frame < audio.size() / channels; ++frame) energy += std::abs(audio[frame * channels + channel]);
+    return energy;
+  };
+
+  auto player = std::make_unique<hook_keys::TrackPlayer>(48000.0);
+  expect(player->load(7, std::make_unique<ConstantTrackDecoder>(48000, 0.5f, -0.25f)), "load a track");
+  expect(player->frameCount(7) == 48000, "the track reports its length");
+  expect(player->status().activeId == 0, "loading does not start playback");
+  expect(player->play(7), "play the loaded track");
+  expect(renderTracksUntil(*player, audio, channels, [&] { return channelEnergy(0) > 0.0; }),
+         "the track reaches the default output 1+2");
+  expect(channelEnergy(1) > 0.0 && channelEnergy(2) == 0.0 && channelEnergy(3) == 0.0,
+         "the default track route stays on outputs 1+2");
+  expect(renderTracksUntil(*player, audio, channels, [&] { return audio[0] > 0.49f; }),
+         "the start fade reaches full level");
+  expect(std::abs(audio[1] + 0.25f) < 0.01f, "the right channel keeps its own samples");
+  expect(player->status().playing && player->status().positionFrames > 0, "playback advances the position");
+
+  player->setOutput(2, 2);
+  renderTracksUntil(*player, audio, channels, [] { return true; });
+  expect(channelEnergy(0) == 0.0 && channelEnergy(1) == 0.0 && channelEnergy(2) > 0.0 && channelEnergy(3) > 0.0,
+         "a 3+4 track route moves the music to outputs 3+4");
+  player->setOutput(3, 1);
+  renderTracksUntil(*player, audio, channels, [] { return true; });
+  expect(std::abs(audio[3] - 0.125f) < 0.01f && channelEnergy(2) == 0.0,
+         "a mono track route mixes both channels into its output");
+  player->setOutput(0, 2);
+
+  player->setGainDb(0.0f, false);
+  expect(renderTracksUntil(*player, audio, channels, [&] { return channelEnergy(0) == 0.0; }),
+         "the Music power button silences the track");
+  player->setGainDb(-6.0f, true);
+  expect(renderTracksUntil(*player, audio, channels, [&] { return std::abs(audio[0] - 0.25f) < 0.01f; }),
+         "the Music fader scales the track");
+  player->setGainDb(0.0f, true);
+
+  expect(renderTracksUntil(*player, audio, channels, [&] { return player->status().ended; }),
+         "a track without loop ends");
+  expect(!player->status().playing && player->status().positionFrames == 48000, "an ended track sits at its end");
+
+  player->setLoop(7, true);
+  expect(player->play(7), "play again after the end");
+  expect(player->status().positionFrames == 0, "playing after the end restarts from the beginning");
+  bool wrapped = false;
+  std::uint64_t previous = 0;
+  renderTracksUntil(*player, audio, channels, [&] {
+    const auto position = player->status().positionFrames;
+    if (position < previous) wrapped = true;
+    previous = position;
+    return wrapped;
+  }, 1200);
+  expect(wrapped && !player->status().ended, "a looping track wraps without ending");
+
+  player->pause(7);
+  expect(renderTracksUntil(*player, audio, channels, [&] { return channelEnergy(0) == 0.0; }),
+         "pause fades the track out");
+  const auto paused = player->status().positionFrames;
+  renderTracksUntil(*player, audio, channels, [] { return false; }, 20);
+  expect(player->status().positionFrames == paused, "a paused track keeps its position");
+
+  expect(player->seek(7, 24000), "move the needle while paused");
+  renderTracksUntil(*player, audio, channels, [] { return true; });
+  expect(player->status().positionFrames == 24000, "the needle position is reported before playing");
+  player->setLoop(7, false);
+  expect(player->play(7), "play from the needle");
+  expect(renderTracksUntil(*player, audio, channels, [&] { return player->status().positionFrames > 24000; }),
+         "playback continues from the needle");
+  expect(player->status().positionFrames < 36000, "playback did not restart from the beginning");
+
+  expect(player->load(8, std::make_unique<ConstantTrackDecoder>(4800, 0.1f, 0.1f)), "queue a second track");
+  expect(player->play(8) && player->status().activeId == 8, "the queued track becomes the active one");
+  expect(renderTracksUntil(*player, audio, channels, [&] { return std::abs(audio[0] - 0.1f) < 0.01f; }),
+         "the second track replaces the first");
+  player->unload(8);
+  expect(player->status().activeId == 0, "unloading the active track stops playback");
+  expect(!player->hasSource(8) && player->hasSource(7), "unload releases only its own track");
+
+  hook_keys::NativeEngineRuntime runtime(48000.0, 512);
+  expect(runtime.tracks().load(1, std::make_unique<ConstantTrackDecoder>(96000, 0.3f, 0.3f)) && runtime.tracks().play(1),
+         "the runtime plays music through its own callback");
+  std::vector<float> engineAudio(512 * 2, 0.0f);
+  bool heard = false;
+  for (int block = 0; block < 400 && !heard; ++block) {
+    runtime.renderInterleaved(engineAudio.data(), 512, 2);
+    heard = std::abs(engineAudio[1022] - 0.3f) < 0.01f;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  expect(heard, "music is mixed into the engine output");
 }
 
 void testVelocityCurveMapping() {
@@ -1852,6 +2031,8 @@ int main() {
   testSynthModCard();
   testDelayDivisionsFollowTempo();
   testVelocityLimits();
+  testMetronomeOutputRoute();
+  testTrackPlayerPlaysRoutesLoopsAndEnds();
   testOutputBoost();
   testUnityGainAnalysisAndSmoothing();
   testRangeAndOctaveRouting();

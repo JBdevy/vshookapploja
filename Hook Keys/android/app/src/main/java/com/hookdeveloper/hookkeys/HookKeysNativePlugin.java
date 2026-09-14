@@ -153,10 +153,16 @@ public class HookKeysNativePlugin extends Plugin {
         else call.reject("Não foi possível preparar o preset sem interromper as notas anteriores.");
     }
 
+    // JSArray.put(double) lança JSONException (recusa NaN/infinito); como objeto
+    // não lança, e um nível inválido vira silêncio em vez de quebrar o JSON.
+    private static double finiteLevel(float value) {
+        return Float.isNaN(value) || Float.isInfinite(value) ? 0.0 : value;
+    }
+
     @PluginMethod
     public void moduleMeterLevels(PluginCall call) {
         JSArray levels = new JSArray();
-        for (float peak : nativeModuleMeterLevels()) levels.put((double) peak);
+        for (float peak : nativeModuleMeterLevels()) levels.put(Double.valueOf(finiteLevel(peak)));
         JSObject result = new JSObject();
         result.put("levels", levels);
         call.resolve(result);
@@ -170,7 +176,7 @@ public class HookKeysNativePlugin extends Plugin {
             return;
         }
         JSArray values = new JSArray();
-        for (float value : nativeModuleAnalysis(moduleIndex)) values.put((double) value);
+        for (float value : nativeModuleAnalysis(moduleIndex)) values.put(Double.valueOf(finiteLevel(value)));
         JSObject result = new JSObject();
         result.put("values", values);
         call.resolve(result);
@@ -493,6 +499,16 @@ public class HookKeysNativePlugin extends Plugin {
     @PluginMethod
     public void setTempo(PluginCall call) {
         if (nativeSetTempo(call.getFloat("bpm", 120.0f))) call.resolve();
+        else call.reject("O motor ainda não foi inicializado.");
+    }
+
+    @PluginMethod
+    public void setMetronomeOutput(PluginCall call) {
+        boolean ok = nativeSetMetronomeOutput(
+            Math.max(0, Math.min(31, call.getInt("channelStart", 0))),
+            call.getInt("channelCount", 2) == 1 ? 1 : 2
+        );
+        if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
     }
 
@@ -908,6 +924,7 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("releaseMs", 3.0f), call.getFloat("swing", 0.0f));
         if (ok) call.resolve(); else call.reject("Não foi possível configurar o Trance Gate.");
     }
+    private static native boolean nativeSetMetronomeOutput(int channelStart, int channelCount);
     private static native boolean nativeConfigureMetronome(
         boolean enabled, float bpm, float volume, int clickSound,
         boolean accentEnabled, boolean doubleTimeEnabled, int timeSignatureNumerator

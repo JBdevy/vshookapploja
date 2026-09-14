@@ -358,6 +358,14 @@ public:
     return runtime != nullptr && runtime->setTempo(bpm);
   }
 
+  bool setMetronomeOutput(int channelStart, int channelCount) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    if (runtime == nullptr) return false;
+    runtime->setMetronomeOutput(
+        static_cast<std::uint8_t>(std::clamp(channelStart, 0, 31)), channelCount == 1 ? 1 : 2);
+    return true;
+  }
+
   bool configureMetronome(
       bool enabled, float bpm, float volume, int clickSound,
       bool accentEnabled, bool doubleTimeEnabled, int numerator) noexcept {
@@ -756,6 +764,12 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureSynth(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetTempo(JNIEnv*, jclass, jfloat bpm) {
   return gEngine.setTempo(bpm) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetMetronomeOutput(
+    JNIEnv*, jclass, jint channelStart, jint channelCount) {
+  return gEngine.setMetronomeOutput(static_cast<int>(channelStart), static_cast<int>(channelCount)) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

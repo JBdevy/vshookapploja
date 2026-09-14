@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import type { NativeTrackAction, NativeTrackBridge, NativeTrackStatus } from '../../features/tracks/NativeTrackPlayer';
 
 export interface NativeMidiDevice {
   id: string;
@@ -91,17 +92,10 @@ export interface NativeVelocityLimitsConfig {
   oscillator2Limit: number;
 }
 
-export interface NativeFileBrowserRoot {
-  id: string;
+export interface NativePickedAudioFile {
+  path: string;
   name: string;
-  removable: boolean;
-}
-
-export interface NativeFileBrowserEntry {
-  name: string;
-  isDirectory: boolean;
-  size?: number;
-  inCloud?: boolean;
+  size: number;
 }
 
 export interface NativeGlideConfig {
@@ -215,6 +209,7 @@ interface HookKeysNativePlugin {
   sendMidi(options: { inputSlot: number; status: number; data1: number; data2: number }): Promise<void>;
   setTempo(options: { bpm: number }): Promise<void>;
   configureMetronome(options: NativeMetronomeConfig): Promise<void>;
+  setMetronomeOutput(options: { channelStart: number; channelCount: number }): Promise<void>;
   setOutputGain(options: { db: number; enabled: boolean }): Promise<void>;
   setCompatibilityMode(options: { enabled: boolean }): Promise<void>;
   setSeamlessPresetSwitching(options: { enabled: boolean }): Promise<void>;
@@ -225,12 +220,16 @@ interface HookKeysNativePlugin {
   finishSoundFontUpload(options: { moduleIndex: number }): Promise<void>;
   cloneSoundFont(options: { sourceModuleIndex: number; targetModuleIndex: number }): Promise<void>;
   saveBackup(options: { fileName: string; content: string }): Promise<{ saved: boolean }>;
-  fileBrowserRoots(): Promise<{ roots: NativeFileBrowserRoot[] }>;
-  addFileBrowserFolder(): Promise<{ added: boolean; root?: NativeFileBrowserRoot }>;
-  removeFileBrowserFolder(options: { rootId: string }): Promise<void>;
-  listFileBrowserDirectory(options: { rootId: string; path: string }): Promise<{ entries: NativeFileBrowserEntry[] }>;
-  importFileBrowserFile(options: { rootId: string; path: string }): Promise<{ path: string; name: string; size: number }>;
-  releaseFileBrowserImport(options: { path: string }): Promise<void>;
+  pickAudioFiles(): Promise<{ files: NativePickedAudioFile[] }>;
+  releasePickedAudioFile(options: { path: string }): Promise<void>;
+  adoptPickedAudioFile(options: { path: string; key: string; extension: string }): Promise<void>;
+  beginTrackUpload(options: { key: string; extension: string }): Promise<{ cached: boolean }>;
+  appendTrackChunk(options: { key: string; base64: string }): Promise<void>;
+  finishTrackUpload(options: { key: string }): Promise<void>;
+  loadTrack(options: { sourceId: number; key: string; extension: string }): Promise<{ durationSeconds: number }>;
+  controlTrack(options: { sourceId: number; action: NativeTrackAction; seconds?: number; loop?: boolean }): Promise<void>;
+  trackStatus(): Promise<NativeTrackStatus>;
+  configureTrackOutput(options: { channelStart: number; channelCount: number; db: number; enabled: boolean }): Promise<void>;
   addListener(eventName: 'midiNote', listener: (event: NativeMidiNoteEvent) => void): Promise<PluginListenerHandle>;
   addListener(
     eventName: 'midiControlChange',
@@ -256,6 +255,8 @@ class HookKeysNativeBridge {
   private lastSynthKey: string | null = null;
   private lastTempo: number | null = null;
   private lastMetronomeKey: string | null = null;
+  private lastMetronomeOutputKey: string | null = null;
+  private lastTrackOutputKey: string | null = null;
   private lastOutputGainKey: string | null = null;
   private lastCompatibilityMode: boolean | null = null;
   private lastSeamlessPresetSwitching: boolean | null = null;
@@ -552,6 +553,15 @@ class HookKeysNativeBridge {
     this.lastMetronomeKey = key;
   }
 
+  async setMetronomeOutput(channelStart: number, channelCount: 1 | 2): Promise<void> {
+    if (!await this.initialize()) return;
+    const options = { channelStart: Math.min(31, Math.max(0, Math.round(channelStart))), channelCount };
+    const key = JSON.stringify(options);
+    if (key === this.lastMetronomeOutputKey) return;
+    await this.call('set_metronome_output', options, () => plugin.setMetronomeOutput(options));
+    this.lastMetronomeOutputKey = key;
+  }
+
   async setOutputGain(db: number, enabled: boolean): Promise<void> {
     if (!await this.initialize()) return;
     const key = `${db}:${enabled}`;
@@ -644,15 +654,47 @@ class HookKeysNativeBridge {
     return result.saved === true;
   }
 
-  // Gerenciador de arquivos próprio: só no app da loja para iOS/iPadOS.
-  readonly files = {
+  // Músicas tocando dentro do motor, com saída própria. Por enquanto só o app
+  // iOS decodifica no motor; desktop e Android seguem no player da web.
+  tracksAvailable(): boolean {
+    return Capacitor.getPlatform() === 'ios';
+  }
+
+  readonly trackBridge: NativeTrackBridge = {
+    storeTrackFile: async (key, extension, file) => {
+      if (!await this.initialize()) throw new Error('native_engine_unavailable');
+      const prepared = await plugin.beginTrackUpload({ key, extension });
+      if (prepared.cached) return;
+      for (let offset = 0; offset < file.size; offset += SOUNDFONT_CHUNK_BYTES) {
+        const base64 = await blobToBase64(file.slice(offset, offset + SOUNDFONT_CHUNK_BYTES));
+        await plugin.appendTrackChunk({ key, base64 });
+      }
+      await plugin.finishTrackUpload({ key });
+    },
+    loadTrack: async (sourceId, key, extension) => {
+      if (!await this.initialize()) throw new Error('native_engine_unavailable');
+      return (await plugin.loadTrack({ sourceId, key, extension })).durationSeconds;
+    },
+    controlTrack: (sourceId, action, options = {}) => plugin.controlTrack({ sourceId, action, ...options }),
+    trackStatus: () => plugin.trackStatus(),
+  };
+
+  async configureTrackOutput(channelStart: number, channelCount: 1 | 2, db: number, enabled: boolean): Promise<void> {
+    if (!this.tracksAvailable() || !await this.initialize()) return;
+    const options = { channelStart: Math.min(31, Math.max(0, Math.round(channelStart))), channelCount, db, enabled };
+    const key = JSON.stringify(options);
+    if (key === this.lastTrackOutputKey) return;
+    await plugin.configureTrackOutput(options);
+    this.lastTrackOutputKey = key;
+  }
+
+  // Seletor de documentos nativo para "Add música": só no app iOS/iPadOS.
+  readonly audioPicker = {
     isAvailable: () => Capacitor.getPlatform() === 'ios',
-    roots: async () => (await plugin.fileBrowserRoots()).roots,
-    addFolder: async () => (await plugin.addFileBrowserFolder()).root ?? null,
-    removeFolder: (rootId: string) => plugin.removeFileBrowserFolder({ rootId }),
-    list: async (rootId: string, path: string) => (await plugin.listFileBrowserDirectory({ rootId, path })).entries,
-    importFile: (rootId: string, path: string) => plugin.importFileBrowserFile({ rootId, path }),
-    release: (path: string) => plugin.releaseFileBrowserImport({ path }),
+    pick: async () => (await plugin.pickAudioFiles()).files,
+    release: (path: string) => plugin.releasePickedAudioFile({ path }),
+    // A música escolhida vira o arquivo que o motor toca, sem outra cópia.
+    adopt: (path: string, key: string, extension: string) => plugin.adoptPickedAudioFile({ path, key, extension }),
     fileUrl: (path: string) => Capacitor.convertFileSrc(path.startsWith('file://') ? path : `file://${path}`),
   };
 
@@ -726,6 +768,8 @@ class HookKeysNativeBridge {
     this.lastSynthKey = null;
     this.lastTempo = null;
     this.lastMetronomeKey = null;
+    this.lastMetronomeOutputKey = null;
+    this.lastTrackOutputKey = null;
     this.lastOutputGainKey = null;
     this.lastCompatibilityMode = null;
     this.lastSeamlessPresetSwitching = null;

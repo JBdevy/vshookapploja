@@ -1,6 +1,7 @@
 import { type LocalTrack, TrackLibraryStore } from './TrackLibraryStore';
 import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
 import { isDesktopRuntime } from '../../platform/runtime';
+import type { NativeTrackPlayer, NativeTrackSource } from './NativeTrackPlayer';
 
 export type TrackPlaybackState = 'empty' | 'loading' | 'stopped' | 'playing' | 'paused';
 export type TrackQueueSource = 'manual' | 'auto';
@@ -53,8 +54,11 @@ export function createTrackTransportMarkup(): string {
   `;
 }
 
+// Web: HTMLAudioElement. App iOS: a mesma interface tocando dentro do motor.
+type TrackAudio = HTMLAudioElement | NativeTrackSource;
+
 export class TrackTransportController {
-  private audio = new Audio();
+  private audio: TrackAudio;
   private readonly handleClick = (event: Event) => this.onClick(event);
   private readonly handleInput = (event: Event) => this.onInput(event);
   private readonly handleLoadedMetadata = () => this.onLoadedMetadata();
@@ -74,7 +78,7 @@ export class TrackTransportController {
   private readonly handleContextMenu = (event: MouseEvent) => this.onContextMenu(event);
   private readonly nameHoldGesture = new LongPressGesture(620);
   private objectUrl: string | null = null;
-  private queuedAudio: HTMLAudioElement | null = null;
+  private queuedAudio: TrackAudio | null = null;
   private queuedObjectUrl: string | null = null;
   private selectedTrack: LocalTrack | null = null;
   private queuedTrack: LocalTrack | null = null;
@@ -100,7 +104,9 @@ export class TrackTransportController {
     private readonly onPlaybackChanged: (snapshot: TrackPlaybackSnapshot) => void,
     private readonly onMessage: (message: string) => void,
     private readonly onPositionRequested: (trigger: HTMLElement) => void,
+    private readonly nativeTracks: NativeTrackPlayer | null = null,
   ) {
+    this.audio = this.createAudio();
     this.audio.preload = 'metadata';
   }
 
@@ -225,10 +231,9 @@ export class TrackTransportController {
       const file = await this.library.getFile(track.id);
       if (sequence !== this.queueSequence || this.queuedTrack?.id !== track.id) return;
       if (!file) throw new Error('track_file_not_found');
-      this.queuedObjectUrl = URL.createObjectURL(file);
-      this.queuedAudio = new Audio(this.queuedObjectUrl);
+      this.queuedAudio = this.createAudio();
       this.queuedAudio.preload = 'auto';
-      this.queuedAudio.load();
+      this.queuedObjectUrl = this.attachFile(this.queuedAudio, track, file);
     } catch {
       if (sequence !== this.queueSequence || this.queuedTrack?.id !== track.id) return;
       this.clearQueuedTrack();
@@ -371,9 +376,7 @@ export class TrackTransportController {
       const file = await this.library.getFile(track.id);
       if (sequence !== this.loadSequence) return;
       if (!file) throw new Error('track_file_not_found');
-      this.objectUrl = URL.createObjectURL(file);
-      this.audio.src = this.objectUrl;
-      this.audio.load();
+      this.objectUrl = this.attachFile(this.audio, track, file);
       if (autoplay) {
         await this.audio.play();
         if (sequence !== this.loadSequence) return;
@@ -403,7 +406,7 @@ export class TrackTransportController {
     this.queuedAudio = null;
     this.queuedObjectUrl = null;
 
-    if (!preparedAudio || !preparedUrl) {
+    if (!preparedAudio || (!preparedUrl && !this.nativeTracks)) {
       await this.loadCurrentTrack(track, true);
       return;
     }
@@ -624,7 +627,25 @@ export class TrackTransportController {
     this.queueSource = null;
   }
 
-  private async prepareAudioOutput(audio: HTMLAudioElement): Promise<void> {
+  private createAudio(): TrackAudio {
+    return this.nativeTracks?.createSource() ?? new Audio();
+  }
+
+  // Web: devolve a URL do arquivo para liberar depois. Nativo: o motor lê o arquivo.
+  private attachFile(audio: TrackAudio, track: LocalTrack, file: Blob): string | null {
+    if (!(audio instanceof HTMLAudioElement)) {
+      audio.open(track, file);
+      return null;
+    }
+    const url = URL.createObjectURL(file);
+    audio.src = url;
+    audio.load();
+    return url;
+  }
+
+  private async prepareAudioOutput(audio: TrackAudio): Promise<void> {
+    // No motor, volume e saída das músicas são configurados pelo PlayerScreen.
+    if (!(audio instanceof HTMLAudioElement)) return;
     try {
       if (!this.audioContext) {
         this.audioContext = new AudioContext();
@@ -644,6 +665,7 @@ export class TrackTransportController {
   }
 
   private applyOutputGain(): void {
+    if (this.nativeTracks) return;
     const gain = this.outputEnabled ? dbToGain(this.outputDb) : 0;
     if (this.outputGain && this.audioContext) {
       this.outputGain.gain.cancelScheduledValues(this.audioContext.currentTime);
@@ -654,7 +676,7 @@ export class TrackTransportController {
     if (this.queuedAudio) this.applyFallbackVolume(this.queuedAudio);
   }
 
-  private applyFallbackVolume(audio: HTMLAudioElement): void {
+  private applyFallbackVolume(audio: TrackAudio): void {
     audio.volume = this.outputEnabled ? Math.min(1, dbToGain(this.outputDb)) : 0;
   }
 }

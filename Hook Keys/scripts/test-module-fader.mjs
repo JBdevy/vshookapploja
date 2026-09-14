@@ -149,6 +149,38 @@ test('velocity limits are forwarded by every native platform bridge', () => {
   }
 });
 
+test('metronome output route is forwarded by every native platform bridge', () => {
+  for (const [path, markers] of [
+    ['../src/platform/native/HookKeysNative.ts', ["'set_metronome_output'", 'plugin.setMetronomeOutput']],
+    ['../src-tauri/src/main.rs', ['fn set_metronome_output', 'hk_runtime_set_metronome_output', '            set_metronome_output,']],
+    ['../src-tauri/src/native_engine_bridge.cpp', ['hk_runtime_set_metronome_output', 'setMetronomeOutput']],
+    ['../ios/App/App/HookKeysNativePlugin.swift', ['name: "setMetronomeOutput"', 'func setMetronomeOutput']],
+    ['../ios/App/App/HookKeysNativeEngine.h', ['setMetronomeOutputChannelStart:']],
+    ['../ios/App/App/HookKeysNativeEngine.mm', ['setMetronomeOutputChannelStart:', 'setMetronomeOutput(']],
+    ['../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', ['public void setMetronomeOutput', 'nativeSetMetronomeOutput(']],
+    ['../android/app/src/main/cpp/HookKeysNativeBridge.cpp', ['nativeSetMetronomeOutput', 'setMetronomeOutput(']],
+  ]) {
+    const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+    for (const marker of markers) assert(source.includes(marker), `${path}: ${marker}`);
+  }
+});
+
+test('music plays inside the iOS engine with its own output', () => {
+  for (const [path, markers] of [
+    ['../src/platform/native/HookKeysNative.ts', ['plugin.beginTrackUpload', 'plugin.loadTrack', 'plugin.controlTrack',
+      'plugin.trackStatus', 'plugin.configureTrackOutput', 'plugin.adoptPickedAudioFile']],
+    ['../ios/App/App/HookKeysNativePlugin.swift', ['name: "loadTrack"', 'name: "controlTrack"', 'name: "trackStatus"',
+      'name: "configureTrackOutput"', 'name: "beginTrackUpload"', 'name: "appendTrackChunk"', 'name: "finishTrackUpload"',
+      'name: "adoptPickedAudioFile"', '"track_not_loaded"', 'applicationSupportDirectory']],
+    ['../ios/App/App/HookKeysNativeEngine.h', ['loadTrackId:', 'controlTrackId:', 'trackStatus', 'configureTrackOutputChannelStart:']],
+    ['../ios/App/App/HookKeysNativeEngine.mm', ['ExtAudioFileOpenURL', 'kExtAudioFileProperty_ClientDataFormat', 'tracks()']],
+    ['../native-engine/src/NativeEngineRuntime.cpp', ['tracks_->render(output, frames, channels)']],
+  ]) {
+    const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+    for (const marker of markers) assert(source.includes(marker), `${path}: ${marker}`);
+  }
+});
+
 test('Glide mode and velocity gate are forwarded by every native platform bridge', () => {
   for (const [path, markers] of [
     ['../src/platform/native/HookKeysNative.ts', ["'configure_glide'", 'plugin.configureGlide']],
@@ -184,19 +216,28 @@ test('track waveform peaks follow the loudness of the music', () => {
   assert.equal(transport.TRACK_WAVEFORM_BARS, 96);
 });
 
-test('iOS file browser: every bridge call is registered in the Swift plugin', () => {
+test('iOS Add música opens the native document picker directly', () => {
   const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
   const swift = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
-  const plist = readFileSync(new URL('../ios/App/App/Info.plist', import.meta.url), 'utf8');
-  for (const method of ['fileBrowserRoots', 'addFileBrowserFolder', 'removeFileBrowserFolder',
-    'listFileBrowserDirectory', 'importFileBrowserFile', 'releaseFileBrowserImport']) {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  for (const method of ['pickAudioFiles', 'releasePickedAudioFile']) {
     assert(bridge.includes(`plugin.${method}(`), `TypeScript chama ${method}`);
     assert(swift.includes(`CAPPluginMethod(name: "${method}"`), `Swift registra ${method}`);
     assert(swift.includes(`@objc func ${method}(_ call: CAPPluginCall)`), `Swift implementa ${method}`);
   }
-  assert(swift.includes('UIDocumentPickerViewController(forOpeningContentTypes: [.folder])'), 'o seletor do iOS só aparece para liberar uma pasta');
-  assert(swift.includes('bookmarkData('), 'a permissão da pasta fica guardada');
-  assert.match(plist, /<key>UIFileSharingEnabled<\/key>\s*<true\/>/, 'a pasta Hook Keys aparece no app Arquivos');
-  assert.match(plist, /<key>LSSupportsOpeningDocumentsInPlace<\/key>\s*<true\/>/);
-  assert(bridge.includes("Capacitor.getPlatform() === 'ios'"), 'o gerenciador existe só no app iOS');
+  assert(swift.includes('UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)'), 'abre o seletor de documentos direto, em áudio');
+  assert(swift.includes('picker.allowsMultipleSelection = true'), 'várias músicas de uma vez');
+  assert(!/fileBrowser|FileBrowser/.test(swift + bridge + player), 'o gerenciador próprio saiu');
+  assert(bridge.includes("Capacitor.getPlatform() === 'ios'"), 'só no app iOS');
+  assert(player.includes('hookKeysNative.audioPicker.isAvailable()'), 'Add música usa o seletor nativo no iOS');
+});
+
+test('App Store icon has no alpha channel (Apple rejects transparent icons, error 90717)', () => {
+  const png = readFileSync(new URL('../ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png', import.meta.url));
+  assert.equal(png.toString('ascii', 12, 16), 'IHDR');
+  assert.equal(png.readUInt32BE(16), 1024);
+  assert.equal(png.readUInt32BE(20), 1024);
+  // PNG color type: 2 = RGB. 4 and 6 carry alpha; 3 (palette) can carry tRNS.
+  assert.equal(png[25], 2, 'o ícone da loja precisa ser RGB, sem canal alfa');
+  assert(!png.includes(Buffer.from('tRNS')), 'o ícone da loja não pode ter transparência');
 });

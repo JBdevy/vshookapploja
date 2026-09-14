@@ -152,6 +152,7 @@ export function createAudioSettingsMarkup(
       ${([
         ['pads', 'Saídas - Pads'],
         ['effects', 'Saídas - Effects'],
+        ['metronome', 'Saídas - Metrônomo'],
       ] as const).map(([bus, label]) => `
         <label class="app-settings-field app-settings-field--audio-route" data-audio-route-field="${bus}">
           <span>${label}</span>
@@ -160,6 +161,14 @@ export function createAudioSettingsMarkup(
           </select>
         </label>
       `).join('')}
+
+      <!-- Músicas saem sempre em 1+2: o seletor só mostra a saída. -->
+      <label class="app-settings-field app-settings-field--audio-route" data-audio-route-field="music">
+        <span>Saídas - Músicas</span>
+        <select data-setting="music-route" disabled aria-disabled="true">
+          <option value="stereo:0" selected>1+2</option>
+        </select>
+      </label>
 
     </section>
   `;

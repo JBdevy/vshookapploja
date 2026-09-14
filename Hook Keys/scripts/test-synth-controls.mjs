@@ -147,6 +147,20 @@ test('Buffer Size keeps driver details out of the commercial interface', () => {
   assert.doesNotMatch(markup, /ms|samples|latência/i);
 });
 
+test('Config Áudio lists Metrônomo as a route and Músicas fixed on 1+2', () => {
+  const routing = { timbres: 'stereo:0', pads: 'stereo:0', effects: 'stereo:0', metronome: 'stereo:0' };
+  const markup = appSettingsView.createAudioSettingsMarkup([{ id: 'x', name: 'Interface', channels: 8 }], 'x', routing, 256);
+  assert.match(markup, /data-audio-bus="metronome"/);
+  assert.match(markup, /Saídas - Metrônomo/);
+  assert.doesNotMatch(markup, /data-audio-bus="music"/, 'Músicas não é uma rota que se escolhe');
+  const music = /<select data-setting="music-route"([^>]*)>([\s\S]*?)<\/select>/.exec(markup);
+  assert(music, 'Saídas - Músicas aparece');
+  assert.match(markup, /Saídas - Músicas/);
+  assert.match(music[1], /disabled/, 'sem opção de mudar');
+  assert.equal(music[2].match(/<option/g).length, 1, 'uma única opção, mesmo com 8 canais');
+  assert.match(music[2], />1\+2</);
+});
+
 test('EQ starts with Low Shelf and High Shelf while preserving five bands', () => {
   const bands = settingsView.readModuleEqBands(undefined);
   assert.equal(bands.length, 5);

@@ -221,6 +221,12 @@ int hk_runtime_set_tempo(void* handle, float bpm) noexcept {
   return handle && runtime(handle)->setTempo(bpm) ? 1 : 0;
 }
 
+void hk_runtime_set_metronome_output(void* handle, int channelStart, int channelCount) noexcept {
+  if (!handle) return;
+  runtime(handle)->setMetronomeOutput(
+      static_cast<std::uint8_t>(std::clamp(channelStart, 0, 31)), channelCount == 1 ? 1 : 2);
+}
+
 void hk_runtime_configure_metronome(
     void* handle, int enabled, float bpm, float volume, int clickSound,
     int accentEnabled, int doubleTimeEnabled, int numerator) noexcept {

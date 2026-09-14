@@ -3,6 +3,7 @@
 #include "hook_keys/AnalogSynthModule.hpp"
 #include "hook_keys/HookKeysEngine.hpp"
 #include "hook_keys/TinySoundFontModule.hpp"
+#include "hook_keys/TrackPlayer.hpp"
 
 #include <array>
 #include <atomic>
@@ -68,7 +69,14 @@ public:
       bool enabled, float bpm, float volume, std::uint8_t clickSound,
       bool accentEnabled, bool doubleTimeEnabled,
       std::uint8_t timeSignatureNumerator) noexcept;
+  // Saída do metrônomo: primeiro canal (0 = saídas 1+2) e 1 (mono) ou 2 (estéreo).
+  void setMetronomeOutput(std::uint8_t channelStart, std::uint8_t channelCount) noexcept {
+    metronomeOutputStart_.store(std::min<std::uint8_t>(channelStart, 31), std::memory_order_release);
+    metronomeOutputCount_.store(channelCount == 1 ? 1 : 2, std::memory_order_release);
+  }
   void setOutputGainDb(float db, bool enabled) noexcept;
+  // Músicas: tocam no mesmo callback, com saída e volume próprios.
+  [[nodiscard]] TrackPlayer& tracks() noexcept { return *tracks_; }
   void stopAllNotes() noexcept;
   void setMidiInputEnabled(bool enabled) noexcept;
   void setCompatibilityMode(bool enabled) noexcept { compatibilityMode_.store(enabled, std::memory_order_release); }
@@ -150,6 +158,8 @@ private:
   std::atomic<bool> midiInputEnabled_{true};
   std::atomic<bool> compatibilityMode_{false};
   std::atomic<bool> metronomeEnabled_{false};
+  std::atomic<std::uint8_t> metronomeOutputStart_{0};
+  std::atomic<std::uint8_t> metronomeOutputCount_{2};
   std::atomic<float> metronomeBpm_{120.0f};
   std::atomic<float> metronomeVolume_{1.0f};
   std::atomic<std::uint8_t> metronomeClickSound_{1};
@@ -164,6 +174,7 @@ private:
   float metronomeClickFrequency_ = 1350.0f;
   float metronomeClickAmplitude_ = 0.0f;
   std::uint8_t metronomeClickWaveform_ = 1;
+  std::unique_ptr<TrackPlayer> tracks_;
   std::atomic<float> outputGainLinear_{1.0f};
   float currentOutputGain_ = 1.0f;
   float outputGainTargetSeen_ = 1.0f;

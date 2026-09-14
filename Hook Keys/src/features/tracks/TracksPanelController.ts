@@ -58,6 +58,15 @@ export function trackFileAccept(native = Capacitor.isNativePlatform()): string {
   return `${native ? 'application/octet-stream' : 'audio/*'},${TRACK_FILE_EXTENSIONS.join(',')}`;
 }
 
+const TRACK_AUDIO_TYPES: Record<string, string> = {
+  mp3: 'audio/mpeg', wav: 'audio/wav', wave: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac',
+  flac: 'audio/flac', ogg: 'audio/ogg', aif: 'audio/aiff', aiff: 'audio/aiff',
+};
+
+export function audioTypeForFileName(name: string): string {
+  return TRACK_AUDIO_TYPES[name.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream';
+}
+
 export function isTrackAudioFile(file: Pick<File, 'name' | 'type'>): boolean {
   const name = file.name.toLowerCase();
   return file.type.startsWith('audio/') || TRACK_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
@@ -458,6 +467,10 @@ export class TracksPanelController {
 
   refreshLibrary(): Promise<void> {
     return this.refresh();
+  }
+
+  showMessage(message: string): void {
+    this.setMessage(message);
   }
 
   private async refresh(): Promise<void> {

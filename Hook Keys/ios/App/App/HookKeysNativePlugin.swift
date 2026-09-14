@@ -32,6 +32,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "sendMidi", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTempo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureMetronome", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setMetronomeOutput", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setOutputGain", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setCompatibilityMode", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setSeamlessPresetSwitching", returnType: CAPPluginReturnPromise),
@@ -42,12 +43,16 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "finishSoundFontUpload", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "cloneSoundFont", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "saveBackup", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "fileBrowserRoots", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "addFileBrowserFolder", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "removeFileBrowserFolder", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "listFileBrowserDirectory", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "importFileBrowserFile", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "releaseFileBrowserImport", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "pickAudioFiles", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "releasePickedAudioFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "adoptPickedAudioFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "beginTrackUpload", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "appendTrackChunk", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "finishTrackUpload", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "loadTrack", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "controlTrack", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "trackStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "configureTrackOutput", returnType: CAPPluginReturnPromise)
     ]
 
     private let engine = HookKeysNativeEngine()
@@ -341,6 +346,14 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         }
     }
 
+    @objc func setMetronomeOutput(_ call: CAPPluginCall) {
+        let ok = engine.setMetronomeOutputChannelStart(
+            min(31, max(0, call.getInt("channelStart", 0))),
+            channelCount: call.getInt("channelCount", 2) == 1 ? 1 : 2
+        )
+        if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
+    }
+
     @objc func configureMetronome(_ call: CAPPluginCall) {
         let ok = engine.configureMetronomeEnabled(
             call.getBool("enabled", false),
@@ -530,30 +543,18 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         }
     }
 
-    // MARK: - Gerenciador de arquivos
+    // MARK: - Seletor de músicas
     //
-    // O iOS só deixa um app ler fora do próprio contêiner com permissão do
-    // usuário. A pasta escolhida uma vez no seletor do sistema vira um bookmark
-    // guardado; dali em diante o app navega por ela sem abrir o seletor de novo.
-    // A pasta "Hook Keys" (Documents) aparece no app Arquivos e aceita AirDrop.
+    // "Add música" abre direto o seletor de documentos do iOS, filtrado em
+    // áudio e com várias músicas por vez. O campo de arquivo da web abria antes
+    // um menu com câmera e fotos. As músicas escolhidas chegam como cópia do app.
 
-    private static let fileBrowserFoldersKey = "hookkeys.fileBrowser.folders"
-    private static let fileBrowserAudioExtensions: Set<String> = ["mp3", "wav", "wave", "m4a", "aac", "flac", "ogg", "aif", "aiff"]
-    private let fileBrowserQueue = DispatchQueue(label: "com.hookdeveloper.hookkeys.filebrowser", qos: .userInitiated)
-    private var pendingFolderPick: (call: CAPPluginCall, delegate: HookKeysFolderPickerDelegate)?
+    private let pickedAudioQueue = DispatchQueue(label: "com.hookdeveloper.hookkeys.pickedaudio", qos: .userInitiated)
+    private var pendingAudioPick: (call: CAPPluginCall, delegate: HookKeysDocumentPickerDelegate)?
 
-    @objc func fileBrowserRoots(_ call: CAPPluginCall) {
-        var roots: [[String: Any]] = [["id": "app", "name": "Hook Keys", "removable": false]]
-        for folder in fileBrowserFolderRecords() {
-            guard let id = folder["id"] as? String, let name = folder["name"] as? String else { continue }
-            roots.append(["id": id, "name": name, "removable": true])
-        }
-        call.resolve(["roots": roots])
-    }
-
-    @objc func addFileBrowserFolder(_ call: CAPPluginCall) {
-        guard pendingFolderPick == nil else {
-            call.reject("Já existe uma escolha de pasta aberta.")
+    @objc func pickAudioFiles(_ call: CAPPluginCall) {
+        guard pendingAudioPick == nil else {
+            call.reject("Já existe uma escolha de músicas aberta.")
             return
         }
         DispatchQueue.main.async { [weak self] in
@@ -561,118 +562,41 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 call.reject("A janela de arquivos não está disponível.")
                 return
             }
-            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
-            let delegate = HookKeysFolderPickerDelegate { [weak self] url in self?.finishFolderPick(url) }
+            let types = [UTType.audio, UTType(filenameExtension: "flac"), UTType(filenameExtension: "ogg")].compactMap { $0 }
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+            picker.allowsMultipleSelection = true
+            let delegate = HookKeysDocumentPickerDelegate { [weak self] urls in self?.finishAudioPick(urls) }
             picker.delegate = delegate
-            picker.allowsMultipleSelection = false
-            self.pendingFolderPick = (call, delegate)
+            self.pendingAudioPick = (call, delegate)
             viewController.present(picker, animated: true)
         }
     }
 
-    private func finishFolderPick(_ url: URL?) {
-        guard let pending = pendingFolderPick else { return }
-        pendingFolderPick = nil
-        guard let url else {
-            pending.call.resolve(["added": false])
-            return
-        }
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        do {
-            let bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
-            let id = UUID().uuidString
-            let name = url.lastPathComponent
-            var folders = fileBrowserFolderRecords()
-            folders.append(["id": id, "name": name, "bookmark": bookmark])
-            UserDefaults.standard.set(folders, forKey: Self.fileBrowserFoldersKey)
-            pending.call.resolve(["added": true, "root": ["id": id, "name": name, "removable": true]])
-        } catch {
-            pending.call.reject("Não foi possível guardar o acesso a essa pasta.", nil, error)
-        }
-    }
-
-    @objc func removeFileBrowserFolder(_ call: CAPPluginCall) {
-        let id = call.getString("rootId", "")
-        let folders = fileBrowserFolderRecords().filter { ($0["id"] as? String) != id }
-        UserDefaults.standard.set(folders, forKey: Self.fileBrowserFoldersKey)
-        call.resolve()
-    }
-
-    @objc func listFileBrowserDirectory(_ call: CAPPluginCall) {
-        let rootId = call.getString("rootId", "app")
-        let path = call.getString("path", "")
-        fileBrowserQueue.async { [weak self] in
-            guard let self else { return }
-            do {
-                let root = try self.openFileBrowserRoot(rootId)
-                defer { root.stop() }
-                let directory = try self.fileBrowserURL(root.url, path)
-                let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .ubiquitousItemDownloadingStatusKey]
-                let contents = try FileManager.default.contentsOfDirectory(
-                    at: directory, includingPropertiesForKeys: keys, options: [.skipsPackageDescendants])
-                var entries: [[String: Any]] = []
-                for item in contents {
-                    var name = item.lastPathComponent
-                    var inCloud = false
-                    // Arquivos do iCloud ainda não baixados: ".Nome.mp3.icloud".
-                    if name.hasPrefix(".") && name.hasSuffix(".icloud") {
-                        name = String(name.dropFirst().dropLast(".icloud".count))
-                        inCloud = true
-                    } else if name.hasPrefix(".") {
-                        continue
-                    }
-                    let values = try? item.resourceValues(forKeys: Set(keys))
-                    if values?.ubiquitousItemDownloadingStatus == .notDownloaded { inCloud = true }
-                    if values?.isDirectory == true {
-                        entries.append(["name": name, "isDirectory": true])
-                    } else if Self.fileBrowserAudioExtensions.contains((name as NSString).pathExtension.lowercased()) {
-                        entries.append(["name": name, "isDirectory": false, "size": values?.fileSize ?? 0, "inCloud": inCloud])
-                    }
-                }
-                DispatchQueue.main.async { call.resolve(["entries": entries]) }
-            } catch {
-                DispatchQueue.main.async { call.reject("Não foi possível abrir essa pasta.", nil, error) }
-            }
-        }
-    }
-
-    @objc func importFileBrowserFile(_ call: CAPPluginCall) {
-        let rootId = call.getString("rootId", "app")
-        let path = call.getString("path", "")
-        fileBrowserQueue.async { [weak self] in
-            guard let self else { return }
-            do {
-                let root = try self.openFileBrowserRoot(rootId)
-                defer { root.stop() }
-                let source = try self.fileBrowserURL(root.url, path)
-                let name = source.lastPathComponent
+    private func finishAudioPick(_ urls: [URL]) {
+        guard let pending = pendingAudioPick else { return }
+        pendingAudioPick = nil
+        pickedAudioQueue.async {
+            var files: [[String: Any]] = []
+            for url in urls {
                 let folder = FileManager.default.temporaryDirectory
                     .appendingPathComponent("HookKeysImport", isDirectory: true)
                     .appendingPathComponent(UUID().uuidString, isDirectory: true)
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let destination = folder.appendingPathComponent(name)
-                try? FileManager.default.startDownloadingUbiquitousItem(at: source)
-                // O coordenador espera o iCloud terminar de baixar antes de copiar.
-                var coordinationError: NSError?
-                var copyError: Error?
-                NSFileCoordinator(filePresenter: nil).coordinate(
-                    readingItemAt: source, options: [.withoutChanges], error: &coordinationError) { readable in
-                    do { try FileManager.default.copyItem(at: readable, to: destination) } catch { copyError = error }
+                let destination = folder.appendingPathComponent(url.lastPathComponent)
+                do {
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    // asCopy já trouxe a música para dentro do app: só muda de lugar.
+                    try FileManager.default.moveItem(at: url, to: destination)
+                    let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    files.append(["path": destination.path, "name": url.lastPathComponent, "size": size])
+                } catch {
+                    try? FileManager.default.removeItem(at: folder)
                 }
-                if let coordinationError { throw coordinationError }
-                if let copyError { throw copyError }
-                let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                DispatchQueue.main.async {
-                    call.resolve(["path": destination.path, "name": name, "size": size])
-                }
-            } catch {
-                DispatchQueue.main.async { call.reject("Não foi possível ler essa música.", nil, error) }
             }
+            DispatchQueue.main.async { pending.call.resolve(["files": files]) }
         }
     }
 
-    @objc func releaseFileBrowserImport(_ call: CAPPluginCall) {
+    @objc func releasePickedAudioFile(_ call: CAPPluginCall) {
         let path = call.getString("path", "")
         let importRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("HookKeysImport", isDirectory: true).standardizedFileURL.path
@@ -683,39 +607,133 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         call.resolve()
     }
 
-    private func fileBrowserFolderRecords() -> [[String: Any]] {
-        UserDefaults.standard.array(forKey: Self.fileBrowserFoldersKey) as? [[String: Any]] ?? []
+    // MARK: - Músicas no motor
+    //
+    // O motor lê a música direto do disco. Cada música fica uma vez em
+    // Application Support/Tracks, pelo id da biblioteca: a do seletor já chega
+    // no app e só muda de lugar; uma antiga do IndexedDB sobe em partes uma vez.
+
+    private let trackQueue = DispatchQueue(label: "com.hookdeveloper.hookkeys.tracks", qos: .userInitiated)
+    private var trackUploads: [String: (handle: FileHandle, temporary: URL, destination: URL)] = [:]
+
+    @objc func adoptPickedAudioFile(_ call: CAPPluginCall) {
+        guard let destination = try? trackFile(call) else { call.reject("Música inválida."); return }
+        let importRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HookKeysImport", isDirectory: true).standardizedFileURL.path
+        let source = URL(fileURLWithPath: call.getString("path", "")).standardizedFileURL
+        guard source.path.hasPrefix(importRoot + "/") else { call.reject("Arquivo fora da importação."); return }
+        trackQueue.async {
+            do {
+                if !FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.moveItem(at: source, to: destination)
+                }
+                try? FileManager.default.removeItem(at: source.deletingLastPathComponent())
+                DispatchQueue.main.async { call.resolve() }
+            } catch {
+                DispatchQueue.main.async { call.reject("Não foi possível guardar a música.", nil, error) }
+            }
+        }
     }
 
-    private func openFileBrowserRoot(_ rootId: String) throws -> (url: URL, stop: () -> Void) {
-        if rootId == "app" {
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
-            return (documents, {})
+    @objc func beginTrackUpload(_ call: CAPPluginCall) {
+        guard let destination = try? trackFile(call), let key = trackKey(call) else {
+            call.reject("Música inválida."); return
         }
-        var folders = fileBrowserFolderRecords()
-        guard let index = folders.firstIndex(where: { ($0["id"] as? String) == rootId }),
-              let bookmark = folders[index]["bookmark"] as? Data else {
-            throw NSError(domain: "HookKeysFiles", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Essa pasta não está mais disponível."])
-        }
-        var stale = false
-        let url = try URL(resolvingBookmarkData: bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
-        let accessing = url.startAccessingSecurityScopedResource()
-        if stale, let refreshed = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
-            folders[index]["bookmark"] = refreshed
-            UserDefaults.standard.set(folders, forKey: Self.fileBrowserFoldersKey)
-        }
-        return (url, { if accessing { url.stopAccessingSecurityScopedResource() } })
+        if FileManager.default.fileExists(atPath: destination.path) { call.resolve(["cached": true]); return }
+        do {
+            let temporary = destination.appendingPathExtension("part")
+            if let old = trackUploads.removeValue(forKey: key) { try? old.handle.close() }
+            FileManager.default.createFile(atPath: temporary.path, contents: nil)
+            trackUploads[key] = (try FileHandle(forWritingTo: temporary), temporary, destination)
+            call.resolve(["cached": false])
+        } catch { call.reject("Não foi possível preparar a música.", nil, error) }
     }
 
-    private func fileBrowserURL(_ base: URL, _ path: String) throws -> URL {
-        let components = path.split(separator: "/").map(String.init)
-        guard !components.contains(where: { $0 == ".." || $0 == "." }) else {
-            throw NSError(domain: "HookKeysFiles", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "Caminho inválido."])
+    @objc func appendTrackChunk(_ call: CAPPluginCall) {
+        guard let key = trackKey(call), let upload = trackUploads[key],
+              let encoded = call.getString("base64"), let data = Data(base64Encoded: encoded) else {
+            call.reject("Envio de música inválido."); return
         }
-        return components.reduce(base) { $0.appendingPathComponent($1) }
+        do { try upload.handle.write(contentsOf: data); call.resolve() }
+        catch { call.reject("Falha ao gravar a música.", nil, error) }
+    }
+
+    @objc func finishTrackUpload(_ call: CAPPluginCall) {
+        guard let key = trackKey(call), let upload = trackUploads.removeValue(forKey: key) else {
+            call.reject("Nenhuma música está sendo enviada."); return
+        }
+        trackQueue.async {
+            do {
+                try upload.handle.close()
+                if FileManager.default.fileExists(atPath: upload.destination.path) {
+                    try FileManager.default.removeItem(at: upload.destination)
+                }
+                try FileManager.default.moveItem(at: upload.temporary, to: upload.destination)
+                DispatchQueue.main.async { call.resolve() }
+            } catch {
+                try? FileManager.default.removeItem(at: upload.temporary)
+                DispatchQueue.main.async { call.reject("Falha ao finalizar a música.", nil, error) }
+            }
+        }
+    }
+
+    @objc func loadTrack(_ call: CAPPluginCall) {
+        let sourceId = call.getInt("sourceId", 0)
+        guard sourceId > 0, let file = try? trackFile(call) else { call.reject("Música inválida."); return }
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            call.reject("A música ainda não está no aparelho.", "track_file_missing"); return
+        }
+        trackQueue.async { [weak self] in
+            let duration = self?.engine.loadTrackId(sourceId, path: file.path) ?? -1
+            DispatchQueue.main.async {
+                if duration > 0 { call.resolve(["durationSeconds": duration]) }
+                else { call.reject("Não foi possível abrir essa música.") }
+            }
+        }
+    }
+
+    @objc func controlTrack(_ call: CAPPluginCall) {
+        let ok = engine.controlTrackId(
+            call.getInt("sourceId", 0),
+            action: call.getString("action", ""),
+            seconds: call.getDouble("seconds", 0),
+            loop: call.getBool("loop", false)
+        )
+        if ok { call.resolve() } else { call.reject("A música não está carregada no motor.", "track_not_loaded") }
+    }
+
+    @objc func trackStatus(_ call: CAPPluginCall) {
+        call.resolve(engine.trackStatus())
+    }
+
+    @objc func configureTrackOutput(_ call: CAPPluginCall) {
+        let ok = engine.configureTrackOutputChannelStart(
+            min(31, max(0, call.getInt("channelStart", 0))),
+            channelCount: call.getInt("channelCount", 2) == 1 ? 1 : 2,
+            gainDb: call.getFloat("db", 0),
+            enabled: call.getBool("enabled", true)
+        )
+        if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
+    }
+
+    private func trackKey(_ call: CAPPluginCall) -> String? {
+        let key = call.getString("key", "")
+        guard (1...80).contains(key.count),
+              key.allSatisfy({ ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" }) else { return nil }
+        return key
+    }
+
+    private func trackFile(_ call: CAPPluginCall) throws -> URL {
+        guard let key = trackKey(call) else {
+            throw NSError(domain: "HookKeysNative", code: 3, userInfo: [NSLocalizedDescriptionKey: "Música inválida."])
+        }
+        let rawExtension = call.getString("extension", "").lowercased()
+        let fileExtension = (1...8).contains(rawExtension.count) &&
+            rawExtension.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) ? rawExtension : "audio"
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = base.appendingPathComponent("Tracks", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("track-\(key).\(fileExtension)")
     }
 
     private func soundfontDirectory() throws -> URL {
@@ -728,18 +746,18 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
 
 
 // Delegate próprio: o plugin já é o delegate do seletor de exportar backup.
-final class HookKeysFolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
-    private let onFinish: (URL?) -> Void
+final class HookKeysDocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
+    private let onFinish: ([URL]) -> Void
 
-    init(onFinish: @escaping (URL?) -> Void) {
+    init(onFinish: @escaping ([URL]) -> Void) {
         self.onFinish = onFinish
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        onFinish(urls.first)
+        onFinish(urls)
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        onFinish(nil)
+        onFinish([])
     }
 }

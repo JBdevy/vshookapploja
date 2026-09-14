@@ -127,6 +127,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                    data2:(NSInteger)data2
                timestamp:(uint64_t)timestamp;
 - (BOOL)setTempo:(float)bpm;
+- (BOOL)setMetronomeOutputChannelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;
 - (BOOL)configureMetronomeEnabled:(BOOL)enabled
                               bpm:(float)bpm
                            volume:(float)volume
@@ -135,6 +136,14 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                 doubleTimeEnabled:(BOOL)doubleTimeEnabled
            timeSignatureNumerator:(NSInteger)timeSignatureNumerator;
 - (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled;
+// Músicas no motor. loadTrack devolve a duração em segundos, ou -1.
+- (double)loadTrackId:(NSInteger)sourceId path:(NSString *)path;
+- (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds loop:(BOOL)loop;
+- (NSDictionary<NSString *, id> *)trackStatus;
+- (BOOL)configureTrackOutputChannelStart:(NSInteger)channelStart
+                            channelCount:(NSInteger)channelCount
+                                  gainDb:(float)gainDb
+                                 enabled:(BOOL)enabled;
 - (void)setCompatibilityMode:(BOOL)enabled;
 - (void)setSeamlessPresetSwitching:(BOOL)enabled;
 - (void)stopAllNotes;

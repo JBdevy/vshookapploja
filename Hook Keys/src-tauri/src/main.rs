@@ -171,6 +171,7 @@ unsafe extern "C" {
         oscillator2_octave: i32,
     ) -> i32;
     fn hk_runtime_set_tempo(handle: *mut c_void, bpm: f32) -> i32;
+    fn hk_runtime_set_metronome_output(handle: *mut c_void, channel_start: i32, channel_count: i32);
     fn hk_runtime_configure_metronome(
         handle: *mut c_void,
         enabled: i32,
@@ -1123,6 +1124,13 @@ fn set_tempo(bpm: f32, state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn set_metronome_output(channel_start: i32, channel_count: i32, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    unsafe { hk_runtime_set_metronome_output(engine.pointer(), channel_start.clamp(0, 31), channel_count) };
+    Ok(())
+}
+
+#[tauri::command]
 fn configure_metronome(
     enabled: bool,
     bpm: f32,
@@ -1677,6 +1685,7 @@ fn main() {
             send_midi,
             set_tempo,
             configure_metronome,
+            set_metronome_output,
             set_output_gain,
             set_compatibility_mode,
             set_seamless_preset_switching,

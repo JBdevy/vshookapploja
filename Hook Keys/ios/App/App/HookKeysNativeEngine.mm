@@ -1,6 +1,7 @@
 #import "HookKeysNativeEngine.h"
 
 #import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
 #import <CoreMIDI/CoreMIDI.h>
 
 #include "hook_keys/NativeEngineRuntime.hpp"
@@ -44,6 +45,84 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   }
   return CFBridgingRelease(value);
 }
+
+// ExtAudioFile decodifica MP3, AAC/M4A, WAV, AIFF, CAF e FLAC e já converte
+// para a taxa do motor. Só a thread de leitura do player e o controle o usam,
+// sempre sob a trava do player.
+class ExtAudioFileTrackDecoder final : public hook_keys::TrackDecoder {
+public:
+  static std::unique_ptr<ExtAudioFileTrackDecoder> open(NSString *path, double sampleRate) {
+    ExtAudioFileRef file = nullptr;
+    NSURL *url = [NSURL fileURLWithPath:path];
+    if (ExtAudioFileOpenURL((__bridge CFURLRef)url, &file) != noErr || file == nullptr) return nullptr;
+    AudioStreamBasicDescription fileFormat{};
+    UInt32 formatSize = sizeof(fileFormat);
+    SInt64 fileFrames = 0;
+    UInt32 framesSize = sizeof(fileFrames);
+    if (ExtAudioFileGetProperty(file, kExtAudioFileProperty_FileDataFormat, &formatSize, &fileFormat) != noErr ||
+        ExtAudioFileGetProperty(file, kExtAudioFileProperty_FileLengthFrames, &framesSize, &fileFrames) != noErr ||
+        fileFormat.mSampleRate <= 0 || fileFrames <= 0 || fileFormat.mChannelsPerFrame == 0) {
+      ExtAudioFileDispose(file);
+      return nullptr;
+    }
+    // Mono continua mono no conversor e vira estéreo aqui, nos dois lados.
+    const UInt32 channels = fileFormat.mChannelsPerFrame == 1 ? 1 : 2;
+    AudioStreamBasicDescription client{};
+    client.mSampleRate = sampleRate;
+    client.mFormatID = kAudioFormatLinearPCM;
+    client.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagsNativeEndian;
+    client.mBitsPerChannel = 32;
+    client.mChannelsPerFrame = channels;
+    client.mFramesPerPacket = 1;
+    client.mBytesPerFrame = 4 * channels;
+    client.mBytesPerPacket = 4 * channels;
+    if (ExtAudioFileSetProperty(file, kExtAudioFileProperty_ClientDataFormat, sizeof(client), &client) != noErr) {
+      ExtAudioFileDispose(file);
+      return nullptr;
+    }
+    return std::unique_ptr<ExtAudioFileTrackDecoder>(new ExtAudioFileTrackDecoder(
+        file, sampleRate / fileFormat.mSampleRate, static_cast<std::uint64_t>(fileFrames), channels));
+  }
+
+  ~ExtAudioFileTrackDecoder() override { ExtAudioFileDispose(file_); }
+
+  [[nodiscard]] std::uint64_t frameCount() const noexcept override {
+    return static_cast<std::uint64_t>(std::llround(static_cast<double>(fileFrames_) * ratio_));
+  }
+
+  [[nodiscard]] bool seek(std::uint64_t frame) noexcept override {
+    // ExtAudioFileSeek conta quadros na taxa do arquivo.
+    const auto fileFrame = std::min<SInt64>(
+        static_cast<SInt64>(fileFrames_), static_cast<SInt64>(std::llround(static_cast<double>(frame) / ratio_)));
+    return ExtAudioFileSeek(file_, fileFrame) == noErr;
+  }
+
+  [[nodiscard]] std::size_t read(float *stereo, std::size_t frames) noexcept override {
+    AudioBufferList list;
+    list.mNumberBuffers = 1;
+    list.mBuffers[0].mNumberChannels = channels_;
+    list.mBuffers[0].mDataByteSize = static_cast<UInt32>(frames * 4 * channels_);
+    list.mBuffers[0].mData = stereo;
+    UInt32 count = static_cast<UInt32>(frames);
+    if (ExtAudioFileRead(file_, &count, &list) != noErr) return 0;
+    if (channels_ == 1) {
+      for (std::size_t frame = count; frame-- > 0;) {
+        stereo[frame * 2] = stereo[frame];
+        stereo[frame * 2 + 1] = stereo[frame];
+      }
+    }
+    return count;
+  }
+
+private:
+  ExtAudioFileTrackDecoder(ExtAudioFileRef file, double ratio, std::uint64_t fileFrames, UInt32 channels) noexcept
+      : file_(file), ratio_(ratio), fileFrames_(fileFrames), channels_(channels) {}
+
+  ExtAudioFileRef file_;
+  double ratio_;
+  std::uint64_t fileFrames_;
+  UInt32 channels_;
+};
 
 } // namespace
 
@@ -535,6 +614,14 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   return runtime != nullptr && runtime->setTempo(bpm);
 }
 
+- (BOOL)setMetronomeOutputChannelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr) return NO;
+  runtime->setMetronomeOutput(
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(channelStart, 0, 31)), channelCount == 1 ? 1 : 2);
+  return YES;
+}
+
 - (BOOL)configureMetronomeEnabled:(BOOL)enabled bpm:(float)bpm volume:(float)volume
                        clickSound:(NSInteger)clickSound accentEnabled:(BOOL)accentEnabled
                 doubleTimeEnabled:(BOOL)doubleTimeEnabled
@@ -553,6 +640,64 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr) return NO;
   runtime->setOutputGainDb(db, enabled);
+  return YES;
+}
+
+- (double)loadTrackId:(NSInteger)sourceId path:(NSString *)path {
+  std::scoped_lock lock(_controlMutex);
+  if (!_audioState || !_audioState->runtime || sourceId <= 0) return -1;
+  auto &player = _audioState->runtime->tracks();
+  auto decoder = ExtAudioFileTrackDecoder::open(path, player.sampleRate());
+  if (!decoder) return -1;
+  const auto frames = decoder->frameCount();
+  if (!player.load(static_cast<std::uint32_t>(sourceId), std::move(decoder))) return -1;
+  return static_cast<double>(frames) / player.sampleRate();
+}
+
+- (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds loop:(BOOL)loop {
+  std::scoped_lock lock(_controlMutex);
+  if (!_audioState || !_audioState->runtime || sourceId <= 0) return NO;
+  auto &player = _audioState->runtime->tracks();
+  const auto identifier = static_cast<std::uint32_t>(sourceId);
+  if ([action isEqualToString:@"unload"]) {
+    player.unload(identifier);
+    return YES;
+  }
+  if (!player.hasSource(identifier)) return NO;
+  if ([action isEqualToString:@"play"]) return player.play(identifier);
+  if ([action isEqualToString:@"pause"]) { player.pause(identifier); return YES; }
+  if ([action isEqualToString:@"loop"]) { player.setLoop(identifier, loop); return YES; }
+  if ([action isEqualToString:@"seek"]) {
+    const auto frame = std::isfinite(seconds) ? std::max(0.0, seconds) * player.sampleRate() : 0.0;
+    return player.seek(identifier, static_cast<std::uint64_t>(std::llround(frame)));
+  }
+  return NO;
+}
+
+- (NSDictionary<NSString *, id> *)trackStatus {
+  std::scoped_lock lock(_controlMutex);
+  if (!_audioState || !_audioState->runtime) {
+    return @{@"activeId": @0, @"playing": @NO, @"ended": @NO, @"positionSeconds": @0};
+  }
+  auto &player = _audioState->runtime->tracks();
+  const auto status = player.status();
+  return @{
+    @"activeId": @(status.activeId),
+    @"playing": @(status.playing),
+    @"ended": @(status.ended),
+    @"positionSeconds": @(static_cast<double>(status.positionFrames) / player.sampleRate()),
+  };
+}
+
+- (BOOL)configureTrackOutputChannelStart:(NSInteger)channelStart
+                            channelCount:(NSInteger)channelCount
+                                  gainDb:(float)gainDb
+                                 enabled:(BOOL)enabled {
+  std::scoped_lock lock(_controlMutex);
+  if (!_audioState || !_audioState->runtime) return NO;
+  auto &player = _audioState->runtime->tracks();
+  player.setOutput(static_cast<std::uint8_t>(std::clamp<NSInteger>(channelStart, 0, 31)), channelCount == 1 ? 1 : 2);
+  player.setGainDb(gainDb, enabled);
   return YES;
 }
 

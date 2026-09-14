@@ -60,6 +60,7 @@ import {
   createTracksPanelMarkup,
   createTracksSplitPanelMarkup,
   TracksPanelController,
+  audioTypeForFileName,
 } from '../tracks/TracksPanelController';
 import {
   applyOnScreenKey,
@@ -141,7 +142,6 @@ import {
   type OutputEnabledState,
 } from './OutputControls';
 import { createOutputFaderPanelMarkup, OutputFaderPanelController } from './OutputFaderPanel';
-import { createFileBrowserMarkup, FileBrowserController } from '../tracks/FileBrowserView';
 import {
   createTrackTransportMarkup,
   TRACK_WAVEFORM_BARS,
@@ -149,6 +149,7 @@ import {
   type TrackPlaybackSnapshot,
 } from '../tracks/TrackTransport';
 import type { LocalTrack } from '../tracks/TrackLibraryStore';
+import { NativeTrackPlayer, trackFileExtension } from '../tracks/NativeTrackPlayer';
 import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
 import { DoubleTapTracker } from '../../shared/gestures/DoubleTapTracker';
 import { EffectAudioStore, isSupportedEffectFile } from '../effects/EffectAudioStore';
@@ -213,7 +214,7 @@ import {
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'file-browser' | 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
 type BankId = 'A' | 'B';
 type PlayerView = 'bank' | 'pads-effects';
 
@@ -780,7 +781,6 @@ export class PlayerScreen {
   private modal: HTMLElement | null = null;
   private modalTrigger: HTMLElement | null = null;
   private tracksPanelController: TracksPanelController | null = null;
-  private fileBrowserController: FileBrowserController | null = null;
   private tabletInputKeyboardController: TabletInputKeyboardController | null = null;
   private splitTracksController: TracksPanelController | null = null;
   private outputFaderController: OutputFaderPanelController | null = null;
@@ -1145,6 +1145,7 @@ export class PlayerScreen {
       (snapshot) => this.handleTrackPlaybackSnapshot(snapshot),
       (message) => this.setStatus(message),
       (trigger) => this.openModal('track-position', null, trigger),
+      hookKeysNative.tracksAvailable() ? new NativeTrackPlayer(hookKeysNative.trackBridge) : null,
     );
     this.trackTransport.mount();
     if (this.desktopRuntime) {
@@ -1709,6 +1710,15 @@ export class PlayerScreen {
 
   private applyMusicOutput(): void {
     this.trackTransport?.setOutputLevel(this.outputLevels.music, this.outputEnabled.music);
+    // Arrastar o fader manda um comando por sincronização, não um por pixel.
+    if (hookKeysNative.tracksAvailable()) this.scheduleNativeEngineSync();
+  }
+
+  // Músicas no motor: sempre em 1+2, com o volume do fader Music.
+  private applyNativeMusicOutput(): Promise<void> {
+    if (!hookKeysNative.tracksAvailable()) return Promise.resolve();
+    return hookKeysNative.configureTrackOutput(0, 2, this.outputLevels.music, this.outputEnabled.music)
+      .catch(() => undefined);
   }
 
   private renderMetronomeState(): void {
@@ -4152,8 +4162,6 @@ export class PlayerScreen {
           </div>
         </section>
       `;
-    } else if (kind === 'file-browser') {
-      bodyMarkup = createFileBrowserMarkup();
     } else if (kind === 'track-position') {
       const snapshot = this.trackTransport?.getSnapshot() ?? this.trackPlaybackSnapshot;
       const canSeek = snapshot.selectedTrackId !== null && snapshot.state !== 'loading';
@@ -4359,11 +4367,6 @@ export class PlayerScreen {
         `
       : kind === 'sound-download' || kind === 'performance-download'
         ? `<button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>`
-      : kind === 'file-browser'
-        ? `
-          <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
-          <button class="player-modal__confirm-button" type="button" data-modal-action="import-browser-files" disabled>Adicionar</button>
-        `
       : kind === 'cc-learn'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
@@ -4529,9 +4532,6 @@ export class PlayerScreen {
     } else if (kind === 'tempo-edit') {
       eyebrow.textContent = 'Tap Tempo';
       title.textContent = 'Definir tempo';
-    } else if (kind === 'file-browser') {
-      eyebrow.textContent = 'Playlist';
-      title.textContent = 'Arquivos';
     } else if (kind === 'track-position') {
       eyebrow.textContent = 'Playlist';
       title.textContent = 'Posição da música';
@@ -5280,7 +5280,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
           this.commitModulePolyphony(modal, moduleNumber);
         }
-        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'glide-config' || kind === 'module-arpeggiator' || kind === 'module-sequencer' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'file-browser' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'glide-config' || kind === 'module-arpeggiator' || kind === 'module-sequencer' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -5288,12 +5288,6 @@ export class PlayerScreen {
         return;
       }
 
-      if (kind === 'file-browser' && modalAction === 'import-browser-files') {
-        void this.fileBrowserController?.importSelected().then((added) => {
-          if (added > 0) void this.splitTracksController?.refreshLibrary();
-        });
-        return;
-      }
       if (modalAction === 'show-devices') {
         modal.dataset.showDevices = 'true';
         if (target instanceof Element) target.closest<HTMLButtonElement>('button')?.setAttribute('hidden', '');
@@ -5701,29 +5695,14 @@ export class PlayerScreen {
         {
           getPlaybackSnapshot: () => this.trackTransport?.getSnapshot() ?? this.trackPlaybackSnapshot,
           onTrackSelected: (track) => this.selectTrack(track),
-          onAddMusicRequested: (trigger) => {
-            if (!hookKeysNative.files.isAvailable()) return false;
-            this.openChildModal('file-browser', null, trigger);
+          onAddMusicRequested: () => {
+            if (!hookKeysNative.audioPicker.isAvailable()) return false;
+            void this.importTracksFromNativePicker();
             return true;
           },
         },
       );
       this.tracksPanelController.mount();
-    } else if (kind === 'file-browser') {
-      const importButton = modal.querySelector<HTMLButtonElement>('[data-modal-action="import-browser-files"]');
-      this.fileBrowserController = new FileBrowserController(
-        modal,
-        hookKeysNative.files,
-        async (file) => {
-          await this.trackLibrary.addFiles([file]);
-        },
-        ({ selectedCount, busy }) => {
-          if (!importButton) return;
-          importButton.disabled = busy || selectedCount === 0;
-          importButton.textContent = busy ? 'Adicionando...' : selectedCount > 0 ? `Adicionar (${selectedCount})` : 'Adicionar';
-        },
-      );
-      this.fileBrowserController.mount();
     } else if (kind === 'track-position') {
       this.trackTransport?.refreshView();
       this.renderTrackWaveform(modal);
@@ -6453,9 +6432,10 @@ export class PlayerScreen {
     if (select.dataset.setting === 'audio-route') {
       const bus = select.dataset.audioBus;
       const channels = this.activeAudioChannelCount();
-      if ((bus === 'timbres' || bus === 'pads' || bus === 'effects') && isAudioBusRoute(select.value, channels)) {
+      if (isAudioRoutingBus(bus) && isAudioBusRoute(select.value, channels)) {
         this.audioRouting[bus] = select.value;
         this.markPlayerStateChanged();
+        if (bus === 'metronome') void this.applyMetronomeOutput();
       }
     }
   }
@@ -7679,6 +7659,7 @@ export class PlayerScreen {
     const menu = custom?.querySelector<HTMLElement>('.app-select__menu');
     if (!custom || !label || !menu) return;
     label.textContent = select.selectedOptions[0]?.textContent?.trim() || 'Selecionar';
+    custom.querySelector<HTMLButtonElement>('[data-app-select-toggle]')!.disabled = select.disabled;
     menu.replaceChildren(...Array.from(select.options, (option) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -7701,9 +7682,14 @@ export class PlayerScreen {
 
   private normalizeAudioRoutes(): void {
     const channels = this.activeAudioChannelCount();
-    for (const bus of ['timbres', 'pads', 'effects'] as const) {
+    for (const bus of AUDIO_ROUTING_BUSES) {
       if (!isAudioBusRoute(this.audioRouting[bus], channels)) this.audioRouting[bus] = 'stereo:0';
     }
+  }
+
+  private applyMetronomeOutput(): Promise<void> {
+    const route = parseAudioBusRoute(this.audioRouting.metronome);
+    return hookKeysNative.setMetronomeOutput(route.start, route.count).catch(() => undefined);
   }
 
   private async refreshAudioDeviceOptions(modal: HTMLElement): Promise<void> {
@@ -7733,7 +7719,7 @@ export class PlayerScreen {
     const channels = this.activeAudioChannelCount();
     for (const select of modal.querySelectorAll<HTMLSelectElement>('[data-setting="audio-route"]')) {
       const bus = select.dataset.audioBus;
-      if (bus !== 'timbres' && bus !== 'pads' && bus !== 'effects') continue;
+      if (!isAudioRoutingBus(bus)) continue;
       select.innerHTML = createAudioRouteOptions(channels, this.audioRouting[bus]);
       this.syncAppSelect(select);
     }
@@ -8207,8 +8193,6 @@ export class PlayerScreen {
 
     this.tracksPanelController?.destroy();
     this.tracksPanelController = null;
-    this.fileBrowserController?.destroy();
-    this.fileBrowserController = null;
     this.outputFaderController?.destroy();
     this.outputFaderController = null;
     this.tabletInputKeyboardController?.destroy();
@@ -8626,6 +8610,8 @@ export class PlayerScreen {
     configurationTasks.push(
       hookKeysNative.setTempo(this.metronome.getBpm()),
       hookKeysNative.setOutputGain(this.outputLevels.master, this.outputEnabled.master),
+      this.applyMetronomeOutput(),
+      this.applyNativeMusicOutput(),
       hookKeysNative.setCompatibilityMode(this.compatibilityMode),
       hookKeysNative.setSeamlessPresetSwitching(this.seamlessPresetSwitching),
       this.metronome.syncNativeState(),
@@ -8767,6 +8753,7 @@ export class PlayerScreen {
       timbres: isAudioBusRoute(savedAudioRouting.timbres) ? savedAudioRouting.timbres : 'stereo:0',
       pads: isAudioBusRoute(savedAudioRouting.pads) ? savedAudioRouting.pads : 'stereo:0',
       effects: isAudioBusRoute(savedAudioRouting.effects) ? savedAudioRouting.effects : 'stereo:0',
+      metronome: isAudioBusRoute(savedAudioRouting.metronome) ? savedAudioRouting.metronome : 'stereo:0',
     };
     this.compatibilityMode = value.compatibilityMode === true;
     this.seamlessPresetSwitching = value.seamlessPresetSwitching === true;
@@ -9003,6 +8990,52 @@ export class PlayerScreen {
     }
   }
 
+  // iOS: "Add música" abre direto o seletor de documentos do sistema, já
+  // filtrado em áudio, sem o menu de câmera e fotos do campo de arquivo da web.
+  // As músicas chegam copiadas no app e entram uma de cada vez.
+  private async importTracksFromNativePicker(): Promise<void> {
+    const picker = hookKeysNative.audioPicker;
+    const message = (text: string) => {
+      this.tracksPanelController?.showMessage(text);
+      this.splitTracksController?.showMessage(text);
+    };
+    let picked: Awaited<ReturnType<typeof picker.pick>>;
+    try {
+      picked = await picker.pick();
+    } catch {
+      message('Não foi possível abrir os arquivos.');
+      return;
+    }
+    if (picked.length === 0) return;
+    let added = 0;
+    for (const [index, file] of picked.entries()) {
+      message(`Adicionando ${index + 1} de ${picked.length}...`);
+      let adopted = false;
+      try {
+        const response = await fetch(picker.fileUrl(file.path));
+        if (!response.ok) throw new Error('file_read_failed');
+        const blob = await response.blob();
+        const [record] = await this.trackLibrary.addFiles([new File([blob], file.name, { type: audioTypeForFileName(file.name) })]);
+        added += 1;
+        // O arquivo escolhido já está no app: vira o que o motor toca.
+        if (record && hookKeysNative.tracksAvailable()) {
+          adopted = await picker.adopt(file.path, record.id, trackFileExtension(file.name)).then(() => true, () => false);
+        }
+      } catch {
+        // Segue com as outras músicas.
+      } finally {
+        if (!adopted) void picker.release(file.path).catch(() => undefined);
+      }
+    }
+    await Promise.all([
+      this.tracksPanelController?.refreshLibrary(),
+      this.splitTracksController?.refreshLibrary(),
+    ]);
+    const failed = picked.length - added;
+    const addedText = `${added} ${added === 1 ? 'música adicionada' : 'músicas adicionadas'}`;
+    message(failed > 0 ? `${addedText}. ${failed} não ${failed === 1 ? 'pôde' : 'puderam'} ser lida${failed === 1 ? '' : 's'}.` : `${addedText}.`);
+  }
+
   // Pinta o modal primeiro; decodificar a música fica para depois do quadro.
   private renderTrackWaveform(modal: HTMLElement): void {
     const transport = this.trackTransport;
@@ -9168,6 +9201,12 @@ function formatSoundfontTotal(bytes: number): string {
 
 function performanceStorageId(assetId: string): string {
   return `performance:${assetId}`;
+}
+
+const AUDIO_ROUTING_BUSES = ['timbres', 'pads', 'effects', 'metronome'] as const satisfies readonly (keyof AudioBusRouting)[];
+
+function isAudioRoutingBus(value: string | undefined): value is keyof AudioBusRouting {
+  return (AUDIO_ROUTING_BUSES as readonly string[]).includes(value ?? '');
 }
 
 function parseAudioBusRoute(route: AudioBusRoute): { start: number; count: 1 | 2 } {

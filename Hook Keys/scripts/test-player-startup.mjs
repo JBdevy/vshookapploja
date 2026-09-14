@@ -720,6 +720,22 @@ try {
   await new Promise(resolve => setTimeout(resolve, 280));
   assert(!window.document.querySelector('[data-audio-restart]'),
     'o aviso fecha depois que o callback da saída volta');
+  // Saída do metrônomo: aparece junto de Pads/Effects, chega ao motor e fica salva.
+  player.openModal('app-settings-audio', null, master);
+  const metronomeRoute = window.document.querySelector('[data-setting="audio-route"][data-audio-bus="metronome"]');
+  assert(metronomeRoute, 'Config › Áudio tem Saídas - Metrônomo');
+  const musicRoute = window.document.querySelector('[data-setting="music-route"]');
+  assert(musicRoute?.disabled, 'Saídas - Músicas aparece travada');
+  assert.equal(musicRoute.parentElement.querySelector('.app-select__toggle span').textContent, '1+2');
+  assert(musicRoute.parentElement.querySelector('[data-app-select-toggle]').disabled, 'o seletor de Músicas não abre');
+  metronomeRoute.value = 'mono:1';
+  metronomeRoute.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const lastMetronomeOutput = calls.filter(({ command }) => command === 'set_metronome_output').at(-1)?.args;
+  assert.equal(JSON.stringify(lastMetronomeOutput), JSON.stringify({ channelStart: 1, channelCount: 1 }),
+    'a saída escolhida chega ao motor');
+  assert.equal(player.createSavedPlayerState().audioRouting.metronome, 'mono:1', 'a saída do metrônomo é salva');
+  player.closeModal();
   // A large file read must not hold up configuration commands or roll back a
   // newer timbre selected while that read was still in flight.
   const library = player.soundLibrary;

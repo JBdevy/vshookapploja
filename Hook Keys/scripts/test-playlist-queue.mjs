@@ -68,7 +68,7 @@ for (const [available, expectsPicker] of [[true, false], [false, true]]) {
   panel.destroy();
   host.remove();
 }
-console.log('ADD_MUSIC_BROWSER_OK: gerenciador no iOS, seletor do sistema nas outras plataformas');
+console.log('ADD_MUSIC_PICKER_OK: seletor nativo no iOS, campo de arquivo nas outras plataformas');
 } finally {
   await window.happyDOM.abort();
 }

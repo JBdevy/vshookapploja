@@ -29,7 +29,8 @@ NativeEngineRuntime::NativeEngineRuntime(double sampleRate, std::size_t maximumB
     : sampleRate_(std::clamp(sampleRate, 8000.0, 384000.0)),
       maximumBlockFrames_(std::clamp<std::size_t>(maximumBlockFrames, 16, 8192)),
       layerScratch_(maximumBlockFrames_ * 32, 0.0f),
-      stereoScratch_(maximumBlockFrames_ * 2, 0.0f) {
+      stereoScratch_(maximumBlockFrames_ * 2, 0.0f),
+      tracks_(std::make_unique<TrackPlayer>(sampleRate_)) {
   layers_.reserve(kMaximumPresetLayers);
   layers_.push_back(createPresetLayer());
   controlLayer_ = renderLayer_ = layers_.back().get();
@@ -479,6 +480,8 @@ void NativeEngineRuntime::renderInterleaved(float* output, std::size_t frames, s
       output[frame * channels + channel] *= gain;
     }
   }
+  // Depois do master: o fader Music já controla o volume das músicas.
+  tracks_->render(output, frames, channels);
   const auto budgetSeconds = static_cast<double>(frames) / sampleRate_;
   if (budgetSeconds > 0.0) {
     const std::chrono::duration<double> spent = std::chrono::steady_clock::now() - started;
@@ -559,11 +562,15 @@ void NativeEngineRuntime::addMetronomeInterleaved(
     float* output, std::size_t frames, std::size_t channels) noexcept {
   if (output == nullptr || frames == 0 || channels == 0) return;
   if (!beginMetronomeBlock()) return;
+  // Uma saída que a interface atual não tem cai de volta em 1+2 em vez de sumir.
+  const auto requested = static_cast<std::size_t>(metronomeOutputStart_.load(std::memory_order_acquire));
+  const auto first = requested < channels ? requested : 0;
+  const bool stereo = metronomeOutputCount_.load(std::memory_order_acquire) == 2 && first + 1 < channels;
   for (std::size_t frame = 0; frame < frames; ++frame) {
     const auto sample = renderMetronomeSample();
     auto* destination = output + frame * channels;
-    destination[0] += sample;
-    if (channels > 1) destination[1] += sample;
+    destination[first] += sample;
+    if (stereo) destination[first + 1] += sample;
   }
 }
 
