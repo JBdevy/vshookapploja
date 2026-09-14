@@ -103,6 +103,10 @@ jobs:
 
       - name: Preparar Android SDK, NDK e CMake
         uses: android-actions/setup-android@v3
+        with:
+          # O padrão da action ainda pede o pacote "tools", que não existe mais no
+          # cmdline-tools atual e derruba o passo. SDK, NDK e CMake vêm no passo seguinte.
+          packages: platform-tools
 
       - name: Instalar ferramentas nativas Android
         shell: bash

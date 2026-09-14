@@ -18,7 +18,7 @@ export interface NativeTrackBridge {
 
 export function trackFileExtension(fileName: string): string {
   const match = /\.([a-z0-9]{1,8})$/i.exec(fileName.trim());
-  return match ? match[1].toLowerCase() : 'audio';
+  return match?.[1]?.toLowerCase() ?? 'audio';
 }
 
 const STATUS_POLL_MS = 200;
