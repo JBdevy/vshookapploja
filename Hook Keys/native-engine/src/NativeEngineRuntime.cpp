@@ -412,7 +412,10 @@ void NativeEngineRuntime::processRuntimeCommands() noexcept {
 }
 
 HookKeysEngine::ModulePeaks NativeEngineRuntime::consumeModulePeaks() noexcept {
-  std::scoped_lock lock(configMutex_);
+  // Meter é telemetria descartável: nunca faça a interface esperar uma troca
+  // de preset/configuração. Os picos atômicos ficam para a próxima leitura.
+  std::unique_lock configLock(configMutex_, std::try_to_lock);
+  if (!configLock.owns_lock()) return {};
   // UI polling reclaims silent layers off the audio thread, but never waits
   // for a file parser that currently owns the sample-sharing mutex.
   std::unique_lock soundLock(soundFontMutex_, std::try_to_lock);
@@ -426,7 +429,8 @@ HookKeysEngine::ModulePeaks NativeEngineRuntime::consumeModulePeaks() noexcept {
 }
 
 HookKeysEngine::ModuleAnalysis NativeEngineRuntime::consumeModuleAnalysis(std::size_t moduleIndex) noexcept {
-  std::scoped_lock lock(configMutex_);
+  std::unique_lock configLock(configMutex_, std::try_to_lock);
+  if (!configLock.owns_lock()) return {};
   HookKeysEngine::ModuleAnalysis result{};
   for (const auto& layer : layers_) {
     const auto values = layer->engine->consumeModuleAnalysis(moduleIndex);

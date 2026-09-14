@@ -364,6 +364,8 @@ const PRESETS_PER_ROW = 8;
 const EFFECT_PAD_MIN_DB = -60;
 // Longest a knob or button change waits before it reaches the audio engine.
 const NATIVE_SYNC_INTERVAL_MS = 24;
+const DESKTOP_MODULE_METER_INTERVAL_MS = 50;
+const MOBILE_MODULE_METER_INTERVAL_MS = 90;
 const EFFECT_PAD_MAX_DB = 0;
 // Desktop knobs stay linear while one pixel moves at most this many steps;
 // wider ranges (envelope and Glide times) switch to the accelerated curve.
@@ -1235,7 +1237,7 @@ export class PlayerScreen {
       } finally {
         this.scheduleModuleMeters();
       }
-    }, 50);
+    }, this.desktopRuntime ? DESKTOP_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS);
   }
 
   // O unico numero que denuncia um estouro. A CPU total da maquina nao serve:
@@ -7615,17 +7617,20 @@ export class PlayerScreen {
       // Só anuncie o runtime como pronto depois de o stream novo realmente
       // entregar callback. Isso evita notas irem para uma troca de buffer que
       // ainda não chegou à placa de áudio.
+      let lastStatus = await hookKeysNative.audioOutputStatus();
       for (let attempt = 0; attempt < 20; attempt += 1) {
-        if ((await hookKeysNative.audioOutputStatus()).ready) {
+        if (lastStatus.ready) {
           if (preserveEngine || !restarted) this.nativeEngineReady = true;
           if (this.liveMidiEnabled) await hookKeysNative.setMidiInputEnabled(true);
           return;
         }
         await new Promise(resolve => window.setTimeout(resolve, 25));
+        lastStatus = await hookKeysNative.audioOutputStatus();
       }
-      throw new Error('audio_callback_not_ready_after_restart');
-    }).catch(() => {
+      throw new Error(lastStatus.error ?? 'audio_callback_not_ready_after_restart');
+    }).catch((error) => {
       this.nativeEngineReady = false;
+      this.nativeEngineSyncError = error;
       this.nativeLoadedTimbres.fill(null);
       this.setStatus('Não foi possível aplicar a saída de áudio selecionada.');
     });
@@ -8447,7 +8452,7 @@ export class PlayerScreen {
 
   private async performNativeEngineSync(): Promise<void> {
     if (!await hookKeysNative.initialize(this.bufferSize)) {
-      throw new Error('native_audio_unavailable');
+      throw new Error(hookKeysNative.initializationErrorMessage() ?? 'native_audio_unavailable');
     }
     if (this.nativePresetTransitionPending || this.nativePresetTransitionInFlight) {
       this.nativePresetTransitionPending = false;

@@ -137,7 +137,9 @@ private:
   NSArray *_selectedDeviceIds;
   std::atomic<bool> _compatibilityMode;
   NSInteger _requestedOutputChannels;
+  NSString *_lastAudioErrorMessage;
 }
+- (void)setAudioErrorStage:(NSString *)stage error:(nullable NSError *)error;
 - (void)createMidiClient;
 - (void)reconnectMidiSources;
 - (void)parseMidiByte:(uint8_t)value slot:(NSInteger)slot timestamp:(uint64_t)timestamp;
@@ -155,6 +157,7 @@ private:
     _selectedDeviceIds = @[[NSNull null], [NSNull null], [NSNull null]];
     _compatibilityMode.store(false, std::memory_order_relaxed);
     _requestedOutputChannels = 2;
+    _lastAudioErrorMessage = @"";
     [self createMidiClient];
   }
   return self;
@@ -166,8 +169,20 @@ private:
   if (_midiClient != 0) MIDIClientDispose(_midiClient);
 }
 
+- (NSString *)lastAudioErrorMessage {
+  std::scoped_lock lock(_controlMutex);
+  return [_lastAudioErrorMessage copy];
+}
+
+- (void)setAudioErrorStage:(NSString *)stage error:(NSError *)error {
+  NSString *detail = error.localizedDescription;
+  if (detail.length == 0) detail = @"erro sem descrição fornecido pelo iOS";
+  _lastAudioErrorMessage = [NSString stringWithFormat:@"%@: %@", stage, detail];
+}
+
 - (BOOL)startWithBufferFrames:(NSInteger)bufferFrames {
   std::scoped_lock lock(_controlMutex);
+  _lastAudioErrorMessage = @"";
   if (_audioEngine != nil && _audioState && _audioState->runtime) {
     if (_audioEngine.isRunning) return YES;
     NSError *restartError = nil;
@@ -178,11 +193,15 @@ private:
     // o sistema continua perfeitamente capaz de abrir usando o buffer da rota.
     [session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / preferredRate)
                                     error:nil];
-    if (![session setActive:YES error:&restartError]) return NO;
+    if (![session setActive:YES error:&restartError]) {
+      [self setAudioErrorStage:@"ativar sessão existente" error:restartError];
+      return NO;
+    }
     _audioState->callbackSeen.store(false, std::memory_order_release);
     _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
     if ([_audioEngine startAndReturnError:&restartError]) return YES;
     _audioState->activeRuntime.store(nullptr, std::memory_order_release);
+    [self setAudioErrorStage:@"reiniciar AVAudioEngine" error:restartError];
     return NO;
   }
 
@@ -192,6 +211,7 @@ private:
                         mode:AVAudioSessionModeDefault
                      options:AVAudioSessionCategoryOptionMixWithOthers
                        error:&sessionError]) {
+    [self setAudioErrorStage:@"configurar sessão" error:sessionError];
     return NO;
   }
 
@@ -201,25 +221,24 @@ private:
   const double preferredRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
   [session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / preferredRate)
                                   error:nil];
-  if (![session setActive:YES error:&sessionError]) return NO;
+  if (![session setActive:YES error:&sessionError]) {
+    [self setAudioErrorStage:@"ativar sessão" error:sessionError];
+    return NO;
+  }
 
   // Somente depois da ativação a taxa da rota é definitiva.
   const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
-  const AVAudioChannelCount channelCount = static_cast<AVAudioChannelCount>(
-      std::clamp<NSInteger>(_requestedOutputChannels, 1, 32));
-  AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate
-                                                                         channels:channelCount];
-  if (format == nil) return NO;
 
   auto state = std::make_shared<AudioState>();
   state->runtime = std::make_unique<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
   state->runtime->setMidiInputEnabled(false);
   state->activeRuntime.store(state->runtime.get(), std::memory_order_release);
 
-  _sourceNode = [[AVAudioSourceNode alloc] initWithFormat:format
-                                             renderBlock:^OSStatus(BOOL *isSilence, const AudioTimeStamp *,
-                                                                   AVAudioFrameCount frameCount,
-                                                                   AudioBufferList *outputData) {
+  // Não imponha ao mixer um formato calculado pelo app. O mainMixer acompanha
+  // automaticamente a saída física do iPhone e entrega ao SourceNode o formato
+  // negociado da rota (alto-falante, mono, Bluetooth, AirPlay ou interface).
+  _sourceNode = [[AVAudioSourceNode alloc] initWithRenderBlock:^OSStatus(
+      BOOL *isSilence, const AudioTimeStamp *, AVAudioFrameCount frameCount, AudioBufferList *outputData) {
     auto *runtime = state->activeRuntime.load(std::memory_order_acquire);
     if (isSilence) *isSilence = runtime == nullptr ? YES : NO;
     if (outputData == nullptr) return noErr;
@@ -231,6 +250,11 @@ private:
     }
     if (runtime == nullptr) return noErr;
     state->callbackSeen.store(true, std::memory_order_release);
+    std::size_t channelCount = 0;
+    for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
+      channelCount += std::max<UInt32>(1, outputData->mBuffers[bufferIndex].mNumberChannels);
+    }
+    channelCount = std::clamp<std::size_t>(channelCount, 1, 32);
     std::size_t offset = 0;
     while (offset < frameCount) {
       const auto frames = std::min(kRenderChunkFrames, static_cast<std::size_t>(frameCount) - offset);
@@ -260,13 +284,15 @@ private:
 
   _audioEngine = [[AVAudioEngine alloc] init];
   [_audioEngine attachNode:_sourceNode];
-  [_audioEngine connect:_sourceNode to:_audioEngine.mainMixerNode format:format];
+  // nil deixa o AVAudioEngine escolher um formato conversível para a rota.
+  [_audioEngine connect:_sourceNode to:_audioEngine.mainMixerNode format:nil];
   [_audioEngine prepare];
   if (![_audioEngine startAndReturnError:&sessionError]) {
     state->activeRuntime.store(nullptr, std::memory_order_release);
     state->runtime.reset();
     _sourceNode = nil;
     _audioEngine = nil;
+    [self setAudioErrorStage:@"iniciar AVAudioEngine" error:sessionError];
     return NO;
   }
   _audioState = std::move(state);
@@ -288,8 +314,10 @@ private:
   NSError *error = nil;
   if (session.maximumOutputNumberOfChannels > 0) {
     const NSInteger preferred = std::min(_requestedOutputChannels, session.maximumOutputNumberOfChannels);
-    if (![session setPreferredOutputNumberOfChannels:preferred error:&error]) return NO;
-    _requestedOutputChannels = preferred;
+    // Também é apenas preferência. Se a rota recusar, o grafo negociado usa a
+    // quantidade real que o iOS fornecer.
+    [session setPreferredOutputNumberOfChannels:preferred error:nil];
+    _requestedOutputChannels = std::max<NSInteger>(1, preferred);
   }
   if (preserveEngine) {
     std::scoped_lock lock(_controlMutex);
@@ -299,6 +327,7 @@ private:
     [_audioEngine pause];
     if (![session setActive:YES error:&error]) {
       _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
+      [self setAudioErrorStage:@"reativar sessão após trocar buffer" error:error];
       return NO;
     }
     const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
@@ -310,6 +339,7 @@ private:
     _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
     if ([_audioEngine startAndReturnError:&error]) return YES;
     _audioState->activeRuntime.store(nullptr, std::memory_order_release);
+    [self setAudioErrorStage:@"reiniciar motor após trocar buffer" error:error];
     return NO;
   }
   [self stop];
@@ -321,9 +351,27 @@ private:
 
 - (BOOL)audioOutputReady {
   std::scoped_lock lock(_controlMutex);
-  return _audioEngine != nil && _audioEngine.isRunning && _audioState &&
+  const BOOL ready = _audioEngine != nil && _audioEngine.isRunning && _audioState &&
       _audioState->callbackSeen.load(std::memory_order_acquire) &&
       _audioState->activeRuntime.load(std::memory_order_acquire) != nullptr;
+  if (ready) {
+    _lastAudioErrorMessage = @"";
+  } else if (_lastAudioErrorMessage.length == 0) {
+    if (_audioEngine == nil || !_audioState || !_audioState->runtime) {
+      _lastAudioErrorMessage = @"motor de áudio ausente";
+    } else if (!_audioEngine.isRunning) {
+      _lastAudioErrorMessage = @"AVAudioEngine está parado";
+    } else if (_audioState->activeRuntime.load(std::memory_order_acquire) == nullptr) {
+      _lastAudioErrorMessage = @"runtime de áudio está desconectado";
+    } else {
+      AVAudioSession *session = AVAudioSession.sharedInstance;
+      NSString *route = session.currentRoute.outputs.firstObject.portName ?: @"sem rota";
+      _lastAudioErrorMessage = [NSString stringWithFormat:
+          @"callback de áudio não iniciou (rota %@, %.0f Hz, %.2f ms)",
+          route, session.sampleRate, session.IOBufferDuration * 1000.0];
+    }
+  }
+  return ready;
 }
 
 - (void)setMidiInputEnabled:(BOOL)enabled {
@@ -333,19 +381,23 @@ private:
 }
 
 - (NSArray<NSNumber *> *)moduleMeterLevels {
-  std::scoped_lock lock(_controlMutex);
+  std::unique_lock lock(_controlMutex, std::try_to_lock);
   NSMutableArray<NSNumber *> *levels = [NSMutableArray arrayWithCapacity:hook_keys::kModuleCount * 2];
-  const auto peaks = _audioState && _audioState->runtime
-      ? _audioState->runtime->consumeModulePeaks() : hook_keys::HookKeysEngine::ModulePeaks{};
+  const auto state = lock.owns_lock() ? _audioState : std::shared_ptr<AudioState>{};
+  if (lock.owns_lock()) lock.unlock();
+  const auto peaks = state && state->runtime
+      ? state->runtime->consumeModulePeaks() : hook_keys::HookKeysEngine::ModulePeaks{};
   for (float peak : peaks) [levels addObject:@(peak)];
   return levels;
 }
 
 - (NSArray<NSNumber *> *)moduleAnalysis:(NSInteger)moduleIndex {
-  std::scoped_lock lock(_controlMutex);
+  std::unique_lock lock(_controlMutex, std::try_to_lock);
   NSMutableArray<NSNumber *> *values = [NSMutableArray arrayWithCapacity:hook_keys::HookKeysEngine::kAnalysisValueCount];
-  const auto analysis = _audioState && _audioState->runtime && moduleIndex >= 0 && moduleIndex < hook_keys::kModuleCount
-      ? _audioState->runtime->consumeModuleAnalysis(static_cast<std::size_t>(moduleIndex))
+  const auto state = lock.owns_lock() ? _audioState : std::shared_ptr<AudioState>{};
+  if (lock.owns_lock()) lock.unlock();
+  const auto analysis = state && state->runtime && moduleIndex >= 0 && moduleIndex < hook_keys::kModuleCount
+      ? state->runtime->consumeModuleAnalysis(static_cast<std::size_t>(moduleIndex))
       : hook_keys::HookKeysEngine::ModuleAnalysis{};
   for (float value : analysis) [values addObject:@(value)];
   return values;

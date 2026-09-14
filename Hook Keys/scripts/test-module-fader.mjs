@@ -51,10 +51,10 @@ test('audio meter fills the complete rail as independent stereo halves', () => {
   assert.match(css, /\.player-module__meter::after\s*\{[^}]*left:\s*50%;/s);
   assert.match(css, /width:\s*calc\(50% - \.5px\);/);
   assert.match(css, /\.player-module__meter-fill\s*\{[^}]*#0db758[^}]*#ffe23b[^}]*#ff3e32/s);
-  assert.match(css, /--module-meter-left-level/);
-  assert.match(css, /--module-meter-right-level/);
-  assert.match(css, /clip-path:\s*inset\(calc\(100% - var\(--module-meter-left-level\)\)/);
-  assert.match(css, /clip-path:\s*inset\(calc\(100% - var\(--module-meter-right-level\)\)/);
+  assert.match(css, /transform:\s*scaleY\(0\)/);
+  assert.match(css, /transform-origin:\s*center bottom/);
+  assert.match(css, /transition:\s*transform 90ms linear/);
+  assert.match(css, /html\[data-runtime="native"\] \.player-module__meter-fill/);
   assert.match(css, /\.player-module__fader\.is-clipping \.player-module__meter-fill/);
 });
 

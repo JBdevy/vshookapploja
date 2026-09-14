@@ -18,6 +18,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 @property(nonatomic, copy, nullable) HKMidiControlHandler onMidiControl;
 @property(nonatomic, copy, nullable) HKMidiPitchHandler onMidiPitch;
 @property(nonatomic, copy, nullable) HKMidiDevicesChangedHandler onMidiDevicesChanged;
+@property(nonatomic, readonly, copy) NSString *lastAudioErrorMessage;
 
 - (BOOL)startWithBufferFrames:(NSInteger)bufferFrames;
 - (BOOL)setAudioOutputDeviceId:(NSString *)deviceId

@@ -124,15 +124,25 @@ public:
   }
 
   hook_keys::HookKeysEngine::ModulePeaks consumeModulePeaks() noexcept {
-    std::scoped_lock lock(controlMutex_);
-    return runtime_ ? runtime_->consumeModulePeaks() : hook_keys::HookKeysEngine::ModulePeaks{};
+    std::shared_ptr<hook_keys::NativeEngineRuntime> runtime;
+    {
+      std::unique_lock lock(controlMutex_, std::try_to_lock);
+      if (!lock.owns_lock()) return {};
+      runtime = runtime_;
+    }
+    return runtime ? runtime->consumeModulePeaks() : hook_keys::HookKeysEngine::ModulePeaks{};
   }
 
   hook_keys::HookKeysEngine::ModuleAnalysis consumeModuleAnalysis(
       std::size_t moduleIndex) noexcept {
-    std::scoped_lock lock(controlMutex_);
-    return runtime_ ? runtime_->consumeModuleAnalysis(moduleIndex)
-                    : hook_keys::HookKeysEngine::ModuleAnalysis{};
+    std::shared_ptr<hook_keys::NativeEngineRuntime> runtime;
+    {
+      std::unique_lock lock(controlMutex_, std::try_to_lock);
+      if (!lock.owns_lock()) return {};
+      runtime = runtime_;
+    }
+    return runtime ? runtime->consumeModuleAnalysis(moduleIndex)
+                   : hook_keys::HookKeysEngine::ModuleAnalysis{};
   }
 
   bool sendMidi(

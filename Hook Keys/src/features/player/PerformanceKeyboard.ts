@@ -84,6 +84,7 @@ export function createPerformanceKeyboardSettingsMarkup(
 
 export class PerformanceKeyboardController {
   private readonly activePointers = new Map<number, number | null>();
+  private readonly noteKeys = new Map<number, HTMLButtonElement>();
   private readonly pointerStartedAt = new Map<number, number>();
   private readonly pointerStartX = new Map<number, number>();
   private readonly pointerCurrentX = new Map<number, number>();
@@ -102,6 +103,11 @@ export class PerformanceKeyboardController {
   ) {}
 
   mount(): void {
+    this.noteKeys.clear();
+    for (const key of this.root.querySelectorAll<HTMLButtonElement>('[data-keyboard-note]')) {
+      const noteNumber = Number(key.dataset.keyboardNote);
+      if (Number.isInteger(noteNumber)) this.noteKeys.set(noteNumber, key);
+    }
     this.root.addEventListener('pointerdown', this.handlePointerDown);
     this.root.addEventListener('pointermove', this.handlePointerMove);
     this.root.addEventListener('pointerup', this.handlePointerEnd);
@@ -124,6 +130,7 @@ export class PerformanceKeyboardController {
     this.pointerStartX.clear();
     this.pointerCurrentX.clear();
     this.twoFingerGesturePointers.clear();
+    this.noteKeys.clear();
     if (this.spreadCommitTimer !== null) window.clearTimeout(this.spreadCommitTimer);
     this.spreadCommitTimer = null;
   }
@@ -246,7 +253,8 @@ export class PerformanceKeyboardController {
   }
 
   private setPressed(noteNumber: number, pressed: boolean): void {
-    const key = this.root.querySelector<HTMLButtonElement>(`[data-keyboard-note="${noteNumber}"]`);
+    const key = this.noteKeys.get(noteNumber)
+      ?? this.root.querySelector<HTMLButtonElement>(`[data-keyboard-note="${noteNumber}"]`);
     key?.classList.toggle('is-pressed', pressed);
     key?.setAttribute('aria-pressed', String(pressed));
   }

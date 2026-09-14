@@ -380,6 +380,7 @@ test('Web MIDI and native Pitch feedback keep the full fourteen-bit value and se
   const pitches = [];
   const midi = load('../src/features/midi/MidiInputService.ts', {
     '../../platform/native/HookKeysNative': { hookKeysNative: {} },
+    '../../platform/runtime': { isDesktopRuntime: () => false },
   }).MidiInputService;
   const service = new midi(() => assert.fail('Pitch is not a note'), () => {}, () => {}, (input) => pitches.push(input));
   service.selectedInputIds.add('midi-a');

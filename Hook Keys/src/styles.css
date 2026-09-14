@@ -2267,6 +2267,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   position: absolute;
   inset: 5px 6px;
   overflow: hidden;
+  contain: paint;
   border-radius: 2px;
   background:
     repeating-linear-gradient(
@@ -10296,19 +10297,29 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   box-shadow:
     inset 0 0 8px rgba(255,255,255,.18),
     0 0 8px rgba(30, 224, 103, .5);
-  transition: clip-path 45ms linear, filter 45ms linear;
+  transform: scaleY(0);
+  transform-origin: center bottom;
+  transition: transform 90ms linear, filter 90ms linear;
+  will-change: transform;
 }
 
 .player-module__meter-fill--left {
   right: auto;
   left: 0;
-  clip-path: inset(calc(100% - var(--module-meter-left-level)) 0 0 0);
 }
 
 .player-module__meter-fill--right {
   right: 0;
   left: auto;
-  clip-path: inset(calc(100% - var(--module-meter-right-level)) 0 0 0);
+}
+
+html[data-runtime="native"] .player-module__meter-fill {
+  box-shadow: none;
+}
+
+html[data-runtime="native"] .player-module__fader.is-clipping .player-module__meter-fill {
+  filter: none;
+  box-shadow: none;
 }
 
 .player-module__fader.is-clipping .player-module__meter-fill {

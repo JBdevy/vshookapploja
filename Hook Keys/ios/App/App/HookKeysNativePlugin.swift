@@ -92,7 +92,10 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         if engine.start(withBufferFrames: call.getInt("bufferSize", 128)) {
             call.resolve(["ready": true])
         } else {
-            call.reject("Não foi possível iniciar o áudio nativo.")
+            let detail = engine.lastAudioErrorMessage
+            call.reject(detail.isEmpty
+                ? "Não foi possível iniciar o áudio nativo."
+                : "Não foi possível iniciar o áudio nativo (\(detail)).")
         }
     }
 
@@ -126,7 +129,11 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
 
     @objc func audioOutputStatus(_ call: CAPPluginCall) {
         let ready = engine.audioOutputReady()
-        call.resolve(["ready": ready, "failed": !ready])
+        call.resolve([
+            "ready": ready,
+            "failed": !ready,
+            "error": ready ? "" : engine.lastAudioErrorMessage
+        ])
     }
 
     @objc func setMidiInputEnabled(_ call: CAPPluginCall) {

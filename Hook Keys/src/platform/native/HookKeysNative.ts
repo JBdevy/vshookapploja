@@ -15,6 +15,7 @@ export interface NativeAudioOutputDevice {
 export interface NativeAudioOutputStatus {
   ready: boolean;
   failed: boolean;
+  error?: string;
 }
 
 export interface NativeModuleConfig {
@@ -244,6 +245,7 @@ const SOUNDFONT_CHUNK_BYTES = 4 * 1024 * 1024;
 
 class HookKeysNativeBridge {
   private initializePromise: Promise<boolean> | null = null;
+  private initialized = false;
   private lastInitializationError: unknown = null;
   private listenersPromise: Promise<void> | null = null;
   private readonly moduleConfigKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
@@ -280,6 +282,7 @@ class HookKeysNativeBridge {
             this.lastAudioDeviceKey = `:2:${bufferSize}`;
           }
           if (!ready) this.initializePromise = null;
+          this.initialized = ready;
           if (ready) this.lastInitializationError = null;
           return ready;
         })
@@ -288,6 +291,7 @@ class HookKeysNativeBridge {
           // boot. Não memorize a falha: a próxima nota/alteração pode tentar
           // iniciar o motor novamente.
           this.lastInitializationError = error;
+          this.initialized = false;
           this.initializePromise = null;
           return false;
         });
@@ -333,10 +337,12 @@ class HookKeysNativeBridge {
         plugin.setAudioOutputDevice({ deviceId, channels, bufferSize, preserveEngine })
       ));
       this.lastAudioDeviceKey = key;
+      this.initialized = true;
       this.initializePromise = null;
       return true;
     } catch (error) {
       this.lastAudioDeviceKey = null;
+      this.initialized = false;
       this.initializePromise = null;
       throw error;
     }
@@ -349,7 +355,12 @@ class HookKeysNativeBridge {
         'audio_output_status', {}, () => plugin.audioOutputStatus(),
       );
       const failed = result.failed === true;
-      return { ready: result.ready === true && !failed, failed };
+      this.initialized = result.ready === true && !failed;
+      return {
+        ready: result.ready === true && !failed,
+        failed,
+        error: typeof result.error === 'string' && result.error.trim() ? result.error.trim() : undefined,
+      };
     } catch {
       // A ponte não responder também significa que não existe uma saída
       // confiável para receber Synth, SF2 e metrônomo.
@@ -424,11 +435,15 @@ class HookKeysNativeBridge {
     await this.call('set_midi_inputs', { deviceIds: normalized }, () => plugin.setMidiInputs({ deviceIds: normalized }));
   }
 
-  async sendMidi(inputSlot: number, status: number, data1: number, data2: number): Promise<void> {
-    if (!await this.initialize()) return;
-    await this.call('send_midi', { inputSlot, status, data1, data2 }, () => (
+  sendMidi(inputSlot: number, status: number, data1: number, data2: number): Promise<void> {
+    const send = () => this.call('send_midi', { inputSlot, status, data1, data2 }, () => (
       plugin.sendMidi({ inputSlot, status, data1, data2 })
     ));
+    // Com o motor confirmado, entre na ponte durante o próprio evento de
+    // toque. Até um await de Promise resolvida deixa a nota atrás de uma
+    // pintura/layout já pendente no WebView.
+    if (this.initialized) return send();
+    return this.initialize().then((ready) => ready ? send() : undefined);
   }
 
   async beginPresetTransition(): Promise<void> {

@@ -1,4 +1,5 @@
 import { hookKeysNative, type NativeMidiDevice } from '../../platform/native/HookKeysNative';
+import { isDesktopRuntime } from '../../platform/runtime';
 
 export interface MidiNoteInput {
   channel: number;
@@ -119,11 +120,13 @@ export class MidiInputService {
     if (hookKeysNative.isAvailable()) {
       void this.requestAccess();
       // Tauri/midir não oferece uma notificação uniforme de hot-plug em todos
-      // os backends. A verificação leve também cobre controladores USB que são
-      // ligados depois de abrir o app.
-      this.nativeRefreshTimer = window.setInterval(() => {
-        void this.refreshNativeDevices(true);
-      }, 1_500);
+      // os backends. Android e iOS já enviam midiDevicesChanged nativamente;
+      // não ocupe a ponte móvel enumerando dispositivos continuamente.
+      if (isDesktopRuntime()) {
+        this.nativeRefreshTimer = window.setInterval(() => {
+          void this.refreshNativeDevices(true);
+        }, 1_500);
+      }
     }
   }
 

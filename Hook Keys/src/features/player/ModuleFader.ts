@@ -123,6 +123,11 @@ export function createModuleFaderMarkup(moduleNumber: number): string {
 export class ModuleFader {
   private readonly rail: HTMLElement;
   private readonly output: HTMLOutputElement;
+  private readonly leftMeter: HTMLElement;
+  private readonly rightMeter: HTMLElement;
+  private lastLeftMeterScale = -1;
+  private lastRightMeterScale = -1;
+  private clipping = false;
   private activePointerId: number | null = null;
   private pointerStartX = 0;
   private pointerStartY = 0;
@@ -145,9 +150,13 @@ export class ModuleFader {
   ) {
     const rail = root.querySelector<HTMLElement>('.player-module__fader-rail');
     const output = root.querySelector<HTMLOutputElement>('.player-module__fader-output');
-    if (!rail || !output) throw new Error(`Fader do módulo ${moduleNumber} incompleto.`);
+    const leftMeter = root.querySelector<HTMLElement>('.player-module__meter-fill--left');
+    const rightMeter = root.querySelector<HTMLElement>('.player-module__meter-fill--right');
+    if (!rail || !output || !leftMeter || !rightMeter) throw new Error(`Fader do módulo ${moduleNumber} incompleto.`);
     this.rail = rail;
     this.output = output;
+    this.leftMeter = leftMeter;
+    this.rightMeter = rightMeter;
     this.rail.setAttribute('aria-orientation', 'vertical');
   }
 
@@ -180,11 +189,24 @@ export class ModuleFader {
 
   setMeterLevels(leftDb: number, rightDb: number): void {
     if (!Number.isFinite(leftDb) || !Number.isFinite(rightDb)) return;
-    const left = dbToPosition(clamp(leftDb, MIN_DB, MAX_DB)) * 100;
-    const right = dbToPosition(clamp(rightDb, MIN_DB, MAX_DB)) * 100;
-    this.root.style.setProperty('--module-meter-left-level', `${left.toFixed(2)}%`);
-    this.root.style.setProperty('--module-meter-right-level', `${right.toFixed(2)}%`);
-    this.root.classList.toggle('is-clipping', leftDb > 0 || rightDb > 0);
+    const left = dbToPosition(clamp(leftDb, MIN_DB, MAX_DB));
+    const right = dbToPosition(clamp(rightDb, MIN_DB, MAX_DB));
+    // Transform fica na camada de composição. Clip-path + custom property no
+    // ancestral forçava o WebView a recalcular e repintar os oito módulos a
+    // cada leitura do motor.
+    if (Math.abs(left - this.lastLeftMeterScale) >= 0.002) {
+      this.leftMeter.style.transform = `scaleY(${left.toFixed(4)})`;
+      this.lastLeftMeterScale = left;
+    }
+    if (Math.abs(right - this.lastRightMeterScale) >= 0.002) {
+      this.rightMeter.style.transform = `scaleY(${right.toFixed(4)})`;
+      this.lastRightMeterScale = right;
+    }
+    const clipping = leftDb > 0 || rightDb > 0;
+    if (clipping !== this.clipping) {
+      this.root.classList.toggle('is-clipping', clipping);
+      this.clipping = clipping;
+    }
   }
 
   getValueDb(): number {

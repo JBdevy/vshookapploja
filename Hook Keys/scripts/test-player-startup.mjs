@@ -163,8 +163,8 @@ try {
   }
   player.closeTracksSplitView();
   const synthFader = root.querySelector('[data-module-fader="8"]');
-  assert.notEqual(synthFader.style.getPropertyValue('--module-meter-left-level'), '0%', 'native Synth left peak reaches the fader');
-  assert.notEqual(synthFader.style.getPropertyValue('--module-meter-right-level'), '0%', 'native Synth right peak reaches the fader');
+  assert.notEqual(synthFader.querySelector('.player-module__meter-fill--left')?.style.transform, 'scaleY(0.0000)', 'native Synth left peak reaches the fader');
+  assert.notEqual(synthFader.querySelector('.player-module__meter-fill--right')?.style.transform, 'scaleY(0.0000)', 'native Synth right peak reaches the fader');
   const master = root.querySelector('[data-output-level="master"]');
   const synthShortcut = root.querySelector('[data-module="8"] .player-module__sound-button');
   assert.equal(synthShortcut.textContent.trim(), 'Synth');

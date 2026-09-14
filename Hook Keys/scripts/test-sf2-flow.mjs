@@ -100,6 +100,8 @@ assert.match(player, /Promise\.all\(\[[\s\S]*initializePromise[\s\S]*restoreProm
   'Boot e restauração precisam convergir antes da configuração final');
 
 assert.match(nativeBridge, /audioOutputStatus\(\): Promise<NativeAudioOutputStatus>/);
+assert.match(nativeBridge, /if \(this\.initialized\) return send\(\)/,
+  'Teclas da tela precisam entrar na ponte nativa sem await quando o motor já está pronto');
 assert.match(nativeBridge, /this\.lastAudioDeviceKey = null;[\s\S]*setAudioOutputDevice\('', 2, bufferSize\)/,
   'A recuperação precisa forçar a reabertura da saída padrão');
 assert.match(metronome, /syncNativeState\(\): Promise<void>/,
