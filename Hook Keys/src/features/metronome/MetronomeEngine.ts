@@ -4,6 +4,7 @@ export type MetronomeClickSound = 1 | 2 | 3;
 
 const MIN_BPM = 60;
 const MAX_BPM = 600;
+const BPM_STEP = 0.5;
 const LOOK_AHEAD_SECONDS = 0.75;
 const SCHEDULER_INTERVAL_MS = 20;
 
@@ -44,15 +45,15 @@ export class MetronomeEngine {
   }
 
   setBpm(value: number): void {
-    this.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(value)));
+    this.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(value / BPM_STEP) * BPM_STEP));
     this.scheduleNativeSync();
     this.onStateChanged();
   }
 
   setVolume(value: number): void {
-    this.volume = Math.min(1, Math.max(0, value));
+    this.volume = Math.min(10 ** (12 / 20), Math.max(0, value));
     if (this.audioContext && this.masterGain) {
-      this.masterGain.gain.setTargetAtTime(this.volume * 0.42, this.audioContext.currentTime, 0.008);
+      this.masterGain.gain.setTargetAtTime(this.volume, this.audioContext.currentTime, 0.008);
     }
     this.scheduleNativeSync();
     this.onStateChanged();
@@ -142,8 +143,8 @@ export class MetronomeEngine {
     numerator = 4,
     denominator = 4,
   ): void {
-    this.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(bpm)));
-    this.volume = Math.min(1, Math.max(0, volume));
+    this.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(bpm / BPM_STEP) * BPM_STEP));
+    this.volume = Math.min(10 ** (12 / 20), Math.max(0, volume));
     this.clickSound = clickSound;
     this.accentEnabled = accentEnabled;
     this.doubleTimeEnabled = doubleTimeEnabled;
@@ -152,7 +153,7 @@ export class MetronomeEngine {
       ? Math.round(denominator)
       : 4;
     if (this.audioContext && this.masterGain) {
-      this.masterGain.gain.setValueAtTime(this.volume * 0.42, this.audioContext.currentTime);
+      this.masterGain.gain.setValueAtTime(this.volume, this.audioContext.currentTime);
     }
     this.scheduleNativeSync();
     this.onStateChanged();
@@ -224,7 +225,7 @@ export class MetronomeEngine {
     if (!this.audioContext) {
       this.audioContext = new AudioContext({ latencyHint: 'interactive' });
       this.masterGain = this.audioContext.createGain();
-      this.masterGain.gain.setValueAtTime(this.volume * 0.42, this.audioContext.currentTime);
+      this.masterGain.gain.setValueAtTime(this.volume, this.audioContext.currentTime);
       this.masterGain.connect(this.audioContext.destination);
     }
     return this.audioContext;

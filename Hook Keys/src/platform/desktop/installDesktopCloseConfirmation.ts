@@ -31,7 +31,7 @@ export async function installDesktopCloseConfirmation(): Promise<void> {
     overlay.innerHTML = `
       <div class="desktop-close-confirmation__surface">
         <div class="desktop-close-confirmation__brand" aria-hidden="true">
-          <img src="/assets/icons/icon-256.webp" alt="">
+          <img src="/assets/icons/256x256.png" alt="">
           <span><strong>HOOK KEYS</strong><small>PERFORMANCE INSTRUMENT</small></span>
         </div>
         <div class="desktop-close-confirmation__message">

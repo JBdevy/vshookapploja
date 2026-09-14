@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 
 namespace hook_keys {
 
@@ -31,6 +32,15 @@ std::uint8_t applyVelocityCurve(
 HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
     : modules_(modules), settings_(settings) {
   settings_.normalize();
+  for (auto& module : modulePeaks_) {
+    for (auto& peak : module) peak.store(0.0f, std::memory_order_relaxed);
+  }
+  for (auto& peak : compressorInputPeaks_) peak.store(0.0f, std::memory_order_relaxed);
+  for (auto& peak : compressorOutputPeaks_) peak.store(0.0f, std::memory_order_relaxed);
+  for (auto& request : compressorMeterRequests_) request.store(false, std::memory_order_relaxed);
+  currentModuleGains_.fill(1.0f);
+  moduleGainSteps_.fill(0.0f);
+  moduleGainRampFrames_.fill(0);
   scratchLeft_.resize(settings_.maximumBlockFrames);
   scratchRight_.resize(settings_.maximumBlockFrames);
   for (auto& processor : effects_) {
@@ -40,6 +50,10 @@ HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
   for (auto& moduleNotes : activeNotes_) {
     for (auto& inputNotes : moduleNotes) inputNotes.fill(-1);
   }
+  for (auto& moduleOrders : activeNoteOrders_) {
+    for (auto& inputOrders : moduleOrders) inputOrders.fill(0);
+  }
+  sustainDown_.fill(false);
 }
 
 bool HookKeysEngine::enqueueMidi(MidiMessage message) noexcept {
@@ -89,15 +103,27 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
     for (std::size_t index = 0; index < kModuleCount; ++index) {
       auto* synth = modules_[index];
       if (synth == nullptr || !configs_[index].enabled) continue;
+      if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
+          !effects_[index].requiresSilentProcessing()) continue;
       std::fill_n(scratchLeft_.data(), blockFrames, 0.0f);
       std::fill_n(scratchRight_.data(), blockFrames, 0.0f);
       synth->renderAdd(scratchLeft_.data(), scratchRight_.data(), blockFrames, 1.0f);
-      effects_[index].process(scratchLeft_.data(), scratchRight_.data(), blockFrames);
-      const auto gain = configs_[index].gainLinear;
+      const auto processorLevels = effects_[index].process(
+          scratchLeft_.data(), scratchRight_.data(), blockFrames,
+          compressorMeterRequests_[index].exchange(false, std::memory_order_acq_rel));
+      publishProcessorLevels(index, processorLevels);
+      float leftPeak = 0.0f;
+      float rightPeak = 0.0f;
       for (std::size_t frame = 0; frame < blockFrames; ++frame) {
+        const auto gain = nextModuleGain(index);
+        leftPeak = std::max(leftPeak, std::abs(scratchLeft_[frame] * gain));
+        rightPeak = std::max(rightPeak, std::abs(scratchRight_[frame] * gain));
         left[rendered + frame] += scratchLeft_[frame] * gain;
         right[rendered + frame] += scratchRight_[frame] * gain;
+        scratchLeft_[frame] *= gain;
+        scratchRight_[frame] *= gain;
       }
+      publishModulePeak(index, leftPeak, rightPeak);
     }
     rendered += blockFrames;
   }
@@ -117,21 +143,36 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
       auto* synth = modules_[index];
       const auto& config = configs_[index];
       if (synth == nullptr || !config.enabled || config.outputChannelStart >= channels) continue;
+      if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
+          !effects_[index].requiresSilentProcessing()) continue;
       std::fill_n(scratchLeft_.data(), blockFrames, 0.0f);
       std::fill_n(scratchRight_.data(), blockFrames, 0.0f);
       synth->renderAdd(scratchLeft_.data(), scratchRight_.data(), blockFrames, 1.0f);
-      effects_[index].process(scratchLeft_.data(), scratchRight_.data(), blockFrames);
+      const auto processorLevels = effects_[index].process(
+          scratchLeft_.data(), scratchRight_.data(), blockFrames,
+          compressorMeterRequests_[index].exchange(false, std::memory_order_acq_rel));
+      publishProcessorLevels(index, processorLevels);
       const auto first = static_cast<std::size_t>(config.outputChannelStart);
       const bool stereo = config.outputChannelCount == 2 && first + 1 < channels;
+      float leftPeak = 0.0f;
+      float rightPeak = 0.0f;
       for (std::size_t frame = 0; frame < blockFrames; ++frame) {
+        const auto gain = nextModuleGain(index);
+        const auto sampleLeft = scratchLeft_[frame] * gain;
+        const auto sampleRight = scratchRight_[frame] * gain;
         auto* destination = output + (rendered + frame) * channels;
+        leftPeak = std::max(leftPeak, std::abs(sampleLeft));
+        rightPeak = std::max(rightPeak, std::abs(sampleRight));
         if (stereo) {
-          destination[first] += scratchLeft_[frame] * config.gainLinear;
-          destination[first + 1] += scratchRight_[frame] * config.gainLinear;
+          destination[first] += sampleLeft;
+          destination[first + 1] += sampleRight;
         } else {
-          destination[first] += (scratchLeft_[frame] + scratchRight_[frame]) * 0.5f * config.gainLinear;
+          destination[first] += (sampleLeft + sampleRight) * 0.5f;
         }
+        scratchLeft_[frame] = sampleLeft;
+        scratchRight_[frame] = sampleRight;
       }
+      publishModulePeak(index, leftPeak, rightPeak);
     }
     rendered += blockFrames;
   }
@@ -139,6 +180,81 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
 
 std::uint64_t HookKeysEngine::droppedCommandCount() const noexcept {
   return droppedCommands_.load(std::memory_order_relaxed);
+}
+
+bool HookKeysEngine::hasActiveVoices() const noexcept {
+  for (std::size_t index = 0; index < kModuleCount; ++index) {
+    if (configs_[index].enabled && modules_[index] != nullptr &&
+        (moduleHasActiveNotes(index) || modules_[index]->hasActiveVoices())) return true;
+  }
+  return false;
+}
+
+void HookKeysEngine::publishModulePeak(
+    std::size_t index, float leftPeak, float rightPeak) noexcept {
+  static_assert(std::atomic<float>::is_always_lock_free, "Meters must not lock the audio thread");
+  const std::array<float, 2> peaks{leftPeak, rightPeak};
+  for (std::size_t channel = 0; channel < peaks.size(); ++channel) {
+    const auto peak = peaks[channel];
+    if (!std::isfinite(peak)) continue;
+    auto& destination = modulePeaks_[index][channel];
+    auto previous = destination.load(std::memory_order_relaxed);
+    while (peak > previous && !destination.compare_exchange_weak(
+        previous, peak, std::memory_order_relaxed)) {}
+  }
+}
+
+HookKeysEngine::ModulePeaks HookKeysEngine::consumeModulePeaks() noexcept {
+  ModulePeaks peaks{};
+  for (std::size_t index = 0; index < kModuleCount; ++index) {
+    peaks[index * 2] = modulePeaks_[index][0].exchange(0.0f, std::memory_order_relaxed);
+    peaks[index * 2 + 1] = modulePeaks_[index][1].exchange(0.0f, std::memory_order_relaxed);
+  }
+  return peaks;
+}
+
+HookKeysEngine::ModuleAnalysis HookKeysEngine::consumeModuleAnalysis(
+    std::size_t moduleIndex) noexcept {
+  ModuleAnalysis result{};
+  if (moduleIndex >= kModuleCount) return result;
+  compressorMeterRequests_[moduleIndex].store(true, std::memory_order_release);
+  result[0] = compressorInputPeaks_[moduleIndex].exchange(0.0f, std::memory_order_relaxed);
+  result[1] = compressorOutputPeaks_[moduleIndex].exchange(0.0f, std::memory_order_relaxed);
+  return result;
+}
+
+void HookKeysEngine::publishProcessorLevels(
+    std::size_t index, ModuleProcessorLevels levels) noexcept {
+  const auto publish = [](std::atomic<float>& destination, float peak) {
+    if (!std::isfinite(peak)) return;
+    auto previous = destination.load(std::memory_order_relaxed);
+    while (peak > previous && !destination.compare_exchange_weak(
+        previous, peak, std::memory_order_relaxed)) {}
+  };
+  publish(compressorInputPeaks_[index], levels.compressorInput);
+  publish(compressorOutputPeaks_[index], levels.compressorOutput);
+}
+
+float HookKeysEngine::nextModuleGain(std::size_t index) noexcept {
+  if (moduleGainRampFrames_[index] > 0) {
+    currentModuleGains_[index] += moduleGainSteps_[index];
+    if (--moduleGainRampFrames_[index] == 0) {
+      currentModuleGains_[index] = configs_[index].gainLinear;
+    }
+  }
+  return currentModuleGains_[index];
+}
+
+void HookKeysEngine::setModuleGainTarget(std::size_t index, float target) noexcept {
+  if (std::abs(target - currentModuleGains_[index]) < 0.000001f) {
+    currentModuleGains_[index] = target;
+    moduleGainSteps_[index] = 0.0f;
+    moduleGainRampFrames_[index] = 0;
+    return;
+  }
+  const auto frames = std::max<std::size_t>(1, static_cast<std::size_t>(settings_.sampleRate * 0.005));
+  moduleGainSteps_[index] = (target - currentModuleGains_[index]) / static_cast<float>(frames);
+  moduleGainRampFrames_[index] = frames;
 }
 
 void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
@@ -151,14 +267,45 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
         const auto index = static_cast<std::size_t>(command.moduleIndex);
         if (configs_[index].enabled && !command.moduleConfig.enabled && modules_[index] != nullptr) {
           modules_[index]->allNotesOff();
-          for (auto& inputNotes : activeNotes_[index]) inputNotes.fill(-1);
+          sustainDown_[index] = false;
+          clearActiveNoteState(index);
+          compressorInputPeaks_[index].store(0.0f, std::memory_order_relaxed);
+          compressorOutputPeaks_[index].store(0.0f, std::memory_order_relaxed);
         } else if (configs_[index].midiInputSlot != command.moduleConfig.midiInputSlot &&
-                   modules_[index] != nullptr && moduleHasActiveNotes(index)) {
-          modules_[index]->allNotesOff();
-          for (auto& inputNotes : activeNotes_[index]) inputNotes.fill(-1);
+                   modules_[index] != nullptr) {
+          // Reset CC64 even if no key is physically down: an SF2 can still
+          // contain pedal-held voices from the previous input route.
+          if (sustainDown_[index]) modules_[index]->controlChange(kSustainController, 0);
+          sustainDown_[index] = false;
+          if (moduleHasActiveNotes(index)) modules_[index]->allNotesOff();
+          clearActiveNoteState(index);
+        } else if (configs_[index].sustainInputEnabled &&
+                   !command.moduleConfig.sustainInputEnabled && modules_[index] != nullptr) {
+          if (sustainDown_[index]) modules_[index]->controlChange(kSustainController, 0);
+          sustainDown_[index] = false;
+          releaseSustainedNotes(index);
+        }
+        if (configs_[index].gainLinear != command.moduleConfig.gainLinear) {
+          setModuleGainTarget(index, command.moduleConfig.gainLinear);
+        }
+        if (configs_[index].modulationInputEnabled && !command.moduleConfig.modulationInputEnabled && modules_[index] != nullptr) {
+          modules_[index]->controlChange(kModulationController, 0);
+          effects_[index].setModulation(0);
+        }
+        if (!command.moduleConfig.effects.compressor.enabled) {
+          compressorInputPeaks_[index].store(0.0f, std::memory_order_relaxed);
+          compressorOutputPeaks_[index].store(0.0f, std::memory_order_relaxed);
+          compressorMeterRequests_[index].store(false, std::memory_order_release);
         }
         configs_[index] = command.moduleConfig;
-        effects_[index].setConfig(configs_[index].effects, settings_.tempoBpm);
+        while (moduleHeldNoteCount(index) > configs_[index].polyphony) {
+          if (!stealOldestNote(index)) break;
+        }
+        if (modules_[index]) modules_[index]->setCutoffConfig(configs_[index].effects.cutoff);
+        auto sharedEffects = configs_[index].effects;
+        // Cutoff belongs to each voice, never to the sum of a polyphonic chord.
+        sharedEffects.cutoff.enabled = false;
+        effects_[index].setConfig(sharedEffects, settings_.tempoBpm);
       }
       break;
     case CommandType::setTempo:
@@ -199,6 +346,12 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
       if (message.data1 == kSustainController && !config.sustainInputEnabled) continue;
       if (message.data1 == kModulationController && !config.modulationInputEnabled) continue;
       if (message.data1 == kModulationController) effects_[index].setModulation(message.data2);
+      if (message.data1 == kSustainController) {
+        // Ao soltar o pedal as vozes seguradas entram em release dentro do SF2.
+        // Tira-las da contagem aqui devolve a polifonia as proximas notas.
+        if (message.data2 < 64) releaseSustainedNotes(index);
+        sustainDown_[index] = message.data2 >= 64;
+      }
       synth->controlChange(message.data1, message.data2);
     }
     return;
@@ -233,6 +386,8 @@ void HookKeysEngine::routeNoteOn(
         (inputSlot == kKeyboardBroadcastInput && generatedConfig) ||
         (inputSlot != kKeyboardBroadcastInput && config.midiInputSlot != kAllMidiInputs &&
          inputSlot != config.midiInputSlot));
+    // Limite Velocity reads the raw key: above it the key plays nothing here.
+    if (velocity > config.velocityIgnoreAbove) continue;
     if (synth == nullptr || !config.enabled ||
         generatedForDifferentModule || regularInputMismatch ||
         (generatedModule < 0 && (sourceNote < config.lowNote || sourceNote > config.highNote))) {
@@ -241,20 +396,27 @@ void HookKeysEngine::routeNoteOn(
     const auto targetNote = translatedNote(sourceNote, config.octaveShift);
     const auto previousTarget = activeNotes_[index][inputSlot][sourceNote];
     if (previousTarget < 0) {
-      std::size_t activeCount = 0;
-      for (const auto& inputNotes : activeNotes_[index]) {
-        activeCount += static_cast<std::size_t>(std::count_if(
-            inputNotes.begin(), inputNotes.end(), [](std::int16_t note) { return note >= 0; }));
+      while (moduleHeldNoteCount(index) >= config.polyphony) {
+        if (!stealOldestNote(index)) break;
       }
-      if (activeCount >= config.polyphony) {
-        if (config.polyphony != 1) continue;
-        synth->allNotesOff();
-        for (auto& inputNotes : activeNotes_[index]) inputNotes.fill(-1);
-      }
+      // Uma voz roubada leva 10 ms para morrer, entao a contagem interna nao
+      // cai na hora: um resgate por nota basta para acompanhar quem toca, e
+      // limitar aqui evita esvaziar o modulo inteiro de uma vez.
+      if (synth->isVoicePoolNearlyFull()) (void)stealOldestNote(index, true);
     }
-    if (previousTarget >= 0) synth->noteOff(static_cast<std::uint8_t>(previousTarget));
+    if (previousTarget >= 0) {
+      // Repetir a mesma tecla com o pedal preso nao pode empilhar vozes: o Note
+      // Off nao solta nada enquanto o CC64 esta em pe, entao a voz anterior sai
+      // pelo release curto de 10 ms do roubo.
+      if (sustainedNotes_[index][inputSlot][sourceNote]) synth->stealNote(static_cast<std::uint8_t>(previousTarget));
+      else synth->noteOff(static_cast<std::uint8_t>(previousTarget));
+      sustainedNotes_[index][inputSlot][sourceNote] = false;
+    }
+    if (!moduleHasActiveNotes(index)) effects_[index].triggerTranceGate();
     activeNotes_[index][inputSlot][sourceNote] = targetNote;
-    synth->noteOn(targetNote, applyVelocityCurve(velocity, config.velocityCurve));
+    activeNoteOrders_[index][inputSlot][sourceNote] = ++activeNoteOrder_;
+    synth->noteOnWithFilterVelocity(targetNote,
+        std::min(applyVelocityCurve(velocity, config.velocityCurve), config.velocityCeiling), velocity);
   }
 }
 
@@ -263,14 +425,33 @@ void HookKeysEngine::routeNoteOff(std::uint8_t inputSlot, std::uint8_t sourceNot
     const auto targetNote = activeNotes_[index][inputSlot][sourceNote];
     if (targetNote < 0) continue;
     if (modules_[index] != nullptr) modules_[index]->noteOff(static_cast<std::uint8_t>(targetNote));
+    if (sustainDown_[index]) {
+      // A voz segue soando presa pelo pedal, entao a nota continua ocupando
+      // polifonia ate o CC64 descer ou o roubo FIFO alcanca-la.
+      sustainedNotes_[index][inputSlot][sourceNote] = true;
+      continue;
+    }
     activeNotes_[index][inputSlot][sourceNote] = -1;
+    activeNoteOrders_[index][inputSlot][sourceNote] = 0;
+  }
+}
+
+void HookKeysEngine::releaseSustainedNotes(std::size_t moduleIndex) noexcept {
+  for (std::size_t input = 0; input < kRoutableMidiInputCount; ++input) {
+    for (std::size_t note = 0; note < kMidiNoteCount; ++note) {
+      if (!sustainedNotes_[moduleIndex][input][note]) continue;
+      sustainedNotes_[moduleIndex][input][note] = false;
+      activeNotes_[moduleIndex][input][note] = -1;
+      activeNoteOrders_[moduleIndex][input][note] = 0;
+    }
   }
 }
 
 void HookKeysEngine::applyAllNotesOff() noexcept {
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     if (modules_[index] != nullptr) modules_[index]->allNotesOff();
-    for (auto& inputNotes : activeNotes_[index]) inputNotes.fill(-1);
+    sustainDown_[index] = false;
+    clearActiveNoteState(index);
   }
 }
 
@@ -279,6 +460,59 @@ bool HookKeysEngine::moduleHasActiveNotes(std::size_t moduleIndex) const noexcep
     if (std::any_of(inputNotes.begin(), inputNotes.end(), [](std::int16_t note) { return note >= 0; })) return true;
   }
   return false;
+}
+
+// So teclas fisicamente pressionadas. O pedal de sustain prende vozes sem
+// consumir a polifonia que o musico escolheu: quem devolve lugar para elas e
+// a folga do banco interno, nao este limite.
+std::size_t HookKeysEngine::moduleHeldNoteCount(std::size_t moduleIndex) const noexcept {
+  std::size_t count = 0;
+  for (std::size_t input = 0; input < kRoutableMidiInputCount; ++input) {
+    for (std::size_t note = 0; note < kMidiNoteCount; ++note) {
+      if (activeNotes_[moduleIndex][input][note] >= 0 &&
+          !sustainedNotes_[moduleIndex][input][note]) ++count;
+    }
+  }
+  return count;
+}
+
+// Uma nota presa so pelo pedal e sempre o sacrificio preferido: a tecla que o
+// musico ainda segura continua soando.
+bool HookKeysEngine::stealOldestNote(std::size_t moduleIndex, bool sustainedOnly) noexcept {
+  for (const bool sustainedPass : {true, false}) {
+    if (!sustainedPass && sustainedOnly) break;
+    auto oldestOrder = std::numeric_limits<std::uint64_t>::max();
+    std::size_t oldestInput = 0;
+    std::size_t oldestSourceNote = 0;
+    bool found = false;
+    for (std::size_t input = 0; input < kRoutableMidiInputCount; ++input) {
+      for (std::size_t note = 0; note < kMidiNoteCount; ++note) {
+        const auto order = activeNoteOrders_[moduleIndex][input][note];
+        if (activeNotes_[moduleIndex][input][note] < 0 || order == 0 || order >= oldestOrder) continue;
+        if (sustainedNotes_[moduleIndex][input][note] != sustainedPass) continue;
+        oldestOrder = order;
+        oldestInput = input;
+        oldestSourceNote = note;
+        found = true;
+      }
+    }
+    if (!found) continue;
+    const auto target = activeNotes_[moduleIndex][oldestInput][oldestSourceNote];
+    if (target >= 0 && modules_[moduleIndex] != nullptr) {
+      modules_[moduleIndex]->stealNote(static_cast<std::uint8_t>(target));
+    }
+    activeNotes_[moduleIndex][oldestInput][oldestSourceNote] = -1;
+    activeNoteOrders_[moduleIndex][oldestInput][oldestSourceNote] = 0;
+    sustainedNotes_[moduleIndex][oldestInput][oldestSourceNote] = false;
+    return true;
+  }
+  return false;
+}
+
+void HookKeysEngine::clearActiveNoteState(std::size_t moduleIndex) noexcept {
+  for (auto& inputNotes : activeNotes_[moduleIndex]) inputNotes.fill(-1);
+  for (auto& inputOrders : activeNoteOrders_[moduleIndex]) inputOrders.fill(0);
+  for (auto& inputSustained : sustainedNotes_[moduleIndex]) inputSustained.fill(false);
 }
 
 bool HookKeysEngine::push(const EngineCommand& command) noexcept {

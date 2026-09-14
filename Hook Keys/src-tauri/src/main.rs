@@ -1,9 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio_config;
+mod audio_callback_gate;
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    BufferSize, BuildStreamError, Device, SampleFormat, Stream, StreamConfig,
+    BufferSize, BuildStreamError, Device, SampleFormat, Stream, StreamConfig, SupportedBufferSize,
 };
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use serde::{Deserialize, Serialize};
@@ -22,12 +25,28 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, State};
 
 unsafe extern "C" {
+    fn hk_runtime_begin_preset_transition(handle: *mut c_void) -> i32;
+    fn hk_runtime_commit_preset_transition(handle: *mut c_void) -> i32;
+    fn hk_runtime_set_compatibility_mode(handle: *mut c_void, enabled: i32);
+    fn hk_runtime_set_seamless_preset_switching(
+        handle: *mut c_void,
+        enabled: i32,
+        cache_budget_bytes: usize,
+    );
+    fn hk_runtime_set_midi_input_enabled(handle: *mut c_void, enabled: i32);
+    fn hk_runtime_set_trance_gate(handle: *mut c_void, module_index: usize, enabled: i32, steps: i32,
+        length: i32, beat_multiplier: f32, gate: f32, depth: f32, attack_ms: f32, release_ms: f32, swing: f32) -> i32;
     fn hk_runtime_create(sample_rate: f64, maximum_block_frames: usize) -> *mut c_void;
     fn hk_runtime_destroy(handle: *mut c_void);
     fn hk_runtime_load_soundfont(
         handle: *mut c_void,
         module_index: usize,
         path: *const c_char,
+    ) -> i32;
+    fn hk_runtime_clone_soundfont(
+        handle: *mut c_void,
+        source_module_index: usize,
+        target_module_index: usize,
     ) -> i32;
     fn hk_runtime_send_midi(
         handle: *mut c_void,
@@ -56,10 +75,38 @@ unsafe extern "C" {
         output_channel_start: i32,
         output_channel_count: i32,
     ) -> i32;
+    fn hk_runtime_set_module_gain(
+        handle: *mut c_void,
+        module_index: usize,
+        db: f32,
+    ) -> i32;
+    fn hk_runtime_configure_velocity_limits(
+        handle: *mut c_void,
+        module_index: usize,
+        ignore_above: i32,
+        ceiling: i32,
+        oscillator1_limit: i32,
+        oscillator2_limit: i32,
+    ) -> i32;
+    fn hk_runtime_configure_glide(
+        handle: *mut c_void,
+        module_index: usize,
+        portamento: i32,
+        velocity_gate_enabled: i32,
+        velocity_gate_inverted: i32,
+        velocity_threshold: i32,
+    ) -> i32;
+    fn hk_runtime_configure_module_modulation(
+        handle: *mut c_void,
+        module_index: usize,
+        lfo: i32,
+        rate_hz: f32,
+    ) -> i32;
     fn hk_runtime_configure_effects(
         handle: *mut c_void,
         module_index: usize,
         cutoff_hz: f32,
+        cutoff_velocity: *const i32,
         eq_types: *const i32,
         eq_frequencies: *const f32,
         eq_gains: *const f32,
@@ -96,6 +143,7 @@ unsafe extern "C" {
         hold_ms: f32,
         decay_ms: f32,
         release_ms: f32,
+        glide_ms: f32,
     ) -> i32;
     fn hk_runtime_configure_synth(
         handle: *mut c_void,
@@ -136,14 +184,132 @@ unsafe extern "C" {
     fn hk_runtime_set_output_gain(handle: *mut c_void, db: f32, enabled: i32);
     fn hk_runtime_stop_all_notes(handle: *mut c_void);
     fn hk_runtime_render(handle: *mut c_void, output: *mut f32, frames: usize, channels: usize);
+    fn hk_runtime_module_peaks(handle: *mut c_void, output: *mut f32);
+    fn hk_runtime_audio_load(handle: *mut c_void, output: *mut f32);
+    fn hk_runtime_module_analysis(handle: *mut c_void, module_index: usize, output: *mut f32);
 }
 
 struct NativeRuntime(NonNull<c_void>);
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTranceGateConfig {
+    module_index: usize,
+    enabled: bool,
+    steps: i32,
+    length: i32,
+    beat_multiplier: f32,
+    gate: f32,
+    depth: f32,
+    attack_ms: f32,
+    release_ms: f32,
+    swing: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeVelocityLimitsConfig {
+    module_index: usize,
+    ignore_above: i32,
+    ceiling: i32,
+    oscillator1_limit: i32,
+    oscillator2_limit: i32,
+}
+
+#[tauri::command]
+fn configure_velocity_limits(config: NativeVelocityLimitsConfig, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    let applied = unsafe {
+        hk_runtime_configure_velocity_limits(
+            engine.pointer(), config.module_index, config.ignore_above, config.ceiling,
+            config.oscillator1_limit, config.oscillator2_limit,
+        )
+    };
+    if applied != 0 { Ok(()) } else { Err("Não foi possível configurar os limites de velocity.".into()) }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeGlideConfig {
+    module_index: usize,
+    portamento: bool,
+    velocity_gate_enabled: bool,
+    velocity_gate_inverted: bool,
+    velocity_threshold: i32,
+}
+
+#[tauri::command]
+fn configure_glide(config: NativeGlideConfig, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    let applied = unsafe {
+        hk_runtime_configure_glide(
+            engine.pointer(), config.module_index, config.portamento as i32,
+            config.velocity_gate_enabled as i32, config.velocity_gate_inverted as i32,
+            config.velocity_threshold,
+        )
+    };
+    if applied != 0 { Ok(()) } else { Err("Não foi possível configurar o Glide.".into()) }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeModuleModulationConfig {
+    module_index: usize,
+    lfo: bool,
+    rate_hz: f32,
+}
+
+#[tauri::command]
+fn configure_module_modulation(
+    config: NativeModuleModulationConfig,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    let applied = unsafe {
+        hk_runtime_configure_module_modulation(
+            engine.pointer(), config.module_index, config.lfo as i32, config.rate_hz,
+        )
+    };
+    if applied != 0 { Ok(()) } else { Err("Não foi possível configurar a modulação do módulo.".into()) }
+}
+
+#[tauri::command]
+fn configure_trance_gate(config: NativeTranceGateConfig, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    let applied = unsafe { hk_runtime_set_trance_gate(engine.pointer(), config.module_index,
+        config.enabled as i32, config.steps, config.length, config.beat_multiplier, config.gate,
+        config.depth, config.attack_ms, config.release_ms, config.swing) };
+    if applied != 0 { Ok(()) } else { Err("Não foi possível configurar o Trance Gate.".into()) }
+}
+
+#[tauri::command]
+async fn begin_preset_transition(state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if unsafe { hk_runtime_begin_preset_transition(engine.pointer()) } != 0 {
+            Ok(())
+        } else {
+            Err("Não foi possível preparar o preset sem interromper as notas anteriores.".into())
+        }
+    }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn commit_preset_transition(state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    if unsafe { hk_runtime_commit_preset_transition(engine.pointer()) } != 0 { Ok(()) }
+    else { Err("Não foi possível aplicar o novo preset.".into()) }
+}
 unsafe impl Send for NativeRuntime {}
 unsafe impl Sync for NativeRuntime {}
 
 impl NativeRuntime {
     fn new(sample_rate: f64, block_frames: usize) -> Result<Self, String> {
+        if !sample_rate.is_finite()
+            || sample_rate < audio_config::MIN_SAMPLE_RATE as f64
+            || sample_rate > audio_config::MAX_SAMPLE_RATE as f64
+        {
+            return Err("A taxa de amostragem da saída não é compatível com o motor de áudio.".into());
+        }
         NonNull::new(unsafe { hk_runtime_create(sample_rate, block_frames) })
             .map(Self)
             .ok_or_else(|| "Não foi possível criar o motor de áudio.".to_string())
@@ -163,8 +329,10 @@ impl Drop for NativeRuntime {
 struct AudioRuntime {
     _stream: Stream,
     _engine: Arc<NativeRuntime>,
+    sample_rate: u32,
     failed: Arc<AtomicBool>,
     callback_seen: Arc<AtomicBool>,
+    callback_gate: Arc<audio_callback_gate::CallbackGate>,
 }
 
 struct EngineHub(RwLock<Option<Arc<NativeRuntime>>>);
@@ -186,6 +354,7 @@ struct UploadSession {
 }
 
 struct AppState {
+    audio_restart: Mutex<()>,
     engine: Arc<EngineHub>,
     audio: Mutex<Option<AudioRuntime>>,
     midi: Mutex<Vec<MidiInputConnection<()>>>,
@@ -197,6 +366,7 @@ struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            audio_restart: Mutex::new(()),
             engine: Arc::new(EngineHub(RwLock::new(None))),
             audio: Mutex::new(None),
             midi: Mutex::new(Vec::new()),
@@ -276,6 +446,8 @@ struct EnvelopeConfig {
     hold_ms: f32,
     decay_ms: f32,
     release_ms: f32,
+    #[serde(default)]
+    glide_ms: f32,
 }
 
 #[derive(Deserialize)]
@@ -312,6 +484,11 @@ struct SynthConfig {
 struct EffectsConfig {
     module_index: usize,
     cutoff_hz: f32,
+    cutoff_velocity0: i32,
+    cutoff_velocity1: i32,
+    cutoff_velocity2: i32,
+    cutoff_velocity3: i32,
+    cutoff_velocity4: i32,
     eq_types: Vec<i32>,
     eq_frequencies: Vec<f32>,
     eq_gains: Vec<f32>,
@@ -410,68 +587,69 @@ fn start_audio(
     device_id: &str,
     requested_channels: u16,
     buffer_size: u32,
+    preserve_engine: bool,
 ) -> Result<(), String> {
+    let _restart = state.audio_restart.lock()
+        .map_err(|_| "Falha ao sincronizar a troca da saída de áudio.".to_string())?;
     let device = select_device(device_id)?;
+    let buffer_size = buffer_size.clamp(64, 512);
     let requested_channels = requested_channels.clamp(1, 32);
-    // Para a saída padrão, use primeiro a configuração que o próprio sistema
-    // operacional já validou. Escolher a maior taxa anunciada pelo driver
-    // podia abrir um stream formalmente válido, mas sem áudio em alguns drivers
-    // WASAPI/CoreAudio. Interfaces selecionadas continuam respeitando o total
-    // de canais pedido para manter as rotas 1+2, 3+4 etc.
-    let system_default = device.default_output_config().ok().filter(|config| {
-        device_id.is_empty()
-            && config.channels() <= 32
-            && matches!(
-                config.sample_format(),
-                SampleFormat::F32 | SampleFormat::F64 | SampleFormat::I16 | SampleFormat::U16
-            )
-    });
-    let selected = if let Some(config) = system_default {
-        config
+    // A named device uses its own default clock just like the system-default
+    // route. Advertised conversion rates are not the physical device clock.
+    let system_default = device.default_output_config().ok();
+    let selected = if let Some(config) = system_default.as_ref().filter(|config| {
+        audio_config::usable_default(config, requested_channels, device_id.is_empty())
+    }) {
+        config.clone()
     } else {
-        device
-            .supported_output_configs()
-            .map_err(|error| error.to_string())?
-            .filter(|config| {
-                config.channels() == requested_channels
-                    && matches!(
-                        config.sample_format(),
-                        SampleFormat::F32 | SampleFormat::F64 | SampleFormat::I16 | SampleFormat::U16
-                    )
-            })
-            // Float evita conversões no callback; 48 kHz é a taxa mais segura
-            // para interfaces de palco quando ela está disponível.
-            .max_by_key(|config| {
-                (
-                    u8::from(config.sample_format() == SampleFormat::F32),
-                    u8::from(config.sample_format() == SampleFormat::F64),
-                    config.max_sample_rate(),
-                )
-            })
-            .map(|config| {
-                let preferred = 48_000;
-                if config.min_sample_rate() <= preferred && config.max_sample_rate() >= preferred {
-                    config.with_sample_rate(preferred)
-                } else {
-                    config.with_max_sample_rate()
-                }
-            })
-            .ok_or_else(|| {
-                "A saída selecionada não oferece a quantidade de canais solicitada.".to_string()
-            })?
+        audio_config::select_config(
+            system_default,
+            device.supported_output_configs().map_err(|error| error.to_string())?,
+            requested_channels,
+            device_id.is_empty(),
+        ).ok_or_else(|| {
+            "A saída selecionada não oferece uma taxa e quantidade de canais compatíveis.".to_string()
+        })?
     };
 
     let channels = selected.channels();
     let sample_rate = selected.sample_rate();
     let sample_format = selected.sample_format();
-    let engine = Arc::new(NativeRuntime::new(
-        sample_rate as f64,
-        buffer_size.max(512) as usize,
-    )?);
+    let supported_buffer_size = *selected.buffer_size();
+    let reusable_engine = if preserve_engine {
+        state
+            .audio
+            .lock()
+            .map_err(|_| "Falha ao consultar o motor de áudio.".to_string())?
+            .as_ref()
+            .filter(|runtime| runtime.sample_rate == sample_rate)
+            .map(|runtime| Arc::clone(&runtime._engine))
+    } else {
+        None
+    };
+    if preserve_engine && reusable_engine.is_none() {
+        return Err("A taxa de amostragem mudou; é necessário recarregar o motor.".to_string());
+    }
+    let engine = match reusable_engine {
+        Some(engine) => engine,
+        None => Arc::new(NativeRuntime::new(
+            sample_rate as f64,
+            buffer_size.max(512) as usize,
+        )?),
+    };
+    if !preserve_engine {
+        unsafe { hk_runtime_set_midi_input_enabled(engine.pointer(), 0) };
+    }
     let failed = Arc::new(AtomicBool::new(false));
     let callback_seen = Arc::new(AtomicBool::new(false));
+    let callback_gate = Arc::new(audio_callback_gate::CallbackGate::default());
     let mut config: StreamConfig = selected.into();
-    config.buffer_size = BufferSize::Fixed(buffer_size.clamp(32, 512));
+    config.buffer_size = match supported_buffer_size {
+        SupportedBufferSize::Range { min, max } if max >= min && max > 0 => {
+            BufferSize::Fixed(buffer_size.clamp(min.max(1), max))
+        }
+        SupportedBufferSize::Range { .. } | SupportedBufferSize::Unknown => BufferSize::Default,
+    };
 
     let stream = build_audio_stream(
         &device,
@@ -480,6 +658,7 @@ fn start_audio(
         Arc::clone(&engine),
         Arc::clone(&failed),
         Arc::clone(&callback_seen),
+        Arc::clone(&callback_gate),
         channels,
     )
     .or_else(|_| {
@@ -491,26 +670,55 @@ fn start_audio(
             Arc::clone(&engine),
             Arc::clone(&failed),
             Arc::clone(&callback_seen),
+            Arc::clone(&callback_gate),
             channels,
         )
     })
     .map_err(|error| error.to_string())?;
-    stream.play().map_err(|error| error.to_string())?;
+    // Pause o stream antigo antes de ativar o novo. Quando o motor é
+    // preservado, dois callbacks simultâneos consumiriam a mesma fila MIDI.
+    let old_audio = {
+        let mut audio = state
+            .audio
+            .lock()
+            .map_err(|_| "Falha ao alterar a saída de áudio.".to_string())?;
+        let previous = audio.take();
+        if let Some(runtime) = previous.as_ref() {
+            if !runtime.callback_gate.suspend_and_wait() {
+                runtime.callback_gate.resume();
+                *audio = previous;
+                return Err("A saída anterior ainda está ocupada. Tente novamente.".into());
+            }
+            let _ = runtime._stream.pause();
+        }
+        previous
+    };
+    if let Err(error) = stream.play() {
+        if let Some(previous) = old_audio {
+            previous.callback_gate.resume();
+            let _ = previous._stream.play();
+            if let Ok(mut audio) = state.audio.lock() {
+                *audio = Some(previous);
+            }
+        }
+        return Err(error.to_string());
+    }
 
-    let mut audio = state
-        .audio
-        .lock()
-        .map_err(|_| "Falha ao alterar a saída de áudio.".to_string())?;
     *state
         .engine
         .0
         .write()
         .map_err(|_| "Falha ao ativar o motor de áudio.".to_string())? = Some(Arc::clone(&engine));
-    *audio = Some(AudioRuntime {
+    *state
+        .audio
+        .lock()
+        .map_err(|_| "Falha ao registrar a saída de áudio.".to_string())? = Some(AudioRuntime {
         _stream: stream,
         _engine: engine,
+        sample_rate,
         failed,
         callback_seen,
+        callback_gate,
     });
     Ok(())
 }
@@ -522,13 +730,19 @@ fn build_audio_stream(
     engine: Arc<NativeRuntime>,
     failed: Arc<AtomicBool>,
     callback_seen: Arc<AtomicBool>,
+    callback_gate: Arc<audio_callback_gate::CallbackGate>,
     channels: u16,
 ) -> Result<Stream, BuildStreamError> {
     let channel_count = channels as usize;
+    // Evita a primeira alocação (e eventuais realocações se o WASAPI variar
+    // o bloco entregue) dentro do callback de tempo real.
+    const MAX_CALLBACK_FRAMES: usize = 8192;
+    let scratch_capacity = MAX_CALLBACK_FRAMES.saturating_mul(channel_count);
     match sample_format {
         SampleFormat::F32 => device.build_output_stream(
             config,
             move |output: &mut [f32], _| unsafe {
+                let Some(_active) = callback_gate.enter() else { output.fill(0.0); return; };
                 callback_seen.store(true, Ordering::Release);
                 hk_runtime_render(
                     engine.pointer(),
@@ -544,11 +758,12 @@ fn build_audio_stream(
             None,
         ),
         SampleFormat::F64 => {
-            let mut scratch = Vec::<f32>::new();
+            let mut scratch = Vec::<f32>::with_capacity(scratch_capacity);
             let stream_failed = Arc::clone(&failed);
             device.build_output_stream(
                 config,
                 move |output: &mut [f64], _| {
+                    let Some(_active) = callback_gate.enter() else { output.fill(0.0); return; };
                     callback_seen.store(true, Ordering::Release);
                     scratch.resize(output.len(), 0.0);
                     unsafe {
@@ -571,11 +786,12 @@ fn build_audio_stream(
             )
         }
         SampleFormat::I16 => {
-            let mut scratch = Vec::<f32>::new();
+            let mut scratch = Vec::<f32>::with_capacity(scratch_capacity);
             let stream_failed = Arc::clone(&failed);
             device.build_output_stream(
                 config,
                 move |output: &mut [i16], _| {
+                    let Some(_active) = callback_gate.enter() else { output.fill(0); return; };
                     callback_seen.store(true, Ordering::Release);
                     scratch.resize(output.len(), 0.0);
                     unsafe {
@@ -598,11 +814,12 @@ fn build_audio_stream(
             )
         }
         SampleFormat::U16 => {
-            let mut scratch = Vec::<f32>::new();
+            let mut scratch = Vec::<f32>::with_capacity(scratch_capacity);
             let stream_failed = Arc::clone(&failed);
             device.build_output_stream(
                 config,
                 move |output: &mut [u16], _| {
+                    let Some(_active) = callback_gate.enter() else { output.fill(32768); return; };
                     callback_seen.store(true, Ordering::Release);
                     scratch.resize(output.len(), 0.0);
                     unsafe {
@@ -639,7 +856,7 @@ fn initialize(
         .map_err(|_| "Motor de áudio indisponível.".to_string())?
         .is_some();
     if !ready {
-        start_audio(&state, "", 2, buffer_size)?;
+        start_audio(&state, "", 2, buffer_size, false)?;
     }
     Ok(HashMap::from([("ready", true)]))
 }
@@ -649,9 +866,17 @@ fn set_audio_output_device(
     device_id: String,
     channels: u16,
     buffer_size: u32,
+    preserve_engine: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    start_audio(&state, &device_id, channels, buffer_size)
+    start_audio(&state, &device_id, channels, buffer_size, preserve_engine)
+}
+
+#[tauri::command]
+fn set_midi_input_enabled(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    unsafe { hk_runtime_set_midi_input_enabled(engine.pointer(), i32::from(enabled)) };
+    Ok(())
 }
 
 #[tauri::command]
@@ -665,6 +890,46 @@ fn audio_output_status(state: State<'_, AppState>) -> Result<HashMap<&'static st
             && runtime.callback_seen.load(Ordering::Acquire)
     });
     Ok(HashMap::from([("ready", ready), ("failed", !ready)]))
+}
+
+#[tauri::command]
+fn module_meter_levels(state: State<'_, AppState>) -> Result<[f32; 16], String> {
+    let engine = state.engine.current()?;
+    let mut peaks = [0.0; 16];
+    unsafe { hk_runtime_module_peaks(engine.pointer(), peaks.as_mut_ptr()) };
+    Ok(peaks)
+}
+
+#[tauri::command]
+fn clone_sound_font(
+    source_module_index: usize,
+    target_module_index: usize,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if source_module_index >= 7 || target_module_index >= 7 ||
+        source_module_index == target_module_index {
+        return Err("Módulos de timbre inválidos.".into());
+    }
+    let engine = state.engine.current()?;
+    if unsafe {
+        hk_runtime_clone_soundfont(
+            engine.pointer(), source_module_index, target_module_index)
+    } != 0 {
+        Ok(())
+    } else {
+        Err("O timbre compartilhado não pôde ser preparado.".into())
+    }
+}
+
+#[tauri::command]
+fn module_analysis(module_index: usize, state: State<'_, AppState>) -> Result<Vec<f32>, String> {
+    if module_index >= 8 {
+        return Err("Módulo inválido.".to_string());
+    }
+    let engine = state.engine.current()?;
+    let mut analysis = vec![0.0; 2];
+    unsafe { hk_runtime_module_analysis(engine.pointer(), module_index, analysis.as_mut_ptr()) };
+    Ok(analysis)
 }
 
 #[tauri::command]
@@ -699,6 +964,17 @@ fn configure_module(config: ModuleConfig, state: State<'_, AppState>) -> Result<
     }
 }
 
+#[tauri::command]
+fn set_module_gain(module_index: usize, db: f32, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    let ok = unsafe { hk_runtime_set_module_gain(engine.pointer(), module_index, db) };
+    if ok != 0 {
+        Ok(())
+    } else {
+        Err("Não foi possível ajustar o volume do módulo.".into())
+    }
+}
+
 fn five_f32(values: &[f32], fallback: f32) -> [f32; 5] {
     std::array::from_fn(|index| values.get(index).copied().unwrap_or(fallback))
 }
@@ -718,11 +994,14 @@ fn configure_module_effects(
     let gains = five_f32(&config.eq_gains, 0.0);
     let qualities = five_f32(&config.eq_qualities, std::f32::consts::FRAC_1_SQRT_2);
     let stages = five_i32(&config.eq_cut_stages, 1);
+    let cutoff_velocity = [config.cutoff_velocity0, config.cutoff_velocity1,
+        config.cutoff_velocity2, config.cutoff_velocity3, config.cutoff_velocity4];
     let ok = unsafe {
         hk_runtime_configure_effects(
             engine.pointer(),
             config.module_index,
             config.cutoff_hz,
+            cutoff_velocity.as_ptr(),
             types.as_ptr(),
             frequencies.as_ptr(),
             gains.as_ptr(),
@@ -774,6 +1053,7 @@ fn configure_module_envelope(
             config.hold_ms,
             config.decay_ms,
             config.release_ms,
+            config.glide_ms,
         )
     };
     if ok != 0 {
@@ -886,6 +1166,45 @@ fn stop_all_notes(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 fn set_compatibility_mode(enabled: bool, state: State<'_, AppState>) {
     state.compatibility_mode.store(enabled, Ordering::Release);
+    if let Ok(engine) = state.engine.current() {
+        unsafe { hk_runtime_set_compatibility_mode(engine.pointer(), enabled as i32) };
+    }
+}
+
+#[tauri::command]
+fn set_seamless_preset_switching(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    unsafe {
+        hk_runtime_set_seamless_preset_switching(
+            engine.pointer(),
+            enabled as i32,
+            soundfont_cache_budget_bytes(),
+        )
+    };
+    Ok(())
+}
+
+// Um cache de SF2 retem bancos de amostras inteiros. Acima disto ele disputa
+// RAM com o timbre que esta tocando, e e essa disputa que empurra as amostras
+// em uso para o arquivo de paginacao - onde o callback de audio passa a
+// esperar disco a cada nota.
+fn soundfont_cache_budget_bytes() -> usize {
+    const MIB: u64 = 1024 * 1024;
+    let physical = memory::physical_bytes();
+    if physical == 0 {
+        return 0; // o motor aplica o proprio padrao conservador
+    }
+    (physical / 8).min(768 * MIB) as usize
+}
+
+// [0] pior bloco desde a ultima leitura, [1] media suavizada, [2] estouros.
+// 1.0 significa que o callback consumiu o prazo inteiro do bloco.
+#[tauri::command]
+fn audio_load(state: State<'_, AppState>) -> Result<Vec<f32>, String> {
+    let engine = state.engine.current()?;
+    let mut load = vec![0.0; 3];
+    unsafe { hk_runtime_audio_load(engine.pointer(), load.as_mut_ptr()) };
+    Ok(load)
 }
 
 #[tauri::command]
@@ -928,7 +1247,7 @@ fn set_midi_inputs(
                     let message_type = status & 0xf0;
                     let blocked_cc = compatibility.load(Ordering::Acquire)
                         && message_type == 0xb0
-                        && matches!(data1, 0 | 6 | 7 | 10 | 16 | 32 | 100 | 101);
+                        && matches!(data1, 0 | 6 | 7 | 10 | 16 | 32 | 91 | 100 | 101);
                     if !blocked_cc {
                         if let Ok(engine) = hub.current() {
                             unsafe {
@@ -996,18 +1315,67 @@ fn soundfont_directory(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
+// Um asset valido e exatamente asset-<64 digitos hexadecimais>.sf2, o mesmo
+// nome que begin_sound_font_upload escreve e o unico que o motor chega a
+// carregar. Qualquer outra coisa no diretorio e sobra.
+fn is_sound_font_asset(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("asset-") else {
+        return false;
+    };
+    let Some(key) = rest.strip_suffix(".sf2") else {
+        return false;
+    };
+    key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+// O esquema antigo gravava o timbre como module-N.sf2, e um download
+// interrompido deixa um module-N.sf2.part para tras. Nenhum dos dois volta a
+// ser lido, e cada um custa centenas de megabytes de disco. Roda na partida,
+// antes de qualquer upload poder comecar.
+fn remove_orphan_sound_fonts(app: &AppHandle) {
+    let Ok(directory) = soundfont_directory(app) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let name = entry.file_name();
+        if name.to_str().is_some_and(is_sound_font_asset) {
+            continue;
+        }
+        let _ = fs::remove_file(entry.path());
+    }
+}
+
 #[tauri::command]
-fn begin_sound_font_upload(
+async fn begin_sound_font_upload(
     module_index: usize,
+    asset_key: String,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<HashMap<&'static str, bool>, String> {
     if module_index >= 8 {
         return Err("Módulo inválido.".into());
     }
     let directory = soundfont_directory(&app)?;
+    if asset_key.len() != 64 || !asset_key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Identificador de timbre inválido.".into());
+    }
     let temporary = directory.join(format!("module-{module_index}.sf2.part"));
-    let destination = directory.join(format!("module-{module_index}.sf2"));
+    let destination = directory.join(format!("asset-{asset_key}.sf2"));
+    if destination.exists() {
+        let engine = state.engine.current()?;
+        let cached_path = destination.clone();
+        let loaded = tauri::async_runtime::spawn_blocking(move || {
+            let Ok(path) = CString::new(cached_path.to_string_lossy().as_bytes()) else { return false };
+            unsafe { hk_runtime_load_soundfont(engine.pointer(), module_index, path.as_ptr()) != 0 }
+        }).await.map_err(|error| error.to_string())?;
+        if loaded { return Ok(HashMap::from([("cached", true)])); }
+    }
     let file = File::create(&temporary).map_err(|error| error.to_string())?;
     state
         .uploads
@@ -1021,7 +1389,7 @@ fn begin_sound_font_upload(
                 destination,
             },
         );
-    Ok(())
+    Ok(HashMap::from([("cached", false)]))
 }
 
 #[tauri::command]
@@ -1044,7 +1412,7 @@ fn append_sound_font_chunk(
 }
 
 #[tauri::command]
-fn finish_sound_font_upload(module_index: usize, state: State<'_, AppState>) -> Result<(), String> {
+async fn finish_sound_font_upload(module_index: usize, state: State<'_, AppState>) -> Result<(), String> {
     let upload = state
         .uploads
         .lock()
@@ -1059,11 +1427,13 @@ fn finish_sound_font_upload(module_index: usize, state: State<'_, AppState>) -> 
     let path = CString::new(upload.destination.to_string_lossy().as_bytes())
         .map_err(|error| error.to_string())?;
     let engine = state.engine.current()?;
-    if unsafe { hk_runtime_load_soundfont(engine.pointer(), module_index, path.as_ptr()) } != 0 {
-        Ok(())
-    } else {
-        Err("O arquivo SF2 não pôde ser carregado.".into())
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if unsafe { hk_runtime_load_soundfont(engine.pointer(), module_index, path.as_ptr()) } != 0 {
+            Ok(())
+        } else {
+            Err("O arquivo SF2 não pôde ser carregado.".into())
+        }
+    }).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -1072,9 +1442,207 @@ fn confirm_app_close(app: AppHandle, state: State<'_, AppState>) {
     app.exit(0);
 }
 
+#[derive(Serialize)]
+struct SaveBackupResult {
+    saved: bool,
+}
+
+fn safe_backup_file_name(value: &str) -> String {
+    let stem = value.trim().strip_suffix(".json").unwrap_or(value.trim());
+    let stem: String = stem.chars().map(|character| match character {
+        'a'..='z' | 'A'..='Z' | '0'..='9' | ' ' | '-' | '_' => character,
+        _ => '-',
+    }).collect();
+    let stem = stem.trim_matches([' ', '-', '_']);
+    format!("{}.json", if stem.is_empty() { "Hook Keys Backup" } else { stem })
+}
+
+#[tauri::command]
+async fn save_backup(file_name: String, content: String) -> Result<SaveBackupResult, String> {
+    const MAX_BACKUP_BYTES: usize = 1024 * 1024;
+    if content.is_empty() || content.len() > MAX_BACKUP_BYTES {
+        return Err("O arquivo de backup é inválido ou muito grande.".into());
+    }
+    let file_name = safe_backup_file_name(&file_name);
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Backup Hook Keys", &["json"])
+            .set_file_name(&file_name)
+            .save_file()
+        else {
+            return Ok(SaveBackupResult { saved: false });
+        };
+        fs::write(path, content.as_bytes()).map_err(|error| error.to_string())?;
+        Ok(SaveBackupResult { saved: true })
+    }).await.map_err(|error| error.to_string())?
+}
+
+// A thread de audio le amostras espalhadas por centenas de megabytes. Quando o
+// Windows apara o working set do processo - e numa maquina de 8 GB ele apara -
+// cada leitura vira falta de pagina resolvida em disco e o callback fica
+// parado esperando I/O. O processo aparece com 0% de CPU enquanto o som corta.
+#[cfg(windows)]
+mod memory {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct Luid {
+        low_part: u32,
+        high_part: i32,
+    }
+
+    #[repr(C)]
+    struct LuidAndAttributes {
+        luid: Luid,
+        attributes: u32,
+    }
+
+    #[repr(C)]
+    struct TokenPrivileges {
+        privilege_count: u32,
+        privileges: [LuidAndAttributes; 1],
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct MemoryStatusEx {
+        length: u32,
+        memory_load: u32,
+        total_physical: u64,
+        available_physical: u64,
+        total_page_file: u64,
+        available_page_file: u64,
+        total_virtual: u64,
+        available_virtual: u64,
+        available_extended_virtual: u64,
+    }
+
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut c_void;
+        fn OpenProcessToken(process: *mut c_void, access: u32, token: *mut *mut c_void) -> i32;
+        fn LookupPrivilegeValueW(system: *const u16, name: *const u16, luid: *mut Luid) -> i32;
+        fn AdjustTokenPrivileges(
+            token: *mut c_void,
+            disable_all: i32,
+            new_state: *const TokenPrivileges,
+            buffer_length: u32,
+            previous_state: *mut TokenPrivileges,
+            return_length: *mut u32,
+        ) -> i32;
+        fn CloseHandle(object: *mut c_void) -> i32;
+        fn SetProcessWorkingSetSizeEx(
+            process: *mut c_void,
+            minimum: usize,
+            maximum: usize,
+            flags: u32,
+        ) -> i32;
+        fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
+    }
+
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_ADJUST_PRIVILEGES: u32 = 0x0020;
+    const SE_PRIVILEGE_ENABLED: u32 = 0x0002;
+    const QUOTA_LIMITS_HARDWS_MIN_ENABLE: u32 = 0x0001;
+
+    pub fn physical_bytes() -> u64 {
+        let mut status = MemoryStatusEx {
+            length: std::mem::size_of::<MemoryStatusEx>() as u32,
+            ..Default::default()
+        };
+        if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
+            return 0;
+        }
+        status.total_physical
+    }
+
+    // SeIncreaseWorkingSetPrivilege ja pertence ao usuario comum; falta apenas
+    // habilita-lo no token deste processo.
+    fn enable_working_set_privilege() {
+        let name: Vec<u16> = "SeIncreaseWorkingSetPrivilege"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            let mut token: *mut c_void = std::ptr::null_mut();
+            if OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                &mut token,
+            ) == 0
+            {
+                return;
+            }
+            let mut luid = Luid::default();
+            if LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) != 0 {
+                let privileges = TokenPrivileges {
+                    privilege_count: 1,
+                    privileges: [LuidAndAttributes {
+                        luid,
+                        attributes: SE_PRIVILEGE_ENABLED,
+                    }],
+                };
+                AdjustTokenPrivileges(
+                    token,
+                    0,
+                    &privileges,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+            }
+            CloseHandle(token);
+        }
+    }
+
+    // O minimo nao reserva nada: apenas impede o corte enquanto o processo
+    // realmente usa a memoria. Por isso pode ser generoso sem tirar RAM de
+    // quem esta ao lado.
+    pub fn pin_working_set() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let physical = physical_bytes();
+        if physical == 0 {
+            return;
+        }
+        let minimum = (physical / 100 * 35).min(3 * GIB / 2) as usize;
+        let maximum = (physical / 100 * 60).min(3 * GIB) as usize;
+        if minimum == 0 || maximum <= minimum {
+            return;
+        }
+        enable_working_set_privilege();
+        unsafe {
+            let process = GetCurrentProcess();
+            if SetProcessWorkingSetSizeEx(
+                process,
+                minimum,
+                maximum,
+                QUOTA_LIMITS_HARDWS_MIN_ENABLE,
+            ) == 0
+            {
+                // Sem o privilegio o minimo vira apenas uma dica, que ja reduz
+                // muito a frequencia do corte.
+                SetProcessWorkingSetSizeEx(process, minimum, maximum, 0);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod memory {
+    pub fn physical_bytes() -> u64 {
+        0
+    }
+    pub fn pin_working_set() {}
+}
+
 fn main() {
+    memory::pin_working_set();
     tauri::Builder::default()
         .manage(AppState::default())
+        .setup(|app| {
+            remove_orphan_sound_fonts(app.handle());
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
@@ -1089,21 +1657,35 @@ fn main() {
             list_audio_output_devices,
             list_midi_devices,
             set_audio_output_device,
+            set_midi_input_enabled,
             audio_output_status,
+            module_meter_levels,
+            module_analysis,
+            audio_load,
             set_midi_inputs,
             configure_module,
+            set_module_gain,
             configure_module_effects,
             configure_module_envelope,
+            configure_module_modulation,
+            configure_glide,
+            configure_velocity_limits,
+            configure_trance_gate,
+            begin_preset_transition,
+            commit_preset_transition,
             configure_synth,
             send_midi,
             set_tempo,
             configure_metronome,
             set_output_gain,
             set_compatibility_mode,
+            set_seamless_preset_switching,
             stop_all_notes,
             begin_sound_font_upload,
             append_sound_font_chunk,
             finish_sound_font_upload,
+            clone_sound_font,
+            save_backup,
             confirm_app_close,
         ])
         .run(tauri::generate_context!())
@@ -1113,6 +1695,59 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_keeps_only_checksum_named_sound_fonts() {
+        let key = "a".repeat(64);
+        assert!(is_sound_font_asset(&format!("asset-{key}.sf2")));
+        assert!(!is_sound_font_asset("module-0.sf2"));
+        assert!(!is_sound_font_asset("module-5.sf2.part"));
+        assert!(!is_sound_font_asset(&format!("asset-{key}.sf2.part")));
+        assert!(!is_sound_font_asset(&format!("asset-{}.sf2", "a".repeat(63))));
+        assert!(!is_sound_font_asset(&format!("asset-{}.sf2", "z".repeat(64))));
+        assert!(!is_sound_font_asset("asset-.sf2"));
+    }
+
+    #[test]
+    fn backup_file_name_cannot_escape_the_native_save_dialog() {
+        assert_eq!(safe_backup_file_name("Hook Keys Backup 2026-09-14.json"), "Hook Keys Backup 2026-09-14.json");
+        assert_eq!(safe_backup_file_name("../segredo.json"), "segredo.json");
+        assert_eq!(safe_backup_file_name("<>:.json"), "Hook Keys Backup.json");
+    }
+
+    #[test]
+    fn diagnostic_real_sf2_six_note_chord() {
+        let Ok(soundfont) = std::env::var("HOOK_KEYS_DIAGNOSTIC_SF2") else { return };
+        let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
+        let path = CString::new(soundfont).expect("path");
+        let loading_started = std::time::Instant::now();
+        assert_ne!(unsafe { hk_runtime_load_soundfont(engine.pointer(), 0, path.as_ptr()) }, 0);
+        let loading_elapsed = loading_started.elapsed();
+        assert_ne!(unsafe {
+            hk_runtime_configure_module(
+                engine.pointer(), 0, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
+                127, 127, 127, 127, 127, 0, 2,
+            )
+        }, 0);
+        for note in [48, 52, 55, 60, 64, 67] {
+            assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, note, 127) }, 0);
+        }
+        let mut output = vec![0.0_f32; 512 * 2];
+        let mut maximum_callback = std::time::Duration::ZERO;
+        let render_started = std::time::Instant::now();
+        let mut peak = 0.0_f32;
+        for _ in 0..200 {
+            let callback_started = std::time::Instant::now();
+            unsafe { hk_runtime_render(engine.pointer(), output.as_mut_ptr(), 512, 2) };
+            maximum_callback = maximum_callback.max(callback_started.elapsed());
+            peak = output.iter().fold(peak, |value, sample| value.max(sample.abs()));
+        }
+        println!(
+            "SF2_DIAGNOSTIC loading={loading_elapsed:?} render_200={:?} max_callback={maximum_callback:?} peak={peak}",
+            render_started.elapsed(),
+        );
+        assert!(output.iter().all(|sample| sample.is_finite()));
+    }
 
     #[test]
     fn shared_engine_loads_sf2_and_renders_audio() {
@@ -1185,6 +1820,31 @@ mod tests {
     }
 
     #[test]
+    fn six_note_chord_renders_without_dynamic_gain_reduction() {
+        let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
+        assert_ne!(unsafe {
+            hk_runtime_configure_module(
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
+                127, 127, 127, 127, 127, 0, 2,
+            )
+        }, 0);
+        assert_ne!(unsafe {
+            hk_runtime_configure_synth(
+                engine.pointer(), 0, 0, 1, 1, 0, 1, 1.0, 1.0, 7.0, 0.0, 0.0,
+                15_000.0, 1.0, 300.0, 20_000.0, 0.0, 0.0, 7.55, 0.0, 0.0, 0, 0,
+            )
+        }, 0);
+        for note in [48, 52, 55, 60, 64, 67] {
+            assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, note, 127) }, 0);
+        }
+        let mut output = vec![0.0_f32; 4096 * 2];
+        unsafe { hk_runtime_render(engine.pointer(), output.as_mut_ptr(), 4096, 2) };
+        let peak = output.iter().fold(0.0_f32, |value, sample| value.max(sample.abs()));
+        assert!(peak > 0.1, "the chord remains audible");
+        assert!(peak.is_finite(), "the polyphonic mix must remain finite: {peak}");
+    }
+
+    #[test]
     fn synth_oscillators_can_be_disabled_independently() {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
@@ -1210,6 +1870,7 @@ mod tests {
                 180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0,
             )
         }, 0);
+        assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, 60, 110) }, 0);
         let mut audible = vec![0.0_f32; 1024 * 2];
         unsafe { hk_runtime_render(engine.pointer(), audible.as_mut_ptr(), 1024, 2) };
         assert!(audible.iter().any(|sample| sample.abs() > 0.00001));

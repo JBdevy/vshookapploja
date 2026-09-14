@@ -10,6 +10,7 @@ import {
   type LocalTrackBlock,
 } from './TrackLibraryStore';
 import type { TrackPlaybackSnapshot } from './TrackTransport';
+import { Capacitor } from '@capacitor/core';
 import { isDesktopRuntime } from '../../platform/runtime';
 
 interface PlaylistDraft {
@@ -38,13 +39,29 @@ type TrackListItem =
 
 interface TracksPanelOptions {
   autoEnabled?: boolean;
+  loopEnabled?: boolean;
   getPlaybackSnapshot?: () => TrackPlaybackSnapshot;
   onAutoEnabledChanged?: (enabled: boolean) => void;
+  onLoopEnabledChanged?: (enabled: boolean) => void;
+  // Devolve true quando o app abre o próprio gerenciador de arquivos.
+  onAddMusicRequested?: (trigger: HTMLElement) => boolean;
   onTrackSelected?: (track: LocalTrack) => void;
   onVisibleTracksChanged?: (tracks: LocalTrack[]) => void;
 }
 
 const PLAYLIST_NAME_LIMIT = 40;
+const TRACK_FILE_EXTENSIONS = ['.mp3', '.wav', '.wave', '.m4a', '.aac', '.flac', '.ogg', '.aif', '.aiff'];
+
+// No iOS/Android, o curinga audio/* abre o menu de câmera e fotos. Pedir um
+// documento (octet-stream) abre direto o seletor de arquivos, como no SF2.
+export function trackFileAccept(native = Capacitor.isNativePlatform()): string {
+  return `${native ? 'application/octet-stream' : 'audio/*'},${TRACK_FILE_EXTENSIONS.join(',')}`;
+}
+
+export function isTrackAudioFile(file: Pick<File, 'name' | 'type'>): boolean {
+  const name = file.name.toLowerCase();
+  return file.type.startsWith('audio/') || TRACK_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
 const BLOCK_NAME_LIMIT = 12;
 
 export function createTracksPanelMarkup(): string {
@@ -58,7 +75,7 @@ export function createTracksPanelMarkup(): string {
         </nav>
         <div class="tracks-library-grid" data-tracks-library aria-label="Músicas adicionadas"></div>
       </div>
-      <input type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg" multiple="multiple" data-tracks-file hidden>
+      <input type="file" accept="${trackFileAccept()}" multiple="multiple" data-tracks-file hidden>
       <p class="tracks-tools-panel__message" data-tracks-message role="status" aria-live="polite"></p>
       <section class="tracks-playlist-editor" data-playlist-editor aria-live="polite" hidden></section>
     </section>
@@ -71,6 +88,7 @@ export function createTracksSplitPanelMarkup(): string {
       <div class="tracks-split-panel__top">
         <button class="tracks-split-active-set" type="button" data-tracks-active-set data-tracks-action="toggle-set-menu" aria-expanded="false">All</button>
         <div class="tracks-split-controls" aria-label="Controles da lista">
+          <button type="button" data-tracks-action="toggle-loop" aria-pressed="false" aria-label="Repetir música"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg></button>
           <button type="button" data-tracks-action="toggle-auto" aria-pressed="false">Auto</button>
           <button type="button" data-tracks-action="add-bl">Add-BL</button>
           <button type="button" data-tracks-action="toggle-edit" aria-pressed="false">Edit</button>
@@ -104,6 +122,7 @@ export class TracksPanelController {
   private managedBlockId: string | null = null;
   private managedBlockNameDraft = '';
   private autoEnabled: boolean;
+  private loopEnabled: boolean;
   private editMode = false;
   private setMenuOpen = false;
   private tracks: LocalTrack[] = [];
@@ -117,6 +136,7 @@ export class TracksPanelController {
     private readonly options: TracksPanelOptions = {},
   ) {
     this.autoEnabled = options.autoEnabled ?? false;
+    this.loopEnabled = options.loopEnabled ?? false;
   }
 
   mount(): void {
@@ -217,6 +237,8 @@ export class TracksPanelController {
     const action = target.closest<HTMLButtonElement>('button[data-tracks-action]')?.dataset.tracksAction;
     if (!action) return;
     if (action === 'add-music') {
+      const trigger = target.closest<HTMLElement>('[data-tracks-action="add-music"]');
+      if (trigger && this.options.onAddMusicRequested?.(trigger)) return;
       this.root.querySelector<HTMLInputElement>('[data-tracks-file]')?.click();
     } else if (action === 'create-playlist') {
       this.openNameEditor(null);
@@ -229,6 +251,10 @@ export class TracksPanelController {
       this.setSetMenuOpen(!this.setMenuOpen);
     } else if (action === 'add-bl') {
       void this.addBlock();
+    } else if (action === 'toggle-loop') {
+      this.loopEnabled = !this.loopEnabled;
+      this.renderSplitControlState();
+      this.options.onLoopEnabledChanged?.(this.loopEnabled);
     } else if (action === 'toggle-auto') {
       this.autoEnabled = !this.autoEnabled;
       this.renderSplitControlState();
@@ -430,6 +456,10 @@ export class TracksPanelController {
     }
   }
 
+  refreshLibrary(): Promise<void> {
+    return this.refresh();
+  }
+
   private async refresh(): Promise<void> {
     try {
       [this.tracks, this.playlists] = await Promise.all([
@@ -586,6 +616,7 @@ export class TracksPanelController {
 
   private renderSplitControlState(): void {
     const states: Record<string, boolean> = {
+      'toggle-loop': this.loopEnabled,
       'toggle-auto': this.autoEnabled,
       'toggle-edit': this.editMode,
     };
@@ -622,14 +653,24 @@ export class TracksPanelController {
   }
 
   private async importTracks(input: HTMLInputElement): Promise<void> {
-    const files = Array.from(input.files ?? []);
+    const selected = Array.from(input.files ?? []);
     input.value = '';
-    if (files.length === 0) return;
+    if (selected.length === 0) return;
+    // O seletor de documentos deixa escolher qualquer arquivo: só áudio entra.
+    const files = selected.filter(isTrackAudioFile);
+    const ignored = selected.length - files.length;
+    const ignoredNote = ignored > 0
+      ? ` ${ignored} ${ignored === 1 ? 'arquivo ignorado' : 'arquivos ignorados'} (não é áudio).`
+      : '';
+    if (files.length === 0) {
+      this.setMessage(`Nenhuma música adicionada.${ignoredNote}`);
+      return;
+    }
     this.setMessage('Adicionando músicas...');
     try {
       await this.library.addFiles(files);
       await this.refresh();
-      this.setMessage(`${files.length} ${files.length === 1 ? 'música adicionada' : 'músicas adicionadas'}.`);
+      this.setMessage(`${files.length} ${files.length === 1 ? 'música adicionada' : 'músicas adicionadas'}.${ignoredNote}`);
     } catch {
       this.setMessage('Não foi possível adicionar as músicas.');
     }

@@ -10,6 +10,9 @@ typedef void (^HKMidiDevicesChangedHandler)(void);
 typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger channel, NSInteger value);
 
 @interface HookKeysNativeEngine : NSObject
+- (BOOL)beginPresetTransition;
+- (BOOL)commitPresetTransition;
+- (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing;
 
 @property(nonatomic, copy, nullable) HKMidiNoteHandler onMidiNote;
 @property(nonatomic, copy, nullable) HKMidiControlHandler onMidiControl;
@@ -19,12 +22,18 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 - (BOOL)startWithBufferFrames:(NSInteger)bufferFrames;
 - (BOOL)setAudioOutputDeviceId:(NSString *)deviceId
                       channels:(NSInteger)channels
-                  bufferFrames:(NSInteger)bufferFrames;
+                  bufferFrames:(NSInteger)bufferFrames
+                preserveEngine:(BOOL)preserveEngine;
 - (BOOL)audioOutputReady;
+- (void)setMidiInputEnabled:(BOOL)enabled;
+- (NSArray<NSNumber *> *)moduleMeterLevels;
+- (NSArray<NSNumber *> *)moduleAnalysis:(NSInteger)moduleIndex;
 - (void)stop;
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)listMidiDevices;
 - (void)setMidiDeviceIds:(NSArray *)deviceIds;
 - (BOOL)loadSoundFontAtPath:(NSString *)path moduleIndex:(NSInteger)moduleIndex;
+- (BOOL)cloneSoundFontFromModule:(NSInteger)sourceModuleIndex
+                        toModule:(NSInteger)targetModuleIndex;
 - (BOOL)configureModule:(NSInteger)moduleIndex
                  enabled:(BOOL)enabled
                inputSlot:(NSInteger)inputSlot
@@ -42,8 +51,10 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
           velocityCurve4:(NSInteger)velocityCurve4
       outputChannelStart:(NSInteger)outputChannelStart
       outputChannelCount:(NSInteger)outputChannelCount;
+- (BOOL)setModuleGainDb:(float)db moduleIndex:(NSInteger)moduleIndex;
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex
                        cutoffHz:(float)cutoffHz
+                 cutoffVelocity:(NSArray<NSNumber *> *)cutoffVelocity
                         eqTypes:(NSArray<NSNumber *> *)eqTypes
                   eqFrequencies:(NSArray<NSNumber *> *)eqFrequencies
                         eqGains:(NSArray<NSNumber *> *)eqGains
@@ -76,7 +87,18 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                         attackMs:(float)attackMs
                           holdMs:(float)holdMs
                          decayMs:(float)decayMs
-                       releaseMs:(float)releaseMs;
+                       releaseMs:(float)releaseMs glideMs:(float)glideMs;
+- (BOOL)configureModuleModulation:(NSInteger)moduleIndex lfo:(BOOL)lfo rateHz:(float)rateHz;
+- (BOOL)configureVelocityLimits:(NSInteger)moduleIndex
+                     ignoreAbove:(NSInteger)ignoreAbove
+                         ceiling:(NSInteger)ceiling
+                oscillator1Limit:(NSInteger)oscillator1Limit
+                oscillator2Limit:(NSInteger)oscillator2Limit;
+- (BOOL)configureGlide:(NSInteger)moduleIndex
+             portamento:(BOOL)portamento
+      velocityGateEnabled:(BOOL)velocityGateEnabled
+     velocityGateInverted:(BOOL)velocityGateInverted
+        velocityThreshold:(NSInteger)velocityThreshold;
 - (BOOL)configureSynth:(NSInteger)oscillator1
                            oscillator2:(NSInteger)oscillator2
                     oscillator1Enabled:(BOOL)oscillator1Enabled
@@ -114,6 +136,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
            timeSignatureNumerator:(NSInteger)timeSignatureNumerator;
 - (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled;
 - (void)setCompatibilityMode:(BOOL)enabled;
+- (void)setSeamlessPresetSwitching:(BOOL)enabled;
 - (void)stopAllNotes;
 
 @end

@@ -26,7 +26,8 @@ bool sameEq(const EqConfig& left, const EqConfig& right) noexcept {
 }
 
 bool sameCutoff(const CutoffConfig& left, const CutoffConfig& right) noexcept {
-  return left.enabled == right.enabled && left.frequencyHz == right.frequencyHz;
+  return left.enabled == right.enabled && left.frequencyHz == right.frequencyHz &&
+         left.velocityCurve == right.velocityCurve;
 }
 
 bool sameCompressor(const CompressorConfig& left, const CompressorConfig& right) noexcept {
@@ -58,14 +59,7 @@ void ModuleEffects::prepare(double sampleRate) {
   delay_.prepare(sampleRate_);
   reverb_.prepare(sampleRate_);
   rotary_.prepare(sampleRate_);
-  cutoff_.configure(
-      {config_.cutoff.enabled && config_.cutoff.frequencyHz < 19999.0f,
-       EqBandType::highCut,
-       config_.cutoff.frequencyHz,
-       0.0f,
-       0.7071f,
-       1},
-      sampleRate_);
+  configureCutoff();
   equalizer_.configure(config_.equalizer, sampleRate_);
   compressor_.configure(config_.compressor, sampleRate_);
   delay_.configure(config_.delay, tempoBpm_);
@@ -80,6 +74,10 @@ void ModuleEffects::reset() noexcept {
   delay_.reset();
   reverb_.reset();
   rotary_.reset();
+  configureCutoff();
+  gatePhaseSamples_ = 0.0;
+  gateStep_ = 0;
+  gateGain_ = 1.0f;
 }
 
 void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexcept {
@@ -87,13 +85,8 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
   tempoBpm_ = std::clamp(tempoBpm, 60.0f, 600.0f);
 
   if (!sameCutoff(config_.cutoff, config.cutoff)) {
-    cutoff_.configure(
-        {config.cutoff.enabled && config.cutoff.frequencyHz < 19999.0f,
-         EqBandType::highCut,
-         config.cutoff.frequencyHz,
-         0.0f,
-         0.7071f},
-        sampleRate_);
+    config_.cutoff = config.cutoff;
+    configureCutoff();
   }
   if (!sameEq(config_.equalizer, config.equalizer)) equalizer_.configure(config.equalizer, sampleRate_);
   if (!sameCompressor(config_.compressor, config.compressor)) {
@@ -102,7 +95,19 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
   if (!sameDelay(config_.delay, config.delay)) delay_.configure(config.delay, tempoBpm_);
   if (!sameReverb(config_.reverb, config.reverb)) reverb_.configure(config.reverb);
   if (!sameRotary(config_.rotary, config.rotary)) rotary_.configure(config.rotary);
+  if (!config_.tranceGate.enabled && config.tranceGate.enabled) triggerTranceGate();
+  gateStep_ %= config.tranceGate.length;
+  gateAttackCoefficient_ = static_cast<float>(1.0 - std::exp(-1.0 / (config.tranceGate.attackMs * 0.001 * sampleRate_)));
+  gateReleaseCoefficient_ = static_cast<float>(1.0 - std::exp(-1.0 / (config.tranceGate.releaseMs * 0.001 * sampleRate_)));
   config_ = config;
+}
+
+void ModuleEffects::configureCutoff() noexcept {
+  const auto& cutoff = config_.cutoff;
+  const float frequency = std::clamp(cutoff.frequencyHz, 20.0f, 20000.0f);
+  cutoff_.configure(
+      {cutoff.enabled && frequency < 19999.0f, EqBandType::highCut,
+       frequency, 0.0f, 0.7071f, 1}, sampleRate_);
 }
 
 void ModuleEffects::setTempo(float tempoBpm) noexcept {
@@ -110,14 +115,57 @@ void ModuleEffects::setTempo(float tempoBpm) noexcept {
   delay_.setTempo(tempoBpm_);
 }
 
-void ModuleEffects::process(float* left, float* right, std::size_t frames) noexcept {
-  if (left == nullptr || right == nullptr || frames == 0) return;
+ModuleProcessorLevels ModuleEffects::process(
+    float* left, float* right, std::size_t frames,
+    bool captureCompressorLevels) noexcept {
+  ModuleProcessorLevels levels{};
+  if (left == nullptr || right == nullptr || frames == 0) return levels;
+  captureCompressorLevels = captureCompressorLevels && config_.compressor.enabled;
   for (std::size_t frame = 0; frame < frames; ++frame) cutoff_.process(left[frame], right[frame]);
   equalizer_.process(left, right, frames);
+  if (captureCompressorLevels) {
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      levels.compressorInput = std::max(
+          levels.compressorInput, std::max(std::abs(left[frame]), std::abs(right[frame])));
+    }
+  }
   compressor_.process(left, right, frames);
+  if (captureCompressorLevels) {
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      levels.compressorOutput = std::max(
+          levels.compressorOutput, std::max(std::abs(left[frame]), std::abs(right[frame])));
+    }
+  }
   rotary_.process(left, right, frames);
+  processTranceGate(left, right, frames);
   delay_.process(left, right, frames);
   reverb_.process(left, right, frames);
+  return levels;
+}
+
+void ModuleEffects::triggerTranceGate() noexcept {
+  gatePhaseSamples_ = 0.0;
+  gateStep_ = 0;
+}
+
+void ModuleEffects::processTranceGate(float* left, float* right, std::size_t frames) noexcept {
+  const auto& gate = config_.tranceGate;
+  if (!gate.enabled && gateGain_ >= 0.99999f) { gateGain_ = 1.0f; return; }
+  const double baseDuration = sampleRate_ * 60.0 / tempoBpm_ * gate.beatMultiplier;
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    double duration = baseDuration * (gateStep_ % 2 == 0 ? 1.0 + gate.swing : 1.0 - gate.swing);
+    while (gatePhaseSamples_ >= duration) {
+      gatePhaseSamples_ -= duration;
+      gateStep_ = (gateStep_ + 1) % gate.length;
+      duration = baseDuration * (gateStep_ % 2 == 0 ? 1.0 + gate.swing : 1.0 - gate.swing);
+    }
+    const bool open = (gate.steps & (1u << gateStep_)) != 0 && gatePhaseSamples_ < duration * gate.gate;
+    const float target = !gate.enabled || open ? 1.0f : 1.0f - gate.depth;
+    gateGain_ += (target - gateGain_) * (target > gateGain_ ? gateAttackCoefficient_ : gateReleaseCoefficient_);
+    left[frame] *= gateGain_;
+    right[frame] *= gateGain_;
+    gatePhaseSamples_ += 1.0;
+  }
 }
 
 void ModuleEffects::RotarySpeaker::prepare(double nextSampleRate) {
@@ -429,7 +477,10 @@ void ModuleEffects::StereoDelay::process(float* left, float* right, std::size_t 
 }
 
 float ModuleEffects::StereoDelay::targetDelaySamples() const noexcept {
-  const auto milliseconds = config.sync ? (60000.0f / tempoBpm) * config.beatMultiplier : config.delayMs;
+  // The division always applies to one beat (1/4): the BPM beat with Sync, or
+  // the knob milliseconds without it (500 ms at 1/8 = 250 ms).
+  const auto beatMs = config.sync ? 60000.0f / tempoBpm : config.delayMs;
+  const auto milliseconds = beatMs * config.beatMultiplier;
   const auto samples = milliseconds * 0.001f * static_cast<float>(sampleRate);
   const auto maximum = leftBuffer.size() > 2 ? static_cast<float>(leftBuffer.size() - 2) : 1.0f;
   return std::clamp(samples, 1.0f, maximum);

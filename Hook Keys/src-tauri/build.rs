@@ -3,6 +3,7 @@ fn main() {
     let mut build = cc::Build::new();
     build
         .cpp(true)
+        .opt_level(2)
         .std("c++17")
         .include(format!("{engine}/include"))
         .include(format!("{engine}/third_party/TinySoundFont"))
@@ -21,5 +22,6 @@ fn main() {
     println!("cargo:rerun-if-changed=src/native_engine_bridge.cpp");
     println!("cargo:rerun-if-changed={engine}/include");
     println!("cargo:rerun-if-changed={engine}/src");
+    println!("cargo:rerun-if-changed={engine}/third_party/TinySoundFont/tsf.h");
     tauri_build::build()
 }

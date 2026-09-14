@@ -10,11 +10,18 @@ cc = "1"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
-cpal = "0.17.3"
+cpal = { version = "0.17.3", features = ["audio_thread_priority"] }
 midir = "0.11"
 base64 = "0.22"
+rfd = "0.15"
 
 [profile.release]
 lto = "thin"
 codegen-units = 4
 strip = true
+
+# O teste local usa o callback de áudio real. Otimize o código do aplicativo
+# também no Tauri dev para o teste não criar dropouts que não existem no build
+# comercial; as dependências continuam no perfil rápido padrão.
+[profile.dev.package.hook-keys-desktop]
+opt-level = 2

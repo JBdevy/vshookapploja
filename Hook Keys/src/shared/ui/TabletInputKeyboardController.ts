@@ -1,5 +1,6 @@
 import {
   createOnScreenKeyboardMarkup,
+  createNumericOnScreenKeyboardMarkup,
   resolveOnScreenKey,
 } from './OnScreenKeyboard';
 
@@ -64,7 +65,10 @@ export class TabletInputKeyboardController {
       if (!body) return;
       body.insertAdjacentHTML(
         'beforeend',
-        createOnScreenKeyboardMarkup(this.keyboardLabel(input)),
+        input.dataset.keyboardNumeric === 'true'
+          ? createNumericOnScreenKeyboardMarkup(
+              this.keyboardLabel(input), input.dataset.keyboardDecimal === 'true')
+          : createOnScreenKeyboardMarkup(this.keyboardLabel(input)),
       );
       this.keyboard = body.lastElementChild instanceof HTMLElement
         ? body.lastElementChild
@@ -128,8 +132,9 @@ export class TabletInputKeyboardController {
 
   private applyKey(input: EditableInput, key: string): void {
     const currentValue = input.value;
-    const numeric = input instanceof HTMLInputElement && input.type === 'number';
-    if (numeric && key !== 'backspace' && !/^\d$/.test(key)) return;
+    const numeric = input instanceof HTMLInputElement && (input.type === 'number' || input.dataset.keyboardNumeric === 'true');
+    const decimal = input instanceof HTMLInputElement && input.dataset.keyboardDecimal === 'true';
+    if (numeric && key !== 'backspace' && !/^\d$/.test(key) && !(decimal && key === '.')) return;
 
     const selectionStart = input.selectionStart ?? currentValue.length;
     const selectionEnd = input.selectionEnd ?? selectionStart;
@@ -144,6 +149,7 @@ export class TabletInputKeyboardController {
       }
     } else {
       const value = key === 'space' ? ' ' : key;
+      if (decimal && value === '.' && currentValue.includes('.')) return;
       const maximumLength = this.maximumLength(input);
       const candidate = `${before}${value}${after}`;
       if (Array.from(candidate).length > maximumLength) return;

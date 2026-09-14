@@ -8,6 +8,11 @@
 
 namespace hook_keys {
 
+struct ModuleProcessorLevels final {
+  float compressorInput = 0.0f;
+  float compressorOutput = 0.0f;
+};
+
 class ModuleEffects final {
 public:
   ModuleEffects() = default;
@@ -20,7 +25,15 @@ public:
   void setConfig(ModuleEffectsConfig config, float tempoBpm) noexcept;
   void setTempo(float tempoBpm) noexcept;
   void setModulation(std::uint8_t value) noexcept;
-  void process(float* left, float* right, std::size_t frames) noexcept;
+  void triggerTranceGate() noexcept;
+  ModuleProcessorLevels process(
+      float* left, float* right, std::size_t frames,
+      bool captureCompressorLevels = false) noexcept;
+  [[nodiscard]] bool requiresSilentProcessing() const noexcept {
+    // Delay e Reverb precisam continuar depois do Note Off para renderizar a cauda.
+    // Os demais processadores não produzem áudio a partir de silêncio.
+    return config_.delay.enabled || config_.reverb.enabled;
+  }
 
 private:
   struct Biquad final {
@@ -142,6 +155,13 @@ private:
   StereoDelay delay_{};
   Reverb reverb_{};
   RotarySpeaker rotary_{};
+  double gatePhaseSamples_ = 0.0;
+  std::uint8_t gateStep_ = 0;
+  float gateGain_ = 1.0f;
+  float gateAttackCoefficient_ = 0.01f;
+  float gateReleaseCoefficient_ = 0.01f;
+  void processTranceGate(float* left, float* right, std::size_t frames) noexcept;
+  void configureCutoff() noexcept;
 };
 
 } // namespace hook_keys

@@ -14,6 +14,30 @@ function transpile(path, require = () => ({}), globals = {}) {
 }
 
 const views = transpile('../src/features/player/PatternModulesView.ts');
+const knob = transpile('../src/features/player/ParameterKnobView.ts');
+const tranceGate = transpile('../src/features/player/TranceGateView.ts', specifier =>
+  specifier === './ParameterKnobView' ? knob : views);
+
+test('Trance Gate defaults and normalized settings contain only volume steps, with BPM divisions', () => {
+  const defaults = tranceGate.readTranceGateSettings(undefined);
+  assert.equal(defaults.enabled, true);
+  assert.equal(defaults.gate, 50);
+  assert.equal(defaults.depth, 100);
+  assert.equal(defaults.steps.length, 16);
+  const restored = tranceGate.readTranceGateSettings({ enabled: false, length: 8, steps: [false, true], depth: 55 });
+  assert.equal(restored.enabled, false);
+  assert.equal(restored.depth, 55);
+  assert.equal(restored.steps[0], false);
+  assert.equal(tranceGate.readTranceGateSettings({ gate: NaN }).gate, 50);
+  const markup = tranceGate.createTranceGateMarkup(restored);
+  assert.match(markup, /Trance Gate/);
+  assert.doesNotMatch(markup, /Velocity|Semitone|data-pattern-parameter="semitone"/);
+  assert.equal([...markup.matchAll(/data-trance-gate-step=/g)].length, 16);
+  assert.equal(tranceGate.tranceGateBeatMultiplier('1/8 T'), 1 / 3);
+  for (const path of ['../src-tauri/src/main.rs', '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', '../ios/App/App/HookKeysNativePlugin.swift']) {
+    assert.match(readFileSync(new URL(path, import.meta.url), 'utf8'), /configure_trance_gate|configureTranceGate/);
+  }
+});
 
 test('pattern settings are normalized and sequencer always restores sixteen safe steps', () => {
   const arp = views.readArpeggiatorSettings({ enabled: true, mode: 'invalid', octaves: 99, gate: -4 });
@@ -37,6 +61,16 @@ test('division clock keeps swing pairs at the same total duration', () => {
   const short = views.patternStepMilliseconds(120, '1/16', 50, 1);
   assert.equal(straight, 125);
   assert.equal(long + short, straight * 2);
+  assert.equal(views.patternStepMilliseconds(120, '1/8 T', 0, 0), 500 / 3);
+  assert.equal(views.patternStepMilliseconds(120, '1/16 T', 0, 0), 500 / 6);
+});
+
+test('arpeggiator offers triplets and 2x2 octave buttons while remaining permanently BPM-synced', () => {
+  const markup = views.createArpeggiatorMarkup({ division: '1/8 T', octaves: 3 });
+  assert.match(markup, /data-arpeggiator-division="1\/8 T"[^>]*aria-pressed="true"/);
+  assert.equal((markup.match(/data-arpeggiator-octaves=/g) ?? []).length, 4);
+  assert.doesNotMatch(markup, /data-pattern-parameter="octaves"/);
+  assert.doesNotMatch(markup, /data-arpeggiator-sync|rateBpm/);
 });
 
 test('arpeggiator and sequencer send generated notes through isolated engine inputs', () => {
@@ -74,4 +108,20 @@ test('arpeggiator and sequencer send generated notes through isolated engine inp
   assert(sent.some(([slot, status]) => slot === 4 && status === 0x80));
   assert(sent.some(([slot, status]) => slot === 5 && status === 0x80));
   controller.destroy();
+});
+
+test('arpeggiator follows physical key-up and its native route disables sustain', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /sustain:\s*patternInputSlot === ARPEGGIATOR_ENGINE_INPUT\s*\? false/,
+    'arpeggiator module must never inherit or accept CC64 sustain');
+  assert.match(player, /inputSlot:\s*patternInputSlot \?\?/,
+    'enabled arpeggiator must receive only its generated note stream');
+  const playback = readFileSync(new URL('../src/features/player/PatternPlaybackController.ts', import.meta.url), 'utf8');
+  assert.match(playback, /if \(existing >= 0\) state\.held\.splice\(existing, 1\);\s*if \(state\.held\.length === 0\) this\.stop\(kind, state, false\);/,
+    'physical Note Off must stop the arpeggio as soon as the final key is released');
+});
+
+test('new users start the arpeggiator module with Fixed velocity 80', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /moduleIndex === 5[\s\S]*?mode: 'fixed', fixedValue: 80, points: \[80, 80, 80, 80, 80\]/);
 });

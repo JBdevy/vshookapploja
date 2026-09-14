@@ -2,7 +2,10 @@ import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
 import { DoubleTapTracker } from '../../shared/gestures/DoubleTapTracker';
 import { isDesktopRuntime } from '../../platform/runtime';
 
-const MIN_DB = -60;
+// Below -60 dB the fader keeps a short tail down to -90 dB, so the last step
+// into silence (-inf) is inaudible.
+export const MODULE_FADER_MIN_DB = -90;
+const MIN_DB = MODULE_FADER_MIN_DB;
 const MAX_DB = 6;
 const DEFAULT_DB = 0;
 const POINTER_STEP_DB = 0.1;
@@ -17,8 +20,9 @@ interface CurvePoint {
 
 const FADER_CURVE: readonly CurvePoint[] = [
   { position: 0, db: MIN_DB },
-  { position: 0.16, db: -36 },
-  { position: 0.36, db: -18 },
+  { position: 0.06, db: -60 },
+  { position: 0.18, db: -36 },
+  { position: 0.37, db: -18 },
   { position: 0.56, db: -9 },
   { position: 0.8, db: 0 },
   { position: 1, db: MAX_DB },
@@ -105,7 +109,8 @@ export function createModuleFaderMarkup(moduleNumber: number): string {
         aria-valuetext="${formatFaderDb(DEFAULT_DB)}"
       >
         <span class="player-module__meter" aria-hidden="true">
-          <span class="player-module__meter-fill"></span>
+          <span class="player-module__meter-fill player-module__meter-fill--left"></span>
+          <span class="player-module__meter-fill player-module__meter-fill--right"></span>
         </span>
         <span class="player-module__zero-line" aria-hidden="true"></span>
         <span class="player-module__fader-handle" aria-hidden="true"></span>
@@ -154,7 +159,7 @@ export class ModuleFader {
     this.rail.addEventListener('keydown', this.handleKeyDown);
     this.rail.addEventListener('contextmenu', this.handleContextMenu);
     this.renderValue();
-    this.setMeterLevel(MIN_DB);
+    this.setMeterLevels(MIN_DB, MIN_DB);
   }
 
   destroy(): void {
@@ -170,9 +175,16 @@ export class ModuleFader {
   }
 
   setMeterLevel(db: number): void {
-    if (!Number.isFinite(db)) return;
-    const meterPosition = dbToPosition(clamp(db, MIN_DB, MAX_DB)) * 100;
-    this.root.style.setProperty('--module-meter-level', `${meterPosition.toFixed(2)}%`);
+    this.setMeterLevels(db, db);
+  }
+
+  setMeterLevels(leftDb: number, rightDb: number): void {
+    if (!Number.isFinite(leftDb) || !Number.isFinite(rightDb)) return;
+    const left = dbToPosition(clamp(leftDb, MIN_DB, MAX_DB)) * 100;
+    const right = dbToPosition(clamp(rightDb, MIN_DB, MAX_DB)) * 100;
+    this.root.style.setProperty('--module-meter-left-level', `${left.toFixed(2)}%`);
+    this.root.style.setProperty('--module-meter-right-level', `${right.toFixed(2)}%`);
+    this.root.classList.toggle('is-clipping', leftDb > 0 || rightDb > 0);
   }
 
   getValueDb(): number {
@@ -235,7 +247,7 @@ export class ModuleFader {
     const safeArea = axisSize * (HANDLE_SAFE_AREA_PERCENT / 100);
     const usableSize = axisSize - safeArea * 2;
     const position = clamp((bounds.bottom - safeArea - event.clientY) / usableSize, 0, 1);
-    this.setValueDb(roundTo(positionToDb(position), POINTER_STEP_DB));
+    this.setValueDb(roundTo(positionToDb(position), POINTER_STEP_DB), true);
   }
 
   private onKeyDown(event: KeyboardEvent): void {

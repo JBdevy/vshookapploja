@@ -9,13 +9,13 @@ export interface VelocityCurveSettings {
 
 export const DEFAULT_VELOCITY_CURVE: VelocityCurveSettings = {
   mode: 'soft',
-  points: [0, 8, 32, 72, 127],
+  points: [0, 16, 44, 84, 127],
   userPoints: [0, 32, 64, 96, 127],
   fixedValue: 100,
 };
 
 const VELOCITY_CURVES: Record<Exclude<VelocityCurveMode, 'user'>, VelocityCurveSettings['points']> = {
-  soft: [0, 8, 32, 72, 127],
+  soft: [0, 16, 44, 84, 127],
   middle: [0, 32, 64, 96, 127],
   hard: [0, 52, 84, 108, 127],
   fixed: [100, 100, 100, 100, 100],
@@ -47,7 +47,11 @@ export function readVelocityCurveSettings(value: unknown): VelocityCurveSettings
     : mode === 'fixed' && points
       ? clampVelocity(points[0])
       : DEFAULT_VELOCITY_CURVE.fixedValue;
-  const activePoints = points ?? velocityCurvePointsForMode(mode, userPoints, fixedValue);
+  // Soft, Middle e Hard são curvas de fábrica: ajustar a tabela precisa
+  // valer também para módulos salvos, então os pontos gravados não mandam.
+  const activePoints = mode === 'user' || mode === 'fixed'
+    ? points ?? velocityCurvePointsForMode(mode, userPoints, fixedValue)
+    : velocityCurvePointsForMode(mode, userPoints, fixedValue);
   return {
     mode,
     points: activePoints,
@@ -98,8 +102,35 @@ export function createVelocityCardMarkup(settings: Readonly<Record<string, unkno
   `;
 }
 
-export function createVelocityCurveMarkup(settings: Readonly<Record<string, unknown>>): string {
+// Limite Velocity (a nota acima não toca) e o limitador do Velocity (a nota
+// acima sai com o próprio valor). Os dois começam em 127, sem efeito.
+export function readVelocityLimit(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? clampVelocity(parsed) : 127;
+}
+
+export function createVelocityCurveMarkup(
+  settings: Readonly<Record<string, unknown>>,
+  options: { ceiling?: number } = {},
+): string {
   const velocity = readVelocityCurveSettings(settings.velocityCurve);
+  const ceiling = options.ceiling === undefined ? null : readVelocityLimit(options.ceiling);
+  const plotMarkup = `
+      <div class="velocity-curve-plot" data-velocity-curve-plot>
+        <svg viewBox="0 0 640 260" preserveAspectRatio="none" aria-label="Entrada e saída da curva de velocity">
+          <g class="velocity-curve-grid">
+            <path d="M0 65H640M0 130H640M0 195H640M160 0V260M320 0V260M480 0V260" />
+            <path class="velocity-curve-reference" d="M0 260L640 0" />
+          </g>
+          <path class="velocity-curve-line" data-velocity-curve-line d="${velocityCurvePath(velocity.points)}" />
+          ${ceiling === null ? '' : `<rect class="velocity-ceiling-zone" data-velocity-ceiling-zone x="0" y="0" width="640" height="${velocityPointY(ceiling)}" />
+          <path class="velocity-ceiling-line" data-velocity-ceiling-line d="M0 ${velocityPointY(ceiling)}H640" />`}
+          <g class="velocity-curve-handles" data-velocity-curve-handles>
+            ${velocity.points.map((point, index) => velocityHandleMarkup(index, point)).join('')}
+          </g>
+        </svg>
+      </div>
+  `;
   return `
     <section class="velocity-curve-editor" data-velocity-mode="${velocity.mode}">
       <div class="velocity-curve-modes" role="radiogroup" aria-label="Curva de velocity">
@@ -113,18 +144,7 @@ export function createVelocityCurveMarkup(settings: Readonly<Record<string, unkn
           >${MODE_LABELS[mode]}</button>
         `).join('')}
       </div>
-      <div class="velocity-curve-plot" data-velocity-curve-plot>
-        <svg viewBox="0 0 640 260" preserveAspectRatio="none" aria-label="Entrada e saída da curva de velocity">
-          <g class="velocity-curve-grid">
-            <path d="M0 65H640M0 130H640M0 195H640M160 0V260M320 0V260M480 0V260" />
-            <path class="velocity-curve-reference" d="M0 260L640 0" />
-          </g>
-          <path class="velocity-curve-line" data-velocity-curve-line d="${velocityCurvePath(velocity.points)}" />
-          <g class="velocity-curve-handles" data-velocity-curve-handles>
-            ${velocity.points.map((point, index) => velocityHandleMarkup(index, point)).join('')}
-          </g>
-        </svg>
-      </div>
+      ${ceiling === null ? plotMarkup : `<div class="velocity-curve-plot-row">${plotMarkup}${velocityCeilingMarkup(ceiling)}</div>`}
       <label class="velocity-fixed-control" data-velocity-fixed-control${velocity.mode === 'fixed' ? '' : ' hidden'}>
         <span>Velocity fixa</span>
         <input type="range" min="0" max="127" step="1" value="${velocity.points[0]}" data-velocity-fixed-value>
@@ -186,6 +206,39 @@ export function velocityFromClientY(plot: HTMLElement, clientY: number): number 
 
 export function isVelocityCurveMode(value: unknown): value is VelocityCurveMode {
   return value === 'soft' || value === 'middle' || value === 'hard' || value === 'fixed' || value === 'user';
+}
+
+function velocityCeilingMarkup(ceiling: number): string {
+  return `
+    <div class="velocity-ceiling" data-velocity-ceiling role="slider" tabindex="0"
+      aria-label="Limitador de velocity" aria-valuemin="1" aria-valuemax="127" aria-valuenow="${ceiling}"
+      style="--velocity-ceiling:${(ceiling / 127) * 100}%">
+      <span class="velocity-ceiling__track" data-velocity-ceiling-track><i></i><b></b></span>
+      <output data-velocity-ceiling-output>${ceiling}</output>
+    </div>
+  `;
+}
+
+export function velocityCeilingFromClientY(track: HTMLElement, clientY: number): number {
+  const rect = track.getBoundingClientRect();
+  if (rect.height <= 0) return 127;
+  return Math.max(1, clampVelocity((1 - ((clientY - rect.top) / rect.height)) * 127));
+}
+
+export function updateVelocityCeilingMarkup(container: HTMLElement, ceiling: number): void {
+  const value = Math.max(1, clampVelocity(ceiling));
+  const slider = container.querySelector<HTMLElement>('[data-velocity-ceiling]');
+  if (slider) {
+    slider.style.setProperty('--velocity-ceiling', `${(value / 127) * 100}%`);
+    slider.setAttribute('aria-valuenow', String(value));
+  }
+  const output = container.querySelector<HTMLOutputElement>('[data-velocity-ceiling-output]');
+  if (output) {
+    output.value = String(value);
+    output.textContent = String(value);
+  }
+  container.querySelector('[data-velocity-ceiling-line]')?.setAttribute('d', `M0 ${velocityPointY(value)}H640`);
+  container.querySelector('[data-velocity-ceiling-zone]')?.setAttribute('height', String(velocityPointY(value)));
 }
 
 function velocityHandleMarkup(index: number, value: number): string {

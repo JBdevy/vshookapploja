@@ -1,4 +1,4 @@
-export type PatternDivision = '1/4' | '1/8' | '1/16' | '1/32';
+export type PatternDivision = '1/4' | '1/8' | '1/16' | '1/32' | '1/4 T' | '1/8 T' | '1/16 T' | '1/32 T';
 export type ArpeggiatorMode = 'up' | 'down' | 'up-down' | 'played' | 'random';
 
 export interface ArpeggiatorSettings {
@@ -26,6 +26,9 @@ export interface SequencerSettings {
 }
 
 export const PATTERN_DIVISIONS: readonly PatternDivision[] = ['1/4', '1/8', '1/16', '1/32'];
+export const ARPEGGIATOR_DIVISIONS: readonly PatternDivision[] = [
+  '1/4', '1/8', '1/16', '1/32', '1/4 T', '1/8 T', '1/16 T', '1/32 T',
+];
 export const ARPEGGIATOR_MODES: readonly ArpeggiatorMode[] = ['up', 'down', 'up-down', 'played', 'random'];
 
 export const DEFAULT_ARPEGGIATOR_SETTINGS: Readonly<ArpeggiatorSettings> = Object.freeze({
@@ -92,17 +95,22 @@ export function createArpeggiatorMarkup(value: unknown): string {
     <section class="pattern-editor arpeggiator-editor" data-arpeggiator-editor>
       <header class="pattern-editor__header">
         <div><span>Módulo 06</span><strong>Arpeggiator</strong></div>
-        <output>${settings.division} · ${settings.octaves} oitava${settings.octaves === 1 ? '' : 's'}</output>
+        <output class="pattern-editor__summary">${settings.division} · ${settings.octaves} oitava${settings.octaves === 1 ? '' : 's'}</output>
       </header>
       <div class="pattern-option-group" role="group" aria-label="Direção do arpejo">
         ${ARPEGGIATOR_MODES.map((mode) => optionButton('arpeggiator-mode', mode, arpeggiatorModeLabel(mode), settings.mode === mode)).join('')}
       </div>
       <div class="pattern-option-group pattern-option-group--division" role="group" aria-label="Divisão do arpejo">
-        ${PATTERN_DIVISIONS.map((division) => optionButton('arpeggiator-division', division, division, settings.division === division)).join('')}
+        ${ARPEGGIATOR_DIVISIONS.map((division) => optionButton('arpeggiator-division', division, division, settings.division === division)).join('')}
       </div>
       <div class="arpeggiator-live-strip" aria-hidden="true">${Array.from({ length: 16 }, () => '<i></i>').join('')}</div>
       <div class="pattern-knob-grid">
-        ${patternKnob('arpeggiator', 'octaves', 'Oitavas', settings.octaves, 1, 4, 1, String(settings.octaves))}
+        <section class="arpeggiator-octaves" aria-label="Oitavas">
+          <span>Oitavas</span>
+          <div role="radiogroup">
+            ${[1, 2, 3, 4].map((octaves) => optionButton('arpeggiator-octaves', String(octaves), String(octaves), settings.octaves === octaves)).join('')}
+          </div>
+        </section>
         ${patternKnob('arpeggiator', 'gate', 'Gate', settings.gate, 10, 100, 1, `${Math.round(settings.gate)}%`)}
         ${patternKnob('arpeggiator', 'swing', 'Swing', settings.swing, 0, 75, 1, `${Math.round(settings.swing)}%`)}
       </div>
@@ -180,7 +188,14 @@ export function updatePatternRangeOutput(input: HTMLInputElement): number {
 
 export function patternStepMilliseconds(bpm: number, division: PatternDivision, swing: number, stepIndex: number): number {
   const quarter = 60_000 / Math.min(600, Math.max(60, Number.isFinite(bpm) ? bpm : 120));
-  const multiplier = division === '1/4' ? 1 : division === '1/8' ? 0.5 : division === '1/32' ? 0.125 : 0.25;
+  const multiplier = division === '1/4' ? 1
+    : division === '1/8' ? 0.5
+    : division === '1/32' ? 0.125
+    : division === '1/4 T' ? 2 / 3
+    : division === '1/8 T' ? 1 / 3
+    : division === '1/16 T' ? 1 / 6
+    : division === '1/32 T' ? 1 / 12
+    : 0.25;
   const swingAmount = Math.min(0.75, Math.max(0, swing / 100));
   return quarter * multiplier * (stepIndex % 2 === 0 ? 1 + swingAmount : 1 - swingAmount);
 }
@@ -225,7 +240,7 @@ function isArpeggiatorMode(value: unknown): value is ArpeggiatorMode {
 }
 
 function isPatternDivision(value: unknown): value is PatternDivision {
-  return typeof value === 'string' && (PATTERN_DIVISIONS as readonly string[]).includes(value);
+  return typeof value === 'string' && (ARPEGGIATOR_DIVISIONS as readonly string[]).includes(value);
 }
 
 function record(value: unknown): Record<string, unknown> {

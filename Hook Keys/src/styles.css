@@ -706,6 +706,23 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   }
 }
 
+.orientation-transition-cover,
+.startup-error {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  background: #000;
+  touch-action: none;
+}
+.startup-error {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #fff;
+}
+.startup-error section { max-width: 540px; text-align: center; }
+.startup-error p { overflow-wrap: anywhere; }
+.startup-error button { margin: 8px; padding: 12px 20px; }
 .octave-transition {
   position: fixed;
   z-index: 10000;
@@ -1030,14 +1047,18 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .octave-transition--enter.is-running {
-  animation: premium-transition-enter 6s ease-in-out both;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+.octave-transition--enter.is-running.is-complete {
+  opacity: 0;
 }
 .octave-transition--exit.is-running {
   animation: premium-transition-exit 6s ease-in-out both;
 }
 
 .octave-transition--enter.is-running .octave-transition__deck {
-  animation: premium-deck-enter 6s cubic-bezier(.16,.76,.18,1) both;
+  animation: premium-loading-deck 1.6s cubic-bezier(.16,.76,.18,1) both;
 }
 .octave-transition--exit.is-running .octave-transition__deck {
   animation: premium-deck-exit 6s cubic-bezier(.6,0,.25,1) both;
@@ -1060,7 +1081,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   animation: premium-status 740ms ease-in-out infinite alternate;
 }
 .octave-transition--enter.is-running .octave-transition__progress i {
-  animation: premium-progress 4.5s .5s cubic-bezier(.18,.72,.2,1) both;
+  animation: premium-loading-progress 1.8s ease-in-out infinite alternate;
 }
 .octave-transition--exit.is-running .octave-transition__progress i {
   animation: premium-progress-exit 4s .4s ease-in both;
@@ -1072,9 +1093,13 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   animation: premium-scan 1.25s .85s ease-in-out both;
 }
 
-@keyframes premium-transition-enter {
-  0%, 78% { opacity: 1; }
-  100% { opacity: 0; }
+@keyframes premium-loading-deck {
+  from { opacity: 0; transform: translateY(20px) scale(.96); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes premium-loading-progress {
+  from { transform: translateX(-30%) scaleX(.35); }
+  to { transform: translateX(95%) scaleX(.35); }
 }
 @keyframes premium-transition-exit {
   0% { opacity: 0; }
@@ -1149,7 +1174,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .synth-editor__header strong { color: #fff; font-size: clamp(15px, 2vw, 22px); }
 .synth-editor__header-controls {
   display: grid !important;
-  grid-template-columns: minmax(0, 1fr) minmax(72px, 11%);
+  grid-template-columns: minmax(0, 1fr) minmax(144px, 22%);
   align-items: center;
   column-gap: clamp(18px, 3vw, 52px) !important;
   min-width: 0;
@@ -1157,7 +1182,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 .synth-preset-group {
   display: grid !important;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 5px !important;
   min-width: 0;
 }
@@ -1171,6 +1196,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   opacity: 1;
 }
 .synth-legato-button { width: 100%; }
+.synth-editor__header-controls .synth-mode-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
 .synth-editor__header button,
 .synth-option-row button {
   min-width: 0;
@@ -1510,6 +1540,34 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   gap: clamp(8px, 1.2vw, 14px);
   min-height: 0;
 }
+.arpeggiator-octaves {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 76px;
+  padding: 7px;
+  color: #fff;
+  border: 1px solid color-mix(in srgb, var(--pattern-accent, #a855f7) 42%, #504650);
+  border-radius: 10px;
+  background: linear-gradient(155deg, #242027, #0d0c10);
+}
+.arpeggiator-octaves > span { text-align: center; color: #fff; font-size: 9px; font-weight: 950; }
+.arpeggiator-octaves > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.arpeggiator-octaves button {
+  min-width: 0;
+  color: #fff;
+  border: 1px solid #56495b;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #302936, #131116);
+  font-weight: 950;
+}
+.arpeggiator-octaves button.is-selected {
+  color: #120b05;
+  border-color: color-mix(in srgb, var(--pattern-accent, #a855f7) 78%, #fff);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--pattern-accent, #a855f7) 66%, #fff), var(--pattern-accent, #a855f7));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--pattern-accent, #a855f7) 30%, transparent);
+}
 .arpeggiator-editor { grid-template-rows: auto auto auto 12px minmax(0, 1fr); }
 .arpeggiator-live-strip { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; align-items: center; }
 .arpeggiator-live-strip i { height: 4px; border-radius: 4px; background: #392645; transition: background .08s ease, box-shadow .08s ease, transform .08s ease; }
@@ -1561,6 +1619,21 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .sequencer-step strong { color: #fff0df; font-size: clamp(10px, 1.3vw, 15px); }
 .sequencer-step i { width: 54%; height: 3px; border-radius: 4px; background: #5b4031; }
 .sequencer-step.is-enabled i { background: #ff8a27; box-shadow: 0 0 8px rgba(255,126,31,.65); }
+.trance-gate-editor .sequencer-step.is-enabled {
+  background: linear-gradient(180deg, #197a45, #093e25);
+  border-color: #3fbb72;
+  color: #fff;
+}
+.trance-gate-editor .sequencer-step.is-disabled {
+  background: linear-gradient(180deg, #9c342e, #4b1615);
+  border-color: #d65c52;
+  color: #fff;
+}
+.trance-gate-editor .sequencer-step.is-enabled i { background: #64e895; box-shadow: none; }
+.trance-gate-editor .pattern-knob-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.trance-gate-editor .pattern-knob { min-width: 0; }
+.trance-gate-editor .module-envelope-knob { justify-self: center; }
+.trance-gate-help { margin: 0; color: #ddd; font-size: 11px; }
 .sequencer-step.is-selected { border-color: #ffc06f; box-shadow: inset 0 0 0 1px #ff8b25, 0 0 10px rgba(255,118,20,.25); }
 .sequencer-step.is-playing { background: linear-gradient(180deg, #ffb34f, #a63706); transform: translateY(-2px); }
 .sequencer-step.is-playing strong,
@@ -1960,6 +2033,51 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   background: rgba(255, 122, 24, 0.18);
 }
 
+/* Medidor de carga do audio. Nao e a CPU da maquina: e quanto do prazo do
+ * buffer o callback consumiu. A CPU total nunca denuncia um estouro - uma
+ * thread saturada aparece como 8% em doze processadores logicos, e como 0%
+ * quando esta travada esperando disco. */
+.player-cpu-meter {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 1px;
+  min-width: clamp(50px, 4.2vw, 64px);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(43, 43, 47, 0.94), rgba(15, 15, 17, 0.98));
+  line-height: 1.05;
+  user-select: none;
+}
+
+.player-cpu-meter small {
+  color: var(--orange-bright);
+  font-size: clamp(8px, 0.78vw, 10px);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.player-cpu-meter strong {
+  color: #f1fff5;
+  font-size: clamp(10px, 1.02vw, 13px);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.player-cpu-meter.is-warning strong {
+  color: #ffc46b;
+}
+
+/* Vermelho no teto: e o bloco que encostou no prazo, exatamente onde o som
+ * corta. */
+.player-cpu-meter.is-critical {
+  border-color: rgba(255, 90, 82, 0.5);
+}
+
+.player-cpu-meter.is-critical strong {
+  color: #ff5a52;
+}
+
 .player-workspace {
   min-width: 0;
   min-height: 0;
@@ -2100,7 +2218,8 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .player-module__fader {
   --module-fader-position: 76.4%;
-  --module-meter-level: 0%;
+  --module-meter-left-level: 0%;
+  --module-meter-right-level: 0%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   justify-items: center;
@@ -2743,18 +2862,51 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 /* No desktop, presets e Keyboard coexistem. O teclado permanece tocável e
    ocupa uma linha própria abaixo dos 16 presets, sem o seletor Mostrar. */
-html[data-runtime="desktop"] .player-screen--tablet .player-bank-view {
-  grid-template-rows: minmax(220px, 1fr) clamp(170px, 31vh, 250px);
+.player-screen--tablet .player-bank-view:has(.player-presets--combined) {
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
-html[data-runtime="desktop"] .player-presets--desktop {
+.player-screen--tablet .player-presets--combined {
   grid-template-columns: minmax(70px, 0.11fr) minmax(0, 1fr);
-  grid-template-rows: minmax(54px, 0.72fr) minmax(88px, 1.28fr);
+  grid-template-rows: clamp(56px, 13vh, 94px) clamp(64px, 15vh, 108px);
   gap: clamp(5px, 0.75vh, 9px) clamp(7px, 1vw, 13px);
   padding: clamp(7px, 1.05vh, 11px);
 }
 
-html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard {
+.player-presets--combined .player-presets__header {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.player-presets--combined .player-presets__grid {
+  grid-column: 2;
+  grid-row: 1;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  min-height: 0;
+}
+
+.player-screen--tablet .player-presets--combined .player-preset-button,
+.player-screen--tablet .player-presets--combined .player-navigation__button {
+  min-height: 0;
+  padding-block: 2px;
+}
+
+@media (max-height: 800px) {
+  html[data-runtime="desktop"] .player-screen--tablet .player-module {
+    gap: 3px;
+    padding: 5px;
+  }
+  html[data-runtime="desktop"] .player-module__settings-button,
+  html[data-runtime="desktop"] .player-module__sound-button {
+    min-height: 26px;
+    padding-block: 2px;
+  }
+  html[data-runtime="desktop"] .player-output-knob__face {
+    width: 38px;
+  }
+}
+
+.player-presets--combined .performance-keyboard {
   grid-column: 1 / -1;
   grid-row: 2;
   display: grid;
@@ -2762,15 +2914,28 @@ html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard {
   height: 100%;
 }
 
-html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard__scroller,
-html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard__keys {
+.player-presets--combined .performance-keyboard__scroller,
+.player-presets--combined .performance-keyboard__keys {
   width: 100%;
   min-width: 0;
   max-width: 100%;
 }
 
-html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard__scroller {
+.player-presets--combined .performance-keyboard__scroller {
   overflow-x: hidden;
+}
+
+@media (max-height: 520px) {
+  .player-screen--tablet .player-bank-view:has(.player-presets--combined) {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .player-screen--tablet .player-presets--combined {
+    grid-template-columns: 58px minmax(0, 1fr);
+    grid-template-rows: clamp(48px, 13vh, 64px) clamp(58px, 15vh, 74px);
+    gap: 3px;
+    padding: 3px;
+  }
+  .player-presets--combined .performance-keyboard__keys { min-height: 0; }
 }
 
 .player-top-transport,
@@ -2835,7 +3000,8 @@ html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard__scr
   min-width: 0;
 }
 
-.player-top-actions > button {
+.player-top-actions > button,
+.player-top-actions > .player-cpu-meter {
   min-height: 38px;
   padding-inline: clamp(9px, 1vw, 14px);
 }
@@ -4022,6 +4188,21 @@ html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard__scr
   grid-template-rows: auto minmax(0, 1fr) auto;
   align-content: stretch;
 }
+.module-cutoff-control {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: clamp(3px, .55vh, 6px);
+}
+.module-cutoff-control > button {
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 5px;
+  border: 1px solid #49c9ff;
+  border-radius: 6px;
+  color: #fff;
+  background: linear-gradient(180deg, #168bc4, #075883);
+  font-size: clamp(8px, .8vw, 11px);
+  font-weight: 950;
+}
 
 .module-envelope-knob {
   position: relative;
@@ -4327,7 +4508,9 @@ html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard__scr
   bottom: 2px;
   left: 2px;
   height: 0;
-  background: linear-gradient(to top, #4daeff, #7ed8ff);
+  background: linear-gradient(to top, #18ad59 0 66%, #f0d31b 66% 88%, #f1372f 88% 100%);
+  box-shadow: 0 0 7px rgba(76, 255, 130, 0.45);
+  transition: height 45ms linear;
 }
 
 .module-compressor-meter small { color: #8d8b90; }
@@ -4544,10 +4727,6 @@ html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard__scr
   stroke-width: 1;
 }
 
-.module-eq-preview__rta {
-  fill: rgba(255, 159, 45, 0.2);
-}
-
 .module-eq-preview__curve-shadow {
   fill: url(#module-eq-preview-shadow);
   pointer-events: none;
@@ -4639,10 +4818,6 @@ html[data-runtime="desktop"] .player-presets--desktop .performance-keyboard__scr
   fill: none;
   stroke: rgba(206, 201, 212, 0.13);
   stroke-width: 1;
-}
-
-.module-eq-editor__rta {
-  fill: rgba(255, 159, 45, 0.18);
 }
 
 .module-eq-editor__curve-shadow {
@@ -5311,7 +5486,8 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
   width: min(100%, 760px);
 }
 
-.player-modal__header-action {
+.player-modal__header-action,
+.player-modal__header-cc-actions {
   position: absolute;
   top: 50%;
   right: 0;
@@ -5325,6 +5501,98 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
   background: linear-gradient(180deg, rgba(46, 46, 50, 0.98), rgba(16, 16, 18, 0.99));
   font-weight: 900;
   transform: translateY(-50%);
+}
+
+.player-modal__header-cc-actions {
+  grid-template-columns: minmax(118px, 1fr) auto;
+  gap: 5px;
+  min-width: 190px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.player-modal__header-cc-actions > button {
+  display: grid;
+  min-height: 42px;
+  padding: 5px 10px;
+  color: #f8ede6;
+  border: 1.5px solid rgba(255, 121, 0, 0.62);
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(46, 46, 50, 0.98), rgba(16, 16, 18, 0.99));
+  font-weight: 900;
+}
+.player-modal__header-cc-actions > button:last-child {
+  border-color: rgba(255, 83, 68, .72);
+  background: linear-gradient(180deg, #9d3029, #561713);
+}
+.player-modal__header-cc-actions small {
+  color: var(--orange-bright);
+  font-size: 9px;
+}
+
+.player-modal__inline-cc-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+}
+
+.player-modal__inline-cc-actions > button {
+  display: grid;
+  min-height: 48px;
+  padding: 6px 12px;
+  color: #f8ede6;
+  border: 1.5px solid rgba(255, 121, 0, 0.62);
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(46, 46, 50, 0.98), rgba(16, 16, 18, 0.99));
+  font-weight: 900;
+}
+
+.player-modal__inline-cc-actions > button:last-child {
+  min-width: 72px;
+  border-color: rgba(255, 83, 68, .72);
+  background: linear-gradient(180deg, #9d3029, #561713);
+}
+
+.player-modal__inline-cc-actions small {
+  color: var(--orange-bright);
+  font-size: 9px;
+}
+.cc-clear-confirmation {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  height: 100%;
+  text-align: center;
+}
+.cc-clear-confirmation strong { color: #fff; font-size: clamp(20px, 3vw, 34px); }
+.cc-clear-confirmation p { margin: 0; color: #d6d2d0; }
+
+.cc-action-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cc-action-pair__clean {
+  min-width: 66px;
+  color: #fff;
+  border: 1px solid rgba(255, 83, 68, .78);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #9d3029, #561713);
+  font-weight: 900;
+}
+
+.preset-name-editor__cc-actions,
+.effect-pad-editor__cc-actions {
+  grid-area: learn;
+}
+
+.cc-action-pair .preset-name-editor__learn,
+.cc-action-pair .effect-pad-editor__learn {
+  grid-area: auto;
 }
 
 .player-modal__header-action small {
@@ -5875,6 +6143,29 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
   background: linear-gradient(180deg, rgba(70, 47, 20, 0.99), rgba(23, 17, 11, 0.99));
 }
 
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split {
+  grid-template-columns: minmax(180px, 30fr) minmax(0, 70fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split > .player-primary {
+  overflow-x: hidden;
+}
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split.is-bank-view > .player-primary > :is(.player-header, .player-bank-view, .player-bottom-bar) {
+  width: 100%;
+  min-width: 0;
+}
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .tracks-horizontal-scroll-guide {
+  display: none;
+}
+html[data-runtime="desktop"] .is-tracks-split .player-module {
+  padding: 4px;
+  gap: 3px;
+}
+html[data-runtime="desktop"] .is-tracks-split .player-module__sound-label,
+html[data-runtime="desktop"] .is-tracks-split .player-module__settings-button { font-size: clamp(6px, .85vw, 11px); }
+html[data-runtime="desktop"] .is-tracks-split .player-module__action-button { font-size: clamp(5px, .65vw, 9px); }
+html[data-runtime="desktop"] .is-tracks-split .player-module__fader-rail { width: clamp(20px, 2.5vw, 34px); }
+
 .player-screen--tablet.is-tracks-split.is-pads-view .tracks-horizontal-scroll-guide {
   display: none;
 }
@@ -6304,6 +6595,32 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
 .track-card.is-queued .track-card__progress i {
   background: #ffd43b;
   transform: scaleX(var(--track-queue-progress, 0));
+}
+
+/* Both playlist layouts must retain playback state colors instead of inheriting
+   the generic orange button theme. The queue countdown stays yellow. */
+:is(.tracks-split-panel, .tracks-tools-panel) .track-card {
+  --button-color-a: #2f2f33 !important;
+  --button-color-b: #0f0f11 !important;
+  --button-border: #65564c !important;
+  background-image: linear-gradient(155deg, var(--button-color-a), var(--button-color-b)) !important;
+  border-color: var(--button-border) !important;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.04) !important;
+}
+:is(.tracks-split-panel, .tracks-tools-panel) .track-card.is-selected {
+  --button-color-a: #168b3d !important;
+  --button-color-b: #063c1a !important;
+  --button-border: #41ea77 !important;
+}
+:is(.tracks-split-panel, .tracks-tools-panel) .track-card.is-playing {
+  --button-color-a: #9d2718 !important;
+  --button-color-b: #450c08 !important;
+  --button-border: #ff5440 !important;
+}
+:is(.tracks-split-panel, .tracks-tools-panel) .track-card.is-queued {
+  --button-color-a: #e77d1c !important;
+  --button-color-b: #803403 !important;
+  --button-border: #ffb14b !important;
 }
 
 .track-name {
@@ -6816,6 +7133,16 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   gap: clamp(9px, 1.8vh, 15px);
 }
 
+.player-modal--tempo-edit .player-modal__body {
+  align-items: start;
+  padding-top: clamp(8px, 2vh, 20px);
+}
+
+.tempo-editor {
+  align-content: start;
+  gap: 12px;
+}
+
 .metronome-panel__meter-options {
   display: grid;
   grid-template-columns: minmax(82px, 0.72fr) minmax(180px, 1.5fr) minmax(82px, 0.72fr);
@@ -7280,10 +7607,35 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   background: #15100d;
   font-size: 24px;
   font-weight: 900;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.tempo-editor input::-webkit-inner-spin-button,
+.tempo-editor input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .tempo-editor small {
   color: var(--orange-bright);
+}
+
+html[data-runtime="desktop"] .player-tempo-button,
+html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .player-output-knob) {
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.player-modal__tablet-keyboard.on-screen-keyboard--numeric {
+  width: min(100%, 520px);
+}
+
+.on-screen-keyboard--numeric .on-screen-keyboard__row button {
+  min-width: 0;
+  min-height: clamp(28px, 6vh, 44px);
+  font-size: clamp(12px, 2vh, 18px);
 }
 
 .player-modal--sound-selection .player-modal__header {
@@ -7640,6 +7992,7 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 
 .user-sf2-panel__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
@@ -7651,6 +8004,18 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   font-size: clamp(10px, 1.1vw, 14px);
   font-weight: 900;
   white-space: nowrap;
+}
+
+.user-sf2-load-status {
+  flex-basis: 100%;
+  margin: 0;
+  color: #ffb25e;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.user-sf2-load-status:empty {
+  display: none;
 }
 
 .user-sf2-list {
@@ -9708,7 +10073,23 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 .player-modal--module-eq .player-modal__surface,
 .player-modal--module-compressor .player-modal__surface,
 .player-modal--module-reverb .player-modal__surface,
-.player-modal--module-delay .player-modal__surface { position: relative; }
+.player-modal--module-delay .player-modal__surface,
+.player-modal--module-synth .player-modal__surface { position: relative; }
+
+/* Synth footer: Voltar | Reset | OK, with Reset styled like the processor reset. */
+.player-modal--module-synth .player-modal__actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.player-modal--module-synth .player-modal__actions > button { width: 100%; min-width: 0; }
+.player-modal__reset-button {
+  min-height: clamp(42px, 7vh, 58px);
+  color: #ffc07c;
+  border: 1px solid rgba(255, 121, 0, .66);
+  border-radius: 9px;
+  background: linear-gradient(180deg, #33251f, #151112);
+  font-weight: 900;
+}
 
 .module-processor-reset-confirmation {
   position: absolute;
@@ -9831,6 +10212,7 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 
 .player-module__fader-rail::before {
   position: absolute;
+  z-index: 2;
   inset: 8px 4px;
   border-radius: 999px;
   background: repeating-linear-gradient(
@@ -9845,6 +10227,7 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 
 .player-module__fader-rail::after {
   position: absolute;
+  z-index: 2;
   top: 8px;
   bottom: 8px;
   left: 50%;
@@ -9859,20 +10242,68 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 
 .player-module__meter {
   z-index: 1;
-  inset: 8px calc(50% - 1.5px);
-  width: 3px;
-  overflow: visible;
+  inset: 3px;
+  width: auto;
+  overflow: hidden;
   border-radius: 999px;
-  background: rgba(255,255,255,.055);
-  box-shadow: 0 0 0 1px rgba(0,0,0,.72);
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.035), transparent 32% 68%, rgba(255,255,255,.025)),
+    rgba(0,0,0,.42);
+  box-shadow:
+    inset 0 0 8px rgba(0,0,0,.82),
+    0 0 0 1px rgba(0,0,0,.72);
+}
+
+.player-module__meter::after {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: rgba(0, 0, 0, .92);
+  box-shadow: 0 0 1px rgba(255, 255, 255, .28);
+  content: "";
+  transform: translateX(-.5px);
+  pointer-events: none;
 }
 
 .player-module__meter-fill {
-  border-radius: 999px;
-  background: linear-gradient(to top, var(--module-accent), var(--module-accent-hot));
+  top: 0;
+  bottom: 0;
+  height: auto;
+  width: calc(50% - .5px);
+  border-radius: 0;
+  background:
+    linear-gradient(90deg, rgba(0,0,0,.2), transparent 24% 76%, rgba(0,0,0,.24)),
+    linear-gradient(to top,
+      #0db758 0%,
+      #54d636 55%,
+      #ffe23b 70%,
+      #ff9b22 79.5%,
+      #ff3e32 80.5%,
+      #dc001b 100%);
   box-shadow:
-    0 0 5px var(--module-accent),
-    0 0 11px color-mix(in srgb, var(--module-accent) 65%, transparent);
+    inset 0 0 8px rgba(255,255,255,.18),
+    0 0 8px rgba(30, 224, 103, .5);
+  transition: clip-path 45ms linear, filter 45ms linear;
+}
+
+.player-module__meter-fill--left {
+  right: auto;
+  left: 0;
+  clip-path: inset(calc(100% - var(--module-meter-left-level)) 0 0 0);
+}
+
+.player-module__meter-fill--right {
+  right: 0;
+  left: auto;
+  clip-path: inset(calc(100% - var(--module-meter-right-level)) 0 0 0);
+}
+
+.player-module__fader.is-clipping .player-module__meter-fill {
+  filter: saturate(1.25) brightness(1.18);
+  box-shadow: inset 0 0 8px rgba(255,255,255,.25), 0 0 12px rgba(255,35,35,.9);
 }
 
 .player-module__zero-line {
@@ -10211,13 +10642,13 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   --button-color-b: color-mix(in srgb, var(--module-sound-color) 57%, black) !important;
   --button-border: color-mix(in srgb, var(--module-sound-color) 75%, white) !important;
 }
-.player-module__sound-button.player-module__synth-mode.is-mono {
+.synth-editor__header .synth-voice-mode-button.is-mono {
   --button-color-a: #b759ff !important;
   --button-color-b: #5a158f !important;
   --button-border: #dca2ff !important;
   color: #fff !important;
 }
-.player-module__sound-button.player-module__synth-mode.is-poly {
+.synth-editor__header .synth-voice-mode-button.is-poly {
   --button-color-a: #36a8ff !important;
   --button-color-b: #0754aa !important;
   --button-border: #9bd5ff !important;
@@ -10473,6 +10904,253 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   border-radius: 12px;
   font-weight: 950;
   text-align: left;
+}
+
+.module-settings-bottom-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+.module-settings-bottom-row:has(.module-glide-card) {
+  grid-template-columns: minmax(0, 2.25fr) minmax(150px, 1fr);
+}
+.module-settings-bottom-row:has(.module-mod-card):not(:has(.module-glide-card)) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.module-settings-bottom-row:has(.module-mod-card):has(.module-glide-card) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.module-settings-bottom-row .module-velocity-card {
+  min-width: 0;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+}
+.module-glide-card {
+  --knob-accent: #35c6e5;
+  color: #fff !important;
+  min-width: 0;
+  min-height: clamp(50px, 8vh, 72px);
+  padding: clamp(5px, .8vh, 8px);
+  border: 1px solid #1986ad;
+  border-radius: 12px;
+  background: linear-gradient(155deg, rgba(25,31,43,.98), rgba(6,13,20,.99));
+  display: grid;
+  grid-template-columns: minmax(52px, auto) minmax(36px, 1fr) minmax(58px, auto);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: center;
+  justify-items: center;
+  gap: clamp(4px, .7vw, 9px);
+  overflow: hidden;
+}
+.module-glide-card > header {
+  align-self: stretch;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 5px;
+}
+.module-glide-card > header > strong {
+  color: #fff;
+  font-size: clamp(10px, 1vw, 13px);
+}
+.module-glide-card > header > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.module-glide-card .module-envelope-knob {
+  width: clamp(34px, 5.4vh, 48px);
+  max-width: 48px;
+}
+.module-glide-card output {
+  max-width: 100%;
+  color: #56d9ff;
+  font-size: clamp(8px, .85vw, 11px);
+  font-weight: 950;
+  white-space: nowrap;
+}
+.module-mod-card {
+  color: #fff !important;
+  min-width: 0;
+  min-height: clamp(50px, 8vh, 72px);
+  padding: clamp(5px, .8vh, 8px);
+  border: 1px solid #8b5de7;
+  border-radius: 12px;
+  background: linear-gradient(155deg, rgba(29, 27, 43, .98), rgba(10, 8, 18, .99));
+  display: grid;
+  grid-template-columns: minmax(52px, .75fr) minmax(88px, 1.2fr) minmax(48px, .7fr);
+  align-items: center;
+  gap: clamp(5px, .8vw, 10px);
+  overflow: hidden;
+}
+.module-mod-card > header {
+  display: grid;
+  gap: 3px;
+}
+.module-mod-card > header > strong {
+  color: #fff;
+  font-size: clamp(10px, 1vw, 13px);
+}
+.module-mod-card > header > small {
+  color: #baadff;
+  font-size: clamp(7px, .72vw, 10px);
+  white-space: nowrap;
+}
+.module-mod-card > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+.module-mod-card button {
+  min-width: 0;
+  min-height: 25px;
+  padding: 3px 6px;
+  border: 1px solid #68758a;
+  border-radius: 7px;
+  color: #fff;
+  background: linear-gradient(180deg, #3c485d, #222c3d);
+  font-weight: 950;
+}
+.module-mod-card button.is-selected {
+  border-color: #57e491;
+  background: linear-gradient(180deg, #239956, #126436);
+  box-shadow: inset 0 0 0 1px rgba(187, 255, 211, .38);
+}
+.module-mod-card__rate {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.module-mod-card__rate .module-envelope-knob {
+  width: clamp(32px, 5.2vh, 46px);
+}
+.module-mod-card__rate output {
+  max-width: 100%;
+  color: #baadff;
+  font-size: clamp(7px, .72vw, 10px);
+  font-weight: 950;
+  white-space: nowrap;
+}
+.module-mod-card__rate:has(input:disabled) {
+  opacity: .4;
+}
+.module-glide-power,
+.module-glide-sync,
+.module-glide-no-sens {
+  min-width: 44px;
+  min-height: 23px;
+  padding: 3px 7px;
+  font-size: 9px;
+  font-weight: 950;
+  color: #fff !important;
+  background: linear-gradient(#b93137, #761b23) !important;
+  border: 1px solid #e46565;
+  border-radius: 6px;
+}
+.module-glide-power[aria-pressed="true"],
+.module-glide-sync[aria-pressed="true"],
+.module-glide-no-sens[aria-pressed="true"] {
+  background: linear-gradient(#188849, #07552c) !important;
+  border-color: #38d27a;
+}
+
+/* Glide card: ON · Sync / Auto-Porta · Config in a tidy 2x2 grid. */
+.module-glide-card > header > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.module-glide-mode,
+.module-glide-config {
+  min-width: 44px;
+  min-height: 23px;
+  padding: 3px 7px;
+  font-size: 9px;
+  font-weight: 950;
+  color: #d8f6ff !important;
+  background: linear-gradient(#26313d, #131a22) !important;
+  border: 1px solid #3d5366;
+  border-radius: 6px;
+}
+.module-glide-mode.is-portamento {
+  color: #03151b !important;
+  background: linear-gradient(#56d9ff, #1486a8) !important;
+  border-color: #8be7ff;
+}
+.module-glide-config.is-active {
+  color: #ffd9a8 !important;
+  border-color: #ff9d2e;
+  box-shadow: inset 0 0 0 1px rgba(255, 157, 46, .35);
+}
+
+/* Glide · Velocity: where Glide acts (cyan) and where it is turned off. */
+.glide-velocity-editor {
+  display: grid;
+  gap: clamp(10px, 1.8vh, 16px);
+  width: min(100%, 620px);
+  margin-inline: auto;
+  align-content: center;
+}
+.glide-velocity-editor__switches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.glide-velocity-editor__switches button {
+  min-height: clamp(38px, 6vh, 50px);
+  font-size: clamp(12px, 1.3vw, 15px);
+}
+.glide-velocity-meter {
+  position: relative;
+  display: flex;
+  height: clamp(30px, 5vh, 42px);
+  overflow: hidden;
+  border: 1px solid #2f4254;
+  border-radius: 10px;
+  background: #0b1118;
+}
+.glide-velocity-meter__low { width: var(--glide-threshold); }
+.glide-velocity-meter__high { flex: 1; }
+.glide-velocity-meter__low,
+.glide-velocity-meter__high {
+  background: repeating-linear-gradient(135deg, #1b232c 0 8px, #11171e 8px 16px);
+}
+.glide-velocity-editor[data-inverted="false"] .glide-velocity-meter__low,
+.glide-velocity-editor[data-inverted="true"] .glide-velocity-meter__high,
+.glide-velocity-editor[data-enabled="false"] .glide-velocity-meter__low,
+.glide-velocity-editor[data-enabled="false"] .glide-velocity-meter__high {
+  background: linear-gradient(180deg, #56d9ff, #127a98);
+}
+.glide-velocity-editor[data-enabled="false"] .glide-velocity-meter { opacity: .45; }
+.glide-velocity-meter > i {
+  position: absolute;
+  inset-block: 0;
+  left: var(--glide-threshold);
+  width: 3px;
+  transform: translateX(-50%);
+  background: #fff;
+  box-shadow: 0 0 8px rgba(255, 255, 255, .7);
+}
+.glide-velocity-editor[data-enabled="false"] .glide-velocity-meter > i { display: none; }
+.glide-velocity-meter__labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -8px;
+  color: #7f93a5;
+  font-size: 11px;
+  font-weight: 850;
+}
+.glide-velocity-editor .velocity-fixed-control input { accent-color: #35c6e5; }
+.glide-velocity-editor > p {
+  margin: 0;
+  color: #b9c8d4;
+  font-size: clamp(11px, 1.1vw, 14px);
+  text-align: center;
+}
+
+.synth-editor__grid > .module-glide-card {
+  min-height: 62px;
 }
 
 .module-velocity-card > span {
@@ -11025,3 +11703,863 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
     grid-template-columns: 1fr;
   }
 }
+
+/* Param usa a altura útil como uma grade real. Assim os previews nunca saem
+   dos próprios cards nem cobrem Velocity/Glide em janelas mais baixas. */
+.player-modal--module-settings .player-modal__body {
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.player-modal--module-settings .module-settings-panel {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-content: stretch;
+  height: 100%;
+  overflow: hidden;
+}
+
+.player-modal--module-settings .module-settings-workspace {
+  height: auto;
+  overflow: hidden;
+}
+
+.player-modal--module-settings :is(.module-envelope-grid, .module-processors-grid) {
+  height: 100%;
+  min-height: 0;
+}
+
+.player-modal--module-settings :is(.module-envelope-control, .module-eq-card, .module-effect-card) {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.player-modal--module-settings :is(
+  .module-eq-preview,
+  .module-compressor-preview,
+  .module-reverb-preview,
+  .module-delay-preview
+) {
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+}
+
+/* Densidade comercial para desktop: a janela abre confortável em notebooks e
+   mantém os oito módulos, os presets e o Keyboard inteiros, sem zoom/rolagem. */
+@media (min-width: 761px) and (max-height: 800px) {
+  html[data-runtime="desktop"] .player-screen--tablet {
+    padding: 5px 7px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-primary,
+  html[data-runtime="desktop"] .player-screen--tablet .player-bank-view {
+    gap: 4px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-top-transport {
+    gap: 5px;
+  }
+
+  html[data-runtime="desktop"] .player-top-brand-actions {
+    gap: 4px;
+  }
+
+  html[data-runtime="desktop"] .player-top-brand-actions .player-brand {
+    padding: 2px 5px;
+  }
+
+  html[data-runtime="desktop"] .player-top-brand-actions .player-brand__image {
+    width: 24px;
+  }
+
+  html[data-runtime="desktop"] .player-top-brand-actions .player-brand__name {
+    font-size: 14px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet :is(
+    .player-top-actions > button,
+    .player-metronome-button,
+    .player-tempo-button,
+    .player-navigation__button
+  ) {
+    min-height: 31px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-metronome-button,
+  html[data-runtime="desktop"] .player-screen--tablet .player-tempo-button {
+    min-width: 52px;
+    width: 52px;
+    padding: 3px 5px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .track-transport,
+  html[data-runtime="desktop"] .player-screen--tablet .player-next-field {
+    padding-block: 3px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-header-knobs {
+    gap: 5px;
+    padding: 3px 6px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-output-knob {
+    grid-template-rows: auto minmax(27px, 1fr) auto;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-output-knob__face {
+    width: 32px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-modules-row {
+    gap: 4px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-module {
+    gap: 3px;
+    padding: 4px;
+    border-radius: 9px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet :is(
+    .player-module__settings-button,
+    .player-module__sound-button
+  ) {
+    min-height: 23px;
+    padding-block: 2px;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-module__fader-rail {
+    width: clamp(22px, 2.7vw, 32px);
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-presets--combined {
+    grid-template-columns: 58px minmax(0, 1fr);
+    grid-template-rows: clamp(46px, 10.5vh, 66px) clamp(52px, 12vh, 76px);
+    gap: 3px 5px;
+    padding: 4px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 620px) {
+  html[data-runtime="desktop"] .player-modal--module-settings .player-modal__surface {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings .player-modal__header h2 {
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings .module-settings-panel {
+    gap: 4px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings .module-settings-io-row {
+    --module-io-control-height: 34px;
+    gap: 7px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings .module-settings-workspace {
+    grid-template-columns: minmax(320px, 1.08fr) minmax(300px, 1fr);
+    gap: 6px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings :is(.module-envelope-grid, .module-processors-grid) {
+    gap: 4px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings :is(
+    .module-envelope-control,
+    .module-eq-card,
+    .module-effect-card
+  ) {
+    gap: 3px;
+    padding: 4px;
+    border-radius: 7px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings .module-envelope-knob {
+    width: min(38px, 7vh);
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings :is(.module-eq-card, .module-effect-card) > button {
+    min-height: 25px;
+    padding: 2px 5px;
+    font-size: 9px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings .module-settings-bottom-row {
+    gap: 5px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings :is(.module-velocity-card, .module-glide-card, .module-mod-card) {
+    min-height: 45px;
+    padding-block: 4px;
+  }
+
+  html[data-runtime="desktop"] .player-modal--module-settings .player-modal__actions {
+    min-height: 32px;
+    padding-top: 3px;
+  }
+}
+
+/* A seleção pertence ao módulo aberto, não ao estado de download. Mantém o
+   contorno visível sobre qualquer gradiente definido pelo painel ou pelo SF2. */
+.sound-browser .fixed-sound-grid button.is-current-timbre,
+.sound-browser .user-sf2-list > button.is-current-timbre {
+  border-color: #fff !important;
+  outline: 2px solid #fff !important;
+  outline-offset: -3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.7),
+    0 0 13px rgba(255, 255, 255, 0.68),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.55) !important;
+}
+
+/* O estado disabled é usado somente enquanto o arquivo entra no motor. Ele
+   não pode apagar a cor nem o contorno da seleção que acabou de ser feita. */
+.sound-browser .user-sf2-list > button.is-current-timbre:disabled {
+  border-color: #fff !important;
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--user-sf2-color-a, #ff7900) 88%, #151117) 0%,
+    color-mix(in srgb, var(--user-sf2-color-b, #ff3d00) 68%, #08080b) 100%
+  ) !important;
+  color: #fff !important;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.player-audio-restart {
+  position: fixed;
+  z-index: 100000;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  place-items: center;
+  min-width: 100%;
+  min-height: 100%;
+  color: #fff;
+  background: rgba(2, 2, 4, 0.76);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+
+.player-audio-restart .loading-orbit {
+  margin: 0 0 14px;
+}
+
+.player-audio-restart strong {
+  color: #fff;
+  font-size: clamp(18px, 2.2vw, 27px);
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: .02em;
+}
+
+.player-audio-restart small {
+  margin-top: 5px;
+  color: #ff9a45;
+  font-size: clamp(11px, 1.15vw, 14px);
+  font-weight: 750;
+  font-style: italic;
+}
+
+/* Barras de rolagem fora do app desktop. O conteudo continua rolando por
+   toque, roda e teclado: some apenas o controle desenhado pelo WebView. */
+:root[data-runtime="desktop"],
+:root[data-runtime="desktop"] * {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none;
+}
+
+:root[data-runtime="desktop"]::-webkit-scrollbar,
+:root[data-runtime="desktop"] *::-webkit-scrollbar {
+  display: none !important;
+  width: 0;
+  height: 0;
+}
+
+/* Number inputs have their own native arrows, not WebView scrollbars. */
+:root[data-runtime="desktop"] input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+:root[data-runtime="desktop"] input[type="number"]::-webkit-inner-spin-button,
+:root[data-runtime="desktop"] input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* Clean deixa o modulo sem timbre selecionado, na mesma linha do nome da
+   categoria. */
+.fixed-sound-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(8px, 1vw, 14px);
+  min-width: 0;
+}
+
+.fixed-sound-panel__header h3 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fixed-sound-clean {
+  flex: 0 0 auto;
+  min-height: clamp(26px, 4vh, 34px);
+  padding: 0 clamp(10px, 1.2vw, 16px);
+  color: var(--orange-bright);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(43, 43, 47, 0.94), rgba(15, 15, 17, 0.98));
+  font: inherit;
+  font-size: clamp(10px, 1.05vw, 13px);
+  font-weight: 800;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fixed-sound-clean:active {
+  background: rgba(255, 122, 24, 0.18);
+}
+
+/* Com o painel de 30% aberto no desktop, o Settings, o User e o medidor de CPU
+   precisam continuar visiveis. Em vez de a coluna sumir, a barra inteira
+   encolhe: e o unico lugar da tela onde esses tres controles existem. */
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-top-transport,
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split.is-pads-view .player-top-transport {
+  grid-template-columns: auto minmax(104px, 1.2fr) minmax(74px, 0.8fr) auto;
+  gap: 4px;
+}
+
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-top-actions {
+  display: flex;
+  gap: 4px;
+}
+
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-top-actions > button,
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-top-actions > .player-cpu-meter {
+  min-height: 32px;
+  padding-inline: 7px;
+  font-size: 11px;
+}
+
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-cpu-meter {
+  min-width: 42px;
+}
+
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-cpu-meter small {
+  font-size: 8px;
+}
+
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-cpu-meter strong {
+  font-size: 11px;
+}
+
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-next-field {
+  padding-inline: 6px;
+  font-size: 11px;
+}
+
+/* No desktop os oito modulos ficam sempre visiveis e ganham a sobra da tela,
+   entao sao eles que devem ceder altura: quem precisa de espaco para ser
+   tocavel e o teclado, e os presets sao lidos de relance durante a musica.
+   A linha dos modulos e 1fr, entao crescer estas duas encolhe aquela. */
+html[data-runtime="desktop"] .player-screen--tablet .player-presets--combined {
+  grid-template-rows: clamp(58px, 14vh, 100px) clamp(70px, 16.8vh, 120px);
+  /* Banco A e Banco B nao podem virar "Banc...": a coluna deles ganha largura
+     da grade dos presets, que tem dezesseis botoes para dar. */
+  grid-template-columns: minmax(96px, 0.135fr) minmax(0, 1fr);
+}
+
+@media (max-height: 800px) {
+  html[data-runtime="desktop"] .player-screen--tablet .player-presets--combined {
+    grid-template-rows: clamp(56px, 13.5vh, 94px) clamp(66px, 16.4vh, 112px);
+  }
+}
+
+/* O card do teclado no desktop tem dois grupos de tres botoes: a entrada MIDI
+   e o estilo. Tres colunas evitam a terceira opcao cair sozinha numa linha. */
+.app-settings-display-card--desktop-keyboard > div,
+.player-modal--app-settings .app-settings-display-card--desktop-keyboard > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+/* "Banco A" e "Banco B" herdavam a fonte dos botoes de navegacao, dimensionada
+   para a barra do topo. Numa coluna estreita isso virava "Banc...", entao o
+   nome encolhe aqui em vez de a coluna roubar espaco dos dezesseis presets. */
+html[data-runtime="desktop"] .player-screen--tablet .player-presets--combined .player-navigation__bank-button {
+  padding-inline: 6px;
+  font-size: clamp(9px, 0.85vw, 11px);
+}
+
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-presets--combined .player-navigation__bank-button {
+  padding-inline: 4px;
+  font-size: clamp(8px, 0.72vw, 10px);
+}
+
+/* App (tablet) com a playlist de 30% aberta: tudo cabe nos 70% restantes, sem
+   arraste horizontal. O topo encolhe para ir da logo ate o User, e cada modulo
+   fica compacto: numero, Param, timbre, fader com medidor e ON. Os seis botoes
+   laterais (A-1, C7, OCT, HLD, MOD) voltam quando a playlist fecha. */
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split {
+  grid-template-rows: minmax(0, 1fr);
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split > .player-primary {
+  overflow-x: hidden;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split.is-bank-view > .player-primary > :is(.player-header, .player-bank-view, .player-bottom-bar) {
+  width: 100%;
+  min-width: 0;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .tracks-horizontal-scroll-guide {
+  display: none;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-top-transport,
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split.is-pads-view .player-top-transport {
+  grid-template-columns: auto minmax(96px, 1.2fr) minmax(64px, 0.8fr) auto;
+  gap: 4px;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-top-actions {
+  display: flex;
+  gap: 4px;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-top-actions > button {
+  min-height: 30px;
+  padding-inline: 6px;
+  font-size: 10px;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-next-field {
+  padding-inline: 6px;
+  font-size: 11px;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-module {
+  padding: 4px;
+  gap: 3px;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-module__actions {
+  display: none;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-module__control-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-module__sound-label,
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-module__settings-button {
+  font-size: clamp(8px, 0.95vw, 11px);
+}
+
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-presets:not(.is-keyboard) {
+  grid-template-columns: clamp(54px, 10cqw, 76px) minmax(0, 1fr);
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-presets--combined .player-navigation__bank-button {
+  padding-inline: 3px;
+  font-size: clamp(8px, 1.4cqw, 10px);
+}
+
+/* Param dos modulos 1 a 7: envelope em 2x3, com o Limite Velocity ao lado do Cutoff. */
+.module-envelope-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+/* Limite Velocity: sexto card do envelope, ao lado do Cutoff. */
+.module-envelope-control:has([data-module-velocity-limit]) { --field-accent: #9d8cff; }
+.module-velocity-limit-card .module-envelope-knob { --knob-accent: #9d8cff; }
+
+/* Velocity: limitador vertical a direita da curva (modulos 1 a 7). */
+.velocity-curve-plot-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(46px, 5.5vw, 66px);
+  gap: clamp(8px, 1vw, 12px);
+  min-height: 0;
+}
+.velocity-curve-plot-row > .velocity-curve-plot { height: 100%; }
+.velocity-ceiling-zone { fill: rgba(255, 92, 92, .1); pointer-events: none; }
+.velocity-ceiling-line {
+  fill: none;
+  stroke: #ff7a7a;
+  stroke-width: 2.5;
+  stroke-dasharray: 10 7;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.velocity-ceiling {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  justify-items: center;
+  gap: 6px;
+  min-height: 0;
+  touch-action: none;
+  cursor: ns-resize;
+  outline: none;
+}
+.velocity-ceiling__track {
+  position: relative;
+  width: 100%;
+  max-width: 34px;
+  height: 100%;
+  border: 1.5px solid rgba(143, 126, 255, .75);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #17131f, #09080d);
+}
+.velocity-ceiling__track > i {
+  position: absolute;
+  inset: auto 3px 3px;
+  height: calc((100% - 6px) * var(--velocity-ceiling) / 100);
+  border-radius: 7px;
+  background: linear-gradient(0deg, #4c3db8, #9d8cff);
+}
+.velocity-ceiling__track > b {
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  bottom: calc(3px + (100% - 6px) * var(--velocity-ceiling) / 100);
+  height: 10px;
+  transform: translateY(50%);
+  border: 1px solid #fff;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #ffffff, #b9b1d9);
+  box-shadow: 0 0 10px rgba(157, 140, 255, .7);
+}
+.velocity-ceiling:focus-visible .velocity-ceiling__track { border-color: #fff; }
+.velocity-ceiling output {
+  color: #fff;
+  font-size: clamp(12px, 1.3vw, 16px);
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Synth: limite de velocity de cada OSC, ao lado do ON. */
+.synth-oscillator-power-row .synth-velocity-limit {
+  grid-column: 1 / span 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  --knob-accent: #9d8cff;
+}
+.synth-velocity-limit .module-envelope-knob { width: 26px; max-width: 26px; }
+.synth-velocity-limit span { color: #c9bfff; font-size: 9px; font-weight: 900; white-space: nowrap; }
+.synth-velocity-limit output { color: #fff; font-size: 10px; font-weight: 950; font-variant-numeric: tabular-nums; }
+
+/* Param e Synth: o titulo vira uma linha pequena para sobrar tela aos controles.
+   No Synth o editor ja mostra "Dual Oscillator Synth", entao "Modulo 08" sai. */
+:root .player-modal.player-modal--module-settings .player-modal__header h2,
+:root .player-modal.player-modal--module-synth .player-modal__header h2 {
+  font-size: clamp(13px, 1.6vw, 17px);
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+:root .player-modal.player-modal--module-synth .player-modal__eyebrow {
+  display: none;
+}
+:root .player-modal.player-modal--module-settings .player-modal__surface,
+:root .player-modal.player-modal--module-synth .player-modal__surface {
+  gap: clamp(4px, 0.7vh, 8px);
+}
+
+/* Posicao da musica: agulha laranja sobre a waveform real. A agulha acompanha o
+   centro do cursor do range (24 px), entao fica exatamente onde o dedo solta. */
+.waveform-position { --track-ratio: 0; }
+.waveform-position__bars i { transition: height .28s ease-out; }
+.waveform-position__bars.is-loading i { opacity: .32; }
+.waveform-position__played {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: calc(12px + (100% - 24px) * var(--track-ratio));
+  right: 0;
+  background: rgba(4, 4, 6, .52);
+  pointer-events: none;
+}
+.waveform-position__needle {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  bottom: 6px;
+  left: calc(12px + (100% - 24px) * var(--track-ratio));
+  width: 3px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: #ff7a18;
+  box-shadow: 0 0 10px rgba(255, 122, 24, .85);
+  pointer-events: none;
+}
+.waveform-position__needle::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 13px;
+  height: 13px;
+  transform: translateX(-50%);
+  border: 2px solid #fff3e0;
+  border-radius: 50%;
+  background: #ff7a18;
+  box-shadow: 0 0 12px rgba(255, 122, 24, .9);
+}
+.waveform-position input[type="range"]::-webkit-slider-thumb {
+  width: 24px;
+  background: transparent;
+  box-shadow: none;
+}
+.waveform-position input[type="range"]::-moz-range-thumb {
+  width: 24px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+.waveform-position.is-locked input[type="range"] {
+  pointer-events: none;
+}
+.waveform-position.is-locked { cursor: not-allowed; }
+.waveform-position.is-locked .waveform-position__needle { background: #c4651c; }
+.waveform-position__notice {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  top: 50%;
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  border: 1px solid #ff9a3d;
+  border-radius: 10px;
+  background: rgba(24, 14, 8, .94);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .6);
+  font-size: clamp(11px, 1.2vw, 14px);
+  font-weight: 900;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Settings e User viram icones: engrenagem e conta. */
+.player-header-icon {
+  display: block;
+  width: clamp(15px, 1.7vw, 21px);
+  height: clamp(15px, 1.7vw, 21px);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.player-navigation__settings-button:has(.player-header-icon),
+.player-account__user-button:has(.player-header-icon) {
+  display: inline-grid;
+  place-items: center;
+  min-width: clamp(30px, 3.6vw, 44px);
+  padding-inline: 6px;
+  color: #fff !important;
+}
+
+/* Modulo sem timbre: um + no lugar do texto. */
+.player-module__sound-label.is-empty {
+  font-size: clamp(18px, 2.2vw, 26px);
+  font-weight: 950;
+  line-height: 1;
+}
+
+/* A agulha agora e arrastada pela waveform inteira (TrackTransport). */
+.waveform-position { cursor: ew-resize; touch-action: none; }
+.waveform-position input[type="range"] { pointer-events: none; }
+
+/* Playlist 30%: Repetir a esquerda do Auto. Desligados em vermelho; ligados,
+   Repetir verde e Auto amarelo. */
+.tracks-split-controls {
+  grid-template-columns: minmax(34px, 0.55fr) repeat(3, minmax(0, 1fr));
+}
+.tracks-split-controls button[data-tracks-action="toggle-loop"] {
+  display: grid;
+  place-items: center;
+  padding: 4px;
+}
+.tracks-split-controls button[data-tracks-action="toggle-loop"] svg {
+  width: clamp(15px, 1.6vw, 20px);
+  height: clamp(15px, 1.6vw, 20px);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tracks-split-controls button:is([data-tracks-action="toggle-loop"], [data-tracks-action="toggle-auto"]):not(.is-selected) {
+  color: #fff1f1;
+  border-color: #ff6868;
+  background: linear-gradient(180deg, #b92f39, #5b1118);
+  box-shadow: none;
+}
+.tracks-split-controls button[data-tracks-action="toggle-loop"].is-selected {
+  color: #effff3;
+  border-color: rgba(76, 235, 127, 0.84);
+  background: linear-gradient(180deg, rgba(25, 150, 69, 0.98), rgba(7, 76, 32, 0.99));
+}
+.tracks-split-controls button[data-tracks-action="toggle-auto"].is-selected {
+  color: #201600;
+  border-color: #ffe36a;
+  background: linear-gradient(180deg, #ffe96d, #dca900);
+  box-shadow: 0 0 12px rgba(255, 214, 74, .28);
+}
+
+/* O + do modulo sem timbre continua grande tambem com a playlist aberta. */
+:root .player-screen.player-screen--tablet .player-module .player-module__sound-label.is-empty {
+  font-size: clamp(16px, 2vw, 24px);
+}
+
+/* Gerenciador de arquivos (iOS): locais a esquerda, pasta atual a direita. */
+.player-modal--file-browser .player-modal__body { align-content: stretch; overflow: hidden; }
+.file-browser {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.34fr) minmax(0, 1fr);
+  gap: clamp(8px, 1.2vw, 14px);
+  width: min(100%, 1000px);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+}
+.file-browser svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.file-browser__roots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1.5px solid rgba(255, 121, 0, .45);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #151517, #09090a);
+}
+.file-browser__root { display: flex; gap: 4px; }
+.file-browser__root > button:first-child,
+.file-browser__add,
+.file-browser__row,
+.file-browser__path button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 10px;
+  color: #f3ece6;
+  border: 1px solid #3a3a40;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #26262b, #151518);
+  font: inherit;
+  font-size: clamp(12px, 1.25vw, 15px);
+  font-weight: 800;
+  text-align: left;
+}
+.file-browser__root > button:first-child { flex: 1; }
+.file-browser__root > button:first-child span,
+.file-browser__row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-browser__root.is-selected > button:first-child {
+  color: #fff;
+  border-color: #ff9a3d;
+  background: linear-gradient(180deg, #a44d0e, #5d2805);
+}
+.file-browser__remove {
+  min-width: 40px;
+  color: #ffb3a8;
+  border: 1px solid #6b2a2a;
+  border-radius: 9px;
+  background: #241314;
+  font-size: 20px;
+  font-weight: 900;
+}
+.file-browser__add {
+  justify-content: center;
+  color: #ffd09a;
+  border-style: dashed;
+  border-color: #ff9a3d;
+}
+.file-browser__main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+.file-browser__path { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.file-browser__path strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #ffcf99;
+  font-size: clamp(12px, 1.3vw, 16px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-browser__path button[data-file-browser-up] { justify-content: center; min-width: 44px; font-size: 22px; }
+.file-browser__path button:disabled { opacity: .35; }
+.file-browser__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px;
+  border: 1.5px solid rgba(255, 121, 0, .45);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #121214, #070708);
+}
+.file-browser__row { width: 100%; flex: 0 0 auto; }
+.file-browser__row span { flex: 1; }
+.file-browser__row small { color: #9d928a; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.file-browser__row.is-folder { color: #ffd6a8; }
+.file-browser__row.is-folder b { color: #ff9a3d; font-size: 20px; }
+.file-browser__check {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 2px solid #5b5b62;
+  border-radius: 6px;
+}
+.file-browser__check svg { width: 14px; height: 14px; opacity: 0; stroke-width: 3; }
+.file-browser__row.is-selected {
+  border-color: #3fdc7c;
+  background: linear-gradient(180deg, #16553a, #0b2c1d);
+}
+.file-browser__row.is-selected .file-browser__check { border-color: #3fdc7c; background: #1f9a55; }
+.file-browser__row.is-selected .file-browser__check svg { opacity: 1; }
+.file-browser__empty { margin: auto; max-width: 420px; color: #a79c94; font-weight: 800; text-align: center; }
+.file-browser__status { min-height: 1.3em; margin: 0; color: #ffcf99; font-size: clamp(11px, 1.1vw, 14px); font-weight: 800; }
+.file-browser.is-busy .file-browser__roots,
+.file-browser.is-busy .file-browser__list { opacity: .6; pointer-events: none; }
+@media (max-width: 700px) {
+  .file-browser { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .file-browser__roots { flex-direction: row; overflow-x: auto; }
+  .file-browser__root > button:first-child { white-space: nowrap; }
+}
+
+.file-browser [hidden] { display: none !important; }
+:root .player-modal.player-modal--file-browser .player-modal__header h2 {
+  font-size: clamp(13px, 1.6vw, 17px);
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+:root .player-modal.player-modal--file-browser .player-modal__eyebrow { display: none; }
+:root .player-modal.player-modal--file-browser .player-modal__surface { gap: clamp(4px, 0.7vh, 8px); padding: clamp(10px, 1.8vw, 22px); }

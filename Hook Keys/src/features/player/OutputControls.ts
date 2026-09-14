@@ -1,6 +1,10 @@
 import { formatFaderDb } from './ModuleFader';
 
 export type OutputBus = 'music' | 'pads' | 'effects' | 'master';
+export const MAX_OUTPUT_DB = 12;
+// Output levels share the fader tail: -60 dB continues down to -90 dB before -inf.
+export const OUTPUT_MIN_DB = -90;
+export const MAX_OUTPUT_GAIN = 10 ** (MAX_OUTPUT_DB / 20);
 
 export interface OutputLevels {
   music: number;
@@ -67,7 +71,7 @@ export function createOutputKnobMarkup(
 }
 
 export function createMetronomeKnobMarkup(volume: number): string {
-  const levelDb = volume <= 0 ? -60 : Math.max(-60, Math.min(0, 20 * Math.log10(volume)));
+  const levelDb = volume <= 0 ? OUTPUT_MIN_DB : Math.max(OUTPUT_MIN_DB, Math.min(MAX_OUTPUT_DB, 20 * Math.log10(volume)));
   const position = outputPosition(levelDb);
   const angle = -135 + (position / 100) * 270;
   return `
@@ -127,18 +131,20 @@ export function isOutputBus(value: string | undefined): value is OutputBus {
 }
 
 export function formatOutputDb(value: number): string {
-  const normalized = Math.min(0, value);
-  return normalized <= -60 ? '−∞ dB' : formatFaderDb(normalized);
+  const normalized = Math.min(MAX_OUTPUT_DB, value);
+  return normalized <= OUTPUT_MIN_DB ? '−∞ dB' : formatFaderDb(normalized);
 }
 
 export function outputPosition(value: number): number {
-  const db = Math.min(0, Math.max(-60, value));
+  const db = Math.min(MAX_OUTPUT_DB, Math.max(OUTPUT_MIN_DB, value));
   const points = [
-    { db: -60, position: 0 },
-    { db: -36, position: 18 },
-    { db: -18, position: 41 },
+    { db: OUTPUT_MIN_DB, position: 0 },
+    { db: -60, position: 6 },
+    { db: -36, position: 21 },
+    { db: -18, position: 43 },
     { db: -9, position: 66 },
-    { db: 0, position: 100 },
+    { db: 0, position: 82 },
+    { db: MAX_OUTPUT_DB, position: 100 },
   ];
   for (let index = 1; index < points.length; index += 1) {
     const start = points[index - 1]!;
@@ -151,11 +157,13 @@ export function outputPosition(value: number): number {
 export function outputDbFromPosition(positionPercent: number): number {
   const position = Math.min(100, Math.max(0, positionPercent));
   const points = [
-    { position: 0, db: -60 },
-    { position: 18, db: -36 },
-    { position: 41, db: -18 },
+    { position: 0, db: OUTPUT_MIN_DB },
+    { position: 6, db: -60 },
+    { position: 21, db: -36 },
+    { position: 43, db: -18 },
     { position: 66, db: -9 },
-    { position: 100, db: 0 },
+    { position: 82, db: 0 },
+    { position: 100, db: MAX_OUTPUT_DB },
   ];
   for (let index = 1; index < points.length; index += 1) {
     const start = points[index - 1]!;
@@ -165,5 +173,5 @@ export function outputDbFromPosition(positionPercent: number): number {
       return Math.round(db * 10) / 10;
     }
   }
-  return 0;
+  return MAX_OUTPUT_DB;
 }

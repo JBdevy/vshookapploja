@@ -5,7 +5,7 @@ import { PlayerScreen } from '../features/player/PlayerScreen';
 import type { AccountApi } from '../features/account/AccountApi';
 import { PlayerStateService } from '../features/account/PlayerStateService';
 import { PlayerBackupService } from '../features/account/PlayerBackupService';
-import { setAppOrientationMode } from '../platform/runtime';
+import { coverOrientationChange, nextPaint, prepareScreenOrientation } from '../platform/orientationTransition';
 
 function requiredElement<T extends Element>(parent: ParentNode, selector: string): T {
   const element = parent.querySelector<T>(selector);
@@ -28,10 +28,10 @@ function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): str
       <div class="octave-transition__deck">
         <header class="octave-transition__header">
           <div class="octave-transition__identity">
-            <img src="/assets/icons/icon-256.webp" alt="">
+            <img src="/assets/icons/256x256.png" alt="">
             <div><span>HOOK KEYS</span><small>PERFORMANCE INSTRUMENT</small></div>
           </div>
-          <span class="octave-transition__engine-state"><i></i>${entering ? 'ENGINE ONLINE' : 'FINALIZANDO'}</span>
+          <span class="octave-transition__engine-state"><i></i>${entering ? 'PREPARANDO MOTOR' : 'FINALIZANDO'}</span>
         </header>
         <div class="octave-transition__stage">
           <div class="octave-transition__meter">${meter}</div>
@@ -44,7 +44,7 @@ function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): str
         <footer class="octave-transition__footer">
           <div class="octave-transition__progress"><i></i></div>
           <span>HOOK AUDIO ENGINE</span>
-          <strong>${entering ? 'READY' : 'SAFE EXIT'}</strong>
+          <strong>${entering ? 'CARREGANDO' : 'SAFE EXIT'}</strong>
         </footer>
       </div>
       <div class="octave-transition__scan"></div>
@@ -57,6 +57,7 @@ export class HookKeysApp {
   private playerScreen: PlayerScreen | null = null;
   private stopLicenseMonitoring: (() => void) | null = null;
   private octaveTransition: HTMLElement | null = null;
+  private screenChangeId = 0;
 
   constructor(
     root: HTMLElement,
@@ -75,30 +76,45 @@ export class HookKeysApp {
   }
 
   start(): void {
-    this.showLogin();
+    void this.showLogin();
   }
 
-  private showLogin(): void {
+  private async showLogin(): Promise<void> {
+    const changeId = ++this.screenChangeId;
+    const cover = coverOrientationChange();
+    this.octaveTransition?.remove();
     this.stopLicenseMonitoring?.();
     this.stopLicenseMonitoring = null;
     this.playerScreen?.destroy();
     this.playerScreen = null;
-    void setAppOrientationMode('login');
+    this.screenRoot.replaceChildren();
+    await prepareScreenOrientation('login');
+    if (changeId !== this.screenChangeId) { cover.remove(); return; }
     const authScreen = new AuthScreen(
       this.screenRoot,
       this.sessions,
-      (session) => this.showPlayer(session),
+      (session) => { void this.showPlayer(session); },
       () => this.accountApi.getPublicAppSettings(),
     );
     void authScreen.start();
+    await nextPaint();
+    cover.remove();
   }
 
-  private showPlayer(session: AuthenticatedSession): void {
-    void setAppOrientationMode('tablet');
+  private async showPlayer(session: AuthenticatedSession): Promise<void> {
+    const changeId = ++this.screenChangeId;
+    const cover = coverOrientationChange();
+    this.octaveTransition?.remove();
+    this.playerScreen?.destroy();
+    this.playerScreen = null;
+    this.screenRoot.replaceChildren();
     this.stopLicenseMonitoring?.();
-    this.stopLicenseMonitoring = this.sessions.startLicenseMonitoring(session, () => this.showLogin());
+    try {
+    await prepareScreenOrientation('tablet');
+    if (changeId !== this.screenChangeId) return;
+    this.stopLicenseMonitoring = this.sessions.startLicenseMonitoring(session, () => { void this.showLogin(); });
     const playerState = new PlayerStateService(this.accountApi, session.token, session.account.email);
-    const playerBackup = new PlayerBackupService(this.accountApi, session.token, session.account.email);
+    const playerBackup = new PlayerBackupService(session.account.email);
     this.playerScreen = new PlayerScreen(
       this.screenRoot,
       session.account,
@@ -121,27 +137,51 @@ export class HookKeysApp {
         completePasswordReset: (passwordToken, password) => this.sessions.completePasswordReset(session, passwordToken, password),
         finishCurrentDeviceRemoval: async () => {
           await this.sessions.clearLocalSession();
-          this.showLogin();
+          await this.showLogin();
         },
       },
       playerState,
       playerBackup,
     );
     this.playerScreen.mount();
-    void this.playOctaveTransition('enter');
+    const loading = this.playOctaveTransition('enter', undefined, this.playerScreen.waitUntilReady());
+    // O overlay de carregamento já cobre o player quando o preto é retirado.
+    cover.remove();
+    await loading;
+    if (changeId === this.screenChangeId) await this.playerScreen?.activateLiveMidi();
+    } catch (error) {
+      if (changeId === this.screenChangeId) this.showStartupError(session, error);
+    } finally {
+      cover.remove();
+    }
+  }
+
+  private showStartupError(session: AuthenticatedSession, error: unknown): void {
+    this.octaveTransition?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'startup-error';
+    overlay.innerHTML = '<section role="alert"><h2>Não foi possível preparar o Hook Keys</h2><p></p><button type="button">Tentar novamente</button><button type="button">Voltar</button></section>';
+    requiredElement(overlay, 'p').textContent = error instanceof Error ? error.message : String(error);
+    const buttons = overlay.querySelectorAll('button');
+    buttons[0]?.addEventListener('click', () => { void this.showPlayer(session); });
+    buttons[1]?.addEventListener('click', () => { void this.showLogin(); });
+    document.body.append(overlay);
+    this.octaveTransition = overlay;
   }
 
   private async logout(session: AuthenticatedSession): Promise<void> {
+    await this.playerScreen?.suspendLiveMidi();
     await this.sessions.logout(session);
     // A despedida inteira continua em paisagem. Só depois que ela some a tela
     // de autenticação volta e o sistema trava novamente em retrato.
     await this.playOctaveTransition('exit');
-    this.showLogin();
+    await this.showLogin();
   }
 
   private playOctaveTransition(
     direction: OctaveTransitionDirection,
     swapScreen?: () => void,
+    readiness: Promise<void> = Promise.resolve(),
   ): Promise<void> {
     this.octaveTransition?.remove();
     const holder = document.createElement('div');
@@ -155,24 +195,35 @@ export class HookKeysApp {
     document.body.append(overlay);
 
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const totalDuration = reducedMotion ? 260 : 6000;
+    // Carregamento mínimo de 3 s (a animação de entrada termina em ~2,2 s); a
+    // despedida do logout mantém os 6 s da própria animação.
+    const totalDuration = direction === 'enter' ? 3000 : 6000;
     const swapDelay = reducedMotion ? 100 : 4400;
-    window.requestAnimationFrame(() => overlay.classList.add('is-running'));
-
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let swapped = false;
       const swap = () => {
         if (swapped) return;
         swapped = true;
         swapScreen?.();
       };
-      if (swapScreen) window.setTimeout(swap, swapDelay);
-      window.setTimeout(() => {
-        swap();
-        overlay.remove();
-        if (this.octaveTransition === overlay) this.octaveTransition = null;
-        resolve();
-      }, totalDuration);
+      // Anexa já o tratamento de rejeição: um erro rápido não fica sem handler.
+      const prepared = readiness.then(() => null, error => ({ error }));
+      window.requestAnimationFrame(() => {
+        overlay.classList.add('is-running');
+        if (swapScreen) window.setTimeout(swap, swapDelay);
+        const minimum = new Promise<void>(done => window.setTimeout(done, totalDuration));
+        void Promise.all([minimum, prepared]).then(async ([, failure]) => {
+          if (failure) { reject(failure.error); return; }
+          swap();
+          if (direction === 'enter') {
+            overlay.classList.add('is-complete');
+            await new Promise(done => window.setTimeout(done, reducedMotion ? 0 : 180));
+          }
+          overlay.remove();
+          if (this.octaveTransition === overlay) this.octaveTransition = null;
+          resolve();
+        });
+      });
     });
   }
 }

@@ -22,9 +22,11 @@ constexpr std::size_t kRenderChunkFrames = 512;
 class AndroidAudioEngine final {
 public:
   bool start(int requestedBufferFrames, int requestedDeviceId = AAUDIO_UNSPECIFIED,
-             int requestedChannels = 2) noexcept {
+             int requestedChannels = 2, bool forceRestart = false,
+             bool preserveRuntime = false) noexcept {
     std::scoped_lock lock(controlMutex_);
-    if (stream_ != nullptr && runtime_ != nullptr && streamReady_.load(std::memory_order_acquire)) {
+    if (!forceRestart && stream_ != nullptr && runtime_ != nullptr &&
+        streamReady_.load(std::memory_order_acquire)) {
       return true;
     }
     // Um erro assíncrono do AAudio deixa o ponteiro do stream existente, mas
@@ -38,7 +40,9 @@ public:
       AAudioStream_close(stream_);
       stream_ = nullptr;
     }
-    runtime_.reset();
+    auto preservedRuntime = preserveRuntime ? std::move(runtime_) : nullptr;
+    const auto preservedSampleRate = sampleRate_;
+    if (!preserveRuntime) runtime_.reset();
     requestedChannels = std::clamp(requestedChannels, 1, 32);
     auto result = openStream(requestedBufferFrames, requestedDeviceId, requestedChannels,
                              AAUDIO_SHARING_MODE_EXCLUSIVE);
@@ -48,17 +52,30 @@ public:
     }
     if (result != AAUDIO_OK || stream_ == nullptr) {
       stream_ = nullptr;
+      runtime_ = std::move(preservedRuntime);
       return false;
     }
 
     channelCount_ = std::clamp(AAudioStream_getChannelCount(stream_), 1, 32);
     const auto sampleRate = static_cast<double>(AAudioStream_getSampleRate(stream_));
-    runtime_ = std::make_unique<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
+    if (preservedRuntime != nullptr && std::abs(sampleRate - preservedSampleRate) >= 0.5) {
+      AAudioStream_close(stream_);
+      stream_ = nullptr;
+      runtime_ = std::move(preservedRuntime);
+      return false;
+    }
+    if (preservedRuntime != nullptr) {
+      runtime_ = std::move(preservedRuntime);
+    } else {
+      runtime_ = std::make_shared<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
+      runtime_->setMidiInputEnabled(false);
+    }
+    sampleRate_ = sampleRate;
     activeRuntime_.store(runtime_.get(), std::memory_order_release);
     result = AAudioStream_requestStart(stream_);
     if (result != AAUDIO_OK) {
       activeRuntime_.store(nullptr, std::memory_order_release);
-      runtime_.reset();
+      if (!preserveRuntime) runtime_.reset();
       AAudioStream_close(stream_);
       stream_ = nullptr;
       return false;
@@ -78,6 +95,7 @@ public:
       stream_ = nullptr;
     }
     runtime_.reset();
+    sampleRate_ = 0.0;
     channelCount_ = 2;
   }
 
@@ -88,8 +106,33 @@ public:
   }
 
   bool loadSoundFont(std::size_t moduleIndex, const char* path) noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> engine;
+    {
+      std::scoped_lock lock(controlMutex_);
+      engine = runtime_;
+    }
+    return engine != nullptr && engine->loadSoundFont(moduleIndex, path);
+  }
+
+  bool cloneSoundFont(std::size_t sourceModuleIndex, std::size_t targetModuleIndex) noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> engine;
+    {
+      std::scoped_lock lock(controlMutex_);
+      engine = runtime_;
+    }
+    return engine != nullptr && engine->cloneSoundFont(sourceModuleIndex, targetModuleIndex);
+  }
+
+  hook_keys::HookKeysEngine::ModulePeaks consumeModulePeaks() noexcept {
     std::scoped_lock lock(controlMutex_);
-    return runtime_ != nullptr && runtime_->loadSoundFont(moduleIndex, path);
+    return runtime_ ? runtime_->consumeModulePeaks() : hook_keys::HookKeysEngine::ModulePeaks{};
+  }
+
+  hook_keys::HookKeysEngine::ModuleAnalysis consumeModuleAnalysis(
+      std::size_t moduleIndex) noexcept {
+    std::scoped_lock lock(controlMutex_);
+    return runtime_ ? runtime_->consumeModuleAnalysis(moduleIndex)
+                    : hook_keys::HookKeysEngine::ModuleAnalysis{};
   }
 
   bool sendMidi(
@@ -100,6 +143,12 @@ public:
       std::uint64_t timestamp) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     return runtime != nullptr && runtime->sendMidi(slot, status, data1, data2, timestamp);
+  }
+
+  void setMidiInputEnabled(bool enabled) noexcept {
+    if (auto* runtime = activeRuntime_.load(std::memory_order_acquire)) {
+      runtime->setMidiInputEnabled(enabled);
+    }
   }
 
   bool configureModule(
@@ -133,7 +182,7 @@ public:
     config.octaveShift = octave;
     config.sustainInputEnabled = sustain;
     config.modulationInputEnabled = modulation;
-    config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
+    config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
     config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
     config.velocityCurve = {
         static_cast<std::uint8_t>(std::clamp(velocityCurve0, 0, 127)),
@@ -146,9 +195,15 @@ public:
     return runtime->setModuleConfig(moduleIndex, config);
   }
 
+  bool setModuleGain(std::size_t moduleIndex, float db) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    return runtime != nullptr && runtime->setModuleGainDb(moduleIndex, db);
+  }
+
   bool configureModuleEffects(
       std::size_t moduleIndex,
       float cutoffHz,
+      const std::array<int, 5>& cutoffVelocity,
       const std::array<int, 5>& eqTypes,
       const std::array<float, 5>& eqFrequencies,
       const std::array<float, 5>& eqGains,
@@ -176,7 +231,11 @@ public:
     hook_keys::ModuleEffectsConfig effects;
     effects.cutoff.enabled = true;
     effects.cutoff.frequencyHz = cutoffHz;
-    effects.equalizer.enabled = true;
+    for (std::size_t index = 0; index < effects.cutoff.velocityCurve.size(); ++index) {
+      effects.cutoff.velocityCurve[index] = static_cast<std::uint8_t>(
+          std::clamp(cutoffVelocity[index], 0, 127));
+    }
+    effects.equalizer.enabled = false;
     for (std::size_t index = 0; index < effects.equalizer.bands.size(); ++index) {
       auto& band = effects.equalizer.bands[index];
       band.enabled = true;
@@ -185,11 +244,14 @@ public:
       band.gainDb = eqGains[index];
       band.quality = eqQualities[index];
       band.cutStages = static_cast<std::uint8_t>(std::clamp(eqCutStages[index], 1, 8));
+      const auto cut = band.type == hook_keys::EqBandType::lowCut ||
+          band.type == hook_keys::EqBandType::highCut;
+      effects.equalizer.enabled = effects.equalizer.enabled || cut || std::abs(band.gainDb) > 0.0001f;
     }
-    effects.compressor = {true, compressorThresholdDb, compressorRatio, compressorAttackMs,
+    effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                           compressorReleaseMs, compressorGainDb, compressorMix};
-    effects.delay = {true, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-    effects.reverb = {true, reverbDecay, reverbDampen, reverbSize, reverbMix};
+    effects.delay = {delayMix > 0.0001f, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
+    effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix};
     effects.rotary = {rotaryEnabled, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                       rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                       rotaryModulationEnabled};
@@ -198,10 +260,62 @@ public:
 
   bool configureModuleEnvelope(
       std::size_t moduleIndex, float attackMs, float holdMs,
-      float decayMs, float releaseMs) noexcept {
+      float decayMs, float releaseMs, float glideMs) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     return runtime != nullptr && runtime->setModuleEnvelope(
-        moduleIndex, attackMs, holdMs, decayMs, releaseMs);
+        moduleIndex, attackMs, holdMs, decayMs, releaseMs, glideMs);
+  }
+
+  bool configureVelocityLimits(std::size_t moduleIndex, std::uint8_t ignoreAbove, std::uint8_t ceiling,
+      std::uint8_t oscillator1Limit, std::uint8_t oscillator2Limit) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    return runtime != nullptr && runtime->setVelocityLimits(
+        moduleIndex, ignoreAbove, ceiling, oscillator1Limit, oscillator2Limit);
+  }
+
+  bool configureGlide(std::size_t moduleIndex, hook_keys::GlideBehavior behavior) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    return runtime != nullptr && runtime->setGlideBehavior(moduleIndex, behavior);
+  }
+
+  bool configureModuleModulation(std::size_t moduleIndex, bool lfo, float rateHz) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    return runtime != nullptr && runtime->setModuleModulationMode(moduleIndex, lfo, rateHz);
+  }
+
+  bool beginPresetTransition() noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    return runtime != nullptr && runtime->beginPresetTransition();
+  }
+
+  bool commitPresetTransition() noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    return runtime != nullptr && runtime->commitPresetTransition();
+  }
+
+  void setCompatibilityMode(bool enabled) noexcept {
+    if (auto* runtime = activeRuntime_.load(std::memory_order_acquire)) runtime->setCompatibilityMode(enabled);
+  }
+
+  void setSeamlessPresetSwitching(bool enabled) noexcept {
+    if (auto* runtime = activeRuntime_.load(std::memory_order_acquire)) runtime->setSeamlessPresetSwitching(enabled);
+  }
+
+  bool configureTranceGate(std::size_t moduleIndex, bool enabled, int steps, int length,
+      float beatMultiplier, float gate, float depth, float attackMs, float releaseMs, float swing) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    if (runtime == nullptr) return false;
+    hook_keys::ModuleEffectsConfig::TranceGateConfig config;
+    config.enabled = enabled;
+    config.steps = static_cast<std::uint16_t>(steps);
+    config.length = static_cast<std::uint8_t>(std::clamp(length, 1, 16));
+    config.beatMultiplier = beatMultiplier;
+    config.gate = gate;
+    config.depth = depth;
+    config.attackMs = attackMs;
+    config.releaseMs = releaseMs;
+    config.swing = swing;
+    return runtime->setTranceGate(moduleIndex, config);
   }
 
   bool configureSynth(
@@ -273,6 +387,7 @@ public:
 private:
   aaudio_result_t openStream(int requestedBufferFrames, int requestedDeviceId,
                              int requestedChannels, aaudio_sharing_mode_t sharingMode) noexcept {
+    requestedBufferFrames = std::clamp(requestedBufferFrames, 64, 512);
     if (stream_ != nullptr) {
       AAudioStream_close(stream_);
       stream_ = nullptr;
@@ -288,12 +403,20 @@ private:
     AAudioStreamBuilder_setChannelCount(builder, requestedChannels);
     AAudioStreamBuilder_setDeviceId(builder, requestedDeviceId);
     AAudioStreamBuilder_setSampleRate(builder, AAUDIO_UNSPECIFIED);
-    AAudioStreamBuilder_setFramesPerDataCallback(
-        builder, std::clamp(requestedBufferFrames, 32, static_cast<int>(kRenderChunkFrames)));
     AAudioStreamBuilder_setDataCallback(builder, &AndroidAudioEngine::dataCallback, this);
     AAudioStreamBuilder_setErrorCallback(builder, &AndroidAudioEngine::errorCallback, this);
     const auto result = AAudioStreamBuilder_openStream(builder, &stream_);
     AAudioStreamBuilder_delete(builder);
+    if (result == AAUDIO_OK && stream_ != nullptr) {
+      // O tamanho do callback pertence ao AAudio. Ajustamos apenas a capacidade
+      // em multiplos do burst nativo para nao provocar underrun em celulares.
+      const auto burst = std::max(1, AAudioStream_getFramesPerBurst(stream_));
+      const auto capacity = std::max(burst, AAudioStream_getBufferCapacityInFrames(stream_));
+      const auto requested = std::max(requestedBufferFrames, burst * 2);
+      const auto wholeBursts = ((requested + burst - 1) / burst) * burst;
+      static_cast<void>(AAudioStream_setBufferSizeInFrames(
+          stream_, std::min(capacity, wholeBursts)));
+    }
     return result;
   }
 
@@ -329,11 +452,12 @@ private:
 
   std::mutex controlMutex_;
   AAudioStream* stream_ = nullptr;
-  std::unique_ptr<hook_keys::NativeEngineRuntime> runtime_;
+  std::shared_ptr<hook_keys::NativeEngineRuntime> runtime_;
   std::atomic<hook_keys::NativeEngineRuntime*> activeRuntime_{nullptr};
   std::atomic<bool> streamReady_{false};
   std::atomic<bool> callbackSeen_{false};
   std::size_t channelCount_ = 2;
+  double sampleRate_ = 0.0;
 };
 
 AndroidAudioEngine gEngine;
@@ -367,10 +491,10 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeStart(JNIEnv*, jclass
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeRestart(
-    JNIEnv*, jclass, jint bufferFrames, jint deviceId, jint channels) {
-  gEngine.stop();
-  if (gEngine.start(bufferFrames, deviceId, channels)) return JNI_TRUE;
-  static_cast<void>(gEngine.start(bufferFrames));
+    JNIEnv*, jclass, jint bufferFrames, jint deviceId, jint channels, jboolean preserveRuntime) {
+  const bool preserve = preserveRuntime == JNI_TRUE;
+  if (gEngine.start(bufferFrames, deviceId, channels, true, preserve)) return JNI_TRUE;
+  static_cast<void>(gEngine.start(bufferFrames, AAUDIO_UNSPECIFIED, 2, true, preserve));
   return JNI_FALSE;
 }
 
@@ -379,9 +503,33 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeStop(JNIEnv*, jclass)
   gEngine.stop();
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetMidiInputEnabled(
+    JNIEnv*, jclass, jboolean enabled) {
+  gEngine.setMidiInputEnabled(enabled == JNI_TRUE);
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeAudioOutputReady(JNIEnv*, jclass) {
   return gEngine.audioOutputReady() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeModuleMeterLevels(JNIEnv* env, jclass) {
+  const auto peaks = gEngine.consumeModulePeaks();
+  auto result = env->NewFloatArray(static_cast<jsize>(peaks.size()));
+  if (result) env->SetFloatArrayRegion(result, 0, static_cast<jsize>(peaks.size()), peaks.data());
+  return result;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeModuleAnalysis(
+    JNIEnv* env, jclass, jint moduleIndex) {
+  const auto analysis = gEngine.consumeModuleAnalysis(static_cast<std::size_t>(moduleIndex));
+  auto result = env->NewFloatArray(static_cast<jsize>(analysis.size()));
+  if (result) env->SetFloatArrayRegion(
+      result, 0, static_cast<jsize>(analysis.size()), analysis.data());
+  return result;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -389,6 +537,14 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeLoadSoundFont(
     JNIEnv* environment, jclass, jint moduleIndex, jstring path) {
   const auto nativePath = javaString(environment, path);
   return gEngine.loadSoundFont(static_cast<std::size_t>(moduleIndex), nativePath.c_str()) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeCloneSoundFont(
+    JNIEnv*, jclass, jint sourceModuleIndex, jint targetModuleIndex) {
+  return gEngine.cloneSoundFont(
+      static_cast<std::size_t>(sourceModuleIndex), static_cast<std::size_t>(targetModuleIndex))
+      ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -448,11 +604,47 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetModuleGain(
+    JNIEnv*, jclass, jint moduleIndex, jfloat db) {
+  return gEngine.setModuleGain(static_cast<std::size_t>(moduleIndex), db)
+      ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureTranceGate(
+    JNIEnv*, jclass, jint moduleIndex, jboolean enabled, jint steps, jint length,
+    jfloat beatMultiplier, jfloat gate, jfloat depth, jfloat attackMs, jfloat releaseMs, jfloat swing) {
+  return gEngine.configureTranceGate(static_cast<std::size_t>(moduleIndex), enabled == JNI_TRUE,
+      steps, length, beatMultiplier, gate, depth, attackMs, releaseMs, swing) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeBeginPresetTransition(JNIEnv*, jclass) {
+  return gEngine.beginPresetTransition() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeCommitPresetTransition(JNIEnv*, jclass) {
+  return gEngine.commitPresetTransition() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetCompatibilityMode(JNIEnv*, jclass, jboolean enabled) {
+  gEngine.setCompatibilityMode(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetSeamlessPresetSwitching(JNIEnv*, jclass, jboolean enabled) {
+  gEngine.setSeamlessPresetSwitching(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffects(
     JNIEnv* environment,
     jclass,
     jint moduleIndex,
     jfloat cutoffHz,
+    jintArray cutoffVelocity,
     jintArray eqTypes,
     jfloatArray eqFrequencies,
     jfloatArray eqGains,
@@ -482,6 +674,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     env->GetFloatArrayRegion(source, start, count, reinterpret_cast<jfloat*>(target));
   };
   const auto types = javaArray<jintArray, int, 5>(environment, eqTypes, 2, readInts);
+  const auto velocity = javaArray<jintArray, int, 5>(environment, cutoffVelocity, 127, readInts);
   const auto frequencies = javaArray<jfloatArray, float, 5>(
       environment, eqFrequencies, 1000.0f, readFloats);
   const auto gains = javaArray<jfloatArray, float, 5>(environment, eqGains, 0.0f, readFloats);
@@ -489,7 +682,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
       environment, eqQualities, 0.7071f, readFloats);
   const auto cutStages = javaArray<jintArray, int, 5>(environment, eqCutStages, 1, readInts);
   return gEngine.configureModuleEffects(
-             static_cast<std::size_t>(moduleIndex), cutoffHz, types, frequencies, gains, qualities,
+             static_cast<std::size_t>(moduleIndex), cutoffHz, velocity, types, frequencies, gains, qualities,
              cutStages, compressorThresholdDb, compressorRatio, compressorAttackMs,
              compressorReleaseMs, compressorGainDb, compressorMix, delaySync == JNI_TRUE,
              delayMs, delayBeatMultiplier, delayFeedback, delayMix, reverbDecay, reverbDampen,
@@ -503,9 +696,41 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEnvelope(
     JNIEnv*, jclass, jint moduleIndex, jfloat attackMs, jfloat holdMs,
-    jfloat decayMs, jfloat releaseMs) {
+    jfloat decayMs, jfloat releaseMs, jfloat glideMs) {
   return gEngine.configureModuleEnvelope(
-             static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs)
+             static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs, glideMs)
+             ? JNI_TRUE
+             : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureVelocityLimits(
+    JNIEnv*, jclass, jint moduleIndex, jint ignoreAbove, jint ceiling,
+    jint oscillator1Limit, jint oscillator2Limit) {
+  if (moduleIndex < 0) return JNI_FALSE;
+  const auto limit = [](jint value) { return static_cast<std::uint8_t>(std::clamp(static_cast<int>(value), 0, 127)); };
+  return gEngine.configureVelocityLimits(static_cast<std::size_t>(moduleIndex), limit(ignoreAbove),
+             limit(ceiling), limit(oscillator1Limit), limit(oscillator2Limit)) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureGlide(
+    JNIEnv*, jclass, jint moduleIndex, jboolean portamento, jboolean velocityGateEnabled,
+    jboolean velocityGateInverted, jint velocityThreshold) {
+  if (moduleIndex < 0) return JNI_FALSE;
+  hook_keys::GlideBehavior behavior;
+  behavior.portamento = portamento == JNI_TRUE;
+  behavior.velocityGateEnabled = velocityGateEnabled == JNI_TRUE;
+  behavior.velocityGateInverted = velocityGateInverted == JNI_TRUE;
+  behavior.velocityThreshold = static_cast<std::uint8_t>(std::clamp(static_cast<int>(velocityThreshold), 0, 127));
+  return gEngine.configureGlide(static_cast<std::size_t>(moduleIndex), behavior) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleModulation(
+    JNIEnv*, jclass, jint moduleIndex, jboolean lfo, jfloat rateHz) {
+  return gEngine.configureModuleModulation(
+             static_cast<std::size_t>(moduleIndex), lfo == JNI_TRUE, rateHz)
              ? JNI_TRUE
              : JNI_FALSE;
 }

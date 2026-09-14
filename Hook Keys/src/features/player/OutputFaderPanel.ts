@@ -1,12 +1,13 @@
 import {
   formatOutputDb,
   OUTPUTS,
+  OUTPUT_MIN_DB,
   outputPosition,
+  outputDbFromPosition,
   type OutputBus,
   type OutputEnabledState,
   type OutputLevels,
 } from './OutputControls';
-import { visualPositionToFaderDb } from './ModuleFader';
 import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
 import { DoubleTapTracker } from '../../shared/gestures/DoubleTapTracker';
 import { isDesktopRuntime } from '../../platform/runtime';
@@ -33,7 +34,7 @@ export function createOutputFaderPanelMarkup(
         <article class="output-fader-channel" data-output-channel="${id}">
           <h3>${label}</h3>
           <output data-output-fader-value="${id}">${formatOutputDb(levels[id])}</output>
-          <div class="output-fader-rail" data-output-fader="${id}" role="slider" tabindex="0" aria-label="Volume ${label}" aria-valuemin="-60" aria-valuemax="6" aria-valuenow="${levels[id]}" style="--output-zero-position:${outputPosition(0)}%">
+          <div class="output-fader-rail" data-output-fader="${id}" role="slider" tabindex="0" aria-label="Volume ${label}" aria-valuemin="${OUTPUT_MIN_DB}" aria-valuemax="12" aria-valuenow="${levels[id]}" style="--output-zero-position:${outputPosition(0)}%">
             <span class="output-fader-fill" style="height:${outputPosition(levels[id])}%"></span>
             <i class="output-fader-zero" aria-hidden="true"></i>
             <b class="output-fader-handle" style="bottom:${outputPosition(levels[id])}%" aria-hidden="true"></b>
@@ -165,7 +166,7 @@ export class OutputFaderPanelController {
     const bounds = drag.rail.getBoundingClientRect();
     if (bounds.height <= 0) return;
     const ratio = Math.min(1, Math.max(0, (bounds.bottom - clientY) / bounds.height));
-    const db = visualPositionToFaderDb(ratio);
+    const db = outputDbFromPosition(ratio * 100);
     this.setValue(drag, db);
   }
 

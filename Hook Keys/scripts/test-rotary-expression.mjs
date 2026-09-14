@@ -18,6 +18,9 @@ function load(path, modules = {}, globals = {}) {
 const effects = load('../src/features/player/ModuleEffectsView.ts', {
   './ParameterKnobView': load('../src/features/player/ParameterKnobView.ts'),
 });
+const glide = load('../src/features/player/GlideView.ts', {
+  './ParameterKnobView': load('../src/features/player/ParameterKnobView.ts'),
+});
 
 function loadPlayerHandlers(names, globals = {}) {
   const source = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
@@ -46,8 +49,9 @@ test('Rotary stacks below Compressor without its preview, while ordinary modules
   const settings = load('../src/features/player/ModuleSettingsView.ts', {
     './ModuleEffectsView': effects,
     './ParameterKnobView': load('../src/features/player/ParameterKnobView.ts'),
+    './GlideView': glide,
     '../audio/AudioOutputService': { createAudioRouteOptions: () => '' },
-    './VelocityCurveView': { createVelocityCardMarkup: () => '' },
+    './VelocityCurveView': { createVelocityCardMarkup: () => '', readVelocityLimit: () => 127 },
   });
   assert.match(settings.createModuleSettingsMarkup([], [], null, {}, 120, 2, 'stereo:0', 'rotary'), /toggle-voice-mode/);
   for (const processor of ['compressor', 'rotary']) {
@@ -135,6 +139,7 @@ test('Modulation toggle persists; CC 1 updates the correct module only at Slow/F
   let changes = 0;
   Object.assign(screen, {
     modal: { querySelector: () => power, querySelectorAll: () => speeds }, currentModalKind: 'module-rotary',
+    liveMidiEnabled: true,
     rotaryModulationValues: new Map(), lastRotaryModulationValue: 0, lastCcValues: new Map(), ccMappings: new Map(),
     getActivePresetState: () => ({ modules }), markPlayerStateChanged: () => changes++,
   });
@@ -202,6 +207,7 @@ test('Rotary Learn uses two-second touch hold with movement cancellation and des
   const learned = [];
   Object.assign(screen, {
     currentModalKind: 'module-rotary', currentModalModuleNumber: 5, desktopRuntime: false,
+    knobInputForTarget: () => null,
     knobCcLearnGesture: new LongPressGesture(2000, 8), openCcLearn: (target) => learned.push(target.control),
   });
   const event = { isPrimary: true, pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 };
@@ -240,7 +246,7 @@ test('all native bridges forward Rotary modulation enablement', () => {
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('rotary_modulation_enabled'));
 });
 
-test('entry/logout retain the animation except the keyboard, last six seconds and share bold italic typography', () => {
+test('entry lasts three seconds, logout six, both keep the animation except the keyboard and share bold italic typography', () => {
   const source = readFileSync(new URL('../src/app/HookKeysApp.ts', import.meta.url), 'utf8');
   const ast = ts.createSourceFile('HookKeysApp.ts', source, ts.ScriptTarget.Latest, true);
   const factory = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'createOctaveTransitionMarkup');
@@ -253,9 +259,12 @@ test('entry/logout retain the animation except the keyboard, last six seconds an
     assert.doesNotMatch(markup, /octave-transition__(keyboard|white-key)/);
     for (const retained of ['identity', 'meter', 'title', 'progress', 'atmosphere']) assert(markup.includes(`octave-transition__${retained}`));
   }
-  assert.match(source, /totalDuration = reducedMotion \? 260 : 6000/);
+  assert.match(source, /totalDuration = direction === 'enter' \? 3000 : 6000/);
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
-  for (const animation of ['transition-enter', 'transition-exit', 'deck-enter', 'deck-exit']) assert(css.includes(`animation: premium-${animation} 6s`));
+  assert(css.includes('animation: premium-transition-exit 6s'));
+  assert(css.includes('animation: premium-deck-exit 6s'));
+  assert(css.includes('animation: premium-loading-deck 1.6s'));
+  assert(css.includes('animation: premium-loading-progress 1.8s'));
   assert.match(css, /body,\s*body :is\([^{}]+\)\s*\{\s*font-weight: 800 !important;\s*font-style: italic !important;/);
 });
 

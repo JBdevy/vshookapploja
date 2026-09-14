@@ -1,11 +1,13 @@
 import type { MidiInputDevice } from '../midi/MidiInputService';
-import type { PlayerBottomView } from './PerformanceKeyboard';
+import type { PerformanceKeyboardStyle, PlayerBottomView } from './PerformanceKeyboard';
 import { createAudioRouteOptions, type AudioBusRouting, type AudioOutputDevice } from '../audio/AudioOutputService';
 
-export const BUFFER_SIZES = [32, 64, 128, 256, 512] as const;
+export const BUFFER_SIZES = [64, 128, 256, 512] as const;
 export type BufferSize = (typeof BUFFER_SIZES)[number];
-export const DEFAULT_BUFFER_SIZE: BufferSize = 128;
-
+// 128 quadros sao 2,7 ms a 48 kHz: uma unica falta de pagina ou um bloco no
+// nucleo eficiente ja estoura o prazo. 256 da o dobro de folga e continua
+// abaixo de 6 ms de latencia, imperceptivel ao tocar.
+export const DEFAULT_BUFFER_SIZE: BufferSize = 256;
 export function isBufferSize(value: number): value is BufferSize {
   return BUFFER_SIZES.some((bufferSize) => bufferSize === value);
 }
@@ -31,11 +33,22 @@ function createDeviceOptions(
   return `<option value=""${selectedDeviceId === null ? ' selected' : ''}>Nenhum</option>${options}`;
 }
 
+// No desktop os presets e o teclado convivem, entao a barra Mostrar nao
+// aparece - e era so por ela que se chegava ao estilo do teclado. Sem isto o
+// aparelho ficava preso no ultimo estilo salvo, sem nenhum caminho de volta.
+const KEYBOARD_STYLE_CHOICES: ReadonlyArray<readonly [PerformanceKeyboardStyle, string]> = [
+  ['standard', 'Default'],
+  ['black', 'Black'],
+  ['neon', 'Neon'],
+];
+
 export function createAppSettingsMarkup(
   compatibilityMode: boolean,
+  seamlessPresetSwitching: boolean,
   bottomView: PlayerBottomView,
   allowKeyboardView: boolean,
   keyboardMidiSlot: number = 1,
+  keyboardStyle: PerformanceKeyboardStyle = 'standard',
 ): string {
   return `
     <section class="app-settings-panel app-settings-panel--main" aria-label="Configurações">
@@ -58,6 +71,15 @@ export function createAppSettingsMarkup(
         <i aria-hidden="true"></i>
       </label>
 
+      <label class="app-settings-toggle app-settings-toggle--seamless-presets">
+        <span>
+          <strong>Troca de preset sem corte</strong>
+          <small>Maior consumo de RAM.</small>
+        </span>
+        <input type="checkbox" data-setting="seamless-preset-switching"${seamlessPresetSwitching ? ' checked' : ''}>
+        <i aria-hidden="true"></i>
+      </label>
+
       ${allowKeyboardView ? `<article class="app-settings-display-card">
         <strong>Mostrar</strong>
         <div role="group" aria-label="Conteúdo exibido abaixo dos módulos">
@@ -65,9 +87,13 @@ export function createAppSettingsMarkup(
           <button type="button" data-setting-view="keyboard" class="${bottomView === 'keyboard' ? 'is-selected' : ''}" aria-pressed="${bottomView === 'keyboard'}">Keyboard</button>
         </div>
       </article>` : `<article class="app-settings-display-card app-settings-display-card--desktop-keyboard">
-        <strong>Teclado do computador</strong>
-        <div role="group" aria-label="Roteamento do teclado do computador">
-          ${[1, 2, 3].map((slot) => `<button type="button" data-desktop-keyboard-midi-slot="${slot}" class="${slot === keyboardMidiSlot ? 'is-selected' : ''}" aria-pressed="${slot === keyboardMidiSlot}">Keyboard ${slot}</button>`).join('')}
+        <strong>Keyboard</strong>
+        <div role="group" aria-label="Entrada MIDI que toca e ilumina o teclado">
+          ${[1, 2, 3].map((slot) => `<button type="button" data-desktop-keyboard-midi-slot="${slot}" class="${slot === keyboardMidiSlot ? 'is-selected' : ''}" aria-pressed="${slot === keyboardMidiSlot}">MIDI ${slot}</button>`).join('')}
+        </div>
+        <strong>Estilo</strong>
+        <div role="group" aria-label="Estilo visual do teclado">
+          ${KEYBOARD_STYLE_CHOICES.map(([style, label]) => `<button type="button" data-keyboard-style="${style}" class="${style === keyboardStyle ? 'is-selected' : ''}" aria-pressed="${style === keyboardStyle}">${label}</button>`).join('')}
         </div>
       </article>`}
     </section>

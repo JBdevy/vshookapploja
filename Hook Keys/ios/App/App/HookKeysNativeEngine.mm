@@ -89,23 +89,28 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
 
 - (BOOL)startWithBufferFrames:(NSInteger)bufferFrames {
   std::scoped_lock lock(_controlMutex);
-  if (_audioEngine != nil && _audioState && _audioState->runtime) return YES;
+  if (_audioEngine != nil && _audioState && _audioState->runtime) {
+    if (_audioEngine.isRunning) return YES;
+    NSError *restartError = nil;
+    if (![AVAudioSession.sharedInstance setActive:YES error:&restartError]) return NO;
+    return [_audioEngine startAndReturnError:&restartError];
+  }
 
   AVAudioSession *session = AVAudioSession.sharedInstance;
   NSError *sessionError = nil;
   if (![session setCategory:AVAudioSessionCategoryPlayback
                         mode:AVAudioSessionModeDefault
-                     options:(AVAudioSessionCategoryOptionMixWithOthers |
-                              AVAudioSessionCategoryOptionAllowBluetooth |
-                              AVAudioSessionCategoryOptionAllowBluetoothA2DP)
+                     options:AVAudioSessionCategoryOptionMixWithOthers
                        error:&sessionError] ||
-      ![session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 32, 512) / 48000.0)
-                                       error:&sessionError] ||
       ![session setActive:YES error:&sessionError]) {
     return NO;
   }
 
   const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
+  // A rota ativa determina a taxa real; 512 frames em 44,1 kHz precisam de
+  // outra duração que os mesmos 512 frames em 48 kHz.
+  if (![session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / sampleRate)
+                                       error:&sessionError]) return NO;
   const AVAudioChannelCount channelCount = static_cast<AVAudioChannelCount>(
       std::clamp<NSInteger>(_requestedOutputChannels, 1, 32));
   AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate
@@ -114,13 +119,15 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
 
   auto state = std::make_shared<AudioState>();
   state->runtime = std::make_unique<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
+  state->runtime->setMidiInputEnabled(false);
   state->activeRuntime.store(state->runtime.get(), std::memory_order_release);
 
   _sourceNode = [[AVAudioSourceNode alloc] initWithFormat:format
-                                             renderBlock:^OSStatus(BOOL *, const AudioTimeStamp *,
+                                             renderBlock:^OSStatus(BOOL *isSilence, const AudioTimeStamp *,
                                                                    AVAudioFrameCount frameCount,
                                                                    AudioBufferList *outputData) {
     auto *runtime = state->activeRuntime.load(std::memory_order_acquire);
+    if (isSilence) *isSilence = runtime == nullptr ? YES : NO;
     if (outputData == nullptr) return noErr;
     for (UInt32 buffer = 0; buffer < outputData->mNumberBuffers; ++buffer) {
       if (outputData->mBuffers[buffer].mData != nullptr) {
@@ -173,7 +180,8 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
 }
 
 - (BOOL)setAudioOutputDeviceId:(NSString *)deviceId channels:(NSInteger)channels
-                  bufferFrames:(NSInteger)bufferFrames {
+                  bufferFrames:(NSInteger)bufferFrames
+                preserveEngine:(BOOL)preserveEngine {
   AVAudioSession *session = AVAudioSession.sharedInstance;
   if (deviceId.length > 0) {
     BOOL currentRouteContainsDevice = NO;
@@ -189,6 +197,28 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
     if (![session setPreferredOutputNumberOfChannels:preferred error:&error]) return NO;
     _requestedOutputChannels = preferred;
   }
+  if (preserveEngine) {
+    std::scoped_lock lock(_controlMutex);
+    if (_audioEngine == nil || !_audioState || !_audioState->runtime) return NO;
+    _audioState->activeRuntime.store(nullptr, std::memory_order_release);
+    _audioState->callbackSeen.store(false, std::memory_order_release);
+    [_audioEngine pause];
+    if (![session setActive:YES error:&error]) {
+      _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
+      return NO;
+    }
+    const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
+    if (![session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / sampleRate)
+                                         error:&error]) {
+      _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
+      return NO;
+    }
+    [_audioEngine prepare];
+    _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
+    if ([_audioEngine startAndReturnError:&error]) return YES;
+    _audioState->activeRuntime.store(nullptr, std::memory_order_release);
+    return NO;
+  }
   [self stop];
   if ([self startWithBufferFrames:bufferFrames]) return YES;
   _requestedOutputChannels = 2;
@@ -201,6 +231,31 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   return _audioEngine != nil && _audioEngine.isRunning && _audioState &&
       _audioState->callbackSeen.load(std::memory_order_acquire) &&
       _audioState->activeRuntime.load(std::memory_order_acquire) != nullptr;
+}
+
+- (void)setMidiInputEnabled:(BOOL)enabled {
+  if (auto* runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr) {
+    runtime->setMidiInputEnabled(enabled);
+  }
+}
+
+- (NSArray<NSNumber *> *)moduleMeterLevels {
+  std::scoped_lock lock(_controlMutex);
+  NSMutableArray<NSNumber *> *levels = [NSMutableArray arrayWithCapacity:hook_keys::kModuleCount * 2];
+  const auto peaks = _audioState && _audioState->runtime
+      ? _audioState->runtime->consumeModulePeaks() : hook_keys::HookKeysEngine::ModulePeaks{};
+  for (float peak : peaks) [levels addObject:@(peak)];
+  return levels;
+}
+
+- (NSArray<NSNumber *> *)moduleAnalysis:(NSInteger)moduleIndex {
+  std::scoped_lock lock(_controlMutex);
+  NSMutableArray<NSNumber *> *values = [NSMutableArray arrayWithCapacity:hook_keys::HookKeysEngine::kAnalysisValueCount];
+  const auto analysis = _audioState && _audioState->runtime && moduleIndex >= 0 && moduleIndex < hook_keys::kModuleCount
+      ? _audioState->runtime->consumeModuleAnalysis(static_cast<std::size_t>(moduleIndex))
+      : hook_keys::HookKeysEngine::ModuleAnalysis{};
+  for (float value : analysis) [values addObject:@(value)];
+  return values;
 }
 
 - (void)stop {
@@ -242,6 +297,15 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
          runtime->loadSoundFont(static_cast<std::size_t>(moduleIndex), path.UTF8String);
 }
 
+- (BOOL)cloneSoundFontFromModule:(NSInteger)sourceModuleIndex
+                        toModule:(NSInteger)targetModuleIndex {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && sourceModuleIndex >= 0 && sourceModuleIndex < 7 &&
+      targetModuleIndex >= 0 && targetModuleIndex < 7 && sourceModuleIndex != targetModuleIndex &&
+      runtime->cloneSoundFont(static_cast<std::size_t>(sourceModuleIndex),
+                              static_cast<std::size_t>(targetModuleIndex));
+}
+
 - (BOOL)configureModule:(NSInteger)moduleIndex enabled:(BOOL)enabled inputSlot:(NSInteger)inputSlot
                  lowNote:(NSInteger)lowNote highNote:(NSInteger)highNote octave:(NSInteger)octave
                  sustain:(BOOL)sustain modulation:(BOOL)modulation volumeDb:(float)volumeDb
@@ -264,7 +328,7 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   config.octaveShift = static_cast<std::int8_t>(std::clamp<NSInteger>(octave, -3, 3));
   config.sustainInputEnabled = sustain;
   config.modulationInputEnabled = modulation;
-  config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
+  config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
   config.polyphony = static_cast<std::uint16_t>(std::clamp<NSInteger>(polyphony, 1, 128));
   config.velocityCurve = {
       static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve0, 0, 127)),
@@ -277,7 +341,14 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   return runtime->setModuleConfig(static_cast<std::size_t>(moduleIndex), config);
 }
 
+- (BOOL)setModuleGainDb:(float)db moduleIndex:(NSInteger)moduleIndex {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && moduleIndex >= 0 && moduleIndex < 8 &&
+         runtime->setModuleGainDb(static_cast<std::size_t>(moduleIndex), db);
+}
+
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex cutoffHz:(float)cutoffHz
+                 cutoffVelocity:(NSArray<NSNumber *> *)cutoffVelocity
                         eqTypes:(NSArray<NSNumber *> *)eqTypes
                   eqFrequencies:(NSArray<NSNumber *> *)eqFrequencies
                         eqGains:(NSArray<NSNumber *> *)eqGains
@@ -304,7 +375,11 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   hook_keys::ModuleEffectsConfig effects;
   effects.cutoff.enabled = true;
   effects.cutoff.frequencyHz = cutoffHz;
-  effects.equalizer.enabled = true;
+  for (NSUInteger index = 0; index < effects.cutoff.velocityCurve.size(); ++index) {
+    const NSInteger value = index < cutoffVelocity.count ? cutoffVelocity[index].integerValue : 127;
+    effects.cutoff.velocityCurve[index] = static_cast<std::uint8_t>(std::clamp<NSInteger>(value, 0, 127));
+  }
+  effects.equalizer.enabled = false;
   for (NSUInteger index = 0; index < effects.equalizer.bands.size(); ++index) {
     auto &band = effects.equalizer.bands[index];
     const NSInteger type = index < eqTypes.count ? eqTypes[index].integerValue : 2;
@@ -315,23 +390,85 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
     band.quality = index < eqQualities.count ? eqQualities[index].floatValue : 0.7071f;
     const NSInteger stages = index < eqCutStages.count ? eqCutStages[index].integerValue : 1;
     band.cutStages = static_cast<std::uint8_t>(std::clamp<NSInteger>(stages, 1, 8));
+    const auto cut = band.type == hook_keys::EqBandType::lowCut ||
+        band.type == hook_keys::EqBandType::highCut;
+    effects.equalizer.enabled = effects.equalizer.enabled || cut || std::abs(band.gainDb) > 0.0001f;
   }
-  effects.compressor = {true, compressorThresholdDb, compressorRatio, compressorAttackMs,
+  effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                         compressorReleaseMs, compressorGainDb, compressorMix};
-  effects.delay = {true, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-  effects.reverb = {true, reverbDecay, reverbDampen, reverbSize, reverbMix};
+  effects.delay = {delayMix > 0.0001f, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
+  effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix};
   effects.rotary = {rotaryEnabled != NO, static_cast<std::uint8_t>(std::clamp<NSInteger>(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != NO};
   return runtime->setModuleEffects(static_cast<std::size_t>(moduleIndex), effects);
 }
 
+- (BOOL)beginPresetTransition {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && runtime->beginPresetTransition();
+}
+
+- (BOOL)commitPresetTransition {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && runtime->commitPresetTransition();
+}
+
 - (BOOL)configureModuleEnvelope:(NSInteger)moduleIndex attackMs:(float)attackMs
-                          holdMs:(float)holdMs decayMs:(float)decayMs releaseMs:(float)releaseMs {
+                          holdMs:(float)holdMs decayMs:(float)decayMs releaseMs:(float)releaseMs glideMs:(float)glideMs {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && moduleIndex >= 0 && moduleIndex < 8 &&
          runtime->setModuleEnvelope(
-             static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs);
+             static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs, glideMs);
+}
+
+- (BOOL)configureVelocityLimits:(NSInteger)moduleIndex
+                     ignoreAbove:(NSInteger)ignoreAbove
+                         ceiling:(NSInteger)ceiling
+                oscillator1Limit:(NSInteger)oscillator1Limit
+                oscillator2Limit:(NSInteger)oscillator2Limit {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= static_cast<NSInteger>(hook_keys::kModuleCount)) return NO;
+  const auto limit = [](NSInteger value) { return static_cast<std::uint8_t>(std::clamp<NSInteger>(value, 0, 127)); };
+  return runtime->setVelocityLimits(static_cast<std::size_t>(moduleIndex), limit(ignoreAbove), limit(ceiling),
+      limit(oscillator1Limit), limit(oscillator2Limit));
+}
+
+- (BOOL)configureGlide:(NSInteger)moduleIndex
+             portamento:(BOOL)portamento
+      velocityGateEnabled:(BOOL)velocityGateEnabled
+     velocityGateInverted:(BOOL)velocityGateInverted
+        velocityThreshold:(NSInteger)velocityThreshold {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= static_cast<NSInteger>(hook_keys::kModuleCount)) return NO;
+  hook_keys::GlideBehavior behavior;
+  behavior.portamento = portamento;
+  behavior.velocityGateEnabled = velocityGateEnabled;
+  behavior.velocityGateInverted = velocityGateInverted;
+  behavior.velocityThreshold = static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityThreshold, 0, 127));
+  return runtime->setGlideBehavior(static_cast<std::size_t>(moduleIndex), behavior);
+}
+
+- (BOOL)configureModuleModulation:(NSInteger)moduleIndex lfo:(BOOL)lfo rateHz:(float)rateHz {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && moduleIndex >= 0 && moduleIndex < 8 &&
+         runtime->setModuleModulationMode(static_cast<std::size_t>(moduleIndex), lfo, rateHz);
+}
+
+- (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
+  hook_keys::ModuleEffectsConfig::TranceGateConfig config;
+  config.enabled = enabled;
+  config.steps = static_cast<std::uint16_t>(steps);
+  config.length = static_cast<std::uint8_t>(std::clamp<NSInteger>(length, 1, 16));
+  config.beatMultiplier = beatMultiplier;
+  config.gate = gate;
+  config.depth = depth;
+  config.attackMs = attackMs;
+  config.releaseMs = releaseMs;
+  config.swing = swing;
+  return runtime->setTranceGate(static_cast<std::size_t>(moduleIndex), config);
 }
 
 - (BOOL)configureSynth:(NSInteger)oscillator1
@@ -421,6 +558,13 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
 
 - (void)setCompatibilityMode:(BOOL)enabled {
   _compatibilityMode.store(enabled, std::memory_order_release);
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime) runtime->setCompatibilityMode(enabled);
+}
+
+- (void)setSeamlessPresetSwitching:(BOOL)enabled {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime) runtime->setSeamlessPresetSwitching(enabled);
 }
 
 - (void)stopAllNotes {
@@ -498,7 +642,7 @@ NSString* endpointName(MIDIEndpointRef endpoint) {
   const NSInteger type = status & 0xf0;
   const bool blockedCompatibilityCC = _compatibilityMode.load(std::memory_order_acquire) &&
       type == 0xb0 && (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 ||
-                       data1 == 16 || data1 == 32 || data1 == 100 || data1 == 101);
+                       data1 == 16 || data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101);
   if (!blockedCompatibilityCC) {
     [self sendMidiFromSlot:slot status:status data1:data1 data2:data2 timestamp:timestamp];
   }

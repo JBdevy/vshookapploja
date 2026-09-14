@@ -27,6 +27,7 @@ export interface CachedSoundPreview {
 interface StoredUserSoundfont extends UserSoundfont {
   accountKey: string;
   file: Blob;
+  createdOrder?: number;
 }
 
 interface StoredFixedSound extends InstalledFixedSound {
@@ -58,7 +59,9 @@ export class SoundLibraryStore {
     const records = await this.readAll<StoredUserSoundfont>(USER_STORE_NAME);
     return records
       .filter((record) => record.accountKey === this.accountKey)
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      // Novos SF2 entram depois dos já existentes, preservando a ordem em que
+      // o usuário montou a biblioteca.
+      .sort((left, right) => storedCreationOrder(left) - storedCreationOrder(right) || left.id.localeCompare(right.id))
       .map(({ id, name, fileName, size, createdAt, colorIndex }) => ({
         id,
         name,
@@ -72,6 +75,12 @@ export class SoundLibraryStore {
   }
 
   async addUser(name: string, file: File, restoredId?: string): Promise<UserSoundfont> {
+    const existing = (await this.readAll<StoredUserSoundfont>(USER_STORE_NAME))
+      .filter((record) => record.accountKey === this.accountKey);
+    const createdOrder = Math.max(
+      Date.now() * 1000,
+      existing.reduce((latest, record) => Math.max(latest, storedCreationOrder(record) + 1), 0),
+    );
     const soundfont: StoredUserSoundfont = {
       id: restoredId?.trim().slice(0, 200) || createId(),
       accountKey: this.accountKey,
@@ -79,6 +88,7 @@ export class SoundLibraryStore {
       fileName: file.name,
       size: file.size,
       createdAt: new Date().toISOString(),
+      createdOrder,
       colorIndex: randomColorIndex(),
       file,
     };
@@ -199,6 +209,14 @@ export class SoundLibraryStore {
     });
     return this.databasePromise;
   }
+}
+
+function storedCreationOrder(soundfont: Pick<StoredUserSoundfont, 'createdAt' | 'createdOrder'>): number {
+  if (Number.isSafeInteger(soundfont.createdOrder) && (soundfont.createdOrder ?? 0) > 0) {
+    return soundfont.createdOrder!;
+  }
+  const timestamp = Date.parse(soundfont.createdAt);
+  return Number.isFinite(timestamp) ? timestamp * 1000 : 0;
 }
 
 function transactionComplete(

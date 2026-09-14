@@ -52,14 +52,6 @@ export class AccountApi {
     });
   }
 
-  emailPlayerBackup(token: string, state: unknown): Promise<{ ok: true; createdAt: string; emailedTo: string }> {
-    return this.http.request('/api/orangekey/account/player-backup/email', {
-      method: 'POST',
-      token,
-      body: { state },
-    });
-  }
-
   getAppSettings(token: string): Promise<AppSettingsResponse> {
     return this.http.request('/api/orangekey/account/app-settings', {
       method: 'GET',

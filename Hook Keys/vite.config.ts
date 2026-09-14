@@ -11,6 +11,11 @@ export default defineConfig(({ mode }) => {
     envDir: projectDirectory,
     server: {
       host: '0.0.0.0',
+      // O Tauri sempre carrega 5173. Se uma execução antiga estiver usando a
+      // porta, falhe claramente em vez de abrir outra porta e deixar a janela
+      // apontando para conteúdo antigo ou para uma tela branca.
+      port: 5173,
+      strictPort: true,
       proxy: {
         '/api': {
           target: backendUrl,

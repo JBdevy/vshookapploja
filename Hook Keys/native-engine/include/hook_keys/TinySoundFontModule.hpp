@@ -1,8 +1,10 @@
 #pragma once
 
 #include "hook_keys/ModuleSynth.hpp"
+#include "hook_keys/TinySoundFontExtensions.hpp"
 #include "hook_keys/RealtimeCommandQueue.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -17,7 +19,9 @@ namespace hook_keys {
 // activated by beginBlock() without allocation, locks, or file access.
 class TinySoundFontModule final : public ModuleSynth {
 public:
-  TinySoundFontModule(double sampleRate, std::size_t maximumBlockFrames, std::size_t maximumVoices = 64);
+  TinySoundFontModule(
+      double sampleRate, std::size_t maximumBlockFrames,
+      std::size_t maximumVoices = kHookKeysMaximumVoices);
   ~TinySoundFontModule() override;
 
   TinySoundFontModule(const TinySoundFontModule&) = delete;
@@ -27,19 +31,42 @@ public:
   // audio block. Calling this never blocks the audio callback.
   [[nodiscard]] bool loadFromFile(const char* utf8Path) noexcept;
   [[nodiscard]] bool loadFromMemory(const void* data, std::size_t size) noexcept;
+  // Creates another playback instance sharing only the immutable SoundFont
+  // regions/samples. Voices, channels, envelopes and effects stay independent.
+  // Both modules must be accessed from the same serialized loader thread.
+  [[nodiscard]] bool copySoundFontFrom(const TinySoundFontModule& source) noexcept;
   void unload() noexcept;
   void collectRetiredSoundFonts() noexcept;
   void setVolumeEnvelope(float attackMs, float holdMs, float decayMs, float releaseMs) noexcept;
+  void setGlide(float milliseconds) noexcept { glideMs_.store(milliseconds, std::memory_order_relaxed); }
+  void setGlideBehavior(GlideBehavior behavior) noexcept override {
+    glideBehavior_.store(behavior.pack(), std::memory_order_relaxed);
+  }
+  void setModulationMode(bool lfo, float rateHz) noexcept {
+    lfoRateHz_.store(std::clamp(rateHz, 0.1f, 20.0f), std::memory_order_release);
+    lfoModulation_.store(lfo, std::memory_order_release);
+  }
 
   [[nodiscard]] bool hasPendingSoundFont() const noexcept;
+  // Bytes do banco de amostras compartilhado, para o host orcar quanto de
+  // SF2 mantem em RAM. Thread de carregamento.
+  [[nodiscard]] std::size_t sampleBytes() const noexcept;
+  [[nodiscard]] bool hasShareableSoundFont() const noexcept { return shareable_ != nullptr; }
 
   // Audio thread only.
   void beginBlock() noexcept override;
   void noteOn(std::uint8_t note, std::uint8_t velocity) noexcept override;
+  void noteOnWithFilterVelocity(std::uint8_t note, std::uint8_t velocity,
+      std::uint8_t filterVelocity) noexcept override;
+  void setCutoffConfig(CutoffConfig config) noexcept override;
   void noteOff(std::uint8_t note) noexcept override;
+  void stealNote(std::uint8_t note) noexcept override;
   void controlChange(std::uint8_t controller, std::uint8_t value) noexcept override;
   void pitchBend(std::uint16_t value) noexcept override;
   void allNotesOff() noexcept override;
+  bool hasActiveVoices() const noexcept override;
+  bool isVoicePoolNearlyFull() const noexcept override;
+  bool canSkipRenderingWhenIdle() const noexcept override { return true; }
   void renderAdd(float* left, float* right, std::size_t frames, float gainLinear) noexcept override;
 
 private:
@@ -53,12 +80,26 @@ private:
   std::vector<float> scratchInterleaved_;
 
   tsf* active_ = nullptr;
+  // Loader-thread-only reference used as a stable tsf_copy source even while
+  // the audio callback swaps active_/pending_.
+  tsf* shareable_ = nullptr;
+  std::atomic<float> glideMs_{0.0f};
+  std::atomic<std::uint16_t> glideBehavior_{GlideBehavior{}.pack()};
+  HookKeysGlideState glide_{};
+  CutoffConfig cutoffConfig_{};
+  std::atomic<bool> lfoModulation_{true};
+  std::atomic<float> lfoRateHz_{6.85f};
+  bool appliedLfoModulation_ = true;
+  std::uint8_t modulationValue_ = 0;
+  std::uint16_t pitchBendValue_ = 8192;
+  double modulationPhase_ = 0.0;
+  float modulationDepth_ = 0.0f;
   tsf* deferredRetired_ = nullptr;
   std::atomic<tsf*> pending_{nullptr};
   std::atomic<float> attackMs_{0.0f};
   std::atomic<float> holdMs_{15000.0f};
   std::atomic<float> decayMs_{25000.0f};
-  std::atomic<float> releaseMs_{90.0f};
+  std::atomic<float> releaseMs_{300.0f};
   std::atomic<std::uint32_t> envelopeGeneration_{1};
   std::uint32_t appliedEnvelopeGeneration_ = 0;
   RealtimeCommandQueue<tsf*, 64> retired_{};

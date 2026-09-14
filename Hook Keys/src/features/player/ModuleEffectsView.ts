@@ -100,9 +100,9 @@ export function createModuleEffectCardsMarkup(
   const compressor = readModuleCompressorSettings(settings.compressor);
   const reverb = readModuleReverbSettings(settings.reverb);
   const delay = readModuleDelaySettings(settings.delay);
-  const delayMilliseconds = delay.sync ? delayMillisecondsForBpm(bpm, delay.division) : delay.milliseconds;
+  const delayMilliseconds = delay.sync ? delayMillisecondsForBpm(bpm, '1/4') : delay.milliseconds;
   return `
-      ${replacement === 'compressor' ? `
+      ${replacement === 'compressor' || replacement === 'synth' ? `
       <article class="module-effect-card module-effect-card--compressor${compressor.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-compressor">Compressor</button>
         <div class="module-compressor-preview" aria-label="Prévia do compressor">
@@ -141,7 +141,7 @@ export function createModuleEffectCardsMarkup(
 function createProcessorShortcutCard(replacement: Exclude<ModuleProcessorReplacement, 'compressor'>): string {
   const label = replacement === 'arpeggiator'
     ? 'Arpeggiator'
-    : replacement === 'sequencer' ? 'Sequencer'
+    : replacement === 'sequencer' ? 'Trance Gate'
       : replacement === 'rotary' ? 'Rotary' : 'Synth';
   return `
     <article class="module-effect-card module-effect-card--processor-shortcuts" aria-label="Processadores do módulo">
@@ -222,7 +222,8 @@ export function createModuleRotaryMarkup(settings: Readonly<Record<string, unkno
 
 export function createModuleDelayMarkup(settings: Readonly<Record<string, unknown>>, bpm: number): string {
   const value = readModuleDelaySettings(settings.delay);
-  const milliseconds = value.sync ? delayMillisecondsForBpm(bpm, value.division) : value.milliseconds;
+  // O knob é uma batida (1/4): o BPM com Sync, ou os ms escolhidos sem ele.
+  const milliseconds = value.sync ? delayMillisecondsForBpm(bpm, '1/4') : value.milliseconds;
   const controls: EffectControlDefinition[] = [
     control('feedback', 'Feedback', 0, 95, 1, value.feedback, `${Math.round(value.feedback)}%`),
     control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
@@ -337,7 +338,7 @@ function createEffectKnob(kind: ModuleEffectKind, item: EffectControlDefinition,
 }
 
 function createVerticalMeter(label: string): string {
-  return `<div class="module-compressor-meter"><span>${label}</span><i><b></b></i><small>−∞</small></div>`;
+  return `<div class="module-compressor-meter" data-compressor-meter="${label.toLowerCase()}"><span>${label}</span><i><b></b></i><small>−∞ dB</small></div>`;
 }
 
 function createPreviewKnob(label: string, progress: number): string {

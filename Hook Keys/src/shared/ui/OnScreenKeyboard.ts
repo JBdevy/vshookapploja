@@ -68,6 +68,20 @@ export function createOnScreenKeyboardMarkup(label: string, initiallyHidden = fa
   `;
 }
 
+export function createNumericOnScreenKeyboardMarkup(label: string, allowDecimal = false): string {
+  return `<div class="on-screen-keyboard on-screen-keyboard--numeric" aria-label="${escapeAttribute(label)}">
+    ${[['1', '2', '3', '4', '5'], ['6', '7', '8', '9', '0']].map(row => `
+      <div class="on-screen-keyboard__row">${row.map(key =>
+        `<button type="button" data-on-screen-key="${key}">${key}</button>`).join('')}</div>
+    `).join('')}
+    <div class="on-screen-keyboard__row">
+      ${allowDecimal ? '<button type="button" data-on-screen-key=".">.</button>' : ''}
+      <button type="button" data-on-screen-key="backspace" aria-label="Apagar">⌫</button>
+      <button type="button" data-on-screen-key="enter">Concluir</button>
+    </div>
+  </div>`;
+}
+
 export function applyOnScreenKey(currentValue: string, key: string, maximumLength: number): string {
   const characters = Array.from(currentValue);
   if (key === 'backspace') return characters.slice(0, -1).join('');

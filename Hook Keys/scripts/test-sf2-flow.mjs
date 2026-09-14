@@ -10,6 +10,14 @@ const androidCpp = readFileSync(new URL('../android/app/src/main/cpp/HookKeysNat
 const androidJava = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
 const iosEngine = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
 const iosPlugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+const soundStore = readFileSync(new URL('../src/features/sound-library/SoundLibraryStore.ts', import.meta.url), 'utf8');
+const soundSelection = readFileSync(new URL('../src/features/player/SoundSelectionView.ts', import.meta.url), 'utf8');
+const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+const nativeEngine = readFileSync(new URL('../native-engine/src/HookKeysEngine.cpp', import.meta.url), 'utf8');
+const tinySoundFont = readFileSync(new URL('../native-engine/src/TinySoundFontImplementation.cpp', import.meta.url), 'utf8');
+const tinySoundFontLibrary = readFileSync(new URL('../native-engine/third_party/TinySoundFont/tsf.h', import.meta.url), 'utf8');
+const tinyModule = readFileSync(new URL('../native-engine/src/TinySoundFontModule.cpp', import.meta.url), 'utf8');
+const nativeRuntime = readFileSync(new URL('../native-engine/src/NativeEngineRuntime.cpp', import.meta.url), 'utf8');
 
 function method(name, nextName) {
   const start = player.indexOf(`  private ${name}`);
@@ -30,6 +38,8 @@ assert.match(select, /await this\.syncNativeEngine\(\)/,
   'A seleção deve aguardar o SF2 chegar ao motor');
 assert(select.indexOf('await this.syncNativeEngine()') < select.lastIndexOf('this.closeModal()'),
   'O modal só pode fechar depois do carregamento');
+assert.match(select, /classList\.toggle\('is-current-timbre', selected\)/,
+  'O SF2 precisa ganhar o contorno imediatamente, antes do carregamento nativo terminar');
 
 assert.match(player,
   /Capacitor\.isNativePlatform\(\) \? 'application\/octet-stream,\.sf2' : '\.sf2'/,
@@ -38,6 +48,16 @@ assert.match(player, /function moduleEmptySoundName[\s\S]*?return 'Sem timbre'/,
   'Arpeggiator e Sequencer não devem ocupar o botão da biblioteca');
 assert.match(player, /classList\.toggle\('has-selected-timbre'/,
   'O botão do módulo deve receber a cor do timbre escolhido');
+assert.match(soundStore, /storedCreationOrder\(left\) - storedCreationOrder\(right\)/,
+  'SF2 do usuário precisam permanecer na ordem de inclusão');
+assert.match(soundSelection, /selectedTimbreId === `fixed:\$\{sound\.id\}`[\s\S]*is-current-timbre/,
+  'O timbre oficial selecionado precisa receber contorno próprio');
+assert.match(player, /selectedTimbreId === `user:\$\{soundfont\.id\}`[\s\S]*is-current-timbre/,
+  'O SF2 selecionado precisa receber contorno próprio');
+assert.match(styles, /button\.is-current-timbre[\s\S]*border-color: #fff !important/,
+  'O contorno do timbre atual precisa ser branco sobre qualquer cor');
+assert.match(styles, /button\.is-current-timbre:disabled[\s\S]*opacity: 1 !important/,
+  'O estado de carregamento não pode deixar o SF2 selecionado cinza');
 
 assert.match(resilientTap, /addEventListener\('scroll', this\.onScroll, true\)/,
   'Uma rolagem real precisa cancelar o toque');
@@ -55,14 +75,27 @@ assert.match(nativeSync, /configurationTasks\.push\([\s\S]*configureSynth/,
   'O Synth precisa estar pronto antes da primeira nota');
 assert.match(nativeSync, /this\.metronome\.syncNativeState\(\)/,
   'O metrônomo precisa ser restaurado junto com o runtime');
-assert(nativeSync.indexOf('await Promise.all(configurationTasks)') < nativeSync.indexOf('await this.syncNativeSoundfonts()'),
-  'Os SF2 só podem entrar depois de módulos, master e metrônomo');
+assert.doesNotMatch(nativeSync, /await this\.syncNativeSoundfonts/,
+  'A fila de parâmetros não pode aguardar a carga dos SF2');
+assert.match(player, /nativeSoundfontSyncQueue[\s\S]*await configurationReady[\s\S]*await this\.syncNativeSoundfonts/,
+  'Os SF2 entram por uma fila independente depois da configuração');
+const soundfontSync = player.slice(player.indexOf('  private async syncNativeSoundfonts'));
+assert.match(soundfontSync, /sourceByTimbre[\s\S]*hookKeysNative\.cloneSoundFont/,
+  'O mesmo SF2 precisa ser transferido e interpretado uma vez antes de ser compartilhado');
+assert.match(tinyModule, /tsf_copy\(source\.shareable_\)/,
+  'As instâncias devem compartilhar apenas os dados imutáveis suportados pelo TinySoundFont');
+assert.match(nativeRuntime, /cloneSoundFont[\s\S]*copySoundFontFrom/,
+  'O runtime precisa entregar uma instância de reprodução separada a cada módulo');
 
 const nativeMidi = method('sendNativeMidi', 'async ensureNativeAudioReady');
-assert.match(nativeMidi, /if \(this\.nativeEngineReady\)[\s\S]*hookKeysNative\.sendMidi/,
+assert.match(nativeMidi, /if \(this\.nativeEngineReady \|\|[\s\S]*hookKeysNative\.sendMidi/,
   'Notas ao vivo precisam do caminho direto, sem consulta de estado por toque');
-assert.match(nativeMidi, /await this\.ensureNativeAudioReady\(\)/,
-  'O primeiro toque deve aguardar a recuperação da saída');
+assert.match(nativeMidi, /!this\.liveMidiEnabled/,
+  'Notas tocadas durante a animação de carregamento devem ser descartadas');
+assert.doesNotMatch(nativeMidi, /nativeMidiQueue/,
+  'Notas nunca podem ficar em fila aguardando o motor');
+assert.match(nativeMidi, /this\.nativeRecoveryPromise = this\.ensureNativeAudioReady\(\)/,
+  'Uma nota descartada pode iniciar recuperação, mas não ser reproduzida depois');
 assert.match(player, /Promise\.all\(\[[\s\S]*initializePromise[\s\S]*restorePromise/,
   'Boot e restauração precisam convergir antes da configuração final');
 
@@ -81,5 +114,42 @@ assert.match(androidJava, /public void audioOutputStatus\(PluginCall call\)/);
 assert.match(iosEngine, /callbackSeen[\s\S]*audioOutputReady[\s\S]*_audioEngine\.isRunning/,
   'iOS precisa detectar a rota suspensa');
 assert.match(iosPlugin, /CAPPluginMethod\(name: "audioOutputStatus"/);
+assert.match(nativeBridge, /preserveEngine[\s\S]*if \(!preserveEngine\) this\.resetSynchronizationCache/,
+  'Trocar somente o buffer não pode invalidar os SF2 já decodificados');
+assert.match(desktop, /preserve_engine[\s\S]*reusable_engine/,
+  'Desktop precisa reutilizar o motor ao trocar somente o buffer');
+assert.match(androidCpp, /preserveRuntime[\s\S]*preservedRuntime/,
+  'Android precisa reutilizar o motor ao trocar somente o buffer');
+assert.match(iosEngine, /preserveEngine[\s\S]*_audioEngine pause/,
+  'iOS precisa reiniciar o stream sem destruir o motor ao trocar somente o buffer');
+for (const [name, source] of [['TypeScript', nativeBridge], ['desktop', desktop], ['Android C++', androidCpp],
+  ['Android Java', androidJava], ['iOS engine', iosEngine], ['iOS plugin', iosPlugin]]) {
+  assert.match(source, /[Mm]oduleAnalysis|module_analysis/, `${name} precisa encaminhar os medidores do compressor`);
+  assert.match(source, /[Cc]loneSoundFont|clone_sound_font|clone_soundfont/,
+    `${name} precisa encaminhar a cópia otimizada e independente do SF2`);
+}
+assert.match(desktop, /Result<\[f32; 16\], String>/,
+  'Desktop precisa entregar pares L/R dos oito módulos');
+assert.match(nativeBridge, /Array\.from\(\{ length: 16 \}/,
+  'A interface precisa consumir os dezesseis níveis estéreo');
+assert.match(nativeEngine, /compressorInputPeaks_[\s\S]*publishProcessorLevels/,
+  'Os medidores do compressor precisam nascer no sinal real do motor');
+assert.match(nativeEngine, /settings_\.sampleRate \* 0\.005/,
+  'Mudanças de fader precisam de rampa anti-zipper no callback');
+assert.match(tinySoundFont, /TSF_RENDER_EFFECTSAMPLEBLOCK 64/,
+  'SF2 precisa usar o bloco de controle nativo com interpolação interna, sem recalcular todo o DSP por amostra');
+assert.match(tinySoundFontLibrary, /gainMonoStep[\s\S]*gainLeft \+= gainLeftStep/,
+  'O ganho do envelope deve ser interpolado dentro do bloco para evitar tick no Note Off');
+assert.match(tinySoundFontLibrary, /TSF_RENDER_SAMPLEEND_FADE 64[\s\S]*remaining \/ fadeDistance/,
+  'O final físico da amostra SF2 precisa chegar a zero mesmo quando termina antes do Release');
 
+assert.match(nativeBridge, /SOUNDFONT_CHUNK_BYTES = 4 \* 1024 \* 1024/,
+  'SF2 grandes usam menos chamadas da WebView e leitura base64 pelo FileReader');
+assert.match(nativeBridge, /reader\.readAsDataURL\(blob\)/);
+for (const bridge of [desktop, androidJava, iosPlugin]) {
+  assert.match(bridge, /assetKey|asset_key/, 'cache nativo é identificado pelo timbre, não pelo módulo');
+  assert.match(bridge, /cached/, 'cache válido evita retransmitir o arquivo inteiro');
+}
+assert.match(nativeRuntime, /if \(!midiInputEnabled_\.load[\s\S]*return true;/,
+  'MIDI físico também precisa ser descartado pelo motor durante o carregamento');
 console.log('SF2_FLOW_AND_RESILIENT_TAPS_OK');

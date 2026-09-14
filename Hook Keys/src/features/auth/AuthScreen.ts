@@ -52,7 +52,7 @@ export class AuthScreen {
           <div class="brand-lockup">
             <img
               class="brand-symbol-image"
-              src="/assets/icons/icon-256.webp"
+              src="/assets/icons/256x256.png"
               alt=""
               aria-hidden="true"
             >

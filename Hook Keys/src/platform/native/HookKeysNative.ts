@@ -39,6 +39,11 @@ export interface NativeModuleConfig {
 export interface NativeModuleEffectsConfig {
   moduleIndex: number;
   cutoffHz: number;
+  cutoffVelocity0: number;
+  cutoffVelocity1: number;
+  cutoffVelocity2: number;
+  cutoffVelocity3: number;
+  cutoffVelocity4: number;
   eqTypes: number[];
   eqFrequencies: number[];
   eqGains: number[];
@@ -75,6 +80,55 @@ export interface NativeModuleEnvelopeConfig {
   holdMs: number;
   decayMs: number;
   releaseMs: number;
+  glideMs: number;
+}
+
+export interface NativeVelocityLimitsConfig {
+  moduleIndex: number;
+  ignoreAbove: number;
+  ceiling: number;
+  oscillator1Limit: number;
+  oscillator2Limit: number;
+}
+
+export interface NativeFileBrowserRoot {
+  id: string;
+  name: string;
+  removable: boolean;
+}
+
+export interface NativeFileBrowserEntry {
+  name: string;
+  isDirectory: boolean;
+  size?: number;
+  inCloud?: boolean;
+}
+
+export interface NativeGlideConfig {
+  moduleIndex: number;
+  portamento: boolean;
+  velocityGateEnabled: boolean;
+  velocityGateInverted: boolean;
+  velocityThreshold: number;
+}
+
+export interface NativeModuleModulationConfig {
+  moduleIndex: number;
+  lfo: boolean;
+  rateHz: number;
+}
+
+export interface NativeTranceGateConfig {
+  moduleIndex: number;
+  enabled: boolean;
+  steps: number;
+  length: number;
+  beatMultiplier: number;
+  gate: number;
+  depth: number;
+  attackMs: number;
+  releaseMs: number;
+  swing: number;
 }
 
 export interface NativeSynthConfig {
@@ -133,26 +187,50 @@ interface NativeMidiPitchBendEvent {
 }
 
 interface HookKeysNativePlugin {
+  setMidiInputEnabled(options: { enabled: boolean }): Promise<void>;
   initialize(options: { bufferSize: number }): Promise<{ ready: boolean }>;
   listMidiDevices(): Promise<{ devices: NativeMidiDevice[] }>;
   listAudioOutputDevices(): Promise<{ devices: NativeAudioOutputDevice[] }>;
-  setAudioOutputDevice(options: { deviceId: string; channels: number; bufferSize: number }): Promise<void>;
+  setAudioOutputDevice(options: {
+    deviceId: string;
+    channels: number;
+    bufferSize: number;
+    preserveEngine?: boolean;
+  }): Promise<void>;
   audioOutputStatus(): Promise<NativeAudioOutputStatus>;
+  moduleMeterLevels(): Promise<{ levels: number[] }>;
+  moduleAnalysis(options: { moduleIndex: number }): Promise<{ values: number[] }>;
   setMidiInputs(options: { deviceIds: Array<string | null> }): Promise<void>;
   configureModule(options: NativeModuleConfig): Promise<void>;
+  beginPresetTransition(): Promise<void>;
+  commitPresetTransition(): Promise<void>;
+  setModuleGain(options: { moduleIndex: number; db: number }): Promise<void>;
   configureModuleEffects(options: NativeModuleEffectsConfig): Promise<void>;
+  configureTranceGate(options: NativeTranceGateConfig): Promise<void>;
   configureModuleEnvelope(options: NativeModuleEnvelopeConfig): Promise<void>;
+  configureModuleModulation(options: NativeModuleModulationConfig): Promise<void>;
+  configureGlide(options: NativeGlideConfig): Promise<void>;
+  configureVelocityLimits(options: NativeVelocityLimitsConfig): Promise<void>;
   configureSynth(options: NativeSynthConfig): Promise<void>;
   sendMidi(options: { inputSlot: number; status: number; data1: number; data2: number }): Promise<void>;
   setTempo(options: { bpm: number }): Promise<void>;
   configureMetronome(options: NativeMetronomeConfig): Promise<void>;
   setOutputGain(options: { db: number; enabled: boolean }): Promise<void>;
   setCompatibilityMode(options: { enabled: boolean }): Promise<void>;
+  setSeamlessPresetSwitching(options: { enabled: boolean }): Promise<void>;
   stopAllNotes(): Promise<void>;
   performHaptic(options: { strength: 'light' | 'medium' }): Promise<void>;
-  beginSoundFontUpload(options: { moduleIndex: number }): Promise<void>;
+  beginSoundFontUpload(options: { moduleIndex: number; assetKey: string }): Promise<{ cached: boolean }>;
   appendSoundFontChunk(options: { moduleIndex: number; base64: string }): Promise<void>;
   finishSoundFontUpload(options: { moduleIndex: number }): Promise<void>;
+  cloneSoundFont(options: { sourceModuleIndex: number; targetModuleIndex: number }): Promise<void>;
+  saveBackup(options: { fileName: string; content: string }): Promise<{ saved: boolean }>;
+  fileBrowserRoots(): Promise<{ roots: NativeFileBrowserRoot[] }>;
+  addFileBrowserFolder(): Promise<{ added: boolean; root?: NativeFileBrowserRoot }>;
+  removeFileBrowserFolder(options: { rootId: string }): Promise<void>;
+  listFileBrowserDirectory(options: { rootId: string; path: string }): Promise<{ entries: NativeFileBrowserEntry[] }>;
+  importFileBrowserFile(options: { rootId: string; path: string }): Promise<{ path: string; name: string; size: number }>;
+  releaseFileBrowserImport(options: { path: string }): Promise<void>;
   addListener(eventName: 'midiNote', listener: (event: NativeMidiNoteEvent) => void): Promise<PluginListenerHandle>;
   addListener(
     eventName: 'midiControlChange',
@@ -163,26 +241,31 @@ interface HookKeysNativePlugin {
 }
 
 const plugin = registerPlugin<HookKeysNativePlugin>('HookKeysNative');
-const SOUNDFONT_CHUNK_BYTES = 384 * 1024;
+const SOUNDFONT_CHUNK_BYTES = 4 * 1024 * 1024;
 
 class HookKeysNativeBridge {
   private initializePromise: Promise<boolean> | null = null;
   private listenersPromise: Promise<void> | null = null;
   private readonly moduleConfigKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
+  private readonly tranceGateKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private readonly moduleEffectsKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private readonly moduleEnvelopeKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
+  private readonly moduleModulationKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
+  private readonly glideKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
+  private readonly velocityLimitKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private lastSynthKey: string | null = null;
   private lastTempo: number | null = null;
   private lastMetronomeKey: string | null = null;
   private lastOutputGainKey: string | null = null;
   private lastCompatibilityMode: boolean | null = null;
+  private lastSeamlessPresetSwitching: boolean | null = null;
   private lastAudioDeviceKey: string | null = null;
 
   isAvailable(): boolean {
     return Capacitor.isNativePlatform() || this.tauriInvoke() !== null;
   }
 
-  initialize(bufferSize = 128): Promise<boolean> {
+  initialize(bufferSize = 256): Promise<boolean> {
     if (!this.isAvailable()) return Promise.resolve(false);
     if (!this.initializePromise) {
       this.initializePromise = this.call<{ ready: boolean }>('initialize', { bufferSize }, () => plugin.initialize({ bufferSize }))
@@ -194,6 +277,7 @@ class HookKeysNativeBridge {
           if (ready && this.lastAudioDeviceKey === null) {
             this.lastAudioDeviceKey = `:2:${bufferSize}`;
           }
+          if (!ready) this.initializePromise = null;
           return ready;
         })
         .catch(() => {
@@ -227,18 +311,30 @@ class HookKeysNativeBridge {
     return Array.isArray(devices) ? devices : [];
   }
 
-  async setAudioOutputDevice(deviceId: string, channels: number, bufferSize: number): Promise<boolean> {
+  async setAudioOutputDevice(
+    deviceId: string,
+    channels: number,
+    bufferSize: number,
+    preserveEngine = false,
+  ): Promise<boolean> {
     if (!await this.initialize(bufferSize)) return false;
     const key = `${deviceId}:${channels}:${bufferSize}`;
     if (key === this.lastAudioDeviceKey) return false;
+    // Trocar somente o buffer mantém o mesmo motor e os SF2 já decodificados.
+    // Uma mudança real de dispositivo/canais continua invalidando todos os
+    // caches porque pode também alterar a taxa de amostragem.
+    if (!preserveEngine) this.resetSynchronizationCache();
     try {
-      await this.call('set_audio_output_device', { deviceId, channels, bufferSize }, () => (
-        plugin.setAudioOutputDevice({ deviceId, channels, bufferSize })
+      await this.call('set_audio_output_device', { deviceId, channels, bufferSize, preserveEngine }, () => (
+        plugin.setAudioOutputDevice({ deviceId, channels, bufferSize, preserveEngine })
       ));
       this.lastAudioDeviceKey = key;
+      this.initializePromise = null;
       return true;
-    } finally {
-      this.resetSynchronizationCache();
+    } catch (error) {
+      this.lastAudioDeviceKey = null;
+      this.initializePromise = null;
+      throw error;
     }
   }
 
@@ -259,6 +355,46 @@ class HookKeysNativeBridge {
 
   async audioOutputFailed(): Promise<boolean> {
     return !(await this.audioOutputStatus()).ready;
+  }
+
+  async moduleMeterLevels(): Promise<number[]> {
+    if (!this.isAvailable()) return [];
+    const result = await this.call<number[] | { levels: number[] }>(
+      'module_meter_levels', {}, () => plugin.moduleMeterLevels(),
+    );
+    const levels = Array.isArray(result) ? result : result.levels;
+    return Array.from({ length: 16 }, (_, index) => {
+      const value = levels?.[index];
+      return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
+    });
+  }
+
+  async moduleAnalysis(moduleIndex: number): Promise<number[]> {
+    if (!this.isAvailable() || !Number.isInteger(moduleIndex) || moduleIndex < 0 || moduleIndex >= 8) return [];
+    const result = await this.call<number[] | { values: number[] }>(
+      'module_analysis', { moduleIndex }, () => plugin.moduleAnalysis({ moduleIndex }),
+    );
+    const values = Array.isArray(result) ? result : result.values;
+    return Array.from({ length: 2 }, (_, index) => {
+      const value = values?.[index];
+      return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
+    });
+  }
+
+  // Custo real do callback de audio contra o prazo do bloco: [0] pior bloco,
+  // [1] media suavizada, [2] estouros. So o desktop mede; nas plataformas
+  // moveis o comando nao existe e o medidor nao aparece.
+  async audioLoad(): Promise<{ peak: number; smoothed: number; overruns: number } | null> {
+    const invoke = this.tauriInvoke();
+    if (!invoke) return null;
+    // O medidor nao pode derrubar o laco que atualiza os VUs dos modulos.
+    const result = await invoke('audio_load').catch(() => null) as unknown;
+    if (!Array.isArray(result)) return null;
+    const at = (index: number) => {
+      const entry = result[index];
+      return typeof entry === 'number' && Number.isFinite(entry) ? Math.max(0, entry) : 0;
+    };
+    return { peak: at(0), smoothed: at(1), overruns: at(2) };
   }
 
   async recoverDefaultAudioOutput(bufferSize: number): Promise<boolean> {
@@ -282,12 +418,40 @@ class HookKeysNativeBridge {
     ));
   }
 
+  async beginPresetTransition(): Promise<void> {
+    if (!await this.initialize()) return;
+    await this.call('begin_preset_transition', {}, () => plugin.beginPresetTransition());
+    // The fresh layer needs ALL settings, including values equal to the old
+    // preset. Keep file/upload caches and the running audio device intact.
+    this.resetSynchronizationCache();
+  }
+
+  async commitPresetTransition(): Promise<void> {
+    await this.call('commit_preset_transition', {}, () => plugin.commitPresetTransition());
+  }
+
   async configureModule(config: NativeModuleConfig): Promise<void> {
     if (!await this.initialize()) return;
     const key = JSON.stringify(config);
     if (this.moduleConfigKeys[config.moduleIndex] === key) return;
     await this.call('configure_module', { config }, () => plugin.configureModule(config));
     this.moduleConfigKeys[config.moduleIndex] = key;
+  }
+
+  async setModuleGain(moduleIndex: number, db: number): Promise<void> {
+    if (!await this.initialize()) return;
+    const safeDb = Number.isFinite(db) ? Math.min(6, Math.max(-90, db)) : 0;
+    await this.call('set_module_gain', { moduleIndex, db: safeDb }, () => (
+      plugin.setModuleGain({ moduleIndex, db: safeDb })
+    ));
+  }
+
+  async configureTranceGate(config: NativeTranceGateConfig): Promise<void> {
+    if (!await this.initialize()) return;
+    const key = JSON.stringify(config);
+    if (this.tranceGateKeys[config.moduleIndex] === key) return;
+    await this.call('configure_trance_gate', { config }, () => plugin.configureTranceGate(config));
+    this.tranceGateKeys[config.moduleIndex] = key;
   }
 
   async configureModuleEffects(config: NativeModuleEffectsConfig): Promise<void> {
@@ -304,6 +468,56 @@ class HookKeysNativeBridge {
     if (this.moduleEnvelopeKeys[config.moduleIndex] === key) return;
     await this.call('configure_module_envelope', { config }, () => plugin.configureModuleEnvelope(config));
     this.moduleEnvelopeKeys[config.moduleIndex] = key;
+  }
+
+  async configureVelocityLimits(config: NativeVelocityLimitsConfig): Promise<void> {
+    if (!await this.initialize()) return;
+    if (!Number.isInteger(config.moduleIndex) || config.moduleIndex < 0 || config.moduleIndex >= 8) return;
+    const limit = (value: number) => Number.isFinite(value) ? Math.round(Math.min(127, Math.max(0, value))) : 127;
+    const normalized: NativeVelocityLimitsConfig = {
+      moduleIndex: config.moduleIndex,
+      ignoreAbove: limit(config.ignoreAbove),
+      ceiling: limit(config.ceiling),
+      oscillator1Limit: limit(config.oscillator1Limit),
+      oscillator2Limit: limit(config.oscillator2Limit),
+    };
+    const key = JSON.stringify(normalized);
+    if (this.velocityLimitKeys[config.moduleIndex] === key) return;
+    await this.call('configure_velocity_limits', { config: normalized }, () => plugin.configureVelocityLimits(normalized));
+    this.velocityLimitKeys[config.moduleIndex] = key;
+  }
+
+  async configureGlide(config: NativeGlideConfig): Promise<void> {
+    if (!await this.initialize()) return;
+    if (!Number.isInteger(config.moduleIndex) || config.moduleIndex < 0 || config.moduleIndex >= 8) return;
+    const normalized: NativeGlideConfig = {
+      moduleIndex: config.moduleIndex,
+      portamento: config.portamento === true,
+      velocityGateEnabled: config.velocityGateEnabled === true,
+      velocityGateInverted: config.velocityGateInverted === true,
+      velocityThreshold: Number.isFinite(config.velocityThreshold)
+        ? Math.round(Math.min(127, Math.max(0, config.velocityThreshold))) : 64,
+    };
+    const key = JSON.stringify(normalized);
+    if (this.glideKeys[config.moduleIndex] === key) return;
+    await this.call('configure_glide', { config: normalized }, () => plugin.configureGlide(normalized));
+    this.glideKeys[config.moduleIndex] = key;
+  }
+
+  async configureModuleModulation(config: NativeModuleModulationConfig): Promise<void> {
+    if (!await this.initialize()) return;
+    if (!Number.isInteger(config.moduleIndex) || config.moduleIndex < 0 || config.moduleIndex >= 8) return;
+    const normalized = {
+      moduleIndex: config.moduleIndex,
+      lfo: config.lfo !== false,
+      rateHz: Number.isFinite(config.rateHz) ? Math.min(20, Math.max(0.1, config.rateHz)) : 6.85,
+    };
+    const key = JSON.stringify(normalized);
+    if (this.moduleModulationKeys[config.moduleIndex] === key) return;
+    await this.call('configure_module_modulation', { config: normalized }, () => (
+      plugin.configureModuleModulation(normalized)
+    ));
+    this.moduleModulationKeys[config.moduleIndex] = key;
   }
 
   async configureSynth(config: NativeSynthConfig): Promise<void> {
@@ -325,8 +539,8 @@ class HookKeysNativeBridge {
     if (!await this.initialize()) return;
     const normalized: NativeMetronomeConfig = {
       enabled: Boolean(config.enabled),
-      bpm: Math.min(600, Math.max(60, Math.round(config.bpm))),
-      volume: Math.min(1, Math.max(0, config.volume)),
+      bpm: Math.min(600, Math.max(60, Math.round(config.bpm * 2) / 2)),
+      volume: Math.min(10 ** (12 / 20), Math.max(0, config.volume)),
       clickSound: Math.min(3, Math.max(1, Math.round(config.clickSound))) as 1 | 2 | 3,
       accentEnabled: Boolean(config.accentEnabled),
       doubleTimeEnabled: Boolean(config.doubleTimeEnabled),
@@ -353,9 +567,23 @@ class HookKeysNativeBridge {
     this.lastCompatibilityMode = enabled;
   }
 
+  async setSeamlessPresetSwitching(enabled: boolean): Promise<void> {
+    if (!await this.initialize()) return;
+    if (this.lastSeamlessPresetSwitching === enabled) return;
+    await this.call('set_seamless_preset_switching', { enabled }, () => (
+      plugin.setSeamlessPresetSwitching({ enabled })
+    ));
+    this.lastSeamlessPresetSwitching = enabled;
+  }
+
   async stopAllNotes(): Promise<void> {
     if (!this.isAvailable()) return;
     await this.call('stop_all_notes', {}, () => plugin.stopAllNotes());
+  }
+
+  async setMidiInputEnabled(enabled: boolean): Promise<void> {
+    if (!this.isAvailable()) return;
+    await this.call('set_midi_input_enabled', { enabled }, () => plugin.setMidiInputEnabled({ enabled }));
   }
 
   async performHaptic(strength: 'light' | 'medium'): Promise<boolean> {
@@ -368,18 +596,65 @@ class HookKeysNativeBridge {
     }
   }
 
-  async loadSoundFont(moduleIndex: number, file: Blob): Promise<void> {
+  async loadSoundFont(
+    moduleIndex: number,
+    file: Blob,
+    cancelled: () => boolean = () => false,
+    progress: (percent: number) => void = () => {},
+    cacheKey = '',
+  ): Promise<void> {
     if (!await this.initialize()) throw new Error('native_engine_unavailable');
-    await this.call('begin_sound_font_upload', { moduleIndex }, () => plugin.beginSoundFontUpload({ moduleIndex }));
+    if (cancelled()) throw new DOMException('Seleção substituída', 'AbortError');
+    const metadata = file as File;
+    const identity = `${cacheKey}:${file.size}:${metadata.lastModified ?? ''}`;
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+    const assetKey = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    const prepared = await this.call('begin_sound_font_upload', { moduleIndex, assetKey }, () => (
+      plugin.beginSoundFontUpload({ moduleIndex, assetKey })
+    ));
+    if (prepared?.cached) { progress(100); return; }
     for (let offset = 0; offset < file.size; offset += SOUNDFONT_CHUNK_BYTES) {
-      const bytes = new Uint8Array(await file.slice(offset, offset + SOUNDFONT_CHUNK_BYTES).arrayBuffer());
-      const base64 = bytesToBase64(bytes);
+      if (cancelled()) throw new DOMException('Seleção substituída', 'AbortError');
+      const base64 = await blobToBase64(file.slice(offset, offset + SOUNDFONT_CHUNK_BYTES));
+      if (cancelled()) throw new DOMException('Seleção substituída', 'AbortError');
       await this.call('append_sound_font_chunk', { moduleIndex, base64 }, () => (
         plugin.appendSoundFontChunk({ moduleIndex, base64 })
       ));
+      progress(Math.min(99, Math.round((offset + SOUNDFONT_CHUNK_BYTES) / file.size * 100)));
     }
+    if (cancelled()) throw new DOMException('Seleção substituída', 'AbortError');
     await this.call('finish_sound_font_upload', { moduleIndex }, () => plugin.finishSoundFontUpload({ moduleIndex }));
+    progress(100);
   }
+
+  async cloneSoundFont(sourceModuleIndex: number, targetModuleIndex: number): Promise<void> {
+    if (!await this.initialize()) throw new Error('native_engine_unavailable');
+    const options = { sourceModuleIndex, targetModuleIndex };
+    await this.call('clone_sound_font', options, () => plugin.cloneSoundFont(options));
+  }
+
+  async saveBackup(fileName: string, content: string): Promise<boolean | null> {
+    const invoke = this.tauriInvoke();
+    if (invoke) {
+      const result = await invoke('save_backup', { fileName, content }) as { saved?: boolean };
+      return result?.saved === true;
+    }
+    if (!Capacitor.isNativePlatform()) return null;
+    const result = await plugin.saveBackup({ fileName, content });
+    return result.saved === true;
+  }
+
+  // Gerenciador de arquivos próprio: só no app da loja para iOS/iPadOS.
+  readonly files = {
+    isAvailable: () => Capacitor.getPlatform() === 'ios',
+    roots: async () => (await plugin.fileBrowserRoots()).roots,
+    addFolder: async () => (await plugin.addFileBrowserFolder()).root ?? null,
+    removeFolder: (rootId: string) => plugin.removeFileBrowserFolder({ rootId }),
+    list: async (rootId: string, path: string) => (await plugin.listFileBrowserDirectory({ rootId, path })).entries,
+    importFile: (rootId: string, path: string) => plugin.importFileBrowserFile({ rootId, path }),
+    release: (path: string) => plugin.releaseFileBrowserImport({ path }),
+    fileUrl: (path: string) => Capacitor.convertFileSrc(path.startsWith('file://') ? path : `file://${path}`),
+  };
 
   private attachEventForwarders(): Promise<void> {
     if (this.listenersPromise) return this.listenersPromise;
@@ -442,23 +717,31 @@ class HookKeysNativeBridge {
 
   private resetSynchronizationCache(): void {
     this.moduleConfigKeys.fill(null);
+    this.tranceGateKeys.fill(null);
     this.moduleEffectsKeys.fill(null);
     this.moduleEnvelopeKeys.fill(null);
+    this.moduleModulationKeys.fill(null);
+    this.glideKeys.fill(null);
+    this.velocityLimitKeys.fill(null);
     this.lastSynthKey = null;
     this.lastTempo = null;
     this.lastMetronomeKey = null;
     this.lastOutputGainKey = null;
     this.lastCompatibilityMode = null;
+    this.lastSeamlessPresetSwitching = null;
   }
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const segmentSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += segmentSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + segmentSize));
-  }
-  return btoa(binary);
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('Falha ao ler o SF2'));
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.readAsDataURL(blob);
+  });
 }
 
 export const hookKeysNative = new HookKeysNativeBridge();

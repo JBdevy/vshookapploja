@@ -38,6 +38,9 @@ if(HOOK_KEYS_BUILD_TESTS)
     tests/HookKeysEngineTests.cpp
   )
   target_link_libraries(hook_keys_engine_tests PRIVATE hook_keys_engine Threads::Threads)
+  # Manual diagnostic: takes local SF2 paths, never opens an audio device.
+  add_executable(hook_keys_sf2_continuity EXCLUDE_FROM_ALL tests/SoundFontContinuityDiagnostic.cpp)
+  target_link_libraries(hook_keys_sf2_continuity PRIVATE hook_keys_engine Threads::Threads)
   add_test(NAME hook_keys_engine_tests COMMAND hook_keys_engine_tests)
   set_tests_properties(hook_keys_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

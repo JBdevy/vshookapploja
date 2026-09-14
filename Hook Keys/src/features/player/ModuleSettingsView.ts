@@ -1,8 +1,9 @@
 import type { MidiInputDevice } from '../midi/MidiInputService';
 import { createModuleEffectCardsMarkup, type ModuleProcessorReplacement } from './ModuleEffectsView';
 import { createAudioRouteOptions, type AudioBusRoute } from '../audio/AudioOutputService';
-import { createVelocityCardMarkup } from './VelocityCurveView';
+import { createVelocityCardMarkup, readVelocityLimit } from './VelocityCurveView';
 import { createParameterKnobMarkup } from './ParameterKnobView';
+import { createGlideCardMarkup } from './GlideView';
 
 export type ModuleEnvelopeParameter = 'attackMs' | 'releaseMs' | 'holdMs' | 'decayMs';
 
@@ -15,10 +16,70 @@ export const MODULE_ENVELOPE_LIMITS: Readonly<Record<ModuleEnvelopeParameter, nu
 
 export const MODULE_ENVELOPE_DEFAULTS: Readonly<Record<ModuleEnvelopeParameter, number>> = {
   attackMs: 0,
-  releaseMs: 90,
+  releaseMs: 300,
   holdMs: MODULE_ENVELOPE_LIMITS.holdMs,
   decayMs: MODULE_ENVELOPE_LIMITS.decayMs,
 };
+
+export type ModuleModulationMode = 'user' | 'lfo';
+
+export function readModuleModulationMode(settings: Readonly<Record<string, unknown>>): ModuleModulationMode {
+  return settings.modulationMode === 'user' ? 'user' : 'lfo';
+}
+
+// Rate padrão do LFO do card Mod, o mesmo do LFO do Synth.
+export const DEFAULT_MODULE_MODULATION_RATE_HZ = 6.85;
+
+export function readModuleModulationRate(settings: Readonly<Record<string, unknown>>): number {
+  const value = Number(settings.modulationRateHz);
+  return Number.isFinite(value) ? Math.min(20, Math.max(0.1, value)) : DEFAULT_MODULE_MODULATION_RATE_HZ;
+}
+
+export function createModuleModulationCardMarkup(
+  settings: Readonly<Record<string, unknown>>,
+  userLabel = 'SF2 · User',
+): string {
+  const mode = readModuleModulationMode(settings);
+  const rate = readModuleModulationRate(settings);
+  return `
+    <article class="module-mod-card" data-module-mod-card>
+      <header>
+        <strong>Mod</strong>
+        <small>${mode === 'lfo' ? `Pitch · ${rate.toFixed(2)} Hz` : userLabel}</small>
+      </header>
+      <div role="group" aria-label="Modo da roda Mod">
+        ${(['user', 'lfo'] as const).map((value) => `
+          <button type="button" data-module-modulation-mode="${value}"
+            class="${mode === value ? 'is-selected' : ''}"
+            aria-pressed="${mode === value}">${value === 'lfo' ? 'LFO' : 'User'}</button>
+        `).join('')}
+      </div>
+      <label class="module-mod-card__rate">
+        ${createParameterKnobMarkup((rate - 0.1) / 19.9, `
+          <input type="range" min="0.1" max="20" step="0.01" value="${rate}"
+            data-module-modulation-rate aria-label="Rate do LFO"
+            aria-valuetext="${rate.toFixed(2)} Hz"${mode === 'user' ? ' disabled' : ''}>
+        `)}
+        <output data-module-modulation-rate-value>${rate.toFixed(2)} Hz</output>
+      </label>
+    </article>
+  `;
+}
+
+// Limite Velocity: a tecla tocada acima do limite não toca nota nenhuma.
+export function createVelocityLimitCardMarkup(settings: Readonly<Record<string, unknown>>): string {
+  const limit = readVelocityLimit(settings.velocityLimit);
+  return `
+    <article class="module-envelope-control module-velocity-limit-card" data-module-velocity-limit-card>
+      <h3>Limite Velocity</h3>
+      ${createParameterKnobMarkup(limit / 127, `
+        <input type="range" min="0" max="127" step="1" value="${limit}"
+          data-module-velocity-limit aria-label="Limite de velocity" aria-valuetext="${limit}">
+      `)}
+      <output data-module-velocity-limit-value>${limit}</output>
+    </article>
+  `;
+}
 
 export type ModuleEqBandType = 'band' | 'low-cut' | 'low-shelf' | 'high-cut' | 'high-shelf';
 
@@ -41,11 +102,11 @@ const MODULE_CUTOFF_MIN_FREQUENCY = 20;
 const MODULE_CUTOFF_MAX_FREQUENCY = 20_000;
 const EQ_BAND_COLORS = ['#62dc6f', '#4da7f4', '#d95cef', '#ff5757', '#8d63f6'] as const;
 const DEFAULT_EQ_BANDS: readonly ModuleEqBand[] = [
-  { frequency: 80, gain: 0, q: 0.71, cutSlope: 1, type: 'band' },
+  { frequency: 80, gain: 0, q: 0.71, cutSlope: 1, type: 'low-shelf' },
   { frequency: 300, gain: 0, q: 1, cutSlope: 1, type: 'band' },
   { frequency: 1_000, gain: 0, q: 1, cutSlope: 1, type: 'band' },
   { frequency: 4_000, gain: 0, q: 1, cutSlope: 1, type: 'band' },
-  { frequency: 12_000, gain: 0, q: 0.71, cutSlope: 1, type: 'band' },
+  { frequency: 12_000, gain: 0, q: 0.71, cutSlope: 1, type: 'high-shelf' },
 ];
 
 const ENVELOPE_CONTROLS: readonly {
@@ -102,7 +163,7 @@ export function createModuleSettingsMarkup(
 
         <button class="module-polyphony-button" type="button" data-module-setting-action="open-polyphony">
           <span>Polifonia</span>
-          <strong>${Math.round(Math.min(128, Math.max(1, Number(settings.polyphony) || 64)))}</strong>
+          <strong>${Math.round(Math.min(128, Math.max(1, Number(settings.polyphony) || 128)))}</strong>
         </button>
 
         ${hasVoiceSwitch ? `
@@ -125,13 +186,14 @@ export function createModuleSettingsMarkup(
             ),
           )).join('')}
           ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz))}
+          ${createVelocityLimitCardMarkup(settings)}
         </div>`}
 
         <div class="module-processors-grid">
           <article class="module-eq-card">
             <button type="button" data-module-setting-action="open-eq">EQ</button>
             <div class="module-eq-preview" aria-label="Prévia do equalizador de cinco bandas">
-              <svg viewBox="0 0 420 170" role="img" aria-label="Equalizador de 10 Hz a 20 kHz com RTA e cinco bandas">
+              <svg viewBox="0 0 420 170" role="img" aria-label="Equalizador de 10 Hz a 20 kHz com cinco bandas">
                 <defs>
                   <linearGradient id="module-eq-preview-shadow" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stop-color="#ffab32" stop-opacity="0.28" />
@@ -142,7 +204,6 @@ export function createModuleSettingsMarkup(
                   <path d="M0 28H420M0 57H420M0 85H420M0 113H420M0 142H420" />
                   <path d="M35 0V170M70 0V170M105 0V170M140 0V170M175 0V170M210 0V170M245 0V170M280 0V170M315 0V170M350 0V170M385 0V170" />
                 </g>
-                <path class="module-eq-preview__rta" data-module-eq-rta d="" />
                 <path class="module-eq-preview__curve-shadow" d="${createEqShadowPath(eqBands, 420, 170)}" />
                 <path class="module-eq-preview__curve" d="${createEqCurve(eqBands, 420, 170)}" />
                 <g class="module-eq-preview__bands">
@@ -156,7 +217,11 @@ export function createModuleSettingsMarkup(
           ${createModuleEffectCardsMarkup(settings, bpm, processorReplacement)}
         </div>
       </div>
-      ${createVelocityCardMarkup(settings)}
+      <div class="module-settings-bottom-row">
+        ${createVelocityCardMarkup(settings)}
+        ${processorReplacement === 'synth' ? '' : createGlideCardMarkup(settings, bpm)}
+        ${createModuleModulationCardMarkup(settings, processorReplacement === 'synth' ? 'Synth · LFO' : 'SF2 · User')}
+      </div>
     </section>
   `;
 }
@@ -166,7 +231,7 @@ export function createModuleEqMarkup(settings: Readonly<Record<string, unknown>>
   return `
     <section class="module-eq-editor" aria-label="Equalizador de cinco bandas">
       <div class="module-eq-editor__plot" data-module-eq-plot>
-        <svg viewBox="0 0 ${MODULE_EQ_WIDTH} ${MODULE_EQ_HEIGHT}" preserveAspectRatio="none" aria-label="RTA e cinco bandas ajustáveis de 10 Hz a 20 kHz">
+        <svg viewBox="0 0 ${MODULE_EQ_WIDTH} ${MODULE_EQ_HEIGHT}" preserveAspectRatio="none" aria-label="Cinco bandas ajustáveis de 10 Hz a 20 kHz">
           <defs>
             <linearGradient id="module-eq-editor-shadow" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="#ffad35" stop-opacity="0.3" />
@@ -177,7 +242,6 @@ export function createModuleEqMarkup(settings: Readonly<Record<string, unknown>>
             <path d="M0 50H1000M0 100H1000M0 150H1000M0 200H1000M0 250H1000M0 300H1000M0 350H1000" />
             <path d="M91 0V400M182 0V400M273 0V400M364 0V400M455 0V400M546 0V400M637 0V400M728 0V400M819 0V400M910 0V400" />
           </g>
-          <path class="module-eq-editor__rta" data-module-eq-rta d="" />
           <path class="module-eq-editor__curve-shadow" data-module-eq-curve-shadow d="${createEqShadowPath(bands, MODULE_EQ_WIDTH, MODULE_EQ_HEIGHT)}" />
           <path class="module-eq-editor__curve" data-module-eq-curve d="${createEqCurve(bands, MODULE_EQ_WIDTH, MODULE_EQ_HEIGHT)}" />
           <g class="module-eq-editor__bands">
@@ -455,7 +519,7 @@ function createEnvelopeControl(
           type="range"
           min="0"
           max="${maximum}"
-          step="0.1"
+          step="1"
           value="${value}"
           data-module-envelope="${parameter}"
           aria-label="${label}"
@@ -471,6 +535,7 @@ function createCutoffControl(frequency: number): string {
   const ratio = cutoffRatioFromFrequency(frequency);
   return `
     <article class="module-envelope-control module-cutoff-control">
+      <button type="button" data-module-setting-action="open-filter-velocity">Velocity</button>
       <h3>Cutoff</h3>
       ${createParameterKnobMarkup(ratio, `
         <input

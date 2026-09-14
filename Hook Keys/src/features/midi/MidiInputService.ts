@@ -282,13 +282,15 @@ export class MidiInputService {
       value: Math.min(127, Math.max(0, Math.round(input.value))),
     };
     if (this.compatibilityMode) {
-      if (normalized.controller === 7) {
+      if (normalized.controller === 91) {
+        // Reverb 1..16 use the contiguous free CC102..117 range. The original
+        // CC91 never reaches the module's reverb send in compatibility mode.
         if (normalized.value >= 1 && normalized.value <= 16) {
           this.onControlChange({ ...normalized, controller: 101 + normalized.value, value: 127 });
         }
         return;
       }
-      if ([0, 6, 10, 16, 32, 100, 101].includes(normalized.controller)) return;
+      if ([0, 6, 7, 10, 16, 32, 100, 101].includes(normalized.controller)) return;
     }
     this.onControlChange(normalized);
   }

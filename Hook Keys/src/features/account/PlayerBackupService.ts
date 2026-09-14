@@ -1,16 +1,17 @@
-import type { AccountApi } from './AccountApi';
+import { hookKeysNative } from '../../platform/native/HookKeysNative';
 
 interface BackupDocument {
   format: 'hook-keys-backup';
   version: number;
   createdAt: string;
-  accountEmail: string;
+  accountEmail?: string;
   state: unknown;
 }
 
 export interface BackupResult {
   createdAt: string;
-  emailedTo: string;
+  fileName: string;
+  saved: boolean;
 }
 
 const MAX_BACKUP_FILE_BYTES = 1024 * 1024;
@@ -19,11 +20,7 @@ export class PlayerBackupService {
   private snapshotProvider: (() => unknown) | null = null;
   private readonly accountEmail: string;
 
-  constructor(
-    private readonly api: AccountApi,
-    private readonly token: string,
-    accountEmail: string,
-  ) {
+  constructor(accountEmail: string) {
     this.accountEmail = accountEmail.trim().toLowerCase();
   }
 
@@ -36,9 +33,17 @@ export class PlayerBackupService {
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new Error('backup_state_unavailable');
     }
-    if (!navigator.onLine) throw new Error('backup_requires_connection');
-    const response = await this.api.emailPlayerBackup(this.token, snapshot);
-    return { createdAt: response.createdAt, emailedTo: response.emailedTo };
+    const createdAt = new Date().toISOString();
+    const fileName = `Hook Keys Backup ${createdAt.slice(0, 19).replaceAll(':', '-')}.json`;
+    const content = JSON.stringify({
+      format: 'hook-keys-backup', version: 2, createdAt, state: snapshot,
+    } satisfies BackupDocument, null, 2);
+    if (new TextEncoder().encode(content).byteLength > MAX_BACKUP_FILE_BYTES) {
+      throw new Error('backup_file_too_large');
+    }
+    const nativeSaved = await hookKeysNative.saveBackup(fileName, content);
+    if (nativeSaved !== null) return { createdAt, fileName, saved: nativeSaved };
+    return { createdAt, fileName, saved: await saveBackupInBrowser(fileName, content) };
   }
 
   async restore(file: File): Promise<unknown> {
@@ -48,10 +53,12 @@ export class PlayerBackupService {
     const parsed = JSON.parse(await file.text()) as Partial<BackupDocument>;
     if (
       parsed.format !== 'hook-keys-backup'
-      || parsed.version !== 1
+      || (parsed.version !== 1 && parsed.version !== 2)
       || typeof parsed.createdAt !== 'string'
-      || typeof parsed.accountEmail !== 'string'
-      || parsed.accountEmail.trim().toLowerCase() !== this.accountEmail
+      || (parsed.version === 1 && (
+        typeof parsed.accountEmail !== 'string'
+        || parsed.accountEmail.trim().toLowerCase() !== this.accountEmail
+      ))
       || !parsed.state
       || typeof parsed.state !== 'object'
       || Array.isArray(parsed.state)
@@ -64,4 +71,37 @@ export class PlayerBackupService {
   destroy(): void {
     this.snapshotProvider = null;
   }
+}
+
+async function saveBackupInBrowser(fileName: string, content: string): Promise<boolean> {
+  const picker = (window as Window & {
+    showSaveFilePicker?: (options: unknown) => Promise<{
+      createWritable(): Promise<{ write(value: string): Promise<void>; close(): Promise<void> }>;
+    }>;
+  }).showSaveFilePicker;
+  if (picker) {
+    try {
+      const handle = await picker({
+        suggestedName: fileName,
+        types: [{ description: 'Backup Hook Keys', accept: { 'application/json': ['.json'] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      return true;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return false;
+      throw error;
+    }
+  }
+  const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  return true;
 }

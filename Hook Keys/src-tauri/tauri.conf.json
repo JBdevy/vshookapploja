@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "Hook Keys", "width": 1280, "height": 760, "minWidth": 760, "minHeight": 430 }],
+    "windows": [{ "title": "Hook Keys", "width": 1100, "height": 650, "minWidth": 900, "minHeight": 520 }],
     "security": { "csp": null }
   },
   "bundle": {

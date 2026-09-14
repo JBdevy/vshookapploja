@@ -13,13 +13,18 @@ namespace {
 constexpr int kChannel = 0;
 constexpr double kMinimumSampleRate = 8000.0;
 constexpr double kMaximumSampleRate = 384000.0;
+// Samplers reserve nominal polyphonic headroom at their source. This is a
+// fixed calibration, not a limiter: adding a note never turns another note
+// down and the module/master faders remain true unity-gain controls at 0 dB.
+constexpr float kSamplerNominalGainDb = -12.0f;
 }
 
 TinySoundFontModule::TinySoundFontModule(
     double sampleRate, std::size_t maximumBlockFrames, std::size_t maximumVoices)
     : sampleRate_(std::clamp(sampleRate, kMinimumSampleRate, kMaximumSampleRate)),
       maximumBlockFrames_(std::max<std::size_t>(maximumBlockFrames, 1)),
-      maximumVoices_(static_cast<int>(std::clamp<std::size_t>(maximumVoices, 1, 256))),
+      maximumVoices_(static_cast<int>(
+          std::clamp<std::size_t>(maximumVoices, 1, kHookKeysMaximumVoices))),
       scratchInterleaved_(maximumBlockFrames_ * 2, 0.0f) {}
 
 TinySoundFontModule::~TinySoundFontModule() {
@@ -30,6 +35,7 @@ TinySoundFontModule::~TinySoundFontModule() {
   }
   if (deferredRetired_ != nullptr) tsf_close(deferredRetired_);
   if (active_ != nullptr) tsf_close(active_);
+  if (shareable_ != nullptr) tsf_close(shareable_);
 }
 
 bool TinySoundFontModule::loadFromFile(const char* utf8Path) noexcept {
@@ -41,6 +47,13 @@ bool TinySoundFontModule::loadFromFile(const char* utf8Path) noexcept {
     tsf_close(prepared);
     return false;
   }
+  auto* shareable = tsf_copy(prepared);
+  if (shareable == nullptr) {
+    tsf_close(prepared);
+    return false;
+  }
+  if (shareable_ != nullptr) tsf_close(shareable_);
+  shareable_ = shareable;
   stage(prepared);
   return true;
 }
@@ -54,12 +67,40 @@ bool TinySoundFontModule::loadFromMemory(const void* data, std::size_t size) noe
     tsf_close(prepared);
     return false;
   }
+  auto* shareable = tsf_copy(prepared);
+  if (shareable == nullptr) {
+    tsf_close(prepared);
+    return false;
+  }
+  if (shareable_ != nullptr) tsf_close(shareable_);
+  shareable_ = shareable;
+  stage(prepared);
+  return true;
+}
+
+bool TinySoundFontModule::copySoundFontFrom(const TinySoundFontModule& source) noexcept {
+  if (source.shareable_ == nullptr || &source == this) return false;
+  collectRetiredSoundFonts();
+  auto* prepared = tsf_copy(source.shareable_);
+  if (prepared == nullptr) return false;
+  auto* shareable = tsf_copy(source.shareable_);
+  if (shareable == nullptr || !configure(prepared)) {
+    if (shareable != nullptr) tsf_close(shareable);
+    tsf_close(prepared);
+    return false;
+  }
+  if (shareable_ != nullptr) tsf_close(shareable_);
+  shareable_ = shareable;
   stage(prepared);
   return true;
 }
 
 void TinySoundFontModule::unload() noexcept {
   collectRetiredSoundFonts();
+  if (shareable_ != nullptr) {
+    tsf_close(shareable_);
+    shareable_ = nullptr;
+  }
   stage(unloadMarker());
 }
 
@@ -79,6 +120,10 @@ void TinySoundFontModule::setVolumeEnvelope(
   envelopeGeneration_.fetch_add(1, std::memory_order_release);
 }
 
+std::size_t TinySoundFontModule::sampleBytes() const noexcept {
+  return hook_keys_tsf_sample_bytes(shareable_);
+}
+
 bool TinySoundFontModule::hasPendingSoundFont() const noexcept {
   const auto* pending = pending_.load(std::memory_order_acquire);
   return pending != nullptr && pending != unloadMarker();
@@ -96,7 +141,8 @@ void TinySoundFontModule::beginBlock() noexcept {
       tsf_channel_note_off_all(active_, kChannel);
       if (!retired_.tryPush(active_)) deferredRetired_ = active_;
     }
-    active_ = prepared == unloadMarker() ? nullptr : prepared;
+      active_ = prepared == unloadMarker() ? nullptr : prepared;
+      glide_ = {};
     appliedEnvelopeGeneration_ = 0;
   }
 
@@ -109,27 +155,75 @@ void TinySoundFontModule::beginBlock() noexcept {
         releaseMs_.load(std::memory_order_relaxed) / 1000.0f);
     appliedEnvelopeGeneration_ = generation;
   }
+  const bool lfo = lfoModulation_.load(std::memory_order_acquire);
+  if (active_ != nullptr && lfo != appliedLfoModulation_) {
+    tsf_channel_midi_control(active_, kChannel, 1, lfo ? 0 : modulationValue_);
+    tsf_channel_set_pitchwheel(active_, kChannel, pitchBendValue_);
+    modulationDepth_ = 0;
+  }
+  appliedLfoModulation_ = lfo;
 }
 
 void TinySoundFontModule::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept {
+  noteOnWithFilterVelocity(note, velocity, velocity);
+}
+
+void TinySoundFontModule::setCutoffConfig(CutoffConfig config) noexcept {
+  if (cutoffConfig_.enabled == config.enabled && cutoffConfig_.frequencyHz == config.frequencyHz &&
+      cutoffConfig_.velocityCurve == config.velocityCurve) return;
+  cutoffConfig_ = config;
+  hook_keys_tsf_set_cutoff(active_, config);
+}
+
+void TinySoundFontModule::noteOnWithFilterVelocity(std::uint8_t note, std::uint8_t velocity,
+    std::uint8_t filterVelocity) noexcept {
   if (active_ == nullptr) return;
-  tsf_channel_note_on(active_, kChannel, note, static_cast<float>(velocity) / 127.0f);
+  hook_keys_tsf_note_on_with_auto_glide(
+      active_, glide_, kChannel, note, static_cast<float>(velocity) / 127.0f,
+      glideMs_.load(std::memory_order_relaxed), &cutoffConfig_, filterVelocity,
+      GlideBehavior::unpack(glideBehavior_.load(std::memory_order_relaxed)));
 }
 
 void TinySoundFontModule::noteOff(std::uint8_t note) noexcept {
   if (active_ != nullptr) tsf_channel_note_off(active_, kChannel, note);
 }
 
+void TinySoundFontModule::stealNote(std::uint8_t note) noexcept {
+  if (active_ != nullptr) hook_keys_tsf_steal_note(active_, glide_, kChannel, note);
+}
+
 void TinySoundFontModule::controlChange(std::uint8_t controller, std::uint8_t value) noexcept {
+  if (controller == 1) {
+    modulationValue_ = value;
+    if (appliedLfoModulation_) value = 0; // avoid doubling the SF2's own modulation
+  }
   if (active_ != nullptr) tsf_channel_midi_control(active_, kChannel, controller, value);
 }
 
 void TinySoundFontModule::pitchBend(std::uint16_t value) noexcept {
+  pitchBendValue_ = value;
   if (active_ != nullptr) tsf_channel_set_pitchwheel(active_, kChannel, value);
 }
 
 void TinySoundFontModule::allNotesOff() noexcept {
-  if (active_ != nullptr) tsf_channel_note_off_all(active_, kChannel);
+  if (active_ == nullptr) return;
+  // A panic, route change or arpeggiator activation must not leave voices held
+  // by an earlier CC64 value inside TinySoundFont.
+  tsf_channel_set_sustain(active_, kChannel, 0);
+  modulationValue_ = 0;
+  tsf_channel_note_off_all(active_, kChannel);
+}
+
+bool TinySoundFontModule::hasActiveVoices() const noexcept {
+  return active_ != nullptr && tsf_active_voice_count(active_) > 0;
+}
+
+bool TinySoundFontModule::isVoicePoolNearlyFull() const noexcept {
+  // Folga para as regioes da proxima nota. Abaixo disso o TinySoundFont teria
+  // de roubar por conta propria, sem saber qual nota o musico ainda segura.
+  constexpr int kHeadroomVoices = 32;
+  return active_ != nullptr &&
+      tsf_active_voice_count(active_) + kHeadroomVoices > maximumVoices_;
 }
 
 void TinySoundFontModule::renderAdd(
@@ -138,13 +232,32 @@ void TinySoundFontModule::renderAdd(
 
   std::size_t rendered = 0;
   while (rendered < frames) {
-    const auto blockFrames = std::min(maximumBlockFrames_, frames - rendered);
-    tsf_render_float(active_, scratchInterleaved_.data(), static_cast<int>(blockFrames), 0);
+    const bool vibrato = appliedLfoModulation_ && (modulationValue_ > 0 || modulationDepth_ > 0.00001f);
+    const auto blockFrames = std::min(vibrato ? std::min<std::size_t>(16, maximumBlockFrames_) : maximumBlockFrames_, frames - rendered);
+    if (vibrato) {
+      const float target = static_cast<float>(modulationValue_) / 127.0f;
+      const float smoothing = static_cast<float>(1.0 - std::exp(-static_cast<double>(blockFrames) / (sampleRate_ * 0.015)));
+      modulationDepth_ += (target - modulationDepth_) * smoothing;
+      // User-selectable pitch LFO, up to +/- 50 cents at full wheel. A separate
+      // base pitch preserves MIDI pitch bend and Auto Glide at the same time.
+      const int bend = static_cast<int>(pitchBendValue_) + static_cast<int>(std::lround(
+          std::sin(modulationPhase_) * modulationDepth_ * 2048.0));
+      tsf_channel_set_pitchwheel(active_, kChannel, std::clamp(bend, 0, 16383));
+    }
+    const bool gliding = std::any_of(glide_.voices.begin(), glide_.voices.end(),
+        [](const auto& voice) { return voice.total > 0; });
+    if (gliding) hook_keys_tsf_render_glide(active_, glide_, scratchInterleaved_.data(),
+        static_cast<int>(blockFrames), glideMs_.load(std::memory_order_relaxed) > 0);
+    else tsf_render_float(active_, scratchInterleaved_.data(), static_cast<int>(blockFrames), 0);
     for (std::size_t frame = 0; frame < blockFrames; ++frame) {
       left[rendered + frame] += scratchInterleaved_[frame * 2] * gainLinear;
       right[rendered + frame] += scratchInterleaved_[frame * 2 + 1] * gainLinear;
     }
     rendered += blockFrames;
+    constexpr double twoPi = 6.28318530717958647692;
+    modulationPhase_ = std::fmod(modulationPhase_ + twoPi *
+        static_cast<double>(lfoRateHz_.load(std::memory_order_relaxed)) *
+        static_cast<double>(blockFrames) / sampleRate_, twoPi);
   }
 }
 
@@ -154,7 +267,7 @@ void TinySoundFontModule::stage(tsf* prepared) noexcept {
 }
 
 bool TinySoundFontModule::configure(tsf* synth) const noexcept {
-  tsf_set_output(synth, TSF_STEREO_INTERLEAVED, static_cast<int>(std::lround(sampleRate_)), 0.0f);
+  tsf_set_output(synth, TSF_STEREO_INTERLEAVED, static_cast<int>(std::lround(sampleRate_)), kSamplerNominalGainDb);
   if (!tsf_set_max_voices(synth, maximumVoices_)) return false;
   if (!tsf_channel_set_presetindex(synth, kChannel, 0)) return false;
   return tsf_channel_set_pitchrange(synth, kChannel, 2.0f) != 0;

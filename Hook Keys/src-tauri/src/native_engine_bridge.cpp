@@ -22,8 +22,50 @@ void* hk_runtime_create(double sampleRate, std::size_t maximumBlockFrames) noexc
 
 void hk_runtime_destroy(void* handle) noexcept { delete runtime(handle); }
 
+int hk_runtime_begin_preset_transition(void* handle) noexcept {
+  return handle && runtime(handle)->beginPresetTransition() ? 1 : 0;
+}
+
+int hk_runtime_commit_preset_transition(void* handle) noexcept {
+  return handle && runtime(handle)->commitPresetTransition() ? 1 : 0;
+}
+
+void hk_runtime_set_compatibility_mode(void* handle, int enabled) noexcept {
+  if (handle) runtime(handle)->setCompatibilityMode(enabled != 0);
+}
+
+void hk_runtime_set_seamless_preset_switching(
+    void* handle, int enabled, std::size_t cacheBudgetBytes) noexcept {
+  if (handle) runtime(handle)->setSeamlessPresetSwitching(enabled != 0, cacheBudgetBytes);
+}
+
+void hk_runtime_set_midi_input_enabled(void* handle, int enabled) noexcept {
+  if (handle) runtime(handle)->setMidiInputEnabled(enabled != 0);
+}
+
+int hk_runtime_set_trance_gate(void* handle, std::size_t moduleIndex, int enabled, int steps,
+    int length, float beatMultiplier, float gate, float depth, float attackMs, float releaseMs, float swing) noexcept {
+  if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
+  hook_keys::ModuleEffectsConfig::TranceGateConfig config;
+  config.enabled = enabled != 0;
+  config.steps = static_cast<std::uint16_t>(steps);
+  config.length = static_cast<std::uint8_t>(std::clamp(length, 1, 16));
+  config.beatMultiplier = beatMultiplier;
+  config.gate = gate;
+  config.depth = depth;
+  config.attackMs = attackMs;
+  config.releaseMs = releaseMs;
+  config.swing = swing;
+  return runtime(handle)->setTranceGate(moduleIndex, config) ? 1 : 0;
+}
+
 int hk_runtime_load_soundfont(void* handle, std::size_t moduleIndex, const char* path) noexcept {
   return handle && path && runtime(handle)->loadSoundFont(moduleIndex, path) ? 1 : 0;
+}
+
+int hk_runtime_clone_soundfont(
+    void* handle, std::size_t sourceModuleIndex, std::size_t targetModuleIndex) noexcept {
+  return handle && runtime(handle)->cloneSoundFont(sourceModuleIndex, targetModuleIndex) ? 1 : 0;
 }
 
 int hk_runtime_send_midi(void* handle, std::uint8_t inputSlot, std::uint8_t status,
@@ -50,7 +92,7 @@ int hk_runtime_configure_module(
   config.octaveShift = static_cast<std::int8_t>(std::clamp(octave, -3, 3));
   config.sustainInputEnabled = sustain != 0;
   config.modulationInputEnabled = modulation != 0;
-  config.gainLinear = volumeDb <= -60.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
+  config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
   config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
   config.velocityCurve = {
       static_cast<std::uint8_t>(std::clamp(velocityCurve0, 0, 127)),
@@ -63,8 +105,39 @@ int hk_runtime_configure_module(
   return runtime(handle)->setModuleConfig(moduleIndex, config) ? 1 : 0;
 }
 
+int hk_runtime_set_module_gain(
+    void* handle, std::size_t moduleIndex, float db) noexcept {
+  return handle && runtime(handle)->setModuleGainDb(moduleIndex, db) ? 1 : 0;
+}
+
+int hk_runtime_configure_velocity_limits(
+    void* handle, std::size_t moduleIndex, int ignoreAbove, int ceiling,
+    int oscillator1Limit, int oscillator2Limit) noexcept {
+  return handle && runtime(handle)->setVelocityLimits(moduleIndex,
+      static_cast<std::uint8_t>(std::clamp(ignoreAbove, 0, 127)), static_cast<std::uint8_t>(std::clamp(ceiling, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp(oscillator1Limit, 0, 127)), static_cast<std::uint8_t>(std::clamp(oscillator2Limit, 0, 127))) ? 1 : 0;
+}
+
+int hk_runtime_configure_glide(
+    void* handle, std::size_t moduleIndex, int portamento, int velocityGateEnabled,
+    int velocityGateInverted, int velocityThreshold) noexcept {
+  if (!handle) return 0;
+  hook_keys::GlideBehavior behavior;
+  behavior.portamento = portamento != 0;
+  behavior.velocityGateEnabled = velocityGateEnabled != 0;
+  behavior.velocityGateInverted = velocityGateInverted != 0;
+  behavior.velocityThreshold = static_cast<std::uint8_t>(std::clamp(velocityThreshold, 0, 127));
+  return runtime(handle)->setGlideBehavior(moduleIndex, behavior) ? 1 : 0;
+}
+
+int hk_runtime_configure_module_modulation(
+    void* handle, std::size_t moduleIndex, int lfo, float rateHz) noexcept {
+  return handle && runtime(handle)->setModuleModulationMode(moduleIndex, lfo != 0, rateHz) ? 1 : 0;
+}
+
 int hk_runtime_configure_effects(
-    void* handle, std::size_t moduleIndex, float cutoffHz, const int* eqTypes,
+    void* handle, std::size_t moduleIndex, float cutoffHz, const int* cutoffVelocity,
+    const int* eqTypes,
     const float* eqFrequencies, const float* eqGains, const float* eqQualities,
     const int* eqCutStages, float compressorThresholdDb, float compressorRatio,
     float compressorAttackMs, float compressorReleaseMs, float compressorGainDb,
@@ -73,12 +146,15 @@ int hk_runtime_configure_effects(
     float reverbSize, float reverbMix, int rotaryEnabled, int rotarySpeed,
     float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
     float rotaryDepth, float rotaryMix, int rotaryModulationEnabled) noexcept {
-  if (!handle || moduleIndex >= hook_keys::kModuleCount || !eqTypes || !eqFrequencies ||
+  if (!handle || moduleIndex >= hook_keys::kModuleCount || !cutoffVelocity || !eqTypes || !eqFrequencies ||
       !eqGains || !eqQualities || !eqCutStages) return 0;
   hook_keys::ModuleEffectsConfig effects;
   effects.cutoff.enabled = true;
   effects.cutoff.frequencyHz = cutoffHz;
-  effects.equalizer.enabled = true;
+  for (std::size_t index = 0; index < effects.cutoff.velocityCurve.size(); ++index) {
+    effects.cutoff.velocityCurve[index] = static_cast<std::uint8_t>(std::clamp(cutoffVelocity[index], 0, 127));
+  }
+  effects.equalizer.enabled = false;
   for (std::size_t index = 0; index < effects.equalizer.bands.size(); ++index) {
     auto& band = effects.equalizer.bands[index];
     band.enabled = true;
@@ -87,11 +163,14 @@ int hk_runtime_configure_effects(
     band.gainDb = eqGains[index];
     band.quality = eqQualities[index];
     band.cutStages = static_cast<std::uint8_t>(std::clamp(eqCutStages[index], 1, 8));
+    const auto cut = band.type == hook_keys::EqBandType::lowCut ||
+        band.type == hook_keys::EqBandType::highCut;
+    effects.equalizer.enabled = effects.equalizer.enabled || cut || std::abs(band.gainDb) > 0.0001f;
   }
-  effects.compressor = {true, compressorThresholdDb, compressorRatio, compressorAttackMs,
+  effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                         compressorReleaseMs, compressorGainDb, compressorMix};
-  effects.delay = {true, delaySync != 0, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-  effects.reverb = {true, reverbDecay, reverbDampen, reverbSize, reverbMix};
+  effects.delay = {delayMix > 0.0001f, delaySync != 0, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
+  effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix};
   effects.rotary = {rotaryEnabled != 0, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != 0};
@@ -99,9 +178,9 @@ int hk_runtime_configure_effects(
 }
 
 int hk_runtime_configure_envelope(void* handle, std::size_t moduleIndex, float attackMs,
-                                  float holdMs, float decayMs, float releaseMs) noexcept {
+                                  float holdMs, float decayMs, float releaseMs, float glideMs) noexcept {
   return handle && runtime(handle)->setModuleEnvelope(
-      moduleIndex, attackMs, holdMs, decayMs, releaseMs) ? 1 : 0;
+      moduleIndex, attackMs, holdMs, decayMs, releaseMs, glideMs) ? 1 : 0;
 }
 
 int hk_runtime_configure_synth(
@@ -164,6 +243,29 @@ void hk_runtime_stop_all_notes(void* handle) noexcept {
 void hk_runtime_render(void* handle, float* output, std::size_t frames,
                        std::size_t channels) noexcept {
   if (handle) runtime(handle)->renderInterleaved(output, frames, channels);
+}
+
+// [0] pior bloco desde a ultima leitura, [1] media suavizada, [2] estouros.
+// 1.0 significa que o callback consumiu o prazo inteiro do bloco.
+void hk_runtime_audio_load(void* handle, float* output) noexcept {
+  if (!handle || !output) return;
+  const auto load = runtime(handle)->consumeAudioLoad();
+  output[0] = load.peak;
+  output[1] = load.smoothed;
+  output[2] = static_cast<float>(load.overruns);
+}
+
+void hk_runtime_module_peaks(void* handle, float* output) noexcept {
+  if (!handle || !output) return;
+  const auto peaks = runtime(handle)->consumeModulePeaks();
+  std::copy(peaks.begin(), peaks.end(), output);
+}
+
+void hk_runtime_module_analysis(
+    void* handle, std::size_t module_index, float* output) noexcept {
+  if (!handle || !output) return;
+  const auto analysis = runtime(handle)->consumeModuleAnalysis(module_index);
+  std::copy(analysis.begin(), analysis.end(), output);
 }
 
 }

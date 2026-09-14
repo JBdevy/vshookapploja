@@ -3,8 +3,39 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cmath>
 
 namespace hook_keys {
+
+// How a module's Glide starts each note. Auto: every note rises from one whole
+// tone below itself. Portamento: every note slides from the previous note.
+// The velocity gate turns Glide off by raw key velocity: from the threshold up,
+// or (inverted) below the threshold.
+struct GlideBehavior final {
+  bool portamento = false;
+  bool velocityGateEnabled = false;
+  bool velocityGateInverted = false;
+  std::uint8_t velocityThreshold = 64;
+
+  [[nodiscard]] bool glidesAt(std::uint8_t velocity) const noexcept {
+    if (!velocityGateEnabled) return true;
+    return velocityGateInverted ? velocity >= velocityThreshold : velocity < velocityThreshold;
+  }
+
+  // Packed so the audio thread reads the whole behavior in one atomic load.
+  [[nodiscard]] std::uint16_t pack() const noexcept {
+    return static_cast<std::uint16_t>((portamento ? 1 : 0) | (velocityGateEnabled ? 2 : 0) |
+        (velocityGateInverted ? 4 : 0) | (std::min<int>(velocityThreshold, 127) << 3));
+  }
+  [[nodiscard]] static GlideBehavior unpack(std::uint16_t bits) noexcept {
+    GlideBehavior behavior;
+    behavior.portamento = (bits & 1) != 0;
+    behavior.velocityGateEnabled = (bits & 2) != 0;
+    behavior.velocityGateInverted = (bits & 4) != 0;
+    behavior.velocityThreshold = static_cast<std::uint8_t>((bits >> 3) & 127);
+    return behavior;
+  }
+};
 
 enum class EqBandType : std::uint8_t {
   lowCut,
@@ -33,11 +64,11 @@ struct EqBandConfig final {
 struct EqConfig final {
   bool enabled = false;
   std::array<EqBandConfig, 5> bands{{
-      {true, EqBandType::lowCut, 30.0f, 0.0f, 0.7071f, 1},
+      {true, EqBandType::lowShelf, 80.0f, 0.0f, 0.7071f, 1},
       {true, EqBandType::bell, 250.0f, 0.0f, 0.7071f, 1},
       {true, EqBandType::bell, 1000.0f, 0.0f, 0.7071f, 1},
       {true, EqBandType::bell, 4000.0f, 0.0f, 0.7071f, 1},
-      {true, EqBandType::highCut, 18000.0f, 0.0f, 0.7071f, 1},
+      {true, EqBandType::highShelf, 12000.0f, 0.0f, 0.7071f, 1},
   }};
 
   void normalize() noexcept {
@@ -48,9 +79,19 @@ struct EqConfig final {
 struct CutoffConfig final {
   bool enabled = true;
   float frequencyHz = 20000.0f;
+  std::array<std::uint8_t, 5> velocityCurve{{127, 127, 127, 127, 127}};
 
   void normalize() noexcept {
     frequencyHz = std::clamp(frequencyHz, 10.0f, 20000.0f);
+  }
+
+  float frequencyForVelocity(std::uint8_t velocity) const noexcept {
+    if (!enabled) return 20000.0f;
+    const float position = std::min<int>(velocity, 127) * 4.0f / 127.0f;
+    const auto lower = static_cast<std::size_t>(std::min(3.0f, std::floor(position)));
+    const float mapped = velocityCurve[lower] +
+        (static_cast<float>(velocityCurve[lower + 1]) - velocityCurve[lower]) * (position - static_cast<float>(lower));
+    return 20.0f * std::pow(std::clamp(frequencyHz, 20.0f, 20000.0f) / 20.0f, mapped / 127.0f);
   }
 };
 
@@ -77,7 +118,7 @@ struct DelayConfig final {
   bool enabled = false;
   bool sync = false;
   float delayMs = 375.0f;
-  float beatMultiplier = 0.75f;
+  float beatMultiplier = 1.0f; // 1/4: the delay time itself
   float feedback = 0.30f;
   float mix = 0.20f;
 
@@ -125,6 +166,26 @@ struct RotaryConfig final {
 };
 
 struct ModuleEffectsConfig final {
+  struct TranceGateConfig final {
+    bool enabled = false;
+    std::uint16_t steps = 0xffff;
+    std::uint8_t length = 16;
+    float beatMultiplier = 0.25f;
+    float gate = 0.5f;
+    float depth = 1.0f;
+    float attackMs = 3.0f;
+    float releaseMs = 3.0f;
+    float swing = 0.0f;
+    void normalize() noexcept {
+      length = std::clamp<std::uint8_t>(length, 1, 16);
+      beatMultiplier = std::clamp(beatMultiplier, 0.0625f, 4.0f);
+      gate = std::clamp(gate, 0.05f, 1.0f);
+      depth = std::clamp(depth, 0.0f, 1.0f);
+      attackMs = std::clamp(attackMs, 0.1f, 100.0f);
+      releaseMs = std::clamp(releaseMs, 0.1f, 100.0f);
+      swing = std::clamp(swing, 0.0f, 0.75f);
+    }
+  } tranceGate{};
   CutoffConfig cutoff{};
   EqConfig equalizer{};
   CompressorConfig compressor{};
@@ -139,6 +200,7 @@ struct ModuleEffectsConfig final {
     delay.normalize();
     reverb.normalize();
     rotary.normalize();
+    tranceGate.normalize();
   }
 };
 

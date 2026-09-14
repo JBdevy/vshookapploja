@@ -43,8 +43,10 @@ public:
     events.push_back({Event::Type::allNotesOff, 0, 0});
   }
   void renderAdd(float*, float*, std::size_t, float) noexcept override {}
+  bool isVoicePoolNearlyFull() const noexcept override { return voicePoolNearlyFull; }
 
   std::vector<Event> events;
+  bool voicePoolNearlyFull = false;
 };
 
 [[noreturn]] void fail(const char* message) {
@@ -175,6 +177,62 @@ void testMonoVoiceSteal() {
          "latest mono note wins");
 }
 
+void testFifoPolyphonySteal() {
+  RecordingSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig config;
+  config.midiInputSlot = hook_keys::kAllMidiInputs;
+  config.polyphony = 2;
+  expect(engine.setModuleConfig(0, config), "configure two-voice FIFO polyphony");
+  expect(engine.enqueueMidi(midi(0x90, 60, 100, 0)), "queue oldest poly note");
+  expect(engine.enqueueMidi(midi(0x90, 64, 100, 1)), "queue second poly note");
+  expect(engine.enqueueMidi(midi(0x90, 67, 100, 2)), "queue replacement poly note");
+  process(engine);
+  expect(synth.events.size() == 4, "full polyphony steals one voice and still accepts the new note");
+  expect(synth.events[0].type == Event::Type::noteOn && synth.events[0].data1 == 60,
+      "FIFO polyphony starts with the first note");
+  expect(synth.events[2].type == Event::Type::noteOff && synth.events[2].data1 == 60,
+      "FIFO polyphony steals the globally oldest note across MIDI inputs");
+  expect(synth.events[3].type == Event::Type::noteOn && synth.events[3].data1 == 67,
+      "FIFO polyphony starts the incoming note after stealing");
+
+  expect(engine.enqueueMidi(midi(0x80, 60, 0, 0)), "late Note Off for stolen note is accepted");
+  process(engine);
+  expect(synth.events.size() == 4, "late Note Off cannot stop a different live voice");
+}
+
+void testArpeggiatorRouteClearsSustain() {
+  RecordingSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[5] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig regular;
+  regular.midiInputSlot = 0;
+  expect(engine.setModuleConfig(5, regular), "configure physical arpeggiator input before enabling processor");
+  expect(engine.enqueueMidi(midi(0xB0, 64, 127, 0)), "press sustain before enabling arpeggiator");
+  process(engine);
+  synth.events.clear();
+
+  auto generated = regular;
+  generated.midiInputSlot = hook_keys::kArpeggiatorInput;
+  generated.sustainInputEnabled = false;
+  expect(engine.setModuleConfig(5, generated), "route arpeggiator to generated notes only");
+  process(engine);
+  expect(synth.events.size() == 1 && synth.events[0].type == Event::Type::controlChange &&
+         synth.events[0].data1 == 64 && synth.events[0].data2 == 0,
+      "enabling arpeggiator explicitly releases an earlier sustain pedal state");
+  synth.events.clear();
+  expect(engine.enqueueMidi(midi(0xB0, 64, 127, 0)), "physical sustain remains valid input data");
+  expect(engine.enqueueMidi(midi(0x90, 67, 100, hook_keys::kArpeggiatorInput)), "generated arpeggio note starts");
+  expect(engine.enqueueMidi(midi(0x80, 67, 0, hook_keys::kArpeggiatorInput)), "generated arpeggio note stops");
+  process(engine);
+  expect(synth.events.size() == 2 && synth.events[0].type == Event::Type::noteOn &&
+         synth.events[1].type == Event::Type::noteOff,
+      "arpeggiator ignores sustain and follows its generated key gate");
+}
+
 void testPerModuleControllerFilters() {
   RecordingSynth first;
   RecordingSynth second;
@@ -192,7 +250,9 @@ void testPerModuleControllerFilters() {
   expect(engine.enqueueMidi(midi(0xB0, 74, 50)), "queue regular controller");
   process(engine);
 
-  expect(first.events.size() == 1 && first.events[0].data1 == 74, "module filter blocks only sustain and modulation");
+  expect(first.events.size() == 2 && first.events[0].data1 == 1 && first.events[0].data2 == 0 &&
+         first.events[1].data1 == 74,
+      "disabling modulation neutralizes the wheel once, then filters sustain and modulation");
   expect(second.events.size() == 3, "unfiltered module receives all controllers");
 }
 
@@ -331,9 +391,83 @@ void testTinySoundFontRendering() {
   synth.collectRetiredSoundFonts();
 }
 
+void testSoundFontModWheelModes() {
+  const auto render = [](bool lfo, float rateHz, std::uint8_t wheel) {
+    hook_keys::TinySoundFontModule synth(48000.0, 128);
+    expect(synth.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"),
+           "load SF2 for Mod mode test");
+    synth.setModulationMode(lfo, rateHz);
+    synth.beginBlock();
+    synth.controlChange(1, wheel);
+    synth.noteOn(60, 120);
+    std::vector<float> left(24000), right(24000);
+    synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    return left;
+  };
+  const auto distance = [](const auto& first, const auto& second) {
+    double result = 0;
+    for (std::size_t index = 0; index < first.size(); ++index) {
+      result += std::abs(first[index] - second[index]);
+    }
+    return result;
+  };
+
+  const auto userWithoutWheel = render(false, 7.55f, 0);
+  const auto userWithWheel = render(false, 7.55f, 127);
+  expect(userWithoutWheel == userWithWheel,
+      "User Mod does not add Hook Keys pitch vibrato to the SF2");
+  const auto defaultLfo = render(true, 7.55f, 127);
+  expect(distance(defaultLfo, userWithoutWheel) > 1.0,
+      "LFO Mod applies pitch vibrato when the wheel is raised");
+  const auto slowerLfo = render(true, 2.0f, 127);
+  expect(distance(defaultLfo, slowerLfo) > 1.0,
+      "Mod Rate changes the pitch LFO frequency");
+  expect(render(true, 7.55f, 0) == userWithoutWheel,
+      "LFO mode stays neutral while the Mod wheel is at zero");
+}
+
+void testSameSoundFontRunsIndependentlyAcrossModules() {
+  hook_keys::NativeEngineRuntime runtime(48000.0, 128);
+  const char* path = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+  expect(runtime.loadSoundFont(0, path) && runtime.cloneSoundFont(0, 1),
+      "same SF2 samples load once and clone into an independent module instance");
+  hook_keys::ModuleConfig first;
+  first.midiInputSlot = 0;
+  first.outputChannelStart = 0;
+  first.outputChannelCount = 2;
+  hook_keys::ModuleConfig second = first;
+  second.midiInputSlot = 1;
+  second.outputChannelStart = 2;
+  expect(runtime.setModuleConfig(0, first) && runtime.setModuleConfig(1, second),
+      "same-SF2 modules retain independent routing and settings");
+  expect(runtime.sendMidi(0, 0x90, 60, 110), "play only the first same-SF2 instance");
+  std::vector<float> firstPass(4096 * 4);
+  runtime.renderInterleaved(firstPass.data(), 4096, 4);
+  double firstEnergy = 0.0;
+  double secondEnergy = 0.0;
+  for (std::size_t frame = 0; frame < 4096; ++frame) {
+    firstEnergy += std::abs(firstPass[frame * 4]);
+    secondEnergy += std::abs(firstPass[frame * 4 + 2]);
+  }
+  expect(firstEnergy > 0.01 && secondEnergy < 0.00001,
+      "triggering one module does not trigger the other instance of the same SF2");
+
+  expect(runtime.sendMidi(1, 0x90, 67, 110), "play the second same-SF2 instance independently");
+  std::vector<float> secondPass(4096 * 4);
+  runtime.renderInterleaved(secondPass.data(), 4096, 4);
+  firstEnergy = 0.0;
+  secondEnergy = 0.0;
+  for (std::size_t frame = 0; frame < 4096; ++frame) {
+    firstEnergy += std::abs(secondPass[frame * 4]);
+    secondEnergy += std::abs(secondPass[frame * 4 + 2]);
+  }
+  expect(firstEnergy > 0.01 && secondEnergy > 0.01,
+      "same SF2 voices continue with separate note, output and processor state");
+}
+
 void testDefaultVolumeEnvelopes() {
   hook_keys::AnalogSynthConfig defaults;
-  expect(defaults.attackMs == 0.0f && defaults.releaseMs == 90.0f, "Synth defaults to zero Attack and 90 ms Release");
+  expect(defaults.attackMs == 0.0f && defaults.releaseMs == 300.0f, "Synth defaults to zero Attack and 300 ms Release");
   expect(defaults.holdMs == 15000.0f && defaults.decayMs == 25000.0f && defaults.filterCutoffHz == 20000.0f,
       "Synth Hold, Decay and Cutoff default to maximum");
   defaults.sustain = 0.25f;
@@ -347,16 +481,16 @@ void testDefaultVolumeEnvelopes() {
   synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
   expect(std::any_of(left.begin(), left.end(), [](float value) { return value != 0.0f; }), "zero Attack sounds immediately");
   synth.noteOff(60);
-  std::vector<float> tailLeft(4800, 0.0f);
-  std::vector<float> tailRight(4800, 0.0f);
+  std::vector<float> tailLeft(16000, 0.0f);
+  std::vector<float> tailRight(16000, 0.0f);
   synth.renderAdd(tailLeft.data(), tailRight.data(), tailLeft.size(), 1.0f);
   const auto tailEnd = std::find_if(tailLeft.rbegin(), tailLeft.rend(), [](float value) { return value != 0.0f; });
   const auto releaseFrames = static_cast<std::size_t>(std::distance(tailLeft.begin(), tailEnd.base()));
-  expect(releaseFrames >= 4300 && releaseFrames <= 4330, "native Synth Release lasts 90 ms at 48 kHz");
+  expect(releaseFrames >= 14380 && releaseFrames <= 14420, "native Synth Release lasts 300 ms at 48 kHz");
 
   const auto renderSoundFont = [](bool explicitDefaults) {
     hook_keys::TinySoundFontModule sf2(48000.0, 128);
-    if (explicitDefaults) sf2.setVolumeEnvelope(0.0f, 15000.0f, 25000.0f, 90.0f);
+    if (explicitDefaults) sf2.setVolumeEnvelope(0.0f, 15000.0f, 25000.0f, 300.0f);
     expect(sf2.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load SF2 for envelope default test");
     sf2.beginBlock();
     sf2.noteOn(60, 127);
@@ -385,11 +519,147 @@ void testNativeRuntimeSignalPath() {
                                       [](double sum, float sample) { return sum + std::abs(sample); });
   expect(energy > 0.001, "native runtime renders the complete MIDI-to-audio path");
 
-  runtime.setOutputGainDb(-60.0f, true);
+  runtime.setOutputGainDb(-90.0f, true);
+  runtime.render(left.data(), right.data(), left.size());
   runtime.render(left.data(), right.data(), left.size());
   const auto mutedEnergy = std::accumulate(left.begin(), left.end(), 0.0,
                                            [](double sum, float sample) { return sum + std::abs(sample); });
   expect(mutedEnergy == 0.0, "native runtime maps the minimum fader position to silence");
+}
+
+void testCompatibilityBlocksCc7() {
+  hook_keys::NativeEngineRuntime actual(48000, 128), reference(48000, 128);
+  hook_keys::ModuleConfig module;
+  module.midiInputSlot = 0;
+  for (auto* runtime : {&actual, &reference}) {
+    expect(runtime->loadSoundFont(0, "third_party/TinySoundFont/examples/florestan-subset.sf2"), "CC7 test loads SF2");
+    expect(runtime->setModuleConfig(0, module), "CC7 test configures SF2");
+  }
+  actual.setCompatibilityMode(true);
+  expect(actual.sendMidi(0, 0xb0, 7, 0), "blocked CC7 is safely discarded");
+  for (auto* runtime : {&actual, &reference}) expect(runtime->sendMidi(0, 0x90, 60, 127), "CC7 test note on");
+  std::array<float, 512 * 2> audio{}, expected{};
+  actual.renderInterleaved(audio.data(), 512, 2);
+  reference.renderInterleaved(expected.data(), 512, 2);
+  expect(audio == expected, "compatibility blocks CC7 before internal SF2 channel volume changes");
+  expect(std::any_of(audio.begin(), audio.end(), [](float sample) { return std::abs(sample) > 0.00001f; }), "CC7 did not mute the SF2");
+  actual.setCompatibilityMode(false);
+  expect(actual.sendMidi(0, 0xb0, 7, 0), "CC7 is accepted when compatibility is off");
+  for (int block = 0; block < 4; ++block) actual.renderInterleaved(audio.data(), 512, 2);
+  expect(std::all_of(audio.begin(), audio.end(), [](float sample) { return std::abs(sample) < 0.00001f; }), "normal MIDI CC7 remains functional outside compatibility mode");
+}
+
+void testSharedSoundFontEnvelopeIsolation() {
+  hook_keys::TinySoundFontModule slow(48000, 128), fast(48000, 128), reference(48000, 128);
+  const char* path = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+  expect(slow.loadFromFile(path) && fast.copySoundFontFrom(slow) && reference.loadFromFile(path), "copy sample data across independent envelopes");
+  slow.setVolumeEnvelope(500, 15000, 25000, 400);
+  reference.setVolumeEnvelope(500, 15000, 25000, 400);
+  fast.setVolumeEnvelope(0, 10, 10, 10);
+  slow.beginBlock();
+  reference.beginBlock();
+  fast.beginBlock(); // must not change slow's parameters for FUTURE note-ons
+  slow.noteOn(60, 127);
+  reference.noteOn(60, 127);
+  std::array<float, 1024> left{}, right{}, expectedLeft{}, expectedRight{};
+  slow.renderAdd(left.data(), right.data(), left.size(), 1);
+  reference.renderAdd(expectedLeft.data(), expectedRight.data(), left.size(), 1);
+  expect(left == expectedLeft && right == expectedRight, "shared samples never share mutable Attack/Hold/Decay/Release parameters");
+}
+
+void testIndependentPresetTails() {
+  hook_keys::NativeEngineRuntime actual(48000.0, 128);
+  hook_keys::NativeEngineRuntime previous(48000.0, 128);
+  hook_keys::NativeEngineRuntime current(48000.0, 128);
+  hook_keys::ModuleConfig oldModule;
+  oldModule.midiInputSlot = 0;
+  oldModule.gainLinear = 0.5f;
+  oldModule.outputChannelStart = 0;
+  hook_keys::ModuleEffectsConfig oldEffects;
+  oldEffects.delay.enabled = true;
+  oldEffects.delay.mix = 0.25f;
+  oldEffects.delay.delayMs = 45.0f;
+  oldEffects.reverb.enabled = true;
+  oldEffects.reverb.mix = 0.15f;
+  hook_keys::AnalogSynthConfig oldSynth;
+  oldSynth.voiceMode = 0;
+  oldSynth.oscillator1 = 0;
+  oldSynth.oscillator2Enabled = false;
+  oldSynth.glideMs = 0;
+  oldSynth.filterEnvelope = 0;
+  oldSynth.releaseMs = 350;
+  for (auto* runtime : {&actual, &previous}) {
+    expect(runtime->loadSoundFont(0, "third_party/TinySoundFont/examples/florestan-subset.sf2"), "preset test loads shared SF2");
+    expect(runtime->setModuleConfig(0, oldModule), "old SF2 config");
+    expect(runtime->setModuleConfig(7, oldModule), "old synth config");
+    expect(runtime->setModuleEffects(0, oldEffects), "old effects config");
+    expect(runtime->setModuleEffects(7, oldEffects), "old synth effects config");
+    expect(runtime->setSynthConfig(oldSynth), "old oscillator config");
+    expect(runtime->setModuleEnvelope(0, 0, 15000, 25000, 350), "old envelope config");
+    expect(runtime->sendMidi(0, 0xb0, 64, 127), "old pedal held");
+    expect(runtime->sendMidi(0, 0x90, 60, 100), "old note on");
+  }
+  std::array<float, 128 * 4> actualAudio{}, previousAudio{}, currentAudio{};
+  auto compare = [&](bool renderCurrent = true) {
+    actual.renderInterleaved(actualAudio.data(), 128, 4);
+    previous.renderInterleaved(previousAudio.data(), 128, 4);
+    if (renderCurrent) current.renderInterleaved(currentAudio.data(), 128, 4);
+    else currentAudio.fill(0.0f);
+    for (std::size_t sample = 0; sample < actualAudio.size(); ++sample) {
+      expect(std::abs(actualAudio[sample] - previousAudio[sample] - currentAudio[sample]) < 0.00001f,
+          "preset transition preserves original SF2/synth voices, effects, gain and output route sample-for-sample");
+    }
+  };
+  for (int block = 0; block < 16; ++block) compare();
+  expect(actual.beginPresetTransition(), "prepare independent preset without panic/restart");
+  hook_keys::ModuleConfig newModule;
+  newModule.midiInputSlot = 1;
+  newModule.outputChannelStart = 2;
+  newModule.octaveShift = 1;
+  newModule.sustainInputEnabled = false;
+  newModule.gainLinear = 0.2f;
+  hook_keys::AnalogSynthConfig newSynth = oldSynth;
+  newSynth.oscillator1 = 2;
+  newSynth.oscillator2Enabled = true;
+  newSynth.oscillator2Volume = 0.3f;
+  newSynth.attackMs = 15;
+  newSynth.filterCutoffHz = 350;
+  newSynth.releaseMs = 12;
+  // Current reference starts with the same samples but entirely separate
+  // voices. Actual transition cloned the bank without rereading the SF2.
+  expect(current.loadSoundFont(0, "third_party/TinySoundFont/examples/florestan-subset.sf2"), "new reference loads same SF2");
+  for (auto* runtime : {&actual, &current}) {
+    expect(runtime->setModuleConfig(0, newModule), "new SF2 config");
+    expect(runtime->setModuleConfig(7, newModule), "new synth config");
+    expect(runtime->setSynthConfig(newSynth), "new oscillators do not mutate old voices");
+    expect(runtime->setModuleEnvelope(0, 25, 100, 150, 12), "new envelopes do not mutate old voices");
+  }
+  compare(false); // both fresh layers stay unrendered until their settings are committed
+  expect(actual.commitPresetTransition(), "atomically activate a fully configured preset");
+  for (auto* runtime : {&actual, &current}) expect(runtime->sendMidi(1, 0x90, 67, 90), "new notes use new layer only");
+  for (int block = 0; block < 16; ++block) compare();
+  for (auto* runtime : {&actual, &previous}) expect(runtime->sendMidi(0, 0x80, 60, 0), "release old key by its original route");
+  for (int block = 0; block < 16; ++block) compare();
+  expect(std::any_of(previousAudio.begin(), previousAudio.end(), [](float sample) { return std::abs(sample) > 0.00001f; }),
+      "old sustain remains held even when the new preset disables sustain");
+  expect(actual.setModuleGainDb(0, -30), "mapped fader changes only new SF2 layer");
+  expect(current.setModuleGainDb(0, -30), "new reference fader");
+  for (int block = 0; block < 8; ++block) compare();
+  for (auto* runtime : {&actual, &previous}) expect(runtime->sendMidi(0, 0xb0, 64, 0), "pedal up releases original preset");
+  for (auto* runtime : {&actual, &current}) expect(runtime->sendMidi(1, 0x80, 67, 0), "new note releases independently");
+  for (int block = 0; block < 1700; ++block) compare();
+  actual.collectRetiredSoundFonts();
+
+  // Repeated silent switches recycle layers rather than retaining every
+  // preset forever or cutting held voices when the bounded capacity fills.
+  hook_keys::NativeEngineRuntime idle(8000.0, 128);
+  std::array<float, 128 * 2> silence{};
+  for (int preset = 0; preset < 40; ++preset) {
+    expect(idle.beginPresetTransition(), "silent layers are reclaimed for subsequent preset switches");
+    expect(idle.commitPresetTransition(), "activate prepared idle layer");
+    for (int block = 0; block < 128; ++block) idle.renderInterleaved(silence.data(), 128, 2);
+    idle.collectRetiredSoundFonts();
+  }
 }
 
 // Collects the frame index of every metronome attack, rendering the runtime in
@@ -483,6 +753,75 @@ void testVelocityCurveMapping() {
          "a flat curve maps every touch to the same velocity");
 }
 
+// Limite Velocity ignora a nota acima do limite; o limitador do Velocity a
+// converte para o proprio limite.
+void testVelocityLimits() {
+  RecordingSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig config;
+  config.velocityCurve = {0, 32, 64, 96, 127};
+  expect(hook_keys::ModuleConfig{}.velocityIgnoreAbove == 127 && hook_keys::ModuleConfig{}.velocityCeiling == 127,
+      "both velocity limits default to 127");
+
+  config.velocityIgnoreAbove = 100;
+  expect(engine.setModuleConfig(0, config), "configure Limite Velocity");
+  expect(engine.enqueueMidi(midi(0x90, 60, 100)), "queue a note at the limit");
+  expect(engine.enqueueMidi(midi(0x90, 62, 101)), "queue a note above the limit");
+  expect(engine.enqueueMidi(midi(0x80, 62, 0)), "release the ignored note");
+  expect(engine.enqueueMidi(midi(0x90, 64, 127)), "queue the hardest note");
+  process(engine);
+  expect(synth.events.size() == 1 && synth.events[0].data1 == 60,
+      "Limite Velocity plays the limit itself and ignores every harder key, including its release");
+
+  synth.events.clear();
+  config.velocityIgnoreAbove = 127;
+  config.velocityCeiling = 100;
+  expect(engine.setModuleConfig(0, config), "configure the velocity limiter");
+  expect(engine.enqueueMidi(midi(0x90, 65, 60)), "queue a soft note under the limiter");
+  expect(engine.enqueueMidi(midi(0x90, 67, 127)), "queue a note above the limiter");
+  process(engine);
+  expect(synth.events.size() == 2 && synth.events[0].data2 < 100 && synth.events[1].data2 == 100,
+      "the limiter keeps softer notes and converts harder ones to the limit");
+
+  // Synth: each oscillator has its own limit on the raw key velocity.
+  const auto renderSynth = [](std::uint8_t limit1, std::uint8_t limit2, std::uint8_t velocity) {
+    hook_keys::AnalogSynthModule analog(48000);
+    hook_keys::AnalogSynthConfig synthConfig;
+    synthConfig.voiceMode = 0;
+    synthConfig.oscillator1 = 0;
+    synthConfig.oscillator2 = 2;
+    synthConfig.detuneCents = synthConfig.glideMs = synthConfig.lfoDepth = synthConfig.filterEnvelope = 0.0f;
+    expect(analog.setConfig(synthConfig), "configure oscillator velocity limits");
+    analog.setOscillatorVelocityLimits(limit1, limit2);
+    analog.beginBlock();
+    analog.noteOnWithFilterVelocity(60, 100, velocity);
+    std::vector<float> left(4800), right(4800);
+    analog.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    return left;
+  };
+  const auto energy = [](const std::vector<float>& samples) {
+    double total = 0.0;
+    for (const auto sample : samples) total += std::abs(sample);
+    return total;
+  };
+  const auto both = renderSynth(127, 127, 110);
+  const auto onlySecond = renderSynth(100, 127, 110);
+  const auto onlyFirst = renderSynth(127, 100, 110);
+  expect(both != onlySecond && both != onlyFirst && onlyFirst != onlySecond,
+      "each Synth oscillator drops out on its own above its velocity limit");
+  expect(onlySecond == renderSynth(100, 127, 110) && renderSynth(100, 127, 90) == both,
+      "below both limits the Synth plays both oscillators");
+  expect(energy(renderSynth(100, 100, 110)) == 0.0, "above both limits the Synth plays nothing");
+
+  // The runtime keeps the limits when the module itself is reconfigured.
+  hook_keys::NativeEngineRuntime runtime(48000, 128);
+  expect(runtime.setVelocityLimits(0, 90, 80), "runtime sets the velocity limits");
+  expect(runtime.setModuleConfig(0, hook_keys::ModuleConfig{}), "runtime reconfigures the module");
+  expect(!runtime.setVelocityLimits(8, 90, 80), "runtime rejects an unknown module");
+}
+
 void testEqualizerProcessing() {
   hook_keys::ModuleEffects effects;
   effects.prepare(48000.0);
@@ -549,6 +888,34 @@ void testCutoffProcessing() {
   double tailEnergy = 0.0;
   for (std::size_t index = left.size() / 2; index < left.size(); ++index) tailEnergy += std::abs(left[index]);
   expect(tailEnergy < 20.0, "module cutoff attenuates frequencies above its limit");
+}
+
+void testCutoffVelocityCurve() {
+  hook_keys::VoiceCutoff processor;
+  hook_keys::ModuleEffectsConfig config;
+  config.cutoff.frequencyHz = 20000;
+  config.cutoff.velocityCurve = {0, 32, 64, 96, 127};
+  const auto render = [&](std::uint8_t velocity) {
+    processor.reset();
+    processor.configure(config.cutoff.frequencyForVelocity(velocity), 48000);
+    std::vector<float> left(4096), right(4096);
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      left[index] = right[index] = static_cast<float>(std::sin(
+          6.283185307179586 * 4000.0 * static_cast<double>(index) / 48000.0));
+    }
+    for (auto& sample : left) sample = processor.process(sample);
+    return std::accumulate(left.begin() + 1024, left.end(), 0.0,
+        [](double sum, float sample) { return sum + std::abs(sample); });
+  };
+  const auto soft = render(1);
+  const auto hard = render(127);
+  expect(hard > soft * 20.0, "filter Velocity curve opens Cutoff according to played velocity");
+
+  config.cutoff.velocityCurve = {127, 127, 127, 127, 127};
+  const auto fixedSoft = render(1);
+  const auto fixedHard = render(127);
+  expect(std::abs(fixedSoft - fixedHard) < fixedHard * 0.0001,
+      "default Fixed 127 filter Velocity preserves the original Cutoff at every touch strength");
 }
 
 void testCompressorProcessing() {
@@ -799,24 +1166,719 @@ void testRotaryMidiEngineRouting() {
 
 } // namespace
 
+void testMetersAndNoteRelease() {
+  for (const bool interleaved : {false, true}) {
+    hook_keys::NativeEngineRuntime runtime(48000.0, 128);
+    expect(runtime.loadSoundFont(0, "third_party/TinySoundFont/examples/florestan-subset.sf2"), "meter test loads SF2");
+    hook_keys::ModuleConfig config;
+    config.midiInputSlot = hook_keys::kAllMidiInputs;
+    expect(runtime.setModuleConfig(0, config), "configure SF2 meter");
+    expect(runtime.setModuleConfig(7, config), "configure Synth meter");
+    const auto empty = runtime.consumeModulePeaks();
+    expect(std::all_of(empty.begin(), empty.end(), [](float v) { return v == 0; }), "meters start silent");
+    expect(runtime.sendMidi(3, 0x90, 60, 110), "virtual keyboard note on");
+    std::array<float, 1024> left{}, right{};
+    const auto render = [&] {
+      if (interleaved) runtime.renderInterleaved(left.data(), 512, 2);
+      else runtime.render(left.data(), right.data(), 512);
+    };
+    render();
+    auto peaks = runtime.consumeModulePeaks();
+    expect(peaks[0] > 0 && peaks[1] > 0 && peaks[14] > 0 && peaks[15] > 0,
+        "real stereo audio reaches both SF2 and Synth meter channels");
+    for (std::size_t module = 1; module < 7; ++module) {
+      expect(peaks[module * 2] == 0 && peaks[module * 2 + 1] == 0,
+          "unloaded stereo modules stay silent");
+    }
+    peaks = runtime.consumeModulePeaks();
+    expect(peaks[0] == 0 && peaks[1] == 0 && peaks[14] == 0 && peaks[15] == 0,
+        "stereo meter read consumes both channels");
+    expect(runtime.setModuleGainDb(0, -90), "mute SF2 fader live");
+    render();
+    static_cast<void>(runtime.consumeModulePeaks()); // 5 ms de rampa anti-click
+    render();
+    expect(runtime.consumeModulePeaks()[0] == 0, "meter reacts to a live fader move while the note is held");
+    expect(runtime.setModuleGainDb(0, 0), "unmute SF2 fader live");
+    render();
+    expect(runtime.consumeModulePeaks()[0] > 0, "held SF2 note returns to the meter without a new Note On");
+    expect(runtime.sendMidi(3, 0x80, 60, 0), "virtual keyboard note off");
+    for (int block = 0; block < 100; ++block) render();
+    static_cast<void>(runtime.consumeModulePeaks());
+    render();
+    {
+      const auto synthPeaks = runtime.consumeModulePeaks();
+      expect(synthPeaks[14] < 0.00001f && synthPeaks[15] < 0.00001f,
+          "Synth stops after release, no stuck loop");
+    }
+    render();
+    expect(runtime.consumeModulePeaks()[0] < 0.00001f, "SF2 stops after release, no stuck loop");
+  }
+}
+
+void testModWheelWithZeroDepth() {
+  const auto render = [](int target, int wheel) {
+    hook_keys::AnalogSynthModule synth(48000);
+    hook_keys::AnalogSynthConfig config;
+    config.lfoDepth = 0;
+    config.lfoTarget = static_cast<std::uint8_t>(target);
+    config.filterCutoffHz = 1500;
+    config.filterEnvelope = 0;
+    expect(synth.setConfig(config), "configure Mod test Synth");
+    synth.beginBlock();
+    synth.controlChange(1, static_cast<std::uint8_t>(wheel));
+    synth.noteOn(60, 110);
+    std::vector<float> left(24000), right(24000);
+    synth.renderAdd(left.data(), right.data(), left.size(), 1);
+    return left;
+  };
+  for (int target = 0; target < 3; ++target) {
+    expect(render(target, 0) != render(target, 127), "Mod wheel works for every LFO destination with Depth zero");
+  }
+}
+
+// Tocar a mesma nota de novo enquanto o release ainda soa era um tick: a fase
+// do oscilador voltava a zero e o envelope saltava para o maximo.
+void testSynthRetriggerHasNoClick() {
+  const auto largestStep = [](const std::vector<float>& samples, std::size_t from, std::size_t to) {
+    double largest = 0.0;
+    for (std::size_t index = std::max<std::size_t>(from, 2); index < to; ++index) {
+      largest = std::max(largest, static_cast<double>(
+          std::abs(samples[index] - 2.0f * samples[index - 1] + samples[index - 2])));
+    }
+    return largest;
+  };
+  for (std::uint8_t voiceMode = 0; voiceMode < 3; ++voiceMode) {
+    hook_keys::AnalogSynthModule synth(48000.0);
+    hook_keys::AnalogSynthConfig config;
+    config.voiceMode = voiceMode;
+    config.oscillator1 = 0;
+    config.oscillator2Enabled = false;
+    config.detuneCents = config.glideMs = config.lfoDepth = 0.0f;
+    expect(synth.setConfig(config), "configure retrigger click test");
+    synth.beginBlock();
+    std::vector<float> left(19200, 0.0f), right(19200, 0.0f);
+    synth.noteOn(60, 100);
+    synth.renderAdd(left.data(), right.data(), 9600, 1.0f);
+    synth.noteOff(60);
+    synth.renderAdd(left.data() + 9600, right.data() + 9600, 2400, 1.0f);
+    synth.noteOn(60, 100);
+    synth.renderAdd(left.data() + 12000, right.data() + 12000, 7200, 1.0f);
+    const auto steady = largestStep(left, 4800, 9600);
+    expect(largestStep(left, 0, 480) < steady * 8.0, "Attack 0 ramps in without a click");
+    expect(largestStep(left, 11900, 12480) < steady * 3.0, "re-pressing a releasing note does not click");
+    double lateEnergy = 0.0;
+    for (std::size_t index = 16800; index < left.size(); ++index) lateEnergy += std::abs(left[index]);
+    expect(lateEnergy > 1000.0, "a note re-pressed during its release keeps sounding in every voice mode");
+  }
+}
+
+void testPolyAutoGlide() {
+  const auto render = [](float glideMs, std::initializer_list<int> notes, std::uint8_t voiceMode = 0) {
+    hook_keys::AnalogSynthModule synth(48000);
+    hook_keys::AnalogSynthConfig config;
+    config.voiceMode = voiceMode;
+    config.oscillator1 = 0;
+    config.oscillator2 = 0;
+    config.oscillator1Enabled = true;
+    config.oscillator2Enabled = false;
+    config.oscillator1Volume = 1;
+    config.detuneCents = 0;
+    config.filterCutoffHz = 20000;
+    config.filterResonance = 0;
+    config.filterEnvelope = 0;
+    config.lfoDepth = 0;
+    config.glideMs = glideMs;
+    expect(synth.setConfig(config), "configure Poly Auto Glide");
+    synth.beginBlock();
+    for (const auto note : notes) synth.noteOn(static_cast<std::uint8_t>(note), 100);
+    std::vector<float> left(512), right(512);
+    synth.renderAdd(left.data(), right.data(), left.size(), 1);
+    return left;
+  };
+  const auto distance = [](const auto& left, const auto& right) {
+    double total = 0;
+    for (std::size_t index = 0; index < left.size(); ++index) total += std::abs(left[index] - right[index]);
+    return total;
+  };
+
+  const auto targetNote = render(0, {60});
+  const auto lowerNote = render(0, {58});
+  const auto glidingNote = render(500, {60});
+  expect(glidingNote != targetNote, "Poly Glide also affects the first note");
+  expect(distance(glidingNote, lowerNote) < distance(glidingNote, targetNote),
+      "Poly Auto Glide starts one whole tone below the played note");
+
+  const auto targetChord = render(0, {60, 64, 67});
+  const auto lowerChord = render(0, {58, 62, 65});
+  const auto glidingChord = render(500, {60, 64, 67});
+  expect(glidingChord != targetChord, "Poly Auto Glide affects simultaneous chord voices");
+  expect(distance(glidingChord, lowerChord) < distance(glidingChord, targetChord),
+      "every Poly chord voice starts one whole tone below its destination");
+
+  for (const auto voiceMode : {std::uint8_t{1}, std::uint8_t{2}}) {
+    const auto monoGlide = render(500, {60}, voiceMode);
+    expect(monoGlide != targetNote && distance(monoGlide, lowerNote) < distance(monoGlide, targetNote),
+        "Mono and Legato Glide also start the first note one whole tone below");
+  }
+}
+
+// Portamento desliza da nota anterior; o limite de velocity desliga o Glide.
+void testGlidePortamentoAndVelocityGate() {
+  static constexpr std::size_t window = 4800; // 100 ms
+  // With a 5 s Glide the pitch barely moves inside the window, so the zero
+  // crossings measure where the note started.
+  const auto crossings = [](const std::vector<float>& samples, std::size_t from) {
+    int count = 0;
+    for (std::size_t index = from + 1; index < from + window; ++index) {
+      if (samples[index - 1] < 0.0f && samples[index] >= 0.0f) ++count;
+    }
+    return count;
+  };
+  struct Step { int note; std::uint8_t velocity; bool release; };
+  const auto play = [&](std::uint8_t voiceMode, hook_keys::GlideBehavior behavior,
+                        std::initializer_list<Step> steps) {
+    hook_keys::AnalogSynthModule synth(48000);
+    hook_keys::AnalogSynthConfig config;
+    config.voiceMode = voiceMode;
+    config.oscillator1 = 0;
+    config.oscillator2Enabled = false;
+    config.detuneCents = config.lfoDepth = config.filterEnvelope = config.filterResonance = 0.0f;
+    config.releaseMs = 5.0f;
+    config.glideMs = 5000.0f;
+    expect(synth.setConfig(config), "configure Portamento synth");
+    synth.setGlideBehavior(behavior);
+    synth.beginBlock();
+    std::vector<float> left, right;
+    for (const auto& step : steps) {
+      if (step.release) {
+        synth.noteOff(static_cast<std::uint8_t>(step.note));
+        std::vector<float> tail(4800), tailRight(4800);
+        synth.renderAdd(tail.data(), tailRight.data(), tail.size(), 1.0f);
+        continue;
+      }
+      synth.noteOnWithFilterVelocity(static_cast<std::uint8_t>(step.note), 100, step.velocity);
+      left.assign(window + 1, 0.0f);
+      right.assign(window + 1, 0.0f);
+      synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    }
+    return crossings(left, 0);
+  };
+  // C4 = 26 crossings in 100 ms, A#3 = 23, C3 = 13 (a continuing phase can shift one).
+  const auto target = [](int count) { return count >= 25 && count <= 27; };
+  const auto toneBelow = [](int count) { return count >= 22 && count <= 24; };
+  hook_keys::GlideBehavior portamento;
+  portamento.portamento = true;
+  expect(toneBelow(play(0, {}, {{60, 100, false}})), "Auto starts one whole tone below");
+  expect(target(play(0, portamento, {{60, 100, false}})), "Portamento's first note has no previous note to slide from");
+  // Mono and Legato hold the previous key (one voice); Poly releases it first so
+  // only the new note is measured.
+  for (const auto voiceMode : {std::uint8_t{1}, std::uint8_t{2}}) {
+    expect(play(voiceMode, portamento, {{48, 100, false}, {60, 100, false}}) <= 14,
+        "Mono and Legato Portamento slide from the previous note");
+    expect(toneBelow(play(voiceMode, {}, {{48, 100, false}, {60, 100, false}})),
+        "Mono and Legato Auto ignore the previous note");
+  }
+  expect(play(0, portamento, {{48, 100, false}, {48, 0, true}, {60, 100, false}}) <= 14,
+      "Poly Portamento slides from the previous note");
+  expect(toneBelow(play(0, {}, {{48, 100, false}, {48, 0, true}, {60, 100, false}})),
+      "Poly Auto ignores the previous note");
+
+  hook_keys::GlideBehavior gate;
+  gate.velocityGateEnabled = true;
+  gate.velocityThreshold = 70;
+  expect(target(play(0, gate, {{60, 70, false}})), "velocity at the threshold plays without Glide");
+  expect(target(play(0, gate, {{60, 110, false}})), "velocity above the threshold plays without Glide");
+  expect(toneBelow(play(0, gate, {{60, 69, false}})), "velocity below the threshold keeps Glide");
+  gate.velocityGateInverted = true;
+  expect(target(play(0, gate, {{60, 69, false}})), "inverted: velocity below the threshold plays without Glide");
+  expect(toneBelow(play(0, gate, {{60, 70, false}})), "inverted: velocity from the threshold keeps Glide");
+
+  hook_keys::GlideBehavior packed;
+  packed.portamento = packed.velocityGateInverted = true;
+  packed.velocityThreshold = 127;
+  const auto unpacked = hook_keys::GlideBehavior::unpack(packed.pack());
+  expect(unpacked.portamento && !unpacked.velocityGateEnabled && unpacked.velocityGateInverted &&
+      unpacked.velocityThreshold == 127, "Glide behavior survives the atomic packing");
+
+  // The runtime routes module 8 to the Synth and 1-7 to the SF2 modules.
+  hook_keys::NativeEngineRuntime runtime(48000, 128);
+  expect(runtime.setGlideBehavior(7, portamento), "runtime configures Synth Glide");
+  expect(runtime.setGlideBehavior(0, gate), "runtime configures SF2 module Glide");
+  expect(!runtime.setGlideBehavior(8, gate), "runtime rejects an unknown module");
+
+  // SF2: a velocity gate that closes Glide renders exactly like Glide off.
+  const auto renderSf2 = [](float glideMs, hook_keys::GlideBehavior behavior, std::uint8_t velocity) {
+    hook_keys::TinySoundFontModule sf2(48000.0, 128);
+    expect(sf2.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load SF2 for Glide gate test");
+    sf2.setGlide(glideMs);
+    sf2.setGlideBehavior(behavior);
+    sf2.beginBlock();
+    sf2.noteOnWithFilterVelocity(60, 100, velocity);
+    std::vector<float> left(4096), right(4096);
+    sf2.renderAdd(left.data(), right.data(), 4096, 1.0f);
+    return left;
+  };
+  hook_keys::GlideBehavior sf2Gate;
+  sf2Gate.velocityGateEnabled = true;
+  sf2Gate.velocityThreshold = 70;
+  const auto dry = renderSf2(0.0f, {}, 100);
+  expect(renderSf2(500.0f, {}, 100) != dry, "SF2 Auto Glide bends the note");
+  expect(renderSf2(500.0f, sf2Gate, 100) == dry, "SF2 velocity gate turns Glide off from the threshold");
+  expect(renderSf2(500.0f, sf2Gate, 50) != dry, "SF2 velocity gate keeps Glide below the threshold");
+  expect(renderSf2(500.0f, portamento, 100) == dry, "SF2 Portamento's first note plays without Glide");
+}
+
+// A divisao do Delay vale sobre uma batida: o BPM com Sync, ou os ms sem ele.
+void testDelayDivisionsFollowTempo() {
+  const auto echoAt = [](bool sync, float beatMultiplier, float bpm) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0);
+    hook_keys::ModuleEffectsConfig config;
+    config.delay.enabled = true;
+    config.delay.sync = sync;
+    config.delay.delayMs = 250.0f;
+    config.delay.beatMultiplier = beatMultiplier;
+    config.delay.feedback = 0.0f;
+    config.delay.mix = 1.0f;
+    effects.setConfig(config, bpm);
+    std::vector<float> left(4 * 48000 + 4800, 0.0f), right(left.size(), 0.0f);
+    left[0] = right[0] = 1.0f;
+    for (std::size_t offset = 0; offset < left.size(); offset += 256) {
+      effects.process(left.data() + offset, right.data() + offset, std::min<std::size_t>(256, left.size() - offset));
+    }
+    return static_cast<std::size_t>(std::distance(left.begin() + 1,
+        std::max_element(left.begin() + 1, left.end(), [](float a, float b) { return std::abs(a) < std::abs(b); }))) + 1;
+  };
+  const auto near = [](std::size_t actual, std::size_t expected) {
+    return actual + 48 >= expected && actual <= expected + 48;
+  };
+  // 120 BPM: a beat is 24000 samples at 48 kHz.
+  expect(near(echoAt(true, 4.0f, 120.0f), 96000), "Delay 1/1 synced lasts four beats");
+  expect(near(echoAt(true, 2.0f, 120.0f), 48000), "Delay 1/2 synced lasts two beats");
+  expect(near(echoAt(true, 1.0f, 120.0f), 24000), "Delay 1/4 synced lasts one beat");
+  expect(near(echoAt(true, 0.5f, 120.0f), 12000), "Delay 1/8 synced lasts half a beat");
+  expect(near(echoAt(true, 1.0f, 90.0f), 32000), "Delay synced follows the BPM");
+  // Without Sync the knob (250 ms = 12000 samples) is the beat the division applies to.
+  expect(near(echoAt(false, 1.0f, 120.0f), 12000), "without Sync 1/4 is the knob milliseconds");
+  expect(near(echoAt(false, 2.0f, 120.0f), 24000), "without Sync 1/2 doubles the knob milliseconds");
+  expect(near(echoAt(false, 0.25f, 120.0f), 3000), "without Sync 1/16 is a quarter of the knob milliseconds");
+  expect(near(echoAt(false, 2.0f, 60.0f), 24000), "without Sync the BPM does not change the Delay");
+}
+
+// Card Mod no Synth: LFO faz a roda virar vibrato proprio; User deixa a roda no
+// LFO do editor, como antes.
+void testSynthModCard() {
+  const auto render = [](bool lfoCard, int wheel, std::uint8_t synthLfoTarget) {
+    hook_keys::AnalogSynthModule synth(48000);
+    hook_keys::AnalogSynthConfig config;
+    config.oscillator1 = 0;
+    config.oscillator2Enabled = false;
+    config.detuneCents = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+    config.filterResonance = 0.0f;
+    config.lfoTarget = synthLfoTarget;
+    expect(synth.setConfig(config), "configure Synth Mod card test");
+    synth.setModulationMode(lfoCard, 7.55f);
+    synth.beginBlock();
+    synth.controlChange(1, static_cast<std::uint8_t>(wheel));
+    synth.noteOn(60, 110);
+    std::vector<float> left(24000), right(24000);
+    synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    return left;
+  };
+  // Synth LFO on Volume, so any pitch change can only come from the Mod card.
+  expect(render(true, 0, 2) == render(false, 0, 2), "without the wheel both Mod modes sound the same");
+  expect(render(true, 127, 2) != render(true, 0, 2), "Mod LFO: the wheel adds a pitch vibrato to the Synth");
+  expect(render(true, 127, 1) == render(true, 127, 2),
+      "Mod LFO: the wheel no longer drives the Synth LFO destination");
+  expect(render(false, 127, 2) != render(false, 0, 2), "Mod User: the wheel still drives the Synth LFO");
+  expect(render(false, 127, 1) != render(false, 127, 2), "Mod User: the Synth LFO destination follows the editor");
+
+  hook_keys::NativeEngineRuntime runtime(48000, 128);
+  expect(runtime.setModuleModulationMode(7, true, 6.0f), "runtime routes the Mod card to the Synth");
+}
+
+void testOutputBoost() {
+  const auto render = [](float master, float click) {
+    hook_keys::NativeEngineRuntime runtime(48000, 128);
+    runtime.setOutputGainDb(master, true);
+    runtime.setMetronome(true, 120, click, 1, false, false, 4);
+    std::array<float, 512> left{}, right{};
+    runtime.render(left.data(), right.data(), left.size());
+    left.fill(0);
+    right.fill(0);
+    runtime.render(left.data(), right.data(), left.size());
+    return *std::max_element(left.begin(), left.end());
+  };
+  const auto normal = render(0, 1);
+  const auto gain = std::pow(10.0f, 12.0f / 20.0f);
+  expect(std::abs(render(12, 1) / normal - gain) < 0.001f, "Master reaches actual +12dB");
+  expect(std::abs(render(0, gain) / normal - gain) < 0.001f, "Metronome reaches actual +12dB");
+}
+
+void testUnityGainAnalysisAndSmoothing() {
+  class AnalysisTone final : public hook_keys::ModuleSynth {
+  public:
+    void noteOn(std::uint8_t, std::uint8_t) noexcept override {}
+    void noteOff(std::uint8_t) noexcept override {}
+    void controlChange(std::uint8_t, std::uint8_t) noexcept override {}
+    void pitchBend(std::uint16_t) noexcept override {}
+    void allNotesOff() noexcept override {}
+    void renderAdd(float* left, float* right, std::size_t frames, float gain) noexcept override {
+      for (std::size_t frame = 0; frame < frames; ++frame, ++sample) {
+        const auto value = static_cast<float>(0.25 * std::sin(
+            6.283185307179586 * 1000.0 * static_cast<double>(sample) / 48000.0)) * gain;
+        left[frame] += value;
+        right[frame] += value * 0.4f;
+      }
+    }
+    std::size_t sample = 0;
+  } tone;
+
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &tone;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig config;
+  config.gainLinear = 1.0f;
+  config.effects.compressor.enabled = true;
+  config.effects.compressor.ratio = 1.0f;
+  expect(engine.setModuleConfig(0, config), "configure unity-gain module");
+  static_cast<void>(engine.consumeModuleAnalysis(0));
+  std::array<float, 2048> left{}, right{};
+  engine.render(left.data(), right.data(), left.size());
+  expect(*std::max_element(left.begin(), left.end()) > 0.249f,
+      "0 dB is unity and does not hide attenuation in the module mixer");
+  const auto stereoMeter = engine.consumeModulePeaks();
+  expect(stereoMeter[0] > 0.249f && stereoMeter[0] < 0.251f,
+      "module meter reads the same post-fader signal sent to the output");
+  expect(stereoMeter[1] > 0.099f && stereoMeter[1] < 0.101f,
+      "module meter preserves an independent right-channel peak");
+  const auto analysis = engine.consumeModuleAnalysis(0);
+  expect(analysis[0] > 0.249f && analysis[1] > 0.249f,
+      "compressor Input and Output meters receive real pre/post processor audio");
+
+  // Include an unread peak: disabling must clear it, not merely stop future capture.
+  engine.render(left.data(), right.data(), left.size());
+  config.effects.compressor.enabled = false;
+  expect(engine.setModuleConfig(0, config), "disable compressor meters");
+  engine.render(left.data(), right.data(), left.size());
+  const auto disabledAnalysis = engine.consumeModuleAnalysis(0);
+  expect(disabledAnalysis[0] == 0 && disabledAnalysis[1] == 0, "disabled compressor clears stale input/output peaks");
+  engine.render(left.data(), right.data(), left.size());
+  const auto bypassAnalysis = engine.consumeModuleAnalysis(0);
+  expect(bypassAnalysis[0] == 0 && bypassAnalysis[1] == 0, "disabled compressor does not capture new peaks");
+  expect(engine.consumeModulePeaks()[0] > 0.249f, "module fader meter remains active with compressor off");
+
+  config.gainLinear = 0.25f;
+  expect(engine.setModuleConfig(0, config), "queue smoothed fader gain");
+  left.fill(0);
+  right.fill(0);
+  engine.render(left.data(), right.data(), 512);
+  float largestStep = 0.0f;
+  for (std::size_t index = 1; index < 512; ++index) {
+    largestStep = std::max(largestStep, std::abs(left[index] - left[index - 1]));
+  }
+  expect(largestStep < 0.04f, "mapped fader changes are ramped without zipper ticks");
+}
+
+void testSoundFontGlide() {
+  const auto render = [](bool enabled, int note) {
+    hook_keys::TinySoundFontModule synth(48000, 128);
+    expect(synth.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load SF2 for Glide");
+    synth.setGlide(enabled ? 500 : 0);
+    synth.beginBlock();
+    synth.noteOn(static_cast<std::uint8_t>(note), 110);
+    std::vector<float> left(19200), right(19200);
+    synth.renderAdd(left.data(), right.data(), left.size(), 1);
+    synth.noteOff(static_cast<std::uint8_t>(note));
+    std::vector<float> tail(48000), tailRight(48000);
+    synth.renderAdd(tail.data(), tailRight.data(), tail.size(), 1);
+    expect(std::all_of(tail.end() - 128, tail.end(), [](float v) { return std::abs(v) < 0.00001f; }), "Glide preserves note-off/release");
+    return left;
+  };
+  const auto dry = render(false, 60);
+  const auto wet = render(true, 60);
+  expect(dry != wet, "the first SF2 note already receives Auto Glide");
+  expect(dry == render(false, 60), "Glide OFF restores normal SF2 pitch");
+}
+
+void testMidiDuringLoadingIsDiscarded() {
+  hook_keys::NativeEngineRuntime runtime(48000, 128);
+  hook_keys::ModuleConfig config;
+  config.enabled = true;
+  expect(runtime.setModuleConfig(7, config), "prepare Synth before loading gate test");
+  runtime.setMidiInputEnabled(false);
+  for (int index = 0; index < 1000; ++index) {
+    expect(runtime.sendMidi(0, 0x90, 60, 127), "blocked MIDI is discarded without filling queue");
+  }
+  runtime.setMidiInputEnabled(true);
+  std::array<float, 512> left{}, right{};
+  runtime.render(left.data(), right.data(), left.size());
+  expect(std::all_of(left.begin(), left.end(), [](float sample) { return sample == 0; }),
+      "opening MIDI after loading does not replay discarded notes");
+  expect(runtime.sendMidi(0, 0x90, 64, 127), "new MIDI enters after loading");
+  runtime.render(left.data(), right.data(), left.size());
+  expect(std::any_of(left.begin(), left.end(), [](float sample) { return std::abs(sample) > 0.00001f; }),
+      "new note sounds normally after loading");
+}
+
+void testTranceGateProcessing() {
+  // Gate runs sample-by-sample, and does not send MIDI retriggers.
+  {
+    hook_keys::ModuleEffects processor;
+    processor.prepare(48000);
+    hook_keys::ModuleEffectsConfig config;
+    config.tranceGate.enabled = true;
+    config.tranceGate.length = 2;
+    config.tranceGate.steps = 1;
+    config.tranceGate.gate = 0.5f;
+    processor.setConfig(config, 120);
+    std::vector<float> left(24000, 1.0f), right(24000, 0.5f);
+    processor.process(left.data(), right.data(), left.size());
+    expect(left[1000] > 0.99f && left[5000] < 0.00001f, "Trance Gate opens/closes in audio callback at 120 BPM");
+    expect(left[11000] < 0.00001f && left[13000] > 0.99f, "disabled gate step is a rest and pattern wraps");
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      expect(std::abs(right[index] - left[index] * 0.5f) < 0.00001f, "gate preserves stereo balance");
+      if (index) expect(std::abs(left[index] - left[index - 1]) < 0.01f, "gate transitions are smoothed, not clicks");
+    }
+    processor.reset();
+    processor.setConfig(config, 240);
+    std::fill(left.begin(), left.end(), 1.0f);
+    std::fill(right.begin(), right.end(), 1.0f);
+    processor.process(left.data(), right.data(), 6000);
+    expect(left[1000] > 0.99f && left[2500] < 0.001f, "240 BPM doubles the pulse rate");
+    config.tranceGate.steps = 0;
+    config.tranceGate.depth = 0.5f;
+    processor.setConfig(config, 120);
+    std::fill(left.begin(), left.end(), 1.0f);
+    processor.process(left.data(), right.data(), left.size());
+    expect(std::abs(left.back() - 0.5f) < 0.00001f, "50 percent Depth retains half the volume when closed");
+    config.tranceGate.enabled = false;
+    processor.setConfig(config, 120);
+    std::fill(left.begin(), left.end(), 1.0f);
+    processor.process(left.data(), right.data(), left.size());
+    expect(left.back() > 0.999f, "gate OFF restores unpulsed audio");
+
+    RecordingSynth synth;
+    hook_keys::HookKeysEngine::SynthModules modules{};
+    modules[6] = &synth;
+    hook_keys::HookKeysEngine engine(modules);
+    hook_keys::ModuleConfig module;
+    module.effects.tranceGate = config.tranceGate;
+    module.effects.tranceGate.enabled = true;
+    expect(engine.setModuleConfig(6, module), "configure native gate module");
+    for (const auto note : {60, 64, 67}) expect(engine.enqueueMidi(midi(0x90, note, 100)), "gate chord input");
+    for (int block = 0; block < 500; ++block) process(engine);
+    expect(synth.events.size() == 3, "Trance Gate keeps the chord without generating NoteOn/Off");
+    expect(synth.events[0].data1 == 60 && synth.events[1].data1 == 64 && synth.events[2].data1 == 67,
+        "gate does not transpose the played chord");
+    for (const auto note : {60, 64, 67}) expect(engine.enqueueMidi(midi(0x80, note, 0)), "release gate chord");
+    process(engine);
+    expect(synth.events.size() == 6, "gate releases only the actual played notes");
+  }
+}
+
+// O banco de amostras vive em 16 bits e a escala virou ganho de voz. Um erro
+// de fator 32767 para qualquer lado nao mudaria a forma de onda, so o nivel,
+// entao o unico jeito de pegar isso e olhar a amplitude absoluta.
+void testSoundFontSampleScale() {
+  constexpr std::size_t blockFrames = 512;
+  hook_keys::TinySoundFontModule soundFont(48000.0, blockFrames, 256);
+  expect(soundFont.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"),
+      "load SF2 for sample scale regression");
+  soundFont.beginBlock();
+  soundFont.noteOn(60, 127);
+  std::array<float, blockFrames * 8> left{}, right{};
+  for (std::size_t offset = 0; offset < left.size(); offset += blockFrames) {
+    soundFont.renderAdd(left.data() + offset, right.data() + offset, blockFrames, 1.0f);
+  }
+  float peak = 0.0f;
+  for (const auto sample : left) peak = std::max(peak, std::abs(sample));
+  expect(peak > 0.01f, "a full velocity note is audible, not divided by the 16 bit range");
+  expect(peak < 1.0f, "a full velocity note stays below clipping, not multiplied by it");
+}
+
+// O pedal de sustain nao pode encolher nem inflar a polifonia. Contar as notas
+// presas por ele fazia o motor roubar notas que ainda deviam soar, e o timbre
+// inteiro parecia comprimido; ignora-las por completo deixava o teto interno
+// do TinySoundFont estourar, onde a nota nova nao saia. Quem devolve lugar e
+// a folga real do banco de vozes, perguntada ao proprio modulo.
+void testSustainPedalDoesNotConsumeThePolyphony() {
+  RecordingSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig config;
+  config.polyphony = 2;
+  expect(engine.setModuleConfig(0, config), "configure two-voice polyphony with sustain");
+  expect(engine.enqueueMidi(midi(0xb0, 64, 127)), "press the sustain pedal");
+  expect(engine.enqueueMidi(midi(0x90, 60, 100)), "first sustained note");
+  expect(engine.enqueueMidi(midi(0x80, 60, 0)), "release the first key, the pedal holds the voice");
+  expect(engine.enqueueMidi(midi(0x90, 64, 100)), "second sustained note");
+  expect(engine.enqueueMidi(midi(0x80, 64, 0)), "release the second key");
+  process(engine);
+  synth.events.clear();
+  expect(engine.enqueueMidi(midi(0x90, 67, 100)), "third note while both keys are pedalled");
+  process(engine);
+  expect(synth.events.size() == 1 && synth.events[0].type == Event::Type::noteOn,
+      "a pedalled note does not spend the polyphony the musician chose");
+
+  // Com o banco interno cheio a folga vira o criterio, e o sacrificio recai
+  // sobre a nota mais antiga presa pelo pedal, nunca sobre a tecla em uso.
+  synth.voicePoolNearlyFull = true;
+  synth.events.clear();
+  expect(engine.enqueueMidi(midi(0x90, 72, 100)), "note arriving with the voice pool nearly full");
+  process(engine);
+  expect(synth.events.size() == 2, "a full voice pool frees room before the new note");
+  expect(synth.events[0].type == Event::Type::noteOff && synth.events[0].data1 == 60,
+      "the oldest pedalled note is the one released");
+  expect(synth.events[1].type == Event::Type::noteOn && synth.events[1].data1 == 72,
+      "the new note still sounds");
+
+  synth.voicePoolNearlyFull = false;
+  expect(engine.enqueueMidi(midi(0x80, 67, 0)), "release the third key onto the pedal");
+  expect(engine.enqueueMidi(midi(0x80, 72, 0)), "release the fourth key onto the pedal");
+  process(engine);
+  synth.events.clear();
+  expect(engine.enqueueMidi(midi(0xb0, 64, 0)), "release the sustain pedal");
+  expect(engine.enqueueMidi(midi(0x90, 76, 100)), "a note after the pedal finds free polyphony");
+  expect(engine.enqueueMidi(midi(0x90, 77, 100)), "and a second one fills it again");
+  process(engine);
+  const auto steals = std::count_if(synth.events.begin(), synth.events.end(),
+      [](const Event& event) { return event.type == Event::Type::noteOff; });
+  expect(steals == 0, "lifting the pedal frees the held notes instead of stealing new ones");
+}
+
+void testSixNoteSoundFontChordKeepsEveryVoice() {
+  constexpr std::array<std::uint8_t, 6> notes{48, 52, 55, 60, 64, 67};
+  // static: o MSVC exige captura para uma constexpr local usada dentro da
+  // lambda, e capturar tiraria o valor do contexto constante.
+  static constexpr std::size_t frames = 512;
+  const auto render = [](const auto& playedNotes) {
+    hook_keys::TinySoundFontModule soundFont(48000.0, frames, 256);
+    expect(soundFont.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"),
+        "load SF2 for six-note chord regression");
+    soundFont.beginBlock();
+    for (const auto note : playedNotes) soundFont.noteOn(note, 100);
+    std::array<float, frames> left{}, right{};
+    soundFont.renderAdd(left.data(), right.data(), frames, 1.0f);
+    return left;
+  };
+
+  const auto chord = render(notes);
+  std::array<float, frames> separateSum{};
+  for (const auto note : notes) {
+    const std::array<std::uint8_t, 1> single{note};
+    const auto voice = render(single);
+    for (std::size_t frame = 0; frame < frames; ++frame) separateSum[frame] += voice[frame];
+  }
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    expect(std::abs(chord[frame] - separateSum[frame]) < 0.0001f,
+        "a six-note SF2 chord renders every requested note without internal voice loss");
+  }
+}
+
+void testNewSoftNoteDoesNotFilterHeldChord() {
+  for (bool sf2 : {false, true}) {
+    for (std::size_t frames : {64u, 256u, 512u}) {
+      std::array<std::unique_ptr<hook_keys::ModuleSynth>, 3> synths;
+      std::array<std::unique_ptr<hook_keys::HookKeysEngine>, 3> engines;
+      for (std::size_t i = 0; i < synths.size(); ++i) {
+        if (sf2) {
+          auto synth = std::make_unique<hook_keys::TinySoundFontModule>(48000, 512);
+          expect(synth->loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load velocity isolation SF2");
+          synths[i] = std::move(synth);
+        } else {
+          auto synth = std::make_unique<hook_keys::AnalogSynthModule>(48000);
+          hook_keys::AnalogSynthConfig config;
+          config.voiceMode = 0;
+          config.glideMs = 0;
+          config.filterEnvelope = 0;
+          config.lfoDepth = 0;
+          expect(synth->setConfig(config), "configure velocity isolation synth");
+          synths[i] = std::move(synth);
+        }
+        hook_keys::HookKeysEngine::SynthModules modules{};
+        modules[0] = synths[i].get();
+        engines[i] = std::make_unique<hook_keys::HookKeysEngine>(modules);
+        hook_keys::ModuleConfig config;
+        config.effects.cutoff.velocityCurve = {0, 32, 64, 96, 127};
+        // Fixed amplitude makes it impossible to confuse filter modulation
+        // with the intentionally quieter amplitude of a soft note.
+        config.velocityCurve = {100, 100, 100, 100, 100};
+        expect(engines[i]->setModuleConfig(0, config), "configure per-note filter regression");
+      }
+      expect(engines[0]->enqueueMidi(midi(0x90, 72, 127)), "combined held note");
+      expect(engines[1]->enqueueMidi(midi(0x90, 72, 127)), "isolated held note");
+      std::array<std::array<float, 512>, 3> left{}, right{};
+      double error = 0, reference = 0;
+      for (int block = 0; block < 60; ++block) {
+        if (block == 20) {
+          expect(engines[0]->enqueueMidi(midi(0x90, 48, 35)), "soft note after loud note");
+          expect(engines[2]->enqueueMidi(midi(0x90, 48, 35)), "isolated soft note");
+        }
+        for (std::size_t i = 0; i < engines.size(); ++i)
+          engines[i]->render(left[i].data(), right[i].data(), frames);
+        if (block < 20) continue;
+        for (std::size_t j = 0; j < frames; ++j) {
+          const double expected = left[1][j] + left[2][j];
+          error += std::abs(left[0][j] - expected);
+          reference += std::abs(expected);
+        }
+      }
+      if (error > reference * 0.0001) {
+        std::cerr << "Velocity isolation " << (sf2 ? "SF2" : "Synth")
+                  << " buffer=" << frames << " relative error=" << error / reference << '\n';
+      }
+      expect(reference > 0.01 && error < reference * 0.0001,
+          "a soft new note must not close the filter on a held loud note");
+    }
+  }
+}
+
 int main() {
+  expect(hook_keys::ModuleConfig{}.polyphony == 128, "new modules default to 128-note polyphony");
+  testNewSoftNoteDoesNotFilterHeldChord();
+  testSixNoteSoundFontChordKeepsEveryVoice();
+  testSoundFontSampleScale();
+  testSustainPedalDoesNotConsumeThePolyphony();
+  testTranceGateProcessing();
+  testMidiDuringLoadingIsDiscarded();
+  testSoundFontGlide();
+  testMetersAndNoteRelease();
+  testModWheelWithZeroDepth();
+  testPolyAutoGlide();
+  testSynthRetriggerHasNoClick();
+  testGlidePortamentoAndVelocityGate();
+  testSynthModCard();
+  testDelayDivisionsFollowTempo();
+  testVelocityLimits();
+  testOutputBoost();
+  testUnityGainAnalysisAndSmoothing();
   testRangeAndOctaveRouting();
   testKeyboardBroadcastRouting();
   testPatternGeneratorRouting();
   testMonoVoiceSteal();
+  testFifoPolyphonySteal();
+  testArpeggiatorRouteClearsSustain();
   testPerModuleControllerFilters();
   testDisableAndPanic();
   testMidiInputRouting();
   testAllMidiInputsRouting();
   testConcurrentProducers();
   testTinySoundFontRendering();
+  testSoundFontModWheelModes();
+  testSameSoundFontRunsIndependentlyAcrossModules();
   testDefaultVolumeEnvelopes();
   testNativeRuntimeSignalPath();
+  testIndependentPresetTails();
+  testCompatibilityBlocksCc7();
+  testSharedSoundFontEnvelopeIsolation();
   testIndependentOscillatorVolumes();
   testIndependentOscillatorOctaves();
   testMetronomeRunsOnTheAudioCallback();
   testVelocityCurveMapping();
   testCutoffProcessing();
+  testCutoffVelocityCurve();
   testEqualizerProcessing();
   testEqualizerCutSlope();
   testCompressorProcessing();

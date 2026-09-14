@@ -1,10 +1,12 @@
 #pragma once
 
 #include "hook_keys/ModuleSynth.hpp"
+#include "hook_keys/VoiceCutoff.hpp"
 #include "hook_keys/RealtimeCommandQueue.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -25,11 +27,11 @@ struct AnalogSynthConfig final {
   float holdMs = 15000.0f;
   float decayMs = 25000.0f;
   float sustain = 1.0f;
-  float releaseMs = 90.0f;
+  float releaseMs = 300.0f;
   float filterCutoffHz = 20000.0f;
   float filterResonance = 0.18f;
   float filterEnvelope = 0.24f;
-  float lfoRateHz = 4.0f;
+  float lfoRateHz = 6.85f;
   float lfoDepth = 0.0f;
   float glideMs = 45.0f;
   std::int8_t oscillator1Octave = 0;
@@ -79,11 +81,57 @@ public:
       const auto previousMode = config_.voiceMode;
       config_ = next;
       if (previousMode != config_.voiceMode) allNotesOff();
+      for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
+        voices_[index].filterUpdateCountdown = 0;
+      }
     }
   }
 
+  bool hasActiveVoices() const noexcept override {
+    return std::any_of(voices_.begin(), voices_.begin() + activeVoiceLimit_,
+        [](const auto& voice) { return voice.active; });
+  }
+  bool canSkipRenderingWhenIdle() const noexcept override { return true; }
+
   void noteOn(std::uint8_t note, std::uint8_t velocity) noexcept override {
+    noteOnWithFilterVelocity(note, velocity, velocity);
+  }
+
+  // Mod card. LFO: the wheel is a pitch vibrato (up to +/- 50 cents) at its own
+  // rate, like the SF2 modules. User: the wheel adds depth to the Synth LFO.
+  void setModulationMode(bool lfo, float rateHz) noexcept {
+    wheelVibratoRateHz_.store(std::clamp(rateHz, 0.1f, 20.0f), std::memory_order_relaxed);
+    wheelVibrato_.store(lfo, std::memory_order_relaxed);
+  }
+
+  // Velocity limit per oscillator: a key struck harder than an oscillator's
+  // limit does not sound on that oscillator (raw key velocity, 127 = always).
+  void setOscillatorVelocityLimits(std::uint8_t oscillator1, std::uint8_t oscillator2) noexcept {
+    oscillatorVelocityLimits_.store(static_cast<std::uint16_t>(
+        std::min<int>(oscillator1, 127) | (std::min<int>(oscillator2, 127) << 8)), std::memory_order_relaxed);
+  }
+
+  void setGlideBehavior(GlideBehavior behavior) noexcept override {
+    glideBehavior_.store(behavior.pack(), std::memory_order_relaxed);
+  }
+
+  void setCutoffConfig(CutoffConfig config) noexcept override {
+    if (cutoffConfig_.enabled == config.enabled && cutoffConfig_.frequencyHz == config.frequencyHz &&
+        cutoffConfig_.velocityCurve == config.velocityCurve) return;
+    cutoffConfig_ = config;
+    for (auto& voice : voices_) if (voice.active)
+      voice.moduleCutoff.configure(config.frequencyForVelocity(heldFilterVelocity_[voice.note]), sampleRate_);
+  }
+
+  void noteOnWithFilterVelocity(std::uint8_t note, std::uint8_t velocity,
+      std::uint8_t filterVelocity) noexcept override {
     note = std::min<std::uint8_t>(note, 127);
+    // A key above both sounding oscillators' limits plays nothing, so it must
+    // not cut or retrigger the note already sounding.
+    const auto limits = oscillatorVelocityLimits_.load(std::memory_order_relaxed);
+    if (!(config_.oscillator1Enabled && filterVelocity <= (limits & 0xff)) &&
+        !(config_.oscillator2Enabled && filterVelocity <= (limits >> 8))) return;
+    heldFilterVelocity_[note] = filterVelocity;
     velocity = std::max<std::uint8_t>(velocity, 1);
     held_[note] = true;
     heldVelocity_[note] = velocity;
@@ -93,7 +141,9 @@ public:
       return;
     }
     auto& voice = voices_[0];
-    const bool legato = config_.voiceMode == 2 && voice.active;
+    // A voice fading out has no key left to tie to: Legato must re-attack it,
+    // otherwise the new note keeps releasing while the key stays down.
+    const bool legato = config_.voiceMode == 2 && voice.active && voice.stage != EnvelopeStage::release;
     startVoice(voice, note, velocity, !legato);
   }
 
@@ -102,7 +152,10 @@ public:
     held_[note] = false;
     if (sustainDown_) return;
     if (config_.voiceMode == 0) {
-      for (auto& voice : voices_) if (voice.active && voice.note == note) releaseVoice(voice);
+      for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
+        auto& voice = voices_[index];
+        if (voice.active && voice.note == note) releaseVoice(voice);
+      }
       return;
     }
     auto& voice = voices_[0];
@@ -115,12 +168,27 @@ public:
     }
   }
 
+  void stealNote(std::uint8_t note) noexcept override {
+    note = std::min<std::uint8_t>(note, 127);
+    held_[note] = false;
+    for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
+      auto& voice = voices_[index];
+      if (!voice.active || voice.note != note) continue;
+      // A very short release avoids a discontinuity but actually frees the
+      // oldest musical voice instead of respecting the normal release time.
+      const auto frames = std::max(1.0, sampleRate_ * 0.005);
+      voice.releaseStep = std::max(voice.envelope, 0.00001f) / static_cast<float>(frames);
+      voice.stage = EnvelopeStage::release;
+    }
+  }
+
   void controlChange(std::uint8_t controller, std::uint8_t value) noexcept override {
     if (controller == 1) modulation_ = static_cast<float>(value) / 127.0f;
     if (controller != 64) return;
     const bool next = value >= 64;
     if (sustainDown_ && !next) {
-      for (auto& voice : voices_) {
+      for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
+        auto& voice = voices_[index];
         if (voice.active && !held_[voice.note]) releaseVoice(voice);
       }
     }
@@ -135,55 +203,83 @@ public:
   void allNotesOff() noexcept override {
     held_.fill(false);
     sustainDown_ = false;
-    for (auto& voice : voices_) releaseVoice(voice);
+    for (std::size_t index = 0; index < activeVoiceLimit_; ++index) releaseVoice(voices_[index]);
   }
 
   void renderAdd(float* left, float* right, std::size_t frames, float gainLinear) noexcept override {
     if (left == nullptr || right == nullptr || frames == 0) return;
     constexpr double kTwoPi = 6.28318530717958647692;
     const auto lfoIncrement = static_cast<double>(config_.lfoRateHz) / sampleRate_;
-    const auto glideCoefficient = config_.glideMs <= 0.01f ? 1.0
-        : 1.0 - std::exp(-1.0 / (sampleRate_ * static_cast<double>(config_.glideMs) * 0.001));
+    const auto detuneRatio = std::pow(2.0, static_cast<double>(config_.detuneCents) / 1200.0);
+    const bool wheelVibrato = wheelVibrato_.load(std::memory_order_relaxed);
+    const auto lfoAmount = config_.lfoDepth + (wheelVibrato ? 0.0f : (1.0f - config_.lfoDepth) * modulation_);
+    const auto vibratoIncrement = static_cast<double>(wheelVibratoRateHz_.load(std::memory_order_relaxed)) / sampleRate_;
+    // 15 ms smoothing, as in the SF2 modules, so the wheel never steps the pitch.
+    const auto vibratoSmoothing = static_cast<float>(1.0 - std::exp(-1.0 / (sampleRate_ * 0.015)));
     for (std::size_t frame = 0; frame < frames; ++frame) {
       const auto lfo = static_cast<float>(std::sin(kTwoPi * lfoPhase_));
       lfoPhase_ += lfoIncrement;
       if (lfoPhase_ >= 1.0) lfoPhase_ -= 1.0;
       float mixed = 0.0f;
-      for (auto& voice : voices_) {
+      auto pitchLfo = config_.lfoTarget == 0 ? lfo * lfoAmount * 2.0f : 0.0f;
+      const auto wheelTarget = wheelVibrato ? modulation_ : 0.0f;
+      wheelVibratoDepth_ += (wheelTarget - wheelVibratoDepth_) * vibratoSmoothing;
+      if (wheelVibratoDepth_ > 0.00001f) {
+        pitchLfo += static_cast<float>(std::sin(kTwoPi * wheelVibratoPhase_)) * wheelVibratoDepth_ * 0.5f;
+        wheelVibratoPhase_ += vibratoIncrement;
+        if (wheelVibratoPhase_ >= 1.0) wheelVibratoPhase_ -= 1.0;
+      }
+      const auto bendRatio = std::pow(2.0, static_cast<double>(pitchBendSemitones_ + pitchLfo) / 12.0);
+      const auto filterLfo = config_.lfoTarget == 1 ? lfo * lfoAmount * 4.0f : 0.0f;
+      for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
+        auto& voice = voices_[index];
         if (!voice.active) continue;
-        voice.currentFrequency += (voice.targetFrequency - voice.currentFrequency) * glideCoefficient;
-        const auto lfoAmount = config_.lfoDepth * (0.35f + modulation_ * 0.65f);
-        const auto pitchLfo = config_.lfoTarget == 0 ? lfo * lfoAmount * 2.0f : 0.0f;
-        const auto bendRatio = std::pow(2.0, static_cast<double>(pitchBendSemitones_ + pitchLfo) / 12.0);
+        if (config_.glideMs <= 0.01f) {
+          voice.currentFrequency = voice.targetFrequency;
+          voice.glideFramesRemaining = 0;
+        } else if (voice.glideFramesRemaining > 0) {
+          voice.currentFrequency += voice.glideFrequencyStep;
+          if (--voice.glideFramesRemaining == 0) voice.currentFrequency = voice.targetFrequency;
+        }
+        // Depth sets the base modulation; CC1 adds depth even when it is zero.
         const auto baseFrequency = voice.currentFrequency * bendRatio;
         const auto frequency1 = std::ldexp(baseFrequency, config_.oscillator1Octave);
-        const auto frequency2 = std::ldexp(baseFrequency
-            * std::pow(2.0, static_cast<double>(config_.detuneCents) / 1200.0), config_.oscillator2Octave);
+        const auto frequency2 = std::ldexp(baseFrequency * detuneRatio, config_.oscillator2Octave);
         voice.phase1 = advancePhase(voice.phase1, frequency1);
         voice.phase2 = advancePhase(voice.phase2, frequency2);
         const auto osc1 = waveform(config_.oscillator1, voice.phase1);
         const auto osc2 = waveform(config_.oscillator2, voice.phase2);
         const auto envelope = advanceEnvelope(voice);
         if (!voice.active) continue;
-        const auto oscillatorSignal = (config_.oscillator1Enabled ? osc1 * config_.oscillator1Volume : 0.0f)
-            + (config_.oscillator2Enabled ? osc2 * config_.oscillator2Volume : 0.0f);
+        const auto oscillatorSignal = (config_.oscillator1Enabled && voice.oscillator1Gate ? osc1 * config_.oscillator1Volume : 0.0f)
+            + (config_.oscillator2Enabled && voice.oscillator2Gate ? osc2 * config_.oscillator2Volume : 0.0f);
         auto sample = oscillatorSignal * envelope * voice.velocity;
-        const auto filterLfo = config_.lfoTarget == 1 ? lfo * lfoAmount * 4.0f : 0.0f;
-        const auto envelopeOctaves = config_.filterEnvelope * envelope * 5.0f;
-        const auto cutoff = config_.filterCutoffHz * std::pow(2.0f, envelopeOctaves + filterLfo);
-        sample = processFilter(voice, sample, cutoff);
+        if (voice.filterUpdateCountdown == 0) {
+          const auto envelopeOctaves = config_.filterEnvelope * envelope * 5.0f;
+          const auto cutoff = config_.filterCutoffHz * std::pow(2.0f, envelopeOctaves + filterLfo);
+          updateFilterCoefficients(voice, cutoff);
+          voice.filterUpdateCountdown = kFilterControlBlock;
+        }
+        --voice.filterUpdateCountdown;
+        sample = processFilter(voice, sample);
+        sample = voice.moduleCutoff.process(sample);
         if (config_.lfoTarget == 2) sample *= std::clamp(1.0f + lfo * lfoAmount, 0.0f, 1.5f);
         mixed += sample;
       }
-      const auto output = std::tanh(mixed * 0.22f) * gainLinear;
+      // Do not hide headroom attenuation behind a control labelled 0 dB.
+      // The module fader is the only post-synth gain: overload remains visible
+      // on its meter (yellow/red) so the musician can lower it deliberately.
+      const auto output = mixed * gainLinear;
       left[frame] += output;
       right[frame] += output;
+      while (activeVoiceLimit_ > 0 && !voices_[activeVoiceLimit_ - 1].active) --activeVoiceLimit_;
     }
   }
 
 private:
   enum class EnvelopeStage : std::uint8_t { idle, attack, hold, decay, sustain, release };
   struct Voice final {
+    VoiceCutoff moduleCutoff{};
     bool active = false;
     std::uint8_t note = 0;
     std::uint64_t age = 0;
@@ -191,14 +287,31 @@ private:
     double phase2 = 0.0;
     double currentFrequency = 440.0;
     double targetFrequency = 440.0;
+    double glideFrequencyStep = 0.0;
+    std::size_t glideFramesRemaining = 0;
     float velocity = 0.0f;
     float envelope = 0.0f;
+    bool oscillator1Gate = true;
+    bool oscillator2Gate = true;
     float releaseStep = 0.0f;
     std::size_t holdFrames = 0;
     EnvelopeStage stage = EnvelopeStage::idle;
     float filterIc1 = 0.0f;
     float filterIc2 = 0.0f;
+    float filterA1 = 1.0f;
+    float filterA2 = 0.0f;
+    float filterA3 = 0.0f;
+    std::uint8_t filterUpdateCountdown = 0;
   };
+
+  static constexpr std::uint8_t kFilterControlBlock = 16;
+  // Shortest gain change the synth makes: short enough to keep Attack 0 and
+  // Release 0 percussive, long enough that the step is not heard as a click.
+  static constexpr double kDeclickMs = 3.0;
+
+  [[nodiscard]] double rampFrames(float milliseconds) const noexcept {
+    return sampleRate_ * std::max(kDeclickMs, static_cast<double>(milliseconds)) * 0.001;
+  }
 
   [[nodiscard]] static double frequencyFor(std::uint8_t note) noexcept {
     return 440.0 * std::pow(2.0, (static_cast<double>(note) - 69.0) / 12.0);
@@ -212,32 +325,65 @@ private:
   }
 
   void startVoice(Voice& voice, std::uint8_t note, std::uint8_t velocity, bool retrigger) noexcept {
+    // Re-pressing a note that is still sounding (its release tail, or Mono)
+    // must continue the waveform: resetting phase, filter or envelope there
+    // is an audible tick.
+    const bool sounding = voice.active && voice.envelope > 0.0f;
+    if (retrigger && !sounding) voice.moduleCutoff.reset();
+    voice.moduleCutoff.configure(cutoffConfig_.frequencyForVelocity(heldFilterVelocity_[note]), sampleRate_);
+    const auto voiceIndex = static_cast<std::size_t>(&voice - voices_.data());
+    activeVoiceLimit_ = std::max(activeVoiceLimit_, voiceIndex + 1);
     const auto nextFrequency = frequencyFor(note);
-    if (!voice.active || config_.glideMs <= 0.01f) voice.currentFrequency = nextFrequency;
+    const auto behavior = GlideBehavior::unpack(glideBehavior_.load(std::memory_order_relaxed));
+    const bool glideEnabled = config_.glideMs > 0.01f && behavior.glidesAt(heldFilterVelocity_[note]);
+    const bool sliding = voice.active && voice.envelope > 0.0f;
+    if (!glideEnabled) {
+      voice.currentFrequency = nextFrequency;
+    } else if (!behavior.portamento) {
+      // Auto: every newly activated note begins one whole tone below itself.
+      voice.currentFrequency = nextFrequency * std::pow(2.0, -2.0 / 12.0);
+    } else if (sliding) {
+      // Portamento keeps a sounding voice's current pitch (Mono, Legato, or a
+      // note re-pressed in its release) and slides on from there.
+    } else {
+      voice.currentFrequency = lastNoteFrequency_ > 0.0 ? lastNoteFrequency_ : nextFrequency;
+    }
+    lastNoteFrequency_ = nextFrequency;
     voice.targetFrequency = nextFrequency;
+    if (glideEnabled && voice.currentFrequency != voice.targetFrequency) {
+      voice.glideFramesRemaining = static_cast<std::size_t>(
+          std::max(1.0, sampleRate_ * static_cast<double>(config_.glideMs) * 0.001));
+      voice.glideFrequencyStep = (voice.targetFrequency - voice.currentFrequency)
+          / static_cast<double>(voice.glideFramesRemaining);
+    } else {
+      voice.glideFramesRemaining = 0;
+      voice.glideFrequencyStep = 0.0;
+    }
     voice.note = note;
     voice.velocity = static_cast<float>(velocity) / 127.0f;
+    const auto limits = oscillatorVelocityLimits_.load(std::memory_order_relaxed);
+    voice.oscillator1Gate = heldFilterVelocity_[note] <= (limits & 0xff);
+    voice.oscillator2Gate = heldFilterVelocity_[note] <= (limits >> 8);
     voice.age = ++voiceAge_;
     voice.active = true;
     if (!retrigger) return;
-    voice.phase1 = 0.0;
-    voice.phase2 = 0.0;
-    voice.envelope = config_.attackMs <= 0.01f ? 1.0f : 0.0f;
+    if (!sounding) {
+      voice.phase1 = 0.0;
+      voice.phase2 = 0.0;
+      voice.envelope = 0.0f;
+      voice.filterIc1 = 0.0f;
+      voice.filterIc2 = 0.0f;
+    }
+    // Attack always ramps from the current level; Attack 0 uses the de-click
+    // ramp instead of jumping to full gain in a single sample.
     voice.holdFrames = static_cast<std::size_t>(sampleRate_ * config_.holdMs * 0.001);
-    voice.stage = config_.attackMs <= 0.01f
-        ? (voice.holdFrames > 0 ? EnvelopeStage::hold : EnvelopeStage::decay)
-        : EnvelopeStage::attack;
-    voice.filterIc1 = 0.0f;
-    voice.filterIc2 = 0.0f;
+    voice.stage = EnvelopeStage::attack;
+    voice.filterUpdateCountdown = 0;
   }
 
   void releaseVoice(Voice& voice) noexcept {
     if (!voice.active || voice.stage == EnvelopeStage::release) return;
-    if (config_.releaseMs <= 0.01f) {
-      voice = Voice{};
-      return;
-    }
-    const auto frames = std::max(1.0, sampleRate_ * config_.releaseMs * 0.001);
+    const auto frames = rampFrames(config_.releaseMs);
     voice.releaseStep = voice.envelope / static_cast<float>(frames);
     voice.stage = EnvelopeStage::release;
   }
@@ -245,8 +391,7 @@ private:
   [[nodiscard]] float advanceEnvelope(Voice& voice) noexcept {
     switch (voice.stage) {
       case EnvelopeStage::attack: {
-        const auto frames = std::max(1.0, sampleRate_ * config_.attackMs * 0.001);
-        voice.envelope += static_cast<float>(1.0 / frames);
+        voice.envelope += static_cast<float>(1.0 / rampFrames(config_.attackMs));
         if (voice.envelope >= 1.0f) {
           voice.envelope = 1.0f;
           voice.stage = voice.holdFrames > 0 ? EnvelopeStage::hold : EnvelopeStage::decay;
@@ -293,18 +438,21 @@ private:
     return static_cast<float>(std::sin(kTwoPi * phase));
   }
 
-  [[nodiscard]] float processFilter(Voice& voice, float input, float cutoffHz) const noexcept {
+  void updateFilterCoefficients(Voice& voice, float cutoffHz) const noexcept {
     constexpr float kPi = 3.14159265358979323846f;
     const auto cutoff = std::clamp(cutoffHz, 20.0f,
         static_cast<float>(std::min(20000.0, sampleRate_ * 0.45)));
     const auto g = std::tan(kPi * cutoff / static_cast<float>(sampleRate_));
     const auto k = 2.0f - config_.filterResonance * 1.92f;
-    const auto a1 = 1.0f / (1.0f + g * (g + k));
-    const auto a2 = g * a1;
-    const auto a3 = g * a2;
+    voice.filterA1 = 1.0f / (1.0f + g * (g + k));
+    voice.filterA2 = g * voice.filterA1;
+    voice.filterA3 = g * voice.filterA2;
+  }
+
+  [[nodiscard]] static float processFilter(Voice& voice, float input) noexcept {
     const auto v3 = input - voice.filterIc2;
-    const auto v1 = a1 * voice.filterIc1 + a2 * v3;
-    const auto v2 = voice.filterIc2 + a2 * voice.filterIc1 + a3 * v3;
+    const auto v1 = voice.filterA1 * voice.filterIc1 + voice.filterA2 * v3;
+    const auto v2 = voice.filterIc2 + voice.filterA2 * voice.filterIc1 + voice.filterA3 * v3;
     voice.filterIc1 = 2.0f * v1 - voice.filterIc1;
     voice.filterIc2 = 2.0f * v2 - voice.filterIc2;
     return v2;
@@ -325,9 +473,14 @@ private:
   double sampleRate_ = 48000.0;
   AnalogSynthConfig config_{};
   RealtimeCommandQueue<AnalogSynthConfig, 64> pendingConfigs_{};
-  std::array<Voice, 128> voices_{};
+  // Headroom lets a stolen voice finish its short de-click release while the
+  // replacement starts. The user-facing polyphony limit remains 128 notes.
+  std::array<Voice, 256> voices_{};
+  std::size_t activeVoiceLimit_ = 0;
   std::array<bool, 128> held_{};
   std::array<std::uint8_t, 128> heldVelocity_{};
+  std::array<std::uint8_t, 128> heldFilterVelocity_{};
+  CutoffConfig cutoffConfig_{};
   std::array<std::uint64_t, 128> heldOrder_{};
   std::uint64_t noteOrder_ = 0;
   std::uint64_t voiceAge_ = 0;
@@ -335,6 +488,14 @@ private:
   float modulation_ = 0.0f;
   float pitchBendSemitones_ = 0.0f;
   double lfoPhase_ = 0.0;
+  // Pitch of the last note started, the Portamento source for a new voice.
+  double lastNoteFrequency_ = 0.0;
+  std::atomic<std::uint16_t> glideBehavior_{GlideBehavior{}.pack()};
+  std::atomic<std::uint16_t> oscillatorVelocityLimits_{static_cast<std::uint16_t>(127 | (127 << 8))};
+  std::atomic<bool> wheelVibrato_{false};
+  std::atomic<float> wheelVibratoRateHz_{6.85f};
+  float wheelVibratoDepth_ = 0.0f;
+  double wheelVibratoPhase_ = 0.0;
 };
 
 } // namespace hook_keys

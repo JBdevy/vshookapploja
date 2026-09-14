@@ -11,6 +11,7 @@ export function createSoundSelectionMarkup(
   categories: readonly SoundCatalogCategory[],
   useTabletKeyboard = false,
   installedSoundIds: ReadonlySet<string> = new Set(),
+  selectedTimbreId: string | null = null,
 ): string {
   const activeCategory = selectedCategory === 'user' || categories.some(({ id }) => id === selectedCategory)
     ? selectedCategory
@@ -36,7 +37,7 @@ export function createSoundSelectionMarkup(
         ${categoryButtons || '<p class="sound-browser__empty">Conecte-se à internet para carregar as categorias.</p>'}
       </nav>
       <div class="sound-browser__content">
-        ${activeCategory ? createSoundCategoryContentMarkup(activeCategory, categories, useTabletKeyboard, installedSoundIds) : createEmptyCatalogMarkup()}
+        ${activeCategory ? createSoundCategoryContentMarkup(activeCategory, categories, useTabletKeyboard, installedSoundIds, selectedTimbreId) : createEmptyCatalogMarkup()}
       </div>
     </section>
   `;
@@ -47,18 +48,24 @@ export function createSoundCategoryContentMarkup(
   categories: readonly SoundCatalogCategory[],
   useTabletKeyboard = false,
   installedSoundIds: ReadonlySet<string> = new Set(),
+  selectedTimbreId: string | null = null,
 ): string {
   if (categoryId !== 'user') {
     const category = categories.find(({ id }) => id === categoryId);
     if (!category) return createEmptyCatalogMarkup();
     return `
       <section class="fixed-sound-panel">
-        <h3>${escapeMarkup(category.name)}</h3>
+        <header class="fixed-sound-panel__header">
+          <h3>${escapeMarkup(category.name)}</h3>
+          <button class="fixed-sound-clean" type="button" data-sound-clean
+            aria-label="Deixar o modulo sem timbre selecionado">Clean</button>
+        </header>
         <div class="fixed-sound-grid">
           ${category.sounds.map((sound) => {
             const installed = installedSoundIds.has(sound.id);
+            const selected = selectedTimbreId === `fixed:${sound.id}`;
             return `
-              <button class="${installed ? 'is-installed' : 'is-downloadable'}" type="button" data-fixed-sound-id="${escapeMarkup(sound.id)}" style="${soundButtonStyle(sound.color)}" aria-label="${escapeMarkup(sound.name)}. ${installed ? 'Baixado' : 'Não baixado'}">
+              <button class="${installed ? 'is-installed' : 'is-downloadable'}${selected ? ' is-current-timbre' : ''}" type="button" data-fixed-sound-id="${escapeMarkup(sound.id)}" style="${soundButtonStyle(sound.color)}" aria-current="${selected}" aria-label="${escapeMarkup(sound.name)}. ${installed ? 'Baixado' : 'Não baixado'}${selected ? '. Selecionado neste módulo' : ''}">
                 <span>${escapeMarkup(sound.name)}</span><small>${installed ? 'No dispositivo' : 'Baixar'}</small>
               </button>
             `;
@@ -76,6 +83,7 @@ export function createUserSoundfontMarkup(useTabletKeyboard: boolean): string {
       <header class="user-sf2-panel__header">
         <h3>User</h3>
         <span data-user-sf2-total>Total - 0 GB</span>
+        <p class="user-sf2-load-status" data-user-sf2-load-status role="status" aria-live="polite"></p>
       </header>
       <div class="user-sf2-list" data-user-sf2-list><span class="loading-orbit" aria-hidden="true"></span></div>
       <button class="user-sf2-add" type="button" data-user-sf2-action="name"><span>Add SF2</span><strong aria-hidden="true">+</strong></button>

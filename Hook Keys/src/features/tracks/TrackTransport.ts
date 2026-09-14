@@ -16,6 +16,33 @@ export interface TrackPlaybackSnapshot {
   state: TrackPlaybackState;
 }
 
+export const TRACK_WAVEFORM_BARS = 96;
+export const SEEK_LOCKED_MESSAGE = 'Não é possível mover a posição com a música reproduzindo.';
+
+// Picos normalizados (0-1) de cada faixa da música, para desenhar a waveform.
+export function waveformPeaksFromChannels(channels: readonly Float32Array[], count: number): number[] {
+  const length = channels[0]?.length ?? 0;
+  if (!length || count <= 0) return [];
+  const bucket = Math.max(1, Math.floor(length / count));
+  // Ler cada amostra de uma música inteira pesa no aparelho antigo; umas
+  // centenas por faixa já desenham o mesmo contorno.
+  const stride = Math.max(1, Math.floor(bucket / 256));
+  const peaks = Array.from({ length: count }, (_, index) => {
+    const start = index * bucket;
+    const end = Math.min(length, start + bucket);
+    let peak = 0;
+    for (const channel of channels) {
+      for (let sample = start; sample < end; sample += stride) {
+        const value = Math.abs(channel[sample] ?? 0);
+        if (value > peak) peak = value;
+      }
+    }
+    return peak;
+  });
+  const loudest = Math.max(...peaks);
+  return loudest > 0 ? peaks.map((peak) => Math.round((peak / loudest) * 1000) / 1000) : peaks.map(() => 0);
+}
+
 export function createTrackTransportMarkup(): string {
   return `
     <section class="track-transport" aria-label="Transporte da música">
@@ -35,8 +62,15 @@ export class TrackTransportController {
   private readonly handleEnded = () => this.onEnded();
   private readonly handleError = () => this.onAudioError();
   private readonly handlePointerDown = (event: PointerEvent) => this.onPointerDown(event);
-  private readonly handlePointerMove = (event: PointerEvent) => this.nameHoldGesture.move(event);
-  private readonly handlePointerEnd = (event: PointerEvent) => this.nameHoldGesture.end(event);
+  private readonly handlePointerMove = (event: PointerEvent) => {
+    this.nameHoldGesture.move(event);
+    this.moveNeedleDrag(event);
+  };
+  private readonly handlePointerEnd = (event: PointerEvent) => {
+    this.nameHoldGesture.end(event);
+    this.endNeedleDrag(event);
+  };
+  private needleDrag: { pointerId: number; waveform: HTMLElement } | null = null;
   private readonly handleContextMenu = (event: MouseEvent) => this.onContextMenu(event);
   private readonly nameHoldGesture = new LongPressGesture(620);
   private objectUrl: string | null = null;
@@ -50,12 +84,15 @@ export class TrackTransportController {
   private loadSequence = 0;
   private queueSequence = 0;
   private autoplayPending = false;
+  private loopEnabled = false;
   private outputDb = 0;
   private outputEnabled = true;
   private audioContext: AudioContext | null = null;
   private outputGain: GainNode | null = null;
   private readonly connectedAudio = new WeakSet<HTMLAudioElement>();
   private renderedTrackName = '';
+  private readonly waveformPeaks = new Map<string, Promise<number[] | null>>();
+  private seekNoticeTimer: number | null = null;
 
   constructor(
     private readonly root: HTMLElement,
@@ -101,9 +138,20 @@ export class TrackTransportController {
   }
 
   setOutputLevel(db: number, enabled: boolean): void {
-    this.outputDb = Math.min(6, Math.max(-60, db));
+    this.outputDb = Math.min(12, Math.max(-90, db));
     this.outputEnabled = enabled;
     this.applyOutputGain();
+  }
+
+  // Repetir: a música atual volta ao início e ganha do Auto. Uma próxima
+  // escolhida à mão continua entrando quando a atual acaba.
+  setLoopEnabled(enabled: boolean): void {
+    this.loopEnabled = enabled;
+    this.applyLoop();
+  }
+
+  private applyLoop(): void {
+    this.audio.loop = this.loopEnabled && this.queueSource !== 'manual';
   }
 
   getSelectedTrackId(): string | null {
@@ -199,6 +247,31 @@ export class TrackTransportController {
 
   private onPointerDown(event: PointerEvent): void {
     const target = event.target;
+    const lockedWaveform = target instanceof Element
+      ? target.closest<HTMLElement>('.waveform-position.is-locked')
+      : null;
+    if (lockedWaveform) {
+      event.preventDefault();
+      this.showSeekLockedNotice(lockedWaveform);
+      return;
+    }
+    // A agulha segue o dedo pela waveform inteira: no iOS o cursor nativo do
+    // range só arrastava acertando em cheio o traço invisível.
+    const waveform = target instanceof Element
+      ? target.closest<HTMLElement>('.waveform-position')
+      : null;
+    if (waveform && this.selectedTrack && this.hasDuration() && this.state !== 'loading') {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      event.preventDefault();
+      this.needleDrag = { pointerId: event.pointerId, waveform };
+      try {
+        waveform.setPointerCapture(event.pointerId);
+      } catch {
+        // Sem captura o arraste continua pelos eventos da raiz.
+      }
+      this.seekToWaveformPoint(waveform, event.clientX);
+      return;
+    }
     const nameButton = target instanceof Element
       ? target.closest<HTMLButtonElement>('[data-transport-track-name]')
       : null;
@@ -225,6 +298,10 @@ export class TrackTransportController {
     const input = event.target;
     if (!(input instanceof HTMLInputElement) || !input.matches('[data-transport-progress]')) return;
     if (this.state === 'playing' || !this.hasDuration()) {
+      if (this.state === 'playing') {
+        const waveform = input.closest<HTMLElement>('.waveform-position');
+        if (waveform) this.showSeekLockedNotice(waveform);
+      }
       this.renderTimeline();
       return;
     }
@@ -232,7 +309,7 @@ export class TrackTransportController {
     this.renderTimeline();
   }
 
-  private async togglePlayStop(): Promise<void> {
+  async togglePlayStop(): Promise<void> {
     if (!this.selectedTrack || this.state === 'loading' || !this.audio.src) return;
     if (this.state === 'playing' || this.state === 'paused') {
       this.audio.pause();
@@ -242,6 +319,10 @@ export class TrackTransportController {
       this.render();
       return;
     }
+    await this.startPlayback();
+  }
+
+  private async startPlayback(): Promise<void> {
     if (this.hasDuration() && this.audio.currentTime >= this.audio.duration) this.audio.currentTime = 0;
     try {
       await this.prepareAudioOutput(this.audio);
@@ -354,6 +435,7 @@ export class TrackTransportController {
   }
 
   private render(): void {
+    this.applyLoop();
     const playStop = this.root.querySelector<HTMLButtonElement>('[data-transport-action="play-stop"]');
     const trackName = this.root.querySelector<HTMLButtonElement>('[data-transport-track-name]');
     const trackNameLabel = trackName?.querySelector<HTMLElement>('span');
@@ -381,15 +463,22 @@ export class TrackTransportController {
   }
 
   private renderTimeline(): void {
+    this.applyLoop();
     const progress = this.root.querySelector<HTMLInputElement>('[data-transport-progress]');
     const remaining = this.root.querySelector<HTMLOutputElement>('[data-transport-remaining]');
     const ready = Boolean(this.selectedTrack) && this.state !== 'loading' && this.hasDuration();
     const ratio = this.currentProgress();
     if (progress) {
       progress.value = String(Math.round(ratio * 1000));
-      progress.disabled = !ready || this.state === 'playing';
+      // Tocando, a agulha fica travada mas o toque continua chegando: quem
+      // tenta mover recebe o aviso em vez de um controle mudo.
+      progress.disabled = !ready;
+      progress.setAttribute('aria-disabled', String(this.state === 'playing'));
       progress.style.setProperty('--track-progress', `${ratio * 100}%`);
-      progress.closest<HTMLElement>('.waveform-position')?.style.setProperty('--track-progress', `${ratio * 100}%`);
+      const waveform = progress.closest<HTMLElement>('.waveform-position');
+      waveform?.style.setProperty('--track-progress', `${ratio * 100}%`);
+      waveform?.style.setProperty('--track-ratio', String(ratio));
+      waveform?.classList.toggle('is-locked', this.state === 'playing');
       progress.title = this.state === 'playing'
         ? 'Pare ou pause a música para mover a posição'
         : 'Mover posição da música';
@@ -399,6 +488,95 @@ export class TrackTransportController {
       remaining.value = formatTime(seconds);
     }
     this.onPlaybackChanged(this.getSnapshot());
+  }
+
+  // Picos da música selecionada. Decodificar a música inteira é o trabalho
+  // pesado, então roda uma vez por música e o resultado fica guardado.
+  loadWaveformPeaks(count = TRACK_WAVEFORM_BARS): Promise<number[] | null> {
+    const track = this.selectedTrack;
+    if (!track) return Promise.resolve(null);
+    const key = `${track.id}:${count}`;
+    let pending = this.waveformPeaks.get(key);
+    if (!pending) {
+      pending = this.decodeWaveformPeaks(track.id, count).catch(() => null);
+      this.waveformPeaks.set(key, pending);
+    }
+    return pending;
+  }
+
+  private async decodeWaveformPeaks(trackId: string, count: number): Promise<number[] | null> {
+    const storageKey = `hookkeys.waveform.${trackId}.${count}`;
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(storageKey) ?? 'null') as unknown;
+      if (Array.isArray(stored) && stored.length === count) return stored.map(Number);
+    } catch {
+      // Sem cache: decodifica abaixo.
+    }
+    const OfflineContext = (window as unknown as { OfflineAudioContext?: typeof OfflineAudioContext }).OfflineAudioContext;
+    if (!OfflineContext) return null;
+    const file = await this.library.getFile(trackId);
+    if (!file) return null;
+    // Offline: decodificar não mexe na sessão de áudio que toca a música.
+    const decoded = await new OfflineContext(1, 1, 44_100).decodeAudioData(await file.arrayBuffer());
+    const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
+    const peaks = waveformPeaksFromChannels(channels, count);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(peaks));
+    } catch {
+      // Sem espaço: a waveform continua valendo nesta sessão.
+    }
+    return peaks;
+  }
+
+  private moveNeedleDrag(event: PointerEvent): void {
+    if (this.needleDrag?.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    this.seekToWaveformPoint(this.needleDrag.waveform, event.clientX);
+  }
+
+  private endNeedleDrag(event: PointerEvent): void {
+    const drag = this.needleDrag;
+    if (drag?.pointerId !== event.pointerId) return;
+    this.needleDrag = null;
+    try {
+      if (drag.waveform.hasPointerCapture(event.pointerId)) drag.waveform.releasePointerCapture(event.pointerId);
+    } catch {
+      // Captura já liberada.
+    }
+  }
+
+  // Mesma geometria da agulha: 12 px de margem de cada lado.
+  private seekToWaveformPoint(waveform: HTMLElement, clientX: number): void {
+    if (this.state === 'playing') {
+      this.needleDrag = null;
+      this.showSeekLockedNotice(waveform);
+      return;
+    }
+    if (!this.hasDuration()) return;
+    const rect = waveform.getBoundingClientRect();
+    const usable = rect.width - 24;
+    if (usable <= 0) return;
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left - 12) / usable));
+    this.audio.currentTime = ratio * this.audio.duration;
+    this.renderTimeline();
+  }
+
+  private showSeekLockedNotice(waveform: HTMLElement): void {
+    let notice = waveform.querySelector<HTMLElement>('[data-waveform-notice]');
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'waveform-position__notice';
+      notice.dataset.waveformNotice = '';
+      notice.setAttribute('role', 'status');
+      waveform.append(notice);
+    }
+    notice.textContent = SEEK_LOCKED_MESSAGE;
+    notice.hidden = false;
+    if (this.seekNoticeTimer !== null) window.clearTimeout(this.seekNoticeTimer);
+    this.seekNoticeTimer = window.setTimeout(() => {
+      this.seekNoticeTimer = null;
+      if (notice) notice.hidden = true;
+    }, 2_200);
   }
 
   private currentProgress(): number {
@@ -468,7 +646,8 @@ export class TrackTransportController {
   private applyOutputGain(): void {
     const gain = this.outputEnabled ? dbToGain(this.outputDb) : 0;
     if (this.outputGain && this.audioContext) {
-      this.outputGain.gain.setValueAtTime(gain, this.audioContext.currentTime);
+      this.outputGain.gain.cancelScheduledValues(this.audioContext.currentTime);
+      this.outputGain.gain.setTargetAtTime(gain, this.audioContext.currentTime, 0.005);
       return;
     }
     this.applyFallbackVolume(this.audio);
@@ -481,7 +660,7 @@ export class TrackTransportController {
 }
 
 function dbToGain(db: number): number {
-  return db <= -60 ? 0 : 10 ** (db / 20);
+  return db <= -90 ? 0 : 10 ** (db / 20);
 }
 
 function formatTime(seconds: number): string {
