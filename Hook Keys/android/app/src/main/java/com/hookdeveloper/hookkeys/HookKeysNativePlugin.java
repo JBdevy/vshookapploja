@@ -62,6 +62,7 @@ public class HookKeysNativePlugin extends Plugin {
     private int connectionGeneration = 0;
     private volatile boolean compatibilityMode = false;
     private int currentBufferSize = 128;
+    private int currentSampleRate = 48000;
 
     private final MidiManager.DeviceCallback deviceCallback = new MidiManager.DeviceCallback() {
         @Override
@@ -100,7 +101,8 @@ public class HookKeysNativePlugin extends Plugin {
     public void initialize(PluginCall call) {
         int bufferSize = Math.max(64, Math.min(512, call.getInt("bufferSize", 128)));
         currentBufferSize = bufferSize;
-        if (!nativeStart(bufferSize)) {
+        currentSampleRate = call.getInt("sampleRate", currentSampleRate) == 44100 ? 44100 : 48000;
+        if (!nativeStart(bufferSize, currentSampleRate)) {
             call.reject("Não foi possível iniciar o áudio nativo.");
             return;
         }
@@ -119,9 +121,10 @@ public class HookKeysNativePlugin extends Plugin {
             catch (NumberFormatException error) { call.reject("Dispositivo de áudio inválido."); return; }
         }
         currentBufferSize = Math.max(64, Math.min(512, call.getInt("bufferSize", currentBufferSize)));
+        currentSampleRate = call.getInt("sampleRate", currentSampleRate) == 44100 ? 44100 : 48000;
         int channels = Math.max(1, Math.min(32, call.getInt("channels", 2)));
         boolean preserveEngine = Boolean.TRUE.equals(call.getBoolean("preserveEngine", false));
-        if (nativeRestart(currentBufferSize, deviceId, channels, preserveEngine)) call.resolve();
+        if (nativeRestart(currentBufferSize, deviceId, channels, currentSampleRate, preserveEngine)) call.resolve();
         else call.reject("Não foi possível abrir o dispositivo de áudio selecionado.");
     }
 
@@ -372,16 +375,16 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("compressorAttackMs", 10.0f),
             call.getFloat("compressorReleaseMs", 160.0f),
             call.getFloat("compressorGainDb", 0.0f),
-            call.getFloat("compressorMix", 1.0f),
+            call.getFloat("compressorMix", 0.0f),
             call.getBoolean("delaySync", false),
             call.getFloat("delayMs", 500.0f),
             call.getFloat("delayBeatMultiplier", 1.0f),
             call.getFloat("delayFeedback", 0.35f),
-            call.getFloat("delayMix", 0.25f),
+            call.getFloat("delayMix", 0.0f),
             call.getFloat("reverbDecay", 0.5f),
             call.getFloat("reverbDampen", 0.5f),
             call.getFloat("reverbSize", 0.6f),
-            call.getFloat("reverbMix", 0.25f),
+            call.getFloat("reverbMix", 0.0f),
             call.getBoolean("rotaryEnabled", false),
             call.getInt("rotarySpeed", 1),
             call.getFloat("rotarySlowHz", 0.8f),
@@ -834,9 +837,9 @@ public class HookKeysNativePlugin extends Plugin {
         }
     }
 
-    private static native boolean nativeStart(int bufferFrames);
+    private static native boolean nativeStart(int bufferFrames, int sampleRate);
     private static native boolean nativeRestart(
-        int bufferFrames, int deviceId, int channels, boolean preserveEngine
+        int bufferFrames, int deviceId, int channels, int sampleRate, boolean preserveEngine
     );
     private static native void nativeStop();
     private static native void nativeSetMidiInputEnabled(boolean enabled);

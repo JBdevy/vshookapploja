@@ -102,7 +102,7 @@ assert.match(player, /Promise\.all\(\[[\s\S]*initializePromise[\s\S]*restoreProm
 assert.match(nativeBridge, /audioOutputStatus\(\): Promise<NativeAudioOutputStatus>/);
 assert.match(nativeBridge, /if \(this\.initialized\) return send\(\)/,
   'Teclas da tela precisam entrar na ponte nativa sem await quando o motor já está pronto');
-assert.match(nativeBridge, /this\.lastAudioDeviceKey = null;[\s\S]*setAudioOutputDevice\('', 2, bufferSize\)/,
+assert.match(nativeBridge, /this\.lastAudioDeviceKey = null;[\s\S]*setAudioOutputDevice\('', 2, bufferSize, sampleRate\)/,
   'A recuperação precisa forçar a reabertura da saída padrão');
 assert.match(metronome, /syncNativeState\(\): Promise<void>/,
   'A sincronização do metrônomo deve poder ser aguardada');

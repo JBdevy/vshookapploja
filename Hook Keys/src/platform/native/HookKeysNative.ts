@@ -183,13 +183,14 @@ interface NativeMidiPitchBendEvent {
 
 interface HookKeysNativePlugin {
   setMidiInputEnabled(options: { enabled: boolean }): Promise<void>;
-  initialize(options: { bufferSize: number }): Promise<{ ready: boolean }>;
+  initialize(options: { bufferSize: number; sampleRate: number }): Promise<{ ready: boolean }>;
   listMidiDevices(): Promise<{ devices: NativeMidiDevice[] }>;
   listAudioOutputDevices(): Promise<{ devices: NativeAudioOutputDevice[] }>;
   setAudioOutputDevice(options: {
     deviceId: string;
     channels: number;
     bufferSize: number;
+    sampleRate: number;
     preserveEngine?: boolean;
   }): Promise<void>;
   audioOutputStatus(): Promise<NativeAudioOutputStatus>;
@@ -269,17 +270,19 @@ class HookKeysNativeBridge {
     return Capacitor.isNativePlatform() || this.tauriInvoke() !== null;
   }
 
-  initialize(bufferSize = 256): Promise<boolean> {
+  initialize(bufferSize = 256, sampleRate = 48_000): Promise<boolean> {
     if (!this.isAvailable()) return Promise.resolve(false);
     if (!this.initializePromise) {
-      this.initializePromise = this.call<{ ready: boolean }>('initialize', { bufferSize }, () => plugin.initialize({ bufferSize }))
+      this.initializePromise = this.call<{ ready: boolean }>(
+        'initialize', { bufferSize, sampleRate }, () => plugin.initialize({ bufferSize, sampleRate }),
+      )
         .then(({ ready }) => {
           // initialize já abre a saída padrão com dois canais. Registrar essa
           // rota evita destruir e recriar o stream imediatamente durante o
           // boot — em Android, iOS e drivers exclusivos do desktop essa
           // segunda abertura podia deixar o motor sem uma saída ativa.
           if (ready && this.lastAudioDeviceKey === null) {
-            this.lastAudioDeviceKey = `:2:${bufferSize}`;
+            this.lastAudioDeviceKey = `:2:${bufferSize}:${sampleRate}`;
           }
           if (!ready) this.initializePromise = null;
           this.initialized = ready;
@@ -323,18 +326,19 @@ class HookKeysNativeBridge {
     deviceId: string,
     channels: number,
     bufferSize: number,
+    sampleRate: number,
     preserveEngine = false,
   ): Promise<boolean> {
-    if (!await this.initialize(bufferSize)) return false;
-    const key = `${deviceId}:${channels}:${bufferSize}`;
+    if (!await this.initialize(bufferSize, sampleRate)) return false;
+    const key = `${deviceId}:${channels}:${bufferSize}:${sampleRate}`;
     if (key === this.lastAudioDeviceKey) return false;
     // Trocar somente o buffer mantém o mesmo motor e os SF2 já decodificados.
     // Uma mudança real de dispositivo/canais continua invalidando todos os
     // caches porque pode também alterar a taxa de amostragem.
     if (!preserveEngine) this.resetSynchronizationCache();
     try {
-      await this.call('set_audio_output_device', { deviceId, channels, bufferSize, preserveEngine }, () => (
-        plugin.setAudioOutputDevice({ deviceId, channels, bufferSize, preserveEngine })
+      await this.call('set_audio_output_device', { deviceId, channels, bufferSize, sampleRate, preserveEngine }, () => (
+        plugin.setAudioOutputDevice({ deviceId, channels, bufferSize, sampleRate, preserveEngine })
       ));
       this.lastAudioDeviceKey = key;
       this.initialized = true;
@@ -412,16 +416,16 @@ class HookKeysNativeBridge {
     return { peak: at(0), smoothed: at(1), overruns: at(2) };
   }
 
-  async recoverDefaultAudioOutput(bufferSize: number): Promise<boolean> {
+  async recoverDefaultAudioOutput(bufferSize: number, sampleRate = 48_000): Promise<boolean> {
     // Força uma abertura real mesmo que a rota padrão continue com a mesma
     // chave. Isso recupera stream interrompido e troca de placa/fone.
     this.lastAudioDeviceKey = null;
     // initialize() registra a chave padrão quando consegue reabrir uma sessão
     // que falhou no boot. Limpe novamente depois dele para que o passo seguinte
     // não confunda "inicializou" com "a recuperação forçada já foi feita".
-    if (!await this.initialize(bufferSize)) return false;
+    if (!await this.initialize(bufferSize, sampleRate)) return false;
     this.lastAudioDeviceKey = null;
-    return this.setAudioOutputDevice('', 2, bufferSize);
+    return this.setAudioOutputDevice('', 2, bufferSize, sampleRate);
   }
 
   initializationErrorMessage(): string | null {

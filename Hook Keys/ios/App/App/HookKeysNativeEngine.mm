@@ -180,14 +180,16 @@ private:
   _lastAudioErrorMessage = [NSString stringWithFormat:@"%@: %@", stage, detail];
 }
 
-- (BOOL)startWithBufferFrames:(NSInteger)bufferFrames {
+- (BOOL)startWithBufferFrames:(NSInteger)bufferFrames sampleRate:(double)requestedSampleRate {
   std::scoped_lock lock(_controlMutex);
   _lastAudioErrorMessage = @"";
+  requestedSampleRate = std::abs(requestedSampleRate - 44100.0) < 1.0 ? 44100.0 : 48000.0;
   if (_audioEngine != nil && _audioState && _audioState->runtime) {
     if (_audioEngine.isRunning) return YES;
     NSError *restartError = nil;
     AVAudioSession *session = AVAudioSession.sharedInstance;
-    const double preferredRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
+    [session setPreferredSampleRate:requestedSampleRate error:nil];
+    const double preferredRate = requestedSampleRate;
     // Tamanho de buffer é uma preferência, não uma condição para existir áudio.
     // Algumas rotas do iOS recusam a preferência enquanto estão sendo ativadas;
     // o sistema continua perfeitamente capaz de abrir usando o buffer da rota.
@@ -218,7 +220,8 @@ private:
   // A Apple recomenda configurar preferências antes de ativar a sessão. A
   // duração pode ser recusada por AirPlay, Bluetooth ou durante uma mudança de
   // rota; isso não deve impedir o Hook Keys de iniciar com o valor do sistema.
-  const double preferredRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
+  [session setPreferredSampleRate:requestedSampleRate error:nil];
+  const double preferredRate = requestedSampleRate;
   [session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / preferredRate)
                                   error:nil];
   if (![session setActive:YES error:&sessionError]) {
@@ -301,6 +304,7 @@ private:
 
 - (BOOL)setAudioOutputDeviceId:(NSString *)deviceId channels:(NSInteger)channels
                   bufferFrames:(NSInteger)bufferFrames
+                    sampleRate:(double)sampleRate
                 preserveEngine:(BOOL)preserveEngine {
   AVAudioSession *session = AVAudioSession.sharedInstance;
   if (deviceId.length > 0) {
@@ -343,9 +347,9 @@ private:
     return NO;
   }
   [self stop];
-  if ([self startWithBufferFrames:bufferFrames]) return YES;
+  if ([self startWithBufferFrames:bufferFrames sampleRate:sampleRate]) return YES;
   _requestedOutputChannels = 2;
-  static_cast<void>([self startWithBufferFrames:bufferFrames]);
+  static_cast<void>([self startWithBufferFrames:bufferFrames sampleRate:sampleRate]);
   return NO;
 }
 

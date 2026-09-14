@@ -13,7 +13,8 @@ fn main() {
         if let Ok(configs) = device.supported_output_configs() {
             let configs: Vec<_> = configs.collect();
             let channels = device.default_output_config().map(|c| c.channels()).unwrap_or(2);
-            if let Some(selected) = audio_config::select_config(device.default_output_config().ok(), configs.clone(), channels, false) {
+            if let Some(selected) = audio_config::select_config(
+                device.default_output_config().ok(), configs.clone(), channels, false, 48_000) {
                 println!("  Hook Keys selected: {} Hz, {} channels", selected.sample_rate(), selected.channels());
             }
             for config in configs.into_iter().filter(|c| matches!(c.sample_format(), SampleFormat::F32 | SampleFormat::F64)) {

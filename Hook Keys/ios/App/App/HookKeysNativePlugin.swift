@@ -89,7 +89,10 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     }
 
     @objc func initialize(_ call: CAPPluginCall) {
-        if engine.start(withBufferFrames: call.getInt("bufferSize", 128)) {
+        if engine.start(
+            withBufferFrames: call.getInt("bufferSize", 128),
+            sampleRate: call.getDouble("sampleRate", 48_000)
+        ) {
             call.resolve(["ready": true])
         } else {
             let detail = engine.lastAudioErrorMessage
@@ -122,6 +125,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             call.getString("deviceId", ""),
             channels: min(32, max(1, call.getInt("channels", 2))),
             bufferFrames: min(512, max(32, call.getInt("bufferSize", 128))),
+            sampleRate: call.getDouble("sampleRate", 48_000),
             preserveEngine: call.getBool("preserveEngine", false)
         )
         if ok { call.resolve() } else { call.reject("Não foi possível abrir o dispositivo de áudio selecionado.") }
@@ -239,16 +243,16 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             compressorAttackMs: call.getFloat("compressorAttackMs", 10),
             compressorReleaseMs: call.getFloat("compressorReleaseMs", 160),
             compressorGainDb: call.getFloat("compressorGainDb", 0),
-            compressorMix: call.getFloat("compressorMix", 1),
+            compressorMix: call.getFloat("compressorMix", 0),
             delaySync: call.getBool("delaySync", false),
             delayMs: call.getFloat("delayMs", 500),
             delayBeatMultiplier: call.getFloat("delayBeatMultiplier", 1),
             delayFeedback: call.getFloat("delayFeedback", 0.35),
-            delayMix: call.getFloat("delayMix", 0.25),
+            delayMix: call.getFloat("delayMix", 0),
             reverbDecay: call.getFloat("reverbDecay", 0.5),
             reverbDampen: call.getFloat("reverbDampen", 0.5),
             reverbSize: call.getFloat("reverbSize", 0.6),
-            reverbMix: call.getFloat("reverbMix", 0.25),
+            reverbMix: call.getFloat("reverbMix", 0),
             rotaryEnabled: call.getBool("rotaryEnabled", false),
             rotarySpeed: call.getInt("rotarySpeed", 1),
             rotarySlowHz: call.getFloat("rotarySlowHz", 0.8),

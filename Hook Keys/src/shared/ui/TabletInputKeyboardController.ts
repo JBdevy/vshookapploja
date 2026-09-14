@@ -60,20 +60,28 @@ export class TabletInputKeyboardController {
     input.focus({ preventScroll: true });
     this.moveCaretToEnd(input);
 
+    const numeric = this.isNumericInput(input);
+    const decimal = this.acceptsDecimal(input);
+    const layout = numeric ? (decimal ? 'decimal' : 'numeric') : 'text';
+    if (this.keyboard?.dataset.inputLayout !== layout) {
+      this.keyboard?.remove();
+      this.keyboard = null;
+    }
     if (!this.keyboard) {
       const body = this.modal.querySelector<HTMLElement>('.player-modal__body');
       if (!body) return;
       body.insertAdjacentHTML(
         'beforeend',
-        input.dataset.keyboardNumeric === 'true'
+        numeric
           ? createNumericOnScreenKeyboardMarkup(
-              this.keyboardLabel(input), input.dataset.keyboardDecimal === 'true')
+              this.keyboardLabel(input), decimal)
           : createOnScreenKeyboardMarkup(this.keyboardLabel(input)),
       );
       this.keyboard = body.lastElementChild instanceof HTMLElement
         ? body.lastElementChild
         : null;
       this.keyboard?.classList.add('player-modal__tablet-keyboard');
+      if (this.keyboard) this.keyboard.dataset.inputLayout = layout;
     }
     this.updateKeyboardAvailability(input);
     this.modal.classList.add('is-tablet-keyboard-open');
@@ -132,8 +140,8 @@ export class TabletInputKeyboardController {
 
   private applyKey(input: EditableInput, key: string): void {
     const currentValue = input.value;
-    const numeric = input instanceof HTMLInputElement && (input.type === 'number' || input.dataset.keyboardNumeric === 'true');
-    const decimal = input instanceof HTMLInputElement && input.dataset.keyboardDecimal === 'true';
+    const numeric = this.isNumericInput(input);
+    const decimal = this.acceptsDecimal(input);
     if (numeric && key !== 'backspace' && !/^\d$/.test(key) && !(decimal && key === '.')) return;
 
     const selectionStart = input.selectionStart ?? currentValue.length;
@@ -157,7 +165,7 @@ export class TabletInputKeyboardController {
     }
 
     const nextValue = `${before}${after}`;
-    if (numeric && !this.isAllowedNumericValue(input, nextValue)) return;
+    if (numeric && input instanceof HTMLInputElement && !this.isAllowedNumericValue(input, nextValue)) return;
     input.value = nextValue;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.focus({ preventScroll: true });
@@ -179,6 +187,10 @@ export class TabletInputKeyboardController {
   private prepareInput(input: EditableInput): void {
     if (!this.isEditableInput(input) || input.dataset.tabletKeyboardManaged === 'true') return;
     input.dataset.tabletKeyboardManaged = 'true';
+    if (input instanceof HTMLInputElement && ['numeric', 'decimal'].includes(input.inputMode)) {
+      input.dataset.keyboardNumeric = 'true';
+      if (input.inputMode === 'decimal') input.dataset.keyboardDecimal = 'true';
+    }
     input.readOnly = true;
     input.setAttribute('inputmode', 'none');
     input.setAttribute('autocomplete', 'off');
@@ -188,11 +200,26 @@ export class TabletInputKeyboardController {
     return !input.disabled && !input.hidden && input.getAttribute('aria-hidden') !== 'true';
   }
 
+  private isNumericInput(input: EditableInput): boolean {
+    return input instanceof HTMLInputElement
+      && (input.type === 'number' || input.dataset.keyboardNumeric === 'true');
+  }
+
+  private acceptsDecimal(input: EditableInput): boolean {
+    if (!(input instanceof HTMLInputElement)) return false;
+    if (input.dataset.keyboardDecimal === 'true') return true;
+    if (input.type !== 'number') return false;
+    if (input.step === 'any') return true;
+    const step = Number(input.step);
+    return Number.isFinite(step) && step > 0 && !Number.isInteger(step);
+  }
+
   private maximumLength(input: EditableInput): number {
     if (input instanceof HTMLInputElement && input.maxLength > 0) return input.maxLength;
     if (input instanceof HTMLInputElement && input.type === 'number') {
-      const maximum = Number(input.max);
-      return Number.isFinite(maximum) ? String(Math.abs(Math.trunc(maximum))).length : 6;
+      const maximum = input.max ? Number(input.max) : NaN;
+      const digits = Number.isFinite(maximum) ? String(Math.abs(Math.trunc(maximum))).length : 6;
+      return digits + (this.acceptsDecimal(input) ? 4 : 0);
     }
     return 64;
   }
@@ -201,7 +228,7 @@ export class TabletInputKeyboardController {
     if (value === '') return true;
     const number = Number(value);
     if (!Number.isFinite(number)) return false;
-    const maximum = Number(input.max);
+    const maximum = input.max ? Number(input.max) : NaN;
     return !Number.isFinite(maximum) || number <= maximum;
   }
 

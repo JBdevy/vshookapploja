@@ -76,9 +76,9 @@ export function createMetronomeKnobMarkup(volume: number): string {
   const angle = -135 + (position / 100) * 270;
   return `
     <label class="player-output-knob" data-output-knob="metronome" style="--knob-angle:${angle}deg;--knob-progress:${position / 100};--knob-accent:#24b8ff">
-      <span>Metrônomo</span>
+      <span>Click</span>
       <span class="player-output-knob__face" aria-hidden="true"><i></i></span>
-      <input type="range" min="0" max="100" step="0.1" value="${position}" data-metronome-output-volume aria-label="Volume do metrônomo" aria-valuetext="${formatOutputDb(levelDb)}">
+      <input type="range" min="0" max="100" step="0.1" value="${position}" data-metronome-output-volume aria-label="Volume do Click" aria-valuetext="${formatOutputDb(levelDb)}">
       <output data-metronome-output-value>${formatOutputDb(levelDb)}</output>
     </label>
   `;

@@ -29,8 +29,11 @@ import {
   createAppSettingsMarkup,
   createMidiSettingsMarkup,
   DEFAULT_BUFFER_SIZE,
+  DEFAULT_SAMPLE_RATE,
   isBufferSize,
+  isSampleRate,
   type BufferSize,
+  type SampleRate,
 } from './AppSettingsView';
 import {
   createPadsEffectsMarkup,
@@ -214,7 +217,7 @@ import {
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
 type BankId = 'A' | 'B';
 type PlayerView = 'bank' | 'pads-effects';
 
@@ -351,6 +354,7 @@ interface AccountControls {
   getSoundCatalog: () => Promise<SoundCatalogPayload>;
   getProfile: () => Promise<AccountProfile>;
   saveProfilePhoto: (imageDataUrl: string) => Promise<AccountProfile>;
+  saveProfileName: (name: string) => Promise<AccountProfile>;
   confirmDeviceRemoval: (deviceId: string, password: string) => Promise<{ ok: true; currentDeviceRemoved: boolean }>;
   requestPasswordReset: () => Promise<RequestCodeResponse>;
   verifyPasswordResetCode: (challengeId: string, code: string) => Promise<PasswordResetTokenResponse>;
@@ -390,6 +394,48 @@ const PRESET_COLORS = [
   ['#e89b31', '#62400d'],
   ['#57c957', '#174f1a'],
 ] as const;
+
+const CHORD_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'] as const;
+const CHORD_PATTERNS: readonly { intervals: readonly number[]; suffix: string }[] = [
+  { intervals: [0, 4, 7, 11], suffix: 'maj7' },
+  { intervals: [0, 3, 7, 10], suffix: 'm7' },
+  { intervals: [0, 4, 7, 10], suffix: '7' },
+  { intervals: [0, 3, 6, 10], suffix: 'm7(b5)' },
+  { intervals: [0, 3, 6, 9], suffix: 'dim7' },
+  { intervals: [0, 4, 7, 9], suffix: '6' },
+  { intervals: [0, 3, 7, 9], suffix: 'm6' },
+  { intervals: [0, 5, 7], suffix: 'sus4' },
+  { intervals: [0, 2, 7], suffix: 'sus2' },
+  { intervals: [0, 4, 8], suffix: 'aug' },
+  { intervals: [0, 3, 6], suffix: 'dim' },
+  { intervals: [0, 4, 7], suffix: '' },
+  { intervals: [0, 3, 7], suffix: 'm' },
+];
+
+function performanceNotesLabel(notes: readonly number[]): string {
+  const sortedNotes = [...new Set(notes)]
+    .filter((note) => Number.isInteger(note) && note >= 0 && note <= 127)
+    .sort((left, right) => left - right);
+  if (sortedNotes.length === 0) return '—';
+  if (sortedNotes.length === 1) return formatMidiNote(sortedNotes[0]!);
+
+  const pitchClasses = [...new Set(sortedNotes.map((note) => note % 12))].sort((left, right) => left - right);
+  if (pitchClasses.length >= 3) {
+    for (const root of pitchClasses) {
+      const intervals = pitchClasses.map((pitch) => (pitch - root + 12) % 12).sort((left, right) => left - right);
+      const chord = CHORD_PATTERNS.find((candidate) =>
+        candidate.intervals.length === intervals.length
+        && candidate.intervals.every((interval, index) => interval === intervals[index]));
+      if (!chord) continue;
+      const bass = sortedNotes[0]! % 12;
+      const inversion = bass === root ? '' : `/${CHORD_NOTE_NAMES[bass]}`;
+      return `${CHORD_NOTE_NAMES[root]}${chord.suffix}${inversion}`;
+    }
+  }
+
+  const visibleNotes = sortedNotes.slice(0, 6).map(formatMidiNote).join(' · ');
+  return sortedNotes.length > 6 ? `${visibleNotes} +${sortedNotes.length - 6}` : visibleNotes;
+}
 
 function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'module-volume') return `module:${target.moduleNumber}`;
@@ -791,6 +837,7 @@ export class PlayerScreen {
   private tracksLoopEnabled = false;
   private visibleTrackSequence: LocalTrack[] = [];
   private renderedQueuedTrackName = '';
+  private readonly displayedPerformanceNotes = new Map<string, number>();
   private trackPlaybackSnapshot: TrackPlaybackSnapshot = {
     progress: 0,
     queueProgress: 0,
@@ -923,6 +970,7 @@ export class PlayerScreen {
   private selectedAudioDeviceId = '';
   private audioRouting: AudioBusRouting = { ...DEFAULT_AUDIO_ROUTING };
   private bufferSize: BufferSize = DEFAULT_BUFFER_SIZE;
+  private sampleRate: SampleRate = DEFAULT_SAMPLE_RATE;
   private audioLoadPercent = 0;
   private audioLoadAlarmUntil = 0;
   private compatibilityMode = false;
@@ -996,12 +1044,9 @@ export class PlayerScreen {
               >Playlist</button>
             </div>
             ${createTrackTransportMarkup()}
-            <div class="player-next-field" aria-label="Próxima música">
-              <span>Próxima</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 12h13M13 6l6 6-6 6"></path>
-              </svg>
-              <strong class="player-next-field__track" data-next-track-name hidden><span></span></strong>
+            <div class="player-note-display" role="status" aria-live="polite" aria-label="Notas ou acordes tocados">
+              <span>Notas / Acordes</span>
+              <strong data-note-chord-display>—</strong>
             </div>
             <div class="player-top-actions">
               <button
@@ -1120,6 +1165,7 @@ export class PlayerScreen {
         () => this.selectBottomView('presets'),
         (noteNumber, pressed, velocity) => {
           const inputId = this.keyboardMidiRouter?.note(noteNumber, pressed, velocity) ?? null;
+          this.updatePerformanceNoteDisplay(`touch:${noteNumber}`, noteNumber, pressed);
           this.patternPlayback.handleInput({ inputId, noteNumber, pressed, velocity });
           return inputId;
         },
@@ -1136,6 +1182,7 @@ export class PlayerScreen {
       this.bottomView = 'presets';
       this.computerKeyboard = new ComputerKeyboardController((noteNumber, pressed, velocity) => {
         const inputId = this.keyboardMidiRouter?.note(noteNumber, pressed, velocity) ?? null;
+        this.updatePerformanceNoteDisplay(`computer:${noteNumber}`, noteNumber, pressed);
         const detail = { channel: 1, inputId, noteNumber, pressed, velocity };
         this.patternPlayback.handleInput(detail);
         window.dispatchEvent(new CustomEvent('hookkeys:performance-note', { detail }));
@@ -1174,7 +1221,7 @@ export class PlayerScreen {
     void restorePromise.finally(() => {
       this.playerBackup.start(() => this.createSavedPlayerState());
     });
-    const initializePromise = hookKeysNative.initialize(this.bufferSize);
+    const initializePromise = restorePromise.then(() => hookKeysNative.initialize(this.bufferSize, this.sampleRate));
     this.nativeBootPromise = Promise.all([
       initializePromise,
       restorePromise.catch(() => undefined),
@@ -1317,6 +1364,7 @@ export class PlayerScreen {
   async suspendLiveMidi(): Promise<void> {
     this.liveMidiEnabled = false;
     this.patternPlayback.reset();
+    this.clearPerformanceNoteDisplay();
     await hookKeysNative.setMidiInputEnabled(false);
   }
 
@@ -1341,6 +1389,7 @@ export class PlayerScreen {
   destroy(): void {
     if (!this.mounted) return;
     this.liveMidiEnabled = false;
+    this.clearPerformanceNoteDisplay();
     this.soundfontSelectionRevision += 1;
     void hookKeysNative.setMidiInputEnabled(false);
     this.closeModal(false);
@@ -3546,6 +3595,11 @@ export class PlayerScreen {
     const matchesKeyboard = keyboardInputId === null || input.inputId === null || input.inputId === keyboardInputId;
     if (matchesKeyboard) {
       this.performanceKeyboard?.setMidiNote(input.noteNumber, input.pressed);
+      this.updatePerformanceNoteDisplay(
+        `midi:${input.inputId ?? 'virtual'}:${input.channel}:${input.noteNumber}`,
+        input.noteNumber,
+        input.pressed,
+      );
     }
     window.dispatchEvent(new CustomEvent('hookkeys:performance-note', { detail: input }));
     this.patternPlayback.handleInput(input);
@@ -3556,6 +3610,20 @@ export class PlayerScreen {
     if (!moduleState) return;
     if (moduleState.midiInputId && input.inputId && moduleState.midiInputId !== input.inputId) return;
     this.applyLearnedMidiNote(input.noteNumber);
+  }
+
+  private updatePerformanceNoteDisplay(source: string, noteNumber: number, pressed: boolean): void {
+    if (!Number.isInteger(noteNumber) || noteNumber < 0 || noteNumber > 127) return;
+    if (pressed) this.displayedPerformanceNotes.set(source, noteNumber);
+    else this.displayedPerformanceNotes.delete(source);
+    const output = this.root.querySelector<HTMLElement>('[data-note-chord-display]');
+    if (output) output.textContent = performanceNotesLabel([...this.displayedPerformanceNotes.values()]);
+  }
+
+  private clearPerformanceNoteDisplay(): void {
+    this.displayedPerformanceNotes.clear();
+    const output = this.root.querySelector<HTMLElement>('[data-note-chord-display]');
+    if (output) output.textContent = '—';
   }
 
   // Leaving the Clean confirmation goes back to where it came from. Opening it
@@ -4053,7 +4121,9 @@ export class PlayerScreen {
     } else if (kind === 'app-settings-midi') {
       bodyMarkup = createMidiSettingsMarkup(this.midiInput.getInputDevices(), this.selectedMidiInputIds);
     } else if (kind === 'app-settings-audio') {
-      bodyMarkup = createAudioSettingsMarkup(this.audioDevices, this.selectedAudioDeviceId, this.audioRouting, this.bufferSize);
+      bodyMarkup = createAudioSettingsMarkup(
+        this.audioDevices, this.selectedAudioDeviceId, this.audioRouting, this.bufferSize, this.sampleRate,
+      );
     } else if (kind === 'keyboard-settings') {
       bodyMarkup = createPerformanceKeyboardSettingsMarkup(this.keyboardMidiSlot, this.keyboardStyle);
     } else if (kind === 'password-reset') {
@@ -4298,7 +4368,12 @@ export class PlayerScreen {
             </button>
             <div class="user-panel__identity-copy">
               <span>Perfil</span>
-              <strong data-user-name></strong>
+              <div class="user-panel__name-row">
+                <strong data-user-name></strong>
+                <button class="user-profile-edit-name" type="button" data-user-profile-action="edit-name" aria-label="Editar nome">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16.5V20h3.5L18.8 8.7l-3.5-3.5L4 16.5Zm17-10.6a1 1 0 0 0 0-1.4l-1.5-1.5a1 1 0 0 0-1.4 0l-1.7 1.7 3.5 3.5L21 5.9Z"/></svg>
+                </button>
+              </div>
               <small data-user-created>Carregando data da conta...</small>
             </div>
             <input type="file" accept="image/*" data-user-profile-file hidden>
@@ -4319,6 +4394,16 @@ export class PlayerScreen {
             </div>
           </div>
           <p class="user-profile-message" data-user-profile-message role="status" aria-live="polite"></p>
+        </section>
+      `;
+    } else if (kind === 'user-name') {
+      bodyMarkup = `
+        <section class="user-name-editor">
+          <label>
+            <span>Nome do usuário</span>
+            <input type="text" maxlength="80" autocomplete="name" autocapitalize="words" spellcheck="false" data-user-name-input>
+          </label>
+          <p data-user-name-message role="alert" aria-live="polite"></p>
         </section>
       `;
     } else if (kind === 'tracks') {
@@ -4349,6 +4434,11 @@ export class PlayerScreen {
       ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
           <button class="player-modal__logout-button" type="button" data-action="logout">Sair</button>
+        `
+      : kind === 'user-name'
+        ? `
+          <button class="player-modal__back-button" type="button" data-modal-action="cancel">Cancelar</button>
+          <button class="player-modal__confirm-button" type="button" data-modal-action="save-user-name">Aplicar</button>
         `
       : kind === 'password-reset'
         ? `<button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>`
@@ -4514,6 +4604,9 @@ export class PlayerScreen {
     } else if (kind === 'user') {
       eyebrow.textContent = 'Hook Keys';
       title.textContent = 'Usuário';
+    } else if (kind === 'user-name') {
+      eyebrow.textContent = 'Perfil';
+      title.textContent = 'Editar nome';
     } else if (kind === 'tracks') {
       eyebrow.textContent = 'Hook Keys';
       title.textContent = 'Playlist';
@@ -5028,6 +5121,11 @@ export class PlayerScreen {
         modal.querySelector<HTMLInputElement>('[data-user-profile-file]')?.click();
         return;
       }
+      if (kind === 'user' && userProfileAction === 'edit-name') {
+        const button = target instanceof Element ? target.closest<HTMLButtonElement>('[data-user-profile-action="edit-name"]') : null;
+        if (button) this.openChildModal('user-name', null, button);
+        return;
+      }
 
       const userSoundfontAction = target instanceof Element
         ? target.closest<HTMLButtonElement>('button[data-user-sf2-action]')?.dataset.userSf2Action
@@ -5265,6 +5363,11 @@ export class PlayerScreen {
         this.markPlayerStateChanged();
         return;
       }
+      if (kind === 'user-name' && modalAction === 'save-user-name') {
+        const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
+        if (button) void this.saveUserProfileName(modal, button);
+        return;
+      }
       if (modalAction === 'confirm' || modalAction === 'cancel') {
         if (modalAction === 'cancel' && kind === 'password-reset') {
           this.passwordResetChallenge = null;
@@ -5283,7 +5386,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
           this.commitModulePolyphony(modal, moduleNumber);
         }
-        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'glide-config' || kind === 'module-arpeggiator' || kind === 'module-sequencer' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'glide-config' || kind === 'module-arpeggiator' || kind === 'module-sequencer' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -5666,6 +5769,9 @@ export class PlayerScreen {
         const confirmation = modal.querySelector<HTMLInputElement>('[data-confirm-new-password]');
         const save = modal.querySelector<HTMLButtonElement>('[data-modal-action="save-password-reset"]');
         if (save) save.disabled = !password || !confirmation || password.value.length < 8 || confirmation.value.length < 8;
+      } else if (kind === 'user-name' && input.matches('[data-user-name-input]')) {
+        const save = modal.querySelector<HTMLButtonElement>('[data-modal-action="save-user-name"]');
+        if (save) save.disabled = input.value.trim().length === 0;
       }
       if (kind === 'module-eq' && moduleNumber !== null && input.matches('[data-module-eq-q]')) {
         this.updateModuleEqQ(modal, input, moduleNumber);
@@ -5688,6 +5794,10 @@ export class PlayerScreen {
       this.tabletInputKeyboardController.mount();
       if (kind === 'tempo-edit') {
         const input = modal.querySelector<HTMLInputElement>('[data-tempo-input]');
+        if (input) this.tabletInputKeyboardController.openFor(input);
+      }
+      if (kind === 'user-name') {
+        const input = modal.querySelector<HTMLInputElement>('[data-user-name-input]');
         if (input) this.tabletInputKeyboardController.openFor(input);
       }
     }
@@ -5729,6 +5839,14 @@ export class PlayerScreen {
     if (userName) userName.textContent = immediateUserName;
     const userPhotoFallback = modal.querySelector<HTMLElement>('[data-user-photo-fallback]');
     if (userPhotoFallback) userPhotoFallback.textContent = initialsFor(immediateUserName);
+    if (kind === 'user-name') {
+      const input = requiredElement<HTMLInputElement>(modal, '[data-user-name-input]');
+      input.value = this.account.name?.trim() || '';
+      const apply = modal.querySelector<HTMLButtonElement>('[data-modal-action="save-user-name"]');
+      if (apply) apply.disabled = input.value.length === 0;
+      if (this.desktopRuntime) input.focus();
+      else this.tabletInputKeyboardController?.openFor(input);
+    }
     if (kind === 'preset-name') {
       const input = requiredElement<HTMLInputElement>(modal, '[data-preset-name-input]');
       input.value = presetState?.name ?? 'Preset';
@@ -5832,6 +5950,7 @@ export class PlayerScreen {
 
   private renderUserProfile(modal: HTMLElement, profile: AccountProfile): void {
     const name = profile.name.trim() || profile.email;
+    this.account.name = profile.name.trim();
     const nameElement = modal.querySelector<HTMLElement>('[data-user-name]');
     const createdElement = modal.querySelector<HTMLElement>('[data-user-created]');
     const fallback = modal.querySelector<HTMLElement>('[data-user-photo-fallback]');
@@ -5848,6 +5967,27 @@ export class PlayerScreen {
       image.src = profile.photoDataUrl;
       image.hidden = false;
       if (fallback) fallback.hidden = true;
+    }
+  }
+
+  private async saveUserProfileName(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
+    const input = modal.querySelector<HTMLInputElement>('[data-user-name-input]');
+    const message = modal.querySelector<HTMLElement>('[data-user-name-message]');
+    const name = input?.value.replace(/\s+/g, ' ').trim() ?? '';
+    if (!input || !name) {
+      if (message) message.textContent = 'Digite o nome do usuário.';
+      return;
+    }
+    button.disabled = true;
+    if (message) message.textContent = 'Salvando nome...';
+    try {
+      const profile = await this.accountControls.saveProfileName(name);
+      this.account.name = profile.name;
+      if (!modal.isConnected) return;
+      this.returnToPreviousModal();
+    } catch {
+      if (message) message.textContent = 'Não foi possível atualizar o nome.';
+      if (button.isConnected) button.disabled = false;
     }
   }
 
@@ -6421,6 +6561,15 @@ export class PlayerScreen {
         this.bufferSize = value;
         this.markPlayerStateChanged();
         void this.applyNativeAudioOutputWithFeedback(true);
+      }
+      return;
+    }
+    if (select.dataset.setting === 'sample-rate') {
+      const value = Number.parseInt(select.value, 10);
+      if (isSampleRate(value) && value !== this.sampleRate) {
+        this.sampleRate = value;
+        this.markPlayerStateChanged();
+        void this.applyNativeAudioOutputWithFeedback(false);
       }
       return;
     }
@@ -7537,7 +7686,7 @@ export class PlayerScreen {
     if (forceRestart) {
       this.soundfontSelectionRevision += 1;
       await this.nativeSoundfontSyncQueue.catch(() => undefined);
-      const restarted = await hookKeysNative.recoverDefaultAudioOutput(this.bufferSize);
+      const restarted = await hookKeysNative.recoverDefaultAudioOutput(this.bufferSize, this.sampleRate);
       if (restarted) {
         this.nativeEngineReady = false;
         this.applySelectedMidiInputs();
@@ -7609,6 +7758,7 @@ export class PlayerScreen {
         device?.id ?? '',
         device?.channels ?? 2,
         this.bufferSize,
+        this.sampleRate,
         preserveEngine,
       );
       if (!this.mounted) return;
@@ -8451,7 +8601,7 @@ export class PlayerScreen {
   }
 
   private async performNativeEngineSync(): Promise<void> {
-    if (!await hookKeysNative.initialize(this.bufferSize)) {
+    if (!await hookKeysNative.initialize(this.bufferSize, this.sampleRate)) {
       throw new Error(hookKeysNative.initializationErrorMessage() ?? 'native_audio_unavailable');
     }
     if (this.nativePresetTransitionPending || this.nativePresetTransitionInFlight) {
@@ -8719,6 +8869,7 @@ export class PlayerScreen {
       activeEffectBank: this.activeEffectBank,
       bufferSize: this.bufferSize,
       bufferSizeDefault: 'safe-256',
+      sampleRate: this.sampleRate,
       compatibilityMode: this.compatibilityMode,
       seamlessPresetSwitching: this.seamlessPresetSwitching,
       bottomView: this.bottomView,
@@ -8778,6 +8929,8 @@ export class PlayerScreen {
         ? savedBufferSize
         : (Math.max(savedBufferSize, DEFAULT_BUFFER_SIZE) as BufferSize);
     }
+    const savedSampleRate = Number(value.sampleRate);
+    if (isSampleRate(savedSampleRate)) this.sampleRate = savedSampleRate;
     this.selectedAudioDeviceId = asString(value.audioDeviceId).slice(0, 500);
     const savedAudioRouting = isRecord(value.audioRouting) ? value.audioRouting : {};
     this.audioRouting = {

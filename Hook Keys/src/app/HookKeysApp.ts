@@ -52,6 +52,28 @@ function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): str
   `;
 }
 
+function welcomeDisplayName(session: AuthenticatedSession): string {
+  const accountName = session.account.name?.trim();
+  if (accountName) return Array.from(accountName).slice(0, 80).join('');
+  const emailName = session.account.email.split('@')[0]?.trim();
+  return emailName || 'Músico';
+}
+
+function createWelcomeTransitionMarkup(): string {
+  return `
+    <section class="welcome-transition" data-welcome-transition role="status" aria-live="polite">
+      <div class="welcome-transition__light" aria-hidden="true"></div>
+      <div class="welcome-transition__content">
+        <span class="welcome-transition__brand">HOOK KEYS</span>
+        <strong class="welcome-transition__text" data-welcome-text></strong>
+        <i class="welcome-transition__caret" aria-hidden="true"></i>
+        <small>PRONTO PARA SUA PERFORMANCE</small>
+      </div>
+      <div class="welcome-transition__line" aria-hidden="true"></div>
+    </section>
+  `;
+}
+
 export class HookKeysApp {
   private readonly screenRoot: HTMLElement;
   private playerScreen: PlayerScreen | null = null;
@@ -131,6 +153,11 @@ export class HookKeysApp {
         saveProfilePhoto: async (imageDataUrl) => (
           await this.accountApi.saveProfilePhoto(session.token, imageDataUrl)
         ).profile,
+        saveProfileName: async (name) => {
+          const { profile } = await this.accountApi.saveProfileName(session.token, name);
+          await this.sessions.updateCachedAccountName(session, profile.name);
+          return profile;
+        },
         confirmDeviceRemoval: (deviceId, password) => this.sessions.confirmDeviceRemoval(session, deviceId, password),
         requestPasswordReset: () => this.sessions.requestPasswordReset(session),
         verifyPasswordResetCode: (challengeId, code) => this.sessions.verifyPasswordResetCode(session, challengeId, code),
@@ -148,6 +175,8 @@ export class HookKeysApp {
     // O overlay de carregamento já cobre o player quando o preto é retirado.
     cover.remove();
     await loading;
+    if (changeId !== this.screenChangeId) return;
+    await this.playWelcomeTransition(welcomeDisplayName(session));
     if (changeId === this.screenChangeId) await this.playerScreen?.activateLiveMidi();
     } catch (error) {
       if (changeId === this.screenChangeId) this.showStartupError(session, error);
@@ -224,6 +253,58 @@ export class HookKeysApp {
           resolve();
         });
       });
+    });
+  }
+
+  private playWelcomeTransition(name: string): Promise<void> {
+    this.octaveTransition?.remove();
+    const holder = document.createElement('div');
+    holder.innerHTML = createWelcomeTransitionMarkup().trim();
+    const overlay = holder.firstElementChild as HTMLElement | null;
+    const textElement = overlay?.querySelector<HTMLElement>('[data-welcome-text]');
+    if (!overlay || !textElement) return Promise.resolve();
+
+    const fullText = `Bem Vindo, ${name}`;
+    const characters = Array.from(fullText);
+    overlay.setAttribute('aria-label', fullText);
+    this.octaveTransition = overlay;
+    document.body.append(overlay);
+
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    return new Promise((resolve) => {
+      const finish = () => {
+        overlay.remove();
+        if (this.octaveTransition === overlay) this.octaveTransition = null;
+        resolve();
+      };
+      window.requestAnimationFrame(() => overlay.classList.add('is-running'));
+      if (reducedMotion) {
+        textElement.textContent = fullText;
+        window.setTimeout(finish, 1100);
+        return;
+      }
+
+      let visibleCount = 0;
+      const typeNext = () => {
+        visibleCount += 1;
+        textElement.textContent = characters.slice(0, visibleCount).join('');
+        if (visibleCount < characters.length) {
+          window.setTimeout(typeNext, 64);
+          return;
+        }
+        window.setTimeout(eraseNext, 1050);
+      };
+      const eraseNext = () => {
+        visibleCount -= 1;
+        textElement.textContent = characters.slice(0, Math.max(0, visibleCount)).join('');
+        if (visibleCount > 0) {
+          window.setTimeout(eraseNext, 38);
+          return;
+        }
+        overlay.classList.add('is-leaving');
+        window.setTimeout(finish, 360);
+      };
+      window.setTimeout(typeNext, 380);
     });
   }
 }

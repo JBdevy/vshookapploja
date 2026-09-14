@@ -169,6 +169,15 @@ export class AuthSessionService {
     return this.api.completePasswordReset(session.token, passwordToken, password);
   }
 
+  async updateCachedAccountName(session: AuthenticatedSession, name: string): Promise<void> {
+    session.account.name = name;
+    await this.vault.writeSession({
+      token: session.token,
+      expiresAt: session.expiresAt,
+      account: session.account,
+    });
+  }
+
   startLicenseMonitoring(
     session: AuthenticatedSession,
     onAccessRemoved: () => void,

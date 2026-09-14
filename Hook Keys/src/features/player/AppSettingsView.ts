@@ -4,12 +4,18 @@ import { createAudioRouteOptions, type AudioBusRouting, type AudioOutputDevice }
 
 export const BUFFER_SIZES = [64, 128, 256, 512] as const;
 export type BufferSize = (typeof BUFFER_SIZES)[number];
+export const SAMPLE_RATES = [44_100, 48_000] as const;
+export type SampleRate = (typeof SAMPLE_RATES)[number];
 // 128 quadros sao 2,7 ms a 48 kHz: uma unica falta de pagina ou um bloco no
 // nucleo eficiente ja estoura o prazo. 256 da o dobro de folga e continua
 // abaixo de 6 ms de latencia, imperceptivel ao tocar.
 export const DEFAULT_BUFFER_SIZE: BufferSize = 256;
+export const DEFAULT_SAMPLE_RATE: SampleRate = 48_000;
 export function isBufferSize(value: number): value is BufferSize {
   return BUFFER_SIZES.some((bufferSize) => bufferSize === value);
+}
+export function isSampleRate(value: number): value is SampleRate {
+  return SAMPLE_RATES.some((sampleRate) => sampleRate === value);
 }
 
 function escapeHtml(value: string): string {
@@ -124,10 +130,14 @@ export function createAudioSettingsMarkup(
   selectedAudioDeviceId: string,
   audioRouting: AudioBusRouting,
   bufferSize: BufferSize,
+  sampleRate: SampleRate,
 ): string {
   const bufferOptions = BUFFER_SIZES.map((size) =>
     `<option value="${size}"${size === bufferSize ? ' selected' : ''}>${size}</option>`,
   ).join('');
+  const sampleRateOptions = SAMPLE_RATES.map((rate) => (
+    `<option value="${rate}"${rate === sampleRate ? ' selected' : ''}>${rate === 44_100 ? '44.100 Hz' : '48.000 Hz'}</option>`
+  )).join('');
   const selectedAudioDevice = audioDevices.find(({ id }) => id === selectedAudioDeviceId);
   const channelCount = selectedAudioDevice?.channels ?? 2;
   const audioDeviceOptions = audioDevices.map((device) => `
@@ -147,6 +157,11 @@ export function createAudioSettingsMarkup(
       <label class="app-settings-field app-settings-field--buffer">
         <span>Buffer Size</span>
         <select data-setting="buffer-size">${bufferOptions}</select>
+      </label>
+
+      <label class="app-settings-field app-settings-field--sample-rate">
+        <span>Sample Rate</span>
+        <select data-setting="sample-rate">${sampleRateOptions}</select>
       </label>
 
       ${([

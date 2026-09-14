@@ -20,10 +20,11 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 @property(nonatomic, copy, nullable) HKMidiDevicesChangedHandler onMidiDevicesChanged;
 @property(nonatomic, readonly, copy) NSString *lastAudioErrorMessage;
 
-- (BOOL)startWithBufferFrames:(NSInteger)bufferFrames;
+- (BOOL)startWithBufferFrames:(NSInteger)bufferFrames sampleRate:(double)sampleRate;
 - (BOOL)setAudioOutputDeviceId:(NSString *)deviceId
                       channels:(NSInteger)channels
                   bufferFrames:(NSInteger)bufferFrames
+                    sampleRate:(double)sampleRate
                 preserveEngine:(BOOL)preserveEngine;
 - (BOOL)audioOutputReady;
 - (void)setMidiInputEnabled:(BOOL)enabled;

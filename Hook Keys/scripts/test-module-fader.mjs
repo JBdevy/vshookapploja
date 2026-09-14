@@ -8,6 +8,22 @@ const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const handleRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .filter(([, selector]) => selector.trim().endsWith('.player-module__fader-handle'));
 
+test('iOS bridge registers a plugin instance rather than a type skipped by auto-registration', () => {
+  const controller = readFileSync(new URL('../ios/App/App/HookKeysBridgeViewController.swift', import.meta.url), 'utf8');
+  assert.match(controller, /private let hookKeysNativePlugin = HookKeysNativePlugin\(\)/);
+  assert.match(controller, /bridge\?\.registerPluginInstance\(hookKeysNativePlugin\)/);
+  assert.doesNotMatch(controller, /bridge\?\.registerPluginType\(/);
+});
+
+test('mobile effects omitted from a call stay bypassed rather than activating compression', () => {
+  const plugin = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
+  const iosPlugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  for (const effect of ['compressorMix', 'delayMix', 'reverbMix']) {
+    assert(plugin.includes(`call.getFloat("${effect}", 0.0f)`), `${effect} deve nascer em zero`);
+    assert(iosPlugin.includes(`call.getFloat("${effect}", 0)`), `${effect} deve nascer em zero no iOS`);
+  }
+});
+
 test('module fader handles reach the inner edges without protruding in every layout', () => {
   assert(handleRules.length >= 3);
   const offsets = handleRules.filter(([, , declarations]) => /(?:left|right):/.test(declarations));

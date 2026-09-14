@@ -588,6 +588,7 @@ fn start_audio(
     device_id: &str,
     requested_channels: u16,
     buffer_size: u32,
+    sample_rate: u32,
     preserve_engine: bool,
 ) -> Result<(), String> {
     let _restart = state.audio_restart.lock()
@@ -595,23 +596,16 @@ fn start_audio(
     let device = select_device(device_id)?;
     let buffer_size = buffer_size.clamp(64, 512);
     let requested_channels = requested_channels.clamp(1, 32);
-    // A named device uses its own default clock just like the system-default
-    // route. Advertised conversion rates are not the physical device clock.
     let system_default = device.default_output_config().ok();
-    let selected = if let Some(config) = system_default.as_ref().filter(|config| {
-        audio_config::usable_default(config, requested_channels, device_id.is_empty())
-    }) {
-        config.clone()
-    } else {
-        audio_config::select_config(
-            system_default,
-            device.supported_output_configs().map_err(|error| error.to_string())?,
-            requested_channels,
-            device_id.is_empty(),
-        ).ok_or_else(|| {
-            "A saída selecionada não oferece uma taxa e quantidade de canais compatíveis.".to_string()
-        })?
-    };
+    let selected = audio_config::select_config(
+        system_default,
+        device.supported_output_configs().map_err(|error| error.to_string())?,
+        requested_channels,
+        device_id.is_empty(),
+        sample_rate,
+    ).ok_or_else(|| {
+        "A saída selecionada não oferece a taxa e quantidade de canais escolhidas.".to_string()
+    })?;
 
     let channels = selected.channels();
     let sample_rate = selected.sample_rate();
@@ -849,6 +843,7 @@ fn build_audio_stream(
 #[tauri::command]
 fn initialize(
     buffer_size: u32,
+    sample_rate: u32,
     state: State<'_, AppState>,
 ) -> Result<HashMap<&'static str, bool>, String> {
     let ready = state
@@ -857,7 +852,7 @@ fn initialize(
         .map_err(|_| "Motor de áudio indisponível.".to_string())?
         .is_some();
     if !ready {
-        start_audio(&state, "", 2, buffer_size, false)?;
+        start_audio(&state, "", 2, buffer_size, sample_rate, false)?;
     }
     Ok(HashMap::from([("ready", true)]))
 }
@@ -867,10 +862,11 @@ fn set_audio_output_device(
     device_id: String,
     channels: u16,
     buffer_size: u32,
+    sample_rate: u32,
     preserve_engine: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    start_audio(&state, &device_id, channels, buffer_size, preserve_engine)
+    start_audio(&state, &device_id, channels, buffer_size, sample_rate, preserve_engine)
 }
 
 #[tauri::command]

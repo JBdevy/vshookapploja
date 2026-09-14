@@ -32,5 +32,30 @@ try {
     assert.equal(timers[0].delay, 6000, 'logout also lasts 6 seconds');
     timers.shift().callback(); await exit;
   }
-  console.log('LOADING_TRANSITION_OK: loading minimum 3 seconds, slow readiness, reduced motion and 6 second logout');
+  for (const reduced of [false, true]) {
+    window.matchMedia = () => ({ matches: reduced });
+    const fullText = 'Bem Vindo, João <Silva>';
+    const welcome = app.playWelcomeTransition('João <Silva>');
+    frames.shift()(0);
+    const text = window.document.querySelector('[data-welcome-text]');
+    if (reduced) {
+      assert.equal(text.textContent, fullText);
+      assert.equal(timers[0].delay, 1100);
+      timers.shift().callback();
+    } else {
+      assert.equal(text.textContent, '');
+      assert.equal(timers[0].delay, 380);
+      while (timers[0].delay !== 1050) timers.shift().callback();
+      assert.equal(text.textContent, fullText, 'nome é digitado completo');
+      assert.equal(text.childElementCount, 0, 'nome não é interpretado como HTML');
+      timers.shift().callback();
+      assert.equal(text.textContent, fullText.slice(0, -1), 'apaga letra a letra');
+      while (timers[0].delay !== 360) timers.shift().callback();
+      assert.equal(text.textContent, '');
+      timers.shift().callback();
+    }
+    await welcome;
+    assert(!window.document.querySelector('[data-welcome-transition]'));
+  }
+  console.log('LOADING_TRANSITION_OK: readiness, logout and personalized welcome typing/erasing, including reduced motion.');
 } finally { await window.happyDOM.abort(); }

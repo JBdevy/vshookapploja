@@ -1199,6 +1199,40 @@ void testIndependentOscillatorVolumes() {
   expect(firstOnly == render(2.0f, -1.0f, true, true), "volume gains clamp to zero through unity");
 }
 
+void testSynthPreservesLinearVelocityAndGain() {
+  const auto render = [](std::uint8_t velocity, float gain = 1.0f) {
+    hook_keys::AnalogSynthModule synth(48000.0);
+    hook_keys::AnalogSynthConfig config;
+    config.oscillator1 = config.oscillator2 = 0;
+    config.detuneCents = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+    config.filterResonance = 0.0f;
+    expect(synth.setConfig(config), "configure Synth linear-gain test");
+    synth.beginBlock();
+    synth.noteOn(69, velocity);
+    std::array<float, 4096> left{};
+    std::array<float, 4096> right{};
+    synth.renderAdd(left.data(), right.data(), left.size(), gain);
+    return left;
+  };
+  const auto soft = render(64);
+  const auto hard = render(127);
+  const auto halfGain = render(127, 0.5f);
+  const auto peak = [](const auto& samples) {
+    float result = 0.0f;
+    for (const auto sample : samples) result = std::max(result, std::abs(sample));
+    return result;
+  };
+  const auto softPeak = peak(soft);
+  const auto hardPeak = peak(hard);
+  expect(std::abs(hardPeak / softPeak - 127.0f / 64.0f) < 0.0001f,
+      "Synth preserves velocity dynamics without automatic compression");
+  expect(hardPeak > 1.5f, "two full-level oscillators are not secretly attenuated at unity gain");
+  for (std::size_t frame = 0; frame < hard.size(); ++frame) {
+    expect(std::abs(halfGain[frame] - hard[frame] * 0.5f) < 0.0001f,
+        "the Synth fader applies exactly its requested linear gain");
+  }
+}
+
 void testRotarySpeakerProcessing() {
   constexpr std::size_t frames = 48000;
   const auto input = [frames]() {
@@ -1447,7 +1481,8 @@ void testSynthRetriggerHasNoClick() {
     expect(largestStep(left, 11900, 12480) < steady * 3.0, "re-pressing a releasing note does not click");
     double lateEnergy = 0.0;
     for (std::size_t index = 16800; index < left.size(); ++index) lateEnergy += std::abs(left[index]);
-    expect(lateEnergy > 1000.0, "a note re-pressed during its release keeps sounding in every voice mode");
+    expect(lateEnergy > 1000.0,
+        "a note re-pressed during its release keeps sounding in every voice mode");
   }
 }
 
@@ -1957,59 +1992,75 @@ void testSixNoteSoundFontChordKeepsEveryVoice() {
 }
 
 void testNewSoftNoteDoesNotFilterHeldChord() {
-  for (bool sf2 : {false, true}) {
-    for (std::size_t frames : {64u, 256u, 512u}) {
-      std::array<std::unique_ptr<hook_keys::ModuleSynth>, 3> synths;
-      std::array<std::unique_ptr<hook_keys::HookKeysEngine>, 3> engines;
-      for (std::size_t i = 0; i < synths.size(); ++i) {
-        if (sf2) {
-          auto synth = std::make_unique<hook_keys::TinySoundFontModule>(48000, 512);
-          expect(synth->loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load velocity isolation SF2");
-          synths[i] = std::move(synth);
-        } else {
-          auto synth = std::make_unique<hook_keys::AnalogSynthModule>(48000);
-          hook_keys::AnalogSynthConfig config;
-          config.voiceMode = 0;
-          config.glideMs = 0;
-          config.filterEnvelope = 0;
-          config.lfoDepth = 0;
-          expect(synth->setConfig(config), "configure velocity isolation synth");
-          synths[i] = std::move(synth);
+  for (const bool sf2 : {false, true}) {
+    for (const bool interleaved : {false, true}) {
+      for (const auto velocities : {std::array<std::uint8_t, 2>{127, 35}, std::array<std::uint8_t, 2>{35, 127}}) {
+        for (const std::size_t frames : {64u, 256u, 512u}) {
+          std::array<std::unique_ptr<hook_keys::ModuleSynth>, 3> synths;
+          std::array<std::unique_ptr<hook_keys::HookKeysEngine>, 3> engines;
+          for (std::size_t i = 0; i < synths.size(); ++i) {
+            if (sf2) {
+              auto synth = std::make_unique<hook_keys::TinySoundFontModule>(48000, 512);
+              expect(synth->loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load velocity isolation SF2");
+              synths[i] = std::move(synth);
+            } else {
+              auto synth = std::make_unique<hook_keys::AnalogSynthModule>(48000);
+              hook_keys::AnalogSynthConfig config;
+              config.voiceMode = 0;
+              config.glideMs = 0;
+              config.filterEnvelope = 0;
+              config.lfoDepth = 0;
+              expect(synth->setConfig(config), "configure velocity isolation synth");
+              synths[i] = std::move(synth);
+            }
+            hook_keys::HookKeysEngine::SynthModules modules{};
+            modules[0] = synths[i].get();
+            engines[i] = std::make_unique<hook_keys::HookKeysEngine>(modules);
+            hook_keys::ModuleConfig config;
+            config.effects.cutoff.velocityCurve = {0, 32, 64, 96, 127};
+            // Fixed amplitude separates filter modulation from the deliberately
+            // quieter amplitude of a soft note.
+            config.velocityCurve = {100, 100, 100, 100, 100};
+            expect(engines[i]->setModuleConfig(0, config), "configure per-note filter regression");
+          }
+          expect(engines[0]->enqueueMidi(midi(0x90, 72, velocities[0])), "combined held note");
+          expect(engines[1]->enqueueMidi(midi(0x90, 72, velocities[0])), "isolated held note");
+          std::array<std::array<float, 512>, 3> left{}, right{};
+          std::array<std::array<float, 1024>, 3> stereo{};
+          double error = 0, reference = 0;
+          for (int block = 0; block < 60; ++block) {
+            if (block == 20) {
+              expect(engines[0]->enqueueMidi(midi(0x90, 48, velocities[1])), "new note after held note");
+              expect(engines[2]->enqueueMidi(midi(0x90, 48, velocities[1])), "isolated new note");
+            }
+            for (std::size_t i = 0; i < engines.size(); ++i) {
+              if (interleaved) {
+                engines[i]->renderInterleaved(stereo[i].data(), frames, 2);
+                for (std::size_t j = 0; j < frames; ++j) {
+                  left[i][j] = stereo[i][j * 2];
+                  right[i][j] = stereo[i][j * 2 + 1];
+                }
+              } else {
+                engines[i]->render(left[i].data(), right[i].data(), frames);
+              }
+            }
+            if (block < 20) continue;
+            for (std::size_t j = 0; j < frames; ++j) {
+              const double expectedLeft = left[1][j] + left[2][j];
+              const double expectedRight = right[1][j] + right[2][j];
+              error += std::abs(left[0][j] - expectedLeft) + std::abs(right[0][j] - expectedRight);
+              reference += std::abs(expectedLeft) + std::abs(expectedRight);
+            }
+          }
+          if (error > reference * 0.0001) {
+            std::cerr << "Velocity isolation " << (sf2 ? "SF2" : "Synth")
+                      << " buffer=" << frames << " interleaved=" << interleaved
+                      << " newVelocity=" << static_cast<int>(velocities[1]) << " relative error=" << error / reference << '\n';
+          }
+          expect(reference > 0.01 && error < reference * 0.0001,
+              "a soft or hard new note must not alter or compress a held note, in either output layout");
         }
-        hook_keys::HookKeysEngine::SynthModules modules{};
-        modules[0] = synths[i].get();
-        engines[i] = std::make_unique<hook_keys::HookKeysEngine>(modules);
-        hook_keys::ModuleConfig config;
-        config.effects.cutoff.velocityCurve = {0, 32, 64, 96, 127};
-        // Fixed amplitude makes it impossible to confuse filter modulation
-        // with the intentionally quieter amplitude of a soft note.
-        config.velocityCurve = {100, 100, 100, 100, 100};
-        expect(engines[i]->setModuleConfig(0, config), "configure per-note filter regression");
       }
-      expect(engines[0]->enqueueMidi(midi(0x90, 72, 127)), "combined held note");
-      expect(engines[1]->enqueueMidi(midi(0x90, 72, 127)), "isolated held note");
-      std::array<std::array<float, 512>, 3> left{}, right{};
-      double error = 0, reference = 0;
-      for (int block = 0; block < 60; ++block) {
-        if (block == 20) {
-          expect(engines[0]->enqueueMidi(midi(0x90, 48, 35)), "soft note after loud note");
-          expect(engines[2]->enqueueMidi(midi(0x90, 48, 35)), "isolated soft note");
-        }
-        for (std::size_t i = 0; i < engines.size(); ++i)
-          engines[i]->render(left[i].data(), right[i].data(), frames);
-        if (block < 20) continue;
-        for (std::size_t j = 0; j < frames; ++j) {
-          const double expected = left[1][j] + left[2][j];
-          error += std::abs(left[0][j] - expected);
-          reference += std::abs(expected);
-        }
-      }
-      if (error > reference * 0.0001) {
-        std::cerr << "Velocity isolation " << (sf2 ? "SF2" : "Synth")
-                  << " buffer=" << frames << " relative error=" << error / reference << '\n';
-      }
-      expect(reference > 0.01 && error < reference * 0.0001,
-          "a soft new note must not close the filter on a held loud note");
     }
   }
 }
@@ -2055,6 +2106,7 @@ int main() {
   testCompatibilityBlocksCc7();
   testSharedSoundFontEnvelopeIsolation();
   testIndependentOscillatorVolumes();
+  testSynthPreservesLinearVelocityAndGain();
   testIndependentOscillatorOctaves();
   testMetronomeRunsOnTheAudioCallback();
   testVelocityCurveMapping();

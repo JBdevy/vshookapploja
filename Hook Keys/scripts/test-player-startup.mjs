@@ -50,6 +50,20 @@ try {
   assert(!calls.some(({ command }) => command === 'send_midi'),
     'motor pronto continua bloqueado até a animação terminar');
   await player.activateLiveMidi();
+  assert(!root.querySelector('.player-next-field'), 'o campo Próxima saiu do topo');
+  const noteDisplay = root.querySelector('[data-note-chord-display]');
+  assert(noteDisplay, 'o topo mostra notas e acordes');
+  assert.equal(noteDisplay.textContent, '—');
+  assert.deepEqual([...root.querySelectorAll('.player-header-knobs .player-output-knob > span:first-child')]
+    .map(label => label.textContent.trim()), ['Playlist', 'Pads', 'Efects', 'Click', 'Master']);
+  assert.equal(root.querySelectorAll('.player-module').length, 8, 'mantém os oito módulos');
+  for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 100);
+  assert.equal(noteDisplay.textContent, 'C', 'reconhece o acorde maior');
+  for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 0);
+  assert.equal(noteDisplay.textContent, '—', 'limpa quando solta as teclas');
+  player.receiveMidiNote(69, 127);
+  assert.equal(noteDisplay.textContent, 'A4', 'nota isolada mostra a oitava');
+  player.receiveMidiNote(69, 0);
   player.sendNativeMidi(3, 0x90, 64, 127);
   player.sendNativeMidi(3, 0x80, 64, 0);
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -129,6 +143,8 @@ try {
   }
   assert(calls.some(({ command }) => command === 'initialize'), 'mount deve iniciar o motor');
   assert(calls.some(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === 7 && args.config.enabled), 'Synth deve chegar ativado ao motor');
+  assert(calls.filter(({ command }) => command === 'configure_module_effects')
+    .every(({ args }) => args.config.compressorMix === 0), 'compressor desligado não recebe mix ativo no boot');
   root.querySelector('[data-action="toggle-metronome"]').click();
   await new Promise(resolve => setTimeout(resolve, 150));
   assert(calls.some(({ command, args }) => command === 'configure_metronome' && args.enabled && args.volume > 0), 'click deve enviar metrônomo audível');
@@ -739,6 +755,18 @@ try {
   assert.equal(JSON.stringify(lastMetronomeOutput), JSON.stringify({ channelStart: 1, channelCount: 1 }),
     'a saída escolhida chega ao motor');
   assert.equal(player.createSavedPlayerState().audioRouting.metronome, 'mono:1', 'a saída do metrônomo é salva');
+  const sampleRate = window.document.querySelector('[data-setting="sample-rate"]');
+  assert.deepEqual([...sampleRate.options].map(option => option.value), ['44100', '48000']);
+  sampleRate.value = '44100';
+  sampleRate.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await player.nativeAudioOutputSync;
+  const rateChange = calls.filter(({ command }) => command === 'set_audio_output_device').at(-1);
+  assert.equal(rateChange.args.sampleRate, 44100, 'sample rate selecionado chega à saída');
+  assert.equal(rateChange.args.preserveEngine, false, 'mudança da taxa recompõe o motor na nova taxa');
+  assert.equal(player.createSavedPlayerState().sampleRate, 44100, 'sample rate fica salvo');
+  sampleRate.value = '48000';
+  sampleRate.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await player.nativeAudioOutputSync;
   player.closeModal();
   // A large file read must not hold up configuration commands or roll back a
   // newer timbre selected while that read was still in flight.

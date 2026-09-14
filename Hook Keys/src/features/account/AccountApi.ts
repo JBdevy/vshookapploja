@@ -86,4 +86,12 @@ export class AccountApi {
       body: { imageDataUrl },
     });
   }
+
+  saveProfileName(token: string, name: string): Promise<{ ok: true; profile: AccountProfile }> {
+    return this.http.request('/api/orangekey/account/profile/name', {
+      method: 'PUT',
+      token,
+      body: { name },
+    });
+  }
 }

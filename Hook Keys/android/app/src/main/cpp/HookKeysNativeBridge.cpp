@@ -22,7 +22,8 @@ constexpr std::size_t kRenderChunkFrames = 512;
 class AndroidAudioEngine final {
 public:
   bool start(int requestedBufferFrames, int requestedDeviceId = AAUDIO_UNSPECIFIED,
-             int requestedChannels = 2, bool forceRestart = false,
+             int requestedChannels = 2, int requestedSampleRate = 48000,
+             bool forceRestart = false,
              bool preserveRuntime = false) noexcept {
     std::scoped_lock lock(controlMutex_);
     if (!forceRestart && stream_ != nullptr && runtime_ != nullptr &&
@@ -44,11 +45,12 @@ public:
     const auto preservedSampleRate = sampleRate_;
     if (!preserveRuntime) runtime_.reset();
     requestedChannels = std::clamp(requestedChannels, 1, 32);
+    requestedSampleRate = requestedSampleRate == 44100 ? 44100 : 48000;
     auto result = openStream(requestedBufferFrames, requestedDeviceId, requestedChannels,
-                             AAUDIO_SHARING_MODE_EXCLUSIVE);
+                             requestedSampleRate, AAUDIO_SHARING_MODE_EXCLUSIVE);
     if (result != AAUDIO_OK) {
       result = openStream(requestedBufferFrames, requestedDeviceId, requestedChannels,
-                          AAUDIO_SHARING_MODE_SHARED);
+                          requestedSampleRate, AAUDIO_SHARING_MODE_SHARED);
     }
     if (result != AAUDIO_OK || stream_ == nullptr) {
       stream_ = nullptr;
@@ -404,7 +406,8 @@ public:
 
 private:
   aaudio_result_t openStream(int requestedBufferFrames, int requestedDeviceId,
-                             int requestedChannels, aaudio_sharing_mode_t sharingMode) noexcept {
+                             int requestedChannels, int requestedSampleRate,
+                             aaudio_sharing_mode_t sharingMode) noexcept {
     requestedBufferFrames = std::clamp(requestedBufferFrames, 64, 512);
     if (stream_ != nullptr) {
       AAudioStream_close(stream_);
@@ -420,7 +423,7 @@ private:
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setChannelCount(builder, requestedChannels);
     AAudioStreamBuilder_setDeviceId(builder, requestedDeviceId);
-    AAudioStreamBuilder_setSampleRate(builder, AAUDIO_UNSPECIFIED);
+    AAudioStreamBuilder_setSampleRate(builder, requestedSampleRate);
     AAudioStreamBuilder_setDataCallback(builder, &AndroidAudioEngine::dataCallback, this);
     AAudioStreamBuilder_setErrorCallback(builder, &AndroidAudioEngine::errorCallback, this);
     const auto result = AAudioStreamBuilder_openStream(builder, &stream_);
@@ -503,16 +506,19 @@ std::array<Value, Size> javaArray(
 } // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeStart(JNIEnv*, jclass, jint bufferFrames) {
-  return gEngine.start(bufferFrames) ? JNI_TRUE : JNI_FALSE;
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeStart(
+    JNIEnv*, jclass, jint bufferFrames, jint sampleRate) {
+  return gEngine.start(bufferFrames, AAUDIO_UNSPECIFIED, 2, sampleRate) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeRestart(
-    JNIEnv*, jclass, jint bufferFrames, jint deviceId, jint channels, jboolean preserveRuntime) {
+    JNIEnv*, jclass, jint bufferFrames, jint deviceId, jint channels, jint sampleRate,
+    jboolean preserveRuntime) {
   const bool preserve = preserveRuntime == JNI_TRUE;
-  if (gEngine.start(bufferFrames, deviceId, channels, true, preserve)) return JNI_TRUE;
-  static_cast<void>(gEngine.start(bufferFrames, AAUDIO_UNSPECIFIED, 2, true, preserve));
+  if (gEngine.start(bufferFrames, deviceId, channels, sampleRate, true, preserve)) return JNI_TRUE;
+  static_cast<void>(gEngine.start(
+      bufferFrames, AAUDIO_UNSPECIFIED, 2, sampleRate, true, preserve));
   return JNI_FALSE;
 }
 
