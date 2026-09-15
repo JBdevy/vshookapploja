@@ -1521,12 +1521,12 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   }
 }
 
-/* Reset do módulo empilhado acima do Modo (ou da Polifonia): ocupa a faixa
-   dos rótulos dos seletores, então a linha dos controles não muda de altura. */
+/* Reset do módulo empilhado acima do Modo (ou da Polifonia): estica e ocupa
+   toda a faixa dos rótulos dos seletores. */
 .module-settings-control-stack {
   display: grid;
-  grid-template-rows: auto var(--module-io-control-height, auto);
-  align-content: end;
+  grid-template-rows: minmax(0, 1fr) var(--module-io-control-height, auto);
+  align-self: stretch;
   gap: 3px;
   min-width: 0;
 }
@@ -1538,13 +1538,13 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .module-settings-reset-button {
-  min-height: 0;
+  min-height: 26px;
   padding: 2px 6px;
   color: #ffc07c;
   border: 1px solid rgba(255, 121, 0, .66);
   border-radius: 7px;
   background: linear-gradient(180deg, #33251f, #151112);
-  font-size: clamp(9px, 1vw, 12px);
+  font-size: clamp(10px, 1.1vw, 13px);
   font-weight: 900;
   line-height: 1.2;
 }
@@ -1881,6 +1881,13 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 @media (max-width: 760px) {
   .module-settings-panel--voice-switch .module-settings-io-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Celular deitado estreito (iPhone SE): Polifonia e Modo cabem na mesma
+     linha dos seletores, sem roubar altura dos cards de baixo. */
+  @media (orientation: landscape) {
+    .module-settings-panel--voice-switch .module-settings-io-row {
+      grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(64px, .34fr) minmax(64px, .34fr);
+    }
+  }
   .sequencer-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .sequencer-step-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sequencer-step-power { grid-row: span 2; }
@@ -9272,6 +9279,13 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 @media (orientation: landscape) and (max-height: 520px) {
   .module-settings-io-row {
     --module-io-control-height: 29px;
+  }
+
+  .module-settings-reset-button {
+    min-height: 22px;
+    padding-block: 1px;
+    border-radius: 6px;
+    font-size: 10px;
   }
   .player-modal {
     padding:

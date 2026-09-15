@@ -397,6 +397,9 @@ void HookKeysEngine::routeNoteOn(
       continue;
     }
     const auto targetNote = translatedNote(sourceNote, config.octaveShift);
+    // Lido antes do roubo: no Mono a nota nova tira a anterior, e o Trance Gate
+    // não pode recomeçar o padrão a cada nota tocada ligada.
+    const auto startsFromSilence = !moduleHasActiveNotes(index);
     while (moduleHeldNoteCount(index) >= config.polyphony) {
       if (!stealOldestNote(index)) break;
     }
@@ -408,7 +411,7 @@ void HookKeysEngine::routeNoteOn(
     // Nao encerra a voz anterior ao repetir a mesma nota. Camadas repetidas
     // sao parte do som (piano, pads e retriggers); sem sustain, o Note Off
     // encerra o grupo inteiro dessa tecla.
-    if (!moduleHasActiveNotes(index)) effects_[index].triggerTranceGate();
+    if (startsFromSilence) effects_[index].triggerTranceGate();
     auto& count = activeNoteCounts_[index][inputSlot][sourceNote];
     auto& sustainedCount = sustainedNoteCounts_[index][inputSlot][sourceNote];
     if (activeNotes_[index][inputSlot][sourceNote] < 0) {

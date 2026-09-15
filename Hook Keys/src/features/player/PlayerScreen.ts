@@ -3103,7 +3103,7 @@ export class PlayerScreen {
 
   private toggleModuleVoiceMode(button: HTMLButtonElement, moduleNumber: number): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
-    if (!moduleState || moduleNumber < 1 || moduleNumber > 5) return;
+    if (!moduleState || moduleNumber < 1 || moduleNumber > 7) return;
     const mono = moduleState.settings.voiceMode !== 'mono';
     moduleState.settings.voiceMode = mono ? 'mono' : 'poly';
     button.classList.toggle('is-mono', mono);
@@ -4896,7 +4896,7 @@ export class PlayerScreen {
           this.showModuleResetConfirmation(modal, moduleNumber);
           return;
         }
-        if (moduleSettingAction === 'toggle-voice-mode' && moduleNumber >= 1 && moduleNumber <= 5) {
+        if (moduleSettingAction === 'toggle-voice-mode' && moduleNumber >= 1 && moduleNumber <= 7) {
           const button = target instanceof Element
             ? target.closest<HTMLButtonElement>('button[data-module-setting-action="toggle-voice-mode"]')
             : null;
@@ -8966,7 +8966,7 @@ export class PlayerScreen {
         volumeDb: moduleState?.volumeDb ?? 0,
         // O próprio sintetizador administra Mono/Poly. O roteador precisa
         // encaminhar todas as notas para preservar prioridade e legato no Mono.
-        polyphony: moduleIndex < 5 && moduleState?.settings.voiceMode === 'mono'
+        polyphony: moduleIndex < 7 && moduleState?.settings.voiceMode === 'mono'
           ? 1
           : Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 128))),
         velocityCurve0: velocityCurve.points[0],

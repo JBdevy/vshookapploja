@@ -147,7 +147,8 @@ export function createModuleSettingsMarkup(
   }).join('');
   const eqBands = readModuleEqBands(settings.eqBands);
   const voiceMode = settings.voiceMode === 'mono' ? 'mono' : 'poly';
-  const hasVoiceSwitch = processorReplacement === 'compressor' || processorReplacement === 'rotary';
+  // Modo Poly/Mono ao lado da Polifonia nos módulos 1 a 7; o Synth tem o dele no editor.
+  const hasVoiceSwitch = processorReplacement !== 'synth';
 
   return `
     <section class="module-settings-panel${processorReplacement === 'synth' ? ' module-settings-panel--synth' : ''}${hasVoiceSwitch ? ' module-settings-panel--voice-switch' : ''}" aria-label="Configurações do timbre">
@@ -168,7 +169,7 @@ export function createModuleSettingsMarkup(
         </label>
 
         <!-- Reset de todos os parâmetros do módulo: acima do Modo Poly/Mono, ou
-             acima da Polifonia nos módulos sem Modo (6, 7 e 8). -->
+             acima da Polifonia no Synth (8), que não tem Modo aqui. -->
         <div class="module-settings-control-stack">
           ${hasVoiceSwitch ? '' : '<button class="module-settings-reset-button" type="button" data-module-setting-action="reset-module">Reset</button>'}
           <button class="module-polyphony-button" type="button" data-module-setting-action="open-polyphony">

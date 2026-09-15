@@ -649,6 +649,29 @@ try {
     assert.equal(calls.filter(({command,args}) => command === 'configure_module_envelope' && args.config.moduleIndex === module - 1).at(-1).args.config.glideMs, 0);
   }
   {
+    // Modo Poly/Mono do Config: módulos 1 a 7 (Arpeggiator e Trance Gate inclusos).
+    const lastPolyphony = (moduleIndex) => calls.filter(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === moduleIndex).at(-1).args.config.polyphony;
+    for (const module of [1, 6, 7]) {
+      player.openModal('module-settings', module, master);
+      const modeButton = () => window.document.querySelector('[data-module-setting-action="toggle-voice-mode"]');
+      assert(modeButton(), `módulo ${module} tem o botão Modo`);
+      assert.equal(modeButton().previousElementSibling.className, 'module-settings-reset-button', `Reset em cima do Modo no módulo ${module}`);
+      assert.equal(modeButton().querySelector('strong').textContent, 'Poly');
+      modeButton().click();
+      await player.syncNativeEngine();
+      assert.equal(modeButton().querySelector('strong').textContent, 'Mono');
+      assert.equal(lastPolyphony(module - 1), 1, `Mono do módulo ${module} chega ao motor como uma voz`);
+      modeButton().click();
+      await player.syncNativeEngine();
+      assert.equal(lastPolyphony(module - 1), 128, `Poly do módulo ${module} volta à polifonia escolhida`);
+      player.closeModal();
+    }
+    player.openModal('module-settings', 8, master);
+    assert.equal(window.document.querySelector('[data-module-setting-action="toggle-voice-mode"]'), null,
+      'o Config do Synth não tem Modo (fica no editor do Synth)');
+    player.closeModal();
+  }
+  {
     const lastGlide = (moduleIndex) => calls.filter(({ command, args }) => command === 'configure_glide' && args.config.moduleIndex === moduleIndex).at(-1)?.args.config;
     for (const [module, kind] of [[2, 'module-settings'], [8, 'module-synth']]) {
       player.openModal(kind, module, master);

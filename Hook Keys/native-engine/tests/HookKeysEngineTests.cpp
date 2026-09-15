@@ -1462,31 +1462,46 @@ void testRotaryPitchStaysInTune() {
   expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 1) < 3.0, "Leslie Slow barely moves the pitch");
 }
 
+// Ganho em dB que o EQ aplica numa senoide, com uma banda configurada à mão.
+double equalizerGainDb(double sampleRate, hook_keys::EqBandConfig band, double frequency) {
+  hook_keys::ModuleEffects effects;
+  effects.prepare(sampleRate);
+  hook_keys::ModuleEffectsConfig config;
+  config.equalizer.enabled = true;
+  config.equalizer.bands[4] = band;
+  effects.setConfig(config, 120.0f);
+  const auto frames = static_cast<std::size_t>(sampleRate);
+  std::vector<float> left(frames), right(frames);
+  for (std::size_t index = 0; index < frames; ++index) {
+    left[index] = right[index] = static_cast<float>(0.1 * std::sin(6.283185307179586 * frequency * static_cast<double>(index) / sampleRate));
+  }
+  effects.process(left.data(), right.data(), frames);
+  double energy = 0.0;
+  for (std::size_t index = frames / 2; index < frames; ++index) energy += static_cast<double>(left[index]) * left[index];
+  const double rms = std::sqrt(energy / static_cast<double>(frames - frames / 2));
+  return 20.0 * std::log10(rms / (0.1 / std::sqrt(2.0)));
+}
+
+// O EQ age de verdade até 20 kHz, em 44,1 e 48 kHz: bell e shelf no topo da
+// faixa sobem o que prometem, e o High Cut corta.
 void testEqualizerControlsTreble() {
-  const auto gainDb = [](std::size_t bandIndex, float bandGainDb, double frequency) {
-    hook_keys::ModuleEffects effects;
-    effects.prepare(48000.0);
-    hook_keys::ModuleEffectsConfig config;
-    config.equalizer.enabled = true;
-    config.equalizer.bands[bandIndex].gainDb = bandGainDb;
-    effects.setConfig(config, 120.0f);
-    std::vector<float> left(48000), right(48000);
-    for (std::size_t index = 0; index < left.size(); ++index) {
-      left[index] = right[index] = static_cast<float>(0.1 * std::sin(6.283185307179586 * frequency * static_cast<double>(index) / 48000.0));
-    }
-    effects.process(left.data(), right.data(), left.size());
-    double energy = 0.0;
-    for (std::size_t index = 24000; index < left.size(); ++index) energy += static_cast<double>(left[index]) * left[index];
-    const double rms = std::sqrt(energy / 24000.0);
-    return 20.0 * std::log10(rms / (0.1 / std::sqrt(2.0)));
-  };
-  const auto flat16 = gainDb(4, 0.0f, 16000.0);
-  const auto boost16 = gainDb(4, 12.0f, 16000.0);
-  const auto cut16 = gainDb(4, -12.0f, 16000.0);
-  const auto boost4 = gainDb(3, 12.0f, 4000.0);
-  expect(boost16 - flat16 > 9.0, "high shelf +12 dB raises 16 kHz");
-  expect(flat16 - cut16 > 9.0, "high shelf -12 dB lowers 16 kHz");
-  expect(boost4 > 10.0, "bell +12 dB at 4 kHz raises 4 kHz");
+  using hook_keys::EqBandType;
+  for (const double rate : {44100.0, 48000.0}) {
+    expect(equalizerGainDb(rate, {true, EqBandType::bell, 16000.0f, 12.0f, 1.0f, 1}, 16000.0) > 11.5,
+        "bell +12 dB at 16 kHz raises 16 kHz by 12 dB");
+    expect(equalizerGainDb(rate, {true, EqBandType::bell, 20000.0f, 12.0f, 1.0f, 1}, 20000.0) > 11.5,
+        "bell +12 dB at 20 kHz still raises 20 kHz by 12 dB");
+    expect(equalizerGainDb(rate, {true, EqBandType::bell, 18000.0f, -12.0f, 1.0f, 1}, 18000.0) < -11.5,
+        "bell -12 dB at 18 kHz lowers 18 kHz by 12 dB");
+    expect(equalizerGainDb(rate, {true, EqBandType::highShelf, 12000.0f, 12.0f, 1.0f, 1}, 20000.0) > 11.0,
+        "high shelf +12 dB at 12 kHz holds the full boost up to 20 kHz");
+    expect(equalizerGainDb(rate, {true, EqBandType::highShelf, 12000.0f, -12.0f, 1.0f, 1}, 20000.0) < -11.0,
+        "high shelf -12 dB at 12 kHz holds the full cut up to 20 kHz");
+    expect(equalizerGainDb(rate, {true, EqBandType::highCut, 16000.0f, 0.0f, 0.7071f, 1}, 20000.0) < -6.0,
+        "high cut at 16 kHz removes 20 kHz");
+    expect(std::abs(equalizerGainDb(rate, {true, EqBandType::highShelf, 12000.0f, 12.0f, 1.0f, 1}, 1000.0)) < 0.2,
+        "high shelf leaves 1 kHz untouched");
+  }
 }
 
 void testIndependentOscillatorOctaves() {
@@ -1575,6 +1590,48 @@ void testRotaryMidiEngineRouting() {
   expect(slow == render(1, true, 127, 1, false), "module MOD OFF prevents Rotary modulation");
   expect(fast == render(2, false, 0, 1), "Rotary Modulation OFF leaves manual Fast untouched");
   expect(render(0, false, -1, 1) == render(1, true, 127, 1, true, 0), "manual Brake takes over after a Modulation message");
+}
+
+// Mono (polifonia 1): a nota tocada ligada tira a anterior, mas o Trance Gate
+// segue o padrão. Só uma nota depois de silêncio recomeça do primeiro passo.
+void testMonoLegatoKeepsTranceGatePattern() {
+  class Constant final : public hook_keys::ModuleSynth {
+  public:
+    void noteOn(std::uint8_t, std::uint8_t) noexcept override {}
+    void noteOff(std::uint8_t) noexcept override {}
+    void controlChange(std::uint8_t, std::uint8_t) noexcept override {}
+    void pitchBend(std::uint16_t) noexcept override {}
+    void allNotesOff() noexcept override {}
+    void renderAdd(float* left, float* right, std::size_t frames, float gain) noexcept override {
+      for (std::size_t i = 0; i < frames; ++i) {
+        left[i] += 0.5f * gain;
+        right[i] += 0.5f * gain;
+      }
+    }
+  };
+  const auto levelAfterSecondNote = [](bool releaseFirst) {
+    Constant constant;
+    hook_keys::HookKeysEngine::SynthModules modules{};
+    modules[6] = &constant;
+    hook_keys::HookKeysEngine engine(modules);
+    hook_keys::ModuleConfig config;
+    config.polyphony = 1;
+    // 120 BPM em semicolcheias: o passo 1 abre por 3000 amostras e o passo 2 é pausa.
+    config.effects.tranceGate.enabled = true;
+    config.effects.tranceGate.length = 2;
+    config.effects.tranceGate.steps = 1;
+    config.effects.tranceGate.gate = 0.5f;
+    expect(engine.setModuleConfig(6, config), "configure mono Trance Gate module");
+    std::vector<float> left(4000), right(4000);
+    expect(engine.enqueueMidi(midi(0x90, 60, 100)), "first gated note");
+    engine.render(left.data(), right.data(), left.size());
+    if (releaseFirst) expect(engine.enqueueMidi(midi(0x80, 60, 0)), "release before the next note");
+    expect(engine.enqueueMidi(midi(0x90, 62, 100)), "second note");
+    engine.render(left.data(), right.data(), 1000);
+    return *std::max_element(left.begin() + 500, left.begin() + 1000);
+  };
+  expect(levelAfterSecondNote(false) < 0.01f, "Mono legato note does not restart the Trance Gate pattern");
+  expect(levelAfterSecondNote(true) > 0.2f, "a note after silence restarts the Trance Gate from the first step");
 }
 
 } // namespace
@@ -2327,6 +2384,7 @@ int main() {
   testEqualizerControlsTreble();
   testRotaryPitchStaysInTune();
   testRotaryMidiEngineRouting();
+  testMonoLegatoKeepsTranceGatePattern();
   std::cout << "Hook Keys engine tests passed\n";
   return EXIT_SUCCESS;
 }

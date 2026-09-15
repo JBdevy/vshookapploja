@@ -54,11 +54,14 @@ test('Rotary stacks below Compressor without its preview, while ordinary modules
     './VelocityCurveView': { createVelocityCardMarkup: () => '', readVelocityLimit: () => 127 },
   });
   assert.match(settings.createModuleSettingsMarkup([], [], null, {}, 120, 2, 'stereo:0', 'rotary'), /toggle-voice-mode/);
-  for (const processor of ['compressor', 'rotary']) {
+  // Módulos 1-4 (compressor), 5 (rotary), 6 (arpeggiator) e 7 (sequencer/Trance Gate).
+  for (const processor of ['compressor', 'rotary', 'arpeggiator', 'sequencer']) {
     const markup = settings.createModuleSettingsMarkup([], [], null, {}, 120, 2, 'stereo:0', processor);
     assert.match(markup, /class="module-settings-panel module-settings-panel--voice-switch"/);
     assert.match(markup, /module-settings-io-row[\s\S]*?module-polyphony-button[\s\S]*?module-voice-mode-button/);
   }
+  assert.doesNotMatch(settings.createModuleSettingsMarkup([], [], null, {}, 120, 2, 'stereo:0', 'synth'), /toggle-voice-mode/,
+    'o Synth troca Poly/Mono no próprio editor');
 });
 
 test('Rotary defaults to OFF/Slow, validates ranges and preserves presets/backups', () => {

@@ -473,6 +473,12 @@ test('paisagem dos dois lados no iOS e no Android', () => {
 });
 
 test('Reset do módulo no Config: acima do Modo (ou da Polifonia) e com confirmação', () => {
+  // Estica e ocupa a faixa inteira acima do Modo; no celular, pelo menos 22px.
+  assert.match(css, /\.module-settings-control-stack \{\s*display: grid;\s*grid-template-rows: minmax\(0, 1fr\) var\(--module-io-control-height, auto\);\s*align-self: stretch;/);
+  assert.match(css, /\.module-settings-reset-button \{\s*min-height: 26px;/);
+  assert.match(css, /\.module-settings-reset-button \{\s*min-height: 22px;/);
+  // iPhone SE deitado: Polifonia e Modo na mesma linha dos seletores (sem quebrar em duas).
+  assert.match(css, /@media \(orientation: landscape\) \{\s*\.module-settings-panel--voice-switch \.module-settings-io-row \{\s*grid-template-columns: minmax\(0, 1\.35fr\) minmax\(0, 1fr\) minmax\(64px, \.34fr\) minmax\(64px, \.34fr\);/);
   const view = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(view, /data-module-setting-action="reset-module">Reset<\/button>\s*<button class="module-voice-mode-button/);
