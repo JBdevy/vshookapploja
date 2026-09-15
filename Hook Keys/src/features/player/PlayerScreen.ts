@@ -7784,6 +7784,11 @@ export class PlayerScreen {
     const selectedId = this.selectedAudioDeviceId;
     if (!hookKeysNative.isAvailable()) return;
     if (await hookKeysNative.audioOutputFailed()) {
+      // No iOS, a troca USB interrompe o callback por alguns instantes. Forçar
+      // fallback aqui reinicia a AVAudioSession repetidamente e faz a interface
+      // conectar/desconectar em ciclo. O observador nativo recupera o motor uma
+      // única vez quando a rota estabiliza.
+      if (this.iosRuntime) return;
       this.selectedAudioDeviceMissCount += 1;
       if (this.selectedAudioDeviceMissCount < 3) return;
       this.selectedAudioDeviceMissCount = 0;

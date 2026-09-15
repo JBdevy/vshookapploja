@@ -27,9 +27,13 @@ test('iOS generator and DSP use the same sample-rate clock negotiated by the rou
 test('iOS keeps a USB audio route stable during the system hand-off', () => {
   const plugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
   assert.match(plugin, /cachedAudioOutputs/);
-  assert.match(plugin, /audioOutputGracePeriod:\s*TimeInterval\s*=\s*3\.0/);
+  assert.match(plugin, /AVAudioSession\.routeChangeNotification/);
+  assert.match(plugin, /reason\s*==\s*\.oldDeviceUnavailable/);
+  assert.match(plugin, /AVAudioSessionRouteChangePreviousRouteKey/);
   assert.match(plugin, /currentRoute\.outputs/);
-  assert.match(plugin, /timeIntervalSince\(\$0\.value\.lastSeen\)\s*<=\s*audioOutputGracePeriod/);
+  assert.match(plugin, /scheduleAudioRouteRecovery/);
+  assert.match(plugin, /if alreadyActive[\s\S]*?call\.resolve\(\)[\s\S]*?return/);
+  assert.doesNotMatch(plugin, /audioOutputGracePeriod/);
 });
 
 test('Android and desktop build their DSP clock from the actual 44.1/48 kHz stream', () => {

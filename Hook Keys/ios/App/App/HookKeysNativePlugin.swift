@@ -61,15 +61,23 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     private struct CachedAudioOutput {
         var name: String
         var channels: Int
-        var lastSeen: Date
     }
     private let audioOutputCacheLock = NSLock()
     private var cachedAudioOutputs: [String: CachedAudioOutput] = [:]
-    private let audioOutputGracePeriod: TimeInterval = 3.0
+    private var audioRouteRecoveryWorkItem: DispatchWorkItem?
+    private var activeBufferFrames = 128
+    private var activeSampleRate = 48_000.0
     private var uploads: [Int: (handle: FileHandle, temporary: URL, destination: URL)] = [:]
     private var pendingBackupExport: (call: CAPPluginCall, temporary: URL)?
 
     public override func load() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(audioRouteDidChange(_:)),
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        cacheCurrentAudioOutputs()
         engine.onMidiNote = { [weak self] _, deviceId, channel, note, velocity in
             self?.notifyListeners("midiNote", data: [
                 "inputId": deviceId, "channel": channel,
@@ -93,15 +101,21 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     }
 
     deinit {
+        audioRouteRecoveryWorkItem?.cancel()
+        NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
         engine.stop()
         for (_, upload) in uploads { try? upload.handle.close() }
     }
 
     @objc func initialize(_ call: CAPPluginCall) {
+        let bufferFrames = call.getInt("bufferSize", 128)
+        let sampleRate = call.getDouble("sampleRate", 48_000)
         if engine.start(
-            withBufferFrames: call.getInt("bufferSize", 128),
-            sampleRate: call.getDouble("sampleRate", 48_000)
+            withBufferFrames: bufferFrames,
+            sampleRate: sampleRate
         ) {
+            activeBufferFrames = bufferFrames
+            activeSampleRate = sampleRate
             call.resolve(["ready": true])
         } else {
             let detail = engine.lastAudioErrorMessage
@@ -116,24 +130,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     }
 
     @objc func listAudioOutputDevices(_ call: CAPPluginCall) {
-        let session = AVAudioSession.sharedInstance()
-        let maximum = max(1, min(32, session.maximumOutputNumberOfChannels))
-        let now = Date()
-        let current = session.currentRoute.outputs.map { output -> (String, String, Int) in
-            let channelCount = output.channels?.count ?? maximum
-            return (output.uid, output.portName, max(1, min(32, channelCount)))
-        }
-
-        // currentRoute pode ficar vazio ou voltar para Speaker por alguns
-        // instantes durante o hand-off de uma interface USB. Preserve a última
-        // rota confirmada nesse intervalo para ela não piscar no seletor.
+        cacheCurrentAudioOutputs()
         audioOutputCacheLock.lock()
-        for (id, name, channels) in current {
-            cachedAudioOutputs[id] = CachedAudioOutput(name: name, channels: channels, lastSeen: now)
-        }
-        cachedAudioOutputs = cachedAudioOutputs.filter {
-            now.timeIntervalSince($0.value.lastSeen) <= audioOutputGracePeriod
-        }
         let devices: [[String: Any]] = cachedAudioOutputs
             .map { id, output in [
                 "id": id,
@@ -145,15 +143,89 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         call.resolve(["devices": devices])
     }
 
+    private func cacheCurrentAudioOutputs() {
+        let session = AVAudioSession.sharedInstance()
+        let maximum = max(1, min(32, session.maximumOutputNumberOfChannels))
+        let current = session.currentRoute.outputs.map { output -> (String, String, Int) in
+            let channelCount = output.channels?.count ?? maximum
+            return (output.uid, output.portName, max(1, min(32, channelCount)))
+        }
+        audioOutputCacheLock.lock()
+        for (id, name, channels) in current {
+            cachedAudioOutputs[id] = CachedAudioOutput(name: name, channels: channels)
+        }
+        audioOutputCacheLock.unlock()
+    }
+
+    @objc private func audioRouteDidChange(_ notification: Notification) {
+        let session = AVAudioSession.sharedInstance()
+        let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+        let reason = rawReason.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+
+        // Uma mudança de categoria/configuração pode expor Speaker por alguns
+        // frames. Só remova a interface quando o iOS afirmar que o dispositivo
+        // antigo realmente ficou indisponível (cabo retirado, energia perdida).
+        if reason == .oldDeviceUnavailable,
+           let previousRoute = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey]
+                as? AVAudioSessionRouteDescription {
+            let currentIds = Set(session.currentRoute.outputs.map(\.uid))
+            audioOutputCacheLock.lock()
+            for output in previousRoute.outputs where !currentIds.contains(output.uid) {
+                cachedAudioOutputs.removeValue(forKey: output.uid)
+            }
+            audioOutputCacheLock.unlock()
+        }
+
+        // O currentRoute da própria notificação ainda pode ser intermediário.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.cacheCurrentAudioOutputs()
+            self.scheduleAudioRouteRecovery()
+        }
+    }
+
+    private func scheduleAudioRouteRecovery() {
+        audioRouteRecoveryWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, !self.engine.audioOutputReady() else { return }
+            _ = self.engine.start(
+                withBufferFrames: self.activeBufferFrames,
+                sampleRate: self.activeSampleRate
+            )
+        }
+        audioRouteRecoveryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+    }
+
     @objc func setAudioOutputDevice(_ call: CAPPluginCall) {
+        let requestedId = call.getString("deviceId", "")
+        let bufferFrames = min(512, max(64, call.getInt("bufferSize", 128)))
+        let sampleRate = call.getDouble("sampleRate", 48_000)
+        let alreadyActive = !requestedId.isEmpty
+            && AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.uid == requestedId }
+            && bufferFrames == activeBufferFrames
+            && abs(sampleRate - activeSampleRate) < 1
+            && engine.audioOutputReady()
+        // Escolher a rota que o próprio iOS já ativou não deve derrubar e abrir
+        // novamente o AVAudioEngine; isso causava o som de reconexão em ciclo.
+        if alreadyActive {
+            call.resolve()
+            return
+        }
         let ok = engine.setAudioOutputDeviceId(
-            call.getString("deviceId", ""),
+            requestedId,
             channels: min(32, max(1, call.getInt("channels", 2))),
-            bufferFrames: min(512, max(32, call.getInt("bufferSize", 128))),
-            sampleRate: call.getDouble("sampleRate", 48_000),
+            bufferFrames: bufferFrames,
+            sampleRate: sampleRate,
             preserveEngine: call.getBool("preserveEngine", false)
         )
-        if ok { call.resolve() } else { call.reject("Não foi possível abrir o dispositivo de áudio selecionado.") }
+        if ok {
+            activeBufferFrames = bufferFrames
+            activeSampleRate = sampleRate
+            call.resolve()
+        } else {
+            call.reject("Não foi possível abrir o dispositivo de áudio selecionado.")
+        }
     }
 
     @objc func audioOutputStatus(_ call: CAPPluginCall) {
