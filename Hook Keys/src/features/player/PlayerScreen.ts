@@ -944,6 +944,7 @@ export class PlayerScreen {
   private audioDeviceMonitorTimer: number | null = null;
   private selectedAudioDeviceMissCount = 0;
   private moduleMeterTimer: number | null = null;
+  private ramMeterTimer: number | null = null;
   private readonly moduleMeterDb = Array.from({ length: 8 }, () => [MODULE_FADER_MIN_DB, MODULE_FADER_MIN_DB]);
   private readonly compressorMeterDb = [-60, -60];
   private renderedAnalysisModuleIndex: number | null = null;
@@ -1057,6 +1058,11 @@ export class PlayerScreen {
                 title="Custo do callback de audio contra o prazo do buffer. Vermelho no teto e onde o som corta.">
                 <small>CPU</small>
                 <strong data-cpu-meter-value>--</strong>
+              </div>` : Capacitor.isNativePlatform() ? `
+              <div class="player-cpu-meter player-ram-meter" role="status" data-ram-meter
+                title="Memória usada pelo app">
+                <small>RAM</small>
+                <strong data-ram-meter-value>--</strong>
               </div>` : ''}
             </div>
           </div>
@@ -1234,6 +1240,33 @@ export class PlayerScreen {
     });
     this.scheduleAudioDeviceMonitor();
     this.scheduleModuleMeters();
+    this.scheduleRamMeter(0);
+  }
+
+  // A RAM muda devagar (carregar SF2, músicas): uma leitura a cada 2 s basta e
+  // não disputa a thread com os medidores de nível.
+  private scheduleRamMeter(delay = 2_000): void {
+    if (!this.mounted || this.desktopRuntime || !Capacitor.isNativePlatform()) return;
+    if (this.ramMeterTimer !== null) window.clearTimeout(this.ramMeterTimer);
+    this.ramMeterTimer = window.setTimeout(async () => {
+      this.ramMeterTimer = null;
+      if (document.visibilityState !== 'hidden') {
+        const usage = await hookKeysNative.memoryUsage();
+        if (!this.mounted) return;
+        if (usage) this.renderRamMeter(usage.percent);
+      }
+      this.scheduleRamMeter();
+    }, delay);
+  }
+
+  private renderRamMeter(percent: number): void {
+    const meter = this.root.querySelector<HTMLElement>('[data-ram-meter]');
+    const value = meter?.querySelector<HTMLElement>('[data-ram-meter-value]');
+    if (!meter || !value) return;
+    const text = `${Math.round(percent)}%`;
+    if (value.textContent !== text) value.textContent = text;
+    meter.classList.toggle('is-critical', percent >= 90);
+    meter.classList.toggle('is-warning', percent >= 75 && percent < 90);
   }
 
   private scheduleModuleMeters(): void {
@@ -1435,6 +1468,8 @@ export class PlayerScreen {
     this.audioDeviceMonitorTimer = null;
     if (this.moduleMeterTimer !== null) window.clearTimeout(this.moduleMeterTimer);
     this.moduleMeterTimer = null;
+    if (this.ramMeterTimer !== null) window.clearTimeout(this.ramMeterTimer);
+    this.ramMeterTimer = null;
     window.removeEventListener('pagehide', this.handlePageHide);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     document.removeEventListener('keydown', this.handleDesktopPlaylistKeydown);

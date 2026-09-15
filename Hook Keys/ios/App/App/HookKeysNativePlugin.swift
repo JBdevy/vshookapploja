@@ -4,6 +4,7 @@ import AVFAudio
 import Foundation
 import UIKit
 import UniformTypeIdentifiers
+import os
 
 @objc(HookKeysNativePlugin)
 public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerDelegate {
@@ -16,6 +17,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "setAudioOutputDevice", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "audioOutputStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "audioRouteLog", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "memoryUsage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMidiInputEnabled", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "moduleMeterLevels", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "moduleAnalysis", returnType: CAPPluginReturnPromise),
@@ -234,6 +236,32 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         call.resolve([
             "current": "\(outputs) · \(rate) Hz · \(channels) · \(engineState)",
             "events": events
+        ])
+    }
+
+    // RAM do app contra o limite que o iOS dá a ele: é nesse teto que o sistema
+    // fecha o app, então a porcentagem mostra quanto falta. phys_footprint é a
+    // mesma conta que o Xcode e o iOS usam para esse limite.
+    @objc func memoryUsage(_ call: CAPPluginCall) {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard status == KERN_SUCCESS else {
+            call.reject("Não foi possível ler a memória do app.")
+            return
+        }
+        let used = Double(info.phys_footprint)
+        let available = Double(os_proc_available_memory())
+        // Sem limite informado (simulador), usa a RAM do aparelho.
+        let limit = available > 0 ? used + available : Double(ProcessInfo.processInfo.physicalMemory)
+        call.resolve([
+            "usedBytes": used,
+            "limitBytes": limit,
+            "percent": limit > 0 ? min(100, used / limit * 100) : 0
         ])
     }
 

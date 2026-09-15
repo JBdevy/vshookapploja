@@ -304,8 +304,9 @@ try {
   }
   player.closeTracksSplitView();
   const synthFader = root.querySelector('[data-module-fader="8"]');
-  assert.notEqual(synthFader.querySelector('.player-module__meter-fill--left')?.style.transform, 'scaleY(0.0000)', 'native Synth left peak reaches the fader');
-  assert.notEqual(synthFader.querySelector('.player-module__meter-fill--right')?.style.transform, 'scaleY(0.0000)', 'native Synth right peak reaches the fader');
+  // Janela do medidor em 100% = vazio; um pico nativo precisa subir a janela.
+  assert.notEqual(synthFader.querySelector('.player-module__meter-fill--left')?.style.transform, 'translate3d(0, 100.00%, 0)', 'native Synth left peak reaches the fader');
+  assert.notEqual(synthFader.querySelector('.player-module__meter-fill--right')?.style.transform, 'translate3d(0, 100.00%, 0)', 'native Synth right peak reaches the fader');
   const master = root.querySelector('[data-output-level="master"]');
   const synthShortcut = root.querySelector('[data-module="8"] .player-module__sound-button');
   assert.equal(synthShortcut.textContent.trim(), 'Synth');

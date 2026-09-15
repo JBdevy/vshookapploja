@@ -29,8 +29,76 @@ struct AudioState final {
   std::atomic<hook_keys::NativeEngineRuntime*> activeRuntime{nullptr};
   std::atomic<bool> callbackSeen{false};
   std::unique_ptr<hook_keys::NativeEngineRuntime> runtime;
+  double sampleRate = 48000.0;
   std::array<float, kRenderChunkFrames * 32> interleaved{};
 };
+
+// Formato do gerador para uma saída de `channels` canais.
+// initStandardFormatWithSampleRate:channels: devolve nil acima de 2 canais, então
+// acima de estéreo o formato leva um layout: o da própria placa quando ela
+// informa um com a mesma contagem, senão canais discretos na ordem da placa.
+AVAudioFormat* renderFormatFor(AVAudioFormat* hardware, double sampleRate, AVAudioChannelCount channels) {
+  if (channels <= 2) {
+    return [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channels:channels];
+  }
+  AVAudioChannelLayout* layout = hardware.channelLayout;
+  if (layout != nil && layout.channelCount == channels) {
+    AVAudioFormat* format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channelLayout:layout];
+    if (format != nil) return format;
+  }
+  AVAudioChannelLayout* discrete = [[AVAudioChannelLayout alloc]
+      initWithLayoutTag:(kAudioChannelLayoutTag_DiscreteInOrder | channels)];
+  return [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channelLayout:discrete];
+}
+
+// Gerador que puxa o DSP do runtime compartilhado. Recriar o nó (troca de
+// placa) reaproveita o mesmo estado: os timbres carregados continuam no motor.
+AVAudioSourceNode* makeSourceNode(AVAudioFormat* format, std::shared_ptr<AudioState> state) {
+  return [[AVAudioSourceNode alloc] initWithFormat:format renderBlock:^OSStatus(
+      BOOL *isSilence, const AudioTimeStamp *, AVAudioFrameCount frameCount, AudioBufferList *outputData) {
+    auto *runtime = state->activeRuntime.load(std::memory_order_acquire);
+    if (isSilence) *isSilence = runtime == nullptr ? YES : NO;
+    if (outputData == nullptr) return noErr;
+    for (UInt32 buffer = 0; buffer < outputData->mNumberBuffers; ++buffer) {
+      if (outputData->mBuffers[buffer].mData != nullptr) {
+        std::fill_n(static_cast<float *>(outputData->mBuffers[buffer].mData),
+                    outputData->mBuffers[buffer].mDataByteSize / sizeof(float), 0.0f);
+      }
+    }
+    if (runtime == nullptr) return noErr;
+    state->callbackSeen.store(true, std::memory_order_release);
+    std::size_t channelCount = 0;
+    for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
+      channelCount += std::max<UInt32>(1, outputData->mBuffers[bufferIndex].mNumberChannels);
+    }
+    channelCount = std::clamp<std::size_t>(channelCount, 1, 32);
+    std::size_t offset = 0;
+    while (offset < frameCount) {
+      const auto frames = std::min(kRenderChunkFrames, static_cast<std::size_t>(frameCount) - offset);
+      runtime->renderInterleaved(state->interleaved.data(), frames, channelCount);
+      std::size_t firstChannel = 0;
+      for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
+        auto &buffer = outputData->mBuffers[bufferIndex];
+        auto *samples = static_cast<float *>(buffer.mData);
+        const std::size_t bufferChannels = std::max<UInt32>(1, buffer.mNumberChannels);
+        if (samples != nullptr) {
+          for (std::size_t frame = 0; frame < frames; ++frame) {
+            for (std::size_t localChannel = 0; localChannel < bufferChannels; ++localChannel) {
+              const auto sourceChannel = firstChannel + localChannel;
+              if (sourceChannel < channelCount) {
+                samples[(offset + frame) * bufferChannels + localChannel] =
+                    state->interleaved[frame * channelCount + sourceChannel];
+              }
+            }
+          }
+        }
+        firstChannel += bufferChannels;
+      }
+      offset += frames;
+    }
+    return noErr;
+  }];
+}
 
 NSString* endpointId(MIDIEndpointRef endpoint) {
   SInt32 value = 0;
@@ -140,6 +208,8 @@ private:
   NSString *_lastAudioErrorMessage;
 }
 - (void)setAudioErrorStage:(NSString *)stage error:(nullable NSError *)error;
+- (BOOL)connectSourceNodeForState:(std::shared_ptr<AudioState>)state
+                    outputChannels:(AVAudioChannelCount)channels;
 - (void)createMidiClient;
 - (void)reconnectMidiSources;
 - (void)parseMidiByte:(uint8_t)value slot:(NSInteger)slot timestamp:(uint64_t)timestamp;
@@ -199,6 +269,20 @@ private:
       [self setAudioErrorStage:@"ativar sessão existente" error:restartError];
       return NO;
     }
+    // A troca de rota (placa plugada depois do boot, por exemplo) muda a
+    // quantidade de canais da saída. Um gerador de 2 canais passando pelo mixer
+    // não chega a uma placa de 4+; refaz o nó com o formato atual da saída.
+    const auto hardwareChannels = std::clamp<AVAudioChannelCount>(
+        [_audioEngine.outputNode outputFormatForBus:0].channelCount, 1, 32);
+    if (_sourceNode != nil && [_sourceNode outputFormatForBus:0].channelCount != hardwareChannels) {
+      [_audioEngine detachNode:_sourceNode];
+      _sourceNode = nil;
+      if (![self connectSourceNodeForState:_audioState outputChannels:hardwareChannels]) {
+        [self setAudioErrorStage:@"preparar formato da nova saída" error:nil];
+        return NO;
+      }
+      [_audioEngine prepare];
+    }
     _audioState->callbackSeen.store(false, std::memory_order_release);
     _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
     if ([_audioEngine startAndReturnError:&restartError]) return YES;
@@ -236,79 +320,22 @@ private:
   const double sampleRate = outputFormat.sampleRate > 0
       ? outputFormat.sampleRate : (session.sampleRate > 0 ? session.sampleRate : 48000.0);
   const auto channelCount = std::clamp<AVAudioChannelCount>(outputFormat.channelCount, 1, 32);
-  // initStandardFormatWithSampleRate:channels: devolve nil acima de 2 canais.
-  // Abrir o app com uma interface USB de 4+ saídas já conectada caía aqui e
-  // falhava em "preparar formato da saída". Acima de estéreo o formato precisa
-  // de um layout: canais discretos, na ordem da placa.
-  AVAudioFormat *renderFormat = nil;
-  if (channelCount <= 2) {
-    renderFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channels:channelCount];
-  } else {
-    AVAudioChannelLayout *layout = [[AVAudioChannelLayout alloc]
-        initWithLayoutTag:(kAudioChannelLayoutTag_DiscreteInOrder | channelCount)];
-    renderFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channelLayout:layout];
-  }
-  if (renderFormat == nil) {
-    _audioEngine = nil;
-    [self setAudioErrorStage:@"preparar formato da saída" error:nil];
-    return NO;
-  }
 
   auto state = std::make_shared<AudioState>();
+  state->sampleRate = sampleRate;
   state->runtime = std::make_unique<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
   state->runtime->setMidiInputEnabled(false);
   state->activeRuntime.store(state->runtime.get(), std::memory_order_release);
 
   // O formato vem da rota real (inclusive mono/Bluetooth), sem fixar estéreo
-  // ou 48 kHz. Se a rota mudar depois, o AVAudioEngine converte a saída sem
-  // reinterpretar os quadros do nosso gerador em outra taxa.
-  _sourceNode = [[AVAudioSourceNode alloc] initWithFormat:renderFormat renderBlock:^OSStatus(
-      BOOL *isSilence, const AudioTimeStamp *, AVAudioFrameCount frameCount, AudioBufferList *outputData) {
-    auto *runtime = state->activeRuntime.load(std::memory_order_acquire);
-    if (isSilence) *isSilence = runtime == nullptr ? YES : NO;
-    if (outputData == nullptr) return noErr;
-    for (UInt32 buffer = 0; buffer < outputData->mNumberBuffers; ++buffer) {
-      if (outputData->mBuffers[buffer].mData != nullptr) {
-        std::fill_n(static_cast<float *>(outputData->mBuffers[buffer].mData),
-                    outputData->mBuffers[buffer].mDataByteSize / sizeof(float), 0.0f);
-      }
-    }
-    if (runtime == nullptr) return noErr;
-    state->callbackSeen.store(true, std::memory_order_release);
-    std::size_t channelCount = 0;
-    for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
-      channelCount += std::max<UInt32>(1, outputData->mBuffers[bufferIndex].mNumberChannels);
-    }
-    channelCount = std::clamp<std::size_t>(channelCount, 1, 32);
-    std::size_t offset = 0;
-    while (offset < frameCount) {
-      const auto frames = std::min(kRenderChunkFrames, static_cast<std::size_t>(frameCount) - offset);
-      runtime->renderInterleaved(state->interleaved.data(), frames, channelCount);
-      std::size_t firstChannel = 0;
-      for (UInt32 bufferIndex = 0; bufferIndex < outputData->mNumberBuffers; ++bufferIndex) {
-        auto &buffer = outputData->mBuffers[bufferIndex];
-        auto *samples = static_cast<float *>(buffer.mData);
-        const std::size_t bufferChannels = std::max<UInt32>(1, buffer.mNumberChannels);
-        if (samples != nullptr) {
-          for (std::size_t frame = 0; frame < frames; ++frame) {
-            for (std::size_t localChannel = 0; localChannel < bufferChannels; ++localChannel) {
-              const auto sourceChannel = firstChannel + localChannel;
-              if (sourceChannel < channelCount) {
-                samples[(offset + frame) * bufferChannels + localChannel] =
-                    state->interleaved[frame * channelCount + sourceChannel];
-              }
-            }
-          }
-        }
-        firstChannel += bufferChannels;
-      }
-      offset += frames;
-    }
-    return noErr;
-  }];
-
-  [_audioEngine attachNode:_sourceNode];
-  [_audioEngine connect:_sourceNode to:_audioEngine.mainMixerNode format:renderFormat];
+  // ou 48 kHz.
+  if (![self connectSourceNodeForState:state outputChannels:channelCount]) {
+    state->activeRuntime.store(nullptr, std::memory_order_release);
+    _sourceNode = nil;
+    _audioEngine = nil;
+    [self setAudioErrorStage:@"preparar formato da saída" error:nil];
+    return NO;
+  }
   [_audioEngine prepare];
   if (![_audioEngine startAndReturnError:&sessionError]) {
     state->activeRuntime.store(nullptr, std::memory_order_release);
@@ -319,6 +346,32 @@ private:
     return NO;
   }
   _audioState = std::move(state);
+  return YES;
+}
+
+- (BOOL)connectSourceNodeForState:(std::shared_ptr<AudioState>)state
+                    outputChannels:(AVAudioChannelCount)channels {
+  AVAudioFormat *hardware = [_audioEngine.outputNode outputFormatForBus:0];
+  AVAudioFormat *renderFormat = renderFormatFor(hardware, state->sampleRate, channels);
+  if (renderFormat == nil) return NO;
+  _sourceNode = makeSourceNode(renderFormat, state);
+  [_audioEngine attachNode:_sourceNode];
+  // connect: lança exceção (e fecharia o app) quando a saída recusa o formato.
+  @try {
+    if (channels <= 2) {
+      // Até estéreo o mixer adapta a saída (mono, Bluetooth, troca de rota) sem
+      // reinterpretar os quadros do gerador em outra taxa.
+      [_audioEngine connect:_sourceNode to:_audioEngine.mainMixerNode format:renderFormat];
+    } else {
+      // Acima de estéreo o mainMixer não distribui canais discretos e a placa
+      // ficava muda: o gerador já entrega cada canal pronto e vai direto à saída.
+      [_audioEngine connect:_sourceNode to:_audioEngine.outputNode format:renderFormat];
+    }
+  } @catch (NSException *exception) {
+    [_audioEngine detachNode:_sourceNode];
+    _sourceNode = nil;
+    return NO;
+  }
   return YES;
 }
 

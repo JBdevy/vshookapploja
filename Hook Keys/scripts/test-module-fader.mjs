@@ -19,7 +19,8 @@ test('iOS generator and DSP use the same sample-rate clock negotiated by the rou
   const engine = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
   assert.match(engine, /outputFormat\s*=\s*\[_audioEngine\.outputNode inputFormatForBus:0\]/);
   assert.match(engine, /sampleRate\s*=\s*outputFormat\.sampleRate/);
-  assert.match(engine, /initWithFormat:renderFormat renderBlock:/);
+  assert.match(engine, /makeSourceNode\(renderFormat, state\)/);
+  assert.match(engine, /initWithFormat:format renderBlock:/);
   assert.match(engine, /connect:_sourceNode to:_audioEngine\.mainMixerNode format:renderFormat/);
   assert.doesNotMatch(engine, /connect:_sourceNode to:_audioEngine\.mainMixerNode format:nil/);
 });
@@ -51,7 +52,7 @@ test('iOS batches MIDI paint and isolates dynamic keyboard and meter layers', ()
   assert.match(runtime, /dataset\.platform\s*=\s*isNative \? Capacitor\.getPlatform\(\)/);
   assert.match(player, /iosRuntime[\s\S]*pendingKeyboardNoteStates[\s\S]*requestAnimationFrame/);
   assert.match(css, /html\[data-platform="ios"\] :is\(\.player-module__meter, \.performance-keyboard__key\)[\s\S]*contain:\s*paint/);
-  assert.match(css, /html\[data-platform="ios"\] \.player-module__meter-fill[\s\S]*transition-property:\s*clip-path/);
+  assert.match(css, /html\[data-platform="ios"\] \.player-module__meter-fill[\s\S]*transition-property:\s*transform/);
 });
 
 test('mobile effects omitted from a call stay bypassed rather than activating compression', () => {
@@ -105,12 +106,15 @@ test('audio meter fills the complete rail as independent stereo halves', () => {
   assert.match(themed[2], /overflow:\s*hidden;/);
   assert.match(css, /\.player-module__meter::after\s*\{[^}]*left:\s*50%;/s);
   assert.match(css, /width:\s*calc\(50% - \.5px\);/);
-  assert.match(css, /\.player-module__meter-fill\s*\{[^}]*#0db758[^}]*#ffe23b[^}]*#ff3e32/s);
-  assert.match(css, /clip-path:\s*inset\(100% 0 0\)/);
-  assert.match(css, /transition:\s*clip-path 90ms linear/);
+  // Degradê em altura total dentro de uma janela: os dois andam só com transform
+  // (GPU), sem repintar e sem comprimir as cores.
+  assert.match(css, /\.player-module__meter-fill > i\s*\{[^}]*#0db758[^}]*#ffe23b[^}]*#ff3e32/s);
+  assert.match(css, /\.player-module__meter-fill\s*\{[^}]*overflow:\s*hidden;[^}]*transform:\s*translate3d\(0, 100%, 0\);[^}]*transition:\s*transform 90ms linear/s);
+  assert.doesNotMatch(css, /transition:\s*clip-path/);
   const fader = readFileSync(new URL('../src/features/player/ModuleFader.ts', import.meta.url), 'utf8');
-  assert.match(fader, /style\.clipPath\s*=\s*`inset\(/);
-  assert.doesNotMatch(fader, /style\.transform\s*=\s*`scaleY\(/);
+  assert.match(fader, /window\.style\.transform = `translate3d\(0, \$\{hidden\}%, 0\)`/);
+  assert.match(fader, /gradient\.style\.transform = `translate3d\(0, -\$\{hidden\}%, 0\)`/);
+  assert.doesNotMatch(fader, /style\.clipPath|scaleY\(/);
   assert.match(css, /html\[data-runtime="native"\] \.player-module__meter-fill/);
   assert.match(css, /\.player-module__fader\.is-clipping \.player-module__meter-fill/);
 });
@@ -312,7 +316,7 @@ test('Auto ligado fica amarelo e Repetir ligado pisca verde acima do tema geral'
 
 test('Modo Lite não tira a transição nem desacelera o meter', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  const lite = css.match(/\.hook-keys-lite \.player-module__meter-fill \{([^}]*)\}/)[1];
+  const lite = css.match(/\.hook-keys-lite :is\(\.player-module__meter-fill, \.player-module__meter-fill > i\) \{([^}]*)\}/)[1];
   assert.doesNotMatch(lite, /transition:\s*none/);
   assert.doesNotMatch(player, /LITE_MODULE_METER_INTERVAL_MS/);
 });
@@ -336,8 +340,13 @@ test('música importada no iOS não grava Blob no IndexedDB', () => {
 
 test('iOS abre interface USB com mais de 2 saídas usando layout de canais', () => {
   const engine = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
-  assert.match(engine, /if \(channelCount <= 2\)[\s\S]*?initStandardFormatWithSampleRate:sampleRate channels:channelCount/);
-  assert.match(engine, /kAudioChannelLayoutTag_DiscreteInOrder \| channelCount[\s\S]*?initStandardFormatWithSampleRate:sampleRate channelLayout:layout/);
+  assert.match(engine, /if \(channels <= 2\) \{\s*return \[\[AVAudioFormat alloc\] initStandardFormatWithSampleRate:sampleRate channels:channels\]/);
+  assert.match(engine, /kAudioChannelLayoutTag_DiscreteInOrder \| channels\)\];\s*return \[\[AVAudioFormat alloc\] initStandardFormatWithSampleRate:sampleRate channelLayout:discrete\]/);
+  // Acima de estéreo o gerador vai direto à saída: o mainMixer deixava a placa muda.
+  assert.match(engine, /connect:_sourceNode to:_audioEngine\.outputNode format:renderFormat/);
+  assert.match(engine, /@catch \(NSException \*exception\)/);
+  // Placa plugada depois do boot: refaz o gerador com os canais da nova saída.
+  assert.match(engine, /\[_sourceNode outputFormatForBus:0\]\.channelCount != hardwareChannels/);
 });
 
 test('Android confere a placa aberta, reabre após desconectar e lista só saídas de música', () => {
@@ -373,4 +382,23 @@ test('lista da Playlist reaproveita linhas e só sincroniza o que mudou', () => 
 test('ícone do Android cabe no recorte redondo do launcher', async () => {
   const png = readFileSync(new URL('../android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png', import.meta.url));
   assert.equal(png.readUInt32BE(16), 432);
+});
+
+test('listas da Playlist não têm efeito elástico nas pontas', () => {
+  assert.match(css, /:is\(\.tracks-library-grid, \.tracks-playlists, \.tracks-playlist-selection-grid\) \{\s*overscroll-behavior: none;/);
+  assert.doesNotMatch(css, /\.tracks-split-panel \.tracks-library-grid \{[^}]*overscroll-behavior: contain/);
+});
+
+test('Modo Lite corta a pintura dos botões no toque', () => {
+  assert.match(css, /\.hook-keys-lite :is\(\.player-screen, \.player-modal\) :is\(button, \[role="button"\], \.app-select__toggle\) \{\s*text-shadow: none !important;\s*transition: none !important;/);
+});
+
+test('apps mostram RAM ao lado do User; desktop mantém CPU', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
+  assert.match(player, /this\.desktopRuntime \? `[\s\S]*?data-cpu-meter[\s\S]*?` : Capacitor\.isNativePlatform\(\) \? `[\s\S]*?data-ram-meter/);
+  assert.match(ios, /CAPPluginMethod\(name: "memoryUsage"/);
+  assert.match(ios, /phys_footprint[\s\S]*?os_proc_available_memory\(\)/);
+  assert.match(android, /public void memoryUsage\(PluginCall call\)\s*\{\s*memoryExecutor\.execute/);
 });

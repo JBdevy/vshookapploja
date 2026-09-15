@@ -195,6 +195,7 @@ interface HookKeysNativePlugin {
   }): Promise<void>;
   audioOutputStatus(): Promise<NativeAudioOutputStatus>;
   audioRouteLog(): Promise<{ current: string; events: string[] }>;
+  memoryUsage(): Promise<{ percent: number; usedBytes: number; limitBytes: number }>;
   moduleMeterLevels(): Promise<{ levels: number[] }>;
   moduleAnalysis(options: { moduleIndex: number }): Promise<{ values: number[] }>;
   setMidiInputs(options: { deviceIds: Array<string | null> }): Promise<void>;
@@ -379,6 +380,18 @@ class HookKeysNativeBridge {
     if (!Capacitor.isNativePlatform() || this.tauriInvoke() || !this.isAvailable()) return null;
     try {
       return await plugin.audioRouteLog();
+    } catch {
+      return null;
+    }
+  }
+
+  // RAM do app em %: no iOS contra o limite do app, no Android contra a RAM do
+  // aparelho. Null no desktop (lá o topo mostra a CPU) e no navegador.
+  async memoryUsage(): Promise<{ percent: number; usedBytes: number; limitBytes: number } | null> {
+    if (!Capacitor.isNativePlatform() || this.tauriInvoke()) return null;
+    try {
+      const result = await plugin.memoryUsage();
+      return Number.isFinite(result.percent) ? result : null;
     } catch {
       return null;
     }

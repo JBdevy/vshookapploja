@@ -6626,7 +6626,12 @@ html[data-runtime="desktop"] .is-tracks-split .player-module__fader-rail { width
   min-height: 0;
   padding-right: 2px;
   overflow-y: auto;
-  overscroll-behavior: contain;
+}
+
+/* Listas da Playlist sem efeito elástico nas pontas: no iOS o "quique" no fim
+   ou no começo segurava o gesto e a lista engasgava ao puxar de volta. */
+:is(.tracks-library-grid, .tracks-playlists, .tracks-playlist-selection-grid) {
+  overscroll-behavior: none;
 }
 
 /* Cada linha pinta isolada: o letreiro de um nome não repinta as vizinhas. */
@@ -9896,6 +9901,21 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
     font-size: 7px;
   }
 
+  .player-screen--tablet .player-top-actions > .player-ram-meter {
+    min-width: 34px;
+    min-height: 27px;
+    padding-inline: 4px;
+    border-radius: 6px;
+  }
+
+  .player-screen--tablet .player-ram-meter small {
+    font-size: 6px;
+  }
+
+  .player-screen--tablet .player-ram-meter strong {
+    font-size: 9px;
+  }
+
   .player-screen--tablet .track-transport {
     grid-template-columns: auto minmax(32px, 1fr) minmax(29px, auto);
     gap: 3px;
@@ -10839,12 +10859,27 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   pointer-events: none;
 }
 
+/* O nível anda só com transform, que a GPU anima sem repintar: a janela
+   (fill) desce e o degradê (i) sobe na mesma medida, então cada cor fica
+   sempre na mesma altura. A transição de clip-path repintava o degradê das 16
+   barras a cada quadro e saturava a thread principal no iPad antigo. */
 .player-module__meter-fill {
   top: 0;
   bottom: 0;
   height: auto;
   width: calc(50% - .5px);
+  overflow: hidden;
   border-radius: 0;
+  background: none;
+  box-shadow: none;
+  transform: translate3d(0, 100%, 0);
+  transition: transform 90ms linear, filter 90ms linear;
+  will-change: transform;
+}
+
+.player-module__meter-fill > i {
+  position: absolute;
+  inset: 0;
   background:
     linear-gradient(90deg, rgba(0,0,0,.2), transparent 24% 76%, rgba(0,0,0,.24)),
     linear-gradient(to top,
@@ -10854,12 +10889,10 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
       #ff9b22 79.5%,
       #ff3e32 80.5%,
       #dc001b 100%);
-  box-shadow:
-    inset 0 0 8px rgba(255,255,255,.18),
-    0 0 8px rgba(30, 224, 103, .5);
-  clip-path: inset(100% 0 0);
-  transition: clip-path 90ms linear, filter 90ms linear;
-  will-change: clip-path;
+  box-shadow: inset 0 0 8px rgba(255,255,255,.18);
+  transform: translate3d(0, -100%, 0);
+  transition: transform 90ms linear;
+  will-change: transform;
 }
 
 .player-module__meter-fill--left {
@@ -10872,13 +10905,12 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   left: auto;
 }
 
-html[data-runtime="native"] .player-module__meter-fill {
+html[data-runtime="native"] .player-module__meter-fill > i {
   box-shadow: none;
 }
 
 html[data-runtime="native"] .player-module__fader.is-clipping .player-module__meter-fill {
   filter: none;
-  box-shadow: none;
 }
 
 /* No WKWebView, limita repinturas do MIDI às teclas/meters e evita reconstruir
@@ -10893,7 +10925,7 @@ html[data-platform="ios"] .performance-keyboard__key.is-pressed {
 }
 
 html[data-platform="ios"] .player-module__meter-fill {
-  transition-property: clip-path;
+  transition-property: transform;
 }
 
 /* Perfil opcional para aparelhos antigos. Mantém todos os controles e todo o
@@ -10917,9 +10949,17 @@ html[data-platform="ios"] .player-module__meter-fill {
   contain: paint;
 }
 
+/* No iPad antigo o custo do toque é pintura: a sombra de texto de cada botão e
+   as transições de sombra/transform repintam o botão por vários quadros. No
+   Lite o botão troca de estado direto, sem animar. */
+.hook-keys-lite :is(.player-screen, .player-modal) :is(button, [role="button"], .app-select__toggle) {
+  text-shadow: none !important;
+  transition: none !important;
+}
+
 /* O meter mantém a transição no Lite: sem ela o nível salta a cada leitura
    e parece baixo FPS. */
-.hook-keys-lite .player-module__meter-fill {
+.hook-keys-lite :is(.player-module__meter-fill, .player-module__meter-fill > i) {
   filter: none !important;
   box-shadow: none !important;
 }
@@ -10935,7 +10975,10 @@ html[data-platform="ios"] .player-module__meter-fill {
 
 .player-module__fader.is-clipping .player-module__meter-fill {
   filter: saturate(1.25) brightness(1.18);
-  box-shadow: inset 0 0 8px rgba(255,255,255,.25), 0 0 12px rgba(255,35,35,.9);
+}
+
+html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-module__meter-fill > i {
+  box-shadow: inset 0 0 8px rgba(255,255,255,.25);
 }
 
 .player-module__zero-line {
@@ -12778,6 +12821,17 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   min-height: 30px;
   padding-inline: 6px;
   font-size: 10px;
+}
+
+/* RAM ao lado do User nos apps: mesma altura dos botões do topo. */
+.player-top-actions > .player-ram-meter {
+  min-width: clamp(44px, 4.2vw, 64px);
+}
+
+.player-screen--tablet.is-tracks-split .player-top-actions > .player-ram-meter {
+  min-width: 42px;
+  min-height: 30px;
+  padding-inline: 5px;
 }
 :root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-next-field {
   padding-inline: 6px;

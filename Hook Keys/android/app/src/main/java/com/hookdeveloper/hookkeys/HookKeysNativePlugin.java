@@ -2,6 +2,7 @@ package com.hookdeveloper.hookkeys;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.media.midi.MidiDevice;
@@ -13,6 +14,7 @@ import android.media.midi.MidiReceiver;
 import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
+import android.os.Debug;
 import android.os.Handler;
 import android.os.Looper;
 import android.net.Uri;
@@ -39,6 +41,8 @@ import java.util.Locale;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @CapacitorPlugin(
     name = "HookKeysNative",
@@ -70,6 +74,8 @@ public class HookKeysNativePlugin extends Plugin {
     // Últimos eventos de dispositivos de áudio, exibidos no app para diagnóstico.
     private final List<String> audioRouteEvents = new ArrayList<>();
     private AudioManager audioManager;
+    // Ler a memória percorre os mapas do processo: fica fora da thread principal.
+    private final ExecutorService memoryExecutor = Executors.newSingleThreadExecutor();
 
     private final AudioDeviceCallback audioDeviceCallback = new AudioDeviceCallback() {
         @Override
@@ -119,6 +125,7 @@ public class HookKeysNativePlugin extends Plugin {
         if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioDeviceCallback);
         closeMidiConnections();
         closeUploads();
+        memoryExecutor.shutdownNow();
         nativeStop();
         super.handleOnDestroy();
     }
@@ -258,6 +265,28 @@ public class HookKeysNativePlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("devices", devices);
         call.resolve(result);
+    }
+
+    // RAM do app (PSS, inclui a memória nativa dos SF2) contra a RAM do aparelho.
+    @PluginMethod
+    public void memoryUsage(PluginCall call) {
+        memoryExecutor.execute(() -> {
+            Debug.MemoryInfo info = new Debug.MemoryInfo();
+            Debug.getMemoryInfo(info);
+            long used = info.getTotalPss() * 1024L;
+            long total = 0;
+            ActivityManager activityManager = (ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
+            if (activityManager != null) {
+                ActivityManager.MemoryInfo memory = new ActivityManager.MemoryInfo();
+                activityManager.getMemoryInfo(memory);
+                total = memory.totalMem;
+            }
+            JSObject result = new JSObject();
+            result.put("usedBytes", used);
+            result.put("limitBytes", total);
+            result.put("percent", total > 0 ? Math.min(100.0, used * 100.0 / total) : 0.0);
+            call.resolve(result);
+        });
     }
 
     @PluginMethod

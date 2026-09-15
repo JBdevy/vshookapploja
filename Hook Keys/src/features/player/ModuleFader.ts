@@ -109,8 +109,8 @@ export function createModuleFaderMarkup(moduleNumber: number): string {
         aria-valuetext="${formatFaderDb(DEFAULT_DB)}"
       >
         <span class="player-module__meter" aria-hidden="true">
-          <span class="player-module__meter-fill player-module__meter-fill--left"></span>
-          <span class="player-module__meter-fill player-module__meter-fill--right"></span>
+          <span class="player-module__meter-fill player-module__meter-fill--left"><i></i></span>
+          <span class="player-module__meter-fill player-module__meter-fill--right"><i></i></span>
         </span>
         <span class="player-module__zero-line" aria-hidden="true"></span>
         <span class="player-module__fader-handle" aria-hidden="true"></span>
@@ -120,11 +120,19 @@ export function createModuleFaderMarkup(moduleNumber: number): string {
   `;
 }
 
+function setMeterWindow(window: HTMLElement, gradient: HTMLElement, level: number): void {
+  const hidden = ((1 - level) * 100).toFixed(2);
+  window.style.transform = `translate3d(0, ${hidden}%, 0)`;
+  gradient.style.transform = `translate3d(0, -${hidden}%, 0)`;
+}
+
 export class ModuleFader {
   private readonly rail: HTMLElement;
   private readonly output: HTMLOutputElement;
   private readonly leftMeter: HTMLElement;
   private readonly rightMeter: HTMLElement;
+  private readonly leftMeterGradient: HTMLElement;
+  private readonly rightMeterGradient: HTMLElement;
   private lastLeftMeterScale = -1;
   private lastRightMeterScale = -1;
   private clipping = false;
@@ -152,11 +160,17 @@ export class ModuleFader {
     const output = root.querySelector<HTMLOutputElement>('.player-module__fader-output');
     const leftMeter = root.querySelector<HTMLElement>('.player-module__meter-fill--left');
     const rightMeter = root.querySelector<HTMLElement>('.player-module__meter-fill--right');
-    if (!rail || !output || !leftMeter || !rightMeter) throw new Error(`Fader do módulo ${moduleNumber} incompleto.`);
+    const leftMeterGradient = leftMeter?.querySelector<HTMLElement>('i');
+    const rightMeterGradient = rightMeter?.querySelector<HTMLElement>('i');
+    if (!rail || !output || !leftMeter || !rightMeter || !leftMeterGradient || !rightMeterGradient) {
+      throw new Error(`Fader do módulo ${moduleNumber} incompleto.`);
+    }
     this.rail = rail;
     this.output = output;
     this.leftMeter = leftMeter;
     this.rightMeter = rightMeter;
+    this.leftMeterGradient = leftMeterGradient;
+    this.rightMeterGradient = rightMeterGradient;
     this.rail.setAttribute('aria-orientation', 'vertical');
   }
 
@@ -193,13 +207,14 @@ export class ModuleFader {
     const right = dbToPosition(clamp(rightDb, MIN_DB, MAX_DB));
     // O gradiente permanece na altura total do medidor e apenas a janela
     // visivel sobe. Escalar o gradiente inteiro comprimia amarelo/vermelho na
-    // base, fazendo um sinal baixo parecer clipado.
+    // base, fazendo um sinal baixo parecer clipado. Janela e gradiente andam
+    // em sentidos opostos só com transform: a GPU anima sem repintar.
     if (Math.abs(left - this.lastLeftMeterScale) >= 0.002) {
-      this.leftMeter.style.clipPath = `inset(${((1 - left) * 100).toFixed(2)}% 0 0)`;
+      setMeterWindow(this.leftMeter, this.leftMeterGradient, left);
       this.lastLeftMeterScale = left;
     }
     if (Math.abs(right - this.lastRightMeterScale) >= 0.002) {
-      this.rightMeter.style.clipPath = `inset(${((1 - right) * 100).toFixed(2)}% 0 0)`;
+      setMeterWindow(this.rightMeter, this.rightMeterGradient, right);
       this.lastRightMeterScale = right;
     }
     const clipping = leftDb > 0 || rightDb > 0;
