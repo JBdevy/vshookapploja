@@ -9372,15 +9372,19 @@ export class PlayerScreen {
         setLoading(true, progress);
         let adopted = false;
         try {
-          const response = await fetch(picker.fileUrl(file.path));
-          if (!response.ok) throw new Error('file_read_failed');
-          const blob = await response.blob();
-          const [record] = await this.trackLibrary.addFiles([new File([blob], file.name, { type: audioTypeForFileName(file.name) })]);
+          const recordId = globalThis.crypto?.randomUUID?.()
+            ?? `track-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;
+          // Primeiro guarda o arquivo no armazenamento nativo. Só depois cria
+          // a linha visível da biblioteca, evitando registros sem áudio.
+          await picker.adopt(file.path, recordId, trackFileExtension(file.name));
+          adopted = true;
+          await this.trackLibrary.addNativeFile({
+            id: recordId,
+            name: file.name,
+            mimeType: audioTypeForFileName(file.name),
+            size: file.size,
+          });
           added += 1;
-          // O arquivo escolhido já está no app: vira o que o motor toca.
-          if (record && hookKeysNative.tracksAvailable()) {
-            adopted = await picker.adopt(file.path, record.id, trackFileExtension(file.name)).then(() => true, () => false);
-          }
         } catch {
           // Segue com as outras músicas.
         } finally {

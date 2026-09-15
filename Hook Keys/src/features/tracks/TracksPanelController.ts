@@ -76,9 +76,8 @@ const BLOCK_NAME_LIMIT = 12;
 function createTrackImportLoadingMarkup(): string {
   return `
     <div class="tracks-import-loading" data-tracks-import-loading role="status" aria-live="polite" hidden>
-      <span class="loading-orbit" aria-hidden="true"></span>
       <strong data-tracks-import-loading-label>Adicionando músicas...</strong>
-      <small>Aguarde enquanto os arquivos são preparados.</small>
+      <span class="tracks-import-loading__bar" aria-hidden="true"><i></i></span>
     </div>
   `;
 }

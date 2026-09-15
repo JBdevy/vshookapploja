@@ -244,6 +244,36 @@ export class TrackLibraryStore {
     return records;
   }
 
+  /**
+   * Registra uma música que já foi guardada pelo motor nativo.
+   * No iOS não duplicamos o arquivo inteiro no IndexedDB: o Blob vazio mantém
+   * compatibilidade com o formato da biblioteca e o áudio real fica em
+   * Application Support/Tracks.
+   */
+  async addNativeFile(file: {
+    id: string;
+    name: string;
+    mimeType: string;
+    size: number;
+  }): Promise<LocalTrack> {
+    const record: StoredLocalTrack = {
+      id: file.id,
+      accountKey: this.accountKey,
+      name: trackNameFromFile(file.name),
+      fileName: file.name,
+      mimeType: file.mimeType || 'application/octet-stream',
+      size: Math.max(0, file.size),
+      addedAt: new Date().toISOString(),
+      file: new Blob([], { type: file.mimeType || 'application/octet-stream' }),
+    };
+    const database = await this.openDatabase();
+    await requestResult(
+      database.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(record),
+    );
+    const { accountKey: _accountKey, file: _file, ...track } = record;
+    return track;
+  }
+
   async getFile(trackId: string): Promise<Blob | null> {
     const database = await this.openDatabase();
     const record = await requestResult<StoredLocalTrack | undefined>(

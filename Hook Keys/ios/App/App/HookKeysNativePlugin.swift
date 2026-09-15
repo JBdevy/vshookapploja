@@ -690,10 +690,16 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                     .appendingPathComponent("HookKeysImport", isDirectory: true)
                     .appendingPathComponent(UUID().uuidString, isDirectory: true)
                 let destination = folder.appendingPathComponent(url.lastPathComponent)
+                let hasScopedAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if hasScopedAccess { url.stopAccessingSecurityScopedResource() }
+                }
                 do {
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    // asCopy já trouxe a música para dentro do app: só muda de lugar.
-                    try FileManager.default.moveItem(at: url, to: destination)
+                    // Alguns provedores do app Arquivos entregam a cópia em outro
+                    // volume. copyItem funciona nesses casos; moveItem pode falhar e
+                    // fazia a seleção chegar vazia ao JavaScript.
+                    try FileManager.default.copyItem(at: url, to: destination)
                     let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                     files.append(["path": destination.path, "name": url.lastPathComponent, "size": size])
                 } catch {

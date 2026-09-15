@@ -282,9 +282,12 @@ test('iOS Add música opens the native document picker directly', () => {
   }
   assert(swift.includes('UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)'), 'abre o seletor de documentos direto, em áudio');
   assert(swift.includes('picker.allowsMultipleSelection = true'), 'várias músicas de uma vez');
+  assert(swift.includes('FileManager.default.copyItem(at: url, to: destination)'), 'aceita músicas vindas de outro volume/provedor do app Arquivos');
   assert(!/fileBrowser|FileBrowser/.test(swift + bridge + player), 'o gerenciador próprio saiu');
   assert(bridge.includes("Capacitor.getPlatform() === 'ios'"), 'só no app iOS');
   assert(player.includes('hookKeysNative.audioPicker.isAvailable()'), 'Add música usa o seletor nativo no iOS');
+  assert(player.includes('this.trackLibrary.addNativeFile({'), 'a biblioteca registra a música depois da adoção nativa');
+  assert(!player.includes('fetch(picker.fileUrl(file.path))'), 'não duplica a música inteira na memória e no IndexedDB');
 });
 
 test('App Store icon has no alpha channel (Apple rejects transparent icons, error 90717)', () => {
