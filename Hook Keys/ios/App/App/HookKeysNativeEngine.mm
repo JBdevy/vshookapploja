@@ -229,18 +229,30 @@ private:
     return NO;
   }
 
-  // Somente depois da ativação a taxa da rota é definitiva.
-  const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
+  // A taxa da sessão é uma preferência negociada. O callback precisa usar o
+  // mesmo relógio do DSP, não um formato implícito escolhido pelo mainMixer.
+  _audioEngine = [[AVAudioEngine alloc] init];
+  AVAudioFormat *outputFormat = [_audioEngine.outputNode inputFormatForBus:0];
+  const double sampleRate = outputFormat.sampleRate > 0
+      ? outputFormat.sampleRate : (session.sampleRate > 0 ? session.sampleRate : 48000.0);
+  const auto channelCount = std::clamp<AVAudioChannelCount>(outputFormat.channelCount, 1, 32);
+  AVAudioFormat *renderFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate
+                                                                           channels:channelCount];
+  if (renderFormat == nil) {
+    _audioEngine = nil;
+    [self setAudioErrorStage:@"preparar formato da saída" error:nil];
+    return NO;
+  }
 
   auto state = std::make_shared<AudioState>();
   state->runtime = std::make_unique<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
   state->runtime->setMidiInputEnabled(false);
   state->activeRuntime.store(state->runtime.get(), std::memory_order_release);
 
-  // Não imponha ao mixer um formato calculado pelo app. O mainMixer acompanha
-  // automaticamente a saída física do iPhone e entrega ao SourceNode o formato
-  // negociado da rota (alto-falante, mono, Bluetooth, AirPlay ou interface).
-  _sourceNode = [[AVAudioSourceNode alloc] initWithRenderBlock:^OSStatus(
+  // O formato vem da rota real (inclusive mono/Bluetooth), sem fixar estéreo
+  // ou 48 kHz. Se a rota mudar depois, o AVAudioEngine converte a saída sem
+  // reinterpretar os quadros do nosso gerador em outra taxa.
+  _sourceNode = [[AVAudioSourceNode alloc] initWithFormat:renderFormat renderBlock:^OSStatus(
       BOOL *isSilence, const AudioTimeStamp *, AVAudioFrameCount frameCount, AudioBufferList *outputData) {
     auto *runtime = state->activeRuntime.load(std::memory_order_acquire);
     if (isSilence) *isSilence = runtime == nullptr ? YES : NO;
@@ -285,10 +297,8 @@ private:
     return noErr;
   }];
 
-  _audioEngine = [[AVAudioEngine alloc] init];
   [_audioEngine attachNode:_sourceNode];
-  // nil deixa o AVAudioEngine escolher um formato conversível para a rota.
-  [_audioEngine connect:_sourceNode to:_audioEngine.mainMixerNode format:nil];
+  [_audioEngine connect:_sourceNode to:_audioEngine.mainMixerNode format:renderFormat];
   [_audioEngine prepare];
   if (![_audioEngine startAndReturnError:&sessionError]) {
     state->activeRuntime.store(nullptr, std::memory_order_release);

@@ -1233,6 +1233,33 @@ void testSynthPreservesLinearVelocityAndGain() {
   }
 }
 
+void testSynthPitchIsIndependentOfSampleRate() {
+  const auto positiveCrossings = [](double sampleRate) {
+    hook_keys::AnalogSynthModule synth(sampleRate);
+    hook_keys::AnalogSynthConfig config;
+    config.oscillator1 = 0;
+    config.oscillator2Enabled = false;
+    config.attackMs = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+    config.filterResonance = 0.0f;
+    expect(synth.setConfig(config), "configure Synth sample-rate test");
+    synth.beginBlock();
+    synth.noteOn(69, 127); // A4 = 440 Hz
+    const auto frames = static_cast<std::size_t>(sampleRate);
+    std::vector<float> left(frames), right(frames);
+    synth.renderAdd(left.data(), right.data(), frames, 1.0f);
+    std::size_t crossings = 0;
+    for (std::size_t frame = 1; frame < frames; ++frame) {
+      if (left[frame - 1] <= 0.0f && left[frame] > 0.0f) ++crossings;
+    }
+    return crossings;
+  };
+  const auto at44100 = positiveCrossings(44100.0);
+  const auto at48000 = positiveCrossings(48000.0);
+  expect(at44100 >= 439 && at44100 <= 441, "A4 stays at 440 Hz with a 44.1 kHz clock");
+  expect(at48000 >= 439 && at48000 <= 441, "A4 stays at 440 Hz with a 48 kHz clock");
+  expect(at44100 == at48000, "changing sample rate does not transpose the Synth");
+}
+
 void testRotarySpeakerProcessing() {
   constexpr std::size_t frames = 48000;
   const auto input = [frames]() {
@@ -1287,6 +1314,34 @@ void testRotarySpeakerProcessing() {
   expect(slow == render(true, 1, 0.7f, 1.0f, 128, false, 127), "Modulation OFF ignores CC 1 for rotary speed");
   expect(render(true, 1, 0.0f, 1.0f, 128) == render(true, 2, 0.0f, 1.0f, 128),
       "zero Depth removes rotation modulation independent of speed");
+
+  const auto renderStereo = [](bool foldToMono) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0);
+    hook_keys::ModuleEffectsConfig config;
+    config.rotary = {true, 2, 0.8f, 6.4f, 0.1f, 0.85f, 1.0f};
+    effects.setConfig(config, 120.0f);
+    std::vector<float> left(48000), right(48000);
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      const auto seconds = static_cast<double>(index) / 48000.0;
+      left[index] = static_cast<float>(0.18 * std::sin(6.283185307179586 * 260.0 * seconds));
+      right[index] = static_cast<float>(0.18 * std::sin(6.283185307179586 * 2100.0 * seconds));
+      if (foldToMono) left[index] = right[index] = (left[index] + right[index]) * 0.5f;
+    }
+    effects.process(left.data(), right.data(), left.size());
+    return std::array<std::vector<float>, 2>{std::move(left), std::move(right)};
+  };
+  const auto stereoSource = renderStereo(false);
+  const auto foldedSource = renderStereo(true);
+  double retainedStereoInformation = 0.0;
+  double outputWidth = 0.0;
+  for (std::size_t index = 0; index < stereoSource[0].size(); ++index) {
+    retainedStereoInformation += std::abs(stereoSource[0][index] - foldedSource[0][index])
+        + std::abs(stereoSource[1][index] - foldedSource[1][index]);
+    outputWidth += std::abs(stereoSource[0][index] - stereoSource[1][index]);
+  }
+  expect(retainedStereoInformation > 100.0, "rotary does not fold an existing stereo source to mono");
+  expect(outputWidth > 100.0, "rotary produces a clearly stereo horn/drum microphone image");
 }
 
 void testIndependentOscillatorOctaves() {
@@ -2107,6 +2162,7 @@ int main() {
   testSharedSoundFontEnvelopeIsolation();
   testIndependentOscillatorVolumes();
   testSynthPreservesLinearVelocityAndGain();
+  testSynthPitchIsIndependentOfSampleRate();
   testIndependentOscillatorOctaves();
   testMetronomeRunsOnTheAudioCallback();
   testVelocityCurveMapping();

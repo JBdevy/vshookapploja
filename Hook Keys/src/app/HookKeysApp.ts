@@ -104,6 +104,7 @@ export class HookKeysApp {
   private async showLogin(): Promise<void> {
     const changeId = ++this.screenChangeId;
     const cover = coverOrientationChange();
+    this.screenRoot.inert = false;
     this.octaveTransition?.remove();
     this.stopLicenseMonitoring?.();
     this.stopLicenseMonitoring = null;
@@ -126,6 +127,7 @@ export class HookKeysApp {
   private async showPlayer(session: AuthenticatedSession): Promise<void> {
     const changeId = ++this.screenChangeId;
     const cover = coverOrientationChange();
+    this.screenRoot.inert = true;
     this.octaveTransition?.remove();
     this.playerScreen?.destroy();
     this.playerScreen = null;
@@ -172,8 +174,9 @@ export class HookKeysApp {
     );
     this.playerScreen.mount();
     const loading = this.playOctaveTransition('enter', undefined, this.playerScreen.waitUntilReady());
-    // O overlay de carregamento já cobre o player quando o preto é retirado.
-    cover.remove();
+    // Mantém o preto acima do player e abaixo das duas animações. Assim os
+    // fades e a troca entre carregamento e boas-vindas nunca expõem o player.
+    cover.classList.add('orientation-transition-cover--startup');
     await loading;
     if (changeId !== this.screenChangeId) return;
     await this.playWelcomeTransition(welcomeDisplayName(session));
@@ -181,6 +184,7 @@ export class HookKeysApp {
     } catch (error) {
       if (changeId === this.screenChangeId) this.showStartupError(session, error);
     } finally {
+      if (changeId === this.screenChangeId) this.screenRoot.inert = false;
       cover.remove();
     }
   }

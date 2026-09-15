@@ -33,6 +33,7 @@ export async function initializePlatformRuntime(): Promise<void> {
   const isDesktop = isDesktopRuntime();
   const isNative = Capacitor.isNativePlatform();
   document.documentElement.dataset.runtime = isDesktop ? 'desktop' : isNative ? 'native' : 'web';
+  document.documentElement.dataset.platform = isNative ? Capacitor.getPlatform() : isDesktop ? 'desktop' : 'web';
   document.documentElement.dataset.appMode = currentMode;
   if (isDesktop) {
     // O WebView do desktop não deve expor o menu de navegador em um app

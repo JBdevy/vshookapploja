@@ -171,8 +171,8 @@ void ModuleEffects::processTranceGate(float* left, float* right, std::size_t fra
 void ModuleEffects::RotarySpeaker::prepare(double nextSampleRate) {
   sampleRate = nextSampleRate;
   const auto capacity = static_cast<std::size_t>(std::ceil(sampleRate * 0.004)) + 4;
-  hornBuffer.assign(capacity, 0.0f);
-  drumBuffer.assign(capacity, 0.0f);
+  for (auto& buffer : hornBuffers) buffer.assign(capacity, 0.0f);
+  for (auto& buffer : drumBuffers) buffer.assign(capacity, 0.0f);
   crossover = 1.0f - std::exp(static_cast<float>(-2.0 * kPi * 800.0 / sampleRate));
   reset();
   configure(config);
@@ -199,12 +199,13 @@ void ModuleEffects::RotarySpeaker::setModulation(std::uint8_t value) noexcept {
 }
 
 void ModuleEffects::RotarySpeaker::reset() noexcept {
-  std::fill(hornBuffer.begin(), hornBuffer.end(), 0.0f);
-  std::fill(drumBuffer.begin(), drumBuffer.end(), 0.0f);
+  for (auto& buffer : hornBuffers) std::fill(buffer.begin(), buffer.end(), 0.0f);
+  for (auto& buffer : drumBuffers) std::fill(buffer.begin(), buffer.end(), 0.0f);
   writeIndex = 0;
   hornPhase = 0.0;
   drumPhase = 0.25;
-  hornHz = drumHz = lowPass = 0.0f;
+  hornHz = drumHz = 0.0f;
+  lowPass.fill(0.0f);
 }
 
 float ModuleEffects::RotarySpeaker::read(const std::vector<float>& buffer, float delaySamples) const noexcept {
@@ -218,37 +219,54 @@ float ModuleEffects::RotarySpeaker::read(const std::vector<float>& buffer, float
 }
 
 void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_t frames) noexcept {
-  if (!config.enabled || hornBuffer.empty() || drumBuffer.empty()) return;
+  if (!config.enabled || hornBuffers[0].empty() || drumBuffers[0].empty()) return;
   const auto targetHz = effectiveSpeed == 0 ? 0.0f : effectiveSpeed == 2 ? config.fastHz : config.slowHz;
   const auto samplesPerMs = static_cast<float>(sampleRate * 0.001);
   for (std::size_t frame = 0; frame < frames; ++frame) {
     hornHz += (targetHz - hornHz) * hornSmoothing;
     drumHz += (targetHz * 0.76f - drumHz) * drumSmoothing;
     hornPhase += hornHz / sampleRate;
-    drumPhase += drumHz / sampleRate;
+    // A horn e o tambor de uma Leslie real giram em sentidos opostos.
+    drumPhase -= drumHz / sampleRate;
     if (hornPhase >= 1.0) hornPhase -= 1.0;
-    if (drumPhase >= 1.0) drumPhase -= 1.0;
+    if (drumPhase < 0.0) drumPhase += 1.0;
     const auto hornMotion = static_cast<float>(std::sin(2.0 * kPi * hornPhase));
     const auto drumMotion = static_cast<float>(std::sin(2.0 * kPi * drumPhase));
     const auto hornDoppler = static_cast<float>(std::cos(2.0 * kPi * hornPhase)) * config.depth;
     const auto drumDoppler = static_cast<float>(std::cos(2.0 * kPi * drumPhase)) * config.depth;
     const auto dryLeft = left[frame];
     const auto dryRight = right[frame];
-    const auto mono = (dryLeft + dryRight) * 0.5f;
-    lowPass += crossover * (mono - lowPass);
-    drumBuffer[writeIndex] = lowPass;
-    hornBuffer[writeIndex] = mono - lowPass;
-    const auto hornLeft = read(hornBuffer, (0.8f + 0.35f * hornDoppler) * samplesPerMs);
-    const auto hornRight = read(hornBuffer, (0.8f - 0.35f * hornDoppler) * samplesPerMs);
-    const auto drumLeft = read(drumBuffer, (0.8f + 0.18f * drumDoppler) * samplesPerMs);
-    const auto drumRight = read(drumBuffer, (0.8f - 0.18f * drumDoppler) * samplesPerMs);
+    const std::array<float, 2> dry{dryLeft, dryRight};
+    for (std::size_t channel = 0; channel < 2; ++channel) {
+      lowPass[channel] += crossover * (dry[channel] - lowPass[channel]);
+      drumBuffers[channel][writeIndex] = lowPass[channel];
+      hornBuffers[channel][writeIndex] = dry[channel] - lowPass[channel];
+    }
+
+    // Um par de microfones ouve lados opostos da trajetória. Cada canal de
+    // entrada conserva seu conteúdo; apenas uma parcela ambiente cruza para o
+    // outro lado. Assim um SF2 estéreo não é convertido em mono e uma fonte
+    // mono ainda adquire largura pela diferença de Doppler/amplitude.
+    constexpr float crossfeed = 0.12f;
+    const auto hornLeftDelay = (0.90f + 0.52f * hornDoppler) * samplesPerMs;
+    const auto hornRightDelay = (0.90f - 0.52f * hornDoppler) * samplesPerMs;
+    const auto drumLeftDelay = (1.35f + 0.28f * drumDoppler) * samplesPerMs;
+    const auto drumRightDelay = (1.35f - 0.28f * drumDoppler) * samplesPerMs;
+    const auto hornLeft = read(hornBuffers[0], hornLeftDelay)
+        + read(hornBuffers[1], hornLeftDelay) * crossfeed;
+    const auto hornRight = read(hornBuffers[1], hornRightDelay)
+        + read(hornBuffers[0], hornRightDelay) * crossfeed;
+    const auto drumLeft = read(drumBuffers[0], drumLeftDelay)
+        + read(drumBuffers[1], drumLeftDelay) * crossfeed;
+    const auto drumRight = read(drumBuffers[1], drumRightDelay)
+        + read(drumBuffers[0], drumRightDelay) * crossfeed;
     const auto hornPan = hornMotion * config.depth * 0.6f;
     const auto drumPan = drumMotion * config.depth * 0.35f;
-    const auto wetLeft = hornLeft * (1.0f - hornPan) + drumLeft * (1.0f - drumPan);
-    const auto wetRight = hornRight * (1.0f + hornPan) + drumRight * (1.0f + drumPan);
+    const auto wetLeft = (hornLeft * (1.0f - hornPan) + drumLeft * (1.0f - drumPan)) / (1.0f + crossfeed);
+    const auto wetRight = (hornRight * (1.0f + hornPan) + drumRight * (1.0f + drumPan)) / (1.0f + crossfeed);
     left[frame] = dryLeft + (wetLeft - dryLeft) * config.mix;
     right[frame] = dryRight + (wetRight - dryRight) * config.mix;
-    writeIndex = (writeIndex + 1) % hornBuffer.size();
+    writeIndex = (writeIndex + 1) % hornBuffers[0].size();
   }
 }
 

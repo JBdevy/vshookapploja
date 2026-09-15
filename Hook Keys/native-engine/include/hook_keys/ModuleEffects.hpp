@@ -126,8 +126,8 @@ private:
     RotaryConfig config{};
     std::uint8_t effectiveSpeed = 1;
     double sampleRate = 48000.0;
-    std::vector<float> hornBuffer;
-    std::vector<float> drumBuffer;
+    std::array<std::vector<float>, 2> hornBuffers;
+    std::array<std::vector<float>, 2> drumBuffers;
     std::size_t writeIndex = 0;
     double hornPhase = 0.0;
     double drumPhase = 0.25;
@@ -136,7 +136,7 @@ private:
     float hornSmoothing = 0.0f;
     float drumSmoothing = 0.0f;
     float crossover = 0.0f;
-    float lowPass = 0.0f;
+    std::array<float, 2> lowPass{};
 
     void prepare(double nextSampleRate);
     void configure(RotaryConfig next) noexcept;

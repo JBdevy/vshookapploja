@@ -179,6 +179,7 @@ import {
   type PlayerBottomView,
 } from './PerformanceKeyboard';
 import { ComputerKeyboardController } from './ComputerKeyboardController';
+import { performanceNotesLabel } from './PerformanceChordDisplay';
 import { createTranceGateMarkup, readTranceGateSettings, tranceGateBeatMultiplier } from './TranceGateView';
 import {
   createSynthModuleMarkup,
@@ -394,48 +395,6 @@ const PRESET_COLORS = [
   ['#e89b31', '#62400d'],
   ['#57c957', '#174f1a'],
 ] as const;
-
-const CHORD_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'] as const;
-const CHORD_PATTERNS: readonly { intervals: readonly number[]; suffix: string }[] = [
-  { intervals: [0, 4, 7, 11], suffix: 'maj7' },
-  { intervals: [0, 3, 7, 10], suffix: 'm7' },
-  { intervals: [0, 4, 7, 10], suffix: '7' },
-  { intervals: [0, 3, 6, 10], suffix: 'm7(b5)' },
-  { intervals: [0, 3, 6, 9], suffix: 'dim7' },
-  { intervals: [0, 4, 7, 9], suffix: '6' },
-  { intervals: [0, 3, 7, 9], suffix: 'm6' },
-  { intervals: [0, 5, 7], suffix: 'sus4' },
-  { intervals: [0, 2, 7], suffix: 'sus2' },
-  { intervals: [0, 4, 8], suffix: 'aug' },
-  { intervals: [0, 3, 6], suffix: 'dim' },
-  { intervals: [0, 4, 7], suffix: '' },
-  { intervals: [0, 3, 7], suffix: 'm' },
-];
-
-function performanceNotesLabel(notes: readonly number[]): string {
-  const sortedNotes = [...new Set(notes)]
-    .filter((note) => Number.isInteger(note) && note >= 0 && note <= 127)
-    .sort((left, right) => left - right);
-  if (sortedNotes.length === 0) return '—';
-  if (sortedNotes.length === 1) return formatMidiNote(sortedNotes[0]!);
-
-  const pitchClasses = [...new Set(sortedNotes.map((note) => note % 12))].sort((left, right) => left - right);
-  if (pitchClasses.length >= 3) {
-    for (const root of pitchClasses) {
-      const intervals = pitchClasses.map((pitch) => (pitch - root + 12) % 12).sort((left, right) => left - right);
-      const chord = CHORD_PATTERNS.find((candidate) =>
-        candidate.intervals.length === intervals.length
-        && candidate.intervals.every((interval, index) => interval === intervals[index]));
-      if (!chord) continue;
-      const bass = sortedNotes[0]! % 12;
-      const inversion = bass === root ? '' : `/${CHORD_NOTE_NAMES[bass]}`;
-      return `${CHORD_NOTE_NAMES[root]}${chord.suffix}${inversion}`;
-    }
-  }
-
-  const visibleNotes = sortedNotes.slice(0, 6).map(formatMidiNote).join(' · ');
-  return sortedNotes.length > 6 ? `${visibleNotes} +${sortedNotes.length - 6}` : visibleNotes;
-}
 
 function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'module-volume') return `module:${target.moduleNumber}`;
@@ -804,9 +763,17 @@ function createBankNavigationMarkup(): string {
   `).join('');
 }
 
+export function isCellularPlayerViewport(width: number, height: number, desktopRuntime: boolean): boolean {
+  // O player nativo abre em paisagem. Usar o menor lado separa celulares de
+  // tablets e continua correto durante a transicao de orientacao do login.
+  return !desktopRuntime && Math.min(width, height) <= 520;
+}
+
 export class PlayerScreen {
   private readonly instanceId = ++playerScreenSequence;
   private readonly desktopRuntime = isDesktopRuntime();
+  private readonly cellularLayout = isCellularPlayerViewport(window.innerWidth, window.innerHeight, this.desktopRuntime);
+  private readonly iosRuntime = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
   private readonly handleRootClick = (event: Event) => this.onRootClick(event);
   private readonly handleRootPointerDown = (event: PointerEvent) => this.onRootPointerDown(event);
   private readonly handleRootPointerMove = (event: PointerEvent) => this.onRootPointerMove(event);
@@ -838,6 +805,8 @@ export class PlayerScreen {
   private visibleTrackSequence: LocalTrack[] = [];
   private renderedQueuedTrackName = '';
   private readonly displayedPerformanceNotes = new Map<string, number>();
+  private readonly pendingKeyboardNoteStates = new Map<number, boolean>();
+  private performanceDisplayFrame: number | null = null;
   private trackPlaybackSnapshot: TrackPlaybackSnapshot = {
     progress: 0,
     queueProgress: 0,
@@ -1024,7 +993,7 @@ export class PlayerScreen {
     ).join('');
 
     this.root.innerHTML = `
-      <main class="app-screen player-screen player-screen--tablet is-bank-view" data-player-screen="${this.instanceId}">
+      <main class="app-screen player-screen player-screen--tablet${this.cellularLayout ? ' player-screen--cellular' : ''} is-bank-view" data-player-screen="${this.instanceId}">
         <div class="player-primary">
           <div class="player-top-transport">
             <div class="player-top-brand-actions">
@@ -1102,12 +1071,12 @@ export class PlayerScreen {
               <div class="player-modules-row">${modules}</div>
             </section>
 
-            <section class="player-presets player-presets--combined${this.desktopRuntime ? ' player-presets--desktop' : ''}" data-player-bottom-panel aria-label="Presets e Keyboard">
+            <section class="player-presets player-presets--combined${this.desktopRuntime ? ' player-presets--desktop' : ''}${this.cellularLayout ? ' player-presets--cellular' : ''}" data-player-bottom-panel aria-label="${this.cellularLayout ? 'Presets' : 'Presets e Keyboard'}">
               <nav class="player-presets__header" aria-label="Escolher banco de presets">
                 ${createBankNavigationMarkup()}
               </nav>
               <div class="player-presets__grid">${createPresetRowsMarkup(1)}</div>
-              ${createPerformanceKeyboardMarkup(this.keyboardStyle)}
+              ${this.cellularLayout ? '' : createPerformanceKeyboardMarkup(this.keyboardStyle)}
             </section>
           </div>
 
@@ -2194,6 +2163,8 @@ export class PlayerScreen {
       : null;
     const bank = bankButton?.dataset.bank;
     if (
+      !this.cellularLayout
+      &&
       bankButton
       && this.isBankId(bank)
       && this.bankKeyboardDoubleTap.register(`keyboard-bank:${bank}`, event.timeStamp)
@@ -2734,6 +2705,7 @@ export class PlayerScreen {
   }
 
   private selectBottomView(view: PlayerBottomView, settingsModal?: HTMLElement): void {
+    if (this.cellularLayout && view === 'keyboard') return;
     this.bottomView = view;
     this.renderBottomView();
     for (const button of settingsModal?.querySelectorAll<HTMLButtonElement>('[data-setting-view]') ?? []) {
@@ -2751,7 +2723,7 @@ export class PlayerScreen {
     const keyboardVisible = true;
     const presetsVisible = true;
     panel.classList.remove('is-keyboard');
-    panel.setAttribute('aria-label', 'Presets e Keyboard');
+    panel.setAttribute('aria-label', this.cellularLayout ? 'Presets' : 'Presets e Keyboard');
     const header = panel.querySelector<HTMLElement>('.player-presets__header');
     const presets = panel.querySelector<HTMLElement>('.player-presets__grid');
     const keyboard = panel.querySelector<HTMLElement>('[data-performance-keyboard]');
@@ -3594,7 +3566,8 @@ export class PlayerScreen {
     const keyboardInputId = this.selectedMidiInputIds[this.keyboardMidiSlot - 1] ?? null;
     const matchesKeyboard = keyboardInputId === null || input.inputId === null || input.inputId === keyboardInputId;
     if (matchesKeyboard) {
-      this.performanceKeyboard?.setMidiNote(input.noteNumber, input.pressed);
+      if (this.iosRuntime) this.pendingKeyboardNoteStates.set(input.noteNumber, input.pressed);
+      else this.performanceKeyboard?.setMidiNote(input.noteNumber, input.pressed);
       this.updatePerformanceNoteDisplay(
         `midi:${input.inputId ?? 'virtual'}:${input.channel}:${input.noteNumber}`,
         input.noteNumber,
@@ -3616,11 +3589,31 @@ export class PlayerScreen {
     if (!Number.isInteger(noteNumber) || noteNumber < 0 || noteNumber > 127) return;
     if (pressed) this.displayedPerformanceNotes.set(source, noteNumber);
     else this.displayedPerformanceNotes.delete(source);
+    if (this.iosRuntime) {
+      if (this.performanceDisplayFrame !== null) return;
+      this.performanceDisplayFrame = window.requestAnimationFrame(() => {
+        this.performanceDisplayFrame = null;
+        if (this.mounted) this.renderPerformanceNoteDisplay();
+      });
+    } else this.renderPerformanceNoteDisplay();
+  }
+
+  private renderPerformanceNoteDisplay(): void {
+    for (const [note, pressed] of this.pendingKeyboardNoteStates) {
+      this.performanceKeyboard?.setMidiNote(note, pressed);
+    }
+    this.pendingKeyboardNoteStates.clear();
     const output = this.root.querySelector<HTMLElement>('[data-note-chord-display]');
-    if (output) output.textContent = performanceNotesLabel([...this.displayedPerformanceNotes.values()]);
+    if (output) {
+      const label = performanceNotesLabel([...this.displayedPerformanceNotes.values()]);
+      if (output.textContent !== label) output.textContent = label;
+    }
   }
 
   private clearPerformanceNoteDisplay(): void {
+    if (this.performanceDisplayFrame !== null) window.cancelAnimationFrame(this.performanceDisplayFrame);
+    this.performanceDisplayFrame = null;
+    this.pendingKeyboardNoteStates.clear();
     this.displayedPerformanceNotes.clear();
     const output = this.root.querySelector<HTMLElement>('[data-note-chord-display]');
     if (output) output.textContent = '—';
@@ -4117,6 +4110,7 @@ export class PlayerScreen {
         false,
         this.keyboardMidiSlot,
         this.keyboardStyle,
+        !this.cellularLayout,
       );
     } else if (kind === 'app-settings-midi') {
       bodyMarkup = createMidiSettingsMarkup(this.midiInput.getInputDevices(), this.selectedMidiInputIds);
@@ -6009,6 +6003,7 @@ export class PlayerScreen {
   }
 
   private handleUserSoundfontAction(modal: HTMLElement, action: string): void {
+    if (modal.dataset.userSf2Importing === 'true') return;
     const namePanel = modal.querySelector<HTMLElement>('[data-user-sf2-name]');
     const nameInput = modal.querySelector<HTMLInputElement>('[data-user-sf2-name-input]');
     const message = modal.querySelector<HTMLElement>('[data-user-sf2-message]');
@@ -6088,6 +6083,7 @@ export class PlayerScreen {
   }
 
   private async importUserSoundfont(modal: HTMLElement, input: HTMLInputElement): Promise<void> {
+    if (modal.dataset.userSf2Importing === 'true') return;
     const file = input.files?.[0];
     const name = input.dataset.soundfontName?.trim().slice(0, 12) ?? '';
     const restoredId = input.dataset.restoreSoundfontId;
@@ -6100,18 +6096,34 @@ export class PlayerScreen {
       if (message) message.textContent = 'Escolha um arquivo SF2.';
       return;
     }
+    modal.dataset.userSf2Importing = 'true';
+    const buttons = [...modal.querySelectorAll<HTMLButtonElement>('[data-user-sf2-action]')];
+    const previouslyDisabled = buttons.map(button => button.disabled);
+    buttons.forEach(button => { button.disabled = true; });
+    const namePanel = modal.querySelector<HTMLElement>('[data-user-sf2-name]');
+    namePanel?.setAttribute('aria-busy', 'true');
+    if (message) message.textContent = 'Adicionando SF2… Aguarde.';
     try {
       await this.soundLibrary.addUser(name, file, restoredId);
       if (restoredId) {
         this.missingUserSoundfonts = this.missingUserSoundfonts.filter(({ id }) => id !== restoredId);
       }
       if (!modal.isConnected) return;
-      const namePanel = modal.querySelector<HTMLElement>('[data-user-sf2-name]');
+      this.setUserSoundfontKeyboardOpen(modal, false);
       if (namePanel) namePanel.hidden = true;
+      const nameInput = modal.querySelector<HTMLInputElement>('[data-user-sf2-name-input]');
+      if (nameInput) nameInput.value = '';
+      this.renderUserSoundfontName(modal);
       await this.renderUserSoundfonts(modal);
-      if (message) message.textContent = `${name} adicionado. Toque no timbre para selecionar neste módulo.`;
+      const libraryMessage = modal.querySelector<HTMLElement>('[data-user-sf2-load-status]');
+      if (libraryMessage) libraryMessage.textContent = `${name} adicionado. Toque no timbre para selecionar neste módulo.`;
+      if (message) message.textContent = '';
     } catch {
       if (message) message.textContent = 'Não foi possível adicionar este SF2.';
+    } finally {
+      delete modal.dataset.userSf2Importing;
+      namePanel?.removeAttribute('aria-busy');
+      buttons.forEach((button, index) => { button.disabled = previouslyDisabled[index] ?? false; });
     }
   }
 
@@ -8942,7 +8954,7 @@ export class PlayerScreen {
     this.compatibilityMode = value.compatibilityMode === true;
     this.seamlessPresetSwitching = value.seamlessPresetSwitching === true;
     this.midiInput.setCompatibilityMode(this.compatibilityMode);
-    this.bottomView = !this.desktopRuntime && value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
+    this.bottomView = !this.cellularLayout && !this.desktopRuntime && value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
     const savedKeyboardMidiSlot = Number(value.keyboardMidiSlot);
     this.keyboardMidiSlot = savedKeyboardMidiSlot === 2 || savedKeyboardMidiSlot === 3 ? savedKeyboardMidiSlot : 1;
     const savedKeyboardStyle = asString(value.keyboardStyle);

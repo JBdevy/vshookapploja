@@ -33,6 +33,18 @@ window.__TAURI_INTERNALS__ = {
   transformCallback: () => 1,
 };
 window.eval(compiled.outputFiles[0].text);
+assert.equal(window.HookPlayer.isCellularPlayerViewport(844, 390, false), true,
+  'iPhone em paisagem usa o layout celular sem Keyboard');
+assert.equal(window.HookPlayer.isCellularPlayerViewport(915, 412, false), true,
+  'Android em paisagem usa o layout celular sem Keyboard');
+assert.equal(window.HookPlayer.isCellularPlayerViewport(1024, 768, false), false,
+  'tablet mantém o Keyboard');
+assert.equal(window.HookPlayer.isCellularPlayerViewport(800, 500, true), false,
+  'desktop mantém o Keyboard mesmo com uma janela menor');
+const playerCss = await import('node:fs/promises').then(({ readFile }) => readFile('src/styles.css', 'utf8'));
+assert.match(playerCss,
+  /\.player-screen--cellular \.player-bank-view:has\(\.player-presets--cellular\)[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto/,
+  'no celular, a altura retirada do Keyboard aumenta a linha dos módulos');
 const root = window.document.createElement('div');
 window.document.body.append(root);
 const player = new window.HookPlayer.PlayerScreen(root, { email: 'startup@example.invalid', name: 'Startup test' },
@@ -58,12 +70,90 @@ try {
     .map(label => label.textContent.trim()), ['Playlist', 'Pads', 'Efects', 'Click', 'Master']);
   assert.equal(root.querySelectorAll('.player-module').length, 8, 'mantém os oito módulos');
   for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 100);
-  assert.equal(noteDisplay.textContent, 'C', 'reconhece o acorde maior');
+  assert.equal(noteDisplay.textContent, 'Cmajor', 'reconhece o acorde maior');
+  player.receiveMidiNote(70, 127);
+  assert.equal(noteDisplay.textContent, 'C7', 'acrescentar a sétima muda a nota para a cifra do acorde');
+  player.receiveMidiNote(70, 0);
   for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 0);
   assert.equal(noteDisplay.textContent, '—', 'limpa quando solta as teclas');
   player.receiveMidiNote(69, 127);
   assert.equal(noteDisplay.textContent, 'A4', 'nota isolada mostra a oitava');
   player.receiveMidiNote(69, 0);
+  for (const [notes, expected] of [
+    [[55, 59, 62], 'Gmajor'],
+    [[60, 63, 67], 'Cm'],
+    [[60, 64, 67, 70], 'C7'],
+    [[60, 64, 67, 71], 'Cmaj7'],
+    [[57, 60, 64, 67], 'Am7'],
+    [[60, 65, 67], 'Csus4'],
+    [[60, 62, 67], 'Csus2'],
+    [[60, 63, 66], 'Cdim'],
+    [[60, 64, 67, 74], 'Cadd9'],
+    [[60, 64, 67, 70, 74], 'C9'],
+    [[60, 64, 67, 71, 74], 'Cmaj9'],
+    [[60, 64, 70], 'C7'], // common voicing without the fifth
+    [[52, 55, 60], 'C/E'],
+    [[55, 60, 64], 'C/G'],
+    [[48, 60, 64, 67, 72], 'Cmajor'], // octave doublings
+  ]) {
+    for (const note of notes) player.receiveMidiNote(note, 110);
+    assert.equal(noteDisplay.textContent, expected, `acorde ${expected} a partir de MIDI ${notes}`);
+    for (const note of notes) player.receiveMidiNote(note, 0);
+    assert.equal(noteDisplay.textContent, '—');
+  }
+  player.receiveMidiNote(60, 127);
+  player.receiveMidiNote(61, 127);
+  player.receiveMidiNote(62, 127);
+  assert.equal(noteDisplay.textContent, 'C4 · C#4 · D4', 'cluster não reconhecido continua mostrando notas');
+  for (const note of [60, 61, 62]) player.receiveMidiNote(note, 0);
+  {
+    const modal = window.document.createElement('div');
+    modal.innerHTML = `<p data-user-sf2-load-status></p><div data-user-sf2-list></div>
+      <button data-user-sf2-action="name">Add SF2</button>
+      <div data-user-sf2-name><input data-user-sf2-name-input value="Piano">
+        <p data-user-sf2-message></p><button data-user-sf2-action="choose-file">Confirmar</button>
+        <button data-user-sf2-action="cancel">Cancelar</button>
+      </div><input type="file" data-user-sf2-file>`;
+    window.document.body.append(modal);
+    const input = modal.querySelector('[data-user-sf2-file]');
+    Object.defineProperty(input, 'files', { value: [new window.File(['test'], 'piano.sf2')], configurable: true });
+    input.dataset.soundfontName = 'Piano';
+    const originalLibrary = player.soundLibrary;
+    const originalRender = player.renderUserSoundfonts;
+    let completeImport, importCount = 0, rendered = false;
+    player.soundLibrary = { addUser: async () => {
+      importCount += 1; await new Promise(resolve => { completeImport = resolve; });
+    } };
+    player.renderUserSoundfonts = async () => { rendered = true; };
+    try {
+      const importing = player.importUserSoundfont(modal, input);
+      assert.equal(modal.dataset.userSf2Importing, 'true');
+      assert(modal.querySelector('[data-user-sf2-action="choose-file"]').disabled,
+        'Confirmar fica bloqueado enquanto grava o SF2');
+      await player.importUserSoundfont(modal, input);
+      assert.equal(importCount, 1, 'toque repetido não adiciona o mesmo arquivo duas vezes');
+      completeImport(); await importing;
+      assert.equal(modal.querySelector('[data-user-sf2-name]').hidden, true,
+        'sucesso retorna à biblioteca e remove a tela de confirmação');
+      assert.equal(modal.querySelector('[data-user-sf2-name-input]').value, '');
+      assert(rendered);
+      assert.match(modal.querySelector('[data-user-sf2-load-status]').textContent, /Piano adicionado/);
+      assert.equal(modal.dataset.userSf2Importing, undefined);
+      assert(!modal.querySelector('[data-user-sf2-action="name"]').disabled);
+      modal.querySelector('[data-user-sf2-name]').hidden = false;
+      input.dataset.soundfontName = 'Piano';
+      player.soundLibrary = { addUser: async () => { throw new Error('storage failed'); } };
+      await player.importUserSoundfont(modal, input);
+      assert.equal(modal.querySelector('[data-user-sf2-name]').hidden, false,
+        'falha mantém o editor aberto para o usuário tentar novamente');
+      assert.match(modal.querySelector('[data-user-sf2-message]').textContent, /Não foi possível/);
+      assert.equal(modal.dataset.userSf2Importing, undefined);
+    } finally {
+      player.soundLibrary = originalLibrary;
+      player.renderUserSoundfonts = originalRender;
+      modal.remove();
+    }
+  }
   player.sendNativeMidi(3, 0x90, 64, 127);
   player.sendNativeMidi(3, 0x80, 64, 0);
   await new Promise(resolve => setTimeout(resolve, 0));

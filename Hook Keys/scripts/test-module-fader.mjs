@@ -15,6 +15,33 @@ test('iOS bridge registers a plugin instance rather than a type skipped by auto-
   assert.doesNotMatch(controller, /bridge\?\.registerPluginType\(/);
 });
 
+test('iOS generator and DSP use the same sample-rate clock negotiated by the route', () => {
+  const engine = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
+  assert.match(engine, /outputFormat\s*=\s*\[_audioEngine\.outputNode inputFormatForBus:0\]/);
+  assert.match(engine, /sampleRate\s*=\s*outputFormat\.sampleRate/);
+  assert.match(engine, /initWithFormat:renderFormat renderBlock:/);
+  assert.match(engine, /connect:_sourceNode to:_audioEngine\.mainMixerNode format:renderFormat/);
+  assert.doesNotMatch(engine, /connect:_sourceNode to:_audioEngine\.mainMixerNode format:nil/);
+});
+
+test('Android and desktop build their DSP clock from the actual 44.1/48 kHz stream', () => {
+  const android = readFileSync(new URL('../android/app/src/main/cpp/HookKeysNativeBridge.cpp', import.meta.url), 'utf8');
+  const desktop = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+  assert.match(android, /sampleRate\s*=\s*static_cast<double>\(AAudioStream_getSampleRate\(stream_\)\)/);
+  assert.match(android, /NativeEngineRuntime>\(sampleRate, kRenderChunkFrames\)/);
+  assert.match(desktop, /sample_rate\s*=\s*selected\.sample_rate\(\)/);
+  assert.match(desktop, /NativeRuntime::new\([\s\S]*sample_rate as f64/);
+});
+
+test('iOS batches MIDI paint and isolates dynamic keyboard and meter layers', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const runtime = readFileSync(new URL('../src/platform/runtime.ts', import.meta.url), 'utf8');
+  assert.match(runtime, /dataset\.platform\s*=\s*isNative \? Capacitor\.getPlatform\(\)/);
+  assert.match(player, /iosRuntime[\s\S]*pendingKeyboardNoteStates[\s\S]*requestAnimationFrame/);
+  assert.match(css, /html\[data-platform="ios"\] :is\(\.player-module__meter, \.performance-keyboard__key\)[\s\S]*contain:\s*paint/);
+  assert.match(css, /html\[data-platform="ios"\] \.player-module__meter-fill[\s\S]*transition-property:\s*transform/);
+});
+
 test('mobile effects omitted from a call stay bypassed rather than activating compression', () => {
   const plugin = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
   const iosPlugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');

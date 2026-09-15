@@ -55,6 +55,7 @@ export function createAppSettingsMarkup(
   allowKeyboardView: boolean,
   keyboardMidiSlot: number = 1,
   keyboardStyle: PerformanceKeyboardStyle = 'standard',
+  showKeyboardSettings: boolean = true,
 ): string {
   return `
     <section class="app-settings-panel app-settings-panel--main" aria-label="Configurações">
@@ -86,7 +87,7 @@ export function createAppSettingsMarkup(
         <i aria-hidden="true"></i>
       </label>
 
-      ${allowKeyboardView ? `<article class="app-settings-display-card">
+      ${!showKeyboardSettings ? '' : allowKeyboardView ? `<article class="app-settings-display-card">
         <strong>Mostrar</strong>
         <div role="group" aria-label="Conteúdo exibido abaixo dos módulos">
           <button type="button" data-setting-view="presets" class="${bottomView === 'presets' ? 'is-selected' : ''}" aria-pressed="${bottomView === 'presets'}">Presets</button>

@@ -720,6 +720,9 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   padding: 24px;
   color: #fff;
 }
+.orientation-transition-cover--startup {
+  z-index: 9999;
+}
 .startup-error section { max-width: 540px; text-align: center; }
 .startup-error p { overflow-wrap: anywhere; }
 .startup-error button { margin: 8px; padding: 12px 20px; }
@@ -3101,6 +3104,21 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
     padding: 3px;
   }
   .player-presets--combined .performance-keyboard__keys { min-height: 0; }
+
+  :root:not([data-runtime="desktop"]) .player-screen--cellular .player-presets--combined {
+    grid-template-rows: clamp(48px, 13vh, 64px);
+  }
+
+  :root:not([data-runtime="desktop"]) .player-screen--cellular .player-bank-view:has(.player-presets--cellular) {
+    /* Sem o Keyboard, toda a altura liberada pertence aos oito modulos. */
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  :root:not([data-runtime="desktop"]) .player-screen--cellular .player-workspace,
+  :root:not([data-runtime="desktop"]) .player-screen--cellular .player-modules-row,
+  :root:not([data-runtime="desktop"]) .player-screen--cellular .player-module {
+    height: 100%;
+  }
 }
 
 .player-top-transport,
@@ -10690,6 +10708,21 @@ html[data-runtime="native"] .player-module__meter-fill {
 html[data-runtime="native"] .player-module__fader.is-clipping .player-module__meter-fill {
   filter: none;
   box-shadow: none;
+}
+
+/* No WKWebView, limita repinturas do MIDI às teclas/meters e evita reconstruir
+   o fundo desfocado de uma confirmação enquanto a performance está tocando.
+   Não altera o tema nem o perfil que já ficou fluido no Android. */
+html[data-platform="ios"] :is(.player-module__meter, .performance-keyboard__key) {
+  contain: paint;
+}
+
+html[data-platform="ios"] .performance-keyboard__key.is-pressed {
+  box-shadow: inset 0 0 0 1px rgba(225, 255, 234, .65);
+}
+
+html[data-platform="ios"] .player-module__meter-fill {
+  transition-property: transform;
 }
 
 .player-module__fader.is-clipping .player-module__meter-fill {
