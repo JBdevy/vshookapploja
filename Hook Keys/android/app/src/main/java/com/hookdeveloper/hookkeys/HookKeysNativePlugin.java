@@ -10,6 +10,7 @@ import android.media.midi.MidiDeviceStatus;
 import android.media.midi.MidiManager;
 import android.media.midi.MidiOutputPort;
 import android.media.midi.MidiReceiver;
+import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.Handler;
@@ -31,7 +32,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.Locale;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +67,25 @@ public class HookKeysNativePlugin extends Plugin {
     private volatile boolean compatibilityMode = false;
     private int currentBufferSize = 128;
     private int currentSampleRate = 48000;
+    // Últimos eventos de dispositivos de áudio, exibidos no app para diagnóstico.
+    private final List<String> audioRouteEvents = new ArrayList<>();
+    private AudioManager audioManager;
+
+    private final AudioDeviceCallback audioDeviceCallback = new AudioDeviceCallback() {
+        @Override
+        public void onAudioDevicesAdded(AudioDeviceInfo[] devices) {
+            for (AudioDeviceInfo device : devices) {
+                if (device.isSink()) recordAudioRouteEvent("conectou: " + describeAudioDevice(device));
+            }
+        }
+
+        @Override
+        public void onAudioDevicesRemoved(AudioDeviceInfo[] devices) {
+            for (AudioDeviceInfo device : devices) {
+                if (device.isSink()) recordAudioRouteEvent("saiu: " + describeAudioDevice(device));
+            }
+        }
+    };
 
     private final MidiManager.DeviceCallback deviceCallback = new MidiManager.DeviceCallback() {
         @Override
@@ -86,11 +109,14 @@ public class HookKeysNativePlugin extends Plugin {
     public void load() {
         midiManager = (MidiManager) getContext().getSystemService(Context.MIDI_SERVICE);
         if (midiManager != null) midiManager.registerDeviceCallback(deviceCallback, mainHandler);
+        audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) audioManager.registerAudioDeviceCallback(audioDeviceCallback, mainHandler);
     }
 
     @Override
     protected void handleOnDestroy() {
         if (midiManager != null) midiManager.unregisterDeviceCallback(deviceCallback);
+        if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioDeviceCallback);
         closeMidiConnections();
         closeUploads();
         nativeStop();
@@ -213,16 +239,18 @@ public class HookKeysNativePlugin extends Plugin {
     @PluginMethod
     public void listAudioOutputDevices(PluginCall call) {
         JSArray devices = new JSArray();
-        AudioManager audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
-        if (audioManager != null) {
-            for (AudioDeviceInfo info : audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+        AudioManager manager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (manager != null) {
+            for (AudioDeviceInfo info : manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                // Telefonia, barramento, earpiece etc. aparecem como saída mas
+                // não tocam música: escolhê-los deixava o app mudo.
+                if (!isMusicOutput(info.getType())) continue;
                 int channels = 0;
                 for (int count : info.getChannelCounts()) channels = Math.max(channels, count);
                 if (channels <= 0) channels = 2;
                 JSObject device = new JSObject();
                 device.put("id", Integer.toString(info.getId()));
-                CharSequence productName = info.getProductName();
-                device.put("name", productName == null || productName.length() == 0 ? "Saída de áudio" : productName.toString());
+                device.put("name", audioDeviceName(info));
                 device.put("channels", Math.min(32, channels));
                 devices.put(device);
             }
@@ -230,6 +258,66 @@ public class HookKeysNativePlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("devices", devices);
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void audioRouteLog(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("current", nativeAudioDiagnostics());
+        JSArray events = new JSArray();
+        synchronized (audioRouteEvents) {
+            for (String event : audioRouteEvents) events.put(event);
+        }
+        result.put("events", events);
+        call.resolve(result);
+    }
+
+    private void recordAudioRouteEvent(String text) {
+        String time = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+        synchronized (audioRouteEvents) {
+            audioRouteEvents.add(time + " " + text);
+            while (audioRouteEvents.size() > 12) audioRouteEvents.remove(0);
+        }
+    }
+
+    private static boolean isMusicOutput(int type) {
+        switch (type) {
+            case AudioDeviceInfo.TYPE_BUILTIN_SPEAKER:
+            case AudioDeviceInfo.TYPE_WIRED_HEADSET:
+            case AudioDeviceInfo.TYPE_WIRED_HEADPHONES:
+            case AudioDeviceInfo.TYPE_USB_DEVICE:
+            case AudioDeviceInfo.TYPE_USB_HEADSET:
+            case AudioDeviceInfo.TYPE_USB_ACCESSORY:
+            case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+            case AudioDeviceInfo.TYPE_BLE_HEADSET:
+            case AudioDeviceInfo.TYPE_BLE_SPEAKER:
+            case AudioDeviceInfo.TYPE_HDMI:
+            case AudioDeviceInfo.TYPE_LINE_ANALOG:
+            case AudioDeviceInfo.TYPE_LINE_DIGITAL:
+            case AudioDeviceInfo.TYPE_AUX_LINE:
+            case AudioDeviceInfo.TYPE_DOCK:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static String audioDeviceName(AudioDeviceInfo info) {
+        CharSequence productName = info.getProductName();
+        String product = productName == null ? "" : productName.toString().trim();
+        switch (info.getType()) {
+            // O alto-falante vem com o nome do modelo do celular, que confunde.
+            case AudioDeviceInfo.TYPE_BUILTIN_SPEAKER: return "Alto-falante";
+            case AudioDeviceInfo.TYPE_WIRED_HEADSET:
+            case AudioDeviceInfo.TYPE_WIRED_HEADPHONES: return "Fone com fio";
+            default: return product.isEmpty() ? "Saída de áudio" : product;
+        }
+    }
+
+    private static String describeAudioDevice(AudioDeviceInfo info) {
+        int channels = 0;
+        for (int count : info.getChannelCounts()) channels = Math.max(channels, count);
+        return audioDeviceName(info) + " [id " + info.getId() + ", tipo " + info.getType() + ", " + channels + "ch]";
     }
 
     @PluginMethod
@@ -844,6 +932,7 @@ public class HookKeysNativePlugin extends Plugin {
     private static native void nativeStop();
     private static native void nativeSetMidiInputEnabled(boolean enabled);
     private static native boolean nativeAudioOutputReady();
+    private static native String nativeAudioDiagnostics();
     private static native float[] nativeModuleMeterLevels();
     private static native float[] nativeModuleAnalysis(int moduleIndex);
     private static native boolean nativeLoadSoundFont(int moduleIndex, String path);

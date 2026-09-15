@@ -910,6 +910,24 @@ void testTrackPlayerPlaysRoutesLoopsAndEnds() {
          "the second track replaces the first");
   player->unload(8);
   expect(player->status().activeId == 0, "unloading the active track stops playback");
+
+  expect(player->load(9, std::make_unique<ConstantTrackDecoder>(4800, 0.4f, 0.4f)) && player->play(9),
+         "play a short track to its end");
+  expect(renderTracksUntil(*player, audio, channels, [&] { return player->status().ended; }),
+         "the short track ends");
+  expect(player->seek(9, 2400), "move the needle after the end");
+  bool heardWhileSeeking = false;
+  renderTracksUntil(*player, audio, channels, [&] {
+    if (channelEnergy(0) > 0.0) heardWhileSeeking = true;
+    return false;
+  }, 40);
+  expect(!heardWhileSeeking && !player->status().playing,
+         "moving the needle after the end stays silent and stopped");
+  expect(player->status().positionFrames == 2400, "the needle still reports the new position");
+  expect(player->play(9), "play from the needle after the end");
+  expect(renderTracksUntil(*player, audio, channels, [&] { return channelEnergy(0) > 0.0; }),
+         "play after moving the needle is audible");
+  expect(player->status().positionFrames >= 2400, "and starts from the needle, not the beginning");
   expect(!player->hasSource(8) && player->hasSource(7), "unload releases only its own track");
 
   hook_keys::NativeEngineRuntime runtime(48000.0, 512);

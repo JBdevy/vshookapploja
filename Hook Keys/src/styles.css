@@ -4328,9 +4328,23 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .module-settings-io-row select,
+.module-settings-io-row .app-select__toggle,
 .module-settings-io-row .module-polyphony-button {
   height: var(--module-io-control-height);
   min-height: var(--module-io-control-height);
+}
+
+/* O seletor próprio segue a altura da linha, inclusive no celular, onde a
+   linha tem menos de 30px; o texto encolhe junto. */
+.module-settings-io-row .app-select__toggle {
+  padding-block: 0;
+  padding-inline: clamp(6px, 1vw, 12px);
+  font-size: clamp(9px, min(1.15vw, 2.2vh), 15px);
+}
+
+.module-settings-io-row .app-select__menu button {
+  min-height: clamp(28px, 5vh, 40px);
+  font-size: clamp(9px, min(1.1vw, 2.1vh), 14px);
 }
 
 .module-settings-panel {
@@ -6612,6 +6626,12 @@ html[data-runtime="desktop"] .is-tracks-split .player-module__fader-rail { width
   min-height: 0;
   padding-right: 2px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Cada linha pinta isolada: o letreiro de um nome não repinta as vizinhas. */
+.tracks-split-panel .tracks-library-grid > :is(.track-card, .track-block) {
+  contain: layout paint;
 }
 
 .tracks-split-panel .track-card {
@@ -6878,6 +6898,11 @@ html[data-runtime="desktop"] .is-tracks-split .player-module__fader-rail { width
   background: #47ed7f;
   transform: scaleX(0);
   transform-origin: left center;
+}
+
+/* Camada de GPU só na linha que está andando: will-change em todas criava uma
+   camada por música e o iPad montava a lista aos pedaços ao rolar. */
+.track-card:is(.is-playing, .is-queued) .track-card__progress i {
   will-change: transform;
 }
 
@@ -9301,7 +9326,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
     font-size: 8px;
   }
 
-  .module-settings-device select {
+  .module-settings-device :is(select, .app-select__toggle) {
     min-height: 27px;
     padding: 2px 7px;
     font-size: 8px;
@@ -13047,11 +13072,10 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 }
 
 /* Os cinco volumes principais ficam livres, sem um segundo card dentro do
-   header. As barras mantêm cada grupo visualmente separado. */
+   header e sem barras entre eles: cada um ocupa uma coluna igual. */
 .player-header-knobs {
-  grid-template-columns:
-    minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto
-    minmax(0, 1fr) auto minmax(0, 1fr);
+  flex: 1 1 auto;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: clamp(3px, .42vw, 7px);
   padding: 0;
   border: 0;
@@ -13128,6 +13152,22 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   margin: auto;
 }
 
+.about-panel {
+  gap: clamp(10px, 2vh, 18px);
+}
+
+/* A Playlist saiu do topo: abre daqui (o long press no Hook Keys abre os 30%). */
+.player-modal .about-panel .about-panel__playlist {
+  width: min(100%, 460px);
+  color: #fff !important;
+  border: 2px solid #75ddff !important;
+  border-radius: 10px;
+  background-image: linear-gradient(145deg, #28c9ff, #0868a5) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .7) !important;
+  min-height: clamp(40px, 7vh, 56px);
+  font-size: clamp(14px, 1.6vw, 20px);
+}
+
 .about-panel__lite-mode {
   width: min(100%, 460px);
 }
@@ -13182,9 +13222,9 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   font-size: clamp(4.5px, min(.48vw, .92vh), 7px);
 }
 
+/* Só o tamanho: a borda/arco vem do tema atual do knob (arco de progresso). */
 .player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob__face {
   width: clamp(17px, min(2.35vw, 4.3vh), 31px);
-  border-width: clamp(2px, .3vw, 4px);
 }
 
 /* Diagnóstico da rota do iOS: recolhido, pequeno e fora da grade dos campos. */

@@ -40,7 +40,8 @@ const bridge = {
     const source = engine.sources.get(sourceId);
     if (!source) throw Object.assign(new Error('not loaded'), { code: 'track_not_loaded' });
     if (action === 'play') Object.assign(engine, { activeId: sourceId, playing: true, ended: false });
-    if (action === 'pause') engine.playing = false;
+    // Como no motor real, pausar só vale para a fonte ativa.
+    if (action === 'pause' && engine.activeId === sourceId) engine.playing = false;
     if (action === 'seek') source.position = options.seconds;
     if (action === 'loop') source.loop = options.loop;
   },

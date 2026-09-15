@@ -236,8 +236,18 @@ private:
   const double sampleRate = outputFormat.sampleRate > 0
       ? outputFormat.sampleRate : (session.sampleRate > 0 ? session.sampleRate : 48000.0);
   const auto channelCount = std::clamp<AVAudioChannelCount>(outputFormat.channelCount, 1, 32);
-  AVAudioFormat *renderFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate
-                                                                           channels:channelCount];
+  // initStandardFormatWithSampleRate:channels: devolve nil acima de 2 canais.
+  // Abrir o app com uma interface USB de 4+ saídas já conectada caía aqui e
+  // falhava em "preparar formato da saída". Acima de estéreo o formato precisa
+  // de um layout: canais discretos, na ordem da placa.
+  AVAudioFormat *renderFormat = nil;
+  if (channelCount <= 2) {
+    renderFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channels:channelCount];
+  } else {
+    AVAudioChannelLayout *layout = [[AVAudioChannelLayout alloc]
+        initWithLayoutTag:(kAudioChannelLayoutTag_DiscreteInOrder | channelCount)];
+    renderFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channelLayout:layout];
+  }
   if (renderFormat == nil) {
     _audioEngine = nil;
     [self setAudioErrorStage:@"preparar formato da saída" error:nil];

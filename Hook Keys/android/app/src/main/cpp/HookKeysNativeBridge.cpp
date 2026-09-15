@@ -11,8 +11,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <chrono>
+#include <cstdio>
 #include <mutex>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -46,10 +49,20 @@ public:
     if (!preserveRuntime) runtime_.reset();
     requestedChannels = std::clamp(requestedChannels, 1, 32);
     requestedSampleRate = requestedSampleRate == 44100 ? 44100 : 48000;
+    lastBufferFrames_ = requestedBufferFrames;
+    lastDeviceId_ = requestedDeviceId;
+    lastChannels_ = requestedChannels;
+    lastSampleRate_ = requestedSampleRate;
     auto result = openStream(requestedBufferFrames, requestedDeviceId, requestedChannels,
                              requestedSampleRate, AAUDIO_SHARING_MODE_EXCLUSIVE);
     if (result != AAUDIO_OK) {
       result = openStream(requestedBufferFrames, requestedDeviceId, requestedChannels,
+                          requestedSampleRate, AAUDIO_SHARING_MODE_SHARED);
+    }
+    // Algumas placas USB recusam a contagem máxima de canais que anunciam.
+    // Estéreo sempre existe; é melhor tocar em 1+2 do que ficar mudo.
+    if (result != AAUDIO_OK && requestedChannels > 2) {
+      result = openStream(requestedBufferFrames, requestedDeviceId, 2,
                           requestedSampleRate, AAUDIO_SHARING_MODE_SHARED);
     }
     if (result != AAUDIO_OK || stream_ == nullptr) {
@@ -83,7 +96,29 @@ public:
       return false;
     }
     streamReady_.store(true, std::memory_order_release);
+    lastError_.store(AAUDIO_OK, std::memory_order_release);
     return true;
+  }
+
+  // Estado do stream para o "Diagnóstico da rota" do app.
+  std::string diagnostics() noexcept {
+    std::scoped_lock lock(controlMutex_);
+    char text[320];
+    if (stream_ == nullptr) {
+      std::snprintf(text, sizeof(text), "sem stream · pedido %d · último erro %s",
+                    lastDeviceId_, AAudio_convertResultToText(lastError_.load()));
+      return text;
+    }
+    std::snprintf(
+        text, sizeof(text),
+        "pedido %d → aberto %d · %d ch · %d Hz · %s · %s · buffer %d · xruns %d · callback %s · último erro %s",
+        lastDeviceId_, AAudioStream_getDeviceId(stream_), AAudioStream_getChannelCount(stream_),
+        AAudioStream_getSampleRate(stream_),
+        AAudioStream_getSharingMode(stream_) == AAUDIO_SHARING_MODE_EXCLUSIVE ? "exclusivo" : "compartilhado",
+        AAudioStream_getPerformanceMode(stream_) == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY ? "baixa latência" : "latência normal",
+        AAudioStream_getBufferSizeInFrames(stream_), AAudioStream_getXRunCount(stream_),
+        callbackSeen_.load() ? "ok" : "parado", AAudio_convertResultToText(lastError_.load()));
+    return text;
   }
 
   void stop() noexcept {
@@ -426,8 +461,20 @@ private:
     AAudioStreamBuilder_setSampleRate(builder, requestedSampleRate);
     AAudioStreamBuilder_setDataCallback(builder, &AndroidAudioEngine::dataCallback, this);
     AAudioStreamBuilder_setErrorCallback(builder, &AndroidAudioEngine::errorCallback, this);
-    const auto result = AAudioStreamBuilder_openStream(builder, &stream_);
+    auto result = AAudioStreamBuilder_openStream(builder, &stream_);
     AAudioStreamBuilder_delete(builder);
+    // No modo exclusivo (MMAP) vários aparelhos ignoram o dispositivo pedido e
+    // abrem no alto-falante interno, que fica mudo com a placa USB conectada:
+    // a placa aparece selecionada e o som não sai em lugar nenhum. Se o stream
+    // não abriu na placa escolhida, desista do exclusivo para o compartilhado.
+    if (result == AAUDIO_OK && stream_ != nullptr && sharingMode == AAUDIO_SHARING_MODE_EXCLUSIVE &&
+        requestedDeviceId != AAUDIO_UNSPECIFIED && AAudioStream_getDeviceId(stream_) != requestedDeviceId) {
+      __android_log_print(ANDROID_LOG_WARN, kLogTag, "Exclusive stream opened on device %d instead of %d",
+                          AAudioStream_getDeviceId(stream_), requestedDeviceId);
+      AAudioStream_close(stream_);
+      stream_ = nullptr;
+      result = AAUDIO_ERROR_UNAVAILABLE;
+    }
     if (result == AAUDIO_OK && stream_ != nullptr) {
       // O tamanho do callback pertence ao AAudio. Ajustamos apenas a capacidade
       // em multiplos do burst nativo para nao provocar underrun em celulares.
@@ -451,7 +498,17 @@ private:
     engine->streamReady_.store(false, std::memory_order_release);
     engine->callbackSeen_.store(false, std::memory_order_release);
     engine->activeRuntime_.store(nullptr, std::memory_order_release);
+    engine->lastError_.store(error, std::memory_order_release);
     __android_log_print(ANDROID_LOG_ERROR, kLogTag, "AAudio stream error: %s", AAudio_convertResultToText(error));
+    // Plugar/desplugar a placa (ou o Android trocar a rota) desconecta o stream.
+    // O AAudio pede para reabrir fora deste callback; mantém os SF2 carregados.
+    if (error != AAUDIO_ERROR_DISCONNECTED || engine->recovering_.exchange(true)) return;
+    std::thread([engine] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      static_cast<void>(engine->start(engine->lastBufferFrames_, engine->lastDeviceId_,
+                                      engine->lastChannels_, engine->lastSampleRate_, true, true));
+      engine->recovering_.store(false, std::memory_order_release);
+    }).detach();
   }
 
   aaudio_data_callback_result_t render(float* interleaved, int32_t frameCount) noexcept {
@@ -479,6 +536,12 @@ private:
   std::atomic<bool> callbackSeen_{false};
   std::size_t channelCount_ = 2;
   double sampleRate_ = 0.0;
+  std::atomic<aaudio_result_t> lastError_{AAUDIO_OK};
+  std::atomic<bool> recovering_{false};
+  int lastBufferFrames_ = 128;
+  int lastDeviceId_ = AAUDIO_UNSPECIFIED;
+  int lastChannels_ = 2;
+  int lastSampleRate_ = 48000;
 };
 
 AndroidAudioEngine gEngine;
@@ -531,6 +594,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetMidiInputEnabled(
     JNIEnv*, jclass, jboolean enabled) {
   gEngine.setMidiInputEnabled(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeAudioDiagnostics(JNIEnv* env, jclass) {
+  return env->NewStringUTF(gEngine.diagnostics().c_str());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

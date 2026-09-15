@@ -395,6 +395,9 @@ const EFFECT_PAD_MIN_DB = -60;
 // Longest a knob or button change waits before it reaches the audio engine.
 const NATIVE_SYNC_INTERVAL_MS = 24;
 const DESKTOP_MODULE_METER_INTERVAL_MS = 50;
+// Todo <select> dos modais vira o seletor próprio do app; o do sistema abre
+// uma roda/lista nativa diferente em cada plataforma.
+const APP_SELECT_QUERY = 'select[data-setting], select[data-module-setting]';
 const MOBILE_MODULE_METER_INTERVAL_MS = 90;
 const EFFECT_PAD_MAX_DB = 0;
 // Desktop knobs stay linear while one pixel moves at most this many steps;
@@ -1035,11 +1038,6 @@ export class PlayerScreen {
                 <img class="player-brand__image" src="/assets/icons/256x256.png" alt="">
                 <span class="player-brand__name"><strong>Hook</strong> Keys</span>
               </button>
-              <button
-                class="player-navigation__button player-navigation__tracks-button"
-                type="button"
-                data-action="open-tracks"
-              >Playlist</button>
             </div>
             ${createTrackTransportMarkup()}
             <div class="player-note-display" role="status" aria-live="polite" aria-label="Notas ou acordes tocados">
@@ -1073,19 +1071,14 @@ export class PlayerScreen {
             >Pads - Efects</button>
             <section class="player-header-knobs" aria-label="Volumes principais">
               ${createOutputKnobMarkup('music', 'Playlist', this.outputLevels.music)}
-              <span class="player-header-knobs__divider" aria-hidden="true">|</span>
               ${createOutputKnobMarkup('pads', 'Pads', this.outputLevels.pads)}
-              <span class="player-header-knobs__divider" aria-hidden="true">|</span>
               ${createOutputKnobMarkup('effects', 'Efects', this.outputLevels.effects)}
-              <span class="player-header-knobs__divider" aria-hidden="true">|</span>
               ${createMetronomeKnobMarkup(this.metronome.getVolume())}
-              <span class="player-header-knobs__divider" aria-hidden="true">|</span>
               ${createOutputKnobMarkup('master', 'Master', this.outputLevels.master)}
             </section>
           </nav>
 
           <div class="player-account">
-            <span class="player-navigation__divider player-account__divider" aria-hidden="true">|</span>
             <button class="player-metronome-button" type="button" data-action="toggle-metronome" aria-pressed="false" aria-label="Ligar metrônomo">
               <svg viewBox="0 0 32 32" aria-hidden="true">
                 <path d="M10 27h12L19 5h-6L10 27Z"></path>
@@ -1663,6 +1656,12 @@ export class PlayerScreen {
     }
 
     if (action === 'open-about') {
+      // O long press no Hook Keys abre/fecha a Playlist 30%; o clique que o
+      // mesmo toque gera depois não abre o modal por cima.
+      if (this.suppressNextTracksClick) {
+        this.suppressNextTracksClick = false;
+        return;
+      }
       this.openModal('about', null, actionButton);
       return;
     }
@@ -1674,19 +1673,6 @@ export class PlayerScreen {
 
     if (action === 'open-user') {
       this.openModal('user', null, actionButton);
-      return;
-    }
-
-    if (action === 'open-tracks') {
-      if (this.suppressNextTracksClick) {
-        this.suppressNextTracksClick = false;
-        return;
-      }
-      if (this.splitTracksController) {
-        this.closeTracksSplitView();
-        return;
-      }
-      this.openModal('tracks', null, actionButton);
       return;
     }
 
@@ -2069,9 +2055,9 @@ export class PlayerScreen {
       return;
     }
 
-    const tracksButton = eventTarget.closest<HTMLButtonElement>('[data-action="open-tracks"]');
-    if (tracksButton && this.root.contains(tracksButton)) {
-      if (!this.splitTracksController) this.startTracksHoldGesture(tracksButton, event);
+    const brandButton = eventTarget.closest<HTMLButtonElement>('[data-action="open-about"]');
+    if (brandButton && this.root.contains(brandButton)) {
+      this.startTracksHoldGesture(brandButton, event);
       return;
     }
 
@@ -2428,9 +2414,9 @@ export class PlayerScreen {
       return;
     }
 
-    const tracksButton = target.closest<HTMLButtonElement>('[data-action="open-tracks"]');
-    if (tracksButton) {
-      if (!this.splitTracksController) this.openTracksSplitView();
+    const brandButton = target.closest<HTMLButtonElement>('[data-action="open-about"]');
+    if (brandButton) {
+      this.toggleTracksSplitView();
       return;
     }
 
@@ -2516,7 +2502,7 @@ export class PlayerScreen {
       window.setTimeout(() => {
         this.suppressNextTracksClick = false;
       }, 700);
-      this.openTracksSplitView();
+      this.toggleTracksSplitView();
     }, 560);
     this.tracksHoldGesture = {
       button,
@@ -2538,6 +2524,11 @@ export class PlayerScreen {
     const { button, pointerId } = this.capturedTracksPointer;
     if (button.hasPointerCapture(pointerId)) button.releasePointerCapture(pointerId);
     this.capturedTracksPointer = null;
+  }
+
+  private toggleTracksSplitView(): void {
+    if (this.splitTracksController) this.closeTracksSplitView();
+    else this.openTracksSplitView();
   }
 
   private openTracksSplitView(): void {
@@ -4092,6 +4083,9 @@ export class PlayerScreen {
     } else if (kind === 'about') {
       bodyMarkup = `
         <section class="about-panel">
+          <button class="player-navigation__button about-panel__playlist" type="button" data-about-action="open-tracks">
+            Playlist
+          </button>
           <label class="app-settings-toggle about-panel__lite-mode">
             <span>
               <strong>Modo Lite</strong>
@@ -4173,7 +4167,7 @@ export class PlayerScreen {
     } else if (kind === 'app-settings-audio') {
       bodyMarkup = createAudioSettingsMarkup(
         this.audioDevices, this.selectedAudioDeviceId, this.audioRouting, this.bufferSize, this.sampleRate,
-      ) + (this.iosRuntime ? `
+      ) + (Capacitor.isNativePlatform() ? `
         <details class="audio-route-diagnostics" data-audio-route-diagnostics>
           <summary>Diagnóstico da rota</summary>
           <p data-audio-route-current>Lendo rota…</p>
@@ -4748,12 +4742,20 @@ export class PlayerScreen {
         event.stopPropagation();
         return;
       }
+      const aboutTracksButton = kind === 'about' && target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-about-action="open-tracks"]')
+        : null;
+      if (aboutTracksButton) {
+        const brand = this.root.querySelector<HTMLElement>('[data-action="open-about"]') ?? aboutTracksButton;
+        this.openModal('tracks', null, brand);
+        return;
+      }
       const customSelectOption = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-app-select-value]')
         : null;
       if (customSelectOption) {
         const customSelect = customSelectOption.closest<HTMLElement>('.app-select');
-        const select = customSelect?.parentElement?.querySelector<HTMLSelectElement>('select[data-setting]');
+        const select = customSelect?.parentElement?.querySelector<HTMLSelectElement>(APP_SELECT_QUERY);
         if (select && !customSelectOption.disabled) {
           select.value = customSelectOption.dataset.appSelectValue ?? '';
           this.syncAppSelect(select);
@@ -5884,7 +5886,7 @@ export class PlayerScreen {
     screen.setAttribute('aria-hidden', 'true');
     this.root.append(modal);
     this.modal = modal;
-    if (kind === 'app-settings-midi' || kind === 'app-settings-audio') {
+    if (kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-settings') {
       this.enhanceAppSelects(modal);
     }
     if (!this.desktopRuntime) {
@@ -7801,7 +7803,7 @@ export class PlayerScreen {
       return;
     }
     try {
-      if (this.iosRuntime && this.currentModalKind === 'app-settings-audio' && this.modal) {
+      if (Capacitor.isNativePlatform() && this.currentModalKind === 'app-settings-audio' && this.modal) {
         void this.renderAudioRouteDiagnostics(this.modal);
       }
       const devices = await this.audioOutput.listDevices();
@@ -7963,7 +7965,7 @@ export class PlayerScreen {
   }
 
   private enhanceAppSelects(modal: HTMLElement): void {
-    for (const select of modal.querySelectorAll<HTMLSelectElement>('select[data-setting]')) {
+    for (const select of modal.querySelectorAll<HTMLSelectElement>(APP_SELECT_QUERY)) {
       if (select.dataset.appSelectEnhanced === 'true') continue;
       select.dataset.appSelectEnhanced = 'true';
       select.classList.add('app-select__native');
@@ -8094,6 +8096,7 @@ export class PlayerScreen {
       select.append(new Option(`MIDI ${index + 1} · ${devices.get(deviceId) ?? 'Dispositivo indisponível'}`, deviceId));
     });
     select.value = moduleState.midiInputId ?? '';
+    this.syncAppSelect(select);
   }
 
   private commitPresetName(modal: HTMLElement, presetNumber: number): void {

@@ -29,6 +29,10 @@ export class ResilientTapController {
   private duplicateControl: HTMLElement | null = null;
   private duplicateUntil = 0;
   private dispatching = false;
+  // Onde o dedo encostou. Um clique de verdade sempre cai nesse elemento (ou
+  // num parente/filho dele); se ele sumiu ou foi coberto por outra tela, o
+  // clique é resto do toque anterior e não pode acionar a tela nova.
+  private touchDownTarget: Element | null = null;
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -52,8 +56,12 @@ export class ResilientTapController {
 
   private readonly onPointerDown = (event: PointerEvent): void => {
     this.pending = null;
+    // Um toque novo começou: o clique atrasado do toque anterior já passou.
+    this.duplicateControl = null;
+    this.touchDownTarget = null;
     if (event.pointerType === 'mouse' || !event.isPrimary) return;
     const target = event.target instanceof Element ? event.target : null;
+    this.touchDownTarget = target;
     const control = target?.closest<HTMLElement>('button, [role="button"]') ?? null;
     if (!control || !this.root.contains(control) || this.isUnavailable(control)) return;
     if (control.matches(EXCLUDED_CONTROLS) || control.closest(EXCLUDED_CONTROLS)) return;
@@ -86,14 +94,37 @@ export class ResilientTapController {
   };
 
   private readonly onClick = (event: MouseEvent): void => {
-    if (this.dispatching || !event.isTrusted || performance.now() > this.duplicateUntil) return;
-    const target = event.target instanceof Element ? event.target : null;
-    if (!this.duplicateControl || !target ||
-        (target !== this.duplicateControl && !this.duplicateControl.contains(target))) return;
+    if (this.dispatching || !event.isTrusted) return;
+    if (this.isLeakedTouchClick(event)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.touchDownTarget = null;
+      this.duplicateControl = null;
+      return;
+    }
+    this.touchDownTarget = null;
+    if (performance.now() > this.duplicateUntil) return;
+    if (!this.duplicateControl) return;
+    // A ação deste toque já rodou no pointerup. O clique nativo que o WebView
+    // gera depois é sempre duplicado, mesmo que caia em outro elemento: quando
+    // a ação abre uma tela, o botão novo que ficou sob o dedo recebia esse
+    // clique e já aparecia acionado/selecionado.
     event.preventDefault();
     event.stopImmediatePropagation();
     this.duplicateControl = null;
   };
+
+  private isLeakedTouchClick(event: MouseEvent): boolean {
+    const down = this.touchDownTarget;
+    const target = event.target instanceof Element ? event.target : null;
+    // detail 0 = clique de teclado/acessibilidade, que não vem de um toque.
+    if (!down || !target || event.detail === 0) return false;
+    if (!down.isConnected) return true;
+    if (target === down || target.contains(down) || down.contains(target)) return false;
+    // Tocar no texto de um <label> repassa o clique para o input dele.
+    const labels = (target as Partial<HTMLInputElement>).labels;
+    return !(labels && Array.from(labels).some((label) => label.contains(down)));
+  }
 
   private isUnavailable(control: HTMLElement): boolean {
     return control.matches(':disabled, [aria-disabled="true"]');

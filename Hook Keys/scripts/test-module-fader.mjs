@@ -333,3 +333,44 @@ test('música importada no iOS não grava Blob no IndexedDB', () => {
   assert.doesNotMatch(nativeAdd, /new Blob/);
   assert.match(store, /record\.storage === 'native'/);
 });
+
+test('iOS abre interface USB com mais de 2 saídas usando layout de canais', () => {
+  const engine = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
+  assert.match(engine, /if \(channelCount <= 2\)[\s\S]*?initStandardFormatWithSampleRate:sampleRate channels:channelCount/);
+  assert.match(engine, /kAudioChannelLayoutTag_DiscreteInOrder \| channelCount[\s\S]*?initStandardFormatWithSampleRate:sampleRate channelLayout:layout/);
+});
+
+test('Android confere a placa aberta, reabre após desconectar e lista só saídas de música', () => {
+  const bridge = readFileSync(new URL('../android/app/src/main/cpp/HookKeysNativeBridge.cpp', import.meta.url), 'utf8');
+  const plugin = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
+  assert.match(bridge, /AAudioStream_getDeviceId\(stream_\) != requestedDeviceId/);
+  assert.match(bridge, /error != AAUDIO_ERROR_DISCONNECTED[\s\S]*?std::thread/);
+  assert.match(plugin, /if \(!isMusicOutput\(info\.getType\(\)\)\) continue;/);
+  assert.match(plugin, /public void audioRouteLog\(PluginCall call\)/);
+});
+
+test('seletores do módulo usam o seletor próprio do app', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /APP_SELECT_QUERY = 'select\[data-setting\], select\[data-module-setting\]'/);
+  assert.match(player, /kind === 'app-settings-audio' \|\| kind === 'module-settings'\) \{\s*this\.enhanceAppSelects\(modal\);/);
+});
+
+test('toque não vaza para a tela aberta pelo próprio toque', () => {
+  const tap = readFileSync(new URL('../src/shared/gestures/ResilientTapController.ts', import.meta.url), 'utf8');
+  assert.match(tap, /if \(!this\.duplicateControl\) return;\s*\/\/[\s\S]*?event\.preventDefault\(\);/);
+  assert.match(tap, /if \(!down\.isConnected\) return true;/);
+});
+
+test('lista da Playlist reaproveita linhas e só sincroniza o que mudou', () => {
+  const panel = readFileSync(new URL('../src/features/tracks/TracksPanelController.ts', import.meta.url), 'utf8');
+  assert.match(panel, /listItemCache\.get\(item\.id\)/);
+  assert.match(panel, /grid\.replaceChildren\(\.\.\.elements\)/);
+  assert.match(panel, /button\.dataset\.playbackState !== state/);
+  assert.doesNotMatch(css.match(/\n\.track-card__progress i \{[^}]*\}/)[0], /will-change/);
+  assert.match(css, /\.track-card:is\(\.is-playing, \.is-queued\) \.track-card__progress i \{\s*will-change: transform;/);
+});
+
+test('ícone do Android cabe no recorte redondo do launcher', async () => {
+  const png = readFileSync(new URL('../android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png', import.meta.url));
+  assert.equal(png.readUInt32BE(16), 432);
+});

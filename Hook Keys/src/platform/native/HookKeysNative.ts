@@ -373,9 +373,10 @@ class HookKeysNativeBridge {
     }
   }
 
-  // Diagnóstico da rota do iOS (eventos da AVAudioSession). Null fora do iOS.
+  // Diagnóstico da rota no iOS (AVAudioSession) e no Android (stream AAudio e
+  // dispositivos conectados). Null no desktop e no navegador.
   async audioRouteLog(): Promise<{ current: string; events: string[] } | null> {
-    if (Capacitor.getPlatform() !== 'ios' || !this.isAvailable()) return null;
+    if (!Capacitor.isNativePlatform() || this.tauriInvoke() || !this.isAvailable()) return null;
     try {
       return await plugin.audioRouteLog();
     } catch {

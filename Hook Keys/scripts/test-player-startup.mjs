@@ -82,8 +82,9 @@ try {
   assert.equal(noteDisplay.textContent, '—');
   assert.deepEqual([...root.querySelectorAll('.player-header-knobs .player-output-knob > span:first-child')]
     .map(label => label.textContent.trim()), ['Playlist', 'Pads', 'Efects', 'Click', 'Master']);
-  assert.equal(root.querySelectorAll('.player-header-knobs__divider').length, 4,
-    'os cinco knobs principais são separados por quatro barras');
+  assert.equal(root.querySelectorAll('.player-header-knobs__divider').length, 0,
+    'os cinco knobs principais ficam sem barras entre eles');
+  assert(!root.querySelector('[data-action="open-tracks"]'), 'a Playlist saiu do topo');
   assert.equal(root.querySelectorAll('.player-module').length, 8, 'mantém os oito módulos');
   for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 100);
   assert.equal(noteDisplay.textContent, 'C', 'usa a cifra profissional para o acorde maior');

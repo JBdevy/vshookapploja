@@ -195,6 +195,8 @@ export class NativeTrackSource extends EventTarget {
     if (status.ended) {
       this.position = Number.isFinite(this.durationSeconds) ? this.durationSeconds : status.positionSeconds;
       this.setPlaying(false);
+      // O motor também precisa saber que parou; senão a agulha o faz tocar.
+      void this.enqueue(() => this.bridge.controlTrack(this.id, 'pause')).catch(() => undefined);
       this.dispatchEvent(new Event('timeupdate'));
       this.dispatchEvent(new Event('ended'));
       return;

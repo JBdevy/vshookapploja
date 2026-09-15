@@ -137,6 +137,12 @@ public:
       if (source == nullptr || !source->decoder) return false;
       source->position = std::min(frame, source->frameCount);
       if (source != activeLocked()) return true;
+      // Depois do fim a música está parada para quem usa, mas playing_ seguia
+      // ligado: mover a agulha voltava a ler blocos e o som saía durante o
+      // arraste. Buscar nunca dá play; só play() liga de novo.
+      if (endedGeneration_.load(std::memory_order_acquire) == generation_.load(std::memory_order_acquire)) {
+        playing_.store(false, std::memory_order_release);
+      }
       // Tocando ou parada, a próxima leitura parte da nova posição.
       restartLocked(*source);
     }

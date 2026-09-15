@@ -146,6 +146,10 @@ export class TracksPanelController {
   private editMode = false;
   private setMenuOpen = false;
   private tracks: LocalTrack[] = [];
+  // Cada linha da lista fica pronta em cache (nome já escapado e medido para o
+  // letreiro). Atualizar a lista só move nós existentes; rolar nunca reconstrói.
+  private readonly listItemCache = new Map<string, { signature: string; element: HTMLElement }>();
+  private marqueeWidth = -1;
   private playlists: LocalPlaylist[] = [];
   private readonly blocksByScope = new Map<string, LocalTrackBlock[]>();
   private readonly layoutsByScope = new Map<string, string[]>();
@@ -591,14 +595,43 @@ export class TracksPanelController {
     grid.classList.toggle('is-editing', this.editMode && this.root.matches('.tracks-split-panel'));
     const showListNumbers = this.root.matches('.tracks-split-panel');
     let musicNumber = 0;
-    grid.innerHTML = visibleItems
-      .map((item) => {
-        if (item.kind === 'block') return createTrackBlock(item.block, showListNumbers ? '–' : null);
-        musicNumber += 1;
-        return createTrackButton(item.track, false, false, showListNumbers ? String(musicNumber) : null);
-      })
-      .join('');
-    this.syncMarqueeLabels(grid);
+    const fresh: HTMLElement[] = [];
+    const liveIds = new Set<string>();
+    const elements = visibleItems.map((item) => {
+      liveIds.add(item.id);
+      let listNumber: string | null = null;
+      if (item.kind === 'track') musicNumber += 1;
+      if (showListNumbers) listNumber = item.kind === 'block' ? '–' : String(musicNumber);
+      const signature = item.kind === 'block'
+        ? `b|${item.block.name}|${listNumber}`
+        : `t|${item.track.name}|${listNumber}`;
+      const cached = this.listItemCache.get(item.id);
+      if (cached?.signature === signature) {
+        cached.element.classList.remove('is-dragging');
+        return cached.element;
+      }
+      const template = document.createElement('template');
+      template.innerHTML = (item.kind === 'block'
+        ? createTrackBlock(item.block, listNumber)
+        : createTrackButton(item.track, false, false, listNumber)).trim();
+      const element = template.content.firstElementChild as HTMLElement;
+      this.listItemCache.set(item.id, { signature, element });
+      fresh.push(element);
+      return element;
+    });
+    // Linhas de outras playlists continuam no cache; só some o que foi apagado.
+    for (const id of this.listItemCache.keys()) {
+      if (!liveIds.has(id) && !this.tracks.some((track) => track.id === id)) this.listItemCache.delete(id);
+    }
+    grid.replaceChildren(...elements);
+    // Mede só as linhas novas; se a largura da lista mudou, mede todas uma vez.
+    const width = grid.clientWidth;
+    if (width !== this.marqueeWidth) {
+      this.marqueeWidth = width;
+      this.syncMarqueeLabels(grid);
+    } else {
+      for (const element of fresh) this.syncMarqueeLabels(element);
+    }
     const snapshot = this.options.getPlaybackSnapshot?.();
     if (snapshot) this.syncPlayback(snapshot);
   }
@@ -689,18 +722,25 @@ export class TracksPanelController {
     button?.classList.toggle('is-selected', open);
   }
 
+  // Roda a cada atualização da música. Escrever atributo/estilo igual em todas
+  // as linhas invalidava o estilo da lista inteira e travava a rolagem no iPad;
+  // agora só a linha que mudou é tocada.
   syncPlayback(snapshot: TrackPlaybackSnapshot): void {
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('button[data-track-id]')) {
       const trackId = button.dataset.trackId;
       const playing = trackId === snapshot.playingTrackId;
       const queued = trackId === snapshot.queuedTrackId;
       const selected = trackId === snapshot.selectedTrackId && !playing && !queued;
-      button.classList.toggle('is-selected', selected);
-      button.classList.toggle('is-playing', playing);
-      button.classList.toggle('is-queued', queued);
-      button.setAttribute('aria-pressed', String(selected || playing || queued));
-      button.style.setProperty('--track-play-progress', String(playing ? snapshot.progress : 0));
-      button.style.setProperty('--track-queue-progress', String(queued ? snapshot.queueProgress : 0));
+      const state = playing ? 'playing' : queued ? 'queued' : selected ? 'selected' : 'idle';
+      if (button.dataset.playbackState !== state) {
+        button.dataset.playbackState = state;
+        button.classList.toggle('is-selected', selected);
+        button.classList.toggle('is-playing', playing);
+        button.classList.toggle('is-queued', queued);
+        button.setAttribute('aria-pressed', String(state !== 'idle'));
+      }
+      setStyleIfChanged(button, '--track-play-progress', String(playing ? snapshot.progress : 0));
+      setStyleIfChanged(button, '--track-queue-progress', String(queued ? snapshot.queueProgress : 0));
     }
   }
 
@@ -1046,6 +1086,10 @@ function createTrackBlock(block: LocalTrackBlock, listNumber: string | null = nu
       <span class="track-block__label">${escapeMarkup(block.name)}</span>
     </div>
   `;
+}
+
+function setStyleIfChanged(element: HTMLElement, property: string, value: string): void {
+  if (element.style.getPropertyValue(property) !== value) element.style.setProperty(property, value);
 }
 
 function escapeMarkup(value: string): string {
