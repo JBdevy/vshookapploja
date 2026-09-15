@@ -137,7 +137,22 @@ public:
     heldVelocity_[note] = velocity;
     heldOrder_[note] = ++noteOrder_;
     if (config_.voiceMode == 0) {
-      startVoice(voiceForPolyNote(note), note, velocity, true);
+      auto& voice = voiceForPolyNote(note);
+      const Voice* phaseReference = nullptr;
+      for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
+        const auto& candidate = voices_[index];
+        if (candidate.active && candidate.note == note &&
+            (!phaseReference || candidate.age > phaseReference->age)) phaseReference = &candidate;
+      }
+      const auto phase1 = phaseReference ? phaseReference->phase1 : 0.0;
+      const auto phase2 = phaseReference ? phaseReference->phase2 : 0.0;
+      startVoice(voice, note, velocity, true);
+      // A camada nova ganha envelope próprio, mas começa na mesma fase da
+      // camada anterior para não criar uma quina audível no retrigger.
+      if (phaseReference && phaseReference != &voice) {
+        voice.phase1 = phase1;
+        voice.phase2 = phase2;
+      }
       return;
     }
     auto& voice = voices_[0];
@@ -150,7 +165,15 @@ public:
   void noteOff(std::uint8_t note) noexcept override {
     note = std::min<std::uint8_t>(note, 127);
     held_[note] = false;
-    if (sustainDown_) return;
+    if (sustainDown_) {
+      for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
+        auto& voice = voices_[index];
+        if (voice.active && voice.note == note && voice.stage != EnvelopeStage::release) {
+          voice.heldSustain = true;
+        }
+      }
+      return;
+    }
     if (config_.voiceMode == 0) {
       for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
         auto& voice = voices_[index];
@@ -189,7 +212,10 @@ public:
     if (sustainDown_ && !next) {
       for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
         auto& voice = voices_[index];
-        if (voice.active && !held_[voice.note]) releaseVoice(voice);
+        if (voice.active && voice.heldSustain) {
+          voice.heldSustain = false;
+          releaseVoice(voice);
+        }
       }
     }
     sustainDown_ = next;
@@ -293,6 +319,7 @@ private:
     float envelope = 0.0f;
     bool oscillator1Gate = true;
     bool oscillator2Gate = true;
+    bool heldSustain = false;
     float releaseStep = 0.0f;
     std::size_t holdFrames = 0;
     EnvelopeStage stage = EnvelopeStage::idle;
@@ -307,7 +334,7 @@ private:
   static constexpr std::uint8_t kFilterControlBlock = 16;
   // Shortest gain change the synth makes: short enough to keep Attack 0 and
   // Release 0 percussive, long enough that the step is not heard as a click.
-  static constexpr double kDeclickMs = 3.0;
+  static constexpr double kDeclickMs = 5.0;
 
   [[nodiscard]] double rampFrames(float milliseconds) const noexcept {
     return sampleRate_ * std::max(kDeclickMs, static_cast<double>(milliseconds)) * 0.001;
@@ -318,16 +345,17 @@ private:
   }
 
   [[nodiscard]] Voice& voiceForPolyNote(std::uint8_t note) noexcept {
-    for (auto& voice : voices_) if (voice.active && voice.note == note) return voice;
+    (void)note;
+    // Retrigger da mesma altura tambem precisa de uma voz nova. Reaproveitar a
+    // voz que ja estava soando cortava o ataque anterior antes do Note Off.
     for (auto& voice : voices_) if (!voice.active) return voice;
     return *std::min_element(voices_.begin(), voices_.end(),
         [](const Voice& left, const Voice& right) { return left.age < right.age; });
   }
 
   void startVoice(Voice& voice, std::uint8_t note, std::uint8_t velocity, bool retrigger) noexcept {
-    // Re-pressing a note that is still sounding (its release tail, or Mono)
-    // must continue the waveform: resetting phase, filter or envelope there
-    // is an audible tick.
+    // Mono reuses its one voice and must continue the waveform; Poly creates
+    // an independent layer and seeds its phase in noteOnWithFilterVelocity.
     const bool sounding = voice.active && voice.envelope > 0.0f;
     if (retrigger && !sounding) voice.moduleCutoff.reset();
     voice.moduleCutoff.configure(cutoffConfig_.frequencyForVelocity(heldFilterVelocity_[note]), sampleRate_);
@@ -364,6 +392,7 @@ private:
     const auto limits = oscillatorVelocityLimits_.load(std::memory_order_relaxed);
     voice.oscillator1Gate = heldFilterVelocity_[note] <= (limits & 0xff);
     voice.oscillator2Gate = heldFilterVelocity_[note] <= (limits >> 8);
+    voice.heldSustain = false;
     voice.age = ++voiceAge_;
     voice.active = true;
     if (!retrigger) return;

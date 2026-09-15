@@ -53,6 +53,9 @@ HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
   for (auto& moduleOrders : activeNoteOrders_) {
     for (auto& inputOrders : moduleOrders) inputOrders.fill(0);
   }
+  for (auto& moduleCounts : activeNoteCounts_) {
+    for (auto& inputCounts : moduleCounts) inputCounts.fill(0);
+  }
   sustainDown_.fill(false);
 }
 
@@ -394,27 +397,29 @@ void HookKeysEngine::routeNoteOn(
       continue;
     }
     const auto targetNote = translatedNote(sourceNote, config.octaveShift);
-    const auto previousTarget = activeNotes_[index][inputSlot][sourceNote];
-    if (previousTarget < 0) {
-      while (moduleHeldNoteCount(index) >= config.polyphony) {
-        if (!stealOldestNote(index)) break;
-      }
-      // Uma voz roubada leva 10 ms para morrer, entao a contagem interna nao
-      // cai na hora: um resgate por nota basta para acompanhar quem toca, e
-      // limitar aqui evita esvaziar o modulo inteiro de uma vez.
-      if (synth->isVoicePoolNearlyFull()) (void)stealOldestNote(index, true);
+    while (moduleHeldNoteCount(index) >= config.polyphony) {
+      if (!stealOldestNote(index)) break;
     }
-    if (previousTarget >= 0) {
-      // Repetir a mesma tecla com o pedal preso nao pode empilhar vozes: o Note
-      // Off nao solta nada enquanto o CC64 esta em pe, entao a voz anterior sai
-      // pelo release curto de 10 ms do roubo.
-      if (sustainedNotes_[index][inputSlot][sourceNote]) synth->stealNote(static_cast<std::uint8_t>(previousTarget));
-      else synth->noteOff(static_cast<std::uint8_t>(previousTarget));
-      sustainedNotes_[index][inputSlot][sourceNote] = false;
-    }
+    // Uma voz roubada leva 10 ms para morrer, entao a contagem interna nao
+    // cai na hora: um resgate por nota basta para acompanhar quem toca, e
+    // limitar aqui evita esvaziar o modulo inteiro de uma vez.
+    if (synth->isVoicePoolNearlyFull()) (void)stealOldestNote(index, true);
+
+    // Nao encerra a voz anterior ao repetir a mesma nota. Camadas repetidas
+    // sao parte do som (piano, pads e retriggers); sem sustain, o Note Off
+    // encerra o grupo inteiro dessa tecla.
     if (!moduleHasActiveNotes(index)) effects_[index].triggerTranceGate();
-    activeNotes_[index][inputSlot][sourceNote] = targetNote;
-    activeNoteOrders_[index][inputSlot][sourceNote] = ++activeNoteOrder_;
+    auto& count = activeNoteCounts_[index][inputSlot][sourceNote];
+    auto& sustainedCount = sustainedNoteCounts_[index][inputSlot][sourceNote];
+    if (activeNotes_[index][inputSlot][sourceNote] < 0) {
+      activeNotes_[index][inputSlot][sourceNote] = targetNote;
+      activeNoteOrders_[index][inputSlot][sourceNote] = ++activeNoteOrder_;
+    } else if (count > 0 && count == sustainedCount) {
+      // Todas as camadas anteriores desta tecla estão apenas no pedal; esta é
+      // uma nova tecla física e passa a ser a mais recente para o roubo FIFO.
+      activeNoteOrders_[index][inputSlot][sourceNote] = ++activeNoteOrder_;
+    }
+    if (count < std::numeric_limits<std::uint16_t>::max()) ++count;
     synth->noteOnWithFilterVelocity(targetNote,
         std::min(applyVelocityCurve(velocity, config.velocityCurve), config.velocityCeiling), velocity);
   }
@@ -428,21 +433,29 @@ void HookKeysEngine::routeNoteOff(std::uint8_t inputSlot, std::uint8_t sourceNot
     if (sustainDown_[index]) {
       // A voz segue soando presa pelo pedal, entao a nota continua ocupando
       // polifonia ate o CC64 descer ou o roubo FIFO alcanca-la.
-      sustainedNotes_[index][inputSlot][sourceNote] = true;
+      sustainedNoteCounts_[index][inputSlot][sourceNote] =
+          activeNoteCounts_[index][inputSlot][sourceNote];
       continue;
     }
     activeNotes_[index][inputSlot][sourceNote] = -1;
     activeNoteOrders_[index][inputSlot][sourceNote] = 0;
+    activeNoteCounts_[index][inputSlot][sourceNote] = 0;
+    sustainedNoteCounts_[index][inputSlot][sourceNote] = 0;
   }
 }
 
 void HookKeysEngine::releaseSustainedNotes(std::size_t moduleIndex) noexcept {
   for (std::size_t input = 0; input < kRoutableMidiInputCount; ++input) {
     for (std::size_t note = 0; note < kMidiNoteCount; ++note) {
-      if (!sustainedNotes_[moduleIndex][input][note]) continue;
-      sustainedNotes_[moduleIndex][input][note] = false;
-      activeNotes_[moduleIndex][input][note] = -1;
-      activeNoteOrders_[moduleIndex][input][note] = 0;
+      auto& total = activeNoteCounts_[moduleIndex][input][note];
+      auto& sustained = sustainedNoteCounts_[moduleIndex][input][note];
+      if (sustained == 0) continue;
+      total = total > sustained ? static_cast<std::uint16_t>(total - sustained) : 0;
+      sustained = 0;
+      if (total == 0) {
+        activeNotes_[moduleIndex][input][note] = -1;
+        activeNoteOrders_[moduleIndex][input][note] = 0;
+      }
     }
   }
 }
@@ -469,8 +482,11 @@ std::size_t HookKeysEngine::moduleHeldNoteCount(std::size_t moduleIndex) const n
   std::size_t count = 0;
   for (std::size_t input = 0; input < kRoutableMidiInputCount; ++input) {
     for (std::size_t note = 0; note < kMidiNoteCount; ++note) {
-      if (activeNotes_[moduleIndex][input][note] >= 0 &&
-          !sustainedNotes_[moduleIndex][input][note]) ++count;
+      if (activeNotes_[moduleIndex][input][note] >= 0) {
+        const auto total = activeNoteCounts_[moduleIndex][input][note];
+        const auto sustained = sustainedNoteCounts_[moduleIndex][input][note];
+        count += total > sustained ? total - sustained : 0;
+      }
     }
   }
   return count;
@@ -489,7 +505,10 @@ bool HookKeysEngine::stealOldestNote(std::size_t moduleIndex, bool sustainedOnly
       for (std::size_t note = 0; note < kMidiNoteCount; ++note) {
         const auto order = activeNoteOrders_[moduleIndex][input][note];
         if (activeNotes_[moduleIndex][input][note] < 0 || order == 0 || order >= oldestOrder) continue;
-        if (sustainedNotes_[moduleIndex][input][note] != sustainedPass) continue;
+        const auto total = activeNoteCounts_[moduleIndex][input][note];
+        const auto sustained = sustainedNoteCounts_[moduleIndex][input][note];
+        const bool sustainedOnlyGroup = total > 0 && total == sustained;
+        if (sustainedOnlyGroup != sustainedPass) continue;
         oldestOrder = order;
         oldestInput = input;
         oldestSourceNote = note;
@@ -503,7 +522,8 @@ bool HookKeysEngine::stealOldestNote(std::size_t moduleIndex, bool sustainedOnly
     }
     activeNotes_[moduleIndex][oldestInput][oldestSourceNote] = -1;
     activeNoteOrders_[moduleIndex][oldestInput][oldestSourceNote] = 0;
-    sustainedNotes_[moduleIndex][oldestInput][oldestSourceNote] = false;
+    activeNoteCounts_[moduleIndex][oldestInput][oldestSourceNote] = 0;
+    sustainedNoteCounts_[moduleIndex][oldestInput][oldestSourceNote] = 0;
     return true;
   }
   return false;
@@ -512,7 +532,8 @@ bool HookKeysEngine::stealOldestNote(std::size_t moduleIndex, bool sustainedOnly
 void HookKeysEngine::clearActiveNoteState(std::size_t moduleIndex) noexcept {
   for (auto& inputNotes : activeNotes_[moduleIndex]) inputNotes.fill(-1);
   for (auto& inputOrders : activeNoteOrders_[moduleIndex]) inputOrders.fill(0);
-  for (auto& inputSustained : sustainedNotes_[moduleIndex]) inputSustained.fill(false);
+  for (auto& inputCounts : activeNoteCounts_[moduleIndex]) inputCounts.fill(0);
+  for (auto& inputSustained : sustainedNoteCounts_[moduleIndex]) inputSustained.fill(0);
 }
 
 bool HookKeysEngine::push(const EngineCommand& command) noexcept {

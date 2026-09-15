@@ -160,11 +160,6 @@ export function createAudioSettingsMarkup(
         <select data-setting="buffer-size">${bufferOptions}</select>
       </label>
 
-      <label class="app-settings-field app-settings-field--sample-rate">
-        <span>Sample Rate</span>
-        <select data-setting="sample-rate">${sampleRateOptions}</select>
-      </label>
-
       ${([
         ['pads', 'Saídas - Pads'],
         ['effects', 'Saídas - Effects'],
@@ -177,6 +172,11 @@ export function createAudioSettingsMarkup(
           </select>
         </label>
       `).join('')}
+
+      <label class="app-settings-field app-settings-field--sample-rate">
+        <span>Sample Rate</span>
+        <select data-setting="sample-rate">${sampleRateOptions}</select>
+      </label>
 
       <!-- Músicas saem sempre em 1+2: o seletor só mostra a saída. -->
       <label class="app-settings-field app-settings-field--audio-route" data-audio-route-field="music">

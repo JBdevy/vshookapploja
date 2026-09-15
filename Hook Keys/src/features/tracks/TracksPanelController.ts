@@ -73,6 +73,16 @@ export function isTrackAudioFile(file: Pick<File, 'name' | 'type'>): boolean {
 }
 const BLOCK_NAME_LIMIT = 12;
 
+function createTrackImportLoadingMarkup(): string {
+  return `
+    <div class="tracks-import-loading" data-tracks-import-loading role="status" aria-live="polite" hidden>
+      <span class="loading-orbit" aria-hidden="true"></span>
+      <strong data-tracks-import-loading-label>Adicionando músicas...</strong>
+      <small>Aguarde enquanto os arquivos são preparados.</small>
+    </div>
+  `;
+}
+
 export function createTracksPanelMarkup(): string {
   return `
     <section class="tracks-tools-panel" aria-label="Opções de músicas">
@@ -87,6 +97,7 @@ export function createTracksPanelMarkup(): string {
       <input type="file" accept="${trackFileAccept()}" multiple="multiple" data-tracks-file hidden>
       <p class="tracks-tools-panel__message" data-tracks-message role="status" aria-live="polite"></p>
       <section class="tracks-playlist-editor" data-playlist-editor aria-live="polite" hidden></section>
+      ${createTrackImportLoadingMarkup()}
     </section>
   `;
 }
@@ -111,6 +122,7 @@ export function createTracksSplitPanelMarkup(): string {
       <div class="tracks-library-grid" data-tracks-library aria-label="Músicas"></div>
       <p class="tracks-tools-panel__message" data-tracks-message role="status" aria-live="polite"></p>
       <section class="tracks-playlist-editor" data-playlist-editor aria-live="polite" hidden></section>
+      ${createTrackImportLoadingMarkup()}
     </aside>
   `;
 }
@@ -473,6 +485,27 @@ export class TracksPanelController {
     this.setMessage(message);
   }
 
+  setImportLoading(loading: boolean, label = 'Adicionando músicas...'): void {
+    const overlay = this.root.querySelector<HTMLElement>('[data-tracks-import-loading]');
+    const owner = overlay?.parentElement;
+    if (!overlay || !owner) return;
+    overlay.hidden = !loading;
+    owner.classList.toggle('is-importing-tracks', loading);
+    if (loading) owner.setAttribute('aria-busy', 'true');
+    else owner.removeAttribute('aria-busy');
+    const output = overlay.querySelector<HTMLElement>('[data-tracks-import-loading-label]');
+    if (output) output.textContent = label;
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-tracks-action="add-music"]')) {
+      button.disabled = loading;
+    }
+  }
+
+  private waitForImportLoadingPaint(): Promise<void> {
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => window.setTimeout(resolve, 0));
+    });
+  }
+
   private async refresh(): Promise<void> {
     try {
       [this.tracks, this.playlists] = await Promise.all([
@@ -680,12 +713,16 @@ export class TracksPanelController {
       return;
     }
     this.setMessage('Adicionando músicas...');
+    this.setImportLoading(true, files.length === 1 ? 'Adicionando música...' : `Adicionando ${files.length} músicas...`);
     try {
+      await this.waitForImportLoadingPaint();
       await this.library.addFiles(files);
       await this.refresh();
       this.setMessage(`${files.length} ${files.length === 1 ? 'música adicionada' : 'músicas adicionadas'}.${ignoredNote}`);
     } catch {
       this.setMessage('Não foi possível adicionar as músicas.');
+    } finally {
+      this.setImportLoading(false);
     }
   }
 

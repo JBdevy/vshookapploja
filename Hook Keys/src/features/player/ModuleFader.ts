@@ -191,15 +191,15 @@ export class ModuleFader {
     if (!Number.isFinite(leftDb) || !Number.isFinite(rightDb)) return;
     const left = dbToPosition(clamp(leftDb, MIN_DB, MAX_DB));
     const right = dbToPosition(clamp(rightDb, MIN_DB, MAX_DB));
-    // Transform fica na camada de composição. Clip-path + custom property no
-    // ancestral forçava o WebView a recalcular e repintar os oito módulos a
-    // cada leitura do motor.
+    // O gradiente permanece na altura total do medidor e apenas a janela
+    // visivel sobe. Escalar o gradiente inteiro comprimia amarelo/vermelho na
+    // base, fazendo um sinal baixo parecer clipado.
     if (Math.abs(left - this.lastLeftMeterScale) >= 0.002) {
-      this.leftMeter.style.transform = `scaleY(${left.toFixed(4)})`;
+      this.leftMeter.style.clipPath = `inset(${((1 - left) * 100).toFixed(2)}% 0 0)`;
       this.lastLeftMeterScale = left;
     }
     if (Math.abs(right - this.lastRightMeterScale) >= 0.002) {
-      this.rightMeter.style.transform = `scaleY(${right.toFixed(4)})`;
+      this.rightMeter.style.clipPath = `inset(${((1 - right) * 100).toFixed(2)}% 0 0)`;
       this.lastRightMeterScale = right;
     }
     const clipping = leftDb > 0 || rightDb > 0;

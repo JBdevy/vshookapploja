@@ -1,6 +1,7 @@
 import Foundation
 import Capacitor
 import AVFAudio
+import Foundation
 import UIKit
 import UniformTypeIdentifiers
 
@@ -57,6 +58,14 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
 
     private let engine = HookKeysNativeEngine()
     private let soundfontQueue = DispatchQueue(label: "com.hookdeveloper.hookkeys.soundfonts", qos: .userInitiated)
+    private struct CachedAudioOutput {
+        var name: String
+        var channels: Int
+        var lastSeen: Date
+    }
+    private let audioOutputCacheLock = NSLock()
+    private var cachedAudioOutputs: [String: CachedAudioOutput] = [:]
+    private let audioOutputGracePeriod: TimeInterval = 3.0
     private var uploads: [Int: (handle: FileHandle, temporary: URL, destination: URL)] = [:]
     private var pendingBackupExport: (call: CAPPluginCall, temporary: URL)?
 
@@ -109,14 +118,30 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     @objc func listAudioOutputDevices(_ call: CAPPluginCall) {
         let session = AVAudioSession.sharedInstance()
         let maximum = max(1, min(32, session.maximumOutputNumberOfChannels))
-        let devices: [[String: Any]] = session.currentRoute.outputs.map { output in
+        let now = Date()
+        let current = session.currentRoute.outputs.map { output -> (String, String, Int) in
             let channelCount = output.channels?.count ?? maximum
-            return [
-                "id": output.uid,
-                "name": output.portName,
-                "channels": max(1, min(32, channelCount))
-            ]
+            return (output.uid, output.portName, max(1, min(32, channelCount)))
         }
+
+        // currentRoute pode ficar vazio ou voltar para Speaker por alguns
+        // instantes durante o hand-off de uma interface USB. Preserve a última
+        // rota confirmada nesse intervalo para ela não piscar no seletor.
+        audioOutputCacheLock.lock()
+        for (id, name, channels) in current {
+            cachedAudioOutputs[id] = CachedAudioOutput(name: name, channels: channels, lastSeen: now)
+        }
+        cachedAudioOutputs = cachedAudioOutputs.filter {
+            now.timeIntervalSince($0.value.lastSeen) <= audioOutputGracePeriod
+        }
+        let devices: [[String: Any]] = cachedAudioOutputs
+            .map { id, output in [
+                "id": id,
+                "name": output.name,
+                "channels": output.channels
+            ] }
+            .sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+        audioOutputCacheLock.unlock()
         call.resolve(["devices": devices])
     }
 

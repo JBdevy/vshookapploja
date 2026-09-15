@@ -178,6 +178,29 @@ void testMonoVoiceSteal() {
          "latest mono note wins");
 }
 
+void testRepeatedNoteLayersUntilNoteOff() {
+  RecordingSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig config;
+  config.midiInputSlot = hook_keys::kAllMidiInputs;
+  config.polyphony = 128;
+  expect(engine.setModuleConfig(0, config), "configure repeated-note layering");
+  expect(engine.enqueueMidi(midi(0x90, 60, 70)), "queue first instance of repeated note");
+  expect(engine.enqueueMidi(midi(0x90, 60, 115)), "queue second instance of repeated note");
+  process(engine);
+  expect(synth.events.size() == 2 &&
+         synth.events[0].type == Event::Type::noteOn &&
+         synth.events[1].type == Event::Type::noteOn,
+      "repeated Note On layers a new voice without cutting the previous one");
+  expect(engine.enqueueMidi(midi(0x80, 60, 0)), "queue repeated-note release");
+  process(engine);
+  expect(synth.events.size() == 3 && synth.events.back().type == Event::Type::noteOff &&
+         synth.events.back().data1 == 60,
+      "one Note Off asks the synth to release the complete repeated-note group");
+}
+
 void testFifoPolyphonySteal() {
   RecordingSynth synth;
   hook_keys::HookKeysEngine::SynthModules modules{};
@@ -1533,7 +1556,11 @@ void testSynthRetriggerHasNoClick() {
     synth.renderAdd(left.data() + 12000, right.data() + 12000, 7200, 1.0f);
     const auto steady = largestStep(left, 4800, 9600);
     expect(largestStep(left, 0, 480) < steady * 8.0, "Attack 0 ramps in without a click");
-    expect(largestStep(left, 11900, 12480) < steady * 3.0, "re-pressing a releasing note does not click");
+    // Poly soma uma segunda voz real, portanto a curvatura pode passar de 2x
+    // sem ser descontinuidade. Mono continua reutilizando uma única voz.
+    const auto retriggerLimit = voiceMode == 0 ? 6.0 : 3.0;
+    expect(largestStep(left, 11900, 12480) < steady * retriggerLimit,
+        "re-pressing a releasing note layers without an impulse click");
     double lateEnergy = 0.0;
     for (std::size_t index = 16800; index < left.size(); ++index) lateEnergy += std::abs(left[index]);
     expect(lateEnergy > 1000.0,
@@ -2145,6 +2172,7 @@ int main() {
   testKeyboardBroadcastRouting();
   testPatternGeneratorRouting();
   testMonoVoiceSteal();
+  testRepeatedNoteLayersUntilNoteOff();
   testFifoPolyphonySteal();
   testArpeggiatorRouteClearsSustain();
   testPerModuleControllerFilters();

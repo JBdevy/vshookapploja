@@ -2034,20 +2034,14 @@ TSFDEF int tsf_channel_note_on(tsf* f, int channel, int key, float vel)
 TSFDEF void tsf_channel_note_off(tsf* f, int channel, int key)
 {
 	unsigned sustain;
-	struct tsf_voice *v = f->voices, *vEnd = v + f->voiceNum, *vMatchFirst = TSF_NULL, *vMatchLast = TSF_NULL;
-	for (; v != vEnd; v++)
+	struct tsf_voice *v = f->voices, *vEnd = v + f->voiceNum;
+	for (sustain = f->channels->channels[channel].sustain; v != vEnd; v++)
 	{
-		//Find the first and last entry in the voices list with matching channel, key and look up the smallest play index
-		if (v->playingPreset == -1 || v->playingChannel != channel || v->playingKey != key || v->ampenv.segment >= TSF_SEGMENT_RELEASE || v->heldSustain) continue;
-		else if (!vMatchFirst || v->playIndex < vMatchFirst->playIndex) vMatchFirst = vMatchLast = v;
-		else if (v->playIndex == vMatchFirst->playIndex) vMatchLast = v;
-	}
-	if (!vMatchFirst) return;
-	for (sustain = f->channels->channels[channel].sustain, v = vMatchFirst; v <= vMatchLast; v++)
-	{
-		//Stop all voices with matching channel, key and the smallest play index which was enumerated above
-		if (v != vMatchFirst && v != vMatchLast &&
-			(v->playIndex != vMatchFirst->playIndex || v->playingPreset == -1 || v->playingChannel != channel || v->playingKey != key || v->ampenv.segment >= TSF_SEGMENT_RELEASE)) continue;
+		// Hook Keys permite empilhar varios Note On da mesma tecla. Um Note Off
+		// sem pedal encerra todas essas camadas; com sustain, todas ficam presas
+		// ate a soltura do CC64.
+		if (v->playingPreset == -1 || v->playingChannel != channel || v->playingKey != key ||
+			v->ampenv.segment >= TSF_SEGMENT_RELEASE || v->heldSustain) continue;
 		//Don't turn off if sustain is active, just mark as held by sustain so we don't forget it
 		if (sustain)
 			v->heldSustain = 1;

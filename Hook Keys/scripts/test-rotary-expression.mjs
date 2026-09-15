@@ -130,7 +130,7 @@ test('real Rotary handlers update module 5, retain parameters through ON/OFF and
 
 test('Modulation toggle persists; CC 1 updates the correct module only at Slow/Fast crossings; mapped buttons use press edges', () => {
   const { Handlers, isCcMappingKey } = loadPlayerHandlers([
-    'toggleRotaryModulation', 'receiveRotaryModulation', 'setModuleRotarySpeed', 'handleMidiControlChange',
+    'toggleRotaryModulation', 'receiveRotaryModulation', 'setModuleRotarySpeed', 'mappedCcRatio', 'handleMidiControlChange',
   ]);
   const screen = new Handlers();
   const modules = Array.from({ length: 8 }, () => ({ enabled: true, modulationInputEnabled: true, midiInputId: 'midi-1', settings: {} }));
@@ -141,6 +141,7 @@ test('Modulation toggle persists; CC 1 updates the correct module only at Slow/F
     modal: { querySelector: () => power, querySelectorAll: () => speeds }, currentModalKind: 'module-rotary',
     liveMidiEnabled: true,
     rotaryModulationValues: new Map(), lastRotaryModulationValue: 0, lastCcValues: new Map(), ccMappings: new Map(),
+    ccMappingOptions: new Map(),
     getActivePresetState: () => ({ modules }), markPlayerStateChanged: () => changes++,
   });
   screen.receiveRotaryModulation(127, 'midi-1');

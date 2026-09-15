@@ -24,6 +24,14 @@ test('iOS generator and DSP use the same sample-rate clock negotiated by the rou
   assert.doesNotMatch(engine, /connect:_sourceNode to:_audioEngine\.mainMixerNode format:nil/);
 });
 
+test('iOS keeps a USB audio route stable during the system hand-off', () => {
+  const plugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  assert.match(plugin, /cachedAudioOutputs/);
+  assert.match(plugin, /audioOutputGracePeriod:\s*TimeInterval\s*=\s*3\.0/);
+  assert.match(plugin, /currentRoute\.outputs/);
+  assert.match(plugin, /timeIntervalSince\(\$0\.value\.lastSeen\)\s*<=\s*audioOutputGracePeriod/);
+});
+
 test('Android and desktop build their DSP clock from the actual 44.1/48 kHz stream', () => {
   const android = readFileSync(new URL('../android/app/src/main/cpp/HookKeysNativeBridge.cpp', import.meta.url), 'utf8');
   const desktop = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
@@ -39,7 +47,7 @@ test('iOS batches MIDI paint and isolates dynamic keyboard and meter layers', ()
   assert.match(runtime, /dataset\.platform\s*=\s*isNative \? Capacitor\.getPlatform\(\)/);
   assert.match(player, /iosRuntime[\s\S]*pendingKeyboardNoteStates[\s\S]*requestAnimationFrame/);
   assert.match(css, /html\[data-platform="ios"\] :is\(\.player-module__meter, \.performance-keyboard__key\)[\s\S]*contain:\s*paint/);
-  assert.match(css, /html\[data-platform="ios"\] \.player-module__meter-fill[\s\S]*transition-property:\s*transform/);
+  assert.match(css, /html\[data-platform="ios"\] \.player-module__meter-fill[\s\S]*transition-property:\s*clip-path/);
 });
 
 test('mobile effects omitted from a call stay bypassed rather than activating compression', () => {
@@ -94,9 +102,11 @@ test('audio meter fills the complete rail as independent stereo halves', () => {
   assert.match(css, /\.player-module__meter::after\s*\{[^}]*left:\s*50%;/s);
   assert.match(css, /width:\s*calc\(50% - \.5px\);/);
   assert.match(css, /\.player-module__meter-fill\s*\{[^}]*#0db758[^}]*#ffe23b[^}]*#ff3e32/s);
-  assert.match(css, /transform:\s*scaleY\(0\)/);
-  assert.match(css, /transform-origin:\s*center bottom/);
-  assert.match(css, /transition:\s*transform 90ms linear/);
+  assert.match(css, /clip-path:\s*inset\(100% 0 0\)/);
+  assert.match(css, /transition:\s*clip-path 90ms linear/);
+  const fader = readFileSync(new URL('../src/features/player/ModuleFader.ts', import.meta.url), 'utf8');
+  assert.match(fader, /style\.clipPath\s*=\s*`inset\(/);
+  assert.doesNotMatch(fader, /style\.transform\s*=\s*`scaleY\(/);
   assert.match(css, /html\[data-runtime="native"\] \.player-module__meter-fill/);
   assert.match(css, /\.player-module__fader\.is-clipping \.player-module__meter-fill/);
 });
@@ -129,11 +139,9 @@ test('library default and active module ON/HLD/MOD use darker greens without ove
   assert.match(css, /\.player-screen \.player-module__action-button\.is-octave-active,\s*\.player-screen \.player-module__power-button\.is-on\s*\{[^}]*--button-color-a: var\(--module-button-green-a\) !important;/);
 });
 
-test('module borders retain independent identities without changing the common gray surfaces', () => {
+test('all module borders use the same orange identity without changing the common gray surfaces', () => {
   assert.match(css, /--module-border-color: #ff7900;/);
-  assert.match(css, /\.player-module:nth-child\(6\)\s*\{\s*--module-border-color: #a855f7;/);
-  assert.match(css, /\.player-module:nth-child\(7\)\s*\{\s*--module-border-color: #ff3434;/);
-  assert.match(css, /\.player-module:nth-child\(8\)\s*\{\s*--module-border-color: #3985ff;/);
+  assert.doesNotMatch(css, /\.player-module:nth-child\(\d\)\s*\{\s*--module-border-color:/);
   assert.match(css, /\.player-module\s*\{\s*border-color: var\(--module-border-color\);/);
   assert.doesNotMatch(css, /\.player-module:nth-child\(\d\)\s*\{[^}]*--module-surface/);
 });

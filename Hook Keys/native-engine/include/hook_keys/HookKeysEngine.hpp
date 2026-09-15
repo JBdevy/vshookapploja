@@ -71,13 +71,18 @@ private:
   std::vector<float> scratchRight_;
   using ActiveNotesByInput = std::array<std::array<std::int16_t, kMidiNoteCount>, kRoutableMidiInputCount>;
   using ActiveNoteOrdersByInput = std::array<std::array<std::uint64_t, kMidiNoteCount>, kRoutableMidiInputCount>;
+  using ActiveNoteCountsByInput = std::array<std::array<std::uint16_t, kMidiNoteCount>, kRoutableMidiInputCount>;
   std::array<ActiveNotesByInput, kModuleCount> activeNotes_{};
   std::array<ActiveNoteOrdersByInput, kModuleCount> activeNoteOrders_{};
-  // Notas cuja tecla ja subiu mas que o pedal de sustain mantem soando. Elas
-  // continuam contando na polifonia: sem isso o teto interno do TinySoundFont
-  // era atingido antes do roubo FIFO do motor, e a nota nova nao saia.
-  using SustainedNotesByInput = std::array<std::array<bool, kMidiNoteCount>, kRoutableMidiInputCount>;
-  std::array<SustainedNotesByInput, kModuleCount> sustainedNotes_{};
+  // A mesma tecla pode receber varios Note On antes do Note Off. Cada Note On
+  // ocupa uma voz independente; o contador impede que essas camadas escapem
+  // do limite de polifonia configurado.
+  std::array<ActiveNoteCountsByInput, kModuleCount> activeNoteCounts_{};
+  // Quantas camadas da tecla já subiram e estão presas somente pelo sustain.
+  // Separar esse número do total mantém correta uma nova pressão da mesma nota
+  // enquanto as camadas anteriores continuam no pedal.
+  using SustainedNoteCountsByInput = std::array<std::array<std::uint16_t, kMidiNoteCount>, kRoutableMidiInputCount>;
+  std::array<SustainedNoteCountsByInput, kModuleCount> sustainedNoteCounts_{};
   std::array<bool, kModuleCount> sustainDown_{};
   std::uint64_t activeNoteOrder_ = 0;
   RealtimeCommandQueue<EngineCommand, 2048> commands_{};

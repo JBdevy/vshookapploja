@@ -2,11 +2,18 @@ import { detect } from '@tonaljs/chord-detect';
 import { formatMidiNote } from '../midi/MidiInputService';
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'] as const;
-const COMMON_CHORD_TYPES = new Set([
-  'M', 'm', '7', 'maj7', 'm7', 'm/maj7', 'mMaj7', 'dim', 'dim7', 'm7b5',
-  'aug', '+', 'sus2', 'sus4', '5', '6', 'm6', '6/9', 'Madd9', 'add9', 'madd9',
-  '9', 'maj9', 'm9', '11', 'maj11', 'm11', '13', 'maj13', 'm13',
-  '7sus4', '9sus4', '7b5', '7#5', '7b9', '7#9', '7#11', '7b13',
+// Menor pontuação = leitura mais comum. A detecção pode devolver várias
+// grafias corretas para o mesmo pitch-class set; essa ordem evita resultados
+// tecnicamente possíveis, mas pouco úteis no palco (Em#5 em vez de C/E).
+const CHORD_TYPE_PRIORITY = new Map<string, number>([
+  ['M', 0], ['m', 0], ['7', 0], ['maj7', 0], ['m7', 0],
+  ['dim', 0], ['dim7', 0], ['m7b5', 0], ['aug', 0], ['+', 0],
+  ['sus2', 0], ['sus4', 0], ['5', 0], ['6', 0], ['m6', 0],
+  ['6add9', 0], ['6/9', 0], ['Madd9', 0], ['add9', 0], ['madd9', 0],
+  ['9', 0], ['maj9', 0], ['m9', 0], ['11', 0], ['maj11', 0], ['m11', 0],
+  ['13', 0], ['maj13', 0], ['m13', 0], ['7sus4', 0], ['9sus4', 0],
+  ['m/maj7', 1], ['mMaj7', 1], ['7b5', 1], ['7#5', 1], ['7b9', 1],
+  ['7#9', 1], ['7#11', 1], ['7b13', 1], ['alt7', 1],
 ]);
 
 function chordParts(symbol: string): RegExpMatchArray | null {
@@ -17,8 +24,20 @@ function displayChord(symbol: string): string {
   const parts = chordParts(symbol);
   if (!parts) return symbol;
   const [, root, type, bass] = parts;
-  const suffix = type === 'M' ? (bass ? '' : 'major') : type === 'Madd9' ? 'add9' : type;
+  // Cifra internacional: tríade maior é somente “C”; qualidade menor/extensões
+  // continuam explícitas (Cm, C7, Cmaj7), e inversões usam baixo após a barra.
+  const suffix = type === 'M' ? '' : type === 'Madd9' ? 'add9' : type;
   return `${root}${suffix}${bass ? `/${bass}` : ''}`;
+}
+
+function preferredChord(candidates: readonly string[]): string | undefined {
+  return candidates
+    .map((candidate, index) => ({
+      candidate,
+      index,
+      priority: CHORD_TYPE_PRIORITY.get(chordParts(candidate)?.[2] ?? '') ?? 50,
+    }))
+    .sort((left, right) => left.priority - right.priority || left.index - right.index)[0]?.candidate;
 }
 
 /** Recognize held MIDI notes, not audio; runs only in the UI, never in the audio callback. */
@@ -36,8 +55,7 @@ export function performanceNotesLabel(notes: readonly number[]): string {
     const candidates = detect(pitchClasses.map(pitch => NOTE_NAMES[pitch]!), { assumePerfectFifth: true });
     // Prefer an ordinary triad inversion over a rarer enharmonic interpretation
     // (for example C/E, rather than Em#5, for E-G-C).
-    const chord = candidates.find(candidate => COMMON_CHORD_TYPES.has(chordParts(candidate)?.[2] ?? ''))
-      ?? candidates[0];
+    const chord = preferredChord(candidates);
     if (chord) return displayChord(chord);
   }
 

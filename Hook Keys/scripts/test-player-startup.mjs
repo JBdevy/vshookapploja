@@ -45,6 +45,20 @@ const playerCss = await import('node:fs/promises').then(({ readFile }) => readFi
 assert.match(playerCss,
   /\.player-screen--cellular \.player-bank-view:has\(\.player-presets--cellular\)[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto/,
   'no celular, a altura retirada do Keyboard aumenta a linha dos módulos');
+assert.match(playerCss, /\.player-modal--app-settings select\[data-setting\]:not\(\.app-select__native\)[\s\S]*?visibility:\s*hidden/,
+  'o seletor nativo fica oculto antes do seletor próprio ser montado');
+for (const [selector, column, row] of [
+  ['\\.app-settings-field--audio-device', 1, 1],
+  ['\\.app-settings-field--buffer', 2, 1],
+  ['\\[data-audio-route-field="pads"\\]', 1, 2],
+  ['\\[data-audio-route-field="effects"\\]', 2, 2],
+  ['\\[data-audio-route-field="metronome"\\]', 1, 3],
+  ['\\[data-audio-route-field="music"\\]', 2, 3],
+  ['\\.app-settings-field--sample-rate', 1, 4],
+]) {
+  assert.match(playerCss, new RegExp(`${selector}\\s*\\{[^}]*grid-column:\\s*${column};[^}]*grid-row:\\s*${row};`),
+    `posição fixa do campo de áudio ${selector}`);
+}
 const root = window.document.createElement('div');
 window.document.body.append(root);
 const player = new window.HookPlayer.PlayerScreen(root, { email: 'startup@example.invalid', name: 'Startup test' },
@@ -68,9 +82,11 @@ try {
   assert.equal(noteDisplay.textContent, '—');
   assert.deepEqual([...root.querySelectorAll('.player-header-knobs .player-output-knob > span:first-child')]
     .map(label => label.textContent.trim()), ['Playlist', 'Pads', 'Efects', 'Click', 'Master']);
+  assert.equal(root.querySelectorAll('.player-header-knobs__divider').length, 4,
+    'os cinco knobs principais são separados por quatro barras');
   assert.equal(root.querySelectorAll('.player-module').length, 8, 'mantém os oito módulos');
   for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 100);
-  assert.equal(noteDisplay.textContent, 'Cmajor', 'reconhece o acorde maior');
+  assert.equal(noteDisplay.textContent, 'C', 'usa a cifra profissional para o acorde maior');
   player.receiveMidiNote(70, 127);
   assert.equal(noteDisplay.textContent, 'C7', 'acrescentar a sétima muda a nota para a cifra do acorde');
   player.receiveMidiNote(70, 0);
@@ -80,7 +96,7 @@ try {
   assert.equal(noteDisplay.textContent, 'A4', 'nota isolada mostra a oitava');
   player.receiveMidiNote(69, 0);
   for (const [notes, expected] of [
-    [[55, 59, 62], 'Gmajor'],
+    [[55, 59, 62], 'G'],
     [[60, 63, 67], 'Cm'],
     [[60, 64, 67, 70], 'C7'],
     [[60, 64, 67, 71], 'Cmaj7'],
@@ -94,7 +110,11 @@ try {
     [[60, 64, 70], 'C7'], // common voicing without the fifth
     [[52, 55, 60], 'C/E'],
     [[55, 60, 64], 'C/G'],
-    [[48, 60, 64, 67, 72], 'Cmajor'], // octave doublings
+    [[48, 60, 64, 67, 72], 'C'], // octave doublings
+    [[59, 62, 65, 67], 'G7/B'],
+    [[60, 64, 68], 'Caug'],
+    [[60, 63, 66, 70], 'Cm7b5'],
+    [[60, 64, 67, 70, 73], 'C7b9'],
   ]) {
     for (const note of notes) player.receiveMidiNote(note, 110);
     assert.equal(noteDisplay.textContent, expected, `acorde ${expected} a partir de MIDI ${notes}`);
@@ -253,6 +273,20 @@ try {
   assert.equal(emptySound.textContent, '+', 'módulo sem timbre mostra +');
   assert(emptySound.classList.contains('is-empty'));
   assert.match(root.querySelector('[data-module="1"] .player-module__sound-button').getAttribute('aria-label'), /Sem timbre/);
+  player.openModal('app-settings', null, root.querySelector('[data-action="open-app-settings"]'));
+  assert(!window.document.querySelector('[data-setting="lite-mode"]'), 'Modo Lite saiu de Settings');
+  player.closeModal();
+  player.openModal('about', null, root.querySelector('[data-action="open-about"]'));
+  const liteMode = window.document.querySelector('[data-setting="lite-mode"]');
+  assert(liteMode && !liteMode.checked, 'tela da versão oferece o Modo Lite desativado por padrão');
+  liteMode.checked = true;
+  liteMode.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert(root.classList.contains('hook-keys-lite'), 'Modo Lite aplica imediatamente o perfil visual leve');
+  assert.equal(player.createSavedPlayerState().liteMode, true, 'Modo Lite fica salvo no estado do usuário');
+  liteMode.checked = false;
+  liteMode.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert(!root.classList.contains('hook-keys-lite'), 'desligar o Modo Lite restaura o visual completo');
+  player.closeModal();
   player.openTracksSplitView();
   assert(!root.querySelector('.tracks-horizontal-scroll-guide'), 'desktop has no drag-here bar');
   {
@@ -400,6 +434,42 @@ try {
     player.applySavedPlayerState(saved);
     assert(!player.ccMappings.has('power:1') && player.ccMappings.get('power:2') === 50, 'duplicatas salvas são limpas');
     for (const key of ['octave:2:up', 'input:4:sustain', 'input:4:modulation', 'power:2']) player.ccMappings.delete(key);
+
+    // Knobs e faders podem inverter e limitar o destino sem reduzir o curso
+    // físico do controlador. Botões continuam binários e não exibem a curva.
+    const moduleFader = root.querySelector('[data-module-fader="1"] .player-module__fader-rail');
+    player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, moduleFader);
+    assert(window.document.querySelector('[data-cc-limit]'), 'Learn de fader mostra Limite CC');
+    const limit = window.document.querySelector('[data-cc-limit]');
+    limit.value = '76.4';
+    limit.dispatchEvent(new window.Event('input', { bubbles: true }));
+    cc(46, 127);
+    window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+    assert.equal(player.ccMappingOptions.get('module:1').inverted, false);
+    assert.equal(player.ccMappingOptions.get('module:1').limitPercent, 76.4);
+    cc(46, 127);
+    assert(Math.abs(player.faders.get(1).getValueDb()) < 0.11, '100% físico termina em 0 dB com limite de 80%');
+
+    player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, moduleFader);
+    window.document.querySelector('[data-modal-action="toggle-cc-invert"]').click();
+    window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+    cc(46, 0);
+    assert(Math.abs(player.faders.get(1).getValueDb()) < 0.11, 'Inverter troca o sentido e mantém o mesmo limite');
+    cc(46, 127);
+    assert.equal(player.faders.get(1).getValueDb(), -90, 'fim invertido chega ao mínimo do fader');
+    const curveBackup = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
+    player.ccMappingOptions.clear();
+    player.applySavedPlayerState(curveBackup);
+    assert.equal(player.ccMappingOptions.get('module:1').inverted, true,
+      'inversão sobrevive ao backup');
+    assert.equal(player.ccMappingOptions.get('module:1').limitPercent, 76.4,
+      'limite sobrevive ao backup');
+
+    player.openCcLearn({ kind: 'module-power', moduleNumber: 1 }, root.querySelector('[data-action="toggle-module"][data-module="1"]'));
+    assert(!window.document.querySelector('[data-cc-limit]'), 'botões não recebem opções de curva contínua');
+    player.closeModal();
+    player.ccMappings.delete('module:1');
+    player.ccMappingOptions.delete('module:1');
   }
   assert.equal(synthShortcut.textContent.trim(), 'Synth', 'alternar modo não muda o atalho frontal');
   player.openModal('module-settings', 8, master);

@@ -6262,6 +6262,7 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
 }
 
 .tracks-tools-panel {
+  position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   gap: clamp(10px, 1.5vh, 16px);
@@ -7415,6 +7416,123 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 .cc-learn-panel p.is-complete,
 .cc-learn-panel small {
   color: var(--orange-bright);
+}
+
+.cc-learn-curve {
+  display: grid;
+  grid-template-columns: minmax(105px, .42fr) minmax(180px, 1fr);
+  align-items: stretch;
+  gap: 9px 12px;
+  width: min(100%, 560px);
+  margin-top: 5px;
+  padding: 10px;
+  border: 1px solid rgba(255, 128, 30, .48);
+  border-radius: 10px;
+  background: rgba(8, 7, 9, .72);
+}
+
+.cc-learn-curve > button {
+  min-height: 46px;
+  color: #fff5ef;
+  border: 1.5px solid #7c3028;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #bd3b31, #701610);
+  font: inherit;
+  font-weight: 900;
+}
+
+.cc-learn-curve > button.is-selected {
+  border-color: #70e69d;
+  background: linear-gradient(180deg, #17854a, #07522d);
+  box-shadow: inset 0 0 0 1px rgba(164, 255, 196, .2);
+}
+
+.cc-learn-curve > label {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-width: 0;
+  color: #fff4ec;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: left;
+}
+
+.cc-learn-curve > label > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cc-learn-curve output {
+  color: #ffad45;
+}
+
+.cc-learn-curve input[type="range"] {
+  width: 100%;
+  accent-color: #ff7b18;
+}
+
+.cc-learn-curve > small {
+  grid-column: 1 / -1;
+  color: #bd9e8d;
+  font-size: 10px;
+  line-height: 1.25;
+  text-align: left;
+}
+
+@media (max-width: 620px) {
+  .cc-learn-curve {
+    grid-template-columns: 1fr;
+  }
+
+  .cc-learn-curve > small {
+    grid-column: auto;
+  }
+}
+
+.tracks-split-panel {
+  position: relative;
+}
+
+.tracks-import-loading {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 20px;
+  color: #fff5ed;
+  border: 1.5px solid rgba(255, 132, 35, .58);
+  border-radius: 11px;
+  background: rgba(8, 7, 8, .94);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  text-align: center;
+}
+
+.tracks-import-loading[hidden] {
+  display: none;
+}
+
+.tracks-import-loading strong {
+  color: #fff5ed;
+  font-size: clamp(16px, 2.4vw, 28px);
+}
+
+.tracks-import-loading small {
+  color: #ffad58;
+  font-size: clamp(9px, 1vw, 12px);
+}
+
+.tracks-import-loading .loading-orbit {
+  width: clamp(38px, 6vh, 58px);
+}
+
+.is-importing-tracks > :not(.tracks-import-loading) {
+  pointer-events: none;
 }
 
 .player-modal--cc-learn .player-modal__actions {
@@ -10535,10 +10653,6 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   --module-surface-b: #0b0c0f;
   --module-border-color: #ff7900;
 }
-.player-module:nth-child(6) { --module-border-color: #a855f7; }
-.player-module:nth-child(7) { --module-border-color: #ff3434; }
-.player-module:nth-child(8) { --module-border-color: #3985ff; }
-
 .player-module {
   border-color: var(--module-border-color);
   background:
@@ -10689,10 +10803,9 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   box-shadow:
     inset 0 0 8px rgba(255,255,255,.18),
     0 0 8px rgba(30, 224, 103, .5);
-  transform: scaleY(0);
-  transform-origin: center bottom;
-  transition: transform 90ms linear, filter 90ms linear;
-  will-change: transform;
+  clip-path: inset(100% 0 0);
+  transition: clip-path 90ms linear, filter 90ms linear;
+  will-change: clip-path;
 }
 
 .player-module__meter-fill--left {
@@ -10726,7 +10839,44 @@ html[data-platform="ios"] .performance-keyboard__key.is-pressed {
 }
 
 html[data-platform="ios"] .player-module__meter-fill {
-  transition-property: transform;
+  transition-property: clip-path;
+}
+
+/* Perfil opcional para aparelhos antigos. Mantém todos os controles e todo o
+   processamento de áudio; reduz somente composição, pintura e animações da UI. */
+.hook-keys-lite :is(
+  .player-header, .player-top-transport, .player-presets, .player-module,
+  .player-module__fader-rail, .player-module__fader-handle,
+  .player-output-knob__face, .player-navigation__button,
+  .player-account__user-button, .player-metronome-button, .player-tempo-button,
+  .performance-keyboard__key, .track-card, .track-block, .player-modal__surface
+) {
+  box-shadow: none !important;
+}
+
+.hook-keys-lite :is(.player-screen *, .player-modal *) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.hook-keys-lite .player-module {
+  contain: paint;
+}
+
+.hook-keys-lite .player-module__meter-fill {
+  filter: none !important;
+  box-shadow: none !important;
+  transition: none !important;
+  will-change: auto;
+}
+
+.hook-keys-lite :is(
+  .track-name.is-marquee,
+  .track-transport__name > span.is-marquee,
+  .player-next-field__track > span.is-marquee
+) {
+  animation: none !important;
+  transform: none !important;
 }
 
 .player-module__fader.is-clipping .player-module__meter-fill {
@@ -12854,6 +13004,125 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 /* O + do modulo sem timbre continua grande tambem com a playlist aberta. */
 :root .player-screen.player-screen--tablet .player-module .player-module__sound-label.is-empty {
   font-size: clamp(16px, 2vw, 24px);
+}
+
+/* Os cinco volumes principais ficam livres, sem um segundo card dentro do
+   header. As barras mantêm cada grupo visualmente separado. */
+.player-header-knobs {
+  grid-template-columns:
+    minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto
+    minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: clamp(3px, .42vw, 7px);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.player-header-knobs__divider {
+  color: rgba(255, 139, 49, .72);
+  font-size: clamp(14px, 1.45vw, 22px);
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.player-output-knob {
+  font-size: clamp(8px, .78vw, 11px);
+}
+
+.player-output-knob__face {
+  width: clamp(32px, 3.45vw, 44px);
+}
+
+.player-output-knob output {
+  font-size: clamp(6.5px, .67vw, 9px);
+}
+
+/* Organização fixa do áudio: cada saída permanece no mesmo lugar mesmo
+   quando algum dispositivo externo oferece mais canais. */
+.player-modal--app-settings-audio .app-settings-panel--devices {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.player-modal--app-settings-audio .app-settings-field--audio-device {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.player-modal--app-settings-audio .app-settings-field--buffer {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.player-modal--app-settings-audio [data-audio-route-field="pads"] {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.player-modal--app-settings-audio [data-audio-route-field="effects"] {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.player-modal--app-settings-audio [data-audio-route-field="metronome"] {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.player-modal--app-settings-audio [data-audio-route-field="music"] {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.player-modal--app-settings-audio .app-settings-field--sample-rate {
+  grid-column: 1;
+  grid-row: 4;
+}
+
+.about-panel {
+  display: grid;
+  place-items: center;
+  width: min(100%, 560px);
+  margin: auto;
+}
+
+.about-panel__lite-mode {
+  width: min(100%, 460px);
+}
+
+/* O select do sistema nunca ganha um frame visível antes da versão própria. */
+.player-modal--app-settings select[data-setting]:not(.app-select__native) {
+  visibility: hidden;
+}
+
+@media (orientation: landscape) and (max-height: 620px) {
+  .player-screen--tablet .player-output-knob {
+    font-size: 6.5px;
+  }
+
+  .player-screen--tablet .player-output-knob__face {
+    width: 24px;
+  }
+
+  .player-screen--tablet .player-output-knob output {
+    font-size: 5.5px;
+  }
+
+  .player-header-knobs__divider {
+    font-size: 12px;
+  }
+}
+
+@media (min-width: 761px) and (max-height: 800px) {
+  html[data-runtime="desktop"] .player-screen--tablet .player-header-knobs {
+    padding: 0;
+  }
+
+  html[data-runtime="desktop"] .player-screen--tablet .player-output-knob__face {
+    width: 32px;
+  }
 }
 
 

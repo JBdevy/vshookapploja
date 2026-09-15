@@ -527,17 +527,41 @@ fn audio_devices() -> Vec<(Device, AudioDevice)> {
         .map(|devices| {
             devices
                 .enumerate()
-                .filter_map(|(index, device)| {
-                    let name = device.description().ok()?.name().to_owned();
+                .map(|(index, device)| {
+                    // Algumas interfaces USB aparecem no WASAPI antes que a lista
+                    // completa de formatos esteja disponível. Elas ainda são saídas
+                    // válidas e não podem desaparecer do seletor por causa disso.
+                    let description = device.description().ok();
+                    // No WASAPI, `name()` pode ser apenas "Alto-falantes" ou
+                    // "Line". A linha estendida contém o FriendlyName do Windows
+                    // (normalmente com fabricante/modelo) e é o nome útil ao músico.
+                    let name = description
+                        .as_ref()
+                        .and_then(|description| {
+                            description
+                                .extended()
+                                .iter()
+                                .filter(|line| !line.trim().is_empty())
+                                .max_by_key(|line| line.len())
+                                .filter(|line| line.len() > description.name().len())
+                                .cloned()
+                        })
+                        .or_else(|| description.as_ref().map(|description| description.name().to_owned()))
+                        .unwrap_or_else(|| format!("Saída de áudio {}", index + 1));
                     let channels = device
                         .supported_output_configs()
-                        .ok()?
-                        .map(|config| config.channels())
-                        .max()
+                        .ok()
+                        .and_then(|configs| configs.map(|config| config.channels()).max())
+                        .or_else(|| device.default_output_config().ok().map(|config| config.channels()))
                         .unwrap_or(2)
                         .clamp(1, 32);
-                    let id = format!("desktop-audio-{index}-{name}");
-                    Some((device, AudioDevice { id, name, channels }))
+                    // O ID do backend permanece estável mesmo que a ordem dos
+                    // endpoints mude ao conectar uma interface USB.
+                    let id = device
+                        .id()
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|_| format!("desktop-audio-{index}-{name}"));
+                    (device, AudioDevice { id, name, channels })
                 })
                 .collect()
         })

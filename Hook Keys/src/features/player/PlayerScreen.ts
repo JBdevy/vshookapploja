@@ -329,6 +329,31 @@ type CcLearnTarget =
   | { kind: 'pad'; bank: PadBankId; note: string }
   | { kind: 'effect'; bank: EffectBankId; effectNumber: number };
 
+interface CcMappingOptions {
+  inverted: boolean;
+  limitPercent: number;
+}
+
+const DEFAULT_CC_MAPPING_OPTIONS: Readonly<CcMappingOptions> = {
+  inverted: false,
+  limitPercent: 100,
+};
+
+function isContinuousCcTarget(target: CcLearnTarget): boolean {
+  if (target.kind === 'module-volume' || target.kind === 'output-volume' ||
+      target.kind === 'metronome-volume') return true;
+  return target.kind === 'module-control' &&
+    target.control !== 'delay:tap' && !target.control.startsWith('rotary:speed:');
+}
+
+function normalizeCcMappingOptions(value: unknown): CcMappingOptions {
+  const record = isRecord(value) ? value : {};
+  return {
+    inverted: record.inverted === true,
+    limitPercent: Math.round(boundedNumber(record.limitPercent, 0, 100, 100) * 10) / 10,
+  };
+}
+
 interface EffectEditHoldGesture {
   button: HTMLButtonElement;
   pointerId: number;
@@ -371,6 +396,7 @@ const EFFECT_PAD_MIN_DB = -60;
 const NATIVE_SYNC_INTERVAL_MS = 24;
 const DESKTOP_MODULE_METER_INTERVAL_MS = 50;
 const MOBILE_MODULE_METER_INTERVAL_MS = 90;
+const LITE_MODULE_METER_INTERVAL_MS = 150;
 const EFFECT_PAD_MAX_DB = 0;
 // Desktop knobs stay linear while one pixel moves at most this many steps;
 // wider ranges (envelope and Glide times) switch to the accelerated curve.
@@ -891,8 +917,11 @@ export class PlayerScreen {
   private readonly keyboardAccentGesture = new LongPressGesture(520, 8);
   private pendingCcLearn: CcLearnTarget | null = null;
   private pendingCcController: number | null = null;
+  private pendingCcInverted = false;
+  private pendingCcLimitPercent = 100;
   private pendingCcClear: CcLearnTarget | null = null;
   private readonly ccMappings = new Map<string, number>();
+  private readonly ccMappingOptions = new Map<string, CcMappingOptions>();
   private readonly lastCcValues = new Map<string, { value: number; receivedAt: number }>();
   private effectEditHoldGesture: EffectEditHoldGesture | null = null;
   private effectEditMode = false;
@@ -911,6 +940,7 @@ export class PlayerScreen {
   private nativeSyncInFlight = false;
   private nativeSyncRequested = false;
   private audioDeviceMonitorTimer: number | null = null;
+  private selectedAudioDeviceMissCount = 0;
   private moduleMeterTimer: number | null = null;
   private readonly moduleMeterDb = Array.from({ length: 8 }, () => [MODULE_FADER_MIN_DB, MODULE_FADER_MIN_DB]);
   private readonly compressorMeterDb = [-60, -60];
@@ -943,6 +973,7 @@ export class PlayerScreen {
   private audioLoadAlarmUntil = 0;
   private compatibilityMode = false;
   private seamlessPresetSwitching = false;
+  private liteMode = false;
   private bottomView: PlayerBottomView = 'presets';
   private keyboardMidiSlot = 1;
   private keyboardStyle: PerformanceKeyboardStyle = 'standard';
@@ -1043,9 +1074,13 @@ export class PlayerScreen {
             >Pads - Efects</button>
             <section class="player-header-knobs" aria-label="Volumes principais">
               ${createOutputKnobMarkup('music', 'Playlist', this.outputLevels.music)}
+              <span class="player-header-knobs__divider" aria-hidden="true">|</span>
               ${createOutputKnobMarkup('pads', 'Pads', this.outputLevels.pads)}
+              <span class="player-header-knobs__divider" aria-hidden="true">|</span>
               ${createOutputKnobMarkup('effects', 'Efects', this.outputLevels.effects)}
+              <span class="player-header-knobs__divider" aria-hidden="true">|</span>
               ${createMetronomeKnobMarkup(this.metronome.getVolume())}
+              <span class="player-header-knobs__divider" aria-hidden="true">|</span>
               ${createOutputKnobMarkup('master', 'Master', this.outputLevels.master)}
             </section>
           </nav>
@@ -1252,7 +1287,9 @@ export class PlayerScreen {
       } finally {
         this.scheduleModuleMeters();
       }
-    }, this.desktopRuntime ? DESKTOP_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS);
+    }, this.liteMode
+      ? LITE_MODULE_METER_INTERVAL_MS
+      : this.desktopRuntime ? DESKTOP_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS);
   }
 
   // O unico numero que denuncia um estouro. A CPU total da maquina nao serve:
@@ -1425,6 +1462,7 @@ export class PlayerScreen {
     this.root.removeEventListener('pointercancel', this.handleRootPointerEnd);
     this.root.removeEventListener('contextmenu', this.handleRootContextMenu);
     this.root.removeEventListener('input', this.handleRootInput);
+    this.root.classList.remove('hook-keys-lite');
     this.root.replaceChildren();
     this.mounted = false;
   }
@@ -3628,7 +3666,11 @@ export class PlayerScreen {
 
   private openCcLearn(target: CcLearnTarget, trigger: HTMLElement): void {
     this.pendingCcLearn = target;
-    this.pendingCcController = this.ccMappings.get(ccMappingKey(target)) ?? null;
+    const key = ccMappingKey(target);
+    this.pendingCcController = this.ccMappings.get(key) ?? null;
+    const options = this.ccMappingOptions.get(key) ?? DEFAULT_CC_MAPPING_OPTIONS;
+    this.pendingCcInverted = options.inverted;
+    this.pendingCcLimitPercent = options.limitPercent;
     if (this.modal) this.openChildModal('cc-learn', null, trigger);
     else this.openModal('cc-learn', null, trigger);
     void this.midiInput.requestAccess();
@@ -3637,6 +3679,13 @@ export class PlayerScreen {
   private ccMappingLabel(target: CcLearnTarget): string {
     const controller = this.ccMappings.get(ccMappingKey(target));
     return controller === undefined ? 'Ainda não mapeado' : `CC ${controller}`;
+  }
+
+  private mappedCcRatio(targetKey: string, value: number): number {
+    const options = this.ccMappingOptions?.get(targetKey) ?? { inverted: false, limitPercent: 100 };
+    const input = Math.min(1, Math.max(0, value / 127));
+    const direction = options.inverted ? 1 - input : input;
+    return direction * (options.limitPercent / 100);
   }
 
   private syncKeyboardExpressionInput(): void {
@@ -3697,10 +3746,11 @@ export class PlayerScreen {
     let metronomeVolumeChanged = false;
     for (const [targetKey, controller] of this.ccMappings) {
       if (controller !== input.controller) continue;
+      const continuousRatio = this.mappedCcRatio(targetKey, input.value);
       const moduleMatch = /^module:([1-8])$/.exec(targetKey);
       if (moduleMatch) {
         const moduleNumber = Number(moduleMatch[1]);
-        this.faders.get(moduleNumber)?.setValueDb(visualPositionToFaderDb(input.value / 127), true);
+        this.faders.get(moduleNumber)?.setValueDb(visualPositionToFaderDb(continuousRatio), true);
         continue;
       }
 
@@ -3716,7 +3766,7 @@ export class PlayerScreen {
             this.setModuleRotarySpeed(speed);
           }
         } else {
-          this.applyMappedModuleControl(moduleNumber, control, input.value / 127);
+          this.applyMappedModuleControl(moduleNumber, control, continuousRatio);
         }
         continue;
       }
@@ -3744,14 +3794,14 @@ export class PlayerScreen {
 
       const outputMatch = /^output:(music|pads|effects|master)$/.exec(targetKey);
       if (outputMatch && isOutputBus(outputMatch[1])) {
-        this.outputLevels[outputMatch[1]] = outputDbFromPosition(input.value / 127 * 100);
+        this.outputLevels[outputMatch[1]] = outputDbFromPosition(continuousRatio * 100);
         outputChanged = true;
         continue;
       }
 
       if (targetKey === 'metronome:volume') {
-        const db = outputDbFromPosition(input.value / 127 * 100);
-        this.metronome.setVolume(input.value <= 0 ? 0 : 10 ** (db / 20));
+        const db = outputDbFromPosition(continuousRatio * 100);
+        this.metronome.setVolume(continuousRatio <= 0 ? 0 : 10 ** (db / 20));
         metronomeVolumeChanged = true;
         continue;
       }
@@ -4040,6 +4090,19 @@ export class PlayerScreen {
       bodyMarkup = createPerformanceDownloadMarkup(this.selectedPerformanceAsset);
     } else if (kind === 'backup-download') {
       bodyMarkup = createBackupDownloadMarkup(this.pendingBackupDownloads);
+    } else if (kind === 'about') {
+      bodyMarkup = `
+        <section class="about-panel">
+          <label class="app-settings-toggle about-panel__lite-mode">
+            <span>
+              <strong>Modo Lite</strong>
+              <small>Interface mais leve. Não altera o áudio.</small>
+            </span>
+            <input type="checkbox" data-setting="lite-mode"${this.liteMode ? ' checked' : ''}>
+            <i aria-hidden="true"></i>
+          </label>
+        </section>
+      `;
     } else if (kind === 'module-settings') {
       bodyMarkup = createModuleSettingsMarkup(
         this.midiInput.getInputDevices(),
@@ -4164,12 +4227,25 @@ export class PlayerScreen {
       `;
     } else if (kind === 'cc-learn' && this.pendingCcLearn) {
       const currentController = this.ccMappings.get(ccMappingKey(this.pendingCcLearn));
+      const continuous = isContinuousCcTarget(this.pendingCcLearn);
       bodyMarkup = `
         <section class="cc-learn-panel">
           <div class="cc-learn-panel__badge" aria-hidden="true">CC</div>
           <strong>Learn CC</strong>
           <p data-cc-learn-status>Mova o controle MIDI que deseja usar.</p>
           <small data-cc-learn-current>${currentController === undefined ? 'Ainda não mapeado' : `Mapeamento atual: CC ${currentController}`}</small>
+          ${continuous ? `
+            <div class="cc-learn-curve" aria-label="Curva do controle contínuo">
+              <button class="${this.pendingCcInverted ? 'is-selected' : ''}" type="button"
+                data-modal-action="toggle-cc-invert" aria-pressed="${this.pendingCcInverted}">Inverter</button>
+              <label>
+                <span>Limite CC <output data-cc-limit-output>${this.pendingCcLimitPercent}%</output></span>
+                <input type="range" min="0" max="100" step="0.1" value="${this.pendingCcLimitPercent}"
+                  data-cc-limit aria-label="Limite CC em porcentagem">
+              </label>
+              <small>O curso completo do controle físico termina neste ponto do knob ou fader.</small>
+            </div>
+          ` : ''}
         </section>
       `;
     } else if (kind === 'cc-clear-confirm' && this.pendingCcClear) {
@@ -5254,15 +5330,33 @@ export class PlayerScreen {
         }
         return;
       }
+      if (kind === 'cc-learn' && modalAction === 'toggle-cc-invert' && this.pendingCcLearn &&
+          isContinuousCcTarget(this.pendingCcLearn)) {
+        this.pendingCcInverted = !this.pendingCcInverted;
+        const button = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-modal-action="toggle-cc-invert"]') : null;
+        button?.classList.toggle('is-selected', this.pendingCcInverted);
+        button?.setAttribute('aria-pressed', String(this.pendingCcInverted));
+        return;
+      }
       if (kind === 'cc-learn' && modalAction === 'confirm-cc-learn') {
         if (this.pendingCcLearn && this.pendingCcController !== null) {
           // Um CC comanda um unico controle: ao confirmar no novo alvo, ele
           // deixa qualquer alvo anterior que usava o mesmo numero.
           const pendingKey = ccMappingKey(this.pendingCcLearn);
           for (const [targetKey, controller] of this.ccMappings) {
-            if (controller === this.pendingCcController && targetKey !== pendingKey) this.ccMappings.delete(targetKey);
+            if (controller === this.pendingCcController && targetKey !== pendingKey) {
+              this.ccMappings.delete(targetKey);
+              this.ccMappingOptions.delete(targetKey);
+            }
           }
           this.ccMappings.set(pendingKey, this.pendingCcController);
+          if (isContinuousCcTarget(this.pendingCcLearn)) {
+            this.ccMappingOptions.set(pendingKey, {
+              inverted: this.pendingCcInverted,
+              limitPercent: this.pendingCcLimitPercent,
+            });
+          } else this.ccMappingOptions.delete(pendingKey);
           this.markPlayerStateChanged(false);
         }
         if (this.modalHistory.length > 0) this.returnToPreviousModal();
@@ -5275,7 +5369,9 @@ export class PlayerScreen {
       }
       if (kind === 'cc-clear-confirm' && modalAction === 'confirm-cc-clear') {
         if (this.pendingCcClear) {
-          this.ccMappings.delete(ccMappingKey(this.pendingCcClear));
+          const key = ccMappingKey(this.pendingCcClear);
+          this.ccMappings.delete(key);
+          this.ccMappingOptions.delete(key);
           this.markPlayerStateChanged(false);
         }
         this.leaveCcClearConfirmation();
@@ -5692,7 +5788,7 @@ export class PlayerScreen {
         this.markPlayerStateChanged();
         return;
       }
-      if (kind === 'app-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio') this.handleAppSettingsChange(event);
+      if (kind === 'about' || kind === 'app-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio') this.handleAppSettingsChange(event);
       if (kind === 'module-settings' && moduleNumber !== null) {
         this.handleModuleSettingsChange(event, moduleNumber);
       }
@@ -5700,6 +5796,12 @@ export class PlayerScreen {
     modal.addEventListener('input', (event) => {
       const input = event.target;
       if (!(input instanceof HTMLInputElement)) return;
+      if (kind === 'cc-learn' && input.matches('[data-cc-limit]')) {
+        this.pendingCcLimitPercent = Math.round(boundedNumber(input.value, 0, 100, 100) * 10) / 10;
+        const output = modal.querySelector<HTMLOutputElement>('[data-cc-limit-output]');
+        if (output) output.value = `${this.pendingCcLimitPercent}%`;
+        return;
+      }
       if ((kind === 'module-settings' || kind === 'module-synth')
           && moduleNumber !== null && input.matches('[data-glide-time]')) {
         this.updateGlideControl(modal, input, moduleNumber);
@@ -6551,6 +6653,12 @@ export class PlayerScreen {
       void hookKeysNative.setSeamlessPresetSwitching(target.checked);
       return;
     }
+    if (target instanceof HTMLInputElement && target.dataset.setting === 'lite-mode') {
+      this.liteMode = target.checked;
+      this.applyLiteMode();
+      this.markPlayerStateChanged(false);
+      return;
+    }
     const select = target;
     if (!(select instanceof HTMLSelectElement)) return;
     if (select.dataset.setting === 'midi-device') {
@@ -6636,6 +6744,10 @@ export class PlayerScreen {
       ? deviceId
       : null;
     this.markPlayerStateChanged();
+  }
+
+  private applyLiteMode(): void {
+    this.root.classList.toggle('hook-keys-lite', this.liteMode);
   }
 
   private updateModuleEnvelopeControl(
@@ -7672,15 +7784,29 @@ export class PlayerScreen {
     const selectedId = this.selectedAudioDeviceId;
     if (!hookKeysNative.isAvailable()) return;
     if (await hookKeysNative.audioOutputFailed()) {
+      this.selectedAudioDeviceMissCount += 1;
+      if (this.selectedAudioDeviceMissCount < 3) return;
+      this.selectedAudioDeviceMissCount = 0;
       await this.fallbackToDefaultAudioOutput(true);
       return;
     }
-    if (!selectedId) return;
     try {
       const devices = await this.audioOutput.listDevices();
       if (!this.mounted || selectedId !== this.selectedAudioDeviceId) return;
+      const deviceListChanged = JSON.stringify(this.audioDevices) !== JSON.stringify(devices);
       this.audioDevices = devices;
-      if (devices.some(({ id }) => id === selectedId)) return;
+      if (deviceListChanged && this.currentModalKind === 'app-settings-audio' && this.modal) {
+        this.renderAudioDeviceOptions(this.modal);
+      }
+      if (!selectedId || devices.some(({ id }) => id === selectedId)) {
+        this.selectedAudioDeviceMissCount = 0;
+        return;
+      }
+      // O Windows pode entregar uma enumeração incompleta durante o hot-plug.
+      // Só tratamos como queda depois de três leituras consecutivas.
+      this.selectedAudioDeviceMissCount += 1;
+      if (this.selectedAudioDeviceMissCount < 3) return;
+      this.selectedAudioDeviceMissCount = 0;
       await this.fallbackToDefaultAudioOutput();
     } catch {
       // Uma falha transitória na enumeração não significa que o dispositivo
@@ -7863,22 +7989,27 @@ export class PlayerScreen {
     try {
       this.audioDevices = await this.audioOutput.listDevices();
       if (!modal.isConnected) return;
-      let needsFallback = false;
-      if (this.selectedAudioDeviceId && !this.audioDevices.some(({ id }) => id === this.selectedAudioDeviceId)) {
-        needsFallback = true;
-      }
-      if (needsFallback) await this.fallbackToDefaultAudioOutput();
       this.normalizeAudioRoutes();
-      const select = modal.querySelector<HTMLSelectElement>('[data-setting="audio-device"]');
-      if (select) {
-        select.innerHTML = `<option value="">Padrão</option>${this.audioDevices.map((device) => `<option value="${escapeMarkup(device.id)}">${escapeMarkup(device.name)} · ${device.channels} canais</option>`).join('')}`;
-        select.value = this.selectedAudioDeviceId;
-        this.syncAppSelect(select);
-      }
+      this.renderAudioDeviceOptions(modal);
       this.refreshAudioRoutingSelects(modal);
     } catch {
       // Mantém a saída padrão se o ambiente não permitir enumerar dispositivos.
     }
+  }
+
+  private renderAudioDeviceOptions(modal: HTMLElement): void {
+    if (!modal.isConnected) return;
+    const select = modal.querySelector<HTMLSelectElement>('[data-setting="audio-device"]');
+    if (!select) return;
+    const selectedIsMissing = this.selectedAudioDeviceId
+      && !this.audioDevices.some(({ id }) => id === this.selectedAudioDeviceId);
+    select.innerHTML = `<option value="">Padrão</option>${this.audioDevices.map((device) => (
+      `<option value="${escapeMarkup(device.id)}">${escapeMarkup(device.name)} · ${device.channels} canais</option>`
+    )).join('')}${selectedIsMissing ? (
+      `<option value="${escapeMarkup(this.selectedAudioDeviceId)}">Dispositivo reconectando…</option>`
+    ) : ''}`;
+    select.value = this.selectedAudioDeviceId;
+    this.syncAppSelect(select);
   }
 
   private refreshAudioRoutingSelects(modal: HTMLElement | null): void {
@@ -8353,6 +8484,8 @@ export class PlayerScreen {
     if (this.modal.classList.contains('player-modal--cc-learn')) {
       this.pendingCcLearn = null;
       this.pendingCcController = null;
+      this.pendingCcInverted = false;
+      this.pendingCcLimitPercent = 100;
     }
     if (this.modal.classList.contains('player-modal--cc-clear-confirm') && !preserveHistory) {
       this.pendingCcClear = null;
@@ -8886,6 +9019,7 @@ export class PlayerScreen {
       sampleRate: this.sampleRate,
       compatibilityMode: this.compatibilityMode,
       seamlessPresetSwitching: this.seamlessPresetSwitching,
+      liteMode: this.liteMode,
       bottomView: this.bottomView,
       keyboardMidiSlot: this.keyboardMidiSlot,
       keyboardStyle: this.keyboardStyle,
@@ -8904,6 +9038,7 @@ export class PlayerScreen {
         volume: this.metronome.getVolume(),
       },
       ccMappings: Object.fromEntries(this.ccMappings),
+      ccMappingOptions: Object.fromEntries(this.ccMappingOptions),
       padBankSelections: Object.fromEntries(this.padBankSelections),
       effectPads: Object.fromEntries(
         EFFECT_BANK_IDS.map((bank) => [bank, (this.effectPadStates.get(bank) ?? []).map((effect) => ({
@@ -8955,6 +9090,8 @@ export class PlayerScreen {
     };
     this.compatibilityMode = value.compatibilityMode === true;
     this.seamlessPresetSwitching = value.seamlessPresetSwitching === true;
+    this.liteMode = value.liteMode === true;
+    this.applyLiteMode();
     this.midiInput.setCompatibilityMode(this.compatibilityMode);
     this.bottomView = !this.cellularLayout && !this.desktopRuntime && value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
     const savedKeyboardMidiSlot = Number(value.keyboardMidiSlot);
@@ -8988,6 +9125,7 @@ export class PlayerScreen {
       boundedNumber(savedMetronome.timeSignatureDenominator, 2, 16, 4),
     );
     this.ccMappings.clear();
+    this.ccMappingOptions.clear();
     const savedCcMappings = isRecord(value.ccMappings) ? value.ccMappings : {};
     for (const [targetKey, controllerValue] of Object.entries(savedCcMappings)) {
       const controller = Number(controllerValue);
@@ -8997,12 +9135,20 @@ export class PlayerScreen {
         if (!this.ccMappings.has(normalizedKey)) this.ccMappings.set(normalizedKey, controller);
       }
     }
+    const savedCcMappingOptions = isRecord(value.ccMappingOptions) ? value.ccMappingOptions : {};
+    for (const [targetKey, optionsValue] of Object.entries(savedCcMappingOptions)) {
+      if (!this.ccMappings.has(targetKey) || !isCcMappingKey(targetKey)) continue;
+      this.ccMappingOptions.set(targetKey, normalizeCcMappingOptions(optionsValue));
+    }
     // Estados anteriores deixavam o mesmo CC em vários controles. O Learn mais
     // recente é o último gravado, então ele fica e os antigos saem.
     const mappedTargets = new Map<number, string>();
     for (const [targetKey, controller] of this.ccMappings) {
       const earlier = mappedTargets.get(controller);
-      if (earlier) this.ccMappings.delete(earlier);
+      if (earlier) {
+        this.ccMappings.delete(earlier);
+        this.ccMappingOptions.delete(earlier);
+      }
       mappedTargets.set(controller, targetKey);
     }
     this.renderOutputLevels();
@@ -9205,33 +9351,47 @@ export class PlayerScreen {
       return;
     }
     if (picked.length === 0) return;
+    const setLoading = (loading: boolean, label?: string) => {
+      this.tracksPanelController?.setImportLoading(loading, label);
+      this.splitTracksController?.setImportLoading(loading, label);
+    };
+    setLoading(true, picked.length === 1 ? 'Adicionando música...' : `Adicionando ${picked.length} músicas...`);
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.setTimeout(resolve, 0));
+    });
     let added = 0;
-    for (const [index, file] of picked.entries()) {
-      message(`Adicionando ${index + 1} de ${picked.length}...`);
-      let adopted = false;
-      try {
-        const response = await fetch(picker.fileUrl(file.path));
-        if (!response.ok) throw new Error('file_read_failed');
-        const blob = await response.blob();
-        const [record] = await this.trackLibrary.addFiles([new File([blob], file.name, { type: audioTypeForFileName(file.name) })]);
-        added += 1;
-        // O arquivo escolhido já está no app: vira o que o motor toca.
-        if (record && hookKeysNative.tracksAvailable()) {
-          adopted = await picker.adopt(file.path, record.id, trackFileExtension(file.name)).then(() => true, () => false);
+    try {
+      for (const [index, file] of picked.entries()) {
+        const progress = `Adicionando ${index + 1} de ${picked.length}...`;
+        message(progress);
+        setLoading(true, progress);
+        let adopted = false;
+        try {
+          const response = await fetch(picker.fileUrl(file.path));
+          if (!response.ok) throw new Error('file_read_failed');
+          const blob = await response.blob();
+          const [record] = await this.trackLibrary.addFiles([new File([blob], file.name, { type: audioTypeForFileName(file.name) })]);
+          added += 1;
+          // O arquivo escolhido já está no app: vira o que o motor toca.
+          if (record && hookKeysNative.tracksAvailable()) {
+            adopted = await picker.adopt(file.path, record.id, trackFileExtension(file.name)).then(() => true, () => false);
+          }
+        } catch {
+          // Segue com as outras músicas.
+        } finally {
+          if (!adopted) void picker.release(file.path).catch(() => undefined);
         }
-      } catch {
-        // Segue com as outras músicas.
-      } finally {
-        if (!adopted) void picker.release(file.path).catch(() => undefined);
       }
+      await Promise.all([
+        this.tracksPanelController?.refreshLibrary(),
+        this.splitTracksController?.refreshLibrary(),
+      ]);
+      const failed = picked.length - added;
+      const addedText = `${added} ${added === 1 ? 'música adicionada' : 'músicas adicionadas'}`;
+      message(failed > 0 ? `${addedText}. ${failed} não ${failed === 1 ? 'pôde' : 'puderam'} ser lida${failed === 1 ? '' : 's'}.` : `${addedText}.`);
+    } finally {
+      setLoading(false);
     }
-    await Promise.all([
-      this.tracksPanelController?.refreshLibrary(),
-      this.splitTracksController?.refreshLibrary(),
-    ]);
-    const failed = picked.length - added;
-    const addedText = `${added} ${added === 1 ? 'música adicionada' : 'músicas adicionadas'}`;
-    message(failed > 0 ? `${addedText}. ${failed} não ${failed === 1 ? 'pôde' : 'puderam'} ser lida${failed === 1 ? '' : 's'}.` : `${addedText}.`);
   }
 
   // Pinta o modal primeiro; decodificar a música fica para depois do quadro.

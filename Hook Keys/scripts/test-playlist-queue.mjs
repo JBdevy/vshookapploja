@@ -20,6 +20,14 @@ const panel = window.document.querySelector(layout === 'split' ? '.tracks-split-
 panel.querySelector('[data-tracks-library]').innerHTML = ['a', 'b', 'c'].map(id =>
   `<button class="track-card" data-track-id="${id}"><strong>${id}</strong><span class="track-card__progress"><i></i></span></button>`).join('');
 const controller = new window.Tracks.TracksPanelController(panel, {});
+const importLoading = panel.querySelector('[data-tracks-import-loading]');
+assert(importLoading?.hidden, `loading de importação nasce oculto no modo ${layout}`);
+controller.setImportLoading(true, 'Adicionando 2 de 3...');
+assert(!importLoading.hidden, `loading aparece durante a importação no modo ${layout}`);
+assert.equal(importLoading.querySelector('[data-tracks-import-loading-label]').textContent, 'Adicionando 2 de 3...');
+assert.equal(panel.getAttribute('aria-busy'), 'true');
+controller.setImportLoading(false);
+assert(importLoading.hidden, `loading some somente depois da atualização no modo ${layout}`);
 const snapshot = { selectedTrackId: 'a', playingTrackId: 'a', queuedTrackId: 'b', queuedTrackName: 'b',
   queueSource: 'manual', state: 'playing', progress: 0.25, queueProgress: 0.75 };
 const row = id => panel.querySelector(`[data-track-id="${id}"]`);
