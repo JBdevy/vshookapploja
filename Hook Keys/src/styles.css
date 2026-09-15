@@ -7417,6 +7417,10 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   color: var(--orange-bright);
 }
 
+.player-modal--cc-learn .player-modal__actions {
+  justify-content: flex-end;
+}
+
 .metronome-panel,
 .tempo-editor {
   display: grid;

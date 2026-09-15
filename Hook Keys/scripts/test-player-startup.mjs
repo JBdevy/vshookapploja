@@ -342,7 +342,7 @@ try {
       player.onRootContextMenu({ target: button, preventDefault() {} });
       assert.equal(player.currentModalKind, 'cc-learn', `${selector} abre o Learn CC`);
       cc(controller, 127);
-      player.closeModal();
+      window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
     };
     const moduleState = (number) => player.getActivePresetState().modules[number - 1];
     // A-1 e C7 não entram no Learn.
@@ -380,29 +380,19 @@ try {
     assert.equal(moduleState(3).enabled, enabled, 'o controle anterior não responde mais');
     player.shiftModuleOctave(2, -1);
 
-    // A tela do Learn tem Clean, com confirmação, e volta para o Learn.
+    // Learn fica ouvindo continuamente e confirma somente o ultimo CC no OK.
     const learnFooter = () => [...window.document.querySelectorAll('.player-modal__actions > button')];
     player.onRootContextMenu({ target: root.querySelector('[data-action="octave-up"][data-module="2"]'), preventDefault() {} });
-    assert.equal(JSON.stringify(learnFooter().map((button) => button.textContent.trim())), JSON.stringify(['Voltar', 'Clean']));
-    const clean = () => window.document.querySelector('[data-modal-action="clean-learn-cc"]');
-    assert.equal(clean().disabled, false, 'Clean fica ativo quando o controle já tem CC');
-    clean().click();
-    assert.equal(player.currentModalKind, 'cc-clear-confirm', 'Clean pede confirmação');
-    window.document.querySelector('[data-modal-action="cancel-cc-clear"]').click();
-    assert.equal(player.currentModalKind, 'cc-learn', 'Cancelar volta para o Learn');
-    assert.equal(player.ccMappings.get('octave:2:up'), 40, 'Cancelar mantém o CC');
-    clean().click();
-    window.document.querySelector('[data-modal-action="confirm-cc-clear"]').click();
-    assert.equal(player.currentModalKind, 'cc-learn', 'Limpar volta para o Learn');
-    assert(!player.ccMappings.has('octave:2:up'), 'Clean remove o CC do controle');
-    assert.match(window.document.querySelector('[data-cc-learn-current]').textContent, /Ainda não mapeado/);
-    assert.equal(clean().disabled, true, 'sem CC, o Clean fica desativado');
+    assert.equal(JSON.stringify(learnFooter().map((button) => button.textContent.trim())), JSON.stringify(['OK']));
     cc(43, 127);
-    assert.equal(player.ccMappings.get('octave:2:up'), 43, 'depois do Clean o Learn continua esperando o MIDI');
-    assert.equal(clean().disabled, false, 'aprender um CC reativa o Clean');
-    clean().click();
-    window.document.querySelector('[data-modal-action="confirm-cc-clear"]').click();
-    player.closeModal();
+    cc(44, 127);
+    cc(45, 127);
+    assert.equal(player.pendingCcLearn.kind, 'module-octave', 'a escuta continua ativa após vários controles');
+    assert.equal(player.ccMappings.get('octave:2:up'), 40, 'a seleção não altera o mapeamento antes do OK');
+    assert.match(window.document.querySelector('[data-cc-learn-current]').textContent, /CC 45/);
+    window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+    assert.equal(player.ccMappings.get('octave:2:up'), 45, 'o último controle pressionado é confirmado');
+    assert.equal(player.currentModalKind, null, 'OK fecha o Learn aberto pela interface principal');
 
     // Duplicatas de estados antigos: fica o mapeamento gravado por último.
     const saved = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
@@ -949,6 +939,7 @@ try {
   assert.equal(player.metronome.getBpm(), 145);
   assert.equal(player.pendingCcLearn.kind, 'tap-tempo');
   player.handleMidiControlChange({ channel: 1, controller: 70, inputId: 'test-midi', value: 127 });
+  window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
   assert.equal(player.ccMappings.get('metronome:tap'), 70);
   player.closeModal();
 
@@ -957,6 +948,7 @@ try {
   window.document.querySelector('[data-modal-action="learn-metronome-cc"]').click();
   assert.equal(player.pendingCcLearn.kind, 'metronome-toggle');
   player.handleMidiControlChange({ channel: 1, controller: 71, inputId: 'test-midi', value: 127 });
+  window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
   assert.equal(player.ccMappings.get('metronome:toggle'), 71);
   player.closeModal();
   const midiToggle = value => player.handleMidiControlChange({ channel: 1, controller: 71, inputId: 'test-midi', value });

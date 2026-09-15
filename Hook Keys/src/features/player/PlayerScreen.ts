@@ -890,8 +890,7 @@ export class PlayerScreen {
   private readonly tempoHoldGesture = new LongPressGesture();
   private readonly keyboardAccentGesture = new LongPressGesture(520, 8);
   private pendingCcLearn: CcLearnTarget | null = null;
-  // Control shown on the Learn CC screen; stays set after the CC is learned.
-  private ccLearnTarget: CcLearnTarget | null = null;
+  private pendingCcController: number | null = null;
   private pendingCcClear: CcLearnTarget | null = null;
   private readonly ccMappings = new Map<string, number>();
   private readonly lastCcValues = new Map<string, { value: number; receivedAt: number }>();
@@ -3629,7 +3628,7 @@ export class PlayerScreen {
 
   private openCcLearn(target: CcLearnTarget, trigger: HTMLElement): void {
     this.pendingCcLearn = target;
-    this.ccLearnTarget = target;
+    this.pendingCcController = this.ccMappings.get(ccMappingKey(target)) ?? null;
     if (this.modal) this.openChildModal('cc-learn', null, trigger);
     else this.openModal('cc-learn', null, trigger);
     void this.midiInput.requestAccess();
@@ -3674,22 +3673,17 @@ export class PlayerScreen {
 
     const pending = this.pendingCcLearn;
     if (pending && this.modal?.classList.contains('player-modal--cc-learn')) {
-      // Um CC comanda um único controle: aprender no novo alvo o tira do anterior.
-      const pendingKey = ccMappingKey(pending);
-      for (const [targetKey, controller] of this.ccMappings) {
-        if (controller === input.controller && targetKey !== pendingKey) this.ccMappings.delete(targetKey);
-      }
-      this.ccMappings.set(pendingKey, input.controller);
+      // A tela continua escutando. Cada mensagem substitui apenas a escolha
+      // temporaria; o ultimo CC so e gravado quando o usuario toca em OK.
+      this.pendingCcController = input.controller;
       const status = this.modal.querySelector<HTMLElement>('[data-cc-learn-status]');
       if (status) {
-        status.textContent = `CC ${input.controller} mapeado`;
+        status.textContent = `Último controle: CC ${input.controller}. Continue movendo ou toque em OK.`;
         status.classList.add('is-complete');
       }
       const current = this.modal.querySelector<HTMLElement>('[data-cc-learn-current]');
-      if (current) current.textContent = `Mapeamento atual: CC ${input.controller}`;
-      this.modal.querySelector<HTMLButtonElement>('[data-modal-action="clean-learn-cc"]')?.removeAttribute('disabled');
-      this.pendingCcLearn = null;
-      this.markPlayerStateChanged();
+      if (current) current.textContent = `Selecionado: CC ${input.controller}`;
+      this.modal.querySelector<HTMLButtonElement>('[data-modal-action="confirm-cc-learn"]')?.removeAttribute('disabled');
       return;
     }
 
@@ -4455,12 +4449,9 @@ export class PlayerScreen {
       : kind === 'sound-download' || kind === 'performance-download'
         ? `<button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>`
       : kind === 'cc-learn'
-        ? `
-          <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
-          <button class="player-modal__confirm-button is-danger" type="button" data-modal-action="clean-learn-cc"${
-            this.pendingCcLearn && this.ccMappings.has(ccMappingKey(this.pendingCcLearn)) ? '' : ' disabled'
-          }>Clean</button>
-        `
+        ? `<button class="player-modal__confirm-button" type="button" data-modal-action="confirm-cc-learn"${
+          this.pendingCcController === null ? ' disabled' : ''
+        }>OK</button>`
       : kind === 'cc-clear-confirm'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel-cc-clear">Cancelar</button>
@@ -5263,13 +5254,19 @@ export class PlayerScreen {
         }
         return;
       }
-      if (kind === 'cc-learn' && modalAction === 'clean-learn-cc' && this.ccLearnTarget) {
-        const button = target instanceof Element
-          ? target.closest<HTMLButtonElement>('[data-modal-action="clean-learn-cc"]') : null;
-        if (button && !button.disabled) {
-          this.pendingCcClear = this.ccLearnTarget;
-          this.openChildModal('cc-clear-confirm', null, button);
+      if (kind === 'cc-learn' && modalAction === 'confirm-cc-learn') {
+        if (this.pendingCcLearn && this.pendingCcController !== null) {
+          // Um CC comanda um unico controle: ao confirmar no novo alvo, ele
+          // deixa qualquer alvo anterior que usava o mesmo numero.
+          const pendingKey = ccMappingKey(this.pendingCcLearn);
+          for (const [targetKey, controller] of this.ccMappings) {
+            if (controller === this.pendingCcController && targetKey !== pendingKey) this.ccMappings.delete(targetKey);
+          }
+          this.ccMappings.set(pendingKey, this.pendingCcController);
+          this.markPlayerStateChanged(false);
         }
+        if (this.modalHistory.length > 0) this.returnToPreviousModal();
+        else this.closeModal();
         return;
       }
       if (kind === 'cc-clear-confirm' && modalAction === 'cancel-cc-clear') {
@@ -5856,6 +5853,8 @@ export class PlayerScreen {
         volumeInput.value = String(EFFECT_PAD_MAX_DB);
         this.updateEffectPadVolumeControl(modal, volumeInput);
       });
+    } else if (kind === 'cc-learn') {
+      modal.querySelector<HTMLButtonElement>('[data-modal-action="confirm-cc-learn"]')?.focus();
     } else if (kind !== 'tempo-edit' || this.desktopRuntime) {
       requiredElement<HTMLButtonElement>(modal, '.player-modal__back-button').focus();
     }
@@ -8351,7 +8350,10 @@ export class PlayerScreen {
       this.soundDownloadAbort = null;
     }
 
-    if (this.modal.classList.contains('player-modal--cc-learn')) this.pendingCcLearn = null;
+    if (this.modal.classList.contains('player-modal--cc-learn')) {
+      this.pendingCcLearn = null;
+      this.pendingCcController = null;
+    }
     if (this.modal.classList.contains('player-modal--cc-clear-confirm') && !preserveHistory) {
       this.pendingCcClear = null;
     }
