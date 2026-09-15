@@ -112,6 +112,7 @@ import {
   readModuleCompressorSettings,
   readModuleDelaySettings,
   readModuleReverbSettings,
+  FACTORY_MODULE_REVERB,
   readModuleRotarySettings,
   readModuleEffectSettings,
   type ModuleEffectKind,
@@ -304,6 +305,8 @@ interface EqBandDrag {
 
 interface KnobDrag {
   input: HTMLInputElement;
+  // O knob inteiro captura o toque: o input invisível não recebe ponteiro.
+  captureElement: HTMLElement;
   pointerId: number;
   startValue: number;
   startY: number;
@@ -389,7 +392,8 @@ interface AccountControls {
 }
 
 const MODULE_COUNT = 8;
-const PRESET_COUNT = 16;
+// Oito presets por banco, numa fileira só (Banco A e Banco B).
+const PRESET_COUNT = 8;
 const PRESETS_PER_ROW = 8;
 const EFFECT_PAD_MIN_DB = -60;
 // Longest a knob or button change waits before it reaches the audio engine.
@@ -6870,7 +6874,7 @@ export class PlayerScreen {
     if (!moduleState || !card || readModuleModulationMode(moduleState.settings) === mode) return;
     moduleState.settings.modulationMode = mode;
     card.outerHTML = createModuleModulationCardMarkup(
-      moduleState.settings, moduleNumber === 8 ? 'Synth · LFO' : 'SF2 · User');
+      moduleState.settings, moduleNumber === 8 ? 'synth' : 'sf2');
     this.markPlayerStateChanged();
   }
 
@@ -7005,15 +7009,17 @@ export class PlayerScreen {
 
     event.preventDefault();
     input.focus({ preventScroll: true });
-    input.setPointerCapture(event.pointerId);
+    const captureElement = input.closest<HTMLElement>('.module-envelope-knob, .module-effect-knob, .player-output-knob') ?? input;
+    capturePointer(captureElement, event.pointerId);
     this.knobDrag = {
       input,
+      captureElement,
       pointerId: event.pointerId,
       startValue,
       startY: event.clientY,
       startX: event.clientX,
       startedAt: event.timeStamp,
-      travelPixels: this.desktopRuntime ? 240 : Math.max(480, Math.min(800, window.innerHeight * 0.9)),
+      travelPixels: this.desktopRuntime ? 240 : Math.max(480, Math.min(800, window.innerWidth * 0.6)),
       linear: this.desktopRuntime,
       moved: false,
     };
@@ -7021,7 +7027,7 @@ export class PlayerScreen {
     const learnTarget = moduleNumber === null ? this.ccLearnTargetForOutputKnob(input) : this.ccLearnTargetForKnob(input, moduleNumber);
     if (!this.desktopRuntime && learnTarget) {
       this.knobCcLearnGesture.start(event, () => {
-        if (input.hasPointerCapture(event.pointerId)) input.releasePointerCapture(event.pointerId);
+        releasePointer(captureElement, event.pointerId);
         this.knobDrag = null;
         this.hideKnobFocus();
         this.openCcLearn(learnTarget, input);
@@ -7037,13 +7043,15 @@ export class PlayerScreen {
     const minimum = Number(drag.input.min);
     const maximum = Number(drag.input.max);
     const step = Number(drag.input.step);
-    const verticalDelta = drag.startY - event.clientY;
-    if (!drag.moved && Math.hypot(verticalDelta, event.clientX - drag.startX) < 2) return;
+    // Knobs só respondem ao movimento horizontal: direita aumenta, esquerda
+    // diminui. Subir ou descer o dedo não muda o valor.
+    const horizontalDelta = event.clientX - drag.startX;
+    if (!drag.moved && Math.abs(horizontalDelta) < 2) return;
     drag.moved = true;
     this.knobCcLearnGesture.cancel();
     this.lastKnobTap = null;
-    const direction = Math.sign(verticalDelta);
-    const distance = Math.abs(verticalDelta);
+    const direction = Math.sign(horizontalDelta);
+    const distance = Math.abs(horizontalDelta);
     const range = maximum - minimum;
     const fineStep = Number.isFinite(step) && step > 0 ? step : range / 1_000;
     // Touch keeps exact single-step control near the starting point, with
@@ -7056,7 +7064,7 @@ export class PlayerScreen {
     let rawValue: number;
     let steppedValue: number;
     if (drag.linear && range / drag.travelPixels <= fineStep * DESKTOP_LINEAR_KNOB_MAX_STEPS_PER_PIXEL) {
-      rawValue = drag.startValue + verticalDelta / drag.travelPixels * range;
+      rawValue = drag.startValue + horizontalDelta / drag.travelPixels * range;
       steppedValue = Number.isFinite(step) && step > 0
         ? minimum + Math.round((rawValue - minimum) / step) * step
         : rawValue;
@@ -7101,7 +7109,7 @@ export class PlayerScreen {
     if (!drag || drag.pointerId !== event.pointerId) return;
     this.knobDrag = null;
     event.preventDefault();
-    if (drag.input.hasPointerCapture(event.pointerId)) drag.input.releasePointerCapture(event.pointerId);
+    releasePointer(drag.captureElement, event.pointerId);
     if (drag.moved) drag.input.dispatchEvent(new Event('change', { bubbles: true }));
     if (!drag.moved && event.type === 'pointerup' && event.timeStamp - drag.startedAt < 500) {
       if (this.lastKnobTap?.input === drag.input && event.timeStamp - this.lastKnobTap.time <= 360) {
@@ -7631,7 +7639,11 @@ export class PlayerScreen {
     if (!moduleState) return;
     if (processor === 'eq') moduleState.settings.eqBands = readModuleEqBands(undefined);
     else if (processor === 'compressor') moduleState.settings.compressor = readModuleCompressorSettings(undefined);
-    else if (processor === 'reverb') moduleState.settings.reverb = readModuleReverbSettings(undefined);
+    // O Reset volta aos valores de fábrica sem ligar/desligar o efeito.
+    else if (processor === 'reverb') moduleState.settings.reverb = {
+      ...FACTORY_MODULE_REVERB,
+      enabled: readModuleReverbSettings(moduleState.settings.reverb).enabled,
+    };
     else if (processor === 'rotary') moduleState.settings.rotary = readModuleRotarySettings(undefined);
     else moduleState.settings.delay = readModuleDelaySettings(undefined);
     const trigger = this.modalTrigger ?? this.root;
@@ -8786,18 +8798,18 @@ export class PlayerScreen {
       .catch(() => undefined)
       .then(async () => {
         await configurationReady;
+        // Trocou de preset, a próxima nota já é dele. A camada anterior segura
+        // só as notas que já estavam soando (release, sustain); nenhuma nota
+        // nova vai para o timbre antigo. Módulos cujo SF2 ainda está chegando
+        // ficam desligados na camada nova (enabled exige o timbre carregado)
+        // e entram sozinhos na reconfiguração depois do carregamento.
+        if (this.mounted && this.nativePresetTransitionInFlight) {
+          await hookKeysNative.commitPresetTransition();
+          this.nativePresetTransitionInFlight = false;
+        }
         if (!this.mounted || revision !== this.soundfontSelectionRevision) return;
         await this.syncNativeSoundfonts(revision);
-        if (this.mounted) {
-          // O preset novo só passa a receber notas depois que o SF2 e todos os
-          // parâmetros estiverem prontos. Até aqui, a camada anterior continua
-          // reproduzindo sem silêncio nem nota atrasada no timbre incompleto.
-          await this.queueNativeConfiguration();
-          if (this.nativePresetTransitionInFlight) {
-            await hookKeysNative.commitPresetTransition();
-            this.nativePresetTransitionInFlight = false;
-          }
-        }
+        if (this.mounted) await this.queueNativeConfiguration();
       })
       .catch(() => {
         if (this.mounted) this.setStatus('Não foi possível sincronizar os timbres. Tente novamente.');
@@ -9291,7 +9303,7 @@ export class PlayerScreen {
       if (!sourceBank) continue;
       const selectedPreset = sourceBank.selectedPreset;
       defaults.selectedPreset = typeof selectedPreset === 'number' && Number.isInteger(selectedPreset)
-        ? Math.min(PRESET_COUNT, Math.max(1, selectedPreset))
+        ? selectedPreset >= 1 && selectedPreset <= PRESET_COUNT ? selectedPreset : 1
         : null;
       const sourcePresets = Array.isArray(sourceBank.presets) ? sourceBank.presets : [];
       defaults.presets = defaults.presets.map((preset, presetIndex) => {
@@ -9506,6 +9518,22 @@ export class PlayerScreen {
   }
 }
 
+function capturePointer(element: HTMLElement, pointerId: number): void {
+  try {
+    element.setPointerCapture?.(pointerId);
+  } catch {
+    // Sem captura, o arraste segue pelos eventos do modal/raiz.
+  }
+}
+
+function releasePointer(element: HTMLElement, pointerId: number): void {
+  try {
+    if (element.hasPointerCapture?.(pointerId)) element.releasePointerCapture(pointerId);
+  } catch {
+    // Captura já liberada.
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -9558,11 +9586,14 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
     voiceMode: 'poly',
     glideMs: DEFAULT_MODULE_GLIDE_MS,
     glideSync: false,
-    modulationMode: 'lfo',
+    // Todo módulo nasce com a roda Mod em User e com o Reverb de fábrica; o
+    // módulo 5 nasce com o Rotary ligado.
+    modulationMode: 'user',
     modulationRateHz: DEFAULT_MODULE_MODULATION_RATE_HZ,
     velocityLimit: 127,
     velocityCeiling: 127,
-    rotary: readModuleRotarySettings(undefined),
+    reverb: { ...FACTORY_MODULE_REVERB },
+    rotary: { ...readModuleRotarySettings(undefined), enabled: moduleIndex === 4 },
     synth: factorySynthPreset(1),
     synthPresets: FACTORY_SYNTH_PRESETS.map((preset) => ({ ...preset })),
     synthActivePreset: 1,

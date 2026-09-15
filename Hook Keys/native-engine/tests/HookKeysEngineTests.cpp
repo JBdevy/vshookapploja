@@ -1533,6 +1533,7 @@ void testModWheelWithZeroDepth() {
     config.filterCutoffHz = 1500;
     config.filterEnvelope = 0;
     expect(synth.setConfig(config), "configure Mod test Synth");
+    synth.setModulationMode(true, 6.85f);
     synth.beginBlock();
     synth.controlChange(1, static_cast<std::uint8_t>(wheel));
     synth.noteOn(60, 110);
@@ -1779,8 +1780,8 @@ void testDelayDivisionsFollowTempo() {
   expect(near(echoAt(false, 2.0f, 60.0f), 24000), "without Sync the BPM does not change the Delay");
 }
 
-// Card Mod no Synth: LFO faz a roda virar vibrato proprio; User deixa a roda no
-// LFO do editor, como antes.
+// Card Mod no Synth: LFO faz a roda acionar o LFO do editor do Synth; User deixa
+// a roda sem efeito no Synth.
 void testSynthModCard() {
   const auto render = [](bool lfoCard, int wheel, std::uint8_t synthLfoTarget) {
     hook_keys::AnalogSynthModule synth(48000);
@@ -1799,13 +1800,11 @@ void testSynthModCard() {
     synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
     return left;
   };
-  // Synth LFO on Volume, so any pitch change can only come from the Mod card.
   expect(render(true, 0, 2) == render(false, 0, 2), "without the wheel both Mod modes sound the same");
-  expect(render(true, 127, 2) != render(true, 0, 2), "Mod LFO: the wheel adds a pitch vibrato to the Synth");
-  expect(render(true, 127, 1) == render(true, 127, 2),
-      "Mod LFO: the wheel no longer drives the Synth LFO destination");
-  expect(render(false, 127, 2) != render(false, 0, 2), "Mod User: the wheel still drives the Synth LFO");
-  expect(render(false, 127, 1) != render(false, 127, 2), "Mod User: the Synth LFO destination follows the editor");
+  expect(render(true, 127, 2) != render(true, 0, 2), "Mod LFO: the wheel drives the Synth LFO");
+  expect(render(true, 127, 1) != render(true, 127, 2), "Mod LFO: the Synth LFO destination follows the editor");
+  expect(render(false, 127, 2) == render(false, 0, 2), "Mod User: the wheel does nothing in the Synth");
+  expect(render(false, 127, 0) == render(false, 0, 0), "Mod User: not even on the pitch destination");
 
   hook_keys::NativeEngineRuntime runtime(48000, 128);
   expect(runtime.setModuleModulationMode(7, true, 6.0f), "runtime routes the Mod card to the Synth");

@@ -29,7 +29,7 @@ export function createPerformanceKeyboardMarkup(style: PerformanceKeyboardStyle)
         data-keyboard-note="${noteNumber}"
         aria-label="${formatMidiNote(noteNumber)}"
         ${black ? `style="--black-key-left:${((whiteIndex / WHITE_KEY_COUNT) * 100).toFixed(5)}%"` : ''}
-      ><span>${formatMidiNote(noteNumber)}</span></button>
+      ></button>
     `;
     if (black) blackKeys.push(key);
     else {

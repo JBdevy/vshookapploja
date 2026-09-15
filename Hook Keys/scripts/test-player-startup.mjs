@@ -484,19 +484,14 @@ try {
     assert(!row.querySelector('[data-module-glide-card]'), 'o Glide do Synth fica no editor, não no Param');
     const lastMod = () => calls.filter(({ command, args }) => command === 'configure_module_modulation' && args.config.moduleIndex === 7).at(-1)?.args.config;
     await player.syncNativeEngine();
-    assert.equal(lastMod()?.lfo, true, 'o card Mod do Synth nasce em LFO');
-    window.document.querySelector('[data-module-modulation-mode="user"]').click();
-    assert.match(window.document.querySelector('[data-module-mod-card] header small').textContent, /Synth · LFO/);
-    await player.syncNativeEngine();
-    assert.equal(lastMod().lfo, false, 'User: a roda volta para o LFO do editor do Synth');
+    assert.equal(lastMod()?.lfo, false, 'o card Mod do Synth nasce em User, como todos os módulos');
+    assert(!window.document.querySelector('[data-module-modulation-rate]'), 'o Mod do Synth não tem Rate próprio');
+    assert.match(window.document.querySelector('[data-module-mod-card] header small').textContent, /Roda sem efeito/);
     window.document.querySelector('[data-module-modulation-mode="lfo"]').click();
-    const rate = window.document.querySelector('[data-module-modulation-rate]');
-    rate.value = '6';
-    rate.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.match(window.document.querySelector('[data-module-mod-card] header small').textContent, /LFO do Synth/);
     await player.syncNativeEngine();
-    assert.equal(JSON.stringify(lastMod()), JSON.stringify({ moduleIndex: 7, lfo: true, rateHz: 6 }), 'o motor recebe o Rate do card Mod do Synth');
-    rate.value = '6.85';
-    rate.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.equal(lastMod().lfo, true, 'LFO: a roda aciona o LFO do editor do Synth');
+    window.document.querySelector('[data-module-modulation-mode="user"]').click();
   }
   player.closeModal();
   {
@@ -720,15 +715,15 @@ try {
   player.startKnobDrag(drag, null);
   assert.equal(player.knobDrag.travelPixels, 240);
   assert.equal(player.knobDrag.linear, true);
-  player.moveKnobDrag({ ...drag, clientY: 190 });
+  player.moveKnobDrag({ ...drag, clientX: 60 });
   assert.equal(master.value, '86.2', 'desktop mouse uses constant linear sensitivity');
-  player.moveKnobDrag({ ...drag, clientY: 180 });
+  player.moveKnobDrag({ ...drag, clientX: 70 });
   assert.equal(master.value, '90.3', 'twice the mouse distance produces twice the change');
-  player.moveKnobDrag({ ...drag, clientY: 210 });
-  assert.equal(master.value, '77.8', 'dragging down reverses the linear change');
-  player.moveKnobDrag({ ...drag, clientY: -400 });
+  player.moveKnobDrag({ ...drag, clientX: 40 });
+  assert.equal(master.value, '77.8', 'dragging left reverses the linear change');
+  player.moveKnobDrag({ ...drag, clientX: 650 });
   assert.equal(master.value, '100', 'desktop movement clamps at maximum');
-  player.moveKnobDrag({ ...drag, clientY: 800 });
+  player.moveKnobDrag({ ...drag, clientX: -550 });
   assert.equal(master.value, '0', 'desktop movement clamps at minimum');
   player.endKnobDrag({ ...drag, type: 'pointerup', timeStamp: 12040 });
   player.openModal('module-settings', 1, master);
@@ -743,8 +738,8 @@ try {
       clientX: 100, clientY: 200, timeStamp: 13000, preventDefault() {} };
     player.startKnobDrag(start, moduleNumber);
     assert.equal(player.knobDrag.linear, false);
-    player.moveKnobDrag({ ...start, clientY: 200 - pixels, timeStamp: 13020 });
-    player.endKnobDrag({ ...start, type: 'pointerup', clientY: 200 - pixels, timeStamp: 13040 });
+    player.moveKnobDrag({ ...start, clientX: 100 + pixels, timeStamp: 13020 });
+    player.endKnobDrag({ ...start, type: 'pointerup', clientX: 100 + pixels, timeStamp: 13040 });
     player.desktopRuntime = desktop;
   };
   const attack = window.document.querySelector('[data-module-envelope="attackMs"]');
@@ -768,15 +763,15 @@ try {
   const mouseDecay = { target: synthDecay, isPrimary: true, pointerType: 'mouse', button: 0, pointerId: 11,
     clientX: 100, clientY: 600, timeStamp: 14000, preventDefault() {} };
   player.startKnobDrag(mouseDecay, 8);
-  player.moveKnobDrag({ ...mouseDecay, clientY: 598 });
+  player.moveKnobDrag({ ...mouseDecay, clientX: 102 });
   assert.equal(synthDecay.value, '6', 'desktop mouse moves a 25 s time knob one ms per pixel near the click');
-  player.moveKnobDrag({ ...mouseDecay, clientY: 597 });
+  player.moveKnobDrag({ ...mouseDecay, clientX: 103 });
   assert.equal(synthDecay.value, '7', 'the next pixel advances exactly one more ms');
-  player.moveKnobDrag({ ...mouseDecay, clientY: 552 });
+  player.moveKnobDrag({ ...mouseDecay, clientX: 148 });
   assert(Number(synthDecay.value) > 50 && Number(synthDecay.value) < 110, 'desktop mouse reaches values between 50 and 110 ms');
-  player.moveKnobDrag({ ...mouseDecay, clientY: 180 });
+  player.moveKnobDrag({ ...mouseDecay, clientX: 520 });
   assert.equal(synthDecay.value, '25000', 'desktop mouse still covers the whole time range in a short drag');
-  player.endKnobDrag({ ...mouseDecay, type: 'pointerup', clientY: 180, timeStamp: 14040 });
+  player.endKnobDrag({ ...mouseDecay, type: 'pointerup', clientX: 520, timeStamp: 14040 });
   player.openModal('module-reverb', 1, master);
   const decay = window.document.querySelector('[data-module-effect-control="decay"]');
   fineDrag(decay, 2.5, 3);
@@ -1068,7 +1063,7 @@ try {
     if (kind) player.startKnobDrag(pointer, module);
     else player.onRootPointerDown(pointer);
     assert.equal(player.knobDrag.input, input, `${kind ?? 'master'} starts dragging from the label area, not just the center`);
-    player.moveKnobDrag({ ...pointer, clientY: 180 });
+    player.moveKnobDrag({ ...pointer, clientX: pointer.clientX + 20 });
     assert(Number(input.value) > startValue);
     player.endKnobDrag({ ...pointer, type: 'pointerup', timeStamp: 32040 });
     assert.equal(player.knobInputForTarget(area.querySelector('span')), input, 'knob face resolves the same input');
@@ -1096,6 +1091,11 @@ try {
   player.desktopRuntime = true;
   player.seamlessPresetSwitching = true;
   const beforePresetSwitch = calls.length;
+  const syncSoundfontsForTest = player.syncNativeSoundfonts.bind(player);
+  player.syncNativeSoundfonts = async (...args) => {
+    calls.push({ command: '__sync_soundfonts_start', args: {} });
+    return syncSoundfontsForTest(...args);
+  };
   let finishTransition;
   transitionBarrier = new Promise(resolve => { finishTransition = resolve; });
   root.querySelector('.player-preset-button[data-preset="4"]').click();
@@ -1119,6 +1119,21 @@ try {
   const commitIndex = switchCalls.findIndex(c => c.command === 'commit_preset_transition');
   assert(commitIndex > switchCalls.findIndex(c => c.command === 'configure_synth'),
     'preset starts accepting new notes only after all its parameters are installed');
+  const firstSoundFontLoad = switchCalls.findIndex(c => /sound_font/.test(c.command));
+  assert(firstSoundFontLoad < 0 || commitIndex < firstSoundFontLoad,
+    'trocou de preset, a próxima nota já é dele: o commit não espera o SF2 carregar');
+  const soundfontSyncIndex = switchCalls.findIndex(c => c.command === '__sync_soundfonts_start');
+  assert(soundfontSyncIndex >= 0 && commitIndex >= 0 && commitIndex < soundfontSyncIndex,
+    'o commit vem antes de sincronizar os timbres: a nota seguinte já é do preset novo');
+  player.syncNativeSoundfonts = syncSoundfontsForTest;
+  const configsBeforeCommit = switchCalls.slice(0, commitIndex).filter(c => c.command === 'configure_module');
+  for (const { args } of configsBeforeCommit) {
+    const moduleIndex = args.config.moduleIndex;
+    const timbre = player.getActivePresetState()?.modules[moduleIndex]?.timbreId ?? null;
+    if (moduleIndex !== 7 && timbre && timbre !== player.nativeLoadedTimbres[moduleIndex]) {
+      assert.equal(args.config.enabled, false, 'módulo com SF2 ainda chegando fica mudo, nunca toca o timbre antigo');
+    }
+  }
   assert(!switchCalls.some(c => c.command === 'stop_all_notes' || c.command === 'initialize'),
     'preset switches do not panic/restart the audio engine');
   player.compatibilityMode = true;

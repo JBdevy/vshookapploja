@@ -62,6 +62,15 @@ const DEFAULT_REVERB: ModuleReverbSettings = {
   mix: 25,
 };
 
+// Reverb com que todo módulo nasce (e para onde o Reset do Reverb volta).
+export const FACTORY_MODULE_REVERB: ModuleReverbSettings = {
+  enabled: true,
+  decay: 4,
+  dampen: 58,
+  size: 0,
+  mix: 44,
+};
+
 const DEFAULT_DELAY: ModuleDelaySettings = {
   enabled: false,
   feedback: 35,

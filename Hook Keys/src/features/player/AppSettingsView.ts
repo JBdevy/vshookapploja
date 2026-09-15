@@ -61,12 +61,12 @@ export function createAppSettingsMarkup(
     <section class="app-settings-panel app-settings-panel--main" aria-label="Configurações">
       <button class="app-settings-navigation-card" type="button" data-settings-page="midi">
         <strong>Dispositivos MIDI</strong>
-        <small>Entradas MIDI e tamanho do buffer</small>
+        <small>Teclados e controladores MIDI conectados</small>
       </button>
 
       <button class="app-settings-navigation-card" type="button" data-settings-page="audio">
         <strong>Dispositivo de áudio</strong>
-        <small>Placa de áudio e canais de saída</small>
+        <small>Placa de áudio, buffer e canais de saída</small>
       </button>
 
       <label class="app-settings-toggle app-settings-toggle--compatibility">

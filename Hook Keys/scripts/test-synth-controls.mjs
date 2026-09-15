@@ -204,6 +204,7 @@ test('new module and Synth defaults use zero Attack, 300 ms Release and maximum 
   const context = {
     exports: {}, ...settingsView, ...synthView, ...glideView,
     readModuleRotarySettings: () => ({}), DEFAULT_ARPEGGIATOR_SETTINGS: {},
+    FACTORY_MODULE_REVERB: { enabled: true, decay: 4, dampen: 58, size: 0, mix: 44 },
     readTranceGateSettings: () => ({}),
     DEFAULT_SEQUENCER_SETTINGS: { steps: [] }, DEFAULT_VELOCITY_CURVE: { points: [], userPoints: [] },
   };

@@ -27,6 +27,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                     sampleRate:(double)sampleRate
                 preserveEngine:(BOOL)preserveEngine;
 - (BOOL)audioOutputReady;
+// Caminho do gerador até a saída (mixer ou direto), formatos e layouts de canais.
+- (NSString *)outputGraphDescription;
 - (void)setMidiInputEnabled:(BOOL)enabled;
 - (NSArray<NSNumber *> *)moduleMeterLevels;
 - (NSArray<NSNumber *> *)moduleAnalysis:(NSInteger)moduleIndex;

@@ -97,11 +97,11 @@ public:
     noteOnWithFilterVelocity(note, velocity, velocity);
   }
 
-  // Mod card. LFO: the wheel is a pitch vibrato (up to +/- 50 cents) at its own
-  // rate, like the SF2 modules. User: the wheel adds depth to the Synth LFO.
-  void setModulationMode(bool lfo, float rateHz) noexcept {
-    wheelVibratoRateHz_.store(std::clamp(rateHz, 0.1f, 20.0f), std::memory_order_relaxed);
-    wheelVibrato_.store(lfo, std::memory_order_relaxed);
+  // Mod card no Synth. LFO: a roda aciona o LFO configurado no editor do Synth
+  // (rate e destino de lá). User: a roda não faz nada no Synth. O Synth não tem
+  // vibrato próprio da roda, então o rate do card não se aplica aqui.
+  void setModulationMode(bool lfo, float) noexcept {
+    wheelDrivesLfo_.store(lfo, std::memory_order_relaxed);
   }
 
   // Velocity limit per oscillator: a key struck harder than an oscillator's
@@ -237,24 +237,14 @@ public:
     constexpr double kTwoPi = 6.28318530717958647692;
     const auto lfoIncrement = static_cast<double>(config_.lfoRateHz) / sampleRate_;
     const auto detuneRatio = std::pow(2.0, static_cast<double>(config_.detuneCents) / 1200.0);
-    const bool wheelVibrato = wheelVibrato_.load(std::memory_order_relaxed);
-    const auto lfoAmount = config_.lfoDepth + (wheelVibrato ? 0.0f : (1.0f - config_.lfoDepth) * modulation_);
-    const auto vibratoIncrement = static_cast<double>(wheelVibratoRateHz_.load(std::memory_order_relaxed)) / sampleRate_;
-    // 15 ms smoothing, as in the SF2 modules, so the wheel never steps the pitch.
-    const auto vibratoSmoothing = static_cast<float>(1.0 - std::exp(-1.0 / (sampleRate_ * 0.015)));
+    const bool wheelDrivesLfo = wheelDrivesLfo_.load(std::memory_order_relaxed);
+    const auto lfoAmount = config_.lfoDepth + (wheelDrivesLfo ? (1.0f - config_.lfoDepth) * modulation_ : 0.0f);
     for (std::size_t frame = 0; frame < frames; ++frame) {
       const auto lfo = static_cast<float>(std::sin(kTwoPi * lfoPhase_));
       lfoPhase_ += lfoIncrement;
       if (lfoPhase_ >= 1.0) lfoPhase_ -= 1.0;
       float mixed = 0.0f;
-      auto pitchLfo = config_.lfoTarget == 0 ? lfo * lfoAmount * 2.0f : 0.0f;
-      const auto wheelTarget = wheelVibrato ? modulation_ : 0.0f;
-      wheelVibratoDepth_ += (wheelTarget - wheelVibratoDepth_) * vibratoSmoothing;
-      if (wheelVibratoDepth_ > 0.00001f) {
-        pitchLfo += static_cast<float>(std::sin(kTwoPi * wheelVibratoPhase_)) * wheelVibratoDepth_ * 0.5f;
-        wheelVibratoPhase_ += vibratoIncrement;
-        if (wheelVibratoPhase_ >= 1.0) wheelVibratoPhase_ -= 1.0;
-      }
+      const auto pitchLfo = config_.lfoTarget == 0 ? lfo * lfoAmount * 2.0f : 0.0f;
       const auto bendRatio = std::pow(2.0, static_cast<double>(pitchBendSemitones_ + pitchLfo) / 12.0);
       const auto filterLfo = config_.lfoTarget == 1 ? lfo * lfoAmount * 4.0f : 0.0f;
       for (std::size_t index = 0; index < activeVoiceLimit_; ++index) {
@@ -521,10 +511,7 @@ private:
   double lastNoteFrequency_ = 0.0;
   std::atomic<std::uint16_t> glideBehavior_{GlideBehavior{}.pack()};
   std::atomic<std::uint16_t> oscillatorVelocityLimits_{static_cast<std::uint16_t>(127 | (127 << 8))};
-  std::atomic<bool> wheelVibrato_{false};
-  std::atomic<float> wheelVibratoRateHz_{6.85f};
-  float wheelVibratoDepth_ = 0.0f;
-  double wheelVibratoPhase_ = 0.0;
+  std::atomic<bool> wheelDrivesLfo_{false};
 };
 
 } // namespace hook_keys

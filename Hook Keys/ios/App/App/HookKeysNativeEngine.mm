@@ -375,6 +375,27 @@ private:
   return YES;
 }
 
+static NSString *describeFormat(AVAudioFormat *format) {
+  if (format == nil) return @"(sem formato)";
+  AVAudioChannelLayout *layout = format.channelLayout;
+  NSString *layoutText = layout == nil ? @"sem layout"
+      : [NSString stringWithFormat:@"layout 0x%X", static_cast<unsigned>(layout.layoutTag)];
+  return [NSString stringWithFormat:@"%uch %.0fHz %@ %@",
+      static_cast<unsigned>(format.channelCount), format.sampleRate,
+      format.isInterleaved ? @"intercalado" : @"separado", layoutText];
+}
+
+- (NSString *)outputGraphDescription {
+  std::scoped_lock lock(_controlMutex);
+  if (_audioEngine == nil || _sourceNode == nil) return @"sem motor";
+  AVAudioFormat *source = [_sourceNode outputFormatForBus:0];
+  const BOOL direct = source.channelCount > 2;
+  return [NSString stringWithFormat:@"%@ · gerador %@ · placa %@",
+      direct ? @"direto na saída" : @"via mixer",
+      describeFormat(source),
+      describeFormat([_audioEngine.outputNode outputFormatForBus:0])];
+}
+
 - (BOOL)setAudioOutputDeviceId:(NSString *)deviceId channels:(NSInteger)channels
                   bufferFrames:(NSInteger)bufferFrames
                     sampleRate:(double)sampleRate

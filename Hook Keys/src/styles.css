@@ -2873,16 +2873,22 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   padding-inline: 5px;
 }
 
+/* Uma fileira de 8 presets ocupa a altura que eram duas: os botões ficam da
+   altura dos dois bancos (A em cima, B embaixo). */
 .player-presets__grid {
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   gap: clamp(4px, 0.65vh, 7px);
   min-width: 0;
+  min-height: 0;
 }
 
 .player-presets__row {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: clamp(4px, 0.65vw, 9px);
+  min-height: 0;
+  height: 100%;
 }
 
 .player-presets__header[hidden],
@@ -2950,15 +2956,6 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   -webkit-tap-highlight-color: transparent;
 }
 
-.performance-keyboard__key span {
-  position: relative;
-  z-index: 3;
-  color: #071109;
-  font-size: clamp(8px, 0.9vw, 11px);
-  opacity: 0;
-  transform: translateY(3px);
-}
-
 .performance-keyboard__key--white {
   flex: 0 0 var(--white-key-width);
   height: 100%;
@@ -2989,17 +2986,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   transform: translateX(-50%);
 }
 
-.performance-keyboard__key--black span { color: #effff3; }
-
 .performance-keyboard__key.is-pressed {
   border-color: #6aff98;
   background: linear-gradient(180deg, #69f797, #16a64a);
   box-shadow: inset 0 0 16px rgba(225, 255, 234, 0.38), 0 0 13px rgba(56, 239, 113, 0.55);
-}
-
-.performance-keyboard__key.is-pressed span {
-  opacity: 1;
-  transform: none;
 }
 
 .performance-keyboard--black .performance-keyboard__key--white {
@@ -3012,8 +3002,6 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   background: linear-gradient(90deg, #aeb2b7, #f7f7f4 48%, #969ba1);
 }
 
-.performance-keyboard--black .performance-keyboard__key--white span { color: #effff3; }
-.performance-keyboard--black .performance-keyboard__key--black span { color: #071109; }
 
 .performance-keyboard--neon .performance-keyboard__key--white {
   border-color: #6838a8;
@@ -3026,7 +3014,6 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   box-shadow: 0 4px 10px #000, inset 0 -4px rgba(255, 255, 255, 0.045);
 }
 
-.performance-keyboard--neon .performance-keyboard__key span { color: #f8edff; }
 
 /* No desktop, presets e Keyboard coexistem. O teclado permanece tocável e
    ocupa uma linha própria abaixo dos 16 presets, sem o seletor Mostrar. */
@@ -3049,7 +3036,8 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .player-presets--combined .player-presets__grid {
   grid-column: 2;
   grid-row: 1;
-  grid-template-rows: repeat(2, minmax(0, 1fr));
+  /* Uma fileira de 8 presets com a altura dos dois bancos. */
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -3296,7 +3284,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   font-size: clamp(6px, .66vw, 9px);
   font-weight: 900;
   touch-action: none;
-  cursor: ns-resize;
+  cursor: ew-resize;
 }
 
 .player-output-knob > span:first-child {
@@ -3344,8 +3332,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   height: 100%;
   margin: 0;
   opacity: 0;
-  cursor: ns-resize;
+  cursor: ew-resize;
   touch-action: none;
+  /* O toque vai para o knob; tocar no range do iOS saltava o valor para 0/127. */
+  pointer-events: none;
 }
 
 .player-output-knob output {
@@ -4466,7 +4456,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   width: clamp(48px, 6.2vw, 70px);
   aspect-ratio: 1;
   touch-action: none;
-  cursor: ns-resize;
+  cursor: ew-resize;
 }
 
 .module-envelope-knob__face {
@@ -4504,8 +4494,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   height: 100%;
   margin: 0;
   opacity: 0;
-  cursor: ns-resize;
+  cursor: ew-resize;
   touch-action: none;
+  /* O toque vai para o knob; tocar no range do iOS saltava o valor para 0/127. */
+  pointer-events: none;
 }
 
 .module-envelope-control output {
@@ -4873,8 +4865,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   height: calc(100% - 52px);
   margin: 0;
   opacity: 0;
-  cursor: ns-resize;
+  cursor: ew-resize;
   touch-action: none;
+  /* O toque vai para o knob; tocar no range do iOS saltava o valor para 0/127. */
+  pointer-events: none;
 }
 
 .module-effect-knob input:disabled {
@@ -8112,7 +8106,7 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 
 html[data-runtime="desktop"] .player-tempo-button,
 html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .player-output-knob) {
-  cursor: ns-resize;
+  cursor: ew-resize;
   touch-action: none;
 }
 
@@ -10665,6 +10659,20 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   font-weight: 900;
 }
 
+/* Celular: o cabeçalho é baixo e o Reset invadia o contorno do painel do
+   EQ/compressor. Sobe e encolhe para caber inteiro acima dele. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .module-processor-reset-button {
+    top: 4px;
+    right: 10px;
+    min-width: 64px;
+    min-height: 26px;
+    padding-block: 2px;
+    border-radius: 7px;
+    font-size: 12px;
+  }
+}
+
 .player-modal--module-eq .player-modal__surface,
 .player-modal--module-compressor .player-modal__surface,
 .player-modal--module-reverb .player-modal__surface,
@@ -11645,6 +11653,11 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   font-weight: 950;
   white-space: nowrap;
 }
+/* Synth: sem o knob de Rate, só título e User/LFO. */
+.module-mod-card.module-mod-card--synth {
+  grid-template-columns: minmax(52px, .75fr) minmax(88px, 1.2fr);
+}
+
 .module-mod-card {
   color: #fff !important;
   min-width: 0;
@@ -12882,6 +12895,15 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 }
 .velocity-curve-plot-row > .velocity-curve-plot { height: 100%; }
 .velocity-ceiling-zone { fill: rgba(255, 92, 92, .1); pointer-events: none; }
+
+/* Em Fixed toda nota sai com a mesma velocity: o teto não faz sentido. */
+.velocity-curve-editor[data-velocity-mode="fixed"] :is(.velocity-ceiling, .velocity-ceiling-zone, .velocity-ceiling-line) {
+  display: none;
+}
+
+.velocity-curve-editor[data-velocity-mode="fixed"] .velocity-curve-plot-row {
+  grid-template-columns: minmax(0, 1fr);
+}
 .velocity-ceiling-line {
   fill: none;
   stroke: #ff7a7a;
@@ -13377,3 +13399,235 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 }
 
 
+
+/* ===== Celular em paisagem: Synth, Glide e Config sem texto maior que o botão =====
+   O Synth perde os dois títulos (a fileira de presets já identifica a tela) e
+   usa 6 colunas: OSC 1 e OSC 2 inteiros na primeira fileira e os knobs em
+   cards compactos. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .player-modal--module-synth .player-modal__header > :not(button) {
+    display: none;
+  }
+
+  .player-modal--module-synth .player-modal__header {
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .player-modal--module-synth .player-modal__surface {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+
+  .player-modal--module-synth .synth-editor {
+    gap: 4px;
+    padding: 5px;
+  }
+
+  .player-modal--module-synth .synth-editor__identity {
+    display: none;
+  }
+
+  .player-modal--module-synth .synth-editor__header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .player-modal--module-synth .synth-editor__grid {
+    --synth-knob-size: 26px;
+    --synth-control-padding: 3px;
+    --synth-control-gap: 1px;
+    --synth-control-font-size: 7px;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-rows: max-content repeat(3, minmax(0, 1fr));
+    grid-auto-rows: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .player-modal--module-synth .synth-card {
+    min-height: 0;
+    border-radius: 7px;
+  }
+
+  .player-modal--module-synth .synth-card--oscillator {
+    grid-column: span 3;
+    gap: 3px;
+  }
+
+  .player-modal--module-synth .synth-card--target,
+  .player-modal--module-synth .synth-editor__grid > .module-glide-card,
+  .player-modal--module-synth .synth-card--octaves {
+    grid-column: span 2;
+  }
+
+  .player-modal--module-synth .synth-card--range {
+    grid-template-rows: max-content var(--synth-knob-size) max-content;
+    align-content: center;
+  }
+
+  .player-modal--module-synth .synth-oscillator-power-row {
+    align-items: center;
+    gap: 3px;
+  }
+
+  .player-modal--module-synth .synth-velocity-limit {
+    gap: 3px;
+    font-size: 8px;
+  }
+
+  .player-modal--module-synth .synth-velocity-limit .module-envelope-knob {
+    width: 20px;
+  }
+
+  .player-modal--module-synth .synth-oscillator-power-row .synth-oscillator-power {
+    min-height: 20px;
+    padding: 1px 4px;
+    font-size: 8px;
+  }
+
+  .player-modal--module-synth .synth-editor__header button,
+  .player-modal--module-synth .synth-option-row button,
+  .player-modal--module-synth .synth-octave-row button {
+    min-height: 20px;
+    padding: 1px 3px;
+    font-size: 8px;
+    white-space: nowrap;
+  }
+
+  .player-modal--module-synth .synth-card--target .synth-option-row {
+    gap: 3px;
+  }
+
+  .player-modal--module-synth .synth-octave-row {
+    gap: 3px;
+  }
+
+  .player-modal--module-synth .synth-octave-row > span {
+    font-size: 7px;
+  }
+
+  /* Glide (Synth e Config): botões 2x2 pequenos, knob e valor sem encavalar. */
+  /* Botões encostados à esquerda; o knob fica no centro do espaço que sobra
+     entre eles e o valor. */
+  .module-glide-card {
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    justify-items: center;
+    gap: 6px;
+    padding: 3px 5px;
+    border-radius: 8px;
+  }
+
+  .module-glide-card > header {
+    justify-self: start;
+    justify-items: start;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .module-glide-card > header > strong {
+    font-size: 8px;
+  }
+
+  .module-glide-card > header > div {
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .module-glide-card > header > div > button {
+    min-width: 0;
+    min-height: 16px;
+    padding: 1px 3px;
+    border-radius: 4px;
+    font-size: 7px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  /* Mesmo tamanho dos outros knobs da tela: no Config, o do Mod ao lado. */
+  .module-glide-card .module-envelope-knob {
+    width: clamp(32px, 5.2vh, 46px);
+    max-width: none;
+  }
+
+  /* No Synth, o mesmo dos knobs dos cards. */
+  .player-modal--module-synth .module-glide-card .module-envelope-knob {
+    width: var(--synth-knob-size);
+  }
+
+  .module-glide-card output {
+    font-size: 7px;
+  }
+
+  /* Config: Polifonia e Modo cabem na altura curta da linha. */
+  .module-polyphony-button,
+  .module-voice-mode-button {
+    gap: 0;
+    padding-block: 1px;
+    line-height: 1;
+  }
+
+  .module-polyphony-button span,
+  .module-voice-mode-button span {
+    font-size: 7px;
+  }
+
+  .module-polyphony-button strong,
+  .module-voice-mode-button strong {
+    font-size: 11px;
+  }
+}
+
+/* Volume no celular: o trilho de 180px mínimo não cabia e empurrava o ON para
+   baixo do rodapé. A fileira do fader encolhe com a tela. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .player-modal--output-volume .player-modal__surface {
+    gap: 4px;
+    padding: 6px 10px;
+  }
+
+  .player-modal--output-volume .player-modal__header h2 {
+    font-size: 18px;
+  }
+
+  .player-modal--output-volume .output-fader-panel {
+    gap: 10px;
+    padding-bottom: 0;
+  }
+
+  .output-fader-channel {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    gap: 3px;
+    padding: 5px 8px;
+  }
+
+  .output-fader-channel h3 {
+    font-size: 12px;
+  }
+
+  .output-fader-channel output {
+    font-size: 9px;
+  }
+
+  .output-fader-rail {
+    min-height: 120px;
+    width: 32px;
+  }
+
+  .output-fader-power {
+    min-height: 24px;
+    font-size: 11px;
+  }
+
+  .player-modal--output-volume .player-modal__actions {
+    padding-top: 4px;
+  }
+}
+
+/* Mod (Config) no celular: User/LFO no mesmo porte dos botões do Glide ao lado. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .module-mod-card button {
+    min-height: 22px;
+    padding: 2px 8px;
+    font-size: 10px;
+  }
+}

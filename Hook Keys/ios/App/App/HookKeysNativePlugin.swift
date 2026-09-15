@@ -234,7 +234,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         let channels = "\(session.outputNumberOfChannels)/\(session.maximumOutputNumberOfChannels)ch"
         let engineState = engine.audioOutputReady() ? "motor ok" : "motor parado"
         call.resolve([
-            "current": "\(outputs) · \(rate) Hz · \(channels) · \(engineState)",
+            "current": "\(outputs) · \(rate) Hz · \(channels) · \(engineState) · \(engine.outputGraphDescription())",
             "events": events
         ])
     }

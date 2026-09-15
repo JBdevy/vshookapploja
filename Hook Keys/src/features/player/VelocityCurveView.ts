@@ -212,7 +212,7 @@ function velocityCeilingMarkup(ceiling: number): string {
   return `
     <div class="velocity-ceiling" data-velocity-ceiling role="slider" tabindex="0"
       aria-label="Limitador de velocity" aria-valuemin="1" aria-valuemax="127" aria-valuenow="${ceiling}"
-      style="--velocity-ceiling:${(ceiling / 127) * 100}%">
+      style="--velocity-ceiling:${(ceiling / 127) * 100}">
       <span class="velocity-ceiling__track" data-velocity-ceiling-track><i></i><b></b></span>
       <output data-velocity-ceiling-output>${ceiling}</output>
     </div>
@@ -229,7 +229,9 @@ export function updateVelocityCeilingMarkup(container: HTMLElement, ceiling: num
   const value = Math.max(1, clampVelocity(ceiling));
   const slider = container.querySelector<HTMLElement>('[data-velocity-ceiling]');
   if (slider) {
-    slider.style.setProperty('--velocity-ceiling', `${(value / 127) * 100}%`);
+    // Número puro (0-100): o CSS multiplica por uma altura; "50%" tornava o
+    // cálculo inválido e a alça ficava presa no topo.
+    slider.style.setProperty('--velocity-ceiling', String((value / 127) * 100));
     slider.setAttribute('aria-valuenow', String(value));
   }
   const output = container.querySelector<HTMLOutputElement>('[data-velocity-ceiling-output]');

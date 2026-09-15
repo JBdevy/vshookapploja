@@ -402,3 +402,54 @@ test('apps mostram RAM ao lado do User; desktop mantém CPU', () => {
   assert.match(ios, /phys_footprint[\s\S]*?os_proc_available_memory\(\)/);
   assert.match(android, /public void memoryUsage\(PluginCall call\)\s*\{\s*memoryExecutor\.execute/);
 });
+
+test('teclas do keyboard só acendem, sem nome de nota', () => {
+  const keyboard = readFileSync(new URL('../src/features/player/PerformanceKeyboard.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(keyboard, /<span>\$\{formatMidiNote\(noteNumber\)\}<\/span>/);
+  assert.match(keyboard, /aria-label="\$\{formatMidiNote\(noteNumber\)\}"/, 'o nome segue só para acessibilidade');
+  assert.doesNotMatch(css, /performance-keyboard__key[a-z-]* span/);
+});
+
+test('Reset do EQ/compressor no celular fica acima do contorno do painel', () => {
+  assert.match(css, /@media \(orientation: landscape\) and \(max-height: 520px\) \{\s*\.module-processor-reset-button \{\s*top: 4px;[^}]*min-height: 26px;/);
+});
+
+test('8 presets por banco numa fileira só', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /const PRESET_COUNT = 8;/);
+  assert.doesNotMatch(player, /VISIBLE_PRESET_COUNT/);
+  assert.match(css, /\.player-presets--combined \.player-presets__grid \{[^}]*grid-template-rows: minmax\(0, 1fr\);/);
+});
+
+test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () => {
+  assert.match(css, /\.player-modal--module-synth \.module-glide-card \.module-envelope-knob \{\s*width: var\(--synth-knob-size\);/);
+  assert.match(css, /\.module-glide-card \{\s*grid-template-columns: max-content minmax\(0, 1fr\) max-content;/);
+  assert.match(css, /\.output-fader-rail \{\s*min-height: 120px;/);
+  assert.match(css, /\.player-modal--module-synth \.synth-editor__identity \{\s*display: none;/);
+});
+
+test('módulos nascem com Reverb de fábrica, Mod em User e o 5 com Rotary', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const effects = readFileSync(new URL('../src/features/player/ModuleEffectsView.ts', import.meta.url), 'utf8');
+  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 4,\s*dampen: 58,\s*size: 0,\s*mix: 44,/);
+  assert.match(player, /modulationMode: 'user',/);
+  assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB \},/);
+  assert.match(player, /rotary: \{ \.\.\.readModuleRotarySettings\(undefined\), enabled: moduleIndex === 4 \},/);
+});
+
+test('knobs só pela horizontal e sem o salto nativo do range do iOS', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /const horizontalDelta = event\.clientX - drag\.startX;/);
+  assert.doesNotMatch(player, /verticalDelta/);
+  for (const knob of ['player-output-knob', 'module-envelope-knob', 'module-effect-knob']) {
+    const block = css.match(new RegExp(`\n\.${knob} input \{[^}]*\}`))[0];
+    assert.match(block, /pointer-events: none;/, `${knob}: o toque vai para o knob, não para o range`);
+  }
+});
+
+test('teto de velocity: variável numérica (a alça desce) e escondido em Fixed', () => {
+  const view = readFileSync(new URL('../src/features/player/VelocityCurveView.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(view, /--velocity-ceiling:\$\{\(ceiling \/ 127\) \* 100\}%/);
+  assert.match(view, /setProperty\('--velocity-ceiling', String\(\(value \/ 127\) \* 100\)\)/);
+  assert.match(css, /\.velocity-curve-editor\[data-velocity-mode="fixed"\] :is\(\.velocity-ceiling, \.velocity-ceiling-zone, \.velocity-ceiling-line\) \{\s*display: none;/);
+});

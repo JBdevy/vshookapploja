@@ -35,17 +35,22 @@ export function readModuleModulationRate(settings: Readonly<Record<string, unkno
   return Number.isFinite(value) ? Math.min(20, Math.max(0.1, value)) : DEFAULT_MODULE_MODULATION_RATE_HZ;
 }
 
+// Synth: LFO aciona o LFO do editor do Synth e User deixa a roda sem efeito,
+// por isso o card do Synth não tem Rate próprio.
 export function createModuleModulationCardMarkup(
   settings: Readonly<Record<string, unknown>>,
-  userLabel = 'SF2 · User',
+  owner: 'sf2' | 'synth' = 'sf2',
 ): string {
   const mode = readModuleModulationMode(settings);
   const rate = readModuleModulationRate(settings);
+  const status = owner === 'synth'
+    ? mode === 'lfo' ? 'LFO do Synth' : 'Roda sem efeito'
+    : mode === 'lfo' ? `Pitch · ${rate.toFixed(2)} Hz` : 'SF2 · User';
   return `
-    <article class="module-mod-card" data-module-mod-card>
+    <article class="module-mod-card${owner === 'synth' ? ' module-mod-card--synth' : ''}" data-module-mod-card>
       <header>
         <strong>Mod</strong>
-        <small>${mode === 'lfo' ? `Pitch · ${rate.toFixed(2)} Hz` : userLabel}</small>
+        <small>${status}</small>
       </header>
       <div role="group" aria-label="Modo da roda Mod">
         ${(['user', 'lfo'] as const).map((value) => `
@@ -54,14 +59,14 @@ export function createModuleModulationCardMarkup(
             aria-pressed="${mode === value}">${value === 'lfo' ? 'LFO' : 'User'}</button>
         `).join('')}
       </div>
-      <label class="module-mod-card__rate">
+      ${owner === 'synth' ? '' : `<label class="module-mod-card__rate">
         ${createParameterKnobMarkup((rate - 0.1) / 19.9, `
           <input type="range" min="0.1" max="20" step="0.01" value="${rate}"
             data-module-modulation-rate aria-label="Rate do LFO"
             aria-valuetext="${rate.toFixed(2)} Hz"${mode === 'user' ? ' disabled' : ''}>
         `)}
         <output data-module-modulation-rate-value>${rate.toFixed(2)} Hz</output>
-      </label>
+      </label>`}
     </article>
   `;
 }
@@ -220,7 +225,7 @@ export function createModuleSettingsMarkup(
       <div class="module-settings-bottom-row">
         ${createVelocityCardMarkup(settings)}
         ${processorReplacement === 'synth' ? '' : createGlideCardMarkup(settings, bpm)}
-        ${createModuleModulationCardMarkup(settings, processorReplacement === 'synth' ? 'Synth · LFO' : 'SF2 · User')}
+        ${createModuleModulationCardMarkup(settings, processorReplacement === 'synth' ? 'synth' : 'sf2')}
       </div>
     </section>
   `;
