@@ -26,6 +26,11 @@
   let suppressMessageClickUntil = 0
   let pollTimer = 0
   let mobileSession = readMobileSession()
+  let chatKeyboardHeight = 0
+  let chatLayoutHeight = 0
+  let chatViewportFrame = 0
+  let nativeKeyboardPlugin = null
+  const chatKeyboardListenerHandles = []
 
   function isNativeApp() {
     const capacitor = window.Capacitor
@@ -45,6 +50,102 @@
       nativeCameraPlugin = window.Capacitor.registerPlugin('Camera')
     }
     return nativeCameraPlugin
+  }
+
+  function getNativeKeyboardPlugin() {
+    if (!isNativeApp()) return null
+    if (window.Capacitor?.Plugins?.Keyboard) return window.Capacitor.Plugins.Keyboard
+    if (!nativeKeyboardPlugin && typeof window.Capacitor?.registerPlugin === 'function') {
+      nativeKeyboardPlugin = window.Capacitor.registerPlugin('Keyboard')
+    }
+    return nativeKeyboardPlugin
+  }
+
+  function applyChatVisibleViewport(forceBottom = false) {
+    chatViewportFrame = 0
+    const shell = document.querySelector('.chatMobileShell')
+    if (!shell) return
+    const viewport = window.visualViewport
+    const measuredLayoutHeight = Math.max(1, Math.round(window.innerHeight || document.documentElement.clientHeight || 640))
+    if (chatKeyboardHeight <= 0) chatLayoutHeight = measuredLayoutHeight
+    const layoutHeight = Math.max(chatLayoutHeight, measuredLayoutHeight)
+    const viewportTop = Math.max(0, Math.round(viewport?.offsetTop || 0))
+    const viewportHeight = Math.max(1, Math.round(viewport?.height || layoutHeight))
+    const nativeVisibleHeight = chatKeyboardHeight > 0
+      ? Math.max(180, layoutHeight - chatKeyboardHeight - viewportTop)
+      : layoutHeight
+    const visibleHeight = chatKeyboardHeight > 0
+      ? Math.min(viewportHeight, nativeVisibleHeight)
+      : viewportHeight
+    const keyboardOpen = chatKeyboardHeight > 0 || visibleHeight < layoutHeight - 80
+    shell.style.setProperty('--chat-viewport-top', `${viewportTop}px`)
+    shell.style.setProperty('--chat-visible-height', `${visibleHeight}px`)
+    shell.classList.toggle('chatMobileKeyboardOpen', keyboardOpen)
+    if (forceBottom || (keyboardOpen && document.activeElement?.id === 'chatMobileInput')) {
+      const messagesContainer = document.getElementById('chatMobileMessages')
+      if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight
+    }
+  }
+
+  function scheduleChatVisibleViewport(forceBottom = false) {
+    if (chatViewportFrame) cancelAnimationFrame(chatViewportFrame)
+    chatViewportFrame = requestAnimationFrame(() => applyChatVisibleViewport(forceBottom))
+  }
+
+  function resizeChatComposerInput() {
+    const input = document.getElementById('chatMobileInput')
+    if (!input) return
+    input.style.height = '0px'
+    const maxHeight = Number.parseFloat(getComputedStyle(input).maxHeight) || 104
+    const height = Math.min(maxHeight, Math.max(42, input.scrollHeight))
+    input.style.height = `${height}px`
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden'
+    scheduleChatVisibleViewport()
+  }
+
+  function onChatViewportChanged() {
+    scheduleChatVisibleViewport()
+  }
+
+  async function setupChatKeyboardViewport() {
+    scheduleChatVisibleViewport()
+    window.addEventListener('resize', onChatViewportChanged)
+    window.visualViewport?.addEventListener?.('resize', onChatViewportChanged)
+    window.visualViewport?.addEventListener?.('scroll', onChatViewportChanged)
+    const keyboard = getNativeKeyboardPlugin()
+    if (!keyboard?.addListener) return
+    const show = (info) => {
+      chatKeyboardHeight = Math.max(0, Math.round(Number(info?.keyboardHeight) || 0))
+      scheduleChatVisibleViewport(true)
+      setTimeout(() => scheduleChatVisibleViewport(true), 80)
+    }
+    const hide = () => {
+      chatKeyboardHeight = 0
+      scheduleChatVisibleViewport()
+      setTimeout(() => scheduleChatVisibleViewport(), 80)
+    }
+    for (const [eventName, handler] of [
+      ['keyboardWillShow', show],
+      ['keyboardDidShow', show],
+      ['keyboardWillHide', hide],
+      ['keyboardDidHide', hide],
+    ]) {
+      try {
+        const handle = await keyboard.addListener(eventName, handler)
+        if (handle) chatKeyboardListenerHandles.push(handle)
+      } catch (_) {}
+    }
+  }
+
+  function teardownChatKeyboardViewport() {
+    window.removeEventListener('resize', onChatViewportChanged)
+    window.visualViewport?.removeEventListener?.('resize', onChatViewportChanged)
+    window.visualViewport?.removeEventListener?.('scroll', onChatViewportChanged)
+    if (chatViewportFrame) cancelAnimationFrame(chatViewportFrame)
+    chatViewportFrame = 0
+    chatKeyboardListenerHandles.splice(0).forEach((handle) => {
+      try { handle?.remove?.() } catch (_) {}
+    })
   }
 
   function readMobileSession() {
@@ -290,16 +391,18 @@
             <button id="chatMobileVoiceCancel" class="chatMobileVoiceCancel" type="button">Cancelar</button>
             <button id="chatMobileVoiceSend" class="chatMobileVoiceSend" type="button">Enviar</button>
           </div>` : ''}
-          <textarea id="chatMobileInput" rows="2" maxlength="1000" placeholder="Escreva uma mensagem..."></textarea>
           <emoji-picker id="chatMobileEmojiPicker" class="chatMobileEmojiPicker dark" locale="pt" emoji-version="17.0" data-source="https://cdn.jsdelivr.net/npm/emoji-picker-element-data@^1/pt/cldr/data.json" hidden></emoji-picker>
           <div class="chatMobileActions">
             <button id="chatMobileGallery" class="chatMobileIconButton" type="button" aria-label="Adicionar foto">📎</button>
+            <textarea id="chatMobileInput" rows="1" maxlength="1000" placeholder="Mensagem"></textarea>
             ${voiceMessagesEnabled ? '<button id="chatMobileAudio" class="chatMobileIconButton" type="button" aria-label="Gravar mensagem de voz">🎙️</button>' : ''}
             <input id="chatMobileGalleryInput" type="file" accept="image/*" hidden />
-            <span id="chatMobileQuota"></span>
-            <button id="chatMobileSend" class="chatMobileSend" type="button">Enviar</button>
+            <button id="chatMobileSend" class="chatMobileSend" type="button" aria-label="Enviar mensagem">➤</button>
           </div>
-          <div id="chatMobileStatus" class="chatMobileStatus"></div>
+          <div class="chatMobileComposerMeta">
+            <div id="chatMobileStatus" class="chatMobileStatus"></div>
+            <span id="chatMobileQuota"></span>
+          </div>
         </section>
         <div id="chatMobileAdminModal" class="chatMobileAdminBackdrop" hidden>
           <section class="chatMobileAdminModal">
@@ -450,7 +553,7 @@
     const send = document.getElementById('chatMobileSend')
     if (input) {
       input.disabled = !enabled || recordingVoice
-      input.placeholder = closed ? 'O chat está fechado' : exhausted ? 'Limite diário atingido' : 'Escreva uma mensagem...'
+      input.placeholder = closed ? 'O chat está fechado' : exhausted ? 'Limite diário atingido' : 'Mensagem'
     }
     if (send) send.disabled = !enabled || recordingVoice
     const composer = document.getElementById('chatMobileComposer')
@@ -663,7 +766,10 @@
     }
     ;['chatMobileGalleryInput'].forEach((id) => {
       const input = document.getElementById(id)
-      if (input) input.value = ''
+      if (input) {
+        input.value = ''
+        resizeChatComposerInput()
+      }
     })
   }
 
@@ -785,7 +891,10 @@
         createdAt: new Date().toISOString(),
         pending: true,
       })
-      if (input) input.value = ''
+      if (input) {
+        input.value = ''
+        resizeChatComposerInput()
+      }
       clearSelectedMedia()
       renderMessages(true)
     }
@@ -1164,6 +1273,7 @@
       const start = Number.isFinite(input.selectionStart) ? input.selectionStart : input.value.length
       const end = Number.isFinite(input.selectionEnd) ? input.selectionEnd : start
       input.setRangeText(emoji, start, end, 'end')
+      resizeChatComposerInput()
       input.focus()
       picker.hidden = true
     })
@@ -1184,6 +1294,14 @@
     document.getElementById('chatMobileRemoveImage')?.addEventListener('click', clearSelectedMedia)
     document.getElementById('chatMobileCancelReply')?.addEventListener('click', clearReplyToMessage)
     document.getElementById('chatMobileSend')?.addEventListener('click', sendMessage)
+    const chatInput = document.getElementById('chatMobileInput')
+    chatInput?.addEventListener('focus', () => {
+      scheduleChatVisibleViewport(true)
+      setTimeout(() => scheduleChatVisibleViewport(true), 120)
+      setTimeout(() => scheduleChatVisibleViewport(true), 320)
+    })
+    chatInput?.addEventListener('input', resizeChatComposerInput)
+    chatInput?.addEventListener('blur', () => setTimeout(() => scheduleChatVisibleViewport(), 80))
     document.getElementById('chatMobileEditCancel')?.addEventListener('click', closeEditMessage)
     document.getElementById('chatMobileEditSave')?.addEventListener('click', saveEditedMessage)
     const messageActions = document.getElementById('chatMobileMessageActions')
@@ -1295,7 +1413,11 @@
   }
 
   buildInterface()
+  void setupChatKeyboardViewport()
   refresh(true).catch(() => {})
   pollTimer = window.setInterval(() => refresh(false).catch(() => {}), 3000)
-  window.addEventListener('beforeunload', () => clearInterval(pollTimer), { once: true })
+  window.addEventListener('beforeunload', () => {
+    clearInterval(pollTimer)
+    teardownChatKeyboardViewport()
+  }, { once: true })
 })()

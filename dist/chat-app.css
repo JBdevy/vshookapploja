@@ -20,12 +20,14 @@ button, textarea { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 
 .chatMobileShell {
-  position: relative;
+  position: fixed;
+  top: var(--chat-viewport-top, 0px);
+  right: 0;
+  left: 0;
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100vh;
-  height: 100dvh;
+  height: var(--chat-visible-height, 100dvh);
   overflow: hidden;
   color: #f8f8fb;
   background:
@@ -287,17 +289,27 @@ button { -webkit-tap-highlight-color: transparent; }
 
 .chatMobileComposer textarea {
   display: block;
-  width: 100%;
-  min-height: 48px;
-  max-height: 92px;
+  min-width: 0;
+  min-height: 42px;
+  max-height: 104px;
+  flex: 1 1 auto;
   resize: none;
-  padding: 10px 11px;
+  padding: 10px 14px;
   border: 1px solid rgba(255, 255, 255, .13);
-  border-radius: 12px;
+  border-radius: 21px;
   outline: none;
   background: rgba(255, 255, 255, .065);
   color: #fff;
-  font-size: 14px;
+  /* 16px evita que o Safari/WKWebView aplique zoom e desloque o campo. */
+  font-size: 16px;
+}
+
+.chatMobileShell.chatMobileKeyboardOpen .chatMobileComposer {
+  padding-bottom: 8px;
+}
+
+.chatMobileShell.chatMobileKeyboardOpen .chatMobileMessages {
+  scroll-padding-bottom: 12px;
 }
 
 .chatMobileComposer textarea:focus { border-color: rgba(207, 55, 255, .72); box-shadow: 0 0 0 2px rgba(207, 55, 255, .1); }
@@ -308,21 +320,22 @@ button { -webkit-tap-highlight-color: transparent; }
 .chatMobileVoiceRecording button { min-height: 34px; padding: 0 10px; border-radius: 9px; font-size: 10px; font-weight: 900; }
 .chatMobileVoiceCancel { border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.07); color: #fff; }
 .chatMobileVoiceSend { border: 0; background: linear-gradient(135deg,#35d477,#168d46); color: #fff; }
-.chatMobileComposer.recordingVoice textarea, .chatMobileComposer.recordingVoice .chatMobileActions { display: none; }
+.chatMobileComposer.recordingVoice .chatMobileActions { display: none; }
 @keyframes chatMobileRecordingPulse { 50% { opacity: .42; transform: scale(.82); } }
-.chatMobileActions { display: flex; align-items: center; gap: 7px; margin-top: 7px; }
+.chatMobileActions { display: flex; align-items: flex-end; gap: 6px; }
 .chatMobileIconButton {
-  width: 37px; height: 37px; padding: 0;
+  width: 42px; height: 42px; flex: 0 0 42px; padding: 0;
   border: 1px solid rgba(255, 255, 255, .13);
-  border-radius: 10px;
+  border-radius: 50%;
   background: rgba(255, 255, 255, .07);
   color: #fff;
   font-size: 20px;
 }
 .chatMobileIconButton:disabled, .chatMobileSend:disabled { opacity: .42; }
-#chatMobileQuota { min-width: 0; margin-left: auto; overflow: hidden; color: #9999a8; font-size: 9px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
-.chatMobileSend { min-height: 37px; padding: 0 14px; border: 0; border-radius: 10px; background: linear-gradient(135deg, #cf37ff, #7b24d5); color: #fff; font-size: 12px; font-weight: 900; }
-.chatMobileStatus { min-height: 14px; margin-top: 5px; color: #ffb3b3; font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; }
+.chatMobileComposerMeta { display: flex; min-height: 12px; align-items: flex-start; gap: 8px; margin-top: 3px; padding-inline: 4px; }
+#chatMobileQuota { min-width: 0; margin-left: auto; overflow: hidden; color: #9999a8; font-size: 8px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.chatMobileSend { display: grid; width: 42px; height: 42px; flex: 0 0 42px; padding: 0 0 0 2px; place-items: center; border: 0; border-radius: 50%; background: linear-gradient(135deg, #cf37ff, #7b24d5); color: #fff; font-size: 18px; font-weight: 900; }
+.chatMobileStatus { min-width: 0; flex: 1; color: #ffb3b3; font-size: 9px; line-height: 1.25; overflow-wrap: anywhere; }
 
 .chatMobilePreview { position: relative; width: 78px; height: 62px; margin-bottom: 7px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .14); border-radius: 10px; background: #030305; }
 .chatMobilePreview img, .chatMobilePreview video { width: 100%; height: 100%; object-fit: cover; }
@@ -413,7 +426,7 @@ button { -webkit-tap-highlight-color: transparent; }
   .chatMobileHeader { min-height: 58px; padding-top: calc(5px + var(--vsh-safe-top)); padding-bottom: 5px; }
   .chatMobileCurrentAvatar { width: 46px; height: 46px; flex-basis: 46px; }
   .chatMobileMessages { padding-top: 8px; padding-bottom: 8px; }
-  .chatMobileComposer textarea { min-height: 42px; max-height: 64px; }
+  .chatMobileComposer textarea { min-height: 42px; max-height: 82px; }
   .chatMobileEmojiPicker { height: min(72vh, 390px); }
 }
 
