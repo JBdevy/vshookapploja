@@ -137,9 +137,9 @@ private:
     float drumHz = 0.0f;
     float hornSmoothing = 0.0f;
     float drumSmoothing = 0.0f;
-    float crossover = 0.0f;
-    std::array<float, 2> lowPass{};
-    std::array<float, 2> lowPassSecond{};
+    // Crossover Linkwitz-Riley de 4ª ordem em 800 Hz (dois Butterworth em série).
+    std::array<Biquad, 2> drumLowPass{};
+    std::array<Biquad, 2> hornHighPass{};
     std::array<float, 2> hornTone{};
 
     void prepare(double nextSampleRate);

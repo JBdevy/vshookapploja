@@ -652,7 +652,7 @@ try {
     const lastGlide = (moduleIndex) => calls.filter(({ command, args }) => command === 'configure_glide' && args.config.moduleIndex === moduleIndex).at(-1)?.args.config;
     for (const [module, kind] of [[2, 'module-settings'], [8, 'module-synth']]) {
       player.openModal(kind, module, master);
-      const buttons = () => [...window.document.querySelectorAll('[data-module-glide-card] header button')].map((button) => button.textContent.trim());
+      const buttons = () => [...window.document.querySelectorAll('[data-module-glide-card] .module-glide-card__buttons button')].map((button) => button.textContent.trim());
       assert.equal(JSON.stringify(buttons()), JSON.stringify(['Sync', 'Auto', 'Config', 'No Sens']),
         'card de Glide padrão: Sync | Auto / Config | No Sens');
       // No Sens: o motor recebe velocity cheia; desligado, a curva salva (Soft).
@@ -836,14 +836,52 @@ try {
   transport.selectedTrack = originalSelectedTrack;
   transport.state = originalState;
   transport.prepareAudioOutput = originalPrepareAudioOutput;
-  player.ccMappings.set('preset:2', 22);
+  player.ccMappings.set('preset:A:2', 22);
   player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 127 });
   assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2, 'CC mapeado aciona o preset');
-  player.activateMappedPreset(1);
+  player.activateMappedPreset('A', 1);
   player.lastCcValues.set('keyboard-a:1:22', { value: 127, receivedAt: performance.now() - 200 });
   player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 127 });
   assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2,
     'teclado que envia somente 127 consegue acionar o mesmo CC novamente');
+  // Banco A e Banco B são independentes: o Preset 3 do Banco B tem o seu
+  // próprio controle e, tocado com a tela no Banco A, leva ao Banco B.
+  assert.equal(player.activeBank, 'A');
+  player.ccMappings.set('preset:B:3', 23);
+  player.handleMidiControlChange({ channel: 1, controller: 23, inputId: 'keyboard-a', value: 127 });
+  assert.equal(player.activeBank, 'B', 'preset mapeado do Banco B troca a tela para o Banco B na hora');
+  assert.equal(player.bankStates.get('B').selectedPreset, 3, 'o Preset 3 do Banco B fica selecionado');
+  assert.equal(player.bankStates.get('A').selectedPreset, null, 'só um preset fica ativo entre os dois bancos');
+  assert.equal(window.document.querySelector('[data-action="show-bank"][data-bank="B"]').getAttribute('aria-pressed'), 'true',
+    'o botão Banco B acende');
+  assert.equal(window.document.querySelector('.player-preset-button[data-preset="3"]').getAttribute('aria-pressed'), 'true',
+    'o botão do Preset 3 acende no Banco B');
+  player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 0 });
+  player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 127 });
+  assert.equal(player.activeBank, 'A', 'o controle do Preset 2 do Banco A volta ao Banco A');
+  assert.equal(player.bankStates.get('A').selectedPreset, 2);
+  assert.equal(player.bankStates.get('B').selectedPreset, null);
+  const savedBankPresets = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
+  savedBankPresets.ccMappings = { ...savedBankPresets.ccMappings, 'preset:A:3': 61, 'preset:3': 62 };
+  player.applySavedPlayerState(savedBankPresets);
+  assert.equal(player.ccMappings.get('preset:A:3'), 61, 'Preset 3 do Banco A é salvo à parte');
+  assert.equal(player.ccMappings.get('preset:B:3'), 23, 'Preset 3 do Banco B é salvo à parte');
+  assert(!player.ccMappings.has('preset:3'), 'preset sem banco não é mais um destino');
+  player.ccMappings.delete('preset:A:3');
+  player.ccMappings.delete('preset:B:3');
+  // Learn CC do Preset 5 aberto no Banco B grava o destino do Banco B.
+  player.showBank('B');
+  player.openModal('preset-name', 5, window.document.querySelector('.player-preset-button[data-preset="5"]'));
+  window.document.querySelector('[data-modal-action="learn-preset-cc"]').click();
+  assert.equal(JSON.stringify(player.pendingCcLearn), JSON.stringify({ kind: 'preset', bank: 'B', presetNumber: 5 }));
+  player.handleMidiControlChange({ channel: 1, controller: 31, inputId: 'keyboard-a', value: 127 });
+  window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+  assert.equal(player.ccMappings.get('preset:B:5'), 31, 'Learn no Banco B mapeia o Preset 5 do Banco B');
+  assert(!player.ccMappings.has('preset:A:5'), 'o Preset 5 do Banco A continua livre');
+  player.closeModal();
+  player.ccMappings.delete('preset:B:5');
+  player.showBank('A');
+  assert.equal(player.bankStates.get('A').selectedPreset, 2);
   player.openModal('module-eq', 1, master);
   assert.equal(window.document.querySelector('[data-module-eq-rta]'), null,
     'EQ permanece leve e sem RTA');
@@ -1142,7 +1180,7 @@ try {
   const beforeBlockedCc7 = player.metronome.isRunning();
   player.handleMidiControlChange({ channel: 1, controller: 7, inputId: 'test-midi', value: 127 });
   assert.equal(player.metronome.isRunning(), beforeBlockedCc7, 'blocked CC7 cannot trigger UI mappings');
-  player.ccMappings.set('preset:1', 102);
+  player.ccMappings.set('preset:A:1', 102);
   const beforeCompatibilityPreset = player.bankStates.get(player.activeBank).selectedPreset;
   player.midiInput.emitControlChange({ channel: 1, controller: 7, inputId: 'test-midi', value: 1 });
   assert.equal(player.bankStates.get(player.activeBank).selectedPreset, beforeCompatibilityPreset,
@@ -1152,11 +1190,11 @@ try {
   player.midiInput.emitControlChange({ channel: 1, controller: 91, inputId: 'test-midi', value: 1 });
   assert.notEqual(player.metronome.isRunning(), beforeReverbControl,
     'Reverb 1 on CC91 is converted into free CC102 while raw CC91 stays blocked');
-  player.ccMappings.set('preset:2', 117);
+  player.ccMappings.set('preset:A:2', 117);
   player.midiInput.emitControlChange({ channel: 1, controller: 91, inputId: 'test-midi', value: 16 });
   assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2,
     'Reverb 16 on CC91 is converted into the final compatibility CC117');
-  player.ccMappings.set('preset:3', 118);
+  player.ccMappings.set('preset:A:3', 118);
   player.midiInput.emitControlChange({ channel: 1, controller: 91, inputId: 'test-midi', value: 17 });
   assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2,
     'Reverb values above 16 do not create synthetic CC messages');

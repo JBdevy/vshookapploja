@@ -420,7 +420,6 @@ test('8 presets por banco numa fileira só', () => {
 
 test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () => {
   assert.match(css, /\.player-modal--module-synth \.module-glide-card \.module-envelope-knob \{\s*width: var\(--synth-knob-size\);/);
-  assert.match(css, /\.module-glide-card \{\s*grid-template-columns: max-content minmax\(0, 1fr\) max-content;/);
   assert.match(css, /\.output-fader-rail \{\s*min-height: 120px;/);
   assert.match(css, /\.player-modal--module-synth \.synth-editor__identity \{\s*display: none;/);
 });
@@ -428,7 +427,7 @@ test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () =>
 test('módulos nascem com Reverb de fábrica, Mod em User e o 5 com Rotary', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const effects = readFileSync(new URL('../src/features/player/ModuleEffectsView.ts', import.meta.url), 'utf8');
-  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 4,\s*dampen: 58,\s*size: 0,\s*mix: 44,/);
+  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 4,\s*dampen: 50,\s*size: 0,\s*mix: 44,/);
   assert.match(player, /modulationMode: 'user',/);
   assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB \},/);
   assert.match(player, /rotary: \{ \.\.\.readModuleRotarySettings\(undefined\), enabled: moduleIndex === 4 \},/);
@@ -471,4 +470,40 @@ test('paisagem dos dois lados no iOS e no Android', () => {
   assert.match(runtime, /if \(await hookKeysNative\.lockOrientation\(mode\)\) return;/);
   assert.match(ios, /let mask: UIInterfaceOrientationMask = landscape \? \.landscape : \.portrait/);
   assert.match(android, /SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);
+});
+
+test('Reset do módulo no Config: acima do Modo (ou da Polifonia) e com confirmação', () => {
+  const view = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(view, /data-module-setting-action="reset-module">Reset<\/button>\s*<button class="module-voice-mode-button/);
+  assert.match(view, /hasVoiceSwitch \? '' : '<button class="module-settings-reset-button"[^']*'\}\s*<button class="module-polyphony-button"/);
+  assert.match(player, /moduleSettingAction === 'reset-module'\) \{\s*this\.showModuleResetConfirmation\(modal, moduleNumber\);/);
+  assert.match(player, /const defaults = createDefaultModuleSettings\(moduleNumber - 1\);[\s\S]*?synthPresets: moduleState\.settings\.synthPresets \?\? defaults\.synthPresets,/);
+});
+
+test('card do Glide: 4 botões ocupam a esquerda e o nome fica em cima do knob', () => {
+  const glide = readFileSync(new URL('../src/features/player/GlideView.ts', import.meta.url), 'utf8');
+  assert.match(glide, /<div class="module-glide-card__buttons"[\s\S]*?No Sens<\/button>\s*<\/div>\s*<div class="module-glide-card__dial">\s*<strong>Glide<\/strong>/);
+  assert.match(css, /\.module-glide-card__buttons \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\s*grid-template-rows: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.doesNotMatch(css, /module-glide-card > header/);
+  // Ligar o Sync troca "0 ms" por "120 BPM": o valor tem largura fixa e o knob não anda.
+  assert.match(css, /\.module-glide-card output \{[^}]*width: 7\.5ch;[^}]*text-align: center;/);
+});
+
+test('diagnóstico da rota mostra o Áudio Mono do iOS (soma L+R só nas saídas 1-2)', () => {
+  const plugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  assert.match(plugin, /UIAccessibility\.isMonoAudioEnabled/);
+});
+
+test('seletor próprio: tocar no rótulo não abre o select nativo do sistema', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /label\.addEventListener\('click', \(event\) => \{\s*if \(event\.target instanceof Element && event\.target\.closest\('\.app-select'\)\) return;\s*event\.preventDefault\(\);/);
+  const native = css.match(/\n\.app-select__native \{[^}]*\}/)[0];
+  assert.match(native, /min-height: 0 !important;/);
+  assert.match(native, /pointer-events: none !important;/);
+});
+
+test('curva de velocity: os 5 pontos se movem, inclusive o primeiro e o último', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /const pointIndex = handle\s*\? Number\(handle\.dataset\.velocityPoint\)\s*: Math\.round\(Math\.min\(1, Math\.max\(0, \(event\.clientX - bounds\.left\) \/ Math\.max\(1, bounds\.width\)\)\) \* 4\);/);
 });

@@ -174,7 +174,8 @@ void ModuleEffects::RotarySpeaker::prepare(double nextSampleRate) {
   const auto capacity = static_cast<std::size_t>(std::ceil(sampleRate * 0.008)) + 4;
   for (auto& buffer : hornBuffers) buffer.assign(capacity, 0.0f);
   for (auto& buffer : drumBuffers) buffer.assign(capacity, 0.0f);
-  crossover = 1.0f - std::exp(static_cast<float>(-2.0 * kPi * 800.0 / sampleRate));
+  for (auto& stage : drumLowPass) stage.configure({true, EqBandType::highCut, 800.0f, 0.0f, 0.7071f, 1}, sampleRate);
+  for (auto& stage : hornHighPass) stage.configure({true, EqBandType::lowCut, 800.0f, 0.0f, 0.7071f, 1}, sampleRate);
   reset();
   configure(config);
 }
@@ -207,8 +208,8 @@ void ModuleEffects::RotarySpeaker::reset() noexcept {
   hornPhase = 0.0;
   drumPhase = 0.25;
   hornHz = drumHz = 0.0f;
-  lowPass.fill(0.0f);
-  lowPassSecond.fill(0.0f);
+  for (auto& stage : drumLowPass) stage.reset();
+  for (auto& stage : hornHighPass) stage.reset();
   hornTone.fill(0.0f);
 }
 
@@ -235,9 +236,21 @@ void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_
   // momentos diferentes; o giro aparece no estéreo e ainda soa em mono.
   constexpr std::array<float, 2> micOffset{-1.2566371f, 1.2566371f};
   constexpr float crossfeed = 0.12f;
-  constexpr float hornReflection = 0.35f;
-  constexpr float drumReflection = 0.22f;
+  constexpr float hornReflection = 0.2f;
+  constexpr float drumReflection = 0.2f;
   constexpr float drive = 1.3f;
+  // O que faz soar Leslie e não vibrato é o volume e o brilho girando. O
+  // Doppler fica discreto (corneta ~12 cents no Fast, tambor ~1): com o atraso
+  // físico inteiro (~0,5 ms) as notas desafinavam como um vibrato.
+  constexpr float hornDopplerMs = 0.16f;
+  constexpr float drumDopplerMs = 0.04f;
+  constexpr float hornTremolo = 0.7f;
+  constexpr float drumTremolo = 0.45f;
+  // Corneta e tambor chegam juntos ao microfone: com atrasos diferentes as duas
+  // metades se cancelavam girando em 700 Hz-1 kHz e a nota "entortava".
+  constexpr float directDelayMs = 1.2f;
+  constexpr float echoDelayMs = 3.8f;
+  const bool dryOnly = config.mix <= 0.0f;
   for (std::size_t frame = 0; frame < frames; ++frame) {
     hornHz += (targetHz - hornHz) * hornSmoothing;
     drumHz += (drumTargetHz - drumHz) * drumSmoothing;
@@ -250,13 +263,19 @@ void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_
     const auto drumAngle = static_cast<float>(2.0 * kPi * drumPhase);
 
     const std::array<float, 2> dry{left[frame], right[frame]};
-    for (std::size_t channel = 0; channel < 2; ++channel) {
-      // Crossover de 800 Hz: dois polos para o tambor, o resto vai para a corneta.
-      lowPass[channel] += crossover * (dry[channel] - lowPass[channel]);
-      lowPassSecond[channel] += crossover * (lowPass[channel] - lowPassSecond[channel]);
-      drumBuffers[channel][writeIndex] = lowPassSecond[channel];
-      hornBuffers[channel][writeIndex] = dry[channel] - lowPass[channel];
-    }
+    // Grave só no tambor e agudo só na corneta. Somadas, as duas bandas voltam
+    // ao sinal original com a fase girada (passa-tudo).
+    auto drumLeft = dry[0];
+    auto drumRight = dry[1];
+    for (auto& stage : drumLowPass) stage.process(drumLeft, drumRight);
+    auto hornLeft = dry[0];
+    auto hornRight = dry[1];
+    for (auto& stage : hornHighPass) stage.process(hornLeft, hornRight);
+    drumBuffers[0][writeIndex] = drumLeft;
+    drumBuffers[1][writeIndex] = drumRight;
+    hornBuffers[0][writeIndex] = hornLeft;
+    hornBuffers[1][writeIndex] = hornRight;
+    const std::array<float, 2> reference{drumLeft + hornLeft, drumRight + hornRight};
 
     std::array<float, 2> wet{};
     for (std::size_t channel = 0; channel < 2; ++channel) {
@@ -265,23 +284,23 @@ void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_
       const auto hornFacing = std::cos(hornAngle + micOffset[channel]);
       const auto drumFacing = std::cos(drumAngle + micOffset[channel]);
 
-      // Doppler: a distância até o microfone muda o atraso (raio da corneta ~20 cm).
-      const auto hornDelay = (1.2f - 0.6f * hornFacing * depth) * samplesPerMs;
-      const auto drumDelay = (1.8f - 0.25f * drumFacing * depth) * samplesPerMs;
+      // Doppler: a distância até o microfone muda o atraso.
+      const auto hornDelay = (directDelayMs - hornDopplerMs * hornFacing * depth) * samplesPerMs;
+      const auto drumDelay = (directDelayMs - drumDopplerMs * drumFacing * depth) * samplesPerMs;
       // Reflexão: o lado oposto da trajetória bate no gabinete e chega depois.
-      const auto hornEchoDelay = (3.8f + 0.6f * hornFacing * depth) * samplesPerMs;
-      const auto drumEchoDelay = (4.6f + 0.25f * drumFacing * depth) * samplesPerMs;
+      const auto hornEchoDelay = (echoDelayMs + hornDopplerMs * hornFacing * depth) * samplesPerMs;
+      const auto drumEchoDelay = (echoDelayMs + drumDopplerMs * drumFacing * depth) * samplesPerMs;
 
       const auto hornSource = read(hornBuffers[channel], hornDelay) + read(hornBuffers[other], hornDelay) * crossfeed;
       const auto hornEcho = read(hornBuffers[channel], hornEchoDelay) + read(hornBuffers[other], hornEchoDelay) * crossfeed;
       const auto drumSource = read(drumBuffers[channel], drumDelay) + read(drumBuffers[other], drumDelay) * crossfeed;
       const auto drumEcho = read(drumBuffers[channel], drumEchoDelay) + read(drumBuffers[other], drumEchoDelay) * crossfeed;
 
-      // Volume pela direção: corneta ~-7 dB de costas, tambor bem menos.
-      const auto hornGain = 1.0f - 0.55f * depth * (0.5f - 0.5f * hornFacing);
-      const auto hornEchoGain = hornReflection * (1.0f - 0.55f * depth * (0.5f + 0.5f * hornFacing));
-      const auto drumGain = 1.0f - 0.3f * depth * (0.5f - 0.5f * drumFacing);
-      const auto drumEchoGain = drumReflection * (1.0f - 0.3f * depth * (0.5f + 0.5f * drumFacing));
+      // Volume pela direção: a corneta some bem mais de costas que o tambor.
+      const auto hornGain = 1.0f - hornTremolo * depth * (0.5f - 0.5f * hornFacing);
+      const auto hornEchoGain = hornReflection * (1.0f - hornTremolo * depth * (0.5f + 0.5f * hornFacing));
+      const auto drumGain = 1.0f - drumTremolo * depth * (0.5f - 0.5f * drumFacing);
+      const auto drumEchoGain = drumReflection * (1.0f - drumTremolo * depth * (0.5f + 0.5f * drumFacing));
 
       // Brilho pela direção: de frente passa até ~7,5 kHz, de costas fica abafada.
       const auto toneHz = 7500.0f - 5000.0f * depth * (0.5f - 0.5f * hornFacing);
@@ -296,8 +315,12 @@ void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_
       // Drive leve de válvula, com ganho unitário em sinal baixo.
       wet[channel] = std::tanh(combined * drive) / drive;
     }
-    left[frame] = dry[0] + (wet[0] - dry[0]) * config.mix;
-    right[frame] = dry[1] + (wet[1] - dry[1]) * config.mix;
+    if (!dryOnly) {
+      // O seco do Mix passa pelo mesmo crossover: Mix parcial não cancela
+      // a região de 800 Hz.
+      left[frame] = reference[0] + (wet[0] - reference[0]) * config.mix;
+      right[frame] = reference[1] + (wet[1] - reference[1]) * config.mix;
+    }
     writeIndex = (writeIndex + 1) % hornBuffers[0].size();
   }
 }

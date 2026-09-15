@@ -328,7 +328,8 @@ type CcLearnTarget =
   | { kind: 'metronome-toggle' }
   | { kind: 'tap-tempo' }
   | { kind: 'bank'; bank: BankId }
-  | { kind: 'preset'; presetNumber: number }
+  // Banco A e Banco B são independentes: cada um tem os seus 8 presets mapeáveis.
+  | { kind: 'preset'; bank: BankId; presetNumber: number }
   | { kind: 'pad'; bank: PadBankId; note: string }
   | { kind: 'effect'; bank: EffectBankId; effectNumber: number };
 
@@ -439,7 +440,7 @@ function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'metronome-toggle') return 'metronome:toggle';
   if (target.kind === 'tap-tempo') return 'metronome:tap';
   if (target.kind === 'bank') return `bank:${target.bank}`;
-  if (target.kind === 'preset') return `preset:${target.presetNumber}`;
+  if (target.kind === 'preset') return `preset:${target.bank}:${target.presetNumber}`;
   if (target.kind === 'pad') return `pad:${target.bank}:${target.note}`;
   return `effect:${target.bank}:${target.effectNumber}`;
 }
@@ -467,7 +468,7 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
   if (target.kind === 'tap-tempo') return 'Tap Tempo';
   if (target.kind === 'bank') return `Banco ${target.bank}`;
   if (target.kind === 'preset') {
-    return `Preset ${target.presetNumber.toString().padStart(2, '0')} do banco ativo`;
+    return `Banco ${target.bank} · Preset ${target.presetNumber.toString().padStart(2, '0')}`;
   }
   if (target.kind === 'pad') return `Pads ${PAD_BANK_IDS.indexOf(target.bank) + 1} · ${target.note}`;
   return `FX ${target.bank} · Efeito ${target.effectNumber}`;
@@ -487,7 +488,7 @@ function isCcMappingKey(value: string): boolean {
   if (/^bank:[AB]$/.test(value)) return true;
   if (/^pad:[ABCD]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
   if (/^effect:[1-4]:([1-9]|1[0-2])$/.test(value)) return true;
-  return /^preset:([1-9]|1[0-6])$/.test(value) || /^preset:[AB]:([1-9]|1[0-6])$/.test(value);
+  return /^preset:[AB]:[1-8]$/.test(value);
 }
 
 function createEffectPadStates(): EffectPadState[] {
@@ -3866,9 +3867,9 @@ export class PlayerScreen {
         continue;
       }
 
-      const presetMatch = /^preset:([1-9]|1[0-6])$/.exec(targetKey);
-      if (presetMatch && risingEdge) {
-        this.activateMappedPreset(Number(presetMatch[1]));
+      const presetMatch = /^preset:([AB]):([1-8])$/.exec(targetKey);
+      if (presetMatch && risingEdge && this.isBankId(presetMatch[1])) {
+        this.activateMappedPreset(presetMatch[1], Number(presetMatch[2]));
       }
     }
 
@@ -3915,15 +3916,18 @@ export class PlayerScreen {
     });
   }
 
-  private activateMappedPreset(presetNumber: number): void {
+  // O controle mapeado leva direto ao banco do preset: o Preset 3 do Banco B
+  // tocado com a tela no Banco A já abre o Banco B com ele selecionado.
+  private activateMappedPreset(bankId: BankId, presetNumber: number): void {
     if (presetNumber < 1 || presetNumber > PRESET_COUNT) return;
-    const bank = this.bankStates.get(this.activeBank);
-    if (!bank || bank.selectedPreset === presetNumber) return;
+    const bank = this.bankStates.get(bankId);
+    if (!bank || (bankId === this.activeBank && bank.selectedPreset === presetNumber)) return;
     if (this.liveMidiEnabled) this.nativePresetTransitionPending = true;
     this.soundfontSelectionRevision += 1;
     this.cancelNoteLearn();
     this.patternPlayback.reset();
     this.saveActivePresetState();
+    this.activeBank = bankId;
     for (const state of this.bankStates.values()) state.selectedPreset = null;
     bank.selectedPreset = presetNumber;
     this.restoreActivePresetState();
@@ -4258,7 +4262,7 @@ export class PlayerScreen {
           <div class="cc-action-pair preset-name-editor__cc-actions">
             <button class="preset-name-editor__learn" type="button" data-modal-action="learn-preset-cc">
               <span>Learn CC</span>
-              <small>${this.ccMappingLabel({ kind: 'preset', presetNumber: moduleNumber })}</small>
+              <small>${this.ccMappingLabel({ kind: 'preset', bank: this.activeBank, presetNumber: moduleNumber })}</small>
             </button>
             <button class="cc-action-pair__clean" type="button" data-modal-action="clean-preset-cc">Clean</button>
           </div>
@@ -4888,6 +4892,10 @@ export class PlayerScreen {
         return;
       }
       if (kind === 'module-settings' && moduleNumber !== null && moduleSettingAction) {
+        if (moduleSettingAction === 'reset-module') {
+          this.showModuleResetConfirmation(modal, moduleNumber);
+          return;
+        }
         if (moduleSettingAction === 'toggle-voice-mode' && moduleNumber >= 1 && moduleNumber <= 5) {
           const button = target instanceof Element
             ? target.closest<HTMLButtonElement>('button[data-module-setting-action="toggle-voice-mode"]')
@@ -5291,6 +5299,14 @@ export class PlayerScreen {
         this.showProcessorResetConfirmation(modal, moduleNumber, processorKind);
         return;
       }
+      const moduleResetChoice = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-module-reset-choice]')?.dataset.moduleResetChoice
+        : null;
+      if (kind === 'module-settings' && moduleNumber !== null && moduleResetChoice) {
+        if (moduleResetChoice === 'confirm') this.confirmModuleReset(moduleNumber);
+        else modal.querySelector('[data-module-reset-confirmation]')?.remove();
+        return;
+      }
       const processorResetChoice = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-processor-reset-choice]')?.dataset.processorResetChoice
         : null;
@@ -5306,7 +5322,7 @@ export class PlayerScreen {
           : null;
         if (button) {
           this.openCcLearn(
-            { kind: 'preset', presetNumber: moduleNumber },
+            { kind: 'preset', bank: this.activeBank, presetNumber: moduleNumber },
             button,
           );
         }
@@ -5330,7 +5346,7 @@ export class PlayerScreen {
         const button = target instanceof Element
           ? target.closest<HTMLButtonElement>('[data-modal-action="clean-preset-cc"]') : null;
         if (button) {
-          this.pendingCcClear = { kind: 'preset', presetNumber: moduleNumber };
+          this.pendingCcClear = { kind: 'preset', bank: this.activeBank, presetNumber: moduleNumber };
           this.openChildModal('cc-clear-confirm', null, button);
         }
         return;
@@ -5629,15 +5645,21 @@ export class PlayerScreen {
       });
       modal.addEventListener('pointerdown', (event) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return;
-        const handle = event.target instanceof Element
-          ? event.target.closest<SVGCircleElement>('[data-velocity-point]')
-          : null;
-        const plot = handle?.closest<HTMLElement>('[data-velocity-curve-plot]');
+        const target = event.target instanceof Element ? event.target : null;
+        const plot = target?.closest<HTMLElement>('[data-velocity-curve-plot]');
         const editor = plot?.closest<HTMLElement>('.velocity-curve-editor');
-        const pointIndex = Number(handle?.dataset.velocityPoint);
-        if (!handle || !plot || editor?.dataset.velocityMode !== 'user' || !Number.isInteger(pointIndex)) return;
+        if (!plot || editor?.dataset.velocityMode !== 'user') return;
+        // O primeiro e o último ponto ficam nos cantos e a borda da curva corta
+        // quase todo o círculo: tocar só nele era impossível. Qualquer toque na
+        // curva pega o ponto mais próximo na horizontal (5 faixas iguais).
+        const handle = target?.closest<SVGCircleElement>('[data-velocity-point]');
+        const bounds = plot.getBoundingClientRect();
+        const pointIndex = handle
+          ? Number(handle.dataset.velocityPoint)
+          : Math.round(Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width))) * 4);
+        if (!Number.isInteger(pointIndex)) return;
         event.preventDefault();
-        plot.setPointerCapture(event.pointerId);
+        capturePointer(plot, event.pointerId);
         velocityCurveDrag = { pointerId: event.pointerId, pointIndex, plot };
         this.setModuleVelocityPoint(modal, moduleNumber, pointIndex, event.clientY, false, velocitySettingKey);
       });
@@ -5652,9 +5674,7 @@ export class PlayerScreen {
         // where the last move left it and just persist that.
         if (event.type === 'pointercancel') this.markPlayerStateChanged();
         else this.setModuleVelocityPoint(modal, moduleNumber, velocityCurveDrag.pointIndex, event.clientY, true, velocitySettingKey);
-        if (velocityCurveDrag.plot.hasPointerCapture(event.pointerId)) {
-          velocityCurveDrag.plot.releasePointerCapture(event.pointerId);
-        }
+        releasePointer(velocityCurveDrag.plot, event.pointerId);
         velocityCurveDrag = null;
       };
       modal.addEventListener('pointerup', endVelocityDrag);
@@ -7604,6 +7624,47 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
+  private showModuleResetConfirmation(modal: HTMLElement, moduleNumber: number): void {
+    if (modal.querySelector('[data-module-reset-confirmation]')) return;
+    const confirmation = document.createElement('div');
+    confirmation.className = 'module-processor-reset-confirmation';
+    confirmation.dataset.moduleResetConfirmation = '';
+    confirmation.setAttribute('role', 'alertdialog');
+    confirmation.setAttribute('aria-modal', 'true');
+    confirmation.setAttribute('aria-label', `Confirmar reset do módulo ${moduleNumber}`);
+    confirmation.innerHTML = `
+      <div>
+        <span>Módulo ${moduleNumber}</span>
+        <strong>Resetar o módulo?</strong>
+        <p>Todos os parâmetros deste módulo voltarão aos valores iniciais. O timbre e o volume continuam.</p>
+        <footer>
+          <button type="button" data-module-reset-choice="cancel">Cancelar</button>
+          <button class="is-danger" type="button" data-module-reset-choice="confirm">Resetar</button>
+        </footer>
+      </div>
+    `;
+    modal.querySelector('.player-modal__surface')?.append(confirmation);
+    confirmation.querySelector<HTMLButtonElement>('[data-module-reset-choice="cancel"]')?.focus();
+  }
+
+  // Volta todos os parâmetros do Config ao padrão de fábrica. O timbre, o
+  // volume, o ON e a oitava ficam no módulo; os presets salvos do Synth
+  // (slots 1-5) são do usuário e continuam.
+  private confirmModuleReset(moduleNumber: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState) return;
+    const defaults = createDefaultModuleSettings(moduleNumber - 1);
+    moduleState.settings = {
+      ...defaults,
+      synthPresets: moduleState.settings.synthPresets ?? defaults.synthPresets,
+    };
+    moduleState.midiInputId = null;
+    const trigger = this.modalTrigger ?? this.root;
+    this.markPlayerStateChanged();
+    this.openModal('module-settings', moduleNumber, trigger, true);
+    this.setStatus(`Módulo ${moduleNumber} resetado.`);
+  }
+
   private showProcessorResetConfirmation(
     modal: HTMLElement,
     moduleNumber: number,
@@ -8017,6 +8078,17 @@ export class PlayerScreen {
       if (select.dataset.appSelectEnhanced === 'true') continue;
       select.dataset.appSelectEnhanced = 'true';
       select.classList.add('app-select__native');
+      select.tabIndex = -1;
+      // O select nativo fica dentro de um <label>: tocar no rótulo repassava o
+      // toque para ele e o iOS abria o seletor do sistema por cima do próprio.
+      const label = select.closest<HTMLLabelElement>('label');
+      if (label && label.dataset.appSelectLabelGuard !== 'true') {
+        label.dataset.appSelectLabelGuard = 'true';
+        label.addEventListener('click', (event) => {
+          if (event.target instanceof Element && event.target.closest('.app-select')) return;
+          event.preventDefault();
+        });
+      }
       const custom = document.createElement('div');
       custom.className = 'app-select';
       custom.innerHTML = `
@@ -9219,9 +9291,7 @@ export class PlayerScreen {
     for (const [targetKey, controllerValue] of Object.entries(savedCcMappings)) {
       const controller = Number(controllerValue);
       if (isCcMappingKey(targetKey) && Number.isInteger(controller) && controller >= 0 && controller <= 127) {
-        const oldPresetMapping = /^preset:[AB]:([1-9]|1[0-6])$/.exec(targetKey);
-        const normalizedKey = oldPresetMapping ? `preset:${oldPresetMapping[1]}` : targetKey;
-        if (!this.ccMappings.has(normalizedKey)) this.ccMappings.set(normalizedKey, controller);
+        this.ccMappings.set(targetKey, controller);
       }
     }
     const savedCcMappingOptions = isRecord(value.ccMappingOptions) ? value.ccMappingOptions : {};

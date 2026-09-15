@@ -168,6 +168,18 @@ test('EQ starts with Low Shelf and High Shelf while preserving five bands', () =
   assert.equal(bands[4].type, 'high-shelf');
 });
 
+test('EQ: a curva do shelf segue a mesma inclinação do motor (Q vira o slope, até 1)', () => {
+  const bands = settingsView.readModuleEqBands(undefined);
+  assert.equal(bands[0].q, 1);
+  assert.equal(bands[4].q, 1);
+  bands[4].gain = 12;
+  const standard = settingsView.createEqCurve(bands, 420, 170);
+  bands[4].q = 0.5;
+  assert.notEqual(settingsView.createEqCurve(bands, 420, 170), standard, 'Q abaixo de 1 suaviza o shelf desenhado');
+  bands[4].q = 4;
+  assert.equal(settingsView.createEqCurve(bands, 420, 170), standard, 'acima de 1 o motor limita o slope em 1');
+});
+
 test('desktop opens smaller and Param clips every preview inside its available grid row', () => {
   const config = JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
   const window = config.app.windows[0];
@@ -204,7 +216,7 @@ test('new module and Synth defaults use zero Attack, 300 ms Release and maximum 
   const context = {
     exports: {}, ...settingsView, ...synthView, ...glideView,
     readModuleRotarySettings: () => ({}), DEFAULT_ARPEGGIATOR_SETTINGS: {},
-    FACTORY_MODULE_REVERB: { enabled: true, decay: 4, dampen: 58, size: 0, mix: 44 },
+    FACTORY_MODULE_REVERB: { enabled: true, decay: 4, dampen: 50, size: 0, mix: 44 },
     readTranceGateSettings: () => ({}),
     DEFAULT_SEQUENCER_SETTINGS: { steps: [] }, DEFAULT_VELOCITY_CURVE: { points: [], userPoints: [] },
   };

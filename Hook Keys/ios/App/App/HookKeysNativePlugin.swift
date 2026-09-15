@@ -234,8 +234,11 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         let rate = Int(session.sampleRate)
         let channels = "\(session.outputNumberOfChannels)/\(session.maximumOutputNumberOfChannels)ch"
         let engineState = engine.audioOutputReady() ? "motor ok" : "motor parado"
+        // O Áudio Mono da Acessibilidade soma L+R no par principal (saídas 1-2)
+        // de qualquer saída, inclusive de placas USB; as saídas 3+ ficam separadas.
+        let monoAudio = UIAccessibility.isMonoAudioEnabled ? "Áudio Mono do iOS LIGADO" : "Áudio Mono do iOS desligado"
         call.resolve([
-            "current": "\(outputs) · \(rate) Hz · \(channels) · \(engineState) · \(engine.outputGraphDescription())",
+            "current": "\(outputs) · \(rate) Hz · \(channels) · \(engineState) · \(monoAudio) · \(engine.outputGraphDescription())",
             "events": events
         ])
     }

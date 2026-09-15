@@ -11,7 +11,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
-#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <numeric>
@@ -1418,6 +1417,78 @@ void testRotaryLeslieAmplitudeModulation() {
   expect(monoEnvelopeVariation(2, 0.0f) < 0.02, "Depth zero removes the Leslie tremolo");
 }
 
+// EQ nos agudos: a banda 4 (bell 4 kHz) e a banda 5 (high shelf 12 kHz) mudam
+// de fato o nível das senoides agudas, para cima e para baixo.
+// Leslie, não vibrato: a rotação deve soar como giro (volume, brilho e
+// espaço), sem entortar a afinação. Mede o desvio de altura, em cents, de uma
+// senoide grave (vai para o tambor) e de uma aguda (vai para a corneta).
+double rotaryPeakPitchDeviationCents(double frequency, float depth, std::uint8_t speed) {
+  constexpr double sampleRate = 48000.0;
+  hook_keys::ModuleEffects effects;
+  effects.prepare(sampleRate);
+  hook_keys::ModuleEffectsConfig config;
+  config.rotary = {true, speed, 0.8f, 6.4f, 0.1f, depth, 1.0f};
+  effects.setConfig(config, 120.0f);
+  std::vector<float> left(144000), right(144000);
+  for (std::size_t index = 0; index < left.size(); ++index) {
+    left[index] = right[index] = static_cast<float>(0.2 * std::sin(6.283185307179586 * frequency * static_cast<double>(index) / sampleRate));
+  }
+  effects.process(left.data(), right.data(), left.size());
+  // Cruzamentos por zero subindo (interpolados) no último segundo.
+  std::vector<double> crossings;
+  for (std::size_t index = 96000; index + 1 < left.size(); ++index) {
+    if (left[index] <= 0.0f && left[index + 1] > 0.0f) {
+      const double fraction = left[index] / static_cast<double>(left[index] - left[index + 1]);
+      crossings.push_back(static_cast<double>(index) + fraction);
+    }
+  }
+  // Frequência média a cada ~5 ms, como o ouvido percebe a altura.
+  const std::size_t cycles = std::max<std::size_t>(1, static_cast<std::size_t>(frequency * 0.005));
+  double peak = 0.0;
+  for (std::size_t index = cycles; index < crossings.size(); ++index) {
+    const double measured = sampleRate * static_cast<double>(cycles) / (crossings[index] - crossings[index - cycles]);
+    peak = std::max(peak, std::abs(1200.0 * std::log2(measured / frequency)));
+  }
+  return peak;
+}
+
+void testRotaryPitchStaysInTune() {
+  // Antes: 28 cents no grave e 52 no agudo (Fast, Depth 70%), e mais de 150
+  // cents na região de 1 kHz, onde corneta e tambor se cruzam.
+  expect(rotaryPeakPitchDeviationCents(220.0, 1.0f, 2) < 3.0, "Leslie Fast keeps low notes in tune");
+  expect(rotaryPeakPitchDeviationCents(700.0, 1.0f, 2) < 8.0, "Leslie Fast keeps the crossover region in tune");
+  expect(rotaryPeakPitchDeviationCents(1000.0, 1.0f, 2) < 25.0, "Leslie drum and horn do not cancel at the crossover");
+  expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 2) < 16.0, "Leslie horn warble stays a shimmer, not a vibrato");
+  expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 1) < 3.0, "Leslie Slow barely moves the pitch");
+}
+
+void testEqualizerControlsTreble() {
+  const auto gainDb = [](std::size_t bandIndex, float bandGainDb, double frequency) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0);
+    hook_keys::ModuleEffectsConfig config;
+    config.equalizer.enabled = true;
+    config.equalizer.bands[bandIndex].gainDb = bandGainDb;
+    effects.setConfig(config, 120.0f);
+    std::vector<float> left(48000), right(48000);
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      left[index] = right[index] = static_cast<float>(0.1 * std::sin(6.283185307179586 * frequency * static_cast<double>(index) / 48000.0));
+    }
+    effects.process(left.data(), right.data(), left.size());
+    double energy = 0.0;
+    for (std::size_t index = 24000; index < left.size(); ++index) energy += static_cast<double>(left[index]) * left[index];
+    const double rms = std::sqrt(energy / 24000.0);
+    return 20.0 * std::log10(rms / (0.1 / std::sqrt(2.0)));
+  };
+  const auto flat16 = gainDb(4, 0.0f, 16000.0);
+  const auto boost16 = gainDb(4, 12.0f, 16000.0);
+  const auto cut16 = gainDb(4, -12.0f, 16000.0);
+  const auto boost4 = gainDb(3, 12.0f, 4000.0);
+  expect(boost16 - flat16 > 9.0, "high shelf +12 dB raises 16 kHz");
+  expect(flat16 - cut16 > 9.0, "high shelf -12 dB lowers 16 kHz");
+  expect(boost4 > 10.0, "bell +12 dB at 4 kHz raises 4 kHz");
+}
+
 void testIndependentOscillatorOctaves() {
   hook_keys::AnalogSynthConfig defaults;
   expect(defaults.oscillator1Octave == 0 && defaults.oscillator2Octave == 0, "both oscillators default to octave zero");
@@ -2253,6 +2324,8 @@ int main() {
   testReverbProcessing();
   testRotarySpeakerProcessing();
   testRotaryLeslieAmplitudeModulation();
+  testEqualizerControlsTreble();
+  testRotaryPitchStaysInTune();
   testRotaryMidiEngineRouting();
   std::cout << "Hook Keys engine tests passed\n";
   return EXIT_SUCCESS;

@@ -1521,6 +1521,34 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   }
 }
 
+/* Reset do módulo empilhado acima do Modo (ou da Polifonia): ocupa a faixa
+   dos rótulos dos seletores, então a linha dos controles não muda de altura. */
+.module-settings-control-stack {
+  display: grid;
+  grid-template-rows: auto var(--module-io-control-height, auto);
+  align-content: end;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* O botão principal (Modo ou Polifonia) fica sempre na linha de baixo, com ou
+   sem Reset em cima, para alinhar com os seletores. */
+.module-settings-control-stack > :last-child {
+  grid-row: 2;
+}
+
+.module-settings-reset-button {
+  min-height: 0;
+  padding: 2px 6px;
+  color: #ffc07c;
+  border: 1px solid rgba(255, 121, 0, .66);
+  border-radius: 7px;
+  background: linear-gradient(180deg, #33251f, #151112);
+  font-size: clamp(9px, 1vw, 12px);
+  font-weight: 900;
+  line-height: 1.2;
+}
+
 /* Arpeggiator, Sequencer e seleção Mono/Poly dos módulos de timbre. */
 .module-settings-panel--voice-switch .module-settings-io-row {
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(92px, .38fr) minmax(92px, .38fr);
@@ -7873,14 +7901,18 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   background: rgba(255, 126, 31, 0.13);
 }
 
+/* O select nativo não pode receber toque nem ocupar área: regras de linha
+   (ex.: altura mínima do Config) não podem devolver tamanho a ele. */
 .app-select__native {
   position: absolute !important;
   width: 1px !important;
   height: 1px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
   padding: 0 !important;
   overflow: hidden;
   opacity: 0;
-  pointer-events: none;
+  pointer-events: none !important;
 }
 
 .app-select {
@@ -11614,45 +11646,59 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   border-radius: 12px;
   background: linear-gradient(155deg, rgba(25,31,43,.98), rgba(6,13,20,.99));
   display: grid;
-  grid-template-columns: minmax(52px, auto) minmax(36px, 1fr) minmax(58px, auto);
+  /* Esquerda: os 4 botões com todo o espaço. Direita: Glide, knob e valor. */
+  grid-template-columns: minmax(0, 1fr) max-content;
   grid-template-rows: minmax(0, 1fr);
-  align-items: center;
-  justify-items: center;
-  gap: clamp(4px, .7vw, 9px);
+  align-items: stretch;
+  gap: clamp(6px, .8vw, 10px);
   overflow: hidden;
 }
-.module-glide-card > header {
-  align-self: stretch;
+.module-glide-card__buttons {
   display: grid;
-  align-content: center;
-  justify-items: start;
-  gap: 5px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: clamp(3px, .5vw, 6px);
+  min-width: 0;
+  min-height: 0;
 }
-.module-glide-card > header > strong {
+.module-glide-card__buttons > button {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 2px 4px;
+  border-radius: 7px;
+  font-size: clamp(10px, 1.1vw, 14px);
+  font-weight: 950;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.module-glide-card__dial {
+  display: grid;
+  grid-template-rows: auto auto auto;
+  align-content: center;
+  justify-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.module-glide-card__dial > strong {
   color: #fff;
   font-size: clamp(10px, 1vw, 13px);
-}
-.module-glide-card > header > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  line-height: 1;
 }
 .module-glide-card .module-envelope-knob {
   width: clamp(34px, 5.4vh, 48px);
   max-width: 48px;
 }
 .module-glide-card output {
-  max-width: 100%;
+  /* Largura fixa que cabe "600 BPM" e "4999 ms": ligar o Sync troca o texto
+     sem alargar a coluna e sem tirar o knob do lugar. */
+  width: 7.5ch;
   color: #56d9ff;
   font-size: clamp(8px, .85vw, 11px);
   font-weight: 950;
+  text-align: center;
   white-space: nowrap;
 }
-/* Synth: sem o knob de Rate, só título e User/LFO. */
-.module-mod-card.module-mod-card--synth {
-  grid-template-columns: minmax(52px, .75fr) minmax(88px, 1.2fr);
-}
-
 .module-mod-card {
   color: #fff !important;
   min-width: 0;
@@ -11739,11 +11785,6 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   border-color: #38d27a;
 }
 
-/* Glide card: ON · Sync / Auto-Porta · Config in a tidy 2x2 grid. */
-.module-glide-card > header > div {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
 .module-glide-mode,
 .module-glide-config {
   min-width: 44px;
@@ -13501,41 +13542,27 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
     font-size: 7px;
   }
 
-  /* Glide (Synth e Config): botões 2x2 pequenos, knob e valor sem encavalar. */
-  /* Botões encostados à esquerda; o knob fica no centro do espaço que sobra
-     entre eles e o valor. */
+  /* Glide no celular: os 4 botões preenchem a esquerda do card; o nome fica
+     em cima do knob, na coluna da direita. */
   .module-glide-card {
-    grid-template-columns: max-content minmax(0, 1fr) max-content;
-    justify-items: center;
-    gap: 6px;
+    gap: 5px;
     padding: 3px 5px;
     border-radius: 8px;
   }
 
-  .module-glide-card > header {
-    justify-self: start;
-    justify-items: start;
-    gap: 2px;
-    min-width: 0;
+  .module-glide-card__buttons {
+    gap: 3px;
   }
 
-  .module-glide-card > header > strong {
-    font-size: 8px;
-  }
-
-  .module-glide-card > header > div {
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .module-glide-card > header > div > button {
-    min-width: 0;
-    min-height: 16px;
+  .module-glide-card__buttons > button {
     padding: 1px 3px;
-    border-radius: 4px;
-    font-size: 7px;
+    border-radius: 5px;
+    font-size: 9px;
     line-height: 1;
-    white-space: nowrap;
+  }
+
+  .module-glide-card__dial > strong {
+    font-size: 8px;
   }
 
   /* Mesmo tamanho dos outros knobs da tela: no Config, o do Mod ao lado. */
@@ -13550,7 +13577,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   }
 
   .module-glide-card output {
-    font-size: 7px;
+    font-size: 8px;
   }
 
   /* Config: Polifonia e Modo cabem na altura curta da linha. */

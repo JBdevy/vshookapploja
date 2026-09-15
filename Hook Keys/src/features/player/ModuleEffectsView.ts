@@ -66,7 +66,7 @@ const DEFAULT_REVERB: ModuleReverbSettings = {
 export const FACTORY_MODULE_REVERB: ModuleReverbSettings = {
   enabled: true,
   decay: 4,
-  dampen: 58,
+  dampen: 50,
   size: 0,
   mix: 44,
 };

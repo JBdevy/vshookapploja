@@ -107,11 +107,12 @@ const MODULE_CUTOFF_MIN_FREQUENCY = 20;
 const MODULE_CUTOFF_MAX_FREQUENCY = 20_000;
 const EQ_BAND_COLORS = ['#62dc6f', '#4da7f4', '#d95cef', '#ff5757', '#8d63f6'] as const;
 const DEFAULT_EQ_BANDS: readonly ModuleEqBand[] = [
-  { frequency: 80, gain: 0, q: 0.71, cutSlope: 1, type: 'low-shelf' },
+  // Shelf com Q 1 = inclinação padrão (S = 1), a mais firme sem ressonância.
+  { frequency: 80, gain: 0, q: 1, cutSlope: 1, type: 'low-shelf' },
   { frequency: 300, gain: 0, q: 1, cutSlope: 1, type: 'band' },
   { frequency: 1_000, gain: 0, q: 1, cutSlope: 1, type: 'band' },
   { frequency: 4_000, gain: 0, q: 1, cutSlope: 1, type: 'band' },
-  { frequency: 12_000, gain: 0, q: 0.71, cutSlope: 1, type: 'high-shelf' },
+  { frequency: 12_000, gain: 0, q: 1, cutSlope: 1, type: 'high-shelf' },
 ];
 
 const ENVELOPE_CONTROLS: readonly {
@@ -166,16 +167,24 @@ export function createModuleSettingsMarkup(
           </select>
         </label>
 
-        <button class="module-polyphony-button" type="button" data-module-setting-action="open-polyphony">
-          <span>Polifonia</span>
-          <strong>${Math.round(Math.min(128, Math.max(1, Number(settings.polyphony) || 128)))}</strong>
-        </button>
+        <!-- Reset de todos os parâmetros do módulo: acima do Modo Poly/Mono, ou
+             acima da Polifonia nos módulos sem Modo (6, 7 e 8). -->
+        <div class="module-settings-control-stack">
+          ${hasVoiceSwitch ? '' : '<button class="module-settings-reset-button" type="button" data-module-setting-action="reset-module">Reset</button>'}
+          <button class="module-polyphony-button" type="button" data-module-setting-action="open-polyphony">
+            <span>Polifonia</span>
+            <strong>${Math.round(Math.min(128, Math.max(1, Number(settings.polyphony) || 128)))}</strong>
+          </button>
+        </div>
 
         ${hasVoiceSwitch ? `
-          <button class="module-voice-mode-button is-${voiceMode}" type="button" data-module-setting-action="toggle-voice-mode" aria-pressed="${voiceMode === 'mono'}">
-            <span>Modo</span>
-            <strong>${voiceMode === 'mono' ? 'Mono' : 'Poly'}</strong>
-          </button>
+          <div class="module-settings-control-stack">
+            <button class="module-settings-reset-button" type="button" data-module-setting-action="reset-module">Reset</button>
+            <button class="module-voice-mode-button is-${voiceMode}" type="button" data-module-setting-action="toggle-voice-mode" aria-pressed="${voiceMode === 'mono'}">
+              <span>Modo</span>
+              <strong>${voiceMode === 'mono' ? 'Mono' : 'Poly'}</strong>
+            </button>
+          </div>
         ` : ''}
       </div>
 
@@ -438,7 +447,10 @@ function filterMagnitudeDb(band: ModuleEqBand, frequency: number, sampleRate: nu
   let b0 = 1; let b1 = 0; let b2 = 0; let a0 = 1; let a1 = 0; let a2 = 0;
   if (band.type === 'low-shelf' || band.type === 'high-shelf') {
     const rootA = Math.sqrt(amplitude);
-    const shelfAlpha = Math.sin(center) * Math.SQRT1_2;
+    // Mesma inclinação do motor (Q vira o slope S, limitado a 1): a curva
+    // desenhada é a que se ouve.
+    const slope = Math.min(1, Math.max(0.1, band.q));
+    const shelfAlpha = Math.sin(center) * 0.5 * Math.sqrt((amplitude + 1 / amplitude) * (1 / slope - 1) + 2);
     const twiceRootAlpha = 2 * rootA * shelfAlpha;
     if (band.type === 'low-shelf') {
       b0 = amplitude * ((amplitude + 1) - (amplitude - 1) * cosine + twiceRootAlpha);
