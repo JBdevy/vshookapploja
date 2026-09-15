@@ -25,7 +25,9 @@ export interface LocalTrackBlock {
 
 interface StoredLocalTrack extends LocalTrack {
   accountKey: string;
-  file: Blob;
+  // Ausente quando o áudio vive no armazenamento nativo (storage: 'native').
+  file?: Blob;
+  storage?: 'native';
 }
 
 interface StoredLocalPlaylist extends LocalPlaylist {
@@ -246,9 +248,9 @@ export class TrackLibraryStore {
 
   /**
    * Registra uma música que já foi guardada pelo motor nativo.
-   * No iOS não duplicamos o arquivo inteiro no IndexedDB: o Blob vazio mantém
-   * compatibilidade com o formato da biblioteca e o áudio real fica em
-   * Application Support/Tracks.
+   * No iOS o áudio real fica em Application Support/Tracks e o registro não
+   * leva Blob nenhum: gravar Blob no IndexedDB do WKWebView é o ponto que
+   * falha em alguns aparelhos e fazia a música sumir da lista.
    */
   async addNativeFile(file: {
     id: string;
@@ -264,13 +266,13 @@ export class TrackLibraryStore {
       mimeType: file.mimeType || 'application/octet-stream',
       size: Math.max(0, file.size),
       addedAt: new Date().toISOString(),
-      file: new Blob([], { type: file.mimeType || 'application/octet-stream' }),
+      storage: 'native',
     };
     const database = await this.openDatabase();
     await requestResult(
       database.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(record),
     );
-    const { accountKey: _accountKey, file: _file, ...track } = record;
+    const { accountKey: _accountKey, storage: _storage, ...track } = record;
     return track;
   }
 
@@ -279,7 +281,10 @@ export class TrackLibraryStore {
     const record = await requestResult<StoredLocalTrack | undefined>(
       database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(trackId),
     );
-    return record?.accountKey === this.accountKey ? record.file : null;
+    if (record?.accountKey !== this.accountKey) return null;
+    // O motor nativo lê o arquivo pelo id; o Blob vazio só cumpre o contrato.
+    if (record.storage === 'native') return new Blob([], { type: record.mimeType });
+    return record.file ?? null;
   }
 
   async listPlaylists(): Promise<LocalPlaylist[]> {

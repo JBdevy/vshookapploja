@@ -396,7 +396,6 @@ const EFFECT_PAD_MIN_DB = -60;
 const NATIVE_SYNC_INTERVAL_MS = 24;
 const DESKTOP_MODULE_METER_INTERVAL_MS = 50;
 const MOBILE_MODULE_METER_INTERVAL_MS = 90;
-const LITE_MODULE_METER_INTERVAL_MS = 150;
 const EFFECT_PAD_MAX_DB = 0;
 // Desktop knobs stay linear while one pixel moves at most this many steps;
 // wider ranges (envelope and Glide times) switch to the accelerated curve.
@@ -1287,9 +1286,9 @@ export class PlayerScreen {
       } finally {
         this.scheduleModuleMeters();
       }
-    }, this.liteMode
-      ? LITE_MODULE_METER_INTERVAL_MS
-      : this.desktopRuntime ? DESKTOP_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS);
+    // O Lite não desacelera o meter: com menos quadros ele andava em degraus e
+    // parecia a tela inteira travando, sem economia perceptível.
+    }, this.desktopRuntime ? DESKTOP_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS);
   }
 
   // O unico numero que denuncia um estouro. A CPU total da maquina nao serve:
@@ -4174,7 +4173,13 @@ export class PlayerScreen {
     } else if (kind === 'app-settings-audio') {
       bodyMarkup = createAudioSettingsMarkup(
         this.audioDevices, this.selectedAudioDeviceId, this.audioRouting, this.bufferSize, this.sampleRate,
-      );
+      ) + (this.iosRuntime ? `
+        <details class="audio-route-diagnostics" data-audio-route-diagnostics>
+          <summary>Diagnóstico da rota</summary>
+          <p data-audio-route-current>Lendo rota…</p>
+          <ol data-audio-route-events></ol>
+        </details>
+      ` : '');
     } else if (kind === 'keyboard-settings') {
       bodyMarkup = createPerformanceKeyboardSettingsMarkup(this.keyboardMidiSlot, this.keyboardStyle);
     } else if (kind === 'password-reset') {
@@ -7796,6 +7801,9 @@ export class PlayerScreen {
       return;
     }
     try {
+      if (this.iosRuntime && this.currentModalKind === 'app-settings-audio' && this.modal) {
+        void this.renderAudioRouteDiagnostics(this.modal);
+      }
       const devices = await this.audioOutput.listDevices();
       if (!this.mounted || selectedId !== this.selectedAudioDeviceId) return;
       const deviceListChanged = JSON.stringify(this.audioDevices) !== JSON.stringify(devices);
@@ -7807,6 +7815,11 @@ export class PlayerScreen {
         this.selectedAudioDeviceMissCount = 0;
         return;
       }
+      // No iOS quem escolhe a saída é o sistema: uma interface USB some da
+      // rota por alguns instantes ao renegociar canais/taxa. Voltar para
+      // "Padrão" aqui reiniciava a sessão, derrubava a interface de novo e
+      // apagava a escolha. Mantém a seleção ("reconectando") até ela voltar.
+      if (this.iosRuntime) return;
       // O Windows pode entregar uma enumeração incompleta durante o hot-plug.
       // Só tratamos como queda depois de três leituras consecutivas.
       this.selectedAudioDeviceMissCount += 1;
@@ -7817,6 +7830,22 @@ export class PlayerScreen {
       // Uma falha transitória na enumeração não significa que o dispositivo
       // saiu. Só fazemos o fallback quando uma lista válida confirma a queda.
     }
+  }
+
+  private async renderAudioRouteDiagnostics(modal: HTMLElement): Promise<void> {
+    const log = await hookKeysNative.audioRouteLog();
+    const current = modal.querySelector<HTMLElement>('[data-audio-route-current]');
+    const list = modal.querySelector<HTMLElement>('[data-audio-route-events]');
+    if (!log || !current || !list || !modal.isConnected) return;
+    current.textContent = `Agora: ${log.current}`;
+    const signature = log.events.join('|');
+    if (list.dataset.signature === signature) return;
+    list.dataset.signature = signature;
+    list.replaceChildren(...log.events.slice().reverse().map((event) => {
+      const item = document.createElement('li');
+      item.textContent = event;
+      return item;
+    }));
   }
 
   private async fallbackToDefaultAudioOutput(forceRestart = false): Promise<void> {
@@ -7887,7 +7916,7 @@ export class PlayerScreen {
         this.audioDevices = await this.audioOutput.listDevices();
       }
       const device = this.audioDevices.find(({ id }) => id === this.selectedAudioDeviceId);
-      if (this.selectedAudioDeviceId && !device) this.selectedAudioDeviceId = '';
+      if (this.selectedAudioDeviceId && !device && !this.iosRuntime) this.selectedAudioDeviceId = '';
       // Nenhuma configuração pode atravessar a troca do stream: aguarde o
       // lote anterior e só então crie o runtime seguinte.
       await this.nativeEngineSyncQueue.catch(() => undefined);
@@ -7979,6 +8008,10 @@ export class PlayerScreen {
   }
 
   private normalizeAudioRoutes(): void {
+    // Interface do iOS reconectando: sem a contagem real de canais, não
+    // reduza as saídas escolhidas para 1+2.
+    if (this.iosRuntime && this.selectedAudioDeviceId
+      && !this.audioDevices.some(({ id }) => id === this.selectedAudioDeviceId)) return;
     const channels = this.activeAudioChannelCount();
     for (const bus of AUDIO_ROUTING_BUSES) {
       if (!isAudioBusRoute(this.audioRouting[bus], channels)) this.audioRouting[bus] = 'stereo:0';
@@ -9356,20 +9389,21 @@ export class PlayerScreen {
       return;
     }
     if (picked.length === 0) return;
-    const setLoading = (loading: boolean, label?: string) => {
-      this.tracksPanelController?.setImportLoading(loading, label);
-      this.splitTracksController?.setImportLoading(loading, label);
+    const setLoading = (loading: boolean, label?: string, progress?: number) => {
+      this.tracksPanelController?.setImportLoading(loading, label, progress);
+      this.splitTracksController?.setImportLoading(loading, label, progress);
     };
     setLoading(true, picked.length === 1 ? 'Adicionando música...' : `Adicionando ${picked.length} músicas...`);
     await new Promise<void>((resolve) => {
       window.requestAnimationFrame(() => window.setTimeout(resolve, 0));
     });
     let added = 0;
+    let firstFailure = '';
     try {
       for (const [index, file] of picked.entries()) {
         const progress = `Adicionando ${index + 1} de ${picked.length}...`;
         message(progress);
-        setLoading(true, progress);
+        setLoading(true, progress, index / picked.length);
         let adopted = false;
         try {
           const recordId = globalThis.crypto?.randomUUID?.()
@@ -9385,8 +9419,14 @@ export class PlayerScreen {
             size: file.size,
           });
           added += 1;
-        } catch {
-          // Segue com as outras músicas.
+        } catch (error) {
+          // Segue com as outras músicas, mas guarda o primeiro motivo para a
+          // mensagem final: sem ele a falha no aparelho não tem diagnóstico.
+          if (!firstFailure) {
+            const stage = adopted ? 'biblioteca' : 'arquivo';
+            const detail = error instanceof Error ? error.message : String(error);
+            firstFailure = `${stage}: ${detail}`.slice(0, 140);
+          }
         } finally {
           if (!adopted) void picker.release(file.path).catch(() => undefined);
         }
@@ -9397,7 +9437,9 @@ export class PlayerScreen {
       ]);
       const failed = picked.length - added;
       const addedText = `${added} ${added === 1 ? 'música adicionada' : 'músicas adicionadas'}`;
-      message(failed > 0 ? `${addedText}. ${failed} não ${failed === 1 ? 'pôde' : 'puderam'} ser lida${failed === 1 ? '' : 's'}.` : `${addedText}.`);
+      message(failed > 0
+        ? `${addedText}. ${failed} não ${failed === 1 ? 'pôde' : 'puderam'} ser lida${failed === 1 ? '' : 's'}${firstFailure ? ` (${firstFailure})` : ''}.`
+        : `${addedText}.`);
     } finally {
       setLoading(false);
     }

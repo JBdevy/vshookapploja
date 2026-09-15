@@ -299,3 +299,37 @@ test('App Store icon has no alpha channel (Apple rejects transparent icons, erro
   assert.equal(png[25], 2, 'o ícone da loja precisa ser RGB, sem canal alfa');
   assert(!png.includes(Buffer.from('tRNS')), 'o ícone da loja não pode ter transparência');
 });
+
+test('Playlist aberta no tablet: nome em cima e dB embaixo em todas as plataformas, celular fora', () => {
+  assert.match(css, /\n\.player-screen--tablet:not\(\.player-screen--cellular\)\.is-tracks-split \.player-output-knob \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);[^}]*grid-template-rows:\s*auto auto auto;/);
+  assert.doesNotMatch(css, /html\[data-runtime="desktop"\] \.player-screen--tablet\.is-tracks-split \.player-output-knob \{/);
+});
+
+test('Auto ligado fica amarelo e Repetir ligado pisca verde acima do tema geral', () => {
+  assert.match(css, /\.player-screen \.tracks-split-controls button\[data-tracks-action="toggle-auto"\]:is\(\.is-selected, \[aria-pressed="true"\]\) \{[^}]*--button-color-a:\s*#ffe45c !important;/);
+  assert.match(css, /\.player-screen \.tracks-split-controls button\[data-tracks-action="toggle-loop"\]:is\(\.is-selected, \[aria-pressed="true"\]\) \{[^}]*animation:\s*tracks-loop-blink/);
+});
+
+test('Modo Lite não tira a transição nem desacelera o meter', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const lite = css.match(/\.hook-keys-lite \.player-module__meter-fill \{([^}]*)\}/)[1];
+  assert.doesNotMatch(lite, /transition:\s*none/);
+  assert.doesNotMatch(player, /LITE_MODULE_METER_INTERVAL_MS/);
+});
+
+test('iOS mantém a interface USB escolhida enquanto a rota reconecta', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const plugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  assert.match(player, /devices\.some\(\(\{ id \}\) => id === selectedId\)\)[\s\S]{0,120}return;[\s\S]{0,500}if \(this\.iosRuntime\) return;/);
+  assert.match(player, /this\.selectedAudioDeviceId && !device && !this\.iosRuntime/);
+  assert.match(plugin, /alreadyActive = \(requestedId\.isEmpty\s*\|\|/);
+  assert.match(plugin, /CAPPluginMethod\(name: "audioRouteLog"/);
+});
+
+test('música importada no iOS não grava Blob no IndexedDB', () => {
+  const store = readFileSync(new URL('../src/features/tracks/TrackLibraryStore.ts', import.meta.url), 'utf8');
+  const nativeAdd = store.match(/async addNativeFile[\s\S]*?\r?\n  \}\r?\n/)[0];
+  assert.match(nativeAdd, /storage:\s*'native'/);
+  assert.doesNotMatch(nativeAdd, /new Blob/);
+  assert.match(store, /record\.storage === 'native'/);
+});

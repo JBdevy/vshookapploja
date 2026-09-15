@@ -15,6 +15,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "listAudioOutputDevices", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setAudioOutputDevice", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "audioOutputStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "audioRouteLog", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMidiInputEnabled", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "moduleMeterLevels", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "moduleAnalysis", returnType: CAPPluginReturnPromise),
@@ -65,6 +66,9 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     private let audioOutputCacheLock = NSLock()
     private var cachedAudioOutputs: [String: CachedAudioOutput] = [:]
     private var audioRouteRecoveryWorkItem: DispatchWorkItem?
+    // Últimos eventos de rota, exibidos em Dispositivo de áudio para
+    // diagnosticar interfaces USB que somem no aparelho.
+    private var audioRouteEvents: [String] = []
     private var activeBufferFrames = 128
     private var activeSampleRate = 48_000.0
     private var uploads: [Int: (handle: FileHandle, temporary: URL, destination: URL)] = [:]
@@ -161,6 +165,12 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         let session = AVAudioSession.sharedInstance()
         let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
         let reason = rawReason.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+        let previousOutputs = (notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey]
+            as? AVAudioSessionRouteDescription)?.outputs ?? []
+        recordAudioRouteEvent(
+            "\(Self.routeChangeReasonName(reason)): \(Self.describeOutputs(previousOutputs)) → "
+                + Self.describeOutputs(session.currentRoute.outputs)
+        )
 
         // Uma mudança de categoria/configuração pode expor Speaker por alguns
         // frames. Só remova a interface quando o iOS afirmar que o dispositivo
@@ -184,6 +194,49 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         }
     }
 
+    private func recordAudioRouteEvent(_ text: String) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        audioOutputCacheLock.lock()
+        audioRouteEvents.append("\(formatter.string(from: Date())) \(text)")
+        if audioRouteEvents.count > 12 { audioRouteEvents.removeFirst(audioRouteEvents.count - 12) }
+        audioOutputCacheLock.unlock()
+    }
+
+    private static func describeOutputs(_ outputs: [AVAudioSessionPortDescription]) -> String {
+        outputs.isEmpty ? "(nenhuma)" : outputs
+            .map { "\($0.portName) [\($0.portType.rawValue), \($0.channels?.count ?? 0)ch]" }
+            .joined(separator: " + ")
+    }
+
+    private static func routeChangeReasonName(_ reason: AVAudioSession.RouteChangeReason?) -> String {
+        switch reason ?? .unknown {
+        case .newDeviceAvailable: return "novo dispositivo"
+        case .oldDeviceUnavailable: return "dispositivo saiu"
+        case .categoryChange: return "categoria"
+        case .override: return "override"
+        case .wakeFromSleep: return "despertar"
+        case .noSuitableRouteForCategory: return "sem rota"
+        case .routeConfigurationChange: return "configuração"
+        default: return "desconhecido"
+        }
+    }
+
+    @objc func audioRouteLog(_ call: CAPPluginCall) {
+        let session = AVAudioSession.sharedInstance()
+        audioOutputCacheLock.lock()
+        let events = audioRouteEvents
+        audioOutputCacheLock.unlock()
+        let outputs = Self.describeOutputs(session.currentRoute.outputs)
+        let rate = Int(session.sampleRate)
+        let channels = "\(session.outputNumberOfChannels)/\(session.maximumOutputNumberOfChannels)ch"
+        let engineState = engine.audioOutputReady() ? "motor ok" : "motor parado"
+        call.resolve([
+            "current": "\(outputs) · \(rate) Hz · \(channels) · \(engineState)",
+            "events": events
+        ])
+    }
+
     private func scheduleAudioRouteRecovery() {
         audioRouteRecoveryWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
@@ -201,8 +254,10 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         let requestedId = call.getString("deviceId", "")
         let bufferFrames = min(512, max(64, call.getInt("bufferSize", 128)))
         let sampleRate = call.getDouble("sampleRate", 48_000)
-        let alreadyActive = !requestedId.isEmpty
-            && AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.uid == requestedId }
+        // "Padrão" (id vazio) é a rota que o iOS já escolheu: se o motor está
+        // tocando nela, reabrir a sessão só serve para derrubar a interface USB.
+        let alreadyActive = (requestedId.isEmpty
+            || AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.uid == requestedId })
             && bufferFrames == activeBufferFrames
             && abs(sampleRate - activeSampleRate) < 1
             && engine.audioOutputReady()

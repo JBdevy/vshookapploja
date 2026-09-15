@@ -7495,6 +7495,8 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   position: relative;
 }
 
+/* Importação de músicas: sem caixa nem fundo. O painel só esmaece e fica
+   um texto curto com uma barra fina que avança a cada arquivo. */
 .tracks-import-loading {
   position: absolute;
   z-index: 40;
@@ -7502,49 +7504,64 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   display: grid;
   align-content: center;
   justify-items: center;
-  gap: 12px;
-  padding: 20px max(24px, 12%);
+  gap: clamp(7px, 1.4vh, 12px);
+  padding: 16px clamp(16px, 14%, 56px);
   color: #fff5ed;
-  background: rgba(8, 7, 8, .9);
   text-align: center;
+  pointer-events: none;
 }
 
 .tracks-import-loading[hidden] {
   display: none;
 }
 
-.tracks-import-loading strong {
+.tracks-import-loading__label {
+  max-width: 100%;
   color: #fff5ed;
-  font-size: clamp(16px, 2.4vw, 28px);
+  font-size: clamp(11px, min(1.25vw, 2.6vh), 16px);
+  font-weight: 800;
+  letter-spacing: .01em;
+  line-height: 1.2;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .9);
 }
 
 .tracks-import-loading__bar {
+  --import-progress: 0;
   position: relative;
   display: block;
-  width: min(100%, 420px);
-  height: 5px;
+  width: min(100%, 260px);
+  height: 3px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(255, 255, 255, .14);
+  background: rgba(255, 255, 255, .12);
 }
 
 .tracks-import-loading__bar i {
   position: absolute;
-  inset-block: 0;
-  left: -42%;
-  width: 42%;
+  inset: 0;
   border-radius: inherit;
-  background: linear-gradient(90deg, #ff6a00, #ffb04b, #ff6a00);
-  box-shadow: 0 0 12px rgba(255, 121, 0, .7);
-  animation: tracks-import-progress 1.05s ease-in-out infinite;
+  background: linear-gradient(90deg, #ff6a00, #ffb04b);
+  box-shadow: 0 0 10px rgba(255, 121, 0, .55);
+  transform: scaleX(var(--import-progress));
+  transform-origin: left center;
+  transition: transform .35s ease-out;
+}
+
+.tracks-import-loading__bar.is-indeterminate i {
+  width: 38%;
+  transform: translateX(-100%);
+  transition: none;
+  animation: tracks-import-progress 1.1s ease-in-out infinite;
 }
 
 @keyframes tracks-import-progress {
-  to { left: 100%; }
+  to { transform: translateX(265%); }
 }
 
 .is-importing-tracks > :not(.tracks-import-loading) {
+  opacity: .22;
   pointer-events: none;
+  transition: opacity .18s ease-out;
 }
 
 .player-modal--cc-learn .player-modal__actions {
@@ -10875,11 +10892,11 @@ html[data-platform="ios"] .player-module__meter-fill {
   contain: paint;
 }
 
+/* O meter mantém a transição no Lite: sem ela o nível salta a cada leitura
+   e parece baixo FPS. */
 .hook-keys-lite .player-module__meter-fill {
   filter: none !important;
   box-shadow: none !important;
-  transition: none !important;
-  will-change: auto;
 }
 
 .hook-keys-lite :is(
@@ -13001,16 +13018,27 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   background: linear-gradient(180deg, #b92f39, #5b1118);
   box-shadow: none;
 }
-.tracks-split-controls button[data-tracks-action="toggle-loop"].is-selected {
-  color: #effff3;
-  border-color: rgba(76, 235, 127, 0.84);
-  background: linear-gradient(180deg, rgba(25, 150, 69, 0.98), rgba(7, 76, 32, 0.99));
+/* O tema geral pinta todo botão selecionado de verde com !important; estas
+   regras são mais específicas para o Auto ficar amarelo e o Repetir piscar. */
+.player-screen .tracks-split-controls button[data-tracks-action="toggle-loop"]:is(.is-selected, [aria-pressed="true"]) {
+  --button-color-a: #39db78 !important;
+  --button-color-b: #08783a !important;
+  --button-border: #8bffb3 !important;
+  color: #effff3 !important;
+  animation: tracks-loop-blink 1.1s ease-in-out infinite;
 }
-.tracks-split-controls button[data-tracks-action="toggle-auto"].is-selected {
-  color: #201600;
-  border-color: #ffe36a;
-  background: linear-gradient(180deg, #ffe96d, #dca900);
-  box-shadow: 0 0 12px rgba(255, 214, 74, .28);
+.player-screen .tracks-split-controls button[data-tracks-action="toggle-auto"]:is(.is-selected, [aria-pressed="true"]) {
+  --button-color-a: #ffe45c !important;
+  --button-color-b: #d69e00 !important;
+  --button-border: #fff08a !important;
+  color: #241800 !important;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .35) !important;
+  box-shadow: inset 0 0 0 2px rgba(255, 250, 210, .45), 0 0 10px rgba(255, 214, 74, .3);
+}
+/* Só opacidade: fica no compositor e não pesa no iPad antigo. */
+@keyframes tracks-loop-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .42; }
 }
 
 /* O + do modulo sem timbre continua grande tambem com a playlist aberta. */
@@ -13127,30 +13155,66 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   }
 }
 
-/* Nos 70% restantes do desktop, cada volume usa leitura vertical: nome,
-   knob e dB. Assim nenhum texto disputa largura com o controle. */
-html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob {
+/* Nos 70% restantes (Playlist aberta), cada volume usa leitura vertical:
+   nome, knob e dB. Vale para desktop, iPad e tablets Android: sem isso o
+   nome e o dB disputam a largura do knob e se sobrepõem. O celular já cabe
+   na leitura horizontal e fica de fora. */
+.player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto;
+  align-content: center;
   justify-items: center;
   row-gap: 1px;
-  font-size: clamp(5px, .48vw, 7px);
+  font-size: clamp(5px, min(.55vw, 1.05vh), 8px);
   line-height: 1;
 }
 
-html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob > span:first-child,
-html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob output {
+.player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob > span:first-child,
+.player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob output {
   justify-self: center;
   max-width: 100%;
+  overflow: hidden;
   text-align: center;
+  text-overflow: clip;
 }
 
-html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob output {
-  font-size: clamp(4.5px, .43vw, 6.5px);
+.player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob output {
+  font-size: clamp(4.5px, min(.48vw, .92vh), 7px);
 }
 
-html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob__face {
-  width: clamp(23px, 2.35vw, 31px);
+.player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob__face {
+  width: clamp(17px, min(2.35vw, 4.3vh), 31px);
+  border-width: clamp(2px, .3vw, 4px);
+}
+
+/* Diagnóstico da rota do iOS: recolhido, pequeno e fora da grade dos campos. */
+.audio-route-diagnostics {
+  width: 100%;
+  margin-top: 4px;
+  color: #b9aca4;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.audio-route-diagnostics summary {
+  width: max-content;
+  color: #ff9b45;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.audio-route-diagnostics p,
+.audio-route-diagnostics ol {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 600;
+}
+
+.audio-route-diagnostics ol {
+  max-height: 96px;
+  padding-left: 16px;
+  overflow-y: auto;
 }
 
 /* iPhone, iPad e Android não herdam os seletores gigantes destinados a

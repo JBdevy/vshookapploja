@@ -194,6 +194,7 @@ interface HookKeysNativePlugin {
     preserveEngine?: boolean;
   }): Promise<void>;
   audioOutputStatus(): Promise<NativeAudioOutputStatus>;
+  audioRouteLog(): Promise<{ current: string; events: string[] }>;
   moduleMeterLevels(): Promise<{ levels: number[] }>;
   moduleAnalysis(options: { moduleIndex: number }): Promise<{ values: number[] }>;
   setMidiInputs(options: { deviceIds: Array<string | null> }): Promise<void>;
@@ -369,6 +370,16 @@ class HookKeysNativeBridge {
       // A ponte não responder também significa que não existe uma saída
       // confiável para receber Synth, SF2 e metrônomo.
       return { ready: false, failed: true };
+    }
+  }
+
+  // Diagnóstico da rota do iOS (eventos da AVAudioSession). Null fora do iOS.
+  async audioRouteLog(): Promise<{ current: string; events: string[] } | null> {
+    if (Capacitor.getPlatform() !== 'ios' || !this.isAvailable()) return null;
+    try {
+      return await plugin.audioRouteLog();
+    } catch {
+      return null;
     }
   }
 

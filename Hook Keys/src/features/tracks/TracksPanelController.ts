@@ -76,8 +76,8 @@ const BLOCK_NAME_LIMIT = 12;
 function createTrackImportLoadingMarkup(): string {
   return `
     <div class="tracks-import-loading" data-tracks-import-loading role="status" aria-live="polite" hidden>
-      <strong data-tracks-import-loading-label>Adicionando músicas...</strong>
-      <span class="tracks-import-loading__bar" aria-hidden="true"><i></i></span>
+      <span class="tracks-import-loading__label" data-tracks-import-loading-label>Adicionando músicas...</span>
+      <span class="tracks-import-loading__bar is-indeterminate" data-tracks-import-loading-bar aria-hidden="true"><i></i></span>
     </div>
   `;
 }
@@ -484,7 +484,8 @@ export class TracksPanelController {
     this.setMessage(message);
   }
 
-  setImportLoading(loading: boolean, label = 'Adicionando músicas...'): void {
+  // progress (0 a 1) deixa a barra determinada; sem ele a barra só corre.
+  setImportLoading(loading: boolean, label = 'Adicionando músicas...', progress?: number): void {
     const overlay = this.root.querySelector<HTMLElement>('[data-tracks-import-loading]');
     const owner = overlay?.parentElement;
     if (!overlay || !owner) return;
@@ -494,6 +495,12 @@ export class TracksPanelController {
     else owner.removeAttribute('aria-busy');
     const output = overlay.querySelector<HTMLElement>('[data-tracks-import-loading-label]');
     if (output) output.textContent = label;
+    const bar = overlay.querySelector<HTMLElement>('[data-tracks-import-loading-bar]');
+    if (bar) {
+      const determinate = loading && typeof progress === 'number' && Number.isFinite(progress);
+      bar.classList.toggle('is-indeterminate', !determinate);
+      bar.style.setProperty('--import-progress', determinate ? String(Math.min(1, Math.max(0, progress))) : '0');
+    }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-tracks-action="add-music"]')) {
       button.disabled = loading;
     }

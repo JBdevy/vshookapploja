@@ -26,6 +26,10 @@ controller.setImportLoading(true, 'Adicionando 2 de 3...');
 assert(!importLoading.hidden, `loading aparece durante a importação no modo ${layout}`);
 assert.equal(importLoading.querySelector('[data-tracks-import-loading-label]').textContent, 'Adicionando 2 de 3...');
 assert.equal(panel.getAttribute('aria-busy'), 'true');
+controller.setImportLoading(true, 'Adicionando 2 de 3...', 1 / 3);
+const importBar = importLoading.querySelector('[data-tracks-import-loading-bar]');
+assert(!importBar.classList.contains('is-indeterminate'), `barra avança por arquivo no modo ${layout}`);
+assert.equal(Number(importBar.style.getPropertyValue('--import-progress')).toFixed(3), '0.333');
 controller.setImportLoading(false);
 assert(importLoading.hidden, `loading some somente depois da atualização no modo ${layout}`);
 const snapshot = { selectedTrackId: 'a', playingTrackId: 'a', queuedTrackId: 'b', queuedTrackName: 'b',
