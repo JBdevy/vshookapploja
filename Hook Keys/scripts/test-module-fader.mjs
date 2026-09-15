@@ -472,6 +472,18 @@ test('paisagem dos dois lados no iOS e no Android', () => {
   assert.match(android, /SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);
 });
 
+test('Copy/Paste: vermelho parado, amarelo piscando copiado e mais rápido no Paste', () => {
+  assert.match(css, /\.player-preset-copy-button:is\(\[data-copy-state="copied"\], \[data-copy-state="paste"\]\) \{[^}]*animation: tracks-loop-blink 1\.1s ease-in-out infinite;/);
+  assert.match(css, /\.player-preset-copy-button\[data-copy-state="paste"\] \{\s*animation-duration: \.45s;/);
+  assert.match(css, /\.player-presets \.player-preset-copy-button \{\s*--button-color-a: #f05a4f !important;/);
+});
+
+test('Velocity do filtro: coluna com Cutoff e ON/OFF à direita da curva, também em Fixed', () => {
+  assert.match(css, /\.velocity-curve-editor--filter \.velocity-curve-plot-row \{\s*grid-template-columns: minmax\(0, 1fr\) clamp\(96px, 11vw, 136px\);/);
+  assert.match(css, /\.velocity-curve-editor\[data-velocity-mode="fixed"\]:not\(\.velocity-curve-editor--filter\) \.velocity-curve-plot-row/);
+  assert.match(css, /\.filter-velocity-cutoff > \.filter-velocity-power \{\s*grid-row: 5;/);
+});
+
 test('Reset do módulo no Config: acima do Modo (ou da Polifonia) e com confirmação', () => {
   // Estica e ocupa a faixa inteira acima do Modo; no celular, pelo menos 22px.
   assert.match(css, /\.module-settings-control-stack \{\s*display: grid;\s*grid-template-rows: minmax\(0, 1fr\) var\(--module-io-control-height, auto\);\s*align-self: stretch;/);

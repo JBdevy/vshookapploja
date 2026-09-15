@@ -111,10 +111,12 @@ export function readVelocityLimit(value: unknown): number {
 
 export function createVelocityCurveMarkup(
   settings: Readonly<Record<string, unknown>>,
-  options: { ceiling?: number } = {},
+  // side: coluna à direita da curva no lugar do limitador (o Cutoff do filtro).
+  options: { ceiling?: number; side?: string; variant?: 'filter'; dimmed?: boolean } = {},
 ): string {
   const velocity = readVelocityCurveSettings(settings.velocityCurve);
   const ceiling = options.ceiling === undefined ? null : readVelocityLimit(options.ceiling);
+  const side = options.side ?? (ceiling === null ? '' : velocityCeilingMarkup(ceiling));
   const plotMarkup = `
       <div class="velocity-curve-plot" data-velocity-curve-plot>
         <svg viewBox="0 0 640 260" preserveAspectRatio="none" aria-label="Entrada e saída da curva de velocity">
@@ -132,7 +134,7 @@ export function createVelocityCurveMarkup(
       </div>
   `;
   return `
-    <section class="velocity-curve-editor" data-velocity-mode="${velocity.mode}">
+    <section class="velocity-curve-editor${options.variant === 'filter' ? ' velocity-curve-editor--filter' : ''}${options.dimmed ? ' is-off' : ''}" data-velocity-mode="${velocity.mode}">
       <div class="velocity-curve-modes" role="radiogroup" aria-label="Curva de velocity">
         ${(Object.keys(MODE_LABELS) as VelocityCurveMode[]).map((mode) => `
           <button
@@ -144,7 +146,7 @@ export function createVelocityCurveMarkup(
           >${MODE_LABELS[mode]}</button>
         `).join('')}
       </div>
-      ${ceiling === null ? plotMarkup : `<div class="velocity-curve-plot-row">${plotMarkup}${velocityCeilingMarkup(ceiling)}</div>`}
+      ${side ? `<div class="velocity-curve-plot-row">${plotMarkup}${side}</div>` : plotMarkup}
       <label class="velocity-fixed-control" data-velocity-fixed-control${velocity.mode === 'fixed' ? '' : ' hidden'}>
         <span>Velocity fixa</span>
         <input type="range" min="0" max="127" step="1" value="${velocity.points[0]}" data-velocity-fixed-value>

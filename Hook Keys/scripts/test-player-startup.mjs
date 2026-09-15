@@ -236,9 +236,9 @@ try {
     for (const module of [0, 7]) legacyFilter.banks.A.presets[2].modules[module].settings.filterVelocityCurve = middleFilter;
     player.applySavedPlayerState(legacyFilter);
     for (const module of [0, 7]) {
-      const filterCurve = player.bankStates.get('A').presets[2].modules[module].settings.filterVelocityCurve;
-      assert.equal(filterCurve.mode, 'fixed', 'Velocity do Cutoff em Middle de fábrica volta para Fixed, filtro aberto');
-      assert.equal(JSON.stringify(filterCurve.points), '[127,127,127,127,127]');
+      const filterSettings = player.bankStates.get('A').presets[2].modules[module].settings;
+      assert.equal(filterSettings.filterVelocityCurve.mode, 'soft', 'Velocity do Cutoff em Middle de fábrica volta para a curva de fábrica');
+      assert.equal(filterSettings.filterVelocityEnabled, false, 'e o Velocity do filtro fica desligado: filtro aberto');
     }
     const chosenFilter = JSON.parse(JSON.stringify(current));
     chosenFilter.banks.A.presets[2].modules[7].settings.filterVelocityCurve = middleFilter;
@@ -598,6 +598,35 @@ try {
     sync().click();
     window.document.querySelector('[data-module-delay-division="1/4"]').click();
     player.closeModal();
+
+    // Velocity do filtro: ON/OFF embaixo e Cutoff próprio, de onde a curva começa.
+    player.openModal('module-settings', 1, master);
+    window.document.querySelector('[data-module-setting-action="open-filter-velocity"]').click();
+    assert.equal(player.currentModalKind, 'module-filter-velocity');
+    const filterPower = () => window.document.querySelector('[data-filter-velocity-power]');
+    const cutoffVelocity = () => [0, 1, 2, 3, 4].map((index) => lastEffects()[`cutoffVelocity${index}`]).join(',');
+    assert.equal(filterPower().textContent, 'OFF', 'nasce desligado');
+    assert.equal(window.document.querySelector('[data-filter-velocity-cutoff-value]').textContent, '100 Hz', 'nasce em 100 Hz');
+    await player.syncNativeEngine();
+    assert.equal(cutoffVelocity(), '127,127,127,127,127', 'desligado, o corte fica no Cutoff do Config');
+    filterPower().click();
+    assert.equal(filterPower().textContent, 'ON');
+    await player.syncNativeEngine();
+    assert.equal(cutoffVelocity(), '30,42,63,94,127', 'ligado em Soft: de 100 Hz até 20 kHz');
+    const filterKnob = window.document.querySelector('[data-filter-velocity-cutoff]');
+    filterKnob.value = String(Math.log(400 / 20) / Math.log(1000));
+    filterKnob.dispatchEvent(new window.Event('input', { bubbles: true }));
+    filterKnob.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(window.document.querySelector('[data-filter-velocity-cutoff-value]').textContent, '400 Hz');
+    assert.equal(player.getActivePresetState().modules[0].settings.filterVelocityCutoffHz, 400);
+    await player.syncNativeEngine();
+    assert.equal(cutoffVelocity(), '55,64,80,103,127', 'com 400 Hz o Velocity trabalha de 400 Hz para cima');
+    window.document.querySelector('[data-modal-action="confirm"]').click();
+    assert.equal(player.currentModalKind, 'module-settings');
+    assert(window.document.querySelector('[data-module-setting-action="open-filter-velocity"]').classList.contains('is-active'),
+      'ligado, o botão Velocity do card Cutoff acende');
+    Object.assign(player.getActivePresetState().modules[0].settings, { filterVelocityEnabled: false, filterVelocityCutoffHz: 100 });
+    player.closeModal();
   }
   master.value = '100';
   master.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -875,8 +904,8 @@ try {
   assert.equal(player.activeBank, 'B', 'preset mapeado do Banco B troca a tela para o Banco B na hora');
   assert.equal(player.bankStates.get('B').selectedPreset, 3, 'o Preset 3 do Banco B fica selecionado');
   assert.equal(player.bankStates.get('A').selectedPreset, null, 'só um preset fica ativo entre os dois bancos');
-  assert.equal(window.document.querySelector('[data-action="show-bank"][data-bank="B"]').getAttribute('aria-pressed'), 'true',
-    'o botão Banco B acende');
+  assert.equal(window.document.querySelector('[data-action="toggle-bank"]').textContent.trim(), 'Banco B',
+    'o botão de banco passa a mostrar o Banco B');
   assert.equal(window.document.querySelector('.player-preset-button[data-preset="3"]').getAttribute('aria-pressed'), 'true',
     'o botão do Preset 3 acende no Banco B');
   player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 0 });
@@ -905,6 +934,88 @@ try {
   player.ccMappings.delete('preset:B:5');
   player.showBank('A');
   assert.equal(player.bankStates.get('A').selectedPreset, 2);
+
+  // Copy / Paste e o botão único que alterna Banco A / Banco B.
+  {
+    const copyButton = () => window.document.querySelector('[data-action="copy-preset"]');
+    const bankToggle = () => window.document.querySelector('[data-action="toggle-bank"]');
+    const presetButton = (number) => window.document.querySelector(`.player-preset-button[data-preset="${number}"]`);
+    assert.equal(window.document.querySelector('[data-action="show-bank"]'), null, 'não existem mais os dois botões de banco');
+    assert.equal(copyButton().textContent.trim(), 'Copy');
+    assert.equal(copyButton().dataset.copyState, 'idle', 'Copy começa vermelho, parado');
+    assert.equal(bankToggle().textContent.trim(), 'Banco A');
+    bankToggle().click();
+    assert.equal(player.activeBank, 'B', 'o botão de banco alterna para o Banco B');
+    assert.equal(bankToggle().textContent.trim(), 'Banco B');
+    assert.equal(bankToggle().dataset.bank, 'B');
+    bankToggle().click();
+    assert.equal(player.activeBank, 'A', 'e volta para o Banco A');
+
+    const source = player.bankStates.get('A').presets[1];
+    source.name = 'Origem';
+    source.modules[0].settings.cutoffHz = 1234;
+    copyButton().click();
+    assert.equal(copyButton().dataset.copyState, 'copied', 'copiado: amarelo piscando');
+    assert.equal(copyButton().textContent.trim(), 'Copy');
+    copyButton().click();
+    assert.equal(copyButton().dataset.copyState, 'idle', 'Copy de novo cancela tudo');
+    assert.equal(player.presetClipboard, null);
+
+    copyButton().click();
+    source.modules[0].settings.cutoffHz = 999;
+    bankToggle().click();
+    assert.equal(copyButton().dataset.copyState, 'copied', 'sem preset escolhido no Banco B, segue esperando');
+    presetButton(5).click();
+    assert.equal(copyButton().dataset.copyState, 'paste');
+    assert.equal(copyButton().textContent.trim(), 'Paste', 'outro preset escolhido: vira Paste e pisca mais rápido');
+    copyButton().click();
+    assert.equal(player.currentModalKind, 'preset-paste-confirm', 'Paste pede confirmação');
+    assert.match(window.document.querySelector('.preset-paste-confirmation strong').textContent,
+      /Deseja colar o Preset 02 do Banco A em cima do Preset 05 do Banco B\?/);
+    window.document.querySelector('[data-modal-action="cancel-preset-paste"]').click();
+    assert.equal(player.currentModalKind, null);
+    assert.equal(copyButton().dataset.copyState, 'paste', 'Cancelar não perde a cópia');
+    assert.notEqual(player.bankStates.get('B').presets[4].name, 'Origem', 'nada foi colado');
+    copyButton().click();
+    assert.equal(player.currentModalKind, null);
+    assert.equal(copyButton().dataset.copyState, 'idle', 'Paste de novo depois de cancelar: cancela tudo');
+
+    bankToggle().click();
+    presetButton(2).click();
+    source.modules[0].settings.cutoffHz = 1234;
+    copyButton().click();
+    source.modules[0].settings.cutoffHz = 999;
+    bankToggle().click();
+    presetButton(5).click();
+    copyButton().click();
+    window.document.querySelector('[data-modal-action="confirm-preset-paste"]').click();
+    const pasted = player.bankStates.get('B').presets[4];
+    assert.equal(pasted.name, 'Origem', 'Paste deixa o preset igual ao copiado');
+    assert.equal(pasted.modules[0].settings.cutoffHz, 1234, 'vale a configuração do momento do Copy');
+    pasted.modules[1].settings.cutoffHz = 777;
+    assert.notEqual(player.bankStates.get('A').presets[1].modules[1].settings.cutoffHz, 777, 'a cópia é independente');
+    assert.equal(copyButton().dataset.copyState, 'idle', 'depois de colar, Copy volta ao vermelho');
+    assert.equal(player.activeBank, 'B');
+    assert.equal(player.bankStates.get('B').selectedPreset, 5);
+    assert.equal(presetButton(5).querySelector('.player-preset-button__label').textContent, 'Origem', 'o nome colado aparece no botão');
+
+    // CC aprendido no botão de banco alterna A e B.
+    player.ccMappings.set('bank:toggle', 41);
+    player.handleMidiControlChange({ channel: 1, controller: 41, inputId: 'keyboard-a', value: 127 });
+    assert.equal(player.activeBank, 'A', 'CC do botão de banco alterna para o Banco A');
+    player.handleMidiControlChange({ channel: 1, controller: 41, inputId: 'keyboard-a', value: 0 });
+    player.handleMidiControlChange({ channel: 1, controller: 41, inputId: 'keyboard-a', value: 127 });
+    assert.equal(player.activeBank, 'B', 'e de volta para o Banco B');
+    player.ccMappings.delete('bank:toggle');
+
+    source.name = 'Preset';
+    source.modules[0].settings.cutoffHz = 20_000;
+    player.bankStates.get('B').presets[4] = JSON.parse(JSON.stringify(player.bankStates.get('B').presets[5]));
+    bankToggle().click();
+    presetButton(2).click();
+    assert.equal(player.activeBank, 'A');
+    assert.equal(player.bankStates.get('A').selectedPreset, 2);
+  }
   player.openModal('module-eq', 1, master);
   assert.equal(window.document.querySelector('[data-module-eq-rta]'), null,
     'EQ permanece leve e sem RTA');

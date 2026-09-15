@@ -79,6 +79,12 @@ import {
   createModuleModulationCardMarkup,
   DEFAULT_MODULE_MODULATION_RATE_HZ,
   createModuleSettingsMarkup,
+  createFilterVelocityCutoffMarkup,
+  DEFAULT_FILTER_VELOCITY_CUTOFF_HZ,
+  filterVelocityEnginePoints,
+  readFilterVelocityCutoffHz,
+  readFilterVelocityEnabled,
+  updateFilterVelocityPowerMarkup,
   eqFrequencyFromRatio,
   eqGainFromRatio,
   eqXFromFrequency,
@@ -219,7 +225,7 @@ import {
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm';
 type BankId = 'A' | 'B';
 type PlayerView = 'bank' | 'pads-effects';
 
@@ -327,7 +333,7 @@ type CcLearnTarget =
   | { kind: 'metronome-volume' }
   | { kind: 'metronome-toggle' }
   | { kind: 'tap-tempo' }
-  | { kind: 'bank'; bank: BankId }
+  | { kind: 'bank-toggle' }
   // Banco A e Banco B são independentes: cada um tem os seus 8 presets mapeáveis.
   | { kind: 'preset'; bank: BankId; presetNumber: number }
   | { kind: 'pad'; bank: PadBankId; note: string }
@@ -439,7 +445,7 @@ function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'metronome-volume') return 'metronome:volume';
   if (target.kind === 'metronome-toggle') return 'metronome:toggle';
   if (target.kind === 'tap-tempo') return 'metronome:tap';
-  if (target.kind === 'bank') return `bank:${target.bank}`;
+  if (target.kind === 'bank-toggle') return 'bank:toggle';
   if (target.kind === 'preset') return `preset:${target.bank}:${target.presetNumber}`;
   if (target.kind === 'pad') return `pad:${target.bank}:${target.note}`;
   return `effect:${target.bank}:${target.effectNumber}`;
@@ -466,7 +472,7 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
   if (target.kind === 'metronome-volume') return 'Volume do metrônomo';
   if (target.kind === 'metronome-toggle') return 'Ligar / desligar metrônomo';
   if (target.kind === 'tap-tempo') return 'Tap Tempo';
-  if (target.kind === 'bank') return `Banco ${target.bank}`;
+  if (target.kind === 'bank-toggle') return 'Banco A / Banco B';
   if (target.kind === 'preset') {
     return `Banco ${target.bank} · Preset ${target.presetNumber.toString().padStart(2, '0')}`;
   }
@@ -485,7 +491,7 @@ function isCcMappingKey(value: string): boolean {
   if (/^input:[1-8]:(sustain|modulation)$/.test(value)) return true;
   if (/^output:(music|pads|effects|master)$/.test(value)) return true;
   if (value === 'metronome:volume' || value === 'metronome:tap' || value === 'metronome:toggle') return true;
-  if (/^bank:[AB]$/.test(value)) return true;
+  if (value === 'bank:toggle') return true;
   if (/^pad:[ABCD]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
   if (/^effect:[1-4]:([1-9]|1[0-2])$/.test(value)) return true;
   return /^preset:[AB]:[1-8]$/.test(value);
@@ -784,16 +790,24 @@ function createBankState(selectedPreset: number | null = null): BankState {
   };
 }
 
+// Copy/Paste do preset em cima e, embaixo, um botão só que alterna Banco A e Banco B.
 function createBankNavigationMarkup(): string {
-  return BANK_IDS.map((bank) => `
+  return `
     <button
-      class="player-navigation__button player-navigation__bank-button${bank === 'A' ? ' is-selected' : ''}"
+      class="player-navigation__button player-navigation__bank-button player-preset-copy-button"
       type="button"
-      data-action="show-bank"
-      data-bank="${bank}"
-      aria-pressed="${bank === 'A'}"
-    >Banco ${bank}</button>
-  `).join('');
+      data-action="copy-preset"
+      data-copy-state="idle"
+      aria-label="Copiar o preset selecionado"
+    >Copy</button>
+    <button
+      class="player-navigation__button player-navigation__bank-button"
+      type="button"
+      data-action="toggle-bank"
+      data-bank="A"
+      aria-label="Banco A. Tocar para ir ao Banco B"
+    >Banco A</button>
+  `;
 }
 
 export function isCellularPlayerViewport(width: number, height: number, desktopRuntime: boolean): boolean {
@@ -918,7 +932,14 @@ export class PlayerScreen {
   private lastRotaryModulationValue = 0;
   private readonly faderDoubleTap = new DoubleTapTracker();
   private lastKnobTap: { input: HTMLInputElement; time: number } | null = null;
-  private readonly bankKeyboardDoubleTap = new DoubleTapTracker();
+  // Preset copiado pelo Copy, esperando o Paste. declinedTarget: o preset em
+  // que o usuário cancelou a confirmação; tocar Paste de novo nele cancela tudo.
+  private presetClipboard: {
+    preset: PresetState;
+    bank: BankId;
+    presetNumber: number;
+    declinedTarget: string | null;
+  } | null = null;
   private readonly metronomeHoldGesture = new LongPressGesture();
   private readonly tempoHoldGesture = new LongPressGesture();
   private readonly keyboardAccentGesture = new LongPressGesture(520, 8);
@@ -1627,11 +1648,13 @@ export class PlayerScreen {
       return;
     }
 
-    if (action === 'show-bank') {
-      const bank = actionButton.dataset.bank;
-      if (this.isBankId(bank)) {
-        this.showBank(bank);
-      }
+    if (action === 'toggle-bank') {
+      this.showBank(this.activeBank === 'A' ? 'B' : 'A');
+      return;
+    }
+
+    if (action === 'copy-preset') {
+      this.pressPresetCopyButton(actionButton);
       return;
     }
 
@@ -1993,10 +2016,9 @@ export class PlayerScreen {
       return;
     }
 
-    const bankButton = eventTarget.closest<HTMLButtonElement>('[data-action="show-bank"]');
-    const bank = bankButton?.dataset.bank;
-    if (bankButton && this.root.contains(bankButton) && this.isBankId(bank)) {
-      this.startCcControlLearn(event, bankButton, { kind: 'bank', bank });
+    const bankButton = eventTarget.closest<HTMLButtonElement>('[data-action="toggle-bank"]');
+    if (bankButton && this.root.contains(bankButton)) {
+      this.startCcControlLearn(event, bankButton, { kind: 'bank-toggle' });
       return;
     }
 
@@ -2226,20 +2248,6 @@ export class PlayerScreen {
       this.endKnobDrag(event);
       return;
     }
-    const bankButton = event.target instanceof Element
-      ? event.target.closest<HTMLButtonElement>('[data-action="show-bank"]')
-      : null;
-    const bank = bankButton?.dataset.bank;
-    if (
-      !this.cellularLayout
-      &&
-      bankButton
-      && this.isBankId(bank)
-      && this.bankKeyboardDoubleTap.register(`keyboard-bank:${bank}`, event.timeStamp)
-    ) {
-      this.showBank(bank);
-      this.selectBottomView('keyboard');
-    }
     if (this.outputFaderDrag?.pointerId === event.pointerId) {
       this.outputFaderLearnGesture.end(event);
       const drag = this.outputFaderDrag;
@@ -2441,10 +2449,9 @@ export class PlayerScreen {
       return;
     }
 
-    const bankButton = target.closest<HTMLButtonElement>('[data-action="show-bank"]');
-    const bank = bankButton?.dataset.bank;
-    if (bankButton && this.isBankId(bank)) {
-      this.openCcLearn({ kind: 'bank', bank }, bankButton);
+    const bankButton = target.closest<HTMLButtonElement>('[data-action="toggle-bank"]');
+    if (bankButton) {
+      this.openCcLearn({ kind: 'bank-toggle' }, bankButton);
       return;
     }
 
@@ -2957,11 +2964,12 @@ export class PlayerScreen {
     padsButton.classList.toggle('is-selected', !showingBank);
     padsButton.setAttribute('aria-pressed', String(!showingBank));
 
-    for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="show-bank"]')) {
-      const isSelected = button.dataset.bank === this.activeBank;
-      button.classList.toggle('is-selected', isSelected);
-      button.setAttribute('aria-pressed', String(isSelected));
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="toggle-bank"]')) {
+      button.dataset.bank = this.activeBank;
+      button.textContent = `Banco ${this.activeBank}`;
+      button.setAttribute('aria-label', `Banco ${this.activeBank}. Tocar para ir ao Banco ${this.activeBank === 'A' ? 'B' : 'A'}`);
     }
+    this.renderPresetCopyButton();
   }
 
   private getActivePresetState(): PresetState | null {
@@ -3054,6 +3062,96 @@ export class PlayerScreen {
 
     const workspace = requiredElement<HTMLElement>(this.root, '.player-workspace');
     workspace.setAttribute('aria-label', `Módulos de timbre do Banco ${this.activeBank}`);
+    this.renderPresetCopyButton();
+  }
+
+  private activePresetKey(): string | null {
+    const selected = this.bankStates.get(this.activeBank)?.selectedPreset ?? null;
+    return selected === null ? null : `${this.activeBank}:${selected}`;
+  }
+
+  // Copy (vermelho) -> copiado (amarelo piscando) -> outro preset escolhido:
+  // Paste (piscando mais rápido). Copy de novo cancela; Paste abre a confirmação.
+  private pressPresetCopyButton(trigger: HTMLElement): void {
+    const clipboard = this.presetClipboard;
+    const bank = this.bankStates.get(this.activeBank);
+    const presetNumber = bank?.selectedPreset ?? null;
+    if (!clipboard) {
+      const preset = this.getActivePresetState();
+      if (!preset || presetNumber === null) {
+        this.setStatus('Escolha um preset para copiar.');
+        return;
+      }
+      this.saveActivePresetState();
+      this.presetClipboard = {
+        preset: JSON.parse(JSON.stringify(preset)) as PresetState,
+        bank: this.activeBank,
+        presetNumber,
+        declinedTarget: null,
+      };
+      this.renderPresetCopyButton();
+      this.setStatus(`${presetSlotLabel(this.activeBank, presetNumber)} copiado. Escolha o preset que vai receber a cópia.`);
+      return;
+    }
+    const target = this.activePresetKey();
+    const pasteReady = target !== null && target !== `${clipboard.bank}:${clipboard.presetNumber}`;
+    if (!pasteReady || clipboard.declinedTarget === target || presetNumber === null) {
+      this.presetClipboard = null;
+      this.renderPresetCopyButton();
+      this.setStatus('Cópia de preset cancelada.');
+      return;
+    }
+    // Cancelar a confirmação guarda a cópia; tocar Paste de novo neste mesmo
+    // preset é que cancela tudo.
+    clipboard.declinedTarget = target;
+    this.openModal('preset-paste-confirm', presetNumber, trigger);
+  }
+
+  private pastePresetClipboard(): void {
+    const clipboard = this.presetClipboard;
+    const bank = this.bankStates.get(this.activeBank);
+    const presetNumber = bank?.selectedPreset ?? null;
+    if (!clipboard || !bank || presetNumber === null) return;
+    // Um CC mapeado pode ter trocado o preset com a confirmação aberta: não cola
+    // num preset diferente do que a pergunta mostrou.
+    if (clipboard.declinedTarget !== `${this.activeBank}:${presetNumber}`) {
+      clipboard.declinedTarget = null;
+      this.renderPresetCopyButton();
+      this.setStatus('O preset mudou antes de colar. Toque em Paste de novo.');
+      return;
+    }
+    if (this.liveMidiEnabled && this.seamlessPresetSwitching) {
+      this.nativePresetTransitionPending = true;
+    } else if (this.liveMidiEnabled) {
+      this.nativePresetTransitionPending = false;
+      void hookKeysNative.stopAllNotes();
+    }
+    this.soundfontSelectionRevision += 1;
+    this.cancelNoteLearn();
+    this.patternPlayback.reset();
+    bank.presets[presetNumber - 1] = JSON.parse(JSON.stringify(clipboard.preset)) as PresetState;
+    this.presetClipboard = null;
+    this.restoreActivePresetState();
+    this.markPlayerStateChanged();
+    this.setStatus(`${presetSlotLabel(clipboard.bank, clipboard.presetNumber)} colado em ${presetSlotLabel(this.activeBank, presetNumber)}.`);
+  }
+
+  private renderPresetCopyButton(): void {
+    const button = this.root.querySelector<HTMLButtonElement>('[data-action="copy-preset"]');
+    const clipboard = this.presetClipboard;
+    const target = this.activePresetKey();
+    if (clipboard?.declinedTarget && clipboard.declinedTarget !== target) clipboard.declinedTarget = null;
+    if (!button) return;
+    const state = !clipboard
+      ? 'idle'
+      : target !== null && target !== `${clipboard.bank}:${clipboard.presetNumber}` ? 'paste' : 'copied';
+    button.dataset.copyState = state;
+    button.textContent = state === 'paste' ? 'Paste' : 'Copy';
+    button.setAttribute('aria-label', state === 'idle'
+      ? 'Copiar o preset selecionado'
+      : state === 'paste'
+        ? `Colar ${clipboard ? presetSlotLabel(clipboard.bank, clipboard.presetNumber) : 'o preset copiado'} neste preset`
+        : 'Cancelar a cópia do preset');
   }
 
   private selectPreset(selectedButton: HTMLButtonElement): void {
@@ -3849,9 +3947,8 @@ export class PlayerScreen {
         continue;
       }
 
-      const bankMatch = /^bank:([AB])$/.exec(targetKey);
-      if (bankMatch && risingEdge && this.isBankId(bankMatch[1])) {
-        this.showBank(bankMatch[1]);
+      if (targetKey === 'bank:toggle') {
+        if (risingEdge) this.showBank(this.activeBank === 'A' ? 'B' : 'A');
         continue;
       }
 
@@ -4171,7 +4268,15 @@ export class PlayerScreen {
       bodyMarkup = createVelocityCurveMarkup(moduleState?.settings ?? {}, moduleNumber !== null && moduleNumber <= 7
         ? { ceiling: readVelocityLimit(moduleState?.settings.velocityCeiling) } : {});
     } else if (kind === 'module-filter-velocity') {
-      bodyMarkup = createVelocityCurveMarkup({ velocityCurve: readFilterVelocityCurve(moduleState?.settings.filterVelocityCurve) });
+      const filterSettings = moduleState?.settings ?? {};
+      bodyMarkup = createVelocityCurveMarkup(
+        { velocityCurve: readFilterVelocityCurve(filterSettings.filterVelocityCurve) },
+        {
+          side: createFilterVelocityCutoffMarkup(filterSettings),
+          variant: 'filter',
+          dimmed: !readFilterVelocityEnabled(filterSettings),
+        },
+      );
     } else if (kind === 'glide-config') {
       bodyMarkup = createGlideVelocityMarkup(moduleNumber === null ? {} : this.glideSettings(moduleNumber));
     } else if (kind === 'module-arpeggiator') {
@@ -4241,6 +4346,13 @@ export class PlayerScreen {
         `;
     } else if (kind === 'output-volume') {
       bodyMarkup = createOutputFaderPanelMarkup(this.outputLevels, this.outputEnabled, OUTPUTS);
+    } else if (kind === 'preset-paste-confirm' && moduleNumber !== null && this.presetClipboard) {
+      bodyMarkup = `
+        <section class="cc-clear-confirmation preset-paste-confirmation">
+          <strong>Deseja colar o ${presetSlotLabel(this.presetClipboard.bank, this.presetClipboard.presetNumber)} em cima do ${presetSlotLabel(this.activeBank, moduleNumber)}?</strong>
+          <p>Toda a configuração do ${presetSlotLabel(this.activeBank, moduleNumber)} será substituída.</p>
+        </section>
+      `;
     } else if (kind === 'preset-name' && moduleNumber !== null) {
       bodyMarkup = `
         <section class="preset-name-editor">
@@ -4571,6 +4683,11 @@ export class PlayerScreen {
         ? `<button class="player-modal__confirm-button" type="button" data-modal-action="confirm-cc-learn"${
           this.pendingCcController === null ? ' disabled' : ''
         }>OK</button>`
+      : kind === 'preset-paste-confirm'
+        ? `
+          <button class="player-modal__back-button" type="button" data-modal-action="cancel-preset-paste">Cancelar</button>
+          <button class="player-modal__confirm-button" type="button" data-modal-action="confirm-preset-paste">Colar</button>
+        `
       : kind === 'cc-clear-confirm'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel-cc-clear">Cancelar</button>
@@ -4735,6 +4852,9 @@ export class PlayerScreen {
     } else if (kind === 'track-position') {
       eyebrow.textContent = 'Playlist';
       title.textContent = 'Posição da música';
+    } else if (kind === 'preset-paste-confirm') {
+      eyebrow.textContent = 'Copy · Paste';
+      title.textContent = 'Colar preset';
     } else if (kind === 'compatibility-mode') {
       eyebrow.textContent = 'Hook Keys';
       title.textContent = this.pendingCompatibilityMode ? 'Modo compatibilidade' : 'Confirmar alteração';
@@ -5426,6 +5546,16 @@ export class PlayerScreen {
         else this.closeModal();
         return;
       }
+      if (kind === 'preset-paste-confirm' && modalAction === 'cancel-preset-paste') {
+        this.closeModal();
+        this.renderPresetCopyButton();
+        return;
+      }
+      if (kind === 'preset-paste-confirm' && modalAction === 'confirm-preset-paste') {
+        this.closeModal(false);
+        this.pastePresetClipboard();
+        return;
+      }
       if (kind === 'cc-clear-confirm' && modalAction === 'cancel-cc-clear') {
         this.leaveCcClearConfirmation();
         return;
@@ -5623,6 +5753,12 @@ export class PlayerScreen {
       modal.addEventListener('pointermove', (event) => this.moveEqBandDrag(event));
       modal.addEventListener('pointerup', (event) => this.endEqBandDrag(event));
       modal.addEventListener('pointercancel', (event) => this.endEqBandDrag(event));
+    }
+    if (kind === 'module-filter-velocity' && moduleNumber !== null) {
+      modal.querySelector<HTMLButtonElement>('[data-filter-velocity-power]')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.toggleFilterVelocity(modal, moduleNumber);
+      });
     }
     if ((kind === 'module-velocity' || kind === 'module-filter-velocity') && moduleNumber !== null) {
       const velocitySettingKey = kind === 'module-filter-velocity' ? 'filterVelocityCurve' : 'velocityCurve';
@@ -5855,6 +5991,11 @@ export class PlayerScreen {
         this.markPlayerStateChanged();
         return;
       }
+      if (kind === 'module-filter-velocity' && moduleNumber !== null && input instanceof HTMLInputElement && input.matches('[data-filter-velocity-cutoff]')) {
+        this.updateFilterVelocityCutoff(modal, input, moduleNumber);
+        this.markPlayerStateChanged();
+        return;
+      }
       if (kind === 'about' || kind === 'app-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio') this.handleAppSettingsChange(event);
       if (kind === 'module-settings' && moduleNumber !== null) {
         this.handleModuleSettingsChange(event, moduleNumber);
@@ -5893,6 +6034,9 @@ export class PlayerScreen {
         this.updateModuleEnvelopeControl(modal, input, moduleNumber);
       } else if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-cutoff]')) {
         this.updateModuleCutoffControl(modal, input, moduleNumber);
+      } else if (kind === 'module-filter-velocity' && moduleNumber !== null && input.matches('[data-filter-velocity-cutoff]')) {
+        this.updateFilterVelocityCutoff(modal, input, moduleNumber);
+        this.scheduleNativeEngineSync();
       } else if (kind === 'metronome' && input.matches('[data-metronome-signature]')) {
         const numeratorInput = modal.querySelector<HTMLInputElement>('[data-metronome-signature="numerator"]');
         const denominatorInput = modal.querySelector<HTMLInputElement>('[data-metronome-signature="denominator"]');
@@ -6860,6 +7004,31 @@ export class PlayerScreen {
     if (output) output.value = formatted;
   }
 
+  private updateFilterVelocityCutoff(modal: HTMLElement, input: HTMLInputElement, moduleNumber: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    const parsed = Number(input.value);
+    if (!moduleState || !Number.isFinite(parsed)) return;
+    const ratio = Math.min(1, Math.max(0, parsed));
+    const frequency = cutoffFrequencyFromRatio(ratio);
+    moduleState.settings.filterVelocityCutoffHz = frequency;
+    const knob = input.closest<HTMLElement>('.module-envelope-knob');
+    knob?.style.setProperty('--knob-angle', `${-135 + ratio * 270}deg`);
+    knob?.style.setProperty('--knob-progress', String(ratio));
+    const formatted = formatCutoffFrequency(frequency);
+    input.setAttribute('aria-valuetext', formatted);
+    const output = modal.querySelector<HTMLOutputElement>('[data-filter-velocity-cutoff-value]');
+    if (output) output.value = formatted;
+  }
+
+  private toggleFilterVelocity(modal: HTMLElement, moduleNumber: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState) return;
+    const enabled = !readFilterVelocityEnabled(moduleState.settings);
+    moduleState.settings.filterVelocityEnabled = enabled;
+    updateFilterVelocityPowerMarkup(modal, enabled);
+    this.markPlayerStateChanged();
+  }
+
   private updateModuleVelocityLimit(input: HTMLInputElement, moduleNumber: number): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     if (!moduleState) return;
@@ -7099,7 +7268,7 @@ export class PlayerScreen {
       steppedValue = Number.isFinite(step) && step > 0
         ? minimum + Math.round((rawValue - minimum) / step) * step
         : rawValue;
-    } else if (drag.input.matches('[data-module-cutoff]')) {
+    } else if (drag.input.matches('[data-module-cutoff], [data-filter-velocity-cutoff]')) {
       const startingHz = cutoffFrequencyFromRatio(drag.startValue);
       const frequency = Math.round(Math.min(20_000, Math.max(20,
         startingHz + acceleratedDelta(20_000 - 20, 1))));
@@ -7151,6 +7320,7 @@ export class PlayerScreen {
         ? DEFAULT_SYNTH_SETTINGS.glideMs : DEFAULT_MODULE_GLIDE_MS;
     }
     if (input.matches('[data-module-cutoff]')) return 1;
+    if (input.matches('[data-filter-velocity-cutoff]')) return cutoffRatioFromFrequency(DEFAULT_FILTER_VELOCITY_CUTOFF_HZ);
     if (input.matches('[data-module-modulation-rate]')) return DEFAULT_MODULE_MODULATION_RATE_HZ;
     if (input.matches('[data-module-velocity-limit]')) return 127;
     const tranceGate = input.dataset.tranceGateParameter;
@@ -9051,6 +9221,11 @@ export class PlayerScreen {
         }
         const eqBands = readModuleEqBands(moduleState.settings.eqBands);
         const filterVelocity = readFilterVelocityCurve(moduleState.settings.filterVelocityCurve);
+        const moduleCutoffHz = readModuleCutoffFrequency(moduleState.settings.cutoffHz);
+        // Velocity do filtro desligado: todos os pontos em 127, o corte fica no Cutoff do Config.
+        const cutoffVelocity: [number, number, number, number, number] = readFilterVelocityEnabled(moduleState.settings)
+          ? filterVelocityEnginePoints(filterVelocity.points, readFilterVelocityCutoffHz(moduleState.settings), moduleCutoffHz)
+          : [127, 127, 127, 127, 127];
         const eqEnabled = moduleState.settings.eqEnabled !== false;
         const compressor = readModuleCompressorSettings(moduleState.settings.compressor);
         const delay = readModuleDelaySettings(moduleState.settings.delay);
@@ -9058,12 +9233,12 @@ export class PlayerScreen {
         const rotary = readModuleRotarySettings(moduleState.settings.rotary);
         configurationTasks.push(hookKeysNative.configureModuleEffects({
           moduleIndex,
-          cutoffHz: readModuleCutoffFrequency(moduleState.settings.cutoffHz),
-          cutoffVelocity0: filterVelocity.points[0],
-          cutoffVelocity1: filterVelocity.points[1],
-          cutoffVelocity2: filterVelocity.points[2],
-          cutoffVelocity3: filterVelocity.points[3],
-          cutoffVelocity4: filterVelocity.points[4],
+          cutoffHz: moduleCutoffHz,
+          cutoffVelocity0: cutoffVelocity[0],
+          cutoffVelocity1: cutoffVelocity[1],
+          cutoffVelocity2: cutoffVelocity[2],
+          cutoffVelocity3: cutoffVelocity[3],
+          cutoffVelocity4: cutoffVelocity[4],
           eqTypes: eqBands.map(({ type }) => !eqEnabled ? 2 : type === 'low-cut' ? 0
             : type === 'low-shelf' ? 1 : type === 'high-shelf' ? 3 : type === 'high-cut' ? 4 : 2),
           eqFrequencies: eqBands.map(({ frequency }) => frequency),
@@ -9439,8 +9614,8 @@ export class PlayerScreen {
             }
             // O Velocity do Cutoff já nasceu em Middle. Com o Cutoff em 20 kHz
             // isso fechava o filtro nas notas fracas (~650 Hz em velocity 64) e
-            // soava como sensibilidade mesmo com o volume em Fixed. O padrão
-            // atual é Fixed 127, filtro aberto.
+            // soava como sensibilidade mesmo com o volume em Fixed. Hoje ele
+            // nasce desligado (filtro aberto), com a curva de fábrica.
             if (migrateLegacyFilterVelocity && isRecord(restoredSettings.filterVelocityCurve)) {
               const filterVelocity = readFilterVelocityCurve(restoredSettings.filterVelocityCurve);
               if (filterVelocity.mode === 'middle') {
@@ -9679,14 +9854,21 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
       points: [...velocityCurve.points],
       userPoints: [...DEFAULT_VELOCITY_CURVE.userPoints],
     },
+    // Velocity do filtro nasce desligado, com o Cutoff dele em 100 Hz e a
+    // curva Soft pronta para quando ligar.
+    filterVelocityEnabled: false,
+    filterVelocityCutoffHz: DEFAULT_FILTER_VELOCITY_CUTOFF_HZ,
     filterVelocityCurve: {
       ...DEFAULT_VELOCITY_CURVE,
-      mode: 'fixed',
       fixedValue: 127,
-      points: [127, 127, 127, 127, 127],
-      userPoints: [0, 32, 64, 96, 127],
+      points: [...DEFAULT_VELOCITY_CURVE.points],
+      userPoints: [...DEFAULT_VELOCITY_CURVE.userPoints],
     },
   };
+}
+
+function presetSlotLabel(bank: BankId, presetNumber: number): string {
+  return `Preset ${presetNumber.toString().padStart(2, '0')} do Banco ${bank}`;
 }
 
 function moduleDisplayName(moduleNumber: number): string {
@@ -9698,9 +9880,9 @@ function moduleDisplayName(moduleNumber: number): string {
 
 function readFilterVelocityCurve(value: unknown) {
   return readVelocityCurveSettings(value ?? {
-    mode: 'fixed', fixedValue: 127,
-    points: [127, 127, 127, 127, 127],
-    userPoints: [0, 32, 64, 96, 127],
+    mode: 'soft', fixedValue: 127,
+    points: [...DEFAULT_VELOCITY_CURVE.points],
+    userPoints: [...DEFAULT_VELOCITY_CURVE.userPoints],
   });
 }
 

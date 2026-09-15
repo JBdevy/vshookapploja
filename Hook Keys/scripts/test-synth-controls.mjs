@@ -168,6 +168,27 @@ test('EQ starts with Low Shelf and High Shelf while preserving five bands', () =
   assert.equal(bands[4].type, 'high-shelf');
 });
 
+test('Velocity do filtro: nasce desligado em 100 Hz e trabalha do Cutoff dele até o Cutoff do Config', () => {
+  assert.equal(settingsView.readFilterVelocityEnabled({}), false);
+  assert.equal(settingsView.readFilterVelocityCutoffHz({}), 100);
+  const column = settingsView.createFilterVelocityCutoffMarkup({});
+  assert.match(column, /data-filter-velocity-power[^>]*aria-pressed="false"[^>]*>OFF<\/button>/);
+  assert.match(column, /<output data-filter-velocity-cutoff-value>100 Hz<\/output>/);
+  // O motor faz 20 Hz × (Cutoff/20)^(ponto/127): os pontos Soft viram expoentes
+  // que começam em 100 Hz e terminam no Cutoff do Config (20 kHz).
+  const engine = settingsView.filterVelocityEnginePoints([0, 16, 44, 84, 127], 100, 20_000);
+  assert.deepEqual([...engine], [30, 42, 63, 94, 127]);
+  const engineHz = (point, cutoff) => 20 * (cutoff / 20) ** (point / 127);
+  assert(Math.abs(engineHz(engine[0], 20_000) / 100 - 1) < 0.05, 'a nota mais fraca fecha perto de 100 Hz');
+  assert.equal(engineHz(engine[4], 20_000), 20_000, 'a mais forte abre até o Cutoff do Config');
+  const at400 = settingsView.filterVelocityEnginePoints([0, 32, 64, 96, 127], 400, 2_000);
+  assert(Math.abs(engineHz(at400[0], 2_000) / 400 - 1) < 0.05, 'com 400 Hz a curva começa em 400 Hz');
+  assert.deepEqual([...settingsView.filterVelocityEnginePoints([0, 16, 44, 84, 127], 5_000, 2_000)], [127, 127, 127, 127, 127],
+    'Cutoff do Velocity acima do Cutoff do Config: fica no Cutoff do Config');
+  assert.match(settingsView.createModuleSettingsMarkup([], [], null, { filterVelocityEnabled: true }, 120, 2, '1+2'),
+    /class="is-active" data-module-setting-action="open-filter-velocity"/, 'ligado, o botão Velocity do Cutoff acende');
+});
+
 test('EQ: a curva do shelf segue a mesma inclinação do motor (Q vira o slope, até 1)', () => {
   const bands = settingsView.readModuleEqBands(undefined);
   assert.equal(bands[0].q, 1);

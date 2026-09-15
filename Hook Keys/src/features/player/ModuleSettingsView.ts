@@ -200,7 +200,7 @@ export function createModuleSettingsMarkup(
               MODULE_ENVELOPE_DEFAULTS[parameter],
             ),
           )).join('')}
-          ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz))}
+          ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings))}
           ${createVelocityLimitCardMarkup(settings)}
         </div>`}
 
@@ -389,6 +389,84 @@ export function cutoffRatioFromFrequency(frequency: number): number {
     / Math.log(MODULE_CUTOFF_MAX_FREQUENCY / MODULE_CUTOFF_MIN_FREQUENCY);
 }
 
+// Velocity do filtro: tem ON/OFF e um Cutoff próprio, que é onde a curva
+// começa. Com 400 Hz, a nota mais fraca fecha em 400 Hz e a mais forte abre
+// até o Cutoff do Config. Nasce desligado e em 100 Hz.
+export const DEFAULT_FILTER_VELOCITY_CUTOFF_HZ = 100;
+
+export function readFilterVelocityEnabled(settings: Readonly<Record<string, unknown>>): boolean {
+  return settings.filterVelocityEnabled === true;
+}
+
+export function readFilterVelocityCutoffHz(settings: Readonly<Record<string, unknown>>): number {
+  const parsed = Number(settings.filterVelocityCutoffHz);
+  return Number.isFinite(parsed)
+    ? Math.min(MODULE_CUTOFF_MAX_FREQUENCY, Math.max(MODULE_CUTOFF_MIN_FREQUENCY, parsed))
+    : DEFAULT_FILTER_VELOCITY_CUTOFF_HZ;
+}
+
+// O motor calcula o corte de cada nota como 20 Hz × (Cutoff/20)^(ponto/127).
+// Cada ponto da curva vira o expoente que dá a mesma frequência entre o Cutoff
+// do Velocity (ponto 0) e o Cutoff do Config (ponto 127). Assim nada muda no
+// motor nativo. Desligado, todos os pontos em 127: o corte é o do Config.
+export function filterVelocityEnginePoints(
+  points: readonly number[],
+  floorHz: number,
+  cutoffHz: number,
+): [number, number, number, number, number] {
+  const top = Math.min(MODULE_CUTOFF_MAX_FREQUENCY, Math.max(MODULE_CUTOFF_MIN_FREQUENCY, cutoffHz));
+  const floor = Math.min(top, Math.max(MODULE_CUTOFF_MIN_FREQUENCY, floorHz));
+  const span = Math.log(top / MODULE_CUTOFF_MIN_FREQUENCY);
+  return Array.from({ length: 5 }, (_, index) => {
+    if (span <= 0) return 127;
+    const point = Math.min(127, Math.max(0, Number(points[index]) || 0));
+    const frequency = floor * Math.pow(top / floor, point / 127);
+    const exponent = 127 * Math.log(frequency / MODULE_CUTOFF_MIN_FREQUENCY) / span;
+    return Math.round(Math.min(127, Math.max(0, exponent)));
+  }) as [number, number, number, number, number];
+}
+
+// Coluna à direita da curva: Cutoff do Velocity em cima, ON/OFF embaixo.
+export function createFilterVelocityCutoffMarkup(settings: Readonly<Record<string, unknown>>): string {
+  const enabled = readFilterVelocityEnabled(settings);
+  const frequency = readFilterVelocityCutoffHz(settings);
+  const ratio = cutoffRatioFromFrequency(frequency);
+  return `
+    <div class="filter-velocity-cutoff" data-filter-velocity-column>
+      <strong>Cutoff</strong>
+      ${createParameterKnobMarkup(ratio, `
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.001"
+          value="${ratio}"
+          data-filter-velocity-cutoff
+          aria-label="Cutoff do Velocity: a curva trabalha a partir desta frequência"
+          aria-valuetext="${formatCutoffFrequency(frequency)}"
+        >
+      `)}
+      <output data-filter-velocity-cutoff-value>${formatCutoffFrequency(frequency)}</output>
+      <button
+        type="button"
+        class="filter-velocity-power module-effect-power ${enabled ? 'is-on' : 'is-off'}"
+        data-filter-velocity-power
+        aria-pressed="${enabled}"
+      >${enabled ? 'ON' : 'OFF'}</button>
+    </div>
+  `;
+}
+
+export function updateFilterVelocityPowerMarkup(container: HTMLElement, enabled: boolean): void {
+  container.querySelector('.velocity-curve-editor')?.classList.toggle('is-off', !enabled);
+  const power = container.querySelector<HTMLButtonElement>('[data-filter-velocity-power]');
+  if (!power) return;
+  power.classList.toggle('is-on', enabled);
+  power.classList.toggle('is-off', !enabled);
+  power.setAttribute('aria-pressed', String(enabled));
+  power.textContent = enabled ? 'ON' : 'OFF';
+}
+
 export function formatCutoffFrequency(frequency: number): string {
   return frequency >= 1_000
     ? `${(frequency / 1_000).toFixed(frequency >= 10_000 ? 0 : 1)} kHz`
@@ -549,11 +627,11 @@ function createEnvelopeControl(
   `;
 }
 
-function createCutoffControl(frequency: number): string {
+function createCutoffControl(frequency: number, velocityEnabled: boolean): string {
   const ratio = cutoffRatioFromFrequency(frequency);
   return `
     <article class="module-envelope-control module-cutoff-control">
-      <button type="button" data-module-setting-action="open-filter-velocity">Velocity</button>
+      <button type="button" class="${velocityEnabled ? 'is-active' : ''}" data-module-setting-action="open-filter-velocity" aria-label="Velocity do filtro${velocityEnabled ? ', ligado' : ', desligado'}">Velocity</button>
       <h3>Cutoff</h3>
       ${createParameterKnobMarkup(ratio, `
         <input
