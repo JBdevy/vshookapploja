@@ -1,6 +1,7 @@
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Capacitor } from '@capacitor/core';
 import { ScreenOrientation } from '@capacitor/screen-orientation';
+import { hookKeysNative } from './native/HookKeysNative';
 
 let initialized = false;
 export type AppOrientationMode = 'login' | 'tablet';
@@ -20,8 +21,16 @@ async function reinforceNativeRuntime(): Promise<void> {
     if (support.isSupported) await KeepAwake.keepAwake();
   };
 
+  // No player, paisagem dos dois lados: o plugin de orientação só trava uma
+  // paisagem, então a trava própria do app vem primeiro.
+  const lockOrientation = async () => {
+    const mode = currentMode === 'tablet' ? 'landscape' : 'portrait';
+    if (await hookKeysNative.lockOrientation(mode)) return;
+    await ScreenOrientation.lock({ orientation: mode });
+  };
+
   await Promise.allSettled([
-    ScreenOrientation.lock({ orientation: currentMode === 'tablet' ? 'landscape' : 'portrait' }),
+    lockOrientation(),
     keepScreenAwake(),
   ]);
 }

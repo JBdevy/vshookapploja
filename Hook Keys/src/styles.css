@@ -3016,8 +3016,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 
 /* No desktop, presets e Keyboard coexistem. O teclado permanece tocável e
-   ocupa uma linha própria abaixo dos 16 presets, sem o seletor Mostrar. */
-.player-screen--tablet .player-bank-view:has(.player-presets--combined) {
+   ocupa uma linha própria abaixo dos presets, sem o seletor Mostrar.
+   Sem :has(): no Safari 16 cada tecla acesa dentro dessa área fazia recalcular
+   o estilo dela inteira (teclado, presets e módulos) e a nota engasgava. A
+   classe na própria área tem o mesmo peso que o :has(.classe) tinha. */
+.player-screen--tablet .player-bank-view.player-bank-view--combined {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
@@ -3082,7 +3085,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 @media (max-height: 520px) {
-  .player-screen--tablet .player-bank-view:has(.player-presets--combined) {
+  .player-screen--tablet .player-bank-view.player-bank-view--combined {
     grid-template-rows: minmax(0, 1fr) auto;
   }
   .player-screen--tablet .player-presets--combined {
@@ -3097,7 +3100,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
     grid-template-rows: clamp(48px, 13vh, 64px);
   }
 
-  :root:not([data-runtime="desktop"]) .player-screen--cellular .player-bank-view:has(.player-presets--cellular) {
+  :root:not([data-runtime="desktop"]) .player-screen--cellular .player-bank-view.player-bank-view--cellular {
     /* Sem o Keyboard, toda a altura liberada pertence aos oito modulos. */
     grid-template-rows: minmax(0, 1fr) auto;
   }
@@ -11166,10 +11169,6 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
   grid-template-rows: minmax(0, 1fr) clamp(96px, 17vh, 138px);
 }
 
-.player-screen--tablet .player-bank-view:has(.player-presets.is-keyboard) {
-  grid-template-rows: minmax(0, 1fr) clamp(96px, 17vh, 138px);
-}
-
 .player-screen--tablet .player-presets:not(.is-keyboard) {
   padding-block: clamp(4px, .7vh, 8px);
 }
@@ -11181,10 +11180,6 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 
 @media (orientation: landscape) and (max-height: 520px) {
   .player-screen--tablet .player-bank-view {
-    grid-template-rows: minmax(0, 1fr) clamp(68px, 20vh, 88px);
-  }
-
-  .player-screen--tablet .player-bank-view:has(.player-presets.is-keyboard) {
     grid-template-rows: minmax(0, 1fr) clamp(68px, 20vh, 88px);
   }
 }

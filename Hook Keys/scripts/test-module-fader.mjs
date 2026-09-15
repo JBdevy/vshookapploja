@@ -338,15 +338,12 @@ test('música importada no iOS não grava Blob no IndexedDB', () => {
   assert.match(store, /record\.storage === 'native'/);
 });
 
-test('iOS abre interface USB com mais de 2 saídas usando layout de canais', () => {
+test('iOS abre interface USB com mais de 2 saídas no formato exato da placa', () => {
   const engine = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
-  assert.match(engine, /if \(channels <= 2\) \{\s*return \[\[AVAudioFormat alloc\] initStandardFormatWithSampleRate:sampleRate channels:channels\]/);
-  assert.match(engine, /kAudioChannelLayoutTag_DiscreteInOrder \| channels\)\];\s*return \[\[AVAudioFormat alloc\] initStandardFormatWithSampleRate:sampleRate channelLayout:discrete\]/);
-  // Acima de estéreo o gerador vai direto à saída: o mainMixer deixava a placa muda.
-  assert.match(engine, /connect:_sourceNode to:_audioEngine\.outputNode format:renderFormat/);
-  assert.match(engine, /@catch \(NSException \*exception\)/);
-  // Placa plugada depois do boot: refaz o gerador com os canais da nova saída.
-  assert.match(engine, /\[_sourceNode outputFormatForBus:0\]\.channelCount != hardwareChannels/);
+  // Formato idêntico ao da placa primeiro: sem conversor de canais, L e R não somam.
+  assert.match(engine, /hardware\.channelCount == channels && std::abs\(hardware\.sampleRate - sampleRate\) < 1\.0 &&[\s\S]*?\[formats addObject:hardware\];/);
+  assert.match(engine, /kAudioChannelLayoutTag_DiscreteInOrder \| channels/, 'canais discretos só como reserva');
+  assert.match(engine, /for \(AVAudioFormat \*renderFormat in renderFormatsFor\(hardware, state->sampleRate, channels\)\)/);
 });
 
 test('Android confere a placa aberta, reabre após desconectar e lista só saídas de música', () => {
@@ -452,4 +449,26 @@ test('teto de velocity: variável numérica (a alça desce) e escondido em Fixed
   assert.doesNotMatch(view, /--velocity-ceiling:\$\{\(ceiling \/ 127\) \* 100\}%/);
   assert.match(view, /setProperty\('--velocity-ceiling', String\(\(value \/ 127\) \* 100\)\)/);
   assert.match(css, /\.velocity-curve-editor\[data-velocity-mode="fixed"\] :is\(\.velocity-ceiling, \.velocity-ceiling-zone, \.velocity-ceiling-line\) \{\s*display: none;/);
+});
+
+test('área do teclado/módulos sem :has() (Safari 16 recalculava tudo a cada tecla acesa)', () => {
+  assert.doesNotMatch(css, /player-bank-view:has\(/);
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /class="player-bank-view player-bank-view--combined\$\{this\.cellularLayout \? ' player-bank-view--cellular' : ''\}"/);
+});
+
+test('Hook Keys: long press só abre os 30%; com eles abertos, um toque fecha', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /if \(this\.splitTracksController\) \{\s*this\.closeTracksSplitView\(\);\s*return;\s*\}\s*this\.openModal\('about'/);
+  assert.match(player, /if \(!this\.splitTracksController\) this\.startTracksHoldGesture\(brandButton, event\);/);
+  assert.doesNotMatch(player, /toggleTracksSplitView/);
+});
+
+test('paisagem dos dois lados no iOS e no Android', () => {
+  const runtime = readFileSync(new URL('../src/platform/runtime.ts', import.meta.url), 'utf8');
+  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
+  assert.match(runtime, /if \(await hookKeysNative\.lockOrientation\(mode\)\) return;/);
+  assert.match(ios, /let mask: UIInterfaceOrientationMask = landscape \? \.landscape : \.portrait/);
+  assert.match(android, /SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);
 });

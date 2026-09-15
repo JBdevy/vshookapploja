@@ -1102,7 +1102,7 @@ export class PlayerScreen {
           </div>
           </header>
 
-          <div class="player-bank-view" data-player-view="bank">
+          <div class="player-bank-view player-bank-view--combined${this.cellularLayout ? ' player-bank-view--cellular' : ''}" data-player-view="bank">
             <section class="player-workspace" aria-label="Módulos de timbre do Banco A">
               <div class="player-modules-row">${modules}</div>
             </section>
@@ -1695,10 +1695,15 @@ export class PlayerScreen {
     }
 
     if (action === 'open-about') {
-      // O long press no Hook Keys abre/fecha a Playlist 30%; o clique que o
-      // mesmo toque gera depois não abre o modal por cima.
+      // Long press no Hook Keys abre a Playlist 30%; o clique que o mesmo toque
+      // gera depois não abre o modal por cima. Com os 30% abertos, um toque
+      // simples só fecha a Playlist; o modal (Modo Lite) abre com ela fechada.
       if (this.suppressNextTracksClick) {
         this.suppressNextTracksClick = false;
+        return;
+      }
+      if (this.splitTracksController) {
+        this.closeTracksSplitView();
         return;
       }
       this.openModal('about', null, actionButton);
@@ -2096,7 +2101,8 @@ export class PlayerScreen {
 
     const brandButton = eventTarget.closest<HTMLButtonElement>('[data-action="open-about"]');
     if (brandButton && this.root.contains(brandButton)) {
-      this.startTracksHoldGesture(brandButton, event);
+      // O long press só abre; fechar é com um toque simples.
+      if (!this.splitTracksController) this.startTracksHoldGesture(brandButton, event);
       return;
     }
 
@@ -2455,7 +2461,7 @@ export class PlayerScreen {
 
     const brandButton = target.closest<HTMLButtonElement>('[data-action="open-about"]');
     if (brandButton) {
-      this.toggleTracksSplitView();
+      if (!this.splitTracksController) this.openTracksSplitView();
       return;
     }
 
@@ -2541,7 +2547,7 @@ export class PlayerScreen {
       window.setTimeout(() => {
         this.suppressNextTracksClick = false;
       }, 700);
-      this.toggleTracksSplitView();
+      this.openTracksSplitView();
     }, 560);
     this.tracksHoldGesture = {
       button,
@@ -2563,11 +2569,6 @@ export class PlayerScreen {
     const { button, pointerId } = this.capturedTracksPointer;
     if (button.hasPointerCapture(pointerId)) button.releasePointerCapture(pointerId);
     this.capturedTracksPointer = null;
-  }
-
-  private toggleTracksSplitView(): void {
-    if (this.splitTracksController) this.closeTracksSplitView();
-    else this.openTracksSplitView();
   }
 
   private openTracksSplitView(): void {

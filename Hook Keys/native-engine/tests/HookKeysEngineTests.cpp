@@ -1385,6 +1385,39 @@ void testRotarySpeakerProcessing() {
   expect(outputWidth > 100.0, "rotary produces a clearly stereo horn/drum microphone image");
 }
 
+// Leslie: a corneta girando faz o volume dos agudos pulsar mesmo somando os
+// dois microfones (mono), e Depth zero tira o tremolo. O timbre de Leslie em
+// si (brilho direcional, reflexão, inércias) só se confirma ouvindo.
+void testRotaryLeslieAmplitudeModulation() {
+  const auto monoEnvelopeVariation = [](std::uint8_t speed, float depth) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0);
+    hook_keys::ModuleEffectsConfig config;
+    config.rotary = {true, speed, 0.8f, 6.4f, 0.1f, depth, 1.0f};
+    effects.setConfig(config, 120.0f);
+    std::vector<float> left(96000), right(96000);
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      left[index] = right[index] = static_cast<float>(
+          0.2 * std::sin(6.283185307179586 * 3000.0 * static_cast<double>(index) / 48000.0));
+    }
+    effects.process(left.data(), right.data(), left.size());
+    // RMS em janelas de 10 ms no segundo final (rotação já estabilizada).
+    std::vector<double> windows;
+    for (std::size_t start = 48000; start + 480 <= left.size(); start += 480) {
+      double energy = 0.0;
+      for (std::size_t index = start; index < start + 480; ++index) {
+        const double mono = 0.5 * (left[index] + right[index]);
+        energy += mono * mono;
+      }
+      windows.push_back(std::sqrt(energy / 480.0));
+    }
+    const auto [low, high] = std::minmax_element(windows.begin(), windows.end());
+    return *high > 0.0 ? (*high - *low) / *high : 0.0;
+  };
+  expect(monoEnvelopeVariation(2, 0.85f) > 0.25, "Leslie Fast: horn tremolo pulses the treble even in mono");
+  expect(monoEnvelopeVariation(2, 0.0f) < 0.02, "Depth zero removes the Leslie tremolo");
+}
+
 void testIndependentOscillatorOctaves() {
   hook_keys::AnalogSynthConfig defaults;
   expect(defaults.oscillator1Octave == 0 && defaults.oscillator2Octave == 0, "both oscillators default to octave zero");
@@ -2219,6 +2252,7 @@ int main() {
   testDelayProcessing();
   testReverbProcessing();
   testRotarySpeakerProcessing();
+  testRotaryLeslieAmplitudeModulation();
   testRotaryMidiEngineRouting();
   std::cout << "Hook Keys engine tests passed\n";
   return EXIT_SUCCESS;

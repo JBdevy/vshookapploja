@@ -121,7 +121,9 @@ private:
     void updateLengths() noexcept;
   };
 
-  // Two-band rotating speaker: horn/drum inertia, Doppler delay and stereo motion.
+  // Caixa Leslie de dois rotores (corneta e tambor), captada por dois microfones:
+  // Doppler, modulação de volume e de brilho pela direção da corneta, reflexão
+  // do gabinete, inércias diferentes e um leve drive de válvula.
   struct RotarySpeaker final {
     RotaryConfig config{};
     std::uint8_t effectiveSpeed = 1;
@@ -137,6 +139,8 @@ private:
     float drumSmoothing = 0.0f;
     float crossover = 0.0f;
     std::array<float, 2> lowPass{};
+    std::array<float, 2> lowPassSecond{};
+    std::array<float, 2> hornTone{};
 
     void prepare(double nextSampleRate);
     void configure(RotaryConfig next) noexcept;

@@ -43,7 +43,7 @@ assert.equal(window.HookPlayer.isCellularPlayerViewport(800, 500, true), false,
   'desktop mantém o Keyboard mesmo com uma janela menor');
 const playerCss = await import('node:fs/promises').then(({ readFile }) => readFile('src/styles.css', 'utf8'));
 assert.match(playerCss,
-  /\.player-screen--cellular \.player-bank-view:has\(\.player-presets--cellular\)[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto/,
+  /\.player-screen--cellular \.player-bank-view\.player-bank-view--cellular[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto/,
   'no celular, a altura retirada do Keyboard aumenta a linha dos módulos');
 assert.match(playerCss, /\.player-modal--app-settings select\[data-setting\]:not\(\.app-select__native\)[\s\S]*?visibility:\s*hidden/,
   'o seletor nativo fica oculto antes do seletor próprio ser montado');

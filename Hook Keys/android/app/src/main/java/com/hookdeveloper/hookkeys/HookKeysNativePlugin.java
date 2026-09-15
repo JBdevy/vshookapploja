@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.content.Intent;
 import android.media.midi.MidiDevice;
 import android.media.midi.MidiDeviceInfo;
@@ -265,6 +266,19 @@ public class HookKeysNativePlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("devices", devices);
         call.resolve(result);
+    }
+
+    // Paisagem dos dois lados, seguindo o sensor: dá para usar com a USB de
+    // qualquer lado. O plugin de orientação só trava uma paisagem.
+    @PluginMethod
+    public void lockOrientation(PluginCall call) {
+        final boolean landscape = "landscape".equals(call.getString("mode", "portrait"));
+        getActivity().runOnUiThread(() -> {
+            getActivity().setRequestedOrientation(landscape
+                ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            call.resolve();
+        });
     }
 
     // RAM do app (PSS, inclui a memória nativa dos SF2) contra a RAM do aparelho.

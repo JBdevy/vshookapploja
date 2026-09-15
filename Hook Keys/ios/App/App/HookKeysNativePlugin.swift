@@ -18,6 +18,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "audioOutputStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "audioRouteLog", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "memoryUsage", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "lockOrientation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMidiInputEnabled", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "moduleMeterLevels", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "moduleAnalysis", returnType: CAPPluginReturnPromise),
@@ -242,6 +243,36 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     // RAM do app contra o limite que o iOS dá a ele: é nesse teto que o sistema
     // fecha o app, então a porcentagem mostra quanto falta. phys_footprint é a
     // mesma conta que o Xcode e o iOS usam para esse limite.
+    // Paisagem dos dois lados (USB para a esquerda ou para a direita). O plugin
+    // de orientação só trava um lado; aqui a máscara libera os dois.
+    @objc func lockOrientation(_ call: CAPPluginCall) {
+        let landscape = call.getString("mode", "portrait") == "landscape"
+        DispatchQueue.main.async { [weak self] in
+            guard let controller = self?.bridge?.viewController as? CAPBridgeViewController else {
+                call.resolve()
+                return
+            }
+            controller.supportedOrientations = landscape
+                ? [UIInterfaceOrientation.landscapeLeft.rawValue, UIInterfaceOrientation.landscapeRight.rawValue]
+                : [UIInterfaceOrientation.portrait.rawValue]
+            let mask: UIInterfaceOrientationMask = landscape ? .landscape : .portrait
+            if #available(iOS 16.0, *) {
+                controller.setNeedsUpdateOfSupportedInterfaceOrientations()
+                let scene = controller.view.window?.windowScene
+                    ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
+                scene?.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+            } else {
+                let deviceIsLandscape = UIDevice.current.orientation.isLandscape
+                if !landscape || !deviceIsLandscape {
+                    let target: UIInterfaceOrientation = landscape ? .landscapeRight : .portrait
+                    UIDevice.current.setValue(target.rawValue, forKey: "orientation")
+                }
+                UIViewController.attemptRotationToDeviceOrientation()
+            }
+            call.resolve()
+        }
+    }
+
     @objc func memoryUsage(_ call: CAPPluginCall) {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)

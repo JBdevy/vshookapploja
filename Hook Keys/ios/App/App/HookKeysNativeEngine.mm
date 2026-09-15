@@ -33,22 +33,34 @@ struct AudioState final {
   std::array<float, kRenderChunkFrames * 32> interleaved{};
 };
 
-// Formato do gerador para uma saída de `channels` canais.
-// initStandardFormatWithSampleRate:channels: devolve nil acima de 2 canais, então
-// acima de estéreo o formato leva um layout: o da própria placa quando ela
-// informa um com a mesma contagem, senão canais discretos na ordem da placa.
-AVAudioFormat* renderFormatFor(AVAudioFormat* hardware, double sampleRate, AVAudioChannelCount channels) {
+// Formatos possíveis do gerador para uma saída de `channels` canais, do melhor
+// para o de reserva. Acima de estéreo o primeiro é o próprio formato da placa:
+// com formato idêntico o iOS não converte nada e o canal N do motor chega na
+// saída N. Uma placa USB costuma informar 6 canais SEM layout (0x0); com um
+// layout "discreto" no gerador o iOS inseria um conversor que somava L+R.
+NSArray<AVAudioFormat*>* renderFormatsFor(AVAudioFormat* hardware, double sampleRate, AVAudioChannelCount channels) {
+  NSMutableArray<AVAudioFormat*>* formats = [NSMutableArray array];
   if (channels <= 2) {
-    return [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channels:channels];
+    AVAudioFormat* stereo = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channels:channels];
+    if (stereo != nil) [formats addObject:stereo];
+    return formats;
   }
+  if (hardware != nil && hardware.channelCount == channels && std::abs(hardware.sampleRate - sampleRate) < 1.0 &&
+      hardware.commonFormat == AVAudioPCMFormatFloat32 && !hardware.isInterleaved) {
+    [formats addObject:hardware];
+  }
+  // initStandardFormatWithSampleRate:channels: devolve nil acima de 2 canais:
+  // as reservas levam o layout da placa (se houver) ou canais discretos.
   AVAudioChannelLayout* layout = hardware.channelLayout;
   if (layout != nil && layout.channelCount == channels) {
     AVAudioFormat* format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channelLayout:layout];
-    if (format != nil) return format;
+    if (format != nil) [formats addObject:format];
   }
   AVAudioChannelLayout* discrete = [[AVAudioChannelLayout alloc]
       initWithLayoutTag:(kAudioChannelLayoutTag_DiscreteInOrder | channels)];
-  return [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channelLayout:discrete];
+  AVAudioFormat* discreteFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate channelLayout:discrete];
+  if (discreteFormat != nil) [formats addObject:discreteFormat];
+  return formats;
 }
 
 // Gerador que puxa o DSP do runtime compartilhado. Recriar o nó (troca de
@@ -352,27 +364,28 @@ private:
 - (BOOL)connectSourceNodeForState:(std::shared_ptr<AudioState>)state
                     outputChannels:(AVAudioChannelCount)channels {
   AVAudioFormat *hardware = [_audioEngine.outputNode outputFormatForBus:0];
-  AVAudioFormat *renderFormat = renderFormatFor(hardware, state->sampleRate, channels);
-  if (renderFormat == nil) return NO;
-  _sourceNode = makeSourceNode(renderFormat, state);
-  [_audioEngine attachNode:_sourceNode];
-  // connect: lança exceção (e fecharia o app) quando a saída recusa o formato.
-  @try {
-    if (channels <= 2) {
-      // Até estéreo o mixer adapta a saída (mono, Bluetooth, troca de rota) sem
-      // reinterpretar os quadros do gerador em outra taxa.
-      [_audioEngine connect:_sourceNode to:_audioEngine.mainMixerNode format:renderFormat];
-    } else {
-      // Acima de estéreo o mainMixer não distribui canais discretos e a placa
-      // ficava muda: o gerador já entrega cada canal pronto e vai direto à saída.
-      [_audioEngine connect:_sourceNode to:_audioEngine.outputNode format:renderFormat];
+  for (AVAudioFormat *renderFormat in renderFormatsFor(hardware, state->sampleRate, channels)) {
+    _sourceNode = makeSourceNode(renderFormat, state);
+    [_audioEngine attachNode:_sourceNode];
+    // connect: lança exceção (e fecharia o app) quando a saída recusa o formato;
+    // nesse caso tenta o próximo formato da lista.
+    @try {
+      if (channels <= 2) {
+        // Até estéreo o mixer adapta a saída (mono, Bluetooth, troca de rota) sem
+        // reinterpretar os quadros do gerador em outra taxa.
+        [_audioEngine connect:_sourceNode to:_audioEngine.mainMixerNode format:renderFormat];
+      } else {
+        // Acima de estéreo o mainMixer não distribui canais discretos e a placa
+        // ficava muda: o gerador já entrega cada canal pronto e vai direto à saída.
+        [_audioEngine connect:_sourceNode to:_audioEngine.outputNode format:renderFormat];
+      }
+      return YES;
+    } @catch (NSException *exception) {
+      [_audioEngine detachNode:_sourceNode];
+      _sourceNode = nil;
     }
-  } @catch (NSException *exception) {
-    [_audioEngine detachNode:_sourceNode];
-    _sourceNode = nil;
-    return NO;
   }
-  return YES;
+  return NO;
 }
 
 static NSString *describeFormat(AVAudioFormat *format) {

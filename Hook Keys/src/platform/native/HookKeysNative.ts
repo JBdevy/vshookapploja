@@ -196,6 +196,7 @@ interface HookKeysNativePlugin {
   audioOutputStatus(): Promise<NativeAudioOutputStatus>;
   audioRouteLog(): Promise<{ current: string; events: string[] }>;
   memoryUsage(): Promise<{ percent: number; usedBytes: number; limitBytes: number }>;
+  lockOrientation(options: { mode: 'landscape' | 'portrait' }): Promise<void>;
   moduleMeterLevels(): Promise<{ levels: number[] }>;
   moduleAnalysis(options: { moduleIndex: number }): Promise<{ values: number[] }>;
   setMidiInputs(options: { deviceIds: Array<string | null> }): Promise<void>;
@@ -394,6 +395,18 @@ class HookKeysNativeBridge {
       return Number.isFinite(result.percent) ? result : null;
     } catch {
       return null;
+    }
+  }
+
+  // Paisagem dos dois lados (iOS e Android). Devolve false quando o binário
+  // nativo ainda não tem o método, para o chamador usar o plugin de orientação.
+  async lockOrientation(mode: 'landscape' | 'portrait'): Promise<boolean> {
+    if (!Capacitor.isNativePlatform() || this.tauriInvoke()) return false;
+    try {
+      await plugin.lockOrientation({ mode });
+      return true;
+    } catch {
+      return false;
     }
   }
 
