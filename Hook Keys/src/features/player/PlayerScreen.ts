@@ -178,6 +178,7 @@ import { hookKeysNative } from '../../platform/native/HookKeysNative';
 import { isDesktopRuntime } from '../../platform/runtime';
 import { Capacitor } from '@capacitor/core';
 import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
+import { ApiError } from '../../shared/api/ApiError';
 import {
   createPerformanceKeyboardMarkup,
   createPerformanceKeysMarkup,
@@ -1220,6 +1221,7 @@ export class PlayerScreen {
           const inputId = this.keyboardMidiRouter?.note(noteNumber, pressed, velocity) ?? null;
           this.updatePerformanceNoteDisplay(`touch:${noteNumber}`, noteNumber, pressed);
           this.patternPlayback.handleInput({ inputId, noteNumber, pressed, velocity });
+          if (pressed) this.learnNoteRangeFrom(noteNumber, inputId);
           return inputId;
         },
       );
@@ -1808,7 +1810,21 @@ export class PlayerScreen {
       return;
     }
 
-    if (action === 'logout') void this.logout(actionButton);
+    if (action === 'logout') {
+      this.showLogoutConfirmation();
+      return;
+    }
+
+    if (action === 'cancel-logout') {
+      this.modal?.querySelector('[data-logout-confirmation]')?.remove();
+      return;
+    }
+
+    if (action === 'confirm-logout') {
+      const logoutButton = this.modal?.querySelector<HTMLButtonElement>('[data-action="logout"]');
+      this.modal?.querySelector('[data-logout-confirmation]')?.remove();
+      if (logoutButton) void this.logout(logoutButton);
+    }
   }
 
   private onRootInput(event: Event): void {
@@ -3829,13 +3845,18 @@ export class PlayerScreen {
     }
     window.dispatchEvent(new CustomEvent('hookkeys:performance-note', { detail: input }));
     this.patternPlayback.handleInput(input);
-    if (!input.pressed) return;
+    if (input.pressed) this.learnNoteRangeFrom(input.noteNumber, input.inputId);
+  }
+
+  // O limite de notas do módulo também se aprende tocando no teclado da tela,
+  // do A-1 ao C7, e não só num teclado MIDI ligado.
+  private learnNoteRangeFrom(noteNumber: number, inputId: string | null): void {
     const pending = this.pendingNoteLearn;
     if (!pending) return;
     const moduleState = this.getActivePresetState()?.modules[pending.moduleNumber - 1];
     if (!moduleState) return;
-    if (moduleState.midiInputId && input.inputId && moduleState.midiInputId !== input.inputId) return;
-    this.applyLearnedMidiNote(input.noteNumber);
+    if (moduleState.midiInputId && inputId && moduleState.midiInputId !== inputId) return;
+    this.applyLearnedMidiNote(noteNumber);
   }
 
   private updatePerformanceNoteDisplay(source: string, noteNumber: number, pressed: boolean): void {
@@ -4726,7 +4747,6 @@ export class PlayerScreen {
     const footerMarkup = kind === 'user'
       ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
-          <button class="player-modal__logout-button" type="button" data-action="logout">Sair</button>
         `
       : kind === 'user-name'
         ? `
@@ -4800,6 +4820,9 @@ export class PlayerScreen {
           ` : ''}
           ${processorKind ? `
             <button class="module-processor-reset-button" type="button" data-modal-action="reset-processor" data-reset-processor="${processorKind}">Reset</button>
+          ` : ''}
+          ${kind === 'user' ? `
+            <button class="player-modal__logout-button player-modal__logout-button--top" type="button" data-action="logout">Sair</button>
           ` : ''}
           <p class="player-modal__description"></p>
         </header>
@@ -5474,7 +5497,21 @@ export class PlayerScreen {
         : null;
       if (kind === 'sound-selection' && modalAction === 'download-all-sounds') {
         const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
-        if (button) void this.downloadAllOfficialSounds(modal, button);
+        if (button) void this.showDownloadAllConfirmation(modal, button);
+        return;
+      }
+      const downloadAllChoice = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-download-all-choice]')?.dataset.downloadAllChoice
+        : null;
+      if (kind === 'sound-selection' && downloadAllChoice) {
+        const confirmation = modal.querySelector<HTMLElement>('[data-download-all-confirmation]');
+        if (downloadAllChoice === 'confirm') {
+          const button = modal.querySelector<HTMLButtonElement>('[data-modal-action="download-all-sounds"]');
+          confirmation?.remove();
+          if (button) void this.downloadAllOfficialSounds(modal, button);
+        } else {
+          confirmation?.remove();
+        }
         return;
       }
       if (kind === 'module-synth' && modalAction === 'reset-synth-preset') {
@@ -6358,6 +6395,10 @@ export class PlayerScreen {
       if (message) message.textContent = 'Digite o nome do usuário.';
       return;
     }
+    if (!navigator.onLine) {
+      if (message) message.textContent = 'Sem conexão com a internet.';
+      return;
+    }
     button.disabled = true;
     if (message) message.textContent = 'Salvando nome...';
     try {
@@ -6365,8 +6406,12 @@ export class PlayerScreen {
       this.account.name = profile.name;
       if (!modal.isConnected) return;
       this.returnToPreviousModal();
-    } catch {
-      if (message) message.textContent = 'Não foi possível atualizar o nome.';
+    } catch (error) {
+      if (message) {
+        message.textContent = !navigator.onLine || (error instanceof ApiError && error.status === 0)
+          ? 'Sem conexão com a internet.'
+          : 'Não foi possível atualizar o nome.';
+      }
       if (button.isConnected) button.disabled = false;
     }
   }
@@ -6376,6 +6421,10 @@ export class PlayerScreen {
     input.value = '';
     if (!file) return;
     const message = modal.querySelector<HTMLElement>('[data-user-profile-message]');
+    if (!navigator.onLine) {
+      if (message) message.textContent = 'Sem conexão com a internet.';
+      return;
+    }
     if (message) message.textContent = 'Salvando foto...';
     try {
       const imageDataUrl = await resizeProfilePhoto(file);
@@ -6383,8 +6432,12 @@ export class PlayerScreen {
       if (!modal.isConnected) return;
       this.renderUserProfile(modal, profile);
       if (message) message.textContent = 'Foto atualizada.';
-    } catch {
-      if (message) message.textContent = 'Não foi possível atualizar a foto.';
+    } catch (error) {
+      if (message) {
+        message.textContent = !navigator.onLine || (error instanceof ApiError && error.status === 0)
+          ? 'Sem conexão com a internet.'
+          : 'Não foi possível atualizar a foto.';
+      }
     }
   }
 
@@ -6546,6 +6599,33 @@ export class PlayerScreen {
     }
   }
 
+  // Sair da conta pede confirmação: o botão fica no alto da janela do User e
+  // um toque errado tirava a pessoa do app no meio do show.
+  private showLogoutConfirmation(): void {
+    const modal = this.modal;
+    if (!modal) return;
+    modal.querySelector('[data-logout-confirmation]')?.remove();
+    const confirmation = document.createElement('section');
+    confirmation.className = 'user-sf2-remove-confirmation logout-confirmation';
+    confirmation.dataset.logoutConfirmation = '';
+    confirmation.setAttribute('role', 'alertdialog');
+    confirmation.setAttribute('aria-modal', 'true');
+    confirmation.setAttribute('aria-label', 'Confirmar saída da conta');
+    confirmation.innerHTML = `
+      <div>
+        <small>Hook Keys</small>
+        <strong>Sair da conta?</strong>
+        <p>Os timbres baixados e os presets continuam neste aparelho. Para voltar, é só entrar de novo.</p>
+        <span>
+          <button type="button" data-action="cancel-logout">Cancelar</button>
+          <button type="button" data-action="confirm-logout">Sair</button>
+        </span>
+      </div>
+    `;
+    modal.append(confirmation);
+    confirmation.querySelector<HTMLButtonElement>('[data-action="cancel-logout"]')?.focus();
+  }
+
   private showUserSoundfontRemoveConfirmation(modal: HTMLElement, button: HTMLButtonElement): void {
     const id = button.dataset.userSoundfontId;
     const name = button.dataset.userSoundfontName;
@@ -6643,6 +6723,7 @@ export class PlayerScreen {
     const knownTotalBytes = sounds.reduce((total, sound) => total + (sound.byteSize ?? 0), 0);
     if (!(await hasStorageFor(knownTotalBytes || undefined))) {
       button.textContent = 'Sem espaço';
+      this.updateSoundDownloadMessage('Armazenamento insuficiente para baixar todos os timbres restantes.');
       return;
     }
 
@@ -6669,13 +6750,64 @@ export class PlayerScreen {
       button.textContent = 'Tudo baixado';
       void this.syncNativeEngine();
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError') && button.isConnected) {
-        button.textContent = completed > 0 ? `Continuar (${sounds.length - completed})` : 'Tentar novamente';
-        button.disabled = false;
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        // No lote também vale a mensagem real: sem ela, só restava o botão
+        // dizendo "Tentar novamente", sem dizer o que aconteceu.
+        console.error('[Hook Keys] Falha ao baixar timbres', error);
+        this.updateSoundDownloadMessage(soundDownloadErrorMessage(error));
+        if (button.isConnected) {
+          button.textContent = completed > 0 ? `Continuar (${sounds.length - completed})` : 'Tentar novamente';
+          button.disabled = false;
+        }
       }
     } finally {
       this.soundDownloadAbort = null;
     }
+  }
+
+  private async showDownloadAllConfirmation(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
+    const sounds = this.soundCatalog.sounds.filter(
+      (sound) => Boolean(sound.sf2ObjectKey) && !this.installedFixedSoundIds.has(sound.id),
+    );
+    if (sounds.length === 0) {
+      button.textContent = 'Tudo baixado';
+      button.disabled = true;
+      return;
+    }
+
+    const knownTotalBytes = sounds.reduce((total, sound) => total + (sound.byteSize ?? 0), 0);
+    button.disabled = true;
+    const hasSpace = await hasStorageFor(knownTotalBytes || undefined);
+    if (!button.isConnected) return;
+    button.disabled = false;
+    if (!hasSpace) {
+      button.textContent = 'Sem espaço';
+      this.updateSoundDownloadMessage(
+        `Espaço insuficiente. Os ${sounds.length} timbres restantes precisam de ${formatBytes(knownTotalBytes)}.`,
+      );
+      return;
+    }
+
+    modal.querySelector('[data-download-all-confirmation]')?.remove();
+    const confirmation = document.createElement('section');
+    confirmation.className = 'user-sf2-remove-confirmation sound-library-download-confirmation';
+    confirmation.dataset.downloadAllConfirmation = '';
+    confirmation.setAttribute('role', 'alertdialog');
+    confirmation.setAttribute('aria-modal', 'true');
+    confirmation.setAttribute('aria-label', 'Confirmar download de todos os timbres');
+    confirmation.innerHTML = `
+      <div>
+        <small>Biblioteca Hook Keys</small>
+        <strong>Baixar todos os timbres?</strong>
+        <p>Serão baixados ${sounds.length} timbres (${formatBytes(knownTotalBytes)}). O espaço disponível foi verificado neste dispositivo.</p>
+        <span>
+          <button type="button" data-download-all-choice="cancel">Cancelar</button>
+          <button type="button" data-download-all-choice="confirm">Baixar</button>
+        </span>
+      </div>
+    `;
+    modal.append(confirmation);
+    confirmation.querySelector<HTMLButtonElement>('[data-download-all-choice="cancel"]')?.focus();
   }
 
   private async selectUserSoundfont(moduleNumber: number, button: HTMLButtonElement): Promise<void> {
@@ -8689,7 +8821,8 @@ export class PlayerScreen {
       this.selectFixedSound(moduleNumber, sound.id);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
-        this.updateSoundDownloadMessage('Não foi possível baixar este timbre. Confira a conexão e tente novamente.');
+        console.error('[Hook Keys] Falha ao baixar timbre', error);
+        this.updateSoundDownloadMessage(soundDownloadErrorMessage(error));
       }
     } finally {
       this.soundDownloadAbort = null;
@@ -9940,6 +10073,37 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
 function formatGigabytes(bytes: number): string {
   const gigabytes = bytes / 1024 ** 3;
   return gigabytes >= 10 ? `${Math.round(gigabytes)} GB` : `${gigabytes.toFixed(1)} GB`;
+}
+
+// O download falhava sempre com a mesma frase. Cada erro conhecido vira uma
+// mensagem que diz o que aconteceu, e o resto mostra o código real.
+function soundDownloadErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const status = /^sound_download_failed:(\d+)$/.exec(raw)?.[1];
+  if (status === '401' || status === '403') {
+    return `O servidor recusou o download deste timbre (${status}). Confira o link e a permissão do arquivo.`;
+  }
+  if (status === '404') return 'O arquivo deste timbre não está no servidor (404).';
+  if (status) return `O servidor respondeu ${status} ao baixar este timbre.`;
+  if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+    return 'Sem espaço neste aparelho para guardar o timbre.';
+  }
+  if (error instanceof RangeError || /allocation failed|out of memory|maximum size/i.test(raw)) {
+    return 'O aparelho ficou sem memória para este timbre. Feche outros apps e tente de novo.';
+  }
+  if (raw === 'sound_too_large') return 'O arquivo do timbre é maior que o limite do app.';
+  if (raw === 'sound_size_mismatch' || raw === 'sound_download_incomplete') {
+    return 'O download veio incompleto. Confira a conexão e tente de novo.';
+  }
+  if (raw === 'sound_download_empty' || raw === 'sound_download_body_missing') {
+    return 'O servidor não enviou o arquivo do timbre.';
+  }
+  if (raw === 'sound_integrity_failed') return 'O arquivo baixado não confere com o do servidor.';
+  if (!navigator.onLine) return 'Sem conexão com a internet.';
+  if (error instanceof TypeError) {
+    return 'Não foi possível falar com o servidor do timbre. Confira a conexão.';
+  }
+  return `Não foi possível baixar este timbre (${raw || 'erro desconhecido'}).`;
 }
 
 function presetSlotLabel(bank: BankId, presetNumber: number): string {

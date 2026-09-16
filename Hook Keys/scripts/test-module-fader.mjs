@@ -454,6 +454,12 @@ test('toque longo no botão Keyboard deixa o teclado em quatro oitavas (C2 a C5)
   assert.match(player, /scroller\.innerHTML = createPerformanceKeysMarkup\(this\.keyboardOctaveSpan\);\s*scroller\.scrollLeft = 0;\s*this\.performanceKeyboard\?\.refreshKeys\(\);/);
 });
 
+test('teclado da tela também ensina o limite de notas do módulo', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /if \(pressed\) this\.learnNoteRangeFrom\(noteNumber, inputId\);/);
+  assert.match(player, /if \(input\.pressed\) this\.learnNoteRangeFrom\(input\.noteNumber, input\.inputId\);/);
+});
+
 test('Lite mantém a tecla acesa e a ponta da tecla preta é quase reta', () => {
   assert.match(css, /\.hook-keys-lite \.performance-keyboard__key\.is-pressed \{\s*box-shadow: inset 0 0 0 2px rgba\(225, 255, 234, \.78\) !important;/);
   assert.match(css, /\.performance-keyboard__key--black \{[^}]*border-radius: 0 0 2px 2px;/);

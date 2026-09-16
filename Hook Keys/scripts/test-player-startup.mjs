@@ -932,6 +932,31 @@ try {
   window.document.querySelector('.player-preset-button[data-preset="2"]').click();
   assert.equal(player.bankStates.get('A').selectedPreset, 2);
 
+  // Limite de notas do módulo aprendido pelo teclado da tela, inclusive nas pontas.
+  {
+    const moduleOne = () => player.getActivePresetState().modules[0];
+    const beforeRange = { low: moduleOne().lowNote, high: moduleOne().highNote };
+    player.toggleNoteLearn(1, 'low');
+    player.learnNoteRangeFrom(9, null);
+    assert.equal(moduleOne().lowNote, 9, 'A-1 tocado na tela vira o limite grave');
+    player.toggleNoteLearn(1, 'high');
+    player.learnNoteRangeFrom(96, null);
+    assert.equal(moduleOne().highNote, 96, 'C7 tocado na tela vira o limite agudo');
+    player.toggleNoteLearn(1, 'low');
+    player.learnNoteRangeFrom(60, 'outro-teclado');
+    assert.equal(moduleOne().lowNote, 60, 'sem dispositivo escolhido no módulo, qualquer entrada ensina');
+    moduleOne().midiInputId = 'teclado-do-modulo';
+    player.toggleNoteLearn(1, 'low');
+    player.learnNoteRangeFrom(48, 'outro-teclado');
+    assert.equal(moduleOne().lowNote, 60, 'com dispositivo escolhido, outro teclado não ensina');
+    player.learnNoteRangeFrom(48, 'teclado-do-modulo');
+    assert.equal(moduleOne().lowNote, 48, 'o teclado do módulo ensina');
+    moduleOne().midiInputId = null;
+    moduleOne().lowNote = beforeRange.low;
+    moduleOne().highNote = beforeRange.high;
+    player.cancelNoteLearn();
+  }
+
   // Copy / Paste, os seis bancos e o botão Presets/Keyboard.
   {
     const copyButton = () => window.document.querySelector('[data-action="copy-preset"]');
