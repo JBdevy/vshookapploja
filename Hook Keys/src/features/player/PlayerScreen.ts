@@ -4800,7 +4800,7 @@ export class PlayerScreen {
           : kind === 'module-rotary' ? 'Rotary Speaker' : 'Delay';
     } else if (kind === 'sound-selection') {
       eyebrow.textContent = `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
-      title.textContent = 'Escolher timbre';
+      title.textContent = 'Library';
     } else if (kind === 'sound-download') {
       eyebrow.textContent = 'Biblioteca';
       title.textContent = this.installedFixedSoundIds.has(this.selectedCatalogSoundId ?? '')
