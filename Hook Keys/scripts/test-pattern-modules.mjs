@@ -110,10 +110,12 @@ test('arpeggiator and sequencer send generated notes through isolated engine inp
   controller.destroy();
 });
 
-test('arpeggiator follows physical key-up and its native route disables sustain', () => {
+test('arpeggiator follows physical key-up and the pedal holds it like any module', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /sustain:\s*patternInputSlot === ARPEGGIATOR_ENGINE_INPUT\s*\? false/,
-    'arpeggiator module must never inherit or accept CC64 sustain');
+  // O pedal voltou a valer no arpeggiator: pisado, ele segura as teclas e a
+  // frase continua. Quem nao quiser desliga no botao Sustain do modulo.
+  assert.match(player, /sustain: moduleState\?\.sustainInputEnabled \?\? true,/,
+    'the pedal reaches the arpeggiator through the module Sustain switch');
   assert.match(player, /inputSlot:\s*patternInputSlot \?\?/,
     'enabled arpeggiator must receive only its generated note stream');
   const playback = readFileSync(new URL('../src/features/player/PatternPlaybackController.ts', import.meta.url), 'utf8');

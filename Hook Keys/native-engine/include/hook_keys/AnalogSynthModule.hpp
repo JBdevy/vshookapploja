@@ -100,8 +100,9 @@ public:
   // Mod card no Synth. LFO: a roda aciona o LFO configurado no editor do Synth
   // (rate e destino de lá). User: a roda não faz nada no Synth. O Synth não tem
   // vibrato próprio da roda, então o rate do card não se aplica aqui.
-  void setModulationMode(bool lfo, float) noexcept {
-    wheelDrivesLfo_.store(lfo, std::memory_order_relaxed);
+  // Só o modo LFO (1) muda algo aqui: o Synth não tem tremolo próprio da roda.
+  void setModulationMode(std::uint8_t mode, float) noexcept {
+    wheelDrivesLfo_.store(mode == 1, std::memory_order_relaxed);
   }
 
   // Velocity limit per oscillator: a key struck harder than an oscillator's

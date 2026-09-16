@@ -498,7 +498,14 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             rotaryRampSeconds: call.getFloat("rotaryRampSeconds", 1.2),
             rotaryDepth: call.getFloat("rotaryDepth", 0.7),
             rotaryMix: call.getFloat("rotaryMix", 1),
-            rotaryModulationEnabled: call.getBool("rotaryModulationEnabled", false)
+            rotaryModulationEnabled: call.getBool("rotaryModulationEnabled", false),
+            chorusEnabled: call.getBool("chorusEnabled", false),
+            chorusRateHz: call.getFloat("chorusRateHz", 0.6),
+            chorusDepth: call.getFloat("chorusDepth", 0.5),
+            chorusMix: call.getFloat("chorusMix", 0.35),
+            autoFaderEnabled: call.getBool("autoFaderEnabled", false),
+            autoFaderBeats: call.getFloat("autoFaderBeats", 1),
+            autoFaderDepthDb: call.getFloat("autoFaderDepthDb", 6)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }
@@ -521,8 +528,9 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             call.reject("Módulo inválido.")
             return
         }
+        // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
         if engine.configureModuleModulation(
-            moduleIndex, lfo: call.getBool("lfo", true), rateHz: call.getFloat("rateHz", 6.85)
+            moduleIndex, mode: call.getInt("mode", 1), rateHz: call.getFloat("rateHz", 6.85)
         ) { call.resolve() }
         else { call.reject("O motor ainda não foi inicializado.") }
     }

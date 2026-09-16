@@ -74,6 +74,14 @@ export interface NativeModuleEffectsConfig {
   rotaryDepth: number;
   rotaryMix: number;
   rotaryModulationEnabled: boolean;
+  chorusEnabled: boolean;
+  chorusRateHz: number;
+  chorusDepth: number;
+  chorusMix: number;
+  autoFaderEnabled: boolean;
+  // 1 = 1/4 do compasso por volta, 0,5 = 1/8.
+  autoFaderBeats: number;
+  autoFaderDepthDb: number;
 }
 
 export interface NativeModuleEnvelopeConfig {
@@ -109,7 +117,8 @@ export interface NativeGlideConfig {
 
 export interface NativeModuleModulationConfig {
   moduleIndex: number;
-  lfo: boolean;
+  // 0 User, 1 LFO de pitch, 2 Tremolo.
+  mode: number;
   rateHz: number;
 }
 
@@ -194,7 +203,6 @@ interface HookKeysNativePlugin {
     preserveEngine?: boolean;
   }): Promise<void>;
   audioOutputStatus(): Promise<NativeAudioOutputStatus>;
-  audioRouteLog(): Promise<{ current: string; events: string[] }>;
   memoryUsage(): Promise<{ percent: number; usedBytes: number; limitBytes: number }>;
   lockOrientation(options: { mode: 'landscape' | 'portrait' }): Promise<void>;
   moduleMeterLevels(): Promise<{ levels: number[] }>;
@@ -375,21 +383,22 @@ class HookKeysNativeBridge {
     }
   }
 
-  // Diagnóstico da rota no iOS (AVAudioSession) e no Android (stream AAudio e
-  // dispositivos conectados). Null no desktop e no navegador.
-  async audioRouteLog(): Promise<{ current: string; events: string[] } | null> {
-    if (!Capacitor.isNativePlatform() || this.tauriInvoke() || !this.isAvailable()) return null;
-    try {
-      return await plugin.audioRouteLog();
-    } catch {
-      return null;
-    }
-  }
-
-  // RAM usada no aparelho inteiro, em % da RAM instalada. Null no desktop
-  // (lá o topo mostra a CPU) e no navegador.
+  // RAM usada no aparelho inteiro, em % da RAM instalada. No desktop vem do
+  // Windows; no navegador, null.
   async memoryUsage(): Promise<{ percent: number; usedBytes: number; limitBytes: number } | null> {
-    if (!Capacitor.isNativePlatform() || this.tauriInvoke()) return null;
+    const invoke = this.tauriInvoke();
+    if (invoke) {
+      const result = await invoke('memory_usage').catch(() => null) as
+        { percent?: unknown; usedBytes?: unknown; limitBytes?: unknown } | null;
+      const percent = Number(result?.percent);
+      if (!Number.isFinite(percent)) return null;
+      return {
+        percent,
+        usedBytes: Number(result?.usedBytes) || 0,
+        limitBytes: Number(result?.limitBytes) || 0,
+      };
+    }
+    if (!Capacitor.isNativePlatform()) return null;
     try {
       const result = await plugin.memoryUsage();
       return Number.isFinite(result.percent) ? result : null;
@@ -579,7 +588,7 @@ class HookKeysNativeBridge {
     if (!Number.isInteger(config.moduleIndex) || config.moduleIndex < 0 || config.moduleIndex >= 8) return;
     const normalized = {
       moduleIndex: config.moduleIndex,
-      lfo: config.lfo !== false,
+      mode: Number.isInteger(config.mode) ? Math.min(2, Math.max(0, config.mode)) : 1,
       rateHz: Number.isFinite(config.rateHz) ? Math.min(20, Math.max(0.1, config.rateHz)) : 6.85,
     };
     const key = JSON.stringify(normalized);

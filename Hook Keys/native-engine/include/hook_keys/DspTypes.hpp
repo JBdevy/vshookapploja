@@ -107,7 +107,8 @@ struct CompressorConfig final {
   void normalize() noexcept {
     thresholdDb = std::clamp(thresholdDb, -60.0f, 0.0f);
     ratio = std::clamp(ratio, 1.0f, 20.0f);
-    attackMs = std::clamp(attackMs, 0.1f, 250.0f);
+    // Abaixo de 1 ms o ganho reage dentro do ciclo da onda e suja o som.
+    attackMs = std::clamp(attackMs, 1.0f, 250.0f);
     releaseMs = std::clamp(releaseMs, 5.0f, 3000.0f);
     outputGainDb = std::clamp(outputGainDb, -24.0f, 24.0f);
     mix = std::clamp(mix, 0.0f, 1.0f);
@@ -165,6 +166,34 @@ struct RotaryConfig final {
   }
 };
 
+// Chorus: duas vozes atrasadas e moduladas, uma em cada lado, somadas ao som
+// original. Rate em Hz, Depth e Mix em 0..1.
+struct ChorusConfig final {
+  bool enabled = false;
+  float rateHz = 0.6f;
+  float depth = 0.5f;
+  float mix = 0.35f;
+
+  void normalize() noexcept {
+    rateHz = std::clamp(rateHz, 0.05f, 8.0f);
+    depth = std::clamp(depth, 0.0f, 1.0f);
+    mix = std::clamp(mix, 0.0f, 1.0f);
+  }
+};
+
+// Auto Fader: o volume desce e volta no tempo do BPM. depthDb é o quanto ele
+// desce a partir do volume atual do módulo; beats é 1 (1/4) ou 0,5 (1/8).
+struct AutoFaderConfig final {
+  bool enabled = false;
+  float beats = 1.0f;
+  float depthDb = 6.0f;
+
+  void normalize() noexcept {
+    beats = beats <= 0.75f ? 0.5f : 1.0f;
+    depthDb = std::clamp(depthDb, 0.0f, 40.0f);
+  }
+};
+
 struct ModuleEffectsConfig final {
   struct TranceGateConfig final {
     bool enabled = false;
@@ -192,6 +221,8 @@ struct ModuleEffectsConfig final {
   DelayConfig delay{};
   ReverbConfig reverb{};
   RotaryConfig rotary{};
+  ChorusConfig chorus{};
+  AutoFaderConfig autoFader{};
 
   void normalize() noexcept {
     cutoff.normalize();
@@ -200,6 +231,8 @@ struct ModuleEffectsConfig final {
     delay.normalize();
     reverb.normalize();
     rotary.normalize();
+    chorus.normalize();
+    autoFader.normalize();
     tranceGate.normalize();
   }
 };

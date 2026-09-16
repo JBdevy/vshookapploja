@@ -121,6 +121,7 @@ export class PerformanceKeyboardController {
   private readonly pointerCurrentX = new Map<number, number>();
   private readonly twoFingerGesturePointers = new Set<number>();
   private twoFingerGestureTriggered = false;
+  private keyLighting = true;
   private spreadCommitTimer: number | null = null;
 
   private readonly handlePointerDown = (event: PointerEvent) => this.onPointerDown(event);
@@ -289,10 +290,20 @@ export class PerformanceKeyboardController {
     }
   }
 
+  // Modo Lite: sem acender a tecla não há repintura nenhuma no toque, que é
+  // o que engasgava a interface nos aparelhos antigos.
+  setKeyLighting(enabled: boolean): void {
+    this.keyLighting = enabled;
+    if (enabled) return;
+    for (const key of this.root.querySelectorAll('.performance-keyboard__key.is-pressed')) {
+      key.classList.remove('is-pressed');
+    }
+  }
+
   private setPressed(noteNumber: number, pressed: boolean): void {
     const key = this.noteKeys.get(noteNumber)
       ?? this.root.querySelector<HTMLButtonElement>(`[data-keyboard-note="${noteNumber}"]`);
-    key?.classList.toggle('is-pressed', pressed);
+    if (this.keyLighting) key?.classList.toggle('is-pressed', pressed);
     key?.setAttribute('aria-pressed', String(pressed));
   }
 

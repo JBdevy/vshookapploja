@@ -50,11 +50,12 @@ assert.match(playerCss, /\.player-modal--app-settings select\[data-setting\]:not
 for (const [selector, column, row] of [
   ['\\.app-settings-field--audio-device', 1, 1],
   ['\\.app-settings-field--buffer', 2, 1],
-  ['\\[data-audio-route-field="pads"\\]', 1, 2],
-  ['\\[data-audio-route-field="effects"\\]', 2, 2],
-  ['\\[data-audio-route-field="metronome"\\]', 1, 3],
-  ['\\[data-audio-route-field="music"\\]', 2, 3],
-  ['\\.app-settings-field--sample-rate', 1, 4],
+  ['\\[data-audio-route-field="timbres"\\]', 1, 2],
+  ['\\[data-audio-route-field="music"\\]', 2, 2],
+  ['\\[data-audio-route-field="pads"\\]', 1, 3],
+  ['\\[data-audio-route-field="effects"\\]', 2, 3],
+  ['\\[data-audio-route-field="metronome"\\]', 1, 4],
+  ['\\.app-settings-field--sample-rate', 2, 4],
 ]) {
   assert.match(playerCss, new RegExp(`${selector}\\s*\\{[^}]*grid-column:\\s*${column};[^}]*grid-row:\\s*${row};`),
     `posição fixa do campo de áudio ${selector}`);
@@ -238,7 +239,8 @@ try {
     for (const module of [0, 7]) {
       const filterSettings = player.bankStates.get('A').presets[2].modules[module].settings;
       assert.equal(filterSettings.filterVelocityCurve.mode, 'soft', 'Velocity do Cutoff em Middle de fábrica volta para a curva de fábrica');
-      assert.equal(filterSettings.filterVelocityEnabled, false, 'e o Velocity do filtro fica desligado: filtro aberto');
+      // Ligado nos módulos 1 e 2, desligado no resto: é o padrão de fábrica.
+      assert.equal(filterSettings.filterVelocityEnabled, module === 0);
     }
     const chosenFilter = JSON.parse(JSON.stringify(current));
     chosenFilter.banks.A.presets[2].modules[7].settings.filterVelocityCurve = middleFilter;
@@ -275,13 +277,16 @@ try {
   assert(emptySound.classList.contains('is-empty'));
   assert.match(root.querySelector('[data-module="1"] .player-module__sound-button').getAttribute('aria-label'), /Sem timbre/);
   player.openModal('app-settings', null, root.querySelector('[data-action="open-app-settings"]'));
-  assert(!window.document.querySelector('[data-setting="lite-mode"]'), 'Modo Lite saiu de Settings');
+  {
+    // O perfil leve (sem animações) vale sempre. O Modo Lite que se liga em
+    // Settings é só para o App: no desktop ele nem aparece.
+    assert(root.classList.contains('hook-keys-lite'), 'o perfil leve fica sempre aplicado');
+    assert(!window.document.querySelector('[data-setting="lite-mode"]'),
+      'o Modo Lite é só do App, não do desktop');
+  }
   player.closeModal();
   player.openModal('about', null, root.querySelector('[data-action="open-about"]'));
-  // O perfil leve vale sempre: não existe mais opção para ligar ou desligar.
-  assert(!window.document.querySelector('[data-setting="lite-mode"]'), 'o Modo Lite saiu também da tela da versão');
-  assert(root.classList.contains('hook-keys-lite'), 'o perfil leve fica sempre aplicado');
-  assert.equal(player.createSavedPlayerState().liteMode, undefined, 'e some do estado salvo');
+  assert(!window.document.querySelector('[data-setting="lite-mode"]'), 'o Modo Lite não fica na tela da versão');
   player.closeModal();
   player.openTracksSplitView();
   assert(!root.querySelector('.tracks-horizontal-scroll-guide'), 'desktop has no drag-here bar');
@@ -414,7 +419,9 @@ try {
     // Learn fica ouvindo continuamente e confirma somente o ultimo CC no OK.
     const learnFooter = () => [...window.document.querySelectorAll('.player-modal__actions > button')];
     player.onRootContextMenu({ target: root.querySelector('[data-action="octave-up"][data-module="2"]'), preventDefault() {} });
-    assert.equal(JSON.stringify(learnFooter().map((button) => button.textContent.trim())), JSON.stringify(['OK']));
+    // Sair sem mapear e limpar o mapeamento saem da propria tela de Learn.
+    assert.equal(JSON.stringify(learnFooter().map((button) => button.textContent.trim())),
+      JSON.stringify(['Voltar', 'Clean', 'OK']));
     cc(43, 127);
     cc(44, 127);
     cc(45, 127);
@@ -470,7 +477,10 @@ try {
   }
   assert.equal(synthShortcut.textContent.trim(), 'Synth', 'alternar modo não muda o atalho frontal');
   player.openModal('module-settings', 8, master);
-  assert(window.document.querySelector('.module-compressor-preview'), 'Param do Synth tem preview do compressor');
+  assert(!window.document.querySelector('.module-compressor-preview'),
+    'o compressor não tem prévia em lugar nenhum');
+  assert(window.document.querySelector('[data-module-setting-action="open-chorus"]'),
+    'o Param do Synth também tem Chorus');
   assert(!window.document.querySelector('[data-module-setting-action="open-synth"]'));
   {
     const row = window.document.querySelector('.module-settings-bottom-row');
@@ -479,13 +489,16 @@ try {
     assert(!row.querySelector('[data-module-glide-card]'), 'o Glide do Synth fica no editor, não no Param');
     const lastMod = () => calls.filter(({ command, args }) => command === 'configure_module_modulation' && args.config.moduleIndex === 7).at(-1)?.args.config;
     await player.syncNativeEngine();
-    assert.equal(lastMod()?.lfo, false, 'o card Mod do Synth nasce em User, como todos os módulos');
+    assert.equal(lastMod()?.mode, 0, 'o card Mod do Synth nasce em User, como todos os módulos');
     assert(!window.document.querySelector('[data-module-modulation-rate]'), 'o Mod do Synth não tem Rate próprio');
     assert.match(window.document.querySelector('[data-module-mod-card] header small').textContent, /Roda sem efeito/);
     window.document.querySelector('[data-module-modulation-mode="lfo"]').click();
     assert.match(window.document.querySelector('[data-module-mod-card] header small').textContent, /LFO do Synth/);
     await player.syncNativeEngine();
-    assert.equal(lastMod().lfo, true, 'LFO: a roda aciona o LFO do editor do Synth');
+    assert.equal(lastMod().mode, 1, 'LFO: a roda aciona o LFO do editor do Synth');
+    // Tremolo é só do SF2: o card do Synth continua com User e LFO.
+    assert(!window.document.querySelector('[data-module-modulation-mode="tremolo"]'),
+      'o Mod do Synth não tem Tremolo');
     window.document.querySelector('[data-module-modulation-mode="user"]').click();
   }
   player.closeModal();
@@ -594,20 +607,35 @@ try {
     window.document.querySelector('[data-module-delay-division="1/4"]').click();
     player.closeModal();
 
+    // Módulos 1 e 2 nascem com o Velocity do filtro ligado, em 110 Hz e curva Soft.
+    for (const moduleIndex of [0, 1]) {
+      const settings = player.getActivePresetState().modules[moduleIndex].settings;
+      assert.equal(settings.filterVelocityEnabled, true, `módulo ${moduleIndex + 1} nasce com o Velocity do filtro ligado`);
+      assert.equal(settings.filterVelocityCutoffHz, 110);
+      assert.equal(settings.filterVelocityCurve.mode, 'soft');
+    }
+    for (const moduleIndex of [2, 4, 7]) {
+      const settings = player.getActivePresetState().modules[moduleIndex].settings;
+      assert.equal(settings.filterVelocityEnabled, false, `módulo ${moduleIndex + 1} continua com ele desligado`);
+      assert.equal(settings.filterVelocityCutoffHz, 100);
+    }
+
     // Velocity do filtro: ON/OFF embaixo e Cutoff próprio, de onde a curva começa.
     player.openModal('module-settings', 1, master);
     window.document.querySelector('[data-module-setting-action="open-filter-velocity"]').click();
     assert.equal(player.currentModalKind, 'module-filter-velocity');
     const filterPower = () => window.document.querySelector('[data-filter-velocity-power]');
     const cutoffVelocity = () => [0, 1, 2, 3, 4].map((index) => lastEffects()[`cutoffVelocity${index}`]).join(',');
-    assert.equal(filterPower().textContent, 'OFF', 'nasce desligado');
-    assert.equal(window.document.querySelector('[data-filter-velocity-cutoff-value]').textContent, '100 Hz', 'nasce em 100 Hz');
+    assert.equal(filterPower().textContent, 'ON', 'no módulo 1 nasce ligado');
+    assert.equal(window.document.querySelector('[data-filter-velocity-cutoff-value]').textContent, '110 Hz', 'e em 110 Hz');
+    await player.syncNativeEngine();
+    assert.equal(cutoffVelocity(), '31,43,64,95,127', 'ligado em Soft: de 110 Hz até 20 kHz');
+    filterPower().click();
+    assert.equal(filterPower().textContent, 'OFF');
     await player.syncNativeEngine();
     assert.equal(cutoffVelocity(), '127,127,127,127,127', 'desligado, o corte fica no Cutoff do Config');
     filterPower().click();
     assert.equal(filterPower().textContent, 'ON');
-    await player.syncNativeEngine();
-    assert.equal(cutoffVelocity(), '30,42,63,94,127', 'ligado em Soft: de 100 Hz até 20 kHz');
     const filterKnob = window.document.querySelector('[data-filter-velocity-cutoff]');
     filterKnob.value = String(Math.log(400 / 20) / Math.log(1000));
     filterKnob.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -620,7 +648,7 @@ try {
     assert.equal(player.currentModalKind, 'module-settings');
     assert(window.document.querySelector('[data-module-setting-action="open-filter-velocity"]').classList.contains('is-active'),
       'ligado, o botão Velocity do card Cutoff acende');
-    Object.assign(player.getActivePresetState().modules[0].settings, { filterVelocityEnabled: false, filterVelocityCutoffHz: 100 });
+    Object.assign(player.getActivePresetState().modules[0].settings, { filterVelocityEnabled: true, filterVelocityCutoffHz: 110 });
     player.closeModal();
   }
   master.value = '100';
@@ -1067,10 +1095,10 @@ try {
   assert(cpuMeter.classList.contains('is-critical'),
     'encostar no prazo do bloco deixa o numero vermelho');
   // RAM do aparelho: percentual, texto com GB usados do total e as cores só no fim.
-  const ramMeter = window.document.createElement('div');
-  ramMeter.dataset.ramMeter = '';
-  ramMeter.innerHTML = '<strong data-ram-meter-value>--</strong>';
-  root.querySelector('.player-screen').append(ramMeter);
+  // No desktop ela fica ao lado da CPU, no mesmo canto.
+  const ramMeter = root.querySelector('[data-ram-meter]');
+  assert(ramMeter, 'o desktop mostra a RAM junto da CPU');
+  assert.equal(ramMeter.previousElementSibling?.dataset.cpuMeter !== undefined, true, 'uma do lado da outra');
   player.renderRamMeter({ percent: 62.4, usedBytes: 3.2 * 1024 ** 3, limitBytes: 5.9 * 1024 ** 3 });
   assert.equal(ramMeter.querySelector('[data-ram-meter-value]').textContent, '62%');
   assert.equal(ramMeter.title, 'Memória usada no aparelho: 3.2 GB de 5.9 GB');
@@ -1080,7 +1108,6 @@ try {
   assert(ramMeter.classList.contains('is-warning'));
   player.renderRamMeter({ percent: 96, usedBytes: 5.7 * 1024 ** 3, limitBytes: 5.9 * 1024 ** 3 });
   assert(ramMeter.classList.contains('is-critical'));
-  ramMeter.remove();
   audioLoad = [0.12, 0.1, 0];
   const restartStart = calls.length;
   player.openModal('app-settings-audio', null, master);

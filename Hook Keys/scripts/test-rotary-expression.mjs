@@ -40,12 +40,17 @@ function loadPlayerHandlers(names, globals = {}) {
   }).outputText, context);
   return context.exports;
 }
-test('Rotary stacks below Compressor without its preview, while ordinary modules keep the preview', () => {
+test('Rotary and Chorus stack below Compressor, and the compressor has no preview anywhere', () => {
   const shortcuts = effects.createModuleEffectCardsMarkup({}, 120, 'rotary');
   assert.match(shortcuts, /module-effect-card--processor-shortcuts/);
   assert.match(shortcuts, /open-compressor">Compressor<\/button>\s*<button[^>]*open-rotary">Rotary<\/button>/);
   assert.doesNotMatch(shortcuts, /module-compressor-preview/);
-  assert.match(effects.createModuleEffectCardsMarkup({}, 120, 'compressor'), /module-compressor-preview/);
+  // Módulos 1 a 4: o Chorus toma o lugar que o Rotary tem no 5.
+  const chorus = effects.createModuleEffectCardsMarkup({}, 120, 'compressor');
+  assert.doesNotMatch(chorus, /module-compressor-preview/);
+  assert.match(chorus, /open-compressor">Compressor<\/button>\s*<button[^>]*open-chorus">Chorus<\/button>/);
+  assert.equal(effects.readModuleChorusSettings(undefined).enabled, false, 'o Chorus nasce desligado');
+  assert.equal(effects.readModuleChorusSettings({ enabled: true, rateHz: 99 }).rateHz, 8, 'Rate vai até 8 Hz');
   const settings = load('../src/features/player/ModuleSettingsView.ts', {
     './ModuleEffectsView': effects,
     './ParameterKnobView': load('../src/features/player/ParameterKnobView.ts'),

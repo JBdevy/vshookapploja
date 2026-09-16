@@ -130,9 +130,11 @@ int hk_runtime_configure_glide(
   return runtime(handle)->setGlideBehavior(moduleIndex, behavior) ? 1 : 0;
 }
 
+// mode: 0 User, 1 LFO de pitch, 2 Tremolo.
 int hk_runtime_configure_module_modulation(
-    void* handle, std::size_t moduleIndex, int lfo, float rateHz) noexcept {
-  return handle && runtime(handle)->setModuleModulationMode(moduleIndex, lfo != 0, rateHz) ? 1 : 0;
+    void* handle, std::size_t moduleIndex, int mode, float rateHz) noexcept {
+  return handle && runtime(handle)->setModuleModulationMode(
+      moduleIndex, static_cast<std::uint8_t>(std::clamp(mode, 0, 2)), rateHz) ? 1 : 0;
 }
 
 int hk_runtime_configure_effects(
@@ -145,7 +147,9 @@ int hk_runtime_configure_effects(
     float delayFeedback, float delayMix, float reverbDecay, float reverbDampen,
     float reverbSize, float reverbMix, int rotaryEnabled, int rotarySpeed,
     float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
-    float rotaryDepth, float rotaryMix, int rotaryModulationEnabled) noexcept {
+    float rotaryDepth, float rotaryMix, int rotaryModulationEnabled,
+    int chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
+    int autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount || !cutoffVelocity || !eqTypes || !eqFrequencies ||
       !eqGains || !eqQualities || !eqCutStages) return 0;
   hook_keys::ModuleEffectsConfig effects;
@@ -174,6 +178,8 @@ int hk_runtime_configure_effects(
   effects.rotary = {rotaryEnabled != 0, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != 0};
+  effects.chorus = {chorusEnabled != 0, chorusRateHz, chorusDepth, chorusMix};
+  effects.autoFader = {autoFaderEnabled != 0, autoFaderBeats, autoFaderDepthDb};
   return runtime(handle)->setModuleEffects(moduleIndex, effects) ? 1 : 0;
 }
 

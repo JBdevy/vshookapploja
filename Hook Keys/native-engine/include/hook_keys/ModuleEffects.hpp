@@ -121,22 +121,46 @@ private:
     void updateLengths() noexcept;
   };
 
-  // Caixa Leslie de dois rotores (corneta e tambor), captada por dois microfones:
-  // Doppler, modulação de volume e de brilho pela direção da corneta, reflexão
-  // do gabinete, inércias diferentes e um leve drive de válvula.
+  // Caixa Leslie de dois rotores (corneta e tambor), captada por dois microfones.
+  // A geometria é a do setBfree/OpenB3: o atraso de cada rotor é a distância
+  // real até o microfone, sqrt((d - r·cos v)² + (r·sin v)²), o que dá ao Doppler
+  // a curva torta de verdade (a chegada é mais rápida que a saída). Em cima
+  // disso vêm a modulação de volume e de brilho pela direção, a reflexão do
+  // gabinete, um vazamento seco, inércias diferentes e um drive leve.
   struct RotarySpeaker final {
+    // Distâncias da Leslie 122 medidas no setBfree (b_whirl): microfone a 42 cm,
+    // corneta de raio 19,2 cm e tambor de 22 cm, ar a 340 m/s.
+    static constexpr float kMicDistanceCm = 42.0f;
+    static constexpr float kHornRadiusCm = 19.2f;
+    static constexpr float kDrumRadiusCm = 22.0f;
+    static constexpr float kAirSpeedMetersPerSecond = 340.0f;
+    // Primeira reflexão no gabinete: 81,5 cm na corneta e 121,5 cm no tambor.
+    static constexpr float kHornReflectionCm = 81.5f;
+    static constexpr float kDrumReflectionCm = 121.5f;
+    static constexpr std::size_t kDisplacementSize = 1024;
+
     RotaryConfig config{};
     std::uint8_t effectiveSpeed = 1;
     double sampleRate = 48000.0;
     std::array<std::vector<float>, 2> hornBuffers;
     std::array<std::vector<float>, 2> drumBuffers;
+    // Distância corneta→microfone e tambor→microfone, em samples, por ângulo.
+    std::array<float, kDisplacementSize> hornDisplacement{};
+    std::array<float, kDisplacementSize> drumDisplacement{};
+    float micDistanceSamples = 0.0f;
+    float hornReflectionSamples = 0.0f;
+    float drumReflectionSamples = 0.0f;
     std::size_t writeIndex = 0;
     double hornPhase = 0.0;
     double drumPhase = 0.25;
     float hornHz = 0.0f;
     float drumHz = 0.0f;
-    float hornSmoothing = 0.0f;
-    float drumSmoothing = 0.0f;
+    // A corneta é leve e acelera rápido, mas leva o dobro para parar; o tambor
+    // é pesado e faz o contrário (setBfree: 0,161/0,321 s e 4,127/1,371 s).
+    float hornAccSmoothing = 0.0f;
+    float hornDecSmoothing = 0.0f;
+    float drumAccSmoothing = 0.0f;
+    float drumDecSmoothing = 0.0f;
     // Crossover Linkwitz-Riley de 4ª ordem em 800 Hz (dois Butterworth em série).
     std::array<Biquad, 2> drumLowPass{};
     std::array<Biquad, 2> hornHighPass{};
@@ -148,6 +172,23 @@ private:
     void reset() noexcept;
     void process(float* left, float* right, std::size_t frames) noexcept;
     [[nodiscard]] float read(const std::vector<float>& buffer, float delaySamples) const noexcept;
+    // Atraso em samples de um rotor visto em `turns` voltas (0..1), já com o
+    // Depth encolhendo o raio em volta da distância do microfone.
+    [[nodiscard]] float displacementAt(
+        const std::array<float, kDisplacementSize>& table, float turns, float depth) const noexcept;
+  };
+
+  // Chorus: uma linha de atraso por lado, com os dois LFOs em quadratura para
+  // o som abrir no estéreo.
+  struct Chorus final {
+    double sampleRate = 48000.0;
+    std::array<std::vector<float>, 2> buffers;
+    std::size_t writeIndex = 0;
+    double phase = 0.0;
+
+    void prepare(double nextSampleRate);
+    void reset() noexcept;
+    void process(const ChorusConfig& config, float* left, float* right, std::size_t frames) noexcept;
   };
 
   double sampleRate_ = 48000.0;
@@ -159,12 +200,16 @@ private:
   StereoDelay delay_{};
   Reverb reverb_{};
   RotarySpeaker rotary_{};
+  Chorus chorus_{};
+  // Auto Fader: fase da onda que abaixa e devolve o volume no tempo do BPM.
+  double autoFaderPhase_ = 0.0;
   double gatePhaseSamples_ = 0.0;
   std::uint8_t gateStep_ = 0;
   float gateGain_ = 1.0f;
   float gateAttackCoefficient_ = 0.01f;
   float gateReleaseCoefficient_ = 0.01f;
   void processTranceGate(float* left, float* right, std::size_t frames) noexcept;
+  void processAutoFader(float* left, float* right, std::size_t frames) noexcept;
   void configureCutoff() noexcept;
 };
 

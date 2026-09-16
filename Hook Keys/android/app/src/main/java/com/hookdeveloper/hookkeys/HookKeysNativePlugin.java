@@ -523,7 +523,14 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("rotaryRampSeconds", 1.2f),
             call.getFloat("rotaryDepth", 0.7f),
             call.getFloat("rotaryMix", 1.0f),
-            call.getBoolean("rotaryModulationEnabled", false)
+            call.getBoolean("rotaryModulationEnabled", false),
+            call.getBoolean("chorusEnabled", false),
+            call.getFloat("chorusRateHz", 0.6f),
+            call.getFloat("chorusDepth", 0.5f),
+            call.getFloat("chorusMix", 0.35f),
+            call.getBoolean("autoFaderEnabled", false),
+            call.getFloat("autoFaderBeats", 1.0f),
+            call.getFloat("autoFaderDepthDb", 6.0f)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -550,8 +557,9 @@ public class HookKeysNativePlugin extends Plugin {
             call.reject("Módulo inválido.");
             return;
         }
+        // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
         if (nativeConfigureModuleModulation(
-                moduleIndex, call.getBoolean("lfo", true), call.getFloat("rateHz", 6.85f))) call.resolve();
+                moduleIndex, call.getInt("mode", 1), call.getFloat("rateHz", 6.85f))) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
     }
 
@@ -1026,12 +1034,14 @@ public class HookKeysNativePlugin extends Plugin {
         float reverbSize,
         float reverbMix, boolean rotaryEnabled, int rotarySpeed,
         float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
-        float rotaryDepth, float rotaryMix, boolean rotaryModulationEnabled
+        float rotaryDepth, float rotaryMix, boolean rotaryModulationEnabled,
+        boolean chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
+        boolean autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb
     );
     private static native boolean nativeConfigureModuleEnvelope(
         int moduleIndex, float attackMs, float holdMs, float decayMs, float releaseMs, float glideMs
     );
-    private static native boolean nativeConfigureModuleModulation(int moduleIndex, boolean lfo, float rateHz);
+    private static native boolean nativeConfigureModuleModulation(int moduleIndex, int mode, float rateHz);
     private static native boolean nativeConfigureVelocityLimits(
         int moduleIndex, int ignoreAbove, int ceiling, int oscillator1Limit, int oscillator2Limit
     );

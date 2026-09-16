@@ -86,13 +86,21 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
               rotaryRampSeconds:(float)rotaryRampSeconds
                     rotaryDepth:(float)rotaryDepth
                       rotaryMix:(float)rotaryMix
-        rotaryModulationEnabled:(BOOL)rotaryModulationEnabled;
+        rotaryModulationEnabled:(BOOL)rotaryModulationEnabled
+                  chorusEnabled:(BOOL)chorusEnabled
+                   chorusRateHz:(float)chorusRateHz
+                    chorusDepth:(float)chorusDepth
+                      chorusMix:(float)chorusMix
+               autoFaderEnabled:(BOOL)autoFaderEnabled
+                 autoFaderBeats:(float)autoFaderBeats
+               autoFaderDepthDb:(float)autoFaderDepthDb;
 - (BOOL)configureModuleEnvelope:(NSInteger)moduleIndex
                         attackMs:(float)attackMs
                           holdMs:(float)holdMs
                          decayMs:(float)decayMs
                        releaseMs:(float)releaseMs glideMs:(float)glideMs;
-- (BOOL)configureModuleModulation:(NSInteger)moduleIndex lfo:(BOOL)lfo rateHz:(float)rateHz;
+// mode: 0 User, 1 LFO de pitch, 2 Tremolo.
+- (BOOL)configureModuleModulation:(NSInteger)moduleIndex mode:(NSInteger)mode rateHz:(float)rateHz;
 - (BOOL)configureVelocityLimits:(NSInteger)moduleIndex
                      ignoreAbove:(NSInteger)ignoreAbove
                          ceiling:(NSInteger)ceiling

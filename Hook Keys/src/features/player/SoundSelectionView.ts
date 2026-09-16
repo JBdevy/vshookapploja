@@ -83,6 +83,8 @@ export function createUserSoundfontMarkup(useTabletKeyboard: boolean): string {
       <header class="user-sf2-panel__header">
         <h3>User</h3>
         <span data-user-sf2-total>Total - 0 GB</span>
+        <button class="fixed-sound-clean" type="button" data-sound-clean
+          aria-label="Deixar o modulo sem timbre selecionado">Clean</button>
         <p class="user-sf2-load-status" data-user-sf2-load-status role="status" aria-live="polite"></p>
       </header>
       <div class="user-sf2-list" data-user-sf2-list><span class="loading-orbit" aria-hidden="true"></span></div>

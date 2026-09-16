@@ -295,14 +295,14 @@ bool NativeEngineRuntime::setSynthConfig(AnalogSynthConfig config) noexcept {
 }
 
 bool NativeEngineRuntime::setModuleModulationMode(
-    std::size_t moduleIndex, bool lfo, float rateHz) noexcept {
+    std::size_t moduleIndex, std::uint8_t mode, float rateHz) noexcept {
   std::scoped_lock lock(configMutex_);
   if (moduleIndex == kModuleCount - 1) {
-    controlLayer_->synth->setModulationMode(lfo, rateHz);
+    controlLayer_->synth->setModulationMode(mode, rateHz);
     return true;
   }
   if (moduleIndex >= controlLayer_->modules.size()) return false;
-  controlLayer_->modules[moduleIndex]->setModulationMode(lfo, rateHz);
+  controlLayer_->modules[moduleIndex]->setModulationMode(mode, rateHz);
   return true;
 }
 

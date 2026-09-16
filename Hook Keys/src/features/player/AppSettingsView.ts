@@ -56,6 +56,8 @@ export function createAppSettingsMarkup(
   keyboardMidiSlot: number = 1,
   keyboardStyle: PerformanceKeyboardStyle = 'standard',
   showKeyboardSettings: boolean = true,
+  liteMode: boolean = false,
+  showLiteMode: boolean = true,
 ): string {
   return `
     <section class="app-settings-panel app-settings-panel--main" aria-label="Configurações">
@@ -83,9 +85,18 @@ export function createAppSettingsMarkup(
           <strong>Troca de preset sem corte</strong>
           <small>Maior consumo de RAM.</small>
         </span>
-        <input type="checkbox" data-setting="seamless-preset-switching"${seamlessPresetSwitching ? ' checked' : ''}>
+        <input type="checkbox" data-setting="seamless-preset-switching"${seamlessPresetSwitching ? ' checked' : ''}${liteMode ? ' disabled' : ''}>
         <i aria-hidden="true"></i>
       </label>
+
+      ${showLiteMode ? `<label class="app-settings-toggle app-settings-toggle--lite-mode">
+        <span>
+          <strong>Modo Lite</strong>
+          <small>Para aparelhos antigos ou mais fracos. As teclas param de acender e a troca sem corte fica desligada.</small>
+        </span>
+        <input type="checkbox" data-setting="lite-mode"${liteMode ? ' checked' : ''}>
+        <i aria-hidden="true"></i>
+      </label>` : ''}
 
       ${!showKeyboardSettings ? '' : allowKeyboardView ? `<article class="app-settings-display-card">
         <strong>Mostrar</strong>
@@ -144,6 +155,16 @@ export function createAudioSettingsMarkup(
   const audioDeviceOptions = audioDevices.map((device) => `
     <option value="${escapeHtml(device.id)}"${device.id === selectedAudioDeviceId ? ' selected' : ''}>${escapeHtml(device.name)} · ${device.channels} canais</option>
   `).join('');
+  // A ordem dos campos é a mesma na tela e no HTML, para o menu do seletor
+  // saber quando abrir para cima (os dois últimos da última linha).
+  const routeField = (bus: keyof AudioBusRouting, label: string) => `
+    <label class="app-settings-field app-settings-field--audio-route" data-audio-route-field="${bus}">
+      <span>${label}</span>
+      <select data-setting="audio-route" data-audio-bus="${bus}">
+        ${createAudioRouteOptions(channelCount, audioRouting[bus])}
+      </select>
+    </label>
+  `;
 
   return `
     <section class="app-settings-panel app-settings-panel--devices" aria-label="Dispositivo de áudio">
@@ -160,23 +181,7 @@ export function createAudioSettingsMarkup(
         <select data-setting="buffer-size">${bufferOptions}</select>
       </label>
 
-      ${([
-        ['pads', 'Saídas - Pads'],
-        ['effects', 'Saídas - Effects'],
-        ['metronome', 'Saídas - Metrônomo'],
-      ] as const).map(([bus, label]) => `
-        <label class="app-settings-field app-settings-field--audio-route" data-audio-route-field="${bus}">
-          <span>${label}</span>
-          <select data-setting="audio-route" data-audio-bus="${bus}">
-            ${createAudioRouteOptions(channelCount, audioRouting[bus])}
-          </select>
-        </label>
-      `).join('')}
-
-      <label class="app-settings-field app-settings-field--sample-rate">
-        <span>Sample Rate</span>
-        <select data-setting="sample-rate">${sampleRateOptions}</select>
-      </label>
+      ${routeField('timbres', 'Saídas - Timbres')}
 
       <!-- Músicas saem sempre em 1+2: o seletor só mostra a saída. -->
       <label class="app-settings-field app-settings-field--audio-route" data-audio-route-field="music">
@@ -184,6 +189,15 @@ export function createAudioSettingsMarkup(
         <select data-setting="music-route" disabled aria-disabled="true">
           <option value="stereo:0" selected>1+2</option>
         </select>
+      </label>
+
+      ${routeField('pads', 'Saídas - Pads')}
+      ${routeField('effects', 'Saídas - Effects')}
+      ${routeField('metronome', 'Saídas - Metrônomo')}
+
+      <label class="app-settings-field app-settings-field--sample-rate">
+        <span>Sample Rate</span>
+        <select data-setting="sample-rate">${sampleRateOptions}</select>
       </label>
 
     </section>

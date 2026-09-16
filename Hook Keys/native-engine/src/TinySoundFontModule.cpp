@@ -155,13 +155,15 @@ void TinySoundFontModule::beginBlock() noexcept {
         releaseMs_.load(std::memory_order_relaxed) / 1000.0f);
     appliedEnvelopeGeneration_ = generation;
   }
-  const bool lfo = lfoModulation_.load(std::memory_order_acquire);
-  if (active_ != nullptr && lfo != appliedLfoModulation_) {
-    tsf_channel_midi_control(active_, kChannel, 1, lfo ? 0 : modulationValue_);
+  // Fora do modo User, a roda não vai para a modulação do SF2: ela vira
+  // vibrato ou tremolo aqui dentro.
+  const auto mode = modulationMode_.load(std::memory_order_acquire);
+  if (active_ != nullptr && mode != appliedModulationMode_) {
+    tsf_channel_midi_control(active_, kChannel, 1, mode == 0 ? modulationValue_ : 0);
     tsf_channel_set_pitchwheel(active_, kChannel, pitchBendValue_);
     modulationDepth_ = 0;
   }
-  appliedLfoModulation_ = lfo;
+  appliedModulationMode_ = mode;
 }
 
 void TinySoundFontModule::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept {
@@ -195,7 +197,9 @@ void TinySoundFontModule::stealNote(std::uint8_t note) noexcept {
 void TinySoundFontModule::controlChange(std::uint8_t controller, std::uint8_t value) noexcept {
   if (controller == 1) {
     modulationValue_ = value;
-    if (appliedLfoModulation_) value = 0; // avoid doubling the SF2's own modulation
+    // Fora do User, a roda já vira vibrato ou tremolo aqui; não pode somar
+    // com a modulação do próprio SF2.
+    if (appliedModulationMode_ != 0) value = 0;
   }
   if (active_ != nullptr) tsf_channel_midi_control(active_, kChannel, controller, value);
 }
@@ -232,12 +236,16 @@ void TinySoundFontModule::renderAdd(
 
   std::size_t rendered = 0;
   while (rendered < frames) {
-    const bool vibrato = appliedLfoModulation_ && (modulationValue_ > 0 || modulationDepth_ > 0.00001f);
-    const auto blockFrames = std::min(vibrato ? std::min<std::size_t>(16, maximumBlockFrames_) : maximumBlockFrames_, frames - rendered);
-    if (vibrato) {
+    const bool wheelOpen = modulationValue_ > 0 || modulationDepth_ > 0.00001f;
+    const bool vibrato = appliedModulationMode_ == 1 && wheelOpen;
+    const bool tremolo = appliedModulationMode_ == 2 && wheelOpen;
+    const auto blockFrames = std::min((vibrato || tremolo) ? std::min<std::size_t>(16, maximumBlockFrames_) : maximumBlockFrames_, frames - rendered);
+    if (vibrato || tremolo) {
       const float target = static_cast<float>(modulationValue_) / 127.0f;
       const float smoothing = static_cast<float>(1.0 - std::exp(-static_cast<double>(blockFrames) / (sampleRate_ * 0.015)));
       modulationDepth_ += (target - modulationDepth_) * smoothing;
+    }
+    if (vibrato) {
       // User-selectable pitch LFO, up to +/- 50 cents at full wheel. A separate
       // base pitch preserves MIDI pitch bend and Auto Glide at the same time.
       const int bend = static_cast<int>(pitchBendValue_) + static_cast<int>(std::lround(
@@ -249,15 +257,31 @@ void TinySoundFontModule::renderAdd(
     if (gliding) hook_keys_tsf_render_glide(active_, glide_, scratchInterleaved_.data(),
         static_cast<int>(blockFrames), glideMs_.load(std::memory_order_relaxed) > 0);
     else tsf_render_float(active_, scratchInterleaved_.data(), static_cast<int>(blockFrames), 0);
-    for (std::size_t frame = 0; frame < blockFrames; ++frame) {
-      left[rendered + frame] += scratchInterleaved_[frame * 2] * gainLinear;
-      right[rendered + frame] += scratchInterleaved_[frame * 2 + 1] * gainLinear;
+    constexpr double twoPi = 6.28318530717958647692;
+    const double phaseStep = twoPi * static_cast<double>(lfoRateHz_.load(std::memory_order_relaxed)) *
+        static_cast<double>(blockFrames) / sampleRate_;
+    if (tremolo) {
+      // Tremolo: a roda abre o quanto o volume balança, até -12 dB no fundo da
+      // onda. O ganho anda junto com a fase, sem degrau entre blocos.
+      const auto tremoloGain = [](double phase, float depth) {
+        return 1.0f - depth * 0.75f * static_cast<float>(0.5 - 0.5 * std::cos(phase));
+      };
+      const float startGain = tremoloGain(modulationPhase_, modulationDepth_);
+      const float endGain = tremoloGain(modulationPhase_ + phaseStep, modulationDepth_);
+      for (std::size_t frame = 0; frame < blockFrames; ++frame) {
+        const float mix = blockFrames > 1 ? static_cast<float>(frame) / static_cast<float>(blockFrames - 1) : 1.0f;
+        const float gain = (startGain + (endGain - startGain) * mix) * gainLinear;
+        left[rendered + frame] += scratchInterleaved_[frame * 2] * gain;
+        right[rendered + frame] += scratchInterleaved_[frame * 2 + 1] * gain;
+      }
+    } else {
+      for (std::size_t frame = 0; frame < blockFrames; ++frame) {
+        left[rendered + frame] += scratchInterleaved_[frame * 2] * gainLinear;
+        right[rendered + frame] += scratchInterleaved_[frame * 2 + 1] * gainLinear;
+      }
     }
     rendered += blockFrames;
-    constexpr double twoPi = 6.28318530717958647692;
-    modulationPhase_ = std::fmod(modulationPhase_ + twoPi *
-        static_cast<double>(lfoRateHz_.load(std::memory_order_relaxed)) *
-        static_cast<double>(blockFrames) / sampleRate_, twoPi);
+    modulationPhase_ = std::fmod(modulationPhase_ + phaseStep, twoPi);
   }
 }
 

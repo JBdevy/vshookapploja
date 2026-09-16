@@ -1,6 +1,6 @@
 import type { MidiInputDevice } from '../midi/MidiInputService';
 import { createModuleEffectCardsMarkup, type ModuleProcessorReplacement } from './ModuleEffectsView';
-import { createAudioRouteOptions, type AudioBusRoute } from '../audio/AudioOutputService';
+import { createAudioRouteOptions, type ModuleOutputRoute } from '../audio/AudioOutputService';
 import { createVelocityCardMarkup, readVelocityLimit } from './VelocityCurveView';
 import { createParameterKnobMarkup } from './ParameterKnobView';
 import { createGlideCardMarkup } from './GlideView';
@@ -21,10 +21,18 @@ export const MODULE_ENVELOPE_DEFAULTS: Readonly<Record<ModuleEnvelopeParameter, 
   decayMs: MODULE_ENVELOPE_LIMITS.decayMs,
 };
 
-export type ModuleModulationMode = 'user' | 'lfo';
+export type ModuleModulationMode = 'user' | 'lfo' | 'tremolo';
 
 export function readModuleModulationMode(settings: Readonly<Record<string, unknown>>): ModuleModulationMode {
-  return settings.modulationMode === 'user' ? 'user' : 'lfo';
+  if (settings.modulationMode === 'user') return 'user';
+  if (settings.modulationMode === 'tremolo') return 'tremolo';
+  return 'lfo';
+}
+
+// O motor recebe o modo como número: 0 User, 1 LFO de pitch, 2 Tremolo.
+export function moduleModulationEngineMode(mode: ModuleModulationMode): number {
+  if (mode === 'user') return 0;
+  return mode === 'tremolo' ? 2 : 1;
 }
 
 // Rate padrão do LFO do card Mod, o mesmo do LFO do Synth.
@@ -41,22 +49,29 @@ export function createModuleModulationCardMarkup(
   settings: Readonly<Record<string, unknown>>,
   owner: 'sf2' | 'synth' = 'sf2',
 ): string {
-  const mode = readModuleModulationMode(settings);
+  const rawMode = readModuleModulationMode(settings);
+  // O Synth não tem Tremolo próprio da roda; lá o card fica só com User/LFO.
+  const mode = owner === 'synth' && rawMode === 'tremolo' ? 'lfo' : rawMode;
   const rate = readModuleModulationRate(settings);
+  const modes = owner === 'synth'
+    ? (['user', 'lfo'] as const)
+    : (['user', 'lfo', 'tremolo'] as const);
+  const labels: Record<ModuleModulationMode, string> = { user: 'User', lfo: 'LFO', tremolo: 'Tremolo' };
   const status = owner === 'synth'
     ? mode === 'lfo' ? 'LFO do Synth' : 'Roda sem efeito'
-    : mode === 'lfo' ? `Pitch · ${rate.toFixed(2)} Hz` : 'SF2 · User';
+    : mode === 'lfo' ? `Pitch · ${rate.toFixed(2)} Hz`
+    : mode === 'tremolo' ? `Tremolo · ${rate.toFixed(2)} Hz` : 'SF2 · User';
   return `
     <article class="module-mod-card${owner === 'synth' ? ' module-mod-card--synth' : ''}" data-module-mod-card>
       <header>
         <strong>Mod</strong>
         <small>${status}</small>
       </header>
-      <div role="group" aria-label="Modo da roda Mod">
-        ${(['user', 'lfo'] as const).map((value) => `
+      <div role="group" aria-label="Modo da roda Mod" data-module-modulation-modes="${modes.length}">
+        ${modes.map((value) => `
           <button type="button" data-module-modulation-mode="${value}"
             class="${mode === value ? 'is-selected' : ''}"
-            aria-pressed="${mode === value}">${value === 'lfo' ? 'LFO' : 'User'}</button>
+            aria-pressed="${mode === value}">${labels[value]}</button>
         `).join('')}
       </div>
       ${owner === 'synth' ? '' : `<label class="module-mod-card__rate">
@@ -67,6 +82,37 @@ export function createModuleModulationCardMarkup(
         `)}
         <output data-module-modulation-rate-value>${rate.toFixed(2)} Hz</output>
       </label>`}
+    </article>
+  `;
+}
+
+// Gain do módulo: um trim em dB somado ao fader da tela principal. Nasce em
+// 0 dB, ou seja, sem mudar nada.
+export const MODULE_GAIN_MIN_DB = -24;
+export const MODULE_GAIN_MAX_DB = 6;
+
+export function readModuleGainDb(settings: Readonly<Record<string, unknown>>): number {
+  const value = Number(settings.gainDb);
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(MODULE_GAIN_MAX_DB, Math.max(MODULE_GAIN_MIN_DB, value));
+}
+
+export function formatModuleGainDb(value: number): string {
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)} dB`;
+}
+
+export function createModuleGainCardMarkup(settings: Readonly<Record<string, unknown>>): string {
+  const gain = readModuleGainDb(settings);
+  const progress = (gain - MODULE_GAIN_MIN_DB) / (MODULE_GAIN_MAX_DB - MODULE_GAIN_MIN_DB);
+  return `
+    <article class="module-gain-card" data-module-gain-card>
+      <strong>Gain</strong>
+      ${createParameterKnobMarkup(progress, `
+        <input type="range" min="${MODULE_GAIN_MIN_DB}" max="${MODULE_GAIN_MAX_DB}" step="0.5" value="${gain}"
+          data-module-gain aria-label="Gain do módulo"
+          aria-valuetext="${formatModuleGainDb(gain)}">
+      `)}
+      <output data-module-gain-value>${formatModuleGainDb(gain)}</output>
     </article>
   `;
 }
@@ -132,7 +178,7 @@ export function createModuleSettingsMarkup(
   settings: Readonly<Record<string, unknown>>,
   bpm: number,
   audioChannelCount: number,
-  audioRoute: AudioBusRoute,
+  audioRoute: ModuleOutputRoute,
   processorReplacement: ModuleProcessorReplacement = 'compressor',
 ): string {
   const deviceNames = new Map(devices.map((device) => [device.id, device.name]));
@@ -164,6 +210,9 @@ export function createModuleSettingsMarkup(
         <label class="app-settings-field module-settings-audio-route">
           <span>Saída do módulo</span>
           <select data-module-setting="audio-route">
+            <!-- Padrão segue Saídas - Timbres: trocar lá move todos os módulos
+                 que ficaram no padrão. -->
+            <option value="default"${audioRoute === 'default' ? ' selected' : ''}>Padrão</option>
             ${createAudioRouteOptions(audioChannelCount, audioRoute)}
           </select>
         </label>
@@ -233,6 +282,7 @@ export function createModuleSettingsMarkup(
         </div>
       </div>
       <div class="module-settings-bottom-row">
+        ${createModuleGainCardMarkup(settings)}
         ${createVelocityCardMarkup(settings)}
         ${processorReplacement === 'synth' ? '' : createGlideCardMarkup(settings, bpm)}
         ${createModuleModulationCardMarkup(settings, processorReplacement === 'synth' ? 'synth' : 'sf2')}

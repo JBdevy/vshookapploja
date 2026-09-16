@@ -102,15 +102,22 @@ import {
   MODULE_ENVELOPE_LIMITS,
   readModuleEqBands,
   readModuleCutoffFrequency,
+  formatModuleGainDb,
+  moduleModulationEngineMode,
+  MODULE_GAIN_MAX_DB,
+  MODULE_GAIN_MIN_DB,
+  readModuleGainDb,
   readModuleModulationMode,
   readModuleModulationRate,
   type ModuleEqBand,
   type ModuleEnvelopeParameter,
+  type ModuleModulationMode,
 } from './ModuleSettingsView';
 import {
   createModuleCompressorMarkup,
   createModuleDelayMarkup,
   createModuleReverbMarkup,
+  createModuleChorusMarkup,
   createModuleRotaryMarkup,
   DELAY_DIVISIONS,
   delayMillisecondsForBpm,
@@ -119,6 +126,7 @@ import {
   readModuleDelaySettings,
   readModuleReverbSettings,
   FACTORY_MODULE_REVERB,
+  readModuleChorusSettings,
   readModuleRotarySettings,
   readModuleEffectSettings,
   type ModuleEffectKind,
@@ -214,6 +222,7 @@ import {
   DEFAULT_SEQUENCER_SETTINGS,
   PATTERN_DIVISIONS,
   readArpeggiatorSettings,
+  readModuleAutoFaderSettings,
   readSequencerSettings,
   updatePatternRangeOutput,
   type ArpeggiatorMode,
@@ -227,7 +236,7 @@ import {
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm';
 type BankId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
 type PlayerView = 'bank' | 'pads-effects';
 
@@ -323,6 +332,8 @@ interface KnobDrag {
   travelPixels: number;
   linear: boolean;
   moved: boolean;
+  // Eixo escolhido no primeiro movimento; vale até soltar o dedo.
+  axis: 'horizontal' | 'vertical' | null;
 }
 
 type CcLearnTarget =
@@ -938,6 +949,9 @@ export class PlayerScreen {
   private metronomeFaderDrag: MetronomeFaderDrag | null = null;
   private eqBandDrag: EqBandDrag | null = null;
   private knobDrag: KnobDrag | null = null;
+  // O visor flutuante do knob fica mais um instante depois que o dedo sai:
+  // dá para soltar e voltar a arrastar sem recomeçar o gesto.
+  private knobFocusHideTimer: number | null = null;
   private tempoDrag: { button: HTMLButtonElement; pointerId: number; startY: number; startX: number;
     startBpm: number; moved: boolean; held: boolean } | null = null;
   private lastDelayTapAt: number | null = null;
@@ -1030,6 +1044,9 @@ export class PlayerScreen {
   private audioLoadAlarmUntil = 0;
   private compatibilityMode = false;
   private seamlessPresetSwitching = false;
+  // Modo Lite: as teclas do teclado param de acender ao toque. É o que pesa
+  // num iPad antigo, e ele não convive com a troca de preset sem corte.
+  private liteMode = false;
   private bottomView: PlayerBottomView = 'presets';
   private keyboardMidiSlot = 1;
   private keyboardStyle: PerformanceKeyboardStyle = 'standard';
@@ -1094,6 +1111,12 @@ export class PlayerScreen {
               </button>
             </div>
             ${createTrackTransportMarkup()}
+            <section class="track-download" data-track-download role="status" aria-live="polite" hidden>
+              <strong>Baixando pacote</strong>
+              <span data-track-download-name></span>
+              <div class="track-download__progress" aria-hidden="true"><i></i></div>
+              <output data-track-download-percent>0%</output>
+            </section>
             <div class="player-note-display" role="status" aria-live="polite" aria-label="Notas ou acordes tocados">
               <span>Notas / Acordes</span>
               <strong data-note-chord-display>—</strong>
@@ -1111,7 +1134,8 @@ export class PlayerScreen {
                 title="Custo do callback de audio contra o prazo do buffer. Vermelho no teto e onde o som corta.">
                 <small>CPU</small>
                 <strong data-cpu-meter-value>--</strong>
-              </div>` : Capacitor.isNativePlatform() ? `
+              </div>` : ''}
+              ${this.desktopRuntime || Capacitor.isNativePlatform() ? `
               <div class="player-cpu-meter player-ram-meter" role="status" data-ram-meter
                 title="Memória usada no aparelho">
                 <small>RAM</small>
@@ -1300,7 +1324,7 @@ export class PlayerScreen {
   // A RAM muda devagar (carregar SF2, músicas): uma leitura a cada 2 s basta e
   // não disputa a thread com os medidores de nível.
   private scheduleRamMeter(delay = 2_000): void {
-    if (!this.mounted || this.desktopRuntime || !Capacitor.isNativePlatform()) return;
+    if (!this.mounted || (!this.desktopRuntime && !Capacitor.isNativePlatform())) return;
     if (this.ramMeterTimer !== null) window.clearTimeout(this.ramMeterTimer);
     this.ramMeterTimer = window.setTimeout(async () => {
       this.ramMeterTimer = null;
@@ -3600,7 +3624,8 @@ export class PlayerScreen {
   private updateArpeggiatorParameter(input: HTMLInputElement): void {
     const moduleState = this.getActivePresetState()?.modules[5];
     const parameter = input.dataset.patternParameter;
-    if (!moduleState || (parameter !== 'gate' && parameter !== 'swing')) return;
+    if (!moduleState) return;
+    if (parameter !== 'gate' && parameter !== 'swing' && parameter !== 'autoFaderDepthDb') return;
     const settings = readArpeggiatorSettings(moduleState.settings.arpeggiator);
     const value = updatePatternRangeOutput(input);
     settings[parameter] = value;
@@ -3608,6 +3633,30 @@ export class PlayerScreen {
     const modal = input.closest<HTMLElement>('.player-modal');
     if (modal) this.renderArpeggiatorSummary(modal, settings);
     this.commitPatternChange();
+    if (parameter === 'autoFaderDepthDb') void this.syncNativeEngine();
+  }
+
+  // Auto Fader: liga/desliga, escolhe entre 1/4 e 1/8 e o resto é o knob de dB.
+  private selectArpeggiatorAutoFader(modal: HTMLElement, choice: string): void {
+    const moduleState = this.getActivePresetState()?.modules[5];
+    if (!moduleState) return;
+    const settings = readArpeggiatorSettings(moduleState.settings.arpeggiator);
+    if (choice === 'power') settings.autoFaderEnabled = !settings.autoFaderEnabled;
+    else if (choice === '1/4' || choice === '1/8') settings.autoFaderDivision = choice;
+    else return;
+    moduleState.settings.arpeggiator = settings;
+    const card = modal.querySelector<HTMLElement>('.arpeggiator-auto-fader');
+    card?.classList.toggle('is-enabled', settings.autoFaderEnabled);
+    for (const button of modal.querySelectorAll<HTMLButtonElement>('[data-arpeggiator-auto-fader]')) {
+      const value = button.dataset.arpeggiatorAutoFader;
+      const selected = value === 'power'
+        ? settings.autoFaderEnabled
+        : value === settings.autoFaderDivision;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    }
+    this.commitPatternChange();
+    void this.syncNativeEngine();
   }
 
   private selectSequencerDivision(modal: HTMLElement, division: PatternDivision): void {
@@ -4292,7 +4341,7 @@ export class PlayerScreen {
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     modal.setAttribute('aria-labelledby', titleId);
-    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-velocity', 'module-filter-velocity', 'module-arpeggiator', 'module-sequencer', 'module-synth', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay', 'module-rotary'];
+    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-velocity', 'module-filter-velocity', 'module-arpeggiator', 'module-sequencer', 'module-synth', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay', 'module-rotary', 'module-chorus'];
     const moduleState = !moduleKinds.includes(kind) || moduleNumber === null
       ? null
       : this.ensureActivePresetState()?.modules[moduleNumber - 1] ?? null;
@@ -4342,11 +4391,11 @@ export class PlayerScreen {
         this.activeAudioChannelCount(),
         isAudioBusRoute(moduleState?.settings.outputRoute, this.activeAudioChannelCount())
           ? moduleState.settings.outputRoute as AudioBusRoute
-          : 'stereo:0',
+          : 'default',
         moduleNumber === 6 ? 'arpeggiator'
           : moduleNumber === 7 ? 'sequencer'
             : moduleNumber === 8 ? 'synth'
-              : moduleNumber === 5 ? 'rotary' : 'compressor',
+              : moduleNumber === 5 ? 'rotary' : 'chorus',
       );
     } else if (kind === 'module-polyphony') {
       const polyphony = Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 128)));
@@ -4392,6 +4441,8 @@ export class PlayerScreen {
       bodyMarkup = createModuleCompressorMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-rotary') {
       bodyMarkup = createModuleRotaryMarkup(moduleState?.settings ?? {});
+    } else if (kind === 'module-chorus') {
+      bodyMarkup = createModuleChorusMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-reverb') {
       bodyMarkup = createModuleReverbMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-delay') {
@@ -4404,20 +4455,17 @@ export class PlayerScreen {
         false,
         this.keyboardMidiSlot,
         this.keyboardStyle,
-        !this.cellularLayout,
+        // O celular também escolhe o MIDI e o estilo do teclado.
+        true,
+        this.liteMode,
+        !this.desktopRuntime,
       );
     } else if (kind === 'app-settings-midi') {
       bodyMarkup = createMidiSettingsMarkup(this.midiInput.getInputDevices(), this.selectedMidiInputIds);
     } else if (kind === 'app-settings-audio') {
       bodyMarkup = createAudioSettingsMarkup(
         this.audioDevices, this.selectedAudioDeviceId, this.audioRouting, this.bufferSize, this.sampleRate,
-      ) + (Capacitor.isNativePlatform() ? `
-        <details class="audio-route-diagnostics" data-audio-route-diagnostics>
-          <summary>Diagnóstico da rota</summary>
-          <p data-audio-route-current>Lendo rota…</p>
-          <ol data-audio-route-events></ol>
-        </details>
-      ` : '');
+      );
     } else if (kind === 'keyboard-settings') {
       bodyMarkup = createPerformanceKeyboardSettingsMarkup(this.keyboardMidiSlot, this.keyboardStyle);
     } else if (kind === 'password-reset') {
@@ -4727,7 +4775,8 @@ export class PlayerScreen {
       : kind === 'module-compressor' ? 'compressor'
         : kind === 'module-reverb' ? 'reverb'
           : kind === 'module-delay' ? 'delay'
-            : kind === 'module-rotary' ? 'rotary' : null;
+            : kind === 'module-rotary' ? 'rotary'
+              : kind === 'module-chorus' ? 'chorus' : null;
     const patternKind = kind === 'module-arpeggiator' ? 'arpeggiator'
       : kind === 'module-sequencer' ? 'sequencer' : null;
     const processorEnabled = patternKind === 'arpeggiator'
@@ -4743,7 +4792,9 @@ export class PlayerScreen {
           : processorKind === 'delay'
             ? readModuleDelaySettings(moduleState?.settings.delay).enabled
             : processorKind === 'rotary'
-              ? readModuleRotarySettings(moduleState?.settings.rotary).enabled : false;
+              ? readModuleRotarySettings(moduleState?.settings.rotary).enabled
+              : processorKind === 'chorus'
+                ? readModuleChorusSettings(moduleState?.settings.chorus).enabled : false;
     const footerMarkup = kind === 'user'
       ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
@@ -4774,9 +4825,13 @@ export class PlayerScreen {
       : kind === 'sound-download' || kind === 'performance-download'
         ? `<button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>`
       : kind === 'cc-learn'
-        ? `<button class="player-modal__confirm-button" type="button" data-modal-action="confirm-cc-learn"${
-          this.pendingCcController === null ? ' disabled' : ''
-        }>OK</button>`
+        ? `
+          <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
+          <button class="player-modal__clean-button" type="button" data-modal-action="open-cc-clear">Clean</button>
+          <button class="player-modal__confirm-button" type="button" data-modal-action="confirm-cc-learn"${
+            this.pendingCcController === null ? ' disabled' : ''
+          }>OK</button>
+        `
       : kind === 'preset-paste-confirm'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel-preset-paste">Cancelar</button>
@@ -4879,14 +4934,15 @@ export class PlayerScreen {
         ? moduleState.timbreName
         : 'Timbre';
       title.textContent = 'EQ';
-    } else if (kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-rotary') {
+    } else if (kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-rotary' || kind === 'module-chorus') {
       eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
         : 'Timbre';
       title.textContent = kind === 'module-compressor'
         ? 'Compressor'
         : kind === 'module-reverb' ? 'Reverb'
-          : kind === 'module-rotary' ? 'Rotary Speaker' : 'Delay';
+          : kind === 'module-rotary' ? 'Rotary Speaker'
+            : kind === 'module-chorus' ? 'Chorus' : 'Delay';
     } else if (kind === 'sound-selection') {
       eyebrow.textContent = `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
       title.textContent = 'Library';
@@ -4994,7 +5050,9 @@ export class PlayerScreen {
         const modulationModeButton = target.closest<HTMLButtonElement>('[data-module-modulation-mode]');
         if (modulationModeButton) {
           const mode = modulationModeButton.dataset.moduleModulationMode;
-          if (mode === 'user' || mode === 'lfo') this.selectModuleModulationMode(modal, moduleNumber, mode);
+          if (mode === 'user' || mode === 'lfo' || mode === 'tremolo') {
+            this.selectModuleModulationMode(modal, moduleNumber, mode);
+          }
           return;
         }
       }
@@ -5130,6 +5188,8 @@ export class PlayerScreen {
             ? 'module-synth'
           : moduleSettingAction === 'open-rotary' && moduleNumber === 5
             ? 'module-rotary'
+          : moduleSettingAction === 'open-chorus'
+            ? 'module-chorus'
           : moduleSettingAction === 'open-reverb'
             ? 'module-reverb'
             : moduleSettingAction === 'open-delay' ? 'module-delay'
@@ -5298,10 +5358,16 @@ export class PlayerScreen {
         : null;
       if (
         moduleNumber !== null
-        && (kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-rotary' || kind === 'module-arpeggiator' || kind === 'module-sequencer')
+        && (kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-rotary' || kind === 'module-chorus' || kind === 'module-arpeggiator' || kind === 'module-sequencer')
         && effectPowerButton
       ) {
         this.toggleModuleEffectPower(effectPowerButton, moduleNumber);
+        return;
+      }
+      const autoFaderButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-arpeggiator-auto-fader]') : null;
+      if (kind === 'module-arpeggiator' && moduleNumber === 6 && autoFaderButton) {
+        this.selectArpeggiatorAutoFader(modal, autoFaderButton.dataset.arpeggiatorAutoFader ?? '');
         return;
       }
       const rotarySpeedButton = target instanceof Element
@@ -5633,6 +5699,12 @@ export class PlayerScreen {
         button?.setAttribute('aria-pressed', String(this.pendingCcInverted));
         return;
       }
+      if (kind === 'cc-learn' && modalAction === 'open-cc-clear' && this.pendingCcLearn) {
+        this.pendingCcClear = this.pendingCcLearn;
+        this.openChildModal('cc-clear-confirm', null,
+          target instanceof HTMLElement ? target : this.modal ?? this.root);
+        return;
+      }
       if (kind === 'cc-learn' && modalAction === 'confirm-cc-learn') {
         if (this.pendingCcLearn && this.pendingCcController !== null) {
           // Um CC comanda um unico controle: ao confirmar no novo alvo, ele
@@ -5777,7 +5849,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
           this.commitModulePolyphony(modal, moduleNumber);
         }
-        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'glide-config' || kind === 'module-arpeggiator' || kind === 'module-sequencer' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay'))) && this.modalHistory.length > 0) {
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'glide-config' || kind === 'module-arpeggiator' || kind === 'module-sequencer' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-chorus'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -6133,6 +6205,10 @@ export class PlayerScreen {
         this.updateModuleModulationRate(input, moduleNumber);
         return;
       }
+      if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-gain]')) {
+        this.updateModuleGain(input, moduleNumber);
+        return;
+      }
       if (kind === 'module-synth' && moduleNumber === 8 && input.matches('[data-synth-parameter]')) {
         this.updateSynthParameter(input);
       } else if (kind === 'module-arpeggiator' && moduleNumber === 6 && input.matches('[data-pattern-kind="arpeggiator"]')) {
@@ -6191,7 +6267,7 @@ export class PlayerScreen {
       if (kind === 'module-eq' && moduleNumber !== null && input.matches('[data-module-eq-q]')) {
         this.updateModuleEqQ(modal, input, moduleNumber);
       }
-      if ((kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-rotary') && moduleNumber !== null && input.matches('[data-module-effect-control]')) {
+      if ((kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-rotary' || kind === 'module-chorus') && moduleNumber !== null && input.matches('[data-module-effect-control]')) {
         this.updateModuleEffectControl(modal, input, moduleNumber);
       }
     });
@@ -6709,6 +6785,30 @@ export class PlayerScreen {
     }
   }
 
+  // Andamento do download na faixa do topo. Vale para um timbre sozinho e
+  // para a biblioteca inteira do "Baixar tudo".
+  private showBackgroundDownload(name: string, percent: number | null): void {
+    const banner = this.root.querySelector<HTMLElement>('[data-track-download]');
+    const transport = this.root.querySelector<HTMLElement>('.track-transport');
+    if (!banner || !transport) return;
+    banner.hidden = false;
+    transport.hidden = true;
+    const label = banner.querySelector<HTMLElement>('[data-track-download-name]');
+    if (label && label.textContent !== name) label.textContent = name;
+    const bounded = percent === null ? null : Math.max(0, Math.min(100, Math.round(percent)));
+    banner.style.setProperty('--download-progress', `${bounded ?? 0}%`);
+    const output = banner.querySelector<HTMLOutputElement>('[data-track-download-percent]');
+    const text = bounded === null ? '...' : `${bounded}%`;
+    if (output && output.value !== text) output.value = text;
+  }
+
+  private hideBackgroundDownload(): void {
+    const banner = this.root.querySelector<HTMLElement>('[data-track-download]');
+    const transport = this.root.querySelector<HTMLElement>('.track-transport');
+    if (banner) banner.hidden = true;
+    if (transport) transport.hidden = false;
+  }
+
   private async downloadAllOfficialSounds(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
     const sounds = this.soundCatalog.sounds.filter(
       (sound) => Boolean(sound.sf2ObjectKey) && !this.installedFixedSoundIds.has(sound.id),
@@ -6733,8 +6833,14 @@ export class PlayerScreen {
     let completed = 0;
     try {
       for (const sound of sounds) {
-        button.textContent = `Baixando ${completed + 1}/${sounds.length}`;
-        await this.soundLibraryEngine.install(sound.id, undefined, this.soundDownloadAbort.signal);
+        if (button.isConnected) button.textContent = `Baixando ${completed + 1}/${sounds.length}`;
+        const done = completed;
+        this.showBackgroundDownload(`${sound.name} (${done + 1}/${sounds.length})`, (done * 100) / sounds.length);
+        await this.soundLibraryEngine.install(sound.id, (progress) => {
+          const inside = progress.percentage === null ? 0 : progress.percentage / sounds.length;
+          this.showBackgroundDownload(`${sound.name} (${done + 1}/${sounds.length})`,
+            (done * 100) / sounds.length + inside);
+        }, this.soundDownloadAbort.signal);
         this.installedFixedSoundIds.add(sound.id);
         completed += 1;
         const soundButton = Array.from(modal.querySelectorAll<HTMLButtonElement>('[data-fixed-sound-id]'))
@@ -6747,7 +6853,7 @@ export class PlayerScreen {
           if (state) state.textContent = 'No dispositivo';
         }
       }
-      button.textContent = 'Tudo baixado';
+      if (button.isConnected) button.textContent = 'Tudo baixado';
       void this.syncNativeEngine();
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
@@ -6762,6 +6868,7 @@ export class PlayerScreen {
       }
     } finally {
       this.soundDownloadAbort = null;
+      this.hideBackgroundDownload();
     }
   }
 
@@ -7060,7 +7167,26 @@ export class PlayerScreen {
       this.openChildModal('compatibility-mode', null, target);
       return;
     }
+    if (target instanceof HTMLInputElement && target.dataset.setting === 'lite-mode') {
+      this.liteMode = target.checked;
+      const seamless = this.modal?.querySelector<HTMLInputElement>('[data-setting="seamless-preset-switching"]');
+      if (seamless) seamless.disabled = this.liteMode;
+      if (this.liteMode && this.seamlessPresetSwitching) {
+        this.seamlessPresetSwitching = false;
+        if (seamless) seamless.checked = false;
+        this.nativePresetTransitionPending = false;
+        void hookKeysNative.stopAllNotes();
+        void hookKeysNative.setSeamlessPresetSwitching(false);
+      }
+      this.applyLiteMode();
+      this.markPlayerStateChanged();
+      return;
+    }
     if (target instanceof HTMLInputElement && target.dataset.setting === 'seamless-preset-switching') {
+      if (this.liteMode) {
+        target.checked = false;
+        return;
+      }
       this.seamlessPresetSwitching = target.checked;
       if (!target.checked) {
         this.nativePresetTransitionPending = false;
@@ -7118,6 +7244,8 @@ export class PlayerScreen {
         this.audioRouting[bus] = select.value;
         this.markPlayerStateChanged();
         if (bus === 'metronome') void this.applyMetronomeOutput();
+        // Os módulos que ficaram no Padrão seguem esta saída.
+        if (bus === 'timbres') void this.syncNativeEngine();
       }
     }
   }
@@ -7143,9 +7271,17 @@ export class PlayerScreen {
     const select = target;
     if (!(select instanceof HTMLSelectElement)) return;
     if (select.dataset.moduleSetting === 'audio-route') {
+      // Padrão não guarda saída: o módulo passa a seguir Saídas - Timbres.
+      if (select.value === 'default') {
+        delete moduleState.settings.outputRoute;
+        this.markPlayerStateChanged();
+        void this.syncNativeEngine();
+        return;
+      }
       if (isAudioBusRoute(select.value, this.activeAudioChannelCount())) {
         moduleState.settings.outputRoute = select.value;
         this.markPlayerStateChanged();
+        void this.syncNativeEngine();
       }
       return;
     }
@@ -7161,6 +7297,9 @@ export class PlayerScreen {
   // é ele que mantém a interface fluida e no aparelho novo não faz falta.
   private applyLiteMode(): void {
     this.root.classList.add('hook-keys-lite');
+    // A tecla acesa é a única parte do Lite que se liga e desliga por aqui.
+    this.root.classList.toggle('hook-keys-lite-keys', this.liteMode);
+    this.performanceKeyboard?.setKeyLighting(!this.liteMode);
   }
 
   private updateModuleEnvelopeControl(
@@ -7259,7 +7398,7 @@ export class PlayerScreen {
   private selectModuleModulationMode(
     modal: HTMLElement,
     moduleNumber: number,
-    mode: 'user' | 'lfo',
+    mode: ModuleModulationMode,
   ): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     const card = modal.querySelector<HTMLElement>('[data-module-mod-card]');
@@ -7268,6 +7407,25 @@ export class PlayerScreen {
     card.outerHTML = createModuleModulationCardMarkup(
       moduleState.settings, moduleNumber === 8 ? 'synth' : 'sf2');
     this.markPlayerStateChanged();
+  }
+
+  // Gain do módulo: soma ao fader da tela principal e vai junto no volume.
+  private updateModuleGain(input: HTMLInputElement, moduleNumber: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState) return;
+    const value = Math.min(MODULE_GAIN_MAX_DB, Math.max(MODULE_GAIN_MIN_DB, Number(input.value) || 0));
+    moduleState.settings.gainDb = value;
+    const progress = (value - MODULE_GAIN_MIN_DB) / (MODULE_GAIN_MAX_DB - MODULE_GAIN_MIN_DB);
+    const knob = input.closest<HTMLElement>('.module-envelope-knob');
+    knob?.style.setProperty('--knob-angle', `${-135 + progress * 270}deg`);
+    knob?.style.setProperty('--knob-progress', String(progress));
+    const label = formatModuleGainDb(value);
+    input.setAttribute('aria-valuetext', label);
+    const output = input.closest<HTMLElement>('[data-module-gain-card]')
+      ?.querySelector<HTMLOutputElement>('[data-module-gain-value]');
+    if (output) output.value = label;
+    this.markPlayerStateChanged();
+    void this.syncNativeEngine();
   }
 
   private updateModuleModulationRate(input: HTMLInputElement, moduleNumber: number): void {
@@ -7414,6 +7572,7 @@ export class PlayerScreen {
       travelPixels: this.desktopRuntime ? 240 : Math.max(480, Math.min(800, window.innerWidth * 0.6)),
       linear: this.desktopRuntime,
       moved: false,
+      axis: null,
     };
     this.showKnobFocus(input);
     const learnTarget = moduleNumber === null ? this.ccLearnTargetForOutputKnob(input) : this.ccLearnTargetForKnob(input, moduleNumber);
@@ -7435,15 +7594,22 @@ export class PlayerScreen {
     const minimum = Number(drag.input.min);
     const maximum = Number(drag.input.max);
     const step = Number(drag.input.step);
-    // Knobs só respondem ao movimento horizontal: direita aumenta, esquerda
-    // diminui. Subir ou descer o dedo não muda o valor.
+    // O knob aceita os dois sentidos: direita ou para cima aumenta, esquerda ou
+    // para baixo diminui. O primeiro movimento escolhe o eixo e ele vale até
+    // soltar o dedo, para um gesto na diagonal não brigar consigo mesmo.
     const horizontalDelta = event.clientX - drag.startX;
-    if (!drag.moved && Math.abs(horizontalDelta) < 2) return;
+    const verticalDelta = drag.startY - event.clientY;
+    if (drag.axis === null) {
+      if (Math.max(Math.abs(horizontalDelta), Math.abs(verticalDelta)) < 2) return;
+      drag.axis = Math.abs(horizontalDelta) >= Math.abs(verticalDelta) ? 'horizontal' : 'vertical';
+    }
+    const axisDelta = drag.axis === 'horizontal' ? horizontalDelta : verticalDelta;
+    if (!drag.moved && Math.abs(axisDelta) < 2) return;
     drag.moved = true;
     this.knobCcLearnGesture.cancel();
     this.lastKnobTap = null;
-    const direction = Math.sign(horizontalDelta);
-    const distance = Math.abs(horizontalDelta);
+    const direction = Math.sign(axisDelta);
+    const distance = Math.abs(axisDelta);
     const range = maximum - minimum;
     const fineStep = Number.isFinite(step) && step > 0 ? step : range / 1_000;
     // Touch keeps exact single-step control near the starting point, with
@@ -7511,7 +7677,9 @@ export class PlayerScreen {
         this.lastKnobTap = null;
       } else this.lastKnobTap = { input: drag.input, time: event.timeStamp };
     } else this.lastKnobTap = null;
-    this.hideKnobFocus();
+    // Enquanto o visor estiver na tela, encostar de novo continua o ajuste do
+    // ponto onde parou, sem recomeçar o valor.
+    this.hideKnobFocus(900);
   }
 
   private defaultKnobValue(input: HTMLInputElement): number {
@@ -7524,6 +7692,7 @@ export class PlayerScreen {
     if (input.matches('[data-module-cutoff]')) return 1;
     if (input.matches('[data-filter-velocity-cutoff]')) return cutoffRatioFromFrequency(DEFAULT_FILTER_VELOCITY_CUTOFF_HZ);
     if (input.matches('[data-module-modulation-rate]')) return DEFAULT_MODULE_MODULATION_RATE_HZ;
+    if (input.matches('[data-module-gain]')) return 0;
     if (input.matches('[data-module-velocity-limit]')) return 127;
     const tranceGate = input.dataset.tranceGateParameter;
     if (tranceGate) return Number((readTranceGateSettings(undefined) as unknown as Record<string, unknown>)[tranceGate]);
@@ -7555,6 +7724,10 @@ export class PlayerScreen {
   }
 
   private showKnobFocus(input: HTMLInputElement): void {
+    if (this.knobFocusHideTimer !== null) {
+      window.clearTimeout(this.knobFocusHideTimer);
+      this.knobFocusHideTimer = null;
+    }
     const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
     const knob = input.closest<HTMLElement>('.module-envelope-knob, .module-effect-knob, .player-output-knob');
     if (!overlay || !knob) return;
@@ -7576,7 +7749,18 @@ export class PlayerScreen {
     overlay.querySelector<HTMLOutputElement>('[data-knob-focus-value]')!.value = sourceOutput?.value || input.getAttribute('aria-valuetext') || input.value;
   }
 
-  private hideKnobFocus(): void {
+  private hideKnobFocus(delayMs = 0): void {
+    if (this.knobFocusHideTimer !== null) {
+      window.clearTimeout(this.knobFocusHideTimer);
+      this.knobFocusHideTimer = null;
+    }
+    if (delayMs > 0) {
+      this.knobFocusHideTimer = window.setTimeout(() => {
+        this.knobFocusHideTimer = null;
+        this.root.querySelector<HTMLElement>('[data-knob-focus]')?.classList.remove('is-visible');
+      }, delayMs);
+      return;
+    }
     const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
     overlay?.classList.remove('is-visible');
   }
@@ -8046,7 +8230,8 @@ export class PlayerScreen {
     const label = processor === 'eq' ? 'EQ'
       : processor === 'compressor' ? 'Compressor'
         : processor === 'reverb' ? 'Reverb'
-          : processor === 'rotary' ? 'Rotary' : 'Delay';
+          : processor === 'rotary' ? 'Rotary'
+            : processor === 'chorus' ? 'Chorus' : 'Delay';
     const confirmation = document.createElement('div');
     confirmation.className = 'module-processor-reset-confirmation';
     confirmation.dataset.processorResetConfirmation = '';
@@ -8071,15 +8256,28 @@ export class PlayerScreen {
   private confirmProcessorReset(moduleNumber: number, processor: 'eq' | ModuleEffectKind): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     if (!moduleState) return;
-    if (processor === 'eq') moduleState.settings.eqBands = readModuleEqBands(undefined);
-    else if (processor === 'compressor') moduleState.settings.compressor = readModuleCompressorSettings(undefined);
     // O Reset volta aos valores de fábrica sem ligar/desligar o efeito.
+    if (processor === 'eq') moduleState.settings.eqBands = readModuleEqBands(undefined);
+    else if (processor === 'compressor') moduleState.settings.compressor = {
+      ...readModuleCompressorSettings(undefined),
+      enabled: readModuleCompressorSettings(moduleState.settings.compressor).enabled,
+    };
     else if (processor === 'reverb') moduleState.settings.reverb = {
       ...FACTORY_MODULE_REVERB,
       enabled: readModuleReverbSettings(moduleState.settings.reverb).enabled,
     };
-    else if (processor === 'rotary') moduleState.settings.rotary = readModuleRotarySettings(undefined);
-    else moduleState.settings.delay = readModuleDelaySettings(undefined);
+    else if (processor === 'rotary') moduleState.settings.rotary = {
+      ...readModuleRotarySettings(undefined),
+      enabled: readModuleRotarySettings(moduleState.settings.rotary).enabled,
+    };
+    else if (processor === 'chorus') moduleState.settings.chorus = {
+      ...readModuleChorusSettings(undefined),
+      enabled: readModuleChorusSettings(moduleState.settings.chorus).enabled,
+    };
+    else moduleState.settings.delay = {
+      ...readModuleDelaySettings(undefined),
+      enabled: readModuleDelaySettings(moduleState.settings.delay).enabled,
+    };
     const trigger = this.modalTrigger ?? this.root;
     this.markPlayerStateChanged();
     const modalKind: ModalKind = processor === 'eq' ? 'module-eq'
@@ -8284,9 +8482,6 @@ export class PlayerScreen {
       return;
     }
     try {
-      if (Capacitor.isNativePlatform() && this.currentModalKind === 'app-settings-audio' && this.modal) {
-        void this.renderAudioRouteDiagnostics(this.modal);
-      }
       const devices = await this.audioOutput.listDevices();
       if (!this.mounted || selectedId !== this.selectedAudioDeviceId) return;
       const deviceListChanged = JSON.stringify(this.audioDevices) !== JSON.stringify(devices);
@@ -8313,22 +8508,6 @@ export class PlayerScreen {
       // Uma falha transitória na enumeração não significa que o dispositivo
       // saiu. Só fazemos o fallback quando uma lista válida confirma a queda.
     }
-  }
-
-  private async renderAudioRouteDiagnostics(modal: HTMLElement): Promise<void> {
-    const log = await hookKeysNative.audioRouteLog();
-    const current = modal.querySelector<HTMLElement>('[data-audio-route-current]');
-    const list = modal.querySelector<HTMLElement>('[data-audio-route-events]');
-    if (!log || !current || !list || !modal.isConnected) return;
-    current.textContent = `Agora: ${log.current}`;
-    const signature = log.events.join('|');
-    if (list.dataset.signature === signature) return;
-    list.dataset.signature = signature;
-    list.replaceChildren(...log.events.slice().reverse().map((event) => {
-      const item = document.createElement('li');
-      item.textContent = event;
-      return item;
-    }));
   }
 
   private async fallbackToDefaultAudioOutput(forceRestart = false): Promise<void> {
@@ -8810,6 +8989,7 @@ export class PlayerScreen {
     this.soundDownloadAbort = new AbortController();
     try {
       await this.soundLibraryEngine.install(sound.id, (progress) => {
+        this.showBackgroundDownload(sound.name, progress.percentage);
         if (!modal.isConnected) return;
         const label = progress.percentage === null
           ? `${formatBytes(progress.receivedBytes)} baixados`
@@ -8817,7 +8997,7 @@ export class PlayerScreen {
         this.updateSoundDownloadProgress(progress.percentage ?? 0, label);
       }, this.soundDownloadAbort.signal);
       this.installedFixedSoundIds.add(sound.id);
-      this.updateSoundDownloadProgress(100, 'Download concluído');
+      if (modal.isConnected) this.updateSoundDownloadProgress(100, 'Download concluído');
       this.selectFixedSound(moduleNumber, sound.id);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
@@ -8826,6 +9006,7 @@ export class PlayerScreen {
       }
     } finally {
       this.soundDownloadAbort = null;
+      this.hideBackgroundDownload();
       if (button.isConnected) button.disabled = false;
     }
   }
@@ -9009,10 +9190,12 @@ export class PlayerScreen {
 
     this.eqBandDrag = null;
     this.knobDrag = null;
+    // Fechando a janela o visor do knob sai junto, sem esperar o tempo dele.
+    this.hideKnobFocus();
     if (this.currentModalKind === 'sound-download' || this.currentModalKind === 'performance-download' || this.currentModalKind === 'backup-download') {
+      // Sair da janela não cancela o download: ele continua e o andamento passa
+      // a aparecer na faixa do topo, no lugar do nome da música.
       this.soundLibraryEngine.preview.stop();
-      this.soundDownloadAbort?.abort();
-      this.soundDownloadAbort = null;
     }
 
     if (this.modal.classList.contains('player-modal--cc-learn')) {
@@ -9307,7 +9490,7 @@ export class PlayerScreen {
         : -1;
       const outputRoute = isAudioBusRoute(moduleState?.settings.outputRoute, this.activeAudioChannelCount())
         ? moduleState.settings.outputRoute as AudioBusRoute
-        : 'stereo:0';
+        : this.audioRouting.timbres;
       const nativeOutputRoute = parseAudioBusRoute(outputRoute);
       const synthSettings = moduleIndex === 7 ? readSynthSettings(moduleState?.settings.synth) : null;
       // No Sens: o volume do Synth não segue o toque. A curva salva continua
@@ -9331,12 +9514,13 @@ export class PlayerScreen {
         lowNote: moduleState?.lowNote ?? 0,
         highNote: moduleState?.highNote ?? 127,
         octave: moduleState?.octaveShift ?? 0,
-        // O arpeggiator follows somente as teclas fisicamente pressionadas.
-        // CC64 nunca deve manter a frase ou uma voz gerada presa.
-        sustain: patternInputSlot === ARPEGGIATOR_ENGINE_INPUT
-          ? false : moduleState?.sustainInputEnabled ?? true,
+        // O pedal vale também no arpeggiator: pisado, ele segura as teclas e a
+        // frase continua rodando. Quem não quiser desliga no botão Sustain do
+        // próprio módulo.
+        sustain: moduleState?.sustainInputEnabled ?? true,
         modulation: moduleState?.modulationInputEnabled ?? true,
-        volumeDb: moduleState?.volumeDb ?? 0,
+        // O fader da tela mais o trim de Gain do Config.
+        volumeDb: (moduleState?.volumeDb ?? 0) + readModuleGainDb(moduleState?.settings ?? {}),
         // O próprio sintetizador administra Mono/Poly. O roteador precisa
         // encaminhar todas as notas para preservar prioridade e legato no Mono.
         polyphony: moduleIndex < 7 && moduleState?.settings.voiceMode === 'mono'
@@ -9353,7 +9537,7 @@ export class PlayerScreen {
       if (moduleState) {
         configurationTasks.push(hookKeysNative.configureModuleModulation({
           moduleIndex,
-          lfo: readModuleModulationMode(moduleState.settings) === 'lfo',
+          mode: moduleModulationEngineMode(readModuleModulationMode(moduleState.settings)),
           rateHz: readModuleModulationRate(moduleState.settings),
         }));
         const glideSource = moduleIndex === 7 && synthSettings
@@ -9434,6 +9618,8 @@ export class PlayerScreen {
         const delay = readModuleDelaySettings(moduleState.settings.delay);
         const reverb = readModuleReverbSettings(moduleState.settings.reverb);
         const rotary = readModuleRotarySettings(moduleState.settings.rotary);
+        const chorus = readModuleChorusSettings(moduleState.settings.chorus);
+        const autoFader = readModuleAutoFaderSettings(moduleState.settings.autoFader);
         configurationTasks.push(hookKeysNative.configureModuleEffects({
           moduleIndex,
           cutoffHz: moduleCutoffHz,
@@ -9471,6 +9657,13 @@ export class PlayerScreen {
           rotaryDepth: rotary.depth / 100,
           rotaryMix: rotary.mix / 100,
           rotaryModulationEnabled: rotary.modulationEnabled,
+          chorusEnabled: chorus.enabled,
+          chorusRateHz: chorus.rateHz,
+          chorusDepth: chorus.depth / 100,
+          chorusMix: chorus.mix / 100,
+          autoFaderEnabled: moduleIndex === 5 && autoFader.enabled,
+          autoFaderBeats: autoFader.division === '1/8' ? 0.5 : 1,
+          autoFaderDepthDb: autoFader.depthDb,
         }));
       }
     }
@@ -9558,6 +9751,7 @@ export class PlayerScreen {
       sampleRate: this.sampleRate,
       compatibilityMode: this.compatibilityMode,
       seamlessPresetSwitching: this.seamlessPresetSwitching,
+      liteMode: this.liteMode,
       bottomView: this.bottomView,
       keyboardMidiSlot: this.keyboardMidiSlot,
       keyboardStyle: this.keyboardStyle,
@@ -9628,7 +9822,8 @@ export class PlayerScreen {
       metronome: isAudioBusRoute(savedAudioRouting.metronome) ? savedAudioRouting.metronome : 'stereo:0',
     };
     this.compatibilityMode = value.compatibilityMode === true;
-    this.seamlessPresetSwitching = value.seamlessPresetSwitching === true;
+    this.liteMode = value.liteMode === true;
+    this.seamlessPresetSwitching = !this.liteMode && value.seamlessPresetSwitching === true;
     this.applyLiteMode();
     this.midiInput.setCompatibilityMode(this.compatibilityMode);
     this.bottomView = value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
@@ -9992,7 +10187,7 @@ function isModuleEnvelopeParameter(value: string | undefined): value is ModuleEn
 }
 
 function isModuleEffectKind(value: string | undefined): value is ModuleEffectKind {
-  return value === 'compressor' || value === 'reverb' || value === 'delay' || value === 'rotary';
+  return value === 'compressor' || value === 'reverb' || value === 'delay' || value === 'rotary' || value === 'chorus';
 }
 
 function isArpeggiatorModeValue(value: string | undefined): value is ArpeggiatorMode {
@@ -10023,6 +10218,7 @@ function moduleEmptySoundName(moduleNumber: number): string {
 }
 
 function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> {
+  const filterVelocityOnByDefault = moduleIndex === 0 || moduleIndex === 1;
   const velocityCurve = moduleIndex === 5
     ? { ...DEFAULT_VELOCITY_CURVE, mode: 'fixed', fixedValue: 80, points: [80, 80, 80, 80, 80] }
     : { ...DEFAULT_VELOCITY_CURVE, points: [...DEFAULT_VELOCITY_CURVE.points] };
@@ -10057,10 +10253,10 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
       points: [...velocityCurve.points],
       userPoints: [...DEFAULT_VELOCITY_CURVE.userPoints],
     },
-    // Velocity do filtro nasce desligado, com o Cutoff dele em 100 Hz e a
-    // curva Soft pronta para quando ligar.
-    filterVelocityEnabled: false,
-    filterVelocityCutoffHz: DEFAULT_FILTER_VELOCITY_CUTOFF_HZ,
+    // Velocity do filtro: os módulos 1 e 2 já nascem com ele ligado em 110 Hz,
+    // na curva Soft. Nos outros ele fica desligado, pronto para quando ligar.
+    filterVelocityEnabled: filterVelocityOnByDefault,
+    filterVelocityCutoffHz: filterVelocityOnByDefault ? 110 : DEFAULT_FILTER_VELOCITY_CUTOFF_HZ,
     filterVelocityCurve: {
       ...DEFAULT_VELOCITY_CURVE,
       fixedValue: 127,

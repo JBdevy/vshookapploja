@@ -8,6 +8,9 @@ export interface ArpeggiatorSettings {
   octaves: number;
   gate: number;
   swing: number;
+  autoFaderEnabled: boolean;
+  autoFaderDivision: '1/4' | '1/8';
+  autoFaderDepthDb: number;
 }
 
 export interface SequencerStep {
@@ -38,6 +41,9 @@ export const DEFAULT_ARPEGGIATOR_SETTINGS: Readonly<ArpeggiatorSettings> = Objec
   octaves: 1,
   gate: 72,
   swing: 0,
+  autoFaderEnabled: false,
+  autoFaderDivision: '1/4',
+  autoFaderDepthDb: 5,
 });
 
 const DEFAULT_STEP_NOTES = [0, 2, 4, 7, 0, 2, 4, 7, 0, 2, 4, 7, 12, 7, 4, 2] as const;
@@ -64,6 +70,24 @@ export function readArpeggiatorSettings(value: unknown): ArpeggiatorSettings {
     octaves: integerInRange(source.octaves, 1, 4, DEFAULT_ARPEGGIATOR_SETTINGS.octaves),
     gate: numberInRange(source.gate, 10, 100, DEFAULT_ARPEGGIATOR_SETTINGS.gate),
     swing: numberInRange(source.swing, 0, 75, DEFAULT_ARPEGGIATOR_SETTINGS.swing),
+    autoFaderEnabled: source.autoFaderEnabled === true,
+    autoFaderDivision: source.autoFaderDivision === '1/8' ? '1/8' : '1/4',
+    autoFaderDepthDb: numberInRange(source.autoFaderDepthDb, 0, 40, 5),
+  };
+}
+
+// Auto Fader do arpeggiator: o volume desce autoFaderDepthDb a partir do
+// volume atual do módulo e volta, uma volta por tempo (1/4) ou colcheia (1/8).
+export function readModuleAutoFaderSettings(value: unknown): {
+  enabled: boolean;
+  division: '1/4' | '1/8';
+  depthDb: number;
+} {
+  const settings = readArpeggiatorSettings(value);
+  return {
+    enabled: settings.autoFaderEnabled,
+    division: settings.autoFaderDivision,
+    depthDb: settings.autoFaderDepthDb,
   };
 }
 
@@ -112,6 +136,20 @@ export function createArpeggiatorMarkup(value: unknown): string {
           </div>
         </section>
         ${patternKnob('arpeggiator', 'gate', 'Gate', settings.gate, 10, 100, 1, `${Math.round(settings.gate)}%`)}
+        <section class="arpeggiator-auto-fader${settings.autoFaderEnabled ? ' is-enabled' : ''}" aria-label="Auto Fader">
+          <button type="button" data-arpeggiator-auto-fader="power"
+            class="${settings.autoFaderEnabled ? 'is-selected' : ''}"
+            aria-pressed="${settings.autoFaderEnabled}">Auto Fader</button>
+          <div role="group" aria-label="Tempo do Auto Fader">
+            ${(['1/4', '1/8'] as const).map((division) => `
+              <button type="button" data-arpeggiator-auto-fader="${division}"
+                class="${settings.autoFaderDivision === division ? 'is-selected' : ''}"
+                aria-pressed="${settings.autoFaderDivision === division}">${division}</button>
+            `).join('')}
+          </div>
+          ${patternKnob('arpeggiator', 'autoFaderDepthDb', 'dB', settings.autoFaderDepthDb, 0, 40, 0.5,
+            `-${settings.autoFaderDepthDb.toFixed(1)} dB`)}
+        </section>
         ${patternKnob('arpeggiator', 'swing', 'Swing', settings.swing, 0, 75, 1, `${Math.round(settings.swing)}%`)}
       </div>
     </section>

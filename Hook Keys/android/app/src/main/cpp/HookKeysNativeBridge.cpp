@@ -272,7 +272,9 @@ public:
       float reverbSize,
       float reverbMix, bool rotaryEnabled, int rotarySpeed,
       float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
-      float rotaryDepth, float rotaryMix, bool rotaryModulationEnabled) noexcept {
+      float rotaryDepth, float rotaryMix, bool rotaryModulationEnabled,
+      bool chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
+      bool autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     hook_keys::ModuleEffectsConfig effects;
@@ -302,6 +304,8 @@ public:
     effects.rotary = {rotaryEnabled, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                       rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                       rotaryModulationEnabled};
+    effects.chorus = {chorusEnabled, chorusRateHz, chorusDepth, chorusMix};
+    effects.autoFader = {autoFaderEnabled, autoFaderBeats, autoFaderDepthDb};
     return runtime->setModuleEffects(moduleIndex, effects);
   }
 
@@ -325,9 +329,10 @@ public:
     return runtime != nullptr && runtime->setGlideBehavior(moduleIndex, behavior);
   }
 
-  bool configureModuleModulation(std::size_t moduleIndex, bool lfo, float rateHz) noexcept {
+  // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
+  bool configureModuleModulation(std::size_t moduleIndex, std::uint8_t mode, float rateHz) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
-    return runtime != nullptr && runtime->setModuleModulationMode(moduleIndex, lfo, rateHz);
+    return runtime != nullptr && runtime->setModuleModulationMode(moduleIndex, mode, rateHz);
   }
 
   bool beginPresetTransition() noexcept {
@@ -758,7 +763,9 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jfloat reverbSize,
     jfloat reverbMix, jboolean rotaryEnabled, jint rotarySpeed,
     jfloat rotarySlowHz, jfloat rotaryFastHz, jfloat rotaryRampSeconds,
-    jfloat rotaryDepth, jfloat rotaryMix, jboolean rotaryModulationEnabled) {
+    jfloat rotaryDepth, jfloat rotaryMix, jboolean rotaryModulationEnabled,
+    jboolean chorusEnabled, jfloat chorusRateHz, jfloat chorusDepth, jfloat chorusMix,
+    jboolean autoFaderEnabled, jfloat autoFaderBeats, jfloat autoFaderDepthDb) {
   const auto readInts = [](JNIEnv* env, jintArray source, jsize start, jsize count, int* target) {
     env->GetIntArrayRegion(source, start, count, reinterpret_cast<jint*>(target));
   };
@@ -780,7 +787,9 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
              delayMs, delayBeatMultiplier, delayFeedback, delayMix, reverbDecay, reverbDampen,
              reverbSize, reverbMix, rotaryEnabled == JNI_TRUE, rotarySpeed,
              rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
-             rotaryModulationEnabled == JNI_TRUE)
+             rotaryModulationEnabled == JNI_TRUE,
+             chorusEnabled == JNI_TRUE, chorusRateHz, chorusDepth, chorusMix,
+             autoFaderEnabled == JNI_TRUE, autoFaderBeats, autoFaderDepthDb)
              ? JNI_TRUE
              : JNI_FALSE;
 }
@@ -820,9 +829,10 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureGlide(
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleModulation(
-    JNIEnv*, jclass, jint moduleIndex, jboolean lfo, jfloat rateHz) {
+    JNIEnv*, jclass, jint moduleIndex, jint mode, jfloat rateHz) {
   return gEngine.configureModuleModulation(
-             static_cast<std::size_t>(moduleIndex), lfo == JNI_TRUE, rateHz)
+             static_cast<std::size_t>(moduleIndex),
+             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 2)), rateHz)
              ? JNI_TRUE
              : JNI_FALSE;
 }

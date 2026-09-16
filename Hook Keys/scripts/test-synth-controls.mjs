@@ -17,6 +17,9 @@ function transpile(path, modules = {}) {
 }
 
 const knobView = transpile('../src/features/player/ParameterKnobView.ts');
+const audioOutput = transpile('../src/features/audio/AudioOutputService.ts', {
+  '../../platform/native/HookKeysNative': { hookKeysNative: {} },
+});
 
 test('compressor meters stop requesting analysis and reset immediately when disabled', () => {
   const source = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
@@ -90,7 +93,7 @@ test('every Synth parameter uses exactly the same knob face as timbre parameters
   const moduleMarkup = settingsView.createModuleSettingsMarkup([], [], null, {}, 120, 2, '1+2');
   const faces = (markup) => [...markup.matchAll(/<span class="module-envelope-knob__face"[^>]*><i><\/i><\/span>/g)].map(([face]) => face);
   assert.equal(faces(synthMarkup).length, 15, 'Synth knobs plus one velocity limit per OSC');
-  assert.equal(faces(moduleMarkup).length, 8, 'timbre knobs plus Limite Velocity');
+  assert.equal(faces(moduleMarkup).length, 9, 'timbre knobs plus Limite Velocity and Gain');
   assert(faces(synthMarkup).every((face) => face === faces(moduleMarkup)[0]));
   assert.doesNotMatch(synthMarkup, /module-effect-knob|synth-knob|conic-gradient|border/);
   assert.equal([...synthMarkup.matchAll(/data-synth-parameter=/g)].length, 15);
@@ -135,8 +138,42 @@ test('modules 1 through 7 expose equal Velocity, Glide and Mod cards with LFO Pi
   const user = settingsView.createModuleModulationCardMarkup({ modulationMode: 'user', modulationRateHz: 12 });
   assert.match(user, /data-module-modulation-mode="user"\s+class="is-selected"/);
   assert.match(user, /data-module-modulation-rate[^>]*disabled/);
+  // Tremolo: terceiro modo do SF2, com o mesmo Rate do LFO de pitch.
+  assert.match(markup, /data-module-modulation-modes="3"/);
+  assert.match(markup, /data-module-modulation-mode="tremolo"/);
+  const tremolo = settingsView.createModuleModulationCardMarkup({ modulationMode: 'tremolo', modulationRateHz: 4 });
+  assert.match(tremolo, /data-module-modulation-mode="tremolo"\s+class="is-selected"/);
+  assert.match(tremolo, /Tremolo · 4\.00 Hz/);
+  assert.doesNotMatch(tremolo, /data-module-modulation-rate[^>]*disabled/, 'o Rate vale para o Tremolo');
+  assert.equal(settingsView.moduleModulationEngineMode('user'), 0);
+  assert.equal(settingsView.moduleModulationEngineMode('lfo'), 1);
+  assert.equal(settingsView.moduleModulationEngineMode('tremolo'), 2);
+  // O Synth não tem Tremolo próprio da roda: lá o card cai para o LFO.
+  const synth = settingsView.createModuleModulationCardMarkup({ modulationMode: 'tremolo' }, 'synth');
+  assert.match(synth, /data-module-modulation-modes="2"/);
+  assert.doesNotMatch(synth, /tremolo/);
+  assert.match(synth, /data-module-modulation-mode="lfo"\s+class="is-selected"/);
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.module-settings-bottom-row:has\(\.module-mod-card\)[^{]*\{[^}]*repeat\(3, minmax\(0, 1fr\)\)/s);
+});
+
+test('Modo Lite: so no App, com descricao, e nao convive com a troca sem corte', () => {
+  const app = appSettingsView.createAppSettingsMarkup(false, true, 'presets', false, 1, 'standard', true, false, true);
+  assert.match(app, /data-setting="lite-mode"/);
+  assert.match(app, /Modo Lite/);
+  assert.match(app, /aparelhos antigos/);
+  // Desligado, a troca sem corte segue livre.
+  assert.doesNotMatch(app, /data-setting="seamless-preset-switching"[^>]*disabled/);
+  const lite = appSettingsView.createAppSettingsMarkup(false, false, 'presets', false, 1, 'standard', true, true, true);
+  assert.match(lite, /data-setting="lite-mode" checked/);
+  assert.match(lite, /data-setting="seamless-preset-switching" disabled/, 'com o Lite ligado ela fica travada');
+  // Desktop nao tem Modo Lite.
+  const desktop = appSettingsView.createAppSettingsMarkup(false, false, 'presets', false, 1, 'standard', true, false, false);
+  assert.doesNotMatch(desktop, /data-setting="lite-mode"/);
+  // O celular escolhe MIDI e estilo do teclado como o desktop.
+  assert.match(desktop, /data-desktop-keyboard-midi-slot="3"/);
+  assert.match(desktop, /data-keyboard-style="hook"/);
+  assert.match(desktop, /data-keyboard-style="black"/);
 });
 
 test('Buffer Size keeps driver details out of the commercial interface', () => {
@@ -159,6 +196,49 @@ test('Config Áudio lists Metrônomo as a route and Músicas fixed on 1+2', () =
   assert.match(music[1], /disabled/, 'sem opção de mudar');
   assert.equal(music[2].match(/<option/g).length, 1, 'uma única opção, mesmo com 8 canais');
   assert.match(music[2], />1\+2</);
+
+  // Saídas - Timbres: mesmas opções das outras saídas, e a ordem da tela é a
+  // mesma do HTML (Dispositivo/Buffer, Timbres/Músicas, Pads/Effects,
+  // Metrônomo/Sample Rate).
+  const timbres = /<select data-setting="audio-route" data-audio-bus="timbres">([\s\S]*?)<\/select>/.exec(markup);
+  assert(timbres, 'Saídas - Timbres aparece');
+  assert.match(markup, /Saídas - Timbres/);
+  const pads = /<select data-setting="audio-route" data-audio-bus="pads">([\s\S]*?)<\/select>/.exec(markup);
+  assert.equal(timbres[1].match(/<option/g).length, pads[1].match(/<option/g).length);
+  const order = [...markup.matchAll(/data-(?:audio-route-field|setting)="([a-z-]+)"/g)]
+    .map(([, name]) => name).filter((name) => name !== 'audio-route' && name !== 'music-route');
+  assert.deepEqual(order, ['audio-device', 'buffer-size', 'timbres', 'music', 'pads', 'effects', 'metronome', 'sample-rate']);
+
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\[data-audio-route-field="timbres"\] \{\s*grid-column: 1;\s*grid-row: 2;/);
+  assert.match(css, /\[data-audio-route-field="metronome"\] \{\s*grid-column: 1;\s*grid-row: 4;/);
+  assert.match(css, /--sample-rate \{\s*grid-column: 2;\s*grid-row: 4;/);
+  assert.doesNotMatch(css, /audio-route-diagnostics/, 'o diagnóstico da rota saiu da tela');
+});
+
+test('a saída do módulo tem Padrão, que segue Saídas - Timbres', () => {
+  const padrao = settingsView.createModuleSettingsMarkup([], [], null, {}, 120, 8, 'default');
+  const select = /<select data-module-setting="audio-route">([\s\S]*?)<\/select>/.exec(padrao);
+  assert(select, 'o módulo tem seletor de saída');
+  assert.match(select[1], /<option value="default" selected>Padrão<\/option>/);
+  // Padrão vem antes das saídas fixas, que continuam todas lá.
+  const fonte = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
+  const bloco = /<select data-module-setting="audio-route">([\s\S]*?)<\/select>/.exec(fonte)[1];
+  assert(bloco.indexOf('value="default"') < bloco.indexOf('createAudioRouteOptions'));
+  const saidas = audioOutput.createAudioRouteOptions(8, 'default');
+  assert.equal(saidas.match(/<option/g).length, 12, 'as 12 saídas de uma placa de 8 canais');
+  assert.doesNotMatch(saidas, /selected/, 'no Padrão nenhuma saída fixa fica marcada');
+  assert.match(audioOutput.createAudioRouteOptions(8, 'mono:2'), /<option value="mono:2" selected>/);
+  const fixa = /<select data-module-setting="audio-route">([\s\S]*?)<\/select>/
+    .exec(settingsView.createModuleSettingsMarkup([], [], null, {}, 120, 8, 'mono:2'))[1];
+  assert.doesNotMatch(fixa, /value="default" selected/);
+
+  // Sem saída própria guardada, o módulo sai por onde Saídas - Timbres estiver.
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /: this\.audioRouting\.timbres;/);
+  assert.match(player, /if \(select\.value === 'default'\) \{[\s\S]{0,90}delete moduleState\.settings\.outputRoute;/);
+  assert.match(player, /if \(bus === 'timbres'\) void this\.syncNativeEngine\(\);/);
+  assert.doesNotMatch(player, /audio-route-diagnostics|audioRouteLog/, 'o diagnóstico da rota saiu da tela');
 });
 
 test('EQ starts with Low Shelf and High Shelf while preserving five bands', () => {
@@ -237,7 +317,7 @@ test('new module and Synth defaults use zero Attack, 300 ms Release and maximum 
   const context = {
     exports: {}, ...settingsView, ...synthView, ...glideView,
     readModuleRotarySettings: () => ({}), DEFAULT_ARPEGGIATOR_SETTINGS: {},
-    FACTORY_MODULE_REVERB: { enabled: true, decay: 4, dampen: 50, size: 0, mix: 44 },
+    FACTORY_MODULE_REVERB: { enabled: true, decay: 10, dampen: 50, size: 0, mix: 50 },
     readTranceGateSettings: () => ({}),
     DEFAULT_SEQUENCER_SETTINGS: { steps: [] }, DEFAULT_VELOCITY_CURVE: { points: [], userPoints: [] },
   };
@@ -392,7 +472,7 @@ test('preset 1 is selected by default; other selections replace it and remain se
   }
 });
 
-test('Synth mode is beside Legato and Param restores the full Compressor preview', () => {
+test('Synth mode is beside Legato and the Synth Param also gets a Chorus', () => {
   for (const mode of ['mono', 'poly']) {
     const markup = synthView.createSynthModuleMarkup({ voiceMode: mode });
     assert.match(markup, new RegExp(`synth-voice-mode-button is-${mode}`));
@@ -400,8 +480,10 @@ test('Synth mode is beside Legato and Param restores the full Compressor preview
   }
   const effects = transpile('../src/features/player/ModuleEffectsView.ts', { './ParameterKnobView': knobView });
   const shortcuts = effects.createModuleEffectCardsMarkup({}, 120, 'synth');
-  assert.match(shortcuts, /module-compressor-preview/);
-  assert.doesNotMatch(shortcuts, /open-synth|processor-shortcuts/);
+  // O compressor não tem prévia em lugar nenhum e o Chorus fica abaixo dele.
+  assert.doesNotMatch(shortcuts, /module-compressor-preview/);
+  assert.doesNotMatch(shortcuts, /open-synth/);
+  assert.match(shortcuts, /open-compressor">Compressor<\/button>\s*<button[^>]*open-chorus">Chorus<\/button>/);
 });
 
 test('common CSS retains the dynamic fill and green selection, without a Synth-only fixed face', () => {

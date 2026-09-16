@@ -1,7 +1,7 @@
 import { createParameterKnobMarkup } from './ParameterKnobView';
 
-export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary';
-export type ModuleProcessorReplacement = 'compressor' | 'rotary' | 'arpeggiator' | 'sequencer' | 'synth';
+export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary' | 'chorus';
+export type ModuleProcessorReplacement = 'compressor' | 'chorus' | 'rotary' | 'arpeggiator' | 'sequencer' | 'synth';
 
 export type RotarySpeed = 'brake' | 'slow' | 'fast';
 export interface ModuleRotarySettings {
@@ -44,13 +44,17 @@ export interface ModuleDelaySettings {
 
 export const DELAY_DIVISIONS = ['1/1', '1/2', '1/4', '1/8', '1/16', '1/8 D', '1/8 T'] as const;
 
+// Attack abaixo de 1 ms faz o compressor sujar o som, então 1 ms é o mínimo
+// do knob e também do que se lê de um preset salvo.
+const MIN_COMPRESSOR_ATTACK_MS = 1;
+
 const DEFAULT_COMPRESSOR: ModuleCompressorSettings = {
   enabled: false,
-  thresholdDb: -18,
+  thresholdDb: -30,
   ratio: 4,
-  gainDb: 0,
-  attackMs: 16,
-  releaseMs: 160,
+  gainDb: 6,
+  attackMs: MIN_COMPRESSOR_ATTACK_MS,
+  releaseMs: 10,
   mix: 100,
 };
 
@@ -65,10 +69,10 @@ const DEFAULT_REVERB: ModuleReverbSettings = {
 // Reverb com que todo módulo nasce (e para onde o Reset do Reverb volta).
 export const FACTORY_MODULE_REVERB: ModuleReverbSettings = {
   enabled: true,
-  decay: 4,
+  decay: 10,
   dampen: 50,
   size: 0,
-  mix: 44,
+  mix: 50,
 };
 
 const DEFAULT_DELAY: ModuleDelaySettings = {
@@ -111,19 +115,11 @@ export function createModuleEffectCardsMarkup(
   const delay = readModuleDelaySettings(settings.delay);
   const delayMilliseconds = delay.sync ? delayMillisecondsForBpm(bpm, '1/4') : delay.milliseconds;
   return `
-      ${replacement === 'compressor' || replacement === 'synth' ? `
-      <article class="module-effect-card module-effect-card--compressor${compressor.enabled ? ' is-enabled' : ' is-disabled'}">
-        <button type="button" data-module-setting-action="open-compressor">Compressor</button>
-        <div class="module-compressor-preview" aria-label="Prévia do compressor">
-          <span class="module-compressor-preview__meter"><i style="--effect-meter:0%"></i></span>
-          <strong>${compressor.ratio.toFixed(1)}:1</strong>
-          <span class="module-compressor-preview__meter module-compressor-preview__meter--output"><i style="--effect-meter:0%"></i></span>
-          <small>${formatSignedDb(compressor.thresholdDb)}</small>
-          <small>Ratio</small>
-          <small>${formatSignedDb(compressor.gainDb)}</small>
-        </div>
-      </article>
-      ` : createProcessorShortcutCard(replacement)}
+      ${createProcessorShortcutCard(
+        replacement === 'compressor' || replacement === 'synth' ? 'chorus' : replacement,
+        compressor.enabled,
+        readModuleChorusSettings(settings.chorus).enabled,
+      )}
 
       <article class="module-effect-card module-effect-card--reverb${reverb.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-reverb">Reverb</button>
@@ -147,15 +143,22 @@ export function createModuleEffectCardsMarkup(
   `;
 }
 
-function createProcessorShortcutCard(replacement: Exclude<ModuleProcessorReplacement, 'compressor'>): string {
+// O compressor não tem prévia em lugar nenhum: é só o botão, com o segundo
+// processador do módulo logo abaixo.
+function createProcessorShortcutCard(
+  replacement: Exclude<ModuleProcessorReplacement, 'compressor' | 'synth'>,
+  compressorEnabled: boolean,
+  chorusEnabled: boolean,
+): string {
   const label = replacement === 'arpeggiator'
     ? 'Arpeggiator'
     : replacement === 'sequencer' ? 'Trance Gate'
-      : replacement === 'rotary' ? 'Rotary' : 'Synth';
+      : replacement === 'rotary' ? 'Rotary' : 'Chorus';
+  const secondEnabled = replacement === 'chorus' ? chorusEnabled : null;
   return `
     <article class="module-effect-card module-effect-card--processor-shortcuts" aria-label="Processadores do módulo">
-      <button class="module-processor-shortcut module-processor-shortcut--compressor" type="button" data-module-setting-action="open-compressor">Compressor</button>
-      <button class="module-processor-shortcut module-processor-shortcut--${replacement}" type="button" data-module-setting-action="open-${replacement}">${label}</button>
+      <button class="module-processor-shortcut module-processor-shortcut--compressor${compressorEnabled ? ' is-enabled' : ''}" type="button" data-module-setting-action="open-compressor">Compressor</button>
+      <button class="module-processor-shortcut module-processor-shortcut--${replacement}${secondEnabled ? ' is-enabled' : ''}" type="button" data-module-setting-action="open-${replacement}">${label}</button>
     </article>
   `;
 }
@@ -166,7 +169,7 @@ export function createModuleCompressorMarkup(settings: Readonly<Record<string, u
     control('thresholdDb', 'Threshold', -60, 0, 0.1, value.thresholdDb, formatSignedDb(value.thresholdDb)),
     control('ratio', 'Ratio', 1, 20, 0.1, value.ratio, `${value.ratio.toFixed(1)}:1`),
     control('gainDb', 'Gain', 0, 24, 0.1, value.gainDb, formatSignedDb(value.gainDb)),
-    control('attackMs', 'Attack', 0.1, 100, 0.1, value.attackMs, `${formatNumber(value.attackMs)} ms`),
+    control('attackMs', 'Attack', MIN_COMPRESSOR_ATTACK_MS, 100, 0.1, value.attackMs, `${formatNumber(value.attackMs)} ms`),
     control('releaseMs', 'Release', 10, 1_000, 1, value.releaseMs, `${Math.round(value.releaseMs)} ms`),
     control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
   ];
@@ -200,6 +203,46 @@ export function createModuleReverbMarkup(settings: Readonly<Record<string, unkno
     <section class="module-effect-editor module-reverb-editor" data-module-effect-editor="reverb">
       <div class="module-effect-controls module-effect-controls--reverb">
         ${controls.map((item) => createEffectKnob('reverb', item)).join('')}
+      </div>
+    </section>
+  `;
+}
+
+export interface ModuleChorusSettings {
+  enabled: boolean;
+  rateHz: number;
+  depth: number;
+  mix: number;
+}
+
+const DEFAULT_CHORUS: ModuleChorusSettings = {
+  enabled: false,
+  rateHz: 0.6,
+  depth: 50,
+  mix: 35,
+};
+
+export function readModuleChorusSettings(value: unknown): ModuleChorusSettings {
+  const source = record(value);
+  return {
+    enabled: source.enabled === true,
+    rateHz: numberInRange(source.rateHz, 0.05, 8, DEFAULT_CHORUS.rateHz),
+    depth: numberInRange(source.depth, 0, 100, DEFAULT_CHORUS.depth),
+    mix: numberInRange(source.mix, 0, 100, DEFAULT_CHORUS.mix),
+  };
+}
+
+export function createModuleChorusMarkup(settings: Readonly<Record<string, unknown>>): string {
+  const value = readModuleChorusSettings(settings.chorus);
+  const controls: EffectControlDefinition[] = [
+    control('rateHz', 'Rate', 0.05, 8, 0.01, value.rateHz, `${value.rateHz.toFixed(2)} Hz`),
+    control('depth', 'Depth', 0, 100, 1, value.depth, `${Math.round(value.depth)}%`),
+    control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
+  ];
+  return `
+    <section class="module-effect-editor module-chorus-editor" data-module-effect-editor="chorus">
+      <div class="module-effect-controls module-effect-controls--chorus">
+        ${controls.map((item) => createEffectKnob('chorus', item)).join('')}
       </div>
     </section>
   `;
@@ -264,7 +307,7 @@ export function readModuleCompressorSettings(value: unknown): ModuleCompressorSe
     thresholdDb: numberInRange(source.thresholdDb, -60, 0, DEFAULT_COMPRESSOR.thresholdDb),
     ratio: numberInRange(source.ratio, 1, 20, DEFAULT_COMPRESSOR.ratio),
     gainDb: numberInRange(source.gainDb, 0, 24, DEFAULT_COMPRESSOR.gainDb),
-    attackMs: numberInRange(source.attackMs, 0.1, 100, DEFAULT_COMPRESSOR.attackMs),
+    attackMs: numberInRange(source.attackMs, MIN_COMPRESSOR_ATTACK_MS, 100, DEFAULT_COMPRESSOR.attackMs),
     releaseMs: numberInRange(source.releaseMs, 10, 1_000, DEFAULT_COMPRESSOR.releaseMs),
     mix: numberInRange(source.mix, 0, 100, DEFAULT_COMPRESSOR.mix),
   };
@@ -314,6 +357,7 @@ export function readModuleEffectSettings(kind: ModuleEffectKind, value: unknown)
   if (kind === 'compressor') return readModuleCompressorSettings(value);
   if (kind === 'reverb') return readModuleReverbSettings(value);
   if (kind === 'rotary') return readModuleRotarySettings(value);
+  if (kind === 'chorus') return readModuleChorusSettings(value);
   return readModuleDelaySettings(value);
 }
 
@@ -329,6 +373,7 @@ export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, val
     if (key === 'mix') return `${Math.round(value)}%`;
     return `${key === 'releaseMs' ? Math.round(value) : formatNumber(value)} ms`;
   }
+  if (kind === 'chorus') return key === 'rateHz' ? `${value.toFixed(2)} Hz` : `${Math.round(value)}%`;
   if (kind === 'reverb') return key === 'decay' ? `${formatNumber(value)} s` : `${Math.round(value)}%`;
   return key === 'milliseconds' ? `${Math.round(value)} ms` : `${Math.round(value)}%`;
 }

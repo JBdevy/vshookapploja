@@ -104,8 +104,10 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
   while (rendered < frames) {
     const auto blockFrames = std::min(settings_.maximumBlockFrames, frames - rendered);
     for (std::size_t index = 0; index < kModuleCount; ++index) {
+      // Desligar o módulo só fecha a porta do MIDI: o que já estava soando
+      // continua até acabar, então ele segue sendo renderizado.
       auto* synth = modules_[index];
-      if (synth == nullptr || !configs_[index].enabled) continue;
+      if (synth == nullptr) continue;
       if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
           !effects_[index].requiresSilentProcessing()) continue;
       std::fill_n(scratchLeft_.data(), blockFrames, 0.0f);
@@ -145,7 +147,7 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
     for (std::size_t index = 0; index < kModuleCount; ++index) {
       auto* synth = modules_[index];
       const auto& config = configs_[index];
-      if (synth == nullptr || !config.enabled || config.outputChannelStart >= channels) continue;
+      if (synth == nullptr || config.outputChannelStart >= channels) continue;
       if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
           !effects_[index].requiresSilentProcessing()) continue;
       std::fill_n(scratchLeft_.data(), blockFrames, 0.0f);
@@ -187,7 +189,7 @@ std::uint64_t HookKeysEngine::droppedCommandCount() const noexcept {
 
 bool HookKeysEngine::hasActiveVoices() const noexcept {
   for (std::size_t index = 0; index < kModuleCount; ++index) {
-    if (configs_[index].enabled && modules_[index] != nullptr &&
+    if (modules_[index] != nullptr &&
         (moduleHasActiveNotes(index) || modules_[index]->hasActiveVoices())) return true;
   }
   return false;
@@ -268,14 +270,8 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
     case CommandType::setModuleConfig:
       if (command.moduleIndex < kModuleCount) {
         const auto index = static_cast<std::size_t>(command.moduleIndex);
-        if (configs_[index].enabled && !command.moduleConfig.enabled && modules_[index] != nullptr) {
-          modules_[index]->allNotesOff();
-          sustainDown_[index] = false;
-          clearActiveNoteState(index);
-          compressorInputPeaks_[index].store(0.0f, std::memory_order_relaxed);
-          compressorOutputPeaks_[index].store(0.0f, std::memory_order_relaxed);
-        } else if (configs_[index].midiInputSlot != command.moduleConfig.midiInputSlot &&
-                   modules_[index] != nullptr) {
+        if (configs_[index].midiInputSlot != command.moduleConfig.midiInputSlot &&
+            modules_[index] != nullptr) {
           // Reset CC64 even if no key is physically down: an SF2 can still
           // contain pedal-held voices from the previous input route.
           if (sustainDown_[index]) modules_[index]->controlChange(kSustainController, 0);
@@ -339,7 +335,11 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
     for (std::size_t index = 0; index < kModuleCount; ++index) {
       auto* synth = modules_[index];
       const auto& config = configs_[index];
-      if (synth == nullptr || !config.enabled) continue;
+      if (synth == nullptr) continue;
+      // Módulo desligado ignora todo controle, menos soltar o sustain: sem
+      // isso um pad que ficou preso no pedal nunca mais solta.
+      const auto pedalRelease = message.data1 == kSustainController && message.data2 < 64;
+      if (!config.enabled && !pedalRelease) continue;
       const auto acceptsInput = config.midiInputSlot == kAllMidiInputs ||
                                 (message.inputSlot == kKeyboardBroadcastInput &&
                                  config.midiInputSlot != kArpeggiatorInput &&

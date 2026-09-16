@@ -399,7 +399,11 @@ test('apps mostram a RAM do aparelho ao lado do User; desktop mantém CPU', () =
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
-  assert.match(player, /this\.desktopRuntime \? `[\s\S]*?data-cpu-meter[\s\S]*?` : Capacitor\.isNativePlatform\(\) \? `[\s\S]*?data-ram-meter/);
+  // No desktop os dois ficam lado a lado; no app, só a RAM.
+  assert.match(player, /this\.desktopRuntime \? `[\s\S]*?data-cpu-meter[\s\S]*?` : ''\}\s*\$\{this\.desktopRuntime \|\| Capacitor\.isNativePlatform\(\) \? `[\s\S]*?data-ram-meter/);
+  const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+  assert.match(rust, /fn memory_usage\(\) -> Result<HashMap<&'static str, f64>, String>/);
+  assert.match(rust, /pub fn status_bytes\(\) -> \(u64, u64\)/);
   assert.match(ios, /CAPPluginMethod\(name: "memoryUsage"/);
   // A conta é do aparelho inteiro, não só do app.
   assert.match(ios, /private lazy var hostPort: host_t = mach_host_self\(\)/);
@@ -474,16 +478,18 @@ test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () =>
 test('módulos nascem com Reverb de fábrica, Mod em User e o 5 com Rotary', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const effects = readFileSync(new URL('../src/features/player/ModuleEffectsView.ts', import.meta.url), 'utf8');
-  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 4,\s*dampen: 50,\s*size: 0,\s*mix: 44,/);
+  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 10,\s*dampen: 50,\s*size: 0,\s*mix: 50,/);
   assert.match(player, /modulationMode: 'user',/);
   assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB \},/);
   assert.match(player, /rotary: \{ \.\.\.readModuleRotarySettings\(undefined\), enabled: moduleIndex === 4 \},/);
 });
 
-test('knobs só pela horizontal e sem o salto nativo do range do iOS', () => {
+test('knobs andam nos dois sentidos, um eixo por gesto, sem o salto nativo do range do iOS', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /const horizontalDelta = event\.clientX - drag\.startX;/);
-  assert.doesNotMatch(player, /verticalDelta/);
+  assert.match(player, /const horizontalDelta = event\.clientX - drag\.startX;\s*const verticalDelta = drag\.startY - event\.clientY;/);
+  // O primeiro movimento escolhe o eixo, e ele vale até soltar o dedo.
+  assert.match(player, /drag\.axis = Math\.abs\(horizontalDelta\) >= Math\.abs\(verticalDelta\) \? 'horizontal' : 'vertical';/);
+  assert.match(player, /const axisDelta = drag\.axis === 'horizontal' \? horizontalDelta : verticalDelta;/);
   for (const knob of ['player-output-knob', 'module-envelope-knob', 'module-effect-knob']) {
     const block = css.match(new RegExp(`\n\.${knob} input \{[^}]*\}`))[0];
     assert.match(block, /pointer-events: none;/, `${knob}: o toque vai para o knob, não para o range`);
@@ -523,6 +529,24 @@ test('Copy/Paste: vermelho parado, amarelo piscando copiado e mais rápido no Pa
   assert.match(css, /\.player-preset-copy-button:is\(\[data-copy-state="copied"\], \[data-copy-state="paste"\]\) \{[^}]*animation: tracks-loop-blink 1\.1s ease-in-out infinite;/);
   assert.match(css, /\.player-preset-copy-button\[data-copy-state="paste"\] \{\s*animation-duration: \.45s;/);
   assert.match(css, /\.player-presets \.player-preset-copy-button \{\s*--button-color-a: #f05a4f !important;/);
+});
+
+test('compressor de fábrica e o Reset que só mexe nos parâmetros', () => {
+  const effects = readFileSync(new URL('../src/features/player/ModuleEffectsView.ts', import.meta.url), 'utf8');
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const engine = readFileSync(new URL('../native-engine/include/hook_keys/DspTypes.hpp', import.meta.url), 'utf8');
+  assert.match(effects, /const DEFAULT_COMPRESSOR: ModuleCompressorSettings = \{\s*enabled: false,\s*thresholdDb: -30,\s*ratio: 4,\s*gainDb: 6,\s*attackMs: MIN_COMPRESSOR_ATTACK_MS,\s*releaseMs: 10,\s*mix: 100,/);
+  // Attack abaixo de 1 ms sujava o som: 1 ms vira o mínimo no knob, na leitura
+  // de um preset salvo e no motor.
+  assert.match(effects, /const MIN_COMPRESSOR_ATTACK_MS = 1;/);
+  assert.match(effects, /control\('attackMs', 'Attack', MIN_COMPRESSOR_ATTACK_MS, 100/);
+  assert.match(effects, /attackMs: numberInRange\(source\.attackMs, MIN_COMPRESSOR_ATTACK_MS, 100/);
+  assert.match(engine, /attackMs = std::clamp\(attackMs, 1\.0f, 250\.0f\);/);
+  // Reset de processador nunca liga nem desliga o efeito.
+  assert.match(player, /moduleState\.settings\.compressor = \{\s*\.\.\.readModuleCompressorSettings\(undefined\),\s*enabled: readModuleCompressorSettings\(moduleState\.settings\.compressor\)\.enabled,/);
+  assert.match(player, /moduleState\.settings\.reverb = \{\s*\.\.\.FACTORY_MODULE_REVERB,\s*enabled: readModuleReverbSettings\(moduleState\.settings\.reverb\)\.enabled,/);
+  assert.match(player, /moduleState\.settings\.rotary = \{\s*\.\.\.readModuleRotarySettings\(undefined\),\s*enabled: readModuleRotarySettings\(moduleState\.settings\.rotary\)\.enabled,/);
+  assert.match(player, /moduleState\.settings\.delay = \{\s*\.\.\.readModuleDelaySettings\(undefined\),\s*enabled: readModuleDelaySettings\(moduleState\.settings\.delay\)\.enabled,/);
 });
 
 test('Velocity do filtro: coluna com Cutoff e ON/OFF à direita da curva, também em Fixed', () => {

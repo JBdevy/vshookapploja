@@ -625,7 +625,14 @@ static NSString *describeFormat(AVAudioFormat *format) {
               rotaryRampSeconds:(float)rotaryRampSeconds
                     rotaryDepth:(float)rotaryDepth
                       rotaryMix:(float)rotaryMix
-        rotaryModulationEnabled:(BOOL)rotaryModulationEnabled {
+        rotaryModulationEnabled:(BOOL)rotaryModulationEnabled
+                  chorusEnabled:(BOOL)chorusEnabled
+                   chorusRateHz:(float)chorusRateHz
+                    chorusDepth:(float)chorusDepth
+                      chorusMix:(float)chorusMix
+               autoFaderEnabled:(BOOL)autoFaderEnabled
+                 autoFaderBeats:(float)autoFaderBeats
+               autoFaderDepthDb:(float)autoFaderDepthDb {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
   hook_keys::ModuleEffectsConfig effects;
@@ -657,6 +664,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
   effects.rotary = {rotaryEnabled != NO, static_cast<std::uint8_t>(std::clamp<NSInteger>(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != NO};
+  effects.chorus = {chorusEnabled != NO, chorusRateHz, chorusDepth, chorusMix};
+  effects.autoFader = {autoFaderEnabled != NO, autoFaderBeats, autoFaderDepthDb};
   return runtime->setModuleEffects(static_cast<std::size_t>(moduleIndex), effects);
 }
 
@@ -705,10 +714,12 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return runtime->setGlideBehavior(static_cast<std::size_t>(moduleIndex), behavior);
 }
 
-- (BOOL)configureModuleModulation:(NSInteger)moduleIndex lfo:(BOOL)lfo rateHz:(float)rateHz {
+- (BOOL)configureModuleModulation:(NSInteger)moduleIndex mode:(NSInteger)mode rateHz:(float)rateHz {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && moduleIndex >= 0 && moduleIndex < 8 &&
-         runtime->setModuleModulationMode(static_cast<std::size_t>(moduleIndex), lfo, rateHz);
+         runtime->setModuleModulationMode(
+             static_cast<std::size_t>(moduleIndex),
+             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 2)), rateHz);
 }
 
 - (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing {

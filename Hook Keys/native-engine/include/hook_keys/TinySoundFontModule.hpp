@@ -42,9 +42,11 @@ public:
   void setGlideBehavior(GlideBehavior behavior) noexcept override {
     glideBehavior_.store(behavior.pack(), std::memory_order_relaxed);
   }
-  void setModulationMode(bool lfo, float rateHz) noexcept {
+  // 0 = User (a roda vai para a modulação do próprio SF2), 1 = LFO de pitch
+  // (vibrato), 2 = Tremolo (a roda abre e fecha o volume no mesmo rate).
+  void setModulationMode(std::uint8_t mode, float rateHz) noexcept {
     lfoRateHz_.store(std::clamp(rateHz, 0.1f, 20.0f), std::memory_order_release);
-    lfoModulation_.store(lfo, std::memory_order_release);
+    modulationMode_.store(mode > 2 ? 0 : mode, std::memory_order_release);
   }
 
   [[nodiscard]] bool hasPendingSoundFont() const noexcept;
@@ -87,9 +89,9 @@ private:
   std::atomic<std::uint16_t> glideBehavior_{GlideBehavior{}.pack()};
   HookKeysGlideState glide_{};
   CutoffConfig cutoffConfig_{};
-  std::atomic<bool> lfoModulation_{true};
+  std::atomic<std::uint8_t> modulationMode_{1};
   std::atomic<float> lfoRateHz_{6.85f};
-  bool appliedLfoModulation_ = true;
+  std::uint8_t appliedModulationMode_ = 1;
   std::uint8_t modulationValue_ = 0;
   std::uint16_t pitchBendValue_ = 8192;
   double modulationPhase_ = 0.0;

@@ -57,7 +57,8 @@ public:
       std::size_t moduleIndex, float attackMs, float holdMs,
       float decayMs, float releaseMs, float glideMs = 0.0f) noexcept;
   [[nodiscard]] bool setSynthConfig(AnalogSynthConfig config) noexcept;
-  [[nodiscard]] bool setModuleModulationMode(std::size_t moduleIndex, bool lfo, float rateHz) noexcept;
+  // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
+  [[nodiscard]] bool setModuleModulationMode(std::size_t moduleIndex, std::uint8_t mode, float rateHz) noexcept;
   // Modules 0-6 (SF2) and 7 (Synth).
   [[nodiscard]] bool setGlideBehavior(std::size_t moduleIndex, GlideBehavior behavior) noexcept;
   // Modules 0-6: Limite Velocity and limiter. Module 7 (Synth): per-oscillator limits.

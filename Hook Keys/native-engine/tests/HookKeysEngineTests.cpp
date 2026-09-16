@@ -286,12 +286,32 @@ void testDisableAndPanic() {
   hook_keys::HookKeysEngine engine(modules);
 
   expect(engine.enqueueMidi(midi(0x90, 64, 110)), "queue note before disable");
+  expect(engine.enqueueMidi(midi(0xB0, 64, 127)), "queue sustain down");
   process(engine);
+  const auto beforeDisable = synth.events.size();
   hook_keys::ModuleConfig disabled;
   disabled.enabled = false;
   expect(engine.setModuleConfig(0, disabled), "disable module");
   process(engine);
-  expect(synth.events.back().type == Event::Type::allNotesOff, "disabling a module releases its voices");
+  // Desligar o módulo é só fechar a porta do MIDI: o que estava soando segue.
+  expect(synth.events.size() == beforeDisable, "disabling a module does not cut the sound");
+
+  expect(engine.enqueueMidi(midi(0x90, 67, 110)), "queue note while disabled");
+  expect(engine.enqueueMidi(midi(0xB0, 74, 50)), "queue controller while disabled");
+  process(engine);
+  expect(synth.events.size() == beforeDisable, "a disabled module takes no notes and no controllers");
+
+  // Menos soltar o pedal: sem isso o pad preso no sustain nunca solta.
+  expect(engine.enqueueMidi(midi(0xB0, 64, 0)), "queue pedal release while disabled");
+  process(engine);
+  expect(synth.events.size() == beforeDisable + 1 &&
+         synth.events.back().data1 == 64 && synth.events.back().data2 == 0,
+      "releasing the pedal still reaches a disabled module");
+
+  // E a tecla solta depois de desligar ainda para a nota dela.
+  expect(engine.enqueueMidi(midi(0x80, 64, 0)), "queue note off while disabled");
+  process(engine);
+  expect(synth.events.back().type == Event::Type::noteOff, "note off still reaches a disabled module");
 
   expect(engine.stopAllNotes(), "queue panic");
   process(engine);
@@ -419,7 +439,7 @@ void testSoundFontModWheelModes() {
     hook_keys::TinySoundFontModule synth(48000.0, 128);
     expect(synth.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"),
            "load SF2 for Mod mode test");
-    synth.setModulationMode(lfo, rateHz);
+    synth.setModulationMode(lfo ? 1 : 0, rateHz);
     synth.beginBlock();
     synth.controlChange(1, wheel);
     synth.noteOn(60, 120);
@@ -1452,14 +1472,26 @@ double rotaryPeakPitchDeviationCents(double frequency, float depth, std::uint8_t
   return peak;
 }
 
+// Uma Leslie 122 de verdade balança a afinação: a corneta gira a 19,2 cm de
+// raio, e no Fast (7 Hz) isso dá ~44 cents de pico. O teste guarda essa faixa
+// física e, principalmente, guarda o cruzamento: com atrasos geométricos as
+// duas metades chegavam a se cancelar e o medidor acusava 200 cents.
 void testRotaryPitchStaysInTune() {
-  // Antes: 28 cents no grave e 52 no agudo (Fast, Depth 70%), e mais de 150
-  // cents na região de 1 kHz, onde corneta e tambor se cruzam.
-  expect(rotaryPeakPitchDeviationCents(220.0, 1.0f, 2) < 3.0, "Leslie Fast keeps low notes in tune");
-  expect(rotaryPeakPitchDeviationCents(700.0, 1.0f, 2) < 8.0, "Leslie Fast keeps the crossover region in tune");
-  expect(rotaryPeakPitchDeviationCents(1000.0, 1.0f, 2) < 25.0, "Leslie drum and horn do not cancel at the crossover");
-  expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 2) < 16.0, "Leslie horn warble stays a shimmer, not a vibrato");
-  expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 1) < 3.0, "Leslie Slow barely moves the pitch");
+  expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 2) > 30.0, "Leslie Fast really swings the horn");
+  expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 2) < 60.0, "the horn swing stays a Leslie, not a siren");
+  expect(rotaryPeakPitchDeviationCents(2500.0, 1.0f, 1) < 10.0, "Leslie Slow barely moves the pitch");
+  expect(rotaryPeakPitchDeviationCents(220.0, 1.0f, 1) < 6.0, "Leslie Slow keeps low notes in tune");
+  // Depth é o raio do rotor: 35% dá um giro discreto, 100% a caixa inteira.
+  expect(rotaryPeakPitchDeviationCents(2500.0, 0.35f, 2) < 28.0, "a low Depth keeps the horn discreet");
+  expect(rotaryPeakPitchDeviationCents(2500.0, 0.35f, 2)
+         < rotaryPeakPitchDeviationCents(2500.0, 1.0f, 2), "Depth opens the swing");
+  // Cruzamento: 812 Hz no tambor e 300 Hz na corneta, com cortes fundos.
+  for (const double frequency : {700.0, 1000.0}) {
+    expect(rotaryPeakPitchDeviationCents(frequency, 1.0f, 2) < 90.0,
+        "Leslie drum and horn do not cancel at the crossover");
+    expect(rotaryPeakPitchDeviationCents(frequency, 0.35f, 2) < 30.0,
+        "at a low Depth the crossover region stays calm");
+  }
 }
 
 // Ganho em dB que o EQ aplica numa senoide, com uma banda configurada à mão.
@@ -1685,6 +1717,46 @@ void testMetersAndNoteRelease() {
   }
 }
 
+// Card Mod no SF2: o terceiro modo e o Tremolo, a roda abre o quanto o volume
+// balanca no mesmo Rate do LFO de pitch.
+void testSoundFontTremolo() {
+  const auto render = [](std::uint8_t mode, int wheel) {
+    hook_keys::TinySoundFontModule sf2(48000.0, 128);
+    expect(sf2.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load SF2 for Tremolo test");
+    sf2.setModulationMode(mode, 6.0f);
+    sf2.beginBlock();
+    sf2.controlChange(1, static_cast<std::uint8_t>(wheel));
+    sf2.noteOn(60, 127);
+    std::vector<float> left(24000), right(24000);
+    sf2.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    return left;
+  };
+  // Envelope da metade final, onde o SF2 ja esta sustentado: o tremolo tem de
+  // deixar o volume visivelmente mais fundo em algum ponto do ciclo.
+  const auto envelopeRange = [](const std::vector<float>& samples) {
+    double lowest = 1.0, highest = 0.0;
+    for (std::size_t start = samples.size() / 2; start + 800 <= samples.size(); start += 800) {
+      double peak = 0.0;
+      for (std::size_t index = start; index < start + 800; ++index) {
+        peak = std::max(peak, static_cast<double>(std::abs(samples[index])));
+      }
+      lowest = std::min(lowest, peak);
+      highest = std::max(highest, peak);
+    }
+    return highest > 0.0 ? lowest / highest : 1.0;
+  };
+  expect(render(2, 0) == render(0, 0), "without the wheel the Tremolo sounds like User");
+  expect(render(2, 127) != render(2, 0), "the wheel opens the Tremolo");
+  expect(envelopeRange(render(2, 127)) < 0.45, "at full wheel the Tremolo swings the volume");
+  expect(envelopeRange(render(0, 127)) > 0.8, "in User the wheel does not swing the volume");
+  // Tremolo nao pode virar vibrato: a roda fora do modo LFO nao mexe no pitch.
+  expect(render(1, 127) != render(2, 127), "Tremolo and pitch LFO are different modes");
+
+  hook_keys::NativeEngineRuntime runtime(48000, 128);
+  expect(runtime.setModuleModulationMode(0, 2, 6.0f), "runtime routes the Tremolo to an SF2 module");
+  expect(runtime.setModuleModulationMode(7, 2, 6.0f), "runtime accepts the Mod card mode on the Synth");
+}
+
 void testModWheelWithZeroDepth() {
   const auto render = [](int target, int wheel) {
     hook_keys::AnalogSynthModule synth(48000);
@@ -1694,7 +1766,7 @@ void testModWheelWithZeroDepth() {
     config.filterCutoffHz = 1500;
     config.filterEnvelope = 0;
     expect(synth.setConfig(config), "configure Mod test Synth");
-    synth.setModulationMode(true, 6.85f);
+    synth.setModulationMode(1, 6.85f);
     synth.beginBlock();
     synth.controlChange(1, static_cast<std::uint8_t>(wheel));
     synth.noteOn(60, 110);
@@ -1953,7 +2025,7 @@ void testSynthModCard() {
     config.filterResonance = 0.0f;
     config.lfoTarget = synthLfoTarget;
     expect(synth.setConfig(config), "configure Synth Mod card test");
-    synth.setModulationMode(lfoCard, 7.55f);
+    synth.setModulationMode(lfoCard ? 1 : 0, 7.55f);
     synth.beginBlock();
     synth.controlChange(1, static_cast<std::uint8_t>(wheel));
     synth.noteOn(60, 110);
@@ -1968,7 +2040,7 @@ void testSynthModCard() {
   expect(render(false, 127, 0) == render(false, 0, 0), "Mod User: not even on the pitch destination");
 
   hook_keys::NativeEngineRuntime runtime(48000, 128);
-  expect(runtime.setModuleModulationMode(7, true, 6.0f), "runtime routes the Mod card to the Synth");
+  expect(runtime.setModuleModulationMode(7, 1, 6.0f), "runtime routes the Mod card to the Synth");
 }
 
 void testOutputBoost() {
@@ -2336,6 +2408,7 @@ int main() {
   testSoundFontGlide();
   testMetersAndNoteRelease();
   testModWheelWithZeroDepth();
+  testSoundFontTremolo();
   testPolyAutoGlide();
   testSynthRetriggerHasNoClick();
   testGlidePortamentoAndVelocityGate();

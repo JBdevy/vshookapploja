@@ -99,7 +99,7 @@ unsafe extern "C" {
     fn hk_runtime_configure_module_modulation(
         handle: *mut c_void,
         module_index: usize,
-        lfo: i32,
+        mode: i32,
         rate_hz: f32,
     ) -> i32;
     fn hk_runtime_configure_effects(
@@ -135,6 +135,13 @@ unsafe extern "C" {
         rotary_depth: f32,
         rotary_mix: f32,
         rotary_modulation_enabled: i32,
+        chorus_enabled: i32,
+        chorus_rate_hz: f32,
+        chorus_depth: f32,
+        chorus_mix: f32,
+        auto_fader_enabled: i32,
+        auto_fader_beats: f32,
+        auto_fader_depth_db: f32,
     ) -> i32;
     fn hk_runtime_configure_envelope(
         handle: *mut c_void,
@@ -255,7 +262,8 @@ fn configure_glide(config: NativeGlideConfig, state: State<'_, AppState>) -> Res
 #[serde(rename_all = "camelCase")]
 struct NativeModuleModulationConfig {
     module_index: usize,
-    lfo: bool,
+    // 0 User, 1 LFO de pitch, 2 Tremolo.
+    mode: i32,
     rate_hz: f32,
 }
 
@@ -267,7 +275,7 @@ fn configure_module_modulation(
     let engine = state.engine.current()?;
     let applied = unsafe {
         hk_runtime_configure_module_modulation(
-            engine.pointer(), config.module_index, config.lfo as i32, config.rate_hz,
+            engine.pointer(), config.module_index, config.mode.clamp(0, 2), config.rate_hz,
         )
     };
     if applied != 0 { Ok(()) } else { Err("Não foi possível configurar a modulação do módulo.".into()) }
@@ -519,6 +527,20 @@ struct EffectsConfig {
     rotary_mix: f32,
     #[serde(default)]
     rotary_modulation_enabled: bool,
+    #[serde(default)]
+    chorus_enabled: bool,
+    #[serde(default)]
+    chorus_rate_hz: f32,
+    #[serde(default)]
+    chorus_depth: f32,
+    #[serde(default)]
+    chorus_mix: f32,
+    #[serde(default)]
+    auto_fader_enabled: bool,
+    #[serde(default)]
+    auto_fader_beats: f32,
+    #[serde(default)]
+    auto_fader_depth_db: f32,
 }
 
 fn audio_devices() -> Vec<(Device, AudioDevice)> {
@@ -1051,6 +1073,13 @@ fn configure_module_effects(
             config.rotary_depth,
             config.rotary_mix,
             if config.rotary_modulation_enabled { 1 } else { 0 },
+            if config.chorus_enabled { 1 } else { 0 },
+            config.chorus_rate_hz,
+            config.chorus_depth,
+            config.chorus_mix,
+            if config.auto_fader_enabled { 1 } else { 0 },
+            config.auto_fader_beats,
+            config.auto_fader_depth_db,
         )
     };
     if ok != 0 {
@@ -1223,6 +1252,21 @@ fn soundfont_cache_budget_bytes() -> usize {
         return 0; // o motor aplica o proprio padrao conservador
     }
     (physical / 8).min(768 * MIB) as usize
+}
+
+// RAM do computador inteiro, como no app: usada e total, em bytes.
+#[tauri::command]
+fn memory_usage() -> Result<HashMap<&'static str, f64>, String> {
+    let (total, available) = memory::status_bytes();
+    if total == 0 {
+        return Err("memoria indisponivel".into());
+    }
+    let used = total.saturating_sub(available);
+    let mut result = HashMap::new();
+    result.insert("usedBytes", used as f64);
+    result.insert("limitBytes", total as f64);
+    result.insert("percent", (used as f64 / total as f64) * 100.0);
+    Ok(result)
 }
 
 // [0] pior bloco desde a ultima leitura, [1] media suavizada, [2] estouros.
@@ -1574,14 +1618,19 @@ mod memory {
     const QUOTA_LIMITS_HARDWS_MIN_ENABLE: u32 = 0x0001;
 
     pub fn physical_bytes() -> u64 {
+        status_bytes().0
+    }
+
+    // (total, disponivel). Zero quando o Windows nao responde.
+    pub fn status_bytes() -> (u64, u64) {
         let mut status = MemoryStatusEx {
             length: std::mem::size_of::<MemoryStatusEx>() as u32,
             ..Default::default()
         };
         if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
-            return 0;
+            return (0, 0);
         }
-        status.total_physical
+        (status.total_physical, status.available_physical)
     }
 
     // SeIncreaseWorkingSetPrivilege ja pertence ao usuario comum; falta apenas
@@ -1660,6 +1709,9 @@ mod memory {
     pub fn physical_bytes() -> u64 {
         0
     }
+    pub fn status_bytes() -> (u64, u64) {
+        (0, 0)
+    }
     pub fn pin_working_set() {}
 }
 
@@ -1690,6 +1742,7 @@ fn main() {
             module_meter_levels,
             module_analysis,
             audio_load,
+            memory_usage,
             set_midi_inputs,
             configure_module,
             set_module_gain,
