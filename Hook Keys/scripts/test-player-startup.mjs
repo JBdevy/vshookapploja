@@ -1039,6 +1039,21 @@ try {
     'o pior bloco aparece imediatamente, sem suavizacao de ataque');
   assert(cpuMeter.classList.contains('is-critical'),
     'encostar no prazo do bloco deixa o numero vermelho');
+  // RAM do aparelho: percentual, texto com GB usados do total e as cores só no fim.
+  const ramMeter = window.document.createElement('div');
+  ramMeter.dataset.ramMeter = '';
+  ramMeter.innerHTML = '<strong data-ram-meter-value>--</strong>';
+  root.querySelector('.player-screen').append(ramMeter);
+  player.renderRamMeter({ percent: 62.4, usedBytes: 3.2 * 1024 ** 3, limitBytes: 5.9 * 1024 ** 3 });
+  assert.equal(ramMeter.querySelector('[data-ram-meter-value]').textContent, '62%');
+  assert.equal(ramMeter.title, 'Memória usada no aparelho: 3.2 GB de 5.9 GB');
+  assert(!ramMeter.classList.contains('is-warning') && !ramMeter.classList.contains('is-critical'),
+    'a RAM do aparelho vive alta: 62% não acende alerta');
+  player.renderRamMeter({ percent: 88, usedBytes: 5.2 * 1024 ** 3, limitBytes: 5.9 * 1024 ** 3 });
+  assert(ramMeter.classList.contains('is-warning'));
+  player.renderRamMeter({ percent: 96, usedBytes: 5.7 * 1024 ** 3, limitBytes: 5.9 * 1024 ** 3 });
+  assert(ramMeter.classList.contains('is-critical'));
+  ramMeter.remove();
   audioLoad = [0.12, 0.1, 0];
   const restartStart = calls.length;
   player.openModal('app-settings-audio', null, master);

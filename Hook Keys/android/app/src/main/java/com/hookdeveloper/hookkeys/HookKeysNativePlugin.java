@@ -15,7 +15,6 @@ import android.media.midi.MidiReceiver;
 import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
-import android.os.Debug;
 import android.os.Handler;
 import android.os.Looper;
 import android.net.Uri;
@@ -285,15 +284,16 @@ public class HookKeysNativePlugin extends Plugin {
     @PluginMethod
     public void memoryUsage(PluginCall call) {
         memoryExecutor.execute(() -> {
-            Debug.MemoryInfo info = new Debug.MemoryInfo();
-            Debug.getMemoryInfo(info);
-            long used = info.getTotalPss() * 1024L;
+            // RAM do aparelho inteiro, não só a do app: o que o Android informa
+            // como disponível já desconta o cache que ele devolve sozinho.
+            long used = 0;
             long total = 0;
             ActivityManager activityManager = (ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
             if (activityManager != null) {
                 ActivityManager.MemoryInfo memory = new ActivityManager.MemoryInfo();
                 activityManager.getMemoryInfo(memory);
                 total = memory.totalMem;
+                used = Math.max(0, memory.totalMem - memory.availMem);
             }
             JSObject result = new JSObject();
             result.put("usedBytes", used);

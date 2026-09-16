@@ -1086,7 +1086,7 @@ export class PlayerScreen {
                 <strong data-cpu-meter-value>--</strong>
               </div>` : Capacitor.isNativePlatform() ? `
               <div class="player-cpu-meter player-ram-meter" role="status" data-ram-meter
-                title="Memória usada pelo app">
+                title="Memória usada no aparelho">
                 <small>RAM</small>
                 <strong data-ram-meter-value>--</strong>
               </div>` : ''}
@@ -1279,20 +1279,28 @@ export class PlayerScreen {
       if (document.visibilityState !== 'hidden') {
         const usage = await hookKeysNative.memoryUsage();
         if (!this.mounted) return;
-        if (usage) this.renderRamMeter(usage.percent);
+        if (usage) this.renderRamMeter(usage);
       }
       this.scheduleRamMeter();
     }, delay);
   }
 
-  private renderRamMeter(percent: number): void {
+  // A RAM do aparelho vive alta (o sistema usa de sobra o que está livre), por
+  // isso o amarelo e o vermelho só aparecem bem no fim.
+  private renderRamMeter(usage: { percent: number; usedBytes: number; limitBytes: number }): void {
     const meter = this.root.querySelector<HTMLElement>('[data-ram-meter]');
     const value = meter?.querySelector<HTMLElement>('[data-ram-meter-value]');
     if (!meter || !value) return;
+    const percent = Math.min(100, Math.max(0, usage.percent));
     const text = `${Math.round(percent)}%`;
     if (value.textContent !== text) value.textContent = text;
-    meter.classList.toggle('is-critical', percent >= 90);
-    meter.classList.toggle('is-warning', percent >= 75 && percent < 90);
+    const label = usage.limitBytes > 0
+      ? `Memória usada no aparelho: ${formatGigabytes(usage.usedBytes)} de ${formatGigabytes(usage.limitBytes)}`
+      : 'Memória usada no aparelho';
+    meter.title = label;
+    meter.setAttribute('aria-label', `${label} (${text})`);
+    meter.classList.toggle('is-critical', percent >= 95);
+    meter.classList.toggle('is-warning', percent >= 85 && percent < 95);
   }
 
   private scheduleModuleMeters(): void {
@@ -9865,6 +9873,11 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
       userPoints: [...DEFAULT_VELOCITY_CURVE.userPoints],
     },
   };
+}
+
+function formatGigabytes(bytes: number): string {
+  const gigabytes = bytes / 1024 ** 3;
+  return gigabytes >= 10 ? `${Math.round(gigabytes)} GB` : `${gigabytes.toFixed(1)} GB`;
 }
 
 function presetSlotLabel(bank: BankId, presetNumber: number): string {

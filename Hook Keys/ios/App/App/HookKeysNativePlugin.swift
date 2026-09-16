@@ -276,7 +276,30 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         }
     }
 
-    @objc func memoryUsage(_ call: CAPPluginCall) {
+    // RAM do aparelho inteiro, não só a do app: páginas ativas, presas e
+    // comprimidas contra a RAM instalada. As inativas são cache que o iOS
+    // devolve para quem precisar, então não entram na conta.
+    // mach_host_self() devolve um direito de envio a cada chamada: guardado uma
+    // vez, a leitura a cada 2 s não vai empilhando portas.
+    private lazy var hostPort: host_t = mach_host_self()
+
+    private func deviceMemoryUsedBytes() -> Double? {
+        var stats = vm_statistics64_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &stats) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(self.hostPort, host_flavor_t(HOST_VM_INFO64), $0, &count)
+            }
+        }
+        guard status == KERN_SUCCESS else { return nil }
+        let pageSize = Double(vm_kernel_page_size)
+        let pages = Double(stats.active_count) + Double(stats.wire_count) + Double(stats.compressor_page_count)
+        // Zero aqui significa leitura vazia: cai na reserva do app.
+        return pages > 0 ? pages * pageSize : nil
+    }
+
+    // Reserva: se o sistema não responder, mostra a memória do próprio app.
+    private func appMemoryUsedBytes() -> Double? {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
         let status = withUnsafeMutablePointer(to: &info) { pointer in
@@ -284,18 +307,19 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
-        guard status == KERN_SUCCESS else {
-            call.reject("Não foi possível ler a memória do app.")
+        return status == KERN_SUCCESS ? Double(info.phys_footprint) : nil
+    }
+
+    @objc func memoryUsage(_ call: CAPPluginCall) {
+        let total = Double(ProcessInfo.processInfo.physicalMemory)
+        guard total > 0, let used = deviceMemoryUsedBytes() ?? appMemoryUsedBytes() else {
+            call.reject("Não foi possível ler a memória do aparelho.")
             return
         }
-        let used = Double(info.phys_footprint)
-        let available = Double(os_proc_available_memory())
-        // Sem limite informado (simulador), usa a RAM do aparelho.
-        let limit = available > 0 ? used + available : Double(ProcessInfo.processInfo.physicalMemory)
         call.resolve([
             "usedBytes": used,
-            "limitBytes": limit,
-            "percent": limit > 0 ? min(100, used / limit * 100) : 0
+            "limitBytes": total,
+            "percent": min(100, used / total * 100)
         ])
     }
 

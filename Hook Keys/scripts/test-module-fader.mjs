@@ -390,14 +390,19 @@ test('Modo Lite corta a pintura dos botões no toque', () => {
   assert.match(css, /\.hook-keys-lite :is\(\.player-screen, \.player-modal\) :is\(button, \[role="button"\], \.app-select__toggle\) \{\s*text-shadow: none !important;\s*transition: none !important;/);
 });
 
-test('apps mostram RAM ao lado do User; desktop mantém CPU', () => {
+test('apps mostram a RAM do aparelho ao lado do User; desktop mantém CPU', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
   assert.match(player, /this\.desktopRuntime \? `[\s\S]*?data-cpu-meter[\s\S]*?` : Capacitor\.isNativePlatform\(\) \? `[\s\S]*?data-ram-meter/);
   assert.match(ios, /CAPPluginMethod\(name: "memoryUsage"/);
-  assert.match(ios, /phys_footprint[\s\S]*?os_proc_available_memory\(\)/);
+  // A conta é do aparelho inteiro, não só do app.
+  assert.match(ios, /private lazy var hostPort: host_t = mach_host_self\(\)/);
+  assert.match(ios, /host_statistics64\(self\.hostPort, host_flavor_t\(HOST_VM_INFO64\)/);
+  assert.match(ios, /ProcessInfo\.processInfo\.physicalMemory[\s\S]*?deviceMemoryUsedBytes\(\) \?\? appMemoryUsedBytes\(\)/);
   assert.match(android, /public void memoryUsage\(PluginCall call\)\s*\{\s*memoryExecutor\.execute/);
+  assert.match(android, /used = Math\.max\(0, memory\.totalMem - memory\.availMem\);/);
+  assert.match(player, /Memória usada no aparelho: \$\{formatGigabytes\(usage\.usedBytes\)\} de \$\{formatGigabytes\(usage\.limitBytes\)\}/);
 });
 
 test('teclas do keyboard só acendem, sem nome de nota', () => {

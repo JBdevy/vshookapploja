@@ -386,8 +386,8 @@ class HookKeysNativeBridge {
     }
   }
 
-  // RAM do app em %: no iOS contra o limite do app, no Android contra a RAM do
-  // aparelho. Null no desktop (lá o topo mostra a CPU) e no navegador.
+  // RAM usada no aparelho inteiro, em % da RAM instalada. Null no desktop
+  // (lá o topo mostra a CPU) e no navegador.
   async memoryUsage(): Promise<{ percent: number; usedBytes: number; limitBytes: number } | null> {
     if (!Capacitor.isNativePlatform() || this.tauriInvoke()) return null;
     try {
