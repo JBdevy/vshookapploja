@@ -8821,7 +8821,7 @@ export class PlayerScreen {
       this.selectFixedSound(moduleNumber, sound.id);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
-        console.error('[Hook Keys] Falha ao baixar timbre', error);
+        console.error('[Hook Keys] Falha ao baixar timbre', sound.id, sound.sf2ObjectKey, error);
         this.updateSoundDownloadMessage(soundDownloadErrorMessage(error));
       }
     } finally {
@@ -10079,6 +10079,16 @@ function formatGigabytes(bytes: number): string {
 // mensagem que diz o que aconteceu, e o resto mostra o código real.
 function soundDownloadErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? '');
+  // Antes de baixar, o app pede ao backend o link assinado do arquivo. Quando é
+  // esse pedido que falha, o problema não está no R2: mostre o código dele.
+  if (error instanceof ApiError) {
+    if (error.status === 0) return 'Sem conexão com o servidor do Hook Keys para pegar o link do timbre.';
+    if (error.status === 401 || error.status === 403) {
+      return `A conta não tem permissão para baixar este timbre (${error.status}).`;
+    }
+    if (error.status === 404) return 'O servidor não encontrou este timbre no catálogo (404).';
+    return `O servidor do Hook Keys respondeu ${error.status} ao dar o link deste timbre${error.code ? ` (${error.code})` : ''}.`;
+  }
   const status = /^sound_download_failed:(\d+)$/.exec(raw)?.[1];
   if (status === '401' || status === '403') {
     return `O servidor recusou o download deste timbre (${status}). Confira o link e a permissão do arquivo.`;
