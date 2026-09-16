@@ -151,6 +151,9 @@ export class HookKeysApp {
         ).compatibilityVideoUrl,
         getSupportUrl: async () => (await this.accountApi.getAppSettings(session.token)).supportUrl,
         getSoundCatalog: async () => (await this.accountApi.getSoundCatalog(session.token)).catalog,
+        getSoundAssetUrl: async (objectKey, kind) => (
+          await this.accountApi.getSoundAssetUrl(session.token, objectKey, kind)
+        ).url,
         getProfile: async () => (await this.accountApi.getProfile(session.token)).profile,
         saveProfilePhoto: async (imageDataUrl) => (
           await this.accountApi.saveProfilePhoto(session.token, imageDataUrl)

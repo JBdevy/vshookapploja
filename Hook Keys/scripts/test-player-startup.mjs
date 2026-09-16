@@ -278,15 +278,10 @@ try {
   assert(!window.document.querySelector('[data-setting="lite-mode"]'), 'Modo Lite saiu de Settings');
   player.closeModal();
   player.openModal('about', null, root.querySelector('[data-action="open-about"]'));
-  const liteMode = window.document.querySelector('[data-setting="lite-mode"]');
-  assert(liteMode && !liteMode.checked, 'tela da versão oferece o Modo Lite desativado por padrão');
-  liteMode.checked = true;
-  liteMode.dispatchEvent(new window.Event('change', { bubbles: true }));
-  assert(root.classList.contains('hook-keys-lite'), 'Modo Lite aplica imediatamente o perfil visual leve');
-  assert.equal(player.createSavedPlayerState().liteMode, true, 'Modo Lite fica salvo no estado do usuário');
-  liteMode.checked = false;
-  liteMode.dispatchEvent(new window.Event('change', { bubbles: true }));
-  assert(!root.classList.contains('hook-keys-lite'), 'desligar o Modo Lite restaura o visual completo');
+  // O perfil leve vale sempre: não existe mais opção para ligar ou desligar.
+  assert(!window.document.querySelector('[data-setting="lite-mode"]'), 'o Modo Lite saiu também da tela da versão');
+  assert(root.classList.contains('hook-keys-lite'), 'o perfil leve fica sempre aplicado');
+  assert.equal(player.createSavedPlayerState().liteMode, undefined, 'e some do estado salvo');
   player.closeModal();
   player.openTracksSplitView();
   assert(!root.querySelector('.tracks-horizontal-scroll-guide'), 'desktop has no drag-here bar');
@@ -896,33 +891,34 @@ try {
   player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 127 });
   assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2,
     'teclado que envia somente 127 consegue acionar o mesmo CC novamente');
-  // Banco A e Banco B são independentes: o Preset 3 do Banco B tem o seu
-  // próprio controle e, tocado com a tela no Banco A, leva ao Banco B.
+  // Os seis bancos são independentes: o Preset 3 do Banco D tem o seu próprio
+  // controle e, tocado com a tela no Banco A, leva ao Banco D.
   assert.equal(player.activeBank, 'A');
-  player.ccMappings.set('preset:B:3', 23);
+  player.ccMappings.set('preset:D:3', 23);
   player.handleMidiControlChange({ channel: 1, controller: 23, inputId: 'keyboard-a', value: 127 });
-  assert.equal(player.activeBank, 'B', 'preset mapeado do Banco B troca a tela para o Banco B na hora');
-  assert.equal(player.bankStates.get('B').selectedPreset, 3, 'o Preset 3 do Banco B fica selecionado');
-  assert.equal(player.bankStates.get('A').selectedPreset, null, 'só um preset fica ativo entre os dois bancos');
-  assert.equal(window.document.querySelector('[data-action="toggle-bank"]').textContent.trim(), 'Banco B',
-    'o botão de banco passa a mostrar o Banco B');
+  assert.equal(player.activeBank, 'D', 'preset mapeado do Banco D troca a tela para o Banco D na hora');
+  assert.equal(player.bankStates.get('D').selectedPreset, 3, 'o Preset 3 do Banco D fica selecionado');
+  assert.equal(player.bankStates.get('A').selectedPreset, null, 'só um preset fica ativo entre os seis bancos');
+  assert.equal(window.document.querySelector('[data-action="show-bank"][data-bank="D"]').getAttribute('aria-pressed'), 'true',
+    'o botão do Banco D acende');
   assert.equal(window.document.querySelector('.player-preset-button[data-preset="3"]').getAttribute('aria-pressed'), 'true',
-    'o botão do Preset 3 acende no Banco B');
+    'o botão do Preset 3 acende no Banco D');
   player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 0 });
   player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 127 });
   assert.equal(player.activeBank, 'A', 'o controle do Preset 2 do Banco A volta ao Banco A');
   assert.equal(player.bankStates.get('A').selectedPreset, 2);
-  assert.equal(player.bankStates.get('B').selectedPreset, null);
+  assert.equal(player.bankStates.get('D').selectedPreset, null);
   const savedBankPresets = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
   savedBankPresets.ccMappings = { ...savedBankPresets.ccMappings, 'preset:A:3': 61, 'preset:3': 62 };
   player.applySavedPlayerState(savedBankPresets);
   assert.equal(player.ccMappings.get('preset:A:3'), 61, 'Preset 3 do Banco A é salvo à parte');
-  assert.equal(player.ccMappings.get('preset:B:3'), 23, 'Preset 3 do Banco B é salvo à parte');
+  assert.equal(player.ccMappings.get('preset:D:3'), 23, 'Preset 3 do Banco D é salvo à parte');
   assert(!player.ccMappings.has('preset:3'), 'preset sem banco não é mais um destino');
   player.ccMappings.delete('preset:A:3');
-  player.ccMappings.delete('preset:B:3');
+  player.ccMappings.delete('preset:D:3');
   // Learn CC do Preset 5 aberto no Banco B grava o destino do Banco B.
   player.showBank('B');
+  window.document.querySelector('.player-preset-button[data-preset="5"]').click();
   player.openModal('preset-name', 5, window.document.querySelector('.player-preset-button[data-preset="5"]'));
   window.document.querySelector('[data-modal-action="learn-preset-cc"]').click();
   assert.equal(JSON.stringify(player.pendingCcLearn), JSON.stringify({ kind: 'preset', bank: 'B', presetNumber: 5 }));
@@ -933,23 +929,31 @@ try {
   player.closeModal();
   player.ccMappings.delete('preset:B:5');
   player.showBank('A');
+  window.document.querySelector('.player-preset-button[data-preset="2"]').click();
   assert.equal(player.bankStates.get('A').selectedPreset, 2);
 
-  // Copy / Paste e o botão único que alterna Banco A / Banco B.
+  // Copy / Paste, os seis bancos e o botão Presets/Keyboard.
   {
     const copyButton = () => window.document.querySelector('[data-action="copy-preset"]');
-    const bankToggle = () => window.document.querySelector('[data-action="toggle-bank"]');
+    const bankButton = (bank) => window.document.querySelector(`[data-action="show-bank"][data-bank="${bank}"]`);
     const presetButton = (number) => window.document.querySelector(`.player-preset-button[data-preset="${number}"]`);
-    assert.equal(window.document.querySelector('[data-action="show-bank"]'), null, 'não existem mais os dois botões de banco');
+    const header = [...window.document.querySelectorAll('.player-presets__header > button')].map((button) => button.textContent.trim());
+    // Este player roda como desktop, onde o Keyboard fica sempre à mostra e o
+    // botão Presets/Keyboard não existe; no app ele entra no fim da linha.
+    assert.equal(JSON.stringify(header), JSON.stringify(['Copy', 'A', 'B', 'C', 'D', 'E', 'F']),
+      'a linha de cima tem Copy e os seis bancos');
+    assert.equal(window.document.querySelector('[data-action="toggle-bottom-view"]'), null,
+      'o desktop não tem o botão Presets/Keyboard');
+    assert.equal(window.document.querySelector('[data-performance-keyboard]').hidden, false,
+      'e o Keyboard do desktop continua fixo');
+    assert.equal(window.document.querySelectorAll('.player-preset-button').length, 16, 'dezesseis presets');
     assert.equal(copyButton().textContent.trim(), 'Copy');
     assert.equal(copyButton().dataset.copyState, 'idle', 'Copy começa vermelho, parado');
-    assert.equal(bankToggle().textContent.trim(), 'Banco A');
-    bankToggle().click();
-    assert.equal(player.activeBank, 'B', 'o botão de banco alterna para o Banco B');
-    assert.equal(bankToggle().textContent.trim(), 'Banco B');
-    assert.equal(bankToggle().dataset.bank, 'B');
-    bankToggle().click();
-    assert.equal(player.activeBank, 'A', 'e volta para o Banco A');
+    bankButton('F').click();
+    assert.equal(player.activeBank, 'F', 'cada banco tem o seu botão');
+    assert.equal(bankButton('F').getAttribute('aria-pressed'), 'true');
+    bankButton('A').click();
+    assert.equal(player.activeBank, 'A');
 
     const source = player.bankStates.get('A').presets[1];
     source.name = 'Origem';
@@ -963,7 +967,7 @@ try {
 
     copyButton().click();
     source.modules[0].settings.cutoffHz = 999;
-    bankToggle().click();
+    bankButton('B').click();
     assert.equal(copyButton().dataset.copyState, 'copied', 'sem preset escolhido no Banco B, segue esperando');
     presetButton(5).click();
     assert.equal(copyButton().dataset.copyState, 'paste');
@@ -980,12 +984,12 @@ try {
     assert.equal(player.currentModalKind, null);
     assert.equal(copyButton().dataset.copyState, 'idle', 'Paste de novo depois de cancelar: cancela tudo');
 
-    bankToggle().click();
+    bankButton('A').click();
     presetButton(2).click();
     source.modules[0].settings.cutoffHz = 1234;
     copyButton().click();
     source.modules[0].settings.cutoffHz = 999;
-    bankToggle().click();
+    bankButton('B').click();
     presetButton(5).click();
     copyButton().click();
     window.document.querySelector('[data-modal-action="confirm-preset-paste"]').click();
@@ -999,19 +1003,17 @@ try {
     assert.equal(player.bankStates.get('B').selectedPreset, 5);
     assert.equal(presetButton(5).querySelector('.player-preset-button__label').textContent, 'Origem', 'o nome colado aparece no botão');
 
-    // CC aprendido no botão de banco alterna A e B.
-    player.ccMappings.set('bank:toggle', 41);
-    player.handleMidiControlChange({ channel: 1, controller: 41, inputId: 'keyboard-a', value: 127 });
-    assert.equal(player.activeBank, 'A', 'CC do botão de banco alterna para o Banco A');
-    player.handleMidiControlChange({ channel: 1, controller: 41, inputId: 'keyboard-a', value: 0 });
-    player.handleMidiControlChange({ channel: 1, controller: 41, inputId: 'keyboard-a', value: 127 });
-    assert.equal(player.activeBank, 'B', 'e de volta para o Banco B');
-    player.ccMappings.delete('bank:toggle');
+    // Os bancos não são mapeáveis: o preset mapeado já leva ao banco dele.
+    player.onRootContextMenu({ target: bankButton('E'), preventDefault() {} });
+    assert.equal(player.currentModalKind, null, 'botão de banco não abre Learn CC');
+    player.ccMappings.set('bank:E', 41);
+    player.applySavedPlayerState(JSON.parse(JSON.stringify({ ...player.createSavedPlayerState(), ccMappings: { 'bank:E': 41 } })));
+    assert(!player.ccMappings.has('bank:E'), 'mapeamento de banco não é mais um destino salvo');
 
     source.name = 'Preset';
     source.modules[0].settings.cutoffHz = 20_000;
     player.bankStates.get('B').presets[4] = JSON.parse(JSON.stringify(player.bankStates.get('B').presets[5]));
-    bankToggle().click();
+    bankButton('A').click();
     presetButton(2).click();
     assert.equal(player.activeBank, 'A');
     assert.equal(player.bankStates.get('A').selectedPreset, 2);

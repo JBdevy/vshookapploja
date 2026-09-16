@@ -37,7 +37,7 @@ try {
 
   const keyboard = window.document.querySelector('[data-performance-keyboard]');
   assert(keyboard, 'o teclado existe no DOM');
-  const styleOf = () => ['standard', 'black', 'neon']
+  const styleOf = () => ['standard', 'black', 'hook']
     .filter(name => keyboard.classList.contains(`performance-keyboard--${name}`));
   assert.deepEqual(styleOf(), ['standard'], 'o teclado nasce no estilo padrão');
 
@@ -45,13 +45,13 @@ try {
   const modal = player.modal;
   assert(modal, 'o modal de configurações do teclado abre');
   const choices = [...modal.querySelectorAll('[data-keyboard-style]')];
-  assert.deepEqual(choices.map(button => button.dataset.keyboardStyle), ['standard', 'black', 'neon'],
+  assert.deepEqual(choices.map(button => button.dataset.keyboardStyle), ['standard', 'black', 'hook'],
     'os três estilos aparecem');
-  assert.deepEqual(choices.map(button => button.textContent.trim()), ['Default', 'Black', 'Neon'],
-    'os estilos se chamam Default, Black e Neon');
+  assert.deepEqual(choices.map(button => button.textContent.trim()), ['Default', 'Black', 'Hook'],
+    'os estilos se chamam Default, Black e Hook');
 
   // Cada escolha precisa trocar a classe no teclado, e só uma pode ficar.
-  for (const wanted of ['neon', 'black', 'standard', 'neon', 'standard']) {
+  for (const wanted of ['hook', 'black', 'standard', 'hook', 'standard']) {
     const button = choices.find(candidate => candidate.dataset.keyboardStyle === wanted);
     button.dispatchEvent(new window.Event('click', { bubbles: true }));
     assert.deepEqual(styleOf(), [wanted], `escolher ${wanted} aplica ${wanted} e remove os outros`);
@@ -66,11 +66,11 @@ try {
   player.openModal('app-settings', null, window.document.createElement('button'));
   const settings = player.modal;
   const desktopChoices = [...settings.querySelectorAll('[data-keyboard-style]')];
-  assert.deepEqual(desktopChoices.map(button => button.textContent.trim()), ['Default', 'Black', 'Neon'],
+  assert.deepEqual(desktopChoices.map(button => button.textContent.trim()), ['Default', 'Black', 'Hook'],
     'as Configuracoes do desktop oferecem os tres estilos');
   assert.deepEqual([...settings.querySelectorAll('[data-desktop-keyboard-midi-slot]')].map(b => b.textContent.trim()),
     ['MIDI 1', 'MIDI 2', 'MIDI 3'], 'o grupo de cima diz que roteia MIDI, nao que muda o visual');
-  for (const wanted of ['black', 'neon', 'standard']) {
+  for (const wanted of ['black', 'hook', 'standard']) {
     desktopChoices.find(c => c.dataset.keyboardStyle === wanted)
       .dispatchEvent(new window.Event('click', { bubbles: true }));
     assert.deepEqual(styleOf(), [wanted], `pelas Configuracoes, ${wanted} tambem se aplica`);

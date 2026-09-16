@@ -180,6 +180,7 @@ import { Capacitor } from '@capacitor/core';
 import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
 import {
   createPerformanceKeyboardMarkup,
+  createPerformanceKeysMarkup,
   createPerformanceKeyboardSettingsMarkup,
   PerformanceKeyboardController,
   type PerformanceKeyboardStyle,
@@ -226,7 +227,7 @@ import {
 
 type LogoutCallback = () => Promise<void>;
 type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'glide-config' | 'module-arpeggiator' | 'module-sequencer' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm';
-type BankId = 'A' | 'B';
+type BankId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
 type PlayerView = 'bank' | 'pads-effects';
 
 interface ModalRoute {
@@ -333,7 +334,6 @@ type CcLearnTarget =
   | { kind: 'metronome-volume' }
   | { kind: 'metronome-toggle' }
   | { kind: 'tap-tempo' }
-  | { kind: 'bank-toggle' }
   // Banco A e Banco B são independentes: cada um tem os seus 8 presets mapeáveis.
   | { kind: 'preset'; bank: BankId; presetNumber: number }
   | { kind: 'pad'; bank: PadBankId; note: string }
@@ -388,6 +388,7 @@ interface AccountControls {
   getCompatibilityVideoUrl: () => Promise<string>;
   getSupportUrl: () => Promise<string>;
   getSoundCatalog: () => Promise<SoundCatalogPayload>;
+  getSoundAssetUrl: (objectKey: string, kind: 'sf2' | 'preview') => Promise<string>;
   getProfile: () => Promise<AccountProfile>;
   saveProfilePhoto: (imageDataUrl: string) => Promise<AccountProfile>;
   saveProfileName: (name: string) => Promise<AccountProfile>;
@@ -399,8 +400,8 @@ interface AccountControls {
 }
 
 const MODULE_COUNT = 8;
-// Oito presets por banco, numa fileira só (Banco A e Banco B).
-const PRESET_COUNT = 8;
+// Dezesseis presets por banco, em duas fileiras de oito, nos seis bancos.
+const PRESET_COUNT = 16;
 const PRESETS_PER_ROW = 8;
 const EFFECT_PAD_MIN_DB = -60;
 // Longest a knob or button change waits before it reaches the audio engine.
@@ -415,7 +416,17 @@ const EFFECT_PAD_MAX_DB = 0;
 // wider ranges (envelope and Glide times) switch to the accelerated curve.
 const DESKTOP_LINEAR_KNOB_MAX_STEPS_PER_PIXEL = 10;
 const DESKTOP_ACCELERATED_KNOB_PIXELS = 400;
-const BANK_IDS: readonly BankId[] = ['A', 'B'];
+const BANK_IDS: readonly BankId[] = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+function isHttpAssetReference(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 const PRESET_COLORS = [
   ['#ff5b38', '#65170b'],
   ['#ff8a22', '#6c2c06'],
@@ -445,7 +456,6 @@ function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'metronome-volume') return 'metronome:volume';
   if (target.kind === 'metronome-toggle') return 'metronome:toggle';
   if (target.kind === 'tap-tempo') return 'metronome:tap';
-  if (target.kind === 'bank-toggle') return 'bank:toggle';
   if (target.kind === 'preset') return `preset:${target.bank}:${target.presetNumber}`;
   if (target.kind === 'pad') return `pad:${target.bank}:${target.note}`;
   return `effect:${target.bank}:${target.effectNumber}`;
@@ -472,7 +482,6 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
   if (target.kind === 'metronome-volume') return 'Volume do metrônomo';
   if (target.kind === 'metronome-toggle') return 'Ligar / desligar metrônomo';
   if (target.kind === 'tap-tempo') return 'Tap Tempo';
-  if (target.kind === 'bank-toggle') return 'Banco A / Banco B';
   if (target.kind === 'preset') {
     return `Banco ${target.bank} · Preset ${target.presetNumber.toString().padStart(2, '0')}`;
   }
@@ -491,10 +500,9 @@ function isCcMappingKey(value: string): boolean {
   if (/^input:[1-8]:(sustain|modulation)$/.test(value)) return true;
   if (/^output:(music|pads|effects|master)$/.test(value)) return true;
   if (value === 'metronome:volume' || value === 'metronome:tap' || value === 'metronome:toggle') return true;
-  if (value === 'bank:toggle') return true;
   if (/^pad:[ABCD]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
   if (/^effect:[1-4]:([1-9]|1[0-2])$/.test(value)) return true;
-  return /^preset:[AB]:[1-8]$/.test(value);
+  return /^preset:[A-F]:([1-9]|1[0-6])$/.test(value);
 }
 
 function createEffectPadStates(): EffectPadState[] {
@@ -790,8 +798,20 @@ function createBankState(selectedPreset: number | null = null): BankState {
   };
 }
 
-// Copy/Paste do preset em cima e, embaixo, um botão só que alterna Banco A e Banco B.
-function createBankNavigationMarkup(): string {
+// Uma linha só: Copy/Paste, os seis bancos e, no app, o botão que troca os
+// presets pelo Keyboard. No desktop o Keyboard fica sempre à mostra, então lá
+// esse botão não existe.
+function createBankNavigationMarkup(withViewToggle: boolean): string {
+  const banks = BANK_IDS.map((bank) => `
+    <button
+      class="player-navigation__button player-navigation__bank-button${bank === 'A' ? ' is-selected' : ''}"
+      type="button"
+      data-action="show-bank"
+      data-bank="${bank}"
+      aria-label="Banco ${bank}"
+      aria-pressed="${bank === 'A'}"
+    >${bank}</button>
+  `).join('');
   return `
     <button
       class="player-navigation__button player-navigation__bank-button player-preset-copy-button"
@@ -800,13 +820,16 @@ function createBankNavigationMarkup(): string {
       data-copy-state="idle"
       aria-label="Copiar o preset selecionado"
     >Copy</button>
-    <button
-      class="player-navigation__button player-navigation__bank-button"
-      type="button"
-      data-action="toggle-bank"
-      data-bank="A"
-      aria-label="Banco A. Tocar para ir ao Banco B"
-    >Banco A</button>
+    ${banks}
+    ${withViewToggle ? `
+      <button
+        class="player-navigation__button player-presets__view-button"
+        type="button"
+        data-action="toggle-bottom-view"
+        data-bottom-view="presets"
+        aria-label="Mostrando os presets. Tocar para mostrar o Keyboard"
+      >Presets</button>
+    ` : ''}
   `;
 }
 
@@ -924,6 +947,10 @@ export class PlayerScreen {
   private keyboardExpressionRouteKey = '';
   private readonly keyboardSettingsHoldGesture = new LongPressGesture();
   private suppressNextKeyboardViewClick = false;
+  // Toque longo no botão Keyboard: quatro oitavas com teclas mais largas.
+  private readonly bottomViewHoldGesture = new LongPressGesture();
+  private suppressNextBottomViewClick = false;
+  private keyboardOctaveSpan: 'full' | 'four' = 'full';
   private readonly outputFaderLearnGesture = new LongPressGesture(2_000);
   private readonly metronomeFaderLearnGesture = new LongPressGesture(2_000);
   private readonly ccControlHoldGesture = new LongPressGesture();
@@ -1002,7 +1029,6 @@ export class PlayerScreen {
   private audioLoadAlarmUntil = 0;
   private compatibilityMode = false;
   private seamlessPresetSwitching = false;
-  private liteMode = false;
   private bottomView: PlayerBottomView = 'presets';
   private keyboardMidiSlot = 1;
   private keyboardStyle: PerformanceKeyboardStyle = 'standard';
@@ -1130,11 +1156,11 @@ export class PlayerScreen {
             </section>
 
             <section class="player-presets player-presets--combined${this.desktopRuntime ? ' player-presets--desktop' : ''}${this.cellularLayout ? ' player-presets--cellular' : ''}" data-player-bottom-panel aria-label="${this.cellularLayout ? 'Presets' : 'Presets e Keyboard'}">
-              <nav class="player-presets__header" aria-label="Escolher banco de presets">
-                ${createBankNavigationMarkup()}
+              <nav class="player-presets__header" aria-label="Bancos e presets">
+                ${createBankNavigationMarkup(!this.desktopRuntime)}
               </nav>
               <div class="player-presets__grid">${createPresetRowsMarkup(1)}</div>
-              ${this.cellularLayout ? '' : createPerformanceKeyboardMarkup(this.keyboardStyle)}
+              ${createPerformanceKeyboardMarkup(this.keyboardStyle, this.keyboardOctaveSpan)}
             </section>
           </div>
 
@@ -1469,6 +1495,7 @@ export class PlayerScreen {
     this.keyboardMidiRouter = null;
     this.patternPlayback.destroy();
     this.keyboardSettingsHoldGesture.cancel();
+    this.bottomViewHoldGesture.cancel();
     this.clearPresetHoldGesture();
     this.clearTracksHoldGesture();
     this.releaseCapturedTracksPointer();
@@ -1561,7 +1588,11 @@ export class PlayerScreen {
     return new SoundLibraryEngine(
       catalog,
       this.soundLibrary,
-      new HttpSoundAssetGateway(async (url) => url),
+      new HttpSoundAssetGateway(async (assetReference, kind) => (
+        isHttpAssetReference(assetReference)
+          ? assetReference
+          : this.accountControls.getSoundAssetUrl(assetReference, kind)
+      )),
     );
   }
 
@@ -1656,8 +1687,22 @@ export class PlayerScreen {
       return;
     }
 
-    if (action === 'toggle-bank') {
-      this.showBank(this.activeBank === 'A' ? 'B' : 'A');
+    if (action === 'toggle-bottom-view') {
+      // O toque longo já trocou as oitavas: o clique que vem junto não troca a view.
+      if (this.suppressNextBottomViewClick) {
+        this.suppressNextBottomViewClick = false;
+        return;
+      }
+      this.selectBottomView(this.bottomView === 'keyboard' ? 'presets' : 'keyboard');
+      return;
+    }
+
+    // Com o Keyboard à mostra, Copy e bancos ficam apagados e sem ação.
+    if (actionButton.getAttribute('aria-disabled') === 'true') return;
+
+    if (action === 'show-bank') {
+      const bank = actionButton.dataset.bank;
+      if (this.isBankId(bank)) this.showBank(bank);
       return;
     }
 
@@ -1989,6 +2034,17 @@ export class PlayerScreen {
       return;
     }
 
+    // Toque longo no botão Presets/Keyboard, só com o Keyboard à mostra.
+    const bottomViewButton = eventTarget.closest<HTMLButtonElement>('[data-action="toggle-bottom-view"]');
+    if (bottomViewButton && this.root.contains(bottomViewButton) && this.bottomView === 'keyboard') {
+      this.bottomViewHoldGesture.start(event, () => {
+        this.suppressNextBottomViewClick = true;
+        window.setTimeout(() => { this.suppressNextBottomViewClick = false; }, 700);
+        this.toggleKeyboardOctaveSpan();
+      });
+      return;
+    }
+
     const inputButton = eventTarget.closest<HTMLButtonElement>(
       '[data-action="toggle-sustain-input"], [data-action="toggle-modulation-input"]',
     );
@@ -2021,12 +2077,6 @@ export class PlayerScreen {
           { kind: 'module-octave', moduleNumber, direction },
         );
       }
-      return;
-    }
-
-    const bankButton = eventTarget.closest<HTMLButtonElement>('[data-action="toggle-bank"]');
-    if (bankButton && this.root.contains(bankButton)) {
-      this.startCcControlLearn(event, bankButton, { kind: 'bank-toggle' });
       return;
     }
 
@@ -2177,6 +2227,7 @@ export class PlayerScreen {
     this.metronomeHoldGesture.move(event);
     this.tempoHoldGesture.move(event);
     this.ccControlHoldGesture.move(event);
+    this.bottomViewHoldGesture.move(event);
     if (this.tempoDrag?.pointerId === event.pointerId) {
       const drag = this.tempoDrag;
       if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >= (this.desktopRuntime ? 3 : 8)) {
@@ -2240,6 +2291,7 @@ export class PlayerScreen {
     this.metronomeHoldGesture.end(event);
     this.tempoHoldGesture.end(event);
     this.ccControlHoldGesture.end(event);
+    this.bottomViewHoldGesture.end(event);
     if (this.tempoDrag?.pointerId === event.pointerId) {
       const drag = this.tempoDrag;
       this.tempoDrag = null;
@@ -2454,12 +2506,6 @@ export class PlayerScreen {
           direction: octave.dataset.action === 'octave-up' ? 1 : -1,
         }, octave);
       }
-      return;
-    }
-
-    const bankButton = target.closest<HTMLButtonElement>('[data-action="toggle-bank"]');
-    if (bankButton) {
-      this.openCcLearn({ kind: 'bank-toggle' }, bankButton);
       return;
     }
 
@@ -2788,7 +2834,6 @@ export class PlayerScreen {
   }
 
   private selectBottomView(view: PlayerBottomView, settingsModal?: HTMLElement): void {
-    if (this.cellularLayout && view === 'keyboard') return;
     this.bottomView = view;
     this.renderBottomView();
     for (const button of settingsModal?.querySelectorAll<HTMLButtonElement>('[data-setting-view]') ?? []) {
@@ -2803,17 +2848,51 @@ export class PlayerScreen {
   private renderBottomView(): void {
     const panel = this.root.querySelector<HTMLElement>('[data-player-bottom-panel]');
     if (!panel) return;
-    const keyboardVisible = true;
-    const presetsVisible = true;
-    panel.classList.remove('is-keyboard');
-    panel.setAttribute('aria-label', this.cellularLayout ? 'Presets' : 'Presets e Keyboard');
-    const header = panel.querySelector<HTMLElement>('.player-presets__header');
+    // No desktop o Keyboard fica fixo embaixo dos presets. No app os dois
+    // dividem o mesmo espaço: o botão Presets/Keyboard troca quem aparece.
+    const showingKeyboard = !this.desktopRuntime && this.bottomView === 'keyboard';
+    panel.classList.toggle('is-keyboard', showingKeyboard);
+    panel.setAttribute('aria-label', this.desktopRuntime
+      ? 'Presets e Keyboard'
+      : showingKeyboard ? 'Keyboard' : 'Presets');
     const presets = panel.querySelector<HTMLElement>('.player-presets__grid');
     const keyboard = panel.querySelector<HTMLElement>('[data-performance-keyboard]');
-    if (header) header.hidden = !presetsVisible;
-    if (presets) presets.hidden = !presetsVisible;
-    if (keyboard) keyboard.hidden = !keyboardVisible;
-    if (!keyboardVisible) this.keyboardExpression?.cancelGestures();
+    if (presets) presets.hidden = showingKeyboard;
+    if (keyboard) keyboard.hidden = !this.desktopRuntime && !showingKeyboard;
+    const viewButton = panel.querySelector<HTMLButtonElement>('[data-action="toggle-bottom-view"]');
+    if (viewButton) {
+      viewButton.dataset.bottomView = showingKeyboard ? 'keyboard' : 'presets';
+      viewButton.textContent = showingKeyboard ? 'Keyboard' : 'Presets';
+      viewButton.setAttribute('aria-label', showingKeyboard
+        ? 'Mostrando o Keyboard. Tocar para mostrar os presets'
+        : 'Mostrando os presets. Tocar para mostrar o Keyboard');
+    }
+    for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-action="copy-preset"], [data-action="show-bank"]')) {
+      button.setAttribute('aria-disabled', String(showingKeyboard));
+      button.tabIndex = showingKeyboard ? -1 : 0;
+    }
+    this.renderKeyboardOctaveSpan();
+    if (!showingKeyboard && !this.desktopRuntime) this.keyboardExpression?.cancelGestures();
+  }
+
+  // Quatro oitavas: troca o teclado inteiro por um de C2 a C5, com as teclas
+  // mais largas. É outro teclado, não um pedaço do de 88.
+  private renderKeyboardOctaveSpan(): void {
+    const scroller = this.root.querySelector<HTMLElement>('.performance-keyboard__scroller');
+    if (!scroller || scroller.dataset.keyboardSpan === this.keyboardOctaveSpan) return;
+    scroller.dataset.keyboardSpan = this.keyboardOctaveSpan;
+    scroller.innerHTML = createPerformanceKeysMarkup(this.keyboardOctaveSpan);
+    scroller.scrollLeft = 0;
+    this.performanceKeyboard?.refreshKeys();
+  }
+
+  private toggleKeyboardOctaveSpan(): void {
+    this.keyboardOctaveSpan = this.keyboardOctaveSpan === 'four' ? 'full' : 'four';
+    this.renderKeyboardOctaveSpan();
+    this.setStatus(this.keyboardOctaveSpan === 'four'
+      ? 'Keyboard em quatro oitavas, de C2 a C5.'
+      : 'Keyboard inteiro, 88 teclas.');
+    this.markPlayerStateChanged();
   }
 
   private selectKeyboardMidiSlot(modal: HTMLElement, slot: 1 | 2 | 3): void {
@@ -2972,10 +3051,10 @@ export class PlayerScreen {
     padsButton.classList.toggle('is-selected', !showingBank);
     padsButton.setAttribute('aria-pressed', String(!showingBank));
 
-    for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="toggle-bank"]')) {
-      button.dataset.bank = this.activeBank;
-      button.textContent = `Banco ${this.activeBank}`;
-      button.setAttribute('aria-label', `Banco ${this.activeBank}. Tocar para ir ao Banco ${this.activeBank === 'A' ? 'B' : 'A'}`);
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="show-bank"]')) {
+      const isSelected = button.dataset.bank === this.activeBank;
+      button.classList.toggle('is-selected', isSelected);
+      button.setAttribute('aria-pressed', String(isSelected));
     }
     this.renderPresetCopyButton();
   }
@@ -3955,11 +4034,6 @@ export class PlayerScreen {
         continue;
       }
 
-      if (targetKey === 'bank:toggle') {
-        if (risingEdge) this.showBank(this.activeBank === 'A' ? 'B' : 'A');
-        continue;
-      }
-
       const padMatch = /^pad:([ABCD]):(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.exec(targetKey);
       if (padMatch && risingEdge && this.isPadBankId(padMatch[1])) {
         this.activateMappedPad(padMatch[1], padMatch[2] ?? 'C');
@@ -3972,7 +4046,7 @@ export class PlayerScreen {
         continue;
       }
 
-      const presetMatch = /^preset:([AB]):([1-8])$/.exec(targetKey);
+      const presetMatch = /^preset:([A-F]):([1-9]|1[0-6])$/.exec(targetKey);
       if (presetMatch && risingEdge && this.isBankId(presetMatch[1])) {
         this.activateMappedPreset(presetMatch[1], Number(presetMatch[2]));
       }
@@ -4235,14 +4309,6 @@ export class PlayerScreen {
           <button class="player-navigation__button about-panel__playlist" type="button" data-about-action="open-tracks">
             Playlist
           </button>
-          <label class="app-settings-toggle about-panel__lite-mode">
-            <span>
-              <strong>Modo Lite</strong>
-              <small>Interface mais leve. Não altera o áudio.</small>
-            </span>
-            <input type="checkbox" data-setting="lite-mode"${this.liteMode ? ' checked' : ''}>
-            <i aria-hidden="true"></i>
-          </label>
         </section>
       `;
     } else if (kind === 'module-settings') {
@@ -5004,7 +5070,7 @@ export class PlayerScreen {
         : null;
       if ((kind === 'keyboard-settings' || kind === 'app-settings') && keyboardStyleButton) {
         const style = keyboardStyleButton.dataset.keyboardStyle;
-        if (style === 'standard' || style === 'black' || style === 'neon') {
+        if (style === 'standard' || style === 'black' || style === 'hook') {
           this.selectKeyboardStyle(modal, style);
         }
         return;
@@ -6872,12 +6938,6 @@ export class PlayerScreen {
       void hookKeysNative.setSeamlessPresetSwitching(target.checked);
       return;
     }
-    if (target instanceof HTMLInputElement && target.dataset.setting === 'lite-mode') {
-      this.liteMode = target.checked;
-      this.applyLiteMode();
-      this.markPlayerStateChanged(false);
-      return;
-    }
     const select = target;
     if (!(select instanceof HTMLSelectElement)) return;
     if (select.dataset.setting === 'midi-device') {
@@ -6965,8 +7025,10 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
+  // O perfil leve (menos sombra, menos transição) vale sempre: no iPad antigo
+  // é ele que mantém a interface fluida e no aparelho novo não faz falta.
   private applyLiteMode(): void {
-    this.root.classList.toggle('hook-keys-lite', this.liteMode);
+    this.root.classList.add('hook-keys-lite');
   }
 
   private updateModuleEnvelopeControl(
@@ -9363,10 +9425,10 @@ export class PlayerScreen {
       sampleRate: this.sampleRate,
       compatibilityMode: this.compatibilityMode,
       seamlessPresetSwitching: this.seamlessPresetSwitching,
-      liteMode: this.liteMode,
       bottomView: this.bottomView,
       keyboardMidiSlot: this.keyboardMidiSlot,
       keyboardStyle: this.keyboardStyle,
+      keyboardOctaveSpan: this.keyboardOctaveSpan,
       midiInputIds: [...this.selectedMidiInputIds],
       audioDeviceId: this.selectedAudioDeviceId,
       audioRouting: { ...this.audioRouting },
@@ -9434,14 +9496,14 @@ export class PlayerScreen {
     };
     this.compatibilityMode = value.compatibilityMode === true;
     this.seamlessPresetSwitching = value.seamlessPresetSwitching === true;
-    this.liteMode = value.liteMode === true;
     this.applyLiteMode();
     this.midiInput.setCompatibilityMode(this.compatibilityMode);
-    this.bottomView = !this.cellularLayout && !this.desktopRuntime && value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
+    this.bottomView = value.bottomView === 'keyboard' ? 'keyboard' : 'presets';
     const savedKeyboardMidiSlot = Number(value.keyboardMidiSlot);
     this.keyboardMidiSlot = savedKeyboardMidiSlot === 2 || savedKeyboardMidiSlot === 3 ? savedKeyboardMidiSlot : 1;
     const savedKeyboardStyle = asString(value.keyboardStyle);
-    this.keyboardStyle = savedKeyboardStyle === 'black' || savedKeyboardStyle === 'neon' ? savedKeyboardStyle : 'standard';
+    this.keyboardStyle = savedKeyboardStyle === 'black' || savedKeyboardStyle === 'hook' ? savedKeyboardStyle : 'standard';
+    this.keyboardOctaveSpan = value.keyboardOctaveSpan === 'four' ? 'four' : 'full';
     this.performanceKeyboard?.setStyle(this.keyboardStyle);
     const savedOutputLevels = isRecord(value.outputLevels) ? value.outputLevels : {};
     this.outputLevels = {

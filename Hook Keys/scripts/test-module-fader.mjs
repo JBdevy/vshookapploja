@@ -386,6 +386,11 @@ test('listas da Playlist não têm efeito elástico nas pontas', () => {
   assert.doesNotMatch(css, /\.tracks-split-panel \.tracks-library-grid \{[^}]*overscroll-behavior: contain/);
 });
 
+test('listas da Library não têm efeito elástico nas pontas', () => {
+  assert.match(css, /:is\(\.sound-browser__categories, \.sound-browser__content, \.user-sf2-list\) \{\s*overscroll-behavior: none;/);
+  assert.doesNotMatch(css, /\.sound-browser__categories \{[^}]*overscroll-behavior: contain/);
+});
+
 test('Modo Lite corta a pintura dos botões no toque', () => {
   assert.match(css, /\.hook-keys-lite :is\(\.player-screen, \.player-modal\) :is\(button, \[role="button"\], \.app-select__toggle\) \{\s*text-shadow: none !important;\s*transition: none !important;/);
 });
@@ -405,22 +410,53 @@ test('apps mostram a RAM do aparelho ao lado do User; desktop mantém CPU', () =
   assert.match(player, /Memória usada no aparelho: \$\{formatGigabytes\(usage\.usedBytes\)\} de \$\{formatGigabytes\(usage\.limitBytes\)\}/);
 });
 
-test('teclas do keyboard só acendem, sem nome de nota', () => {
+test('só os dós (e o lá mais grave) levam o nome escrito na tecla', () => {
   const keyboard = readFileSync(new URL('../src/features/player/PerformanceKeyboard.ts', import.meta.url), 'utf8');
-  assert.doesNotMatch(keyboard, /<span>\$\{formatMidiNote\(noteNumber\)\}<\/span>/);
-  assert.match(keyboard, /aria-label="\$\{formatMidiNote\(noteNumber\)\}"/, 'o nome segue só para acessibilidade');
-  assert.doesNotMatch(css, /performance-keyboard__key[a-z-]* span/);
+  assert.match(keyboard, /const named = !black && \(noteNumber % 12 === 0 \|\| noteNumber === firstNote\);/);
+  assert.match(keyboard, /\$\{named \? `<span>\$\{formatMidiNote\(noteNumber\)\}<\/span>` : ''\}/);
+  assert.match(keyboard, /aria-label="\$\{formatMidiNote\(noteNumber\)\}"/, 'todas as teclas seguem com o nome na acessibilidade');
+  assert.match(css, /\.performance-keyboard__key--white > span \{/);
 });
 
 test('Reset do EQ/compressor no celular fica acima do contorno do painel', () => {
   assert.match(css, /@media \(orientation: landscape\) and \(max-height: 520px\) \{\s*\.module-processor-reset-button \{\s*top: 4px;[^}]*min-height: 26px;/);
 });
 
-test('8 presets por banco numa fileira só', () => {
+test('16 presets em duas fileiras, seis bancos coloridos e a linha Copy/Bancos/Presets', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /const PRESET_COUNT = 8;/);
+  assert.match(player, /const PRESET_COUNT = 16;/);
+  assert.match(player, /const BANK_IDS: readonly BankId\[\] = \['A', 'B', 'C', 'D', 'E', 'F'\];/);
   assert.doesNotMatch(player, /VISIBLE_PRESET_COUNT/);
-  assert.match(css, /\.player-presets--combined \.player-presets__grid \{[^}]*grid-template-rows: minmax\(0, 1fr\);/);
+  assert.match(css, /\.player-presets__grid \{\s*display: grid;\s*grid-template-rows: repeat\(2, minmax\(0, 1fr\)\);/);
+  // Uma linha só: Copy/Paste, os seis bancos e o botão Presets/Keyboard.
+  assert.match(css, /\.player-presets__header \{\s*display: grid;\s*grid-auto-flow: column;/);
+  for (const bank of ['C', 'D', 'E', 'F']) {
+    assert.match(css, new RegExp(`\\.player-navigation__bank-button\\[data-bank="${bank}"\\] \\{ --button-color-a:`));
+  }
+  // Com o Keyboard à mostra, Copy e bancos ficam apagados e sem ação.
+  assert.match(css, /\.player-presets\.is-keyboard \.player-presets__header :is\(\.player-preset-copy-button, \.player-navigation__bank-button\) \{\s*opacity: \.34;\s*pointer-events: none;/);
+  // No desktop o Keyboard fica fixo, numa linha própria, e não existe o botão.
+  assert.match(css, /\.player-presets--desktop \.performance-keyboard \{\s*grid-row: 3;/);
+  assert.match(player, /\$\{createBankNavigationMarkup\(!this\.desktopRuntime\)\}/);
+  assert.match(player, /const showingKeyboard = !this\.desktopRuntime && this\.bottomView === 'keyboard';/);
+});
+
+test('toque longo no botão Keyboard deixa o teclado em quatro oitavas (C2 a C5)', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  // Só vale com o Keyboard à mostra, e o clique que vem junto não troca a view.
+  assert.match(player, /\[data-action="toggle-bottom-view"\]'\);\s*if \(bottomViewButton && this\.root\.contains\(bottomViewButton\) && this\.bottomView === 'keyboard'\) \{\s*this\.bottomViewHoldGesture\.start/);
+  assert.match(player, /this\.keyboardOctaveSpan = this\.keyboardOctaveSpan === 'four' \? 'full' : 'four';/);
+  assert.match(player, /keyboardOctaveSpan: this\.keyboardOctaveSpan,/);
+  // O teclado curto é outro teclado, montado de C2 (36) a C5 com 37 teclas.
+  const keyboard = readFileSync(new URL('../src/features/player/PerformanceKeyboard.ts', import.meta.url), 'utf8');
+  assert.match(keyboard, /const SHORT_FIRST_NOTE = 36;\s*const SHORT_NOTE_COUNT = 37;/);
+  assert.match(keyboard, /--white-key-width:\$\{whiteKeyWidth\.toFixed\(6\)\}%/);
+  assert.match(player, /scroller\.innerHTML = createPerformanceKeysMarkup\(this\.keyboardOctaveSpan\);\s*scroller\.scrollLeft = 0;\s*this\.performanceKeyboard\?\.refreshKeys\(\);/);
+});
+
+test('Lite mantém a tecla acesa e a ponta da tecla preta é quase reta', () => {
+  assert.match(css, /\.hook-keys-lite \.performance-keyboard__key\.is-pressed \{\s*box-shadow: inset 0 0 0 2px rgba\(225, 255, 234, \.78\) !important;/);
+  assert.match(css, /\.performance-keyboard__key--black \{[^}]*border-radius: 0 0 2px 2px;/);
 });
 
 test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () => {

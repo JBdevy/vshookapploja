@@ -26,6 +26,12 @@ export interface SoundCatalogResponse {
   catalog: SoundCatalogPayload;
 }
 
+export interface SoundAssetUrlResponse {
+  ok: true;
+  url: string;
+  expiresIn: number;
+}
+
 export interface AccountProfile {
   id: number;
   email: string;
@@ -63,6 +69,18 @@ export class AccountApi {
     return this.http.request('/api/orangekey/account/sound-catalog', {
       method: 'GET',
       token,
+    });
+  }
+
+  getSoundAssetUrl(
+    token: string,
+    objectKey: string,
+    kind: 'sf2' | 'preview',
+  ): Promise<SoundAssetUrlResponse> {
+    return this.http.request('/api/orangekey/account/sound-assets/url', {
+      method: 'POST',
+      token,
+      body: { objectKey, kind },
     });
   }
 

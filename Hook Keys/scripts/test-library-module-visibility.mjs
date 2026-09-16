@@ -51,3 +51,39 @@ test('mobile and desktop share the same filtered library and reject selecting a 
   assert.match(player, /return this\.soundCatalog\.categoriesForModule\(moduleNumber\);/);
   assert.match(player, /const categories = this\.soundCategoriesForModule\(moduleNumber\);\s*if \(category !== 'user' && !categories\.some/);
 });
+
+test('private R2 object keys and legacy URLs are both accepted by the catalog', () => {
+  const privateCatalog = new catalog.SoundCatalog({
+    revision: 3,
+    categories: [{
+      ...category('pianos', null),
+      sounds: [{
+        id: 'astoria',
+        name: 'Astoria Grand',
+        color: '#118ab2',
+        sf2ObjectKey: 'library/1-Grand Piano/Astoria Grand.sf2',
+        previewObjectKey: 'library/previews/Astoria Grand.mp3',
+        assetVersion: 2,
+      }],
+    }],
+  });
+  assert.equal(privateCatalog.get('astoria').sf2ObjectKey, 'library/1-Grand Piano/Astoria Grand.sf2');
+  assert.equal(privateCatalog.get('astoria').previewObjectKey, 'library/previews/Astoria Grand.mp3');
+
+  const legacyCatalog = new catalog.SoundCatalog({
+    categories: [{
+      ...category('legacy-url', null),
+      sounds: [{
+        id: 'legacy-sound', name: 'Legacy', color: '#118ab2',
+        sf2Url: 'https://cdn.example.com/legacy.sf2', previewUrl: '',
+      }],
+    }],
+  });
+  assert.equal(legacyCatalog.get('legacy-sound').sf2ObjectKey, 'https://cdn.example.com/legacy.sf2');
+  assert.throws(() => new catalog.SoundCatalog({
+    categories: [{
+      ...category('unsafe', null),
+      sounds: [{ id: 'unsafe-sound', name: 'Unsafe', color: '#118ab2', sf2ObjectKey: '../outside.sf2' }],
+    }],
+  }), /sound_catalog_object_key_invalid/);
+});

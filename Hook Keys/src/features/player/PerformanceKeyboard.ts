@@ -1,12 +1,18 @@
 import { formatMidiNote } from '../midi/MidiInputService';
 
 export type PlayerBottomView = 'presets' | 'keyboard';
-export type PerformanceKeyboardStyle = 'standard' | 'black' | 'neon';
+export type PerformanceKeyboardStyle = 'standard' | 'black' | 'hook';
 
 const FIRST_NOTE = 9;
 const NOTE_COUNT = 88;
-const WHITE_KEY_COUNT = 52;
 const BLACK_NOTE_OFFSETS = new Set([1, 3, 6, 8, 10]);
+// Quatro oitavas: um teclado próprio de C2 a C5, com as teclas mais largas.
+const SHORT_FIRST_NOTE = 36;
+const SHORT_NOTE_COUNT = 37;
+// A tecla preta tem 62% da largura da branca, como no teclado inteiro.
+const BLACK_KEY_RATIO = 0.62;
+
+export type PerformanceKeyboardSpan = 'full' | 'four';
 
 export interface PerformanceNoteDetail {
   channel: number;
@@ -16,20 +22,33 @@ export interface PerformanceNoteDetail {
   velocity: number;
 }
 
-export function createPerformanceKeyboardMarkup(style: PerformanceKeyboardStyle): string {
+// Só as teclas: o mesmo bloco serve para o teclado inteiro e para o de cinco
+// oitavas, e é ele que o botão Keyboard troca no toque longo.
+export function createPerformanceKeysMarkup(span: PerformanceKeyboardSpan = 'full'): string {
+  const short = span === 'four';
+  const firstNote = short ? SHORT_FIRST_NOTE : FIRST_NOTE;
+  const noteCount = short ? SHORT_NOTE_COUNT : NOTE_COUNT;
+  let whiteKeyCount = 0;
+  for (let noteNumber = firstNote; noteNumber < firstNote + noteCount; noteNumber += 1) {
+    if (!BLACK_NOTE_OFFSETS.has(noteNumber % 12)) whiteKeyCount += 1;
+  }
+  const whiteKeyWidth = 100 / whiteKeyCount;
   const whiteKeys: string[] = [];
   const blackKeys: string[] = [];
   let whiteIndex = 0;
-  for (let noteNumber = FIRST_NOTE; noteNumber < FIRST_NOTE + NOTE_COUNT; noteNumber += 1) {
+  for (let noteNumber = firstNote; noteNumber < firstNote + noteCount; noteNumber += 1) {
     const black = BLACK_NOTE_OFFSETS.has(noteNumber % 12);
+    // Cada dó leva o nome escrito na tecla, e o lá mais grave do teclado
+    // inteiro também: é por eles que a pessoa se localiza.
+    const named = !black && (noteNumber % 12 === 0 || noteNumber === firstNote);
     const key = `
       <button
         class="performance-keyboard__key performance-keyboard__key--${black ? 'black' : 'white'}"
         type="button"
         data-keyboard-note="${noteNumber}"
         aria-label="${formatMidiNote(noteNumber)}"
-        ${black ? `style="--black-key-left:${((whiteIndex / WHITE_KEY_COUNT) * 100).toFixed(5)}%"` : ''}
-      ></button>
+        ${black ? `style="--black-key-left:${((whiteIndex / whiteKeyCount) * 100).toFixed(5)}%"` : ''}
+      >${named ? `<span>${formatMidiNote(noteNumber)}</span>` : ''}</button>
     `;
     if (black) blackKeys.push(key);
     else {
@@ -37,6 +56,21 @@ export function createPerformanceKeyboardMarkup(style: PerformanceKeyboardStyle)
       whiteIndex += 1;
     }
   }
+  return `
+    <div
+      class="performance-keyboard__keys"
+      style="--white-key-width:${whiteKeyWidth.toFixed(6)}%;--black-key-width:${(whiteKeyWidth * BLACK_KEY_RATIO).toFixed(6)}%"
+    >
+      <div class="performance-keyboard__white-keys">${whiteKeys.join('')}</div>
+      <div class="performance-keyboard__black-keys">${blackKeys.join('')}</div>
+    </div>
+  `;
+}
+
+export function createPerformanceKeyboardMarkup(
+  style: PerformanceKeyboardStyle,
+  span: PerformanceKeyboardSpan = 'full',
+): string {
   return `
     <div class="performance-keyboard performance-keyboard--${style}" data-performance-keyboard hidden>
       <div class="performance-keyboard__expression" aria-label="Controles de expressão do teclado">
@@ -48,11 +82,8 @@ export function createPerformanceKeyboardMarkup(style: PerformanceKeyboardStyle)
           </label>
         `).join('')}
       </div>
-      <div class="performance-keyboard__scroller">
-        <div class="performance-keyboard__keys">
-          <div class="performance-keyboard__white-keys">${whiteKeys.join('')}</div>
-          <div class="performance-keyboard__black-keys">${blackKeys.join('')}</div>
-        </div>
+      <div class="performance-keyboard__scroller" data-keyboard-span="${span}">
+        ${createPerformanceKeysMarkup(span)}
       </div>
     </div>
   `;
@@ -75,7 +106,7 @@ export function createPerformanceKeyboardSettingsMarkup(
         <div role="group" aria-label="Estilo visual do teclado">
           ${createChoiceButton('keyboard-style', 'standard', 'Default', style === 'standard')}
           ${createChoiceButton('keyboard-style', 'black', 'Black', style === 'black')}
-          ${createChoiceButton('keyboard-style', 'neon', 'Neon', style === 'neon')}
+          ${createChoiceButton('keyboard-style', 'hook', 'Hook', style === 'hook')}
         </div>
       </article>
     </section>
@@ -102,12 +133,18 @@ export class PerformanceKeyboardController {
     private readonly onNote: (noteNumber: number, pressed: boolean, velocity: number) => string | null | void = () => {},
   ) {}
 
-  mount(): void {
+  // Depois de trocar o teclado (88 teclas <-> cinco oitavas) as teclas são
+  // outras: o mapa de notas precisa apontar para os botões novos.
+  refreshKeys(): void {
     this.noteKeys.clear();
     for (const key of this.root.querySelectorAll<HTMLButtonElement>('[data-keyboard-note]')) {
       const noteNumber = Number(key.dataset.keyboardNote);
       if (Number.isInteger(noteNumber)) this.noteKeys.set(noteNumber, key);
     }
+  }
+
+  mount(): void {
+    this.refreshKeys();
     this.root.addEventListener('pointerdown', this.handlePointerDown);
     this.root.addEventListener('pointermove', this.handlePointerMove);
     this.root.addEventListener('pointerup', this.handlePointerEnd);
@@ -136,7 +173,7 @@ export class PerformanceKeyboardController {
   }
 
   setStyle(style: PerformanceKeyboardStyle): void {
-    this.root.classList.remove('performance-keyboard--standard', 'performance-keyboard--black', 'performance-keyboard--neon');
+    this.root.classList.remove('performance-keyboard--standard', 'performance-keyboard--black', 'performance-keyboard--hook');
     this.root.classList.add(`performance-keyboard--${style}`);
   }
 

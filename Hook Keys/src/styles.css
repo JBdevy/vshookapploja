@@ -2882,21 +2882,25 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .player-presets {
   display: grid;
-  grid-template-columns: minmax(86px, 0.13fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   align-items: stretch;
-  gap: clamp(7px, 1vw, 13px);
-  padding: clamp(12px, 1.7vh, 17px);
+  gap: clamp(5px, 0.8vh, 10px);
+  padding: clamp(8px, 1.3vh, 14px);
   border: 1.5px solid rgba(255, 121, 0, 0.48);
   border-radius: clamp(11px, 1.4vw, 17px);
   background: linear-gradient(180deg, rgba(29, 29, 32, 0.97), rgba(11, 11, 13, 0.99));
   box-shadow: inset 0 1px rgba(255, 211, 177, 0.05);
 }
 
+/* Uma linha só: Copy/Paste, os seis bancos e (no app) Presets/Keyboard. */
 .player-presets__header {
   display: grid;
-  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   align-content: stretch;
-  gap: clamp(5px, 0.7vh, 8px);
+  gap: clamp(3px, 0.5vw, 7px);
   min-width: 0;
   min-height: 0;
   padding: 0;
@@ -2908,12 +2912,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   padding-inline: 5px;
 }
 
-/* Uma fileira de 8 presets ocupa a altura que eram duas: os botões ficam da
-   altura dos dois bancos (A em cima, B embaixo). */
+/* Dezesseis presets: duas fileiras de oito. */
 .player-presets__grid {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  gap: clamp(4px, 0.65vh, 7px);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: clamp(3px, 0.55vh, 7px);
   min-width: 0;
   min-height: 0;
 }
@@ -2932,10 +2935,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   display: none !important;
 }
 
-.player-screen--tablet .player-presets.is-keyboard {
-  grid-template-columns: minmax(0, 1fr);
-  padding: 3px;
-}
+
 
 .performance-keyboard {
   display: grid;
@@ -3000,6 +3000,23 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   box-shadow: inset 0 -7px 8px rgba(0, 0, 0, 0.18);
 }
 
+/* Nome escrito só nos dós (e no lá mais grave): eles orientam a mão. */
+.performance-keyboard__key--white > span {
+  color: #6b6f75;
+  font-size: clamp(6px, .72vw, 11px);
+  font-weight: 900;
+  letter-spacing: -.02em;
+  pointer-events: none;
+}
+
+:is(.performance-keyboard--black, .performance-keyboard--hook) .performance-keyboard__key--white > span {
+  color: #9aa0a6;
+}
+
+.performance-keyboard__key--white.is-pressed > span {
+  color: #06381d;
+}
+
 .performance-keyboard__black-keys {
   position: absolute;
   inset: 0;
@@ -3013,6 +3030,8 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   left: var(--black-key-left);
   width: var(--black-key-width);
   height: 63%;
+  /* A ponta da tecla preta é quase reta; o arredondado continua nas brancas. */
+  border-radius: 0 0 2px 2px;
   color: #fff;
   border: 1px solid #000;
   background: linear-gradient(90deg, #050506, #35353a 45%, #070708);
@@ -3038,15 +3057,28 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 
-.performance-keyboard--neon .performance-keyboard__key--white {
-  border-color: #6838a8;
-  background: linear-gradient(90deg, #160824, #351057 50%, #150621);
+/* Estilo Hook: as teclas de baixo (brancas) pretas e as de cima (pretas) em
+   laranja com gradiente. */
+.performance-keyboard--hook .performance-keyboard__key--white {
+  border-color: #2b2b30;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, .55), rgba(0, 0, 0, 0) 24% 76%, rgba(0, 0, 0, .55)),
+    linear-gradient(180deg, #313138, #16161a 55%, #050506);
 }
 
-.performance-keyboard--neon .performance-keyboard__key--black {
-  border-color: #4a4052;
-  background: linear-gradient(90deg, #020203, #18151c 48%, #000);
-  box-shadow: 0 4px 10px #000, inset 0 -4px rgba(255, 255, 255, 0.045);
+.performance-keyboard--hook .performance-keyboard__key--black {
+  border-color: #3a1800;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, .45), rgba(0, 0, 0, 0) 26% 74%, rgba(0, 0, 0, .45)),
+    linear-gradient(180deg, #ffc56a, #ff8a1f 45%, #c25200 82%, #7a3200);
+  box-shadow: 0 4px 10px #000, inset 0 -4px rgba(255, 255, 255, .08);
+}
+
+/* A tecla tocada acende verde em qualquer estilo: esta regra vem depois das
+   cores de cada estilo e tem o mesmo peso delas. */
+.performance-keyboard .performance-keyboard__key.is-pressed {
+  border-color: #6aff98;
+  background: linear-gradient(180deg, #69f797, #16a64a);
 }
 
 
@@ -3060,10 +3092,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .player-screen--tablet .player-presets--combined {
-  grid-template-columns: minmax(70px, 0.11fr) minmax(0, 1fr);
-  grid-template-rows: clamp(56px, 13vh, 94px) clamp(64px, 15vh, 108px);
-  gap: clamp(5px, 0.75vh, 9px) clamp(7px, 1vw, 13px);
-  padding: clamp(7px, 1.05vh, 11px);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: clamp(24px, 4.4vh, 38px) clamp(68px, 16vh, 116px);
+  gap: clamp(4px, 0.7vh, 8px);
+  padding: clamp(6px, 1vh, 11px);
 }
 
 .player-presets--combined .player-presets__header {
@@ -3072,10 +3104,8 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .player-presets--combined .player-presets__grid {
-  grid-column: 2;
-  grid-row: 1;
-  /* Uma fileira de 8 presets com a altura dos dois bancos. */
-  grid-template-rows: minmax(0, 1fr);
+  grid-column: 1;
+  grid-row: 2;
   min-height: 0;
 }
 
@@ -3101,11 +3131,26 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .player-presets--combined .performance-keyboard {
-  grid-column: 1 / -1;
+  grid-column: 1;
   grid-row: 2;
   display: grid;
   width: 100%;
   height: 100%;
+}
+
+/* Desktop: presets e Keyboard juntos, o Keyboard numa linha própria. */
+.player-screen--tablet .player-presets--desktop {
+  grid-template-rows: clamp(24px, 4.4vh, 38px) clamp(56px, 12vh, 92px) clamp(70px, 16vh, 120px);
+}
+
+.player-presets--desktop .performance-keyboard {
+  grid-row: 3;
+}
+
+/* Com o Keyboard à mostra, Copy e bancos continuam na linha, apagados e sem ação. */
+.player-presets.is-keyboard .player-presets__header :is(.player-preset-copy-button, .player-navigation__bank-button) {
+  opacity: .34;
+  pointer-events: none;
 }
 
 .player-presets--combined .performance-keyboard__scroller,
@@ -3124,15 +3169,21 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
     grid-template-rows: minmax(0, 1fr) auto;
   }
   .player-screen--tablet .player-presets--combined {
-    grid-template-columns: 58px minmax(0, 1fr);
-    grid-template-rows: clamp(48px, 13vh, 64px) clamp(58px, 15vh, 74px);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 20px clamp(52px, 15vh, 78px);
     gap: 3px;
     padding: 3px;
   }
+
+  .player-screen--tablet .player-presets--desktop {
+    grid-template-rows: 20px clamp(40px, 11vh, 60px) clamp(52px, 15vh, 74px);
+  }
   .player-presets--combined .performance-keyboard__keys { min-height: 0; }
 
+  /* Celular: a faixa de baixo tem a mesma altura com os presets ou com o
+     Keyboard, para a linha de cima nao pular ao trocar. */
   :root:not([data-runtime="desktop"]) .player-screen--cellular .player-presets--combined {
-    grid-template-rows: clamp(48px, 13vh, 64px);
+    grid-template-rows: 18px clamp(40px, 13vh, 62px);
   }
 
   :root:not([data-runtime="desktop"]) .player-screen--cellular .player-bank-view.player-bank-view--cellular {
@@ -3914,12 +3965,13 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   color: var(--preset-accent);
 }
 
+/* O preset ativo usa a mesma marca do banco ativo: borda branca em volta. */
 .player-preset-button.is-selected {
-  border-color: transparent;
+  border-color: #fff;
   background-image:
     linear-gradient(180deg, #24a957, #07572a),
     linear-gradient(110deg, #ff365e, #ffbf2e 25%, #31d96c 50%, #2d8cff 75%, #ca4cff);
-  box-shadow: 0 0 19px rgba(40, 221, 100, 0.28), inset 0 1px rgba(225, 255, 235, 0.26);
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.34), inset 0 1px rgba(225, 255, 235, 0.26);
 }
 
 .player-preset-button.is-selected .player-preset-button__label {
@@ -8237,9 +8289,14 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   padding-right: 2px;
   overflow-x: hidden;
   overflow-y: auto;
-  overscroll-behavior: contain;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
+}
+
+/* Library sem efeito elastico nas pontas, igual as listas da Playlist: com o
+   quique, o arrasto seguinte disputava com a animacao e a lista freava. */
+:is(.sound-browser__categories, .sound-browser__content, .user-sf2-list) {
+  overscroll-behavior: none;
 }
 
 .sound-browser__categories::-webkit-scrollbar {
@@ -9159,9 +9216,9 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .player-presets {
-    grid-template-columns: 63px minmax(0, 1fr);
-    gap: 5px;
-    padding: 8px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 6px;
   }
 
   .player-preset-button {
@@ -10172,7 +10229,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .player-screen--tablet .player-presets {
-    grid-template-columns: 58px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 3px;
     padding: 3px;
     border-radius: 7px;
@@ -11019,6 +11076,12 @@ html[data-platform="ios"] .player-module__meter-fill {
   transition: none !important;
 }
 
+/* O Lite tira as sombras, e no iOS é a sombra que faz a tecla parecer acesa:
+   a tecla tocada mantém o contorno claro, que é barato de pintar. */
+.hook-keys-lite .performance-keyboard__key.is-pressed {
+  box-shadow: inset 0 0 0 2px rgba(225, 255, 234, .78) !important;
+}
+
 /* O meter mantém a transição no Lite: sem ela o nível salta a cada leitura
    e parece baixo FPS. */
 .hook-keys-lite :is(.player-module__meter-fill, .player-module__meter-fill > i) {
@@ -11220,12 +11283,12 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
   grid-template-rows: minmax(0, 1fr) clamp(96px, 17vh, 138px);
 }
 
-.player-screen--tablet .player-presets:not(.is-keyboard) {
+.player-screen--tablet .player-presets {
   padding-block: clamp(4px, .7vh, 8px);
 }
 
-.player-screen--tablet .player-presets:not(.is-keyboard) .player-preset-button,
-.player-screen--tablet .player-presets:not(.is-keyboard) .player-presets__header .player-navigation__button {
+.player-screen--tablet .player-preset-button,
+.player-screen--tablet .player-presets__header .player-navigation__button {
   min-height: 0;
 }
 
@@ -11250,26 +11313,26 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
   overflow: hidden;
 }
 
-.player-screen--tablet.is-tracks-split .player-presets:not(.is-keyboard) {
-  grid-template-columns: clamp(42px, 8cqw, 58px) minmax(0, 1fr);
+.player-screen--tablet.is-tracks-split .player-presets {
+  grid-template-columns: minmax(0, 1fr);
   gap: 3px;
   padding: 3px;
 }
 
-.player-screen--tablet.is-tracks-split .player-presets:not(.is-keyboard) .player-presets__grid,
-.player-screen--tablet.is-tracks-split .player-presets:not(.is-keyboard) .player-presets__row {
+.player-screen--tablet.is-tracks-split .player-presets .player-presets__grid,
+.player-screen--tablet.is-tracks-split .player-presets .player-presets__row {
   gap: clamp(2px, .45cqw, 4px);
 }
 
-.player-screen--tablet.is-tracks-split .player-presets:not(.is-keyboard) .player-preset-button {
+.player-screen--tablet.is-tracks-split .player-presets .player-preset-button {
   min-width: 0;
   min-height: 0;
   padding: 2px 3px;
   border-radius: 5px;
 }
 
-.player-screen--tablet.is-tracks-split .player-presets:not(.is-keyboard) .player-preset-button__number,
-.player-screen--tablet.is-tracks-split .player-presets:not(.is-keyboard) .player-preset-button__label {
+.player-screen--tablet.is-tracks-split .player-presets .player-preset-button__number,
+.player-screen--tablet.is-tracks-split .player-presets .player-preset-button__label {
   font-size: clamp(5px, 1.1cqw, 8px);
 }
 
@@ -11387,6 +11450,10 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 .player-module__action-button { --button-color-a: #174f8e !important; --button-color-b: #061b38 !important; --button-border: #347bc0 !important; }
 .player-navigation__bank-button[data-bank="A"] { --button-color-a: #27b9ff !important; --button-color-b: #175cae !important; --button-border: #78d5ff !important; }
 .player-navigation__bank-button[data-bank="B"] { --button-color-a: #bd63ff !important; --button-color-b: #6922a6 !important; --button-border: #dda5ff !important; }
+.player-navigation__bank-button[data-bank="C"] { --button-color-a: #35d273 !important; --button-color-b: #0a5c30 !important; --button-border: #8bffb5 !important; }
+.player-navigation__bank-button[data-bank="D"] { --button-color-a: #ffa53d !important; --button-color-b: #94480a !important; --button-border: #ffd08a !important; }
+.player-navigation__bank-button[data-bank="E"] { --button-color-a: #ff5f9e !important; --button-color-b: #8d1450 !important; --button-border: #ffa8cb !important; }
+.player-navigation__bank-button[data-bank="F"] { --button-color-a: #19c9d8 !important; --button-color-b: #075660 !important; --button-border: #8bf0ff !important; }
 .player-modal__back-button { --button-color-a: #b8b4bc !important; --button-color-b: #77727c !important; --button-border: #d3cfd7 !important; }
 .player-modal__confirm-button { --button-color-a: #ff9c3e !important; --button-color-b: #e95408 !important; --button-border: #ffc078 !important; }
 .player-module__power-button.is-on,
@@ -12578,9 +12645,9 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   }
 
   html[data-runtime="desktop"] .player-screen--tablet .player-presets--combined {
-    grid-template-columns: 58px minmax(0, 1fr);
-    grid-template-rows: clamp(46px, 10.5vh, 66px) clamp(52px, 12vh, 76px);
-    gap: 3px 5px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 22px clamp(38px, 9vh, 58px) clamp(52px, 12vh, 76px);
+    gap: 3px;
     padding: 4px;
   }
 }
@@ -12824,15 +12891,13 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
    tocavel e o teclado, e os presets sao lidos de relance durante a musica.
    A linha dos modulos e 1fr, entao crescer estas duas encolhe aquela. */
 html[data-runtime="desktop"] .player-screen--tablet .player-presets--combined {
-  grid-template-rows: clamp(58px, 14vh, 100px) clamp(70px, 16.8vh, 120px);
-  /* Banco A e Banco B nao podem virar "Banc...": a coluna deles ganha largura
-     da grade dos presets, que tem dezesseis botoes para dar. */
-  grid-template-columns: minmax(96px, 0.135fr) minmax(0, 1fr);
+  grid-template-rows: clamp(26px, 4.6vh, 40px) clamp(54px, 12vh, 92px) clamp(70px, 16.8vh, 120px);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (max-height: 800px) {
   html[data-runtime="desktop"] .player-screen--tablet .player-presets--combined {
-    grid-template-rows: clamp(56px, 13.5vh, 94px) clamp(66px, 16.4vh, 112px);
+    grid-template-rows: clamp(24px, 4.2vh, 36px) clamp(50px, 11.5vh, 84px) clamp(66px, 16.4vh, 112px);
   }
 }
 
@@ -12924,9 +12989,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   font-size: clamp(8px, 0.95vw, 11px);
 }
 
-:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-presets:not(.is-keyboard) {
-  grid-template-columns: clamp(54px, 10cqw, 76px) minmax(0, 1fr);
-}
+
 :root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-presets--combined .player-navigation__bank-button {
   padding-inline: 3px;
   font-size: clamp(8px, 1.4cqw, 10px);
@@ -13259,9 +13322,37 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   animation-duration: .45s;
 }
 /* O botão de banco mostra sempre o banco ativo: texto claro sobre o azul (A) ou o roxo (B). */
-:is(.player-screen, .player-modal) .player-presets .player-navigation__bank-button[data-action="toggle-bank"] {
+:is(.player-screen, .player-modal) .player-presets :is(.player-navigation__bank-button[data-action="show-bank"], .player-presets__view-button) {
   color: #f1fff5 !important;
   text-shadow: 0 1px 2px rgba(0, 0, 0, .7) !important;
+}
+
+/* Banco parado fica com a cor fraca; o ativo volta à cor cheia e ganha a borda
+   branca. Só opacidade: é o que o iPad antigo compõe de graça. */
+:is(.player-screen, .player-modal) .player-presets .player-navigation__bank-button[data-action="show-bank"] {
+  opacity: .5;
+}
+
+:is(.player-screen, .player-modal) .player-presets .player-navigation__bank-button[data-action="show-bank"].is-selected {
+  opacity: 1;
+  border-color: #fff !important;
+  box-shadow: inset 0 0 0 2px #fff, 0 0 10px rgba(255, 255, 255, .4) !important;
+}
+/* O botão Presets/Keyboard não é um banco: cinza-escuro, fora da paleta deles. */
+:is(.player-screen, .player-modal) .player-presets .player-presets__view-button {
+  --button-color-a: #4b4a54 !important;
+  --button-color-b: #1b1a20 !important;
+  --button-border: #8d8a99 !important;
+  border-color: var(--button-border) !important;
+  background-color: var(--button-color-b) !important;
+  background-image: linear-gradient(145deg, var(--button-color-a), var(--button-color-b)) !important;
+}
+:is(.player-screen, .player-modal) .player-presets .player-presets__view-button[data-bottom-view="keyboard"] {
+  --button-color-a: #ffe45c !important;
+  --button-color-b: #d69e00 !important;
+  --button-border: #fff08a !important;
+  color: #241800 !important;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .35) !important;
 }
 .preset-paste-confirmation strong {
   max-width: 34ch;

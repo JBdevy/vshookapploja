@@ -45,7 +45,7 @@ function createDeviceOptions(
 const KEYBOARD_STYLE_CHOICES: ReadonlyArray<readonly [PerformanceKeyboardStyle, string]> = [
   ['standard', 'Default'],
   ['black', 'Black'],
-  ['neon', 'Neon'],
+  ['hook', 'Hook'],
 ];
 
 export function createAppSettingsMarkup(

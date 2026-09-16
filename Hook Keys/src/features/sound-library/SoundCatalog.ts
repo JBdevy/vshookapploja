@@ -97,8 +97,8 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
         name: safeName(rawSound.name, 120),
         category: id,
         color: safeColor(rawSound.color),
-        sf2ObjectKey: optionalSafeHttpUrl(rawSound.sf2Url),
-        previewObjectKey: optionalSafeHttpUrl(rawSound.previewUrl),
+        sf2ObjectKey: optionalAssetReference(rawSound.sf2ObjectKey, rawSound.sf2Url),
+        previewObjectKey: optionalAssetReference(rawSound.previewObjectKey, rawSound.previewUrl),
         catalogVersion: positiveInteger(rawSound.assetVersion, revision),
         byteSize: optionalPositiveInteger(rawSound.byteSize),
         order: positiveInteger(rawSound.order, soundIndex + 1),
@@ -177,9 +177,22 @@ function safeHttpUrl(value: unknown): string {
   return url.toString();
 }
 
-function optionalSafeHttpUrl(value: unknown): string {
-  const raw = String(value || '').trim();
-  return raw ? safeHttpUrl(raw) : '';
+function optionalAssetReference(primary: unknown, legacyUrl: unknown): string {
+  const raw = String(primary || '').trim() || String(legacyUrl || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return safeHttpUrl(raw);
+  return safeLibraryObjectKey(raw);
+}
+
+function safeLibraryObjectKey(value: string): string {
+  const key = value.replace(/\\/g, '/');
+  const segments = key.split('/');
+  if (
+    key.length > 1024
+    || !key.startsWith('library/')
+    || segments.some((segment) => !segment || segment === '.' || segment === '..')
+  ) throw new Error('sound_catalog_object_key_invalid');
+  return key;
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
