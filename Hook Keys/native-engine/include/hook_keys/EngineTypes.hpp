@@ -13,8 +13,7 @@ inline constexpr std::size_t kModuleCount = 8;
 inline constexpr std::size_t kMidiInputCount = 3;
 inline constexpr std::uint8_t kKeyboardBroadcastInput = 3;
 inline constexpr std::uint8_t kArpeggiatorInput = 4;
-inline constexpr std::uint8_t kSequencerInput = 5;
-inline constexpr std::size_t kRoutableMidiInputCount = 6;
+inline constexpr std::size_t kRoutableMidiInputCount = 5;
 inline constexpr std::uint8_t kAllMidiInputs = 0xff;
 inline constexpr std::uint8_t kMidiNoteCount = 128;
 
@@ -49,8 +48,7 @@ struct ModuleConfig final {
     lowNote = std::min<std::uint8_t>(lowNote, 127);
     highNote = std::min<std::uint8_t>(highNote, 127);
     if (lowNote > highNote) std::swap(lowNote, highNote);
-    if (midiInputSlot != kAllMidiInputs && midiInputSlot != kArpeggiatorInput &&
-        midiInputSlot != kSequencerInput) {
+    if (midiInputSlot != kAllMidiInputs && midiInputSlot != kArpeggiatorInput) {
       midiInputSlot = std::min<std::uint8_t>(midiInputSlot, static_cast<std::uint8_t>(kMidiInputCount - 1));
     }
     octaveShift = std::clamp<std::int8_t>(octaveShift, -3, 3);

@@ -1,5 +1,19 @@
 import type { MidiInputDevice } from '../midi/MidiInputService';
-import { createModuleEffectCardsMarkup, type ModuleProcessorReplacement } from './ModuleEffectsView';
+import {
+  createModuleChorusMarkup,
+  createModuleCompressorMarkup,
+  createModuleDelayMarkup,
+  createModuleReverbMarkup,
+  createModuleRotaryMarkup,
+  readModuleChorusSettings,
+  readModuleCompressorSettings,
+  readModuleDelaySettings,
+  readModuleReverbSettings,
+  readModuleRotarySettings,
+  type ModuleProcessorReplacement,
+} from './ModuleEffectsView';
+import { createArpeggiatorMarkup, readArpeggiatorSettings } from './PatternModulesView';
+import { createTranceGateMarkup, readTranceGateSettings } from './TranceGateView';
 import { createAudioRouteOptions, type ModuleOutputRoute } from '../audio/AudioOutputService';
 import { createVelocityCardMarkup, readVelocityLimit } from './VelocityCurveView';
 import { createParameterKnobMarkup } from './ParameterKnobView';
@@ -57,15 +71,10 @@ export function createModuleModulationCardMarkup(
     ? (['user', 'lfo'] as const)
     : (['user', 'lfo', 'tremolo'] as const);
   const labels: Record<ModuleModulationMode, string> = { user: 'User', lfo: 'LFO', tremolo: 'Tremolo' };
-  const status = owner === 'synth'
-    ? mode === 'lfo' ? 'LFO do Synth' : 'Roda sem efeito'
-    : mode === 'lfo' ? `Pitch · ${rate.toFixed(2)} Hz`
-    : mode === 'tremolo' ? `Tremolo · ${rate.toFixed(2)} Hz` : 'SF2 · User';
   return `
     <article class="module-mod-card${owner === 'synth' ? ' module-mod-card--synth' : ''}" data-module-mod-card>
       <header>
         <strong>Mod</strong>
-        <small>${status}</small>
       </header>
       <div role="group" aria-label="Modo da roda Mod" data-module-modulation-modes="${modes.length}">
         ${modes.map((value) => `
@@ -86,10 +95,11 @@ export function createModuleModulationCardMarkup(
   `;
 }
 
-// Gain do módulo: um trim em dB somado ao fader da tela principal. Nasce em
-// 0 dB, ou seja, sem mudar nada.
+// Gain do módulo: ganho de entrada, antes do EQ e do compressor. Serve para
+// empurrar o sinal nos processadores; o volume de saída continua sendo só do
+// fader da tela principal. Nasce em 0 dB, ou seja, sem mudar nada.
 export const MODULE_GAIN_MIN_DB = -24;
-export const MODULE_GAIN_MAX_DB = 6;
+export const MODULE_GAIN_MAX_DB = 12;
 
 export function readModuleGainDb(settings: Readonly<Record<string, unknown>>): number {
   const value = Number(settings.gainDb);
@@ -171,6 +181,88 @@ const ENVELOPE_CONTROLS: readonly {
   { parameter: 'decayMs', label: 'Decay' },
 ];
 
+// Páginas do Config. O topo (MIDI, saída, Polifonia, Modo) e o rodapé (Gain,
+// Velocity, Glide, Mod) ficam sempre na tela; só o miolo troca de página.
+export type ModuleSettingsPage =
+  'envelope' | 'eq' | 'compressor' | 'chorus' | 'reverb' | 'delay'
+  | 'rotary' | 'arpeggiator' | 'trance-gate';
+export type ModuleSettingsMode = 'default' | 'user';
+
+const MODULE_SETTINGS_PAGE_LABELS: Readonly<Record<ModuleSettingsPage, string>> = {
+  envelope: 'Envelope',
+  eq: 'EQ',
+  compressor: 'Compressor',
+  chorus: 'Chorus',
+  reverb: 'Reverb',
+  delay: 'Delay',
+  rotary: 'Rotary',
+  arpeggiator: 'Arpeggiator',
+  'trance-gate': 'Trance Gate',
+};
+
+export function moduleSettingsPages(
+  processorReplacement: ModuleProcessorReplacement,
+): readonly ModuleSettingsPage[] {
+  const pages: ModuleSettingsPage[] = processorReplacement === 'synth'
+    ? ['eq', 'compressor', 'chorus', 'reverb', 'delay']
+    : ['envelope', 'eq', 'compressor', 'chorus', 'reverb', 'delay'];
+  // O processador próprio do módulo vem depois do Delay.
+  if (processorReplacement === 'rotary') pages.push('rotary');
+  if (processorReplacement === 'arpeggiator') pages.push('arpeggiator');
+  if (processorReplacement === 'trance-gate') pages.push('trance-gate');
+  return pages;
+}
+
+export function isModuleSettingsPage(value: string | undefined): value is ModuleSettingsPage {
+  return value !== undefined && value in MODULE_SETTINGS_PAGE_LABELS;
+}
+
+// ON/OFF da página: o Envelope não tem; o EQ e os processadores têm.
+export function moduleSettingsPagePower(
+  page: ModuleSettingsPage,
+  settings: Readonly<Record<string, unknown>>,
+): boolean | null {
+  if (page === 'eq') return settings.eqEnabled !== false;
+  if (page === 'compressor') return readModuleCompressorSettings(settings.compressor).enabled;
+  if (page === 'chorus') return readModuleChorusSettings(settings.chorus).enabled;
+  if (page === 'reverb') return readModuleReverbSettings(settings.reverb).enabled;
+  if (page === 'delay') return readModuleDelaySettings(settings.delay).enabled;
+  if (page === 'rotary') return readModuleRotarySettings(settings.rotary).enabled;
+  if (page === 'arpeggiator') return readArpeggiatorSettings(settings.arpeggiator).enabled;
+  if (page === 'trance-gate') return readTranceGateSettings(settings.tranceGate).enabled;
+  return null;
+}
+
+export function createModuleSettingsPageMarkup(
+  page: ModuleSettingsPage,
+  settings: Readonly<Record<string, unknown>>,
+  bpm: number,
+): string {
+  if (page === 'eq') return createModuleEqMarkup(settings);
+  if (page === 'compressor') return createModuleCompressorMarkup(settings);
+  if (page === 'chorus') return createModuleChorusMarkup(settings);
+  if (page === 'reverb') return createModuleReverbMarkup(settings);
+  if (page === 'delay') return createModuleDelayMarkup(settings, bpm);
+  if (page === 'rotary') return createModuleRotaryMarkup(settings);
+  if (page === 'arpeggiator') return createArpeggiatorMarkup(settings.arpeggiator);
+  if (page === 'trance-gate') return createTranceGateMarkup(settings.tranceGate);
+  return `
+    <div class="module-envelope-grid" aria-label="Envelope do timbre">
+      ${ENVELOPE_CONTROLS.map(({ parameter, label }) => createEnvelopeControl(
+        parameter,
+        label,
+        readEnvelopeTime(
+          settings[parameter],
+          MODULE_ENVELOPE_LIMITS[parameter],
+          MODULE_ENVELOPE_DEFAULTS[parameter],
+        ),
+      )).join('')}
+      ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings))}
+      ${createVelocityLimitCardMarkup(settings)}
+    </div>
+  `;
+}
+
 export function createModuleSettingsMarkup(
   devices: readonly MidiInputDevice[],
   activeDeviceIds: readonly (string | null)[],
@@ -180,7 +272,12 @@ export function createModuleSettingsMarkup(
   audioChannelCount: number,
   audioRoute: ModuleOutputRoute,
   processorReplacement: ModuleProcessorReplacement = 'compressor',
+  activePage: ModuleSettingsPage = 'envelope',
+  settingsMode: ModuleSettingsMode = 'user',
 ): string {
+  const pages = moduleSettingsPages(processorReplacement);
+  const page = pages.includes(activePage) ? activePage : pages[0] as ModuleSettingsPage;
+  const power = moduleSettingsPagePower(page, settings);
   const deviceNames = new Map(devices.map((device) => [device.id, device.name]));
   const options = activeDeviceIds.map((deviceId, index) => {
     if (!deviceId) return '';
@@ -191,13 +288,12 @@ export function createModuleSettingsMarkup(
       </option>
     `;
   }).join('');
-  const eqBands = readModuleEqBands(settings.eqBands);
   const voiceMode = settings.voiceMode === 'mono' ? 'mono' : 'poly';
   // Modo Poly/Mono ao lado da Polifonia nos módulos 1 a 7; o Synth tem o dele no editor.
   const hasVoiceSwitch = processorReplacement !== 'synth';
 
   return `
-    <section class="module-settings-panel${processorReplacement === 'synth' ? ' module-settings-panel--synth' : ''}${hasVoiceSwitch ? ' module-settings-panel--voice-switch' : ''}" aria-label="Configurações do timbre">
+    <section class="module-settings-panel${processorReplacement === 'synth' ? ' module-settings-panel--synth' : ''}${hasVoiceSwitch ? ' module-settings-panel--voice-switch' : ''}${settingsMode === 'default' && hasVoiceSwitch ? ' is-default-mode' : ''}" aria-label="Configurações do timbre" data-module-settings-mode-active="${settingsMode}">
       <div class="module-settings-io-row">
         <label class="app-settings-field module-settings-device">
           <span>Dispositivo MIDI</span>
@@ -217,10 +313,9 @@ export function createModuleSettingsMarkup(
           </select>
         </label>
 
-        <!-- Reset de todos os parâmetros do módulo: acima do Modo Poly/Mono, ou
-             acima da Polifonia no Synth (8), que não tem Modo aqui. -->
         <div class="module-settings-control-stack">
-          ${hasVoiceSwitch ? '' : '<button class="module-settings-reset-button" type="button" data-module-setting-action="reset-module">Reset</button>'}
+          ${hasVoiceSwitch ? `<button class="module-settings-source-button${settingsMode === 'default' ? ' is-selected' : ''}" type="button"
+            data-module-settings-mode="default" aria-pressed="${settingsMode === 'default'}">Default</button>` : ''}
           <button class="module-polyphony-button" type="button" data-module-setting-action="open-polyphony">
             <span>Polifonia</span>
             <strong>${Math.round(Math.min(128, Math.max(1, Number(settings.polyphony) || 128)))}</strong>
@@ -229,7 +324,8 @@ export function createModuleSettingsMarkup(
 
         ${hasVoiceSwitch ? `
           <div class="module-settings-control-stack">
-            <button class="module-settings-reset-button" type="button" data-module-setting-action="reset-module">Reset</button>
+            <button class="module-settings-source-button${settingsMode === 'user' ? ' is-selected' : ''}" type="button"
+              data-module-settings-mode="user" aria-pressed="${settingsMode === 'user'}">User</button>
             <button class="module-voice-mode-button is-${voiceMode}" type="button" data-module-setting-action="toggle-voice-mode" aria-pressed="${voiceMode === 'mono'}">
               <span>Modo</span>
               <strong>${voiceMode === 'mono' ? 'Mono' : 'Poly'}</strong>
@@ -238,48 +334,22 @@ export function createModuleSettingsMarkup(
         ` : ''}
       </div>
 
-      <div class="module-settings-workspace">
-        ${processorReplacement === 'synth' ? '' : `<div class="module-envelope-grid" aria-label="Envelope do timbre">
-          ${ENVELOPE_CONTROLS.map(({ parameter, label }) => createEnvelopeControl(
-            parameter,
-            label,
-            readEnvelopeTime(
-              settings[parameter],
-              MODULE_ENVELOPE_LIMITS[parameter],
-              MODULE_ENVELOPE_DEFAULTS[parameter],
-            ),
-          )).join('')}
-          ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings))}
-          ${createVelocityLimitCardMarkup(settings)}
-        </div>`}
-
-        <div class="module-processors-grid">
-          <article class="module-eq-card">
-            <button type="button" data-module-setting-action="open-eq">EQ</button>
-            <div class="module-eq-preview" aria-label="Prévia do equalizador de cinco bandas">
-              <svg viewBox="0 0 420 170" role="img" aria-label="Equalizador de 10 Hz a 20 kHz com cinco bandas">
-                <defs>
-                  <linearGradient id="module-eq-preview-shadow" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#ffab32" stop-opacity="0.28" />
-                    <stop offset="100%" stop-color="#ff7a18" stop-opacity="0.03" />
-                  </linearGradient>
-                </defs>
-                <g class="module-eq-preview__grid">
-                  <path d="M0 28H420M0 57H420M0 85H420M0 113H420M0 142H420" />
-                  <path d="M35 0V170M70 0V170M105 0V170M140 0V170M175 0V170M210 0V170M245 0V170M280 0V170M315 0V170M350 0V170M385 0V170" />
-                </g>
-                <path class="module-eq-preview__curve-shadow" d="${createEqShadowPath(eqBands, 420, 170)}" />
-                <path class="module-eq-preview__curve" d="${createEqCurve(eqBands, 420, 170)}" />
-                <g class="module-eq-preview__bands">
-                  ${eqBands.map((band, index) => `<circle cx="${eqXFromFrequency(band.frequency, 420)}" cy="${eqYFromGain(band.gain, 170)}" r="5" style="--eq-band-color:${EQ_BAND_COLORS[index]}" />`).join('')}
-                </g>
-              </svg>
-              <span>10 Hz</span>
-              <span>20 kHz</span>
-            </div>
-          </article>
-          ${createModuleEffectCardsMarkup(settings, bpm, processorReplacement)}
+      <div class="module-settings-pages">
+        <div role="tablist" aria-label="Páginas da configuração">
+          ${pages.map((item) => `
+            <button type="button" role="tab" data-module-settings-page="${item}"
+              class="${item === page ? 'is-selected' : ''}"
+              aria-selected="${item === page}">${MODULE_SETTINGS_PAGE_LABELS[item]}</button>
+          `).join('')}
         </div>
+        ${power === null ? '' : `
+          <button class="module-settings-reset-button" type="button"
+            data-modal-action="reset-processor" data-reset-processor="${page}">Reset</button>
+        `}
+      </div>
+
+      <div class="module-settings-workspace" data-module-settings-workspace data-page="${page}">
+        ${createModuleSettingsPageMarkup(page, settings, bpm)}
       </div>
       <div class="module-settings-bottom-row">
         ${createModuleGainCardMarkup(settings)}

@@ -1,7 +1,7 @@
 import { createParameterKnobMarkup } from './ParameterKnobView';
 
 export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary' | 'chorus';
-export type ModuleProcessorReplacement = 'compressor' | 'chorus' | 'rotary' | 'arpeggiator' | 'sequencer' | 'synth';
+export type ModuleProcessorReplacement = 'compressor' | 'chorus' | 'rotary' | 'arpeggiator' | 'trance-gate' | 'synth';
 
 export type RotarySpeed = 'brake' | 'slow' | 'fast';
 export interface ModuleRotarySettings {
@@ -152,7 +152,7 @@ function createProcessorShortcutCard(
 ): string {
   const label = replacement === 'arpeggiator'
     ? 'Arpeggiator'
-    : replacement === 'sequencer' ? 'Trance Gate'
+    : replacement === 'trance-gate' ? 'Trance Gate'
       : replacement === 'rotary' ? 'Rotary' : 'Chorus';
   const secondEnabled = replacement === 'chorus' ? chorusEnabled : null;
   return `
@@ -191,8 +191,32 @@ export function createModuleCompressorMarkup(settings: Readonly<Record<string, u
   `;
 }
 
+// Três ambientes prontos: o botão só escreve Decay, Dampen e Size; o Mix
+// continua sendo escolha de quem toca.
+export const REVERB_SPACES = {
+  room: { decay: 1.2, dampen: 62, size: 18 },
+  hall: { decay: 4.5, dampen: 34, size: 78 },
+  stage: { decay: 2.2, dampen: 48, size: 46 },
+} as const;
+
+export type ReverbSpace = keyof typeof REVERB_SPACES;
+
+export function isReverbSpace(value: string | undefined): value is ReverbSpace {
+  return value === 'room' || value === 'hall' || value === 'stage';
+}
+
+function currentReverbSpace(value: ModuleReverbSettings): ReverbSpace | null {
+  for (const [name, space] of Object.entries(REVERB_SPACES) as [ReverbSpace, typeof REVERB_SPACES.room][]) {
+    if (Math.abs(value.decay - space.decay) < 0.05
+      && Math.round(value.dampen) === space.dampen
+      && Math.round(value.size) === space.size) return name;
+  }
+  return null;
+}
+
 export function createModuleReverbMarkup(settings: Readonly<Record<string, unknown>>): string {
   const value = readModuleReverbSettings(settings.reverb);
+  const space = currentReverbSpace(value);
   const controls: EffectControlDefinition[] = [
     control('decay', 'Decay', 0.1, 20, 0.1, value.decay, `${formatNumber(value.decay)} s`),
     control('dampen', 'Dampen', 0, 100, 1, value.dampen, `${Math.round(value.dampen)}%`),
@@ -200,11 +224,20 @@ export function createModuleReverbMarkup(settings: Readonly<Record<string, unkno
     control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
   ];
   return `
-    <section class="module-effect-editor module-reverb-editor" data-module-effect-editor="reverb">
-      <div class="module-effect-controls module-effect-controls--reverb">
-        ${controls.map((item) => createEffectKnob('reverb', item)).join('')}
+    <div class="module-reverb-page">
+      <div class="module-reverb-spaces" role="group" aria-label="Ambiente do reverb">
+        ${(['room', 'hall', 'stage'] as const).map((item) => `
+          <button type="button" data-module-reverb-space="${item}"
+            class="${item === space ? 'is-selected' : ''}"
+            aria-pressed="${item === space}">${item === 'room' ? 'Room' : item === 'hall' ? 'Hall' : 'Stage'}</button>
+        `).join('')}
       </div>
-    </section>
+      <section class="module-effect-editor module-reverb-editor" data-module-effect-editor="reverb">
+        <div class="module-effect-controls module-effect-controls--reverb">
+          ${controls.map((item) => createEffectKnob('reverb', item)).join('')}
+        </div>
+      </section>
+    </div>
   `;
 }
 
@@ -255,7 +288,6 @@ export function createModuleRotaryMarkup(settings: Readonly<Record<string, unkno
     control('fastHz', 'Fast', 2, 10, 0.01, value.fastHz, `${value.fastHz.toFixed(2)} Hz`),
     control('rampSeconds', 'Acceleration', 0.1, 10, 0.1, value.rampSeconds, `${value.rampSeconds.toFixed(1)} s`),
     control('depth', 'Depth', 0, 100, 1, value.depth, `${Math.round(value.depth)}%`),
-    control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
   ];
   return `
     <section class="module-effect-editor module-rotary-editor" data-module-effect-editor="rotary">
@@ -282,21 +314,23 @@ export function createModuleDelayMarkup(settings: Readonly<Record<string, unknow
     control('milliseconds', 'Delay', 1, 2_000, 1, milliseconds, value.sync ? `${Math.round(bpm)} BPM` : `${Math.round(milliseconds)} ms`),
   ];
   return `
-    <section class="module-effect-editor module-delay-editor" data-module-effect-editor="delay">
-      <div class="module-delay-editor__display">
-        <button type="button" data-module-delay-tap${value.sync ? ' disabled' : ''}>Tap</button>
-        <output data-module-delay-display>${value.sync ? `${Math.round(bpm)} BPM` : `${Math.round(milliseconds)} ms`}</output>
-      </div>
+    <div class="module-delay-page">
       <div class="module-delay-editor__divisions" role="group" aria-label="Divisão do delay">
         ${DELAY_DIVISIONS.map((division) => `
           <button type="button" data-module-delay-division="${division}" class="${division === value.division ? 'is-selected' : ''}" aria-pressed="${division === value.division}">${division}</button>
         `).join('')}
         <button type="button" data-module-delay-sync class="${value.sync ? 'is-selected' : ''}" aria-pressed="${value.sync}">Sync</button>
       </div>
-      <div class="module-effect-controls module-effect-controls--delay">
-        ${controls.map((item) => createEffectKnob('delay', item, item.key === 'milliseconds' && value.sync)).join('')}
-      </div>
-    </section>
+      <section class="module-effect-editor module-delay-editor" data-module-effect-editor="delay">
+        <div class="module-delay-editor__display">
+          <button type="button" data-module-delay-tap${value.sync ? ' disabled' : ''}>Tap</button>
+          <output data-module-delay-display>${value.sync ? `${Math.round(bpm)} BPM` : `${Math.round(milliseconds)} ms`}</output>
+        </div>
+        <div class="module-effect-controls module-effect-controls--delay">
+          ${controls.map((item) => createEffectKnob('delay', item, item.key === 'milliseconds' && value.sync)).join('')}
+        </div>
+      </section>
+    </div>
   `;
 }
 
@@ -349,7 +383,8 @@ export function readModuleRotarySettings(value: unknown): ModuleRotarySettings {
     fastHz: numberInRange(source.fastHz, 2, 10, DEFAULT_ROTARY.fastHz),
     rampSeconds: numberInRange(source.rampSeconds, 0.1, 10, DEFAULT_ROTARY.rampSeconds),
     depth: numberInRange(source.depth, 0, 100, DEFAULT_ROTARY.depth),
-    mix: numberInRange(source.mix, 0, 100, DEFAULT_ROTARY.mix),
+    // O Rotary não tem Mix: a caixa toca inteira, sempre em 100%.
+    mix: 100,
   };
 }
 

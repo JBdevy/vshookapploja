@@ -1,5 +1,12 @@
 import type { SoundCategoryDefinition, SoundCategoryId } from './SoundCategories';
 
+export interface ModuleSoundSettings {
+  modules1To4: Readonly<Record<string, unknown>>;
+  module5: Readonly<Record<string, unknown>>;
+  module6: Readonly<Record<string, unknown>>;
+  module7: Readonly<Record<string, unknown>>;
+}
+
 export interface FixedSoundDefinition {
   id: string;
   name: string;
@@ -10,6 +17,7 @@ export interface FixedSoundDefinition {
   catalogVersion: number;
   byteSize?: number;
   sha256?: string;
+  moduleSettings?: ModuleSoundSettings;
 }
 
 export interface SoundCatalogCategory extends SoundCategoryDefinition {
@@ -33,6 +41,7 @@ export interface SoundCatalogPayload {
   updatedAt: string | null;
   categories: readonly SoundCatalogCategory[];
   performanceAssets: readonly PerformanceAssetDefinition[];
+  defaultSettings?: ModuleSoundSettings;
 }
 
 export class SoundCatalog {
@@ -41,12 +50,14 @@ export class SoundCatalog {
   readonly sounds: readonly FixedSoundDefinition[];
   readonly categories: readonly SoundCatalogCategory[];
   readonly performanceAssets: readonly PerformanceAssetDefinition[];
+  readonly defaultSettings: ModuleSoundSettings;
 
   constructor(payload: SoundCatalogPayload = emptySoundCatalog()) {
     const validated = validateSoundCatalog(payload);
     this.version = validated.revision;
     this.categories = validated.categories;
     this.performanceAssets = validated.performanceAssets;
+    this.defaultSettings = validated.defaultSettings ?? emptyModuleSettings();
     this.sounds = validated.categories.flatMap((category) => category.sounds);
     this.soundsById = new Map(this.sounds.map((sound) => [sound.id, sound]));
   }
@@ -74,7 +85,7 @@ export class SoundCatalog {
 }
 
 export function emptySoundCatalog(): SoundCatalogPayload {
-  return { revision: 1, updatedAt: null, categories: [], performanceAssets: [] };
+  return { revision: 1, updatedAt: null, categories: [], performanceAssets: [], defaultSettings: emptyModuleSettings() };
 }
 
 export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
@@ -101,6 +112,7 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
         previewObjectKey: optionalAssetReference(rawSound.previewObjectKey, rawSound.previewUrl),
         catalogVersion: positiveInteger(rawSound.assetVersion, revision),
         byteSize: optionalPositiveInteger(rawSound.byteSize),
+        moduleSettings: readModuleSettings(rawSound.moduleSettings),
         order: positiveInteger(rawSound.order, soundIndex + 1),
       });
     }).sort((left, right) => left.order - right.order) : [];
@@ -109,8 +121,6 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
       name: safeName(rawCategory.name, 80),
       color: safeColor(rawCategory.color),
       order: positiveInteger(rawCategory.order, categoryIndex + 1),
-      moduleRole: rawCategory.moduleRole === 'sequencer' || rawCategory.moduleRole === 'mono'
-        ? rawCategory.moduleRole : null,
       visibleModule: visibleModule(rawCategory.visibleModule),
       sounds,
     });
@@ -139,7 +149,36 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : null,
     categories: Object.freeze(categories),
     performanceAssets: Object.freeze(performanceAssets),
+    defaultSettings: readModuleSettings(value.defaultSettings),
   });
+}
+
+function emptyModuleSettings(): ModuleSoundSettings {
+  return Object.freeze({
+    modules1To4: Object.freeze({}),
+    module5: Object.freeze({}),
+    module6: Object.freeze({}),
+    module7: Object.freeze({}),
+  });
+}
+
+function readModuleSettings(value: unknown): ModuleSoundSettings {
+  const source = isRecord(value) ? value : {};
+  return Object.freeze({
+    modules1To4: safeSettingsObject(source.modules1To4),
+    module5: safeSettingsObject(source.module5),
+    module6: safeSettingsObject(source.module6),
+    module7: safeSettingsObject(source.module7),
+  });
+}
+
+function safeSettingsObject(value: unknown): Readonly<Record<string, unknown>> {
+  if (!isRecord(value)) return Object.freeze({});
+  try {
+    return Object.freeze(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
+  } catch {
+    return Object.freeze({});
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

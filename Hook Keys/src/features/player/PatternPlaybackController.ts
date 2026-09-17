@@ -1,12 +1,10 @@
 import {
   patternStepMilliseconds,
   readArpeggiatorSettings,
-  readSequencerSettings,
   type ArpeggiatorSettings,
 } from './PatternModulesView';
 
 export const ARPEGGIATOR_ENGINE_INPUT = 4;
-export const SEQUENCER_ENGINE_INPUT = 5;
 
 export interface PatternInput {
   inputId: string | null;
@@ -18,14 +16,6 @@ export interface PatternInput {
 export interface PatternPlaybackSnapshot {
   bpm: number;
   arpeggiator: {
-    moduleEnabled: boolean;
-    hasSound: boolean;
-    midiInputId: string | null;
-    lowNote: number;
-    highNote: number;
-    settings: unknown;
-  };
-  sequencer: {
     moduleEnabled: boolean;
     hasSound: boolean;
     midiInputId: string | null;
@@ -51,48 +41,21 @@ interface PlaybackState {
   nextAt: number | null;
 }
 
-type PatternKind = 'arpeggiator' | 'sequencer';
-
 export class PatternPlaybackController {
   private order = 0;
-  private readonly arpeggiator = createPlaybackState();
-  private readonly sequencer = createPlaybackState();
+  private readonly state = createPlaybackState();
 
   constructor(
     private readonly snapshot: () => PatternPlaybackSnapshot,
     private readonly send: (slot: number, status: number, note: number, velocity: number) => void,
-    private readonly pulse: (kind: PatternKind, step: number | null) => void = () => {},
+    private readonly pulse: (step: number | null) => void = () => {},
   ) {}
 
   handleInput(input: PatternInput): void {
-    const snapshot = this.snapshot();
-    this.handleForKind('arpeggiator', this.arpeggiator, snapshot.arpeggiator, input);
-    this.handleForKind('sequencer', this.sequencer, snapshot.sequencer, input);
-  }
-
-  settingsChanged(): void {
-    const snapshot = this.snapshot();
-    this.reconcile('arpeggiator', this.arpeggiator, isArpeggiatorActive(snapshot));
-    this.reconcile('sequencer', this.sequencer, isSequencerActive(snapshot));
-  }
-
-  reset(): void {
-    this.stop('arpeggiator', this.arpeggiator, true);
-    this.stop('sequencer', this.sequencer, true);
-  }
-
-  destroy(): void {
-    this.reset();
-  }
-
-  private handleForKind(
-    kind: PatternKind,
-    state: PlaybackState,
-    config: PatternPlaybackSnapshot[PatternKind],
-    input: PatternInput,
-  ): void {
-    if (!config.moduleEnabled || !config.hasSound || !patternEnabled(kind, config.settings)) {
-      if (state.held.length > 0 || state.timer !== null) this.stop(kind, state, true);
+    const config = this.snapshot().arpeggiator;
+    const state = this.state;
+    if (!config.moduleEnabled || !config.hasSound || !readArpeggiatorSettings(config.settings).enabled) {
+      if (state.held.length > 0 || state.timer !== null) this.stop(true);
       return;
     }
     if (!acceptsInput(config.midiInputId, input.inputId)) return;
@@ -109,92 +72,86 @@ export class PatternPlaybackController {
       state.held.push(note);
       if (state.timer === null) {
         state.step = 0;
-        this.tick(kind, state);
+        this.tick();
       }
       return;
     }
     if (existing >= 0) state.held.splice(existing, 1);
-    if (state.held.length === 0) this.stop(kind, state, false);
+    if (state.held.length === 0) this.stop(false);
   }
 
-  private reconcile(kind: PatternKind, state: PlaybackState, active: boolean): void {
-    if (!active) this.stop(kind, state, true);
-    else if (state.held.length > 0 && state.timer === null) this.tick(kind, state);
+  settingsChanged(): void {
+    const active = isArpeggiatorActive(this.snapshot());
+    if (!active) this.stop(true);
+    else if (this.state.held.length > 0 && this.state.timer === null) this.tick();
   }
 
-  private tick(kind: PatternKind, state: PlaybackState): void {
+  reset(): void {
+    this.stop(true);
+  }
+
+  destroy(): void {
+    this.reset();
+  }
+
+  private tick(): void {
+    const state = this.state;
     state.timer = null;
     const snapshot = this.snapshot();
-    const active = kind === 'arpeggiator' ? isArpeggiatorActive(snapshot) : isSequencerActive(snapshot);
-    if (!active || state.held.length === 0) {
-      this.stop(kind, state, !active);
+    if (!isArpeggiatorActive(snapshot) || state.held.length === 0) {
+      this.stop(!isArpeggiatorActive(snapshot));
       return;
     }
 
-    if (state.playingNote !== null) this.noteOff(kind, state);
-    if (kind === 'arpeggiator') {
-      const settings = readArpeggiatorSettings(snapshot.arpeggiator.settings);
-      const notes = arpeggiatorNotes(state.held, settings);
-      if (notes.length > 0) {
-        const note = notes[state.step % notes.length];
-        if (note !== undefined) {
-          const velocity = velocityForNote(state.held, note);
-          this.noteOn(kind, state, note, velocity, settings.gate, patternStepMilliseconds(snapshot.bpm, settings.division, settings.swing, state.step));
-        }
+    if (state.playingNote !== null) this.noteOff();
+    const settings = readArpeggiatorSettings(snapshot.arpeggiator.settings);
+    const notes = arpeggiatorNotes(state.held, settings);
+    if (notes.length > 0) {
+      const note = notes[state.step % notes.length];
+      if (note !== undefined) {
+        const velocity = velocityForNote(state.held, note);
+        this.noteOn(note, velocity, settings.gate, patternStepMilliseconds(snapshot.bpm, settings.division, settings.swing, state.step));
       }
-      this.pulse(kind, state.step % Math.max(1, notes.length));
-      const duration = patternStepMilliseconds(snapshot.bpm, settings.division, settings.swing, state.step);
-      state.step = (state.step + 1) % Math.max(1, notes.length);
-      this.scheduleNext(kind, state, duration);
-      return;
     }
-
-    const settings = readSequencerSettings(snapshot.sequencer.settings);
-    const stepIndex = state.step % settings.length;
-    const step = settings.steps[stepIndex];
-    const root = newestHeldNote(state.held);
-    const duration = patternStepMilliseconds(snapshot.bpm, settings.division, settings.swing, stepIndex);
-    if (step?.enabled && root) {
-      const note = clampMidi(root.noteNumber + step.semitone);
-      const velocity = Math.max(1, Math.round((root.velocity * step.velocity) / 127));
-      this.noteOn(kind, state, note, velocity, step.gate, duration);
-    }
-    this.pulse(kind, stepIndex);
-    state.step = (stepIndex + 1) % settings.length;
-    this.scheduleNext(kind, state, duration);
+    this.pulse(state.step % Math.max(1, notes.length));
+    const duration = patternStepMilliseconds(snapshot.bpm, settings.division, settings.swing, state.step);
+    state.step = (state.step + 1) % Math.max(1, notes.length);
+    this.scheduleNext(duration);
   }
 
-  private scheduleNext(kind: PatternKind, state: PlaybackState, duration: number): void {
+  private scheduleNext(duration: number): void {
+    const state = this.state;
     const now = Date.now();
     state.nextAt = (state.nextAt ?? now) + duration;
-    state.timer = window.setTimeout(() => this.tick(kind, state), Math.max(0, state.nextAt - now));
+    state.timer = window.setTimeout(() => this.tick(), Math.max(0, state.nextAt - now));
   }
 
-  private noteOn(kind: PatternKind, state: PlaybackState, note: number, velocity: number, gate: number, duration: number): void {
-    const slot = kind === 'arpeggiator' ? ARPEGGIATOR_ENGINE_INPUT : SEQUENCER_ENGINE_INPUT;
+  private noteOn(note: number, velocity: number, gate: number, duration: number): void {
+    const state = this.state;
     state.playingNote = note;
-    this.send(slot, 0x90, note, velocity);
+    this.send(ARPEGGIATOR_ENGINE_INPUT, 0x90, note, velocity);
     if (state.releaseTimer !== null) window.clearTimeout(state.releaseTimer);
-    state.releaseTimer = window.setTimeout(() => this.noteOff(kind, state), Math.max(8, duration * Math.min(1, Math.max(0.1, gate / 100))));
+    state.releaseTimer = window.setTimeout(() => this.noteOff(), Math.max(8, duration * Math.min(1, Math.max(0.1, gate / 100))));
   }
 
-  private noteOff(kind: PatternKind, state: PlaybackState): void {
+  private noteOff(): void {
+    const state = this.state;
     if (state.releaseTimer !== null) window.clearTimeout(state.releaseTimer);
     state.releaseTimer = null;
     if (state.playingNote === null) return;
-    const slot = kind === 'arpeggiator' ? ARPEGGIATOR_ENGINE_INPUT : SEQUENCER_ENGINE_INPUT;
-    this.send(slot, 0x80, state.playingNote, 0);
+    this.send(ARPEGGIATOR_ENGINE_INPUT, 0x80, state.playingNote, 0);
     state.playingNote = null;
   }
 
-  private stop(kind: PatternKind, state: PlaybackState, clearHeld: boolean): void {
+  private stop(clearHeld: boolean): void {
+    const state = this.state;
     if (state.timer !== null) window.clearTimeout(state.timer);
     state.timer = null;
-    this.noteOff(kind, state);
+    this.noteOff();
     state.step = 0;
     state.nextAt = null;
     if (clearHeld) state.held = [];
-    this.pulse(kind, null);
+    this.pulse(null);
   }
 }
 
@@ -205,15 +162,6 @@ function createPlaybackState(): PlaybackState {
 function isArpeggiatorActive(snapshot: PatternPlaybackSnapshot): boolean {
   return snapshot.arpeggiator.moduleEnabled && snapshot.arpeggiator.hasSound
     && readArpeggiatorSettings(snapshot.arpeggiator.settings).enabled;
-}
-
-function isSequencerActive(snapshot: PatternPlaybackSnapshot): boolean {
-  return snapshot.sequencer.moduleEnabled && snapshot.sequencer.hasSound
-    && readSequencerSettings(snapshot.sequencer.settings).enabled;
-}
-
-function patternEnabled(kind: PatternKind, settings: unknown): boolean {
-  return kind === 'arpeggiator' ? readArpeggiatorSettings(settings).enabled : readSequencerSettings(settings).enabled;
 }
 
 function acceptsInput(configured: string | null, incoming: string | null): boolean {

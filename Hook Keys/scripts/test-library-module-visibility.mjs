@@ -15,9 +15,9 @@ function load(path, modules = {}, globals = {}) {
   return context.exports;
 }
 const catalog = load('../src/features/sound-library/SoundCatalog.ts');
-const category = (id, visibleModule, moduleRole = null) => ({ id, name: id, color: '#118ab2', sounds: [], visibleModule, moduleRole });
+const category = (id, visibleModule) => ({ id, name: id, color: '#118ab2', sounds: [], visibleModule });
 const payload = { revision: 2, updatedAt: null, categories: [
-  category('legacy', undefined, 'sequencer'), category('all', null),
+  category('legacy', undefined), category('all', null),
   ...Array.from({ length: 8 }, (_, index) => category(`only-${index + 1}`, index + 1)),
 ] };
 
@@ -86,4 +86,27 @@ test('private R2 object keys and legacy URLs are both accepted by the catalog', 
       sounds: [{ id: 'unsafe-sound', name: 'Unsafe', color: '#118ab2', sf2ObjectKey: '../outside.sf2' }],
     }],
   }), /sound_catalog_object_key_invalid/);
+});
+
+test('catalog keeps Global settings and per-sound scopes for modules 1-4, 5, 6 and 7', () => {
+  const settings = {
+    modules1To4: { attackMs: 3 },
+    module5: { rotary: { enabled: true } },
+    module6: { arpeggiator: { enabled: false } },
+    module7: { tranceGate: { enabled: true } },
+  };
+  const sounds = new catalog.SoundCatalog({
+    revision: 4,
+    defaultSettings: settings,
+    categories: [{
+      ...category('configured', null),
+      sounds: [{
+        id: 'configured-sound', name: 'Configured', color: '#118ab2',
+        sf2ObjectKey: 'library/configured.sf2', moduleSettings: settings,
+      }],
+    }],
+  });
+  assert.equal(sounds.defaultSettings.modules1To4.attackMs, 3);
+  assert.equal(sounds.get('configured-sound').moduleSettings.module5.rotary.enabled, true);
+  assert.equal(sounds.get('configured-sound').moduleSettings.module7.tranceGate.enabled, true);
 });

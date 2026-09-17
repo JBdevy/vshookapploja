@@ -67,7 +67,19 @@ const synthView = transpile('../src/features/player/SynthModuleView.ts', {
 const settingsView = transpile('../src/features/player/ModuleSettingsView.ts', {
   './ParameterKnobView': knobView,
   './GlideView': glideView,
-  './ModuleEffectsView': { createModuleEffectCardsMarkup: () => '' },
+  './ModuleEffectsView': {
+    createModuleEffectCardsMarkup: () => '',
+    createModuleChorusMarkup: () => '', createModuleCompressorMarkup: () => '',
+    createModuleDelayMarkup: () => '', createModuleReverbMarkup: () => '',
+    createModuleRotaryMarkup: () => '',
+    readModuleChorusSettings: () => ({ enabled: false }),
+    readModuleCompressorSettings: () => ({ enabled: false }),
+    readModuleDelaySettings: () => ({ enabled: false }),
+    readModuleReverbSettings: () => ({ enabled: false }),
+    readModuleRotarySettings: () => ({ enabled: false }),
+  },
+  './PatternModulesView': { createArpeggiatorMarkup: () => '', readArpeggiatorSettings: () => ({ enabled: false }) },
+  './TranceGateView': { createTranceGateMarkup: () => '', readTranceGateSettings: () => ({ enabled: false }) },
   '../audio/AudioOutputService': { createAudioRouteOptions: () => '' },
   './VelocityCurveView': {
     createVelocityCardMarkup: () => '',
@@ -102,7 +114,7 @@ test('every Synth parameter uses exactly the same knob face as timbre parameters
   assert.match(synthMarkup, /Volume OSC 2/);
 });
 
-test('Glide Sync follows one BPM beat without sequencer divisions and preserves manual time', () => {
+test('Glide Sync follows one BPM beat without pattern divisions and preserves manual time', () => {
   const manual = glideView.createGlideCardMarkup({ glideMs: 450 }, 120);
   assert.match(manual, /data-module-glide-card/);
   assert.doesNotMatch(manual, /data-glide-power/, 'sem ON/OFF: 0 ms é o Glide desligado');
@@ -133,7 +145,8 @@ test('modules 1 through 7 expose equal Velocity, Glide and Mod cards with LFO Pi
   assert.match(markup, /data-module-mod-card/);
   assert.match(markup, /data-module-modulation-mode="lfo"\s+class="is-selected"/);
   assert.match(markup, /value="6.85"\s+data-module-modulation-rate/);
-  assert.match(markup, /Pitch · 6\.85 Hz/);
+  assert.match(markup, /<output data-module-modulation-rate-value>6\.85 Hz<\/output>/);
+  assert.doesNotMatch(markup, /<small>[^<]*Hz<\/small>/, 'sem texto solto embaixo de Mod');
   assert.match(markup, /data-module-setting-action="open-filter-velocity"/);
   const user = settingsView.createModuleModulationCardMarkup({ modulationMode: 'user', modulationRateHz: 12 });
   assert.match(user, /data-module-modulation-mode="user"\s+class="is-selected"/);
@@ -143,7 +156,9 @@ test('modules 1 through 7 expose equal Velocity, Glide and Mod cards with LFO Pi
   assert.match(markup, /data-module-modulation-mode="tremolo"/);
   const tremolo = settingsView.createModuleModulationCardMarkup({ modulationMode: 'tremolo', modulationRateHz: 4 });
   assert.match(tremolo, /data-module-modulation-mode="tremolo"\s+class="is-selected"/);
-  assert.match(tremolo, /Tremolo · 4\.00 Hz/);
+  assert.match(tremolo, /<output data-module-modulation-rate-value>4\.00 Hz<\/output>/);
+  // O nome inteiro fica dentro do botão: por isso o card perdeu o texto do topo.
+  assert.match(tremolo, />Tremolo<\/button>/);
   assert.doesNotMatch(tremolo, /data-module-modulation-rate[^>]*disabled/, 'o Rate vale para o Tremolo');
   assert.equal(settingsView.moduleModulationEngineMode('user'), 0);
   assert.equal(settingsView.moduleModulationEngineMode('lfo'), 1);
@@ -289,7 +304,14 @@ test('desktop opens smaller and Param clips every preview inside its available g
     { width: 1100, height: 650, minWidth: 900, minHeight: 520 },
   );
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.player-modal--module-settings \.module-settings-panel\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/s);
+  assert.match(css, /\.player-modal--module-settings \.module-settings-panel\s*\{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/s);
+  assert.match(css, /\.module-effect-controls--chorus\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\);[^}]*grid-template-rows: repeat\(3, minmax\(0, 1fr\)\);/s);
+  assert.match(css, /\.module-reverb-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
+  assert.match(css, /\.module-delay-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
+  assert.match(css, /\.module-delay-editor__divisions\s*\{[^}]*grid-template-columns: repeat\(8, minmax\(0, 1fr\)\);/s);
+  assert.match(css, /\.trance-gate-editor\s*\{[^}]*grid-template-rows: auto auto minmax\(54px, \.75fr\) minmax\(78px, 1fr\) auto;/s);
+  assert.match(css, /\.trance-gate-editor__header\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\);/s);
+  assert.match(css, /\.trance-gate-editor \.pattern-knob \.module-effect-knob__face\s*\{[^}]*width: min\(52px, 7vh\);[^}]*height: min\(52px, 7vh\);/s);
   assert.match(css, /\.player-modal--module-settings :is\(\s*\.module-eq-preview,[\s\S]*?max-height: 100%;/);
   assert.match(css, /html\[data-runtime="desktop"\] \.player-screen--tablet \.player-presets--combined\s*\{[^}]*grid-template-rows:/s);
 });
@@ -319,7 +341,7 @@ test('new module and Synth defaults use zero Attack, 300 ms Release and maximum 
     readModuleRotarySettings: () => ({}), DEFAULT_ARPEGGIATOR_SETTINGS: {},
     FACTORY_MODULE_REVERB: { enabled: true, decay: 10, dampen: 50, size: 0, mix: 50 },
     readTranceGateSettings: () => ({}),
-    DEFAULT_SEQUENCER_SETTINGS: { steps: [] }, DEFAULT_VELOCITY_CURVE: { points: [], userPoints: [] },
+    DEFAULT_VELOCITY_CURVE: { points: [], userPoints: [] },
   };
   vm.runInNewContext(ts.transpileModule(`${factory.getText(ast)}\nexport { createDefaultModuleSettings };`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -658,8 +680,12 @@ test('the five factory Synth presets match the sounds configured in the app', ()
 
 test('Param 1-7 has Limite Velocity beside Cutoff; the Synth has one limit per oscillator', () => {
   const markup = settingsView.createModuleSettingsMarkup([], [], null, { velocityLimit: 100 }, 120, 2, '1+2');
-  assert.match(markup, /module-envelope-grid[\s\S]*?data-module-cutoff[\s\S]*?data-module-velocity-limit-card[\s\S]*?module-processors-grid/,
-    'Limite Velocity fica no envelope, logo depois do Cutoff');
+  assert.match(markup, /module-envelope-grid[\s\S]*?data-module-cutoff[\s\S]*?data-module-velocity-limit-card/,
+    'Limite Velocity fica na página Envelope, logo depois do Cutoff');
+  // O Config virou páginas: o topo e o rodapé ficam, o miolo troca.
+  assert.match(markup, /data-module-settings-page="envelope"[^>]*class="is-selected"/);
+  assert.match(markup, /data-module-settings-page="eq"[\s\S]*?data-module-settings-page="delay"/);
+  assert.doesNotMatch(markup, /data-module-setting-action="reset-module"/, 'o Reset do módulo saiu');
   assert.doesNotMatch(markup.slice(markup.indexOf('module-settings-bottom-row')), /data-module-velocity-limit/,
     'a linha do Velocity não tem o Limite');
   assert.match(markup, /value="100"\s+data-module-velocity-limit/);
@@ -676,4 +702,11 @@ test('Param 1-7 has Limite Velocity beside Cutoff; the Synth has one limit per o
     assert.equal(preset.oscillator1VelocityLimit, 127);
     assert.equal(preset.oscillator2VelocityLimit, 127);
   }
+  const defaultParam = settingsView.createModuleSettingsMarkup(
+    [], [], null, {}, 120, 2, '1+2', 'chorus', 'envelope', 'default');
+  assert.match(defaultParam, /data-module-settings-mode="default" aria-pressed="true"/);
+  assert.match(defaultParam, /data-module-settings-mode="user" aria-pressed="false"/);
+  assert.match(defaultParam, /module-settings-panel[^>]*is-default-mode/);
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.module-settings-panel\.is-default-mode :is\([\s\S]*?filter: grayscale\(1\) brightness\(\.58\);/);
 });

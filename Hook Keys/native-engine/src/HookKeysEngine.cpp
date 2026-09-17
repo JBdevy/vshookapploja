@@ -63,7 +63,7 @@ bool HookKeysEngine::enqueueMidi(MidiMessage message) noexcept {
   if (message.inputSlot >= kMidiInputCount) {
     const auto type = static_cast<std::uint8_t>(message.status & kMessageTypeMask);
     const auto virtualInput = message.inputSlot == kKeyboardBroadcastInput ||
-        message.inputSlot == kArpeggiatorInput || message.inputSlot == kSequencerInput;
+        message.inputSlot == kArpeggiatorInput;
     const auto virtualMessage = type == kNoteOn || type == kNoteOff ||
         (message.inputSlot == kKeyboardBroadcastInput &&
          (type == kControlChange || type == kPitchBend));
@@ -340,10 +340,12 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
       // isso um pad que ficou preso no pedal nunca mais solta.
       const auto pedalRelease = message.data1 == kSustainController && message.data2 < 64;
       if (!config.enabled && !pedalRelease) continue;
-      const auto acceptsInput = config.midiInputSlot == kAllMidiInputs ||
-                                (message.inputSlot == kKeyboardBroadcastInput &&
-                                 config.midiInputSlot != kArpeggiatorInput &&
-                                 config.midiInputSlot != kSequencerInput) ||
+      // O módulo tocado pelo arpeggiator recebe as notas pela entrada gerada,
+      // mas pedal, roda e expressão só existem no teclado físico: para eles
+      // vale qualquer entrada, senão o pedal nunca alcançaria o módulo.
+      const auto generatedNotes = config.midiInputSlot == kArpeggiatorInput;
+      const auto acceptsInput = config.midiInputSlot == kAllMidiInputs || generatedNotes ||
+                                message.inputSlot == kKeyboardBroadcastInput ||
                                 message.inputSlot == config.midiInputSlot;
       if (!acceptsInput) continue;
       if (message.data1 == kSustainController && !config.sustainInputEnabled) continue;
@@ -362,12 +364,12 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
   if (type == kPitchBend) {
     const auto value = static_cast<std::uint16_t>(message.data1 | (message.data2 << 7));
     for (std::size_t index = 0; index < kModuleCount; ++index) {
-      if (modules_[index] != nullptr && configs_[index].enabled &&
-          (configs_[index].midiInputSlot == kAllMidiInputs ||
-           (message.inputSlot == kKeyboardBroadcastInput &&
-            configs_[index].midiInputSlot != kArpeggiatorInput &&
-            configs_[index].midiInputSlot != kSequencerInput) ||
-           message.inputSlot == configs_[index].midiInputSlot)) {
+      const auto& config = configs_[index];
+      const auto generatedNotes = config.midiInputSlot == kArpeggiatorInput;
+      if (modules_[index] != nullptr && config.enabled &&
+          (config.midiInputSlot == kAllMidiInputs || generatedNotes ||
+           message.inputSlot == kKeyboardBroadcastInput ||
+           message.inputSlot == config.midiInputSlot)) {
         modules_[index]->pitchBend(value);
       }
     }
@@ -376,15 +378,13 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
 
 void HookKeysEngine::routeNoteOn(
     std::uint8_t inputSlot, std::uint8_t sourceNote, std::uint8_t velocity) noexcept {
-  const auto generatedModule = inputSlot == kArpeggiatorInput ? 5
-      : inputSlot == kSequencerInput ? 6 : -1;
+  const auto generatedModule = inputSlot == kArpeggiatorInput ? 5 : -1;
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     auto* synth = modules_[index];
     const auto& config = configs_[index];
     const auto generatedForDifferentModule = generatedModule >= 0 &&
         index != static_cast<std::size_t>(generatedModule);
-    const auto generatedConfig = config.midiInputSlot == kArpeggiatorInput ||
-        config.midiInputSlot == kSequencerInput;
+    const auto generatedConfig = config.midiInputSlot == kArpeggiatorInput;
     const auto regularInputMismatch = generatedModule < 0 && (
         (inputSlot == kKeyboardBroadcastInput && generatedConfig) ||
         (inputSlot != kKeyboardBroadcastInput && config.midiInputSlot != kAllMidiInputs &&

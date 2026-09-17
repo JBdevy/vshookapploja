@@ -505,7 +505,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             chorusMix: call.getFloat("chorusMix", 0.35),
             autoFaderEnabled: call.getBool("autoFaderEnabled", false),
             autoFaderBeats: call.getFloat("autoFaderBeats", 1),
-            autoFaderDepthDb: call.getFloat("autoFaderDepthDb", 6)
+            autoFaderDepthDb: call.getFloat("autoFaderDepthDb", 6),
+            inputGainDb: call.getFloat("inputGainDb", 0)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }

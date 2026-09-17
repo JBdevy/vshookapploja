@@ -9,23 +9,8 @@ export interface ArpeggiatorSettings {
   gate: number;
   swing: number;
   autoFaderEnabled: boolean;
-  autoFaderDivision: '1/4' | '1/8';
+  autoFaderDivision: '1/2' | '1/4';
   autoFaderDepthDb: number;
-}
-
-export interface SequencerStep {
-  enabled: boolean;
-  semitone: number;
-  velocity: number;
-  gate: number;
-}
-
-export interface SequencerSettings {
-  enabled: boolean;
-  division: PatternDivision;
-  length: number;
-  swing: number;
-  steps: SequencerStep[];
 }
 
 export const PATTERN_DIVISIONS: readonly PatternDivision[] = ['1/4', '1/8', '1/16', '1/32'];
@@ -46,21 +31,6 @@ export const DEFAULT_ARPEGGIATOR_SETTINGS: Readonly<ArpeggiatorSettings> = Objec
   autoFaderDepthDb: 5,
 });
 
-const DEFAULT_STEP_NOTES = [0, 2, 4, 7, 0, 2, 4, 7, 0, 2, 4, 7, 12, 7, 4, 2] as const;
-
-export const DEFAULT_SEQUENCER_SETTINGS: Readonly<SequencerSettings> = Object.freeze({
-  enabled: false,
-  division: '1/16',
-  length: 16,
-  swing: 0,
-  steps: Object.freeze(DEFAULT_STEP_NOTES.map((semitone) => Object.freeze({
-    enabled: true,
-    semitone,
-    velocity: 110,
-    gate: 72,
-  }))) as unknown as SequencerStep[],
-});
-
 export function readArpeggiatorSettings(value: unknown): ArpeggiatorSettings {
   const source = record(value);
   return {
@@ -71,7 +41,7 @@ export function readArpeggiatorSettings(value: unknown): ArpeggiatorSettings {
     gate: numberInRange(source.gate, 10, 100, DEFAULT_ARPEGGIATOR_SETTINGS.gate),
     swing: numberInRange(source.swing, 0, 75, DEFAULT_ARPEGGIATOR_SETTINGS.swing),
     autoFaderEnabled: source.autoFaderEnabled === true,
-    autoFaderDivision: source.autoFaderDivision === '1/8' ? '1/8' : '1/4',
+    autoFaderDivision: source.autoFaderDivision === '1/2' ? '1/2' : '1/4',
     autoFaderDepthDb: numberInRange(source.autoFaderDepthDb, 0, 40, 5),
   };
 }
@@ -80,7 +50,7 @@ export function readArpeggiatorSettings(value: unknown): ArpeggiatorSettings {
 // volume atual do módulo e volta, uma volta por tempo (1/4) ou colcheia (1/8).
 export function readModuleAutoFaderSettings(value: unknown): {
   enabled: boolean;
-  division: '1/4' | '1/8';
+  division: '1/2' | '1/4';
   depthDb: number;
 } {
   const settings = readArpeggiatorSettings(value);
@@ -88,28 +58,6 @@ export function readModuleAutoFaderSettings(value: unknown): {
     enabled: settings.autoFaderEnabled,
     division: settings.autoFaderDivision,
     depthDb: settings.autoFaderDepthDb,
-  };
-}
-
-export function readSequencerSettings(value: unknown): SequencerSettings {
-  const source = record(value);
-  const sourceSteps = Array.isArray(source.steps) ? source.steps : [];
-  const defaults = DEFAULT_SEQUENCER_SETTINGS.steps;
-  return {
-    enabled: source.enabled === true,
-    division: isPatternDivision(source.division) ? source.division : DEFAULT_SEQUENCER_SETTINGS.division,
-    length: integerInRange(source.length, 1, 16, DEFAULT_SEQUENCER_SETTINGS.length),
-    swing: numberInRange(source.swing, 0, 75, DEFAULT_SEQUENCER_SETTINGS.swing),
-    steps: Array.from({ length: 16 }, (_, index) => {
-      const step = record(sourceSteps[index]);
-      const fallback = defaults[index] ?? { enabled: true, semitone: 0, velocity: 110, gate: 72 };
-      return {
-        enabled: typeof step.enabled === 'boolean' ? step.enabled : fallback.enabled,
-        semitone: integerInRange(step.semitone, -24, 24, fallback.semitone),
-        velocity: integerInRange(step.velocity, 1, 127, fallback.velocity),
-        gate: numberInRange(step.gate, 10, 100, fallback.gate),
-      };
-    }),
   };
 }
 
@@ -136,12 +84,13 @@ export function createArpeggiatorMarkup(value: unknown): string {
           </div>
         </section>
         ${patternKnob('arpeggiator', 'gate', 'Gate', settings.gate, 10, 100, 1, `${Math.round(settings.gate)}%`)}
+        ${patternKnob('arpeggiator', 'swing', 'Swing', settings.swing, 0, 75, 1, `${Math.round(settings.swing)}%`)}
         <section class="arpeggiator-auto-fader${settings.autoFaderEnabled ? ' is-enabled' : ''}" aria-label="Auto Fader">
           <button type="button" data-arpeggiator-auto-fader="power"
             class="${settings.autoFaderEnabled ? 'is-selected' : ''}"
             aria-pressed="${settings.autoFaderEnabled}">Auto Fader</button>
           <div role="group" aria-label="Tempo do Auto Fader">
-            ${(['1/4', '1/8'] as const).map((division) => `
+            ${(['1/2', '1/4'] as const).map((division) => `
               <button type="button" data-arpeggiator-auto-fader="${division}"
                 class="${settings.autoFaderDivision === division ? 'is-selected' : ''}"
                 aria-pressed="${settings.autoFaderDivision === division}">${division}</button>
@@ -150,59 +99,9 @@ export function createArpeggiatorMarkup(value: unknown): string {
           ${patternKnob('arpeggiator', 'autoFaderDepthDb', 'dB', settings.autoFaderDepthDb, 0, 40, 0.5,
             `-${settings.autoFaderDepthDb.toFixed(1)} dB`)}
         </section>
-        ${patternKnob('arpeggiator', 'swing', 'Swing', settings.swing, 0, 75, 1, `${Math.round(settings.swing)}%`)}
+
       </div>
     </section>
-  `;
-}
-
-export function createSequencerMarkup(value: unknown): string {
-  const settings = readSequencerSettings(value);
-  const selectedStep = 0;
-  return `
-    <section class="pattern-editor sequencer-editor" data-sequencer-editor data-sequencer-selected-step="${selectedStep}">
-      <header class="pattern-editor__header">
-        <div><span>Módulo 07</span><strong>Sequencer</strong></div>
-        <output>${settings.length} passos · ${settings.division}</output>
-      </header>
-      <div class="pattern-editor__toolbar">
-        <div class="pattern-option-group pattern-option-group--division" role="group" aria-label="Divisão do sequenciador">
-          ${PATTERN_DIVISIONS.map((division) => optionButton('sequencer-division', division, division, settings.division === division)).join('')}
-        </div>
-        <div class="pattern-option-group pattern-option-group--length" role="group" aria-label="Tamanho da sequência">
-          ${[4, 8, 16].map((length) => optionButton('sequencer-length', String(length), `${length} passos`, settings.length === length)).join('')}
-        </div>
-      </div>
-      <div class="sequencer-steps" role="listbox" aria-label="Passos do sequenciador">
-        ${settings.steps.map((step, index) => `
-          <button
-            class="sequencer-step${step.enabled ? ' is-enabled' : ' is-disabled'}${index === selectedStep ? ' is-selected' : ''}${index >= settings.length ? ' is-outside' : ''}"
-            type="button"
-            data-sequencer-step="${index}"
-            role="option"
-            aria-selected="${index === selectedStep}"
-            ${index >= settings.length ? 'disabled' : ''}
-          ><span>${String(index + 1).padStart(2, '0')}</span><strong>${formatSemitone(step.semitone)}</strong><i></i></button>
-        `).join('')}
-      </div>
-      ${createSequencerStepEditor(settings, selectedStep)}
-    </section>
-  `;
-}
-
-export function createSequencerStepEditor(settings: SequencerSettings, index: number): string {
-  const safeIndex = Math.min(15, Math.max(0, Math.round(index)));
-  const step = settings.steps[safeIndex] ?? { enabled: true, semitone: 0, velocity: 110, gate: 72 };
-  return `
-    <div class="sequencer-step-editor" data-sequencer-step-editor>
-      <button class="sequencer-step-power ${step.enabled ? 'is-on' : 'is-off'}" type="button" data-sequencer-step-power aria-pressed="${step.enabled}">
-        <span>Passo ${String(safeIndex + 1).padStart(2, '0')}</span><strong>${step.enabled ? 'ON' : 'OFF'}</strong>
-      </button>
-      ${patternKnob('sequencer', 'semitone', 'Nota', step.semitone, -24, 24, 1, formatSemitone(step.semitone), safeIndex)}
-      ${patternKnob('sequencer', 'velocity', 'Velocity', step.velocity, 1, 127, 1, String(step.velocity), safeIndex)}
-      ${patternKnob('sequencer', 'gate', 'Gate', step.gate, 10, 100, 1, `${Math.round(step.gate)}%`, safeIndex)}
-      ${patternKnob('sequencer', 'swing', 'Swing', settings.swing, 0, 75, 1, `${Math.round(settings.swing)}%`)}
-    </div>
   `;
 }
 
@@ -217,7 +116,8 @@ export function updatePatternRangeOutput(input: HTMLInputElement): number {
   const parameter = input.dataset.patternParameter;
   const formatted = parameter === 'gate' || parameter === 'swing'
     ? `${Math.round(value)}%`
-    : parameter === 'semitone' ? formatSemitone(value) : String(Math.round(value));
+    : parameter === 'autoFaderDepthDb' ? `-${value.toFixed(1)} dB`
+    : String(Math.round(value));
   const output = knob?.querySelector<HTMLOutputElement>('output');
   if (output) output.value = formatted;
   input.setAttribute('aria-valuetext', formatted);
@@ -238,13 +138,8 @@ export function patternStepMilliseconds(bpm: number, division: PatternDivision, 
   return quarter * multiplier * (stepIndex % 2 === 0 ? 1 + swingAmount : 1 - swingAmount);
 }
 
-export function formatSemitone(value: number): string {
-  const rounded = Math.round(Math.min(24, Math.max(-24, value)));
-  return rounded === 0 ? '0' : `${rounded > 0 ? '+' : ''}${rounded}`;
-}
-
 function patternKnob(
-  kind: 'arpeggiator' | 'sequencer',
+  kind: 'arpeggiator',
   parameter: string,
   label: string,
   value: number,
@@ -252,14 +147,13 @@ function patternKnob(
   maximum: number,
   step: number,
   formatted: string,
-  stepIndex?: number,
 ): string {
   const progress = (value - minimum) / (maximum - minimum);
   return `
     <label class="pattern-knob module-effect-knob" style="--knob-angle:${-135 + progress * 270}deg;--knob-progress:${progress}">
       <span>${label}</span>
       <span class="module-effect-knob__face" aria-hidden="true"><i></i></span>
-      <input type="range" min="${minimum}" max="${maximum}" step="${step}" value="${value}" data-pattern-kind="${kind}" data-pattern-parameter="${parameter}"${stepIndex === undefined ? '' : ` data-sequencer-step-index="${stepIndex}"`} aria-label="${label}" aria-valuetext="${formatted}">
+      <input type="range" min="${minimum}" max="${maximum}" step="${step}" value="${value}" data-pattern-kind="${kind}" data-pattern-parameter="${parameter}" aria-label="${label}" aria-valuetext="${formatted}">
       <output>${formatted}</output>
     </label>
   `;

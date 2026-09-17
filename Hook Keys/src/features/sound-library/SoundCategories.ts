@@ -5,7 +5,6 @@ export interface SoundCategoryDefinition {
   name: string;
   color: string;
   order: number;
-  moduleRole: 'sequencer' | 'mono' | null;
 }
 
 export const DEFAULT_SOUND_CATEGORY: SoundCategoryId = '';

@@ -1549,7 +1549,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   line-height: 1.2;
 }
 
-/* Arpeggiator, Sequencer e seleção Mono/Poly dos módulos de timbre. */
+/* Arpeggiator, Trance Gate e seleção Mono/Poly dos módulos de timbre. */
 .module-settings-panel--voice-switch .module-settings-io-row {
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(92px, .38fr) minmax(92px, .38fr);
 }
@@ -1584,37 +1584,14 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   border-color: rgba(187, 101, 255, .8);
   background: radial-gradient(circle at 50% 0%, rgba(139, 54, 219, .3), transparent 65%), linear-gradient(155deg, #28113e, #09050e 76%);
 }
-.module-effect-card--sequencer {
-  border-color: rgba(255, 143, 40, .84);
-  background: radial-gradient(circle at 50% 0%, rgba(255, 115, 20, .28), transparent 65%), linear-gradient(155deg, #3f1a07, #100702 76%);
-}
 .module-effect-card--arpeggiator > button {
   --processor-accent: #a855f7;
   color: #fff;
   border-color: #cd91ff;
   background: linear-gradient(180deg, #b85cf1, #65159c);
 }
-.module-effect-card--sequencer > button {
-  --processor-accent: #ff841f;
-  color: #16100a;
-  border-color: #ffc071;
-  background: linear-gradient(180deg, #ffae49, #e95b0b);
-}
 
 .module-arpeggiator-preview,
-.module-sequencer-preview {
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 88px;
-  padding: 8px;
-  overflow: hidden;
-  border: 1px solid rgba(138, 116, 154, .48);
-  border-radius: 7px;
-  background: linear-gradient(180deg, #17121c, #09070c);
-}
 .module-arpeggiator-preview__notes {
   display: flex;
   align-items: end;
@@ -1638,46 +1615,26 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .module-arpeggiator-preview strong { color: #e6bcff; font-size: 10px; letter-spacing: .12em; }
 .module-arpeggiator-preview > span { color: #fff; font-size: 8px; font-weight: 900; }
 
-.module-sequencer-preview > div {
-  display: grid;
-  grid-template-columns: repeat(8, minmax(3px, 1fr));
-  align-items: end;
-  gap: 3px;
-  width: 100%;
-  height: 48px;
-}
-.module-sequencer-preview i {
-  height: var(--step-level);
-  min-height: 4px;
-  border-radius: 2px 2px 0 0;
-  background: #33251d;
-}
-.module-sequencer-preview i.is-active {
-  background: linear-gradient(180deg, #ffd071, #ff7217);
-  box-shadow: 0 0 7px rgba(255,120,24,.42);
-}
-.module-sequencer-preview strong { color: #ffb465; font-size: 9px; letter-spacing: .12em; }
-.module-sequencer-preview > span { color: #fff; font-size: 9px; font-weight: 950; }
 
 .player-modal--module-arpeggiator .player-modal__surface,
-.player-modal--module-sequencer .player-modal__surface {
+.player-modal--module-trance-gate .player-modal__surface {
   gap: clamp(6px, 1vh, 12px);
   padding: clamp(10px, 1.8vw, 24px);
   border-color: color-mix(in srgb, var(--pattern-accent) 66%, #ff7900);
 }
 .player-modal--module-arpeggiator { --pattern-accent: #a855f7; }
-.player-modal--module-sequencer { --pattern-accent: #ff841f; }
+.player-modal--module-trance-gate { --pattern-accent: #ff841f; }
 .player-modal--module-arpeggiator .player-modal__header h2 { color: #d69cff; }
-.player-modal--module-sequencer .player-modal__header h2 { color: #ffb76c; }
+.player-modal--module-trance-gate .player-modal__header h2 { color: #ffb76c; }
 .player-modal--module-arpeggiator .player-modal__body,
-.player-modal--module-sequencer .player-modal__body { align-content: stretch; overflow: hidden; }
+.player-modal--module-trance-gate .player-modal__body { align-content: stretch; overflow: hidden; }
 .player-modal--module-arpeggiator .player-modal__actions,
-.player-modal--module-sequencer .player-modal__actions {
+.player-modal--module-trance-gate .player-modal__actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .player-modal--module-arpeggiator .player-modal__actions > button,
-.player-modal--module-sequencer .player-modal__actions > button { width: 100%; min-width: 0; }
+.player-modal--module-trance-gate .player-modal__actions > button { width: 100%; min-width: 0; }
 
 .pattern-editor {
   display: grid;
@@ -1735,6 +1692,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   gap: clamp(8px, 1.2vw, 14px);
   min-height: 0;
 }
+/* Arpeggiator: Oitavas, Gate e Swing estreitos, e o Auto Fader no resto. */
+.arpeggiator-editor .pattern-knob-grid {
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .58fr) minmax(0, .58fr) minmax(0, 1.25fr);
+}
+
 .arpeggiator-octaves {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -1789,14 +1751,119 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .pattern-knob:nth-child(4) { --knob-accent: #ff4d67; }
 .pattern-knob:nth-child(5) { --knob-accent: #a855f7; }
 
-.sequencer-editor { grid-template-rows: auto auto minmax(72px, .9fr) minmax(90px, 1.15fr); }
-.sequencer-steps {
+.trance-gate-editor { grid-template-rows: auto auto minmax(54px, .75fr) minmax(78px, 1fr) auto; }
+.trance-gate-editor__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 26px;
+}
+
+.module-settings-source-button {
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 6px;
+  color: #bdb7b3;
+  border: 1px solid #5c5653;
+  border-radius: 7px;
+  background: linear-gradient(180deg, #302c2d, #141214);
+  font-size: clamp(9px, 1vw, 12px);
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+.module-settings-source-button.is-selected[data-module-settings-mode="default"] {
+  color: #17110d;
+  border-color: #ffc178;
+  background: linear-gradient(180deg, #ffb559, #e86611);
+}
+
+.module-settings-source-button.is-selected[data-module-settings-mode="user"] {
+  color: #07140a;
+  border-color: #78f39d;
+  background: linear-gradient(180deg, #4be080, #159449);
+}
+
+.module-settings-panel.is-default-mode :is(
+  .module-polyphony-button,
+  .module-voice-mode-button,
+  .module-settings-workspace,
+  .module-settings-bottom-row,
+  .module-settings-reset-button
+),
+.player-modal--module-settings.is-default-settings .player-modal__actions .module-effect-power {
+  filter: grayscale(1) brightness(.58);
+  opacity: .68;
+  cursor: not-allowed;
+}
+
+.module-default-settings-notice,
+.sound-loading-overlay {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border-radius: inherit;
+  background: rgba(3, 3, 5, .76);
+  backdrop-filter: blur(5px);
+}
+
+.player-modal--module-settings .player-modal__surface,
+.player-modal--sound-selection .player-modal__surface { position: relative; }
+
+.module-default-settings-notice > div,
+.sound-loading-overlay > div {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: min(92%, 430px);
+  padding: clamp(20px, 4vw, 36px);
+  color: #fff;
+  border: 1px solid rgba(255, 139, 48, .72);
+  border-radius: 14px;
+  background: linear-gradient(155deg, #25160e, #09080a 72%);
+  box-shadow: 0 18px 55px rgba(0,0,0,.55), 0 0 24px rgba(255,126,31,.14);
+  text-align: center;
+}
+
+.module-default-settings-notice strong,
+.sound-loading-overlay strong { color: #ffb66d; font-size: clamp(17px, 2.5vw, 24px); }
+.module-default-settings-notice p,
+.sound-loading-overlay p,
+.sound-loading-overlay small { margin: 0; color: #e7ddd7; }
+.module-default-settings-notice button,
+.sound-loading-overlay button {
+  min-width: 130px;
+  min-height: 38px;
+  color: #160d07;
+  border: 1px solid #ffc17e;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #ffad4c, #e85c0c);
+  font-weight: 950;
+}
+.sound-loading-overlay.is-error > div { border-color: #ef6464; }
+.sound-loading-overlay.is-error strong { color: #ff8b8b; }
+.trance-gate-editor__header > span { justify-self: start; }
+.trance-gate-editor__header > strong {
+  justify-self: center;
+  color: #ffd0a2;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(16px, 2vw, 23px);
+  font-style: italic;
+  letter-spacing: .025em;
+  line-height: 1;
+  text-shadow: 0 1px 2px #000, 0 0 10px rgba(255, 132, 31, .2);
+}
+.trance-gate-editor__header > output { justify-self: end; }
+.trance-gate-steps {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 5px;
   min-height: 0;
 }
-.sequencer-step {
+.trance-gate-step {
   position: relative;
   display: grid;
   grid-template-rows: auto 1fr auto;
@@ -1810,72 +1877,58 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   background: linear-gradient(180deg, #251b16, #0f0b09);
   overflow: hidden;
 }
-.sequencer-step span { font-size: 7px; font-weight: 950; opacity: .7; }
-.sequencer-step strong { color: #fff0df; font-size: clamp(10px, 1.3vw, 15px); }
-.sequencer-step i { width: 54%; height: 3px; border-radius: 4px; background: #5b4031; }
-.sequencer-step.is-enabled i { background: #ff8a27; box-shadow: 0 0 8px rgba(255,126,31,.65); }
-.trance-gate-editor .sequencer-step.is-enabled {
+.trance-gate-step span { font-size: 7px; font-weight: 950; opacity: .7; }
+.trance-gate-step strong { color: #fff0df; font-size: clamp(10px, 1.3vw, 15px); }
+.trance-gate-step i { width: 54%; height: 3px; border-radius: 4px; background: #5b4031; }
+.trance-gate-step.is-enabled i { background: #ff8a27; box-shadow: 0 0 8px rgba(255,126,31,.65); }
+.trance-gate-editor .trance-gate-step.is-enabled {
   background: linear-gradient(180deg, #197a45, #093e25);
   border-color: #3fbb72;
   color: #fff;
 }
-.trance-gate-editor .sequencer-step.is-disabled {
+.trance-gate-editor .trance-gate-step.is-disabled {
   background: linear-gradient(180deg, #9c342e, #4b1615);
   border-color: #d65c52;
   color: #fff;
 }
-.trance-gate-editor .sequencer-step.is-enabled i { background: #64e895; box-shadow: none; }
+.trance-gate-editor .trance-gate-step.is-enabled i { background: #64e895; box-shadow: none; }
 .trance-gate-editor .pattern-knob-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .trance-gate-editor .pattern-knob { min-width: 0; }
+.trance-gate-editor .pattern-knob .module-effect-knob__face {
+  width: min(52px, 7vh);
+  height: min(52px, 7vh);
+}
 .trance-gate-editor .module-envelope-knob { justify-self: center; }
 .trance-gate-help { margin: 0; color: #ddd; font-size: 11px; }
-.sequencer-step.is-selected { border-color: #ffc06f; box-shadow: inset 0 0 0 1px #ff8b25, 0 0 10px rgba(255,118,20,.25); }
-.sequencer-step.is-playing { background: linear-gradient(180deg, #ffb34f, #a63706); transform: translateY(-2px); }
-.sequencer-step.is-playing strong,
-.sequencer-step.is-playing span { color: #120a04; }
-.sequencer-step.is-outside { opacity: .28; }
+.trance-gate-step.is-outside { opacity: .28; }
 
-.sequencer-step-editor {
-  display: grid;
-  grid-template-columns: minmax(92px, .8fr) repeat(4, minmax(0, 1fr));
-  gap: 7px;
-  min-height: 0;
-}
-.sequencer-step-power {
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 5px;
-  color: #fff;
-  border: 1px solid #ff6355;
-  border-radius: 10px;
-  background: linear-gradient(180deg, #d43c31, #791810);
-  font-weight: 950;
-}
-.sequencer-step-power span { font-size: 8px; }
-.sequencer-step-power strong { font-size: 14px; }
-.sequencer-step-power.is-on { border-color: #60ed91; background: linear-gradient(180deg, #24c765, #087332); }
 
 @media (orientation: landscape) and (max-height: 560px) {
   .player-modal--module-arpeggiator .player-modal__surface,
-  .player-modal--module-sequencer .player-modal__surface { gap: 4px; padding: 6px 8px; }
+  .player-modal--module-trance-gate .player-modal__surface { gap: 4px; padding: 6px 8px; }
   .player-modal--module-arpeggiator .player-modal__header h2,
-  .player-modal--module-sequencer .player-modal__header h2 { font-size: 18px; }
+  .player-modal--module-trance-gate .player-modal__header h2 { font-size: 18px; }
   .pattern-editor { gap: 5px; padding: 6px; border-radius: 10px; }
   .pattern-editor__header strong { font-size: 15px; }
   .pattern-editor__header span,
   .pattern-editor__header output { font-size: 7px; }
+  .trance-gate-editor { grid-template-rows: auto auto minmax(36px, .65fr) minmax(54px, 1fr) auto; }
+  .trance-gate-editor__header { min-height: 18px; }
+  .trance-gate-editor__header > strong { font-size: 15px; }
   .pattern-option-group { gap: 3px; }
   .pattern-option-group button { min-height: 24px; padding: 2px 4px; font-size: 7px; }
-  .sequencer-steps { gap: 3px; }
-  .sequencer-step { padding: 2px; border-radius: 4px; }
-  .sequencer-step strong { font-size: 9px; }
-  .sequencer-step-editor { gap: 3px; }
+  .trance-gate-steps { gap: 3px; }
+  .trance-gate-step { padding: 2px; border-radius: 4px; }
+  .trance-gate-step strong { font-size: 9px; }
   .pattern-knob { min-height: 0; padding: 3px; border-radius: 6px; }
   .pattern-knob > span:first-child,
   .pattern-knob output,
-  .sequencer-step-power span { font-size: 6px; }
   .pattern-knob .module-effect-knob__face { width: auto; height: 100%; max-height: 46px; }
+  .trance-gate-editor .pattern-knob .module-effect-knob__face {
+    width: min(38px, 7vh);
+    height: min(38px, 7vh);
+    max-height: 32px;
+  }
   .module-effect-power { min-height: 30px; }
 }
 
@@ -1888,9 +1941,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
       grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(64px, .34fr) minmax(64px, .34fr);
     }
   }
-  .sequencer-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .sequencer-step-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sequencer-step-power { grid-row: span 2; }
+  .trance-gate-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 @media (orientation: landscape) and (max-height: 560px) {
@@ -4529,9 +4580,75 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   width: min(100%, 620px);
 }
 
+/* O Config virou páginas: o miolo é uma página só, ocupando a largura toda. */
+.module-settings-pages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(6px, 0.9vw, 12px);
+  height: clamp(30px, 4.6vh, 40px);
+  min-width: 0;
+}
+
+.module-settings-pages > [role="tablist"] {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: clamp(4px, 0.6vw, 8px);
+  min-width: 0;
+}
+
+.module-settings-pages button {
+  min-width: 0;
+  /* Altura fixa: a página aberta não muda o tamanho dos botões. */
+  height: clamp(28px, 4.2vh, 38px);
+  min-height: 0;
+  padding: 3px clamp(4px, 0.8vw, 12px);
+  overflow: hidden;
+  color: #fff;
+  border: 1.5px solid rgba(255, 126, 31, 0.5);
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(43, 30, 22, 0.96), rgba(16, 11, 9, 0.99));
+  font-size: clamp(9px, 1vw, 13px);
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Cada página tem a cor do seu editor; a aberta ganha o contorno branco. */
+.module-settings-pages [role="tablist"] button {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--page-color, #ff7e1f) 70%, transparent);
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--page-color, #ff7e1f) 34%, rgba(16, 11, 9, 0.99)),
+    rgba(12, 9, 14, 0.99));
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+.module-settings-pages [role="tablist"] button[data-module-settings-page="envelope"] { --page-color: #ff7e1f; }
+.module-settings-pages [role="tablist"] button[data-module-settings-page="eq"] { --page-color: #2fb8e6; }
+.module-settings-pages [role="tablist"] button[data-module-settings-page="compressor"] { --page-color: #d8a33a; }
+.module-settings-pages [role="tablist"] button[data-module-settings-page="chorus"] { --page-color: #9a6bf0; }
+.module-settings-pages [role="tablist"] button[data-module-settings-page="reverb"] { --page-color: #3fd07a; }
+.module-settings-pages [role="tablist"] button[data-module-settings-page="delay"] { --page-color: #c85bf0; }
+.module-settings-pages [role="tablist"] button[data-module-settings-page="rotary"] { --page-color: #2f7ce6; }
+.module-settings-pages [role="tablist"] button[data-module-settings-page="arpeggiator"] { --page-color: #ef5da8; }
+.module-settings-pages [role="tablist"] button[data-module-settings-page="trance-gate"] { --page-color: #ff5f45; }
+
+/* A página aberta mantém a própria cor e ganha o contorno branco. */
+:is(.player-screen, .player-modal) .module-settings-pages [role="tablist"] button.is-selected {
+  color: #fff;
+  border-color: #fff;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--page-color, #ff7e1f) 92%, #fff),
+    var(--page-color, #ff7e1f));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
 .module-settings-workspace {
   display: grid;
-  grid-template-columns: minmax(390px, 1.1fr) minmax(360px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   gap: clamp(10px, 1.5vw, 18px);
   min-width: 0;
@@ -4543,15 +4660,22 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   width: 100%;
 }
 
+.module-settings-workspace > * {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
 .module-settings-panel--synth .module-processors-grid {
   width: 100%;
 }
 
 .module-envelope-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(68px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: clamp(7px, 1vw, 12px);
   min-width: 0;
+  min-height: 0;
 }
 
 .module-envelope-control,
@@ -4962,6 +5086,66 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   min-height: 0;
 }
 
+.module-reverb-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(6px, 1vh, 12px);
+  width: min(100%, 980px);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.module-delay-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(6px, 1vh, 12px);
+  width: min(100%, 980px);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.module-reverb-spaces {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: clamp(5px, 0.8vw, 10px);
+  min-width: 0;
+}
+
+.module-reverb-spaces button {
+  min-width: 0;
+  min-height: clamp(38px, 6.5vh, 54px);
+  padding: clamp(5px, 1vh, 10px) clamp(10px, 1.5vw, 18px);
+  color: #fff;
+  border: 1.5px solid rgba(63, 208, 122, 0.55);
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(24, 48, 34, 0.96), rgba(10, 16, 12, 0.99));
+  font-size: clamp(9px, 1vw, 13px);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.module-effect-controls--chorus {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  align-content: stretch;
+}
+
+.module-effect-controls--chorus .module-effect-knob {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.module-effect-controls--chorus .module-effect-knob > span:first-child {
+  justify-self: end;
+}
+
+.module-effect-controls--chorus .module-effect-knob > output {
+  justify-self: start;
+}
+
 .module-effect-controls--compressor {
   grid-template-columns: repeat(3, minmax(90px, 1fr));
   grid-template-rows: repeat(2, minmax(0, 1fr));
@@ -5048,7 +5232,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .module-delay-editor {
-  grid-template-columns: minmax(155px, 0.5fr) minmax(230px, 0.8fr) minmax(0, 1.6fr);
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.7fr);
   align-items: stretch;
 }
 
@@ -5089,8 +5273,14 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .module-delay-editor__divisions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 6px;
+}
+
+.module-delay-editor__divisions button {
+  min-width: 0;
+  min-height: clamp(38px, 6.5vh, 54px);
+  padding: clamp(5px, 1vh, 10px) clamp(4px, 0.7vw, 10px);
 }
 
 .module-delay-editor__divisions button.is-selected {
@@ -9544,7 +9734,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .module-settings-workspace {
-    grid-template-columns: minmax(285px, 0.92fr) minmax(0, 1.08fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 5px;
     height: 100%;
     overflow: hidden;
@@ -9697,11 +9887,10 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .module-delay-editor {
-    grid-template-columns: minmax(74px, 0.52fr) minmax(120px, 0.9fr);
-    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(150px, 0.75fr) minmax(0, 1.4fr);
+    grid-template-rows: minmax(0, 1fr);
     grid-template-areas:
-      "tap divisions"
-      "controls controls";
+      "tap controls";
     gap: 4px;
   }
 
@@ -9717,7 +9906,6 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .module-delay-editor__divisions {
-    grid-area: divisions;
     gap: 2px;
   }
 
@@ -11266,10 +11454,18 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 .player-modal--module-eq .player-modal__actions,
 .player-modal--module-compressor .player-modal__actions,
 .player-modal--module-reverb .player-modal__actions,
-.player-modal--module-delay .player-modal__actions {
+.player-modal--module-delay .player-modal__actions,
+.player-modal--module-settings .player-modal__actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+
+.player-modal--module-settings .player-modal__actions > button {
+  width: 100%;
+  min-width: 0;
+}
+
+.player-modal--module-settings .player-modal__confirm-button { grid-column: 3; }
 
 .player-modal--module-eq .player-modal__back-button,
 .player-modal--module-eq .player-modal__confirm-button,
@@ -11609,7 +11805,8 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
   .pad-bank-button, .sound-category-button, .fixed-sound-grid button,
   .effect-color-option, .player-module__synth-mode,
   .player-navigation__bank-button, .player-navigation__pads-button,
-  .player-module__filter-button
+  .player-module__filter-button,
+  .module-settings-pages [role="tablist"] button
 )) {
   --button-color-a: #39db78 !important;
   --button-color-b: #08783a !important;
@@ -11982,7 +12179,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   border-radius: 12px;
   background: linear-gradient(155deg, rgba(29, 27, 43, .98), rgba(10, 8, 18, .99));
   display: grid;
-  grid-template-columns: minmax(52px, .75fr) minmax(88px, 1.2fr) minmax(48px, .7fr);
+  grid-template-columns: minmax(34px, .4fr) minmax(112px, 1.7fr) minmax(46px, .62fr);
   align-items: center;
   gap: clamp(5px, .8vw, 10px);
   overflow: hidden;
@@ -12005,14 +12202,15 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
 }
-/* Com o Tremolo são três botões na mesma largura do card. */
+/* Com o Tremolo são três botões; o nome tem de caber dentro do botão. */
 .module-mod-card > div[data-module-modulation-modes="3"] {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 3px;
 }
 .module-mod-card > div[data-module-modulation-modes="3"] button {
-  padding: 3px 2px;
-  font-size: clamp(8px, .78vw, 11px);
+  padding: 3px 1px;
+  font-size: clamp(7.5px, .72vw, 10px);
+  letter-spacing: -0.01em;
 }
 .module-mod-card button {
   min-width: 0;
@@ -12372,20 +12570,10 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   border-color: rgba(187, 101, 255, .8);
   background: radial-gradient(circle at 50% 0%, rgba(139, 54, 219, .3), transparent 65%), linear-gradient(155deg, #28113e, #09050e 76%);
 }
-.module-effect-card.module-effect-card--sequencer {
-  border-color: rgba(255, 143, 40, .84);
-  background: radial-gradient(circle at 50% 0%, rgba(255, 115, 20, .28), transparent 65%), linear-gradient(155deg, #3f1a07, #100702 76%);
-}
 .module-effect-card.module-effect-card--arpeggiator > button {
   color: #fff;
   border-color: #cd91ff;
   background: linear-gradient(180deg, #b85cf1, #65159c);
-}
-.module-effect-card.module-effect-card--sequencer > button {
-  color: #16100a !important;
-  border-color: #ffc071;
-  background: linear-gradient(180deg, #ffae49, #e95b0b);
-  text-shadow: 0 1px rgba(255,255,255,.24) !important;
 }
 
 /* Nos módulos especiais, compressor e função do módulo dividem o mesmo card. */
@@ -12420,7 +12608,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   text-shadow: 0 1px 2px #31054f !important;
 }
 
-.module-effect-card--processor-shortcuts > .module-processor-shortcut--sequencer {
+.module-effect-card--processor-shortcuts > .module-processor-shortcut--trance-gate {
   color: #171009 !important;
   border-color: #ffc071;
   background: linear-gradient(180deg, #ffae49, #e95b0b);
@@ -12719,7 +12907,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 }
 
 .player-modal--module-settings .module-settings-panel {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   align-content: stretch;
   height: 100%;
   overflow: hidden;
@@ -12870,7 +13058,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   }
 
   html[data-runtime="desktop"] .player-modal--module-settings .module-settings-workspace {
-    grid-template-columns: minmax(320px, 1.08fr) minmax(300px, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
   }
 

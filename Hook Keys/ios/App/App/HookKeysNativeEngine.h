@@ -93,7 +93,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                       chorusMix:(float)chorusMix
                autoFaderEnabled:(BOOL)autoFaderEnabled
                  autoFaderBeats:(float)autoFaderBeats
-               autoFaderDepthDb:(float)autoFaderDepthDb;
+               autoFaderDepthDb:(float)autoFaderDepthDb
+                    inputGainDb:(float)inputGainDb;
 - (BOOL)configureModuleEnvelope:(NSInteger)moduleIndex
                         attackMs:(float)attackMs
                           holdMs:(float)holdMs

@@ -136,25 +136,22 @@ void testPatternGeneratorRouting() {
   hook_keys::HookKeysEngine engine(modules);
   for (std::size_t index = 0; index < synths.size(); ++index) {
     hook_keys::ModuleConfig config;
-    config.midiInputSlot = index == 5 ? hook_keys::kArpeggiatorInput
-        : index == 6 ? hook_keys::kSequencerInput : hook_keys::kAllMidiInputs;
+    config.midiInputSlot = index == 5 ? hook_keys::kArpeggiatorInput : hook_keys::kAllMidiInputs;
     expect(engine.setModuleConfig(index, config), "configure generated-note routing");
   }
   expect(engine.enqueueMidi(midi(0x90, 67, 108, hook_keys::kArpeggiatorInput)), "queue arpeggiator note");
-  expect(engine.enqueueMidi(midi(0x90, 72, 105, hook_keys::kSequencerInput)), "queue sequencer note");
   process(engine);
   for (std::size_t index = 0; index < synths.size(); ++index) {
-    const auto expected = index == 5 || index == 6 ? 1U : 0U;
+    const auto expected = index == 5 ? 1U : 0U;
     expect(synths[index].events.size() == expected, "generated notes stay inside their module");
   }
   expect(synths[5].events[0].data1 == 67, "arpeggiator reaches module 6");
-  expect(synths[6].events[0].data1 == 72, "sequencer reaches module 7");
   for (auto& synth : synths) synth.events.clear();
   expect(engine.enqueueMidi(midi(0x90, 60, 100, hook_keys::kKeyboardBroadcastInput)),
-         "queue touch keyboard broadcast while patterns are active");
+         "queue touch keyboard broadcast while the arpeggiator is active");
   process(engine);
-  expect(synths[5].events.empty() && synths[6].events.empty(),
-         "touch keyboard roots do not bypass enabled pattern processors");
+  expect(synths[5].events.empty(),
+         "touch keyboard roots do not bypass the arpeggiator");
   expect(synths[0].events.size() == 1 && synths[7].events.size() == 1,
          "touch keyboard still broadcasts to ordinary modules");
 
@@ -253,7 +250,27 @@ void testArpeggiatorRouteClearsSustain() {
   process(engine);
   expect(synth.events.size() == 2 && synth.events[0].type == Event::Type::noteOn &&
          synth.events[1].type == Event::Type::noteOff,
-      "arpeggiator ignores sustain and follows its generated key gate");
+      "with its Sustain switch off the arpeggiator follows only the generated key gate");
+
+  // Com o botão Sustain do módulo ligado, o pedal do teclado físico alcança o
+  // módulo do arpeggiator: as notas da frase seguram enquanto o pedal desce.
+  auto pedal = generated;
+  pedal.sustainInputEnabled = true;
+  expect(engine.setModuleConfig(5, pedal), "turn the arpeggiator module Sustain switch back on");
+  process(engine);
+  synth.events.clear();
+  expect(engine.enqueueMidi(midi(0xB0, 64, 127, 0)), "press the pedal on the physical keyboard");
+  expect(engine.enqueueMidi(midi(0xE0, 0, 96, 0)), "bend the wheel on the physical keyboard");
+  process(engine);
+  expect(synth.events.size() == 2 && synth.events[0].type == Event::Type::controlChange &&
+         synth.events[0].data1 == 64 && synth.events[0].data2 == 127,
+      "the sustain pedal reaches the module the arpeggiator plays");
+  expect(synth.events[1].type == Event::Type::pitchBend, "and so does the pitch wheel");
+  synth.events.clear();
+  expect(engine.enqueueMidi(midi(0xB0, 64, 0, 0)), "release the pedal");
+  process(engine);
+  expect(synth.events.size() == 1 && synth.events[0].data1 == 64 && synth.events[0].data2 == 0,
+      "releasing the pedal reaches it too, so nothing stays stuck");
 }
 
 void testPerModuleControllerFilters() {
@@ -1476,6 +1493,63 @@ double rotaryPeakPitchDeviationCents(double frequency, float depth, std::uint8_t
 // raio, e no Fast (7 Hz) isso dá ~44 cents de pico. O teste guarda essa faixa
 // física e, principalmente, guarda o cruzamento: com atrasos geométricos as
 // duas metades chegavam a se cancelar e o medidor acusava 200 cents.
+// Auto Fader: desce o volume até -depthDb e volta, uma volta por tempo (1/4)
+// ou por meio compasso (1/2).
+void testAutoFaderRidesTheVolume() {
+  const auto envelope = [](bool enabled, float beats, float depthDb) {
+    constexpr double sampleRate = 48000.0;
+    hook_keys::ModuleEffects effects;
+    effects.prepare(sampleRate);
+    hook_keys::ModuleEffectsConfig config;
+    config.autoFader = {enabled, beats, depthDb};
+    effects.setConfig(config, 120.0f);  // 120 BPM: um tempo dura meio segundo.
+    std::vector<float> left(48000, 0.5f), right(48000, 0.5f);
+    effects.process(left.data(), right.data(), left.size());
+    std::vector<float> peaks;
+    for (std::size_t start = 0; start + 480 <= left.size(); start += 480) {
+      float peak = 0.0f;
+      for (std::size_t index = start; index < start + 480; ++index) peak = std::max(peak, std::abs(left[index]));
+      peaks.push_back(peak);
+    }
+    return peaks;
+  };
+  const auto lowest = [](const std::vector<float>& peaks) {
+    return *std::min_element(peaks.begin(), peaks.end());
+  };
+  const auto highest = [](const std::vector<float>& peaks) {
+    return *std::max_element(peaks.begin(), peaks.end());
+  };
+  // Conta os fundos da onda: um por ciclo, e todos caem no meio da medida.
+  const auto cycles = [](const std::vector<float>& peaks) {
+    std::size_t count = 0;
+    for (std::size_t index = 1; index + 1 < peaks.size(); ++index) {
+      if (peaks[index] < peaks[index - 1] && peaks[index] <= peaks[index + 1]) count += 1;
+    }
+    return count;
+  };
+
+  const auto off = envelope(false, 1.0f, 6.0f);
+  expect(highest(off) - lowest(off) < 0.0001f, "with the Auto Fader off nothing moves");
+
+  const auto quarter = envelope(true, 1.0f, 6.0f);
+  expect(highest(quarter) > 0.49f, "the Auto Fader never goes above the current volume");
+  // -6 dB é metade da amplitude.
+  expect(std::abs(lowest(quarter) - 0.25f) < 0.02f, "at 6 dB the bottom of the wave is half the level");
+  expect(cycles(quarter) == 2, "at 120 BPM a 1/4 cycle happens twice per second");
+
+  const auto half = envelope(true, 2.0f, 6.0f);
+  expect(cycles(half) == 1, "a 1/2 cycle takes twice as long");
+
+  const auto deep = envelope(true, 1.0f, 20.0f);
+  expect(lowest(deep) < lowest(quarter), "more dB digs the volume deeper");
+
+  hook_keys::ModuleEffectsConfig config;
+  config.autoFader = {true, 0.25f, 99.0f};
+  config.normalize();
+  expect(config.autoFader.beats == 1.0f && config.autoFader.depthDb == 40.0f,
+      "the Auto Fader only accepts 1/4 and 1/2, and at most 40 dB");
+}
+
 void testRotaryPitchStaysInTune() {
   expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 2) > 30.0, "Leslie Fast really swings the horn");
   expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 2) < 60.0, "the horn swing stays a Leslie, not a siren");
@@ -2456,6 +2530,7 @@ int main() {
   testRotaryLeslieAmplitudeModulation();
   testEqualizerControlsTreble();
   testRotaryPitchStaysInTune();
+  testAutoFaderRidesTheVolume();
   testRotaryMidiEngineRouting();
   testMonoLegatoKeepsTranceGatePattern();
   std::cout << "Hook Keys engine tests passed\n";

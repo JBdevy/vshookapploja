@@ -142,6 +142,7 @@ unsafe extern "C" {
         auto_fader_enabled: i32,
         auto_fader_beats: f32,
         auto_fader_depth_db: f32,
+        input_gain_db: f32,
     ) -> i32;
     fn hk_runtime_configure_envelope(
         handle: *mut c_void,
@@ -541,6 +542,8 @@ struct EffectsConfig {
     auto_fader_beats: f32,
     #[serde(default)]
     auto_fader_depth_db: f32,
+    #[serde(default)]
+    input_gain_db: f32,
 }
 
 fn audio_devices() -> Vec<(Device, AudioDevice)> {
@@ -1080,6 +1083,7 @@ fn configure_module_effects(
             if config.auto_fader_enabled { 1 } else { 0 },
             config.auto_fader_beats,
             config.auto_fader_depth_db,
+            config.input_gain_db,
         )
     };
     if ok != 0 {

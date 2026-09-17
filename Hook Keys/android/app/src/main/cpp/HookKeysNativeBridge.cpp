@@ -220,8 +220,7 @@ public:
     if (runtime == nullptr) return false;
     hook_keys::ModuleConfig config;
     config.enabled = enabled;
-    config.midiInputSlot = inputSlot == hook_keys::kArpeggiatorInput ||
-            inputSlot == hook_keys::kSequencerInput
+    config.midiInputSlot = inputSlot == hook_keys::kArpeggiatorInput
         ? inputSlot
         : inputSlot >= hook_keys::kMidiInputCount ? hook_keys::kAllMidiInputs : inputSlot;
     config.lowNote = lowNote;
@@ -274,7 +273,8 @@ public:
       float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
       float rotaryDepth, float rotaryMix, bool rotaryModulationEnabled,
       bool chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
-      bool autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb) noexcept {
+      bool autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
+      float inputGainDb) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     hook_keys::ModuleEffectsConfig effects;
@@ -306,6 +306,7 @@ public:
                       rotaryModulationEnabled};
     effects.chorus = {chorusEnabled, chorusRateHz, chorusDepth, chorusMix};
     effects.autoFader = {autoFaderEnabled, autoFaderBeats, autoFaderDepthDb};
+    effects.inputGainDb = inputGainDb;
     return runtime->setModuleEffects(moduleIndex, effects);
   }
 
@@ -765,7 +766,8 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jfloat rotarySlowHz, jfloat rotaryFastHz, jfloat rotaryRampSeconds,
     jfloat rotaryDepth, jfloat rotaryMix, jboolean rotaryModulationEnabled,
     jboolean chorusEnabled, jfloat chorusRateHz, jfloat chorusDepth, jfloat chorusMix,
-    jboolean autoFaderEnabled, jfloat autoFaderBeats, jfloat autoFaderDepthDb) {
+    jboolean autoFaderEnabled, jfloat autoFaderBeats, jfloat autoFaderDepthDb,
+    jfloat inputGainDb) {
   const auto readInts = [](JNIEnv* env, jintArray source, jsize start, jsize count, int* target) {
     env->GetIntArrayRegion(source, start, count, reinterpret_cast<jint*>(target));
   };
@@ -789,7 +791,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
              rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
              rotaryModulationEnabled == JNI_TRUE,
              chorusEnabled == JNI_TRUE, chorusRateHz, chorusDepth, chorusMix,
-             autoFaderEnabled == JNI_TRUE, autoFaderBeats, autoFaderDepthDb)
+             autoFaderEnabled == JNI_TRUE, autoFaderBeats, autoFaderDepthDb, inputGainDb)
              ? JNI_TRUE
              : JNI_FALSE;
 }

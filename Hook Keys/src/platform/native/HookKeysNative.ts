@@ -82,6 +82,8 @@ export interface NativeModuleEffectsConfig {
   // 1 = 1/4 do compasso por volta, 0,5 = 1/8.
   autoFaderBeats: number;
   autoFaderDepthDb: number;
+  // Gain de entrada do módulo, antes dos processadores.
+  inputGainDb: number;
 }
 
 export interface NativeModuleEnvelopeConfig {

@@ -122,6 +122,15 @@ ModuleProcessorLevels ModuleEffects::process(
   ModuleProcessorLevels levels{};
   if (left == nullptr || right == nullptr || frames == 0) return levels;
   captureCompressorLevels = captureCompressorLevels && config_.compressor.enabled;
+  // Gain de entrada: entra antes de tudo, para o EQ e o compressor receberem
+  // o sinal já empurrado.
+  if (config_.inputGainDb != 0.0f) {
+    const auto gain = std::pow(10.0f, config_.inputGainDb / 20.0f);
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      left[frame] *= gain;
+      right[frame] *= gain;
+    }
+  }
   for (std::size_t frame = 0; frame < frames; ++frame) cutoff_.process(left[frame], right[frame]);
   equalizer_.process(left, right, frames);
   if (captureCompressorLevels) {

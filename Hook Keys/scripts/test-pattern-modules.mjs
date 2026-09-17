@@ -39,20 +39,15 @@ test('Trance Gate defaults and normalized settings contain only volume steps, wi
   }
 });
 
-test('pattern settings are normalized and sequencer always restores sixteen safe steps', () => {
+test('arpeggiator settings are normalized, and the old step sequencer is gone', () => {
   const arp = views.readArpeggiatorSettings({ enabled: true, mode: 'invalid', octaves: 99, gate: -4 });
   assert.equal(arp.enabled, true);
   assert.equal(arp.mode, 'up');
   assert.equal(arp.octaves, 4);
   assert.equal(arp.gate, 10);
-
-  const sequence = views.readSequencerSettings({
-    length: 99,
-    steps: [{ enabled: false, semitone: 90, velocity: 0, gate: 200 }],
-  });
-  assert.equal(sequence.length, 16);
-  assert.equal(sequence.steps.length, 16);
-  assert.deepEqual({ ...sequence.steps[0] }, { enabled: false, semitone: 24, velocity: 1, gate: 100 });
+  // O módulo 07 é só Trance Gate: não existe mais sequenciador de notas.
+  assert.equal(views.readSequencerSettings, undefined);
+  assert.equal(views.createSequencerMarkup, undefined);
 });
 
 test('division clock keeps swing pairs at the same total duration', () => {
@@ -73,7 +68,7 @@ test('arpeggiator offers triplets and 2x2 octave buttons while remaining permane
   assert.doesNotMatch(markup, /data-arpeggiator-sync|rateBpm/);
 });
 
-test('arpeggiator and sequencer send generated notes through isolated engine inputs', () => {
+test('the arpeggiator sends its generated notes through its own engine input', () => {
   let timerId = 0;
   const timers = new Map();
   const fakeWindow = {
@@ -96,17 +91,14 @@ test('arpeggiator and sequencer send generated notes through isolated engine inp
       moduleEnabled: true, hasSound: true, midiInputId: null, lowNote: 0, highNote: 127,
       settings: { enabled: true, mode: 'up', division: '1/16', octaves: 1, gate: 70, swing: 0 },
     },
-    sequencer: {
-      moduleEnabled: true, hasSound: true, midiInputId: null, lowNote: 0, highNote: 127,
-      settings: { enabled: true, division: '1/16', length: 4, swing: 0 },
-    },
   };
   const controller = new playback.PatternPlaybackController(() => snapshot, (...message) => sent.push(message));
   controller.handleInput({ inputId: null, noteNumber: 60, pressed: true, velocity: 100 });
-  assert.deepEqual(sent.slice(0, 2).map((message) => message[0]), [4, 5]);
+  assert.deepEqual(sent.slice(0, 1).map((message) => message[0]), [4]);
+  assert(sent.every(([slot]) => slot === 4), 'a entrada 5 do sequenciador não existe mais');
   controller.handleInput({ inputId: null, noteNumber: 60, pressed: false, velocity: 0 });
   assert(sent.some(([slot, status]) => slot === 4 && status === 0x80));
-  assert(sent.some(([slot, status]) => slot === 5 && status === 0x80));
+  assert.equal(playback.SEQUENCER_ENGINE_INPUT, undefined);
   controller.destroy();
 });
 
@@ -119,7 +111,7 @@ test('arpeggiator follows physical key-up and the pedal holds it like any module
   assert.match(player, /inputSlot:\s*patternInputSlot \?\?/,
     'enabled arpeggiator must receive only its generated note stream');
   const playback = readFileSync(new URL('../src/features/player/PatternPlaybackController.ts', import.meta.url), 'utf8');
-  assert.match(playback, /if \(existing >= 0\) state\.held\.splice\(existing, 1\);\s*if \(state\.held\.length === 0\) this\.stop\(kind, state, false\);/,
+  assert.match(playback, /if \(existing >= 0\) state\.held\.splice\(existing, 1\);\s*if \(state\.held\.length === 0\) this\.stop\(false\);/,
     'physical Note Off must stop the arpeggio as soon as the final key is released');
 });
 

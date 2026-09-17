@@ -555,19 +555,41 @@ test('Velocity do filtro: coluna com Cutoff e ON/OFF à direita da curva, també
   assert.match(css, /\.filter-velocity-cutoff > \.filter-velocity-power \{\s*grid-row: 5;/);
 });
 
-test('Reset do módulo no Config: acima do Modo (ou da Polifonia) e com confirmação', () => {
-  // Estica e ocupa a faixa inteira acima do Modo; no celular, pelo menos 22px.
-  assert.match(css, /\.module-settings-control-stack \{\s*display: grid;\s*grid-template-rows: minmax\(0, 1fr\) var\(--module-io-control-height, auto\);\s*align-self: stretch;/);
-  assert.match(css, /\.module-settings-reset-button \{\s*min-height: 26px;/);
-  assert.match(css, /\.module-settings-reset-button \{\s*min-height: 22px;/);
+test('Config em páginas: Reset acompanha a aba e ON/OFF permanece no centro do rodapé', () => {
   // iPhone SE deitado: Polifonia e Modo na mesma linha dos seletores (sem quebrar em duas).
   assert.match(css, /@media \(orientation: landscape\) \{\s*\.module-settings-panel--voice-switch \.module-settings-io-row \{\s*grid-template-columns: minmax\(0, 1\.35fr\) minmax\(0, 1fr\) minmax\(64px, \.34fr\) minmax\(64px, \.34fr\);/);
+  // Os botões de página têm altura fixa: a página aberta não muda o tamanho deles.
+  assert.match(css, /\.module-settings-pages button \{[^}]*height: clamp\(28px, 4\.2vh, 38px\);/);
+  assert.match(css, /\.module-settings-pages \[role="tablist"\] button\.is-selected \{[^}]*border-color: #fff;/);
   const view = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(view, /data-module-setting-action="reset-module">Reset<\/button>\s*<button class="module-voice-mode-button/);
-  assert.match(view, /hasVoiceSwitch \? '' : '<button class="module-settings-reset-button"[^']*'\}\s*<button class="module-polyphony-button"/);
-  assert.match(player, /moduleSettingAction === 'reset-module'\) \{\s*this\.showModuleResetConfirmation\(modal, moduleNumber\);/);
+  // O Reset do módulo saiu de cima do Modo; cada página tem o seu.
+  assert.doesNotMatch(view, /data-module-setting-action="reset-module"/);
+  assert.match(view, /data-modal-action="reset-processor" data-reset-processor="\$\{page\}"/);
+  assert.doesNotMatch(view, /data-module-effect-power="\$\{page === 'eq'/,
+    'o ON/OFF não fica mais junto das abas');
+  assert.match(player, /kind === 'module-settings'[\s\S]*?player-modal__back-button[\s\S]*?data-module-effect-power="\$\{this\.moduleConfigPage\}"[\s\S]*?player-modal__confirm-button/,
+    'o ON/OFF fica entre Voltar e OK');
+  assert.match(player, /\.player-modal__actions \[data-module-effect-power\]/,
+    'a troca de página atualiza o ON/OFF do rodapé');
+  assert.match(css, /\.player-modal--module-settings \.player-modal__actions[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/,
+    'o rodapé do Config mantém três colunas');
   assert.match(player, /const defaults = createDefaultModuleSettings\(moduleNumber - 1\);[\s\S]*?synthPresets: moduleState\.settings\.synthPresets \?\? defaults\.synthPresets,/);
+});
+
+test('Default bloqueia parâmetros, orienta mudar para User e o timbre só fecha depois de carregar', () => {
+  const view = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(view, /data-module-settings-mode="default"/);
+  assert.match(view, /data-module-settings-mode="user"/);
+  assert.match(player, /settingsMode: moduleIndex < 7 \? 'default' : 'user'/,
+    'os módulos 1–7 nascem em Default no app e no desktop');
+  assert.match(player, /moduleIndex < 7 && source\.settingsMode !== 'user' \? 'default' : 'user'/,
+    'um estado sem escolha explícita também restaura em Default');
+  assert.match(player, /Mude para User para configurar\./);
+  assert.match(player, /private async selectFixedSound[\s\S]*?await this\.syncNativeEngine\(\);[\s\S]*?nativeLoadedTimbres[\s\S]*?this\.closeModal\(\);/);
+  assert.match(player, /Carregando timbre…/);
+  assert.match(player, /data-sound-loading-progress/);
 });
 
 test('card do Glide: 4 botões ocupam a esquerda e o nome fica em cima do knob', () => {

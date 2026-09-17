@@ -479,8 +479,11 @@ try {
   player.openModal('module-settings', 8, master);
   assert(!window.document.querySelector('.module-compressor-preview'),
     'o compressor não tem prévia em lugar nenhum');
-  assert(window.document.querySelector('[data-module-setting-action="open-chorus"]'),
+  // O Config virou páginas: o Synth também tem a página do Chorus.
+  assert(window.document.querySelector('[data-module-settings-page="chorus"]'),
     'o Param do Synth também tem Chorus');
+  assert(!window.document.querySelector('[data-module-settings-page="envelope"]'),
+    'o Synth cuida do envelope no editor dele');
   assert(!window.document.querySelector('[data-module-setting-action="open-synth"]'));
   {
     const row = window.document.querySelector('.module-settings-bottom-row');
@@ -491,9 +494,11 @@ try {
     await player.syncNativeEngine();
     assert.equal(lastMod()?.mode, 0, 'o card Mod do Synth nasce em User, como todos os módulos');
     assert(!window.document.querySelector('[data-module-modulation-rate]'), 'o Mod do Synth não tem Rate próprio');
-    assert.match(window.document.querySelector('[data-module-mod-card] header small').textContent, /Roda sem efeito/);
+    // O card não tem mais texto embaixo de "Mod": o botão aceso é que diz o modo.
+    assert(!window.document.querySelector('[data-module-mod-card] header small'));
+    assert.equal(window.document.querySelector('[data-module-modulation-mode="user"]').className, 'is-selected');
     window.document.querySelector('[data-module-modulation-mode="lfo"]').click();
-    assert.match(window.document.querySelector('[data-module-mod-card] header small').textContent, /LFO do Synth/);
+    assert.equal(window.document.querySelector('[data-module-modulation-mode="lfo"]').className, 'is-selected');
     await player.syncNativeEngine();
     assert.equal(lastMod().mode, 1, 'LFO: a roda aciona o LFO do editor do Synth');
     // Tremolo é só do SF2: o card do Synth continua com User e LFO.
@@ -707,7 +712,7 @@ try {
       player.openModal('module-settings', module, master);
       const modeButton = () => window.document.querySelector('[data-module-setting-action="toggle-voice-mode"]');
       assert(modeButton(), `módulo ${module} tem o botão Modo`);
-      assert.equal(modeButton().previousElementSibling.className, 'module-settings-reset-button', `Reset em cima do Modo no módulo ${module}`);
+      assert.equal(modeButton().previousElementSibling, null, `sem Reset em cima do Modo no módulo ${module}`);
       assert.equal(modeButton().querySelector('strong').textContent, 'Poly');
       modeButton().click();
       await player.syncNativeEngine();
@@ -858,7 +863,7 @@ try {
   const gate = window.document.querySelector('[data-pattern-parameter="gate"]');
   fineDrag(gate, 70, 3);
   assert.equal(gate.value, '71', 'pattern knobs use the same progressive curve');
-  for (const [kind, module] of [['module-settings', 1], ['module-synth', 8], ['module-reverb', 1], ['module-delay', 1], ['module-compressor', 1], ['module-rotary', 5], ['module-arpeggiator', 6], ['module-sequencer', 7]]) {
+  for (const [kind, module] of [['module-settings', 1], ['module-synth', 8], ['module-reverb', 1], ['module-delay', 1], ['module-compressor', 1], ['module-rotary', 5], ['module-arpeggiator', 6], ['module-trance-gate', 7]]) {
     player.openModal(kind, module, master);
     for (const input of window.document.querySelectorAll('.player-modal .module-envelope-knob input, .player-modal .module-effect-knob input')) {
       const value = player.defaultKnobValue(input);
@@ -1197,11 +1202,11 @@ try {
   assert(calls.some(({ command, args }) => command === 'begin_sound_font_upload' && /^[a-f0-9]{64}$/.test(args.assetKey)),
     'arquivo nativo recebe uma chave estável para reutilizar o cache');
   const saved = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
-  player.openModal('module-sequencer', 7, master);
+  player.openModal('module-trance-gate', 7, master);
   assert(window.document.querySelector('[data-trance-gate-editor]'));
   assert(!window.document.querySelector('[data-pattern-parameter="semitone"]'));
-  assert.equal(player.createPatternPlaybackSnapshot().sequencer.settings, null,
-    'o módulo 7 nunca ativa o antigo gerador de notas do sequencer');
+  assert.equal(player.createPatternPlaybackSnapshot().sequencer, undefined,
+    'o antigo gerador de notas do sequencer não existe mais');
   const step = window.document.querySelector('[data-trance-gate-step="1"]');
   step.click();
   await player.syncNativeEngine();
@@ -1218,7 +1223,7 @@ try {
   assert.equal(gateConfig.length, 8);
   assert.equal(gateConfig.beatMultiplier, 1 / 3);
   assert.equal(gateConfig.depth, 0.5);
-  window.document.querySelector('[data-module-effect-power="sequencer"]').click();
+  window.document.querySelector('[data-module-effect-power="trance-gate"]').click();
   await player.syncNativeEngine();
   assert.equal(calls.filter(c => c.command === 'configure_trance_gate').at(-1).args.config.enabled, false);
   const gateBackup = JSON.parse(JSON.stringify(player.createSavedPlayerState()));

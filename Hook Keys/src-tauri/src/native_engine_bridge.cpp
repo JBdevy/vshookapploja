@@ -82,8 +82,7 @@ int hk_runtime_configure_module(
   if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
   hook_keys::ModuleConfig config;
   config.enabled = enabled != 0;
-  config.midiInputSlot = inputSlot == static_cast<int>(hook_keys::kArpeggiatorInput) ||
-          inputSlot == static_cast<int>(hook_keys::kSequencerInput)
+  config.midiInputSlot = inputSlot == static_cast<int>(hook_keys::kArpeggiatorInput)
       ? static_cast<std::uint8_t>(inputSlot)
       : inputSlot >= 0 && inputSlot < static_cast<int>(hook_keys::kMidiInputCount)
           ? static_cast<std::uint8_t>(inputSlot) : hook_keys::kAllMidiInputs;
@@ -149,7 +148,8 @@ int hk_runtime_configure_effects(
     float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
     float rotaryDepth, float rotaryMix, int rotaryModulationEnabled,
     int chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
-    int autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb) noexcept {
+    int autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
+    float inputGainDb) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount || !cutoffVelocity || !eqTypes || !eqFrequencies ||
       !eqGains || !eqQualities || !eqCutStages) return 0;
   hook_keys::ModuleEffectsConfig effects;
@@ -180,6 +180,7 @@ int hk_runtime_configure_effects(
                     rotaryModulationEnabled != 0};
   effects.chorus = {chorusEnabled != 0, chorusRateHz, chorusDepth, chorusMix};
   effects.autoFader = {autoFaderEnabled != 0, autoFaderBeats, autoFaderDepthDb};
+  effects.inputGainDb = inputGainDb;
   return runtime(handle)->setModuleEffects(moduleIndex, effects) ? 1 : 0;
 }
 

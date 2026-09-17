@@ -45,7 +45,7 @@ assert.match(player,
   /Capacitor\.isNativePlatform\(\) \? 'application\/octet-stream,\.sf2' : '\.sf2'/,
   'iOS/Android precisam solicitar um documento, sem oferecer câmera ou fotos');
 assert.match(player, /function moduleEmptySoundName[\s\S]*?return 'Sem timbre'/,
-  'Arpeggiator e Sequencer não devem ocupar o botão da biblioteca');
+  'Arpeggiator e Trance Gate não devem ocupar o botão da biblioteca');
 assert.match(player, /classList\.toggle\('has-selected-timbre'/,
   'O botão do módulo deve receber a cor do timbre escolhido');
 assert.match(soundStore, /storedCreationOrder\(left\) - storedCreationOrder\(right\)/,

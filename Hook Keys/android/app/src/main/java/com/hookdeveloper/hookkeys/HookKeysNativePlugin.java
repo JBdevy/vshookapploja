@@ -530,7 +530,8 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("chorusMix", 0.35f),
             call.getBoolean("autoFaderEnabled", false),
             call.getFloat("autoFaderBeats", 1.0f),
-            call.getFloat("autoFaderDepthDb", 6.0f)
+            call.getFloat("autoFaderDepthDb", 6.0f),
+            call.getFloat("inputGainDb", 0.0f)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -1036,7 +1037,8 @@ public class HookKeysNativePlugin extends Plugin {
         float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
         float rotaryDepth, float rotaryMix, boolean rotaryModulationEnabled,
         boolean chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
-        boolean autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb
+        boolean autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
+        float inputGainDb
     );
     private static native boolean nativeConfigureModuleEnvelope(
         int moduleIndex, float attackMs, float holdMs, float decayMs, float releaseMs, float glideMs

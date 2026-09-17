@@ -182,14 +182,14 @@ struct ChorusConfig final {
 };
 
 // Auto Fader: o volume desce e volta no tempo do BPM. depthDb é o quanto ele
-// desce a partir do volume atual do módulo; beats é 1 (1/4) ou 0,5 (1/8).
+// desce a partir do volume atual do módulo; beats é 1 (1/4) ou 2 (1/2).
 struct AutoFaderConfig final {
   bool enabled = false;
   float beats = 1.0f;
   float depthDb = 6.0f;
 
   void normalize() noexcept {
-    beats = beats <= 0.75f ? 0.5f : 1.0f;
+    beats = beats >= 1.5f ? 2.0f : 1.0f;
     depthDb = std::clamp(depthDb, 0.0f, 40.0f);
   }
 };
@@ -220,6 +220,9 @@ struct ModuleEffectsConfig final {
   CompressorConfig compressor{};
   DelayConfig delay{};
   ReverbConfig reverb{};
+  // Gain de entrada do módulo, em dB: empurra o sinal nos processadores sem
+  // mexer no fader, que continua sendo o volume de saída.
+  float inputGainDb = 0.0f;
   RotaryConfig rotary{};
   ChorusConfig chorus{};
   AutoFaderConfig autoFader{};
@@ -230,6 +233,7 @@ struct ModuleEffectsConfig final {
     compressor.normalize();
     delay.normalize();
     reverb.normalize();
+    inputGainDb = std::clamp(inputGainDb, -24.0f, 12.0f);
     rotary.normalize();
     chorus.normalize();
     autoFader.normalize();

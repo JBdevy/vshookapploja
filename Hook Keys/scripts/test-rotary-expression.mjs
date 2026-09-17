@@ -53,14 +53,16 @@ test('Rotary and Chorus stack below Compressor, and the compressor has no previe
   assert.equal(effects.readModuleChorusSettings({ enabled: true, rateHz: 99 }).rateHz, 8, 'Rate vai até 8 Hz');
   const settings = load('../src/features/player/ModuleSettingsView.ts', {
     './ModuleEffectsView': effects,
+  './PatternModulesView': { createArpeggiatorMarkup: () => '', readArpeggiatorSettings: () => ({ enabled: false }) },
+  './TranceGateView': { createTranceGateMarkup: () => '', readTranceGateSettings: () => ({ enabled: false }) },
     './ParameterKnobView': load('../src/features/player/ParameterKnobView.ts'),
     './GlideView': glide,
     '../audio/AudioOutputService': { createAudioRouteOptions: () => '' },
     './VelocityCurveView': { createVelocityCardMarkup: () => '', readVelocityLimit: () => 127 },
   });
   assert.match(settings.createModuleSettingsMarkup([], [], null, {}, 120, 2, 'stereo:0', 'rotary'), /toggle-voice-mode/);
-  // Módulos 1-4 (compressor), 5 (rotary), 6 (arpeggiator) e 7 (sequencer/Trance Gate).
-  for (const processor of ['compressor', 'rotary', 'arpeggiator', 'sequencer']) {
+  // Módulos 1-4 (compressor/chorus), 5 (rotary), 6 (arpeggiator) e 7 (Trance Gate).
+  for (const processor of ['compressor', 'rotary', 'arpeggiator', 'trance-gate']) {
     const markup = settings.createModuleSettingsMarkup([], [], null, {}, 120, 2, 'stereo:0', processor);
     assert.match(markup, /class="module-settings-panel module-settings-panel--voice-switch"/);
     assert.match(markup, /module-settings-io-row[\s\S]*?module-polyphony-button[\s\S]*?module-voice-mode-button/);
@@ -78,7 +80,10 @@ test('Rotary defaults to OFF/Slow, validates ranges and preserves presets/backup
   const invalid = effects.readModuleRotarySettings({ speed: 'bad', slowHz: -9, fastHz: 99, rampSeconds: 99, depth: -1, mix: 200 });
   assert.deepEqual({ ...invalid }, { enabled: false, modulationEnabled: false, speed: 'slow', slowHz: .2, fastHz: 10, rampSeconds: 10, depth: 0, mix: 100 });
   const markup = effects.createModuleRotaryMarkup({ rotary: stored });
-  assert.equal([...markup.matchAll(/data-module-effect-control=/g)].length, 5);
+  // O Mix saiu: a caixa toca sempre inteira, em 100%.
+  assert.equal([...markup.matchAll(/data-module-effect-control=/g)].length, 4);
+  assert.doesNotMatch(markup, /data-module-effect-control="mix"/);
+  assert.equal(effects.readModuleRotarySettings({ mix: 30 }).mix, 100);
   assert.match(markup, /data-module-rotary-speed="fast" class="is-selected" aria-pressed="true"/);
   assert.match(markup, /module-effect-knob__face/);
   assert.match(markup, /module-rotary-modulation is-on" data-module-rotary-modulation aria-pressed="true">Modulation On/);
