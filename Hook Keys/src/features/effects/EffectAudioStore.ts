@@ -38,11 +38,19 @@ export class EffectAudioStore {
   }
 
   async get(bank: EffectBankId, effectNumber: number): Promise<Blob | null> {
+    return (await this.getRecord(bank, effectNumber))?.file ?? null;
+  }
+
+  async getFileName(bank: EffectBankId, effectNumber: number): Promise<string | null> {
+    return (await this.getRecord(bank, effectNumber))?.fileName ?? null;
+  }
+
+  private async getRecord(bank: EffectBankId, effectNumber: number): Promise<StoredEffectAudio | null> {
     const database = await this.openDatabase();
     const record = await requestResult<StoredEffectAudio | undefined>(
       database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(this.idFor(bank, effectNumber)),
     );
-    return record?.accountKey === this.accountKey ? record.file : null;
+    return record?.accountKey === this.accountKey ? record : null;
   }
 
   private idFor(bank: EffectBankId, effectNumber: number): string {

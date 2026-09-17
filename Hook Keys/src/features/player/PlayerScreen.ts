@@ -887,6 +887,14 @@ export class PlayerScreen {
   private readonly handleDesktopPlaylistKeydown = (event: KeyboardEvent) => this.onDesktopPlaylistKeydown(event);
   private modal: HTMLElement | null = null;
   private modalTrigger: HTMLElement | null = null;
+  private userPhotoCrop: {
+    image: HTMLImageElement;
+    canvas: HTMLCanvasElement;
+    zoom: number;
+    offsetX: number;
+    offsetY: number;
+    drag: { pointerId: number; x: number; y: number } | null;
+  } | null = null;
   private tracksPanelController: TracksPanelController | null = null;
   private tabletInputKeyboardController: TabletInputKeyboardController | null = null;
   private splitTracksController: TracksPanelController | null = null;
@@ -4787,6 +4795,24 @@ export class PlayerScreen {
             </div>
           </div>
           <p class="user-profile-message" data-user-profile-message role="status" aria-live="polite"></p>
+          <div class="user-photo-preview" data-user-photo-preview hidden>
+            <div class="user-photo-preview__dialog" role="dialog" aria-modal="true" aria-labelledby="user-photo-preview-title">
+              <strong id="user-photo-preview-title">Prévia da foto</strong>
+              <div class="user-photo-preview__editor" data-user-photo-crop>
+                <canvas width="720" height="405" data-user-photo-canvas aria-label="Ajuste da foto do perfil"></canvas>
+                <span class="user-photo-preview__mask" aria-hidden="true"></span>
+                <div class="user-photo-preview__zoom" aria-label="Zoom da foto">
+                  <button type="button" data-user-photo-zoom="in" aria-label="Aumentar foto">+</button>
+                  <button type="button" data-user-photo-zoom="out" aria-label="Diminuir foto">−</button>
+                </div>
+              </div>
+              <p>Arraste a imagem e ajuste o zoom. A área dentro do círculo será usada no perfil.</p>
+              <div class="user-photo-preview__actions">
+                <button type="button" data-modal-action="cancel-user-photo">Escolher outra</button>
+                <button type="button" data-modal-action="save-user-photo">Usar esta foto</button>
+              </div>
+            </div>
+          </div>
         </section>
       `;
     } else if (kind === 'user-name') {
@@ -5909,6 +5935,15 @@ export class PlayerScreen {
         if (button) void this.saveUserProfileName(modal, button);
         return;
       }
+      if (kind === 'user' && modalAction === 'cancel-user-photo') {
+        this.closeUserProfilePhotoPreview(modal, true);
+        return;
+      }
+      if (kind === 'user' && modalAction === 'save-user-photo') {
+        const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
+        if (button) void this.saveUserProfilePhoto(modal, button);
+        return;
+      }
       if (modalAction === 'confirm' || modalAction === 'cancel') {
         if (modalAction === 'cancel' && kind === 'password-reset') {
           this.passwordResetChallenge = null;
@@ -6236,7 +6271,7 @@ export class PlayerScreen {
         return;
       }
       if (kind === 'user' && input instanceof HTMLInputElement && input.matches('[data-user-profile-file]')) {
-        void this.uploadUserProfilePhoto(modal, input);
+        void this.previewUserProfilePhoto(modal, input);
         return;
       }
       if (kind === 'user' && input instanceof HTMLInputElement && input.matches('[data-player-backup-file]')) {
@@ -6532,11 +6567,11 @@ export class PlayerScreen {
         : 'Data de criação indisponível';
     }
     if (fallback) fallback.textContent = initialsFor(name);
-    if (image && profile.photoDataUrl) {
-      image.src = profile.photoDataUrl;
-      image.hidden = false;
-      if (fallback) fallback.hidden = true;
+    if (image) {
+      image.src = profile.photoDataUrl || '';
+      image.hidden = !profile.photoDataUrl;
     }
+    if (fallback) fallback.hidden = Boolean(profile.photoDataUrl);
   }
 
   private async saveUserProfileName(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
@@ -6568,21 +6603,121 @@ export class PlayerScreen {
     }
   }
 
-  private async uploadUserProfilePhoto(modal: HTMLElement, input: HTMLInputElement): Promise<void> {
+  private async previewUserProfilePhoto(modal: HTMLElement, input: HTMLInputElement): Promise<void> {
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
     const message = modal.querySelector<HTMLElement>('[data-user-profile-message]');
+    if (message) message.textContent = 'Preparando prévia...';
+    try {
+      const image = await loadProfilePhoto(file);
+      if (!modal.isConnected) return;
+      const preview = modal.querySelector<HTMLElement>('[data-user-photo-preview]');
+      const canvas = modal.querySelector<HTMLCanvasElement>('[data-user-photo-canvas]');
+      const editor = modal.querySelector<HTMLElement>('[data-user-photo-crop]');
+      if (!preview || !canvas || !editor) return;
+      this.userPhotoCrop = { image, canvas, zoom: 1, offsetX: 0, offsetY: 0, drag: null };
+      this.bindUserProfilePhotoCrop(editor);
+      this.renderUserProfilePhotoCrop();
+      preview.hidden = false;
+      if (message) message.textContent = '';
+      modal.querySelector<HTMLButtonElement>('[data-modal-action="save-user-photo"]')?.focus();
+    } catch {
+      if (message) message.textContent = 'Não foi possível abrir esta imagem.';
+    }
+  }
+
+  private closeUserProfilePhotoPreview(modal: HTMLElement, chooseAgain = false): void {
+    const preview = modal.querySelector<HTMLElement>('[data-user-photo-preview]');
+    if (preview) preview.hidden = true;
+    this.userPhotoCrop = null;
+    if (chooseAgain) modal.querySelector<HTMLInputElement>('[data-user-profile-file]')?.click();
+  }
+
+  private bindUserProfilePhotoCrop(editor: HTMLElement): void {
+    const canvas = this.userPhotoCrop?.canvas;
+    if (!canvas) return;
+    canvas.onpointerdown = (event) => {
+      if (!this.userPhotoCrop) return;
+      canvas.setPointerCapture(event.pointerId);
+      this.userPhotoCrop.drag = { pointerId:event.pointerId, x:event.clientX, y:event.clientY };
+      canvas.classList.add('is-dragging');
+    };
+    canvas.onpointermove = (event) => {
+      const state = this.userPhotoCrop;
+      if (!state?.drag || state.drag.pointerId !== event.pointerId) return;
+      const rect = canvas.getBoundingClientRect();
+      state.offsetX += (event.clientX - state.drag.x) * canvas.width / Math.max(1, rect.width);
+      state.offsetY += (event.clientY - state.drag.y) * canvas.height / Math.max(1, rect.height);
+      state.drag.x = event.clientX;
+      state.drag.y = event.clientY;
+      this.renderUserProfilePhotoCrop();
+    };
+    const endDrag = (event: PointerEvent) => {
+      if (this.userPhotoCrop?.drag?.pointerId !== event.pointerId) return;
+      this.userPhotoCrop.drag = null;
+      canvas.classList.remove('is-dragging');
+    };
+    canvas.onpointerup = endDrag;
+    canvas.onpointercancel = endDrag;
+    editor.querySelectorAll<HTMLButtonElement>('[data-user-photo-zoom]').forEach((button) => {
+      button.onclick = () => {
+        const state = this.userPhotoCrop;
+        if (!state) return;
+        const previous = state.zoom;
+        state.zoom = button.dataset.userPhotoZoom === 'in'
+          ? Math.min(4, state.zoom * 1.18)
+          : Math.max(1, state.zoom / 1.18);
+        const ratio = state.zoom / previous;
+        state.offsetX *= ratio;
+        state.offsetY *= ratio;
+        this.renderUserProfilePhotoCrop();
+      };
+    });
+  }
+
+  private renderUserProfilePhotoCrop(): void {
+    const state = this.userPhotoCrop;
+    if (!state) return;
+    const { canvas, image } = state;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const diameter = canvas.height * .68;
+    const radius = diameter / 2;
+    const scale = Math.max(diameter / image.naturalWidth, diameter / image.naturalHeight) * state.zoom;
+    const width = image.naturalWidth * scale;
+    const height = image.naturalHeight * scale;
+    state.offsetX = Math.min(Math.max(state.offsetX, radius - width / 2), width / 2 - radius);
+    state.offsetY = Math.min(Math.max(state.offsetY, radius - height / 2), height / 2 - radius);
+    context.fillStyle = '#090604';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(
+      image,
+      canvas.width / 2 + state.offsetX - width / 2,
+      canvas.height / 2 + state.offsetY - height / 2,
+      width,
+      height,
+    );
+  }
+
+  private async saveUserProfilePhoto(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
+    const imageDataUrl = createProfilePhotoCrop(this.userPhotoCrop);
+    const message = modal.querySelector<HTMLElement>('[data-user-profile-message]');
+    if (!imageDataUrl.startsWith('data:image/')) return;
     if (!navigator.onLine) {
       if (message) message.textContent = 'Sem conexão com a internet.';
       return;
     }
+    const cancel = modal.querySelector<HTMLButtonElement>('[data-modal-action="cancel-user-photo"]');
+    button.disabled = true;
+    if (cancel) cancel.disabled = true;
+    button.textContent = 'Salvando...';
     if (message) message.textContent = 'Salvando foto...';
     try {
-      const imageDataUrl = await resizeProfilePhoto(file);
       const profile = await this.accountControls.saveProfilePhoto(imageDataUrl);
       if (!modal.isConnected) return;
       this.renderUserProfile(modal, profile);
+      this.closeUserProfilePhotoPreview(modal);
       if (message) message.textContent = 'Foto atualizada.';
     } catch (error) {
       if (message) {
@@ -6590,6 +6725,12 @@ export class PlayerScreen {
           ? 'Sem conexão com a internet.'
           : 'Não foi possível atualizar a foto.';
       }
+    } finally {
+      if (button.isConnected) {
+        button.disabled = false;
+        button.textContent = 'Usar esta foto';
+      }
+      if (cancel?.isConnected) cancel.disabled = false;
     }
   }
 
@@ -9388,6 +9529,7 @@ export class PlayerScreen {
   private closeModal(restoreFocus = true, preserveHistory = false): void {
     if (!this.modal) return;
 
+    if (this.currentModalKind === 'user') this.userPhotoCrop = null;
     this.eqBandDrag = null;
     this.knobDrag = null;
     // Fechando a janela o visor do knob sai junto, sem esperar o tempo dele.
@@ -9497,8 +9639,9 @@ export class PlayerScreen {
   private async restoreSavedPlayerState(): Promise<void> {
     try {
       const saved = await this.playerState.load();
-      if (!saved || this.stateChangedBeforeRestore) return;
-      this.applySavedPlayerState(saved);
+      if (this.stateChangedBeforeRestore) return;
+      if (saved) this.applySavedPlayerState(saved);
+      await this.restoreEffectAudioAssignments();
       this.restoreActivePresetState();
       this.renderActivePadBank();
       this.renderActiveEffectBank();
@@ -9506,6 +9649,15 @@ export class PlayerScreen {
     } catch {
       this.setStatus('Suas configurações serão sincronizadas quando houver conexão.');
     }
+  }
+
+  private async restoreEffectAudioAssignments(): Promise<void> {
+    await Promise.all(EFFECT_BANK_IDS.flatMap((bank) => (
+      (this.effectPadStates.get(bank) ?? []).map(async (effect, index) => {
+        const fileName = await this.effectAudioLibrary.getFileName(bank, index + 1).catch(() => null);
+        effect.audioFileName = fileName;
+      })
+    )));
   }
 
   private markPlayerStateChanged(syncNative = true): void {
@@ -10687,36 +10839,44 @@ function initialsFor(name: string): string {
   return initials.toLocaleUpperCase('pt-BR');
 }
 
-async function resizeProfilePhoto(file: File): Promise<string> {
+async function loadProfilePhoto(file: File): Promise<HTMLImageElement> {
   if (!file.type.startsWith('image/')) throw new Error('invalid_image');
   const sourceUrl = URL.createObjectURL(file);
   try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    return await new Promise<HTMLImageElement>((resolve, reject) => {
       const element = new Image();
       element.onload = () => resolve(element);
       element.onerror = () => reject(new Error('invalid_image'));
       element.src = sourceUrl;
     });
-    const side = Math.min(image.naturalWidth, image.naturalHeight);
-    if (!side) throw new Error('invalid_image');
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('canvas_unavailable');
-    context.drawImage(
-      image,
-      (image.naturalWidth - side) / 2,
-      (image.naturalHeight - side) / 2,
-      side,
-      side,
-      0,
-      0,
-      256,
-      256,
-    );
-    return canvas.toDataURL('image/jpeg', 0.78);
   } finally {
     URL.revokeObjectURL(sourceUrl);
   }
+}
+
+function createProfilePhotoCrop(state: {
+  image: HTMLImageElement;
+  canvas: HTMLCanvasElement;
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+} | null): string {
+  if (!state) return '';
+  const { image, canvas } = state;
+  const diameter = canvas.height * .68;
+  const scale = Math.max(diameter / image.naturalWidth, diameter / image.naturalHeight) * state.zoom;
+  const renderedWidth = image.naturalWidth * scale;
+  const renderedHeight = image.naturalHeight * scale;
+  const renderedLeft = canvas.width / 2 + state.offsetX - renderedWidth / 2;
+  const renderedTop = canvas.height / 2 + state.offsetY - renderedHeight / 2;
+  const sourceSide = diameter / scale;
+  const sourceX = (canvas.width / 2 - diameter / 2 - renderedLeft) / scale;
+  const sourceY = (canvas.height / 2 - diameter / 2 - renderedTop) / scale;
+  const output = document.createElement('canvas');
+  output.width = 256;
+  output.height = 256;
+  const context = output.getContext('2d');
+  if (!context) throw new Error('canvas_unavailable');
+  context.drawImage(image, sourceX, sourceY, sourceSide, sourceSide, 0, 0, 256, 256);
+  return output.toDataURL('image/jpeg', .82);
 }

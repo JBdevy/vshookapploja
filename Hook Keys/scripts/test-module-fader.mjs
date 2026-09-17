@@ -8,6 +8,15 @@ const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const handleRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .filter(([, selector]) => selector.trim().endsWith('.player-module__fader-handle'));
 
+test('FX escolhidos para os pads voltam do armazenamento local ao reabrir o app', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const store = readFileSync(new URL('../src/features/effects/EffectAudioStore.ts', import.meta.url), 'utf8');
+  assert.match(store, /async getFileName\(bank: EffectBankId, effectNumber: number\)/);
+  assert.match(store, /getRecord\(bank, effectNumber\)\)\?\.fileName/);
+  assert.match(player, /await this\.restoreEffectAudioAssignments\(\)/);
+  assert.match(player, /effect\.audioFileName = fileName/);
+});
+
 test('iOS bridge registers a plugin instance rather than a type skipped by auto-registration', () => {
   const controller = readFileSync(new URL('../ios/App/App/HookKeysBridgeViewController.swift', import.meta.url), 'utf8');
   assert.match(controller, /private let hookKeysNativePlugin = HookKeysNativePlugin\(\)/);
