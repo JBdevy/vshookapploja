@@ -1538,7 +1538,7 @@ fn safe_backup_file_name(value: &str) -> String {
 
 #[tauri::command]
 async fn save_backup(file_name: String, content: String) -> Result<SaveBackupResult, String> {
-    const MAX_BACKUP_BYTES: usize = 1024 * 1024;
+    const MAX_BACKUP_BYTES: usize = 16 * 1024 * 1024;
     if content.is_empty() || content.len() > MAX_BACKUP_BYTES {
         return Err("O arquivo de backup é inválido ou muito grande.".into());
     }

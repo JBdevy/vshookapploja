@@ -6510,8 +6510,15 @@ export class PlayerScreen {
       if (message) message.textContent = result.saved
         ? `Backup salvo em ${result.fileName}.`
         : 'Salvamento do backup cancelado.';
-    } catch {
-      if (message) message.textContent = 'Não foi possível salvar o backup.';
+    } catch (error) {
+      const detail = nativeErrorMessage(error);
+      if (message) {
+        message.textContent = detail === 'backup_file_too_large'
+          ? 'O backup ficou maior que 16 MB.'
+          : detail && !detail.includes('_')
+            ? detail
+            : 'Não foi possível salvar o backup.';
+      }
     } finally {
       if (button.isConnected) button.disabled = false;
     }

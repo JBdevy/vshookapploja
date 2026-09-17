@@ -645,7 +645,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             return
         }
         guard let content = call.getString("content"), !content.isEmpty,
-              let data = content.data(using: .utf8), data.count <= 1024 * 1024 else {
+              let data = content.data(using: .utf8), data.count <= 16 * 1024 * 1024 else {
             call.reject("O arquivo de backup é inválido ou muito grande.")
             return
         }

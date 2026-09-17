@@ -396,7 +396,7 @@ public class HookKeysNativePlugin extends Plugin {
     public void saveBackup(PluginCall call) {
         String content = call.getString("content");
         if (content == null || content.isEmpty()
-                || content.getBytes(StandardCharsets.UTF_8).length > 1024 * 1024) {
+                || content.getBytes(StandardCharsets.UTF_8).length > 16 * 1024 * 1024) {
             call.reject("O arquivo de backup é inválido ou muito grande.");
             return;
         }

@@ -49,6 +49,18 @@ test('cancelled native picker is reported without uploading anything', async () 
   assert.equal(result.saved, false);
 });
 
+test('backup accepts the current preset library above the old 1 MB limit', async () => {
+  let writtenBytes = 0;
+  const PlayerBackupService = loadService(async (_fileName, content) => {
+    writtenBytes = Buffer.byteLength(content);
+    return true;
+  });
+  const state = { presets: 'x'.repeat(2 * 1024 * 1024) };
+  const result = await new PlayerBackupService('cliente@example.com').backupNow(state);
+  assert.equal(result.saved, true);
+  assert.ok(writtenBytes > 1024 * 1024);
+});
+
 test('restore accepts local v2 and keeps compatibility with same-account v1', async () => {
   const PlayerBackupService = loadService(async () => true);
   const service = new PlayerBackupService('cliente@example.com');

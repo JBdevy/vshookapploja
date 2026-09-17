@@ -14,7 +14,7 @@ export interface BackupResult {
   saved: boolean;
 }
 
-const MAX_BACKUP_FILE_BYTES = 1024 * 1024;
+const MAX_BACKUP_FILE_BYTES = 16 * 1024 * 1024;
 
 export class PlayerBackupService {
   private snapshotProvider: (() => unknown) | null = null;
