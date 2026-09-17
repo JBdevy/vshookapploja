@@ -3445,12 +3445,14 @@ export class PlayerScreen {
 
   private defaultSettingsForModule(moduleNumber: number, moduleState: ModulePresetState): Record<string, unknown> {
     const scope = moduleSettingsScope(moduleNumber);
-    const globalSettings = this.soundCatalog.defaultSettings[scope];
     const sound = moduleState.timbreId?.startsWith('fixed:')
       ? this.soundCatalog.get(moduleState.timbreId.slice(6)) : null;
+    const categorySettings = sound
+      ? this.soundCatalog.getCategory(sound.category)?.defaultSettings[scope] ?? {}
+      : this.soundCatalog.defaultSettings[scope];
     const soundSettings = sound?.moduleSettings?.[scope] ?? {};
     return mergeSettings(
-      mergeSettings(createDefaultModuleSettings(moduleNumber - 1), globalSettings),
+      mergeSettings(createDefaultModuleSettings(moduleNumber - 1), categorySettings),
       soundSettings,
     );
   }
@@ -9717,6 +9719,7 @@ export class PlayerScreen {
         // próprio módulo.
         sustain: moduleState?.sustainInputEnabled ?? true,
         modulation: moduleState?.modulationInputEnabled ?? true,
+        gmDrumHiHatChoke: isDrumCatalogSound(this.soundCatalog, moduleState?.timbreId),
         volumeDb: moduleState?.volumeDb ?? 0,
         // O próprio sintetizador administra Mono/Poly. O roteador precisa
         // encaminhar todas as notas para preservar prioridade e legato no Mono.
@@ -10494,6 +10497,14 @@ function moduleSettingsScope(moduleNumber: number): 'modules1To4' | 'module5' | 
   if (moduleNumber === 6) return 'module6';
   if (moduleNumber === 7) return 'module7';
   return 'modules1To4';
+}
+
+function isDrumCatalogSound(catalog: SoundCatalog, timbreId: string | null | undefined): boolean {
+  if (!timbreId?.startsWith('fixed:')) return false;
+  const sound = catalog.get(timbreId.slice(6));
+  if (!sound) return false;
+  const category = catalog.getCategory(sound.category);
+  return sound.category.toLowerCase() === 'drum' || category?.name.trim().toLowerCase() === 'drum';
 }
 
 function cloneSettings(value: Readonly<Record<string, unknown>>): Record<string, unknown> {

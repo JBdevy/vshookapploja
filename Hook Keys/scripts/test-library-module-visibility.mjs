@@ -100,6 +100,12 @@ test('catalog keeps Global settings and per-sound scopes for modules 1-4, 5, 6 a
     defaultSettings: settings,
     categories: [{
       ...category('configured', null),
+      defaultSettings: {
+        modules1To4: { attackMs: 7 },
+        module5: { rotary: { enabled: false } },
+        module6: { arpeggiator: { enabled: true } },
+        module7: { tranceGate: { enabled: false } },
+      },
       sounds: [{
         id: 'configured-sound', name: 'Configured', color: '#118ab2',
         sf2ObjectKey: 'library/configured.sf2', moduleSettings: settings,
@@ -107,6 +113,8 @@ test('catalog keeps Global settings and per-sound scopes for modules 1-4, 5, 6 a
     }],
   });
   assert.equal(sounds.defaultSettings.modules1To4.attackMs, 3);
+  assert.equal(sounds.getCategory('configured').defaultSettings.modules1To4.attackMs, 7);
+  assert.equal(sounds.getCategory('configured').defaultSettings.module6.arpeggiator.enabled, true);
   assert.equal(sounds.get('configured-sound').moduleSettings.module5.rotary.enabled, true);
   assert.equal(sounds.get('configured-sound').moduleSettings.module7.tranceGate.enabled, true);
 });

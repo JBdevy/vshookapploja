@@ -197,6 +197,40 @@ void testRepeatedNoteLayersUntilNoteOff() {
       "one Note Off asks the synth to release the complete repeated-note group");
 }
 
+void testGmDrumHiHatChoke() {
+  RecordingSynth drum;
+  RecordingSynth piano;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &drum;
+  modules[1] = &piano;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig drumConfig;
+  drumConfig.midiInputSlot = hook_keys::kAllMidiInputs;
+  drumConfig.gmDrumHiHatChoke = true;
+  hook_keys::ModuleConfig pianoConfig;
+  pianoConfig.midiInputSlot = hook_keys::kAllMidiInputs;
+  expect(engine.setModuleConfig(0, drumConfig), "configure GM drum hi-hat choke");
+  expect(engine.setModuleConfig(1, pianoConfig), "configure regular layered module");
+  expect(engine.enqueueMidi(midi(0x90, 46, 100)), "play GM open hi-hat");
+  expect(engine.enqueueMidi(midi(0x90, 42, 110)), "closed hi-hat chokes open hi-hat");
+  expect(engine.enqueueMidi(midi(0x90, 44, 105)), "pedal hi-hat chokes closed hi-hat");
+  process(engine);
+
+  expect(drum.events.size() == 5, "each new GM hi-hat chokes the preceding drum voice");
+  expect(drum.events[0].type == Event::Type::noteOn && drum.events[0].data1 == 46,
+      "GM open hi-hat starts normally");
+  expect(drum.events[1].type == Event::Type::noteOff && drum.events[1].data1 == 46 &&
+         drum.events[2].type == Event::Type::noteOn && drum.events[2].data1 == 42,
+      "GM closed hi-hat immediately cuts the open hi-hat");
+  expect(drum.events[3].type == Event::Type::noteOff && drum.events[3].data1 == 42 &&
+         drum.events[4].type == Event::Type::noteOn && drum.events[4].data1 == 44,
+      "GM pedal hi-hat immediately cuts the closed hi-hat");
+  expect(piano.events.size() == 3 &&
+         std::all_of(piano.events.begin(), piano.events.end(), [](const Event& event) {
+           return event.type == Event::Type::noteOn;
+         }), "the same GM notes keep layering outside the Drum category");
+}
+
 void testFifoPolyphonySteal() {
   RecordingSynth synth;
   hook_keys::HookKeysEngine::SynthModules modules{};
@@ -2498,6 +2532,7 @@ int main() {
   testPatternGeneratorRouting();
   testMonoVoiceSteal();
   testRepeatedNoteLayersUntilNoteOff();
+  testGmDrumHiHatChoke();
   testFifoPolyphonySteal();
   testArpeggiatorRouteClearsSustain();
   testPerModuleControllerFilters();

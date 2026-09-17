@@ -23,6 +23,7 @@ export interface FixedSoundDefinition {
 export interface SoundCatalogCategory extends SoundCategoryDefinition {
   sounds: readonly FixedSoundDefinition[];
   visibleModule?: number | null;
+  defaultSettings: ModuleSoundSettings;
 }
 
 export interface PerformanceAssetDefinition {
@@ -122,6 +123,7 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
       color: safeColor(rawCategory.color),
       order: positiveInteger(rawCategory.order, categoryIndex + 1),
       visibleModule: visibleModule(rawCategory.visibleModule),
+      defaultSettings: readModuleSettings(rawCategory.defaultSettings),
       sounds,
     });
   }).sort((left, right) => left.order - right.order);

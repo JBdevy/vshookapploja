@@ -396,6 +396,23 @@ void HookKeysEngine::routeNoteOn(
         (generatedModule < 0 && (sourceNote < config.lowNote || sourceNote > config.highNote))) {
       continue;
     }
+    if (config.gmDrumHiHatChoke &&
+        (sourceNote == 42 || sourceNote == 44 || sourceNote == 46)) {
+      // GM: closed (42), pedal (44) and open (46) are mutually exclusive.
+      // Use the stealing release so the choke also wins over sustain/pedal.
+      constexpr std::array<std::uint8_t, 3> kGmHiHats{42, 44, 46};
+      for (std::size_t input = 0; input < kRoutableMidiInputCount; ++input) {
+        for (const auto hiHat : kGmHiHats) {
+          const auto soundingNote = activeNotes_[index][input][hiHat];
+          if (soundingNote < 0) continue;
+          synth->stealNote(static_cast<std::uint8_t>(soundingNote));
+          activeNotes_[index][input][hiHat] = -1;
+          activeNoteOrders_[index][input][hiHat] = 0;
+          activeNoteCounts_[index][input][hiHat] = 0;
+          sustainedNoteCounts_[index][input][hiHat] = 0;
+        }
+      }
+    }
     const auto targetNote = translatedNote(sourceNote, config.octaveShift);
     // Lido antes do roubo: no Mono a nota nova tira a anterior, e o Trance Gate
     // não pode recomeçar o padrão a cada nota tocada ligada.

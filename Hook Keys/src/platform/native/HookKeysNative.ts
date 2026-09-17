@@ -27,6 +27,7 @@ export interface NativeModuleConfig {
   octave: number;
   sustain: boolean;
   modulation: boolean;
+  gmDrumHiHatChoke: boolean;
   volumeDb: number;
   polyphony: number;
   velocityCurve0: number;

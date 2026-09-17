@@ -564,7 +564,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
 
 - (BOOL)configureModule:(NSInteger)moduleIndex enabled:(BOOL)enabled inputSlot:(NSInteger)inputSlot
                  lowNote:(NSInteger)lowNote highNote:(NSInteger)highNote octave:(NSInteger)octave
-                 sustain:(BOOL)sustain modulation:(BOOL)modulation volumeDb:(float)volumeDb
+                 sustain:(BOOL)sustain modulation:(BOOL)modulation gmDrumHiHatChoke:(BOOL)gmDrumHiHatChoke
+                volumeDb:(float)volumeDb
                 polyphony:(NSInteger)polyphony velocityCurve0:(NSInteger)velocityCurve0
            velocityCurve1:(NSInteger)velocityCurve1 velocityCurve2:(NSInteger)velocityCurve2
            velocityCurve3:(NSInteger)velocityCurve3 velocityCurve4:(NSInteger)velocityCurve4
@@ -583,6 +584,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
   config.octaveShift = static_cast<std::int8_t>(std::clamp<NSInteger>(octave, -3, 3));
   config.sustainInputEnabled = sustain;
   config.modulationInputEnabled = modulation;
+  config.gmDrumHiHatChoke = gmDrumHiHatChoke;
   config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
   config.polyphony = static_cast<std::uint16_t>(std::clamp<NSInteger>(polyphony, 1, 128));
   config.velocityCurve = {

@@ -207,6 +207,7 @@ public:
       std::int8_t octave,
       bool sustain,
       bool modulation,
+      bool gmDrumHiHatChoke,
       float volumeDb,
       int polyphony,
       int velocityCurve0,
@@ -228,6 +229,7 @@ public:
     config.octaveShift = octave;
     config.sustainInputEnabled = sustain;
     config.modulationInputEnabled = modulation;
+    config.gmDrumHiHatChoke = gmDrumHiHatChoke;
     config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
     config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
     config.velocityCurve = {
@@ -670,6 +672,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
     jint octave,
     jboolean sustain,
     jboolean modulation,
+    jboolean gmDrumHiHatChoke,
     jfloat volumeDb,
     jint polyphony,
     jint velocityCurve0,
@@ -688,6 +691,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
              static_cast<std::int8_t>(octave),
              sustain == JNI_TRUE,
              modulation == JNI_TRUE,
+             gmDrumHiHatChoke == JNI_TRUE,
              volumeDb,
              static_cast<int>(polyphony),
              static_cast<int>(velocityCurve0),

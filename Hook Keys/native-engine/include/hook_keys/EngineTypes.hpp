@@ -29,6 +29,8 @@ struct ModuleConfig final {
   bool enabled = true;
   bool sustainInputEnabled = true;
   bool modulationInputEnabled = true;
+  // GM closed/pedal/open hi-hats (42/44/46) form one exclusive choke group.
+  bool gmDrumHiHatChoke = false;
   std::uint8_t lowNote = 0;
   std::uint8_t highNote = 127;
   std::uint8_t midiInputSlot = 0;

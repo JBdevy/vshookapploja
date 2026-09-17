@@ -411,6 +411,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             octave: call.getInt("octave", 0),
             sustain: call.getBool("sustain", true),
             modulation: call.getBool("modulation", true),
+            gmDrumHiHatChoke: call.getBool("gmDrumHiHatChoke", false),
             volumeDb: call.getFloat("volumeDb", 0),
             polyphony: min(128, max(1, call.getInt("polyphony", 128))),
             velocityCurve0: min(127, max(0, call.getInt("velocityCurve0", 0))),

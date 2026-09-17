@@ -76,7 +76,7 @@ int hk_runtime_send_midi(void* handle, std::uint8_t inputSlot, std::uint8_t stat
 int hk_runtime_configure_module(
     void* handle, std::size_t moduleIndex, int enabled, int inputSlot, int lowNote,
     int highNote, int octave, int sustain, int modulation, float volumeDb,
-    int polyphony, int velocityCurve0, int velocityCurve1, int velocityCurve2,
+    int gmDrumHiHatChoke, int polyphony, int velocityCurve0, int velocityCurve1, int velocityCurve2,
     int velocityCurve3, int velocityCurve4, int outputChannelStart,
     int outputChannelCount) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
@@ -91,6 +91,7 @@ int hk_runtime_configure_module(
   config.octaveShift = static_cast<std::int8_t>(std::clamp(octave, -3, 3));
   config.sustainInputEnabled = sustain != 0;
   config.modulationInputEnabled = modulation != 0;
+  config.gmDrumHiHatChoke = gmDrumHiHatChoke != 0;
   config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
   config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
   config.velocityCurve = {

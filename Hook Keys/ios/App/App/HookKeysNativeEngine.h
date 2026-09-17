@@ -46,6 +46,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                   octave:(NSInteger)octave
                  sustain:(BOOL)sustain
               modulation:(BOOL)modulation
+       gmDrumHiHatChoke:(BOOL)gmDrumHiHatChoke
                 volumeDb:(float)volumeDb
                polyphony:(NSInteger)polyphony
           velocityCurve0:(NSInteger)velocityCurve0
