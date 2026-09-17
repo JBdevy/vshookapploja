@@ -47,6 +47,7 @@ interface TracksPanelOptions {
   onAddMusicRequested?: (trigger: HTMLElement) => boolean;
   onTrackSelected?: (track: LocalTrack) => void;
   onVisibleTracksChanged?: (tracks: LocalTrack[]) => void;
+  onTracksDeleting?: (tracks: LocalTrack[]) => void | Promise<void>;
 }
 
 const PLAYLIST_NAME_LIMIT = 40;
@@ -264,6 +265,8 @@ export class TracksPanelController {
       const trigger = target.closest<HTMLElement>('[data-tracks-action="add-music"]');
       if (trigger && this.options.onAddMusicRequested?.(trigger)) return;
       this.root.querySelector<HTMLInputElement>('[data-tracks-file]')?.click();
+    } else if (action === 'delete-all') {
+      this.renderDeleteAllConfirmation();
     } else if (action === 'create-playlist') {
       this.openNameEditor(null);
     } else if (action === 'show-all') {
@@ -304,6 +307,10 @@ export class TracksPanelController {
       this.openPlaylistManager(this.draft.id);
     } else if (action === 'playlist-delete-confirm') {
       void this.deleteDraftPlaylist();
+    } else if (action === 'delete-all-cancel') {
+      this.closeEditor();
+    } else if (action === 'delete-all-confirm') {
+      void this.deleteAllVisibleTracks();
     } else if (action === 'block-delete-cancel') {
       this.closeEditor();
     } else if (action === 'block-delete-confirm') {
@@ -583,6 +590,7 @@ export class TracksPanelController {
         .map((trackId) => this.tracks.find(({ id }) => id === trackId))
         .filter((track): track is LocalTrack => Boolean(track))
       : this.tracks;
+    this.syncDeleteAllButton(visibleTracks.length === 0);
     const visibleItems = this.orderVisibleItems(visibleTracks);
     const orderedTracks = visibleItems
       .filter((item): item is Extract<TrackListItem, { kind: 'track' }> => item.kind === 'track')
@@ -638,6 +646,13 @@ export class TracksPanelController {
 
   private activeScopeId(): string {
     return this.activePlaylistId ?? 'all';
+  }
+
+  private syncDeleteAllButton(disabled: boolean): void {
+    const button = this.root.querySelector<HTMLButtonElement>('[data-tracks-action="delete-all"]');
+    if (!button) return;
+    button.disabled = disabled;
+    button.setAttribute('aria-disabled', String(disabled));
   }
 
   private syncMarqueeLabels(container: HTMLElement): void {
@@ -904,6 +919,61 @@ export class TracksPanelController {
         </div>
       </div>
     `;
+  }
+
+  private renderDeleteAllConfirmation(): void {
+    const playlist = this.activePlaylistId
+      ? this.playlists.find(({ id }) => id === this.activePlaylistId)
+      : null;
+    const trackCount = playlist
+      ? playlist.trackIds.filter((trackId) => this.tracks.some(({ id }) => id === trackId)).length
+      : this.tracks.length;
+    if (trackCount === 0) return;
+    const editor = this.getEditor();
+    editor.hidden = false;
+    editor.innerHTML = `
+      <div class="tracks-playlist-manager">
+        <span>Delete All</span>
+        <h3>${playlist ? escapeMarkup(playlist.name) : 'Todas as músicas'}</h3>
+        <p>${playlist
+          ? 'Todas as músicas serão removidas desta playlist, mas continuarão disponíveis em All.'
+          : 'Todas as músicas adicionadas serão apagadas da biblioteca e de todas as playlists.'}</p>
+        <p data-playlist-message role="alert"></p>
+        <div class="tracks-playlist-editor__actions">
+          <button type="button" data-tracks-action="delete-all-cancel">Cancelar</button>
+          <button class="is-danger" type="button" data-tracks-action="delete-all-confirm">Apagar tudo</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private async deleteAllVisibleTracks(): Promise<void> {
+    const confirmButton = this.root.querySelector<HTMLButtonElement>('[data-tracks-action="delete-all-confirm"]');
+    if (confirmButton) confirmButton.disabled = true;
+    const playlist = this.activePlaylistId
+      ? this.playlists.find(({ id }) => id === this.activePlaylistId)
+      : null;
+    try {
+      if (playlist) {
+        const removedIds = new Set(playlist.trackIds);
+        const layout = (this.layoutsByScope.get(playlist.id) ?? []).filter((itemId) => !removedIds.has(itemId));
+        await Promise.all([
+          this.library.updatePlaylist(playlist.id, playlist.name, []),
+          this.library.saveListLayout(playlist.id, layout),
+        ]);
+      } else {
+        await this.options.onTracksDeleting?.([...this.tracks]);
+        await this.library.deleteAllTracks();
+      }
+      this.closeEditor();
+      await this.refresh();
+      this.setMessage(playlist
+        ? 'Todas as músicas foram removidas desta playlist.'
+        : 'Todas as músicas foram apagadas.');
+    } catch {
+      this.setEditorMessage('Não foi possível apagar todas as músicas.');
+      if (confirmButton) confirmButton.disabled = false;
+    }
   }
 
   private async deleteDraftPlaylist(): Promise<void> {

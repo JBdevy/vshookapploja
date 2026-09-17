@@ -337,6 +337,23 @@ export class TrackTransportController {
     this.render();
   }
 
+  removeTracks(trackIds: readonly string[]): void {
+    const removed = new Set(trackIds);
+    if (this.queuedTrack && removed.has(this.queuedTrack.id)) this.clearQueuedTrack();
+    if (!this.selectedTrack || !removed.has(this.selectedTrack.id)) {
+      this.render();
+      return;
+    }
+    this.autoplayPending = false;
+    this.loadSequence += 1;
+    this.audio.pause();
+    this.releaseCurrentSource();
+    this.selectedTrack = null;
+    this.autoQueueSuppressedForTrackId = null;
+    this.state = 'empty';
+    this.render();
+  }
+
   private async startPlayback(): Promise<void> {
     if (this.hasDuration() && this.audio.currentTime >= this.audio.duration) this.audio.currentTime = 0;
     try {

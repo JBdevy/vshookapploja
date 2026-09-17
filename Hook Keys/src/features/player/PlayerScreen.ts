@@ -2738,6 +2738,7 @@ export class PlayerScreen {
         },
         onTrackSelected: (track) => this.selectTrack(track),
         onVisibleTracksChanged: (tracks) => this.updateVisibleTrackSequence(tracks),
+        onTracksDeleting: (tracks) => this.deleteStoredTracks(tracks),
       },
     );
     this.splitTracksController.mount();
@@ -4939,6 +4940,7 @@ export class PlayerScreen {
       : kind === 'tracks'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
+          <button class="tracks-footer-button tracks-footer-button--delete-all" type="button" data-tracks-action="delete-all" disabled aria-disabled="true">Delete All</button>
           <button class="tracks-footer-button tracks-footer-button--add" type="button" data-tracks-action="add-music">Add música</button>
           <button class="tracks-footer-button tracks-footer-button--create" type="button" data-tracks-action="create-playlist">Create playlist</button>
         `
@@ -6480,6 +6482,7 @@ export class PlayerScreen {
         {
           getPlaybackSnapshot: () => this.trackTransport?.getSnapshot() ?? this.trackPlaybackSnapshot,
           onTrackSelected: (track) => this.selectTrack(track),
+          onTracksDeleting: (tracks) => this.deleteStoredTracks(tracks),
           onAddMusicRequested: () => {
             if (!hookKeysNative.audioPicker.isAvailable()) return false;
             void this.importTracksFromNativePicker();
@@ -10510,6 +10513,15 @@ export class PlayerScreen {
         if (bank) bank.selectedPreset = null;
       }
     }
+  }
+
+  private async deleteStoredTracks(tracks: LocalTrack[]): Promise<void> {
+    this.trackTransport?.removeTracks(tracks.map(({ id }) => id));
+    if (!hookKeysNative.audioPicker.isAvailable()) return;
+    await Promise.all(tracks.map((track) => hookKeysNative.audioPicker.delete(
+      track.id,
+      trackFileExtension(track.fileName),
+    )));
   }
 
   // iOS: "Add música" abre direto o seletor de documentos do sistema, já

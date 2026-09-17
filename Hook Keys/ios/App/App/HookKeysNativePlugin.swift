@@ -52,6 +52,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "pickAudioFiles", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "releasePickedAudioFile", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "adoptPickedAudioFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "deleteTrackFile", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "beginTrackUpload", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "appendTrackChunk", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "finishTrackUpload", returnType: CAPPluginReturnPromise),
@@ -924,6 +925,20 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             trackUploads[key] = (try FileHandle(forWritingTo: temporary), temporary, destination)
             call.resolve(["cached": false])
         } catch { call.reject("Não foi possível preparar a música.", nil, error) }
+    }
+
+    @objc func deleteTrackFile(_ call: CAPPluginCall) {
+        guard let file = try? trackFile(call) else { call.reject("Música inválida."); return }
+        trackQueue.async {
+            do {
+                if FileManager.default.fileExists(atPath: file.path) {
+                    try FileManager.default.removeItem(at: file)
+                }
+                DispatchQueue.main.async { call.resolve() }
+            } catch {
+                DispatchQueue.main.async { call.reject("Não foi possível apagar a música.", nil, error) }
+            }
+        }
     }
 
     @objc func appendTrackChunk(_ call: CAPPluginCall) {

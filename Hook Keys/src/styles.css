@@ -7417,10 +7417,25 @@ html[data-runtime="desktop"] .is-tracks-split .player-module__fader-rail { width
 }
 
 .tracks-footer-button--add {
-  margin-left: auto;
   color: #effff3;
   border-color: rgba(69, 235, 123, 0.78);
   background: linear-gradient(180deg, #1a9c4c, #075a2a);
+}
+
+.tracks-footer-button--delete-all {
+  margin-left: auto;
+  color: #fff0ee;
+  border-color: rgba(239, 82, 69, 0.82);
+  background: linear-gradient(180deg, #a72b24, #5e110d);
+}
+
+.tracks-footer-button--delete-all:disabled {
+  color: rgba(218, 208, 203, 0.42);
+  border-color: rgba(124, 112, 106, 0.28);
+  background: linear-gradient(180deg, rgba(67, 61, 58, 0.62), rgba(32, 29, 27, 0.72));
+  cursor: default;
+  filter: grayscale(1);
+  opacity: 0.55;
 }
 
 .tracks-footer-button--create {
@@ -13449,6 +13464,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 html[data-runtime="desktop"] .player-screen--tablet .player-presets--combined {
   grid-template-rows: clamp(26px, 4.6vh, 40px) clamp(54px, 12vh, 92px) clamp(70px, 16.8vh, 120px);
   grid-template-columns: minmax(0, 1fr);
+  row-gap: clamp(6px, 1.1vh, 9px);
 }
 
 @media (max-height: 800px) {

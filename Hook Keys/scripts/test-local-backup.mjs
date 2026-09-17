@@ -81,5 +81,10 @@ test('restore accepts local v2 and keeps compatibility with same-account v1', as
 test('backend email endpoint is absent from the app bundle source', () => {
   const api = readFileSync(new URL('../src/features/account/AccountApi.ts', import.meta.url), 'utf8');
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const playerState = readFileSync(new URL('../src/features/account/PlayerStateService.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(api + player, /player-backup\/email|emailPlayerBackup|Backup enviado para/);
+  assert.doesNotMatch(api, /player-state|getPlayerState|savePlayerState/,
+    'estado e backups não devem ser enviados ao backend');
+  assert.doesNotMatch(playerState, /AccountApi|HttpClient|fetch\(|navigator\.onLine|getPlayerState|savePlayerState/,
+    'salvamento automático deve permanecer somente no armazenamento local');
 });

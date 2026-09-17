@@ -137,7 +137,7 @@ export class HookKeysApp {
     await prepareScreenOrientation('tablet');
     if (changeId !== this.screenChangeId) return;
     this.stopLicenseMonitoring = this.sessions.startLicenseMonitoring(session, () => { void this.showLogin(); });
-    const playerState = new PlayerStateService(this.accountApi, session.token, session.account.email);
+    const playerState = new PlayerStateService(session.account.email);
     const playerBackup = new PlayerBackupService(session.account.email);
     this.playerScreen = new PlayerScreen(
       this.screenRoot,

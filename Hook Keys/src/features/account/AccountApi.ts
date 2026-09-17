@@ -1,13 +1,6 @@
 import type { HttpClient } from '../../shared/api/HttpClient';
 import type { SoundCatalogPayload } from '../sound-library/SoundCatalog';
 
-export interface PlayerStateResponse {
-  ok: true;
-  state: unknown;
-  revision: number;
-  updatedAt?: string;
-}
-
 export interface AppSettingsResponse {
   ok: true;
   acquireLicenseUrl: string;
@@ -42,21 +35,6 @@ export interface AccountProfile {
 
 export class AccountApi {
   constructor(private readonly http: HttpClient) {}
-
-  getPlayerState(token: string): Promise<PlayerStateResponse> {
-    return this.http.request('/api/orangekey/account/player-state', {
-      method: 'GET',
-      token,
-    });
-  }
-
-  savePlayerState(token: string, state: unknown): Promise<{ ok: true }> {
-    return this.http.request('/api/orangekey/account/player-state', {
-      method: 'PUT',
-      token,
-      body: { state },
-    });
-  }
 
   getAppSettings(token: string): Promise<AppSettingsResponse> {
     return this.http.request('/api/orangekey/account/app-settings', {

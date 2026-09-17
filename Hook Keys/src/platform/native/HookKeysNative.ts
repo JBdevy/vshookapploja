@@ -240,6 +240,7 @@ interface HookKeysNativePlugin {
   pickAudioFiles(): Promise<{ files: NativePickedAudioFile[] }>;
   releasePickedAudioFile(options: { path: string }): Promise<void>;
   adoptPickedAudioFile(options: { path: string; key: string; extension: string }): Promise<void>;
+  deleteTrackFile(options: { key: string; extension: string }): Promise<void>;
   beginTrackUpload(options: { key: string; extension: string }): Promise<{ cached: boolean }>;
   appendTrackChunk(options: { key: string; base64: string }): Promise<void>;
   finishTrackUpload(options: { key: string }): Promise<void>;
@@ -783,6 +784,7 @@ class HookKeysNativeBridge {
     release: (path: string) => plugin.releasePickedAudioFile({ path }),
     // A música escolhida vira o arquivo que o motor toca, sem outra cópia.
     adopt: (path: string, key: string, extension: string) => plugin.adoptPickedAudioFile({ path, key, extension }),
+    delete: (key: string, extension: string) => plugin.deleteTrackFile({ key, extension }),
     fileUrl: (path: string) => Capacitor.convertFileSrc(path.startsWith('file://') ? path : `file://${path}`),
   };
 

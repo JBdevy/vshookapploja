@@ -107,6 +107,52 @@ export class TrackLibraryStore {
     );
   }
 
+  async deleteAllTracks(): Promise<LocalTrack[]> {
+    const tracks = await this.list();
+    if (tracks.length === 0) return [];
+    const deletedIds = new Set(tracks.map(({ id }) => id));
+    const database = await this.openDatabase();
+    const [playlists, layouts] = await Promise.all([
+      requestResult<StoredLocalPlaylist[]>(
+        database.transaction(PLAYLIST_STORE_NAME, 'readonly').objectStore(PLAYLIST_STORE_NAME).getAll(),
+      ),
+      requestResult<StoredListLayout[]>(
+        database.transaction(LAYOUT_STORE_NAME, 'readonly').objectStore(LAYOUT_STORE_NAME).getAll(),
+      ),
+    ]);
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(
+        [STORE_NAME, PLAYLIST_STORE_NAME, ORDER_STORE_NAME, LAYOUT_STORE_NAME],
+        'readwrite',
+      );
+      const trackStore = transaction.objectStore(STORE_NAME);
+      tracks.forEach(({ id }) => trackStore.delete(id));
+
+      const playlistStore = transaction.objectStore(PLAYLIST_STORE_NAME);
+      playlists
+        .filter(({ accountKey }) => accountKey === this.accountKey)
+        .forEach((playlist) => playlistStore.put({
+          ...playlist,
+          trackIds: playlist.trackIds.filter((trackId) => !deletedIds.has(trackId)),
+          updatedAt: new Date().toISOString(),
+        }));
+
+      transaction.objectStore(ORDER_STORE_NAME).delete(this.accountKey);
+      const layoutStore = transaction.objectStore(LAYOUT_STORE_NAME);
+      layouts
+        .filter(({ accountKey }) => accountKey === this.accountKey)
+        .forEach((layout) => layoutStore.put({
+          ...layout,
+          itemIds: layout.itemIds.filter((itemId) => !deletedIds.has(itemId)),
+          updatedAt: new Date().toISOString(),
+        }));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Falha ao apagar as músicas.'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Falha ao apagar as músicas.'));
+    });
+    return tracks;
+  }
+
   async listBlocks(scopeId: string): Promise<LocalTrackBlock[]> {
     const database = await this.openDatabase();
     const records = await requestResult<StoredTrackBlock[]>(
