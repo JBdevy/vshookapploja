@@ -7,6 +7,15 @@ final class HookKeysBridgeViewController: CAPBridgeViewController {
     // ponte HookKeysNative exista também no IPA instalado.
     private let hookKeysNativePlugin = HookKeysNativePlugin()
 
+    override var prefersStatusBarHidden: Bool { true }
+
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        setNeedsStatusBarAppearanceUpdate()
+    }
+
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
         bridge?.registerPluginInstance(hookKeysNativePlugin)

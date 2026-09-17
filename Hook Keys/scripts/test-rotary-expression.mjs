@@ -134,6 +134,8 @@ test('real Rotary handlers update module 5, retain parameters through ON/OFF and
   screen.toggleModuleEffectPower(power, 5);
   assert.equal(power.textContent, 'OFF');
   assert.equal(modules[4].settings.rotary.fastHz, 8);
+  // O Reset devolve a página ao Default daquele timbre.
+  screen.defaultSettingsForModule = () => ({ rotary: effects.readModuleRotarySettings(undefined) });
   screen.confirmProcessorReset(5, 'rotary');
   assert.deepEqual(screen.opened, ['module-rotary', 5]);
   assert.deepEqual({ ...modules[4].settings.rotary }, { ...effects.readModuleRotarySettings(undefined) });

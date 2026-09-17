@@ -1868,7 +1868,6 @@ export class PlayerScreen {
       const kind: ModalKind =
         action === 'open-module-settings' ? 'module-settings' : 'sound-selection';
       this.openModal(kind, moduleNumber, actionButton);
-      if (kind === 'sound-selection') void this.refreshSoundCatalog();
       return;
     }
 
@@ -3784,7 +3783,6 @@ export class PlayerScreen {
     settings.division = division;
     moduleState.settings.arpeggiator = settings;
     this.selectPatternButton(modal, '[data-arpeggiator-division]', 'arpeggiatorDivision', division);
-    this.renderArpeggiatorSummary(modal, settings);
     this.commitPatternChange();
   }
 
@@ -3796,7 +3794,6 @@ export class PlayerScreen {
     settings.octaves = octaves;
     moduleState.settings.arpeggiator = settings;
     this.selectPatternButton(modal, '[data-arpeggiator-octaves]', 'arpeggiatorOctaves', String(octaves));
-    this.renderArpeggiatorSummary(modal, settings);
     this.commitPatternChange();
   }
 
@@ -3809,8 +3806,6 @@ export class PlayerScreen {
     const value = updatePatternRangeOutput(input);
     settings[parameter] = value;
     moduleState.settings.arpeggiator = settings;
-    const modal = input.closest<HTMLElement>('.player-modal');
-    if (modal) this.renderArpeggiatorSummary(modal, settings);
     this.commitPatternChange();
     if (parameter === 'autoFaderDepthDb') void this.syncNativeEngine();
   }
@@ -3903,11 +3898,6 @@ export class PlayerScreen {
       button.classList.toggle('is-selected', selected);
       button.setAttribute('aria-pressed', String(selected));
     }
-  }
-
-  private renderArpeggiatorSummary(modal: HTMLElement, settings: ReturnType<typeof readArpeggiatorSettings>): void {
-    const output = modal.querySelector<HTMLOutputElement>('.pattern-editor__summary');
-    if (output) output.value = `${settings.division} · ${settings.octaves} oitava${settings.octaves === 1 ? '' : 's'}`;
   }
 
   private commitPatternChange(): void {
@@ -4983,6 +4973,10 @@ export class PlayerScreen {
       : kind === 'module-settings'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
+          ${moduleState?.settingsMode === 'default' ? '' : `
+            <button class="player-modal__reset-button" type="button"
+              data-modal-action="reset-processor" data-reset-processor="${this.moduleConfigPage}">Reset</button>
+          `}
           <button class="module-effect-power ${settingsPagePower ? 'is-on' : 'is-off'}" type="button"
             data-module-effect-power="${this.moduleConfigPage}" aria-pressed="${settingsPagePower === true}"
             ${settingsPagePower === null ? 'hidden' : ''}>${settingsPagePower ? 'ON' : 'OFF'}</button>
@@ -5011,7 +5005,14 @@ export class PlayerScreen {
                 0,
               ),
             )}</span>
-            <button class="sound-library-download-all" type="button" data-modal-action="download-all-sounds" aria-live="polite">Baixar tudo</button>
+            ${(() => {
+              const downloadable = this.soundCatalog.sounds.filter((sound) => Boolean(sound.sf2ObjectKey));
+              const done = downloadable.length > 0
+                && downloadable.every((sound) => this.installedFixedSoundIds.has(sound.id));
+              return `<button class="sound-library-download-all" type="button" data-modal-action="download-all-sounds" aria-live="polite"${
+                done || downloadable.length === 0 ? ' disabled' : ''
+              }>${done ? 'Tudo baixado' : 'Baixar tudo'}</button>`;
+            })()}
           ` : ''}
           ${processorKind ? `
             <button class="module-processor-reset-button" type="button" data-modal-action="reset-processor" data-reset-processor="${processorKind}">Reset</button>
@@ -6954,14 +6955,14 @@ export class PlayerScreen {
         return `
             <button class="${selected ? 'is-current-timbre' : ''}" type="button" data-user-soundfont-id="${escapeMarkup(soundfont.id)}" data-user-soundfont-name="${escapeMarkup(soundfont.name)}" data-user-soundfont-color="${PRESET_COLORS[soundfont.colorIndex]?.[0] ?? PRESET_COLORS[0]?.[0]}" style="--user-sf2-color-a:${PRESET_COLORS[soundfont.colorIndex]?.[0] ?? PRESET_COLORS[0]?.[0]};--user-sf2-color-b:${PRESET_COLORS[soundfont.colorIndex]?.[1] ?? PRESET_COLORS[0]?.[1]}" aria-current="${selected}">
               <strong>${escapeMarkup(soundfont.name)}</strong>
-              <small>${escapeMarkup(soundfont.fileName)}</small>
+              <small>${escapeMarkup(withoutSoundfontExtension(soundfont.fileName))}</small>
             </button>
           `;
       }).join('');
       const missingMarkup = this.missingUserSoundfonts.map((soundfont) => `
         <button class="is-missing" type="button" data-missing-user-soundfont-id="${escapeMarkup(soundfont.id)}" data-missing-user-soundfont-name="${escapeMarkup(soundfont.name)}">
           <strong>${escapeMarkup(soundfont.name)}</strong>
-          <small>null</small>
+          <small>Arquivo não encontrado</small>
         </button>
       `).join('');
       list.innerHTML = installedMarkup || missingMarkup
@@ -8603,38 +8604,53 @@ export class PlayerScreen {
     confirmation.querySelector<HTMLButtonElement>('[data-processor-reset-choice="cancel"]')?.focus();
   }
 
-  private confirmProcessorReset(moduleNumber: number, processor: 'eq' | ModuleEffectKind): void {
+  private confirmProcessorReset(moduleNumber: number, processor: ModuleSettingsPage | 'eq' | ModuleEffectKind): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     if (!moduleState) return;
-    // O Reset volta aos valores de fábrica sem ligar/desligar o efeito.
-    if (processor === 'eq') moduleState.settings.eqBands = readModuleEqBands(undefined);
-    else if (processor === 'compressor') moduleState.settings.compressor = {
-      ...readModuleCompressorSettings(undefined),
-      enabled: readModuleCompressorSettings(moduleState.settings.compressor).enabled,
+    // O Reset de uma página devolve só ela ao Default daquele timbre, e sem
+    // ligar nem desligar o processador.
+    const reference = this.defaultSettingsForModule(moduleNumber, moduleState);
+    const restore = <T>(key: string, read: (value: unknown) => T, enabled?: boolean) => {
+      const value = read(reference[key]) as T & { enabled?: boolean };
+      if (enabled !== undefined) value.enabled = enabled;
+      moduleState.settings[key] = value;
     };
-    else if (processor === 'reverb') moduleState.settings.reverb = {
-      ...FACTORY_MODULE_REVERB,
-      enabled: readModuleReverbSettings(moduleState.settings.reverb).enabled,
-    };
-    else if (processor === 'rotary') moduleState.settings.rotary = {
-      ...readModuleRotarySettings(undefined),
-      enabled: readModuleRotarySettings(moduleState.settings.rotary).enabled,
-    };
-    else if (processor === 'chorus') moduleState.settings.chorus = {
-      ...readModuleChorusSettings(undefined),
-      enabled: readModuleChorusSettings(moduleState.settings.chorus).enabled,
-    };
-    else moduleState.settings.delay = {
-      ...readModuleDelaySettings(undefined),
-      enabled: readModuleDelaySettings(moduleState.settings.delay).enabled,
-    };
+    if (processor === 'eq') moduleState.settings.eqBands = readModuleEqBands(reference.eqBands);
+    else if (processor === 'envelope') {
+      for (const key of ['attackMs', 'releaseMs', 'holdMs', 'decayMs', 'cutoffHz', 'velocityLimit']) {
+        moduleState.settings[key] = reference[key];
+      }
+    } else if (processor === 'arpeggiator') {
+      restore('arpeggiator', readArpeggiatorSettings,
+        readArpeggiatorSettings(moduleState.settings.arpeggiator).enabled);
+    } else if (processor === 'trance-gate') {
+      restore('tranceGate', readTranceGateSettings,
+        readTranceGateSettings(moduleState.settings.tranceGate).enabled);
+    } else if (processor === 'compressor') {
+      restore('compressor', readModuleCompressorSettings,
+        readModuleCompressorSettings(moduleState.settings.compressor).enabled);
+    } else if (processor === 'reverb') {
+      restore('reverb', readModuleReverbSettings,
+        readModuleReverbSettings(moduleState.settings.reverb).enabled);
+    } else if (processor === 'rotary') {
+      restore('rotary', readModuleRotarySettings,
+        readModuleRotarySettings(moduleState.settings.rotary).enabled);
+    } else if (processor === 'chorus') {
+      restore('chorus', readModuleChorusSettings,
+        readModuleChorusSettings(moduleState.settings.chorus).enabled);
+    } else {
+      restore('delay', readModuleDelaySettings,
+        readModuleDelaySettings(moduleState.settings.delay).enabled);
+    }
     const trigger = this.modalTrigger ?? this.root;
     this.markPlayerStateChanged();
-    const modalKind: ModalKind = processor === 'eq' ? 'module-eq'
-      : processor === 'compressor' ? 'module-compressor'
-        : processor === 'reverb' ? 'module-reverb'
-          : processor === 'rotary' ? 'module-rotary' : 'module-delay';
-    this.openModal(modalKind, moduleNumber, trigger, true);
+    void this.syncNativeEngine();
+    this.openModal(this.currentModalKind === 'module-settings' ? 'module-settings'
+      : processor === 'eq' ? 'module-eq'
+        : processor === 'compressor' ? 'module-compressor'
+          : processor === 'reverb' ? 'module-reverb'
+            : processor === 'rotary' ? 'module-rotary' : 'module-delay',
+      moduleNumber, trigger, true);
     this.setStatus(`${processor === 'eq' ? 'EQ resetado para flat' : `${processor} resetado`} no módulo ${moduleNumber}.`);
   }
 
@@ -10816,6 +10832,11 @@ function soundDownloadErrorMessage(error: unknown): string {
     return 'Não foi possível falar com o servidor do timbre. Confira a conexão.';
   }
   return `Não foi possível baixar este timbre (${raw || 'erro desconhecido'}).`;
+}
+
+// O ".sf2" nao diz nada para quem toca: fica so o nome do arquivo.
+function withoutSoundfontExtension(fileName: string): string {
+  return fileName.replace(/\.sf2$/i, '');
 }
 
 function presetSlotLabel(bank: BankId, presetNumber: number): string {

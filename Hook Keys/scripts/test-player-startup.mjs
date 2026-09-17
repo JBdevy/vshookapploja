@@ -60,6 +60,8 @@ for (const [selector, column, row] of [
   assert.match(playerCss, new RegExp(`${selector}\\s*\\{[^}]*grid-column:\\s*${column};[^}]*grid-row:\\s*${row};`),
     `posição fixa do campo de áudio ${selector}`);
 }
+// Em Default os parâmetros do módulo ficam travados: os testes mexem em User.
+const useUserSettings = () => window.document.querySelector('[data-module-settings-mode="user"]')?.click();
 const root = window.document.createElement('div');
 window.document.body.append(root);
 const player = new window.HookPlayer.PlayerScreen(root, { email: 'startup@example.invalid', name: 'Startup test' },
@@ -477,6 +479,7 @@ try {
   }
   assert.equal(synthShortcut.textContent.trim(), 'Synth', 'alternar modo não muda o atalho frontal');
   player.openModal('module-settings', 8, master);
+  useUserSettings();
   assert(!window.document.querySelector('.module-compressor-preview'),
     'o compressor não tem prévia em lugar nenhum');
   // O Config virou páginas: o Synth também tem a página do Chorus.
@@ -557,6 +560,7 @@ try {
     const lastLimits = (moduleIndex) => calls.filter(({ command, args }) => command === 'configure_velocity_limits' && args.config.moduleIndex === moduleIndex).at(-1)?.args.config;
     player.closeModal();
     player.openModal('module-settings', 2, master);
+    useUserSettings();
     await player.syncNativeEngine();
     assert.equal(JSON.stringify(lastLimits(1)), JSON.stringify({ moduleIndex: 1, ignoreAbove: 127, ceiling: 127, oscillator1Limit: 127, oscillator2Limit: 127 }),
       'os limites nascem em 127');
@@ -627,6 +631,7 @@ try {
 
     // Velocity do filtro: ON/OFF embaixo e Cutoff próprio, de onde a curva começa.
     player.openModal('module-settings', 1, master);
+    useUserSettings();
     window.document.querySelector('[data-module-setting-action="open-filter-velocity"]').click();
     assert.equal(player.currentModalKind, 'module-filter-velocity');
     const filterPower = () => window.document.querySelector('[data-filter-velocity-power]');
@@ -676,6 +681,7 @@ try {
   assert.equal(master.value, '82', 'double tap resets master to unity 0dB, not +12');
   for (let module = 1; module <= 8; module++) {
     player.openModal('module-settings', module, master);
+    useUserSettings();
     const glideCard = window.document.querySelector('[data-module-glide-card]');
     assert.equal(Boolean(glideCard), module <= 7);
     if (module > 7) continue;
@@ -710,9 +716,11 @@ try {
     const lastPolyphony = (moduleIndex) => calls.filter(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === moduleIndex).at(-1).args.config.polyphony;
     for (const module of [1, 6, 7]) {
       player.openModal('module-settings', module, master);
+      useUserSettings();
       const modeButton = () => window.document.querySelector('[data-module-setting-action="toggle-voice-mode"]');
       assert(modeButton(), `módulo ${module} tem o botão Modo`);
-      assert.equal(modeButton().previousElementSibling, null, `sem Reset em cima do Modo no módulo ${module}`);
+      assert(modeButton().previousElementSibling?.classList.contains('module-settings-source-button'),
+        `em cima do Modo fica Default/User, não o Reset, no módulo ${module}`);
       assert.equal(modeButton().querySelector('strong').textContent, 'Poly');
       modeButton().click();
       await player.syncNativeEngine();
@@ -723,7 +731,33 @@ try {
       assert.equal(lastPolyphony(module - 1), 128, `Poly do módulo ${module} volta à polifonia escolhida`);
       player.closeModal();
     }
+  }
+  {
+    // Em Default os parâmetros ficam travados: tocar num deles abre o aviso e
+    // não muda nada. Só depois de ir para User o controle responde. As outras
+    // partes desta suíte trocam para User primeiro, então é aqui que a trava
+    // fica guardada.
+    player.openModal('module-settings', 3, master);
+    const panel = () => window.document.querySelector('.player-modal--module-settings');
+    window.document.querySelector('[data-module-settings-mode="default"]').click();
+    assert(panel().classList.contains('is-default-settings'), 'o módulo volta para Default');
+    const gain = () => window.document.querySelector('[data-module-gain]');
+    const before = gain().value;
+    gain().dispatchEvent(new window.Event('pointerdown', { bubbles: true, cancelable: true }));
+    const notice = () => window.document.querySelector('[data-default-settings-notice]');
+    assert(notice(), 'tocar no parâmetro abre o aviso');
+    assert.match(notice().textContent, /Mude para User/);
+    assert.equal(gain().value, before, 'e o parâmetro continua como estava');
+    window.document.querySelector('[data-default-settings-notice-close]').click();
+    assert(!notice(), 'o aviso fecha no Entendi');
+    assert(panel().classList.contains('is-default-settings'), 'e o módulo continua em Default');
+    useUserSettings();
+    assert(!panel().classList.contains('is-default-settings'), 'em User os parâmetros liberam');
+    player.closeModal();
+  }
+  {
     player.openModal('module-settings', 8, master);
+    useUserSettings();
     assert.equal(window.document.querySelector('[data-module-setting-action="toggle-voice-mode"]'), null,
       'o Config do Synth não tem Modo (fica no editor do Synth)');
     player.closeModal();
@@ -807,6 +841,7 @@ try {
   assert.equal(master.value, '0', 'desktop movement clamps at minimum');
   player.endKnobDrag({ ...drag, type: 'pointerup', timeStamp: 12040 });
   player.openModal('module-settings', 1, master);
+  useUserSettings();
   const fineDrag = (input, startValue, pixels, moduleNumber = player.currentModalModuleNumber) => {
     const desktop = player.desktopRuntime;
     player.desktopRuntime = false; // Exercise the app response separately.

@@ -277,7 +277,6 @@ export function createModuleSettingsMarkup(
 ): string {
   const pages = moduleSettingsPages(processorReplacement);
   const page = pages.includes(activePage) ? activePage : pages[0] as ModuleSettingsPage;
-  const power = moduleSettingsPagePower(page, settings);
   const deviceNames = new Map(devices.map((device) => [device.id, device.name]));
   const options = activeDeviceIds.map((deviceId, index) => {
     if (!deviceId) return '';
@@ -342,10 +341,6 @@ export function createModuleSettingsMarkup(
               aria-selected="${item === page}">${MODULE_SETTINGS_PAGE_LABELS[item]}</button>
           `).join('')}
         </div>
-        ${power === null ? '' : `
-          <button class="module-settings-reset-button" type="button"
-            data-modal-action="reset-processor" data-reset-processor="${page}">Reset</button>
-        `}
       </div>
 
       <div class="module-settings-workspace" data-module-settings-workspace data-page="${page}">

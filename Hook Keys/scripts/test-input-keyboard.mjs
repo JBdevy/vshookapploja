@@ -20,8 +20,14 @@ try {
   const name = modal.querySelector('[data-name]');
   controller.openFor(name);
   assert(modal.querySelector('[data-on-screen-key="A"]'));
+  // O teclado abre com a primeira letra maiúscula e o Shift aceso; depois dela
+  // volta sozinho para minúscula.
+  assert.equal(modal.querySelector('[data-on-screen-key="shift"]').getAttribute('aria-pressed'), 'true');
   key('A');
-  assert.equal(name.value, 'a');
+  assert.equal(name.value, 'A');
+  assert.equal(modal.querySelector('[data-on-screen-key="shift"]').getAttribute('aria-pressed'), 'false');
+  key('A');
+  assert.equal(name.value, 'Aa');
   const count = modal.querySelector('[data-count]');
   controller.openFor(count);
   assert(modal.querySelector('.on-screen-keyboard--numeric'));

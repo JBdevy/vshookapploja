@@ -615,8 +615,11 @@ test('compressor de fábrica e o Reset que só mexe nos parâmetros', () => {
   assert.match(effects, /attackMs: numberInRange\(source\.attackMs, MIN_COMPRESSOR_ATTACK_MS, 100/);
   assert.match(engine, /attackMs = std::clamp\(attackMs, 1\.0f, 250\.0f\);/);
   // Reset de processador nunca liga nem desliga o efeito.
-  assert.match(player, /moduleState\.settings\.compressor = \{\s*\.\.\.readModuleCompressorSettings\(undefined\),\s*enabled: readModuleCompressorSettings\(moduleState\.settings\.compressor\)\.enabled,/);
-  assert.match(player, /moduleState\.settings\.reverb = \{\s*\.\.\.FACTORY_MODULE_REVERB,\s*enabled: readModuleReverbSettings\(moduleState\.settings\.reverb\)\.enabled,/);
+  // O Reset de cada página volta ao Default daquele timbre, sem ligar nem
+  // desligar o processador.
+  assert.match(player, /const reference = this\.defaultSettingsForModule\(moduleNumber, moduleState\);/);
+  assert.match(player, /restore\('compressor', readModuleCompressorSettings,\s*readModuleCompressorSettings\(moduleState\.settings\.compressor\)\.enabled\);/);
+  assert.match(player, /restore\('reverb', readModuleReverbSettings,\s*readModuleReverbSettings\(moduleState\.settings\.reverb\)\.enabled\);/);
   assert.match(player, /moduleState\.settings\.rotary = \{\s*\.\.\.readModuleRotarySettings\(undefined\),\s*enabled: readModuleRotarySettings\(moduleState\.settings\.rotary\)\.enabled,/);
   assert.match(player, /moduleState\.settings\.delay = \{\s*\.\.\.readModuleDelaySettings\(undefined\),\s*enabled: readModuleDelaySettings\(moduleState\.settings\.delay\)\.enabled,/);
 });
@@ -637,7 +640,9 @@ test('Config em páginas: Reset acompanha a aba e ON/OFF permanece no centro do 
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   // O Reset do módulo saiu de cima do Modo; cada página tem o seu.
   assert.doesNotMatch(view, /data-module-setting-action="reset-module"/);
-  assert.match(view, /data-modal-action="reset-processor" data-reset-processor="\$\{page\}"/);
+  assert.doesNotMatch(view, /data-modal-action="reset-processor"/, 'o Reset saiu da fileira de abas');
+  assert.match(player, /moduleState\?\.settingsMode === 'default' \? '' : `[\s\S]*?data-reset-processor="\$\{this\.moduleConfigPage\}"/,
+    'o Reset da página fica no rodapé e só em User');
   assert.doesNotMatch(view, /data-module-effect-power="\$\{page === 'eq'/,
     'o ON/OFF não fica mais junto das abas');
   assert.match(player, /kind === 'module-settings'[\s\S]*?player-modal__back-button[\s\S]*?data-module-effect-power="\$\{this\.moduleConfigPage\}"[\s\S]*?player-modal__confirm-button/,

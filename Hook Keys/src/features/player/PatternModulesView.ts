@@ -65,10 +65,6 @@ export function createArpeggiatorMarkup(value: unknown): string {
   const settings = readArpeggiatorSettings(value);
   return `
     <section class="pattern-editor arpeggiator-editor" data-arpeggiator-editor>
-      <header class="pattern-editor__header">
-        <div><span>Módulo 06</span><strong>Arpeggiator</strong></div>
-        <output class="pattern-editor__summary">${settings.division} · ${settings.octaves} oitava${settings.octaves === 1 ? '' : 's'}</output>
-      </header>
       <div class="pattern-option-group" role="group" aria-label="Direção do arpejo">
         ${ARPEGGIATOR_MODES.map((mode) => optionButton('arpeggiator-mode', mode, arpeggiatorModeLabel(mode), settings.mode === mode)).join('')}
       </div>

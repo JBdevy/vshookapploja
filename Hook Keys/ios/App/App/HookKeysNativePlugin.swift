@@ -265,7 +265,16 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 controller.setNeedsUpdateOfSupportedInterfaceOrientations()
                 let scene = controller.view.window?.windowScene
                     ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
-                scene?.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+                let current = scene?.interfaceOrientation
+                let alreadyThere = landscape
+                    ? (current?.isLandscape ?? false)
+                    : (current?.isPortrait ?? false)
+                // Repetir o pedido de geometria prende a tela no lado atual e o
+                // aparelho não gira mais; com a tela já no sentido certo basta
+                // a lista de orientações aceitas e o sensor cuida do resto.
+                if !alreadyThere {
+                    scene?.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+                }
             } else {
                 let deviceIsLandscape = UIDevice.current.orientation.isLandscape
                 if !landscape || !deviceIsLandscape {

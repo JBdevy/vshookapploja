@@ -43,7 +43,6 @@ export function createTranceGateMarkup(value: unknown): string {
   const options = (key: string, values: readonly (number | string)[], current: number | string) => values.map(value =>
     `<button type="button" data-trance-gate-${key}="${value}" class="${value === current ? 'is-selected' : ''}" aria-pressed="${value === current}">${value}</button>`).join('');
   return `<section class="pattern-editor trance-gate-editor" data-trance-gate-editor>
-    <header class="pattern-editor__header trance-gate-editor__header"><span>Módulo 07 · Sync BPM</span><strong>Trance Gate</strong><output>${settings.length} passos · ${settings.division}</output></header>
     <div class="pattern-editor__toolbar">
       <div class="pattern-option-group pattern-option-group--division" role="group" aria-label="Divisão do Trance Gate">${options('division', ARPEGGIATOR_DIVISIONS, settings.division)}</div>
       <div class="pattern-option-group" role="group" aria-label="Quantidade de passos">${options('length', [4, 8, 16], settings.length)}</div>

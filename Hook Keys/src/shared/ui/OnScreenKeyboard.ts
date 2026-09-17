@@ -36,7 +36,9 @@ export function createOnScreenKeyboardMarkup(label: string, initiallyHidden = fa
           return '<button type="button" data-on-screen-key="backspace" aria-label="Apagar último caractere">⌫</button>';
         }
         if (key === 'shift') {
-          return '<button type="button" data-on-screen-key="shift" aria-label="Ativar maiúscula" aria-pressed="false">⇧</button>';
+          // O teclado abre com a primeira letra maiúscula, como no celular:
+          // o Shift já nasce aceso para combinar com o que se vê nas teclas.
+          return '<button class="is-active" type="button" data-on-screen-key="shift" aria-label="Ativar maiúscula" aria-pressed="true">⇧</button>';
         }
         const isLetter = /^[A-Z]$/.test(key);
         return `<button type="button" data-on-screen-key="${key}"${isLetter ? ` data-on-screen-character="${key}"` : ''}>${key}</button>`;
@@ -45,7 +47,7 @@ export function createOnScreenKeyboardMarkup(label: string, initiallyHidden = fa
   `).join('');
 
   return `
-    <div class="on-screen-keyboard is-lowercase" data-shift-mode="off" aria-label="${escapeAttribute(label)}"${initiallyHidden ? ' hidden' : ''}>
+    <div class="on-screen-keyboard" data-shift-mode="once" aria-label="${escapeAttribute(label)}"${initiallyHidden ? ' hidden' : ''}>
       ${rows}
       <div class="on-screen-keyboard__row on-screen-keyboard__row--actions">
         <button type="button" data-on-screen-key="emoji" aria-label="Abrir emojis">☺</button>

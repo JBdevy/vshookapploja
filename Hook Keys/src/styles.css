@@ -1653,6 +1653,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .player-modal--module-arpeggiator .player-modal__actions > button,
 .player-modal--module-trance-gate .player-modal__actions > button { width: 100%; min-width: 0; }
 
+.player-modal--module-settings .player-modal__actions > button:not([hidden]) {
+  flex: 1 1 0;
+  min-width: clamp(60px, 8vw, 150px);
+}
+
 .pattern-editor {
   display: grid;
   align-content: stretch;
@@ -1708,6 +1713,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   align-items: stretch;
   gap: clamp(8px, 1.2vw, 14px);
   min-height: 0;
+  overflow: hidden;
 }
 /* Arpeggiator: Oitavas, Gate e Swing estreitos, e o Auto Fader no resto. */
 .arpeggiator-editor .pattern-knob-grid {
@@ -1719,7 +1725,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 5px;
   min-width: 0;
-  min-height: 76px;
+  min-height: 0;
   padding: 7px;
   color: #fff;
   border: 1px solid color-mix(in srgb, var(--pattern-accent, #a855f7) 42%, #504650);
@@ -1727,7 +1733,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   background: linear-gradient(155deg, #242027, #0d0c10);
 }
 .arpeggiator-octaves > span { text-align: center; color: #fff; font-size: 9px; font-weight: 950; }
-.arpeggiator-octaves > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.arpeggiator-octaves > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
 .arpeggiator-octaves button {
   min-width: 0;
   color: #fff;
@@ -1742,7 +1748,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   background: linear-gradient(180deg, color-mix(in srgb, var(--pattern-accent, #a855f7) 66%, #fff), var(--pattern-accent, #a855f7));
   box-shadow: 0 0 8px color-mix(in srgb, var(--pattern-accent, #a855f7) 30%, transparent);
 }
-.arpeggiator-editor { grid-template-rows: auto auto auto 12px minmax(0, 1fr); }
+.arpeggiator-editor { grid-template-rows: auto auto 12px minmax(0, 1fr); }
 .arpeggiator-live-strip { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; align-items: center; }
 .arpeggiator-live-strip i { height: 4px; border-radius: 4px; background: #392645; transition: background .08s ease, box-shadow .08s ease, transform .08s ease; }
 .arpeggiator-live-strip i.is-playing { background: #cf78ff; box-shadow: 0 0 10px #a84bf7; transform: scaleY(2); }
@@ -1751,24 +1757,24 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   place-items: center;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
-  min-height: 76px;
-  padding: 7px;
+  min-height: 0;
+  padding: 5px;
   color: #fff;
   border: 1px solid color-mix(in srgb, var(--knob-accent) 42%, #504650);
   border-radius: 10px;
   background: linear-gradient(155deg, #242027, #0d0c10);
 }
 .pattern-knob > span:first-child { color: #fff; font-size: 9px; font-weight: 950; }
-.pattern-knob .module-effect-knob__face { width: min(68px, 10vh); }
+.pattern-knob .module-effect-knob__face { width: min(52px, 7.4vh); }
 .pattern-knob output { color: color-mix(in srgb, var(--knob-accent) 72%, #fff); font-size: 9px; font-weight: 950; }
 .pattern-knob:nth-child(2) { --knob-accent: #39d878; }
 .pattern-knob:nth-child(3) { --knob-accent: #25b9ff; }
 .pattern-knob:nth-child(4) { --knob-accent: #ff4d67; }
 .pattern-knob:nth-child(5) { --knob-accent: #a855f7; }
 
-.trance-gate-editor { grid-template-rows: auto auto minmax(54px, .75fr) minmax(78px, 1fr) auto; }
+.trance-gate-editor { grid-template-rows: auto minmax(54px, .75fr) minmax(78px, 1fr) auto; }
 .trance-gate-editor__header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -8633,7 +8639,8 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   min-height: clamp(30px, 4.5vh, 39px);
   padding: 5px clamp(9px, 1.1vw, 15px);
   overflow: hidden;
-  color: #fff;
+  color: #0d0b08;
+  text-shadow: none;
   border: 1px solid var(--sound-button-color, #ff8a22);
   border-radius: 8px;
   background: linear-gradient(
@@ -8734,6 +8741,14 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 .fixed-sound-grid button:active {
   transform: translateY(1px);
   filter: brightness(1.22);
+}
+
+.sound-browser .sound-category-button,
+.sound-browser .fixed-sound-grid button,
+.sound-browser .fixed-sound-grid button strong,
+.sound-browser .fixed-sound-grid button span {
+  color: #0d0b08 !important;
+  text-shadow: none !important;
 }
 
 .fixed-sound-grid button small {
@@ -10025,8 +10040,8 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .fixed-sound-grid {
-    grid-auto-rows: minmax(24px, 1fr);
-    gap: 2px;
+    grid-auto-rows: minmax(40px, auto);
+    gap: 3px;
   }
 
   .app-settings-panel {
@@ -12112,7 +12127,8 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 }
 
 .fixed-sound-grid button {
-  color: #f8eee7 !important;
+  color: #0d0b08 !important;
+  text-shadow: none !important;
   border-color: var(--sound-button-color, #ff8a22) !important;
   background-color: var(--sound-button-color, #ff8a22) !important;
   background-image: linear-gradient(
@@ -13821,9 +13837,10 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 .player-panic-button {
   grid-template-rows: repeat(2, min-content);
   align-content: center;
-  gap: 0;
+  /* PA estava colado em NIC: um respiro entre as duas linhas. */
+  gap: clamp(1px, .18vh, 3px);
   font-size: clamp(7px, .72vw, 9px);
-  line-height: .82;
+  line-height: .9;
   letter-spacing: .02em;
 }
 
@@ -13832,6 +13849,12 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 }
 
 /* Modulo sem timbre: um + no lugar do texto. */
+/* Com um timbre escolhido o fundo e a cor dele: o nome vai de preto. */
+.player-module__sound-label:not(.is-empty) {
+  color: #0d0b08 !important;
+  text-shadow: none !important;
+}
+
 .player-module__sound-label.is-empty {
   font-size: clamp(18px, 2.2vw, 26px);
   font-weight: 950;

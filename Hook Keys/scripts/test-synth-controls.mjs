@@ -309,8 +309,10 @@ test('desktop opens smaller and Param clips every preview inside its available g
   assert.match(css, /\.module-reverb-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
   assert.match(css, /\.module-delay-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
   assert.match(css, /\.module-delay-editor__divisions\s*\{[^}]*grid-template-columns: repeat\(8, minmax\(0, 1fr\)\);/s);
-  assert.match(css, /\.trance-gate-editor\s*\{[^}]*grid-template-rows: auto auto minmax\(54px, \.75fr\) minmax\(78px, 1fr\) auto;/s);
-  assert.match(css, /\.trance-gate-editor__header\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\);/s);
+  // O editor perdeu o cabeçalho interno: o título já está no alto da janela.
+  assert.match(css, /\.trance-gate-editor\s*\{[^}]*grid-template-rows: auto minmax\(54px, \.75fr\) minmax\(78px, 1fr\) auto;/s);
+  const tranceGateView = readFileSync(new URL('../src/features/player/TranceGateView.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(tranceGateView, /pattern-editor__header/);
   assert.match(css, /\.trance-gate-editor \.pattern-knob \.module-effect-knob__face\s*\{[^}]*width: min\(52px, 7vh\);[^}]*height: min\(52px, 7vh\);/s);
   assert.match(css, /\.player-modal--module-settings :is\(\s*\.module-eq-preview,[\s\S]*?max-height: 100%;/);
   assert.match(css, /html\[data-runtime="desktop"\] \.player-screen--tablet \.player-presets--combined\s*\{[^}]*grid-template-rows:/s);
