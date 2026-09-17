@@ -103,6 +103,21 @@ def configure_ios(root: Path) -> None:
         "O VS Hook usa o microfone somente quando você grava uma mensagem de voz no Chat Hook."
     )
     data["ITSAppUsesNonExemptEncryption"] = False
+    # O app abre em retrato. No Diretor Tablet, o ScreenOrientation passa para
+    # o sensor e precisa encontrar as duas paisagens declaradas no bundle.
+    phone_orientations = [
+        "UIInterfaceOrientationPortrait",
+        "UIInterfaceOrientationLandscapeLeft",
+        "UIInterfaceOrientationLandscapeRight",
+    ]
+    tablet_orientations = [
+        "UIInterfaceOrientationPortrait",
+        "UIInterfaceOrientationPortraitUpsideDown",
+        "UIInterfaceOrientationLandscapeLeft",
+        "UIInterfaceOrientationLandscapeRight",
+    ]
+    data["UISupportedInterfaceOrientations"] = phone_orientations
+    data["UISupportedInterfaceOrientations~ipad"] = tablet_orientations
     with plist_path.open("wb") as target:
         plistlib.dump(data, target, sort_keys=False)
     print(f"Permissao de microfone iOS configurada: {plist_path}")
