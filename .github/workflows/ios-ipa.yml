@@ -51,6 +51,7 @@ jobs:
           python3 scripts/configure-local-network.py ios
           python3 scripts/configure-push-notifications.py ios
           python3 scripts/configure-media-permissions.py ios
+          python3 scripts/configure-fullscreen.py ios
 
       - name: Importar certificado iOS
         env:

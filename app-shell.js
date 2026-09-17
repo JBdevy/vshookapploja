@@ -558,10 +558,12 @@ async function setDirectorNativeOrientation(mode) {
     }
     if (!vshookNativeScreenOrientationPlugin) return false
     if (mode === 'tablet') {
-      // O plugin do Capacitor interpreta "landscape" como apenas o lado
-      // principal. "any" deixa o sensor aceitar as duas paisagens; o guard do
-      // modo Tablet continua impedindo o uso em retrato.
-      await vshookNativeScreenOrientationPlugin.lock({ orientation: 'any' })
+      // "any" apenas destrava: o aparelho em pe continuava em pe e o modo
+      // Tablet nunca chegava a deitar. Travar a paisagem forca o giro, e o
+      // lado escolhido e o que o aparelho ja estava mais perto de mostrar.
+      const angle = Number(window.screen?.orientation?.angle ?? window.orientation ?? 0)
+      const side = angle === 270 || angle === -90 ? 'landscape-secondary' : 'landscape'
+      await vshookNativeScreenOrientationPlugin.lock({ orientation: side })
     } else {
       await vshookNativeScreenOrientationPlugin.lock({ orientation: 'portrait' })
     }

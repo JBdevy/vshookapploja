@@ -55,6 +55,7 @@ jobs:
           npx cap sync android
           python3 scripts/configure-android-minimum.py
           python3 scripts/configure-media-permissions.py android
+          python3 scripts/configure-fullscreen.py android
           if [ -n "$ANDROID_GOOGLE_SERVICES_JSON_BASE64" ]; then
             printf '%s' "$ANDROID_GOOGLE_SERVICES_JSON_BASE64" | tr -d '\r\n\t ' | base64 --decode > android/app/google-services.json
             python3 - <<'PY'
