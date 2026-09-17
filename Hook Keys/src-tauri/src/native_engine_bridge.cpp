@@ -68,6 +68,10 @@ int hk_runtime_clone_soundfont(
   return handle && runtime(handle)->cloneSoundFont(sourceModuleIndex, targetModuleIndex) ? 1 : 0;
 }
 
+void hk_runtime_unload_soundfont(void* handle, std::size_t moduleIndex) noexcept {
+  if (handle) runtime(handle)->unloadSoundFont(moduleIndex);
+}
+
 int hk_runtime_send_midi(void* handle, std::uint8_t inputSlot, std::uint8_t status,
                          std::uint8_t data1, std::uint8_t data2) noexcept {
   return handle && runtime(handle)->sendMidi(inputSlot, status, data1, data2) ? 1 : 0;

@@ -47,6 +47,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "appendSoundFontChunk", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "finishSoundFontUpload", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "cloneSoundFont", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "unloadSoundFont", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "saveBackup", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "pickAudioFiles", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "releasePickedAudioFile", returnType: CAPPluginReturnPromise),
@@ -799,6 +800,17 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
                 if copied { call.resolve() }
                 else { call.reject("O timbre compartilhado não pôde ser preparado.") }
             }
+        }
+    }
+
+    @objc func unloadSoundFont(_ call: CAPPluginCall) {
+        let moduleIndex = call.getInt("moduleIndex", -1)
+        guard (0..<7).contains(moduleIndex) else {
+            call.reject("Módulo de timbre inválido."); return
+        }
+        soundfontQueue.async { [weak self] in
+            self?.engine.unloadSoundFont(fromModule: moduleIndex)
+            DispatchQueue.main.async { call.resolve() }
         }
     }
 

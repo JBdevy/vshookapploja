@@ -483,6 +483,9 @@ void HookKeysEngine::releaseSustainedNotes(std::size_t moduleIndex) noexcept {
 void HookKeysEngine::applyAllNotesOff() noexcept {
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     if (modules_[index] != nullptr) modules_[index]->allNotesOff();
+    // Panic deve cortar também as caudas de delay/reverb e estados dos demais
+    // processadores, em vez de apenas soltar as teclas.
+    effects_[index].reset();
     sustainDown_[index] = false;
     clearActiveNoteState(index);
   }

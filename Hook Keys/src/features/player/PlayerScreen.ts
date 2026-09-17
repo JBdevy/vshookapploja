@@ -937,8 +937,9 @@ export class PlayerScreen {
   private missingUserSoundfonts: MissingUserSoundfont[] = [];
   private readonly trackLibrary: TrackLibraryStore;
   private readonly effectAudioLibrary: EffectAudioStore;
-  // Som do pad de efeito: um player por pad, criado na primeira vez que toca.
-  private readonly effectPadAudio = new Map<string, HTMLAudioElement>();
+  // Cada pad reaproveita a URL do arquivo, mas pode ter várias vozes tocando
+  // juntas no Gate + Infinite Release.
+  private readonly effectPadAudio = new Map<string, { url: string; voices: Set<HTMLAudioElement> }>();
   private readonly metronome = new MetronomeEngine(() => this.renderMetronomeState());
   private readonly patternPlayback = new PatternPlaybackController(
     () => this.createPatternPlaybackSnapshot(),
@@ -1146,6 +1147,12 @@ export class PlayerScreen {
               <strong data-note-chord-display>—</strong>
             </div>
             <div class="player-top-actions">
+              <button
+                class="player-navigation__button player-panic-button"
+                type="button"
+                data-action="panic"
+                aria-label="Panic: interromper imediatamente todas as notas"
+              ><span>PA</span><span>NIC</span></button>
               <button
                 class="player-navigation__button player-navigation__settings-button"
                 type="button"
@@ -1591,6 +1598,7 @@ export class PlayerScreen {
     this.playerBackup.destroy();
     this.trackTransport?.destroy();
     this.trackTransport = null;
+    for (const key of [...this.effectPadAudio.keys()]) this.disposeEffectPadAudio(key);
     for (const fader of this.faders.values()) fader.destroy();
     this.faders.clear();
     this.root.removeEventListener('click', this.handleRootClick);
@@ -1840,6 +1848,11 @@ export class PlayerScreen {
 
     if (action === 'open-app-settings') {
       this.openModal('app-settings', null, actionButton);
+      return;
+    }
+
+    if (action === 'panic') {
+      this.triggerPanic();
       return;
     }
 
@@ -2853,8 +2866,8 @@ export class PlayerScreen {
     this.triggerEffect(this.activeEffectBank, effectNumber);
   }
 
-  // O arquivo do pad fica no aparelho; aqui ele vira um player reaproveitado a
-  // cada toque, com o volume do próprio pad.
+  // Infinite Release é polifônico: cada toque ganha seu próprio player e não
+  // reinicia as instâncias que ainda estão tocando.
   private async playEffectPadAudio(
     bank: EffectBankId,
     effectNumber: number,
@@ -2862,28 +2875,65 @@ export class PlayerScreen {
   ): Promise<void> {
     if (!state.audioFileName) return;
     const key = `${bank}:${effectNumber}`;
-    let audio = this.effectPadAudio.get(key);
-    if (!audio) {
+    let pool = this.effectPadAudio.get(key);
+    if (!pool) {
       const file = await this.effectAudioLibrary.get(bank, effectNumber).catch(() => null);
       if (!file || !this.mounted) return;
-      audio = new Audio(URL.createObjectURL(file));
-      audio.preload = 'auto';
-      // Terminando sozinho, o pad apaga junto.
-      audio.addEventListener('ended', () => this.releaseEffectPad(bank, effectNumber));
-      this.effectPadAudio.set(key, audio);
+      // Dois toques muito rápidos podem terminar a leitura juntos. Só o
+      // primeiro cria a URL; o segundo usa o pool que acabou de ser publicado.
+      pool = this.effectPadAudio.get(key);
+      if (!pool) {
+        pool = { url: URL.createObjectURL(file), voices: new Set() };
+        this.effectPadAudio.set(key, pool);
+      }
     }
+    const audio = new Audio(pool.url);
+    pool.voices.add(audio);
+    audio.preload = 'auto';
     audio.volume = Math.min(1, Math.max(0, Math.pow(10, state.volumeDb / 20)));
-    audio.currentTime = 0;
+    audio.addEventListener('ended', () => this.finishEffectPadAudioVoice(key, audio), { once: true });
     await audio.play().catch(() => {
+      this.finishEffectPadAudioVoice(key, audio);
       this.setStatus('Não foi possível tocar o áudio deste efeito.');
     });
   }
 
   private stopEffectPadAudio(bank: EffectBankId, effectNumber: number): void {
-    const audio = this.effectPadAudio.get(`${bank}:${effectNumber}`);
-    if (!audio) return;
-    audio.pause();
-    audio.currentTime = 0;
+    const pool = this.effectPadAudio.get(`${bank}:${effectNumber}`);
+    if (!pool) return;
+    for (const audio of pool.voices) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    }
+    pool.voices.clear();
+  }
+
+  private finishEffectPadAudioVoice(key: string, audio: HTMLAudioElement): void {
+    const pool = this.effectPadAudio.get(key);
+    if (!pool || !pool.voices.delete(audio)) return;
+    audio.removeAttribute('src');
+    audio.load();
+    if (pool.voices.size > 0) return;
+    const [bank, effectText] = key.split(':');
+    const effectNumber = Number.parseInt(effectText ?? '', 10);
+    if (!this.isEffectBankId(bank) || !Number.isInteger(effectNumber)) return;
+    const state = this.effectPadStates.get(bank)?.[effectNumber - 1];
+    if (!state?.active) return;
+    state.active = false;
+    if (bank === this.activeEffectBank) this.renderActiveEffectBank();
+  }
+
+  private disposeEffectPadAudio(key: string): void {
+    const pool = this.effectPadAudio.get(key);
+    if (!pool) return;
+    const [bank, effectText] = key.split(':');
+    const effectNumber = Number.parseInt(effectText ?? '', 10);
+    if (this.isEffectBankId(bank) && Number.isInteger(effectNumber)) {
+      this.stopEffectPadAudio(bank, effectNumber);
+    }
+    URL.revokeObjectURL(pool.url);
+    this.effectPadAudio.delete(key);
   }
 
   // Solta o pad: para o som e apaga a luz do botão.
@@ -3966,6 +4016,26 @@ export class PlayerScreen {
     this.displayedPerformanceNotes.clear();
     const output = this.root.querySelector<HTMLElement>('[data-note-chord-display]');
     if (output) output.textContent = '—';
+  }
+
+  private triggerPanic(): void {
+    this.patternPlayback.reset();
+    this.trackTransport?.stop();
+    this.metronome.stop();
+    this.releasePressedKeyboardKey();
+    this.keyboardMidiRouter?.resetExpression();
+    for (const bank of PAD_BANK_IDS) this.padBankSelections.set(bank, null);
+    for (const [bank, states] of this.effectPadStates) {
+      states.forEach((state, index) => {
+        state.active = false;
+        this.stopEffectPadAudio(bank, index + 1);
+      });
+    }
+    this.renderActivePadBank();
+    this.renderActiveEffectBank();
+    this.clearPerformanceNoteDisplay();
+    void hookKeysNative.stopAllNotes();
+    this.setStatus('Panic: notas, pads, efeitos, música e metrônomo interrompidos.');
   }
 
   // Leaving the Clean confirmation goes back to where it came from. Opening it
@@ -9125,6 +9195,7 @@ export class PlayerScreen {
     if (label) label.textContent = 'Salvando...';
     try {
       await this.effectAudioLibrary.save(this.activeEffectBank, effectNumber, file);
+      this.disposeEffectPadAudio(`${this.activeEffectBank}:${effectNumber}`);
       const effect = this.effectPadStates.get(this.activeEffectBank)?.[effectNumber - 1];
       if (effect) effect.audioFileName = file.name.slice(0, 180);
       if (modal.isConnected && label) label.textContent = file.name;
@@ -10053,7 +10124,13 @@ export class PlayerScreen {
       if (!this.mounted || revision !== this.soundfontSelectionRevision) return;
       if (moduleIndex === 7) continue;
       const timbreId = preset?.modules[moduleIndex]?.timbreId ?? null;
-      if (!timbreId) continue;
+      if (!timbreId) {
+        if (this.nativeLoadedTimbres[moduleIndex]) {
+          await hookKeysNative.unloadSoundFont(moduleIndex).catch(() => undefined);
+          this.nativeLoadedTimbres[moduleIndex] = null;
+        }
+        continue;
+      }
       if (timbreId === this.nativeLoadedTimbres[moduleIndex]) {
         if (!sourceByTimbre.has(timbreId)) sourceByTimbre.set(timbreId, moduleIndex);
         continue;

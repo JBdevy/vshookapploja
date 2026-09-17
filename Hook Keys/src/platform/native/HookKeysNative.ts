@@ -235,6 +235,7 @@ interface HookKeysNativePlugin {
   appendSoundFontChunk(options: { moduleIndex: number; base64: string }): Promise<void>;
   finishSoundFontUpload(options: { moduleIndex: number }): Promise<void>;
   cloneSoundFont(options: { sourceModuleIndex: number; targetModuleIndex: number }): Promise<void>;
+  unloadSoundFont(options: { moduleIndex: number }): Promise<void>;
   saveBackup(options: { fileName: string; content: string }): Promise<{ saved: boolean }>;
   pickAudioFiles(): Promise<{ files: NativePickedAudioFile[] }>;
   releasePickedAudioFile(options: { path: string }): Promise<void>;
@@ -722,6 +723,12 @@ class HookKeysNativeBridge {
     if (!await this.initialize()) throw new Error('native_engine_unavailable');
     const options = { sourceModuleIndex, targetModuleIndex };
     await this.call('clone_sound_font', options, () => plugin.cloneSoundFont(options));
+  }
+
+  async unloadSoundFont(moduleIndex: number): Promise<void> {
+    if (!await this.initialize()) return;
+    const options = { moduleIndex };
+    await this.call('unload_sound_font', options, () => plugin.unloadSoundFont(options));
   }
 
   async saveBackup(fileName: string, content: string): Promise<boolean | null> {

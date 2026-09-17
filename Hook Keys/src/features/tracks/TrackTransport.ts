@@ -327,6 +327,16 @@ export class TrackTransportController {
     await this.startPlayback();
   }
 
+  stop(): void {
+    this.autoplayPending = false;
+    this.loadSequence += 1;
+    this.audio.pause();
+    if (this.audio.src) this.audio.currentTime = 0;
+    if (this.selectedTrack) this.state = 'stopped';
+    this.clearQueuedTrack();
+    this.render();
+  }
+
   private async startPlayback(): Promise<void> {
     if (this.hasDuration() && this.audio.currentTime >= this.audio.duration) this.audio.currentTime = 0;
     try {

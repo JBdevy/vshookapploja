@@ -131,28 +131,31 @@ ModuleProcessorLevels ModuleEffects::process(
       right[frame] *= gain;
     }
   }
-  for (std::size_t frame = 0; frame < frames; ++frame) cutoff_.process(left[frame], right[frame]);
-  equalizer_.process(left, right, frames);
+  if (config_.cutoff.enabled && config_.cutoff.frequencyHz < 19999.0f) {
+    for (std::size_t frame = 0; frame < frames; ++frame) cutoff_.process(left[frame], right[frame]);
+  }
+  if (config_.equalizer.enabled) equalizer_.process(left, right, frames);
   if (captureCompressorLevels) {
     for (std::size_t frame = 0; frame < frames; ++frame) {
       levels.compressorInput = std::max(
           levels.compressorInput, std::max(std::abs(left[frame]), std::abs(right[frame])));
     }
   }
-  compressor_.process(left, right, frames);
+  if (config_.compressor.enabled) compressor_.process(left, right, frames);
   if (captureCompressorLevels) {
     for (std::size_t frame = 0; frame < frames; ++frame) {
       levels.compressorOutput = std::max(
           levels.compressorOutput, std::max(std::abs(left[frame]), std::abs(right[frame])));
     }
   }
-  rotary_.process(left, right, frames);
-  chorus_.process(config_.chorus, left, right, frames);
+  if (config_.rotary.enabled) rotary_.process(left, right, frames);
+  if (config_.chorus.enabled) chorus_.process(config_.chorus, left, right, frames);
   processTranceGate(left, right, frames);
-  delay_.process(left, right, frames);
-  reverb_.process(left, right, frames);
+  if (config_.delay.enabled) delay_.process(left, right, frames);
+  if (config_.reverb.enabled) reverb_.process(left, right, frames);
   // O Auto Fader é volume: vem por último, depois de tudo que soa.
-  processAutoFader(left, right, frames);
+  if (config_.autoFader.enabled) processAutoFader(left, right, frames);
+  else autoFaderPhase_ = 0.0;
   return levels;
 }
 

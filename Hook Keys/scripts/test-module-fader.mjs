@@ -8,6 +8,69 @@ const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const handleRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .filter(([, selector]) => selector.trim().endsWith('.player-module__fader-handle'));
 
+test('toque longo não seleciona texto nem abre o callout do navegador', () => {
+  assert.match(css, /\*\s*\{[\s\S]*?user-select:\s*none;[\s\S]*?-webkit-user-select:\s*none;[\s\S]*?-webkit-touch-callout:\s*none;/);
+  assert.match(css, /input,[\s\S]*?textarea,[\s\S]*?\[contenteditable="true"\][\s\S]*?user-select:\s*text;/);
+});
+
+test('módulos sem timbre descarregam o SF2 nas três plataformas', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
+  const desktop = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+  const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
+  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  assert.match(player, /if \(!timbreId\)[\s\S]*?hookKeysNative\.unloadSoundFont\(moduleIndex\)/);
+  assert.match(bridge, /async unloadSoundFont\(moduleIndex: number\)/);
+  assert.match(desktop, /fn unload_sound_font\(/);
+  assert.match(android, /public void unloadSoundFont\(PluginCall call\)/);
+  assert.match(ios, /@objc func unloadSoundFont\(_ call: CAPPluginCall\)/);
+});
+
+test('players temporários dos pads liberam a URL ao trocar arquivo ou fechar', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /URL\.revokeObjectURL\(pool\.url\)/);
+  assert.match(player, /effectAudioLibrary\.save[\s\S]*?disposeEffectPadAudio/);
+  assert.match(player, /for \(const key of \[\.\.\.this\.effectPadAudio\.keys\(\)\]\) this\.disposeEffectPadAudio\(key\)/);
+});
+
+test('Infinite Release cria vozes sobrepostas sem cortar o áudio anterior', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /effectPadAudio = new Map<string, \{ url: string; voices: Set<HTMLAudioElement> \}>/);
+  assert.match(player, /const audio = new Audio\(pool\.url\);[\s\S]*?pool\.voices\.add\(audio\)/);
+  assert.doesNotMatch(player, /const \{ audio \} = player;[\s\S]*?audio\.currentTime = 0/);
+  assert.match(player, /releaseHeldEffectPads\(\)[\s\S]*?gateRelease === 'continue-press'/);
+  assert.match(player, /finishEffectPadAudioVoice[\s\S]*?if \(pool\.voices\.size > 0\) return/);
+});
+
+test('Panic corta notas, pads, efeitos, música e metrônomo', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const tracks = readFileSync(new URL('../src/features/tracks/TrackTransport.ts', import.meta.url), 'utf8');
+  const engine = readFileSync(new URL('../native-engine/src/HookKeysEngine.cpp', import.meta.url), 'utf8');
+  assert.match(player, /data-action="panic"[\s\S]*?<span>PA<\/span><span>NIC<\/span>/);
+  assert.match(player, /triggerPanic\(\)[\s\S]*?trackTransport\?\.stop\(\)[\s\S]*?metronome\.stop\(\)/);
+  assert.match(player, /triggerPanic\(\)[\s\S]*?effectPadStates[\s\S]*?stopEffectPadAudio/);
+  assert.match(player, /triggerPanic\(\)[\s\S]*?hookKeysNative\.stopAllNotes\(\)/);
+  assert.match(tracks, /stop\(\): void \{[\s\S]*?this\.audio\.pause\(\)[\s\S]*?this\.clearQueuedTrack\(\)/);
+  assert.match(engine, /applyAllNotesOff\(\)[\s\S]*?effects_\[index\]\.reset\(\)/);
+});
+
+test('pads de notas e efeitos ficam verdes com contorno branco enquanto ativos', () => {
+  const pads = readFileSync(new URL('../src/features/player/PadsEffectsView.ts', import.meta.url), 'utf8');
+  assert.match(css, /\.performance-pad--note\.is-active,[\s\S]*?border-color:\s*#fff;[\s\S]*?linear-gradient\(160deg,\s*#24aa58,\s*#07572a\)/);
+  assert.match(css, /\.performance-pad--effect\.is-active\s*\{[\s\S]*?border-color:\s*#fff;[\s\S]*?linear-gradient\(160deg,\s*#28b85e,\s*#075529\)/);
+  assert.match(css, /\.performance-section\.is-editing \.performance-pad--effect\.is-active\s*\{[\s\S]*?border-color:\s*#fff;/);
+  for (const removedGreen of ['#9fd632', '#35d273', '#19c9aa']) {
+    assert(!pads.includes(removedGreen), `a paleta de edição não deve oferecer o verde ${removedGreen}`);
+  }
+});
+
+test('metrônomo usa o azul do Click e Pads - Efects usa o laranja do Config', () => {
+  assert.match(css, /\.player-metronome-button,[\s\S]*?\[data-action="toggle-metronome"\][\s\S]*?--button-color-a:\s*#24b8ff/);
+  assert.match(css, /\.player-metronome-button\.is-active,[\s\S]*?--button-color-a:\s*#24b8ff/);
+  assert.match(css, /\.player-navigation__pads-button,[\s\S]*?\[data-action="show-pads-effects"\][\s\S]*?--button-color-a:\s*#ffad45[\s\S]*?--button-color-b:\s*#e55808[\s\S]*?color:\s*#090705/);
+  assert.match(css, /\.player-module__settings-button\s*\{\s*--button-color-a:\s*#ffad45[^}]*--button-color-b:\s*#e55808/);
+});
+
 test('FX escolhidos para os pads voltam do armazenamento local ao reabrir o app', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const store = readFileSync(new URL('../src/features/effects/EffectAudioStore.ts', import.meta.url), 'utf8');

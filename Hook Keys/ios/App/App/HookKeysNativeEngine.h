@@ -38,6 +38,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 - (BOOL)loadSoundFontAtPath:(NSString *)path moduleIndex:(NSInteger)moduleIndex;
 - (BOOL)cloneSoundFontFromModule:(NSInteger)sourceModuleIndex
                         toModule:(NSInteger)targetModuleIndex;
+- (void)unloadSoundFontFromModule:(NSInteger)moduleIndex;
 - (BOOL)configureModule:(NSInteger)moduleIndex
                  enabled:(BOOL)enabled
                inputSlot:(NSInteger)inputSlot

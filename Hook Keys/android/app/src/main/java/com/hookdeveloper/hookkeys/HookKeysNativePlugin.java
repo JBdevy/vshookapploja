@@ -815,6 +815,19 @@ public class HookKeysNativePlugin extends Plugin {
         }, "HookKeys-SF2-Cloner").start();
     }
 
+    @PluginMethod
+    public void unloadSoundFont(PluginCall call) {
+        int moduleIndex = call.getInt("moduleIndex", -1);
+        if (moduleIndex < 0 || moduleIndex >= 7) {
+            call.reject("Módulo de timbre inválido.");
+            return;
+        }
+        new Thread(() -> {
+            nativeUnloadSoundFont(moduleIndex);
+            call.resolve();
+        }, "HookKeys-SF2-Unloader").start();
+    }
+
     private void notifyMidiDevicesChanged() {
         notifyListeners("midiDevicesChanged", new JSObject(), true);
     }
@@ -990,6 +1003,7 @@ public class HookKeysNativePlugin extends Plugin {
     private static native float[] nativeModuleAnalysis(int moduleIndex);
     private static native boolean nativeLoadSoundFont(int moduleIndex, String path);
     private static native boolean nativeCloneSoundFont(int sourceModuleIndex, int targetModuleIndex);
+    private static native void nativeUnloadSoundFont(int moduleIndex);
     private static native boolean nativeSendMidi(int inputSlot, int status, int data1, int data2, long timestamp);
     private static native boolean nativeConfigureModule(
         int moduleIndex,

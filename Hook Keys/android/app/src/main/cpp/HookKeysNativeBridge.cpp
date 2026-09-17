@@ -160,6 +160,15 @@ public:
     return engine != nullptr && engine->cloneSoundFont(sourceModuleIndex, targetModuleIndex);
   }
 
+  void unloadSoundFont(std::size_t moduleIndex) noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> engine;
+    {
+      std::scoped_lock lock(controlMutex_);
+      engine = runtime_;
+    }
+    if (engine) engine->unloadSoundFont(moduleIndex);
+  }
+
   hook_keys::HookKeysEngine::ModulePeaks consumeModulePeaks() noexcept {
     std::shared_ptr<hook_keys::NativeEngineRuntime> runtime;
     {
@@ -645,6 +654,12 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeCloneSoundFont(
   return gEngine.cloneSoundFont(
       static_cast<std::size_t>(sourceModuleIndex), static_cast<std::size_t>(targetModuleIndex))
       ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeUnloadSoundFont(
+    JNIEnv*, jclass, jint moduleIndex) {
+  gEngine.unloadSoundFont(static_cast<std::size_t>(moduleIndex));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

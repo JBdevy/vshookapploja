@@ -48,6 +48,7 @@ unsafe extern "C" {
         source_module_index: usize,
         target_module_index: usize,
     ) -> i32;
+    fn hk_runtime_unload_soundfont(handle: *mut c_void, module_index: usize);
     fn hk_runtime_send_midi(
         handle: *mut c_void,
         input_slot: u8,
@@ -970,6 +971,16 @@ fn clone_sound_font(
 }
 
 #[tauri::command]
+fn unload_sound_font(module_index: usize, state: State<'_, AppState>) -> Result<(), String> {
+    if module_index >= 7 {
+        return Err("Módulo de timbre inválido.".into());
+    }
+    let engine = state.engine.current()?;
+    unsafe { hk_runtime_unload_soundfont(engine.pointer(), module_index) };
+    Ok(())
+}
+
+#[tauri::command]
 fn module_analysis(module_index: usize, state: State<'_, AppState>) -> Result<Vec<f32>, String> {
     if module_index >= 8 {
         return Err("Módulo inválido.".to_string());
@@ -1774,6 +1785,7 @@ fn main() {
             append_sound_font_chunk,
             finish_sound_font_upload,
             clone_sound_font,
+            unload_sound_font,
             save_backup,
             confirm_app_close,
         ])

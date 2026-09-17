@@ -562,6 +562,13 @@ static NSString *describeFormat(AVAudioFormat *format) {
                               static_cast<std::size_t>(targetModuleIndex));
 }
 
+- (void)unloadSoundFontFromModule:(NSInteger)moduleIndex {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime != nullptr && moduleIndex >= 0 && moduleIndex < 7) {
+    runtime->unloadSoundFont(static_cast<std::size_t>(moduleIndex));
+  }
+}
+
 - (BOOL)configureModule:(NSInteger)moduleIndex enabled:(BOOL)enabled inputSlot:(NSInteger)inputSlot
                  lowNote:(NSInteger)lowNote highNote:(NSInteger)highNote octave:(NSInteger)octave
                  sustain:(BOOL)sustain modulation:(BOOL)modulation gmDrumHiHatChoke:(BOOL)gmDrumHiHatChoke

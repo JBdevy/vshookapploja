@@ -31,6 +31,23 @@ body :is(button, a, label, h1, h2, h3, h4, h5, h6, p, span, strong, b, small, le
 
 * {
   box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Campos editáveis continuam aceitando cursor e seleção; o restante da
+   interface nunca se comporta como uma página do navegador ao segurar. */
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+img,
+a {
+  -webkit-user-drag: none;
 }
 
 html,
@@ -2844,7 +2861,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .performance-pad--note.is-active,
 .performance-pad--note.is-sharp.is-active {
   color: #f1fff5;
-  border-color: rgba(79, 239, 129, 0.9);
+  border-color: #fff;
   background:
     radial-gradient(circle at 50% 10%, rgba(174, 255, 199, 0.16), transparent 44%),
     linear-gradient(160deg, #24aa58, #07572a);
@@ -2867,7 +2884,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .performance-pad--effect.is-active {
   color: #effff3;
-  border-color: rgba(79, 239, 129, 0.92);
+  border-color: #fff;
   background:
     radial-gradient(circle at 50% 10%, rgba(187, 255, 207, 0.2), transparent 44%),
     linear-gradient(160deg, #28b85e, #075529);
@@ -5094,6 +5111,14 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   height: 100%;
   min-height: 0;
   margin: 0 auto;
+}
+
+.performance-section.is-editing .performance-pad--effect.is-active {
+  color: #effff3;
+  border-color: #fff;
+  background:
+    radial-gradient(circle at 50% 10%, rgba(187, 255, 207, 0.2), transparent 44%),
+    linear-gradient(160deg, #28b85e, #075529);
 }
 
 .module-delay-page {
@@ -11836,11 +11861,22 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 .player-navigation__tracks-button,
 [data-action="open-tracks"] { --button-color-a: #28c9ff !important; --button-color-b: #0868a5 !important; --button-border: #75ddff !important; }
 .player-navigation__pads-button,
-[data-action="show-pads-effects"] { --button-color-a: #f657a9 !important; --button-color-b: #8a1762 !important; --button-border: #ff91c9 !important; }
+[data-action="show-pads-effects"] {
+  --button-color-a: #ffad45 !important;
+  --button-color-b: #e55808 !important;
+  --button-border: #ffd08a !important;
+  color: #090705 !important;
+  text-shadow: 0 1px rgba(255,255,255,.2) !important;
+}
 .player-metronome-button,
-[data-action="toggle-metronome"] { --button-color-a: #f05a45 !important; --button-color-b: #931d19 !important; --button-border: #ff8a78 !important; }
+[data-action="toggle-metronome"] { --button-color-a: #24b8ff !important; --button-color-b: #075f9f !important; --button-border: #83d9ff !important; }
 .player-metronome-button.is-active,
-[data-action="toggle-metronome"].is-active { --button-color-a: #22d77a !important; --button-color-b: #08723a !important; --button-border: #70efa7 !important; }
+[data-action="toggle-metronome"].is-active {
+  --button-color-a: #24b8ff !important;
+  --button-color-b: #075f9f !important;
+  --button-border: #fff !important;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.5), 0 0 12px rgba(36,184,255,.42) !important;
+}
 .player-tempo-button,
 [data-action="tap-tempo"] { --button-color-a: #ffd64a !important; --button-color-b: #d06b08 !important; --button-border: #fff08a !important; }
 .player-tempo-button strong,
@@ -11848,9 +11884,16 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 [data-action="tap-tempo"] strong,
 [data-action="tap-tempo"] span { color: #090705 !important; }
 .player-navigation__settings-button,
-[data-action="open-app-settings"] { --button-color-a: #a96aff !important; --button-color-b: #5420a3 !important; --button-border: #d1a9ff !important; }
+[data-action="open-app-settings"] {
+  --button-color-a: #ffe15a !important;
+  --button-color-b: #c97908 !important;
+  --button-border: #fff19a !important;
+  color: #090705 !important;
+}
 .player-account__user-button,
-[data-action="open-user"] { --button-color-a: #ff765f !important; --button-color-b: #a42920 !important; --button-border: #ffa392 !important; }
+[data-action="open-user"] { --button-color-a: #35db78 !important; --button-color-b: #08743a !important; --button-border: #8bffb5 !important; }
+.player-panic-button,
+[data-action="panic"] { --button-color-a: #f05a4f !important; --button-color-b: #851916 !important; --button-border: #ff887d !important; }
 .player-module__sound-button { --button-color-a: var(--module-button-green-a) !important; --button-color-b: var(--module-button-green-b) !important; --button-border: var(--module-button-green-border) !important; }
 .player-module__sound-button.has-selected-timbre {
   --button-color-a: color-mix(in srgb, var(--module-sound-color) 78%, white) !important;
@@ -12015,6 +12058,8 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 [data-action="toggle-metronome"],
 .player-tempo-button,
 [data-action="tap-tempo"],
+.player-panic-button,
+[data-action="panic"],
 .player-navigation__settings-button,
 [data-action="open-app-settings"],
 .player-account__user-button,
@@ -13736,7 +13781,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   pointer-events: none;
 }
 
-/* Settings e User viram icones: engrenagem e conta. */
+/* Panic, Settings e User ocupam exatamente o mesmo espaço no cabeçalho. */
 .player-header-icon {
   display: block;
   width: clamp(15px, 1.7vw, 21px);
@@ -13747,6 +13792,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.player-panic-button,
 .player-navigation__settings-button:has(.player-header-icon),
 .player-account__user-button:has(.player-header-icon) {
   display: inline-grid;
@@ -13754,6 +13800,19 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   min-width: clamp(30px, 3.6vw, 44px);
   padding-inline: 6px;
   color: #fff !important;
+}
+
+.player-panic-button {
+  grid-template-rows: repeat(2, min-content);
+  align-content: center;
+  gap: 0;
+  font-size: clamp(7px, .72vw, 9px);
+  line-height: .82;
+  letter-spacing: .02em;
+}
+
+.player-navigation__settings-button:has(.player-header-icon) {
+  color: #090705 !important;
 }
 
 /* Modulo sem timbre: um + no lugar do texto. */
