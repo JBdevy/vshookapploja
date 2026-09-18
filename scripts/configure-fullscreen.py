@@ -23,7 +23,7 @@ PLIST_KEYS = {
 
 IMMERSIVE_METHODS = """
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
         enableImmersiveMode();
     }

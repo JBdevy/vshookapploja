@@ -169,8 +169,8 @@ async function until(predicate, message, timeoutMs = 1500) {
 async function run() {
   await evaluate("setDirectorNativeOrientation('phone')")
   await evaluate("setDirectorNativeOrientation('tablet')")
-  assert.deepEqual(orientationLocks, ['portrait', 'any'],
-    'o app nativo deve manter retrato fora do Diretor Tablet e aceitar a paisagem dos dois lados')
+  assert.deepEqual(orientationLocks, ['portrait', 'landscape'],
+    'o app nativo mantém retrato fora do Diretor Tablet e deita a tela no modo Tablet')
 
   const addresses = await vm.runInContext('getVshookStoreLocalNetworkAddresses()', context)
   if (addresses.length !== 1 || addresses[0] !== '192.168.77.42') {
