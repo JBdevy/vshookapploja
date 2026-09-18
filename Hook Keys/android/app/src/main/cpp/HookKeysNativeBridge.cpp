@@ -323,10 +323,10 @@ public:
 
   bool configureModuleEnvelope(
       std::size_t moduleIndex, float attackMs, float holdMs,
-      float decayMs, float releaseMs, float glideMs) noexcept {
+      float decayMs, float releaseMs, float glideMs, float sustainDb) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     return runtime != nullptr && runtime->setModuleEnvelope(
-        moduleIndex, attackMs, holdMs, decayMs, releaseMs, glideMs);
+        moduleIndex, attackMs, holdMs, decayMs, releaseMs, glideMs, sustainDb);
   }
 
   bool configureVelocityLimits(std::size_t moduleIndex, std::uint8_t ignoreAbove, std::uint8_t ceiling,
@@ -818,9 +818,10 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEnvelope(
     JNIEnv*, jclass, jint moduleIndex, jfloat attackMs, jfloat holdMs,
-    jfloat decayMs, jfloat releaseMs, jfloat glideMs) {
+    jfloat decayMs, jfloat releaseMs, jfloat glideMs, jfloat sustainDb) {
   return gEngine.configureModuleEnvelope(
-             static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs, glideMs)
+             static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs, glideMs,
+             sustainDb)
              ? JNI_TRUE
              : JNI_FALSE;
 }
@@ -853,7 +854,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleModula
     JNIEnv*, jclass, jint moduleIndex, jint mode, jfloat rateHz) {
   return gEngine.configureModuleModulation(
              static_cast<std::size_t>(moduleIndex),
-             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 2)), rateHz)
+             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 3)), rateHz)
              ? JNI_TRUE
              : JNI_FALSE;
 }

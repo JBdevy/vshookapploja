@@ -553,7 +553,7 @@ test('módulos nascem com Reverb de fábrica, Mod em User e o 5 com Rotary', () 
   assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 10,\s*dampen: 50,\s*size: 0,\s*mix: 50,/);
   assert.match(player, /modulationMode: 'user',/);
   assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB \},/);
-  assert.match(player, /rotary: \{ \.\.\.readModuleRotarySettings\(undefined\), enabled: moduleIndex === 4 \},/);
+  assert.match(player, /rotary: \{ \.\.\.readModuleRotarySettings\(undefined\), enabled: moduleIndex === 6 \},/);
 });
 
 test('knobs andam nos dois sentidos, um eixo por gesto, sem o salto nativo do range do iOS', () => {
@@ -620,8 +620,8 @@ test('compressor de fábrica e o Reset que só mexe nos parâmetros', () => {
   assert.match(player, /const reference = this\.defaultSettingsForModule\(moduleNumber, moduleState\);/);
   assert.match(player, /restore\('compressor', readModuleCompressorSettings,\s*readModuleCompressorSettings\(moduleState\.settings\.compressor\)\.enabled\);/);
   assert.match(player, /restore\('reverb', readModuleReverbSettings,\s*readModuleReverbSettings\(moduleState\.settings\.reverb\)\.enabled\);/);
-  assert.match(player, /moduleState\.settings\.rotary = \{\s*\.\.\.readModuleRotarySettings\(undefined\),\s*enabled: readModuleRotarySettings\(moduleState\.settings\.rotary\)\.enabled,/);
-  assert.match(player, /moduleState\.settings\.delay = \{\s*\.\.\.readModuleDelaySettings\(undefined\),\s*enabled: readModuleDelaySettings\(moduleState\.settings\.delay\)\.enabled,/);
+  assert.match(player, /restore\('rotary', readModuleRotarySettings,\s*readModuleRotarySettings\(moduleState\.settings\.rotary\)\.enabled\);/);
+  assert.match(player, /restore\('delay', readModuleDelaySettings,\s*readModuleDelaySettings\(moduleState\.settings\.delay\)\.enabled\);/);
 });
 
 test('Velocity do filtro: coluna com Cutoff e ON/OFF à direita da curva, também em Fixed', () => {
@@ -641,12 +641,12 @@ test('Config em páginas: Reset acompanha a aba e ON/OFF permanece no centro do 
   // O Reset do módulo saiu de cima do Modo; cada página tem o seu.
   assert.doesNotMatch(view, /data-module-setting-action="reset-module"/);
   assert.doesNotMatch(view, /data-modal-action="reset-processor"/, 'o Reset saiu da fileira de abas');
-  assert.match(player, /moduleState\?\.settingsMode === 'default' \? '' : `[\s\S]*?data-reset-processor="\$\{this\.moduleConfigPage\}"/,
+  assert.match(player, /data-reset-processor="\$\{this\.moduleConfigPage\}"\$\{[\s\S]*?settingsMode === 'default' \? ' hidden' : ''\}/,
     'o Reset da página fica no rodapé e só em User');
   assert.doesNotMatch(view, /data-module-effect-power="\$\{page === 'eq'/,
     'o ON/OFF não fica mais junto das abas');
-  assert.match(player, /kind === 'module-settings'[\s\S]*?player-modal__back-button[\s\S]*?data-module-effect-power="\$\{this\.moduleConfigPage\}"[\s\S]*?player-modal__confirm-button/,
-    'o ON/OFF fica entre Voltar e OK');
+  assert.match(player, /kind === 'module-settings'[\s\S]*?player-modal__back-button[\s\S]*?data-module-effect-power="\$\{this\.moduleConfigPage\}"[\s\S]*?player-modal__reset-button/,
+    'o ON/OFF fica entre Voltar e Reset');
   assert.match(player, /\.player-modal__actions \[data-module-effect-power\]/,
     'a troca de página atualiza o ON/OFF do rodapé');
   assert.match(css, /\.player-modal--module-settings \.player-modal__actions[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/,

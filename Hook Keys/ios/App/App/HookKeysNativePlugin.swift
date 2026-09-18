@@ -530,7 +530,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             holdMs: call.getFloat("holdMs", 15000),
             decayMs: call.getFloat("decayMs", 25000),
             releaseMs: call.getFloat("releaseMs", 300),
-            glideMs: call.getFloat("glideMs", 0)
+            glideMs: call.getFloat("glideMs", 0),
+            sustainDb: call.getFloat("sustainDb", 0)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }

@@ -53,9 +53,11 @@ public:
   [[nodiscard]] bool setModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept;
   [[nodiscard]] bool setModuleGainDb(std::size_t moduleIndex, float db) noexcept;
   [[nodiscard]] bool setModuleEffects(std::size_t moduleIndex, ModuleEffectsConfig effects) noexcept;
+  // sustainDb: 0 dB segura o som cheio depois do Decay; abaixo disso a nota
+  // cai até esse nível e fica nele enquanto a tecla estiver presa.
   [[nodiscard]] bool setModuleEnvelope(
       std::size_t moduleIndex, float attackMs, float holdMs,
-      float decayMs, float releaseMs, float glideMs = 0.0f) noexcept;
+      float decayMs, float releaseMs, float glideMs = 0.0f, float sustainDb = 0.0f) noexcept;
   [[nodiscard]] bool setSynthConfig(AnalogSynthConfig config) noexcept;
   // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
   [[nodiscard]] bool setModuleModulationMode(std::size_t moduleIndex, std::uint8_t mode, float rateHz) noexcept;

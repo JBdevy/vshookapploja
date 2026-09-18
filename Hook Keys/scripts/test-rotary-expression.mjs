@@ -116,7 +116,7 @@ test('real Rotary handlers update module 5, retain parameters through ON/OFF and
   }));
   const modal = { querySelectorAll: () => buttons };
   let changes = 0;
-  Object.assign(screen, { getActivePresetState: () => ({ modules }), markPlayerStateChanged: () => changes++, root: {}, setStatus() {}, openModal(kind, number) { this.opened = [kind, number]; } });
+  Object.assign(screen, { getActivePresetState: () => ({ modules }), markPlayerStateChanged: () => changes++, root: {}, setStatus() {}, openModal(kind, number) { this.opened = [kind, number]; }, syncNativeEngine: async () => {}, currentModalKind: 'module-rotary' });
   screen.selectModuleRotarySpeed(modal, buttons[2]);
   assert.equal(modules[4].settings.rotary.speed, 'fast');
   assert.deepEqual(buttons.map((button) => button.pressed), ['false', 'false', 'true']);
@@ -186,7 +186,7 @@ test('Modulation toggle persists; CC 1 updates the correct module only at Slow/F
   screen.handleMidiControlChange({ controller: 1, value: 127, inputId: 'midi-1' });
   assert.equal(modules[4].settings.rotary.speed, 'slow');
   for (const [index, speed] of ['brake', 'fast', 'slow'].entries()) {
-    const key = `module-control:5:rotary:speed:${speed}`;
+    const key = `module-control:7:rotary:speed:${speed}`;
     assert(isCcMappingKey(key), `${key} survives saved state / backup validation`);
     screen.ccMappings.set(key, 20 + index);
     screen.handleMidiControlChange({ controller: 20 + index, value: 127, inputId: 'midi-1' });
@@ -196,8 +196,8 @@ test('Modulation toggle persists; CC 1 updates the correct module only at Slow/F
     assert.equal(modules[4].settings.rotary.speed, speed);
     assert.equal(changes, pressedChanges, 'releasing the mapped MIDI button never reverses the selection');
   }
-  assert(isCcMappingKey('module-control:5:rotary:depth'));
-  assert(!isCcMappingKey('module-control:5:rotary:speed:invalid'));
+  assert(isCcMappingKey('module-control:7:rotary:depth'));
+  assert(!isCcMappingKey('module-control:7:rotary:speed:invalid'));
   assert(!isCcMappingKey('module-control:4:rotary:speed:slow'));
 });
 
@@ -222,7 +222,7 @@ test('Rotary Learn uses two-second touch hold with movement cancellation and des
   const screen = new Handlers();
   const learned = [];
   Object.assign(screen, {
-    currentModalKind: 'module-rotary', currentModalModuleNumber: 5, desktopRuntime: false,
+    currentModalKind: 'module-rotary', currentModalModuleNumber: 7, desktopRuntime: false,
     knobInputForTarget: () => null,
     knobCcLearnGesture: new LongPressGesture(2000, 8), openCcLearn: (target) => learned.push(target.control),
   });

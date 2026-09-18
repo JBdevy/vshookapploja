@@ -35,18 +35,20 @@ export const MODULE_ENVELOPE_DEFAULTS: Readonly<Record<ModuleEnvelopeParameter, 
   decayMs: MODULE_ENVELOPE_LIMITS.decayMs,
 };
 
-export type ModuleModulationMode = 'user' | 'lfo' | 'tremolo';
+export type ModuleModulationMode = 'user' | 'lfo' | 'tremolo' | 'pan';
 
 export function readModuleModulationMode(settings: Readonly<Record<string, unknown>>): ModuleModulationMode {
   if (settings.modulationMode === 'user') return 'user';
   if (settings.modulationMode === 'tremolo') return 'tremolo';
+  if (settings.modulationMode === 'pan') return 'pan';
   return 'lfo';
 }
 
 // O motor recebe o modo como número: 0 User, 1 LFO de pitch, 2 Tremolo.
 export function moduleModulationEngineMode(mode: ModuleModulationMode): number {
   if (mode === 'user') return 0;
-  return mode === 'tremolo' ? 2 : 1;
+  if (mode === 'tremolo') return 2;
+  return mode === 'pan' ? 3 : 1;
 }
 
 // Rate padrão do LFO do card Mod, o mesmo do LFO do Synth.
@@ -65,12 +67,15 @@ export function createModuleModulationCardMarkup(
 ): string {
   const rawMode = readModuleModulationMode(settings);
   // O Synth não tem Tremolo próprio da roda; lá o card fica só com User/LFO.
-  const mode = owner === 'synth' && rawMode === 'tremolo' ? 'lfo' : rawMode;
+  // O Synth não tem Tremolo nem Pan próprios da roda.
+  const mode = owner === 'synth' && rawMode !== 'user' ? 'lfo' : rawMode;
   const rate = readModuleModulationRate(settings);
   const modes = owner === 'synth'
     ? (['user', 'lfo'] as const)
-    : (['user', 'lfo', 'tremolo'] as const);
-  const labels: Record<ModuleModulationMode, string> = { user: 'User', lfo: 'LFO', tremolo: 'Tremolo' };
+    : (['user', 'lfo', 'tremolo', 'pan'] as const);
+  const labels: Record<ModuleModulationMode, string> = {
+    user: 'User', lfo: 'LFO', tremolo: 'Tremolo', pan: 'Pan',
+  };
   return `
     <article class="module-mod-card${owner === 'synth' ? ' module-mod-card--synth' : ''}" data-module-mod-card>
       <header>
@@ -95,6 +100,34 @@ export function createModuleModulationCardMarkup(
   `;
 }
 
+export const MODULE_SUSTAIN_MIN_DB = -60;
+
+export function readModuleSustainDb(settings: Readonly<Record<string, unknown>>): number {
+  const value = Number(settings.sustainDb);
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(0, Math.max(MODULE_SUSTAIN_MIN_DB, value));
+}
+
+export function formatModuleSustainDb(value: number): string {
+  return value <= MODULE_SUSTAIN_MIN_DB ? '-inf' : `${value.toFixed(1)} dB`;
+}
+
+function createSustainControl(settings: Readonly<Record<string, unknown>>): string {
+  const sustain = readModuleSustainDb(settings);
+  const progress = (sustain - MODULE_SUSTAIN_MIN_DB) / -MODULE_SUSTAIN_MIN_DB;
+  return `
+    <article class="module-envelope-control">
+      <h3>Sustain</h3>
+      ${createParameterKnobMarkup(progress, `
+        <input type="range" min="${MODULE_SUSTAIN_MIN_DB}" max="0" step="0.5" value="${sustain}"
+          data-module-sustain aria-label="Sustain do envelope"
+          aria-valuetext="${formatModuleSustainDb(sustain)}">
+      `)}
+      <output data-module-sustain-value>${formatModuleSustainDb(sustain)}</output>
+    </article>
+  `;
+}
+
 // Gain do módulo: ganho de entrada, antes do EQ e do compressor. Serve para
 // empurrar o sinal nos processadores; o volume de saída continua sendo só do
 // fader da tela principal. Nasce em 0 dB, ou seja, sem mudar nada.
@@ -115,7 +148,7 @@ export function createModuleGainCardMarkup(settings: Readonly<Record<string, unk
   const gain = readModuleGainDb(settings);
   const progress = (gain - MODULE_GAIN_MIN_DB) / (MODULE_GAIN_MAX_DB - MODULE_GAIN_MIN_DB);
   return `
-    <article class="module-gain-card" data-module-gain-card>
+    <article class="module-envelope-control module-gain-card" data-module-gain-card>
       <strong>Gain</strong>
       ${createParameterKnobMarkup(progress, `
         <input type="range" min="${MODULE_GAIN_MIN_DB}" max="${MODULE_GAIN_MAX_DB}" step="0.5" value="${gain}"
@@ -245,7 +278,7 @@ export function createModuleSettingsPageMarkup(
   if (page === 'delay') return createModuleDelayMarkup(settings, bpm);
   if (page === 'rotary') return createModuleRotaryMarkup(settings);
   if (page === 'arpeggiator') return createArpeggiatorMarkup(settings.arpeggiator);
-  if (page === 'trance-gate') return createTranceGateMarkup(settings.tranceGate);
+  if (page === 'trance-gate') return createTranceGateMarkup(settings.tranceGate, bpm);
   return `
     <div class="module-envelope-grid" aria-label="Envelope do timbre">
       ${ENVELOPE_CONTROLS.map(({ parameter, label }) => createEnvelopeControl(
@@ -257,8 +290,10 @@ export function createModuleSettingsPageMarkup(
           MODULE_ENVELOPE_DEFAULTS[parameter],
         ),
       )).join('')}
+      ${createSustainControl(settings)}
       ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings))}
       ${createVelocityLimitCardMarkup(settings)}
+      ${createModuleGainCardMarkup(settings)}
     </div>
   `;
 }
@@ -347,7 +382,6 @@ export function createModuleSettingsMarkup(
         ${createModuleSettingsPageMarkup(page, settings, bpm)}
       </div>
       <div class="module-settings-bottom-row">
-        ${createModuleGainCardMarkup(settings)}
         ${createVelocityCardMarkup(settings)}
         ${processorReplacement === 'synth' ? '' : createGlideCardMarkup(settings, bpm)}
         ${createModuleModulationCardMarkup(settings, processorReplacement === 'synth' ? 'synth' : 'sf2')}

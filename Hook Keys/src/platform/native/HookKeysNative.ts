@@ -94,6 +94,8 @@ export interface NativeModuleEnvelopeConfig {
   decayMs: number;
   releaseMs: number;
   glideMs: number;
+  // 0 dB segura o som cheio depois do Decay.
+  sustainDb: number;
 }
 
 export interface NativeVelocityLimitsConfig {
@@ -120,7 +122,7 @@ export interface NativeGlideConfig {
 
 export interface NativeModuleModulationConfig {
   moduleIndex: number;
-  // 0 User, 1 LFO de pitch, 2 Tremolo.
+  // 0 User, 1 LFO de pitch, 2 Tremolo, 3 Pan.
   mode: number;
   rateHz: number;
 }
@@ -593,7 +595,7 @@ class HookKeysNativeBridge {
     if (!Number.isInteger(config.moduleIndex) || config.moduleIndex < 0 || config.moduleIndex >= 8) return;
     const normalized = {
       moduleIndex: config.moduleIndex,
-      mode: Number.isInteger(config.mode) ? Math.min(2, Math.max(0, config.mode)) : 1,
+      mode: Number.isInteger(config.mode) ? Math.min(3, Math.max(0, config.mode)) : 1,
       rateHz: Number.isFinite(config.rateHz) ? Math.min(20, Math.max(0.1, config.rateHz)) : 6.85,
     };
     const key = JSON.stringify(normalized);

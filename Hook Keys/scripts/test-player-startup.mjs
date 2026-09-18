@@ -891,14 +891,14 @@ try {
   const decay = window.document.querySelector('[data-module-effect-control="decay"]');
   fineDrag(decay, 2.5, 3);
   assert.equal(decay.value, '2.6', 'effect knobs use their declared decimal step');
-  player.openModal('module-arpeggiator', 6, master);
+  player.openModal('module-arpeggiator', 5, master);
   const octave2 = window.document.querySelector('[data-arpeggiator-octaves="2"]');
   octave2.click();
   assert(octave2.classList.contains('is-selected'), 'Arpeggiator octaves use the requested 2x2 buttons');
   const gate = window.document.querySelector('[data-pattern-parameter="gate"]');
   fineDrag(gate, 70, 3);
   assert.equal(gate.value, '71', 'pattern knobs use the same progressive curve');
-  for (const [kind, module] of [['module-settings', 1], ['module-synth', 8], ['module-reverb', 1], ['module-delay', 1], ['module-compressor', 1], ['module-rotary', 5], ['module-arpeggiator', 6], ['module-trance-gate', 7]]) {
+  for (const [kind, module] of [['module-settings', 1], ['module-synth', 8], ['module-reverb', 1], ['module-delay', 1], ['module-compressor', 1], ['module-rotary', 7], ['module-arpeggiator', 5], ['module-trance-gate', 6]]) {
     player.openModal(kind, module, master);
     for (const input of window.document.querySelectorAll('.player-modal .module-envelope-knob input, .player-modal .module-effect-knob input')) {
       const value = player.defaultKnobValue(input);
@@ -1237,7 +1237,7 @@ try {
   assert(calls.some(({ command, args }) => command === 'begin_sound_font_upload' && /^[a-f0-9]{64}$/.test(args.assetKey)),
     'arquivo nativo recebe uma chave estável para reutilizar o cache');
   const saved = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
-  player.openModal('module-trance-gate', 7, master);
+  player.openModal('module-trance-gate', 6, master);
   assert(window.document.querySelector('[data-trance-gate-editor]'));
   assert(!window.document.querySelector('[data-pattern-parameter="semitone"]'));
   assert.equal(player.createPatternPlaybackSnapshot().sequencer, undefined,
@@ -1263,7 +1263,7 @@ try {
   assert.equal(calls.filter(c => c.command === 'configure_trance_gate').at(-1).args.config.enabled, false);
   const gateBackup = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
   player.applySavedPlayerState(gateBackup);
-  assert.equal(player.getActivePresetState().modules[6].settings.tranceGate.depth, 50,
+  assert.equal(player.getActivePresetState().modules[5].settings.tranceGate.depth, 50,
     'Trance Gate settings persist in presets and backups');
   player.closeModal();
   const savedSynth = saved.banks[player.activeBank].presets[player.bankStates.get(player.activeBank).selectedPreset - 1].modules[7];

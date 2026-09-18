@@ -154,6 +154,7 @@ unsafe extern "C" {
         decay_ms: f32,
         release_ms: f32,
         glide_ms: f32,
+        sustain_db: f32,
     ) -> i32;
     fn hk_runtime_configure_synth(
         handle: *mut c_void,
@@ -278,7 +279,7 @@ fn configure_module_modulation(
     let engine = state.engine.current()?;
     let applied = unsafe {
         hk_runtime_configure_module_modulation(
-            engine.pointer(), config.module_index, config.mode.clamp(0, 2), config.rate_hz,
+            engine.pointer(), config.module_index, config.mode.clamp(0, 3), config.rate_hz,
         )
     };
     if applied != 0 { Ok(()) } else { Err("Não foi possível configurar a modulação do módulo.".into()) }
@@ -461,6 +462,8 @@ struct EnvelopeConfig {
     release_ms: f32,
     #[serde(default)]
     glide_ms: f32,
+    #[serde(default)]
+    sustain_db: f32,
 }
 
 #[derive(Deserialize)]
@@ -1122,6 +1125,7 @@ fn configure_module_envelope(
             config.decay_ms,
             config.release_ms,
             config.glide_ms,
+            config.sustain_db,
         )
     };
     if ok != 0 {

@@ -281,10 +281,10 @@ bool NativeEngineRuntime::setModuleEffects(
 
 bool NativeEngineRuntime::setModuleEnvelope(
     std::size_t moduleIndex, float attackMs, float holdMs,
-    float decayMs, float releaseMs, float glideMs) noexcept {
+    float decayMs, float releaseMs, float glideMs, float sustainDb) noexcept {
   std::scoped_lock lock(configMutex_);
   if (moduleIndex >= controlLayer_->modules.size()) return false;
-  controlLayer_->modules[moduleIndex]->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs);
+  controlLayer_->modules[moduleIndex]->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs, sustainDb);
   controlLayer_->modules[moduleIndex]->setGlide(std::isfinite(glideMs) ? std::clamp(glideMs, 0.0f, 5000.0f) : 0.0f);
   return true;
 }

@@ -37,9 +37,10 @@ void hook_keys_tsf_render_glide(tsf* synth, HookKeysGlideState& state,
 
 // Overrides stay on each playback instance; shared SF2 regions are immutable.
 // Must only be called from the audio thread.
+// sustain: nível em que a nota segura depois do Decay, de 0 a 1.
 extern "C" void hook_keys_tsf_set_volume_envelope(
     tsf* synth, float attackSeconds, float holdSeconds,
-    float decaySeconds, float releaseSeconds) noexcept;
+    float decaySeconds, float releaseSeconds, float sustain) noexcept;
 
 // Bytes ocupados pelo banco de amostras imutavel deste SoundFont. Instancias
 // criadas por tsf_copy compartilham o mesmo banco e relatam o mesmo valor,

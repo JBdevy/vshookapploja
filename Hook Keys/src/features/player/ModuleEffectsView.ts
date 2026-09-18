@@ -1,7 +1,8 @@
 import { createParameterKnobMarkup } from './ParameterKnobView';
 
 export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary' | 'chorus';
-export type ModuleProcessorReplacement = 'compressor' | 'chorus' | 'rotary' | 'arpeggiator' | 'trance-gate' | 'synth';
+export type ModuleProcessorReplacement =
+  'compressor' | 'chorus' | 'rotary' | 'arpeggiator' | 'trance-gate' | 'organ' | 'synth';
 
 export type RotarySpeed = 'brake' | 'slow' | 'fast';
 export interface ModuleRotarySettings {
@@ -153,6 +154,7 @@ function createProcessorShortcutCard(
   const label = replacement === 'arpeggiator'
     ? 'Arpeggiator'
     : replacement === 'trance-gate' ? 'Trance Gate'
+      : replacement === 'organ' ? 'Organ'
       : replacement === 'rotary' ? 'Rotary' : 'Chorus';
   const secondEnabled = replacement === 'chorus' ? chorusEnabled : null;
   return `

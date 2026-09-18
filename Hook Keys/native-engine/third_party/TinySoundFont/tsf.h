@@ -373,6 +373,8 @@ struct tsf
 	// the shared immutable SF2 regions copied into another module/preset.
 	int hookVolumeEnvelopeOverride;
 	float hookAttackSeconds, hookHoldSeconds, hookDecaySeconds, hookReleaseSeconds;
+	/* Nivel em que a nota segura depois do Decay, 0..1. Antes era fixo em 1. */
+	float hookSustain;
 };
 
 #ifndef TSF_NO_STDIO
@@ -1721,7 +1723,7 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 		if (f->hookVolumeEnvelopeOverride)
 		{
 			struct tsf_envelope envelope = region->ampenv;
-			envelope.sustain = 1.0f;
+			envelope.sustain = f->hookSustain;
 			if (f->hookAttackSeconds >= 0.0f) envelope.attack = f->hookAttackSeconds;
 			if (f->hookHoldSeconds >= 0.0f) { envelope.hold = f->hookHoldSeconds; envelope.keynumToHold = 0.0f; }
 			if (f->hookDecaySeconds >= 0.0f) { envelope.decay = f->hookDecaySeconds; envelope.keynumToDecay = 0.0f; }

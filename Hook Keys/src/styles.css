@@ -1653,10 +1653,18 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .player-modal--module-arpeggiator .player-modal__actions > button,
 .player-modal--module-trance-gate .player-modal__actions > button { width: 100%; min-width: 0; }
 
-.player-modal--module-settings .player-modal__actions > button:not([hidden]) {
-  flex: 1 1 0;
+.player-modal--module-settings .player-modal__actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.player-modal--module-settings .player-modal__actions > button {
   min-width: clamp(60px, 8vw, 150px);
 }
+
+.player-modal--module-settings .player-modal__actions > .player-modal__back-button { grid-column: 1; }
+.player-modal--module-settings .player-modal__actions > .module-effect-power { grid-column: 2; }
+.player-modal--module-settings .player-modal__actions > .player-modal__reset-button { grid-column: 3; }
 
 .pattern-editor {
   display: grid;
@@ -1710,6 +1718,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .pattern-knob-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
   gap: clamp(8px, 1.2vw, 14px);
   min-height: 0;
@@ -1752,7 +1761,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .arpeggiator-live-strip { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; align-items: center; }
 .arpeggiator-live-strip i { height: 4px; border-radius: 4px; background: #392645; transition: background .08s ease, box-shadow .08s ease, transform .08s ease; }
 .arpeggiator-live-strip i.is-playing { background: #cf78ff; box-shadow: 0 0 10px #a84bf7; transform: scaleY(2); }
-.pattern-knob {
+.pattern-editor .pattern-knob {
   --knob-accent: var(--pattern-accent, #ff841f);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -1766,15 +1775,15 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   border-radius: 10px;
   background: linear-gradient(155deg, #242027, #0d0c10);
 }
-.pattern-knob > span:first-child { color: #fff; font-size: 9px; font-weight: 950; }
-.pattern-knob .module-effect-knob__face { width: min(52px, 7.4vh); }
-.pattern-knob output { color: color-mix(in srgb, var(--knob-accent) 72%, #fff); font-size: 9px; font-weight: 950; }
-.pattern-knob:nth-child(2) { --knob-accent: #39d878; }
-.pattern-knob:nth-child(3) { --knob-accent: #25b9ff; }
-.pattern-knob:nth-child(4) { --knob-accent: #ff4d67; }
-.pattern-knob:nth-child(5) { --knob-accent: #a855f7; }
+.pattern-editor .pattern-knob > span:first-child { color: #fff; font-size: 9px; font-weight: 950; }
+.pattern-editor .pattern-knob .module-effect-knob__face { width: min(42px, 5.8vh); }
+.pattern-editor .pattern-knob output { color: color-mix(in srgb, var(--knob-accent) 72%, #fff); font-size: 9px; font-weight: 950; }
+.pattern-editor .pattern-knob:nth-child(2) { --knob-accent: #39d878; }
+.pattern-editor .pattern-knob:nth-child(3) { --knob-accent: #25b9ff; }
+.pattern-editor .pattern-knob:nth-child(4) { --knob-accent: #ff4d67; }
+.pattern-editor .pattern-knob:nth-child(5) { --knob-accent: #a855f7; }
 
-.trance-gate-editor { grid-template-rows: auto minmax(54px, .75fr) minmax(78px, 1fr) auto; }
+.trance-gate-editor { grid-template-rows: auto minmax(0, 1fr) minmax(0, .85fr); }
 .trance-gate-editor__header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -1916,13 +1925,54 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 .trance-gate-editor .trance-gate-step.is-enabled i { background: #64e895; box-shadow: none; }
 .trance-gate-editor .pattern-knob-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+/* Sync e o tempo livre em ms ficam à direita do 16, na mesma fileira. */
+.trance-gate-editor .pattern-editor__toolbar {
+  grid-template-columns: minmax(0, 1fr) minmax(0, .78fr) minmax(0, .5fr);
+}
+
+.trance-gate-rate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, .8fr);
+  gap: clamp(4px, .7vw, 8px);
+  min-width: 0;
+  min-height: 0;
+}
+
+.trance-gate-rate > button {
+  min-width: 0;
+  min-height: 0;
+  padding: 2px 4px;
+  color: #f7f1f8;
+  border: 1px solid #56495b;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #302936, #131116);
+  font-size: clamp(8px, 1vw, 12px);
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.trance-gate-rate > button.is-selected {
+  color: #120b05;
+  border-color: color-mix(in srgb, var(--pattern-accent, #ff5f45) 78%, #fff);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--pattern-accent, #ff5f45) 66%, #fff), var(--pattern-accent, #ff5f45));
+}
+
+/* Com o Sync ligado o knob não se mexe: ele só mostra o andamento. */
+.trance-gate-rate .pattern-knob.is-locked {
+  opacity: .62;
+}
+
+.trance-gate-rate .pattern-knob.is-locked .module-envelope-knob {
+  pointer-events: none;
+}
+.pattern-editor .trance-gate-editor .pattern-knob,
 .trance-gate-editor .pattern-knob { min-width: 0; }
-.trance-gate-editor .pattern-knob .module-effect-knob__face {
+.pattern-editor.trance-gate-editor .pattern-knob .module-effect-knob__face {
   width: min(52px, 7vh);
   height: min(52px, 7vh);
 }
 .trance-gate-editor .module-envelope-knob { justify-self: center; }
-.trance-gate-help { margin: 0; color: #ddd; font-size: 11px; }
 .trance-gate-step.is-outside { opacity: .28; }
 
 
@@ -1935,24 +1985,78 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   .pattern-editor__header strong { font-size: 15px; }
   .pattern-editor__header span,
   .pattern-editor__header output { font-size: 7px; }
-  .trance-gate-editor { grid-template-rows: auto auto minmax(36px, .65fr) minmax(54px, 1fr) auto; }
+  .trance-gate-editor { grid-template-rows: auto minmax(36px, .65fr) minmax(54px, 1fr); }
   .trance-gate-editor__header { min-height: 18px; }
   .trance-gate-editor__header > strong { font-size: 15px; }
   .pattern-option-group { gap: 3px; }
-  .pattern-option-group button { min-height: 24px; padding: 2px 4px; font-size: 7px; }
+  .pattern-option-group button { min-height: 20px; padding: 1px 4px; font-size: 7px; }
   .trance-gate-steps { gap: 3px; }
   .trance-gate-step { padding: 2px; border-radius: 4px; }
   .trance-gate-step strong { font-size: 9px; }
-  .pattern-knob { min-height: 0; padding: 3px; border-radius: 6px; }
+  .pattern-editor .pattern-knob { min-height: 0; padding: 3px; border-radius: 6px; }
   .pattern-knob > span:first-child,
   .pattern-knob output,
   .pattern-knob .module-effect-knob__face { width: auto; height: 100%; max-height: 46px; }
-  .trance-gate-editor .pattern-knob .module-effect-knob__face {
+  .pattern-editor.trance-gate-editor .pattern-knob .module-effect-knob__face {
     width: min(38px, 7vh);
     height: min(38px, 7vh);
     max-height: 32px;
   }
   .module-effect-power { min-height: 30px; }
+
+  /* Celular deitado: o editor de padrão é o conteúdo da página, então a
+     moldura em volta dele encolhe para ele caber inteiro, sem cortar embaixo. */
+  .module-settings-panel:has(.pattern-editor) {
+    --module-io-control-height: clamp(34px, 9vh, 44px);
+  }
+  .module-settings-panel:has(.pattern-editor) .module-settings-pages,
+  .module-settings-panel:has(.pattern-editor) .module-settings-pages button {
+    height: 26px;
+  }
+  .module-settings-panel:has(.pattern-editor) .module-settings-bottom-row {
+    max-height: 54px;
+  }
+  .module-settings-panel:has(.pattern-editor) :is(.module-glide-card, .module-mod-card) {
+    min-height: 0;
+    padding: 4px;
+    gap: 5px;
+  }
+  .module-settings-panel:has(.pattern-editor) .module-mod-card button {
+    min-height: 18px;
+    padding: 1px 3px;
+  }
+  .module-settings-panel:has(.pattern-editor) .module-glide-card__dial > strong {
+    font-size: 9px;
+  }
+  .module-settings-panel:has(.pattern-editor) :is(.module-glide-card, .module-mod-card) .module-envelope-knob {
+    width: clamp(22px, 4.6vh, 32px);
+  }
+  .player-modal--module-settings:has(.pattern-editor) .player-modal__actions > button {
+    min-height: 32px;
+  }
+  .pattern-editor .arpeggiator-octaves { padding: 3px; gap: 3px; }
+  .pattern-editor .arpeggiator-octaves > span { font-size: 7px; }
+  .pattern-editor .arpeggiator-octaves button {
+    padding: 0 2px;
+    font-size: 11px;
+    line-height: 1;
+  }
+  .pattern-editor .arpeggiator-auto-fader { gap: 3px; padding: 3px; }
+  .pattern-editor .arpeggiator-auto-fader > .pattern-knob { padding: 0; gap: 1px; }
+  /* Deitado o valor já diz dB: o rótulo em cima sai para o knob caber. */
+  .pattern-editor .arpeggiator-auto-fader > .pattern-knob > span:first-child { display: none; }
+  .pattern-editor .arpeggiator-auto-fader { gap: 2px; }
+  .pattern-editor .arpeggiator-auto-fader > div { gap: 2px; }
+  .pattern-editor .arpeggiator-auto-fader button {
+    min-height: 13px;
+    padding: 0 3px;
+    font-size: 7px;
+    line-height: 1;
+  }
+  .pattern-editor .arpeggiator-auto-fader .module-effect-knob__face {
+    width: min(22px, 3.4vh);
+    max-height: 22px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -2434,8 +2538,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .player-module__settings-button,
 .player-module__sound-button {
+  display: grid;
+  place-items: center;
   width: 100%;
   min-width: 0;
+  height: clamp(29px, 4.8vh, 39px);
   min-height: clamp(29px, 4.8vh, 39px);
   padding: 4px 5px;
   overflow: hidden;
@@ -3198,6 +3305,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   }
   html[data-runtime="desktop"] .player-module__settings-button,
   html[data-runtime="desktop"] .player-module__sound-button {
+    height: 26px;
     min-height: 26px;
     padding-block: 2px;
   }
@@ -4695,7 +4803,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .module-envelope-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: clamp(7px, 1vw, 12px);
   min-width: 0;
   min-height: 0;
@@ -4735,6 +4843,12 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .module-envelope-control {
   grid-template-rows: auto minmax(0, 1fr) auto;
   align-content: stretch;
+}
+
+/* O knob acompanha a largura do card: sem isso ele crescia com a altura da
+   página e os oito cards do envelope ficavam gigantes. */
+.module-envelope-grid .module-envelope-knob {
+  width: min(100%, clamp(34px, 5.6vh, 58px));
 }
 .module-cutoff-control {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
@@ -5158,23 +5272,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   cursor: pointer;
 }
 
+/* Chorus: três cards em pé lado a lado, como os do Reverb. */
 .module-effect-controls--chorus {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: repeat(3, minmax(0, 1fr));
-  align-content: stretch;
-}
-
-.module-effect-controls--chorus .module-effect-knob {
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: minmax(0, 1fr);
-}
-
-.module-effect-controls--chorus .module-effect-knob > span:first-child {
-  justify-self: end;
-}
-
-.module-effect-controls--chorus .module-effect-knob > output {
-  justify-self: start;
+  align-content: stretch;
 }
 
 .module-effect-controls--compressor {
@@ -9543,6 +9645,10 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
     min-height: 27px;
   }
 
+  .player-module__sound-button {
+    height: 27px;
+  }
+
   .player-module__fader-rail {
     width: 25px;
   }
@@ -9801,7 +9907,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .module-envelope-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 3px;
   }
 
@@ -10522,6 +10628,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
   .player-screen--tablet .player-module__settings-button,
   .player-screen--tablet .player-module__sound-button {
+    height: 20px;
     min-height: 20px;
     padding: 1px 2px;
     border-radius: 5px;
@@ -12212,21 +12319,241 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   grid-template-columns: minmax(0, 2.25fr) minmax(150px, 1fr);
 }
 .module-settings-bottom-row:has(.module-mod-card):not(:has(.module-glide-card)) {
-  grid-template-columns: minmax(56px, .5fr) repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .module-settings-bottom-row:has(.module-mod-card):has(.module-glide-card) {
-  grid-template-columns: minmax(56px, .5fr) repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 /* Gain: o trim do módulo, à esquerda do card de Velocity. */
+/* Hook B3: cinco presets em cima e os nove faders embaixo. A barra puxada
+   para baixo é a voz entrando, como no órgão de verdade. */
+.organ-panel {
+  display: grid;
+  /* Presets à esquerda, Rotary no canto superior direito e os faders embaixo. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, .72fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(6px, 1vh, 12px);
+  height: 100%;
+  min-height: 0;
+  padding: clamp(6px, 1vh, 12px);
+  border: 1.5px solid rgba(255, 126, 31, 0.45);
+  border-radius: 12px;
+  background: linear-gradient(170deg, rgba(34, 24, 18, 0.98), rgba(12, 9, 8, 0.99));
+}
+
+.organ-presets {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: start;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: clamp(4px, 0.7vw, 9px);
+  min-width: 0;
+}
+
+.organ-presets button {
+  min-width: 0;
+  min-height: clamp(26px, 4vh, 38px);
+  padding: 2px 4px;
+  overflow: hidden;
+  color: #2b2118;
+  border: 1px solid #b9a894;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #f4ece0, #cdbfad);
+  font-size: clamp(9px, 1.1vw, 14px);
+  font-weight: 950;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.organ-presets button.is-selected {
+  color: #fff4e6;
+  border-color: #ffb45c;
+  background: linear-gradient(180deg, #5c3a1c, #2a1809);
+}
+
+.organ-drawbars {
+  grid-column: 1 / span 2;
+  grid-row: 2;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: clamp(3px, 0.6vw, 8px);
+  /* O console fica com a proporção de um Hammond: largo, não uma torre. */
+  justify-self: center;
+  align-self: center;
+  width: 100%;
+  max-width: 1040px;
+  height: min(100%, clamp(150px, 46vh, 400px));
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(4px, 0.8vh, 9px);
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.25));
+}
+
+.organ-drawbar {
+  --drawbar-position: 0;
+  --drawbar-grip: clamp(13px, 2.4vh, 20px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  justify-items: center;
+  gap: 3px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.organ-drawbar__feet {
+  color: #f6e6d2;
+  font-size: clamp(7px, 0.8vw, 11px);
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+/* A calha por onde o fader corre: em cima fechado, embaixo todo aberto. */
+.organ-drawbar__track {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.35)),
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0 1px, transparent 1px 11%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+/* A haste sai do topo e acompanha a barra: é o quanto ela foi puxada. */
+.organ-drawbar__stem {
+  position: absolute;
+  top: 0;
+  left: 38%;
+  right: 38%;
+  height: calc(var(--drawbar-position) / 8 * (100% - var(--drawbar-grip)) + var(--drawbar-grip) / 2);
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(90deg, #6d6660, #cfc6bb 45%, #6d6660);
+}
+
+.organ-drawbar__grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--drawbar-position) / 8 * (100% - var(--drawbar-grip)));
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 2px;
+  height: var(--drawbar-grip);
+  border-radius: 4px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.55);
+}
+
+.organ-drawbar__grip s {
+  width: 62%;
+  height: 1px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.organ-drawbar--brown .organ-drawbar__grip {
+  background: linear-gradient(180deg, #b07a46, #6d411a);
+}
+
+.organ-drawbar--white .organ-drawbar__grip {
+  background: linear-gradient(180deg, #f2ead9, #c3b69f);
+}
+
+.organ-drawbar--black .organ-drawbar__grip {
+  background: linear-gradient(180deg, #514840, #1d1914);
+}
+
+.organ-drawbar--black .organ-drawbar__grip s {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* O range guarda o valor; quem arrasta é a calha. */
+.organ-drawbar input[type="range"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.organ-drawbar output {
+  color: #ffb45c;
+  font-size: clamp(7px, 0.8vw, 11px);
+  font-weight: 950;
+}
+
+.organ-panel .module-rotary-editor {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  grid-template-rows: auto auto;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid rgba(47, 124, 230, 0.45);
+  border-radius: 9px;
+}
+
+.organ-panel .module-rotary-speed {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.organ-panel .module-rotary-modulation-row {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+/* Os quatro knobs ficam numa fileira só, ao lado dos botões. */
+.organ-panel .module-effect-controls--rotary {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  gap: 3px;
+}
+
+.organ-panel .module-rotary-editor :is(.module-rotary-speed button, .module-rotary-modulation) {
+  min-height: clamp(18px, 2.6vh, 26px);
+  padding: 1px 3px;
+  font-size: clamp(7px, .72vw, 10px);
+}
+
+.organ-panel .module-rotary-editor .module-effect-knob {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 2px;
+  padding: 3px;
+}
+
+.organ-panel .module-rotary-editor .module-effect-knob__face {
+  width: min(38px, 5vh);
+}
+
+.organ-panel .module-rotary-editor :is(.module-effect-knob > span:first-child, .module-effect-knob output) {
+  font-size: clamp(7px, .72vw, 10px);
+}
+
 /* Auto Fader do arpeggiator: fica à direita do Gate. */
 .arpeggiator-auto-fader {
   display: grid;
-  justify-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  justify-items: stretch;
   align-content: center;
   gap: 4px;
   min-width: 0;
+  min-height: 0;
   padding: clamp(4px, .7vh, 8px);
+  overflow: hidden;
   border: 1px solid rgba(255, 137, 49, 0.4);
   border-radius: 12px;
   background: linear-gradient(155deg, rgba(38, 30, 24, .98), rgba(14, 10, 8, .99));
@@ -12236,11 +12563,21 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   border-color: #57e491;
 }
 
+.arpeggiator-auto-fader > button {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/* As duas divisões ficam uma embaixo da outra, abaixo do botão do Auto Fader. */
 .arpeggiator-auto-fader > div {
+  grid-column: 1;
+  grid-row: 2 / span 2;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 4px;
   width: 100%;
+  min-height: 0;
 }
 
 .arpeggiator-auto-fader button {
@@ -12261,7 +12598,13 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 }
 
 .arpeggiator-auto-fader > .pattern-knob {
-  width: 100%;
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  /* Rótulo, knob e valor juntos no meio da coluna, e não esparramados. */
+  grid-template-rows: auto auto auto;
+  align-content: center;
+  width: auto;
+  min-height: 0;
   border: 0;
   background: none;
 }
@@ -13585,7 +13928,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 
 /* Param dos modulos 1 a 7: envelope em 2x3, com o Limite Velocity ao lado do Cutoff. */
 .module-envelope-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
   grid-template-rows: repeat(2, minmax(0, 1fr));
 }
 /* Limite Velocity: sexto card do envelope, ao lado do Cutoff. */

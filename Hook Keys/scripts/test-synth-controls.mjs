@@ -105,7 +105,8 @@ test('every Synth parameter uses exactly the same knob face as timbre parameters
   const moduleMarkup = settingsView.createModuleSettingsMarkup([], [], null, {}, 120, 2, '1+2');
   const faces = (markup) => [...markup.matchAll(/<span class="module-envelope-knob__face"[^>]*><i><\/i><\/span>/g)].map(([face]) => face);
   assert.equal(faces(synthMarkup).length, 15, 'Synth knobs plus one velocity limit per OSC');
-  assert.equal(faces(moduleMarkup).length, 9, 'timbre knobs plus Limite Velocity and Gain');
+  assert.equal(faces(moduleMarkup).length, 10, 'timbre knobs plus Sustain, Limite Velocity and Gain');
+  assert.match(moduleMarkup, /data-module-sustain aria-label="Sustain do envelope"/);
   assert(faces(synthMarkup).every((face) => face === faces(moduleMarkup)[0]));
   assert.doesNotMatch(synthMarkup, /module-effect-knob|synth-knob|conic-gradient|border/);
   assert.equal([...synthMarkup.matchAll(/data-synth-parameter=/g)].length, 15);
@@ -152,7 +153,7 @@ test('modules 1 through 7 expose equal Velocity, Glide and Mod cards with LFO Pi
   assert.match(user, /data-module-modulation-mode="user"\s+class="is-selected"/);
   assert.match(user, /data-module-modulation-rate[^>]*disabled/);
   // Tremolo: terceiro modo do SF2, com o mesmo Rate do LFO de pitch.
-  assert.match(markup, /data-module-modulation-modes="3"/);
+  assert.match(markup, /data-module-modulation-modes="4"/);
   assert.match(markup, /data-module-modulation-mode="tremolo"/);
   const tremolo = settingsView.createModuleModulationCardMarkup({ modulationMode: 'tremolo', modulationRateHz: 4 });
   assert.match(tremolo, /data-module-modulation-mode="tremolo"\s+class="is-selected"/);
@@ -305,12 +306,12 @@ test('desktop opens smaller and Param clips every preview inside its available g
   );
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.player-modal--module-settings \.module-settings-panel\s*\{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/s);
-  assert.match(css, /\.module-effect-controls--chorus\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\);[^}]*grid-template-rows: repeat\(3, minmax\(0, 1fr\)\);/s);
+  assert.match(css, /\.module-effect-controls--chorus\s*\{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/s);
   assert.match(css, /\.module-reverb-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
   assert.match(css, /\.module-delay-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
   assert.match(css, /\.module-delay-editor__divisions\s*\{[^}]*grid-template-columns: repeat\(8, minmax\(0, 1fr\)\);/s);
   // O editor perdeu o cabeçalho interno: o título já está no alto da janela.
-  assert.match(css, /\.trance-gate-editor\s*\{[^}]*grid-template-rows: auto minmax\(54px, \.75fr\) minmax\(78px, 1fr\) auto;/s);
+  assert.match(css, /\.trance-gate-editor\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\) minmax\(0, \.85fr\);/s);
   const tranceGateView = readFileSync(new URL('../src/features/player/TranceGateView.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(tranceGateView, /pattern-editor__header/);
   assert.match(css, /\.trance-gate-editor \.pattern-knob \.module-effect-knob__face\s*\{[^}]*width: min\(52px, 7vh\);[^}]*height: min\(52px, 7vh\);/s);

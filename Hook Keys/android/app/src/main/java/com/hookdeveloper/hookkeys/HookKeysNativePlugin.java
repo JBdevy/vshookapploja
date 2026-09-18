@@ -546,7 +546,8 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("holdMs", 15000.0f),
             call.getFloat("decayMs", 25000.0f),
             call.getFloat("releaseMs", 300.0f),
-            call.getFloat("glideMs", 0.0f)
+            call.getFloat("glideMs", 0.0f),
+            call.getFloat("sustainDb", 0.0f)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -1057,7 +1058,8 @@ public class HookKeysNativePlugin extends Plugin {
         float inputGainDb
     );
     private static native boolean nativeConfigureModuleEnvelope(
-        int moduleIndex, float attackMs, float holdMs, float decayMs, float releaseMs, float glideMs
+        int moduleIndex, float attackMs, float holdMs, float decayMs, float releaseMs, float glideMs,
+        float sustainDb
     );
     private static native boolean nativeConfigureModuleModulation(int moduleIndex, int mode, float rateHz);
     private static native boolean nativeConfigureVelocityLimits(

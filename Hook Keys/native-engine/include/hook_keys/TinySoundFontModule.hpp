@@ -37,16 +37,19 @@ public:
   [[nodiscard]] bool copySoundFontFrom(const TinySoundFontModule& source) noexcept;
   void unload() noexcept;
   void collectRetiredSoundFonts() noexcept;
-  void setVolumeEnvelope(float attackMs, float holdMs, float decayMs, float releaseMs) noexcept;
+  // sustainDb: quanto o som cai depois do Decay, de -60 dB a 0 dB (0 = cheio).
+  void setVolumeEnvelope(
+      float attackMs, float holdMs, float decayMs, float releaseMs, float sustainDb = 0.0f) noexcept;
   void setGlide(float milliseconds) noexcept { glideMs_.store(milliseconds, std::memory_order_relaxed); }
   void setGlideBehavior(GlideBehavior behavior) noexcept override {
     glideBehavior_.store(behavior.pack(), std::memory_order_relaxed);
   }
   // 0 = User (a roda vai para a modulação do próprio SF2), 1 = LFO de pitch
-  // (vibrato), 2 = Tremolo (a roda abre e fecha o volume no mesmo rate).
+  // (vibrato), 2 = Tremolo (o volume balança), 3 = Pan (o som anda de um lado
+  // ao outro no mesmo rate).
   void setModulationMode(std::uint8_t mode, float rateHz) noexcept {
     lfoRateHz_.store(std::clamp(rateHz, 0.1f, 20.0f), std::memory_order_release);
-    modulationMode_.store(mode > 2 ? 0 : mode, std::memory_order_release);
+    modulationMode_.store(mode > 3 ? 0 : mode, std::memory_order_release);
   }
 
   [[nodiscard]] bool hasPendingSoundFont() const noexcept;
@@ -101,6 +104,7 @@ private:
   std::atomic<float> attackMs_{0.0f};
   std::atomic<float> holdMs_{15000.0f};
   std::atomic<float> decayMs_{25000.0f};
+  std::atomic<float> sustainDb_{0.0f};
   std::atomic<float> releaseMs_{300.0f};
   std::atomic<std::uint32_t> envelopeGeneration_{1};
   std::uint32_t appliedEnvelopeGeneration_ = 0;

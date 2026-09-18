@@ -101,7 +101,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                         attackMs:(float)attackMs
                           holdMs:(float)holdMs
                          decayMs:(float)decayMs
-                       releaseMs:(float)releaseMs glideMs:(float)glideMs;
+                       releaseMs:(float)releaseMs glideMs:(float)glideMs
+                       sustainDb:(float)sustainDb;
 // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
 - (BOOL)configureModuleModulation:(NSInteger)moduleIndex mode:(NSInteger)mode rateHz:(float)rateHz;
 - (BOOL)configureVelocityLimits:(NSInteger)moduleIndex

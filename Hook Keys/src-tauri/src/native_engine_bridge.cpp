@@ -138,7 +138,7 @@ int hk_runtime_configure_glide(
 int hk_runtime_configure_module_modulation(
     void* handle, std::size_t moduleIndex, int mode, float rateHz) noexcept {
   return handle && runtime(handle)->setModuleModulationMode(
-      moduleIndex, static_cast<std::uint8_t>(std::clamp(mode, 0, 2)), rateHz) ? 1 : 0;
+      moduleIndex, static_cast<std::uint8_t>(std::clamp(mode, 0, 3)), rateHz) ? 1 : 0;
 }
 
 int hk_runtime_configure_effects(
@@ -190,9 +190,10 @@ int hk_runtime_configure_effects(
 }
 
 int hk_runtime_configure_envelope(void* handle, std::size_t moduleIndex, float attackMs,
-                                  float holdMs, float decayMs, float releaseMs, float glideMs) noexcept {
+                                  float holdMs, float decayMs, float releaseMs, float glideMs,
+                                  float sustainDb) noexcept {
   return handle && runtime(handle)->setModuleEnvelope(
-      moduleIndex, attackMs, holdMs, decayMs, releaseMs, glideMs) ? 1 : 0;
+      moduleIndex, attackMs, holdMs, decayMs, releaseMs, glideMs, sustainDb) ? 1 : 0;
 }
 
 int hk_runtime_configure_synth(

@@ -378,7 +378,7 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
 
 void HookKeysEngine::routeNoteOn(
     std::uint8_t inputSlot, std::uint8_t sourceNote, std::uint8_t velocity) noexcept {
-  const auto generatedModule = inputSlot == kArpeggiatorInput ? 5 : -1;
+  const auto generatedModule = inputSlot == kArpeggiatorInput ? 4 : -1;
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     auto* synth = modules_[index];
     const auto& config = configs_[index];

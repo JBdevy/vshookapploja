@@ -109,17 +109,19 @@ void hook_keys_tsf_render_glide(tsf* synth, HookKeysGlideState& state,
 
 extern "C" void hook_keys_tsf_set_volume_envelope(
     tsf* synth, float attackSeconds, float holdSeconds,
-    float decaySeconds, float releaseSeconds) noexcept {
+    float decaySeconds, float releaseSeconds, float sustain) noexcept {
   if (synth == nullptr || synth->presetNum <= 0) return;
+  const auto safeSustain = sustain < 0.0f ? 0.0f : sustain > 1.0f ? 1.0f : sustain;
   synth->hookVolumeEnvelopeOverride = 1;
   synth->hookAttackSeconds = attackSeconds;
   synth->hookHoldSeconds = holdSeconds;
   synth->hookDecaySeconds = decaySeconds;
   synth->hookReleaseSeconds = releaseSeconds;
+  synth->hookSustain = safeSustain;
   for (int index = 0; index < synth->voiceNum; ++index) {
     auto& voice = synth->voices[index];
     if (voice.playingPreset != 0) continue;
-    voice.ampenv.parameters.sustain = 1.0f;
+    voice.ampenv.parameters.sustain = safeSustain;
     if (attackSeconds >= 0.0f) voice.ampenv.parameters.attack = attackSeconds;
     if (holdSeconds >= 0.0f) {
       voice.ampenv.parameters.hold = holdSeconds;

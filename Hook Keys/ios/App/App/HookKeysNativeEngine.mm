@@ -690,11 +690,12 @@ static NSString *describeFormat(AVAudioFormat *format) {
 }
 
 - (BOOL)configureModuleEnvelope:(NSInteger)moduleIndex attackMs:(float)attackMs
-                          holdMs:(float)holdMs decayMs:(float)decayMs releaseMs:(float)releaseMs glideMs:(float)glideMs {
+                          holdMs:(float)holdMs decayMs:(float)decayMs releaseMs:(float)releaseMs glideMs:(float)glideMs
+                       sustainDb:(float)sustainDb {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && moduleIndex >= 0 && moduleIndex < 8 &&
          runtime->setModuleEnvelope(
-             static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs, glideMs);
+             static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs, glideMs, sustainDb);
 }
 
 - (BOOL)configureVelocityLimits:(NSInteger)moduleIndex
@@ -729,7 +730,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return runtime != nullptr && moduleIndex >= 0 && moduleIndex < 8 &&
          runtime->setModuleModulationMode(
              static_cast<std::size_t>(moduleIndex),
-             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 2)), rateHz);
+             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 3)), rateHz);
 }
 
 - (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing {

@@ -112,7 +112,8 @@ void TinySoundFontModule::collectRetiredSoundFonts() noexcept {
 }
 
 void TinySoundFontModule::setVolumeEnvelope(
-    float attackMs, float holdMs, float decayMs, float releaseMs) noexcept {
+    float attackMs, float holdMs, float decayMs, float releaseMs, float sustainDb) noexcept {
+  sustainDb_.store(std::clamp(sustainDb, -60.0f, 0.0f), std::memory_order_relaxed);
   attackMs_.store(attackMs < 0.0f ? -1.0f : std::clamp(attackMs, 0.0f, 15000.0f), std::memory_order_relaxed);
   holdMs_.store(holdMs < 0.0f ? -1.0f : std::clamp(holdMs, 0.0f, 15000.0f), std::memory_order_relaxed);
   decayMs_.store(decayMs < 0.0f ? -1.0f : std::clamp(decayMs, 0.0f, 25000.0f), std::memory_order_relaxed);
@@ -148,11 +149,13 @@ void TinySoundFontModule::beginBlock() noexcept {
 
   const auto generation = envelopeGeneration_.load(std::memory_order_acquire);
   if (active_ != nullptr && generation != appliedEnvelopeGeneration_) {
+    const auto sustainDb = sustainDb_.load(std::memory_order_relaxed);
     hook_keys_tsf_set_volume_envelope(
         active_, attackMs_.load(std::memory_order_relaxed) / 1000.0f,
         holdMs_.load(std::memory_order_relaxed) / 1000.0f,
         decayMs_.load(std::memory_order_relaxed) / 1000.0f,
-        releaseMs_.load(std::memory_order_relaxed) / 1000.0f);
+        releaseMs_.load(std::memory_order_relaxed) / 1000.0f,
+        sustainDb <= -60.0f ? 0.0f : std::pow(10.0f, sustainDb / 20.0f));
     appliedEnvelopeGeneration_ = generation;
   }
   // Fora do modo User, a roda não vai para a modulação do SF2: ela vira
@@ -239,8 +242,9 @@ void TinySoundFontModule::renderAdd(
     const bool wheelOpen = modulationValue_ > 0 || modulationDepth_ > 0.00001f;
     const bool vibrato = appliedModulationMode_ == 1 && wheelOpen;
     const bool tremolo = appliedModulationMode_ == 2 && wheelOpen;
-    const auto blockFrames = std::min((vibrato || tremolo) ? std::min<std::size_t>(16, maximumBlockFrames_) : maximumBlockFrames_, frames - rendered);
-    if (vibrato || tremolo) {
+    const bool panning = appliedModulationMode_ == 3 && wheelOpen;
+    const auto blockFrames = std::min((vibrato || tremolo || panning) ? std::min<std::size_t>(16, maximumBlockFrames_) : maximumBlockFrames_, frames - rendered);
+    if (vibrato || tremolo || panning) {
       const float target = static_cast<float>(modulationValue_) / 127.0f;
       const float smoothing = static_cast<float>(1.0 - std::exp(-static_cast<double>(blockFrames) / (sampleRate_ * 0.015)));
       modulationDepth_ += (target - modulationDepth_) * smoothing;
@@ -260,7 +264,21 @@ void TinySoundFontModule::renderAdd(
     constexpr double twoPi = 6.28318530717958647692;
     const double phaseStep = twoPi * static_cast<double>(lfoRateHz_.load(std::memory_order_relaxed)) *
         static_cast<double>(blockFrames) / sampleRate_;
-    if (tremolo) {
+    if (panning) {
+      // Pan: a roda abre o quanto o som anda para os lados. Um lado sobe
+      // enquanto o outro desce, com a soma sempre no mesmo volume.
+      const auto panAt = [](double phase, float depth) {
+        return depth * static_cast<float>(std::sin(phase));
+      };
+      const float startPan = panAt(modulationPhase_, modulationDepth_);
+      const float endPan = panAt(modulationPhase_ + phaseStep, modulationDepth_);
+      for (std::size_t frame = 0; frame < blockFrames; ++frame) {
+        const float mix = blockFrames > 1 ? static_cast<float>(frame) / static_cast<float>(blockFrames - 1) : 1.0f;
+        const float pan = startPan + (endPan - startPan) * mix;
+        left[rendered + frame] += scratchInterleaved_[frame * 2] * gainLinear * (1.0f - std::max(0.0f, pan));
+        right[rendered + frame] += scratchInterleaved_[frame * 2 + 1] * gainLinear * (1.0f + std::min(0.0f, pan));
+      }
+    } else if (tremolo) {
       // Tremolo: a roda abre o quanto o volume balança, até -12 dB no fundo da
       // onda. O ganho anda junto com a fase, sem degrau entre blocos.
       const auto tremoloGain = [](double phase, float depth) {
