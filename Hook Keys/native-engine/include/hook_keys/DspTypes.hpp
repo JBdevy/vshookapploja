@@ -76,13 +76,55 @@ struct EqConfig final {
   }
 };
 
+// LP2/HP2: um estágio de 2 polos (12 dB/oitava), o filtro de sempre. LP4/HP4:
+// dois estágios em série (24 dB/oitava, curva mais íngreme). Lowpass corta os
+// agudos: Highpass é o mesmo filtro ao contrário, cortando os graves.
+enum class FilterKind : std::uint8_t { lowpass2, lowpass4, highpass2, highpass4 };
+
+inline constexpr bool filterKindIsHighpass(FilterKind kind) noexcept {
+  return kind == FilterKind::highpass2 || kind == FilterKind::highpass4;
+}
+
+inline constexpr bool filterKindIsFourPole(FilterKind kind) noexcept {
+  return kind == FilterKind::lowpass4 || kind == FilterKind::highpass4;
+}
+
+// Envelope do filtro: Attack sobe o corte até o valor do Cutoff (acima), Decay
+// desce até Sustain (fração do caminho já aberto pelo Attack) e Release volta
+// a fechar depois do Note Off. Depth em oitavas: 0 desliga o envelope (o corte
+// fica sempre no valor fixo de CutoffConfig, como antes desta função existir).
+struct FilterEnvelopeConfig final {
+  bool enabled = false;
+  float attackMs = 5.0f;
+  float decayMs = 200.0f;
+  float sustain = 1.0f;
+  float releaseMs = 200.0f;
+  float depthOctaves = 4.0f;
+
+  void normalize() noexcept {
+    attackMs = std::clamp(attackMs, 0.0f, 15000.0f);
+    decayMs = std::clamp(decayMs, 0.0f, 15000.0f);
+    sustain = std::clamp(sustain, 0.0f, 1.0f);
+    releaseMs = std::clamp(releaseMs, 0.0f, 15000.0f);
+    depthOctaves = std::clamp(depthOctaves, 0.0f, 8.0f);
+  }
+
+  bool operator==(const FilterEnvelopeConfig& other) const noexcept {
+    return enabled == other.enabled && attackMs == other.attackMs && decayMs == other.decayMs
+        && sustain == other.sustain && releaseMs == other.releaseMs && depthOctaves == other.depthOctaves;
+  }
+};
+
 struct CutoffConfig final {
   bool enabled = true;
   float frequencyHz = 20000.0f;
   std::array<std::uint8_t, 5> velocityCurve{{127, 127, 127, 127, 127}};
+  FilterKind type = FilterKind::lowpass2;
+  FilterEnvelopeConfig envelope{};
 
   void normalize() noexcept {
     frequencyHz = std::clamp(frequencyHz, 10.0f, 20000.0f);
+    envelope.normalize();
   }
 
   float frequencyForVelocity(std::uint8_t velocity) const noexcept {
@@ -93,6 +135,12 @@ struct CutoffConfig final {
         (static_cast<float>(velocityCurve[lower + 1]) - velocityCurve[lower]) * (position - static_cast<float>(lower));
     return 20.0f * std::pow(std::clamp(frequencyHz, 20.0f, 20000.0f) / 20.0f, mapped / 127.0f);
   }
+
+  bool operator==(const CutoffConfig& other) const noexcept {
+    return enabled == other.enabled && frequencyHz == other.frequencyHz
+        && velocityCurve == other.velocityCurve && type == other.type && envelope == other.envelope;
+  }
+  bool operator!=(const CutoffConfig& other) const noexcept { return !(*this == other); }
 };
 
 struct CompressorConfig final {

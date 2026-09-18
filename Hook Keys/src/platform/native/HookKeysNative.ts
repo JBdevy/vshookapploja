@@ -47,6 +47,14 @@ export interface NativeModuleEffectsConfig {
   cutoffVelocity2: number;
   cutoffVelocity3: number;
   cutoffVelocity4: number;
+  // 0 Lowpass 2, 1 Lowpass 4, 2 Highpass 2, 3 Highpass 4.
+  cutoffFilterType: number;
+  cutoffEnvelopeEnabled: boolean;
+  cutoffEnvelopeAttackMs: number;
+  cutoffEnvelopeDecayMs: number;
+  cutoffEnvelopeSustain: number;
+  cutoffEnvelopeReleaseMs: number;
+  cutoffEnvelopeDepthOctaves: number;
   eqTypes: number[];
   eqFrequencies: number[];
   eqGains: number[];

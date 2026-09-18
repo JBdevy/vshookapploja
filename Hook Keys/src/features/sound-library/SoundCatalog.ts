@@ -1,10 +1,9 @@
 import type { SoundCategoryDefinition, SoundCategoryId } from './SoundCategories';
 
 export interface ModuleSoundSettings {
-  modules1To4: Readonly<Record<string, unknown>>;
-  module5: Readonly<Record<string, unknown>>;
-  module6: Readonly<Record<string, unknown>>;
-  module7: Readonly<Record<string, unknown>>;
+  // Módulos 1-6 são os únicos que escolhem timbre e compartilham este único
+  // destino de configuração; o Organ (módulo 7) não escolhe timbre.
+  modules1To6: Readonly<Record<string, unknown>>;
 }
 
 export interface FixedSoundDefinition {
@@ -18,6 +17,7 @@ export interface FixedSoundDefinition {
   byteSize?: number;
   sha256?: string;
   moduleSettings?: ModuleSoundSettings;
+  publishedAt: string | null;
 }
 
 export interface SoundCatalogCategory extends SoundCategoryDefinition {
@@ -114,6 +114,7 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
         catalogVersion: positiveInteger(rawSound.assetVersion, revision),
         byteSize: optionalPositiveInteger(rawSound.byteSize),
         moduleSettings: readModuleSettings(rawSound.moduleSettings),
+        publishedAt: optionalIsoDate(rawSound.publishedAt),
         order: positiveInteger(rawSound.order, soundIndex + 1),
       });
     }).sort((left, right) => left.order - right.order) : [];
@@ -157,20 +158,14 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
 
 function emptyModuleSettings(): ModuleSoundSettings {
   return Object.freeze({
-    modules1To4: Object.freeze({}),
-    module5: Object.freeze({}),
-    module6: Object.freeze({}),
-    module7: Object.freeze({}),
+    modules1To6: Object.freeze({}),
   });
 }
 
 function readModuleSettings(value: unknown): ModuleSoundSettings {
   const source = isRecord(value) ? value : {};
   return Object.freeze({
-    modules1To4: safeSettingsObject(source.modules1To4),
-    module5: safeSettingsObject(source.module5),
-    module6: safeSettingsObject(source.module6),
-    module7: safeSettingsObject(source.module7),
+    modules1To6: safeSettingsObject(source.modules1To6),
   });
 }
 
@@ -244,4 +239,10 @@ function positiveInteger(value: unknown, fallback: number): number {
 function optionalPositiveInteger(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : undefined;
+}
+
+function optionalIsoDate(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
 }

@@ -174,8 +174,7 @@ void TinySoundFontModule::noteOn(std::uint8_t note, std::uint8_t velocity) noexc
 }
 
 void TinySoundFontModule::setCutoffConfig(CutoffConfig config) noexcept {
-  if (cutoffConfig_.enabled == config.enabled && cutoffConfig_.frequencyHz == config.frequencyHz &&
-      cutoffConfig_.velocityCurve == config.velocityCurve) return;
+  if (cutoffConfig_ == config) return;
   cutoffConfig_ = config;
   hook_keys_tsf_set_cutoff(active_, config);
 }
@@ -256,6 +255,7 @@ void TinySoundFontModule::renderAdd(
           std::sin(modulationPhase_) * modulationDepth_ * 2048.0));
       tsf_channel_set_pitchwheel(active_, kChannel, std::clamp(bend, 0, 16383));
     }
+    hook_keys_tsf_advance_filter_envelope(active_, cutoffConfig_, blockFrames, static_cast<float>(sampleRate_));
     const bool gliding = std::any_of(glide_.voices.begin(), glide_.voices.end(),
         [](const auto& voice) { return voice.total > 0; });
     if (gliding) hook_keys_tsf_render_glide(active_, glide_, scratchInterleaved_.data(),

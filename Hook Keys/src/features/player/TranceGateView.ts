@@ -66,7 +66,7 @@ export function createTranceGateMarkup(value: unknown, bpm = 120): string {
     `<button type="button" data-trance-gate-${key}="${value}" class="${value === current ? 'is-selected' : ''}" aria-pressed="${value === current}">${value}</button>`).join('');
   return `<section class="pattern-editor trance-gate-editor" data-trance-gate-editor>
     <div class="pattern-editor__toolbar">
-      <div class="pattern-option-group pattern-option-group--division" role="group" aria-label="Divisão do Trance Gate">${options('division', ARPEGGIATOR_DIVISIONS, settings.division)}</div>
+      <div class="pattern-option-group pattern-option-group--division" role="group" aria-label="Divisão do Pulse">${options('division', ARPEGGIATOR_DIVISIONS, settings.division)}</div>
       <div class="pattern-option-group pattern-option-group--length" role="group" aria-label="Quantidade de passos">${options('length', [4, 8, 16], settings.length)}</div>
       <div class="trance-gate-rate">
         <button type="button" data-trance-gate-sync
@@ -79,7 +79,7 @@ export function createTranceGateMarkup(value: unknown, bpm = 120): string {
         </label>
       </div>
     </div>
-    <div class="trance-gate-steps" role="group" aria-label="Passos do Trance Gate">${settings.steps.map((enabled, index) =>
+    <div class="trance-gate-steps" role="group" aria-label="Passos do Pulse">${settings.steps.map((enabled, index) =>
       `<button type="button" class="trance-gate-step ${enabled ? 'is-enabled' : 'is-disabled'}${index >= settings.length ? ' is-outside' : ''}" data-trance-gate-step="${index}" aria-label="Passo ${index + 1}" aria-pressed="${enabled}" ${index >= settings.length ? 'disabled' : ''}><span>${String(index + 1).padStart(2, '0')}</span><strong>${enabled ? 'ON' : 'OFF'}</strong><i></i></button>`).join('')}</div>
     <div class="pattern-knob-grid">${([
       ['gate', 'Gate', 5, 100, 1, '%'], ['depth', 'Depth', 0, 100, 1, '%'],

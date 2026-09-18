@@ -7,24 +7,89 @@
 #include "tsf.h"
 #include "hook_keys/TinySoundFontExtensions.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 
-static void configureVoiceCutoff(tsf_voice& voice, const hook_keys::CutoffConfig& config,
-    float sampleRate) noexcept {
-  const auto frequency = config.frequencyForVelocity(voice.hookFilterVelocity);
-  auto& filter = voice.hookCutoff;
-  const bool active = frequency < 19999.0f;
+static void applyFilterStage(tsf_voice_lowpass& filter, float frequency, float sampleRate,
+    bool highpass, bool bypass) noexcept {
+  const bool active = !bypass;
   if (active != static_cast<bool>(filter.active)) filter.z1 = filter.z2 = 0;
   filter.active = active;
   filter.QInv = 1.4142135623730951;
-  if (active) tsf_voice_lowpass_setup(&filter, std::min(frequency / sampleRate, 0.45f));
+  if (!active) return;
+  const auto normalized = std::min(frequency / sampleRate, 0.45f);
+  if (highpass) tsf_voice_highpass_setup(&filter, normalized);
+  else tsf_voice_lowpass_setup(&filter, normalized);
+}
+
+// LP4/HP4 rodam o mesmo estagio duas vezes (24 dB/oitava); LP2/HP2 deixam o
+// segundo estagio sempre em bypass. Lowpass some perto do teto (nada a cortar
+// acima); Highpass some perto do piso (nada a cortar abaixo).
+static void applyCutoffStages(tsf_voice& voice, const hook_keys::CutoffConfig& config,
+    float frequency, float sampleRate) noexcept {
+  const bool highpass = hook_keys::filterKindIsHighpass(config.type);
+  const bool fourPole = hook_keys::filterKindIsFourPole(config.type);
+  const bool bypass = highpass ? frequency <= 20.5f : frequency >= 19999.0f;
+  applyFilterStage(voice.hookCutoff, frequency, sampleRate, highpass, bypass);
+  applyFilterStage(voice.hookCutoffStage2, frequency, sampleRate, highpass, bypass || !fourPole);
+}
+
+// level 0..1: 0 é o ponto mais fechado que o Depth permite, 1 é o Cutoff
+// configurado (o comportamento de sempre quando o envelope está desligado).
+static float filterEnvelopeFrequency(
+    const hook_keys::CutoffConfig& config, float baseFrequency, float level) noexcept {
+  const auto& envelope = config.envelope;
+  if (!envelope.enabled || envelope.depthOctaves <= 0.0f) return baseFrequency;
+  return baseFrequency * std::pow(2.0f, envelope.depthOctaves * (level - 1.0f));
+}
+
+static void configureVoiceCutoff(tsf_voice& voice, const hook_keys::CutoffConfig& config,
+    float sampleRate, bool resetEnvelope) noexcept {
+  if (resetEnvelope) {
+    voice.hookFilterEnvLevel = 0.0f;
+    voice.hookFilterEnvReachedPeak = 0;
+  }
+  const auto baseFrequency = config.frequencyForVelocity(voice.hookFilterVelocity);
+  const auto frequency = filterEnvelopeFrequency(config, baseFrequency, voice.hookFilterEnvLevel);
+  applyCutoffStages(voice, config, frequency, sampleRate);
 }
 
 void hook_keys_tsf_set_cutoff(tsf* synth, const hook_keys::CutoffConfig& config) noexcept {
   if (!synth) return;
   for (int i = 0; i < synth->voiceNum; ++i) {
     auto& voice = synth->voices[i];
-    if (voice.playingPreset >= 0) configureVoiceCutoff(voice, config, synth->outSampleRate);
+    // false: uma mudança no Cutoff/Velocity não reinicia o envelope de quem
+    // já está soando — só o Note On seguinte começa do zero.
+    if (voice.playingPreset >= 0) configureVoiceCutoff(voice, config, synth->outSampleRate, false);
+  }
+}
+
+void hook_keys_tsf_advance_filter_envelope(
+    tsf* synth, const hook_keys::CutoffConfig& config, std::size_t frames, float sampleRate) noexcept {
+  if (!synth || !config.envelope.enabled || config.envelope.depthOctaves <= 0.0f) return;
+  const auto& envelope = config.envelope;
+  const auto blockSeconds = static_cast<float>(frames) / sampleRate;
+  const auto attackCoefficient = std::exp(-blockSeconds / std::max(envelope.attackMs * 0.001f, 0.001f));
+  const auto decayCoefficient = std::exp(-blockSeconds / std::max(envelope.decayMs * 0.001f, 0.001f));
+  const auto releaseCoefficient = std::exp(-blockSeconds / std::max(envelope.releaseMs * 0.001f, 0.001f));
+  for (int i = 0; i < synth->voiceNum; ++i) {
+    auto& voice = synth->voices[i];
+    if (voice.playingPreset < 0) continue;
+    const bool released = voice.ampenv.segment >= TSF_SEGMENT_RELEASE;
+    float target = 0.0f;
+    float coefficient = releaseCoefficient;
+    if (!released) {
+      if (!voice.hookFilterEnvReachedPeak) { target = 1.0f; coefficient = attackCoefficient; }
+      else { target = envelope.sustain; coefficient = decayCoefficient; }
+    }
+    voice.hookFilterEnvLevel = target + (voice.hookFilterEnvLevel - target) * coefficient;
+    if (!released && !voice.hookFilterEnvReachedPeak && voice.hookFilterEnvLevel >= 0.999f) {
+      voice.hookFilterEnvLevel = 1.0f;
+      voice.hookFilterEnvReachedPeak = 1;
+    }
+    const auto baseFrequency = config.frequencyForVelocity(voice.hookFilterVelocity);
+    const auto frequency = baseFrequency * std::pow(2.0f, envelope.depthOctaves * (voice.hookFilterEnvLevel - 1.0f));
+    applyCutoffStages(voice, config, frequency, sampleRate);
   }
 }
 
@@ -50,7 +115,7 @@ bool hook_keys_tsf_note_on_with_auto_glide(tsf* synth, HookKeysGlideState& state
     if (voice.playingPreset < 0 || voice.playingChannel != channel ||
         voice.playingKey != note || voice.playIndex != playIndex) continue;
     voice.hookFilterVelocity = filterVelocity;
-    if (cutoff) configureVoiceCutoff(voice, *cutoff, synth->outSampleRate);
+    if (cutoff) configureVoiceCutoff(voice, *cutoff, synth->outSampleRate, true);
     auto& glide = state.voices[i];
     if (!glides || startSemitones == 0.0f) {
       glide = {};

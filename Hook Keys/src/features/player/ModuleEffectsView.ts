@@ -1,6 +1,6 @@
 import { createParameterKnobMarkup } from './ParameterKnobView';
 
-export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary' | 'chorus';
+export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary' | 'chorus' | 'cutoffEnvelope';
 export type ModuleProcessorReplacement =
   'compressor' | 'chorus' | 'rotary' | 'arpeggiator' | 'trance-gate' | 'organ' | 'synth';
 
@@ -44,6 +44,21 @@ export interface ModuleDelaySettings {
 }
 
 export const DELAY_DIVISIONS = ['1/1', '1/2', '1/4', '1/8', '1/16', '1/8 D', '1/8 T'] as const;
+
+// LP2/HP2: um estágio (12 dB/oitava), o filtro de sempre. LP4/HP4: dois em
+// série (24 dB/oitava, curva mais íngreme). Lowpass corta os agudos; Highpass
+// é o mesmo filtro ao contrário, cortando os graves.
+export const CUTOFF_FILTER_TYPES = ['lowpass2', 'lowpass4', 'highpass2', 'highpass4'] as const;
+export type CutoffFilterType = typeof CUTOFF_FILTER_TYPES[number];
+
+export interface ModuleCutoffEnvelopeSettings {
+  enabled: boolean;
+  attackMs: number;
+  decayMs: number;
+  sustain: number;
+  releaseMs: number;
+  depthOctaves: number;
+}
 
 // Attack abaixo de 1 ms faz o compressor sujar o som, então 1 ms é o mínimo
 // do knob e também do que se lê de um preset salvo.
@@ -94,6 +109,15 @@ const DEFAULT_ROTARY: ModuleRotarySettings = {
   rampSeconds: 1.2,
   depth: 70,
   mix: 100,
+};
+
+const DEFAULT_CUTOFF_ENVELOPE: ModuleCutoffEnvelopeSettings = {
+  enabled: false,
+  attackMs: 5,
+  decayMs: 200,
+  sustain: 100,
+  releaseMs: 200,
+  depthOctaves: 4,
 };
 
 interface EffectControlDefinition {
@@ -153,7 +177,7 @@ function createProcessorShortcutCard(
 ): string {
   const label = replacement === 'arpeggiator'
     ? 'Arpeggiator'
-    : replacement === 'trance-gate' ? 'Trance Gate'
+    : replacement === 'trance-gate' ? 'Pulse'
       : replacement === 'organ' ? 'Organ'
       : replacement === 'rotary' ? 'Rotary' : 'Chorus';
   const secondEnabled = replacement === 'chorus' ? chorusEnabled : null;
@@ -306,6 +330,31 @@ export function createModuleRotaryMarkup(settings: Readonly<Record<string, unkno
   `;
 }
 
+export function createModuleEnvFilterMarkup(settings: Readonly<Record<string, unknown>>): string {
+  const value = readModuleCutoffEnvelopeSettings(settings.cutoffEnvelope);
+  const filterType = readCutoffFilterType(settings.cutoffFilterType);
+  const controls = [
+    control('attackMs', 'Attack', 0, 5_000, 1, value.attackMs, `${Math.round(value.attackMs)} ms`),
+    control('decayMs', 'Decay', 0, 5_000, 1, value.decayMs, `${Math.round(value.decayMs)} ms`),
+    control('sustain', 'Sustain', 0, 100, 1, value.sustain, `${Math.round(value.sustain)}%`),
+    control('releaseMs', 'Release', 0, 5_000, 1, value.releaseMs, `${Math.round(value.releaseMs)} ms`),
+    control('depthOctaves', 'Depth', 0, 8, 0.1, value.depthOctaves, `${value.depthOctaves.toFixed(1)} oct`),
+  ];
+  const filterTypeLabels: Record<CutoffFilterType, string> = {
+    lowpass2: 'Lowpass 2', lowpass4: 'Lowpass 4', highpass2: 'Highpass 2', highpass4: 'Highpass 4',
+  };
+  return `
+    <section class="module-effect-editor module-env-filter-editor" data-module-effect-editor="cutoffEnvelope">
+      <div class="module-env-filter-type" role="group" aria-label="Tipo do filtro">
+        ${CUTOFF_FILTER_TYPES.map((type) => `<button type="button" data-cutoff-filter-type="${type}" class="${filterType === type ? 'is-selected' : ''}" aria-pressed="${filterType === type}">${filterTypeLabels[type]}</button>`).join('')}
+      </div>
+      <div class="module-effect-controls module-effect-controls--cutoff-envelope">
+        ${controls.map((item) => createEffectKnob('cutoffEnvelope', item)).join('')}
+      </div>
+    </section>
+  `;
+}
+
 export function createModuleDelayMarkup(settings: Readonly<Record<string, unknown>>, bpm: number): string {
   const value = readModuleDelaySettings(settings.delay);
   // O knob é uma batida (1/4): o BPM com Sync, ou os ms escolhidos sem ele.
@@ -390,11 +439,29 @@ export function readModuleRotarySettings(value: unknown): ModuleRotarySettings {
   };
 }
 
+export function readModuleCutoffEnvelopeSettings(value: unknown): ModuleCutoffEnvelopeSettings {
+  const source = record(value);
+  return {
+    enabled: source.enabled === true,
+    attackMs: numberInRange(source.attackMs, 0, 15_000, DEFAULT_CUTOFF_ENVELOPE.attackMs),
+    decayMs: numberInRange(source.decayMs, 0, 15_000, DEFAULT_CUTOFF_ENVELOPE.decayMs),
+    sustain: numberInRange(source.sustain, 0, 100, DEFAULT_CUTOFF_ENVELOPE.sustain),
+    releaseMs: numberInRange(source.releaseMs, 0, 15_000, DEFAULT_CUTOFF_ENVELOPE.releaseMs),
+    depthOctaves: numberInRange(source.depthOctaves, 0, 8, DEFAULT_CUTOFF_ENVELOPE.depthOctaves),
+  };
+}
+
+export function readCutoffFilterType(value: unknown): CutoffFilterType {
+  return (CUTOFF_FILTER_TYPES as readonly string[]).includes(value as string)
+    ? value as CutoffFilterType : 'lowpass2';
+}
+
 export function readModuleEffectSettings(kind: ModuleEffectKind, value: unknown) {
   if (kind === 'compressor') return readModuleCompressorSettings(value);
   if (kind === 'reverb') return readModuleReverbSettings(value);
   if (kind === 'rotary') return readModuleRotarySettings(value);
   if (kind === 'chorus') return readModuleChorusSettings(value);
+  if (kind === 'cutoffEnvelope') return readModuleCutoffEnvelopeSettings(value);
   return readModuleDelaySettings(value);
 }
 
@@ -412,6 +479,11 @@ export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, val
   }
   if (kind === 'chorus') return key === 'rateHz' ? `${value.toFixed(2)} Hz` : `${Math.round(value)}%`;
   if (kind === 'reverb') return key === 'decay' ? `${formatNumber(value)} s` : `${Math.round(value)}%`;
+  if (kind === 'cutoffEnvelope') {
+    if (key === 'depthOctaves') return `${value.toFixed(1)} oct`;
+    if (key === 'sustain') return `${Math.round(value)}%`;
+    return `${Math.round(value)} ms`;
+  }
   return key === 'milliseconds' ? `${Math.round(value)} ms` : `${Math.round(value)}%`;
 }
 

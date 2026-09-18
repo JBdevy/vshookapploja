@@ -12,10 +12,19 @@ namespace hook_keys {
 inline constexpr std::size_t kModuleCount = 8;
 inline constexpr std::size_t kMidiInputCount = 3;
 inline constexpr std::uint8_t kKeyboardBroadcastInput = 3;
-inline constexpr std::uint8_t kArpeggiatorInput = 4;
-inline constexpr std::size_t kRoutableMidiInputCount = 5;
+// Cada módulo tem seu próprio Arpeggiator: cada um precisa de uma entrada
+// virtual só sua, senão dois módulos com Arpeggiator ligado ouviriam a mesma
+// frase gerada um do outro. kArpeggiatorInput continua valendo como o slot
+// do módulo 0 (compatibilidade); os demais vêm em sequência a partir dele.
+inline constexpr std::uint8_t kArpeggiatorInputBase = 4;
+inline constexpr std::uint8_t kArpeggiatorInput = kArpeggiatorInputBase;
+inline constexpr std::size_t kRoutableMidiInputCount = kArpeggiatorInputBase + kModuleCount;
 inline constexpr std::uint8_t kAllMidiInputs = 0xff;
 inline constexpr std::uint8_t kMidiNoteCount = 128;
+
+inline constexpr std::uint8_t arpeggiatorInputForModule(std::size_t moduleIndex) noexcept {
+  return static_cast<std::uint8_t>(kArpeggiatorInputBase + moduleIndex);
+}
 
 struct MidiMessage final {
   std::uint8_t status = 0;
@@ -50,7 +59,7 @@ struct ModuleConfig final {
     lowNote = std::min<std::uint8_t>(lowNote, 127);
     highNote = std::min<std::uint8_t>(highNote, 127);
     if (lowNote > highNote) std::swap(lowNote, highNote);
-    if (midiInputSlot != kAllMidiInputs && midiInputSlot != kArpeggiatorInput) {
+    if (midiInputSlot != kAllMidiInputs && midiInputSlot < kArpeggiatorInputBase) {
       midiInputSlot = std::min<std::uint8_t>(midiInputSlot, static_cast<std::uint8_t>(kMidiInputCount - 1));
     }
     octaveShift = std::clamp<std::int8_t>(octaveShift, -3, 3);

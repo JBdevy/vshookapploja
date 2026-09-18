@@ -88,12 +88,9 @@ test('private R2 object keys and legacy URLs are both accepted by the catalog', 
   }), /sound_catalog_object_key_invalid/);
 });
 
-test('catalog keeps Global settings and per-sound scopes for modules 1-4, 5, 6 and 7', () => {
+test('catalog keeps Global settings and per-sound settings shared by modules 1-6', () => {
   const settings = {
-    modules1To4: { attackMs: 3 },
-    module5: { rotary: { enabled: true } },
-    module6: { arpeggiator: { enabled: false } },
-    module7: { tranceGate: { enabled: true } },
+    modules1To6: { attackMs: 3, arpeggiator: { enabled: false }, tranceGate: { enabled: true } },
   };
   const sounds = new catalog.SoundCatalog({
     revision: 4,
@@ -101,10 +98,7 @@ test('catalog keeps Global settings and per-sound scopes for modules 1-4, 5, 6 a
     categories: [{
       ...category('configured', null),
       defaultSettings: {
-        modules1To4: { attackMs: 7 },
-        module5: { rotary: { enabled: false } },
-        module6: { arpeggiator: { enabled: true } },
-        module7: { tranceGate: { enabled: false } },
+        modules1To6: { attackMs: 7, arpeggiator: { enabled: true } },
       },
       sounds: [{
         id: 'configured-sound', name: 'Configured', color: '#118ab2',
@@ -112,9 +106,8 @@ test('catalog keeps Global settings and per-sound scopes for modules 1-4, 5, 6 a
       }],
     }],
   });
-  assert.equal(sounds.defaultSettings.modules1To4.attackMs, 3);
-  assert.equal(sounds.getCategory('configured').defaultSettings.modules1To4.attackMs, 7);
-  assert.equal(sounds.getCategory('configured').defaultSettings.module6.arpeggiator.enabled, true);
-  assert.equal(sounds.get('configured-sound').moduleSettings.module5.rotary.enabled, true);
-  assert.equal(sounds.get('configured-sound').moduleSettings.module7.tranceGate.enabled, true);
+  assert.equal(sounds.defaultSettings.modules1To6.attackMs, 3);
+  assert.equal(sounds.getCategory('configured').defaultSettings.modules1To6.attackMs, 7);
+  assert.equal(sounds.getCategory('configured').defaultSettings.modules1To6.arpeggiator.enabled, true);
+  assert.equal(sounds.get('configured-sound').moduleSettings.modules1To6.tranceGate.enabled, true);
 });

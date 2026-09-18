@@ -7,9 +7,11 @@ import {
   createModuleRotaryMarkup,
   readModuleChorusSettings,
   readModuleCompressorSettings,
+  readModuleCutoffEnvelopeSettings,
   readModuleDelaySettings,
   readModuleReverbSettings,
   readModuleRotarySettings,
+  readCutoffFilterType,
   type ModuleProcessorReplacement,
 } from './ModuleEffectsView';
 import { createArpeggiatorMarkup, readArpeggiatorSettings } from './PatternModulesView';
@@ -230,7 +232,7 @@ const MODULE_SETTINGS_PAGE_LABELS: Readonly<Record<ModuleSettingsPage, string>> 
   delay: 'Delay',
   rotary: 'Rotary',
   arpeggiator: 'Arpeggiator',
-  'trance-gate': 'Trance Gate',
+  'trance-gate': 'Pulse',
 };
 
 export function moduleSettingsPages(
@@ -239,10 +241,10 @@ export function moduleSettingsPages(
   const pages: ModuleSettingsPage[] = processorReplacement === 'synth'
     ? ['eq', 'compressor', 'chorus', 'reverb', 'delay']
     : ['envelope', 'eq', 'compressor', 'chorus', 'reverb', 'delay'];
-  // O processador próprio do módulo vem depois do Delay.
+  // O processador próprio do módulo (se houver) vem depois do Delay.
   if (processorReplacement === 'rotary') pages.push('rotary');
-  if (processorReplacement === 'arpeggiator') pages.push('arpeggiator');
-  if (processorReplacement === 'trance-gate') pages.push('trance-gate');
+  // Todo módulo tem seu próprio Arpeggiator e Pulse, independente dos demais.
+  pages.push('arpeggiator', 'trance-gate');
   return pages;
 }
 
@@ -291,7 +293,7 @@ export function createModuleSettingsPageMarkup(
         ),
       )).join('')}
       ${createSustainControl(settings)}
-      ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings))}
+      ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings), settings)}
       ${createVelocityLimitCardMarkup(settings)}
       ${createModuleGainCardMarkup(settings)}
     </div>
@@ -776,11 +778,16 @@ function createEnvelopeControl(
   `;
 }
 
-function createCutoffControl(frequency: number, velocityEnabled: boolean): string {
+function createCutoffControl(
+  frequency: number, velocityEnabled: boolean, settings: Readonly<Record<string, unknown>>,
+): string {
   const ratio = cutoffRatioFromFrequency(frequency);
+  const envelopeEnabled = readModuleCutoffEnvelopeSettings(settings.cutoffEnvelope).enabled;
+  const filterType = readCutoffFilterType(settings.cutoffFilterType);
+  const customized = velocityEnabled || envelopeEnabled || filterType !== 'lowpass2';
   return `
     <article class="module-envelope-control module-cutoff-control">
-      <button type="button" class="${velocityEnabled ? 'is-active' : ''}" data-module-setting-action="open-filter-velocity" aria-label="Velocity do filtro${velocityEnabled ? ', ligado' : ', desligado'}">Velocity</button>
+      <button type="button" class="${customized ? 'is-active' : ''}" data-module-setting-action="open-filter-velocity" aria-label="Config do Cutoff${customized ? ', personalizado' : ''}">Config</button>
       <h3>Cutoff</h3>
       ${createParameterKnobMarkup(ratio, `
         <input

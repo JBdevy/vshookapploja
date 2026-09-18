@@ -124,7 +124,11 @@ void testKeyboardBroadcastRouting() {
   expect(engine.enqueueMidi(midi(0x80, 64, 0, hook_keys::kKeyboardBroadcastInput)), "release broadcast keyboard");
   process(engine);
   for (auto& synth : synths) expect(synth.events.size() == 2 && synth.events.back().type == Event::Type::noteOff, "broadcast releases each note");
-  expect(!engine.enqueueMidi(midi(0x90, 64, 110, 6)), "reject invalid virtual input");
+  // Desde que cada módulo ganhou seu próprio slot gerado (base 4 + índice do
+  // módulo), o slot 6 passou a ser válido (o do módulo 3) — o teste agora usa
+  // um slot além do fim da faixa roteável para continuar inválido.
+  expect(!engine.enqueueMidi(midi(0x90, 64, 110, static_cast<std::uint8_t>(hook_keys::kRoutableMidiInputCount))),
+      "reject invalid virtual input");
 }
 
 void testPatternGeneratorRouting() {
@@ -134,27 +138,44 @@ void testPatternGeneratorRouting() {
     modules[index] = &synths[index];
   }
   hook_keys::HookKeysEngine engine(modules);
+  // Cada módulo tem seu próprio Arpeggiator: cada um escuta o seu próprio slot
+  // gerado (base + índice do módulo) — ver arpeggiatorInputForModule em
+  // EngineTypes.hpp. O módulo 5 (índice 4) usa o dele nesta primeira parte.
   for (std::size_t index = 0; index < synths.size(); ++index) {
     hook_keys::ModuleConfig config;
-    config.midiInputSlot = index == 5 ? hook_keys::kArpeggiatorInput : hook_keys::kAllMidiInputs;
+    config.midiInputSlot = index == 4
+        ? hook_keys::arpeggiatorInputForModule(index) : hook_keys::kAllMidiInputs;
     expect(engine.setModuleConfig(index, config), "configure generated-note routing");
   }
-  expect(engine.enqueueMidi(midi(0x90, 67, 108, hook_keys::kArpeggiatorInput)), "queue arpeggiator note");
+  expect(engine.enqueueMidi(midi(0x90, 67, 108, hook_keys::arpeggiatorInputForModule(4))),
+      "queue arpeggiator note for module 5's own generated slot");
   process(engine);
   for (std::size_t index = 0; index < synths.size(); ++index) {
-    const auto expected = index == 5 ? 1U : 0U;
+    const auto expected = index == 4 ? 1U : 0U;
     expect(synths[index].events.size() == expected, "generated notes stay inside their module");
   }
-  expect(synths[5].events[0].data1 == 67, "arpeggiator reaches module 6");
+  expect(synths[4].events[0].data1 == 67, "arpeggiator reaches module 5");
   for (auto& synth : synths) synth.events.clear();
+
+  // Um segundo módulo com seu próprio Arpeggiator não ouve a frase do
+  // primeiro: cada slot gerado pertence a um único módulo.
+  hook_keys::ModuleConfig secondGenerator;
+  secondGenerator.midiInputSlot = hook_keys::arpeggiatorInputForModule(1);
+  expect(engine.setModuleConfig(1, secondGenerator), "give module 2 its own Arpeggiator slot");
+  expect(engine.enqueueMidi(midi(0x90, 70, 100, hook_keys::arpeggiatorInputForModule(4))),
+      "queue another note for module 5's generated slot");
+  process(engine);
+  expect(synths[4].events.size() == 1 && synths[1].events.empty(),
+      "each module's generated slot stays independent from the others");
+  for (auto& synth : synths) synth.events.clear();
+
   expect(engine.enqueueMidi(midi(0x90, 60, 100, hook_keys::kKeyboardBroadcastInput)),
          "queue touch keyboard broadcast while the arpeggiator is active");
   process(engine);
-  expect(synths[5].events.empty(),
+  expect(synths[4].events.empty(),
          "touch keyboard roots do not bypass the arpeggiator");
   expect(synths[0].events.size() == 1 && synths[7].events.size() == 1,
          "touch keyboard still broadcasts to ordinary modules");
-
 }
 
 void testMonoVoiceSteal() {
@@ -260,27 +281,29 @@ void testFifoPolyphonySteal() {
 void testArpeggiatorRouteClearsSustain() {
   RecordingSynth synth;
   hook_keys::HookKeysEngine::SynthModules modules{};
-  modules[5] = &synth;
+  // Índice 4 = módulo 5, o Arpeggiator desde a renumeração.
+  modules[4] = &synth;
   hook_keys::HookKeysEngine engine(modules);
   hook_keys::ModuleConfig regular;
   regular.midiInputSlot = 0;
-  expect(engine.setModuleConfig(5, regular), "configure physical arpeggiator input before enabling processor");
+  expect(engine.setModuleConfig(4, regular), "configure physical arpeggiator input before enabling processor");
   expect(engine.enqueueMidi(midi(0xB0, 64, 127, 0)), "press sustain before enabling arpeggiator");
   process(engine);
   synth.events.clear();
 
   auto generated = regular;
-  generated.midiInputSlot = hook_keys::kArpeggiatorInput;
+  // Slot próprio do módulo 5 (índice 4): base + índice, não o slot cravado.
+  generated.midiInputSlot = hook_keys::arpeggiatorInputForModule(4);
   generated.sustainInputEnabled = false;
-  expect(engine.setModuleConfig(5, generated), "route arpeggiator to generated notes only");
+  expect(engine.setModuleConfig(4, generated), "route arpeggiator to generated notes only");
   process(engine);
   expect(synth.events.size() == 1 && synth.events[0].type == Event::Type::controlChange &&
          synth.events[0].data1 == 64 && synth.events[0].data2 == 0,
       "enabling arpeggiator explicitly releases an earlier sustain pedal state");
   synth.events.clear();
   expect(engine.enqueueMidi(midi(0xB0, 64, 127, 0)), "physical sustain remains valid input data");
-  expect(engine.enqueueMidi(midi(0x90, 67, 100, hook_keys::kArpeggiatorInput)), "generated arpeggio note starts");
-  expect(engine.enqueueMidi(midi(0x80, 67, 0, hook_keys::kArpeggiatorInput)), "generated arpeggio note stops");
+  expect(engine.enqueueMidi(midi(0x90, 67, 100, hook_keys::arpeggiatorInputForModule(4))), "generated arpeggio note starts");
+  expect(engine.enqueueMidi(midi(0x80, 67, 0, hook_keys::arpeggiatorInputForModule(4))), "generated arpeggio note stops");
   process(engine);
   expect(synth.events.size() == 2 && synth.events[0].type == Event::Type::noteOn &&
          synth.events[1].type == Event::Type::noteOff,
@@ -290,7 +313,7 @@ void testArpeggiatorRouteClearsSustain() {
   // módulo do arpeggiator: as notas da frase seguram enquanto o pedal desce.
   auto pedal = generated;
   pedal.sustainInputEnabled = true;
-  expect(engine.setModuleConfig(5, pedal), "turn the arpeggiator module Sustain switch back on");
+  expect(engine.setModuleConfig(4, pedal), "turn the arpeggiator module Sustain switch back on");
   process(engine);
   synth.events.clear();
   expect(engine.enqueueMidi(midi(0xB0, 64, 127, 0)), "press the pedal on the physical keyboard");
@@ -397,7 +420,9 @@ void testMidiInputRouting() {
   expect(engine.setModuleConfig(0, config), "switch MIDI input");
   process(engine);
   expect(synth.events.back().type == Event::Type::allNotesOff, "switching MIDI input releases old voices");
-  expect(!engine.enqueueMidi(midi(0x90, 64, 100, 6)), "reject invalid MIDI input slot");
+  // Slot 6 hoje é válido (o gerado do módulo 3); use um além do fim da faixa.
+  expect(!engine.enqueueMidi(midi(0x90, 64, 100, static_cast<std::uint8_t>(hook_keys::kRoutableMidiInputCount))),
+      "reject invalid MIDI input slot");
 }
 
 void testAllMidiInputsRouting() {
@@ -1206,6 +1231,58 @@ void testCutoffVelocityCurve() {
   const auto fixedHard = render(127);
   expect(std::abs(fixedSoft - fixedHard) < fixedHard * 0.0001,
       "default Fixed 127 filter Velocity preserves the original Cutoff at every touch strength");
+}
+
+void testCutoffFilterTypesAndEnvelope() {
+  const char* path = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+  const auto energyOf = [&](hook_keys::CutoffConfig cutoff, std::size_t skipFrames) {
+    hook_keys::TinySoundFontModule sf2(48000.0, 128);
+    expect(sf2.loadFromFile(path), "load SF2 for cutoff filter type/envelope test");
+    sf2.beginBlock();
+    sf2.setCutoffConfig(cutoff);
+    sf2.noteOn(60, 127);
+    if (skipFrames > 0) {
+      std::vector<float> discardLeft(skipFrames, 0.0f), discardRight(skipFrames, 0.0f);
+      sf2.renderAdd(discardLeft.data(), discardRight.data(), skipFrames, 1.0f);
+    }
+    std::vector<float> left(512, 0.0f), right(512, 0.0f);
+    sf2.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    double energy = 0.0;
+    for (auto sample : left) energy += std::abs(sample);
+    return energy;
+  };
+
+  hook_keys::CutoffConfig base;
+  base.velocityCurve = {127, 127, 127, 127, 127};
+
+  auto lowLowpass = base;
+  lowLowpass.frequencyHz = 100.0f;
+  lowLowpass.type = hook_keys::FilterKind::lowpass2;
+  const auto lowLowpassEnergy = energyOf(lowLowpass, 0);
+
+  auto lowHighpass = lowLowpass;
+  lowHighpass.type = hook_keys::FilterKind::highpass2;
+  const auto lowHighpassEnergy = energyOf(lowHighpass, 0);
+  expect(lowHighpassEnergy > lowLowpassEnergy * 4.0,
+      "Highpass at a low frequency lets far more energy through than Lowpass at the same frequency");
+
+  auto midLowpass2 = base;
+  midLowpass2.frequencyHz = 900.0f;
+  midLowpass2.type = hook_keys::FilterKind::lowpass2;
+  const auto lp2Energy = energyOf(midLowpass2, 0);
+
+  auto midLowpass4 = midLowpass2;
+  midLowpass4.type = hook_keys::FilterKind::lowpass4;
+  const auto lp4Energy = energyOf(midLowpass4, 0);
+  expect(lp4Energy < lp2Energy * 0.95,
+      "Lowpass 4 (24 dB/octave) cuts more than Lowpass 2 at the same Cutoff");
+
+  auto envelopeConfig = midLowpass2;
+  envelopeConfig.envelope = {true, 5.0f, 5.0f, 1.0f, 5.0f, 4.0f};
+  const auto earlyEnergy = energyOf(envelopeConfig, 0);
+  const auto lateEnergy = energyOf(envelopeConfig, 24000);
+  expect(earlyEnergy < lateEnergy * 0.5,
+      "the filter envelope starts closed at Note On and opens once Attack/Decay finish");
 }
 
 void testCompressorProcessing() {
@@ -2556,6 +2633,7 @@ int main() {
   testVelocityCurveMapping();
   testCutoffProcessing();
   testCutoffVelocityCurve();
+  testCutoffFilterTypesAndEnvelope();
   testEqualizerProcessing();
   testEqualizerCutSlope();
   testCompressorProcessing();

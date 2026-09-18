@@ -12,6 +12,7 @@ export function createSoundSelectionMarkup(
   useTabletKeyboard = false,
   installedSoundIds: ReadonlySet<string> = new Set(),
   selectedTimbreId: string | null = null,
+  seenSoundIds: ReadonlySet<string> = new Set(),
 ): string {
   const activeCategory = selectedCategory === 'user' || categories.some(({ id }) => id === selectedCategory)
     ? selectedCategory
@@ -37,7 +38,7 @@ export function createSoundSelectionMarkup(
         ${categoryButtons || '<p class="sound-browser__empty">Conecte-se à internet para carregar as categorias.</p>'}
       </nav>
       <div class="sound-browser__content">
-        ${activeCategory ? createSoundCategoryContentMarkup(activeCategory, categories, useTabletKeyboard, installedSoundIds, selectedTimbreId) : createEmptyCatalogMarkup()}
+        ${activeCategory ? createSoundCategoryContentMarkup(activeCategory, categories, useTabletKeyboard, installedSoundIds, selectedTimbreId, seenSoundIds) : createEmptyCatalogMarkup()}
       </div>
     </section>
   `;
@@ -49,6 +50,7 @@ export function createSoundCategoryContentMarkup(
   useTabletKeyboard = false,
   installedSoundIds: ReadonlySet<string> = new Set(),
   selectedTimbreId: string | null = null,
+  seenSoundIds: ReadonlySet<string> = new Set(),
 ): string {
   if (categoryId !== 'user') {
     const category = categories.find(({ id }) => id === categoryId);
@@ -64,9 +66,10 @@ export function createSoundCategoryContentMarkup(
           ${category.sounds.map((sound) => {
             const installed = installedSoundIds.has(sound.id);
             const selected = selectedTimbreId === `fixed:${sound.id}`;
+            const isNew = !seenSoundIds.has(sound.id);
             return `
-              <button class="${installed ? 'is-installed' : 'is-downloadable'}${selected ? ' is-current-timbre' : ''}" type="button" data-fixed-sound-id="${escapeMarkup(sound.id)}" style="${soundButtonStyle(sound.color)}" aria-current="${selected}" aria-label="${escapeMarkup(sound.name)}. ${installed ? 'Baixado' : 'Não baixado'}${selected ? '. Selecionado neste módulo' : ''}">
-                <span>${escapeMarkup(sound.name)}</span><small>${installed ? 'No dispositivo' : 'Baixar'}</small>
+              <button class="${installed ? 'is-installed' : 'is-downloadable'}${selected ? ' is-current-timbre' : ''}${isNew ? ' is-new' : ''}" type="button" data-fixed-sound-id="${escapeMarkup(sound.id)}" style="${soundButtonStyle(sound.color)}" aria-current="${selected}" aria-label="${escapeMarkup(sound.name)}. ${installed ? 'Baixado' : 'Não baixado'}${selected ? '. Selecionado neste módulo' : ''}${isNew ? '. Timbre novo' : ''}">
+                <span>${escapeMarkup(sound.name)}</span><small>${installed ? 'No dispositivo' : 'Baixar'}</small>${isNew ? '<i class="fixed-sound-new-badge" aria-hidden="true">new</i>' : ''}
               </button>
             `;
           }).join('') || '<p class="sound-browser__empty">Nenhum timbre cadastrado nesta categoria.</p>'}

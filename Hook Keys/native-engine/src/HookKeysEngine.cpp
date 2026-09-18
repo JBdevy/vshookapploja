@@ -63,7 +63,7 @@ bool HookKeysEngine::enqueueMidi(MidiMessage message) noexcept {
   if (message.inputSlot >= kMidiInputCount) {
     const auto type = static_cast<std::uint8_t>(message.status & kMessageTypeMask);
     const auto virtualInput = message.inputSlot == kKeyboardBroadcastInput ||
-        message.inputSlot == kArpeggiatorInput;
+        (message.inputSlot >= kArpeggiatorInputBase && message.inputSlot < kRoutableMidiInputCount);
     const auto virtualMessage = type == kNoteOn || type == kNoteOff ||
         (message.inputSlot == kKeyboardBroadcastInput &&
          (type == kControlChange || type == kPitchBend));
@@ -343,7 +343,7 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
       // O módulo tocado pelo arpeggiator recebe as notas pela entrada gerada,
       // mas pedal, roda e expressão só existem no teclado físico: para eles
       // vale qualquer entrada, senão o pedal nunca alcançaria o módulo.
-      const auto generatedNotes = config.midiInputSlot == kArpeggiatorInput;
+      const auto generatedNotes = config.midiInputSlot != kAllMidiInputs && config.midiInputSlot >= kArpeggiatorInputBase;
       const auto acceptsInput = config.midiInputSlot == kAllMidiInputs || generatedNotes ||
                                 message.inputSlot == kKeyboardBroadcastInput ||
                                 message.inputSlot == config.midiInputSlot;
@@ -365,7 +365,7 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
     const auto value = static_cast<std::uint16_t>(message.data1 | (message.data2 << 7));
     for (std::size_t index = 0; index < kModuleCount; ++index) {
       const auto& config = configs_[index];
-      const auto generatedNotes = config.midiInputSlot == kArpeggiatorInput;
+      const auto generatedNotes = config.midiInputSlot != kAllMidiInputs && config.midiInputSlot >= kArpeggiatorInputBase;
       if (modules_[index] != nullptr && config.enabled &&
           (config.midiInputSlot == kAllMidiInputs || generatedNotes ||
            message.inputSlot == kKeyboardBroadcastInput ||
@@ -378,13 +378,16 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
 
 void HookKeysEngine::routeNoteOn(
     std::uint8_t inputSlot, std::uint8_t sourceNote, std::uint8_t velocity) noexcept {
-  const auto generatedModule = inputSlot == kArpeggiatorInput ? 4 : -1;
+  // Cada módulo escuta seu próprio slot gerado (base + índice do módulo): a
+  // frase do Arpeggiator de um módulo nunca soa em outro.
+  const auto generatedModule = inputSlot >= kArpeggiatorInputBase
+      ? static_cast<int>(inputSlot - kArpeggiatorInputBase) : -1;
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     auto* synth = modules_[index];
     const auto& config = configs_[index];
     const auto generatedForDifferentModule = generatedModule >= 0 &&
         index != static_cast<std::size_t>(generatedModule);
-    const auto generatedConfig = config.midiInputSlot == kArpeggiatorInput;
+    const auto generatedConfig = config.midiInputSlot != kAllMidiInputs && config.midiInputSlot >= kArpeggiatorInputBase;
     const auto regularInputMismatch = generatedModule < 0 && (
         (inputSlot == kKeyboardBroadcastInput && generatedConfig) ||
         (inputSlot != kKeyboardBroadcastInput && config.midiInputSlot != kAllMidiInputs &&

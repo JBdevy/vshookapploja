@@ -185,7 +185,8 @@ try {
     'somente mensagens novas após liberar a interface chegam ao motor');
   assert.equal(player.getActivePresetState().modules[7].settings.velocityCurve.mode, 'soft', 'o Synth nasce em Soft');
   assert.equal(player.getActivePresetState().modules[7].settings.synth.noVelocitySensitivity, true, 'o Synth nasce com No Sens ligado');
-  assert.equal(player.getActivePresetState().modules[5].settings.velocityCurve.fixedValue, 80, 'o módulo 6 continua em Fixed 80');
+  assert.equal(player.getActivePresetState().modules[5].settings.velocityCurve.mode, 'soft',
+    'o módulo 6 voltou a ser um módulo normal, sem curva de velocity fixa');
   {
     const current = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
     const soft = { mode: 'soft', points: [0, 16, 44, 84, 127], userPoints: [0, 32, 64, 96, 127], fixedValue: 100 };
@@ -196,8 +197,8 @@ try {
     legacy.banks.A.presets[0].modules[7].settings.velocityCurve = soft;
     legacy.banks.A.presets[0].modules[0].settings.velocityCurve = soft;
     player.applySavedPlayerState(legacy);
-    assert.equal(player.bankStates.get('A').presets[0].modules[5].settings.velocityCurve.fixedValue, 80,
-      'estado salvo antigo leva o módulo 6 de Soft para Fixed 80');
+    assert.equal(player.bankStates.get('A').presets[0].modules[5].settings.velocityCurve.mode, 'soft',
+      'módulo 6 voltou a ser normal: o Soft antigo permanece em Soft');
     assert.equal(player.bankStates.get('A').presets[0].modules[7].settings.velocityCurve.mode, 'soft',
       'o Synth antigo em Soft continua em Soft');
     assert.equal(player.bankStates.get('A').presets[0].modules[0].settings.velocityCurve.mode, 'soft',
@@ -1248,14 +1249,16 @@ try {
   player.openModal('module-trance-gate', 6, master);
   assert(window.document.querySelector('[data-trance-gate-editor]'));
   assert(!window.document.querySelector('[data-pattern-parameter="semitone"]'));
-  assert.equal(player.createPatternPlaybackSnapshot().sequencer, undefined,
+  assert.equal(player.createPatternPlaybackSnapshot(5).sequencer, undefined,
     'o antigo gerador de notas do sequencer não existe mais');
-  // Regressão do renumber: o snapshot lia modules[5] (Trance Gate, módulo 6)
-  // no lugar de modules[4] (Arpeggiator, módulo 5) — o som parava de sair.
+  // Cada módulo tem seu próprio Arpeggiator: o snapshot do módulo 5 lê o
+  // timbre do módulo 5, não o de outro módulo qualquer.
   preset.modules[4].timbreId = 'fixed:arp-voice';
   preset.modules[5].timbreId = null;
-  const arpSnapshot = player.createPatternPlaybackSnapshot().arpeggiator;
-  assert.equal(arpSnapshot.hasSound, true, 'o snapshot lê o timbre do módulo 5, não do módulo 6');
+  const arpSnapshot = player.createPatternPlaybackSnapshot(5).arpeggiator;
+  assert.equal(arpSnapshot.hasSound, true, 'o snapshot do módulo 5 lê o timbre do módulo 5');
+  const otherSnapshot = player.createPatternPlaybackSnapshot(6).arpeggiator;
+  assert.equal(otherSnapshot.hasSound, false, 'o snapshot do módulo 6 não lê o timbre do módulo 5');
   const step = window.document.querySelector('[data-trance-gate-step="1"]');
   step.click();
   await player.syncNativeEngine();

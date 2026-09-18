@@ -39,6 +39,12 @@ if(HOOK_KEYS_BUILD_TESTS)
     tests/HookKeysEngineTests.cpp
   )
   target_link_libraries(hook_keys_engine_tests PRIVATE hook_keys_engine Threads::Threads)
+  if(MSVC)
+    # Cada teste cria um HookKeysEngine inteiro na pilha (nunca acontece no app
+    # real: lá ele mora num unique_ptr). Com mais slots de entrada gerados por
+    # módulo o objeto cresceu e passou a estourar a pilha padrão de 1 MB.
+    target_link_options(hook_keys_engine_tests PRIVATE /STACK:8388608)
+  endif()
   # Manual diagnostic: takes local SF2 paths, never opens an audio device.
   add_executable(hook_keys_sf2_continuity EXCLUDE_FROM_ALL tests/SoundFontContinuityDiagnostic.cpp)
   target_link_libraries(hook_keys_sf2_continuity PRIVATE hook_keys_engine Threads::Threads)

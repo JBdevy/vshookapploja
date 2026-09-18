@@ -8912,6 +8912,51 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   filter: brightness(1.22);
 }
 
+/* Timbre ainda não aberto pelo usuário: faixa RGB girando ao redor do botão
+   e um rótulo "new" no canto inferior direito. Some ao abrir uma vez. */
+@property --fixed-sound-new-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.fixed-sound-grid button.is-new {
+  position: relative;
+  z-index: 0;
+}
+
+.fixed-sound-grid button.is-new::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 7px;
+  background: conic-gradient(from var(--fixed-sound-new-angle, 0deg),
+    #ff2d55, #ff9500, #ffe600, #34ff6a, #00c8ff, #7a5cff, #ff2d55);
+  z-index: -1;
+  animation: fixed-sound-new-spin 2.6s linear infinite;
+}
+
+@keyframes fixed-sound-new-spin {
+  to { --fixed-sound-new-angle: 360deg; }
+}
+
+.fixed-sound-new-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(10, 8, 6, 0.72);
+  color: #fff;
+  font-size: 6.5px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
 .sound-browser .sound-category-button,
 .sound-browser .fixed-sound-grid button,
 .sound-browser .fixed-sound-grid button strong,
@@ -8971,6 +9016,22 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 .sound-download__identity small,
 .sound-download__message {
   color: #aaa4ae;
+}
+
+.sound-download__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sound-download__meta span {
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #cfc9d2;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .backup-download {

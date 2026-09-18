@@ -30,6 +30,12 @@ bool hook_keys_tsf_note_on_with_auto_glide(tsf* synth, HookKeysGlideState& state
     const hook_keys::CutoffConfig* cutoff = nullptr, std::uint8_t filterVelocity = 127,
     hook_keys::GlideBehavior behavior = {}) noexcept;
 void hook_keys_tsf_set_cutoff(tsf* synth, const hook_keys::CutoffConfig& config) noexcept;
+// Avança o envelope do Cutoff de cada voz ativa por `frames` amostras e
+// reaplica o(s) estágio(s) do filtro com a frequência já modulada. Chamado
+// pelo módulo uma vez por bloco de renderização (fora do laço interno do
+// TinySoundFont): o envelope não precisa de resolução de amostra a amostra.
+void hook_keys_tsf_advance_filter_envelope(
+    tsf* synth, const hook_keys::CutoffConfig& config, std::size_t frames, float sampleRate) noexcept;
 void hook_keys_tsf_steal_note(tsf* synth, HookKeysGlideState& state,
     int channel, std::uint8_t note) noexcept;
 void hook_keys_tsf_render_glide(tsf* synth, HookKeysGlideState& state,

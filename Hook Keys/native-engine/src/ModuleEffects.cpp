@@ -26,8 +26,7 @@ bool sameEq(const EqConfig& left, const EqConfig& right) noexcept {
 }
 
 bool sameCutoff(const CutoffConfig& left, const CutoffConfig& right) noexcept {
-  return left.enabled == right.enabled && left.frequencyHz == right.frequencyHz &&
-         left.velocityCurve == right.velocityCurve;
+  return left == right;
 }
 
 bool sameCompressor(const CompressorConfig& left, const CompressorConfig& right) noexcept {

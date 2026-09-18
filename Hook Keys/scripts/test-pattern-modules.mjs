@@ -30,7 +30,7 @@ test('Trance Gate defaults and normalized settings contain only volume steps, wi
   assert.equal(restored.steps[0], false);
   assert.equal(tranceGate.readTranceGateSettings({ gate: NaN }).gate, 50);
   const markup = tranceGate.createTranceGateMarkup(restored);
-  assert.match(markup, /Trance Gate/);
+  assert.match(markup, /Pulse/);
   assert.doesNotMatch(markup, /Velocity|Semitone|data-pattern-parameter="semitone"/);
   assert.equal([...markup.matchAll(/data-trance-gate-step=/g)].length, 16);
   assert.equal(tranceGate.tranceGateBeatMultiplier('1/8 T'), 1 / 3);
@@ -68,7 +68,7 @@ test('arpeggiator offers triplets and 2x2 octave buttons while remaining permane
   assert.doesNotMatch(markup, /data-arpeggiator-sync|rateBpm/);
 });
 
-test('the arpeggiator sends its generated notes through its own engine input', () => {
+test('every module runs its own independent Arpeggiator, each on its own engine input', () => {
   let timerId = 0;
   const timers = new Map();
   const fakeWindow = {
@@ -92,13 +92,22 @@ test('the arpeggiator sends its generated notes through its own engine input', (
       settings: { enabled: true, mode: 'up', division: '1/16', octaves: 1, gate: 70, swing: 0 },
     },
   };
-  const controller = new playback.PatternPlaybackController(() => snapshot, (...message) => sent.push(message));
+  const controller = new playback.PatternPlaybackController(
+    () => snapshot,
+    (moduleNumber, slot, status, note, velocity) => sent.push([moduleNumber, slot, status, note, velocity]),
+  );
   controller.handleInput({ inputId: null, noteNumber: 60, pressed: true, velocity: 100 });
-  assert.deepEqual(sent.slice(0, 1).map((message) => message[0]), [4]);
-  assert(sent.every(([slot]) => slot === 4), 'a entrada 5 do sequenciador não existe mais');
+  // Cada um dos 8 módulos tem seu próprio Arpeggiator: a mesma nota física
+  // gera uma frase independente para cada um, no seu próprio slot gerado.
+  assert.equal(sent.length, 8, 'each of the 8 modules runs its own generator');
+  for (const [moduleNumber, slot] of sent) {
+    assert.equal(slot, playback.arpeggiatorInputSlotForModule(moduleNumber),
+      'each module sends through its own base-plus-index engine input');
+  }
+  assert.equal(sent.find(([moduleNumber]) => moduleNumber === 1)?.[1], 4,
+    'module 1 keeps using the base engine input');
   controller.handleInput({ inputId: null, noteNumber: 60, pressed: false, velocity: 0 });
-  assert(sent.some(([slot, status]) => slot === 4 && status === 0x80));
-  assert.equal(playback.SEQUENCER_ENGINE_INPUT, undefined);
+  assert(sent.some(([, slot, status]) => slot === 4 && status === 0x80));
   controller.destroy();
 });
 
@@ -111,11 +120,6 @@ test('arpeggiator follows physical key-up and the pedal holds it like any module
   assert.match(player, /inputSlot:\s*patternInputSlot \?\?/,
     'enabled arpeggiator must receive only its generated note stream');
   const playback = readFileSync(new URL('../src/features/player/PatternPlaybackController.ts', import.meta.url), 'utf8');
-  assert.match(playback, /if \(existing >= 0\) state\.held\.splice\(existing, 1\);\s*if \(state\.held\.length === 0\) this\.stop\(false\);/,
+  assert.match(playback, /if \(existing >= 0\) state\.held\.splice\(existing, 1\);\s*if \(state\.held\.length === 0\) this\.stop\(moduleNumber, false\);/,
     'physical Note Off must stop the arpeggio as soon as the final key is released');
-});
-
-test('new users start the arpeggiator module with Fixed velocity 80', () => {
-  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /moduleIndex === 5[\s\S]*?mode: 'fixed', fixedValue: 80, points: \[80, 80, 80, 80, 80\]/);
 });

@@ -492,7 +492,14 @@ struct tsf_voice
 	struct tsf_voice_lowpass lowpass;
 	// Hook Keys user Cutoff is per voice, separate from the SF2's own filter.
 	struct tsf_voice_lowpass hookCutoff;
+	// LP4/HP4 rodam o mesmo estagio duas vezes em serie (24 dB/oitava).
+	struct tsf_voice_lowpass hookCutoffStage2;
 	unsigned char hookFilterVelocity;
+	// Envelope do Cutoff (Attack/Decay/Sustain/Release), avancado fora do
+	// tsf_voice_render por hook_keys_tsf_advance_filter_envelope: level vai de
+	// 0 (fechado) a 1 (o Cutoff configurado); reachedPeak marca o fim do Attack.
+	float hookFilterEnvLevel;
+	unsigned char hookFilterEnvReachedPeak;
 	struct tsf_voice_lfo modlfo, viblfo;
 };
 
@@ -1191,6 +1198,20 @@ static float tsf_voice_lowpass_process(struct tsf_voice_lowpass* e, double In)
 	double Out = In * e->a0 + e->z1; e->z1 = In * e->a1 + e->z2 - e->b1 * Out; e->z2 = In * e->a0 - e->b2 * Out; return (float)Out;
 }
 
+// Highpass do mesmo "K-method" acima (http://www.earlevel.com/main/2012/11/26/biquad-c-source-code/):
+// os polos (b1/b2) sao os mesmos do lowpass para o mesmo Fc/Q; so o numerador
+// muda (zero em 0 Hz em vez de Nyquist). Reusa tsf_voice_lowpass_process, que
+// nao assume nada alem de a2==a0 - verdade nos dois filtros.
+static void tsf_voice_highpass_setup(struct tsf_voice_lowpass* e, float Fc)
+{
+	double K = TSF_TAN(TSF_PI * Fc), KK = K * K;
+	double norm = 1 / (1 + K * e->QInv + KK);
+	e->a0 = norm;
+	e->a1 = -2 * e->a0;
+	e->b1 = 2 * (KK - 1) * norm;
+	e->b2 = (1 - K * e->QInv + KK) * norm;
+}
+
 static void tsf_voice_lfo_setup(struct tsf_voice_lfo* e, float delay, int freqCents, float outSampleRate)
 {
 	e->samplesUntil = (int)(delay * outSampleRate);
@@ -1268,6 +1289,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 	double tmpSourceSamplePosition = v->sourceSamplePosition;
 	struct tsf_voice_lowpass tmpLowpass = v->lowpass;
 	struct tsf_voice_lowpass tmpHookCutoff = v->hookCutoff;
+	struct tsf_voice_lowpass tmpHookCutoffStage2 = v->hookCutoffStage2;
 
 	TSF_BOOL dynamicLowpass = (region->modLfoToFilterFc || region->modEnvToFilterFc);
 	float tmpSampleRate = f->outSampleRate, tmpInitialFilterFc, tmpModLfoToFilterFc, tmpModEnvToFilterFc;
@@ -1340,7 +1362,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
-					if (tmpHookCutoff.active) val = tsf_voice_lowpass_process(&tmpHookCutoff, val);
+					if (tmpHookCutoff.active) val = tsf_voice_lowpass_process(&tmpHookCutoff, val); if (tmpHookCutoffStage2.active) val = tsf_voice_lowpass_process(&tmpHookCutoffStage2, val);
 
 					*outL++ += val * gainLeft;
 					*outL++ += val * gainRight;
@@ -1371,7 +1393,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
-					if (tmpHookCutoff.active) val = tsf_voice_lowpass_process(&tmpHookCutoff, val);
+					if (tmpHookCutoff.active) val = tsf_voice_lowpass_process(&tmpHookCutoff, val); if (tmpHookCutoffStage2.active) val = tsf_voice_lowpass_process(&tmpHookCutoffStage2, val);
 
 					*outL++ += val * gainLeft;
 					*outR++ += val * gainRight;
@@ -1400,7 +1422,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
-					if (tmpHookCutoff.active) val = tsf_voice_lowpass_process(&tmpHookCutoff, val);
+					if (tmpHookCutoff.active) val = tsf_voice_lowpass_process(&tmpHookCutoff, val); if (tmpHookCutoffStage2.active) val = tsf_voice_lowpass_process(&tmpHookCutoffStage2, val);
 
 					*outL++ += val * gainMono;
 					gainMono += gainMonoStep;
@@ -1422,6 +1444,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 	v->sourceSamplePosition = tmpSourceSamplePosition;
 	if (tmpLowpass.active || dynamicLowpass) v->lowpass = tmpLowpass;
 	if (tmpHookCutoff.active) v->hookCutoff = tmpHookCutoff;
+	if (tmpHookCutoffStage2.active) v->hookCutoffStage2 = tmpHookCutoffStage2;
 }
 
 TSFDEF tsf* tsf_load(struct tsf_stream* stream)
@@ -1735,7 +1758,10 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 
 		// Setup lowpass filter.
 		TSF_MEMSET(&voice->hookCutoff, 0, sizeof(voice->hookCutoff));
+		TSF_MEMSET(&voice->hookCutoffStage2, 0, sizeof(voice->hookCutoffStage2));
 		voice->hookFilterVelocity = 127;
+		voice->hookFilterEnvLevel = 0.0f;
+		voice->hookFilterEnvReachedPeak = 0;
 		lowpassFc = (region->initialFilterFc <= 13500 ? tsf_cents2Hertz((float)region->initialFilterFc) / f->outSampleRate : 1.0f);
 		lowpassFilterQDB = region->initialFilterQ / 10.0f;
 		voice->lowpass.QInv = 1.0 / TSF_POW(10.0, (lowpassFilterQDB / 20.0));
