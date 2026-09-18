@@ -3466,7 +3466,8 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   min-height: clamp(38px, 6vh, 48px);
   padding: 6px;
   place-items: center;
-  color: var(--orange-bright);
+  /* Preto sempre, ligado ou desligado — não laranja nem quase branco. */
+  color: #090705;
   border: 1.5px solid rgba(255, 121, 0, 0.62);
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(37, 37, 41, 0.98), rgba(13, 13, 15, 0.99));
@@ -3484,7 +3485,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .player-screen--tablet .player-metronome-button.is-active {
-  color: #effff3;
+  color: #090705;
   border-color: rgba(76, 235, 127, 0.84);
   background: linear-gradient(180deg, rgba(25, 150, 69, 0.98), rgba(7, 76, 32, 0.99));
   box-shadow: 0 0 16px rgba(40, 221, 100, 0.2);
@@ -8660,6 +8661,72 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   font-size: clamp(22px, 3vw, 39px);
 }
 
+/* Pequenos, no canto direito da mesma linha do título Hook B3 — não uma
+   caixa nova ocupando a largura toda. */
+.organ-header-controls {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  /* Mesma altura para o knob e o botão, senão um ficava mais alto que o
+     outro e parecia fora da linha. */
+  height: clamp(30px, 5vh, 44px);
+  gap: clamp(6px, 1vw, 14px);
+}
+
+.organ-header-controls__volume {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  height: 100%;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.organ-header-controls__volume.is-hidden { display: none; }
+
+.organ-header-controls__volume > span:first-child {
+  color: #d9ecff;
+  font-size: clamp(10px, 1.1vw, 14px);
+  font-weight: 900;
+}
+
+.organ-header-controls__volume .module-envelope-knob {
+  width: clamp(32px, 4.4vh, 46px);
+}
+
+.organ-header-controls__volume output {
+  color: #ffb45c;
+  font-size: clamp(10px, 1.1vw, 14px);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.organ-header-controls__toggle {
+  min-height: clamp(30px, 5vh, 44px);
+  padding: 0 clamp(12px, 1.6vw, 20px);
+  color: #fff;
+  border: 1.5px solid rgba(126, 255, 31, 0.5);
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(30, 56, 24, 0.96), rgba(12, 20, 10, 0.99));
+  font-size: clamp(11px, 1.3vw, 15px);
+  font-weight: 950;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.organ-header-controls__toggle.is-on {
+  color: #0c1b0a;
+  border-color: #78f39d;
+  background: linear-gradient(180deg, #4be080, #159449);
+}
+
 .sound-library-total {
   position: absolute;
   left: 50%;
@@ -9866,7 +9933,11 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   .player-modal__clean-button,
   .player-modal__confirm-button,
   .player-modal__logout-button,
-  .tracks-footer-button {
+  .tracks-footer-button,
+  /* O Reset e o ON/OFF do Config moram na mesma fileira do Voltar: sem eles
+     aqui, só o Voltar encolhia e ficava fora do padrão dos vizinhos. */
+  .player-modal__reset-button,
+  .module-effect-power {
     min-width: 74px;
     min-height: 30px;
     padding-inline: 10px;
@@ -10022,8 +10093,9 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .module-effect-controls--reverb {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: repeat(2, minmax(0, 1fr));
+    /* Um do lado do outro, como no tablet: Decay, Dampen, Size e Mix. */
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .module-effect-knob {
@@ -12006,12 +12078,19 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
   text-shadow: 0 1px rgba(255,255,255,.2) !important;
 }
 .player-metronome-button,
-[data-action="toggle-metronome"] { --button-color-a: #24b8ff !important; --button-color-b: #075f9f !important; --button-border: #83d9ff !important; }
+[data-action="toggle-metronome"] {
+  --button-color-a: #24b8ff !important;
+  --button-color-b: #075f9f !important;
+  --button-border: #83d9ff !important;
+  color: #090705 !important;
+  text-shadow: none !important;
+}
 .player-metronome-button.is-active,
 [data-action="toggle-metronome"].is-active {
   --button-color-a: #24b8ff !important;
   --button-color-b: #075f9f !important;
   --button-border: #fff !important;
+  color: #090705 !important;
   box-shadow: inset 0 0 0 2px rgba(255,255,255,.5), 0 0 12px rgba(36,184,255,.42) !important;
 }
 .player-tempo-button,
@@ -12330,74 +12409,50 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
    para baixo é a voz entrando, como no órgão de verdade. */
 .organ-panel {
   display: grid;
-  /* Presets à esquerda, Rotary no canto superior direito e os faders embaixo. */
-  grid-template-columns: minmax(0, 1fr) minmax(0, .72fr);
+  /* O Rotary toma a fileira de cima inteira; os faders ficam embaixo. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   gap: clamp(6px, 1vh, 12px);
   height: 100%;
   min-height: 0;
   padding: clamp(6px, 1vh, 12px);
-  border: 1.5px solid rgba(255, 126, 31, 0.45);
+  border: 1.5px solid rgba(126, 255, 31, 0.4);
   border-radius: 12px;
-  background: linear-gradient(170deg, rgba(34, 24, 18, 0.98), rgba(12, 9, 8, 0.99));
+  /* Só dentro do Hook B3: um verde mais claro, diferente do laranja do resto do app. */
+  background: linear-gradient(170deg, rgba(36, 66, 38, 0.98), rgba(16, 28, 17, 0.99));
 }
 
-.organ-presets {
-  grid-column: 1;
-  grid-row: 1;
-  align-self: start;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
-  gap: clamp(4px, 0.7vw, 9px);
-  min-width: 0;
-}
-
-.organ-presets button {
-  min-width: 0;
-  min-height: clamp(26px, 4vh, 38px);
-  padding: 2px 4px;
-  overflow: hidden;
-  color: #2b2118;
-  border: 1px solid #b9a894;
-  border-radius: 6px;
-  background: linear-gradient(180deg, #f4ece0, #cdbfad);
-  font-size: clamp(9px, 1.1vw, 14px);
-  font-weight: 950;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-.organ-presets button.is-selected {
-  color: #fff4e6;
-  border-color: #ffb45c;
-  background: linear-gradient(180deg, #5c3a1c, #2a1809);
+/* O fundo do modal inteiro (atrás do painel) também vira verde só aqui. */
+.player-modal--module-organ .player-modal__surface {
+  background: linear-gradient(135deg, rgba(40, 72, 42, 0.98), rgba(16, 26, 17, 0.99));
+  border-color: rgba(126, 255, 31, 0.5);
 }
 
 .organ-drawbars {
-  grid-column: 1 / span 2;
-  grid-row: 2;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
-  gap: clamp(3px, 0.6vw, 8px);
-  /* O console fica com a proporção de um Hammond: largo, não uma torre. */
+  /* Bem juntas, como no console de verdade — quase encostando uma na outra. */
+  gap: clamp(1px, 0.15vw, 3px);
   justify-self: center;
   align-self: center;
   width: 100%;
-  max-width: 1040px;
-  height: min(100%, clamp(150px, 46vh, 400px));
+  max-width: 760px;
+  height: min(100%, clamp(150px, 52vh, 470px));
   min-width: 0;
   min-height: 0;
-  padding: clamp(4px, 0.8vh, 9px);
+  padding: clamp(6px, 1vh, 12px) clamp(4px, 0.8vh, 9px) clamp(4px, 0.8vh, 9px);
   border-radius: 9px;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.25));
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0.6));
 }
 
 .organ-drawbar {
   --drawbar-position: 0;
-  --drawbar-grip: clamp(13px, 2.4vh, 20px);
+  /* Mais alta ainda, para parecer um bloco grosso e não uma tira fina. */
+  --drawbar-grip: clamp(52px, 9.5vh, 86px);
+  /* Percurso da ponteira: vai até o fim de verdade — a régua revelada usa a
+     mesma distância, então as duas nunca desalinham. */
+  --drawbar-travel: calc(100% - var(--drawbar-grip));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   justify-items: center;
@@ -12406,71 +12461,168 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   min-height: 0;
 }
 
+/* A calha e os LEDs lado a lado: os LEDs ficam à direita de cada drawbar. */
+.organ-drawbar__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
+  gap: clamp(2px, .4vw, 5px);
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.organ-drawbar__leds {
+  display: grid;
+  /* Dois quadrados por estágio, 16 no total. Fileiras do tamanho do próprio
+     quadrado, não esticadas pela calha inteira. */
+  grid-template-rows: repeat(16, auto);
+  gap: clamp(1px, .3vh, 3px);
+  align-self: center;
+  justify-items: center;
+  width: clamp(15px, 2vw, 22px);
+  min-height: 0;
+}
+
+.organ-drawbar__leds i {
+  /* Quadrado de verdade: tamanho fixo, não esticado na fileira. */
+  width: clamp(12px, 1.9vh, 17px);
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: #10151f;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+/* Acende de cima para baixo, conforme a barra desce estágios. */
+.organ-drawbar__leds i.is-lit {
+  background: radial-gradient(circle, #d4ffb0, #6de23a 70%);
+  box-shadow: 0 0 4px 1px rgba(109, 226, 58, 0.85), inset 0 0 0 1px rgba(220, 255, 190, 0.7);
+}
+
+/* Celular deitado: a calha encolhe (ver .organ-panel a seguir) e os 16 LEDs
+   grandes não cabiam mais na altura — aqui eles voltam a caber. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .organ-drawbar__leds {
+    width: clamp(9px, 1.4vw, 13px);
+    gap: 1px;
+  }
+  .organ-drawbar__leds i {
+    width: clamp(6px, 1vh, 9px);
+  }
+}
+
 .organ-drawbar__feet {
   color: #f6e6d2;
-  font-size: clamp(7px, 0.8vw, 11px);
+  font-size: clamp(8px, 0.9vw, 12px);
   font-weight: 950;
   white-space: nowrap;
 }
 
-/* A calha por onde o fader corre: em cima fechado, embaixo todo aberto. */
+/* A calha por onde o fader corre: fina, escura, com os números 1 a 8 descendo
+   junto — a régua clássica do console. */
 .organ-drawbar__track {
   position: relative;
-  width: 100%;
+  width: 74%;
   min-height: 0;
-  border-radius: 6px;
-  background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.35)),
-    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0 1px, transparent 1px 11%);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  /* Sem arredondar: a ponteira, quadrada em cima, não bate com uma calha
+     redonda — sobrava um triângulo do fundo aparecendo nos cantos. */
+  /* Uma fresta fina sempre visível, mesmo onde a régua ainda não apareceu —
+     dá a impressão de que o trilho continua por baixo do botão. */
+  background: linear-gradient(90deg,
+    transparent 44%, rgba(255, 255, 255, 0.14) 44%, rgba(255, 255, 255, 0.14) 56%, transparent 56%);
+  overflow: hidden;
   cursor: ns-resize;
   touch-action: none;
 }
 
-/* A haste sai do topo e acompanha a barra: é o quanto ela foi puxada. */
-.organ-drawbar__stem {
-  position: absolute;
-  top: 0;
-  left: 38%;
-  right: 38%;
-  height: calc(var(--drawbar-position) / 8 * (100% - var(--drawbar-grip)) + var(--drawbar-grip) / 2);
-  border-radius: 0 0 3px 3px;
-  background: linear-gradient(90deg, #6d6660, #cfc6bb 45%, #6d6660);
-}
-
-.organ-drawbar__grip {
+/* A régua fica sempre no mesmo lugar (presa à calha, não ao botão): o "1"
+   fica logo no topo e o "8" no fundo. Um clip-path corta ela mesma de baixo
+   para cima — sem elemento de tampa, então não sobra nenhum retângulo verde
+   diferente do fundo por trás: onde não foi revelado, é só o painel, nada. */
+.organ-drawbar__ticks {
   position: absolute;
   left: 0;
   right: 0;
-  top: calc(var(--drawbar-position) / 8 * (100% - var(--drawbar-grip)));
+  top: 0;
+  /* A mesma distância de percurso do topo da ponteira (--drawbar-travel):
+     assim a régua revelada termina bem onde a ponteira está, sempre, mesmo
+     com a folga que sobra embaixo dela no fim do curso. */
+  height: calc(var(--drawbar-travel));
+  display: grid;
+  grid-template-rows: repeat(8, minmax(0, 1fr));
+  /* Só os cantos de cima arredondam: os de baixo encostam na ponteira,
+     quadrada, e um raio ali destoava dela. */
+  border-radius: 3px 3px 0 0;
+  /* Tira branca de cada lado, preta só no meio (onde moram os números) —
+     como a régua de verdade atrás dos drawbars. */
+  background:
+    linear-gradient(90deg,
+      #e8e2d6 0, #e8e2d6 20%,
+      #0a0a0a 20%, #0a0a0a 80%,
+      #e8e2d6 80%, #e8e2d6 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  clip-path: inset(0 0 calc((1 - var(--drawbar-position) / 8) * 100%) 0);
+  pointer-events: none;
+}
+
+.organ-drawbar__ticks span {
+  display: grid;
+  place-items: center;
+  color: #ff9e2e;
+  font-size: clamp(7px, 0.7vw, 9px);
+  font-weight: 900;
+}
+
+/* A ponteira: retângulo simples e chapado, como no console de verdade —
+   sem bisel pesado, só uma quina clara em cima e sombra embaixo. */
+.organ-drawbar__grip {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Um pouquinho pra trás (pra cima): fecha o respiro que sobrava entre o
+     último número revelado e a ponteira. */
+  top: calc(var(--drawbar-position) / 8 * var(--drawbar-travel) - 4px);
+  /* 100%: nada do trilho aparece na borda, a ponteira cobre a régua inteira. */
+  width: 100%;
   display: grid;
   align-content: center;
   justify-items: center;
-  gap: 2px;
   height: var(--drawbar-grip);
-  border-radius: 4px;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.55);
+  /* Topo reto (quadrado), só a base arredonda. */
+  border-radius: 3px 3px 30% 30% / 3px 3px 24% 24%;
+  border-top: 1px solid rgba(255, 255, 255, 0.55);
+  border-bottom: 2px solid rgba(0, 0, 0, 0.6);
+  box-shadow: 0 3px 5px rgba(0, 0, 0, 0.55);
 }
 
-.organ-drawbar__grip s {
-  width: 62%;
-  height: 1px;
+.organ-drawbar__grip::before {
+  display: none;
+}
+
+/* O friso do meio: a linha escura que corta a ponteira ao meio nos drawbars
+   de verdade. */
+.organ-drawbar__grip::after {
+  content: '';
+  width: 70%;
+  height: 2px;
+  border-radius: 2px;
   background: rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
-.organ-drawbar--brown .organ-drawbar__grip {
-  background: linear-gradient(180deg, #b07a46, #6d411a);
+.organ-drawbar--red .organ-drawbar__grip {
+  background: #7a1f1f;
 }
 
 .organ-drawbar--white .organ-drawbar__grip {
-  background: linear-gradient(180deg, #f2ead9, #c3b69f);
+  background: #c7c7c7;
 }
 
 .organ-drawbar--black .organ-drawbar__grip {
-  background: linear-gradient(180deg, #514840, #1d1914);
+  background: #17161a;
 }
 
-.organ-drawbar--black .organ-drawbar__grip s {
+.organ-drawbar--black .organ-drawbar__grip::after {
   background: rgba(255, 255, 255, 0.22);
 }
 
@@ -12490,17 +12642,25 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 }
 
 .organ-panel .module-rotary-editor {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 1;
   align-self: start;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  /* Com o Rotary tomando a largura inteira, os botões ficam numa coluna
+     estreita à esquerda e os quatro knobs esticam pelo resto. */
+  grid-template-columns: minmax(150px, .3fr) minmax(0, 1fr);
   grid-template-rows: auto auto;
-  gap: 4px;
+  gap: 10px;
   min-width: 0;
-  padding: 4px;
-  border: 1px solid rgba(47, 124, 230, 0.45);
+  padding: 10px;
+  border: 1px solid rgba(126, 255, 31, 0.4);
   border-radius: 9px;
+}
+
+/* Os cards dos knobs do Rotary também ganham o verde do Hook B3. */
+.organ-panel .module-effect-knob {
+  border-color: rgba(126, 255, 31, 0.35);
+  background: rgba(16, 26, 14, 0.75);
 }
 
 .organ-panel .module-rotary-speed {
@@ -12514,32 +12674,110 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 }
 
 /* Os quatro knobs ficam numa fileira só, ao lado dos botões. */
+/* Os quatro knobs ficam numa fileira só, distribuídos por todo o espaço à
+   direita dos botões — como já estava, sem encolher pra a esquerda. */
 .organ-panel .module-effect-controls--rotary {
   grid-column: 2;
   grid-row: 1 / span 2;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-template-rows: minmax(0, 1fr);
-  gap: 3px;
+  gap: 10px;
 }
 
 .organ-panel .module-rotary-editor :is(.module-rotary-speed button, .module-rotary-modulation) {
-  min-height: clamp(18px, 2.6vh, 26px);
-  padding: 1px 3px;
-  font-size: clamp(7px, .72vw, 10px);
+  min-height: clamp(26px, 4vh, 38px);
+  padding: 3px 6px;
+  font-size: clamp(10px, 1.1vw, 14px);
 }
 
 .organ-panel .module-rotary-editor .module-effect-knob {
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 2px;
-  padding: 3px;
+  gap: 4px;
+  padding: 6px;
 }
 
 .organ-panel .module-rotary-editor .module-effect-knob__face {
-  width: min(38px, 5vh);
+  width: min(58px, 8vh);
 }
 
 .organ-panel .module-rotary-editor :is(.module-effect-knob > span:first-child, .module-effect-knob output) {
-  font-size: clamp(7px, .72vw, 10px);
+  font-size: clamp(10px, 1.1vw, 14px);
+}
+
+/* Celular: bem menor, senão a régua e a ponteira estouravam o painel por
+   baixo. O bloco inteiro encolhe — altura da ponteira, do console e a
+   largura das colunas — para caber na tela toda. O player nativo abre em
+   paisagem no celular (tela larga e baixa), então max-width sozinho nunca
+   batia — o mesmo teste de altura curta usado no resto do Config. 760px
+   pegava tablet também (a altura da paisagem de vários é bem perto disso) —
+   560px fica seguro só para celular. */
+@media (max-width: 560px), (orientation: landscape) and (max-height: 560px) {
+  .organ-drawbar {
+    --drawbar-grip: clamp(22px, 4.2vh, 34px);
+  }
+  .organ-drawbars {
+    /* Sem teto: preenche o que sobrar de verdade no cartão, em vez de parar
+       curto e deixar uma faixa vazia embaixo. */
+    height: 100%;
+    padding: 3px;
+  }
+  .organ-drawbar__feet {
+    font-size: 7px;
+  }
+  .organ-drawbar__ticks span {
+    font-size: 6px;
+  }
+  .organ-drawbar__leds {
+    width: clamp(6px, 1vw, 9px);
+  }
+  .organ-drawbar__leds i {
+    width: clamp(5px, 1vh, 7px);
+  }
+  /* Continua no canto direito, só menor — o título encolhe (ver a seguir)
+     pra abrir espaço, em vez dos controles descerem pra baixo dele. */
+  .organ-header-controls {
+    height: 20px;
+  }
+  .player-modal--module-organ .player-modal__header h2 {
+    font-size: clamp(15px, 5vw, 22px);
+  }
+  .organ-header-controls__toggle {
+    min-height: 20px;
+    padding: 0 6px;
+    font-size: 7px;
+  }
+  .organ-header-controls__volume .module-envelope-knob {
+    width: 18px;
+  }
+  .organ-header-controls__volume span,
+  .organ-header-controls__volume output {
+    font-size: 7px;
+  }
+  /* O Rotary estava do mesmo tamanho do tablet e espremia o espaço das
+     drawbars — aqui ele encolhe junto com o resto. */
+  .organ-panel .module-rotary-editor {
+    grid-template-columns: minmax(70px, .3fr) minmax(0, 1fr);
+    gap: 3px;
+    padding: 3px;
+  }
+  .organ-panel .module-effect-controls--rotary {
+    gap: 3px;
+  }
+  .organ-panel .module-rotary-editor :is(.module-rotary-speed button, .module-rotary-modulation) {
+    min-height: 14px;
+    padding: 0 2px;
+    font-size: 6px;
+  }
+  .organ-panel .module-rotary-editor .module-effect-knob {
+    padding: 2px;
+    gap: 1px;
+  }
+  .organ-panel .module-rotary-editor .module-effect-knob__face {
+    width: min(20px, 3.4vh);
+  }
+  .organ-panel .module-rotary-editor :is(.module-effect-knob > span:first-child, .module-effect-knob output) {
+    font-size: 6px;
+  }
 }
 
 /* Auto Fader do arpeggiator: fica à direita do Gate. */
@@ -13246,6 +13484,21 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   touch-action: none;
 }
 .keyboard-expression:focus-within .keyboard-expression__track { outline: 2px solid var(--wheel-accent); outline-offset: -2px; }
+
+/* Sem isto a fileira do corpo fica do tamanho do conteúdo (auto), e o
+   height: 100% do organ-panel não tem contra quem se apoiar: os faders
+   nasciam colapsados, sem altura para arrastar. */
+.player-modal--module-organ .player-modal__surface {
+  position: relative;
+  gap: clamp(7px, 1.1vh, 12px);
+  padding: clamp(10px, 2vw, 24px);
+}
+.player-modal--module-organ .player-modal__header { position: relative; width: 100%; }
+.player-modal--module-organ .player-modal__header h2 { color: #ffe077; }
+.player-modal--module-organ .player-modal__description:empty { display: none; }
+/* Sem "Módulo 07": o título Hook B3 sobe e sobra mais altura pros faders. */
+.player-modal--module-organ .player-modal__eyebrow { display: none; }
+.player-modal--module-organ .player-modal__body { align-content: stretch; overflow: hidden; }
 
 .player-modal--module-rotary .player-modal__surface {
   position: relative;

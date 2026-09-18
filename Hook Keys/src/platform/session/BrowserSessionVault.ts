@@ -6,10 +6,10 @@ const SESSION_KEY = 'orangekey.session';
 /**
  * Armazenamento persistente da etapa de preview, necessário para abrir sem internet.
  *
- * Bloqueio de release: a fábrica deve substituir esta classe por uma
- * implementação protegida pelo Keychain (iOS) e Keystore (Android) antes da
- * distribuição nas lojas. O contrato evita mudanças no fluxo de autenticação.
- * A implementação nativa segura substituirá esta classe pela fábrica existente.
+ * No app nativo (iOS/Android) a fábrica (createSessionVault) usa o
+ * NativeSessionVault, protegido por Keychain/SharedPreferences com backup, em
+ * vez desta classe — o localStorage da WebView some quando o app é
+ * desinstalado. Esta classe continua servindo o browser e o desktop Tauri.
  */
 export class BrowserSessionVault implements SessionVault {
   private memoryFallback: StoredSession | null = null;

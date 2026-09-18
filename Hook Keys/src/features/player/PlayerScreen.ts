@@ -208,7 +208,10 @@ import {
 } from './PerformanceKeyboard';
 import { ComputerKeyboardController } from './ComputerKeyboardController';
 import { performanceNotesLabel } from './PerformanceChordDisplay';
-import { createOrganMarkup, ORGAN_DRAWBAR_MAX, ORGAN_PRESET_COUNT, readOrganSettings } from './OrganView';
+import {
+  createOrganHeaderControlsMarkup, createOrganMarkup, ORGAN_CLICK_VOLUME_MAX_DB, ORGAN_CLICK_VOLUME_MIN_DB,
+  ORGAN_DRAWBAR_MAX, ORGAN_DRAWBARS, readOrganSettings,
+} from './OrganView';
 import { createTranceGateMarkup, readTranceGateSettings, tranceGateStepBeats } from './TranceGateView';
 import {
   createSynthModuleMarkup,
@@ -514,10 +517,11 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
 }
 
 function isCcMappingKey(value: string): boolean {
-  if (/^module-control:7:tranceGate:(gate|depth|attackMs|releaseMs|swing)$/.test(value)) return true;
+  if (/^module-control:6:tranceGate:(gate|depth|attackMs|releaseMs|swing)$/.test(value)) return true;
   if (/^module-control:[1-8]:synth:sustain$/.test(value)) return false;
   if (/^module:[1-8]$/.test(value)) return true;
   if (/^module-control:7:rotary:(slowHz|fastHz|rampSeconds|depth|mix|speed:(brake|slow|fast))$/.test(value)) return true;
+  if (/^module-control:7:organ:drawbar:[0-8]$/.test(value)) return true;
   if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|compressor:[A-Za-z]+|reverb:[A-Za-z]+|delay:[A-Za-z]+|synth:[A-Za-z]+|arpeggiator:(octaves|gate|swing))$/.test(value)) return true;
   if (/^octave:[1-8]:(up|down)$/.test(value)) return true;
   if (/^power:[1-8]$/.test(value)) return true;
@@ -809,7 +813,8 @@ function createBankState(selectedPreset: number | null = null): BankState {
       name: 'Preset',
       modules: Array.from({ length: MODULE_COUNT }, (_, moduleIndex) => ({
         category: '',
-        enabled: true,
+        // Todo módulo nasce desligado: o usuário liga o que for usar.
+        enabled: false,
         highNote: 96,
         lowNote: 9,
         modulationInputEnabled: true,
@@ -978,9 +983,12 @@ export class PlayerScreen {
   private metronomeFaderDrag: MetronomeFaderDrag | null = null;
   private eqBandDrag: EqBandDrag | null = null;
   private knobDrag: KnobDrag | null = null;
-  private organDrawbarDrag: {
-    track: HTMLElement; pointerId: number; moduleNumber: number;
-  } | null = null;
+  // Um por dedo: no Hammond de verdade dá pra puxar vários drawbars ao mesmo
+  // tempo, então isPrimary não vale aqui — cada ponteiro tem sua própria entrada.
+  private readonly organDrawbarDrags = new Map<number, { track: HTMLElement; moduleNumber: number }>();
+  // Criado só quando o clique do drawbar é usado pela primeira vez: navegador
+  // nenhum deixa abrir AudioContext antes de um gesto do usuário.
+  private organClickAudioContext: AudioContext | null = null;
   // Página aberta no Config. O topo e o rodapé do painel não mudam; só o miolo.
   // Cada módulo lembra a própria página; abrir outro módulo começa na primeira.
   private moduleConfigPage: ModuleSettingsPage = 'envelope';
@@ -3558,7 +3566,9 @@ export class PlayerScreen {
 
   private createPatternPlaybackSnapshot(): PatternPlaybackSnapshot {
     const modules = this.getActivePresetState()?.modules;
-    const arpeggiator = modules?.[5];
+    // Índice 4 = módulo 5, o Arpeggiator. Estava lendo o índice 5 (módulo 6,
+    // o Trance Gate) — sobrou do renumber, e é por isso que o som parava.
+    const arpeggiator = modules?.[4];
     return {
       bpm: this.metronome.getBpm(),
       arpeggiator: {
@@ -5040,6 +5050,7 @@ export class PlayerScreen {
         <header class="player-modal__header">
           <p class="player-modal__eyebrow"></p>
           <h2 id="${titleId}"></h2>
+          ${kind === 'module-organ' ? createOrganHeaderControlsMarkup(moduleState?.settings ?? {}) : ''}
           ${kind === 'sound-selection' ? `
             <span class="sound-library-total">Total - ${formatSoundfontTotal(
               this.soundCatalog.sounds.reduce(
@@ -5581,14 +5592,14 @@ export class PlayerScreen {
       }
       const autoFaderButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-arpeggiator-auto-fader]') : null;
-      if (pageKind() === 'module-arpeggiator' && moduleNumber === 6 && autoFaderButton) {
+      if (pageKind() === 'module-arpeggiator' && moduleNumber === 5 && autoFaderButton) {
         this.selectArpeggiatorAutoFader(modal, autoFaderButton.dataset.arpeggiatorAutoFader ?? '');
         return;
       }
-      const organPresetButton = target instanceof Element
-        ? target.closest<HTMLButtonElement>('[data-organ-preset]') : null;
-      if (pageKind() === 'module-organ' && moduleNumber !== null && organPresetButton) {
-        this.selectOrganPreset(modal, moduleNumber, Number(organPresetButton.dataset.organPreset));
+      const organSoundToggle = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-organ-sound-toggle]') : null;
+      if (kind === 'module-organ' && moduleNumber !== null && organSoundToggle) {
+        this.toggleOrganSound(modal, moduleNumber);
         return;
       }
       const reverbSpaceButton = target instanceof Element
@@ -6282,8 +6293,10 @@ export class PlayerScreen {
       this.startKnobDrag(event, moduleNumber);
     });
     modal.addEventListener('pointermove', (event) => {
-      if (this.moveOrganDrawbarDrag(event)) return;
+      // Sempre primeiro: se não, o Learn no drawbar nunca era cancelado por
+      // um arrasto de verdade, já que o retorno antecipado pulava esta linha.
       this.knobCcLearnGesture.move(event);
+      if (this.moveOrganDrawbarDrag(event)) return;
       this.moveKnobDrag(event);
     });
     modal.addEventListener('pointerup', (event) => {
@@ -6459,6 +6472,10 @@ export class PlayerScreen {
       }
       if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-sustain]')) {
         this.updateModuleSustain(input, moduleNumber);
+        return;
+      }
+      if (kind === 'module-organ' && moduleNumber !== null && input.matches('[data-organ-click-volume]')) {
+        this.updateOrganClickVolume(input, moduleNumber);
         return;
       }
       if (kind === 'module-synth' && moduleNumber === 8 && input.matches('[data-synth-parameter]')) {
@@ -7304,8 +7321,11 @@ export class PlayerScreen {
     moduleState.timbreId = `user:${id}`;
     moduleState.timbreName = name;
     moduleState.timbreColor = normalizeSoundColor(button.dataset.userSoundfontColor);
+    // Trocar de timbre volta a tela para Default, mas sem jogar fora o que o
+    // músico ajustou em User: fica guardado, do mesmo jeito que o botão
+    // Default/User já guarda, para reaparecer se ele voltar para User.
+    if (moduleState.settingsMode === 'user') moduleState.userSettings = cloneSettings(moduleState.settings);
     moduleState.settingsMode = 'default';
-    moduleState.userSettings = null;
     moduleState.settings = this.defaultSettingsForModule(moduleNumber, moduleState);
     // O carregamento nativo pode levar alguns instantes. Marque a escolha no
     // DOM antes de desabilitar o botão para o usuário nunca enxergar um card
@@ -7774,8 +7794,11 @@ export class PlayerScreen {
     if (!moduleState || !isReverbSpace(name)) return;
     const current = readModuleReverbSettings(moduleState.settings.reverb);
     moduleState.settings.reverb = { ...current, ...REVERB_SPACES[name] };
-    const editor = modal.querySelector<HTMLElement>('[data-module-effect-editor="reverb"]');
-    if (editor) editor.outerHTML = createModuleReverbMarkup(moduleState.settings);
+    // createModuleReverbMarkup devolve a página inteira (as abas Room/Hall/
+    // Stage + o editor); trocar só a section de dentro aninhava outra página
+    // inteira a cada clique, e os três botões nunca paravam de se multiplicar.
+    const page = modal.querySelector<HTMLElement>('.module-reverb-page');
+    if (page) page.outerHTML = createModuleReverbMarkup(moduleState.settings);
     this.markPlayerStateChanged();
     void this.syncNativeEngine();
   }
@@ -7861,21 +7884,44 @@ export class PlayerScreen {
     return Math.min(ORGAN_DRAWBAR_MAX, Math.max(0, Math.round(offset / travel * ORGAN_DRAWBAR_MAX)));
   }
 
+  // A régua também é mapeável: cada drawbar vira um module-control próprio,
+  // do mesmo jeito que os knobs comuns.
+  private ccLearnTargetForOrganDrawbar(track: HTMLElement, moduleNumber: number): CcLearnTarget | null {
+    const index = Number(track.dataset.organDrawbarTrack);
+    if (!Number.isInteger(index)) return null;
+    const drawbar = ORGAN_DRAWBARS[index];
+    if (!drawbar) return null;
+    return {
+      kind: 'module-control', moduleNumber, control: `organ:drawbar:${index}`,
+      label: `Drawbar ${drawbar.feet}`,
+    };
+  }
+
   private startOrganDrawbarDrag(event: PointerEvent, moduleNumber: number | null): boolean {
-    if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return false;
+    // Sem isPrimary: cada dedo é um pointerId próprio, e todos precisam poder
+    // começar um arrasto — só o botão do mouse continua exigido fora do touch.
+    if (event.pointerType === 'mouse' && event.button !== 0) return false;
     if (!(event.target instanceof Element) || moduleNumber === null) return false;
     const track = event.target.closest<HTMLElement>('[data-organ-drawbar-track]');
     if (!track) return false;
     event.preventDefault();
     capturePointer(track, event.pointerId);
-    this.organDrawbarDrag = { track, pointerId: event.pointerId, moduleNumber };
+    this.organDrawbarDrags.set(event.pointerId, { track, moduleNumber });
     this.applyOrganDrawbar(track, moduleNumber, this.organDrawbarPositionAt(track, event.clientY));
+    const learnTarget = this.ccLearnTargetForOrganDrawbar(track, moduleNumber);
+    if (!this.desktopRuntime && learnTarget) {
+      this.knobCcLearnGesture.start(event, () => {
+        releasePointer(track, event.pointerId);
+        this.organDrawbarDrags.delete(event.pointerId);
+        this.openCcLearn(learnTarget, track);
+      });
+    }
     return true;
   }
 
   private moveOrganDrawbarDrag(event: PointerEvent): boolean {
-    const drag = this.organDrawbarDrag;
-    if (!drag || drag.pointerId !== event.pointerId) return false;
+    const drag = this.organDrawbarDrags.get(event.pointerId);
+    if (!drag) return false;
     event.preventDefault();
     this.applyOrganDrawbar(
       drag.track, drag.moduleNumber, this.organDrawbarPositionAt(drag.track, event.clientY));
@@ -7883,10 +7929,10 @@ export class PlayerScreen {
   }
 
   private endOrganDrawbarDrag(event: PointerEvent): void {
-    const drag = this.organDrawbarDrag;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    releasePointer(drag.track, drag.pointerId);
-    this.organDrawbarDrag = null;
+    const drag = this.organDrawbarDrags.get(event.pointerId);
+    if (!drag) return;
+    releasePointer(drag.track, event.pointerId);
+    this.organDrawbarDrags.delete(event.pointerId);
     void this.syncNativeEngine();
   }
 
@@ -7906,19 +7952,70 @@ export class PlayerScreen {
     if (input) input.value = String(position);
     const output = bar?.querySelector<HTMLOutputElement>('[data-organ-drawbar-value]');
     if (output) output.value = String(position);
+    // Dois LEDs por estágio: o mesmo cálculo do createOrganMarkup.
+    bar?.querySelectorAll('.organ-drawbar__leds i').forEach((led, ledIndex) => {
+      led.classList.toggle('is-lit', ledIndex + 1 <= position * 2);
+    });
+    if (!settings.soundEnabled) this.playOrganClick(settings.clickVolumeDb);
     this.markPlayerStateChanged();
   }
 
-  private selectOrganPreset(modal: HTMLElement, moduleNumber: number, preset: number): void {
+  // Um clique curto e seco, só de referência: toca no lugar do timbre real
+  // quando o Drawbar Sound está desligado, um por estágio arrastado.
+  private playOrganClick(volumeDb: number): void {
+    try {
+      const AudioContextClass = window.AudioContext
+        ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const context = this.organClickAudioContext ??= new AudioContextClass();
+      if (context.state === 'suspended') void context.resume();
+      const now = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'square';
+      oscillator.frequency.setValueAtTime(1_400, now);
+      const peak = 10 ** (volumeDb / 20);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(peak, now + 0.002);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.06);
+    } catch {
+      // Sem áudio de clique: os LEDs e o número já dão o feedback visual.
+    }
+  }
+
+  private updateOrganClickVolume(input: HTMLInputElement, moduleNumber: number): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
-    if (!moduleState || !Number.isInteger(preset) || preset < 1 || preset > ORGAN_PRESET_COUNT) return;
+    if (!moduleState) return;
     const settings = readOrganSettings(moduleState.settings.organ);
-    settings.preset = preset;
+    const value = Math.min(ORGAN_CLICK_VOLUME_MAX_DB, Math.max(ORGAN_CLICK_VOLUME_MIN_DB, Number(input.value) || 0));
+    settings.clickVolumeDb = value;
     moduleState.settings.organ = settings;
-    const panel = modal.querySelector<HTMLElement>('[data-organ-panel]');
-    if (panel) panel.outerHTML = createOrganMarkup(moduleState.settings);
+    const progress = (value - ORGAN_CLICK_VOLUME_MIN_DB) / (ORGAN_CLICK_VOLUME_MAX_DB - ORGAN_CLICK_VOLUME_MIN_DB);
+    const knob = input.closest<HTMLElement>('.module-envelope-knob');
+    knob?.style.setProperty('--knob-angle', `${-135 + progress * 270}deg`);
+    knob?.style.setProperty('--knob-progress', String(progress));
+    const label = `${value.toFixed(0)} dB`;
+    input.setAttribute('aria-valuetext', label);
+    const output = input.closest<HTMLElement>('.organ-header-controls__volume')?.querySelector<HTMLOutputElement>('output');
+    if (output) output.value = label;
     this.markPlayerStateChanged();
-    void this.syncNativeEngine();
+  }
+
+  private toggleOrganSound(modal: HTMLElement, moduleNumber: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState) return;
+    const settings = readOrganSettings(moduleState.settings.organ);
+    settings.soundEnabled = !settings.soundEnabled;
+    moduleState.settings.organ = settings;
+    const toggle = modal.querySelector<HTMLButtonElement>('[data-organ-sound-toggle]');
+    toggle?.classList.toggle('is-on', settings.soundEnabled);
+    toggle?.classList.toggle('is-off', !settings.soundEnabled);
+    toggle?.setAttribute('aria-pressed', String(settings.soundEnabled));
+    this.markPlayerStateChanged();
   }
 
   // Sustain: o nível em que a nota segura enquanto a tecla está presa.
@@ -8157,8 +8254,12 @@ export class PlayerScreen {
     // progressive acceleration. Desktop uses a constant mouse sensitivity in
     // the knob's own domain (including logarithmic cutoff positions), except
     // for wide ranges, which get the mouse curve below.
+    // A curva estava exigindo dedo demais: uns 250-260px para varrer o knob
+    // inteiro. O termo fino (perto da origem, /3) fica igual — é o que dá o
+    // passo exato de 1 unidade a cada 3px —, só o termo de aceleração ficou
+    // mais forte (240 no lugar de 500), então o curso inteiro cabe em ~180px.
     const acceleratedDelta = (domainRange: number, domainStep = fineStep) => direction * (
-      (distance / 3) * domainStep + Math.pow(distance / 500, 3) * domainRange
+      (distance / 3) * domainStep + Math.pow(distance / 240, 3) * domainRange
     );
     let rawValue: number;
     let steppedValue: number;
@@ -8307,7 +8408,7 @@ export class PlayerScreen {
 
   private ccLearnTargetForKnob(input: HTMLInputElement, moduleNumber: number): CcLearnTarget | null {
     const tranceGateParameter = input.dataset.tranceGateParameter;
-    if (moduleNumber === 7 && tranceGateParameter) {
+    if (moduleNumber === 6 && tranceGateParameter) {
       return { kind: 'module-control', moduleNumber, control: `tranceGate:${tranceGateParameter}`,
         label: input.ariaLabel || tranceGateParameter };
     }
@@ -8329,7 +8430,7 @@ export class PlayerScreen {
     }
     const patternKind = input.dataset.patternKind;
     const patternParameter = input.dataset.patternParameter;
-    if (moduleNumber === 6 && patternKind === 'arpeggiator' && patternParameter) {
+    if (moduleNumber === 5 && patternKind === 'arpeggiator' && patternParameter) {
       return {
         kind: 'module-control',
         moduleNumber,
@@ -8361,6 +8462,22 @@ export class PlayerScreen {
     }
     if (control === 'cutoff') {
       moduleState.settings.cutoffHz = cutoffFrequencyFromRatio(progress);
+      this.markPlayerStateChanged();
+      return;
+    }
+
+    if (moduleNumber === 7 && control.startsWith('organ:drawbar:')) {
+      const index = Number(control.slice('organ:drawbar:'.length));
+      if (!Number.isInteger(index)) return;
+      const settings = readOrganSettings(moduleState.settings.organ);
+      const position = Math.round(progress * ORGAN_DRAWBAR_MAX);
+      if (settings.drawbars[index] === position) return;
+      settings.drawbars[index] = position;
+      moduleState.settings.organ = settings;
+      if (this.currentModalKind === 'module-organ') {
+        const panel = this.modal?.querySelector<HTMLElement>('[data-organ-panel]');
+        if (panel) panel.outerHTML = createOrganMarkup(moduleState.settings);
+      }
       this.markPlayerStateChanged();
       return;
     }
@@ -8399,7 +8516,7 @@ export class PlayerScreen {
       return;
     }
 
-    if (moduleNumber === 6 && control.startsWith('arpeggiator:')) {
+    if (moduleNumber === 5 && control.startsWith('arpeggiator:')) {
       const parameter = control.slice('arpeggiator:'.length);
       const ranges: Record<string, readonly [number, number]> = {
         octaves: [1, 4],
@@ -8417,7 +8534,7 @@ export class PlayerScreen {
       return;
     }
 
-    if (moduleNumber === 7 && control.startsWith('tranceGate:')) {
+    if (moduleNumber === 6 && control.startsWith('tranceGate:')) {
       const parameter = control.slice('tranceGate:'.length);
       const ranges: Record<string, readonly [number, number]> = {
         gate: [5, 100], depth: [0, 100], attackMs: [0.1, 100], releaseMs: [0.1, 100], swing: [0, 75],
@@ -9155,15 +9272,24 @@ export class PlayerScreen {
       select.dataset.appSelectEnhanced = 'true';
       select.classList.add('app-select__native');
       select.tabIndex = -1;
-      // O select nativo fica dentro de um <label>: tocar no rótulo repassava o
-      // toque para ele e o iOS abria o seletor do sistema por cima do próprio.
+      // O select nativo fica dentro de um <label>: mesmo escondido, tocar em
+      // qualquer lugar do rótulo (inclusive nos nossos próprios botões, já
+      // que o clique borbulha até o <label>) ativa o controle associado por
+      // padrão do navegador, e o iOS abre o seletor do sistema por cima do
+      // nosso. Isso vale sempre, não só fora do widget — por isso não há
+      // exceção aqui: os outros listeners de clique continuam funcionando
+      // normalmente, pois preventDefault não impede outros ouvintes.
       const label = select.closest<HTMLLabelElement>('label');
       if (label && label.dataset.appSelectLabelGuard !== 'true') {
         label.dataset.appSelectLabelGuard = 'true';
-        label.addEventListener('click', (event) => {
-          if (event.target instanceof Element && event.target.closest('.app-select')) return;
-          event.preventDefault();
-        });
+        // O clique cobre o "ativar o controle associado" do navegador, mas no
+        // Safari/WKWebView do iOS o picker nativo pode começar a abrir já no
+        // toque (pointerdown/mousedown), antes do click — daí ele pisca e
+        // fecha em vez de nem aparecer. Previne nos três.
+        const preventLabelDefault = (event: Event) => event.preventDefault();
+        label.addEventListener('click', preventLabelDefault);
+        label.addEventListener('mousedown', preventLabelDefault);
+        label.addEventListener('pointerdown', preventLabelDefault);
       }
       const custom = document.createElement('div');
       custom.className = 'app-select';
@@ -9482,8 +9608,11 @@ export class PlayerScreen {
     moduleState.timbreId = `fixed:${sound.id}`;
     moduleState.timbreName = sound.name;
     moduleState.timbreColor = sound.color;
+    // Trocar de timbre volta a tela para Default, mas sem jogar fora o que o
+    // músico ajustou em User: fica guardado, do mesmo jeito que o botão
+    // Default/User já guarda, para reaparecer se ele voltar para User.
+    if (moduleState.settingsMode === 'user') moduleState.userSettings = cloneSettings(moduleState.settings);
     moduleState.settingsMode = 'default';
-    moduleState.userSettings = null;
     moduleState.settings = this.defaultSettingsForModule(moduleNumber, moduleState);
     if (button) {
       for (const candidate of button.parentElement?.querySelectorAll<HTMLButtonElement>('[data-fixed-sound-id]') ?? []) {

@@ -28,12 +28,22 @@ void prepareRealtimeFloatingPoint() noexcept {
 NativeEngineRuntime::NativeEngineRuntime(double sampleRate, std::size_t maximumBlockFrames)
     : sampleRate_(std::clamp(sampleRate, 8000.0, 384000.0)),
       maximumBlockFrames_(std::clamp<std::size_t>(maximumBlockFrames, 16, 8192)),
+      organModule_(std::make_unique<OrganModule>(sampleRate_, maximumBlockFrames_)),
       layerScratch_(maximumBlockFrames_ * 32, 0.0f),
       stereoScratch_(maximumBlockFrames_ * 2, 0.0f),
       tracks_(std::make_unique<TrackPlayer>(sampleRate_)) {
   layers_.reserve(kMaximumPresetLayers);
   layers_.push_back(createPresetLayer());
   controlLayer_ = renderLayer_ = layers_.back().get();
+}
+
+bool NativeEngineRuntime::loadOrganVoice(std::size_t drawbarIndex, const char* utf8Path) noexcept {
+  std::scoped_lock lock(soundFontMutex_);
+  return organModule_->loadVoice(drawbarIndex, utf8Path);
+}
+
+void NativeEngineRuntime::setOrganDrawbarPosition(std::size_t drawbarIndex, std::uint8_t position) noexcept {
+  organModule_->setDrawbarPosition(drawbarIndex, position);
 }
 
 std::unique_ptr<NativeEngineRuntime::PresetLayer> NativeEngineRuntime::createPresetLayer() {
@@ -627,6 +637,9 @@ HookKeysEngine::SynthModules NativeEngineRuntime::modulePointers(
     AnalogSynthModule* synth) noexcept {
   HookKeysEngine::SynthModules pointers{};
   for (std::size_t index = 0; index < modules.size(); ++index) pointers[index] = modules[index].get();
+  // Módulo 7 (índice 6) é o Organ, não o TinySoundFontModule avulso do
+  // array: uma instância só, compartilhada por todas as camadas de preset.
+  pointers[6] = organModule_.get();
   pointers[kModuleCount - 1] = synth;
   return pointers;
 }

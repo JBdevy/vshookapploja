@@ -97,7 +97,7 @@ try {
   for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 0);
   assert.equal(noteDisplay.textContent, '—', 'limpa quando solta as teclas');
   player.receiveMidiNote(69, 127);
-  assert.equal(noteDisplay.textContent, 'A4', 'nota isolada mostra a oitava');
+  assert.equal(noteDisplay.textContent, 'A3', 'nota isolada mostra a oitava');
   player.receiveMidiNote(69, 0);
   for (const [notes, expected] of [
     [[55, 59, 62], 'G'],
@@ -128,7 +128,7 @@ try {
   player.receiveMidiNote(60, 127);
   player.receiveMidiNote(61, 127);
   player.receiveMidiNote(62, 127);
-  assert.equal(noteDisplay.textContent, 'C4 · C#4 · D4', 'cluster não reconhecido continua mostrando notas');
+  assert.equal(noteDisplay.textContent, 'C3 · C#3 · D3', 'cluster não reconhecido continua mostrando notas');
   for (const note of [60, 61, 62]) player.receiveMidiNote(note, 0);
   {
     const modal = window.document.createElement('div');
@@ -257,7 +257,9 @@ try {
     player.applySavedPlayerState(current);
   }
   assert(calls.some(({ command }) => command === 'initialize'), 'mount deve iniciar o motor');
-  assert(calls.some(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === 7 && args.config.enabled), 'Synth deve chegar ativado ao motor');
+  // Todo módulo nasce desligado, o Synth incluído: o músico liga o que for usar.
+  assert(calls.filter(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === 7)
+    .every(({ args }) => !args.config.enabled), 'Synth nasce desligado como qualquer outro módulo');
   assert(calls.filter(({ command }) => command === 'configure_module_effects')
     .every(({ args }) => args.config.compressorMix === 0), 'compressor desligado não recebe mix ativo no boot');
   root.querySelector('[data-action="toggle-metronome"]').click();
@@ -1111,6 +1113,9 @@ try {
     assert.equal(player.activeBank, 'A');
     assert.equal(player.bankStates.get('A').selectedPreset, 2);
   }
+  // O módulo nasce desligado: sem ligá-lo, não haveria sinal para o medidor
+  // do compressor mostrar mais abaixo.
+  root.querySelector('[data-action="toggle-module"][data-module="1"]').click();
   player.openModal('module-eq', 1, master);
   assert.equal(window.document.querySelector('[data-module-eq-rta]'), null,
     'EQ permanece leve e sem RTA');
@@ -1212,6 +1217,9 @@ try {
   };
   const preset = player.getActivePresetState();
   preset.modules[0].category = 'user';
+  // O módulo nasce desligado: liga primeiro, para o clique de baixo desligar
+  // de verdade e testar o OFF chegando ao motor durante o carregamento.
+  root.querySelector('[data-module="8"] .player-module__power-button').click();
   player.openModal('sound-selection', 1, master);
   await new Promise(resolve => setTimeout(resolve, 10));
   const firstButton = window.document.querySelector('[data-user-soundfont-id="a"]');
@@ -1242,6 +1250,12 @@ try {
   assert(!window.document.querySelector('[data-pattern-parameter="semitone"]'));
   assert.equal(player.createPatternPlaybackSnapshot().sequencer, undefined,
     'o antigo gerador de notas do sequencer não existe mais');
+  // Regressão do renumber: o snapshot lia modules[5] (Trance Gate, módulo 6)
+  // no lugar de modules[4] (Arpeggiator, módulo 5) — o som parava de sair.
+  preset.modules[4].timbreId = 'fixed:arp-voice';
+  preset.modules[5].timbreId = null;
+  const arpSnapshot = player.createPatternPlaybackSnapshot().arpeggiator;
+  assert.equal(arpSnapshot.hasSound, true, 'o snapshot lê o timbre do módulo 5, não do módulo 6');
   const step = window.document.querySelector('[data-trance-gate-step="1"]');
   step.click();
   await player.syncNativeEngine();

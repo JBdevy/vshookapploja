@@ -8,6 +8,7 @@ add_library(hook_keys_engine STATIC
   src/HookKeysEngine.cpp
   src/ModuleEffects.cpp
   src/NativeEngineRuntime.cpp
+  src/OrganModule.cpp
   src/TinySoundFontImplementation.cpp
   src/TinySoundFontModule.cpp
 )

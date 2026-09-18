@@ -2,6 +2,7 @@
 
 #include "hook_keys/AnalogSynthModule.hpp"
 #include "hook_keys/HookKeysEngine.hpp"
+#include "hook_keys/OrganModule.hpp"
 #include "hook_keys/TinySoundFontModule.hpp"
 #include "hook_keys/TrackPlayer.hpp"
 
@@ -84,6 +85,11 @@ public:
   void setMidiInputEnabled(bool enabled) noexcept;
   void setCompatibilityMode(bool enabled) noexcept { compatibilityMode_.store(enabled, std::memory_order_release); }
   bool setTranceGate(std::size_t moduleIndex, ModuleEffectsConfig::TranceGateConfig config) noexcept;
+  // Hook B3: os nove SF2 dos drawbars, fixos e compartilhados por todo
+  // preset (carregados uma vez só, nunca por camada — são ~200 MB juntos).
+  // drawbarIndex vai de 0 (16') a 8 (1'), a mesma ordem do app.
+  [[nodiscard]] bool loadOrganVoice(std::size_t drawbarIndex, const char* utf8Path) noexcept;
+  void setOrganDrawbarPosition(std::size_t drawbarIndex, std::uint8_t position) noexcept;
   void render(float* left, float* right, std::size_t frames) noexcept;
   void renderInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
 
@@ -109,12 +115,15 @@ private:
   void touchSoundFontCacheLocked(const std::string& path) noexcept;
   void trimSoundFontCacheLocked() noexcept;
   void publishAudioLoad(float load) noexcept;
-  static HookKeysEngine::SynthModules modulePointers(
+  HookKeysEngine::SynthModules modulePointers(
       const std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount - 1>& modules,
       AnalogSynthModule* synth) noexcept;
 
   double sampleRate_ = 48000.0;
   std::size_t maximumBlockFrames_ = 512;
+  // Módulo 7 (índice 6): o Organ não mora no array acima. Uma instância só,
+  // dividida entre todas as camadas de preset — ver o comentário da classe.
+  std::unique_ptr<OrganModule> organModule_;
   struct PresetLayer final {
     std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount - 1> modules{};
     std::unique_ptr<AnalogSynthModule> synth;

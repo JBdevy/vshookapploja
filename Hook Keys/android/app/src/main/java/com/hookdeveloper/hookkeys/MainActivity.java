@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(HookKeysNativePlugin.class);
+        registerPlugin(SessionVaultPlugin.class);
         super.onCreate(savedInstanceState);
         enableImmersiveMode();
     }

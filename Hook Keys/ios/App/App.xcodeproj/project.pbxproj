@@ -19,6 +19,7 @@
 		A10000000000000000000006 /* NativeEngineRuntime.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* NativeEngineRuntime.cpp */; };
 		A10000000000000000000007 /* TinySoundFontImplementation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* TinySoundFontImplementation.cpp */; settings = {COMPILER_FLAGS = "-w"; }; };
 		A10000000000000000000008 /* TinySoundFontModule.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* TinySoundFontModule.cpp */; };
+		A10000000000000000000009 /* SessionVaultPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* SessionVaultPlugin.swift */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -35,6 +36,7 @@
 		A20000000000000000000003 /* HookKeysNativeEngine.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = HookKeysNativeEngine.mm; sourceTree = "<group>"; };
 		A20000000000000000000004 /* HookKeysNativeEngine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HookKeysNativeEngine.h; sourceTree = "<group>"; };
 		A20000000000000000000005 /* HookKeys-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "HookKeys-Bridging-Header.h"; sourceTree = "<group>"; };
+		A20000000000000000000006 /* SessionVaultPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionVaultPlugin.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* HookKeysEngine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = HookKeysEngine.cpp; path = "../../native-engine/src/HookKeysEngine.cpp"; sourceTree = SOURCE_ROOT; };
 		A20000000000000000000011 /* ModuleEffects.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ModuleEffects.cpp; path = "../../native-engine/src/ModuleEffects.cpp"; sourceTree = SOURCE_ROOT; };
 		A20000000000000000000012 /* NativeEngineRuntime.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = NativeEngineRuntime.cpp; path = "../../native-engine/src/NativeEngineRuntime.cpp"; sourceTree = SOURCE_ROOT; };
@@ -88,6 +90,7 @@
 				A20000000000000000000003 /* HookKeysNativeEngine.mm */,
 				A20000000000000000000004 /* HookKeysNativeEngine.h */,
 				A20000000000000000000005 /* HookKeys-Bridging-Header.h */,
+				A20000000000000000000006 /* SessionVaultPlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -199,6 +202,7 @@
 				A10000000000000000000006 /* NativeEngineRuntime.cpp in Sources */,
 				A10000000000000000000007 /* TinySoundFontImplementation.cpp in Sources */,
 				A10000000000000000000008 /* TinySoundFontModule.cpp in Sources */,
+				A10000000000000000000009 /* SessionVaultPlugin.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

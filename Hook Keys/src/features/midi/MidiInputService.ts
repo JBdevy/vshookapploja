@@ -50,7 +50,9 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 export function formatMidiNote(noteNumber: number): string {
   const safeNote = Math.min(127, Math.max(0, Math.round(noteNumber)));
   const noteName = NOTE_NAMES[safeNote % NOTE_NAMES.length] ?? 'C';
-  const octave = Math.floor(safeNote / NOTE_NAMES.length) - 1;
+  // Convenção Yamaha/Casio (a mesma da maioria dos teclados dos usuários): a
+  // nota do meio (60) é C3, não C4.
+  const octave = Math.floor(safeNote / NOTE_NAMES.length) - 2;
   return `${noteName}${octave}`;
 }
 

@@ -1,8 +1,12 @@
+import { Capacitor } from '@capacitor/core';
 import { BrowserSessionVault } from './BrowserSessionVault';
+import { NativeSessionVault } from './NativeSessionVault';
 import type { SessionVault } from './SessionVault';
 
 export function createSessionVault(): SessionVault {
-  // Nesta etapa, navegador e protótipo nativo compartilham o vault de sessão.
-  // A troca pelo vault nativo seguro acontece somente aqui, sem alterar o app.
+  // No app nativo (iOS/Android) a sessão mora no Keychain/SharedPreferences,
+  // que sobrevivem a desinstalar e reinstalar; no browser e no desktop Tauri
+  // continua no localStorage, que é o que existe nesses ambientes.
+  if (Capacitor.isNativePlatform()) return new NativeSessionVault();
   return new BrowserSessionVault();
 }

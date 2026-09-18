@@ -683,9 +683,14 @@ test('diagnóstico da rota mostra o Áudio Mono do iOS (soma L+R só nas saídas
   assert.match(plugin, /UIAccessibility\.isMonoAudioEnabled/);
 });
 
-test('seletor próprio: tocar no rótulo não abre o select nativo do sistema', () => {
+test('seletor próprio: tocar no rótulo (ou nos próprios botões dentro dele) não abre o select nativo do sistema', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /label\.addEventListener\('click', \(event\) => \{\s*if \(event\.target instanceof Element && event\.target\.closest\('\.app-select'\)\) return;\s*event\.preventDefault\(\);/);
+  // preventDefault tem que valer sempre: como o clique nos nossos botões
+  // borbulha até o <label>, uma exceção para dentro de .app-select deixava o
+  // navegador ativar o select nativo por baixo do nosso, exatamente quando o
+  // usuário escolhia uma opção. No iOS o picker pode começar a abrir já no
+  // toque, então mousedown/pointerdown também precisam ser prevenidos.
+  assert.match(player, /const preventLabelDefault = \(event: Event\) => event\.preventDefault\(\);\s*label\.addEventListener\('click', preventLabelDefault\);\s*label\.addEventListener\('mousedown', preventLabelDefault\);\s*label\.addEventListener\('pointerdown', preventLabelDefault\);/);
   const native = css.match(/\n\.app-select__native \{[^}]*\}/)[0];
   assert.match(native, /min-height: 0 !important;/);
   assert.match(native, /pointer-events: none !important;/);
