@@ -185,12 +185,17 @@ struct ReverbConfig final {
   float dampen = 0.45f;
   float size = 0.50f;
   float mix = 0.20f;
+  // Balança a leitura de cada linha de atraso por uma fração de amostra, numa
+  // taxa fixa e com fases diferentes por linha: dá o "shimmer" de reverbs de
+  // prato/sala de verdade, sem ficar robótico. 0 desliga (comportamento antigo).
+  float mod = 0.0f;
 
   void normalize() noexcept {
     decay = std::clamp(decay, 0.0f, 1.0f);
     dampen = std::clamp(dampen, 0.0f, 1.0f);
     size = std::clamp(size, 0.0f, 1.0f);
     mix = std::clamp(mix, 0.0f, 1.0f);
+    mod = std::clamp(mod, 0.0f, 1.0f);
   }
 };
 

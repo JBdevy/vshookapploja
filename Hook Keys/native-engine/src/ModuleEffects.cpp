@@ -42,7 +42,7 @@ bool sameDelay(const DelayConfig& left, const DelayConfig& right) noexcept {
 
 bool sameReverb(const ReverbConfig& left, const ReverbConfig& right) noexcept {
   return left.enabled == right.enabled && left.decay == right.decay && left.dampen == right.dampen &&
-         left.size == right.size && left.mix == right.mix;
+         left.size == right.size && left.mix == right.mix && left.mod == right.mod;
 }
 
 bool sameRotary(const RotaryConfig& left, const RotaryConfig& right) noexcept {
@@ -693,8 +693,21 @@ void ModuleEffects::ReverbDelayLine::reset() noexcept {
   filtered = 0.0f;
 }
 
-float ModuleEffects::ReverbDelayLine::processComb(float input, float feedback, float dampen) noexcept {
-  const auto output = buffer[index];
+float ModuleEffects::ReverbDelayLine::processComb(
+    float input, float feedback, float dampen, float modOffset) noexcept {
+  float output;
+  if (modOffset == 0.0f) {
+    output = buffer[index];
+  } else {
+    const auto size = static_cast<float>(length);
+    auto readPosition = static_cast<float>(index) + modOffset;
+    readPosition = std::fmod(readPosition, size);
+    if (readPosition < 0.0f) readPosition += size;
+    const auto baseIndex = static_cast<std::size_t>(readPosition);
+    const auto fraction = readPosition - static_cast<float>(baseIndex);
+    const auto nextIndex = baseIndex + 1 >= length ? 0 : baseIndex + 1;
+    output = buffer[baseIndex] * (1.0f - fraction) + buffer[nextIndex] * fraction;
+  }
   filtered = output * (1.0f - dampen) + filtered * dampen;
   buffer[index] = input + filtered * feedback;
   index = (index + 1) % length;
@@ -739,6 +752,7 @@ void ModuleEffects::Reverb::reset() noexcept {
   for (auto& line : combRight) line.reset();
   for (auto& line : allPassLeft) line.reset();
   for (auto& line : allPassRight) line.reset();
+  modPhase = 0.0;
 }
 
 void ModuleEffects::Reverb::process(float* left, float* right, std::size_t frames) noexcept {
@@ -748,20 +762,39 @@ void ModuleEffects::Reverb::process(float* left, float* right, std::size_t frame
   // 50% para cima o original é que vai embora, até sobrar só o processado.
   const auto dryGain = config.mix <= 0.5f ? 1.0f : 1.0f - (config.mix - 0.5f) * 2.0f;
   const auto wetGain = config.mix <= 0.5f ? config.mix * 2.0f : 1.0f;
+  // Taxa fixa (baixa o bastante pra não virar vibrato) e uma fase por linha,
+  // pra balançar sem ficar robótico. Até 1,8 amostra no fundo, suave.
+  constexpr double kTwoPi = 6.28318530717958647692;
+  constexpr double kModRateHz = 0.37;
+  constexpr float kModMaxSamples = 1.8f;
+  const auto modPhaseStep = kTwoPi * kModRateHz / sampleRate;
+  const auto modDepth = config.mod * kModMaxSamples;
   for (std::size_t frame = 0; frame < frames; ++frame) {
     const auto dryLeft = left[frame];
     const auto dryRight = right[frame];
     const auto input = (dryLeft + dryRight) * 0.12f;
     float wetLeft = 0.0f;
     float wetRight = 0.0f;
-    for (auto& line : combLeft) wetLeft += line.processComb(input, feedback, config.dampen);
-    for (auto& line : combRight) wetRight += line.processComb(input, feedback, config.dampen);
+    if (modDepth > 0.0f) {
+      for (std::size_t index = 0; index < combLeft.size(); ++index) {
+        const auto phase = modPhase + index * (kTwoPi / combLeft.size());
+        wetLeft += combLeft[index].processComb(input, feedback, config.dampen,
+            modDepth * static_cast<float>(std::sin(phase)));
+        wetRight += combRight[index].processComb(input, feedback, config.dampen,
+            modDepth * static_cast<float>(std::sin(phase + kTwoPi * 0.25)));
+      }
+    } else {
+      for (auto& line : combLeft) wetLeft += line.processComb(input, feedback, config.dampen);
+      for (auto& line : combRight) wetRight += line.processComb(input, feedback, config.dampen);
+    }
     wetLeft *= 0.25f;
     wetRight *= 0.25f;
     for (auto& line : allPassLeft) wetLeft = line.processAllPass(wetLeft);
     for (auto& line : allPassRight) wetRight = line.processAllPass(wetRight);
     left[frame] = dryLeft * dryGain + wetLeft * wetGain;
     right[frame] = dryRight * dryGain + wetRight * wetGain;
+    modPhase += modPhaseStep;
+    if (modPhase >= kTwoPi) modPhase -= kTwoPi;
   }
 }
 

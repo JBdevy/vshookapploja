@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { Window } from 'happy-dom';
 
 function load(path, modules = {}, globals = {}) {
   const context = { exports: {}, ...globals, require(specifier) {
@@ -143,6 +144,41 @@ test('real Rotary handlers update module 5, retain parameters through ON/OFF and
   assert.deepEqual(modules[3].settings, {});
 });
 
+test('clicking Room, Hall or Stage replaces the reverb page instead of nesting a new one', () => {
+  const names = ['selectReverbSpace'];
+  const source = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const ast = ts.createSourceFile('PlayerScreen.ts', source, ts.ScriptTarget.Latest, true);
+  const player = ast.statements.find((node) => ts.isClassDeclaration(node) && node.name?.text === 'PlayerScreen');
+  const methods = names.map((name) => {
+    const method = player.members.find((node) => ts.isMethodDeclaration(node) && node.name?.getText(ast) === name);
+    assert(method, `Missing real handler: ${name}`);
+    return method.getText(ast);
+  }).join('\n');
+  const context = { exports: {}, ...effects };
+  vm.runInNewContext(ts.transpileModule(`export class Handlers { ${methods} }`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, context);
+  const screen = new context.exports.Handlers();
+  const window = new Window({ settings: { enableJavaScriptEvaluation: true } });
+  const modal = window.document.createElement('div');
+  modal.innerHTML = effects.createModuleReverbMarkup({});
+  window.document.body.appendChild(modal);
+  const moduleState = { settings: {} };
+  Object.assign(screen, {
+    getActivePresetState: () => ({ modules: [moduleState] }),
+    markPlayerStateChanged: () => {},
+    syncNativeEngine: async () => {},
+  });
+  for (let click = 0; click < 3; click += 1) {
+    screen.selectReverbSpace(modal, 1, 'hall');
+    assert.equal(modal.querySelectorAll('.module-reverb-page').length, 1,
+      `still a single reverb page after click ${click + 1}`);
+    assert.equal(modal.querySelectorAll('.module-reverb-spaces button').length, 3,
+      `still exactly Room/Hall/Stage after click ${click + 1}, not multiplying`);
+  }
+  window.close();
+});
+
 test('Modulation toggle persists; CC 1 updates the correct module only at Slow/Fast crossings; mapped buttons use press edges', () => {
   const { Handlers, isCcMappingKey } = loadPlayerHandlers([
     'toggleRotaryModulation', 'receiveRotaryModulation', 'setModuleRotarySpeed', 'mappedCcRatio', 'handleMidiControlChange',
@@ -260,6 +296,33 @@ test('all native bridges forward Rotary modulation enablement', () => {
     '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
   ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('rotaryModulationEnabled'), path);
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('rotary_modulation_enabled'));
+});
+
+test('all native bridges forward the Cutoff filter type and envelope', () => {
+  for (const path of [
+    '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
+    '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
+    '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+  ]) {
+    const content = readFileSync(new URL(path, import.meta.url), 'utf8');
+    assert(content.includes('cutoffFilterType'), `${path} missing cutoffFilterType`);
+    assert(content.includes('cutoffEnvelopeEnabled'), `${path} missing cutoffEnvelopeEnabled`);
+    assert(content.includes('cutoffEnvelopeDepthOctaves'), `${path} missing cutoffEnvelopeDepthOctaves`);
+  }
+  const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+  assert(rust.includes('cutoff_filter_type'));
+  assert(rust.includes('cutoff_envelope_depth_octaves'));
+});
+
+test('all native bridges forward the Reverb Mod knob', () => {
+  for (const path of [
+    '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
+    '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
+    '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+  ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('reverbMod'), path);
+  assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('reverb_mod'));
 });
 
 test('entry lasts three seconds, logout six, both keep the animation except the keyboard and share bold italic typography', () => {

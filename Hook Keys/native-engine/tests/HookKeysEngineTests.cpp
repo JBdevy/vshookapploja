@@ -1342,6 +1342,34 @@ void testReverbProcessing() {
   expect(tailEnergy > 0.01, "reverb creates an audible tail");
 }
 
+void testReverbMod() {
+  const auto renderTail = [](float mod) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0);
+    hook_keys::ModuleEffectsConfig config;
+    config.reverb.enabled = true;
+    config.reverb.decay = 0.7f;
+    config.reverb.dampen = 0.4f;
+    config.reverb.size = 0.5f;
+    config.reverb.mix = 1.0f;
+    config.reverb.mod = mod;
+    effects.setConfig(config, 120.0f);
+    std::vector<float> left(8192, 0.0f), right(8192, 0.0f);
+    left[0] = right[0] = 1.0f;
+    effects.process(left.data(), right.data(), left.size());
+    return left;
+  };
+  const auto still = renderTail(0.0f);
+  const auto modulated = renderTail(1.0f);
+  bool differs = false;
+  for (std::size_t index = 0; index < still.size(); ++index) {
+    if (std::abs(still[index] - modulated[index]) > 1e-6f) { differs = true; break; }
+  }
+  expect(differs, "Mod audibly changes the reverb tail compared to Mod off");
+  const auto stillAgain = renderTail(0.0f);
+  expect(still == stillAgain, "Mod off keeps the exact old reverb tail (no regression)");
+}
+
 void testIndependentOscillatorVolumes() {
   const auto render = [](float volume1, float volume2, bool enabled1, bool enabled2) {
     hook_keys::AnalogSynthModule synth(48000.0);
@@ -2639,6 +2667,7 @@ int main() {
   testCompressorProcessing();
   testDelayProcessing();
   testReverbProcessing();
+  testReverbMod();
   testRotarySpeakerProcessing();
   testRotaryLeslieAmplitudeModulation();
   testEqualizerControlsTreble();

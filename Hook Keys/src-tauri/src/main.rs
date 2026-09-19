@@ -109,6 +109,13 @@ unsafe extern "C" {
         module_index: usize,
         cutoff_hz: f32,
         cutoff_velocity: *const i32,
+        cutoff_filter_type: i32,
+        cutoff_envelope_enabled: i32,
+        cutoff_envelope_attack_ms: f32,
+        cutoff_envelope_decay_ms: f32,
+        cutoff_envelope_sustain: f32,
+        cutoff_envelope_release_ms: f32,
+        cutoff_envelope_depth_octaves: f32,
         eq_types: *const i32,
         eq_frequencies: *const f32,
         eq_gains: *const f32,
@@ -127,6 +134,7 @@ unsafe extern "C" {
         delay_mix: f32,
         reverb_decay: f32,
         reverb_dampen: f32,
+        reverb_mod: f32,
         reverb_size: f32,
         reverb_mix: f32,
         rotary_enabled: i32,
@@ -505,6 +513,20 @@ struct EffectsConfig {
     cutoff_velocity2: i32,
     cutoff_velocity3: i32,
     cutoff_velocity4: i32,
+    #[serde(default)]
+    cutoff_filter_type: i32,
+    #[serde(default)]
+    cutoff_envelope_enabled: bool,
+    #[serde(default)]
+    cutoff_envelope_attack_ms: f32,
+    #[serde(default)]
+    cutoff_envelope_decay_ms: f32,
+    #[serde(default)]
+    cutoff_envelope_sustain: f32,
+    #[serde(default)]
+    cutoff_envelope_release_ms: f32,
+    #[serde(default)]
+    cutoff_envelope_depth_octaves: f32,
     eq_types: Vec<i32>,
     eq_frequencies: Vec<f32>,
     eq_gains: Vec<f32>,
@@ -523,6 +545,8 @@ struct EffectsConfig {
     delay_mix: f32,
     reverb_decay: f32,
     reverb_dampen: f32,
+    #[serde(default)]
+    reverb_mod: f32,
     reverb_size: f32,
     reverb_mix: f32,
     rotary_enabled: bool,
@@ -1065,6 +1089,13 @@ fn configure_module_effects(
             config.module_index,
             config.cutoff_hz,
             cutoff_velocity.as_ptr(),
+            config.cutoff_filter_type,
+            if config.cutoff_envelope_enabled { 1 } else { 0 },
+            config.cutoff_envelope_attack_ms,
+            config.cutoff_envelope_decay_ms,
+            config.cutoff_envelope_sustain,
+            config.cutoff_envelope_release_ms,
+            config.cutoff_envelope_depth_octaves,
             types.as_ptr(),
             frequencies.as_ptr(),
             gains.as_ptr(),
@@ -1083,6 +1114,7 @@ fn configure_module_effects(
             config.delay_mix,
             config.reverb_decay,
             config.reverb_dampen,
+            config.reverb_mod,
             config.reverb_size,
             config.reverb_mix,
             if config.rotary_enabled { 1 } else { 0 },

@@ -30,6 +30,9 @@ export interface ModuleReverbSettings {
   enabled: boolean;
   decay: number;
   dampen: number;
+  // Balança a leitura das linhas de atraso numa taxa fixa: dá o "shimmer" de
+  // reverbs de sala/prato de verdade. 0 desliga.
+  mod: number;
   size: number;
   mix: number;
 }
@@ -78,6 +81,7 @@ const DEFAULT_REVERB: ModuleReverbSettings = {
   enabled: false,
   decay: 2.5,
   dampen: 50,
+  mod: 0,
   size: 60,
   mix: 25,
 };
@@ -87,6 +91,7 @@ export const FACTORY_MODULE_REVERB: ModuleReverbSettings = {
   enabled: true,
   decay: 10,
   dampen: 50,
+  mod: 0,
   size: 0,
   mix: 50,
 };
@@ -246,6 +251,7 @@ export function createModuleReverbMarkup(settings: Readonly<Record<string, unkno
   const controls: EffectControlDefinition[] = [
     control('decay', 'Decay', 0.1, 20, 0.1, value.decay, `${formatNumber(value.decay)} s`),
     control('dampen', 'Dampen', 0, 100, 1, value.dampen, `${Math.round(value.dampen)}%`),
+    control('mod', 'Mod', 0, 100, 1, value.mod, `${Math.round(value.mod)}%`),
     control('size', 'Size', 0, 100, 1, value.size, `${Math.round(value.size)}%`),
     control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
   ];
@@ -404,6 +410,7 @@ export function readModuleReverbSettings(value: unknown): ModuleReverbSettings {
     enabled: source.enabled === true,
     decay: numberInRange(source.decay, 0.1, 20, DEFAULT_REVERB.decay),
     dampen: numberInRange(source.dampen, 0, 100, DEFAULT_REVERB.dampen),
+    mod: numberInRange(source.mod, 0, 100, DEFAULT_REVERB.mod),
     size: numberInRange(source.size, 0, 100, DEFAULT_REVERB.size),
     mix: numberInRange(source.mix, 0, 100, DEFAULT_REVERB.mix),
   };

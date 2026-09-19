@@ -61,6 +61,13 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex
                        cutoffHz:(float)cutoffHz
                  cutoffVelocity:(NSArray<NSNumber *> *)cutoffVelocity
+               cutoffFilterType:(NSInteger)cutoffFilterType
+        cutoffEnvelopeEnabled:(BOOL)cutoffEnvelopeEnabled
+       cutoffEnvelopeAttackMs:(float)cutoffEnvelopeAttackMs
+        cutoffEnvelopeDecayMs:(float)cutoffEnvelopeDecayMs
+         cutoffEnvelopeSustain:(float)cutoffEnvelopeSustain
+      cutoffEnvelopeReleaseMs:(float)cutoffEnvelopeReleaseMs
+   cutoffEnvelopeDepthOctaves:(float)cutoffEnvelopeDepthOctaves
                         eqTypes:(NSArray<NSNumber *> *)eqTypes
                   eqFrequencies:(NSArray<NSNumber *> *)eqFrequencies
                         eqGains:(NSArray<NSNumber *> *)eqGains
@@ -79,6 +86,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                        delayMix:(float)delayMix
                     reverbDecay:(float)reverbDecay
                    reverbDampen:(float)reverbDampen
+                      reverbMod:(float)reverbMod
                      reverbSize:(float)reverbSize
                       reverbMix:(float)reverbMix
                   rotaryEnabled:(BOOL)rotaryEnabled

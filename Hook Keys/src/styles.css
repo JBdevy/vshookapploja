@@ -2521,6 +2521,13 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
     0 12px 25px rgba(0, 0, 0, 0.22);
 }
 
+/* Toque longo no botão que abre a biblioteca/Organ/Synth soa o módulo: os
+   outros módulos ficam em preto e branco. Solo único: soar outro substitui
+   o anterior. */
+.player-modules-row.has-soloed-module .player-module:not(.is-soloed) {
+  filter: grayscale(1) brightness(0.82);
+}
+
 .player-module__number {
   display: block;
   color: var(--orange-bright);
@@ -2529,11 +2536,6 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   font-weight: 950;
   line-height: 1;
   text-align: center;
-}
-
-.player-module__number--named {
-  font-size: clamp(7px, 0.78vw, 10px);
-  letter-spacing: -0.035em;
 }
 
 .player-module__settings-button,
@@ -5286,8 +5288,13 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .module-effect-controls--reverb {
-  grid-template-columns: repeat(4, minmax(100px, 1fr));
+  /* Decay, Dampen, Mod, Size e Mix: cinco cartões, então cada um encolhe
+     um pouco pra caber sem sobrar espaço vazio. */
+  grid-template-columns: repeat(5, minmax(76px, 1fr));
 }
+
+.module-reverb-editor .module-effect-knob { padding: 6px; }
+.module-reverb-editor .module-effect-knob__face { width: min(60px, 8vh); }
 
 .module-effect-controls--delay {
   grid-template-columns: repeat(3, minmax(100px, 1fr));
@@ -8763,6 +8770,14 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   filter: grayscale(0.35);
 }
 
+/* Tudo já baixado: o mesmo botão vira "Apagar biblioteca", em vermelho pra
+   marcar que agora a ação é destrutiva. */
+.sound-library-download-all.is-delete {
+  border-color: #ff5c5c;
+  background: linear-gradient(180deg, #ff6b6b, #a51f1f);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.28), 0 0 14px rgba(255, 92, 92, 0.18);
+}
+
 .sound-browser {
   display: grid;
   grid-template-columns: clamp(125px, 20vw, 230px) minmax(0, 1fr);
@@ -8804,6 +8819,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 }
 
 .sound-category-button {
+  position: relative;
   width: 100%;
   min-height: clamp(30px, 4.5vh, 39px);
   padding: 5px clamp(9px, 1.1vw, 15px);
@@ -8887,6 +8903,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 }
 
 .fixed-sound-grid button {
+  position: relative;
   min-width: 0;
   min-height: 0;
   padding: 2px 5px;
@@ -8912,32 +8929,26 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   filter: brightness(1.22);
 }
 
-/* Timbre ainda não aberto pelo usuário: faixa RGB girando ao redor do botão
-   e um rótulo "new" no canto inferior direito. Some ao abrir uma vez. */
-@property --fixed-sound-new-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
-
-.fixed-sound-grid button.is-new {
-  position: relative;
-  z-index: 0;
-}
-
-.fixed-sound-grid button.is-new::before {
-  content: '';
+/* Barra fina de progresso durante "Baixar tudo": some quando o timbre não
+   está sendo baixado (opacity 0) e cresce da esquerda pra direita conforme
+   o download daquele timbre específico avança. */
+.fixed-sound-progress {
   position: absolute;
-  inset: -2px;
-  border-radius: 7px;
-  background: conic-gradient(from var(--fixed-sound-new-angle, 0deg),
-    #ff2d55, #ff9500, #ffe600, #34ff6a, #00c8ff, #7a5cff, #ff2d55);
-  z-index: -1;
-  animation: fixed-sound-new-spin 2.6s linear infinite;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  transform-origin: left;
+  transform: scaleX(var(--fixed-sound-progress, 0));
+  background: linear-gradient(90deg, #ffb04b, #ff6a00);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 120ms linear;
+  z-index: 1;
 }
 
-@keyframes fixed-sound-new-spin {
-  to { --fixed-sound-new-angle: 360deg; }
+.fixed-sound-grid button.is-downloading .fixed-sound-progress {
+  opacity: 1;
 }
 
 .fixed-sound-new-badge {
@@ -10154,9 +10165,13 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .module-effect-controls--reverb {
-    /* Um do lado do outro, como no tablet: Decay, Dampen, Size e Mix. */
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* Um do lado do outro, como no tablet: Decay, Dampen, Mod, Size e Mix. */
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     grid-template-rows: minmax(0, 1fr);
+  }
+
+  .module-reverb-editor .module-effect-knob__face {
+    width: min(30px, 9vh);
   }
 
   .module-effect-knob {
@@ -10753,10 +10768,6 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
   .player-screen--tablet .player-module__number {
     font-size: 7px;
-  }
-
-  .player-screen--tablet .player-module__number--named {
-    font-size: 5px;
   }
 
   .player-screen--tablet .player-module__settings-button,
@@ -13594,6 +13605,20 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   border-radius: 8px;
   font-weight: 900;
 }
+.cutoff-config-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.cutoff-config-tabs button {
+  min-height: clamp(30px, 6vh, 42px);
+  border: 1px solid #3a3540;
+  border-radius: 8px;
+  background: #171420;
+  color: #cfc9d2;
+  font-weight: 800;
+}
+.cutoff-config-tabs button.is-selected { border-color: #ff8a22; background: #2a1c0f; color: #ffb066; }
+.module-env-filter-editor { grid-template-rows: auto minmax(0, 1fr); align-content: center; }
+.module-env-filter-type { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+.module-env-filter-type button { min-height: clamp(30px, 6vh, 42px); border-radius: 8px; font-weight: 800; font-size: clamp(10px, 1.6vw, 13px); }
+.module-effect-controls--cutoff-envelope { grid-template-columns: repeat(5, minmax(0, 1fr)); align-content: center; }
 .module-effect-controls--rotary { grid-template-columns: repeat(5, minmax(0, 1fr)); align-content: center; }
 .module-rotary-editor .module-effect-knob:nth-child(5n + 1) { --knob-accent: #ffe06a; }
 .module-rotary-editor .module-effect-knob:nth-child(5n + 2) { --knob-accent: #ff9251; }

@@ -102,7 +102,9 @@ private:
     void prepare(std::size_t maximumLength);
     void setLength(std::size_t nextLength) noexcept;
     void reset() noexcept;
-    float processComb(float input, float feedback, float dampen) noexcept;
+    // modOffset: quanto a leitura balança pra frente/trás do ponto natural,
+    // em amostras (pode ser fracionário — interpolado linearmente).
+    float processComb(float input, float feedback, float dampen, float modOffset = 0.0f) noexcept;
     float processAllPass(float input) noexcept;
   };
 
@@ -113,6 +115,7 @@ private:
     std::array<ReverbDelayLine, 4> combRight{};
     std::array<ReverbDelayLine, 2> allPassLeft{};
     std::array<ReverbDelayLine, 2> allPassRight{};
+    double modPhase = 0.0;
 
     void prepare(double nextSampleRate);
     void configure(ReverbConfig next) noexcept;

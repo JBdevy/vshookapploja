@@ -106,6 +106,7 @@ import {
   MODULE_ENVELOPE_LIMITS,
   readModuleEqBands,
   readModuleCutoffFrequency,
+  createCutoffControl,
   formatModuleGainDb,
   moduleModulationEngineMode,
   MODULE_GAIN_MAX_DB,
@@ -305,6 +306,14 @@ interface PresetHoldGesture {
 }
 
 interface TracksHoldGesture {
+  button: HTMLButtonElement;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  timer: number;
+}
+
+interface ModuleSoloHoldGesture {
   button: HTMLButtonElement;
   pointerId: number;
   startX: number;
@@ -561,12 +570,11 @@ function requiredElement<T extends Element>(parent: ParentNode, selector: string
 function createModuleMarkup(moduleNumber: number): string {
   const emptySoundName = moduleEmptySoundName(moduleNumber);
   const displayName = moduleDisplayName(moduleNumber);
-  const namedModule = moduleNumber === 7 || moduleNumber === 8;
   const synthModule = moduleNumber === 8;
   const organModule = moduleNumber === 7;
   return `
-    <article class="player-module${namedModule ? ' player-module--named' : ''}" data-module="${moduleNumber}" aria-label="Módulo ${displayName}">
-      <span class="player-module__number${namedModule ? ' player-module__number--named' : ''}" aria-hidden="true">${displayName}</span>
+    <article class="player-module" data-module="${moduleNumber}" aria-label="Módulo ${displayName}">
+      <span class="player-module__number" aria-hidden="true">${displayName}</span>
       <button
         class="player-module__settings-button"
         type="button"
@@ -1065,6 +1073,11 @@ export class PlayerScreen {
   private effectEditHoldGesture: EffectEditHoldGesture | null = null;
   private effectEditMode = false;
   private pressedKeyboardKey: { button: HTMLButtonElement; pointerId: number } | null = null;
+  // Toque longo no botão que abre a biblioteca/organ/synth de um módulo:
+  // solo único, o módulo soado ganha contorno RGB e os outros ficam P&B.
+  private moduleSoloHoldGesture: ModuleSoloHoldGesture | null = null;
+  private soloedModuleNumber: number | null = null;
+  private suppressNextModuleSoundClick = false;
   private suppressNextPresetClick = false;
   private suppressNextTracksClick = false;
   private suppressNextEffectBankClick = false;
@@ -1601,6 +1614,7 @@ export class PlayerScreen {
     this.clearTracksHoldGesture();
     this.releaseCapturedTracksPointer();
     this.clearEffectEditHoldGesture();
+    this.clearModuleSoloHoldGesture();
     this.outputFaderLearnGesture.cancel();
     this.metronomeFaderLearnGesture.cancel();
     this.ccControlHoldGesture.cancel();
@@ -1841,13 +1855,14 @@ export class PlayerScreen {
       return;
     }
 
-    if (action === 'open-synth') {
-      this.openModal('module-synth', 8, actionButton);
-      return;
-    }
-
-    if (action === 'open-organ') {
-      this.openModal('module-organ', 7, actionButton);
+    if (action === 'open-synth' || action === 'open-organ') {
+      // Toque longo nesse mesmo botão soa/tira o solo do módulo; o clique que
+      // vem junto não deve abrir o editor por cima.
+      if (this.suppressNextModuleSoundClick) {
+        this.suppressNextModuleSoundClick = false;
+        return;
+      }
+      this.openModal(action === 'open-synth' ? 'module-synth' : 'module-organ', action === 'open-synth' ? 8 : 7, actionButton);
       return;
     }
 
@@ -1911,6 +1926,12 @@ export class PlayerScreen {
     }
 
     if (action === 'open-module-settings' || action === 'open-sound-selection') {
+      // Toque longo no botão de abrir a biblioteca soa/tira o solo do módulo;
+      // o clique que vem junto não deve abrir a biblioteca por cima.
+      if (action === 'open-sound-selection' && this.suppressNextModuleSoundClick) {
+        this.suppressNextModuleSoundClick = false;
+        return;
+      }
       const moduleNumber = Number.parseInt(actionButton.dataset.module ?? '', 10);
       if (!Number.isInteger(moduleNumber)) return;
 
@@ -2325,6 +2346,12 @@ export class PlayerScreen {
       return;
     }
 
+    const moduleSoundButton = eventTarget.closest<HTMLButtonElement>('.player-module__sound-button');
+    if (moduleSoundButton && this.root.contains(moduleSoundButton)) {
+      this.startModuleSoloHoldGesture(moduleSoundButton, event);
+      return;
+    }
+
     const triggerButton = eventTarget.closest<HTMLButtonElement>('button[data-performance-kind]');
     if (!triggerButton || !this.root.contains(triggerButton)) return;
 
@@ -2404,6 +2431,13 @@ export class PlayerScreen {
       }
       return;
     }
+    const soloGesture = this.moduleSoloHoldGesture;
+    if (soloGesture?.pointerId === event.pointerId) {
+      if (Math.hypot(event.clientX - soloGesture.startX, event.clientY - soloGesture.startY) > 10) {
+        this.clearModuleSoloHoldGesture();
+      }
+      return;
+    }
     const gesture = this.presetHoldGesture;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 10) {
@@ -2472,6 +2506,7 @@ export class PlayerScreen {
     }
     if (this.effectEditHoldGesture?.pointerId === event.pointerId) this.clearEffectEditHoldGesture();
     if (this.presetHoldGesture?.pointerId === event.pointerId) this.clearPresetHoldGesture();
+    if (this.moduleSoloHoldGesture?.pointerId === event.pointerId) this.clearModuleSoloHoldGesture();
   }
 
   private startCcControlLearn(
@@ -2883,6 +2918,59 @@ export class PlayerScreen {
     if (!this.presetHoldGesture) return;
     window.clearTimeout(this.presetHoldGesture.timer);
     this.presetHoldGesture = null;
+  }
+
+  private startModuleSoloHoldGesture(button: HTMLButtonElement, event: PointerEvent): void {
+    if (this.desktopRuntime) return;
+    this.clearModuleSoloHoldGesture();
+    const moduleNumber = Number.parseInt(button.dataset.module ?? '', 10);
+    if (!Number.isInteger(moduleNumber)) return;
+    const timer = window.setTimeout(() => {
+      this.moduleSoloHoldGesture = null;
+      this.suppressNextModuleSoundClick = true;
+      window.setTimeout(() => {
+        this.suppressNextModuleSoundClick = false;
+      }, 900);
+      // Bloqueio direto no próprio botão, na fase de captura: o toque longo
+      // solta o dedo bem em cima do clique que ele mesmo gera, e a flag de
+      // supressão sozinha corria risco de perder essa corrida.
+      const blockClick = (clickEvent: Event) => {
+        clickEvent.preventDefault();
+        clickEvent.stopImmediatePropagation();
+      };
+      button.addEventListener('click', blockClick, { capture: true, once: true });
+      window.setTimeout(() => button.removeEventListener('click', blockClick, true), 900);
+      this.toggleModuleSolo(moduleNumber);
+    }, 560);
+    this.moduleSoloHoldGesture = {
+      button,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      timer,
+    };
+  }
+
+  private clearModuleSoloHoldGesture(): void {
+    if (!this.moduleSoloHoldGesture) return;
+    window.clearTimeout(this.moduleSoloHoldGesture.timer);
+    this.moduleSoloHoldGesture = null;
+  }
+
+  private toggleModuleSolo(moduleNumber: number): void {
+    // Solo único: soar outro módulo substitui o anterior, sem acumular.
+    this.soloedModuleNumber = this.soloedModuleNumber === moduleNumber ? null : moduleNumber;
+    this.renderModuleSoloState();
+  }
+
+  private renderModuleSoloState(): void {
+    const row = this.root.querySelector<HTMLElement>('.player-modules-row');
+    if (!row) return;
+    row.classList.toggle('has-soloed-module', this.soloedModuleNumber !== null);
+    for (const moduleElement of row.querySelectorAll<HTMLElement>('.player-module')) {
+      const moduleNumber = Number.parseInt(moduleElement.dataset.module ?? '', 10);
+      moduleElement.classList.toggle('is-soloed', moduleNumber === this.soloedModuleNumber);
+    }
   }
 
   private activatePerformanceButton(button: HTMLButtonElement): void {
@@ -4595,7 +4683,12 @@ export class PlayerScreen {
         },
       );
     } else if (kind === 'module-env-filter') {
-      bodyMarkup = cutoffConfigTabsMarkup('env-filter') + createModuleEnvFilterMarkup(moduleState?.settings ?? {});
+      const envFilterSettings = moduleState?.settings ?? {};
+      // O mesmo knob de Cutoff de fora, sem o botão Config (já estamos dentro
+      // dele): dá pra ajustar sem sair da aba Env-Filter.
+      bodyMarkup = cutoffConfigTabsMarkup('env-filter')
+        + createCutoffControl(readModuleCutoffFrequency(envFilterSettings.cutoffHz), false, envFilterSettings, false)
+        + createModuleEnvFilterMarkup(envFilterSettings);
     } else if (kind === 'glide-config') {
       bodyMarkup = createGlideVelocityMarkup(moduleNumber === null ? {} : this.glideSettings(moduleNumber));
     } else if (kind === 'module-arpeggiator') {
@@ -5093,9 +5186,12 @@ export class PlayerScreen {
               const downloadable = this.soundCatalog.sounds.filter((sound) => Boolean(sound.sf2ObjectKey));
               const done = downloadable.length > 0
                 && downloadable.every((sound) => this.installedFixedSoundIds.has(sound.id));
-              return `<button class="sound-library-download-all" type="button" data-modal-action="download-all-sounds" aria-live="polite"${
-                done || downloadable.length === 0 ? ' disabled' : ''
-              }>${done ? 'Tudo baixado' : 'Baixar tudo'}</button>`;
+              // Tudo já baixado: o mesmo botão vira "Apagar biblioteca" em vez
+              // de ficar travado sem fazer mais nada.
+              return `<button class="sound-library-download-all${done ? ' is-delete' : ''}" type="button" data-modal-action="${
+                done ? 'delete-all-sounds' : 'download-all-sounds'
+              }" aria-live="polite"${downloadable.length === 0 ? ' disabled' : ''
+              }>${done ? 'Apagar biblioteca' : 'Baixar tudo'}</button>`;
             })()}
           ` : ''}
           ${processorKind ? `
@@ -5775,7 +5871,7 @@ export class PlayerScreen {
         }
         const soundId = fixedSoundButton.dataset.fixedSoundId;
         if (!soundId) return;
-        this.markSoundSeen(soundId, fixedSoundButton);
+        this.markSoundSeen(soundId, fixedSoundButton, modal);
         if (this.installedFixedSoundIds.has(soundId)) {
           void this.selectFixedSound(moduleNumber, soundId, fixedSoundButton);
         } else {
@@ -5851,6 +5947,24 @@ export class PlayerScreen {
         if (button) void this.showDownloadAllConfirmation(modal, button);
         return;
       }
+      if (kind === 'sound-selection' && modalAction === 'delete-all-sounds') {
+        this.showDeleteAllConfirmation(modal);
+        return;
+      }
+      const deleteAllChoice = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-delete-all-choice]')?.dataset.deleteAllChoice
+        : null;
+      if (kind === 'sound-selection' && deleteAllChoice) {
+        const confirmation = modal.querySelector<HTMLElement>('[data-delete-all-confirmation]');
+        if (deleteAllChoice === 'confirm') {
+          const button = modal.querySelector<HTMLButtonElement>('[data-modal-action="delete-all-sounds"]');
+          confirmation?.remove();
+          if (button) void this.deleteAllOfficialSounds(modal, button);
+        } else {
+          confirmation?.remove();
+        }
+        return;
+      }
       const downloadAllChoice = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-download-all-choice]')?.dataset.downloadAllChoice
         : null;
@@ -5881,7 +5995,8 @@ export class PlayerScreen {
         const requested = target instanceof Element
           ? target.closest<HTMLElement>('[data-reset-processor]')?.dataset.resetProcessor
           : undefined;
-        const processor = requested === 'eq' || isModuleEffectKind(requested) ? requested : processorKind;
+        const processor = requested === 'eq' || requested === 'envelope' || isModuleEffectKind(requested)
+          ? requested : processorKind;
         if (processor) {
           this.showProcessorResetConfirmation(modal, moduleNumber, processor);
           return;
@@ -6533,7 +6648,7 @@ export class PlayerScreen {
         this.updateTranceGateParameter(input, moduleNumber);
       } else if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-envelope]')) {
         this.updateModuleEnvelopeControl(modal, input, moduleNumber);
-      } else if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-cutoff]')) {
+      } else if ((kind === 'module-settings' || kind === 'module-env-filter') && moduleNumber !== null && input.matches('[data-module-cutoff]')) {
         this.updateModuleCutoffControl(modal, input, moduleNumber);
       } else if (kind === 'module-filter-velocity' && moduleNumber !== null && input.matches('[data-filter-velocity-cutoff]')) {
         this.updateFilterVelocityCutoff(modal, input, moduleNumber);
@@ -7200,13 +7315,15 @@ export class PlayerScreen {
       if (libraryTotal) libraryTotal.textContent = `Total - ${formatSoundfontTotal(officialBytes + userBytes)}`;
       const userTotal = modal.querySelector<HTMLElement>('[data-user-sf2-total]');
       if (userTotal) userTotal.textContent = `Total - ${formatSoundfontTotal(userBytes)}`;
-      const downloadAll = modal.querySelector<HTMLButtonElement>('[data-modal-action="download-all-sounds"]');
+      const downloadAll = modal.querySelector<HTMLButtonElement>('.sound-library-download-all');
       if (downloadAll) {
         const downloadable = this.soundCatalog.sounds.filter((sound) => Boolean(sound.sf2ObjectKey));
         const remaining = downloadable.filter((sound) => !this.installedFixedSoundIds.has(sound.id));
         const allDownloaded = downloadable.length > 0 && remaining.length === 0;
-        downloadAll.disabled = allDownloaded || downloadable.length === 0;
-        downloadAll.textContent = allDownloaded ? 'Tudo baixado' : 'Baixar tudo';
+        downloadAll.disabled = downloadable.length === 0;
+        downloadAll.classList.toggle('is-delete', allDownloaded);
+        downloadAll.dataset.modalAction = allDownloaded ? 'delete-all-sounds' : 'download-all-sounds';
+        downloadAll.textContent = allDownloaded ? 'Apagar biblioteca' : 'Baixar tudo';
       }
     } catch {
       // Mantém o valor visual inicial quando o armazenamento local não responder.
@@ -7264,20 +7381,29 @@ export class PlayerScreen {
         if (button.isConnected) button.textContent = `Baixando ${completed + 1}/${sounds.length}`;
         const done = completed;
         this.showBackgroundDownload(`${sound.name} (${done + 1}/${sounds.length})`, (done * 100) / sounds.length);
-        await this.soundLibraryEngine.install(sound.id, (progress) => {
-          const inside = progress.percentage === null ? 0 : progress.percentage / sounds.length;
-          this.showBackgroundDownload(`${sound.name} (${done + 1}/${sounds.length})`,
-            (done * 100) / sounds.length + inside);
-        }, this.soundDownloadAbort.signal);
+        const currentButton = Array.from(modal.querySelectorAll<HTMLButtonElement>('[data-fixed-sound-id]'))
+          .find((candidate) => candidate.dataset.fixedSoundId === sound.id);
+        currentButton?.classList.add('is-downloading');
+        currentButton?.style.setProperty('--fixed-sound-progress', '0');
+        try {
+          await this.soundLibraryEngine.install(sound.id, (progress) => {
+            const inside = progress.percentage === null ? 0 : progress.percentage / sounds.length;
+            this.showBackgroundDownload(`${sound.name} (${done + 1}/${sounds.length})`,
+              (done * 100) / sounds.length + inside);
+            if (progress.percentage !== null) {
+              currentButton?.style.setProperty('--fixed-sound-progress', String(progress.percentage / 100));
+            }
+          }, this.soundDownloadAbort.signal);
+        } finally {
+          currentButton?.classList.remove('is-downloading');
+        }
         this.installedFixedSoundIds.add(sound.id);
         completed += 1;
-        const soundButton = Array.from(modal.querySelectorAll<HTMLButtonElement>('[data-fixed-sound-id]'))
-          .find((candidate) => candidate.dataset.fixedSoundId === sound.id);
-        if (soundButton) {
-          soundButton.classList.remove('is-downloadable');
-          soundButton.classList.add('is-installed');
-          soundButton.setAttribute('aria-label', `${sound.name}. Baixado`);
-          const state = soundButton.querySelector<HTMLElement>('small');
+        if (currentButton) {
+          currentButton.classList.remove('is-downloadable');
+          currentButton.classList.add('is-installed');
+          currentButton.setAttribute('aria-label', `${sound.name}. Baixado`);
+          const state = currentButton.querySelector<HTMLElement>('small');
           if (state) state.textContent = 'No dispositivo';
         }
       }
@@ -7343,6 +7469,84 @@ export class PlayerScreen {
     `;
     modal.append(confirmation);
     confirmation.querySelector<HTMLButtonElement>('[data-download-all-choice="cancel"]')?.focus();
+  }
+
+  private showDeleteAllConfirmation(modal: HTMLElement): void {
+    const installedOfficial = this.soundCatalog.sounds.filter(
+      (sound) => Boolean(sound.sf2ObjectKey) && this.installedFixedSoundIds.has(sound.id),
+    );
+    if (installedOfficial.length === 0) return;
+    const knownBytes = installedOfficial.reduce((total, sound) => total + (sound.byteSize ?? 0), 0);
+    modal.querySelector('[data-delete-all-confirmation]')?.remove();
+    const confirmation = document.createElement('section');
+    confirmation.className = 'user-sf2-remove-confirmation sound-library-download-confirmation';
+    confirmation.dataset.deleteAllConfirmation = '';
+    confirmation.setAttribute('role', 'alertdialog');
+    confirmation.setAttribute('aria-modal', 'true');
+    confirmation.setAttribute('aria-label', 'Confirmar apagar toda a biblioteca');
+    confirmation.innerHTML = `
+      <div>
+        <small>Biblioteca Hook Keys</small>
+        <strong>Apagar todos os timbres baixados?</strong>
+        <p>Serão apagados ${installedOfficial.length} timbres (${formatBytes(knownBytes)}) deste aparelho. Módulos que os usam ficam sem timbre.</p>
+        <span>
+          <button type="button" data-delete-all-choice="cancel">Cancelar</button>
+          <button type="button" data-delete-all-choice="confirm">Apagar</button>
+        </span>
+      </div>
+    `;
+    modal.append(confirmation);
+    confirmation.querySelector<HTMLButtonElement>('[data-delete-all-choice="cancel"]')?.focus();
+  }
+
+  private async deleteAllOfficialSounds(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
+    const installedOfficial = this.soundCatalog.sounds.filter(
+      (sound) => Boolean(sound.sf2ObjectKey) && this.installedFixedSoundIds.has(sound.id),
+    );
+    if (installedOfficial.length === 0) return;
+    button.disabled = true;
+    let removed = 0;
+    try {
+      for (const sound of installedOfficial) {
+        if (button.isConnected) button.textContent = `Apagando ${removed + 1}/${installedOfficial.length}`;
+        await this.soundLibraryEngine.remove(sound.id);
+        this.installedFixedSoundIds.delete(sound.id);
+        const reference = `fixed:${sound.id}`;
+        for (const bank of this.bankStates.values()) {
+          for (const preset of bank.presets) {
+            for (let moduleIndex = 0; moduleIndex < preset.modules.length; moduleIndex += 1) {
+              const module = preset.modules[moduleIndex];
+              if (!module || module.timbreId !== reference) continue;
+              module.timbreId = null;
+              module.timbreName = moduleEmptySoundName(moduleIndex + 1);
+              module.timbreColor = null;
+            }
+          }
+        }
+        removed += 1;
+        const soundButton = Array.from(modal.querySelectorAll<HTMLButtonElement>('[data-fixed-sound-id]'))
+          .find((candidate) => candidate.dataset.fixedSoundId === sound.id);
+        if (soundButton) {
+          soundButton.classList.remove('is-installed');
+          soundButton.classList.add('is-downloadable');
+          soundButton.setAttribute('aria-label', `${sound.name}. Não baixado`);
+          const state = soundButton.querySelector<HTMLElement>('small');
+          if (state) state.textContent = 'Baixar';
+        }
+      }
+      this.nativeLoadedTimbres.fill(null);
+      this.restoreActivePresetState();
+      this.markPlayerStateChanged();
+      void this.syncNativeEngine();
+      await this.renderSoundLibraryTotals(modal);
+    } catch {
+      this.updateSoundDownloadMessage('Não foi possível apagar toda a biblioteca.');
+    } finally {
+      if (button.isConnected) {
+        button.disabled = false;
+        button.textContent = 'Apagar biblioteca';
+      }
+    }
   }
 
   private async selectUserSoundfont(moduleNumber: number, button: HTMLButtonElement): Promise<void> {
@@ -8918,7 +9122,8 @@ export class PlayerScreen {
       : processor === 'compressor' ? 'Compressor'
         : processor === 'reverb' ? 'Reverb'
           : processor === 'rotary' ? 'Rotary'
-            : processor === 'chorus' ? 'Chorus' : 'Delay';
+            : processor === 'chorus' ? 'Chorus'
+              : processor === 'cutoffEnvelope' ? 'Env-Filter' : 'Delay';
     const confirmation = document.createElement('div');
     confirmation.className = 'module-processor-reset-confirmation';
     confirmation.dataset.processorResetConfirmation = '';
@@ -9659,13 +9864,22 @@ export class PlayerScreen {
   }
 
   // Some a faixa RGB e o rótulo "new" assim que o timbre é aberto pela
-  // primeira vez, mesmo que o usuário não baixe nem escute o preview.
-  private markSoundSeen(soundId: string, button: HTMLButtonElement): void {
+  // primeira vez, mesmo que o usuário não baixe nem escute o preview. A
+  // categoria segue com o "new" enquanto tiver outro timbre não visto dentro.
+  private markSoundSeen(soundId: string, button: HTMLButtonElement, modal: HTMLElement): void {
     if (this.seenSoundIds.has(soundId)) return;
     this.seenSoundIds.add(soundId);
     this.markPlayerStateChanged();
     button.classList.remove('is-new');
     button.querySelector('.fixed-sound-new-badge')?.remove();
+    const category = this.soundCatalog.get(soundId)?.category;
+    if (!category) return;
+    const stillHasNewSound = (this.soundCatalog.getCategory(category)?.sounds ?? [])
+      .some((sound) => !this.seenSoundIds.has(sound.id));
+    if (stillHasNewSound) return;
+    const categoryButton = modal.querySelector<HTMLButtonElement>(`[data-sound-category="${category}"]`);
+    categoryButton?.classList.remove('is-new');
+    categoryButton?.querySelector('.fixed-sound-new-badge')?.remove();
   }
 
   private async selectFixedSound(moduleNumber: number, soundId: string, button?: HTMLButtonElement): Promise<void> {
@@ -10449,6 +10663,13 @@ export class PlayerScreen {
           cutoffVelocity2: cutoffVelocity[2],
           cutoffVelocity3: cutoffVelocity[3],
           cutoffVelocity4: cutoffVelocity[4],
+          cutoffFilterType: CUTOFF_FILTER_TYPES.indexOf(cutoffFilterType),
+          cutoffEnvelopeEnabled: cutoffEnvelope.enabled,
+          cutoffEnvelopeAttackMs: cutoffEnvelope.attackMs,
+          cutoffEnvelopeDecayMs: cutoffEnvelope.decayMs,
+          cutoffEnvelopeSustain: cutoffEnvelope.sustain / 100,
+          cutoffEnvelopeReleaseMs: cutoffEnvelope.releaseMs,
+          cutoffEnvelopeDepthOctaves: cutoffEnvelope.depthOctaves,
           eqTypes: eqBands.map(({ type }) => !eqEnabled ? 2 : type === 'low-cut' ? 0
             : type === 'low-shelf' ? 1 : type === 'high-shelf' ? 3 : type === 'high-cut' ? 4 : 2),
           eqFrequencies: eqBands.map(({ frequency }) => frequency),
@@ -10468,6 +10689,7 @@ export class PlayerScreen {
           delayMix: delay.enabled ? delay.mix / 100 : 0,
           reverbDecay: (reverb.decay - 0.1) / 19.9,
           reverbDampen: reverb.dampen / 100,
+          reverbMod: reverb.mod / 100,
           reverbSize: reverb.size / 100,
           reverbMix: reverb.enabled ? reverb.mix / 100 : 0,
           rotaryEnabled: moduleIndex === 6 && rotary.enabled,
@@ -11218,8 +11440,6 @@ function presetSlotLabel(bank: BankId, presetNumber: number): string {
 }
 
 function moduleDisplayName(moduleNumber: number): string {
-  if (moduleNumber === 7) return 'Organ';
-  if (moduleNumber === 8) return 'Synth';
   return String(moduleNumber);
 }
 

@@ -73,6 +73,7 @@ export interface NativeModuleEffectsConfig {
   delayMix: number;
   reverbDecay: number;
   reverbDampen: number;
+  reverbMod: number;
   reverbSize: number;
   reverbMix: number;
   rotaryEnabled: boolean;

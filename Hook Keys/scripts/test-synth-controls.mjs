@@ -77,6 +77,8 @@ const settingsView = transpile('../src/features/player/ModuleSettingsView.ts', {
     readModuleDelaySettings: () => ({ enabled: false }),
     readModuleReverbSettings: () => ({ enabled: false }),
     readModuleRotarySettings: () => ({ enabled: false }),
+    readModuleCutoffEnvelopeSettings: () => ({ enabled: false }),
+    readCutoffFilterType: () => 'lowpass2',
   },
   './PatternModulesView': { createArpeggiatorMarkup: () => '', readArpeggiatorSettings: () => ({ enabled: false }) },
   './TranceGateView': { createTranceGateMarkup: () => '', readTranceGateSettings: () => ({ enabled: false }) },

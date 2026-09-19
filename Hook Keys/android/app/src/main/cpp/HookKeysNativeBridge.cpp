@@ -261,6 +261,13 @@ public:
       std::size_t moduleIndex,
       float cutoffHz,
       const std::array<int, 5>& cutoffVelocity,
+      int cutoffFilterType,
+      bool cutoffEnvelopeEnabled,
+      float cutoffEnvelopeAttackMs,
+      float cutoffEnvelopeDecayMs,
+      float cutoffEnvelopeSustain,
+      float cutoffEnvelopeReleaseMs,
+      float cutoffEnvelopeDepthOctaves,
       const std::array<int, 5>& eqTypes,
       const std::array<float, 5>& eqFrequencies,
       const std::array<float, 5>& eqGains,
@@ -279,6 +286,7 @@ public:
       float delayMix,
       float reverbDecay,
       float reverbDampen,
+      float reverbMod,
       float reverbSize,
       float reverbMix, bool rotaryEnabled, int rotarySpeed,
       float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
@@ -291,6 +299,13 @@ public:
     hook_keys::ModuleEffectsConfig effects;
     effects.cutoff.enabled = true;
     effects.cutoff.frequencyHz = cutoffHz;
+    effects.cutoff.type = static_cast<hook_keys::FilterKind>(std::clamp(cutoffFilterType, 0, 3));
+    effects.cutoff.envelope.enabled = cutoffEnvelopeEnabled;
+    effects.cutoff.envelope.attackMs = cutoffEnvelopeAttackMs;
+    effects.cutoff.envelope.decayMs = cutoffEnvelopeDecayMs;
+    effects.cutoff.envelope.sustain = cutoffEnvelopeSustain;
+    effects.cutoff.envelope.releaseMs = cutoffEnvelopeReleaseMs;
+    effects.cutoff.envelope.depthOctaves = cutoffEnvelopeDepthOctaves;
     for (std::size_t index = 0; index < effects.cutoff.velocityCurve.size(); ++index) {
       effects.cutoff.velocityCurve[index] = static_cast<std::uint8_t>(
           std::clamp(cutoffVelocity[index], 0, 127));
@@ -311,7 +326,7 @@ public:
     effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                           compressorReleaseMs, compressorGainDb, compressorMix};
     effects.delay = {delayMix > 0.0001f, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-    effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix};
+    effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
     effects.rotary = {rotaryEnabled, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                       rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                       rotaryModulationEnabled};
@@ -762,6 +777,13 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jint moduleIndex,
     jfloat cutoffHz,
     jintArray cutoffVelocity,
+    jint cutoffFilterType,
+    jboolean cutoffEnvelopeEnabled,
+    jfloat cutoffEnvelopeAttackMs,
+    jfloat cutoffEnvelopeDecayMs,
+    jfloat cutoffEnvelopeSustain,
+    jfloat cutoffEnvelopeReleaseMs,
+    jfloat cutoffEnvelopeDepthOctaves,
     jintArray eqTypes,
     jfloatArray eqFrequencies,
     jfloatArray eqGains,
@@ -780,6 +802,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jfloat delayMix,
     jfloat reverbDecay,
     jfloat reverbDampen,
+    jfloat reverbMod,
     jfloat reverbSize,
     jfloat reverbMix, jboolean rotaryEnabled, jint rotarySpeed,
     jfloat rotarySlowHz, jfloat rotaryFastHz, jfloat rotaryRampSeconds,
@@ -802,11 +825,14 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
       environment, eqQualities, 0.7071f, readFloats);
   const auto cutStages = javaArray<jintArray, int, 5>(environment, eqCutStages, 1, readInts);
   return gEngine.configureModuleEffects(
-             static_cast<std::size_t>(moduleIndex), cutoffHz, velocity, types, frequencies, gains, qualities,
+             static_cast<std::size_t>(moduleIndex), cutoffHz, velocity,
+             cutoffFilterType, cutoffEnvelopeEnabled == JNI_TRUE, cutoffEnvelopeAttackMs,
+             cutoffEnvelopeDecayMs, cutoffEnvelopeSustain, cutoffEnvelopeReleaseMs, cutoffEnvelopeDepthOctaves,
+             types, frequencies, gains, qualities,
              cutStages, compressorThresholdDb, compressorRatio, compressorAttackMs,
              compressorReleaseMs, compressorGainDb, compressorMix, delaySync == JNI_TRUE,
              delayMs, delayBeatMultiplier, delayFeedback, delayMix, reverbDecay, reverbDampen,
-             reverbSize, reverbMix, rotaryEnabled == JNI_TRUE, rotarySpeed,
+             reverbMod, reverbSize, reverbMix, rotaryEnabled == JNI_TRUE, rotarySpeed,
              rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
              rotaryModulationEnabled == JNI_TRUE,
              chorusEnabled == JNI_TRUE, chorusRateHz, chorusDepth, chorusMix,

@@ -143,13 +143,16 @@ int hk_runtime_configure_module_modulation(
 
 int hk_runtime_configure_effects(
     void* handle, std::size_t moduleIndex, float cutoffHz, const int* cutoffVelocity,
+    int cutoffFilterType, int cutoffEnvelopeEnabled, float cutoffEnvelopeAttackMs,
+    float cutoffEnvelopeDecayMs, float cutoffEnvelopeSustain, float cutoffEnvelopeReleaseMs,
+    float cutoffEnvelopeDepthOctaves,
     const int* eqTypes,
     const float* eqFrequencies, const float* eqGains, const float* eqQualities,
     const int* eqCutStages, float compressorThresholdDb, float compressorRatio,
     float compressorAttackMs, float compressorReleaseMs, float compressorGainDb,
     float compressorMix, int delaySync, float delayMs, float delayBeatMultiplier,
     float delayFeedback, float delayMix, float reverbDecay, float reverbDampen,
-    float reverbSize, float reverbMix, int rotaryEnabled, int rotarySpeed,
+    float reverbMod, float reverbSize, float reverbMix, int rotaryEnabled, int rotarySpeed,
     float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
     float rotaryDepth, float rotaryMix, int rotaryModulationEnabled,
     int chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
@@ -160,6 +163,13 @@ int hk_runtime_configure_effects(
   hook_keys::ModuleEffectsConfig effects;
   effects.cutoff.enabled = true;
   effects.cutoff.frequencyHz = cutoffHz;
+  effects.cutoff.type = static_cast<hook_keys::FilterKind>(std::clamp(cutoffFilterType, 0, 3));
+  effects.cutoff.envelope.enabled = cutoffEnvelopeEnabled != 0;
+  effects.cutoff.envelope.attackMs = cutoffEnvelopeAttackMs;
+  effects.cutoff.envelope.decayMs = cutoffEnvelopeDecayMs;
+  effects.cutoff.envelope.sustain = cutoffEnvelopeSustain;
+  effects.cutoff.envelope.releaseMs = cutoffEnvelopeReleaseMs;
+  effects.cutoff.envelope.depthOctaves = cutoffEnvelopeDepthOctaves;
   for (std::size_t index = 0; index < effects.cutoff.velocityCurve.size(); ++index) {
     effects.cutoff.velocityCurve[index] = static_cast<std::uint8_t>(std::clamp(cutoffVelocity[index], 0, 127));
   }
@@ -179,7 +189,7 @@ int hk_runtime_configure_effects(
   effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                         compressorReleaseMs, compressorGainDb, compressorMix};
   effects.delay = {delayMix > 0.0001f, delaySync != 0, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-  effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix};
+  effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
   effects.rotary = {rotaryEnabled != 0, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != 0};

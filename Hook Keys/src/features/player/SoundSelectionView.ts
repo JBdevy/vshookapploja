@@ -19,14 +19,17 @@ export function createSoundSelectionMarkup(
     : categories[0]?.id ?? '';
   const categoryButtons = categories.map((category, index) => {
     const isSelected = category.id === activeCategory;
+    // A categoria carrega o "new" enquanto tiver ao menos um timbre não visto
+    // ainda; some sozinha quando o usuário já abriu todos os de dentro dela.
+    const hasNewSound = category.sounds.some((sound) => !seenSoundIds.has(sound.id));
     return `
       <button
-        class="sound-category-button${isSelected ? ' is-selected' : ''}"
+        class="sound-category-button${isSelected ? ' is-selected' : ''}${hasNewSound ? ' is-new' : ''}"
         type="button"
         data-sound-category="${escapeMarkup(category.id)}"
         aria-pressed="${isSelected}"
         style="${soundButtonStyle(category.color)}"
-      >${index + 1} - ${escapeMarkup(category.name)}</button>
+      >${index + 1} - ${escapeMarkup(category.name)}${hasNewSound ? '<i class="fixed-sound-new-badge" aria-hidden="true">new</i>' : ''}</button>
     `;
   }).join('');
 
@@ -69,7 +72,7 @@ export function createSoundCategoryContentMarkup(
             const isNew = !seenSoundIds.has(sound.id);
             return `
               <button class="${installed ? 'is-installed' : 'is-downloadable'}${selected ? ' is-current-timbre' : ''}${isNew ? ' is-new' : ''}" type="button" data-fixed-sound-id="${escapeMarkup(sound.id)}" style="${soundButtonStyle(sound.color)}" aria-current="${selected}" aria-label="${escapeMarkup(sound.name)}. ${installed ? 'Baixado' : 'Não baixado'}${selected ? '. Selecionado neste módulo' : ''}${isNew ? '. Timbre novo' : ''}">
-                <span>${escapeMarkup(sound.name)}</span><small>${installed ? 'No dispositivo' : 'Baixar'}</small>${isNew ? '<i class="fixed-sound-new-badge" aria-hidden="true">new</i>' : ''}
+                <span>${escapeMarkup(sound.name)}</span><small>${installed ? 'No dispositivo' : 'Baixar'}</small>${isNew ? '<i class="fixed-sound-new-badge" aria-hidden="true">new</i>' : ''}<i class="fixed-sound-progress" data-fixed-sound-progress aria-hidden="true"></i>
               </button>
             `;
           }).join('') || '<p class="sound-browser__empty">Nenhum timbre cadastrado nesta categoria.</p>'}

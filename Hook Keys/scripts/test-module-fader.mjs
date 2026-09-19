@@ -550,7 +550,7 @@ test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () =>
 test('módulos nascem com Reverb de fábrica, Mod em User e o 5 com Rotary', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const effects = readFileSync(new URL('../src/features/player/ModuleEffectsView.ts', import.meta.url), 'utf8');
-  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 10,\s*dampen: 50,\s*size: 0,\s*mix: 50,/);
+  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 10,\s*dampen: 50,\s*mod: 0,\s*size: 0,\s*mix: 50,/);
   assert.match(player, /modulationMode: 'user',/);
   assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB \},/);
   assert.match(player, /rotary: \{ \.\.\.readModuleRotarySettings\(undefined\), enabled: moduleIndex === 6 \},/);

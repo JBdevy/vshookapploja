@@ -613,6 +613,13 @@ static NSString *describeFormat(AVAudioFormat *format) {
 
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex cutoffHz:(float)cutoffHz
                  cutoffVelocity:(NSArray<NSNumber *> *)cutoffVelocity
+               cutoffFilterType:(NSInteger)cutoffFilterType
+        cutoffEnvelopeEnabled:(BOOL)cutoffEnvelopeEnabled
+       cutoffEnvelopeAttackMs:(float)cutoffEnvelopeAttackMs
+        cutoffEnvelopeDecayMs:(float)cutoffEnvelopeDecayMs
+         cutoffEnvelopeSustain:(float)cutoffEnvelopeSustain
+      cutoffEnvelopeReleaseMs:(float)cutoffEnvelopeReleaseMs
+   cutoffEnvelopeDepthOctaves:(float)cutoffEnvelopeDepthOctaves
                         eqTypes:(NSArray<NSNumber *> *)eqTypes
                   eqFrequencies:(NSArray<NSNumber *> *)eqFrequencies
                         eqGains:(NSArray<NSNumber *> *)eqGains
@@ -624,7 +631,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
                       delaySync:(BOOL)delaySync delayMs:(float)delayMs
             delayBeatMultiplier:(float)delayBeatMultiplier delayFeedback:(float)delayFeedback
                        delayMix:(float)delayMix reverbDecay:(float)reverbDecay
-                   reverbDampen:(float)reverbDampen reverbSize:(float)reverbSize
+                   reverbDampen:(float)reverbDampen reverbMod:(float)reverbMod
+                     reverbSize:(float)reverbSize
                       reverbMix:(float)reverbMix
                   rotaryEnabled:(BOOL)rotaryEnabled
                     rotarySpeed:(NSInteger)rotarySpeed
@@ -647,6 +655,13 @@ static NSString *describeFormat(AVAudioFormat *format) {
   hook_keys::ModuleEffectsConfig effects;
   effects.cutoff.enabled = true;
   effects.cutoff.frequencyHz = cutoffHz;
+  effects.cutoff.type = static_cast<hook_keys::FilterKind>(std::clamp<NSInteger>(cutoffFilterType, 0, 3));
+  effects.cutoff.envelope.enabled = cutoffEnvelopeEnabled != NO;
+  effects.cutoff.envelope.attackMs = cutoffEnvelopeAttackMs;
+  effects.cutoff.envelope.decayMs = cutoffEnvelopeDecayMs;
+  effects.cutoff.envelope.sustain = cutoffEnvelopeSustain;
+  effects.cutoff.envelope.releaseMs = cutoffEnvelopeReleaseMs;
+  effects.cutoff.envelope.depthOctaves = cutoffEnvelopeDepthOctaves;
   for (NSUInteger index = 0; index < effects.cutoff.velocityCurve.size(); ++index) {
     const NSInteger value = index < cutoffVelocity.count ? cutoffVelocity[index].integerValue : 127;
     effects.cutoff.velocityCurve[index] = static_cast<std::uint8_t>(std::clamp<NSInteger>(value, 0, 127));
@@ -669,7 +684,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
   effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                         compressorReleaseMs, compressorGainDb, compressorMix};
   effects.delay = {delayMix > 0.0001f, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-  effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix};
+  effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
   effects.rotary = {rotaryEnabled != NO, static_cast<std::uint8_t>(std::clamp<NSInteger>(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != NO};

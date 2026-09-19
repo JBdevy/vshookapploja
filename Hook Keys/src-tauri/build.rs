@@ -11,6 +11,7 @@ fn main() {
         .file(format!("{engine}/src/HookKeysEngine.cpp"))
         .file(format!("{engine}/src/ModuleEffects.cpp"))
         .file(format!("{engine}/src/NativeEngineRuntime.cpp"))
+        .file(format!("{engine}/src/OrganModule.cpp"))
         .file(format!("{engine}/src/TinySoundFontImplementation.cpp"))
         .file(format!("{engine}/src/TinySoundFontModule.cpp"));
     if build.get_compiler().is_like_msvc() {

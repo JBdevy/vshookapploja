@@ -778,8 +778,9 @@ function createEnvelopeControl(
   `;
 }
 
-function createCutoffControl(
+export function createCutoffControl(
   frequency: number, velocityEnabled: boolean, settings: Readonly<Record<string, unknown>>,
+  showConfigButton = true,
 ): string {
   const ratio = cutoffRatioFromFrequency(frequency);
   const envelopeEnabled = readModuleCutoffEnvelopeSettings(settings.cutoffEnvelope).enabled;
@@ -787,7 +788,7 @@ function createCutoffControl(
   const customized = velocityEnabled || envelopeEnabled || filterType !== 'lowpass2';
   return `
     <article class="module-envelope-control module-cutoff-control">
-      <button type="button" class="${customized ? 'is-active' : ''}" data-module-setting-action="open-filter-velocity" aria-label="Config do Cutoff${customized ? ', personalizado' : ''}">Config</button>
+      ${showConfigButton ? `<button type="button" class="${customized ? 'is-active' : ''}" data-module-setting-action="open-filter-velocity" aria-label="Config do Cutoff${customized ? ', personalizado' : ''}">Config</button>` : ''}
       <h3>Cutoff</h3>
       ${createParameterKnobMarkup(ratio, `
         <input
