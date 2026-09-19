@@ -55,8 +55,11 @@ const modal = openModuleSettings(1);
 modal.querySelector('[data-module-settings-mode="user"]').click();
 
 // Rotary não é uma aba do Config: só existe no editor próprio do Organ
-// (módulo 7). As outras cinco são abas comuns a qualquer módulo 1-6.
-for (const page of ['eq', 'compressor', 'reverb', 'delay', 'chorus']) {
+// (módulo 7). As outras seis (incluindo Envelope) são comuns a qualquer
+// módulo 1-6.
+for (const page of ['envelope', 'eq', 'compressor', 'reverb', 'delay', 'chorus']) {
+  const modal = root.querySelector('.player-modal--module-settings');
+  assert(modal, `${page}: modal Config sumiu entre as abas`);
   goToPage(modal, page);
   const resetButton = modal.querySelector('.player-modal__actions [data-reset-processor]');
   assert(resetButton, `${page}: botão de Reset não está no rodapé`);
@@ -65,11 +68,21 @@ for (const page of ['eq', 'compressor', 'reverb', 'delay', 'chorus']) {
   resetButton.click();
   const confirmation = modal.querySelector('[data-processor-reset-confirmation]');
   assert(confirmation, `${page}: clicar em Reset não abriu a janela de confirmação`);
-  const confirmButton = confirmation.querySelector('[data-processor-reset-choice="confirm"]');
+
+  // Cancelar precisa mesmo fechar, sem mexer em nada.
+  const cancelButton = confirmation.querySelector('[data-processor-reset-choice="cancel"]');
+  assert(cancelButton, `${page}: confirmação sem botão de cancelar`);
+  cancelButton.click();
+  assert(!root.querySelector('[data-processor-reset-confirmation]'),
+    `${page}: cancelar não fechou a janela de confirmação`);
+
+  // Reabre e agora confirma de verdade.
+  resetButton.click();
+  const confirmButton = root.querySelector('[data-processor-reset-confirmation] [data-processor-reset-choice="confirm"]');
   assert(confirmButton, `${page}: confirmação sem botão de confirmar`);
   confirmButton.click();
   assert(!root.querySelector('[data-processor-reset-confirmation]'),
     `${page}: confirmar não fechou a janela de confirmação`);
 }
 
-console.log('PROCESSOR_RESET_OK: Reset por aba abre a confirmação e reseta em EQ, Compressor, Reverb, Delay, Rotary e Chorus');
+console.log('PROCESSOR_RESET_OK: Reset por aba abre a confirmação e Cancelar/Resetar funcionam em Envelope, EQ, Compressor, Reverb, Delay e Chorus');

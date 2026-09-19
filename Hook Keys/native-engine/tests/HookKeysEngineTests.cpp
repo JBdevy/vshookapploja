@@ -49,6 +49,21 @@ public:
   bool voicePoolNearlyFull = false;
 };
 
+class StereoSignalSynth final : public hook_keys::ModuleSynth {
+public:
+  void noteOn(std::uint8_t, std::uint8_t) noexcept override {}
+  void noteOff(std::uint8_t) noexcept override {}
+  void controlChange(std::uint8_t, std::uint8_t) noexcept override {}
+  void pitchBend(std::uint16_t) noexcept override {}
+  void allNotesOff() noexcept override {}
+  void renderAdd(float* left, float* right, std::size_t frames, float gain) noexcept override {
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      left[frame] += 0.25f * gain;
+      right[frame] += 0.75f * gain;
+    }
+  }
+};
+
 [[noreturn]] void fail(const char* message) {
   std::cerr << "FAILED: " << message << '\n';
   std::exit(EXIT_FAILURE);
@@ -67,6 +82,69 @@ void process(hook_keys::HookKeysEngine& engine) {
 hook_keys::MidiMessage midi(
     std::uint8_t status, std::uint8_t data1, std::uint8_t data2, std::uint8_t inputSlot = 0) {
   return {status, data1, data2, inputSlot, 0};
+}
+
+void testGlobalTranspose() {
+  RecordingSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+
+  hook_keys::ModuleConfig config;
+  expect(engine.setModuleConfig(0, config), "configure module for global transpose test");
+
+  expect(engine.enqueueMidi(midi(0x90, 60, 100)), "queue note on, no transpose yet");
+  process(engine);
+  expect(synth.events.back().data1 == 60, "no transpose leaves the note as played");
+
+  expect(engine.setGlobalTranspose(5), "raise the global transpose by 5 semitones");
+  expect(engine.enqueueMidi(midi(0x90, 60, 100)), "queue note on with +5 transpose");
+  process(engine);
+  expect(synth.events.back().data1 == 65, "global transpose shifts every module up by the same amount");
+
+  expect(engine.setGlobalTranspose(-3), "lower the global transpose to -3 semitones");
+  expect(engine.enqueueMidi(midi(0x90, 60, 100)), "queue note on with -3 transpose");
+  process(engine);
+  expect(synth.events.back().data1 == 57, "a negative global transpose shifts down");
+
+  // Soma com o Oct do próprio módulo: uma oitava acima (+12) e mais 2 semitons
+  // do transpose geral.
+  config.octaveShift = 1;
+  expect(engine.setModuleConfig(0, config), "raise the module's own octave too");
+  expect(engine.setGlobalTranspose(2), "set the global transpose to +2 semitones");
+  expect(engine.enqueueMidi(midi(0x90, 60, 100)), "queue note on with octave and transpose combined");
+  process(engine);
+  expect(synth.events.back().data1 == 74, "global transpose stacks with the module's own octave shift");
+}
+
+void testModuleDualMonoOutputRouting() {
+  StereoSignalSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig config;
+  config.outputChannelStart = 2;
+  config.outputChannelCount = 2;
+  expect(engine.setModuleConfig(0, config), "configure stereo module route on outputs 3+4");
+
+  std::array<float, 8> output{};
+  engine.renderInterleaved(output.data(), 2, 4);
+  expect(std::abs(output[2] - 0.25f) < 0.0001f && std::abs(output[3] - 0.75f) < 0.0001f,
+      "stereo keeps L on output 3 and R on output 4");
+
+  config.outputDualMono = true;
+  expect(engine.setModuleConfig(0, config), "enable dual mono for the same module route");
+  engine.renderInterleaved(output.data(), 2, 4);
+  expect(std::abs(output[2] - 0.5f) < 0.0001f && std::abs(output[3] - 0.5f) < 0.0001f,
+      "dual mono sends the L+R mix to both outputs 3 and 4");
+
+  config.outputDualMono = false;
+  config.outputChannelStart = 3;
+  config.outputChannelCount = 1;
+  expect(engine.setModuleConfig(0, config), "configure an individual output 4 route");
+  engine.renderInterleaved(output.data(), 2, 4);
+  expect(std::abs(output[3] - 0.5f) < 0.0001f,
+      "an individual output always receives the L+R mono mix");
 }
 
 void testRangeAndOctaveRouting() {
@@ -1285,6 +1363,97 @@ void testCutoffFilterTypesAndEnvelope() {
       "the filter envelope starts closed at Note On and opens once Attack/Decay finish");
 }
 
+void testNoVelocitySensitivity() {
+  const char* path = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+  const auto blockEnergy = [](hook_keys::TinySoundFontModule& sf2) {
+    std::vector<float> left(512, 0.0f), right(512, 0.0f);
+    sf2.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    double energy = 0.0;
+    for (auto sample : left) energy += std::abs(sample);
+    return energy;
+  };
+
+  hook_keys::TinySoundFontModule soft(48000.0, 128);
+  expect(soft.loadFromFile(path), "load SF2 for No Sens test (soft)");
+  soft.beginBlock();
+  soft.noteOn(60, 20);
+  const auto softEnergyBefore = blockEnergy(soft);
+
+  hook_keys::TinySoundFontModule loud(48000.0, 128);
+  expect(loud.loadFromFile(path), "load SF2 for No Sens test (loud)");
+  loud.beginBlock();
+  loud.noteOn(60, 127);
+  const auto loudEnergyFirstBlock = blockEnergy(loud);
+  expect(softEnergyBefore < loudEnergyFirstBlock * 0.5,
+      "a soft key press is quieter than a hard one with No Sens off");
+
+  // A nota já está soando (sem novo Note On): ligar o No Sens agora precisa
+  // valer na hora, subindo pro ganho pleno sem esperar a próxima tecla.
+  soft.setNoVelocitySensitivity(true);
+  const auto softEnergyAfter = blockEnergy(soft);
+  const auto loudEnergySecondBlock = blockEnergy(loud);
+  expect(softEnergyAfter > softEnergyBefore * 1.8,
+      "turning No Sens on immediately raises the gain of an already-sounding note");
+  expect(std::abs(softEnergyAfter - loudEnergySecondBlock) < loudEnergySecondBlock * 0.15,
+      "with No Sens on, a soft press sounds as loud as a hard press");
+}
+
+void testMonoNoteReturnsToStillHeldKey() {
+  const char* path = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+  const auto energyAfterRelease = [&](bool keepFirstNoteHeld) {
+    hook_keys::TinySoundFontModule sf2(48000.0, 128);
+    expect(sf2.loadFromFile(path), "load SF2 for mono note-return test");
+    // Release curto: sem isso o release padrão (300 ms) mantém as duas
+    // variantes praticamente no mesmo volume dentro da janela testada.
+    sf2.setVolumeEnvelope(0.0f, 0.0f, 0.0f, 15.0f, 0.0f);
+    sf2.beginBlock();
+    sf2.setVoiceMode(true, false);
+    sf2.noteOn(60, 100);
+    std::vector<float> left(2048, 0.0f), right(2048, 0.0f);
+    sf2.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    sf2.noteOn(64, 100); // a segunda tecla toma a voz da primeira (mono)
+    sf2.renderAdd(left.data(), right.data(), left.size(), 1.0f); // a voz roubada morre rápido (10 ms)
+    if (!keepFirstNoteHeld) sf2.noteOff(60);
+    sf2.noteOff(64); // solta a tecla que estava soando
+    std::vector<float> after(2048, 0.0f), afterRight(2048, 0.0f);
+    sf2.renderAdd(after.data(), afterRight.data(), after.size(), 1.0f);
+    double energy = 0.0;
+    for (auto sample : after) energy += std::abs(sample);
+    return energy;
+  };
+  const auto withPreviousKeyStillHeld = energyAfterRelease(true);
+  const auto withNothingElseHeld = energyAfterRelease(false);
+  expect(withPreviousKeyStillHeld > withNothingElseHeld * 3.0,
+      "releasing the sounding mono note returns to the previous still-held key instead of going silent");
+}
+
+void testMonoLegatoRetunePreservesEnvelope() {
+  const char* path = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+  // Attack de 2 s: o ganho do envelope domina o resultado, então o teste não
+  // depende do conteúdo acústico específico do SF2 (picos/vales naturais da
+  // amostra), só de o envelope reiniciar (retrigger) ou continuar (legato).
+  const auto peakRightAfterSecondNote = [&](bool legato) {
+    hook_keys::TinySoundFontModule sf2(48000.0, 128);
+    expect(sf2.loadFromFile(path), "load SF2 for mono legato test");
+    sf2.setVolumeEnvelope(2000.0f, 0.0f, 0.0f, 300.0f, 0.0f);
+    sf2.beginBlock();
+    sf2.setVoiceMode(true, legato);
+    sf2.noteOn(60, 100);
+    std::vector<float> left(1024, 0.0f), right(1024, 0.0f);
+    sf2.renderAdd(left.data(), right.data(), left.size(), 1.0f); // envelope ainda bem no começo do attack
+    sf2.noteOn(64, 100); // legato: continua o mesmo attack; sem legato: reinicia do zero
+    std::vector<float> after(256, 0.0f), afterRight(256, 0.0f);
+    sf2.renderAdd(after.data(), afterRight.data(), after.size(), 1.0f);
+    float peak = 0.0f;
+    for (auto sample : after) peak = std::max(peak, std::abs(sample));
+    return peak;
+  };
+  const auto legatoPeak = peakRightAfterSecondNote(true);
+  const auto retriggerPeak = peakRightAfterSecondNote(false);
+  expect(legatoPeak > retriggerPeak * 1.3f,
+      "Legato keeps the attack envelope already in progress; Legato off restarts it from zero");
+}
+
 void testCompressorProcessing() {
   hook_keys::ModuleEffects effects;
   effects.prepare(48000.0);
@@ -1447,6 +1616,47 @@ void testSynthPreservesLinearVelocityAndGain() {
     expect(std::abs(halfGain[frame] - hard[frame] * 0.5f) < 0.0001f,
         "the Synth fader applies exactly its requested linear gain");
   }
+}
+
+void testSynthNoVelocitySensitivity() {
+  const auto peak = [](const auto& samples) {
+    float result = 0.0f;
+    for (const auto sample : samples) result = std::max(result, std::abs(sample));
+    return result;
+  };
+  const auto renderBlock = [&](hook_keys::AnalogSynthModule& synth) {
+    std::array<float, 4096> left{};
+    std::array<float, 4096> right{};
+    synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+    return peak(left);
+  };
+  hook_keys::AnalogSynthConfig config;
+  config.oscillator1 = config.oscillator2 = 0;
+  config.detuneCents = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+  config.filterResonance = 0.0f;
+
+  hook_keys::AnalogSynthModule soft(48000.0);
+  expect(soft.setConfig(config), "configure Synth for No Sens test (soft)");
+  soft.beginBlock();
+  soft.noteOn(69, 32);
+  const auto softPeakBefore = renderBlock(soft);
+
+  hook_keys::AnalogSynthModule hard(48000.0);
+  expect(hard.setConfig(config), "configure Synth for No Sens test (hard)");
+  hard.beginBlock();
+  hard.noteOn(69, 127);
+  const auto hardPeakFirstBlock = renderBlock(hard);
+  expect(softPeakBefore < hardPeakFirstBlock * 0.5f,
+      "a soft key press is quieter than a hard one on the Synth with No Sens off");
+
+  // Nota já soando, sem novo Note On: ligar o No Sens tem que valer na hora.
+  soft.setNoVelocitySensitivity(true);
+  const auto softPeakAfter = renderBlock(soft);
+  const auto hardPeakSecondBlock = renderBlock(hard);
+  expect(softPeakAfter > softPeakBefore * 1.8f,
+      "turning No Sens on immediately raises the gain of an already-sounding Synth note");
+  expect(std::abs(softPeakAfter - hardPeakSecondBlock) < hardPeakSecondBlock * 0.05f,
+      "with No Sens on, a soft Synth press sounds as loud as a hard press");
 }
 
 void testSynthPitchIsIndependentOfSampleRate() {
@@ -2632,6 +2842,8 @@ int main() {
   testTrackPlayerPlaysRoutesLoopsAndEnds();
   testOutputBoost();
   testUnityGainAnalysisAndSmoothing();
+  testGlobalTranspose();
+  testModuleDualMonoOutputRouting();
   testRangeAndOctaveRouting();
   testKeyboardBroadcastRouting();
   testPatternGeneratorRouting();
@@ -2655,6 +2867,7 @@ int main() {
   testSharedSoundFontEnvelopeIsolation();
   testIndependentOscillatorVolumes();
   testSynthPreservesLinearVelocityAndGain();
+  testSynthNoVelocitySensitivity();
   testSynthPitchIsIndependentOfSampleRate();
   testIndependentOscillatorOctaves();
   testMetronomeRunsOnTheAudioCallback();
@@ -2662,6 +2875,9 @@ int main() {
   testCutoffProcessing();
   testCutoffVelocityCurve();
   testCutoffFilterTypesAndEnvelope();
+  testNoVelocitySensitivity();
+  testMonoNoteReturnsToStillHeldKey();
+  testMonoLegatoRetunePreservesEnvelope();
   testEqualizerProcessing();
   testEqualizerCutSlope();
   testCompressorProcessing();

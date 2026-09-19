@@ -157,6 +157,11 @@ TSFDEF void tsf_set_output(tsf* f, enum TSFOutputMode outputmode, int samplerate
 //   global_gain: the desired volume where 1.0 is 100%
 TSFDEF void tsf_set_volume(tsf* f, float global_gain);
 
+// Hook Keys: No Sens. Quando enabled, toda nota soa no ganho pleno da wave,
+// ignorando o velocity com que a tecla foi tocada. Reaplica na hora o ganho
+// das vozes ja soando, entao o efeito e imediato mesmo com um acorde preso.
+TSFDEF void tsf_set_no_velocity_sensitivity(tsf* f, int enabled);
+
 // Set the maximum number of voices to play simultaneously
 // Depending on the soundfond, one note can cause many new voices to be started,
 // so don't keep this number too low or otherwise sounds may not play.
@@ -375,6 +380,11 @@ struct tsf
 	float hookAttackSeconds, hookHoldSeconds, hookDecaySeconds, hookReleaseSeconds;
 	/* Nivel em que a nota segura depois do Decay, 0..1. Antes era fixo em 1. */
 	float hookSustain;
+	// No Sens: quando ligado, toda voz soa no ganho pleno da propria wave,
+	// ignorando o quanto a tecla foi tocada. Precisa ser retroativo (afeta
+	// notas ja soando), entao tsf_set_no_velocity_sensitivity reaplica o
+	// ganho de cada voz ativa na hora, em vez de só valer pra proxima nota.
+	TSF_BOOL hookNoVelocitySensitivity;
 };
 
 #ifndef TSF_NO_STDIO
@@ -500,6 +510,10 @@ struct tsf_voice
 	// 0 (fechado) a 1 (o Cutoff configurado); reachedPeak marca o fim do Attack.
 	float hookFilterEnvLevel;
 	unsigned char hookFilterEnvReachedPeak;
+	// Parcela do noteGainDB que veio só do velocity desta nota (sempre <= 0,
+	// toque fraco reduz o ganho). Guardada à parte pra dar pra tirar/devolver
+	// na hora quando o No Sens muda com a nota já soando.
+	float hookVelocityGainDB;
 	struct tsf_voice_lfo modlfo, viblfo;
 };
 
@@ -1627,6 +1641,18 @@ TSFDEF void tsf_set_volume(tsf* f, float global_volume)
 	f->globalGainDB = (global_volume == 1.0f ? 0 : -tsf_gainToDecibels(1.0f / global_volume));
 }
 
+TSFDEF void tsf_set_no_velocity_sensitivity(tsf* f, int enabled)
+{
+	struct tsf_voice *v, *vEnd;
+	TSF_BOOL wasEnabled = f->hookNoVelocitySensitivity;
+	if ((TSF_BOOL)(enabled != 0) == wasEnabled) return;
+	f->hookNoVelocitySensitivity = (TSF_BOOL)(enabled != 0);
+	// Tira ou devolve a parcela de velocity de cada voz ja soando, na hora.
+	for (v = f->voices, vEnd = v + f->voiceNum; v != vEnd; v++)
+		if (v->playingPreset != -1)
+			v->noteGainDB += (f->hookNoVelocitySensitivity ? -v->hookVelocityGainDB : v->hookVelocityGainDB);
+}
+
 TSFDEF int tsf_set_max_voices(tsf* f, int max_voices)
 {
 	int i = f->voiceNum;
@@ -1720,7 +1746,9 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 		voice->playingKey = key;
 		voice->playIndex = voicePlayIndex;
 		voice->heldSustain = 0;
-		voice->noteGainDB = f->globalGainDB - region->attenuation - tsf_gainToDecibels(1.0f / vel);
+		voice->hookVelocityGainDB = -tsf_gainToDecibels(1.0f / vel);
+		voice->noteGainDB = f->globalGainDB - region->attenuation
+			+ (f->hookNoVelocitySensitivity ? 0.0f : voice->hookVelocityGainDB);
 
 		if (f->channels)
 		{

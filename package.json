@@ -35,6 +35,7 @@
     "@capacitor/status-bar": "^6.0.1",
     "capacitor-voice-recorder": "6.0.3",
     "vshook-local-network": "file:plugins/vshook-local-network",
+    "vshook-orientation": "file:plugins/vshook-orientation",
     "vshook-silent-switch": "file:plugins/vshook-silent-switch"
   },
   "devDependencies": {

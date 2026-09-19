@@ -43,6 +43,8 @@ public:
   void noteOnWithFilterVelocity(std::uint8_t note, std::uint8_t velocity,
       std::uint8_t filterVelocity) noexcept override;
   void setCutoffConfig(CutoffConfig config) noexcept override;
+  void setNoVelocitySensitivity(bool enabled) noexcept override;
+  void setVoiceMode(bool mono, bool legato) noexcept override;
   void setGlideBehavior(GlideBehavior behavior) noexcept override;
   void noteOff(std::uint8_t note) noexcept override;
   void stealNote(std::uint8_t note) noexcept override;

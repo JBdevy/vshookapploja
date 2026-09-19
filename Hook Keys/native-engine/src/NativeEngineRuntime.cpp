@@ -348,6 +348,11 @@ bool NativeEngineRuntime::setTempo(float bpm) noexcept {
   return controlLayer_->engine->setTempoBpm(bpm);
 }
 
+bool NativeEngineRuntime::setGlobalTranspose(int semitones) noexcept {
+  std::scoped_lock lock(configMutex_);
+  return controlLayer_->engine->setGlobalTranspose(semitones);
+}
+
 void NativeEngineRuntime::setMetronome(
     bool enabled, float bpm, float volume, std::uint8_t clickSound,
     bool accentEnabled, bool doubleTimeEnabled,

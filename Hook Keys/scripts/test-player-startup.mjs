@@ -80,56 +80,50 @@ try {
     'motor pronto continua bloqueado até a animação terminar');
   await player.activateLiveMidi();
   assert(!root.querySelector('.player-next-field'), 'o campo Próxima saiu do topo');
-  const noteDisplay = root.querySelector('[data-note-chord-display]');
-  assert(noteDisplay, 'o topo mostra notas e acordes');
-  assert.equal(noteDisplay.textContent, '—');
+  const globalOctaveUp = root.querySelector('[data-action="global-octave-up"]');
+  assert(globalOctaveUp, 'o topo mostra o controle de oitava geral');
   assert.deepEqual([...root.querySelectorAll('.player-header-knobs .player-output-knob > span:first-child')]
     .map(label => label.textContent.trim()), ['Playlist', 'Pads', 'Efects', 'Click', 'Master']);
   assert.equal(root.querySelectorAll('.player-header-knobs__divider').length, 0,
     'os cinco knobs principais ficam sem barras entre eles');
   assert(!root.querySelector('[data-action="open-tracks"]'), 'a Playlist saiu do topo');
   assert.equal(root.querySelectorAll('.player-module').length, 8, 'mantém os oito módulos');
-  for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 100);
-  assert.equal(noteDisplay.textContent, 'C', 'usa a cifra profissional para o acorde maior');
-  player.receiveMidiNote(70, 127);
-  assert.equal(noteDisplay.textContent, 'C7', 'acrescentar a sétima muda a nota para a cifra do acorde');
-  player.receiveMidiNote(70, 0);
-  for (const noteNumber of [60, 64, 67]) player.receiveMidiNote(noteNumber, 0);
-  assert.equal(noteDisplay.textContent, '—', 'limpa quando solta as teclas');
-  player.receiveMidiNote(69, 127);
-  assert.equal(noteDisplay.textContent, 'A3', 'nota isolada mostra a oitava');
-  player.receiveMidiNote(69, 0);
-  for (const [notes, expected] of [
-    [[55, 59, 62], 'G'],
-    [[60, 63, 67], 'Cm'],
-    [[60, 64, 67, 70], 'C7'],
-    [[60, 64, 67, 71], 'Cmaj7'],
-    [[57, 60, 64, 67], 'Am7'],
-    [[60, 65, 67], 'Csus4'],
-    [[60, 62, 67], 'Csus2'],
-    [[60, 63, 66], 'Cdim'],
-    [[60, 64, 67, 74], 'Cadd9'],
-    [[60, 64, 67, 70, 74], 'C9'],
-    [[60, 64, 67, 71, 74], 'Cmaj9'],
-    [[60, 64, 70], 'C7'], // common voicing without the fifth
-    [[52, 55, 60], 'C/E'],
-    [[55, 60, 64], 'C/G'],
-    [[48, 60, 64, 67, 72], 'C'], // octave doublings
-    [[59, 62, 65, 67], 'G7/B'],
-    [[60, 64, 68], 'Caug'],
-    [[60, 63, 66, 70], 'Cm7b5'],
-    [[60, 64, 67, 70, 73], 'C7b9'],
-  ]) {
-    for (const note of notes) player.receiveMidiNote(note, 110);
-    assert.equal(noteDisplay.textContent, expected, `acorde ${expected} a partir de MIDI ${notes}`);
-    for (const note of notes) player.receiveMidiNote(note, 0);
-    assert.equal(noteDisplay.textContent, '—');
-  }
-  player.receiveMidiNote(60, 127);
-  player.receiveMidiNote(61, 127);
-  player.receiveMidiNote(62, 127);
-  assert.equal(noteDisplay.textContent, 'C3 · C#3 · D3', 'cluster não reconhecido continua mostrando notas');
-  for (const note of [60, 61, 62]) player.receiveMidiNote(note, 0);
+  assert.deepEqual(
+    [...root.querySelectorAll('.keyboard-expression__track i b')].map((label) => label.textContent),
+    ['H', 'K'],
+    'H e K ficam dentro dos botões móveis de Pitch e Modulation',
+  );
+  assert.doesNotMatch(playerCss, /\.keyboard-expression--mod \.keyboard-expression__track i\s*\{[^}]*opacity:\s*0/,
+    'o botão móvel do Modulation continua visível sobre a barra laranja');
+  const moduleOctaves = player.getActivePresetState().modules.map(module => module.octaveShift);
+  globalOctaveUp.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(player.globalOctaveShift, 1, 'OCT + altera a oitava geral da entrada');
+  assert.deepEqual(player.getActivePresetState().modules.map(module => module.octaveShift), moduleOctaves,
+    'OCT geral não altera o Oct individual dos módulos');
+  assert(calls.some(({ command, args }) => command === 'set_global_transpose' && args?.semitones === 12),
+    'uma oitava geral é enviada ao motor como 12 semitons');
+  assert.deepEqual(
+    [...root.querySelectorAll('.player-global-pitch__separator')].map((separator) => separator.textContent),
+    ['/', '/', '/'],
+    'barras separam OCT, TRS, STEREO e PANIC',
+  );
+  assert.equal(root.querySelectorAll('.player-global-pitch__group > span').length, 0,
+    'não repete os nomes OCT e TRANS ao lado dos botões');
+  const moduleOutputMode = root.querySelector('[data-action="toggle-module-output-mode"]');
+  assert.equal(moduleOutputMode.textContent, 'STEREO');
+  const beforeDualMono = calls.length;
+  moduleOutputMode.click();
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(moduleOutputMode.textContent, 'MONO');
+  const dualMonoConfigs = calls.slice(beforeDualMono).filter(({ command }) => command === 'configure_module');
+  assert.equal(new Set(dualMonoConfigs.map(({ args }) => args.config.moduleIndex)).size, 8,
+    'Mono atualiza os oito módulos');
+  assert(dualMonoConfigs.every(({ args }) => args.config.outputDualMono === true),
+    'Mono envia L+R duplicado somente pela configuração dos módulos');
+  moduleOutputMode.click();
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(moduleOutputMode.textContent, 'STEREO');
   {
     const modal = window.document.createElement('div');
     modal.innerHTML = `<p data-user-sf2-load-status></p><div data-user-sf2-list></div>
@@ -452,6 +446,8 @@ try {
     const limit = window.document.querySelector('[data-cc-limit]');
     limit.value = '76.4';
     limit.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.match(window.document.querySelector('[data-cc-limit-output]').textContent, /dB$/,
+      'limite do fader é mostrado em dB, não em porcentagem genérica');
     cc(46, 127);
     window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
     assert.equal(player.ccMappingOptions.get('module:1').inverted, false);
@@ -479,6 +475,15 @@ try {
     player.closeModal();
     player.ccMappings.delete('module:1');
     player.ccMappingOptions.delete('module:1');
+
+    player.openCcLearn({ kind: 'module-control', moduleNumber: 1, control: 'attackMs', label: 'Attack' }, moduleFader);
+    assert.match(window.document.querySelector('[data-cc-limit-output]').textContent, /ms$/,
+      'limite do Attack é mostrado em milissegundos');
+    player.closeModal();
+    player.openCcLearn({ kind: 'module-control', moduleNumber: 1, control: 'cutoff', label: 'Cutoff' }, moduleFader);
+    assert.match(window.document.querySelector('[data-cc-limit-output]').textContent, /kHz$/,
+      'limite do Cutoff é mostrado em frequência');
+    player.closeModal();
   }
   assert.equal(synthShortcut.textContent.trim(), 'Synth', 'alternar modo não muda o atalho frontal');
   player.openModal('module-settings', 8, master);
@@ -716,7 +721,9 @@ try {
   }
   {
     // Modo Poly/Mono do Config: módulos 1 a 7 (Arpeggiator e Trance Gate inclusos).
-    const lastPolyphony = (moduleIndex) => calls.filter(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === moduleIndex).at(-1).args.config.polyphony;
+    // O motor decide o Mono sozinho agora (substitui e devolve a nota
+    // anterior); a polifonia configurada continua valendo, sem ser forçada a 1.
+    const lastConfig = (moduleIndex) => calls.filter(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === moduleIndex).at(-1).args.config;
     for (const module of [1, 6, 7]) {
       player.openModal('module-settings', module, master);
       useUserSettings();
@@ -725,15 +732,49 @@ try {
       assert(modeButton().previousElementSibling?.classList.contains('module-settings-source-button'),
         `em cima do Modo fica Default/User, não o Reset, no módulo ${module}`);
       assert.equal(modeButton().querySelector('strong').textContent, 'Poly');
+      const glideModeButton = () => window.document.querySelector('[data-glide-mode]');
+      assert.equal(glideModeButton()?.textContent, 'Auto', `módulo ${module} começa em Auto`);
       modeButton().click();
       await player.syncNativeEngine();
       assert.equal(modeButton().querySelector('strong').textContent, 'Mono');
-      assert.equal(lastPolyphony(module - 1), 1, `Mono do módulo ${module} chega ao motor como uma voz`);
-      modeButton().click();
+      assert.equal(lastConfig(module - 1).mono, true, `Mono do módulo ${module} chega ao motor como uma flag`);
+      assert.equal(lastConfig(module - 1).polyphony, 128, `Mono não força mais a polifonia a 1 no módulo ${module}`);
+      assert.equal(player.getActivePresetState().modules[module - 1].settings.glideMode, 'portamento',
+        `Mono liga o Portamento sozinho no módulo ${module}`);
+      // Mono → Porta tem que aparecer na hora no card de Glide, sem fechar
+      // e reabrir o Config.
+      assert.equal(glideModeButton()?.textContent, 'Porta', `módulo ${module}: Auto virou Porta na hora`);
+      // E o caminho contrário: apagar o Porta no card de Glide devolve o
+      // módulo pro Poly, também refletido na hora no botão Modo.
+      glideModeButton().click();
       await player.syncNativeEngine();
-      assert.equal(lastPolyphony(module - 1), 128, `Poly do módulo ${module} volta à polifonia escolhida`);
+      assert.equal(player.getActivePresetState().modules[module - 1].settings.glideMode, 'auto',
+        `módulo ${module}: desligar o Porta volta o Glide pra Auto`);
+      assert.equal(player.getActivePresetState().modules[module - 1].settings.voiceMode, 'poly',
+        `módulo ${module}: desligar o Porta devolve o módulo pro Poly`);
+      assert.equal(modeButton().querySelector('strong').textContent, 'Poly',
+        `módulo ${module}: o botão Modo mostra Poly na hora, sem reabrir`);
+      assert.equal(lastConfig(module - 1).mono, false, `Poly do módulo ${module} desliga a flag de Mono`);
+      assert.equal(lastConfig(module - 1).polyphony, 128, `Poly do módulo ${module} volta à polifonia escolhida`);
       player.closeModal();
     }
+  }
+  {
+    // O mesmo vínculo Mono/Poly ↔ Porta/Auto vale pro Synth (módulo 8), que
+    // tem seu próprio botão de Modo dentro do editor.
+    player.openModal('module-synth', 8, master);
+    const synthModeButton = () => window.document.querySelector('[data-synth-voice-mode]');
+    const synthGlideModeButton = () => window.document.querySelector('[data-glide-mode]');
+    assert(synthModeButton(), 'Synth tem o botão de Modo');
+    assert.equal(synthModeButton().textContent, 'Poly');
+    synthModeButton().click();
+    await player.syncNativeEngine();
+    assert.equal(synthModeButton().textContent, 'Mono', 'Synth: Poly vira Mono');
+    assert.equal(synthGlideModeButton()?.textContent, 'Porta', 'Synth: Mono liga o Porta na hora');
+    synthGlideModeButton().click();
+    await player.syncNativeEngine();
+    assert.equal(synthModeButton().textContent, 'Poly', 'Synth: desligar o Porta devolve o Poly na hora');
+    player.closeModal();
   }
   {
     // Em Default os parâmetros ficam travados: tocar num deles abre o aviso e
@@ -772,19 +813,24 @@ try {
       const buttons = () => [...window.document.querySelectorAll('[data-module-glide-card] .module-glide-card__buttons button')].map((button) => button.textContent.trim());
       assert.equal(JSON.stringify(buttons()), JSON.stringify(['Sync', 'Auto', 'Config', 'No Sens']),
         'card de Glide padrão: Sync | Auto / Config | No Sens');
-      // No Sens: o motor recebe velocity cheia; desligado, a curva salva (Soft).
+      // No Sens agora desliga o envelope do amplificador direto no motor
+      // (retroativo, nem novo Note On precisa); a curva de velocity salva
+      // sempre vai real pro motor, ligado ou não.
+      const moduleConfig = () => calls.filter(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === module - 1).at(-1).args.config;
       const curve = () => {
-        const config = calls.filter(({ command, args }) => command === 'configure_module' && args.config.moduleIndex === module - 1).at(-1).args.config;
+        const config = moduleConfig();
         return [config.velocityCurve0, config.velocityCurve1, config.velocityCurve2, config.velocityCurve3, config.velocityCurve4].join(',');
       };
       const noSens = () => window.document.querySelector('[data-glide-no-sens]');
       await player.syncNativeEngine();
       assert.equal(noSens().getAttribute('aria-pressed'), String(module === 8), 'No Sens nasce ligado só no Synth');
-      assert.equal(curve(), module === 8 ? '127,127,127,127,127' : '0,16,44,84,127');
+      assert.equal(curve(), '0,16,44,84,127');
+      assert.equal(moduleConfig().noVelocitySensitivity, module === 8, 'No Sens vai direto pro motor, sem mexer na curva salva');
       noSens().click();
       await player.syncNativeEngine();
       assert.equal(noSens().getAttribute('aria-pressed'), String(module !== 8));
-      assert.equal(curve(), module === 8 ? '0,16,44,84,127' : '127,127,127,127,127', 'No Sens alterna o volume fixo no motor');
+      assert.equal(curve(), '0,16,44,84,127', 'a curva salva não muda mais quando o No Sens alterna');
+      assert.equal(moduleConfig().noVelocitySensitivity, module !== 8, 'No Sens alterna direto no motor');
       noSens().click();
       await player.syncNativeEngine();
       await player.syncNativeEngine();
@@ -1099,9 +1145,105 @@ try {
     assert.equal(player.bankStates.get('B').selectedPreset, 5);
     assert.equal(presetButton(5).querySelector('.player-preset-button__label').textContent, 'Origem', 'o nome colado aparece no botão');
 
-    // Os bancos não são mapeáveis: o preset mapeado já leva ao banco dele.
+    // Clique direito é o toque longo do desktop: abre o nome/Advanced do banco,
+    // mas continua sem transformar o próprio banco em destino de Learn CC.
     player.onRootContextMenu({ target: bankButton('E'), preventDefault() {} });
-    assert.equal(player.currentModalKind, null, 'botão de banco não abre Learn CC');
+    assert.equal(player.currentModalKind, 'bank-name', 'clique direito no banco abre o editor');
+    const bankNameInput = window.document.querySelector('[data-bank-name-input]');
+    assert.equal(bankNameInput.maxLength, 12, 'nome do banco tem no máximo 12 caracteres');
+    bankNameInput.value = 'Show Principal';
+    bankNameInput.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    assert.equal(player.currentModalKind, null, 'Enter no desktop aciona o botão OK do modal');
+    assert.equal(player.bankStates.get('E').name, 'Show Princip', 'nome salvo respeita os 12 caracteres');
+    assert.equal(bankButton('E').textContent, 'Show Princip');
+
+    player.onRootContextMenu({ target: bankButton('B'), preventDefault() {} });
+    window.document.querySelector('[data-modal-action="open-bank-advanced"]').click();
+    assert.deepEqual([...window.document.querySelectorAll('[data-bank-fader-mode]')].map(button => button.textContent.trim()),
+      ['Default', 'Master', 'Bank 1', 'Bank 2'], 'Advanced oferece os quatro modos de fader');
+    window.document.querySelector('[data-bank-fader-mode="master"]').click();
+    assert.equal(player.bankStates.get('B').faderMode, 'master');
+    player.closeModal();
+    player.faders.get(1).setValueDb(-18, true);
+    presetButton(6).click();
+    assert(Math.abs(player.faders.get(1).getValueDb() + 18) < 0.01,
+      'Master mantém o volume do fader ao trocar de preset');
+
+    player.onRootContextMenu({ target: bankButton('B'), preventDefault() {} });
+    window.document.querySelector('[data-modal-action="open-bank-advanced"]').click();
+    window.document.querySelector('[data-bank-fader-mode="bank"]').click();
+    player.closeModal();
+    player.faders.get(1).setValueDb(-15, true);
+    presetButton(5).click();
+    assert(Math.abs(player.faders.get(1).getValueDb() + 15) < 0.01,
+      'Bank 1 herda do Master e mantém o volume do fader ao trocar de preset');
+    presetButton(6).click();
+    assert(Math.abs(player.faders.get(1).getValueDb() + 15) < 0.01,
+      'Bank 1 mantém o mesmo volume também ao retornar ao preset anterior');
+    const bankFader = root.querySelector('[data-module-fader="1"] .player-module__fader-rail');
+    player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, bankFader);
+    player.handleMidiControlChange({ controller: 118, value: 127, channel: 1, inputId: 'bank-cc' });
+    window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+    assert.equal(player.ccMappings.get('module-bank:B:6:1'), 118,
+      'Bank 1 grava o CC do fader no preset atual');
+    presetButton(5).click();
+    player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, bankFader);
+    player.handleMidiControlChange({ controller: 118, value: 127, channel: 1, inputId: 'bank-cc' });
+    window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+    assert.equal(player.ccMappings.get('module-bank:B:5:1'), 118,
+      'o mesmo CC pode ser remapeado no outro preset do modo Bank 1');
+
+    player.onRootContextMenu({ target: bankButton('B'), preventDefault() {} });
+    window.document.querySelector('[data-modal-action="open-bank-advanced"]').click();
+    window.document.querySelector('[data-bank-fader-mode="bank2"]').click();
+    player.closeModal();
+    assert.equal(player.bankStates.get('B').faderMode, 'bank2');
+    assert.equal(bankButton('B').dataset.bankModeLabel, 'Bank 2');
+    player.faders.get(1).setValueDb(-22, true);
+    const presetSixVolume = player.bankStates.get('B').presets[5].modules[0].volumeDb;
+    presetButton(6).click();
+    assert(Math.abs(player.faders.get(1).getValueDb() - presetSixVolume) < 0.01,
+      'Bank 2 restaura o volume individual do preset de destino');
+    player.faders.get(1).setValueDb(-8, true);
+    presetButton(5).click();
+    assert(Math.abs(player.faders.get(1).getValueDb() + 22) < 0.01,
+      'Bank 2 recupera o volume salvo no primeiro preset');
+    presetButton(6).click();
+    assert(Math.abs(player.faders.get(1).getValueDb() + 8) < 0.01,
+      'Bank 2 recupera o volume salvo no segundo preset');
+    assert.equal(player.ccMappingKeyForTarget({ kind: 'module-volume', moduleNumber: 1 }), 'module-bank:B:6:1',
+      'Bank 2 mantém o Learn CC do fader individual por preset');
+    assert.equal(player.createSavedPlayerState().banks.B.faderMode, 'bank2',
+      'Bank 2 é preservado no estado salvo');
+    player.onRootContextMenu({ target: bankButton('B'), preventDefault() {} });
+    window.document.querySelector('[data-modal-action="open-bank-advanced"]').click();
+    window.document.querySelector('[data-bank-fader-mode="default"]').click();
+    player.closeModal();
+    player.ccMappings.delete('module-bank:B:5:1');
+    player.ccMappings.delete('module-bank:B:6:1');
+
+    const sourceConfig = player.getActivePresetState().modules[4];
+    const targetConfig = player.getActivePresetState().modules[5];
+    sourceConfig.timbreId = 'fixed:config-copy-test';
+    sourceConfig.timbreName = 'Copy Test';
+    sourceConfig.settings.attackMs = 432;
+    targetConfig.midiInputId = 'midi-destino';
+    player.ccMappings.set('module-control:6:attackMs', 117);
+    const sourceConfigButton = root.querySelector('[data-action="open-module-settings"][data-module="5"]');
+    const targetConfigButton = root.querySelector('[data-action="open-module-settings"][data-module="6"]');
+    player.onRootContextMenu({ target: sourceConfigButton, preventDefault() {} });
+    assert(sourceConfigButton.classList.contains('is-config-copy-source'), 'Config de origem fica piscando');
+    targetConfigButton.click();
+    assert.equal(player.currentModalKind, 'module-config-copy-confirm', 'destino pede confirmação antes de substituir o Config');
+    assert.match(window.document.querySelector('.preset-paste-confirmation').textContent,
+      /módulo 5 para o módulo 6/);
+    window.document.querySelector('[data-modal-action="confirm-module-config-copy"]').click();
+    assert.equal(player.getActivePresetState().modules[5].timbreName, 'Copy Test', 'copia também o timbre');
+    assert.equal(player.getActivePresetState().modules[5].settings.attackMs, 432, 'copia a configuração inteira');
+    assert.equal(player.getActivePresetState().modules[5].midiInputId, 'midi-destino', 'não copia a entrada MIDI');
+    assert.equal(player.ccMappings.get('module-control:6:attackMs'), 117, 'não altera o MIDI mapeado no destino');
+    player.ccMappings.delete('module-control:6:attackMs');
+
     player.ccMappings.set('bank:E', 41);
     player.applySavedPlayerState(JSON.parse(JSON.stringify({ ...player.createSavedPlayerState(), ccMappings: { 'bank:E': 41 } })));
     assert(!player.ccMappings.has('bank:E'), 'mapeamento de banco não é mais um destino salvo');
@@ -1386,6 +1528,22 @@ try {
   assert.equal(tempoInput.value, '96', 'custom numeric keys edit BPM');
   window.document.querySelector('[data-modal-action="confirm"]').click();
   assert.equal(player.metronome.getBpm(), 96, 'custom BPM is committed');
+  player.selectBottomView('keyboard');
+  const appBankButton = root.querySelector('[data-action="show-bank"][data-bank="C"]');
+  assert.equal(appBankButton.getAttribute('aria-disabled'), null,
+    'no app, os bancos continuam habilitados quando o Keyboard aparece');
+  assert.doesNotMatch(playerCss,
+    /\.player-presets\.is-keyboard[^\{]*player-navigation__bank-button[^\{]*\{[^}]*pointer-events:\s*none/,
+    'o Keyboard não bloqueia os eventos de toque dos bancos');
+  appBankButton.click();
+  assert.equal(player.activeBank, 'C', 'toque simples no app troca de banco com o Keyboard aberto');
+  const appBankPointer = { ...appTempoPointer, target: appBankButton, pointerId: 33, timeStamp: 35000 };
+  player.onRootPointerDown(appBankPointer);
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.equal(player.currentModalKind, 'bank-name', 'toque longo no banco abre a edição no app');
+  player.onRootPointerEnd({ ...appBankPointer, type: 'pointerup', timeStamp: 35620 });
+  player.closeModal();
+  player.selectBottomView('presets');
   player.desktopRuntime = true;
   player.seamlessPresetSwitching = true;
   const beforePresetSwitch = calls.length;
@@ -1460,6 +1618,39 @@ try {
     'Reverb values above 16 do not create synthetic CC messages');
   player.compatibilityMode = false;
   player.midiInput.setCompatibilityMode(false);
+
+  {
+    const originalInstall = player.soundLibraryEngine.install.bind(player.soundLibraryEngine);
+    const originalSyncNativeEngine = player.syncNativeEngine.bind(player);
+    let simultaneousDownloads = 0;
+    let maximumSimultaneousDownloads = 0;
+    const order = [];
+    player.soundLibraryEngine.install = async (soundId, onProgress) => {
+      simultaneousDownloads += 1;
+      maximumSimultaneousDownloads = Math.max(maximumSimultaneousDownloads, simultaneousDownloads);
+      order.push(`start:${soundId}`);
+      onProgress?.({ soundId, phase: 'downloading', receivedBytes: 50, totalBytes: 100, percentage: 50 });
+      await new Promise(resolve => setTimeout(resolve, 5));
+      order.push(`end:${soundId}`);
+      simultaneousDownloads -= 1;
+      return {};
+    };
+    player.syncNativeEngine = async () => {};
+    const queuedSound = (id, name) => ({ id, name, category: 'keys', color: '#fff', sf2ObjectKey: `${id}.sf2`,
+      previewObjectKey: '', catalogVersion: 1, publishedAt: null });
+    for (const sound of [queuedSound('queue-one', 'Fila 1'), queuedSound('queue-two', 'Fila 2')]) {
+      player.activeSoundDownloads.set(sound.id, {
+        sound, percentage: 0, abort: new AbortController(), state: 'queued',
+      });
+    }
+    await player.processSoundDownloadQueue();
+    assert.equal(maximumSimultaneousDownloads, 1, 'downloads de timbre rodam um por vez');
+    assert.deepEqual(order, ['start:queue-one', 'end:queue-one', 'start:queue-two', 'end:queue-two'],
+      'a fila termina um timbre antes de iniciar o próximo');
+    player.soundLibraryEngine.install = originalInstall;
+    player.syncNativeEngine = originalSyncNativeEngine;
+  }
+
   meterLevels = Array(16).fill(0);
   player.destroy();
   const reads = calls.filter(c => c.command === 'module_meter_levels').length;

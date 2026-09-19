@@ -77,7 +77,7 @@ export function createPerformanceKeyboardMarkup(
         ${(['pitch', 'mod'] as const).map((kind) => `
           <label class="keyboard-expression keyboard-expression--${kind}" style="--wheel-position:${kind === 'pitch' ? 50 : 0}%">
             <span>${kind === 'pitch' ? 'Pitch' : 'Mod'}</span>
-            <span class="keyboard-expression__track" aria-hidden="true"><i></i></span>
+            <span class="keyboard-expression__track" aria-hidden="true"><i><b>${kind === 'pitch' ? 'H' : 'K'}</b></i></span>
             <input type="range" min="0" max="${kind === 'pitch' ? 16383 : 127}" step="1" value="${kind === 'pitch' ? 8192 : 0}" data-keyboard-expression="${kind}" aria-label="${kind === 'pitch' ? 'Pitch bend' : 'Modulação'}" aria-valuetext="${kind === 'pitch' ? '0%' : '0'}">
           </label>
         `).join('')}

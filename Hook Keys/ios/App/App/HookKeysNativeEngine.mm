@@ -576,8 +576,12 @@ static NSString *describeFormat(AVAudioFormat *format) {
                 polyphony:(NSInteger)polyphony velocityCurve0:(NSInteger)velocityCurve0
            velocityCurve1:(NSInteger)velocityCurve1 velocityCurve2:(NSInteger)velocityCurve2
            velocityCurve3:(NSInteger)velocityCurve3 velocityCurve4:(NSInteger)velocityCurve4
+   noVelocitySensitivity:(BOOL)noVelocitySensitivity
+                     mono:(BOOL)mono
+                   legato:(BOOL)legato
        outputChannelStart:(NSInteger)outputChannelStart
-       outputChannelCount:(NSInteger)outputChannelCount {
+       outputChannelCount:(NSInteger)outputChannelCount
+             outputDualMono:(BOOL)outputDualMono {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
   hook_keys::ModuleConfig config;
@@ -600,8 +604,12 @@ static NSString *describeFormat(AVAudioFormat *format) {
       static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve2, 0, 127)),
       static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve3, 0, 127)),
       static_cast<std::uint8_t>(std::clamp<NSInteger>(velocityCurve4, 0, 127))};
+  config.noVelocitySensitivity = noVelocitySensitivity;
+  config.mono = mono;
+  config.legato = legato;
   config.outputChannelStart = static_cast<std::uint8_t>(std::clamp<NSInteger>(outputChannelStart, 0, 31));
   config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
+  config.outputDualMono = outputDualMono;
   return runtime->setModuleConfig(static_cast<std::size_t>(moduleIndex), config);
 }
 
@@ -826,6 +834,11 @@ static NSString *describeFormat(AVAudioFormat *format) {
 - (BOOL)setTempo:(float)bpm {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && runtime->setTempo(bpm);
+}
+
+- (BOOL)setGlobalTranspose:(NSInteger)semitones {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && runtime->setGlobalTranspose(static_cast<int>(semitones));
 }
 
 - (BOOL)setMetronomeOutputChannelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount {

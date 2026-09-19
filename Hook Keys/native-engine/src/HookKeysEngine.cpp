@@ -84,6 +84,11 @@ bool HookKeysEngine::setTempoBpm(float tempoBpm) noexcept {
   return push(EngineCommand::tempo(std::clamp(tempoBpm, 60.0f, 600.0f)));
 }
 
+bool HookKeysEngine::setGlobalTranspose(int semitones) noexcept {
+  return push(EngineCommand::globalTranspose(
+      static_cast<std::int8_t>(std::clamp(semitones, -60, 60))));
+}
+
 bool HookKeysEngine::stopAllNotes() noexcept {
   return push(EngineCommand::panic());
 }
@@ -168,11 +173,13 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
         auto* destination = output + (rendered + frame) * channels;
         leftPeak = std::max(leftPeak, std::abs(sampleLeft));
         rightPeak = std::max(rightPeak, std::abs(sampleRight));
-        if (stereo) {
+        if (stereo && !config.outputDualMono) {
           destination[first] += sampleLeft;
           destination[first + 1] += sampleRight;
         } else {
-          destination[first] += (sampleLeft + sampleRight) * 0.5f;
+          const auto mono = (sampleLeft + sampleRight) * 0.5f;
+          destination[first] += mono;
+          if (stereo) destination[first + 1] += mono;
         }
         scratchLeft_[frame] = sampleLeft;
         scratchRight_[frame] = sampleRight;
@@ -301,6 +308,8 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
           if (!stealOldestNote(index)) break;
         }
         if (modules_[index]) modules_[index]->setCutoffConfig(configs_[index].effects.cutoff);
+        if (modules_[index]) modules_[index]->setNoVelocitySensitivity(configs_[index].noVelocitySensitivity);
+        if (modules_[index]) modules_[index]->setVoiceMode(configs_[index].mono, configs_[index].legato);
         auto sharedEffects = configs_[index].effects;
         // Cutoff belongs to each voice, never to the sum of a polyphonic chord.
         sharedEffects.cutoff.enabled = false;
@@ -313,6 +322,9 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
       break;
     case CommandType::allNotesOff:
       applyAllNotesOff();
+      break;
+    case CommandType::setGlobalTranspose:
+      settings_.globalTransposeSemitones = command.globalTransposeSemitones;
       break;
   }
 }
@@ -416,7 +428,7 @@ void HookKeysEngine::routeNoteOn(
         }
       }
     }
-    const auto targetNote = translatedNote(sourceNote, config.octaveShift);
+    const auto targetNote = translatedNote(sourceNote, config.octaveShift, settings_.globalTransposeSemitones);
     // Lido antes do roubo: no Mono a nota nova tira a anterior, e o Trance Gate
     // não pode recomeçar o padrão a cada nota tocada ligada.
     const auto startsFromSilence = !moduleHasActiveNotes(index);
@@ -568,8 +580,10 @@ bool HookKeysEngine::push(const EngineCommand& command) noexcept {
   return false;
 }
 
-std::uint8_t HookKeysEngine::translatedNote(std::uint8_t sourceNote, std::int8_t octaveShift) noexcept {
-  const auto translated = static_cast<int>(sourceNote) + static_cast<int>(octaveShift) * 12;
+std::uint8_t HookKeysEngine::translatedNote(
+    std::uint8_t sourceNote, std::int8_t octaveShift, std::int8_t globalTransposeSemitones) noexcept {
+  const auto translated = static_cast<int>(sourceNote) + static_cast<int>(octaveShift) * 12
+      + static_cast<int>(globalTransposeSemitones);
   return static_cast<std::uint8_t>(std::clamp(translated, 0, 127));
 }
 

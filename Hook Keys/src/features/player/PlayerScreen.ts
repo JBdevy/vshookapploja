@@ -2,11 +2,13 @@ import type { HookKeysAccount } from '../auth/types';
 import {
   createGlideCardMarkup,
   createGlideVelocityMarkup,
+  createVoiceModeMarkup,
   DEFAULT_MODULE_GLIDE_MS,
   effectiveGlideMs,
   formatGlideMs,
   readGlideMode,
   readGlideVelocity,
+  readLegato,
   readNoVelocitySensitivity,
   updateGlideVelocityMarkup,
 } from './GlideView';
@@ -23,7 +25,7 @@ import {
   type MidiNoteInput,
   type MidiPitchBendInput,
 } from '../midi/MidiInputService';
-import { createModuleFaderMarkup, MODULE_FADER_MIN_DB, ModuleFader, visualPositionToFaderDb } from './ModuleFader';
+import { createModuleFaderMarkup, formatFaderDb, MODULE_FADER_MIN_DB, ModuleFader, visualPositionToFaderDb } from './ModuleFader';
 import {
   createAudioSettingsMarkup,
   createAppSettingsMarkup,
@@ -224,6 +226,7 @@ import {
   DEFAULT_SYNTH_SETTINGS,
   FACTORY_SYNTH_PRESETS,
   factorySynthPreset,
+  formatOscillatorVolume,
   oscillatorVolumeGain,
   readSynthSettings,
   SYNTH_PRESET_COUNT,
@@ -252,9 +255,22 @@ import {
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-organ' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-organ' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm' | 'module-config-copy-confirm';
 type BankId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
+type FaderBehaviorMode = 'default' | 'master' | 'bank' | 'bank2';
 type PlayerView = 'bank' | 'pads-effects';
+
+function faderModeUsesPersistentVolumes(mode: FaderBehaviorMode): boolean {
+  return mode === 'master' || mode === 'bank';
+}
+
+function faderModeUsesPresetMappings(mode: FaderBehaviorMode): boolean {
+  return mode === 'bank' || mode === 'bank2';
+}
+
+function faderModeLabel(mode: FaderBehaviorMode): string {
+  return mode === 'master' ? 'Master' : mode === 'bank' ? 'Bank 1' : mode === 'bank2' ? 'Bank 2' : 'Default';
+}
 
 interface ModalRoute {
   kind: ModalKind;
@@ -263,6 +279,9 @@ interface ModalRoute {
 }
 
 interface BankState {
+  faderMode: FaderBehaviorMode;
+  masterVolumes: number[];
+  name: string;
   selectedPreset: number | null;
   presets: PresetState[];
 }
@@ -405,6 +424,95 @@ function normalizeCcMappingOptions(value: unknown): CcMappingOptions {
   };
 }
 
+// O limite continua salvo como uma fração neutra (para manter backups
+// compatíveis), mas o músico vê o ponto final real do controle que mapeou.
+function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
+  const progress = Math.min(1, Math.max(0, limitPercent / 100));
+  if (target.kind === 'module-volume') {
+    return formatFaderDb(visualPositionToFaderDb(progress));
+  }
+  if (target.kind === 'output-volume' || target.kind === 'metronome-volume') {
+    return formatOutputDb(outputDbFromPosition(progress * 100));
+  }
+  if (target.kind !== 'module-control') return `${limitPercent}%`;
+
+  const control = target.control;
+  if (isModuleEnvelopeParameter(control)) {
+    return formatEnvelopeTime(MODULE_ENVELOPE_LIMITS[control] * progress);
+  }
+  if (control === 'cutoff') return formatCutoffFrequency(cutoffFrequencyFromRatio(progress));
+  if (control.startsWith('organ:drawbar:')) return String(Math.round(ORGAN_DRAWBAR_MAX * progress));
+
+  if (control.startsWith('synth:')) {
+    const parameter = control.slice('synth:'.length);
+    const ranges: Record<string, readonly [number, number]> = {
+      oscillator1Volume: [0, 100], oscillator2Volume: [0, 100], detuneCents: [-100, 100],
+      attackMs: [0, 15_000], holdMs: [0, 15_000], decayMs: [0, 25_000], releaseMs: [0, 25_000],
+      filterCutoffHz: [20, 20_000], filterResonance: [0, 98], filterEnvelope: [-100, 100],
+      lfoRateHz: [0.05, 30], lfoDepth: [0, 100], glideMs: [0, 5_000],
+    };
+    const range = ranges[parameter];
+    if (!range) return `${limitPercent}%`;
+    const value = parameter === 'filterCutoffHz'
+      ? 20 * (1_000 ** progress)
+      : range[0] + (range[1] - range[0]) * progress;
+    if (parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume') {
+      return formatOscillatorVolume(value);
+    }
+    if (parameter.endsWith('Ms')) return formatEnvelopeTime(value);
+    if (parameter === 'filterCutoffHz') return formatCutoffFrequency(value);
+    if (parameter === 'lfoRateHz') return `${value.toFixed(2)} Hz`;
+    if (parameter === 'detuneCents') return `${Math.round(value)} cent`;
+    return `${Math.round(value)}%`;
+  }
+
+  if (control.startsWith('arpeggiator:')) {
+    const parameter = control.slice('arpeggiator:'.length);
+    const ranges: Record<string, readonly [number, number]> = {
+      octaves: [1, 4], gate: [10, 100], swing: [0, 75],
+    };
+    const range = ranges[parameter];
+    if (!range) return `${limitPercent}%`;
+    const value = range[0] + (range[1] - range[0]) * progress;
+    return parameter === 'octaves' ? String(Math.round(value)) : `${Math.round(value)}%`;
+  }
+
+  if (control.startsWith('tranceGate:')) {
+    const parameter = control.slice('tranceGate:'.length);
+    const ranges: Record<string, readonly [number, number]> = {
+      gate: [5, 100], depth: [0, 100], attackMs: [0.1, 100], releaseMs: [0.1, 100], swing: [0, 75],
+    };
+    const range = ranges[parameter];
+    if (!range) return `${limitPercent}%`;
+    const value = range[0] + (range[1] - range[0]) * progress;
+    return parameter.endsWith('Ms') ? `${value.toFixed(value < 10 ? 1 : 0)} ms` : `${Math.round(value)}%`;
+  }
+
+  const separator = control.indexOf(':');
+  const effectKind = control.slice(0, separator);
+  const effectControl = control.slice(separator + 1);
+  if (!isModuleEffectKind(effectKind) || !effectControl) return `${limitPercent}%`;
+  const ranges: Record<string, readonly [number, number]> = {
+    'compressor:thresholdDb': [-60, 0], 'compressor:ratio': [1, 20], 'compressor:gainDb': [0, 24],
+    'compressor:attackMs': [0.1, 100], 'compressor:releaseMs': [10, 1_000], 'compressor:mix': [0, 100],
+    'reverb:decay': [0.1, 20], 'reverb:dampen': [0, 100], 'reverb:size': [0, 100], 'reverb:mix': [0, 100],
+    'delay:feedback': [0, 95], 'delay:mix': [0, 100], 'delay:milliseconds': [1, 2_000],
+    'rotary:slowHz': [0.2, 2], 'rotary:fastHz': [2, 10], 'rotary:rampSeconds': [0.1, 10],
+    'rotary:depth': [0, 100], 'rotary:mix': [0, 100],
+    'chorus:rateHz': [0.05, 8], 'chorus:depth': [0, 100], 'chorus:mix': [0, 100],
+    'cutoffEnvelope:attackMs': [0, 5_000], 'cutoffEnvelope:decayMs': [0, 5_000],
+    'cutoffEnvelope:sustain': [0, 100], 'cutoffEnvelope:releaseMs': [0, 5_000],
+    'cutoffEnvelope:depthOctaves': [0, 8],
+  };
+  const range = ranges[control];
+  if (!range) return `${limitPercent}%`;
+  return formatModuleEffectValue(
+    effectKind,
+    effectControl,
+    range[0] + (range[1] - range[0]) * progress,
+  );
+}
+
 interface EffectEditHoldGesture {
   button: HTMLButtonElement;
   pointerId: number;
@@ -531,12 +639,13 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
 }
 
 function isCcMappingKey(value: string): boolean {
+  if (/^module-bank:[A-F]:([1-9]|1[0-6]):[1-8]$/.test(value)) return true;
   if (/^module-control:[1-8]:tranceGate:(gate|depth|attackMs|releaseMs|swing)$/.test(value)) return true;
   if (/^module-control:[1-8]:synth:sustain$/.test(value)) return false;
   if (/^module:[1-8]$/.test(value)) return true;
   if (/^module-control:7:rotary:(slowHz|fastHz|rampSeconds|depth|mix|speed:(brake|slow|fast))$/.test(value)) return true;
   if (/^module-control:7:organ:drawbar:[0-8]$/.test(value)) return true;
-  if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|compressor:[A-Za-z]+|reverb:[A-Za-z]+|delay:[A-Za-z]+|synth:[A-Za-z]+|arpeggiator:(octaves|gate|swing))$/.test(value)) return true;
+  if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|(compressor|reverb|delay|chorus|cutoffEnvelope):[A-Za-z]+|synth:[A-Za-z]+|arpeggiator:(octaves|gate|swing))$/.test(value)) return true;
   if (/^octave:[1-8]:(up|down)$/.test(value)) return true;
   if (/^power:[1-8]$/.test(value)) return true;
   if (/^input:[1-8]:(sustain|modulation)$/.test(value)) return true;
@@ -545,6 +654,11 @@ function isCcMappingKey(value: string): boolean {
   if (/^pad:[ABCD]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
   if (/^effect:[1-4]:([1-9]|1[0-2])$/.test(value)) return true;
   return /^preset:[A-F]:([1-9]|1[0-6])$/.test(value);
+}
+
+function ccMappingConflictScope(key: string): string {
+  const bankFader = /^module-bank:([A-F]):([1-9]|1[0-6]):[1-8]$/.exec(key);
+  return bankFader ? `bank-faders:${bankFader[1]}:${bankFader[2]}` : 'global';
 }
 
 function createEffectPadStates(): EffectPadState[] {
@@ -757,7 +871,7 @@ function createNewPasswordMarkup(useTabletKeyboard: boolean): string {
   `;
 }
 
-function createSoundDownloadMarkup(sound: FixedSoundDefinition | null, installed: boolean): string {
+function createSoundDownloadMarkup(sound: FixedSoundDefinition | null, installed: boolean, downloading = false): string {
   if (!sound) {
     return '<section class="sound-download"><p>Este timbre não está mais disponível na biblioteca.</p></section>';
   }
@@ -780,7 +894,7 @@ function createSoundDownloadMarkup(sound: FixedSoundDefinition | null, installed
       ` : `
         <div class="sound-download__buttons">
           <button class="sound-download__preview" type="button" data-modal-action="preview-sound"${sound.previewObjectKey ? '' : ' disabled'}><b aria-hidden="true">▶</b><span>Ouvir preview</span></button>
-          <button class="sound-download__install" type="button" data-modal-action="download-sound"${sound.sf2ObjectKey ? '' : ' disabled'}>Baixar</button>
+          <button class="sound-download__install" type="button" data-modal-action="download-sound"${sound.sf2ObjectKey && !downloading ? '' : ' disabled'}>${downloading ? 'Baixando…' : 'Baixar'}</button>
         </div>
         <div class="sound-download__progress" data-sound-download-progress aria-hidden="true"><i></i></div>
       `}
@@ -791,7 +905,9 @@ function createSoundDownloadMarkup(sound: FixedSoundDefinition | null, installed
             ? 'SF2 ainda não publicado'
             : !sound.previewObjectKey
               ? 'Preview ainda não publicado'
-              : ''
+              : downloading
+                ? 'Baixando… acompanhe o progresso no topo da tela.'
+                : ''
       }</p>
     </section>
   `;
@@ -838,6 +954,9 @@ function createBackupDownloadMarkup(sounds: readonly FixedSoundDefinition[]): st
 
 function createBankState(selectedPreset: number | null = null): BankState {
   return {
+    faderMode: 'default',
+    masterVolumes: Array.from({ length: MODULE_COUNT }, () => 0),
+    name: '',
     selectedPreset,
     presets: Array.from({ length: PRESET_COUNT }, () => ({
       name: 'Preset',
@@ -873,6 +992,7 @@ function createBankNavigationMarkup(withViewToggle: boolean): string {
       type="button"
       data-action="show-bank"
       data-bank="${bank}"
+      data-bank-mode-label="Default"
       aria-label="Banco ${bank}"
       aria-pressed="${bank === 'A'}"
     >${bank}</button>
@@ -974,9 +1094,21 @@ export class PlayerScreen {
   private pendingBackupDownloads: FixedSoundDefinition[] = [];
   private backupDownloadLimit = 0;
   private soundDownloadAbort: AbortController | null = null;
+  // Downloads individuais entram numa fila única. Só o primeiro usa rede e
+  // atualiza o banner; os demais aguardam sem fazer o nome do topo oscilar.
+  private readonly activeSoundDownloads = new Map<string, {
+    sound: FixedSoundDefinition;
+    percentage: number | null;
+    abort: AbortController;
+    state: 'queued' | 'downloading';
+  }>();
+  private soundDownloadQueueRunning = false;
+  private bulkSoundDownloadRunning = false;
   private readonly fixedSoundHoldGesture = new LongPressGesture(700, 10);
   private readonly userSoundfontHoldGesture = new LongPressGesture(700, 10);
   private readonly synthPresetHoldGesture = new LongPressGesture(700, 10);
+  private readonly bankHoldGesture = new LongPressGesture(560, 10);
+  private readonly moduleConfigHoldGesture = new LongPressGesture(560, 10);
   private suppressNextFixedSoundClick = false;
   private suppressNextUserSoundfontClick = false;
   private suppressNextSynthPresetClick = 0;
@@ -1009,6 +1141,10 @@ export class PlayerScreen {
   private mounted = false;
   private logoutBusy = false;
   private pendingNoteLearn: PendingNoteLearn | null = null;
+  private pendingBankEdit: BankId | null = null;
+  private moduleConfigCopySource: number | null = null;
+  private suppressNextBankClick = false;
+  private suppressNextModuleConfigClick = false;
   private presetHoldGesture: PresetHoldGesture | null = null;
   private tracksHoldGesture: TracksHoldGesture | null = null;
   private capturedTracksPointer: { button: HTMLButtonElement; pointerId: number } | null = null;
@@ -1038,6 +1174,9 @@ export class PlayerScreen {
   private keyboardExpression: KeyboardExpressionController | null = null;
   private keyboardExpressionRouteKey = '';
   private readonly keyboardSettingsHoldGesture = new LongPressGesture();
+  // Toque longo no botão Mono/Poly: abre Legato + tempo do Portamento.
+  private readonly voiceModeHoldGesture = new LongPressGesture();
+  private suppressNextVoiceModeClick = false;
   private suppressNextKeyboardViewClick = false;
   // Toque longo no botão Keyboard: quatro oitavas com teclas mais largas.
   private readonly bottomViewHoldGesture = new LongPressGesture();
@@ -1136,6 +1275,13 @@ export class PlayerScreen {
   private passwordResetToken: string | null = null;
   private pendingCompatibilityMode: boolean | null = null;
   private compatibilityVideoUrl = '';
+  // Controles de entrada globais: são somados antes da distribuição para os
+  // módulos e nunca alteram o Oct particular salvo em cada um.
+  private globalOctaveShift = 0;
+  private globalTransposeSemitones = 0;
+  // Somente os oito módulos: Mono soma L+R e duplica a soma em cada canal da
+  // rota escolhida. Playlist, pads, efeitos e metrônomo não usam este estado.
+  private moduleOutputMono = false;
   private outputLevels: OutputLevels = { ...DEFAULT_OUTPUT_LEVELS };
   private outputEnabled: OutputEnabledState = { ...DEFAULT_OUTPUT_ENABLED };
   private activeView: PlayerView = 'bank';
@@ -1199,17 +1345,53 @@ export class PlayerScreen {
               <div class="track-download__progress" aria-hidden="true"><i></i></div>
               <output data-track-download-percent>0%</output>
             </section>
-            <div class="player-note-display" role="status" aria-live="polite" aria-label="Notas ou acordes tocados">
-              <span>Notas / Acordes</span>
-              <strong data-note-chord-display>—</strong>
-            </div>
-            <div class="player-top-actions">
+            <div class="player-global-pitch" role="group" aria-label="Oitava e transpose gerais">
+              <div class="player-global-pitch__group" aria-label="Oitava geral">
+                <button
+                  class="player-global-pitch__button"
+                  type="button"
+                  data-action="global-octave-down"
+                  aria-label="Descer uma oitava na entrada geral. Ajuste atual: ${this.globalOctaveShift}"
+                >${this.globalOctaveShift < 0 ? `OCT − ${Math.abs(this.globalOctaveShift)}` : 'OCT −'}</button>
+                <button
+                  class="player-global-pitch__button"
+                  type="button"
+                  data-action="global-octave-up"
+                  aria-label="Subir uma oitava na entrada geral. Ajuste atual: ${this.globalOctaveShift}"
+                >${this.globalOctaveShift > 0 ? `OCT + ${this.globalOctaveShift}` : 'OCT +'}</button>
+              </div>
+              <span class="player-global-pitch__separator" aria-hidden="true">/</span>
+              <div class="player-global-pitch__group" aria-label="Transpose geral">
+                <button
+                  class="player-global-pitch__button"
+                  type="button"
+                  data-action="global-transpose-down"
+                  aria-label="Descer um semitom o transpose geral. Ajuste atual: ${this.globalTransposeSemitones}"
+                >${this.globalTransposeSemitones < 0 ? `TRS − ${Math.abs(this.globalTransposeSemitones)}` : 'TRS −'}</button>
+                <button
+                  class="player-global-pitch__button"
+                  type="button"
+                  data-action="global-transpose-up"
+                  aria-label="Subir um semitom o transpose geral. Ajuste atual: ${this.globalTransposeSemitones}"
+                >${this.globalTransposeSemitones > 0 ? `TRS + ${this.globalTransposeSemitones}` : 'TRS +'}</button>
+              </div>
+              <span class="player-global-pitch__separator" aria-hidden="true">/</span>
               <button
-                class="player-navigation__button player-panic-button"
+                class="player-global-pitch__button player-global-pitch__output-mode${this.moduleOutputMono ? ' is-mono' : ''}"
+                type="button"
+                data-action="toggle-module-output-mode"
+                aria-pressed="${this.moduleOutputMono}"
+                aria-label="Saída dos módulos em ${this.moduleOutputMono ? 'Mono dual' : 'Stereo'}. Alternar para ${this.moduleOutputMono ? 'Stereo' : 'Mono dual'}"
+              >${this.moduleOutputMono ? 'MONO' : 'STEREO'}</button>
+              <span class="player-global-pitch__separator" aria-hidden="true">/</span>
+              <button
+                class="player-global-pitch__button player-panic-button"
                 type="button"
                 data-action="panic"
                 aria-label="Panic: interromper imediatamente todas as notas"
-              ><span>PA</span><span>NIC</span></button>
+              >PANIC</button>
+            </div>
+            <div class="player-top-actions">
               <button
                 class="player-navigation__button player-navigation__settings-button"
                 type="button"
@@ -1625,8 +1807,13 @@ export class PlayerScreen {
     this.fixedSoundHoldGesture.cancel();
     this.userSoundfontHoldGesture.cancel();
     this.synthPresetHoldGesture.cancel();
+    this.voiceModeHoldGesture.cancel();
+    this.bankHoldGesture.cancel();
+    this.moduleConfigHoldGesture.cancel();
     this.soundDownloadAbort?.abort();
     this.soundDownloadAbort = null;
+    for (const { abort } of this.activeSoundDownloads.values()) abort.abort();
+    this.activeSoundDownloads.clear();
     this.soundLibraryEngine.destroy();
     this.outputFaderDrag = null;
     this.metronomeFaderDrag = null;
@@ -1818,6 +2005,10 @@ export class PlayerScreen {
     if (actionButton.getAttribute('aria-disabled') === 'true') return;
 
     if (action === 'show-bank') {
+      if (this.suppressNextBankClick) {
+        this.suppressNextBankClick = false;
+        return;
+      }
       const bank = actionButton.dataset.bank;
       if (this.isBankId(bank)) this.showBank(bank);
       return;
@@ -1883,6 +2074,21 @@ export class PlayerScreen {
       return;
     }
 
+    if (action === 'global-octave-up' || action === 'global-octave-down') {
+      this.shiftGlobalOctave(action === 'global-octave-up' ? 1 : -1);
+      return;
+    }
+
+    if (action === 'global-transpose-up' || action === 'global-transpose-down') {
+      this.shiftGlobalTranspose(action === 'global-transpose-up' ? 1 : -1);
+      return;
+    }
+
+    if (action === 'toggle-module-output-mode') {
+      this.toggleModuleOutputMode();
+      return;
+    }
+
     if (action === 'toggle-sustain-input' || action === 'toggle-modulation-input') {
       const moduleNumber = Number.parseInt(actionButton.dataset.module ?? '', 10);
       if (Number.isInteger(moduleNumber)) {
@@ -1926,6 +2132,10 @@ export class PlayerScreen {
     }
 
     if (action === 'open-module-settings' || action === 'open-sound-selection') {
+      if (action === 'open-module-settings' && this.suppressNextModuleConfigClick) {
+        this.suppressNextModuleConfigClick = false;
+        return;
+      }
       // Toque longo no botão de abrir a biblioteca soa/tira o solo do módulo;
       // o clique que vem junto não deve abrir a biblioteca por cima.
       if (action === 'open-sound-selection' && this.suppressNextModuleSoundClick) {
@@ -1934,6 +2144,17 @@ export class PlayerScreen {
       }
       const moduleNumber = Number.parseInt(actionButton.dataset.module ?? '', 10);
       if (!Number.isInteger(moduleNumber)) return;
+
+      if (action === 'open-module-settings' && this.moduleConfigCopySource !== null) {
+        if (moduleNumber === this.moduleConfigCopySource) {
+          this.cancelModuleConfigCopy('Cópia de Config cancelada.');
+        } else if (moduleNumber >= 1 && moduleNumber <= 6) {
+          this.openModal('module-config-copy-confirm', moduleNumber, actionButton);
+        } else {
+          this.setStatus('A cópia de Config funciona somente entre os módulos 1 a 6.');
+        }
+        return;
+      }
 
       const kind: ModalKind =
         action === 'open-module-settings' ? 'module-settings' : 'sound-selection';
@@ -2340,6 +2561,32 @@ export class PlayerScreen {
       return;
     }
 
+    const bankButton = eventTarget.closest<HTMLButtonElement>('[data-action="show-bank"]');
+    if (bankButton && this.root.contains(bankButton)) {
+      const bank = bankButton.dataset.bank;
+      if (this.isBankId(bank) && !this.desktopRuntime) {
+        this.bankHoldGesture.start(event, () => {
+          this.suppressNextBankClick = true;
+          window.setTimeout(() => { this.suppressNextBankClick = false; }, 900);
+          this.openBankNameEditor(bank, bankButton);
+        });
+      }
+      return;
+    }
+
+    const configButton = eventTarget.closest<HTMLButtonElement>('[data-action="open-module-settings"]');
+    if (configButton && this.root.contains(configButton)) {
+      const moduleNumber = Number(configButton.dataset.module);
+      if (Number.isInteger(moduleNumber) && !this.desktopRuntime) {
+        this.moduleConfigHoldGesture.start(event, () => {
+          this.suppressNextModuleConfigClick = true;
+          window.setTimeout(() => { this.suppressNextModuleConfigClick = false; }, 900);
+          this.beginModuleConfigCopy(moduleNumber);
+        });
+      }
+      return;
+    }
+
     const presetButton = eventTarget.closest<HTMLButtonElement>('.player-preset-button');
     if (presetButton && this.root.contains(presetButton)) {
       this.startPresetHoldGesture(presetButton, event);
@@ -2348,6 +2595,7 @@ export class PlayerScreen {
 
     const moduleSoundButton = eventTarget.closest<HTMLButtonElement>('.player-module__sound-button');
     if (moduleSoundButton && this.root.contains(moduleSoundButton)) {
+      if (!this.desktopRuntime) event.preventDefault();
       this.startModuleSoloHoldGesture(moduleSoundButton, event);
       return;
     }
@@ -2381,6 +2629,8 @@ export class PlayerScreen {
     this.tempoHoldGesture.move(event);
     this.ccControlHoldGesture.move(event);
     this.bottomViewHoldGesture.move(event);
+    this.bankHoldGesture.move(event);
+    this.moduleConfigHoldGesture.move(event);
     if (this.tempoDrag?.pointerId === event.pointerId) {
       const drag = this.tempoDrag;
       if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >= (this.desktopRuntime ? 3 : 8)) {
@@ -2454,6 +2704,8 @@ export class PlayerScreen {
     this.tempoHoldGesture.end(event);
     this.ccControlHoldGesture.end(event);
     this.bottomViewHoldGesture.end(event);
+    this.bankHoldGesture.end(event);
+    this.moduleConfigHoldGesture.end(event);
     if (this.tempoDrag?.pointerId === event.pointerId) {
       const drag = this.tempoDrag;
       this.tempoDrag = null;
@@ -2564,6 +2816,33 @@ export class PlayerScreen {
     const target = event.target;
     if (!this.desktopRuntime || !(target instanceof Element)) return;
     event.preventDefault();
+
+    const voiceModeButton = target.closest<HTMLButtonElement>('button[data-module-setting-action="toggle-voice-mode"]');
+    if (voiceModeButton && this.modal && this.currentModalKind === 'module-settings' && this.currentModalModuleNumber !== null) {
+      this.openChildModal('module-voice-mode', this.currentModalModuleNumber, voiceModeButton);
+      return;
+    }
+
+    const bankButton = target.closest<HTMLButtonElement>('[data-action="show-bank"]');
+    const bank = bankButton?.dataset.bank;
+    if (bankButton && this.isBankId(bank)) {
+      this.openBankNameEditor(bank, bankButton);
+      return;
+    }
+
+    const configButton = target.closest<HTMLButtonElement>('[data-action="open-module-settings"]');
+    if (configButton) {
+      const moduleNumber = Number(configButton.dataset.module);
+      if (Number.isInteger(moduleNumber)) this.beginModuleConfigCopy(moduleNumber);
+      return;
+    }
+
+    const moduleSoundButton = target.closest<HTMLButtonElement>('.player-module__sound-button');
+    if (moduleSoundButton) {
+      const soloModuleNumber = Number.parseInt(moduleSoundButton.dataset.module ?? '', 10);
+      if (Number.isInteger(soloModuleNumber)) this.toggleModuleSolo(soloModuleNumber);
+      return;
+    }
 
     const synthPresetButton = target.closest<HTMLButtonElement>('[data-synth-preset]');
     const synthPresetSlot = Number(synthPresetButton?.dataset.synthPreset);
@@ -2925,8 +3204,13 @@ export class PlayerScreen {
     this.clearModuleSoloHoldGesture();
     const moduleNumber = Number.parseInt(button.dataset.module ?? '', 10);
     if (!Number.isInteger(moduleNumber)) return;
+    // Prende o ponteiro no próprio botão: sem isso, em alguns navegadores um
+    // toque longo sem o dedo se mover perfeitamente parado ainda soltava um
+    // clique solto que caía em outro elemento por baixo.
+    button.setPointerCapture(event.pointerId);
     const timer = window.setTimeout(() => {
       this.moduleSoloHoldGesture = null;
+      if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
       this.suppressNextModuleSoundClick = true;
       window.setTimeout(() => {
         this.suppressNextModuleSoundClick = false;
@@ -2953,7 +3237,9 @@ export class PlayerScreen {
 
   private clearModuleSoloHoldGesture(): void {
     if (!this.moduleSoloHoldGesture) return;
-    window.clearTimeout(this.moduleSoloHoldGesture.timer);
+    const { button, pointerId, timer } = this.moduleSoloHoldGesture;
+    window.clearTimeout(timer);
+    if (button.hasPointerCapture(pointerId)) button.releasePointerCapture(pointerId);
     this.moduleSoloHoldGesture = null;
   }
 
@@ -3174,9 +3460,13 @@ export class PlayerScreen {
         ? 'Mostrando o Keyboard. Tocar para mostrar os presets'
         : 'Mostrando os presets. Tocar para mostrar o Keyboard');
     }
-    for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-action="copy-preset"], [data-action="show-bank"]')) {
+    for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-action="copy-preset"]')) {
       button.setAttribute('aria-disabled', String(showingKeyboard));
       button.tabIndex = showingKeyboard ? -1 : 0;
+    }
+    for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-action="show-bank"]')) {
+      button.removeAttribute('aria-disabled');
+      button.tabIndex = 0;
     }
     this.renderKeyboardOctaveSpan();
     if (!showingKeyboard && !this.desktopRuntime) this.keyboardExpression?.cancelGestures();
@@ -3342,6 +3632,54 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
+  private openBankNameEditor(bank: BankId, trigger: HTMLElement): void {
+    this.pendingBankEdit = bank;
+    this.openModal('bank-name', null, trigger);
+  }
+
+  private beginModuleConfigCopy(moduleNumber: number): void {
+    if (moduleNumber < 1 || moduleNumber > 6) {
+      this.setStatus('A cópia de Config funciona somente entre os módulos 1 a 6.');
+      return;
+    }
+    this.moduleConfigCopySource = moduleNumber;
+    this.renderModuleConfigCopyState();
+    this.setStatus(`Config do módulo ${moduleNumber} copiado. Toque no Config de outro módulo de 1 a 6.`);
+  }
+
+  private cancelModuleConfigCopy(message?: string): void {
+    this.moduleConfigCopySource = null;
+    this.renderModuleConfigCopyState();
+    if (message) this.setStatus(message);
+  }
+
+  private renderModuleConfigCopyState(): void {
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="open-module-settings"]')) {
+      const source = Number(button.dataset.module) === this.moduleConfigCopySource;
+      button.classList.toggle('is-config-copy-source', source);
+      button.setAttribute('aria-pressed', String(source));
+    }
+  }
+
+  private copyModuleConfiguration(sourceNumber: number, targetNumber: number): void {
+    const preset = this.getActivePresetState();
+    const source = preset?.modules[sourceNumber - 1];
+    const target = preset?.modules[targetNumber - 1];
+    if (!preset || !source || !target || sourceNumber > 6 || targetNumber > 6) return;
+    const preservedMidiInputId = target.midiInputId;
+    const copied = JSON.parse(JSON.stringify(source)) as ModulePresetState;
+    copied.midiInputId = preservedMidiInputId;
+    preset.modules[targetNumber - 1] = copied;
+    // Os mapas CC ficam fora do estado do módulo e, portanto, continuam
+    // exatamente como estavam no destino.
+    this.nativeLoadedTimbres[targetNumber - 1] = null;
+    this.soundfontSelectionRevision += 1;
+    this.cancelModuleConfigCopy();
+    this.restoreActivePresetState();
+    this.markPlayerStateChanged();
+    this.setStatus(`Config e timbre do módulo ${sourceNumber} copiados para o módulo ${targetNumber}. MIDI preservado.`);
+  }
+
   private updateVisibleView(): void {
     const bankView = requiredElement<HTMLElement>(this.root, '[data-player-view="bank"]');
     const padsView = requiredElement<HTMLElement>(this.root, '[data-player-view="pads-effects"]');
@@ -3360,10 +3698,16 @@ export class PlayerScreen {
 
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="show-bank"]')) {
       const isSelected = button.dataset.bank === this.activeBank;
+      const bankId = button.dataset.bank;
+      const bankState = this.isBankId(bankId) ? this.bankStates.get(bankId) : null;
+      button.textContent = bankState?.name || bankId || '';
+      button.dataset.bankModeLabel = faderModeLabel(bankState?.faderMode ?? 'default');
+      button.setAttribute('aria-label', `Banco ${bankId}${bankState?.name ? `: ${bankState.name}` : ''}`);
       button.classList.toggle('is-selected', isSelected);
       button.setAttribute('aria-pressed', String(isSelected));
     }
     this.renderPresetCopyButton();
+    this.renderModuleConfigCopyState();
   }
 
   private getActivePresetState(): PresetState | null {
@@ -3385,10 +3729,16 @@ export class PlayerScreen {
 
   private saveActivePresetState(): void {
     const preset = this.getActivePresetState();
-    if (!preset) return;
+    const bank = this.bankStates.get(this.activeBank);
+    if (!preset || !bank) return;
     for (const [moduleNumber, fader] of this.faders) {
       const moduleState = preset.modules[moduleNumber - 1];
-      if (moduleState) moduleState.volumeDb = fader.getValueDb();
+      if (!moduleState) continue;
+      if (faderModeUsesPersistentVolumes(bank.faderMode)) {
+        bank.masterVolumes[moduleNumber - 1] = fader.getValueDb();
+      } else {
+        moduleState.volumeDb = fader.getValueDb();
+      }
     }
   }
 
@@ -3401,7 +3751,9 @@ export class PlayerScreen {
     if (preset) {
       for (const [moduleNumber, fader] of this.faders) {
         const moduleState = preset.modules[moduleNumber - 1];
-        fader.setValueDb(moduleState?.volumeDb ?? 0);
+        fader.setValueDb(faderModeUsesPersistentVolumes(bank.faderMode)
+          ? bank.masterVolumes[moduleNumber - 1] ?? 0
+          : moduleState?.volumeDb ?? 0);
 
         const moduleElement = this.root.querySelector<HTMLElement>(
           `.player-module[data-module="${moduleNumber}"]`,
@@ -3590,27 +3942,55 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
-  private toggleSynthMode(button: HTMLButtonElement): void {
+  private toggleSynthMode(modal: HTMLElement, button: HTMLButtonElement): void {
     const moduleState = this.ensureActivePresetState()?.modules[7];
     if (!moduleState) return;
     const settings = readSynthSettings(moduleState.settings.synth);
     settings.voiceMode = settings.voiceMode === 'mono' ? 'poly' : 'mono';
+    // Mono e Portamento andam sempre juntos, nos dois sentidos.
+    const mono = settings.voiceMode === 'mono';
+    settings.glideMode = mono ? 'portamento' : 'auto';
     moduleState.settings.synth = settings;
     this.renderSynthModeButton(button, moduleState);
+    // O card de Glide (Auto/Porta) do Synth pode estar na mesma tela.
+    this.renderGlideCard(modal, 8);
     this.markPlayerStateChanged();
   }
 
-  private toggleModuleVoiceMode(button: HTMLButtonElement, moduleNumber: number): void {
+  private toggleModuleVoiceMode(modal: HTMLElement, button: HTMLButtonElement, moduleNumber: number): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     if (!moduleState || moduleNumber < 1 || moduleNumber > 7) return;
     const mono = moduleState.settings.voiceMode !== 'mono';
     moduleState.settings.voiceMode = mono ? 'mono' : 'poly';
+    // Mono e Portamento andam sempre juntos, nos dois sentidos.
+    moduleState.settings.glideMode = mono ? 'portamento' : 'auto';
+    this.renderModuleVoiceModeButtonDisplay(button, mono);
+    // O card de Glide (Auto/Porta) pode estar na tela ao mesmo tempo: se
+    // estiver, precisa refletir a troca na hora.
+    this.renderGlideCard(modal, moduleNumber);
+    this.markPlayerStateChanged();
+  }
+
+  private renderModuleVoiceModeButtonDisplay(button: HTMLButtonElement, mono: boolean): void {
     button.classList.toggle('is-mono', mono);
     button.classList.toggle('is-poly', !mono);
     button.setAttribute('aria-pressed', String(mono));
     const label = button.querySelector<HTMLElement>('strong');
     if (label) label.textContent = mono ? 'Mono' : 'Poly';
-    this.markPlayerStateChanged();
+  }
+
+  // Mono/Poly e Auto/Porta ficam trancados juntos: o botão do Modo já mudou
+  // de valor no updateGlideSettings acima, só falta refletir na tela.
+  private syncVoiceModeFromGlideMode(modal: HTMLElement, moduleNumber: number): void {
+    if (moduleNumber === 8) {
+      const moduleState = this.getActivePresetState()?.modules[7];
+      const button = modal.querySelector<HTMLButtonElement>('[data-synth-voice-mode]');
+      if (moduleState && button) this.renderSynthModeButton(button, moduleState);
+      return;
+    }
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    const button = modal.querySelector<HTMLButtonElement>('button[data-module-setting-action="toggle-voice-mode"]');
+    if (moduleState && button) this.renderModuleVoiceModeButtonDisplay(button, moduleState.settings.voiceMode === 'mono');
   }
 
   private refreshDefaultSettingsFromCatalog(): void {
@@ -4199,7 +4579,7 @@ export class PlayerScreen {
 
   private openCcLearn(target: CcLearnTarget, trigger: HTMLElement): void {
     this.pendingCcLearn = target;
-    const key = ccMappingKey(target);
+    const key = this.ccMappingKeyForTarget(target);
     this.pendingCcController = this.ccMappings.get(key) ?? null;
     const options = this.ccMappingOptions.get(key) ?? DEFAULT_CC_MAPPING_OPTIONS;
     this.pendingCcInverted = options.inverted;
@@ -4210,8 +4590,17 @@ export class PlayerScreen {
   }
 
   private ccMappingLabel(target: CcLearnTarget): string {
-    const controller = this.ccMappings.get(ccMappingKey(target));
+    const controller = this.ccMappings.get(this.ccMappingKeyForTarget(target));
     return controller === undefined ? 'Ainda não mapeado' : `CC ${controller}`;
+  }
+
+  private ccMappingKeyForTarget(target: CcLearnTarget): string {
+    if (target.kind !== 'module-volume') return ccMappingKey(target);
+    const bank = this.bankStates.get(this.activeBank);
+    const presetNumber = bank?.selectedPreset ?? null;
+    return bank && faderModeUsesPresetMappings(bank.faderMode) && presetNumber !== null
+      ? `module-bank:${this.activeBank}:${presetNumber}:${target.moduleNumber}`
+      : ccMappingKey(target);
   }
 
   private mappedCcRatio(targetKey: string, value: number): number {
@@ -4280,8 +4669,22 @@ export class PlayerScreen {
     for (const [targetKey, controller] of this.ccMappings) {
       if (controller !== input.controller) continue;
       const continuousRatio = this.mappedCcRatio(targetKey, input.value);
+      const bankModuleMatch = /^module-bank:([A-F]):([1-9]|1[0-6]):([1-8])$/.exec(targetKey);
+      if (bankModuleMatch) {
+        const bank = bankModuleMatch[1];
+        const presetNumber = Number(bankModuleMatch[2]);
+        const moduleNumber = Number(bankModuleMatch[3]);
+        const activeBank = this.bankStates.get(this.activeBank);
+        if (bank === this.activeBank && activeBank && faderModeUsesPresetMappings(activeBank.faderMode)
+            && presetNumber === activeBank.selectedPreset) {
+          this.faders.get(moduleNumber)?.setValueDb(visualPositionToFaderDb(continuousRatio), true);
+        }
+        continue;
+      }
       const moduleMatch = /^module:([1-8])$/.exec(targetKey);
       if (moduleMatch) {
+        const activeFaderMode = this.bankStates.get(this.activeBank)?.faderMode;
+        if (activeFaderMode && faderModeUsesPresetMappings(activeFaderMode)) continue;
         const moduleNumber = Number(moduleMatch[1]);
         this.faders.get(moduleNumber)?.setValueDb(visualPositionToFaderDb(continuousRatio), true);
         continue;
@@ -4474,6 +4877,80 @@ export class PlayerScreen {
     this.setStatus(`Módulo ${moduleNumber}: oitava ${moduleState.octaveShift}.`);
   }
 
+  private shiftGlobalOctave(direction: -1 | 1): void {
+    this.globalOctaveShift = Math.min(3, Math.max(-3, this.globalOctaveShift + direction));
+    this.renderGlobalOctaveButtons();
+    this.markPlayerStateChanged();
+    void this.syncGlobalTranspose();
+    this.setStatus(`Oitava geral de entrada: ${this.globalOctaveShift}.`);
+  }
+
+  private renderGlobalOctaveButtons(): void {
+    const downButton = this.root.querySelector<HTMLButtonElement>('[data-action="global-octave-down"]');
+    const upButton = this.root.querySelector<HTMLButtonElement>('[data-action="global-octave-up"]');
+    const value = this.globalOctaveShift;
+    if (downButton) {
+      downButton.textContent = value < 0 ? `OCT − ${Math.abs(value)}` : 'OCT −';
+      downButton.classList.toggle('is-octave-active', value < 0);
+      downButton.disabled = value <= -3;
+      downButton.setAttribute('aria-label', `Descer uma oitava na entrada geral. Ajuste atual: ${value}`);
+    }
+    if (upButton) {
+      upButton.textContent = value > 0 ? `OCT + ${value}` : 'OCT +';
+      upButton.classList.toggle('is-octave-active', value > 0);
+      upButton.disabled = value >= 3;
+      upButton.setAttribute('aria-label', `Subir uma oitava na entrada geral. Ajuste atual: ${value}`);
+    }
+  }
+
+  private shiftGlobalTranspose(direction: -1 | 1): void {
+    this.globalTransposeSemitones = Math.min(24, Math.max(-24, this.globalTransposeSemitones + direction));
+    this.renderGlobalTransposeButtons();
+    this.markPlayerStateChanged();
+    void this.syncGlobalTranspose();
+    this.setStatus(`Transpose geral: ${this.globalTransposeSemitones} semitom(ns).`);
+  }
+
+  private renderGlobalTransposeButtons(): void {
+    const downButton = this.root.querySelector<HTMLButtonElement>('[data-action="global-transpose-down"]');
+    const upButton = this.root.querySelector<HTMLButtonElement>('[data-action="global-transpose-up"]');
+    const value = this.globalTransposeSemitones;
+    if (downButton) {
+      downButton.textContent = value < 0 ? `TRS − ${Math.abs(value)}` : 'TRS −';
+      downButton.classList.toggle('is-octave-active', value < 0);
+      downButton.setAttribute('aria-label', `Descer um semitom o transpose geral. Ajuste atual: ${value}`);
+    }
+    if (upButton) {
+      upButton.textContent = value > 0 ? `TRS + ${value}` : 'TRS +';
+      upButton.classList.toggle('is-octave-active', value > 0);
+      upButton.setAttribute('aria-label', `Subir um semitom o transpose geral. Ajuste atual: ${value}`);
+    }
+  }
+
+  private async syncGlobalTranspose(): Promise<void> {
+    if (!hookKeysNative.isAvailable()) return;
+    await hookKeysNative.setGlobalTranspose(this.globalOctaveShift * 12 + this.globalTransposeSemitones);
+  }
+
+  private toggleModuleOutputMode(): void {
+    this.moduleOutputMono = !this.moduleOutputMono;
+    this.renderModuleOutputModeButton();
+    this.markPlayerStateChanged();
+    this.setStatus(this.moduleOutputMono
+      ? 'Módulos em Mono dual: L+R em todos os canais escolhidos.'
+      : 'Módulos em Stereo: L e R separados nas rotas de dois canais.');
+  }
+
+  private renderModuleOutputModeButton(): void {
+    const button = this.root.querySelector<HTMLButtonElement>('[data-action="toggle-module-output-mode"]');
+    if (!button) return;
+    button.textContent = this.moduleOutputMono ? 'MONO' : 'STEREO';
+    button.classList.toggle('is-mono', this.moduleOutputMono);
+    button.setAttribute('aria-pressed', String(this.moduleOutputMono));
+    button.setAttribute('aria-label',
+      `Saída dos módulos em ${this.moduleOutputMono ? 'Mono dual' : 'Stereo'}. Alternar para ${this.moduleOutputMono ? 'Stereo' : 'Mono dual'}`);
+  }
+
   private toggleModuleInput(
     moduleNumber: number,
     input: 'sustain' | 'modulation',
@@ -4622,7 +5099,11 @@ export class PlayerScreen {
       );
     } else if (kind === 'sound-download') {
       const sound = this.selectedCatalogSoundId ? this.soundCatalog.get(this.selectedCatalogSoundId) : null;
-      bodyMarkup = createSoundDownloadMarkup(sound, sound ? this.installedFixedSoundIds.has(sound.id) : false);
+      bodyMarkup = createSoundDownloadMarkup(
+        sound,
+        sound ? this.installedFixedSoundIds.has(sound.id) : false,
+        sound ? this.activeSoundDownloads.has(sound.id) : false,
+      );
     } else if (kind === 'performance-download') {
       bodyMarkup = createPerformanceDownloadMarkup(this.selectedPerformanceAsset);
     } else if (kind === 'backup-download') {
@@ -4691,6 +5172,12 @@ export class PlayerScreen {
         + createModuleEnvFilterMarkup(envFilterSettings);
     } else if (kind === 'glide-config') {
       bodyMarkup = createGlideVelocityMarkup(moduleNumber === null ? {} : this.glideSettings(moduleNumber));
+    } else if (kind === 'module-voice-mode') {
+      bodyMarkup = createVoiceModeMarkup(
+        moduleNumber === null ? {} : this.glideSettings(moduleNumber),
+        this.metronome.getBpm(),
+        moduleNumber === 8 ? 'synth' : 'module',
+      );
     } else if (kind === 'module-arpeggiator') {
       bodyMarkup = createArpeggiatorMarkup(moduleState?.settings.arpeggiator);
     } else if (kind === 'module-trance-gate') {
@@ -4766,6 +5253,44 @@ export class PlayerScreen {
           <p>Toda a configuração do ${presetSlotLabel(this.activeBank, moduleNumber)} será substituída.</p>
         </section>
       `;
+    } else if (kind === 'module-config-copy-confirm' && moduleNumber !== null
+        && this.moduleConfigCopySource !== null) {
+      bodyMarkup = `
+        <section class="cc-clear-confirmation preset-paste-confirmation">
+          <strong>Copiar o Config do módulo ${this.moduleConfigCopySource} para o módulo ${moduleNumber}?</strong>
+          <p>Toda a configuração e o timbre do módulo ${moduleNumber} serão substituídos. O MIDI mapeado e a entrada MIDI do destino serão preservados.</p>
+        </section>
+      `;
+    } else if (kind === 'bank-name' && this.pendingBankEdit) {
+      const bankState = this.bankStates.get(this.pendingBankEdit);
+      bodyMarkup = `
+        <section class="preset-name-editor bank-name-editor">
+          <label class="preset-name-editor__field">
+            <span>Nome do banco</span>
+            <input type="text" maxlength="12" autocomplete="off" data-bank-name-input
+              value="${escapeMarkup(bankState?.name || this.pendingBankEdit)}">
+          </label>
+          <button class="bank-name-editor__advanced" type="button" data-modal-action="open-bank-advanced">Advanced</button>
+        </section>
+      `;
+    } else if (kind === 'bank-advanced' && this.pendingBankEdit) {
+      const mode = this.bankStates.get(this.pendingBankEdit)?.faderMode ?? 'default';
+      bodyMarkup = `
+        <section class="bank-advanced-panel">
+          <div class="bank-advanced-panel__modes" role="radiogroup" aria-label="Comportamento dos faders">
+            ${(['default', 'master', 'bank', 'bank2'] as const).map((option) => `
+              <button class="${mode === option ? 'is-selected' : ''}" type="button"
+                data-bank-fader-mode="${option}" role="radio" aria-checked="${mode === option}">${
+                  faderModeLabel(option)
+                }</button>
+            `).join('')}
+          </div>
+          <p><b>Default:</b> o mesmo Learn CC vale em todos os presets e cada preset restaura sua posição de volume.</p>
+          <p><b>Master:</b> o mesmo Learn CC vale em todos os presets e os volumes permanecem onde estão ao trocar de preset.</p>
+          <p><b>Bank 1:</b> os volumes permanecem como no Master, mas o Learn CC dos faders é individual em cada preset.</p>
+          <p><b>Bank 2:</b> o Learn CC dos faders é individual e cada preset restaura sua própria posição de volume.</p>
+        </section>
+      `;
     } else if (kind === 'preset-name' && moduleNumber !== null) {
       bodyMarkup = `
         <section class="preset-name-editor">
@@ -4794,8 +5319,9 @@ export class PlayerScreen {
         </section>
       `;
     } else if (kind === 'cc-learn' && this.pendingCcLearn) {
-      const currentController = this.ccMappings.get(ccMappingKey(this.pendingCcLearn));
+      const currentController = this.ccMappings.get(this.ccMappingKeyForTarget(this.pendingCcLearn));
       const continuous = isContinuousCcTarget(this.pendingCcLearn);
+      const ccLimit = formatCcLimit(this.pendingCcLearn, this.pendingCcLimitPercent);
       bodyMarkup = `
         <section class="cc-learn-panel">
           <div class="cc-learn-panel__badge" aria-hidden="true">CC</div>
@@ -4807,9 +5333,9 @@ export class PlayerScreen {
               <button class="${this.pendingCcInverted ? 'is-selected' : ''}" type="button"
                 data-modal-action="toggle-cc-invert" aria-pressed="${this.pendingCcInverted}">Inverter</button>
               <label>
-                <span>Limite CC <output data-cc-limit-output>${this.pendingCcLimitPercent}%</output></span>
+                <span>Limite CC <output data-cc-limit-output>${ccLimit}</output></span>
                 <input type="range" min="0" max="100" step="0.1" value="${this.pendingCcLimitPercent}"
-                  data-cc-limit aria-label="Limite CC em porcentagem">
+                  data-cc-limit aria-label="Limite CC" aria-valuetext="${ccLimit}">
               </label>
               <small>O curso completo do controle físico termina neste ponto do knob ou fader.</small>
             </div>
@@ -4817,7 +5343,7 @@ export class PlayerScreen {
         </section>
       `;
     } else if (kind === 'cc-clear-confirm' && this.pendingCcClear) {
-      const controller = this.ccMappings.get(ccMappingKey(this.pendingCcClear));
+      const controller = this.ccMappings.get(this.ccMappingKeyForTarget(this.pendingCcClear));
       bodyMarkup = `
         <section class="cc-clear-confirmation">
           <strong>Limpar mapeamento?</strong>
@@ -5132,6 +5658,11 @@ export class PlayerScreen {
           <button class="player-modal__back-button" type="button" data-modal-action="cancel-preset-paste">Cancelar</button>
           <button class="player-modal__confirm-button" type="button" data-modal-action="confirm-preset-paste">Colar</button>
         `
+      : kind === 'module-config-copy-confirm'
+        ? `
+          <button class="player-modal__back-button" type="button" data-modal-action="cancel">Cancelar</button>
+          <button class="player-modal__confirm-button" type="button" data-modal-action="confirm-module-config-copy">Copiar</button>
+        `
       : kind === 'cc-clear-confirm'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel-cc-clear">Cancelar</button>
@@ -5237,6 +5768,9 @@ export class PlayerScreen {
     } else if (kind === 'glide-config') {
       eyebrow.textContent = moduleNumber === 8 ? 'Synth' : `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
       title.textContent = 'Glide · Velocity';
+    } else if (kind === 'module-voice-mode') {
+      eyebrow.textContent = moduleNumber === 8 ? 'Synth' : `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
+      title.textContent = 'Mono · Legato';
     } else if (kind === 'module-filter-velocity') {
       eyebrow.textContent = 'Cutoff';
       title.textContent = 'Velocity do filtro';
@@ -5316,6 +5850,12 @@ export class PlayerScreen {
     } else if (kind === 'effect-pad') {
       eyebrow.textContent = `FX ${this.activeEffectBank} · Pad ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
       title.textContent = 'Editar efeito';
+    } else if (kind === 'bank-name' && this.pendingBankEdit) {
+      eyebrow.textContent = `Banco ${this.pendingBankEdit}`;
+      title.textContent = 'Nome do banco';
+    } else if (kind === 'bank-advanced' && this.pendingBankEdit) {
+      eyebrow.textContent = `Banco ${this.pendingBankEdit}`;
+      title.textContent = 'Advanced';
     } else if (kind === 'cc-learn' && this.pendingCcLearn) {
       eyebrow.textContent = ccLearnTargetLabel(this.pendingCcLearn);
       title.textContent = 'Learn CC';
@@ -5334,6 +5874,9 @@ export class PlayerScreen {
     } else if (kind === 'preset-paste-confirm') {
       eyebrow.textContent = 'Copy · Paste';
       title.textContent = 'Colar preset';
+    } else if (kind === 'module-config-copy-confirm') {
+      eyebrow.textContent = 'Config · Copy';
+      title.textContent = 'Confirmar cópia';
     } else if (kind === 'compatibility-mode') {
       eyebrow.textContent = 'Hook Keys';
       title.textContent = this.pendingCompatibilityMode ? 'Modo compatibilidade' : 'Confirmar alteração';
@@ -5377,6 +5920,22 @@ export class PlayerScreen {
         noticeClose.closest('[data-default-settings-notice]')?.remove();
         return;
       }
+      const bankAdvanced = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-modal-action="open-bank-advanced"]') : null;
+      if (kind === 'bank-name' && bankAdvanced && this.pendingBankEdit) {
+        this.commitBankName(modal);
+        this.openChildModal('bank-advanced', null, bankAdvanced);
+        return;
+      }
+      const bankModeButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-bank-fader-mode]') : null;
+      if (kind === 'bank-advanced' && bankModeButton && this.pendingBankEdit) {
+        const mode = bankModeButton.dataset.bankFaderMode;
+        if (mode === 'default' || mode === 'master' || mode === 'bank' || mode === 'bank2') {
+          this.setBankFaderMode(this.pendingBankEdit, mode, modal);
+        }
+        return;
+      }
       const settingsModeButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-module-settings-mode]') : null;
       if (kind === 'module-settings' && moduleNumber !== null && settingsModeButton) {
@@ -5397,7 +5956,7 @@ export class PlayerScreen {
           return;
         }
       }
-      if ((kind === 'module-settings' || kind === 'module-synth')
+      if ((kind === 'module-settings' || kind === 'module-synth' || kind === 'module-voice-mode')
           && moduleNumber !== null && target instanceof Element) {
         const noSens = target.closest<HTMLButtonElement>('[data-glide-no-sens]');
         if (noSens) {
@@ -5414,14 +5973,28 @@ export class PlayerScreen {
         }
         if (target.closest('[data-glide-mode]')) {
           this.updateGlideSettings(moduleNumber, (settings) => {
-            settings.glideMode = readGlideMode(settings) === 'portamento' ? 'auto' : 'portamento';
+            const nextMode = readGlideMode(settings) === 'portamento' ? 'auto' : 'portamento';
+            settings.glideMode = nextMode;
+            // Porta e Mono andam sempre juntos, nos dois sentidos: Porta liga
+            // o Mono, Auto devolve pro Poly.
+            settings.voiceMode = nextMode === 'portamento' ? 'mono' : 'poly';
           });
           this.renderGlideCard(modal, moduleNumber);
+          this.syncVoiceModeFromGlideMode(modal, moduleNumber);
           return;
         }
         const glideConfig = target.closest<HTMLButtonElement>('[data-glide-config]');
         if (glideConfig) {
           this.openChildModal('glide-config', moduleNumber, glideConfig);
+          return;
+        }
+        const legatoButton = target.closest<HTMLButtonElement>('[data-voice-mode-legato]');
+        if (legatoButton) {
+          this.updateGlideSettings(moduleNumber, (settings) => {
+            settings.legato = !readLegato(settings);
+          });
+          this.renderGlideCard(modal, moduleNumber);
+          this.markPlayerStateChanged();
           return;
         }
       }
@@ -5551,10 +6124,16 @@ export class PlayerScreen {
           return;
         }
         if (moduleSettingAction === 'toggle-voice-mode' && moduleNumber >= 1 && moduleNumber <= 7) {
+          // O toque longo já abriu o Legato/Portamento; o clique que vem
+          // junto não deve alternar Mono/Poly por cima.
+          if (this.suppressNextVoiceModeClick) {
+            this.suppressNextVoiceModeClick = false;
+            return;
+          }
           const button = target instanceof Element
             ? target.closest<HTMLButtonElement>('button[data-module-setting-action="toggle-voice-mode"]')
             : null;
-          if (button) this.toggleModuleVoiceMode(button, moduleNumber);
+          if (button) this.toggleModuleVoiceMode(modal, button, moduleNumber);
           return;
         }
         const childKind = moduleSettingAction === 'open-compressor'
@@ -5586,7 +6165,7 @@ export class PlayerScreen {
           ? target.closest<HTMLButtonElement>('[data-synth-voice-mode]')
           : null;
         if (voiceModeButton) {
-          this.toggleSynthMode(voiceModeButton);
+          this.toggleSynthMode(modal, voiceModeButton);
           return;
         }
         const presetButton = target instanceof Element
@@ -6013,10 +6592,21 @@ export class PlayerScreen {
       const processorResetChoice = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-processor-reset-choice]')?.dataset.processorResetChoice
         : null;
-      if (processorKind && moduleNumber !== null && processorResetChoice) {
-        if (processorResetChoice === 'confirm') this.confirmProcessorReset(moduleNumber, processorKind);
-        else modal.querySelector('[data-processor-reset-confirmation]')?.remove();
-        return;
+      if (processorResetChoice && moduleNumber !== null) {
+        // No Config em páginas, processorKind não segue a aba (fica preso ao
+        // "kind" do modal, sempre 'module-settings'): o processador certo é o
+        // que ficou guardado na própria confirmação ao abrir.
+        const confirmationProcessor = target instanceof Element
+          ? target.closest<HTMLElement>('[data-processor-reset-confirmation]')?.dataset.processorResetConfirmation
+          : undefined;
+        const processor = confirmationProcessor === 'eq' || confirmationProcessor === 'envelope'
+          || isModuleEffectKind(confirmationProcessor)
+          ? confirmationProcessor : processorKind;
+        if (processor) {
+          if (processorResetChoice === 'confirm') this.confirmProcessorReset(moduleNumber, processor);
+          else modal.querySelector('[data-processor-reset-confirmation]')?.remove();
+          return;
+        }
       }
       if (modalAction === 'learn-preset-cc' && kind === 'preset-name' && moduleNumber !== null) {
         this.commitPresetName(modal, moduleNumber);
@@ -6115,9 +6705,10 @@ export class PlayerScreen {
         if (this.pendingCcLearn && this.pendingCcController !== null) {
           // Um CC comanda um unico controle: ao confirmar no novo alvo, ele
           // deixa qualquer alvo anterior que usava o mesmo numero.
-          const pendingKey = ccMappingKey(this.pendingCcLearn);
+          const pendingKey = this.ccMappingKeyForTarget(this.pendingCcLearn);
           for (const [targetKey, controller] of this.ccMappings) {
-            if (controller === this.pendingCcController && targetKey !== pendingKey) {
+            if (controller === this.pendingCcController && targetKey !== pendingKey
+                && ccMappingConflictScope(targetKey) === ccMappingConflictScope(pendingKey)) {
               this.ccMappings.delete(targetKey);
               this.ccMappingOptions.delete(targetKey);
             }
@@ -6145,13 +6736,20 @@ export class PlayerScreen {
         this.pastePresetClipboard();
         return;
       }
+      if (kind === 'module-config-copy-confirm' && modalAction === 'confirm-module-config-copy'
+          && moduleNumber !== null && this.moduleConfigCopySource !== null) {
+        const sourceNumber = this.moduleConfigCopySource;
+        this.closeModal(false);
+        this.copyModuleConfiguration(sourceNumber, moduleNumber);
+        return;
+      }
       if (kind === 'cc-clear-confirm' && modalAction === 'cancel-cc-clear') {
         this.leaveCcClearConfirmation();
         return;
       }
       if (kind === 'cc-clear-confirm' && modalAction === 'confirm-cc-clear') {
         if (this.pendingCcClear) {
-          const key = ccMappingKey(this.pendingCcClear);
+          const key = this.ccMappingKeyForTarget(this.pendingCcClear);
           this.ccMappings.delete(key);
           this.ccMappingOptions.delete(key);
           this.markPlayerStateChanged(false);
@@ -6257,6 +6855,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'preset-name' && moduleNumber !== null) {
           this.commitPresetName(modal, moduleNumber);
         }
+        if (modalAction === 'confirm' && kind === 'bank-name') this.commitBankName(modal);
         if (modalAction === 'confirm' && kind === 'effect-pad' && moduleNumber !== null) {
           this.commitEffectPad(modal, moduleNumber);
         }
@@ -6264,7 +6863,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
           this.commitModulePolyphony(modal, moduleNumber);
         }
-        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'module-env-filter' || kind === 'glide-config' || kind === 'module-arpeggiator' || kind === 'module-trance-gate' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-chorus'))) && this.modalHistory.length > 0) {
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'bank-advanced' || kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'module-env-filter' || kind === 'glide-config' || kind === 'module-voice-mode' || kind === 'module-arpeggiator' || kind === 'module-trance-gate' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-chorus'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -6479,6 +7078,24 @@ export class PlayerScreen {
         if (button && learnTarget) this.startRotarySpeedLearn(event, button, learnTarget);
       });
     }
+    if (kind === 'module-settings' && moduleNumber !== null) {
+      modal.addEventListener('pointerdown', (event) => {
+        const button = event.target instanceof Element
+          ? event.target.closest<HTMLButtonElement>('button[data-module-setting-action="toggle-voice-mode"]')
+          : null;
+        if (!button || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        if (!this.desktopRuntime) {
+          this.voiceModeHoldGesture.start(event, () => {
+            this.suppressNextVoiceModeClick = true;
+            window.setTimeout(() => { this.suppressNextVoiceModeClick = false; }, 900);
+            this.openChildModal('module-voice-mode', moduleNumber, button);
+          });
+        }
+      });
+      modal.addEventListener('pointermove', (event) => this.voiceModeHoldGesture.move(event));
+      modal.addEventListener('pointerup', (event) => this.voiceModeHoldGesture.end(event));
+      modal.addEventListener('pointercancel', (event) => this.voiceModeHoldGesture.end(event));
+    }
     if (kind === 'module-synth' && moduleNumber === 8) {
       modal.addEventListener('pointerdown', (event) => {
         const button = event.target instanceof Element
@@ -6603,7 +7220,7 @@ export class PlayerScreen {
         return;
       }
       if (kind === 'about' || kind === 'app-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio') this.handleAppSettingsChange(event);
-      if (kind === 'module-settings' && moduleNumber !== null) {
+      if ((kind === 'module-settings' || kind === 'module-voice-mode') && moduleNumber !== null) {
         this.handleModuleSettingsChange(event, moduleNumber);
       }
     });
@@ -6613,10 +7230,14 @@ export class PlayerScreen {
       if (kind === 'cc-learn' && input.matches('[data-cc-limit]')) {
         this.pendingCcLimitPercent = Math.round(boundedNumber(input.value, 0, 100, 100) * 10) / 10;
         const output = modal.querySelector<HTMLOutputElement>('[data-cc-limit-output]');
-        if (output) output.value = `${this.pendingCcLimitPercent}%`;
+        const formatted = this.pendingCcLearn
+          ? formatCcLimit(this.pendingCcLearn, this.pendingCcLimitPercent)
+          : `${this.pendingCcLimitPercent}%`;
+        if (output) output.value = formatted;
+        input.setAttribute('aria-valuetext', formatted);
         return;
       }
-      if ((kind === 'module-settings' || kind === 'module-synth')
+      if ((kind === 'module-settings' || kind === 'module-synth' || kind === 'module-voice-mode')
           && moduleNumber !== null && input.matches('[data-glide-time]')) {
         this.updateGlideControl(modal, input, moduleNumber);
         return;
@@ -6720,6 +7341,10 @@ export class PlayerScreen {
         const input = modal.querySelector<HTMLInputElement>('[data-user-name-input]');
         if (input) this.tabletInputKeyboardController.openFor(input);
       }
+      if (kind === 'bank-name') {
+        const input = modal.querySelector<HTMLInputElement>('[data-bank-name-input]');
+        if (input) this.tabletInputKeyboardController.openFor(input);
+      }
     }
     if (kind === 'tracks') {
       this.tracksPanelController = new TracksPanelController(
@@ -6754,7 +7379,10 @@ export class PlayerScreen {
       );
       this.outputFaderController.mount();
     }
-    if (kind === 'sound-selection') void this.renderSoundLibraryTotals(modal);
+    if (kind === 'sound-selection') {
+      this.syncSoundDownloadButtons(modal);
+      void this.renderSoundLibraryTotals(modal);
+    }
     const userName = modal.querySelector<HTMLElement>('[data-user-name]');
     const immediateUserName = this.account.name?.trim() || this.account.email;
     if (userName) userName.textContent = immediateUserName;
@@ -6773,6 +7401,9 @@ export class PlayerScreen {
       input.value = presetState?.name ?? 'Preset';
       const preview = requiredElement<HTMLElement>(modal, '.preset-name-editor__preview .player-preset-button__label');
       preview.textContent = input.value;
+    } else if (kind === 'bank-name') {
+      const input = requiredElement<HTMLInputElement>(modal, '[data-bank-name-input]');
+      if (this.desktopRuntime) input.focus();
     } else if (kind === 'effect-pad') {
       const input = requiredElement<HTMLInputElement>(modal, '[data-effect-name-input]');
       input.value = effectPadState?.name ?? `Efeito ${moduleNumber ?? ''}`;
@@ -7354,7 +7985,105 @@ export class PlayerScreen {
     if (transport) transport.hidden = false;
   }
 
+  private renderActiveSoundDownloadsBanner(): void {
+    const entries = [...this.activeSoundDownloads.values()];
+    const active = entries.find((entry) => entry.state === 'downloading') ?? entries[0];
+    if (!active) {
+      this.hideBackgroundDownload();
+      return;
+    }
+    const label = entries.length > 1 ? `${active.sound.name} (1/${entries.length})` : active.sound.name;
+    this.showBackgroundDownload(label, active.percentage);
+  }
+
+  private syncSoundDownloadButtons(container: ParentNode = this.root): void {
+    for (const button of container.querySelectorAll<HTMLButtonElement>('[data-fixed-sound-id]')) {
+      const soundId = button.dataset.fixedSoundId ?? '';
+      const entry = this.activeSoundDownloads.get(soundId);
+      const downloading = entry?.state === 'downloading';
+      const queued = entry?.state === 'queued';
+      button.classList.toggle('is-downloading', downloading);
+      button.classList.toggle('is-download-queued', queued);
+      button.style.setProperty('--fixed-sound-progress', String((entry?.percentage ?? 0) / 100));
+      if (entry) {
+        const status = button.querySelector<HTMLElement>('small');
+        if (status) status.textContent = downloading ? 'Baixando' : 'Na fila';
+      } else {
+        const installed = this.installedFixedSoundIds.has(soundId);
+        button.classList.toggle('is-installed', installed);
+        button.classList.toggle('is-downloadable', !installed);
+        button.setAttribute('aria-label', `${this.soundCatalog.get(soundId)?.name ?? 'Timbre'}. ${installed ? 'Baixado' : 'Não baixado'}`);
+        const status = button.querySelector<HTMLElement>('small');
+        if (status) status.textContent = installed ? 'No dispositivo' : 'Baixar';
+      }
+    }
+  }
+
+  private async processSoundDownloadQueue(): Promise<void> {
+    if (this.soundDownloadQueueRunning || this.bulkSoundDownloadRunning) return;
+    this.soundDownloadQueueRunning = true;
+    try {
+      while (this.activeSoundDownloads.size > 0 && this.mounted) {
+        const pair = [...this.activeSoundDownloads.entries()].find(([, entry]) => entry.state === 'queued');
+        if (!pair) break;
+        const [soundId, entry] = pair;
+        let installed = false;
+        entry.state = 'downloading';
+        entry.percentage = 0;
+        this.renderActiveSoundDownloadsBanner();
+        this.syncSoundDownloadButtons();
+        try {
+          await this.soundLibraryEngine.install(soundId, (progress) => {
+            entry.percentage = progress.percentage;
+            this.renderActiveSoundDownloadsBanner();
+            this.syncSoundDownloadButtons();
+            if (this.currentModalKind === 'sound-download' && this.selectedCatalogSoundId === soundId) {
+              const label = progress.percentage === null
+                ? `${formatBytes(progress.receivedBytes)} baixados`
+                : `${progress.percentage}%`;
+              this.updateSoundDownloadProgress(progress.percentage ?? 0, label);
+            }
+          }, entry.abort.signal);
+          this.installedFixedSoundIds.add(soundId);
+          installed = true;
+          if (this.currentModalKind === 'sound-download' && this.selectedCatalogSoundId === soundId) {
+            this.updateSoundDownloadProgress(100, 'Download concluído. Volte e escolha o timbre para usá-lo.');
+            const installButton = this.modal?.querySelector<HTMLButtonElement>('[data-modal-action="download-sound"]');
+            if (installButton) {
+              installButton.disabled = true;
+              installButton.textContent = 'Baixado';
+            }
+          }
+        } catch (error) {
+          if (!(error instanceof DOMException && error.name === 'AbortError')) {
+            console.error('[Hook Keys] Falha ao baixar timbre', soundId, entry.sound.sf2ObjectKey, error);
+            if (this.selectedCatalogSoundId === soundId) {
+              this.updateSoundDownloadMessage(soundDownloadErrorMessage(error));
+              const installButton = this.modal?.querySelector<HTMLButtonElement>('[data-modal-action="download-sound"]');
+              if (installButton) {
+                installButton.disabled = false;
+                installButton.textContent = 'Tentar novamente';
+              }
+            }
+          }
+        } finally {
+          this.activeSoundDownloads.delete(soundId);
+          this.syncSoundDownloadButtons();
+          this.renderActiveSoundDownloadsBanner();
+          if (installed) void this.syncNativeEngine();
+        }
+      }
+    } finally {
+      this.soundDownloadQueueRunning = false;
+      if (this.activeSoundDownloads.size === 0) this.hideBackgroundDownload();
+    }
+  }
+
   private async downloadAllOfficialSounds(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
+    if (this.bulkSoundDownloadRunning || this.soundDownloadQueueRunning || this.activeSoundDownloads.size > 0) {
+      this.updateSoundDownloadMessage('Aguarde a fila atual terminar antes de usar Baixar tudo.');
+      return;
+    }
     const sounds = this.soundCatalog.sounds.filter(
       (sound) => Boolean(sound.sf2ObjectKey) && !this.installedFixedSoundIds.has(sound.id),
     );
@@ -7373,6 +8102,7 @@ export class PlayerScreen {
     }
 
     button.disabled = true;
+    this.bulkSoundDownloadRunning = true;
     this.soundDownloadAbort?.abort();
     this.soundDownloadAbort = new AbortController();
     let completed = 0;
@@ -7422,7 +8152,9 @@ export class PlayerScreen {
       }
     } finally {
       this.soundDownloadAbort = null;
+      this.bulkSoundDownloadRunning = false;
       this.hideBackgroundDownload();
+      if (this.activeSoundDownloads.size > 0) void this.processSoundDownloadQueue();
     }
   }
 
@@ -8372,16 +9104,15 @@ export class PlayerScreen {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     const card = modal.querySelector<HTMLElement>('[data-module-glide-card]');
     if (!moduleState || !card) return;
-    if (moduleNumber === 8) {
-      const settings = readSynthSettings(moduleState.settings.synth);
-      card.outerHTML = createGlideCardMarkup(
-        settings as unknown as Readonly<Record<string, unknown>>,
-        this.metronome.getBpm(),
-        'synth',
-      );
-    } else {
-      card.outerHTML = createGlideCardMarkup(moduleState.settings, this.metronome.getBpm());
-    }
+    const owner = moduleNumber === 8 ? 'synth' : 'module';
+    const settings = moduleNumber === 8
+      ? readSynthSettings(moduleState.settings.synth) as unknown as Readonly<Record<string, unknown>>
+      : moduleState.settings;
+    // O toque longo no Mono/Poly abre o mesmo card, só que com o Legato no
+    // lugar dos botões de sempre — precisa saber qual modal está aberto.
+    card.outerHTML = this.currentModalKind === 'module-voice-mode'
+      ? createVoiceModeMarkup(settings, this.metronome.getBpm(), owner)
+      : createGlideCardMarkup(settings, this.metronome.getBpm(), owner);
   }
 
   private updateGlideControl(modal: HTMLElement | null, input: HTMLInputElement, moduleNumber: number): void {
@@ -8826,6 +9557,14 @@ export class PlayerScreen {
       'rotary:rampSeconds': [0.1, 10],
       'rotary:depth': [0, 100],
       'rotary:mix': [0, 100],
+      'chorus:rateHz': [0.05, 8],
+      'chorus:depth': [0, 100],
+      'chorus:mix': [0, 100],
+      'cutoffEnvelope:attackMs': [0, 5_000],
+      'cutoffEnvelope:decayMs': [0, 5_000],
+      'cutoffEnvelope:sustain': [0, 100],
+      'cutoffEnvelope:releaseMs': [0, 5_000],
+      'cutoffEnvelope:depthOctaves': [0, 8],
     };
     const range = ranges[control];
     if (!range) return;
@@ -9115,18 +9854,23 @@ export class PlayerScreen {
   private showProcessorResetConfirmation(
     modal: HTMLElement,
     moduleNumber: number,
-    processor: 'eq' | ModuleEffectKind,
+    processor: 'eq' | 'envelope' | ModuleEffectKind,
   ): void {
     if (modal.querySelector('[data-processor-reset-confirmation]')) return;
     const label = processor === 'eq' ? 'EQ'
-      : processor === 'compressor' ? 'Compressor'
-        : processor === 'reverb' ? 'Reverb'
-          : processor === 'rotary' ? 'Rotary'
-            : processor === 'chorus' ? 'Chorus'
-              : processor === 'cutoffEnvelope' ? 'Env-Filter' : 'Delay';
+      : processor === 'envelope' ? 'Envelope'
+        : processor === 'compressor' ? 'Compressor'
+          : processor === 'reverb' ? 'Reverb'
+            : processor === 'rotary' ? 'Rotary'
+              : processor === 'chorus' ? 'Chorus'
+                : processor === 'cutoffEnvelope' ? 'Env-Filter' : 'Delay';
     const confirmation = document.createElement('div');
     confirmation.className = 'module-processor-reset-confirmation';
-    confirmation.dataset.processorResetConfirmation = '';
+    // Guarda o processador desta confirmação: dentro do Config em páginas o
+    // Cancelar/Resetar do rodapé precisa saber de qual aba ela veio, já que
+    // o fechamento não é reaberto por aba (processorKind fica fixo em
+    // 'module-settings').
+    confirmation.dataset.processorResetConfirmation = processor;
     confirmation.setAttribute('role', 'alertdialog');
     confirmation.setAttribute('aria-modal', 'true');
     confirmation.setAttribute('aria-label', `Confirmar reset de ${label} do módulo ${moduleNumber}`);
@@ -9134,7 +9878,9 @@ export class PlayerScreen {
       <div>
         <span>${label}</span>
         <strong>Resetar ${label}?</strong>
-        <p>${processor === 'eq' ? 'Todas as cinco bandas voltarão para flat.' : 'Todos os parâmetros voltarão aos valores iniciais e o processador será desligado.'}</p>
+        <p>${processor === 'eq' ? 'Todas as cinco bandas voltarão para flat.'
+          : processor === 'envelope' ? 'Attack, Release, Hold, Decay, Cutoff e o limite de velocity voltarão aos valores iniciais.'
+            : 'Todos os parâmetros voltarão aos valores iniciais e o processador será desligado.'}</p>
         <footer>
           <button type="button" data-processor-reset-choice="cancel">Cancelar</button>
           <button class="is-danger" type="button" data-processor-reset-choice="confirm">Resetar</button>
@@ -9194,7 +9940,9 @@ export class PlayerScreen {
       : processor === 'eq' ? 'module-eq'
         : processor === 'compressor' ? 'module-compressor'
           : processor === 'reverb' ? 'module-reverb'
-            : processor === 'rotary' ? 'module-rotary' : 'module-delay',
+            : processor === 'rotary' ? 'module-rotary'
+              : processor === 'chorus' ? 'module-chorus'
+                : processor === 'cutoffEnvelope' ? 'module-env-filter' : 'module-delay',
       moduleNumber, trigger, true);
     this.setStatus(`${processor === 'eq' ? 'EQ resetado para flat' : `${processor} resetado`} no módulo ${moduleNumber}.`);
   }
@@ -9544,24 +10292,18 @@ export class PlayerScreen {
       select.dataset.appSelectEnhanced = 'true';
       select.classList.add('app-select__native');
       select.tabIndex = -1;
-      // O select nativo fica dentro de um <label>: mesmo escondido, tocar em
-      // qualquer lugar do rótulo (inclusive nos nossos próprios botões, já
-      // que o clique borbulha até o <label>) ativa o controle associado por
-      // padrão do navegador, e o iOS abre o seletor do sistema por cima do
-      // nosso. Isso vale sempre, não só fora do widget — por isso não há
-      // exceção aqui: os outros listeners de clique continuam funcionando
-      // normalmente, pois preventDefault não impede outros ouvintes.
+      // Um <select> dentro de <label> pode ser ativado pelo gesto no botão
+      // customizado antes mesmo do click/preventDefault (especialmente no
+      // WKWebView). Trocar somente o contêiner por <div> remove de vez essa
+      // ação nativa, sem mudar classes, layout ou o select usado pelo estado.
       const label = select.closest<HTMLLabelElement>('label');
-      if (label && label.dataset.appSelectLabelGuard !== 'true') {
-        label.dataset.appSelectLabelGuard = 'true';
-        // O clique cobre o "ativar o controle associado" do navegador, mas no
-        // Safari/WKWebView do iOS o picker nativo pode começar a abrir já no
-        // toque (pointerdown/mousedown), antes do click — daí ele pisca e
-        // fecha em vez de nem aparecer. Previne nos três.
-        const preventLabelDefault = (event: Event) => event.preventDefault();
-        label.addEventListener('click', preventLabelDefault);
-        label.addEventListener('mousedown', preventLabelDefault);
-        label.addEventListener('pointerdown', preventLabelDefault);
+      if (label) {
+        const container = document.createElement('div');
+        for (const attribute of Array.from(label.attributes)) {
+          if (attribute.name !== 'for') container.setAttribute(attribute.name, attribute.value);
+        }
+        while (label.firstChild) container.append(label.firstChild);
+        label.replaceWith(container);
       }
       const custom = document.createElement('div');
       custom.className = 'app-select';
@@ -9699,6 +10441,36 @@ export class PlayerScreen {
     if (!input || !preset) return;
     preset.name = input.value.trim().slice(0, 20) || 'Preset';
     this.restoreActivePresetState();
+    this.markPlayerStateChanged();
+  }
+
+  private commitBankName(modal: HTMLElement): void {
+    if (!this.pendingBankEdit) return;
+    const input = modal.querySelector<HTMLInputElement>('[data-bank-name-input]');
+    const bank = this.bankStates.get(this.pendingBankEdit);
+    if (!input || !bank) return;
+    bank.name = input.value.trim().slice(0, 12) || this.pendingBankEdit;
+    this.updateVisibleView();
+    this.markPlayerStateChanged(false);
+  }
+
+  private setBankFaderMode(bankId: BankId, mode: FaderBehaviorMode, modal: HTMLElement): void {
+    const bank = this.bankStates.get(bankId);
+    if (!bank || bank.faderMode === mode) return;
+    this.saveActivePresetState();
+    if (faderModeUsesPersistentVolumes(mode) && bankId === this.activeBank) {
+      bank.masterVolumes = Array.from({ length: MODULE_COUNT }, (_, index) =>
+        this.faders.get(index + 1)?.getValueDb() ?? 0);
+    }
+    bank.faderMode = mode;
+    const bankButton = this.root.querySelector<HTMLButtonElement>(`[data-action="show-bank"][data-bank="${bankId}"]`);
+    if (bankButton) bankButton.dataset.bankModeLabel = faderModeLabel(mode);
+    for (const button of modal.querySelectorAll<HTMLButtonElement>('[data-bank-fader-mode]')) {
+      const selected = button.dataset.bankFaderMode === mode;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-checked', String(selected));
+    }
+    if (bankId === this.activeBank) this.restoreActivePresetState();
     this.markPlayerStateChanged();
   }
 
@@ -9995,38 +10767,25 @@ export class PlayerScreen {
     }
   }
 
-  private async downloadSelectedSound(modal: HTMLElement, moduleNumber: number, button: HTMLButtonElement): Promise<void> {
+  private async downloadSelectedSound(_modal: HTMLElement, _moduleNumber: number, button: HTMLButtonElement): Promise<void> {
     const sound = this.selectedCatalogSoundId ? this.soundCatalog.get(this.selectedCatalogSoundId) : null;
     if (!sound) return;
+    // Já está baixando (por ex. o usuário voltou e entrou de novo no mesmo
+    // timbre): não começa outro download por cima.
+    if (this.activeSoundDownloads.has(sound.id)) return;
     if (!(await hasStorageFor(sound.byteSize))) {
       this.updateSoundDownloadMessage('Armazenamento insuficiente para baixar este timbre.');
       return;
     }
     button.disabled = true;
-    this.soundDownloadAbort?.abort();
-    this.soundDownloadAbort = new AbortController();
-    try {
-      await this.soundLibraryEngine.install(sound.id, (progress) => {
-        this.showBackgroundDownload(sound.name, progress.percentage);
-        if (!modal.isConnected) return;
-        const label = progress.percentage === null
-          ? `${formatBytes(progress.receivedBytes)} baixados`
-          : `${progress.percentage}%`;
-        this.updateSoundDownloadProgress(progress.percentage ?? 0, label);
-      }, this.soundDownloadAbort.signal);
-      this.installedFixedSoundIds.add(sound.id);
-      if (modal.isConnected) this.updateSoundDownloadProgress(100, 'Download concluído');
-      await this.selectFixedSound(moduleNumber, sound.id);
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) {
-        console.error('[Hook Keys] Falha ao baixar timbre', sound.id, sound.sf2ObjectKey, error);
-        this.updateSoundDownloadMessage(soundDownloadErrorMessage(error));
-      }
-    } finally {
-      this.soundDownloadAbort = null;
-      this.hideBackgroundDownload();
-      if (button.isConnected) button.disabled = false;
-    }
+    const abort = new AbortController();
+    this.activeSoundDownloads.set(sound.id, {
+      sound, percentage: 0, abort, state: 'queued',
+    });
+    button.textContent = this.soundDownloadQueueRunning ? 'Na fila…' : 'Baixando…';
+    this.renderActiveSoundDownloadsBanner();
+    this.syncSoundDownloadButtons();
+    void this.processSoundDownloadQueue();
   }
 
   private async uninstallSelectedSound(button: HTMLButtonElement): Promise<void> {
@@ -10251,6 +11010,38 @@ export class PlayerScreen {
 
   private onModalKeydown(event: KeyboardEvent): void {
     if (!this.modal) return;
+
+    if (
+      this.desktopRuntime
+      && event.key === 'Enter'
+      && !event.repeat
+      && !event.isComposing
+      && !event.ctrlKey
+      && !event.metaKey
+      && !event.altKey
+      && !event.shiftKey
+    ) {
+      const target = event.target;
+      // Enter confirma campos simples no desktop. Em controles que usam Enter
+      // para editar a própria opção ou inserir uma nova linha, ele permanece
+      // com o comportamento nativo.
+      if (!(target instanceof Element) || !target.closest('textarea, select, [contenteditable="true"]')) {
+        const nestedDialog = Array.from(
+          this.modal.querySelectorAll<HTMLElement>('[role="alertdialog"]'),
+        ).at(-1);
+        const nestedButtons = nestedDialog
+          ? Array.from(nestedDialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+          : [];
+        const confirmButton = nestedButtons.at(-1)
+          ?? this.modal.querySelector<HTMLButtonElement>('.player-modal__confirm-button:not(:disabled)');
+        if (confirmButton) {
+          event.preventDefault();
+          event.stopPropagation();
+          confirmButton.click();
+          return;
+        }
+      }
+    }
 
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -10511,7 +11302,9 @@ export class PlayerScreen {
       }
     }
     const preset = this.getActivePresetState();
-    const configurationTasks: Promise<void>[] = [];
+    const configurationTasks: Promise<void>[] = [
+      hookKeysNative.setGlobalTranspose(this.globalOctaveShift * 12 + this.globalTransposeSemitones),
+    ];
     for (let moduleIndex = 0; moduleIndex < MODULE_COUNT; moduleIndex += 1) {
       const moduleState = preset?.modules[moduleIndex];
       const selectedSlot = moduleState?.midiInputId
@@ -10522,14 +11315,19 @@ export class PlayerScreen {
         : this.audioRouting.timbres;
       const nativeOutputRoute = parseAudioBusRoute(outputRoute);
       const synthSettings = moduleIndex === 7 ? readSynthSettings(moduleState?.settings.synth) : null;
-      // No Sens: o volume do Synth não segue o toque. A curva salva continua
-      // guardada; o Glide e o filtro seguem lendo a velocity real da tecla.
+      // No Sens: desliga o envelope do amplificador (o que faz o volume
+      // seguir o velocity), soando sempre no ganho pleno da wave. É o motor
+      // quem aplica isso agora — inclusive nas notas já soando, na hora —
+      // então a curva de velocity continua valendo do jeito real.
       const noSens = synthSettings
         ? synthSettings.noVelocitySensitivity
         : readNoVelocitySensitivity(moduleState?.settings ?? {});
-      const velocityCurve = noSens
-        ? { points: [127, 127, 127, 127, 127] }
-        : readVelocityCurveSettings(moduleState?.settings.velocityCurve);
+      const velocityCurve = readVelocityCurveSettings(moduleState?.settings.velocityCurve);
+      // Mono/Legato agora é o motor quem decide (substitui e devolve a nota
+      // anterior ainda presa): não força mais a polifonia a 1, senão o
+      // roteador rouba a nota antes do motor conseguir devolvê-la.
+      const mono = moduleIndex < 7 && moduleState?.settings.voiceMode === 'mono';
+      const legato = mono && readLegato(moduleState?.settings ?? {});
       // Todo módulo tem seu próprio Arpeggiator: cada um escuta seu próprio
       // slot gerado (base + índice do módulo) — ver arpeggiatorInputSlotForModule.
       const arpeggiatorSettings = readArpeggiatorSettings(moduleState?.settings.arpeggiator);
@@ -10550,19 +11348,23 @@ export class PlayerScreen {
         sustain: moduleState?.sustainInputEnabled ?? true,
         modulation: moduleState?.modulationInputEnabled ?? true,
         gmDrumHiHatChoke: isDrumCatalogSound(this.soundCatalog, moduleState?.timbreId),
-        volumeDb: moduleState?.volumeDb ?? 0,
-        // O próprio sintetizador administra Mono/Poly. O roteador precisa
-        // encaminhar todas as notas para preservar prioridade e legato no Mono.
-        polyphony: moduleIndex < 7 && moduleState?.settings.voiceMode === 'mono'
-          ? 1
-          : Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 128))),
+        volumeDb: faderModeUsesPersistentVolumes(
+          this.bankStates.get(this.activeBank)?.faderMode ?? 'default',
+        )
+          ? this.bankStates.get(this.activeBank)?.masterVolumes[moduleIndex] ?? 0
+          : moduleState?.volumeDb ?? 0,
+        polyphony: Math.round(Math.min(128, Math.max(1, Number(moduleState?.settings.polyphony) || 128))),
         velocityCurve0: velocityCurve.points[0],
         velocityCurve1: velocityCurve.points[1],
         velocityCurve2: velocityCurve.points[2],
         velocityCurve3: velocityCurve.points[3],
         velocityCurve4: velocityCurve.points[4],
+        noVelocitySensitivity: Boolean(noSens),
+        mono,
+        legato,
         outputChannelStart: nativeOutputRoute.start,
         outputChannelCount: nativeOutputRoute.count,
+        outputDualMono: this.moduleOutputMono,
       }));
       if (moduleState) {
         configurationTasks.push(hookKeysNative.configureModuleModulation({
@@ -10812,6 +11614,9 @@ export class PlayerScreen {
       keyboardMidiSlot: this.keyboardMidiSlot,
       keyboardStyle: this.keyboardStyle,
       keyboardOctaveSpan: this.keyboardOctaveSpan,
+      globalOctaveShift: this.globalOctaveShift,
+      globalTransposeSemitones: this.globalTransposeSemitones,
+      moduleOutputMono: this.moduleOutputMono,
       midiInputIds: [...this.selectedMidiInputIds],
       audioDeviceId: this.selectedAudioDeviceId,
       audioRouting: { ...this.audioRouting },
@@ -10891,6 +11696,12 @@ export class PlayerScreen {
     const savedKeyboardStyle = asString(value.keyboardStyle);
     this.keyboardStyle = savedKeyboardStyle === 'black' || savedKeyboardStyle === 'hook' ? savedKeyboardStyle : 'standard';
     this.keyboardOctaveSpan = value.keyboardOctaveSpan === 'four' ? 'four' : 'full';
+    this.globalOctaveShift = boundedNumber(value.globalOctaveShift, -3, 3, 0);
+    this.globalTransposeSemitones = boundedNumber(value.globalTransposeSemitones, -24, 24, 0);
+    this.moduleOutputMono = value.moduleOutputMono === true;
+    this.renderGlobalOctaveButtons();
+    this.renderGlobalTransposeButtons();
+    this.renderModuleOutputModeButton();
     this.performanceKeyboard?.setStyle(this.keyboardStyle);
     const savedOutputLevels = isRecord(value.outputLevels) ? value.outputLevels : {};
     this.outputLevels = {
@@ -10933,14 +11744,15 @@ export class PlayerScreen {
     }
     // Estados anteriores deixavam o mesmo CC em vários controles. O Learn mais
     // recente é o último gravado, então ele fica e os antigos saem.
-    const mappedTargets = new Map<number, string>();
+    const mappedTargets = new Map<string, string>();
     for (const [targetKey, controller] of this.ccMappings) {
-      const earlier = mappedTargets.get(controller);
+      const scopedController = `${ccMappingConflictScope(targetKey)}:${controller}`;
+      const earlier = mappedTargets.get(scopedController);
       if (earlier) {
         this.ccMappings.delete(earlier);
         this.ccMappingOptions.delete(earlier);
       }
-      mappedTargets.set(controller, targetKey);
+      mappedTargets.set(scopedController, targetKey);
     }
     this.renderOutputLevels();
     this.renderBottomView();
@@ -11004,6 +11816,16 @@ export class PlayerScreen {
       const defaults = createBankState();
       const sourceBank = isRecord(savedBanks[bankId]) ? savedBanks[bankId] : null;
       if (!sourceBank) continue;
+      defaults.name = typeof sourceBank.name === 'string'
+        ? sourceBank.name.trim().slice(0, 12) || bankId
+        : bankId;
+      defaults.faderMode = sourceBank.faderMode === 'master' || sourceBank.faderMode === 'bank'
+          || sourceBank.faderMode === 'bank2'
+        ? sourceBank.faderMode
+        : 'default';
+      const savedMasterVolumes = Array.isArray(sourceBank.masterVolumes) ? sourceBank.masterVolumes : [];
+      defaults.masterVolumes = Array.from({ length: MODULE_COUNT }, (_, index) =>
+        boundedNumber(savedMasterVolumes[index], MODULE_FADER_MIN_DB, 6, 0));
       const selectedPreset = sourceBank.selectedPreset;
       defaults.selectedPreset = typeof selectedPreset === 'number' && Number.isInteger(selectedPreset)
         ? selectedPreset >= 1 && selectedPreset <= PRESET_COUNT ? selectedPreset : 1

@@ -1,8 +1,43 @@
+/* Empacotada localmente (public/assets/fonts): o app roda offline no
+   Capacitor/Tauri, então a fonte não pode depender de rede (Google Fonts). */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/assets/fonts/jetbrains-mono/jetbrains-mono-latin-800-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/assets/fonts/jetbrains-mono/jetbrains-mono-latin-ext-800-normal.woff2') format('woff2');
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: italic;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/assets/fonts/jetbrains-mono/jetbrains-mono-latin-800-italic.woff2') format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: italic;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/assets/fonts/jetbrains-mono/jetbrains-mono-latin-ext-800-italic.woff2') format('woff2');
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
 :root {
   color: #fff9f4;
   background: #070504;
   font-family:
-    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    'JetBrains Mono', ui-monospace, "Segoe UI Mono", "Cascadia Mono", monospace;
   font-synthesis: weight style;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -27,6 +62,9 @@ body,
 body :is(button, a, label, h1, h2, h3, h4, h5, h6, p, span, strong, b, small, legend, summary, output, input, select, option, textarea, li, td, th) {
   font-weight: 800 !important;
   font-style: italic !important;
+  /* JetBrains Mono é monoespaçada: cada letra ocupa mais espaço que a Inter
+     de antes, e sem isso o texto passava dos botões apertados do Config. */
+  letter-spacing: -0.03em !important;
 }
 
 * {
@@ -1582,6 +1620,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   align-content: center;
   gap: 3px;
   min-width: 0;
+  overflow: hidden;
   color: #fff;
   border: 1.5px solid #65baff;
   border-radius: 10px;
@@ -1589,8 +1628,15 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   box-shadow: inset 0 1px rgba(255,255,255,.22), 0 0 12px rgba(37,143,228,.2);
   font-weight: 950;
 }
-.module-voice-mode-button span { color: #d9efff; font-size: clamp(9px, 1vw, 12px); }
-.module-voice-mode-button strong { color: #fff; font-size: clamp(15px, 1.7vw, 22px); }
+.module-voice-mode-button span,
+.module-voice-mode-button strong {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.module-voice-mode-button span { color: #d9efff; font-size: clamp(8px, 0.85vw, 10px); }
+.module-voice-mode-button strong { color: #fff; font-size: clamp(12px, 1.35vw, 17px); }
 .module-voice-mode-button.is-mono {
   border-color: #c084ff;
   background: linear-gradient(180deg, #a34be5, #51127f);
@@ -2007,7 +2053,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   /* Celular deitado: o editor de padrão é o conteúdo da página, então a
      moldura em volta dele encolhe para ele caber inteiro, sem cortar embaixo. */
   .module-settings-panel:has(.pattern-editor) {
-    --module-io-control-height: clamp(34px, 9vh, 44px);
+    --module-io-control-height: clamp(30px, 7.5vh, 38px);
   }
   .module-settings-panel:has(.pattern-editor) .module-settings-pages,
   .module-settings-panel:has(.pattern-editor) .module-settings-pages button {
@@ -2341,7 +2387,26 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .player-navigation__bank-button {
+  position: relative;
   flex: 0 1 auto;
+}
+
+.player-navigation__bank-button[data-action="show-bank"]::after {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(10, 8, 6, .72);
+  color: #fff;
+  font-size: 5.5px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: .01em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  content: attr(data-bank-mode-label);
+  pointer-events: none;
 }
 
 .player-navigation__button.is-selected {
@@ -3333,8 +3398,9 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   grid-row: 3;
 }
 
-/* Com o Keyboard à mostra, Copy e bancos continuam na linha, apagados e sem ação. */
-.player-presets.is-keyboard .player-presets__header :is(.player-preset-copy-button, .player-navigation__bank-button) {
+/* Com o Keyboard à mostra, Copy fica indisponível; os bancos continuam
+   acessíveis para trocar de banco e para o toque longo de edição. */
+.player-presets.is-keyboard .player-presets__header .player-preset-copy-button {
   opacity: .34;
   pointer-events: none;
 }
@@ -3392,7 +3458,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .player-screen--tablet .player-top-transport {
   display: grid;
-  grid-template-columns: auto minmax(180px, 1.35fr) minmax(120px, 0.9fr) auto;
+  grid-template-columns: auto minmax(175px, 1.2fr) minmax(185px, 1.15fr) auto;
   align-items: stretch;
   gap: clamp(7px, 0.9vw, 12px);
   min-width: 0;
@@ -3439,7 +3505,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   grid-column: 3;
 }
 
-.player-screen--tablet .player-top-transport .player-note-display {
+.player-screen--tablet .player-top-transport .player-global-pitch {
   grid-column: 3;
 }
 
@@ -3776,9 +3842,9 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   display: grid;
   grid-template-columns: auto minmax(56px, 1fr) minmax(44px, auto);
   align-items: center;
-  gap: clamp(5px, 0.65vw, 9px);
+  gap: clamp(4px, 0.5vw, 6px);
   min-width: 0;
-  padding: 4px clamp(8px, 1vw, 13px);
+  padding: 4px clamp(6px, .7vw, 9px);
   border: 1.5px solid rgba(255, 121, 0, 0.48);
   border-radius: clamp(10px, 1.3vw, 15px);
   background: linear-gradient(180deg, rgba(31, 31, 34, 0.98), rgba(12, 12, 14, 0.99));
@@ -3891,14 +3957,15 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   animation: next-track-name-marquee 7s linear infinite;
 }
 
-.player-note-display {
+.player-global-pitch {
   display: none;
 }
 
-.player-screen--tablet .player-note-display {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+.player-screen--tablet .player-global-pitch {
+  display: flex;
   align-items: center;
+  justify-content: flex-start;
+  gap: clamp(4px, .55vw, 8px);
   min-width: 0;
   padding: 5px 10px;
   overflow: hidden;
@@ -3910,7 +3977,33 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   box-shadow: inset 0 1px rgba(255, 211, 173, .08), 0 6px 18px rgba(0, 0, 0, .32);
 }
 
-.player-note-display > span {
+.player-global-pitch__group {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: clamp(3px, .35vw, 5px);
+  min-width: 0;
+}
+
+.player-global-pitch__separator {
+  color: #806d61;
+  font-size: clamp(15px, 1.45vw, 21px);
+  font-weight: 950;
+  line-height: 1;
+}
+
+.player-global-pitch__output-mode {
+  min-width: clamp(54px, 5.8vw, 78px);
+}
+
+.player-global-pitch__output-mode.is-mono {
+  color: #effff3;
+  border-color: rgba(76, 235, 127, 0.84);
+  background: linear-gradient(180deg, rgba(25, 150, 69, 0.98), rgba(7, 76, 32, 0.99));
+  box-shadow: 0 0 10px rgba(40, 221, 100, 0.18), inset 0 1px rgba(220, 255, 230, 0.2);
+}
+
+.player-global-pitch__group > span {
   color: #b89a86;
   font-size: clamp(6px, .58vw, 8px);
   font-weight: 900;
@@ -3920,16 +4013,37 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   white-space: nowrap;
 }
 
-.player-note-display > strong {
-  min-width: 0;
+.player-global-pitch__button {
+  min-width: clamp(42px, 4.5vw, 60px);
+  min-height: 24px;
+  padding: 3px 6px;
   overflow: hidden;
-  color: #ffad45;
-  font-size: clamp(12px, 1.35vw, 19px);
-  font-weight: 950;
-  line-height: 1.05;
+  color: #cdbdb2;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(44, 35, 52, 0.98), rgba(17, 11, 23, 0.99));
+  font-size: clamp(8px, .88vw, 11px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  line-height: 1;
   text-overflow: ellipsis;
-  text-shadow: 0 0 12px rgba(255, 122, 24, .2);
   white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.player-global-pitch__button:active {
+  border-color: rgba(255, 151, 76, 0.75);
+  background: rgba(255, 122, 24, 0.2);
+  transform: translateY(1px);
+}
+
+.player-global-pitch__button.is-octave-active {
+  color: #effff3;
+  border-color: rgba(76, 235, 127, 0.84);
+  background: linear-gradient(180deg, rgba(25, 150, 69, 0.98), rgba(7, 76, 32, 0.99));
+  box-shadow: 0 0 10px rgba(40, 221, 100, 0.18), inset 0 1px rgba(220, 255, 230, 0.2);
 }
 
 .track-position-panel {
@@ -4645,7 +4759,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .module-settings-io-row {
-  --module-io-control-height: clamp(50px, 7.8vh, 64px);
+  --module-io-control-height: clamp(42px, 6.6vh, 54px);
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(110px, .42fr);
   align-items: end;
@@ -7927,6 +8041,64 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   font-size: 11px;
 }
 
+.bank-name-editor {
+  grid-template-columns: minmax(220px, 1fr) minmax(140px, .35fr);
+  grid-template-areas: "field advanced";
+  align-items: end;
+}
+
+.bank-name-editor__advanced {
+  grid-area: advanced;
+  min-height: 48px;
+  color: #fff4ec;
+  border: 1.5px solid rgba(255, 137, 43, .7);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #4a3326, #17110e);
+  font-weight: 900;
+}
+
+.bank-advanced-panel {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  width: min(100%, 720px);
+  margin: 0 auto;
+  color: #cbb8aa;
+}
+
+.bank-advanced-panel__modes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.bank-advanced-panel__modes button {
+  min-height: 48px;
+  color: #fff4ec;
+  border: 1.5px solid #704126;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #46372e, #171311);
+  font-weight: 950;
+}
+
+.bank-advanced-panel__modes button.is-selected {
+  color: #07130a;
+  border-color: #71ef91;
+  background: linear-gradient(180deg, #4cf16d, #169a39);
+}
+
+.bank-advanced-panel p { margin: 0; line-height: 1.35; }
+.bank-advanced-panel p b { color: #ffad45; }
+
+.player-module__settings-button.is-config-copy-source {
+  animation: config-copy-pulse .58s ease-in-out infinite alternate;
+}
+
+@keyframes config-copy-pulse {
+  from { filter: brightness(.8); box-shadow: 0 0 0 rgba(255, 126, 31, 0); }
+  to { filter: brightness(1.65); box-shadow: 0 0 16px rgba(255, 126, 31, .9); }
+}
+
 .cc-learn-panel {
   display: grid;
   place-items: center;
@@ -8929,9 +9101,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   filter: brightness(1.22);
 }
 
-/* Barra fina de progresso durante "Baixar tudo": some quando o timbre não
-   está sendo baixado (opacity 0) e cresce da esquerda pra direita conforme
-   o download daquele timbre específico avança. */
+/* Barra fina verde do único timbre que está usando a fila de download. */
 .fixed-sound-progress {
   position: absolute;
   left: 0;
@@ -8940,7 +9110,8 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   height: 2px;
   transform-origin: left;
   transform: scaleX(var(--fixed-sound-progress, 0));
-  background: linear-gradient(90deg, #ffb04b, #ff6a00);
+  background: linear-gradient(90deg, #20d85a, #80ff9c);
+  box-shadow: 0 0 7px rgba(54, 255, 105, .75);
   opacity: 0;
   pointer-events: none;
   transition: transform 120ms linear;
@@ -8949,6 +9120,10 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
 .fixed-sound-grid button.is-downloading .fixed-sound-progress {
   opacity: 1;
+}
+
+.fixed-sound-grid button.is-download-queued small {
+  color: #ffd06b;
 }
 
 .fixed-sound-new-badge {
@@ -9716,7 +9891,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
 @media (max-width: 760px) and (orientation: landscape) {
   .module-settings-io-row {
-    --module-io-control-height: 42px;
+    --module-io-control-height: 36px;
   }
   .player-screen {
     gap: 6px;
@@ -9931,7 +10106,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 /* Interface principal em celulares e outras telas horizontais de pouca altura. */
 @media (orientation: landscape) and (max-height: 520px) {
   .module-settings-io-row {
-    --module-io-control-height: 29px;
+    --module-io-control-height: 26px;
   }
 
   .module-settings-reset-button {
@@ -10572,7 +10747,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .player-screen--tablet .player-top-transport {
-    grid-template-columns: auto minmax(100px, 1.2fr) minmax(78px, 0.8fr) auto;
+    grid-template-columns: auto minmax(96px, 1fr) minmax(114px, 1fr) auto;
     gap: 3px;
   }
 
@@ -10652,17 +10827,13 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
     height: 12px;
   }
 
-  .player-screen--tablet .player-note-display {
+  .player-screen--tablet .player-global-pitch {
     padding: 2px 5px;
     border-radius: 7px;
   }
 
-  .player-screen--tablet .player-note-display > span {
-    font-size: 5px;
-  }
-
-  .player-screen--tablet .player-note-display > strong {
-    font-size: 9px;
+  .player-screen--tablet .player-global-pitch__separator {
+    font-size: 10px;
   }
 
   .player-screen--tablet .player-header {
@@ -11255,14 +11426,22 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   align-content: center;
   gap: 3px;
   min-width: 0;
+  overflow: hidden;
   color: #fff4e8;
   border: 1.5px solid rgba(255,121,0,.62);
   border-radius: 10px;
   background: linear-gradient(180deg, #30211a, #120d0c);
   font-weight: 900;
 }
-.module-polyphony-button span { color: #ffad65; font-size: clamp(9px, 1vw, 12px); }
-.module-polyphony-button strong { color: #fff4e8; font-size: clamp(15px, 1.7vw, 22px); }
+.module-polyphony-button span,
+.module-polyphony-button strong {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.module-polyphony-button span { color: #ffad65; font-size: clamp(8px, 0.85vw, 10px); }
+.module-polyphony-button strong { color: #fff4e8; font-size: clamp(12px, 1.35vw, 17px); }
 
 .module-polyphony-panel {
   display: grid;
@@ -11461,7 +11640,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
 .player-screen--tablet .track-transport__name,
 .player-screen--tablet .player-next-field__track {
-  padding: 4px 7px;
+  padding: 4px 5px;
   border: 1px solid rgba(255, 148, 71, .2);
   border-radius: 6px;
   background: linear-gradient(145deg, rgba(58, 42, 48, .82), rgba(14, 11, 15, .96));
@@ -12987,6 +13166,11 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   min-width: 0;
   min-height: 0;
 }
+/* O modal do toque longo no Mono/Poly só tem Sync e Legato: uma linha só,
+   sem duas células vazias embaixo como sobraria no grid 2x2 de sempre. */
+.module-glide-card__buttons--voice-mode {
+  grid-template-rows: minmax(0, 1fr);
+}
 .module-glide-card__buttons > button {
   min-width: 0;
   min-height: 0;
@@ -13508,7 +13692,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   -webkit-user-select: none;
   touch-action: none;
 }
-.keyboard-expression--mod { --wheel-accent: #ff89d0; }
+.keyboard-expression--mod { --wheel-accent: #ff9a38; }
 .keyboard-expression > span:first-child { color: #f4f2f0; font-size: clamp(7px, .8vw, 10px); font-weight: 900; text-align: center; }
 .keyboard-expression__track {
   position: relative;
@@ -13517,32 +13701,46 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   overflow: hidden;
   border: 1px solid #50545c;
   border-radius: 6px;
-  background: repeating-linear-gradient(180deg, transparent 0 5px, #45464a 5px 6px), linear-gradient(90deg, #07080c, #333740 48%, #090a0e);
+  background: linear-gradient(90deg, #07080c, #333740 48%, #090a0e);
   box-shadow: inset 0 2px 7px #000;
 }
-.keyboard-expression--pitch .keyboard-expression__track::before {
+.keyboard-expression--mod .keyboard-expression__track::after {
   position: absolute;
-  top: 50%;
   right: 0;
+  bottom: 0;
   left: 0;
-  border-top: 1px solid var(--wheel-accent);
-  opacity: .7;
+  height: var(--wheel-position, 0%);
+  background: linear-gradient(0deg, #e95b08, #ffad45);
+  box-shadow: 0 0 7px rgba(255, 121, 0, .48);
   content: '';
 }
 .keyboard-expression__track i {
   position: absolute;
+  z-index: 2;
   top: clamp(7px, calc(100% - var(--wheel-position, 0%)), calc(100% - 7px));
   right: 2px;
   left: 2px;
   height: 12px;
   border: 1px solid var(--wheel-accent);
   border-radius: 3px;
-  background: repeating-linear-gradient(180deg, #d4d8de 0 2px, #5c6777 2px 3px);
+  background: linear-gradient(180deg, #d4d8de, #687384);
   box-shadow: 0 0 5px var(--wheel-accent), 0 2px 5px #000;
   transform: translateY(-50%);
 }
+.keyboard-expression__track i b {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  color: rgba(20, 22, 27, .9);
+  font-size: 6px;
+  font-style: normal;
+  font-weight: 950;
+  line-height: 1;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
 .keyboard-expression input {
-  z-index: 1;
+  z-index: 3;
   grid-area: 2 / 1;
   width: 100%;
   height: 100%;
@@ -13873,7 +14071,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 
   html[data-runtime="desktop"] .player-screen--tablet .track-transport,
   html[data-runtime="desktop"] .player-screen--tablet .player-next-field,
-  html[data-runtime="desktop"] .player-screen--tablet .player-note-display {
+  html[data-runtime="desktop"] .player-screen--tablet .player-global-pitch {
     padding-block: 3px;
   }
 
@@ -13921,67 +14119,81 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   }
 }
 
+/* Desktop é mouse preciso, não dedo: o Config pode ficar compacto sempre,
+   não só quando a janela é baixa — os knobs e letras de touch ficavam
+   grandes demais e espremiam o resto do card em qualquer altura de janela. */
+html[data-runtime="desktop"] .player-modal--module-settings .player-modal__surface {
+  gap: 4px;
+  padding: 6px 8px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings .player-modal__header h2 {
+  font-size: 20px;
+  line-height: 1;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings .module-settings-panel {
+  gap: 4px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings .module-settings-io-row {
+  --module-io-control-height: 34px;
+  gap: 7px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings :is(.module-envelope-grid, .module-processors-grid) {
+  gap: 4px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings :is(
+  .module-envelope-control,
+  .module-eq-card,
+  .module-effect-card
+) {
+  gap: 3px;
+  padding: 4px;
+  border-radius: 7px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings .module-envelope-knob {
+  width: min(38px, 7vh);
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings .module-effect-knob__face {
+  width: min(38px, 7vh);
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings .module-effect-knob {
+  grid-template-rows: auto minmax(38px, 1fr) auto;
+  padding: 4px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings :is(.module-eq-card, .module-effect-card) > button {
+  min-height: 25px;
+  padding: 2px 5px;
+  font-size: 9px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings .module-settings-bottom-row {
+  gap: 5px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings :is(.module-velocity-card, .module-glide-card, .module-mod-card) {
+  min-height: 45px;
+  padding-block: 4px;
+}
+
+html[data-runtime="desktop"] .player-modal--module-settings .player-modal__actions {
+  min-height: 32px;
+  padding-top: 3px;
+}
+
 @media (orientation: landscape) and (max-height: 620px) {
-  html[data-runtime="desktop"] .player-modal--module-settings .player-modal__surface {
-    gap: 4px;
-    padding: 6px 8px;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings .player-modal__header h2 {
-    font-size: 20px;
-    line-height: 1;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings .module-settings-panel {
-    gap: 4px;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings .module-settings-io-row {
-    --module-io-control-height: 34px;
-    gap: 7px;
-  }
-
+  /* Só nessa altura curta que o Config precisa perder a segunda coluna e
+     virar uma lista só — o resto do aperto já vale sempre, acima. */
   html[data-runtime="desktop"] .player-modal--module-settings .module-settings-workspace {
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings :is(.module-envelope-grid, .module-processors-grid) {
-    gap: 4px;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings :is(
-    .module-envelope-control,
-    .module-eq-card,
-    .module-effect-card
-  ) {
-    gap: 3px;
-    padding: 4px;
-    border-radius: 7px;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings .module-envelope-knob {
-    width: min(38px, 7vh);
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings :is(.module-eq-card, .module-effect-card) > button {
-    min-height: 25px;
-    padding: 2px 5px;
-    font-size: 9px;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings .module-settings-bottom-row {
-    gap: 5px;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings :is(.module-velocity-card, .module-glide-card, .module-mod-card) {
-    min-height: 45px;
-    padding-block: 4px;
-  }
-
-  html[data-runtime="desktop"] .player-modal--module-settings .player-modal__actions {
-    min-height: 32px;
-    padding-top: 3px;
   }
 }
 
@@ -14118,7 +14330,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
    encolhe: e o unico lugar da tela onde esses tres controles existem. */
 :root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-top-transport,
 :root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split.is-pads-view .player-top-transport {
-  grid-template-columns: auto minmax(104px, 1.2fr) minmax(74px, 0.8fr) auto;
+  grid-template-columns: auto minmax(90px, .9fr) minmax(102px, 1.1fr) auto;
   gap: 4px;
 }
 
@@ -14151,7 +14363,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   font-size: 11px;
 }
 
-:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-note-display {
+:root[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-global-pitch {
   padding-inline: 6px;
 }
 
@@ -14216,6 +14428,16 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   grid-template-columns: auto minmax(96px, 1.2fr) minmax(64px, 0.8fr) auto;
   gap: 4px;
 }
+
+/* Com a Playlist em 30%, o transporte usa também a coluna que normalmente
+   pertence a OCT/TRS. Os controles globais voltam assim que a Playlist fecha. */
+.player-screen--tablet.is-tracks-split .player-global-pitch {
+  display: none !important;
+}
+
+.player-screen--tablet.is-tracks-split .player-top-transport :is(.track-transport, .track-download) {
+  grid-column: 2 / 4;
+}
 :root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-top-actions {
   display: flex;
   gap: 4px;
@@ -14241,7 +14463,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   font-size: 11px;
 }
 
-:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-note-display {
+:root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-global-pitch {
   padding-inline: 6px;
 }
 :root:not([data-runtime="desktop"]) .player-screen--tablet.is-tracks-split .player-module {
@@ -14495,7 +14717,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   pointer-events: none;
 }
 
-/* Panic, Settings e User ocupam exatamente o mesmo espaço no cabeçalho. */
+/* Settings e User ocupam exatamente o mesmo espaço no cabeçalho. */
 .player-header-icon {
   display: block;
   width: clamp(15px, 1.7vw, 21px);
@@ -14517,13 +14739,21 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 }
 
 .player-panic-button {
-  grid-template-rows: repeat(2, min-content);
+  grid-template-rows: min-content;
   align-content: center;
-  /* PA estava colado em NIC: um respiro entre as duas linhas. */
-  gap: clamp(1px, .18vh, 3px);
-  font-size: clamp(7px, .72vw, 9px);
-  line-height: .9;
+  gap: 0;
+  font-size: clamp(8px, .88vw, 11px);
+  line-height: 1;
   letter-spacing: .02em;
+}
+
+.player-global-pitch .player-panic-button {
+  display: inline-grid;
+  min-width: clamp(42px, 4.5vw, 60px);
+  min-height: 24px;
+  padding: 3px 6px;
+  font-size: clamp(8px, .88vw, 11px);
+  line-height: 1;
 }
 
 .player-navigation__settings-button:has(.player-header-icon) {
@@ -15044,12 +15274,12 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 
   .module-polyphony-button span,
   .module-voice-mode-button span {
-    font-size: 7px;
+    font-size: 6.5px;
   }
 
   .module-polyphony-button strong,
   .module-voice-mode-button strong {
-    font-size: 11px;
+    font-size: 10px;
   }
 }
 

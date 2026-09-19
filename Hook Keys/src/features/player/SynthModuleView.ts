@@ -386,7 +386,7 @@ export function oscillatorVolumeGain(position: number): number {
   return position <= 0 ? 0 : 10 ** (oscillatorVolumeDb(position) / 20);
 }
 
-function formatOscillatorVolume(value: number): string {
+export function formatOscillatorVolume(value: number): string {
   if (value <= 0) return '−∞ dB';
   return `${oscillatorVolumeDb(value).toFixed(1)} dB`;
 }

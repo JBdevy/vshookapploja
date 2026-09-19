@@ -35,8 +35,18 @@ export interface NativeModuleConfig {
   velocityCurve2: number;
   velocityCurve3: number;
   velocityCurve4: number;
+  // No Sens: toda nota soa no ganho pleno da wave, ignorando o velocity da
+  // tecla. É retroativo no motor — muda o ganho de notas já soando na hora.
+  noVelocitySensitivity: boolean;
+  // Mono: uma nota nova substitui a que estiver soando; soltar volta pra
+  // tecla anterior ainda presa. Legato: só a primeira nota depois do
+  // silêncio reinicia o envelope.
+  mono: boolean;
+  legato: boolean;
   outputChannelStart: number;
   outputChannelCount: 1 | 2;
+  // Soma L+R e envia a mesma soma a cada canal da rota do módulo.
+  outputDualMono: boolean;
 }
 
 export interface NativeModuleEffectsConfig {
@@ -235,6 +245,7 @@ interface HookKeysNativePlugin {
   configureSynth(options: NativeSynthConfig): Promise<void>;
   sendMidi(options: { inputSlot: number; status: number; data1: number; data2: number }): Promise<void>;
   setTempo(options: { bpm: number }): Promise<void>;
+  setGlobalTranspose(options: { semitones: number }): Promise<void>;
   configureMetronome(options: NativeMetronomeConfig): Promise<void>;
   setMetronomeOutput(options: { channelStart: number; channelCount: number }): Promise<void>;
   setOutputGain(options: { db: number; enabled: boolean }): Promise<void>;
@@ -285,6 +296,7 @@ class HookKeysNativeBridge {
   private readonly velocityLimitKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private lastSynthKey: string | null = null;
   private lastTempo: number | null = null;
+  private lastGlobalTranspose: number | null = null;
   private lastMetronomeKey: string | null = null;
   private lastMetronomeOutputKey: string | null = null;
   private lastTrackOutputKey: string | null = null;
@@ -630,6 +642,13 @@ class HookKeysNativeBridge {
     this.lastTempo = bpm;
   }
 
+  async setGlobalTranspose(semitones: number): Promise<void> {
+    if (!await this.initialize()) return;
+    if (this.lastGlobalTranspose === semitones) return;
+    await this.call('set_global_transpose', { semitones }, () => plugin.setGlobalTranspose({ semitones }));
+    this.lastGlobalTranspose = semitones;
+  }
+
   async configureMetronome(config: NativeMetronomeConfig): Promise<void> {
     if (!await this.initialize()) return;
     const normalized: NativeMetronomeConfig = {
@@ -868,6 +887,7 @@ class HookKeysNativeBridge {
     this.velocityLimitKeys.fill(null);
     this.lastSynthKey = null;
     this.lastTempo = null;
+    this.lastGlobalTranspose = null;
     this.lastMetronomeKey = null;
     this.lastMetronomeOutputKey = null;
     this.lastTrackOutputKey = null;

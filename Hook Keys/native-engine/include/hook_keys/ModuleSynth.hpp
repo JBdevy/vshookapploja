@@ -20,6 +20,15 @@ public:
   virtual void noteOnWithFilterVelocity(std::uint8_t note, std::uint8_t velocity,
       std::uint8_t /*filterVelocity*/) noexcept { noteOn(note, velocity); }
   virtual void setCutoffConfig(CutoffConfig) noexcept {}
+  // No Sens: toda nota soa no ganho pleno da wave, ignorando o velocity da
+  // tecla. Precisa ser retroativo, afetando as vozes ja soando na hora.
+  virtual void setNoVelocitySensitivity(bool) noexcept {}
+  // Mono: uma nota nova substitui a que estiver soando; soltar essa nota
+  // volta pra tecla anterior ainda pressionada, se houver. Legato: só a
+  // primeira nota depois do silêncio reinicia o envelope — as demais so
+  // deslizam o pitch da voz já soando. O Synth (AnalogSynthModule) já tem seu
+  // próprio controle de voz e ignora isto.
+  virtual void setVoiceMode(bool /*mono*/, bool /*legato*/) noexcept {}
   // Control thread; the next Note On uses it.
   virtual void setGlideBehavior(GlideBehavior) noexcept {}
   virtual void noteOff(std::uint8_t note) noexcept = 0;

@@ -55,8 +55,12 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
           velocityCurve2:(NSInteger)velocityCurve2
           velocityCurve3:(NSInteger)velocityCurve3
           velocityCurve4:(NSInteger)velocityCurve4
+  noVelocitySensitivity:(BOOL)noVelocitySensitivity
+                    mono:(BOOL)mono
+                  legato:(BOOL)legato
       outputChannelStart:(NSInteger)outputChannelStart
-      outputChannelCount:(NSInteger)outputChannelCount;
+      outputChannelCount:(NSInteger)outputChannelCount
+            outputDualMono:(BOOL)outputDualMono;
 - (BOOL)setModuleGainDb:(float)db moduleIndex:(NSInteger)moduleIndex;
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex
                        cutoffHz:(float)cutoffHz
@@ -151,6 +155,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                    data2:(NSInteger)data2
                timestamp:(uint64_t)timestamp;
 - (BOOL)setTempo:(float)bpm;
+- (BOOL)setGlobalTranspose:(NSInteger)semitones;
 - (BOOL)setMetronomeOutputChannelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;
 - (BOOL)configureMetronomeEnabled:(BOOL)enabled
                               bpm:(float)bpm

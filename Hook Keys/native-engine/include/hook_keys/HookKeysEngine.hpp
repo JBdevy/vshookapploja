@@ -30,6 +30,9 @@ public:
   [[nodiscard]] bool enqueueMidi(MidiMessage message) noexcept;
   [[nodiscard]] bool setModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept;
   [[nodiscard]] bool setTempoBpm(float tempoBpm) noexcept;
+  // Transpose geral de entrada (semitons, -60..60), somado por cima do Oct de
+  // cada módulo antes de chegar no sintetizador.
+  [[nodiscard]] bool setGlobalTranspose(int semitones) noexcept;
   [[nodiscard]] bool stopAllNotes() noexcept;
 
   // Consumer side: audio callback only.
@@ -61,7 +64,8 @@ private:
   void clearActiveNoteState(std::size_t moduleIndex) noexcept;
 
   [[nodiscard]] bool push(const EngineCommand& command) noexcept;
-  [[nodiscard]] static std::uint8_t translatedNote(std::uint8_t sourceNote, std::int8_t octaveShift) noexcept;
+  [[nodiscard]] static std::uint8_t translatedNote(
+      std::uint8_t sourceNote, std::int8_t octaveShift, std::int8_t globalTransposeSemitones) noexcept;
 
   SynthModules modules_{};
   EngineSettings settings_{};

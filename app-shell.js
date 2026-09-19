@@ -25,6 +25,7 @@ let vshookDirectorTabletViewportRestoreTimer = 0
 let vshookDirectorTabletLandscapeContinuation = null
 let vshookDirectorAppActive = false
 let vshookNativeKeepAwakePlugin = null
+let vshookNativeFreeOrientationPlugin = null
 let vshookNativeScreenOrientationPlugin = null
 let vshookDirectorComputerKey = ''
 let vshookRedundancyTimer = 0
@@ -549,6 +550,21 @@ function isDirectorTabletLandscape() {
 
 async function setDirectorNativeOrientation(mode) {
   if (!isVshookInstalledNativeApp()) return false
+  if (!vshookNativeFreeOrientationPlugin) {
+    vshookNativeFreeOrientationPlugin = window.Capacitor?.Plugins?.VSHookOrientation || null
+    if (!vshookNativeFreeOrientationPlugin && typeof window.Capacitor?.registerPlugin === 'function') {
+      vshookNativeFreeOrientationPlugin = window.Capacitor.registerPlugin('VSHookOrientation')
+    }
+  }
+  if (vshookNativeFreeOrientationPlugin) {
+    try {
+      await vshookNativeFreeOrientationPlugin.setMode({ mode })
+      return true
+    } catch (error) {
+      // Builds antigos ainda não têm a ponte própria; usa o plugin anterior
+      // como fallback até o próximo APK/IPA ser instalado.
+    }
+  }
   try {
     if (!vshookNativeScreenOrientationPlugin) {
       vshookNativeScreenOrientationPlugin = window.Capacitor?.Plugins?.ScreenOrientation || null
@@ -558,12 +574,7 @@ async function setDirectorNativeOrientation(mode) {
     }
     if (!vshookNativeScreenOrientationPlugin) return false
     if (mode === 'tablet') {
-      // "any" apenas destrava: o aparelho em pe continuava em pe e o modo
-      // Tablet nunca chegava a deitar. Travar a paisagem forca o giro, e o
-      // lado escolhido e o que o aparelho ja estava mais perto de mostrar.
-      const angle = Number(window.screen?.orientation?.angle ?? window.orientation ?? 0)
-      const side = angle === 270 || angle === -90 ? 'landscape-secondary' : 'landscape'
-      await vshookNativeScreenOrientationPlugin.lock({ orientation: side })
+      await vshookNativeScreenOrientationPlugin.lock({ orientation: 'landscape' })
     } else {
       await vshookNativeScreenOrientationPlugin.lock({ orientation: 'portrait' })
     }

@@ -71,6 +71,12 @@ export async function installDesktopCloseConfirmation(): Promise<void> {
       if (event.key === 'Escape') {
         event.preventDefault();
         dismiss();
+      } else if (event.key === 'Enter' && !event.repeat && !event.isComposing
+          && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+        const confirm = overlay.querySelector<HTMLButtonElement>('[data-desktop-close="confirm"]:not(:disabled)');
+        if (!confirm) return;
+        event.preventDefault();
+        confirm.click();
       }
     });
 

@@ -1,0 +1,28 @@
+{
+  "name": "vshook-orientation",
+  "version": "1.0.0",
+  "description": "Orientação nativa do VS Hook com paisagem livre nos dois sentidos.",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "ios/Sources",
+    "Package.swift",
+    "VshookOrientation.podspec",
+    "dist/"
+  ],
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "@capacitor/core": "^6.0.0"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}

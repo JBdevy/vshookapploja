@@ -38,6 +38,14 @@ void hook_keys_tsf_advance_filter_envelope(
     tsf* synth, const hook_keys::CutoffConfig& config, std::size_t frames, float sampleRate) noexcept;
 void hook_keys_tsf_steal_note(tsf* synth, HookKeysGlideState& state,
     int channel, std::uint8_t note) noexcept;
+// Legato mono: reafina a(s) voz(es) já soando de oldNote para newNote sem
+// reiniciar o envelope nem a posição da amostra, só o pitch desliza (ou
+// pula na hora, sem milliseconds). Retorna false se não havia voz ativa
+// para oldNote — quem chamou cai pro Note On normal (retrigger completo).
+bool hook_keys_tsf_legato_retune(tsf* synth, HookKeysGlideState& state,
+    int channel, std::uint8_t oldNote, std::uint8_t newNote, float milliseconds,
+    const hook_keys::CutoffConfig* cutoff, std::uint8_t filterVelocity,
+    hook_keys::GlideBehavior behavior) noexcept;
 void hook_keys_tsf_render_glide(tsf* synth, HookKeysGlideState& state,
     float* output, int frames, bool enabled) noexcept;
 

@@ -36,6 +36,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "configureSynth", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sendMidi", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTempo", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setGlobalTranspose", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureMetronome", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMetronomeOutput", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setOutputGain", returnType: CAPPluginReturnPromise),
@@ -430,8 +431,12 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             velocityCurve2: min(127, max(0, call.getInt("velocityCurve2", 64))),
             velocityCurve3: min(127, max(0, call.getInt("velocityCurve3", 96))),
             velocityCurve4: min(127, max(0, call.getInt("velocityCurve4", 127))),
+            noVelocitySensitivity: call.getBool("noVelocitySensitivity", false),
+            mono: call.getBool("mono", false),
+            legato: call.getBool("legato", false),
             outputChannelStart: min(31, max(0, call.getInt("outputChannelStart", 0))),
-            outputChannelCount: call.getInt("outputChannelCount", 2) == 1 ? 1 : 2
+            outputChannelCount: call.getInt("outputChannelCount", 2) == 1 ? 1 : 2,
+            outputDualMono: call.getBool("outputDualMono", false)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }
@@ -619,6 +624,14 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
 
     @objc func setTempo(_ call: CAPPluginCall) {
         if engine.setTempo(call.getFloat("bpm", 120)) {
+            call.resolve()
+        } else {
+            call.reject("O motor ainda não foi inicializado.")
+        }
+    }
+
+    @objc func setGlobalTranspose(_ call: CAPPluginCall) {
+        if engine.setGlobalTranspose(call.getInt("semitones", 0)) {
             call.resolve()
         } else {
             call.reject("O motor ainda não foi inicializado.")

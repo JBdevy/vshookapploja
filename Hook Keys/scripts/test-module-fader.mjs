@@ -46,7 +46,8 @@ test('Panic corta notas, pads, efeitos, música e metrônomo', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const tracks = readFileSync(new URL('../src/features/tracks/TrackTransport.ts', import.meta.url), 'utf8');
   const engine = readFileSync(new URL('../native-engine/src/HookKeysEngine.cpp', import.meta.url), 'utf8');
-  assert.match(player, /data-action="panic"[\s\S]*?<span>PA<\/span><span>NIC<\/span>/);
+  assert.match(player, /data-action="toggle-module-output-mode"[\s\S]*?data-action="panic"[\s\S]*?>PANIC<\/button>/,
+    'Panic fica em uma linha, imediatamente depois de Stereo/Mono');
   assert.match(player, /triggerPanic\(\)[\s\S]*?trackTransport\?\.stop\(\)[\s\S]*?metronome\.stop\(\)/);
   assert.match(player, /triggerPanic\(\)[\s\S]*?effectPadStates[\s\S]*?stopEffectPadAudio/);
   assert.match(player, /triggerPanic\(\)[\s\S]*?hookKeysNative\.stopAllNotes\(\)/);
@@ -509,8 +510,10 @@ test('16 presets em duas fileiras, seis bancos coloridos e a linha Copy/Bancos/P
   for (const bank of ['C', 'D', 'E', 'F']) {
     assert.match(css, new RegExp(`\\.player-navigation__bank-button\\[data-bank="${bank}"\\] \\{ --button-color-a:`));
   }
-  // Com o Keyboard à mostra, Copy e bancos ficam apagados e sem ação.
-  assert.match(css, /\.player-presets\.is-keyboard \.player-presets__header :is\(\.player-preset-copy-button, \.player-navigation__bank-button\) \{\s*opacity: \.34;\s*pointer-events: none;/);
+  // Com o Keyboard à mostra, só Copy fica sem ação; os bancos continuam
+  // disponíveis para troca e toque longo.
+  assert.match(css, /\.player-presets\.is-keyboard \.player-presets__header \.player-preset-copy-button \{\s*opacity: \.34;\s*pointer-events: none;/);
+  assert.doesNotMatch(css, /\.player-presets\.is-keyboard[^\{]*player-navigation__bank-button[^\{]*\{[^}]*pointer-events:\s*none/);
   // No desktop o Keyboard fica fixo, numa linha própria, e não existe o botão.
   assert.match(css, /\.player-presets--desktop \.performance-keyboard \{\s*grid-row: 3;/);
   assert.match(player, /\$\{createBankNavigationMarkup\(!this\.desktopRuntime\)\}/);
@@ -671,7 +674,8 @@ test('Default bloqueia parâmetros, orienta mudar para User e o timbre só fecha
 
 test('card do Glide: 4 botões ocupam a esquerda e o nome fica em cima do knob', () => {
   const glide = readFileSync(new URL('../src/features/player/GlideView.ts', import.meta.url), 'utf8');
-  assert.match(glide, /<div class="module-glide-card__buttons"[\s\S]*?No Sens<\/button>\s*<\/div>\s*<div class="module-glide-card__dial">\s*<strong>Glide<\/strong>/);
+  assert.match(glide, /<div class="module-glide-card__buttons"[\s\S]*?No Sens<\/button>\s*<\/div>\s*\$\{glideDialMarkup\(settings, bpm, ownerAttribute, 'Glide'\)\}/);
+  assert.match(glide, /function glideDialMarkup[\s\S]*?<div class="module-glide-card__dial">\s*<strong>\$\{label\}<\/strong>/);
   assert.match(css, /\.module-glide-card__buttons \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\s*grid-template-rows: repeat\(2, minmax\(0, 1fr\)\);/);
   assert.doesNotMatch(css, /module-glide-card > header/);
   // Ligar o Sync troca "0 ms" por "120 BPM": o valor tem largura fixa e o knob não anda.
@@ -685,12 +689,10 @@ test('diagnóstico da rota mostra o Áudio Mono do iOS (soma L+R só nas saídas
 
 test('seletor próprio: tocar no rótulo (ou nos próprios botões dentro dele) não abre o select nativo do sistema', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  // preventDefault tem que valer sempre: como o clique nos nossos botões
-  // borbulha até o <label>, uma exceção para dentro de .app-select deixava o
-  // navegador ativar o select nativo por baixo do nosso, exatamente quando o
-  // usuário escolhia uma opção. No iOS o picker pode começar a abrir já no
-  // toque, então mousedown/pointerdown também precisam ser prevenidos.
-  assert.match(player, /const preventLabelDefault = \(event: Event\) => event\.preventDefault\(\);\s*label\.addEventListener\('click', preventLabelDefault\);\s*label\.addEventListener\('mousedown', preventLabelDefault\);\s*label\.addEventListener\('pointerdown', preventLabelDefault\);/);
+  // O contêiner visual não pode continuar sendo um <label>: no WKWebView a
+  // ativação nativa pode começar antes de qualquer preventDefault. O enhancer
+  // preserva os filhos/atributos, mas troca o label por uma div neutra.
+  assert.match(player, /const container = document\.createElement\('div'\);[\s\S]*while \(label\.firstChild\) container\.append\(label\.firstChild\);\s*label\.replaceWith\(container\);/);
   const native = css.match(/\n\.app-select__native \{[^}]*\}/)[0];
   assert.match(native, /min-height: 0 !important;/);
   assert.match(native, /pointer-events: none !important;/);

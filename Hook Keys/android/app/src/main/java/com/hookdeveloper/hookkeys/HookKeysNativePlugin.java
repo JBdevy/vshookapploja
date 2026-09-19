@@ -464,8 +464,12 @@ public class HookKeysNativePlugin extends Plugin {
             Math.max(0, Math.min(127, call.getInt("velocityCurve2", 64))),
             Math.max(0, Math.min(127, call.getInt("velocityCurve3", 96))),
             Math.max(0, Math.min(127, call.getInt("velocityCurve4", 127))),
+            call.getBoolean("noVelocitySensitivity", false),
+            call.getBoolean("mono", false),
+            call.getBoolean("legato", false),
             Math.max(0, Math.min(31, call.getInt("outputChannelStart", 0))),
-            call.getInt("outputChannelCount", 2) == 1 ? 1 : 2
+            call.getInt("outputChannelCount", 2) == 1 ? 1 : 2,
+            call.getBoolean("outputDualMono", false)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -652,6 +656,12 @@ public class HookKeysNativePlugin extends Plugin {
     @PluginMethod
     public void setTempo(PluginCall call) {
         if (nativeSetTempo(call.getFloat("bpm", 120.0f))) call.resolve();
+        else call.reject("O motor ainda não foi inicializado.");
+    }
+
+    @PluginMethod
+    public void setGlobalTranspose(PluginCall call) {
+        if (nativeSetGlobalTranspose(call.getInt("semitones", 0))) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
     }
 
@@ -1031,8 +1041,12 @@ public class HookKeysNativePlugin extends Plugin {
         int velocityCurve2,
         int velocityCurve3,
         int velocityCurve4,
+        boolean noVelocitySensitivity,
+        boolean mono,
+        boolean legato,
         int outputChannelStart,
-        int outputChannelCount
+        int outputChannelCount,
+        boolean outputDualMono
     );
     private static native boolean nativeSetModuleGain(int moduleIndex, float db);
     private static native boolean nativeConfigureModuleEffects(
@@ -1094,6 +1108,7 @@ public class HookKeysNativePlugin extends Plugin {
         float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave
     );
     private static native boolean nativeSetTempo(float bpm);
+    private static native boolean nativeSetGlobalTranspose(int semitones);
     private static native boolean nativeConfigureTranceGate(int moduleIndex, boolean enabled, int steps,
         int length, float beatMultiplier, float gate, float depth, float attackMs, float releaseMs, float swing);
 

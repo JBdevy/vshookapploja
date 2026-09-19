@@ -81,8 +81,8 @@ int hk_runtime_configure_module(
     void* handle, std::size_t moduleIndex, int enabled, int inputSlot, int lowNote,
     int highNote, int octave, int sustain, int modulation, float volumeDb,
     int gmDrumHiHatChoke, int polyphony, int velocityCurve0, int velocityCurve1, int velocityCurve2,
-    int velocityCurve3, int velocityCurve4, int outputChannelStart,
-    int outputChannelCount) noexcept {
+    int velocityCurve3, int velocityCurve4, int noVelocitySensitivity, int mono, int legato,
+    int outputChannelStart, int outputChannelCount, int outputDualMono) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
   hook_keys::ModuleConfig config;
   config.enabled = enabled != 0;
@@ -104,8 +104,12 @@ int hk_runtime_configure_module(
       static_cast<std::uint8_t>(std::clamp(velocityCurve2, 0, 127)),
       static_cast<std::uint8_t>(std::clamp(velocityCurve3, 0, 127)),
       static_cast<std::uint8_t>(std::clamp(velocityCurve4, 0, 127))};
+  config.noVelocitySensitivity = noVelocitySensitivity != 0;
+  config.mono = mono != 0;
+  config.legato = legato != 0;
   config.outputChannelStart = static_cast<std::uint8_t>(std::clamp(outputChannelStart, 0, 31));
   config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
+  config.outputDualMono = outputDualMono != 0;
   return runtime(handle)->setModuleConfig(moduleIndex, config) ? 1 : 0;
 }
 
@@ -242,6 +246,10 @@ int hk_runtime_configure_synth(
 
 int hk_runtime_set_tempo(void* handle, float bpm) noexcept {
   return handle && runtime(handle)->setTempo(bpm) ? 1 : 0;
+}
+
+int hk_runtime_set_global_transpose(void* handle, int semitones) noexcept {
+  return handle && runtime(handle)->setGlobalTranspose(semitones) ? 1 : 0;
 }
 
 void hk_runtime_set_metronome_output(void* handle, int channelStart, int channelCount) noexcept {

@@ -74,8 +74,12 @@ unsafe extern "C" {
         velocity_curve2: i32,
         velocity_curve3: i32,
         velocity_curve4: i32,
+        no_velocity_sensitivity: i32,
+        mono: i32,
+        legato: i32,
         output_channel_start: i32,
         output_channel_count: i32,
+        output_dual_mono: i32,
     ) -> i32;
     fn hk_runtime_set_module_gain(
         handle: *mut c_void,
@@ -190,6 +194,7 @@ unsafe extern "C" {
         oscillator2_octave: i32,
     ) -> i32;
     fn hk_runtime_set_tempo(handle: *mut c_void, bpm: f32) -> i32;
+    fn hk_runtime_set_global_transpose(handle: *mut c_void, semitones: i32) -> i32;
     fn hk_runtime_set_metronome_output(handle: *mut c_void, channel_start: i32, channel_count: i32);
     fn hk_runtime_configure_metronome(
         handle: *mut c_void,
@@ -456,8 +461,13 @@ struct ModuleConfig {
     velocity_curve2: i32,
     velocity_curve3: i32,
     velocity_curve4: i32,
+    no_velocity_sensitivity: bool,
+    mono: bool,
+    legato: bool,
     output_channel_start: i32,
     output_channel_count: i32,
+    #[serde(default)]
+    output_dual_mono: bool,
 }
 
 #[derive(Deserialize)]
@@ -1040,8 +1050,12 @@ fn configure_module(config: ModuleConfig, state: State<'_, AppState>) -> Result<
             config.velocity_curve2,
             config.velocity_curve3,
             config.velocity_curve4,
+            config.no_velocity_sensitivity as i32,
+            config.mono as i32,
+            config.legato as i32,
             config.output_channel_start,
             config.output_channel_count,
+            config.output_dual_mono as i32,
         )
     };
     if ok != 0 {
@@ -1223,6 +1237,16 @@ fn set_tempo(bpm: f32, state: State<'_, AppState>) -> Result<(), String> {
         Ok(())
     } else {
         Err("Não foi possível alterar o tempo.".into())
+    }
+}
+
+#[tauri::command]
+fn set_global_transpose(semitones: i32, state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    if unsafe { hk_runtime_set_global_transpose(engine.pointer(), semitones) } != 0 {
+        Ok(())
+    } else {
+        Err("Não foi possível alterar o transpose geral.".into())
     }
 }
 
@@ -1811,6 +1835,7 @@ fn main() {
             configure_synth,
             send_midi,
             set_tempo,
+            set_global_transpose,
             configure_metronome,
             set_metronome_output,
             set_output_gain,
@@ -1863,7 +1888,7 @@ mod tests {
         assert_ne!(unsafe {
             hk_runtime_configure_module(
                 engine.pointer(), 0, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
-                127, 127, 127, 127, 127, 0, 2,
+                127, 127, 127, 127, 127, 0, 0, 0, 0, 2,
             )
         }, 0);
         for note in [48, 52, 55, 60, 64, 67] {
@@ -1915,6 +1940,9 @@ mod tests {
                     32,
                     72,
                     127,
+                    0,
+                    0,
+                    0,
                     2,
                     2,
                 )
@@ -1941,7 +1969,7 @@ mod tests {
         assert_ne!(unsafe {
             hk_runtime_configure_module(
                 engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
-                0, 32, 64, 96, 127, 0, 2,
+                0, 32, 64, 96, 127, 0, 0, 0, 0, 2,
             )
         }, 0);
         assert_ne!(unsafe {
@@ -1962,7 +1990,7 @@ mod tests {
         assert_ne!(unsafe {
             hk_runtime_configure_module(
                 engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
-                127, 127, 127, 127, 127, 0, 2,
+                127, 127, 127, 127, 127, 0, 0, 0, 0, 2,
             )
         }, 0);
         assert_ne!(unsafe {
@@ -1987,7 +2015,7 @@ mod tests {
         assert_ne!(unsafe {
             hk_runtime_configure_module(
                 engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
-                0, 32, 64, 96, 127, 0, 2,
+                0, 32, 64, 96, 127, 0, 0, 0, 0, 2,
             )
         }, 0);
         assert_ne!(unsafe {

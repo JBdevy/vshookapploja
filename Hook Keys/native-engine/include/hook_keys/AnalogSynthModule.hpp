@@ -124,6 +124,10 @@ public:
       voice.moduleCutoff.configure(config.frequencyForVelocity(heldFilterVelocity_[voice.note]), sampleRate_);
   }
 
+  void setNoVelocitySensitivity(bool enabled) noexcept override {
+    noVelocitySensitivity_ = enabled;
+  }
+
   void noteOnWithFilterVelocity(std::uint8_t note, std::uint8_t velocity,
       std::uint8_t filterVelocity) noexcept override {
     note = std::min<std::uint8_t>(note, 127);
@@ -270,7 +274,9 @@ public:
         if (!voice.active) continue;
         const auto oscillatorSignal = (config_.oscillator1Enabled && voice.oscillator1Gate ? osc1 * config_.oscillator1Volume : 0.0f)
             + (config_.oscillator2Enabled && voice.oscillator2Gate ? osc2 * config_.oscillator2Volume : 0.0f);
-        auto sample = oscillatorSignal * envelope * voice.velocity;
+        // No Sens: lido a cada bloco, então ligar/desligar já vale pras vozes
+        // que estão soando agora, sem esperar a próxima tecla.
+        auto sample = oscillatorSignal * envelope * (noVelocitySensitivity_ ? 1.0f : voice.velocity);
         if (voice.filterUpdateCountdown == 0) {
           const auto envelopeOctaves = config_.filterEnvelope * envelope * 5.0f;
           const auto cutoff = config_.filterCutoffHz * std::pow(2.0f, envelopeOctaves + filterLfo);
@@ -501,6 +507,7 @@ private:
   std::array<std::uint8_t, 128> heldVelocity_{};
   std::array<std::uint8_t, 128> heldFilterVelocity_{};
   CutoffConfig cutoffConfig_{};
+  bool noVelocitySensitivity_ = false;
   std::array<std::uint64_t, 128> heldOrder_{};
   std::uint64_t noteOrder_ = 0;
   std::uint64_t voiceAge_ = 0;

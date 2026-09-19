@@ -145,6 +145,9 @@ void TinySoundFontModule::beginBlock() noexcept {
       active_ = prepared == unloadMarker() ? nullptr : prepared;
       glide_ = {};
     appliedEnvelopeGeneration_ = 0;
+    if (active_ != nullptr) {
+      tsf_set_no_velocity_sensitivity(active_, noVelocitySensitivity_ ? 1 : 0);
+    }
   }
 
   const auto generation = envelopeGeneration_.load(std::memory_order_acquire);
@@ -179,21 +182,91 @@ void TinySoundFontModule::setCutoffConfig(CutoffConfig config) noexcept {
   hook_keys_tsf_set_cutoff(active_, config);
 }
 
+void TinySoundFontModule::setNoVelocitySensitivity(bool enabled) noexcept {
+  if (enabled == noVelocitySensitivity_) return;
+  noVelocitySensitivity_ = enabled;
+  if (active_ != nullptr) tsf_set_no_velocity_sensitivity(active_, enabled ? 1 : 0);
+}
+
+void TinySoundFontModule::setVoiceMode(bool mono, bool legato) noexcept {
+  mono_ = mono;
+  legato_ = legato;
+  if (!mono_) monoSounding_ = false;
+}
+
+int TinySoundFontModule::newestMonoHeldNote(std::uint8_t excludingNote) const noexcept {
+  int newest = -1;
+  std::uint64_t newestOrder = 0;
+  for (int note = 0; note < 128; ++note) {
+    if (note == excludingNote || !monoHeld_[note]) continue;
+    if (monoHeldOrder_[note] > newestOrder) {
+      newestOrder = monoHeldOrder_[note];
+      newest = note;
+    }
+  }
+  return newest;
+}
+
 void TinySoundFontModule::noteOnWithFilterVelocity(std::uint8_t note, std::uint8_t velocity,
     std::uint8_t filterVelocity) noexcept {
   if (active_ == nullptr) return;
-  hook_keys_tsf_note_on_with_auto_glide(
-      active_, glide_, kChannel, note, static_cast<float>(velocity) / 127.0f,
-      glideMs_.load(std::memory_order_relaxed), &cutoffConfig_, filterVelocity,
-      GlideBehavior::unpack(glideBehavior_.load(std::memory_order_relaxed)));
+  const auto milliseconds = glideMs_.load(std::memory_order_relaxed);
+  const auto behavior = GlideBehavior::unpack(glideBehavior_.load(std::memory_order_relaxed));
+  if (!mono_) {
+    hook_keys_tsf_note_on_with_auto_glide(active_, glide_, kChannel, note,
+        static_cast<float>(velocity) / 127.0f, milliseconds, &cutoffConfig_, filterVelocity, behavior);
+    return;
+  }
+  monoHeld_[note] = true;
+  monoHeldVelocity_[note] = velocity;
+  monoHeldFilterVelocity_[note] = filterVelocity;
+  monoHeldOrder_[note] = ++monoNoteOrder_;
+  // Legato só vale de uma tecla presa pra outra: a primeira nota depois do
+  // silêncio sempre ataca o envelope normalmente, como em qualquer sintetizador.
+  if (legato_ && monoSounding_ &&
+      hook_keys_tsf_legato_retune(active_, glide_, kChannel, monoNote_, note, milliseconds,
+          &cutoffConfig_, filterVelocity, behavior)) {
+    monoNote_ = note;
+    return;
+  }
+  if (monoSounding_) hook_keys_tsf_steal_note(active_, glide_, kChannel, monoNote_);
+  hook_keys_tsf_note_on_with_auto_glide(active_, glide_, kChannel, note,
+      static_cast<float>(velocity) / 127.0f, milliseconds, &cutoffConfig_, filterVelocity, behavior);
+  monoSounding_ = true;
+  monoNote_ = note;
 }
 
 void TinySoundFontModule::noteOff(std::uint8_t note) noexcept {
-  if (active_ != nullptr) tsf_channel_note_off(active_, kChannel, note);
+  if (active_ == nullptr) return;
+  if (!mono_) {
+    tsf_channel_note_off(active_, kChannel, note);
+    return;
+  }
+  monoHeld_[note] = false;
+  if (!monoSounding_ || monoNote_ != note) return;
+  const auto fallback = newestMonoHeldNote(note);
+  if (fallback < 0) {
+    tsf_channel_note_off(active_, kChannel, note);
+    monoSounding_ = false;
+    return;
+  }
+  // Voltar pra tecla anterior ainda presa é sempre suave (o dedo nunca saiu
+  // dela), independente do Legato estar ligado ou não para notas novas.
+  const auto milliseconds = glideMs_.load(std::memory_order_relaxed);
+  const auto behavior = GlideBehavior::unpack(glideBehavior_.load(std::memory_order_relaxed));
+  const auto fallbackFilterVelocity = monoHeldFilterVelocity_[fallback];
+  if (!hook_keys_tsf_legato_retune(active_, glide_, kChannel, monoNote_,
+      static_cast<std::uint8_t>(fallback), milliseconds, &cutoffConfig_, fallbackFilterVelocity, behavior)) {
+    hook_keys_tsf_note_on_with_auto_glide(active_, glide_, kChannel, static_cast<std::uint8_t>(fallback),
+        static_cast<float>(monoHeldVelocity_[fallback]) / 127.0f, milliseconds, &cutoffConfig_,
+        fallbackFilterVelocity, behavior);
+  }
+  monoNote_ = static_cast<std::uint8_t>(fallback);
 }
 
 void TinySoundFontModule::stealNote(std::uint8_t note) noexcept {
   if (active_ != nullptr) hook_keys_tsf_steal_note(active_, glide_, kChannel, note);
+  if (mono_ && monoSounding_ && monoNote_ == note) monoSounding_ = false;
 }
 
 void TinySoundFontModule::controlChange(std::uint8_t controller, std::uint8_t value) noexcept {
@@ -212,6 +285,8 @@ void TinySoundFontModule::pitchBend(std::uint16_t value) noexcept {
 }
 
 void TinySoundFontModule::allNotesOff() noexcept {
+  monoHeld_.fill(false);
+  monoSounding_ = false;
   if (active_ == nullptr) return;
   // A panic, route change or arpeggiator activation must not leave voices held
   // by an earlier CC64 value inside TinySoundFont.

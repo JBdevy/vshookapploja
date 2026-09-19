@@ -44,6 +44,14 @@ void OrganModule::setCutoffConfig(CutoffConfig config) noexcept {
   for (auto& voice : voices_) voice->setCutoffConfig(config);
 }
 
+void OrganModule::setNoVelocitySensitivity(bool enabled) noexcept {
+  for (auto& voice : voices_) voice->setNoVelocitySensitivity(enabled);
+}
+
+void OrganModule::setVoiceMode(bool mono, bool legato) noexcept {
+  for (auto& voice : voices_) voice->setVoiceMode(mono, legato);
+}
+
 void OrganModule::setGlideBehavior(GlideBehavior behavior) noexcept {
   for (auto& voice : voices_) voice->setGlideBehavior(behavior);
 }

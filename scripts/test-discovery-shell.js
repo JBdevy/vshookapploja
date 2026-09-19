@@ -31,6 +31,7 @@ let abortedRequests = 0
 let fetchOverride = null
 let addressOverride = null
 const orientationLocks = []
+const orientationModes = []
 const windowListeners = new Map()
 const elements = new Map()
 
@@ -130,6 +131,9 @@ const context = {
     Capacitor: {
       isNativePlatform: () => true,
       Plugins: {
+        VSHookOrientation: {
+          setMode: async ({ mode }) => { orientationModes.push(mode) },
+        },
         ScreenOrientation: {
           lock: async ({ orientation }) => { orientationLocks.push(orientation) },
           unlock: async () => { throw new Error('O app nativo não deve desbloquear a orientação') },
@@ -169,8 +173,24 @@ async function until(predicate, message, timeoutMs = 1500) {
 async function run() {
   await evaluate("setDirectorNativeOrientation('phone')")
   await evaluate("setDirectorNativeOrientation('tablet')")
-  assert.deepEqual(orientationLocks, ['portrait', 'landscape'],
-    'o app nativo mantém retrato fora do Diretor Tablet e deita a tela no modo Tablet')
+  assert.deepEqual(orientationModes, ['phone', 'tablet'],
+    'a ponte própria recebe retrato no telefone e paisagem livre no Tablet')
+  assert.deepEqual(orientationLocks, [], 'a ponte própria substitui o bloqueio de um único lado')
+  const androidOrientation = fs.readFileSync(path.join(
+    __dirname, '..', 'plugins', 'vshook-orientation', 'android', 'src', 'main', 'java',
+    'com', 'hookdeveloper', 'vshook', 'orientation', 'VSHookOrientationPlugin.java',
+  ), 'utf8')
+  assert.match(androidOrientation, /SCREEN_ORIENTATION_SENSOR_LANDSCAPE/,
+    'Android aceita as paisagens de 90 e 270 graus')
+  const iosOrientation = fs.readFileSync(path.join(
+    __dirname, '..', 'plugins', 'vshook-orientation', 'ios', 'Sources',
+    'VSHookOrientationPlugin', 'VSHookOrientationPlugin.swift',
+  ), 'utf8')
+  assert.match(iosOrientation,
+    /\[UIInterfaceOrientation\.landscapeLeft\.rawValue, UIInterfaceOrientation\.landscapeRight\.rawValue\]/,
+    'iOS declara simultaneamente os dois lados da paisagem')
+  assert.match(iosOrientation, /if !alreadyThere \{/,
+    'iOS não troca o lado quando a tela já entrou deitada')
 
   const addresses = await vm.runInContext('getVshookStoreLocalNetworkAddresses()', context)
   if (addresses.length !== 1 || addresses[0] !== '192.168.77.42') {

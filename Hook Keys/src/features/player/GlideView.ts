@@ -23,6 +23,12 @@ export function readGlideSync(settings: Readonly<Record<string, unknown>>): bool
   return settings.glideSync === true;
 }
 
+// Legato: só a primeira nota depois do silêncio ataca o envelope; as demais,
+// em Mono, só deslizam o pitch da voz que já está soando.
+export function readLegato(settings: Readonly<Record<string, unknown>>): boolean {
+  return settings.legato === true;
+}
+
 export function readGlideBpm(bpm: number): number {
   return Math.round(Math.min(MAX_GLIDE_BPM, Math.max(
     MIN_GLIDE_BPM,
@@ -119,10 +125,11 @@ export function updateGlideVelocityMarkup(container: HTMLElement, velocity: Glid
   if (help) help.textContent = glideVelocityDescription(velocity);
 }
 
-export function createGlideCardMarkup(
+function glideDialMarkup(
   settings: Readonly<Record<string, unknown>>,
   bpm: number,
-  owner: 'module' | 'synth' = 'module',
+  ownerAttribute: string,
+  label: string,
 ): string {
   const synchronized = readGlideSync(settings);
   const manualMilliseconds = readGlideMs(settings);
@@ -131,8 +138,22 @@ export function createGlideCardMarkup(
   const minimum = synchronized ? MIN_GLIDE_BPM : 0;
   const maximum = synchronized ? MAX_GLIDE_BPM : 5000;
   const progress = (value - minimum) / (maximum - minimum);
-  const ownerAttribute = owner === 'synth' ? ' data-synth-parameter="glideMs"' : '';
   const valueText = synchronized ? `${synchronizedBpm} BPM` : formatGlideMs(manualMilliseconds);
+  return `<div class="module-glide-card__dial">
+      <strong>${label}</strong>
+    ${createParameterKnobMarkup(progress,
+      `<input type="range" min="${minimum}" max="${maximum}" step="1" value="${value}" data-glide-time data-glide-synced="${synchronized}"${ownerAttribute}${synchronized ? ' disabled' : ''} aria-label="${synchronized ? 'BPM sincronizado do Glide' : 'Tempo do Glide'}" aria-valuetext="${valueText}">`)}
+      <output data-glide-value>${valueText}</output>
+    </div>`;
+}
+
+export function createGlideCardMarkup(
+  settings: Readonly<Record<string, unknown>>,
+  bpm: number,
+  owner: 'module' | 'synth' = 'module',
+): string {
+  const synchronized = readGlideSync(settings);
+  const ownerAttribute = owner === 'synth' ? ' data-synth-parameter="glideMs"' : '';
   const mode = readGlideMode(settings);
   const velocity = readGlideVelocity(settings);
   const noSens = readNoVelocitySensitivity(settings, owner);
@@ -146,12 +167,26 @@ export function createGlideCardMarkup(
         <button type="button" class="module-glide-config${velocity.enabled ? ' is-active' : ''}" data-glide-config aria-label="Configurar velocity do Glide${velocity.enabled ? ', ativo' : ''}">Config</button>
         <button type="button" class="module-glide-no-sens" data-glide-no-sens aria-pressed="${noSens}" aria-label="No Sens: volume ${noSens ? 'igual em qualquer toque' : 'segue o velocity'}">No Sens</button>
     </div>
-    <div class="module-glide-card__dial">
-      <strong>Glide</strong>
-    ${createParameterKnobMarkup(progress,
-      `<input type="range" min="${minimum}" max="${maximum}" step="1" value="${value}" data-glide-time data-glide-synced="${synchronized}"${ownerAttribute}${synchronized ? ' disabled' : ''} aria-label="${synchronized ? 'BPM sincronizado do Glide' : 'Tempo do Glide'}" aria-valuetext="${valueText}">`)}
-      <output data-glide-value>${valueText}</output>
+    ${glideDialMarkup(settings, bpm, ownerAttribute, 'Glide')}
+  </article>`;
+}
+
+// Toque longo no botão Mono/Poly: legato liga/desliga e o tempo do
+// portamento (o mesmo Glide do card principal, só que em foco aqui).
+export function createVoiceModeMarkup(
+  settings: Readonly<Record<string, unknown>>,
+  bpm: number,
+  owner: 'module' | 'synth' = 'module',
+): string {
+  const synchronized = readGlideSync(settings);
+  const legato = readLegato(settings);
+  const ownerAttribute = owner === 'synth' ? ' data-synth-parameter="glideMs"' : '';
+  return `<article class="module-glide-card module-voice-mode-editor" data-module-glide-card data-glide-owner="${owner}">
+    <div class="module-glide-card__buttons module-glide-card__buttons--voice-mode" role="group" aria-label="Opções do Mono">
+        <button type="button" class="module-glide-sync" data-glide-sync aria-pressed="${synchronized}">Sync</button>
+        <button type="button" class="module-glide-mode is-${legato ? 'portamento' : 'auto'}" data-voice-mode-legato aria-pressed="${legato}" aria-label="Legato: ${legato ? 'ligado, só a primeira nota ataca o envelope' : 'desligado, toda nota ataca de novo'}. Alternar">Legato</button>
     </div>
+    ${glideDialMarkup(settings, bpm, ownerAttribute, 'Portamento')}
   </article>`;
 }
 

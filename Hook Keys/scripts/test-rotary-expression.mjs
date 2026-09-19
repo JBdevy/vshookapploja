@@ -325,6 +325,53 @@ test('all native bridges forward the Reverb Mod knob', () => {
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('reverb_mod'));
 });
 
+test('all native bridges forward No Sens (velocity does not drive the amp envelope)', () => {
+  for (const path of [
+    '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
+    '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
+    '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+  ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('noVelocitySensitivity'), path);
+  assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('no_velocity_sensitivity'));
+});
+
+test('all native bridges forward Mono and Legato', () => {
+  for (const path of [
+    '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
+    '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
+    '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+  ]) {
+    const content = readFileSync(new URL(path, import.meta.url), 'utf8');
+    assert(content.includes('mono'), `${path} missing mono`);
+    assert(content.includes('legato'), `${path} missing legato`);
+  }
+  const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+  assert(rust.includes('mono: bool') || rust.includes('mono: i32'));
+  assert(rust.includes('legato: bool') || rust.includes('legato: i32'));
+});
+
+test('module-only Stereo/Mono reaches every native bridge as dual mono routing', () => {
+  for (const path of [
+    '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
+    '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
+    '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+    '../native-engine/include/hook_keys/EngineTypes.hpp', '../native-engine/src/HookKeysEngine.cpp',
+  ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('outputDualMono'), path);
+  assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('output_dual_mono'));
+});
+
+test('all native bridges forward the global transpose', () => {
+  for (const path of [
+    '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
+    '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
+    '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+  ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('GlobalTranspose'), path);
+  assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('set_global_transpose'));
+});
+
 test('entry lasts three seconds, logout six, both keep the animation except the keyboard and share bold italic typography', () => {
   const source = readFileSync(new URL('../src/app/HookKeysApp.ts', import.meta.url), 'utf8');
   const ast = ts.createSourceFile('HookKeysApp.ts', source, ts.ScriptTarget.Latest, true);

@@ -144,6 +144,37 @@ void hook_keys_tsf_steal_note(tsf* synth, HookKeysGlideState& state,
   }
 }
 
+bool hook_keys_tsf_legato_retune(tsf* synth, HookKeysGlideState& state,
+    int channel, std::uint8_t oldNote, std::uint8_t newNote, float milliseconds,
+    const hook_keys::CutoffConfig* cutoff, std::uint8_t filterVelocity,
+    hook_keys::GlideBehavior behavior) noexcept {
+  if (!synth) return false;
+  bool found = false;
+  const bool glides = milliseconds > 0.0f && behavior.glidesAt(filterVelocity);
+  const auto count = std::min(synth->voiceNum, static_cast<int>(state.voices.size()));
+  for (int i = 0; i < count; ++i) {
+    auto& voice = synth->voices[i];
+    if (voice.playingPreset < 0 || voice.playingChannel != channel || voice.playingKey != oldNote) continue;
+    found = true;
+    voice.playingKey = newNote;
+    voice.hookFilterVelocity = filterVelocity;
+    // false: legato não reinicia o envelope do Cutoff, só reaponta o alvo.
+    if (cutoff) configureVoiceCutoff(voice, *cutoff, synth->outSampleRate, false);
+    auto& glide = state.voices[i];
+    if (!glides) {
+      glide = {};
+      tsf_voice_calcpitchratio(&voice, 0, synth->outSampleRate);
+      continue;
+    }
+    glide.playIndex = voice.playIndex;
+    glide.startSemitones = static_cast<float>(oldNote) - static_cast<float>(newNote);
+    glide.remaining = glide.total = std::max<std::uint32_t>(1,
+        static_cast<std::uint32_t>(milliseconds * synth->outSampleRate / 1000.0f));
+  }
+  if (found) state.lastNote = newNote;
+  return found;
+}
+
 void hook_keys_tsf_render_glide(tsf* synth, HookKeysGlideState& state,
     float* output, int frames, bool enabled) noexcept {
   // Small fixed chunks keep portamento smooth without allocation in render.

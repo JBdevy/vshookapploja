@@ -46,6 +46,9 @@ struct ModuleConfig final {
   std::int8_t octaveShift = 0;
   std::uint8_t outputChannelStart = 0;
   std::uint8_t outputChannelCount = 2;
+  // Quando ativo, a soma mono de L+R vai para cada canal da rota. Em uma rota
+  // 1+2, por exemplo, os canais 1 e 2 recebem exatamente o mesmo sinal.
+  bool outputDualMono = false;
   std::array<std::uint8_t, 5> velocityCurve{0, 32, 64, 96, 127};
   // Limite Velocity: a key struck harder than this plays no note at all.
   std::uint8_t velocityIgnoreAbove = 127;
@@ -53,6 +56,15 @@ struct ModuleConfig final {
   std::uint8_t velocityCeiling = 127;
   std::uint16_t polyphony = 128;
   float gainLinear = 1.0f;
+  // No Sens: toda nota soa no ganho pleno da wave, ignorando o velocity da
+  // tecla. É retroativo — muda o ganho de notas já soando na hora.
+  bool noVelocitySensitivity = false;
+  // Mono: uma nota nova substitui a que estiver soando; soltar volta pra
+  // tecla anterior ainda presa. Legato: só a primeira nota depois do
+  // silêncio reinicia o envelope. O Synth (módulo 8) tem seu próprio
+  // controle de voz e ignora estes dois campos.
+  bool mono = false;
+  bool legato = false;
   ModuleEffectsConfig effects{};
 
   void normalize() noexcept {
@@ -78,11 +90,16 @@ struct EngineSettings final {
   double sampleRate = 48000.0;
   std::size_t maximumBlockFrames = 512;
   float tempoBpm = 120.0f;
+  // Transpose geral: soma (em semitons) por cima do Oct de cada módulo, antes
+  // de chegar no sintetizador. Ao contrário do Oct por módulo, este é um só
+  // valor para o motor inteiro.
+  std::int8_t globalTransposeSemitones = 0;
 
   void normalize() noexcept {
     sampleRate = std::clamp(sampleRate, 8000.0, 384000.0);
     maximumBlockFrames = std::clamp<std::size_t>(maximumBlockFrames, 16, 8192);
     tempoBpm = std::clamp(tempoBpm, 60.0f, 600.0f);
+    globalTransposeSemitones = std::clamp<std::int8_t>(globalTransposeSemitones, -60, 60);
   }
 };
 
@@ -91,6 +108,7 @@ enum class CommandType : std::uint8_t {
   setModuleConfig,
   setTempo,
   allNotesOff,
+  setGlobalTranspose,
 };
 
 struct EngineCommand final {
@@ -99,6 +117,7 @@ struct EngineCommand final {
   MidiMessage midi{};
   ModuleConfig moduleConfig{};
   float tempoBpm = 120.0f;
+  std::int8_t globalTransposeSemitones = 0;
 
   static EngineCommand midiMessage(MidiMessage message) noexcept {
     EngineCommand command;
@@ -125,6 +144,13 @@ struct EngineCommand final {
     EngineCommand command;
     command.type = CommandType::setTempo;
     command.tempoBpm = bpm;
+    return command;
+  }
+
+  static EngineCommand globalTranspose(std::int8_t semitones) noexcept {
+    EngineCommand command;
+    command.type = CommandType::setGlobalTranspose;
+    command.globalTransposeSemitones = semitones;
     return command;
   }
 };

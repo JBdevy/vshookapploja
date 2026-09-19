@@ -69,6 +69,7 @@ public:
       std::size_t moduleIndex, std::uint8_t ignoreAbove, std::uint8_t ceiling,
       std::uint8_t oscillator1Limit = 127, std::uint8_t oscillator2Limit = 127) noexcept;
   [[nodiscard]] bool setTempo(float bpm) noexcept;
+  [[nodiscard]] bool setGlobalTranspose(int semitones) noexcept;
   void setMetronome(
       bool enabled, float bpm, float volume, std::uint8_t clickSound,
       bool accentEnabled, bool doubleTimeEnabled,

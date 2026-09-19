@@ -224,8 +224,12 @@ public:
       int velocityCurve2,
       int velocityCurve3,
       int velocityCurve4,
+      bool noVelocitySensitivity,
+      bool mono,
+      bool legato,
       int outputChannelStart,
-      int outputChannelCount) noexcept {
+      int outputChannelCount,
+      bool outputDualMono) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     hook_keys::ModuleConfig config;
@@ -247,8 +251,12 @@ public:
         static_cast<std::uint8_t>(std::clamp(velocityCurve2, 0, 127)),
         static_cast<std::uint8_t>(std::clamp(velocityCurve3, 0, 127)),
         static_cast<std::uint8_t>(std::clamp(velocityCurve4, 0, 127))};
+    config.noVelocitySensitivity = noVelocitySensitivity;
+    config.mono = mono;
+    config.legato = legato;
     config.outputChannelStart = static_cast<std::uint8_t>(std::clamp(outputChannelStart, 0, 31));
     config.outputChannelCount = outputChannelCount == 1 ? 1 : 2;
+    config.outputDualMono = outputDualMono;
     return runtime->setModuleConfig(moduleIndex, config);
   }
 
@@ -435,6 +443,11 @@ public:
   bool setTempo(float bpm) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     return runtime != nullptr && runtime->setTempo(bpm);
+  }
+
+  bool setGlobalTranspose(int semitones) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    return runtime != nullptr && runtime->setGlobalTranspose(semitones);
   }
 
   bool setMetronomeOutput(int channelStart, int channelCount) noexcept {
@@ -710,8 +723,12 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
     jint velocityCurve2,
     jint velocityCurve3,
     jint velocityCurve4,
+    jboolean noVelocitySensitivity,
+    jboolean mono,
+    jboolean legato,
     jint outputChannelStart,
-    jint outputChannelCount) {
+    jint outputChannelCount,
+    jboolean outputDualMono) {
   return gEngine.configureModule(
              static_cast<std::size_t>(moduleIndex),
              enabled == JNI_TRUE,
@@ -729,8 +746,12 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
              static_cast<int>(velocityCurve2),
              static_cast<int>(velocityCurve3),
              static_cast<int>(velocityCurve4),
+             noVelocitySensitivity == JNI_TRUE,
+             mono == JNI_TRUE,
+             legato == JNI_TRUE,
              static_cast<int>(outputChannelStart),
-             static_cast<int>(outputChannelCount))
+             static_cast<int>(outputChannelCount),
+             outputDualMono == JNI_TRUE)
              ? JNI_TRUE
              : JNI_FALSE;
 }
@@ -906,6 +927,11 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureSynth(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetTempo(JNIEnv*, jclass, jfloat bpm) {
   return gEngine.setTempo(bpm) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetGlobalTranspose(JNIEnv*, jclass, jint semitones) {
+  return gEngine.setGlobalTranspose(static_cast<int>(semitones)) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

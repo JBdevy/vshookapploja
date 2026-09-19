@@ -5,6 +5,7 @@
 #include "hook_keys/RealtimeCommandQueue.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -64,6 +65,8 @@ public:
   void noteOnWithFilterVelocity(std::uint8_t note, std::uint8_t velocity,
       std::uint8_t filterVelocity) noexcept override;
   void setCutoffConfig(CutoffConfig config) noexcept override;
+  void setNoVelocitySensitivity(bool enabled) noexcept override;
+  void setVoiceMode(bool mono, bool legato) noexcept override;
   void noteOff(std::uint8_t note) noexcept override;
   void stealNote(std::uint8_t note) noexcept override;
   void controlChange(std::uint8_t controller, std::uint8_t value) noexcept override;
@@ -92,6 +95,22 @@ private:
   std::atomic<std::uint16_t> glideBehavior_{GlideBehavior{}.pack()};
   HookKeysGlideState glide_{};
   CutoffConfig cutoffConfig_{};
+  // Reaplicado a cada troca de tsf ativo (novo timbre carregado), já que a
+  // instância nova nasce zerada e perderia o No Sens sem isso.
+  bool noVelocitySensitivity_ = false;
+  // Mono/Legato: mesmo desenho do AnalogSynthModule (held_/heldOrder_/
+  // newestHeldNote), só que aqui uma nota devolvida ou um novo Note On em
+  // Legato usam hook_keys_tsf_legato_retune em vez de reiniciar a voz.
+  bool mono_ = false;
+  bool legato_ = false;
+  bool monoSounding_ = false;
+  std::uint8_t monoNote_ = 0;
+  std::array<bool, 128> monoHeld_{};
+  std::array<std::uint8_t, 128> monoHeldVelocity_{};
+  std::array<std::uint8_t, 128> monoHeldFilterVelocity_{};
+  std::array<std::uint64_t, 128> monoHeldOrder_{};
+  std::uint64_t monoNoteOrder_ = 0;
+  [[nodiscard]] int newestMonoHeldNote(std::uint8_t excludingNote) const noexcept;
   std::atomic<std::uint8_t> modulationMode_{1};
   std::atomic<float> lfoRateHz_{6.85f};
   std::uint8_t appliedModulationMode_ = 1;
