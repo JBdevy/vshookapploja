@@ -666,10 +666,23 @@ test('Default bloqueia parâmetros, orienta mudar para User e o timbre só fecha
     'os módulos 1–7 nascem em Default no app e no desktop');
   assert.match(player, /moduleIndex < 7 && source\.settingsMode !== 'user' \? 'default' : 'user'/,
     'um estado sem escolha explícita também restaura em Default');
+  const modeSelection = /private setModuleSettingsMode[\s\S]*?private defaultSettingsForModule/.exec(player)?.[0] ?? '';
+  assert.match(modeSelection, /mode === 'default'[\s\S]*?moduleState\.userSettings = cloneSettings\(moduleState\.settings\)/,
+    'ao voltar para Default, o User atual fica guardado');
+  assert.match(modeSelection, /cloneSettings\(moduleState\.userSettings \?\? moduleState\.settings\)/,
+    'User parte do Default apenas na primeira vez e depois recupera sua memória');
   assert.match(player, /Mude para User para configurar\./);
   assert.match(player, /private async selectFixedSound[\s\S]*?await this\.syncNativeEngine\(\);[\s\S]*?nativeLoadedTimbres[\s\S]*?this\.closeModal\(\);/);
   assert.match(player, /Carregando timbre…/);
   assert.match(player, /data-sound-loading-progress/);
+  const userSelection = /private async selectUserSoundfont[\s\S]*?private async loadAcquireLicenseUrl/.exec(player)?.[0] ?? '';
+  const fixedSelection = /private async selectFixedSound[\s\S]*?private showSoundLoadingOverlay/.exec(player)?.[0] ?? '';
+  for (const selection of [userSelection, fixedSelection]) {
+    assert.match(selection, /if \(moduleState\.settingsMode === 'user'\)[\s\S]*?moduleState\.userSettings = cloneSettings\(moduleState\.settings\)/,
+      'a troca de timbre mantém a memória User do módulo');
+    assert.doesNotMatch(selection, /moduleState\.settingsMode = 'default'/,
+      'a troca de timbre não pode forçar Default');
+  }
 });
 
 test('card do Glide: 4 botões ocupam a esquerda e o nome fica em cima do knob', () => {

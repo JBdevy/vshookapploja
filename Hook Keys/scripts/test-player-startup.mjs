@@ -1360,6 +1360,9 @@ try {
   };
   const preset = player.getActivePresetState();
   preset.modules[0].category = 'user';
+  preset.modules[0].settingsMode = 'user';
+  preset.modules[0].settings.attackMs = 4321;
+  preset.modules[0].userSettings = JSON.parse(JSON.stringify(preset.modules[0].settings));
   // O módulo nasce desligado: liga primeiro, para o clique de baixo desligar
   // de verdade e testar o OFF chegando ao motor durante o carregamento.
   root.querySelector('[data-module="8"] .player-module__power-button').click();
@@ -1383,6 +1386,9 @@ try {
   releaseFirstFile(new window.Blob(['old']));
   await Promise.all([firstSelection, secondSelection]);
   assert.equal(preset.modules[0].timbreId, 'user:b', 'seleção antiga não desfaz a mais recente');
+  assert.equal(preset.modules[0].settingsMode, 'user', 'trocar timbre não volta um módulo já editado para Default');
+  assert.equal(preset.modules[0].settings.attackMs, 4321, 'trocar timbre preserva a configuração User ativa');
+  assert.equal(preset.modules[0].userSettings.attackMs, 4321, 'a memória de User também continua preservada');
   assert.equal(player.nativeLoadedTimbres[0], 'user:b');
   assert.equal(preset.modules[7].enabled, false, 'terminar o SF2 não reativa o módulo desligado');
   assert(calls.some(({ command, args }) => command === 'begin_sound_font_upload' && /^[a-f0-9]{64}$/.test(args.assetKey)),
