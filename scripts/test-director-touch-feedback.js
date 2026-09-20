@@ -137,5 +137,8 @@ assert.match(onTapBlock,
 assert.match(onTapBlock,
   /event\.type === 'pointerup'[\s\S]*?lastPointerDispatchedAction\s*=\s*\{ key, at: now\(\) \}/,
   'o pointerup precisa registrar a acao executada para proteger o fallback')
+assert.match(onTapBlock,
+  /modalPointerAction[\s\S]*?closest\?\.\('\.modalOverlay,\[data-stop-modal\]'\)[\s\S]*?ignoreTapUntil\s*=\s*Math\.max/,
+  'o click sintetico de um botao de modal nao pode vazar para o controle exposto atras')
 
 console.log(`DIRECTOR_TOUCH_FEEDBACK_OK: ${sourcePath}`)

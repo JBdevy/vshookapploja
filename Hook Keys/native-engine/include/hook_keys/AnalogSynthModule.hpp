@@ -16,12 +16,15 @@ namespace hook_keys {
 struct AnalogSynthConfig final {
   std::uint8_t oscillator1 = 1; // sine, saw, square, triangle
   std::uint8_t oscillator2 = 2;
+  std::uint8_t oscillator3 = 1;
   bool oscillator1Enabled = true;
   bool oscillator2Enabled = true;
+  bool oscillator3Enabled = true;
   std::uint8_t voiceMode = 1;   // poly, mono, legato
   std::uint8_t lfoTarget = 1;   // pitch, filter, volume
   float oscillator1Volume = 1.0f;
   float oscillator2Volume = 1.0f;
+  float oscillator3Volume = 1.0f;
   float detuneCents = 7.0f;
   float attackMs = 0.0f;
   float holdMs = 15000.0f;
@@ -36,14 +39,17 @@ struct AnalogSynthConfig final {
   float glideMs = 45.0f;
   std::int8_t oscillator1Octave = 0;
   std::int8_t oscillator2Octave = 0;
+  std::int8_t oscillator3Octave = 0;
 
   void normalize(double sampleRate) noexcept {
     oscillator1 = std::min<std::uint8_t>(oscillator1, 3);
     oscillator2 = std::min<std::uint8_t>(oscillator2, 3);
+    oscillator3 = std::min<std::uint8_t>(oscillator3, 3);
     voiceMode = std::min<std::uint8_t>(voiceMode, 2);
     lfoTarget = std::min<std::uint8_t>(lfoTarget, 2);
     oscillator1Volume = std::clamp(oscillator1Volume, 0.0f, 1.0f);
     oscillator2Volume = std::clamp(oscillator2Volume, 0.0f, 1.0f);
+    oscillator3Volume = std::clamp(oscillator3Volume, 0.0f, 1.0f);
     detuneCents = std::clamp(detuneCents, -100.0f, 100.0f);
     attackMs = std::clamp(attackMs, 0.0f, 15000.0f);
     holdMs = std::clamp(holdMs, 0.0f, 15000.0f);
@@ -59,6 +65,7 @@ struct AnalogSynthConfig final {
     glideMs = std::clamp(glideMs, 0.0f, 5000.0f);
     oscillator1Octave = std::clamp<std::int8_t>(oscillator1Octave, -3, 3);
     oscillator2Octave = std::clamp<std::int8_t>(oscillator2Octave, -3, 3);
+    oscillator3Octave = std::clamp<std::int8_t>(oscillator3Octave, -3, 3);
   }
 };
 
@@ -107,9 +114,11 @@ public:
 
   // Velocity limit per oscillator: a key struck harder than an oscillator's
   // limit does not sound on that oscillator (raw key velocity, 127 = always).
-  void setOscillatorVelocityLimits(std::uint8_t oscillator1, std::uint8_t oscillator2) noexcept {
-    oscillatorVelocityLimits_.store(static_cast<std::uint16_t>(
-        std::min<int>(oscillator1, 127) | (std::min<int>(oscillator2, 127) << 8)), std::memory_order_relaxed);
+  void setOscillatorVelocityLimits(std::uint8_t oscillator1, std::uint8_t oscillator2,
+      std::uint8_t oscillator3 = 127) noexcept {
+    oscillatorVelocityLimits_.store(static_cast<std::uint32_t>(
+        std::min<int>(oscillator1, 127) | (std::min<int>(oscillator2, 127) << 8)
+        | (std::min<int>(oscillator3, 127) << 16)), std::memory_order_relaxed);
   }
 
   void setGlideBehavior(GlideBehavior behavior) noexcept override {
@@ -135,7 +144,8 @@ public:
     // not cut or retrigger the note already sounding.
     const auto limits = oscillatorVelocityLimits_.load(std::memory_order_relaxed);
     if (!(config_.oscillator1Enabled && filterVelocity <= (limits & 0xff)) &&
-        !(config_.oscillator2Enabled && filterVelocity <= (limits >> 8))) return;
+        !(config_.oscillator2Enabled && filterVelocity <= ((limits >> 8) & 0xff)) &&
+        !(config_.oscillator3Enabled && filterVelocity <= ((limits >> 16) & 0xff))) return;
     heldFilterVelocity_[note] = filterVelocity;
     velocity = std::max<std::uint8_t>(velocity, 1);
     held_[note] = true;
@@ -151,12 +161,14 @@ public:
       }
       const auto phase1 = phaseReference ? phaseReference->phase1 : 0.0;
       const auto phase2 = phaseReference ? phaseReference->phase2 : 0.0;
+      const auto phase3 = phaseReference ? phaseReference->phase3 : 0.0;
       startVoice(voice, note, velocity, true);
       // A camada nova ganha envelope próprio, mas começa na mesma fase da
       // camada anterior para não criar uma quina audível no retrigger.
       if (phaseReference && phaseReference != &voice) {
         voice.phase1 = phase1;
         voice.phase2 = phase2;
+        voice.phase3 = phase3;
       }
       return;
     }
@@ -266,17 +278,22 @@ public:
         const auto baseFrequency = voice.currentFrequency * bendRatio;
         const auto frequency1 = std::ldexp(baseFrequency, config_.oscillator1Octave);
         const auto frequency2 = std::ldexp(baseFrequency * detuneRatio, config_.oscillator2Octave);
+        const auto frequency3 = std::ldexp(baseFrequency / detuneRatio, config_.oscillator3Octave);
         voice.phase1 = advancePhase(voice.phase1, frequency1);
         voice.phase2 = advancePhase(voice.phase2, frequency2);
+        voice.phase3 = advancePhase(voice.phase3, frequency3);
         const auto osc1 = waveform(config_.oscillator1, voice.phase1);
         const auto osc2 = waveform(config_.oscillator2, voice.phase2);
+        const auto osc3 = waveform(config_.oscillator3, voice.phase3);
         const auto envelope = advanceEnvelope(voice);
         if (!voice.active) continue;
         const auto oscillatorSignal = (config_.oscillator1Enabled && voice.oscillator1Gate ? osc1 * config_.oscillator1Volume : 0.0f)
             + (config_.oscillator2Enabled && voice.oscillator2Gate ? osc2 * config_.oscillator2Volume : 0.0f);
+        const auto threeOscillatorSignal = oscillatorSignal
+            + (config_.oscillator3Enabled && voice.oscillator3Gate ? osc3 * config_.oscillator3Volume : 0.0f);
         // No Sens: lido a cada bloco, então ligar/desligar já vale pras vozes
         // que estão soando agora, sem esperar a próxima tecla.
-        auto sample = oscillatorSignal * envelope * (noVelocitySensitivity_ ? 1.0f : voice.velocity);
+        auto sample = threeOscillatorSignal * envelope * (noVelocitySensitivity_ ? 1.0f : voice.velocity);
         if (voice.filterUpdateCountdown == 0) {
           const auto envelopeOctaves = config_.filterEnvelope * envelope * 5.0f;
           const auto cutoff = config_.filterCutoffHz * std::pow(2.0f, envelopeOctaves + filterLfo);
@@ -308,6 +325,7 @@ private:
     std::uint64_t age = 0;
     double phase1 = 0.0;
     double phase2 = 0.0;
+    double phase3 = 0.0;
     double currentFrequency = 440.0;
     double targetFrequency = 440.0;
     double glideFrequencyStep = 0.0;
@@ -316,6 +334,7 @@ private:
     float envelope = 0.0f;
     bool oscillator1Gate = true;
     bool oscillator2Gate = true;
+    bool oscillator3Gate = true;
     bool heldSustain = false;
     float releaseStep = 0.0f;
     std::size_t holdFrames = 0;
@@ -389,6 +408,7 @@ private:
     const auto limits = oscillatorVelocityLimits_.load(std::memory_order_relaxed);
     voice.oscillator1Gate = heldFilterVelocity_[note] <= (limits & 0xff);
     voice.oscillator2Gate = heldFilterVelocity_[note] <= (limits >> 8);
+    voice.oscillator3Gate = heldFilterVelocity_[note] <= ((limits >> 16) & 0xff);
     voice.heldSustain = false;
     voice.age = ++voiceAge_;
     voice.active = true;
@@ -396,6 +416,7 @@ private:
     if (!sounding) {
       voice.phase1 = 0.0;
       voice.phase2 = 0.0;
+      voice.phase3 = 0.0;
       voice.envelope = 0.0f;
       voice.filterIc1 = 0.0f;
       voice.filterIc2 = 0.0f;
@@ -518,7 +539,7 @@ private:
   // Pitch of the last note started, the Portamento source for a new voice.
   double lastNoteFrequency_ = 0.0;
   std::atomic<std::uint16_t> glideBehavior_{GlideBehavior{}.pack()};
-  std::atomic<std::uint16_t> oscillatorVelocityLimits_{static_cast<std::uint16_t>(127 | (127 << 8))};
+  std::atomic<std::uint32_t> oscillatorVelocityLimits_{static_cast<std::uint32_t>(127 | (127 << 8) | (127 << 16))};
   std::atomic<bool> wheelDrivesLfo_{false};
 };
 

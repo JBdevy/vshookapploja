@@ -133,6 +133,7 @@ assert(arrasteAt > suavizadoAt,
 
 let relogioMs = 0
 let posBridge = 0
+let gridVisualId = 'musica-1'
 const gridContext = vm.createContext({
   Math, Number, String,
   SEEK_CLOCK_SNAP_SEC: 1.2,
@@ -140,10 +141,11 @@ const gridContext = vm.createContext({
   seekClockKey: '',
   seekClockPosSec: 0,
   seekClockAtMs: 0,
+  seekClockAwaitingBoundsKey: '',
   now: () => relogioMs,
   isPlaying: () => true,
   isPaused: () => false,
-  getVisualPlayingId: () => 'musica-1',
+  getVisualPlayingId: () => gridVisualId,
   getSmoothedCurrentPlaybackPosition: () => posBridge,
 })
 vm.runInContext(extract('getSmoothSeekPlayPositionSec'), gridContext)
@@ -190,6 +192,34 @@ const gridDepoisDoSeek = lerGrid(TOTAL_MS + FRAME_MS)
 assert(Math.abs(gridDepoisDoSeek - 90) < 0.05,
   'seek deveria reancorar o cursor do Grid de vez, ficou em ' +
   gridDepoisDoSeek.toFixed(3) + 's')
+
+// Um snapshot muito antigo da mesma reprodução não é um seek. Mesmo quando o
+// atraso passa do limite de snap, a agulha não pode voltar para ele.
+posBridge = 20
+const gridDepoisDoSnapshotAntigo = lerGrid(TOTAL_MS + (FRAME_MS * 2))
+assert(gridDepoisDoSnapshotAntigo >= gridDepoisDoSeek,
+  'snapshot antigo puxou o cursor do Grid para tras')
+
+// O ID novo pode chegar um poll antes da posição. A posição antiga precisa
+// ficar retida no início, não ser limitada visualmente no fim da música nova.
+gridVisualId = 'musica-antiga'
+posBridge = 350
+vm.runInContext(
+  `getSmoothSeekPlayPositionSec({}, ${TOTAL_MS + 100}, { id: 'antiga', start: 300, end: 360 })`,
+  gridContext)
+gridVisualId = 'musica-nova'
+posBridge = 350
+const trocaComPosicaoAntiga = vm.runInContext(
+  `getSmoothSeekPlayPositionSec({}, ${TOTAL_MS + 116}, { id: 'nova', start: 0, end: 100 })`,
+  gridContext)
+assert.equal(trocaComPosicaoAntiga, 0,
+  'posição anterior jogou a agulha para o fim da música nova')
+posBridge = 0.25
+const trocaConfirmada = vm.runInContext(
+  `getSmoothSeekPlayPositionSec({}, ${TOTAL_MS + 132}, { id: 'nova', start: 0, end: 100 })`,
+  gridContext)
+assert(Math.abs(trocaConfirmada - 0.25) < 0.001,
+  'agulha não saiu do início após a posição nova ser confirmada')
 
 
 // ---------------------------------------------------------------------------
