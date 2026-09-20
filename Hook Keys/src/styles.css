@@ -3951,11 +3951,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .player-global-pitch__separator {
   display: inline-grid;
   place-items: center;
-  flex: 0 0 clamp(8px, .9vw, 12px);
-  width: clamp(8px, .9vw, 12px);
+  flex: 0 0 clamp(3px, .35vw, 5px);
+  width: clamp(3px, .35vw, 5px);
   margin-inline: 0;
   color: #806d61;
-  font-size: clamp(15px, 1.45vw, 21px);
+  font-size: clamp(12px, 1.1vw, 17px);
   font-weight: 950;
   line-height: 1;
 }
@@ -10801,8 +10801,8 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .player-screen--tablet .player-global-pitch__separator {
-    flex-basis: 7px;
-    width: 7px;
+    flex-basis: 3px;
+    width: 3px;
     margin-inline: 0;
     font-size: 10px;
   }

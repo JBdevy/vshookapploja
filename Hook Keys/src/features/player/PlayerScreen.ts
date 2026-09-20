@@ -1331,7 +1331,7 @@ export class PlayerScreen {
                   aria-label="Subir uma oitava na entrada geral. Ajuste atual: ${this.globalOctaveShift}"
                 >${this.globalOctaveShift > 0 ? `OCT + ${this.globalOctaveShift}` : 'OCT +'}</button>
               </div>
-              <span class="player-global-pitch__separator" aria-hidden="true">/</span>
+              <span class="player-global-pitch__separator" aria-hidden="true">|</span>
               <div class="player-global-pitch__group" aria-label="Transpose geral">
                 <button
                   class="player-global-pitch__button"
@@ -1346,7 +1346,7 @@ export class PlayerScreen {
                   aria-label="Subir um semitom o transpose geral. Ajuste atual: ${this.globalTransposeSemitones}"
                 >${this.globalTransposeSemitones > 0 ? `TRS + ${this.globalTransposeSemitones}` : 'TRS +'}</button>
               </div>
-              <span class="player-global-pitch__separator" aria-hidden="true">/</span>
+              <span class="player-global-pitch__separator" aria-hidden="true">|</span>
               <button
                 class="player-global-pitch__button player-global-pitch__output-mode${this.moduleOutputMono ? ' is-mono' : ''}"
                 type="button"
@@ -1354,7 +1354,7 @@ export class PlayerScreen {
                 aria-pressed="${this.moduleOutputMono}"
                 aria-label="Saída dos módulos em ${this.moduleOutputMono ? 'Mono dual' : 'Stereo'}. Alternar para ${this.moduleOutputMono ? 'Stereo' : 'Mono dual'}"
               >${this.moduleOutputMono ? 'MONO' : 'STEREO'}</button>
-              <span class="player-global-pitch__separator" aria-hidden="true">/</span>
+              <span class="player-global-pitch__separator" aria-hidden="true">|</span>
               <button
                 class="player-global-pitch__button player-panic-button"
                 type="button"

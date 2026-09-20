@@ -105,8 +105,8 @@ try {
     'uma oitava geral é enviada ao motor como 12 semitons');
   assert.deepEqual(
     [...root.querySelectorAll('.player-global-pitch__separator')].map((separator) => separator.textContent),
-    ['/', '/', '/'],
-    'barras separam OCT, TRS, STEREO e PANIC',
+    ['|', '|', '|'],
+    'barras verticais separam OCT, TRS, STEREO e PANIC',
   );
   assert.equal(root.querySelectorAll('.player-global-pitch__group > span').length, 0,
     'não repete os nomes OCT e TRANS ao lado dos botões');
