@@ -9,7 +9,6 @@ import type {
   DeviceNameRequiredResponse,
   DeviceRemovalRequiredResponse,
   StartLoginResponse,
-  PasswordResetTokenResponse,
   VerifyCodeResponse,
 } from './types';
 
@@ -145,28 +144,12 @@ export class AuthSessionService {
     return this.api.confirmDeviceRemoval(session.token, targetDeviceId, password);
   }
 
-  requestPasswordReset(session: AuthenticatedSession): Promise<import('./types').RequestCodeResponse> {
-    return this.api.requestPasswordReset(session.token);
+  requestTemporaryPassword(email: string): Promise<{ ok: true; temporaryPasswordSent: true; message: string }> {
+    return this.api.requestTemporaryPassword(email.trim().toLowerCase());
   }
 
-  requestPasswordRecovery(email: string): Promise<import('./types').RequestCodeResponse> {
-    return this.api.requestPasswordRecovery(email.trim().toLowerCase());
-  }
-
-  verifyPasswordRecoveryCode(challengeId: string, code: string): Promise<PasswordResetTokenResponse> {
-    return this.api.verifyPasswordRecoveryCode(challengeId, code);
-  }
-
-  completePasswordRecovery(passwordToken: string, password: string, passwordConfirmation: string): Promise<{ ok: true }> {
-    return this.api.completePasswordRecovery(passwordToken, password, passwordConfirmation);
-  }
-
-  verifyPasswordResetCode(session: AuthenticatedSession, challengeId: string, code: string): Promise<PasswordResetTokenResponse> {
-    return this.api.verifyPasswordResetCode(session.token, challengeId, code);
-  }
-
-  completePasswordReset(session: AuthenticatedSession, passwordToken: string, password: string): Promise<{ ok: true }> {
-    return this.api.completePasswordReset(session.token, passwordToken, password);
+  changePassword(session: AuthenticatedSession, password: string, passwordConfirmation: string): Promise<{ ok: true }> {
+    return this.api.changePassword(session.token, password, passwordConfirmation);
   }
 
   async updateCachedAccountName(session: AuthenticatedSession, name: string): Promise<void> {

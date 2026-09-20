@@ -163,9 +163,9 @@ export class HookKeysApp {
           return profile;
         },
         confirmDeviceRemoval: (deviceId, password) => this.sessions.confirmDeviceRemoval(session, deviceId, password),
-        requestPasswordReset: () => this.sessions.requestPasswordReset(session),
-        verifyPasswordResetCode: (challengeId, code) => this.sessions.verifyPasswordResetCode(session, challengeId, code),
-        completePasswordReset: (passwordToken, password) => this.sessions.completePasswordReset(session, passwordToken, password),
+        changePassword: (password, passwordConfirmation) => (
+          this.sessions.changePassword(session, password, passwordConfirmation)
+        ),
         finishCurrentDeviceRemoval: async () => {
           await this.sessions.clearLocalSession();
           await this.showLogin();

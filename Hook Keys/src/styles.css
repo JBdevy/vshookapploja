@@ -3943,13 +3943,17 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   display: grid;
   grid-template-columns: auto auto;
   align-items: center;
+  flex: 0 0 auto;
   gap: clamp(3px, .35vw, 5px);
   min-width: 0;
 }
 
 .player-global-pitch__separator {
-  flex: 0 0 auto;
-  margin-inline: 2px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 clamp(8px, .9vw, 12px);
+  width: clamp(8px, .9vw, 12px);
+  margin-inline: 0;
   color: #806d61;
   font-size: clamp(15px, 1.45vw, 21px);
   font-weight: 950;
@@ -10797,7 +10801,9 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .player-screen--tablet .player-global-pitch__separator {
-    margin-inline: 1px;
+    flex-basis: 7px;
+    width: 7px;
+    margin-inline: 0;
     font-size: 10px;
   }
 

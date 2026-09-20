@@ -12,7 +12,7 @@ import {
   readNoVelocitySensitivity,
   updateGlideVelocityMarkup,
 } from './GlideView';
-import type { DeviceOverviewResponse, PasswordResetTokenResponse, RequestCodeResponse } from '../auth/types';
+import type { DeviceOverviewResponse } from '../auth/types';
 import type { PlayerStateService } from '../account/PlayerStateService';
 import { KeyboardMidiRouter, keyboardMidiRoute } from './KeyboardMidiRouter';
 import { KeyboardExpressionController } from './KeyboardExpressionController';
@@ -542,9 +542,7 @@ interface AccountControls {
   saveProfilePhoto: (imageDataUrl: string) => Promise<AccountProfile>;
   saveProfileName: (name: string) => Promise<AccountProfile>;
   confirmDeviceRemoval: (deviceId: string, password: string) => Promise<{ ok: true; currentDeviceRemoved: boolean }>;
-  requestPasswordReset: () => Promise<RequestCodeResponse>;
-  verifyPasswordResetCode: (challengeId: string, code: string) => Promise<PasswordResetTokenResponse>;
-  completePasswordReset: (passwordToken: string, password: string) => Promise<{ ok: true }>;
+  changePassword: (password: string, passwordConfirmation: string) => Promise<{ ok: true }>;
   finishCurrentDeviceRemoval: () => Promise<void>;
 }
 
@@ -824,31 +822,6 @@ function createPresetRowsMarkup(selectedPreset: number | null): string {
 // que o modal já apareceu.
 function createWaveformBarsMarkup(): string {
   return Array.from({ length: TRACK_WAVEFORM_BARS }, () => '<i style="--wave-height:8%"></i>').join('');
-}
-
-function createPasswordResetCodeMarkup(email: string): string {
-  return `
-    <section class="user-password-reset">
-      <strong>Confirme seu e-mail</strong>
-      <p>Digite o código de 6 dígitos enviado para ${escapeMarkup(email)}.</p>
-      <label>
-        <span>Código</span>
-        <span class="user-password-reset__input-shell">
-          <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="Código de redefinição" data-password-reset-code>
-          <span class="user-password-reset__code-caret" aria-hidden="true"><i></i></span>
-        </span>
-      </label>
-      <p class="user-device-message is-error" role="alert" aria-live="polite"></p>
-      <button type="button" data-modal-action="verify-password-reset" disabled>Continuar</button>
-    </section>
-  `;
-}
-
-function positionPasswordResetCodeCaret(input: HTMLInputElement): void {
-  const length = input.value.length;
-  const shell = input.parentElement;
-  shell?.style.setProperty('--password-reset-code-length', String(length));
-  shell?.style.setProperty('--password-reset-code-caret-gap', length > 0 ? '4px' : '0px');
 }
 
 function createNewPasswordMarkup(useTabletKeyboard: boolean): string {
@@ -1271,8 +1244,6 @@ export class PlayerScreen {
   private bottomView: PlayerBottomView = 'presets';
   private keyboardMidiSlot = 1;
   private keyboardStyle: PerformanceKeyboardStyle = 'standard';
-  private passwordResetChallenge: RequestCodeResponse | null = null;
-  private passwordResetToken: string | null = null;
   private pendingCompatibilityMode: boolean | null = null;
   private compatibilityVideoUrl = '';
   // Controles de entrada globais: são somados antes da distribuição para os
@@ -5226,9 +5197,7 @@ export class PlayerScreen {
     } else if (kind === 'keyboard-settings') {
       bodyMarkup = createPerformanceKeyboardSettingsMarkup(this.keyboardMidiSlot, this.keyboardStyle);
     } else if (kind === 'password-reset') {
-      bodyMarkup = this.passwordResetToken
-        ? createNewPasswordMarkup(!this.desktopRuntime)
-        : createPasswordResetCodeMarkup(this.account.email);
+      bodyMarkup = createNewPasswordMarkup(!this.desktopRuntime);
     } else if (kind === 'compatibility-mode' && this.pendingCompatibilityMode !== null) {
       bodyMarkup = this.pendingCompatibilityMode
         ? `
@@ -5834,7 +5803,7 @@ export class PlayerScreen {
       title.textContent = 'Configurar teclado';
     } else if (kind === 'password-reset') {
       eyebrow.textContent = 'Conta';
-      title.textContent = this.passwordResetToken ? 'Nova senha' : 'Redefinir senha';
+      title.textContent = 'Redefinir senha';
     } else if (kind === 'user') {
       eyebrow.textContent = 'Hook Keys';
       title.textContent = 'Usuário';
@@ -6846,8 +6815,6 @@ export class PlayerScreen {
       }
       if (modalAction === 'confirm' || modalAction === 'cancel') {
         if (modalAction === 'cancel' && kind === 'password-reset') {
-          this.passwordResetChallenge = null;
-          this.passwordResetToken = null;
           if (this.modalHistory.length > 0) this.returnToPreviousModal();
           else this.closeModal();
           return;
@@ -6897,12 +6864,6 @@ export class PlayerScreen {
       if (kind === 'user' && modalAction === 'reset-password') {
         const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
         if (button) void this.beginPasswordReset(button);
-        return;
-      }
-
-      if (kind === 'password-reset' && modalAction === 'verify-password-reset') {
-        const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
-        if (button) void this.verifyPasswordResetCode(modal, button);
         return;
       }
 
@@ -7300,11 +7261,6 @@ export class PlayerScreen {
           modal, moduleNumber, Number(input.value),
           kind === 'module-filter-velocity' ? 'filterVelocityCurve' : 'velocityCurve',
         );
-      } else if (kind === 'password-reset' && input.matches('[data-password-reset-code]')) {
-        input.value = input.value.replace(/\D/g, '').slice(0, 6);
-        positionPasswordResetCodeCaret(input);
-        const verify = modal.querySelector<HTMLButtonElement>('[data-modal-action="verify-password-reset"]');
-        if (verify) verify.disabled = input.value.length !== 6;
       } else if (kind === 'password-reset' && input.matches('[data-new-password], [data-confirm-new-password]')) {
         const password = modal.querySelector<HTMLInputElement>('[data-new-password]');
         const confirmation = modal.querySelector<HTMLInputElement>('[data-confirm-new-password]');
@@ -8391,45 +8347,15 @@ export class PlayerScreen {
     }
   }
 
-  private async beginPasswordReset(button: HTMLButtonElement): Promise<void> {
-    button.disabled = true;
-    const userModal = this.modal;
-    const message = userModal?.querySelector<HTMLElement>('[data-user-profile-message]');
-    if (message) message.textContent = 'Enviando código...';
-    try {
-      this.passwordResetChallenge = await this.accountControls.requestPasswordReset();
-      this.passwordResetToken = null;
-      if (button.isConnected) this.openChildModal('password-reset', null, button);
-    } catch {
-      if (message) message.textContent = 'Não foi possível enviar o código agora.';
-      button.disabled = false;
-    }
-  }
-
-  private async verifyPasswordResetCode(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
-    const input = modal.querySelector<HTMLInputElement>('[data-password-reset-code]');
-    const challenge = this.passwordResetChallenge;
-    if (!input || !challenge || input.value.length !== 6) return;
-    button.disabled = true;
-    const message = modal.querySelector<HTMLElement>('.user-device-message');
-    try {
-      const result = await this.accountControls.verifyPasswordResetCode(challenge.challengeId, input.value);
-      this.passwordResetToken = result.passwordToken;
-      if (modal.isConnected) this.openModal('password-reset', null, this.modalTrigger ?? this.root, true);
-    } catch {
-      if (message) message.textContent = 'Código incorreto ou expirado. Tente novamente.';
-      input.value = '';
-      positionPasswordResetCodeCaret(input);
-      button.disabled = true;
-    }
+  private beginPasswordReset(button: HTMLButtonElement): void {
+    this.openChildModal('password-reset', null, button);
   }
 
   private async saveNewPassword(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
     const password = modal.querySelector<HTMLInputElement>('[data-new-password]');
     const confirmation = modal.querySelector<HTMLInputElement>('[data-confirm-new-password]');
-    const token = this.passwordResetToken;
     const message = modal.querySelector<HTMLElement>('.user-device-message');
-    if (!password || !confirmation || !token) return;
+    if (!password || !confirmation) return;
     if (password.value !== confirmation.value) {
       if (message) message.textContent = 'As senhas não são iguais.';
       return;
@@ -8437,9 +8363,7 @@ export class PlayerScreen {
     if (password.value.length < 8) return;
     button.disabled = true;
     try {
-      await this.accountControls.completePasswordReset(token, password.value);
-      this.passwordResetChallenge = null;
-      this.passwordResetToken = null;
+      await this.accountControls.changePassword(password.value, confirmation.value);
       if (message) {
         message.classList.remove('is-error');
         message.textContent = 'Senha alterada com sucesso.';

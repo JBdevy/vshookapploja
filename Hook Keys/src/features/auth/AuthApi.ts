@@ -5,9 +5,7 @@ import type {
   DeviceOverviewResponse,
   DeviceRegistrationResponse,
   InitialDeviceLoginResponse,
-  RequestCodeResponse,
   StartLoginResponse,
-  PasswordResetTokenResponse,
   VerifyCodeResponse,
 } from './types';
 
@@ -66,37 +64,15 @@ export class AuthApi {
     });
   }
 
-  requestPasswordReset(token: string): Promise<RequestCodeResponse> {
-    return this.http.request('/api/orangekey/account/password/reset/request-code', { method: 'POST', token });
-  }
-
-  requestPasswordRecovery(email: string): Promise<RequestCodeResponse> {
-    return this.http.request('/api/orangekey/auth/password/reset/request-code', {
+  requestTemporaryPassword(email: string): Promise<{ ok: true; temporaryPasswordSent: true; message: string }> {
+    return this.http.request('/api/orangekey/auth/password/forgot', {
       method: 'POST', body: { email },
     });
   }
 
-  verifyPasswordRecoveryCode(challengeId: string, code: string): Promise<PasswordResetTokenResponse> {
-    return this.http.request('/api/orangekey/auth/password/reset/verify-code', {
-      method: 'POST', body: { challengeId, code },
-    });
-  }
-
-  completePasswordRecovery(passwordToken: string, password: string, passwordConfirmation: string): Promise<{ ok: true }> {
-    return this.http.request('/api/orangekey/auth/password/reset/complete', {
-      method: 'POST', body: { passwordToken, password, passwordConfirmation },
-    });
-  }
-
-  verifyPasswordResetCode(token: string, challengeId: string, code: string): Promise<PasswordResetTokenResponse> {
-    return this.http.request('/api/orangekey/account/password/reset/verify-code', {
-      method: 'POST', token, body: { challengeId, code },
-    });
-  }
-
-  completePasswordReset(token: string, passwordToken: string, password: string): Promise<{ ok: true }> {
-    return this.http.request('/api/orangekey/account/password/reset/complete', {
-      method: 'POST', token, body: { passwordToken, password },
+  changePassword(token: string, password: string, passwordConfirmation: string): Promise<{ ok: true }> {
+    return this.http.request('/api/orangekey/account/password/change', {
+      method: 'POST', token, body: { password, passwordConfirmation },
     });
   }
 
