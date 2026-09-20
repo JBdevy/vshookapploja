@@ -37,10 +37,11 @@ export const MODULE_ENVELOPE_DEFAULTS: Readonly<Record<ModuleEnvelopeParameter, 
   decayMs: MODULE_ENVELOPE_LIMITS.decayMs,
 };
 
-export type ModuleModulationMode = 'user' | 'lfo' | 'tremolo' | 'pan';
+export type ModuleModulationMode = 'user' | 'rotary' | 'lfo' | 'tremolo' | 'pan';
 
 export function readModuleModulationMode(settings: Readonly<Record<string, unknown>>): ModuleModulationMode {
   if (settings.modulationMode === 'user') return 'user';
+  if (settings.modulationMode === 'rotary') return 'rotary';
   if (settings.modulationMode === 'tremolo') return 'tremolo';
   if (settings.modulationMode === 'pan') return 'pan';
   return 'lfo';
@@ -48,7 +49,7 @@ export function readModuleModulationMode(settings: Readonly<Record<string, unkno
 
 // O motor recebe o modo como número: 0 User, 1 LFO de pitch, 2 Tremolo.
 export function moduleModulationEngineMode(mode: ModuleModulationMode): number {
-  if (mode === 'user') return 0;
+  if (mode === 'user' || mode === 'rotary') return 0;
   if (mode === 'tremolo') return 2;
   return mode === 'pan' ? 3 : 1;
 }
@@ -65,7 +66,7 @@ export function readModuleModulationRate(settings: Readonly<Record<string, unkno
 // por isso o card do Synth não tem Rate próprio.
 export function createModuleModulationCardMarkup(
   settings: Readonly<Record<string, unknown>>,
-  owner: 'sf2' | 'synth' = 'sf2',
+  owner: 'sf2' | 'synth' | 'organ' = 'sf2',
 ): string {
   const rawMode = readModuleModulationMode(settings);
   // O Synth não tem Tremolo próprio da roda; lá o card fica só com User/LFO.
@@ -74,27 +75,33 @@ export function createModuleModulationCardMarkup(
   const rate = readModuleModulationRate(settings);
   const modes = owner === 'synth'
     ? (['user', 'lfo'] as const)
-    : (['user', 'lfo', 'tremolo', 'pan'] as const);
+    : owner === 'organ'
+      ? (['rotary', 'tremolo', 'pan'] as const)
+      : (['user', 'lfo', 'tremolo', 'pan'] as const);
   const labels: Record<ModuleModulationMode, string> = {
-    user: 'User', lfo: 'LFO', tremolo: 'Tremolo', pan: 'Pan',
+    user: 'User', rotary: 'Rotary', lfo: 'LFO', tremolo: 'Tremolo', pan: 'Pan',
   };
   return `
     <article class="module-mod-card${owner === 'synth' ? ' module-mod-card--synth' : ''}" data-module-mod-card>
       <header>
         <strong>Mod</strong>
       </header>
-      <div role="group" aria-label="Modo da roda Mod" data-module-modulation-modes="${modes.length}">
-        ${modes.map((value) => `
+      <div role="group" aria-label="Modo da roda Mod" data-module-modulation-modes="${owner === 'organ' ? 4 : modes.length}">
+        ${modes.map((value, index) => `
           <button type="button" data-module-modulation-mode="${value}"
             class="${mode === value ? 'is-selected' : ''}"
-            aria-pressed="${mode === value}">${labels[value]}</button>
+            aria-pressed="${mode === value}">${owner === 'organ' && value === 'rotary' ? 'M-RT' : labels[value]}</button>
+          ${owner === 'organ' && index === 0 ? `<button type="button" data-module-rotary-toggle
+            class="${readModuleRotarySettings(settings.rotary).speed === 'fast' ? 'is-selected' : ''}"
+            aria-pressed="${readModuleRotarySettings(settings.rotary).speed === 'fast'}"
+            aria-label="Alternar Rotary entre Slow e Fast">R-TG</button>` : ''}
         `).join('')}
       </div>
       ${owner === 'synth' ? '' : `<label class="module-mod-card__rate">
         ${createParameterKnobMarkup((rate - 0.1) / 19.9, `
           <input type="range" min="0.1" max="20" step="0.01" value="${rate}"
             data-module-modulation-rate aria-label="Rate do LFO"
-            aria-valuetext="${rate.toFixed(2)} Hz"${mode === 'user' ? ' disabled' : ''}>
+            aria-valuetext="${rate.toFixed(2)} Hz"${mode === 'user' || mode === 'rotary' ? ' disabled' : ''}>
         `)}
         <output data-module-modulation-rate-value>${rate.toFixed(2)} Hz</output>
       </label>`}
@@ -386,7 +393,8 @@ export function createModuleSettingsMarkup(
       <div class="module-settings-bottom-row">
         ${createVelocityCardMarkup(settings)}
         ${processorReplacement === 'synth' ? '' : createGlideCardMarkup(settings, bpm)}
-        ${createModuleModulationCardMarkup(settings, processorReplacement === 'synth' ? 'synth' : 'sf2')}
+        ${createModuleModulationCardMarkup(settings,
+          processorReplacement === 'synth' ? 'synth' : processorReplacement === 'organ' ? 'organ' : 'sf2')}
       </div>
     </section>
   `;

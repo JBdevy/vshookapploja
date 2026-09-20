@@ -2007,14 +2007,25 @@ async function connectVshookApplePeer(peer, signal) {
     if (!isCurrentDiscovery(connectSignal)) return
     const directorUrl = String(connection?.directorUrl || '').replace(/\/+$/, '')
     if (!directorUrl) throw new Error('O Mac não abriu a conexão direta.')
-    const payload =
-      await fetchJsonWithTimeout(`${directorUrl}/discovery`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal) ||
-      await fetchJsonWithTimeout(`${directorUrl}/projects`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal) ||
-      await fetchJsonWithTimeout(`${directorUrl}/state`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal)
+    // Na conexao peer-to-peer o Mac pode estar sem uma interface Wi-Fi comum.
+    // Nesse caso /discovery responde corretamente, mas com networkAvailable=false
+    // e sem projetos. /projects consulta diretamente o bridge do REAPER e deve
+    // ser a fonte principal desta modalidade de conexao.
+    const projectPayload = await fetchJsonWithTimeout(
+      `${directorUrl}/projects`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal)
     if (!isCurrentDiscovery(connectSignal)) return
-    const projects = payload
-      ? normalizeVshookApplePeerProjects(payload, connection, peer.id)
+    let projects = projectPayload
+      ? normalizeVshookApplePeerProjects(projectPayload, connection, peer.id)
       : []
+
+    if (!projects.length) {
+      const statePayload = await fetchJsonWithTimeout(
+        `${directorUrl}/state`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal)
+      if (!isCurrentDiscovery(connectSignal)) return
+      projects = statePayload
+        ? normalizeVshookApplePeerProjects(statePayload, connection, peer.id)
+        : []
+    }
     if (!projects.length) {
       throw new Error('A Hook Center foi encontrada, mas não há projeto aberto no REAPER.')
     }

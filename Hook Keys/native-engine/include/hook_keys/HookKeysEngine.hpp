@@ -51,6 +51,7 @@ private:
   void publishModulePeak(std::size_t index, float leftPeak, float rightPeak) noexcept;
   void publishProcessorLevels(std::size_t index, ModuleProcessorLevels levels) noexcept;
   [[nodiscard]] float nextModuleGain(std::size_t index) noexcept;
+  void applyModuleLimiter(std::size_t index, float& left, float& right) noexcept;
   void setModuleGainTarget(std::size_t index, float target) noexcept;
   void applyCommand(const EngineCommand& command) noexcept;
   void routeMidi(const MidiMessage& message) noexcept;
@@ -98,6 +99,8 @@ private:
   std::array<float, kModuleCount> currentModuleGains_{};
   std::array<float, kModuleCount> moduleGainSteps_{};
   std::array<std::size_t, kModuleCount> moduleGainRampFrames_{};
+  std::array<float, kModuleCount> moduleLimiterGains_{};
+  float moduleLimiterRelease_ = 0.0f;
 };
 
 } // namespace hook_keys

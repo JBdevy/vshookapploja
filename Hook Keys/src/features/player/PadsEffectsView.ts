@@ -4,7 +4,7 @@ export type PerformanceTrigger =
 
 export const PAD_BANK_IDS = ['A', 'B', 'C', 'D'] as const;
 export type PadBankId = (typeof PAD_BANK_IDS)[number];
-export const EFFECT_BANK_IDS = ['1', '2', '3', '4'] as const;
+export const EFFECT_BANK_IDS = ['1', '2', '3', '4', '5', '6', '7', '8'] as const;
 export type EffectBankId = (typeof EFFECT_BANK_IDS)[number];
 
 const CHROMATIC_NOTES = [
@@ -62,7 +62,7 @@ function createEffectBankButton(bank: EffectBankId): string {
       data-action="select-effect-bank"
       data-effect-bank="${bank}"
       aria-pressed="${isSelected}"
-    >FX ${bank}</button>
+    ><span>FX ${bank}</span></button>
   `;
 }
 
@@ -107,15 +107,15 @@ export function createPadsEffectsMarkup(): string {
 
   return `
     <section class="pads-effects-view" data-player-view="pads-effects" hidden>
-      <section class="performance-section" aria-label="Pads de notas musicais">
+      <section class="performance-section performance-section--notes" aria-label="Pads de notas musicais">
         <nav class="pad-bank-selector" aria-label="Bancos dos pads">
           ${PAD_BANK_IDS.map(createPadBankButton).join('')}
         </nav>
         <div class="performance-grid performance-grid--notes">${notes}</div>
       </section>
 
-      <section class="performance-section" aria-label="Efeitos">
-        <nav class="pad-bank-selector" aria-label="Bancos dos efeitos">
+      <section class="performance-section performance-section--effects" aria-label="Efeitos">
+        <nav class="pad-bank-selector pad-bank-selector--effects" aria-label="Bancos dos efeitos">
           ${EFFECT_BANK_IDS.map(createEffectBankButton).join('')}
         </nav>
         <div class="performance-grid performance-grid--effects">${effects}</div>

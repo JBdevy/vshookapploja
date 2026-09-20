@@ -255,7 +255,7 @@ import {
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-organ' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm' | 'module-config-copy-confirm';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-organ' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'effect-bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm' | 'module-config-copy-confirm';
 type BankId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
 type FaderBehaviorMode = 'default' | 'master' | 'bank' | 'bank2';
 type PlayerView = 'bank' | 'pads-effects';
@@ -413,7 +413,8 @@ function isContinuousCcTarget(target: CcLearnTarget): boolean {
   if (target.kind === 'module-volume' || target.kind === 'output-volume' ||
       target.kind === 'metronome-volume') return true;
   return target.kind === 'module-control' &&
-    target.control !== 'delay:tap' && !target.control.startsWith('rotary:speed:');
+    target.control !== 'delay:tap' && target.control !== 'rotary:toggle'
+    && !target.control.startsWith('rotary:speed:');
 }
 
 function normalizeCcMappingOptions(value: unknown): CcMappingOptions {
@@ -641,7 +642,7 @@ function isCcMappingKey(value: string): boolean {
   if (/^module-control:[1-8]:tranceGate:(gate|depth|attackMs|releaseMs|swing)$/.test(value)) return true;
   if (/^module-control:[1-8]:synth:sustain$/.test(value)) return false;
   if (/^module:[1-8]$/.test(value)) return true;
-  if (/^module-control:7:rotary:(slowHz|fastHz|rampSeconds|depth|mix|speed:(brake|slow|fast))$/.test(value)) return true;
+  if (/^module-control:7:rotary:(slowHz|fastHz|rampSeconds|depth|mix|toggle|speed:(brake|slow|fast))$/.test(value)) return true;
   if (/^module-control:7:organ:drawbar:[0-8]$/.test(value)) return true;
   if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|(compressor|reverb|delay|chorus|cutoffEnvelope):[A-Za-z]+|synth:[A-Za-z]+|arpeggiator:(octaves|gate|swing))$/.test(value)) return true;
   if (/^octave:[1-8]:(up|down)$/.test(value)) return true;
@@ -1115,6 +1116,7 @@ export class PlayerScreen {
   private logoutBusy = false;
   private pendingNoteLearn: PendingNoteLearn | null = null;
   private pendingBankEdit: BankId | null = null;
+  private pendingEffectBankEdit: EffectBankId | null = null;
   private moduleConfigCopySource: number | null = null;
   private suppressNextBankClick = false;
   private suppressNextModuleConfigClick = false;
@@ -1138,6 +1140,7 @@ export class PlayerScreen {
   // O visor flutuante do knob fica mais um instante depois que o dedo sai:
   // dá para soltar e voltar a arrastar sem recomeçar o gesto.
   private knobFocusHideTimer: number | null = null;
+  private knobFocusInput: HTMLInputElement | null = null;
   private tempoDrag: { button: HTMLButtonElement; pointerId: number; startY: number; startX: number;
     startBpm: number; moved: boolean; held: boolean } | null = null;
   private lastDelayTapAt: number | null = null;
@@ -1159,8 +1162,6 @@ export class PlayerScreen {
   private readonly metronomeFaderLearnGesture = new LongPressGesture(2_000);
   private readonly ccControlHoldGesture = new LongPressGesture();
   private readonly knobCcLearnGesture = new LongPressGesture(2_000, 8);
-  private readonly rotaryModulationValues = new Map<string | null, number>();
-  private lastRotaryModulationValue = 0;
   private readonly faderDoubleTap = new DoubleTapTracker();
   private lastKnobTap: { input: HTMLInputElement; time: number } | null = null;
   // Preset copiado pelo Copy, esperando o Paste. declinedTarget: o preset em
@@ -1264,6 +1265,9 @@ export class PlayerScreen {
   );
   private readonly effectPadStates = new Map<EffectBankId, EffectPadState[]>(
     EFFECT_BANK_IDS.map((bank) => [bank, createEffectPadStates()]),
+  );
+  private readonly effectBankNames = new Map<EffectBankId, string>(
+    EFFECT_BANK_IDS.map((bank) => [bank, `FX ${bank}`]),
   );
   private readonly bankStates = new Map<BankId, BankState>(
     BANK_IDS.map((bank) => [bank, createBankState(bank === 'A' ? 1 : null)]),
@@ -1439,7 +1443,12 @@ export class PlayerScreen {
       <div class="knob-focus" data-knob-focus aria-hidden="true">
         <div class="knob-focus__card">
           <strong data-knob-focus-label></strong>
-          <span class="knob-focus__face"><i></i></span>
+          <div class="knob-focus__controls">
+            <span class="knob-focus__face"><i></i></span>
+            <label class="knob-focus__fader" aria-label="Ajuste vertical do parâmetro">
+              <input type="range" min="0" max="100" step="1" value="0" data-knob-focus-fader>
+            </label>
+          </div>
           <output data-knob-focus-value></output>
         </div>
       </div>
@@ -2002,7 +2011,16 @@ export class PlayerScreen {
         return;
       }
       const bank = actionButton.dataset.effectBank;
-      if (this.isEffectBankId(bank)) this.selectEffectBank(bank);
+      if (this.isEffectBankId(bank)) {
+        if (this.effectEditMode) {
+          this.activeEffectBank = bank;
+          this.renderActiveEffectBank();
+          this.pendingEffectBankEdit = bank;
+          this.openModal('effect-bank-name', null, actionButton);
+        } else {
+          this.selectEffectBank(bank);
+        }
+      }
       return;
     }
 
@@ -2153,6 +2171,14 @@ export class PlayerScreen {
   private onRootInput(event: Event): void {
     const input = event.target;
     if (!(input instanceof HTMLInputElement)) return;
+    if (input.matches('[data-knob-focus-fader]')) {
+      const source = this.knobFocusInput;
+      if (!source?.isConnected || source.disabled) return;
+      source.value = input.value;
+      source.dispatchEvent(new Event('input', { bubbles: true }));
+      this.syncKnobFocus(source);
+      return;
+    }
     if (input.matches('[data-metronome-output-volume]')) {
       const position = Math.min(100, Math.max(0, Number(input.value)));
       if (!Number.isFinite(position)) return;
@@ -2852,6 +2878,12 @@ export class PlayerScreen {
       return;
     }
 
+    const rotaryToggleButton = target.closest<HTMLButtonElement>('[data-module-rotary-toggle]');
+    if (rotaryToggleButton && this.currentModalKind === 'module-settings' && this.currentModalModuleNumber === 7) {
+      this.openCcLearn(this.ccLearnTargetForRotaryToggle(), rotaryToggleButton);
+      return;
+    }
+
     const rotarySpeedButton = target.closest<HTMLButtonElement>('[data-module-rotary-speed]');
     const rotaryLearnTarget = rotarySpeedButton ? this.ccLearnTargetForRotarySpeed(rotarySpeedButton) : null;
     if (rotarySpeedButton && rotaryLearnTarget) {
@@ -2952,6 +2984,7 @@ export class PlayerScreen {
       this.activeEffectBank = effectBank;
       this.effectEditMode = !this.effectEditMode;
       this.renderActiveEffectBank();
+      this.setStatus(this.effectEditMode ? 'Modo de edição dos efeitos ativado.' : 'Modo de edição dos efeitos desativado.');
       return;
     }
 
@@ -3511,11 +3544,11 @@ export class PlayerScreen {
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="select-effect-bank"]')) {
       const isSelected = button.dataset.effectBank === this.activeEffectBank;
       button.classList.toggle('is-selected', isSelected);
-      button.classList.toggle(
-        'is-editing',
-        this.effectEditMode && button.dataset.effectBank === this.activeEffectBank,
-      );
+      button.classList.toggle('is-editing', this.effectEditMode);
       button.setAttribute('aria-pressed', String(isSelected));
+      const bank = button.dataset.effectBank;
+      const label = button.querySelector<HTMLElement>('span');
+      if (label && this.isEffectBankId(bank)) label.textContent = this.effectBankNames.get(bank) ?? `FX ${bank}`;
     }
     const effectsSection = this.root.querySelector<HTMLElement>('.performance-grid--effects')
       ?.closest<HTMLElement>('.performance-section');
@@ -4667,6 +4700,8 @@ export class PlayerScreen {
         const control = moduleControlMatch[2] ?? '';
         if (control === 'delay:tap') {
           if (risingEdge) this.tapMappedModuleDelay(moduleNumber);
+        } else if (moduleNumber === 7 && control === 'rotary:toggle') {
+          if (risingEdge) this.toggleModuleRotarySpeed();
         } else if (moduleNumber === 7 && control.startsWith('rotary:speed:')) {
           const speed = control.slice('rotary:speed:'.length);
           if (risingEdge && (speed === 'brake' || speed === 'slow' || speed === 'fast')) {
@@ -5240,6 +5275,16 @@ export class PlayerScreen {
               value="${escapeMarkup(bankState?.name || this.pendingBankEdit)}">
           </label>
           <button class="bank-name-editor__advanced" type="button" data-modal-action="open-bank-advanced">Advanced</button>
+        </section>
+      `;
+    } else if (kind === 'effect-bank-name' && this.pendingEffectBankEdit) {
+      bodyMarkup = `
+        <section class="preset-name-editor bank-name-editor">
+          <label class="preset-name-editor__field">
+            <span>Nome do FX</span>
+            <input type="text" maxlength="12" autocomplete="off" data-effect-bank-name-input
+              value="${escapeMarkup(this.effectBankNames.get(this.pendingEffectBankEdit) ?? `FX ${this.pendingEffectBankEdit}`)}">
+          </label>
         </section>
       `;
     } else if (kind === 'bank-advanced' && this.pendingBankEdit) {
@@ -5822,6 +5867,9 @@ export class PlayerScreen {
     } else if (kind === 'bank-name' && this.pendingBankEdit) {
       eyebrow.textContent = `Banco ${this.pendingBankEdit}`;
       title.textContent = 'Nome do banco';
+    } else if (kind === 'effect-bank-name' && this.pendingEffectBankEdit) {
+      eyebrow.textContent = `FX ${this.pendingEffectBankEdit}`;
+      title.textContent = 'Nome do FX';
     } else if (kind === 'bank-advanced' && this.pendingBankEdit) {
       eyebrow.textContent = `Banco ${this.pendingBankEdit}`;
       title.textContent = 'Advanced';
@@ -5971,8 +6019,11 @@ export class PlayerScreen {
         const modulationModeButton = target.closest<HTMLButtonElement>('[data-module-modulation-mode]');
         if (modulationModeButton) {
           const mode = modulationModeButton.dataset.moduleModulationMode;
-          if (mode === 'user' || mode === 'lfo' || mode === 'tremolo' || mode === 'pan') {
-            this.selectModuleModulationMode(modal, moduleNumber, mode);
+          if (mode === 'user' || mode === 'rotary' || mode === 'lfo' || mode === 'tremolo' || mode === 'pan') {
+            const nextMode = moduleNumber === 7 && mode === 'rotary'
+              && readModuleModulationMode(this.getActivePresetState()?.modules[6]?.settings ?? {}) === 'rotary'
+              ? 'user' : mode;
+            this.selectModuleModulationMode(modal, moduleNumber, nextMode);
           }
           return;
         }
@@ -5980,6 +6031,12 @@ export class PlayerScreen {
       if (target instanceof Element && this.suppressNextCcControlClick?.contains(target)) {
         this.suppressNextCcControlClick = null;
         event.stopPropagation();
+        return;
+      }
+      const rotaryToggleButton = kind === 'module-settings' && moduleNumber === 7 && target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-module-rotary-toggle]') : null;
+      if (rotaryToggleButton) {
+        this.toggleModuleRotarySpeed(modal);
         return;
       }
       const aboutTracksButton = kind === 'about' && target instanceof Element
@@ -6302,12 +6359,6 @@ export class PlayerScreen {
         ? target.closest<HTMLButtonElement>('[data-module-rotary-speed]') : null;
       if (pageKind() === 'module-rotary' && moduleNumber === 7 && rotarySpeedButton) {
         this.selectModuleRotarySpeed(modal, rotarySpeedButton);
-        return;
-      }
-      const rotaryModulationButton = target instanceof Element
-        ? target.closest<HTMLButtonElement>('[data-module-rotary-modulation]') : null;
-      if (pageKind() === 'module-rotary' && moduleNumber === 7 && rotaryModulationButton) {
-        this.toggleRotaryModulation();
         return;
       }
       const delayDivisionButton = target instanceof Element
@@ -6823,6 +6874,7 @@ export class PlayerScreen {
           this.commitPresetName(modal, moduleNumber);
         }
         if (modalAction === 'confirm' && kind === 'bank-name') this.commitBankName(modal);
+        if (modalAction === 'confirm' && kind === 'effect-bank-name') this.commitEffectBankName(modal);
         if (modalAction === 'confirm' && kind === 'effect-pad' && moduleNumber !== null) {
           this.commitEffectPad(modal, moduleNumber);
         }
@@ -7040,6 +7092,12 @@ export class PlayerScreen {
       });
     }
     if (kind === 'module-settings' && moduleNumber !== null) {
+      modal.addEventListener('pointerdown', (event) => {
+        const button = moduleNumber === 7 && event.target instanceof Element
+          ? event.target.closest<HTMLButtonElement>('[data-module-rotary-toggle]') : null;
+        if (!button || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        this.startCcControlLearn(event, button, this.ccLearnTargetForRotaryToggle(), true);
+      });
       modal.addEventListener('pointerdown', (event) => {
         const button = event.target instanceof Element
           ? event.target.closest<HTMLButtonElement>('button[data-module-setting-action="toggle-voice-mode"]')
@@ -7301,6 +7359,10 @@ export class PlayerScreen {
         const input = modal.querySelector<HTMLInputElement>('[data-bank-name-input]');
         if (input) this.tabletInputKeyboardController.openFor(input);
       }
+      if (kind === 'effect-bank-name') {
+        const input = modal.querySelector<HTMLInputElement>('[data-effect-bank-name-input]');
+        if (input) this.tabletInputKeyboardController.openFor(input);
+      }
     }
     if (kind === 'tracks') {
       this.tracksPanelController = new TracksPanelController(
@@ -7359,6 +7421,9 @@ export class PlayerScreen {
       preview.textContent = input.value;
     } else if (kind === 'bank-name') {
       const input = requiredElement<HTMLInputElement>(modal, '[data-bank-name-input]');
+      if (this.desktopRuntime) input.focus();
+    } else if (kind === 'effect-bank-name') {
+      const input = requiredElement<HTMLInputElement>(modal, '[data-effect-bank-name-input]');
       if (this.desktopRuntime) input.focus();
     } else if (kind === 'effect-pad') {
       const input = requiredElement<HTMLInputElement>(modal, '[data-effect-name-input]');
@@ -8778,9 +8843,15 @@ export class PlayerScreen {
     const card = modal.querySelector<HTMLElement>('[data-module-mod-card]');
     if (!moduleState || !card || readModuleModulationMode(moduleState.settings) === mode) return;
     moduleState.settings.modulationMode = mode;
+    if (moduleNumber === 7) {
+      const rotary = readModuleRotarySettings(moduleState.settings.rotary);
+      rotary.modulationEnabled = mode === 'rotary';
+      moduleState.settings.rotary = rotary;
+    }
     card.outerHTML = createModuleModulationCardMarkup(
-      moduleState.settings, moduleNumber === 8 ? 'synth' : 'sf2');
+      moduleState.settings, moduleNumber === 8 ? 'synth' : moduleNumber === 7 ? 'organ' : 'sf2');
     this.markPlayerStateChanged();
+    void this.syncNativeEngine();
   }
 
   // Drawbars do Hook B3: são faders. O dedo cai na calha e a barra vai para
@@ -8870,8 +8941,8 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
-  // Um clique curto e seco, só de referência: toca no lugar do timbre real
-  // quando o Drawbar Sound está desligado, um por estágio arrastado.
+  // O mesmo clique curto usado ao descer uma lista: toca no lugar do timbre
+  // real quando o Drawbar Sound está desligado, uma vez por estágio.
   private playOrganClick(volumeDb: number): void {
     try {
       const AudioContextClass = window.AudioContext
@@ -8882,16 +8953,17 @@ export class PlayerScreen {
       const now = context.currentTime;
       const oscillator = context.createOscillator();
       const gain = context.createGain();
-      oscillator.type = 'square';
-      oscillator.frequency.setValueAtTime(1_400, now);
-      const peak = 10 ** (volumeDb / 20);
-      gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(peak, now + 0.002);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+      oscillator.type = 'triangle';
+      oscillator.frequency.setValueAtTime(940, now);
+      const duration = 0.02;
+      const peak = 0.04 * (10 ** (volumeDb / 20));
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), now + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
       oscillator.connect(gain);
       gain.connect(context.destination);
       oscillator.start(now);
-      oscillator.stop(now + 0.06);
+      oscillator.stop(now + duration + 0.01);
     } catch {
       // Sem áudio de clique: os LEDs e o número já dão o feedback visual.
     }
@@ -9231,7 +9303,7 @@ export class PlayerScreen {
     } else this.lastKnobTap = null;
     // Enquanto o visor estiver na tela, encostar de novo continua o ajuste do
     // ponto onde parou, sem recomeçar o valor.
-    this.hideKnobFocus(900);
+    this.hideKnobFocus(drag.moved ? 900 : 3_000);
   }
 
   private defaultKnobValue(input: HTMLInputElement): number {
@@ -9282,11 +9354,30 @@ export class PlayerScreen {
     const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
     const knob = input.closest<HTMLElement>('.module-envelope-knob, .module-effect-knob, .player-output-knob');
     if (!overlay || !knob) return;
+    this.knobFocusInput = input;
     const label = knob.querySelector<HTMLElement>(':scope > span:not([class$="__face"])');
     const accent = getComputedStyle(knob).getPropertyValue('--knob-accent').trim();
     if (accent) overlay.style.setProperty('--knob-accent', accent);
     overlay.querySelector<HTMLElement>('[data-knob-focus-label]')!.textContent = label?.textContent?.trim() || input.ariaLabel || '';
+    const fader = overlay.querySelector<HTMLInputElement>('[data-knob-focus-fader]');
+    if (fader) {
+      fader.min = input.min;
+      fader.max = input.max;
+      fader.step = input.step;
+      fader.disabled = input.disabled;
+      fader.setAttribute('aria-label', input.ariaLabel || label?.textContent?.trim() || 'Parâmetro');
+      fader.onpointerdown = () => {
+        if (this.knobFocusHideTimer !== null) window.clearTimeout(this.knobFocusHideTimer);
+        this.knobFocusHideTimer = null;
+      };
+      fader.onchange = () => {
+        const source = this.knobFocusInput;
+        if (source?.isConnected) source.dispatchEvent(new Event('change', { bubbles: true }));
+        this.hideKnobFocus(1_200);
+      };
+    }
     overlay.classList.add('is-visible');
+    overlay.setAttribute('aria-hidden', 'false');
     this.syncKnobFocus(input);
   }
 
@@ -9296,6 +9387,11 @@ export class PlayerScreen {
     if (!overlay || !knob) return;
     overlay.style.setProperty('--knob-angle', getComputedStyle(knob).getPropertyValue('--knob-angle'));
     overlay.style.setProperty('--knob-progress', getComputedStyle(knob).getPropertyValue('--knob-progress'));
+    const fader = overlay.querySelector<HTMLInputElement>('[data-knob-focus-fader]');
+    if (fader) {
+      fader.value = input.value;
+      fader.setAttribute('aria-valuetext', input.getAttribute('aria-valuetext') || input.value);
+    }
     const sourceOutput = knob.querySelector<HTMLOutputElement>('output');
     overlay.querySelector<HTMLOutputElement>('[data-knob-focus-value]')!.value = sourceOutput?.value || input.getAttribute('aria-valuetext') || input.value;
   }
@@ -9308,12 +9404,16 @@ export class PlayerScreen {
     if (delayMs > 0) {
       this.knobFocusHideTimer = window.setTimeout(() => {
         this.knobFocusHideTimer = null;
-        this.root.querySelector<HTMLElement>('[data-knob-focus]')?.classList.remove('is-visible');
+        const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
+        overlay?.classList.remove('is-visible');
+        overlay?.setAttribute('aria-hidden', 'true');
       }, delayMs);
       return;
     }
     const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
     overlay?.classList.remove('is-visible');
+    overlay?.setAttribute('aria-hidden', 'true');
+    this.knobFocusInput = null;
   }
 
   private ccLearnTargetForKnob(input: HTMLInputElement, moduleNumber: number): CcLearnTarget | null {
@@ -9888,6 +9988,10 @@ export class PlayerScreen {
     return { kind: 'module-control', moduleNumber: 7, control: `rotary:speed:${speed}`, label: `Rotary ${speed === 'brake' ? 'Brake' : speed === 'fast' ? 'Fast' : 'Slow'}` };
   }
 
+  private ccLearnTargetForRotaryToggle(): CcLearnTarget {
+    return { kind: 'module-control', moduleNumber: 7, control: 'rotary:toggle', label: 'R-TG Slow/Fast' };
+  }
+
   private startRotarySpeedLearn(event: PointerEvent, button: HTMLButtonElement, target: CcLearnTarget): void {
     if (!event.isPrimary || this.desktopRuntime || (event.pointerType === 'mouse' && event.button !== 0)) return;
     this.knobCcLearnGesture.start(event, () => {
@@ -9899,7 +10003,7 @@ export class PlayerScreen {
     });
   }
 
-  private setModuleRotarySpeed(speed: 'brake' | 'slow' | 'fast', modal: HTMLElement | null = this.currentModalKind === 'module-rotary' ? this.modal : null): void {
+  private setModuleRotarySpeed(speed: 'brake' | 'slow' | 'fast', modal: HTMLElement | null = this.modal): void {
     // Índice 6 = módulo 7, o Organ — o único que o motor liga (ver
     // rotaryEnabled em performNativeEngineSync). Lia o índice 4 (módulo 5) e
     // os botões de velocidade não alcançavam o Leslie de verdade.
@@ -9914,41 +10018,33 @@ export class PlayerScreen {
       option.classList.toggle('is-selected', selected);
       option.setAttribute('aria-pressed', String(selected));
     }
-    if (changed) this.markPlayerStateChanged();
+    const toggle = modal?.querySelector<HTMLButtonElement>('[data-module-rotary-toggle]');
+    if (toggle) {
+      const fast = speed === 'fast';
+      toggle.classList.toggle('is-selected', fast);
+      toggle.setAttribute('aria-pressed', String(fast));
+    }
+    if (changed) {
+      this.markPlayerStateChanged();
+      this.scheduleNativeEngineSync();
+    }
+  }
+
+  private toggleModuleRotarySpeed(modal: HTMLElement | null = this.modal): void {
+    const moduleState = this.getActivePresetState()?.modules[6];
+    if (!moduleState) return;
+    const speed = readModuleRotarySettings(moduleState.settings.rotary).speed;
+    this.setModuleRotarySpeed(speed === 'fast' ? 'slow' : 'fast', modal);
   }
 
   private receiveRotaryModulation(value: number, inputId: string | null): void {
     const normalized = Math.round(Math.min(127, Math.max(0, value)));
-    this.rotaryModulationValues.set(inputId, normalized);
-    this.lastRotaryModulationValue = normalized;
     const moduleState = this.getActivePresetState()?.modules[6];
     if (!moduleState?.enabled || !moduleState.modulationInputEnabled
         || (inputId !== null && moduleState.midiInputId && moduleState.midiInputId !== inputId)) return;
-    if (readModuleRotarySettings(moduleState.settings.rotary).modulationEnabled) {
+    if (readModuleModulationMode(moduleState.settings) === 'rotary') {
       this.setModuleRotarySpeed(normalized >= 64 ? 'fast' : 'slow');
     }
-  }
-
-  private toggleRotaryModulation(): void {
-    const moduleState = this.getActivePresetState()?.modules[6];
-    if (!moduleState) return;
-    const settings = readModuleRotarySettings(moduleState.settings.rotary);
-    settings.modulationEnabled = !settings.modulationEnabled;
-    if (settings.modulationEnabled && moduleState.modulationInputEnabled) {
-      const value = moduleState.midiInputId
-        ? this.rotaryModulationValues.get(moduleState.midiInputId) ?? 0 : this.lastRotaryModulationValue;
-      settings.speed = value >= 64 ? 'fast' : 'slow';
-    }
-    moduleState.settings.rotary = settings;
-    const button = this.modal?.querySelector<HTMLButtonElement>('[data-module-rotary-modulation]');
-    if (button) {
-      button.classList.toggle('is-on', settings.modulationEnabled);
-      button.classList.toggle('is-off', !settings.modulationEnabled);
-      button.setAttribute('aria-pressed', String(settings.modulationEnabled));
-      button.textContent = `Modulation ${settings.modulationEnabled ? 'On' : 'Off'}`;
-    }
-    this.setModuleRotarySpeed(settings.speed);
-    this.markPlayerStateChanged();
   }
 
   private selectModuleDelayDivision(modal: HTMLElement, button: HTMLButtonElement, moduleNumber: number): void {
@@ -10380,6 +10476,16 @@ export class PlayerScreen {
     bank.name = input.value.trim().slice(0, 12) || this.pendingBankEdit;
     this.updateVisibleView();
     this.markPlayerStateChanged(false);
+  }
+
+  private commitEffectBankName(modal: HTMLElement): void {
+    if (!this.pendingEffectBankEdit) return;
+    const input = modal.querySelector<HTMLInputElement>('[data-effect-bank-name-input]');
+    if (!input) return;
+    const bank = this.pendingEffectBankEdit;
+    this.effectBankNames.set(bank, input.value.trim().slice(0, 12) || `FX ${bank}`);
+    this.renderActiveEffectBank();
+    this.markPlayerStateChanged();
   }
 
   private setBankFaderMode(bankId: BankId, mode: FaderBehaviorMode, modal: HTMLElement): void {
@@ -11435,7 +11541,8 @@ export class PlayerScreen {
           rotaryRampSeconds: rotary.rampSeconds,
           rotaryDepth: rotary.depth / 100,
           rotaryMix: rotary.mix / 100,
-          rotaryModulationEnabled: rotary.modulationEnabled,
+          rotaryModulationEnabled: moduleIndex === 6
+            && readModuleModulationMode(moduleState.settings) === 'rotary',
           chorusEnabled: chorus.enabled,
           chorusRateHz: chorus.rateHz,
           chorusDepth: chorus.depth / 100,
@@ -11535,6 +11642,9 @@ export class PlayerScreen {
       filterVelocityDefault: 'fixed-v1',
       moduleGlideDefault: 'ms-v1',
       modulationRateDefault: '6.85',
+      organTranceGateDefault: 'off-v1',
+      organModulationDefault: 'rotary-r-tg-v1',
+      moduleReverbDefault: 'room-v1',
       activeBank: this.activeBank,
       activePadBank: this.activePadBank,
       activeEffectBank: this.activeEffectBank,
@@ -11568,6 +11678,7 @@ export class PlayerScreen {
       ccMappings: Object.fromEntries(this.ccMappings),
       ccMappingOptions: Object.fromEntries(this.ccMappingOptions),
       padBankSelections: Object.fromEntries(this.padBankSelections),
+      effectBankNames: Object.fromEntries(this.effectBankNames),
       effectPads: Object.fromEntries(
         EFFECT_BANK_IDS.map((bank) => [bank, (this.effectPadStates.get(bank) ?? []).map((effect) => ({
           colorIndex: effect.colorIndex,
@@ -11593,6 +11704,9 @@ export class PlayerScreen {
     const migrateLegacyFilterVelocity = value.filterVelocityDefault !== 'fixed-v1';
     const migrateModuleGlidePower = value.moduleGlideDefault !== 'ms-v1';
     const migrateModulationRate = value.modulationRateDefault !== '6.85';
+    const migrateOrganTranceGate = value.organTranceGateDefault !== 'off-v1';
+    const migrateOrganModulation = value.organModulationDefault !== 'rotary-r-tg-v1';
+    const migrateModuleReverbRoom = value.moduleReverbDefault !== 'room-v1';
     const savedSeenSoundIds = Array.isArray(value.seenSoundIds) ? value.seenSoundIds : [];
     this.seenSoundIds = new Set(savedSeenSoundIds.filter((id): id is string => typeof id === 'string'));
     const savedMidiInputIds = Array.isArray(value.midiInputIds) ? value.midiInputIds : [];
@@ -11698,6 +11812,13 @@ export class PlayerScreen {
     }
     if (this.isEffectBankId(asString(value.activeEffectBank))) {
       this.activeEffectBank = asString(value.activeEffectBank) as EffectBankId;
+    }
+    const savedEffectBankNames = isRecord(value.effectBankNames) ? value.effectBankNames : {};
+    for (const effectBank of EFFECT_BANK_IDS) {
+      const name = typeof savedEffectBankNames[effectBank] === 'string'
+        ? savedEffectBankNames[effectBank].trim().slice(0, 12)
+        : '';
+      this.effectBankNames.set(effectBank, name || `FX ${effectBank}`);
     }
 
     const savedSelections = isRecord(value.padBankSelections) ? value.padBankSelections : {};
@@ -11824,6 +11945,37 @@ export class PlayerScreen {
             // O Rate do card Mod nascia em 7,55 Hz; o padrão agora é 6,85 Hz.
             if (migrateModulationRate && Number(restoredSettings.modulationRateHz) === 7.55) {
               restoredSettings.modulationRateHz = DEFAULT_MODULE_MODULATION_RATE_HZ;
+            }
+            // O Organ chegou a ser salvo com o Pulse ligado por padrão. Desliga
+            // uma única vez nos estados antigos; depois a escolha do usuário é
+            // preservada pelo marcador organTranceGateDefault.
+            if (migrateOrganTranceGate && moduleIndex === 6) {
+              restoredSettings.tranceGate = {
+                ...readTranceGateSettings(restoredSettings.tranceGate),
+                enabled: false,
+              };
+            }
+            // O seletor Mod do Organ substituiu User por Rotary. Estados
+            // antigos que ainda estavam no padrão User entram no Rotary; as
+            // escolhas explícitas LFO/Tremolo/Pan permanecem intactas.
+            if (moduleIndex === 6) {
+              if (migrateOrganModulation
+                  && (readModuleModulationMode(restoredSettings) === 'user'
+                    || readModuleModulationMode(restoredSettings) === 'lfo')) {
+                restoredSettings.modulationMode = 'rotary';
+              }
+              const organRotary = readModuleRotarySettings(restoredSettings.rotary);
+              organRotary.modulationEnabled = readModuleModulationMode(restoredSettings) === 'rotary';
+              restoredSettings.rotary = organRotary;
+            }
+            // Somente o antigo Reverb de fábrica vira Room. Configurações que o
+            // usuário já personalizou continuam exatamente como estavam.
+            if (migrateModuleReverbRoom) {
+              const reverb = readModuleReverbSettings(restoredSettings.reverb);
+              const wasLegacyFactory = reverb.enabled && reverb.decay === 10
+                && reverb.dampen === 50 && reverb.mod === 0
+                && reverb.size === 0 && reverb.mix === 50;
+              if (wasLegacyFactory) restoredSettings.reverb = { ...FACTORY_MODULE_REVERB };
             }
             // O Velocity do Cutoff já nasceu em Middle. Com o Cutoff em 20 kHz
             // isso fechava o filtro nas notas fracas (~650 Hz em velocity 64) e
@@ -12078,18 +12230,24 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
     voiceMode: 'poly',
     glideMs: DEFAULT_MODULE_GLIDE_MS,
     glideSync: false,
-    // Todo módulo nasce com a roda Mod em User e com o Reverb de fábrica; o
-    // módulo 5 nasce com o Rotary ligado.
-    modulationMode: 'user',
+    // O Organ nasce com a roda em Rotary; os demais módulos começam em User.
+    modulationMode: moduleIndex === 6 ? 'rotary' : 'user',
     modulationRateHz: DEFAULT_MODULE_MODULATION_RATE_HZ,
     velocityLimit: 127,
     velocityCeiling: 127,
     reverb: { ...FACTORY_MODULE_REVERB },
-    rotary: { ...readModuleRotarySettings(undefined), enabled: moduleIndex === 6 },
+    rotary: {
+      ...readModuleRotarySettings(undefined),
+      enabled: moduleIndex === 6,
+      modulationEnabled: moduleIndex === 6,
+    },
     synth: factorySynthPreset(1),
     synthPresets: FACTORY_SYNTH_PRESETS.map((preset) => ({ ...preset })),
     synthActivePreset: 1,
-    tranceGate: readTranceGateSettings(undefined),
+    tranceGate: {
+      ...readTranceGateSettings(undefined),
+      enabled: moduleIndex !== 6,
+    },
     arpeggiator: { ...DEFAULT_ARPEGGIATOR_SETTINGS },
     velocityCurve: {
       ...velocityCurve,

@@ -88,6 +88,21 @@ try {
     'os cinco knobs principais ficam sem barras entre eles');
   assert(!root.querySelector('[data-action="open-tracks"]'), 'a Playlist saiu do topo');
   assert.equal(root.querySelectorAll('.player-module').length, 8, 'mantém os oito módulos');
+  const factoryModules = player.getActivePresetState().modules;
+  assert.equal(factoryModules[6].settings.tranceGate.enabled, false,
+    'o Trance Gate do Organ nasce desligado');
+  assert.equal(
+    JSON.stringify(factoryModules.map((module) => {
+      const reverb = module.settings.reverb;
+      return [reverb.decay, reverb.dampen, reverb.size];
+    })),
+    JSON.stringify(Array.from({ length: 8 }, () => [1.2, 62, 18])),
+    'o Reverb de fábrica nasce no ambiente Room em todos os módulos',
+  );
+  assert.equal(factoryModules[6].settings.modulationMode, 'rotary',
+    'a roda Mod do Organ nasce em Rotary');
+  assert.equal(factoryModules[6].settings.rotary.modulationEnabled, true,
+    'o Rotary do Organ responde à roda Mod sem um segundo botão On/Off');
   assert.deepEqual(
     [...root.querySelectorAll('.keyboard-expression__track i b')].map((label) => label.textContent),
     ['H', 'K'],

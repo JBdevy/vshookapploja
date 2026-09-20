@@ -147,6 +147,32 @@ void testModuleDualMonoOutputRouting() {
       "an individual output always receives the L+R mono mix");
 }
 
+void testPerModuleOutputLimiter() {
+  StereoSignalSynth synth;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &synth;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig config;
+  config.gainLinear = 2.0f;
+  expect(engine.setModuleConfig(0, config), "configure a hot module for limiter test");
+
+  constexpr float ceiling = 0.97723722096f; // -0.2 dBFS
+  std::array<float, 1024> output{};
+  engine.renderInterleaved(output.data(), output.size() / 2, 2);
+  const auto peak = *std::max_element(output.begin(), output.end());
+  expect(peak <= ceiling + 0.000001f,
+      "each module is limited internally to -0.2 dBFS after its fader");
+  expect(output[output.size() - 1] > ceiling - 0.0001f,
+      "the module limiter reaches the configured ceiling instead of clipping lower");
+  expect(std::abs(output[output.size() - 2] * 3.0f - output[output.size() - 1]) < 0.0001f,
+      "the linked stereo limiter preserves the module's L/R image");
+
+  std::array<float, 256> left{}, right{};
+  engine.render(left.data(), right.data(), left.size());
+  expect(*std::max_element(right.begin(), right.end()) <= ceiling + 0.000001f,
+      "the planar render path uses the same per-module -0.2 dBFS limiter");
+}
+
 void testRangeAndOctaveRouting() {
   RecordingSynth first;
   RecordingSynth second;
@@ -722,6 +748,26 @@ void testNativeRuntimeSignalPath() {
   const auto mutedEnergy = std::accumulate(left.begin(), left.end(), 0.0,
                                            [](double sum, float sample) { return sum + std::abs(sample); });
   expect(mutedEnergy == 0.0, "native runtime maps the minimum fader position to silence");
+}
+
+void testNativeRuntimeOrganDrawbars() {
+  hook_keys::NativeEngineRuntime runtime(48000.0, 128);
+  for (std::size_t index = 0; index < 9; ++index) {
+    const auto path = "assets/hook-b3/drawbar-" + std::to_string(index) + ".sf2";
+    expect(runtime.loadOrganVoice(index, path.c_str()), "native runtime loads every Organ drawbar SF2");
+    runtime.setOrganDrawbarPosition(index, index == 0 ? 8 : 0);
+  }
+  hook_keys::ModuleConfig config;
+  config.midiInputSlot = hook_keys::kAllMidiInputs;
+  expect(runtime.setModuleConfig(6, config), "native runtime enables the Organ module");
+  expect(runtime.sendMidi(0, 0x90, 60, 127), "native runtime queues an Organ note");
+
+  std::array<float, 4096> left{};
+  std::array<float, 4096> right{};
+  runtime.render(left.data(), right.data(), left.size());
+  const auto energy = std::accumulate(left.begin(), left.end(), 0.0,
+                                      [](double sum, float sample) { return sum + std::abs(sample); });
+  expect(energy > 0.001, "a pulled Organ drawbar produces audio through module 7");
 }
 
 void testCompatibilityBlocksCc7() {
@@ -2772,6 +2818,10 @@ void testNewSoftNoteDoesNotFilterHeldChord() {
             modules[0] = synths[i].get();
             engines[i] = std::make_unique<hook_keys::HookKeysEngine>(modules);
             hook_keys::ModuleConfig config;
+            // Este teste mede linearidade entre vozes, não o limiter final do
+            // módulo. Mantenha a soma abaixo de -0,2 dBFS para isolar o DSP
+            // de velocity/filtro que ele realmente verifica.
+            config.gainLinear = 0.25f;
             config.effects.cutoff.velocityCurve = {0, 32, 64, 96, 127};
             // Fixed amplitude separates filter modulation from the deliberately
             // quieter amplitude of a soft note.
@@ -2844,6 +2894,7 @@ int main() {
   testUnityGainAnalysisAndSmoothing();
   testGlobalTranspose();
   testModuleDualMonoOutputRouting();
+  testPerModuleOutputLimiter();
   testRangeAndOctaveRouting();
   testKeyboardBroadcastRouting();
   testPatternGeneratorRouting();
@@ -2862,6 +2913,7 @@ int main() {
   testSameSoundFontRunsIndependentlyAcrossModules();
   testDefaultVolumeEnvelopes();
   testNativeRuntimeSignalPath();
+  testNativeRuntimeOrganDrawbars();
   testIndependentPresetTails();
   testCompatibilityBlocksCc7();
   testSharedSoundFontEnvelopeIsolation();

@@ -6,6 +6,9 @@ final class HookKeysBridgeViewController: CAPBridgeViewController {
     // entra no modo de auto-registro. Esta instância explícita garante que a
     // ponte HookKeysNative exista também no IPA instalado.
     private let hookKeysNativePlugin = HookKeysNativePlugin()
+    // A sessão precisa da mesma inscrição explícita. Sem ela o JavaScript cai
+    // no fallback em memória e o usuário precisa entrar novamente ao reabrir.
+    private let sessionVaultPlugin = SessionVaultPlugin()
 
     override var prefersStatusBarHidden: Bool { true }
 
@@ -19,5 +22,6 @@ final class HookKeysBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
         bridge?.registerPluginInstance(hookKeysNativePlugin)
+        bridge?.registerPluginInstance(sessionVaultPlugin)
     }
 }

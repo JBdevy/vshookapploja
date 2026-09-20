@@ -13,6 +13,13 @@ assert(shell.includes('id="applePeerConnectBtn"'), 'Botão manual de conexão di
 assert(shell.includes("discoverApplePeers({ timeoutMs: 4500 })"), 'Descoberta Apple manual ausente')
 assert(shell.includes("transport: 'apple-peer'"), 'Projetos diretos não identificam o transporte')
 assert(shell.includes("project.transport === 'apple-peer'"), 'Monitor LAN não ignora transporte direto')
+const directConnect = shell.slice(
+  shell.indexOf('async function connectVshookApplePeer'),
+  shell.indexOf('function renderVshookApplePeerChoices'))
+assert(directConnect.indexOf('`${directorUrl}/projects`') < directConnect.indexOf('`${directorUrl}/state`'),
+  'Conexão Apple deve consultar /projects antes do estado auxiliar')
+assert(!directConnect.includes('`${directorUrl}/discovery`'),
+  'Conexão Apple não pode depender do /discovery da rede Wi-Fi comum')
 assert(!/discoverProjectsFromActiveNetwork[\s\S]{0,600}discoverApplePeers/.test(shell),
   'Conexão direta não pode ser fallback automático da busca Wi-Fi')
 

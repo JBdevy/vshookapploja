@@ -2871,10 +2871,20 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .pads-effects-view {
   display: grid;
-  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 0.82fr) minmax(0, 1.18fr);
   gap: clamp(8px, 1.4vh, 16px);
   min-width: 0;
   min-height: 0;
+}
+
+.performance-section--effects {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.pad-bank-selector--effects {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows: minmax(28px, auto);
 }
 
 .performance-section {
@@ -3068,11 +3078,31 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .pad-bank-button.is-editing {
+  position: relative;
+  overflow: visible;
   color: #211500;
   border-color: #ffe677;
   background: linear-gradient(180deg, #ffd84d, #d99c0a);
   box-shadow: 0 0 14px rgba(255, 205, 54, 0.4);
   animation: effect-edit-pulse 900ms ease-in-out infinite;
+}
+
+.pad-bank-button.is-editing::after {
+  position: absolute;
+  z-index: 3;
+  top: 1px;
+  left: 50%;
+  padding: 1px 4px;
+  color: #2a1800;
+  border-radius: 3px;
+  background: #ffd84d;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35);
+  content: "EDIT";
+  font-size: clamp(5px, 0.62vw, 8px);
+  font-weight: 950;
+  letter-spacing: 0.07em;
+  transform: translate(-50%, -58%);
+  pointer-events: none;
 }
 
 @keyframes effect-edit-pulse {
@@ -3684,12 +3714,35 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   box-shadow: 0 22px 60px rgba(0, 0, 0, .7), 0 0 30px color-mix(in srgb, var(--knob-accent) 22%, transparent);
   transform: scale(.58);
   transition: transform 150ms cubic-bezier(.2, .9, .2, 1.2);
+  pointer-events: auto;
 }
 
 .knob-focus.is-visible .knob-focus__card { transform: scale(1); }
 .knob-focus__card strong { color: #fff; font-size: 18px; }
 .knob-focus__face { width: 118px; border-width: 8px; }
 .knob-focus__card output { color: var(--knob-accent); font-size: 16px; font-weight: 950; }
+.knob-focus__controls {
+  display: grid;
+  grid-template-columns: 118px 34px;
+  align-items: center;
+  gap: 22px;
+}
+.knob-focus__fader {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 118px;
+}
+.knob-focus__fader input {
+  width: 34px;
+  height: 118px;
+  margin: 0;
+  accent-color: var(--knob-accent);
+  cursor: ns-resize;
+  direction: rtl;
+  writing-mode: vertical-lr;
+  touch-action: none;
+}
 
 .module-envelope-control:nth-of-type(1) .module-envelope-knob { --knob-accent: #ff5c5c; }
 .module-envelope-control:nth-of-type(2) .module-envelope-knob { --knob-accent: #ff9f2f; }
@@ -11036,6 +11089,16 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
     border-radius: 7px;
   }
 
+  .player-screen--tablet .performance-section--effects {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .player-screen--tablet .pad-bank-selector--effects {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-rows: minmax(20px, auto);
+  }
+
   .player-screen--tablet .performance-section__header p {
     font-size: 5px;
   }
@@ -11617,11 +11680,11 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 }
 
 .player-screen--tablet .track-transport {
-  border-color: rgba(42, 183, 255, .68);
+  border-color: rgba(255, 59, 92, .72);
   background:
-    radial-gradient(circle at 12% 0, rgba(49, 198, 255, .22), transparent 44%),
-    linear-gradient(145deg, #113653, #081725 56%, #090b13);
-  box-shadow: inset 0 1px rgba(166, 230, 255, .15), 0 6px 18px rgba(0,0,0,.32);
+    radial-gradient(circle at 12% 0, rgba(255, 59, 92, .24), transparent 44%),
+    linear-gradient(145deg, #531122, #25080f 56%, #13090c);
+  box-shadow: inset 0 1px rgba(255, 166, 184, .16), 0 6px 18px rgba(0,0,0,.32);
 }
 
 .player-screen--tablet .player-next-field {

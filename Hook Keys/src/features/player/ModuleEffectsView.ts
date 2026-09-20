@@ -89,10 +89,10 @@ const DEFAULT_REVERB: ModuleReverbSettings = {
 // Reverb com que todo módulo nasce (e para onde o Reset do Reverb volta).
 export const FACTORY_MODULE_REVERB: ModuleReverbSettings = {
   enabled: true,
-  decay: 10,
-  dampen: 50,
+  decay: 1.2,
+  dampen: 62,
   mod: 0,
-  size: 0,
+  size: 18,
   mix: 50,
 };
 
@@ -325,9 +325,6 @@ export function createModuleRotaryMarkup(settings: Readonly<Record<string, unkno
     <section class="module-effect-editor module-rotary-editor" data-module-effect-editor="rotary">
       <div class="module-rotary-speed" role="group" aria-label="Velocidade do Rotary">
         ${(['brake', 'slow', 'fast'] as const).map((speed) => `<button type="button" data-module-rotary-speed="${speed}" class="${value.speed === speed ? 'is-selected' : ''}" aria-pressed="${value.speed === speed}">${speed === 'brake' ? 'Brake' : speed === 'slow' ? 'Slow' : 'Fast'}</button>`).join('')}
-      </div>
-      <div class="module-rotary-modulation-row">
-        <button type="button" class="module-effect-power module-rotary-modulation ${value.modulationEnabled ? 'is-on' : 'is-off'}" data-module-rotary-modulation aria-pressed="${value.modulationEnabled}">Modulation ${value.modulationEnabled ? 'On' : 'Off'}</button>
       </div>
       <div class="module-effect-controls module-effect-controls--rotary">
         ${controls.map((item) => createEffectKnob('rotary', item)).join('')}

@@ -550,13 +550,13 @@ test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () =>
   assert.match(css, /\.player-modal--module-synth \.synth-editor__identity \{\s*display: none;/);
 });
 
-test('módulos nascem com Reverb de fábrica, Mod em User e o 5 com Rotary', () => {
+test('módulos nascem com Reverb Room e o Organ com Rotary ligado à roda Mod', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const effects = readFileSync(new URL('../src/features/player/ModuleEffectsView.ts', import.meta.url), 'utf8');
-  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 10,\s*dampen: 50,\s*mod: 0,\s*size: 0,\s*mix: 50,/);
-  assert.match(player, /modulationMode: 'user',/);
+  assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 1\.2,\s*dampen: 62,\s*mod: 0,\s*size: 18,\s*mix: 50,/);
+  assert.match(player, /modulationMode: moduleIndex === 6 \? 'rotary' : 'user',/);
   assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB \},/);
-  assert.match(player, /rotary: \{ \.\.\.readModuleRotarySettings\(undefined\), enabled: moduleIndex === 6 \},/);
+  assert.match(player, /enabled: moduleIndex === 6,\s*modulationEnabled: moduleIndex === 6,/);
 });
 
 test('knobs andam nos dois sentidos, um eixo por gesto, sem o salto nativo do range do iOS', () => {

@@ -72,7 +72,7 @@ test('Rotary and Chorus stack below Compressor, and the compressor has no previe
     'o Synth troca Poly/Mono no próprio editor');
 });
 
-test('Rotary defaults to OFF/Slow, validates ranges and preserves presets/backups', () => {
+test('Rotary defaults to OFF/Slow, validates ranges and no longer duplicates Modulation On/Off', () => {
   assert.equal(effects.readModuleRotarySettings(undefined).enabled, false);
   assert.equal(effects.readModuleRotarySettings(undefined).speed, 'slow');
   assert.equal(effects.readModuleRotarySettings(undefined).modulationEnabled, false);
@@ -87,8 +87,8 @@ test('Rotary defaults to OFF/Slow, validates ranges and preserves presets/backup
   assert.equal(effects.readModuleRotarySettings({ mix: 30 }).mix, 100);
   assert.match(markup, /data-module-rotary-speed="fast" class="is-selected" aria-pressed="true"/);
   assert.match(markup, /module-effect-knob__face/);
-  assert.match(markup, /module-rotary-modulation is-on" data-module-rotary-modulation aria-pressed="true">Modulation On/);
-  assert.match(effects.createModuleRotaryMarkup({}), /module-rotary-modulation is-off" data-module-rotary-modulation aria-pressed="false">Modulation Off/);
+  assert.doesNotMatch(markup, /data-module-rotary-modulation|Modulation On|Modulation Off/);
+  assert.doesNotMatch(effects.createModuleRotaryMarkup({}), /data-module-rotary-modulation/);
   assert.equal(effects.formatModuleEffectValue('rotary', 'fastHz', 6.4), '6.40 Hz');
   assert.equal(effects.formatModuleEffectValue('rotary', 'rampSeconds', 1.2), '1.2 s');
 });
@@ -115,9 +115,9 @@ test('real Rotary handlers update module 5, retain parameters through ON/OFF and
     classList: { toggle(_name, value) { this.value = value; } },
     setAttribute(_name, value) { this.pressed = value; },
   }));
-  const modal = { querySelectorAll: () => buttons };
+  const modal = { querySelectorAll: () => buttons, querySelector: () => null };
   let changes = 0;
-  Object.assign(screen, { getActivePresetState: () => ({ modules }), markPlayerStateChanged: () => changes++, root: {}, setStatus() {}, openModal(kind, number) { this.opened = [kind, number]; }, syncNativeEngine: async () => {}, currentModalKind: 'module-rotary' });
+  Object.assign(screen, { getActivePresetState: () => ({ modules }), markPlayerStateChanged: () => changes++, root: {}, setStatus() {}, openModal(kind, number) { this.opened = [kind, number]; }, syncNativeEngine: async () => {}, scheduleNativeEngineSync() {}, currentModalKind: 'module-rotary' });
   screen.selectModuleRotarySpeed(modal, buttons[2]);
   assert.equal(modules[6].settings.rotary.speed, 'fast');
   assert.deepEqual(buttons.map((button) => button.pressed), ['false', 'false', 'true']);
@@ -179,30 +179,32 @@ test('clicking Room, Hall or Stage replaces the reverb page instead of nesting a
   window.close();
 });
 
-test('Modulation toggle persists; CC 1 updates the correct module only at Slow/Fast crossings; mapped buttons use press edges', () => {
+test('M-RT pode desligar a roda; R-TG e CC 1 mantêm Slow/Fast sincronizados sem conflito', () => {
   const { Handlers, isCcMappingKey } = loadPlayerHandlers([
-    'toggleRotaryModulation', 'receiveRotaryModulation', 'setModuleRotarySpeed', 'mappedCcRatio', 'handleMidiControlChange',
-  ]);
+    'toggleModuleRotarySpeed', 'receiveRotaryModulation', 'setModuleRotarySpeed', 'mappedCcRatio', 'handleMidiControlChange',
+  ], {
+    readModuleModulationMode: (settings) => ['lfo', 'tremolo', 'pan', 'rotary'].includes(settings.modulationMode)
+      ? settings.modulationMode : 'user',
+  });
   const screen = new Handlers();
   const modules = Array.from({ length: 8 }, () => ({ enabled: true, modulationInputEnabled: true, midiInputId: 'midi-1', settings: {} }));
-  const power = { classes: new Map(), classList: { toggle(name, value) { power.classes.set(name, value); } }, setAttribute(name, value) { this[name] = value; } };
+  const toggle = { classes: new Map(), classList: { toggle(name, value) { toggle.classes.set(name, value); } }, setAttribute(name, value) { this[name] = value; } };
   const speeds = ['brake', 'slow', 'fast'].map((speed) => ({ dataset: { moduleRotarySpeed: speed }, classList: { toggle() {} }, setAttribute(name, value) { this[name] = value; } }));
   let changes = 0;
   Object.assign(screen, {
-    modal: { querySelector: () => power, querySelectorAll: () => speeds }, currentModalKind: 'module-rotary',
-    liveMidiEnabled: true,
-    rotaryModulationValues: new Map(), lastRotaryModulationValue: 0, lastCcValues: new Map(), ccMappings: new Map(),
+    modal: { querySelector: () => toggle, querySelectorAll: () => speeds }, currentModalKind: 'module-settings',
+    liveMidiEnabled: true, compatibilityMode: false, pendingCcLearn: null,
+    lastCcValues: new Map(), ccMappings: new Map(),
     ccMappingOptions: new Map(),
     getActivePresetState: () => ({ modules }), markPlayerStateChanged: () => changes++,
+    scheduleNativeEngineSync() {},
   });
   screen.receiveRotaryModulation(127, 'midi-1');
-  assert.equal(changes, 0, 'Modulation OFF never changes manual speed');
-  screen.toggleRotaryModulation();
-  assert.equal(power.textContent, 'Modulation On');
-  assert.equal(power.classes.get('is-on'), true);
-  assert.equal(power.classes.get('is-off'), false);
-  assert.equal(modules[6].settings.rotary.speed, 'fast', 'enabling uses the last selected MIDI Mod value');
-  assert.equal(JSON.parse(JSON.stringify(modules[6].settings)).rotary.modulationEnabled, true);
+  assert.equal(changes, 0, 'M-RT apagado não deixa a roda alterar o Rotary');
+  modules[6].settings.modulationMode = 'rotary';
+  screen.receiveRotaryModulation(127, 'midi-1');
+  assert.equal(modules[6].settings.rotary.speed, 'fast', 'M-RT aceso liga a roda ao Rotary');
+  assert.equal(toggle.classes.get('is-selected'), true, 'R-TG acompanha Fast recebido pela roda');
   screen.handleMidiControlChange({ controller: 1, value: 0, inputId: 'other-midi' });
   assert.equal(modules[6].settings.rotary.speed, 'fast', 'different assigned device cannot alter Rotary');
   screen.handleMidiControlChange({ controller: 1, value: 63, inputId: 'midi-1' });
@@ -215,12 +217,12 @@ test('Modulation toggle persists; CC 1 updates the correct module only at Slow/F
   assert.deepEqual(speeds.map((button) => button['aria-pressed']), ['false', 'false', 'true']);
   screen.handleMidiControlChange({ controller: 1, value: 0, inputId: null });
   assert.equal(modules[6].settings.rotary.speed, 'slow', 'virtual keyboard Mod broadcast controls Rotary');
-  screen.toggleRotaryModulation();
-  assert.equal(power.textContent, 'Modulation Off');
-  assert.equal(power.classes.get('is-on'), false);
-  assert.equal(power.classes.get('is-off'), true);
+  modules[6].settings.modulationMode = 'pan';
   screen.handleMidiControlChange({ controller: 1, value: 127, inputId: 'midi-1' });
-  assert.equal(modules[6].settings.rotary.speed, 'slow');
+  assert.equal(modules[6].settings.rotary.speed, 'slow', 'Pan impede a roda Mod de mudar a Leslie');
+  screen.toggleModuleRotarySpeed();
+  assert.equal(modules[6].settings.rotary.speed, 'fast', 'R-TG continua alternando a Leslie com Pan ativo');
+  assert.equal(toggle.classes.get('is-selected'), true);
   for (const [index, speed] of ['brake', 'fast', 'slow'].entries()) {
     const key = `module-control:7:rotary:speed:${speed}`;
     assert(isCcMappingKey(key), `${key} survives saved state / backup validation`);
@@ -233,6 +235,7 @@ test('Modulation toggle persists; CC 1 updates the correct module only at Slow/F
     assert.equal(changes, pressedChanges, 'releasing the mapped MIDI button never reverses the selection');
   }
   assert(isCcMappingKey('module-control:7:rotary:depth'));
+  assert(isCcMappingKey('module-control:7:rotary:toggle'));
   assert(!isCcMappingKey('module-control:7:rotary:speed:invalid'));
   assert(!isCcMappingKey('module-control:4:rotary:speed:slow'));
 });

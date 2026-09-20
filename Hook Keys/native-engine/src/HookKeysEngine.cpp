@@ -17,6 +17,8 @@ constexpr std::uint8_t kModulationController = 1;
 constexpr std::uint8_t kSustainController = 64;
 constexpr std::uint8_t kAllSoundOffController = 120;
 constexpr std::uint8_t kAllNotesOffController = 123;
+constexpr float kModuleLimiterCeiling = 0.97723722096f; // -0.2 dBFS
+constexpr float kModuleLimiterReleaseSeconds = 0.08f;
 
 std::uint8_t applyVelocityCurve(
     std::uint8_t velocity, const std::array<std::uint8_t, 5>& curve) noexcept {
@@ -41,6 +43,9 @@ HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
   currentModuleGains_.fill(1.0f);
   moduleGainSteps_.fill(0.0f);
   moduleGainRampFrames_.fill(0);
+  moduleLimiterGains_.fill(1.0f);
+  moduleLimiterRelease_ = 1.0f - std::exp(
+      -1.0f / (static_cast<float>(settings_.sampleRate) * kModuleLimiterReleaseSeconds));
   scratchLeft_.resize(settings_.maximumBlockFrames);
   scratchRight_.resize(settings_.maximumBlockFrames);
   for (auto& processor : effects_) {
@@ -114,7 +119,10 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
       auto* synth = modules_[index];
       if (synth == nullptr) continue;
       if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
-          !effects_[index].requiresSilentProcessing()) continue;
+          !effects_[index].requiresSilentProcessing()) {
+        moduleLimiterGains_[index] = 1.0f;
+        continue;
+      }
       std::fill_n(scratchLeft_.data(), blockFrames, 0.0f);
       std::fill_n(scratchRight_.data(), blockFrames, 0.0f);
       synth->renderAdd(scratchLeft_.data(), scratchRight_.data(), blockFrames, 1.0f);
@@ -126,12 +134,15 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
       float rightPeak = 0.0f;
       for (std::size_t frame = 0; frame < blockFrames; ++frame) {
         const auto gain = nextModuleGain(index);
-        leftPeak = std::max(leftPeak, std::abs(scratchLeft_[frame] * gain));
-        rightPeak = std::max(rightPeak, std::abs(scratchRight_[frame] * gain));
-        left[rendered + frame] += scratchLeft_[frame] * gain;
-        right[rendered + frame] += scratchRight_[frame] * gain;
-        scratchLeft_[frame] *= gain;
-        scratchRight_[frame] *= gain;
+        auto sampleLeft = scratchLeft_[frame] * gain;
+        auto sampleRight = scratchRight_[frame] * gain;
+        applyModuleLimiter(index, sampleLeft, sampleRight);
+        leftPeak = std::max(leftPeak, std::abs(sampleLeft));
+        rightPeak = std::max(rightPeak, std::abs(sampleRight));
+        left[rendered + frame] += sampleLeft;
+        right[rendered + frame] += sampleRight;
+        scratchLeft_[frame] = sampleLeft;
+        scratchRight_[frame] = sampleRight;
       }
       publishModulePeak(index, leftPeak, rightPeak);
     }
@@ -154,7 +165,10 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
       const auto& config = configs_[index];
       if (synth == nullptr || config.outputChannelStart >= channels) continue;
       if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
-          !effects_[index].requiresSilentProcessing()) continue;
+          !effects_[index].requiresSilentProcessing()) {
+        moduleLimiterGains_[index] = 1.0f;
+        continue;
+      }
       std::fill_n(scratchLeft_.data(), blockFrames, 0.0f);
       std::fill_n(scratchRight_.data(), blockFrames, 0.0f);
       synth->renderAdd(scratchLeft_.data(), scratchRight_.data(), blockFrames, 1.0f);
@@ -168,8 +182,9 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
       float rightPeak = 0.0f;
       for (std::size_t frame = 0; frame < blockFrames; ++frame) {
         const auto gain = nextModuleGain(index);
-        const auto sampleLeft = scratchLeft_[frame] * gain;
-        const auto sampleRight = scratchRight_[frame] * gain;
+        auto sampleLeft = scratchLeft_[frame] * gain;
+        auto sampleRight = scratchRight_[frame] * gain;
+        applyModuleLimiter(index, sampleLeft, sampleRight);
         auto* destination = output + (rendered + frame) * channels;
         leftPeak = std::max(leftPeak, std::abs(sampleLeft));
         rightPeak = std::max(rightPeak, std::abs(sampleRight));
@@ -255,6 +270,27 @@ float HookKeysEngine::nextModuleGain(std::size_t index) noexcept {
     }
   }
   return currentModuleGains_[index];
+}
+
+void HookKeysEngine::applyModuleLimiter(
+    std::size_t index, float& left, float& right) noexcept {
+  const auto peak = std::max(std::abs(left), std::abs(right));
+  auto& limiterGain = moduleLimiterGains_[index];
+  const auto requiredGain = peak > kModuleLimiterCeiling
+      ? kModuleLimiterCeiling / peak
+      : 1.0f;
+
+  if (requiredGain < limiterGain) {
+    // Ataque instantâneo: nenhum pico do módulo ultrapassa -0,2 dBFS.
+    limiterGain = requiredGain;
+  } else {
+    limiterGain += (1.0f - limiterGain) * moduleLimiterRelease_;
+    // Durante a soltura, um novo pico continua respeitando o teto.
+    limiterGain = std::min(limiterGain, requiredGain);
+  }
+
+  left *= limiterGain;
+  right *= limiterGain;
 }
 
 void HookKeysEngine::setModuleGainTarget(std::size_t index, float target) noexcept {
