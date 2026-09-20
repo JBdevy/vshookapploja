@@ -447,7 +447,7 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
   if (control.startsWith('synth:')) {
     const parameter = control.slice('synth:'.length);
     const ranges: Record<string, readonly [number, number]> = {
-      oscillator1Volume: [0, 100], oscillator2Volume: [0, 100], detuneCents: [-100, 100],
+      oscillator1Volume: [0, 100], oscillator2Volume: [0, 100], oscillator3Volume: [0, 100], detuneCents: [-100, 100],
       attackMs: [0, 15_000], holdMs: [0, 15_000], decayMs: [0, 25_000], releaseMs: [0, 25_000],
       filterCutoffHz: [20, 20_000], filterResonance: [0, 98], filterEnvelope: [-100, 100],
       lfoRateHz: [0.05, 30], lfoDepth: [0, 100], glideMs: [0, 5_000],
@@ -457,7 +457,7 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
     const value = parameter === 'filterCutoffHz'
       ? 20 * (1_000 ** progress)
       : range[0] + (range[1] - range[0]) * progress;
-    if (parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume') {
+    if (parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume' || parameter === 'oscillator3Volume') {
       return formatOscillatorVolume(value);
     }
     if (parameter.endsWith('Ms')) return formatEnvelopeTime(value);
@@ -651,7 +651,7 @@ function isCcMappingKey(value: string): boolean {
   if (/^output:(music|pads|effects|master)$/.test(value)) return true;
   if (value === 'metronome:volume' || value === 'metronome:tap' || value === 'metronome:toggle') return true;
   if (/^pad:[ABCD]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
-  if (/^effect:[1-4]:([1-9]|1[0-2])$/.test(value)) return true;
+  if (/^effect:[1-8]:([1-9]|1[0-2])$/.test(value)) return true;
   return /^preset:[A-F]:([1-9]|1[0-6])$/.test(value);
 }
 
@@ -949,7 +949,7 @@ function createBankState(selectedPreset: number | null = null): BankState {
         timbreColor: null,
         volumeDb: 0,
         settings: createDefaultModuleSettings(moduleIndex),
-        settingsMode: moduleIndex < 7 ? 'default' : 'user',
+        settingsMode: moduleIndex < 6 ? 'default' : 'user',
         userSettings: null,
       })),
     })),
@@ -4001,8 +4001,18 @@ export class PlayerScreen {
     for (const bank of this.bankStates.values()) {
       for (const preset of bank.presets) {
         preset.modules.forEach((moduleState, index) => {
-          if (index < 7 && moduleState.settingsMode === 'default') {
+          if (index < 6 && moduleState.settingsMode === 'default') {
             moduleState.settings = this.defaultSettingsForModule(index + 1, moduleState);
+          } else if (index === 6) {
+            const factory = createDefaultModuleSettings(index);
+            if (JSON.stringify(moduleState.settings) === JSON.stringify(factory)) {
+              moduleState.settings = mergeSettings(factory, this.soundCatalog.defaultSettings.organ);
+            }
+          } else if (index === 7) {
+            const factory = createDefaultModuleSettings(index);
+            if (JSON.stringify(moduleState.settings) === JSON.stringify(factory)) {
+              moduleState.settings = mergeSettings(factory, this.soundCatalog.defaultSettings.synth);
+            }
           }
         });
       }
@@ -4016,7 +4026,7 @@ export class PlayerScreen {
     mode: ModuleSettingsMode,
   ): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
-    if (!moduleState || moduleNumber < 1 || moduleNumber > 7 || moduleState.settingsMode === mode) return;
+    if (!moduleState || moduleNumber < 1 || moduleNumber > 6 || moduleState.settingsMode === mode) return;
     if (mode === 'default') {
       moduleState.userSettings = cloneSettings(moduleState.settings);
       moduleState.settings = this.defaultSettingsForModule(moduleNumber, moduleState);
@@ -4104,12 +4114,12 @@ export class PlayerScreen {
     if (!parameter || !moduleState) return;
     const settings = readSynthSettings(moduleState.settings.synth);
     const value = updateSynthRangeOutput(input);
-    if (parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume' || parameter === 'detuneCents'
+    if (parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume' || parameter === 'oscillator3Volume' || parameter === 'detuneCents'
         || parameter === 'attackMs' || parameter === 'holdMs' || parameter === 'decayMs'
         || parameter === 'releaseMs' || parameter === 'filterCutoffHz'
         || parameter === 'filterResonance' || parameter === 'filterEnvelope'
         || parameter === 'lfoRateHz' || parameter === 'lfoDepth' || parameter === 'glideMs'
-        || parameter === 'oscillator1VelocityLimit' || parameter === 'oscillator2VelocityLimit') {
+        || parameter === 'oscillator1VelocityLimit' || parameter === 'oscillator2VelocityLimit' || parameter === 'oscillator3VelocityLimit') {
       settings[parameter] = value;
       moduleState.settings.synth = settings;
       this.markPlayerStateChanged();
@@ -4118,7 +4128,7 @@ export class PlayerScreen {
 
   private shiftSynthOctave(
     modal: HTMLElement,
-    parameter: 'oscillator1Octave' | 'oscillator2Octave',
+    parameter: 'oscillator1Octave' | 'oscillator2Octave' | 'oscillator3Octave',
     direction: -1 | 1,
   ): void {
     const moduleState = this.getActivePresetState()?.modules[7];
@@ -4142,7 +4152,7 @@ export class PlayerScreen {
 
   private selectSynthOscillator(
     modal: HTMLElement,
-    parameter: 'oscillator1' | 'oscillator2',
+    parameter: 'oscillator1' | 'oscillator2' | 'oscillator3',
     oscillator: SynthOscillator,
   ): void {
     const moduleState = this.getActivePresetState()?.modules[7];
@@ -4160,7 +4170,7 @@ export class PlayerScreen {
 
   private toggleSynthOscillator(
     button: HTMLButtonElement,
-    parameter: 'oscillator1Enabled' | 'oscillator2Enabled',
+    parameter: 'oscillator1Enabled' | 'oscillator2Enabled' | 'oscillator3Enabled',
   ): void {
     const moduleState = this.getActivePresetState()?.modules[7];
     if (!moduleState) return;
@@ -4171,7 +4181,8 @@ export class PlayerScreen {
     button.classList.toggle('is-off', !settings[parameter]);
     button.textContent = settings[parameter] ? 'ON' : 'OFF';
     button.setAttribute('aria-pressed', String(settings[parameter]));
-    button.setAttribute('aria-label', `${settings[parameter] ? 'Desativar' : 'Ativar'} ${parameter === 'oscillator1Enabled' ? 'OSC 1' : 'OSC 2'}`);
+    const oscillator = parameter === 'oscillator1Enabled' ? 1 : parameter === 'oscillator2Enabled' ? 2 : 3;
+    button.setAttribute('aria-label', `${settings[parameter] ? 'Desativar' : 'Ativar'} OSC ${oscillator}`);
     this.markPlayerStateChanged();
   }
 
@@ -6206,12 +6217,30 @@ export class PlayerScreen {
           this.loadSynthPreset(modal, synthPreset);
           return;
         }
+        const oscillatorTab = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-synth-oscillator-tab]') : null;
+        if (oscillatorTab) {
+          const selectedTab = Number(oscillatorTab.dataset.synthOscillatorTab);
+          if (selectedTab >= 1 && selectedTab <= 3) {
+            for (const button of modal.querySelectorAll<HTMLButtonElement>('[data-synth-oscillator-tab]')) {
+              const selected = Number(button.dataset.synthOscillatorTab) === selectedTab;
+              button.classList.toggle('is-selected', selected);
+              button.setAttribute('aria-selected', String(selected));
+            }
+            for (const page of modal.querySelectorAll<HTMLElement>('[data-synth-oscillator-page]')) {
+              const selected = Number(page.dataset.synthOscillatorPage) === selectedTab;
+              page.hidden = !selected;
+              page.classList.toggle('is-selected', selected);
+            }
+          }
+          return;
+        }
         const oscillatorPowerButton = target instanceof Element
           ? target.closest<HTMLButtonElement>('[data-synth-oscillator-power]')
           : null;
         const oscillatorPower = oscillatorPowerButton?.dataset.synthOscillatorPower;
         if (oscillatorPowerButton
-            && (oscillatorPower === 'oscillator1Enabled' || oscillatorPower === 'oscillator2Enabled')) {
+            && (oscillatorPower === 'oscillator1Enabled' || oscillatorPower === 'oscillator2Enabled' || oscillatorPower === 'oscillator3Enabled')) {
           this.toggleSynthOscillator(oscillatorPowerButton, oscillatorPower);
           return;
         }
@@ -6220,7 +6249,7 @@ export class PlayerScreen {
         if (octaveButton) {
           const parameter = octaveButton.dataset.synthOctave;
           const direction = Number(octaveButton.dataset.synthOctaveDirection);
-          if ((parameter === 'oscillator1Octave' || parameter === 'oscillator2Octave')
+          if ((parameter === 'oscillator1Octave' || parameter === 'oscillator2Octave' || parameter === 'oscillator3Octave')
               && (direction === -1 || direction === 1)) {
             this.shiftSynthOctave(modal, parameter, direction);
           }
@@ -6231,7 +6260,7 @@ export class PlayerScreen {
           : null;
         if (oscillatorButton?.dataset.synthOscillator) {
           const [parameter, oscillator] = oscillatorButton.dataset.synthOscillator.split(':');
-          if ((parameter === 'oscillator1' || parameter === 'oscillator2')
+          if ((parameter === 'oscillator1' || parameter === 'oscillator2' || parameter === 'oscillator3')
               && (oscillator === 'sine' || oscillator === 'saw' || oscillator === 'square' || oscillator === 'triangle')) {
             this.selectSynthOscillator(modal, parameter, oscillator);
           }
@@ -9497,6 +9526,7 @@ export class PlayerScreen {
       const ranges: Record<string, readonly [number, number]> = {
         oscillator1Volume: [0, 100],
         oscillator2Volume: [0, 100],
+        oscillator3Volume: [0, 100],
         detuneCents: [-100, 100],
         attackMs: [0, 15_000],
         holdMs: [0, 15_000],
@@ -11416,10 +11446,11 @@ export class PlayerScreen {
         configurationTasks.push(hookKeysNative.configureVelocityLimits(moduleIndex === 7 && synthSettings
           ? { moduleIndex, ignoreAbove: 127, ceiling: 127,
               oscillator1Limit: synthSettings.oscillator1VelocityLimit,
-              oscillator2Limit: synthSettings.oscillator2VelocityLimit }
+              oscillator2Limit: synthSettings.oscillator2VelocityLimit,
+              oscillator3Limit: synthSettings.oscillator3VelocityLimit }
           : { moduleIndex, ignoreAbove: readVelocityLimit(moduleState.settings.velocityLimit),
               ceiling: readVelocityLimit(moduleState.settings.velocityCeiling),
-              oscillator1Limit: 127, oscillator2Limit: 127 }));
+              oscillator1Limit: 127, oscillator2Limit: 127, oscillator3Limit: 127 }));
         configurationTasks.push(hookKeysNative.configureGlide({
           moduleIndex,
           portamento: readGlideMode(glideSource) === 'portamento',
@@ -11431,12 +11462,15 @@ export class PlayerScreen {
           configurationTasks.push(hookKeysNative.configureSynth({
             oscillator1: synthOscillatorIndex(synthSettings.oscillator1),
             oscillator2: synthOscillatorIndex(synthSettings.oscillator2),
+            oscillator3: synthOscillatorIndex(synthSettings.oscillator3),
             oscillator1Enabled: synthSettings.oscillator1Enabled,
             oscillator2Enabled: synthSettings.oscillator2Enabled,
+            oscillator3Enabled: synthSettings.oscillator3Enabled,
             voiceMode: synthSettings.voiceMode === 'poly' ? 0 : synthSettings.legato ? 2 : 1,
             lfoTarget: synthLfoTargetIndex(synthSettings.lfoTarget),
             oscillator1Volume: oscillatorVolumeGain(synthSettings.oscillator1Volume),
             oscillator2Volume: oscillatorVolumeGain(synthSettings.oscillator2Volume),
+            oscillator3Volume: oscillatorVolumeGain(synthSettings.oscillator3Volume),
             detuneCents: synthSettings.detuneCents,
             attackMs: synthSettings.attackMs,
             holdMs: synthSettings.holdMs,
@@ -11454,6 +11488,7 @@ export class PlayerScreen {
             ),
             oscillator1Octave: synthSettings.oscillator1Octave,
             oscillator2Octave: synthSettings.oscillator2Octave,
+            oscillator3Octave: synthSettings.oscillator3Octave,
           }));
         } else {
           configurationTasks.push(hookKeysNative.configureModuleEnvelope({
@@ -12011,7 +12046,7 @@ export class PlayerScreen {
               timbreColor: moduleIndex === 7 ? null : normalizeSoundColor(source.timbreColor),
               volumeDb: boundedNumber(source.volumeDb, MODULE_FADER_MIN_DB, 6, module.volumeDb),
               settings: restoredSettings,
-              settingsMode: moduleIndex < 7 && source.settingsMode !== 'user' ? 'default' : 'user',
+              settingsMode: moduleIndex < 6 && source.settingsMode !== 'user' ? 'default' : 'user',
               userSettings: isRecord(source.userSettings) ? cloneSettings(source.userSettings) : null,
             };
           }),

@@ -662,9 +662,9 @@ test('Default bloqueia parâmetros, orienta mudar para User e o timbre só fecha
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(view, /data-module-settings-mode="default"/);
   assert.match(view, /data-module-settings-mode="user"/);
-  assert.match(player, /settingsMode: moduleIndex < 7 \? 'default' : 'user'/,
-    'os módulos 1–7 nascem em Default no app e no desktop');
-  assert.match(player, /moduleIndex < 7 && source\.settingsMode !== 'user' \? 'default' : 'user'/,
+  assert.match(player, /settingsMode: moduleIndex < 6 \? 'default' : 'user'/,
+    'os módulos 1–6 nascem em Default; Organ e Synth não expõem User');
+  assert.match(player, /moduleIndex < 6 && source\.settingsMode !== 'user' \? 'default' : 'user'/,
     'um estado sem escolha explícita também restaura em Default');
   const modeSelection = /private setModuleSettingsMode[\s\S]*?private defaultSettingsForModule/.exec(player)?.[0] ?? '';
   assert.match(modeSelection, /mode === 'default'[\s\S]*?moduleState\.userSettings = cloneSettings\(moduleState\.settings\)/,

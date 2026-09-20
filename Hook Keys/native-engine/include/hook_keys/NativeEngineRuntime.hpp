@@ -67,7 +67,8 @@ public:
   // Modules 0-6: Limite Velocity and limiter. Module 7 (Synth): per-oscillator limits.
   [[nodiscard]] bool setVelocityLimits(
       std::size_t moduleIndex, std::uint8_t ignoreAbove, std::uint8_t ceiling,
-      std::uint8_t oscillator1Limit = 127, std::uint8_t oscillator2Limit = 127) noexcept;
+      std::uint8_t oscillator1Limit = 127, std::uint8_t oscillator2Limit = 127,
+      std::uint8_t oscillator3Limit = 127) noexcept;
   [[nodiscard]] bool setTempo(float bpm) noexcept;
   [[nodiscard]] bool setGlobalTranspose(int semitones) noexcept;
   void setMetronome(

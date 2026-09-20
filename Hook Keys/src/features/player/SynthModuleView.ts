@@ -14,14 +14,17 @@ export type SynthLfoTarget = 'pitch' | 'filter' | 'volume';
 export interface SynthModuleSettings {
   oscillator1: SynthOscillator;
   oscillator2: SynthOscillator;
+  oscillator3: SynthOscillator;
   oscillator1Enabled: boolean;
   oscillator2Enabled: boolean;
+  oscillator3Enabled: boolean;
   voiceMode: SynthVoiceMode;
   legato: boolean;
   // No Sens: the key velocity does not change the Synth volume.
   noVelocitySensitivity: boolean;
   oscillator1Volume: number;
   oscillator2Volume: number;
+  oscillator3Volume: number;
   detuneCents: number;
   attackMs: number;
   holdMs: number;
@@ -42,21 +45,26 @@ export interface SynthModuleSettings {
   glideVelocityThreshold: number;
   oscillator1Octave: number;
   oscillator2Octave: number;
+  oscillator3Octave: number;
   // Limite de velocity de cada OSC: acima dele, aquele oscilador não soa.
   oscillator1VelocityLimit: number;
   oscillator2VelocityLimit: number;
+  oscillator3VelocityLimit: number;
 }
 
 export const DEFAULT_SYNTH_SETTINGS: Readonly<SynthModuleSettings> = Object.freeze({
   oscillator1: 'saw',
   oscillator2: 'square',
+  oscillator3: 'saw',
   oscillator1Enabled: true,
   oscillator2Enabled: true,
+  oscillator3Enabled: true,
   voiceMode: 'mono',
   legato: true,
   noVelocitySensitivity: true,
   oscillator1Volume: 100,
   oscillator2Volume: 100,
+  oscillator3Volume: 100,
   detuneCents: 7,
   attackMs: 0,
   holdMs: 15000,
@@ -77,8 +85,10 @@ export const DEFAULT_SYNTH_SETTINGS: Readonly<SynthModuleSettings> = Object.free
   glideVelocityThreshold: DEFAULT_GLIDE_VELOCITY_THRESHOLD,
   oscillator1Octave: 0,
   oscillator2Octave: 0,
+  oscillator3Octave: 0,
   oscillator1VelocityLimit: 127,
   oscillator2VelocityLimit: 127,
+  oscillator3VelocityLimit: 127,
 });
 
 export const SYNTH_PRESET_COUNT = 5;
@@ -89,6 +99,7 @@ const FACTORY_PRESET_BASE: Readonly<SynthModuleSettings> = Object.freeze({
   ...DEFAULT_SYNTH_SETTINGS,
   oscillator1Enabled: true,
   oscillator2Enabled: true,
+  oscillator3Enabled: true,
   detuneCents: 0,
   holdMs: 15000,
   decayMs: 25000,
@@ -100,6 +111,7 @@ const FACTORY_PRESET_BASE: Readonly<SynthModuleSettings> = Object.freeze({
   glideSync: false,
   oscillator1Octave: 0,
   oscillator2Octave: 0,
+  oscillator3Octave: 0,
 });
 
 export const FACTORY_SYNTH_PRESETS: readonly Readonly<SynthModuleSettings>[] = Object.freeze([
@@ -164,10 +176,13 @@ export function readSynthSettings(value: unknown): SynthModuleSettings {
   return {
     oscillator1: isOscillator(source.oscillator1) ? source.oscillator1 : DEFAULT_SYNTH_SETTINGS.oscillator1,
     oscillator2: isOscillator(source.oscillator2) ? source.oscillator2 : DEFAULT_SYNTH_SETTINGS.oscillator2,
+    oscillator3: isOscillator(source.oscillator3) ? source.oscillator3 : DEFAULT_SYNTH_SETTINGS.oscillator3,
     oscillator1Enabled: typeof source.oscillator1Enabled === 'boolean'
       ? source.oscillator1Enabled : DEFAULT_SYNTH_SETTINGS.oscillator1Enabled,
     oscillator2Enabled: typeof source.oscillator2Enabled === 'boolean'
       ? source.oscillator2Enabled : DEFAULT_SYNTH_SETTINGS.oscillator2Enabled,
+    oscillator3Enabled: typeof source.oscillator3Enabled === 'boolean'
+      ? source.oscillator3Enabled : DEFAULT_SYNTH_SETTINGS.oscillator3Enabled,
     voiceMode: source.voiceMode === 'poly' ? 'poly' : 'mono',
     legato: typeof source.legato === 'boolean' ? source.legato : DEFAULT_SYNTH_SETTINGS.legato,
     noVelocitySensitivity: typeof source.noVelocitySensitivity === 'boolean'
@@ -176,6 +191,7 @@ export function readSynthSettings(value: unknown): SynthModuleSettings {
       legacyMix !== null && source.oscillator2Enabled !== false ? 100 - legacyMix : DEFAULT_SYNTH_SETTINGS.oscillator1Volume),
     oscillator2Volume: bounded(source.oscillator2Volume, 0, 100,
       legacyMix !== null && source.oscillator1Enabled !== false ? legacyMix : DEFAULT_SYNTH_SETTINGS.oscillator2Volume),
+    oscillator3Volume: bounded(source.oscillator3Volume, 0, 100, DEFAULT_SYNTH_SETTINGS.oscillator3Volume),
     detuneCents: bounded(source.detuneCents, -100, 100, DEFAULT_SYNTH_SETTINGS.detuneCents),
     attackMs: bounded(source.attackMs, 0, 15000, DEFAULT_SYNTH_SETTINGS.attackMs),
     holdMs: bounded(source.holdMs, 0, 15000, DEFAULT_SYNTH_SETTINGS.holdMs),
@@ -196,8 +212,10 @@ export function readSynthSettings(value: unknown): SynthModuleSettings {
     glideVelocityThreshold: glideVelocity.threshold,
     oscillator1Octave: Math.round(bounded(source.oscillator1Octave, -3, 3, 0)),
     oscillator2Octave: Math.round(bounded(source.oscillator2Octave, -3, 3, 0)),
+    oscillator3Octave: Math.round(bounded(source.oscillator3Octave, -3, 3, 0)),
     oscillator1VelocityLimit: Math.round(bounded(source.oscillator1VelocityLimit, 0, 127, 127)),
     oscillator2VelocityLimit: Math.round(bounded(source.oscillator2VelocityLimit, 0, 127, 127)),
+    oscillator3VelocityLimit: Math.round(bounded(source.oscillator3VelocityLimit, 0, 127, 127)),
   };
 }
 
@@ -211,7 +229,11 @@ export function createSynthModuleMarkup(
   return `
     <section class="synth-editor" data-synth-editor>
       <header class="synth-editor__header">
-        <div class="synth-editor__identity"><span>Sintetizador</span><strong>Dual Oscillator Synth</strong></div>
+        <nav class="synth-oscillator-tabs" role="tablist" aria-label="Osciladores">
+          ${([1, 2, 3] as const).map((oscillator) => `<button type="button" role="tab"
+            data-synth-oscillator-tab="${oscillator}" aria-selected="${oscillator === 1}"
+            class="${oscillator === 1 ? 'is-selected' : ''}">OSC ${oscillator}</button>`).join('')}
+        </nav>
         <div class="synth-editor__header-controls">
           <div class="synth-preset-group">
             ${Array.from({ length: SYNTH_PRESET_COUNT }, (_, index) => {
@@ -226,10 +248,23 @@ export function createSynthModuleMarkup(
         </div>
       </header>
       <div class="synth-editor__grid">
-        ${oscillatorCard('OSC 1', 'oscillator1', settings.oscillator1, settings.oscillator1Enabled, settings.oscillator1VelocityLimit)}
-        ${oscillatorCard('OSC 2', 'oscillator2', settings.oscillator2, settings.oscillator2Enabled, settings.oscillator2VelocityLimit)}
-        ${rangeCard('Volume OSC 1', 'oscillator1Volume', settings.oscillator1Volume, 0, 100, 1, formatOscillatorVolume(settings.oscillator1Volume))}
-        ${rangeCard('Volume OSC 2', 'oscillator2Volume', settings.oscillator2Volume, 0, 100, 1, formatOscillatorVolume(settings.oscillator2Volume))}
+        ${([1, 2, 3] as const).map((oscillator) => {
+          const prefix = `oscillator${oscillator}` as 'oscillator1' | 'oscillator2' | 'oscillator3';
+          const enabled = `${prefix}Enabled` as 'oscillator1Enabled' | 'oscillator2Enabled' | 'oscillator3Enabled';
+          const volume = `${prefix}Volume` as 'oscillator1Volume' | 'oscillator2Volume' | 'oscillator3Volume';
+          const velocity = `${prefix}VelocityLimit` as 'oscillator1VelocityLimit' | 'oscillator2VelocityLimit' | 'oscillator3VelocityLimit';
+          const octave = `${prefix}Octave` as 'oscillator1Octave' | 'oscillator2Octave' | 'oscillator3Octave';
+          return `<section class="synth-oscillator-page${oscillator === 1 ? ' is-selected' : ''}" data-synth-oscillator-page="${oscillator}"${oscillator === 1 ? '' : ' hidden'}>
+            ${oscillatorCard(`OSC ${oscillator}`, prefix, settings[prefix], settings[enabled], settings[velocity])}
+            ${rangeCard(`Volume OSC ${oscillator}`, volume, settings[volume], 0, 100, 1, formatOscillatorVolume(settings[volume]))}
+            <article class="synth-card synth-card--octaves">
+              <div class="synth-octave-row"><span>OSC ${oscillator} <strong data-synth-octave-value="${octave}">${settings[octave] > 0 ? '+' : ''}${settings[octave]}</strong></span>
+                <button class="${settings[octave] < 0 ? 'is-selected' : ''}" type="button" data-synth-octave="${octave}" data-synth-octave-direction="-1" aria-pressed="${settings[octave] < 0}" ${settings[octave] <= -3 ? 'disabled' : ''}>OCT −</button>
+                <button class="${settings[octave] > 0 ? 'is-selected' : ''}" type="button" data-synth-octave="${octave}" data-synth-octave-direction="1" aria-pressed="${settings[octave] > 0}" ${settings[octave] >= 3 ? 'disabled' : ''}>OCT +</button>
+              </div>
+            </article>
+          </section>`;
+        }).join('')}
         ${rangeCard('Detune', 'detuneCents', settings.detuneCents, -100, 100, 1, `${Math.round(settings.detuneCents)} cent`)}
         ${rangeCard('Attack', 'attackMs', settings.attackMs, 0, 15000, 1, formatMs(settings.attackMs))}
         ${rangeCard('Hold', 'holdMs', settings.holdMs, 0, 15000, 1, formatMs(settings.holdMs))}
@@ -247,15 +282,6 @@ export function createSynthModuleMarkup(
         ${rangeCard('LFO Rate', 'lfoRateHz', settings.lfoRateHz, 0.05, 30, 0.05, `${settings.lfoRateHz.toFixed(2)} Hz`)}
         ${rangeCard('LFO Depth', 'lfoDepth', settings.lfoDepth, 0, 100, 1, `${Math.round(settings.lfoDepth)}%`)}
         ${createGlideCardMarkup(settings as unknown as Readonly<Record<string, unknown>>, bpm, 'synth')}
-        <article class="synth-card synth-card--octaves">
-          ${(['oscillator1Octave', 'oscillator2Octave'] as const).map((parameter, index) => `
-            <div class="synth-octave-row">
-              <span>OSC ${index + 1} <strong data-synth-octave-value="${parameter}">${settings[parameter] > 0 ? '+' : ''}${settings[parameter]}</strong></span>
-              <button class="${settings[parameter] < 0 ? 'is-selected' : ''}" type="button" data-synth-octave="${parameter}" data-synth-octave-direction="-1" aria-pressed="${settings[parameter] < 0}" aria-label="Diminuir oitava do OSC ${index + 1}" ${settings[parameter] <= -3 ? 'disabled' : ''}>OCT −</button>
-              <button class="${settings[parameter] > 0 ? 'is-selected' : ''}" type="button" data-synth-octave="${parameter}" data-synth-octave-direction="1" aria-pressed="${settings[parameter] > 0}" aria-label="Aumentar oitava do OSC ${index + 1}" ${settings[parameter] >= 3 ? 'disabled' : ''}>OCT +</button>
-            </div>
-          `).join('')}
-        </article>
       </div>
     </section>
   `;
@@ -274,11 +300,11 @@ export function updateSynthRangeOutput(input: HTMLInputElement): number {
     : 0;
   knob?.style.setProperty('--knob-angle', `${-135 + progress * 270}deg`);
   knob?.style.setProperty('--knob-progress', String(progress));
-  const formatted = parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume' ? formatOscillatorVolume(value)
+  const formatted = parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume' || parameter === 'oscillator3Volume' ? formatOscillatorVolume(value)
       : parameter === 'filterCutoffHz' ? formatHz(value)
       : parameter === 'attackMs' || parameter === 'holdMs' || parameter === 'decayMs'
         || parameter === 'releaseMs' || parameter === 'glideMs' ? formatMs(value)
-        : parameter === 'oscillator1VelocityLimit' || parameter === 'oscillator2VelocityLimit' ? `${Math.round(value)}`
+        : parameter === 'oscillator1VelocityLimit' || parameter === 'oscillator2VelocityLimit' || parameter === 'oscillator3VelocityLimit' ? `${Math.round(value)}`
         : parameter === 'detuneCents' ? `${Math.round(value)} cent`
           : parameter === 'lfoRateHz' ? `${value.toFixed(2)} Hz`
             : `${Math.round(value)}%`;
@@ -298,7 +324,7 @@ export function synthLfoTargetIndex(value: SynthLfoTarget): number {
 
 function oscillatorCard(
   label: string,
-  parameter: 'oscillator1' | 'oscillator2',
+  parameter: 'oscillator1' | 'oscillator2' | 'oscillator3',
   selected: SynthOscillator,
   enabled: boolean,
   velocityLimit: number,

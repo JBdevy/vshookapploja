@@ -123,6 +123,7 @@ export interface NativeVelocityLimitsConfig {
   ceiling: number;
   oscillator1Limit: number;
   oscillator2Limit: number;
+  oscillator3Limit: number;
 }
 
 export interface NativePickedAudioFile {
@@ -162,12 +163,15 @@ export interface NativeTranceGateConfig {
 export interface NativeSynthConfig {
   oscillator1: number;
   oscillator2: number;
+  oscillator3: number;
   oscillator1Enabled: boolean;
   oscillator2Enabled: boolean;
+  oscillator3Enabled: boolean;
   voiceMode: number;
   lfoTarget: number;
   oscillator1Volume: number;
   oscillator2Volume: number;
+  oscillator3Volume: number;
   detuneCents: number;
   attackMs: number;
   holdMs: number;
@@ -182,6 +186,7 @@ export interface NativeSynthConfig {
   glideMs: number;
   oscillator1Octave: number;
   oscillator2Octave: number;
+  oscillator3Octave: number;
 }
 
 export interface NativeOrganConfig {
@@ -593,6 +598,7 @@ class HookKeysNativeBridge {
       ceiling: limit(config.ceiling),
       oscillator1Limit: limit(config.oscillator1Limit),
       oscillator2Limit: limit(config.oscillator2Limit),
+      oscillator3Limit: limit(config.oscillator3Limit),
     };
     const key = JSON.stringify(normalized);
     if (this.velocityLimitKeys[config.moduleIndex] === key) return;

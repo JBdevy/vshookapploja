@@ -662,7 +662,8 @@ public class HookKeysNativePlugin extends Plugin {
                 Math.max(0, Math.min(127, call.getInt("ignoreAbove", 127))),
                 Math.max(0, Math.min(127, call.getInt("ceiling", 127))),
                 Math.max(0, Math.min(127, call.getInt("oscillator1Limit", 127))),
-                Math.max(0, Math.min(127, call.getInt("oscillator2Limit", 127))))) call.resolve();
+                Math.max(0, Math.min(127, call.getInt("oscillator2Limit", 127))),
+                Math.max(0, Math.min(127, call.getInt("oscillator3Limit", 127))))) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
     }
 
@@ -687,12 +688,15 @@ public class HookKeysNativePlugin extends Plugin {
         boolean ok = nativeConfigureSynth(
             Math.max(0, Math.min(3, call.getInt("oscillator1", 1))),
             Math.max(0, Math.min(3, call.getInt("oscillator2", 2))),
+            Math.max(0, Math.min(3, call.getInt("oscillator3", 1))),
             call.getBoolean("oscillator1Enabled", true),
             call.getBoolean("oscillator2Enabled", true),
+            call.getBoolean("oscillator3Enabled", true),
             Math.max(0, Math.min(2, call.getInt("voiceMode", 1))),
             Math.max(0, Math.min(2, call.getInt("lfoTarget", 1))),
             call.getFloat("oscillator1Volume", 1.0f),
             call.getFloat("oscillator2Volume", 1.0f),
+            call.getFloat("oscillator3Volume", 1.0f),
             call.getFloat("detuneCents", 7.0f),
             call.getFloat("attackMs", 0.0f),
             call.getFloat("holdMs", 15000.0f),
@@ -706,7 +710,8 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("lfoDepth", 0.0f),
             call.getFloat("glideMs", 45.0f),
             call.getInt("oscillator1Octave", 0),
-            call.getInt("oscillator2Octave", 0)
+            call.getInt("oscillator2Octave", 0),
+            call.getInt("oscillator3Octave", 0)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -1167,19 +1172,19 @@ public class HookKeysNativePlugin extends Plugin {
     );
     private static native boolean nativeConfigureModuleModulation(int moduleIndex, int mode, float rateHz);
     private static native boolean nativeConfigureVelocityLimits(
-        int moduleIndex, int ignoreAbove, int ceiling, int oscillator1Limit, int oscillator2Limit
+        int moduleIndex, int ignoreAbove, int ceiling, int oscillator1Limit, int oscillator2Limit, int oscillator3Limit
     );
     private static native boolean nativeConfigureGlide(
         int moduleIndex, boolean portamento, boolean velocityGateEnabled,
         boolean velocityGateInverted, int velocityThreshold
     );
     private static native boolean nativeConfigureSynth(
-        int oscillator1, int oscillator2, boolean oscillator1Enabled,
-        boolean oscillator2Enabled, int voiceMode, int lfoTarget,
-        float oscillator1Volume, float oscillator2Volume, float detuneCents, float attackMs, float holdMs,
+        int oscillator1, int oscillator2, int oscillator3, boolean oscillator1Enabled,
+        boolean oscillator2Enabled, boolean oscillator3Enabled, int voiceMode, int lfoTarget,
+        float oscillator1Volume, float oscillator2Volume, float oscillator3Volume, float detuneCents, float attackMs, float holdMs,
         float decayMs, float sustain, float releaseMs, float filterCutoffHz,
         float filterResonance, float filterEnvelope, float lfoRateHz,
-        float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave
+        float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave, int oscillator3Octave
     );
     private static native boolean nativeSetTempo(float bpm);
     private static native boolean nativeSetGlobalTranspose(int semitones);

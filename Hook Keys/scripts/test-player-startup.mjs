@@ -585,7 +585,7 @@ try {
     player.openModal('module-settings', 2, master);
     useUserSettings();
     await player.syncNativeEngine();
-    assert.equal(JSON.stringify(lastLimits(1)), JSON.stringify({ moduleIndex: 1, ignoreAbove: 127, ceiling: 127, oscillator1Limit: 127, oscillator2Limit: 127 }),
+    assert.equal(JSON.stringify(lastLimits(1)), JSON.stringify({ moduleIndex: 1, ignoreAbove: 127, ceiling: 127, oscillator1Limit: 127, oscillator2Limit: 127, oscillator3Limit: 127 }),
       'os limites nascem em 127');
     const limitKnob = window.document.querySelector('[data-module-velocity-limit]');
     limitKnob.value = '100';
@@ -608,7 +608,7 @@ try {
     osc2Limit.value = '90';
     osc2Limit.dispatchEvent(new window.Event('input', { bubbles: true }));
     await player.syncNativeEngine();
-    assert.equal(JSON.stringify(lastLimits(7)), JSON.stringify({ moduleIndex: 7, ignoreAbove: 127, ceiling: 127, oscillator1Limit: 127, oscillator2Limit: 90 }),
+    assert.equal(JSON.stringify(lastLimits(7)), JSON.stringify({ moduleIndex: 7, ignoreAbove: 127, ceiling: 127, oscillator1Limit: 127, oscillator2Limit: 90, oscillator3Limit: 127 }),
       'o limite do OSC 2 chega ao motor');
     Object.assign(player.getActivePresetState().modules[1].settings, { velocityLimit: 127, velocityCeiling: 127 });
     player.getActivePresetState().modules[7].settings.synth = { ...player.getActivePresetState().modules[7].settings.synth, oscillator2VelocityLimit: 127 };
@@ -744,8 +744,12 @@ try {
       useUserSettings();
       const modeButton = () => window.document.querySelector('[data-module-setting-action="toggle-voice-mode"]');
       assert(modeButton(), `módulo ${module} tem o botão Modo`);
-      assert(modeButton().previousElementSibling?.classList.contains('module-settings-source-button'),
-        `em cima do Modo fica Default/User, não o Reset, no módulo ${module}`);
+      if (module === 7) {
+        assert(!window.document.querySelector('[data-module-settings-mode="user"]'), 'o Organ não expõe mais a opção User');
+      } else {
+        assert(modeButton().previousElementSibling?.classList.contains('module-settings-source-button'),
+          `em cima do Modo fica Default/User, não o Reset, no módulo ${module}`);
+      }
       assert.equal(modeButton().querySelector('strong').textContent, 'Poly');
       const glideModeButton = () => window.document.querySelector('[data-glide-mode]');
       assert.equal(glideModeButton()?.textContent, 'Auto', `módulo ${module} começa em Auto`);

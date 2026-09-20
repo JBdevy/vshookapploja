@@ -122,7 +122,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                      ignoreAbove:(NSInteger)ignoreAbove
                          ceiling:(NSInteger)ceiling
                 oscillator1Limit:(NSInteger)oscillator1Limit
-                oscillator2Limit:(NSInteger)oscillator2Limit;
+                oscillator2Limit:(NSInteger)oscillator2Limit
+                oscillator3Limit:(NSInteger)oscillator3Limit;
 - (BOOL)configureGlide:(NSInteger)moduleIndex
              portamento:(BOOL)portamento
       velocityGateEnabled:(BOOL)velocityGateEnabled
@@ -130,12 +131,15 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
         velocityThreshold:(NSInteger)velocityThreshold;
 - (BOOL)configureSynth:(NSInteger)oscillator1
                            oscillator2:(NSInteger)oscillator2
+                           oscillator3:(NSInteger)oscillator3
                     oscillator1Enabled:(BOOL)oscillator1Enabled
                     oscillator2Enabled:(BOOL)oscillator2Enabled
+                    oscillator3Enabled:(BOOL)oscillator3Enabled
                               voiceMode:(NSInteger)voiceMode
                               lfoTarget:(NSInteger)lfoTarget
                       oscillator1Volume:(float)oscillator1Volume
                       oscillator2Volume:(float)oscillator2Volume
+                      oscillator3Volume:(float)oscillator3Volume
                             detuneCents:(float)detuneCents
                                attackMs:(float)attackMs
                                  holdMs:(float)holdMs
@@ -149,7 +153,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                                lfoDepth:(float)lfoDepth
                                 glideMs:(float)glideMs
                       oscillator1Octave:(NSInteger)oscillator1Octave
-                      oscillator2Octave:(NSInteger)oscillator2Octave;
+                      oscillator2Octave:(NSInteger)oscillator2Octave
+                      oscillator3Octave:(NSInteger)oscillator3Octave;
 - (BOOL)sendMidiFromSlot:(NSInteger)slot
                   status:(NSInteger)status
                    data1:(NSInteger)data1

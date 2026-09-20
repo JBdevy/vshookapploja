@@ -99,6 +99,7 @@ unsafe extern "C" {
         ceiling: i32,
         oscillator1_limit: i32,
         oscillator2_limit: i32,
+        oscillator3_limit: i32,
     ) -> i32;
     fn hk_runtime_configure_glide(
         handle: *mut c_void,
@@ -178,12 +179,15 @@ unsafe extern "C" {
         handle: *mut c_void,
         oscillator1: i32,
         oscillator2: i32,
+        oscillator3: i32,
         oscillator1_enabled: i32,
         oscillator2_enabled: i32,
+        oscillator3_enabled: i32,
         voice_mode: i32,
         lfo_target: i32,
         oscillator1_volume: f32,
         oscillator2_volume: f32,
+        oscillator3_volume: f32,
         detune_cents: f32,
         attack_ms: f32,
         hold_ms: f32,
@@ -198,6 +202,7 @@ unsafe extern "C" {
         glide_ms: f32,
         oscillator1_octave: i32,
         oscillator2_octave: i32,
+        oscillator3_octave: i32,
     ) -> i32;
     fn hk_runtime_set_tempo(handle: *mut c_void, bpm: f32) -> i32;
     fn hk_runtime_set_global_transpose(handle: *mut c_void, semitones: i32) -> i32;
@@ -244,6 +249,7 @@ struct NativeVelocityLimitsConfig {
     ceiling: i32,
     oscillator1_limit: i32,
     oscillator2_limit: i32,
+    oscillator3_limit: i32,
 }
 
 #[tauri::command]
@@ -252,7 +258,7 @@ fn configure_velocity_limits(config: NativeVelocityLimitsConfig, state: State<'_
     let applied = unsafe {
         hk_runtime_configure_velocity_limits(
             engine.pointer(), config.module_index, config.ignore_above, config.ceiling,
-            config.oscillator1_limit, config.oscillator2_limit,
+            config.oscillator1_limit, config.oscillator2_limit, config.oscillator3_limit,
         )
     };
     if applied != 0 { Ok(()) } else { Err("Não foi possível configurar os limites de velocity.".into()) }
@@ -509,12 +515,18 @@ struct EnvelopeConfig {
 struct SynthConfig {
     oscillator1: i32,
     oscillator2: i32,
+    #[serde(default = "default_synth_oscillator3")]
+    oscillator3: i32,
     oscillator1_enabled: bool,
     oscillator2_enabled: bool,
+    #[serde(default = "default_true")]
+    oscillator3_enabled: bool,
     voice_mode: i32,
     lfo_target: i32,
     oscillator1_volume: f32,
     oscillator2_volume: f32,
+    #[serde(default = "default_one")]
+    oscillator3_volume: f32,
     detune_cents: f32,
     attack_ms: f32,
     hold_ms: f32,
@@ -531,7 +543,13 @@ struct SynthConfig {
     oscillator1_octave: i32,
     #[serde(default)]
     oscillator2_octave: i32,
+    #[serde(default)]
+    oscillator3_octave: i32,
 }
+
+fn default_true() -> bool { true }
+fn default_one() -> f32 { 1.0 }
+fn default_synth_oscillator3() -> i32 { 1 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1249,12 +1267,15 @@ fn configure_synth(config: SynthConfig, state: State<'_, AppState>) -> Result<()
             engine.pointer(),
             config.oscillator1,
             config.oscillator2,
+            config.oscillator3,
             if config.oscillator1_enabled { 1 } else { 0 },
             if config.oscillator2_enabled { 1 } else { 0 },
+            if config.oscillator3_enabled { 1 } else { 0 },
             config.voice_mode,
             config.lfo_target,
             config.oscillator1_volume,
             config.oscillator2_volume,
+            config.oscillator3_volume,
             config.detune_cents,
             config.attack_ms,
             config.hold_ms,
@@ -1269,6 +1290,7 @@ fn configure_synth(config: SynthConfig, state: State<'_, AppState>) -> Result<()
             config.glide_ms,
             config.oscillator1_octave,
             config.oscillator2_octave,
+            config.oscillator3_octave,
         )
     };
     if ok != 0 { Ok(()) } else { Err("Não foi possível configurar o Synth.".into()) }
@@ -1948,8 +1970,8 @@ mod tests {
         let loading_elapsed = loading_started.elapsed();
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 0, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
-                127, 127, 127, 127, 127, 0, 0, 0, 0, 2,
+                engine.pointer(), 0, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 64,
+                127, 127, 127, 127, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);
         for note in [48, 52, 55, 60, 64, 67] {
@@ -1995,6 +2017,7 @@ mod tests {
                     1,
                     1,
                     0.0,
+                    0,
                     64,
                     0,
                     8,
@@ -2006,6 +2029,7 @@ mod tests {
                     0,
                     2,
                     2,
+                    0,
                 )
             },
             0
@@ -2029,14 +2053,14 @@ mod tests {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
-                0, 32, 64, 96, 127, 0, 0, 0, 0, 2,
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 64,
+                0, 32, 64, 96, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 1, 2, 1, 1, 1, 1, 0.65, 0.35, 7.0, 0.0, 0.0,
-                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0,
+                engine.pointer(), 1, 2, 1, 1, 1, 1, 1, 1, 0.65, 0.35, 0.35, 7.0, 0.0, 0.0,
+                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0, 0,
             )
         }, 0);
         assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, 60, 110) }, 0);
@@ -2050,14 +2074,14 @@ mod tests {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
-                127, 127, 127, 127, 127, 0, 0, 0, 0, 2,
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 64,
+                127, 127, 127, 127, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 0, 0, 1, 1, 0, 1, 1.0, 1.0, 7.0, 0.0, 0.0,
-                15_000.0, 1.0, 300.0, 20_000.0, 0.0, 0.0, 7.55, 0.0, 0.0, 0, 0,
+                engine.pointer(), 0, 0, 0, 1, 1, 1, 0, 1, 1.0, 1.0, 1.0, 7.0, 0.0, 0.0,
+                15_000.0, 1.0, 300.0, 20_000.0, 0.0, 0.0, 7.55, 0.0, 0.0, 0, 0, 0,
             )
         }, 0);
         for note in [48, 52, 55, 60, 64, 67] {
@@ -2075,14 +2099,14 @@ mod tests {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 64,
-                0, 32, 64, 96, 127, 0, 0, 0, 0, 2,
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 64,
+                0, 32, 64, 96, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 1, 2, 0, 0, 1, 1, 0.65, 0.35, 7.0, 0.0, 0.0,
-                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0,
+                engine.pointer(), 1, 2, 1, 0, 0, 0, 1, 1, 0.65, 0.35, 0.35, 7.0, 0.0, 0.0,
+                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0, 0,
             )
         }, 0);
         assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, 60, 110) }, 0);
@@ -2092,8 +2116,8 @@ mod tests {
 
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 1, 2, 1, 0, 1, 1, 0.65, 0.35, 7.0, 0.0, 0.0,
-                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0,
+                engine.pointer(), 1, 2, 1, 1, 0, 0, 1, 1, 0.65, 0.35, 0.35, 7.0, 0.0, 0.0,
+                180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0, 0,
             )
         }, 0);
         assert_ne!(unsafe { hk_runtime_send_midi(engine.pointer(), 0, 0x90, 60, 110) }, 0);

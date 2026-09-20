@@ -368,10 +368,10 @@ public:
   }
 
   bool configureVelocityLimits(std::size_t moduleIndex, std::uint8_t ignoreAbove, std::uint8_t ceiling,
-      std::uint8_t oscillator1Limit, std::uint8_t oscillator2Limit) noexcept {
+      std::uint8_t oscillator1Limit, std::uint8_t oscillator2Limit, std::uint8_t oscillator3Limit) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     return runtime != nullptr && runtime->setVelocityLimits(
-        moduleIndex, ignoreAbove, ceiling, oscillator1Limit, oscillator2Limit);
+        moduleIndex, ignoreAbove, ceiling, oscillator1Limit, oscillator2Limit, oscillator3Limit);
   }
 
   bool configureGlide(std::size_t moduleIndex, hook_keys::GlideBehavior behavior) noexcept {
@@ -421,23 +421,26 @@ public:
   }
 
   bool configureSynth(
-      int oscillator1, int oscillator2, bool oscillator1Enabled,
-      bool oscillator2Enabled, int voiceMode, int lfoTarget,
-      float oscillator1Volume, float oscillator2Volume, float detuneCents, float attackMs, float holdMs,
+      int oscillator1, int oscillator2, int oscillator3, bool oscillator1Enabled,
+      bool oscillator2Enabled, bool oscillator3Enabled, int voiceMode, int lfoTarget,
+      float oscillator1Volume, float oscillator2Volume, float oscillator3Volume, float detuneCents, float attackMs, float holdMs,
       float decayMs, float sustain, float releaseMs, float filterCutoffHz,
       float filterResonance, float filterEnvelope, float lfoRateHz,
-      float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave) noexcept {
+      float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave, int oscillator3Octave) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     hook_keys::AnalogSynthConfig config;
     config.oscillator1 = static_cast<std::uint8_t>(std::clamp(oscillator1, 0, 3));
     config.oscillator2 = static_cast<std::uint8_t>(std::clamp(oscillator2, 0, 3));
+    config.oscillator3 = static_cast<std::uint8_t>(std::clamp(oscillator3, 0, 3));
     config.oscillator1Enabled = oscillator1Enabled;
     config.oscillator2Enabled = oscillator2Enabled;
+    config.oscillator3Enabled = oscillator3Enabled;
     config.voiceMode = static_cast<std::uint8_t>(std::clamp(voiceMode, 0, 2));
     config.lfoTarget = static_cast<std::uint8_t>(std::clamp(lfoTarget, 0, 2));
     config.oscillator1Volume = oscillator1Volume;
     config.oscillator2Volume = oscillator2Volume;
+    config.oscillator3Volume = oscillator3Volume;
     config.detuneCents = detuneCents;
     config.attackMs = attackMs;
     config.holdMs = holdMs;
@@ -452,6 +455,7 @@ public:
     config.glideMs = glideMs;
     config.oscillator1Octave = static_cast<std::int8_t>(std::clamp(oscillator1Octave, -3, 3));
     config.oscillator2Octave = static_cast<std::int8_t>(std::clamp(oscillator2Octave, -3, 3));
+    config.oscillator3Octave = static_cast<std::int8_t>(std::clamp(oscillator3Octave, -3, 3));
     return runtime->setSynthConfig(config);
   }
 
@@ -907,11 +911,11 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEnvelo
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureVelocityLimits(
     JNIEnv*, jclass, jint moduleIndex, jint ignoreAbove, jint ceiling,
-    jint oscillator1Limit, jint oscillator2Limit) {
+    jint oscillator1Limit, jint oscillator2Limit, jint oscillator3Limit) {
   if (moduleIndex < 0) return JNI_FALSE;
   const auto limit = [](jint value) { return static_cast<std::uint8_t>(std::clamp(static_cast<int>(value), 0, 127)); };
   return gEngine.configureVelocityLimits(static_cast<std::size_t>(moduleIndex), limit(ignoreAbove),
-             limit(ceiling), limit(oscillator1Limit), limit(oscillator2Limit)) ? JNI_TRUE : JNI_FALSE;
+             limit(ceiling), limit(oscillator1Limit), limit(oscillator2Limit), limit(oscillator3Limit)) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -939,18 +943,18 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleModula
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureSynth(
-    JNIEnv*, jclass, jint oscillator1, jint oscillator2, jboolean oscillator1Enabled,
-    jboolean oscillator2Enabled, jint voiceMode, jint lfoTarget,
-    jfloat oscillator1Volume, jfloat oscillator2Volume, jfloat detuneCents, jfloat attackMs,
+    JNIEnv*, jclass, jint oscillator1, jint oscillator2, jint oscillator3, jboolean oscillator1Enabled,
+    jboolean oscillator2Enabled, jboolean oscillator3Enabled, jint voiceMode, jint lfoTarget,
+    jfloat oscillator1Volume, jfloat oscillator2Volume, jfloat oscillator3Volume, jfloat detuneCents, jfloat attackMs,
     jfloat holdMs, jfloat decayMs, jfloat sustain, jfloat releaseMs,
     jfloat filterCutoffHz, jfloat filterResonance, jfloat filterEnvelope,
-    jfloat lfoRateHz, jfloat lfoDepth, jfloat glideMs, jint oscillator1Octave, jint oscillator2Octave) {
+    jfloat lfoRateHz, jfloat lfoDepth, jfloat glideMs, jint oscillator1Octave, jint oscillator2Octave, jint oscillator3Octave) {
   return gEngine.configureSynth(
-             oscillator1, oscillator2, oscillator1Enabled == JNI_TRUE,
-             oscillator2Enabled == JNI_TRUE, voiceMode, lfoTarget, oscillator1Volume, oscillator2Volume,
+             oscillator1, oscillator2, oscillator3, oscillator1Enabled == JNI_TRUE,
+             oscillator2Enabled == JNI_TRUE, oscillator3Enabled == JNI_TRUE, voiceMode, lfoTarget, oscillator1Volume, oscillator2Volume, oscillator3Volume,
              detuneCents, attackMs, holdMs, decayMs, sustain, releaseMs,
              filterCutoffHz, filterResonance, filterEnvelope, lfoRateHz,
-             lfoDepth, glideMs, oscillator1Octave, oscillator2Octave)
+             lfoDepth, glideMs, oscillator1Octave, oscillator2Octave, oscillator3Octave)
              ? JNI_TRUE
              : JNI_FALSE;
 }

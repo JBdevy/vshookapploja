@@ -334,9 +334,10 @@ export function createModuleSettingsMarkup(
   const voiceMode = settings.voiceMode === 'mono' ? 'mono' : 'poly';
   // Modo Poly/Mono ao lado da Polifonia nos módulos 1 a 7; o Synth tem o dele no editor.
   const hasVoiceSwitch = processorReplacement !== 'synth';
+  const hasSettingsSource = processorReplacement !== 'synth' && processorReplacement !== 'organ';
 
   return `
-    <section class="module-settings-panel${processorReplacement === 'synth' ? ' module-settings-panel--synth' : ''}${hasVoiceSwitch ? ' module-settings-panel--voice-switch' : ''}${settingsMode === 'default' && hasVoiceSwitch ? ' is-default-mode' : ''}" aria-label="Configurações do timbre" data-module-settings-mode-active="${settingsMode}">
+    <section class="module-settings-panel${processorReplacement === 'synth' ? ' module-settings-panel--synth' : ''}${hasVoiceSwitch ? ' module-settings-panel--voice-switch' : ''}${settingsMode === 'default' && hasSettingsSource ? ' is-default-mode' : ''}" aria-label="Configurações do timbre" data-module-settings-mode-active="${settingsMode}">
       <div class="module-settings-io-row">
         <label class="app-settings-field module-settings-device">
           <span>Dispositivo MIDI</span>
@@ -357,7 +358,7 @@ export function createModuleSettingsMarkup(
         </label>
 
         <div class="module-settings-control-stack">
-          ${hasVoiceSwitch ? `<button class="module-settings-source-button${settingsMode === 'default' ? ' is-selected' : ''}" type="button"
+          ${hasSettingsSource ? `<button class="module-settings-source-button${settingsMode === 'default' ? ' is-selected' : ''}" type="button"
             data-module-settings-mode="default" aria-pressed="${settingsMode === 'default'}">Default</button>` : ''}
           <button class="module-polyphony-button" type="button" data-module-setting-action="open-polyphony">
             <span>Polifonia</span>
@@ -367,8 +368,8 @@ export function createModuleSettingsMarkup(
 
         ${hasVoiceSwitch ? `
           <div class="module-settings-control-stack">
-            <button class="module-settings-source-button${settingsMode === 'user' ? ' is-selected' : ''}" type="button"
-              data-module-settings-mode="user" aria-pressed="${settingsMode === 'user'}">User</button>
+            ${hasSettingsSource ? `<button class="module-settings-source-button${settingsMode === 'user' ? ' is-selected' : ''}" type="button"
+              data-module-settings-mode="user" aria-pressed="${settingsMode === 'user'}">User</button>` : ''}
             <button class="module-voice-mode-button is-${voiceMode}" type="button" data-module-setting-action="toggle-voice-mode" aria-pressed="${voiceMode === 'mono'}">
               <span>Modo</span>
               <strong>${voiceMode === 'mono' ? 'Mono' : 'Poly'}</strong>

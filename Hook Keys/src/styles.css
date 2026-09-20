@@ -1343,6 +1343,14 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .synth-editor__header div { display: grid; gap: 2px; }
+.synth-oscillator-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-self: stretch;
+  gap: 5px;
+  min-width: 0;
+}
+.synth-oscillator-tabs button { width: 100%; }
 .synth-editor__identity { min-width: 0; }
 .synth-editor__identity strong { overflow-wrap: anywhere; }
 .synth-editor__header span { color: #c99be8; font-size: 9px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; }
@@ -1405,6 +1413,15 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: clamp(6px, .9vw, 10px);
 }
+.synth-oscillator-page {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: clamp(6px, .9vw, 10px);
+  min-width: 0;
+}
+.synth-oscillator-page[hidden] { display: none !important; }
+.synth-oscillator-page .synth-card--oscillator { grid-column: auto; }
 
 .synth-card {
   min-width: 0;

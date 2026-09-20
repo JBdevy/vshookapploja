@@ -594,7 +594,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             ignoreAbove: min(127, max(0, call.getInt("ignoreAbove", 127))),
             ceiling: min(127, max(0, call.getInt("ceiling", 127))),
             oscillator1Limit: min(127, max(0, call.getInt("oscillator1Limit", 127))),
-            oscillator2Limit: min(127, max(0, call.getInt("oscillator2Limit", 127)))
+            oscillator2Limit: min(127, max(0, call.getInt("oscillator2Limit", 127))),
+            oscillator3Limit: min(127, max(0, call.getInt("oscillator3Limit", 127)))
         ) { call.resolve() }
         else { call.reject("O motor ainda não foi inicializado.") }
     }
@@ -619,12 +620,15 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         let ok = engine.configureSynth(
             call.getInt("oscillator1", 1),
             oscillator2: call.getInt("oscillator2", 2),
+            oscillator3: call.getInt("oscillator3", 1),
             oscillator1Enabled: call.getBool("oscillator1Enabled", true),
             oscillator2Enabled: call.getBool("oscillator2Enabled", true),
+            oscillator3Enabled: call.getBool("oscillator3Enabled", true),
             voiceMode: call.getInt("voiceMode", 1),
             lfoTarget: call.getInt("lfoTarget", 0),
             oscillator1Volume: call.getFloat("oscillator1Volume", 1),
             oscillator2Volume: call.getFloat("oscillator2Volume", 1),
+            oscillator3Volume: call.getFloat("oscillator3Volume", 1),
             detuneCents: call.getFloat("detuneCents", 7),
             attackMs: call.getFloat("attackMs", 0),
             holdMs: call.getFloat("holdMs", 15_000),
@@ -638,7 +642,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             lfoDepth: call.getFloat("lfoDepth", 0),
             glideMs: call.getFloat("glideMs", 80),
             oscillator1Octave: call.getInt("oscillator1Octave", 0),
-            oscillator2Octave: call.getInt("oscillator2Octave", 0)
+            oscillator2Octave: call.getInt("oscillator2Octave", 0),
+            oscillator3Octave: call.getInt("oscillator3Octave", 0)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }

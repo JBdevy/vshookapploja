@@ -133,10 +133,11 @@ int hk_runtime_set_module_gain(
 
 int hk_runtime_configure_velocity_limits(
     void* handle, std::size_t moduleIndex, int ignoreAbove, int ceiling,
-    int oscillator1Limit, int oscillator2Limit) noexcept {
+    int oscillator1Limit, int oscillator2Limit, int oscillator3Limit) noexcept {
   return handle && runtime(handle)->setVelocityLimits(moduleIndex,
       static_cast<std::uint8_t>(std::clamp(ignoreAbove, 0, 127)), static_cast<std::uint8_t>(std::clamp(ceiling, 0, 127)),
-      static_cast<std::uint8_t>(std::clamp(oscillator1Limit, 0, 127)), static_cast<std::uint8_t>(std::clamp(oscillator2Limit, 0, 127))) ? 1 : 0;
+      static_cast<std::uint8_t>(std::clamp(oscillator1Limit, 0, 127)), static_cast<std::uint8_t>(std::clamp(oscillator2Limit, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp(oscillator3Limit, 0, 127))) ? 1 : 0;
 }
 
 int hk_runtime_configure_glide(
@@ -224,22 +225,25 @@ int hk_runtime_configure_envelope(void* handle, std::size_t moduleIndex, float a
 }
 
 int hk_runtime_configure_synth(
-    void* handle, int oscillator1, int oscillator2, int oscillator1Enabled,
-    int oscillator2Enabled, int voiceMode, int lfoTarget,
-    float oscillator1Volume, float oscillator2Volume, float detuneCents, float attackMs, float holdMs,
+    void* handle, int oscillator1, int oscillator2, int oscillator3, int oscillator1Enabled,
+    int oscillator2Enabled, int oscillator3Enabled, int voiceMode, int lfoTarget,
+    float oscillator1Volume, float oscillator2Volume, float oscillator3Volume, float detuneCents, float attackMs, float holdMs,
     float decayMs, float sustain, float releaseMs, float filterCutoffHz,
     float filterResonance, float filterEnvelope, float lfoRateHz, float lfoDepth,
-    float glideMs, int oscillator1Octave, int oscillator2Octave) noexcept {
+    float glideMs, int oscillator1Octave, int oscillator2Octave, int oscillator3Octave) noexcept {
   if (!handle) return 0;
   hook_keys::AnalogSynthConfig config;
   config.oscillator1 = static_cast<std::uint8_t>(std::clamp(oscillator1, 0, 3));
   config.oscillator2 = static_cast<std::uint8_t>(std::clamp(oscillator2, 0, 3));
+  config.oscillator3 = static_cast<std::uint8_t>(std::clamp(oscillator3, 0, 3));
   config.oscillator1Enabled = oscillator1Enabled != 0;
   config.oscillator2Enabled = oscillator2Enabled != 0;
+  config.oscillator3Enabled = oscillator3Enabled != 0;
   config.voiceMode = static_cast<std::uint8_t>(std::clamp(voiceMode, 0, 2));
   config.lfoTarget = static_cast<std::uint8_t>(std::clamp(lfoTarget, 0, 2));
   config.oscillator1Volume = oscillator1Volume;
   config.oscillator2Volume = oscillator2Volume;
+  config.oscillator3Volume = oscillator3Volume;
   config.detuneCents = detuneCents;
   config.attackMs = attackMs;
   config.holdMs = holdMs;
@@ -254,6 +258,7 @@ int hk_runtime_configure_synth(
   config.glideMs = glideMs;
   config.oscillator1Octave = static_cast<std::int8_t>(std::clamp(oscillator1Octave, -3, 3));
   config.oscillator2Octave = static_cast<std::int8_t>(std::clamp(oscillator2Octave, -3, 3));
+  config.oscillator3Octave = static_cast<std::int8_t>(std::clamp(oscillator3Octave, -3, 3));
   return runtime(handle)->setSynthConfig(config) ? 1 : 0;
 }
 

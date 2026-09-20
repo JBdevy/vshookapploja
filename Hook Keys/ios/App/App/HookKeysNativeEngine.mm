@@ -748,12 +748,13 @@ static NSString *describeFormat(AVAudioFormat *format) {
                      ignoreAbove:(NSInteger)ignoreAbove
                          ceiling:(NSInteger)ceiling
                 oscillator1Limit:(NSInteger)oscillator1Limit
-                oscillator2Limit:(NSInteger)oscillator2Limit {
+                oscillator2Limit:(NSInteger)oscillator2Limit
+                oscillator3Limit:(NSInteger)oscillator3Limit {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= static_cast<NSInteger>(hook_keys::kModuleCount)) return NO;
   const auto limit = [](NSInteger value) { return static_cast<std::uint8_t>(std::clamp<NSInteger>(value, 0, 127)); };
   return runtime->setVelocityLimits(static_cast<std::size_t>(moduleIndex), limit(ignoreAbove), limit(ceiling),
-      limit(oscillator1Limit), limit(oscillator2Limit));
+      limit(oscillator1Limit), limit(oscillator2Limit), limit(oscillator3Limit));
 }
 
 - (BOOL)configureGlide:(NSInteger)moduleIndex
@@ -797,12 +798,15 @@ static NSString *describeFormat(AVAudioFormat *format) {
 
 - (BOOL)configureSynth:(NSInteger)oscillator1
                            oscillator2:(NSInteger)oscillator2
+                           oscillator3:(NSInteger)oscillator3
                     oscillator1Enabled:(BOOL)oscillator1Enabled
                     oscillator2Enabled:(BOOL)oscillator2Enabled
+                    oscillator3Enabled:(BOOL)oscillator3Enabled
                               voiceMode:(NSInteger)voiceMode
                               lfoTarget:(NSInteger)lfoTarget
                       oscillator1Volume:(float)oscillator1Volume
                       oscillator2Volume:(float)oscillator2Volume
+                      oscillator3Volume:(float)oscillator3Volume
                             detuneCents:(float)detuneCents
                                attackMs:(float)attackMs
                                  holdMs:(float)holdMs
@@ -816,18 +820,22 @@ static NSString *describeFormat(AVAudioFormat *format) {
                                lfoDepth:(float)lfoDepth
                                 glideMs:(float)glideMs
                       oscillator1Octave:(NSInteger)oscillator1Octave
-                      oscillator2Octave:(NSInteger)oscillator2Octave {
+                      oscillator2Octave:(NSInteger)oscillator2Octave
+                      oscillator3Octave:(NSInteger)oscillator3Octave {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr) return NO;
   hook_keys::AnalogSynthConfig config;
   config.oscillator1 = static_cast<std::uint8_t>(std::clamp<NSInteger>(oscillator1, 0, 3));
   config.oscillator2 = static_cast<std::uint8_t>(std::clamp<NSInteger>(oscillator2, 0, 3));
+  config.oscillator3 = static_cast<std::uint8_t>(std::clamp<NSInteger>(oscillator3, 0, 3));
   config.oscillator1Enabled = oscillator1Enabled;
   config.oscillator2Enabled = oscillator2Enabled;
+  config.oscillator3Enabled = oscillator3Enabled;
   config.voiceMode = static_cast<std::uint8_t>(std::clamp<NSInteger>(voiceMode, 0, 2));
   config.lfoTarget = static_cast<std::uint8_t>(std::clamp<NSInteger>(lfoTarget, 0, 2));
   config.oscillator1Volume = oscillator1Volume;
   config.oscillator2Volume = oscillator2Volume;
+  config.oscillator3Volume = oscillator3Volume;
   config.detuneCents = detuneCents;
   config.attackMs = attackMs;
   config.holdMs = holdMs;
@@ -842,6 +850,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
   config.glideMs = glideMs;
   config.oscillator1Octave = static_cast<std::int8_t>(std::clamp<NSInteger>(oscillator1Octave, -3, 3));
   config.oscillator2Octave = static_cast<std::int8_t>(std::clamp<NSInteger>(oscillator2Octave, -3, 3));
+  config.oscillator3Octave = static_cast<std::int8_t>(std::clamp<NSInteger>(oscillator3Octave, -3, 3));
   return runtime->setSynthConfig(config);
 }
 

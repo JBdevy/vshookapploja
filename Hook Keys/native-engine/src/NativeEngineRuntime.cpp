@@ -330,11 +330,12 @@ bool NativeEngineRuntime::setGlideBehavior(std::size_t moduleIndex, GlideBehavio
 
 bool NativeEngineRuntime::setVelocityLimits(
     std::size_t moduleIndex, std::uint8_t ignoreAbove, std::uint8_t ceiling,
-    std::uint8_t oscillator1Limit, std::uint8_t oscillator2Limit) noexcept {
+    std::uint8_t oscillator1Limit, std::uint8_t oscillator2Limit,
+    std::uint8_t oscillator3Limit) noexcept {
   if (moduleIndex >= kModuleCount) return false;
   std::scoped_lock lock(configMutex_);
   if (moduleIndex == kModuleCount - 1) {
-    controlLayer_->synth->setOscillatorVelocityLimits(oscillator1Limit, oscillator2Limit);
+    controlLayer_->synth->setOscillatorVelocityLimits(oscillator1Limit, oscillator2Limit, oscillator3Limit);
   }
   auto& config = controlLayer_->configs[moduleIndex];
   config.velocityIgnoreAbove = ignoreAbove;

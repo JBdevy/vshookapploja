@@ -106,12 +106,12 @@ test('every Synth parameter uses exactly the same knob face as timbre parameters
   const synthMarkup = synthView.createSynthModuleMarkup({});
   const moduleMarkup = settingsView.createModuleSettingsMarkup([], [], null, {}, 120, 2, '1+2');
   const faces = (markup) => [...markup.matchAll(/<span class="module-envelope-knob__face"[^>]*><i><\/i><\/span>/g)].map(([face]) => face);
-  assert.equal(faces(synthMarkup).length, 15, 'Synth knobs plus one velocity limit per OSC');
+  assert.equal(faces(synthMarkup).length, 17, 'Synth knobs plus one velocity limit and volume per OSC');
   assert.equal(faces(moduleMarkup).length, 10, 'timbre knobs plus Sustain, Limite Velocity and Gain');
   assert.match(moduleMarkup, /data-module-sustain aria-label="Sustain do envelope"/);
   assert(faces(synthMarkup).every((face) => face === faces(moduleMarkup)[0]));
   assert.doesNotMatch(synthMarkup, /module-effect-knob|synth-knob|conic-gradient|border/);
-  assert.equal([...synthMarkup.matchAll(/data-synth-parameter=/g)].length, 15);
+  assert.equal([...synthMarkup.matchAll(/data-synth-parameter=/g)].length, 17);
   assert.doesNotMatch(synthMarkup, /Mix OSC 2|data-synth-parameter="oscillatorMix"/);
   assert.match(synthMarkup, /Volume OSC 1/);
   assert.match(synthMarkup, /Volume OSC 2/);
@@ -522,7 +522,7 @@ test('common CSS retains the dynamic fill and green selection, without a Synth-o
   assert.match(css, /\.synth-preset-button\.is-selected\s*\{[\s\S]*?background: linear-gradient\(180deg, #39df7d, #0b873f\)/);
 });
 
-test('each native bridge forwards both independent oscillator volumes rather than a crossfade', () => {
+test('each native bridge forwards all three independent oscillator volumes rather than a crossfade', () => {
   for (const path of [
     '../src/platform/native/HookKeysNative.ts',
     '../src/features/player/PlayerScreen.ts',
@@ -537,11 +537,13 @@ test('each native bridge forwards both independent oscillator volumes rather tha
     const source = readFileSync(new URL(path, import.meta.url), 'utf8');
     assert(source.includes('oscillator1Volume'), `${path} must forward volume 1`);
     assert(source.includes('oscillator2Volume'), `${path} must forward volume 2`);
+    assert(source.includes('oscillator3Volume'), `${path} must forward volume 3`);
     assert(!source.includes('oscillatorMix'), `${path} must not keep the crossfade`);
   }
   const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
   assert(rust.includes('oscillator1_volume'));
   assert(rust.includes('oscillator2_volume'));
+  assert(rust.includes('oscillator3_volume'));
   assert(!rust.includes('oscillator_mix'));
 });
 
@@ -557,9 +559,9 @@ test('independent oscillator octaves default to zero, stay within -3..+3 and sur
   assert.equal(synthView.readSynthSettings({ oscillator1Octave: -9, oscillator2Octave: 9 }).oscillator1Octave, -3);
   assert.equal(synthView.readSynthSettings({ oscillator1Octave: 1.7 }).oscillator1Octave, 2);
   const markup = synthView.createSynthModuleMarkup(saved);
-  assert.match(markup, /data-synth-parameter="glideMs"[\s\S]*?synth-card--octaves/);
+  assert.match(markup, /synth-card--octaves[\s\S]*?data-synth-parameter="glideMs"/);
   const buttons = [...markup.matchAll(/<button[^>]*data-synth-octave="([^"]+)"[^>]*data-synth-octave-direction="(-?1)"[^>]*>/g)];
-  assert.equal(buttons.length, 4);
+  assert.equal(buttons.length, 6);
   assert.match(buttons[0][0], /disabled/);
   assert.doesNotMatch(buttons[1][0], /disabled/);
   assert.match(markup, /data-synth-octave-value="oscillator2Octave">\+2/);
@@ -621,9 +623,10 @@ test('all platform bridges forward independent octaves to the native DSP', () =>
     const source = readFileSync(new URL(path, import.meta.url), 'utf8');
     assert(source.includes('oscillator1Octave'), path);
     assert(source.includes('oscillator2Octave'), path);
+    assert(source.includes('oscillator3Octave'), path);
   }
   const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
-  assert.match(rust, /config\.oscillator1_octave,\s*config\.oscillator2_octave,/);
+  assert.match(rust, /config\.oscillator1_octave,\s*config\.oscillator2_octave,\s*config\.oscillator3_octave,/);
 });
 
 test('Synth layout gives controls natural height and keeps presets and footer outside the inner scroll', () => {
@@ -700,12 +703,14 @@ test('Param 1-7 has Limite Velocity beside Cutoff; the Synth has one limit per o
   const synth = synthView.createSynthModuleMarkup({ oscillator2VelocityLimit: 90 });
   assert.match(synth, /value="127"\s+data-synth-parameter="oscillator1VelocityLimit"/);
   assert.match(synth, /value="90"\s+data-synth-parameter="oscillator2VelocityLimit"/);
+  assert.match(synth, /value="127"\s+data-synth-parameter="oscillator3VelocityLimit"/);
   const saved = synthView.readSynthSettings({ oscillator1VelocityLimit: 300, oscillator2VelocityLimit: 64 });
   assert.equal(saved.oscillator1VelocityLimit, 127);
   assert.equal(saved.oscillator2VelocityLimit, 64);
   for (const preset of synthView.FACTORY_SYNTH_PRESETS) {
     assert.equal(preset.oscillator1VelocityLimit, 127);
     assert.equal(preset.oscillator2VelocityLimit, 127);
+    assert.equal(preset.oscillator3VelocityLimit, 127);
   }
   const defaultParam = settingsView.createModuleSettingsMarkup(
     [], [], null, {}, 120, 2, '1+2', 'chorus', 'envelope', 'default');
