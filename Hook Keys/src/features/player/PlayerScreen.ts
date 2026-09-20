@@ -8304,12 +8304,15 @@ export class PlayerScreen {
     moduleState.timbreId = `user:${id}`;
     moduleState.timbreName = name;
     moduleState.timbreColor = normalizeSoundColor(button.dataset.userSoundfontColor);
-    // Trocar de timbre volta a tela para Default, mas sem jogar fora o que o
-    // músico ajustou em User: fica guardado, do mesmo jeito que o botão
-    // Default/User já guarda, para reaparecer se ele voltar para User.
-    if (moduleState.settingsMode === 'user') moduleState.userSettings = cloneSettings(moduleState.settings);
-    moduleState.settingsMode = 'default';
-    moduleState.settings = this.defaultSettingsForModule(moduleNumber, moduleState);
+    // User nasce a partir do Default somente na primeira vez. Depois disso a
+    // troca de SF2 altera apenas o timbre: se User está ativo, todos os ajustes
+    // continuam ativos; se Default está ativo, só ele acompanha o novo timbre
+    // e o User já criado permanece guardado para quando o músico voltar nele.
+    if (moduleState.settingsMode === 'user') {
+      moduleState.userSettings = cloneSettings(moduleState.settings);
+    } else {
+      moduleState.settings = this.defaultSettingsForModule(moduleNumber, moduleState);
+    }
     // O carregamento nativo pode levar alguns instantes. Marque a escolha no
     // DOM antes de desabilitar o botão para o usuário nunca enxergar um card
     // cinza enquanto o SF2 é preparado.
@@ -10672,12 +10675,14 @@ export class PlayerScreen {
     moduleState.timbreId = `fixed:${sound.id}`;
     moduleState.timbreName = sound.name;
     moduleState.timbreColor = sound.color;
-    // Trocar de timbre volta a tela para Default, mas sem jogar fora o que o
-    // músico ajustou em User: fica guardado, do mesmo jeito que o botão
-    // Default/User já guarda, para reaparecer se ele voltar para User.
-    if (moduleState.settingsMode === 'user') moduleState.userSettings = cloneSettings(moduleState.settings);
-    moduleState.settingsMode = 'default';
-    moduleState.settings = this.defaultSettingsForModule(moduleNumber, moduleState);
+    // O Default do novo timbre só é aplicado quando o módulo já está em
+    // Default. Uma configuração User ativa pertence ao módulo/preset, não ao
+    // SF2 escolhido, e portanto não pode ser substituída durante a troca.
+    if (moduleState.settingsMode === 'user') {
+      moduleState.userSettings = cloneSettings(moduleState.settings);
+    } else {
+      moduleState.settings = this.defaultSettingsForModule(moduleNumber, moduleState);
+    }
     if (button) {
       for (const candidate of button.parentElement?.querySelectorAll<HTMLButtonElement>('[data-fixed-sound-id]') ?? []) {
         const selected = candidate === button;

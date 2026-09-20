@@ -37,6 +37,7 @@ jobs:
         run: |
           npm run build
           npm run test:discovery
+          npm run test:apple-peer
 
       - name: Sincronizar iOS
         run: |

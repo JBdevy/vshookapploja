@@ -1,5 +1,6 @@
 ext {
     capacitorVersion = System.getenv('CAPACITOR_VERSION')
+    androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.6.1'
 }
 
 buildscript {
@@ -36,4 +37,8 @@ repositories {
 
 dependencies {
     implementation project(':capacitor-android')
+    // O tipo retornado por Plugin#getActivity() herda de AppCompatActivity.
+    // A dependencia e "implementation" dentro do Capacitor, portanto nao fica
+    // exposta no classpath de compilacao deste modulo de plugin.
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
 }

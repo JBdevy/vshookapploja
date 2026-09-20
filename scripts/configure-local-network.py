@@ -12,8 +12,11 @@ def configure_ios(root: Path) -> None:
     with plist_path.open("rb") as source:
         data = plistlib.load(source)
     data["NSLocalNetworkUsageDescription"] = (
-        "O VS Hook procura a Hook Center e a extensao VS Hook na sua rede local."
+        "O VS Hook procura a Hook Center na rede local e pode conectar diretamente ao Mac."
     )
+    bonjour_services = set(data.get("NSBonjourServices", []))
+    bonjour_services.add("_vshook._tcp")
+    data["NSBonjourServices"] = sorted(bonjour_services)
     # O bloqueio de orientação no iPad só funciona fora do multitasking.
     data["UIRequiresFullScreen"] = True
     with plist_path.open("wb") as target:

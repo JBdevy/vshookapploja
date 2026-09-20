@@ -8,7 +8,7 @@ const VSHOOK_SCAN_BATCH_SIZE = 72
 const VSHOOK_REDUNDANCY_POLL_MS = 700
 const VSHOOK_REDUNDANCY_TIMEOUT_MS = 600
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-1-chat-composer-v65'
+const VSHOOK_ASSET_VERSION = '1-0-1-chat-composer-v69'
 const VSHOOK_CHAT_BOOTSTRAP_KEY = 'vshook_chat_bootstrap_key'
 const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
 const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
@@ -899,6 +899,26 @@ function renderManualIpBox() {
   `
 }
 
+function isVshookIosNativeApp() {
+  try {
+    return isVshookInstalledNativeApp() &&
+      String(window.Capacitor?.getPlatform?.() || '').toLowerCase() === 'ios'
+  } catch (error) {
+    return false
+  }
+}
+
+function renderApplePeerButton() {
+  if (!isVshookIosNativeApp()) return ''
+  return `<button class="vshook-secondary-button vshook-apple-peer-button" id="applePeerConnectBtn">Conectar direto ao Mac</button>`
+}
+
+function attachApplePeerHandler() {
+  document.getElementById('applePeerConnectBtn')?.addEventListener('click', () => {
+    startVshookApplePeerDiscovery()
+  })
+}
+
 function attachManualIpHandler() {
   document.getElementById('manualIpBtn')?.addEventListener('click', () => attemptManualIpEntry())
   document.getElementById('searchAgainBtn')?.addEventListener('click', () => restartDiscovery())
@@ -911,6 +931,7 @@ function restartDiscovery() {
   // Invalida imediatamente a execução anterior e descarta apenas resultados
   // temporários. O próximo startDiscovery consulta de novo a rede ativa.
   cancelDiscovery()
+  stopVshookApplePeerBridge()
   vshookDiscoveredProjects = []
   try { localStorage.removeItem('vshook_cached_mode_projects') } catch (error) {}
   const button = document.getElementById('searchAgainBtn')
@@ -930,10 +951,12 @@ function renderSearching() {
     <p class="vshook-shell-status">Abra o projeto no REAPER. A busca usa o Wi‑Fi atual e continua em segundo plano. Se preferir, digite o IP do computador.</p>
     ${renderStoredChatButton()}
     ${renderStandaloneTransferHookButton()}
+    ${renderApplePeerButton()}
     ${renderManualIpBox()}
   `)
   attachStoredChatHandler()
   attachStandaloneTransferHookHandler()
+  attachApplePeerHandler()
   attachManualIpHandler()
 }
 
@@ -945,10 +968,12 @@ function renderNoProjects() {
     <p class="vshook-shell-status">Abra o projeto no REAPER e toque em Procurar. O Drop Hook funciona somente com a Hook Center aberta.</p>
     ${renderStoredChatButton()}
     ${renderStandaloneTransferHookButton()}
+    ${renderApplePeerButton()}
     ${renderManualIpBox()}
   `)
   attachStoredChatHandler()
   attachStandaloneTransferHookHandler()
+  attachApplePeerHandler()
   attachManualIpHandler()
 }
 
@@ -1879,6 +1904,17 @@ window.vshookExitToProjectSelector = function () {
 // de rede informada pelo Android/iOS. Todo o restante vem da Hook Center.
 let vshookStoreLocalNetworkPlugin = null
 
+function getVshookStoreLocalNetworkPlugin() {
+  if (!isVshookInstalledNativeApp()) return null
+  if (!vshookStoreLocalNetworkPlugin) {
+    vshookStoreLocalNetworkPlugin = window.Capacitor?.Plugins?.VSHookLocalNetwork || null
+    if (!vshookStoreLocalNetworkPlugin && typeof window.Capacitor?.registerPlugin === 'function') {
+      vshookStoreLocalNetworkPlugin = window.Capacitor.registerPlugin('VSHookLocalNetwork')
+    }
+  }
+  return vshookStoreLocalNetworkPlugin
+}
+
 function isVshookInstalledNativeApp() {
   try {
     const capacitor = window.Capacitor
@@ -1904,19 +1940,154 @@ function isVshookStorePrivateIpv4(value) {
 async function getVshookStoreLocalNetworks() {
   if (!isVshookInstalledNativeApp()) return []
   try {
-    if (!vshookStoreLocalNetworkPlugin) {
-      vshookStoreLocalNetworkPlugin = window.Capacitor?.Plugins?.VSHookLocalNetwork || null
-      if (!vshookStoreLocalNetworkPlugin && typeof window.Capacitor?.registerPlugin === 'function') {
-        vshookStoreLocalNetworkPlugin = window.Capacitor.registerPlugin('VSHookLocalNetwork')
-      }
-    }
-    if (!vshookStoreLocalNetworkPlugin) return []
-    const result = await vshookStoreLocalNetworkPlugin.getAddresses()
+    const plugin = getVshookStoreLocalNetworkPlugin()
+    if (!plugin) return []
+    const result = await plugin.getAddresses()
     // Plugins antigos retornavam somente addresses; os novos incluem a máscara.
     const networks = Array.isArray(result?.networks) ? result.networks : result?.addresses
     return normalizeVshookLocalNetworks(networks)
   } catch (error) {
     return []
+  }
+}
+
+function stopVshookApplePeerBridge() {
+  if (!isVshookIosNativeApp()) return
+  try {
+    const plugin = getVshookStoreLocalNetworkPlugin()
+    if (typeof plugin?.stopApplePeerBridge === 'function') {
+      void plugin.stopApplePeerBridge().catch(() => {})
+    }
+  } catch (error) {}
+}
+
+function renderVshookApplePeerStatus(title, status, extra = '') {
+  setShell(`
+    ${getLogoHtml()}
+    <h1 class="vshook-shell-title">${vshookEscape(title)}</h1>
+    <p class="vshook-shell-subtitle">${vshookEscape(status)}</p>
+    ${extra}
+    <button class="vshook-secondary-button" id="applePeerWifiBtn">Usar rede Wi-Fi normal</button>
+  `, 'vshook-apple-peer-shell-card')
+  document.getElementById('applePeerWifiBtn')?.addEventListener('click', restartDiscovery)
+}
+
+function normalizeVshookApplePeerProjects(payload, connection, peerId) {
+  const projects = extractProjectList(payload, payload, '127.0.0.1')
+  const peerName = String(connection?.peerName || 'Mac').trim() || 'Mac'
+  return projects.map((project) => ({
+    ...project,
+    host: '127.0.0.1',
+    lanHost: '127.0.0.1',
+    directorUrl: String(connection.directorUrl || '').replace(/\/+$/, ''),
+    musiciansUrl: String(connection.musiciansUrl || '').replace(/\/+$/, ''),
+    computerName: peerName,
+    deviceName: peerName,
+    computerId: `apple-peer:${peerId}`,
+    transport: 'apple-peer',
+  }))
+}
+
+async function connectVshookApplePeer(peer, signal) {
+  if (!isCurrentDiscovery(signal)) return
+  renderVshookApplePeerStatus(
+    'Conexão direta',
+    `Conectando ao ${peer.name || 'Mac'}...`,
+    '<div class="vshook-search-spinner" role="status" aria-label="Conectando"></div>'
+  )
+  // setShell cancela a busca que abriu esta tela; uma nova geração passa a
+  // representar exclusivamente a conexão escolhida pelo usuário.
+  const connectSignal = beginDiscovery()
+  try {
+    const plugin = getVshookStoreLocalNetworkPlugin()
+    if (typeof plugin?.connectApplePeer !== 'function') {
+      throw new Error('Atualize o VS Hook para usar a conexão direta.')
+    }
+    const connection = await plugin.connectApplePeer({ peerId: peer.id })
+    if (!isCurrentDiscovery(connectSignal)) return
+    const directorUrl = String(connection?.directorUrl || '').replace(/\/+$/, '')
+    if (!directorUrl) throw new Error('O Mac não abriu a conexão direta.')
+    const payload =
+      await fetchJsonWithTimeout(`${directorUrl}/discovery`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal) ||
+      await fetchJsonWithTimeout(`${directorUrl}/projects`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal) ||
+      await fetchJsonWithTimeout(`${directorUrl}/state`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal)
+    if (!isCurrentDiscovery(connectSignal)) return
+    const projects = payload
+      ? normalizeVshookApplePeerProjects(payload, connection, peer.id)
+      : []
+    if (!projects.length) {
+      throw new Error('A Hook Center foi encontrada, mas não há projeto aberto no REAPER.')
+    }
+    renderModeFirst(projects)
+  } catch (error) {
+    if (!isCurrentDiscovery(connectSignal)) return
+    stopVshookApplePeerBridge()
+    renderVshookApplePeerStatus(
+      'Não foi possível conectar',
+      error?.message || 'Verifique se o Wi-Fi está ligado no iPad e no Mac.',
+      '<button class="vshook-secondary-button vshook-apple-peer-button" id="applePeerRetryBtn">Procurar Macs novamente</button>'
+    )
+    document.getElementById('applePeerRetryBtn')?.addEventListener('click', startVshookApplePeerDiscovery)
+  }
+}
+
+function renderVshookApplePeerChoices(peers) {
+  const rows = peers.map((peer, index) => `
+    <button class="vshook-computer-button" data-apple-peer-index="${index}">
+      <span class="vshook-computer-icon" aria-hidden="true">▣</span>
+      <span class="vshook-computer-copy">
+        <strong>${vshookEscape(peer.name || 'Mac')}</strong>
+        <small>Conexão direta Apple</small>
+      </span>
+    </button>`).join('')
+  renderVshookApplePeerStatus(
+    'Escolha o Mac',
+    'Mais de uma Hook Center foi encontrada por perto.',
+    `<div class="vshook-computer-list vshook-apple-peer-list">${rows}</div>`
+  )
+  const choiceSignal = beginDiscovery()
+  document.querySelectorAll('[data-apple-peer-index]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const peer = peers[Number(button.getAttribute('data-apple-peer-index'))]
+      if (peer) connectVshookApplePeer(peer, choiceSignal)
+    })
+  })
+}
+
+async function startVshookApplePeerDiscovery() {
+  if (!isVshookIosNativeApp()) return
+  renderVshookApplePeerStatus(
+    'Conexão direta',
+    'Procurando Macs próximos com a Hook Center aberta...',
+    '<div class="vshook-search-spinner" role="status" aria-label="Procurando Macs"></div>'
+  )
+  const signal = beginDiscovery()
+  try {
+    const plugin = getVshookStoreLocalNetworkPlugin()
+    if (typeof plugin?.discoverApplePeers !== 'function') {
+      throw new Error('Atualize o VS Hook para usar a conexão direta.')
+    }
+    const result = await plugin.discoverApplePeers({ timeoutMs: 4500 })
+    if (!isCurrentDiscovery(signal)) return
+    const peers = Array.isArray(result?.peers)
+      ? result.peers.filter((peer) => peer && peer.id)
+      : []
+    if (!peers.length) {
+      throw new Error('Nenhum Mac foi encontrado. Ligue o Wi-Fi nos dois aparelhos e abra a Hook Center.')
+    }
+    if (peers.length === 1) {
+      await connectVshookApplePeer(peers[0], signal)
+      return
+    }
+    renderVshookApplePeerChoices(peers)
+  } catch (error) {
+    if (!isCurrentDiscovery(signal)) return
+    renderVshookApplePeerStatus(
+      'Mac não encontrado',
+      error?.message || 'Ligue o Wi-Fi no iPad e no Mac e tente novamente.',
+      '<button class="vshook-secondary-button vshook-apple-peer-button" id="applePeerRetryBtn">Procurar Macs novamente</button>'
+    )
+    document.getElementById('applePeerRetryBtn')?.addEventListener('click', startVshookApplePeerDiscovery)
   }
 }
 
@@ -2009,7 +2180,8 @@ function scheduleVshookRedundancyCheck(delayMs = VSHOOK_REDUNDANCY_POLL_MS) {
 
 function startVshookRedundancyMonitor(project, mode) {
   stopVshookRedundancyMonitor()
-  if (!isVshookInstalledNativeApp() || mode !== 'director' || !project) return
+  if (!isVshookInstalledNativeApp() || mode !== 'director' || !project ||
+      project.transport === 'apple-peer') return
   vshookRedundancyProject = { ...project }
   vshookRedundancyMode = mode
   window.__VSHOOK_REDUNDANCY__ = {

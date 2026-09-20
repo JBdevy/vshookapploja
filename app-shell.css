@@ -357,3 +357,21 @@ html[data-director-device="tablet"].directorLoginPortraitMode .vshook-shell-card
   .vshook-project-shell-card .vshook-project-actions { gap:8px; margin-top:7px; }
   .vshook-project-shell-card .vshook-project-actions button { min-height:38px; padding:7px 12px; border-radius:12px; font-size:14px; }
 }
+
+.vshook-apple-peer-button {
+  border-color:#38bdf8;
+  color:#d9f4ff;
+  background:linear-gradient(180deg,rgba(14,116,144,.42),rgba(8,47,73,.7));
+}
+
+.vshook-apple-peer-button:active,
+.vshook-apple-peer-button.is-pressed {
+  background:linear-gradient(180deg,rgba(2,132,199,.72),rgba(7,89,133,.86));
+}
+
+.vshook-apple-peer-list {
+  width:100%;
+  max-height:min(48vh,360px);
+  overflow-y:auto;
+  overscroll-behavior:contain;
+}

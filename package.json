@@ -14,6 +14,7 @@
     "build": "node scripts/check-safe-area.js && node scripts/build-static.js",
     "test:discovery": "node scripts/test-discovery-shell.js",
     "test:local-network-native": "node scripts/test-local-network-native.js",
+    "test:apple-peer": "node scripts/test-apple-peer-bridge.js",
     "start": "vite --host 0.0.0.0",
     "sync:android": "node scripts/set-capacitor-app-id.js com.vshook.app && npm run build && npx cap sync android",
     "sync:ios": "node scripts/set-capacitor-app-id.js com.hookdeveloper.vshook && npm run build && npx cap sync ios",
