@@ -32,6 +32,7 @@ import androidx.activity.result.ActivityResult;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
@@ -76,6 +77,8 @@ public class HookKeysNativePlugin extends Plugin {
     private AudioManager audioManager;
     // Ler a memória percorre os mapas do processo: fica fora da thread principal.
     private final ExecutorService memoryExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService organExecutor = Executors.newSingleThreadExecutor();
+    private volatile boolean organVoicesLoaded = false;
 
     private final AudioDeviceCallback audioDeviceCallback = new AudioDeviceCallback() {
         @Override
@@ -126,7 +129,9 @@ public class HookKeysNativePlugin extends Plugin {
         closeMidiConnections();
         closeUploads();
         memoryExecutor.shutdownNow();
+        organExecutor.shutdownNow();
         nativeStop();
+        organVoicesLoaded = false;
         super.handleOnDestroy();
     }
 
@@ -139,10 +144,7 @@ public class HookKeysNativePlugin extends Plugin {
             call.reject("Não foi possível iniciar o áudio nativo.");
             return;
         }
-        reconnectSelectedDevices();
-        JSObject result = new JSObject();
-        result.put("ready", true);
-        call.resolve(result);
+        finishOrganInitialization(call, true);
     }
 
     @PluginMethod
@@ -157,8 +159,65 @@ public class HookKeysNativePlugin extends Plugin {
         currentSampleRate = call.getInt("sampleRate", currentSampleRate) == 44100 ? 44100 : 48000;
         int channels = Math.max(1, Math.min(32, call.getInt("channels", 2)));
         boolean preserveEngine = Boolean.TRUE.equals(call.getBoolean("preserveEngine", false));
-        if (nativeRestart(currentBufferSize, deviceId, channels, currentSampleRate, preserveEngine)) call.resolve();
-        else call.reject("Não foi possível abrir o dispositivo de áudio selecionado.");
+        if (!nativeRestart(currentBufferSize, deviceId, channels, currentSampleRate, preserveEngine)) {
+            call.reject("Não foi possível abrir o dispositivo de áudio selecionado.");
+            return;
+        }
+        if (!preserveEngine) organVoicesLoaded = false;
+        finishOrganInitialization(call, false);
+    }
+
+    private void finishOrganInitialization(PluginCall call, boolean initializationResult) {
+        organExecutor.execute(() -> {
+            if (!organVoicesLoaded && !loadBundledOrganVoices()) {
+                nativeStop();
+                call.reject("Não foi possível carregar os bancos SF2 do Organ.");
+                return;
+            }
+            organVoicesLoaded = true;
+            reconnectSelectedDevices();
+            if (initializationResult) {
+                JSObject result = new JSObject();
+                result.put("ready", true);
+                call.resolve(result);
+            } else {
+                call.resolve();
+            }
+        });
+    }
+
+    private boolean loadBundledOrganVoices() {
+        File directory = new File(getContext().getFilesDir(), "hook-b3-v1");
+        if (!directory.exists() && !directory.mkdirs()) return false;
+        byte[] buffer = new byte[256 * 1024];
+        for (int index = 0; index < 9; index += 1) {
+            File destination = new File(directory, "drawbar-" + index + ".sf2");
+            try (InputStream input = getContext().getAssets().open("hook-b3/" + destination.getName())) {
+                long packagedLength = input.available();
+                if (!destination.isFile() || destination.length() != packagedLength) {
+                File temporary = new File(directory, destination.getName() + ".part");
+                if (temporary.exists() && !temporary.delete()) return false;
+                try (FileOutputStream output = new FileOutputStream(temporary)) {
+                    int count;
+                    while ((count = input.read(buffer)) >= 0) {
+                        if (count > 0) output.write(buffer, 0, count);
+                    }
+                    output.getFD().sync();
+                } catch (IOException error) {
+                    temporary.delete();
+                    return false;
+                }
+                if ((destination.exists() && !destination.delete()) || !temporary.renameTo(destination)) {
+                    temporary.delete();
+                    return false;
+                }
+                }
+            } catch (IOException error) {
+                return false;
+            }
+            if (!nativeLoadOrganVoice(index, destination.getAbsolutePath())) return false;
+        }
+        return true;
     }
 
     @PluginMethod
@@ -473,6 +532,19 @@ public class HookKeysNativePlugin extends Plugin {
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
+    }
+
+    @PluginMethod
+    public void configureOrgan(PluginCall call) {
+        JSArray drawbars = call.getArray("drawbars", new JSArray());
+        if (drawbars.length() != 9) {
+            call.reject("A configuração do Organ precisa ter nove drawbars.");
+            return;
+        }
+        for (int index = 0; index < 9; index += 1) {
+            nativeSetOrganDrawbarPosition(index, Math.max(0, Math.min(8, drawbars.optInt(index, 0))));
+        }
+        call.resolve();
     }
 
     @PluginMethod
@@ -1021,6 +1093,8 @@ public class HookKeysNativePlugin extends Plugin {
     private static native float[] nativeModuleMeterLevels();
     private static native float[] nativeModuleAnalysis(int moduleIndex);
     private static native boolean nativeLoadSoundFont(int moduleIndex, String path);
+    private static native boolean nativeLoadOrganVoice(int drawbarIndex, String path);
+    private static native void nativeSetOrganDrawbarPosition(int drawbarIndex, int position);
     private static native boolean nativeCloneSoundFont(int sourceModuleIndex, int targetModuleIndex);
     private static native void nativeUnloadSoundFont(int moduleIndex);
     private static native boolean nativeSendMidi(int inputSlot, int status, int data1, int data2, long timestamp);

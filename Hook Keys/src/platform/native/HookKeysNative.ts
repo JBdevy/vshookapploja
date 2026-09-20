@@ -184,6 +184,10 @@ export interface NativeSynthConfig {
   oscillator2Octave: number;
 }
 
+export interface NativeOrganConfig {
+  drawbars: number[];
+}
+
 export interface NativeMetronomeConfig {
   enabled: boolean;
   bpm: number;
@@ -243,6 +247,7 @@ interface HookKeysNativePlugin {
   configureGlide(options: NativeGlideConfig): Promise<void>;
   configureVelocityLimits(options: NativeVelocityLimitsConfig): Promise<void>;
   configureSynth(options: NativeSynthConfig): Promise<void>;
+  configureOrgan(options: NativeOrganConfig): Promise<void>;
   sendMidi(options: { inputSlot: number; status: number; data1: number; data2: number }): Promise<void>;
   setTempo(options: { bpm: number }): Promise<void>;
   setGlobalTranspose(options: { semitones: number }): Promise<void>;
@@ -295,6 +300,7 @@ class HookKeysNativeBridge {
   private readonly glideKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private readonly velocityLimitKeys: (string | null)[] = Array.from({ length: 8 }, () => null);
   private lastSynthKey: string | null = null;
+  private lastOrganKey: string | null = null;
   private lastTempo: number | null = null;
   private lastGlobalTranspose: number | null = null;
   private lastMetronomeKey: string | null = null;
@@ -635,6 +641,19 @@ class HookKeysNativeBridge {
     this.lastSynthKey = key;
   }
 
+  async configureOrgan(config: NativeOrganConfig): Promise<void> {
+    if (!await this.initialize()) return;
+    const normalized = {
+      drawbars: Array.from({ length: 9 }, (_, index) => (
+        Math.min(8, Math.max(0, Math.round(Number(config.drawbars[index]) || 0)))
+      )),
+    };
+    const key = JSON.stringify(normalized);
+    if (key === this.lastOrganKey) return;
+    await this.call('configure_organ', normalized, () => plugin.configureOrgan(normalized));
+    this.lastOrganKey = key;
+  }
+
   async setTempo(bpm: number): Promise<void> {
     if (!await this.initialize()) return;
     if (this.lastTempo === bpm) return;
@@ -886,6 +905,7 @@ class HookKeysNativeBridge {
     this.glideKeys.fill(null);
     this.velocityLimitKeys.fill(null);
     this.lastSynthKey = null;
+    this.lastOrganKey = null;
     this.lastTempo = null;
     this.lastGlobalTranspose = null;
     this.lastMetronomeKey = null;

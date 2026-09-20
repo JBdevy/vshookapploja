@@ -117,7 +117,6 @@ export class HookKeysApp {
       this.screenRoot,
       this.sessions,
       (session) => { void this.showPlayer(session); },
-      () => this.accountApi.getPublicAppSettings(),
     );
     void authScreen.start();
     await nextPaint();

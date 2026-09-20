@@ -8,12 +8,6 @@ export interface AppSettingsResponse {
   supportUrl: string;
 }
 
-export interface PublicAppSettingsResponse {
-  ok: true;
-  acquireLicenseUrl: string;
-  supportUrl: string;
-}
-
 export interface SoundCatalogResponse {
   ok: true;
   catalog: SoundCatalogPayload;
@@ -59,12 +53,6 @@ export class AccountApi {
       method: 'POST',
       token,
       body: { objectKey, kind },
-    });
-  }
-
-  getPublicAppSettings(): Promise<PublicAppSettingsResponse> {
-    return this.http.request('/api/orangekey/public/app-settings', {
-      method: 'GET',
     });
   }
 

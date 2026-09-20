@@ -9002,6 +9002,7 @@ export class PlayerScreen {
     toggle?.classList.toggle('is-off', !settings.soundEnabled);
     toggle?.setAttribute('aria-pressed', String(settings.soundEnabled));
     this.markPlayerStateChanged();
+    void this.syncNativeEngine();
   }
 
   // Sustain: o nível em que a nota segura enquanto a tecla está presa.
@@ -11320,6 +11321,7 @@ export class PlayerScreen {
         : this.audioRouting.timbres;
       const nativeOutputRoute = parseAudioBusRoute(outputRoute);
       const synthSettings = moduleIndex === 7 ? readSynthSettings(moduleState?.settings.synth) : null;
+      const organSettings = moduleIndex === 6 ? readOrganSettings(moduleState?.settings.organ) : null;
       // No Sens: desliga o envelope do amplificador (o que faz o volume
       // seguir o velocity), soando sempre no ganho pleno da wave. É o motor
       // quem aplica isso agora — inclusive nas notas já soando, na hora —
@@ -11341,7 +11343,7 @@ export class PlayerScreen {
         : null;
       configurationTasks.push(hookKeysNative.configureModule({
         moduleIndex,
-        enabled: Boolean(moduleState?.enabled && (moduleIndex === 7 ||
+        enabled: Boolean(moduleState?.enabled && (organSettings?.soundEnabled ?? true) && (moduleIndex === 6 || moduleIndex === 7 ||
           (moduleState.timbreId && moduleState.timbreId === this.nativeLoadedTimbres[moduleIndex]))),
         inputSlot: patternInputSlot ?? (selectedSlot >= 0 ? selectedSlot : 3),
         lowNote: moduleState?.lowNote ?? 0,
@@ -11433,6 +11435,9 @@ export class PlayerScreen {
             glideMs: effectiveGlideMs(moduleState.settings, this.metronome.getBpm()),
             sustainDb: readModuleSustainDb(moduleState.settings),
           }));
+        }
+        if (moduleIndex === 6 && organSettings) {
+          configurationTasks.push(hookKeysNative.configureOrgan({ drawbars: organSettings.drawbars }));
         }
         // Todo módulo tem seu próprio Pulse (Trance Gate).
         {

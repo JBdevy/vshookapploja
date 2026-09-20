@@ -21,6 +21,7 @@
 		A10000000000000000000008 /* TinySoundFontModule.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* TinySoundFontModule.cpp */; };
 		A10000000000000000000009 /* SessionVaultPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* SessionVaultPlugin.swift */; };
 		A1000000000000000000000A /* OrganModule.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* OrganModule.cpp */; };
+		A1000000000000000000000B /* hook-b3 in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* hook-b3 */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -44,6 +45,7 @@
 		A20000000000000000000013 /* TinySoundFontImplementation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TinySoundFontImplementation.cpp; path = "../../native-engine/src/TinySoundFontImplementation.cpp"; sourceTree = SOURCE_ROOT; };
 		A20000000000000000000014 /* TinySoundFontModule.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TinySoundFontModule.cpp; path = "../../native-engine/src/TinySoundFontModule.cpp"; sourceTree = SOURCE_ROOT; };
 		A20000000000000000000015 /* OrganModule.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = OrganModule.cpp; path = "../../native-engine/src/OrganModule.cpp"; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000016 /* hook-b3 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "hook-b3"; path = "../../native-engine/assets/hook-b3"; sourceTree = SOURCE_ROOT; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -85,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				A30000000000000000000001 /* Hook Keys Engine */,
+				A20000000000000000000016 /* hook-b3 */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A20000000000000000000001 /* HookKeysNativePlugin.swift */,
@@ -181,6 +184,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000000000000000000000B /* hook-b3 in Resources */,
 				504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */,
 				50B271D11FEDC1A000F3C39B /* public in Resources */,
 				504EC30F1FED79650016851F /* Assets.xcassets in Resources */,

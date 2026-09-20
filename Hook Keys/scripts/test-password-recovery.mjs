@@ -64,6 +64,9 @@ const load = (relativePath, modules = {}) => {
   }).outputText, context);
   return context.exports;
 };
+const authScreenSource = readFileSync(new URL('../src/features/auth/AuthScreen.ts', import.meta.url), 'utf8');
+assert.doesNotMatch(authScreenSource, /Comprar acesso|login-purchase-button|login-support-button/,
+  'a tela de login não pode exibir compra externa nem suporte durante a revisão das lojas');
 const apiErrorModule = load('shared/api/ApiError.ts');
 const { AuthScreen } = load('features/auth/AuthScreen.ts', {
   '../../shared/api/ApiError': apiErrorModule,

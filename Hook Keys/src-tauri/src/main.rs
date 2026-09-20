@@ -43,6 +43,12 @@ unsafe extern "C" {
         module_index: usize,
         path: *const c_char,
     ) -> i32;
+    fn hk_runtime_load_organ_voice(
+        handle: *mut c_void,
+        drawbar_index: usize,
+        path: *const c_char,
+    ) -> i32;
+    fn hk_runtime_set_organ_drawbar(handle: *mut c_void, drawbar_index: usize, position: i32);
     fn hk_runtime_clone_soundfont(
         handle: *mut c_void,
         source_module_index: usize,
@@ -343,6 +349,20 @@ impl NativeRuntime {
 
     fn pointer(&self) -> *mut c_void {
         self.0.as_ptr()
+    }
+
+    fn load_organ_voices(&self, paths: &[PathBuf]) -> Result<(), String> {
+        if paths.len() != 9 {
+            return Err("O banco do Organ está incompleto.".into());
+        }
+        for (index, path) in paths.iter().enumerate() {
+            let native_path = CString::new(path.to_string_lossy().as_bytes())
+                .map_err(|_| "O caminho do banco do Organ é inválido.".to_string())?;
+            if unsafe { hk_runtime_load_organ_voice(self.pointer(), index, native_path.as_ptr()) } == 0 {
+                return Err(format!("Não foi possível carregar o drawbar {} do Organ.", index + 1));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -672,7 +692,29 @@ fn select_device(device_id: &str) -> Result<Device, String> {
         .ok_or_else(|| "O dispositivo de áudio selecionado não está mais conectado.".to_string())
 }
 
+fn organ_voice_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
+    let bundled = app.path().resource_dir()
+        .map_err(|error| format!("Não foi possível localizar os recursos do Organ: {error}"))?
+        .join("hook-b3");
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../native-engine/assets/hook-b3");
+    let directory = if bundled.join("drawbar-0.sf2").is_file() {
+        bundled
+    } else {
+        development
+    };
+    let paths = (0..9)
+        .map(|index| directory.join(format!("drawbar-{index}.sf2")))
+        .collect::<Vec<_>>();
+    if paths.iter().all(|path| path.is_file()) {
+        Ok(paths)
+    } else {
+        Err("Os nove bancos SF2 do Organ não foram encontrados na instalação.".into())
+    }
+}
+
 fn start_audio(
+    app: &AppHandle,
     state: &AppState,
     device_id: &str,
     requested_channels: u16,
@@ -716,10 +758,14 @@ fn start_audio(
     }
     let engine = match reusable_engine {
         Some(engine) => engine,
-        None => Arc::new(NativeRuntime::new(
-            sample_rate as f64,
-            buffer_size.max(512) as usize,
-        )?),
+        None => {
+            let engine = Arc::new(NativeRuntime::new(
+                sample_rate as f64,
+                buffer_size.max(512) as usize,
+            )?);
+            engine.load_organ_voices(&organ_voice_paths(app)?)?;
+            engine
+        }
     };
     if !preserve_engine {
         unsafe { hk_runtime_set_midi_input_enabled(engine.pointer(), 0) };
@@ -933,6 +979,7 @@ fn build_audio_stream(
 fn initialize(
     buffer_size: u32,
     sample_rate: u32,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<HashMap<&'static str, bool>, String> {
     let ready = state
@@ -941,7 +988,7 @@ fn initialize(
         .map_err(|_| "Motor de áudio indisponível.".to_string())?
         .is_some();
     if !ready {
-        start_audio(&state, "", 2, buffer_size, sample_rate, false)?;
+        start_audio(&app, &state, "", 2, buffer_size, sample_rate, false)?;
     }
     Ok(HashMap::from([("ready", true)]))
 }
@@ -953,9 +1000,22 @@ fn set_audio_output_device(
     buffer_size: u32,
     sample_rate: u32,
     preserve_engine: bool,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    start_audio(&state, &device_id, channels, buffer_size, sample_rate, preserve_engine)
+    start_audio(&app, &state, &device_id, channels, buffer_size, sample_rate, preserve_engine)
+}
+
+#[tauri::command]
+fn configure_organ(drawbars: Vec<i32>, state: State<'_, AppState>) -> Result<(), String> {
+    if drawbars.len() != 9 {
+        return Err("A configuração do Organ precisa ter nove drawbars.".into());
+    }
+    let engine = state.engine.current()?;
+    for (index, position) in drawbars.into_iter().enumerate() {
+        unsafe { hk_runtime_set_organ_drawbar(engine.pointer(), index, position.clamp(0, 8)) };
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1833,6 +1893,7 @@ fn main() {
             begin_preset_transition,
             commit_preset_transition,
             configure_synth,
+            configure_organ,
             send_midi,
             set_tempo,
             set_global_transpose,

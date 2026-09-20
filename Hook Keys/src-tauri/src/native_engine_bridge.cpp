@@ -63,6 +63,19 @@ int hk_runtime_load_soundfont(void* handle, std::size_t moduleIndex, const char*
   return handle && path && runtime(handle)->loadSoundFont(moduleIndex, path) ? 1 : 0;
 }
 
+int hk_runtime_load_organ_voice(
+    void* handle, std::size_t drawbarIndex, const char* path) noexcept {
+  return handle && path && runtime(handle)->loadOrganVoice(drawbarIndex, path) ? 1 : 0;
+}
+
+void hk_runtime_set_organ_drawbar(
+    void* handle, std::size_t drawbarIndex, int position) noexcept {
+  if (handle) {
+    runtime(handle)->setOrganDrawbarPosition(
+        drawbarIndex, static_cast<std::uint8_t>(std::clamp(position, 0, 8)));
+  }
+}
+
 int hk_runtime_clone_soundfont(
     void* handle, std::size_t sourceModuleIndex, std::size_t targetModuleIndex) noexcept {
   return handle && runtime(handle)->cloneSoundFont(sourceModuleIndex, targetModuleIndex) ? 1 : 0;

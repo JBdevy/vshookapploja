@@ -604,44 +604,6 @@ button {
   text-align: center;
 }
 
-.login-access-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.login-purchase-button,
-.login-support-button {
-  display: flex;
-  width: 100%;
-  min-height: 42px;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  color: #170800;
-  border: 1.5px solid rgba(255, 180, 90, 0.82);
-  border-radius: 13px;
-  background: linear-gradient(180deg, #ffae55, #ef6d12);
-  font-size: 12px;
-  font-weight: 900;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-
-.login-support-button {
-  color: #eefaf2;
-  border: 1.5px solid rgba(48, 201, 99, 0.72);
-  background: linear-gradient(180deg, rgba(35, 151, 73, 0.94), rgba(18, 100, 46, 0.98));
-}
-
-.login-purchase-button:disabled,
-.login-support-button:disabled {
-  cursor: default;
-  filter: grayscale(0.7);
-  opacity: 0.42;
-}
-
 .connection-state,
 .loading-state {
   display: flex;
@@ -3986,6 +3948,8 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .player-global-pitch__separator {
+  flex: 0 0 auto;
+  margin-inline: 2px;
   color: #806d61;
   font-size: clamp(15px, 1.45vw, 21px);
   font-weight: 950;
@@ -10833,6 +10797,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .player-screen--tablet .player-global-pitch__separator {
+    margin-inline: 1px;
     font-size: 10px;
   }
 
@@ -11215,9 +11180,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 }
 
-/* Celular curto em pe: o cartao de acesso tem altura propria e nao encolhe,
-   entao os botoes Comprar/Suporte caiam abaixo da dobra num iPhone SE.
-   Aperta so os respiros; nenhum texto sai da tela. */
+/* Celular curto em pe: aperta so os respiros do acesso; nenhum texto sai da tela. */
 @media (orientation: portrait) and (max-height: 700px) {
   html[data-app-mode="login"] .brand-kicker {
     margin-bottom: 6px;

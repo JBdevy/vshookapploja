@@ -1,7 +1,5 @@
 import { ApiError } from '../../shared/api/ApiError';
-import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
 import type { AuthSessionService } from './AuthSessionService';
-import type { PublicAppSettingsResponse } from '../account/AccountApi';
 import type {
   AuthenticatedSession,
   DeviceRemovalRequiredResponse,
@@ -34,16 +32,11 @@ export class AuthScreen {
   private replacement: { access: DeviceRemovalRequiredResponse } | null = null;
   private countdownTimer: number | null = null;
   private resendBusy = false;
-  private supportUrl = '';
-  private purchaseUrl = '';
-  private readonly supportButton: HTMLButtonElement;
-  private readonly purchaseButton: HTMLButtonElement;
 
   constructor(
     root: HTMLElement,
     private readonly sessions: AuthSessionService,
     private readonly onAuthenticated: (session: AuthenticatedSession) => void,
-    private readonly getPublicAppSettings: () => Promise<PublicAppSettingsResponse>,
   ) {
     this.deviceName = sessions.getDeviceName();
     root.innerHTML = `
@@ -75,10 +68,6 @@ export class AuthScreen {
               <span>Hook Keys</span>
             </div>
             <div id="auth-content" class="auth-content"></div>
-            <div class="login-access-actions">
-              <button class="login-purchase-button" type="button" disabled>Comprar acesso</button>
-              <button class="login-support-button" type="button" disabled>Suporte</button>
-            </div>
           </div>
           <p class="access-footer">Acesso protegido pela sua senha</p>
         </section>
@@ -86,14 +75,9 @@ export class AuthScreen {
     `;
 
     this.content = select(root, '#auth-content');
-    this.purchaseButton = select(root, '.login-purchase-button');
-    this.supportButton = select(root, '.login-support-button');
-    this.purchaseButton.addEventListener('click', () => this.openPurchasePage());
-    this.supportButton.addEventListener('click', () => this.openSupport());
   }
 
   async start(): Promise<void> {
-    void this.loadPublicAppSettings();
     this.renderLoading();
     try {
       const session = await this.sessions.restoreSession();
@@ -105,44 +89,6 @@ export class AuthScreen {
     } catch {
       this.renderConnectionError();
     }
-  }
-
-  private async loadPublicAppSettings(): Promise<void> {
-    try {
-      const settings = await this.getPublicAppSettings();
-      if (isWhatsAppSupportUrl(settings.supportUrl)) {
-        this.supportUrl = settings.supportUrl;
-        this.supportButton.disabled = false;
-      }
-      if (this.isPublicHttpUrl(settings.acquireLicenseUrl)) {
-        this.purchaseUrl = settings.acquireLicenseUrl;
-        this.purchaseButton.disabled = false;
-      }
-    } catch {
-      this.supportUrl = '';
-      this.purchaseUrl = '';
-      this.supportButton.disabled = true;
-      this.purchaseButton.disabled = true;
-    }
-  }
-
-  private openPurchasePage(): void {
-    if (!this.purchaseUrl) return;
-    window.open(this.purchaseUrl, '_blank', 'noopener,noreferrer');
-  }
-
-  private isPublicHttpUrl(value: string): boolean {
-    try {
-      const url = new URL(value);
-      return url.protocol === 'https:' || url.protocol === 'http:';
-    } catch {
-      return false;
-    }
-  }
-
-  private openSupport(): void {
-    if (!this.supportUrl) return;
-    void openWhatsAppSupport(this.supportUrl);
   }
 
   private renderLoading(): void {

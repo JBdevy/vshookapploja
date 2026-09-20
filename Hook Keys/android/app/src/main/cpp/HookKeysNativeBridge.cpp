@@ -151,6 +151,21 @@ public:
     return engine != nullptr && engine->loadSoundFont(moduleIndex, path);
   }
 
+  bool loadOrganVoice(std::size_t drawbarIndex, const char* path) noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> engine;
+    {
+      std::scoped_lock lock(controlMutex_);
+      engine = runtime_;
+    }
+    return engine != nullptr && engine->loadOrganVoice(drawbarIndex, path);
+  }
+
+  void setOrganDrawbarPosition(std::size_t drawbarIndex, std::uint8_t position) noexcept {
+    if (auto* runtime = activeRuntime_.load(std::memory_order_acquire)) {
+      runtime->setOrganDrawbarPosition(drawbarIndex, position);
+    }
+  }
+
   bool cloneSoundFont(std::size_t sourceModuleIndex, std::size_t targetModuleIndex) noexcept {
     std::shared_ptr<hook_keys::NativeEngineRuntime> engine;
     {
@@ -674,6 +689,22 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeLoadSoundFont(
     JNIEnv* environment, jclass, jint moduleIndex, jstring path) {
   const auto nativePath = javaString(environment, path);
   return gEngine.loadSoundFont(static_cast<std::size_t>(moduleIndex), nativePath.c_str()) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeLoadOrganVoice(
+    JNIEnv* environment, jclass, jint drawbarIndex, jstring path) {
+  const auto nativePath = javaString(environment, path);
+  return gEngine.loadOrganVoice(static_cast<std::size_t>(drawbarIndex), nativePath.c_str())
+      ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetOrganDrawbarPosition(
+    JNIEnv*, jclass, jint drawbarIndex, jint position) {
+  gEngine.setOrganDrawbarPosition(
+      static_cast<std::size_t>(drawbarIndex),
+      static_cast<std::uint8_t>(std::clamp(position, 0, 8)));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

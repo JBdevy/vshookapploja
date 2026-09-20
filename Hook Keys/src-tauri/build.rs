@@ -24,5 +24,6 @@ fn main() {
     println!("cargo:rerun-if-changed={engine}/include");
     println!("cargo:rerun-if-changed={engine}/src");
     println!("cargo:rerun-if-changed={engine}/third_party/TinySoundFont/tsf.h");
+    println!("cargo:rerun-if-changed={engine}/assets/hook-b3");
     tauri_build::build()
 }

@@ -34,6 +34,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "configureGlide", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureVelocityLimits", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureSynth", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "configureOrgan", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sendMidi", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTempo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setGlobalTranspose", returnType: CAPPluginReturnPromise),
@@ -120,18 +121,18 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     @objc func initialize(_ call: CAPPluginCall) {
         let bufferFrames = call.getInt("bufferSize", 128)
         let sampleRate = call.getDouble("sampleRate", 48_000)
-        if engine.start(
-            withBufferFrames: bufferFrames,
-            sampleRate: sampleRate
-        ) {
-            activeBufferFrames = bufferFrames
-            activeSampleRate = sampleRate
-            call.resolve(["ready": true])
-        } else {
-            let detail = engine.lastAudioErrorMessage
-            call.reject(detail.isEmpty
-                ? "Não foi possível iniciar o áudio nativo."
-                : "Não foi possível iniciar o áudio nativo (\(detail)).")
+        soundfontQueue.async { [weak self] in
+            guard let self else { return }
+            if self.engine.start(withBufferFrames: bufferFrames, sampleRate: sampleRate) {
+                self.activeBufferFrames = bufferFrames
+                self.activeSampleRate = sampleRate
+                call.resolve(["ready": true])
+            } else {
+                let detail = self.engine.lastAudioErrorMessage
+                call.reject(detail.isEmpty
+                    ? "Não foi possível iniciar o áudio nativo."
+                    : "Não foi possível iniciar o áudio nativo (\(detail)).")
+            }
         }
     }
 
@@ -365,19 +366,24 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             call.resolve()
             return
         }
-        let ok = engine.setAudioOutputDeviceId(
-            requestedId,
-            channels: min(32, max(1, call.getInt("channels", 2))),
-            bufferFrames: bufferFrames,
-            sampleRate: sampleRate,
-            preserveEngine: call.getBool("preserveEngine", false)
-        )
-        if ok {
-            activeBufferFrames = bufferFrames
-            activeSampleRate = sampleRate
-            call.resolve()
-        } else {
-            call.reject("Não foi possível abrir o dispositivo de áudio selecionado.")
+        let channels = min(32, max(1, call.getInt("channels", 2)))
+        let preserveEngine = call.getBool("preserveEngine", false)
+        soundfontQueue.async { [weak self] in
+            guard let self else { return }
+            let ok = self.engine.setAudioOutputDeviceId(
+                requestedId,
+                channels: channels,
+                bufferFrames: bufferFrames,
+                sampleRate: sampleRate,
+                preserveEngine: preserveEngine
+            )
+            if ok {
+                self.activeBufferFrames = bufferFrames
+                self.activeSampleRate = sampleRate
+                call.resolve()
+            } else {
+                call.reject("Não foi possível abrir o dispositivo de áudio selecionado.")
+            }
         }
     }
 
@@ -477,6 +483,21 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             depth: call.getFloat("depth", 1), attackMs: call.getFloat("attackMs", 3),
             releaseMs: call.getFloat("releaseMs", 3), swing: call.getFloat("swing", 0))
         if ok { call.resolve() } else { call.reject("Não foi possível configurar o Trance Gate.") }
+    }
+
+    @objc func configureOrgan(_ call: CAPPluginCall) {
+        let drawbars = call.getArray("drawbars", []).compactMap { value -> NSNumber? in
+            if let number = value as? NSNumber {
+                return NSNumber(value: min(8, max(0, number.intValue)))
+            }
+            return nil
+        }
+        if drawbars.count != 9 {
+            call.reject("A configuração do Organ precisa ter nove drawbars.")
+            return
+        }
+        if engine.configureOrganDrawbars(drawbars) { call.resolve() }
+        else { call.reject("O motor ainda não foi inicializado.") }
     }
 
     @objc func configureModuleEffects(_ call: CAPPluginCall) {

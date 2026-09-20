@@ -337,6 +337,18 @@ private:
   state->sampleRate = sampleRate;
   state->runtime = std::make_unique<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
   state->runtime->setMidiInputEnabled(false);
+  for (NSInteger index = 0; index < 9; ++index) {
+    NSString *name = [NSString stringWithFormat:@"drawbar-%ld", static_cast<long>(index)];
+    NSString *path = [NSBundle.mainBundle pathForResource:name ofType:@"sf2" inDirectory:@"hook-b3"];
+    if (path.length == 0 || !state->runtime->loadOrganVoice(
+            static_cast<std::size_t>(index), path.UTF8String)) {
+      state->runtime.reset();
+      _audioEngine = nil;
+      _lastAudioErrorMessage = [NSString stringWithFormat:
+          @"banco SF2 do drawbar %ld do Organ ausente ou inválido", static_cast<long>(index + 1)];
+      return NO;
+    }
+  }
   state->activeRuntime.store(state->runtime.get(), std::memory_order_release);
 
   // O formato vem da rota real (inclusive mono/Bluetooth), sem fixar estéreo
@@ -551,6 +563,17 @@ static NSString *describeFormat(AVAudioFormat *format) {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && moduleIndex >= 0 && moduleIndex < 8 &&
          runtime->loadSoundFont(static_cast<std::size_t>(moduleIndex), path.UTF8String);
+}
+
+- (BOOL)configureOrganDrawbars:(NSArray<NSNumber *> *)drawbars {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr || drawbars.count != 9) return NO;
+  for (NSInteger index = 0; index < 9; ++index) {
+    runtime->setOrganDrawbarPosition(
+        static_cast<std::size_t>(index),
+        static_cast<std::uint8_t>(std::clamp<NSInteger>(drawbars[index].integerValue, 0, 8)));
+  }
+  return YES;
 }
 
 - (BOOL)cloneSoundFontFromModule:(NSInteger)sourceModuleIndex
