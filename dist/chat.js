@@ -258,7 +258,11 @@
         sync()
       })
       ;['loadedmetadata', 'durationchange', 'timeupdate'].forEach((type) => audio.addEventListener(type, sync))
-      ;['pause', 'ended', 'emptied'].forEach((type) => audio.addEventListener(type, stopSmoothSync))
+      ;['pause', 'emptied'].forEach((type) => audio.addEventListener(type, stopSmoothSync))
+      audio.addEventListener('ended', () => {
+        audio.currentTime = 0
+        stopSmoothSync()
+      })
       seek.addEventListener('input', () => {
         if (Number.isFinite(audio.duration) && audio.duration > 0) audio.currentTime = (Number(seek.value) / 100) * audio.duration
         sync()
@@ -380,11 +384,13 @@
             <button id="chatMobileLogoutButton" class="chatMobileHeaderButton chatMobileLogoutButton" type="button">Sair</button>
             <button id="chatMobileAdminMenu" class="chatMobileHeaderButton" type="button" aria-label="Configurar chat" hidden>☰</button>
             <button id="chatMobileAvatarButton" class="chatMobileHeaderButton" type="button" hidden>Foto</button>
-            <input id="chatMobileAvatarInput" type="file" accept="image/*" hidden />
           </div>
         </header>
         <div id="chatMobileAvatarMenu" class="chatMobileCameraMenu chatMobileProfileMenu" hidden>
-          <button type="button" data-avatar-action="change">Alterar foto</button>
+          <label class="chatMobileCameraMenuAction" data-avatar-action="change">
+            Alterar foto
+            <input id="chatMobileAvatarInput" class="chatMobileNativeFileInput" type="file" accept="image/*" />
+          </label>
           <button id="chatMobileRemoveAvatar" type="button" data-avatar-action="remove">Remover foto</button>
         </div>
 
@@ -711,7 +717,7 @@
   async function chooseMedia(file) {
     const status = document.getElementById('chatMobileStatus')
     try {
-      if (status) status.textContent = 'Preparando imagem...'
+      if (status) status.textContent = ''
       selectedMedia = await prepareImage(file)
       const imagePreview = document.getElementById('chatMobilePreviewImage')
       const audioPreview = document.getElementById('chatMobilePreviewAudio')
@@ -745,7 +751,7 @@
     if (!camera) return false
     const status = document.getElementById('chatMobileStatus')
     try {
-      if (status) status.textContent = source === 'CAMERA' ? 'Abrindo câmera...' : 'Abrindo fototeca...'
+      if (status) status.textContent = ''
       const photo = await camera.getPhoto({
         source,
         resultType: 'dataUrl',
@@ -764,7 +770,7 @@
       await chooseMedia(blob)
       return true
     } catch (error) {
-      if (!/cancel/i.test(String(error?.message || '')) && status) status.textContent = error.message || 'Não foi possível abrir a foto.'
+      if (status) status.textContent = /cancel/i.test(String(error?.message || '')) ? '' : error.message || 'Não foi possível abrir a foto.'
       return true
     }
   }
@@ -1148,45 +1154,23 @@
   async function uploadMobileAvatar(file) {
     const status = document.getElementById('chatMobileStatus')
     try {
-      if (status) status.textContent = 'Preparando foto...'
+      if (status) status.textContent = ''
       const image = await prepareImage(file, 3 * 1024 * 1024)
       const result = await post('/chat/avatar', { image: { mimeType: image.mimeType, base64: image.base64 } })
       applyState(result, true)
-      if (status) status.textContent = 'Foto atualizada.'
+      if (status) status.textContent = ''
     } catch (error) {
       if (status) status.textContent = error.message
-    }
-  }
-
-  async function chooseNativeAvatarPhoto() {
-    const camera = getNativeCameraPlugin()
-    if (!camera) {
-      document.getElementById('chatMobileAvatarInput')?.click()
-      return
-    }
-    const status = document.getElementById('chatMobileStatus')
-    try {
-      const photo = await camera.getPhoto({
-        source: 'PROMPT', resultType: 'dataUrl', quality: 90, width: 1920,
-        correctOrientation: true, saveToGallery: false,
-        promptLabelHeader: 'Foto do perfil', promptLabelCancel: 'Cancelar',
-        promptLabelPhoto: 'Fototeca', promptLabelPicture: 'Tirar foto',
-      })
-      if (!photo?.dataUrl) return
-      const response = await fetch(photo.dataUrl)
-      await uploadMobileAvatar(await response.blob())
-    } catch (error) {
-      if (!/cancel/i.test(String(error?.message || '')) && status) status.textContent = error.message || 'Não foi possível abrir a foto.'
     }
   }
 
   async function removeMobileAvatar() {
     const status = document.getElementById('chatMobileStatus')
     try {
-      if (status) status.textContent = 'Removendo foto...'
+      if (status) status.textContent = ''
       const result = await post('/chat/avatar', { remove: true })
       applyState(result, true)
-      if (status) status.textContent = 'Foto removida.'
+      if (status) status.textContent = ''
     } catch (error) {
       if (status) status.textContent = error.message
     }
@@ -1217,16 +1201,21 @@
     avatarMenu?.addEventListener('click', (event) => {
       const action = event.target.closest('[data-avatar-action]')?.dataset.avatarAction
       if (!action) return
+      if (action === 'change') return
       avatarMenu.hidden = true
-      if (action === 'change') chooseNativeAvatarPhoto()
-      else if (action === 'remove') removeMobileAvatar()
+      if (action === 'remove') removeMobileAvatar()
     })
     document.addEventListener('pointerdown', (event) => {
       if (!avatarMenu || avatarMenu.hidden || event.target === avatarMenuButton || avatarMenu.contains(event.target)) return
       avatarMenu.hidden = true
     })
-    document.getElementById('chatMobileAvatarInput')?.addEventListener('change', (event) => {
-      uploadMobileAvatar(event.target.files?.[0])
+    document.getElementById('chatMobileAvatarInput')?.addEventListener('change', async (event) => {
+      if (avatarMenu) avatarMenu.hidden = true
+      if (event.target.files?.length !== 1) {
+        event.target.value = ''
+        return
+      }
+      await uploadMobileAvatar(event.target.files[0])
       event.target.value = ''
     })
     const picker = document.getElementById('chatMobileEmojiPicker')
