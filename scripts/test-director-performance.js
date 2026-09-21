@@ -486,6 +486,11 @@ assert.match(optimisticPositionBlock, /optimisticPlayingAnchorPos/,
   'inicio local da musica deve possuir ancora propria')
 assert.match(optimisticPositionBlock, /locallyPaused/,
   'progresso local nao pode herdar o pausado antigo do Bridge')
+const ensureSongRowProgressBlock = extractFunction('ensureSongRowProgress')
+assert.match(ensureSongRowProgressBlock, /bar\.style\.transform\s*=\s*nextScale/,
+  'barra nova deve nascer na escala correta, sem piscar cheia')
+assert.doesNotMatch(ensureSongRowProgressBlock, /bar\.style\.width\s*=/,
+  'largura inline era ignorada pelo CSS e fazia a barra aparecer cheia')
 assert(source.includes("showPopup('APENAS COM A MÚSICA PARADA'"),
   'aviso do Grid deve informar que a operacao exige musica parada')
 const stoppedTransportBlock = extractFunction('bridgeExplicitlyStopped')
@@ -618,14 +623,23 @@ assert.match(source,
   /\.mixerTabletGridWaveform>i\{[^}]*border-radius:999px!important/,
   'waveform falsa dos itens deve usar barras arredondadas como o painel Grid')
 assert.match(extractFunction('renderMixerViewButtons'),
-  /data-action="mixer-tracks">MIXER<\/button>[\s\S]*?data-action="mixer-master">MASTER<\/button>/,
-  'TCP deve oferecer somente as visões MIXER e MASTER')
-assert.doesNotMatch(extractFunction('renderMixerViewButtons'),
-  /data-action="mixer-groups"|>TRACKS<|>GRUPOS</,
-  'botões separados de pistas e grupos não devem continuar no TCP')
-assert.doesNotMatch(extractFunction('getMixerTracks'),
-  /state\.mixerView === 'groups'/,
-  'visão MIXER deve manter grupos dentro da lista completa de pistas')
+  /tablet \? 'MIXER' : 'TRACKS'[\s\S]*?tablet \? '' : `[\s\S]*?data-action="mixer-groups">GRUPOS<\/button>`/,
+  'celular deve manter TRACKS, GRUPOS e MASTER; tablet deve manter MIXER e MASTER')
+assert.match(extractFunction('getMixerTracks'),
+  /!isTabletMixerLayout\(\) && state\.mixerView === 'groups'[\s\S]*?data\?\.mixerGroups/,
+  'GRUPOS do celular deve usar a lista separada sem alterar o tablet')
+assert.match(extractFunction('getMusicPaneStructureSignature'),
+  /getMixerFocusItem\(data\)[\s\S]*?state\.mixerTimelineLoadedRevision/,
+  'cache do TCP deve atualizar quando a musica ou o catalogo de itens muda')
+assert.match(extractFunction('applyCachedMixerTimelineProject'),
+  /return entry\.items\.length > 0/,
+  'catalogo vazio nao pode impedir a consulta viva dos itens')
+assert.doesNotMatch(extractFunction('getMixerTimelinePremixItems'),
+  /if \(hasCachedTimeline && !timelineItems\.length\) return \[\]/,
+  'catalogo vazio nao pode ocultar itens compactos do TCP')
+assert.match(extractFunction('renderTelepromptHighlightedText'),
+  /directorTpTextContent[\s\S]*?content\.appendChild\(highlight\)[\s\S]*?element\.replaceChildren\(content\)/,
+  'trecho colorido do teleprompt deve permanecer no mesmo bloco de texto')
 assert.match(extractFunction('getMixerGroupShadowItems'),
   /folderDepth[\s\S]*?remainingDepth[\s\S]*?getMixerItemsForTrack/,
   'pistas de grupo sem item devem reunir as waveforms de suas pistas filhas')
