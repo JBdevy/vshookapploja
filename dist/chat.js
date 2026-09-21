@@ -18,7 +18,6 @@
   let voiceRecorder = null
   let voiceTimer = 0
   let voiceFinishing = false
-  let pushMuteBusy = false
   let replyingToMessageId = 0
   let editingMessageId = 0
   let actionMessageId = 0
@@ -166,7 +165,6 @@
   function saveMobileSession(value) {
     mobileSession = value
     try { localStorage.setItem(mobileSessionStorageKey, JSON.stringify(value)) } catch (_) {}
-    window.vshookSetupNativeChatPushNotifications?.().catch(() => {})
   }
 
   function clearMobileSession() {
@@ -379,7 +377,6 @@
             <span id="chatMobileConnection">Conectando...</span>
           </div>
           <div class="chatMobileHeaderActions">
-            <button id="chatMobileMuteButton" class="chatMobileMuteButton" type="button" aria-label="Silenciar notificações push do Chat Hook" aria-pressed="false" hidden><span>Silenciar</span><i aria-hidden="true"></i></button>
             <button id="chatMobileLogoutButton" class="chatMobileHeaderButton chatMobileLogoutButton" type="button">Sair</button>
             <button id="chatMobileAdminMenu" class="chatMobileHeaderButton" type="button" aria-label="Configurar chat" hidden>☰</button>
             <button id="chatMobileAvatarButton" class="chatMobileHeaderButton" type="button" hidden>Foto</button>
@@ -438,7 +435,6 @@
             <label><span>Mensagens por dia</span><input id="chatMobileAdminLimit" type="number" min="1" max="10000" /></label>
             <label><span>Ilimitado</span><input id="chatMobileAdminUnlimited" type="checkbox" /></label>
             <label><span>Limpar depois de quantos dias</span><input id="chatMobileAdminRetention" type="number" min="1" max="30" /></label>
-            <label><span>Silenciar notificações push</span><input id="chatMobileAdminMute" type="checkbox" /></label>
             <div id="chatMobileAdminStatus" class="chatMobileStatus"></div>
             <div class="chatMobileAdminActions"><button id="chatMobileAdminClear" type="button">Limpar chat</button><button id="chatMobileAdminLogout" class="chatMobileAdminLogout" type="button">Sair</button><button id="chatMobileAdminClose" type="button">Cancelar</button><button id="chatMobileAdminSave" type="button">Salvar</button></div>
           </section>
@@ -596,15 +592,12 @@
     if (quota) quota.textContent = user.isAdmin ? 'Administrador' : user.id ? (limits.unlimited === true ? `${Number(limits.usedToday || 0)} hoje • ilimitado` : `${Number(limits.usedToday || 0)}/${Number(limits.dailyLimit || 10)} hoje`) : '--'
     const adminMenu = document.getElementById('chatMobileAdminMenu')
     const avatarButton = document.getElementById('chatMobileAvatarButton')
-    const muteButton = document.getElementById('chatMobileMuteButton')
     const logoutButton = document.getElementById('chatMobileLogoutButton')
     if (adminMenu) adminMenu.hidden = user.isAdmin !== true
     if (avatarButton) avatarButton.hidden = !user.id
     const removeAvatar = document.getElementById('chatMobileRemoveAvatar')
     if (removeAvatar) removeAvatar.hidden = !user.avatarUrl
-    if (muteButton) muteButton.hidden = user.isAdmin === true
     if (logoutButton) logoutButton.hidden = user.isAdmin === true
-    renderPushMuteControls()
   }
 
   function applyState(next, full = false) {
@@ -1109,58 +1102,8 @@
     document.getElementById('chatMobileAdminUnlimited').checked = settings.dailyMessageUnlimited === true
     document.getElementById('chatMobileAdminLimit').disabled = settings.dailyMessageUnlimited === true
     document.getElementById('chatMobileAdminRetention').value = String(settings.retentionDays || 7)
-    document.getElementById('chatMobileAdminMute').checked = chatPushMuted()
     document.getElementById('chatMobileAdminStatus').textContent = ''
     document.getElementById('chatMobileAdminModal').hidden = false
-  }
-
-  function chatPushMuted() {
-    if (typeof window.vshookIsChatPushMuted === 'function') return window.vshookIsChatPushMuted() === true
-    try { return localStorage.getItem('vshook_chat_push_muted') === '1' }
-    catch (error) { return false }
-  }
-
-  function renderPushMuteControls() {
-    const muted = chatPushMuted()
-    const button = document.getElementById('chatMobileMuteButton')
-    if (button) {
-      button.classList.toggle('is-muted', muted)
-      button.setAttribute('aria-pressed', String(muted))
-      button.disabled = pushMuteBusy
-    }
-    const adminToggle = document.getElementById('chatMobileAdminMute')
-    if (adminToggle && document.activeElement !== adminToggle) adminToggle.checked = muted
-    if (adminToggle) adminToggle.disabled = pushMuteBusy
-  }
-
-  async function setChatPushMuted(muted, statusElement = null) {
-    if (pushMuteBusy) return
-    pushMuteBusy = true
-    renderPushMuteControls()
-    try {
-      const result = typeof window.vshookSetChatPushMuted === 'function'
-        ? await window.vshookSetChatPushMuted(muted)
-        : { muted, synced: true }
-      renderPushMuteControls()
-      const status = statusElement || document.getElementById('chatMobileStatus')
-      if (status) {
-        status.textContent = result?.synced === false
-          ? `${muted ? 'Notificações silenciadas' : 'Notificações ativadas'} neste aparelho. O servidor será atualizado quando a internet voltar.`
-          : muted
-            ? 'Notificações push silenciadas neste aparelho.'
-            : 'Notificações push ativadas neste aparelho.'
-      }
-    } catch (error) {
-      const status = statusElement || document.getElementById('chatMobileStatus')
-      if (status) status.textContent = error.message || 'Não foi possível alterar as notificações push.'
-    } finally {
-      pushMuteBusy = false
-      renderPushMuteControls()
-    }
-  }
-
-  function toggleChatPushMute(statusElement = null) {
-    return setChatPushMuted(!chatPushMuted(), statusElement)
   }
 
   async function logoutChat() {
@@ -1258,7 +1201,6 @@
       if (voiceRecorder?.active) cancelVoiceRecording()
       window.vshookExitToProjectSelector?.()
     })
-    document.getElementById('chatMobileMuteButton')?.addEventListener('click', () => toggleChatPushMute())
     document.getElementById('chatMobileLogoutButton')?.addEventListener('click', logoutChat)
     document.getElementById('chatMobileAdminLogout')?.addEventListener('click', logoutChat)
     document.getElementById('chatMobileAdminMenu')?.addEventListener('click', openAdminSettings)
@@ -1266,9 +1208,6 @@
     document.getElementById('chatMobileAdminSave')?.addEventListener('click', saveAdminSettings)
     document.getElementById('chatMobileAdminClear')?.addEventListener('click', clearChatAsAdmin)
     document.getElementById('chatMobileAdminUnlimited')?.addEventListener('change', (event) => { document.getElementById('chatMobileAdminLimit').disabled = event.target.checked })
-    document.getElementById('chatMobileAdminMute')?.addEventListener('change', (event) => {
-      setChatPushMuted(event.target.checked, document.getElementById('chatMobileAdminStatus'))
-    })
     const avatarMenu = document.getElementById('chatMobileAvatarMenu')
     const avatarMenuButton = document.getElementById('chatMobileAvatarButton')
     avatarMenuButton?.addEventListener('click', (event) => {

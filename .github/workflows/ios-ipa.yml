@@ -50,7 +50,6 @@ jobs:
           python3 scripts/configure-ios-minimum.py
           python3 scripts/apply-native-icons.py ios
           python3 scripts/configure-local-network.py ios
-          python3 scripts/configure-push-notifications.py ios
           python3 scripts/configure-media-permissions.py ios
           python3 scripts/configure-fullscreen.py ios
 

@@ -44,8 +44,6 @@ jobs:
           npm run test:discovery
 
       - name: Sincronizar Android
-        env:
-          ANDROID_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
           node scripts/set-capacitor-app-id.js com.vshook.app
           if [ ! -d android ]; then
@@ -56,28 +54,6 @@ jobs:
           python3 scripts/configure-android-minimum.py
           python3 scripts/configure-media-permissions.py android
           python3 scripts/configure-fullscreen.py android
-          if [ -n "$ANDROID_GOOGLE_SERVICES_JSON_BASE64" ]; then
-            printf '%s' "$ANDROID_GOOGLE_SERVICES_JSON_BASE64" | tr -d '\r\n\t ' | base64 --decode > android/app/google-services.json
-            python3 - <<'PY'
-          import json, sys
-          path = 'android/app/google-services.json'
-          with open(path, encoding='utf-8') as handle:
-              config = json.load(handle)
-          packages = {
-              str(client.get('client_info', {}).get('android_client_info', {}).get('package_name', ''))
-              for client in config.get('client', [])
-          }
-          expected = 'com.vshook.app'
-          if expected not in packages:
-              print(f'google-services.json não possui o pacote obrigatório {expected}. Pacotes encontrados: {sorted(packages)}')
-              sys.exit(1)
-          project = config.get('project_info', {})
-          print(f"Firebase Android validado: projeto={project.get('project_id', '')}, numero={project.get('project_number', '')}, pacote={expected}")
-          PY
-            echo "Firebase Android configurado para notificações do Chat Hook."
-          else
-            echo "AVISO: ANDROID_GOOGLE_SERVICES_JSON_BASE64 não configurado; notificações Android não serão registradas."
-          fi
           python3 scripts/apply-native-icons.py android
 
       - name: Definir versão Android

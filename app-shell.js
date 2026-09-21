@@ -14,6 +14,7 @@ const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
 const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
 const VSHOOK_CHAT_PUSH_TOKEN_KEY = 'vshook_chat_push_token'
 const VSHOOK_CHAT_PUSH_MUTED_KEY = 'vshook_chat_push_muted'
+const VSHOOK_CHAT_PUSH_ENABLED = false
 const VSHOOK_CHAT_BACKEND_URL = 'https://hookupdate7.up.railway.app'
 let vshookDiscoveredProjects = []
 let vshookBridgeBrowserMode = false
@@ -144,7 +145,6 @@ function renderStoredChatButton() {
 function enterStoredChat() {
   const session = getStoredChatMobileSession()
   if (!session && !hasStoredChatBootstrapKey()) return false
-  if (session) setupNativeChatPushNotifications().catch(() => false)
   const bridgeBaseUrl = String(session?.bridgeBaseUrl || window.location.origin || '').replace(/\/+$/, '')
   enterApp({
     id: 'chat-hook-internet',
@@ -242,6 +242,7 @@ function publishChatPushStatus(code, message) {
 }
 
 async function postChatPushToken(session, pushToken, platform, firebaseProjectId = '') {
+  if (!VSHOOK_CHAT_PUSH_ENABLED) return false
   if (!session?.accessToken || !session?.backendUrl || !pushToken) return false
   if (isChatPushMuted()) {
     await postChatPushUnregister(session, pushToken)
@@ -322,6 +323,7 @@ async function rotateNativeChatPushToken(PushNotifications, rejectedToken, platf
 }
 
 async function setupNativeChatPushNotifications() {
+  if (!VSHOOK_CHAT_PUSH_ENABLED) return false
   if (!isVshookInstalledNativeApp()) return false
   const session = getStoredChatMobileSession()
   if (!session) return false
@@ -408,6 +410,7 @@ async function setupNativeChatPushNotifications() {
 window.vshookSetupNativeChatPushNotifications = setupNativeChatPushNotifications
 window.vshookIsChatPushMuted = isChatPushMuted
 window.vshookSetChatPushMuted = async function (muted) {
+  if (!VSHOOK_CHAT_PUSH_ENABLED) return { muted: true, synced: true, disabled: true }
   const shouldMute = muted === true
   try {
     if (shouldMute) localStorage.setItem(VSHOOK_CHAT_PUSH_MUTED_KEY, '1')
@@ -462,10 +465,6 @@ window.vshookLogoutChat = async function () {
   try { window.dispatchEvent(new CustomEvent('vshook-chat-session-changed', { detail: null })) } catch (error) {}
   return true
 }
-
-window.addEventListener('online', () => {
-  setupNativeChatPushNotifications().catch(() => false)
-})
 
 function attachStoredChatHandler() {
   document.getElementById('openStoredChatBtn')?.addEventListener('click', () => {
@@ -2437,13 +2436,12 @@ window.addEventListener('load', async () => {
   keepScreenAwake()
   const forcedModeProjects = consumeVSHookForcedModeSelection()
   await bootstrapChatMobileSessionFromQr()
-  await setupNativeChatPushNotifications()
   if (forcedModeProjects !== null) {
     renderModeFirst(forcedModeProjects)
     return
   }
   try {
-    if ((consumeChatNotificationTarget() || localStorage.getItem('vshook_selected_mode') === 'chat') && getStoredChatMobileSession()) {
+    if (localStorage.getItem('vshook_selected_mode') === 'chat' && getStoredChatMobileSession()) {
       enterStoredChat()
       return
     }

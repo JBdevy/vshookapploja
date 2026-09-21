@@ -12,6 +12,10 @@ const director = read('vsdiretor.js')
 const musicians = read('vsmusicos.js')
 const transferHook = read('transfer-hook.js')
 const index = read('index.html')
+const iosMediaPermissions = read('scripts/configure-media-permissions.py')
+const iosWorkflow = read('.github/workflows/ios-ipa.yml')
+const androidWorkflow = read('.github/workflows/android-apk-aab.yml')
+const packageManifest = JSON.parse(read('package.json'))
 const shippedFiles = [
   'app-shell.js',
   'chat.js',
@@ -78,6 +82,29 @@ assert.match(chat, /post\('\/chat\/avatar'/,
   'O envio da foto deixou de usar a rota persistente do perfil.')
 assert.match(chat, /applyState\(result, true\)/,
   'A foto enviada não atualiza o estado retornado pelo servidor.')
+for (const usageDescription of [
+  'NSCameraUsageDescription',
+  'NSPhotoLibraryUsageDescription',
+  'NSPhotoLibraryAddUsageDescription',
+]) {
+  assert.match(iosMediaPermissions, new RegExp(`data\\["${usageDescription}"\\]`),
+    `A preparação do Info.plist não configura ${usageDescription}.`)
+}
+assert.match(iosWorkflow, /python3 scripts\/configure-media-permissions\.py ios/,
+  'O workflow do IPA não aplica as permissões de mídia ao Info.plist.')
+
+assert.equal(packageManifest.dependencies?.['@capacitor/push-notifications'], undefined,
+  'O plugin de push não deve fazer parte do app Android/iOS.')
+assert.equal(packageManifest.dependencies?.['@capacitor/local-notifications'], undefined,
+  'O plugin de notificações locais não deve fazer parte do app Android/iOS.')
+assert.match(appShell, /const VSHOOK_CHAT_PUSH_ENABLED = false/,
+  'O push do Chat Hook deve permanecer desativado no aplicativo.')
+assert.doesNotMatch(chat, /chatMobileMuteButton|chatMobileAdminMute|Silenciar notificações push/,
+  'A interface ainda oferece controles de notificações desativadas.')
+assert.doesNotMatch(iosWorkflow, /configure-push-notifications/,
+  'O workflow iOS ainda injeta a capacidade de Push Notifications.')
+assert.doesNotMatch(androidWorkflow, /ANDROID_GOOGLE_SERVICES_JSON_BASE64|google-services\.json/,
+  'O workflow Android ainda instala Firebase para notificações.')
 
 for (const forbiddenDirectory of ['Hook Keys', 'android', 'ios', 'node_modules', 'plugins']) {
   assert.equal(fs.existsSync(path.join(root, 'dist', forbiddenDirectory)), false,

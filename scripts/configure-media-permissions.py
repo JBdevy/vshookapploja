@@ -99,6 +99,13 @@ def configure_ios(root: Path) -> None:
         "O VS Hook acessa sua fototeca quando você escolhe uma imagem para enviar "
         "no Chat Hook ou usar como foto de perfil."
     )
+    # O Camera.getPhoto do Capacitor valida também a chave de adição da
+    # fototeca no iOS, mesmo quando saveToGallery está desativado. Sem ela o
+    # seletor nativo interrompe a troca da foto antes de retornar a imagem.
+    data["NSPhotoLibraryAddUsageDescription"] = (
+        "O VS Hook pode adicionar uma imagem à sua fototeca quando você usa "
+        "os recursos de foto do Chat Hook."
+    )
     data["NSMicrophoneUsageDescription"] = (
         "O VS Hook usa o microfone somente quando você grava uma mensagem de voz no Chat Hook."
     )
@@ -120,7 +127,7 @@ def configure_ios(root: Path) -> None:
     data["UISupportedInterfaceOrientations~ipad"] = tablet_orientations
     with plist_path.open("wb") as target:
         plistlib.dump(data, target, sort_keys=False)
-    print(f"Permissao de microfone iOS configurada: {plist_path}")
+    print(f"Permissões de câmera, fototeca e microfone iOS configuradas: {plist_path}")
 
 
 def main() -> None:

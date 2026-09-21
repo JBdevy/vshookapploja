@@ -12,9 +12,6 @@
   "plugins": {
     "Keyboard": {
       "resize": "none"
-    },
-    "PushNotifications": {
-      "presentationOptions": []
     }
   }
 }
