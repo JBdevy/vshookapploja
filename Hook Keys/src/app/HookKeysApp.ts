@@ -175,14 +175,34 @@ export class HookKeysApp {
       playerBackup,
     );
     this.playerScreen.mount();
-    const loading = this.playOctaveTransition('enter', undefined, this.playerScreen.waitUntilReady());
-    // Mantém o preto acima do player e abaixo das duas animações. Assim os
-    // fades e a troca entre carregamento e boas-vindas nunca expõem o player.
+    const welcomeName = welcomeDisplayName(session);
+    let welcome: Promise<void> | null = null;
+    const revealPlayer = () => {
+      if (changeId === this.screenChangeId) cover.remove();
+    };
+    const startWelcome = () => {
+      if (changeId !== this.screenChangeId || welcome) return;
+      // Prepara a tela de boas-vindas atrás do carregamento antes do fade dele.
+      // Assim a cobertura preta nunca fica sozinha entre as duas animações.
+      welcome = this.playWelcomeTransition(welcomeName, revealPlayer, true);
+    };
+    const loading = this.playOctaveTransition(
+      'enter',
+      startWelcome,
+      this.playerScreen.waitUntilReady(),
+    );
+    // O preto protege somente a preparação. No fade final das boas-vindas ele
+    // sai primeiro, para a animação revelar diretamente o player — nunca uma
+    // tela preta enquanto o MIDI termina de ativar.
     cover.classList.add('orientation-transition-cover--startup');
     await loading;
     if (changeId !== this.screenChangeId) return;
-    await this.playWelcomeTransition(welcomeDisplayName(session));
-    if (changeId === this.screenChangeId) await this.playerScreen?.activateLiveMidi();
+    if (!welcome) welcome = this.playWelcomeTransition(welcomeName, revealPlayer);
+    await welcome;
+    if (changeId === this.screenChangeId) {
+      this.screenRoot.inert = false;
+      await this.playerScreen?.activateLiveMidi();
+    }
     } catch (error) {
       if (changeId === this.screenChangeId) this.showStartupError(session, error);
     } finally {
@@ -262,8 +282,12 @@ export class HookKeysApp {
     });
   }
 
-  private playWelcomeTransition(name: string): Promise<void> {
-    this.octaveTransition?.remove();
+  private playWelcomeTransition(
+    name: string,
+    revealPlayer?: () => void,
+    handoffFromLoading = false,
+  ): Promise<void> {
+    if (!handoffFromLoading) this.octaveTransition?.remove();
     const holder = document.createElement('div');
     holder.innerHTML = createWelcomeTransitionMarkup().trim();
     const overlay = holder.firstElementChild as HTMLElement | null;
@@ -273,17 +297,31 @@ export class HookKeysApp {
     const fullText = `Bem Vindo, ${name}`;
     const characters = Array.from(fullText);
     overlay.setAttribute('aria-label', fullText);
+    if (handoffFromLoading) {
+      // Já entra completamente opaca, mas abaixo do carregamento. O fade do
+      // carregamento passa diretamente para esta tela, sem revelar o preto.
+      overlay.classList.add('welcome-transition--handoff', 'is-running');
+    }
     this.octaveTransition = overlay;
     document.body.append(overlay);
 
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     return new Promise((resolve) => {
+      let revealed = false;
+      const reveal = () => {
+        if (revealed) return;
+        revealed = true;
+        revealPlayer?.();
+      };
       const finish = () => {
+        reveal();
         overlay.remove();
         if (this.octaveTransition === overlay) this.octaveTransition = null;
         resolve();
       };
-      window.requestAnimationFrame(() => overlay.classList.add('is-running'));
+      if (!handoffFromLoading) {
+        window.requestAnimationFrame(() => overlay.classList.add('is-running'));
+      }
       if (reducedMotion) {
         textElement.textContent = fullText;
         window.setTimeout(finish, 1100);
@@ -307,6 +345,7 @@ export class HookKeysApp {
           window.setTimeout(eraseNext, 38);
           return;
         }
+        reveal();
         overlay.classList.add('is-leaving');
         window.setTimeout(finish, 360);
       };

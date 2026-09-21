@@ -238,8 +238,39 @@ test('M-RT pode desligar a roda; R-TG e CC 1 mantêm Slow/Fast sincronizados sem
   }
   assert(isCcMappingKey('module-control:7:rotary:depth'));
   assert(isCcMappingKey('module-control:7:rotary:toggle'));
+  for (let drawbar = 0; drawbar < 9; drawbar += 1) {
+    assert(isCcMappingKey(`module-control:7:organ:drawbar:${drawbar}`),
+      `Drawbar ${drawbar + 1} keeps its own persistent Learn CC key`);
+  }
+  assert(!isCcMappingKey('module-control:7:organ:drawbar:9'));
+  assert(!isCcMappingKey('module-control:6:organ:drawbar:0'));
   assert(!isCcMappingKey('module-control:7:rotary:speed:invalid'));
   assert(!isCcMappingKey('module-control:4:rotary:speed:slow'));
+});
+
+test('each Organ drawbar exposes Learn CC by desktop right-click', () => {
+  class Element { closest() { return null; } }
+  const drawbar = new Element();
+  drawbar.dataset = { organDrawbarTrack: '4' };
+  drawbar.closest = (selector) => selector === '[data-organ-drawbar-track]' ? drawbar : null;
+  const { Handlers } = loadPlayerHandlers(
+    ['ccLearnTargetForOrganDrawbar', 'onRootContextMenu'],
+    { Element, ORGAN_DRAWBARS: Array.from({ length: 9 }, (_, index) => ({ feet: String(index + 1) })) },
+  );
+  const screen = new Handlers();
+  const learned = [];
+  Object.assign(screen, {
+    desktopRuntime: true,
+    currentModalKind: 'module-organ',
+    currentModalModuleNumber: 7,
+    openCcLearn: (target) => learned.push(target),
+  });
+  let prevented = false;
+  screen.onRootContextMenu({ target: drawbar, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.deepEqual(learned.map(({ kind, moduleNumber, control }) => ({ kind, moduleNumber, control })), [{
+    kind: 'module-control', moduleNumber: 7, control: 'organ:drawbar:4',
+  }]);
 });
 
 test('Rotary Learn uses two-second touch hold with movement cancellation and desktop right-click', () => {

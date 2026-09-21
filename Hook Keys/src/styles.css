@@ -808,6 +808,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .welcome-transition.is-running { opacity: 1; }
+.welcome-transition--handoff { z-index: 9999; }
 .welcome-transition.is-running::after { animation: welcome-cinema-scan 1.35s .22s ease-out both; }
 .welcome-transition.is-leaving { opacity: 0; filter: blur(6px); }
 
@@ -1411,17 +1412,22 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   display: grid;
   min-width: 0;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: clamp(6px, .9vw, 10px);
+  gap: 2px;
 }
 .synth-oscillator-page {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
-  gap: clamp(6px, .9vw, 10px);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, auto));
+  gap: 2px;
   min-width: 0;
 }
 .synth-oscillator-page[hidden] { display: none !important; }
-.synth-oscillator-page .synth-card--oscillator { grid-column: auto; }
+.synth-oscillator-page .synth-card--oscillator {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+.synth-oscillator-page .synth-card--octaves { grid-column: 3 / -1; }
 
 .synth-card {
   min-width: 0;
@@ -1429,7 +1435,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   overflow: hidden;
   padding: 8px;
   border: 1px solid rgba(116, 104, 139, .52);
-  border-radius: 10px;
+  border-radius: 4px;
   background: linear-gradient(155deg, rgba(31, 28, 43, .96), rgba(10, 10, 16, .98));
   box-shadow: inset 0 1px rgba(255,255,255,.035);
 }
@@ -1452,6 +1458,15 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .synth-card--target { grid-template-rows: repeat(2, max-content); }
 .synth-option-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
 .synth-card--target .synth-option-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Fecha todas as fileiras do grid de quatro colunas: Filter Env ocupa as duas
+   vagas finais, e o Glide vira um card horizontal de largura inteira. */
+.synth-editor__grid > .synth-card:has([data-synth-parameter="filterEnvelope"]) {
+  grid-column: span 2;
+}
+.synth-editor__grid > .module-glide-card {
+  grid-column: 1 / -1;
+}
 
 .synth-card--octaves { display: grid; align-content: center; gap: 6px; }
 .synth-octave-row { display: grid; grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 1fr)); align-items: center; gap: 4px; min-width: 0; }
@@ -1510,7 +1525,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 @media (orientation: landscape) and (max-height: 560px) {
   .synth-editor { gap: 6px; margin-top: 7px; padding: 8px; }
-  .synth-editor__grid { gap: 5px; }
+  .synth-editor__grid { gap: 2px; }
   .synth-card { min-height: 48px; padding: 5px; }
   .synth-editor__header button,
   .synth-option-row button { min-height: 24px; padding: 2px 4px; font-size: 7px; }
@@ -1518,10 +1533,6 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 @media (max-width: 700px) {
   .synth-editor__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-@media (min-width: 1100px) {
-  .synth-editor__header { grid-template-columns: minmax(180px, .3fr) minmax(0, 1fr); }
 }
 
 @media (max-width: 480px) {
@@ -3745,31 +3756,46 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   gap: 22px;
 }
 .knob-focus__fader {
+  --focus-fader-progress: 0;
+  position: relative;
   display: grid;
   place-items: center;
   width: 34px;
   height: 118px;
 }
-.knob-focus__fader input {
-  width: 34px;
-  height: 118px;
-  margin: 0;
-  accent-color: var(--knob-accent);
-  cursor: ns-resize;
-  direction: rtl;
-  writing-mode: vertical-lr;
-  touch-action: none;
+.knob-focus__fader::before {
+  width: 8px;
+  height: 100%;
+  border: 1px solid #343943;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #050608, #171a1f 48%, #050608);
+  box-shadow: inset 0 0 5px #000, 0 0 7px color-mix(in srgb, var(--knob-accent) 28%, transparent);
+  content: "";
 }
-
-/* WebViews móveis não aplicam de forma consistente writing-mode em range.
-   Mantemos o range nativo horizontal e giramos o controle inteiro; o gesto
-   continua sendo calculado pelo eixo Y no PlayerScreen. */
-:root:not([data-runtime="desktop"]) .knob-focus__fader input {
-  width: 118px;
-  height: 34px;
-  direction: ltr;
-  writing-mode: horizontal-tb;
-  transform: rotate(-90deg);
+.knob-focus__fader::after {
+  position: absolute;
+  top: calc((1 - var(--focus-fader-progress)) * (100% - 20px));
+  left: 50%;
+  width: 30px;
+  height: 20px;
+  border: 1px solid #626a76;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #444b55, #171a1f 47%, #090a0c 53%, #353b44);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--knob-accent) 45%, transparent), inset 0 1px rgba(255,255,255,.2);
+  transform: translateX(-50%);
+  pointer-events: none;
+  content: "";
+}
+.knob-focus__fader input {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ns-resize;
+  touch-action: none;
 }
 
 .module-envelope-control:nth-of-type(1) .module-envelope-knob { --knob-accent: #ff5c5c; }
@@ -4531,17 +4557,8 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
    as far as their labels, knob and value still fit without overlapping. */
 @media (orientation: landscape) {
   .player-modal--module-synth .player-modal__surface {
-    gap: clamp(6px, 1vh, 12px);
-    padding: clamp(10px, 1.8vw, 24px);
-  }
-
-  .player-modal--module-synth .player-modal__eyebrow {
-    margin-bottom: 3px;
-    font-size: clamp(8px, 1.1vh, 11px);
-  }
-
-  .player-modal--module-synth .player-modal__header h2 {
-    font-size: clamp(18px, 3.4vh, 34px);
+    gap: 4px;
+    padding: 4px 6px;
   }
 
   .player-modal--module-synth .player-modal__body {
@@ -4551,10 +4568,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
   .player-modal--module-synth .synth-editor {
     grid-template-rows: auto minmax(0, 1fr);
-    gap: clamp(5px, 1vh, 10px);
+    gap: 4px;
     min-height: 0;
-    margin-top: 0;
-    padding: clamp(6px, 1.2vh, 12px);
+    margin: 0;
+    padding: 0;
   }
 
   .player-modal--module-synth .synth-editor__grid {
@@ -4565,7 +4582,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
     --synth-row-min-height: calc(var(--synth-knob-size) + var(--synth-control-padding) * 2 + var(--synth-control-gap) * 2 + var(--synth-control-font-size) * 2.4 + 2px);
     grid-template-rows: max-content repeat(3, minmax(var(--synth-row-min-height), 1fr)) minmax(max-content, 1fr);
     grid-auto-rows: minmax(var(--synth-row-min-height), max-content);
-    gap: clamp(4px, 0.8vh, 8px);
+    gap: 2px;
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
@@ -4628,7 +4645,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   }
 
   .player-modal--module-synth .player-modal__actions {
-    padding-top: clamp(5px, 1vh, 10px);
+    padding-top: 0;
   }
 
   .player-modal--module-synth .player-modal__actions > button {
@@ -11569,6 +11586,25 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 .player-modal--module-delay .player-modal__surface,
 .player-modal--module-synth .player-modal__surface { position: relative; }
 
+/* A própria interface já identifica o Synth pelos OSC. Removemos o título e o
+   segundo contorno para entregar essa altura aos controles. */
+.player-modal--module-synth .player-modal__header {
+  display: none;
+}
+.player-modal--module-synth .player-modal__surface {
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 4px;
+  padding: 4px 6px;
+}
+.player-modal--module-synth .synth-editor {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 /* Synth footer: Voltar | Reset | OK, with Reset styled like the processor reset. */
 .player-modal--module-synth .player-modal__actions {
   display: grid;
@@ -15183,28 +15219,17 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 
 
 /* ===== Celular em paisagem: Synth, Glide e Config sem texto maior que o botão =====
-   O Synth perde os dois títulos (a fileira de presets já identifica a tela) e
-   usa 6 colunas: OSC 1 e OSC 2 inteiros na primeira fileira e os knobs em
-   cards compactos. */
+   O Synth conserva exatamente a organização compartilhada com o desktop;
+   aqui mudam somente escala, espaços e títulos externos para caber na tela. */
 @media (orientation: landscape) and (max-height: 520px) {
-  .player-modal--module-synth .player-modal__header > :not(button) {
-    display: none;
-  }
-
-  .player-modal--module-synth .player-modal__header {
-    min-height: 0;
-    margin: 0;
-    padding: 0;
-  }
-
   .player-modal--module-synth .player-modal__surface {
     gap: 4px;
-    padding: 6px 8px;
+    padding: 3px 5px;
   }
 
   .player-modal--module-synth .synth-editor {
     gap: 4px;
-    padding: 5px;
+    padding: 0;
   }
 
   .player-modal--module-synth .synth-editor__identity {
@@ -15220,9 +15245,6 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
     --synth-control-padding: 3px;
     --synth-control-gap: 1px;
     --synth-control-font-size: 7px;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    grid-template-rows: max-content repeat(3, minmax(0, 1fr));
-    grid-auto-rows: minmax(0, 1fr);
     gap: 3px;
   }
 
@@ -15232,14 +15254,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   }
 
   .player-modal--module-synth .synth-card--oscillator {
-    grid-column: span 3;
     gap: 3px;
-  }
-
-  .player-modal--module-synth .synth-card--target,
-  .player-modal--module-synth .synth-editor__grid > .module-glide-card,
-  .player-modal--module-synth .synth-card--octaves {
-    grid-column: span 2;
   }
 
   .player-modal--module-synth .synth-card--range {
@@ -15734,4 +15749,36 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
     inset 1px 0 rgba(255, 255, 255, .1),
     inset -1px 0 rgba(0, 0, 0, .8);
   content: "";
+}
+
+/* Padrão único dos cards de parâmetros em todos os módulos. Mantemos os
+   botões internos com sua identidade; o card externo usa raio 4 e os grids
+   deixam exatamente 2 px entre um card e outro. */
+:is(
+  .synth-card,
+  .module-envelope-control,
+  .module-eq-card,
+  .module-effect-card,
+  .module-effect-knob,
+  .module-velocity-card,
+  .module-gain-card,
+  .module-glide-card,
+  .module-mod-card,
+  .pattern-knob,
+  .arpeggiator-auto-fader
+) {
+  border-radius: 4px;
+}
+
+:is(
+  .synth-editor__grid,
+  .synth-oscillator-page,
+  .module-envelope-grid,
+  .module-processors-grid,
+  .module-settings-bottom-row,
+  .module-effect-controls,
+  .pattern-knob-grid,
+  .module-eq-editor__readouts
+) {
+  gap: 2px;
 }

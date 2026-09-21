@@ -567,14 +567,25 @@ test('module fader field and library controls use the requested compact corner r
   assert.match(css, /\.player-screen :is\(\.player-module__settings-button, \.player-module__sound-button\)\s*\{\s*border-radius:\s*4px;/);
 });
 
+test('all module parameter cards use four-pixel corners and two-pixel spacing', () => {
+  assert.match(css, /:is\(\s*\.synth-card,[\s\S]*?\.arpeggiator-auto-fader\s*\)\s*\{\s*border-radius:\s*4px;/);
+  assert.match(css, /:is\(\s*\.synth-editor__grid,[\s\S]*?\.module-eq-editor__readouts\s*\)\s*\{\s*gap:\s*2px;/);
+});
+
 test('the interface base uses the loading-panel dark gray instead of pure black', () => {
   assert.match(css, /--interface-background:\s*#131315;/);
   assert.match(css, /\.player-screen\s*\{[^}]*background:\s*var\(--interface-background\);/s);
   assert.match(css, /\.player-screen--tablet\.is-tracks-split > \.player-primary > \.player-top-transport\s*\{[^}]*background:\s*var\(--interface-background\);/s);
 });
 
-test('mobile enlarged knob uses a truly vertical fader in WebViews', () => {
-  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.knob-focus__fader input\s*\{[^}]*width:\s*118px;[^}]*height:\s*34px;[^}]*writing-mode:\s*horizontal-tb;[^}]*transform:\s*rotate\(-90deg\);/s);
+test('the enlarged knob uses the same custom vertical fader on desktop and app', () => {
+  assert.match(css, /\.knob-focus__fader\s*\{[^}]*position:\s*relative;[^}]*width:\s*34px;[^}]*height:\s*118px;/s);
+  assert.match(css, /\.knob-focus__fader::before\s*\{[^}]*width:\s*8px;[^}]*height:\s*100%;/s);
+  assert.match(css, /\.knob-focus__fader::after\s*\{[^}]*top:\s*calc\(\(1 - var\(--focus-fader-progress\)\) \* \(100% - 20px\)\);/s);
+  assert.doesNotMatch(css, /:root:not\(\[data-runtime="desktop"\]\) \.knob-focus__fader/,
+    'the app must not have a different fader implementation');
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /setProperty\('--focus-fader-progress', String\(progress\)\)/);
 });
 
 test('knobs andam nos dois sentidos, um eixo por gesto, sem o salto nativo do range do iOS', () => {

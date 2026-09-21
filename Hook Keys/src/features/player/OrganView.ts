@@ -52,6 +52,7 @@ function drawbarMarkup(index: number, position: number): string {
       <div class="organ-drawbar__body">
         <div class="organ-drawbar__track" data-organ-drawbar-track="${index}"
           role="slider" tabindex="0" aria-label="${drawbar.name}"
+          title="Learn CC: segure por 2 segundos no app ou clique com o botão direito no desktop"
           aria-valuemin="0" aria-valuemax="${ORGAN_DRAWBAR_MAX}" aria-valuenow="${position}"
           aria-valuetext="${position} de ${ORGAN_DRAWBAR_MAX}">
           <span class="organ-drawbar__ticks" aria-hidden="true">${

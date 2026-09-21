@@ -117,6 +117,40 @@ test('every Synth parameter uses exactly the same knob face as timbre parameters
   assert.match(synthMarkup, /Volume OSC 2/);
 });
 
+test('Synth keeps one shared control layout on desktop and app', () => {
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(css,
+    /\.synth-editor__header\s*\{\s*grid-template-columns:\s*minmax\(180px,[^}]+\}/,
+    'wide desktop must not move OSC tabs beside the preset row');
+  assert.doesNotMatch(css,
+    /\.player-modal--module-synth \.synth-card--oscillator\s*\{\s*grid-column:\s*span 3;/,
+    'the app must not replace the shared OSC card flow');
+  assert.doesNotMatch(css,
+    /\.player-modal--module-synth \.synth-editor__grid\s*\{[^}]*grid-template-columns:\s*repeat\(6,/,
+    'the compact app rule may resize controls but cannot replace the desktop grid');
+  assert.match(css,
+    /\.synth-oscillator-page \.synth-card--oscillator\s*\{[^}]*grid-column:\s*span 2;[^}]*grid-row:\s*span 2;/,
+    'the oscillator card must fill the left side of both rows');
+  assert.match(css,
+    /\.synth-oscillator-page \.synth-card--octaves\s*\{\s*grid-column:\s*3 \/ -1;/,
+    'the rectangular OCT card must fill the space below Volume and Detune');
+  assert.match(css,
+    /filterEnvelope[^}]+\{\s*grid-column:\s*span 2;/,
+    'Filter Env must close its four-column row');
+  assert.match(css,
+    /\.synth-editor__grid > \.module-glide-card\s*\{\s*grid-column:\s*1 \/ -1;/,
+    'Glide must use the whole final row instead of leaving empty cells');
+  assert.match(css,
+    /\.player-modal--module-synth \.player-modal__header\s*\{\s*display:\s*none;/,
+    'the redundant Synth title must not consume vertical space');
+  assert.match(css,
+    /\.player-modal--module-synth \.player-modal__surface\s*\{[^}]*grid-template-rows:\s*minmax\(0, 1fr\) auto;/,
+    'body and footer must use the two real modal rows after removing the title');
+  assert.match(css,
+    /\.player-modal--module-synth \.synth-editor\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/,
+    'the Synth editor must not draw a second contour inside the modal');
+});
+
 test('Glide Sync follows one BPM beat without pattern divisions and preserves manual time', () => {
   const manual = glideView.createGlideCardMarkup({ glideMs: 450 }, 120);
   assert.match(manual, /data-module-glide-card/);

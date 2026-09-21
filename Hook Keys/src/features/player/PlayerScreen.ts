@@ -2871,6 +2871,13 @@ export class PlayerScreen {
       return;
     }
 
+    const organDrawbar = target.closest<HTMLElement>('[data-organ-drawbar-track]');
+    if (organDrawbar && this.currentModalKind === 'module-organ' && this.currentModalModuleNumber === 7) {
+      const learnTarget = this.ccLearnTargetForOrganDrawbar(organDrawbar, this.currentModalModuleNumber);
+      if (learnTarget) this.openCcLearn(learnTarget, organDrawbar);
+      return;
+    }
+
     const knobInput = this.knobInputForTarget(target);
     if (knobInput) {
       const learnTarget = this.currentModalModuleNumber === null
@@ -9464,6 +9471,13 @@ export class PlayerScreen {
     if (fader) {
       fader.value = input.value;
       fader.setAttribute('aria-valuetext', input.getAttribute('aria-valuetext') || input.value);
+      const minimum = Number(fader.min);
+      const maximum = Number(fader.max);
+      const current = Number(fader.value);
+      const progress = Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum
+        ? Math.min(1, Math.max(0, (current - minimum) / (maximum - minimum)))
+        : 0;
+      fader.parentElement?.style.setProperty('--focus-fader-progress', String(progress));
     }
     const sourceOutput = knob.querySelector<HTMLOutputElement>('output');
     overlay.querySelector<HTMLOutputElement>('[data-knob-focus-value]')!.value = sourceOutput?.value || input.getAttribute('aria-valuetext') || input.value;

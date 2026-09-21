@@ -36,7 +36,8 @@ try {
   for (const reduced of [false, true]) {
     window.matchMedia = () => ({ matches: reduced });
     const fullText = 'Bem Vindo, João <Silva>';
-    const welcome = app.playWelcomeTransition('João <Silva>');
+    let revealed = false;
+    const welcome = app.playWelcomeTransition('João <Silva>', () => { revealed = true; });
     frames.shift()(0);
     const text = window.document.querySelector('[data-welcome-text]');
     if (reduced) {
@@ -53,9 +54,11 @@ try {
       assert.equal(text.textContent, fullText.slice(0, -1), 'apaga letra a letra');
       while (timers[0].delay !== 360) timers.shift().callback();
       assert.equal(text.textContent, '');
+      assert.equal(revealed, true, 'the player is revealed underneath the final welcome fade');
       timers.shift().callback();
     }
     await welcome;
+    assert.equal(revealed, true);
     assert(!window.document.querySelector('[data-welcome-transition]'));
   }
   const stubs = new Map([
@@ -106,22 +109,28 @@ try {
     window.engineReady = engine.promise;
     window.midiReady = midi.promise;
     const sequenceApp = new window.SequencedHookApp.HookKeysApp(root, sessions, {});
-    sequenceApp.playOctaveTransition = async (_direction, _swap, readiness) => {
+    sequenceApp.playOctaveTransition = async (_direction, swap, readiness) => {
       window.startupSteps.push('loading');
       const overlay = window.document.createElement('div');
       overlay.dataset.octaveTransition = '';
       window.document.body.append(overlay);
       sequenceApp.octaveTransition = overlay;
       await readiness; await loading.promise;
+      swap?.();
+      assert(window.startupSteps.includes('welcome'),
+        'welcome is prepared while the loading overlay still covers the screen');
+      assert(overlay.isConnected, 'loading remains visible until welcome is ready underneath');
       overlay.remove();
       window.startupSteps.push('loading-finished');
     };
-    sequenceApp.playWelcomeTransition = async name => {
+    sequenceApp.playWelcomeTransition = async (name, revealPlayer, handoffFromLoading) => {
       assert.equal(name, 'João');
+      assert.equal(handoffFromLoading, true, 'startup uses the seamless loading handoff');
       assert(window.document.querySelector('.orientation-transition-cover--startup'),
         'black cover survives the loading-to-welcome handoff');
       window.startupSteps.push('welcome');
       await welcome.promise;
+      revealPlayer();
       window.startupSteps.push('welcome-finished');
     };
     const startup = sequenceApp.showPlayer(session);
@@ -151,19 +160,21 @@ try {
       assert(!window.startupSteps.includes('midi'), 'cancelled welcome cannot activate the old player');
     } else {
       welcome.resolve(); await flush();
-      assert(cover.isConnected, 'cover also protects the final native MIDI activation');
-      assert.equal(screen.inert, true);
+      assert(!cover.isConnected, 'welcome fade reveals the prepared player directly, without a black frame');
+      assert.equal(screen.inert, false, 'the visible player is ready while native MIDI finishes activating');
+      assert(window.startupSteps.includes('midi'), 'MIDI activation starts only after the welcome transition');
       midi.resolve(); await startup;
       assert.equal(screen.inert, false);
-      assert.deepEqual(window.startupSteps, ['tablet', 'mount', 'loading', 'loading-finished',
-        'welcome', 'welcome-finished', 'midi', 'midi-ready']);
+      assert.deepEqual(window.startupSteps, ['tablet', 'mount', 'loading', 'welcome',
+        'loading-finished', 'welcome-finished', 'midi', 'midi-ready']);
     }
-    assert(!cover.isConnected, 'interface is uncovered only when the sequence finishes');
+    assert(!cover.isConnected, 'the startup cover cannot return after the welcome fade');
   }
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.orientation-transition-cover--startup\s*\{\s*z-index:\s*9999;/);
+  assert.match(css, /\.welcome-transition--handoff\s*\{\s*z-index:\s*9999;/);
   for (const selector of ['octave-transition', 'welcome-transition']) {
     assert.match(css, new RegExp(`\\.${selector}\\s*\\{[^}]*z-index:\\s*10000;`));
   }
-  console.log('LOADING_TRANSITION_OK: readiness, logout, welcome and uninterrupted black cover, including errors/cancellation.');
+  console.log('LOADING_TRANSITION_OK: readiness, logout and welcome reveal the player without an intermediate black frame.');
 } finally { await window.happyDOM.abort(); }
