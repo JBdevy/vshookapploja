@@ -194,11 +194,16 @@ private:
   float outputGainTargetSeen_ = 1.0f;
   float outputGainStep_ = 0.0f;
   std::size_t outputGainRampFrames_ = 0;
+  // Limiter do barramento Master (módulos + metrônomo), vinculado entre
+  // todos os canais para não deslocar a imagem quando apenas um lado clipa.
+  float masterLimiterGain_ = 1.0f;
+  float masterLimiterRelease_ = 0.0f;
   [[nodiscard]] bool beginMetronomeBlock() noexcept;
   void addMetronome(float* left, float* right, std::size_t frames) noexcept;
   void addMetronomeInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
   [[nodiscard]] float renderMetronomeSample() noexcept;
   [[nodiscard]] float nextOutputGain() noexcept;
+  void applyMasterLimiter(float* frame, std::size_t channels) noexcept;
 };
 
 } // namespace hook_keys

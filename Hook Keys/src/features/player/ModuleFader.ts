@@ -5,8 +5,9 @@ import { isDesktopRuntime } from '../../platform/runtime';
 // Below -60 dB the fader keeps a short tail down to -90 dB, so the last step
 // into silence (-inf) is inaudible.
 export const MODULE_FADER_MIN_DB = -90;
+export const MODULE_FADER_MAX_DB = 0;
 const MIN_DB = MODULE_FADER_MIN_DB;
-const MAX_DB = 6;
+const MAX_DB = MODULE_FADER_MAX_DB;
 const DEFAULT_DB = 0;
 const POINTER_STEP_DB = 0.1;
 const KEY_STEP_DB = 0.5;
@@ -23,8 +24,7 @@ const FADER_CURVE: readonly CurvePoint[] = [
   { position: 0.06, db: -60 },
   { position: 0.18, db: -36 },
   { position: 0.37, db: -18 },
-  { position: 0.56, db: -9 },
-  { position: 0.8, db: 0 },
+  { position: 0.65, db: -9 },
   { position: 1, db: MAX_DB },
 ];
 

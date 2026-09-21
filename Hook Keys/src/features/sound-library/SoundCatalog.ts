@@ -1,11 +1,9 @@
 import type { SoundCategoryDefinition, SoundCategoryId } from './SoundCategories';
 
 export interface ModuleSoundSettings {
-  // Módulos 1-6 são os únicos que escolhem timbre e compartilham este único
-  // destino de configuração; o Organ (módulo 7) não escolhe timbre.
+  // Organ e Synth use only their factory/app state. The backend configures
+  // exclusively the downloadable timbres used by modules 1 through 6.
   modules1To6: Readonly<Record<string, unknown>>;
-  organ: Readonly<Record<string, unknown>>;
-  synth: Readonly<Record<string, unknown>>;
 }
 
 export interface FixedSoundDefinition {
@@ -161,8 +159,6 @@ export function validateSoundCatalog(value: unknown): SoundCatalogPayload {
 function emptyModuleSettings(): ModuleSoundSettings {
   return Object.freeze({
     modules1To6: Object.freeze({}),
-    organ: Object.freeze({}),
-    synth: Object.freeze({}),
   });
 }
 
@@ -170,8 +166,6 @@ function readModuleSettings(value: unknown): ModuleSoundSettings {
   const source = isRecord(value) ? value : {};
   return Object.freeze({
     modules1To6: safeSettingsObject(source.modules1To6),
-    organ: safeSettingsObject(source.organ),
-    synth: safeSettingsObject(source.synth),
   });
 }
 

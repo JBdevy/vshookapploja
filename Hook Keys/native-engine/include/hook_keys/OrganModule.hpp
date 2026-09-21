@@ -57,9 +57,23 @@ public:
   void renderAdd(float* left, float* right, std::size_t frames, float gainLinear) noexcept override;
 
 private:
+  // OpenB3/Beatrix aplica variações aleatórias muito curtas no ataque da
+  // tecla. Aqui o key-click é uma camada transitória própria do Organ,
+  // pré-alocada para nunca criar objetos no callback de áudio.
+  struct KeyClick final {
+    std::uint32_t remaining = 0;
+    float level = 0.0f;
+  };
+  static constexpr std::size_t kMaximumKeyClicks = 32;
+  void startKeyClick(std::uint8_t velocity) noexcept;
+
   std::array<std::unique_ptr<TinySoundFontModule>, kDrawbarCount> voices_;
   // Ganho linear por drawbar (0..1), lido no áudio a cada bloco.
   std::array<std::atomic<float>, kDrawbarCount> drawbarGain_{};
+  std::array<std::atomic<bool>, kDrawbarCount> voiceLoaded_{};
+  std::array<KeyClick, kMaximumKeyClicks> keyClicks_{};
+  std::uint32_t clickSeed_ = 0x738ac41du;
+  std::uint32_t clickLengthSamples_ = 0;
 };
 
 } // namespace hook_keys

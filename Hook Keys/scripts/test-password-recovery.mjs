@@ -64,10 +64,20 @@ const load = (relativePath, modules = {}) => {
 };
 
 const authScreenSource = readFileSync(new URL('../src/features/auth/AuthScreen.ts', import.meta.url), 'utf8');
+const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 assert.doesNotMatch(authScreenSource, /Comprar acesso|login-purchase-button|login-support-button/,
   'a tela de login não pode exibir compra externa nem suporte durante a revisão das lojas');
 assert.doesNotMatch(authScreenSource, /requestPasswordRecovery|verifyPasswordRecoveryCode|completePasswordRecovery/,
   'a recuperação de senha não deve usar código de verificação');
+
+const keyboardCardRule = [...styles.matchAll(/html\[data-keyboard="open"\]\[data-app-mode="login"\] \.access-card\s*\{([^}]*)\}/g)].at(-1)?.[1] || '';
+const keyboardShellRule = [...styles.matchAll(/html\[data-keyboard="open"\]\[data-app-mode="login"\] \.app-shell\s*\{([^}]*)\}/g)].at(-1)?.[1] || '';
+assert.match(keyboardCardRule, /max-height:\s*none/,
+  'o teclado não pode redimensionar continuamente o card de login');
+assert.match(keyboardCardRule, /overflow:\s*visible/,
+  'o card preserva seu tamanho natural quando o teclado abre');
+assert.match(keyboardShellRule, /overflow-y:\s*auto/,
+  'a tela externa assume a rolagem quando o teclado reduz a área visível');
 
 const apiErrorModule = load('shared/api/ApiError.ts');
 const { AuthScreen } = load('features/auth/AuthScreen.ts', {

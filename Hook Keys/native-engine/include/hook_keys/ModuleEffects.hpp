@@ -115,6 +115,11 @@ private:
     std::array<ReverbDelayLine, 4> combRight{};
     std::array<ReverbDelayLine, 2> allPassLeft{};
     std::array<ReverbDelayLine, 2> allPassRight{};
+    // O Mod usa um chorus curto somente na entrada molhada, antes da rede de
+    // reverb. Assim o som seco fica firme e a movimentação se espalha pela
+    // cauda, como nos reverbs modulados dedicados.
+    std::array<std::vector<float>, 2> modBuffers{};
+    std::size_t modWriteIndex = 0;
     double modPhase = 0.0;
 
     void prepare(double nextSampleRate);
@@ -125,13 +130,13 @@ private:
   };
 
   // Caixa Leslie de dois rotores (corneta e tambor), captada por dois microfones.
-  // A geometria é a do setBfree/OpenB3: o atraso de cada rotor é a distância
+  // A geometria segue o OpenB3 (que incorpora o b_whirl do setBfree): o atraso de cada rotor é a distância
   // real até o microfone, sqrt((d - r·cos v)² + (r·sin v)²), o que dá ao Doppler
   // a curva torta de verdade (a chegada é mais rápida que a saída). Em cima
   // disso vêm a modulação de volume e de brilho pela direção, a reflexão do
   // gabinete, um vazamento seco, inércias diferentes e um drive leve.
   struct RotarySpeaker final {
-    // Distâncias da Leslie 122 medidas no setBfree (b_whirl): microfone a 42 cm,
+    // Distâncias usadas no OpenB3/Beatrix (b_whirl): microfone a 42 cm,
     // corneta de raio 19,2 cm e tambor de 22 cm, ar a 340 m/s.
     static constexpr float kMicDistanceCm = 42.0f;
     static constexpr float kHornRadiusCm = 19.2f;

@@ -172,7 +172,9 @@ export interface NativeSynthConfig {
   oscillator1Volume: number;
   oscillator2Volume: number;
   oscillator3Volume: number;
-  detuneCents: number;
+  oscillator1DetuneCents: number;
+  oscillator2DetuneCents: number;
+  oscillator3DetuneCents: number;
   attackMs: number;
   holdMs: number;
   decayMs: number;

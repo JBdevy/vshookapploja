@@ -807,7 +807,9 @@ static NSString *describeFormat(AVAudioFormat *format) {
                       oscillator1Volume:(float)oscillator1Volume
                       oscillator2Volume:(float)oscillator2Volume
                       oscillator3Volume:(float)oscillator3Volume
-                            detuneCents:(float)detuneCents
+                 oscillator1DetuneCents:(float)oscillator1DetuneCents
+                 oscillator2DetuneCents:(float)oscillator2DetuneCents
+                 oscillator3DetuneCents:(float)oscillator3DetuneCents
                                attackMs:(float)attackMs
                                  holdMs:(float)holdMs
                                 decayMs:(float)decayMs
@@ -836,7 +838,9 @@ static NSString *describeFormat(AVAudioFormat *format) {
   config.oscillator1Volume = oscillator1Volume;
   config.oscillator2Volume = oscillator2Volume;
   config.oscillator3Volume = oscillator3Volume;
-  config.detuneCents = detuneCents;
+  config.oscillator1DetuneCents = oscillator1DetuneCents;
+  config.oscillator2DetuneCents = oscillator2DetuneCents;
+  config.oscillator3DetuneCents = oscillator3DetuneCents;
   config.attackMs = attackMs;
   config.holdMs = holdMs;
   config.decayMs = decayMs;
@@ -1044,10 +1048,11 @@ static NSString *describeFormat(AVAudioFormat *format) {
 - (void)dispatchMidiStatus:(uint8_t)status data1:(uint8_t)data1 data2:(uint8_t)data2
                       slot:(NSInteger)slot timestamp:(uint64_t)timestamp {
   const NSInteger type = status & 0xf0;
-  const bool blockedCompatibilityCC = _compatibilityMode.load(std::memory_order_acquire) &&
-      type == 0xb0 && (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 ||
-                       data1 == 16 || data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101);
-  if (!blockedCompatibilityCC) {
+  const bool blockedCompatibilityMessage = _compatibilityMode.load(std::memory_order_acquire) &&
+      (type == 0xc0 || (type == 0xb0 &&
+       (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 || data1 == 16 ||
+        data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101)));
+  if (!blockedCompatibilityMessage) {
     [self sendMidiFromSlot:slot status:status data1:data1 data2:data2 timestamp:timestamp];
   }
   NSString *deviceId = slot < _selectedDeviceIds.count && [_selectedDeviceIds[slot] isKindOfClass:NSString.class]

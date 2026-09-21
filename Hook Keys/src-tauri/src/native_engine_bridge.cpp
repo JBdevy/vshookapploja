@@ -227,7 +227,9 @@ int hk_runtime_configure_envelope(void* handle, std::size_t moduleIndex, float a
 int hk_runtime_configure_synth(
     void* handle, int oscillator1, int oscillator2, int oscillator3, int oscillator1Enabled,
     int oscillator2Enabled, int oscillator3Enabled, int voiceMode, int lfoTarget,
-    float oscillator1Volume, float oscillator2Volume, float oscillator3Volume, float detuneCents, float attackMs, float holdMs,
+    float oscillator1Volume, float oscillator2Volume, float oscillator3Volume,
+    float oscillator1DetuneCents, float oscillator2DetuneCents, float oscillator3DetuneCents,
+    float attackMs, float holdMs,
     float decayMs, float sustain, float releaseMs, float filterCutoffHz,
     float filterResonance, float filterEnvelope, float lfoRateHz, float lfoDepth,
     float glideMs, int oscillator1Octave, int oscillator2Octave, int oscillator3Octave) noexcept {
@@ -244,7 +246,9 @@ int hk_runtime_configure_synth(
   config.oscillator1Volume = oscillator1Volume;
   config.oscillator2Volume = oscillator2Volume;
   config.oscillator3Volume = oscillator3Volume;
-  config.detuneCents = detuneCents;
+  config.oscillator1DetuneCents = oscillator1DetuneCents;
+  config.oscillator2DetuneCents = oscillator2DetuneCents;
+  config.oscillator3DetuneCents = oscillator3DetuneCents;
   config.attackMs = attackMs;
   config.holdMs = holdMs;
   config.decayMs = decayMs;

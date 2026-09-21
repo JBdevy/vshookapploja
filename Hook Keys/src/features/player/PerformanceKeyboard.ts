@@ -3,11 +3,11 @@ import { formatMidiNote } from '../midi/MidiInputService';
 export type PlayerBottomView = 'presets' | 'keyboard';
 export type PerformanceKeyboardStyle = 'standard' | 'black' | 'hook';
 
-const FIRST_NOTE = 9;
+const FIRST_NOTE = 21;
 const NOTE_COUNT = 88;
 const BLACK_NOTE_OFFSETS = new Set([1, 3, 6, 8, 10]);
 // Quatro oitavas: um teclado próprio de C2 a C5, com as teclas mais largas.
-const SHORT_FIRST_NOTE = 36;
+const SHORT_FIRST_NOTE = 48;
 const SHORT_NOTE_COUNT = 37;
 // A tecla preta tem 62% da largura da branca, como no teclado inteiro.
 const BLACK_KEY_RATIO = 0.62;
@@ -195,7 +195,7 @@ export class PerformanceKeyboardController {
     this.pointerStartedAt.set(event.pointerId, event.timeStamp);
     this.pointerStartX.set(event.pointerId, event.clientX);
     this.pointerCurrentX.set(event.pointerId, event.clientX);
-    this.changePointerNote(event.pointerId, noteNumber);
+    this.changePointerNote(event.pointerId, noteNumber, this.velocityAt(target, event.clientY));
     if (event.pointerType === 'touch' && this.activePointers.size === 2) {
       const pointerIds = [...this.activePointers.keys()];
       const firstStartedAt = this.pointerStartedAt.get(pointerIds[0] ?? -1) ?? 0;
@@ -221,7 +221,11 @@ export class PerformanceKeyboardController {
     const target = this.root.ownerDocument.elementFromPoint(event.clientX, event.clientY)
       ?.closest<HTMLButtonElement>('[data-keyboard-note]');
     const noteNumber = target && this.root.contains(target) ? Number(target.dataset.keyboardNote) : null;
-    this.changePointerNote(event.pointerId, noteNumber !== null && Number.isInteger(noteNumber) ? noteNumber : null);
+    this.changePointerNote(
+      event.pointerId,
+      noteNumber !== null && Number.isInteger(noteNumber) ? noteNumber : null,
+      target ? this.velocityAt(target, event.clientY) : 0,
+    );
     if (this.twoFingerGesturePointers.size !== 2) return;
     const pointers = [...this.twoFingerGesturePointers];
     const firstId = pointers[0];
@@ -274,7 +278,7 @@ export class PerformanceKeyboardController {
     }
   }
 
-  private changePointerNote(pointerId: number, noteNumber: number | null): void {
+  private changePointerNote(pointerId: number, noteNumber: number | null, velocity = 110): void {
     const previous = this.activePointers.get(pointerId);
     if (previous === noteNumber) return;
     this.activePointers.set(pointerId, noteNumber);
@@ -286,8 +290,18 @@ export class PerformanceKeyboardController {
     }
     if (noteNumber !== null && ![...this.activePointers].some(([id, note]) => id !== pointerId && note === noteNumber)) {
       this.setPressed(noteNumber, true);
-      this.dispatchNote(noteNumber, true);
+      this.dispatchNote(noteNumber, true, velocity);
     }
+  }
+
+  // A coordenada vertical vira velocity: perto do topo toca as camadas mais
+  // suaves e, conforme o dedo chega à ponta inferior, alcança velocity 127.
+  // O cálculo usa a altura da própria tecla, então vale igualmente para as
+  // teclas brancas e pretas, apesar de elas terem alturas diferentes.
+  private velocityAt(key: HTMLElement, clientY: number): number {
+    const bounds = key.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientY - bounds.top) / Math.max(1, bounds.height)));
+    return Math.min(127, Math.max(1, Math.round(1 + ratio * 126)));
   }
 
   // Modo Lite: sem acender a tecla não há repintura nenhuma no toque, que é
@@ -307,15 +321,16 @@ export class PerformanceKeyboardController {
     key?.setAttribute('aria-pressed', String(pressed));
   }
 
-  private dispatchNote(noteNumber: number, pressed: boolean): void {
-    const inputId = this.onNote(noteNumber, pressed, pressed ? 110 : 0) ?? null;
+  private dispatchNote(noteNumber: number, pressed: boolean, velocity = 0): void {
+    const noteVelocity = pressed ? Math.min(127, Math.max(1, Math.round(velocity))) : 0;
+    const inputId = this.onNote(noteNumber, pressed, noteVelocity) ?? null;
     window.dispatchEvent(new CustomEvent<PerformanceNoteDetail>('hookkeys:performance-note', {
       detail: {
         channel: 1,
         inputId,
         noteNumber,
         pressed,
-        velocity: pressed ? 110 : 0,
+        velocity: noteVelocity,
       },
     }));
   }

@@ -106,12 +106,12 @@ test('every Synth parameter uses exactly the same knob face as timbre parameters
   const synthMarkup = synthView.createSynthModuleMarkup({});
   const moduleMarkup = settingsView.createModuleSettingsMarkup([], [], null, {}, 120, 2, '1+2');
   const faces = (markup) => [...markup.matchAll(/<span class="module-envelope-knob__face"[^>]*><i><\/i><\/span>/g)].map(([face]) => face);
-  assert.equal(faces(synthMarkup).length, 17, 'Synth knobs plus one velocity limit and volume per OSC');
+  assert.equal(faces(synthMarkup).length, 19, 'Synth knobs plus velocity, volume and Detune per OSC');
   assert.equal(faces(moduleMarkup).length, 10, 'timbre knobs plus Sustain, Limite Velocity and Gain');
   assert.match(moduleMarkup, /data-module-sustain aria-label="Sustain do envelope"/);
   assert(faces(synthMarkup).every((face) => face === faces(moduleMarkup)[0]));
   assert.doesNotMatch(synthMarkup, /module-effect-knob|synth-knob|conic-gradient|border/);
-  assert.equal([...synthMarkup.matchAll(/data-synth-parameter=/g)].length, 17);
+  assert.equal([...synthMarkup.matchAll(/data-synth-parameter=/g)].length, 19);
   assert.doesNotMatch(synthMarkup, /Mix OSC 2|data-synth-parameter="oscillatorMix"/);
   assert.match(synthMarkup, /Volume OSC 1/);
   assert.match(synthMarkup, /Volume OSC 2/);
@@ -403,7 +403,9 @@ function createRange(parameter, min, max, scale = '') {
 
 test('moving a Synth knob updates its bar, pointer, card value and enlarged accessible value together', () => {
   for (const [parameter, min, max, unit] of [
-    ['detuneCents', -100, 100, ' cent'],
+    ['oscillator1DetuneCents', -100, 100, ' cent'],
+    ['oscillator2DetuneCents', -100, 100, ' cent'],
+    ['oscillator3DetuneCents', -100, 100, ' cent'],
     ['filterEnvelope', -100, 100, '%'], ['filterResonance', 0, 98, '%'],
   ]) {
     const range = createRange(parameter, min, max);
@@ -499,6 +501,19 @@ test('preset 1 is selected by default; other selections replace it and remain se
   }
 });
 
+test('Synth preset names are customizable, bounded and escaped in button markup', () => {
+  const markup = synthView.createSynthModuleMarkup({}, [true, true], 2, 120, [
+    'Lead Laranja',
+    '<Azul & Rosa>',
+    '1234567890123456789012345',
+  ]);
+  assert.match(markup, /data-synth-preset="1"[^>]*>Lead Laranja<\/button>/);
+  assert.match(markup, /data-synth-preset="2"[^>]*>&lt;Azul &amp; Rosa&gt;<\/button>/);
+  assert.match(markup, /data-synth-preset="3"[^>]*>12345678901234567890<\/button>/);
+  assert.doesNotMatch(markup, /<Azul & Rosa>/);
+  assert.match(markup, /data-synth-preset="4"[^>]*>Preset 4<\/button>/);
+});
+
 test('Synth mode is beside Legato and the Synth Param also gets a Chorus', () => {
   for (const mode of ['mono', 'poly']) {
     const markup = synthView.createSynthModuleMarkup({ voiceMode: mode });
@@ -515,7 +530,7 @@ test('Synth mode is beside Legato and the Synth Param also gets a Chorus', () =>
 
 test('common CSS retains the dynamic fill and green selection, without a Synth-only fixed face', () => {
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.player-output-knob__face,\s*\.module-envelope-knob__face,\s*\.module-effect-knob__face,\s*\.knob-focus__face\s*\{\s*border-width: 0;\s*background: conic-gradient\([\s\S]*?var\(--knob-progress, 0\)/);
+  assert.match(css, /\.player-output-knob__face::before,\s*\.module-envelope-knob__face::before,\s*\.module-effect-knob__face::before,\s*\.knob-focus__face::before\s*\{[\s\S]*?conic-gradient\([\s\S]*?var\(--knob-progress, 0\) \* 1turn\)/);
   // Synth-specific layout sizing is allowed, but its knob face must stay shared.
   const selectors = [...css.matchAll(/([^{}]+)\{/g)].map(([, selector]) => selector.trim());
   assert(!selectors.some((selector) => selector.includes('synth') && /knob[^\s,]*__face/.test(selector)));
@@ -538,12 +553,18 @@ test('each native bridge forwards all three independent oscillator volumes rathe
     assert(source.includes('oscillator1Volume'), `${path} must forward volume 1`);
     assert(source.includes('oscillator2Volume'), `${path} must forward volume 2`);
     assert(source.includes('oscillator3Volume'), `${path} must forward volume 3`);
+    assert(source.includes('oscillator1DetuneCents'), `${path} must forward detune 1`);
+    assert(source.includes('oscillator2DetuneCents'), `${path} must forward detune 2`);
+    assert(source.includes('oscillator3DetuneCents'), `${path} must forward detune 3`);
     assert(!source.includes('oscillatorMix'), `${path} must not keep the crossfade`);
   }
   const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
   assert(rust.includes('oscillator1_volume'));
   assert(rust.includes('oscillator2_volume'));
   assert(rust.includes('oscillator3_volume'));
+  assert(rust.includes('oscillator1_detune_cents'));
+  assert(rust.includes('oscillator2_detune_cents'));
+  assert(rust.includes('oscillator3_detune_cents'));
   assert(!rust.includes('oscillator_mix'));
 });
 
@@ -632,6 +653,10 @@ test('all platform bridges forward independent octaves to the native DSP', () =>
 test('Synth layout gives controls natural height and keeps presets and footer outside the inner scroll', () => {
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.synth-editor__header\s*\{[^}]*display: grid;[^}]*min-width: 0;/);
+  assert.match(css, /data-synth-oscillator-tab="1"\]:not\(\.is-selected\)[\s\S]*?#ff9a4a/);
+  assert.match(css, /data-synth-oscillator-tab="2"\]:not\(\.is-selected\)[\s\S]*?#ff73c8/);
+  assert.match(css, /data-synth-oscillator-tab="3"\]:not\(\.is-selected\)[\s\S]*?#59b9ff/);
+  assert.match(css, /data-synth-oscillator-tab\]\.is-selected[\s\S]*?#4ceb7f/);
   assert.doesNotMatch(css, /\.synth-editor__header-controls\s*\{[^}]*width: (?:84|88)%;/);
   assert.match(css, /grid-template-rows: repeat\(3, max-content\);/);
   assert.match(css, /grid-template-rows: max-content repeat\(3, minmax\(var\(--synth-row-min-height\), 1fr\)\) minmax\(max-content, 1fr\);/);
@@ -658,15 +683,15 @@ test('the five factory Synth presets match the sounds configured in the app', ()
   assert.equal(synthView.SYNTH_PRESET_COUNT, 5);
   const pick = (preset, keys) => Object.fromEntries(keys.map((key) => [key, preset[key]]));
   const keys = ['oscillator1', 'oscillator2', 'oscillator1Enabled', 'oscillator2Enabled', 'voiceMode', 'legato',
-    'oscillator1Volume', 'oscillator2Volume', 'detuneCents', 'attackMs', 'holdMs', 'decayMs', 'releaseMs',
+    'oscillator1Volume', 'oscillator2Volume', 'oscillator1DetuneCents', 'oscillator2DetuneCents', 'oscillator3DetuneCents', 'attackMs', 'holdMs', 'decayMs', 'releaseMs',
     'filterCutoffHz', 'filterResonance', 'filterEnvelope', 'lfoTarget', 'lfoRateHz', 'lfoDepth',
     'glideMs', 'glideSync', 'oscillator1Octave', 'oscillator2Octave'];
   const expected = [
-    ['sine', 'sine', true, true, 'poly', false, 89, 60, 0, 8, 15000, 25000, 85, 20000, 0, 100, 'pitch', 6.85, 0, 205, false, 0, 1],
-    ['saw', 'saw', true, true, 'poly', false, 89, 60, 0, 8, 15000, 25000, 85, 49.09, 0, 100, 'pitch', 6.85, 0, 205, false, 0, 0],
-    ['sine', 'sine', true, true, 'mono', true, 100, 100, 0, 0, 15000, 25000, 25, 20000, 18, 24, 'pitch', 6.85, 0, 0, false, 0, 1],
-    ['saw', 'saw', true, true, 'poly', false, 100, 100, 0, 0, 15000, 25000, 49, 308.3, 31, 14, 'filter', 6.85, 0, 129, false, 0, 0],
-    ['sine', 'square', true, false, 'mono', true, 100, 100, 0, 0, 15000, 25000, 47, 20000, 0, 24, 'pitch', 6.85, 0, 0, false, 0, 0],
+    ['sine', 'sine', true, true, 'poly', false, 89, 60, 0, 0, 0, 8, 15000, 25000, 85, 20000, 0, 100, 'pitch', 6.85, 0, 205, false, 0, 1],
+    ['saw', 'saw', true, true, 'poly', false, 89, 60, 0, 0, 0, 8, 15000, 25000, 85, 49.09, 0, 100, 'pitch', 6.85, 0, 205, false, 0, 0],
+    ['sine', 'sine', true, true, 'mono', true, 100, 100, 0, 0, 0, 0, 15000, 25000, 25, 20000, 18, 24, 'pitch', 6.85, 0, 0, false, 0, 1],
+    ['saw', 'saw', true, true, 'poly', false, 100, 100, 0, 0, 0, 0, 15000, 25000, 49, 308.3, 31, 14, 'filter', 6.85, 0, 129, false, 0, 0],
+    ['sine', 'square', true, false, 'mono', true, 100, 100, 0, 0, 0, 0, 15000, 25000, 47, 20000, 0, 24, 'pitch', 6.85, 0, 0, false, 0, 0],
   ];
   expected.forEach((values, index) => {
     assert.equal(JSON.stringify(pick(presets[index], keys)), JSON.stringify(Object.fromEntries(keys.map((key, i) => [key, values[i]]))),

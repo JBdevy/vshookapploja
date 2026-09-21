@@ -109,8 +109,9 @@ const DEFAULT_ROTARY: ModuleRotarySettings = {
   enabled: false,
   modulationEnabled: false,
   speed: 'slow',
-  slowHz: 0.8,
-  fastHz: 6.4,
+  // OpenB3/Beatrix b_whirl: corneta a 40,32 e 423,36 RPM.
+  slowHz: 0.672,
+  fastHz: 7.056,
   rampSeconds: 1.2,
   depth: 70,
   mix: 100,
@@ -316,8 +317,8 @@ export function createModuleChorusMarkup(settings: Readonly<Record<string, unkno
 export function createModuleRotaryMarkup(settings: Readonly<Record<string, unknown>>): string {
   const value = readModuleRotarySettings(settings.rotary);
   const controls = [
-    control('slowHz', 'Slow', 0.2, 2, 0.01, value.slowHz, `${value.slowHz.toFixed(2)} Hz`),
-    control('fastHz', 'Fast', 2, 10, 0.01, value.fastHz, `${value.fastHz.toFixed(2)} Hz`),
+    control('slowHz', 'Slow', 0.2, 2, 0.001, value.slowHz, `${value.slowHz.toFixed(3)} Hz`),
+    control('fastHz', 'Fast', 2, 10, 0.001, value.fastHz, `${value.fastHz.toFixed(3)} Hz`),
     control('rampSeconds', 'Acceleration', 0.1, 10, 0.1, value.rampSeconds, `${value.rampSeconds.toFixed(1)} s`),
     control('depth', 'Depth', 0, 100, 1, value.depth, `${Math.round(value.depth)}%`),
   ];
@@ -471,7 +472,7 @@ export function readModuleEffectSettings(kind: ModuleEffectKind, value: unknown)
 
 export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, value: number): string {
   if (kind === 'rotary') {
-    if (key === 'slowHz' || key === 'fastHz') return `${value.toFixed(2)} Hz`;
+    if (key === 'slowHz' || key === 'fastHz') return `${value.toFixed(3)} Hz`;
     if (key === 'rampSeconds') return `${value.toFixed(1)} s`;
     return `${Math.round(value)}%`;
   }

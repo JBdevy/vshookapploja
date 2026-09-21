@@ -25,7 +25,9 @@ struct AnalogSynthConfig final {
   float oscillator1Volume = 1.0f;
   float oscillator2Volume = 1.0f;
   float oscillator3Volume = 1.0f;
-  float detuneCents = 7.0f;
+  float oscillator1DetuneCents = 0.0f;
+  float oscillator2DetuneCents = 7.0f;
+  float oscillator3DetuneCents = -7.0f;
   float attackMs = 0.0f;
   float holdMs = 15000.0f;
   float decayMs = 25000.0f;
@@ -50,7 +52,9 @@ struct AnalogSynthConfig final {
     oscillator1Volume = std::clamp(oscillator1Volume, 0.0f, 1.0f);
     oscillator2Volume = std::clamp(oscillator2Volume, 0.0f, 1.0f);
     oscillator3Volume = std::clamp(oscillator3Volume, 0.0f, 1.0f);
-    detuneCents = std::clamp(detuneCents, -100.0f, 100.0f);
+    oscillator1DetuneCents = std::clamp(oscillator1DetuneCents, -100.0f, 100.0f);
+    oscillator2DetuneCents = std::clamp(oscillator2DetuneCents, -100.0f, 100.0f);
+    oscillator3DetuneCents = std::clamp(oscillator3DetuneCents, -100.0f, 100.0f);
     attackMs = std::clamp(attackMs, 0.0f, 15000.0f);
     holdMs = std::clamp(holdMs, 0.0f, 15000.0f);
     decayMs = std::clamp(decayMs, 0.0f, 25000.0f);
@@ -253,7 +257,11 @@ public:
     if (left == nullptr || right == nullptr || frames == 0) return;
     constexpr double kTwoPi = 6.28318530717958647692;
     const auto lfoIncrement = static_cast<double>(config_.lfoRateHz) / sampleRate_;
-    const auto detuneRatio = std::pow(2.0, static_cast<double>(config_.detuneCents) / 1200.0);
+    const std::array<double, 3> detuneRatios = {
+      std::pow(2.0, static_cast<double>(config_.oscillator1DetuneCents) / 1200.0),
+      std::pow(2.0, static_cast<double>(config_.oscillator2DetuneCents) / 1200.0),
+      std::pow(2.0, static_cast<double>(config_.oscillator3DetuneCents) / 1200.0),
+    };
     const bool wheelDrivesLfo = wheelDrivesLfo_.load(std::memory_order_relaxed);
     const auto lfoAmount = config_.lfoDepth + (wheelDrivesLfo ? (1.0f - config_.lfoDepth) * modulation_ : 0.0f);
     for (std::size_t frame = 0; frame < frames; ++frame) {
@@ -276,9 +284,9 @@ public:
         }
         // Depth sets the base modulation; CC1 adds depth even when it is zero.
         const auto baseFrequency = voice.currentFrequency * bendRatio;
-        const auto frequency1 = std::ldexp(baseFrequency, config_.oscillator1Octave);
-        const auto frequency2 = std::ldexp(baseFrequency * detuneRatio, config_.oscillator2Octave);
-        const auto frequency3 = std::ldexp(baseFrequency / detuneRatio, config_.oscillator3Octave);
+        const auto frequency1 = std::ldexp(baseFrequency * detuneRatios[0], config_.oscillator1Octave);
+        const auto frequency2 = std::ldexp(baseFrequency * detuneRatios[1], config_.oscillator2Octave);
+        const auto frequency3 = std::ldexp(baseFrequency * detuneRatios[2], config_.oscillator3Octave);
         voice.phase1 = advancePhase(voice.phase1, frequency1);
         voice.phase2 = advancePhase(voice.phase2, frequency2);
         voice.phase3 = advancePhase(voice.phase3, frequency3);
@@ -407,7 +415,7 @@ private:
     voice.velocity = static_cast<float>(velocity) / 127.0f;
     const auto limits = oscillatorVelocityLimits_.load(std::memory_order_relaxed);
     voice.oscillator1Gate = heldFilterVelocity_[note] <= (limits & 0xff);
-    voice.oscillator2Gate = heldFilterVelocity_[note] <= (limits >> 8);
+    voice.oscillator2Gate = heldFilterVelocity_[note] <= ((limits >> 8) & 0xff);
     voice.oscillator3Gate = heldFilterVelocity_[note] <= ((limits >> 16) & 0xff);
     voice.heldSustain = false;
     voice.age = ++voiceAge_;

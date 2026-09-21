@@ -25,7 +25,7 @@ import {
   type MidiNoteInput,
   type MidiPitchBendInput,
 } from '../midi/MidiInputService';
-import { createModuleFaderMarkup, formatFaderDb, MODULE_FADER_MIN_DB, ModuleFader, visualPositionToFaderDb } from './ModuleFader';
+import { createModuleFaderMarkup, formatFaderDb, MODULE_FADER_MAX_DB, MODULE_FADER_MIN_DB, ModuleFader, visualPositionToFaderDb } from './ModuleFader';
 import {
   createAudioSettingsMarkup,
   createAppSettingsMarkup,
@@ -170,6 +170,7 @@ import {
   DEFAULT_OUTPUT_LEVELS,
   formatOutputDb,
   isOutputBus,
+  MAX_OUTPUT_DB,
   OUTPUTS,
   OUTPUT_MIN_DB,
   outputDbFromPosition,
@@ -217,8 +218,7 @@ import {
 import { ComputerKeyboardController } from './ComputerKeyboardController';
 import { performanceNotesLabel } from './PerformanceChordDisplay';
 import {
-  createOrganHeaderControlsMarkup, createOrganMarkup, ORGAN_CLICK_VOLUME_MAX_DB, ORGAN_CLICK_VOLUME_MIN_DB,
-  ORGAN_DRAWBAR_MAX, ORGAN_DRAWBARS, readOrganSettings,
+  createOrganMarkup, ORGAN_DRAWBAR_MAX, ORGAN_DRAWBARS, readOrganSettings,
 } from './OrganView';
 import { createTranceGateMarkup, readTranceGateSettings, tranceGateStepBeats } from './TranceGateView';
 import {
@@ -255,7 +255,7 @@ import {
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-organ' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'effect-bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm' | 'module-config-copy-confirm';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'synth-preset-name' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-organ' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'effect-bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm' | 'module-config-copy-confirm';
 type BankId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
 type FaderBehaviorMode = 'default' | 'master' | 'bank' | 'bank2';
 type PlayerView = 'bank' | 'pads-effects';
@@ -394,6 +394,7 @@ type CcLearnTarget =
   | { kind: 'metronome-volume' }
   | { kind: 'metronome-toggle' }
   | { kind: 'tap-tempo' }
+  | { kind: 'synth-preset'; presetNumber: number }
   // Banco A e Banco B são independentes: cada um tem os seus 8 presets mapeáveis.
   | { kind: 'preset'; bank: BankId; presetNumber: number }
   | { kind: 'pad'; bank: PadBankId; note: string }
@@ -447,7 +448,8 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
   if (control.startsWith('synth:')) {
     const parameter = control.slice('synth:'.length);
     const ranges: Record<string, readonly [number, number]> = {
-      oscillator1Volume: [0, 100], oscillator2Volume: [0, 100], oscillator3Volume: [0, 100], detuneCents: [-100, 100],
+      oscillator1Volume: [0, 100], oscillator2Volume: [0, 100], oscillator3Volume: [0, 100],
+      oscillator1DetuneCents: [-100, 100], oscillator2DetuneCents: [-100, 100], oscillator3DetuneCents: [-100, 100],
       attackMs: [0, 15_000], holdMs: [0, 15_000], decayMs: [0, 25_000], releaseMs: [0, 25_000],
       filterCutoffHz: [20, 20_000], filterResonance: [0, 98], filterEnvelope: [-100, 100],
       lfoRateHz: [0.05, 30], lfoDepth: [0, 100], glideMs: [0, 5_000],
@@ -463,7 +465,7 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
     if (parameter.endsWith('Ms')) return formatEnvelopeTime(value);
     if (parameter === 'filterCutoffHz') return formatCutoffFrequency(value);
     if (parameter === 'lfoRateHz') return `${value.toFixed(2)} Hz`;
-    if (parameter === 'detuneCents') return `${Math.round(value)} cent`;
+    if (parameter.endsWith('DetuneCents')) return `${Math.round(value)} cent`;
     return `${Math.round(value)}%`;
   }
 
@@ -604,6 +606,7 @@ function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'metronome-volume') return 'metronome:volume';
   if (target.kind === 'metronome-toggle') return 'metronome:toggle';
   if (target.kind === 'tap-tempo') return 'metronome:tap';
+  if (target.kind === 'synth-preset') return `synth-preset:${target.presetNumber}`;
   if (target.kind === 'preset') return `preset:${target.bank}:${target.presetNumber}`;
   if (target.kind === 'pad') return `pad:${target.bank}:${target.note}`;
   return `effect:${target.bank}:${target.effectNumber}`;
@@ -630,6 +633,7 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
   if (target.kind === 'metronome-volume') return 'Volume do metrônomo';
   if (target.kind === 'metronome-toggle') return 'Ligar / desligar metrônomo';
   if (target.kind === 'tap-tempo') return 'Tap Tempo';
+  if (target.kind === 'synth-preset') return `Synth · Preset ${target.presetNumber}`;
   if (target.kind === 'preset') {
     return `Banco ${target.bank} · Preset ${target.presetNumber.toString().padStart(2, '0')}`;
   }
@@ -650,6 +654,7 @@ function isCcMappingKey(value: string): boolean {
   if (/^input:[1-8]:(sustain|modulation)$/.test(value)) return true;
   if (/^output:(music|pads|effects|master)$/.test(value)) return true;
   if (value === 'metronome:volume' || value === 'metronome:tap' || value === 'metronome:toggle') return true;
+  if (/^synth-preset:[1-5]$/.test(value)) return true;
   if (/^pad:[ABCD]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
   if (/^effect:[1-8]:([1-9]|1[0-2])$/.test(value)) return true;
   return /^preset:[A-F]:([1-9]|1[0-6])$/.test(value);
@@ -938,8 +943,8 @@ function createBankState(selectedPreset: number | null = null): BankState {
         category: '',
         // Todo módulo nasce desligado: o usuário liga o que for usar.
         enabled: false,
-        highNote: 96,
-        lowNote: 9,
+        highNote: 108,
+        lowNote: 21,
         modulationInputEnabled: true,
         midiInputId: null,
         octaveShift: 0,
@@ -1130,9 +1135,6 @@ export class PlayerScreen {
   // Um por dedo: no Hammond de verdade dá pra puxar vários drawbars ao mesmo
   // tempo, então isPrimary não vale aqui — cada ponteiro tem sua própria entrada.
   private readonly organDrawbarDrags = new Map<number, { track: HTMLElement; moduleNumber: number }>();
-  // Criado só quando o clique do drawbar é usado pela primeira vez: navegador
-  // nenhum deixa abrir AudioContext antes de um gesto do usuário.
-  private organClickAudioContext: AudioContext | null = null;
   // Página aberta no Config. O topo e o rodapé do painel não mudam; só o miolo.
   // Cada módulo lembra a própria página; abrir outro módulo começa na primeira.
   private moduleConfigPage: ModuleSettingsPage = 'envelope';
@@ -1622,7 +1624,7 @@ export class PlayerScreen {
           for (let index = 0; index < 8; index += 1) {
             const displayed = [0, 1].map((channel) => {
               const peak = peaks[index * 2 + channel] ?? 0;
-              const db = peak > 0 ? Math.max(MODULE_FADER_MIN_DB, Math.min(6, 20 * Math.log10(peak))) : MODULE_FADER_MIN_DB;
+              const db = peak > 0 ? Math.max(MODULE_FADER_MIN_DB, Math.min(MODULE_FADER_MAX_DB, 20 * Math.log10(peak))) : MODULE_FADER_MIN_DB;
               // Fast attack, smooth release; only the UI is smoothed.
               const previous = this.moduleMeterDb[index]?.[channel] ?? MODULE_FADER_MIN_DB;
               return Math.max(db, previous - 3);
@@ -2212,7 +2214,7 @@ export class PlayerScreen {
 
   private renderOutputLevels(): void {
     for (const outputBus of ['music', 'pads', 'effects', 'master'] as const) {
-      const value = Math.min(12, this.outputLevels[outputBus]);
+      const value = Math.min(MAX_OUTPUT_DB, this.outputLevels[outputBus]);
       this.outputLevels[outputBus] = value;
       const input = this.root.querySelector<HTMLInputElement>(`[data-output-level="${outputBus}"]`);
       const output = this.root.querySelector<HTMLOutputElement>(`[data-output-value="${outputBus}"]`);
@@ -2268,7 +2270,7 @@ export class PlayerScreen {
       }
     }
     const linearVolume = this.metronome.getVolume();
-    const levelDb = linearVolume <= 0 ? OUTPUT_MIN_DB : Math.max(OUTPUT_MIN_DB, Math.min(12, 20 * Math.log10(linearVolume)));
+    const levelDb = linearVolume <= 0 ? OUTPUT_MIN_DB : Math.max(OUTPUT_MIN_DB, Math.min(MAX_OUTPUT_DB, 20 * Math.log10(linearVolume)));
     const volume = outputPosition(levelDb);
     const volumeInput = this.root.querySelector<HTMLInputElement>('[data-metronome-output-volume]');
     const volumeOutput = this.root.querySelector<HTMLOutputElement>('[data-metronome-output-value]');
@@ -2845,7 +2847,7 @@ export class PlayerScreen {
     const synthPresetSlot = Number(synthPresetButton?.dataset.synthPreset);
     if (synthPresetButton && Number.isInteger(synthPresetSlot)
         && this.modal && this.currentModalKind === 'module-synth') {
-      this.saveSynthPreset(this.modal, synthPresetSlot);
+      this.openChildModal('synth-preset-name', synthPresetSlot, synthPresetButton);
       return;
     }
 
@@ -4003,16 +4005,6 @@ export class PlayerScreen {
         preset.modules.forEach((moduleState, index) => {
           if (index < 6 && moduleState.settingsMode === 'default') {
             moduleState.settings = this.defaultSettingsForModule(index + 1, moduleState);
-          } else if (index === 6) {
-            const factory = createDefaultModuleSettings(index);
-            if (JSON.stringify(moduleState.settings) === JSON.stringify(factory)) {
-              moduleState.settings = mergeSettings(factory, this.soundCatalog.defaultSettings.organ);
-            }
-          } else if (index === 7) {
-            const factory = createDefaultModuleSettings(index);
-            if (JSON.stringify(moduleState.settings) === JSON.stringify(factory)) {
-              moduleState.settings = mergeSettings(factory, this.soundCatalog.defaultSettings.synth);
-            }
           }
         });
       }
@@ -4114,7 +4106,8 @@ export class PlayerScreen {
     if (!parameter || !moduleState) return;
     const settings = readSynthSettings(moduleState.settings.synth);
     const value = updateSynthRangeOutput(input);
-    if (parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume' || parameter === 'oscillator3Volume' || parameter === 'detuneCents'
+    if (parameter === 'oscillator1Volume' || parameter === 'oscillator2Volume' || parameter === 'oscillator3Volume'
+        || parameter === 'oscillator1DetuneCents' || parameter === 'oscillator2DetuneCents' || parameter === 'oscillator3DetuneCents'
         || parameter === 'attackMs' || parameter === 'holdMs' || parameter === 'decayMs'
         || parameter === 'releaseMs' || parameter === 'filterCutoffHz'
         || parameter === 'filterResonance' || parameter === 'filterEnvelope'
@@ -4197,6 +4190,27 @@ export class PlayerScreen {
     });
   }
 
+  private synthPresetNames(moduleState: ModulePresetState): string[] {
+    const source = Array.isArray(moduleState.settings.synthPresetNames)
+      ? moduleState.settings.synthPresetNames : [];
+    return Array.from({ length: SYNTH_PRESET_COUNT }, (_, index) => {
+      const name = typeof source[index] === 'string' ? source[index].trim().slice(0, 20) : '';
+      return name || `Preset ${index + 1}`;
+    });
+  }
+
+  private persistActiveSynthPreset(): void {
+    const moduleState = this.getActivePresetState()?.modules[7];
+    if (!moduleState) return;
+    const slot = boundedNumber(moduleState.settings.synthActivePreset, 1, SYNTH_PRESET_COUNT, 1);
+    const slots = this.synthPresetSlots(moduleState);
+    // Every Synth edit belongs to the selected slot. Keeping the slot snapshot
+    // current here also covers controls shared with other Config pages (Glide,
+    // Mono/Poly, CC Learn), instead of relying on a manual Save button.
+    slots[slot - 1] = { ...readSynthSettings(moduleState.settings.synth) };
+    moduleState.settings.synthPresets = slots;
+  }
+
   private renderSynthEditor(modal: HTMLElement, moduleState: ModulePresetState): void {
     const slots = this.synthPresetSlots(moduleState);
     const activePreset = boundedNumber(moduleState.settings.synthActivePreset, 1, SYNTH_PRESET_COUNT, 1);
@@ -4207,22 +4221,23 @@ export class PlayerScreen {
       slots.map(Boolean),
       activePreset,
       this.metronome.getBpm(),
+      this.synthPresetNames(moduleState),
     );
   }
 
-  private saveSynthPreset(modal: HTMLElement, slot: number): void {
+  private saveSynthPreset(modal: HTMLElement | null, slot: number): void {
     const moduleState = this.getActivePresetState()?.modules[7];
     if (!moduleState || slot < 1 || slot > SYNTH_PRESET_COUNT) return;
     const slots = this.synthPresetSlots(moduleState);
     slots[slot - 1] = { ...readSynthSettings(moduleState.settings.synth) };
     moduleState.settings.synthPresets = slots;
     moduleState.settings.synthActivePreset = slot;
-    this.renderSynthEditor(modal, moduleState);
+    if (modal) this.renderSynthEditor(modal, moduleState);
     this.markPlayerStateChanged();
     this.setStatus(`Preset ${slot} do Synth salvo.`);
   }
 
-  private loadSynthPreset(modal: HTMLElement, slot: number): void {
+  private loadSynthPreset(modal: HTMLElement | null, slot: number): void {
     const moduleState = this.getActivePresetState()?.modules[7];
     if (!moduleState || slot < 1 || slot > SYNTH_PRESET_COUNT) return;
     const saved = this.synthPresetSlots(moduleState)[slot - 1];
@@ -4232,7 +4247,7 @@ export class PlayerScreen {
     }
     moduleState.settings.synth = { ...saved };
     moduleState.settings.synthActivePreset = slot;
-    this.renderSynthEditor(modal, moduleState);
+    if (modal) this.renderSynthEditor(modal, moduleState);
     this.markPlayerStateChanged();
     this.setStatus(`Preset ${slot} do Synth carregado.`);
   }
@@ -4771,6 +4786,13 @@ export class PlayerScreen {
         continue;
       }
 
+      const synthPresetMatch = /^synth-preset:([1-5])$/.exec(targetKey);
+      if (synthPresetMatch && risingEdge) {
+        const synthModal = this.currentModalKind === 'module-synth' ? this.modal : null;
+        this.loadSynthPreset(synthModal, Number(synthPresetMatch[1]));
+        continue;
+      }
+
       const padMatch = /^pad:([ABCD]):(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.exec(targetKey);
       if (padMatch && risingEdge && this.isPadBankId(padMatch[1])) {
         this.activateMappedPad(padMatch[1], padMatch[2] ?? 'C');
@@ -5206,7 +5228,27 @@ export class PlayerScreen {
         synthPresets.map(Boolean),
         moduleState ? boundedNumber(moduleState.settings.synthActivePreset, 1, SYNTH_PRESET_COUNT, 1) : 1,
         this.metronome.getBpm(),
+        moduleState ? this.synthPresetNames(moduleState) : [],
       );
+    } else if (kind === 'synth-preset-name' && moduleNumber !== null) {
+      const synthModule = this.getActivePresetState()?.modules[7];
+      const name = synthModule ? this.synthPresetNames(synthModule)[moduleNumber - 1] : `Preset ${moduleNumber}`;
+      bodyMarkup = `
+        <section class="preset-name-editor synth-preset-name-editor">
+          <label class="preset-name-editor__field">
+            <span>Nome do preset do Synth</span>
+            <input type="text" maxlength="20" autocomplete="off" data-synth-preset-name-input
+              value="${escapeMarkup(name ?? `Preset ${moduleNumber}`)}">
+          </label>
+          <div class="cc-action-pair preset-name-editor__cc-actions">
+            <button class="preset-name-editor__learn" type="button" data-modal-action="learn-synth-preset-cc">
+              <span>Learn CC</span>
+              <small>${this.ccMappingLabel({ kind: 'synth-preset', presetNumber: moduleNumber })}</small>
+            </button>
+            <button class="cc-action-pair__clean" type="button" data-modal-action="clean-synth-preset-cc">Clean</button>
+          </div>
+        </section>
+      `;
     } else if (kind === 'module-eq') {
       bodyMarkup = createModuleEqMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-compressor') {
@@ -5678,6 +5720,11 @@ export class PlayerScreen {
             this.pendingCcController === null ? ' disabled' : ''
           }>OK</button>
         `
+      : kind === 'synth-preset-name'
+        ? `
+          <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
+          <button class="player-modal__confirm-button" type="button" data-modal-action="confirm">OK</button>
+        `
       : kind === 'preset-paste-confirm'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel-preset-paste">Cancelar</button>
@@ -5730,7 +5777,6 @@ export class PlayerScreen {
         <header class="player-modal__header">
           <p class="player-modal__eyebrow"></p>
           <h2 id="${titleId}"></h2>
-          ${kind === 'module-organ' ? createOrganHeaderControlsMarkup(moduleState?.settings ?? {}) : ''}
           ${kind === 'sound-selection' ? `
             <span class="sound-library-total">Total - ${formatSoundfontTotal(
               this.soundCatalog.sounds.reduce(
@@ -5811,6 +5857,9 @@ export class PlayerScreen {
     } else if (kind === 'module-synth') {
       eyebrow.textContent = 'Módulo 08';
       title.textContent = 'Synth';
+    } else if (kind === 'synth-preset-name') {
+      eyebrow.textContent = 'Synth';
+      title.textContent = `Preset ${moduleNumber ?? ''}`;
     } else if (kind === 'module-eq') {
       eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
@@ -6358,12 +6407,6 @@ export class PlayerScreen {
         this.selectArpeggiatorAutoFader(modal, moduleNumber, autoFaderButton.dataset.arpeggiatorAutoFader ?? '');
         return;
       }
-      const organSoundToggle = target instanceof Element
-        ? target.closest<HTMLButtonElement>('[data-organ-sound-toggle]') : null;
-      if (kind === 'module-organ' && moduleNumber !== null && organSoundToggle) {
-        this.toggleOrganSound(modal, moduleNumber);
-        return;
-      }
       const reverbSpaceButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-module-reverb-space]') : null;
       if (pageKind() === 'module-reverb' && moduleNumber !== null && reverbSpaceButton) {
@@ -6386,7 +6429,7 @@ export class PlayerScreen {
       }
       const rotarySpeedButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-module-rotary-speed]') : null;
-      if (pageKind() === 'module-rotary' && moduleNumber === 7 && rotarySpeedButton) {
+      if ((pageKind() === 'module-rotary' || kind === 'module-organ') && moduleNumber === 7 && rotarySpeedButton) {
         this.selectModuleRotarySpeed(modal, rotarySpeedButton);
         return;
       }
@@ -6670,6 +6713,13 @@ export class PlayerScreen {
         }
         return;
       }
+      if (modalAction === 'learn-synth-preset-cc' && kind === 'synth-preset-name' && moduleNumber !== null) {
+        this.commitSynthPresetName(modal, moduleNumber);
+        const button = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-modal-action="learn-synth-preset-cc"]') : null;
+        if (button) this.openCcLearn({ kind: 'synth-preset', presetNumber: moduleNumber }, button);
+        return;
+      }
       if (modalAction === 'learn-effect-cc' && kind === 'effect-pad' && moduleNumber !== null) {
         this.commitEffectPad(modal, moduleNumber);
         const button = target instanceof Element
@@ -6689,6 +6739,16 @@ export class PlayerScreen {
           ? target.closest<HTMLButtonElement>('[data-modal-action="clean-preset-cc"]') : null;
         if (button) {
           this.pendingCcClear = { kind: 'preset', bank: this.activeBank, presetNumber: moduleNumber };
+          this.openChildModal('cc-clear-confirm', null, button);
+        }
+        return;
+      }
+      if (modalAction === 'clean-synth-preset-cc' && kind === 'synth-preset-name' && moduleNumber !== null) {
+        this.commitSynthPresetName(modal, moduleNumber);
+        const button = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-modal-action="clean-synth-preset-cc"]') : null;
+        if (button) {
+          this.pendingCcClear = { kind: 'synth-preset', presetNumber: moduleNumber };
           this.openChildModal('cc-clear-confirm', null, button);
         }
         return;
@@ -6857,6 +6917,11 @@ export class PlayerScreen {
         if (this.pendingCompatibilityMode !== null) {
           this.compatibilityMode = this.pendingCompatibilityMode;
           this.midiInput.setCompatibilityMode(this.compatibilityMode);
+          // A entrada MIDI nativa alimenta o DSP diretamente antes de avisar a
+          // interface. Portanto, atualizar apenas o filtro da interface deixa
+          // o motor usando o modo anterior até a próxima reinicialização do
+          // áudio. Propague a escolha imediatamente para todas as plataformas.
+          void hookKeysNative.setCompatibilityMode(this.compatibilityMode).catch(() => undefined);
           this.pendingCompatibilityMode = null;
           this.markPlayerStateChanged();
         }
@@ -6902,6 +6967,9 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'preset-name' && moduleNumber !== null) {
           this.commitPresetName(modal, moduleNumber);
         }
+        if (modalAction === 'confirm' && kind === 'synth-preset-name' && moduleNumber !== null) {
+          this.commitSynthPresetName(modal, moduleNumber);
+        }
         if (modalAction === 'confirm' && kind === 'bank-name') this.commitBankName(modal);
         if (modalAction === 'confirm' && kind === 'effect-bank-name') this.commitEffectBankName(modal);
         if (modalAction === 'confirm' && kind === 'effect-pad' && moduleNumber !== null) {
@@ -6911,7 +6979,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
           this.commitModulePolyphony(modal, moduleNumber);
         }
-        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'bank-advanced' || kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'module-env-filter' || kind === 'glide-config' || kind === 'module-voice-mode' || kind === 'module-arpeggiator' || kind === 'module-trance-gate' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-chorus'))) && this.modalHistory.length > 0) {
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'bank-advanced' || kind === 'synth-preset-name' || kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'module-env-filter' || kind === 'glide-config' || kind === 'module-voice-mode' || kind === 'module-arpeggiator' || kind === 'module-trance-gate' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-chorus'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -7112,7 +7180,7 @@ export class PlayerScreen {
       this.knobCcLearnGesture.end(event);
       this.endKnobDrag(event);
     });
-    if (pageKind() === 'module-rotary' && moduleNumber === 7) {
+    if ((pageKind() === 'module-rotary' || kind === 'module-organ') && moduleNumber === 7) {
       modal.addEventListener('pointerdown', (event) => {
         const button = event.target instanceof Element
           ? event.target.closest<HTMLButtonElement>('[data-module-rotary-speed]') : null;
@@ -7157,7 +7225,7 @@ export class PlayerScreen {
             window.setTimeout(() => {
               if (this.suppressNextSynthPresetClick === slot) this.suppressNextSynthPresetClick = 0;
             }, 900);
-            this.saveSynthPreset(modal, slot);
+            this.openChildModal('synth-preset-name', slot, button);
           });
         }
       });
@@ -7305,10 +7373,6 @@ export class PlayerScreen {
         this.updateModuleSustain(input, moduleNumber);
         return;
       }
-      if (kind === 'module-organ' && moduleNumber !== null && input.matches('[data-organ-click-volume]')) {
-        this.updateOrganClickVolume(input, moduleNumber);
-        return;
-      }
       if (kind === 'module-synth' && moduleNumber === 8 && input.matches('[data-synth-parameter]')) {
         this.updateSynthParameter(input);
       } else if (pageKind() === 'module-arpeggiator' && moduleNumber !== null && input.matches('[data-pattern-kind="arpeggiator"]')) {
@@ -7360,7 +7424,7 @@ export class PlayerScreen {
       if (pageKind() === 'module-eq' && moduleNumber !== null && input.matches('[data-module-eq-q]')) {
         this.updateModuleEqQ(modal, input, moduleNumber);
       }
-      if ((pageKind() === 'module-compressor' || pageKind() === 'module-reverb' || pageKind() === 'module-delay' || pageKind() === 'module-rotary' || pageKind() === 'module-chorus' || pageKind() === 'module-env-filter') && moduleNumber !== null && input.matches('[data-module-effect-control]')) {
+      if ((pageKind() === 'module-compressor' || pageKind() === 'module-reverb' || pageKind() === 'module-delay' || pageKind() === 'module-rotary' || pageKind() === 'module-organ' || pageKind() === 'module-chorus' || pageKind() === 'module-env-filter') && moduleNumber !== null && input.matches('[data-module-effect-control]')) {
         this.updateModuleEffectControl(modal, input, moduleNumber);
       }
     });
@@ -7448,6 +7512,9 @@ export class PlayerScreen {
       input.value = presetState?.name ?? 'Preset';
       const preview = requiredElement<HTMLElement>(modal, '.preset-name-editor__preview .player-preset-button__label');
       preview.textContent = input.value;
+    } else if (kind === 'synth-preset-name') {
+      const input = requiredElement<HTMLInputElement>(modal, '[data-synth-preset-name-input]');
+      if (this.desktopRuntime) input.focus();
     } else if (kind === 'bank-name') {
       const input = requiredElement<HTMLInputElement>(modal, '[data-bank-name-input]');
       if (this.desktopRuntime) input.focus();
@@ -8966,68 +9033,7 @@ export class PlayerScreen {
     bar?.querySelectorAll('.organ-drawbar__leds i').forEach((led, ledIndex) => {
       led.classList.toggle('is-lit', ledIndex + 1 <= position * 2);
     });
-    if (!settings.soundEnabled) this.playOrganClick(settings.clickVolumeDb);
     this.markPlayerStateChanged();
-  }
-
-  // O mesmo clique curto usado ao descer uma lista: toca no lugar do timbre
-  // real quando o Drawbar Sound está desligado, uma vez por estágio.
-  private playOrganClick(volumeDb: number): void {
-    try {
-      const AudioContextClass = window.AudioContext
-        ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioContextClass) return;
-      const context = this.organClickAudioContext ??= new AudioContextClass();
-      if (context.state === 'suspended') void context.resume();
-      const now = context.currentTime;
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = 'triangle';
-      oscillator.frequency.setValueAtTime(940, now);
-      const duration = 0.02;
-      const peak = 0.04 * (10 ** (volumeDb / 20));
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), now + 0.004);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start(now);
-      oscillator.stop(now + duration + 0.01);
-    } catch {
-      // Sem áudio de clique: os LEDs e o número já dão o feedback visual.
-    }
-  }
-
-  private updateOrganClickVolume(input: HTMLInputElement, moduleNumber: number): void {
-    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
-    if (!moduleState) return;
-    const settings = readOrganSettings(moduleState.settings.organ);
-    const value = Math.min(ORGAN_CLICK_VOLUME_MAX_DB, Math.max(ORGAN_CLICK_VOLUME_MIN_DB, Number(input.value) || 0));
-    settings.clickVolumeDb = value;
-    moduleState.settings.organ = settings;
-    const progress = (value - ORGAN_CLICK_VOLUME_MIN_DB) / (ORGAN_CLICK_VOLUME_MAX_DB - ORGAN_CLICK_VOLUME_MIN_DB);
-    const knob = input.closest<HTMLElement>('.module-envelope-knob');
-    knob?.style.setProperty('--knob-angle', `${-135 + progress * 270}deg`);
-    knob?.style.setProperty('--knob-progress', String(progress));
-    const label = `${value.toFixed(0)} dB`;
-    input.setAttribute('aria-valuetext', label);
-    const output = input.closest<HTMLElement>('.organ-header-controls__volume')?.querySelector<HTMLOutputElement>('output');
-    if (output) output.value = label;
-    this.markPlayerStateChanged();
-  }
-
-  private toggleOrganSound(modal: HTMLElement, moduleNumber: number): void {
-    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
-    if (!moduleState) return;
-    const settings = readOrganSettings(moduleState.settings.organ);
-    settings.soundEnabled = !settings.soundEnabled;
-    moduleState.settings.organ = settings;
-    const toggle = modal.querySelector<HTMLButtonElement>('[data-organ-sound-toggle]');
-    toggle?.classList.toggle('is-on', settings.soundEnabled);
-    toggle?.classList.toggle('is-off', !settings.soundEnabled);
-    toggle?.setAttribute('aria-pressed', String(settings.soundEnabled));
-    this.markPlayerStateChanged();
-    void this.syncNativeEngine();
   }
 
   // Sustain: o nível em que a nota segura enquanto a tecla está presa.
@@ -9395,11 +9401,49 @@ export class PlayerScreen {
       fader.step = input.step;
       fader.disabled = input.disabled;
       fader.setAttribute('aria-label', input.ariaLabel || label?.textContent?.trim() || 'Parâmetro');
-      fader.onpointerdown = () => {
+      let activePointerId: number | null = null;
+      const updateFromPointer = (event: PointerEvent): void => {
+        const bounds = fader.getBoundingClientRect();
+        const minimum = Number(fader.min) || 0;
+        const maximum = Number(fader.max) || 100;
+        const rawStep = Number(fader.step);
+        const step = Number.isFinite(rawStep) && rawStep > 0 ? rawStep : 1;
+        const ratio = Math.min(1, Math.max(0, (bounds.bottom - event.clientY) / Math.max(1, bounds.height)));
+        const rawValue = minimum + ratio * (maximum - minimum);
+        const stepped = minimum + Math.round((rawValue - minimum) / step) * step;
+        fader.value = String(Math.min(maximum, Math.max(minimum, stepped)));
+        fader.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      const finishPointer = (event: PointerEvent): void => {
+        if (activePointerId !== event.pointerId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (fader.hasPointerCapture(event.pointerId)) fader.releasePointerCapture(event.pointerId);
+        activePointerId = null;
+        const source = this.knobFocusInput;
+        if (source?.isConnected) source.dispatchEvent(new Event('change', { bubbles: true }));
+        this.hideKnobFocus(1_200);
+      };
+      fader.onpointerdown = (event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
         if (this.knobFocusHideTimer !== null) window.clearTimeout(this.knobFocusHideTimer);
         this.knobFocusHideTimer = null;
+        activePointerId = event.pointerId;
+        fader.setPointerCapture(event.pointerId);
+        updateFromPointer(event);
       };
+      fader.onpointermove = (event) => {
+        if (activePointerId !== event.pointerId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        updateFromPointer(event);
+      };
+      fader.onpointerup = finishPointer;
+      fader.onpointercancel = finishPointer;
       fader.onchange = () => {
+        if (activePointerId !== null) return;
         const source = this.knobFocusInput;
         if (source?.isConnected) source.dispatchEvent(new Event('change', { bubbles: true }));
         this.hideKnobFocus(1_200);
@@ -9527,7 +9571,9 @@ export class PlayerScreen {
         oscillator1Volume: [0, 100],
         oscillator2Volume: [0, 100],
         oscillator3Volume: [0, 100],
-        detuneCents: [-100, 100],
+        oscillator1DetuneCents: [-100, 100],
+        oscillator2DetuneCents: [-100, 100],
+        oscillator3DetuneCents: [-100, 100],
         attackMs: [0, 15_000],
         holdMs: [0, 15_000],
         decayMs: [0, 25_000],
@@ -10013,7 +10059,8 @@ export class PlayerScreen {
 
   private ccLearnTargetForRotarySpeed(button: HTMLButtonElement): CcLearnTarget | null {
     const speed = button.dataset.moduleRotarySpeed;
-    if (this.currentModalKind !== 'module-rotary' || this.currentModalModuleNumber !== 7
+    if ((this.currentModalKind !== 'module-rotary' && this.currentModalKind !== 'module-organ')
+        || this.currentModalModuleNumber !== 7
         || (speed !== 'brake' && speed !== 'slow' && speed !== 'fast')) return null;
     return { kind: 'module-control', moduleNumber: 7, control: `rotary:speed:${speed}`, label: `Rotary ${speed === 'brake' ? 'Brake' : speed === 'fast' ? 'Fast' : 'Slow'}` };
   }
@@ -10495,6 +10542,16 @@ export class PlayerScreen {
     if (!input || !preset) return;
     preset.name = input.value.trim().slice(0, 20) || 'Preset';
     this.restoreActivePresetState();
+    this.markPlayerStateChanged();
+  }
+
+  private commitSynthPresetName(modal: HTMLElement, presetNumber: number): void {
+    const input = modal.querySelector<HTMLInputElement>('[data-synth-preset-name-input]');
+    const moduleState = this.getActivePresetState()?.modules[7];
+    if (!input || !moduleState || presetNumber < 1 || presetNumber > SYNTH_PRESET_COUNT) return;
+    const names = this.synthPresetNames(moduleState);
+    names[presetNumber - 1] = input.value.trim().slice(0, 20) || `Preset ${presetNumber}`;
+    moduleState.settings.synthPresetNames = names;
     this.markPlayerStateChanged();
   }
 
@@ -11197,6 +11254,7 @@ export class PlayerScreen {
   private markPlayerStateChanged(syncNative = true): void {
     this.stateChangedBeforeRestore = true;
     this.playerStateDirty = true;
+    this.persistActiveSynthPreset();
     this.saveActivePresetState();
     if (this.playerStateSaveTimer !== null) window.clearTimeout(this.playerStateSaveTimer);
     this.playerStateSaveTimer = window.setTimeout(() => this.flushPlayerStateSave(), 180);
@@ -11403,7 +11461,7 @@ export class PlayerScreen {
         : null;
       configurationTasks.push(hookKeysNative.configureModule({
         moduleIndex,
-        enabled: Boolean(moduleState?.enabled && (organSettings?.soundEnabled ?? true) && (moduleIndex === 6 || moduleIndex === 7 ||
+        enabled: Boolean(moduleState?.enabled && (moduleIndex === 6 || moduleIndex === 7 ||
           (moduleState.timbreId && moduleState.timbreId === this.nativeLoadedTimbres[moduleIndex]))),
         inputSlot: patternInputSlot ?? (selectedSlot >= 0 ? selectedSlot : 3),
         lowNote: moduleState?.lowNote ?? 0,
@@ -11471,7 +11529,9 @@ export class PlayerScreen {
             oscillator1Volume: oscillatorVolumeGain(synthSettings.oscillator1Volume),
             oscillator2Volume: oscillatorVolumeGain(synthSettings.oscillator2Volume),
             oscillator3Volume: oscillatorVolumeGain(synthSettings.oscillator3Volume),
-            detuneCents: synthSettings.detuneCents,
+            oscillator1DetuneCents: synthSettings.oscillator1DetuneCents,
+            oscillator2DetuneCents: synthSettings.oscillator2DetuneCents,
+            oscillator3DetuneCents: synthSettings.oscillator3DetuneCents,
             attackMs: synthSettings.attackMs,
             holdMs: synthSettings.holdMs,
             decayMs: synthSettings.decayMs,
@@ -11788,10 +11848,10 @@ export class PlayerScreen {
     this.performanceKeyboard?.setStyle(this.keyboardStyle);
     const savedOutputLevels = isRecord(value.outputLevels) ? value.outputLevels : {};
     this.outputLevels = {
-      music: boundedNumber(savedOutputLevels.music, OUTPUT_MIN_DB, 12, DEFAULT_OUTPUT_LEVELS.music),
-      pads: boundedNumber(savedOutputLevels.pads, OUTPUT_MIN_DB, 12, DEFAULT_OUTPUT_LEVELS.pads),
-      effects: boundedNumber(savedOutputLevels.effects, OUTPUT_MIN_DB, 12, DEFAULT_OUTPUT_LEVELS.effects),
-      master: boundedNumber(savedOutputLevels.master, OUTPUT_MIN_DB, 12, DEFAULT_OUTPUT_LEVELS.master),
+      music: boundedNumber(savedOutputLevels.music, OUTPUT_MIN_DB, MAX_OUTPUT_DB, DEFAULT_OUTPUT_LEVELS.music),
+      pads: boundedNumber(savedOutputLevels.pads, OUTPUT_MIN_DB, MAX_OUTPUT_DB, DEFAULT_OUTPUT_LEVELS.pads),
+      effects: boundedNumber(savedOutputLevels.effects, OUTPUT_MIN_DB, MAX_OUTPUT_DB, DEFAULT_OUTPUT_LEVELS.effects),
+      master: boundedNumber(savedOutputLevels.master, OUTPUT_MIN_DB, MAX_OUTPUT_DB, DEFAULT_OUTPUT_LEVELS.master),
     };
     const savedOutputEnabled = isRecord(value.outputEnabled) ? value.outputEnabled : {};
     this.outputEnabled = {
@@ -11915,7 +11975,7 @@ export class PlayerScreen {
         : 'default';
       const savedMasterVolumes = Array.isArray(sourceBank.masterVolumes) ? sourceBank.masterVolumes : [];
       defaults.masterVolumes = Array.from({ length: MODULE_COUNT }, (_, index) =>
-        boundedNumber(savedMasterVolumes[index], MODULE_FADER_MIN_DB, 6, 0));
+        boundedNumber(savedMasterVolumes[index], MODULE_FADER_MIN_DB, MODULE_FADER_MAX_DB, 0));
       const selectedPreset = sourceBank.selectedPreset;
       defaults.selectedPreset = typeof selectedPreset === 'number' && Number.isInteger(selectedPreset)
         ? selectedPreset >= 1 && selectedPreset <= PRESET_COUNT ? selectedPreset : 1
@@ -12044,7 +12104,7 @@ export class PlayerScreen {
                 : typeof source.timbreName === 'string'
                   ? source.timbreName.slice(0, 120) : module.timbreName,
               timbreColor: moduleIndex === 7 ? null : normalizeSoundColor(source.timbreColor),
-              volumeDb: boundedNumber(source.volumeDb, MODULE_FADER_MIN_DB, 6, module.volumeDb),
+              volumeDb: boundedNumber(source.volumeDb, MODULE_FADER_MIN_DB, MODULE_FADER_MAX_DB, module.volumeDb),
               settings: restoredSettings,
               settingsMode: moduleIndex < 6 && source.settingsMode !== 'user' ? 'default' : 'user',
               userSettings: isRecord(source.userSettings) ? cloneSettings(source.userSettings) : null,

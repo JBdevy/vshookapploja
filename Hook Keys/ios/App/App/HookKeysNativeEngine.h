@@ -140,7 +140,9 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                       oscillator1Volume:(float)oscillator1Volume
                       oscillator2Volume:(float)oscillator2Volume
                       oscillator3Volume:(float)oscillator3Volume
-                            detuneCents:(float)detuneCents
+                 oscillator1DetuneCents:(float)oscillator1DetuneCents
+                 oscillator2DetuneCents:(float)oscillator2DetuneCents
+                 oscillator3DetuneCents:(float)oscillator3DetuneCents
                                attackMs:(float)attackMs
                                  holdMs:(float)holdMs
                                 decayMs:(float)decayMs

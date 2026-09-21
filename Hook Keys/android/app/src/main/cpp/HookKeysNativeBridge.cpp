@@ -423,7 +423,9 @@ public:
   bool configureSynth(
       int oscillator1, int oscillator2, int oscillator3, bool oscillator1Enabled,
       bool oscillator2Enabled, bool oscillator3Enabled, int voiceMode, int lfoTarget,
-      float oscillator1Volume, float oscillator2Volume, float oscillator3Volume, float detuneCents, float attackMs, float holdMs,
+      float oscillator1Volume, float oscillator2Volume, float oscillator3Volume,
+      float oscillator1DetuneCents, float oscillator2DetuneCents, float oscillator3DetuneCents,
+      float attackMs, float holdMs,
       float decayMs, float sustain, float releaseMs, float filterCutoffHz,
       float filterResonance, float filterEnvelope, float lfoRateHz,
       float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave, int oscillator3Octave) noexcept {
@@ -441,7 +443,9 @@ public:
     config.oscillator1Volume = oscillator1Volume;
     config.oscillator2Volume = oscillator2Volume;
     config.oscillator3Volume = oscillator3Volume;
-    config.detuneCents = detuneCents;
+    config.oscillator1DetuneCents = oscillator1DetuneCents;
+    config.oscillator2DetuneCents = oscillator2DetuneCents;
+    config.oscillator3DetuneCents = oscillator3DetuneCents;
     config.attackMs = attackMs;
     config.holdMs = holdMs;
     config.decayMs = decayMs;
@@ -945,14 +949,16 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureSynth(
     JNIEnv*, jclass, jint oscillator1, jint oscillator2, jint oscillator3, jboolean oscillator1Enabled,
     jboolean oscillator2Enabled, jboolean oscillator3Enabled, jint voiceMode, jint lfoTarget,
-    jfloat oscillator1Volume, jfloat oscillator2Volume, jfloat oscillator3Volume, jfloat detuneCents, jfloat attackMs,
+    jfloat oscillator1Volume, jfloat oscillator2Volume, jfloat oscillator3Volume,
+    jfloat oscillator1DetuneCents, jfloat oscillator2DetuneCents, jfloat oscillator3DetuneCents, jfloat attackMs,
     jfloat holdMs, jfloat decayMs, jfloat sustain, jfloat releaseMs,
     jfloat filterCutoffHz, jfloat filterResonance, jfloat filterEnvelope,
     jfloat lfoRateHz, jfloat lfoDepth, jfloat glideMs, jint oscillator1Octave, jint oscillator2Octave, jint oscillator3Octave) {
   return gEngine.configureSynth(
              oscillator1, oscillator2, oscillator3, oscillator1Enabled == JNI_TRUE,
              oscillator2Enabled == JNI_TRUE, oscillator3Enabled == JNI_TRUE, voiceMode, lfoTarget, oscillator1Volume, oscillator2Volume, oscillator3Volume,
-             detuneCents, attackMs, holdMs, decayMs, sustain, releaseMs,
+             oscillator1DetuneCents, oscillator2DetuneCents, oscillator3DetuneCents,
+             attackMs, holdMs, decayMs, sustain, releaseMs,
              filterCutoffHz, filterResonance, filterEnvelope, lfoRateHz,
              lfoDepth, glideMs, oscillator1Octave, oscillator2Octave, oscillator3Octave)
              ? JNI_TRUE

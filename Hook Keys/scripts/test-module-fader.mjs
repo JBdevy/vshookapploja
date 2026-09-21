@@ -140,10 +140,10 @@ test('mobile effects omitted from a call stay bypassed rather than activating co
 test('module fader handles reach the inner edges without protruding in every layout', () => {
   assert(handleRules.length >= 3);
   const offsets = handleRules.filter(([, , declarations]) => /(?:left|right):/.test(declarations));
-  assert.equal(offsets.length, 3);
+  assert(offsets.length >= 4);
   for (const [, selector, declarations] of offsets) {
-    assert.match(declarations, /left:\s*0px;/, selector.trim());
-    assert.match(declarations, /right:\s*0px;/, selector.trim());
+    assert.match(declarations, /left:\s*[01]px;/, selector.trim());
+    assert.match(declarations, /right:\s*[01]px;/, selector.trim());
     assert.doesNotMatch(declarations, /(?:left|right):\s*-/, selector.trim());
   }
   for (const railWidth of [20, 24, 27, 38, 42]) {
@@ -161,12 +161,13 @@ test('all eight modules inherit the same darker Synth gray theme', () => {
   assert.doesNotMatch(css, /\.player-module:nth-child\(\d\)\s*\{\s*--module-accent:/);
 });
 
-test('themed handle retains square corners and its module colors, without an external glow', () => {
-  const themed = handleRules.find(([, , declarations]) => declarations.includes('var(--module-accent-hot)'))[2];
-  assert.match(themed, /border-radius:\s*0;/);
-  assert.match(themed, /linear-gradient\(180deg, var\(--module-accent-hot\)/);
-  const shadows = themed.match(/box-shadow:([^;]+);/)[1].split(/,\s*(?![^()]*\))/);
-  assert(shadows.every((shadow) => shadow.trim().startsWith('inset ')));
+test('module fader handle uses the vertical dark-metal model without indicator dots', () => {
+  const themed = handleRules.find(([, , declarations]) => declarations.includes('--module-fader-handle-half'))[2];
+  assert.match(themed, /height:\s*var\(--module-fader-handle-height\)/);
+  assert.match(themed, /border-radius:\s*2px;/);
+  assert.match(themed, /#ff9b2f/);
+  assert.match(css, /\.player-screen \.player-module__fader-handle::before\s*\{[^}]*border-radius:\s*999px;/s);
+  assert.doesNotMatch(css, /\.player-screen \.player-module__fader-handle::after\s*\{/);
 });
 
 test('audio meter fills the complete rail as independent stereo halves', () => {
@@ -247,19 +248,21 @@ test('module faders and output levels pass through -90 dB before -inf', () => {
   });
   const output = transpile('../src/features/player/OutputControls.ts', { './ModuleFader': fader });
   assert.equal(fader.MODULE_FADER_MIN_DB, -90);
+  assert.equal(fader.MODULE_FADER_MAX_DB, 0);
   assert.equal(fader.formatFaderDb(-90), '−∞ dB');
   assert.equal(fader.formatFaderDb(-89.9), '-89.9 dB');
   // Rail bottom (6% safe area) is silence; the tail reaches -60 dB at 6% of travel.
   assert.equal(fader.visualPositionToFaderDb(0.06), -90);
   assert.equal(fader.visualPositionToFaderDb(0.06 + 0.06 * 0.88), -60);
   assert(fader.visualPositionToFaderDb(0.06 + 0.03 * 0.88) < -60, 'fader has room between -60 dB and silence');
-  assert.equal(fader.visualPositionToFaderDb(0.06 + 0.8 * 0.88) + 0, 0, '0 dB keeps its fader position');
+  assert.equal(fader.visualPositionToFaderDb(0.94) + 0, 0, '0 dB is the top of the fader');
 
   assert.equal(output.OUTPUT_MIN_DB, -90);
+  assert.equal(output.MAX_OUTPUT_DB, 0);
   assert.equal(output.outputDbFromPosition(0), -90);
   assert.equal(output.outputDbFromPosition(3), -75);
   assert.equal(output.outputDbFromPosition(6), -60);
-  assert.equal(output.outputDbFromPosition(82), 0, '0 dB keeps its output knob position');
+  assert.equal(output.outputDbFromPosition(100), 0, '0 dB is the end of the output knob');
   assert.equal(output.formatOutputDb(-90), '−∞ dB');
   assert.equal(output.formatOutputDb(-75), '-75.0 dB');
   assert.equal(output.outputPosition(-75), 3);
@@ -526,9 +529,9 @@ test('toque longo no botão Keyboard deixa o teclado em quatro oitavas (C2 a C5)
   assert.match(player, /\[data-action="toggle-bottom-view"\]'\);\s*if \(bottomViewButton && this\.root\.contains\(bottomViewButton\) && this\.bottomView === 'keyboard'\) \{\s*this\.bottomViewHoldGesture\.start/);
   assert.match(player, /this\.keyboardOctaveSpan = this\.keyboardOctaveSpan === 'four' \? 'full' : 'four';/);
   assert.match(player, /keyboardOctaveSpan: this\.keyboardOctaveSpan,/);
-  // O teclado curto é outro teclado, montado de C2 (36) a C5 com 37 teclas.
+  // O teclado curto é outro teclado, montado de C2 (48) a C5 com 37 teclas.
   const keyboard = readFileSync(new URL('../src/features/player/PerformanceKeyboard.ts', import.meta.url), 'utf8');
-  assert.match(keyboard, /const SHORT_FIRST_NOTE = 36;\s*const SHORT_NOTE_COUNT = 37;/);
+  assert.match(keyboard, /const SHORT_FIRST_NOTE = 48;\s*const SHORT_NOTE_COUNT = 37;/);
   assert.match(keyboard, /--white-key-width:\$\{whiteKeyWidth\.toFixed\(6\)\}%/);
   assert.match(player, /scroller\.innerHTML = createPerformanceKeysMarkup\(this\.keyboardOctaveSpan\);\s*scroller\.scrollLeft = 0;\s*this\.performanceKeyboard\?\.refreshKeys\(\);/);
 });
@@ -557,6 +560,21 @@ test('módulos nascem com Reverb Room e o Organ com Rotary ligado à roda Mod', 
   assert.match(player, /modulationMode: moduleIndex === 6 \? 'rotary' : 'user',/);
   assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB \},/);
   assert.match(player, /enabled: moduleIndex === 6,\s*modulationEnabled: moduleIndex === 6,/);
+});
+
+test('module fader field and library controls use the requested compact corner radii', () => {
+  assert.match(css, /\.player-screen \.player-module__fader-rail\s*\{\s*border-radius:\s*2px;/);
+  assert.match(css, /\.player-screen :is\(\.player-module__settings-button, \.player-module__sound-button\)\s*\{\s*border-radius:\s*4px;/);
+});
+
+test('the interface base uses the loading-panel dark gray instead of pure black', () => {
+  assert.match(css, /--interface-background:\s*#131315;/);
+  assert.match(css, /\.player-screen\s*\{[^}]*background:\s*var\(--interface-background\);/s);
+  assert.match(css, /\.player-screen--tablet\.is-tracks-split > \.player-primary > \.player-top-transport\s*\{[^}]*background:\s*var\(--interface-background\);/s);
+});
+
+test('mobile enlarged knob uses a truly vertical fader in WebViews', () => {
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.knob-focus__fader input\s*\{[^}]*width:\s*118px;[^}]*height:\s*34px;[^}]*writing-mode:\s*horizontal-tb;[^}]*transform:\s*rotate\(-90deg\);/s);
 });
 
 test('knobs andam nos dois sentidos, um eixo por gesto, sem o salto nativo do range do iOS', () => {

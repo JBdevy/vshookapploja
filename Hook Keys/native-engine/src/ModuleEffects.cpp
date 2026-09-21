@@ -250,7 +250,7 @@ void ModuleEffects::processTranceGate(float* left, float* right, std::size_t fra
 
 void ModuleEffects::RotarySpeaker::prepare(double nextSampleRate) {
   sampleRate = nextSampleRate;
-  // Tabelas de distância: o mesmo cálculo do computeOffsets() do setBfree.
+  // Tabelas de distância baseadas no computeOffsets() do OpenB3/Beatrix.
   const auto samplesPerCm = static_cast<float>(sampleRate) / (kAirSpeedMetersPerSecond * 100.0f);
   micDistanceSamples = kMicDistanceCm * samplesPerCm;
   hornReflectionSamples = kHornReflectionCm * samplesPerCm;
@@ -289,16 +289,17 @@ void ModuleEffects::RotarySpeaker::configure(RotaryConfig next) noexcept {
   // Clear old delay samples on bypass transitions; retain inertia for speed changes.
   if (config.enabled != next.enabled) reset();
   config = next;
-  // Ramp é o tempo da corneta subindo. As outras três constantes seguem as
-  // proporções do setBfree: a corneta desce no dobro do tempo que sobe e o
-  // tambor sobe em ~3,4x esse tempo, mas desce em ~1,1x.
+  // OpenB3/Beatrix b_whirl: quatro constantes de tempo independentes.
+  // O controle Ramp escala todas sem destruir a diferença entre os rotores;
+  // no valor padrão de 1,2 s usamos os tempos originais do OpenB3.
   const auto constant = [this](float seconds) {
     return 1.0f - std::exp(-1.0f / (std::max(seconds, 0.001f) * static_cast<float>(sampleRate)));
   };
-  hornAccSmoothing = constant(config.rampSeconds);
-  hornDecSmoothing = constant(config.rampSeconds * 2.0f);
-  drumAccSmoothing = constant(config.rampSeconds * 3.4f);
-  drumDecSmoothing = constant(config.rampSeconds * 1.14f);
+  const auto rampScale = config.rampSeconds / 1.2f;
+  hornAccSmoothing = constant(0.161f * rampScale);
+  hornDecSmoothing = constant(0.321f * rampScale);
+  drumAccSmoothing = constant(4.127f * rampScale);
+  drumDecSmoothing = constant(1.371f * rampScale);
 }
 
 void ModuleEffects::setModulation(std::uint8_t value) noexcept {
@@ -347,9 +348,8 @@ float ModuleEffects::RotarySpeaker::read(const std::vector<float>& buffer, float
 void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_t frames) noexcept {
   if (!config.enabled || hornBuffers[0].empty() || drumBuffers[0].empty()) return;
   const auto targetHz = effectiveSpeed == 0 ? 0.0f : effectiveSpeed == 2 ? config.fastHz : config.slowHz;
-  // Tambor um pouco mais lento que a corneta (Leslie 122: chorale 0,83/0,67 Hz,
-  // tremolo 6,7/5,7 Hz).
-  const auto drumTargetHz = targetHz * (effectiveSpeed == 2 ? 0.844f : 0.893f);
+  // OpenB3/Beatrix b_whirl: 36/40,32 RPM no Slow e 357,3/423,36 no Fast.
+  const auto drumTargetHz = targetHz * (effectiveSpeed == 2 ? (357.3f / 423.36f) : (36.0f / 40.32f));
   const auto depth = config.depth;
   const auto toneScale = static_cast<float>(2.0 * kPi / sampleRate);
   // Microfones a +/-72 graus (0,2 de volta): cada lado ouve a corneta chegar e
@@ -737,6 +737,10 @@ void ModuleEffects::Reverb::prepare(double nextSampleRate) {
     allPassRight[index].prepare(
         static_cast<std::size_t>(std::ceil((allPassSeconds[index] + 0.0003) * 1.30 * sampleRate)) + 2);
   }
+  // Centro de 7 ms e excursão máxima de 5 ms, com folga para interpolação.
+  // A memória nasce aqui, nunca dentro da thread de áudio.
+  const auto modCapacity = static_cast<std::size_t>(std::ceil(sampleRate * 0.014)) + 4;
+  for (auto& buffer : modBuffers) buffer.assign(modCapacity, 0.0f);
   updateLengths();
 }
 
@@ -752,6 +756,8 @@ void ModuleEffects::Reverb::reset() noexcept {
   for (auto& line : combRight) line.reset();
   for (auto& line : allPassLeft) line.reset();
   for (auto& line : allPassRight) line.reset();
+  for (auto& buffer : modBuffers) std::fill(buffer.begin(), buffer.end(), 0.0f);
+  modWriteIndex = 0;
   modPhase = 0.0;
 }
 
@@ -762,31 +768,50 @@ void ModuleEffects::Reverb::process(float* left, float* right, std::size_t frame
   // 50% para cima o original é que vai embora, até sobrar só o processado.
   const auto dryGain = config.mix <= 0.5f ? 1.0f : 1.0f - (config.mix - 0.5f) * 2.0f;
   const auto wetGain = config.mix <= 0.5f ? config.mix * 2.0f : 1.0f;
-  // Taxa fixa (baixa o bastante pra não virar vibrato) e uma fase por linha,
-  // pra balançar sem ficar robótico. Até 1,8 amostra no fundo, suave.
+  // Inspirado na arquitetura de reverbs modulados: um chorus lento entra
+  // antes da rede, somente no caminho wet. O knob controla Depth; Rate fica
+  // musicalmente lento e fixo para manter a interface com um único controle.
   constexpr double kTwoPi = 6.28318530717958647692;
-  constexpr double kModRateHz = 0.37;
-  constexpr float kModMaxSamples = 1.8f;
+  constexpr double kModRateHz = 0.50;
   const auto modPhaseStep = kTwoPi * kModRateHz / sampleRate;
-  const auto modDepth = config.mod * kModMaxSamples;
+  const auto modDepthSamples = config.mod * static_cast<float>(sampleRate * 0.005);
+  const auto modCenterSamples = static_cast<float>(sampleRate * 0.007);
+  const auto modCapacity = modBuffers[0].size();
   for (std::size_t frame = 0; frame < frames; ++frame) {
     const auto dryLeft = left[frame];
     const auto dryRight = right[frame];
-    const auto input = (dryLeft + dryRight) * 0.12f;
+    float inputLeft;
+    float inputRight;
+    if (modDepthSamples > 0.0f && modCapacity > 1) {
+      modBuffers[0][modWriteIndex] = dryLeft;
+      modBuffers[1][modWriteIndex] = dryRight;
+      float modulated[2]{};
+      for (std::size_t channel = 0; channel < 2; ++channel) {
+        const auto phase = modPhase + (channel == 0 ? 0.0 : kTwoPi * 0.25);
+        const auto delaySamples = modCenterSamples
+            + modDepthSamples * static_cast<float>(std::sin(phase));
+        auto readPosition = static_cast<float>(modWriteIndex) - delaySamples;
+        while (readPosition < 0.0f) readPosition += static_cast<float>(modCapacity);
+        const auto first = static_cast<std::size_t>(readPosition) % modCapacity;
+        const auto second = (first + 1) % modCapacity;
+        const auto fraction = readPosition - std::floor(readPosition);
+        const auto delayed = modBuffers[channel][first]
+            + (modBuffers[channel][second] - modBuffers[channel][first]) * fraction;
+        const auto dry = channel == 0 ? dryLeft : dryRight;
+        // 50% de chorus: perceptível na cauda sem apagar o ataque original.
+        modulated[channel] = dry + (delayed - dry) * 0.5f;
+      }
+      inputLeft = modulated[0] * 0.12f;
+      inputRight = modulated[1] * 0.12f;
+      modWriteIndex = (modWriteIndex + 1) % modCapacity;
+    } else {
+      // Caminho antigo bit a bit quando Mod está zerado.
+      inputLeft = inputRight = (dryLeft + dryRight) * 0.12f;
+    }
     float wetLeft = 0.0f;
     float wetRight = 0.0f;
-    if (modDepth > 0.0f) {
-      for (std::size_t index = 0; index < combLeft.size(); ++index) {
-        const auto phase = modPhase + index * (kTwoPi / combLeft.size());
-        wetLeft += combLeft[index].processComb(input, feedback, config.dampen,
-            modDepth * static_cast<float>(std::sin(phase)));
-        wetRight += combRight[index].processComb(input, feedback, config.dampen,
-            modDepth * static_cast<float>(std::sin(phase + kTwoPi * 0.25)));
-      }
-    } else {
-      for (auto& line : combLeft) wetLeft += line.processComb(input, feedback, config.dampen);
-      for (auto& line : combRight) wetRight += line.processComb(input, feedback, config.dampen);
-    }
+    for (auto& line : combLeft) wetLeft += line.processComb(inputLeft, feedback, config.dampen);
+    for (auto& line : combRight) wetRight += line.processComb(inputRight, feedback, config.dampen);
     wetLeft *= 0.25f;
     wetRight *= 0.25f;
     for (auto& line : allPassLeft) wetLeft = line.processAllPass(wetLeft);

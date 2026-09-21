@@ -697,7 +697,9 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("oscillator1Volume", 1.0f),
             call.getFloat("oscillator2Volume", 1.0f),
             call.getFloat("oscillator3Volume", 1.0f),
-            call.getFloat("detuneCents", 7.0f),
+            call.getFloat("oscillator1DetuneCents", 0.0f),
+            call.getFloat("oscillator2DetuneCents", 7.0f),
+            call.getFloat("oscillator3DetuneCents", -7.0f),
             call.getFloat("attackMs", 0.0f),
             call.getFloat("holdMs", 15000.0f),
             call.getFloat("decayMs", 25000.0f),
@@ -1047,10 +1049,11 @@ public class HookKeysNativePlugin extends Plugin {
 
         private void dispatchMidi(int status, int data1, int data2, long timestamp) {
             int type = status & 0xf0;
-            boolean blockedCompatibilityCc = compatibilityMode && type == 0xb0 &&
-                (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 || data1 == 16 ||
-                 data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101);
-            if (!blockedCompatibilityCc) nativeSendMidi(inputSlot, status, data1, data2, timestamp);
+            boolean blockedCompatibilityMessage = compatibilityMode &&
+                (type == 0xc0 || (type == 0xb0 &&
+                 (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 || data1 == 16 ||
+                  data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101)));
+            if (!blockedCompatibilityMessage) nativeSendMidi(inputSlot, status, data1, data2, timestamp);
             if (type == 0x80 || type == 0x90) {
                 JSObject event = new JSObject();
                 event.put("channel", (status & 0x0f) + 1);
@@ -1181,7 +1184,9 @@ public class HookKeysNativePlugin extends Plugin {
     private static native boolean nativeConfigureSynth(
         int oscillator1, int oscillator2, int oscillator3, boolean oscillator1Enabled,
         boolean oscillator2Enabled, boolean oscillator3Enabled, int voiceMode, int lfoTarget,
-        float oscillator1Volume, float oscillator2Volume, float oscillator3Volume, float detuneCents, float attackMs, float holdMs,
+        float oscillator1Volume, float oscillator2Volume, float oscillator3Volume,
+        float oscillator1DetuneCents, float oscillator2DetuneCents, float oscillator3DetuneCents,
+        float attackMs, float holdMs,
         float decayMs, float sustain, float releaseMs, float filterCutoffHz,
         float filterResonance, float filterEnvelope, float lfoRateHz,
         float lfoDepth, float glideMs, int oscillator1Octave, int oscillator2Octave, int oscillator3Octave

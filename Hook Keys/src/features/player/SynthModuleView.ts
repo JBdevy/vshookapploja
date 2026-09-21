@@ -25,7 +25,9 @@ export interface SynthModuleSettings {
   oscillator1Volume: number;
   oscillator2Volume: number;
   oscillator3Volume: number;
-  detuneCents: number;
+  oscillator1DetuneCents: number;
+  oscillator2DetuneCents: number;
+  oscillator3DetuneCents: number;
   attackMs: number;
   holdMs: number;
   decayMs: number;
@@ -65,7 +67,9 @@ export const DEFAULT_SYNTH_SETTINGS: Readonly<SynthModuleSettings> = Object.free
   oscillator1Volume: 100,
   oscillator2Volume: 100,
   oscillator3Volume: 100,
-  detuneCents: 7,
+  oscillator1DetuneCents: 0,
+  oscillator2DetuneCents: 7,
+  oscillator3DetuneCents: -7,
   attackMs: 0,
   holdMs: 15000,
   decayMs: 25000,
@@ -100,7 +104,9 @@ const FACTORY_PRESET_BASE: Readonly<SynthModuleSettings> = Object.freeze({
   oscillator1Enabled: true,
   oscillator2Enabled: true,
   oscillator3Enabled: true,
-  detuneCents: 0,
+  oscillator1DetuneCents: 0,
+  oscillator2DetuneCents: 0,
+  oscillator3DetuneCents: 0,
   holdMs: 15000,
   decayMs: 25000,
   sustain: 100,
@@ -172,6 +178,10 @@ export function readSynthSettings(value: unknown): SynthModuleSettings {
   // Preserve the sound of older presets/backups that stored a crossfade.
   const legacyMix = typeof source.oscillatorMix === 'number' && Number.isFinite(source.oscillatorMix)
     ? bounded(source.oscillatorMix, 0, 100, 35) : null;
+  // The old single Detune kept OSC 1 centered, raised OSC 2 and lowered OSC 3.
+  // Preserve that sound while migrating each preset to independent tuning.
+  const legacyDetune = typeof source.detuneCents === 'number' && Number.isFinite(source.detuneCents)
+    ? bounded(source.detuneCents, -100, 100, 7) : null;
   const glideVelocity = readGlideVelocity(source);
   return {
     oscillator1: isOscillator(source.oscillator1) ? source.oscillator1 : DEFAULT_SYNTH_SETTINGS.oscillator1,
@@ -192,7 +202,12 @@ export function readSynthSettings(value: unknown): SynthModuleSettings {
     oscillator2Volume: bounded(source.oscillator2Volume, 0, 100,
       legacyMix !== null && source.oscillator1Enabled !== false ? legacyMix : DEFAULT_SYNTH_SETTINGS.oscillator2Volume),
     oscillator3Volume: bounded(source.oscillator3Volume, 0, 100, DEFAULT_SYNTH_SETTINGS.oscillator3Volume),
-    detuneCents: bounded(source.detuneCents, -100, 100, DEFAULT_SYNTH_SETTINGS.detuneCents),
+    oscillator1DetuneCents: bounded(source.oscillator1DetuneCents, -100, 100,
+      legacyDetune === null ? DEFAULT_SYNTH_SETTINGS.oscillator1DetuneCents : 0),
+    oscillator2DetuneCents: bounded(source.oscillator2DetuneCents, -100, 100,
+      legacyDetune ?? DEFAULT_SYNTH_SETTINGS.oscillator2DetuneCents),
+    oscillator3DetuneCents: bounded(source.oscillator3DetuneCents, -100, 100,
+      legacyDetune === null ? DEFAULT_SYNTH_SETTINGS.oscillator3DetuneCents : -legacyDetune),
     attackMs: bounded(source.attackMs, 0, 15000, DEFAULT_SYNTH_SETTINGS.attackMs),
     holdMs: bounded(source.holdMs, 0, 15000, DEFAULT_SYNTH_SETTINGS.holdMs),
     decayMs: bounded(source.decayMs, 0, 25000, DEFAULT_SYNTH_SETTINGS.decayMs),
@@ -224,6 +239,7 @@ export function createSynthModuleMarkup(
   occupiedPresets: readonly boolean[] = [],
   activePreset = 1,
   bpm = 120,
+  presetNames: readonly string[] = [],
 ): string {
   const settings = readSynthSettings(value);
   return `
@@ -238,7 +254,9 @@ export function createSynthModuleMarkup(
           <div class="synth-preset-group">
             ${Array.from({ length: SYNTH_PRESET_COUNT }, (_, index) => {
               const slot = index + 1;
-              return `<button class="synth-preset-button ${activePreset === slot ? 'is-selected' : ''} ${occupiedPresets[index] ? 'is-saved' : 'is-empty'}" type="button" data-synth-preset="${slot}" aria-pressed="${activePreset === slot}" aria-label="Preset ${slot}${occupiedPresets[index] ? ', salvo' : ', vazio'}. Toque para carregar; segure para salvar.">Preset ${slot}</button>`;
+              const name = presetNames[index]?.trim().slice(0, 20) || `Preset ${slot}`;
+              const safeName = escapeSynthMarkup(name);
+              return `<button class="synth-preset-button ${activePreset === slot ? 'is-selected' : ''} ${occupiedPresets[index] ? 'is-saved' : 'is-empty'}" type="button" data-synth-preset="${slot}" aria-pressed="${activePreset === slot}" aria-label="${safeName}${occupiedPresets[index] ? ', salvo' : ', vazio'}. Toque para carregar; segure para editar.">${safeName}</button>`;
             }).join('')}
           </div>
           <div class="synth-mode-controls">
@@ -254,9 +272,11 @@ export function createSynthModuleMarkup(
           const volume = `${prefix}Volume` as 'oscillator1Volume' | 'oscillator2Volume' | 'oscillator3Volume';
           const velocity = `${prefix}VelocityLimit` as 'oscillator1VelocityLimit' | 'oscillator2VelocityLimit' | 'oscillator3VelocityLimit';
           const octave = `${prefix}Octave` as 'oscillator1Octave' | 'oscillator2Octave' | 'oscillator3Octave';
+          const detune = `${prefix}DetuneCents` as 'oscillator1DetuneCents' | 'oscillator2DetuneCents' | 'oscillator3DetuneCents';
           return `<section class="synth-oscillator-page${oscillator === 1 ? ' is-selected' : ''}" data-synth-oscillator-page="${oscillator}"${oscillator === 1 ? '' : ' hidden'}>
             ${oscillatorCard(`OSC ${oscillator}`, prefix, settings[prefix], settings[enabled], settings[velocity])}
             ${rangeCard(`Volume OSC ${oscillator}`, volume, settings[volume], 0, 100, 1, formatOscillatorVolume(settings[volume]))}
+            ${rangeCard(`Detune OSC ${oscillator}`, detune, settings[detune], -100, 100, 1, `${Math.round(settings[detune])} cent`)}
             <article class="synth-card synth-card--octaves">
               <div class="synth-octave-row"><span>OSC ${oscillator} <strong data-synth-octave-value="${octave}">${settings[octave] > 0 ? '+' : ''}${settings[octave]}</strong></span>
                 <button class="${settings[octave] < 0 ? 'is-selected' : ''}" type="button" data-synth-octave="${octave}" data-synth-octave-direction="-1" aria-pressed="${settings[octave] < 0}" ${settings[octave] <= -3 ? 'disabled' : ''}>OCT −</button>
@@ -265,7 +285,6 @@ export function createSynthModuleMarkup(
             </article>
           </section>`;
         }).join('')}
-        ${rangeCard('Detune', 'detuneCents', settings.detuneCents, -100, 100, 1, `${Math.round(settings.detuneCents)} cent`)}
         ${rangeCard('Attack', 'attackMs', settings.attackMs, 0, 15000, 1, formatMs(settings.attackMs))}
         ${rangeCard('Hold', 'holdMs', settings.holdMs, 0, 15000, 1, formatMs(settings.holdMs))}
         ${rangeCard('Decay', 'decayMs', settings.decayMs, 0, 25000, 1, formatMs(settings.decayMs))}
@@ -287,6 +306,12 @@ export function createSynthModuleMarkup(
   `;
 }
 
+function escapeSynthMarkup(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character] ?? character);
+}
+
 export function updateSynthRangeOutput(input: HTMLInputElement): number {
   const parameter = input.dataset.synthParameter;
   const raw = Number(input.value);
@@ -305,7 +330,7 @@ export function updateSynthRangeOutput(input: HTMLInputElement): number {
       : parameter === 'attackMs' || parameter === 'holdMs' || parameter === 'decayMs'
         || parameter === 'releaseMs' || parameter === 'glideMs' ? formatMs(value)
         : parameter === 'oscillator1VelocityLimit' || parameter === 'oscillator2VelocityLimit' || parameter === 'oscillator3VelocityLimit' ? `${Math.round(value)}`
-        : parameter === 'detuneCents' ? `${Math.round(value)} cent`
+        : parameter === 'oscillator1DetuneCents' || parameter === 'oscillator2DetuneCents' || parameter === 'oscillator3DetuneCents' ? `${Math.round(value)} cent`
           : parameter === 'lfoRateHz' ? `${value.toFixed(2)} Hz`
             : `${Math.round(value)}%`;
   input.setAttribute('aria-valuetext', formatted);

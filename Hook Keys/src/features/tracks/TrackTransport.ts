@@ -144,7 +144,7 @@ export class TrackTransportController {
   }
 
   setOutputLevel(db: number, enabled: boolean): void {
-    this.outputDb = Math.min(12, Math.max(-90, db));
+    this.outputDb = Math.min(0, Math.max(-90, db));
     this.outputEnabled = enabled;
     this.applyOutputGain();
   }

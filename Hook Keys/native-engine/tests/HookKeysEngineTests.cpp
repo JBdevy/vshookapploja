@@ -828,6 +828,7 @@ void testIndependentPresetTails() {
   oldSynth.voiceMode = 0;
   oldSynth.oscillator1 = 0;
   oldSynth.oscillator2Enabled = false;
+  oldSynth.oscillator3Enabled = false;
   oldSynth.glideMs = 0;
   oldSynth.filterEnvelope = 0;
   oldSynth.releaseMs = 350;
@@ -1225,15 +1226,19 @@ void testVelocityLimits() {
       "the limiter keeps softer notes and converts harder ones to the limit");
 
   // Synth: each oscillator has its own limit on the raw key velocity.
-  const auto renderSynth = [](std::uint8_t limit1, std::uint8_t limit2, std::uint8_t velocity) {
+  const auto renderSynth = [](std::uint8_t limit1, std::uint8_t limit2,
+                              std::uint8_t limit3, std::uint8_t velocity) {
     hook_keys::AnalogSynthModule analog(48000);
     hook_keys::AnalogSynthConfig synthConfig;
     synthConfig.voiceMode = 0;
     synthConfig.oscillator1 = 0;
     synthConfig.oscillator2 = 2;
-    synthConfig.detuneCents = synthConfig.glideMs = synthConfig.lfoDepth = synthConfig.filterEnvelope = 0.0f;
+    synthConfig.oscillator3 = 3;
+    synthConfig.oscillator3Octave = 1;
+    synthConfig.oscillator1DetuneCents = synthConfig.oscillator2DetuneCents = synthConfig.oscillator3DetuneCents = 0.0f;
+    synthConfig.glideMs = synthConfig.lfoDepth = synthConfig.filterEnvelope = 0.0f;
     expect(analog.setConfig(synthConfig), "configure oscillator velocity limits");
-    analog.setOscillatorVelocityLimits(limit1, limit2);
+    analog.setOscillatorVelocityLimits(limit1, limit2, limit3);
     analog.beginBlock();
     analog.noteOnWithFilterVelocity(60, 100, velocity);
     std::vector<float> left(4800), right(4800);
@@ -1245,14 +1250,17 @@ void testVelocityLimits() {
     for (const auto sample : samples) total += std::abs(sample);
     return total;
   };
-  const auto both = renderSynth(127, 127, 110);
-  const auto onlySecond = renderSynth(100, 127, 110);
-  const auto onlyFirst = renderSynth(127, 100, 110);
-  expect(both != onlySecond && both != onlyFirst && onlyFirst != onlySecond,
-      "each Synth oscillator drops out on its own above its velocity limit");
-  expect(onlySecond == renderSynth(100, 127, 110) && renderSynth(100, 127, 90) == both,
-      "below both limits the Synth plays both oscillators");
-  expect(energy(renderSynth(100, 100, 110)) == 0.0, "above both limits the Synth plays nothing");
+  const auto all = renderSynth(127, 127, 127, 110);
+  const auto onlyFirst = renderSynth(127, 100, 100, 110);
+  const auto onlySecond = renderSynth(100, 127, 100, 110);
+  const auto onlyThird = renderSynth(100, 100, 127, 110);
+  expect(all != onlyFirst && all != onlySecond && all != onlyThird &&
+         onlyFirst != onlySecond && onlyFirst != onlyThird && onlySecond != onlyThird,
+      "each of the three Synth oscillators obeys its own velocity limit");
+  expect(renderSynth(100, 100, 100, 90) == all,
+      "below all three limits the Synth plays every oscillator");
+  expect(energy(renderSynth(100, 100, 100, 110)) == 0.0,
+      "above all three limits the Synth plays nothing");
 
   // The runtime keeps the limits when the module itself is reconfigured.
   hook_keys::NativeEngineRuntime runtime(48000, 128);
@@ -1586,15 +1594,19 @@ void testReverbMod() {
 }
 
 void testIndependentOscillatorVolumes() {
-  const auto render = [](float volume1, float volume2, bool enabled1, bool enabled2) {
+  const auto render = [](float volume1, float volume2, float volume3,
+                         bool enabled1, bool enabled2, bool enabled3) {
     hook_keys::AnalogSynthModule synth(48000.0);
     hook_keys::AnalogSynthConfig config;
     config.oscillator1 = 0;
     config.oscillator2 = 3;
+    config.oscillator3 = 1;
     config.oscillator1Volume = volume1;
     config.oscillator2Volume = volume2;
+    config.oscillator3Volume = volume3;
     config.oscillator1Enabled = enabled1;
     config.oscillator2Enabled = enabled2;
+    config.oscillator3Enabled = enabled3;
     config.filterEnvelope = 0.0f;
     config.filterResonance = 0.0f;
     config.lfoDepth = 0.0f;
@@ -1612,22 +1624,32 @@ void testIndependentOscillatorVolumes() {
     for (const auto sample : samples) sum += std::abs(sample);
     return sum;
   };
-  const auto firstOnly = render(1.0f, 0.8f, true, false);
-  const auto secondOnly = render(0.8f, 1.0f, false, true);
-  expect(energy(firstOnly) > 1.0 && energy(secondOnly) > 1.0, "each oscillator produces audio alone");
-  expect(firstOnly == render(1.0f, 0.0f, true, true),
+  const auto firstOnly = render(1.0f, 0.8f, 0.7f, true, false, false);
+  const auto secondOnly = render(0.8f, 1.0f, 0.7f, false, true, false);
+  const auto thirdOnly = render(0.8f, 0.7f, 1.0f, false, false, true);
+  expect(energy(firstOnly) > 1.0 && energy(secondOnly) > 1.0 && energy(thirdOnly) > 1.0,
+      "each oscillator produces audio alone");
+  expect(firstOnly == render(1.0f, 0.0f, 0.0f, true, true, true),
       "enabling a silent OSC 2 does not change OSC 1 gain");
-  expect(secondOnly == render(0.0f, 1.0f, true, true),
+  expect(secondOnly == render(0.0f, 1.0f, 0.0f, true, true, true),
       "enabling a silent OSC 1 does not change OSC 2 gain");
-  const auto firstHalf = energy(render(0.5f, 1.0f, true, false));
-  const auto secondHalf = energy(render(1.0f, 0.5f, false, true));
+  expect(thirdOnly == render(0.0f, 0.0f, 1.0f, true, true, true),
+      "silent OSC 1 and OSC 2 do not change OSC 3 gain");
+  const auto firstHalf = energy(render(0.5f, 1.0f, 1.0f, true, false, false));
+  const auto secondHalf = energy(render(1.0f, 0.5f, 1.0f, false, true, false));
+  const auto thirdHalf = energy(render(1.0f, 1.0f, 0.5f, false, false, true));
   expect(firstHalf > energy(firstOnly) * 0.49 && firstHalf < energy(firstOnly) * 0.53,
-      "OSC 1 volume works even with OSC 2 switched off");
+      "OSC 1 volume works with the other oscillators switched off");
   expect(secondHalf > energy(secondOnly) * 0.49 && secondHalf < energy(secondOnly) * 0.53,
-      "OSC 2 volume works even with OSC 1 switched off");
-  expect(energy(render(0.0f, 0.0f, true, true)) == 0.0, "zero volume silences both oscillators");
-  expect(energy(render(1.0f, 1.0f, false, false)) == 0.0, "ON/OFF silences independently of stored volume");
-  expect(firstOnly == render(2.0f, -1.0f, true, true), "volume gains clamp to zero through unity");
+      "OSC 2 volume works with the other oscillators switched off");
+  expect(thirdHalf > energy(thirdOnly) * 0.49 && thirdHalf < energy(thirdOnly) * 0.53,
+      "OSC 3 volume works with the other oscillators switched off");
+  expect(energy(render(0.0f, 0.0f, 0.0f, true, true, true)) == 0.0,
+      "zero volume silences all oscillators");
+  expect(energy(render(1.0f, 1.0f, 1.0f, false, false, false)) == 0.0,
+      "ON/OFF silences independently of stored volume");
+  expect(firstOnly == render(2.0f, -1.0f, -1.0f, true, true, true),
+      "volume gains clamp to zero through unity");
 }
 
 void testSynthPreservesLinearVelocityAndGain() {
@@ -1635,7 +1657,8 @@ void testSynthPreservesLinearVelocityAndGain() {
     hook_keys::AnalogSynthModule synth(48000.0);
     hook_keys::AnalogSynthConfig config;
     config.oscillator1 = config.oscillator2 = 0;
-    config.detuneCents = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+    config.oscillator1DetuneCents = config.oscillator2DetuneCents = config.oscillator3DetuneCents = 0.0f;
+    config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
     config.filterResonance = 0.0f;
     expect(synth.setConfig(config), "configure Synth linear-gain test");
     synth.beginBlock();
@@ -1678,7 +1701,8 @@ void testSynthNoVelocitySensitivity() {
   };
   hook_keys::AnalogSynthConfig config;
   config.oscillator1 = config.oscillator2 = 0;
-  config.detuneCents = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+  config.oscillator1DetuneCents = config.oscillator2DetuneCents = config.oscillator3DetuneCents = 0.0f;
+  config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
   config.filterResonance = 0.0f;
 
   hook_keys::AnalogSynthModule soft(48000.0);
@@ -1711,6 +1735,7 @@ void testSynthPitchIsIndependentOfSampleRate() {
     hook_keys::AnalogSynthConfig config;
     config.oscillator1 = 0;
     config.oscillator2Enabled = false;
+    config.oscillator3Enabled = false;
     config.attackMs = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
     config.filterResonance = 0.0f;
     expect(synth.setConfig(config), "configure Synth sample-rate test");
@@ -1859,7 +1884,8 @@ double rotaryPeakPitchDeviationCents(double frequency, float depth, std::uint8_t
   hook_keys::ModuleEffects effects;
   effects.prepare(sampleRate);
   hook_keys::ModuleEffectsConfig config;
-  config.rotary = {true, speed, 0.8f, 6.4f, 0.1f, depth, 1.0f};
+  // Mede o comportamento com os valores de fábrica do OpenB3/Beatrix.
+  config.rotary = {true, speed, 0.672f, 7.056f, 1.2f, depth, 1.0f};
   effects.setConfig(config, 120.0f);
   std::vector<float> left(144000), right(144000);
   for (std::size_t index = 0; index < left.size(); ++index) {
@@ -2007,20 +2033,26 @@ void testEqualizerControlsTreble() {
 
 void testIndependentOscillatorOctaves() {
   hook_keys::AnalogSynthConfig defaults;
-  expect(defaults.oscillator1Octave == 0 && defaults.oscillator2Octave == 0, "both oscillators default to octave zero");
+  expect(defaults.oscillator1Octave == 0 && defaults.oscillator2Octave == 0 &&
+         defaults.oscillator3Octave == 0, "all oscillators default to octave zero");
   defaults.oscillator1Octave = -10;
   defaults.oscillator2Octave = 10;
+  defaults.oscillator3Octave = -10;
   defaults.normalize(48000.0);
-  expect(defaults.oscillator1Octave == -3 && defaults.oscillator2Octave == 3, "oscillator octave bounds are -3 to +3");
-  const auto render = [](int oscillator, int octave1, int octave2, int note) {
+  expect(defaults.oscillator1Octave == -3 && defaults.oscillator2Octave == 3 &&
+         defaults.oscillator3Octave == -3, "oscillator octave bounds are -3 to +3");
+  const auto render = [](int oscillator, int octave1, int octave2, int octave3, int note) {
     hook_keys::AnalogSynthModule synth(48000.0);
     hook_keys::AnalogSynthConfig config;
-    config.oscillator1 = config.oscillator2 = 0;
+    config.oscillator1 = config.oscillator2 = config.oscillator3 = 0;
     config.oscillator1Enabled = oscillator == 1;
     config.oscillator2Enabled = oscillator == 2;
+    config.oscillator3Enabled = oscillator == 3;
     config.oscillator1Octave = static_cast<std::int8_t>(octave1);
     config.oscillator2Octave = static_cast<std::int8_t>(octave2);
-    config.detuneCents = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+    config.oscillator3Octave = static_cast<std::int8_t>(octave3);
+    config.oscillator1DetuneCents = config.oscillator2DetuneCents = config.oscillator3DetuneCents = 0.0f;
+    config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
     expect(synth.setConfig(config), "queue independent oscillator octaves");
     synth.beginBlock();
     synth.noteOn(static_cast<std::uint8_t>(note), 100);
@@ -2028,13 +2060,15 @@ void testIndependentOscillatorOctaves() {
     synth.renderAdd(left.data(), right.data(), left.size(), 1.0f);
     return left;
   };
-  for (int oscillator = 1; oscillator <= 2; ++oscillator) {
-    const auto base = render(oscillator, 0, 0, 60);
-    expect(base == render(oscillator, oscillator == 1 ? 0 : 3, oscillator == 2 ? 0 : -3, 60),
+  for (int oscillator = 1; oscillator <= 3; ++oscillator) {
+    const auto base = render(oscillator, 0, 0, 0, 60);
+    expect(base == render(oscillator, oscillator == 1 ? 0 : 3,
+        oscillator == 2 ? 0 : -3, oscillator == 3 ? 0 : 2, 60),
         "octave of muted oscillator does not change the audible oscillator");
     for (int octave = -3; octave <= 3; ++octave) {
-      const auto shifted = render(oscillator, oscillator == 1 ? octave : 0, oscillator == 2 ? octave : 0, 60);
-      const auto reference = render(oscillator, 0, 0, 60 + octave * 12);
+      const auto shifted = render(oscillator, oscillator == 1 ? octave : 0,
+          oscillator == 2 ? octave : 0, oscillator == 3 ? octave : 0, 60);
+      const auto reference = render(oscillator, 0, 0, 0, 60 + octave * 12);
       for (std::size_t i = 0; i < shifted.size(); ++i) {
         expect(std::isfinite(shifted[i]), "octave transposition keeps audio finite");
         expect(std::abs(shifted[i] - reference[i]) < 0.0001f, "octave transposition matches the equivalent MIDI note");
@@ -2265,7 +2299,9 @@ void testSynthRetriggerHasNoClick() {
     config.voiceMode = voiceMode;
     config.oscillator1 = 0;
     config.oscillator2Enabled = false;
-    config.detuneCents = config.glideMs = config.lfoDepth = 0.0f;
+    config.oscillator3Enabled = false;
+    config.oscillator1DetuneCents = config.oscillator2DetuneCents = config.oscillator3DetuneCents = 0.0f;
+    config.glideMs = config.lfoDepth = 0.0f;
     expect(synth.setConfig(config), "configure retrigger click test");
     synth.beginBlock();
     std::vector<float> left(19200, 0.0f), right(19200, 0.0f);
@@ -2298,8 +2334,9 @@ void testPolyAutoGlide() {
     config.oscillator2 = 0;
     config.oscillator1Enabled = true;
     config.oscillator2Enabled = false;
+    config.oscillator3Enabled = false;
     config.oscillator1Volume = 1;
-    config.detuneCents = 0;
+    config.oscillator1DetuneCents = config.oscillator2DetuneCents = config.oscillator3DetuneCents = 0;
     config.filterCutoffHz = 20000;
     config.filterResonance = 0;
     config.filterEnvelope = 0;
@@ -2359,7 +2396,9 @@ void testGlidePortamentoAndVelocityGate() {
     config.voiceMode = voiceMode;
     config.oscillator1 = 0;
     config.oscillator2Enabled = false;
-    config.detuneCents = config.lfoDepth = config.filterEnvelope = config.filterResonance = 0.0f;
+    config.oscillator3Enabled = false;
+    config.oscillator1DetuneCents = config.oscillator2DetuneCents = config.oscillator3DetuneCents = 0.0f;
+    config.lfoDepth = config.filterEnvelope = config.filterResonance = 0.0f;
     config.releaseMs = 5.0f;
     config.glideMs = 5000.0f;
     expect(synth.setConfig(config), "configure Portamento synth");
@@ -2490,7 +2529,9 @@ void testSynthModCard() {
     hook_keys::AnalogSynthConfig config;
     config.oscillator1 = 0;
     config.oscillator2Enabled = false;
-    config.detuneCents = config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
+    config.oscillator3Enabled = false;
+    config.oscillator1DetuneCents = config.oscillator2DetuneCents = config.oscillator3DetuneCents = 0.0f;
+    config.glideMs = config.lfoDepth = config.filterEnvelope = 0.0f;
     config.filterResonance = 0.0f;
     config.lfoTarget = synthLfoTarget;
     expect(synth.setConfig(config), "configure Synth Mod card test");
@@ -2524,10 +2565,13 @@ void testOutputBoost() {
     runtime.render(left.data(), right.data(), left.size());
     return *std::max_element(left.begin(), left.end());
   };
-  const auto normal = render(0, 1);
-  const auto gain = std::pow(10.0f, 12.0f / 20.0f);
-  expect(std::abs(render(12, 1) / normal - gain) < 0.001f, "Master reaches actual +12dB");
-  expect(std::abs(render(0, gain) / normal - gain) < 0.001f, "Metronome reaches actual +12dB");
+  const auto unity = render(0, 0.1f);
+  expect(std::abs(render(12, 0.1f) - unity) < 0.000001f,
+      "legacy positive Master values clamp to 0dB");
+  expect(std::abs(render(0, 4.0f) - render(0, 1.0f)) < 0.000001f,
+      "legacy positive Click values clamp to 0dB");
+  expect(render(12, 1) <= 0.977238f,
+      "Master limiter holds the summed bus at -0.2dBFS");
 }
 
 void testUnityGainAnalysisAndSmoothing() {

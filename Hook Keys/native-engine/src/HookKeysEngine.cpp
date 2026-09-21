@@ -120,6 +120,10 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
       if (synth == nullptr) continue;
       if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
           !effects_[index].requiresSilentProcessing()) {
+        // O relógio do fader pertence ao áudio, não às vozes. Se a rampa
+        // congelar durante o silêncio, a primeira nota seguinte começa no
+        // ganho antigo e faz um vai-e-volta antes de alcançar o valor salvo.
+        advanceSilentModuleGain(index, blockFrames);
         moduleLimiterGains_[index] = 1.0f;
         continue;
       }
@@ -166,6 +170,7 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
       if (synth == nullptr || config.outputChannelStart >= channels) continue;
       if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
           !effects_[index].requiresSilentProcessing()) {
+        advanceSilentModuleGain(index, blockFrames);
         moduleLimiterGains_[index] = 1.0f;
         continue;
       }
@@ -270,6 +275,20 @@ float HookKeysEngine::nextModuleGain(std::size_t index) noexcept {
     }
   }
   return currentModuleGains_[index];
+}
+
+void HookKeysEngine::advanceSilentModuleGain(
+    std::size_t index, std::size_t frames) noexcept {
+  auto& remaining = moduleGainRampFrames_[index];
+  if (remaining == 0 || frames == 0) return;
+  if (frames >= remaining) {
+    currentModuleGains_[index] = configs_[index].gainLinear;
+    moduleGainSteps_[index] = 0.0f;
+    remaining = 0;
+    return;
+  }
+  currentModuleGains_[index] += moduleGainSteps_[index] * static_cast<float>(frames);
+  remaining -= frames;
 }
 
 void HookKeysEngine::applyModuleLimiter(

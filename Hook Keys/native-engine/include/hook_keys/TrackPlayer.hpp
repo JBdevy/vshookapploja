@@ -156,7 +156,7 @@ public:
   }
 
   void setGainDb(float db, bool enabled) noexcept {
-    const auto clamped = std::clamp(std::isfinite(db) ? db : 0.0f, -90.0f, 12.0f);
+    const auto clamped = std::clamp(std::isfinite(db) ? db : 0.0f, -90.0f, 0.0f);
     const auto linear = !enabled || clamped <= -90.0f ? 0.0f : std::pow(10.0f, clamped / 20.0f);
     gainTarget_.store(linear, std::memory_order_release);
   }

@@ -11,6 +11,9 @@
 namespace hook_keys {
 
 namespace {
+constexpr float kMasterLimiterCeiling = 0.97723722096f; // -0.2 dBFS
+constexpr float kMasterLimiterReleaseSeconds = 0.08f;
+
 void prepareRealtimeFloatingPoint() noexcept {
 #if defined(_M_IX86) || defined(_M_X64) || defined(__SSE__)
   // Recursive filters and long releases eventually reach denormal values.
@@ -32,6 +35,8 @@ NativeEngineRuntime::NativeEngineRuntime(double sampleRate, std::size_t maximumB
       layerScratch_(maximumBlockFrames_ * 32, 0.0f),
       stereoScratch_(maximumBlockFrames_ * 2, 0.0f),
       tracks_(std::make_unique<TrackPlayer>(sampleRate_)) {
+  masterLimiterRelease_ = 1.0f - std::exp(
+      -1.0f / (static_cast<float>(sampleRate_) * kMasterLimiterReleaseSeconds));
   layers_.reserve(kMaximumPresetLayers);
   layers_.push_back(createPresetLayer());
   controlLayer_ = renderLayer_ = layers_.back().get();
@@ -236,8 +241,13 @@ bool NativeEngineRuntime::sendMidi(
     std::uint8_t data2,
     std::uint64_t timestampNanoseconds) noexcept {
   if (!midiInputEnabled_.load(std::memory_order_acquire)) return true;
-  if (compatibilityMode_.load(std::memory_order_acquire) && (status & 0xf0) == 0xb0 &&
-      (data1 == 7 || data1 == 91)) return true;
+  const auto messageType = status & 0xf0;
+  const bool blockedCompatibilityMessage = compatibilityMode_.load(std::memory_order_acquire) && (
+      messageType == 0xc0 ||
+      (messageType == 0xb0 &&
+       (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 || data1 == 16 ||
+        data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101)));
+  if (blockedCompatibilityMessage) return true;
   if (inputSlot >= kRoutableMidiInputCount || data1 > 127 || data2 > 127) return false;
   RuntimeCommand command;
   command.midi = {status, data1, data2, inputSlot, timestampNanoseconds};
@@ -265,7 +275,7 @@ bool NativeEngineRuntime::setModuleConfig(std::size_t moduleIndex, ModuleConfig 
 bool NativeEngineRuntime::setModuleGainDb(std::size_t moduleIndex, float db) noexcept {
   if (moduleIndex >= kModuleCount) return false;
   std::scoped_lock lock(configMutex_);
-  const float safeDb = std::isfinite(db) ? std::clamp(db, -90.0f, 6.0f) : 0.0f;
+  const float safeDb = std::isfinite(db) ? std::clamp(db, -90.0f, 0.0f) : 0.0f;
   controlLayer_->configs[moduleIndex].gainLinear = safeDb <= -90.0f
       ? 0.0f : std::pow(10.0f, safeDb / 20.0f);
   return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
@@ -359,7 +369,7 @@ void NativeEngineRuntime::setMetronome(
     bool accentEnabled, bool doubleTimeEnabled,
     std::uint8_t timeSignatureNumerator) noexcept {
   metronomeBpm_.store(std::clamp(bpm, 60.0f, 600.0f), std::memory_order_release);
-  metronomeVolume_.store(std::clamp(volume, 0.0f, std::pow(10.0f, 12.0f / 20.0f)), std::memory_order_release);
+  metronomeVolume_.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_release);
   metronomeClickSound_.store(
       static_cast<std::uint8_t>(std::clamp<int>(clickSound, 1, 3)),
       std::memory_order_release);
@@ -373,7 +383,7 @@ void NativeEngineRuntime::setMetronome(
 
 void NativeEngineRuntime::setOutputGainDb(float db, bool enabled) noexcept {
   outputGainLinear_.store(
-      enabled && db > -90.0f ? std::pow(10.0f, std::clamp(db, -90.0f, 12.0f) / 20.0f) : 0.0f,
+      enabled && db > -90.0f ? std::pow(10.0f, std::clamp(db, -90.0f, 0.0f) / 20.0f) : 0.0f,
       std::memory_order_release);
 }
 
@@ -439,7 +449,13 @@ HookKeysEngine::ModulePeaks NativeEngineRuntime::consumeModulePeaks() noexcept {
   HookKeysEngine::ModulePeaks result{};
   for (const auto& layer : layers_) {
     const auto peaks = layer->engine->consumeModulePeaks();
-    for (std::size_t index = 0; index < result.size(); ++index) result[index] += peaks[index];
+    // Cada valor já é o maior pico de todo o intervalo desde a leitura
+    // anterior. Somar picos que podem ter ocorrido em instantes diferentes
+    // nas caudas de presets antigos inventava um nível que nunca existiu.
+    // O maior pico entre as camadas mantém a cauda visível sem esse exagero.
+    for (std::size_t index = 0; index < result.size(); ++index) {
+      result[index] = std::max(result[index], peaks[index]);
+    }
   }
   return result;
 }
@@ -499,6 +515,7 @@ void NativeEngineRuntime::renderInterleaved(float* output, std::size_t frames, s
     for (std::size_t channel = 0; channel < channels; ++channel) {
       output[frame * channels + channel] *= gain;
     }
+    applyMasterLimiter(output + frame * channels, channels);
   }
   // Depois do master: o fader Music já controla o volume das músicas.
   tracks_->render(output, frames, channels);
@@ -548,6 +565,26 @@ float NativeEngineRuntime::nextOutputGain() noexcept {
     if (--outputGainRampFrames_ == 0) currentOutputGain_ = outputGainTargetSeen_;
   }
   return currentOutputGain_;
+}
+
+void NativeEngineRuntime::applyMasterLimiter(float* frame, std::size_t channels) noexcept {
+  if (frame == nullptr || channels == 0) return;
+  float peak = 0.0f;
+  for (std::size_t channel = 0; channel < channels; ++channel) {
+    peak = std::max(peak, std::abs(frame[channel]));
+  }
+  const auto requiredGain = peak > kMasterLimiterCeiling
+      ? kMasterLimiterCeiling / peak
+      : 1.0f;
+  if (requiredGain < masterLimiterGain_) {
+    masterLimiterGain_ = requiredGain;
+  } else {
+    masterLimiterGain_ += (1.0f - masterLimiterGain_) * masterLimiterRelease_;
+    masterLimiterGain_ = std::min(masterLimiterGain_, requiredGain);
+  }
+  for (std::size_t channel = 0; channel < channels; ++channel) {
+    frame[channel] *= masterLimiterGain_;
+  }
 }
 
 // Reads the control-thread state once per block: the click keeps its own frame

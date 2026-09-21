@@ -1,7 +1,7 @@
 import { formatFaderDb } from './ModuleFader';
 
 export type OutputBus = 'music' | 'pads' | 'effects' | 'master';
-export const MAX_OUTPUT_DB = 12;
+export const MAX_OUTPUT_DB = 0;
 // Output levels share the fader tail: -60 dB continues down to -90 dB before -inf.
 export const OUTPUT_MIN_DB = -90;
 export const MAX_OUTPUT_GAIN = 10 ** (MAX_OUTPUT_DB / 20);
@@ -140,10 +140,9 @@ export function outputPosition(value: number): number {
   const points = [
     { db: OUTPUT_MIN_DB, position: 0 },
     { db: -60, position: 6 },
-    { db: -36, position: 21 },
-    { db: -18, position: 43 },
-    { db: -9, position: 66 },
-    { db: 0, position: 82 },
+    { db: -36, position: 23 },
+    { db: -18, position: 49 },
+    { db: -9, position: 75 },
     { db: MAX_OUTPUT_DB, position: 100 },
   ];
   for (let index = 1; index < points.length; index += 1) {
@@ -159,10 +158,9 @@ export function outputDbFromPosition(positionPercent: number): number {
   const points = [
     { position: 0, db: OUTPUT_MIN_DB },
     { position: 6, db: -60 },
-    { position: 21, db: -36 },
-    { position: 43, db: -18 },
-    { position: 66, db: -9 },
-    { position: 82, db: 0 },
+    { position: 23, db: -36 },
+    { position: 49, db: -18 },
+    { position: 75, db: -9 },
     { position: 100, db: MAX_OUTPUT_DB },
   ];
   for (let index = 1; index < points.length; index += 1) {

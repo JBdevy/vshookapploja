@@ -185,9 +185,8 @@ struct ReverbConfig final {
   float dampen = 0.45f;
   float size = 0.50f;
   float mix = 0.20f;
-  // Balança a leitura de cada linha de atraso por uma fração de amostra, numa
-  // taxa fixa e com fases diferentes por linha: dá o "shimmer" de reverbs de
-  // prato/sala de verdade, sem ficar robótico. 0 desliga (comportamento antigo).
+  // Profundidade do chorus lento aplicado apenas ao sinal molhado antes da
+  // rede do reverb. 0 desliga e preserva exatamente o comportamento antigo.
   float mod = 0.0f;
 
   void normalize() noexcept {
@@ -202,8 +201,8 @@ struct ReverbConfig final {
 struct RotaryConfig final {
   bool enabled = false;
   std::uint8_t speed = 1; // brake, slow, fast
-  float slowHz = 0.8f;
-  float fastHz = 6.4f;
+  float slowHz = 0.672f;
+  float fastHz = 7.056f;
   float rampSeconds = 1.2f;
   float depth = 0.7f;
   float mix = 1.0f;

@@ -35,7 +35,7 @@
 
 :root {
   color: #fff9f4;
-  background: #070504;
+  background: #131315;
   font-family:
     'JetBrains Mono', ui-monospace, "Segoe UI Mono", "Cascadia Mono", monospace;
   font-synthesis: weight style;
@@ -52,6 +52,7 @@
   --module-button-green-a: #18874e;
   --module-button-green-b: #064526;
   --module-button-green-border: #459a6b;
+  --interface-background: #131315;
   --app-viewport-height: 100vh;
   --app-viewport-height: 100dvh;
   --app-viewport-offset-top: 0px;
@@ -104,7 +105,7 @@ body {
   background:
     radial-gradient(circle at 14% 20%, rgba(125, 38, 5, 0.3), transparent 35%),
     radial-gradient(circle at 92% 82%, rgba(255, 102, 0, 0.12), transparent 32%),
-    #070504;
+    var(--interface-background);
 }
 
 button,
@@ -298,7 +299,8 @@ button {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-bottom: clamp(24px, 4.5vh, 48px);
+  /* Width does not change when the native keyboard resizes the viewport. */
+  margin-bottom: clamp(24px, 3vw, 40px);
   color: #8f8178;
   font-size: 11px;
   font-weight: 800;
@@ -708,9 +710,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-stage {
 }
 
 html[data-keyboard="open"][data-app-mode="login"] .access-card {
-  max-height: calc(var(--app-viewport-height) - 16px);
-  padding-bottom: 38px;
-  scroll-padding-bottom: 38px;
+  max-height: none;
 }
 
 html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
@@ -726,7 +726,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .orientation-transition-cover,
 .startup-error {
   position: fixed;
-  inset: 0;
+  inset: 7%;
   z-index: 10001;
   background: #000;
   touch-action: none;
@@ -973,7 +973,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   min-height: 330px;
   padding: clamp(14px, 2.4vw, 28px);
   overflow: hidden;
-  border: 1px solid rgba(255, 143, 55, .38);
+  border: 0;
   border-radius: clamp(20px, 3vw, 34px);
   background:
     linear-gradient(135deg, rgba(255,255,255,.055), transparent 30%),
@@ -2198,7 +2198,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
-  background: #000;
+  background: var(--interface-background);
 }
 
 .player-primary {
@@ -3759,6 +3759,17 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   direction: rtl;
   writing-mode: vertical-lr;
   touch-action: none;
+}
+
+/* WebViews móveis não aplicam de forma consistente writing-mode em range.
+   Mantemos o range nativo horizontal e giramos o controle inteiro; o gesto
+   continua sendo calculado pelo eixo Y no PlayerScreen. */
+:root:not([data-runtime="desktop"]) .knob-focus__fader input {
+  width: 118px;
+  height: 34px;
+  direction: ltr;
+  writing-mode: horizontal-tb;
+  transform: rotate(-90deg);
 }
 
 .module-envelope-control:nth-of-type(1) .module-envelope-knob { --knob-accent: #ff5c5c; }
@@ -6941,9 +6952,9 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
 }
 
 .player-screen--tablet.is-tracks-split {
-  grid-template-columns: minmax(220px, 30%) minmax(0, 70%);
+  grid-template-columns: minmax(220px, 30fr) minmax(0, 70fr);
   grid-template-rows: minmax(0, 1fr) auto;
-  column-gap: clamp(7px, 1vw, 12px);
+  column-gap: 2px;
   row-gap: 5px;
 }
 
@@ -6964,7 +6975,7 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
   left: 0;
   width: 100%;
   min-width: 0;
-  background: #000;
+  background: var(--interface-background);
 }
 
 .player-screen--tablet.is-tracks-split > .player-primary::-webkit-scrollbar {
@@ -8079,6 +8090,16 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   font-size: 11px;
 }
 
+.synth-preset-name-editor {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "field"
+    "learn";
+  align-items: stretch;
+  width: min(100%, 620px);
+  gap: 12px;
+}
+
 .bank-name-editor {
   grid-template-columns: minmax(220px, 1fr) minmax(140px, .35fr);
   grid-template-areas: "field advanced";
@@ -8876,72 +8897,6 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
 .player-modal--sound-selection .player-modal__header h2 {
   font-size: clamp(22px, 3vw, 39px);
-}
-
-/* Pequenos, no canto direito da mesma linha do título Hook B3 — não uma
-   caixa nova ocupando a largura toda. */
-.organ-header-controls {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  /* Mesma altura para o knob e o botão, senão um ficava mais alto que o
-     outro e parecia fora da linha. */
-  height: clamp(30px, 5vh, 44px);
-  gap: clamp(6px, 1vw, 14px);
-}
-
-.organ-header-controls__volume {
-  display: grid;
-  grid-template-columns: auto auto auto;
-  align-items: center;
-  height: 100%;
-  gap: 4px;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-}
-
-.organ-header-controls__volume.is-hidden { display: none; }
-
-.organ-header-controls__volume > span:first-child {
-  color: #d9ecff;
-  font-size: clamp(10px, 1.1vw, 14px);
-  font-weight: 900;
-}
-
-.organ-header-controls__volume .module-envelope-knob {
-  width: clamp(32px, 4.4vh, 46px);
-}
-
-.organ-header-controls__volume output {
-  color: #ffb45c;
-  font-size: clamp(10px, 1.1vw, 14px);
-  font-weight: 900;
-  white-space: nowrap;
-}
-
-.organ-header-controls__toggle {
-  min-height: clamp(30px, 5vh, 44px);
-  padding: 0 clamp(12px, 1.6vw, 20px);
-  color: #fff;
-  border: 1.5px solid rgba(126, 255, 31, 0.5);
-  border-radius: 9px;
-  background: linear-gradient(180deg, rgba(30, 56, 24, 0.96), rgba(12, 20, 10, 0.99));
-  font-size: clamp(11px, 1.3vw, 15px);
-  font-weight: 950;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.organ-header-controls__toggle.is-on {
-  color: #0c1b0a;
-  border-color: #78f39d;
-  background: linear-gradient(180deg, #4be080, #159449);
 }
 
 .sound-library-total {
@@ -9989,7 +9944,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
   .player-module {
     padding: 4px;
-    border-radius: 9px;
+    border-radius: 5px;
   }
 
   .player-module__settings-button,
@@ -10975,7 +10930,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   .player-screen--tablet .player-module {
     gap: 2px;
     padding: 3px;
-    border-radius: 7px;
+    border-radius: 5px;
   }
 
   .player-screen--tablet .player-module__number {
@@ -12213,9 +12168,7 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 .module-envelope-control h3 { color: color-mix(in srgb, var(--field-accent, #ffb35b) 76%, #fff); }
 .module-envelope-control output {
   color: #fff;
-  background: linear-gradient(180deg,
-    color-mix(in srgb, var(--field-accent, #ff7900) 82%, #fff 5%),
-    color-mix(in srgb, var(--field-accent, #ff7900) 62%, #09070a));
+  background: none;
 }
 
 .module-envelope-knob .module-envelope-knob__face,
@@ -12653,6 +12606,9 @@ html:not([data-runtime="native"]) .player-module__fader.is-clipping .player-modu
 html[data-keyboard="open"][data-app-mode="login"] .app-shell {
   display: block;
   width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 html[data-keyboard="open"][data-app-mode="login"] .access-stage {
@@ -12660,8 +12616,9 @@ html[data-keyboard="open"][data-app-mode="login"] .access-stage {
   grid-template-columns: minmax(0, 1fr);
   width: 100%;
   min-width: 0;
+  min-height: max-content;
   place-items: start center;
-  --login-keyboard-top-gap: clamp(16px, calc(var(--app-viewport-height) * 0.045), 32px);
+  --login-keyboard-top-gap: clamp(16px, 3vw, 32px);
   padding: max(var(--login-keyboard-top-gap), env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 8px max(18px, env(safe-area-inset-left));
   border-left: 0;
 }
@@ -12669,7 +12626,8 @@ html[data-keyboard="open"][data-app-mode="login"] .access-stage {
 html[data-keyboard="open"][data-app-mode="login"] .access-card {
   width: min(100%, 520px);
   margin-inline: auto;
-  max-height: calc(var(--app-viewport-height) - max(var(--login-keyboard-top-gap), env(safe-area-inset-top)) - 8px);
+  max-height: none;
+  overflow: visible;
 }
 
 .module-velocity-card {
@@ -13033,25 +12991,8 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   .organ-drawbar__leds i {
     width: clamp(5px, 1vh, 7px);
   }
-  /* Continua no canto direito, só menor — o título encolhe (ver a seguir)
-     pra abrir espaço, em vez dos controles descerem pra baixo dele. */
-  .organ-header-controls {
-    height: 20px;
-  }
   .player-modal--module-organ .player-modal__header h2 {
     font-size: clamp(15px, 5vw, 22px);
-  }
-  .organ-header-controls__toggle {
-    min-height: 20px;
-    padding: 0 6px;
-    font-size: 7px;
-  }
-  .organ-header-controls__volume .module-envelope-knob {
-    width: 18px;
-  }
-  .organ-header-controls__volume span,
-  .organ-header-controls__volume output {
-    font-size: 7px;
   }
   /* O Rotary estava do mesmo tamanho do tablet e espremia o espaço das
      drawbars — aqui ele encolhe junto com o resto. */
@@ -13866,6 +13807,78 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 .module-env-filter-type { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
 .module-env-filter-type button { min-height: clamp(30px, 6vh, 42px); border-radius: 8px; font-weight: 800; font-size: clamp(10px, 1.6vw, 13px); }
 .module-effect-controls--cutoff-envelope { grid-template-columns: repeat(5, minmax(0, 1fr)); align-content: center; }
+.player-modal--module-env-filter .player-modal__surface {
+  gap: clamp(4px, .7vh, 8px);
+  padding: clamp(6px, 1.2vw, 12px);
+}
+.player-modal--module-env-filter .player-modal__header h2 {
+  font-size: clamp(18px, 4vh, 28px);
+  line-height: 1;
+  letter-spacing: -.025em;
+}
+.player-modal--module-env-filter .player-modal__eyebrow {
+  margin-bottom: 2px;
+  font-size: clamp(6px, 1.2vh, 9px);
+}
+.player-modal--module-env-filter .player-modal__body {
+  grid-template-rows: auto minmax(76px, .7fr) minmax(118px, 1fr);
+  align-content: stretch;
+  gap: clamp(3px, .6vh, 6px);
+  overflow: hidden;
+}
+.player-modal--module-env-filter .cutoff-config-tabs {
+  gap: 5px;
+  margin: 0;
+}
+.player-modal--module-env-filter .cutoff-config-tabs button,
+.player-modal--module-env-filter .module-env-filter-type button {
+  min-height: clamp(24px, 5vh, 34px);
+  padding-block: 2px;
+  border-radius: 6px;
+  font-size: clamp(8px, 1.2vw, 11px);
+}
+.player-modal--module-env-filter > .player-modal__surface > .player-modal__body > .module-cutoff-control {
+  gap: 2px;
+  min-height: 0;
+  padding: 4px;
+  border-radius: 8px;
+}
+.player-modal--module-env-filter .module-cutoff-control h3 { font-size: clamp(8px, 1.2vw, 11px); }
+.player-modal--module-env-filter .module-cutoff-control .module-envelope-knob {
+  width: min(42px, 9vh);
+}
+.player-modal--module-env-filter .module-cutoff-control output { font-size: clamp(7px, 1vw, 10px); }
+.player-modal--module-env-filter .module-env-filter-editor {
+  gap: 4px;
+  padding: 5px;
+  border-radius: 9px;
+}
+.player-modal--module-env-filter .module-env-filter-type {
+  gap: 4px;
+  margin: 0;
+}
+.player-modal--module-env-filter .module-effect-controls--cutoff-envelope { gap: 4px; }
+.player-modal--module-env-filter .module-effect-knob {
+  grid-template-rows: auto minmax(34px, 1fr) auto;
+  gap: 1px;
+  padding: 3px;
+  border-radius: 6px;
+  font-size: clamp(7px, 1vw, 10px);
+}
+.player-modal--module-env-filter .module-effect-knob__face {
+  width: min(42px, 9vh);
+  border-width: 3px;
+}
+.player-modal--module-env-filter .module-effect-knob output { font-size: clamp(6px, .9vw, 9px); }
+.player-modal--module-env-filter .player-modal__actions {
+  min-height: 30px;
+  padding-top: 2px;
+}
+.player-modal--module-env-filter .player-modal__actions button {
+  min-height: clamp(26px, 5vh, 34px);
+  padding-block: 2px;
+  font-size: clamp(8px, 1vw, 10px);
+}
 .module-effect-controls--rotary { grid-template-columns: repeat(5, minmax(0, 1fr)); align-content: center; }
 .module-rotary-editor .module-effect-knob:nth-child(5n + 1) { --knob-accent: #ffe06a; }
 .module-rotary-editor .module-effect-knob:nth-child(5n + 2) { --knob-accent: #ff9251; }
@@ -14145,7 +14158,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   html[data-runtime="desktop"] .player-screen--tablet .player-module {
     gap: 3px;
     padding: 4px;
-    border-radius: 9px;
+    border-radius: 5px;
   }
 
   html[data-runtime="desktop"] .player-screen--tablet :is(
@@ -15385,4 +15398,340 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
     padding: 2px 8px;
     font-size: 10px;
   }
+}
+
+/* Moldura compacta do instrumento: os painéis continuam separados, mas sem
+   a sequência de caixas muito arredondadas e sem corredores pretos entre elas. */
+.player-screen {
+  gap: 2px;
+  padding:
+    max(2px, env(safe-area-inset-top))
+    max(2px, env(safe-area-inset-right))
+    max(2px, env(safe-area-inset-bottom))
+    max(2px, env(safe-area-inset-left));
+}
+.player-primary,
+.player-screen--tablet .player-primary,
+.player-bank-view,
+.player-screen--tablet .player-bank-view,
+.pads-effects-view,
+.player-screen--tablet .player-top-transport,
+.player-top-brand-actions,
+.player-top-actions,
+.player-modules-row {
+  gap: 2px;
+}
+.player-presets {
+  gap: 2px;
+  padding: 2px;
+}
+:is(
+  .player-header,
+  .player-top-brand-actions .player-brand,
+  .player-screen--tablet .track-transport,
+  .player-screen--tablet .track-download,
+  .player-screen--tablet .player-next-field,
+  .player-screen--tablet .player-global-pitch,
+  .player-header-knobs,
+  .player-module,
+  .performance-section,
+  .player-presets,
+  .performance-keyboard,
+  .player-modal__surface
+) {
+  border-radius: 5px;
+}
+
+/* O transporte precisa caber inteiro entre o nome da música e os botões do
+   sistema. Os separadores continuam visíveis, mas deixam de roubar o PANIC. */
+.player-screen--tablet .player-global-pitch {
+  gap: 2px;
+  padding: 3px 4px;
+}
+.player-global-pitch__group { gap: 2px; }
+.player-global-pitch__separator {
+  flex-basis: 7px;
+  width: 7px;
+  margin-inline: 2px;
+  font-size: clamp(10px, 1vw, 14px);
+}
+.player-global-pitch__button {
+  min-width: clamp(34px, 3.8vw, 54px);
+  padding-inline: 4px;
+}
+.player-global-pitch__output-mode { min-width: clamp(46px, 5vw, 68px); }
+.player-global-pitch .player-panic-button {
+  flex: 1 1 0;
+  min-width: clamp(38px, 4vw, 56px);
+  padding-inline: 4px;
+  overflow: visible;
+}
+
+/* Os seis comandos dividem toda a faixa, sem deixar uma sobra depois do
+   PANIC. Os pares OCT/TRS continuam agrupados para manter a leitura. */
+.player-screen--tablet .player-global-pitch {
+  justify-content: flex-start;
+}
+.player-screen--tablet .player-global-pitch__group {
+  grid-template-columns: repeat(2, auto);
+  flex: 0 0 auto;
+}
+.player-screen--tablet .player-global-pitch__button {
+  width: auto;
+  min-width: clamp(40px, 4.4vw, 60px);
+}
+.player-screen--tablet .player-global-pitch__output-mode,
+.player-screen--tablet .player-global-pitch > .player-panic-button {
+  flex: 0 0 auto;
+  min-width: clamp(48px, 5vw, 66px);
+}
+
+/* A Playlist lateral (30%) segue o mesmo raio estrutural de 5 px. */
+.tracks-split-panel,
+.tracks-split-active-set,
+.tracks-split-controls button,
+.tracks-split-panel .tracks-playlists,
+.tracks-split-panel .track-card,
+.tracks-split-panel .track-block {
+  border-radius: 5px;
+}
+
+/* No app há mais largura útil nessa faixa do que no cabeçalho desktop. */
+:root:not([data-runtime="desktop"]) .player-screen--tablet .player-global-pitch__button {
+  width: 100%;
+  min-width: 0;
+  min-height: 27px;
+  padding-inline: 4px;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet .player-global-pitch__group {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 2 1 0;
+}
+:root:not([data-runtime="desktop"]) .player-screen--tablet .player-global-pitch__output-mode,
+:root:not([data-runtime="desktop"]) .player-screen--tablet .player-global-pitch > .player-panic-button {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Efeitos: os oito bancos ocupam uma linha própria acima dos 12 pads. A
+   regra comum de .performance-section vinha depois da variante e recolocava
+   o seletor numa coluna estreita, comprimindo "FX 1" em vários "F". */
+.performance-section.performance-section--effects {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(28px, auto) minmax(0, 1fr);
+}
+.performance-section--effects .pad-bank-selector--effects {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows: minmax(28px, auto);
+  width: 100%;
+}
+.performance-section--effects :is(.pad-bank-button, .performance-pad) {
+  border-radius: 5px;
+}
+
+/* Um único contorno de módulo no desktop e nos apps. Esta regra final evita
+   que os raios antigos de 9 px (desktop) e 7 px (app) voltem pela cascata. */
+.player-screen .player-module {
+  border: 1.5px solid var(--module-border-color, #ff7900);
+  border-radius: 5px;
+}
+
+/* OCT−, OCT+, TRS−, TRS+, STEREO e PANIC têm exatamente a mesma largura.
+   display:contents remove apenas a caixa intermediária dos pares OCT/TRS. */
+.player-screen--tablet .player-global-pitch {
+  display: grid;
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr)) 7px
+    repeat(2, minmax(0, 1fr)) 7px
+    minmax(0, 1fr) 7px minmax(0, 1fr);
+  align-items: center;
+}
+.player-screen--tablet .player-global-pitch__group {
+  display: contents;
+}
+.player-screen--tablet .player-global-pitch__button,
+.player-screen--tablet .player-global-pitch__output-mode,
+.player-screen--tablet .player-global-pitch > .player-panic-button {
+  width: 100%;
+  min-width: 0;
+}
+.player-screen--tablet .player-global-pitch__separator {
+  width: 7px;
+  margin: 0;
+}
+
+/* Identidade das abas do Synth; a seleção continua sendo sempre verde. */
+:is(.player-screen, .player-modal) .synth-editor__header .synth-oscillator-tabs [data-synth-oscillator-tab="1"]:not(.is-selected) {
+  --button-color-a: #d85b16 !important;
+  --button-color-b: #762306 !important;
+  --button-border: #ff9a4a !important;
+  color: #fff5eb !important;
+  border-color: var(--button-border) !important;
+  background-color: var(--button-color-b) !important;
+  background-image: linear-gradient(180deg, var(--button-color-a), var(--button-color-b)) !important;
+}
+:is(.player-screen, .player-modal) .synth-editor__header .synth-oscillator-tabs [data-synth-oscillator-tab="2"]:not(.is-selected) {
+  --button-color-a: #cb3b91 !important;
+  --button-color-b: #681343 !important;
+  --button-border: #ff73c8 !important;
+  color: #fff1fa !important;
+  border-color: var(--button-border) !important;
+  background-color: var(--button-color-b) !important;
+  background-image: linear-gradient(180deg, var(--button-color-a), var(--button-color-b)) !important;
+}
+:is(.player-screen, .player-modal) .synth-editor__header .synth-oscillator-tabs [data-synth-oscillator-tab="3"]:not(.is-selected) {
+  --button-color-a: #238ed8 !important;
+  --button-color-b: #0a477b !important;
+  --button-border: #59b9ff !important;
+  color: #eef8ff !important;
+  border-color: var(--button-border) !important;
+  background-color: var(--button-color-b) !important;
+  background-image: linear-gradient(180deg, var(--button-color-a), var(--button-color-b)) !important;
+}
+:is(.player-screen, .player-modal) .synth-editor__header .synth-oscillator-tabs [data-synth-oscillator-tab].is-selected {
+  --button-color-a: #199645 !important;
+  --button-color-b: #074c20 !important;
+  --button-border: #4ceb7f !important;
+  color: #effff3 !important;
+  border-color: var(--button-border) !important;
+  background-color: var(--button-color-b) !important;
+  background-image: linear-gradient(180deg, var(--button-color-a), var(--button-color-b)) !important;
+  box-shadow: 0 0 12px rgba(40, 221, 100, .28), inset 0 1px rgba(220, 255, 230, .2);
+}
+
+.player-screen .player-module__fader-rail {
+  border-radius: 2px;
+}
+.player-screen .player-module__meter,
+.player-screen .player-module__fader-rail::before {
+  border-radius: 2px;
+}
+.player-screen :is(.player-module__settings-button, .player-module__sound-button) {
+  border-radius: 4px;
+}
+
+.player-screen .player-module__action-pair {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Knob preto brilhante com anel contínuo e pontos discretos, inspirado no
+   modelo de referência. O anel acompanha o valor e conserva a cor de cada
+   parâmetro. */
+.player-output-knob__face,
+.module-envelope-knob__face,
+.module-effect-knob__face,
+.knob-focus__face {
+  isolation: isolate;
+  overflow: visible;
+  border: 1px solid #050608;
+  background:
+    repeating-conic-gradient(
+      from 135deg,
+      color-mix(in srgb, var(--knob-accent, #ff9b2f) 76%, white) 0 1.1deg,
+      transparent 1.1deg 30deg
+    ),
+    radial-gradient(circle, #0b0c0f 0 64%, #23252a 65% 72%, #07080a 73% 100%);
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, .82),
+    0 0 8px color-mix(in srgb, var(--knob-accent, #ff9b2f) 24%, transparent),
+    inset 0 0 0 1px rgba(255, 255, 255, .05),
+    inset 0 0 9px #000;
+}
+
+.player-output-knob__face::before,
+.module-envelope-knob__face::before,
+.module-effect-knob__face::before,
+.knob-focus__face::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 135deg,
+    color-mix(in srgb, var(--knob-accent, #ff9b2f) 72%, white)
+      0 calc(var(--knob-progress, 0) * 1turn),
+    #282a2f calc(var(--knob-progress, 0) * 1turn) 1turn
+  );
+  filter: drop-shadow(0 0 3px var(--knob-accent, #ff9b2f));
+  content: "";
+}
+
+.player-output-knob__face::after,
+.module-envelope-knob__face::after,
+.module-effect-knob__face::after,
+.knob-focus__face::after {
+  z-index: 1;
+  inset: 20%;
+  border: 1px solid color-mix(in srgb, var(--knob-accent, #ff9b2f) 70%, #575a61);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .42) 0 7%, rgba(255, 255, 255, .1) 8% 20%, transparent 36%),
+    radial-gradient(ellipse at 35% 24%, rgba(255, 255, 255, .3), transparent 29%),
+    radial-gradient(circle at 58% 68%, #020304 0 47%, #0c0e11 66%, #25282d 82%, #050608 100%);
+  box-shadow:
+    inset 2px 2px 4px rgba(255, 255, 255, .12),
+    inset -5px -6px 10px rgba(0, 0, 0, .9),
+    0 0 0 2px #050608,
+    0 0 6px color-mix(in srgb, var(--knob-accent, #ff9b2f) 34%, transparent);
+}
+
+.player-output-knob__face i,
+.module-envelope-knob__face i,
+.module-effect-knob__face i,
+.knob-focus__face i {
+  z-index: 2;
+  width: max(1px, 3.5%);
+  height: 30%;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--knob-accent, #ff9b2f) 58%, white);
+  box-shadow: 0 0 5px var(--knob-accent, #ff9b2f);
+}
+
+/* Alça vertical inspirada no fader metálico de referência. O clamp mantém a
+   peça inteira dentro do trilho mesmo nos módulos compactos do celular. */
+.player-screen .player-module__fader-handle {
+  --module-fader-handle-height: clamp(24px, 4.2vh, 34px);
+  --module-fader-handle-half: clamp(12px, 2.1vh, 17px);
+  z-index: 4;
+  right: 1px;
+  bottom: clamp(
+    var(--module-fader-handle-half),
+    var(--module-fader-position),
+    calc(100% - var(--module-fader-handle-half))
+  );
+  left: 1px;
+  height: var(--module-fader-handle-height);
+  border: 1px solid #555960;
+  border-radius: 2px;
+  background:
+    linear-gradient(90deg,
+      transparent 0 5%,
+      #ff9b2f 6% 9%,
+      transparent 10% 90%,
+      #ff9b2f 91% 94%,
+      transparent 95%),
+    linear-gradient(90deg, #111317, #34373c 18%, #17191d 50%, #34373c 82%, #101216);
+  box-shadow:
+    0 2px 5px rgba(0, 0, 0, .82),
+    0 0 7px rgba(255, 139, 24, .32),
+    inset 0 1px rgba(255, 255, 255, .18),
+    inset 0 -2px 4px rgba(0, 0, 0, .68);
+}
+
+.player-screen .player-module__fader-handle::before {
+  position: absolute;
+  top: 16%;
+  right: 28%;
+  bottom: 22%;
+  left: 28%;
+  border: 1px solid #060709;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #08090b, #272a2f 50%, #090a0c);
+  box-shadow:
+    inset 1px 0 rgba(255, 255, 255, .1),
+    inset -1px 0 rgba(0, 0, 0, .8);
+  content: "";
 }

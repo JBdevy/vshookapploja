@@ -2,18 +2,10 @@
 // com o Rotary em cima e os nove drawbars embaixo. Cada drawbar tem um SF2
 // próprio e o quanto ele está puxado para baixo vira o volume daquela barra.
 import { createModuleRotaryMarkup } from './ModuleEffectsView';
-import { createParameterKnobMarkup } from './ParameterKnobView';
 
 export interface OrganSettings {
   drawbars: number[];
-  // Com o som do drawbar desligado, cada estágio arrastado toca um clique no
-  // lugar do timbre — o Volume é só desse clique.
-  soundEnabled: boolean;
-  clickVolumeDb: number;
 }
-
-export const ORGAN_CLICK_VOLUME_MIN_DB = -40;
-export const ORGAN_CLICK_VOLUME_MAX_DB = 0;
 
 // Pés de cada barra, na ordem do Hammond. O rótulo de cima é o harmônico.
 export const ORGAN_DRAWBARS: readonly { feet: string; name: string; tone: 'red' | 'white' | 'black' }[] = [
@@ -38,17 +30,12 @@ const DEFAULT_DRAWBARS = [8, 8, 8, 0, 0, 0, 0, 0, 0];
 export function readOrganSettings(value: unknown): OrganSettings {
   const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   const stored = Array.isArray(source.drawbars) ? source.drawbars : [];
-  const clickVolumeDb = Number(source.clickVolumeDb);
   return {
     drawbars: ORGAN_DRAWBARS.map((_, index) => {
       const bar = Number(stored[index]);
       if (!Number.isFinite(bar)) return DEFAULT_DRAWBARS[index] ?? 0;
       return Math.min(ORGAN_DRAWBAR_MAX, Math.max(0, Math.round(bar)));
     }),
-    soundEnabled: typeof source.soundEnabled === 'boolean' ? source.soundEnabled : true,
-    clickVolumeDb: Number.isFinite(clickVolumeDb)
-      ? Math.min(ORGAN_CLICK_VOLUME_MAX_DB, Math.max(ORGAN_CLICK_VOLUME_MIN_DB, clickVolumeDb))
-      : -12,
   };
 }
 
@@ -79,30 +66,6 @@ function drawbarMarkup(index: number, position: number): string {
       <input type="range" min="0" max="${ORGAN_DRAWBAR_MAX}" step="1" value="${position}"
         data-organ-drawbar="${index}" aria-hidden="true" tabindex="-1">
       <output data-organ-drawbar-value="${index}">${position}</output>
-    </div>
-  `;
-}
-
-// Knob do clique + o toggle Drawbar Sound: ficam na mesma linha do título
-// Hook B3, no cabeçalho do modal — não dentro do painel.
-export function createOrganHeaderControlsMarkup(moduleSettings: Readonly<Record<string, unknown>>): string {
-  const settings = readOrganSettings(moduleSettings.organ);
-  const progress = (settings.clickVolumeDb - ORGAN_CLICK_VOLUME_MIN_DB)
-    / (ORGAN_CLICK_VOLUME_MAX_DB - ORGAN_CLICK_VOLUME_MIN_DB);
-  return `
-    <div class="organ-header-controls">
-      <label class="pattern-knob module-effect-knob organ-header-controls__volume">
-        <span>Volume</span>
-        ${createParameterKnobMarkup(progress,
-    `<input type="range" min="${ORGAN_CLICK_VOLUME_MIN_DB}" max="${ORGAN_CLICK_VOLUME_MAX_DB}" step="1"
-              value="${settings.clickVolumeDb}" data-organ-click-volume aria-label="Volume do clique"
-              aria-valuetext="${settings.clickVolumeDb.toFixed(0)} dB">`)}
-        <output>${settings.clickVolumeDb.toFixed(0)} dB</output>
-      </label>
-      <button class="organ-header-controls__toggle ${settings.soundEnabled ? 'is-on' : 'is-off'}" type="button"
-        data-organ-sound-toggle aria-pressed="${settings.soundEnabled}">
-        Drawbar Sound
-      </button>
     </div>
   `;
 }

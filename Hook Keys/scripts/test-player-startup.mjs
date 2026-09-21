@@ -42,11 +42,26 @@ assert.equal(window.HookPlayer.isCellularPlayerViewport(1024, 768, false), false
 assert.equal(window.HookPlayer.isCellularPlayerViewport(800, 500, true), false,
   'desktop mantém o Keyboard mesmo com uma janela menor');
 const playerCss = await import('node:fs/promises').then(({ readFile }) => readFile('src/styles.css', 'utf8'));
+const readSource = (path) => import('node:fs/promises').then(({ readFile }) => readFile(path, 'utf8'));
+const playerSource = await readSource('src/features/player/PlayerScreen.ts');
+const compatibilityNativeSources = await Promise.all([
+  readSource('native-engine/src/NativeEngineRuntime.cpp'),
+  readSource('src-tauri/src/main.rs'),
+  readSource('android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java'),
+  readSource('ios/App/App/HookKeysNativeEngine.mm'),
+]);
+for (const source of compatibilityNativeSources) {
+  assert.match(source, /(?:messageType|message_type|type)\s*==\s*0xc0/,
+    'modo compatibilidade bloqueia Program Change antes de chegar ao SF2 em todas as plataformas');
+}
 assert.match(playerCss,
   /\.player-screen--cellular \.player-bank-view\.player-bank-view--cellular[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto/,
   'no celular, a altura retirada do Keyboard aumenta a linha dos módulos');
 assert.match(playerCss, /\.player-modal--app-settings select\[data-setting\]:not\(\.app-select__native\)[\s\S]*?visibility:\s*hidden/,
   'o seletor nativo fica oculto antes do seletor próprio ser montado');
+assert.match(playerCss,
+  /\.performance-section\.performance-section--effects\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);[^}]*grid-template-rows:\s*minmax\(28px, auto\) minmax\(0, 1fr\)/,
+  'os oito bancos FX ficam numa linha inteira acima dos pads de efeito');
 for (const [selector, column, row] of [
   ['\\.app-settings-field--audio-device', 1, 1],
   ['\\.app-settings-field--buffer', 2, 1],
@@ -297,6 +312,31 @@ try {
     assert(root.classList.contains('hook-keys-lite'), 'o perfil leve fica sempre aplicado');
     assert(!window.document.querySelector('[data-setting="lite-mode"]'),
       'o Modo Lite é só do App, não do desktop');
+
+    const compatibility = window.document.querySelector('[data-setting="compatibility-mode"]');
+    const callsBeforeCompatibility = calls.length;
+    compatibility.checked = true;
+    compatibility.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(player.currentModalKind, 'compatibility-mode',
+      'a alteração do modo compatibilidade exige confirmação');
+    window.document.querySelector('[data-modal-action="apply-compatibility"]').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(player.compatibilityMode, true, 'a confirmação ativa o modo na interface');
+    assert(calls.slice(callsBeforeCompatibility).some(({ command, args }) => (
+      command === 'set_compatibility_mode' && args?.enabled === true
+    )), 'a confirmação aplica o modo imediatamente ao motor nativo');
+    assert.equal(player.createSavedPlayerState().compatibilityMode, true,
+      'o modo confirmado entra no estado persistente do usuário');
+
+    const compatibilityAfterApply = window.document.querySelector('[data-setting="compatibility-mode"]');
+    compatibilityAfterApply.checked = false;
+    compatibilityAfterApply.dispatchEvent(new window.Event('change', { bubbles: true }));
+    window.document.querySelector('[data-modal-action="apply-compatibility"]').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(player.compatibilityMode, false, 'a confirmação também desativa o modo imediatamente');
+    assert(calls.slice(callsBeforeCompatibility).some(({ command, args }) => (
+      command === 'set_compatibility_mode' && args?.enabled === false
+    )), 'a desativação também chega ao motor nativo sem reiniciar o áudio');
   }
   player.closeModal();
   player.openModal('about', null, root.querySelector('[data-action="open-about"]'));
@@ -381,6 +421,11 @@ try {
     assert.equal(sentAttacks().at(-1), 600, 'o último valor do arraste chega ao motor');
     attack.value = '8';
     attack.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.equal(
+      player.getActivePresetState().modules[7].settings.synthPresets[0].attackMs,
+      8,
+      'cada alteração do Synth é salva automaticamente no preset ativo',
+    );
     await new Promise(resolve => setTimeout(resolve, 120));
   }
   player.closeModal();
@@ -468,13 +513,15 @@ try {
     assert.equal(player.ccMappingOptions.get('module:1').inverted, false);
     assert.equal(player.ccMappingOptions.get('module:1').limitPercent, 76.4);
     cc(46, 127);
-    assert(Math.abs(player.faders.get(1).getValueDb()) < 0.11, '100% físico termina em 0 dB com limite de 80%');
+    assert(Math.abs(player.faders.get(1).getValueDb() - (-5.1)) < 0.11,
+      '100% físico respeita o limite configurado abaixo do novo teto de 0 dB');
 
     player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, moduleFader);
     window.document.querySelector('[data-modal-action="toggle-cc-invert"]').click();
     window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
     cc(46, 0);
-    assert(Math.abs(player.faders.get(1).getValueDb()) < 0.11, 'Inverter troca o sentido e mantém o mesmo limite');
+    assert(Math.abs(player.faders.get(1).getValueDb() - (-5.1)) < 0.11,
+      'Inverter troca o sentido e mantém o mesmo limite');
     cc(46, 127);
     assert.equal(player.faders.get(1).getValueDb(), -90, 'fim invertido chega ao mínimo do fader');
     const curveBackup = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
@@ -687,8 +734,8 @@ try {
   master.value = '100';
   master.dispatchEvent(new window.Event('input', { bubbles: true }));
   await player.syncNativeEngine();
-  assert(calls.some(({ command, args }) => command === 'set_output_gain' && args.db === 12));
-  assert.match(root.querySelector('[data-output-value="master"]').value, /\+12/);
+  assert(calls.some(({ command, args }) => command === 'set_output_gain' && args.db === 0));
+  assert.equal(root.querySelector('[data-output-value="master"]').value, '0.0 dB');
   player.faders.get(8).setValueDb(-12, true);
   await new Promise(resolve => setTimeout(resolve, 0));
   assert(calls.some(({ command, args }) => command === 'set_module_gain' && args.moduleIndex === 7 && args.db === -12),
@@ -701,7 +748,7 @@ try {
     player.endKnobDrag({ ...event, type: 'pointerup', timeStamp: time + 30 });
   };
   tap(master, 1000); tap(master, 1150);
-  assert.equal(master.value, '82', 'double tap resets master to unity 0dB, not +12');
+  assert.equal(master.value, '100', 'double tap resets master to unity at the 0dB ceiling');
   for (let module = 1; module <= 8; module++) {
     player.openModal('module-settings', module, master);
     useUserSettings();
@@ -893,6 +940,10 @@ try {
     }
   }
   player.closeModal();
+  // Parte do meio do curso para testar a sensibilidade sem já iniciar no
+  // novo teto físico de 0 dB (posição 100).
+  master.value = '82';
+  master.dispatchEvent(new window.Event('input', { bubbles: true }));
   const drag = { target: master, isPrimary: true, pointerType: 'mouse', button: 0, pointerId: 1, clientX: 50, clientY: 200, timeStamp: 12000, preventDefault() {} };
   player.startKnobDrag(drag, null);
   assert.equal(player.knobDrag.travelPixels, 240);
@@ -933,7 +984,7 @@ try {
   fineDrag(cutoff, 0, 3);
   assert.equal(window.document.querySelector('[data-module-cutoff-value]').value, '21 Hz', 'module Cutoff permits exact 1Hz steps');
   player.openModal('module-synth', 8, master);
-  const detune = window.document.querySelector('[data-synth-parameter="detuneCents"]');
+  const detune = window.document.querySelector('[data-synth-parameter="oscillator1DetuneCents"]');
   fineDrag(detune, 0, 3);
   assert.equal(detune.value, '1', 'Synth knobs use their exact minimum step');
   const synthCutoff = window.document.querySelector('[data-synth-scale="cutoff"]');
@@ -959,6 +1010,62 @@ try {
   const decay = window.document.querySelector('[data-module-effect-control="decay"]');
   fineDrag(decay, 2.5, 3);
   assert.equal(decay.value, '2.6', 'effect knobs use their declared decimal step');
+  player.showKnobFocus(decay);
+  const focusFader = root.querySelector('[data-knob-focus-fader]');
+  focusFader.getBoundingClientRect = () => ({ top: 0, bottom: 100, height: 100 });
+  focusFader.setPointerCapture = () => {};
+  focusFader.hasPointerCapture = () => false;
+  focusFader.dispatchEvent(new window.PointerEvent('pointerdown', {
+    bubbles: true, cancelable: true, pointerId: 77, pointerType: 'touch', clientY: 100,
+  }));
+  assert.equal(decay.value, '0.1', 'the enlarged vertical fader drives the original knob at its lower end');
+  focusFader.dispatchEvent(new window.PointerEvent('pointermove', {
+    bubbles: true, cancelable: true, pointerId: 77, pointerType: 'touch', clientY: 0,
+  }));
+  assert.equal(decay.value, '20', 'the enlarged vertical fader reaches and updates the knob maximum');
+  focusFader.dispatchEvent(new window.PointerEvent('pointerup', {
+    bubbles: true, cancelable: true, pointerId: 77, pointerType: 'touch', clientY: 0,
+  }));
+  player.openModal('module-rotary', 7, master);
+  const rotaryDepth = window.document.querySelector('[data-module-effect-kind="rotary"][data-module-effect-control="depth"]');
+  player.showKnobFocus(rotaryDepth);
+  focusFader.dispatchEvent(new window.PointerEvent('pointerdown', {
+    bubbles: true, cancelable: true, pointerId: 78, pointerType: 'touch', clientY: 100,
+  }));
+  focusFader.dispatchEvent(new window.PointerEvent('pointermove', {
+    bubbles: true, cancelable: true, pointerId: 78, pointerType: 'touch', clientY: 27,
+  }));
+  assert.equal(rotaryDepth.value, '73', 'the enlarged fader forwards its value to a Rotary knob');
+  assert.equal(player.getActivePresetState().modules[6].settings.rotary.depth, 73,
+    'the Rotary state receives changes made with the enlarged fader');
+  focusFader.dispatchEvent(new window.PointerEvent('pointerup', {
+    bubbles: true, cancelable: true, pointerId: 78, pointerType: 'touch', clientY: 27,
+  }));
+  player.openModal('module-organ', 7, master);
+  const organState = player.getActivePresetState().modules[6];
+  const embeddedRotaryDepth = window.document.querySelector('[data-module-effect-kind="rotary"][data-module-effect-control="depth"]');
+  player.showKnobFocus(embeddedRotaryDepth);
+  focusFader.value = '41';
+  focusFader.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.equal(embeddedRotaryDepth.value, '41', 'the enlarged fader updates Rotary inside the Organ screen');
+  assert.equal(organState.settings.rotary.depth, 41,
+    'Rotary controls embedded in Organ persist their values');
+  const firstDrawbar = window.document.querySelector('[data-organ-drawbar-track="0"]');
+  organState.enabled = true;
+  player.applyOrganDrawbar(firstDrawbar, 7, 7);
+  assert.equal(organState.settings.organ.drawbars[0], 7, 'drawbar movement remains active without Drawbar Sound');
+  assert.equal(window.document.querySelector('[data-organ-sound-toggle]'), null,
+    'Drawbar Sound control was removed from Organ');
+  assert.equal(window.document.querySelector('[data-organ-click-volume]'), null,
+    'Drawbar Sound volume was removed from Organ');
+  await player.syncNativeEngine();
+  assert.equal(calls.filter(({ command, args }) => command === 'configure_module'
+    && args.config.moduleIndex === 6).at(-1).args.config.enabled, true,
+  'removing Drawbar Sound does not disable the Organ timbre');
+  window.document.querySelector('[data-module-rotary-speed="brake"]').click();
+  assert.equal(organState.settings.rotary.speed, 'brake', 'Brake works inside the embedded Organ Rotary');
+  assert.doesNotMatch(playerSource, /playOrganClick|data-organ-sound-toggle|data-organ-click-volume/,
+    'Drawbar Sound implementation was removed');
   player.openModal('module-arpeggiator', 5, master);
   const octave2 = window.document.querySelector('[data-arpeggiator-octaves="2"]');
   octave2.click();
@@ -1073,11 +1180,11 @@ try {
     const moduleOne = () => player.getActivePresetState().modules[0];
     const beforeRange = { low: moduleOne().lowNote, high: moduleOne().highNote };
     player.toggleNoteLearn(1, 'low');
-    player.learnNoteRangeFrom(9, null);
-    assert.equal(moduleOne().lowNote, 9, 'A-1 tocado na tela vira o limite grave');
+    player.learnNoteRangeFrom(21, null);
+    assert.equal(moduleOne().lowNote, 21, 'A-1 tocado na tela vira o limite grave');
     player.toggleNoteLearn(1, 'high');
-    player.learnNoteRangeFrom(96, null);
-    assert.equal(moduleOne().highNote, 96, 'C7 tocado na tela vira o limite agudo');
+    player.learnNoteRangeFrom(108, null);
+    assert.equal(moduleOne().highNote, 108, 'C7 tocado na tela vira o limite agudo');
     player.toggleNoteLearn(1, 'low');
     player.learnNoteRangeFrom(60, 'outro-teclado');
     assert.equal(moduleOne().lowNote, 60, 'sem dispositivo escolhido no módulo, qualquer entrada ensina');
@@ -1619,10 +1726,19 @@ try {
     'preset switches do not panic/restart the audio engine');
   player.compatibilityMode = true;
   player.midiInput.setCompatibilityMode(true);
-  player.ccMappings.set('metronome:toggle', 7);
   const beforeBlockedCc7 = player.metronome.isRunning();
+  for (const controller of [0, 6, 7, 10, 16, 32, 100, 101]) {
+    player.ccMappings.set('metronome:toggle', controller);
+    player.midiInput.emitControlChange({ channel: 1, controller, inputId: 'test-midi', value: 127 });
+    assert.equal(player.metronome.isRunning(), beforeBlockedCc7,
+      `CC${controller} automático do teclado comum fica isolado no modo compatibilidade`);
+  }
   player.handleMidiControlChange({ channel: 1, controller: 7, inputId: 'test-midi', value: 127 });
   assert.equal(player.metronome.isRunning(), beforeBlockedCc7, 'blocked CC7 cannot trigger UI mappings');
+  player.ccMappings.set('metronome:toggle', 64);
+  player.midiInput.emitControlChange({ channel: 1, controller: 64, inputId: 'test-midi', value: 127 });
+  assert.notEqual(player.metronome.isRunning(), beforeBlockedCc7,
+    'Sustain CC64 continua disponível para mapeamento no modo compatibilidade');
   player.ccMappings.set('preset:A:1', 102);
   const beforeCompatibilityPreset = player.bankStates.get(player.activeBank).selectedPreset;
   player.midiInput.emitControlChange({ channel: 1, controller: 7, inputId: 'test-midi', value: 1 });

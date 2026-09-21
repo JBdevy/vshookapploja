@@ -76,6 +76,8 @@ test('Rotary defaults to OFF/Slow, validates ranges and no longer duplicates Mod
   assert.equal(effects.readModuleRotarySettings(undefined).enabled, false);
   assert.equal(effects.readModuleRotarySettings(undefined).speed, 'slow');
   assert.equal(effects.readModuleRotarySettings(undefined).modulationEnabled, false);
+  assert.equal(effects.readModuleRotarySettings(undefined).slowHz, 0.672);
+  assert.equal(effects.readModuleRotarySettings(undefined).fastHz, 7.056);
   const stored = effects.readModuleRotarySettings({ enabled: true, modulationEnabled: true, speed: 'fast', slowHz: 1.5, fastHz: 8, rampSeconds: 3, depth: 55, mix: 80 });
   assert.deepEqual({ ...effects.readModuleEffectSettings('rotary', JSON.parse(JSON.stringify(stored))) }, { ...stored });
   const invalid = effects.readModuleRotarySettings({ speed: 'bad', slowHz: -9, fastHz: 99, rampSeconds: 99, depth: -1, mix: 200 });
@@ -89,7 +91,7 @@ test('Rotary defaults to OFF/Slow, validates ranges and no longer duplicates Mod
   assert.match(markup, /module-effect-knob__face/);
   assert.doesNotMatch(markup, /data-module-rotary-modulation|Modulation On|Modulation Off/);
   assert.doesNotMatch(effects.createModuleRotaryMarkup({}), /data-module-rotary-modulation/);
-  assert.equal(effects.formatModuleEffectValue('rotary', 'fastHz', 6.4), '6.40 Hz');
+  assert.equal(effects.formatModuleEffectValue('rotary', 'fastHz', 7.056), '7.056 Hz');
   assert.equal(effects.formatModuleEffectValue('rotary', 'rampSeconds', 1.2), '1.2 s');
 });
 
@@ -128,7 +130,7 @@ test('real Rotary handlers update module 5, retain parameters through ON/OFF and
   screen.updateModuleEffectControl(modal, input, 5);
   assert.equal(modules[4].settings.rotary.fastHz, 8);
   assert.equal(properties.get('--knob-progress'), '0.75');
-  assert.equal(output.value, '8.00 Hz');
+  assert.equal(output.value, '8.000 Hz');
   const power = { dataset: { moduleEffectPower: 'rotary' }, classList: { toggle() {} }, setAttribute() {}, closest: () => null };
   screen.toggleModuleEffectPower(power, 5);
   assert.equal(power.textContent, 'ON');
@@ -267,6 +269,10 @@ test('Rotary Learn uses two-second touch hold with movement cancellation and des
   });
   const event = { isPrimary: true, pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 };
   const target = screen.ccLearnTargetForRotarySpeed(button);
+  screen.currentModalKind = 'module-organ';
+  assert.equal(screen.ccLearnTargetForRotarySpeed(button).control, 'rotary:speed:slow',
+    'the embedded Organ Rotary exposes the same Slow/Fast/Brake mapping');
+  screen.currentModalKind = 'module-rotary';
   screen.startRotarySpeedLearn(event, button, target);
   advance(1999);
   assert.deepEqual(learned, []);

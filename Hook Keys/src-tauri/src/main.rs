@@ -188,7 +188,9 @@ unsafe extern "C" {
         oscillator1_volume: f32,
         oscillator2_volume: f32,
         oscillator3_volume: f32,
-        detune_cents: f32,
+        oscillator1_detune_cents: f32,
+        oscillator2_detune_cents: f32,
+        oscillator3_detune_cents: f32,
         attack_ms: f32,
         hold_ms: f32,
         decay_ms: f32,
@@ -527,7 +529,12 @@ struct SynthConfig {
     oscillator2_volume: f32,
     #[serde(default = "default_one")]
     oscillator3_volume: f32,
-    detune_cents: f32,
+    #[serde(default)]
+    oscillator1_detune_cents: f32,
+    #[serde(default = "default_synth_oscillator2_detune")]
+    oscillator2_detune_cents: f32,
+    #[serde(default = "default_synth_oscillator3_detune")]
+    oscillator3_detune_cents: f32,
     attack_ms: f32,
     hold_ms: f32,
     decay_ms: f32,
@@ -550,6 +557,8 @@ struct SynthConfig {
 fn default_true() -> bool { true }
 fn default_one() -> f32 { 1.0 }
 fn default_synth_oscillator3() -> i32 { 1 }
+fn default_synth_oscillator2_detune() -> f32 { 7.0 }
+fn default_synth_oscillator3_detune() -> f32 { -7.0 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1276,7 +1285,9 @@ fn configure_synth(config: SynthConfig, state: State<'_, AppState>) -> Result<()
             config.oscillator1_volume,
             config.oscillator2_volume,
             config.oscillator3_volume,
-            config.detune_cents,
+            config.oscillator1_detune_cents,
+            config.oscillator2_detune_cents,
+            config.oscillator3_detune_cents,
             config.attack_ms,
             config.hold_ms,
             config.decay_ms,
@@ -1477,10 +1488,11 @@ fn set_midi_inputs(
                     let data1 = message[1];
                     let data2 = message.get(2).copied().unwrap_or(0);
                     let message_type = status & 0xf0;
-                    let blocked_cc = compatibility.load(Ordering::Acquire)
-                        && message_type == 0xb0
-                        && matches!(data1, 0 | 6 | 7 | 10 | 16 | 32 | 91 | 100 | 101);
-                    if !blocked_cc {
+                    let blocked_compatibility_message = compatibility.load(Ordering::Acquire)
+                        && (message_type == 0xc0
+                            || (message_type == 0xb0
+                                && matches!(data1, 0 | 6 | 7 | 10 | 16 | 32 | 91 | 100 | 101)));
+                    if !blocked_compatibility_message {
                         if let Ok(engine) = hub.current() {
                             unsafe {
                                 hk_runtime_send_midi(
@@ -2059,7 +2071,7 @@ mod tests {
         }, 0);
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 1, 2, 1, 1, 1, 1, 1, 1, 0.65, 0.35, 0.35, 7.0, 0.0, 0.0,
+                engine.pointer(), 1, 2, 1, 1, 1, 1, 1, 1, 0.65, 0.35, 0.35, 0.0, 7.0, -7.0, 0.0, 0.0,
                 180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0, 0,
             )
         }, 0);
@@ -2080,7 +2092,7 @@ mod tests {
         }, 0);
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 0, 0, 0, 1, 1, 1, 0, 1, 1.0, 1.0, 1.0, 7.0, 0.0, 0.0,
+                engine.pointer(), 0, 0, 0, 1, 1, 1, 0, 1, 1.0, 1.0, 1.0, 0.0, 7.0, -7.0, 0.0, 0.0,
                 15_000.0, 1.0, 300.0, 20_000.0, 0.0, 0.0, 7.55, 0.0, 0.0, 0, 0, 0,
             )
         }, 0);
@@ -2105,7 +2117,7 @@ mod tests {
         }, 0);
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 1, 2, 1, 0, 0, 0, 1, 1, 0.65, 0.35, 0.35, 7.0, 0.0, 0.0,
+                engine.pointer(), 1, 2, 1, 0, 0, 0, 1, 1, 0.65, 0.35, 0.35, 0.0, 7.0, -7.0, 0.0, 0.0,
                 180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0, 0,
             )
         }, 0);
@@ -2116,7 +2128,7 @@ mod tests {
 
         assert_ne!(unsafe {
             hk_runtime_configure_synth(
-                engine.pointer(), 1, 2, 1, 1, 0, 0, 1, 1, 0.65, 0.35, 0.35, 7.0, 0.0, 0.0,
+                engine.pointer(), 1, 2, 1, 1, 0, 0, 1, 1, 0.65, 0.35, 0.35, 0.0, 7.0, -7.0, 0.0, 0.0,
                 180.0, 0.72, 250.0, 7200.0, 0.18, 0.24, 4.0, 0.0, 45.0, 0, 0, 0,
             )
         }, 0);
