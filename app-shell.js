@@ -8,7 +8,7 @@ const VSHOOK_SCAN_BATCH_SIZE = 72
 const VSHOOK_REDUNDANCY_POLL_MS = 700
 const VSHOOK_REDUNDANCY_TIMEOUT_MS = 600
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-1-chat-composer-v69'
+const VSHOOK_ASSET_VERSION = '1-0-1-apple-review-v71'
 const VSHOOK_CHAT_BOOTSTRAP_KEY = 'vshook_chat_bootstrap_key'
 const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
 const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
@@ -120,6 +120,7 @@ async function bootstrapChatMobileSessionFromQr() {
       expiresAt: String(created.expiresAt || ''),
       bridgeBaseUrl: String(window.location.origin || '').replace(/\/+$/, ''),
     }))
+    try { window.dispatchEvent(new CustomEvent('vshook-chat-session-changed', { detail: created })) } catch (error) {}
     localStorage.removeItem(VSHOOK_CHAT_BOOTSTRAP_KEY)
     return true
   } catch (error) {
@@ -196,6 +197,21 @@ async function postChatPushUnregister(session, pushToken) {
   const result = await response.json().catch(() => ({}))
   if (!response.ok || result.ok === false) throw new Error(result.error || 'Não foi possível silenciar as notificações do Chat Hook.')
   return true
+}
+
+async function revokeChatMobileSession(session) {
+  if (!session?.accessToken || !session?.backendUrl) return false
+  try {
+    await fetch(`${String(session.backendUrl).replace(/\/+$/, '')}/api/chat/mobile/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatMobileToken: session.accessToken }),
+      cache: 'no-store',
+    })
+    return true
+  } catch (error) {
+    return false
+  }
 }
 
 async function reportChatPushDiagnostic(session, stage, detail = '') {
@@ -438,10 +454,12 @@ window.vshookLogoutChat = async function () {
   if (session && storedToken) {
     try { await postChatPushUnregister(session, storedToken) } catch (error) {}
   }
+  await revokeChatMobileSession(session)
   try {
     localStorage.removeItem(VSHOOK_CHAT_MOBILE_SESSION_KEY)
     localStorage.removeItem(VSHOOK_CHAT_BOOTSTRAP_KEY)
   } catch (error) {}
+  try { window.dispatchEvent(new CustomEvent('vshook-chat-session-changed', { detail: null })) } catch (error) {}
   return true
 }
 
@@ -460,9 +478,9 @@ function renderChatLogin() {
   setShell(`
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">Entrar no Chat Hook</h1>
-    <p class="vshook-shell-subtitle">Use o mesmo e-mail informado na compra do VS Hook.</p>
+    <p class="vshook-shell-subtitle">Entre com a sua conta do Chat Hook.</p>
     <form id="chatLoginForm" class="vshook-login-form">
-      <input id="chatLoginEmail" class="vshook-manual-ip-input" type="email" autocomplete="email" placeholder="E-mail da compra" required />
+      <input id="chatLoginEmail" class="vshook-manual-ip-input" type="email" autocomplete="email" placeholder="E-mail da conta" required />
       <div id="chatLoginStatus" class="vshook-shell-status"></div>
       <button class="vshook-mode-button" type="submit">Entrar</button>
     </form>
@@ -484,11 +502,14 @@ function renderChatLogin() {
       })
       const result = await response.json().catch(() => ({}))
       const created = result?.mobileSession
-      if (!response.ok || !created?.accessToken) throw new Error(result?.error || 'E-mail não encontrado ou licença inativa.')
+      if (!response.ok || !created?.accessToken) {
+        throw new Error('Não foi possível entrar. Confira o e-mail da conta e tente novamente.')
+      }
       localStorage.setItem(VSHOOK_CHAT_MOBILE_SESSION_KEY, JSON.stringify({
         accessToken: String(created.accessToken), backendUrl: VSHOOK_CHAT_BACKEND_URL,
         expiresAt: String(created.expiresAt || ''), bridgeBaseUrl: VSHOOK_CHAT_BACKEND_URL
       }))
+      try { window.dispatchEvent(new CustomEvent('vshook-chat-session-changed', { detail: created })) } catch (error) {}
       enterStoredChat()
     } catch (error) {
       if (status) status.textContent = error.message || 'Não foi possível entrar no Chat Hook.'
@@ -503,22 +524,18 @@ function renderStandaloneTransferHookButton() {
 }
 
 function enterStandaloneTransferHook() {
-  let host = ''
-  try { host = normalizeIp(localStorage.getItem('vshook_transfer_host') || '') } catch (_) {}
-  if (!host) host = normalizeIp(window.location.hostname)
-  if (!host) {
-    host = normalizeIp(window.prompt('Digite o IP do computador com a Hook Center aberta:') || '')
-  }
-  if (!host) return false
-  try { localStorage.setItem('vshook_transfer_host', host) } catch (_) {}
-  enterApp({
-    id: 'transfer-hook-local',
-    projectName: 'Drop Hook',
-    directorUrl: `http://${host}:${VSHOOK_DIRECTOR_PORT}`,
-    musiciansUrl: `http://${host}:${VSHOOK_MUSICIANS_PORT}`,
-    projectTabIndex: 0,
-  }, 'transfer-hook', { skipProjectSwitch: true })
-  return true
+  setShell(`
+    ${getLogoHtml()}
+    <h1 class="vshook-shell-title">Drop Hook</h1>
+    <p class="vshook-shell-subtitle">Conecte-se ao VS Hook/Hook Center na mesma rede para utilizar este recurso.</p>
+    <div class="vshook-project-actions">
+      <button class="vshook-back-button" id="dropHookUnavailableBackBtn">Voltar</button>
+      <button class="vshook-secondary-button" id="dropHookUnavailableSearchBtn">Procurar</button>
+    </div>
+  `)
+  document.getElementById('dropHookUnavailableBackBtn')?.addEventListener('click', () => renderNoProjects())
+  document.getElementById('dropHookUnavailableSearchBtn')?.addEventListener('click', () => restartDiscovery())
+  return false
 }
 
 function attachStandaloneTransferHookHandler() {
@@ -948,7 +965,7 @@ function renderSearching() {
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Procurando sessões VS Hook disponíveis na rede Wi‑Fi...</p>
     <div class="vshook-search-spinner" role="status" aria-label="Procurando"></div>
-    <p class="vshook-shell-status">Abra o projeto no REAPER. A busca usa o Wi‑Fi atual e continua em segundo plano. Se preferir, digite o IP do computador.</p>
+    <p class="vshook-shell-status">Mantenha o VS Hook/Hook Center aberto no computador e na mesma rede Wi‑Fi. A busca continua em segundo plano.</p>
     ${renderStoredChatButton()}
     ${renderStandaloneTransferHookButton()}
     ${renderApplePeerButton()}
@@ -965,7 +982,7 @@ function renderNoProjects() {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Nenhuma sessão VS Hook foi encontrada.</p>
-    <p class="vshook-shell-status">Abra o projeto no REAPER e toque em Procurar. O Drop Hook funciona somente com a Hook Center aberta.</p>
+    <p class="vshook-shell-status">Conecte-se ao VS Hook/Hook Center na mesma rede para utilizar estes recursos. Depois, toque em Procurar.</p>
     ${renderStoredChatButton()}
     ${renderStandaloneTransferHookButton()}
     ${renderApplePeerButton()}
@@ -1124,7 +1141,7 @@ function renderDirectorComputers(projects, options = {}) {
 // O "Atualizar" precisa varrer a rede do mesmo jeito que a tela inicial. No app
 // instalado a tela inicial monta os candidatos a partir dos IPs locais reais
 // (plugin nativo); sem isso o botao varria a faixa generica e nao encontrava o
-// projeto aberto no REAPER depois que a tela de sessoes ja estava na frente.
+// projeto aberto no sistema desktop depois que a tela de sessoes ja estava na frente.
 async function buildDiscoveryCandidateIps() {
   if (!isVshookInstalledNativeApp()) return buildCandidateIps()
   const localNetworks = await getVshookStoreLocalNetworks()
@@ -1175,7 +1192,7 @@ async function refreshProjectSelector() {
       localStorage.removeItem('vshook_selected_project')
       localStorage.removeItem('vshook_cached_mode_projects')
     } catch (error) {}
-    renderProjects([], { status: 'Abra o projeto no REAPER e verifique se a sessão está disponível.' })
+    renderProjects([], { status: 'Conecte-se ao VS Hook/Hook Center na mesma rede e verifique se a sessão está disponível.' })
   }
 }
 
@@ -1193,7 +1210,7 @@ function renderProjects(projects, options = {}) {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">Modo Diretor</h1>
     <p class="vshook-shell-subtitle">Selecione a sessão disponível na rede Wi‑Fi.</p>
-    <div class="vshook-project-list">${rows || `<div class="vshook-shell-status">Abra o projeto no REAPER e verifique se a sessão está disponível.</div>`}</div>
+    <div class="vshook-project-list">${rows || `<div class="vshook-shell-status">Conecte-se ao VS Hook/Hook Center na mesma rede para utilizar este recurso.</div>`}</div>
     ${status ? `<p class="vshook-shell-status">${vshookEscape(status)}</p>` : ''}
     <div class="vshook-project-actions">
       <button class="vshook-back-button" id="backModeBtn">Voltar</button>
@@ -1764,7 +1781,7 @@ function renderBridgeNoProjects() {
     ${getLogoHtml()}
     <h1 class="vshook-shell-title">VS Hook</h1>
     <p class="vshook-shell-subtitle">Nenhuma sessão VS Hook foi encontrada.</p>
-    <p class="vshook-shell-status">Abra o projeto no REAPER. O Drop Hook funciona somente com a Hook Center aberta.</p>
+    <p class="vshook-shell-status">Conecte-se ao VS Hook/Hook Center na mesma rede para utilizar estes recursos.</p>
     ${renderStoredChatButton()}
     ${renderStandaloneTransferHookButton()}
     <button class="vshook-secondary-button" id="refreshProjectsBtn">Atualizar</button>
@@ -2009,7 +2026,7 @@ async function connectVshookApplePeer(peer, signal) {
     if (!directorUrl) throw new Error('O Mac não abriu a conexão direta.')
     // Na conexao peer-to-peer o Mac pode estar sem uma interface Wi-Fi comum.
     // Nesse caso /discovery responde corretamente, mas com networkAvailable=false
-    // e sem projetos. /projects consulta diretamente o bridge do REAPER e deve
+    // e sem projetos. /projects consulta diretamente o bridge do sistema desktop e deve
     // ser a fonte principal desta modalidade de conexao.
     const projectPayload = await fetchJsonWithTimeout(
       `${directorUrl}/projects`, VSHOOK_BRIDGE_BROWSER_TIMEOUT_MS, connectSignal)
@@ -2027,7 +2044,7 @@ async function connectVshookApplePeer(peer, signal) {
         : []
     }
     if (!projects.length) {
-      throw new Error('A Hook Center foi encontrada, mas não há projeto aberto no REAPER.')
+      throw new Error('A Hook Center foi encontrada, mas não há projeto aberto no sistema desktop.')
     }
     renderModeFirst(projects)
   } catch (error) {

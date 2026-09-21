@@ -557,6 +557,16 @@ async function run() {
       'A descoberta deixou listeners de cancelamento depois de concluir ou sair.')
   }
 
+  // Instalação limpa e sem computador: nenhum recurso companion pode ficar
+  // preso nem sugerir compra. O Drop Hook deve explicar a conexão necessária.
+  storage.clear()
+  evaluate('renderNoProjects()')
+  assert.ok(shellHtml.includes('Conecte-se ao VS Hook/Hook Center na mesma rede'))
+  elements.get('openStandaloneTransferHookBtn').click()
+  assert.ok(shellHtml.includes('Conecte-se ao VS Hook/Hook Center na mesma rede para utilizar este recurso.'))
+  assert.ok(elements.has('dropHookUnavailableBackBtn'))
+  assert.ok(elements.has('dropHookUnavailableSearchBtn'))
+
   console.log('Cancelamento ok: lotes, Procurar, Wi-Fi trocado, Voltar, JSON/plugin tardios, IP manual, modos, bridge e pagehide.')
   console.log('Rede local ok: sem fallback, máscara real, hotspot próprio Android/iOS e histórico filtrado.')
 

@@ -686,7 +686,7 @@ function backToModeSelector() {
 }
 
 function renderOffline() {
-  return `<div class="recadosShell"><div class="recadosCard"><img class="recadosLogo" src="./vshook-icon.png" alt="VS Hook" /><h1>Recados</h1><p>Hook Center offline. Abra o VS Hook no REAPER e mantenha tudo na mesma rede Wi‑Fi.</p><button class="recadosCancelButton recadosBackWide" data-action="back">VOLTAR</button></div></div>`
+  return `<div class="recadosShell"><div class="recadosCard"><img class="recadosLogo" src="./vshook-icon.png" alt="VS Hook" /><h1>Recados</h1><p>Conecte-se ao VS Hook/Hook Center na mesma rede para utilizar este recurso.</p><button class="recadosCancelButton recadosBackWide" data-action="back">VOLTAR</button></div></div>`
 }
 
 function renderAuth() {

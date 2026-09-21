@@ -2666,7 +2666,7 @@
 
     // Em snapshots antigos somente a sessão realmente ativa informa
     // projectDirty. Não transfere o * para uma seleção otimista ainda não
-    // confirmada pelo REAPER.
+    // confirmada pelo sistema desktop.
     const active = getSnapshotActiveProjectSelection(data)
     const id = getProjectItemId(item, index)
     const itemIndex = getProjectItemIndex(item, index)
@@ -3770,7 +3770,7 @@
       const master = data?.mixerMaster || mixer?.master || data?.masterTrack || null
       return master && typeof master === 'object' ? [master] : []
     }
-    // A visão MIXER usa a lista completa do REAPER. Ela já contém as pistas
+    // A visão MIXER usa a lista completa do sistema desktop. Ela já contém as pistas
     // de grupo na posição correta; mixerGroups é apenas o subconjunto antigo
     // usado pela aba GRUPOS que não existe mais.
     return getAppVisibleMixerTracks(Array.isArray(data?.mixerTracks) ? data.mixerTracks : (Array.isArray(mixer?.tracks) ? mixer.tracks : []))
@@ -4031,7 +4031,7 @@
         continue
       }
       // Assim que a leitura viva confirma o clique do app, solta a proteção
-      // otimista. Uma mudança manual posterior no REAPER aparece na hora.
+      // otimista. Uma mudança manual posterior no sistema desktop aparece na hora.
       if (rawValue === !!hold.value) {
         mixerToggleHold.delete(`${state.mixerView}:${id}:${field}`)
         continue
@@ -9236,7 +9236,7 @@
       const active = selectedProject.id
         ? selectedProject.id === projectId
         : selectedProject.index === getProjectItemIndex(p, index)
-      // O REAPER identifica a aba atual alterada com "*". No app usamos o
+      // O sistema desktop identifica a aba atual alterada com "*". No app usamos o
       // mesmo projectDirty que controla o SAVE, removendo primeiro qualquer
       // prefixo antigo para o salvamento otimista desaparecer na mesma hora.
       const cleanName = getProjectItemName(p, index).replace(/^\s*\*+\s*/, '')
@@ -9259,7 +9259,7 @@
       return selected.id ? id === selected.id : getProjectItemIndex(item, index) === selected.index
     })
     const name = upperText(project ? getProjectItemName(project) : 'PROJETO ATUAL')
-    return `<div class="modalOverlay tabletCenteredModalOverlay projectSaveConfirmOverlay"><div class="modalSpacer"></div><div class="modalBox projectSaveConfirmBox" data-stop-modal><div class="modalTitle">SALVAR PROJETO</div><div class="projectSaveConfirmText">Deseja salvar <strong>${escapeHtml(name)}</strong> no REAPER?</div><div class="modalButtons"><button class="modalOkBtnWide projectSaveConfirmBtn" data-action="project-save-confirm">SALVAR</button><button class="modalCancelBtn" data-action="project-save-cancel">CANCELAR</button></div></div><div class="modalBottomSpace"></div></div>`
+    return `<div class="modalOverlay tabletCenteredModalOverlay projectSaveConfirmOverlay"><div class="modalSpacer"></div><div class="modalBox projectSaveConfirmBox" data-stop-modal><div class="modalTitle">SALVAR PROJETO</div><div class="projectSaveConfirmText">Deseja salvar <strong>${escapeHtml(name)}</strong> no sistema desktop?</div><div class="modalButtons"><button class="modalOkBtnWide projectSaveConfirmBtn" data-action="project-save-confirm">SALVAR</button><button class="modalCancelBtn" data-action="project-save-cancel">CANCELAR</button></div></div><div class="modalBottomSpace"></div></div>`
   }
 
   function renderMixerVolumeModal() {
@@ -11567,7 +11567,7 @@
     const viewportWidth = Math.max(1, viewport.clientWidth)
     const viewportHeight = Math.max(1, viewport.clientHeight)
     // A janela do app tem densidade e proporcao bem diferentes da janela
-    // nativa do REAPER. A antiga base fazia 50% no app equivaler visualmente
+    // nativa do sistema desktop. A antiga base fazia 50% no app equivaler visualmente
     // a 100% no Teleprompt nativo. Mantemos toda a faixa configuravel, mas
     // corrigimos a referencia: agora 100% representa aquele tamanho visual.
     const appLyricsScaleFactor = 0.5
@@ -17319,7 +17319,7 @@
     const rowDb = root.querySelector(`[data-mixer-id="${CSS.escape(id)}"] .mixerRowDb`)
     if (rowGroup) rowGroup.textContent = dbText
     if (rowDb) rowDb.textContent = dbText
-    // Usa o comando próprio de reset do REAPER. Assim o 0 dB não depende de
+    // Usa o comando próprio de reset do sistema desktop. Assim o 0 dB não depende de
     // um valor transitório que o range nativo possa emitir no segundo toque.
     queueLatestVolumeCommand(`track:${id}`, 'mixer_reset_volume', {
       id,

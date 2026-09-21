@@ -9,6 +9,7 @@
   const bootstrapKeyStorageKey = 'vshook_chat_bootstrap_key'
   const messages = new Map()
   let chatState = null
+  let chatSessionRevision = 0
   let lastMessageId = 0
   let revision = 0
   let polling = false
@@ -173,6 +174,19 @@
     try { localStorage.removeItem(mobileSessionStorageKey) } catch (_) {}
   }
 
+  function resetChatForCurrentSession() {
+    chatSessionRevision += 1
+    mobileSession = readMobileSession()
+    chatState = null
+    messages.clear()
+    lastMessageId = 0
+    revision = 0
+    renderMessages(true)
+    updateHeaderAndControls()
+  }
+
+  window.addEventListener('vshook-chat-session-changed', resetChatForCurrentSession)
+
   function escapeHtml(value) {
     return String(value ?? '')
       .replace(/&/g, '&amp;')
@@ -185,6 +199,13 @@
   function initials(name) {
     const parts = String(name || 'User').trim().split(/\s+/).filter(Boolean)
     return (parts.length > 1 ? `${parts[0][0]}${parts[parts.length - 1][0]}` : parts[0]?.slice(0, 2) || 'U').toUpperCase()
+  }
+
+  function publicChatError(value, fallback = 'Não foi possível acessar o Chat Hook.', status = 0) {
+    if (Number(status) === 401 || Number(status) === 403) {
+      return 'Não foi possível acessar esta conta do Chat Hook.'
+    }
+    return String(value || '').trim() || fallback
   }
 
   function avatarHtml(name, url) {
@@ -284,7 +305,7 @@
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok || data?.ok === false) {
-        const error = new Error(data?.error || `HTTP ${response.status}`)
+        const error = new Error(publicChatError(data?.error, `Falha de conexão (${response.status}).`, response.status))
         error.status = response.status
         error.retryAfter = Number(data?.retryAfter) || 0
         throw error
@@ -296,8 +317,14 @@
   }
 
   async function ensureMobileSession() {
-    const current = mobileSession || readMobileSession()
-    if (current) return current
+    // A sessão persistida é a fonte de verdade. Uma troca de conta não pode
+    // continuar usando o token antigo que ficou nesta variável em memória.
+    const stored = readMobileSession()
+    if (stored) {
+      mobileSession = stored
+      return stored
+    }
+    mobileSession = null
     const bootstrapKey = (() => {
       try { return String(localStorage.getItem(bootstrapKeyStorageKey) || '').trim() }
       catch (_) { return '' }
@@ -609,9 +636,11 @@
 
   async function refresh(full = false) {
     if (polling || document.visibilityState === 'hidden') return
+    const sessionRevision = chatSessionRevision
     polling = true
     try {
       const result = await post('/chat/state', { afterId: full ? 0 : lastMessageId })
+      if (sessionRevision !== chatSessionRevision) return
       const serverRevision = Math.max(0, Number(result?.chat?.revision || 0))
       if (!full && revision && serverRevision !== revision) {
         polling = false
@@ -620,6 +649,7 @@
       }
       applyState(result, full || !chatState)
     } catch (error) {
+      if (sessionRevision !== chatSessionRevision) return
       const status = document.getElementById('chatMobileStatus')
       if (status) {
         status.dataset.connection = '1'
