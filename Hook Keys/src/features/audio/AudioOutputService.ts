@@ -47,7 +47,7 @@ export class AudioOutputService {
   }
 }
 
-// Os módulos aceitam "default": a saída segue o que estiver em Saídas - Timbres.
+// Os módulos aceitam "default": a saída segue o que estiver em Saídas - Módulos.
 export type ModuleOutputRoute = AudioBusRoute | 'default';
 
 export function createAudioRouteOptions(channelCount: number, selected: ModuleOutputRoute): string {

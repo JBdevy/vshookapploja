@@ -1640,6 +1640,7 @@ export class PlayerScreen {
           this.renderOutputMeter('music', peaks.slice(18, 20));
           this.renderOutputMeter('click', peaks.slice(20, 22));
           this.renderOutputMeter('effects', this.effectMeterPeaks());
+          // O estado selecionado do pad não é sinal de áudio: não inventar nível.
           this.renderOutputMeter('pads', [0, 0]);
           if (analysisModuleIndex === this.getCompressorAnalysisModuleIndex()) {
             this.renderModuleAnalysis(analysis);
@@ -8804,7 +8805,7 @@ export class PlayerScreen {
     const select = target;
     if (!(select instanceof HTMLSelectElement)) return;
     if (select.dataset.moduleSetting === 'audio-route') {
-      // Padrão não guarda saída: o módulo passa a seguir Saídas - Timbres.
+      // Padrão não guarda saída: o módulo passa a seguir Saídas - Módulos.
       if (select.value === 'default') {
         delete moduleState.settings.outputRoute;
         this.markPlayerStateChanged();

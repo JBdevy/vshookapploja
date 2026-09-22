@@ -71,6 +71,29 @@ test('pads de notas e efeitos ficam verdes com contorno branco enquanto ativos',
   }
 });
 
+test('Playlist e Click chegam sem truncar; não confunde pad selecionado com áudio', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
+  assert.match(bridge, /Array\.from\(\{ length: 22 \}/);
+  assert.match(player, /renderOutputMeter\('music', peaks\.slice\(18, 20\)\)/);
+  assert.match(player, /renderOutputMeter\('click', peaks\.slice\(20, 22\)\)/);
+  assert.match(player, /renderOutputMeter\('effects', this\.effectMeterPeaks\(\)\)/);
+  assert.match(player, /renderOutputMeter\('pads', \[0, 0\]\)/);
+  assert.doesNotMatch(player, /padMeterPeaks/);
+});
+
+test('knobs não deformam quando os 30% da Playlist estão abertos no desktop', () => {
+  assert.match(css, /html\[data-runtime="desktop"\] \.player-screen--tablet\.is-tracks-split \.player-output-knob__face\s*\{[^}]*width:[^}]*height:/s);
+  assert.match(css, /html\[data-runtime="desktop"\] \.player-screen--tablet\.is-tracks-split \.player-output-mini-meter\s*\{[^}]*height:/s);
+});
+
+test('dispositivo de áudio usa os nomes Módulos e Playlist', () => {
+  const settings = readFileSync(new URL('../src/features/player/AppSettingsView.ts', import.meta.url), 'utf8');
+  assert.match(settings, /Saídas - Módulos/);
+  assert.match(settings, /Saídas - Playlist/);
+  assert.doesNotMatch(settings, /Saídas - Timbres|Saídas - Músicas/);
+});
+
 test('somente o banco FX em edição recebe amarelo e selo EDIT', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(player, /button\.classList\.toggle\('is-editing', this\.effectEditMode && isSelected\)/);
@@ -419,9 +442,9 @@ test('App Store icon has no alpha channel (Apple rejects transparent icons, erro
   assert(!png.includes(Buffer.from('tRNS')), 'o ícone da loja não pode ter transparência');
 });
 
-test('Playlist aberta no tablet: nome em cima e dB embaixo em todas as plataformas, celular fora', () => {
+test('Playlist aberta: tablet empilha a leitura e desktop mantém os cinco knobs compactos', () => {
   assert.match(css, /\n\.player-screen--tablet:not\(\.player-screen--cellular\)\.is-tracks-split \.player-output-knob \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);[^}]*grid-template-rows:\s*auto auto auto;/);
-  assert.doesNotMatch(css, /html\[data-runtime="desktop"\] \.player-screen--tablet\.is-tracks-split \.player-output-knob \{/);
+  assert.match(css, /html\[data-runtime="desktop"\] \.player-screen--tablet\.is-tracks-split \.player-output-knob \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto minmax\(25px, \.72fr\);/);
 });
 
 test('Auto ligado fica amarelo e Repetir ligado pisca verde acima do tema geral', () => {
@@ -860,6 +883,7 @@ test('curva de velocity: os 5 pontos se movem, inclusive o primeiro e o último'
 
 test('Drum envia Release 0 por tecla e os três chimbais mantêm choke depois do Note Off', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const catalog = readFileSync(new URL('../src/features/sound-library/SoundCatalog.ts', import.meta.url), 'utf8');
   const engineTypes = readFileSync(new URL('../native-engine/include/hook_keys/EngineTypes.hpp', import.meta.url), 'utf8');
   const engine = readFileSync(new URL('../native-engine/src/HookKeysEngine.cpp', import.meta.url), 'utf8');
   const desktop = readFileSync(new URL('../src-tauri/src/native_engine_bridge.cpp', import.meta.url), 'utf8');
@@ -867,6 +891,10 @@ test('Drum envia Release 0 por tecla e os três chimbais mantêm choke depois do
   const ios = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
   assert.match(player, /encodeDrumZeroReleaseNotes\(moduleState\?\.settings\.drumZeroReleaseNotes\)/);
   assert.match(player, /drumZeroReleaseMask0: drumZeroReleaseMasks\[0\]/);
+  assert.match(player, /const soundSettings = sound\?\.moduleSettings\?\.\[scope\] \?\? \{\};[\s\S]*?soundSettings/,
+    'a configuração individual recebida do backend deve ser combinada ao timbre');
+  assert.match(catalog, /modules1To6: safeSettingsObject\(source\.modules1To6\)/,
+    'o catálogo não pode descartar drumZeroReleaseNotes dentro das configurações do timbre');
   assert.match(engineTypes, /std::array<std::uint32_t, 4> drumZeroReleaseNoteMasks/);
   assert.match(engine, /hiHatTailNotes_\[index\]\[note\]/);
   assert.match(engine, /drumNoteUsesZeroRelease\(sourceNote\)[\s\S]*?stealNote/);

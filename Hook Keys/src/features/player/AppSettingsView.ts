@@ -181,11 +181,11 @@ export function createAudioSettingsMarkup(
         <select data-setting="buffer-size">${bufferOptions}</select>
       </label>
 
-      ${routeField('timbres', 'Saídas - Timbres')}
+      ${routeField('timbres', 'Saídas - Módulos')}
 
-      <!-- Músicas saem sempre em 1+2: o seletor só mostra a saída. -->
+      <!-- Playlist sai sempre em 1+2: o seletor só mostra a saída. -->
       <label class="app-settings-field app-settings-field--audio-route" data-audio-route-field="music">
-        <span>Saídas - Músicas</span>
+        <span>Saídas - Playlist</span>
         <select data-setting="music-route" disabled aria-disabled="true">
           <option value="stereo:0" selected>1+2</option>
         </select>

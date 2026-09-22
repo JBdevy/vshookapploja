@@ -475,7 +475,9 @@ class HookKeysNativeBridge {
       'module_meter_levels', {}, () => plugin.moduleMeterLevels(),
     );
     const levels = Array.isArray(result) ? result : result.levels;
-    return Array.from({ length: 18 }, (_, index) => {
+    // 0..15: oito módulos; 16..17: soma dos módulos; 18..19: Playlist;
+    // 20..21: Click. Não trunque os dois últimos buses ao normalizar a ponte.
+    return Array.from({ length: 22 }, (_, index) => {
       const value = levels?.[index];
       return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
     });

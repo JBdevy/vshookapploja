@@ -130,10 +130,10 @@ for (const [name, source] of [['TypeScript', nativeBridge], ['desktop', desktop]
   assert.match(source, /[Cc]loneSoundFont|clone_sound_font|clone_soundfont/,
     `${name} precisa encaminhar a cópia otimizada e independente do SF2`);
 }
-assert.match(desktop, /Result<\[f32; 16\], String>/,
-  'Desktop precisa entregar pares L/R dos oito módulos');
-assert.match(nativeBridge, /Array\.from\(\{ length: 16 \}/,
-  'A interface precisa consumir os dezesseis níveis estéreo');
+assert.match(desktop, /Result<\[f32; 22\], String>/,
+  'Desktop precisa entregar módulos, soma dos módulos, Playlist e Click em estéreo');
+assert.match(nativeBridge, /Array\.from\(\{ length: 22 \}/,
+  'A interface precisa consumir todos os vinte e dois níveis sem cortar Playlist ou Click');
 assert.match(nativeEngine, /compressorInputPeaks_[\s\S]*publishProcessorLevels/,
   'Os medidores do compressor precisam nascer no sinal real do motor');
 assert.match(nativeEngine, /settings_\.sampleRate \* 0\.005/,

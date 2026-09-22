@@ -15204,6 +15204,37 @@ html[data-runtime="desktop"] .player-output-knob__face {
   border-radius: 50%;
 }
 
+/* Com os 30% da Playlist abertos, cada coluna perde largura. Mantém disco e
+   meter com medidas explícitas para nenhum knob achatar, esticar ou invadir o
+   vizinho durante a redistribuição do grid. */
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-header-knobs {
+  gap: 2px;
+}
+
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob {
+  grid-template-columns: minmax(0, 1fr) auto minmax(25px, .72fr);
+  column-gap: 2px;
+  font-size: clamp(7px, .62vw, 9px);
+}
+
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob__control {
+  gap: 4px;
+}
+
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob__face {
+  flex-basis: clamp(28px, 2.55vw, 36px);
+  width: clamp(28px, 2.55vw, 36px);
+  height: clamp(28px, 2.55vw, 36px);
+}
+
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-mini-meter {
+  height: clamp(28px, 2.55vw, 36px);
+}
+
+html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-output-knob output {
+  font-size: clamp(6px, .55vw, 8px);
+}
+
 /* Organização fixa do áudio: cada saída permanece no mesmo lugar mesmo
    quando algum dispositivo externo oferece mais canais. */
 .player-modal--app-settings-audio .app-settings-panel--devices {

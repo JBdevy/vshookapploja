@@ -385,7 +385,7 @@ export function createModuleSettingsMarkup(
         <label class="app-settings-field module-settings-audio-route">
           <span>Saída do módulo</span>
           <select data-module-setting="audio-route">
-            <!-- Padrão segue Saídas - Timbres: trocar lá move todos os módulos
+            <!-- Padrão segue Saídas - Módulos: trocar lá move todos os módulos
                  que ficaram no padrão. -->
             <option value="default"${audioRoute === 'default' ? ' selected' : ''}>Padrão</option>
             ${createAudioRouteOptions(audioChannelCount, audioRoute)}
