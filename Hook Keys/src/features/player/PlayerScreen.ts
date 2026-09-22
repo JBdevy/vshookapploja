@@ -1638,7 +1638,9 @@ export class PlayerScreen {
           for (let index = 0; index < 8; index += 1) {
             const displayed = [0, 1].map((channel) => {
               const peak = peaks[index * 2 + channel] ?? 0;
-              const db = peak > 0 ? Math.max(MODULE_FADER_MIN_DB, Math.min(MODULE_FADER_MAX_DB, 20 * Math.log10(peak))) : MODULE_FADER_MIN_DB;
+              // O preenchimento é limitado a 0 dB no fader, mas o valor bruto
+              // precisa continuar disponível para detectar clipping real.
+              const db = peak > 0 ? Math.max(MODULE_FADER_MIN_DB, 20 * Math.log10(peak)) : MODULE_FADER_MIN_DB;
               // Fast attack, smooth release; only the UI is smoothed.
               const previous = this.moduleMeterDb[index]?.[channel] ?? MODULE_FADER_MIN_DB;
               return Math.max(db, previous - 3);

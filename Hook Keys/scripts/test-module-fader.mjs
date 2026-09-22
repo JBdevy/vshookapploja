@@ -280,10 +280,16 @@ test('audio meter fills the complete rail as independent stereo halves', () => {
   assert.match(css, /width:\s*calc\(50% - \.5px\);/);
   // Degradê em altura total dentro de uma janela: os dois andam só com transform
   // (GPU), sem repintar e sem comprimir as cores.
-  assert.match(css, /\.player-module__meter-fill > i\s*\{[^}]*#0db758[^}]*#ffe23b[^}]*#ff3e32/s);
+  assert.match(css, /\.player-module__meter-fill > i\s*\{[^}]*#0db758[^}]*#ffe23b[^}]*var\(--meter-peak-color, #ff9b22\) 100%/s);
+  assert.match(css, /#54d636 76\.7%,\s*#ffe23b 76\.7%,\s*#ffe23b 88\.3%,\s*#ff9b22 88\.3%/);
+  assert.match(css, /\.player-module__fader\.is-clipping\s*\{\s*--meter-peak-color:\s*#ff3e32;/);
   assert.match(css, /\.player-module__meter-fill\s*\{[^}]*overflow:\s*hidden;[^}]*transform:\s*translate3d\(0, 100%, 0\);[^}]*transition:\s*transform 90ms linear/s);
   assert.doesNotMatch(css, /transition:\s*clip-path/);
   const fader = readFileSync(new URL('../src/features/player/ModuleFader.ts', import.meta.url), 'utf8');
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /const db = peak > 0 \? Math\.max\(MODULE_FADER_MIN_DB, 20 \* Math\.log10\(peak\)\)/);
+  assert.match(fader, /const clipping = leftDb > 0 \|\| rightDb > 0;/);
+  assert.doesNotMatch(css.match(/\.player-module__meter-fill > i\s*\{[^}]*\}/s)?.[0] ?? '', /#ff3e32|#dc001b/);
   assert.match(fader, /window\.style\.transform = `translate3d\(0, \$\{hidden\}%, 0\)`/);
   assert.match(fader, /gradient\.style\.transform = `translate3d\(0, -\$\{hidden\}%, 0\)`/);
   assert.doesNotMatch(fader, /style\.clipPath|scaleY\(/);
