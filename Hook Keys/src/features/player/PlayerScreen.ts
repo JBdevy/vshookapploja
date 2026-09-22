@@ -5976,7 +5976,7 @@ export class PlayerScreen {
         : moduleNumber === 7 ? 'Organ'
         : moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
-        : 'Timbre';
+        : 'Empty';
     } else if (kind === 'module-polyphony') {
       eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName

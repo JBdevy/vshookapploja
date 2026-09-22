@@ -158,16 +158,16 @@ export function createGlideCardMarkup(
   const velocity = readGlideVelocity(settings);
   const noSens = readNoVelocitySensitivity(settings, owner);
 
-  // Os 4 botões ocupam a esquerda do card inteira (2x2); à direita, "Glide"
-  // em cima do knob e o valor embaixo.
+  // Os 4 botões ocupam a esquerda do card em 2x2; à direita, o nome do modo
+  // fica em cima do knob e o valor embaixo.
   return `<article class="module-glide-card${owner === 'synth' ? ' synth-card' : ''}" data-module-glide-card data-glide-owner="${owner}">
     <div class="module-glide-card__buttons" role="group" aria-label="Opções do Glide">
         <button type="button" class="module-glide-sync" data-glide-sync aria-pressed="${synchronized}">Sync</button>
-        <button type="button" class="module-glide-mode is-${mode}" data-glide-mode="${mode}" aria-label="Modo do Glide: ${mode === 'portamento' ? 'Portamento, a partir da nota anterior' : 'Auto, um tom abaixo'}. Alternar">${mode === 'portamento' ? 'Porta' : 'Auto'}</button>
+        <button type="button" class="module-glide-mode is-${mode}" data-glide-mode="${mode}" aria-label="Modo do Glide: ${mode === 'portamento' ? 'Portamento, a partir da nota anterior' : 'Auto, um tom abaixo'}. Alternar">${mode === 'portamento' ? 'Portamento' : 'Auto'}</button>
         <button type="button" class="module-glide-config${velocity.enabled ? ' is-active' : ''}" data-glide-config aria-label="Configurar velocity do Glide${velocity.enabled ? ', ativo' : ''}">Config</button>
         <button type="button" class="module-glide-no-sens" data-glide-no-sens aria-pressed="${noSens}" aria-label="No Sens: volume ${noSens ? 'igual em qualquer toque' : 'segue o velocity'}">No Sens</button>
     </div>
-    ${glideDialMarkup(settings, bpm, ownerAttribute, 'Glide')}
+    ${glideDialMarkup(settings, bpm, ownerAttribute, mode === 'portamento' ? 'Portamento' : 'Glide')}
   </article>`;
 }
 

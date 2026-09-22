@@ -113,19 +113,19 @@ export function createModuleModulationCardMarkup(
     user: 'User', rotary: 'Rotary', lfo: 'LFO', tremolo: 'Tremolo', pan: 'Pan',
   };
   return `
-    <article class="module-mod-card${owner === 'synth' ? ' module-mod-card--synth' : ''}" data-module-mod-card>
+    <article class="module-mod-card${owner === 'synth' ? ' module-mod-card--synth' : ''}${owner === 'organ' ? ' module-mod-card--organ' : ''}" data-module-mod-card>
       <header>
-        <strong>Mod</strong>
+        <h3>Mod</h3>
       </header>
       <div role="group" aria-label="Modo da roda Mod" data-module-modulation-modes="${owner === 'organ' ? 4 : modes.length}">
         ${modes.map((value, index) => `
           <button type="button" data-module-modulation-mode="${value}"
             class="${mode === value ? 'is-selected' : ''}"
-            aria-pressed="${mode === value}">${owner === 'organ' && value === 'rotary' ? 'M-RT' : labels[value]}</button>
+            aria-pressed="${mode === value}">${owner === 'organ' && value === 'rotary' ? 'Wheel Rotary' : labels[value]}</button>
           ${owner === 'organ' && index === 0 ? `<button type="button" data-module-rotary-toggle
             class="${readModuleRotarySettings(settings.rotary).speed === 'fast' ? 'is-selected' : ''}"
             aria-pressed="${readModuleRotarySettings(settings.rotary).speed === 'fast'}"
-            aria-label="Alternar Rotary entre Slow e Fast">R-TG</button>` : ''}
+            aria-label="Alternar Rotary entre Slow e Fast">Toggle Rotary</button>` : ''}
         `).join('')}
       </div>
       ${owner === 'synth' ? '' : `<label class="module-mod-card__rate">
@@ -338,7 +338,7 @@ export function createModuleSettingsPageMarkup(
       )).join('')}
       ${createSustainControl(settings)}
       ${organ ? createModuleModulationCardMarkup(settings, 'organ') : createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings), settings)}
-      ${organ ? '<article class="module-envelope-control module-envelope-placeholder" aria-hidden="true"></article>' : createVelocityLimitCardMarkup(settings)}
+      ${organ ? '' : createVelocityLimitCardMarkup(settings)}
       ${createModuleGainCardMarkup(settings)}
     </div>
   `;
@@ -833,7 +833,7 @@ export function createCutoffControl(
   const customized = velocityEnabled || envelopeEnabled || filterType !== 'lowpass2';
   return `
     <article class="module-envelope-control module-cutoff-control">
-      ${showConfigButton ? `<button type="button" class="${customized ? 'is-active' : ''}" data-module-setting-action="open-filter-velocity" aria-label="Config do Cutoff${customized ? ', personalizado' : ''}">Config</button>` : ''}
+      ${showConfigButton ? `<button type="button" class="${customized ? 'is-active' : ''}" data-module-setting-action="open-filter-velocity" aria-label="Envelope do Cutoff${customized ? ', personalizado' : ''}">Envelope</button>` : ''}
       <h3>Cutoff</h3>
       ${createParameterKnobMarkup(ratio, `
         <input

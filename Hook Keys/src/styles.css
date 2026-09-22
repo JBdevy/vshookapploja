@@ -1456,6 +1456,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .synth-card--oscillator,
 .synth-card--target { grid-column: span 2; display: grid; grid-template-rows: repeat(3, max-content); align-content: center; gap: 7px; }
 .synth-card--target { grid-template-rows: repeat(2, max-content); }
+.synth-card--target > span { transform: translateY(-12px); }
 .synth-option-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
 .synth-card--target .synth-option-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
@@ -5146,7 +5147,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   border-radius: 6px;
   color: #fff;
   background: linear-gradient(180deg, #168bc4, #075883);
-  font-size: clamp(8px, .8vw, 11px);
+  font-size: clamp(9px, .95vw, 12px);
   font-weight: 950;
 }
 /* Velocity do filtro ligado: o botão do card fica verde. */
@@ -13352,8 +13353,9 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 }
 
 .module-gain-card > strong {
-  color: #fff;
-  font-size: clamp(9px, .92vw, 12px);
+  color: #ffc15f;
+  font-size: clamp(11px, 1.3vw, 16px);
+  font-weight: 900;
 }
 
 .module-gain-card .module-envelope-knob {
@@ -13403,6 +13405,8 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   grid-template-rows: minmax(0, 1fr);
 }
 .module-glide-card__buttons > button {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -13412,6 +13416,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   font-weight: 950;
   line-height: 1.1;
   white-space: nowrap;
+  overflow: hidden;
 }
 .module-glide-card__dial {
   display: grid;
@@ -13419,12 +13424,16 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   align-content: center;
   justify-items: center;
   gap: 2px;
-  min-width: 0;
+  /* Reserva desde o início o espaço do maior título (Portamento). Assim o
+     knob e as quatro células dos botões não mudam de posição ao trocar modo. */
+  width: 12ch;
+  min-width: 12ch;
 }
 .module-glide-card__dial > strong {
   color: #fff;
   font-size: clamp(10px, 1vw, 13px);
   line-height: 1;
+  transform: translateY(-3px);
 }
 .module-glide-card .module-envelope-knob {
   width: clamp(34px, 5.4vh, 48px);
@@ -13458,9 +13467,11 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   display: grid;
   gap: 3px;
 }
-.module-mod-card > header > strong {
+.module-mod-card > header > h3 {
+  margin: 0;
   color: #fff;
   font-size: clamp(10px, 1vw, 13px);
+  font-weight: 900;
 }
 .module-mod-card > header > small {
   color: #baadff;
@@ -13515,6 +13526,41 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 }
 .module-mod-card__rate:has(input:disabled) {
   opacity: .4;
+}
+
+/* No Organ, o Mod ocupa também o antigo espaço vazio. O título segue o
+   padrão dos demais cards, os quatro modos ganham largura e o Rate fica
+   sozinho na parte inferior. */
+.module-envelope-grid > .module-mod-card--organ {
+  grid-column: span 2;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.module-envelope-grid > .module-mod-card--organ > header {
+  justify-items: center;
+}
+
+.module-envelope-grid > .module-mod-card--organ > header > h3 {
+  color: #ffc15f;
+  font-size: clamp(11px, 1.3vw, 16px);
+}
+
+.module-envelope-grid > .module-mod-card--organ > div[data-module-modulation-modes="4"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.module-envelope-grid > .module-mod-card--organ > div[data-module-modulation-modes="4"] button {
+  min-height: 30px;
+  padding-inline: 5px;
+  font-size: clamp(9px, .95vw, 12px);
+  white-space: nowrap;
+}
+
+.module-envelope-grid > .module-mod-card--organ > .module-mod-card__rate {
+  align-self: end;
 }
 
 /* Pan/Tremolo guardam um range auxiliar apenas para alimentar o visor
@@ -13633,6 +13679,10 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 
 .synth-editor__grid > .module-glide-card {
   min-height: 62px;
+  /* No Synth o card ocupa a fileira inteira. Limitar a área dos quatro
+     botões mantém o knob perto deles, sem empurrá-lo para a borda direita. */
+  grid-template-columns: minmax(210px, 90%) max-content;
+  justify-content: start;
 }
 
 .module-velocity-card > span {

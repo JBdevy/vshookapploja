@@ -657,6 +657,8 @@ test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () =>
   assert.match(css, /\.player-modal--module-synth \.module-glide-card \.module-envelope-knob \{\s*width: var\(--synth-knob-size\);/);
   assert.match(css, /\.output-fader-rail \{\s*min-height: 120px;/);
   assert.match(css, /\.player-modal--module-synth \.synth-editor__identity \{\s*display: none;/);
+  assert.match(css, /\.synth-card--target > span \{ transform: translateY\(-12px\); \}/,
+    'o título LFO destino sobe sem deslocar os botões');
 });
 
 test('módulos nascem com Reverb Room e o Organ com Rotary ligado à roda Mod', () => {
@@ -675,7 +677,19 @@ test('Config do Organ remove controles sem função e mantém Envelope, Mod, Arp
   const organ = readFileSync(new URL('../native-engine/src/OrganModule.cpp', import.meta.url), 'utf8');
   assert.match(settings, /const organ = processorReplacement === 'organ';/);
   assert.match(settings, /organ \? createModuleModulationCardMarkup\(settings, 'organ'\) : createCutoffControl/);
-  assert.match(settings, /module-envelope-placeholder/);
+  assert.match(settings, /module-mod-card--organ/);
+  assert.doesNotMatch(settings, /organ \? '<article class="module-envelope-control module-envelope-placeholder/,
+    'o Mod do Organ deve ocupar o antigo espaço vazio');
+  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ \{\s*grid-column: span 2;/,
+    'o card Mod do Organ ocupa duas colunas');
+  assert.match(settings, /\? 'Wheel Rotary' : labels\[value\]/);
+  assert.match(settings, />Toggle Rotary<\/button>/);
+  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ > div\[data-module-modulation-modes="4"\] \{\s*grid-template-columns: repeat\(2,/,
+    'os quatro botões do Mod ficam em duas colunas largas');
+  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ > div\[data-module-modulation-modes="4"\] button \{\s*min-height: 30px;/,
+    'os quatro botões do Mod do Organ usam a altura maior');
+  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ > div\[data-module-modulation-modes="4"\] button \{[^}]*font-size: clamp\(9px, \.95vw, 12px\);/s,
+    'os nomes dos quatro modos do Organ usam fonte maior');
   assert.match(settings, /processorReplacement === 'organ' \? '' : `<div class="module-settings-bottom-row">/,
     'o Organ não deve renderizar os cards inferiores de Velocity e Glide');
   assert.match(player, /const noSens = moduleIndex === 6 \? true/);
@@ -685,6 +699,11 @@ test('Config do Organ remove controles sem função e mantém Envelope, Mod, Arp
     'Envelope do Organ precisa alcançar as nove drawbars');
   assert.match(organ, /void OrganModule::setNoVelocitySensitivity\(bool\)[\s\S]*?setNoVelocitySensitivity\(true\)/,
     'No Sens do Organ permanece ligado internamente');
+});
+
+test('Config dos módulos 1 a 6 mostra Empty quando nenhum timbre está selecionado', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /if \(kind === 'module-settings'\)[\s\S]*?: 'Empty';/);
 });
 
 test('arrasto das cinco bandas do EQ continua registrado ao trocar a aba dentro do Config', () => {
@@ -700,6 +719,15 @@ test('module fader field and library controls use the requested compact corner r
 test('all module parameter cards use four-pixel corners and two-pixel spacing', () => {
   assert.match(css, /:is\(\s*\.synth-card,[\s\S]*?\.arpeggiator-auto-fader\s*\)\s*\{\s*border-radius:\s*4px;/);
   assert.match(css, /:is\(\s*\.synth-editor__grid,[\s\S]*?\.module-eq-editor__readouts\s*\)\s*\{\s*gap:\s*2px;/);
+});
+
+test('título Gain usa a mesma tipografia dos títulos do Envelope', () => {
+  assert.match(css, /\.module-envelope-control h3 \{[^}]*color: #ffc15f;[^}]*font-size: clamp\(11px, 1\.3vw, 16px\);[^}]*font-weight: 900;/s);
+  assert.match(css, /\.module-gain-card > strong \{[^}]*color: #ffc15f;[^}]*font-size: clamp\(11px, 1\.3vw, 16px\);[^}]*font-weight: 900;/s);
+});
+
+test('botão Envelope do Cutoff usa fonte maior sem mudar o tamanho do card', () => {
+  assert.match(css, /\.module-cutoff-control > button \{[^}]*min-height: 24px;[^}]*font-size: clamp\(9px, \.95vw, 12px\);/s);
 });
 
 test('the interface base uses the loading-panel dark gray instead of pure black', () => {
@@ -948,11 +976,21 @@ test('efeitos removem descontinuidade ao alterar Reverb, Compressor e outros par
   assert.match(effects, /transitionOffsetLeft_ = lastOutputLeft_ - left\[frame\];/);
 });
 
-test('card do Glide: 4 botões ocupam a esquerda e o nome fica em cima do knob', () => {
+test('card do Glide: botões compactos no Synth e título acompanha Glide ou Portamento', () => {
   const glide = readFileSync(new URL('../src/features/player/GlideView.ts', import.meta.url), 'utf8');
-  assert.match(glide, /<div class="module-glide-card__buttons"[\s\S]*?No Sens<\/button>\s*<\/div>\s*\$\{glideDialMarkup\(settings, bpm, ownerAttribute, 'Glide'\)\}/);
+  const settings = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
+  assert.match(glide, /<div class="module-glide-card__buttons"[\s\S]*?No Sens<\/button>\s*<\/div>\s*\$\{glideDialMarkup\(settings, bpm, ownerAttribute, mode === 'portamento' \? 'Portamento' : 'Glide'\)\}/);
+  assert.match(glide, /mode === 'portamento' \? 'Portamento' : 'Auto'/);
   assert.match(glide, /function glideDialMarkup[\s\S]*?<div class="module-glide-card__dial">\s*<strong>\$\{label\}<\/strong>/);
   assert.match(css, /\.module-glide-card__buttons \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);\s*grid-template-rows: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(css, /\.module-glide-card__buttons > button \{\s*width: 100%;\s*max-width: 100%;[\s\S]*?overflow: hidden;/,
+    'cada botão mantém a dimensão da célula mesmo quando o texto muda');
+  assert.match(css, /\.module-glide-card__dial \{[^}]*width: 12ch;[^}]*min-width: 12ch;/s,
+    'o dial reserva sempre a largura do título Portamento');
+  assert.match(css, /\.module-glide-card__dial > strong \{[^}]*transform: translateY\(-3px\);/s,
+    'o título Glide ou Portamento fica um pouco acima do knob');
+  assert.match(css, /\.synth-editor__grid > \.module-glide-card \{[^}]*grid-template-columns: minmax\(210px, 90%\) max-content;[^}]*justify-content: start;/s);
+  assert.match(settings, /aria-label="Envelope do Cutoff[^>]*>Envelope<\/button>/);
   assert.doesNotMatch(css, /module-glide-card > header/);
   // Ligar o Sync troca "0 ms" por "120 BPM": o valor tem largura fixa e o knob não anda.
   assert.match(css, /\.module-glide-card output \{[^}]*width: 7\.5ch;[^}]*text-align: center;/);
