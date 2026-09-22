@@ -1,12 +1,213 @@
 #include "hook_keys/ModuleEffects.hpp"
+#include "hook_keys/ConvolutionIrData.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <complex>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 namespace hook_keys {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
+
+struct StereoImpulse final {
+  std::vector<float> left;
+  std::vector<float> right;
+};
+
+using ImpulseBank = std::array<StereoImpulse, 6>;
+
+std::uint16_t readU16(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+  return static_cast<std::uint16_t>(bytes[offset]) |
+      (static_cast<std::uint16_t>(bytes[offset + 1]) << 8u);
+}
+
+std::uint32_t readU32(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+  return static_cast<std::uint32_t>(bytes[offset]) |
+      (static_cast<std::uint32_t>(bytes[offset + 1]) << 8u) |
+      (static_cast<std::uint32_t>(bytes[offset + 2]) << 16u) |
+      (static_cast<std::uint32_t>(bytes[offset + 3]) << 24u);
+}
+
+std::vector<std::uint8_t> decodeBase64(const char* encoded) {
+  static constexpr char alphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::array<std::int16_t, 256> lookup{};
+  lookup.fill(-1);
+  for (std::int16_t index = 0; index < 64; ++index) {
+    lookup[static_cast<std::uint8_t>(alphabet[index])] = index;
+  }
+  std::vector<std::uint8_t> result;
+  std::uint32_t value = 0;
+  int bits = -8;
+  for (const auto* cursor = encoded; *cursor != '\0'; ++cursor) {
+    const auto byte = static_cast<std::uint8_t>(*cursor);
+    if (*cursor == '=') break;
+    const auto decoded = lookup[byte];
+    if (decoded < 0) continue;
+    value = (value << 6u) | static_cast<std::uint32_t>(decoded);
+    bits += 6;
+    if (bits >= 0) {
+      result.push_back(static_cast<std::uint8_t>((value >> bits) & 0xffu));
+      bits -= 8;
+    }
+  }
+  return result;
+}
+
+float pcmSample(const std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint16_t bits) {
+  if (bits == 16) {
+    const auto raw = static_cast<std::int16_t>(readU16(bytes, offset));
+    return static_cast<float>(raw) / 32768.0f;
+  }
+  if (bits == 24) {
+    auto raw = static_cast<std::int32_t>(bytes[offset]) |
+        (static_cast<std::int32_t>(bytes[offset + 1]) << 8) |
+        (static_cast<std::int32_t>(bytes[offset + 2]) << 16);
+    if ((raw & 0x00800000) != 0) raw |= static_cast<std::int32_t>(0xff000000);
+    return static_cast<float>(raw) / 8388608.0f;
+  }
+  if (bits == 32) {
+    return static_cast<float>(static_cast<std::int32_t>(readU32(bytes, offset))) / 2147483648.0f;
+  }
+  return 0.0f;
+}
+
+double peakFrequencyGain(const std::vector<float>& impulse) {
+  if (impulse.empty()) return 0.0;
+  // O pico de uma amostra do IR nao limita o ganho da convolucao: varias
+  // amostras podem se somar na mesma frequencia. Medimos a resposta inteira
+  // com resolucao dobrada para nao deixar uma ressonancia entre bins escapar.
+  std::size_t size = 1;
+  while (size < impulse.size() * 2) size <<= 1;
+  std::vector<std::complex<double>> spectrum(size);
+  for (std::size_t index = 0; index < impulse.size(); ++index) spectrum[index] = impulse[index];
+  for (std::size_t index = 1, reversed = 0; index < size; ++index) {
+    auto bit = size >> 1;
+    while (reversed & bit) { reversed ^= bit; bit >>= 1; }
+    reversed ^= bit;
+    if (index < reversed) std::swap(spectrum[index], spectrum[reversed]);
+  }
+  for (std::size_t length = 2; length <= size; length <<= 1) {
+    const auto angle = -2.0 * kPi / static_cast<double>(length);
+    const std::complex<double> step(std::cos(angle), std::sin(angle));
+    for (std::size_t base = 0; base < size; base += length) {
+      std::complex<double> rotation(1.0, 0.0);
+      for (std::size_t index = 0; index < length / 2; ++index) {
+        const auto even = spectrum[base + index];
+        const auto odd = spectrum[base + index + length / 2] * rotation;
+        spectrum[base + index] = even + odd;
+        spectrum[base + index + length / 2] = even - odd;
+        rotation *= step;
+      }
+    }
+  }
+  double peak = 0.0;
+  for (std::size_t index = 0; index <= size / 2; ++index) {
+    peak = std::max(peak, std::abs(spectrum[index]));
+  }
+  return peak;
+}
+
+StereoImpulse decodeWav(const char* encoded, double targetSampleRate, bool reverb) {
+  const auto bytes = decodeBase64(encoded);
+  if (bytes.size() < 44 || readU32(bytes, 0) != 0x46464952u || readU32(bytes, 8) != 0x45564157u) return {};
+
+  std::uint16_t format = 0;
+  std::uint16_t channels = 0;
+  std::uint16_t bits = 0;
+  std::uint32_t sampleRate = 0;
+  std::size_t dataOffset = 0;
+  std::size_t dataSize = 0;
+  for (std::size_t offset = 12; offset + 8 <= bytes.size();) {
+    const auto id = readU32(bytes, offset);
+    const auto size = static_cast<std::size_t>(readU32(bytes, offset + 4));
+    const auto payload = offset + 8;
+    if (payload + size > bytes.size()) break;
+    if (id == 0x20746d66u && size >= 16) {
+      format = readU16(bytes, payload);
+      channels = readU16(bytes, payload + 2);
+      sampleRate = readU32(bytes, payload + 4);
+      bits = readU16(bytes, payload + 14);
+    } else if (id == 0x61746164u) {
+      dataOffset = payload;
+      dataSize = size;
+    }
+    offset = payload + size + (size & 1u);
+  }
+  if (format != 1 || channels < 1 || channels > 2 || sampleRate == 0 ||
+      (bits != 16 && bits != 24 && bits != 32) || dataSize == 0) return {};
+
+  const auto bytesPerSample = static_cast<std::size_t>(bits / 8);
+  const auto sourceFrames = dataSize / (bytesPerSample * channels);
+  StereoImpulse source;
+  source.left.resize(sourceFrames);
+  source.right.resize(sourceFrames);
+  for (std::size_t frame = 0; frame < sourceFrames; ++frame) {
+    const auto offset = dataOffset + frame * bytesPerSample * channels;
+    source.left[frame] = pcmSample(bytes, offset, bits);
+    source.right[frame] = channels == 2 ? pcmSample(bytes, offset + bytesPerSample, bits) : source.left[frame];
+  }
+
+  StereoImpulse output;
+  if (std::abs(targetSampleRate - static_cast<double>(sampleRate)) < 0.5) {
+    output = std::move(source);
+  } else {
+    const auto outputFrames = static_cast<std::size_t>(std::ceil(
+        static_cast<double>(sourceFrames) * targetSampleRate / static_cast<double>(sampleRate)));
+    output.left.resize(outputFrames);
+    output.right.resize(outputFrames);
+    const auto step = static_cast<double>(sampleRate) / targetSampleRate;
+    for (std::size_t frame = 0; frame < outputFrames; ++frame) {
+      const auto position = std::min(static_cast<double>(sourceFrames - 1), frame * step);
+      const auto first = static_cast<std::size_t>(position);
+      const auto second = std::min(first + 1, sourceFrames - 1);
+      const auto fraction = static_cast<float>(position - static_cast<double>(first));
+      output.left[frame] = source.left[first] + (source.left[second] - source.left[first]) * fraction;
+      output.right[frame] = source.right[first] + (source.right[second] - source.right[first]) * fraction;
+    }
+  }
+
+  // Os IRs de fontes diferentes vieram com niveis muito distintos. No
+  // gabinete, normalizar pelo pico da amostra causava ate +20 dB de ganho
+  // numa faixa do Organ, antes do fader. O ganho maximo da resposta em
+  // frequencia e o limite correto para a convolucao do Rotary.
+  double leftEnergy = 0.0;
+  double rightEnergy = 0.0;
+  for (std::size_t frame = 0; frame < output.left.size(); ++frame) {
+    leftEnergy += static_cast<double>(output.left[frame]) * output.left[frame];
+    rightEnergy += static_cast<double>(output.right[frame]) * output.right[frame];
+  }
+  const auto denominator = reverb
+      ? static_cast<float>(std::sqrt(std::max(leftEnergy, rightEnergy)))
+      : static_cast<float>(std::max(peakFrequencyGain(output.left), peakFrequencyGain(output.right)));
+  const auto target = reverb ? 0.70f : 0.85f;
+  const auto gain = denominator > 0.000001f ? target / denominator : 1.0f;
+  for (auto& sample : output.left) sample *= gain;
+  for (auto& sample : output.right) sample *= gain;
+  return output;
+}
+
+std::shared_ptr<const ImpulseBank> impulseBank(double sampleRate) {
+  static std::mutex mutex;
+  static std::unordered_map<int, std::shared_ptr<const ImpulseBank>> cache;
+  const auto key = static_cast<int>(std::lround(sampleRate));
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto existing = cache.find(key);
+  if (existing != cache.end()) return existing->second;
+  auto bank = std::make_shared<ImpulseBank>();
+  for (std::size_t index = 0; index < bank->size(); ++index) {
+    (*bank)[index] = decodeWav(embedded_ir::kImpulses[index].base64Wav, sampleRate, index < 4);
+  }
+  cache.emplace(key, bank);
+  return bank;
+}
 
 float decibelsToLinear(float decibels) noexcept {
   return std::pow(10.0f, decibels / 20.0f);
@@ -41,23 +242,24 @@ bool sameDelay(const DelayConfig& left, const DelayConfig& right) noexcept {
 }
 
 bool sameReverb(const ReverbConfig& left, const ReverbConfig& right) noexcept {
-  return left.enabled == right.enabled && left.decay == right.decay && left.dampen == right.dampen &&
-         left.size == right.size && left.mix == right.mix && left.mod == right.mod;
+  return left.enabled == right.enabled && left.impulse == right.impulse &&
+         left.mix == right.mix;
 }
 
 bool sameRotary(const RotaryConfig& left, const RotaryConfig& right) noexcept {
   return left.enabled == right.enabled && left.speed == right.speed && left.slowHz == right.slowHz &&
          left.fastHz == right.fastHz && left.rampSeconds == right.rampSeconds &&
          left.depth == right.depth && left.mix == right.mix &&
-         left.modulationEnabled == right.modulationEnabled;
+         left.modulationEnabled == right.modulationEnabled && left.cabinetEnabled == right.cabinetEnabled;
 }
 } // namespace
 
-void ModuleEffects::prepare(double sampleRate) {
+void ModuleEffects::prepare(double sampleRate, bool organModule) {
   sampleRate_ = std::clamp(sampleRate, 8000.0, 384000.0);
   currentInputGain_ = decibelsToLinear(config_.inputGainDb);
   delay_.prepare(sampleRate_);
   reverb_.prepare(sampleRate_);
+  if (organModule) cabinet_.prepare(sampleRate_);
   rotary_.prepare(sampleRate_);
   chorus_.prepare(sampleRate_);
   configureCutoff();
@@ -74,6 +276,7 @@ void ModuleEffects::reset() noexcept {
   compressor_.reset();
   delay_.reset();
   reverb_.reset();
+  cabinet_.reset();
   rotary_.reset();
   configureCutoff();
   gatePhaseSamples_ = 0.0;
@@ -178,6 +381,10 @@ ModuleProcessorLevels ModuleEffects::process(
           levels.compressorOutput, std::max(std::abs(left[frame]), std::abs(right[frame])));
     }
   }
+  // O Organ passa pelo gabinete em ambos os estados. Rotary Off usa a
+  // resposta estática; Rotary On usa a resposta do gabinete antes do giro
+  // dinâmico (Doppler/tremolo/inércia) calculado abaixo.
+  if (config_.rotary.cabinetEnabled) cabinet_.process(left, right, frames, config_.rotary.enabled);
   if (config_.rotary.enabled) rotary_.process(left, right, frames);
   if (config_.chorus.enabled) chorus_.process(config_.chorus, left, right, frames);
   processTranceGate(left, right, frames);
@@ -726,167 +933,100 @@ float ModuleEffects::StereoDelay::targetDelaySamples() const noexcept {
   return std::clamp(samples, 1.0f, maximum);
 }
 
-void ModuleEffects::ReverbDelayLine::prepare(std::size_t maximumLength) {
-  buffer.assign(std::max<std::size_t>(maximumLength, 2), 0.0f);
-  length = buffer.size();
-  index = 0;
-  filtered = 0.0f;
-}
-
-void ModuleEffects::ReverbDelayLine::setLength(std::size_t nextLength) noexcept {
-  length = std::clamp<std::size_t>(nextLength, 1, buffer.size());
-  if (index >= length) index = 0;
-}
-
-void ModuleEffects::ReverbDelayLine::reset() noexcept {
-  std::fill(buffer.begin(), buffer.end(), 0.0f);
-  index = 0;
-  filtered = 0.0f;
-}
-
-float ModuleEffects::ReverbDelayLine::processComb(
-    float input, float feedback, float dampen, float modOffset) noexcept {
-  float output;
-  if (modOffset == 0.0f) {
-    output = buffer[index];
-  } else {
-    const auto size = static_cast<float>(length);
-    auto readPosition = static_cast<float>(index) + modOffset;
-    readPosition = std::fmod(readPosition, size);
-    if (readPosition < 0.0f) readPosition += size;
-    const auto baseIndex = static_cast<std::size_t>(readPosition);
-    const auto fraction = readPosition - static_cast<float>(baseIndex);
-    const auto nextIndex = baseIndex + 1 >= length ? 0 : baseIndex + 1;
-    output = buffer[baseIndex] * (1.0f - fraction) + buffer[nextIndex] * fraction;
-  }
-  filtered = output * (1.0f - dampen) + filtered * dampen;
-  buffer[index] = input + filtered * feedback;
-  index = (index + 1) % length;
-  return output;
-}
-
-float ModuleEffects::ReverbDelayLine::processAllPass(float input) noexcept {
-  const auto delayed = buffer[index];
-  const auto output = delayed - input;
-  buffer[index] = input + delayed * 0.5f;
-  index = (index + 1) % length;
-  return output;
-}
-
 void ModuleEffects::Reverb::prepare(double nextSampleRate) {
   sampleRate = nextSampleRate;
-  constexpr std::array<double, 4> combSeconds{{0.0297, 0.0371, 0.0411, 0.0437}};
-  constexpr std::array<double, 2> allPassSeconds{{0.0050, 0.0017}};
-  for (std::size_t index = 0; index < combLeft.size(); ++index) {
-    combLeft[index].prepare(static_cast<std::size_t>(std::ceil(combSeconds[index] * 1.30 * sampleRate)) + 2);
-    combRight[index].prepare(
-        static_cast<std::size_t>(std::ceil((combSeconds[index] + 0.0007) * 1.30 * sampleRate)) + 2);
+  const auto bank = impulseBank(sampleRate);
+  for (std::size_t impulse = 0; impulse < convolvers.size(); ++impulse) {
+    const auto& source = (*bank)[impulse];
+    if (source.left.empty() || source.right.empty()) return;
+    auto pair = std::make_unique<ConvolutionPair>();
+    constexpr std::size_t headBlockSize = 128;
+    constexpr std::size_t tailBlockSize = 4096;
+    const auto leftReady = pair->left.init(
+        headBlockSize, tailBlockSize, source.left.data(), source.left.size());
+    const auto rightReady = pair->right.init(
+        headBlockSize, tailBlockSize, source.right.data(), source.right.size());
+    pair->ready = leftReady && rightReady;
+    convolvers[impulse] = std::move(pair);
   }
-  for (std::size_t index = 0; index < allPassLeft.size(); ++index) {
-    allPassLeft[index].prepare(
-        static_cast<std::size_t>(std::ceil(allPassSeconds[index] * 1.30 * sampleRate)) + 2);
-    allPassRight[index].prepare(
-        static_cast<std::size_t>(std::ceil((allPassSeconds[index] + 0.0003) * 1.30 * sampleRate)) + 2);
-  }
-  // Centro de 7 ms e excursão máxima de 5 ms, com folga para interpolação.
-  // A memória nasce aqui, nunca dentro da thread de áudio.
-  const auto modCapacity = static_cast<std::size_t>(std::ceil(sampleRate * 0.014)) + 4;
-  for (auto& buffer : modBuffers) buffer.assign(modCapacity, 0.0f);
-  updateLengths();
 }
 
 void ModuleEffects::Reverb::configure(ReverbConfig next) noexcept {
   next.normalize();
-  const auto sizeChanged = next.size != config.size;
   config = next;
-  if (sizeChanged) updateLengths();
 }
 
 void ModuleEffects::Reverb::reset() noexcept {
-  for (auto& line : combLeft) line.reset();
-  for (auto& line : combRight) line.reset();
-  for (auto& line : allPassLeft) line.reset();
-  for (auto& line : allPassRight) line.reset();
-  for (auto& buffer : modBuffers) std::fill(buffer.begin(), buffer.end(), 0.0f);
-  modWriteIndex = 0;
-  modPhase = 0.0;
+  for (auto& pair : convolvers) {
+    if (!pair || !pair->ready) continue;
+    pair->left.clearHistory();
+    pair->right.clearHistory();
+  }
 }
 
 void ModuleEffects::Reverb::process(float* left, float* right, std::size_t frames) noexcept {
   if (!config.enabled) return;
-  const auto feedback = 0.65f + config.decay * 0.32f;
+  const auto impulse = std::min<std::uint8_t>(config.impulse, 3);
+  auto* pair = convolvers[impulse].get();
+  if (pair == nullptr || !pair->ready) return;
   // Mix como send: até 50% o som original fica inteiro e só entra reverb; de
   // 50% para cima o original é que vai embora, até sobrar só o processado.
   const auto dryGain = config.mix <= 0.5f ? 1.0f : 1.0f - (config.mix - 0.5f) * 2.0f;
   const auto wetGain = config.mix <= 0.5f ? config.mix * 2.0f : 1.0f;
-  // Inspirado na arquitetura de reverbs modulados: um chorus lento entra
-  // antes da rede, somente no caminho wet. O knob controla Depth; Rate fica
-  // musicalmente lento e fixo para manter a interface com um único controle.
-  constexpr double kTwoPi = 6.28318530717958647692;
-  constexpr double kModRateHz = 0.50;
-  const auto modPhaseStep = kTwoPi * kModRateHz / sampleRate;
-  const auto modDepthSamples = config.mod * static_cast<float>(sampleRate * 0.005);
-  const auto modCenterSamples = static_cast<float>(sampleRate * 0.007);
-  const auto modCapacity = modBuffers[0].size();
-  for (std::size_t frame = 0; frame < frames; ++frame) {
-    const auto dryLeft = left[frame];
-    const auto dryRight = right[frame];
-    float inputLeft;
-    float inputRight;
-    if (modDepthSamples > 0.0f && modCapacity > 1) {
-      modBuffers[0][modWriteIndex] = dryLeft;
-      modBuffers[1][modWriteIndex] = dryRight;
-      float modulated[2]{};
-      for (std::size_t channel = 0; channel < 2; ++channel) {
-        const auto phase = modPhase + (channel == 0 ? 0.0 : kTwoPi * 0.25);
-        const auto delaySamples = modCenterSamples
-            + modDepthSamples * static_cast<float>(std::sin(phase));
-        auto readPosition = static_cast<float>(modWriteIndex) - delaySamples;
-        while (readPosition < 0.0f) readPosition += static_cast<float>(modCapacity);
-        const auto first = static_cast<std::size_t>(readPosition) % modCapacity;
-        const auto second = (first + 1) % modCapacity;
-        const auto fraction = readPosition - std::floor(readPosition);
-        const auto delayed = modBuffers[channel][first]
-            + (modBuffers[channel][second] - modBuffers[channel][first]) * fraction;
-        const auto dry = channel == 0 ? dryLeft : dryRight;
-        // 50% de chorus: perceptível na cauda sem apagar o ataque original.
-        modulated[channel] = dry + (delayed - dry) * 0.5f;
-      }
-      inputLeft = modulated[0] * 0.12f;
-      inputRight = modulated[1] * 0.12f;
-      modWriteIndex = (modWriteIndex + 1) % modCapacity;
-    } else {
-      // Caminho antigo bit a bit quando Mod está zerado.
-      inputLeft = inputRight = (dryLeft + dryRight) * 0.12f;
+  for (std::size_t offset = 0; offset < frames;) {
+    const auto count = std::min<std::size_t>(wetLeft.size(), frames - offset);
+    pair->left.process(left + offset, wetLeft.data(), count);
+    pair->right.process(right + offset, wetRight.data(), count);
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      left[offset + frame] = left[offset + frame] * dryGain + wetLeft[frame] * wetGain;
+      right[offset + frame] = right[offset + frame] * dryGain + wetRight[frame] * wetGain;
     }
-    float wetLeft = 0.0f;
-    float wetRight = 0.0f;
-    for (auto& line : combLeft) wetLeft += line.processComb(inputLeft, feedback, config.dampen);
-    for (auto& line : combRight) wetRight += line.processComb(inputRight, feedback, config.dampen);
-    wetLeft *= 0.25f;
-    wetRight *= 0.25f;
-    for (auto& line : allPassLeft) wetLeft = line.processAllPass(wetLeft);
-    for (auto& line : allPassRight) wetRight = line.processAllPass(wetRight);
-    left[frame] = dryLeft * dryGain + wetLeft * wetGain;
-    right[frame] = dryRight * dryGain + wetRight * wetGain;
-    modPhase += modPhaseStep;
-    if (modPhase >= kTwoPi) modPhase -= kTwoPi;
+    offset += count;
   }
 }
 
-void ModuleEffects::Reverb::updateLengths() noexcept {
-  constexpr std::array<double, 4> combSeconds{{0.0297, 0.0371, 0.0411, 0.0437}};
-  constexpr std::array<double, 2> allPassSeconds{{0.0050, 0.0017}};
-  const auto scale = 0.75 + static_cast<double>(config.size) * 0.50;
-  for (std::size_t index = 0; index < combLeft.size(); ++index) {
-    combLeft[index].setLength(static_cast<std::size_t>(std::lround(combSeconds[index] * scale * sampleRate)));
-    combRight[index].setLength(
-        static_cast<std::size_t>(std::lround((combSeconds[index] + 0.0007) * scale * sampleRate)));
+void ModuleEffects::Cabinet::prepare(double nextSampleRate) {
+  sampleRate = nextSampleRate;
+  const auto bank = impulseBank(sampleRate);
+  for (std::size_t index = 0; index < convolvers.size(); ++index) {
+    const auto& source = (*bank)[index + 4];
+    if (source.left.empty() || source.right.empty()) continue;
+    constexpr std::size_t headBlockSize = 64;
+    constexpr std::size_t tailBlockSize = 2048;
+    const auto leftReady = convolvers[index].left.init(
+        headBlockSize, tailBlockSize, source.left.data(), source.left.size());
+    const auto rightReady = convolvers[index].right.init(
+        headBlockSize, tailBlockSize, source.right.data(), source.right.size());
+    convolvers[index].ready = leftReady && rightReady;
   }
-  for (std::size_t index = 0; index < allPassLeft.size(); ++index) {
-    allPassLeft[index].setLength(static_cast<std::size_t>(std::lround(allPassSeconds[index] * scale * sampleRate)));
-    allPassRight[index].setLength(
-        static_cast<std::size_t>(std::lround((allPassSeconds[index] + 0.0003) * scale * sampleRate)));
+}
+
+void ModuleEffects::Cabinet::reset() noexcept {
+  for (auto& pair : convolvers) {
+    if (!pair.ready) continue;
+    pair.left.clearHistory();
+    pair.right.clearHistory();
+  }
+}
+
+void ModuleEffects::Cabinet::process(
+    float* left, float* right, std::size_t frames, bool rotaryOn) noexcept {
+  const auto selected = rotaryOn ? std::size_t{1} : std::size_t{0};
+  if (!convolvers[selected].ready) return;
+  for (std::size_t offset = 0; offset < frames;) {
+    const auto count = std::min<std::size_t>(wetLeft[0].size(), frames - offset);
+    // Os dois IRs acompanham a mesma entrada continuamente. Assim ligar ou
+    // desligar o Rotary troca a resposta sem ressuscitar uma cauda antiga.
+    for (std::size_t index = 0; index < convolvers.size(); ++index) {
+      if (!convolvers[index].ready) continue;
+      convolvers[index].left.process(left + offset, wetLeft[index].data(), count);
+      convolvers[index].right.process(right + offset, wetRight[index].data(), count);
+    }
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      left[offset + frame] = wetLeft[selected][frame];
+      right[offset + frame] = wetRight[selected][frame];
+    }
+    offset += count;
   }
 }
 

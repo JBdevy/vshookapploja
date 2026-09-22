@@ -2,6 +2,7 @@
 #include "hook_keys/AnalogSynthModule.hpp"
 #include "hook_keys/ModuleEffects.hpp"
 #include "hook_keys/NativeEngineRuntime.hpp"
+#include "hook_keys/OrganModule.hpp"
 #include "hook_keys/RealtimeCommandQueue.hpp"
 #include "hook_keys/TinySoundFontModule.hpp"
 
@@ -135,8 +136,8 @@ void testModuleDualMonoOutputRouting() {
   config.outputDualMono = true;
   expect(engine.setModuleConfig(0, config), "enable dual mono for the same module route");
   engine.renderInterleaved(output.data(), 2, 4);
-  expect(std::abs(output[2] - 0.5f) < 0.0001f && std::abs(output[3] - 0.5f) < 0.0001f,
-      "dual mono sends the L+R mix to both outputs 3 and 4");
+  expect(std::abs(output[2] - 1.0f) < 0.0001f && std::abs(output[3] - 1.0f) < 0.0001f,
+      "dual mono sends the uncompensated L+R sum to both outputs 3 and 4");
 
   config.outputDualMono = false;
   config.outputChannelStart = 3;
@@ -839,6 +840,49 @@ void testNativeRuntimeOrganDrawbars() {
   const auto energy = std::accumulate(left.begin(), left.end(), 0.0,
                                       [](double sum, float sample) { return sum + std::abs(sample); });
   expect(energy > 0.001, "a pulled Organ drawbar produces audio through module 7");
+
+  hook_keys::ModuleEffectsConfig::TranceGateConfig pulse;
+  pulse.enabled = true;
+  pulse.steps = 0;
+  pulse.length = 1;
+  pulse.beatMultiplier = 0.0625f;
+  pulse.depth = 1.0f;
+  pulse.attackMs = 0.1f;
+  pulse.releaseMs = 0.1f;
+  expect(runtime.setTranceGate(6, pulse), "Pulse config reaches the Organ engine");
+  expect(runtime.sendMidi(0, 0x90, 64, 127), "Organ Pulse receives a fresh note");
+  std::array<float, 4096> gatedLeft{}, gatedRight{};
+  runtime.render(gatedLeft.data(), gatedRight.data(), gatedLeft.size());
+  const auto gatedTail = std::accumulate(gatedLeft.end() - 1024, gatedLeft.end(), 0.0,
+      [](double sum, float sample) { return sum + std::abs(sample); });
+  expect(gatedTail < energy * 0.001, "Pulse closes the audible Organ signal");
+}
+
+void testOrganEnvelopeAndPermanentNoSens() {
+  const auto render = [](float attackMs, std::uint8_t velocity) {
+    hook_keys::OrganModule organ(48000.0, 256);
+    expect(organ.loadVoice(0, "assets/hook-b3/drawbar-0.sf2"), "Organ envelope test loads a drawbar");
+    organ.setDrawbarPosition(0, 8);
+    organ.setNoVelocitySensitivity(false); // The Organ must ignore attempts to disable No Sens.
+    organ.setVolumeEnvelope(attackMs, 15000.0f, 0.0f, 30.0f, 0.0f);
+    organ.beginBlock();
+    organ.noteOn(60, velocity);
+    std::vector<float> left(4096), right(4096);
+    for (std::size_t offset = 0; offset < left.size(); offset += 256) {
+      organ.beginBlock();
+      organ.renderAdd(left.data() + offset, right.data() + offset,
+          std::min<std::size_t>(256, left.size() - offset), 1.0f);
+    }
+    return std::accumulate(left.begin(), left.end(), 0.0,
+        [](double sum, float sample) { return sum + std::abs(sample); });
+  };
+  const auto immediateSoft = render(0.0f, 20);
+  const auto immediateHard = render(0.0f, 127);
+  const auto slowAttack = render(2000.0f, 127);
+  expect(immediateSoft > immediateHard * 0.85 && immediateSoft < immediateHard * 1.15,
+      "Organ keeps No Sens active internally at every key velocity");
+  expect(slowAttack < immediateHard * 0.2,
+      "Organ forwards its Attack envelope to every drawbar voice");
 }
 
 void testCompatibilityBlocksCc7() {
@@ -1644,32 +1688,118 @@ void testReverbProcessing() {
   expect(tailEnergy > 0.01, "reverb creates an audible tail");
 }
 
-void testReverbMod() {
-  const auto renderTail = [](float mod) {
+void testReverbImpulseSelection() {
+  const auto renderTail = [](std::uint8_t impulse) {
     hook_keys::ModuleEffects effects;
     effects.prepare(48000.0);
     hook_keys::ModuleEffectsConfig config;
     config.reverb.enabled = true;
-    config.reverb.decay = 0.7f;
-    config.reverb.dampen = 0.4f;
-    config.reverb.size = 0.5f;
     config.reverb.mix = 1.0f;
-    config.reverb.mod = mod;
+    config.reverb.impulse = impulse;
     effects.setConfig(config, 120.0f);
     std::vector<float> left(8192, 0.0f), right(8192, 0.0f);
     left[0] = right[0] = 1.0f;
     effects.process(left.data(), right.data(), left.size());
     return left;
   };
-  const auto still = renderTail(0.0f);
-  const auto modulated = renderTail(1.0f);
+  const auto room1 = renderTail(0);
+  const auto hall1 = renderTail(2);
   bool differs = false;
-  for (std::size_t index = 0; index < still.size(); ++index) {
-    if (std::abs(still[index] - modulated[index]) > 1e-6f) { differs = true; break; }
+  for (std::size_t index = 0; index < room1.size(); ++index) {
+    if (std::abs(room1[index] - hall1[index]) > 1e-6f) { differs = true; break; }
   }
-  expect(differs, "Mod audibly changes the reverb tail compared to Mod off");
-  const auto stillAgain = renderTail(0.0f);
-  expect(still == stillAgain, "Mod off keeps the exact old reverb tail (no regression)");
+  expect(differs, "Room 1 and Hall 1 use different convolution impulses");
+  expect(room1 == renderTail(0), "the same IR produces a deterministic convolution tail");
+}
+
+void testOrganCabinetImpulseSelection() {
+  const auto render = [](bool rotaryOn) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0, true);
+    hook_keys::ModuleEffectsConfig config;
+    config.rotary.cabinetEnabled = true;
+    config.rotary.enabled = rotaryOn;
+    config.rotary.speed = 0;
+    config.rotary.depth = 0.0f;
+    effects.setConfig(config, 120.0f);
+    std::vector<float> left(2048, 0.0f), right(2048, 0.0f);
+    left[0] = right[0] = 1.0f;
+    effects.process(left.data(), right.data(), left.size());
+    return left;
+  };
+  const auto rotaryOff = render(false);
+  const auto rotaryOn = render(true);
+  expect(rotaryOff != rotaryOn, "Organ selects the Rotary Off and Rotary On cabinet IRs");
+  expect(std::any_of(rotaryOff.begin(), rotaryOff.end(), [](float value) { return std::abs(value) > 0.0001f; }),
+      "Rotary Off cabinet produces audio");
+}
+
+void testOrganCabinetDoesNotBoostResonances() {
+  for (const auto rotaryOn : {false, true}) {
+    for (const auto frequency : {440.0, 925.0, 1000.0, 1255.0}) {
+      hook_keys::ModuleEffects effects;
+      effects.prepare(48000.0, true);
+      hook_keys::ModuleEffectsConfig config;
+      config.rotary.cabinetEnabled = true;
+      config.rotary.enabled = rotaryOn;
+      config.rotary.speed = 0;
+      config.rotary.depth = 0.0f;
+      config.rotary.mix = 0.0f;
+      effects.setConfig(config, 120.0f);
+      std::vector<float> left(48000), right(48000);
+      for (std::size_t index = 0; index < left.size(); ++index) {
+        left[index] = right[index] = 0.5f * std::sin(
+            2.0 * 3.14159265358979323846 * frequency * static_cast<double>(index) / 48000.0);
+      }
+      for (std::size_t offset = 0; offset < left.size(); offset += 256) {
+        effects.process(left.data() + offset, right.data() + offset,
+            std::min<std::size_t>(256, left.size() - offset));
+      }
+      float peak = 0.0f;
+      for (std::size_t index = 40000; index < left.size(); ++index) {
+        peak = std::max(peak, std::max(std::abs(left[index]), std::abs(right[index])));
+      }
+      expect(peak < 0.51f, "Organ cabinet IR does not boost steady notes above the input level");
+    }
+  }
+}
+
+void testOrganFullRegistrationThroughCabinet() {
+  hook_keys::OrganModule organ(48000.0, 256);
+  for (std::size_t index = 0; index < hook_keys::OrganModule::kDrawbarCount; ++index) {
+    expect(organ.loadVoice(index, ("assets/hook-b3/drawbar-" + std::to_string(index) + ".sf2").c_str()),
+        "full-registration test loads each Organ drawbar");
+    organ.setDrawbarPosition(index, 8);
+  }
+  organ.setNoVelocitySensitivity(true);
+  for (const auto note : {48, 52, 55, 60, 64, 67}) organ.noteOn(note, 127);
+  std::vector<float> rawLeft(48000), rawRight(48000);
+  for (std::size_t offset = 0; offset < rawLeft.size(); offset += 256) {
+    organ.beginBlock();
+    organ.renderAdd(rawLeft.data() + offset, rawRight.data() + offset,
+        std::min<std::size_t>(256, rawLeft.size() - offset), 1.0f);
+  }
+  for (const auto rotaryOn : {false, true}) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0, true);
+    hook_keys::ModuleEffectsConfig config;
+    config.rotary.cabinetEnabled = true;
+    config.rotary.enabled = rotaryOn;
+    config.rotary.speed = 2;
+    config.rotary.depth = 0.7f;
+    config.rotary.mix = 1.0f;
+    effects.setConfig(config, 120.0f);
+    auto left = rawLeft;
+    auto right = rawRight;
+    for (std::size_t offset = 0; offset < left.size(); offset += 256) {
+      effects.process(left.data() + offset, right.data() + offset,
+          std::min<std::size_t>(256, left.size() - offset));
+    }
+    const auto peak = std::max(
+        std::abs(*std::max_element(left.begin(), left.end(), [](float a, float b) { return std::abs(a) < std::abs(b); })),
+        std::abs(*std::max_element(right.begin(), right.end(), [](float a, float b) { return std::abs(a) < std::abs(b); })));
+    expect(peak < 0.90f, "all nine Organ drawbars and a six-note chord keep headroom through the cabinet");
+  }
 }
 
 void testIndependentOscillatorVolumes() {
@@ -1756,7 +1886,7 @@ void testEffectParametersDoNotClickOnChange() {
   expect(std::abs(left.front() - previous) < 0.0001f,
       "compressor change starts continuously, without a click");
   previous = left.back();
-  config.reverb = {true, 0.8f, 0.5f, 0.9f, 0.8f, 0.2f};
+  config.reverb = {true, 0, 0.8f, 0.5f, 0.9f, 0.8f, 0.2f};
   effects.setConfig(config, 120.0f);
   render();
   expect(std::abs(left.front() - previous) < 0.0001f,
@@ -3082,6 +3212,7 @@ int main() {
   testNativeRuntimeSignalPath();
   testModulesMeterUsesEveryOutput();
   testNativeRuntimeOrganDrawbars();
+  testOrganEnvelopeAndPermanentNoSens();
   testIndependentPresetTails();
   testCompatibilityBlocksCc7();
   testSharedSoundFontEnvelopeIsolation();
@@ -3103,7 +3234,10 @@ int main() {
   testCompressorProcessing();
   testDelayProcessing();
   testReverbProcessing();
-  testReverbMod();
+  testReverbImpulseSelection();
+  testOrganCabinetImpulseSelection();
+  testOrganCabinetDoesNotBoostResonances();
+  testOrganFullRegistrationThroughCabinet();
   testRotarySpeakerProcessing();
   testRotaryLeslieAmplitudeModulation();
   testEqualizerControlsTreble();

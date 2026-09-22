@@ -1,9 +1,11 @@
 #pragma once
 
 #include "hook_keys/DspTypes.hpp"
+#include "../../third_party/FFTConvolver/TwoStageFFTConvolver.h"
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace hook_keys {
@@ -18,7 +20,7 @@ public:
   ModuleEffects() = default;
 
   // Call before starting audio. All delay, reverb and rotary memory is allocated here.
-  void prepare(double sampleRate);
+  void prepare(double sampleRate, bool organModule = false);
   void reset() noexcept;
 
   // Audio thread only. These operations are bounded and never allocate.
@@ -93,40 +95,42 @@ private:
     [[nodiscard]] float targetDelaySamples() const noexcept;
   };
 
-  struct ReverbDelayLine final {
-    std::vector<float> buffer;
-    std::size_t index = 0;
-    std::size_t length = 1;
-    float filtered = 0.0f;
-
-    void prepare(std::size_t maximumLength);
-    void setLength(std::size_t nextLength) noexcept;
-    void reset() noexcept;
-    // modOffset: quanto a leitura balança pra frente/trás do ponto natural,
-    // em amostras (pode ser fracionário — interpolado linearmente).
-    float processComb(float input, float feedback, float dampen, float modOffset = 0.0f) noexcept;
-    float processAllPass(float input) noexcept;
-  };
-
   struct Reverb final {
+    struct ConvolutionPair final {
+      fftconvolver::TwoStageFFTConvolver left;
+      fftconvolver::TwoStageFFTConvolver right;
+      bool ready = false;
+    };
+
     ReverbConfig config{};
     double sampleRate = 48000.0;
-    std::array<ReverbDelayLine, 4> combLeft{};
-    std::array<ReverbDelayLine, 4> combRight{};
-    std::array<ReverbDelayLine, 2> allPassLeft{};
-    std::array<ReverbDelayLine, 2> allPassRight{};
-    // O Mod usa um chorus curto somente na entrada molhada, antes da rede de
-    // reverb. Assim o som seco fica firme e a movimentação se espalha pela
-    // cauda, como nos reverbs modulados dedicados.
-    std::array<std::vector<float>, 2> modBuffers{};
-    std::size_t modWriteIndex = 0;
-    double modPhase = 0.0;
+    // Todos os perfis são preparados antes da thread de áudio: alternar IR
+    // durante uma apresentação não faz alocação nem processamento pesado.
+    std::array<std::unique_ptr<ConvolutionPair>, 4> convolvers{};
+    std::array<float, 256> wetLeft{};
+    std::array<float, 256> wetRight{};
 
     void prepare(double nextSampleRate);
     void configure(ReverbConfig next) noexcept;
     void reset() noexcept;
     void process(float* left, float* right, std::size_t frames) noexcept;
-    void updateLengths() noexcept;
+  };
+
+  struct Cabinet final {
+    struct ConvolutionPair final {
+      fftconvolver::TwoStageFFTConvolver left;
+      fftconvolver::TwoStageFFTConvolver right;
+      bool ready = false;
+    };
+
+    double sampleRate = 48000.0;
+    std::array<ConvolutionPair, 2> convolvers{}; // Rotary Off, Rotary On
+    std::array<std::array<float, 256>, 2> wetLeft{};
+    std::array<std::array<float, 256>, 2> wetRight{};
+
+    void prepare(double nextSampleRate);
+    void reset() noexcept;
+    void process(float* left, float* right, std::size_t frames, bool rotaryOn) noexcept;
   };
 
   // Caixa Leslie de dois rotores (corneta e tambor), captada por dois microfones.
@@ -207,6 +211,7 @@ private:
   Compressor compressor_{};
   StereoDelay delay_{};
   Reverb reverb_{};
+  Cabinet cabinet_{};
   RotarySpeaker rotary_{};
   Chorus chorus_{};
   // Auto Fader: fase da onda que abaixa e devolve o volume no tempo do BPM.

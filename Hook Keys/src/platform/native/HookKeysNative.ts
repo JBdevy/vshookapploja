@@ -90,6 +90,8 @@ export interface NativeModuleEffectsConfig {
   reverbMod: number;
   reverbSize: number;
   reverbMix: number;
+  // 0 Room 1, 1 Room 2, 2 Hall 1, 3 Hall 2.
+  reverbImpulse: number;
   rotaryEnabled: boolean;
   rotarySpeed: number;
   rotarySlowHz: number;

@@ -181,15 +181,18 @@ struct DelayConfig final {
 
 struct ReverbConfig final {
   bool enabled = false;
+  // 0 Room 1, 1 Room 2, 2 Hall 1, 3 Hall 2. Todos são IRs reais.
+  std::uint8_t impulse = 0;
+  // Campos legados continuam no formato dos presets antigos, mas o DSP de
+  // convolução usa somente impulse e mix: o IR determina cauda e tonalidade.
   float decay = 0.50f;
   float dampen = 0.45f;
   float size = 0.50f;
   float mix = 0.20f;
-  // Profundidade do chorus lento aplicado apenas ao sinal molhado antes da
-  // rede do reverb. 0 desliga e preserva exatamente o comportamento antigo.
   float mod = 0.0f;
 
   void normalize() noexcept {
+    impulse = std::min<std::uint8_t>(impulse, 3);
     decay = std::clamp(decay, 0.0f, 1.0f);
     dampen = std::clamp(dampen, 0.0f, 1.0f);
     size = std::clamp(size, 0.0f, 1.0f);
@@ -207,6 +210,9 @@ struct RotaryConfig final {
   float depth = 0.7f;
   float mix = 1.0f;
   bool modulationEnabled = false;
+  // O módulo 7 (Organ) mantém a resposta real do gabinete mesmo com a
+  // rotação desligada; o bridge nativo liga esta opção somente nele.
+  bool cabinetEnabled = false;
 
   void normalize() noexcept {
     speed = std::min<std::uint8_t>(speed, 2);

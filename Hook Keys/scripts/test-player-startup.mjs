@@ -760,7 +760,12 @@ try {
     player.openModal('module-settings', module, master);
     useUserSettings();
     const glideCard = window.document.querySelector('[data-module-glide-card]');
-    assert.equal(Boolean(glideCard), module <= 7);
+    assert.equal(Boolean(glideCard), module <= 6);
+    if (module === 7) {
+      await player.syncNativeEngine();
+      assert.equal(calls.filter(({command,args}) => command === 'configure_module_envelope' && args.config.moduleIndex === 6).at(-1).args.config.glideMs, 0);
+      continue;
+    }
     if (module > 7) continue;
     assert(!window.document.querySelector('[data-glide-power]'), 'o Glide dos módulos não tem ON/OFF');
     let knob = window.document.querySelector('[data-glide-time]');
@@ -806,14 +811,20 @@ try {
       }
       assert.equal(modeButton().querySelector('strong').textContent, 'Poly');
       const glideModeButton = () => window.document.querySelector('[data-glide-mode]');
-      assert.equal(glideModeButton()?.textContent, 'Auto', `módulo ${module} começa em Auto`);
+      assert.equal(glideModeButton()?.textContent, module === 7 ? undefined : 'Auto',
+        `módulo ${module} ${module === 7 ? 'não exibe Glide' : 'começa em Auto'}`);
       modeButton().click();
       await player.syncNativeEngine();
       assert.equal(modeButton().querySelector('strong').textContent, 'Mono');
       assert.equal(lastConfig(module - 1).mono, true, `Mono do módulo ${module} chega ao motor como uma flag`);
       assert.equal(lastConfig(module - 1).polyphony, 128, `Mono não força mais a polifonia a 1 no módulo ${module}`);
-      assert.equal(player.getActivePresetState().modules[module - 1].settings.glideMode, 'portamento',
-        `Mono liga o Portamento sozinho no módulo ${module}`);
+      assert.equal(player.getActivePresetState().modules[module - 1].settings.glideMode,
+        module === 7 ? 'auto' : 'portamento',
+        `Mono ${module === 7 ? 'não ativa Glide no Organ' : 'liga o Portamento sozinho'} no módulo ${module}`);
+      if (module === 7) {
+        player.closeModal();
+        continue;
+      }
       // Mono → Porta tem que aparecer na hora no card de Glide, sem fechar
       // e reabrir o Config.
       assert.equal(glideModeButton()?.textContent, 'Porta', `módulo ${module}: Auto virou Porta na hora`);
@@ -998,10 +1009,10 @@ try {
   assert.equal(synthDecay.value, '4');
   player.endKnobDrag({ ...mouseDecay, type: 'pointerup', clientX: 520, timeStamp: 14040 });
   player.openModal('module-reverb', 1, master);
-  const decay = window.document.querySelector('[data-module-effect-control="decay"]');
-  fineDrag(decay, 2.5, 3);
-  assert.equal(decay.value, '2.6', 'effect knobs use their declared decimal step');
-  player.showKnobFocus(decay);
+  const reverbMix = window.document.querySelector('[data-module-effect-control="mix"]');
+  fineDrag(reverbMix, 25, 3);
+  assert.equal(reverbMix.value, '26', 'Convolution Mix uses its declared step');
+  player.showKnobFocus(reverbMix);
   const focusFader = root.querySelector('[data-knob-focus-fader]');
   focusFader.parentElement.getBoundingClientRect = () => ({ top: 0, bottom: 100, height: 100 });
   focusFader.setPointerCapture = () => {};
@@ -1009,11 +1020,11 @@ try {
   focusFader.dispatchEvent(new window.PointerEvent('pointerdown', {
     bubbles: true, cancelable: true, pointerId: 77, pointerType: 'touch', clientY: 100,
   }));
-  assert.equal(decay.value, '2.6', 'encostar no fader não faz o valor saltar');
+  assert.equal(reverbMix.value, '26', 'encostar no fader não faz o valor saltar');
   focusFader.dispatchEvent(new window.PointerEvent('pointermove', {
     bubbles: true, cancelable: true, pointerId: 77, pointerType: 'touch', clientY: 0,
   }));
-  assert.equal(decay.value, '20', 'the enlarged vertical fader reaches and updates the knob maximum');
+  assert.equal(reverbMix.value, '100', 'the enlarged vertical fader reaches and updates the knob maximum');
   focusFader.dispatchEvent(new window.PointerEvent('pointerup', {
     bubbles: true, cancelable: true, pointerId: 77, pointerType: 'touch', clientY: 0,
   }));

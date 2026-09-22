@@ -541,6 +541,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             reverbMod: call.getFloat("reverbMod", 0),
             reverbSize: call.getFloat("reverbSize", 0.6),
             reverbMix: call.getFloat("reverbMix", 0),
+            reverbImpulse: call.getInt("reverbImpulse", 0),
             rotaryEnabled: call.getBool("rotaryEnabled", false),
             rotarySpeed: call.getInt("rotarySpeed", 1),
             rotarySlowHz: call.getFloat("rotarySlowHz", 0.8),

@@ -49,8 +49,8 @@ struct ModuleConfig final {
   std::int8_t octaveShift = 0;
   std::uint8_t outputChannelStart = 0;
   std::uint8_t outputChannelCount = 2;
-  // Quando ativo, a soma mono de L+R vai para cada canal da rota. Em uma rota
-  // 1+2, por exemplo, os canais 1 e 2 recebem exatamente o mesmo sinal.
+  // Quando ativo, a soma mono integral L+R, sem compensação de ganho, vai para
+  // cada canal da rota. Em 1+2, os canais 1 e 2 recebem o mesmo sinal somado.
   bool outputDualMono = false;
   std::array<std::uint8_t, 5> velocityCurve{0, 32, 64, 96, 127};
   // Limite Velocity: a key struck harder than this plays no note at all.

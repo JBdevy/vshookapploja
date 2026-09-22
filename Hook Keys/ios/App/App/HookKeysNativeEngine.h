@@ -98,6 +98,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                       reverbMod:(float)reverbMod
                      reverbSize:(float)reverbSize
                       reverbMix:(float)reverbMix
+                  reverbImpulse:(NSInteger)reverbImpulse
                   rotaryEnabled:(BOOL)rotaryEnabled
                     rotarySpeed:(NSInteger)rotarySpeed
                    rotarySlowHz:(float)rotarySlowHz

@@ -16,6 +16,10 @@ OrganModule::OrganModule(double sampleRate, std::size_t maximumBlockFrames)
     // drawbars, não o ADSR de cada SF2 — o registro soa igual do começo ao
     // fim da nota, como um Hammond de verdade.
     voice->setVolumeEnvelope(0.0f, 15000.0f, 0.0f, 30.0f, 0.0f);
+    voice->setNoVelocitySensitivity(true);
+    CutoffConfig cutoff;
+    cutoff.enabled = false;
+    voice->setCutoffConfig(cutoff);
   }
   for (auto& gain : drawbarGain_) gain.store(0.0f, std::memory_order_relaxed);
   for (auto& loaded : voiceLoaded_) loaded.store(false, std::memory_order_relaxed);
@@ -44,14 +48,16 @@ void OrganModule::beginBlock() noexcept {
 }
 
 void OrganModule::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept {
-  startKeyClick(velocity);
-  for (auto& voice : voices_) voice->noteOn(note, velocity);
+  static_cast<void>(velocity);
+  startKeyClick(127);
+  for (auto& voice : voices_) voice->noteOn(note, 127);
 }
 
 void OrganModule::noteOnWithFilterVelocity(
-    std::uint8_t note, std::uint8_t velocity, std::uint8_t filterVelocity) noexcept {
-  startKeyClick(velocity);
-  for (auto& voice : voices_) voice->noteOnWithFilterVelocity(note, velocity, filterVelocity);
+    std::uint8_t note, std::uint8_t velocity, std::uint8_t) noexcept {
+  static_cast<void>(velocity);
+  startKeyClick(127);
+  for (auto& voice : voices_) voice->noteOnWithFilterVelocity(note, 127, 127);
 }
 
 void OrganModule::startKeyClick(std::uint8_t velocity) noexcept {
@@ -71,20 +77,29 @@ void OrganModule::startKeyClick(std::uint8_t velocity) noexcept {
   slot->level = 0.009f * loudestDrawbar * (static_cast<float>(velocity) / 127.0f);
 }
 
-void OrganModule::setCutoffConfig(CutoffConfig config) noexcept {
-  for (auto& voice : voices_) voice->setCutoffConfig(config);
+void OrganModule::setCutoffConfig(CutoffConfig) noexcept {
+  CutoffConfig bypass;
+  bypass.enabled = false;
+  for (auto& voice : voices_) voice->setCutoffConfig(bypass);
 }
 
-void OrganModule::setNoVelocitySensitivity(bool enabled) noexcept {
-  for (auto& voice : voices_) voice->setNoVelocitySensitivity(enabled);
+void OrganModule::setNoVelocitySensitivity(bool) noexcept {
+  for (auto& voice : voices_) voice->setNoVelocitySensitivity(true);
+}
+
+void OrganModule::setVolumeEnvelope(
+    float attackMs, float holdMs, float decayMs, float releaseMs, float sustainDb) noexcept {
+  for (auto& voice : voices_) {
+    voice->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs, sustainDb);
+  }
 }
 
 void OrganModule::setVoiceMode(bool mono, bool legato) noexcept {
   for (auto& voice : voices_) voice->setVoiceMode(mono, legato);
 }
 
-void OrganModule::setGlideBehavior(GlideBehavior behavior) noexcept {
-  for (auto& voice : voices_) voice->setGlideBehavior(behavior);
+void OrganModule::setGlideBehavior(GlideBehavior) noexcept {
+  for (auto& voice : voices_) voice->setGlideBehavior({});
 }
 
 void OrganModule::noteOff(std::uint8_t note) noexcept {

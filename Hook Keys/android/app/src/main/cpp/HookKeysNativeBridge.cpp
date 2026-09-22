@@ -347,7 +347,7 @@ public:
       float reverbDampen,
       float reverbMod,
       float reverbSize,
-      float reverbMix, bool rotaryEnabled, int rotarySpeed,
+      float reverbMix, int reverbImpulse, bool rotaryEnabled, int rotarySpeed,
       float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
       float rotaryDepth, float rotaryMix, bool rotaryModulationEnabled,
       bool chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
@@ -385,10 +385,13 @@ public:
     effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                           compressorReleaseMs, compressorGainDb, compressorMix};
     effects.delay = {delayMix > 0.0001f, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-    effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
+    effects.reverb = {reverbMix > 0.0001f,
+                      static_cast<std::uint8_t>(std::clamp(reverbImpulse, 0, 3)),
+                      reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
     effects.rotary = {rotaryEnabled, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                       rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                       rotaryModulationEnabled};
+    effects.rotary.cabinetEnabled = moduleIndex == 6;
     effects.chorus = {chorusEnabled, chorusRateHz, chorusDepth, chorusMix};
     effects.autoFader = {autoFaderEnabled, autoFaderBeats, autoFaderDepthDb};
     effects.inputGainDb = inputGainDb;
@@ -922,7 +925,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jfloat reverbDampen,
     jfloat reverbMod,
     jfloat reverbSize,
-    jfloat reverbMix, jboolean rotaryEnabled, jint rotarySpeed,
+    jfloat reverbMix, jint reverbImpulse, jboolean rotaryEnabled, jint rotarySpeed,
     jfloat rotarySlowHz, jfloat rotaryFastHz, jfloat rotaryRampSeconds,
     jfloat rotaryDepth, jfloat rotaryMix, jboolean rotaryModulationEnabled,
     jboolean chorusEnabled, jfloat chorusRateHz, jfloat chorusDepth, jfloat chorusMix,
@@ -950,7 +953,8 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
              cutStages, compressorThresholdDb, compressorRatio, compressorAttackMs,
              compressorReleaseMs, compressorGainDb, compressorMix, delaySync == JNI_TRUE,
              delayMs, delayBeatMultiplier, delayFeedback, delayMix, reverbDecay, reverbDampen,
-             reverbMod, reverbSize, reverbMix, rotaryEnabled == JNI_TRUE, rotarySpeed,
+             reverbMod, reverbSize, reverbMix, reverbImpulse,
+             rotaryEnabled == JNI_TRUE, rotarySpeed,
              rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
              rotaryModulationEnabled == JNI_TRUE,
              chorusEnabled == JNI_TRUE, chorusRateHz, chorusDepth, chorusMix,

@@ -683,6 +683,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
                    reverbDampen:(float)reverbDampen reverbMod:(float)reverbMod
                      reverbSize:(float)reverbSize
                       reverbMix:(float)reverbMix
+                  reverbImpulse:(NSInteger)reverbImpulse
                   rotaryEnabled:(BOOL)rotaryEnabled
                     rotarySpeed:(NSInteger)rotarySpeed
                    rotarySlowHz:(float)rotarySlowHz
@@ -733,10 +734,13 @@ static NSString *describeFormat(AVAudioFormat *format) {
   effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                         compressorReleaseMs, compressorGainDb, compressorMix};
   effects.delay = {delayMix > 0.0001f, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-  effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
+  effects.reverb = {reverbMix > 0.0001f,
+                    static_cast<std::uint8_t>(std::clamp<NSInteger>(reverbImpulse, 0, 3)),
+                    reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
   effects.rotary = {rotaryEnabled != NO, static_cast<std::uint8_t>(std::clamp<NSInteger>(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != NO};
+  effects.rotary.cabinetEnabled = moduleIndex == 6;
   effects.chorus = {chorusEnabled != NO, chorusRateHz, chorusDepth, chorusMix};
   effects.autoFader = {autoFaderEnabled != NO, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;

@@ -50,7 +50,7 @@ HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
   scratchLeft_.resize(settings_.maximumBlockFrames);
   scratchRight_.resize(settings_.maximumBlockFrames);
   for (auto& processor : effects_) {
-    processor.prepare(settings_.sampleRate);
+    processor.prepare(settings_.sampleRate, &processor == &effects_[6]);
     processor.setTempo(settings_.tempoBpm);
   }
   for (auto& moduleNotes : activeNotes_) {
@@ -198,7 +198,12 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
           destination[first] += sampleLeft;
           destination[first + 1] += sampleRight;
         } else {
-          const auto mono = (sampleLeft + sampleRight) * 0.5f;
+          // O botão MONO é uma soma intencional, sem compensação de -6 dB:
+          // L+R entrega o ganho adicional esperado pelo usuário. Uma rota de
+          // apenas um canal, ainda em modo Stereo, preserva a média anterior.
+          const auto mono = config.outputDualMono
+              ? sampleLeft + sampleRight
+              : (sampleLeft + sampleRight) * 0.5f;
           destination[first] += mono;
           if (stereo) destination[first + 1] += mono;
         }
@@ -367,6 +372,15 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
           compressorMeterRequests_[index].store(false, std::memory_order_release);
         }
         configs_[index] = command.moduleConfig;
+        // O Organ tem dinâmica fixa de Hammond e não possui Velocity, Glide
+        // ou Cutoff próprios. Presets antigos não podem reativar esses
+        // controles invisíveis ao reenviar uma configuração salva.
+        if (index == 6) {
+          configs_[index].noVelocitySensitivity = true;
+          configs_[index].velocityIgnoreAbove = 127;
+          configs_[index].velocityCeiling = 127;
+          configs_[index].effects.cutoff.enabled = false;
+        }
         while (moduleHeldNoteCount(index) > configs_[index].polyphony) {
           if (!stealOldestNote(index)) break;
         }

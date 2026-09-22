@@ -30,8 +30,8 @@ export interface ModuleReverbSettings {
   enabled: boolean;
   decay: number;
   dampen: number;
-  // Balança a leitura das linhas de atraso numa taxa fixa: dá o "shimmer" de
-  // reverbs de sala/prato de verdade. 0 desliga.
+  // Valores legados preservados para importar presets anteriores. O motor de
+  // convolução usa apenas o IR selecionado e o Mix.
   mod: number;
   size: number;
   mix: number;
@@ -154,11 +154,10 @@ export function createModuleEffectCardsMarkup(
 
       <article class="module-effect-card module-effect-card--reverb${reverb.enabled ? ' is-enabled' : ' is-disabled'}">
         <button type="button" data-module-setting-action="open-reverb">Reverb</button>
+        <span class="module-effect-card__badge">Convolution</span>
         <div class="module-reverb-preview" aria-label="Prévia do reverb">
-          ${createPreviewKnob('Decay', compressorRatio(reverb.decay, 0.1, 20))}
-          ${createPreviewKnob('Dampen', reverb.dampen / 100)}
-          ${createPreviewKnob('Size', reverb.size / 100)}
-          ${createPreviewKnob('Mix', reverb.mix / 100)}
+          <span class="module-reverb-preview__impulse"><strong>${reverbSpaceLabel(readReverbSpace(settings.reverbSpace))}</strong><small>IR</small></span>
+          ${createPreviewKnob('Mix', readReverbSpaceMix(settings) / 100)}
         </div>
       </article>
 
@@ -223,50 +222,60 @@ export function createModuleCompressorMarkup(settings: Readonly<Record<string, u
   `;
 }
 
-// Os três ambientes têm ajustes próprios. Estes valores são usados somente
-// na primeira seleção, antes de o músico personalizar cada ambiente.
+// O ambiente agora vem integralmente do arquivo de resposta ao impulso.
 export const REVERB_SPACES = {
-  room: { decay: 1.2, dampen: 62, size: 18 },
-  hall: { decay: 4.5, dampen: 34, size: 78 },
-  stage: { decay: 2.2, dampen: 48, size: 46 },
+  room1: { label: 'Room 1', impulse: 0 },
+  room2: { label: 'Room 2', impulse: 1 },
+  hall1: { label: 'Hall 1', impulse: 2 },
+  hall2: { label: 'Hall 2', impulse: 3 },
 } as const;
 
 export type ReverbSpace = keyof typeof REVERB_SPACES;
 
 export function isReverbSpace(value: string | undefined): value is ReverbSpace {
-  return value === 'room' || value === 'hall' || value === 'stage';
+  return value === 'room1' || value === 'room2' || value === 'hall1' || value === 'hall2';
 }
 
-export function currentReverbSpace(value: ModuleReverbSettings): ReverbSpace | null {
-  for (const [name, space] of Object.entries(REVERB_SPACES) as [ReverbSpace, typeof REVERB_SPACES.room][]) {
-    if (Math.abs(value.decay - space.decay) < 0.05
-      && Math.round(value.dampen) === space.dampen
-      && Math.round(value.size) === space.size) return name;
-  }
-  return null;
+export function readReverbSpace(value: unknown): ReverbSpace {
+  if (isReverbSpace(value as string | undefined)) return value as ReverbSpace;
+  // Migração dos presets salvos antes da troca para convolução.
+  if (value === 'hall') return 'hall1';
+  if (value === 'stage') return 'room2';
+  return 'room1';
+}
+
+export function currentReverbSpace(_value: ModuleReverbSettings): ReverbSpace {
+  return 'room1';
+}
+
+export function reverbSpaceLabel(value: ReverbSpace): string {
+  return REVERB_SPACES[value].label;
+}
+
+export function readReverbSpaceMix(settings: Readonly<Record<string, unknown>>, space = readReverbSpace(settings.reverbSpace)): number {
+  const spaces = record(settings.reverbSpaces);
+  const saved = Number(record(spaces[space]).mix);
+  return Number.isFinite(saved) ? Math.max(0, Math.min(100, saved))
+    : readModuleReverbSettings(settings.reverb).mix;
 }
 
 export function createModuleReverbMarkup(settings: Readonly<Record<string, unknown>>): string {
-  const value = readModuleReverbSettings(settings.reverb);
-  const space = isReverbSpace(settings.reverbSpace as string | undefined)
-    ? settings.reverbSpace as ReverbSpace : currentReverbSpace(value);
+  const space = readReverbSpace(settings.reverbSpace);
+  const mix = readReverbSpaceMix(settings, space);
   const controls: EffectControlDefinition[] = [
-    control('decay', 'Decay', 0.1, 20, 0.1, value.decay, `${formatNumber(value.decay)} s`),
-    control('dampen', 'Dampen', 0, 100, 1, value.dampen, `${Math.round(value.dampen)}%`),
-    control('mod', 'Mod', 0, 100, 1, value.mod, `${Math.round(value.mod)}%`),
-    control('size', 'Size', 0, 100, 1, value.size, `${Math.round(value.size)}%`),
-    control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
+    control('mix', 'Mix', 0, 100, 1, mix, `${Math.round(mix)}%`),
   ];
   return `
     <div class="module-reverb-page">
       <div class="module-reverb-spaces" role="group" aria-label="Ambiente do reverb">
-        ${(['room', 'hall', 'stage'] as const).map((item) => `
+        ${(Object.keys(REVERB_SPACES) as ReverbSpace[]).map((item) => `
           <button type="button" data-module-reverb-space="${item}"
             class="${item === space ? 'is-selected' : ''}"
-            aria-pressed="${item === space}">${item === 'room' ? 'Room' : item === 'hall' ? 'Hall' : 'Stage'}</button>
+            aria-pressed="${item === space}">${REVERB_SPACES[item].label}</button>
         `).join('')}
       </div>
       <section class="module-effect-editor module-reverb-editor" data-module-effect-editor="reverb">
+        <span class="module-reverb-convolution-badge">Convolution</span>
         <div class="module-effect-controls module-effect-controls--reverb">
           ${controls.map((item) => createEffectKnob('reverb', item)).join('')}
         </div>
@@ -533,10 +542,6 @@ function formatSignedDb(value: number): string {
 
 function formatNumber(value: number): string {
   return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
-}
-
-function compressorRatio(value: number, min: number, max: number): number {
-  return (value - min) / (max - min);
 }
 
 export function delayMillisecondsForBpm(bpm: number, division: string): number {

@@ -11,6 +11,10 @@ add_library(hook_keys_engine STATIC
   src/OrganModule.cpp
   src/TinySoundFontImplementation.cpp
   src/TinySoundFontModule.cpp
+  third_party/FFTConvolver/AudioFFT.cpp
+  third_party/FFTConvolver/FFTConvolver.cpp
+  third_party/FFTConvolver/TwoStageFFTConvolver.cpp
+  third_party/FFTConvolver/Utilities.cpp
 )
 
 target_include_directories(hook_keys_engine
@@ -18,6 +22,7 @@ target_include_directories(hook_keys_engine
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/TinySoundFont
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/FFTConvolver
 )
 
 target_compile_features(hook_keys_engine PUBLIC cxx_std_17)

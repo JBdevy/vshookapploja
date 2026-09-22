@@ -259,11 +259,13 @@ test('all eight modules inherit the same darker Synth gray theme', () => {
   assert.doesNotMatch(css, /\.player-module:nth-child\(\d\)\s*\{\s*--module-accent:/);
 });
 
-test('module fader handle uses the vertical dark-metal model without indicator dots', () => {
+test('module fader uses the vertical gold-metal model with orange side lights and no dots', () => {
   const themed = handleRules.find(([, , declarations]) => declarations.includes('--module-fader-handle-half'))[2];
   assert.match(themed, /height:\s*var\(--module-fader-handle-height\)/);
   assert.match(themed, /border-radius:\s*2px;/);
-  assert.match(themed, /#ff9b2f/);
+  assert.match(themed, /#ffd874/);
+  assert.match(themed, /#ffad3b/);
+  assert.match(css, /\.player-screen \.player-module__fader-rail\s*\{[^}]*#d8a33b[^}]*#f8cc68/s);
   assert.match(css, /\.player-screen \.player-module__fader-handle::before\s*\{[^}]*border-radius:\s*999px;/s);
   assert.doesNotMatch(css, /\.player-screen \.player-module__fader-handle::after\s*\{/);
 });
@@ -666,6 +668,30 @@ test('módulos nascem com Reverb Room e o Organ com Rotary ligado à roda Mod', 
   assert.match(player, /enabled: moduleIndex === 6,\s*modulationEnabled: moduleIndex === 6,/);
 });
 
+test('Config do Organ remove controles sem função e mantém Envelope, Mod, Arpeggiator e Pulse reais', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const settings = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
+  const runtime = readFileSync(new URL('../native-engine/src/NativeEngineRuntime.cpp', import.meta.url), 'utf8');
+  const organ = readFileSync(new URL('../native-engine/src/OrganModule.cpp', import.meta.url), 'utf8');
+  assert.match(settings, /const organ = processorReplacement === 'organ';/);
+  assert.match(settings, /organ \? createModuleModulationCardMarkup\(settings, 'organ'\) : createCutoffControl/);
+  assert.match(settings, /module-envelope-placeholder/);
+  assert.match(settings, /processorReplacement === 'organ' \? '' : `<div class="module-settings-bottom-row">/,
+    'o Organ não deve renderizar os cards inferiores de Velocity e Glide');
+  assert.match(player, /const noSens = moduleIndex === 6 \? true/);
+  assert.match(player, /hasSound: moduleNumber >= 7 \|\| Boolean\(arpeggiator\?\.timbreId\)/,
+    'Arpeggiator reconhece Organ e Synth mesmo sem timbreId de biblioteca');
+  assert.match(runtime, /if \(moduleIndex == 6\) \{\s*organModule_->setVolumeEnvelope/,
+    'Envelope do Organ precisa alcançar as nove drawbars');
+  assert.match(organ, /void OrganModule::setNoVelocitySensitivity\(bool\)[\s\S]*?setNoVelocitySensitivity\(true\)/,
+    'No Sens do Organ permanece ligado internamente');
+});
+
+test('arrasto das cinco bandas do EQ continua registrado ao trocar a aba dentro do Config', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /if \(\(kind === 'module-settings' \|\| pageKind\(\) === 'module-eq'\) && moduleNumber !== null\) \{\s*modal\.addEventListener\('pointerdown', \(event\) => this\.startEqBandDrag/);
+});
+
 test('module fader field and library controls use the requested compact corner radii', () => {
   assert.match(css, /\.player-screen \.player-module__fader-rail\s*\{\s*border-radius:\s*2px;/);
   assert.match(css, /\.player-screen :is\(\.player-module__settings-button, \.player-module__sound-button\)\s*\{\s*border-radius:\s*4px;/);
@@ -820,19 +846,29 @@ test('Default bloqueia parâmetros, orienta mudar para User e o timbre só fecha
   }
 });
 
-test('Hall personalizado continua selecionado e os ambientes guardam ajustes separados', () => {
+test('Reverb seleciona os quatro IRs reais e expõe apenas o Mix', () => {
   const knob = transpile('../src/features/player/ParameterKnobView.ts');
   const effects = transpile('../src/features/player/ModuleEffectsView.ts', { './ParameterKnobView': knob });
   const markup = effects.createModuleReverbMarkup({
-    reverbSpace: 'hall',
+    reverbSpace: 'hall1',
     reverb: { enabled: true, decay: 7.3, dampen: 41, mod: 17, size: 84, mix: 39 },
   });
-  assert.match(markup, /data-module-reverb-space="hall"\s+class="is-selected"\s+aria-pressed="true"/);
-  assert.match(markup, /7\.3 s/);
+  assert.match(markup, /data-module-reverb-space="hall1"\s+class="is-selected"\s+aria-pressed="true"/);
+  assert.match(markup, /Convolution/);
+  assert.match(markup, /data-module-effect-control="mix"/);
+  assert.doesNotMatch(markup, /data-module-effect-control="(?:decay|dampen|mod|size)"/);
+  const presetMixes = {
+    reverbSpace: 'hall1', reverb: { enabled: true, mix: 39 },
+    reverbSpaces: { room1: { mix: 11 }, room2: { mix: 22 }, hall1: { mix: 33 }, hall2: { mix: 44 } },
+  };
+  for (const [space, expected] of [['room1', 11], ['room2', 22], ['hall1', 33], ['hall2', 44]]) {
+    assert.equal(effects.readReverbSpaceMix(presetMixes, space), expected);
+  }
+  assert.equal(effects.readReverbSpaceMix(presetMixes), 33);
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /profiles\[previous as string\] = \{/);
-  assert.match(player, /moduleState\.settings\.reverbSpaces = profiles/);
-  assert.match(player, /moduleState\.settings\.reverbSpaces = \{[\s\S]*?\[space\]: \{ decay: reverb\.decay/);
+  assert.match(player, /reverbImpulse: REVERB_SPACES\[readReverbSpace\(moduleState\.settings\.reverbSpace\)\]\.impulse/);
+  assert.match(player, /moduleState\.settings\.reverbSpace = name/);
+  assert.match(player, /reverbMix: reverb\.enabled \? readReverbSpaceMix\(moduleState\.settings\) \/ 100 : 0/);
 });
 
 test('cinco volumes mostram medidores e Módulos reúne timbres de qualquer saída', () => {

@@ -106,7 +106,12 @@ test('real Rotary handlers update module 5, retain parameters through ON/OFF and
     return method.getText(ast);
   }).join('\n');
   const guard = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'isModuleEffectKind');
-  const context = { exports: {}, ...effects };
+  const context = { exports: {}, ...effects, ensureReverbMixPresets(settings) {
+    settings.reverbSpaces ??= {
+      room1: { mix: 50 }, room2: { mix: 50 }, hall1: { mix: 50 }, hall2: { mix: 50 },
+    };
+    return settings.reverbSpaces;
+  } };
   vm.runInNewContext(ts.transpileModule(`${guard.getText(ast)}\nexport class Handlers { ${methods} }`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, context);
@@ -146,7 +151,7 @@ test('real Rotary handlers update module 5, retain parameters through ON/OFF and
   assert.deepEqual(modules[3].settings, {});
 });
 
-test('clicking Room, Hall or Stage replaces the reverb page instead of nesting a new one', () => {
+test('clicking one of the four convolution IRs replaces the reverb page without nesting', () => {
   const names = ['selectReverbSpace'];
   const source = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const ast = ts.createSourceFile('PlayerScreen.ts', source, ts.ScriptTarget.Latest, true);
@@ -156,7 +161,12 @@ test('clicking Room, Hall or Stage replaces the reverb page instead of nesting a
     assert(method, `Missing real handler: ${name}`);
     return method.getText(ast);
   }).join('\n');
-  const context = { exports: {}, ...effects };
+  const context = { exports: {}, ...effects, ensureReverbMixPresets(settings) {
+    settings.reverbSpaces ??= {
+      room1: { mix: 50 }, room2: { mix: 50 }, hall1: { mix: 50 }, hall2: { mix: 50 },
+    };
+    return settings.reverbSpaces;
+  } };
   vm.runInNewContext(ts.transpileModule(`export class Handlers { ${methods} }`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, context);
@@ -172,11 +182,11 @@ test('clicking Room, Hall or Stage replaces the reverb page instead of nesting a
     syncNativeEngine: async () => {},
   });
   for (let click = 0; click < 3; click += 1) {
-    screen.selectReverbSpace(modal, 1, 'hall');
+    screen.selectReverbSpace(modal, 1, 'hall1');
     assert.equal(modal.querySelectorAll('.module-reverb-page').length, 1,
       `still a single reverb page after click ${click + 1}`);
-    assert.equal(modal.querySelectorAll('.module-reverb-spaces button').length, 3,
-      `still exactly Room/Hall/Stage after click ${click + 1}, not multiplying`);
+    assert.equal(modal.querySelectorAll('.module-reverb-spaces button').length, 4,
+      `still exactly Room 1/Room 2/Hall 1/Hall 2 after click ${click + 1}, not multiplying`);
   }
   window.close();
 });

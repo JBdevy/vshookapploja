@@ -267,6 +267,11 @@ bool NativeEngineRuntime::setModuleConfig(std::size_t moduleIndex, ModuleConfig 
   config.effects = controlLayer_->configs[moduleIndex].effects;
   config.velocityIgnoreAbove = controlLayer_->configs[moduleIndex].velocityIgnoreAbove;
   config.velocityCeiling = controlLayer_->configs[moduleIndex].velocityCeiling;
+  if (moduleIndex == 6) {
+    config.noVelocitySensitivity = true;
+    config.velocityIgnoreAbove = 127;
+    config.velocityCeiling = 127;
+  }
   config.normalize();
   controlLayer_->configs[moduleIndex] = config;
   return controlLayer_->engine->setModuleConfig(moduleIndex, config);
@@ -294,6 +299,7 @@ bool NativeEngineRuntime::setModuleEffects(
   if (moduleIndex >= kModuleCount) return false;
   std::scoped_lock lock(configMutex_);
   effects.normalize();
+  if (moduleIndex == 6) effects.cutoff.enabled = false;
   effects.tranceGate = controlLayer_->configs[moduleIndex].effects.tranceGate;
   controlLayer_->configs[moduleIndex].effects = effects;
   return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
@@ -304,6 +310,10 @@ bool NativeEngineRuntime::setModuleEnvelope(
     float decayMs, float releaseMs, float glideMs, float sustainDb) noexcept {
   std::scoped_lock lock(configMutex_);
   if (moduleIndex >= controlLayer_->modules.size()) return false;
+  if (moduleIndex == 6) {
+    organModule_->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs, sustainDb);
+    return true;
+  }
   controlLayer_->modules[moduleIndex]->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs, sustainDb);
   controlLayer_->modules[moduleIndex]->setGlide(std::isfinite(glideMs) ? std::clamp(glideMs, 0.0f, 5000.0f) : 0.0f);
   return true;
@@ -337,6 +347,10 @@ bool NativeEngineRuntime::setGlideBehavior(std::size_t moduleIndex, GlideBehavio
     controlLayer_->synth->setGlideBehavior(behavior);
     return true;
   }
+  if (moduleIndex == 6) {
+    organModule_->setGlideBehavior({});
+    return true;
+  }
   if (moduleIndex >= controlLayer_->modules.size()) return false;
   controlLayer_->modules[moduleIndex]->setGlideBehavior(behavior);
   return true;
@@ -352,8 +366,8 @@ bool NativeEngineRuntime::setVelocityLimits(
     controlLayer_->synth->setOscillatorVelocityLimits(oscillator1Limit, oscillator2Limit, oscillator3Limit);
   }
   auto& config = controlLayer_->configs[moduleIndex];
-  config.velocityIgnoreAbove = ignoreAbove;
-  config.velocityCeiling = ceiling;
+  config.velocityIgnoreAbove = moduleIndex == 6 ? 127 : ignoreAbove;
+  config.velocityCeiling = moduleIndex == 6 ? 127 : ceiling;
   config.normalize();
   return controlLayer_->engine->setModuleConfig(moduleIndex, config);
 }

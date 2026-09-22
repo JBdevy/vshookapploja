@@ -129,8 +129,9 @@ import {
   createModuleCompressorMarkup,
   createModuleDelayMarkup,
   createModuleReverbMarkup,
-  currentReverbSpace,
   isReverbSpace,
+  readReverbSpace,
+  readReverbSpaceMix,
   REVERB_SPACES,
   createModuleChorusMarkup,
   createModuleRotaryMarkup,
@@ -4099,11 +4100,12 @@ export class PlayerScreen {
     const mono = moduleState.settings.voiceMode !== 'mono';
     moduleState.settings.voiceMode = mono ? 'mono' : 'poly';
     // Mono e Portamento andam sempre juntos, nos dois sentidos.
-    moduleState.settings.glideMode = mono ? 'portamento' : 'auto';
+    // O Organ nao possui Glide: Mono troca apenas a prioridade das vozes.
+    moduleState.settings.glideMode = moduleNumber === 7 ? 'auto' : mono ? 'portamento' : 'auto';
     this.renderModuleVoiceModeButtonDisplay(button, mono);
     // O card de Glide (Auto/Porta) pode estar na tela ao mesmo tempo: se
     // estiver, precisa refletir a troca na hora.
-    this.renderGlideCard(modal, moduleNumber);
+    if (moduleNumber !== 7) this.renderGlideCard(modal, moduleNumber);
     this.markPlayerStateChanged();
   }
 
@@ -4202,7 +4204,8 @@ export class PlayerScreen {
       bpm: this.metronome.getBpm(),
       arpeggiator: {
         moduleEnabled: arpeggiator?.enabled === true,
-        hasSound: Boolean(arpeggiator?.timbreId),
+        // Organ e Synth sao internos e nao possuem timbreId da biblioteca.
+        hasSound: moduleNumber >= 7 || Boolean(arpeggiator?.timbreId),
         midiInputId: arpeggiator?.midiInputId ?? null,
         lowNote: arpeggiator?.lowNote ?? 0,
         highNote: arpeggiator?.highNote ?? 127,
@@ -5106,7 +5109,7 @@ export class PlayerScreen {
     this.renderModuleOutputModeButton();
     this.markPlayerStateChanged();
     this.setStatus(this.moduleOutputMono
-      ? 'Módulos em Mono dual: L+R em todos os canais escolhidos.'
+      ? 'Módulos em Mono dual: soma L+R sem redução em todos os canais escolhidos.'
       : 'Módulos em Stereo: L e R separados nas rotas de dois canais.');
   }
 
@@ -7217,7 +7220,9 @@ export class PlayerScreen {
         );
       }
     });
-    if (pageKind() === 'module-eq' && moduleNumber !== null) {
+    // Config troca as abas dentro deste mesmo modal. Registre o arrasto desde
+    // a abertura; fora da aba EQ nao existem handles e o handler nao age.
+    if ((kind === 'module-settings' || pageKind() === 'module-eq') && moduleNumber !== null) {
       modal.addEventListener('pointerdown', (event) => this.startEqBandDrag(event, moduleNumber));
       modal.addEventListener('pointermove', (event) => this.moveEqBandDrag(event));
       modal.addEventListener('pointerup', (event) => this.endEqBandDrag(event));
@@ -9016,35 +9021,12 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
-  // Cada ambiente guarda os cinco parâmetros sem sobrescrever os outros.
   private selectReverbSpace(modal: HTMLElement, moduleNumber: number, name: string | undefined): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     if (!moduleState || !isReverbSpace(name)) return;
-    const current = readModuleReverbSettings(moduleState.settings.reverb);
-    const stored = moduleState.settings.reverbSpaces;
-    const profiles: Record<string, unknown> = stored && typeof stored === 'object' && !Array.isArray(stored)
-      ? { ...stored as Record<string, unknown> } : {};
-    for (const [spaceName, preset] of Object.entries(REVERB_SPACES)) {
-      if (!profiles[spaceName]) profiles[spaceName] = { ...current, ...preset };
-    }
-    const previous = isReverbSpace(moduleState.settings.reverbSpace as string | undefined)
-      ? moduleState.settings.reverbSpace : currentReverbSpace(current);
-    if (isReverbSpace(previous as string | undefined)) {
-      profiles[previous as string] = {
-        decay: current.decay, dampen: current.dampen, mod: current.mod, size: current.size, mix: current.mix,
-      };
-    }
-    const saved = profiles[name];
-    const target = saved && typeof saved === 'object' && !Array.isArray(saved)
-      ? saved as Record<string, unknown> : REVERB_SPACES[name];
-    const next = readModuleReverbSettings({ ...current, ...target });
-    moduleState.settings.reverb = next;
+    const mixes = ensureReverbMixPresets(moduleState.settings);
     moduleState.settings.reverbSpace = name;
-    profiles[name] = { decay: next.decay, dampen: next.dampen, mod: next.mod, size: next.size, mix: next.mix };
-    moduleState.settings.reverbSpaces = profiles;
-    // createModuleReverbMarkup devolve a página inteira (as abas Room/Hall/
-    // Stage + o editor); trocar só a section de dentro aninhava outra página
-    // inteira a cada clique, e os três botões nunca paravam de se multiplicar.
+    moduleState.settings.reverb = { ...readModuleReverbSettings(moduleState.settings.reverb), mix: mixes[name].mix };
     const page = modal.querySelector<HTMLElement>('.module-reverb-page');
     if (page) page.outerHTML = createModuleReverbMarkup(moduleState.settings);
     this.markPlayerStateChanged();
@@ -9063,7 +9045,12 @@ export class PlayerScreen {
     this.moduleConfigPage = page;
     this.moduleConfigPages.set(moduleNumber, page);
     workspace.dataset.page = page;
-    workspace.innerHTML = createModuleSettingsPageMarkup(page, moduleState.settings, this.metronome.getBpm());
+    workspace.innerHTML = createModuleSettingsPageMarkup(
+      page,
+      moduleState.settings,
+      this.metronome.getBpm(),
+      moduleNumber === 7 ? 'organ' : moduleNumber === 8 ? 'synth' : 'chorus',
+    );
     for (const button of row.querySelectorAll<HTMLButtonElement>('[data-module-settings-page]')) {
       const selected = button.dataset.moduleSettingsPage === page;
       button.classList.toggle('is-selected', selected);
@@ -9756,8 +9743,11 @@ export class PlayerScreen {
     if (!range) return;
     const value = range[0] + (range[1] - range[0]) * progress;
     const settings = readModuleEffectSettings(effectKind, moduleState.settings[effectKind]);
+    const reverbMixes = effectKind === 'reverb' && effectControl === 'mix'
+      ? ensureReverbMixPresets(moduleState.settings) : null;
     (settings as unknown as Record<string, number | string | boolean>)[effectControl] = value;
     moduleState.settings[effectKind] = settings;
+    if (reverbMixes) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)].mix = value;
     this.markPlayerStateChanged();
   }
 
@@ -9930,21 +9920,10 @@ export class PlayerScreen {
 
     const settings = readModuleEffectSettings(kind, moduleState.settings[kind]);
     if (!(key in settings)) return;
-    if (kind === 'reverb' && !isReverbSpace(moduleState.settings.reverbSpace as string | undefined)) {
-      const matched = currentReverbSpace(readModuleReverbSettings(moduleState.settings.reverb));
-      if (matched) moduleState.settings.reverbSpace = matched;
-    }
+    const reverbMixes = kind === 'reverb' && key === 'mix' ? ensureReverbMixPresets(moduleState.settings) : null;
     (settings as unknown as Record<string, number | string>)[key] = value;
     moduleState.settings[kind] = settings;
-    if (kind === 'reverb' && isReverbSpace(moduleState.settings.reverbSpace as string | undefined)) {
-      const space = moduleState.settings.reverbSpace as string;
-      const stored = moduleState.settings.reverbSpaces;
-      const reverb = readModuleReverbSettings(settings);
-      moduleState.settings.reverbSpaces = {
-        ...(stored && typeof stored === 'object' && !Array.isArray(stored) ? stored as Record<string, unknown> : {}),
-        [space]: { decay: reverb.decay, dampen: reverb.dampen, mod: reverb.mod, size: reverb.size, mix: reverb.mix },
-      };
-    }
+    if (reverbMixes) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)].mix = value;
 
     const minimum = Number(input.min);
     const maximum = Number(input.max);
@@ -11549,7 +11528,7 @@ export class PlayerScreen {
       // seguir o velocity), soando sempre no ganho pleno da wave. É o motor
       // quem aplica isso agora — inclusive nas notas já soando, na hora —
       // então a curva de velocity continua valendo do jeito real.
-      const noSens = synthSettings
+      const noSens = moduleIndex === 6 ? true : synthSettings
         ? synthSettings.noVelocitySensitivity
         : readNoVelocitySensitivity(moduleState?.settings ?? {});
       const velocityCurve = readVelocityCurveSettings(moduleState?.settings.velocityCurve);
@@ -11620,7 +11599,10 @@ export class PlayerScreen {
           ? synthSettings as unknown as Readonly<Record<string, unknown>>
           : moduleState.settings;
         const glideVelocity = readGlideVelocity(glideSource);
-        configurationTasks.push(hookKeysNative.configureVelocityLimits(moduleIndex === 7 && synthSettings
+        configurationTasks.push(hookKeysNative.configureVelocityLimits(moduleIndex === 6
+          ? { moduleIndex, ignoreAbove: 127, ceiling: 127,
+              oscillator1Limit: 127, oscillator2Limit: 127, oscillator3Limit: 127 }
+          : moduleIndex === 7 && synthSettings
           ? { moduleIndex, ignoreAbove: 127, ceiling: 127,
               oscillator1Limit: synthSettings.oscillator1VelocityLimit,
               oscillator2Limit: synthSettings.oscillator2VelocityLimit,
@@ -11630,10 +11612,10 @@ export class PlayerScreen {
               oscillator1Limit: 127, oscillator2Limit: 127, oscillator3Limit: 127 }));
         configurationTasks.push(hookKeysNative.configureGlide({
           moduleIndex,
-          portamento: readGlideMode(glideSource) === 'portamento',
-          velocityGateEnabled: glideVelocity.enabled,
-          velocityGateInverted: glideVelocity.inverted,
-          velocityThreshold: glideVelocity.threshold,
+          portamento: moduleIndex === 6 ? false : readGlideMode(glideSource) === 'portamento',
+          velocityGateEnabled: moduleIndex === 6 ? false : glideVelocity.enabled,
+          velocityGateInverted: moduleIndex === 6 ? false : glideVelocity.inverted,
+          velocityThreshold: moduleIndex === 6 ? 64 : glideVelocity.threshold,
         }));
         if (moduleIndex === 7 && synthSettings) {
           configurationTasks.push(hookKeysNative.configureSynth({
@@ -11676,7 +11658,7 @@ export class PlayerScreen {
             holdMs: optionalBoundedNumber(moduleState.settings.holdMs, 0, 15_000),
             decayMs: optionalBoundedNumber(moduleState.settings.decayMs, 0, 25_000),
             releaseMs: optionalBoundedNumber(moduleState.settings.releaseMs, 0, 25_000),
-            glideMs: effectiveGlideMs(moduleState.settings, this.metronome.getBpm()),
+            glideMs: moduleIndex === 6 ? 0 : effectiveGlideMs(moduleState.settings, this.metronome.getBpm()),
             sustainDb: readModuleSustainDb(moduleState.settings),
           }));
         }
@@ -11713,14 +11695,14 @@ export class PlayerScreen {
         const autoFader = readModuleAutoFaderSettings(moduleState.settings.arpeggiator);
         configurationTasks.push(hookKeysNative.configureModuleEffects({
           moduleIndex,
-          cutoffHz: moduleCutoffHz,
-          cutoffVelocity0: cutoffVelocity[0],
-          cutoffVelocity1: cutoffVelocity[1],
-          cutoffVelocity2: cutoffVelocity[2],
-          cutoffVelocity3: cutoffVelocity[3],
-          cutoffVelocity4: cutoffVelocity[4],
-          cutoffFilterType: CUTOFF_FILTER_TYPES.indexOf(cutoffFilterType),
-          cutoffEnvelopeEnabled: cutoffEnvelope.enabled,
+          cutoffHz: moduleIndex === 6 ? 20_000 : moduleCutoffHz,
+          cutoffVelocity0: moduleIndex === 6 ? 127 : cutoffVelocity[0],
+          cutoffVelocity1: moduleIndex === 6 ? 127 : cutoffVelocity[1],
+          cutoffVelocity2: moduleIndex === 6 ? 127 : cutoffVelocity[2],
+          cutoffVelocity3: moduleIndex === 6 ? 127 : cutoffVelocity[3],
+          cutoffVelocity4: moduleIndex === 6 ? 127 : cutoffVelocity[4],
+          cutoffFilterType: moduleIndex === 6 ? 0 : CUTOFF_FILTER_TYPES.indexOf(cutoffFilterType),
+          cutoffEnvelopeEnabled: moduleIndex === 6 ? false : cutoffEnvelope.enabled,
           cutoffEnvelopeAttackMs: cutoffEnvelope.attackMs,
           cutoffEnvelopeDecayMs: cutoffEnvelope.decayMs,
           cutoffEnvelopeSustain: cutoffEnvelope.sustain / 100,
@@ -11747,7 +11729,8 @@ export class PlayerScreen {
           reverbDampen: reverb.dampen / 100,
           reverbMod: reverb.mod / 100,
           reverbSize: reverb.size / 100,
-          reverbMix: reverb.enabled ? reverb.mix / 100 : 0,
+          reverbMix: reverb.enabled ? readReverbSpaceMix(moduleState.settings) / 100 : 0,
+          reverbImpulse: REVERB_SPACES[readReverbSpace(moduleState.settings.reverbSpace)].impulse,
           rotaryEnabled: moduleIndex === 6 && rotary.enabled,
           rotarySpeed: rotary.speed === 'brake' ? 0 : rotary.speed === 'fast' ? 2 : 1,
           rotarySlowHz: rotary.slowHz,
@@ -12380,6 +12363,21 @@ function releasePointer(element: HTMLElement, pointerId: number): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function ensureReverbMixPresets(settings: Record<string, unknown>): Record<keyof typeof REVERB_SPACES, { mix: number }> {
+  const existing = isRecord(settings.reverbSpaces) ? settings.reverbSpaces : {};
+  const fallback = readModuleReverbSettings(settings.reverb).mix;
+  const legacy: Partial<Record<keyof typeof REVERB_SPACES, string>> = { room1: 'room', room2: 'stage', hall1: 'hall' };
+  const mixes = {} as Record<keyof typeof REVERB_SPACES, { mix: number }>;
+  for (const key of Object.keys(REVERB_SPACES) as Array<keyof typeof REVERB_SPACES>) {
+    const legacyKey = legacy[key];
+    const saved = existing[key] ?? (legacyKey ? existing[legacyKey] : undefined);
+    const value = isRecord(saved) ? Number(saved.mix) : Number.NaN;
+    mixes[key] = { mix: Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback };
+  }
+  settings.reverbSpaces = mixes;
+  return mixes;
 }
 
 function isModuleEnvelopeParameter(value: string | undefined): value is ModuleEnvelopeParameter {

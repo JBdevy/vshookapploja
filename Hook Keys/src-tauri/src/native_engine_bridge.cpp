@@ -177,7 +177,8 @@ int hk_runtime_configure_effects(
     float compressorAttackMs, float compressorReleaseMs, float compressorGainDb,
     float compressorMix, int delaySync, float delayMs, float delayBeatMultiplier,
     float delayFeedback, float delayMix, float reverbDecay, float reverbDampen,
-    float reverbMod, float reverbSize, float reverbMix, int rotaryEnabled, int rotarySpeed,
+    float reverbMod, float reverbSize, float reverbMix, int reverbImpulse,
+    int rotaryEnabled, int rotarySpeed,
     float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
     float rotaryDepth, float rotaryMix, int rotaryModulationEnabled,
     int chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
@@ -214,10 +215,13 @@ int hk_runtime_configure_effects(
   effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                         compressorReleaseMs, compressorGainDb, compressorMix};
   effects.delay = {delayMix > 0.0001f, delaySync != 0, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
-  effects.reverb = {reverbMix > 0.0001f, reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
+  effects.reverb = {reverbMix > 0.0001f,
+                    static_cast<std::uint8_t>(std::clamp(reverbImpulse, 0, 3)),
+                    reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
   effects.rotary = {rotaryEnabled != 0, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != 0};
+  effects.rotary.cabinetEnabled = moduleIndex == 6;
   effects.chorus = {chorusEnabled != 0, chorusRateHz, chorusDepth, chorusMix};
   effects.autoFader = {autoFaderEnabled != 0, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;

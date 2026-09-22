@@ -46,6 +46,8 @@ public:
       std::uint8_t filterVelocity) noexcept override;
   void setCutoffConfig(CutoffConfig config) noexcept override;
   void setNoVelocitySensitivity(bool enabled) noexcept override;
+  void setVolumeEnvelope(
+      float attackMs, float holdMs, float decayMs, float releaseMs, float sustainDb = 0.0f) noexcept;
   void setVoiceMode(bool mono, bool legato) noexcept override;
   void setGlideBehavior(GlideBehavior behavior) noexcept override;
   void noteOff(std::uint8_t note) noexcept override;

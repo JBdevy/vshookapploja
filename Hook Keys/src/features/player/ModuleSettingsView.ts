@@ -314,6 +314,7 @@ export function createModuleSettingsPageMarkup(
   page: ModuleSettingsPage,
   settings: Readonly<Record<string, unknown>>,
   bpm: number,
+  processorReplacement: ModuleProcessorReplacement = 'compressor',
 ): string {
   if (page === 'eq') return createModuleEqMarkup(settings);
   if (page === 'compressor') return createModuleCompressorMarkup(settings);
@@ -323,6 +324,7 @@ export function createModuleSettingsPageMarkup(
   if (page === 'rotary') return createModuleRotaryMarkup(settings);
   if (page === 'arpeggiator') return createArpeggiatorMarkup(settings.arpeggiator);
   if (page === 'trance-gate') return createTranceGateMarkup(settings.tranceGate, bpm);
+  const organ = processorReplacement === 'organ';
   return `
     <div class="module-envelope-grid" aria-label="Envelope do timbre">
       ${ENVELOPE_CONTROLS.map(({ parameter, label }) => createEnvelopeControl(
@@ -335,8 +337,8 @@ export function createModuleSettingsPageMarkup(
         ),
       )).join('')}
       ${createSustainControl(settings)}
-      ${createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings), settings)}
-      ${createVelocityLimitCardMarkup(settings)}
+      ${organ ? createModuleModulationCardMarkup(settings, 'organ') : createCutoffControl(readModuleCutoffFrequency(settings.cutoffHz), readFilterVelocityEnabled(settings), settings)}
+      ${organ ? '<article class="module-envelope-control module-envelope-placeholder" aria-hidden="true"></article>' : createVelocityLimitCardMarkup(settings)}
       ${createModuleGainCardMarkup(settings)}
     </div>
   `;
@@ -424,14 +426,13 @@ export function createModuleSettingsMarkup(
       </div>
 
       <div class="module-settings-workspace" data-module-settings-workspace data-page="${page}">
-        ${createModuleSettingsPageMarkup(page, settings, bpm)}
+        ${createModuleSettingsPageMarkup(page, settings, bpm, processorReplacement)}
       </div>
-      <div class="module-settings-bottom-row">
+      ${processorReplacement === 'organ' ? '' : `<div class="module-settings-bottom-row">
         ${createVelocityCardMarkup(settings)}
         ${processorReplacement === 'synth' ? '' : createGlideCardMarkup(settings, bpm)}
-        ${createModuleModulationCardMarkup(settings,
-          processorReplacement === 'synth' ? 'synth' : processorReplacement === 'organ' ? 'organ' : 'sf2')}
-      </div>
+        ${createModuleModulationCardMarkup(settings, processorReplacement === 'synth' ? 'synth' : 'sf2')}
+      </div>`}
     </section>
   `;
 }

@@ -5125,6 +5125,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   align-content: stretch;
 }
 
+.module-envelope-placeholder {
+  pointer-events: none;
+}
+
 /* O knob acompanha a largura do card: sem isso ele crescia com a altura da
    página e os oito cards do envelope ficavam gigantes. */
 .module-envelope-grid .module-envelope-knob {
@@ -5229,8 +5233,30 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .module-effect-card--reverb {
+  position: relative;
   border-color: rgba(92, 150, 255, 0.74);
   background: linear-gradient(155deg, #182f5a, #080e1c 76%);
+}
+
+.module-effect-card__badge,
+.module-reverb-convolution-badge {
+  color: #9fffc1;
+  border: 1px solid rgba(57, 216, 120, 0.65);
+  border-radius: 6px;
+  background: rgba(5, 31, 16, 0.92);
+  font-size: clamp(7px, 0.8vw, 10px);
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.module-effect-card__badge {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  padding: 3px 6px;
+  pointer-events: none;
 }
 
 .module-effect-card--delay {
@@ -5323,11 +5349,21 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 
 .module-reverb-preview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(44px, 0.55fr);
   place-items: center;
   gap: 4px;
   padding: 9px 5px 6px;
 }
+
+.module-reverb-preview__impulse {
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  color: #dfffea;
+}
+
+.module-reverb-preview__impulse strong { font-size: clamp(11px, 1.25vw, 15px); }
+.module-reverb-preview__impulse small { color: #7fcf9d; font-size: 8px; font-weight: 900; }
 
 .module-effect-preview-knob {
   display: grid;
@@ -5565,9 +5601,16 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .module-effect-controls--reverb {
-  /* Decay, Dampen, Mod, Size e Mix: cinco cartões, então cada um encolhe
-     um pouco pra caber sem sobrar espaço vazio. */
-  grid-template-columns: repeat(5, minmax(76px, 1fr));
+  grid-template-columns: minmax(110px, 240px);
+  justify-content: center;
+}
+
+.module-reverb-editor { position: relative; }
+.module-reverb-convolution-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 5px 9px;
 }
 
 .module-reverb-editor .module-effect-knob { padding: 6px; }
@@ -10487,8 +10530,7 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .module-effect-controls--reverb {
-    /* Um do lado do outro, como no tablet: Decay, Dampen, Mod, Size e Mix. */
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: minmax(90px, 160px);
     grid-template-rows: minmax(0, 1fr);
   }
 
@@ -12924,6 +12966,10 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 }
 
 .organ-drawbar__leds {
+  position: relative;
+  /* Aproxima os LEDs da calha desta drawbar; a coluna automática do grid
+     deixava a régua visualmente deslocada para a direita. */
+  left: clamp(-19px, -1.4vw, -10px);
   display: grid;
   /* Dois quadrados por estágio, 16 no total. Fileiras do tamanho do próprio
      quadrado, não esticadas pela calha inteira. */
@@ -12933,6 +12979,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   justify-items: center;
   width: clamp(15px, 2vw, 22px);
   min-height: 0;
+  pointer-events: none;
 }
 
 .organ-drawbar__leds i {
@@ -13179,6 +13226,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
     font-size: 6px;
   }
   .organ-drawbar__leds {
+    left: -8px;
     width: clamp(6px, 1vw, 9px);
   }
   .organ-drawbar__leds i {
@@ -15894,6 +15942,15 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
 
 .player-screen .player-module__fader-rail {
   border-radius: 2px;
+  border-color: #d8a33b;
+  background: linear-gradient(90deg,
+    #4b2d08 0%, #f8cc68 11%, #a96c18 21%,
+    #111317 29% 71%,
+    #a96c18 79%, #f8cc68 89%, #4b2d08 100%);
+  box-shadow:
+    inset 0 1px rgba(255, 239, 170, .9),
+    inset 0 0 0 1px rgba(68, 37, 3, .72),
+    0 0 8px rgba(255, 164, 36, .28);
 }
 .player-screen .player-module__meter,
 .player-screen .player-module__fader-rail::before {
@@ -15997,21 +16054,21 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
   );
   left: 1px;
   height: var(--module-fader-handle-height);
-  border: 1px solid #555960;
+  border: 1px solid #ffe3a0;
   border-radius: 2px;
   background:
     linear-gradient(90deg,
-      transparent 0 5%,
-      #ff9b2f 6% 9%,
-      transparent 10% 90%,
-      #ff9b2f 91% 94%,
-      transparent 95%),
-    linear-gradient(90deg, #111317, #34373c 18%, #17191d 50%, #34373c 82%, #101216);
+      transparent 0 2px,
+      #ffad3b 2px 3px,
+      transparent 3px calc(100% - 3px),
+      #ffad3b calc(100% - 3px) calc(100% - 2px),
+      transparent calc(100% - 2px)),
+    linear-gradient(90deg, #69400f, #ffd874 15%, #b97819 31%, #fff0ad 45%, #a56310 60%, #f4c55c 82%, #59340b);
   box-shadow:
     0 2px 5px rgba(0, 0, 0, .82),
     0 0 7px rgba(255, 139, 24, .32),
-    inset 0 1px rgba(255, 255, 255, .18),
-    inset 0 -2px 4px rgba(0, 0, 0, .68);
+    inset 0 1px rgba(255, 244, 190, .92),
+    inset 0 -2px 3px rgba(73, 42, 5, .58);
 }
 
 .player-screen .player-module__fader-handle::before {
@@ -16022,7 +16079,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
   left: 28%;
   border: 1px solid #060709;
   border-radius: 999px;
-  background: linear-gradient(90deg, #08090b, #272a2f 50%, #090a0c);
+  background: linear-gradient(90deg, #160d03, #4a2d0a 50%, #120a02);
   box-shadow:
     inset 1px 0 rgba(255, 255, 255, .1),
     inset -1px 0 rgba(0, 0, 0, .8);
