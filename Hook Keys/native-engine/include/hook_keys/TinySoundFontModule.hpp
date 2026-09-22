@@ -48,9 +48,11 @@ public:
   // 0 = User (a roda vai para a modulação do próprio SF2), 1 = LFO de pitch
   // (vibrato), 2 = Tremolo (o volume balança), 3 = Pan (o som anda de um lado
   // ao outro no mesmo rate).
-  void setModulationMode(std::uint8_t mode, float rateHz) noexcept {
+  void setModulationMode(std::uint8_t mode, float rateHz, float intensity = 1.0f) noexcept {
     lfoRateHz_.store(std::clamp(rateHz, 0.1f, 20.0f), std::memory_order_release);
-    modulationMode_.store(mode > 3 ? 0 : mode, std::memory_order_release);
+    modulationIntensity_.store(std::clamp(intensity, 0.0f, 1.0f), std::memory_order_release);
+    // 4 = roda reservada ao Rotary do Organ; não envia CC1 nem cria LFO aqui.
+    modulationMode_.store(mode > 4 ? 0 : mode, std::memory_order_release);
   }
 
   [[nodiscard]] bool hasPendingSoundFont() const noexcept;
@@ -113,6 +115,7 @@ private:
   [[nodiscard]] int newestMonoHeldNote(std::uint8_t excludingNote) const noexcept;
   std::atomic<std::uint8_t> modulationMode_{1};
   std::atomic<float> lfoRateHz_{6.85f};
+  std::atomic<float> modulationIntensity_{1.0f};
   std::uint8_t appliedModulationMode_ = 1;
   std::uint8_t modulationValue_ = 0;
   std::uint16_t pitchBendValue_ = 8192;

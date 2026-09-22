@@ -319,7 +319,8 @@ void TinySoundFontModule::renderAdd(
     const bool panning = appliedModulationMode_ == 3 && wheelOpen;
     const auto blockFrames = std::min((vibrato || tremolo || panning) ? std::min<std::size_t>(16, maximumBlockFrames_) : maximumBlockFrames_, frames - rendered);
     if (vibrato || tremolo || panning) {
-      const float target = static_cast<float>(modulationValue_) / 127.0f;
+      const float target = static_cast<float>(modulationValue_) / 127.0f *
+          modulationIntensity_.load(std::memory_order_relaxed);
       const float smoothing = static_cast<float>(1.0 - std::exp(-static_cast<double>(blockFrames) / (sampleRate_ * 0.015)));
       modulationDepth_ += (target - modulationDepth_) * smoothing;
     }

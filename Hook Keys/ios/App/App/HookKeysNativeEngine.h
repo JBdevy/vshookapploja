@@ -49,6 +49,10 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                  sustain:(BOOL)sustain
               modulation:(BOOL)modulation
        gmDrumHiHatChoke:(BOOL)gmDrumHiHatChoke
+ drumZeroReleaseMask0:(NSInteger)drumZeroReleaseMask0
+ drumZeroReleaseMask1:(NSInteger)drumZeroReleaseMask1
+ drumZeroReleaseMask2:(NSInteger)drumZeroReleaseMask2
+ drumZeroReleaseMask3:(NSInteger)drumZeroReleaseMask3
                 volumeDb:(float)volumeDb
                polyphony:(NSInteger)polyphony
           velocityCurve0:(NSInteger)velocityCurve0
@@ -117,7 +121,10 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                        releaseMs:(float)releaseMs glideMs:(float)glideMs
                        sustainDb:(float)sustainDb;
 // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
-- (BOOL)configureModuleModulation:(NSInteger)moduleIndex mode:(NSInteger)mode rateHz:(float)rateHz;
+- (BOOL)configureModuleModulation:(NSInteger)moduleIndex
+                              mode:(NSInteger)mode
+                            rateHz:(float)rateHz
+                         intensity:(float)intensity;
 - (BOOL)configureVelocityLimits:(NSInteger)moduleIndex
                      ignoreAbove:(NSInteger)ignoreAbove
                          ceiling:(NSInteger)ceiling
@@ -172,7 +179,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                     accentEnabled:(BOOL)accentEnabled
                 doubleTimeEnabled:(BOOL)doubleTimeEnabled
            timeSignatureNumerator:(NSInteger)timeSignatureNumerator;
-- (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled;
+- (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled
+       channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;
 // Músicas no motor. loadTrack devolve a duração em segundos, ou -1.
 - (double)loadTrackId:(NSInteger)sourceId path:(NSString *)path;
 - (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds loop:(BOOL)loop;

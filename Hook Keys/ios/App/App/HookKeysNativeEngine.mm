@@ -505,12 +505,21 @@ static NSString *describeFormat(AVAudioFormat *format) {
 
 - (NSArray<NSNumber *> *)moduleMeterLevels {
   std::unique_lock lock(_controlMutex, std::try_to_lock);
-  NSMutableArray<NSNumber *> *levels = [NSMutableArray arrayWithCapacity:hook_keys::kModuleCount * 2];
+  NSMutableArray<NSNumber *> *levels = [NSMutableArray arrayWithCapacity:hook_keys::kModuleCount * 2 + 6];
   const auto state = lock.owns_lock() ? _audioState : std::shared_ptr<AudioState>{};
   if (lock.owns_lock()) lock.unlock();
   const auto peaks = state && state->runtime
       ? state->runtime->consumeModulePeaks() : hook_keys::HookKeysEngine::ModulePeaks{};
   for (float peak : peaks) [levels addObject:@(peak)];
+  const auto master = state && state->runtime
+      ? state->runtime->consumeMasterPeaks() : std::array<float, 2>{};
+  for (float peak : master) [levels addObject:@(peak)];
+  const auto tracks = state && state->runtime
+      ? state->runtime->consumeTrackPeaks() : std::array<float, 2>{};
+  for (float peak : tracks) [levels addObject:@(peak)];
+  const auto click = state && state->runtime
+      ? state->runtime->consumeMetronomePeaks() : std::array<float, 2>{};
+  for (float peak : click) [levels addObject:@(peak)];
   return levels;
 }
 
@@ -595,6 +604,10 @@ static NSString *describeFormat(AVAudioFormat *format) {
 - (BOOL)configureModule:(NSInteger)moduleIndex enabled:(BOOL)enabled inputSlot:(NSInteger)inputSlot
                  lowNote:(NSInteger)lowNote highNote:(NSInteger)highNote octave:(NSInteger)octave
                  sustain:(BOOL)sustain modulation:(BOOL)modulation gmDrumHiHatChoke:(BOOL)gmDrumHiHatChoke
+ drumZeroReleaseMask0:(NSInteger)drumZeroReleaseMask0
+ drumZeroReleaseMask1:(NSInteger)drumZeroReleaseMask1
+ drumZeroReleaseMask2:(NSInteger)drumZeroReleaseMask2
+ drumZeroReleaseMask3:(NSInteger)drumZeroReleaseMask3
                 volumeDb:(float)volumeDb
                 polyphony:(NSInteger)polyphony velocityCurve0:(NSInteger)velocityCurve0
            velocityCurve1:(NSInteger)velocityCurve1 velocityCurve2:(NSInteger)velocityCurve2
@@ -619,6 +632,11 @@ static NSString *describeFormat(AVAudioFormat *format) {
   config.sustainInputEnabled = sustain;
   config.modulationInputEnabled = modulation;
   config.gmDrumHiHatChoke = gmDrumHiHatChoke;
+  config.drumZeroReleaseNoteMasks = {
+      static_cast<std::uint32_t>(drumZeroReleaseMask0),
+      static_cast<std::uint32_t>(drumZeroReleaseMask1),
+      static_cast<std::uint32_t>(drumZeroReleaseMask2),
+      static_cast<std::uint32_t>(drumZeroReleaseMask3)};
   config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
   config.polyphony = static_cast<std::uint16_t>(std::clamp<NSInteger>(polyphony, 1, 128));
   config.velocityCurve = {
@@ -772,12 +790,15 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return runtime->setGlideBehavior(static_cast<std::size_t>(moduleIndex), behavior);
 }
 
-- (BOOL)configureModuleModulation:(NSInteger)moduleIndex mode:(NSInteger)mode rateHz:(float)rateHz {
+- (BOOL)configureModuleModulation:(NSInteger)moduleIndex
+                              mode:(NSInteger)mode
+                            rateHz:(float)rateHz
+                         intensity:(float)intensity {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && moduleIndex >= 0 && moduleIndex < 8 &&
          runtime->setModuleModulationMode(
              static_cast<std::size_t>(moduleIndex),
-             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 3)), rateHz);
+             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 4)), rateHz, intensity);
 }
 
 - (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing {
@@ -899,10 +920,13 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return YES;
 }
 
-- (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled {
+- (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled
+       channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr) return NO;
-  runtime->setOutputGainDb(db, enabled);
+  runtime->setOutputGainDb(db, enabled,
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(channelStart, 0, 31)),
+      channelCount == 1 ? 1 : 2);
   return YES;
 }
 

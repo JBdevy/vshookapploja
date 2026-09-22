@@ -223,8 +223,8 @@ export function createModuleCompressorMarkup(settings: Readonly<Record<string, u
   `;
 }
 
-// Três ambientes prontos: o botão só escreve Decay, Dampen e Size; o Mix
-// continua sendo escolha de quem toca.
+// Os três ambientes têm ajustes próprios. Estes valores são usados somente
+// na primeira seleção, antes de o músico personalizar cada ambiente.
 export const REVERB_SPACES = {
   room: { decay: 1.2, dampen: 62, size: 18 },
   hall: { decay: 4.5, dampen: 34, size: 78 },
@@ -237,7 +237,7 @@ export function isReverbSpace(value: string | undefined): value is ReverbSpace {
   return value === 'room' || value === 'hall' || value === 'stage';
 }
 
-function currentReverbSpace(value: ModuleReverbSettings): ReverbSpace | null {
+export function currentReverbSpace(value: ModuleReverbSettings): ReverbSpace | null {
   for (const [name, space] of Object.entries(REVERB_SPACES) as [ReverbSpace, typeof REVERB_SPACES.room][]) {
     if (Math.abs(value.decay - space.decay) < 0.05
       && Math.round(value.dampen) === space.dampen
@@ -248,7 +248,8 @@ function currentReverbSpace(value: ModuleReverbSettings): ReverbSpace | null {
 
 export function createModuleReverbMarkup(settings: Readonly<Record<string, unknown>>): string {
   const value = readModuleReverbSettings(settings.reverb);
-  const space = currentReverbSpace(value);
+  const space = isReverbSpace(settings.reverbSpace as string | undefined)
+    ? settings.reverbSpace as ReverbSpace : currentReverbSpace(value);
   const controls: EffectControlDefinition[] = [
     control('decay', 'Decay', 0.1, 20, 0.1, value.decay, `${formatNumber(value.decay)} s`),
     control('dampen', 'Dampen', 0, 100, 1, value.dampen, `${Math.round(value.dampen)}%`),

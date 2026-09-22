@@ -466,16 +466,20 @@ void HookKeysEngine::routeNoteOn(
         (generatedModule < 0 && (sourceNote < config.lowNote || sourceNote > config.highNote))) {
       continue;
     }
-    if (config.gmDrumHiHatChoke &&
-        (sourceNote == 42 || sourceNote == 44 || sourceNote == 46)) {
+    const auto isGmHiHat = config.gmDrumHiHatChoke &&
+        (sourceNote == 42 || sourceNote == 44 || sourceNote == 46);
+    if (isGmHiHat) {
       // GM: closed (42), pedal (44) and open (46) are mutually exclusive.
-      // Use the stealing release so the choke also wins over sustain/pedal.
+      // A cauda continua depois que a tecla sobe, então não podemos depender
+      // apenas de activeNotes_: o próximo chimbal corta todas as caudas do
+      // grupo com a soltura rápida, inclusive sob sustain.
+      for (std::size_t note = 0; note < kMidiNoteCount; ++note) {
+        if (hiHatTailNotes_[index][note]) synth->stealNote(static_cast<std::uint8_t>(note));
+      }
+      hiHatTailNotes_[index].fill(false);
       constexpr std::array<std::uint8_t, 3> kGmHiHats{42, 44, 46};
       for (std::size_t input = 0; input < kRoutableMidiInputCount; ++input) {
         for (const auto hiHat : kGmHiHats) {
-          const auto soundingNote = activeNotes_[index][input][hiHat];
-          if (soundingNote < 0) continue;
-          synth->stealNote(static_cast<std::uint8_t>(soundingNote));
           activeNotes_[index][input][hiHat] = -1;
           activeNoteOrders_[index][input][hiHat] = 0;
           activeNoteCounts_[index][input][hiHat] = 0;
@@ -512,6 +516,7 @@ void HookKeysEngine::routeNoteOn(
     if (count < std::numeric_limits<std::uint16_t>::max()) ++count;
     synth->noteOnWithFilterVelocity(targetNote,
         std::min(applyVelocityCurve(velocity, config.velocityCurve), config.velocityCeiling), velocity);
+    if (isGmHiHat) hiHatTailNotes_[index][targetNote] = true;
   }
 }
 
@@ -519,7 +524,21 @@ void HookKeysEngine::routeNoteOff(std::uint8_t inputSlot, std::uint8_t sourceNot
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     const auto targetNote = activeNotes_[index][inputSlot][sourceNote];
     if (targetNote < 0) continue;
-    if (modules_[index] != nullptr) modules_[index]->noteOff(static_cast<std::uint8_t>(targetNote));
+    if (modules_[index] != nullptr) {
+      if (configs_[index].gmDrumHiHatChoke && configs_[index].drumNoteUsesZeroRelease(sourceNote)) {
+        modules_[index]->stealNote(static_cast<std::uint8_t>(targetNote));
+      } else {
+        modules_[index]->noteOff(static_cast<std::uint8_t>(targetNote));
+      }
+    }
+    if (configs_[index].gmDrumHiHatChoke && configs_[index].drumNoteUsesZeroRelease(sourceNote)) {
+      activeNotes_[index][inputSlot][sourceNote] = -1;
+      activeNoteOrders_[index][inputSlot][sourceNote] = 0;
+      activeNoteCounts_[index][inputSlot][sourceNote] = 0;
+      sustainedNoteCounts_[index][inputSlot][sourceNote] = 0;
+      hiHatTailNotes_[index][targetNote] = false;
+      continue;
+    }
     if (sustainDown_[index]) {
       // A voz segue soando presa pelo pedal, entao a nota continua ocupando
       // polifonia ate o CC64 descer ou o roubo FIFO alcanca-la.
@@ -627,6 +646,7 @@ void HookKeysEngine::clearActiveNoteState(std::size_t moduleIndex) noexcept {
   for (auto& inputOrders : activeNoteOrders_[moduleIndex]) inputOrders.fill(0);
   for (auto& inputCounts : activeNoteCounts_[moduleIndex]) inputCounts.fill(0);
   for (auto& inputSustained : sustainedNoteCounts_[moduleIndex]) inputSustained.fill(0);
+  hiHatTailNotes_[moduleIndex].fill(false);
 }
 
 bool HookKeysEngine::push(const EngineCommand& command) noexcept {

@@ -28,6 +28,10 @@ export interface NativeModuleConfig {
   sustain: boolean;
   modulation: boolean;
   gmDrumHiHatChoke: boolean;
+  drumZeroReleaseMask0: number;
+  drumZeroReleaseMask1: number;
+  drumZeroReleaseMask2: number;
+  drumZeroReleaseMask3: number;
   volumeDb: number;
   polyphony: number;
   velocityCurve0: number;
@@ -145,6 +149,7 @@ export interface NativeModuleModulationConfig {
   // 0 User, 1 LFO de pitch, 2 Tremolo, 3 Pan.
   mode: number;
   rateHz: number;
+  intensity: number;
 }
 
 export interface NativeTranceGateConfig {
@@ -260,7 +265,7 @@ interface HookKeysNativePlugin {
   setGlobalTranspose(options: { semitones: number }): Promise<void>;
   configureMetronome(options: NativeMetronomeConfig): Promise<void>;
   setMetronomeOutput(options: { channelStart: number; channelCount: number }): Promise<void>;
-  setOutputGain(options: { db: number; enabled: boolean }): Promise<void>;
+  setOutputGain(options: { db: number; enabled: boolean; channelStart: number; channelCount: number }): Promise<void>;
   setCompatibilityMode(options: { enabled: boolean }): Promise<void>;
   setSeamlessPresetSwitching(options: { enabled: boolean }): Promise<void>;
   stopAllNotes(): Promise<void>;
@@ -470,7 +475,7 @@ class HookKeysNativeBridge {
       'module_meter_levels', {}, () => plugin.moduleMeterLevels(),
     );
     const levels = Array.isArray(result) ? result : result.levels;
-    return Array.from({ length: 16 }, (_, index) => {
+    return Array.from({ length: 18 }, (_, index) => {
       const value = levels?.[index];
       return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
     });
@@ -630,8 +635,9 @@ class HookKeysNativeBridge {
     if (!Number.isInteger(config.moduleIndex) || config.moduleIndex < 0 || config.moduleIndex >= 8) return;
     const normalized = {
       moduleIndex: config.moduleIndex,
-      mode: Number.isInteger(config.mode) ? Math.min(3, Math.max(0, config.mode)) : 1,
+      mode: Number.isInteger(config.mode) ? Math.min(4, Math.max(0, config.mode)) : 1,
       rateHz: Number.isFinite(config.rateHz) ? Math.min(20, Math.max(0.1, config.rateHz)) : 6.85,
+      intensity: Number.isFinite(config.intensity) ? Math.min(1, Math.max(0, config.intensity)) : 1,
     };
     const key = JSON.stringify(normalized);
     if (this.moduleModulationKeys[config.moduleIndex] === key) return;
@@ -702,11 +708,16 @@ class HookKeysNativeBridge {
     this.lastMetronomeOutputKey = key;
   }
 
-  async setOutputGain(db: number, enabled: boolean): Promise<void> {
+  async setOutputGain(db: number, enabled: boolean, channelStart: number, channelCount: 1 | 2): Promise<void> {
     if (!await this.initialize()) return;
-    const key = `${db}:${enabled}`;
+    const options = {
+      db, enabled,
+      channelStart: Math.min(31, Math.max(0, Math.round(channelStart))),
+      channelCount,
+    };
+    const key = JSON.stringify(options);
     if (this.lastOutputGainKey === key) return;
-    await this.call('set_output_gain', { db, enabled }, () => plugin.setOutputGain({ db, enabled }));
+    await this.call('set_output_gain', options, () => plugin.setOutputGain(options));
     this.lastOutputGainKey = key;
   }
 

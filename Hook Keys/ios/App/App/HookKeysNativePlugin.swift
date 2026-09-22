@@ -430,6 +430,10 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             sustain: call.getBool("sustain", true),
             modulation: call.getBool("modulation", true),
             gmDrumHiHatChoke: call.getBool("gmDrumHiHatChoke", false),
+            drumZeroReleaseMask0: call.getInt("drumZeroReleaseMask0", 0),
+            drumZeroReleaseMask1: call.getInt("drumZeroReleaseMask1", 0),
+            drumZeroReleaseMask2: call.getInt("drumZeroReleaseMask2", 0),
+            drumZeroReleaseMask3: call.getInt("drumZeroReleaseMask3", 0),
             volumeDb: call.getFloat("volumeDb", 0),
             polyphony: min(128, max(1, call.getInt("polyphony", 128))),
             velocityCurve0: min(127, max(0, call.getInt("velocityCurve0", 0))),
@@ -578,7 +582,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         }
         // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
         if engine.configureModuleModulation(
-            moduleIndex, mode: call.getInt("mode", 1), rateHz: call.getFloat("rateHz", 6.85)
+            moduleIndex, mode: call.getInt("mode", 1), rateHz: call.getFloat("rateHz", 6.85),
+            intensity: call.getFloat("intensity", 1)
         ) { call.resolve() }
         else { call.reject("O motor ainda não foi inicializado.") }
     }
@@ -761,7 +766,9 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     }
 
     @objc func setOutputGain(_ call: CAPPluginCall) {
-        if engine.setOutputGainDb(call.getFloat("db", 0), enabled: call.getBool("enabled", true)) {
+        if engine.setOutputGainDb(call.getFloat("db", 0), enabled: call.getBool("enabled", true),
+                                  channelStart: call.getInt("channelStart", 0),
+                                  channelCount: call.getInt("channelCount", 2)) {
             call.resolve()
         } else {
             call.reject("O motor ainda não foi inicializado.")

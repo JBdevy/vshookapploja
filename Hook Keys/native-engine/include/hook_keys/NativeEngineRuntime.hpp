@@ -61,7 +61,8 @@ public:
       float decayMs, float releaseMs, float glideMs = 0.0f, float sustainDb = 0.0f) noexcept;
   [[nodiscard]] bool setSynthConfig(AnalogSynthConfig config) noexcept;
   // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
-  [[nodiscard]] bool setModuleModulationMode(std::size_t moduleIndex, std::uint8_t mode, float rateHz) noexcept;
+  [[nodiscard]] bool setModuleModulationMode(
+      std::size_t moduleIndex, std::uint8_t mode, float rateHz, float intensity = 1.0f) noexcept;
   // Modules 0-6 (SF2) and 7 (Synth).
   [[nodiscard]] bool setGlideBehavior(std::size_t moduleIndex, GlideBehavior behavior) noexcept;
   // Modules 0-6: Limite Velocity and limiter. Module 7 (Synth): per-oscillator limits.
@@ -80,7 +81,8 @@ public:
     metronomeOutputStart_.store(std::min<std::uint8_t>(channelStart, 31), std::memory_order_release);
     metronomeOutputCount_.store(channelCount == 1 ? 1 : 2, std::memory_order_release);
   }
-  void setOutputGainDb(float db, bool enabled) noexcept;
+  void setOutputGainDb(float db, bool enabled,
+      std::uint8_t channelStart = 0, std::uint8_t channelCount = 2) noexcept;
   // Músicas: tocam no mesmo callback, com saída e volume próprios.
   [[nodiscard]] TrackPlayer& tracks() noexcept { return *tracks_; }
   void stopAllNotes() noexcept;
@@ -97,6 +99,9 @@ public:
 
   [[nodiscard]] double sampleRate() const noexcept { return sampleRate_; }
   [[nodiscard]] HookKeysEngine::ModulePeaks consumeModulePeaks() noexcept;
+  [[nodiscard]] std::array<float, 2> consumeMasterPeaks() noexcept;
+  [[nodiscard]] std::array<float, 2> consumeTrackPeaks() noexcept { return tracks_->consumePeaks(); }
+  [[nodiscard]] std::array<float, 2> consumeMetronomePeaks() noexcept;
   [[nodiscard]] HookKeysEngine::ModuleAnalysis consumeModuleAnalysis(
       std::size_t moduleIndex) noexcept;
   [[nodiscard]] std::size_t maximumBlockFrames() const noexcept { return maximumBlockFrames_; }
@@ -194,10 +199,13 @@ private:
   float outputGainTargetSeen_ = 1.0f;
   float outputGainStep_ = 0.0f;
   std::size_t outputGainRampFrames_ = 0;
-  // Limiter do barramento Master (módulos + metrônomo), vinculado entre
-  // todos os canais para não deslocar a imagem quando apenas um lado clipa.
+  // O barramento Módulos controla e mede todos os timbres, em qualquer saída.
+  std::atomic<std::uint16_t> masterOutputRoute_{2u << 8};
+  std::uint16_t masterOutputRouteSeen_ = 2u << 8; // audio thread only
   float masterLimiterGain_ = 1.0f;
   float masterLimiterRelease_ = 0.0f;
+  std::array<std::atomic<float>, 2> masterPeaks_{};
+  std::array<std::atomic<float>, 2> metronomePeaks_{};
   [[nodiscard]] bool beginMetronomeBlock() noexcept;
   void addMetronome(float* left, float* right, std::size_t frames) noexcept;
   void addMetronomeInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;

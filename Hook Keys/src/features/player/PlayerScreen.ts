@@ -76,7 +76,6 @@ import {
   createEqCurve,
   createEqShadowPath,
   cutoffFrequencyFromRatio,
-  cutoffRatioFromFrequency,
   createModuleEqMarkup,
   createModuleModulationCardMarkup,
   DEFAULT_MODULE_MODULATION_RATE_HZ,
@@ -117,6 +116,7 @@ import {
   formatModuleSustainDb,
   MODULE_SUSTAIN_MIN_DB,
   readModuleSustainDb,
+  readModuleModulationIntensity,
   readModuleModulationMode,
   readModuleModulationRate,
   type ModuleEqBand,
@@ -129,6 +129,7 @@ import {
   createModuleCompressorMarkup,
   createModuleDelayMarkup,
   createModuleReverbMarkup,
+  currentReverbSpace,
   isReverbSpace,
   REVERB_SPACES,
   createModuleChorusMarkup,
@@ -223,7 +224,6 @@ import {
 import { createTranceGateMarkup, readTranceGateSettings, tranceGateStepBeats } from './TranceGateView';
 import {
   createSynthModuleMarkup,
-  DEFAULT_SYNTH_SETTINGS,
   FACTORY_SYNTH_PRESETS,
   factorySynthPreset,
   formatOscillatorVolume,
@@ -367,21 +367,11 @@ interface EqBandDrag {
 
 interface KnobDrag {
   input: HTMLInputElement;
-  // O knob inteiro captura o toque: o input invisível não recebe ponteiro.
   captureElement: HTMLElement;
   pointerId: number;
-  startValue: number;
   startY: number;
   startX: number;
-  startedAt: number;
-  travelPixels: number;
-  linear: boolean;
   moved: boolean;
-  // Eixo escolhido no primeiro movimento; vale até soltar o dedo. Até seis
-  // pixels ele ainda pode se corrigir, para um começo torto não prender o
-  // gesto no sentido errado.
-  axis: 'horizontal' | 'vertical' | null;
-  axisLocked: boolean;
 }
 
 type CcLearnTarget =
@@ -550,6 +540,10 @@ interface AccountControls {
 }
 
 const MODULE_COUNT = 8;
+// Faixa completa padrão de um piano de 88 teclas. Nesta interface a nota MIDI
+// 60 é C3, portanto MIDI 21..108 aparece como A-1..C7.
+const DEFAULT_MODULE_LOW_NOTE = 21;
+const DEFAULT_MODULE_HIGH_NOTE = 108;
 // Dezesseis presets por banco, em duas fileiras de oito, nos seis bancos.
 const PRESET_COUNT = 16;
 const PRESETS_PER_ROW = 8;
@@ -562,10 +556,7 @@ const DESKTOP_MODULE_METER_INTERVAL_MS = 50;
 const APP_SELECT_QUERY = 'select[data-setting], select[data-module-setting]';
 const MOBILE_MODULE_METER_INTERVAL_MS = 90;
 const EFFECT_PAD_MAX_DB = 0;
-// Desktop knobs stay linear while one pixel moves at most this many steps;
-// wider ranges (envelope and Glide times) switch to the accelerated curve.
-const DESKTOP_LINEAR_KNOB_MAX_STEPS_PER_PIXEL = 10;
-const DESKTOP_ACCELERATED_KNOB_PIXELS = 400;
+const KNOB_FOCUS_IDLE_MS = 2_000;
 const BANK_IDS: readonly BankId[] = ['A', 'B', 'C', 'D', 'E', 'F'];
 
 function isHttpAssetReference(value: string): boolean {
@@ -736,7 +727,7 @@ function createModuleMarkup(moduleNumber: number): string {
               data-module="${moduleNumber}"
               aria-pressed="false"
               aria-label="Definir nota inicial do módulo ${moduleNumber}"
-            >A-1</button>
+            >${formatMidiNote(DEFAULT_MODULE_LOW_NOTE)}</button>
             <button
               class="player-module__action-button player-module__range-button"
               type="button"
@@ -745,7 +736,7 @@ function createModuleMarkup(moduleNumber: number): string {
               data-module="${moduleNumber}"
               aria-pressed="false"
               aria-label="Definir nota final do módulo ${moduleNumber}"
-            >C7</button>
+            >${formatMidiNote(DEFAULT_MODULE_HIGH_NOTE)}</button>
           </div>
           <div class="player-module__action-pair">
             <button
@@ -943,8 +934,8 @@ function createBankState(selectedPreset: number | null = null): BankState {
         category: '',
         // Todo módulo nasce desligado: o usuário liga o que for usar.
         enabled: false,
-        highNote: 108,
-        lowNote: 21,
+        highNote: DEFAULT_MODULE_HIGH_NOTE,
+        lowNote: DEFAULT_MODULE_LOW_NOTE,
         modulationInputEnabled: true,
         midiInputId: null,
         octaveShift: 0,
@@ -1012,6 +1003,13 @@ export class PlayerScreen {
   private readonly handleRootPointerDown = (event: PointerEvent) => this.onRootPointerDown(event);
   private readonly handleRootPointerMove = (event: PointerEvent) => this.onRootPointerMove(event);
   private readonly handleRootPointerEnd = (event: PointerEvent) => this.onRootPointerEnd(event);
+  private readonly handleKnobFocusOutsidePointerDown = (event: PointerEvent) => {
+    const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
+    if (!overlay?.classList.contains('is-visible')) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('.knob-focus__card')) return;
+    this.hideKnobFocus();
+  };
   private readonly handleRootContextMenu = (event: Event) => this.onRootContextMenu(event);
   private readonly handleRootInput = (event: Event) => this.onRootInput(event);
   private readonly handlePageHide = () => this.flushPlayerStateSave(true);
@@ -1082,12 +1080,13 @@ export class PlayerScreen {
     state: 'queued' | 'downloading';
   }>();
   private soundDownloadQueueRunning = false;
-  private bulkSoundDownloadRunning = false;
+  private soundDownloadBatchIds: Set<string> | null = null;
   private readonly fixedSoundHoldGesture = new LongPressGesture(700, 10);
   private readonly userSoundfontHoldGesture = new LongPressGesture(700, 10);
   private readonly synthPresetHoldGesture = new LongPressGesture(700, 10);
   private readonly bankHoldGesture = new LongPressGesture(560, 10);
   private readonly moduleConfigHoldGesture = new LongPressGesture(560, 10);
+  private readonly moduleModulationIntensityHoldGesture = new LongPressGesture(560, 10);
   private suppressNextFixedSoundClick = false;
   private suppressNextUserSoundfontClick = false;
   private suppressNextSynthPresetClick = 0;
@@ -1097,6 +1096,7 @@ export class PlayerScreen {
   // Cada pad reaproveita a URL do arquivo, mas pode ter várias vozes tocando
   // juntas no Gate + Infinite Release.
   private readonly effectPadAudio = new Map<string, { url: string; voices: Set<HTMLAudioElement> }>();
+  private readonly effectAudioBaseGain = new WeakMap<HTMLAudioElement, number>();
   private readonly metronome = new MetronomeEngine(() => this.renderMetronomeState());
   private readonly patternPlayback = new PatternPlaybackController(
     (moduleNumber) => this.createPatternPlaybackSnapshot(moduleNumber),
@@ -1125,6 +1125,7 @@ export class PlayerScreen {
   private moduleConfigCopySource: number | null = null;
   private suppressNextBankClick = false;
   private suppressNextModuleConfigClick = false;
+  private suppressNextModuleModulationClick: HTMLButtonElement | null = null;
   private presetHoldGesture: PresetHoldGesture | null = null;
   private tracksHoldGesture: TracksHoldGesture | null = null;
   private capturedTracksPointer: { button: HTMLButtonElement; pointerId: number } | null = null;
@@ -1165,7 +1166,6 @@ export class PlayerScreen {
   private readonly ccControlHoldGesture = new LongPressGesture();
   private readonly knobCcLearnGesture = new LongPressGesture(2_000, 8);
   private readonly faderDoubleTap = new DoubleTapTracker();
-  private lastKnobTap: { input: HTMLInputElement; time: number } | null = null;
   // Preset copiado pelo Copy, esperando o Paste. declinedTarget: o preset em
   // que o usuário cancelou a confirmação; tocar Paste de novo nele cancela tudo.
   private presetClipboard: {
@@ -1211,6 +1211,9 @@ export class PlayerScreen {
   private moduleMeterTimer: number | null = null;
   private ramMeterTimer: number | null = null;
   private readonly moduleMeterDb = Array.from({ length: 8 }, () => [MODULE_FADER_MIN_DB, MODULE_FADER_MIN_DB]);
+  private readonly outputMeterDb: Record<string, number[]> = {
+    music: [-60, -60], pads: [-60, -60], effects: [-60, -60], click: [-60, -60], modules: [-60, -60],
+  };
   private readonly compressorMeterDb = [-60, -60];
   private renderedAnalysisModuleIndex: number | null = null;
   private playerStateSaveTimer: number | null = null;
@@ -1404,7 +1407,7 @@ export class PlayerScreen {
               ${createOutputKnobMarkup('pads', 'Pads', this.outputLevels.pads)}
               ${createOutputKnobMarkup('effects', 'Efects', this.outputLevels.effects)}
               ${createMetronomeKnobMarkup(this.metronome.getVolume())}
-              ${createOutputKnobMarkup('master', 'Master', this.outputLevels.master)}
+              ${createOutputKnobMarkup('master', 'Módulos', this.outputLevels.master)}
             </section>
           </nav>
 
@@ -1447,9 +1450,9 @@ export class PlayerScreen {
           <strong data-knob-focus-label></strong>
           <div class="knob-focus__controls">
             <span class="knob-focus__face"><i></i></span>
-            <label class="knob-focus__fader" aria-label="Ajuste vertical do parâmetro">
+            <div class="knob-focus__fader" aria-label="Ajuste vertical do parâmetro">
               <input type="range" min="0" max="100" step="1" value="0" data-knob-focus-fader>
-            </label>
+            </div>
           </div>
           <output data-knob-focus-value></output>
         </div>
@@ -1538,6 +1541,7 @@ export class PlayerScreen {
     this.root.addEventListener('pointermove', this.handleRootPointerMove);
     this.root.addEventListener('pointerup', this.handleRootPointerEnd);
     this.root.addEventListener('pointercancel', this.handleRootPointerEnd);
+    document.addEventListener('pointerdown', this.handleKnobFocusOutsidePointerDown, true);
     this.root.addEventListener('contextmenu', this.handleRootContextMenu);
     this.root.addEventListener('input', this.handleRootInput);
     window.addEventListener('pagehide', this.handlePageHide);
@@ -1632,6 +1636,11 @@ export class PlayerScreen {
             this.moduleMeterDb[index] = displayed;
             this.setModuleMeterLevel(index + 1, displayed[0] ?? MODULE_FADER_MIN_DB, displayed[1] ?? MODULE_FADER_MIN_DB);
           }
+          this.renderOutputMeter('modules', peaks.slice(16, 18));
+          this.renderOutputMeter('music', peaks.slice(18, 20));
+          this.renderOutputMeter('click', peaks.slice(20, 22));
+          this.renderOutputMeter('effects', this.effectMeterPeaks());
+          this.renderOutputMeter('pads', [0, 0]);
           if (analysisModuleIndex === this.getCompressorAnalysisModuleIndex()) {
             this.renderModuleAnalysis(analysis);
           } else if (this.getCompressorAnalysisModuleIndex() === null) {
@@ -1647,6 +1656,8 @@ export class PlayerScreen {
           this.moduleMeterDb[index] = [MODULE_FADER_MIN_DB, MODULE_FADER_MIN_DB];
           this.setModuleMeterLevel(index + 1, MODULE_FADER_MIN_DB, MODULE_FADER_MIN_DB);
         }
+        for (const levels of Object.values(this.outputMeterDb)) levels.fill(-60);
+        for (const bus of Object.keys(this.outputMeterDb)) this.renderOutputMeter(bus, [0, 0]);
       } finally {
         this.scheduleModuleMeters();
       }
@@ -1677,6 +1688,28 @@ export class PlayerScreen {
 
   setModuleMeterLevel(moduleNumber: number, leftDb: number, rightDb = leftDb): void {
     this.faders.get(moduleNumber)?.setMeterLevels(leftDb, rightDb);
+  }
+
+  private renderOutputMeter(bus: string, peaks: readonly number[]): void {
+    const meter = this.root.querySelector<HTMLElement>(`[data-output-meter="${bus}"]`);
+    if (!meter) return;
+    const held = this.outputMeterDb[bus] ?? (this.outputMeterDb[bus] = [-60, -60]);
+    for (let channel = 0; channel < 2; channel += 1) {
+      const peak = peaks[channel] ?? 0;
+      const db = peak > 0 ? Math.max(-60, Math.min(0, 20 * Math.log10(peak))) : -60;
+      const displayed = Math.max(db, (held[channel] ?? -60) - 4);
+      held[channel] = displayed;
+      const fill = meter.querySelector<HTMLElement>(`[data-output-meter-channel="${channel}"]`);
+      fill?.style.setProperty('--output-meter-level', `${(displayed + 60) / 60 * 100}%`);
+    }
+  }
+
+  private effectMeterPeaks(): [number, number] {
+    let peak = 0;
+    for (const pool of this.effectPadAudio.values()) {
+      for (const audio of pool.voices) if (!audio.paused && !audio.ended) peak = Math.max(peak, audio.volume);
+    }
+    return [peak, peak];
   }
 
   private getCompressorAnalysisModuleIndex(): number | null {
@@ -1833,6 +1866,7 @@ export class PlayerScreen {
     this.root.removeEventListener('pointermove', this.handleRootPointerMove);
     this.root.removeEventListener('pointerup', this.handleRootPointerEnd);
     this.root.removeEventListener('pointercancel', this.handleRootPointerEnd);
+    document.removeEventListener('pointerdown', this.handleKnobFocusOutsidePointerDown, true);
     this.root.removeEventListener('contextmenu', this.handleRootContextMenu);
     this.root.removeEventListener('input', this.handleRootInput);
     this.root.classList.remove('hook-keys-lite');
@@ -2017,8 +2051,12 @@ export class PlayerScreen {
         if (this.effectEditMode) {
           this.activeEffectBank = bank;
           this.renderActiveEffectBank();
-          this.pendingEffectBankEdit = bank;
-          this.openModal('effect-bank-name', null, actionButton);
+          // FX 1 e FX 2 são bancos de fábrica. Entram no modo Edit para
+          // configurar pads, mas seus nomes permanecem definidos pelo app.
+          if (bank !== '1' && bank !== '2') {
+            this.pendingEffectBankEdit = bank;
+            this.openModal('effect-bank-name', null, actionButton);
+          }
         } else {
           this.selectEffectBank(bank);
         }
@@ -2241,6 +2279,12 @@ export class PlayerScreen {
 
   private applyMusicOutput(): void {
     this.trackTransport?.setOutputLevel(this.outputLevels.music, this.outputEnabled.music);
+    const effectsGain = this.outputEnabled.effects ? Math.pow(10, this.outputLevels.effects / 20) : 0;
+    for (const pool of this.effectPadAudio.values()) {
+      for (const audio of pool.voices) {
+        audio.volume = Math.min(1, Math.max(0, (this.effectAudioBaseGain.get(audio) ?? 1) * effectsGain));
+      }
+    }
     // Arrastar o fader manda um comando por sincronização, não um por pixel.
     if (hookKeysNative.tracksAvailable()) this.scheduleNativeEngineSync();
   }
@@ -2795,7 +2839,7 @@ export class PlayerScreen {
     drag.fader.style.setProperty('--output-position', `${outputPosition(value)}%`);
     const output = drag.fader.parentElement?.querySelector<HTMLOutputElement>('[data-output-value]');
     if (output) output.value = formatOutputDb(value);
-    if (outputBus === 'music') this.applyMusicOutput();
+    if (outputBus === 'music' || outputBus === 'effects') this.applyMusicOutput();
   }
 
   private updateMetronomeFaderFromPointer(drag: MetronomeFaderDrag, clientX: number): void {
@@ -3326,7 +3370,10 @@ export class PlayerScreen {
     const audio = new Audio(pool.url);
     pool.voices.add(audio);
     audio.preload = 'auto';
-    audio.volume = Math.min(1, Math.max(0, Math.pow(10, state.volumeDb / 20)));
+    const baseGain = Math.pow(10, state.volumeDb / 20);
+    const effectsGain = this.outputEnabled.effects ? Math.pow(10, this.outputLevels.effects / 20) : 0;
+    this.effectAudioBaseGain.set(audio, baseGain);
+    audio.volume = Math.min(1, Math.max(0, baseGain * effectsGain));
     audio.addEventListener('ended', () => this.finishEffectPadAudioVoice(key, audio), { once: true });
     await audio.play().catch(() => {
       this.finishEffectPadAudioVoice(key, audio);
@@ -3553,7 +3600,8 @@ export class PlayerScreen {
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="select-effect-bank"]')) {
       const isSelected = button.dataset.effectBank === this.activeEffectBank;
       button.classList.toggle('is-selected', isSelected);
-      button.classList.toggle('is-editing', this.effectEditMode);
+      // O selo pertence ao banco que está sendo editado, não ao seletor inteiro.
+      button.classList.toggle('is-editing', this.effectEditMode && isSelected);
       button.setAttribute('aria-pressed', String(isSelected));
       const bank = button.dataset.effectBank;
       const label = button.querySelector<HTMLElement>('span');
@@ -3591,6 +3639,8 @@ export class PlayerScreen {
 
   private renderActivePadBank(): void {
     const selectedNote = this.padBankSelections.get(this.activePadBank) ?? null;
+    const notesSection = this.root.querySelector<HTMLElement>('.performance-section--notes');
+    if (notesSection) notesSection.dataset.activePadBank = this.activePadBank;
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="select-pad-bank"]')) {
       const isSelected = button.dataset.padBank === this.activePadBank;
       button.classList.toggle('is-selected', isSelected);
@@ -5496,6 +5546,12 @@ export class PlayerScreen {
     } else if (kind === 'effect-pad' && moduleNumber !== null) {
       const activeColorIndex = effectPadState?.colorIndex ?? (moduleNumber - 1) % EFFECT_PAD_COLORS.length;
       const activeColors = EFFECT_PAD_COLORS[activeColorIndex] ?? EFFECT_PAD_COLORS[0];
+      const hasFixedEffectName = this.activeEffectBank === '1' || this.activeEffectBank === '2';
+      const effectName = hasFixedEffectName
+        ? this.soundCatalog.getPerformanceAsset('fx', this.activeEffectBank, moduleNumber)?.name
+          ?? effectPadState?.name
+          ?? `Efeito ${moduleNumber}`
+        : effectPadState?.name ?? `Efeito ${moduleNumber}`;
       const supportsAudioAssignment = this.activeEffectBank === '3' || this.activeEffectBank === '4';
       const effectVolumeDb = boundedNumber(
         effectPadState?.volumeDb,
@@ -5506,22 +5562,24 @@ export class PlayerScreen {
       const effectVolumePosition = ((effectVolumeDb - EFFECT_PAD_MIN_DB) / (EFFECT_PAD_MAX_DB - EFFECT_PAD_MIN_DB)) * 100;
       bodyMarkup = `
         <section
-          class="effect-pad-editor${supportsAudioAssignment ? ' has-audio-options' : ''}"
+          class="effect-pad-editor${supportsAudioAssignment ? ' has-audio-options' : ''}${hasFixedEffectName ? ' has-fixed-name' : ''}"
           data-effect-color-index="${activeColorIndex}"
           data-effect-mode="${effectPadState?.triggerMode ?? 'toggle'}"
           data-effect-gate-release="${effectPadState?.gateRelease ?? 'infinite'}"
         >
-          <label class="effect-pad-editor__field">
-            <span>Nome do efeito</span>
-            <input type="text" maxlength="12" autocomplete="off" data-effect-name-input>
-          </label>
+          ${hasFixedEffectName ? '' : `
+            <label class="effect-pad-editor__field">
+              <span>Nome do efeito</span>
+              <input type="text" maxlength="12" autocomplete="off" data-effect-name-input>
+            </label>
+          `}
           <div class="effect-pad-editor__preview" aria-label="Prévia do pad">
             <button
               class="performance-pad performance-pad--effect effect-pad-editor__preview-button"
               type="button"
               disabled
               style="--effect-accent: ${activeColors[0]}; --effect-dark: ${activeColors[1]}"
-            ><span></span></button>
+            ><span>${escapeMarkup(effectName)}</span></button>
           </div>
           <div class="effect-color-palette" role="radiogroup" aria-label="Cor do efeito">
             ${EFFECT_PAD_COLORS.map((colors, colorIndex) => `
@@ -6085,6 +6143,12 @@ export class PlayerScreen {
       if (kind === 'module-settings' && moduleNumber !== null && target instanceof Element) {
         const modulationModeButton = target.closest<HTMLButtonElement>('[data-module-modulation-mode]');
         if (modulationModeButton) {
+          if (this.suppressNextModuleModulationClick === modulationModeButton) {
+            this.suppressNextModuleModulationClick = null;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           const mode = modulationModeButton.dataset.moduleModulationMode;
           if (mode === 'user' || mode === 'rotary' || mode === 'lfo' || mode === 'tremolo' || mode === 'pan') {
             const nextMode = moduleNumber === 7 && mode === 'rotary'
@@ -6549,6 +6613,9 @@ export class PlayerScreen {
         }
         const soundId = fixedSoundButton.dataset.fixedSoundId;
         if (!soundId) return;
+        // A fila já é o estado desse timbre. Não reabre a tela de download ao
+        // tocar em um item que está baixando ou aguardando.
+        if (this.activeSoundDownloads.has(soundId)) return;
         this.markSoundSeen(soundId, fixedSoundButton, modal);
         if (this.installedFixedSoundIds.has(soundId)) {
           void this.selectFixedSound(moduleNumber, soundId, fixedSoundButton);
@@ -7197,6 +7264,30 @@ export class PlayerScreen {
     }
     if (kind === 'module-settings' && moduleNumber !== null) {
       modal.addEventListener('pointerdown', (event) => {
+        const button = event.target instanceof Element
+          ? event.target.closest<HTMLButtonElement>(
+            '[data-module-modulation-mode="pan"], [data-module-modulation-mode="tremolo"]',
+          ) : null;
+        if (!button || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        const mode = button.dataset.moduleModulationMode;
+        if (mode !== 'pan' && mode !== 'tremolo') return;
+        this.moduleModulationIntensityHoldGesture.start(event, () => {
+          this.suppressNextModuleModulationClick = button;
+          window.setTimeout(() => {
+            if (this.suppressNextModuleModulationClick === button) {
+              this.suppressNextModuleModulationClick = null;
+            }
+          }, 900);
+          const input = modal.querySelector<HTMLInputElement>(
+            `[data-module-modulation-intensity="${mode}"]`,
+          );
+          if (input) this.showKnobFocus(input);
+        });
+      });
+      modal.addEventListener('pointermove', (event) => this.moduleModulationIntensityHoldGesture.move(event));
+      modal.addEventListener('pointerup', (event) => this.moduleModulationIntensityHoldGesture.end(event));
+      modal.addEventListener('pointercancel', (event) => this.moduleModulationIntensityHoldGesture.end(event));
+      modal.addEventListener('pointerdown', (event) => {
         const button = moduleNumber === 7 && event.target instanceof Element
           ? event.target.closest<HTMLButtonElement>('[data-module-rotary-toggle]') : null;
         if (!button || (event.pointerType === 'mouse' && event.button !== 0)) return;
@@ -7372,6 +7463,11 @@ export class PlayerScreen {
         this.updateModuleModulationRate(input, moduleNumber);
         return;
       }
+      if (kind === 'module-settings' && moduleNumber !== null
+          && input.matches('[data-module-modulation-intensity]')) {
+        this.updateModuleModulationIntensity(input, moduleNumber);
+        return;
+      }
       if (kind === 'module-settings' && moduleNumber !== null && input.matches('[data-module-gain]')) {
         this.updateModuleGain(input, moduleNumber);
         return;
@@ -7529,10 +7625,12 @@ export class PlayerScreen {
       const input = requiredElement<HTMLInputElement>(modal, '[data-effect-bank-name-input]');
       if (this.desktopRuntime) input.focus();
     } else if (kind === 'effect-pad') {
-      const input = requiredElement<HTMLInputElement>(modal, '[data-effect-name-input]');
-      input.value = effectPadState?.name ?? `Efeito ${moduleNumber ?? ''}`;
       const preview = requiredElement<HTMLElement>(modal, '.effect-pad-editor__preview-button span');
-      preview.textContent = input.value;
+      const input = modal.querySelector<HTMLInputElement>('[data-effect-name-input]');
+      if (input) {
+        input.value = effectPadState?.name ?? `Efeito ${moduleNumber ?? ''}`;
+        preview.textContent = input.value;
+      }
       const volumeInput = modal.querySelector<HTMLInputElement>('[data-effect-pad-volume]');
       volumeInput?.addEventListener('dblclick', () => {
         volumeInput.value = String(EFFECT_PAD_MAX_DB);
@@ -8078,7 +8176,8 @@ export class PlayerScreen {
         downloadAll.disabled = downloadable.length === 0;
         downloadAll.classList.toggle('is-delete', allDownloaded);
         downloadAll.dataset.modalAction = allDownloaded ? 'delete-all-sounds' : 'download-all-sounds';
-        downloadAll.textContent = allDownloaded ? 'Apagar biblioteca' : 'Baixar tudo';
+        if (this.soundDownloadBatchIds) this.syncDownloadAllButton(modal);
+        else downloadAll.textContent = allDownloaded ? 'Apagar biblioteca' : 'Baixar tudo';
       }
     } catch {
       // Mantém o valor visual inicial quando o armazenamento local não responder.
@@ -8131,7 +8230,7 @@ export class PlayerScreen {
       button.style.setProperty('--fixed-sound-progress', String((entry?.percentage ?? 0) / 100));
       if (entry) {
         const status = button.querySelector<HTMLElement>('small');
-        if (status) status.textContent = downloading ? 'Baixando' : 'Na fila';
+        if (status) status.textContent = downloading ? 'Baixando' : 'Aguardando';
       } else {
         const installed = this.installedFixedSoundIds.has(soundId);
         button.classList.toggle('is-installed', installed);
@@ -8143,8 +8242,18 @@ export class PlayerScreen {
     }
   }
 
+  private syncDownloadAllButton(container: ParentNode = this.root): void {
+    const button = container.querySelector<HTMLButtonElement>('.sound-library-download-all');
+    const batch = this.soundDownloadBatchIds;
+    if (!button || !batch) return;
+    const completed = [...batch].filter((id) => this.installedFixedSoundIds.has(id)).length;
+    button.disabled = this.activeSoundDownloads.size > 0 || completed >= batch.size;
+    button.textContent = `Baixado ${completed}/${batch.size}`;
+    button.setAttribute('aria-label', `${completed} de ${batch.size} timbres baixados`);
+  }
+
   private async processSoundDownloadQueue(): Promise<void> {
-    if (this.soundDownloadQueueRunning || this.bulkSoundDownloadRunning) return;
+    if (this.soundDownloadQueueRunning) return;
     this.soundDownloadQueueRunning = true;
     try {
       while (this.activeSoundDownloads.size > 0 && this.mounted) {
@@ -8193,6 +8302,7 @@ export class PlayerScreen {
         } finally {
           this.activeSoundDownloads.delete(soundId);
           this.syncSoundDownloadButtons();
+          this.syncDownloadAllButton();
           this.renderActiveSoundDownloadsBanner();
           if (installed) void this.syncNativeEngine();
         }
@@ -8204,10 +8314,6 @@ export class PlayerScreen {
   }
 
   private async downloadAllOfficialSounds(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
-    if (this.bulkSoundDownloadRunning || this.soundDownloadQueueRunning || this.activeSoundDownloads.size > 0) {
-      this.updateSoundDownloadMessage('Aguarde a fila atual terminar antes de usar Baixar tudo.');
-      return;
-    }
     const sounds = this.soundCatalog.sounds.filter(
       (sound) => Boolean(sound.sf2ObjectKey) && !this.installedFixedSoundIds.has(sound.id),
     );
@@ -8218,68 +8324,24 @@ export class PlayerScreen {
       return;
     }
 
-    const knownTotalBytes = sounds.reduce((total, sound) => total + (sound.byteSize ?? 0), 0);
+    const notQueued = sounds.filter((sound) => !this.activeSoundDownloads.has(sound.id));
+    const knownTotalBytes = notQueued.reduce((total, sound) => total + (sound.byteSize ?? 0), 0);
     if (!(await hasStorageFor(knownTotalBytes || undefined))) {
       button.textContent = 'Sem espaço';
       this.updateSoundDownloadMessage('Armazenamento insuficiente para baixar todos os timbres restantes.');
       return;
     }
 
-    button.disabled = true;
-    this.bulkSoundDownloadRunning = true;
-    this.soundDownloadAbort?.abort();
-    this.soundDownloadAbort = new AbortController();
-    let completed = 0;
-    try {
-      for (const sound of sounds) {
-        if (button.isConnected) button.textContent = `Baixando ${completed + 1}/${sounds.length}`;
-        const done = completed;
-        this.showBackgroundDownload(`${sound.name} (${done + 1}/${sounds.length})`, (done * 100) / sounds.length);
-        const currentButton = Array.from(modal.querySelectorAll<HTMLButtonElement>('[data-fixed-sound-id]'))
-          .find((candidate) => candidate.dataset.fixedSoundId === sound.id);
-        currentButton?.classList.add('is-downloading');
-        currentButton?.style.setProperty('--fixed-sound-progress', '0');
-        try {
-          await this.soundLibraryEngine.install(sound.id, (progress) => {
-            const inside = progress.percentage === null ? 0 : progress.percentage / sounds.length;
-            this.showBackgroundDownload(`${sound.name} (${done + 1}/${sounds.length})`,
-              (done * 100) / sounds.length + inside);
-            if (progress.percentage !== null) {
-              currentButton?.style.setProperty('--fixed-sound-progress', String(progress.percentage / 100));
-            }
-          }, this.soundDownloadAbort.signal);
-        } finally {
-          currentButton?.classList.remove('is-downloading');
-        }
-        this.installedFixedSoundIds.add(sound.id);
-        completed += 1;
-        if (currentButton) {
-          currentButton.classList.remove('is-downloadable');
-          currentButton.classList.add('is-installed');
-          currentButton.setAttribute('aria-label', `${sound.name}. Baixado`);
-          const state = currentButton.querySelector<HTMLElement>('small');
-          if (state) state.textContent = 'No dispositivo';
-        }
-      }
-      if (button.isConnected) button.textContent = 'Tudo baixado';
-      void this.syncNativeEngine();
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) {
-        // No lote também vale a mensagem real: sem ela, só restava o botão
-        // dizendo "Tentar novamente", sem dizer o que aconteceu.
-        console.error('[Hook Keys] Falha ao baixar timbres', error);
-        this.updateSoundDownloadMessage(soundDownloadErrorMessage(error));
-        if (button.isConnected) {
-          button.textContent = completed > 0 ? `Continuar (${sounds.length - completed})` : 'Tentar novamente';
-          button.disabled = false;
-        }
-      }
-    } finally {
-      this.soundDownloadAbort = null;
-      this.bulkSoundDownloadRunning = false;
-      this.hideBackgroundDownload();
-      if (this.activeSoundDownloads.size > 0) void this.processSoundDownloadQueue();
+    this.soundDownloadBatchIds = new Set(sounds.map((sound) => sound.id));
+    for (const sound of notQueued) {
+      this.activeSoundDownloads.set(sound.id, {
+        sound, percentage: 0, abort: new AbortController(), state: 'queued',
+      });
     }
+    this.syncSoundDownloadButtons(modal);
+    this.syncDownloadAllButton(modal);
+    this.renderActiveSoundDownloadsBanner();
+    void this.processSoundDownloadQueue();
   }
 
   private async showDownloadAllConfirmation(modal: HTMLElement, button: HTMLButtonElement): Promise<void> {
@@ -8292,7 +8354,8 @@ export class PlayerScreen {
       return;
     }
 
-    const knownTotalBytes = sounds.reduce((total, sound) => total + (sound.byteSize ?? 0), 0);
+    const toQueue = sounds.filter((sound) => !this.activeSoundDownloads.has(sound.id));
+    const knownTotalBytes = toQueue.reduce((total, sound) => total + (sound.byteSize ?? 0), 0);
     button.disabled = true;
     const hasSpace = await hasStorageFor(knownTotalBytes || undefined);
     if (!button.isConnected) return;
@@ -8300,7 +8363,7 @@ export class PlayerScreen {
     if (!hasSpace) {
       button.textContent = 'Sem espaço';
       this.updateSoundDownloadMessage(
-        `Espaço insuficiente. Os ${sounds.length} timbres restantes precisam de ${formatBytes(knownTotalBytes)}.`,
+        `Espaço insuficiente. Os ${toQueue.length} timbres que faltam na fila precisam de ${formatBytes(knownTotalBytes)}.`,
       );
       return;
     }
@@ -8316,7 +8379,7 @@ export class PlayerScreen {
       <div>
         <small>Biblioteca Hook Keys</small>
         <strong>Baixar todos os timbres?</strong>
-        <p>Serão baixados ${sounds.length} timbres (${formatBytes(knownTotalBytes)}). O espaço disponível foi verificado neste dispositivo.</p>
+        <p>${toQueue.length} timbres serão adicionados à fila (${formatBytes(knownTotalBytes)}). O download atual continuará normalmente.</p>
         <span>
           <button type="button" data-download-all-choice="cancel">Cancelar</button>
           <button type="button" data-download-all-choice="confirm">Baixar</button>
@@ -8865,13 +8928,32 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
-  // Trocar de página no Config: o topo e o rodapé do painel ficam onde estão.
-  // Room, Hall e Stage escrevem Decay, Dampen e Size de uma vez; o Mix fica.
+  // Cada ambiente guarda os cinco parâmetros sem sobrescrever os outros.
   private selectReverbSpace(modal: HTMLElement, moduleNumber: number, name: string | undefined): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     if (!moduleState || !isReverbSpace(name)) return;
     const current = readModuleReverbSettings(moduleState.settings.reverb);
-    moduleState.settings.reverb = { ...current, ...REVERB_SPACES[name] };
+    const stored = moduleState.settings.reverbSpaces;
+    const profiles: Record<string, unknown> = stored && typeof stored === 'object' && !Array.isArray(stored)
+      ? { ...stored as Record<string, unknown> } : {};
+    for (const [spaceName, preset] of Object.entries(REVERB_SPACES)) {
+      if (!profiles[spaceName]) profiles[spaceName] = { ...current, ...preset };
+    }
+    const previous = isReverbSpace(moduleState.settings.reverbSpace as string | undefined)
+      ? moduleState.settings.reverbSpace : currentReverbSpace(current);
+    if (isReverbSpace(previous as string | undefined)) {
+      profiles[previous as string] = {
+        decay: current.decay, dampen: current.dampen, mod: current.mod, size: current.size, mix: current.mix,
+      };
+    }
+    const saved = profiles[name];
+    const target = saved && typeof saved === 'object' && !Array.isArray(saved)
+      ? saved as Record<string, unknown> : REVERB_SPACES[name];
+    const next = readModuleReverbSettings({ ...current, ...target });
+    moduleState.settings.reverb = next;
+    moduleState.settings.reverbSpace = name;
+    profiles[name] = { decay: next.decay, dampen: next.dampen, mod: next.mod, size: next.size, mix: next.mix };
+    moduleState.settings.reverbSpaces = profiles;
     // createModuleReverbMarkup devolve a página inteira (as abas Room/Hall/
     // Stage + o editor); trocar só a section de dentro aninhava outra página
     // inteira a cada clique, e os três botões nunca paravam de se multiplicar.
@@ -8955,6 +9037,24 @@ export class PlayerScreen {
       moduleState.settings, moduleNumber === 8 ? 'synth' : moduleNumber === 7 ? 'organ' : 'sf2');
     this.markPlayerStateChanged();
     void this.syncNativeEngine();
+  }
+
+  private updateModuleModulationIntensity(input: HTMLInputElement, moduleNumber: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    const mode = input.dataset.moduleModulationIntensity;
+    if (!moduleState || (mode !== 'pan' && mode !== 'tremolo')) return;
+    const value = Math.round(boundedNumber(input.value, 0, 100, 100));
+    moduleState.settings[mode === 'pan' ? 'panIntensity' : 'tremoloIntensity'] = value;
+    input.value = String(value);
+    input.setAttribute('aria-valuetext', `${value}%`);
+    const control = input.closest<HTMLElement>('.module-effect-knob');
+    control?.style.setProperty('--knob-angle', `${-135 + value * 2.7}deg`);
+    control?.style.setProperty('--knob-progress', String(value / 100));
+    const output = control?.querySelector<HTMLOutputElement>('output');
+    if (output) output.value = `${value}%`;
+    this.syncKnobFocus(input);
+    this.markPlayerStateChanged();
+    this.scheduleNativeEngineSync();
   }
 
   // Drawbars do Hook B3: são faders. O dedo cai na calha e a barra vai para
@@ -9200,19 +9300,13 @@ export class PlayerScreen {
 
   private startKnobDrag(event: PointerEvent, moduleNumber: number | null): void {
     if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
-    // Um pointerup perdido (o iOS às vezes come um, quando o card se redesenha
-    // debaixo do dedo) não pode deixar o gesto anterior preso: cada toque novo
-    // começa do zero e escolhe o eixo de novo.
+    // O knob apenas abre o fader. Nenhum gesto nele muda o parâmetro.
     if (this.knobDrag) {
       releasePointer(this.knobDrag.captureElement, this.knobDrag.pointerId);
       this.knobDrag = null;
     }
     const input = this.knobInputForTarget(event.target);
     if (!input || input.disabled) return;
-    const startValue = Number(input.value);
-    const minimum = Number(input.min);
-    const maximum = Number(input.max);
-    if (![startValue, minimum, maximum].every(Number.isFinite) || maximum <= minimum) return;
 
     event.preventDefault();
     input.focus({ preventScroll: true });
@@ -9222,15 +9316,9 @@ export class PlayerScreen {
       input,
       captureElement,
       pointerId: event.pointerId,
-      startValue,
       startY: event.clientY,
       startX: event.clientX,
-      startedAt: event.timeStamp,
-      travelPixels: this.desktopRuntime ? 240 : Math.max(480, Math.min(800, window.innerWidth * 0.6)),
-      linear: this.desktopRuntime,
       moved: false,
-      axis: null,
-      axisLocked: false,
     };
     this.showKnobFocus(input);
     const learnTarget = moduleNumber === null ? this.ccLearnTargetForOutputKnob(input) : this.ccLearnTargetForKnob(input, moduleNumber);
@@ -9247,85 +9335,9 @@ export class PlayerScreen {
   private moveKnobDrag(event: PointerEvent): void {
     const drag = this.knobDrag;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
-
-    const minimum = Number(drag.input.min);
-    const maximum = Number(drag.input.max);
-    const step = Number(drag.input.step);
-    // O knob aceita os dois sentidos: direita ou para cima aumenta, esquerda ou
-    // para baixo diminui. O primeiro movimento escolhe o eixo e ele vale até
-    // soltar o dedo, para um gesto na diagonal não brigar consigo mesmo.
-    const horizontalDelta = event.clientX - drag.startX;
-    const verticalDelta = drag.startY - event.clientY;
-    if (!drag.axisLocked) {
-      // O knob responde já nos dois primeiros pixels, mas só fecha o eixo aos
-      // seis: até lá um começo torto ainda se corrige sozinho.
-      const travel = Math.max(Math.abs(horizontalDelta), Math.abs(verticalDelta));
-      if (travel < 2) return;
-      drag.axis = Math.abs(horizontalDelta) >= Math.abs(verticalDelta) ? 'horizontal' : 'vertical';
-      drag.axisLocked = travel >= 6;
-    }
-    const axisDelta = drag.axis === 'horizontal' ? horizontalDelta : verticalDelta;
-    if (!drag.moved && Math.abs(axisDelta) < 2) return;
+    if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 8) return;
     drag.moved = true;
     this.knobCcLearnGesture.cancel();
-    this.lastKnobTap = null;
-    const direction = Math.sign(axisDelta);
-    const distance = Math.abs(axisDelta);
-    const range = maximum - minimum;
-    const fineStep = Number.isFinite(step) && step > 0 ? step : range / 1_000;
-    // Touch keeps exact single-step control near the starting point, with
-    // progressive acceleration. Desktop uses a constant mouse sensitivity in
-    // the knob's own domain (including logarithmic cutoff positions), except
-    // for wide ranges, which get the mouse curve below.
-    // A curva estava exigindo dedo demais: uns 250-260px para varrer o knob
-    // inteiro. O termo fino (perto da origem, /3) fica igual — é o que dá o
-    // passo exato de 1 unidade a cada 3px —, só o termo de aceleração ficou
-    // mais forte (240 no lugar de 500), então o curso inteiro cabe em ~180px.
-    const acceleratedDelta = (domainRange: number, domainStep = fineStep) => direction * (
-      (distance / 3) * domainStep + Math.pow(distance / 240, 3) * domainRange
-    );
-    let rawValue: number;
-    let steppedValue: number;
-    if (drag.linear && range / drag.travelPixels <= fineStep * DESKTOP_LINEAR_KNOB_MAX_STEPS_PER_PIXEL) {
-      rawValue = drag.startValue + horizontalDelta / drag.travelPixels * range;
-      steppedValue = Number.isFinite(step) && step > 0
-        ? minimum + Math.round((rawValue - minimum) / step) * step
-        : rawValue;
-    } else if (drag.linear) {
-      // Wide ranges (times up to 25 s) would jump ~100 ms per pixel if linear.
-      // Near the click the mouse moves one step per pixel (4, 5, 6 ms...), then
-      // accelerates so the whole range still fits in a ~400 px drag.
-      const domainRange = toCoarseKnobDomain(maximum) - toCoarseKnobDomain(minimum);
-      rawValue = fromCoarseKnobDomain(toCoarseKnobDomain(drag.startValue) + direction * (
-        distance * fineStep + Math.pow(distance / DESKTOP_ACCELERATED_KNOB_PIXELS, 3) * domainRange
-      ));
-      steppedValue = coarseKnobValue(rawValue, minimum, step);
-    } else if (drag.input.matches('[data-module-cutoff], [data-filter-velocity-cutoff]')) {
-      const startingHz = cutoffFrequencyFromRatio(drag.startValue);
-      const frequency = Math.round(Math.min(20_000, Math.max(20,
-        startingHz + acceleratedDelta(20_000 - 20, 1))));
-      steppedValue = cutoffRatioFromFrequency(frequency);
-    } else if (drag.input.dataset.synthScale === 'cutoff') {
-      const startingHz = 20 * (1_000 ** (drag.startValue / 100));
-      const frequency = Math.round(Math.min(20_000, Math.max(20,
-        startingHz + acceleratedDelta(20_000 - 20, 1))));
-      steppedValue = Math.log(frequency / 20) / Math.log(1_000) * 100;
-    } else {
-      // Nos tempos longos o knob anda fino até 10 s e de meio em meio segundo
-      // daí para cima: antes eram quase 40 cm de dedo para ir de 10 s a 25 s.
-      const domainRange = toCoarseKnobDomain(maximum) - toCoarseKnobDomain(minimum);
-      rawValue = fromCoarseKnobDomain(toCoarseKnobDomain(drag.startValue) + acceleratedDelta(domainRange));
-      steppedValue = coarseKnobValue(rawValue, minimum, step);
-    }
-    const value = Math.min(maximum, Math.max(minimum, steppedValue));
-    const serializedValue = String(Number(value.toFixed(6)));
-    if (drag.input.value === serializedValue) return;
-
-    drag.moved = true;
-    drag.input.value = serializedValue;
-    drag.input.dispatchEvent(new Event('input', { bubbles: true }));
-    this.syncKnobFocus(drag.input);
   }
 
   private endKnobDrag(event: PointerEvent): void {
@@ -9334,51 +9346,9 @@ export class PlayerScreen {
     this.knobDrag = null;
     event.preventDefault();
     releasePointer(drag.captureElement, event.pointerId);
-    if (drag.moved) drag.input.dispatchEvent(new Event('change', { bubbles: true }));
-    if (!drag.moved && event.type === 'pointerup' && event.timeStamp - drag.startedAt < 500) {
-      if (this.lastKnobTap?.input === drag.input && event.timeStamp - this.lastKnobTap.time <= 360) {
-        drag.input.value = String(this.defaultKnobValue(drag.input));
-        drag.input.dispatchEvent(new Event('input', { bubbles: true }));
-        drag.input.dispatchEvent(new Event('change', { bubbles: true }));
-        this.lastKnobTap = null;
-      } else this.lastKnobTap = { input: drag.input, time: event.timeStamp };
-    } else this.lastKnobTap = null;
     // Enquanto o visor estiver na tela, encostar de novo continua o ajuste do
     // ponto onde parou, sem recomeçar o valor.
-    this.hideKnobFocus(drag.moved ? 900 : 3_000);
-  }
-
-  private defaultKnobValue(input: HTMLInputElement): number {
-    if (isOutputBus(input.dataset.outputLevel) || input.matches('[data-metronome-output-volume]')) return outputPosition(0);
-    if (input.matches('[data-glide-time]')) {
-      if (input.dataset.glideSynced === 'true') return this.metronome.getBpm();
-      return input.dataset.glideOwner === 'synth' || input.closest('[data-glide-owner="synth"]')
-        ? DEFAULT_SYNTH_SETTINGS.glideMs : DEFAULT_MODULE_GLIDE_MS;
-    }
-    if (input.matches('[data-module-cutoff]')) return 1;
-    if (input.matches('[data-filter-velocity-cutoff]')) return cutoffRatioFromFrequency(DEFAULT_FILTER_VELOCITY_CUTOFF_HZ);
-    if (input.matches('[data-module-modulation-rate]')) return DEFAULT_MODULE_MODULATION_RATE_HZ;
-    if (input.matches('[data-module-gain]')) return 0;
-    if (input.matches('[data-module-sustain]')) return 0;
-    if (input.matches('[data-module-velocity-limit]')) return 127;
-    const tranceGate = input.dataset.tranceGateParameter;
-    if (tranceGate) return Number((readTranceGateSettings(undefined) as unknown as Record<string, unknown>)[tranceGate]);
-    const envelope = input.dataset.moduleEnvelope;
-    if (isModuleEnvelopeParameter(envelope)) return MODULE_ENVELOPE_DEFAULTS[envelope];
-    const synth = input.dataset.synthParameter;
-    if (synth) {
-      const value = Number((DEFAULT_SYNTH_SETTINGS as unknown as Record<string, unknown>)[synth]);
-      return input.dataset.synthScale === 'cutoff' ? Math.log(value / 20) / Math.log(1000) : value;
-    }
-    const kind = input.dataset.moduleEffectKind;
-    const control = input.dataset.moduleEffectControl;
-    if (isModuleEffectKind(kind) && control) return Number((readModuleEffectSettings(kind, {}) as unknown as Record<string, unknown>)[control]);
-    const parameter = input.dataset.patternParameter;
-    if (parameter) {
-      const settings = readArpeggiatorSettings({});
-      return Number((settings as unknown as Record<string, unknown>)[parameter] ?? input.min);
-    }
-    return Number(input.min);
+    this.hideKnobFocus(KNOB_FOCUS_IDLE_MS);
   }
 
   private ccLearnTargetForOutputKnob(input: HTMLInputElement): CcLearnTarget | null {
@@ -9408,57 +9378,66 @@ export class PlayerScreen {
       fader.step = input.step;
       fader.disabled = input.disabled;
       fader.setAttribute('aria-label', input.ariaLabel || label?.textContent?.trim() || 'Parâmetro');
+      const faderTrack = fader.parentElement;
+      if (!faderTrack) return;
       let activePointerId: number | null = null;
+      let pointerStartY = 0;
+      let pointerStartValue = 0;
       const updateFromPointer = (event: PointerEvent): void => {
-        const bounds = fader.getBoundingClientRect();
+        const bounds = faderTrack.getBoundingClientRect();
         const minimum = Number(fader.min) || 0;
         const maximum = Number(fader.max) || 100;
         const rawStep = Number(fader.step);
         const step = Number.isFinite(rawStep) && rawStep > 0 ? rawStep : 1;
-        const ratio = Math.min(1, Math.max(0, (bounds.bottom - event.clientY) / Math.max(1, bounds.height)));
-        const rawValue = minimum + ratio * (maximum - minimum);
+        const rawValue = pointerStartValue +
+          (pointerStartY - event.clientY) / Math.max(1, bounds.height - 20) * (maximum - minimum);
         const stepped = minimum + Math.round((rawValue - minimum) / step) * step;
-        fader.value = String(Math.min(maximum, Math.max(minimum, stepped)));
+        const nextValue = String(Math.min(maximum, Math.max(minimum, stepped)));
+        if (fader.value === nextValue) return;
+        fader.value = nextValue;
         fader.dispatchEvent(new Event('input', { bubbles: true }));
       };
       const finishPointer = (event: PointerEvent): void => {
         if (activePointerId !== event.pointerId) return;
         event.preventDefault();
         event.stopPropagation();
-        if (fader.hasPointerCapture(event.pointerId)) fader.releasePointerCapture(event.pointerId);
+        if (faderTrack.hasPointerCapture(event.pointerId)) faderTrack.releasePointerCapture(event.pointerId);
         activePointerId = null;
         const source = this.knobFocusInput;
         if (source?.isConnected) source.dispatchEvent(new Event('change', { bubbles: true }));
-        this.hideKnobFocus(1_200);
+        this.hideKnobFocus(KNOB_FOCUS_IDLE_MS);
       };
-      fader.onpointerdown = (event) => {
+      faderTrack.onpointerdown = (event) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
         if (this.knobFocusHideTimer !== null) window.clearTimeout(this.knobFocusHideTimer);
         this.knobFocusHideTimer = null;
         activePointerId = event.pointerId;
-        fader.setPointerCapture(event.pointerId);
-        updateFromPointer(event);
+        pointerStartY = event.clientY;
+        pointerStartValue = Number(fader.value);
+        faderTrack.setPointerCapture(event.pointerId);
+        fader.focus({ preventScroll: true });
       };
-      fader.onpointermove = (event) => {
+      faderTrack.onpointermove = (event) => {
         if (activePointerId !== event.pointerId) return;
         event.preventDefault();
         event.stopPropagation();
         updateFromPointer(event);
       };
-      fader.onpointerup = finishPointer;
-      fader.onpointercancel = finishPointer;
+      faderTrack.onpointerup = finishPointer;
+      faderTrack.onpointercancel = finishPointer;
       fader.onchange = () => {
         if (activePointerId !== null) return;
         const source = this.knobFocusInput;
         if (source?.isConnected) source.dispatchEvent(new Event('change', { bubbles: true }));
-        this.hideKnobFocus(1_200);
+        this.hideKnobFocus(KNOB_FOCUS_IDLE_MS);
       };
     }
     overlay.classList.add('is-visible');
     overlay.setAttribute('aria-hidden', 'false');
     this.syncKnobFocus(input);
+    this.hideKnobFocus(KNOB_FOCUS_IDLE_MS);
   }
 
   private syncKnobFocus(input: HTMLInputElement): void {
@@ -9494,6 +9473,7 @@ export class PlayerScreen {
         const overlay = this.root.querySelector<HTMLElement>('[data-knob-focus]');
         overlay?.classList.remove('is-visible');
         overlay?.setAttribute('aria-hidden', 'true');
+        this.knobFocusInput = null;
       }, delayMs);
       return;
     }
@@ -9862,8 +9842,21 @@ export class PlayerScreen {
 
     const settings = readModuleEffectSettings(kind, moduleState.settings[kind]);
     if (!(key in settings)) return;
+    if (kind === 'reverb' && !isReverbSpace(moduleState.settings.reverbSpace as string | undefined)) {
+      const matched = currentReverbSpace(readModuleReverbSettings(moduleState.settings.reverb));
+      if (matched) moduleState.settings.reverbSpace = matched;
+    }
     (settings as unknown as Record<string, number | string>)[key] = value;
     moduleState.settings[kind] = settings;
+    if (kind === 'reverb' && isReverbSpace(moduleState.settings.reverbSpace as string | undefined)) {
+      const space = moduleState.settings.reverbSpace as string;
+      const stored = moduleState.settings.reverbSpaces;
+      const reverb = readModuleReverbSettings(settings);
+      moduleState.settings.reverbSpaces = {
+        ...(stored && typeof stored === 'object' && !Array.isArray(stored) ? stored as Record<string, unknown> : {}),
+        [space]: { decay: reverb.decay, dampen: reverb.dampen, mod: reverb.mod, size: reverb.size, mix: reverb.mix },
+      };
+    }
 
     const minimum = Number(input.min);
     const maximum = Number(input.max);
@@ -10037,6 +10030,9 @@ export class PlayerScreen {
     } else if (processor === 'reverb') {
       restore('reverb', readModuleReverbSettings,
         readModuleReverbSettings(moduleState.settings.reverb).enabled);
+      moduleState.settings.reverbSpace = reference.reverbSpace;
+      moduleState.settings.reverbSpaces = reference.reverbSpaces
+        ? cloneSettings(reference.reverbSpaces as Record<string, unknown>) : undefined;
     } else if (processor === 'rotary') {
       restore('rotary', readModuleRotarySettings,
         readModuleRotarySettings(moduleState.settings.rotary).enabled);
@@ -10581,6 +10577,7 @@ export class PlayerScreen {
 
   private commitEffectBankName(modal: HTMLElement): void {
     if (!this.pendingEffectBankEdit) return;
+    if (this.pendingEffectBankEdit === '1' || this.pendingEffectBankEdit === '2') return;
     const input = modal.querySelector<HTMLInputElement>('[data-effect-bank-name-input]');
     if (!input) return;
     const bank = this.pendingEffectBankEdit;
@@ -10694,9 +10691,11 @@ export class PlayerScreen {
     const input = modal.querySelector<HTMLInputElement>('[data-effect-name-input]');
     const editor = modal.querySelector<HTMLElement>('.effect-pad-editor');
     const effect = this.effectPadStates.get(this.activeEffectBank)?.[effectNumber - 1];
-    if (!input || !editor || !effect) return;
+    if (!editor || !effect) return;
     const requestedColorIndex = Number.parseInt(editor.dataset.effectColorIndex ?? '', 10);
-    effect.name = input.value.trim().slice(0, 12) || `Efeito ${effectNumber}`;
+    if (this.activeEffectBank !== '1' && this.activeEffectBank !== '2' && input) {
+      effect.name = input.value.trim().slice(0, 12) || `Efeito ${effectNumber}`;
+    }
     effect.colorIndex = EFFECT_PAD_COLORS[requestedColorIndex]
       ? requestedColorIndex
       : effect.colorIndex;
@@ -10748,6 +10747,7 @@ export class PlayerScreen {
         this.seenSoundIds,
       );
       if (category === 'user') void this.renderUserSoundfonts(modal);
+      else this.syncSoundDownloadButtons(content);
     }
   }
 
@@ -11473,6 +11473,10 @@ export class PlayerScreen {
       const patternInputSlot = arpeggiatorSettings.enabled
         ? arpeggiatorInputSlotForModule(moduleIndex + 1)
         : null;
+      const drumSound = isDrumCatalogSound(this.soundCatalog, moduleState?.timbreId);
+      const drumZeroReleaseMasks = drumSound
+        ? encodeDrumZeroReleaseNotes(moduleState?.settings.drumZeroReleaseNotes)
+        : [0, 0, 0, 0] as const;
       configurationTasks.push(hookKeysNative.configureModule({
         moduleIndex,
         enabled: Boolean(moduleState?.enabled && (moduleIndex === 6 || moduleIndex === 7 ||
@@ -11486,7 +11490,11 @@ export class PlayerScreen {
         // próprio módulo.
         sustain: moduleState?.sustainInputEnabled ?? true,
         modulation: moduleState?.modulationInputEnabled ?? true,
-        gmDrumHiHatChoke: isDrumCatalogSound(this.soundCatalog, moduleState?.timbreId),
+        gmDrumHiHatChoke: drumSound,
+        drumZeroReleaseMask0: drumZeroReleaseMasks[0],
+        drumZeroReleaseMask1: drumZeroReleaseMasks[1],
+        drumZeroReleaseMask2: drumZeroReleaseMasks[2],
+        drumZeroReleaseMask3: drumZeroReleaseMasks[3],
         volumeDb: faderModeUsesPersistentVolumes(
           this.bankStates.get(this.activeBank)?.faderMode ?? 'default',
         )
@@ -11506,10 +11514,16 @@ export class PlayerScreen {
         outputDualMono: this.moduleOutputMono,
       }));
       if (moduleState) {
+        const modulationMode = readModuleModulationMode(moduleState.settings);
         configurationTasks.push(hookKeysNative.configureModuleModulation({
           moduleIndex,
-          mode: moduleModulationEngineMode(readModuleModulationMode(moduleState.settings)),
+          // No Organ, Rotary usa a roda exclusivamente no processador Leslie.
+          // O modo 4 bloqueia tanto o LFO interno quanto o CC1 do próprio SF2.
+          mode: moduleIndex === 6 && modulationMode === 'rotary'
+            ? 4 : moduleModulationEngineMode(modulationMode),
           rateHz: readModuleModulationRate(moduleState.settings),
+          intensity: (modulationMode === 'pan' || modulationMode === 'tremolo'
+            ? readModuleModulationIntensity(moduleState.settings, modulationMode) : 100) / 100,
         }));
         const glideSource = moduleIndex === 7 && synthSettings
           ? synthSettings as unknown as Readonly<Record<string, unknown>>
@@ -11663,9 +11677,13 @@ export class PlayerScreen {
         }));
       }
     }
+    const masterRoute = parseAudioBusRoute(this.audioRouting.timbres);
     configurationTasks.push(
       hookKeysNative.setTempo(this.metronome.getBpm()),
-      hookKeysNative.setOutputGain(this.outputLevels.master, this.outputEnabled.master),
+      hookKeysNative.setOutputGain(
+        this.outputLevels.master, this.outputEnabled.master,
+        masterRoute.start, masterRoute.count,
+      ),
       this.applyMetronomeOutput(),
       this.applyNativeMusicOutput(),
       hookKeysNative.setCompatibilityMode(this.compatibilityMode),
@@ -11924,6 +11942,10 @@ export class PlayerScreen {
     }
     const savedEffectBankNames = isRecord(value.effectBankNames) ? value.effectBankNames : {};
     for (const effectBank of EFFECT_BANK_IDS) {
+      if (effectBank === '1' || effectBank === '2') {
+        this.effectBankNames.set(effectBank, `FX ${effectBank}`);
+        continue;
+      }
       const name = typeof savedEffectBankNames[effectBank] === 'string'
         ? savedEffectBankNames[effectBank].trim().slice(0, 12)
         : '';
@@ -11965,7 +11987,7 @@ export class PlayerScreen {
               ? requestedColorIndex
               : effect.colorIndex,
             gateRelease: source.gateRelease === 'continue-press' ? 'continue-press' : 'infinite',
-            name: typeof source.name === 'string'
+            name: effectBank !== '1' && effectBank !== '2' && typeof source.name === 'string'
               ? source.name.trim().slice(0, 12) || effect.name
               : effect.name,
             triggerMode: source.triggerMode === 'gate' ? 'gate' : 'toggle',
@@ -12273,30 +12295,6 @@ function isModuleEnvelopeParameter(value: string | undefined): value is ModuleEn
   return value !== undefined && Object.prototype.hasOwnProperty.call(MODULE_ENVELOPE_LIMITS, value);
 }
 
-// Acima de 10 s o knob passa a andar de meio em meio segundo: só os tempos
-// longos (Attack, Hold, Decay, Release) chegam nessa faixa.
-const COARSE_KNOB_FROM_MS = 10_000;
-const COARSE_KNOB_STEP_MS = 500;
-
-function toCoarseKnobDomain(value: number): number {
-  if (value <= COARSE_KNOB_FROM_MS) return value;
-  return COARSE_KNOB_FROM_MS + (value - COARSE_KNOB_FROM_MS) / COARSE_KNOB_STEP_MS;
-}
-
-function fromCoarseKnobDomain(value: number): number {
-  if (value <= COARSE_KNOB_FROM_MS) return value;
-  return COARSE_KNOB_FROM_MS + (value - COARSE_KNOB_FROM_MS) * COARSE_KNOB_STEP_MS;
-}
-
-function coarseKnobValue(rawValue: number, minimum: number, step: number): number {
-  if (rawValue > COARSE_KNOB_FROM_MS) {
-    return Math.round(rawValue / COARSE_KNOB_STEP_MS) * COARSE_KNOB_STEP_MS;
-  }
-  return Number.isFinite(step) && step > 0
-    ? minimum + Math.round((rawValue - minimum) / step) * step
-    : rawValue;
-}
-
 function isModuleEffectKind(value: string | undefined): value is ModuleEffectKind {
   return value === 'compressor' || value === 'reverb' || value === 'delay' || value === 'rotary'
       || value === 'chorus' || value === 'cutoffEnvelope';
@@ -12342,6 +12340,8 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
     // O Organ nasce com a roda em Rotary; os demais módulos começam em User.
     modulationMode: moduleIndex === 6 ? 'rotary' : 'user',
     modulationRateHz: DEFAULT_MODULE_MODULATION_RATE_HZ,
+    tremoloIntensity: 100,
+    panIntensity: 100,
     velocityLimit: 127,
     velocityCeiling: 127,
     reverb: { ...FACTORY_MODULE_REVERB },
@@ -12387,7 +12387,20 @@ function isDrumCatalogSound(catalog: SoundCatalog, timbreId: string | null | und
   const sound = catalog.get(timbreId.slice(6));
   if (!sound) return false;
   const category = catalog.getCategory(sound.category);
-  return sound.category.toLowerCase() === 'drum' || category?.name.trim().toLowerCase() === 'drum';
+  const categoryName = category?.name.trim().toLowerCase();
+  return sound.category.toLowerCase() === 'drum' || categoryName === 'drum' || categoryName === 'bateria';
+}
+
+function encodeDrumZeroReleaseNotes(value: unknown): readonly [number, number, number, number] {
+  const masks = [0, 0, 0, 0];
+  if (!Array.isArray(value)) return masks as [number, number, number, number];
+  for (const rawNote of value) {
+    const note = Number(rawNote);
+    if (!Number.isInteger(note) || note < 0 || note > 127) continue;
+    const group = note >>> 5;
+    masks[group] = ((masks[group] ?? 0) | (1 << (note & 31))) | 0;
+  }
+  return masks as [number, number, number, number];
 }
 
 function cloneSettings(value: Readonly<Record<string, unknown>>): Record<string, unknown> {

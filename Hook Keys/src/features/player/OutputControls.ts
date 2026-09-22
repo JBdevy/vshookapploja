@@ -38,7 +38,7 @@ export const OUTPUTS: readonly { id: OutputBus; label: string }[] = [
   { id: 'music', label: 'Músicas' },
   { id: 'pads', label: 'Pads' },
   { id: 'effects', label: 'Efects' },
-  { id: 'master', label: 'Master' },
+  { id: 'master', label: 'Módulos' },
 ];
 
 interface OutputControlMarkupOptions {
@@ -53,6 +53,13 @@ const OUTPUT_KNOB_COLORS: Record<OutputBus, string> = {
   master: '#ff8a1f',
 };
 
+function createOutputMiniMeter(id: string, label: string): string {
+  return `<span class="player-output-mini-meter" data-output-meter="${id}" role="img" aria-label="Nível de ${label}">
+    <i aria-hidden="true"><b data-output-meter-channel="0"></b></i>
+    <i aria-hidden="true"><b data-output-meter-channel="1"></b></i>
+  </span>`;
+}
+
 export function createOutputKnobMarkup(
   id: OutputBus,
   label: string,
@@ -63,7 +70,10 @@ export function createOutputKnobMarkup(
   return `
     <label class="player-output-knob" data-output-knob="${id}" style="--knob-angle:${angle}deg;--knob-progress:${position / 100};--knob-accent:${OUTPUT_KNOB_COLORS[id]}">
       <span>${label}</span>
-      <span class="player-output-knob__face" aria-hidden="true"><i></i></span>
+      <span class="player-output-knob__control">
+        <span class="player-output-knob__face" aria-hidden="true"><i></i></span>
+        ${createOutputMiniMeter(id === 'master' ? 'modules' : id, label)}
+      </span>
       <input type="range" min="0" max="100" step="0.1" value="${position}" data-output-level="${id}" aria-label="Volume ${label}" aria-valuetext="${formatOutputDb(level)}">
       <output data-output-value="${id}">${formatOutputDb(level)}</output>
     </label>
@@ -77,7 +87,10 @@ export function createMetronomeKnobMarkup(volume: number): string {
   return `
     <label class="player-output-knob" data-output-knob="metronome" style="--knob-angle:${angle}deg;--knob-progress:${position / 100};--knob-accent:#24b8ff">
       <span>Click</span>
-      <span class="player-output-knob__face" aria-hidden="true"><i></i></span>
+      <span class="player-output-knob__control">
+        <span class="player-output-knob__face" aria-hidden="true"><i></i></span>
+        ${createOutputMiniMeter('click', 'Click')}
+      </span>
       <input type="range" min="0" max="100" step="0.1" value="${position}" data-metronome-output-volume aria-label="Volume do Click" aria-valuetext="${formatOutputDb(levelDb)}">
       <output data-metronome-output-value>${formatOutputDb(levelDb)}</output>
     </label>

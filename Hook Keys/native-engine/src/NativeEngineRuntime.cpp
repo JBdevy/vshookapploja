@@ -315,14 +315,18 @@ bool NativeEngineRuntime::setSynthConfig(AnalogSynthConfig config) noexcept {
 }
 
 bool NativeEngineRuntime::setModuleModulationMode(
-    std::size_t moduleIndex, std::uint8_t mode, float rateHz) noexcept {
+    std::size_t moduleIndex, std::uint8_t mode, float rateHz, float intensity) noexcept {
   std::scoped_lock lock(configMutex_);
   if (moduleIndex == kModuleCount - 1) {
     controlLayer_->synth->setModulationMode(mode, rateHz);
     return true;
   }
+  if (moduleIndex == 6) {
+    organModule_->setModulationMode(mode, rateHz, intensity);
+    return true;
+  }
   if (moduleIndex >= controlLayer_->modules.size()) return false;
-  controlLayer_->modules[moduleIndex]->setModulationMode(mode, rateHz);
+  controlLayer_->modules[moduleIndex]->setModulationMode(mode, rateHz, intensity);
   return true;
 }
 
@@ -381,7 +385,14 @@ void NativeEngineRuntime::setMetronome(
   metronomeEnabled_.store(enabled, std::memory_order_release);
 }
 
-void NativeEngineRuntime::setOutputGainDb(float db, bool enabled) noexcept {
+void NativeEngineRuntime::setOutputGainDb(
+    float db, bool enabled, std::uint8_t channelStart, std::uint8_t channelCount) noexcept {
+  const auto route = static_cast<std::uint16_t>(
+      static_cast<std::uint16_t>(std::min<std::uint8_t>(channelStart, 31))
+      | (static_cast<std::uint16_t>(channelCount == 1 ? 1 : 2) << 8));
+  if (masterOutputRoute_.exchange(route, std::memory_order_acq_rel) != route) {
+    for (auto& peak : masterPeaks_) peak.store(0.0f, std::memory_order_relaxed);
+  }
   outputGainLinear_.store(
       enabled && db > -90.0f ? std::pow(10.0f, std::clamp(db, -90.0f, 0.0f) / 20.0f) : 0.0f,
       std::memory_order_release);
@@ -471,6 +482,20 @@ HookKeysEngine::ModuleAnalysis NativeEngineRuntime::consumeModuleAnalysis(std::s
   return result;
 }
 
+std::array<float, 2> NativeEngineRuntime::consumeMasterPeaks() noexcept {
+  return {
+      masterPeaks_[0].exchange(0.0f, std::memory_order_acq_rel),
+      masterPeaks_[1].exchange(0.0f, std::memory_order_acq_rel),
+  };
+}
+
+std::array<float, 2> NativeEngineRuntime::consumeMetronomePeaks() noexcept {
+  return {
+      metronomePeaks_[0].exchange(0.0f, std::memory_order_acq_rel),
+      metronomePeaks_[1].exchange(0.0f, std::memory_order_acq_rel),
+  };
+}
+
 void NativeEngineRuntime::render(float* left, float* right, std::size_t frames) noexcept {
   if (left == nullptr || right == nullptr) return;
   for (std::size_t rendered = 0; rendered < frames;) {
@@ -509,15 +534,31 @@ void NativeEngineRuntime::renderInterleaved(float* output, std::size_t frames, s
     }
     rendered += count;
   }
-  addMetronomeInterleaved(output, frames, channels);
+  const auto masterRoute = masterOutputRoute_.load(std::memory_order_acquire);
+  if (masterRoute != masterOutputRouteSeen_) {
+    masterOutputRouteSeen_ = masterRoute;
+    masterLimiterGain_ = 1.0f;
+  }
+  std::array<float, 2> masterBlockPeaks{};
   for (std::size_t frame = 0; frame < frames; ++frame) {
     const auto gain = nextOutputGain();
     for (std::size_t channel = 0; channel < channels; ++channel) {
       output[frame * channels + channel] *= gain;
     }
     applyMasterLimiter(output + frame * channels, channels);
+    for (std::size_t channel = 0; channel < channels; ++channel) {
+      const auto side = channel & 1u;
+      masterBlockPeaks[side] = std::max(masterBlockPeaks[side],
+          std::abs(output[frame * channels + channel]));
+    }
   }
-  // Depois do master: o fader Music já controla o volume das músicas.
+  for (std::size_t channel = 0; channel < masterBlockPeaks.size(); ++channel) {
+    auto previous = masterPeaks_[channel].load(std::memory_order_relaxed);
+    while (masterBlockPeaks[channel] > previous && !masterPeaks_[channel].compare_exchange_weak(
+        previous, masterBlockPeaks[channel], std::memory_order_release, std::memory_order_relaxed)) {}
+  }
+  // Click e Playlist têm volumes e medidores próprios; não passam por Módulos.
+  addMetronomeInterleaved(output, frames, channels);
   tracks_->render(output, frames, channels);
   const auto budgetSeconds = static_cast<double>(frames) / sampleRate_;
   if (budgetSeconds > 0.0) {
@@ -623,11 +664,19 @@ void NativeEngineRuntime::addMetronomeInterleaved(
   const auto requested = static_cast<std::size_t>(metronomeOutputStart_.load(std::memory_order_acquire));
   const auto first = requested < channels ? requested : 0;
   const bool stereo = metronomeOutputCount_.load(std::memory_order_acquire) == 2 && first + 1 < channels;
+  float blockPeak = 0.0f;
   for (std::size_t frame = 0; frame < frames; ++frame) {
     const auto sample = renderMetronomeSample();
+    blockPeak = std::max(blockPeak, std::abs(sample));
     auto* destination = output + frame * channels;
     destination[first] += sample;
     if (stereo) destination[first + 1] += sample;
+  }
+  const auto sides = stereo ? 2u : 1u;
+  for (std::size_t channel = 0; channel < sides; ++channel) {
+    auto previous = metronomePeaks_[channel].load(std::memory_order_relaxed);
+    while (blockPeak > previous && !metronomePeaks_[channel].compare_exchange_weak(
+        previous, blockPeak, std::memory_order_release, std::memory_order_relaxed)) {}
   }
 }
 

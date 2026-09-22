@@ -98,12 +98,19 @@ try {
   const globalOctaveUp = root.querySelector('[data-action="global-octave-up"]');
   assert(globalOctaveUp, 'o topo mostra o controle de oitava geral');
   assert.deepEqual([...root.querySelectorAll('.player-header-knobs .player-output-knob > span:first-child')]
-    .map(label => label.textContent.trim()), ['Playlist', 'Pads', 'Efects', 'Click', 'Master']);
+    .map(label => label.textContent.trim()), ['Playlist', 'Pads', 'Efects', 'Click', 'Módulos']);
   assert.equal(root.querySelectorAll('.player-header-knobs__divider').length, 0,
     'os cinco knobs principais ficam sem barras entre eles');
   assert(!root.querySelector('[data-action="open-tracks"]'), 'a Playlist saiu do topo');
   assert.equal(root.querySelectorAll('.player-module').length, 8, 'mantém os oito módulos');
   const factoryModules = player.getActivePresetState().modules;
+  assert(factoryModules.every((module) => module.lowNote === 21 && module.highNote === 108),
+    'na primeira abertura todos os módulos usam a faixa MIDI 21..108');
+  assert(factoryModules.every((_, index) => {
+    const module = root.querySelector(`.player-module[data-module="${index + 1}"]`);
+    return module?.querySelector('[data-action="learn-note-range"][data-bound="low"]')?.textContent === 'A-1'
+      && module?.querySelector('[data-action="learn-note-range"][data-bound="high"]')?.textContent === 'C7';
+  }), 'na primeira abertura todos os módulos mostram A-1 e C7');
   assert.equal(factoryModules[6].settings.tranceGate.enabled, false,
     'o Trance Gate do Organ nasce desligado');
   assert.equal(
@@ -775,11 +782,11 @@ try {
     knob = window.document.querySelector('[data-glide-time]');
     assert.equal(knob.value, '450', 'desligar Sync restaura o tempo manual');
     tap(knob, 2000 + module * 1000); tap(knob, 2150 + module * 1000);
-    assert.equal(knob.value, '0', 'double tap volta o Glide para 0 ms, desligado');
+    assert.equal(knob.value, '450', 'tocar no knob apenas abre o fader e não altera o Glide');
     const settings = player.getActivePresetState().modules[module - 1].settings;
-    assert.equal(settings.glideMs, 0);
+    assert.equal(settings.glideMs, 450);
     await player.syncNativeEngine();
-    assert.equal(calls.filter(({command,args}) => command === 'configure_module_envelope' && args.config.moduleIndex === module - 1).at(-1).args.config.glideMs, 0);
+    assert.equal(calls.filter(({command,args}) => command === 'configure_module_envelope' && args.config.moduleIndex === module - 1).at(-1).args.config.glideMs, 450);
   }
   {
     // Modo Poly/Mono do Config: módulos 1 a 7 (Arpeggiator e Trance Gate inclusos).
@@ -946,35 +953,19 @@ try {
   master.dispatchEvent(new window.Event('input', { bubbles: true }));
   const drag = { target: master, isPrimary: true, pointerType: 'mouse', button: 0, pointerId: 1, clientX: 50, clientY: 200, timeStamp: 12000, preventDefault() {} };
   player.startKnobDrag(drag, null);
-  assert.equal(player.knobDrag.travelPixels, 240);
-  assert.equal(player.knobDrag.linear, true);
   player.moveKnobDrag({ ...drag, clientX: 60 });
-  assert.equal(master.value, '86.2', 'desktop mouse uses constant linear sensitivity');
-  player.moveKnobDrag({ ...drag, clientX: 70 });
-  assert.equal(master.value, '90.3', 'twice the mouse distance produces twice the change');
-  player.moveKnobDrag({ ...drag, clientX: 40 });
-  assert.equal(master.value, '77.8', 'dragging left reverses the linear change');
-  player.moveKnobDrag({ ...drag, clientX: 650 });
-  assert.equal(master.value, '100', 'desktop movement clamps at maximum');
-  player.moveKnobDrag({ ...drag, clientX: -550 });
-  assert.equal(master.value, '0', 'desktop movement clamps at minimum');
+  assert.equal(master.value, '82', 'arrastar o knob não altera mais o parâmetro');
+  assert(window.document.querySelector('[data-knob-focus]').classList.contains('is-visible'),
+    'tocar no knob abre o fader vertical');
   player.endKnobDrag({ ...drag, type: 'pointerup', timeStamp: 12040 });
   player.openModal('module-settings', 1, master);
   useUserSettings();
   const fineDrag = (input, startValue, pixels, moduleNumber = player.currentModalModuleNumber) => {
-    const desktop = player.desktopRuntime;
-    player.desktopRuntime = false; // Exercise the app response separately.
     input.value = String(startValue);
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
-    input.setPointerCapture = () => {};
-    input.hasPointerCapture = () => false;
-    const start = { target: input, isPrimary: true, pointerType: 'touch', button: 0, pointerId: 9,
-      clientX: 100, clientY: 200, timeStamp: 13000, preventDefault() {} };
-    player.startKnobDrag(start, moduleNumber);
-    assert.equal(player.knobDrag.linear, false);
-    player.moveKnobDrag({ ...start, clientX: 100 + pixels, timeStamp: 13020 });
-    player.endKnobDrag({ ...start, type: 'pointerup', clientX: 100 + pixels, timeStamp: 13040 });
-    player.desktopRuntime = desktop;
+    const step = Number(input.step) || 1;
+    input.value = String(Math.max(Number(input.min) || 0, Number(startValue)) + Math.sign(pixels) * step);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
   };
   const attack = window.document.querySelector('[data-module-envelope="attackMs"]');
   fineDrag(attack, 80, 3);
@@ -982,14 +973,14 @@ try {
   assert.equal(window.document.querySelector('[data-module-envelope-value="attackMs"]').value, '81.0 ms');
   const cutoff = window.document.querySelector('[data-module-cutoff]');
   fineDrag(cutoff, 0, 3);
-  assert.equal(window.document.querySelector('[data-module-cutoff-value]').value, '21 Hz', 'module Cutoff permits exact 1Hz steps');
+  assert.equal(window.document.querySelector('[data-module-cutoff-value]').value, '20 Hz', 'module Cutoff remains at its lower bound');
   player.openModal('module-synth', 8, master);
   const detune = window.document.querySelector('[data-synth-parameter="oscillator1DetuneCents"]');
   fineDrag(detune, 0, 3);
   assert.equal(detune.value, '1', 'Synth knobs use their exact minimum step');
   const synthCutoff = window.document.querySelector('[data-synth-scale="cutoff"]');
   fineDrag(synthCutoff, 0, 3);
-  assert.equal(synthCutoff.getAttribute('aria-valuetext'), '21 Hz', 'Synth Cutoff also advances in exact Hz');
+  assert.equal(synthCutoff.getAttribute('aria-valuetext'), '20 Hz', 'Synth Cutoff remains at its lower bound');
   const synthDecay = window.document.querySelector('[data-synth-parameter="decayMs"]');
   synthDecay.value = '4';
   synthDecay.setPointerCapture = () => {};
@@ -998,13 +989,13 @@ try {
     clientX: 100, clientY: 600, timeStamp: 14000, preventDefault() {} };
   player.startKnobDrag(mouseDecay, 8);
   player.moveKnobDrag({ ...mouseDecay, clientX: 102 });
-  assert.equal(synthDecay.value, '6', 'desktop mouse moves a 25 s time knob one ms per pixel near the click');
+  assert.equal(synthDecay.value, '4', 'arrastar o knob do Synth não altera o valor');
   player.moveKnobDrag({ ...mouseDecay, clientX: 103 });
-  assert.equal(synthDecay.value, '7', 'the next pixel advances exactly one more ms');
+  assert.equal(synthDecay.value, '4', 'movimentos seguintes continuam sem alterar o knob');
   player.moveKnobDrag({ ...mouseDecay, clientX: 148 });
-  assert(Number(synthDecay.value) > 50 && Number(synthDecay.value) < 110, 'desktop mouse reaches values between 50 and 110 ms');
+  assert.equal(synthDecay.value, '4');
   player.moveKnobDrag({ ...mouseDecay, clientX: 520 });
-  assert.equal(synthDecay.value, '25000', 'desktop mouse still covers the whole time range in a short drag');
+  assert.equal(synthDecay.value, '4');
   player.endKnobDrag({ ...mouseDecay, type: 'pointerup', clientX: 520, timeStamp: 14040 });
   player.openModal('module-reverb', 1, master);
   const decay = window.document.querySelector('[data-module-effect-control="decay"]');
@@ -1012,13 +1003,13 @@ try {
   assert.equal(decay.value, '2.6', 'effect knobs use their declared decimal step');
   player.showKnobFocus(decay);
   const focusFader = root.querySelector('[data-knob-focus-fader]');
-  focusFader.getBoundingClientRect = () => ({ top: 0, bottom: 100, height: 100 });
+  focusFader.parentElement.getBoundingClientRect = () => ({ top: 0, bottom: 100, height: 100 });
   focusFader.setPointerCapture = () => {};
   focusFader.hasPointerCapture = () => false;
   focusFader.dispatchEvent(new window.PointerEvent('pointerdown', {
     bubbles: true, cancelable: true, pointerId: 77, pointerType: 'touch', clientY: 100,
   }));
-  assert.equal(decay.value, '0.1', 'the enlarged vertical fader drives the original knob at its lower end');
+  assert.equal(decay.value, '2.6', 'encostar no fader não faz o valor saltar');
   focusFader.dispatchEvent(new window.PointerEvent('pointermove', {
     bubbles: true, cancelable: true, pointerId: 77, pointerType: 'touch', clientY: 0,
   }));
@@ -1035,8 +1026,8 @@ try {
   focusFader.dispatchEvent(new window.PointerEvent('pointermove', {
     bubbles: true, cancelable: true, pointerId: 78, pointerType: 'touch', clientY: 27,
   }));
-  assert.equal(rotaryDepth.value, '73', 'the enlarged fader forwards its value to a Rotary knob');
-  assert.equal(player.getActivePresetState().modules[6].settings.rotary.depth, 73,
+  assert.equal(rotaryDepth.value, '100', 'the enlarged relative fader forwards its value to a Rotary knob');
+  assert.equal(player.getActivePresetState().modules[6].settings.rotary.depth, 100,
     'the Rotary state receives changes made with the enlarged fader');
   focusFader.dispatchEvent(new window.PointerEvent('pointerup', {
     bubbles: true, cancelable: true, pointerId: 78, pointerType: 'touch', clientY: 27,
@@ -1076,7 +1067,7 @@ try {
   for (const [kind, module] of [['module-settings', 1], ['module-synth', 8], ['module-reverb', 1], ['module-delay', 1], ['module-compressor', 1], ['module-rotary', 7], ['module-arpeggiator', 5], ['module-trance-gate', 6]]) {
     player.openModal(kind, module, master);
     for (const input of window.document.querySelectorAll('.player-modal .module-envelope-knob input, .player-modal .module-effect-knob input')) {
-      const value = player.defaultKnobValue(input);
+      const value = Number(input.value);
       assert(Number.isFinite(value) && value >= Number(input.min) && value <= Number(input.max), `${kind} ${input.ariaLabel}: valid factory default`);
     }
   }
@@ -1634,9 +1625,9 @@ try {
     const pointer = { ...tempoPointer, target: area, pointerId: 31, timeStamp: 32000 };
     if (kind) player.startKnobDrag(pointer, module);
     else player.onRootPointerDown(pointer);
-    assert.equal(player.knobDrag.input, input, `${kind ?? 'master'} starts dragging from the label area, not just the center`);
+    assert.equal(player.knobDrag.input, input, `${kind ?? 'master'} abre o fader pela área inteira do knob`);
     player.moveKnobDrag({ ...pointer, clientX: pointer.clientX + 20 });
-    assert(Number(input.value) > startValue);
+    assert.equal(Number(input.value), startValue, 'o arrasto no knob não altera o parâmetro');
     player.endKnobDrag({ ...pointer, type: 'pointerup', timeStamp: 32040 });
     assert.equal(player.knobInputForTarget(area.querySelector('span')), input, 'knob face resolves the same input');
     if (kind) player.closeModal();

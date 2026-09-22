@@ -516,6 +516,10 @@ public class HookKeysNativePlugin extends Plugin {
             call.getBoolean("sustain", true),
             call.getBoolean("modulation", true),
             call.getBoolean("gmDrumHiHatChoke", false),
+            call.getInt("drumZeroReleaseMask0", 0),
+            call.getInt("drumZeroReleaseMask1", 0),
+            call.getInt("drumZeroReleaseMask2", 0),
+            call.getInt("drumZeroReleaseMask3", 0),
             call.getFloat("volumeDb", 0.0f),
             Math.max(1, Math.min(128, call.getInt("polyphony", 128))),
             Math.max(0, Math.min(127, call.getInt("velocityCurve0", 0))),
@@ -646,7 +650,8 @@ public class HookKeysNativePlugin extends Plugin {
         }
         // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
         if (nativeConfigureModuleModulation(
-                moduleIndex, call.getInt("mode", 1), call.getFloat("rateHz", 6.85f))) call.resolve();
+                moduleIndex, call.getInt("mode", 1), call.getFloat("rateHz", 6.85f),
+                call.getFloat("intensity", 1.0f))) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
     }
 
@@ -771,7 +776,9 @@ public class HookKeysNativePlugin extends Plugin {
 
     @PluginMethod
     public void setOutputGain(PluginCall call) {
-        if (nativeSetOutputGain(call.getFloat("db", 0.0f), call.getBoolean("enabled", true))) call.resolve();
+        if (nativeSetOutputGain(
+                call.getFloat("db", 0.0f), call.getBoolean("enabled", true),
+                call.getInt("channelStart", 0), call.getInt("channelCount", 2))) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
     }
 
@@ -1116,6 +1123,10 @@ public class HookKeysNativePlugin extends Plugin {
         boolean sustain,
         boolean modulation,
         boolean gmDrumHiHatChoke,
+        int drumZeroReleaseMask0,
+        int drumZeroReleaseMask1,
+        int drumZeroReleaseMask2,
+        int drumZeroReleaseMask3,
         float volumeDb,
         int polyphony,
         int velocityCurve0,
@@ -1173,7 +1184,9 @@ public class HookKeysNativePlugin extends Plugin {
         int moduleIndex, float attackMs, float holdMs, float decayMs, float releaseMs, float glideMs,
         float sustainDb
     );
-    private static native boolean nativeConfigureModuleModulation(int moduleIndex, int mode, float rateHz);
+    private static native boolean nativeConfigureModuleModulation(
+        int moduleIndex, int mode, float rateHz, float intensity
+    );
     private static native boolean nativeConfigureVelocityLimits(
         int moduleIndex, int ignoreAbove, int ceiling, int oscillator1Limit, int oscillator2Limit, int oscillator3Limit
     );
@@ -1209,6 +1222,7 @@ public class HookKeysNativePlugin extends Plugin {
         boolean enabled, float bpm, float volume, int clickSound,
         boolean accentEnabled, boolean doubleTimeEnabled, int timeSignatureNumerator
     );
-    private static native boolean nativeSetOutputGain(float db, boolean enabled);
+    private static native boolean nativeSetOutputGain(
+        float db, boolean enabled, int channelStart, int channelCount);
     private static native void nativeStopAllNotes();
 }

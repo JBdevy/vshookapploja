@@ -350,10 +350,20 @@ void testGmDrumHiHatChoke() {
   expect(drum.events[3].type == Event::Type::noteOff && drum.events[3].data1 == 42 &&
          drum.events[4].type == Event::Type::noteOn && drum.events[4].data1 == 44,
       "GM pedal hi-hat immediately cuts the closed hi-hat");
-  expect(piano.events.size() == 3 &&
-         std::all_of(piano.events.begin(), piano.events.end(), [](const Event& event) {
+  expect(engine.enqueueMidi(midi(0x80, 44, 0)), "release GM pedal hi-hat before its tail ends");
+  expect(engine.enqueueMidi(midi(0x90, 46, 100)), "open hi-hat also chokes a released pedal tail");
+  process(engine);
+  expect(drum.events.size() == 8 &&
+         drum.events[5].type == Event::Type::noteOff && drum.events[5].data1 == 44 &&
+         drum.events[6].type == Event::Type::noteOff && drum.events[6].data1 == 44 &&
+         drum.events[7].type == Event::Type::noteOn && drum.events[7].data1 == 46,
+      "a new GM hi-hat chokes the preceding sample even after its key was released");
+  expect(piano.events.size() == 5 &&
+         std::all_of(piano.events.begin(), piano.events.begin() + 3, [](const Event& event) {
            return event.type == Event::Type::noteOn;
-         }), "the same GM notes keep layering outside the Drum category");
+         }) && piano.events[3].type == Event::Type::noteOff &&
+         piano.events[4].type == Event::Type::noteOn,
+      "the same GM notes keep normal key behavior outside the Drum category");
 }
 
 void testFifoPolyphonySteal() {
@@ -750,6 +760,67 @@ void testNativeRuntimeSignalPath() {
   expect(mutedEnergy == 0.0, "native runtime maps the minimum fader position to silence");
 }
 
+void testGmDrumPerNoteZeroRelease() {
+  RecordingSynth drum;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &drum;
+  hook_keys::HookKeysEngine engine(modules);
+  hook_keys::ModuleConfig config;
+  config.midiInputSlot = hook_keys::kAllMidiInputs;
+  config.gmDrumHiHatChoke = true;
+  config.drumZeroReleaseNoteMasks[1] = std::uint32_t{1} << (38 - 32);
+  expect(engine.setModuleConfig(0, config), "configure per-note Drum Release 0");
+  expect(engine.enqueueMidi(midi(0x90, 38, 100)), "play zero-release snare note");
+  expect(engine.enqueueMidi(midi(0x80, 38, 0)), "release zero-release snare note");
+  process(engine);
+  expect(drum.events.size() == 2 && drum.events[1].type == Event::Type::noteOff && drum.events[1].data1 == 38,
+      "a Drum key marked Release 0 uses immediate voice stealing on Note Off");
+}
+
+void testModulesMeterUsesEveryOutput() {
+  const char* soundFont = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+  hook_keys::NativeEngineRuntime defaultRoute(48000.0, 128);
+  expect(defaultRoute.loadSoundFont(0, soundFont), "load SF2 for Modules meter test");
+  hook_keys::ModuleConfig config;
+  config.midiInputSlot = hook_keys::kAllMidiInputs;
+  expect(defaultRoute.setModuleConfig(0, config), "route timbre to default stereo pair");
+  expect(defaultRoute.sendMidi(0, 0x90, 60, 120), "start default-route timbre");
+  std::array<float, 4096> left{}, right{};
+  defaultRoute.render(left.data(), right.data(), left.size());
+  const auto defaultPeaks = defaultRoute.consumeMasterPeaks();
+  expect(defaultPeaks[0] > 0.0f && defaultPeaks[1] > 0.0f,
+      "Modules meter reads both channels of the default timbre output");
+  expect(defaultRoute.consumeMasterPeaks() == std::array<float, 2>{},
+      "Modules meter peaks reset after the UI reads them");
+
+  hook_keys::NativeEngineRuntime customRoute(48000.0, 128);
+  expect(customRoute.loadSoundFont(0, soundFont), "load SF2 for custom route test");
+  config.outputChannelStart = 2;
+  expect(customRoute.setModuleConfig(0, config), "route timbre to outputs 3+4");
+  expect(customRoute.sendMidi(0, 0x90, 60, 120), "start custom-route timbre");
+  customRoute.setOutputGainDb(-90.0f, true);
+  std::array<float, 4096 * 4> output{};
+  customRoute.renderInterleaved(output.data(), 4096, 4);
+  (void)customRoute.consumeMasterPeaks();
+  customRoute.renderInterleaved(output.data(), 4096, 4);
+  expect(customRoute.consumeMasterPeaks() == std::array<float, 2>{},
+      "muted Modules bus reports silence on custom outputs too");
+  expect(std::all_of(output.begin(), output.end(), [](float sample) { return sample == 0.0f; }),
+      "Modules fader mutes timbres routed to outputs 3+4");
+
+  customRoute.setOutputGainDb(0.0f, true, 2, 2);
+  customRoute.renderInterleaved(output.data(), 4096, 4);
+  const auto routedPeaks = customRoute.consumeMasterPeaks();
+  expect(routedPeaks[0] > 0.0f && routedPeaks[1] > 0.0f,
+      "Modules meter includes timbres routed to outputs 3+4");
+  customRoute.setOutputGainDb(-90.0f, true, 2, 2);
+  customRoute.renderInterleaved(output.data(), 4096, 4);
+  customRoute.renderInterleaved(output.data(), 4096, 4);
+  expect(std::all_of(output.begin(), output.end(), [](float sample) {
+    return sample == 0.0f;
+  }), "Modules fader keeps every timbre output muted");
+}
+
 void testNativeRuntimeOrganDrawbars() {
   hook_keys::NativeEngineRuntime runtime(48000.0, 128);
   for (std::size_t index = 0; index < 9; ++index) {
@@ -987,6 +1058,9 @@ void testMetronomeOutputRoute() {
   const auto mainEnergy = energyPerChannel(main);
   expect(mainEnergy[0] > 0.0 && mainEnergy[1] > 0.0, "the default metronome route plays on outputs 1+2");
   expect(mainEnergy[2] == 0.0 && mainEnergy[3] == 0.0, "the default metronome route leaves outputs 3+4 silent");
+  const auto clickPeaks = main.consumeMetronomePeaks();
+  expect(clickPeaks[0] > 0.0f && clickPeaks[1] > 0.0f,
+      "Click meter reads both post-volume metronome channels");
 
   hook_keys::NativeEngineRuntime cue(48000.0, 512);
   cue.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
@@ -1161,6 +1235,11 @@ void testTrackPlayerPlaysRoutesLoopsAndEnds() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   expect(heard, "music is mixed into the engine output");
+  const auto trackPeaks = runtime.consumeTrackPeaks();
+  expect(trackPeaks[0] > 0.0f && trackPeaks[1] > 0.0f,
+      "Playlist meter reads the post-volume stereo track signal");
+  expect(runtime.consumeTrackPeaks() == std::array<float, 2>{},
+      "Playlist meter peaks reset after the UI reads them");
 }
 
 void testVelocityCurveMapping() {
@@ -2223,10 +2302,10 @@ void testMetersAndNoteRelease() {
 // Card Mod no SF2: o terceiro modo e o Tremolo, a roda abre o quanto o volume
 // balanca no mesmo Rate do LFO de pitch.
 void testSoundFontTremolo() {
-  const auto render = [](std::uint8_t mode, int wheel) {
+  const auto render = [](std::uint8_t mode, int wheel, float intensity = 1.0f) {
     hook_keys::TinySoundFontModule sf2(48000.0, 128);
     expect(sf2.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load SF2 for Tremolo test");
-    sf2.setModulationMode(mode, 6.0f);
+    sf2.setModulationMode(mode, 6.0f, intensity);
     sf2.beginBlock();
     sf2.controlChange(1, static_cast<std::uint8_t>(wheel));
     sf2.noteOn(60, 127);
@@ -2251,6 +2330,10 @@ void testSoundFontTremolo() {
   expect(render(2, 0) == render(0, 0), "without the wheel the Tremolo sounds like User");
   expect(render(2, 127) != render(2, 0), "the wheel opens the Tremolo");
   expect(envelopeRange(render(2, 127)) < 0.45, "at full wheel the Tremolo swings the volume");
+  expect(envelopeRange(render(2, 127, 0.0f)) > 0.8,
+      "Tremolo intensity zero removes the audible movement");
+  expect(envelopeRange(render(2, 127, 0.25f)) > envelopeRange(render(2, 127)),
+      "lower Tremolo intensity makes the movement shallower");
   expect(envelopeRange(render(0, 127)) > 0.8, "in User the wheel does not swing the volume");
   // Tremolo nao pode virar vibrato: a roda fora do modo LFO nao mexe no pitch.
   expect(render(1, 127) != render(2, 127), "Tremolo and pitch LFO are different modes");
@@ -2945,6 +3028,7 @@ int main() {
   testMonoVoiceSteal();
   testRepeatedNoteLayersUntilNoteOff();
   testGmDrumHiHatChoke();
+  testGmDrumPerNoteZeroRelease();
   testFifoPolyphonySteal();
   testArpeggiatorRouteClearsSustain();
   testPerModuleControllerFilters();
@@ -2957,6 +3041,7 @@ int main() {
   testSameSoundFontRunsIndependentlyAcrossModules();
   testDefaultVolumeEnvelopes();
   testNativeRuntimeSignalPath();
+  testModulesMeterUsesEveryOutput();
   testNativeRuntimeOrganDrawbars();
   testIndependentPresetTails();
   testCompatibilityBlocksCc7();

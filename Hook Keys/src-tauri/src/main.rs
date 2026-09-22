@@ -74,6 +74,10 @@ unsafe extern "C" {
         modulation: i32,
         volume_db: f32,
         gm_drum_hi_hat_choke: i32,
+        drum_zero_release_mask0: i32,
+        drum_zero_release_mask1: i32,
+        drum_zero_release_mask2: i32,
+        drum_zero_release_mask3: i32,
         polyphony: i32,
         velocity_curve0: i32,
         velocity_curve1: i32,
@@ -114,6 +118,7 @@ unsafe extern "C" {
         module_index: usize,
         mode: i32,
         rate_hz: f32,
+        intensity: f32,
     ) -> i32;
     fn hk_runtime_configure_effects(
         handle: *mut c_void,
@@ -219,7 +224,8 @@ unsafe extern "C" {
         double_time_enabled: i32,
         numerator: i32,
     );
-    fn hk_runtime_set_output_gain(handle: *mut c_void, db: f32, enabled: i32);
+    fn hk_runtime_set_output_gain(
+        handle: *mut c_void, db: f32, enabled: i32, channel_start: i32, channel_count: i32);
     fn hk_runtime_stop_all_notes(handle: *mut c_void);
     fn hk_runtime_render(handle: *mut c_void, output: *mut f32, frames: usize, channels: usize);
     fn hk_runtime_module_peaks(handle: *mut c_void, output: *mut f32);
@@ -296,6 +302,7 @@ struct NativeModuleModulationConfig {
     // 0 User, 1 LFO de pitch, 2 Tremolo.
     mode: i32,
     rate_hz: f32,
+    intensity: f32,
 }
 
 #[tauri::command]
@@ -306,7 +313,8 @@ fn configure_module_modulation(
     let engine = state.engine.current()?;
     let applied = unsafe {
         hk_runtime_configure_module_modulation(
-            engine.pointer(), config.module_index, config.mode.clamp(0, 3), config.rate_hz,
+            engine.pointer(), config.module_index, config.mode.clamp(0, 4), config.rate_hz,
+            config.intensity.clamp(0.0, 1.0),
         )
     };
     if applied != 0 { Ok(()) } else { Err("Não foi possível configurar a modulação do módulo.".into()) }
@@ -483,6 +491,14 @@ struct ModuleConfig {
     modulation: bool,
     volume_db: f32,
     gm_drum_hi_hat_choke: bool,
+    #[serde(default)]
+    drum_zero_release_mask0: i32,
+    #[serde(default)]
+    drum_zero_release_mask1: i32,
+    #[serde(default)]
+    drum_zero_release_mask2: i32,
+    #[serde(default)]
+    drum_zero_release_mask3: i32,
     polyphony: i32,
     velocity_curve0: i32,
     velocity_curve1: i32,
@@ -1066,9 +1082,9 @@ fn audio_output_status(state: State<'_, AppState>) -> Result<HashMap<&'static st
 }
 
 #[tauri::command]
-fn module_meter_levels(state: State<'_, AppState>) -> Result<[f32; 16], String> {
+fn module_meter_levels(state: State<'_, AppState>) -> Result<[f32; 22], String> {
     let engine = state.engine.current()?;
-    let mut peaks = [0.0; 16];
+    let mut peaks = [0.0; 22];
     unsafe { hk_runtime_module_peaks(engine.pointer(), peaks.as_mut_ptr()) };
     Ok(peaks)
 }
@@ -1131,6 +1147,10 @@ fn configure_module(config: ModuleConfig, state: State<'_, AppState>) -> Result<
             config.modulation as i32,
             config.volume_db,
             config.gm_drum_hi_hat_choke as i32,
+            config.drum_zero_release_mask0,
+            config.drum_zero_release_mask1,
+            config.drum_zero_release_mask2,
+            config.drum_zero_release_mask3,
             config.polyphony,
             config.velocity_curve0,
             config.velocity_curve1,
@@ -1378,9 +1398,13 @@ fn configure_metronome(
 }
 
 #[tauri::command]
-fn set_output_gain(db: f32, enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+fn set_output_gain(
+    db: f32, enabled: bool, channel_start: i32, channel_count: i32,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let engine = state.engine.current()?;
-    unsafe { hk_runtime_set_output_gain(engine.pointer(), db, enabled as i32) };
+    unsafe { hk_runtime_set_output_gain(
+        engine.pointer(), db, enabled as i32, channel_start, channel_count) };
     Ok(())
 }
 
@@ -1982,7 +2006,7 @@ mod tests {
         let loading_elapsed = loading_started.elapsed();
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 0, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 64,
+                engine.pointer(), 0, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 0, 0, 0, 0, 64,
                 127, 127, 127, 127, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);
@@ -2030,6 +2054,10 @@ mod tests {
                     1,
                     0.0,
                     0,
+                    0,
+                    0,
+                    0,
+                    0,
                     64,
                     0,
                     8,
@@ -2065,7 +2093,7 @@ mod tests {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 64,
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 0, 0, 0, 0, 64,
                 0, 32, 64, 96, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);
@@ -2086,7 +2114,7 @@ mod tests {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 64,
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 0, 0, 0, 0, 64,
                 127, 127, 127, 127, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);
@@ -2111,7 +2139,7 @@ mod tests {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 64,
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 0, 0, 0, 64,
                 0, 32, 64, 96, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);

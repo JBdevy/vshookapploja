@@ -62,6 +62,37 @@ export function readModuleModulationRate(settings: Readonly<Record<string, unkno
   return Number.isFinite(value) ? Math.min(20, Math.max(0.1, value)) : DEFAULT_MODULE_MODULATION_RATE_HZ;
 }
 
+export type ModuleModulationIntensityMode = 'tremolo' | 'pan';
+
+export function readModuleModulationIntensity(
+  settings: Readonly<Record<string, unknown>>,
+  mode: ModuleModulationIntensityMode,
+): number {
+  const value = Number(settings[mode === 'pan' ? 'panIntensity' : 'tremoloIntensity']);
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 100;
+}
+
+function createModuleModulationIntensityControl(
+  settings: Readonly<Record<string, unknown>>,
+  mode: ModuleModulationIntensityMode,
+): string {
+  const value = readModuleModulationIntensity(settings, mode);
+  const label = mode === 'pan' ? 'Intensidade do Pan' : 'Intensidade do Tremolo';
+  const accent = mode === 'pan' ? '#25b9ff' : '#ff4d67';
+  return `
+    <label class="module-effect-knob module-mod-card__intensity-control"
+      data-module-modulation-intensity-control="${mode}"
+      style="--knob-accent:${accent};--knob-angle:${-135 + value * 2.7}deg;--knob-progress:${value / 100}"
+      hidden>
+      <span>${label}</span>
+      <input type="range" min="0" max="100" step="1" value="${value}"
+        data-module-modulation-intensity="${mode}" aria-label="${label}"
+        aria-valuetext="${Math.round(value)}%">
+      <output>${Math.round(value)}%</output>
+    </label>
+  `;
+}
+
 // Synth: LFO aciona o LFO do editor do Synth e User deixa a roda sem efeito,
 // por isso o card do Synth não tem Rate próprio.
 export function createModuleModulationCardMarkup(
@@ -105,6 +136,10 @@ export function createModuleModulationCardMarkup(
         `)}
         <output data-module-modulation-rate-value>${rate.toFixed(2)} Hz</output>
       </label>`}
+      ${owner === 'synth' ? '' : `
+        ${createModuleModulationIntensityControl(settings, 'tremolo')}
+        ${createModuleModulationIntensityControl(settings, 'pan')}
+      `}
     </article>
   `;
 }

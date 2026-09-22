@@ -194,6 +194,36 @@ public:
     return runtime ? runtime->consumeModulePeaks() : hook_keys::HookKeysEngine::ModulePeaks{};
   }
 
+  std::array<float, 2> consumeMasterPeaks() noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> runtime;
+    {
+      std::unique_lock lock(controlMutex_, std::try_to_lock);
+      if (!lock.owns_lock()) return {};
+      runtime = runtime_;
+    }
+    return runtime ? runtime->consumeMasterPeaks() : std::array<float, 2>{};
+  }
+
+  std::array<float, 2> consumeTrackPeaks() noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> runtime;
+    {
+      std::unique_lock lock(controlMutex_, std::try_to_lock);
+      if (!lock.owns_lock()) return {};
+      runtime = runtime_;
+    }
+    return runtime ? runtime->consumeTrackPeaks() : std::array<float, 2>{};
+  }
+
+  std::array<float, 2> consumeMetronomePeaks() noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> runtime;
+    {
+      std::unique_lock lock(controlMutex_, std::try_to_lock);
+      if (!lock.owns_lock()) return {};
+      runtime = runtime_;
+    }
+    return runtime ? runtime->consumeMetronomePeaks() : std::array<float, 2>{};
+  }
+
   hook_keys::HookKeysEngine::ModuleAnalysis consumeModuleAnalysis(
       std::size_t moduleIndex) noexcept {
     std::shared_ptr<hook_keys::NativeEngineRuntime> runtime;
@@ -232,6 +262,10 @@ public:
       bool sustain,
       bool modulation,
       bool gmDrumHiHatChoke,
+      std::uint32_t drumZeroReleaseMask0,
+      std::uint32_t drumZeroReleaseMask1,
+      std::uint32_t drumZeroReleaseMask2,
+      std::uint32_t drumZeroReleaseMask3,
       float volumeDb,
       int polyphony,
       int velocityCurve0,
@@ -258,6 +292,8 @@ public:
     config.sustainInputEnabled = sustain;
     config.modulationInputEnabled = modulation;
     config.gmDrumHiHatChoke = gmDrumHiHatChoke;
+    config.drumZeroReleaseNoteMasks = {drumZeroReleaseMask0, drumZeroReleaseMask1,
+                                      drumZeroReleaseMask2, drumZeroReleaseMask3};
     config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
     config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
     config.velocityCurve = {
@@ -380,9 +416,10 @@ public:
   }
 
   // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
-  bool configureModuleModulation(std::size_t moduleIndex, std::uint8_t mode, float rateHz) noexcept {
+  bool configureModuleModulation(
+      std::size_t moduleIndex, std::uint8_t mode, float rateHz, float intensity) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
-    return runtime != nullptr && runtime->setModuleModulationMode(moduleIndex, mode, rateHz);
+    return runtime != nullptr && runtime->setModuleModulationMode(moduleIndex, mode, rateHz, intensity);
   }
 
   bool beginPresetTransition() noexcept {
@@ -494,10 +531,11 @@ public:
     return true;
   }
 
-  bool setOutputGain(float db, bool enabled) noexcept {
+  bool setOutputGain(float db, bool enabled, int channelStart, int channelCount) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
-    runtime->setOutputGainDb(db, enabled);
+    runtime->setOutputGainDb(db, enabled,
+        static_cast<std::uint8_t>(std::clamp(channelStart, 0, 31)), channelCount == 1 ? 1 : 2);
     return true;
   }
 
@@ -677,8 +715,20 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeAudioOutputReady(JNIE
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeModuleMeterLevels(JNIEnv* env, jclass) {
   const auto peaks = gEngine.consumeModulePeaks();
-  auto result = env->NewFloatArray(static_cast<jsize>(peaks.size()));
-  if (result) env->SetFloatArrayRegion(result, 0, static_cast<jsize>(peaks.size()), peaks.data());
+  const auto master = gEngine.consumeMasterPeaks();
+  const auto tracks = gEngine.consumeTrackPeaks();
+  const auto click = gEngine.consumeMetronomePeaks();
+  auto result = env->NewFloatArray(static_cast<jsize>(
+      peaks.size() + master.size() + tracks.size() + click.size()));
+  if (result) {
+    env->SetFloatArrayRegion(result, 0, static_cast<jsize>(peaks.size()), peaks.data());
+    env->SetFloatArrayRegion(result, static_cast<jsize>(peaks.size()),
+        static_cast<jsize>(master.size()), master.data());
+    env->SetFloatArrayRegion(result, static_cast<jsize>(peaks.size() + master.size()),
+        static_cast<jsize>(tracks.size()), tracks.data());
+    env->SetFloatArrayRegion(result, static_cast<jsize>(peaks.size() + master.size() + tracks.size()),
+        static_cast<jsize>(click.size()), click.data());
+  }
   return result;
 }
 
@@ -755,6 +805,10 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
     jboolean sustain,
     jboolean modulation,
     jboolean gmDrumHiHatChoke,
+    jint drumZeroReleaseMask0,
+    jint drumZeroReleaseMask1,
+    jint drumZeroReleaseMask2,
+    jint drumZeroReleaseMask3,
     jfloat volumeDb,
     jint polyphony,
     jint velocityCurve0,
@@ -778,6 +832,10 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModule(
              sustain == JNI_TRUE,
              modulation == JNI_TRUE,
              gmDrumHiHatChoke == JNI_TRUE,
+             static_cast<std::uint32_t>(drumZeroReleaseMask0),
+             static_cast<std::uint32_t>(drumZeroReleaseMask1),
+             static_cast<std::uint32_t>(drumZeroReleaseMask2),
+             static_cast<std::uint32_t>(drumZeroReleaseMask3),
              volumeDb,
              static_cast<int>(polyphony),
              static_cast<int>(velocityCurve0),
@@ -937,10 +995,10 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureGlide(
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleModulation(
-    JNIEnv*, jclass, jint moduleIndex, jint mode, jfloat rateHz) {
+    JNIEnv*, jclass, jint moduleIndex, jint mode, jfloat rateHz, jfloat intensity) {
   return gEngine.configureModuleModulation(
              static_cast<std::size_t>(moduleIndex),
-             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 3)), rateHz)
+             static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 4)), rateHz, intensity)
              ? JNI_TRUE
              : JNI_FALSE;
 }
@@ -994,8 +1052,9 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureMetronome(
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetOutputGain(
-    JNIEnv*, jclass, jfloat db, jboolean enabled) {
-  return gEngine.setOutputGain(db, enabled == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+    JNIEnv*, jclass, jfloat db, jboolean enabled, jint channelStart, jint channelCount) {
+  return gEngine.setOutputGain(db, enabled == JNI_TRUE, channelStart, channelCount)
+      ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

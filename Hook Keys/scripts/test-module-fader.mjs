@@ -57,12 +57,51 @@ test('Panic corta notas, pads, efeitos, música e metrônomo', () => {
 
 test('pads de notas e efeitos ficam verdes com contorno branco enquanto ativos', () => {
   const pads = readFileSync(new URL('../src/features/player/PadsEffectsView.ts', import.meta.url), 'utf8');
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(css, /\.performance-pad--note\.is-active,[\s\S]*?border-color:\s*#fff;[\s\S]*?linear-gradient\(160deg,\s*#24aa58,\s*#07572a\)/);
   assert.match(css, /\.performance-pad--effect\.is-active\s*\{[\s\S]*?border-color:\s*#fff;[\s\S]*?linear-gradient\(160deg,\s*#28b85e,\s*#075529\)/);
   assert.match(css, /\.performance-section\.is-editing \.performance-pad--effect\.is-active\s*\{[\s\S]*?border-color:\s*#fff;/);
+  assert.match(player, /notesSection\.dataset\.activePadBank = this\.activePadBank/);
+  for (const bank of ['A', 'B', 'C', 'D']) {
+    assert.match(css, new RegExp(`data-pad-bank="${bank}"\\]\\:not\\(\\.is-selected\\)`));
+    assert.match(css, new RegExp(`data-active-pad-bank="${bank}"\\] \\.performance-pad--note\\:not\\(\\.is-active\\)`));
+  }
   for (const removedGreen of ['#9fd632', '#35d273', '#19c9aa']) {
     assert(!pads.includes(removedGreen), `a paleta de edição não deve oferecer o verde ${removedGreen}`);
   }
+});
+
+test('somente o banco FX em edição recebe amarelo e selo EDIT', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /button\.classList\.toggle\('is-editing', this\.effectEditMode && isSelected\)/);
+  assert.match(css, /\.pad-bank-button\.is-editing\s*\{[\s\S]*?background:\s*linear-gradient\(180deg,\s*#ffd84d,\s*#d99c0a\)/);
+  assert.match(css, /\.pad-bank-button\.is-editing::after\s*\{[\s\S]*?content:\s*"EDIT"/);
+});
+
+test('visor flutuante do knob fecha após 2 s parado ou ao tocar fora', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /const KNOB_FOCUS_IDLE_MS = 2_000/);
+  assert.match(player, /document\.addEventListener\('pointerdown', this\.handleKnobFocusOutsidePointerDown, true\)/);
+  assert.match(player, /target\.closest\('\.knob-focus__card'\)[\s\S]*?this\.hideKnobFocus\(\)/);
+  assert.match(player, /this\.syncKnobFocus\(input\);\s*this\.hideKnobFocus\(KNOB_FOCUS_IDLE_MS\)/);
+});
+
+test('botões de timbres mantêm dimensões fixas sem crescer no hover', () => {
+  assert.match(css, /\.fixed-sound-grid\s*\{[\s\S]*?--fixed-sound-button-height:\s*46px;[\s\S]*?grid-auto-rows:\s*var\(--fixed-sound-button-height\)/);
+  assert.match(css, /\.fixed-sound-grid button\s*\{[\s\S]*?height:\s*var\(--fixed-sound-button-height\);[\s\S]*?max-height:\s*var\(--fixed-sound-button-height\)/);
+  assert.match(css, /\.sound-browser :is\(\.fixed-sound-grid button, \.user-sf2-list > button\):is\(:hover, :active, :focus\)[\s\S]*?transform:\s*none !important/);
+  const selectedCategory = css.match(/\.sound-category-button\.is-selected\s*\{([^}]*)\}/)?.[1] ?? '';
+  assert.doesNotMatch(selectedCategory, /(?:min-height|padding|font-size)\s*:/);
+});
+
+test('FX 1 e FX 2 mantêm nomes fixos, mas preservam cor, volume e Learn CC', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /const hasFixedEffectName = this\.activeEffectBank === '1' \|\| this\.activeEffectBank === '2'/);
+  assert.match(player, /hasFixedEffectName \? '' : `[\s\S]*?data-effect-name-input/);
+  assert.match(player, /if \(this\.activeEffectBank !== '1' && this\.activeEffectBank !== '2' && input\)[\s\S]*?effect\.name =/);
+  assert.match(player, /if \(bank !== '1' && bank !== '2'\)[\s\S]*?openModal\('effect-bank-name'/);
+  assert.match(player, /class="effect-pad-editor[\s\S]*?data-effect-pad-volume[\s\S]*?learn-effect-cc/);
+  assert.match(css, /\.effect-pad-editor\.has-fixed-name\s*\{[\s\S]*?"preview preview"/);
 });
 
 test('metrônomo usa o azul do Click e Pads - Efects usa o laranja do Config', () => {
@@ -588,12 +627,14 @@ test('the enlarged knob uses the same custom vertical fader on desktop and app',
   assert.match(player, /setProperty\('--focus-fader-progress', String\(progress\)\)/);
 });
 
-test('knobs andam nos dois sentidos, um eixo por gesto, sem o salto nativo do range do iOS', () => {
+test('knob abre o visor; só o fader vertical muda o valor sem saltar no primeiro toque', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /const horizontalDelta = event\.clientX - drag\.startX;\s*const verticalDelta = drag\.startY - event\.clientY;/);
-  // O primeiro movimento escolhe o eixo, e ele vale até soltar o dedo.
-  assert.match(player, /drag\.axis = Math\.abs\(horizontalDelta\) >= Math\.abs\(verticalDelta\) \? 'horizontal' : 'vertical';/);
-  assert.match(player, /const axisDelta = drag\.axis === 'horizontal' \? horizontalDelta : verticalDelta;/);
+  const knobHandlers = player.slice(player.indexOf('private startKnobDrag('), player.indexOf('private ccLearnTargetForOutputKnob('));
+  assert.match(knobHandlers, /this\.showKnobFocus\(input\)/);
+  assert.doesNotMatch(knobHandlers, /input\.value\s*=/);
+  assert.match(player, /pointerStartValue = Number\(fader\.value\)/);
+  assert.match(player, /const rawValue = pointerStartValue \+\s*\(pointerStartY - event\.clientY\)/);
+  assert.doesNotMatch(player.slice(player.indexOf('faderTrack.onpointerdown ='), player.indexOf('faderTrack.onpointermove =')), /updateFromPointer\(event\)/);
   for (const knob of ['player-output-knob', 'module-envelope-knob', 'module-effect-knob']) {
     const block = css.match(new RegExp(`\n\.${knob} input \{[^}]*\}`))[0];
     assert.match(block, /pointer-events: none;/, `${knob}: o toque vai para o knob, não para o range`);
@@ -714,6 +755,78 @@ test('Default bloqueia parâmetros, orienta mudar para User e o timbre só fecha
   }
 });
 
+test('Hall personalizado continua selecionado e os ambientes guardam ajustes separados', () => {
+  const knob = transpile('../src/features/player/ParameterKnobView.ts');
+  const effects = transpile('../src/features/player/ModuleEffectsView.ts', { './ParameterKnobView': knob });
+  const markup = effects.createModuleReverbMarkup({
+    reverbSpace: 'hall',
+    reverb: { enabled: true, decay: 7.3, dampen: 41, mod: 17, size: 84, mix: 39 },
+  });
+  assert.match(markup, /data-module-reverb-space="hall"\s+class="is-selected"\s+aria-pressed="true"/);
+  assert.match(markup, /7\.3 s/);
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /profiles\[previous as string\] = \{/);
+  assert.match(player, /moduleState\.settings\.reverbSpaces = profiles/);
+  assert.match(player, /moduleState\.settings\.reverbSpaces = \{[\s\S]*?\[space\]: \{ decay: reverb\.decay/);
+});
+
+test('cinco volumes mostram medidores e Módulos reúne timbres de qualquer saída', () => {
+  const output = readFileSync(new URL('../src/features/player/OutputControls.ts', import.meta.url), 'utf8');
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const runtime = readFileSync(new URL('../native-engine/src/NativeEngineRuntime.cpp', import.meta.url), 'utf8');
+  assert.match(output, /data-output-meter="\$\{id\}"/);
+  assert.match(output, /id === 'master' \? 'modules' : id/);
+  assert.match(output, /createOutputMiniMeter\('click', 'Click'\)/);
+  assert.match(player, /createOutputKnobMarkup\('master', 'Módulos'/);
+  assert.match(player, /renderOutputMeter\('modules', peaks\.slice\(16, 18\)\)/);
+  assert.match(player, /renderOutputMeter\('music', peaks\.slice\(18, 20\)\)/);
+  assert.match(player, /renderOutputMeter\('click', peaks\.slice\(20, 22\)\)/);
+  assert.match(runtime, /for \(std::size_t channel = 0; channel < channels; \+\+channel\) \{\s*output\[frame \* channels \+ channel\] \*= gain;/);
+});
+
+test('Baixar tudo acrescenta os restantes à fila e item aguardando não reabre o modal', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /const notQueued = sounds\.filter\(\(sound\) => !this\.activeSoundDownloads\.has\(sound\.id\)\)/);
+  assert.match(player, /this\.soundDownloadBatchIds = new Set\(sounds\.map\(\(sound\) => sound\.id\)\)/);
+  assert.match(player, /button\.textContent = `Baixado \$\{completed\}\/\$\{batch\.size\}`/);
+  assert.match(player, /status\.textContent = downloading \? 'Baixando' : 'Aguardando'/);
+  assert.match(player, /if \(this\.activeSoundDownloads\.has\(soundId\)\) return;/);
+  assert.doesNotMatch(player, /Aguarde a fila atual terminar antes de usar Baixar tudo/);
+});
+
+test('Organ envia Rotary, Tremolo e Pan às nove vozes em vez de ficar no LFO', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const runtime = readFileSync(new URL('../native-engine/src/NativeEngineRuntime.cpp', import.meta.url), 'utf8');
+  const organ = readFileSync(new URL('../native-engine/src/OrganModule.cpp', import.meta.url), 'utf8');
+  const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
+  assert.match(player, /moduleIndex === 6 && modulationMode === 'rotary'\s*\? 4/);
+  assert.match(runtime, /if \(moduleIndex == 6\) \{\s*organModule_->setModulationMode\(mode, rateHz, intensity\);/);
+  assert.match(organ, /for \(auto& voice : voices_\) voice->setModulationMode\(mode, rateHz, intensity\);/);
+  assert.match(bridge, /Math\.min\(4, Math\.max\(0, config\.mode\)\)/);
+});
+
+test('toque longo em Pan e Tremolo abre intensidade independente em porcentagem', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const settings = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
+  const sf2 = readFileSync(new URL('../native-engine/src/TinySoundFontModule.cpp', import.meta.url), 'utf8');
+  assert.match(player, /moduleModulationIntensityHoldGesture\.start\(event,/);
+  assert.match(player, /data-module-modulation-intensity="\$\{mode\}"/);
+  assert.match(settings, /mode === 'pan' \? 'panIntensity' : 'tremoloIntensity'/);
+  assert.match(settings, /aria-valuetext="\$\{Math\.round\(value\)\}%"/);
+  assert.match(css, /\.module-mod-card__intensity-control,\s*\.module-mod-card__intensity-control\[hidden\] \{\s*display: none !important;/);
+  assert.match(sf2, /modulationIntensity_\.load\(std::memory_order_relaxed\)/);
+});
+
+test('margem externa da tela e de todos os modais é 1 px', () => {
+  assert.match(css, /\.player-screen \{\s*gap: 2px;\s*padding:\s*max\(1px, env\(safe-area-inset-top\)\)/);
+  assert.match(css, /\.player-modal \{\s*padding:\s*max\(1px, env\(safe-area-inset-top\)\)/);
+});
+
+test('knobs dos cinco volumes ficam circulares e separados do meter no desktop', () => {
+  assert.match(css, /html\[data-runtime="desktop"\] \.player-output-knob__control \{[^}]*align-items: center;[^}]*gap: clamp\(6px, \.55vw, 9px\);/s);
+  assert.match(css, /html\[data-runtime="desktop"\] \.player-output-knob__face \{[^}]*width: clamp\(32px, 3\.2vw, 42px\);[^}]*height: clamp\(32px, 3\.2vw, 42px\);[^}]*border-radius: 50%;/s);
+});
+
 test('card do Glide: 4 botões ocupam a esquerda e o nome fica em cima do knob', () => {
   const glide = readFileSync(new URL('../src/features/player/GlideView.ts', import.meta.url), 'utf8');
   assert.match(glide, /<div class="module-glide-card__buttons"[\s\S]*?No Sens<\/button>\s*<\/div>\s*\$\{glideDialMarkup\(settings, bpm, ownerAttribute, 'Glide'\)\}/);
@@ -743,4 +856,21 @@ test('seletor próprio: tocar no rótulo (ou nos próprios botões dentro dele) 
 test('curva de velocity: os 5 pontos se movem, inclusive o primeiro e o último', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(player, /const pointIndex = handle\s*\? Number\(handle\.dataset\.velocityPoint\)\s*: Math\.round\(Math\.min\(1, Math\.max\(0, \(event\.clientX - bounds\.left\) \/ Math\.max\(1, bounds\.width\)\)\) \* 4\);/);
+});
+
+test('Drum envia Release 0 por tecla e os três chimbais mantêm choke depois do Note Off', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const engineTypes = readFileSync(new URL('../native-engine/include/hook_keys/EngineTypes.hpp', import.meta.url), 'utf8');
+  const engine = readFileSync(new URL('../native-engine/src/HookKeysEngine.cpp', import.meta.url), 'utf8');
+  const desktop = readFileSync(new URL('../src-tauri/src/native_engine_bridge.cpp', import.meta.url), 'utf8');
+  const android = readFileSync(new URL('../android/app/src/main/cpp/HookKeysNativeBridge.cpp', import.meta.url), 'utf8');
+  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
+  assert.match(player, /encodeDrumZeroReleaseNotes\(moduleState\?\.settings\.drumZeroReleaseNotes\)/);
+  assert.match(player, /drumZeroReleaseMask0: drumZeroReleaseMasks\[0\]/);
+  assert.match(engineTypes, /std::array<std::uint32_t, 4> drumZeroReleaseNoteMasks/);
+  assert.match(engine, /hiHatTailNotes_\[index\]\[note\]/);
+  assert.match(engine, /drumNoteUsesZeroRelease\(sourceNote\)[\s\S]*?stealNote/);
+  for (const bridge of [desktop, android, ios]) {
+    assert.match(bridge, /drumZeroReleaseNoteMasks/);
+  }
 });

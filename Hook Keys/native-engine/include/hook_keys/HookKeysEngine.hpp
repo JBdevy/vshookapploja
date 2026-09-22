@@ -89,6 +89,10 @@ private:
   // enquanto as camadas anteriores continuam no pedal.
   using SustainedNoteCountsByInput = std::array<std::array<std::uint16_t, kMidiNoteCount>, kRoutableMidiInputCount>;
   std::array<SustainedNoteCountsByInput, kModuleCount> sustainedNoteCounts_{};
+  // O Note Off tira a tecla do estado físico, mas a amostra do chimbal ainda
+  // pode estar na cauda. Mantemos essas notas até o próximo choke.
+  using HiHatTailNotes = std::array<bool, kMidiNoteCount>;
+  std::array<HiHatTailNotes, kModuleCount> hiHatTailNotes_{};
   std::array<bool, kModuleCount> sustainDown_{};
   std::uint64_t activeNoteOrder_ = 0;
   RealtimeCommandQueue<EngineCommand, 2048> commands_{};

@@ -32,6 +32,10 @@ void OrganModule::setDrawbarPosition(std::size_t drawbarIndex, std::uint8_t posi
       static_cast<float>(clamped) / static_cast<float>(kDrawbarMax), std::memory_order_release);
 }
 
+void OrganModule::setModulationMode(std::uint8_t mode, float rateHz, float intensity) noexcept {
+  for (auto& voice : voices_) voice->setModulationMode(mode, rateHz, intensity);
+}
+
 void OrganModule::beginBlock() noexcept {
   for (auto& voice : voices_) voice->beginBlock();
 }

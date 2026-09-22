@@ -63,6 +63,11 @@ public:
 
   [[nodiscard]] double sampleRate() const noexcept { return sampleRate_; }
 
+  [[nodiscard]] std::array<float, 2> consumePeaks() noexcept {
+    return {peaks_[0].exchange(0.0f, std::memory_order_acq_rel),
+        peaks_[1].exchange(0.0f, std::memory_order_acq_rel)};
+  }
+
   // Controle -------------------------------------------------------------------
 
   [[nodiscard]] bool load(std::uint32_t id, std::unique_ptr<TrackDecoder> decoder) {
@@ -217,6 +222,7 @@ public:
       gainRampFrames_ = gainStepFrames_;
       gainStep_ = (target - gain_) / static_cast<float>(gainRampFrames_);
     }
+    std::array<float, 2> blockPeaks{};
     for (std::size_t frame = 0; frame < frames; ++frame) {
       if (!hasBlock_ && !nextBlock(generation)) break;
       if (block_.end) {
@@ -234,6 +240,8 @@ public:
       const auto amount = gain_ * fade_;
       const auto left = block_.samples[blockOffset_ * 2] * amount;
       const auto right = block_.samples[blockOffset_ * 2 + 1] * amount;
+      blockPeaks[0] = std::max(blockPeaks[0], std::abs(left));
+      blockPeaks[1] = std::max(blockPeaks[1], std::abs(right));
       auto* destination = output + frame * channels;
       if (stereo) {
         destination[first] += left;
@@ -244,6 +252,11 @@ public:
       renderPosition_ = block_.startFrame + blockOffset_ + 1;
       if (++blockOffset_ >= block_.frames) hasBlock_ = false;
       if (!wantsPlay && fade_ <= 0.0f) break;
+    }
+    for (std::size_t channel = 0; channel < blockPeaks.size(); ++channel) {
+      auto previous = peaks_[channel].load(std::memory_order_relaxed);
+      while (blockPeaks[channel] > previous && !peaks_[channel].compare_exchange_weak(
+          previous, blockPeaks[channel], std::memory_order_release, std::memory_order_relaxed)) {}
     }
     positionFrames_.store(renderPosition_, std::memory_order_release);
   }
@@ -378,6 +391,7 @@ private:
   float gainStep_ = 0.0f;
   std::size_t gainRampFrames_ = 0;
   std::size_t gainStepFrames_ = 1;
+  std::array<std::atomic<float>, 2> peaks_{};
 };
 
 } // namespace hook_keys

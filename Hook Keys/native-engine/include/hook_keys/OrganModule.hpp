@@ -37,6 +37,7 @@ public:
   [[nodiscard]] bool loadVoice(std::size_t drawbarIndex, const char* utf8Path) noexcept;
   // 0 (fechada) a 8 (toda puxada) — o mesmo valor que o drawbar mostra.
   void setDrawbarPosition(std::size_t drawbarIndex, std::uint8_t position) noexcept;
+  void setModulationMode(std::uint8_t mode, float rateHz, float intensity = 1.0f) noexcept;
 
   void beginBlock() noexcept override;
   void noteOn(std::uint8_t note, std::uint8_t velocity) noexcept override;

@@ -40,6 +40,9 @@ struct ModuleConfig final {
   bool modulationInputEnabled = true;
   // GM closed/pedal/open hi-hats (42/44/46) form one exclusive choke group.
   bool gmDrumHiHatChoke = false;
+  // Bit por nota MIDI. Quando ligado, o Note Off usa a soltura rápida
+  // anti-click em vez do Release geral configurado para o timbre Drum.
+  std::array<std::uint32_t, 4> drumZeroReleaseNoteMasks{};
   std::uint8_t lowNote = 0;
   std::uint8_t highNote = 127;
   std::uint8_t midiInputSlot = 0;
@@ -66,6 +69,10 @@ struct ModuleConfig final {
   bool mono = false;
   bool legato = false;
   ModuleEffectsConfig effects{};
+
+  [[nodiscard]] bool drumNoteUsesZeroRelease(std::uint8_t note) const noexcept {
+    return (drumZeroReleaseNoteMasks[note / 32] & (std::uint32_t{1} << (note % 32))) != 0;
+  }
 
   void normalize() noexcept {
     lowNote = std::min<std::uint8_t>(lowNote, 127);

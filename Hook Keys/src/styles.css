@@ -2982,6 +2982,32 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   box-shadow: 0 0 14px rgba(40, 221, 100, 0.18), inset 0 1px rgba(220, 255, 230, 0.24);
 }
 
+/* Cada banco de Pads mantém uma cor própria. O banco selecionado e o pad
+   engatilhado continuam verdes para que o estado ativo seja inequívoco. */
+.performance-section--notes [data-pad-bank="A"]:not(.is-selected) {
+  color: #241800;
+  border-color: #ffe36a;
+  background: linear-gradient(180deg, #ffd84d, #c98208);
+}
+
+.performance-section--notes [data-pad-bank="B"]:not(.is-selected) {
+  color: #fff;
+  border-color: #ff7474;
+  background: linear-gradient(180deg, #db3e49, #75141e);
+}
+
+.performance-section--notes [data-pad-bank="C"]:not(.is-selected) {
+  color: #fff;
+  border-color: #c281ff;
+  background: linear-gradient(180deg, #8d4bc5, #42166d);
+}
+
+.performance-section--notes [data-pad-bank="D"]:not(.is-selected) {
+  color: #fff;
+  border-color: #69bdff;
+  background: linear-gradient(180deg, #278ddd, #084a83);
+}
+
 .pad-bank-button:active {
   transform: translateY(1px);
 }
@@ -3036,6 +3062,38 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   background:
     radial-gradient(circle at 50% 10%, rgba(239, 255, 244, 0.24), transparent 48%),
     linear-gradient(160deg, #b8c8bc, #7d9082);
+}
+
+.performance-section--notes[data-active-pad-bank="A"] .performance-pad--note:not(.is-active) {
+  color: #241800;
+  border-color: #ffe36a;
+  background:
+    radial-gradient(circle at 50% 10%, rgba(255, 255, 255, 0.24), transparent 48%),
+    linear-gradient(160deg, #ffd84d, #c98208);
+}
+
+.performance-section--notes[data-active-pad-bank="B"] .performance-pad--note:not(.is-active) {
+  color: #fff;
+  border-color: #ff7474;
+  background:
+    radial-gradient(circle at 50% 10%, rgba(255, 255, 255, 0.16), transparent 48%),
+    linear-gradient(160deg, #db3e49, #75141e);
+}
+
+.performance-section--notes[data-active-pad-bank="C"] .performance-pad--note:not(.is-active) {
+  color: #fff;
+  border-color: #c281ff;
+  background:
+    radial-gradient(circle at 50% 10%, rgba(255, 255, 255, 0.16), transparent 48%),
+    linear-gradient(160deg, #8d4bc5, #42166d);
+}
+
+.performance-section--notes[data-active-pad-bank="D"] .performance-pad--note:not(.is-active) {
+  color: #fff;
+  border-color: #69bdff;
+  background:
+    radial-gradient(circle at 50% 10%, rgba(255, 255, 255, 0.16), transparent 48%),
+    linear-gradient(160deg, #278ddd, #084a83);
 }
 
 .performance-pad--note.is-active,
@@ -3547,6 +3605,35 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   display: none;
 }
 
+.player-master-meter {
+  display: none;
+  align-items: stretch;
+  gap: 2px;
+  height: clamp(38px, 6vh, 48px);
+  padding: 4px 3px;
+}
+
+.player-screen--tablet .player-master-meter {
+  display: flex;
+}
+
+.player-master-meter__track {
+  position: relative;
+  width: 5px;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid #525258;
+  border-radius: 2px;
+  background: #090a0c;
+}
+
+.player-master-meter__track > i {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, #20c85f 0%, #69e854 62%, #f5d83d 80%, #f0523e 100%);
+  clip-path: inset(calc(100% - var(--master-meter-level, 0%)) 0 0 0);
+}
+
 .player-screen--tablet .player-metronome-button {
   display: grid;
   width: clamp(58px, 6vw, 76px);
@@ -3796,6 +3883,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   opacity: 0;
   cursor: ns-resize;
   touch-action: none;
+  pointer-events: none;
 }
 
 .module-envelope-control:nth-of-type(1) .module-envelope-knob { --knob-accent: #ff5c5c; }
@@ -6242,6 +6330,14 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
     "options options"
     "mode mode";
   gap: clamp(7px, 1.25vh, 13px) clamp(12px, 2.4vw, 28px);
+}
+
+.effect-pad-editor.has-fixed-name {
+  grid-template-areas:
+    "preview preview"
+    "volume volume"
+    "palette palette"
+    "learn learn";
 }
 
 .effect-pad-editor__field {
@@ -9026,13 +9122,10 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 }
 
 .sound-category-button.is-selected {
-  min-height: clamp(38px, 5.4vh, 47px);
-  padding-block: 8px;
   color: #071005;
   border-color: #7dff60;
   background: #2cf604;
   box-shadow: 0 0 13px rgba(44, 246, 4, 0.68), inset 0 1px rgba(255, 255, 255, 0.34);
-  font-size: clamp(10px, 1.2vw, 15px);
 }
 
 .sound-category-button:active {
@@ -9074,11 +9167,12 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 }
 
 .fixed-sound-grid {
+  --fixed-sound-button-height: 46px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   /* Mesma altura dos botões da categoria User: os das categorias oficiais
      ficavam finos demais para acertar com o dedo. */
-  grid-auto-rows: minmax(46px, auto);
+  grid-auto-rows: var(--fixed-sound-button-height);
   gap: clamp(3px, 0.5vw, 6px);
   min-width: 0;
   min-height: 0;
@@ -9087,7 +9181,9 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 .fixed-sound-grid button {
   position: relative;
   min-width: 0;
-  min-height: 0;
+  height: var(--fixed-sound-button-height);
+  min-height: var(--fixed-sound-button-height);
+  max-height: var(--fixed-sound-button-height);
   padding: 2px 5px;
   overflow: hidden;
   color: #f8eee7;
@@ -9107,8 +9203,14 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 }
 
 .fixed-sound-grid button:active {
-  transform: translateY(1px);
   filter: brightness(1.22);
+}
+
+/* A biblioteca não usa zoom/elevação por hover ou toque. Além de parecer
+   aleatório, transformar um item isolado fazia os botões parecerem ter
+   tamanhos diferentes no desktop e durante a rolagem no app. */
+.sound-browser :is(.fixed-sound-grid button, .user-sf2-list > button):is(:hover, :active, :focus) {
+  transform: none !important;
 }
 
 /* Barra fina verde do único timbre que está usando a fila de download. */
@@ -9371,9 +9473,10 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 }
 
 .user-sf2-list {
+  --fixed-sound-button-height: 46px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-rows: minmax(46px, auto);
+  grid-auto-rows: var(--fixed-sound-button-height);
   align-content: start;
   gap: 7px;
   min-height: 0;
@@ -9406,6 +9509,9 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
 .user-sf2-list > button {
   display: grid;
+  height: var(--fixed-sound-button-height);
+  min-height: var(--fixed-sound-button-height);
+  max-height: var(--fixed-sound-button-height);
   padding: 6px 10px;
   overflow: hidden;
   text-align: left;
@@ -10479,8 +10585,12 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
   }
 
   .fixed-sound-grid {
-    grid-auto-rows: minmax(40px, auto);
+    --fixed-sound-button-height: 40px;
     gap: 3px;
+  }
+
+  .user-sf2-list {
+    --fixed-sound-button-height: 40px;
   }
 
   .app-settings-panel {
@@ -10920,6 +11030,16 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
     min-height: 27px;
     padding: 2px;
     border-radius: 6px;
+  }
+
+  .player-screen--tablet .player-master-meter {
+    height: 27px;
+    padding: 2px 1px;
+    gap: 1px;
+  }
+
+  .player-screen--tablet .player-master-meter__track {
+    width: 4px;
   }
 
   .player-screen--tablet .player-metronome-button svg {
@@ -13311,6 +13431,13 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 .module-mod-card__rate:has(input:disabled) {
   opacity: .4;
 }
+
+/* Pan/Tremolo guardam um range auxiliar apenas para alimentar o visor
+   flutuante do toque longo. Ele nunca participa do layout do card Mod. */
+.module-mod-card__intensity-control,
+.module-mod-card__intensity-control[hidden] {
+  display: none !important;
+}
 .module-glide-power,
 .module-glide-sync,
 .module-glide-no-sens {
@@ -14167,6 +14294,10 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
     padding: 3px 5px;
   }
 
+  html[data-runtime="desktop"] .player-screen--tablet .player-master-meter {
+    height: 31px;
+  }
+
   html[data-runtime="desktop"] .player-screen--tablet .track-transport,
   html[data-runtime="desktop"] .player-screen--tablet .player-next-field,
   html[data-runtime="desktop"] .player-screen--tablet .player-global-pitch {
@@ -15015,12 +15146,62 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   font-size: clamp(8px, .78vw, 11px);
 }
 
+.player-output-knob__control {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.player-output-mini-meter {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  height: clamp(32px, 3.45vw, 44px);
+  padding-block: 2px;
+}
+
+.player-output-mini-meter > i {
+  position: relative;
+  display: block;
+  width: 3px;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid #4d5057;
+  border-radius: 2px;
+  background: #08090b;
+}
+
+.player-output-mini-meter > i > b {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, #20c85f 0%, #69e854 62%, #f5d83d 80%, #f0523e 100%);
+  clip-path: inset(calc(100% - var(--output-meter-level, 0%)) 0 0 0);
+}
+
 .player-output-knob__face {
   width: clamp(32px, 3.45vw, 44px);
 }
 
 .player-output-knob output {
   font-size: clamp(6.5px, .67vw, 9px);
+}
+
+/* Desktop: o flex não pode esticar o disco até a altura do meter. Fixamos os
+   dois eixos no mesmo valor e abrimos espaço visual entre knob e meter. */
+html[data-runtime="desktop"] .player-output-knob__control {
+  align-items: center;
+  gap: clamp(6px, .55vw, 9px);
+}
+
+html[data-runtime="desktop"] .player-output-knob__face {
+  flex: 0 0 clamp(32px, 3.2vw, 42px);
+  width: clamp(32px, 3.2vw, 42px);
+  height: clamp(32px, 3.2vw, 42px);
+  aspect-ratio: auto;
+  border-radius: 50%;
 }
 
 /* Organização fixa do áudio: cada saída permanece no mesmo lugar mesmo
@@ -15420,10 +15601,19 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
 .player-screen {
   gap: 2px;
   padding:
-    max(2px, env(safe-area-inset-top))
-    max(2px, env(safe-area-inset-right))
-    max(2px, env(safe-area-inset-bottom))
-    max(2px, env(safe-area-inset-left));
+    max(1px, env(safe-area-inset-top))
+    max(1px, env(safe-area-inset-right))
+    max(1px, env(safe-area-inset-bottom))
+    max(1px, env(safe-area-inset-left)) !important;
+}
+/* A moldura externa de qualquer modal usa o mesmo 1 px da tela principal.
+   Isso inclui Config, Hook B3 e Synth; a safe area física ainda é respeitada. */
+.player-modal {
+  padding:
+    max(1px, env(safe-area-inset-top))
+    max(1px, env(safe-area-inset-right))
+    max(1px, env(safe-area-inset-bottom))
+    max(1px, env(safe-area-inset-left)) !important;
 }
 .player-primary,
 .player-screen--tablet .player-primary,

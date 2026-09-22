@@ -93,7 +93,9 @@ int hk_runtime_send_midi(void* handle, std::uint8_t inputSlot, std::uint8_t stat
 int hk_runtime_configure_module(
     void* handle, std::size_t moduleIndex, int enabled, int inputSlot, int lowNote,
     int highNote, int octave, int sustain, int modulation, float volumeDb,
-    int gmDrumHiHatChoke, int polyphony, int velocityCurve0, int velocityCurve1, int velocityCurve2,
+    int gmDrumHiHatChoke, int drumZeroReleaseMask0, int drumZeroReleaseMask1,
+    int drumZeroReleaseMask2, int drumZeroReleaseMask3,
+    int polyphony, int velocityCurve0, int velocityCurve1, int velocityCurve2,
     int velocityCurve3, int velocityCurve4, int noVelocitySensitivity, int mono, int legato,
     int outputChannelStart, int outputChannelCount, int outputDualMono) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
@@ -109,6 +111,11 @@ int hk_runtime_configure_module(
   config.sustainInputEnabled = sustain != 0;
   config.modulationInputEnabled = modulation != 0;
   config.gmDrumHiHatChoke = gmDrumHiHatChoke != 0;
+  config.drumZeroReleaseNoteMasks = {
+      static_cast<std::uint32_t>(drumZeroReleaseMask0),
+      static_cast<std::uint32_t>(drumZeroReleaseMask1),
+      static_cast<std::uint32_t>(drumZeroReleaseMask2),
+      static_cast<std::uint32_t>(drumZeroReleaseMask3)};
   config.gainLinear = volumeDb <= -90.0f ? 0.0f : std::pow(10.0f, volumeDb / 20.0f);
   config.polyphony = static_cast<std::uint16_t>(std::clamp(polyphony, 1, 128));
   config.velocityCurve = {
@@ -154,9 +161,9 @@ int hk_runtime_configure_glide(
 
 // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
 int hk_runtime_configure_module_modulation(
-    void* handle, std::size_t moduleIndex, int mode, float rateHz) noexcept {
+    void* handle, std::size_t moduleIndex, int mode, float rateHz, float intensity) noexcept {
   return handle && runtime(handle)->setModuleModulationMode(
-      moduleIndex, static_cast<std::uint8_t>(std::clamp(mode, 0, 3)), rateHz) ? 1 : 0;
+      moduleIndex, static_cast<std::uint8_t>(std::clamp(mode, 0, 4)), rateHz, intensity) ? 1 : 0;
 }
 
 int hk_runtime_configure_effects(
@@ -291,8 +298,10 @@ void hk_runtime_configure_metronome(
       static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)));
 }
 
-void hk_runtime_set_output_gain(void* handle, float db, int enabled) noexcept {
-  if (handle) runtime(handle)->setOutputGainDb(db, enabled != 0);
+void hk_runtime_set_output_gain(
+    void* handle, float db, int enabled, int channelStart, int channelCount) noexcept {
+  if (handle) runtime(handle)->setOutputGainDb(db, enabled != 0,
+      static_cast<std::uint8_t>(std::clamp(channelStart, 0, 31)), channelCount == 1 ? 1 : 2);
 }
 
 void hk_runtime_stop_all_notes(void* handle) noexcept {
@@ -318,6 +327,12 @@ void hk_runtime_module_peaks(void* handle, float* output) noexcept {
   if (!handle || !output) return;
   const auto peaks = runtime(handle)->consumeModulePeaks();
   std::copy(peaks.begin(), peaks.end(), output);
+  const auto master = runtime(handle)->consumeMasterPeaks();
+  std::copy(master.begin(), master.end(), output + peaks.size());
+  const auto tracks = runtime(handle)->consumeTrackPeaks();
+  std::copy(tracks.begin(), tracks.end(), output + peaks.size() + master.size());
+  const auto click = runtime(handle)->consumeMetronomePeaks();
+  std::copy(click.begin(), click.end(), output + peaks.size() + master.size() + tracks.size());
 }
 
 void hk_runtime_module_analysis(
