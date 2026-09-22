@@ -136,7 +136,7 @@ assert.match(nativeBridge, /Array\.from\(\{ length: 22 \}/,
   'A interface precisa consumir todos os vinte e dois níveis sem cortar Playlist ou Click');
 assert.match(nativeEngine, /compressorInputPeaks_[\s\S]*publishProcessorLevels/,
   'Os medidores do compressor precisam nascer no sinal real do motor');
-assert.match(nativeEngine, /settings_\.sampleRate \* 0\.005/,
+assert.match(nativeEngine, /settings_\.sampleRate \* 0\.03/,
   'Mudanças de fader precisam de rampa anti-zipper no callback');
 assert.match(tinySoundFont, /TSF_RENDER_EFFECTSAMPLEBLOCK 64/,
   'SF2 precisa usar o bloco de controle nativo com interpolação interna, sem recalcular todo o DSP por amostra');

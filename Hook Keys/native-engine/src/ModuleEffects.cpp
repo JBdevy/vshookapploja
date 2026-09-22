@@ -55,6 +55,7 @@ bool sameRotary(const RotaryConfig& left, const RotaryConfig& right) noexcept {
 
 void ModuleEffects::prepare(double sampleRate) {
   sampleRate_ = std::clamp(sampleRate, 8000.0, 384000.0);
+  currentInputGain_ = decibelsToLinear(config_.inputGainDb);
   delay_.prepare(sampleRate_);
   reverb_.prepare(sampleRate_);
   rotary_.prepare(sampleRate_);
@@ -78,11 +79,39 @@ void ModuleEffects::reset() noexcept {
   gatePhaseSamples_ = 0.0;
   gateStep_ = 0;
   gateGain_ = 1.0f;
+  currentInputGain_ = decibelsToLinear(config_.inputGainDb);
+  lastOutputLeft_ = lastOutputRight_ = 0.0f;
+  transitionOffsetLeft_ = transitionOffsetRight_ = 0.0f;
+  hasProcessedOutput_ = false;
+  effectTransitionPending_ = false;
 }
 
 void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexcept {
   config.normalize();
   tempoBpm_ = std::clamp(tempoBpm, 60.0f, 600.0f);
+
+  // Qualquer troca de parâmetros pode criar uma descontinuidade na saída:
+  // EQ, compressor, tamanho do reverb e estados ON/OFF inclusive.
+  const bool soundChanged = config_.inputGainDb != config.inputGainDb ||
+      !sameCutoff(config_.cutoff, config.cutoff) || !sameEq(config_.equalizer, config.equalizer) ||
+      !sameCompressor(config_.compressor, config.compressor) ||
+      !sameDelay(config_.delay, config.delay) || !sameReverb(config_.reverb, config.reverb) ||
+      !sameRotary(config_.rotary, config.rotary) ||
+      config_.chorus.enabled != config.chorus.enabled || config_.chorus.rateHz != config.chorus.rateHz ||
+      config_.chorus.depth != config.chorus.depth || config_.chorus.mix != config.chorus.mix ||
+      config_.autoFader.enabled != config.autoFader.enabled ||
+      config_.autoFader.depthDb != config.autoFader.depthDb ||
+      config_.autoFader.beats != config.autoFader.beats ||
+      config_.tranceGate.enabled != config.tranceGate.enabled ||
+      config_.tranceGate.steps != config.tranceGate.steps ||
+      config_.tranceGate.length != config.tranceGate.length ||
+      config_.tranceGate.beatMultiplier != config.tranceGate.beatMultiplier ||
+      config_.tranceGate.gate != config.tranceGate.gate ||
+      config_.tranceGate.depth != config.tranceGate.depth ||
+      config_.tranceGate.attackMs != config.tranceGate.attackMs ||
+      config_.tranceGate.releaseMs != config.tranceGate.releaseMs ||
+      config_.tranceGate.swing != config.tranceGate.swing;
+  if (soundChanged && hasProcessedOutput_) effectTransitionPending_ = true;
 
   if (!sameCutoff(config_.cutoff, config.cutoff)) {
     config_.cutoff = config.cutoff;
@@ -123,11 +152,13 @@ ModuleProcessorLevels ModuleEffects::process(
   captureCompressorLevels = captureCompressorLevels && config_.compressor.enabled;
   // Gain de entrada: entra antes de tudo, para o EQ e o compressor receberem
   // o sinal já empurrado.
-  if (config_.inputGainDb != 0.0f) {
-    const auto gain = std::pow(10.0f, config_.inputGainDb / 20.0f);
+  {
+    const auto targetGain = decibelsToLinear(config_.inputGainDb);
+    const auto smoothing = 1.0f - std::exp(-1.0f / (0.030f * static_cast<float>(sampleRate_)));
     for (std::size_t frame = 0; frame < frames; ++frame) {
-      left[frame] *= gain;
-      right[frame] *= gain;
+      currentInputGain_ += (targetGain - currentInputGain_) * smoothing;
+      left[frame] *= currentInputGain_;
+      right[frame] *= currentInputGain_;
     }
   }
   if (config_.cutoff.enabled && config_.cutoff.frequencyHz < 19999.0f) {
@@ -155,6 +186,26 @@ ModuleProcessorLevels ModuleEffects::process(
   // O Auto Fader é volume: vem por último, depois de tudo que soa.
   if (config_.autoFader.enabled) processAutoFader(left, right, frames);
   else autoFaderPhase_ = 0.0;
+  // De-click na saída de todos os processadores. Corrige apenas o salto na
+  // fronteira da alteração, sem atrasar continuamente o áudio ou o controle.
+  const auto release = std::exp(-1.0f / (0.015f * static_cast<float>(sampleRate_)));
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    if (effectTransitionPending_) {
+      // Não amortece o ataque de uma nota nova depois de silêncio.
+      if (std::max(std::abs(lastOutputLeft_), std::abs(lastOutputRight_)) > 0.0001f) {
+        transitionOffsetLeft_ = lastOutputLeft_ - left[frame];
+        transitionOffsetRight_ = lastOutputRight_ - right[frame];
+      }
+      effectTransitionPending_ = false;
+    }
+    left[frame] += transitionOffsetLeft_;
+    right[frame] += transitionOffsetRight_;
+    transitionOffsetLeft_ *= release;
+    transitionOffsetRight_ *= release;
+    lastOutputLeft_ = left[frame];
+    lastOutputRight_ = right[frame];
+  }
+  hasProcessedOutput_ = true;
   return levels;
 }
 

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace hook_keys {
 
@@ -71,6 +72,11 @@ private:
   std::array<std::unique_ptr<TinySoundFontModule>, kDrawbarCount> voices_;
   // Ganho linear por drawbar (0..1), lido no áudio a cada bloco.
   std::array<std::atomic<float>, kDrawbarCount> drawbarGain_{};
+  // Suavização por amostra no callback; os buffers são pré-alocados.
+  std::array<float, kDrawbarCount> currentDrawbarGain_{};
+  float drawbarSmoothing_ = 0.0f;
+  std::vector<float> voiceScratchLeft_;
+  std::vector<float> voiceScratchRight_;
   std::array<std::atomic<bool>, kDrawbarCount> voiceLoaded_{};
   std::array<KeyClick, kMaximumKeyClicks> keyClicks_{};
   std::uint32_t clickSeed_ = 0x738ac41du;

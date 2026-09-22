@@ -5,7 +5,10 @@
 
 namespace hook_keys {
 
-OrganModule::OrganModule(double sampleRate, std::size_t maximumBlockFrames) {
+OrganModule::OrganModule(double sampleRate, std::size_t maximumBlockFrames)
+    : voiceScratchLeft_(maximumBlockFrames, 0.0f),
+      voiceScratchRight_(maximumBlockFrames, 0.0f) {
+  drawbarSmoothing_ = 1.0f - std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.03f));
   clickLengthSamples_ = std::max<std::uint32_t>(1, static_cast<std::uint32_t>(sampleRate * 0.002));
   for (auto& voice : voices_) {
     voice = std::make_unique<TinySoundFontModule>(sampleRate, maximumBlockFrames);
@@ -118,9 +121,18 @@ bool OrganModule::isVoicePoolNearlyFull() const noexcept {
 
 void OrganModule::renderAdd(float* left, float* right, std::size_t frames, float gainLinear) noexcept {
   for (std::size_t index = 0; index < kDrawbarCount; ++index) {
-    const auto drawbarGain = drawbarGain_[index].load(std::memory_order_acquire);
-    if (drawbarGain <= 0.0f) continue;
-    voices_[index]->renderAdd(left, right, frames, gainLinear * drawbarGain);
+    const auto target = drawbarGain_[index].load(std::memory_order_acquire);
+    auto& current = currentDrawbarGain_[index];
+    if (target <= 0.0f && current <= 0.00001f) { current = 0.0f; continue; }
+    std::fill_n(voiceScratchLeft_.data(), frames, 0.0f);
+    std::fill_n(voiceScratchRight_.data(), frames, 0.0f);
+    voices_[index]->renderAdd(voiceScratchLeft_.data(), voiceScratchRight_.data(), frames, 1.0f);
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      current += (target - current) * drawbarSmoothing_;
+      const auto gain = gainLinear * current;
+      left[frame] += voiceScratchLeft_[frame] * gain;
+      right[frame] += voiceScratchRight_[frame] * gain;
+    }
   }
   // O key-click do OpenB3 vem do contato de tecla, não de um motor Leslie
   // rodando em silêncio. Um ruído curtíssimo com queda de amplitude acompanha

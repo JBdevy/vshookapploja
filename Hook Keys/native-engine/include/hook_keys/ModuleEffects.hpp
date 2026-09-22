@@ -216,6 +216,13 @@ private:
   float gateGain_ = 1.0f;
   float gateAttackCoefficient_ = 0.01f;
   float gateReleaseCoefficient_ = 0.01f;
+  float currentInputGain_ = 1.0f;
+  float lastOutputLeft_ = 0.0f;
+  float lastOutputRight_ = 0.0f;
+  float transitionOffsetLeft_ = 0.0f;
+  float transitionOffsetRight_ = 0.0f;
+  bool hasProcessedOutput_ = false;
+  bool effectTransitionPending_ = false;
   void processTranceGate(float* left, float* right, std::size_t frames) noexcept;
   void processAutoFader(float* left, float* right, std::size_t frames) noexcept;
   void configureCutoff() noexcept;

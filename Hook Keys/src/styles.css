@@ -4007,6 +4007,15 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   background: linear-gradient(180deg, rgba(31, 31, 34, 0.98), rgba(12, 12, 14, 0.99));
 }
 
+.track-transport__progress {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #43e878 var(--track-progress, 0%), rgba(255, 255, 255, 0.16) var(--track-progress, 0%));
+  pointer-events: none;
+}
+
 .track-transport button {
   min-width: 48px;
   min-height: 28px;
@@ -4256,7 +4265,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .player-modal--track-position .player-modal__actions {
-  justify-content: flex-end;
+  justify-content: space-between;
 }
 
 .waveform-position {
@@ -8981,9 +8990,9 @@ html[data-runtime="desktop"] .player-tempo-button {
   touch-action: none;
 }
 
-/* O knob anda nos dois sentidos, e o cursor mostra isso. */
+/* O knob abre seu ajuste; o cursor de arrastar a janela não se aplica aqui. */
 html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .player-output-knob) {
-  cursor: move;
+  cursor: pointer;
   touch-action: none;
 }
 
@@ -9211,6 +9220,28 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
    tamanhos diferentes no desktop e durante a rolagem no app. */
 .sound-browser :is(.fixed-sound-grid button, .user-sf2-list > button):is(:hover, :active, :focus) {
   transform: none !important;
+}
+
+.sound-browser :is(.fixed-sound-grid button, .user-sf2-list > button) {
+  transition: filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+@media (hover: hover) {
+  html[data-runtime="desktop"] .sound-browser :is(.fixed-sound-grid button, .user-sf2-list > button):hover {
+    filter: brightness(1.2);
+    box-shadow: 0 0 0 1px #fff8, 0 0 15px #ff9b4580;
+  }
+  html[data-runtime="desktop"] .performance-pad--effect:hover {
+    filter: brightness(1.18);
+    box-shadow: 0 0 0 1px #fff7, 0 0 16px var(--effect-accent);
+  }
+}
+
+.performance-pad--effect {
+  transition: filter 120ms ease, box-shadow 120ms ease;
+}
+.performance-pad--effect:active {
+  filter: brightness(1.25);
 }
 
 /* Barra fina verde do único timbre que está usando a fila de download. */
@@ -15361,6 +15392,26 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
 /* Só o tamanho: a borda/arco vem do tema atual do knob (arco de progresso). */
 .player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob__face {
   width: clamp(17px, min(2.35vw, 4.3vh), 31px);
+}
+
+/* No app, o flex não pode comprimir o disco para caber no medidor quando a
+   Playlist ocupa 30% da tela. Largura e altura ficam sempre idênticas. */
+:root:not([data-runtime="desktop"]) .player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob__control {
+  align-items: center;
+  gap: 3px;
+}
+
+:root:not([data-runtime="desktop"]) .player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-knob__face {
+  flex: 0 0 clamp(17px, min(2.35vw, 4.3vh), 31px);
+  width: clamp(17px, min(2.35vw, 4.3vh), 31px);
+  height: clamp(17px, min(2.35vw, 4.3vh), 31px);
+  aspect-ratio: auto;
+  border-radius: 50%;
+}
+
+:root:not([data-runtime="desktop"]) .player-screen--tablet:not(.player-screen--cellular).is-tracks-split .player-output-mini-meter {
+  flex: 0 0 auto;
+  height: clamp(17px, min(2.35vw, 4.3vh), 31px);
 }
 
 /* iPhone, iPad e Android não herdam os seletores gigantes destinados a

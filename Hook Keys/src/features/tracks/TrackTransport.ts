@@ -50,6 +50,7 @@ export function createTrackTransportMarkup(): string {
       <button type="button" data-transport-action="play-stop" disabled>Play</button>
       <button class="track-transport__name" type="button" data-transport-track-name disabled><span>Nenhuma música selecionada</span></button>
       <output data-transport-remaining aria-label="Tempo restante">00:00</output>
+      <span class="track-transport__progress" data-top-transport-progress aria-hidden="true"></span>
     </section>
   `;
 }
@@ -93,6 +94,10 @@ export class TrackTransportController {
   private outputEnabled = true;
   private audioContext: AudioContext | null = null;
   private outputGain: GainNode | null = null;
+  private outputAnalysers: readonly [AnalyserNode, AnalyserNode] | null = null;
+  private readonly meterBuffers: readonly [Float32Array<ArrayBuffer>, Float32Array<ArrayBuffer>] = [
+    new Float32Array(new ArrayBuffer(2048 * 4)), new Float32Array(new ArrayBuffer(2048 * 4)),
+  ];
   private readonly connectedAudio = new WeakSet<HTMLAudioElement>();
   private renderedTrackName = '';
   private readonly waveformPeaks = new Map<string, Promise<number[] | null>>();
@@ -140,6 +145,7 @@ export class TrackTransportController {
     this.outputGain?.disconnect();
     void this.audioContext?.close();
     this.outputGain = null;
+    this.outputAnalysers = null;
     this.audioContext = null;
   }
 
@@ -327,6 +333,24 @@ export class TrackTransportController {
     await this.startPlayback();
   }
 
+  async playFromCurrentPosition(): Promise<void> {
+    if (!this.selectedTrack || this.state === 'loading' || this.state === 'playing' || !this.audio.src) return;
+    await this.startPlayback();
+  }
+
+  // Desktop/Android tocam a Playlist no WebAudio, não no motor nativo.
+  // Cada canal mede o sinal após o ganho sem mexer no caminho audível.
+  getOutputPeaks(): [number, number] {
+    if (!this.outputAnalysers || this.audioContext?.state !== 'running') return [0, 0];
+    return this.outputAnalysers.map((analyser, channel) => {
+      const samples = this.meterBuffers[channel]!;
+      analyser.getFloatTimeDomainData(samples);
+      let peak = 0;
+      for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+      return peak;
+    }) as [number, number];
+  }
+
   stop(): void {
     this.autoplayPending = false;
     this.loadSequence += 1;
@@ -498,6 +522,8 @@ export class TrackTransportController {
     const remaining = this.root.querySelector<HTMLOutputElement>('[data-transport-remaining]');
     const ready = Boolean(this.selectedTrack) && this.state !== 'loading' && this.hasDuration();
     const ratio = this.currentProgress();
+    this.root.querySelector<HTMLElement>('[data-top-transport-progress]')
+      ?.style.setProperty('--track-progress', `${ratio * 100}%`);
     if (progress) {
       progress.value = String(Math.round(ratio * 1000));
       // Tocando, a agulha fica travada mas o toque continua chegando: quem
@@ -678,6 +704,19 @@ export class TrackTransportController {
         this.audioContext = new AudioContext();
         this.outputGain = this.audioContext.createGain();
         this.outputGain.connect(this.audioContext.destination);
+        const splitter = this.audioContext.createChannelSplitter(2);
+        const silentTap = this.audioContext.createGain();
+        silentTap.gain.value = 0;
+        const left = this.audioContext.createAnalyser();
+        const right = this.audioContext.createAnalyser();
+        left.fftSize = right.fftSize = 2048;
+        this.outputGain.connect(splitter);
+        splitter.connect(left, 0);
+        splitter.connect(right, 1);
+        left.connect(silentTap);
+        right.connect(silentTap);
+        silentTap.connect(this.audioContext.destination);
+        this.outputAnalysers = [left, right];
       }
       if (!this.connectedAudio.has(audio)) {
         this.audioContext.createMediaElementSource(audio).connect(this.outputGain!);

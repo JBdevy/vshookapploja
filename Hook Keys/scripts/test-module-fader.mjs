@@ -75,7 +75,7 @@ test('Playlist e Click chegam sem truncar; não confunde pad selecionado com áu
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
   assert.match(bridge, /Array\.from\(\{ length: 22 \}/);
-  assert.match(player, /renderOutputMeter\('music', peaks\.slice\(18, 20\)\)/);
+  assert.match(player, /renderOutputMeter\('music', hookKeysNative\.tracksAvailable\(\)[\s\S]*?peaks\.slice\(18, 20\) : this\.trackTransport\?\.getOutputPeaks\(\)/);
   assert.match(player, /renderOutputMeter\('click', peaks\.slice\(20, 22\)\)/);
   assert.match(player, /renderOutputMeter\('effects', this\.effectMeterPeaks\(\)\)/);
   assert.match(player, /renderOutputMeter\('pads', \[0, 0\]\)/);
@@ -115,6 +115,42 @@ test('botões de timbres mantêm dimensões fixas sem crescer no hover', () => {
   assert.match(css, /\.sound-browser :is\(\.fixed-sound-grid button, \.user-sf2-list > button\):is\(:hover, :active, :focus\)[\s\S]*?transform:\s*none !important/);
   const selectedCategory = css.match(/\.sound-category-button\.is-selected\s*\{([^}]*)\}/)?.[1] ?? '';
   assert.doesNotMatch(selectedCategory, /(?:min-height|padding|font-size)\s*:/);
+  assert.match(css, /html\[data-runtime="desktop"\] \.sound-browser :is\(\.fixed-sound-grid button, \.user-sf2-list > button\):hover\s*\{[^}]*filter:\s*brightness\(1\.2\)/);
+  assert.match(css, /\.performance-pad--effect:active\s*\{[^}]*filter:\s*brightness\(1\.25\)/);
+});
+
+test('Rotary do Organ tem ON/OFF no desktop e cursor dos knobs não usa quatro setas', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /kind === 'module-organ'[\s\S]*?this\.desktopRuntime \? `<button[\s\S]*?data-module-effect-power="rotary"/);
+  assert.match(player, /pageKind\(\) === 'module-env-filter' \|\| kind === 'module-organ'/);
+  assert.match(css, /html\[data-runtime="desktop"\] :is\(\.module-envelope-knob, \.module-effect-knob, \.player-output-knob\)\s*\{[^}]*cursor:\s*pointer/);
+});
+
+test('transporte superior e medidor da Playlist usam progresso e sinal reais', () => {
+  const transport = readFileSync(new URL('../src/features/tracks/TrackTransport.ts', import.meta.url), 'utf8');
+  assert.match(transport, /data-top-transport-progress/);
+  assert.match(transport, /getOutputPeaks\(\): \[number, number\]/);
+  assert.match(transport, /createChannelSplitter\(2\)/);
+  assert.match(css, /\.track-transport__progress\s*\{[^}]*grid-column:\s*1 \/ -1/);
+});
+
+test('modal de posição oferece Play à esquerda do OK, sem Voltar', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const transport = readFileSync(new URL('../src/features/tracks/TrackTransport.ts', import.meta.url), 'utf8');
+  const footer = player.match(/: kind === 'track-position'\s*\? `([\s\S]*?)`\s*: kind === 'compatibility-mode'/)?.[1] ?? '';
+  assert.match(footer, /data-modal-action="play-track-position"/);
+  assert.match(footer, /data-modal-action="confirm">OK/);
+  assert.doesNotMatch(footer, />Voltar</);
+  assert.match(player, /modalAction === 'play-track-position'[\s\S]*?playFromCurrentPosition\(\)/);
+  assert.match(transport, /async playFromCurrentPosition\(\): Promise<void>/);
+  assert.match(css, /\.player-modal--track-position \.player-modal__actions \{\s*justify-content: space-between;/);
+});
+
+test('medidor dos efeitos no desktop lê o áudio dos efeitos, não apenas o volume configurado', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /private effectMeterPeaks\(\): \[number, number\][\s\S]*?getFloatTimeDomainData\(samples\)/);
+  assert.match(player, /private async attachEffectMeter\(audio: HTMLAudioElement\)/);
+  assert.match(player, /await this\.attachEffectMeter\(audio\);\s*await audio\.play\(\)/);
 });
 
 test('FX 1 e FX 2 mantêm nomes fixos, mas preservam cor, volume e Learn CC', () => {
@@ -802,7 +838,7 @@ test('cinco volumes mostram medidores e Módulos reúne timbres de qualquer saí
   assert.match(output, /createOutputMiniMeter\('click', 'Click'\)/);
   assert.match(player, /createOutputKnobMarkup\('master', 'Módulos'/);
   assert.match(player, /renderOutputMeter\('modules', peaks\.slice\(16, 18\)\)/);
-  assert.match(player, /renderOutputMeter\('music', peaks\.slice\(18, 20\)\)/);
+  assert.match(player, /hookKeysNative\.tracksAvailable\(\)[\s\S]*?peaks\.slice\(18, 20\) : this\.trackTransport\?\.getOutputPeaks\(\)/);
   assert.match(player, /renderOutputMeter\('click', peaks\.slice\(20, 22\)\)/);
   assert.match(runtime, /for \(std::size_t channel = 0; channel < channels; \+\+channel\) \{\s*output\[frame \* channels \+ channel\] \*= gain;/);
 });
@@ -815,6 +851,13 @@ test('Baixar tudo acrescenta os restantes à fila e item aguardando não reabre 
   assert.match(player, /status\.textContent = downloading \? 'Baixando' : 'Aguardando'/);
   assert.match(player, /if \(this\.activeSoundDownloads\.has\(soundId\)\) return;/);
   assert.doesNotMatch(player, /Aguarde a fila atual terminar antes de usar Baixar tudo/);
+});
+
+test('desktop não bloqueia Baixar tudo pela cota estimada da WebView', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /async function hasStorageFor\(byteSize: number \| undefined\): Promise<boolean> \{[\s\S]*?if \(isDesktopRuntime\(\)\) return true;[\s\S]*?navigator\.storage\.estimate\(\)/);
+  assert.match(player, /private async prepareBackupDownloadCapacity\([\s\S]*?if \(this\.desktopRuntime\) return;[\s\S]*?navigator\.storage\?\.estimate/);
+  assert.match(player, /QuotaExceededError'[\s\S]*?isDesktopRuntime\(\)[\s\S]*?biblioteca local do desktop/);
 });
 
 test('Organ envia Rotary, Tremolo e Pan às nove vozes em vez de ficar no LFO', () => {
@@ -848,6 +891,19 @@ test('margem externa da tela e de todos os modais é 1 px', () => {
 test('knobs dos cinco volumes ficam circulares e separados do meter no desktop', () => {
   assert.match(css, /html\[data-runtime="desktop"\] \.player-output-knob__control \{[^}]*align-items: center;[^}]*gap: clamp\(6px, \.55vw, 9px\);/s);
   assert.match(css, /html\[data-runtime="desktop"\] \.player-output-knob__face \{[^}]*width: clamp\(32px, 3\.2vw, 42px\);[^}]*height: clamp\(32px, 3\.2vw, 42px\);[^}]*border-radius: 50%;/s);
+});
+
+test('Playlist 30% no app mantém os cinco knobs e meters com altura igual à largura', () => {
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--tablet:not\(\.player-screen--cellular\)\.is-tracks-split \.player-output-knob__face \{[^}]*flex: 0 0 clamp\(17px,[^}]*height: clamp\(17px,[^}]*border-radius: 50%;/s);
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--tablet:not\(\.player-screen--cellular\)\.is-tracks-split \.player-output-mini-meter \{[^}]*height: clamp\(17px,/s);
+});
+
+test('efeitos removem descontinuidade ao alterar Reverb, Compressor e outros parâmetros', () => {
+  const effects = readFileSync(new URL('../native-engine/src/ModuleEffects.cpp', import.meta.url), 'utf8');
+  assert.match(effects, /soundChanged = config_\.inputGainDb[^;]*!sameCompressor[^;]*!sameReverb/s);
+  assert.match(effects, /if \(soundChanged && hasProcessedOutput_\) effectTransitionPending_ = true;/);
+  assert.match(effects, /currentInputGain_ \+= \(targetGain - currentInputGain_\) \* smoothing;/);
+  assert.match(effects, /transitionOffsetLeft_ = lastOutputLeft_ - left\[frame\];/);
 });
 
 test('card do Glide: 4 botões ocupam a esquerda e o nome fica em cima do knob', () => {

@@ -1731,6 +1731,40 @@ void testIndependentOscillatorVolumes() {
       "volume gains clamp to zero through unity");
 }
 
+void testEffectParametersDoNotClickOnChange() {
+  hook_keys::ModuleEffects effects;
+  effects.prepare(48000.0);
+  hook_keys::ModuleEffectsConfig config;
+  effects.setConfig(config, 120.0f);
+  std::array<float, 2048> left{}, right{};
+  const auto render = [&] {
+    left.fill(0.4f);
+    right.fill(0.4f);
+    effects.process(left.data(), right.data(), left.size());
+    return left.back();
+  };
+  auto previous = render();
+  config.inputGainDb = -20.0f;
+  effects.setConfig(config, 120.0f);
+  render();
+  expect(std::abs(left.front() - previous) < 0.0001f,
+      "input gain change starts continuously, without a click");
+  previous = left.back();
+  config.compressor = {true, -30.0f, 8.0f, 3.0f, 60.0f, 0.0f, 1.0f};
+  effects.setConfig(config, 120.0f);
+  render();
+  expect(std::abs(left.front() - previous) < 0.0001f,
+      "compressor change starts continuously, without a click");
+  previous = left.back();
+  config.reverb = {true, 0.8f, 0.5f, 0.9f, 0.8f, 0.2f};
+  effects.setConfig(config, 120.0f);
+  render();
+  expect(std::abs(left.front() - previous) < 0.0001f,
+      "reverb mix and size change starts continuously, without a click");
+  expect(std::all_of(left.begin(), left.end(), [](float value) { return std::isfinite(value); }),
+      "effect parameter smoothing keeps finite samples");
+}
+
 void testSynthPreservesLinearVelocityAndGain() {
   const auto render = [](std::uint8_t velocity, float gain = 1.0f) {
     hook_keys::AnalogSynthModule synth(48000.0);
@@ -2279,7 +2313,11 @@ void testMetersAndNoteRelease() {
         "stereo meter read consumes both channels");
     expect(runtime.setModuleGainDb(0, -90), "mute SF2 fader live");
     render();
-    static_cast<void>(runtime.consumeModulePeaks()); // 5 ms de rampa anti-click
+    static_cast<void>(runtime.consumeModulePeaks()); // rampa anti-click de 30 ms
+    render();
+    static_cast<void>(runtime.consumeModulePeaks());
+    render();
+    static_cast<void>(runtime.consumeModulePeaks());
     render();
     expect(runtime.consumeModulePeaks()[0] == 0, "meter reacts to a live fader move while the note is held");
     expect(runtime.setModuleGainDb(0, 0), "unmute SF2 fader live");
@@ -3004,6 +3042,7 @@ int main() {
   testSoundFontSampleScale();
   testSustainPedalDoesNotConsumeThePolyphony();
   testTranceGateProcessing();
+  testEffectParametersDoNotClickOnChange();
   testMidiDuringLoadingIsDiscarded();
   testSoundFontGlide();
   testMetersAndNoteRelease();

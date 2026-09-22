@@ -43,6 +43,7 @@ HookKeysEngine::HookKeysEngine(SynthModules modules, EngineSettings settings)
   currentModuleGains_.fill(1.0f);
   moduleGainSteps_.fill(0.0f);
   moduleGainRampFrames_.fill(0);
+  moduleGainConfigured_.fill(false);
   moduleLimiterGains_.fill(1.0f);
   moduleLimiterRelease_ = 1.0f - std::exp(
       -1.0f / (static_cast<float>(settings_.sampleRate) * kModuleLimiterReleaseSeconds));
@@ -319,7 +320,7 @@ void HookKeysEngine::setModuleGainTarget(std::size_t index, float target) noexce
     moduleGainRampFrames_[index] = 0;
     return;
   }
-  const auto frames = std::max<std::size_t>(1, static_cast<std::size_t>(settings_.sampleRate * 0.005));
+  const auto frames = std::max<std::size_t>(1, static_cast<std::size_t>(settings_.sampleRate * 0.03));
   moduleGainSteps_[index] = (target - currentModuleGains_[index]) / static_cast<float>(frames);
   moduleGainRampFrames_[index] = frames;
 }
@@ -346,7 +347,14 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
           sustainDown_[index] = false;
           releaseSustainedNotes(index);
         }
-        if (configs_[index].gainLinear != command.moduleConfig.gainLinear) {
+        if (!moduleGainConfigured_[index]) {
+          // A primeira configuração vem antes de qualquer nota. Ela define o
+          // ponto inicial, não é um movimento de fader a ser interpolado.
+          currentModuleGains_[index] = command.moduleConfig.gainLinear;
+          moduleGainSteps_[index] = 0.0f;
+          moduleGainRampFrames_[index] = 0;
+          moduleGainConfigured_[index] = true;
+        } else if (configs_[index].gainLinear != command.moduleConfig.gainLinear) {
           setModuleGainTarget(index, command.moduleConfig.gainLinear);
         }
         if (configs_[index].modulationInputEnabled && !command.moduleConfig.modulationInputEnabled && modules_[index] != nullptr) {

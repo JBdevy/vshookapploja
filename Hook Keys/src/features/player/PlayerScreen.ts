@@ -1097,6 +1097,16 @@ export class PlayerScreen {
   // juntas no Gate + Infinite Release.
   private readonly effectPadAudio = new Map<string, { url: string; voices: Set<HTMLAudioElement> }>();
   private readonly effectAudioBaseGain = new WeakMap<HTMLAudioElement, number>();
+  private effectAudioContext: AudioContext | null = null;
+  private effectMeterSilentTap: GainNode | null = null;
+  private readonly effectAudioAnalysers = new Map<HTMLAudioElement, {
+    source: MediaElementAudioSourceNode;
+    splitter: ChannelSplitterNode;
+    analysers: [AnalyserNode, AnalyserNode];
+  }>();
+  private readonly effectMeterBuffers: [Float32Array<ArrayBuffer>, Float32Array<ArrayBuffer>] = [
+    new Float32Array(2048), new Float32Array(2048),
+  ];
   private readonly metronome = new MetronomeEngine(() => this.renderMetronomeState());
   private readonly patternPlayback = new PatternPlaybackController(
     (moduleNumber) => this.createPatternPlaybackSnapshot(moduleNumber),
@@ -1637,7 +1647,8 @@ export class PlayerScreen {
             this.setModuleMeterLevel(index + 1, displayed[0] ?? MODULE_FADER_MIN_DB, displayed[1] ?? MODULE_FADER_MIN_DB);
           }
           this.renderOutputMeter('modules', peaks.slice(16, 18));
-          this.renderOutputMeter('music', peaks.slice(18, 20));
+          this.renderOutputMeter('music', hookKeysNative.tracksAvailable()
+            ? peaks.slice(18, 20) : this.trackTransport?.getOutputPeaks() ?? [0, 0]);
           this.renderOutputMeter('click', peaks.slice(20, 22));
           this.renderOutputMeter('effects', this.effectMeterPeaks());
           // O estado selecionado do pad não é sinal de áudio: não inventar nível.
@@ -1706,11 +1717,63 @@ export class PlayerScreen {
   }
 
   private effectMeterPeaks(): [number, number] {
-    let peak = 0;
-    for (const pool of this.effectPadAudio.values()) {
-      for (const audio of pool.voices) if (!audio.paused && !audio.ended) peak = Math.max(peak, audio.volume);
+    if (!this.desktopRuntime) {
+      // O medidor nativo mantém o comportamento anterior até os pads de áudio
+      // passarem por um barramento medido pelo motor da plataforma.
+      let level = 0;
+      for (const pool of this.effectPadAudio.values()) {
+        for (const audio of pool.voices) {
+          if (!audio.paused && !audio.ended) level = Math.max(level, audio.volume);
+        }
+      }
+      return [level, level];
     }
-    return [peak, peak];
+    const peaks: [number, number] = [0, 0];
+    for (const [audio, { analysers }] of this.effectAudioAnalysers) {
+      if (audio.paused || audio.ended) continue;
+      analysers.forEach((analyser, channel) => {
+        const samples = this.effectMeterBuffers[channel]!;
+        analyser.getFloatTimeDomainData(samples);
+        for (const sample of samples) peaks[channel] = Math.max(peaks[channel] ?? 0, Math.abs(sample));
+      });
+    }
+    return peaks;
+  }
+
+  private async attachEffectMeter(audio: HTMLAudioElement): Promise<void> {
+    if (!this.desktopRuntime) return;
+    try {
+      if (!this.effectAudioContext) {
+        this.effectAudioContext = new AudioContext();
+        this.effectMeterSilentTap = this.effectAudioContext.createGain();
+        this.effectMeterSilentTap.gain.value = 0;
+        this.effectMeterSilentTap.connect(this.effectAudioContext.destination);
+      }
+      if (this.effectAudioContext.state === 'suspended') await this.effectAudioContext.resume();
+      const source = this.effectAudioContext.createMediaElementSource(audio);
+      const splitter = this.effectAudioContext.createChannelSplitter(2);
+      const left = this.effectAudioContext.createAnalyser();
+      const right = this.effectAudioContext.createAnalyser();
+      left.fftSize = right.fftSize = 2048;
+      source.connect(this.effectAudioContext.destination);
+      source.connect(splitter);
+      splitter.connect(left, 0);
+      splitter.connect(right, 1);
+      left.connect(this.effectMeterSilentTap!);
+      right.connect(this.effectMeterSilentTap!);
+      this.effectAudioAnalysers.set(audio, { source, splitter, analysers: [left, right] });
+    } catch {
+      // Sem WebAudio, o efeito continua reproduzindo pelo elemento original.
+    }
+  }
+
+  private detachEffectMeter(audio: HTMLAudioElement): void {
+    const graph = this.effectAudioAnalysers.get(audio);
+    if (!graph) return;
+    graph.source.disconnect();
+    graph.splitter.disconnect();
+    for (const analyser of graph.analysers) analyser.disconnect();
+    this.effectAudioAnalysers.delete(audio);
   }
 
   private getCompressorAnalysisModuleIndex(): number | null {
@@ -1860,6 +1923,10 @@ export class PlayerScreen {
     this.trackTransport?.destroy();
     this.trackTransport = null;
     for (const key of [...this.effectPadAudio.keys()]) this.disposeEffectPadAudio(key);
+    for (const audio of this.effectAudioAnalysers.keys()) this.detachEffectMeter(audio);
+    void this.effectAudioContext?.close();
+    this.effectAudioContext = null;
+    this.effectMeterSilentTap = null;
     for (const fader of this.faders.values()) fader.destroy();
     this.faders.clear();
     this.root.removeEventListener('click', this.handleRootClick);
@@ -3376,6 +3443,7 @@ export class PlayerScreen {
     this.effectAudioBaseGain.set(audio, baseGain);
     audio.volume = Math.min(1, Math.max(0, baseGain * effectsGain));
     audio.addEventListener('ended', () => this.finishEffectPadAudioVoice(key, audio), { once: true });
+    await this.attachEffectMeter(audio);
     await audio.play().catch(() => {
       this.finishEffectPadAudioVoice(key, audio);
       this.setStatus('Não foi possível tocar o áudio deste efeito.');
@@ -3386,6 +3454,7 @@ export class PlayerScreen {
     const pool = this.effectPadAudio.get(`${bank}:${effectNumber}`);
     if (!pool) return;
     for (const audio of pool.voices) {
+      this.detachEffectMeter(audio);
       audio.pause();
       audio.removeAttribute('src');
       audio.load();
@@ -3394,6 +3463,7 @@ export class PlayerScreen {
   }
 
   private finishEffectPadAudioVoice(key: string, audio: HTMLAudioElement): void {
+    this.detachEffectMeter(audio);
     const pool = this.effectPadAudio.get(key);
     if (!pool || !pool.voices.delete(audio)) return;
     audio.removeAttribute('src');
@@ -5766,6 +5836,13 @@ export class PlayerScreen {
           <button class="tracks-footer-button tracks-footer-button--add" type="button" data-tracks-action="add-music">Add música</button>
           <button class="tracks-footer-button tracks-footer-button--create" type="button" data-tracks-action="create-playlist">Create playlist</button>
         `
+      : kind === 'track-position'
+        ? `
+          <button class="player-modal__back-button" type="button" data-modal-action="play-track-position"${
+            this.trackTransport?.getSnapshot().selectedTrackId && this.trackTransport.getSnapshot().state !== 'loading'
+              ? '' : ' disabled'}>Play</button>
+          <button class="player-modal__confirm-button" type="button" data-modal-action="confirm">OK</button>
+        `
       : kind === 'compatibility-mode'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel-compatibility">Cancelar</button>
@@ -5809,6 +5886,9 @@ export class PlayerScreen {
       : kind === 'module-organ'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>
+          ${this.desktopRuntime ? `<button class="module-effect-power ${readModuleRotarySettings(moduleState?.settings.rotary).enabled ? 'is-on' : 'is-off'}" type="button"
+            data-module-effect-power="rotary" aria-pressed="${readModuleRotarySettings(moduleState?.settings.rotary).enabled}">${
+              readModuleRotarySettings(moduleState?.settings.rotary).enabled ? 'ON' : 'OFF'}</button>` : ''}
         `
       : kind === 'module-synth'
         ? `
@@ -6467,7 +6547,7 @@ export class PlayerScreen {
         : null;
       if (
         moduleNumber !== null
-        && (pageKind() === 'module-eq' || pageKind() === 'module-compressor' || pageKind() === 'module-reverb' || pageKind() === 'module-delay' || pageKind() === 'module-rotary' || pageKind() === 'module-chorus' || pageKind() === 'module-arpeggiator' || pageKind() === 'module-trance-gate' || pageKind() === 'module-env-filter')
+        && (pageKind() === 'module-eq' || pageKind() === 'module-compressor' || pageKind() === 'module-reverb' || pageKind() === 'module-delay' || pageKind() === 'module-rotary' || pageKind() === 'module-chorus' || pageKind() === 'module-arpeggiator' || pageKind() === 'module-trance-gate' || pageKind() === 'module-env-filter' || kind === 'module-organ')
         && effectPowerButton
       ) {
         this.toggleModuleEffectPower(effectPowerButton, moduleNumber);
@@ -7031,6 +7111,11 @@ export class PlayerScreen {
       if (kind === 'user' && modalAction === 'save-user-photo') {
         const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
         if (button) void this.saveUserProfilePhoto(modal, button);
+        return;
+      }
+      if (kind === 'track-position' && modalAction === 'play-track-position') {
+        void this.trackTransport?.playFromCurrentPosition();
+        this.closeModal();
         return;
       }
       if (modalAction === 'confirm' || modalAction === 'cancel') {
@@ -11008,6 +11093,9 @@ export class PlayerScreen {
     const unknownSizes = sounds.some((sound) => sound.byteSize === undefined);
     const message = modal.querySelector<HTMLElement>('[data-backup-download-message]');
     const button = modal.querySelector<HTMLButtonElement>('[data-modal-action="download-backup-sounds"]');
+    // No Tauri, a estimativa da WebView mede a cota da origem, não o espaço
+    // livre real do disco. Não limite o backup por esse número no desktop.
+    if (this.desktopRuntime) return;
     try {
       const estimate = await navigator.storage?.estimate?.();
       if (!modal.isConnected || !estimate || estimate.quota === undefined || estimate.usage === undefined) return;
@@ -12447,7 +12535,9 @@ function soundDownloadErrorMessage(error: unknown): string {
   if (status === '404') return 'O arquivo deste timbre não está no servidor (404).';
   if (status) return `O servidor respondeu ${status} ao baixar este timbre.`;
   if (error instanceof DOMException && error.name === 'QuotaExceededError') {
-    return 'Sem espaço neste aparelho para guardar o timbre.';
+    return isDesktopRuntime()
+      ? 'A biblioteca local do desktop atingiu o limite de armazenamento. Tente liberar espaço na biblioteca e baixar novamente.'
+      : 'Sem espaço neste aparelho para guardar o timbre.';
   }
   if (error instanceof RangeError || /allocation failed|out of memory|maximum size/i.test(raw)) {
     return 'O aparelho ficou sem memória para este timbre. Feche outros apps e tente de novo.';
@@ -12502,6 +12592,10 @@ function boundedNumber(value: unknown, minimum: number, maximum: number, fallbac
 }
 
 async function hasStorageFor(byteSize: number | undefined): Promise<boolean> {
+  // navigator.storage.estimate() no desktop/Tauri pode reportar uma cota de
+  // WebView muito menor que o espaço do disco. A gravação no IndexedDB é a
+  // verificação real; um QuotaExceededError será tratado no download.
+  if (isDesktopRuntime()) return true;
   if (!byteSize || !navigator.storage?.estimate) return true;
   try {
     const estimate = await navigator.storage.estimate();
