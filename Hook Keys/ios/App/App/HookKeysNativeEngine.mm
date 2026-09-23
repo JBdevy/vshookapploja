@@ -760,7 +760,9 @@ static NSString *describeFormat(AVAudioFormat *format) {
                     rotaryModulationEnabled != NO};
   effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled != NO;
   effects.chorus = {chorusEnabled != NO, chorusRateHz, chorusDepth, chorusMix};
-  effects.loFi = {loFiEnabled != NO, loFiBitDepth, loFiSampleRateHz, loFiMix};
+  // ABI legado: BitDepth transporta Amount (semitons), SampleRate transporta Rate (Hz).
+  (void)loFiMix;
+  effects.loFi = {loFiEnabled != NO, loFiSampleRateHz, loFiBitDepth};
   effects.autoFader = {autoFaderEnabled != NO, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;
   return runtime->setModuleEffects(static_cast<std::size_t>(moduleIndex), effects);

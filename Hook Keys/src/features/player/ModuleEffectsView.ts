@@ -295,9 +295,8 @@ export interface ModuleChorusSettings {
 
 export interface ModuleLoFiSettings {
   enabled: boolean;
-  bitDepth: number;
-  sampleRateHz: number;
-  mix: number;
+  rateHz: number;
+  amountSemitones: number;
 }
 
 const DEFAULT_CHORUS: ModuleChorusSettings = {
@@ -309,9 +308,8 @@ const DEFAULT_CHORUS: ModuleChorusSettings = {
 
 const DEFAULT_LOFI: ModuleLoFiSettings = {
   enabled: false,
-  bitDepth: 8,
-  sampleRateHz: 12_000,
-  mix: 50,
+  rateHz: 1,
+  amountSemitones: 0.25,
 };
 
 export function readModuleChorusSettings(value: unknown): ModuleChorusSettings {
@@ -344,18 +342,16 @@ export function readModuleLoFiSettings(value: unknown): ModuleLoFiSettings {
   const source = record(value);
   return {
     enabled: source.enabled === true,
-    bitDepth: numberInRange(source.bitDepth, 4, 16, DEFAULT_LOFI.bitDepth),
-    sampleRateHz: numberInRange(source.sampleRateHz, 1_000, 48_000, DEFAULT_LOFI.sampleRateHz),
-    mix: numberInRange(source.mix, 0, 100, DEFAULT_LOFI.mix),
+    rateHz: numberInRange(source.rateHz, 0.05, 8, DEFAULT_LOFI.rateHz),
+    amountSemitones: numberInRange(source.amountSemitones, 0, 1, DEFAULT_LOFI.amountSemitones),
   };
 }
 
 export function createModuleLoFiMarkup(settings: Readonly<Record<string, unknown>>): string {
   const value = readModuleLoFiSettings(settings.lofi);
   const controls: EffectControlDefinition[] = [
-    control('bitDepth', 'Bits', 4, 16, 1, value.bitDepth, `${Math.round(value.bitDepth)} bit`),
-    control('sampleRateHz', 'Rate', 1_000, 48_000, 100, value.sampleRateHz, formatLoFiRate(value.sampleRateHz)),
-    control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
+    control('rateHz', 'Rate', 0.05, 8, 0.01, value.rateHz, `${value.rateHz.toFixed(2)} Hz`),
+    control('amountSemitones', 'Amount', 0, 1, 0.01, value.amountSemitones, formatVibesAmount(value.amountSemitones)),
   ];
   return `
     <section class="module-effect-editor module-lofi-editor" data-module-effect-editor="lofi">
@@ -546,9 +542,8 @@ export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, val
   }
   if (kind === 'chorus') return key === 'rateHz' ? `${value.toFixed(2)} Hz` : `${Math.round(value)}%`;
   if (kind === 'lofi') {
-    if (key === 'bitDepth') return `${Math.round(value)} bit`;
-    if (key === 'sampleRateHz') return formatLoFiRate(value);
-    return `${Math.round(value)}%`;
+    if (key === 'rateHz') return `${value.toFixed(2)} Hz`;
+    return formatVibesAmount(value);
   }
   if (kind === 'reverb') return key === 'decay' ? `${formatNumber(value)} s` : `${Math.round(value)}%`;
   if (kind === 'cutoffEnvelope') {
@@ -601,8 +596,10 @@ function formatNumber(value: number): string {
   return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
 }
 
-function formatLoFiRate(value: number): string {
-  return value >= 1_000 ? `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)} kHz` : `${Math.round(value)} Hz`;
+function formatVibesAmount(value: number): string {
+  if (value <= 0.0001) return 'OFF';
+  if (value >= 0.995) return '1.00 st';
+  return `${Math.round(value * 100)} ct`;
 }
 
 export function delayMillisecondsForBpm(bpm: number, division: string): number {

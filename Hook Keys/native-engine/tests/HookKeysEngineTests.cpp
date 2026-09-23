@@ -1412,6 +1412,8 @@ void testTrackPlayerPlaysRoutesLoopsAndEnds() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
+  constexpr double sampleRate = 48000.0;
+  constexpr std::size_t totalFrames = static_cast<std::size_t>(sampleRate * 2.0);
   hook_keys::NativeEngineRuntime sixEight(sampleRate, 512);
   sixEight.setMetronome(true, 120.0f, 1.0f, 1, false, false, 6, 8);
   const auto sixEightOnsets = metronomeOnsets(sixEight, totalFrames, 256);
@@ -1963,6 +1965,45 @@ void testOrganCabinetDoesNotBoostResonances() {
       expect(peak > 0.40f, "Organ cabinet compensates the IR attenuation without losing audible volume");
     }
   }
+}
+
+void testVibesPitchModulationAndZeroBypass() {
+  hook_keys::ModuleEffects effects;
+  effects.prepare(48000.0, false);
+  hook_keys::ModuleEffectsConfig config;
+  config.cutoff.enabled = false;
+  config.equalizer.enabled = false;
+  config.loFi = {true, 2.0f, 0.0f};
+  effects.setConfig(config, 120.0f);
+
+  std::vector<float> left(512), right(512);
+  for (std::size_t index = 0; index < left.size(); ++index) {
+    left[index] = right[index] = 0.4f * std::sin(
+        2.0 * 3.14159265358979323846 * 440.0 * static_cast<double>(index) / 48000.0);
+  }
+  const auto dry = left;
+  effects.process(left.data(), right.data(), left.size());
+  expect(left == dry && right == dry, "Vibes Amount zero is a bit-transparent bypass");
+
+  config.loFi.amountSemitones = 1.0f;
+  effects.setConfig(config, 120.0f);
+  double difference = 0.0;
+  std::size_t phaseFrame = left.size();
+  for (int block = 0; block < 12; ++block) {
+    for (std::size_t index = 0; index < left.size(); ++index, ++phaseFrame) {
+      const auto sample = 0.4f * std::sin(
+          2.0 * 3.14159265358979323846 * 440.0 * static_cast<double>(phaseFrame) / 48000.0);
+      left[index] = right[index] = sample;
+    }
+    const auto input = left;
+    effects.process(left.data(), right.data(), left.size());
+    if (block >= 4) {
+      for (std::size_t index = 0; index < left.size(); ++index) {
+        difference += std::abs(static_cast<double>(left[index] - input[index]));
+      }
+    }
+  }
+  expect(difference > 1.0, "Vibes Amount modulates pitch instead of reducing bits");
 }
 
 void testOrganFullRegistrationThroughCabinet() {
@@ -3415,6 +3456,7 @@ void testNewSoftNoteDoesNotFilterHeldChord() {
 
 int main() {
   expect(hook_keys::ModuleConfig{}.polyphony == 128, "new modules default to 128-note polyphony");
+  testVibesPitchModulationAndZeroBypass();
   testNewSoftNoteDoesNotFilterHeldChord();
   testSixNoteSoundFontChordKeepsEveryVoice();
   testSoundFontSampleScale();

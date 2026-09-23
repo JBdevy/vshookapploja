@@ -239,17 +239,16 @@ struct ChorusConfig final {
   }
 };
 
-// Lo-Fi: redução de bits e de taxa de amostragem com mistura dry/wet.
+// Vibes: oscilação contínua de afinação. O Amount vai de zero (bypass) até
+// um semitom; o Rate controla a velocidade da ida e volta.
 struct LoFiConfig final {
   bool enabled = false;
-  float bitDepth = 8.0f;
-  float sampleRateHz = 12000.0f;
-  float mix = 0.5f;
+  float rateHz = 1.0f;
+  float amountSemitones = 0.25f;
 
   void normalize() noexcept {
-    bitDepth = std::clamp(bitDepth, 4.0f, 16.0f);
-    sampleRateHz = std::clamp(sampleRateHz, 1000.0f, 48000.0f);
-    mix = std::clamp(mix, 0.0f, 1.0f);
+    rateHz = std::clamp(rateHz, 0.05f, 8.0f);
+    amountSemitones = std::clamp(amountSemitones, 0.0f, 1.0f);
   }
 };
 

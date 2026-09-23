@@ -5655,9 +5655,14 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 /* Chorus: três cards em pé lado a lado, como os do Reverb. */
-.module-effect-controls--chorus,
-.module-effect-controls--lofi {
+.module-effect-controls--chorus {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.module-effect-controls--lofi {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows: minmax(0, 1fr);
   align-content: stretch;
 }

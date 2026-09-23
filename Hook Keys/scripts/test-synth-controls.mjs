@@ -342,7 +342,8 @@ test('desktop opens smaller and Param clips every preview inside its available g
   );
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.player-modal--module-settings \.module-settings-panel\s*\{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/s);
-  assert.match(css, /\.module-effect-controls--chorus,\s*\.module-effect-controls--lofi\s*\{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/s);
+  assert.match(css, /\.module-effect-controls--chorus\s*\{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/s);
+  assert.match(css, /\.module-effect-controls--lofi\s*\{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/s);
   assert.match(css, /\.module-reverb-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
   assert.match(css, /\.module-delay-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
   assert.match(css, /\.module-delay-editor__divisions\s*\{[^}]*grid-template-columns: repeat\(8, minmax\(0, 1fr\)\);/s);
@@ -535,6 +536,21 @@ test('preset 1 is selected by default; other selections replace it and remain se
     assert.match(selected[0][0], /is-selected/);
     assert.match(markup, /class="synth-preset-group"[\s\S]*?<\/div>\s*<div class="synth-mode-controls">\s*<button[^>]*data-synth-voice-mode[^>]*>Mono<\/button>\s*<button class="synth-legato-button/);
   }
+});
+
+test('Vibes replaces the bit crusher with Rate and microtonal Amount only', () => {
+  const effects = transpile('../src/features/player/ModuleEffectsView.ts', { './ParameterKnobView': knobView });
+  const settings = effects.readModuleLoFiSettings({ enabled: true, rateHz: 2.5, amountSemitones: 0 });
+  assert.equal(settings.enabled, true);
+  assert.equal(settings.rateHz, 2.5);
+  assert.equal(settings.amountSemitones, 0);
+  const markup = effects.createModuleLoFiMarkup({ lofi: settings });
+  assert.match(markup, /min="0\.05" max="8"[^>]*data-module-effect-control="rateHz"/);
+  assert.match(markup, /min="0" max="1"[^>]*data-module-effect-control="amountSemitones"/);
+  assert.match(markup, />OFF<\/output>/);
+  assert.doesNotMatch(markup, /Bits|bitDepth|sampleRateHz|data-module-effect-control="mix"/);
+  assert.equal(effects.formatModuleEffectValue('lofi', 'amountSemitones', 0.37), '37 ct');
+  assert.equal(effects.formatModuleEffectValue('lofi', 'amountSemitones', 1), '1.00 st');
 });
 
 test('Synth preset names are customizable, bounded and escaped in button markup', () => {

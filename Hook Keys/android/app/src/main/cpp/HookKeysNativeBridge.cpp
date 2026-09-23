@@ -432,7 +432,9 @@ public:
                       rotaryModulationEnabled};
     effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled;
     effects.chorus = {chorusEnabled, chorusRateHz, chorusDepth, chorusMix};
-    effects.loFi = {loFiEnabled, loFiBitDepth, loFiSampleRateHz, loFiMix};
+    // ABI legado: BitDepth transporta Amount (semitons), SampleRate transporta Rate (Hz).
+    (void)loFiMix;
+    effects.loFi = {loFiEnabled, loFiSampleRateHz, loFiBitDepth};
     effects.autoFader = {autoFaderEnabled, autoFaderBeats, autoFaderDepthDb};
     effects.inputGainDb = inputGainDb;
     return runtime->setModuleEffects(moduleIndex, effects);

@@ -246,7 +246,9 @@ int hk_runtime_configure_effects(
                     rotaryModulationEnabled != 0};
   effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled != 0;
   effects.chorus = {chorusEnabled != 0, chorusRateHz, chorusDepth, chorusMix};
-  effects.loFi = {loFiEnabled != 0, loFiBitDepth, loFiSampleRateHz, loFiMix};
+  // ABI legado: BitDepth transporta Amount (semitons), SampleRate transporta Rate (Hz).
+  (void)loFiMix;
+  effects.loFi = {loFiEnabled != 0, loFiSampleRateHz, loFiBitDepth};
   effects.autoFader = {autoFaderEnabled != 0, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;
   return runtime(handle)->setModuleEffects(moduleIndex, effects) ? 1 : 0;

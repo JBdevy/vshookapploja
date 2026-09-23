@@ -514,7 +514,7 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
     'rotary:slowHz': [0.2, 2], 'rotary:fastHz': [2, 10], 'rotary:rampSeconds': [0.1, 10],
     'rotary:depth': [0, 100], 'rotary:mix': [0, 100],
     'chorus:rateHz': [0.05, 8], 'chorus:depth': [0, 100], 'chorus:mix': [0, 100],
-    'lofi:bitDepth': [4, 16], 'lofi:sampleRateHz': [1_000, 48_000], 'lofi:mix': [0, 100],
+    'lofi:rateHz': [0.05, 8], 'lofi:amountSemitones': [0, 1],
     'cutoffEnvelope:attackMs': [0, 5_000], 'cutoffEnvelope:decayMs': [0, 5_000],
     'cutoffEnvelope:sustain': [0, 100], 'cutoffEnvelope:releaseMs': [0, 5_000],
     'cutoffEnvelope:depthOctaves': [0, 8],
@@ -6431,7 +6431,7 @@ export class PlayerScreen {
         : kind === 'module-reverb' ? 'Reverb'
           : kind === 'module-rotary' ? 'Rotary Speaker'
             : kind === 'module-chorus' ? 'Chorus'
-              : kind === 'module-lofi' ? 'Lo-Fi' : 'Delay';
+              : kind === 'module-lofi' ? 'Vibes' : 'Delay';
     } else if (kind === 'module-organ') {
       eyebrow.textContent = `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
       title.textContent = 'Hook B3';
@@ -10187,9 +10187,8 @@ export class PlayerScreen {
       'chorus:rateHz': [0.05, 8],
       'chorus:depth': [0, 100],
       'chorus:mix': [0, 100],
-      'lofi:bitDepth': [4, 16],
-      'lofi:sampleRateHz': [1_000, 48_000],
-      'lofi:mix': [0, 100],
+      'lofi:rateHz': [0.05, 8],
+      'lofi:amountSemitones': [0, 1],
       'cutoffEnvelope:attackMs': [0, 5_000],
       'cutoffEnvelope:decayMs': [0, 5_000],
       'cutoffEnvelope:sustain': [0, 100],
@@ -10203,6 +10202,7 @@ export class PlayerScreen {
     const reverbMixes = effectKind === 'reverb' && effectControl === 'mix'
       ? ensureReverbMixPresets(moduleState.settings) : null;
     (settings as unknown as Record<string, number | string | boolean>)[effectControl] = value;
+    if (effectKind === 'lofi' && effectControl === 'amountSemitones') settings.enabled = value > 0;
     moduleState.settings[effectKind] = settings;
     if (reverbMixes) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)].mix = value;
     this.markPlayerStateChanged();
@@ -10382,6 +10382,18 @@ export class PlayerScreen {
     if (!(key in settings)) return;
     const reverbMixes = kind === 'reverb' && key === 'mix' ? ensureReverbMixPresets(moduleState.settings) : null;
     (settings as unknown as Record<string, number | string>)[key] = value;
+    if (kind === 'lofi' && key === 'amountSemitones') {
+      // No Vibes, Amount zero é o próprio bypass; ao abrir novamente o
+      // Amount, o efeito entra sem exigir um segundo toque no ON/OFF.
+      settings.enabled = value > 0;
+      const power = modal.querySelector<HTMLButtonElement>('[data-module-effect-power="lofi"]');
+      if (power) {
+        power.classList.toggle('is-on', settings.enabled);
+        power.classList.toggle('is-off', !settings.enabled);
+        power.textContent = settings.enabled ? 'ON' : 'OFF';
+        power.setAttribute('aria-pressed', String(settings.enabled));
+      }
+    }
     moduleState.settings[kind] = settings;
     if (reverbMixes) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)].mix = value;
 
@@ -10438,6 +10450,23 @@ export class PlayerScreen {
     if (!isModuleEffectKind(kind)) return;
     const settings = readModuleEffectSettings(kind, moduleState.settings[kind]);
     settings.enabled = !settings.enabled;
+    if (kind === 'lofi') {
+      const vibes = settings as ReturnType<typeof readModuleLoFiSettings>;
+      if (vibes.enabled && vibes.amountSemitones <= 0) {
+        vibes.amountSemitones = 0.25;
+        const amount = button.closest<HTMLElement>('.player-modal__surface')
+          ?.querySelector<HTMLInputElement>('[data-module-effect-kind="lofi"][data-module-effect-control="amountSemitones"]');
+        if (amount) {
+          amount.value = String(vibes.amountSemitones);
+          amount.setAttribute('aria-valuetext', formatModuleEffectValue('lofi', 'amountSemitones', vibes.amountSemitones));
+          const knob = amount.closest<HTMLElement>('.module-effect-knob');
+          knob?.style.setProperty('--knob-angle', `${-135 + vibes.amountSemitones * 270}deg`);
+          knob?.style.setProperty('--knob-progress', String(vibes.amountSemitones));
+          const output = knob?.querySelector<HTMLOutputElement>('[data-module-effect-output="amountSemitones"]');
+          if (output) output.value = formatModuleEffectValue('lofi', 'amountSemitones', vibes.amountSemitones);
+        }
+      }
+    }
     moduleState.settings[kind] = settings;
     if (kind === 'compressor' && !settings.enabled) this.renderModuleAnalysis([]);
     button.classList.toggle('is-on', settings.enabled);
@@ -10512,7 +10541,8 @@ export class PlayerScreen {
           : processor === 'reverb' ? 'Reverb'
             : processor === 'rotary' ? 'Rotary'
               : processor === 'chorus' ? 'Chorus'
-                : processor === 'cutoffEnvelope' ? 'Env-Filter' : 'Delay';
+                : processor === 'lofi' ? 'Vibes'
+                  : processor === 'cutoffEnvelope' ? 'Env-Filter' : 'Delay';
     const confirmation = document.createElement('div');
     confirmation.className = 'module-processor-reset-confirmation';
     // Guarda o processador desta confirmação: dentro do Config em páginas o
@@ -12249,10 +12279,12 @@ export class PlayerScreen {
           chorusRateHz: chorus.rateHz,
           chorusDepth: chorus.depth / 100,
           chorusMix: chorus.mix / 100,
-          loFiEnabled: moduleIndex !== 6 && loFi.enabled,
-          loFiBitDepth: loFi.bitDepth,
-          loFiSampleRateHz: loFi.sampleRateHz,
-          loFiMix: loFi.mix / 100,
+          // A ponte nativa ainda usa os nomes históricos para manter o ABI das
+          // três plataformas. Eles transportam Amount, Rate e não têm Mix.
+          loFiEnabled: moduleIndex !== 6 && loFi.enabled && loFi.amountSemitones > 0,
+          loFiBitDepth: loFi.amountSemitones,
+          loFiSampleRateHz: loFi.rateHz,
+          loFiMix: 1,
           // O Auto Fader é parte do Arpeggiator: a preferência continua salva,
           // mas o DSP só roda enquanto o Arpeggiator deste módulo estiver ON.
           autoFaderEnabled: arpeggiatorSettings.enabled && autoFader.enabled,

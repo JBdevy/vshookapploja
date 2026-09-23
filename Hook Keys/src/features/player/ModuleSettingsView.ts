@@ -272,7 +272,7 @@ const MODULE_SETTINGS_PAGE_LABELS: Readonly<Record<ModuleSettingsPage, string>> 
   eq: 'EQ',
   compressor: 'Compressor',
   chorus: 'Chorus',
-  lofi: 'Lo-Fi',
+  lofi: 'Vibes',
   reverb: 'Reverb',
   delay: 'Delay',
   rotary: 'Rotary',

@@ -315,8 +315,8 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
       !sameRotary(config_.rotary, config.rotary) ||
       config_.chorus.enabled != config.chorus.enabled || config_.chorus.rateHz != config.chorus.rateHz ||
       config_.chorus.depth != config.chorus.depth || config_.chorus.mix != config.chorus.mix ||
-      config_.loFi.enabled != config.loFi.enabled || config_.loFi.bitDepth != config.loFi.bitDepth ||
-      config_.loFi.sampleRateHz != config.loFi.sampleRateHz || config_.loFi.mix != config.loFi.mix ||
+      // Rate e Amount do Vibes têm suavização própria durante o arrasto.
+      config_.loFi.enabled != config.loFi.enabled ||
       config_.autoFader.enabled != config.autoFader.enabled ||
       config_.autoFader.depthDb != config.autoFader.depthDb ||
       config_.autoFader.beats != config.autoFader.beats ||
@@ -403,7 +403,9 @@ ModuleProcessorLevels ModuleEffects::process(
   cabinet_.process(left, right, frames, config_.rotary.cabinetEnabled, config_.rotary.enabled);
   if (config_.rotary.enabled) rotary_.process(left, right, frames);
   if (config_.chorus.enabled) chorus_.process(config_.chorus, left, right, frames);
-  if (config_.loFi.enabled) loFi_.process(config_.loFi, left, right, frames);
+  // O Vibes mantém a linha de atraso alimentada mesmo em bypass. Assim ele
+  // entra sem silêncio nem estouro ao ser ligado durante uma nota sustentada.
+  loFi_.process(config_.loFi, left, right, frames);
   processTranceGate(left, right, frames);
   if (config_.delay.enabled) delay_.process(left, right, frames);
   if (config_.reverb.enabled) reverb_.process(left, right, frames);
@@ -498,38 +500,61 @@ void ModuleEffects::Chorus::process(
   }
 }
 
-void ModuleEffects::LoFi::prepare(double nextSampleRate) noexcept {
+void ModuleEffects::LoFi::prepare(double nextSampleRate) {
   sampleRate = std::clamp(nextSampleRate, 8000.0, 384000.0);
+  // Em 0,05 Hz e 1 semitom o raio do sweep chega a cerca de 190 ms, portanto
+  // a excursão completa do atraso ocupa perto de 380 ms. A reserva de 500 ms
+  // cobre toda a faixa sem alocar na thread de áudio.
+  const auto capacity = static_cast<std::size_t>(std::ceil(sampleRate * 0.5)) + 8;
+  for (auto& buffer : buffers) buffer.assign(capacity, 0.0f);
   reset();
 }
 
 void ModuleEffects::LoFi::reset() noexcept {
-  heldLeft = 0.0f;
-  heldRight = 0.0f;
-  framesUntilCapture = 0;
+  for (auto& buffer : buffers) std::fill(buffer.begin(), buffer.end(), 0.0f);
+  writeIndex = 0;
+  phase = 0.0;
+  currentRateHz = 1.0f;
+  currentAmountSemitones = 0.0f;
+}
+
+float ModuleEffects::LoFi::read(
+    const std::vector<float>& buffer, float delaySamples) const noexcept {
+  if (buffer.empty()) return 0.0f;
+  auto position = static_cast<float>(writeIndex) - delaySamples;
+  const auto capacity = static_cast<float>(buffer.size());
+  while (position < 0.0f) position += capacity;
+  while (position >= capacity) position -= capacity;
+  const auto first = static_cast<std::size_t>(position) % buffer.size();
+  const auto second = (first + 1) % buffer.size();
+  const auto fraction = position - std::floor(position);
+  return buffer[first] + (buffer[second] - buffer[first]) * fraction;
 }
 
 void ModuleEffects::LoFi::process(
     const LoFiConfig& config, float* left, float* right, std::size_t frames) noexcept {
-  if (!config.enabled || config.mix <= 0.0001f) return;
-  const auto bitDepth = static_cast<unsigned int>(std::round(config.bitDepth));
-  const auto quantization = static_cast<float>((1u << (bitDepth - 1u)) - 1u);
-  const auto holdFrames = std::max<std::uint32_t>(
-      1u, static_cast<std::uint32_t>(std::round(sampleRate / config.sampleRateHz)));
-  const auto quantize = [quantization](float sample) noexcept {
-    return std::round(std::clamp(sample, -1.0f, 1.0f) * quantization) / quantization;
-  };
+  if (buffers[0].empty() || buffers[1].empty()) return;
+  const auto targetAmount = config.enabled ? config.amountSemitones : 0.0f;
+  const auto smoothing = 1.0f - std::exp(-1.0f / (0.030f * static_cast<float>(sampleRate)));
   for (std::size_t frame = 0; frame < frames; ++frame) {
-    const auto dryLeft = left[frame];
-    const auto dryRight = right[frame];
-    if (framesUntilCapture == 0) {
-      heldLeft = quantize(dryLeft);
-      heldRight = quantize(dryRight);
-      framesUntilCapture = holdFrames;
+    buffers[0][writeIndex] = left[frame];
+    buffers[1][writeIndex] = right[frame];
+    currentRateHz += (config.rateHz - currentRateHz) * smoothing;
+    currentAmountSemitones += (targetAmount - currentAmountSemitones) * smoothing;
+    if (currentAmountSemitones > 0.0001f) {
+      // A derivada do atraso determina a variação de pitch. Esta amplitude
+      // produz exatamente o desvio configurado no pico da senoide.
+      const auto pitchRatio = std::pow(2.0f, currentAmountSemitones / 12.0f) - 1.0f;
+      const auto sweepSamples = pitchRatio * static_cast<float>(sampleRate)
+          / (2.0f * static_cast<float>(kPi) * currentRateHz);
+      const auto delaySamples = 2.0f + sweepSamples
+          * (1.0f + static_cast<float>(std::sin(2.0 * kPi * phase)));
+      left[frame] = read(buffers[0], delaySamples);
+      right[frame] = read(buffers[1], delaySamples);
+      phase += currentRateHz / sampleRate;
+      if (phase >= 1.0) phase -= 1.0;
     }
-    --framesUntilCapture;
-    left[frame] = dryLeft + (heldLeft - dryLeft) * config.mix;
-    right[frame] = dryRight + (heldRight - dryRight) * config.mix;
+    writeIndex = (writeIndex + 1) % buffers[0].size();
   }
 }
 

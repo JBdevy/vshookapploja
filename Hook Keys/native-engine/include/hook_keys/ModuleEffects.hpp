@@ -227,13 +227,16 @@ private:
 
   struct LoFi final {
     double sampleRate = 48000.0;
-    float heldLeft = 0.0f;
-    float heldRight = 0.0f;
-    std::uint32_t framesUntilCapture = 0;
+    std::array<std::vector<float>, 2> buffers;
+    std::size_t writeIndex = 0;
+    double phase = 0.0;
+    float currentRateHz = 1.0f;
+    float currentAmountSemitones = 0.0f;
 
-    void prepare(double nextSampleRate) noexcept;
+    void prepare(double nextSampleRate);
     void reset() noexcept;
     void process(const LoFiConfig& config, float* left, float* right, std::size_t frames) noexcept;
+    [[nodiscard]] float read(const std::vector<float>& buffer, float delaySamples) const noexcept;
   };
 
   double sampleRate_ = 48000.0;

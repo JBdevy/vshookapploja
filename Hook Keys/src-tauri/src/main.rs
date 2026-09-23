@@ -602,9 +602,11 @@ fn default_one() -> f32 { 1.0 }
 fn default_synth_oscillator3() -> i32 { 1 }
 fn default_synth_oscillator2_detune() -> f32 { 7.0 }
 fn default_synth_oscillator3_detune() -> f32 { -7.0 }
-fn default_lo_fi_bit_depth() -> f32 { 8.0 }
-fn default_lo_fi_sample_rate() -> f32 { 12_000.0 }
-fn default_lo_fi_mix() -> f32 { 0.5 }
+// Os nomes permanecem no ABI, mas transportam Amount (semitons), Rate (Hz)
+// e um campo reservado. O efeito visível é Vibes e não possui Mix.
+fn default_lo_fi_bit_depth() -> f32 { 0.25 }
+fn default_lo_fi_sample_rate() -> f32 { 1.0 }
+fn default_lo_fi_mix() -> f32 { 1.0 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
