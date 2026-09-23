@@ -305,7 +305,13 @@ void testPatternGeneratorRouting() {
   expect(engine.enqueueMidi(midi(0x90, 70, 100, hook_keys::arpeggiatorInputForModule(4))),
       "queue another note for module 5's generated slot");
   process(engine);
-  expect(synths[4].events.size() == 1 && synths[1].events.empty(),
+  const auto secondModuleReceivedNote = std::any_of(
+      synths[1].events.begin(), synths[1].events.end(),
+      [](const Event& event) { return event.type == Event::Type::noteOn; });
+  // Trocar a rota do módulo 2 solta o CC64 que ainda estava abaixado, portanto
+  // ele pode registrar esse CC de limpeza; o que nunca pode receber é a nota
+  // gerada pelo Arpeggiator exclusivo do módulo 5.
+  expect(synths[4].events.size() == 1 && !secondModuleReceivedNote,
       "each module's generated slot stays independent from the others");
   for (auto& synth : synths) synth.events.clear();
 
@@ -459,8 +465,9 @@ void testArpeggiatorRouteClearsSustain() {
          synth.events[1].type == Event::Type::noteOff,
       "with its Sustain switch off the arpeggiator follows only the generated key gate");
 
-  // Com o botão Sustain do módulo ligado, o pedal do teclado físico alcança o
-  // módulo do arpeggiator: as notas da frase seguram enquanto o pedal desce.
+  // Com o botão Sustain do módulo ligado, o pedal físico é consumido pelo
+  // controlador do Arpeggiator. Ele segura o acorde-fonte, mas não chega ao
+  // synth para prender cada nota gerada e formar um acorde por baixo.
   auto pedal = generated;
   pedal.sustainInputEnabled = true;
   expect(engine.setModuleConfig(4, pedal), "turn the arpeggiator module Sustain switch back on");
@@ -469,15 +476,13 @@ void testArpeggiatorRouteClearsSustain() {
   expect(engine.enqueueMidi(midi(0xB0, 64, 127, 0)), "press the pedal on the physical keyboard");
   expect(engine.enqueueMidi(midi(0xE0, 0, 96, 0)), "bend the wheel on the physical keyboard");
   process(engine);
-  expect(synth.events.size() == 2 && synth.events[0].type == Event::Type::controlChange &&
-         synth.events[0].data1 == 64 && synth.events[0].data2 == 127,
-      "the sustain pedal reaches the module the arpeggiator plays");
-  expect(synth.events[1].type == Event::Type::pitchBend, "and so does the pitch wheel");
+  expect(synth.events.size() == 1 && synth.events[0].type == Event::Type::pitchBend,
+      "the arpeggiator consumes physical sustain without latching generated notes");
   synth.events.clear();
   expect(engine.enqueueMidi(midi(0xB0, 64, 0, 0)), "release the pedal");
   process(engine);
-  expect(synth.events.size() == 1 && synth.events[0].data1 == 64 && synth.events[0].data2 == 0,
-      "releasing the pedal reaches it too, so nothing stays stuck");
+  expect(synth.events.empty(),
+      "releasing physical sustain is also kept out of the generated-note synth");
 }
 
 void testPerModuleControllerFilters() {
@@ -2461,8 +2466,8 @@ double rotaryPeakPitchDeviationCents(double frequency, float depth, std::uint8_t
 // raio, e no Fast (7 Hz) isso dá ~44 cents de pico. O teste guarda essa faixa
 // física e, principalmente, guarda o cruzamento: com atrasos geométricos as
 // duas metades chegavam a se cancelar e o medidor acusava 200 cents.
-// Auto Fader: desce o volume até -depthDb e volta, uma volta por tempo (1/4)
-// ou por meio compasso (1/2).
+// Auto Fader: desce o volume até -depthDb e volta. A interface calcula os
+// tempos a partir do compasso atual e entrega aqui a duração em beats.
 void testAutoFaderRidesTheVolume() {
   const auto envelope = [](bool enabled, float beats, float depthDb) {
     constexpr double sampleRate = 48000.0;
@@ -2514,8 +2519,8 @@ void testAutoFaderRidesTheVolume() {
   hook_keys::ModuleEffectsConfig config;
   config.autoFader = {true, 0.25f, 99.0f};
   config.normalize();
-  expect(config.autoFader.beats == 1.0f && config.autoFader.depthDb == 40.0f,
-      "the Auto Fader only accepts 1/4 and 1/2, and at most 40 dB");
+  expect(config.autoFader.beats == 0.25f && config.autoFader.depthDb == 40.0f,
+      "the Auto Fader preserves valid beat durations and caps depth at 40 dB");
 }
 
 void testRotaryPitchStaysInTune() {

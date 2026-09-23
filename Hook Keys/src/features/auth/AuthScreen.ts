@@ -50,7 +50,7 @@ export class AuthScreen {
               aria-hidden="true"
             >
             <p class="brand-kicker">ReiVs apresenta</p>
-            <h1 id="brand-title"><span>Hook</span> Keys</h1>
+            <h1 id="brand-title"><span>Bronze</span> Keys</h1>
             <p class="brand-line">Seu instrumento. Em qualquer palco.</p>
           </div>
 

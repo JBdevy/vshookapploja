@@ -1,6 +1,5 @@
 import type { SoundCatalogCategory } from '../sound-library/SoundCatalog';
 import type { SoundCategoryId } from '../sound-library/SoundCategories';
-import { createOnScreenKeyboardMarkup } from '../../shared/ui/OnScreenKeyboard';
 
 function soundButtonStyle(color: string): string {
   return `--sound-button-color:${color}`;
@@ -50,7 +49,7 @@ export function createSoundSelectionMarkup(
 export function createSoundCategoryContentMarkup(
   categoryId: SoundCategoryId,
   categories: readonly SoundCatalogCategory[],
-  useTabletKeyboard = false,
+  _useTabletKeyboard = false,
   installedSoundIds: ReadonlySet<string> = new Set(),
   selectedTimbreId: string | null = null,
   seenSoundIds: ReadonlySet<string> = new Set(),
@@ -83,10 +82,10 @@ export function createSoundCategoryContentMarkup(
       </section>
     `;
   }
-  return createUserSoundfontMarkup(useTabletKeyboard);
+  return createUserSoundfontMarkup();
 }
 
-export function createUserSoundfontMarkup(useTabletKeyboard: boolean): string {
+export function createUserSoundfontMarkup(): string {
   return `
     <section class="user-sf2-panel">
       <header class="user-sf2-panel__header">
@@ -97,7 +96,7 @@ export function createUserSoundfontMarkup(useTabletKeyboard: boolean): string {
         <p class="user-sf2-load-status" data-user-sf2-load-status role="status" aria-live="polite"></p>
       </header>
       <div class="user-sf2-list" data-user-sf2-list><span class="loading-orbit" aria-hidden="true"></span></div>
-      <button class="user-sf2-add" type="button" data-user-sf2-action="name"><span>Add SF2</span><strong aria-hidden="true">+</strong></button>
+      <button class="user-sf2-add" type="button" data-user-sf2-action="choose-file"><span>Add SF2</span><strong aria-hidden="true">+</strong></button>
       <input
         class="user-sf2-file"
         type="file"
@@ -105,20 +104,6 @@ export function createUserSoundfontMarkup(useTabletKeyboard: boolean): string {
         data-user-sf2-file
         hidden
       >
-      <div class="user-sf2-name user-sf2-name--${useTabletKeyboard ? 'custom' : 'system'}" data-user-sf2-name hidden>
-        <label>
-          <span>Nome do timbre</span>
-          ${useTabletKeyboard
-            ? `<span class="on-screen-text-field" role="textbox" tabindex="0" aria-label="Nome do timbre" aria-readonly="true" data-user-sf2-name-field><span data-user-sf2-name-value></span><i aria-hidden="true"></i></span><input type="hidden" data-user-sf2-name-input>`
-            : '<input type="text" maxlength="12" autocomplete="off" autocapitalize="words" data-user-sf2-name-input>'}
-        </label>
-        ${useTabletKeyboard ? createOnScreenKeyboardMarkup('Teclado para o nome do timbre', true) : ''}
-        <p data-user-sf2-message role="alert"></p>
-        <div class="user-sf2-name__actions">
-          <button type="button" data-user-sf2-action="cancel">Cancelar</button>
-          <button type="button" data-user-sf2-action="choose-file">Confirmar</button>
-        </div>
-      </div>
     </section>
   `;
 }

@@ -288,6 +288,8 @@ test('preset e banco ativos pulsam com contorno RGB sem trocar o preenchimento',
 test('modal flutuante do knob oferece ajuste fino acelerado por + e menos', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(player, /data-knob-focus-step="1"[\s\S]*?data-knob-focus-step="-1"/);
+  assert.match(player, /current >= 1_000[\s\S]*?Math\.floor\(current \/ 100\)[\s\S]*?Math\.ceil\(current \/ 100\)/,
+    'os botões finos dos tempos passam de 1.0 para 1.1, 1.2 e 1.3 segundos');
   assert.match(player, /private bindKnobFocusStepButtons\(overlay: HTMLElement\)/);
   assert.match(player, /current \+ direction \* step/);
   assert.match(player, /repeatDelayMs = Math\.max\(110, repeatDelayMs - 18\)/);

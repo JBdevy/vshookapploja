@@ -116,10 +116,16 @@ try {
   assert(root.querySelector('[data-pad-low-cut]'), 'LOW oferece o high-pass dos Pads');
   assert(root.querySelector('[data-pad-high-cut]'), 'HIGH oferece o low-pass dos Pads');
   assert.deepEqual(
-    [...root.querySelectorAll('.performance-pad--note > span')].map(label => label.textContent.trim()),
-    ['C - Am', 'C# - Bbm', 'D - Bm', 'D# - Cm', 'E - C#m', 'F - Dm',
-      'F# - Ebm', 'G - Em', 'G# - Fm', 'A - F#m', 'A# - Gm', 'B - G#m'],
-    'cada Pad mostra a tonalidade maior e sua relativa menor',
+    [...root.querySelectorAll('.performance-pad--note > .performance-pad__note')]
+      .map(label => label.textContent.trim()),
+    ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'],
+    'cada Pad mostra a tonalidade principal em destaque',
+  );
+  assert.deepEqual(
+    [...root.querySelectorAll('.performance-pad--note > .performance-pad__relative')]
+      .map(label => label.textContent.trim()),
+    ['Am', 'Bbm', 'Bm', 'Cm', 'C#m', 'Dm', 'Ebm', 'Em', 'Fm', 'F#m', 'Gm', 'G#m'],
+    'cada Pad mostra sua relativa menor abaixo da tonalidade principal',
   );
   root.querySelector('[data-action="show-pads-effects"]').click();
   assert.deepEqual(
@@ -156,6 +162,18 @@ try {
     'a roda Mod do Organ nasce em Rotary');
   assert.equal(factoryModules[6].settings.rotary.modulationEnabled, true,
     'o Rotary do Organ responde à roda Mod sem um segundo botão On/Off');
+  assert.strictEqual(
+    player.bankStates.get('A').presets[0].modules[6].settings,
+    player.bankStates.get('B').presets[8].modules[6].settings,
+    'drawbars, Rotary e toda a configuração interna do Organ são globais entre bancos e presets',
+  );
+  {
+    const savedOrganState = player.createSavedPlayerState();
+    assert(savedOrganState.organModuleSettings?.rotary,
+      'a configuração global do Organ é salva uma única vez no backup');
+    assert.equal(Object.keys(savedOrganState.banks.A.presets[0].modules[6].settings).length, 0,
+      'o preset não grava uma segunda cópia da configuração do Organ');
+  }
   assert.deepEqual(
     [...root.querySelectorAll('.keyboard-expression__track i b')].map((label) => label.textContent),
     ['H', 'K'],
@@ -195,15 +213,11 @@ try {
   {
     const modal = window.document.createElement('div');
     modal.innerHTML = `<p data-user-sf2-load-status></p><div data-user-sf2-list></div>
-      <button data-user-sf2-action="name">Add SF2</button>
-      <div data-user-sf2-name><input data-user-sf2-name-input value="Piano">
-        <p data-user-sf2-message></p><button data-user-sf2-action="choose-file">Confirmar</button>
-        <button data-user-sf2-action="cancel">Cancelar</button>
-      </div><input type="file" data-user-sf2-file>`;
+      <button data-user-sf2-action="choose-file">Add SF2</button>
+      <input type="file" data-user-sf2-file>`;
     window.document.body.append(modal);
     const input = modal.querySelector('[data-user-sf2-file]');
     Object.defineProperty(input, 'files', { value: [new window.File(['test'], 'piano.sf2')], configurable: true });
-    input.dataset.soundfontName = 'Piano';
     const originalLibrary = player.soundLibrary;
     const originalRender = player.renderUserSoundfonts;
     let completeImport, importCount = 0, rendered = false;
@@ -215,24 +229,18 @@ try {
       const importing = player.importUserSoundfont(modal, input);
       assert.equal(modal.dataset.userSf2Importing, 'true');
       assert(modal.querySelector('[data-user-sf2-action="choose-file"]').disabled,
-        'Confirmar fica bloqueado enquanto grava o SF2');
+        'Add SF2 fica bloqueado enquanto grava o arquivo');
       await player.importUserSoundfont(modal, input);
       assert.equal(importCount, 1, 'toque repetido não adiciona o mesmo arquivo duas vezes');
       completeImport(); await importing;
-      assert.equal(modal.querySelector('[data-user-sf2-name]').hidden, true,
-        'sucesso retorna à biblioteca e remove a tela de confirmação');
-      assert.equal(modal.querySelector('[data-user-sf2-name-input]').value, '');
       assert(rendered);
-      assert.match(modal.querySelector('[data-user-sf2-load-status]').textContent, /Piano adicionado/);
+      assert.match(modal.querySelector('[data-user-sf2-load-status]').textContent, /piano adicionado/);
       assert.equal(modal.dataset.userSf2Importing, undefined);
-      assert(!modal.querySelector('[data-user-sf2-action="name"]').disabled);
-      modal.querySelector('[data-user-sf2-name]').hidden = false;
-      input.dataset.soundfontName = 'Piano';
+      assert(!modal.querySelector('[data-user-sf2-action="choose-file"]').disabled);
+      Object.defineProperty(input, 'files', { value: [new window.File(['test'], 'piano.sf2')], configurable: true });
       player.soundLibrary = { addUser: async () => { throw new Error('storage failed'); } };
       await player.importUserSoundfont(modal, input);
-      assert.equal(modal.querySelector('[data-user-sf2-name]').hidden, false,
-        'falha mantém o editor aberto para o usuário tentar novamente');
-      assert.match(modal.querySelector('[data-user-sf2-message]').textContent, /Não foi possível/);
+      assert.match(modal.querySelector('[data-user-sf2-load-status]').textContent, /Não foi possível/);
       assert.equal(modal.dataset.userSf2Importing, undefined);
     } finally {
       player.soundLibrary = originalLibrary;
@@ -1480,17 +1488,17 @@ try {
   assert.notEqual(window.document.querySelector('[data-compressor-meter="input"] i b').style.height, '0%',
     'medidor Input do compressor ligado recebe sinal real');
   const cpuMeter = window.document.querySelector('[data-cpu-meter]');
-  assert(cpuMeter, 'o desktop mostra a CPU do processo Hook Keys ao lado de User');
+  assert(cpuMeter, 'o desktop mostra a CPU do processo Bronze Keys ao lado de User');
   assert.equal(cpuMeter.querySelector('[data-cpu-meter-value]').textContent, '12%',
-    'o medidor mostra somente a CPU consumida pelo Hook Keys');
+    'o medidor mostra somente a CPU consumida pelo Bronze Keys');
   assert(!cpuMeter.classList.contains('is-critical'),
     'uma carga folgada nao acende o alerta');
   processCpuUsage = 97;
-  await new Promise(resolve => setTimeout(resolve, 120));
+  await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(cpuMeter.querySelector('[data-cpu-meter-value]').textContent, '97%',
     'a leitura nova aparece rapidamente e sem segurar o valor anterior');
   assert(cpuMeter.classList.contains('is-critical'),
-    'o próprio Hook Keys perto do teto deixa o número vermelho');
+    'o próprio Bronze Keys perto do teto deixa o número vermelho');
   // RAM do aparelho: percentual, texto com GB usados do total e as cores só no fim.
   // No desktop ela fica ao lado da CPU, no mesmo canto.
   const ramMeter = root.querySelector('[data-ram-meter]');

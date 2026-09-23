@@ -37,13 +37,13 @@ function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): str
           <div class="octave-transition__meter">${meter}</div>
           <div class="octave-transition__title">
             <span>${entering ? 'INICIALIZANDO' : 'ENCERRANDO SESSÃO'}</span>
-            <strong><b>HOOK</b> KEYS</strong>
+            <strong><b>BRONZE</b> KEYS</strong>
             <small>${entering ? 'Preparando sua performance' : 'Salvando sua performance'}</small>
           </div>
         </div>
         <footer class="octave-transition__footer">
           <div class="octave-transition__progress"><i></i></div>
-          <span>HOOK AUDIO ENGINE</span>
+          <span>BRONZE AUDIO ENGINE</span>
           <strong>${entering ? 'CARREGANDO' : 'SAFE EXIT'}</strong>
         </footer>
       </div>

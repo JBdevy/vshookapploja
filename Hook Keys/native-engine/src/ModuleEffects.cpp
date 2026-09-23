@@ -291,6 +291,8 @@ void ModuleEffects::reset() noexcept {
   transitionOffsetLeft_ = transitionOffsetRight_ = 0.0f;
   hasProcessedOutput_ = false;
   effectTransitionPending_ = false;
+  effectTailActive_ = false;
+  effectTailSilentFrames_ = 0;
 }
 
 void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexcept {
@@ -350,6 +352,11 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
   gateAttackCoefficient_ = static_cast<float>(1.0 - std::exp(-1.0 / (config.tranceGate.attackMs * 0.001 * sampleRate_)));
   gateReleaseCoefficient_ = static_cast<float>(1.0 - std::exp(-1.0 / (config.tranceGate.releaseMs * 0.001 * sampleRate_)));
   config_ = config;
+  if ((!config_.delay.enabled || config_.delay.mix <= 0.00001f) &&
+      (!config_.reverb.enabled || config_.reverb.mix <= 0.00001f)) {
+    effectTailActive_ = false;
+    effectTailSilentFrames_ = 0;
+  }
 }
 
 void ModuleEffects::configureCutoff() noexcept {
@@ -370,6 +377,20 @@ ModuleProcessorLevels ModuleEffects::process(
     bool captureCompressorLevels) noexcept {
   ModuleProcessorLevels levels{};
   if (left == nullptr || right == nullptr || frames == 0) return levels;
+  bool hasTailInput = false;
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    if (std::max(std::abs(left[frame]), std::abs(right[frame])) > 0.0000001f) {
+      hasTailInput = true;
+      break;
+    }
+  }
+  const bool hasTailEffect =
+      (config_.delay.enabled && config_.delay.mix > 0.00001f) ||
+      (config_.reverb.enabled && config_.reverb.mix > 0.00001f);
+  if (hasTailInput && hasTailEffect) {
+    effectTailActive_ = true;
+    effectTailSilentFrames_ = 0;
+  }
   captureCompressorLevels = captureCompressorLevels && config_.compressor.enabled;
   // Gain de entrada: entra antes de tudo, para o EQ e o compressor receberem
   // o sinal já empurrado.
@@ -434,6 +455,26 @@ ModuleProcessorLevels ModuleEffects::process(
     lastOutputRight_ = right[frame];
   }
   hasProcessedOutput_ = true;
+  if (effectTailActive_) {
+    float outputPeak = 0.0f;
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      outputPeak = std::max(outputPeak, std::max(std::abs(left[frame]), std::abs(right[frame])));
+    }
+    if (hasTailInput || outputPeak > 0.000001f) {
+      effectTailSilentFrames_ = 0;
+    } else {
+      effectTailSilentFrames_ += frames;
+      const auto delaySeconds = config_.delay.sync
+          ? 60.0 / static_cast<double>(std::max(1.0f, tempoBpm_)) * config_.delay.beatMultiplier
+          : static_cast<double>(config_.delay.delayMs) / 1000.0;
+      const auto silentLimitSeconds = config_.delay.enabled
+          ? std::max(0.25, delaySeconds + 0.10) : 0.25;
+      if (effectTailSilentFrames_ >= static_cast<std::size_t>(sampleRate_ * silentLimitSeconds)) {
+        effectTailActive_ = false;
+        effectTailSilentFrames_ = 0;
+      }
+    }
+  }
   return levels;
 }
 

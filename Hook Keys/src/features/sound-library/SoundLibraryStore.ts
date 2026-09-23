@@ -84,7 +84,7 @@ export class SoundLibraryStore {
     const soundfont: StoredUserSoundfont = {
       id: restoredId?.trim().slice(0, 200) || createId(),
       accountKey: this.accountKey,
-      name: name.trim().slice(0, 12),
+      name: name.trim().slice(0, 120),
       fileName: file.name,
       size: file.size,
       createdAt: new Date().toISOString(),

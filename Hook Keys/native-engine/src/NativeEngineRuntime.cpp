@@ -218,6 +218,7 @@ bool NativeEngineRuntime::loadSoundFont(std::size_t moduleIndex, const char* utf
       if (copied) {
         currentSoundFontPaths_[moduleIndex] = path;
         touchSoundFontCacheLocked(path);
+        enqueueCurrentExpression(layer);
       }
       return copied;
     }
@@ -225,6 +226,7 @@ bool NativeEngineRuntime::loadSoundFont(std::size_t moduleIndex, const char* utf
   if (!layer->modules[moduleIndex]->loadFromFile(utf8Path)) return false;
   currentSoundFontPaths_[moduleIndex] = path;
   retainSoundFontLocked(path, *layer->modules[moduleIndex]);
+  enqueueCurrentExpression(layer);
   return true;
 }
 
@@ -234,8 +236,27 @@ bool NativeEngineRuntime::cloneSoundFont(
   const auto copied = sourceModuleIndex < controlLayer_->modules.size() && targetModuleIndex < controlLayer_->modules.size() &&
       sourceModuleIndex != targetModuleIndex &&
       controlLayer_->modules[targetModuleIndex]->copySoundFontFrom(*controlLayer_->modules[sourceModuleIndex]);
-  if (copied) currentSoundFontPaths_[targetModuleIndex] = currentSoundFontPaths_[sourceModuleIndex];
+  if (copied) {
+    currentSoundFontPaths_[targetModuleIndex] = currentSoundFontPaths_[sourceModuleIndex];
+    enqueueCurrentExpression(controlLayer_);
+  }
   return copied;
+}
+
+void NativeEngineRuntime::enqueueCurrentExpression(PresetLayer* layer) noexcept {
+  if (layer == nullptr) return;
+  for (std::size_t slot = 0; slot < currentExpression_.size(); ++slot) {
+    const auto input = static_cast<std::uint8_t>(slot);
+    const auto sustain = currentExpression_[slot].sustain.load(std::memory_order_acquire);
+    const auto modulation = currentExpression_[slot].modulation.load(std::memory_order_acquire);
+    const auto pitch = currentExpression_[slot].pitch.load(std::memory_order_acquire);
+    if (sustain >= 0) (void)layer->engine->enqueueMidi(
+        {0xb0, 64, static_cast<std::uint8_t>(sustain), input, 0});
+    if (modulation >= 0) (void)layer->engine->enqueueMidi(
+        {0xb0, 1, static_cast<std::uint8_t>(modulation), input, 0});
+    if (pitch >= 0) (void)layer->engine->enqueueMidi(
+        {0xe0, static_cast<std::uint8_t>(pitch & 127), static_cast<std::uint8_t>(pitch >> 7), input, 0});
+  }
 }
 
 void NativeEngineRuntime::unloadSoundFont(std::size_t moduleIndex) noexcept {
@@ -340,6 +361,13 @@ bool NativeEngineRuntime::sendMidi(
         data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101)));
   if (blockedCompatibilityMessage) return true;
   if (inputSlot >= kRoutableMidiInputCount || data1 > 127 || data2 > 127) return false;
+  if (messageType == 0xb0 && data1 == 64) {
+    currentExpression_[inputSlot].sustain.store(data2, std::memory_order_release);
+  } else if (messageType == 0xb0 && data1 == 1) {
+    currentExpression_[inputSlot].modulation.store(data2, std::memory_order_release);
+  } else if (messageType == 0xe0) {
+    currentExpression_[inputSlot].pitch.store(data1 | (data2 << 7), std::memory_order_release);
+  }
   RuntimeCommand command;
   command.midi = {status, data1, data2, inputSlot, timestampNanoseconds};
   return runtimeCommands_.tryPush(command);
@@ -513,7 +541,7 @@ void NativeEngineRuntime::setMetronome(
       std::memory_order_release);
   const auto denominator = timeSignatureDenominator == 2 || timeSignatureDenominator == 8 ||
       timeSignatureDenominator == 16 ? timeSignatureDenominator : 4;
-  metronomeDenominator_.store(denominator, std::memory_order_release);
+  metronomeDenominator_.store(static_cast<std::uint8_t>(denominator), std::memory_order_release);
   if (restart) metronomeResetRequested_.store(true, std::memory_order_release);
   metronomeEnabled_.store(enabled, std::memory_order_release);
 }
@@ -541,7 +569,13 @@ void NativeEngineRuntime::processRuntimeCommands() noexcept {
   RuntimeCommand command;
   while (runtimeCommands_.tryPop(command)) {
     if (command.kind == RuntimeCommand::Kind::transition) {
-      if (renderLayer_ != nullptr) tailLayers_[tailLayerCount_++] = renderLayer_;
+      if (renderLayer_ != nullptr) {
+        // O Organ é uma instância compartilhada entre as camadas. Renderizá-lo
+        // na camada antiga e na nova avançava as mesmas nove vozes duas vezes
+        // por callback, dobrando o custo e produzindo som picotado na troca.
+        renderLayer_->engine->excludeSharedModuleFromTail(6);
+        tailLayers_[tailLayerCount_++] = renderLayer_;
+      }
       renderLayer_ = command.layer;
       // A physically held pedal/wheel also applies to NEW notes, without
       // copying voices or synth parameters from the previous preset.

@@ -34,6 +34,10 @@ public:
   // cada módulo antes de chegar no sintetizador.
   [[nodiscard]] bool setGlobalTranspose(int semitones) noexcept;
   [[nodiscard]] bool stopAllNotes() noexcept;
+  // A cauda de um preset antigo não pode renderizar novamente um instrumento
+  // compartilhado com a camada nova (hoje, o Organ). As mensagens de Note Off
+  // continuam chegando à camada antiga para liberar corretamente as teclas.
+  void excludeSharedModuleFromTail(std::size_t moduleIndex) noexcept;
 
   // Consumer side: audio callback only.
   void render(float* left, float* right, std::size_t frames) noexcept;
@@ -105,6 +109,7 @@ private:
   std::array<float, kModuleCount> moduleGainSteps_{};
   std::array<std::size_t, kModuleCount> moduleGainRampFrames_{};
   std::array<bool, kModuleCount> moduleGainConfigured_{};
+  std::array<bool, kModuleCount> tailExcludedModules_{};
   std::array<float, kModuleCount> moduleLimiterGains_{};
   float moduleLimiterRelease_ = 0.0f;
 };

@@ -28,6 +28,10 @@ function method(name, nextName) {
 
 const add = method('async importUserSoundfont', 'async renderUserSoundfonts');
 assert.match(add, /soundLibrary\.addUser\(name, file, restoredId\)/);
+assert.match(add, /withoutSoundfontExtension\(file\.name\)/,
+  'O nome do SF2 novo deve vir diretamente do nome do arquivo');
+assert.doesNotMatch(soundSelection, /Nome do timbre|data-user-sf2-name/,
+  'Adicionar SF2 não deve abrir uma etapa para digitar nome');
 assert.doesNotMatch(add, /moduleState|timbreId\s*=/,
   'Adicionar à biblioteca não pode selecionar o SF2 automaticamente');
 assert.match(add, /Toque no timbre para selecionar neste módulo/);

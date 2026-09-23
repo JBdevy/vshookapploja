@@ -192,5 +192,5 @@ export function createVoiceModeMarkup(
 
 export function formatGlideMs(milliseconds: number): string {
   const value = Math.round(Math.min(5000, Math.max(0, milliseconds)));
-  return value >= 1000 && value % 1000 === 0 ? `${value / 1000} s` : `${value} ms`;
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}k ms` : `${value} ms`;
 }

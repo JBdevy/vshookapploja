@@ -99,6 +99,10 @@ bool HookKeysEngine::stopAllNotes() noexcept {
   return push(EngineCommand::panic());
 }
 
+void HookKeysEngine::excludeSharedModuleFromTail(std::size_t moduleIndex) noexcept {
+  if (moduleIndex < kModuleCount) tailExcludedModules_[moduleIndex] = true;
+}
+
 void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexcept {
   if (left == nullptr || right == nullptr || frames == 0) return;
   std::fill_n(left, frames, 0.0f);
@@ -118,7 +122,7 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
       // Desligar o módulo só fecha a porta do MIDI: o que já estava soando
       // continua até acabar, então ele segue sendo renderizado.
       auto* synth = modules_[index];
-      if (synth == nullptr) continue;
+      if (synth == nullptr || tailExcludedModules_[index]) continue;
       if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
           !effects_[index].requiresSilentProcessing()) {
         // O relógio do fader pertence ao áudio, não às vozes. Se a rampa
@@ -168,7 +172,7 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
     for (std::size_t index = 0; index < kModuleCount; ++index) {
       auto* synth = modules_[index];
       const auto& config = configs_[index];
-      if (synth == nullptr || config.outputChannelStart >= channels) continue;
+      if (synth == nullptr || tailExcludedModules_[index] || config.outputChannelStart >= channels) continue;
       if (synth->canSkipRenderingWhenIdle() && !synth->hasActiveVoices() &&
           !effects_[index].requiresSilentProcessing()) {
         advanceSilentModuleGain(index, blockFrames);
@@ -222,8 +226,15 @@ std::uint64_t HookKeysEngine::droppedCommandCount() const noexcept {
 
 bool HookKeysEngine::hasActiveVoices() const noexcept {
   for (std::size_t index = 0; index < kModuleCount; ++index) {
-    if (modules_[index] != nullptr &&
-        (moduleHasActiveNotes(index) || modules_[index]->hasActiveVoices())) return true;
+    if (modules_[index] == nullptr) continue;
+    // Para um instrumento compartilhado, só o estado de roteamento desta
+    // camada mantém a cauda viva. As vozes físicas são renderizadas uma única
+    // vez pela camada atual.
+    if (tailExcludedModules_[index]) {
+      if (moduleHasActiveNotes(index)) return true;
+      continue;
+    }
+    if (moduleHasActiveNotes(index) || modules_[index]->hasActiveVoices()) return true;
   }
   return false;
 }

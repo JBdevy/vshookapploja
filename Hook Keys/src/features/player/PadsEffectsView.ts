@@ -40,18 +40,18 @@ const RELATIVE_MINOR_BY_NOTE: Readonly<Record<(typeof CHROMATIC_NOTES)[number], 
 export const EFFECT_COUNT = 12;
 
 export const EFFECT_PAD_COLORS = [
-  ['#ff5b38', '#65170b'],
-  ['#ff8a22', '#6c2c06'],
-  ['#ffc329', '#6b4a04'],
-  ['#f3a91f', '#704005'],
-  ['#ef6bd7', '#6a195c'],
-  ['#35d5f2', '#075164'],
-  ['#19bfe8', '#07495f'],
-  ['#3288ff', '#0a3269'],
-  ['#6d68ff', '#272568'],
-  ['#a357f2', '#3d2168'],
-  ['#e649ba', '#611546'],
-  ['#ff4777', '#6c142d'],
+  ['#ff3b30', '#a40e08'],
+  ['#ff7a00', '#a83d00'],
+  ['#ffd000', '#9b6a00'],
+  ['#ff9f0a', '#9e4d00'],
+  ['#ff2dc6', '#8c0d68'],
+  ['#00d7ff', '#006c85'],
+  ['#00a9f4', '#005b8d'],
+  ['#2979ff', '#103b9d'],
+  ['#655cff', '#2f2a9e'],
+  ['#af52de', '#62218b'],
+  ['#e52cae', '#8f0c61'],
+  ['#ff2d67', '#9b123d'],
 ] as const;
 
 function createPadBankButton(bank: PadBankId): string {
@@ -94,7 +94,8 @@ function createNoteButton(note: string): string {
       aria-label="${label}"
       aria-pressed="false"
     >
-      <span>${label}</span>
+      <span class="performance-pad__note">${note}</span>
+      <small class="performance-pad__relative">${relative}</small>
     </button>
   `;
 }

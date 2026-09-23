@@ -3068,6 +3068,11 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .performance-pad--note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1px, .35vh, 4px);
   color: #15191e;
   border-color: rgba(193, 210, 198, 0.94);
   background:
@@ -3077,10 +3082,18 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
     inset 0 1px rgba(255, 255, 255, 0.72),
     inset 0 -8px 18px rgba(83, 103, 120, 0.16),
     0 5px 12px rgba(0, 0, 0, 0.22);
-  font-size: clamp(17px, 2.4vw, 32px);
 }
 
-.performance-pad--note > span {
+.performance-pad--note > .performance-pad__note {
+  font-size: clamp(20px, 2.8vw, 36px);
+  line-height: .95;
+  white-space: nowrap;
+}
+
+.performance-pad--note > .performance-pad__relative {
+  font-size: clamp(10px, 1.25vw, 17px);
+  line-height: 1;
+  opacity: .8;
   white-space: nowrap;
 }
 
@@ -3129,8 +3142,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   box-shadow:
     inset 0 1px rgba(255, 255, 255, 0.18),
     inset 0 -8px 18px rgba(0, 0, 0, 0.25),
-    0 5px 12px rgba(0, 0, 0, 0.24);
+    0 5px 12px rgba(0, 0, 0, 0.24),
+    0 0 9px color-mix(in srgb, var(--effect-accent) 28%, transparent);
   font-size: clamp(10px, 1.25vw, 15px);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.78);
 }
 
 .performance-pad--effect.is-active {
@@ -4570,8 +4585,9 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   border-radius: 8px;
   background: linear-gradient(145deg, var(--preset-accent), var(--preset-dark));
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.08),
-    0 5px 11px rgba(0, 0, 0, 0.18);
+    inset 0 1px rgba(255, 255, 255, 0.2),
+    0 5px 11px rgba(0, 0, 0, 0.22),
+    0 0 8px color-mix(in srgb, var(--preset-accent) 22%, transparent);
   cursor: pointer;
 }
 

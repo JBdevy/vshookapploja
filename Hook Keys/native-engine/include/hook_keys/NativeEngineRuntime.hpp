@@ -129,9 +129,11 @@ public:
   [[nodiscard]] AudioLoad consumeAudioLoad() noexcept;
 
 private:
+  struct PresetLayer;
   void retainSoundFontLocked(const std::string& path, TinySoundFontModule& source) noexcept;
   void touchSoundFontCacheLocked(const std::string& path) noexcept;
   void trimSoundFontCacheLocked() noexcept;
+  void enqueueCurrentExpression(PresetLayer* layer) noexcept;
   void publishAudioLoad(float load) noexcept;
   HookKeysEngine::SynthModules modulePointers(
       const std::array<std::unique_ptr<TinySoundFontModule>, kModuleCount - 1>& modules,
@@ -177,6 +179,14 @@ private:
     int pitch = -1;
   };
   std::array<LiveExpression, kRoutableMidiInputCount> liveExpression_{}; // audio thread only
+  struct CurrentExpression final {
+    std::atomic<int> sustain{-1};
+    std::atomic<int> modulation{-1};
+    std::atomic<int> pitch{-1};
+  };
+  // Espelho lock-free para que um SF2 carregado fora da thread de áudio
+  // receba imediatamente o pedal/roda que já estão fisicamente pressionados.
+  std::array<CurrentExpression, kRoutableMidiInputCount> currentExpression_{};
   std::mutex configMutex_;
   std::mutex soundFontMutex_;
   bool seamlessPresetSwitching_ = false;

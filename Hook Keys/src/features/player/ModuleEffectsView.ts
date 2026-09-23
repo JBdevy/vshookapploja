@@ -539,6 +539,9 @@ export function readModuleEffectSettings(kind: ModuleEffectKind, value: unknown)
 }
 
 export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, value: number): string {
+  const milliseconds = (amount: number): string => amount >= 1_000
+    ? `${(amount / 1_000).toFixed(1)}k ms`
+    : `${Math.round(amount)} ms`;
   if (kind === 'rotary') {
     if (key === 'slowHz' || key === 'fastHz') return `${value.toFixed(3)} Hz`;
     if (key === 'rampSeconds') return `${value.toFixed(1)} s`;
@@ -548,6 +551,7 @@ export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, val
     if (key === 'ratio') return `${value.toFixed(1)}:1`;
     if (key === 'thresholdDb' || key === 'gainDb') return formatSignedDb(value);
     if (key === 'mix') return `${Math.round(value)}%`;
+    if (value >= 1_000) return milliseconds(value);
     return `${key === 'releaseMs' ? Math.round(value) : formatNumber(value)} ms`;
   }
   if (kind === 'chorus') return key === 'rateHz' ? `${value.toFixed(2)} Hz` : `${Math.round(value)}%`;
@@ -560,9 +564,9 @@ export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, val
   if (kind === 'cutoffEnvelope') {
     if (key === 'depthOctaves') return `${value.toFixed(1)} oct`;
     if (key === 'sustain') return `${Math.round(value)}%`;
-    return `${Math.round(value)} ms`;
+    return milliseconds(value);
   }
-  return key === 'milliseconds' ? `${Math.round(value)} ms` : `${Math.round(value)}%`;
+  return key === 'milliseconds' ? milliseconds(value) : `${Math.round(value)}%`;
 }
 
 function createEffectKnob(kind: ModuleEffectKind, item: EffectControlDefinition, disabled = false): string {

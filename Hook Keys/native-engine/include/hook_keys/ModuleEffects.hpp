@@ -34,7 +34,9 @@ public:
   [[nodiscard]] bool requiresSilentProcessing() const noexcept {
     // Delay e Reverb continuam para renderizar a cauda. Vibes continua para
     // manter o ruído de superfície do vinil mesmo entre uma nota e outra.
-    return config_.delay.enabled || config_.reverb.enabled ||
+    // Um efeito apenas configurado, mas que ainda não recebeu áudio, não deve
+    // manter convoluções silenciosas rodando em todos os módulos/presets.
+    return effectTailActive_ ||
         (config_.loFi.enabled && config_.loFi.vinylEnabled);
   }
 
@@ -274,6 +276,8 @@ private:
   float transitionOffsetRight_ = 0.0f;
   bool hasProcessedOutput_ = false;
   bool effectTransitionPending_ = false;
+  bool effectTailActive_ = false;
+  std::size_t effectTailSilentFrames_ = 0;
   void processTranceGate(float* left, float* right, std::size_t frames) noexcept;
   void processAutoFader(float* left, float* right, std::size_t frames) noexcept;
   void configureCutoff() noexcept;

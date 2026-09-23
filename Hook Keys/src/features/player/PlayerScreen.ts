@@ -67,11 +67,7 @@ import {
   TracksPanelController,
   audioTypeForFileName,
 } from '../tracks/TracksPanelController';
-import {
-  applyOnScreenKey,
-  openOnScreenAccentOptions,
-  resolveOnScreenKey,
-} from '../../shared/ui/OnScreenKeyboard';
+import { openOnScreenAccentOptions } from '../../shared/ui/OnScreenKeyboard';
 import {
   createEqCurve,
   createEqShadowPath,
@@ -599,7 +595,9 @@ const EFFECT_PAD_MIN_DB = -60;
 // Longest a knob or button change waits before it reaches the audio engine.
 const NATIVE_SYNC_INTERVAL_MS = 24;
 const DESKTOP_MODULE_METER_INTERVAL_MS = 50;
-const DESKTOP_CPU_METER_INTERVAL_MS = 100;
+// Evita dez travessias por segundo pela ponte do desktop enquanto mantém o
+// percentual visualmente responsivo.
+const DESKTOP_CPU_METER_INTERVAL_MS = 250;
 // Todo <select> dos modais vira o seletor próprio do app; o do sistema abre
 // uma roda/lista nativa diferente em cada plataforma.
 const APP_SELECT_QUERY = 'select[data-setting], select[data-module-setting]';
@@ -618,22 +616,22 @@ function isHttpAssetReference(value: string): boolean {
 }
 
 const PRESET_COLORS = [
-  ['#ff8b7e', '#ff5f52'],
-  ['#ffad62', '#ff842f'],
-  ['#ffdc59', '#f1b927'],
-  ['#cde95b', '#a9cf35'],
-  ['#79e993', '#45ca69'],
-  ['#65e2cf', '#30c2aa'],
-  ['#6edcff', '#35bde8'],
-  ['#79b8ff', '#458eea'],
-  ['#9ea5ff', '#747de8'],
-  ['#bd98ff', '#986ee6'],
-  ['#d996f2', '#b96bdd'],
-  ['#f28bd0', '#d85bad'],
-  ['#ff91ae', '#ed627f'],
-  ['#ff9d82', '#f27657'],
-  ['#f5c36b', '#dc9e3e'],
-  ['#91dd79', '#62bf4d'],
+  ['#ff453a', '#e0251d'],
+  ['#ff850a', '#e45e00'],
+  ['#ffd60a', '#e4aa00'],
+  ['#b9ed21', '#78c700'],
+  ['#30e66b', '#16b94a'],
+  ['#18e0c1', '#08af91'],
+  ['#24d4ff', '#099fce'],
+  ['#4b8dff', '#2f68d8'],
+  ['#7478ff', '#5559d8'],
+  ['#a866ff', '#8245d3'],
+  ['#d14dff', '#a22dcd'],
+  ['#ff45ce', '#d421aa'],
+  ['#ff4f8f', '#da2765'],
+  ['#ff6347', '#dc3a25'],
+  ['#ffb51b', '#df8000'],
+  ['#55e268', '#28b83c'],
 ] as const;
 
 const USER_SOUNDFONT_COLORS = [
@@ -1377,6 +1375,11 @@ export class PlayerScreen {
   private readonly effectBankNames = new Map<EffectBankId, string>(
     EFFECT_BANK_IDS.map((bank) => [bank, bank === '1' ? 'Church' : `FX ${bank}`]),
   );
+  // A configuração sonora do Organ pertence ao instrumento, não ao preset.
+  // Os estados do módulo (ON/OFF, volume, oitava, MIDI e faixa de notas)
+  // continuam nos presets; drawbars, rotary e os demais parâmetros internos
+  // compartilham esta única configuração em todos os bancos.
+  private organGlobalSettings: Record<string, unknown> = createDefaultModuleSettings(6);
   private readonly bankStates = new Map<BankId, BankState>(
     BANK_IDS.map((bank) => [bank, createBankState(bank === 'A' ? 1 : null)]),
   );
@@ -1395,6 +1398,7 @@ export class PlayerScreen {
     this.soundLibraryEngine = this.createSoundLibraryEngine(this.soundCatalog);
     this.trackLibrary = new TrackLibraryStore(account.email);
     this.effectAudioLibrary = new EffectAudioStore(account.email);
+    this.linkOrganSettingsToGlobal();
   }
 
   mount(): void {
@@ -1418,7 +1422,7 @@ export class PlayerScreen {
                 aria-label="Sobre o Bronze Keys"
               >
                 <img class="player-brand__image" src="/assets/icons/256x256.png" alt="">
-                <span class="player-brand__name"><strong>Hook</strong> Keys</span>
+                <span class="player-brand__name"><strong>Bronze</strong> Keys</span>
               </button>
             </div>
             ${createTrackTransportMarkup()}
@@ -4212,6 +4216,7 @@ export class PlayerScreen {
     this.cancelNoteLearn();
     this.preparePatternPlaybackForPresetTransition();
     bank.presets[presetNumber - 1] = JSON.parse(JSON.stringify(clipboard.preset)) as PresetState;
+    this.linkOrganSettingsToGlobal();
     this.presetClipboard = null;
     this.restoreActivePresetState();
     this.markPlayerStateChanged();
@@ -7094,19 +7099,6 @@ export class PlayerScreen {
         }
         return;
       }
-      const userSoundfontNameField = target instanceof Element
-        ? target.closest<HTMLElement>('[data-user-sf2-name-field]')
-        : null;
-      const userSoundfontInlineKey = target instanceof Element
-        ? target.closest<HTMLButtonElement>('.user-sf2-name button[data-on-screen-key]')
-        : null;
-      if (kind === 'sound-selection' && userSoundfontNameField) {
-        this.setUserSoundfontKeyboardOpen(modal, true, userSoundfontNameField);
-        return;
-      }
-      if (kind === 'sound-selection' && !userSoundfontInlineKey) {
-        this.setUserSoundfontKeyboardOpen(modal, false);
-      }
       const userSoundfontRemoveChoice = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-user-sf2-remove-choice]')
         : null;
@@ -7171,19 +7163,6 @@ export class PlayerScreen {
           this.selectedCatalogSoundId = soundId;
           this.openChildModal('sound-download', moduleNumber, fixedSoundButton);
         }
-        return;
-      }
-
-      const userSoundfontKeyButton = target instanceof Element
-        ? target.closest<HTMLButtonElement>('button[data-on-screen-key]')
-        : null;
-      if (kind === 'sound-selection' && userSoundfontKeyButton?.dataset.onScreenKey) {
-        const key = resolveOnScreenKey(userSoundfontKeyButton, userSoundfontKeyButton.dataset.onScreenKey);
-        if (key === 'enter') {
-          this.setUserSoundfontKeyboardOpen(modal, false);
-          this.handleUserSoundfontAction(modal, 'choose-file');
-        }
-        else if (key) this.updateUserSoundfontName(modal, key);
         return;
       }
 
@@ -8491,46 +8470,12 @@ export class PlayerScreen {
 
   private handleUserSoundfontAction(modal: HTMLElement, action: string): void {
     if (modal.dataset.userSf2Importing === 'true') return;
-    const namePanel = modal.querySelector<HTMLElement>('[data-user-sf2-name]');
-    const nameInput = modal.querySelector<HTMLInputElement>('[data-user-sf2-name-input]');
-    const message = modal.querySelector<HTMLElement>('[data-user-sf2-message]');
-    if (!namePanel || !nameInput) return;
-
-    if (action === 'name') {
-      namePanel.hidden = false;
-      nameInput.value = '';
-      this.renderUserSoundfontName(modal);
-      if (message) message.textContent = '';
-      this.setUserSoundfontKeyboardOpen(modal, false);
-      return;
-    }
-    if (action === 'cancel') {
-      this.setUserSoundfontKeyboardOpen(modal, false);
-      namePanel.hidden = true;
-      nameInput.value = '';
-      const fileInput = modal.querySelector<HTMLInputElement>('[data-user-sf2-file]');
-      if (fileInput) {
-        fileInput.value = '';
-        delete fileInput.dataset.soundfontName;
-        delete fileInput.dataset.restoreSoundfontId;
-      }
-      this.renderUserSoundfontName(modal);
-      if (message) message.textContent = '';
-      return;
-    }
-    if (action !== 'choose-file') return;
-
-    const name = nameInput.value.trim().slice(0, 12);
-    if (!name) {
-      if (message) message.textContent = 'Digite um nome para o timbre.';
-      return;
-    }
+    if (action !== 'choose-file' && action !== 'name') return;
     const fileInput = modal.querySelector<HTMLInputElement>('[data-user-sf2-file]');
     if (!fileInput) return;
-    this.setUserSoundfontKeyboardOpen(modal, false);
     fileInput.value = '';
     delete fileInput.dataset.restoreSoundfontId;
-    fileInput.dataset.soundfontName = name;
+    delete fileInput.dataset.soundfontName;
     // iOS only skips Foto/Tirar foto when `accept` resolves to a non-media
     // document type. Android then opens its document picker as well. Keep the
     // strict extension-only filter on desktop, where octet-stream is displayed
@@ -8539,46 +8484,18 @@ export class PlayerScreen {
     fileInput.click();
   }
 
-  private updateUserSoundfontName(modal: HTMLElement, key: string): void {
-    const input = modal.querySelector<HTMLInputElement>('[data-user-sf2-name-input]');
-    const message = modal.querySelector<HTMLElement>('[data-user-sf2-message]');
-    if (!input) return;
-    input.value = applyOnScreenKey(input.value, key, 12);
-    this.renderUserSoundfontName(modal);
-    if (message) message.textContent = '';
-  }
-
-  private renderUserSoundfontName(modal: HTMLElement): void {
-    const input = modal.querySelector<HTMLInputElement>('[data-user-sf2-name-input]');
-    const value = modal.querySelector<HTMLElement>('[data-user-sf2-name-value]');
-    if (input && value) value.textContent = input.value;
-  }
-
-  private setUserSoundfontKeyboardOpen(
-    modal: HTMLElement,
-    open: boolean,
-    requestedField?: HTMLElement,
-  ): void {
-    const field = requestedField ?? modal.querySelector<HTMLElement>('[data-user-sf2-name-field]');
-    const keyboard = modal.querySelector<HTMLElement>('.user-sf2-name .on-screen-keyboard');
-    if (field) {
-      field.classList.toggle('is-input-active', open);
-      if (open) field.focus({ preventScroll: true });
-      else field.blur();
-    }
-    if (keyboard) keyboard.hidden = !open;
-  }
-
   private async importUserSoundfont(modal: HTMLElement, input: HTMLInputElement): Promise<void> {
     if (modal.dataset.userSf2Importing === 'true') return;
     const file = input.files?.[0];
-    const name = input.dataset.soundfontName?.trim().slice(0, 12) ?? '';
     const restoredId = input.dataset.restoreSoundfontId;
+    const restoredName = input.dataset.soundfontName?.trim().slice(0, 120) ?? '';
+    const fileName = file ? withoutSoundfontExtension(file.name).trim().slice(0, 120) : '';
+    const name = restoredId && restoredName ? restoredName : fileName;
     input.value = '';
     delete input.dataset.restoreSoundfontId;
     delete input.dataset.soundfontName;
     if (!file || !name) return;
-    const message = modal.querySelector<HTMLElement>('[data-user-sf2-message]');
+    const message = modal.querySelector<HTMLElement>('[data-user-sf2-load-status]');
     if (!file.name.toLowerCase().endsWith('.sf2')) {
       if (message) message.textContent = 'Escolha um arquivo SF2.';
       return;
@@ -8587,8 +8504,7 @@ export class PlayerScreen {
     const buttons = [...modal.querySelectorAll<HTMLButtonElement>('[data-user-sf2-action]')];
     const previouslyDisabled = buttons.map(button => button.disabled);
     buttons.forEach(button => { button.disabled = true; });
-    const namePanel = modal.querySelector<HTMLElement>('[data-user-sf2-name]');
-    namePanel?.setAttribute('aria-busy', 'true');
+    modal.setAttribute('aria-busy', 'true');
     if (message) message.textContent = 'Adicionando SF2… Aguarde.';
     try {
       await this.soundLibrary.addUser(name, file, restoredId);
@@ -8596,20 +8512,14 @@ export class PlayerScreen {
         this.missingUserSoundfonts = this.missingUserSoundfonts.filter(({ id }) => id !== restoredId);
       }
       if (!modal.isConnected) return;
-      this.setUserSoundfontKeyboardOpen(modal, false);
-      if (namePanel) namePanel.hidden = true;
-      const nameInput = modal.querySelector<HTMLInputElement>('[data-user-sf2-name-input]');
-      if (nameInput) nameInput.value = '';
-      this.renderUserSoundfontName(modal);
       await this.renderUserSoundfonts(modal);
       const libraryMessage = modal.querySelector<HTMLElement>('[data-user-sf2-load-status]');
       if (libraryMessage) libraryMessage.textContent = `${name} adicionado. Toque no timbre para selecionar neste módulo.`;
-      if (message) message.textContent = '';
     } catch {
       if (message) message.textContent = 'Não foi possível adicionar este SF2.';
     } finally {
       delete modal.dataset.userSf2Importing;
-      namePanel?.removeAttribute('aria-busy');
+      modal.removeAttribute('aria-busy');
       buttons.forEach((button, index) => { button.disabled = previouslyDisabled[index] ?? false; });
     }
   }
@@ -10008,7 +9918,24 @@ export class PlayerScreen {
         const lower = Number.isFinite(minimum) ? minimum : -Number.MAX_VALUE;
         const upper = Number.isFinite(maximum) ? maximum : Number.MAX_VALUE;
         const decimals = Math.min(8, Math.max(0, (String(source.step).split('.')[1] || '').length));
-        const next = Math.min(upper, Math.max(lower, current + direction * step));
+        const milliseconds = source.matches(
+          '[data-module-envelope], [data-glide-time], [data-module-effect-control="milliseconds"], [data-module-effect-control$="Ms"]',
+        );
+        let requested = current + direction * step;
+        if (milliseconds) {
+          if (current >= 1_000) {
+            // Acima de 1 segundo, o ajuste fino acompanha os décimos exibidos:
+            // 1.0, 1.1, 1.2 s. Abaixo disso, o ajuste anda de 10 em 10 ms.
+            requested = direction > 0
+              ? (Math.floor(current / 100) + 1) * 100
+              : (Math.ceil(current / 100) - 1) * 100;
+          } else {
+            requested = direction > 0
+              ? Math.min(1_000, (Math.floor(current / 10) + 1) * 10)
+              : (Math.ceil(current / 10) - 1) * 10;
+          }
+        }
+        const next = Math.min(upper, Math.max(lower, requested));
         const nextValue = decimals > 0 ? next.toFixed(decimals) : String(Math.round(next));
         if (source.value === nextValue || Number(source.value) === Number(nextValue)) return;
         source.value = nextValue;
@@ -12467,6 +12394,20 @@ export class PlayerScreen {
   }
 
   private createSavedPlayerState(): object {
+    const savedBanks = Object.fromEntries(BANK_IDS.map((bankId) => {
+      const bank = this.bankStates.get(bankId);
+      if (!bank) return [bankId, null];
+      const savedBank = JSON.parse(JSON.stringify(bank)) as BankState;
+      for (const preset of savedBank.presets) {
+        const organ = preset.modules[6];
+        if (!organ) continue;
+        // A configuração do Organ é gravada uma vez em organModuleSettings.
+        // O restante do estado do módulo ainda pertence a este preset.
+        organ.settings = {};
+        organ.userSettings = null;
+      }
+      return [bankId, savedBank];
+    }));
     return {
       version: 1,
       velocityCurveDefault: 'soft-v2',
@@ -12522,11 +12463,22 @@ export class PlayerScreen {
           volumeDb: effect.volumeDb,
         }))]),
       ),
-      banks: Object.fromEntries(
-        BANK_IDS.map((bankId) => [bankId, this.bankStates.get(bankId)]),
-      ),
+      organModuleSettings: cloneSettings(this.organGlobalSettings),
+      banks: savedBanks,
       seenSoundIds: [...this.seenSoundIds],
     };
+  }
+
+  private linkOrganSettingsToGlobal(): void {
+    for (const bank of this.bankStates.values()) {
+      for (const preset of bank.presets) {
+        const organ = preset.modules[6];
+        if (!organ) continue;
+        organ.settings = this.organGlobalSettings;
+        organ.settingsMode = 'user';
+        organ.userSettings = null;
+      }
+    }
   }
 
   private applySavedPlayerState(value: unknown): void {
@@ -12711,6 +12663,13 @@ export class PlayerScreen {
       );
     }
 
+    const savedOrganModuleSettings = isRecord(value.organModuleSettings)
+      ? value.organModuleSettings
+      : {};
+    this.organGlobalSettings = mergeSettings(
+      createDefaultModuleSettings(6),
+      savedOrganModuleSettings,
+    );
     const savedBanks = isRecord(value.banks) ? value.banks : {};
     for (const bankId of BANK_IDS) {
       const defaults = createBankState();
@@ -12743,9 +12702,11 @@ export class PlayerScreen {
             const source = isRecord(sourceModules[moduleIndex]) ? sourceModules[moduleIndex] : null;
             if (!source) return module;
             const category = asString(source.category);
-            const restoredSettings = isRecord(source.settings)
-              ? { ...module.settings, ...source.settings }
-              : module.settings;
+            const restoredSettings = moduleIndex === 6
+              ? this.organGlobalSettings
+              : isRecord(source.settings)
+                ? { ...module.settings, ...source.settings }
+                : module.settings;
             // Versões anteriores salvaram uma divisão rítmica no Glide. Ela não
             // faz parte do controle: Sync depende somente do BPM global.
             delete restoredSettings.glideDivision;
@@ -12864,6 +12825,7 @@ export class PlayerScreen {
       });
       this.bankStates.set(bankId, defaults);
     }
+    this.linkOrganSettingsToGlobal();
 
     const activeBankState = this.bankStates.get(this.activeBank);
     const selectedBank = activeBankState && activeBankState.selectedPreset !== null
