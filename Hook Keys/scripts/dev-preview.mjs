@@ -99,7 +99,7 @@ function launcherHtml(appUrl, qrCodeDataUrl, adapterName, hasLanAddress) {
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Hook Keys — Preview</title>
+    <title>Bronze Keys — Preview</title>
     <style>
       :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
       * { box-sizing: border-box; }
@@ -116,9 +116,9 @@ function launcherHtml(appUrl, qrCodeDataUrl, adapterName, hasLanAddress) {
   <body>
     <main>
       <p class="eyebrow">Preview local</p>
-      <h1>Hook Keys</h1>
+      <h1>Bronze Keys</h1>
       <p>${connectionCopy}</p>
-      <img src="${qrCodeDataUrl}" alt="QR code para abrir o Hook Keys">
+      <img src="${qrCodeDataUrl}" alt="QR code para abrir o Bronze Keys">
       <a href="${safeUrl}" target="_blank" rel="noreferrer">${safeUrl}</a>
       <small>${hasLanAddress ? `Rede: ${escapeHtml(adapterName)}` : 'Use Ctrl+C para encerrar.'}</small>
     </main>
@@ -179,7 +179,7 @@ async function main() {
   }
 
   const launcherUrl = `http://127.0.0.1:${launcherAddress.port}/`;
-  console.log(`\nHook Keys disponível em ${appUrl}`);
+  console.log(`\nBronze Keys disponível em ${appUrl}`);
   console.log('Use Ctrl+C para encerrar o preview.\n');
   if (!/^(1|true|yes)$/i.test(String(process.env.HOOK_KEYS_NO_OPEN || ''))) {
     openBrowser(launcherUrl);
@@ -198,7 +198,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('\nNão foi possível iniciar o preview do Hook Keys.');
+  console.error('\nNão foi possível iniciar o preview do Bronze Keys.');
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 });

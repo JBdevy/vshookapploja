@@ -550,7 +550,7 @@ public class HookKeysNativePlugin extends Plugin {
             call.reject("O arquivo de backup é inválido ou muito grande.");
             return;
         }
-        String fileName = safeBackupFileName(call.getString("fileName", "Hook Keys Backup.json"));
+        String fileName = safeBackupFileName(call.getString("fileName", "Bronze Keys Backup.json"));
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/json");
@@ -587,7 +587,7 @@ public class HookKeysNativePlugin extends Plugin {
     private static String safeBackupFileName(String value) {
         String name = value == null ? "" : value.trim().replaceAll("(?i)\\.json$", "");
         name = name.replaceAll("[^A-Za-z0-9 _-]", "-").replaceAll("^[ _-]+|[ _-]+$", "");
-        return (name.isEmpty() ? "Hook Keys Backup" : name) + ".json";
+        return (name.isEmpty() ? "Bronze Keys Backup" : name) + ".json";
     }
 
     @PluginMethod
@@ -718,6 +718,8 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("loFiBitDepth", 0.25f),
             call.getFloat("loFiSampleRateHz", 1.0f),
             call.getFloat("loFiMix", 1.0f),
+            call.getBoolean("loFiVinylEnabled", true),
+            call.getFloat("loFiNoise", -24.0f),
             call.getBoolean("autoFaderEnabled", false),
             call.getFloat("autoFaderBeats", 4.0f),
             call.getFloat("autoFaderDepthDb", 6.0f),
@@ -1322,6 +1324,7 @@ public class HookKeysNativePlugin extends Plugin {
         boolean rotaryCabinetEnabled,
         boolean chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
         boolean loFiEnabled, float loFiBitDepth, float loFiSampleRateHz, float loFiMix,
+        boolean loFiVinylEnabled, float loFiNoise,
         boolean autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
         float inputGainDb
     );

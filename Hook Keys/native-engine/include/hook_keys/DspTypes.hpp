@@ -245,10 +245,13 @@ struct LoFiConfig final {
   bool enabled = false;
   float rateHz = 1.0f;
   float amountSemitones = 0.25f;
+  bool vinylEnabled = true;
+  float noiseGainDb = -24.0f;
 
   void normalize() noexcept {
     rateHz = std::clamp(rateHz, 0.05f, 8.0f);
     amountSemitones = std::clamp(amountSemitones, 0.0f, 1.0f);
+    noiseGainDb = std::clamp(noiseGainDb, -36.0f, 0.0f);
   }
 };
 

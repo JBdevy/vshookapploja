@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 chcp 65001 >nul
-title Hook Keys Desktop - Teste local
+title Bronze Keys Desktop - Teste local
 cd /d "%~dp0"
 
 where node >nul 2>&1 || goto node_ausente
@@ -9,7 +9,7 @@ where npm >nul 2>&1 || goto node_ausente
 where cargo >nul 2>&1 || goto rust_ausente
 
 if not exist "node_modules\.package-lock.json" (
-  echo Instalando dependencias do Hook Keys...
+  echo Instalando dependencias do Bronze Keys...
   call npm install
   if errorlevel 1 goto erro
 )
@@ -18,7 +18,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\pr
 if errorlevel 1 goto erro
 
 echo.
-echo Iniciando o Hook Keys Desktop local...
+echo Iniciando o Bronze Keys Desktop local...
 echo Limpando qualquer instancia antiga deste teste.
 echo Alteracoes de layout serao atualizadas automaticamente.
 echo Alteracoes no motor nativo serao compiladas ao reiniciar este arquivo.
@@ -39,6 +39,6 @@ goto erro
 
 :erro
 echo.
-echo O teste local do Hook Keys Desktop foi encerrado com erro.
+echo O teste local do Bronze Keys Desktop foi encerrado com erro.
 pause
 exit /b 1

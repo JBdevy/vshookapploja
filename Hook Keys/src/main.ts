@@ -36,7 +36,7 @@ async function bootstrap(): Promise<void> {
 void bootstrap().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   const root = document.querySelector<HTMLElement>('#app') ?? document.body;
-  root.innerHTML = `<main role="alert" style="box-sizing:border-box;display:grid;place-items:center;width:100%;height:100%;padding:24px;color:#fff;background:#000;font:700 15px/1.45 system-ui,sans-serif;text-align:center"><section><h1 style="color:#ff8b2c">O Hook Keys não conseguiu iniciar</h1><p></p><button type="button" style="padding:12px 20px;color:#140700;border:1px solid #ffb269;border-radius:9px;background:#ff8a25;font-weight:900">Tentar novamente</button></section></main>`;
+  root.innerHTML = `<main role="alert" style="box-sizing:border-box;display:grid;place-items:center;width:100%;height:100%;padding:24px;color:#fff;background:#000;font:700 15px/1.45 system-ui,sans-serif;text-align:center"><section><h1 style="color:#cd7f32">O Bronze Keys não conseguiu iniciar</h1><p></p><button type="button" style="padding:12px 20px;color:#140700;border:1px solid #e8ad70;border-radius:9px;background:#cd7f32;font-weight:900">Tentar novamente</button></section></main>`;
   root.querySelector('p')!.textContent = message;
   root.querySelector('button')!.addEventListener('click', () => window.location.reload());
 });

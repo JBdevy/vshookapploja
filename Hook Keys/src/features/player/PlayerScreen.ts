@@ -514,7 +514,7 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
     'rotary:slowHz': [0.2, 2], 'rotary:fastHz': [2, 10], 'rotary:rampSeconds': [0.1, 10],
     'rotary:depth': [0, 100], 'rotary:mix': [0, 100],
     'chorus:rateHz': [0.05, 8], 'chorus:depth': [0, 100], 'chorus:mix': [0, 100],
-    'lofi:rateHz': [0.05, 8], 'lofi:amountSemitones': [0, 1],
+    'lofi:rateHz': [0.05, 8], 'lofi:amountSemitones': [0, 1], 'lofi:noiseDb': [-36, 0],
     'cutoffEnvelope:attackMs': [0, 5_000], 'cutoffEnvelope:decayMs': [0, 5_000],
     'cutoffEnvelope:sustain': [0, 100], 'cutoffEnvelope:releaseMs': [0, 5_000],
     'cutoffEnvelope:depthOctaves': [0, 8],
@@ -1415,7 +1415,7 @@ export class PlayerScreen {
                 class="player-brand"
                 type="button"
                 data-action="open-about"
-                aria-label="Sobre o Hook Keys"
+                aria-label="Sobre o Bronze Keys"
               >
                 <img class="player-brand__image" src="/assets/icons/256x256.png" alt="">
                 <span class="player-brand__name"><strong>Hook</strong> Keys</span>
@@ -1484,7 +1484,7 @@ export class PlayerScreen {
               <button class="player-account__user-button" type="button" data-action="open-user" aria-label="Conta"><svg class="player-header-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></button>
               ${this.desktopRuntime ? `
               <div class="player-cpu-meter" role="status" data-cpu-meter
-                title="Uso de CPU somente do processo Hook Keys">
+                title="Uso de CPU somente do processo Bronze Keys">
                 <small>CPU</small>
                 <strong data-cpu-meter-value>--</strong>
               </div>` : ''}
@@ -1556,6 +1556,10 @@ export class PlayerScreen {
         <div class="knob-focus__card">
           <strong data-knob-focus-label></strong>
           <div class="knob-focus__controls">
+            <div class="knob-focus__stepper" aria-label="Ajuste fino do parâmetro">
+              <button type="button" data-knob-focus-step="1" aria-label="Aumentar um passo">+</button>
+              <button type="button" data-knob-focus-step="-1" aria-label="Diminuir um passo">−</button>
+            </div>
             <span class="knob-focus__face"><i></i></span>
             <div class="knob-focus__fader" aria-label="Ajuste vertical do parâmetro">
               <input type="range" min="0" max="100" step="1" value="0" data-knob-focus-fader>
@@ -1794,7 +1798,7 @@ export class PlayerScreen {
     const percent = Math.min(100, Math.max(0, processPercent));
     const text = `${Math.round(percent)}%`;
     if (value.textContent !== text) value.textContent = text;
-    meter.setAttribute('aria-label', `CPU usada pelo Hook Keys: ${text}`);
+    meter.setAttribute('aria-label', `CPU usada pelo Bronze Keys: ${text}`);
     const critical = percent >= 90;
     meter.classList.toggle('is-critical', critical);
     meter.classList.toggle('is-warning', !critical && percent >= 70);
@@ -6453,7 +6457,7 @@ export class PlayerScreen {
       title.textContent = 'ReiVs';
       description.textContent = 'Copyright 2026';
     } else if (kind === 'app-settings') {
-      eyebrow.textContent = 'Hook Keys';
+      eyebrow.textContent = 'Bronze Keys';
       title.textContent = 'Configurações';
     } else if (kind === 'app-settings-midi') {
       eyebrow.textContent = 'Configurações';
@@ -6468,16 +6472,16 @@ export class PlayerScreen {
       eyebrow.textContent = 'Conta';
       title.textContent = 'Redefinir senha';
     } else if (kind === 'user') {
-      eyebrow.textContent = 'Hook Keys';
+      eyebrow.textContent = 'Bronze Keys';
       title.textContent = 'Usuário';
     } else if (kind === 'user-name') {
       eyebrow.textContent = 'Perfil';
       title.textContent = 'Editar nome';
     } else if (kind === 'tracks') {
-      eyebrow.textContent = 'Hook Keys';
+      eyebrow.textContent = 'Bronze Keys';
       title.textContent = 'Playlist';
     } else if (kind === 'output-volume') {
-      eyebrow.textContent = 'Hook Keys';
+      eyebrow.textContent = 'Bronze Keys';
       title.textContent = 'Volume';
     } else if (kind === 'effect-pad') {
       eyebrow.textContent = `FX ${this.activeEffectBank} · Pad ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
@@ -6516,7 +6520,7 @@ export class PlayerScreen {
       eyebrow.textContent = 'Config · Copy';
       title.textContent = 'Confirmar cópia';
     } else if (kind === 'compatibility-mode') {
-      eyebrow.textContent = 'Hook Keys';
+      eyebrow.textContent = 'Bronze Keys';
       title.textContent = this.pendingCompatibilityMode ? 'Modo compatibilidade' : 'Confirmar alteração';
     } else if (kind === 'compatibility-preset-learn-blocked') {
       eyebrow.textContent = 'Modo compatibilidade';
@@ -7019,6 +7023,12 @@ export class PlayerScreen {
         ? target.closest<HTMLButtonElement>('[data-module-rotary-cabinet]') : null;
       if (kind === 'module-organ' && moduleNumber === 7 && rotaryCabinetButton) {
         this.toggleModuleRotaryCabinet(rotaryCabinetButton);
+        return;
+      }
+      const vibesVinylButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-module-vibes-vinyl]') : null;
+      if (pageKind() === 'module-lofi' && moduleNumber !== null && vibesVinylButton) {
+        this.toggleModuleVibesVinyl(vibesVinylButton, moduleNumber);
         return;
       }
       const delayDivisionButton = target instanceof Element
@@ -8651,7 +8661,7 @@ export class PlayerScreen {
     confirmation.setAttribute('aria-label', 'Confirmar saída da conta');
     confirmation.innerHTML = `
       <div>
-        <small>Hook Keys</small>
+        <small>Bronze Keys</small>
         <strong>Sair da conta?</strong>
         <p>Os timbres baixados e os presets continuam neste aparelho. Para voltar, é só entrar de novo.</p>
         <span>
@@ -8860,7 +8870,7 @@ export class PlayerScreen {
           }
         } catch (error) {
           if (!(error instanceof DOMException && error.name === 'AbortError')) {
-            console.error('[Hook Keys] Falha ao baixar timbre', soundId, entry.sound.sf2ObjectKey, error);
+            console.error('[Bronze Keys] Falha ao baixar timbre', soundId, entry.sound.sf2ObjectKey, error);
             if (this.selectedCatalogSoundId === soundId) {
               this.updateSoundDownloadMessage(soundDownloadErrorMessage(error));
               const installButton = this.modal?.querySelector<HTMLButtonElement>('[data-modal-action="download-sound"]');
@@ -8948,7 +8958,7 @@ export class PlayerScreen {
     confirmation.setAttribute('aria-label', 'Confirmar download de todos os timbres');
     confirmation.innerHTML = `
       <div>
-        <small>Biblioteca Hook Keys</small>
+        <small>Biblioteca Bronze Keys</small>
         <strong>Baixar todos os timbres?</strong>
         <p>${toQueue.length} timbres serão adicionados à fila (${formatBytes(knownTotalBytes)}). O download atual continuará normalmente.</p>
         <span>
@@ -8976,7 +8986,7 @@ export class PlayerScreen {
     confirmation.setAttribute('aria-label', 'Confirmar apagar toda a biblioteca');
     confirmation.innerHTML = `
       <div>
-        <small>Biblioteca Hook Keys</small>
+        <small>Biblioteca Bronze Keys</small>
         <strong>Apagar todos os timbres baixados?</strong>
         <p>Serão apagados ${installedOfficial.length} timbres (${formatBytes(knownBytes)}) deste aparelho. Módulos que os usam ficam sem timbre.</p>
         <span>
@@ -9963,10 +9973,93 @@ export class PlayerScreen {
         this.hideKnobFocus(KNOB_FOCUS_IDLE_MS);
       };
     }
+    this.bindKnobFocusStepButtons(overlay);
     overlay.classList.add('is-visible');
     overlay.setAttribute('aria-hidden', 'false');
     this.syncKnobFocus(input);
     this.hideKnobFocus(KNOB_FOCUS_IDLE_MS);
+  }
+
+  private bindKnobFocusStepButtons(overlay: HTMLElement): void {
+    for (const button of overlay.querySelectorAll<HTMLButtonElement>('[data-knob-focus-step]')) {
+      let holdTimer: number | null = null;
+      let repeatDelayMs = 280;
+      let activePointerId: number | null = null;
+      const direction = button.dataset.knobFocusStep === '-1' ? -1 : 1;
+
+      const stopRepeating = (commit: boolean): void => {
+        if (holdTimer !== null) window.clearTimeout(holdTimer);
+        holdTimer = null;
+        activePointerId = null;
+        const source = this.knobFocusInput;
+        if (commit && source?.isConnected) source.dispatchEvent(new Event('change', { bubbles: true }));
+        this.hideKnobFocus(KNOB_FOCUS_IDLE_MS);
+      };
+
+      const stepOnce = (): void => {
+        const source = this.knobFocusInput;
+        if (!source?.isConnected || source.disabled) return;
+        const minimum = Number(source.min);
+        const maximum = Number(source.max);
+        const rawStep = Number(source.step);
+        const step = Number.isFinite(rawStep) && rawStep > 0 ? rawStep : 1;
+        const current = Number(source.value);
+        if (!Number.isFinite(current)) return;
+        const lower = Number.isFinite(minimum) ? minimum : -Number.MAX_VALUE;
+        const upper = Number.isFinite(maximum) ? maximum : Number.MAX_VALUE;
+        const decimals = Math.min(8, Math.max(0, (String(source.step).split('.')[1] || '').length));
+        const next = Math.min(upper, Math.max(lower, current + direction * step));
+        const nextValue = decimals > 0 ? next.toFixed(decimals) : String(Math.round(next));
+        if (source.value === nextValue || Number(source.value) === Number(nextValue)) return;
+        source.value = nextValue;
+        source.dispatchEvent(new Event('input', { bubbles: true }));
+        this.syncKnobFocus(source);
+        this.hideKnobFocus(KNOB_FOCUS_IDLE_MS);
+      };
+
+      const scheduleRepeat = (): void => {
+        holdTimer = window.setTimeout(() => {
+          stepOnce();
+          // A repetição acelera gradualmente, mas para em 110 ms para continuar
+          // precisa e controlável mesmo em parâmetros de faixa grande.
+          repeatDelayMs = Math.max(110, repeatDelayMs - 18);
+          scheduleRepeat();
+        }, repeatDelayMs);
+      };
+
+      button.onpointerdown = (event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (this.knobFocusHideTimer !== null) window.clearTimeout(this.knobFocusHideTimer);
+        this.knobFocusHideTimer = null;
+        activePointerId = event.pointerId;
+        repeatDelayMs = 280;
+        button.setPointerCapture(event.pointerId);
+        stepOnce();
+        holdTimer = window.setTimeout(() => {
+          stepOnce();
+          scheduleRepeat();
+        }, 420);
+      };
+      button.onpointerup = (event) => {
+        if (activePointerId !== event.pointerId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+        stopRepeating(true);
+      };
+      button.onpointercancel = () => stopRepeating(true);
+      button.onclick = (event) => {
+        event.preventDefault();
+        // Click de teclado não passa por pointerdown.
+        if (event.detail === 0) {
+          stepOnce();
+          const source = this.knobFocusInput;
+          if (source?.isConnected) source.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      };
+    }
   }
 
   private syncKnobFocus(input: HTMLInputElement): void {
@@ -10189,6 +10282,7 @@ export class PlayerScreen {
       'chorus:mix': [0, 100],
       'lofi:rateHz': [0.05, 8],
       'lofi:amountSemitones': [0, 1],
+      'lofi:noiseDb': [-36, 0],
       'cutoffEnvelope:attackMs': [0, 5_000],
       'cutoffEnvelope:decayMs': [0, 5_000],
       'cutoffEnvelope:sustain': [0, 100],
@@ -10202,7 +10296,6 @@ export class PlayerScreen {
     const reverbMixes = effectKind === 'reverb' && effectControl === 'mix'
       ? ensureReverbMixPresets(moduleState.settings) : null;
     (settings as unknown as Record<string, number | string | boolean>)[effectControl] = value;
-    if (effectKind === 'lofi' && effectControl === 'amountSemitones') settings.enabled = value > 0;
     moduleState.settings[effectKind] = settings;
     if (reverbMixes) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)].mix = value;
     this.markPlayerStateChanged();
@@ -10382,18 +10475,6 @@ export class PlayerScreen {
     if (!(key in settings)) return;
     const reverbMixes = kind === 'reverb' && key === 'mix' ? ensureReverbMixPresets(moduleState.settings) : null;
     (settings as unknown as Record<string, number | string>)[key] = value;
-    if (kind === 'lofi' && key === 'amountSemitones') {
-      // No Vibes, Amount zero é o próprio bypass; ao abrir novamente o
-      // Amount, o efeito entra sem exigir um segundo toque no ON/OFF.
-      settings.enabled = value > 0;
-      const power = modal.querySelector<HTMLButtonElement>('[data-module-effect-power="lofi"]');
-      if (power) {
-        power.classList.toggle('is-on', settings.enabled);
-        power.classList.toggle('is-off', !settings.enabled);
-        power.textContent = settings.enabled ? 'ON' : 'OFF';
-        power.setAttribute('aria-pressed', String(settings.enabled));
-      }
-    }
     moduleState.settings[kind] = settings;
     if (reverbMixes) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)].mix = value;
 
@@ -10450,23 +10531,6 @@ export class PlayerScreen {
     if (!isModuleEffectKind(kind)) return;
     const settings = readModuleEffectSettings(kind, moduleState.settings[kind]);
     settings.enabled = !settings.enabled;
-    if (kind === 'lofi') {
-      const vibes = settings as ReturnType<typeof readModuleLoFiSettings>;
-      if (vibes.enabled && vibes.amountSemitones <= 0) {
-        vibes.amountSemitones = 0.25;
-        const amount = button.closest<HTMLElement>('.player-modal__surface')
-          ?.querySelector<HTMLInputElement>('[data-module-effect-kind="lofi"][data-module-effect-control="amountSemitones"]');
-        if (amount) {
-          amount.value = String(vibes.amountSemitones);
-          amount.setAttribute('aria-valuetext', formatModuleEffectValue('lofi', 'amountSemitones', vibes.amountSemitones));
-          const knob = amount.closest<HTMLElement>('.module-effect-knob');
-          knob?.style.setProperty('--knob-angle', `${-135 + vibes.amountSemitones * 270}deg`);
-          knob?.style.setProperty('--knob-progress', String(vibes.amountSemitones));
-          const output = knob?.querySelector<HTMLOutputElement>('[data-module-effect-output="amountSemitones"]');
-          if (output) output.value = formatModuleEffectValue('lofi', 'amountSemitones', vibes.amountSemitones);
-        }
-      }
-    }
     moduleState.settings[kind] = settings;
     if (kind === 'compressor' && !settings.enabled) this.renderModuleAnalysis([]);
     button.classList.toggle('is-on', settings.enabled);
@@ -10485,6 +10549,18 @@ export class PlayerScreen {
     moduleState.settings.rotary = rotary;
     button.classList.toggle('is-selected', rotary.cabinetEnabled);
     button.setAttribute('aria-pressed', String(rotary.cabinetEnabled));
+    this.markPlayerStateChanged();
+  }
+
+  private toggleModuleVibesVinyl(button: HTMLButtonElement, moduleNumber: number): void {
+    const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
+    if (!moduleState) return;
+    const vibes = readModuleLoFiSettings(moduleState.settings.lofi);
+    vibes.vinylEnabled = !vibes.vinylEnabled;
+    moduleState.settings.lofi = vibes;
+    button.classList.toggle('is-selected', vibes.vinylEnabled);
+    button.setAttribute('aria-pressed', String(vibes.vinylEnabled));
+    button.textContent = vibes.vinylEnabled ? 'ON' : 'OFF';
     this.markPlayerStateChanged();
   }
 
@@ -12281,10 +12357,12 @@ export class PlayerScreen {
           chorusMix: chorus.mix / 100,
           // A ponte nativa ainda usa os nomes históricos para manter o ABI das
           // três plataformas. Eles transportam Amount, Rate e não têm Mix.
-          loFiEnabled: moduleIndex !== 6 && loFi.enabled && loFi.amountSemitones > 0,
+          loFiEnabled: moduleIndex !== 6 && loFi.enabled,
           loFiBitDepth: loFi.amountSemitones,
           loFiSampleRateHz: loFi.rateHz,
           loFiMix: 1,
+          loFiVinylEnabled: loFi.vinylEnabled,
+          loFiNoise: loFi.noiseDb,
           // O Auto Fader é parte do Arpeggiator: a preferência continua salva,
           // mas o DSP só roda enquanto o Arpeggiator deste módulo estiver ON.
           autoFaderEnabled: arpeggiatorSettings.enabled && autoFader.enabled,
@@ -13084,12 +13162,12 @@ function soundDownloadErrorMessage(error: unknown): string {
   // Antes de baixar, o app pede ao backend o link assinado do arquivo. Quando é
   // esse pedido que falha, o problema não está no R2: mostre o código dele.
   if (error instanceof ApiError) {
-    if (error.status === 0) return 'Sem conexão com o servidor do Hook Keys para pegar o link do timbre.';
+    if (error.status === 0) return 'Sem conexão com o servidor do Bronze Keys para pegar o link do timbre.';
     if (error.status === 401 || error.status === 403) {
       return `A conta não tem permissão para baixar este timbre (${error.status}).`;
     }
     if (error.status === 404) return 'O servidor não encontrou este timbre no catálogo (404).';
-    return `O servidor do Hook Keys respondeu ${error.status} ao dar o link deste timbre${error.code ? ` (${error.code})` : ''}.`;
+    return `O servidor do Bronze Keys respondeu ${error.status} ao dar o link deste timbre${error.code ? ` (${error.code})` : ''}.`;
   }
   const status = /^sound_download_failed:(\d+)$/.exec(raw)?.[1];
   if (status === '401' || status === '403') {

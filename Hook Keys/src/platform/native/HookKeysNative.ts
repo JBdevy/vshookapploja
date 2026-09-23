@@ -109,6 +109,8 @@ export interface NativeModuleEffectsConfig {
   loFiBitDepth: number;
   loFiSampleRateHz: number;
   loFiMix: number;
+  loFiVinylEnabled: boolean;
+  loFiNoise: number;
   autoFaderEnabled: boolean;
   // Duração da volta completa em semínimas, derivada do compasso global.
   autoFaderBeats: number;

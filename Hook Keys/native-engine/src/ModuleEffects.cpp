@@ -1,5 +1,6 @@
 #include "hook_keys/ModuleEffects.hpp"
 #include "hook_keys/ConvolutionIrData.hpp"
+#include "hook_keys/VinylNoiseData.hpp"
 
 #include <algorithm>
 #include <array>
@@ -317,6 +318,7 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
       config_.chorus.depth != config.chorus.depth || config_.chorus.mix != config.chorus.mix ||
       // Rate e Amount do Vibes têm suavização própria durante o arrasto.
       config_.loFi.enabled != config.loFi.enabled ||
+      config_.loFi.vinylEnabled != config.loFi.vinylEnabled ||
       config_.autoFader.enabled != config.autoFader.enabled ||
       config_.autoFader.depthDb != config.autoFader.depthDb ||
       config_.autoFader.beats != config.autoFader.beats ||
@@ -516,6 +518,12 @@ void ModuleEffects::LoFi::reset() noexcept {
   phase = 0.0;
   currentRateHz = 1.0f;
   currentAmountSemitones = 0.0f;
+  currentVinylGain = 0.0f;
+  currentNoiseGain = 0.0f;
+  noisePosition = 0.0;
+  toneLowPass.fill(0.0f);
+  toneHighPassInput.fill(0.0f);
+  toneHighPassOutput.fill(0.0f);
 }
 
 float ModuleEffects::LoFi::read(
@@ -531,16 +539,36 @@ float ModuleEffects::LoFi::read(
   return buffer[first] + (buffer[second] - buffer[first]) * fraction;
 }
 
+float ModuleEffects::LoFi::readNoise(std::size_t channel) const noexcept {
+  using namespace embedded_vinyl_noise;
+  const auto first = static_cast<std::size_t>(noisePosition) % kFrames;
+  const auto second = (first + 1) % kFrames;
+  const auto fraction = static_cast<float>(noisePosition - std::floor(noisePosition));
+  const auto a = static_cast<float>(kStereo[first * 2 + channel]) / 32768.0f;
+  const auto b = static_cast<float>(kStereo[second * 2 + channel]) / 32768.0f;
+  return a + (b - a) * fraction;
+}
+
 void ModuleEffects::LoFi::process(
     const LoFiConfig& config, float* left, float* right, std::size_t frames) noexcept {
   if (buffers[0].empty() || buffers[1].empty()) return;
   const auto targetAmount = config.enabled ? config.amountSemitones : 0.0f;
+  const auto targetVinylGain = config.enabled && config.vinylEnabled ? 1.0f : 0.0f;
+  const auto targetNoiseGain = targetVinylGain * std::pow(10.0f, config.noiseGainDb / 20.0f);
   const auto smoothing = 1.0f - std::exp(-1.0f / (0.030f * static_cast<float>(sampleRate)));
+  const auto toneLowPassCoefficient = 1.0f - std::exp(
+      -2.0f * static_cast<float>(kPi) * 6000.0f / static_cast<float>(sampleRate));
+  const auto toneHighPassCoefficient = std::exp(
+      -2.0f * static_cast<float>(kPi) * 100.0f / static_cast<float>(sampleRate));
   for (std::size_t frame = 0; frame < frames; ++frame) {
-    buffers[0][writeIndex] = left[frame];
-    buffers[1][writeIndex] = right[frame];
+    const std::array<float, 2> dry{{left[frame], right[frame]}};
+    buffers[0][writeIndex] = dry[0];
+    buffers[1][writeIndex] = dry[1];
     currentRateHz += (config.rateHz - currentRateHz) * smoothing;
     currentAmountSemitones += (targetAmount - currentAmountSemitones) * smoothing;
+    currentVinylGain += (targetVinylGain - currentVinylGain) * smoothing;
+    currentNoiseGain += (targetNoiseGain - currentNoiseGain) * smoothing;
+    std::array<float, 2> vinyl = dry;
     if (currentAmountSemitones > 0.0001f) {
       // A derivada do atraso determina a variação de pitch. Esta amplitude
       // produz exatamente o desvio configurado no pico da senoide.
@@ -549,10 +577,29 @@ void ModuleEffects::LoFi::process(
           / (2.0f * static_cast<float>(kPi) * currentRateHz);
       const auto delaySamples = 2.0f + sweepSamples
           * (1.0f + static_cast<float>(std::sin(2.0 * kPi * phase)));
-      left[frame] = read(buffers[0], delaySamples);
-      right[frame] = read(buffers[1], delaySamples);
+      vinyl[0] = read(buffers[0], delaySamples);
+      vinyl[1] = read(buffers[1], delaySamples);
       phase += currentRateHz / sampleRate;
       if (phase >= 1.0) phase -= 1.0;
+    }
+
+    for (std::size_t channel = 0; channel < 2; ++channel) {
+      // Saturação suave e faixa física do disco: 100 Hz a 6 kHz.
+      const auto saturated = std::tanh(vinyl[channel] * 1.25f) / 1.25f;
+      toneLowPass[channel] += (saturated - toneLowPass[channel]) * toneLowPassCoefficient;
+      const auto highPassed = toneHighPassCoefficient *
+          (toneHighPassOutput[channel] + toneLowPass[channel] - toneHighPassInput[channel]);
+      toneHighPassInput[channel] = toneLowPass[channel];
+      toneHighPassOutput[channel] = highPassed;
+
+      const auto colored = vinyl[channel] + (highPassed - vinyl[channel]) * currentVinylGain;
+      const auto output = colored + readNoise(channel) * currentNoiseGain;
+      if (channel == 0) left[frame] = output;
+      else right[frame] = output;
+    }
+    if (currentNoiseGain > 0.000001f) {
+      noisePosition += static_cast<double>(embedded_vinyl_noise::kSampleRate) / sampleRate;
+      while (noisePosition >= embedded_vinyl_noise::kFrames) noisePosition -= embedded_vinyl_noise::kFrames;
     }
     writeIndex = (writeIndex + 1) % buffers[0].size();
   }

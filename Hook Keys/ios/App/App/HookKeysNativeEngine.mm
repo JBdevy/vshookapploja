@@ -714,6 +714,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
                  loFiBitDepth:(float)loFiBitDepth
              loFiSampleRateHz:(float)loFiSampleRateHz
                        loFiMix:(float)loFiMix
+              loFiVinylEnabled:(BOOL)loFiVinylEnabled
+                     loFiNoise:(float)loFiNoise
                autoFaderEnabled:(BOOL)autoFaderEnabled
                  autoFaderBeats:(float)autoFaderBeats
                autoFaderDepthDb:(float)autoFaderDepthDb
@@ -762,7 +764,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
   effects.chorus = {chorusEnabled != NO, chorusRateHz, chorusDepth, chorusMix};
   // ABI legado: BitDepth transporta Amount (semitons), SampleRate transporta Rate (Hz).
   (void)loFiMix;
-  effects.loFi = {loFiEnabled != NO, loFiSampleRateHz, loFiBitDepth};
+  effects.loFi = {loFiEnabled != NO, loFiSampleRateHz, loFiBitDepth,
+                  loFiVinylEnabled != NO, loFiNoise};
   effects.autoFader = {autoFaderEnabled != NO, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;
   return runtime->setModuleEffects(static_cast<std::size_t>(moduleIndex), effects);
@@ -1062,7 +1065,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
 
 - (void)createMidiClient {
   __weak HookKeysNativeEngine *weakSelf = self;
-  OSStatus status = MIDIClientCreateWithBlock(CFSTR("Hook Keys MIDI"), &_midiClient, ^(const MIDINotification *) {
+  OSStatus status = MIDIClientCreateWithBlock(CFSTR("Bronze Keys MIDI"), &_midiClient, ^(const MIDINotification *) {
     HookKeysNativeEngine *strongSelf = weakSelf;
     if (!strongSelf) return;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -1071,7 +1074,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
     });
   });
   if (status != noErr) return;
-  status = MIDIInputPortCreate(_midiClient, CFSTR("Hook Keys Input"),
+  status = MIDIInputPortCreate(_midiClient, CFSTR("Bronze Keys Input"),
                               [](const MIDIPacketList *packets, void *readRefCon, void *sourceRefCon) {
     auto *engine = (__bridge HookKeysNativeEngine *)readRefCon;
     const NSInteger slot = std::clamp<NSInteger>(reinterpret_cast<uintptr_t>(sourceRefCon) - 1, 0, 2);

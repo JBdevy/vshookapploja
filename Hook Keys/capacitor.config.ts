@@ -3,7 +3,7 @@ import { KeyboardResize, KeyboardStyle } from '@capacitor/keyboard';
 
 const config: CapacitorConfig = {
   appId: 'com.hookdeveloper.hookkeys',
-  appName: 'Hook Keys',
+  appName: 'Bronze Keys',
   webDir: 'dist',
   backgroundColor: '#070504',
   loggingBehavior: 'none',

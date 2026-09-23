@@ -47,5 +47,4 @@ if (platform === 'android') {
   ]);
 }
 
-console.log(`Hook Keys ${platform}: versao ${versionName}, build ${buildNumber}.`);
-
+console.log(`Bronze Keys ${platform}: versao ${versionName}, build ${buildNumber}.`);

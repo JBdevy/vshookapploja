@@ -269,15 +269,29 @@ test('all eight modules inherit the same darker Synth gray theme', () => {
   assert.doesNotMatch(css, /\.player-module:nth-child\(\d\)\s*\{\s*--module-accent:/);
 });
 
-test('module fader uses the vertical gold-metal model with side lights and no dots', () => {
+test('module fader uses the vertical bronze-metal model with side lights and no dots', () => {
   const themed = handleRules.find(([, , declarations]) => declarations.includes('--module-fader-handle-half'))[2];
   assert.match(themed, /height:\s*var\(--module-fader-handle-height\)/);
   assert.match(themed, /border-radius:\s*2px;/);
-  assert.match(themed, /#ffd874/);
-  assert.match(themed, /#ffad3b/);
-  assert.match(css, /\.player-screen \.player-module__fader-rail\s*\{[^}]*#4b2d08[^}]*#f8cc68/s);
+  assert.match(themed, /#e3a66a/);
+  assert.match(themed, /#c97832/);
+  assert.match(css, /\.player-screen \.player-module__fader-rail\s*\{[^}]*#4a2818[^}]*#d99a5d/s);
   assert.match(css, /\.player-screen \.player-module__fader-handle::before\s*\{[^}]*border-radius:\s*999px;/s);
   assert.doesNotMatch(css, /\.player-screen \.player-module__fader-handle::after\s*\{/);
+});
+
+test('preset e banco ativos pulsam com contorno RGB sem trocar o preenchimento', () => {
+  assert.match(css, /\.player-presets \.player-preset-button\.is-selected,[\s\S]*?\.player-presets \.player-navigation__bank-button\[data-action="show-bank"\]\.is-selected[\s\S]*?active-selection-rgb-border 2\.4s linear infinite/);
+  assert.match(css, /@keyframes active-selection-rgb-border\s*\{[\s\S]*?#ff3b30[\s\S]*?#34c759[\s\S]*?#32ade6[\s\S]*?#bf5af2/);
+});
+
+test('modal flutuante do knob oferece ajuste fino acelerado por + e menos', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /data-knob-focus-step="1"[\s\S]*?data-knob-focus-step="-1"/);
+  assert.match(player, /private bindKnobFocusStepButtons\(overlay: HTMLElement\)/);
+  assert.match(player, /current \+ direction \* step/);
+  assert.match(player, /repeatDelayMs = Math\.max\(110, repeatDelayMs - 18\)/);
+  assert.match(css, /\.knob-focus__controls\s*\{[^}]*grid-template-columns:\s*34px 118px 34px/s);
 });
 
 test('audio meter fills the complete rail as independent stereo halves', () => {
@@ -901,7 +915,7 @@ test('Default bloqueia parâmetros, orienta mudar para User e o timbre só fecha
   assert.match(player, /private async selectFixedSound[\s\S]*?await this\.syncNativeEngine\(\);[\s\S]*?nativeLoadedTimbres[\s\S]*?this\.closeModal\(\);/);
   assert.match(player, /Carregando timbre…/);
   assert.match(player, /data-sound-loading-progress/);
-  const userSelection = /private async selectUserSoundfont[\s\S]*?private async loadAcquireLicenseUrl/.exec(player)?.[0] ?? '';
+  const userSelection = /private async selectUserSoundfont[\s\S]*?private async loadCompatibilityVideoUrl/.exec(player)?.[0] ?? '';
   const fixedSelection = /private async selectFixedSound[\s\S]*?private showSoundLoadingOverlay/.exec(player)?.[0] ?? '';
   for (const selection of [userSelection, fixedSelection]) {
     assert.match(selection, /if \(moduleState\.settingsMode === 'user'\)[\s\S]*?moduleState\.userSettings = cloneSettings\(moduleState\.settings\)/,
@@ -1016,7 +1030,7 @@ test('knobs dos cinco volumes ficam circulares e separados do meter no desktop',
   assert.match(css, /html\[data-runtime="desktop"\] \.player-output-knob__face \{[^}]*width: clamp\(32px, 3\.2vw, 42px\);[^}]*height: clamp\(32px, 3\.2vw, 42px\);[^}]*border-radius: 50%;/s);
 });
 
-test('celular reserva margem somente no lado atual do notch e mantém os cinco knobs circulares', () => {
+test('celular usa a mesma margem segura no notch e na porta e mantém os cinco knobs circulares', () => {
   const runtime = readFileSync(new URL('../src/platform/runtime.ts', import.meta.url), 'utf8');
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
   const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
@@ -1029,9 +1043,10 @@ test('celular reserva margem somente no lado atual do notch e mantém os cinco k
     'em 90 graus o notch fica à esquerda e o lado da porta permanece livre');
   assert.match(runtime, /angle === 270 \|\| orientation\?\.type === 'landscape-secondary'\s*\? 'right'/s,
     'em 270 graus o notch fica à direita e o lado da porta permanece livre');
-  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \{\s*padding: 1px !important;/);
-  assert.match(css, /:root\[data-notch-side="left"\] \.player-screen--cellular \{\s*padding-left: max\(1px, calc\(env\(safe-area-inset-left\) - 8px\), calc\(env\(safe-area-inset-right\) - 8px\)\) !important;/);
-  assert.match(css, /:root\[data-notch-side="right"\] \.player-screen--cellular \{\s*padding-right: max\(1px, calc\(env\(safe-area-inset-left\) - 8px\), calc\(env\(safe-area-inset-right\) - 8px\)\) !important;/);
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \{\s*padding: 1px max\(1px, calc\(env\(safe-area-inset-left\) - 8px\), calc\(env\(safe-area-inset-right\) - 8px\)\) !important;/);
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-modal \{\s*padding-left: max\(1px, calc\(env\(safe-area-inset-left\) - 8px\), calc\(env\(safe-area-inset-right\) - 8px\)\) !important;\s*padding-right: max\(1px, calc\(env\(safe-area-inset-left\) - 8px\), calc\(env\(safe-area-inset-right\) - 8px\)\) !important;/);
+  assert.doesNotMatch(css, /:root\[data-notch-side="(?:left|right)"\] \.player-screen--cellular/,
+    'nenhum lado lateral pode ficar com margem menor que o outro');
   assert.match(android, /getDisplayCutout\(\)/);
   assert.match(android, /cutout\.getBoundingRects\(\)/);
   assert.match(ios, /@objc func displayCutoutSide/);

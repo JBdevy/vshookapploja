@@ -243,7 +243,7 @@ export class TabletInputKeyboardController {
     const explicitLabel = input.getAttribute('aria-label');
     if (explicitLabel) return `Teclado para ${explicitLabel}`;
     const label = input.closest('label')?.querySelector<HTMLElement>('span')?.textContent?.trim();
-    return label ? `Teclado para ${label}` : 'Teclado do Hook Keys';
+    return label ? `Teclado para ${label}` : 'Teclado do Bronze Keys';
   }
 
   private showCaretFor(input: EditableInput): void {

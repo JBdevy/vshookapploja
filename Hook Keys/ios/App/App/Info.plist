@@ -7,9 +7,9 @@
 		<string>whatsapp</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>O Hook Keys usa Bluetooth para receber notas e controles de dispositivos MIDI conectados.</string>
+	<string>O Bronze Keys usa Bluetooth para receber notas e controles de dispositivos MIDI conectados.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>O Hook Keys usa Bluetooth para receber notas e controles de dispositivos MIDI conectados.</string>
+	<string>O Bronze Keys usa Bluetooth para receber notas e controles de dispositivos MIDI conectados.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
@@ -19,7 +19,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Hook Keys</string>
+        <string>Bronze Keys</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

@@ -32,9 +32,10 @@ public:
       float* left, float* right, std::size_t frames,
       bool captureCompressorLevels = false) noexcept;
   [[nodiscard]] bool requiresSilentProcessing() const noexcept {
-    // Delay e Reverb precisam continuar depois do Note Off para renderizar a cauda.
-    // Os demais processadores não produzem áudio a partir de silêncio.
-    return config_.delay.enabled || config_.reverb.enabled;
+    // Delay e Reverb continuam para renderizar a cauda. Vibes continua para
+    // manter o ruído de superfície do vinil mesmo entre uma nota e outra.
+    return config_.delay.enabled || config_.reverb.enabled ||
+        (config_.loFi.enabled && config_.loFi.vinylEnabled);
   }
 
 private:
@@ -232,11 +233,18 @@ private:
     double phase = 0.0;
     float currentRateHz = 1.0f;
     float currentAmountSemitones = 0.0f;
+    float currentVinylGain = 0.0f;
+    float currentNoiseGain = 0.0f;
+    double noisePosition = 0.0;
+    std::array<float, 2> toneLowPass{};
+    std::array<float, 2> toneHighPassInput{};
+    std::array<float, 2> toneHighPassOutput{};
 
     void prepare(double nextSampleRate);
     void reset() noexcept;
     void process(const LoFiConfig& config, float* left, float* right, std::size_t frames) noexcept;
     [[nodiscard]] float read(const std::vector<float>& buffer, float delaySamples) const noexcept;
+    [[nodiscard]] float readNoise(std::size_t channel) const noexcept;
   };
 
   double sampleRate_ = 48000.0;

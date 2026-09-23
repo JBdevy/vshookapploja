@@ -32,7 +32,7 @@ assert.doesNotMatch(add, /moduleState|timbreId\s*=/,
   'Adicionar à biblioteca não pode selecionar o SF2 automaticamente');
 assert.match(add, /Toque no timbre para selecionar neste módulo/);
 
-const select = method('async selectUserSoundfont', 'async loadAcquireLicenseUrl');
+const select = method('async selectUserSoundfont', 'async loadCompatibilityVideoUrl');
 assert.match(select, /moduleState\.timbreId\s*=\s*`user:/);
 assert.match(select, /await this\.syncNativeEngine\(\)/,
   'A seleção deve aguardar o SF2 chegar ao motor');

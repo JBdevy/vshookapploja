@@ -26,13 +26,13 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --gold: #d4af37;
-  --gold-bright: #ffe59a;
-  --gold-deep: #755000;
-  --gold-border: #e2bd4f;
-  --gold-rgb: 212, 175, 55;
+  --gold: #cd7f32;
+  --gold-bright: #e8ad70;
+  --gold-deep: #6f3518;
+  --gold-border: #c8874a;
+  --gold-rgb: 205, 127, 50;
   /* Nomes legados continuam existindo para os componentes antigos, mas
-     apontam para uma unica paleta dourada. */
+     apontam para uma unica paleta bronze. */
   --orange: var(--gold);
   --orange-bright: var(--gold-bright);
   --orange-deep: var(--gold-deep);
@@ -3410,8 +3410,8 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 
-/* Estilo Hook: as teclas de baixo (brancas) pretas e as de cima (pretas) em
-   dourado com gradiente. */
+/* Estilo Bronze: as teclas de baixo (brancas) pretas e as de cima (pretas) em
+   bronze com gradiente. */
 .performance-keyboard--hook .performance-keyboard__key--white {
   border-color: #2b2b30;
   background:
@@ -3423,7 +3423,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   border-color: var(--gold-border);
   background:
     linear-gradient(90deg, rgba(0, 0, 0, .45), rgba(0, 0, 0, 0) 26% 74%, rgba(0, 0, 0, .45)),
-    linear-gradient(180deg, #fff0a8, var(--gold) 45%, #967019 82%, #493300);
+    linear-gradient(180deg, #f2c08c, var(--gold) 45%, #9a5427 82%, #4a2513);
   box-shadow: 0 4px 10px #000, inset 0 -4px rgba(255, 255, 255, .08);
 }
 
@@ -3894,9 +3894,35 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 .knob-focus__card output { color: var(--knob-accent); font-size: 16px; font-weight: 950; }
 .knob-focus__controls {
   display: grid;
-  grid-template-columns: 118px 34px;
+  grid-template-columns: 34px 118px 34px;
   align-items: center;
-  gap: 22px;
+  gap: 14px;
+}
+.knob-focus__stepper {
+  display: grid;
+  gap: 10px;
+  width: 34px;
+}
+.knob-focus__stepper button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 46px;
+  padding: 0;
+  color: #fff;
+  border: 1px solid color-mix(in srgb, var(--knob-accent) 70%, #626a76);
+  border-radius: 5px;
+  background: linear-gradient(180deg, #343943, #121419);
+  box-shadow: inset 0 1px rgba(255, 255, 255, .14), 0 0 7px color-mix(in srgb, var(--knob-accent) 24%, transparent);
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1;
+  touch-action: none;
+}
+.knob-focus__stepper button:active {
+  color: #120b07;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--knob-accent) 55%, #fff), var(--knob-accent));
+  transform: translateY(1px);
 }
 .knob-focus__fader {
   --focus-fader-progress: 0;
@@ -5662,9 +5688,40 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .module-effect-controls--lofi {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: minmax(0, 1fr);
   align-content: stretch;
+}
+
+.module-vibes-noise {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.module-vibes-noise > .module-effect-knob {
+  width: 100%;
+  height: 100%;
+}
+
+.module-vibes-vinyl {
+  min-height: 30px;
+  border: 1px solid rgba(212, 175, 55, 0.78);
+  border-radius: 6px;
+  color: #f6f2e8;
+  background: linear-gradient(180deg, #302c34, #17151a);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.module-vibes-vinyl.is-selected {
+  border-color: #52f28b;
+  color: #08150d;
+  background: linear-gradient(180deg, #44dd7d, #24ae5b);
+  box-shadow: 0 0 10px rgba(57, 225, 118, 0.3);
 }
 
 .module-effect-controls--compressor {
@@ -16220,19 +16277,15 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
     max(1px, env(safe-area-inset-left)) !important;
 }
 
-/* Celular em paisagem: todas as bordas livres usam 1 px. A orientação nativa
-   identifica em qual lado está o notch e só esse lado recebe a maior das duas
-   safe areas laterais (no iOS elas podem vir simétricas). */
+/* Celular em paisagem: os dois lados recebem a mesma margem segura. Além do
+   notch, o lado da porta precisa escapar do canto arredondado físico do iPhone. */
 @media (orientation: landscape) and (max-height: 620px) {
   :root:not([data-runtime="desktop"]) .player-screen--cellular {
-    padding: 1px !important;
+    padding: 1px max(1px, calc(env(safe-area-inset-left) - 8px), calc(env(safe-area-inset-right) - 8px)) !important;
   }
 
-  :root[data-notch-side="left"] .player-screen--cellular {
+  :root:not([data-runtime="desktop"]) .player-modal {
     padding-left: max(1px, calc(env(safe-area-inset-left) - 8px), calc(env(safe-area-inset-right) - 8px)) !important;
-  }
-
-  :root[data-notch-side="right"] .player-screen--cellular {
     padding-right: max(1px, calc(env(safe-area-inset-left) - 8px), calc(env(safe-area-inset-right) - 8px)) !important;
   }
 
@@ -16503,13 +16556,33 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
   50% { filter: brightness(1.32) saturate(1.12); }
 }
 
+/* Preset e banco ativos mantêm a pulsação e percorrem o espectro somente no
+   contorno, sem trocar a cor escolhida pelo músico. */
+:is(.player-screen, .player-modal) :is(
+  .player-presets .player-preset-button.is-selected,
+  .player-presets .player-navigation__bank-button[data-action="show-bank"].is-selected
+) {
+  animation:
+    active-page-selection-pulse 880ms ease-in-out infinite,
+    active-selection-rgb-border 2.4s linear infinite;
+}
+
+@keyframes active-selection-rgb-border {
+  0%, 100% { border-color: #ff3b30; }
+  16.666% { border-color: #ffcc00; }
+  33.333% { border-color: #34c759; }
+  50% { border-color: #32ade6; }
+  66.666% { border-color: #5856d6; }
+  83.333% { border-color: #bf5af2; }
+}
+
 .player-screen .player-module__fader-rail {
   border-radius: 2px;
   border-color: var(--gold-border);
   background: linear-gradient(90deg,
-    #4b2d08 0%, #f8cc68 11%, #a96c18 21%,
+    #4a2818 0%, #d99a5d 11%, #a65d2a 21%,
     #111317 29% 71%,
-    #a96c18 79%, #f8cc68 89%, #4b2d08 100%);
+    #a65d2a 79%, #d99a5d 89%, #4a2818 100%);
   box-shadow:
     inset 0 1px rgba(255, 239, 170, .9),
     inset 0 0 0 1px rgba(68, 37, 3, .72),
@@ -16639,11 +16712,11 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
   background:
     linear-gradient(90deg,
       transparent 0 2px,
-      #ffad3b 2px 3px,
+      #c97832 2px 3px,
       transparent 3px calc(100% - 3px),
-      #ffad3b calc(100% - 3px) calc(100% - 2px),
+      #c97832 calc(100% - 3px) calc(100% - 2px),
       transparent calc(100% - 2px)),
-    linear-gradient(90deg, #69400f, #ffd874 15%, #b97819 31%, #fff0ad 45%, #a56310 60%, #f4c55c 82%, #59340b);
+    linear-gradient(90deg, #5b3017, #e3a66a 15%, #a85c29 31%, #f1c18e 45%, #8d451e 60%, #d49355 82%, #4a2412);
   box-shadow:
     0 2px 5px rgba(0, 0, 0, .82),
     0 0 7px rgba(255, 139, 24, .32),

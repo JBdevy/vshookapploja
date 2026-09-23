@@ -54,18 +54,18 @@ export class AuthScreen {
             <p class="brand-line">Seu instrumento. Em qualquer palco.</p>
           </div>
 
-          <div class="brand-notes" aria-label="Vantagens do acesso Hook Keys">
+          <div class="brand-notes" aria-label="Vantagens do acesso Bronze Keys">
             <p><span aria-hidden="true"></span>Acesso vinculado ao e-mail da sua compra</p>
             <p><span aria-hidden="true"></span>Seus sons prontos para acompanhar você</p>
           </div>
         </section>
 
-        <section class="access-stage" aria-label="Acesso ao Hook Keys">
+        <section class="access-stage" aria-label="Acesso ao Bronze Keys">
           <div class="access-glow" aria-hidden="true"></div>
           <div class="access-card">
             <div class="access-card__topline">
               <span class="status-light" aria-hidden="true"></span>
-              <span>Hook Keys</span>
+              <span>Bronze Keys</span>
             </div>
             <div id="auth-content" class="auth-content"></div>
           </div>
@@ -105,7 +105,7 @@ export class AuthScreen {
     this.replaceContent(`
       <header class="form-heading">
         <p class="eyebrow">Bem-vindo</p>
-        <h2>Acessar Hook Keys</h2>
+        <h2>Acessar Bronze Keys</h2>
         <p>Informe o e-mail usado na compra para acessar sua conta.</p>
       </header>
 

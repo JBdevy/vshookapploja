@@ -1973,7 +1973,7 @@ void testVibesPitchModulationAndZeroBypass() {
   hook_keys::ModuleEffectsConfig config;
   config.cutoff.enabled = false;
   config.equalizer.enabled = false;
-  config.loFi = {true, 2.0f, 0.0f};
+  config.loFi = {true, 2.0f, 0.0f, false, -24.0f};
   effects.setConfig(config, 120.0f);
 
   std::vector<float> left(512), right(512);
@@ -2004,6 +2004,24 @@ void testVibesPitchModulationAndZeroBypass() {
     }
   }
   expect(difference > 1.0, "Vibes Amount modulates pitch instead of reducing bits");
+
+  hook_keys::ModuleEffects masterBypass;
+  masterBypass.prepare(48000.0, false);
+  hook_keys::ModuleEffectsConfig bypassConfig;
+  bypassConfig.cutoff.enabled = false;
+  bypassConfig.equalizer.enabled = false;
+  // Mesmo com Amount, vinil e ruído configurados, o OFF mestre do Vibes
+  // precisa deixar o caminho completamente transparente.
+  bypassConfig.loFi = {false, 2.0f, 1.0f, true, 0.0f};
+  masterBypass.setConfig(bypassConfig, 120.0f);
+  for (std::size_t index = 0; index < left.size(); ++index) {
+    left[index] = right[index] = 0.4f * std::sin(
+        2.0 * 3.14159265358979323846 * 440.0 * static_cast<double>(index) / 48000.0);
+  }
+  const auto masterDry = left;
+  masterBypass.process(left.data(), right.data(), left.size());
+  expect(left == masterDry && right == masterDry,
+      "Vibes OFF disables pitch, vinyl coloration and NoiseRain together");
 }
 
 void testOrganFullRegistrationThroughCabinet() {

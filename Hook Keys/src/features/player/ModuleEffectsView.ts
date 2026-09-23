@@ -297,6 +297,8 @@ export interface ModuleLoFiSettings {
   enabled: boolean;
   rateHz: number;
   amountSemitones: number;
+  vinylEnabled: boolean;
+  noiseDb: number;
 }
 
 const DEFAULT_CHORUS: ModuleChorusSettings = {
@@ -310,6 +312,8 @@ const DEFAULT_LOFI: ModuleLoFiSettings = {
   enabled: false,
   rateHz: 1,
   amountSemitones: 0.25,
+  vinylEnabled: true,
+  noiseDb: -24,
 };
 
 export function readModuleChorusSettings(value: unknown): ModuleChorusSettings {
@@ -344,6 +348,8 @@ export function readModuleLoFiSettings(value: unknown): ModuleLoFiSettings {
     enabled: source.enabled === true,
     rateHz: numberInRange(source.rateHz, 0.05, 8, DEFAULT_LOFI.rateHz),
     amountSemitones: numberInRange(source.amountSemitones, 0, 1, DEFAULT_LOFI.amountSemitones),
+    vinylEnabled: source.vinylEnabled !== false,
+    noiseDb: numberInRange(source.noiseDb, -36, 0, DEFAULT_LOFI.noiseDb),
   };
 }
 
@@ -352,11 +358,15 @@ export function createModuleLoFiMarkup(settings: Readonly<Record<string, unknown
   const controls: EffectControlDefinition[] = [
     control('rateHz', 'Rate', 0.05, 8, 0.01, value.rateHz, `${value.rateHz.toFixed(2)} Hz`),
     control('amountSemitones', 'Amount', 0, 1, 0.01, value.amountSemitones, formatVibesAmount(value.amountSemitones)),
+    control('noiseDb', 'Noise', -36, 0, 0.5, value.noiseDb, `${value.noiseDb.toFixed(1)} dB`),
   ];
   return `
     <section class="module-effect-editor module-lofi-editor" data-module-effect-editor="lofi">
       <div class="module-effect-controls module-effect-controls--lofi">
-        ${controls.map((item) => createEffectKnob('lofi', item)).join('')}
+        ${controls.map((item) => item.key === 'noiseDb'
+          ? `<div class="module-vibes-noise">${createEffectKnob('lofi', item)}<button type="button" data-module-vibes-vinyl
+              class="module-vibes-vinyl${value.vinylEnabled ? ' is-selected' : ''}" aria-pressed="${value.vinylEnabled}">${value.vinylEnabled ? 'ON' : 'OFF'}</button></div>`
+          : createEffectKnob('lofi', item)).join('')}
       </div>
     </section>
   `;
@@ -543,6 +553,7 @@ export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, val
   if (kind === 'chorus') return key === 'rateHz' ? `${value.toFixed(2)} Hz` : `${Math.round(value)}%`;
   if (kind === 'lofi') {
     if (key === 'rateHz') return `${value.toFixed(2)} Hz`;
+    if (key === 'noiseDb') return `${value.toFixed(1)} dB`;
     return formatVibesAmount(value);
   }
   if (kind === 'reverb') return key === 'decay' ? `${formatNumber(value)} s` : `${Math.round(value)}%`;

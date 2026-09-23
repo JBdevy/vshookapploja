@@ -867,7 +867,7 @@ export class TracksPanelController {
             <strong>Normal Playlist</strong><span>Músicas na velocidade original</span>
           </button>
           <button type="button" data-tracks-action="playlist-kind-loop">
-            <strong>Playlist de loop</strong><span>Sincronizada com o BPM do Hook Keys</span>
+            <strong>Playlist de loop</strong><span>Sincronizada com o BPM do Bronze Keys</span>
           </button>
         </div>
         <p class="tracks-playlist-loop-notice">Importe arquivos em 120 BPM com edição pronta para loop.</p>

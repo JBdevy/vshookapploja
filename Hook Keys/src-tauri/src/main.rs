@@ -178,6 +178,8 @@ unsafe extern "C" {
         lo_fi_bit_depth: f32,
         lo_fi_sample_rate_hz: f32,
         lo_fi_mix: f32,
+        lo_fi_vinyl_enabled: i32,
+        lo_fi_noise: f32,
         auto_fader_enabled: i32,
         auto_fader_beats: f32,
         auto_fader_depth_db: f32,
@@ -607,6 +609,8 @@ fn default_synth_oscillator3_detune() -> f32 { -7.0 }
 fn default_lo_fi_bit_depth() -> f32 { 0.25 }
 fn default_lo_fi_sample_rate() -> f32 { 1.0 }
 fn default_lo_fi_mix() -> f32 { 1.0 }
+fn default_vibes_vinyl_enabled() -> bool { true }
+fn default_vibes_noise() -> f32 { -24.0 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -683,6 +687,10 @@ struct EffectsConfig {
     lo_fi_sample_rate_hz: f32,
     #[serde(default = "default_lo_fi_mix")]
     lo_fi_mix: f32,
+    #[serde(default = "default_vibes_vinyl_enabled")]
+    lo_fi_vinyl_enabled: bool,
+    #[serde(default = "default_vibes_noise")]
+    lo_fi_noise: f32,
     #[serde(default)]
     auto_fader_enabled: bool,
     #[serde(default)]
@@ -750,7 +758,7 @@ fn list_audio_output_devices() -> Vec<AudioDevice> {
 
 #[tauri::command]
 fn list_midi_devices() -> Vec<MidiDevice> {
-    let Ok(input) = MidiInput::new("Hook Keys") else {
+    let Ok(input) = MidiInput::new("Bronze Keys") else {
         return vec![];
     };
     input
@@ -991,7 +999,7 @@ fn build_audio_stream(
             },
             move |error| {
                 failed.store(true, Ordering::Release);
-                eprintln!("Hook Keys audio: {error}");
+                eprintln!("Bronze Keys audio: {error}");
             },
             None,
         ),
@@ -1018,7 +1026,7 @@ fn build_audio_stream(
                 },
                 move |error| {
                     stream_failed.store(true, Ordering::Release);
-                    eprintln!("Hook Keys audio: {error}");
+                    eprintln!("Bronze Keys audio: {error}");
                 },
                 None,
             )
@@ -1046,7 +1054,7 @@ fn build_audio_stream(
                 },
                 move |error| {
                     stream_failed.store(true, Ordering::Release);
-                    eprintln!("Hook Keys audio: {error}");
+                    eprintln!("Bronze Keys audio: {error}");
                 },
                 None,
             )
@@ -1074,7 +1082,7 @@ fn build_audio_stream(
                 },
                 move |error| {
                     stream_failed.store(true, Ordering::Release);
-                    eprintln!("Hook Keys audio: {error}");
+                    eprintln!("Bronze Keys audio: {error}");
                 },
                 None,
             )
@@ -1357,6 +1365,8 @@ fn configure_module_effects(
             config.lo_fi_bit_depth,
             config.lo_fi_sample_rate_hz,
             config.lo_fi_mix,
+            if config.lo_fi_vinyl_enabled { 1 } else { 0 },
+            config.lo_fi_noise,
             if config.auto_fader_enabled { 1 } else { 0 },
             config.auto_fader_beats,
             config.auto_fader_depth_db,
@@ -1699,7 +1709,7 @@ fn set_midi_inputs(
             .strip_prefix("desktop-midi-")
             .and_then(|value| value.parse::<usize>().ok())
             .ok_or_else(|| "Entrada MIDI inválida.".to_string())?;
-        let mut input = MidiInput::new(&format!("Hook Keys MIDI {}", slot + 1))
+        let mut input = MidiInput::new(&format!("Bronze Keys MIDI {}", slot + 1))
             .map_err(|error| error.to_string())?;
         input.ignore(Ignore::None);
         let ports = input.ports();
@@ -1713,7 +1723,7 @@ fn set_midi_inputs(
         let connection = input
             .connect(
                 port,
-                "Hook Keys",
+                "Bronze Keys",
                 move |_, message, _| {
                     if message.len() < 2 {
                         return;
@@ -1934,7 +1944,7 @@ fn safe_backup_file_name(value: &str) -> String {
         _ => '-',
     }).collect();
     let stem = stem.trim_matches([' ', '-', '_']);
-    format!("{}.json", if stem.is_empty() { "Hook Keys Backup" } else { stem })
+    format!("{}.json", if stem.is_empty() { "Bronze Keys Backup" } else { stem })
 }
 
 #[tauri::command]
@@ -1946,7 +1956,7 @@ async fn save_backup(file_name: String, content: String) -> Result<SaveBackupRes
     let file_name = safe_backup_file_name(&file_name);
     tauri::async_runtime::spawn_blocking(move || {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Backup Hook Keys", &["json"])
+            .add_filter("Backup Bronze Keys", &["json"])
             .set_file_name(&file_name)
             .save_file()
         else {
@@ -2204,7 +2214,7 @@ fn main() {
             confirm_app_close,
         ])
         .run(tauri::generate_context!())
-        .expect("erro ao iniciar Hook Keys");
+        .expect("erro ao iniciar Bronze Keys");
 }
 
 #[cfg(test)]
@@ -2225,9 +2235,9 @@ mod tests {
 
     #[test]
     fn backup_file_name_cannot_escape_the_native_save_dialog() {
-        assert_eq!(safe_backup_file_name("Hook Keys Backup 2026-09-14.json"), "Hook Keys Backup 2026-09-14.json");
+        assert_eq!(safe_backup_file_name("Bronze Keys Backup 2026-09-14.json"), "Bronze Keys Backup 2026-09-14.json");
         assert_eq!(safe_backup_file_name("../segredo.json"), "segredo.json");
-        assert_eq!(safe_backup_file_name("<>:.json"), "Hook Keys Backup.json");
+        assert_eq!(safe_backup_file_name("<>:.json"), "Bronze Keys Backup.json");
     }
 
     #[test]

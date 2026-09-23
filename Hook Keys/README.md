@@ -1,4 +1,4 @@
-# Hook Keys
+# Bronze Keys
 
 Aplicativo móvel da Hook Developer para reprodução de instrumentos SF2 por MIDI. O repositório contém a interface multiplataforma, autenticação, persistência dos presets e o motor C++ ligado aos projetos Android e iOS.
 

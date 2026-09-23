@@ -100,7 +100,7 @@ async function saveBackupInBrowser(fileName: string, content: string): Promise<b
     try {
       const handle = await picker({
         suggestedName: fileName,
-        types: [{ description: 'Backup Hook Keys', accept: { 'application/json': ['.json'] } }],
+        types: [{ description: 'Backup Bronze Keys', accept: { 'application/json': ['.json'] } }],
       });
       const writable = await handle.createWritable();
       await writable.write(content);

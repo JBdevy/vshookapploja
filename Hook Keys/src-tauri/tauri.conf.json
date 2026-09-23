@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Hook Keys",
+  "productName": "Bronze Keys",
   "version": "1.0.0",
   "identifier": "com.hookdeveloper.hookkeys",
   "build": {
@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "Hook Keys", "width": 1100, "height": 650, "minWidth": 900, "minHeight": 520 }],
+    "windows": [{ "title": "Bronze Keys", "width": 1100, "height": 650, "minWidth": 900, "minHeight": 520 }],
     "security": { "csp": null }
   },
   "bundle": {
@@ -25,7 +25,7 @@
     ],
     "publisher": "Hook Developer",
     "shortDescription": "Instrumento musical profissional para performance ao vivo.",
-    "longDescription": "Hook Keys transforma seu computador em uma central profissional de timbres, efeitos, MIDI, arpejador, sequenciador e sintetizador para performance ao vivo.",
+    "longDescription": "Bronze Keys transforma seu computador em uma central profissional de timbres, efeitos, MIDI, arpejador, sequenciador e sintetizador para performance ao vivo.",
     "resources": {
       "../native-engine/assets/hook-b3": "hook-b3",
       "../native-engine/assets/pads": "pads"

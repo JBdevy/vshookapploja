@@ -116,6 +116,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                  loFiBitDepth:(float)loFiBitDepth
              loFiSampleRateHz:(float)loFiSampleRateHz
                        loFiMix:(float)loFiMix
+              loFiVinylEnabled:(BOOL)loFiVinylEnabled
+                     loFiNoise:(float)loFiNoise
                autoFaderEnabled:(BOOL)autoFaderEnabled
                  autoFaderBeats:(float)autoFaderBeats
                autoFaderDepthDb:(float)autoFaderDepthDb

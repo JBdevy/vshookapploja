@@ -390,6 +390,7 @@ public:
       bool rotaryCabinetEnabled,
       bool chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
       bool loFiEnabled, float loFiBitDepth, float loFiSampleRateHz, float loFiMix,
+      bool loFiVinylEnabled, float loFiNoise,
       bool autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
       float inputGainDb) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
@@ -434,7 +435,7 @@ public:
     effects.chorus = {chorusEnabled, chorusRateHz, chorusDepth, chorusMix};
     // ABI legado: BitDepth transporta Amount (semitons), SampleRate transporta Rate (Hz).
     (void)loFiMix;
-    effects.loFi = {loFiEnabled, loFiSampleRateHz, loFiBitDepth};
+    effects.loFi = {loFiEnabled, loFiSampleRateHz, loFiBitDepth, loFiVinylEnabled, loFiNoise};
     effects.autoFader = {autoFaderEnabled, autoFaderBeats, autoFaderDepthDb};
     effects.inputGainDb = inputGainDb;
     return runtime->setModuleEffects(moduleIndex, effects);
@@ -1001,6 +1002,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jboolean rotaryCabinetEnabled,
     jboolean chorusEnabled, jfloat chorusRateHz, jfloat chorusDepth, jfloat chorusMix,
     jboolean loFiEnabled, jfloat loFiBitDepth, jfloat loFiSampleRateHz, jfloat loFiMix,
+    jboolean loFiVinylEnabled, jfloat loFiNoise,
     jboolean autoFaderEnabled, jfloat autoFaderBeats, jfloat autoFaderDepthDb,
     jfloat inputGainDb) {
   const auto readInts = [](JNIEnv* env, jintArray source, jsize start, jsize count, int* target) {
@@ -1031,6 +1033,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
              rotaryModulationEnabled == JNI_TRUE, rotaryCabinetEnabled == JNI_TRUE,
              chorusEnabled == JNI_TRUE, chorusRateHz, chorusDepth, chorusMix,
              loFiEnabled == JNI_TRUE, loFiBitDepth, loFiSampleRateHz, loFiMix,
+             loFiVinylEnabled == JNI_TRUE, loFiNoise,
              autoFaderEnabled == JNI_TRUE, autoFaderBeats, autoFaderDepthDb, inputGainDb)
              ? JNI_TRUE
              : JNI_FALSE;

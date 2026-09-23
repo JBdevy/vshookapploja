@@ -29,7 +29,7 @@ function createOctaveTransitionMarkup(direction: OctaveTransitionDirection): str
         <header class="octave-transition__header">
           <div class="octave-transition__identity">
             <img src="/assets/icons/256x256.png" alt="">
-            <div><span>HOOK KEYS</span><small>PERFORMANCE INSTRUMENT</small></div>
+            <div><span>BRONZE KEYS</span><small>PERFORMANCE INSTRUMENT</small></div>
           </div>
           <span class="octave-transition__engine-state"><i></i>${entering ? 'PREPARANDO MOTOR' : 'FINALIZANDO'}</span>
         </header>
@@ -64,7 +64,7 @@ function createWelcomeTransitionMarkup(): string {
     <section class="welcome-transition" data-welcome-transition role="status" aria-live="polite">
       <div class="welcome-transition__light" aria-hidden="true"></div>
       <div class="welcome-transition__content">
-        <span class="welcome-transition__brand">HOOK KEYS</span>
+        <span class="welcome-transition__brand">BRONZE KEYS</span>
         <strong class="welcome-transition__text" data-welcome-text></strong>
         <i class="welcome-transition__caret" aria-hidden="true"></i>
         <small>PRONTO PARA SUA PERFORMANCE</small>
@@ -90,7 +90,7 @@ export class HookKeysApp {
       <aside class="orientation-guard" aria-live="polite">
         <div class="rotate-device" aria-hidden="true"><span></span></div>
         <strong>Gire o dispositivo</strong>
-        <p>O Hook Keys foi feito para ser usado na horizontal.</p>
+        <p>O Bronze Keys foi feito para ser usado na horizontal.</p>
       </aside>
       <div id="screen-root" class="screen-root"></div>
     `;
@@ -213,7 +213,7 @@ export class HookKeysApp {
     this.octaveTransition?.remove();
     const overlay = document.createElement('div');
     overlay.className = 'startup-error';
-    overlay.innerHTML = '<section role="alert"><h2>Não foi possível preparar o Hook Keys</h2><p></p><button type="button">Tentar novamente</button><button type="button">Voltar</button></section>';
+    overlay.innerHTML = '<section role="alert"><h2>Não foi possível preparar o Bronze Keys</h2><p></p><button type="button">Tentar novamente</button><button type="button">Voltar</button></section>';
     requiredElement(overlay, 'p').textContent = error instanceof Error ? error.message : String(error);
     const buttons = overlay.querySelectorAll('button');
     buttons[0]?.addEventListener('click', () => { void this.showPlayer(session); });

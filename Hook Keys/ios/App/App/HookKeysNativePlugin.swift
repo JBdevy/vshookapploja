@@ -615,6 +615,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             loFiBitDepth: call.getFloat("loFiBitDepth", 0.25),
             loFiSampleRateHz: call.getFloat("loFiSampleRateHz", 1),
             loFiMix: call.getFloat("loFiMix", 1),
+            loFiVinylEnabled: call.getBool("loFiVinylEnabled", true),
+            loFiNoise: call.getFloat("loFiNoise", -24),
             autoFaderEnabled: call.getBool("autoFaderEnabled", false),
             autoFaderBeats: call.getFloat("autoFaderBeats", 4),
             autoFaderDepthDb: call.getFloat("autoFaderDepthDb", 6),
@@ -780,7 +782,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             call.reject("O arquivo de backup é inválido ou muito grande.")
             return
         }
-        let fileName = safeBackupFileName(call.getString("fileName", "Hook Keys Backup.json"))
+        let fileName = safeBackupFileName(call.getString("fileName", "Bronze Keys Backup.json"))
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent(fileName)
@@ -827,7 +829,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         let cleaned = withoutExtension.replacingOccurrences(
             of: "[^A-Za-z0-9 _-]", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: " _-"))
-        return (cleaned.isEmpty ? "Hook Keys Backup" : cleaned) + ".json"
+        return (cleaned.isEmpty ? "Bronze Keys Backup" : cleaned) + ".json"
     }
 
     @objc func setOutputGain(_ call: CAPPluginCall) {

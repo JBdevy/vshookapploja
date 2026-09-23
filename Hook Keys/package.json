@@ -22,6 +22,7 @@
     "test:native-tracks": "node scripts/test-native-tracks.mjs",
     "test:loop-metronome": "node scripts/test-loop-metronome.mjs",
     "generate:metronome-click": "node scripts/generate-metronome-click.mjs",
+    "generate:vinyl-noise": "node scripts/generate-vinyl-noise.mjs",
     "test:keyboard-style": "node scripts/test-keyboard-style.mjs",
     "test:input-keyboard": "node scripts/test-input-keyboard.mjs",
     "test:loading-transition": "node scripts/test-loading-transition.mjs",
