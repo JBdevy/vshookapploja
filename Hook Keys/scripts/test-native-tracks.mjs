@@ -149,6 +149,12 @@ try {
   assert.equal(transport.audio.playbackRate, 1, 'música normal permanece na velocidade original');
   assert.equal(snapshot.selectedTrackId, 'a', 'escolher outro áudio troca imediatamente o loop infinito');
   assert.equal(snapshot.queuedTrackId, null, 'o próximo áudio não fica preso atrás do loop');
+  await transport.selectTrack(tracks.loop);
+  await settle();
+  assert.equal(snapshot.selectedTrackId, 'fixed-loop:test',
+    'escolher um loop durante música normal troca imediatamente em vez de selecionar e voltar');
+  assert.equal(snapshot.queuedTrackId, null, 'loop de acompanhamento nunca fica na fila comum');
+  assert.equal(snapshot.loopPlaying, true, 'o loop selecionado imediatamente continua tocando');
   transport.destroy();
   await settle();
   assert.equal(engine.sources.size, 0, 'fechar o transporte libera o motor');

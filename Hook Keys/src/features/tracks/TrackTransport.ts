@@ -210,16 +210,17 @@ export class TrackTransportController {
       this.render();
       return;
     }
+    // Loop é acompanhamento imediato, não uma próxima música. Entrar ou sair
+    // de uma playlist de loop troca a fonte agora, inclusive se o mesmo item
+    // já tiver sido preparado como próximo; assim ele não pisca e volta.
+    if (isTempoSyncedLoopTrack(track) || isTempoSyncedLoopTrack(this.selectedTrack)) {
+      await this.loadCurrentTrack(track, this.state === 'playing' || this.state === 'paused');
+      return;
+    }
     if (track.id === this.queuedTrack?.id) {
       this.autoQueueSuppressedForTrackId = this.selectedTrack?.id ?? null;
       this.clearQueuedTrack();
       this.renderTimeline();
-      return;
-    }
-    // Um loop fixo nunca chega ao evento ended. Ao escolher outro item enquanto
-    // ele toca, a troca precisa acontecer agora em vez de ficar eternamente na fila.
-    if (isTempoSyncedLoopTrack(this.selectedTrack)) {
-      await this.loadCurrentTrack(track, this.state === 'playing' || this.state === 'paused');
       return;
     }
     if (this.state === 'playing' || this.state === 'paused') {

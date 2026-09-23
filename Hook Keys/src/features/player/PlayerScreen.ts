@@ -3594,7 +3594,6 @@ export class PlayerScreen {
       this.detachEffectMeter(audio);
       audio.pause();
       audio.removeAttribute('src');
-      audio.load();
     }
     pool.voices.clear();
   }
@@ -3604,7 +3603,6 @@ export class PlayerScreen {
     const pool = this.effectPadAudio.get(key);
     if (!pool || !pool.voices.delete(audio)) return;
     audio.removeAttribute('src');
-    audio.load();
     if (pool.voices.size > 0) return;
     const [bank, effectText] = key.split(':');
     const effectNumber = Number.parseInt(effectText ?? '', 10);

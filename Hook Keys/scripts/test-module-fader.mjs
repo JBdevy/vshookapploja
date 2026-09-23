@@ -152,6 +152,17 @@ test('medidor dos efeitos no desktop lê o áudio dos efeitos, não apenas o vol
   assert.match(player, /await this\.attachEffectMeter\(audio\);\s*await audio\.play\(\)/);
 });
 
+test('app limita o custo dos pads e não reinicializa o player ao terminar um FX', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const runtime = readFileSync(new URL('../native-engine/src/NativeEngineRuntime.cpp', import.meta.url), 'utf8');
+  assert.match(runtime, /constexpr int kPadMaximumVoices = 128/);
+  assert.match(runtime, /if \(!pad->hasActiveVoices\(\)\) continue;\s*pad->renderAdd/);
+  const stopEffect = player.match(/private stopEffectPadAudio[\s\S]*?\n  }\n\n  private finishEffectPadAudioVoice/)?.[0] ?? '';
+  const finishEffect = player.match(/private finishEffectPadAudioVoice[\s\S]*?\n  }\n\n  private disposeEffectPadAudio/)?.[0] ?? '';
+  assert.doesNotMatch(stopEffect, /audio\.load\(\)/);
+  assert.doesNotMatch(finishEffect, /audio\.load\(\)/);
+});
+
 test('FX 1 mantém o nome Church fixo, mas preserva cor, volume e Learn CC', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(player, /const hasFixedEffectName = this\.activeEffectBank === '1'/);

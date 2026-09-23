@@ -21,6 +21,7 @@ const tests = [
   ['scripts/test-desktop-browser-shortcuts.mjs'],
   ['scripts/test-rotary-expression.mjs'],
   ['scripts/test-macos-pkg-sign.mjs'],
+  ['scripts/verify-desktop-assets.mjs'],
 ];
 
 for (const args of tests) {

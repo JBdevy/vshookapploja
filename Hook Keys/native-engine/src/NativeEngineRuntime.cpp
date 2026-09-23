@@ -14,6 +14,10 @@ namespace hook_keys {
 namespace {
 constexpr float kMasterLimiterCeiling = 0.97723722096f; // -0.2 dBFS
 constexpr float kMasterLimiterReleaseSeconds = 0.08f;
+// Os pads contínuos tocam uma única nota por vez. Reservar as mesmas 1024
+// vozes dos módulos de timbre aumenta o custo e a memória de trabalho sem
+// benefício, especialmente no Android/iOS.
+constexpr int kPadMaximumVoices = 128;
 
 void prepareRealtimeFloatingPoint() noexcept {
 #if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
@@ -83,7 +87,7 @@ NativeEngineRuntime::NativeEngineRuntime(double sampleRate, std::size_t maximumB
   layers_.reserve(kMaximumPresetLayers);
   for (auto& pad : padModules_) {
     pad = std::make_unique<TinySoundFontModule>(
-        sampleRate_, maximumBlockFrames_, kHookKeysMaximumVoices);
+        sampleRate_, maximumBlockFrames_, kPadMaximumVoices);
   }
   layers_.push_back(createPresetLayer());
   controlLayer_ = renderLayer_ = layers_.back().get();
@@ -780,6 +784,9 @@ void NativeEngineRuntime::addPadsInterleaved(
     std::fill_n(padLeftScratch_.data(), count, 0.0f);
     std::fill_n(padRightScratch_.data(), count, 0.0f);
     for (auto& pad : padModules_) {
+      // Um banco carregado, mas silencioso, não precisa percorrer todas as
+      // vozes reservadas em cada callback do celular.
+      if (!pad->hasActiveVoices()) continue;
       pad->renderAdd(padLeftScratch_.data(), padRightScratch_.data(), count, 1.0f);
     }
     for (std::size_t frame = 0; frame < count; ++frame) {
