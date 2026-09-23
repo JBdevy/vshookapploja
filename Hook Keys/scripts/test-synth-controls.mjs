@@ -236,25 +236,25 @@ test('Buffer Size keeps driver details out of the commercial interface', () => {
   assert.doesNotMatch(markup, /ms|samples|latência/i);
 });
 
-test('Config Áudio lists Metrônomo as a route and Músicas fixed on 1+2', () => {
+test('Config Áudio lists Metrônomo as a route and Playlist fixed on 1+2', () => {
   const routing = { timbres: 'stereo:0', pads: 'stereo:0', effects: 'stereo:0', metronome: 'stereo:0' };
   const markup = appSettingsView.createAudioSettingsMarkup([{ id: 'x', name: 'Interface', channels: 8 }], 'x', routing, 256);
   assert.match(markup, /data-audio-bus="metronome"/);
   assert.match(markup, /Saídas - Metrônomo/);
-  assert.doesNotMatch(markup, /data-audio-bus="music"/, 'Músicas não é uma rota que se escolhe');
+  assert.doesNotMatch(markup, /data-audio-bus="music"/, 'Playlist não é uma rota que se escolhe');
   const music = /<select data-setting="music-route"([^>]*)>([\s\S]*?)<\/select>/.exec(markup);
-  assert(music, 'Saídas - Músicas aparece');
-  assert.match(markup, /Saídas - Músicas/);
+  assert(music, 'Saídas - Playlist aparece');
+  assert.match(markup, /Saídas - Playlist/);
   assert.match(music[1], /disabled/, 'sem opção de mudar');
   assert.equal(music[2].match(/<option/g).length, 1, 'uma única opção, mesmo com 8 canais');
   assert.match(music[2], />1\+2</);
 
-  // Saídas - Timbres: mesmas opções das outras saídas, e a ordem da tela é a
-  // mesma do HTML (Dispositivo/Buffer, Timbres/Músicas, Pads/Effects,
+  // Saídas - Módulos: mesmas opções das outras saídas, e a ordem da tela é a
+  // mesma do HTML (Dispositivo/Buffer, Módulos/Playlist, Pads/Effects,
   // Metrônomo/Sample Rate).
   const timbres = /<select data-setting="audio-route" data-audio-bus="timbres">([\s\S]*?)<\/select>/.exec(markup);
-  assert(timbres, 'Saídas - Timbres aparece');
-  assert.match(markup, /Saídas - Timbres/);
+  assert(timbres, 'Saídas - Módulos aparece');
+  assert.match(markup, /Saídas - Módulos/);
   const pads = /<select data-setting="audio-route" data-audio-bus="pads">([\s\S]*?)<\/select>/.exec(markup);
   assert.equal(timbres[1].match(/<option/g).length, pads[1].match(/<option/g).length);
   const order = [...markup.matchAll(/data-(?:audio-route-field|setting)="([a-z-]+)"/g)]
@@ -268,7 +268,7 @@ test('Config Áudio lists Metrônomo as a route and Músicas fixed on 1+2', () =
   assert.doesNotMatch(css, /audio-route-diagnostics/, 'o diagnóstico da rota saiu da tela');
 });
 
-test('a saída do módulo tem Padrão, que segue Saídas - Timbres', () => {
+test('a saída do módulo tem Padrão, que segue Saídas - Módulos', () => {
   const padrao = settingsView.createModuleSettingsMarkup([], [], null, {}, 120, 8, 'default');
   const select = /<select data-module-setting="audio-route">([\s\S]*?)<\/select>/.exec(padrao);
   assert(select, 'o módulo tem seletor de saída');
@@ -285,7 +285,7 @@ test('a saída do módulo tem Padrão, que segue Saídas - Timbres', () => {
     .exec(settingsView.createModuleSettingsMarkup([], [], null, {}, 120, 8, 'mono:2'))[1];
   assert.doesNotMatch(fixa, /value="default" selected/);
 
-  // Sem saída própria guardada, o módulo sai por onde Saídas - Timbres estiver.
+  // Sem saída própria guardada, o módulo sai por onde Saídas - Módulos estiver.
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(player, /: this\.audioRouting\.timbres;/);
   assert.match(player, /if \(select\.value === 'default'\) \{[\s\S]{0,90}delete moduleState\.settings\.outputRoute;/);
@@ -342,7 +342,7 @@ test('desktop opens smaller and Param clips every preview inside its available g
   );
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.player-modal--module-settings \.module-settings-panel\s*\{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/s);
-  assert.match(css, /\.module-effect-controls--chorus\s*\{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/s);
+  assert.match(css, /\.module-effect-controls--chorus,\s*\.module-effect-controls--lofi\s*\{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/s);
   assert.match(css, /\.module-reverb-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
   assert.match(css, /\.module-delay-page\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
   assert.match(css, /\.module-delay-editor__divisions\s*\{[^}]*grid-template-columns: repeat\(8, minmax\(0, 1fr\)\);/s);
@@ -377,7 +377,7 @@ test('new module and Synth defaults use zero Attack, 300 ms Release and maximum 
   const factory = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'createDefaultModuleSettings');
   const context = {
     exports: {}, ...settingsView, ...synthView, ...glideView,
-    readModuleRotarySettings: () => ({}), DEFAULT_ARPEGGIATOR_SETTINGS: {},
+    readModuleRotarySettings: () => ({}), readModuleLoFiSettings: () => ({}), DEFAULT_ARPEGGIATOR_SETTINGS: {},
     FACTORY_MODULE_REVERB: { enabled: true, decay: 10, dampen: 50, size: 0, mix: 50 },
     readTranceGateSettings: () => ({}),
     DEFAULT_VELOCITY_CURVE: { points: [], userPoints: [] },
@@ -402,15 +402,17 @@ test('new module and Synth defaults use zero Attack, 300 ms Release and maximum 
   assert.doesNotMatch(source, /sustain: \[0, 100\]/);
 });
 
-test('Reverb previews use the shared thin dynamic knob face rather than the old fixed blue arc', () => {
+test('Reverb preview shows the selected convolution IR and the shared Mix knob', () => {
   const effects = transpile('../src/features/player/ModuleEffectsView.ts', { './ParameterKnobView': knobView });
   const markup = effects.createModuleEffectCardsMarkup({ reverb: { decay: 20, dampen: 0, size: 50, mix: 100 } }, 120);
   const preview = markup.match(/<div class="module-reverb-preview"[^>]*>([\s\S]*?)<\/div>/)[1];
   const knobs = [...preview.matchAll(/class="module-envelope-knob" style="--knob-angle:[^;]*;--knob-progress:([^"]+)"/g)];
-  assert.deepEqual(knobs.map(([, progress]) => Number(progress)), [1, 0, .5, 1]);
-  assert.equal([...preview.matchAll(/class="module-envelope-knob__face" aria-hidden="true"><i><\/i><\/span>/g)].length, 4);
+  assert.deepEqual(knobs.map(([, progress]) => Number(progress)), [1]);
+  assert.equal([...preview.matchAll(/class="module-envelope-knob__face" aria-hidden="true"><i><\/i><\/span>/g)].length, 1);
   assert.doesNotMatch(preview, /<input|<span class="module-effect-preview-knob"[^>]*><i/);
-  for (const label of ['Decay', 'Dampen', 'Size', 'Mix']) assert(preview.includes(`<small>${label}</small>`));
+  assert.match(preview, /module-reverb-preview__impulse/);
+  assert.match(preview, /<strong>Room 1<\/strong><small>IR<\/small>/);
+  assert(preview.includes('<small>Mix</small>'));
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert(!css.includes('.module-effect-preview-knob > i'));
   assert.match(css, /\.module-effect-preview-knob \.module-envelope-knob\s*\{[^}]*pointer-events: none;/);
@@ -687,7 +689,7 @@ test('all platform bridges forward independent octaves to the native DSP', () =>
 test('Synth layout gives controls natural height and keeps presets and footer outside the inner scroll', () => {
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.synth-editor__header\s*\{[^}]*display: grid;[^}]*min-width: 0;/);
-  assert.match(css, /data-synth-oscillator-tab="1"\]:not\(\.is-selected\)[\s\S]*?#ff9a4a/);
+  assert.match(css, /data-synth-oscillator-tab="1"\]:not\(\.is-selected\)[\s\S]*?--button-border: var\(--gold-border\)/);
   assert.match(css, /data-synth-oscillator-tab="2"\]:not\(\.is-selected\)[\s\S]*?#ff73c8/);
   assert.match(css, /data-synth-oscillator-tab="3"\]:not\(\.is-selected\)[\s\S]*?#59b9ff/);
   assert.match(css, /data-synth-oscillator-tab\]\.is-selected[\s\S]*?#4ceb7f/);

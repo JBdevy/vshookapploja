@@ -86,3 +86,5 @@ for (const page of ['envelope', 'eq', 'compressor', 'reverb', 'delay', 'chorus']
 }
 
 console.log('PROCESSOR_RESET_OK: Reset por aba abre a confirmação e Cancelar/Resetar funcionam em Envelope, EQ, Compressor, Reverb, Delay e Chorus');
+player.destroy();
+await window.happyDOM.abort();

@@ -32,10 +32,15 @@ function loadPlayerHandlers(names, globals = {}) {
     assert(method, `Missing real handler: ${name}`);
     return method.getText(ast);
   }).join('\n');
-  const helpers = ['isModuleEffectKind', 'isCcMappingKey', 'ccMappingKey'].map((name) => (
+  const helpers = ['isModuleEffectKind', 'isCcMappingKey', 'ccMappingKey', 'isPadNoteTarget'].map((name) => (
     ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(ast)
   )).join('\n');
-  const context = { exports: {}, ...effects, ...globals };
+  const context = {
+    exports: {},
+    ...effects,
+    DEFAULT_CC_MAPPING_OPTIONS: { inverted: false, minimumPercent: 0, maximumPercent: 100 },
+    ...globals,
+  };
   vm.runInNewContext(ts.transpileModule(`${helpers}\nexport class Handlers { ${methods} }\nexport { isCcMappingKey };`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, context);

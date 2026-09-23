@@ -5,6 +5,7 @@ export type MetronomeClickSound = 1 | 2 | 3 | 4 | 5;
 const MIN_BPM = 60;
 const MAX_BPM = 300;
 const BPM_STEP = 0.5;
+const MAX_VOLUME = 1;
 const LOOK_AHEAD_SECONDS = 0.75;
 const SCHEDULER_INTERVAL_MS = 20;
 
@@ -60,7 +61,7 @@ export class MetronomeEngine {
   }
 
   setVolume(value: number): void {
-    this.volume = Math.min(10 ** (12 / 20), Math.max(0, value));
+    this.volume = Math.min(MAX_VOLUME, Math.max(0, value));
     if (this.audioContext && this.masterGain) {
       this.masterGain.gain.setTargetAtTime(this.audibleVolume(), this.audioContext.currentTime, 0.008);
     }
@@ -184,7 +185,7 @@ export class MetronomeEngine {
     denominator = 4,
   ): void {
     this.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(bpm / BPM_STEP) * BPM_STEP));
-    this.volume = Math.min(10 ** (12 / 20), Math.max(0, volume));
+    this.volume = Math.min(MAX_VOLUME, Math.max(0, volume));
     this.clickSound = clickSound;
     if ((clickSound === 4 || clickSound === 5) && !hookKeysNative.isAvailable()) {
       void this.loadSampledClickBuffer(clickSound);
@@ -203,11 +204,17 @@ export class MetronomeEngine {
   }
 
   destroy(): void {
-    this.stop();
+    // O desligamento precisa entrar depois de qualquer configuração nativa já
+    // em voo. Enviá-lo diretamente deixava um comando antigo reativar o Click
+    // depois de logout/troca de tela.
+    this.running = false;
+    this.loopClockActive = false;
+    if (this.timer !== null) window.clearInterval(this.timer);
+    this.timer = null;
     if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
     this.nativeSyncTimer = null;
     if (hookKeysNative.isAvailable()) {
-      void hookKeysNative.configureMetronome(this.nativeConfig(false));
+      void this.enqueueNativeConfig(this.nativeConfig(false)).catch(() => undefined);
     }
     if (this.audioContext) void this.audioContext.close();
     this.audioContext = null;

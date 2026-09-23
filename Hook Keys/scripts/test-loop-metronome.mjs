@@ -100,6 +100,15 @@ try {
   assert.equal(calls.at(-1).enabled, true, 'o relógio continua ativo durante o loop');
   assert.equal(calls.at(-1).volume, 1, 'o último comando sempre libera o Click, mesmo com inicialização lenta');
   racingMetronome.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 90));
+  assert.equal(calls.at(-1).enabled, false,
+    'destruir o player sempre deixa o metrônomo nativo desligado depois dos comandos pendentes');
+  assert.equal(calls.at(-1).volume, 0, 'destruir o player também fecha o volume do Click');
+
+  const boundedMetronome = new window.Metronome.MetronomeEngine();
+  boundedMetronome.setVolume(10 ** (12 / 20));
+  assert.equal(boundedMetronome.getVolume(), 1, 'o estado usa o mesmo teto de 0 dB do controle e do motor nativo');
+  boundedMetronome.destroy();
   console.log('LOOP_METRONOME_OK: A-B ignorado no loop e Click sem corrida de ativação');
 } finally {
   await window.happyDOM.abort();

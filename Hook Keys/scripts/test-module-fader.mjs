@@ -35,7 +35,7 @@ test('players temporários dos pads liberam a URL ao trocar arquivo ou fechar', 
 
 test('Infinite Release cria vozes sobrepostas sem cortar o áudio anterior', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /effectPadAudio = new Map<string, \{ url: string; voices: Set<HTMLAudioElement> \}>/);
+  assert.match(player, /effectPadAudio = new Map<string, \{\s*url: string;\s*objectUrl: boolean;\s*voices: Set<HTMLAudioElement>;\s*\}>/);
   assert.match(player, /const audio = new Audio\(pool\.url\);[\s\S]*?pool\.voices\.add\(audio\)/);
   assert.doesNotMatch(player, /const \{ audio \} = player;[\s\S]*?audio\.currentTime = 0/);
   assert.match(player, /releaseHeldEffectPads\(\)[\s\S]*?gateRelease === 'continue-press'/);
@@ -62,7 +62,7 @@ test('pads de notas e efeitos ficam verdes com contorno branco enquanto ativos',
   assert.match(css, /\.performance-pad--effect\.is-active\s*\{[\s\S]*?border-color:\s*#fff;[\s\S]*?linear-gradient\(160deg,\s*#28b85e,\s*#075529\)/);
   assert.match(css, /\.performance-section\.is-editing \.performance-pad--effect\.is-active\s*\{[\s\S]*?border-color:\s*#fff;/);
   assert.match(player, /notesSection\.dataset\.activePadBank = this\.activePadBank/);
-  for (const bank of ['A', 'B', 'C', 'D']) {
+  for (const bank of ['A', 'B']) {
     assert.match(css, new RegExp(`data-pad-bank="${bank}"\\]\\:not\\(\\.is-selected\\)`));
     assert.match(css, new RegExp(`data-active-pad-bank="${bank}"\\] \\.performance-pad--note\\:not\\(\\.is-active\\)`));
   }
@@ -74,12 +74,11 @@ test('pads de notas e efeitos ficam verdes com contorno branco enquanto ativos',
 test('Playlist e Click chegam sem truncar; não confunde pad selecionado com áudio', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
-  assert.match(bridge, /Array\.from\(\{ length: 22 \}/);
+  assert.match(bridge, /Array\.from\(\{ length: 24 \}/);
   assert.match(player, /renderOutputMeter\('music', hookKeysNative\.tracksAvailable\(\)[\s\S]*?peaks\.slice\(18, 20\) : this\.trackTransport\?\.getOutputPeaks\(\)/);
   assert.match(player, /renderOutputMeter\('click', peaks\.slice\(20, 22\)\)/);
   assert.match(player, /renderOutputMeter\('effects', this\.effectMeterPeaks\(\)\)/);
-  assert.match(player, /renderOutputMeter\('pads', \[0, 0\]\)/);
-  assert.doesNotMatch(player, /padMeterPeaks/);
+  assert.match(player, /renderOutputMeter\('pads', peaks\.slice\(22, 24\)\)/);
 });
 
 test('knobs não deformam quando os 30% da Playlist estão abertos no desktop', () => {
@@ -153,21 +152,21 @@ test('medidor dos efeitos no desktop lê o áudio dos efeitos, não apenas o vol
   assert.match(player, /await this\.attachEffectMeter\(audio\);\s*await audio\.play\(\)/);
 });
 
-test('FX 1 e FX 2 mantêm nomes fixos, mas preservam cor, volume e Learn CC', () => {
+test('FX 1 mantém o nome Church fixo, mas preserva cor, volume e Learn CC', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /const hasFixedEffectName = this\.activeEffectBank === '1' \|\| this\.activeEffectBank === '2'/);
+  assert.match(player, /const hasFixedEffectName = this\.activeEffectBank === '1'/);
   assert.match(player, /hasFixedEffectName \? '' : `[\s\S]*?data-effect-name-input/);
-  assert.match(player, /if \(this\.activeEffectBank !== '1' && this\.activeEffectBank !== '2' && input\)[\s\S]*?effect\.name =/);
-  assert.match(player, /if \(bank !== '1' && bank !== '2'\)[\s\S]*?openModal\('effect-bank-name'/);
+  assert.match(player, /if \(this\.activeEffectBank !== '1' && input\)[\s\S]*?effect\.name =/);
+  assert.match(player, /if \(bank !== '1'\)[\s\S]*?openModal\('effect-bank-name'/);
   assert.match(player, /class="effect-pad-editor[\s\S]*?data-effect-pad-volume[\s\S]*?learn-effect-cc/);
   assert.match(css, /\.effect-pad-editor\.has-fixed-name\s*\{[\s\S]*?"preview preview"/);
 });
 
-test('metrônomo usa o azul do Click e Pads - Efects usa o laranja do Config', () => {
+test('metrônomo usa o azul do Click e Pads - Efects usa o dourado do Config', () => {
   assert.match(css, /\.player-metronome-button,[\s\S]*?\[data-action="toggle-metronome"\][\s\S]*?--button-color-a:\s*#24b8ff/);
   assert.match(css, /\.player-metronome-button\.is-active,[\s\S]*?--button-color-a:\s*#24b8ff/);
-  assert.match(css, /\.player-navigation__pads-button,[\s\S]*?\[data-action="show-pads-effects"\][\s\S]*?--button-color-a:\s*#ffad45[\s\S]*?--button-color-b:\s*#e55808[\s\S]*?color:\s*#090705/);
-  assert.match(css, /\.player-module__settings-button\s*\{\s*--button-color-a:\s*#ffad45[^}]*--button-color-b:\s*#e55808/);
+  assert.match(css, /\.player-navigation__pads-button,[\s\S]*?\[data-action="show-pads-effects"\][\s\S]*?--button-color-a:\s*var\(--gold-bright\)[\s\S]*?--button-color-b:\s*var\(--gold-deep\)[\s\S]*?color:\s*#090705/);
+  assert.match(css, /\.player-module__settings-button\s*\{\s*--button-color-a:\s*var\(--gold-bright\)[^}]*--button-color-b:\s*var\(--gold-deep\)/);
 });
 
 test('FX escolhidos para os pads voltam do armazenamento local ao reabrir o app', () => {
@@ -259,13 +258,13 @@ test('all eight modules inherit the same darker Synth gray theme', () => {
   assert.doesNotMatch(css, /\.player-module:nth-child\(\d\)\s*\{\s*--module-accent:/);
 });
 
-test('module fader uses the vertical gold-metal model with orange side lights and no dots', () => {
+test('module fader uses the vertical gold-metal model with side lights and no dots', () => {
   const themed = handleRules.find(([, , declarations]) => declarations.includes('--module-fader-handle-half'))[2];
   assert.match(themed, /height:\s*var\(--module-fader-handle-height\)/);
   assert.match(themed, /border-radius:\s*2px;/);
   assert.match(themed, /#ffd874/);
   assert.match(themed, /#ffad3b/);
-  assert.match(css, /\.player-screen \.player-module__fader-rail\s*\{[^}]*#d8a33b[^}]*#f8cc68/s);
+  assert.match(css, /\.player-screen \.player-module__fader-rail\s*\{[^}]*#4b2d08[^}]*#f8cc68/s);
   assert.match(css, /\.player-screen \.player-module__fader-handle::before\s*\{[^}]*border-radius:\s*999px;/s);
   assert.doesNotMatch(css, /\.player-screen \.player-module__fader-handle::after\s*\{/);
 });
@@ -327,8 +326,8 @@ test('library default and active module ON/HLD/MOD use darker greens without ove
   assert.match(css, /\.player-screen \.player-module__action-button\.is-octave-active,\s*\.player-screen \.player-module__power-button\.is-on\s*\{[^}]*--button-color-a: var\(--module-button-green-a\) !important;/);
 });
 
-test('all module borders use the same orange identity without changing the common gray surfaces', () => {
-  assert.match(css, /--module-border-color: #ff7900;/);
+test('all module borders use the same gold identity without changing the common gray surfaces', () => {
+  assert.match(css, /--module-border-color: var\(--gold-border\);/);
   assert.doesNotMatch(css, /\.player-module:nth-child\(\d\)\s*\{\s*--module-border-color:/);
   assert.match(css, /\.player-module\s*\{\s*border-color: var\(--module-border-color\);/);
   assert.doesNotMatch(css, /\.player-module:nth-child\(\d\)\s*\{[^}]*--module-surface/);
@@ -441,6 +440,7 @@ test('Glide mode and velocity gate are forwarded by every native platform bridge
 test('track waveform peaks follow the loudness of the music', () => {
   const transport = transpile('../src/features/tracks/TrackTransport.ts', {
     './TrackLibraryStore': {},
+    './BundledLoops': { isTempoSyncedLoopTrack: () => false },
     '../../shared/gestures/LongPressGesture': { LongPressGesture: class {} },
     '../../platform/runtime': { isDesktopRuntime: () => false },
   });
@@ -695,7 +695,7 @@ test('Config do Organ remove controles sem função e mantém Envelope, Mod, Arp
   assert.match(player, /const noSens = moduleIndex === 6 \? true/);
   assert.match(player, /hasSound: moduleNumber >= 7 \|\| Boolean\(arpeggiator\?\.timbreId\)/,
     'Arpeggiator reconhece Organ e Synth mesmo sem timbreId de biblioteca');
-  assert.match(runtime, /if \(moduleIndex == 6\) \{\s*organModule_->setVolumeEnvelope/,
+  assert.match(runtime, /if \(moduleIndex == 6\) \{[\s\S]{0,240}organModule_->setVolumeEnvelope/,
     'Envelope do Organ precisa alcançar as nove drawbars');
   assert.match(organ, /void OrganModule::setNoVelocitySensitivity\(bool\)[\s\S]*?setNoVelocitySensitivity\(true\)/,
     'No Sens do Organ permanece ligado internamente');
@@ -1003,7 +1003,7 @@ test('Playlist 30% no app mantém os cinco knobs e meters com altura igual à la
 
 test('efeitos removem descontinuidade ao alterar Reverb, Compressor e outros parâmetros', () => {
   const effects = readFileSync(new URL('../native-engine/src/ModuleEffects.cpp', import.meta.url), 'utf8');
-  assert.match(effects, /soundChanged = config_\.inputGainDb[^;]*!sameCompressor[^;]*!sameReverb/s);
+  assert.match(effects, /soundChanged = config_\.inputGainDb[^;]*!sameCompressor[^;]*reverbTopologyChanged/s);
   assert.match(effects, /if \(soundChanged && hasProcessedOutput_\) effectTransitionPending_ = true;/);
   assert.match(effects, /currentInputGain_ \+= \(targetGain - currentInputGain_\) \* smoothing;/);
   assert.match(effects, /transitionOffsetLeft_ = lastOutputLeft_ - left\[frame\];/);

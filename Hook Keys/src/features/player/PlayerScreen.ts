@@ -12375,7 +12375,7 @@ export class PlayerScreen {
     const savedClickSound = Number(savedMetronome.clickSound);
     this.metronome.applySavedSettings(
       boundedNumber(savedMetronome.bpm, 60, 600, 120),
-      boundedNumber(savedMetronome.volume, 0, 10 ** (12 / 20), 1),
+      boundedNumber(savedMetronome.volume, 0, 1, 1),
       (savedClickSound === 2 || savedClickSound === 3 || savedClickSound === 4 || savedClickSound === 5
         ? savedClickSound : 1) as MetronomeClickSound,
       savedMetronome.accentEnabled === true,
