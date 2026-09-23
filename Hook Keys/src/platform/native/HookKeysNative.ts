@@ -100,6 +100,7 @@ export interface NativeModuleEffectsConfig {
   rotaryDepth: number;
   rotaryMix: number;
   rotaryModulationEnabled: boolean;
+  rotaryCabinetEnabled: boolean;
   chorusEnabled: boolean;
   chorusRateHz: number;
   chorusDepth: number;
@@ -247,6 +248,7 @@ interface HookKeysNativePlugin {
   audioOutputStatus(): Promise<NativeAudioOutputStatus>;
   memoryUsage(): Promise<{ percent: number; usedBytes: number; limitBytes: number }>;
   lockOrientation(options: { mode: 'landscape' | 'portrait' }): Promise<void>;
+  displayCutoutSide(): Promise<{ side: 'left' | 'right' | 'top' | 'none' }>;
   moduleMeterLevels(): Promise<{ levels: number[] }>;
   moduleAnalysis(options: { moduleIndex: number }): Promise<{ values: number[] }>;
   setMidiInputs(options: { deviceIds: Array<string | null> }): Promise<void>;
@@ -263,6 +265,15 @@ interface HookKeysNativePlugin {
   configureSynth(options: NativeSynthConfig): Promise<void>;
   configureOrgan(options: NativeOrganConfig): Promise<void>;
   sendMidi(options: { inputSlot: number; status: number; data1: number; data2: number }): Promise<void>;
+  setPadNote(options: { bankIndex: number; note: number; enabled: boolean; velocity: number }): Promise<void>;
+  configurePadOutput(options: {
+    db: number;
+    enabled: boolean;
+    channelStart: number;
+    channelCount: number;
+    lowCutHz: number;
+    highCutHz: number;
+  }): Promise<void>;
   setTempo(options: { bpm: number }): Promise<void>;
   setGlobalTranspose(options: { semitones: number }): Promise<void>;
   configureMetronome(options: NativeMetronomeConfig): Promise<void>;
@@ -467,6 +478,18 @@ class HookKeysNativeBridge {
     }
   }
 
+  async displayCutoutSide(): Promise<'left' | 'right' | 'top' | null> {
+    if (!Capacitor.isNativePlatform() || this.tauriInvoke()) return null;
+    try {
+      const result = await plugin.displayCutoutSide();
+      return result.side === 'left' || result.side === 'right' || result.side === 'top'
+        ? result.side
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   async audioOutputFailed(): Promise<boolean> {
     return !(await this.audioOutputStatus()).ready;
   }
@@ -478,8 +501,8 @@ class HookKeysNativeBridge {
     );
     const levels = Array.isArray(result) ? result : result.levels;
     // 0..15: oito módulos; 16..17: soma dos módulos; 18..19: Playlist;
-    // 20..21: Click. Não trunque os dois últimos buses ao normalizar a ponte.
-    return Array.from({ length: 22 }, (_, index) => {
+    // 20..21: Click; 22..23: Pads.
+    return Array.from({ length: 24 }, (_, index) => {
       const value = levels?.[index];
       return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
     });
@@ -511,6 +534,15 @@ class HookKeysNativeBridge {
       return typeof entry === 'number' && Number.isFinite(entry) ? Math.max(0, entry) : 0;
     };
     return { peak: at(0), smoothed: at(1), overruns: at(2) };
+  }
+
+  // CPU apenas do processo Hook Keys no desktop, sem misturar o consumo dos
+  // demais aplicativos ou o percentual global do computador.
+  async processCpuUsage(): Promise<number | null> {
+    const invoke = this.tauriInvoke();
+    if (!invoke) return null;
+    const result = Number(await invoke('process_cpu_usage').catch(() => Number.NaN));
+    return Number.isFinite(result) ? Math.min(100, Math.max(0, result)) : null;
   }
 
   async recoverDefaultAudioOutput(bufferSize: number, sampleRate = 48_000): Promise<boolean> {
@@ -545,6 +577,31 @@ class HookKeysNativeBridge {
     // pintura/layout já pendente no WebView.
     if (this.initialized) return send();
     return this.initialize().then((ready) => ready ? send() : undefined);
+  }
+
+  setPadNote(bankIndex: number, note: number, enabled: boolean, velocity = 127): Promise<void> {
+    const options = {
+      bankIndex: Math.min(1, Math.max(0, Math.round(bankIndex))),
+      note: Math.min(71, Math.max(60, Math.round(note))),
+      enabled,
+      velocity: Math.min(127, Math.max(1, Math.round(velocity))),
+    };
+    const send = () => this.call('set_pad_note', options, () => plugin.setPadNote(options));
+    if (this.initialized) return send();
+    return this.initialize().then((ready) => ready ? send() : undefined);
+  }
+
+  async configurePadOutput(
+    channelStart: number,
+    channelCount: 1 | 2,
+    db: number,
+    enabled: boolean,
+    lowCutHz: number,
+    highCutHz: number,
+  ): Promise<void> {
+    if (!await this.initialize()) return;
+    const options = { channelStart, channelCount, db, enabled, lowCutHz, highCutHz };
+    await this.call('configure_pad_output', options, () => plugin.configurePadOutput(options));
   }
 
   async beginPresetTransition(): Promise<void> {

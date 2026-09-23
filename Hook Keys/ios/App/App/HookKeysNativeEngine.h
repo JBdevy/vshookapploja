@@ -107,6 +107,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                     rotaryDepth:(float)rotaryDepth
                       rotaryMix:(float)rotaryMix
         rotaryModulationEnabled:(BOOL)rotaryModulationEnabled
+           rotaryCabinetEnabled:(BOOL)rotaryCabinetEnabled
                   chorusEnabled:(BOOL)chorusEnabled
                    chorusRateHz:(float)chorusRateHz
                     chorusDepth:(float)chorusDepth
@@ -170,6 +171,11 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                    data1:(NSInteger)data1
                    data2:(NSInteger)data2
                timestamp:(uint64_t)timestamp;
+- (BOOL)setPadNote:(NSInteger)note bankIndex:(NSInteger)bankIndex
+            enabled:(BOOL)enabled velocity:(NSInteger)velocity;
+- (BOOL)setPadOutputGainDb:(float)db enabled:(BOOL)enabled
+             channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount
+                   lowCutHz:(float)lowCutHz highCutHz:(float)highCutHz;
 - (BOOL)setTempo:(float)bpm;
 - (BOOL)setGlobalTranspose:(NSInteger)semitones;
 - (BOOL)setMetronomeOutputChannelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;

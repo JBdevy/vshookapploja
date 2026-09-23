@@ -734,7 +734,8 @@ void testDefaultVolumeEnvelopes() {
     sf2.renderAdd(audio[0].data() + 2048, audio[1].data() + 2048, 6144, 1.0f);
     return audio;
   };
-  expect(renderSoundFont(false) == renderSoundFont(true), "SF2 receives the requested defaults on load even without a frontend configuration call");
+  expect(renderSoundFont(false) == renderSoundFont(true),
+      "standalone SF2 modules keep their documented envelope defaults");
 }
 
 void testNativeRuntimeSignalPath() {
@@ -759,6 +760,36 @@ void testNativeRuntimeSignalPath() {
   const auto mutedEnergy = std::accumulate(left.begin(), left.end(), 0.0,
                                            [](double sum, float sample) { return sum + std::abs(sample); });
   expect(mutedEnergy == 0.0, "native runtime maps the minimum fader position to silence");
+}
+
+void testNeutralRuntimeSoundFontPathPreservesEmbeddedEnvelope() {
+  constexpr std::size_t frames = 4096;
+  constexpr std::size_t block = 128;
+  const char* path = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+
+  hook_keys::NativeEngineRuntime runtime(48000.0, block);
+  expect(runtime.loadSoundFont(0, path), "neutral SF2 path loads the runtime timbre");
+  hook_keys::ModuleConfig config;
+  config.midiInputSlot = hook_keys::kAllMidiInputs;
+  expect(runtime.setModuleConfig(0, config), "neutral SF2 path enables module 1");
+  expect(runtime.setModuleEnvelope(0, 0.0f, 15000.0f, 25000.0f, 300.0f, 0.0f, 0.0f),
+      "neutral SF2 path sends the UI factory envelope");
+  expect(runtime.sendMidi(0, 0x90, 60, 127), "neutral SF2 path starts a note");
+  std::array<std::vector<float>, 2> actual{
+      std::vector<float>(frames), std::vector<float>(frames)};
+  runtime.render(actual[0].data(), actual[1].data(), frames);
+
+  hook_keys::TinySoundFontModule reference(48000.0, block);
+  reference.useEmbeddedVolumeEnvelope();
+  expect(reference.loadFromFile(path), "neutral SF2 path loads its embedded-envelope reference");
+  reference.beginBlock();
+  reference.noteOn(60, 127);
+  std::array<std::vector<float>, 2> expected{
+      std::vector<float>(frames), std::vector<float>(frames)};
+  reference.renderAdd(expected[0].data(), expected[1].data(), frames, 1.0f);
+
+  expect(actual == expected,
+      "module 1 with every processor neutral reaches the output without hidden envelope or effects");
 }
 
 void testGmDrumPerNoteZeroRelease() {
@@ -856,6 +887,38 @@ void testNativeRuntimeOrganDrawbars() {
   const auto gatedTail = std::accumulate(gatedLeft.end() - 1024, gatedLeft.end(), 0.0,
       [](double sum, float sample) { return sum + std::abs(sample); });
   expect(gatedTail < energy * 0.001, "Pulse closes the audible Organ signal");
+}
+
+void testDryOrganPreservesItsSoundFontVoice() {
+  constexpr std::size_t frames = 4096;
+  constexpr std::size_t block = 256;
+  const char* path = "assets/hook-b3/drawbar-0.sf2";
+
+  hook_keys::OrganModule organ(48000.0, block);
+  expect(organ.loadVoice(0, path), "dry Organ test loads its first drawbar");
+  organ.setDrawbarPosition(0, 8);
+
+  hook_keys::TinySoundFontModule reference(48000.0, block);
+  expect(reference.loadFromFile(path), "dry Organ test loads the reference SF2 voice");
+  reference.setNoVelocitySensitivity(true);
+  reference.useEmbeddedVolumeEnvelope();
+
+  organ.beginBlock();
+  reference.beginBlock();
+  organ.noteOn(60, 127);
+  reference.noteOn(60, 127);
+  std::array<std::vector<float>, 2> actual{
+      std::vector<float>(frames), std::vector<float>(frames)};
+  std::array<std::vector<float>, 2> expected{
+      std::vector<float>(frames), std::vector<float>(frames)};
+  for (std::size_t offset = 0; offset < frames; offset += block) {
+    organ.beginBlock();
+    reference.beginBlock();
+    organ.renderAdd(actual[0].data() + offset, actual[1].data() + offset, block, 1.0f);
+    reference.renderAdd(expected[0].data() + offset, expected[1].data() + offset, block, 1.0f);
+  }
+  expect(actual == expected,
+      "dry Organ adds no hidden click, envelope or first-note drawbar fade to the SF2 voice");
 }
 
 void testOrganEnvelopeAndPermanentNoSens() {
@@ -1734,6 +1797,37 @@ void testOrganCabinetImpulseSelection() {
       "Rotary Off cabinet produces audio");
 }
 
+void testBypassedModuleEffectsAreBitTransparent() {
+  hook_keys::ModuleEffects effects;
+  effects.prepare(48000.0, false);
+  hook_keys::ModuleEffectsConfig config;
+  config.cutoff.enabled = false;
+  config.equalizer.enabled = false;
+  config.compressor.enabled = false;
+  config.delay.enabled = false;
+  config.reverb.enabled = false;
+  config.rotary.enabled = false;
+  config.rotary.cabinetEnabled = false;
+  config.chorus.enabled = false;
+  config.autoFader.enabled = false;
+  config.tranceGate.enabled = false;
+  config.inputGainDb = 0.0f;
+  effects.setConfig(config, 120.0f);
+
+  std::vector<float> left(4096), right(4096);
+  for (std::size_t index = 0; index < left.size(); ++index) {
+    left[index] = 0.37f * std::sin(static_cast<float>(index) * 0.037f);
+    right[index] = 0.29f * std::cos(static_cast<float>(index) * 0.053f);
+  }
+  const auto expectedLeft = left;
+  const auto expectedRight = right;
+  for (std::size_t offset = 0; offset < left.size(); offset += 256) {
+    effects.process(left.data() + offset, right.data() + offset, 256);
+  }
+  expect(left == expectedLeft && right == expectedRight,
+      "all module effects OFF and Gain at 0 dB preserve audio bit for bit");
+}
+
 void testOrganCabinetDoesNotBoostResonances() {
   for (const auto rotaryOn : {false, true}) {
     for (const auto frequency : {440.0, 925.0, 1000.0, 1255.0}) {
@@ -1760,6 +1854,7 @@ void testOrganCabinetDoesNotBoostResonances() {
         peak = std::max(peak, std::max(std::abs(left[index]), std::abs(right[index])));
       }
       expect(peak < 0.51f, "Organ cabinet IR does not boost steady notes above the input level");
+      expect(peak > 0.40f, "Organ cabinet compensates the IR attenuation without losing audible volume");
     }
   }
 }
@@ -1779,6 +1874,7 @@ void testOrganFullRegistrationThroughCabinet() {
     organ.renderAdd(rawLeft.data() + offset, rawRight.data() + offset,
         std::min<std::size_t>(256, rawLeft.size() - offset), 1.0f);
   }
+  expect(rawLeft == rawRight, "mono Organ drawbars stay identical before stereo effects");
   for (const auto rotaryOn : {false, true}) {
     hook_keys::ModuleEffects effects;
     effects.prepare(48000.0, true);
@@ -2115,6 +2211,49 @@ void testRotaryLeslieAmplitudeModulation() {
   };
   expect(monoEnvelopeVariation(2, 0.85f) > 0.25, "Leslie Fast: horn tremolo pulses the treble even in mono");
   expect(monoEnvelopeVariation(2, 0.0f) < 0.02, "Depth zero removes the Leslie tremolo");
+}
+
+// Ligar ou editar o EQ precisa preservar o estado do Rotary. Esta é a mesma
+// sequência do desktop: o Organ já está tocando, o usuário liga o EQ e o
+// próximo bloco continua passando pela Leslie.
+void testRotarySurvivesEqualizerActivation() {
+  constexpr std::size_t blockSize = 256;
+  hook_keys::ModuleEffects effects;
+  effects.prepare(48000.0, true);
+  hook_keys::ModuleEffectsConfig config;
+  config.rotary = {true, 2, 0.672f, 7.056f, 0.1f, 0.85f, 1.0f};
+  config.rotary.cabinetEnabled = false;
+  effects.setConfig(config, 120.0f);
+
+  std::size_t sampleIndex = 0;
+  const auto renderBlock = [&]() {
+    std::array<float, 256> left{};
+    std::array<float, 256> right{};
+    for (std::size_t frame = 0; frame < left.size(); ++frame, ++sampleIndex) {
+      const auto seconds = static_cast<double>(sampleIndex) / 48000.0;
+      left[frame] = right[frame] = static_cast<float>(
+          0.15 * std::sin(6.283185307179586 * 220.0 * seconds)
+          + 0.15 * std::sin(6.283185307179586 * 2500.0 * seconds));
+    }
+    effects.process(left.data(), right.data(), blockSize);
+    return std::array<std::array<float, 256>, 2>{left, right};
+  };
+
+  for (std::size_t block = 0; block < 190; ++block) renderBlock();
+  config.equalizer.enabled = true;
+  config.equalizer.bands[2].gainDb = 6.0f;
+  effects.setConfig(config, 120.0f);
+
+  double stereoMotion = 0.0;
+  for (std::size_t block = 0; block < 190; ++block) {
+    const auto output = renderBlock();
+    for (std::size_t frame = 0; frame < blockSize; ++frame) {
+      expect(std::isfinite(output[0][frame]) && std::isfinite(output[1][frame]),
+          "EQ plus Rotary output stays finite");
+      stereoMotion += std::abs(output[0][frame] - output[1][frame]);
+    }
+  }
+  expect(stereoMotion > 1.0, "activating EQ does not stop the Rotary stereo motion");
 }
 
 // EQ nos agudos: a banda 4 (bell 4 kHz) e a banda 5 (high shelf 12 kHz) mudam
@@ -2472,6 +2611,9 @@ void testMetersAndNoteRelease() {
 void testSoundFontTremolo() {
   const auto render = [](std::uint8_t mode, int wheel, float intensity = 1.0f) {
     hook_keys::TinySoundFontModule sf2(48000.0, 128);
+    // Mantem a nota sustentada para medir apenas o LFO, sem que o envelope
+    // embutido no SF2 seja confundido com tremolo.
+    sf2.setVolumeEnvelope(0.0f, 15000.0f, 25000.0f, 300.0f);
     expect(sf2.loadFromFile("third_party/TinySoundFont/examples/florestan-subset.sf2"), "load SF2 for Tremolo test");
     sf2.setModulationMode(mode, 6.0f, intensity);
     sf2.beginBlock();
@@ -3210,8 +3352,10 @@ int main() {
   testSameSoundFontRunsIndependentlyAcrossModules();
   testDefaultVolumeEnvelopes();
   testNativeRuntimeSignalPath();
+  testNeutralRuntimeSoundFontPathPreservesEmbeddedEnvelope();
   testModulesMeterUsesEveryOutput();
   testNativeRuntimeOrganDrawbars();
+  testDryOrganPreservesItsSoundFontVoice();
   testOrganEnvelopeAndPermanentNoSens();
   testIndependentPresetTails();
   testCompatibilityBlocksCc7();
@@ -3236,10 +3380,12 @@ int main() {
   testReverbProcessing();
   testReverbImpulseSelection();
   testOrganCabinetImpulseSelection();
+  testBypassedModuleEffectsAreBitTransparent();
   testOrganCabinetDoesNotBoostResonances();
   testOrganFullRegistrationThroughCabinet();
   testRotarySpeakerProcessing();
   testRotaryLeslieAmplitudeModulation();
+  testRotarySurvivesEqualizerActivation();
   testEqualizerControlsTreble();
   testRotaryPitchStaysInTune();
   testAutoFaderRidesTheVolume();

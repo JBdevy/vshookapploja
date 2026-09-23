@@ -381,10 +381,10 @@ ModuleProcessorLevels ModuleEffects::process(
           levels.compressorOutput, std::max(std::abs(left[frame]), std::abs(right[frame])));
     }
   }
-  // O Organ passa pelo gabinete em ambos os estados. Rotary Off usa a
-  // resposta estática; Rotary On usa a resposta do gabinete antes do giro
-  // dinâmico (Doppler/tremolo/inércia) calculado abaixo.
-  if (config_.rotary.cabinetEnabled) cabinet_.process(left, right, frames, config_.rotary.enabled);
+  // Em bypass esta chamada retorna antes da convolução. Com o Gabinet ligado,
+  // somente o IR selecionado é processado; executar os dois IRs estéreo em
+  // todo bloco roubava tempo do callback e podia interromper o Rotary.
+  cabinet_.process(left, right, frames, config_.rotary.cabinetEnabled, config_.rotary.enabled);
   if (config_.rotary.enabled) rotary_.process(left, right, frames);
   if (config_.chorus.enabled) chorus_.process(config_.chorus, left, right, frames);
   processTranceGate(left, right, frames);
@@ -700,13 +700,6 @@ void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_
 }
 
 void ModuleEffects::Biquad::configure(const EqBandConfig& config, double sampleRate) noexcept {
-  enabled = config.enabled;
-  if (!enabled) {
-    b0 = 1.0f;
-    b1 = b2 = a1 = a2 = 0.0f;
-    return;
-  }
-
   const auto frequency = std::clamp<double>(config.frequencyHz, 10.0, sampleRate * 0.45);
   const auto omega = 2.0 * kPi * frequency / sampleRate;
   const auto sine = std::sin(omega);
@@ -775,11 +768,51 @@ void ModuleEffects::Biquad::configure(const EqBandConfig& config, double sampleR
     }
   }
 
-  b0 = static_cast<float>(nextB0 / nextA0);
-  b1 = static_cast<float>(nextB1 / nextA0);
-  b2 = static_cast<float>(nextB2 / nextA0);
-  a1 = static_cast<float>(nextA1 / nextA0);
-  a2 = static_cast<float>(nextA2 / nextA0);
+  targetEnabled = config.enabled;
+  targetB0 = targetEnabled ? static_cast<float>(nextB0 / nextA0) : 1.0f;
+  targetB1 = targetEnabled ? static_cast<float>(nextB1 / nextA0) : 0.0f;
+  targetB2 = targetEnabled ? static_cast<float>(nextB2 / nextA0) : 0.0f;
+  targetA1 = targetEnabled ? static_cast<float>(nextA1 / nextA0) : 0.0f;
+  targetA2 = targetEnabled ? static_cast<float>(nextA2 / nextA0) : 0.0f;
+
+  if (!coefficientsInitialized) {
+    b0 = targetB0;
+    b1 = targetB1;
+    b2 = targetB2;
+    a1 = targetA1;
+    a2 = targetA2;
+    enabled = targetEnabled;
+    coefficientsInitialized = true;
+    smoothingSamplesRemaining = 0;
+    return;
+  }
+
+  // Ao mover frequência, ganho ou Q, interpolar os coeficientes evita zipper
+  // noise. Quinze milissegundos continuam parecendo instantâneos na interface
+  // e terminam antes da próxima atualização normal do arrasto.
+  if (!enabled && targetEnabled) {
+    enabled = true;
+    b0 = 1.0f;
+    b1 = b2 = a1 = a2 = 0.0f;
+    reset();
+  }
+  if (!enabled && !targetEnabled) {
+    b0 = targetB0;
+    b1 = targetB1;
+    b2 = targetB2;
+    a1 = targetA1;
+    a2 = targetA2;
+    smoothingSamplesRemaining = 0;
+    return;
+  }
+  smoothingSamplesRemaining = std::max<std::uint32_t>(
+      1, static_cast<std::uint32_t>(sampleRate * 0.015));
+  const auto divisor = static_cast<float>(smoothingSamplesRemaining);
+  stepB0 = (targetB0 - b0) / divisor;
+  stepB1 = (targetB1 - b1) / divisor;
+  stepB2 = (targetB2 - b2) / divisor;
+  stepA1 = (targetA1 - a1) / divisor;
+  stepA2 = (targetA2 - a2) / divisor;
 }
 
 void ModuleEffects::Biquad::reset() noexcept {
@@ -787,6 +820,8 @@ void ModuleEffects::Biquad::reset() noexcept {
 }
 
 void ModuleEffects::Biquad::process(float& left, float& right) noexcept {
+  if (!enabled) return;
+  advanceCoefficients();
   if (!enabled) return;
   const auto outputLeft = b0 * left + z1Left;
   z1Left = b1 * left - a1 * outputLeft + z2Left;
@@ -797,6 +832,25 @@ void ModuleEffects::Biquad::process(float& left, float& right) noexcept {
   z1Right = b1 * right - a1 * outputRight + z2Right;
   z2Right = b2 * right - a2 * outputRight;
   right = outputRight;
+}
+
+void ModuleEffects::Biquad::advanceCoefficients() noexcept {
+  if (smoothingSamplesRemaining == 0) return;
+  b0 += stepB0;
+  b1 += stepB1;
+  b2 += stepB2;
+  a1 += stepA1;
+  a2 += stepA2;
+  if (--smoothingSamplesRemaining > 0) return;
+  b0 = targetB0;
+  b1 = targetB1;
+  b2 = targetB2;
+  a1 = targetA1;
+  a2 = targetA2;
+  if (!targetEnabled) {
+    enabled = false;
+    reset();
+  }
 }
 
 void ModuleEffects::Equalizer::configure(const EqConfig& config, double sampleRate) noexcept {
@@ -1007,24 +1061,66 @@ void ModuleEffects::Cabinet::reset() noexcept {
     pair.left.clearHistory();
     pair.right.clearHistory();
   }
+  loudnessGain = {{4.0f, 4.0f}};
+  activeImpulse = 0;
+  wasEnabled = false;
 }
 
 void ModuleEffects::Cabinet::process(
-    float* left, float* right, std::size_t frames, bool rotaryOn) noexcept {
+    float* left, float* right, std::size_t frames, bool enabled, bool rotaryOn) noexcept {
   const auto selected = rotaryOn ? std::size_t{1} : std::size_t{0};
+  if (!enabled) {
+    wasEnabled = false;
+    return;
+  }
   if (!convolvers[selected].ready) return;
+  if (!wasEnabled || selected != activeImpulse) {
+    convolvers[selected].left.clearHistory();
+    convolvers[selected].right.clearHistory();
+    loudnessGain[selected] = 4.0f;
+    activeImpulse = selected;
+    wasEnabled = true;
+  }
   for (std::size_t offset = 0; offset < frames;) {
     const auto count = std::min<std::size_t>(wetLeft[0].size(), frames - offset);
-    // Os dois IRs acompanham a mesma entrada continuamente. Assim ligar ou
-    // desligar o Rotary troca a resposta sem ressuscitar uma cauda antiga.
-    for (std::size_t index = 0; index < convolvers.size(); ++index) {
-      if (!convolvers[index].ready) continue;
-      convolvers[index].left.process(left + offset, wetLeft[index].data(), count);
-      convolvers[index].right.process(right + offset, wetRight[index].data(), count);
-    }
+    double dryEnergy = 0.0;
     for (std::size_t frame = 0; frame < count; ++frame) {
-      left[offset + frame] = wetLeft[selected][frame];
-      right[offset + frame] = wetRight[selected][frame];
+      const auto dryLeft = left[offset + frame];
+      const auto dryRight = right[offset + frame];
+      dryEnergy += static_cast<double>(dryLeft) * dryLeft +
+          static_cast<double>(dryRight) * dryRight;
+    }
+    convolvers[selected].left.process(left + offset, wetLeft[selected].data(), count);
+    convolvers[selected].right.process(right + offset, wetRight[selected].data(), count);
+
+    double wetEnergy = 0.0;
+    float wetPeak = 0.0f;
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      const auto wetL = wetLeft[selected][frame];
+      const auto wetR = wetRight[selected][frame];
+      wetEnergy += static_cast<double>(wetL) * wetL + static_cast<double>(wetR) * wetR;
+      wetPeak = std::max(wetPeak, std::max(std::abs(wetL), std::abs(wetR)));
+    }
+    // Igualamos a energia do IR à entrada, mas o ganho nunca pode empurrar
+    // um pico acima de -1,1 dBFS. Isso recupera o volume sem reintroduzir a
+    // distorção que a antiga normalização por pico de amostra causava.
+    auto target = loudnessGain[selected];
+    if (dryEnergy > 1.0e-10 && wetEnergy > 1.0e-10) {
+      target = static_cast<float>(std::sqrt(dryEnergy / wetEnergy));
+    }
+    constexpr float ceiling = 0.88f;
+    const auto peakLimited = wetPeak > 1.0e-7f ? ceiling / wetPeak : 8.0f;
+    target = std::clamp(std::min(target, peakLimited), 0.25f, 8.0f);
+    const auto gainStart = std::min(loudnessGain[selected], peakLimited);
+    const auto smoothing = 1.0f - std::exp(
+        -static_cast<float>(count) / (0.080f * static_cast<float>(sampleRate)));
+    loudnessGain[selected] = gainStart + (target - gainStart) * smoothing;
+    const auto gainEnd = loudnessGain[selected];
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      const auto progress = count > 1 ? static_cast<float>(frame) / static_cast<float>(count - 1) : 1.0f;
+      const auto gain = gainStart + (gainEnd - gainStart) * progress;
+      left[offset + frame] = wetLeft[selected][frame] * gain;
+      right[offset + frame] = wetRight[selected][frame] * gain;
     }
     offset += count;
   }

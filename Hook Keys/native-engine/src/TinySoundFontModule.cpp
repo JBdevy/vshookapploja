@@ -118,6 +118,12 @@ void TinySoundFontModule::setVolumeEnvelope(
   holdMs_.store(holdMs < 0.0f ? -1.0f : std::clamp(holdMs, 0.0f, 15000.0f), std::memory_order_relaxed);
   decayMs_.store(decayMs < 0.0f ? -1.0f : std::clamp(decayMs, 0.0f, 25000.0f), std::memory_order_relaxed);
   releaseMs_.store(releaseMs < 0.0f ? -1.0f : std::clamp(releaseMs, 0.0f, 25000.0f), std::memory_order_relaxed);
+  volumeEnvelopeOverrideEnabled_.store(true, std::memory_order_relaxed);
+  envelopeGeneration_.fetch_add(1, std::memory_order_release);
+}
+
+void TinySoundFontModule::useEmbeddedVolumeEnvelope() noexcept {
+  volumeEnvelopeOverrideEnabled_.store(false, std::memory_order_relaxed);
   envelopeGeneration_.fetch_add(1, std::memory_order_release);
 }
 
@@ -152,13 +158,17 @@ void TinySoundFontModule::beginBlock() noexcept {
 
   const auto generation = envelopeGeneration_.load(std::memory_order_acquire);
   if (active_ != nullptr && generation != appliedEnvelopeGeneration_) {
-    const auto sustainDb = sustainDb_.load(std::memory_order_relaxed);
-    hook_keys_tsf_set_volume_envelope(
-        active_, attackMs_.load(std::memory_order_relaxed) / 1000.0f,
-        holdMs_.load(std::memory_order_relaxed) / 1000.0f,
-        decayMs_.load(std::memory_order_relaxed) / 1000.0f,
-        releaseMs_.load(std::memory_order_relaxed) / 1000.0f,
-        sustainDb <= -60.0f ? 0.0f : std::pow(10.0f, sustainDb / 20.0f));
+    if (volumeEnvelopeOverrideEnabled_.load(std::memory_order_relaxed)) {
+      const auto sustainDb = sustainDb_.load(std::memory_order_relaxed);
+      hook_keys_tsf_set_volume_envelope(
+          active_, attackMs_.load(std::memory_order_relaxed) / 1000.0f,
+          holdMs_.load(std::memory_order_relaxed) / 1000.0f,
+          decayMs_.load(std::memory_order_relaxed) / 1000.0f,
+          releaseMs_.load(std::memory_order_relaxed) / 1000.0f,
+          sustainDb <= -60.0f ? 0.0f : std::pow(10.0f, sustainDb / 20.0f));
+    } else {
+      hook_keys_tsf_use_embedded_volume_envelope(active_);
+    }
     appliedEnvelopeGeneration_ = generation;
   }
   // Fora do modo User, a roda não vai para a modulação do SF2: ela vira

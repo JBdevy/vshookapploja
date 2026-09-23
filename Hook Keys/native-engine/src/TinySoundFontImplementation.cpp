@@ -231,6 +231,13 @@ extern "C" void hook_keys_tsf_set_volume_envelope(
   }
 }
 
+extern "C" void hook_keys_tsf_use_embedded_volume_envelope(tsf* synth) noexcept {
+  if (synth == nullptr) return;
+  // Nao reescrevemos vozes em andamento: cada uma ja esta no seu estagio de
+  // envelope. O SF2 volta a comandar integralmente todo Note On seguinte.
+  synth->hookVolumeEnvelopeOverride = 0;
+}
+
 extern "C" std::size_t hook_keys_tsf_sample_bytes(const tsf* synth) noexcept {
   if (synth == nullptr) return 0;
   return static_cast<std::size_t>(synth->fontSampleCount) * sizeof(TSF_SAMPLE_TYPE);

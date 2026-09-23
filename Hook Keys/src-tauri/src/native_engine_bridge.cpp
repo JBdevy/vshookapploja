@@ -68,6 +68,27 @@ int hk_runtime_load_organ_voice(
   return handle && path && runtime(handle)->loadOrganVoice(drawbarIndex, path) ? 1 : 0;
 }
 
+int hk_runtime_load_pad_bank(void* handle, std::size_t bankIndex, const char* path) noexcept {
+  return handle && runtime(handle)->loadPadBank(bankIndex, path) ? 1 : 0;
+}
+
+int hk_runtime_set_pad_note(
+    void* handle, std::size_t bankIndex, int note, int enabled, int velocity) noexcept {
+  if (!handle) return 0;
+  return runtime(handle)->setPadNote(bankIndex,
+      static_cast<std::uint8_t>(std::clamp(note, 0, 127)), enabled != 0,
+      static_cast<std::uint8_t>(std::clamp(velocity, 1, 127))) ? 1 : 0;
+}
+
+void hk_runtime_set_pad_output(
+    void* handle, float db, int enabled, int channelStart, int channelCount,
+    float lowCutHz, float highCutHz) noexcept {
+  if (!handle) return;
+  runtime(handle)->setPadOutput(db, enabled != 0,
+      static_cast<std::uint8_t>(std::clamp(channelStart, 0, 31)), channelCount == 1 ? 1 : 2,
+      lowCutHz, highCutHz);
+}
+
 void hk_runtime_set_organ_drawbar(
     void* handle, std::size_t drawbarIndex, int position) noexcept {
   if (handle) {
@@ -181,6 +202,7 @@ int hk_runtime_configure_effects(
     int rotaryEnabled, int rotarySpeed,
     float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
     float rotaryDepth, float rotaryMix, int rotaryModulationEnabled,
+    int rotaryCabinetEnabled,
     int chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
     int autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
     float inputGainDb) noexcept {
@@ -221,7 +243,7 @@ int hk_runtime_configure_effects(
   effects.rotary = {rotaryEnabled != 0, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != 0};
-  effects.rotary.cabinetEnabled = moduleIndex == 6;
+  effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled != 0;
   effects.chorus = {chorusEnabled != 0, chorusRateHz, chorusDepth, chorusMix};
   effects.autoFader = {autoFaderEnabled != 0, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;
@@ -337,6 +359,9 @@ void hk_runtime_module_peaks(void* handle, float* output) noexcept {
   std::copy(tracks.begin(), tracks.end(), output + peaks.size() + master.size());
   const auto click = runtime(handle)->consumeMetronomePeaks();
   std::copy(click.begin(), click.end(), output + peaks.size() + master.size() + tracks.size());
+  const auto pads = runtime(handle)->consumePadPeaks();
+  std::copy(pads.begin(), pads.end(),
+      output + peaks.size() + master.size() + tracks.size() + click.size());
 }
 
 void hk_runtime_module_analysis(

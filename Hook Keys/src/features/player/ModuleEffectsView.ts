@@ -7,6 +7,7 @@ export type ModuleProcessorReplacement =
 export type RotarySpeed = 'brake' | 'slow' | 'fast';
 export interface ModuleRotarySettings {
   enabled: boolean;
+  cabinetEnabled: boolean;
   modulationEnabled: boolean;
   speed: RotarySpeed;
   slowHz: number;
@@ -107,6 +108,7 @@ const DEFAULT_DELAY: ModuleDelaySettings = {
 
 const DEFAULT_ROTARY: ModuleRotarySettings = {
   enabled: false,
+  cabinetEnabled: true,
   modulationEnabled: false,
   speed: 'slow',
   // OpenB3/Beatrix b_whirl: corneta a 40,32 e 423,36 RPM.
@@ -324,7 +326,10 @@ export function createModuleChorusMarkup(settings: Readonly<Record<string, unkno
   `;
 }
 
-export function createModuleRotaryMarkup(settings: Readonly<Record<string, unknown>>): string {
+export function createModuleRotaryMarkup(
+  settings: Readonly<Record<string, unknown>>,
+  showCabinetToggle = false,
+): string {
   const value = readModuleRotarySettings(settings.rotary);
   const controls = [
     control('slowHz', 'Slow', 0.2, 2, 0.001, value.slowHz, `${value.slowHz.toFixed(3)} Hz`),
@@ -336,6 +341,9 @@ export function createModuleRotaryMarkup(settings: Readonly<Record<string, unkno
     <section class="module-effect-editor module-rotary-editor" data-module-effect-editor="rotary">
       <div class="module-rotary-speed" role="group" aria-label="Velocidade do Rotary">
         ${(['brake', 'slow', 'fast'] as const).map((speed) => `<button type="button" data-module-rotary-speed="${speed}" class="${value.speed === speed ? 'is-selected' : ''}" aria-pressed="${value.speed === speed}">${speed === 'brake' ? 'Brake' : speed === 'slow' ? 'Slow' : 'Fast'}</button>`).join('')}
+        ${showCabinetToggle ? `<button type="button" data-module-rotary-cabinet
+          class="module-rotary-cabinet${value.cabinetEnabled ? ' is-selected' : ''}"
+          aria-pressed="${value.cabinetEnabled}">Gabinet</button>` : ''}
       </div>
       <div class="module-effect-controls module-effect-controls--rotary">
         ${controls.map((item) => createEffectKnob('rotary', item)).join('')}
@@ -443,6 +451,9 @@ export function readModuleRotarySettings(value: unknown): ModuleRotarySettings {
   const source = record(value);
   return {
     enabled: source.enabled === true,
+    // Presets anteriores não possuem este campo e já usavam o IR sempre
+    // ligado no Organ; por isso apenas false explícito desativa o gabinete.
+    cabinetEnabled: source.cabinetEnabled !== false,
     modulationEnabled: source.modulationEnabled === true,
     speed: source.speed === 'brake' || source.speed === 'fast' ? source.speed : 'slow',
     slowHz: numberInRange(source.slowHz, 0.2, 2, DEFAULT_ROTARY.slowHz),

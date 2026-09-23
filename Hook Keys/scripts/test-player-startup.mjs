@@ -17,7 +17,7 @@ window.Option = function Option(text = '', value = '') {
 const calls = [];
 let transitionBarrier = null;
 let meterLevels = [0.25, 0.1, ...Array(12).fill(0), 0.5, 0.2];
-let audioLoad = [0.12, 0.1, 0]; // pico, media, estouros
+let processCpuUsage = 12;
 window.__TAURI_INTERNALS__ = {
   invoke: async (command, args) => {
     calls.push({ command, args });
@@ -27,7 +27,7 @@ window.__TAURI_INTERNALS__ = {
     if (command === 'module_meter_levels') return meterLevels;
     if (command === 'begin_sound_font_upload') return { cached: true };
     if (command === 'module_analysis') return [0.5, 0.25];
-    if (command === 'audio_load') return audioLoad;
+    if (command === 'process_cpu_usage') return processCpuUsage;
     return 1;
   },
   transformCallback: () => 1,
@@ -103,6 +103,32 @@ try {
     'os cinco knobs principais ficam sem barras entre eles');
   assert(!root.querySelector('[data-action="open-tracks"]'), 'a Playlist saiu do topo');
   assert.equal(root.querySelectorAll('.player-module').length, 8, 'mantém os oito módulos');
+  assert.deepEqual(
+    [...root.querySelectorAll('[data-action="select-pad-bank"]')].map(button => button.textContent.trim()),
+    ['Pads 1', 'Pads 2'],
+    'a interface mantém somente os dois bancos SF2 de Pads',
+  );
+  assert(root.querySelector('[data-pad-low-cut]'), 'LOW oferece o high-pass dos Pads');
+  assert(root.querySelector('[data-pad-high-cut]'), 'HIGH oferece o low-pass dos Pads');
+  assert.deepEqual(
+    [...root.querySelectorAll('.performance-pad--note > span')].map(label => label.textContent.trim()),
+    ['C - Am', 'C# - Bbm', 'D - Bm', 'D# - Cm', 'E - C#m', 'F - Dm',
+      'F# - Ebm', 'G - Em', 'G# - Fm', 'A - F#m', 'A# - Gm', 'B - G#m'],
+    'cada Pad mostra a tonalidade maior e sua relativa menor',
+  );
+  root.querySelector('[data-action="show-pads-effects"]').click();
+  assert.deepEqual(
+    [...root.querySelectorAll('.performance-pad--effect > span')].map(label => label.textContent.trim()),
+    ['Kick', 'Bump', 'SineDrop', 'BourineFx', 'ClapFx', 'ClapVerb',
+      'ClapBourine', 'PluckFx', 'ClipVerb', 'Carillon', 'DoupFx', 'Reverse'],
+    'FX 1 mostra os doze efeitos nativos empacotados no app',
+  );
+  const fxOneBank = root.querySelector('[data-action="select-effect-bank"][data-effect-bank="1"]');
+  fxOneBank.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  assert(fxOneBank.classList.contains('is-editing'), 'FX 1 entra no modo Edit');
+  root.querySelector('[data-action="show-bank"][data-bank="A"]').click();
+  assert(!fxOneBank.classList.contains('is-editing'),
+    'sair de Pads - Effects encerra o modo Edit');
   const factoryModules = player.getActivePresetState().modules;
   assert(factoryModules.every((module) => module.lowNote === 21 && module.highNote === 108),
     'na primeira abertura todos os módulos usam a faixa MIDI 21..108');
@@ -825,10 +851,10 @@ try {
         player.closeModal();
         continue;
       }
-      // Mono → Porta tem que aparecer na hora no card de Glide, sem fechar
+      // Mono → Portamento tem que aparecer na hora no card de Glide, sem fechar
       // e reabrir o Config.
-      assert.equal(glideModeButton()?.textContent, 'Porta', `módulo ${module}: Auto virou Porta na hora`);
-      // E o caminho contrário: apagar o Porta no card de Glide devolve o
+      assert.equal(glideModeButton()?.textContent, 'Portamento', `módulo ${module}: Auto virou Portamento na hora`);
+      // E o caminho contrário: apagar o Portamento no card de Glide devolve o
       // módulo pro Poly, também refletido na hora no botão Modo.
       glideModeButton().click();
       await player.syncNativeEngine();
@@ -844,7 +870,7 @@ try {
     }
   }
   {
-    // O mesmo vínculo Mono/Poly ↔ Porta/Auto vale pro Synth (módulo 8), que
+    // O mesmo vínculo Mono/Poly ↔ Portamento/Auto vale pro Synth (módulo 8), que
     // tem seu próprio botão de Modo dentro do editor.
     player.openModal('module-synth', 8, master);
     const synthModeButton = () => window.document.querySelector('[data-synth-voice-mode]');
@@ -854,7 +880,7 @@ try {
     synthModeButton().click();
     await player.syncNativeEngine();
     assert.equal(synthModeButton().textContent, 'Mono', 'Synth: Poly vira Mono');
-    assert.equal(synthGlideModeButton()?.textContent, 'Porta', 'Synth: Mono liga o Porta na hora');
+    assert.equal(synthGlideModeButton()?.textContent, 'Portamento', 'Synth: Mono liga o Portamento na hora');
     synthGlideModeButton().click();
     await player.syncNativeEngine();
     assert.equal(synthModeButton().textContent, 'Poly', 'Synth: desligar o Porta devolve o Poly na hora');
@@ -921,7 +947,7 @@ try {
       assert.equal(JSON.stringify(lastGlide(module - 1)), JSON.stringify({ moduleIndex: module - 1, portamento: false, velocityGateEnabled: false, velocityGateInverted: false, velocityThreshold: 64 }),
         'o motor começa em Auto com o limite de velocity desligado');
       window.document.querySelector('[data-glide-mode]').click();
-      assert.equal(window.document.querySelector('[data-glide-mode]').textContent, 'Porta', 'o modo alterna para Portamento');
+      assert.equal(window.document.querySelector('[data-glide-mode]').textContent, 'Portamento', 'o modo alterna para Portamento');
       const settings = () => module === 8
         ? player.getActivePresetState().modules[7].settings.synth
         : player.getActivePresetState().modules[module - 1].settings;
@@ -1399,17 +1425,17 @@ try {
   assert.notEqual(window.document.querySelector('[data-compressor-meter="input"] i b').style.height, '0%',
     'medidor Input do compressor ligado recebe sinal real');
   const cpuMeter = window.document.querySelector('[data-cpu-meter]');
-  assert(cpuMeter, 'o desktop mostra o medidor de carga do audio ao lado de User');
+  assert(cpuMeter, 'o desktop mostra a CPU do processo Hook Keys ao lado de User');
   assert.equal(cpuMeter.querySelector('[data-cpu-meter-value]').textContent, '12%',
-    'o medidor mostra quanto do prazo do bloco o callback consumiu');
+    'o medidor mostra somente a CPU consumida pelo Hook Keys');
   assert(!cpuMeter.classList.contains('is-critical'),
     'uma carga folgada nao acende o alerta');
-  audioLoad = [0.97, 0.5, 0];
+  processCpuUsage = 97;
   await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(cpuMeter.querySelector('[data-cpu-meter-value]').textContent, '97%',
-    'o pior bloco aparece imediatamente, sem suavizacao de ataque');
+    'a leitura nova aparece rapidamente e sem segurar o valor anterior');
   assert(cpuMeter.classList.contains('is-critical'),
-    'encostar no prazo do bloco deixa o numero vermelho');
+    'o próprio Hook Keys perto do teto deixa o número vermelho');
   // RAM do aparelho: percentual, texto com GB usados do total e as cores só no fim.
   // No desktop ela fica ao lado da CPU, no mesmo canto.
   const ramMeter = root.querySelector('[data-ram-meter]');
@@ -1424,7 +1450,7 @@ try {
   assert(ramMeter.classList.contains('is-warning'));
   player.renderRamMeter({ percent: 96, usedBytes: 5.7 * 1024 ** 3, limitBytes: 5.9 * 1024 ** 3 });
   assert(ramMeter.classList.contains('is-critical'));
-  audioLoad = [0.12, 0.1, 0];
+  processCpuUsage = 12;
   const restartStart = calls.length;
   player.openModal('app-settings-audio', null, master);
   const buffer = window.document.querySelector('[data-setting="buffer-size"]');

@@ -9,13 +9,12 @@ OrganModule::OrganModule(double sampleRate, std::size_t maximumBlockFrames)
     : voiceScratchLeft_(maximumBlockFrames, 0.0f),
       voiceScratchRight_(maximumBlockFrames, 0.0f) {
   drawbarSmoothing_ = 1.0f - std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.03f));
-  clickLengthSamples_ = std::max<std::uint32_t>(1, static_cast<std::uint32_t>(sampleRate * 0.002));
   for (auto& voice : voices_) {
     voice = std::make_unique<TinySoundFontModule>(sampleRate, maximumBlockFrames);
-    // Sem envelope de amplitude próprio: quem faz a dinâmica é a mesa de
-    // drawbars, não o ADSR de cada SF2 — o registro soa igual do começo ao
-    // fim da nota, como um Hammond de verdade.
-    voice->setVolumeEnvelope(0.0f, 15000.0f, 0.0f, 30.0f, 0.0f);
+    // O estado neutro do Organ precisa reproduzir o SF2 sem reescrever o seu
+    // ataque, sustain ou release. A envoltoria do app so entra quando o
+    // usuario realmente altera algum desses controles.
+    voice->useEmbeddedVolumeEnvelope();
     voice->setNoVelocitySensitivity(true);
     CutoffConfig cutoff;
     cutoff.enabled = false;
@@ -49,32 +48,27 @@ void OrganModule::beginBlock() noexcept {
 
 void OrganModule::noteOn(std::uint8_t note, std::uint8_t velocity) noexcept {
   static_cast<void>(velocity);
-  startKeyClick(127);
+  settleDrawbarsBeforeFirstNote();
   for (auto& voice : voices_) voice->noteOn(note, 127);
 }
 
 void OrganModule::noteOnWithFilterVelocity(
     std::uint8_t note, std::uint8_t velocity, std::uint8_t) noexcept {
   static_cast<void>(velocity);
-  startKeyClick(127);
+  settleDrawbarsBeforeFirstNote();
   for (auto& voice : voices_) voice->noteOnWithFilterVelocity(note, 127, 127);
 }
 
-void OrganModule::startKeyClick(std::uint8_t velocity) noexcept {
-  if (velocity == 0) return;
-  float loudestDrawbar = 0.0f;
+void OrganModule::settleDrawbarsBeforeFirstNote() noexcept {
+  for (const auto& voice : voices_) {
+    if (voice->hasActiveVoices()) return;
+  }
+  // Em silencio nao existe sinal para fazer de-click. Comecar a primeira nota
+  // numa rampa de 30 ms mudava o ataque original do sample sem o usuario ter
+  // ligado efeito nenhum.
   for (std::size_t index = 0; index < kDrawbarCount; ++index) {
-    if (!voiceLoaded_[index].load(std::memory_order_acquire)) continue;
-    loudestDrawbar = std::max(loudestDrawbar, drawbarGain_[index].load(std::memory_order_acquire));
+    currentDrawbarGain_[index] = drawbarGain_[index].load(std::memory_order_acquire);
   }
-  if (loudestDrawbar <= 0.0f) return;
-  auto* slot = &keyClicks_[0];
-  for (auto& click : keyClicks_) {
-    if (click.remaining == 0) { slot = &click; break; }
-    if (click.remaining < slot->remaining) slot = &click;
-  }
-  slot->remaining = clickLengthSamples_;
-  slot->level = 0.009f * loudestDrawbar * (static_cast<float>(velocity) / 127.0f);
 }
 
 void OrganModule::setCutoffConfig(CutoffConfig) noexcept {
@@ -92,6 +86,10 @@ void OrganModule::setVolumeEnvelope(
   for (auto& voice : voices_) {
     voice->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs, sustainDb);
   }
+}
+
+void OrganModule::useEmbeddedVolumeEnvelope() noexcept {
+  for (auto& voice : voices_) voice->useEmbeddedVolumeEnvelope();
 }
 
 void OrganModule::setVoiceMode(bool mono, bool legato) noexcept {
@@ -120,11 +118,9 @@ void OrganModule::pitchBend(std::uint16_t value) noexcept {
 
 void OrganModule::allNotesOff() noexcept {
   for (auto& voice : voices_) voice->allNotesOff();
-  for (auto& click : keyClicks_) click.remaining = 0;
 }
 
 bool OrganModule::hasActiveVoices() const noexcept {
-  for (const auto& click : keyClicks_) if (click.remaining > 0) return true;
   for (const auto& voice : voices_) if (voice->hasActiveVoices()) return true;
   return false;
 }
@@ -148,26 +144,6 @@ void OrganModule::renderAdd(float* left, float* right, std::size_t frames, float
       left[frame] += voiceScratchLeft_[frame] * gain;
       right[frame] += voiceScratchRight_[frame] * gain;
     }
-  }
-  // O key-click do OpenB3 vem do contato de tecla, não de um motor Leslie
-  // rodando em silêncio. Um ruído curtíssimo com queda de amplitude acompanha
-  // cada Note On, sem alocação, bloqueio ou vazamento para outras notas.
-  for (std::size_t frame = 0; frame < frames; ++frame) {
-    float clickSample = 0.0f;
-    for (auto& click : keyClicks_) {
-      if (click.remaining == 0) continue;
-      clickSeed_ ^= clickSeed_ << 13;
-      clickSeed_ ^= clickSeed_ >> 17;
-      clickSeed_ ^= clickSeed_ << 5;
-      const auto noise = static_cast<float>(clickSeed_ & 0xffffu) / 32767.5f - 1.0f;
-      const auto envelope = static_cast<float>(click.remaining)
-          / static_cast<float>(clickLengthSamples_);
-      clickSample += noise * envelope * envelope * click.level;
-      --click.remaining;
-    }
-    const auto output = clickSample * gainLinear;
-    left[frame] += output;
-    right[frame] += output;
   }
 }
 

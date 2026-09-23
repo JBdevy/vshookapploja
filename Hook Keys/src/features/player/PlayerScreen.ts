@@ -382,6 +382,7 @@ type CcLearnTarget =
   | { kind: 'module-power'; moduleNumber: number }
   | { kind: 'module-input'; moduleNumber: number; input: 'sustain' | 'modulation' }
   | { kind: 'output-volume'; bus: OutputBus }
+  | { kind: 'pad-filter'; filter: 'low' | 'high' }
   | { kind: 'metronome-volume' }
   | { kind: 'metronome-toggle' }
   | { kind: 'tap-tempo' }
@@ -402,7 +403,7 @@ const DEFAULT_CC_MAPPING_OPTIONS: Readonly<CcMappingOptions> = {
 };
 
 function isContinuousCcTarget(target: CcLearnTarget): boolean {
-  if (target.kind === 'module-volume' || target.kind === 'output-volume' ||
+  if (target.kind === 'module-volume' || target.kind === 'output-volume' || target.kind === 'pad-filter' ||
       target.kind === 'metronome-volume') return true;
   return target.kind === 'module-control' &&
     target.control !== 'delay:tap' && target.control !== 'rotary:toggle'
@@ -427,6 +428,7 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
   if (target.kind === 'output-volume' || target.kind === 'metronome-volume') {
     return formatOutputDb(outputDbFromPosition(progress * 100));
   }
+  if (target.kind === 'pad-filter') return formatCutoffFrequency(cutoffFrequencyFromRatio(progress));
   if (target.kind !== 'module-control') return `${limitPercent}%`;
 
   const control = target.control;
@@ -525,6 +527,30 @@ interface EffectPadState {
   volumeDb: number;
 }
 
+const BUNDLED_FX_ONE = [
+  { name: 'Kick', fileName: '01-kick.mp3' },
+  { name: 'Bump', fileName: '02-bump.mp3' },
+  { name: 'SineDrop', fileName: '03-sine-drop.mp3' },
+  { name: 'BourineFx', fileName: '04-bourine-fx.mp3' },
+  { name: 'ClapFx', fileName: '05-clap-fx.mp3' },
+  { name: 'ClapVerb', fileName: '06-clap-verb.mp3' },
+  { name: 'ClapBourine', fileName: '07-clap-bourine.mp3' },
+  { name: 'PluckFx', fileName: '08-pluck-fx.mp3' },
+  { name: 'ClipVerb', fileName: '09-clip-verb.mp3' },
+  { name: 'Carillon', fileName: '10-carillon.mp3' },
+  { name: 'DoupFx', fileName: '11-doup-fx.mp3' },
+  { name: 'Reverse', fileName: '12-reverse.mp3' },
+] as const;
+
+function bundledFxOne(effectNumber: number): (typeof BUNDLED_FX_ONE)[number] | null {
+  return BUNDLED_FX_ONE[effectNumber - 1] ?? null;
+}
+
+function bundledFxOneUrl(effectNumber: number): string | null {
+  const effect = bundledFxOne(effectNumber);
+  return effect ? new URL(`assets/fx/fx-1/${effect.fileName}`, document.baseURI).href : null;
+}
+
 interface AccountControls {
   listDevices: () => Promise<DeviceOverviewResponse>;
   getAcquireLicenseUrl: () => Promise<string>;
@@ -552,6 +578,7 @@ const EFFECT_PAD_MIN_DB = -60;
 // Longest a knob or button change waits before it reaches the audio engine.
 const NATIVE_SYNC_INTERVAL_MS = 24;
 const DESKTOP_MODULE_METER_INTERVAL_MS = 50;
+const DESKTOP_CPU_METER_INTERVAL_MS = 100;
 // Todo <select> dos modais vira o seletor próprio do app; o do sistema abre
 // uma roda/lista nativa diferente em cada plataforma.
 const APP_SELECT_QUERY = 'select[data-setting], select[data-module-setting]';
@@ -595,6 +622,7 @@ function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'module-power') return `power:${target.moduleNumber}`;
   if (target.kind === 'module-input') return `input:${target.moduleNumber}:${target.input}`;
   if (target.kind === 'output-volume') return `output:${target.bus}`;
+  if (target.kind === 'pad-filter') return `pads:${target.filter}-cutoff`;
   if (target.kind === 'metronome-volume') return 'metronome:volume';
   if (target.kind === 'metronome-toggle') return 'metronome:toggle';
   if (target.kind === 'tap-tempo') return 'metronome:tap';
@@ -614,6 +642,9 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
         ? 'Músicas'
         : `${target.bus[0]?.toUpperCase() ?? ''}${target.bus.slice(1)}`;
     return `Volume ${label}`;
+  }
+  if (target.kind === 'pad-filter') {
+    return target.filter === 'low' ? 'Pads · Low (high-pass)' : 'Pads · High (low-pass)';
   }
   if (target.kind === 'module-octave') {
     return `Módulo ${target.moduleNumber} · OCT ${target.direction > 0 ? '+' : '-'}`;
@@ -645,9 +676,10 @@ function isCcMappingKey(value: string): boolean {
   if (/^power:[1-8]$/.test(value)) return true;
   if (/^input:[1-8]:(sustain|modulation)$/.test(value)) return true;
   if (/^output:(music|pads|effects|master)$/.test(value)) return true;
+  if (value === 'pads:low-cutoff' || value === 'pads:high-cutoff') return true;
   if (value === 'metronome:volume' || value === 'metronome:tap' || value === 'metronome:toggle') return true;
   if (/^synth-preset:[1-5]$/.test(value)) return true;
-  if (/^pad:[ABCD]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
+  if (/^pad:[AB]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
   if (/^effect:[1-8]:([1-9]|1[0-2])$/.test(value)) return true;
   return /^preset:[A-F]:([1-9]|1[0-6])$/.test(value);
 }
@@ -657,13 +689,15 @@ function ccMappingConflictScope(key: string): string {
   return bankFader ? `bank-faders:${bankFader[1]}:${bankFader[2]}` : 'global';
 }
 
-function createEffectPadStates(): EffectPadState[] {
+function createEffectPadStates(bank?: EffectBankId): EffectPadState[] {
   return Array.from({ length: EFFECT_COUNT }, (_, index) => ({
     active: false,
     audioFileName: null,
     colorIndex: index % EFFECT_PAD_COLORS.length,
     gateRelease: 'infinite',
-    name: `Efeito ${index + 1}`,
+    name: bank === '1'
+      ? bundledFxOne(index + 1)?.name ?? `Efeito ${index + 1}`
+      : `Efeito ${index + 1}`,
     triggerMode: 'toggle',
     volumeDb: EFFECT_PAD_MAX_DB,
   }));
@@ -1096,7 +1130,11 @@ export class PlayerScreen {
   private readonly effectAudioLibrary: EffectAudioStore;
   // Cada pad reaproveita a URL do arquivo, mas pode ter várias vozes tocando
   // juntas no Gate + Infinite Release.
-  private readonly effectPadAudio = new Map<string, { url: string; voices: Set<HTMLAudioElement> }>();
+  private readonly effectPadAudio = new Map<string, {
+    url: string;
+    objectUrl: boolean;
+    voices: Set<HTMLAudioElement>;
+  }>();
   private readonly effectAudioBaseGain = new WeakMap<HTMLAudioElement, number>();
   private effectAudioContext: AudioContext | null = null;
   private effectMeterSilentTap: GainNode | null = null;
@@ -1251,8 +1289,7 @@ export class PlayerScreen {
   private audioRouting: AudioBusRouting = { ...DEFAULT_AUDIO_ROUTING };
   private bufferSize: BufferSize = DEFAULT_BUFFER_SIZE;
   private sampleRate: SampleRate = DEFAULT_SAMPLE_RATE;
-  private audioLoadPercent = 0;
-  private audioLoadAlarmUntil = 0;
+  private lastProcessCpuReadAt = 0;
   private compatibilityMode = false;
   private seamlessPresetSwitching = false;
   // Modo Lite: as teclas do teclado param de acender ao toque. É o que pesa
@@ -1275,12 +1312,14 @@ export class PlayerScreen {
   private activeView: PlayerView = 'bank';
   private activeBank: BankId = 'A';
   private activePadBank: PadBankId = 'A';
+  private padLowCutHz = 20;
+  private padHighCutHz = 20_000;
   private activeEffectBank: EffectBankId = '1';
   private readonly padBankSelections = new Map<PadBankId, string | null>(
     PAD_BANK_IDS.map((bank) => [bank, null]),
   );
   private readonly effectPadStates = new Map<EffectBankId, EffectPadState[]>(
-    EFFECT_BANK_IDS.map((bank) => [bank, createEffectPadStates()]),
+    EFFECT_BANK_IDS.map((bank) => [bank, createEffectPadStates(bank)]),
   );
   private readonly effectBankNames = new Map<EffectBankId, string>(
     EFFECT_BANK_IDS.map((bank) => [bank, `FX ${bank}`]),
@@ -1392,7 +1431,7 @@ export class PlayerScreen {
               <button class="player-account__user-button" type="button" data-action="open-user" aria-label="Conta"><svg class="player-header-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></button>
               ${this.desktopRuntime ? `
               <div class="player-cpu-meter" role="status" data-cpu-meter
-                title="Custo do callback de audio contra o prazo do buffer. Vermelho no teto e onde o som corta.">
+                title="Uso de CPU somente do processo Hook Keys">
                 <small>CPU</small>
                 <strong data-cpu-meter-value>--</strong>
               </div>` : ''}
@@ -1654,16 +1693,17 @@ export class PlayerScreen {
             ? peaks.slice(18, 20) : this.trackTransport?.getOutputPeaks() ?? [0, 0]);
           this.renderOutputMeter('click', peaks.slice(20, 22));
           this.renderOutputMeter('effects', this.effectMeterPeaks());
-          // O estado selecionado do pad não é sinal de áudio: não inventar nível.
-          this.renderOutputMeter('pads', [0, 0]);
+          this.renderOutputMeter('pads', peaks.slice(22, 24));
           if (analysisModuleIndex === this.getCompressorAnalysisModuleIndex()) {
             this.renderModuleAnalysis(analysis);
           } else if (this.getCompressorAnalysisModuleIndex() === null) {
             this.renderModuleAnalysis([]);
           }
-          if (this.desktopRuntime) {
-            const load = await hookKeysNative.audioLoad();
-            if (load && this.mounted) this.renderAudioLoad(load);
+          if (this.desktopRuntime
+              && performance.now() - this.lastProcessCpuReadAt >= DESKTOP_CPU_METER_INTERVAL_MS) {
+            this.lastProcessCpuReadAt = performance.now();
+            const percent = await hookKeysNative.processCpuUsage();
+            if (percent !== null && this.mounted) this.renderProcessCpuUsage(percent);
           }
         }
         } catch {
@@ -1681,24 +1721,20 @@ export class PlayerScreen {
     }, this.desktopRuntime ? DESKTOP_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS);
   }
 
-  // O unico numero que denuncia um estouro. A CPU total da maquina nao serve:
-  // uma thread de audio saturada aparece como 8% em doze processadores
-  // logicos, e como 0% quando esta travada esperando uma pagina voltar do
-  // disco. Aqui 100% significa que o bloco consumiu o prazo inteiro.
-  private renderAudioLoad(load: { peak: number; smoothed: number; overruns: number }): void {
+  // Uso real do executável Hook Keys, na mesma escala de CPU total mostrada
+  // pelo sistema. Atualiza direto: não segura pico antigo nem mistura outros
+  // programas do computador.
+  private renderProcessCpuUsage(processPercent: number): void {
     const meter = this.root.querySelector<HTMLElement>('[data-cpu-meter]');
     const value = meter?.querySelector<HTMLElement>('[data-cpu-meter-value]');
     if (!meter || !value) return;
-    // Ataque imediato e queda lenta: o bloco ruim precisa aparecer, mas o
-    // numero nao pode piscar a cada leitura.
-    const measured = Math.max(load.peak, load.smoothed) * 100;
-    this.audioLoadPercent = Math.min(999, Math.max(measured, this.audioLoadPercent - 4));
-    value.textContent = `${Math.round(this.audioLoadPercent)}%`;
-    // Um estouro dura um bloco so. Segure o alarme para ele ser visto.
-    if (load.overruns > 0) this.audioLoadAlarmUntil = Date.now() + 2000;
-    const critical = this.audioLoadPercent >= 90 || Date.now() < this.audioLoadAlarmUntil;
+    const percent = Math.min(100, Math.max(0, processPercent));
+    const text = `${Math.round(percent)}%`;
+    if (value.textContent !== text) value.textContent = text;
+    meter.setAttribute('aria-label', `CPU usada pelo Hook Keys: ${text}`);
+    const critical = percent >= 90;
     meter.classList.toggle('is-critical', critical);
-    meter.classList.toggle('is-warning', !critical && this.audioLoadPercent >= 70);
+    meter.classList.toggle('is-warning', !critical && percent >= 70);
   }
 
   setModuleMeterLevel(moduleNumber: number, leftDb: number, rightDb = leftDb): void {
@@ -2122,9 +2158,8 @@ export class PlayerScreen {
         if (this.effectEditMode) {
           this.activeEffectBank = bank;
           this.renderActiveEffectBank();
-          // FX 1 e FX 2 são bancos de fábrica. Entram no modo Edit para
-          // configurar pads, mas seus nomes permanecem definidos pelo app.
-          if (bank !== '1' && bank !== '2') {
+          // Somente FX 1 é banco de fábrica. FX 2–8 pertencem ao usuário.
+          if (bank !== '1') {
             this.pendingEffectBankEdit = bank;
             this.openModal('effect-bank-name', null, actionButton);
           }
@@ -2301,6 +2336,15 @@ export class PlayerScreen {
       input.setAttribute('aria-valuetext', formatOutputDb(levelDb));
       const output = this.root.querySelector<HTMLOutputElement>('[data-metronome-output-value]');
       if (output) output.value = formatOutputDb(levelDb);
+      this.markPlayerStateChanged();
+      return;
+    }
+    if (input.matches('[data-pad-low-cut], [data-pad-high-cut]')) {
+      const ratio = Math.min(1, Math.max(0, Number(input.value) / 100));
+      if (!Number.isFinite(ratio)) return;
+      if (input.matches('[data-pad-low-cut]')) this.padLowCutHz = cutoffFrequencyFromRatio(ratio);
+      else this.padHighCutHz = cutoffFrequencyFromRatio(ratio);
+      this.renderPadFilters();
       this.markPlayerStateChanged();
       return;
     }
@@ -3424,17 +3468,22 @@ export class PlayerScreen {
     effectNumber: number,
     state: EffectPadState,
   ): Promise<void> {
-    if (!state.audioFileName) return;
+    const bundledUrl = bank === '1' ? bundledFxOneUrl(effectNumber) : null;
+    if (!bundledUrl && !state.audioFileName) return;
     const key = `${bank}:${effectNumber}`;
     let pool = this.effectPadAudio.get(key);
     if (!pool) {
-      const file = await this.effectAudioLibrary.get(bank, effectNumber).catch(() => null);
-      if (!file || !this.mounted) return;
+      const file = bundledUrl ? null : await this.effectAudioLibrary.get(bank, effectNumber).catch(() => null);
+      if ((!bundledUrl && !file) || !this.mounted) return;
       // Dois toques muito rápidos podem terminar a leitura juntos. Só o
       // primeiro cria a URL; o segundo usa o pool que acabou de ser publicado.
       pool = this.effectPadAudio.get(key);
       if (!pool) {
-        pool = { url: URL.createObjectURL(file), voices: new Set() };
+        pool = {
+          url: bundledUrl ?? URL.createObjectURL(file!),
+          objectUrl: bundledUrl === null,
+          voices: new Set(),
+        };
         this.effectPadAudio.set(key, pool);
       }
     }
@@ -3489,7 +3538,7 @@ export class PlayerScreen {
     if (this.isEffectBankId(bank) && Number.isInteger(effectNumber)) {
       this.stopEffectPadAudio(bank, effectNumber);
     }
-    URL.revokeObjectURL(pool.url);
+    if (pool.objectUrl) URL.revokeObjectURL(pool.url);
     this.effectPadAudio.delete(key);
   }
 
@@ -3514,17 +3563,10 @@ export class PlayerScreen {
   }
 
   private performanceAssetForButton(button: HTMLButtonElement): PerformanceAssetDefinition | null {
-    if (button.dataset.performanceKind === 'effect') {
-      if (this.activeEffectBank !== '1' && this.activeEffectBank !== '2') return null;
-      const slot = Number.parseInt(button.dataset.performanceValue ?? '', 10);
-      return Number.isInteger(slot)
-        ? this.soundCatalog.getPerformanceAsset('fx', this.activeEffectBank, slot)
-        : null;
-    }
-    if (button.dataset.performanceKind !== 'note') return null;
-    const buttons = Array.from(this.root.querySelectorAll<HTMLButtonElement>('.performance-pad--note'));
-    const slot = buttons.indexOf(button) + 1;
-    return slot > 0 ? this.soundCatalog.getPerformanceAsset('pad', this.activePadBank, slot) : null;
+    // Pads 1/2 e FX 1 são empacotados no app. FX 2–8 pertencem ao usuário;
+    // nenhum desses bancos abre o antigo download de assets do R2.
+    void button;
+    return null;
   }
 
   private openPerformanceDownloadIfNeeded(button: HTMLButtonElement): boolean {
@@ -3550,6 +3592,15 @@ export class PlayerScreen {
       bubbles: true,
       detail: trigger,
     }));
+    if (trigger.kind === 'note' && trigger.padBank) {
+      const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      const noteIndex = notes.indexOf(trigger.value);
+      const bankIndex = PAD_BANK_IDS.indexOf(trigger.padBank);
+      if (noteIndex >= 0 && bankIndex >= 0) {
+        void hookKeysNative.setPadNote(bankIndex, 60 + noteIndex, trigger.active === true, 127)
+          .catch(() => undefined);
+      }
+    }
     const action = trigger.kind === 'note'
       ? trigger.active ? 'ativada' : 'desativada'
       : 'acionado';
@@ -3685,15 +3736,15 @@ export class PlayerScreen {
       ?.closest<HTMLElement>('.performance-section');
     effectsSection?.classList.toggle('is-editing', this.effectEditMode);
 
-    const effectStates = this.effectPadStates.get(this.activeEffectBank) ?? createEffectPadStates();
+    const effectStates = this.effectPadStates.get(this.activeEffectBank)
+      ?? createEffectPadStates(this.activeEffectBank);
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('.performance-pad--effect')) {
       const effectIndex = Number.parseInt(button.dataset.performanceValue ?? '', 10) - 1;
       const state = effectStates[effectIndex];
       const colors = EFFECT_PAD_COLORS[state?.colorIndex ?? effectIndex % EFFECT_PAD_COLORS.length]
         ?? EFFECT_PAD_COLORS[0];
-      const catalogAsset = this.soundCatalog.getPerformanceAsset('fx', this.activeEffectBank, effectIndex + 1);
-      const name = (this.activeEffectBank === '1' || this.activeEffectBank === '2')
-        ? catalogAsset?.name ?? state?.name ?? `Efeito ${effectIndex + 1}`
+      const name = this.activeEffectBank === '1'
+        ? bundledFxOne(effectIndex + 1)?.name ?? state?.name ?? `Efeito ${effectIndex + 1}`
         : state?.name ?? `Efeito ${effectIndex + 1}`;
       const label = button.querySelector<HTMLElement>('span');
       if (label) label.textContent = name;
@@ -3722,14 +3773,31 @@ export class PlayerScreen {
     }
 
     const noteButtons = Array.from(this.root.querySelectorAll<HTMLButtonElement>('.performance-pad--note'));
-    for (const [index, button] of noteButtons.entries()) {
-      const catalogAsset = this.soundCatalog.getPerformanceAsset('pad', this.activePadBank, index + 1);
-      const label = button.querySelector<HTMLElement>('span');
-      if (label && catalogAsset) label.textContent = catalogAsset.name;
-      if (catalogAsset) button.setAttribute('aria-label', catalogAsset.name);
+    for (const button of noteButtons) {
       const isActive = button.dataset.performanceValue === selectedNote;
       button.classList.toggle('is-active', isActive);
       button.setAttribute('aria-pressed', String(isActive));
+    }
+    this.renderPadFilters();
+  }
+
+  private renderPadFilters(): void {
+    const controls = [
+      { selector: '[data-pad-low-cut]', output: '[data-pad-low-cut-value]', frequency: this.padLowCutHz },
+      { selector: '[data-pad-high-cut]', output: '[data-pad-high-cut-value]', frequency: this.padHighCutHz },
+    ] as const;
+    for (const control of controls) {
+      const ratio = Math.min(1, Math.max(0, Math.log(control.frequency / 20) / Math.log(1000)));
+      const input = this.root.querySelector<HTMLInputElement>(control.selector);
+      if (!input) continue;
+      input.value = String(ratio * 100);
+      const formatted = formatCutoffFrequency(control.frequency);
+      input.setAttribute('aria-valuetext', formatted);
+      const knob = input.closest<HTMLElement>('.player-output-knob');
+      knob?.style.setProperty('--knob-angle', `${-135 + ratio * 270}deg`);
+      knob?.style.setProperty('--knob-progress', String(ratio));
+      const output = this.root.querySelector<HTMLOutputElement>(control.output);
+      if (output) output.value = formatted;
     }
   }
 
@@ -3738,6 +3806,7 @@ export class PlayerScreen {
     this.patternPlayback.reset();
     if (this.activeView === 'pads-effects') {
       this.effectEditMode = false;
+      this.renderActiveEffectBank();
       this.activeView = 'bank';
       this.restoreActivePresetState();
       this.updateVisibleView();
@@ -3761,6 +3830,10 @@ export class PlayerScreen {
     this.soundfontSelectionRevision += 1;
     this.cancelNoteLearn();
     this.patternPlayback.reset();
+    // O modo Edit pertence somente à tela Pads - Effects. Ao sair dela não
+    // pode continuar armado para a próxima vez que o usuário voltar.
+    this.effectEditMode = false;
+    this.renderActiveEffectBank();
     if (this.activeView === 'bank') this.saveActivePresetState();
     this.activeBank = bank;
     this.activeView = 'bank';
@@ -4829,6 +4902,7 @@ export class PlayerScreen {
     );
     let outputChanged = false;
     let metronomeVolumeChanged = false;
+    let padFiltersChanged = false;
     for (const [targetKey, controller] of this.ccMappings) {
       if (controller !== input.controller) continue;
       const continuousRatio = this.mappedCcRatio(targetKey, input.value);
@@ -4900,6 +4974,13 @@ export class PlayerScreen {
         continue;
       }
 
+      if (targetKey === 'pads:low-cutoff' || targetKey === 'pads:high-cutoff') {
+        if (targetKey === 'pads:low-cutoff') this.padLowCutHz = cutoffFrequencyFromRatio(continuousRatio);
+        else this.padHighCutHz = cutoffFrequencyFromRatio(continuousRatio);
+        padFiltersChanged = true;
+        continue;
+      }
+
       if (targetKey === 'metronome:volume') {
         const db = outputDbFromPosition(continuousRatio * 100);
         this.metronome.setVolume(continuousRatio <= 0 ? 0 : 10 ** (db / 20));
@@ -4926,13 +5007,13 @@ export class PlayerScreen {
         continue;
       }
 
-      const padMatch = /^pad:([ABCD]):(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.exec(targetKey);
+      const padMatch = /^pad:([AB]):(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.exec(targetKey);
       if (padMatch && risingEdge && this.isPadBankId(padMatch[1])) {
         this.activateMappedPad(padMatch[1], padMatch[2] ?? 'C');
         continue;
       }
 
-      const effectMatch = /^effect:([1-4]):([1-9]|1[0-2])$/.exec(targetKey);
+      const effectMatch = /^effect:([1-8]):([1-9]|1[0-2])$/.exec(targetKey);
       if (effectMatch && risingEdge && this.isEffectBankId(effectMatch[1])) {
         this.activateMappedEffect(effectMatch[1], Number(effectMatch[2]));
         continue;
@@ -4951,6 +5032,10 @@ export class PlayerScreen {
     }
     if (metronomeVolumeChanged) {
       this.renderMetronomeState();
+      this.markPlayerStateChanged();
+    }
+    if (padFiltersChanged) {
+      this.renderPadFilters();
       this.markPlayerStateChanged();
     }
   }
@@ -5622,13 +5707,13 @@ export class PlayerScreen {
     } else if (kind === 'effect-pad' && moduleNumber !== null) {
       const activeColorIndex = effectPadState?.colorIndex ?? (moduleNumber - 1) % EFFECT_PAD_COLORS.length;
       const activeColors = EFFECT_PAD_COLORS[activeColorIndex] ?? EFFECT_PAD_COLORS[0];
-      const hasFixedEffectName = this.activeEffectBank === '1' || this.activeEffectBank === '2';
+      const hasFixedEffectName = this.activeEffectBank === '1';
       const effectName = hasFixedEffectName
-        ? this.soundCatalog.getPerformanceAsset('fx', this.activeEffectBank, moduleNumber)?.name
+        ? bundledFxOne(moduleNumber)?.name
           ?? effectPadState?.name
           ?? `Efeito ${moduleNumber}`
         : effectPadState?.name ?? `Efeito ${moduleNumber}`;
-      const supportsAudioAssignment = this.activeEffectBank === '3' || this.activeEffectBank === '4';
+      const supportsAudioAssignment = this.activeEffectBank !== '1';
       const effectVolumeDb = boundedNumber(
         effectPadState?.volumeDb,
         EFFECT_PAD_MIN_DB,
@@ -6588,6 +6673,12 @@ export class PlayerScreen {
         ? target.closest<HTMLButtonElement>('[data-module-rotary-speed]') : null;
       if ((pageKind() === 'module-rotary' || kind === 'module-organ') && moduleNumber === 7 && rotarySpeedButton) {
         this.selectModuleRotarySpeed(modal, rotarySpeedButton);
+        return;
+      }
+      const rotaryCabinetButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-module-rotary-cabinet]') : null;
+      if (kind === 'module-organ' && moduleNumber === 7 && rotaryCabinetButton) {
+        this.toggleModuleRotaryCabinet(rotaryCabinetButton);
         return;
       }
       const delayDivisionButton = target instanceof Element
@@ -9430,6 +9521,8 @@ export class PlayerScreen {
     const bus = input.dataset.outputLevel;
     if (isOutputBus(bus)) return { kind: 'output-volume', bus };
     if (input.matches('[data-metronome-output-volume]')) return { kind: 'metronome-volume' };
+    if (input.matches('[data-pad-low-cut]')) return { kind: 'pad-filter', filter: 'low' };
+    if (input.matches('[data-pad-high-cut]')) return { kind: 'pad-filter', filter: 'high' };
     return null;
   }
 
@@ -9851,6 +9944,9 @@ export class PlayerScreen {
     const gain = readout?.querySelector<HTMLElement>('[data-eq-gain]');
     if (frequency) frequency.textContent = formatEqFrequency(band.frequency);
     if (gain) gain.textContent = formatEqGain(band.gain);
+    // O estado só é persistido no fim do gesto, mas o motor precisa receber
+    // frequência e ganho enquanto a banda se move para o EQ responder ao vivo.
+    this.scheduleNativeEngineSync();
   }
 
   private updateModuleEqQ(modal: HTMLElement, input: HTMLInputElement, moduleNumber: number): void {
@@ -9985,6 +10081,17 @@ export class PlayerScreen {
     button.textContent = settings.enabled ? 'ON' : 'OFF';
     button.setAttribute('aria-pressed', String(settings.enabled));
     button.closest<HTMLElement>('[data-module-effect-editor]')?.classList.toggle('is-disabled', !settings.enabled);
+    this.markPlayerStateChanged();
+  }
+
+  private toggleModuleRotaryCabinet(button: HTMLButtonElement): void {
+    const moduleState = this.getActivePresetState()?.modules[6];
+    if (!moduleState) return;
+    const rotary = readModuleRotarySettings(moduleState.settings.rotary);
+    rotary.cabinetEnabled = !rotary.cabinetEnabled;
+    moduleState.settings.rotary = rotary;
+    button.classList.toggle('is-selected', rotary.cabinetEnabled);
+    button.setAttribute('aria-pressed', String(rotary.cabinetEnabled));
     this.markPlayerStateChanged();
   }
 
@@ -10644,7 +10751,7 @@ export class PlayerScreen {
 
   private commitEffectBankName(modal: HTMLElement): void {
     if (!this.pendingEffectBankEdit) return;
-    if (this.pendingEffectBankEdit === '1' || this.pendingEffectBankEdit === '2') return;
+    if (this.pendingEffectBankEdit === '1') return;
     const input = modal.querySelector<HTMLInputElement>('[data-effect-bank-name-input]');
     if (!input) return;
     const bank = this.pendingEffectBankEdit;
@@ -10760,7 +10867,7 @@ export class PlayerScreen {
     const effect = this.effectPadStates.get(this.activeEffectBank)?.[effectNumber - 1];
     if (!editor || !effect) return;
     const requestedColorIndex = Number.parseInt(editor.dataset.effectColorIndex ?? '', 10);
-    if (this.activeEffectBank !== '1' && this.activeEffectBank !== '2' && input) {
+    if (this.activeEffectBank !== '1' && input) {
       effect.name = input.value.trim().slice(0, 12) || `Efeito ${effectNumber}`;
     }
     effect.colorIndex = EFFECT_PAD_COLORS[requestedColorIndex]
@@ -11327,7 +11434,7 @@ export class PlayerScreen {
   }
 
   private async restoreEffectAudioAssignments(): Promise<void> {
-    await Promise.all(EFFECT_BANK_IDS.flatMap((bank) => (
+    await Promise.all(EFFECT_BANK_IDS.filter((bank) => bank !== '1').flatMap((bank) => (
       (this.effectPadStates.get(bank) ?? []).map(async (effect, index) => {
         const fileName = await this.effectAudioLibrary.getFileName(bank, index + 1).catch(() => null);
         effect.audioFileName = fileName;
@@ -11740,6 +11847,7 @@ export class PlayerScreen {
           rotaryMix: rotary.mix / 100,
           rotaryModulationEnabled: moduleIndex === 6
             && readModuleModulationMode(moduleState.settings) === 'rotary',
+          rotaryCabinetEnabled: moduleIndex === 6 && rotary.cabinetEnabled,
           chorusEnabled: chorus.enabled,
           chorusRateHz: chorus.rateHz,
           chorusDepth: chorus.depth / 100,
@@ -11752,6 +11860,7 @@ export class PlayerScreen {
       }
     }
     const masterRoute = parseAudioBusRoute(this.audioRouting.timbres);
+    const padRoute = parseAudioBusRoute(this.audioRouting.pads);
     configurationTasks.push(
       hookKeysNative.setTempo(this.metronome.getBpm()),
       hookKeysNative.setOutputGain(
@@ -11759,6 +11868,10 @@ export class PlayerScreen {
         masterRoute.start, masterRoute.count,
       ),
       this.applyMetronomeOutput(),
+      hookKeysNative.configurePadOutput(
+        padRoute.start, padRoute.count, this.outputLevels.pads,
+        this.outputEnabled.pads, this.padLowCutHz, this.padHighCutHz,
+      ),
       this.applyNativeMusicOutput(),
       hookKeysNative.setCompatibilityMode(this.compatibilityMode),
       hookKeysNative.setSeamlessPresetSwitching(this.seamlessPresetSwitching),
@@ -11848,6 +11961,8 @@ export class PlayerScreen {
       moduleReverbDefault: 'room-v1',
       activeBank: this.activeBank,
       activePadBank: this.activePadBank,
+      padLowCutHz: this.padLowCutHz,
+      padHighCutHz: this.padHighCutHz,
       activeEffectBank: this.activeEffectBank,
       bufferSize: this.bufferSize,
       bufferSizeDefault: 'safe-256',
@@ -11948,6 +12063,10 @@ export class PlayerScreen {
     this.globalOctaveShift = boundedNumber(value.globalOctaveShift, -3, 3, 0);
     this.globalTransposeSemitones = boundedNumber(value.globalTransposeSemitones, -24, 24, 0);
     this.moduleOutputMono = value.moduleOutputMono === true;
+    this.padLowCutHz = boundedNumber(value.padLowCutHz, 20, 20_000, 20);
+    this.padHighCutHz = boundedNumber(
+      value.padHighCutHz ?? value.padCutoffHz, 20, 20_000, 20_000,
+    );
     this.renderGlobalOctaveButtons();
     this.renderGlobalTransposeButtons();
     this.renderModuleOutputModeButton();
@@ -12016,7 +12135,7 @@ export class PlayerScreen {
     }
     const savedEffectBankNames = isRecord(value.effectBankNames) ? value.effectBankNames : {};
     for (const effectBank of EFFECT_BANK_IDS) {
-      if (effectBank === '1' || effectBank === '2') {
+      if (effectBank === '1') {
         this.effectBankNames.set(effectBank, `FX ${effectBank}`);
         continue;
       }
@@ -12047,7 +12166,7 @@ export class PlayerScreen {
       const sourceEffects = Array.isArray(savedEffectPads[effectBank])
         ? savedEffectPads[effectBank]
         : [];
-      const defaults = createEffectPadStates();
+      const defaults = createEffectPadStates(effectBank);
       this.effectPadStates.set(
         effectBank,
         defaults.map((effect, index) => {
@@ -12061,7 +12180,7 @@ export class PlayerScreen {
               ? requestedColorIndex
               : effect.colorIndex,
             gateRelease: source.gateRelease === 'continue-press' ? 'continue-press' : 'infinite',
-            name: effectBank !== '1' && effectBank !== '2' && typeof source.name === 'string'
+            name: effectBank !== '1' && typeof source.name === 'string'
               ? source.name.trim().slice(0, 12) || effect.name
               : effect.name,
             triggerMode: source.triggerMode === 'gate' ? 'gate' : 'toggle',

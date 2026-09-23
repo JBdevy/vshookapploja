@@ -27,7 +27,8 @@
     "shortDescription": "Instrumento musical profissional para performance ao vivo.",
     "longDescription": "Hook Keys transforma seu computador em uma central profissional de timbres, efeitos, MIDI, arpejador, sequenciador e sintetizador para performance ao vivo.",
     "resources": {
-      "../native-engine/assets/hook-b3": "hook-b3"
+      "../native-engine/assets/hook-b3": "hook-b3",
+      "../native-engine/assets/pads": "pads"
     },
     "windows": {
       "allowDowngrades": false,

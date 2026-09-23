@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { build } from 'esbuild';
 import { Window } from 'happy-dom';
 
@@ -20,14 +21,28 @@ try {
   const name = modal.querySelector('[data-name]');
   controller.openFor(name);
   assert(modal.querySelector('[data-on-screen-key="A"]'));
+  assert(!modal.querySelector('[data-on-screen-key="emoji"]'), 'o teclado de texto não oferece emojis');
+  assert.equal(modal.querySelectorAll('.on-screen-keyboard__row--actions > button').length, 3,
+    'a última linha contém caracteres especiais, Espaço e Enter');
+  assert.equal(modal.querySelector('.on-screen-keyboard__row--actions > button:nth-child(2)')?.dataset.onScreenKey, 'space',
+    'Espaço permanece no centro');
+  assert.equal(modal.querySelector('.on-screen-keyboard__row--actions > button:last-child')?.dataset.onScreenKey, 'enter',
+    'Enter volta para a posição da direita');
+  key('symbols');
+  assert(modal.querySelector('[data-keyboard-layout-panel="letters"]').hidden);
+  assert(!modal.querySelector('[data-keyboard-layout-panel="symbols"]').hidden);
+  key('@');
+  assert.equal(name.value, '@', 'o painel de caracteres especiais escreve no campo');
+  key('symbols');
+  assert(!modal.querySelector('[data-keyboard-layout-panel="letters"]').hidden, 'ABC retorna às letras');
   // O teclado abre com a primeira letra maiúscula e o Shift aceso; depois dela
   // volta sozinho para minúscula.
   assert.equal(modal.querySelector('[data-on-screen-key="shift"]').getAttribute('aria-pressed'), 'true');
   key('A');
-  assert.equal(name.value, 'A');
+  assert.equal(name.value, '@A');
   assert.equal(modal.querySelector('[data-on-screen-key="shift"]').getAttribute('aria-pressed'), 'false');
   key('A');
-  assert.equal(name.value, 'Aa');
+  assert.equal(name.value, '@Aa');
   const count = modal.querySelector('[data-count]');
   controller.openFor(count);
   assert(modal.querySelector('.on-screen-keyboard--numeric'));
@@ -53,6 +68,9 @@ try {
   assert(modal.querySelector('[data-on-screen-key="A"]'), 'volta ao teclado de letras');
   assert.equal(modal.querySelectorAll('.on-screen-keyboard').length, 1);
   assert.equal(name.readOnly, true, 'não chama teclado nativo');
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.on-screen-keyboard__row button \{[^}]*border-radius: 4px;/s,
+    'todas as teclas usam arredondamento de 4px');
   console.log('INPUT_KEYBOARD_OK: texto, números, decimal, limites e alternância de layout.');
 } finally {
   controller.destroy();

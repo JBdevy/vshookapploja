@@ -83,7 +83,6 @@ export class TabletInputKeyboardController {
       this.keyboard?.classList.add('player-modal__tablet-keyboard');
       if (this.keyboard) this.keyboard.dataset.inputLayout = layout;
     }
-    this.updateKeyboardAvailability(input);
     this.modal.classList.add('is-tablet-keyboard-open');
     this.showCaretFor(input);
   }
@@ -245,19 +244,6 @@ export class TabletInputKeyboardController {
     if (explicitLabel) return `Teclado para ${explicitLabel}`;
     const label = input.closest('label')?.querySelector<HTMLElement>('span')?.textContent?.trim();
     return label ? `Teclado para ${label}` : 'Teclado do Hook Keys';
-  }
-
-  private updateKeyboardAvailability(input: EditableInput): void {
-    const passwordField = input instanceof HTMLInputElement && input.type === 'password';
-    const emojiButton = this.keyboard?.querySelector<HTMLButtonElement>('[data-on-screen-key="emoji"]');
-    if (emojiButton) {
-      emojiButton.disabled = passwordField;
-      emojiButton.setAttribute('aria-disabled', String(passwordField));
-    }
-    if (passwordField) {
-      const emojis = this.keyboard?.querySelector<HTMLElement>('[data-on-screen-emojis]');
-      if (emojis) emojis.hidden = true;
-    }
   }
 
   private showCaretFor(input: EditableInput): void {

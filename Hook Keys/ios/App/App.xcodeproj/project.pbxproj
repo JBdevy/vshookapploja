@@ -26,6 +26,7 @@
 		A1000000000000000000000D /* FFTConvolver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* FFTConvolver.cpp */; };
 		A1000000000000000000000E /* TwoStageFFTConvolver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* TwoStageFFTConvolver.cpp */; };
 		A1000000000000000000000F /* Utilities.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* Utilities.cpp */; };
+		A10000000000000000000010 /* pads in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001B /* pads */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -54,6 +55,7 @@
 		A20000000000000000000018 /* FFTConvolver.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FFTConvolver.cpp; path = "../../native-engine/third_party/FFTConvolver/FFTConvolver.cpp"; sourceTree = SOURCE_ROOT; };
 		A20000000000000000000019 /* TwoStageFFTConvolver.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TwoStageFFTConvolver.cpp; path = "../../native-engine/third_party/FFTConvolver/TwoStageFFTConvolver.cpp"; sourceTree = SOURCE_ROOT; };
 		A2000000000000000000001A /* Utilities.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Utilities.cpp; path = "../../native-engine/third_party/FFTConvolver/Utilities.cpp"; sourceTree = SOURCE_ROOT; };
+		A2000000000000000000001B /* pads */ = {isa = PBXFileReference; lastKnownFileType = folder; name = pads; path = "../../native-engine/assets/pads"; sourceTree = SOURCE_ROOT; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -96,6 +98,7 @@
 			children = (
 				A30000000000000000000001 /* Hook Keys Engine */,
 				A20000000000000000000016 /* hook-b3 */,
+				A2000000000000000000001B /* pads */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A20000000000000000000001 /* HookKeysNativePlugin.swift */,
@@ -197,6 +200,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000000000000000000B /* hook-b3 in Resources */,
+				A10000000000000000000010 /* pads in Resources */,
 				504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */,
 				50B271D11FEDC1A000F3C39B /* public in Resources */,
 				504EC30F1FED79650016851F /* Assets.xcassets in Resources */,

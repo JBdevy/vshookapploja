@@ -17,9 +17,14 @@ import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Build;
 import android.net.Uri;
+import android.graphics.Rect;
 import android.util.Base64;
+import android.view.DisplayCutout;
 import android.view.HapticFeedbackConstants;
+import android.view.View;
+import android.view.WindowInsets;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -79,6 +84,7 @@ public class HookKeysNativePlugin extends Plugin {
     private final ExecutorService memoryExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService organExecutor = Executors.newSingleThreadExecutor();
     private volatile boolean organVoicesLoaded = false;
+    private volatile boolean padBankLoaded = false;
 
     private final AudioDeviceCallback audioDeviceCallback = new AudioDeviceCallback() {
         @Override
@@ -132,6 +138,7 @@ public class HookKeysNativePlugin extends Plugin {
         organExecutor.shutdownNow();
         nativeStop();
         organVoicesLoaded = false;
+        padBankLoaded = false;
         super.handleOnDestroy();
     }
 
@@ -164,6 +171,7 @@ public class HookKeysNativePlugin extends Plugin {
             return;
         }
         if (!preserveEngine) organVoicesLoaded = false;
+        if (!preserveEngine) padBankLoaded = false;
         finishOrganInitialization(call, false);
     }
 
@@ -175,6 +183,12 @@ public class HookKeysNativePlugin extends Plugin {
                 return;
             }
             organVoicesLoaded = true;
+            if (!padBankLoaded && !loadBundledPadBanks()) {
+                nativeStop();
+                call.reject("Não foi possível carregar os bancos SF2 dos Pads.");
+                return;
+            }
+            padBankLoaded = true;
             reconnectSelectedDevices();
             if (initializationResult) {
                 JSObject result = new JSObject();
@@ -216,6 +230,41 @@ public class HookKeysNativePlugin extends Plugin {
                 return false;
             }
             if (!nativeLoadOrganVoice(index, destination.getAbsolutePath())) return false;
+        }
+        return true;
+    }
+
+    private boolean loadBundledPadBanks() {
+        File directory = new File(getContext().getFilesDir(), "hook-pads-v2");
+        if (!directory.exists() && !directory.mkdirs()) return false;
+        for (int bankIndex = 0; bankIndex < 2; bankIndex++) {
+            String fileName = "pads-" + (bankIndex + 1) + ".sf2";
+            File destination = new File(directory, fileName);
+            try (InputStream input = getContext().getAssets().open("pads/" + fileName)) {
+                long packagedLength = input.available();
+                if (!destination.isFile() || destination.length() != packagedLength) {
+                    File temporary = new File(directory, fileName + ".part");
+                    if (temporary.exists() && !temporary.delete()) return false;
+                    try (FileOutputStream output = new FileOutputStream(temporary)) {
+                        byte[] buffer = new byte[256 * 1024];
+                        int count;
+                        while ((count = input.read(buffer)) >= 0) {
+                            if (count > 0) output.write(buffer, 0, count);
+                        }
+                        output.getFD().sync();
+                    } catch (IOException error) {
+                        temporary.delete();
+                        return false;
+                    }
+                    if ((destination.exists() && !destination.delete()) || !temporary.renameTo(destination)) {
+                        temporary.delete();
+                        return false;
+                    }
+                }
+            } catch (IOException error) {
+                return false;
+            }
+            if (!nativeLoadPadBank(bankIndex, destination.getAbsolutePath())) return false;
         }
         return true;
     }
@@ -336,6 +385,46 @@ public class HookKeysNativePlugin extends Plugin {
                 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
             call.resolve();
+        });
+    }
+
+    // Lê o recorte físico real, sem deduzir pelo ângulo. Alguns aparelhos
+    // informam safe-area dos dois lados, embora o notch exista em apenas um.
+    @PluginMethod
+    public void displayCutoutSide(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            String side = "none";
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                View decor = getActivity().getWindow().getDecorView();
+                WindowInsets insets = decor.getRootWindowInsets();
+                DisplayCutout cutout = insets == null ? null : insets.getDisplayCutout();
+                if (cutout != null && !cutout.getBoundingRects().isEmpty()) {
+                    Rect largest = null;
+                    long largestArea = -1;
+                    for (Rect bounds : cutout.getBoundingRects()) {
+                        long area = (long) bounds.width() * (long) bounds.height();
+                        if (area > largestArea) {
+                            largestArea = area;
+                            largest = bounds;
+                        }
+                    }
+                    if (largest != null) {
+                        int width = Math.max(1, decor.getWidth());
+                        int height = Math.max(1, decor.getHeight());
+                        int leftDistance = Math.max(0, largest.left);
+                        int rightDistance = Math.max(0, width - largest.right);
+                        int topDistance = Math.max(0, largest.top);
+                        int bottomDistance = Math.max(0, height - largest.bottom);
+                        int nearest = Math.min(Math.min(leftDistance, rightDistance), Math.min(topDistance, bottomDistance));
+                        if (nearest == leftDistance) side = "left";
+                        else if (nearest == rightDistance) side = "right";
+                        else if (nearest == topDistance) side = "top";
+                    }
+                }
+            }
+            JSObject result = new JSObject();
+            result.put("side", side);
+            call.resolve(result);
         });
     }
 
@@ -614,6 +703,7 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("rotaryDepth", 0.7f),
             call.getFloat("rotaryMix", 1.0f),
             call.getBoolean("rotaryModulationEnabled", false),
+            call.getBoolean("rotaryCabinetEnabled", true),
             call.getBoolean("chorusEnabled", false),
             call.getFloat("chorusRateHz", 0.6f),
             call.getFloat("chorusDepth", 0.5f),
@@ -736,6 +826,33 @@ public class HookKeysNativePlugin extends Plugin {
         );
         if (ok) call.resolve();
         else call.reject("A fila MIDI não está disponível.");
+    }
+
+    @PluginMethod
+    public void setPadNote(PluginCall call) {
+        int note = call.getInt("note", -1);
+        if (note < 60 || note > 71) {
+            call.reject("A nota do Pad 1 precisa estar entre C3 e B3.");
+            return;
+        }
+        int bankIndex = call.getInt("bankIndex", -1);
+        if (bankIndex < 0 || bankIndex > 1) {
+            call.reject("Banco de Pads inválido.");
+            return;
+        }
+        if (nativeSetPadNote(bankIndex, note, call.getBoolean("enabled", false),
+                Math.max(1, Math.min(127, call.getInt("velocity", 127))))) call.resolve();
+        else call.reject("A fila de áudio dos Pads está ocupada.");
+    }
+
+    @PluginMethod
+    public void configurePadOutput(PluginCall call) {
+        if (nativeSetPadOutput(
+                call.getFloat("db", 0.0f), call.getBoolean("enabled", true),
+                call.getInt("channelStart", 0), call.getInt("channelCount", 2),
+                Math.max(20.0f, Math.min(20000.0f, call.getFloat("lowCutHz", 20.0f))),
+                Math.max(20.0f, Math.min(20000.0f, call.getFloat("highCutHz", 20000.0f))))) call.resolve();
+        else call.reject("O motor ainda não foi inicializado.");
     }
 
     @PluginMethod
@@ -1110,6 +1227,14 @@ public class HookKeysNativePlugin extends Plugin {
     private static native float[] nativeModuleAnalysis(int moduleIndex);
     private static native boolean nativeLoadSoundFont(int moduleIndex, String path);
     private static native boolean nativeLoadOrganVoice(int drawbarIndex, String path);
+    private static native boolean nativeLoadPadBank(int bankIndex, String path);
+    private static native boolean nativeSetPadNote(
+        int bankIndex, int note, boolean enabled, int velocity
+    );
+    private static native boolean nativeSetPadOutput(
+        float db, boolean enabled, int channelStart, int channelCount,
+        float lowCutHz, float highCutHz
+    );
     private static native void nativeSetOrganDrawbarPosition(int drawbarIndex, int position);
     private static native boolean nativeCloneSoundFont(int sourceModuleIndex, int targetModuleIndex);
     private static native void nativeUnloadSoundFont(int moduleIndex);
@@ -1177,6 +1302,7 @@ public class HookKeysNativePlugin extends Plugin {
         float reverbMix, int reverbImpulse, boolean rotaryEnabled, int rotarySpeed,
         float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
         float rotaryDepth, float rotaryMix, boolean rotaryModulationEnabled,
+        boolean rotaryCabinetEnabled,
         boolean chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
         boolean autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
         float inputGainDb

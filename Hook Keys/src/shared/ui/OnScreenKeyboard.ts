@@ -5,17 +5,12 @@ const KEY_ROWS = [
   ['shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'backspace'],
 ] as const;
 
-const EMOJI_CATEGORIES = {
-  rostos: ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😋','😎','🤩','🥳','😏','😒','😔','😢','😭','😤','😡','🤯','😱','😴','🤔','🤗','🤫','🤭','🫠'],
-  gestos: ['👍','👎','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉','👆','👇','☝️','✋','🤚','🖐️','🖖','👋','👏','🙌','🫶','🙏','💪','🫵'],
-  pessoas: ['👶','🧒','👦','👧','🧑','👨','👩','🧔','👴','👵','👮','👷','💂','🕵️','👩‍⚕️','👨‍🎓','👩‍🏫','👨‍🎤','👩‍🎨','👨‍🚀','🧙','🦸','🥷'],
-  animais: ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🦄','🐝','🦋','🐢','🐍','🐬','🐳'],
-  comida: ['🍎','🍊','🍋','🍉','🍇','🍓','🍒','🥭','🍍','🥥','🥑','🍅','🥕','🌽','🍞','🧀','🍔','🍟','🍕','🌭','🌮','🍿','🍩','🍪','🎂','☕','🥤'],
-  musica: ['🎹','🎵','🎶','🎤','🎧','🎸','🥁','🎺','🎷','🪗','🎻','🪕','🪘','🎼','🔊','🔉','🔈','📻','💿','🎙️','🎚️','🎛️'],
-  objetos: ['⌚','📱','💻','⌨️','🖥️','📷','💡','🔦','🔋','🔌','🧰','🔧','🔨','⚙️','🧲','📌','📍','✂️','📝','📁','🔒','🔑','🎁','🎈'],
-  simbolos: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','💔','❣️','💕','💯','💥','✨','🔥','⚡','⭐','🌟','✅','❌','⚠️','🚨','♻️','➕','➖','➡️','⬅️'],
-  bandeiras: ['🇧🇷','🇵🇹','🇺🇸','🇦🇷','🇨🇱','🇨🇴','🇲🇽','🇨🇦','🇬🇧','🇫🇷','🇩🇪','🇮🇹','🇪🇸','🇯🇵','🇰🇷','🇨🇳','🇮🇳','🇦🇺'],
-} as const;
+const SYMBOL_ROWS = [
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+  ['@', '#', '$', '%', '&', '*', '-', '+', '(', ')'],
+  ['!', '"', "'", ':', ';', '/', '?', '_', '='],
+  ['\\', '|', '~', '<', '>', '[', ']', '{', '}', 'backspace'],
+] as const;
 
 const ACCENTS: Record<string, readonly string[]> = {
   A: ['Á', 'À', 'Â', 'Ã', 'Ä', 'Å'],
@@ -29,45 +24,47 @@ const ACCENTS: Record<string, readonly string[]> = {
 };
 
 export function createOnScreenKeyboardMarkup(label: string, initiallyHidden = false): string {
-  const rows = KEY_ROWS.map((row) => `
+  const letterRows = KEY_ROWS.map((row) => `
     <div class="on-screen-keyboard__row">
-      ${row.map((key) => {
+      ${row.map((key) => createKeyboardKeyMarkup(key, true)).join('')}
+    </div>
+  `).join('');
+  const symbolRows = SYMBOL_ROWS.map((row) => `
+    <div class="on-screen-keyboard__row">
+      ${row.map((key) => createKeyboardKeyMarkup(key, false)).join('')}
+    </div>
+  `).join('');
+
+  return `
+    <div class="on-screen-keyboard" data-shift-mode="once" data-character-layout="letters" aria-label="${escapeAttribute(label)}"${initiallyHidden ? ' hidden' : ''}>
+      <div class="on-screen-keyboard__layout" data-keyboard-layout-panel="letters">
+        ${letterRows}
+      </div>
+      <div class="on-screen-keyboard__layout" data-keyboard-layout-panel="symbols" hidden>
+        ${symbolRows}
+      </div>
+      <div class="on-screen-keyboard__row on-screen-keyboard__row--actions">
+        <button type="button" data-on-screen-key="symbols" aria-label="Abrir caracteres especiais">#+=</button>
+        <button type="button" data-on-screen-key="space">Espaço</button>
+        <button type="button" data-on-screen-key="enter" aria-label="Enter">Enter</button>
+      </div>
+    </div>
+  `;
+}
+
+function createKeyboardKeyMarkup(key: string, allowShift: boolean): string {
         if (key === 'backspace') {
           return '<button type="button" data-on-screen-key="backspace" aria-label="Apagar último caractere">⌫</button>';
         }
         if (key === 'shift') {
+          if (!allowShift) return '';
           // O teclado abre com a primeira letra maiúscula, como no celular:
           // o Shift já nasce aceso para combinar com o que se vê nas teclas.
           return '<button class="is-active" type="button" data-on-screen-key="shift" aria-label="Ativar maiúscula" aria-pressed="true">⇧</button>';
         }
         const isLetter = /^[A-Z]$/.test(key);
-        return `<button type="button" data-on-screen-key="${key}"${isLetter ? ` data-on-screen-character="${key}"` : ''}>${key}</button>`;
-      }).join('')}
-    </div>
-  `).join('');
-
-  return `
-    <div class="on-screen-keyboard" data-shift-mode="once" aria-label="${escapeAttribute(label)}"${initiallyHidden ? ' hidden' : ''}>
-      ${rows}
-      <div class="on-screen-keyboard__row on-screen-keyboard__row--actions">
-        <button type="button" data-on-screen-key="emoji" aria-label="Abrir emojis">☺</button>
-        <button type="button" data-on-screen-key="space">Espaço</button>
-        <button type="button" data-on-screen-key="enter" aria-label="Enter">Enter</button>
-      </div>
-      <div class="on-screen-keyboard__emojis" data-on-screen-emojis hidden>
-        <nav class="on-screen-keyboard__emoji-categories" aria-label="Categorias de emoji">
-          ${Object.keys(EMOJI_CATEGORIES).map((category, index) => `
-            <button class="${index === 0 ? 'is-selected' : ''}" type="button" data-on-screen-key="emoji-category" data-emoji-category="${category}">${emojiCategoryIcon(category)}</button>
-          `).join('')}
-        </nav>
-        ${Object.entries(EMOJI_CATEGORIES).map(([category, emojis], index) => `
-          <div class="on-screen-keyboard__emoji-grid" data-emoji-panel="${category}"${index === 0 ? '' : ' hidden'}>
-            ${emojis.map((emoji) => `<button type="button" data-on-screen-key="${emoji}" aria-label="Emoji ${emoji}">${emoji}</button>`).join('')}
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
+        const escapedKey = escapeAttribute(key);
+        return `<button type="button" data-on-screen-key="${escapedKey}"${isLetter ? ` data-on-screen-character="${escapedKey}"` : ''}>${escapedKey}</button>`;
 }
 
 export function createNumericOnScreenKeyboardMarkup(label: string, allowDecimal = false): string {
@@ -87,7 +84,7 @@ export function createNumericOnScreenKeyboardMarkup(label: string, allowDecimal 
 export function applyOnScreenKey(currentValue: string, key: string, maximumLength: number): string {
   const characters = Array.from(currentValue);
   if (key === 'backspace') return characters.slice(0, -1).join('');
-  if (key === 'emoji' || key === 'enter' || key === 'shift') return currentValue;
+  if (key === 'enter' || key === 'shift' || key === 'symbols') return currentValue;
   if (key === 'space') {
     if (characters.length === 0 || currentValue.endsWith(' ') || characters.length >= maximumLength) {
       return currentValue;
@@ -103,19 +100,17 @@ export function resolveOnScreenKey(button: HTMLButtonElement, rawKey: string): s
   const keyboard = button.closest<HTMLElement>('.on-screen-keyboard');
   if (!keyboard) return rawKey;
   if (rawKey !== 'shift') keyboard.querySelector('[data-on-screen-accents]')?.remove();
-  if (rawKey === 'emoji') {
-    const emojis = keyboard.querySelector<HTMLElement>('[data-on-screen-emojis]');
-    if (emojis) emojis.hidden = !emojis.hidden;
-    return null;
-  }
-  if (rawKey === 'emoji-category') {
-    const category = button.dataset.emojiCategory;
-    for (const option of keyboard.querySelectorAll<HTMLButtonElement>('[data-emoji-category]')) {
-      option.classList.toggle('is-selected', option === button);
+  if (rawKey === 'symbols') {
+    const symbolsVisible = keyboard.dataset.characterLayout === 'symbols';
+    const nextLayout = symbolsVisible ? 'letters' : 'symbols';
+    keyboard.dataset.characterLayout = nextLayout;
+    for (const panel of keyboard.querySelectorAll<HTMLElement>('[data-keyboard-layout-panel]')) {
+      panel.hidden = panel.dataset.keyboardLayoutPanel !== nextLayout;
     }
-    for (const panel of keyboard.querySelectorAll<HTMLElement>('[data-emoji-panel]')) {
-      panel.hidden = panel.dataset.emojiPanel !== category;
-    }
+    button.textContent = symbolsVisible ? '#+=' : 'ABC';
+    button.setAttribute('aria-label', symbolsVisible
+      ? 'Abrir caracteres especiais'
+      : 'Voltar para letras');
     return null;
   }
   if (rawKey === 'shift') {
@@ -177,13 +172,6 @@ export function openOnScreenAccentOptions(button: HTMLButtonElement): boolean {
   options.style.setProperty('--accent-bottom', `${keyboardBounds.bottom - buttonBounds.top + 7}px`);
   keyboard.append(options);
   return true;
-}
-
-function emojiCategoryIcon(category: string): string {
-  return ({
-    rostos: '😀', gestos: '👋', pessoas: '🧑', animais: '🐶', comida: '🍕',
-    musica: '🎹', objetos: '💡', simbolos: '✨', bandeiras: '🇧🇷',
-  } as Record<string, string>)[category] ?? '•';
 }
 
 function escapeAttribute(value: string): string {

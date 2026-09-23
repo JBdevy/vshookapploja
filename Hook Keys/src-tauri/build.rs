@@ -32,5 +32,6 @@ fn main() {
     println!("cargo:rerun-if-changed={engine}/third_party/TinySoundFont/tsf.h");
     println!("cargo:rerun-if-changed={engine}/third_party/FFTConvolver");
     println!("cargo:rerun-if-changed={engine}/assets/hook-b3");
+    println!("cargo:rerun-if-changed={engine}/assets/pads");
     tauri_build::build()
 }

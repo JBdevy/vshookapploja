@@ -34,10 +34,16 @@ NativeEngineRuntime::NativeEngineRuntime(double sampleRate, std::size_t maximumB
       organModule_(std::make_unique<OrganModule>(sampleRate_, maximumBlockFrames_)),
       layerScratch_(maximumBlockFrames_ * 32, 0.0f),
       stereoScratch_(maximumBlockFrames_ * 2, 0.0f),
+      padLeftScratch_(maximumBlockFrames_, 0.0f),
+      padRightScratch_(maximumBlockFrames_, 0.0f),
       tracks_(std::make_unique<TrackPlayer>(sampleRate_)) {
   masterLimiterRelease_ = 1.0f - std::exp(
       -1.0f / (static_cast<float>(sampleRate_) * kMasterLimiterReleaseSeconds));
   layers_.reserve(kMaximumPresetLayers);
+  for (auto& pad : padModules_) {
+    pad = std::make_unique<TinySoundFontModule>(
+        sampleRate_, maximumBlockFrames_, kHookKeysMaximumVoices);
+  }
   layers_.push_back(createPresetLayer());
   controlLayer_ = renderLayer_ = layers_.back().get();
 }
@@ -49,6 +55,42 @@ bool NativeEngineRuntime::loadOrganVoice(std::size_t drawbarIndex, const char* u
 
 void NativeEngineRuntime::setOrganDrawbarPosition(std::size_t drawbarIndex, std::uint8_t position) noexcept {
   organModule_->setDrawbarPosition(drawbarIndex, position);
+}
+
+bool NativeEngineRuntime::loadPadBank(std::size_t bankIndex, const char* utf8Path) noexcept {
+  std::scoped_lock lock(soundFontMutex_);
+  if (bankIndex >= padModules_.size() || utf8Path == nullptr || *utf8Path == '\0') return false;
+  if (!padModules_[bankIndex]->loadFromFile(utf8Path)) return false;
+  // Preserve a envoltória criada dentro do SF2 do pad.
+  padModules_[bankIndex]->useEmbeddedVolumeEnvelope();
+  return true;
+}
+
+bool NativeEngineRuntime::setPadNote(
+    std::size_t bankIndex, std::uint8_t note, bool enabled, std::uint8_t velocity) noexcept {
+  if (bankIndex >= padModules_.size() || note < 60 || note > 71) return false;
+  RuntimeCommand command;
+  command.kind = RuntimeCommand::Kind::padNote;
+  command.midi.data1 = note;
+  command.midi.data2 = enabled ? std::clamp<std::uint8_t>(velocity, 1, 127) : 0;
+  command.midi.inputSlot = static_cast<std::uint8_t>(bankIndex);
+  return runtimeCommands_.tryPush(command);
+}
+
+void NativeEngineRuntime::setPadOutput(
+    float db, bool enabled, std::uint8_t channelStart, std::uint8_t channelCount,
+    float lowCutHz, float highCutHz) noexcept {
+  const auto route = static_cast<std::uint16_t>(
+      static_cast<std::uint16_t>(std::min<std::uint8_t>(channelStart, 31))
+      | (static_cast<std::uint16_t>(channelCount == 1 ? 1 : 2) << 8));
+  if (padOutputRoute_.exchange(route, std::memory_order_acq_rel) != route) {
+    for (auto& peak : padPeaks_) peak.store(0.0f, std::memory_order_relaxed);
+  }
+  padGainLinear_.store(
+      enabled && db > -90.0f ? std::pow(10.0f, std::clamp(db, -90.0f, 0.0f) / 20.0f) : 0.0f,
+      std::memory_order_release);
+  padLowCutHz_.store(std::clamp(lowCutHz, 20.0f, 20000.0f), std::memory_order_release);
+  padHighCutHz_.store(std::clamp(highCutHz, 20.0f, 20000.0f), std::memory_order_release);
 }
 
 std::unique_ptr<NativeEngineRuntime::PresetLayer> NativeEngineRuntime::createPresetLayer() {
@@ -310,11 +352,31 @@ bool NativeEngineRuntime::setModuleEnvelope(
     float decayMs, float releaseMs, float glideMs, float sustainDb) noexcept {
   std::scoped_lock lock(configMutex_);
   if (moduleIndex >= controlLayer_->modules.size()) return false;
+  // Estes sao os valores que a interface usa para representar o estado
+  // inicial. No estado inicial, qualquer modulo SF2 deve respeitar a
+  // envoltoria gravada no proprio arquivo. O override do app so entra quando
+  // o usuario realmente altera um dos controles.
+  constexpr float epsilon = 0.001f;
+  const auto near = [epsilon](float left, float right) noexcept {
+    return std::abs(left - right) <= epsilon;
+  };
+  const bool usesFactoryEnvelope = near(attackMs, 0.0f) && near(holdMs, 15000.0f)
+      && near(decayMs, 25000.0f) && near(releaseMs, 300.0f)
+      && near(sustainDb, 0.0f);
   if (moduleIndex == 6) {
-    organModule_->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs, sustainDb);
+    if (usesFactoryEnvelope) {
+      organModule_->useEmbeddedVolumeEnvelope();
+    } else {
+      organModule_->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs, sustainDb);
+    }
     return true;
   }
-  controlLayer_->modules[moduleIndex]->setVolumeEnvelope(attackMs, holdMs, decayMs, releaseMs, sustainDb);
+  if (usesFactoryEnvelope) {
+    controlLayer_->modules[moduleIndex]->useEmbeddedVolumeEnvelope();
+  } else {
+    controlLayer_->modules[moduleIndex]->setVolumeEnvelope(
+        attackMs, holdMs, decayMs, releaseMs, sustainDb);
+  }
   controlLayer_->modules[moduleIndex]->setGlide(std::isfinite(glideMs) ? std::clamp(glideMs, 0.0f, 5000.0f) : 0.0f);
   return true;
 }
@@ -441,6 +503,11 @@ void NativeEngineRuntime::processRuntimeCommands() noexcept {
       for (std::size_t index = 0; index < tailLayerCount_; ++index) {
         (void)tailLayers_[index]->engine->stopAllNotes();
       }
+      for (auto& pad : padModules_) pad->allNotesOff();
+    } else if (command.kind == RuntimeCommand::Kind::padNote) {
+      auto& pad = padModules_[std::min<std::size_t>(command.midi.inputSlot, padModules_.size() - 1)];
+      if (command.midi.data2 == 0) pad->noteOff(command.midi.data1);
+      else pad->noteOn(command.midi.data1, command.midi.data2);
     } else {
       (void)renderLayer_->engine->enqueueMidi(command.midi);
       const auto type = command.midi.status & 0xf0;
@@ -510,6 +577,14 @@ std::array<float, 2> NativeEngineRuntime::consumeMetronomePeaks() noexcept {
   };
 }
 
+std::array<float, 2> NativeEngineRuntime::consumePadPeaks() noexcept {
+  for (auto& pad : padModules_) pad->collectRetiredSoundFonts();
+  return {
+      padPeaks_[0].exchange(0.0f, std::memory_order_acq_rel),
+      padPeaks_[1].exchange(0.0f, std::memory_order_acq_rel),
+  };
+}
+
 void NativeEngineRuntime::render(float* left, float* right, std::size_t frames) noexcept {
   if (left == nullptr || right == nullptr) return;
   for (std::size_t rendered = 0; rendered < frames;) {
@@ -527,6 +602,7 @@ void NativeEngineRuntime::renderInterleaved(float* output, std::size_t frames, s
   if (output == nullptr || channels == 0 || channels > 32) return;
   const auto started = std::chrono::steady_clock::now();
   prepareRealtimeFloatingPoint();
+  for (auto& pad : padModules_) pad->beginBlock();
   processRuntimeCommands();
   for (std::size_t rendered = 0; rendered < frames;) {
     const auto count = std::min(maximumBlockFrames_, frames - rendered);
@@ -571,7 +647,8 @@ void NativeEngineRuntime::renderInterleaved(float* output, std::size_t frames, s
     while (masterBlockPeaks[channel] > previous && !masterPeaks_[channel].compare_exchange_weak(
         previous, masterBlockPeaks[channel], std::memory_order_release, std::memory_order_relaxed)) {}
   }
-  // Click e Playlist têm volumes e medidores próprios; não passam por Módulos.
+  // Pads, Click e Playlist têm volumes/rotas próprios; não passam por Módulos.
+  addPadsInterleaved(output, frames, channels);
   addMetronomeInterleaved(output, frames, channels);
   tracks_->render(output, frames, channels);
   const auto budgetSeconds = static_cast<double>(frames) / sampleRate_;
@@ -620,6 +697,91 @@ float NativeEngineRuntime::nextOutputGain() noexcept {
     if (--outputGainRampFrames_ == 0) currentOutputGain_ = outputGainTargetSeen_;
   }
   return currentOutputGain_;
+}
+
+float NativeEngineRuntime::nextPadGain() noexcept {
+  const auto target = padGainLinear_.load(std::memory_order_acquire);
+  if (target != padGainTargetSeen_) {
+    padGainTargetSeen_ = target;
+    padGainRampFrames_ = std::max<std::size_t>(
+        1, static_cast<std::size_t>(sampleRate_ * 0.005));
+    padGainStep_ = (target - currentPadGain_) / static_cast<float>(padGainRampFrames_);
+  }
+  if (padGainRampFrames_ > 0) {
+    currentPadGain_ += padGainStep_;
+    if (--padGainRampFrames_ == 0) currentPadGain_ = padGainTargetSeen_;
+  }
+  return currentPadGain_;
+}
+
+void NativeEngineRuntime::addPadsInterleaved(
+    float* output, std::size_t frames, std::size_t channels) noexcept {
+  if (output == nullptr || frames == 0 || channels == 0) return;
+  const auto route = padOutputRoute_.load(std::memory_order_acquire);
+  const auto requested = static_cast<std::size_t>(route & 0xffu);
+  const auto first = requested < channels ? requested : 0;
+  const bool stereo = ((route >> 8) & 0xffu) == 2 && first + 1 < channels;
+  std::array<float, 2> blockPeaks{};
+  for (std::size_t rendered = 0; rendered < frames;) {
+    const auto count = std::min(maximumBlockFrames_, frames - rendered);
+    std::fill_n(padLeftScratch_.data(), count, 0.0f);
+    std::fill_n(padRightScratch_.data(), count, 0.0f);
+    for (auto& pad : padModules_) {
+      pad->renderAdd(padLeftScratch_.data(), padRightScratch_.data(), count, 1.0f);
+    }
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      const auto gain = nextPadGain();
+      const auto targetLowCut = padLowCutHz_.load(std::memory_order_relaxed);
+      const auto targetHighCut = padHighCutHz_.load(std::memory_order_relaxed);
+      currentPadLowCutHz_ += (targetLowCut - currentPadLowCutHz_) * 0.0025f;
+      currentPadHighCutHz_ += (targetHighCut - currentPadHighCutHz_) * 0.0025f;
+      float left = padLeftScratch_[frame];
+      float right = padRightScratch_[frame];
+      constexpr float kTwoPi = 6.28318530718f;
+      if (currentPadLowCutHz_ > 20.05f) {
+        const auto alpha = 1.0f - std::exp(
+            -kTwoPi * currentPadLowCutHz_ / static_cast<float>(sampleRate_));
+        padHighPassLowState_[0] += alpha * (left - padHighPassLowState_[0]);
+        padHighPassLowState_[1] += alpha * (right - padHighPassLowState_[1]);
+        left -= padHighPassLowState_[0];
+        right -= padHighPassLowState_[1];
+      } else {
+        padHighPassLowState_[0] = 0.0f;
+        padHighPassLowState_[1] = 0.0f;
+      }
+      if (currentPadHighCutHz_ < 19950.0f) {
+        const auto cutoff = std::min(currentPadHighCutHz_, static_cast<float>(sampleRate_ * 0.45));
+        const auto alpha = 1.0f - std::exp(-kTwoPi * cutoff / static_cast<float>(sampleRate_));
+        padLowPassState_[0] += alpha * (left - padLowPassState_[0]);
+        padLowPassState_[1] += alpha * (right - padLowPassState_[1]);
+        left = padLowPassState_[0];
+        right = padLowPassState_[1];
+      } else {
+        padLowPassState_[0] = left;
+        padLowPassState_[1] = right;
+      }
+      left *= gain;
+      right *= gain;
+      auto* destination = output + (rendered + frame) * channels;
+      if (stereo) {
+        destination[first] += left;
+        destination[first + 1] += right;
+        blockPeaks[0] = std::max(blockPeaks[0], std::abs(left));
+        blockPeaks[1] = std::max(blockPeaks[1], std::abs(right));
+      } else {
+        // Saída mono soma L+R, igual ao modo Mono dos módulos.
+        const auto mono = left + right;
+        destination[first] += mono;
+        blockPeaks[0] = blockPeaks[1] = std::max(blockPeaks[0], std::abs(mono));
+      }
+    }
+    rendered += count;
+  }
+  for (std::size_t channel = 0; channel < blockPeaks.size(); ++channel) {
+    auto previous = padPeaks_[channel].load(std::memory_order_relaxed);
+    while (blockPeaks[channel] > previous && !padPeaks_[channel].compare_exchange_weak(
+        previous, blockPeaks[channel], std::memory_order_release, std::memory_order_relaxed)) {}
+  }
 }
 
 void NativeEngineRuntime::applyMasterLimiter(float* frame, std::size_t channels) noexcept {

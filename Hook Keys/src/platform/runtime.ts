@@ -1,6 +1,7 @@
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Capacitor } from '@capacitor/core';
 import { ScreenOrientation } from '@capacitor/screen-orientation';
+import { installDesktopBrowserShortcutBlocker } from './desktop/installDesktopBrowserShortcutBlocker';
 import { hookKeysNative } from './native/HookKeysNative';
 
 let initialized = false;
@@ -9,7 +10,33 @@ let currentMode: AppOrientationMode = 'login';
 
 type TauriRuntimeWindow = Window & {
   __TAURI_INTERNALS__?: unknown;
+  orientation?: number;
 };
+
+async function updateNativeNotchSide(): Promise<void> {
+  const nativeSide = await hookKeysNative.displayCutoutSide();
+  if (nativeSide) {
+    document.documentElement.dataset.notchSide = nativeSide;
+    return;
+  }
+
+  const orientation = window.screen.orientation;
+  const rawAngle = Number.isFinite(orientation?.angle)
+    ? orientation.angle
+    : Number((window as TauriRuntimeWindow).orientation ?? 0);
+  const angle = ((rawAngle % 360) + 360) % 360;
+
+  // Celulares têm orientação natural em retrato. A orientação da tela informa
+  // a rotação do conteúdo, por isso o recorte físico fica no lado oposto ao
+  // que uma leitura direta do ângulo sugeriria: em 90° o notch está à esquerda
+  // e em 270° à direita. O lado livre é justamente o da porta de carregamento.
+  const side = angle === 90 || orientation?.type === 'landscape-primary'
+    ? 'left'
+    : angle === 270 || orientation?.type === 'landscape-secondary'
+      ? 'right'
+      : 'top';
+  document.documentElement.dataset.notchSide = side;
+}
 
 export function isDesktopRuntime(): boolean {
   return Boolean((window as TauriRuntimeWindow).__TAURI_INTERNALS__);
@@ -33,6 +60,7 @@ async function reinforceNativeRuntime(): Promise<void> {
     lockOrientation(),
     keepScreenAwake(),
   ]);
+  await updateNativeNotchSide();
 }
 
 export async function initializePlatformRuntime(): Promise<void> {
@@ -49,11 +77,23 @@ export async function initializePlatformRuntime(): Promise<void> {
     // comercial. Os controles que usam o botão direito continuam recebendo o
     // evento e tratam suas próprias ações antes que o menu pudesse aparecer.
     document.addEventListener('contextmenu', (event) => event.preventDefault());
+    installDesktopBrowserShortcutBlocker();
     return;
   }
-  if (!isNative) return;
+  if (!isNative) {
+    // A prévia aberta diretamente no navegador do celular também precisa
+    // escolher um único lado para o notch; antes este cálculo só rodava dentro
+    // do APK/IPA e a versão web ficava com 1 px nos dois lados.
+    await updateNativeNotchSide();
+    window.screen.orientation?.addEventListener('change', () => void updateNativeNotchSide());
+    window.addEventListener('orientationchange', () => void updateNativeNotchSide());
+    window.addEventListener('resize', () => void updateNativeNotchSide());
+    return;
+  }
 
   await reinforceNativeRuntime();
+  window.screen.orientation?.addEventListener('change', () => void updateNativeNotchSide());
+  window.addEventListener('orientationchange', () => void updateNativeNotchSide());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void reinforceNativeRuntime();
   });

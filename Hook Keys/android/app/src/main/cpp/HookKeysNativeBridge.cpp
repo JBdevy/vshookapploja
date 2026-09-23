@@ -160,6 +160,34 @@ public:
     return engine != nullptr && engine->loadOrganVoice(drawbarIndex, path);
   }
 
+  bool loadPadBank(std::size_t bankIndex, const char* path) noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> engine;
+    {
+      std::scoped_lock lock(controlMutex_);
+      engine = runtime_;
+    }
+    return engine != nullptr && engine->loadPadBank(bankIndex, path);
+  }
+
+  bool setPadNote(int bankIndex, int note, bool enabled, int velocity) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    return runtime != nullptr && runtime->setPadNote(
+        static_cast<std::size_t>(std::clamp(bankIndex, 0, 1)),
+        static_cast<std::uint8_t>(std::clamp(note, 0, 127)), enabled,
+        static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)));
+  }
+
+  bool setPadOutput(
+      float db, bool enabled, int channelStart, int channelCount,
+      float lowCutHz, float highCutHz) noexcept {
+    auto* runtime = activeRuntime_.load(std::memory_order_acquire);
+    if (runtime == nullptr) return false;
+    runtime->setPadOutput(db, enabled,
+        static_cast<std::uint8_t>(std::clamp(channelStart, 0, 31)), channelCount == 1 ? 1 : 2,
+        lowCutHz, highCutHz);
+    return true;
+  }
+
   void setOrganDrawbarPosition(std::size_t drawbarIndex, std::uint8_t position) noexcept {
     if (auto* runtime = activeRuntime_.load(std::memory_order_acquire)) {
       runtime->setOrganDrawbarPosition(drawbarIndex, position);
@@ -222,6 +250,16 @@ public:
       runtime = runtime_;
     }
     return runtime ? runtime->consumeMetronomePeaks() : std::array<float, 2>{};
+  }
+
+  std::array<float, 2> consumePadPeaks() noexcept {
+    std::shared_ptr<hook_keys::NativeEngineRuntime> runtime;
+    {
+      std::unique_lock lock(controlMutex_, std::try_to_lock);
+      if (!lock.owns_lock()) return {};
+      runtime = runtime_;
+    }
+    return runtime ? runtime->consumePadPeaks() : std::array<float, 2>{};
   }
 
   hook_keys::HookKeysEngine::ModuleAnalysis consumeModuleAnalysis(
@@ -350,6 +388,7 @@ public:
       float reverbMix, int reverbImpulse, bool rotaryEnabled, int rotarySpeed,
       float rotarySlowHz, float rotaryFastHz, float rotaryRampSeconds,
       float rotaryDepth, float rotaryMix, bool rotaryModulationEnabled,
+      bool rotaryCabinetEnabled,
       bool chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
       bool autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
       float inputGainDb) noexcept {
@@ -391,7 +430,7 @@ public:
     effects.rotary = {rotaryEnabled, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                       rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                       rotaryModulationEnabled};
-    effects.rotary.cabinetEnabled = moduleIndex == 6;
+    effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled;
     effects.chorus = {chorusEnabled, chorusRateHz, chorusDepth, chorusMix};
     effects.autoFader = {autoFaderEnabled, autoFaderBeats, autoFaderDepthDb};
     effects.inputGainDb = inputGainDb;
@@ -721,8 +760,9 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeModuleMeterLevels(JNI
   const auto master = gEngine.consumeMasterPeaks();
   const auto tracks = gEngine.consumeTrackPeaks();
   const auto click = gEngine.consumeMetronomePeaks();
+  const auto pads = gEngine.consumePadPeaks();
   auto result = env->NewFloatArray(static_cast<jsize>(
-      peaks.size() + master.size() + tracks.size() + click.size()));
+      peaks.size() + master.size() + tracks.size() + click.size() + pads.size()));
   if (result) {
     env->SetFloatArrayRegion(result, 0, static_cast<jsize>(peaks.size()), peaks.data());
     env->SetFloatArrayRegion(result, static_cast<jsize>(peaks.size()),
@@ -731,6 +771,9 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeModuleMeterLevels(JNI
         static_cast<jsize>(tracks.size()), tracks.data());
     env->SetFloatArrayRegion(result, static_cast<jsize>(peaks.size() + master.size() + tracks.size()),
         static_cast<jsize>(click.size()), click.data());
+    env->SetFloatArrayRegion(result,
+        static_cast<jsize>(peaks.size() + master.size() + tracks.size() + click.size()),
+        static_cast<jsize>(pads.size()), pads.data());
   }
   return result;
 }
@@ -757,6 +800,28 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeLoadOrganVoice(
     JNIEnv* environment, jclass, jint drawbarIndex, jstring path) {
   const auto nativePath = javaString(environment, path);
   return gEngine.loadOrganVoice(static_cast<std::size_t>(drawbarIndex), nativePath.c_str())
+      ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeLoadPadBank(
+    JNIEnv* environment, jclass, jint bankIndex, jstring path) {
+  const auto nativePath = javaString(environment, path);
+  return gEngine.loadPadBank(static_cast<std::size_t>(bankIndex), nativePath.c_str()) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetPadNote(
+    JNIEnv*, jclass, jint bankIndex, jint note, jboolean enabled, jint velocity) {
+  return gEngine.setPadNote(bankIndex, note, enabled == JNI_TRUE, velocity) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetPadOutput(
+    JNIEnv*, jclass, jfloat db, jboolean enabled, jint channelStart, jint channelCount,
+    jfloat lowCutHz, jfloat highCutHz) {
+  return gEngine.setPadOutput(
+      db, enabled == JNI_TRUE, channelStart, channelCount, lowCutHz, highCutHz)
       ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -928,6 +993,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jfloat reverbMix, jint reverbImpulse, jboolean rotaryEnabled, jint rotarySpeed,
     jfloat rotarySlowHz, jfloat rotaryFastHz, jfloat rotaryRampSeconds,
     jfloat rotaryDepth, jfloat rotaryMix, jboolean rotaryModulationEnabled,
+    jboolean rotaryCabinetEnabled,
     jboolean chorusEnabled, jfloat chorusRateHz, jfloat chorusDepth, jfloat chorusMix,
     jboolean autoFaderEnabled, jfloat autoFaderBeats, jfloat autoFaderDepthDb,
     jfloat inputGainDb) {
@@ -956,7 +1022,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
              reverbMod, reverbSize, reverbMix, reverbImpulse,
              rotaryEnabled == JNI_TRUE, rotarySpeed,
              rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
-             rotaryModulationEnabled == JNI_TRUE,
+             rotaryModulationEnabled == JNI_TRUE, rotaryCabinetEnabled == JNI_TRUE,
              chorusEnabled == JNI_TRUE, chorusRateHz, chorusDepth, chorusMix,
              autoFaderEnabled == JNI_TRUE, autoFaderBeats, autoFaderDepthDb, inputGainDb)
              ? JNI_TRUE

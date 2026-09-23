@@ -44,15 +44,29 @@ private:
     float b2 = 0.0f;
     float a1 = 0.0f;
     float a2 = 0.0f;
+    float targetB0 = 1.0f;
+    float targetB1 = 0.0f;
+    float targetB2 = 0.0f;
+    float targetA1 = 0.0f;
+    float targetA2 = 0.0f;
+    float stepB0 = 0.0f;
+    float stepB1 = 0.0f;
+    float stepB2 = 0.0f;
+    float stepA1 = 0.0f;
+    float stepA2 = 0.0f;
     float z1Left = 0.0f;
     float z2Left = 0.0f;
     float z1Right = 0.0f;
     float z2Right = 0.0f;
     bool enabled = false;
+    bool targetEnabled = false;
+    bool coefficientsInitialized = false;
+    std::uint32_t smoothingSamplesRemaining = 0;
 
     void configure(const EqBandConfig& config, double sampleRate) noexcept;
     void reset() noexcept;
     void process(float& left, float& right) noexcept;
+    void advanceCoefficients() noexcept;
   };
 
   struct Equalizer final {
@@ -127,10 +141,15 @@ private:
     std::array<ConvolutionPair, 2> convolvers{}; // Rotary Off, Rotary On
     std::array<std::array<float, 256>, 2> wetLeft{};
     std::array<std::array<float, 256>, 2> wetRight{};
+    // Os IRs têm forte atenuação média depois da normalização que protege as
+    // ressonâncias. Cada resposta mantém um ganho de loudness próprio.
+    std::array<float, 2> loudnessGain{{4.0f, 4.0f}};
+    std::size_t activeImpulse = 0;
+    bool wasEnabled = false;
 
     void prepare(double nextSampleRate);
     void reset() noexcept;
-    void process(float* left, float* right, std::size_t frames, bool rotaryOn) noexcept;
+    void process(float* left, float* right, std::size_t frames, bool enabled, bool rotaryOn) noexcept;
   };
 
   // Caixa Leslie de dois rotores (corneta e tambor), captada por dois microfones.

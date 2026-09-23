@@ -19,8 +19,9 @@ use std::{
     ptr::NonNull,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
     },
+    time::Instant,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -48,6 +49,12 @@ unsafe extern "C" {
         drawbar_index: usize,
         path: *const c_char,
     ) -> i32;
+    fn hk_runtime_load_pad_bank(handle: *mut c_void, bank_index: usize, path: *const c_char) -> i32;
+    fn hk_runtime_set_pad_note(
+        handle: *mut c_void, bank_index: usize, note: i32, enabled: i32, velocity: i32) -> i32;
+    fn hk_runtime_set_pad_output(
+        handle: *mut c_void, db: f32, enabled: i32, channel_start: i32,
+        channel_count: i32, low_cut_hz: f32, high_cut_hz: f32);
     fn hk_runtime_set_organ_drawbar(handle: *mut c_void, drawbar_index: usize, position: i32);
     fn hk_runtime_clone_soundfont(
         handle: *mut c_void,
@@ -162,6 +169,7 @@ unsafe extern "C" {
         rotary_depth: f32,
         rotary_mix: f32,
         rotary_modulation_enabled: i32,
+        rotary_cabinet_enabled: i32,
         chorus_enabled: i32,
         chorus_rate_hz: f32,
         chorus_depth: f32,
@@ -380,6 +388,16 @@ impl NativeRuntime {
             }
         }
         Ok(())
+    }
+
+    fn load_pad_bank(&self, bank_index: usize, path: &PathBuf) -> Result<(), String> {
+        let native_path = CString::new(path.to_string_lossy().as_bytes())
+            .map_err(|_| format!("O caminho do banco do Pad {} é inválido.", bank_index + 1))?;
+        if unsafe { hk_runtime_load_pad_bank(self.pointer(), bank_index, native_path.as_ptr()) } != 0 {
+            Ok(())
+        } else {
+            Err(format!("Não foi possível carregar o banco SF2 do Pad {}.", bank_index + 1))
+        }
     }
 }
 
@@ -634,6 +652,8 @@ struct EffectsConfig {
     rotary_mix: f32,
     #[serde(default)]
     rotary_modulation_enabled: bool,
+    #[serde(default = "default_true")]
+    rotary_cabinet_enabled: bool,
     #[serde(default)]
     chorus_enabled: bool,
     #[serde(default)]
@@ -759,6 +779,24 @@ fn organ_voice_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
     }
 }
 
+fn pad_bank_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
+    let resource_dir = app.path().resource_dir()
+        .map_err(|error| format!("Não foi possível localizar os recursos dos Pads: {error}"))?
+        .join("pads");
+    let development_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../native-engine/assets/pads");
+    (1..=2)
+        .map(|number| {
+            let file_name = format!("pads-{number}.sf2");
+            let bundled = resource_dir.join(&file_name);
+            let development = development_dir.join(&file_name);
+            if bundled.is_file() { Ok(bundled) }
+            else if development.is_file() { Ok(development) }
+            else { Err(format!("O banco SF2 do Pad {number} não foi encontrado na instalação.")) }
+        })
+        .collect()
+}
+
 fn start_audio(
     app: &AppHandle,
     state: &AppState,
@@ -810,6 +848,9 @@ fn start_audio(
                 buffer_size.max(512) as usize,
             )?);
             engine.load_organ_voices(&organ_voice_paths(app)?)?;
+            for (bank_index, path) in pad_bank_paths(app)?.iter().enumerate() {
+                engine.load_pad_bank(bank_index, path)?;
+            }
             engine
         }
     };
@@ -1085,11 +1126,47 @@ fn audio_output_status(state: State<'_, AppState>) -> Result<HashMap<&'static st
 }
 
 #[tauri::command]
-fn module_meter_levels(state: State<'_, AppState>) -> Result<[f32; 22], String> {
+fn module_meter_levels(state: State<'_, AppState>) -> Result<[f32; 24], String> {
     let engine = state.engine.current()?;
-    let mut peaks = [0.0; 22];
+    let mut peaks = [0.0; 24];
     unsafe { hk_runtime_module_peaks(engine.pointer(), peaks.as_mut_ptr()) };
     Ok(peaks)
+}
+
+#[tauri::command]
+fn set_pad_note(
+    bank_index: usize, note: i32, enabled: bool, velocity: i32,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    if !(60..=71).contains(&note) {
+        return Err("A nota do Pad 1 precisa estar entre C3 e B3.".into());
+    }
+    if bank_index > 1 {
+        return Err("Banco de Pads inválido.".into());
+    }
+    if unsafe { hk_runtime_set_pad_note(
+        engine.pointer(), bank_index, note, enabled as i32, velocity.clamp(1, 127)) } != 0 {
+        Ok(())
+    } else {
+        Err("A fila de áudio dos Pads está ocupada.".into())
+    }
+}
+
+#[tauri::command]
+fn configure_pad_output(
+    db: f32, enabled: bool, channel_start: i32, channel_count: i32,
+    low_cut_hz: f32, high_cut_hz: f32,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let engine = state.engine.current()?;
+    unsafe {
+        hk_runtime_set_pad_output(
+            engine.pointer(), db.clamp(-90.0, 0.0), enabled as i32,
+            channel_start.clamp(0, 31), if channel_count == 1 { 1 } else { 2 },
+            low_cut_hz.clamp(20.0, 20_000.0), high_cut_hz.clamp(20.0, 20_000.0));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1250,6 +1327,7 @@ fn configure_module_effects(
             config.rotary_depth,
             config.rotary_mix,
             if config.rotary_modulation_enabled { 1 } else { 0 },
+            if config.rotary_cabinet_enabled { 1 } else { 0 },
             if config.chorus_enabled { 1 } else { 0 },
             config.chorus_rate_hz,
             config.chorus_depth,
@@ -1476,6 +1554,103 @@ fn audio_load(state: State<'_, AppState>) -> Result<Vec<f32>, String> {
     let mut load = vec![0.0; 3];
     unsafe { hk_runtime_audio_load(engine.pointer(), load.as_mut_ptr()) };
     Ok(load)
+}
+
+#[derive(Default)]
+struct ProcessCpuSample {
+    wall: Option<Instant>,
+    cpu_seconds: f64,
+}
+
+static PROCESS_CPU_SAMPLE: OnceLock<Mutex<ProcessCpuSample>> = OnceLock::new();
+
+// Percentual usado somente pelo processo Hook Keys, normalizado pela
+// capacidade total dos processadores lógicos (mesma escala do Gerenciador de
+// Tarefas). Não inclui os outros programas nem a CPU ociosa do computador.
+#[tauri::command]
+fn process_cpu_usage() -> Result<f64, String> {
+    let cpu_seconds = process_cpu::seconds()
+        .ok_or_else(|| "cpu do processo indisponivel".to_string())?;
+    let now = Instant::now();
+    let logical_cpus = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1) as f64;
+    let mut sample = PROCESS_CPU_SAMPLE
+        .get_or_init(|| Mutex::new(ProcessCpuSample::default()))
+        .lock()
+        .map_err(|_| "medidor de cpu indisponivel".to_string())?;
+    let percent = sample.wall.map(|previous_wall| {
+        let wall_seconds = now.duration_since(previous_wall).as_secs_f64();
+        let used_seconds = (cpu_seconds - sample.cpu_seconds).max(0.0);
+        if wall_seconds > 0.0 {
+            used_seconds / wall_seconds / logical_cpus * 100.0
+        } else {
+            0.0
+        }
+    }).unwrap_or(0.0);
+    sample.wall = Some(now);
+    sample.cpu_seconds = cpu_seconds;
+    Ok(percent.clamp(0.0, 100.0))
+}
+
+#[cfg(windows)]
+mod process_cpu {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut c_void;
+        fn GetProcessTimes(
+            process: *mut c_void,
+            creation: *mut FileTime,
+            exit: *mut FileTime,
+            kernel: *mut FileTime,
+            user: *mut FileTime,
+        ) -> i32;
+    }
+
+    fn ticks(value: &FileTime) -> u64 {
+        (u64::from(value.high) << 32) | u64::from(value.low)
+    }
+
+    pub fn seconds() -> Option<f64> {
+        let mut creation = FileTime::default();
+        let mut exit = FileTime::default();
+        let mut kernel = FileTime::default();
+        let mut user = FileTime::default();
+        let ok = unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(), &mut creation, &mut exit, &mut kernel, &mut user,
+            )
+        };
+        (ok != 0).then(|| (ticks(&kernel) + ticks(&user)) as f64 / 10_000_000.0)
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod process_cpu {
+    pub fn seconds() -> Option<f64> {
+        let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+            return None;
+        }
+        let timeval = |value: libc::timeval| {
+            value.tv_sec as f64 + value.tv_usec as f64 / 1_000_000.0
+        };
+        Some(timeval(usage.ru_utime) + timeval(usage.ru_stime))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+mod process_cpu {
+    pub fn seconds() -> Option<f64> { None }
 }
 
 #[tauri::command]
@@ -1921,6 +2096,25 @@ fn main() {
         .manage(AppState::default())
         .setup(|app| {
             remove_orphan_sound_fonts(app.handle());
+            // O Hook Keys é um instrumento, não uma página de navegador. No
+            // Windows, desliga no próprio WebView2 os atalhos de localizar,
+            // imprimir, recarregar, salvar página, DevTools etc. Atalhos de
+            // edição de texto como Ctrl+C/Ctrl+V continuam disponíveis.
+            #[cfg(windows)]
+            if let Some(main_webview) = app.get_webview_window("main") {
+                let _ = main_webview.with_webview(|webview| unsafe {
+                    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+                    use windows::core::Interface;
+
+                    if let Ok(core_webview) = webview.controller().CoreWebView2() {
+                        if let Ok(settings) = core_webview.Settings() {
+                            if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
+                                let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false);
+                            }
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1940,8 +2134,11 @@ fn main() {
             set_midi_input_enabled,
             audio_output_status,
             module_meter_levels,
+            set_pad_note,
+            configure_pad_output,
             module_analysis,
             audio_load,
+            process_cpu_usage,
             memory_usage,
             set_midi_inputs,
             configure_module,
@@ -2093,6 +2290,42 @@ mod tests {
     }
 
     #[test]
+    fn bundled_pad_one_plays_c3_through_its_own_bus() {
+        let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
+        let soundfont = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../native-engine/assets/pads/pads-1.sf2");
+        let path = CString::new(soundfont.to_string_lossy().as_bytes()).expect("path");
+        assert_ne!(unsafe { hk_runtime_load_pad_bank(engine.pointer(), 0, path.as_ptr()) }, 0);
+        unsafe { hk_runtime_set_pad_output(engine.pointer(), 0.0, 1, 0, 2, 20.0, 20_000.0) };
+        assert_ne!(unsafe { hk_runtime_set_pad_note(engine.pointer(), 0, 60, 1, 127) }, 0);
+        let mut output = vec![0.0_f32; 48_000 * 2];
+        unsafe { hk_runtime_render(engine.pointer(), output.as_mut_ptr(), 48_000, 2) };
+        assert!(output.iter().all(|sample| sample.is_finite()));
+        assert!(output.iter().any(|sample| sample.abs() > 0.00001), "Pad 1 C3 deve produzir áudio");
+        let mut peaks = [0.0_f32; 24];
+        unsafe { hk_runtime_module_peaks(engine.pointer(), peaks.as_mut_ptr()) };
+        assert!(peaks[22] > 0.0 || peaks[23] > 0.0, "medidor dos Pads deve receber o sinal");
+    }
+
+    #[test]
+    fn bundled_pad_two_plays_c3_through_its_own_bus() {
+        let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
+        let soundfont = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../native-engine/assets/pads/pads-2.sf2");
+        let path = CString::new(soundfont.to_string_lossy().as_bytes()).expect("path");
+        assert_ne!(unsafe { hk_runtime_load_pad_bank(engine.pointer(), 1, path.as_ptr()) }, 0);
+        unsafe { hk_runtime_set_pad_output(engine.pointer(), 0.0, 1, 0, 2, 20.0, 20_000.0) };
+        assert_ne!(unsafe { hk_runtime_set_pad_note(engine.pointer(), 1, 60, 1, 127) }, 0);
+        let mut output = vec![0.0_f32; 48_000 * 2];
+        unsafe { hk_runtime_render(engine.pointer(), output.as_mut_ptr(), 48_000, 2) };
+        assert!(output.iter().all(|sample| sample.is_finite()));
+        assert!(output.iter().any(|sample| sample.abs() > 0.00001), "Pad 2 C3 deve produzir áudio");
+        let mut peaks = [0.0_f32; 24];
+        unsafe { hk_runtime_module_peaks(engine.pointer(), peaks.as_mut_ptr()) };
+        assert!(peaks[22] > 0.0 || peaks[23] > 0.0, "medidor dos Pads deve receber o sinal");
+    }
+
+    #[test]
     fn synth_module_renders_without_a_soundfont() {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
@@ -2143,8 +2376,8 @@ mod tests {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         assert_ne!(unsafe {
             hk_runtime_configure_module(
-                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 0, 0, 0, 64,
-                0, 32, 64, 96, 127, 0, 0, 0, 0, 2, 0,
+                engine.pointer(), 7, 1, 0, 0, 127, 0, 1, 1, 0.0, 0, 0, 0, 0, 0,
+                64, 0, 32, 64, 96, 127, 0, 0, 0, 0, 2, 0,
             )
         }, 0);
         assert_ne!(unsafe {

@@ -55,6 +55,9 @@ void hook_keys_tsf_render_glide(tsf* synth, HookKeysGlideState& state,
 extern "C" void hook_keys_tsf_set_volume_envelope(
     tsf* synth, float attackSeconds, float holdSeconds,
     float decaySeconds, float releaseSeconds, float sustain) noexcept;
+// Volta a usar exatamente a envoltoria gravada dentro do SF2 para as proximas
+// notas. As vozes que ja estao soando terminam sem uma troca abrupta.
+extern "C" void hook_keys_tsf_use_embedded_volume_envelope(tsf* synth) noexcept;
 
 // Bytes ocupados pelo banco de amostras imutavel deste SoundFont. Instancias
 // criadas por tsf_copy compartilham o mesmo banco e relatam o mesmo valor,

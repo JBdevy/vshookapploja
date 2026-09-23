@@ -23,6 +23,7 @@
     "test:keyboard-style": "node scripts/test-keyboard-style.mjs",
     "test:input-keyboard": "node scripts/test-input-keyboard.mjs",
     "test:loading-transition": "node scripts/test-loading-transition.mjs",
+    "test:desktop-shortcuts": "node scripts/test-desktop-browser-shortcuts.mjs",
     "test:rotary-expression": "node scripts/test-rotary-expression.mjs",
     "test:macos-pkg-sign": "node scripts/test-macos-pkg-sign.mjs",
     "build": "npm run typecheck && vite build",

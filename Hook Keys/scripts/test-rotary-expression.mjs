@@ -74,14 +74,15 @@ test('Rotary and Chorus stack below Compressor, and the compressor has no previe
 
 test('Rotary defaults to OFF/Slow, validates ranges and no longer duplicates Modulation On/Off', () => {
   assert.equal(effects.readModuleRotarySettings(undefined).enabled, false);
+  assert.equal(effects.readModuleRotarySettings(undefined).cabinetEnabled, true);
   assert.equal(effects.readModuleRotarySettings(undefined).speed, 'slow');
   assert.equal(effects.readModuleRotarySettings(undefined).modulationEnabled, false);
   assert.equal(effects.readModuleRotarySettings(undefined).slowHz, 0.672);
   assert.equal(effects.readModuleRotarySettings(undefined).fastHz, 7.056);
-  const stored = effects.readModuleRotarySettings({ enabled: true, modulationEnabled: true, speed: 'fast', slowHz: 1.5, fastHz: 8, rampSeconds: 3, depth: 55, mix: 80 });
+  const stored = effects.readModuleRotarySettings({ enabled: true, cabinetEnabled: false, modulationEnabled: true, speed: 'fast', slowHz: 1.5, fastHz: 8, rampSeconds: 3, depth: 55, mix: 80 });
   assert.deepEqual({ ...effects.readModuleEffectSettings('rotary', JSON.parse(JSON.stringify(stored))) }, { ...stored });
   const invalid = effects.readModuleRotarySettings({ speed: 'bad', slowHz: -9, fastHz: 99, rampSeconds: 99, depth: -1, mix: 200 });
-  assert.deepEqual({ ...invalid }, { enabled: false, modulationEnabled: false, speed: 'slow', slowHz: .2, fastHz: 10, rampSeconds: 10, depth: 0, mix: 100 });
+  assert.deepEqual({ ...invalid }, { enabled: false, cabinetEnabled: true, modulationEnabled: false, speed: 'slow', slowHz: .2, fastHz: 10, rampSeconds: 10, depth: 0, mix: 100 });
   const markup = effects.createModuleRotaryMarkup({ rotary: stored });
   // O Mix saiu: a caixa toca sempre inteira, em 100%.
   assert.equal([...markup.matchAll(/data-module-effect-control=/g)].length, 4);
@@ -91,6 +92,9 @@ test('Rotary defaults to OFF/Slow, validates ranges and no longer duplicates Mod
   assert.match(markup, /module-effect-knob__face/);
   assert.doesNotMatch(markup, /data-module-rotary-modulation|Modulation On|Modulation Off/);
   assert.doesNotMatch(effects.createModuleRotaryMarkup({}), /data-module-rotary-modulation/);
+  assert.doesNotMatch(effects.createModuleRotaryMarkup({}), /data-module-rotary-cabinet/);
+  assert.match(effects.createModuleRotaryMarkup({}, true), /data-module-rotary-cabinet[\s\S]*aria-pressed="true">Gabinet/);
+  assert.match(effects.createModuleRotaryMarkup({ rotary: { cabinetEnabled: false } }, true), /data-module-rotary-cabinet[\s\S]*aria-pressed="false">Gabinet/);
   assert.equal(effects.formatModuleEffectValue('rotary', 'fastHz', 7.056), '7.056 Hz');
   assert.equal(effects.formatModuleEffectValue('rotary', 'rampSeconds', 1.2), '1.2 s');
 });
@@ -348,6 +352,21 @@ test('all native bridges forward Rotary modulation enablement', () => {
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('rotary_modulation_enabled'));
 });
 
+test('Gabinet do Organ é salvo e encaminhado até o IR nas três plataformas', () => {
+  const organ = readFileSync(new URL('../src/features/player/OrganView.ts', import.meta.url), 'utf8');
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(organ, /createModuleRotaryMarkup\(moduleSettings, true\)/);
+  assert.match(player, /rotaryCabinetEnabled: moduleIndex === 6 && rotary\.cabinetEnabled/);
+  for (const path of [
+    '../src/platform/native/HookKeysNative.ts', '../src-tauri/src/native_engine_bridge.cpp',
+    '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
+    '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
+    '../ios/App/App/HookKeysNativePlugin.swift',
+  ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('rotaryCabinetEnabled'), path);
+  assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('rotary_cabinet_enabled'));
+});
+
 test('all native bridges forward the Cutoff filter type and envelope', () => {
   for (const path of [
     '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
@@ -422,7 +441,7 @@ test('all native bridges forward the global transpose', () => {
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('set_global_transpose'));
 });
 
-test('entry lasts three seconds, logout six, both keep the animation except the keyboard and share bold italic typography', () => {
+test('entry lasts three seconds, logout six, both keep the animation except the keyboard and share bold normal typography', () => {
   const source = readFileSync(new URL('../src/app/HookKeysApp.ts', import.meta.url), 'utf8');
   const ast = ts.createSourceFile('HookKeysApp.ts', source, ts.ScriptTarget.Latest, true);
   const factory = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'createOctaveTransitionMarkup');
@@ -441,7 +460,7 @@ test('entry lasts three seconds, logout six, both keep the animation except the 
   assert(css.includes('animation: premium-deck-exit 6s'));
   assert(css.includes('animation: premium-loading-deck 1.6s'));
   assert(css.includes('animation: premium-loading-progress 1.8s'));
-  assert.match(css, /body,\s*body :is\([^{}]+\)\s*\{\s*font-weight: 800 !important;\s*font-style: italic !important;/);
+  assert.match(css, /body,\s*body :is\([^{}]+\)\s*\{[\s\S]*?font-weight: 800 !important;\s*font-style: normal !important;/);
 });
 
 test('EQ preview shrinks to the card and reserves its own inset for the graph and frequency labels', () => {

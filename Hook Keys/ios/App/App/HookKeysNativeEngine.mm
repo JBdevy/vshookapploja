@@ -349,6 +349,17 @@ private:
       return NO;
     }
   }
+  for (NSInteger index = 0; index < 2; ++index) {
+    NSString *resourceName = [NSString stringWithFormat:@"pads-%ld", static_cast<long>(index + 1)];
+    NSString *padPath = [NSBundle.mainBundle pathForResource:resourceName ofType:@"sf2" inDirectory:@"pads"];
+    if (padPath.length == 0 || !state->runtime->loadPadBank(static_cast<std::size_t>(index), padPath.UTF8String)) {
+      state->runtime.reset();
+      _audioEngine = nil;
+      _lastAudioErrorMessage = [NSString stringWithFormat:
+          @"banco SF2 do Pad %ld ausente ou inválido", static_cast<long>(index + 1)];
+      return NO;
+    }
+  }
   state->activeRuntime.store(state->runtime.get(), std::memory_order_release);
 
   // O formato vem da rota real (inclusive mono/Bluetooth), sem fixar estéreo
@@ -505,7 +516,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
 
 - (NSArray<NSNumber *> *)moduleMeterLevels {
   std::unique_lock lock(_controlMutex, std::try_to_lock);
-  NSMutableArray<NSNumber *> *levels = [NSMutableArray arrayWithCapacity:hook_keys::kModuleCount * 2 + 6];
+  NSMutableArray<NSNumber *> *levels = [NSMutableArray arrayWithCapacity:hook_keys::kModuleCount * 2 + 8];
   const auto state = lock.owns_lock() ? _audioState : std::shared_ptr<AudioState>{};
   if (lock.owns_lock()) lock.unlock();
   const auto peaks = state && state->runtime
@@ -520,6 +531,9 @@ static NSString *describeFormat(AVAudioFormat *format) {
   const auto click = state && state->runtime
       ? state->runtime->consumeMetronomePeaks() : std::array<float, 2>{};
   for (float peak : click) [levels addObject:@(peak)];
+  const auto pads = state && state->runtime
+      ? state->runtime->consumePadPeaks() : std::array<float, 2>{};
+  for (float peak : pads) [levels addObject:@(peak)];
   return levels;
 }
 
@@ -692,6 +706,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
                     rotaryDepth:(float)rotaryDepth
                       rotaryMix:(float)rotaryMix
         rotaryModulationEnabled:(BOOL)rotaryModulationEnabled
+           rotaryCabinetEnabled:(BOOL)rotaryCabinetEnabled
                   chorusEnabled:(BOOL)chorusEnabled
                    chorusRateHz:(float)chorusRateHz
                     chorusDepth:(float)chorusDepth
@@ -740,7 +755,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
   effects.rotary = {rotaryEnabled != NO, static_cast<std::uint8_t>(std::clamp<NSInteger>(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != NO};
-  effects.rotary.cabinetEnabled = moduleIndex == 6;
+  effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled != NO;
   effects.chorus = {chorusEnabled != NO, chorusRateHz, chorusDepth, chorusMix};
   effects.autoFader = {autoFaderEnabled != NO, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;
@@ -890,6 +905,26 @@ static NSString *describeFormat(AVAudioFormat *format) {
       static_cast<std::uint8_t>(std::clamp<NSInteger>(slot, 0, hook_keys::kArpeggiatorInput)),
       static_cast<std::uint8_t>(status), static_cast<std::uint8_t>(data1),
       static_cast<std::uint8_t>(data2), timestamp);
+}
+
+- (BOOL)setPadNote:(NSInteger)note bankIndex:(NSInteger)bankIndex
+            enabled:(BOOL)enabled velocity:(NSInteger)velocity {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && runtime->setPadNote(
+      static_cast<std::size_t>(std::clamp<NSInteger>(bankIndex, 0, 1)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(note, 0, 127)), enabled,
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(velocity, 1, 127)));
+}
+
+- (BOOL)setPadOutputGainDb:(float)db enabled:(BOOL)enabled
+             channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount
+                   lowCutHz:(float)lowCutHz highCutHz:(float)highCutHz {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr) return NO;
+  runtime->setPadOutput(db, enabled,
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(channelStart, 0, 31)),
+      channelCount == 1 ? 1 : 2, lowCutHz, highCutHz);
+  return YES;
 }
 
 - (BOOL)setTempo:(float)bpm {

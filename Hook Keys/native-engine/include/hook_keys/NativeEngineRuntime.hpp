@@ -94,6 +94,15 @@ public:
   // drawbarIndex vai de 0 (16') a 8 (1'), a mesma ordem do app.
   [[nodiscard]] bool loadOrganVoice(std::size_t drawbarIndex, const char* utf8Path) noexcept;
   void setOrganDrawbarPosition(std::size_t drawbarIndex, std::uint8_t position) noexcept;
+  // Bancos fixos dos Pads. O Pad 1 usa as doze notas C3-B3 (MIDI 60-71)
+  // e vive em um barramento próprio, sem consumir nenhum dos oito módulos.
+  [[nodiscard]] bool loadPadBank(std::size_t bankIndex, const char* utf8Path) noexcept;
+  [[nodiscard]] bool setPadNote(
+      std::size_t bankIndex, std::uint8_t note, bool enabled,
+      std::uint8_t velocity = 127) noexcept;
+  void setPadOutput(float db, bool enabled,
+      std::uint8_t channelStart = 0, std::uint8_t channelCount = 2,
+      float lowCutHz = 20.0f, float highCutHz = 20000.0f) noexcept;
   void render(float* left, float* right, std::size_t frames) noexcept;
   void renderInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
 
@@ -102,6 +111,7 @@ public:
   [[nodiscard]] std::array<float, 2> consumeMasterPeaks() noexcept;
   [[nodiscard]] std::array<float, 2> consumeTrackPeaks() noexcept { return tracks_->consumePeaks(); }
   [[nodiscard]] std::array<float, 2> consumeMetronomePeaks() noexcept;
+  [[nodiscard]] std::array<float, 2> consumePadPeaks() noexcept;
   [[nodiscard]] HookKeysEngine::ModuleAnalysis consumeModuleAnalysis(
       std::size_t moduleIndex) noexcept;
   [[nodiscard]] std::size_t maximumBlockFrames() const noexcept { return maximumBlockFrames_; }
@@ -139,7 +149,7 @@ private:
     std::size_t silentFrames = 0;
   };
   struct RuntimeCommand final {
-    enum class Kind : std::uint8_t { midi, transition, panic } kind = Kind::midi;
+    enum class Kind : std::uint8_t { midi, transition, panic, padNote } kind = Kind::midi;
     MidiMessage midi{};
     PresetLayer* layer = nullptr;
   };
@@ -157,6 +167,9 @@ private:
   RealtimeCommandQueue<PresetLayer*, 32> retiredLayers_;
   std::vector<float> layerScratch_;
   std::vector<float> stereoScratch_;
+  std::array<std::unique_ptr<TinySoundFontModule>, 2> padModules_;
+  std::vector<float> padLeftScratch_;
+  std::vector<float> padRightScratch_;
   struct LiveExpression final {
     int sustain = -1;
     int modulation = -1;
@@ -206,11 +219,26 @@ private:
   float masterLimiterRelease_ = 0.0f;
   std::array<std::atomic<float>, 2> masterPeaks_{};
   std::array<std::atomic<float>, 2> metronomePeaks_{};
+  std::atomic<float> padGainLinear_{1.0f};
+  float currentPadGain_ = 1.0f;
+  float padGainTargetSeen_ = 1.0f;
+  float padGainStep_ = 0.0f;
+  std::size_t padGainRampFrames_ = 0;
+  std::atomic<std::uint16_t> padOutputRoute_{2u << 8};
+  std::atomic<float> padLowCutHz_{20.0f};
+  std::atomic<float> padHighCutHz_{20000.0f};
+  float currentPadLowCutHz_ = 20.0f;
+  float currentPadHighCutHz_ = 20000.0f;
+  std::array<float, 2> padHighPassLowState_{};
+  std::array<float, 2> padLowPassState_{};
+  std::array<std::atomic<float>, 2> padPeaks_{};
   [[nodiscard]] bool beginMetronomeBlock() noexcept;
   void addMetronome(float* left, float* right, std::size_t frames) noexcept;
   void addMetronomeInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
+  void addPadsInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
   [[nodiscard]] float renderMetronomeSample() noexcept;
   [[nodiscard]] float nextOutputGain() noexcept;
+  [[nodiscard]] float nextPadGain() noexcept;
   void applyMasterLimiter(float* frame, std::size_t channels) noexcept;
 };
 

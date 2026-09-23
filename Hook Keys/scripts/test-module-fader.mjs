@@ -684,7 +684,7 @@ test('Config do Organ remove controles sem função e mantém Envelope, Mod, Arp
     'o card Mod do Organ ocupa duas colunas');
   assert.match(settings, /\? 'Wheel Rotary' : labels\[value\]/);
   assert.match(settings, />Toggle Rotary<\/button>/);
-  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ > div\[data-module-modulation-modes="4"\] \{\s*grid-template-columns: repeat\(2,/,
+  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ > div\[data-module-modulation-modes="4"\] \{[^}]*grid-template-columns: repeat\(2,/s,
     'os quatro botões do Mod ficam em duas colunas largas');
   assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ > div\[data-module-modulation-modes="4"\] button \{\s*min-height: 30px;/,
     'os quatro botões do Mod do Organ usam a altura maior');
@@ -706,9 +706,11 @@ test('Config dos módulos 1 a 6 mostra Empty quando nenhum timbre está selecion
   assert.match(player, /if \(kind === 'module-settings'\)[\s\S]*?: 'Empty';/);
 });
 
-test('arrasto das cinco bandas do EQ continua registrado ao trocar a aba dentro do Config', () => {
+test('arrasto das cinco bandas do EQ continua registrado e sincroniza o áudio ao vivo', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(player, /if \(\(kind === 'module-settings' \|\| pageKind\(\) === 'module-eq'\) && moduleNumber !== null\) \{\s*modal\.addEventListener\('pointerdown', \(event\) => this\.startEqBandDrag/);
+  assert.match(player, /private updateEqBandFromPointer[\s\S]*?moduleState\.settings\.eqBands = bands;[\s\S]*?this\.scheduleNativeEngineSync\(\);\s*\n  \}/,
+    'cada movimento da banda deve chegar ao motor antes de soltar o ponteiro');
 });
 
 test('module fader field and library controls use the requested compact corner radii', () => {
@@ -961,6 +963,37 @@ test('margem externa da tela e de todos os modais é 1 px', () => {
 test('knobs dos cinco volumes ficam circulares e separados do meter no desktop', () => {
   assert.match(css, /html\[data-runtime="desktop"\] \.player-output-knob__control \{[^}]*align-items: center;[^}]*gap: clamp\(6px, \.55vw, 9px\);/s);
   assert.match(css, /html\[data-runtime="desktop"\] \.player-output-knob__face \{[^}]*width: clamp\(32px, 3\.2vw, 42px\);[^}]*height: clamp\(32px, 3\.2vw, 42px\);[^}]*border-radius: 50%;/s);
+});
+
+test('celular reserva margem somente no lado atual do notch e mantém os cinco knobs circulares', () => {
+  const runtime = readFileSync(new URL('../src/platform/runtime.ts', import.meta.url), 'utf8');
+  const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
+  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  assert.match(runtime, /const nativeSide = await hookKeysNative\.displayCutoutSide\(\);/,
+    'o layout consulta o lado físico informado pelo app nativo');
+  assert.match(runtime, /if \(!isNative\) \{[^}]*await updateNativeNotchSide\(\);[^}]*addEventListener\('resize'/s,
+    'a prévia no navegador móvel também acompanha o lado do notch');
+  assert.match(runtime, /document\.documentElement\.dataset\.notchSide = side;/);
+  assert.match(runtime, /angle === 90 \|\| orientation\?\.type === 'landscape-primary'\s*\? 'left'/s,
+    'em 90 graus o notch fica à esquerda e o lado da porta permanece livre');
+  assert.match(runtime, /angle === 270 \|\| orientation\?\.type === 'landscape-secondary'\s*\? 'right'/s,
+    'em 270 graus o notch fica à direita e o lado da porta permanece livre');
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \{\s*padding: 1px !important;/);
+  assert.match(css, /:root\[data-notch-side="left"\] \.player-screen--cellular \{\s*padding-left: max\(1px, calc\(env\(safe-area-inset-left\) - 8px\), calc\(env\(safe-area-inset-right\) - 8px\)\) !important;/);
+  assert.match(css, /:root\[data-notch-side="right"\] \.player-screen--cellular \{\s*padding-right: max\(1px, calc\(env\(safe-area-inset-left\) - 8px\), calc\(env\(safe-area-inset-right\) - 8px\)\) !important;/);
+  assert.match(android, /getDisplayCutout\(\)/);
+  assert.match(android, /cutout\.getBoundingRects\(\)/);
+  assert.match(ios, /@objc func displayCutoutSide/);
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \.player-output-knob__face \{[^}]*flex: 0 0 clamp\(20px,[^}]*width: clamp\(20px,[^}]*height: clamp\(20px,[^}]*border-radius: 50%;/s);
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \.player-output-mini-meter \{[^}]*height: clamp\(20px,/s);
+});
+
+test('Mod do Organ reserva a coluna do Rate sem sobrepor os botões 2x2', () => {
+  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ \{[^}]*grid-template-columns: minmax\(0, 1fr\) max-content;[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
+  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ > div\[data-module-modulation-modes="4"\] \{[^}]*grid-template-columns: repeat\(2,[^}]*grid-template-rows: repeat\(2,/s);
+  assert.match(css, /\.module-envelope-grid > \.module-mod-card--organ > \.module-mod-card__rate \{[^}]*grid-column: 2;[^}]*grid-row: 2;/s);
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.module-envelope-grid > \.module-mod-card--organ \{[^}]*grid-template-columns: minmax\(0, 1fr\) 50px;/s);
+  assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.module-envelope-grid > \.module-mod-card--organ \.module-envelope-knob \{\s*width: clamp\(32px, 9\.5vh, 38px\);/);
 });
 
 test('Playlist 30% no app mantém os cinco knobs e meters com altura igual à largura', () => {

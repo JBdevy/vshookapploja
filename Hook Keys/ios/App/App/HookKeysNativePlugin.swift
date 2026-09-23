@@ -19,6 +19,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "audioRouteLog", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "memoryUsage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "lockOrientation", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "displayCutoutSide", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMidiInputEnabled", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "moduleMeterLevels", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "moduleAnalysis", returnType: CAPPluginReturnPromise),
@@ -36,6 +37,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         CAPPluginMethod(name: "configureSynth", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureOrgan", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sendMidi", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setPadNote", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "configurePadOutput", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTempo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setGlobalTranspose", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "configureMetronome", returnType: CAPPluginReturnPromise),
@@ -289,6 +292,24 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         }
     }
 
+    // No iPhone, landscapeLeft coloca o recorte físico à esquerda e
+    // landscapeRight à direita. Retornar o lado nativo evita a safe area
+    // simétrica do Safari, que desperdiça também o lado da porta Lightning/USB.
+    @objc func displayCutoutSide(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            let scene = self?.bridge?.viewController?.view.window?.windowScene
+                ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
+            let side: String
+            switch scene?.interfaceOrientation {
+            case .landscapeLeft: side = "left"
+            case .landscapeRight: side = "right"
+            case .portrait, .portraitUpsideDown: side = "top"
+            default: side = "none"
+            }
+            call.resolve(["side": side])
+        }
+    }
+
     // RAM do aparelho inteiro, não só a do app: páginas ativas, presas e
     // comprimidas contra a RAM instalada. As inativas são cache que o iOS
     // devolve para quem precisar, então não entram na conta.
@@ -417,6 +438,39 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     @objc func setMidiInputs(_ call: CAPPluginCall) {
         engine.setMidiDeviceIds(call.getArray("deviceIds", []))
         call.resolve()
+    }
+
+    @objc func setPadNote(_ call: CAPPluginCall) {
+        let note = call.getInt("note", -1)
+        guard (60...71).contains(note) else {
+            call.reject("A nota do Pad 1 precisa estar entre C3 e B3.")
+            return
+        }
+        let bankIndex = call.getInt("bankIndex", -1)
+        guard (0...1).contains(bankIndex) else {
+            call.reject("Banco de Pads inválido.")
+            return
+        }
+        if engine.setPadNote(note, bankIndex: bankIndex, enabled: call.getBool("enabled", false),
+                             velocity: min(127, max(1, call.getInt("velocity", 127)))) {
+            call.resolve()
+        } else {
+            call.reject("A fila de áudio dos Pads está ocupada.")
+        }
+    }
+
+    @objc func configurePadOutput(_ call: CAPPluginCall) {
+        if engine.setPadOutputGainDb(
+            call.getFloat("db", 0), enabled: call.getBool("enabled", true),
+            channelStart: min(31, max(0, call.getInt("channelStart", 0))),
+            channelCount: call.getInt("channelCount", 2) == 1 ? 1 : 2,
+            lowCutHz: min(20_000, max(20, call.getFloat("lowCutHz", 20))),
+            highCutHz: min(20_000, max(20, call.getFloat("highCutHz", 20_000)))
+        ) {
+            call.resolve()
+        } else {
+            call.reject("O motor ainda não foi inicializado.")
+        }
     }
 
     @objc func configureModule(_ call: CAPPluginCall) {
@@ -550,6 +604,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             rotaryDepth: call.getFloat("rotaryDepth", 0.7),
             rotaryMix: call.getFloat("rotaryMix", 1),
             rotaryModulationEnabled: call.getBool("rotaryModulationEnabled", false),
+            rotaryCabinetEnabled: call.getBool("rotaryCabinetEnabled", true),
             chorusEnabled: call.getBool("chorusEnabled", false),
             chorusRateHz: call.getFloat("chorusRateHz", 0.6),
             chorusDepth: call.getFloat("chorusDepth", 0.5),

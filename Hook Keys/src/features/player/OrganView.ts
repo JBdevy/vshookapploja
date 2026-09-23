@@ -75,7 +75,7 @@ export function createOrganMarkup(moduleSettings: Readonly<Record<string, unknow
   const settings = readOrganSettings(moduleSettings.organ);
   return `
     <section class="organ-panel" data-organ-panel>
-      ${createModuleRotaryMarkup(moduleSettings)}
+      ${createModuleRotaryMarkup(moduleSettings, true)}
       <div class="organ-drawbars" role="group" aria-label="Drawbars">
         ${settings.drawbars.map((position, index) => drawbarMarkup(index, position)).join('')}
       </div>

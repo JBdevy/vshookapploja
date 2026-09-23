@@ -41,6 +41,8 @@ public:
   // sustainDb: quanto o som cai depois do Decay, de -60 dB a 0 dB (0 = cheio).
   void setVolumeEnvelope(
       float attackMs, float holdMs, float decayMs, float releaseMs, float sustainDb = 0.0f) noexcept;
+  // Caminho seco: preserva a envoltoria original armazenada no proprio SF2.
+  void useEmbeddedVolumeEnvelope() noexcept;
   void setGlide(float milliseconds) noexcept { glideMs_.store(milliseconds, std::memory_order_relaxed); }
   void setGlideBehavior(GlideBehavior behavior) noexcept override {
     glideBehavior_.store(behavior.pack(), std::memory_order_relaxed);
@@ -128,6 +130,9 @@ private:
   std::atomic<float> decayMs_{25000.0f};
   std::atomic<float> sustainDb_{0.0f};
   std::atomic<float> releaseMs_{300.0f};
+  // O runtime desliga esse override no estado neutro do app. A classe mantem
+  // os defaults historicos para hosts que a usam diretamente sem configurar.
+  std::atomic<bool> volumeEnvelopeOverrideEnabled_{true};
   std::atomic<std::uint32_t> envelopeGeneration_{1};
   std::uint32_t appliedEnvelopeGeneration_ = 0;
   RealtimeCommandQueue<tsf*, 64> retired_{};
