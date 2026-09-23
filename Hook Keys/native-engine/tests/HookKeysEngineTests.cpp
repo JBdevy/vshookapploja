@@ -209,6 +209,19 @@ void testRangeAndOctaveRouting() {
   expect(engine.enqueueMidi(midi(0x80, 60, 0)), "queue note off");
   process(engine);
   expect(first.events.back().type == Event::Type::noteOff && first.events.back().data1 == 72, "note-off uses original routed note");
+
+  // OCT -/+ durante uma nota pressionada encerra a voz antiga no próprio
+  // módulo. Caso contrário o Note Off posterior podia não alcançar a nota.
+  firstConfig.lowNote = 48;
+  firstConfig.octaveShift = 0;
+  expect(engine.setModuleConfig(0, firstConfig), "restore range and octave");
+  expect(engine.enqueueMidi(midi(0x90, 61, 100)), "hold note before octave change");
+  process(engine);
+  firstConfig.octaveShift = 1;
+  expect(engine.setModuleConfig(0, firstConfig), "change octave while note is held");
+  process(engine);
+  expect(first.events.back().type == Event::Type::allNotesOff,
+      "changing module octave releases held notes instead of leaving a stuck voice");
 }
 
 void testKeyboardBroadcastRouting() {

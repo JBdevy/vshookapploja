@@ -672,6 +672,25 @@ test('celular: Glide com knob no padrão da tela e Volume sem ON cortado', () =>
     'o título LFO destino sobe sem deslocar os botões');
 });
 
+test('presets usam cores claras variadas, texto preto e paleta salva no modal', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /DEFAULT_PRESET_COLOR_ORDER\s*=\s*\[2, 7, 4, 12/);
+  assert.match(player, /data-preset-color-index="\$\{colorIndex\}"/);
+  assert.match(player, /preset\.colorIndex = presetColorIndex\(colorButton\?\.dataset\.presetColorIndex, presetNumber\)/);
+  assert.match(player, /colorIndex: presetColorIndex\(sourcePreset\.colorIndex, presetIndex \+ 1\)/);
+  assert.match(css, /\.player-preset-button\s*\{[^}]*color:\s*#090909;[^}]*background:\s*linear-gradient\(145deg, var\(--preset-accent\), var\(--preset-dark\)\);/s);
+  assert.doesNotMatch(css, /\.player-preset-button\s*\{[^}]*#ff365e[^}]*#ca4cff/s,
+    'o contorno RGB antigo saiu dos presets');
+  assert.match(css, /\.preset-color-palette\s*\{/);
+  assert.match(css, /\.preset-color-option\.is-selected\s*\{[^}]*border-color:\s*#fff;/s);
+});
+
+test('trocar OCT do módulo libera a nota ativa antes de aplicar a nova oitava', () => {
+  const engine = readFileSync(new URL('../native-engine/src/HookKeysEngine.cpp', import.meta.url), 'utf8');
+  assert.match(engine, /const auto octaveChanged = configs_\[index\]\.octaveShift != command\.moduleConfig\.octaveShift;/);
+  assert.match(engine, /\(inputRouteChanged \|\| octaveChanged\)[\s\S]*?modules_\[index\]->allNotesOff\(\);[\s\S]*?clearActiveNoteState\(index\);/);
+});
+
 test('módulos nascem com Reverb Room e o Organ com Rotary ligado à roda Mod', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const effects = readFileSync(new URL('../src/features/player/ModuleEffectsView.ts', import.meta.url), 'utf8');
@@ -939,6 +958,22 @@ test('Baixar tudo acrescenta os restantes à fila e item aguardando não reabre 
   assert.match(player, /status\.textContent = downloading \? 'Baixando' : 'Aguardando'/);
   assert.match(player, /if \(this\.activeSoundDownloads\.has\(soundId\)\) return;/);
   assert.doesNotMatch(player, /Aguarde a fila atual terminar antes de usar Baixar tudo/);
+});
+
+test('download manual concluído pulsa só até o usuário tocar em outro timbre', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /source:\s*'manual'/);
+  assert.match(player, /source:\s*'batch'/);
+  assert.match(player, /entry\.source === 'manual'\) this\.recentManualDownloadSoundId = soundId/);
+  assert.match(player, /this\.recentManualDownloadSoundId !== soundId/);
+  assert.match(css, /\.fixed-sound-grid button\.is-manual-download-complete\s*\{[^}]*animation:\s*fixed-sound-download-complete/s);
+});
+
+test('Gain do módulo alcança -36 dB na interface e no motor', () => {
+  const settings = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
+  const dspTypes = readFileSync(new URL('../native-engine/include/hook_keys/DspTypes.hpp', import.meta.url), 'utf8');
+  assert.match(settings, /MODULE_GAIN_MIN_DB\s*=\s*-36/);
+  assert.match(dspTypes, /inputGainDb\s*=\s*std::clamp\(inputGainDb,\s*-36\.0f,\s*12\.0f\)/);
 });
 
 test('desktop não bloqueia Baixar tudo pela cota estimada da WebView', () => {

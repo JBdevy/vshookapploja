@@ -221,3 +221,52 @@ test('arpeggiator receives the whole chord immediately and the pedal sustains it
   assert.equal(controller.states[0].timer, null, 'pedal-up stops after the last physical key was released');
   controller.destroy();
 });
+
+test('preset transition detaches Arpeggiator notes without cutting Organ or the other modules', () => {
+  let timerId = 0;
+  const timers = new Map();
+  const fakeWindow = {
+    setTimeout(callback) {
+      timerId += 1;
+      timers.set(timerId, callback);
+      return timerId;
+    },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  const playback = transpile(
+    '../src/features/player/PatternPlaybackController.ts',
+    (specifier) => specifier === './PatternModulesView' ? views : {},
+    { window: fakeWindow, Math },
+  );
+  const sent = [];
+  const snapshot = {
+    bpm: 120,
+    timeSignatureNumerator: 4,
+    timeSignatureDenominator: 4,
+    arpeggiator: {
+      moduleEnabled: true, hasSound: true, midiInputId: null, lowNote: 0, highNote: 127,
+      sustainEnabled: true,
+      settings: { enabled: true, mode: 'up', division: '1/16', octaves: 1, gate: 70, swing: 0 },
+    },
+  };
+  const controller = new playback.PatternPlaybackController(
+    () => snapshot,
+    (moduleNumber, slot, status, note, velocity) => sent.push([moduleNumber, slot, status, note, velocity]),
+  );
+  controller.handleInput({ inputId: null, noteNumber: 60, pressed: true, velocity: 100 });
+  const noteOffsBefore = sent.filter(([, , status]) => status === 0x80).length;
+  const detached = controller.detachForPresetTransition();
+  assert.equal(detached.length, 8, 'todos os módulos ativos entregam sua nota para a transição');
+  assert(detached.some(({ moduleNumber, inputSlot }) => moduleNumber === 7 && inputSlot === 10),
+    'o Organ participa da mesma transição sem corte');
+  assert.equal(sent.filter(([, , status]) => status === 0x80).length, noteOffsBefore,
+    'desanexar não envia Note Off antes do commit nativo');
+  assert.equal(timers.size, 0, 'os próximos passos e gates antigos ficam suspensos');
+  controller.reset();
+  assert.equal(sent.filter(([, , status]) => status === 0x80).length, noteOffsBefore,
+    'o restore do novo preset não corta as notas já entregues à camada antiga');
+
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /await hookKeysNative\.commitPresetTransition\(\);\s*await this\.releasePatternNotesAfterPresetCommit\(\);/,
+    'as notas do Arpeggiator só são soltas depois que Pulse e parâmetros antigos viram cauda');
+});

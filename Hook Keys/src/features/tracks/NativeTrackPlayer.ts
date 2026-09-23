@@ -16,6 +16,7 @@ export interface NativeTrackBridge {
     seconds?: number;
     loop?: boolean;
     playbackRate?: number;
+    syncMetronome?: boolean;
   }): Promise<void>;
   trackStatus(): Promise<NativeTrackStatus>;
 }
@@ -179,19 +180,19 @@ export class NativeTrackSource extends EventTarget {
     void this.enqueue(() => this.bridge.controlTrack(this.id, 'unload')).catch(() => undefined);
   }
 
-  async play(): Promise<void> {
+  async play(syncMetronome = false): Promise<void> {
     if (!this.loaded || !await this.loaded) throw new Error('track_not_ready');
     if (this.durationSeconds > 0 && this.position >= this.durationSeconds) this.position = 0;
     this.setPlaying(true);
     try {
       await this.enqueue(async () => {
         try {
-          await this.bridge.controlTrack(this.id, 'play');
+          await this.bridge.controlTrack(this.id, 'play', { syncMetronome });
         } catch (error) {
           // O motor foi recriado (troca de saída): carrega de novo e retoma.
           if (!isTrackNotLoaded(error)) throw error;
           await this.loadIntoEngine(this.openSerial);
-          await this.bridge.controlTrack(this.id, 'play');
+          await this.bridge.controlTrack(this.id, 'play', { syncMetronome });
         }
       });
       this.positionAt = performance.now();

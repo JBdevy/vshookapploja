@@ -310,7 +310,7 @@ struct ModuleEffectsConfig final {
     compressor.normalize();
     delay.normalize();
     reverb.normalize();
-    inputGainDb = std::clamp(inputGainDb, -24.0f, 12.0f);
+    inputGainDb = std::clamp(inputGainDb, -36.0f, 12.0f);
     rotary.normalize();
     chorus.normalize();
     loFi.normalize();

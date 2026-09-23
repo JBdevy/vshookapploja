@@ -990,7 +990,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
 }
 
 - (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds
-                  loop:(BOOL)loop playbackRate:(double)playbackRate {
+                  loop:(BOOL)loop playbackRate:(double)playbackRate
+       syncMetronome:(BOOL)syncMetronome {
   std::scoped_lock lock(_controlMutex);
   if (!_audioState || !_audioState->runtime || sourceId <= 0) return NO;
   auto &player = _audioState->runtime->tracks();
@@ -1000,7 +1001,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
     return YES;
   }
   if (!player.hasSource(identifier)) return NO;
-  if ([action isEqualToString:@"play"]) return player.play(identifier);
+  if ([action isEqualToString:@"play"]) return player.play(identifier, syncMetronome);
   if ([action isEqualToString:@"pause"]) { player.pause(identifier); return YES; }
   if ([action isEqualToString:@"loop"]) { player.setLoop(identifier, loop); return YES; }
   if ([action isEqualToString:@"rate"]) {

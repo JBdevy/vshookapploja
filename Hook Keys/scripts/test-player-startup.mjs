@@ -1839,6 +1839,21 @@ try {
   player.ccMappings.set('preset:B:4', 70);
   player.compatibilityMode = true;
   player.midiInput.setCompatibilityMode(true);
+  player.openModal('preset-name', 1, root.querySelector('.player-preset-button[data-preset="1"]'));
+  const blockedPresetActions = window.document.querySelector('.preset-name-editor__cc-actions');
+  assert(blockedPresetActions.classList.contains('is-compatibility-blocked'));
+  assert.equal(blockedPresetActions.querySelector('[data-modal-action="learn-preset-cc"]').getAttribute('aria-disabled'), 'true');
+  blockedPresetActions.querySelector('[data-modal-action="learn-preset-cc"]').click();
+  assert.equal(player.currentModalKind, 'compatibility-preset-learn-blocked');
+  assert.match(window.document.querySelector('.compatibility-confirmation').textContent, /Desative o modo compatibilidade/);
+  window.document.querySelector('[data-modal-action="dismiss-compatibility-preset-block"]').click();
+  assert.equal(player.currentModalKind, 'preset-name');
+  window.document.querySelector('[data-modal-action="clean-preset-cc"]').click();
+  assert.equal(player.currentModalKind, 'compatibility-preset-learn-blocked',
+    'Clean também apenas explica que a compatibilidade precisa ser desativada');
+  assert.equal(player.ccMappings.get('preset:B:4'), 70, 'o aviso não apaga o Learn que já estava salvo');
+  window.document.querySelector('[data-modal-action="dismiss-compatibility-preset-block"]').click();
+  player.closeModal();
   const beforeBlockedCc7 = player.metronome.isRunning();
   for (const controller of [0, 6, 7, 10, 16, 32, 100, 101]) {
     player.ccMappings.set('metronome:toggle', controller);

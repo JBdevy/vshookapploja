@@ -144,7 +144,6 @@ export class HookKeysApp {
       async () => this.logout(session),
       {
         listDevices: () => this.sessions.devices(session),
-        getAcquireLicenseUrl: async () => (await this.accountApi.getAppSettings(session.token)).acquireLicenseUrl,
         getCompatibilityVideoUrl: async () => (
           await this.accountApi.getAppSettings(session.token)
         ).compatibilityVideoUrl,

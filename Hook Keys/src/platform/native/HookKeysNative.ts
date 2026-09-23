@@ -311,6 +311,7 @@ interface HookKeysNativePlugin {
     seconds?: number;
     loop?: boolean;
     playbackRate?: number;
+    syncMetronome?: boolean;
   }): Promise<void>;
   trackStatus(): Promise<NativeTrackStatus>;
   configureTrackOutput(options: { channelStart: number; channelCount: number; db: number; enabled: boolean }): Promise<void>;

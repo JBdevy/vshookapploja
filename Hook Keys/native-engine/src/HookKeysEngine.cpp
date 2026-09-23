@@ -338,10 +338,13 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
     case CommandType::setModuleConfig:
       if (command.moduleIndex < kModuleCount) {
         const auto index = static_cast<std::size_t>(command.moduleIndex);
-        if (configs_[index].midiInputSlot != command.moduleConfig.midiInputSlot &&
+        const auto inputRouteChanged = configs_[index].midiInputSlot != command.moduleConfig.midiInputSlot;
+        const auto octaveChanged = configs_[index].octaveShift != command.moduleConfig.octaveShift;
+        if ((inputRouteChanged || octaveChanged) &&
             modules_[index] != nullptr) {
-          // Reset CC64 even if no key is physically down: an SF2 can still
-          // contain pedal-held voices from the previous input route.
+          // Uma voz iniciada numa oitava não pode sobreviver à troca e perder
+          // seu Note Off. Limpa somente este módulo; as demais continuam.
+          // Também zera CC64, pois o SF2 pode guardar uma cauda no pedal.
           if (sustainDown_[index]) modules_[index]->controlChange(kSustainController, 0);
           sustainDown_[index] = false;
           if (moduleHasActiveNotes(index)) modules_[index]->allNotesOff();

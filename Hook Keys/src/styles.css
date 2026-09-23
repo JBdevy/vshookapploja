@@ -4539,14 +4539,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   min-width: 0;
   min-height: clamp(46px, 7.4vh, 62px);
   padding: 5px clamp(6px, 0.85vw, 12px);
-  color: #f8eee8;
-  border: 2px solid transparent;
+  color: #090909;
+  border: 2px solid color-mix(in srgb, var(--preset-dark) 72%, #1b1b1b);
   border-radius: 8px;
-  background-image:
-    linear-gradient(180deg, rgba(43, 43, 47, 0.98), rgba(14, 14, 16, 0.99)),
-    linear-gradient(110deg, #ff365e, #ffbf2e 25%, #31d96c 50%, #2d8cff 75%, #ca4cff);
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
+  background: linear-gradient(145deg, var(--preset-accent), var(--preset-dark));
   box-shadow:
     inset 0 1px rgba(255, 255, 255, 0.08),
     0 5px 11px rgba(0, 0, 0, 0.18);
@@ -4554,7 +4550,7 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
 }
 
 .player-preset-button__number {
-  color: #fff;
+  color: #090909;
   font-size: clamp(10px, 1.1vw, 14px);
   font-weight: 900;
 }
@@ -4568,20 +4564,19 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   line-height: 1.05;
   overflow-wrap: anywhere;
   white-space: normal;
-  color: var(--preset-accent);
+  color: #090909;
+  text-shadow: 0 1px rgba(255, 255, 255, .28);
 }
 
 /* O preset ativo usa a mesma marca do banco ativo: borda branca em volta. */
 .player-preset-button.is-selected {
   border-color: #fff;
-  background-image:
-    linear-gradient(180deg, #24a957, #07572a),
-    linear-gradient(110deg, #ff365e, #ffbf2e 25%, #31d96c 50%, #2d8cff 75%, #ca4cff);
+  background: linear-gradient(145deg, var(--preset-accent), var(--preset-dark));
   box-shadow: 0 0 14px rgba(255, 255, 255, 0.34), inset 0 1px rgba(225, 255, 235, 0.26);
 }
 
 .player-preset-button.is-selected .player-preset-button__label {
-  color: #fff;
+  color: #090909;
 }
 
 .player-screen__status {
@@ -6726,6 +6721,21 @@ html[data-app-mode="tablet"] .user-password-reset__input-shell > input.is-tablet
   font-weight: 900;
 }
 
+/* O snapshot Reverb 1..16 ocupa os presets enquanto a compatibilidade está
+   ativa. Os botões continuam tocáveis somente para explicar como liberá-los. */
+.preset-name-editor__cc-actions.is-compatibility-blocked > button {
+  color: #aaa !important;
+  border-color: #555 !important;
+  background: linear-gradient(180deg, #303033, #111113) !important;
+  box-shadow: none !important;
+  filter: grayscale(1);
+  cursor: not-allowed;
+}
+
+.preset-name-editor__cc-actions.is-compatibility-blocked small {
+  color: #8f8f92 !important;
+}
+
 .module-power-learn-choice {
   display: grid;
   gap: 12px;
@@ -8431,6 +8441,7 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   grid-template-columns: minmax(220px, 0.8fr) minmax(150px, 0.45fr);
   grid-template-areas:
     "field preview"
+    "palette palette"
     "learn learn";
   align-items: end;
   gap: clamp(12px, 2.2vw, 24px) clamp(18px, 4vw, 60px);
@@ -8438,6 +8449,28 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
   min-width: 0;
   min-height: 0;
   margin: 0 auto;
+}
+
+.preset-color-palette {
+  display: grid;
+  grid-area: palette;
+  grid-template-columns: repeat(8, minmax(26px, 1fr));
+  gap: clamp(5px, .8vw, 9px);
+}
+
+.preset-color-option {
+  min-width: 0;
+  min-height: clamp(28px, 5vh, 40px);
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: linear-gradient(145deg, var(--preset-accent), var(--preset-dark));
+  box-shadow: inset 0 1px rgba(255, 255, 255, .3);
+}
+
+.preset-color-option.is-selected {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px #111, 0 0 10px var(--preset-accent);
 }
 
 .preset-name-editor__field {
@@ -9664,6 +9697,23 @@ html[data-runtime="desktop"] :is(.module-envelope-knob, .module-effect-knob, .pl
 
 .fixed-sound-grid button.is-download-queued small {
   color: #ffd06b;
+}
+
+/* Confirmação visual apenas do download iniciado no próprio timbre. O lote
+   "Baixar tudo" não usa este estado; tocar em outro timbre o encerra. */
+.fixed-sound-grid button.is-manual-download-complete {
+  animation: fixed-sound-download-complete 820ms ease-in-out infinite;
+}
+
+@keyframes fixed-sound-download-complete {
+  0%, 100% {
+    filter: brightness(1);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .3), 0 0 5px var(--sound-button-color, #ffb23d);
+  }
+  50% {
+    filter: brightness(1.34);
+    box-shadow: 0 0 0 2px #fff, 0 0 18px var(--sound-button-color, #ffb23d);
+  }
 }
 
 .fixed-sound-new-badge {

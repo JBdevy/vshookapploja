@@ -177,7 +177,7 @@ function createSustainControl(settings: Readonly<Record<string, unknown>>): stri
 // Gain do módulo: ganho de entrada, antes do EQ e do compressor. Serve para
 // empurrar o sinal nos processadores; o volume de saída continua sendo só do
 // fader da tela principal. Nasce em 0 dB, ou seja, sem mudar nada.
-export const MODULE_GAIN_MIN_DB = -24;
+export const MODULE_GAIN_MIN_DB = -36;
 export const MODULE_GAIN_MAX_DB = 12;
 
 export function readModuleGainDb(settings: Readonly<Record<string, unknown>>): number {

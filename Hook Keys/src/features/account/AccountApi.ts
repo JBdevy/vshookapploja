@@ -3,7 +3,6 @@ import type { SoundCatalogPayload } from '../sound-library/SoundCatalog';
 
 export interface AppSettingsResponse {
   ok: true;
-  acquireLicenseUrl: string;
   compatibilityVideoUrl: string;
 }
 

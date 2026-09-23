@@ -23,6 +23,12 @@ export interface PatternInput {
   velocity: number;
 }
 
+export interface DetachedPatternNote {
+  inputSlot: number;
+  moduleNumber: number;
+  noteNumber: number;
+}
+
 export interface PatternPlaybackSnapshot {
   bpm: number;
   timeSignatureNumerator: number;
@@ -111,6 +117,36 @@ export class PatternPlaybackController {
   reset(): void {
     this.sustainInputs.clear();
     for (let moduleNumber = 1; moduleNumber <= MODULE_COUNT; moduleNumber += 1) this.stop(moduleNumber, true);
+  }
+
+  // Na troca sem corte, não mande Note Off antes de o motor transformar o
+  // preset anterior em uma camada de cauda. Suspenda o relógio agora e devolva
+  // as notas geradas para o Player soltá-las logo após o commit da transição.
+  // Isso vale para todos os oito módulos, inclusive Organ e Synth.
+  detachForPresetTransition(): DetachedPatternNote[] {
+    this.sustainInputs.clear();
+    const detached: DetachedPatternNote[] = [];
+    for (let moduleNumber = 1; moduleNumber <= MODULE_COUNT; moduleNumber += 1) {
+      const state = this.states[moduleNumber - 1];
+      if (!state) continue;
+      if (state.timer !== null) window.clearTimeout(state.timer);
+      if (state.releaseTimer !== null) window.clearTimeout(state.releaseTimer);
+      if (state.playingNote !== null) {
+        detached.push({
+          inputSlot: arpeggiatorInputSlotForModule(moduleNumber),
+          moduleNumber,
+          noteNumber: state.playingNote,
+        });
+      }
+      state.held = [];
+      state.timer = null;
+      state.releaseTimer = null;
+      state.playingNote = null;
+      state.step = 0;
+      state.nextAt = null;
+      this.pulse(moduleNumber, null);
+    }
+    return detached;
   }
 
   destroy(): void {

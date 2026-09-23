@@ -113,7 +113,7 @@ export class TrackTransportController {
     private readonly onMessage: (message: string) => void,
     private readonly onPositionRequested: (trigger: HTMLElement) => void,
     private readonly nativeTracks: NativeTrackPlayer | null = null,
-    private readonly onLoopPlaybackStarting: () => void = () => {},
+    private readonly onLoopPlaybackStarting: () => Promise<void> = () => Promise.resolve(),
   ) {
     this.audio = this.createAudio();
     this.audio.preload = 'metadata';
@@ -407,8 +407,17 @@ export class TrackTransportController {
     if (this.hasDuration() && this.audio.currentTime >= this.audio.duration) this.audio.currentTime = 0;
     try {
       await this.prepareAudioOutput(this.audio);
-      if (isTempoSyncedLoopTrack(this.selectedTrack)) this.onLoopPlaybackStarting();
-      await this.audio.play();
+      const synchronizedLoop = isTempoSyncedLoopTrack(this.selectedTrack);
+      if (synchronizedLoop && !(this.audio instanceof HTMLAudioElement)) {
+        await this.onLoopPlaybackStarting();
+      }
+      if (this.audio instanceof HTMLAudioElement) await this.audio.play();
+      else await this.audio.play(synchronizedLoop);
+      if (synchronizedLoop && this.audio instanceof HTMLAudioElement) {
+        // O HTMLAudioElement só informa o instante real depois que play()
+        // resolve. Reiniciar aqui elimina a diferença variável do carregamento.
+        await this.onLoopPlaybackStarting();
+      }
       this.state = 'playing';
       this.render();
     } catch {
@@ -457,8 +466,15 @@ export class TrackTransportController {
       this.objectUrl = this.attachFile(this.audio, track, file);
       this.applyPlaybackRate(this.audio, track);
       if (autoplay) {
-        if (isTempoSyncedLoopTrack(track)) this.onLoopPlaybackStarting();
-        await this.audio.play();
+        const synchronizedLoop = isTempoSyncedLoopTrack(track);
+        if (synchronizedLoop && !(this.audio instanceof HTMLAudioElement)) {
+          await this.onLoopPlaybackStarting();
+        }
+        if (this.audio instanceof HTMLAudioElement) await this.audio.play();
+        else await this.audio.play(synchronizedLoop);
+        if (synchronizedLoop && this.audio instanceof HTMLAudioElement) {
+          await this.onLoopPlaybackStarting();
+        }
         if (sequence !== this.loadSequence) return;
         this.state = 'playing';
       }
@@ -506,8 +522,15 @@ export class TrackTransportController {
     this.render();
     try {
       await this.prepareAudioOutput(this.audio);
-      if (isTempoSyncedLoopTrack(track)) this.onLoopPlaybackStarting();
-      await this.audio.play();
+      const synchronizedLoop = isTempoSyncedLoopTrack(track);
+      if (synchronizedLoop && !(this.audio instanceof HTMLAudioElement)) {
+        await this.onLoopPlaybackStarting();
+      }
+      if (this.audio instanceof HTMLAudioElement) await this.audio.play();
+      else await this.audio.play(synchronizedLoop);
+      if (synchronizedLoop && this.audio instanceof HTMLAudioElement) {
+        await this.onLoopPlaybackStarting();
+      }
       this.state = 'playing';
       this.autoplayPending = false;
       this.render();

@@ -706,6 +706,12 @@ void NativeEngineRuntime::renderInterleaved(float* output, std::size_t frames, s
   }
   // Pads, Click e Playlist têm volumes/rotas próprios; não passam por Módulos.
   addPadsInterleaved(output, frames, channels);
+  // O Play do loop e o primeiro tempo do Click são consumidos pelo mesmo
+  // callback de áudio. Assim não existe diferença variável entre duas calls
+  // vindas do JavaScript/Capacitor.
+  if (tracks_->consumeMetronomeSyncStart()) {
+    metronomeResetRequested_.store(true, std::memory_order_release);
+  }
   addMetronomeInterleaved(output, frames, channels);
   tracks_->render(output, frames, channels);
   const auto budgetSeconds = static_cast<double>(frames) / sampleRate_;

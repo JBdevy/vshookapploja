@@ -197,7 +197,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 // Músicas no motor. loadTrack devolve a duração em segundos, ou -1.
 - (double)loadTrackId:(NSInteger)sourceId path:(NSString *)path;
 - (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds
-                  loop:(BOOL)loop playbackRate:(double)playbackRate;
+                  loop:(BOOL)loop playbackRate:(double)playbackRate
+       syncMetronome:(BOOL)syncMetronome;
 - (NSDictionary<NSString *, id> *)trackStatus;
 - (BOOL)configureTrackOutputChannelStart:(NSInteger)channelStart
                             channelCount:(NSInteger)channelCount

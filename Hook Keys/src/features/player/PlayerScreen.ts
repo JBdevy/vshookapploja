@@ -254,11 +254,12 @@ import {
 import {
   arpeggiatorInputSlotForModule,
   PatternPlaybackController,
+  type DetachedPatternNote,
   type PatternPlaybackSnapshot,
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'synth-preset-name' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-lofi' | 'module-organ' | 'module-power-learn-choice' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'effect-bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm' | 'module-config-copy-confirm';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'synth-preset-name' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-lofi' | 'module-organ' | 'module-power-learn-choice' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'effect-bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'compatibility-preset-learn-blocked' | 'preset-paste-confirm' | 'module-config-copy-confirm';
 type BankId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
 type FaderBehaviorMode = 'default' | 'master' | 'bank2';
 type PlayerView = 'bank' | 'pads-effects';
@@ -290,6 +291,7 @@ interface BankState {
 }
 
 interface PresetState {
+  colorIndex: number;
   modules: ModulePresetState[];
   name: string;
 }
@@ -570,7 +572,6 @@ function bundledFxOneUrl(effectNumber: number): string | null {
 
 interface AccountControls {
   listDevices: () => Promise<DeviceOverviewResponse>;
-  getAcquireLicenseUrl: () => Promise<string>;
   getCompatibilityVideoUrl: () => Promise<string>;
   getSoundCatalog: () => Promise<SoundCatalogPayload>;
   getSoundAssetUrl: (objectKey: string, kind: 'sf2' | 'preview') => Promise<string>;
@@ -617,23 +618,40 @@ function isHttpAssetReference(value: string): boolean {
 }
 
 const PRESET_COLORS = [
-  ['#ff5b38', '#65170b'],
-  ['#ff8a22', '#6c2c06'],
-  ['#ffc329', '#6b4a04'],
-  ['#a8d82e', '#384f08'],
-  ['#35d273', '#0a4f29'],
-  ['#19c9aa', '#075147'],
-  ['#19bfe8', '#07495f'],
-  ['#3288ff', '#0a3269'],
-  ['#5b68ff', '#202768'],
-  ['#8957f2', '#342168'],
-  ['#b84ce8', '#4d1764'],
-  ['#e649ba', '#611546'],
-  ['#ff4777', '#6c142d'],
-  ['#ff684e', '#701f13'],
-  ['#e89b31', '#62400d'],
-  ['#57c957', '#174f1a'],
+  ['#ff8b7e', '#ff5f52'],
+  ['#ffad62', '#ff842f'],
+  ['#ffdc59', '#f1b927'],
+  ['#cde95b', '#a9cf35'],
+  ['#79e993', '#45ca69'],
+  ['#65e2cf', '#30c2aa'],
+  ['#6edcff', '#35bde8'],
+  ['#79b8ff', '#458eea'],
+  ['#9ea5ff', '#747de8'],
+  ['#bd98ff', '#986ee6'],
+  ['#d996f2', '#b96bdd'],
+  ['#f28bd0', '#d85bad'],
+  ['#ff91ae', '#ed627f'],
+  ['#ff9d82', '#f27657'],
+  ['#f5c36b', '#dc9e3e'],
+  ['#91dd79', '#62bf4d'],
 ] as const;
+
+const USER_SOUNDFONT_COLORS = [
+  ['#ff5b38', '#65170b'], ['#ff8a22', '#6c2c06'], ['#ffc329', '#6b4a04'], ['#a8d82e', '#384f08'],
+  ['#35d273', '#0a4f29'], ['#19c9aa', '#075147'], ['#19bfe8', '#07495f'], ['#3288ff', '#0a3269'],
+  ['#5b68ff', '#202768'], ['#8957f2', '#342168'], ['#b84ce8', '#4d1764'], ['#e649ba', '#611546'],
+  ['#ff4777', '#6c142d'], ['#ff684e', '#701f13'], ['#e89b31', '#62400d'], ['#57c957', '#174f1a'],
+] as const;
+
+// Ordem embaralhada e estável: os cards parecem aleatórios sem trocar de cor
+// sozinhos a cada abertura do app.
+const DEFAULT_PRESET_COLOR_ORDER = [2, 7, 4, 12, 0, 9, 5, 14, 3, 11, 6, 15, 1, 10, 8, 13] as const;
+
+function presetColorIndex(value: unknown, presetNumber: number): number {
+  const requested = Number(value);
+  if (Number.isInteger(requested) && PRESET_COLORS[requested]) return requested;
+  return DEFAULT_PRESET_COLOR_ORDER[(presetNumber - 1) % DEFAULT_PRESET_COLOR_ORDER.length] ?? 0;
+}
 
 function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'module-volume') return `module:${target.moduleNumber}`;
@@ -844,7 +862,7 @@ function createPresetMarkup(
   isSelected: boolean,
   presetName = 'Preset',
 ): string {
-  const colors = PRESET_COLORS[presetNumber - 1] ?? PRESET_COLORS[0];
+  const colors = PRESET_COLORS[presetColorIndex(undefined, presetNumber)] ?? PRESET_COLORS[0];
   return `
     <button
       class="player-preset-button${isSelected ? ' is-selected' : ''}"
@@ -989,7 +1007,8 @@ function createBankState(selectedPreset: number | null = null): BankState {
     masterVolumes: Array.from({ length: MODULE_COUNT }, () => 0),
     name: '',
     selectedPreset,
-    presets: Array.from({ length: PRESET_COUNT }, () => ({
+    presets: Array.from({ length: PRESET_COUNT }, (_, presetIndex) => ({
+      colorIndex: presetColorIndex(undefined, presetIndex + 1),
       name: 'Preset',
       modules: Array.from({ length: MODULE_COUNT }, (_, moduleIndex) => ({
         category: '',
@@ -1142,9 +1161,11 @@ export class PlayerScreen {
     percentage: number | null;
     abort: AbortController;
     state: 'queued' | 'downloading';
+    source: 'manual' | 'batch';
   }>();
   private soundDownloadQueueRunning = false;
   private soundDownloadBatchIds: Set<string> | null = null;
+  private recentManualDownloadSoundId: string | null = null;
   private readonly fixedSoundHoldGesture = new LongPressGesture(700, 10);
   private readonly userSoundfontHoldGesture = new LongPressGesture(700, 10);
   private readonly synthPresetHoldGesture = new LongPressGesture(700, 10);
@@ -1313,6 +1334,7 @@ export class PlayerScreen {
   private readonly nativeLoadedTimbres: (string | null)[] = Array.from({ length: MODULE_COUNT }, () => null);
   private nativePresetTransitionPending = false;
   private nativePresetTransitionInFlight = false;
+  private readonly pendingPatternTransitionReleases = new Map<string, DetachedPatternNote>();
   private selectedMidiInputIds: (string | null)[] = [null, null, null];
   private readonly audioOutput = new AudioOutputService();
   private audioDevices: AudioOutputDevice[] = [];
@@ -1615,11 +1637,11 @@ export class PlayerScreen {
       (message) => this.setStatus(message),
       (trigger) => this.openModal('track-position', null, trigger),
       hookKeysNative.tracksAvailable() ? new NativeTrackPlayer(hookKeysNative.trackBridge) : null,
-      () => {
+      async () => {
         // O relógio começa mudo no mesmo gesto do Play. O botão Click apenas
         // abre/fecha seu volume depois, sem reiniciar nem perder a fase.
         this.loopMetronomePlaying = true;
-        this.metronome.setLoopPlaybackActive(true, true);
+        await this.metronome.startLoopPlaybackClock();
       },
     );
     this.trackTransport.mount();
@@ -1901,6 +1923,7 @@ export class PlayerScreen {
 
   async activateLiveMidi(): Promise<void> {
     if (!this.mounted) return;
+    this.pendingPatternTransitionReleases.clear();
     this.patternPlayback.reset();
     await hookKeysNative.setMidiInputEnabled(true);
     if (this.mounted) this.liveMidiEnabled = true;
@@ -1908,6 +1931,7 @@ export class PlayerScreen {
 
   async suspendLiveMidi(): Promise<void> {
     this.liveMidiEnabled = false;
+    this.pendingPatternTransitionReleases.clear();
     this.patternPlayback.reset();
     this.clearPerformanceNoteDisplay();
     await hookKeysNative.setMidiInputEnabled(false);
@@ -3916,7 +3940,7 @@ export class PlayerScreen {
     }
     this.soundfontSelectionRevision += 1;
     this.cancelNoteLearn();
-    this.patternPlayback.reset();
+    this.preparePatternPlaybackForPresetTransition();
     // O modo Edit pertence somente à tela Pads - Effects. Ao sair dela não
     // pode continuar armado para a próxima vez que o usuário voltar.
     this.effectEditMode = false;
@@ -4102,11 +4126,16 @@ export class PlayerScreen {
       const isSelected = presetNumber === bank.selectedPreset;
       const presetState = bank.presets[presetNumber - 1];
       const presetName = presetState?.name ?? 'Preset';
+      const colorIndex = presetColorIndex(presetState?.colorIndex, presetNumber);
+      const colors = PRESET_COLORS[colorIndex] ?? PRESET_COLORS[0];
+      if (presetState) presetState.colorIndex = colorIndex;
       button.classList.toggle('is-selected', isSelected);
       button.setAttribute('aria-pressed', String(isSelected));
       button.setAttribute('aria-label', `Preset ${presetNumber}: ${presetName}`);
       const label = button.querySelector<HTMLElement>('.player-preset-button__label');
       if (label) label.textContent = presetName;
+      button.style.setProperty('--preset-accent', colors[0]);
+      button.style.setProperty('--preset-dark', colors[1]);
     }
 
     const workspace = requiredElement<HTMLElement>(this.root, '.player-workspace');
@@ -4177,7 +4206,7 @@ export class PlayerScreen {
     }
     this.soundfontSelectionRevision += 1;
     this.cancelNoteLearn();
-    this.patternPlayback.reset();
+    this.preparePatternPlaybackForPresetTransition();
     bank.presets[presetNumber - 1] = JSON.parse(JSON.stringify(clipboard.preset)) as PresetState;
     this.presetClipboard = null;
     this.restoreActivePresetState();
@@ -4221,7 +4250,7 @@ export class PlayerScreen {
     }
     this.soundfontSelectionRevision += 1;
     this.cancelNoteLearn();
-    this.patternPlayback.reset();
+    this.preparePatternPlaybackForPresetTransition();
     this.saveActivePresetState();
     for (const state of this.bankStates.values()) state.selectedPreset = null;
     bank.selectedPreset = presetNumber;
@@ -4914,6 +4943,7 @@ export class PlayerScreen {
   }
 
   private triggerPanic(): void {
+    this.pendingPatternTransitionReleases.clear();
     this.patternPlayback.reset();
     this.trackTransport?.stop();
     this.metronome.stop();
@@ -5288,7 +5318,7 @@ export class PlayerScreen {
     if (this.liveMidiEnabled) this.nativePresetTransitionPending = true;
     this.soundfontSelectionRevision += 1;
     this.cancelNoteLearn();
-    this.patternPlayback.reset();
+    this.preparePatternPlaybackForPresetTransition();
     this.saveActivePresetState();
     this.activeBank = bankId;
     for (const state of this.bankStates.values()) state.selectedPreset = null;
@@ -5296,6 +5326,27 @@ export class PlayerScreen {
     this.restoreActivePresetState();
     this.updateVisibleView();
     this.markPlayerStateChanged();
+  }
+
+  private preparePatternPlaybackForPresetTransition(): void {
+    if (!this.liveMidiEnabled || (!this.nativePresetTransitionPending && !this.nativePresetTransitionInFlight)) {
+      this.pendingPatternTransitionReleases.clear();
+      this.patternPlayback.reset();
+      return;
+    }
+    for (const note of this.patternPlayback.detachForPresetTransition()) {
+      this.pendingPatternTransitionReleases.set(`${note.inputSlot}:${note.noteNumber}`, note);
+    }
+  }
+
+  private async releasePatternNotesAfterPresetCommit(): Promise<void> {
+    for (const [key, note] of [...this.pendingPatternTransitionReleases]) {
+      // O commit entra primeiro na mesma fila nativa. Este Note Off alcança a
+      // camada antiga já aposentada, deixando o Release/Pulse/Organ terminar
+      // naturalmente sem manter a nota presa.
+      await hookKeysNative.sendMidi(note.inputSlot, 0x80, note.noteNumber, 0);
+      this.pendingPatternTransitionReleases.delete(key);
+    }
   }
 
   private applyLearnedMidiNote(noteNumber: number): void {
@@ -5540,9 +5591,8 @@ export class PlayerScreen {
     const presetState = kind !== 'preset-name' || moduleNumber === null
       ? null
       : this.bankStates.get(this.activeBank)?.presets[moduleNumber - 1] ?? null;
-    const presetColors = moduleNumber === null
-      ? PRESET_COLORS[0]
-      : PRESET_COLORS[moduleNumber - 1] ?? PRESET_COLORS[0];
+    const activePresetColorIndex = presetColorIndex(presetState?.colorIndex, moduleNumber ?? 1);
+    const presetColors = PRESET_COLORS[activePresetColorIndex] ?? PRESET_COLORS[0];
     const effectPadState = kind !== 'effect-pad' || moduleNumber === null
       ? null
       : this.effectPadStates.get(this.activeEffectBank)?.[moduleNumber - 1] ?? null;
@@ -5726,6 +5776,13 @@ export class PlayerScreen {
             <p>Deseja desativar o modo compatibilidade?</p>
           </section>
         `;
+    } else if (kind === 'compatibility-preset-learn-blocked') {
+      bodyMarkup = `
+        <section class="compatibility-confirmation">
+          <strong>Mapeamento indisponível</strong>
+          <p>Desative o modo compatibilidade.</p>
+        </section>
+      `;
     } else if (kind === 'output-volume') {
       bodyMarkup = createOutputFaderPanelMarkup(this.outputLevels, this.outputEnabled, OUTPUTS);
     } else if (kind === 'preset-paste-confirm' && moduleNumber !== null && this.presetClipboard) {
@@ -5800,12 +5857,27 @@ export class PlayerScreen {
               <span class="player-preset-button__label"></span>
             </button>
           </div>
-          <div class="cc-action-pair preset-name-editor__cc-actions">
-            <button class="preset-name-editor__learn" type="button" data-modal-action="learn-preset-cc">
+          <div class="preset-color-palette" role="radiogroup" aria-label="Cor do preset">
+            ${PRESET_COLORS.map((colors, colorIndex) => `
+              <button
+                class="preset-color-option${colorIndex === activePresetColorIndex ? ' is-selected' : ''}"
+                type="button"
+                data-preset-color-index="${colorIndex}"
+                role="radio"
+                aria-checked="${colorIndex === activePresetColorIndex}"
+                aria-label="Cor ${colorIndex + 1}"
+                style="--preset-accent: ${colors[0]}; --preset-dark: ${colors[1]}"
+              ></button>
+            `).join('')}
+          </div>
+          <div class="cc-action-pair preset-name-editor__cc-actions${this.compatibilityMode ? ' is-compatibility-blocked' : ''}">
+            <button class="preset-name-editor__learn" type="button" data-modal-action="learn-preset-cc"${
+  this.compatibilityMode ? ' aria-disabled="true"' : ''}>
               <span>Learn CC</span>
               <small>${this.ccMappingLabel({ kind: 'preset', bank: this.activeBank, presetNumber: moduleNumber })}</small>
             </button>
-            <button class="cc-action-pair__clean" type="button" data-modal-action="clean-preset-cc">Clean</button>
+            <button class="cc-action-pair__clean" type="button" data-modal-action="clean-preset-cc"${
+  this.compatibilityMode ? ' aria-disabled="true"' : ''}>Clean</button>
           </div>
         </section>
       `;
@@ -6077,7 +6149,6 @@ export class PlayerScreen {
               <input type="file" accept="application/json,.json" data-player-backup-file hidden>
               <button class="user-panel__action-button" type="button" data-modal-action="reset-password">Redefinir senha</button>
               <button class="user-panel__action-button" type="button" data-modal-action="show-devices">Dispositivos</button>
-              <button class="user-panel__action-button" type="button" data-modal-action="acquire-license" disabled>Adquirir mais licença</button>
             </nav>
             <div class="user-panel__licenses" data-user-licenses>
               <span class="loading-orbit" aria-hidden="true"></span>
@@ -6181,6 +6252,8 @@ export class PlayerScreen {
           <button class="player-modal__back-button" type="button" data-modal-action="cancel-compatibility">Cancelar</button>
           <button class="player-modal__confirm-button" type="button" data-modal-action="apply-compatibility">${this.pendingCompatibilityMode ? 'Aplicar' : 'Sim'}</button>
         `
+      : kind === 'compatibility-preset-learn-blocked'
+        ? `<button class="player-modal__confirm-button" type="button" data-modal-action="dismiss-compatibility-preset-block">OK</button>`
       : kind === 'backup-download'
         ? `
           <button class="player-modal__back-button" type="button" data-modal-action="skip-backup-download">Agora não</button>
@@ -6445,6 +6518,9 @@ export class PlayerScreen {
     } else if (kind === 'compatibility-mode') {
       eyebrow.textContent = 'Hook Keys';
       title.textContent = this.pendingCompatibilityMode ? 'Modo compatibilidade' : 'Confirmar alteração';
+    } else if (kind === 'compatibility-preset-learn-blocked') {
+      eyebrow.textContent = 'Modo compatibilidade';
+      title.textContent = 'Learn CC bloqueado';
     } else {
       eyebrow.textContent = `Banco ${this.activeBank} · Preset ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
       title.textContent = 'Nome do preset';
@@ -6973,6 +7049,13 @@ export class PlayerScreen {
         this.selectEffectPadColor(modal, effectColorButton);
         return;
       }
+      const presetColorButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('button[data-preset-color-index]')
+        : null;
+      if (kind === 'preset-name' && presetColorButton) {
+        this.selectPresetColor(modal, presetColorButton);
+        return;
+      }
       const effectModeButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('button[data-effect-mode]')
         : null;
@@ -7030,6 +7113,16 @@ export class PlayerScreen {
       const categoryButton = target instanceof Element
         ? target.closest<HTMLButtonElement>('button[data-sound-category]')
         : null;
+
+      if (kind === 'sound-selection' && target instanceof Element) {
+        const touchedSound = target.closest<HTMLElement>('[data-fixed-sound-id], [data-user-soundfont-id]');
+        const touchedSoundId = touchedSound?.dataset.fixedSoundId ?? null;
+        if (touchedSound && this.recentManualDownloadSoundId !== touchedSoundId) {
+          this.recentManualDownloadSoundId = null;
+          this.syncSoundDownloadButtons(modal);
+        }
+      }
+
       if (categoryButton && moduleNumber !== null) {
         const category = categoryButton.dataset.soundCategory;
         if (typeof category === 'string' && category.length > 0) {
@@ -7054,6 +7147,10 @@ export class PlayerScreen {
         }
         const soundId = fixedSoundButton.dataset.fixedSoundId;
         if (!soundId) return;
+        if (this.recentManualDownloadSoundId && this.recentManualDownloadSoundId !== soundId) {
+          this.recentManualDownloadSoundId = null;
+          this.syncSoundDownloadButtons(modal);
+        }
         // A fila já é o estado desse timbre. Não reabre a tela de download ao
         // tocar em um item que está baixando ou aguardando.
         if (this.activeSoundDownloads.has(soundId)) return;
@@ -7214,6 +7311,14 @@ export class PlayerScreen {
           else modal.querySelector('[data-processor-reset-confirmation]')?.remove();
           return;
         }
+      }
+      if (kind === 'preset-name' && moduleNumber !== null && this.compatibilityMode
+          && (modalAction === 'learn-preset-cc' || modalAction === 'clean-preset-cc')) {
+        this.commitPresetName(modal, moduleNumber);
+        const button = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-modal-action]') : null;
+        if (button) this.openChildModal('compatibility-preset-learn-blocked', null, button);
+        return;
       }
       if (modalAction === 'learn-preset-cc' && kind === 'preset-name' && moduleNumber !== null) {
         this.commitPresetName(modal, moduleNumber);
@@ -7435,6 +7540,11 @@ export class PlayerScreen {
         if (this.compatibilityVideoUrl) window.open(this.compatibilityVideoUrl, '_blank', 'noopener,noreferrer');
         return;
       }
+      if (kind === 'compatibility-preset-learn-blocked'
+          && modalAction === 'dismiss-compatibility-preset-block') {
+        this.returnToPreviousModal();
+        return;
+      }
       if (kind === 'compatibility-mode' && modalAction === 'cancel-compatibility') {
         this.pendingCompatibilityMode = null;
         this.returnToPreviousModal();
@@ -7551,13 +7661,6 @@ export class PlayerScreen {
       if (kind === 'password-reset' && modalAction === 'save-password-reset') {
         const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
         if (button) void this.saveNewPassword(modal, button);
-        return;
-      }
-
-      if (modalAction === 'acquire-license') {
-        const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
-        const url = button?.dataset.purchaseUrl;
-        if (url) window.open(url, '_blank', 'noopener,noreferrer');
         return;
       }
 
@@ -8118,7 +8221,6 @@ export class PlayerScreen {
       void this.renderUserSoundfonts(modal);
     } else if (kind === 'user') {
       void this.loadUserDevices(modal);
-      void this.loadAcquireLicenseUrl(modal);
       void this.loadUserProfile(modal);
     } else if (kind === 'backup-download') {
       void this.prepareBackupDownloadCapacity(modal);
@@ -8515,7 +8617,7 @@ export class PlayerScreen {
       const installedMarkup = soundfonts.map((soundfont) => {
         const selected = selectedTimbreId === `user:${soundfont.id}`;
         return `
-            <button class="${selected ? 'is-current-timbre' : ''}" type="button" data-user-soundfont-id="${escapeMarkup(soundfont.id)}" data-user-soundfont-name="${escapeMarkup(soundfont.name)}" data-user-soundfont-color="${PRESET_COLORS[soundfont.colorIndex]?.[0] ?? PRESET_COLORS[0]?.[0]}" style="--user-sf2-color-a:${PRESET_COLORS[soundfont.colorIndex]?.[0] ?? PRESET_COLORS[0]?.[0]};--user-sf2-color-b:${PRESET_COLORS[soundfont.colorIndex]?.[1] ?? PRESET_COLORS[0]?.[1]}" aria-current="${selected}">
+            <button class="${selected ? 'is-current-timbre' : ''}" type="button" data-user-soundfont-id="${escapeMarkup(soundfont.id)}" data-user-soundfont-name="${escapeMarkup(soundfont.name)}" data-user-soundfont-color="${USER_SOUNDFONT_COLORS[soundfont.colorIndex]?.[0] ?? USER_SOUNDFONT_COLORS[0]?.[0]}" style="--user-sf2-color-a:${USER_SOUNDFONT_COLORS[soundfont.colorIndex]?.[0] ?? USER_SOUNDFONT_COLORS[0]?.[0]};--user-sf2-color-b:${USER_SOUNDFONT_COLORS[soundfont.colorIndex]?.[1] ?? USER_SOUNDFONT_COLORS[0]?.[1]}" aria-current="${selected}">
               <strong>${escapeMarkup(soundfont.name)}</strong>
               <small>${escapeMarkup(withoutSoundfontExtension(soundfont.fileName))}</small>
             </button>
@@ -8691,6 +8793,10 @@ export class PlayerScreen {
       const queued = entry?.state === 'queued';
       button.classList.toggle('is-downloading', downloading);
       button.classList.toggle('is-download-queued', queued);
+      button.classList.toggle(
+        'is-manual-download-complete',
+        !entry && soundId === this.recentManualDownloadSoundId && this.installedFixedSoundIds.has(soundId),
+      );
       button.style.setProperty('--fixed-sound-progress', String((entry?.percentage ?? 0) / 100));
       if (entry) {
         const status = button.querySelector<HTMLElement>('small');
@@ -8743,6 +8849,7 @@ export class PlayerScreen {
           }, entry.abort.signal);
           this.installedFixedSoundIds.add(soundId);
           installed = true;
+          if (entry.source === 'manual') this.recentManualDownloadSoundId = soundId;
           if (this.currentModalKind === 'sound-download' && this.selectedCatalogSoundId === soundId) {
             this.updateSoundDownloadProgress(100, 'Download concluído. Volte e escolha o timbre para usá-lo.');
             const installButton = this.modal?.querySelector<HTMLButtonElement>('[data-modal-action="download-sound"]');
@@ -8799,7 +8906,7 @@ export class PlayerScreen {
     this.soundDownloadBatchIds = new Set(sounds.map((sound) => sound.id));
     for (const sound of notQueued) {
       this.activeSoundDownloads.set(sound.id, {
-        sound, percentage: 0, abort: new AbortController(), state: 'queued',
+        sound, percentage: 0, abort: new AbortController(), state: 'queued', source: 'batch',
       });
     }
     this.syncSoundDownloadButtons(modal);
@@ -9006,19 +9113,6 @@ export class PlayerScreen {
     }
     this.setStatus(`${name} carregado no módulo ${moduleNumber}.`);
     this.closeModal();
-  }
-
-  private async loadAcquireLicenseUrl(modal: HTMLElement): Promise<void> {
-    const button = modal.querySelector<HTMLButtonElement>('[data-modal-action="acquire-license"]');
-    if (!button) return;
-    try {
-      const url = await this.accountControls.getAcquireLicenseUrl();
-      if (!modal.isConnected || !url) return;
-      button.dataset.purchaseUrl = url;
-      button.disabled = false;
-    } catch {
-      // O botão permanece indisponível até que a conexão volte.
-    }
   }
 
   private async loadCompatibilityVideoUrl(): Promise<void> {
@@ -10999,8 +11093,24 @@ export class PlayerScreen {
     const preset = this.bankStates.get(this.activeBank)?.presets[presetNumber - 1];
     if (!input || !preset) return;
     preset.name = input.value.trim().slice(0, 20) || 'Preset';
+    const colorButton = modal.querySelector<HTMLButtonElement>('[data-preset-color-index].is-selected');
+    preset.colorIndex = presetColorIndex(colorButton?.dataset.presetColorIndex, presetNumber);
     this.restoreActivePresetState();
     this.markPlayerStateChanged();
+  }
+
+  private selectPresetColor(modal: HTMLElement, button: HTMLButtonElement): void {
+    const colorIndex = Number.parseInt(button.dataset.presetColorIndex ?? '', 10);
+    const colors = PRESET_COLORS[colorIndex];
+    const preview = modal.querySelector<HTMLElement>('.preset-name-editor__preview-button');
+    if (!preview || !colors) return;
+    preview.style.setProperty('--preset-accent', colors[0]);
+    preview.style.setProperty('--preset-dark', colors[1]);
+    for (const option of modal.querySelectorAll<HTMLButtonElement>('[data-preset-color-index]')) {
+      const selected = option === button;
+      option.classList.toggle('is-selected', selected);
+      option.setAttribute('aria-checked', String(selected));
+    }
   }
 
   private commitSynthPresetName(modal: HTMLElement, presetNumber: number): void {
@@ -11370,7 +11480,7 @@ export class PlayerScreen {
     button.disabled = true;
     const abort = new AbortController();
     this.activeSoundDownloads.set(sound.id, {
-      sound, percentage: 0, abort, state: 'queued',
+      sound, percentage: 0, abort, state: 'queued', source: 'manual',
     });
     button.textContent = this.soundDownloadQueueRunning ? 'Na fila…' : 'Baixando…';
     this.renderActiveSoundDownloadsBanner();
@@ -11850,6 +11960,7 @@ export class PlayerScreen {
         // e entram sozinhos na reconfiguração depois do carregamento.
         if (this.mounted && this.nativePresetTransitionInFlight) {
           await hookKeysNative.commitPresetTransition();
+          await this.releasePatternNotesAfterPresetCommit();
           this.nativePresetTransitionInFlight = false;
         }
         if (!this.mounted || revision !== this.soundfontSelectionRevision) return;
@@ -12514,6 +12625,7 @@ export class PlayerScreen {
         if (!sourcePreset) return preset;
         const sourceModules = Array.isArray(sourcePreset.modules) ? sourcePreset.modules : [];
         return {
+          colorIndex: presetColorIndex(sourcePreset.colorIndex, presetIndex + 1),
           name: typeof sourcePreset.name === 'string'
             ? sourcePreset.name.trim().slice(0, 20) || 'Preset'
             : 'Preset',

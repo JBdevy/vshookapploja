@@ -169,6 +169,23 @@ export class MetronomeEngine {
     this.onStateChanged();
   }
 
+  /**
+   * Arma e reinicia o relógio do loop sem passar pelo debounce normal das
+   * alterações de configuração. O transporte aguarda esta Promise no player
+   * nativo; no player web ela é chamada assim que o play foi confirmado.
+   */
+  async startLoopPlaybackClock(): Promise<void> {
+    this.loopClockActive = true;
+    if (hookKeysNative.isAvailable()) {
+      if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
+      this.nativeSyncTimer = null;
+      await this.enqueueNativeConfig(this.nativeConfig(undefined, true));
+    } else {
+      this.restartWebClock();
+    }
+    this.onStateChanged();
+  }
+
   private stopClock(): void {
     if (this.timer !== null) window.clearInterval(this.timer);
     this.timer = null;

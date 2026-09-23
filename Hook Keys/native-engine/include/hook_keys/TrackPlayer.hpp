@@ -103,7 +103,7 @@ public:
     }
   }
 
-  [[nodiscard]] bool play(std::uint32_t id) {
+  [[nodiscard]] bool play(std::uint32_t id, bool syncMetronome = false) {
     {
       std::scoped_lock lock(mutex_);
       auto* source = findLocked(id);
@@ -123,10 +123,15 @@ public:
       activeId_.store(id, std::memory_order_release);
       playbackRate_.store(source->playbackRate, std::memory_order_release);
       restartLocked(*source);
+      syncMetronomeOnNextRender_.store(syncMetronome, std::memory_order_release);
       playing_.store(true, std::memory_order_release);
     }
     wake_.notify_all();
     return true;
+  }
+
+  [[nodiscard]] bool consumeMetronomeSyncStart() noexcept {
+    return syncMetronomeOnNextRender_.exchange(false, std::memory_order_acq_rel);
   }
 
   void pause(std::uint32_t id) {
@@ -398,6 +403,7 @@ private:
   std::atomic<std::uint32_t> generation_{1};
   std::atomic<std::uint32_t> endedGeneration_{0};
   std::atomic<bool> playing_{false};
+  std::atomic<bool> syncMetronomeOnNextRender_{false};
   std::atomic<std::uint64_t> positionFrames_{0};
   std::atomic<std::uint64_t> restartPosition_{0};
   std::atomic<float> gainTarget_{1.0f};

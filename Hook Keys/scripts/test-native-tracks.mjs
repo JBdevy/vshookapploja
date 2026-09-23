@@ -65,8 +65,9 @@ root.innerHTML = window.Tracks.createTrackTransportMarkup();
 window.document.body.append(root);
 let snapshot = null;
 const messages = [];
+let loopClockStarts = 0;
 const transport = new TrackTransportController(root, library, (next) => { snapshot = next; }, (message) => messages.push(message), () => {},
-  new NativeTrackPlayer(bridge));
+  new NativeTrackPlayer(bridge), async () => { loopClockStarts += 1; });
 transport.mount();
 const controls = (action) => calls.filter(([kind, , name]) => kind === 'control' && name === action);
 
@@ -144,6 +145,9 @@ try {
   await settle();
   assert.equal(snapshot.loopPlaying, true,
     'um loop tocando informa que o relógio do metrônomo deve ficar ativo e alinhado');
+  assert.equal(loopClockStarts, 1, 'o relógio do metrônomo é armado antes do Play nativo do loop');
+  assert.equal(controls('play').at(-1)[3].syncMetronome, true,
+    'o Play nativo reinicia loop e metrônomo no mesmo callback de áudio');
   await transport.selectTrack(tracks.a);
   await settle();
   assert.equal(transport.audio.playbackRate, 1, 'música normal permanece na velocidade original');

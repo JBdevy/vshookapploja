@@ -1121,7 +1121,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             action: call.getString("action", ""),
             seconds: call.getDouble("seconds", 0),
             loop: call.getBool("loop", false),
-            playbackRate: call.getDouble("playbackRate", 1)
+            playbackRate: call.getDouble("playbackRate", 1),
+            syncMetronome: call.getBool("syncMetronome", false)
         )
         if ok { call.resolve() } else { call.reject("A música não está carregada no motor.", "track_not_loaded") }
     }
