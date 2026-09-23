@@ -12,6 +12,11 @@ final class HookKeysBridgeViewController: CAPBridgeViewController {
 
     override var prefersStatusBarHidden: Bool { true }
 
+    // A máscara muda de retrato (login) para as duas paisagens (player).
+    // Explicitar a autorrotação evita que uma build Release preserve o lado
+    // usado no primeiro requestGeometryUpdate e ignore a rotação seguinte.
+    override var shouldAutorotate: Bool { true }
+
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
     override func viewDidAppear(_ animated: Bool) {

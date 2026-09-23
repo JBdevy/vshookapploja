@@ -292,17 +292,18 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         }
     }
 
-    // No iPhone, landscapeLeft coloca o recorte físico à esquerda e
-    // landscapeRight à direita. Retornar o lado nativo evita a safe area
-    // simétrica do Safari, que desperdiça também o lado da porta Lightning/USB.
+    // UIInterfaceOrientation descreve a orientação da interface, não o lado
+    // físico para o qual o aparelho foi girado. Por isso landscapeLeft deixa
+    // o topo físico (notch) à direita e landscapeRight o deixa à esquerda.
+    // Inverter essa relação reservava espaço na USB e cobria o notch.
     @objc func displayCutoutSide(_ call: CAPPluginCall) {
         DispatchQueue.main.async { [weak self] in
             let scene = self?.bridge?.viewController?.view.window?.windowScene
                 ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
             let side: String
             switch scene?.interfaceOrientation {
-            case .landscapeLeft: side = "left"
-            case .landscapeRight: side = "right"
+            case .landscapeLeft: side = "right"
+            case .landscapeRight: side = "left"
             case .portrait, .portraitUpsideDown: side = "top"
             default: side = "none"
             }

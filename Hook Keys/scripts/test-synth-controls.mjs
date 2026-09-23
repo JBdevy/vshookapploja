@@ -571,6 +571,8 @@ test('common CSS retains the dynamic fill and green selection, without a Synth-o
   const selectors = [...css.matchAll(/([^{}]+)\{/g)].map(([, selector]) => selector.trim());
   assert(!selectors.some((selector) => selector.includes('synth') && /knob[^\s,]*__face/.test(selector)));
   assert.match(css, /\.synth-preset-button\.is-selected\s*\{[\s\S]*?background: linear-gradient\(180deg, #39df7d, #0b873f\)/);
+  assert.match(css, /\.synth-oscillator-tabs \[data-synth-oscillator-tab\]\.is-selected,[\s\S]*?\.synth-preset-button\.is-selected,[\s\S]*?\.player-presets \.player-preset-button\.is-selected,[\s\S]*?\.player-navigation__bank-button\[data-action="show-bank"\]\.is-selected[\s\S]*?animation: active-page-selection-pulse/);
+  assert.match(css, /@keyframes active-page-selection-pulse\s*\{[\s\S]*?filter: brightness\(1\.32\) saturate\(1\.12\)/);
 });
 
 test('each native bridge forwards all three independent oscillator volumes rather than a crossfade', () => {
@@ -692,7 +694,7 @@ test('Synth layout gives controls natural height and keeps presets and footer ou
   assert.match(css, /data-synth-oscillator-tab="1"\]:not\(\.is-selected\)[\s\S]*?--button-border: var\(--gold-border\)/);
   assert.match(css, /data-synth-oscillator-tab="2"\]:not\(\.is-selected\)[\s\S]*?#ff73c8/);
   assert.match(css, /data-synth-oscillator-tab="3"\]:not\(\.is-selected\)[\s\S]*?#59b9ff/);
-  assert.match(css, /data-synth-oscillator-tab\]\.is-selected[\s\S]*?#4ceb7f/);
+  assert.match(css, /data-synth-oscillator-tab\]\.is-selected[\s\S]*?--button-border:\s*#fff/);
   assert.doesNotMatch(css, /\.synth-editor__header-controls\s*\{[^}]*width: (?:84|88)%;/);
   assert.match(css, /grid-template-rows: repeat\(3, max-content\);/);
   assert.match(css, /grid-template-rows: max-content repeat\(3, minmax\(var\(--synth-row-min-height\), 1fr\)\) minmax\(max-content, 1fr\);/);

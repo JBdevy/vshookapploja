@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { Keyboard } from '@capacitor/keyboard';
-import { setAppOrientationMode, type AppOrientationMode } from './runtime';
+import { refreshNativeNotchSide, setAppOrientationMode, type AppOrientationMode } from './runtime';
 
 export function coverOrientationChange(): HTMLElement {
   const cover = document.createElement('div');
@@ -36,5 +36,8 @@ export async function prepareScreenOrientation(mode: AppOrientationMode): Promis
     if (landscape === (mode === 'tablet') && performance.now() - stableSince >= 250) break;
     await new Promise(resolve => window.setTimeout(resolve, 50));
   }
+  // setAppOrientationMode dispara a rotação, mas o lado do recorte só é
+  // confiável depois que a nova geometria estabiliza.
+  await refreshNativeNotchSide();
   await nextPaint();
 }

@@ -5068,6 +5068,17 @@ export class PlayerScreen {
       return;
     }
 
+    // No modo compatibilidade, Reverb 1..16 chega do serviço MIDI como
+    // CC102..117. Essa faixa forma um snapshot temporário dos 16 presets do
+    // banco aberto. Não altere ccMappings: ao desligar o modo, todo Learn CC
+    // feito anteriormente pelo usuário volta a funcionar exatamente como era.
+    const compatibilityPreset = input.controller - 101;
+    if (this.compatibilityMode && input.value >= 64
+        && compatibilityPreset >= 1 && compatibilityPreset <= PRESET_COUNT) {
+      this.activateMappedPreset(this.activeBank, compatibilityPreset);
+      return;
+    }
+
     // Alguns teclados mandam apenas 127 a cada toque (sem o 0 de soltura).
     // Depois do debounce, outro 127 é uma nova pressão válida. A chave inclui
     // dispositivo e canal para o CC de um teclado não travar o de outro.
@@ -5208,7 +5219,9 @@ export class PlayerScreen {
       }
 
       const presetMatch = /^preset:([A-F]):([1-9]|1[0-6])$/.exec(targetKey);
-      if (presetMatch && risingEdge && this.isBankId(presetMatch[1])) {
+      // O snapshot Reverb 1..16 substitui temporariamente apenas os Learn dos
+      // presets principais. Os valores continuam no mapa e voltam ao desligar.
+      if (presetMatch && !this.compatibilityMode && risingEdge && this.isBankId(presetMatch[1])) {
         this.activateMappedPreset(presetMatch[1], Number(presetMatch[2]));
       }
     }

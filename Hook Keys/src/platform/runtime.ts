@@ -7,6 +7,7 @@ import { hookKeysNative } from './native/HookKeysNative';
 let initialized = false;
 export type AppOrientationMode = 'login' | 'tablet';
 let currentMode: AppOrientationMode = 'login';
+let notchRefreshTimers: number[] = [];
 
 type TauriRuntimeWindow = Window & {
   __TAURI_INTERNALS__?: unknown;
@@ -36,6 +37,22 @@ async function updateNativeNotchSide(): Promise<void> {
       ? 'right'
       : 'top';
   document.documentElement.dataset.notchSide = side;
+}
+
+// Durante a rotação, WKWebView pode emitir orientationchange antes de o
+// UIWindowScene publicar a nova interfaceOrientation. Releia depois dos
+// frames da animação para não manter o lado anterior do notch na build nativa.
+function refreshNotchSideAfterOrientationChange(): void {
+  for (const timer of notchRefreshTimers) window.clearTimeout(timer);
+  notchRefreshTimers = [];
+  void updateNativeNotchSide();
+  for (const delay of [100, 300, 700]) {
+    notchRefreshTimers.push(window.setTimeout(() => void updateNativeNotchSide(), delay));
+  }
+}
+
+export async function refreshNativeNotchSide(): Promise<void> {
+  await updateNativeNotchSide();
 }
 
 export function isDesktopRuntime(): boolean {
@@ -85,15 +102,16 @@ export async function initializePlatformRuntime(): Promise<void> {
     // escolher um único lado para o notch; antes este cálculo só rodava dentro
     // do APK/IPA e a versão web ficava com 1 px nos dois lados.
     await updateNativeNotchSide();
-    window.screen.orientation?.addEventListener('change', () => void updateNativeNotchSide());
-    window.addEventListener('orientationchange', () => void updateNativeNotchSide());
-    window.addEventListener('resize', () => void updateNativeNotchSide());
+    window.screen.orientation?.addEventListener('change', refreshNotchSideAfterOrientationChange);
+    window.addEventListener('orientationchange', refreshNotchSideAfterOrientationChange);
+    window.addEventListener('resize', refreshNotchSideAfterOrientationChange);
     return;
   }
 
   await reinforceNativeRuntime();
-  window.screen.orientation?.addEventListener('change', () => void updateNativeNotchSide());
-  window.addEventListener('orientationchange', () => void updateNativeNotchSide());
+  window.screen.orientation?.addEventListener('change', refreshNotchSideAfterOrientationChange);
+  window.addEventListener('orientationchange', refreshNotchSideAfterOrientationChange);
+  window.addEventListener('resize', refreshNotchSideAfterOrientationChange);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void reinforceNativeRuntime();
   });

@@ -1834,6 +1834,9 @@ try {
   }
   assert(!switchCalls.some(c => c.command === 'stop_all_notes' || c.command === 'initialize'),
     'preset switches do not panic/restart the audio engine');
+  // O snapshot de compatibilidade é uma camada temporária. Este Learn precisa
+  // sobreviver intacto à ativação e à desativação do modo.
+  player.ccMappings.set('preset:B:4', 70);
   player.compatibilityMode = true;
   player.midiInput.setCompatibilityMode(true);
   const beforeBlockedCc7 = player.metronome.isRunning();
@@ -1849,7 +1852,10 @@ try {
   player.midiInput.emitControlChange({ channel: 1, controller: 64, inputId: 'test-midi', value: 127 });
   assert.notEqual(player.metronome.isRunning(), beforeBlockedCc7,
     'Sustain CC64 continua disponível para mapeamento no modo compatibilidade');
-  player.ccMappings.set('preset:A:1', 102);
+  const beforeSuspendedPresetLearn = player.bankStates.get(player.activeBank).selectedPreset;
+  player.midiInput.emitControlChange({ channel: 1, controller: 70, inputId: 'test-midi', value: 127 });
+  assert.equal(player.bankStates.get(player.activeBank).selectedPreset, beforeSuspendedPresetLearn,
+    'o Learn CC anterior do preset fica suspenso enquanto o snapshot está ativo');
   const beforeCompatibilityPreset = player.bankStates.get(player.activeBank).selectedPreset;
   player.midiInput.emitControlChange({ channel: 1, controller: 7, inputId: 'test-midi', value: 1 });
   assert.equal(player.bankStates.get(player.activeBank).selectedPreset, beforeCompatibilityPreset,
@@ -1857,18 +1863,26 @@ try {
   player.ccMappings.set('metronome:toggle', 102);
   const beforeReverbControl = player.metronome.isRunning();
   player.midiInput.emitControlChange({ channel: 1, controller: 91, inputId: 'test-midi', value: 1 });
-  assert.notEqual(player.metronome.isRunning(), beforeReverbControl,
-    'Reverb 1 on CC91 is converted into free CC102 while raw CC91 stays blocked');
-  player.ccMappings.set('preset:A:2', 117);
+  assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 1,
+    'Reverb 1 seleciona automaticamente o Preset 1 do banco aberto');
+  assert.equal(player.metronome.isRunning(), beforeReverbControl,
+    'o snapshot temporário prevalece sobre Learn CC enquanto a compatibilidade está ativa');
+  player.activateMappedPreset('B', 2);
   player.midiInput.emitControlChange({ channel: 1, controller: 91, inputId: 'test-midi', value: 16 });
-  assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2,
-    'Reverb 16 on CC91 is converted into the final compatibility CC117');
-  player.ccMappings.set('preset:A:3', 118);
+  assert.equal(player.activeBank, 'B');
+  assert.equal(player.bankStates.get('B').selectedPreset, 16,
+    'Reverb 16 seleciona o Preset 16 também nos demais bancos');
   player.midiInput.emitControlChange({ channel: 1, controller: 91, inputId: 'test-midi', value: 17 });
-  assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2,
+  assert.equal(player.bankStates.get('B').selectedPreset, 16,
     'Reverb values above 16 do not create synthetic CC messages');
+  assert.equal(player.ccMappings.get('preset:B:4'), 70,
+    'ativar compatibilidade não sobrescreve o Learn CC salvo pelo usuário');
   player.compatibilityMode = false;
   player.midiInput.setCompatibilityMode(false);
+  player.midiInput.emitControlChange({ channel: 1, controller: 70, inputId: 'test-midi', value: 0 });
+  player.midiInput.emitControlChange({ channel: 1, controller: 70, inputId: 'test-midi', value: 127 });
+  assert.equal(player.bankStates.get('B').selectedPreset, 4,
+    'ao desativar compatibilidade, o Learn CC anterior volta a selecionar o preset');
 
   {
     const originalInstall = player.soundLibraryEngine.install.bind(player.soundLibraryEngine);

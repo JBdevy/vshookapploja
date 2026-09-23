@@ -796,9 +796,14 @@ test('Hook Keys: long press só abre os 30%; com eles abertos, um toque fecha', 
 test('paisagem dos dois lados no iOS e no Android', () => {
   const runtime = readFileSync(new URL('../src/platform/runtime.ts', import.meta.url), 'utf8');
   const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  const iosController = readFileSync(new URL('../ios/App/App/HookKeysBridgeViewController.swift', import.meta.url), 'utf8');
+  const orientationTransition = readFileSync(new URL('../src/platform/orientationTransition.ts', import.meta.url), 'utf8');
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
   assert.match(runtime, /if \(await hookKeysNative\.lockOrientation\(mode\)\) return;/);
+  assert.match(runtime, /window\.addEventListener\('resize', refreshNotchSideAfterOrientationChange\)/);
   assert.match(ios, /let mask: UIInterfaceOrientationMask = landscape \? \.landscape : \.portrait/);
+  assert.match(iosController, /override var shouldAutorotate: Bool \{ true \}/);
+  assert.match(orientationTransition, /await refreshNativeNotchSide\(\);/);
   assert.match(android, /SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);
 });
 
@@ -995,6 +1000,10 @@ test('celular reserva margem somente no lado atual do notch e mantém os cinco k
   assert.match(android, /getDisplayCutout\(\)/);
   assert.match(android, /cutout\.getBoundingRects\(\)/);
   assert.match(ios, /@objc func displayCutoutSide/);
+  assert.match(ios, /case \.landscapeLeft: side = "right"/,
+    'UIInterfaceOrientation landscapeLeft deixa o notch físico à direita');
+  assert.match(ios, /case \.landscapeRight: side = "left"/,
+    'UIInterfaceOrientation landscapeRight deixa o notch físico à esquerda');
   assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \.player-output-knob__face \{[^}]*flex: 0 0 clamp\(20px,[^}]*width: clamp\(20px,[^}]*height: clamp\(20px,[^}]*border-radius: 50%;/s);
   assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \.player-output-mini-meter \{[^}]*height: clamp\(20px,/s);
 });
