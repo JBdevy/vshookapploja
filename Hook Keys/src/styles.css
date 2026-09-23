@@ -7907,11 +7907,39 @@ html[data-runtime="desktop"] .is-tracks-split .player-module__fader-rail { width
   --button-border: #ffd08a !important;
 }
 
-:is(.player-screen, .player-modal) .track-card:is(
-  .track-card--loop-green, .track-card--loop-blue, .track-card--loop-orange
-) .track-name {
+.track-card--loop-green .track-name,
+.track-card--loop-blue .track-name,
+.track-card--loop-orange .track-name,
+.track-card--loop-green .track-list-number,
+.track-card--loop-blue .track-list-number,
+.track-card--loop-orange .track-list-number {
   color: #17120d !important;
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+}
+
+.track-card--loop-green .track-list-number,
+.track-card--loop-blue .track-list-number,
+.track-card--loop-orange .track-list-number {
+  border-right-color: rgba(0, 0, 0, 0.26);
+}
+
+/* O loop mantém sua cor própria e pulsa tanto ao ser escolhido quanto durante
+   a reprodução, em vez de virar o vermelho genérico das outras músicas. */
+:is(.player-screen, .player-modal) .track-card:is(
+  .track-card--loop-green, .track-card--loop-blue, .track-card--loop-orange
+):is(.is-selected, .is-playing) {
+  animation: bundled-loop-selected-pulse 820ms ease-in-out infinite;
+}
+
+@keyframes bundled-loop-selected-pulse {
+  0%, 100% {
+    filter: brightness(1);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), 0 0 4px rgba(255, 255, 255, 0.12) !important;
+  }
+  50% {
+    filter: brightness(1.22);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.32), 0 0 14px rgba(255, 255, 255, 0.48) !important;
+  }
 }
 
 .track-name {
@@ -8970,8 +8998,8 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 
 .metronome-panel__sounds {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
   margin-top: -2px;
 }
 
@@ -9296,12 +9324,16 @@ html[data-keyboard="open"] .player-modal--preset-name .player-modal__confirm-but
 }
 
 .metronome-panel__sounds button {
-  min-height: 58px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 4px 2px;
   color: #f7e9df;
   border: 1.5px solid rgba(var(--gold-rgb), 0.62);
   border-radius: 10px;
   background: linear-gradient(180deg, rgba(46, 46, 50, 0.98), rgba(16, 16, 18, 0.99));
+  font-size: clamp(8px, .85vw, 11px);
   font-weight: 900;
+  white-space: nowrap;
 }
 
 .metronome-panel__sounds button.is-selected {

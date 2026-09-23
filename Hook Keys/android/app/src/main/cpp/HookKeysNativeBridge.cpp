@@ -569,7 +569,7 @@ public:
     if (runtime == nullptr) return false;
     runtime->setMetronome(
         enabled, bpm, volume,
-        static_cast<std::uint8_t>(std::clamp(clickSound, 1, 4)),
+        static_cast<std::uint8_t>(std::clamp(clickSound, 1, 5)),
         accentEnabled, doubleTimeEnabled,
         static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)),
         static_cast<std::uint8_t>(denominator), restart);

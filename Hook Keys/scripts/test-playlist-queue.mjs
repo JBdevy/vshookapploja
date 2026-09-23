@@ -86,12 +86,14 @@ console.log('ADD_MUSIC_PICKER_OK: seletor nativo no iOS, campo de arquivo nas ou
 // Loops é uma playlist fixa do app e não abre edição nem exclusão.
 {
   const host = window.document.createElement('div');
+  host.className = 'player-screen';
   host.innerHTML = window.Tracks.createTracksSplitPanelMarkup();
   window.document.body.append(host);
+  const splitPanel = host.querySelector('.tracks-split-panel');
   const library = {
     list: async () => [], listPlaylists: async () => [], listBlocks: async () => [], getListLayout: async () => [],
   };
-  const controller = new window.Tracks.TracksPanelController(host, library);
+  const controller = new window.Tracks.TracksPanelController(splitPanel, library);
   controller.mount();
   await settle();
   const loops = host.querySelector('[data-playlist-id="fixed:loops"]');
@@ -108,6 +110,13 @@ console.log('ADD_MUSIC_PICKER_OK: seletor nativo no iOS, campo de arquivo nas ou
     ['track-card--loop-green', 'track-card--loop-blue', 'track-card--loop-orange'],
     'Beat 4/4 fica verde, Beat 4/4 - 2 azul bebê e Beat 6/8 laranja',
   );
+  const firstLoop = host.querySelector('[data-track-id="fixed-loop-beat-4-4"]');
+  controller.syncPlayback({ selectedTrackId: 'fixed-loop-beat-4-4', playingTrackId: null,
+    queuedTrackId: null, queuedTrackName: null, queueSource: null, state: 'stopped', progress: 0, queueProgress: 0,
+    loopPlaying: false });
+  assert(firstLoop.classList.contains('is-selected'), 'loop escolhido recebe o estado pulsante de seleção');
+  assert.equal(window.getComputedStyle(firstLoop.querySelector('.track-list-number')).color, '#17120d',
+    'número da coluna do loop fica preto');
   assert.equal(host.querySelector('[data-tracks-action="toggle-edit"]').disabled, true, 'Loops não entra em edição');
   assert.equal(host.querySelector('[data-tracks-action="add-bl"]').disabled, true, 'Loops não recebe blocos do usuário');
   assert.equal(host.querySelector('[data-tracks-action="toggle-auto"]').disabled, true,
@@ -118,6 +127,39 @@ console.log('ADD_MUSIC_PICKER_OK: seletor nativo no iOS, campo de arquivo nas ou
   host.remove();
 }
 console.log('FIXED_LOOPS_OK: playlist fixa, protegida e independente dos sets do usuário');
+
+// O painel compacto de 30% nasce na mesma playlist que estava selecionada.
+{
+  const playlist = { id: 'set-a', name: 'Set A', trackIds: [], createdAt: '', updatedAt: '', kind: 'normal' };
+  const library = {
+    list: async () => [], listPlaylists: async () => [playlist], listBlocks: async () => [], getListLayout: async () => [],
+  };
+  const selections = [];
+  const firstHost = window.document.createElement('div');
+  firstHost.innerHTML = window.Tracks.createTracksSplitPanelMarkup();
+  window.document.body.append(firstHost);
+  const first = new window.Tracks.TracksPanelController(firstHost, library, {
+    onActivePlaylistChanged: playlistId => selections.push(playlistId),
+  });
+  first.mount();
+  await settle();
+  firstHost.querySelector('[data-playlist-id="set-a"]').click();
+  assert.equal(selections.at(-1), 'set-a', 'seleção da playlist é devolvida ao Player');
+  first.destroy();
+  firstHost.remove();
+
+  const reopenedHost = window.document.createElement('div');
+  reopenedHost.innerHTML = window.Tracks.createTracksSplitPanelMarkup();
+  window.document.body.append(reopenedHost);
+  const reopened = new window.Tracks.TracksPanelController(reopenedHost, library, { initialPlaylistId: 'set-a' });
+  reopened.mount();
+  await settle();
+  assert.equal(reopenedHost.querySelector('[data-tracks-active-set]').textContent, 'Set A',
+    'reabrir os 30% preserva a playlist atual em vez de voltar para All');
+  reopened.destroy();
+  reopenedHost.remove();
+}
+console.log('PLAYLIST_SELECTION_OK: painel de 30% preserva a playlist atual');
 
 // Ao criar playlist, o usuário escolhe Normal ou Loop antes do nome.
 {

@@ -745,7 +745,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             call.getBool("enabled", false),
             bpm: call.getFloat("bpm", 120),
             volume: min(1, max(0, call.getFloat("volume", 1))),
-            clickSound: min(4, max(1, call.getInt("clickSound", 1))),
+            clickSound: min(5, max(1, call.getInt("clickSound", 1))),
             accentEnabled: call.getBool("accentEnabled", false),
             doubleTimeEnabled: call.getBool("doubleTimeEnabled", false),
             timeSignatureNumerator: min(16, max(1, call.getInt("timeSignatureNumerator", 4))),

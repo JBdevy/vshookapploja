@@ -321,7 +321,7 @@ void hk_runtime_configure_metronome(
   if (!handle) return;
   runtime(handle)->setMetronome(
       enabled != 0, bpm, volume,
-      static_cast<std::uint8_t>(std::clamp(clickSound, 1, 4)),
+      static_cast<std::uint8_t>(std::clamp(clickSound, 1, 5)),
       accentEnabled != 0, doubleTimeEnabled != 0,
       static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)),
       static_cast<std::uint8_t>(denominator), restart != 0);

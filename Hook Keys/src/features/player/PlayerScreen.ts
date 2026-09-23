@@ -1104,6 +1104,7 @@ export class PlayerScreen {
   private tracksAutoEnabled = false;
   private loopMetronomePlaying = false;
   private tracksLoopEnabled = false;
+  private tracksActivePlaylistId: string | null = null;
   private visibleTrackSequence: LocalTrack[] = [];
   private renderedQueuedTrackName = '';
   private readonly displayedPerformanceNotes = new Map<string, number>();
@@ -3338,7 +3339,9 @@ export class PlayerScreen {
       {
         autoEnabled: this.tracksAutoEnabled,
         loopEnabled: this.tracksLoopEnabled,
+        initialPlaylistId: this.tracksActivePlaylistId,
         getPlaybackSnapshot: () => this.trackTransport?.getSnapshot() ?? this.trackPlaybackSnapshot,
+        onActivePlaylistChanged: (playlistId) => { this.tracksActivePlaylistId = playlistId; },
         onAutoEnabledChanged: (enabled) => this.setTracksAutoEnabled(enabled),
         onLoopEnabledChanged: (enabled) => {
           this.tracksLoopEnabled = enabled;
@@ -5875,7 +5878,7 @@ export class PlayerScreen {
             <button class="${this.metronome.isDoubleTimeEnabled() ? 'is-selected' : ''}" type="button" data-modal-action="toggle-metronome-double" aria-pressed="${this.metronome.isDoubleTimeEnabled()}">2x</button>
           </div>
           <div class="metronome-panel__sounds" aria-label="Som do metrônomo">
-            ${([1, 2, 3, 4] as const).map((sound) => `
+            ${([1, 2, 3, 4, 5] as const).map((sound) => `
               <button class="${this.metronome.getClickSound() === sound ? 'is-selected' : ''}" type="button" data-metronome-sound="${sound}">Click ${sound}</button>
             `).join('')}
           </div>
@@ -6978,7 +6981,7 @@ export class PlayerScreen {
         : null;
       if (kind === 'metronome' && metronomeSoundButton) {
         const sound = Number(metronomeSoundButton.dataset.metronomeSound);
-        if (sound === 1 || sound === 2 || sound === 3 || sound === 4) {
+        if (sound === 1 || sound === 2 || sound === 3 || sound === 4 || sound === 5) {
           this.metronome.setClickSound(sound);
           for (const option of modal.querySelectorAll<HTMLButtonElement>('[data-metronome-sound]')) {
             option.classList.toggle('is-selected', option === metronomeSoundButton);
@@ -8014,7 +8017,9 @@ export class PlayerScreen {
         modal,
         this.trackLibrary,
         {
+          initialPlaylistId: this.tracksActivePlaylistId,
           getPlaybackSnapshot: () => this.trackTransport?.getSnapshot() ?? this.trackPlaybackSnapshot,
+          onActivePlaylistChanged: (playlistId) => { this.tracksActivePlaylistId = playlistId; },
           onTrackSelected: (track) => this.selectTrack(track),
           onTracksDeleting: (tracks) => this.deleteStoredTracks(tracks),
           onAddMusicRequested: () => {
@@ -12371,7 +12376,8 @@ export class PlayerScreen {
     this.metronome.applySavedSettings(
       boundedNumber(savedMetronome.bpm, 60, 600, 120),
       boundedNumber(savedMetronome.volume, 0, 10 ** (12 / 20), 1),
-      (savedClickSound === 2 || savedClickSound === 3 || savedClickSound === 4 ? savedClickSound : 1) as MetronomeClickSound,
+      (savedClickSound === 2 || savedClickSound === 3 || savedClickSound === 4 || savedClickSound === 5
+        ? savedClickSound : 1) as MetronomeClickSound,
       savedMetronome.accentEnabled === true,
       savedMetronome.doubleTimeEnabled === true,
       boundedNumber(savedMetronome.timeSignatureNumerator, 1, 16, 4),

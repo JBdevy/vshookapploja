@@ -961,7 +961,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
   if (runtime == nullptr) return NO;
   runtime->setMetronome(
       enabled, bpm, volume,
-      static_cast<std::uint8_t>(std::clamp<NSInteger>(clickSound, 1, 4)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(clickSound, 1, 5)),
       accentEnabled, doubleTimeEnabled,
       static_cast<std::uint8_t>(std::clamp<NSInteger>(timeSignatureNumerator, 1, 16)),
       static_cast<std::uint8_t>(timeSignatureDenominator), restart);

@@ -1495,7 +1495,7 @@ fn configure_metronome(
             enabled as i32,
             bpm.clamp(60.0, 300.0),
             volume.clamp(0.0, 1.0),
-            click_sound.clamp(1, 4),
+            click_sound.clamp(1, 5),
             accent_enabled as i32,
             double_time_enabled as i32,
             time_signature_numerator.clamp(1, 16),
@@ -2445,11 +2445,11 @@ mod tests {
         assert!(output.iter().any(|sample| sample.abs() > 0.00001));
 
         unsafe {
-            hk_runtime_configure_metronome(engine.pointer(), 1, 120.0, 1.0, 4, 0, 0, 4, 4, 1);
+            hk_runtime_configure_metronome(engine.pointer(), 1, 120.0, 1.0, 5, 0, 0, 4, 4, 1);
         }
         let mut sampled_click = vec![0.0_f32; 16_384 * 2];
         unsafe { hk_runtime_render(engine.pointer(), sampled_click.as_mut_ptr(), 16_384, 2) };
         assert!(sampled_click.iter().any(|sample| sample.abs() > 0.00001),
-            "Click 4.wav must render through the native metronome");
+            "Click 5.mp3 converted to PCM must render through the native metronome");
     }
 }

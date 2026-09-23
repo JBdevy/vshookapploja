@@ -895,7 +895,7 @@ public class HookKeysNativePlugin extends Plugin {
             call.getBoolean("enabled", false),
             call.getFloat("bpm", 120.0f),
             Math.max(0.0f, Math.min(1.0f, call.getFloat("volume", 1.0f))),
-            Math.max(1, Math.min(4, call.getInt("clickSound", 1))),
+            Math.max(1, Math.min(5, call.getInt("clickSound", 1))),
             call.getBoolean("accentEnabled", false),
             call.getBoolean("doubleTimeEnabled", false),
             Math.max(1, Math.min(16, call.getInt("timeSignatureNumerator", 4))),

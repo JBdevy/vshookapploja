@@ -53,7 +53,9 @@ type TrackListItem =
 interface TracksPanelOptions {
   autoEnabled?: boolean;
   loopEnabled?: boolean;
+  initialPlaylistId?: string | null;
   getPlaybackSnapshot?: () => TrackPlaybackSnapshot;
+  onActivePlaylistChanged?: (playlistId: string | null) => void;
   onAutoEnabledChanged?: (enabled: boolean) => void;
   onLoopEnabledChanged?: (enabled: boolean) => void;
   // Devolve true quando o app abre o próprio gerenciador de arquivos.
@@ -175,6 +177,7 @@ export class TracksPanelController {
   ) {
     this.autoEnabled = options.autoEnabled ?? false;
     this.loopEnabled = options.loopEnabled ?? false;
+    this.activePlaylistId = options.initialPlaylistId ?? null;
   }
 
   mount(): void {
@@ -265,7 +268,7 @@ export class TracksPanelController {
         this.suppressNextPlaylistClick = false;
         return;
       }
-      this.activePlaylistId = playlistButton.dataset.playlistId ?? null;
+      this.setActivePlaylist(playlistButton.dataset.playlistId ?? null);
       this.disableNormalPlaybackModesForLoopPlaylist();
       if (isFixedLoopsPlaylist(this.activePlaylistId)) {
         this.editMode = false;
@@ -293,7 +296,7 @@ export class TracksPanelController {
     } else if (action === 'playlist-kind-loop') {
       this.openNameEditor(null, 'loop');
     } else if (action === 'show-all') {
-      this.activePlaylistId = null;
+      this.setActivePlaylist(null);
       this.setSetMenuOpen(false);
       this.renderLibrary();
       this.renderPlaylists();
@@ -565,7 +568,7 @@ export class TracksPanelController {
       this.playlists = [FIXED_LOOPS_PLAYLIST, ...userPlaylists];
       if (!this.root.isConnected) return;
       if (this.activePlaylistId && !this.playlists.some(({ id }) => id === this.activePlaylistId)) {
-        this.activePlaylistId = null;
+        this.setActivePlaylist(null);
       }
       const scopes = ['all', ...userPlaylists.map(({ id }) => id)];
       const storedLists = await Promise.all(scopes.map(async (scopeId) => ({
@@ -948,7 +951,7 @@ export class TracksPanelController {
       const playlist = this.draft.id
         ? await this.library.updatePlaylist(this.draft.id, this.draft.name, [...this.draft.trackIds], this.draft.kind)
         : await this.library.createPlaylist(this.draft.name, [...this.draft.trackIds], this.draft.kind);
-      this.activePlaylistId = playlist.id;
+      this.setActivePlaylist(playlist.id);
       this.disableNormalPlaybackModesForLoopPlaylist();
       this.closeEditor();
       await this.refresh();
@@ -1014,6 +1017,12 @@ export class TracksPanelController {
 
   private activePlaylistIsLoop(): boolean {
     return this.playlists.find(({ id }) => id === this.activePlaylistId)?.kind === 'loop';
+  }
+
+  private setActivePlaylist(playlistId: string | null): void {
+    if (this.activePlaylistId === playlistId) return;
+    this.activePlaylistId = playlistId;
+    this.options.onActivePlaylistChanged?.(playlistId);
   }
 
   private renderDeleteAllConfirmation(): void {
@@ -1090,7 +1099,7 @@ export class TracksPanelController {
     if (!playlistId) return;
     try {
       await this.library.deletePlaylist(playlistId);
-      if (this.activePlaylistId === playlistId) this.activePlaylistId = null;
+      if (this.activePlaylistId === playlistId) this.setActivePlaylist(null);
       this.closeEditor();
       await this.refresh();
       this.setMessage('Playlist apagada.');

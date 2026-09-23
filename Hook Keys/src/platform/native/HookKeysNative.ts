@@ -213,7 +213,7 @@ export interface NativeMetronomeConfig {
   enabled: boolean;
   bpm: number;
   volume: number;
-  clickSound: 1 | 2 | 3 | 4;
+  clickSound: 1 | 2 | 3 | 4 | 5;
   accentEnabled: boolean;
   doubleTimeEnabled: boolean;
   timeSignatureNumerator: number;
@@ -763,7 +763,7 @@ class HookKeysNativeBridge {
       enabled: Boolean(config.enabled),
       bpm: Math.min(300, Math.max(60, Math.round(config.bpm * 2) / 2)),
       volume: Math.min(10 ** (12 / 20), Math.max(0, config.volume)),
-      clickSound: Math.min(4, Math.max(1, Math.round(config.clickSound))) as 1 | 2 | 3 | 4,
+      clickSound: Math.min(5, Math.max(1, Math.round(config.clickSound))) as 1 | 2 | 3 | 4 | 5,
       accentEnabled: Boolean(config.accentEnabled),
       doubleTimeEnabled: Boolean(config.doubleTimeEnabled),
       timeSignatureNumerator: Math.min(16, Math.max(1, Math.round(config.timeSignatureNumerator))),

@@ -1177,6 +1177,11 @@ void testMetronomeRunsOnTheAudioCallback() {
   expect(!metronomeOnsets(sampled, 16384, 256).empty(),
          "Click 4 plays the embedded WAV sample");
 
+  hook_keys::NativeEngineRuntime sampledFive(sampleRate, 512);
+  sampledFive.setMetronome(true, 120.0f, 1.0f, 5, false, false, 4, 4);
+  expect(!metronomeOnsets(sampledFive, 16384, 256).empty(),
+         "Click 5 plays the embedded MP3 converted to native PCM");
+
   hook_keys::NativeEngineRuntime restarted(sampleRate, 512);
   restarted.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4);
   (void)metronomeOnsets(restarted, 12000, 256);

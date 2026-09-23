@@ -1,6 +1,6 @@
 import { hookKeysNative } from '../../platform/native/HookKeysNative';
 
-export type MetronomeClickSound = 1 | 2 | 3 | 4;
+export type MetronomeClickSound = 1 | 2 | 3 | 4 | 5;
 
 const MIN_BPM = 60;
 const MAX_BPM = 300;
@@ -12,7 +12,9 @@ export class MetronomeEngine {
   private audioContext: AudioContext | null = null;
   private clickBuffers: Record<1 | 2 | 3, AudioBuffer> | null = null;
   private click4Buffer: AudioBuffer | null = null;
+  private click5Buffer: AudioBuffer | null = null;
   private click4Loading: Promise<AudioBuffer | null> | null = null;
+  private click5Loading: Promise<AudioBuffer | null> | null = null;
   private masterGain: GainNode | null = null;
   private timer: number | null = null;
   private nextBeatTime = 0;
@@ -28,6 +30,10 @@ export class MetronomeEngine {
   private running = false;
   private loopClockActive = false;
   private nativeSyncTimer: number | null = null;
+  // Configurações do metrônomo precisam chegar ao motor na mesma ordem em que
+  // foram produzidas. Sem esta fila, o comando mudo que inicia o relógio do
+  // loop podia terminar depois do comando que libera o volume do Click.
+  private nativeSyncQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly onStateChanged: () => void = () => {}) {}
 
@@ -44,7 +50,7 @@ export class MetronomeEngine {
     if (!hookKeysNative.isAvailable()) return Promise.resolve();
     if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
     this.nativeSyncTimer = null;
-    return hookKeysNative.configureMetronome(this.nativeConfig());
+    return this.enqueueNativeConfig(this.nativeConfig());
   }
 
   setBpm(value: number): void {
@@ -64,9 +70,9 @@ export class MetronomeEngine {
 
   setClickSound(value: MetronomeClickSound): void {
     this.clickSound = value;
-    if (value === 4 && !hookKeysNative.isAvailable()) {
-      void this.loadClick4Buffer().then((buffer) => {
-        if (buffer && this.clickSound === 4 && !this.clockActive()) this.previewClick();
+    if ((value === 4 || value === 5) && !hookKeysNative.isAvailable()) {
+      void this.loadSampledClickBuffer(value).then((buffer) => {
+        if (buffer && this.clickSound === value && !this.clockActive()) this.previewClick();
       });
     } else if (!this.clockActive() && !hookKeysNative.isAvailable()) {
       this.previewClick();
@@ -180,7 +186,9 @@ export class MetronomeEngine {
     this.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(bpm / BPM_STEP) * BPM_STEP));
     this.volume = Math.min(10 ** (12 / 20), Math.max(0, volume));
     this.clickSound = clickSound;
-    if (clickSound === 4 && !hookKeysNative.isAvailable()) void this.loadClick4Buffer();
+    if ((clickSound === 4 || clickSound === 5) && !hookKeysNative.isAvailable()) {
+      void this.loadSampledClickBuffer(clickSound);
+    }
     this.accentEnabled = accentEnabled;
     this.doubleTimeEnabled = doubleTimeEnabled;
     this.timeSignatureNumerator = Math.min(16, Math.max(1, Math.round(numerator)));
@@ -205,8 +213,18 @@ export class MetronomeEngine {
     this.audioContext = null;
     this.clickBuffers = null;
     this.click4Buffer = null;
+    this.click5Buffer = null;
     this.click4Loading = null;
+    this.click5Loading = null;
     this.masterGain = null;
+  }
+
+  private enqueueNativeConfig(config: ReturnType<MetronomeEngine['nativeConfig']>): Promise<void> {
+    const result = this.nativeSyncQueue
+      .catch(() => undefined)
+      .then(() => hookKeysNative.configureMetronome(config));
+    this.nativeSyncQueue = result.catch(() => undefined);
+    return result;
   }
 
   private scheduleNativeSync(immediate = false, restart = false): void {
@@ -214,7 +232,7 @@ export class MetronomeEngine {
     if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
     this.nativeSyncTimer = window.setTimeout(() => {
       this.nativeSyncTimer = null;
-      void hookKeysNative.configureMetronome(this.nativeConfig(undefined, restart)).catch(() => undefined);
+      void this.enqueueNativeConfig(this.nativeConfig(undefined, restart)).catch(() => undefined);
     }, immediate ? 0 : 32);
   }
 
@@ -224,7 +242,9 @@ export class MetronomeEngine {
       bpm: this.bpm,
       volume: this.audibleVolume(),
       clickSound: this.clickSound,
-      accentEnabled: this.accentEnabled,
+      // Loops já trazem o próprio compasso. Durante a reprodução deles o
+      // metrônomo é sempre reto; A-B volta a valer ao sair do loop.
+      accentEnabled: this.accentEnabled && !this.loopClockActive,
       doubleTimeEnabled: this.doubleTimeEnabled,
       timeSignatureNumerator: this.timeSignatureNumerator,
       timeSignatureDenominator: this.timeSignatureDenominator,
@@ -262,7 +282,10 @@ export class MetronomeEngine {
     if (!this.clockActive()) return;
     const context = this.getAudioContext();
     while (this.nextBeatTime < context.currentTime + LOOK_AHEAD_SECONDS) {
-      this.createClick(this.nextBeatTime, this.accentEnabled && this.beatIndex === 0);
+      this.createClick(
+        this.nextBeatTime,
+        !this.loopClockActive && this.accentEnabled && this.beatIndex === 0,
+      );
       this.nextBeatTime += 60 / this.bpm * (4 / this.timeSignatureDenominator)
         / (this.doubleTimeEnabled ? 2 : 1);
       const beatsPerMeasure = this.timeSignatureNumerator * (this.doubleTimeEnabled ? 2 : 1);
@@ -274,8 +297,9 @@ export class MetronomeEngine {
     const context = this.getAudioContext();
     const source = context.createBufferSource();
     const gain = context.createGain();
-    source.buffer = this.clickSound === 4
-      ? this.click4Buffer ?? this.getClickBuffers()[1]
+    source.buffer = this.clickSound === 5
+      ? this.click5Buffer ?? this.getClickBuffers()[1]
+      : this.clickSound === 4 ? this.click4Buffer ?? this.getClickBuffers()[1]
       : this.getClickBuffers()[this.clickSound];
     source.playbackRate.setValueAtTime(accented ? 1.28 : 1, at);
     gain.gain.setValueAtTime(accented ? 1.33 : 1, at);
@@ -328,6 +352,30 @@ export class MetronomeEngine {
       .catch(() => null)
       .finally(() => { this.click4Loading = null; });
     return this.click4Loading;
+  }
+
+  private loadClick5Buffer(): Promise<AudioBuffer | null> {
+    if (this.click5Buffer) return Promise.resolve(this.click5Buffer);
+    if (this.click5Loading) return this.click5Loading;
+    const context = this.getAudioContext();
+    const url = new URL('assets/loops/Click%205.wav', document.baseURI).toString();
+    this.click5Loading = fetch(url)
+      .then((response) => {
+        if (!response.ok) throw new Error(`click_5_http_${response.status}`);
+        return response.arrayBuffer();
+      })
+      .then((bytes) => context.decodeAudioData(bytes))
+      .then((buffer) => {
+        this.click5Buffer = buffer;
+        return buffer;
+      })
+      .catch(() => null)
+      .finally(() => { this.click5Loading = null; });
+    return this.click5Loading;
+  }
+
+  private loadSampledClickBuffer(sound: 4 | 5): Promise<AudioBuffer | null> {
+    return sound === 4 ? this.loadClick4Buffer() : this.loadClick5Buffer();
   }
 }
 
