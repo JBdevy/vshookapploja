@@ -239,15 +239,30 @@ struct ChorusConfig final {
   }
 };
 
+// Lo-Fi: redução de bits e de taxa de amostragem com mistura dry/wet.
+struct LoFiConfig final {
+  bool enabled = false;
+  float bitDepth = 8.0f;
+  float sampleRateHz = 12000.0f;
+  float mix = 0.5f;
+
+  void normalize() noexcept {
+    bitDepth = std::clamp(bitDepth, 4.0f, 16.0f);
+    sampleRateHz = std::clamp(sampleRateHz, 1000.0f, 48000.0f);
+    mix = std::clamp(mix, 0.0f, 1.0f);
+  }
+};
+
 // Auto Fader: o volume desce e volta no tempo do BPM. depthDb é o quanto ele
-// desce a partir do volume atual do módulo; beats é 1 (1/4) ou 2 (1/2).
+// desce a partir do volume atual do módulo; beats é a duração do ciclo inteiro
+// medida em semínimas (4/4: 4 ou 2; 6/8: 3 ou 1,5).
 struct AutoFaderConfig final {
   bool enabled = false;
-  float beats = 1.0f;
+  float beats = 4.0f;
   float depthDb = 6.0f;
 
   void normalize() noexcept {
-    beats = beats >= 1.5f ? 2.0f : 1.0f;
+    beats = std::clamp(beats, 0.25f, 16.0f);
     depthDb = std::clamp(depthDb, 0.0f, 40.0f);
   }
 };
@@ -258,6 +273,8 @@ struct ModuleEffectsConfig final {
     std::uint16_t steps = 0xffff;
     std::uint8_t length = 16;
     float beatMultiplier = 0.25f;
+    // Duração do compasso em semínimas. Zero mantém o ciclo livre (Sync OFF).
+    float measureBeats = 0.0f;
     float gate = 0.5f;
     float depth = 1.0f;
     float attackMs = 3.0f;
@@ -266,6 +283,7 @@ struct ModuleEffectsConfig final {
     void normalize() noexcept {
       length = std::clamp<std::uint8_t>(length, 1, 16);
       beatMultiplier = std::clamp(beatMultiplier, 0.0625f, 4.0f);
+      measureBeats = std::clamp(measureBeats, 0.0f, 16.0f);
       gate = std::clamp(gate, 0.05f, 1.0f);
       depth = std::clamp(depth, 0.0f, 1.0f);
       attackMs = std::clamp(attackMs, 0.1f, 100.0f);
@@ -283,6 +301,7 @@ struct ModuleEffectsConfig final {
   float inputGainDb = 0.0f;
   RotaryConfig rotary{};
   ChorusConfig chorus{};
+  LoFiConfig loFi{};
   AutoFaderConfig autoFader{};
 
   void normalize() noexcept {
@@ -294,6 +313,7 @@ struct ModuleEffectsConfig final {
     inputGainDb = std::clamp(inputGainDb, -24.0f, 12.0f);
     rotary.normalize();
     chorus.normalize();
+    loFi.normalize();
     autoFader.normalize();
     tranceGate.normalize();
   }

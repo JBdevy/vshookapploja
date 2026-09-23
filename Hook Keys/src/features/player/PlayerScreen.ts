@@ -134,6 +134,7 @@ import {
   readReverbSpaceMix,
   REVERB_SPACES,
   createModuleChorusMarkup,
+  createModuleLoFiMarkup,
   createModuleRotaryMarkup,
   createModuleEnvFilterMarkup,
   CUTOFF_FILTER_TYPES,
@@ -145,6 +146,7 @@ import {
   readModuleReverbSettings,
   FACTORY_MODULE_REVERB,
   readModuleChorusSettings,
+  readModuleLoFiSettings,
   readModuleRotarySettings,
   readModuleCutoffEnvelopeSettings,
   readCutoffFilterType,
@@ -207,7 +209,6 @@ import {
 import { hookKeysNative } from '../../platform/native/HookKeysNative';
 import { isDesktopRuntime } from '../../platform/runtime';
 import { Capacitor } from '@capacitor/core';
-import { isWhatsAppSupportUrl, openWhatsAppSupport } from '../../shared/platform/WhatsAppSupport';
 import { ApiError } from '../../shared/api/ApiError';
 import {
   createPerformanceKeyboardMarkup,
@@ -241,6 +242,7 @@ import {
 import {
   ARPEGGIATOR_MODES,
   ARPEGGIATOR_DIVISIONS,
+  autoFaderCycleBeats,
   createArpeggiatorMarkup,
   DEFAULT_ARPEGGIATOR_SETTINGS,
   readArpeggiatorSettings,
@@ -256,21 +258,21 @@ import {
 } from './PatternPlaybackController';
 
 type LogoutCallback = () => Promise<void>;
-type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'synth-preset-name' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-organ' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'effect-bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm' | 'module-config-copy-confirm';
+type ModalKind = 'module-settings' | 'module-polyphony' | 'module-velocity' | 'module-filter-velocity' | 'module-env-filter' | 'glide-config' | 'module-voice-mode' | 'module-arpeggiator' | 'module-trance-gate' | 'module-synth' | 'synth-preset-name' | 'module-eq' | 'module-compressor' | 'module-reverb' | 'module-delay' | 'module-rotary' | 'module-chorus' | 'module-lofi' | 'module-organ' | 'module-power-learn-choice' | 'sound-selection' | 'sound-download' | 'performance-download' | 'backup-download' | 'about' | 'app-settings' | 'app-settings-midi' | 'app-settings-audio' | 'keyboard-settings' | 'password-reset' | 'preset-name' | 'bank-name' | 'effect-bank-name' | 'bank-advanced' | 'effect-pad' | 'user' | 'user-name' | 'tracks' | 'output-volume' | 'cc-learn' | 'cc-clear-confirm' | 'metronome' | 'tempo-edit' | 'track-position' | 'compatibility-mode' | 'preset-paste-confirm' | 'module-config-copy-confirm';
 type BankId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
-type FaderBehaviorMode = 'default' | 'master' | 'bank' | 'bank2';
+type FaderBehaviorMode = 'default' | 'master' | 'bank2';
 type PlayerView = 'bank' | 'pads-effects';
 
 function faderModeUsesPersistentVolumes(mode: FaderBehaviorMode): boolean {
-  return mode === 'master' || mode === 'bank';
+  return mode === 'master';
 }
 
 function faderModeUsesPresetMappings(mode: FaderBehaviorMode): boolean {
-  return mode === 'bank' || mode === 'bank2';
+  return mode === 'bank2';
 }
 
 function faderModeLabel(mode: FaderBehaviorMode): string {
-  return mode === 'master' ? 'Master' : mode === 'bank' ? 'Bank 1' : mode === 'bank2' ? 'Bank 2' : 'Default';
+  return mode === 'master' ? 'Master' : mode === 'bank2' ? 'Bank' : 'Default';
 }
 
 interface ModalRoute {
@@ -380,12 +382,14 @@ type CcLearnTarget =
   | { kind: 'module-control'; moduleNumber: number; control: string; label: string }
   | { kind: 'module-octave'; moduleNumber: number; direction: -1 | 1 }
   | { kind: 'module-power'; moduleNumber: number }
+  | { kind: 'module-solo'; moduleNumber: number }
   | { kind: 'module-input'; moduleNumber: number; input: 'sustain' | 'modulation' }
   | { kind: 'output-volume'; bus: OutputBus }
   | { kind: 'pad-filter'; filter: 'low' | 'high' }
   | { kind: 'metronome-volume' }
   | { kind: 'metronome-toggle' }
   | { kind: 'tap-tempo' }
+  | { kind: 'tempo-adjust'; direction: -1 | 1 }
   | { kind: 'synth-preset'; presetNumber: number }
   // Banco A e Banco B são independentes: cada um tem os seus 8 presets mapeáveis.
   | { kind: 'preset'; bank: BankId; presetNumber: number }
@@ -394,12 +398,14 @@ type CcLearnTarget =
 
 interface CcMappingOptions {
   inverted: boolean;
-  limitPercent: number;
+  minimumPercent: number;
+  maximumPercent: number;
 }
 
 const DEFAULT_CC_MAPPING_OPTIONS: Readonly<CcMappingOptions> = {
   inverted: false,
-  limitPercent: 100,
+  minimumPercent: 0,
+  maximumPercent: 100,
 };
 
 function isContinuousCcTarget(target: CcLearnTarget): boolean {
@@ -410,11 +416,21 @@ function isContinuousCcTarget(target: CcLearnTarget): boolean {
     && !target.control.startsWith('rotary:speed:');
 }
 
+function isPadNoteTarget(target: CcLearnTarget | null): target is Extract<CcLearnTarget, { kind: 'pad' | 'effect' }> {
+  return target?.kind === 'pad' || target?.kind === 'effect';
+}
+
 function normalizeCcMappingOptions(value: unknown): CcMappingOptions {
   const record = isRecord(value) ? value : {};
+  const minimumPercent = Math.round(boundedNumber(record.minimumPercent, 0, 100, 0) * 10) / 10;
+  // limitPercent é o formato antigo e continua aceito na migração.
+  const maximumPercent = Math.round(
+    boundedNumber(record.maximumPercent ?? record.limitPercent, 0, 100, 100) * 10,
+  ) / 10;
   return {
     inverted: record.inverted === true,
-    limitPercent: Math.round(boundedNumber(record.limitPercent, 0, 100, 100) * 10) / 10,
+    minimumPercent: Math.min(minimumPercent, maximumPercent),
+    maximumPercent: Math.max(minimumPercent, maximumPercent),
   };
 }
 
@@ -496,6 +512,7 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
     'rotary:slowHz': [0.2, 2], 'rotary:fastHz': [2, 10], 'rotary:rampSeconds': [0.1, 10],
     'rotary:depth': [0, 100], 'rotary:mix': [0, 100],
     'chorus:rateHz': [0.05, 8], 'chorus:depth': [0, 100], 'chorus:mix': [0, 100],
+    'lofi:bitDepth': [4, 16], 'lofi:sampleRateHz': [1_000, 48_000], 'lofi:mix': [0, 100],
     'cutoffEnvelope:attackMs': [0, 5_000], 'cutoffEnvelope:decayMs': [0, 5_000],
     'cutoffEnvelope:sustain': [0, 100], 'cutoffEnvelope:releaseMs': [0, 5_000],
     'cutoffEnvelope:depthOctaves': [0, 8],
@@ -555,7 +572,6 @@ interface AccountControls {
   listDevices: () => Promise<DeviceOverviewResponse>;
   getAcquireLicenseUrl: () => Promise<string>;
   getCompatibilityVideoUrl: () => Promise<string>;
-  getSupportUrl: () => Promise<string>;
   getSoundCatalog: () => Promise<SoundCatalogPayload>;
   getSoundAssetUrl: (objectKey: string, kind: 'sf2' | 'preview') => Promise<string>;
   getProfile: () => Promise<AccountProfile>;
@@ -567,6 +583,10 @@ interface AccountControls {
 }
 
 const MODULE_COUNT = 8;
+// 0..2 are physical devices, 3 is the on-screen keyboard and 4..11 are
+// generated arpeggiator inputs. 0xff is the engine's explicit "all physical
+// inputs plus the on-screen keyboard" route for a module with no device set.
+const ALL_MIDI_INPUTS = 0xff;
 // Faixa completa padrão de um piano de 88 teclas. Nesta interface a nota MIDI
 // 60 é C3, portanto MIDI 21..108 aparece como A-1..C7.
 const DEFAULT_MODULE_LOW_NOTE = 21;
@@ -620,12 +640,14 @@ function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'module-control') return `module-control:${target.moduleNumber}:${target.control}`;
   if (target.kind === 'module-octave') return `octave:${target.moduleNumber}:${target.direction > 0 ? 'up' : 'down'}`;
   if (target.kind === 'module-power') return `power:${target.moduleNumber}`;
+  if (target.kind === 'module-solo') return `solo:${target.moduleNumber}`;
   if (target.kind === 'module-input') return `input:${target.moduleNumber}:${target.input}`;
   if (target.kind === 'output-volume') return `output:${target.bus}`;
   if (target.kind === 'pad-filter') return `pads:${target.filter}-cutoff`;
   if (target.kind === 'metronome-volume') return 'metronome:volume';
   if (target.kind === 'metronome-toggle') return 'metronome:toggle';
   if (target.kind === 'tap-tempo') return 'metronome:tap';
+  if (target.kind === 'tempo-adjust') return `metronome:${target.direction > 0 ? 'increase' : 'decrease'}`;
   if (target.kind === 'synth-preset') return `synth-preset:${target.presetNumber}`;
   if (target.kind === 'preset') return `preset:${target.bank}:${target.presetNumber}`;
   if (target.kind === 'pad') return `pad:${target.bank}:${target.note}`;
@@ -650,12 +672,14 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
     return `Módulo ${target.moduleNumber} · OCT ${target.direction > 0 ? '+' : '-'}`;
   }
   if (target.kind === 'module-power') return `Módulo ${target.moduleNumber} · ON/OFF`;
+  if (target.kind === 'module-solo') return `Módulo ${target.moduleNumber} · SOLO`;
   if (target.kind === 'module-input') {
     return `Módulo ${target.moduleNumber} · ${target.input === 'sustain' ? 'HLD' : 'MOD'}`;
   }
   if (target.kind === 'metronome-volume') return 'Volume do metrônomo';
   if (target.kind === 'metronome-toggle') return 'Ligar / desligar metrônomo';
   if (target.kind === 'tap-tempo') return 'Tap Tempo';
+  if (target.kind === 'tempo-adjust') return `${target.direction > 0 ? 'Aumentar' : 'Diminuir'} BPM em 0,5`;
   if (target.kind === 'synth-preset') return `Synth · Preset ${target.presetNumber}`;
   if (target.kind === 'preset') {
     return `Banco ${target.bank} · Preset ${target.presetNumber.toString().padStart(2, '0')}`;
@@ -671,13 +695,15 @@ function isCcMappingKey(value: string): boolean {
   if (/^module:[1-8]$/.test(value)) return true;
   if (/^module-control:7:rotary:(slowHz|fastHz|rampSeconds|depth|mix|toggle|speed:(brake|slow|fast))$/.test(value)) return true;
   if (/^module-control:7:organ:drawbar:[0-8]$/.test(value)) return true;
-  if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|(compressor|reverb|delay|chorus|cutoffEnvelope):[A-Za-z]+|synth:[A-Za-z]+|arpeggiator:(octaves|gate|swing))$/.test(value)) return true;
+  if (/^module-control:[1-8]:(attackMs|releaseMs|holdMs|decayMs|cutoff|(compressor|reverb|delay|chorus|lofi|cutoffEnvelope):[A-Za-z]+|synth:[A-Za-z]+|arpeggiator:(octaves|gate|swing))$/.test(value)) return true;
   if (/^octave:[1-8]:(up|down)$/.test(value)) return true;
   if (/^power:[1-8]$/.test(value)) return true;
+  if (/^solo:[1-8]$/.test(value)) return true;
   if (/^input:[1-8]:(sustain|modulation)$/.test(value)) return true;
   if (/^output:(music|pads|effects|master)$/.test(value)) return true;
   if (value === 'pads:low-cutoff' || value === 'pads:high-cutoff') return true;
-  if (value === 'metronome:volume' || value === 'metronome:tap' || value === 'metronome:toggle') return true;
+  if (value === 'metronome:volume' || value === 'metronome:tap' || value === 'metronome:toggle'
+      || value === 'metronome:increase' || value === 'metronome:decrease') return true;
   if (/^synth-preset:[1-5]$/.test(value)) return true;
   if (/^pad:[AB]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
   if (/^effect:[1-8]:([1-9]|1[0-2])$/.test(value)) return true;
@@ -698,7 +724,7 @@ function createEffectPadStates(bank?: EffectBankId): EffectPadState[] {
     name: bank === '1'
       ? bundledFxOne(index + 1)?.name ?? `Efeito ${index + 1}`
       : `Efeito ${index + 1}`,
-    triggerMode: 'toggle',
+    triggerMode: bank === '1' ? 'gate' : 'toggle',
     volumeDb: EFFECT_PAD_MAX_DB,
   }));
 }
@@ -1076,6 +1102,7 @@ export class PlayerScreen {
   private outputFaderController: OutputFaderPanelController | null = null;
   private trackTransport: TrackTransportController | null = null;
   private tracksAutoEnabled = false;
+  private loopMetronomePlaying = false;
   private tracksLoopEnabled = false;
   private visibleTrackSequence: LocalTrack[] = [];
   private renderedQueuedTrackName = '';
@@ -1090,6 +1117,7 @@ export class PlayerScreen {
     queueSource: null,
     selectedTrackId: null,
     playingTrackId: null,
+    loopPlaying: false,
     state: 'empty',
   };
   private readonly faders = new Map<number, ModuleFader>();
@@ -1229,7 +1257,9 @@ export class PlayerScreen {
   private pendingCcLearn: CcLearnTarget | null = null;
   private pendingCcController: number | null = null;
   private pendingCcInverted = false;
-  private pendingCcLimitPercent = 100;
+  private pendingCcMinimumPercent = 0;
+  private pendingCcMaximumPercent = 100;
+  private pendingCcLimitEndpoint: 'minimum' | 'maximum' = 'maximum';
   private pendingCcClear: CcLearnTarget | null = null;
   private readonly ccMappings = new Map<string, number>();
   private readonly ccMappingOptions = new Map<string, CcMappingOptions>();
@@ -1322,7 +1352,7 @@ export class PlayerScreen {
     EFFECT_BANK_IDS.map((bank) => [bank, createEffectPadStates(bank)]),
   );
   private readonly effectBankNames = new Map<EffectBankId, string>(
-    EFFECT_BANK_IDS.map((bank) => [bank, `FX ${bank}`]),
+    EFFECT_BANK_IDS.map((bank) => [bank, bank === '1' ? 'Church' : `FX ${bank}`]),
   );
   private readonly bankStates = new Map<BankId, BankState>(
     BANK_IDS.map((bank) => [bank, createBankState(bank === 'A' ? 1 : null)]),
@@ -1469,9 +1499,13 @@ export class PlayerScreen {
                 <path d="M7 27h18"></path>
               </svg>
             </button>
-            <button class="player-tempo-button" type="button" data-action="tap-tempo" aria-label="Tap Tempo. 120 BPM">
-              <strong data-metronome-bpm>120</strong><span>BPM</span>
-            </button>
+            <div class="player-tempo-stepper" aria-label="Controle de BPM">
+              <button class="player-tempo-step" type="button" data-action="adjust-tempo" data-tempo-step="-0.5" aria-label="Diminuir BPM em 0,5">−</button>
+              <button class="player-tempo-button" type="button" data-action="tap-tempo" aria-label="Tap Tempo. 120 BPM">
+                <strong data-metronome-bpm>120</strong><span>BPM</span>
+              </button>
+              <button class="player-tempo-step" type="button" data-action="adjust-tempo" data-tempo-step="0.5" aria-label="Aumentar BPM em 0,5">+</button>
+            </div>
           </div>
           </header>
 
@@ -1580,6 +1614,12 @@ export class PlayerScreen {
       (message) => this.setStatus(message),
       (trigger) => this.openModal('track-position', null, trigger),
       hookKeysNative.tracksAvailable() ? new NativeTrackPlayer(hookKeysNative.trackBridge) : null,
+      () => {
+        // O relógio começa mudo no mesmo gesto do Play. O botão Click apenas
+        // abre/fecha seu volume depois, sem reiniciar nem perder a fase.
+        this.loopMetronomePlaying = true;
+        this.metronome.setLoopPlaybackActive(true, true);
+      },
     );
     this.trackTransport.mount();
     if (this.desktopRuntime) {
@@ -2099,6 +2139,15 @@ export class PlayerScreen {
       return;
     }
 
+    if (action === 'adjust-tempo') {
+      const step = Number(actionButton.dataset.tempoStep);
+      if (step === -0.5 || step === 0.5) {
+        this.metronome.setBpm(this.metronome.getBpm() + step);
+        this.markPlayerStateChanged();
+      }
+      return;
+    }
+
     if (action === 'show-pads-effects') {
       this.showPadsEffects();
       return;
@@ -2414,6 +2463,9 @@ export class PlayerScreen {
   private renderMetronomeState(): void {
     const tempoButton = this.root.querySelector<HTMLButtonElement>('[data-action="tap-tempo"]');
     const bpm = this.metronome.getBpm();
+    // Somente faixas marcadas como loop usam este BPM; o transporte mantém
+    // músicas normais em playbackRate 1.
+    this.trackTransport?.setTempoBpm(bpm);
     const bpmLabel = tempoButton?.querySelector<HTMLElement>('[data-metronome-bpm]');
     if (bpmLabel) bpmLabel.textContent = formatBpm(bpm);
     if (tempoButton) tempoButton.setAttribute('aria-label', `Tap Tempo. ${bpm} BPM`);
@@ -2587,8 +2639,15 @@ export class PlayerScreen {
     if (powerButton && this.root.contains(powerButton)) {
       const moduleNumber = Number.parseInt(powerButton.dataset.module ?? '', 10);
       if (Number.isInteger(moduleNumber)) {
-        this.startCcControlLearn(event, powerButton, { kind: 'module-power', moduleNumber });
+        this.startModulePowerLearnChoice(event, powerButton, moduleNumber);
       }
+      return;
+    }
+
+    const tempoStepButton = eventTarget.closest<HTMLButtonElement>('[data-action="adjust-tempo"]');
+    if (tempoStepButton && this.root.contains(tempoStepButton)) {
+      const direction = Number(tempoStepButton.dataset.tempoStep) > 0 ? 1 : -1;
+      this.startCcControlLearn(event, tempoStepButton, { kind: 'tempo-adjust', direction });
       return;
     }
 
@@ -2771,13 +2830,6 @@ export class PlayerScreen {
       return;
     }
 
-    if (triggerButton.dataset.performanceKind === 'note') {
-      const note = triggerButton.dataset.performanceValue;
-      if (note) {
-        this.startCcControlLearn(event, triggerButton, { kind: 'pad', bank: this.activePadBank, note }, false);
-      }
-    }
-
     this.activatePerformanceButton(triggerButton);
   }
 
@@ -2934,6 +2986,21 @@ export class PlayerScreen {
         }, 900);
       }
       this.openCcLearn(target, trigger);
+    });
+  }
+
+  private startModulePowerLearnChoice(
+    event: PointerEvent,
+    trigger: HTMLButtonElement,
+    moduleNumber: number,
+  ): void {
+    if (this.desktopRuntime) return;
+    this.ccControlHoldGesture.start(event, () => {
+      this.suppressNextCcControlClick = trigger;
+      window.setTimeout(() => {
+        if (this.suppressNextCcControlClick === trigger) this.suppressNextCcControlClick = null;
+      }, 900);
+      this.openModal('module-power-learn-choice', moduleNumber, trigger);
     });
   }
 
@@ -3105,7 +3172,7 @@ export class PlayerScreen {
     const power = target.closest<HTMLButtonElement>('[data-action="toggle-module"]');
     if (power) {
       const powerModule = Number(power.dataset.module);
-      if (Number.isInteger(powerModule)) this.openCcLearn({ kind: 'module-power', moduleNumber: powerModule }, power);
+      if (Number.isInteger(powerModule)) this.openModal('module-power-learn-choice', powerModule, power);
       return;
     }
 
@@ -3119,6 +3186,13 @@ export class PlayerScreen {
           direction: octave.dataset.action === 'octave-up' ? 1 : -1,
         }, octave);
       }
+      return;
+    }
+
+    const tempoStepButton = target.closest<HTMLButtonElement>('[data-action="adjust-tempo"]');
+    if (tempoStepButton) {
+      const direction = Number(tempoStepButton.dataset.tempoStep) > 0 ? 1 : -1;
+      this.openCcLearn({ kind: 'tempo-adjust', direction }, tempoStepButton);
       return;
     }
 
@@ -3291,6 +3365,10 @@ export class PlayerScreen {
   }
 
   private handleTrackPlaybackSnapshot(snapshot: TrackPlaybackSnapshot): void {
+    if (snapshot.loopPlaying !== this.loopMetronomePlaying) {
+      this.loopMetronomePlaying = snapshot.loopPlaying;
+      this.metronome.setLoopPlaybackActive(snapshot.loopPlaying, snapshot.loopPlaying);
+    }
     this.trackPlaybackSnapshot = snapshot;
     this.renderQueuedTrackName(snapshot.queuedTrackName);
     this.tracksPanelController?.syncPlayback(snapshot);
@@ -3419,6 +3497,10 @@ export class PlayerScreen {
     // Solo único: soar outro módulo substitui o anterior, sem acumular.
     this.soloedModuleNumber = this.soloedModuleNumber === moduleNumber ? null : moduleNumber;
     this.renderModuleSoloState();
+    // Solo não altera nem salva o ON/OFF original dos módulos. Ele fecha
+    // temporariamente a entrada MIDI dos demais no motor e, ao sair do Solo,
+    // restaura exatamente os estados que já estavam no preset.
+    this.scheduleNativeEngineSync();
   }
 
   private renderModuleSoloState(): void {
@@ -3738,8 +3820,12 @@ export class PlayerScreen {
 
     const effectStates = this.effectPadStates.get(this.activeEffectBank)
       ?? createEffectPadStates(this.activeEffectBank);
-    for (const button of this.root.querySelectorAll<HTMLButtonElement>('.performance-pad--effect')) {
-      const effectIndex = Number.parseInt(button.dataset.performanceValue ?? '', 10) - 1;
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>(
+      '.performance-pad--effect[data-performance-kind="effect"][data-performance-value]',
+    )) {
+      const effectNumber = Number.parseInt(button.dataset.performanceValue ?? '', 10);
+      if (!Number.isInteger(effectNumber) || effectNumber < 1 || effectNumber > EFFECT_COUNT) continue;
+      const effectIndex = effectNumber - 1;
       const state = effectStates[effectIndex];
       const colors = EFFECT_PAD_COLORS[state?.colorIndex ?? effectIndex % EFFECT_PAD_COLORS.length]
         ?? EFFECT_PAD_COLORS[0];
@@ -4275,6 +4361,8 @@ export class PlayerScreen {
     const arpeggiator = this.getActivePresetState()?.modules[moduleNumber - 1];
     return {
       bpm: this.metronome.getBpm(),
+      timeSignatureNumerator: this.metronome.getTimeSignatureNumerator(),
+      timeSignatureDenominator: this.metronome.getTimeSignatureDenominator(),
       arpeggiator: {
         moduleEnabled: arpeggiator?.enabled === true,
         // Organ e Synth sao internos e nao possuem timbreId da biblioteca.
@@ -4282,6 +4370,7 @@ export class PlayerScreen {
         midiInputId: arpeggiator?.midiInputId ?? null,
         lowNote: arpeggiator?.lowNote ?? 0,
         highNote: arpeggiator?.highNote ?? 127,
+        sustainEnabled: arpeggiator?.sustainInputEnabled ?? true,
         settings: arpeggiator?.settings.arpeggiator,
       },
     };
@@ -4571,13 +4660,13 @@ export class PlayerScreen {
     if (parameter === 'autoFaderDepthDb') void this.syncNativeEngine();
   }
 
-  // Auto Fader: liga/desliga, escolhe entre 1/4 e 1/8 e o resto é o knob de dB.
+  // Auto Fader: liga/desliga, escolhe um ciclo de 1/1 ou 1/2 e ajusta a profundidade em dB.
   private selectArpeggiatorAutoFader(modal: HTMLElement, moduleNumber: number, choice: string): void {
     const moduleState = this.getActivePresetState()?.modules[moduleNumber - 1];
     if (!moduleState) return;
     const settings = readArpeggiatorSettings(moduleState.settings.arpeggiator);
     if (choice === 'power') settings.autoFaderEnabled = !settings.autoFaderEnabled;
-    else if (choice === '1/2' || choice === '1/4') settings.autoFaderDivision = choice;
+    else if (choice === '1/1' || choice === '1/2') settings.autoFaderDivision = choice;
     else return;
     moduleState.settings.arpeggiator = settings;
     const card = modal.querySelector<HTMLElement>('.arpeggiator-auto-fader');
@@ -4724,6 +4813,44 @@ export class PlayerScreen {
 
   private handleMidiNote(input: MidiNoteInput): void {
     if (!this.liveMidiEnabled) return;
+    // Canal MIDI 10 é reservado aos pads e FX. Ele nunca acende/toca o
+    // keyboard principal; somente a nota aprendida dispara seu botão.
+    if (input.channel === 10) {
+      if (input.pressed && isPadNoteTarget(this.pendingCcLearn)
+          && this.modal?.classList.contains('player-modal--cc-learn')) {
+        this.pendingCcController = input.noteNumber;
+        const formatted = formatMidiNote(input.noteNumber);
+        const status = this.modal.querySelector<HTMLElement>('[data-cc-learn-status]');
+        if (status) {
+          status.textContent = `Última nota: ${formatted} no canal 10. Toque em OK para salvar.`;
+          status.classList.add('is-complete');
+        }
+        const current = this.modal.querySelector<HTMLElement>('[data-cc-learn-current]');
+        if (current) current.textContent = `Selecionado: ${formatted} · CH 10`;
+        this.modal.querySelector<HTMLButtonElement>('[data-modal-action="confirm-cc-learn"]')?.removeAttribute('disabled');
+        return;
+      }
+      for (const [targetKey, noteNumber] of this.ccMappings) {
+        if (noteNumber !== input.noteNumber) continue;
+        const padMatch = /^pad:([AB]):(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.exec(targetKey);
+        if (padMatch && input.pressed && this.isPadBankId(padMatch[1])) {
+          this.activateMappedPad(padMatch[1], padMatch[2] ?? 'C');
+          continue;
+        }
+        const effectMatch = /^effect:([1-8]):([1-9]|1[0-2])$/.exec(targetKey);
+        if (!effectMatch || !this.isEffectBankId(effectMatch[1])) continue;
+        const bank = effectMatch[1];
+        const effectNumber = Number(effectMatch[2]);
+        if (input.pressed) this.activateMappedEffect(bank, effectNumber);
+        else {
+          const state = this.effectPadStates.get(bank)?.[effectNumber - 1];
+          if (state?.triggerMode === 'gate' && state.gateRelease === 'continue-press') {
+            this.releaseEffectPad(bank, effectNumber);
+          }
+        }
+      }
+      return;
+    }
     const keyboardInputId = this.selectedMidiInputIds[this.keyboardMidiSlot - 1] ?? null;
     const matchesKeyboard = keyboardInputId === null || input.inputId === null || input.inputId === keyboardInputId;
     if (matchesKeyboard) {
@@ -4819,15 +4946,51 @@ export class PlayerScreen {
     this.pendingCcController = this.ccMappings.get(key) ?? null;
     const options = this.ccMappingOptions.get(key) ?? DEFAULT_CC_MAPPING_OPTIONS;
     this.pendingCcInverted = options.inverted;
-    this.pendingCcLimitPercent = options.limitPercent;
+    this.pendingCcMinimumPercent = options.minimumPercent;
+    this.pendingCcMaximumPercent = options.maximumPercent;
+    this.pendingCcLimitEndpoint = 'maximum';
     if (this.modal) this.openChildModal('cc-learn', null, trigger);
     else this.openModal('cc-learn', null, trigger);
     void this.midiInput.requestAccess();
   }
 
+  private renderPendingCcLimits(modal: HTMLElement): void {
+    if (!this.pendingCcLearn) return;
+    const minimumLabel = formatCcLimit(this.pendingCcLearn, this.pendingCcMinimumPercent);
+    const maximumLabel = formatCcLimit(this.pendingCcLearn, this.pendingCcMaximumPercent);
+    const activeMinimum = this.pendingCcLimitEndpoint === 'minimum';
+    const minimumInput = modal.querySelector<HTMLInputElement>('[data-cc-limit="minimum"]');
+    const maximumInput = modal.querySelector<HTMLInputElement>('[data-cc-limit="maximum"]');
+    if (minimumInput) {
+      minimumInput.value = String(this.pendingCcMinimumPercent);
+      minimumInput.setAttribute('aria-valuetext', minimumLabel);
+      minimumInput.classList.toggle('is-active', activeMinimum);
+    }
+    if (maximumInput) {
+      maximumInput.value = String(this.pendingCcMaximumPercent);
+      maximumInput.setAttribute('aria-valuetext', maximumLabel);
+      maximumInput.classList.toggle('is-active', !activeMinimum);
+    }
+    const range = modal.querySelector<HTMLElement>('[data-cc-limit-range]');
+    range?.style.setProperty('--cc-limit-minimum', `${this.pendingCcMinimumPercent}%`);
+    range?.style.setProperty('--cc-limit-maximum', `${this.pendingCcMaximumPercent}%`);
+    const activeOutput = modal.querySelector<HTMLOutputElement>('[data-cc-limit-output]');
+    if (activeOutput) activeOutput.value = activeMinimum ? minimumLabel : maximumLabel;
+    const minimumOutput = modal.querySelector<HTMLOutputElement>('[data-cc-limit-minimum-output]');
+    if (minimumOutput) minimumOutput.value = minimumLabel;
+    const maximumOutput = modal.querySelector<HTMLOutputElement>('[data-cc-limit-maximum-output]');
+    if (maximumOutput) maximumOutput.value = maximumLabel;
+    for (const button of modal.querySelectorAll<HTMLButtonElement>('[data-cc-limit-endpoint]')) {
+      const selected = button.dataset.ccLimitEndpoint === this.pendingCcLimitEndpoint;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    }
+  }
+
   private ccMappingLabel(target: CcLearnTarget): string {
     const controller = this.ccMappings.get(this.ccMappingKeyForTarget(target));
-    return controller === undefined ? 'Ainda não mapeado' : `CC ${controller}`;
+    if (controller === undefined) return 'Ainda não mapeado';
+    return isPadNoteTarget(target) ? `${formatMidiNote(controller)} · CH 10` : `CC ${controller}`;
   }
 
   private ccMappingKeyForTarget(target: CcLearnTarget): string {
@@ -4840,10 +5003,12 @@ export class PlayerScreen {
   }
 
   private mappedCcRatio(targetKey: string, value: number): number {
-    const options = this.ccMappingOptions?.get(targetKey) ?? { inverted: false, limitPercent: 100 };
+    const options = this.ccMappingOptions?.get(targetKey) ?? DEFAULT_CC_MAPPING_OPTIONS;
     const input = Math.min(1, Math.max(0, value / 127));
     const direction = options.inverted ? 1 - input : input;
-    return direction * (options.limitPercent / 100);
+    const minimum = options.minimumPercent / 100;
+    const maximum = options.maximumPercent / 100;
+    return minimum + direction * (maximum - minimum);
   }
 
   private syncKeyboardExpressionInput(): void {
@@ -4863,6 +5028,11 @@ export class PlayerScreen {
 
   private handleMidiControlChange(input: MidiControlChangeInput): void {
     if (!this.liveMidiEnabled) return;
+    // O controlador do arpejador precisa conhecer o CC64 para manter também
+    // as notas-fonte do acorde, não apenas as vozes já geradas no motor nativo.
+    if (input.controller === 64) {
+      this.patternPlayback.handleSustain(input.inputId, input.channel, input.value >= 64);
+    }
     // Raw CC7 is discarded. Reverb CC91 values 1..16 arrive as synthetic
     // CC102..117 and remain available to Learn CC.
     if (this.compatibilityMode && input.controller === 7) return;
@@ -4879,6 +5049,9 @@ export class PlayerScreen {
     this.lastCcValues.set(ccSourceKey, { value: input.value, receivedAt });
 
     const pending = this.pendingCcLearn;
+    // Pads e FX aprendem notas exclusivamente no canal MIDI 10. Um CC não
+    // pode substituir sem querer a nota escolhida enquanto o modal está aberto.
+    if (isPadNoteTarget(pending)) return;
     if (pending && this.modal?.classList.contains('player-modal--cc-learn')) {
       // A tela continua escutando. Cada mensagem substitui apenas a escolha
       // temporaria; o ultimo CC so e gravado quando o usuario toca em OK.
@@ -4904,6 +5077,7 @@ export class PlayerScreen {
     let metronomeVolumeChanged = false;
     let padFiltersChanged = false;
     for (const [targetKey, controller] of this.ccMappings) {
+      if (targetKey.startsWith('pad:') || targetKey.startsWith('effect:')) continue;
       if (controller !== input.controller) continue;
       const continuousRatio = this.mappedCcRatio(targetKey, input.value);
       const bankModuleMatch = /^module-bank:([A-F]):([1-9]|1[0-6]):([1-8])$/.exec(targetKey);
@@ -4961,6 +5135,12 @@ export class PlayerScreen {
         continue;
       }
 
+      const soloMatch = /^solo:([1-8])$/.exec(targetKey);
+      if (soloMatch) {
+        if (risingEdge) this.toggleModuleSolo(Number(soloMatch[1]));
+        continue;
+      }
+
       const octaveMatch = /^octave:([1-8]):(up|down)$/.exec(targetKey);
       if (octaveMatch && risingEdge) {
         this.shiftModuleOctave(Number(octaveMatch[1]), octaveMatch[2] === 'up' ? 1 : -1);
@@ -4997,6 +5177,13 @@ export class PlayerScreen {
 
       if (targetKey === 'metronome:toggle' && risingEdge) {
         this.toggleMetronome();
+        continue;
+      }
+
+      if ((targetKey === 'metronome:increase' || targetKey === 'metronome:decrease') && risingEdge) {
+        const direction = targetKey === 'metronome:increase' ? 1 : -1;
+        this.metronome.setBpm(this.metronome.getBpm() + direction * 0.5);
+        this.markPlayerStateChanged();
         continue;
       }
 
@@ -5060,9 +5247,12 @@ export class PlayerScreen {
   private triggerEffect(bank: EffectBankId, effectNumber: number): void {
     const effectState = this.effectPadStates.get(bank)?.[effectNumber - 1];
     if (!effectState) return;
-    effectState.active = effectState.triggerMode === 'toggle' ? !effectState.active : true;
+    // O FX 1 nativo é sempre Gate/one-shot: só dispara pelo próprio pad ou
+    // pelo CC aprendido. Notas do keyboard/MIDI não passam por este método.
+    effectState.active = bank === '1'
+      ? true
+      : effectState.triggerMode === 'toggle' ? !effectState.active : true;
     if (bank === this.activeEffectBank) this.renderActiveEffectBank();
-    // Toggle desligando para o som; nos outros casos o arquivo toca do começo.
     if (effectState.active) void this.playEffectPadAudio(bank, effectNumber, effectState);
     else this.stopEffectPadAudio(bank, effectNumber);
     this.dispatchPerformanceTrigger({
@@ -5224,6 +5414,7 @@ export class PlayerScreen {
       moduleState.modulationInputEnabled = !moduleState.modulationInputEnabled;
     }
     this.renderModuleActionState(moduleElement, moduleNumber, moduleState);
+    this.patternPlayback.settingsChanged();
     this.markPlayerStateChanged();
   }
 
@@ -5325,7 +5516,7 @@ export class PlayerScreen {
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     modal.setAttribute('aria-labelledby', titleId);
-    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-velocity', 'module-filter-velocity', 'module-env-filter', 'module-arpeggiator', 'module-trance-gate', 'module-synth', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay', 'module-rotary', 'module-chorus', 'module-organ'];
+    const moduleKinds: readonly ModalKind[] = ['sound-selection', 'sound-download', 'module-settings', 'module-polyphony', 'module-velocity', 'module-filter-velocity', 'module-env-filter', 'module-arpeggiator', 'module-trance-gate', 'module-synth', 'module-eq', 'module-compressor', 'module-reverb', 'module-delay', 'module-rotary', 'module-chorus', 'module-lofi', 'module-organ'];
     const moduleState = !moduleKinds.includes(kind) || moduleNumber === null
       ? null
       : this.ensureActivePresetState()?.modules[moduleNumber - 1] ?? null;
@@ -5477,6 +5668,8 @@ export class PlayerScreen {
       bodyMarkup = createModuleRotaryMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-chorus') {
       bodyMarkup = createModuleChorusMarkup(moduleState?.settings ?? {});
+    } else if (kind === 'module-lofi') {
+      bodyMarkup = createModuleLoFiMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-reverb') {
       bodyMarkup = createModuleReverbMarkup(moduleState?.settings ?? {});
     } else if (kind === 'module-delay') {
@@ -5563,7 +5756,7 @@ export class PlayerScreen {
       bodyMarkup = `
         <section class="bank-advanced-panel">
           <div class="bank-advanced-panel__modes" role="radiogroup" aria-label="Comportamento dos faders">
-            ${(['default', 'master', 'bank', 'bank2'] as const).map((option) => `
+            ${(['default', 'master', 'bank2'] as const).map((option) => `
               <button class="${mode === option ? 'is-selected' : ''}" type="button"
                 data-bank-fader-mode="${option}" role="radio" aria-checked="${mode === option}">${
                   faderModeLabel(option)
@@ -5572,8 +5765,7 @@ export class PlayerScreen {
           </div>
           <p><b>Default:</b> o mesmo Learn CC vale em todos os presets e cada preset restaura sua posição de volume.</p>
           <p><b>Master:</b> o mesmo Learn CC vale em todos os presets e os volumes permanecem onde estão ao trocar de preset.</p>
-          <p><b>Bank 1:</b> os volumes permanecem como no Master, mas o Learn CC dos faders é individual em cada preset.</p>
-          <p><b>Bank 2:</b> o Learn CC dos faders é individual e cada preset restaura sua própria posição de volume.</p>
+          <p><b>Bank:</b> o Learn CC dos faders é individual e cada preset restaura sua própria posição de volume.</p>
         </section>
       `;
     } else if (kind === 'preset-name' && moduleNumber !== null) {
@@ -5603,26 +5795,61 @@ export class PlayerScreen {
           </div>
         </section>
       `;
+    } else if (kind === 'module-power-learn-choice' && moduleNumber !== null) {
+      bodyMarkup = `
+        <section class="module-power-learn-choice">
+          <p>Escolha qual comando do módulo ${moduleNumber} deseja mapear.</p>
+          <div>
+            <button type="button" data-modal-action="learn-module-power" data-module-learn-choice="power">
+              <strong>ON/OFF</strong>
+              <small>${this.ccMappingLabel({ kind: 'module-power', moduleNumber })}</small>
+            </button>
+            <button type="button" data-modal-action="learn-module-power" data-module-learn-choice="solo">
+              <strong>SOLO</strong>
+              <small>${this.ccMappingLabel({ kind: 'module-solo', moduleNumber })}</small>
+            </button>
+          </div>
+        </section>
+      `;
     } else if (kind === 'cc-learn' && this.pendingCcLearn) {
       const currentController = this.ccMappings.get(this.ccMappingKeyForTarget(this.pendingCcLearn));
       const continuous = isContinuousCcTarget(this.pendingCcLearn);
-      const ccLimit = formatCcLimit(this.pendingCcLearn, this.pendingCcLimitPercent);
+      const padNoteLearn = isPadNoteTarget(this.pendingCcLearn);
+      const ccMinimum = formatCcLimit(this.pendingCcLearn, this.pendingCcMinimumPercent);
+      const ccMaximum = formatCcLimit(this.pendingCcLearn, this.pendingCcMaximumPercent);
       bodyMarkup = `
         <section class="cc-learn-panel">
-          <div class="cc-learn-panel__badge" aria-hidden="true">CC</div>
-          <strong>Learn CC</strong>
-          <p data-cc-learn-status>Mova o controle MIDI que deseja usar.</p>
-          <small data-cc-learn-current>${currentController === undefined ? 'Ainda não mapeado' : `Mapeamento atual: CC ${currentController}`}</small>
+          <div class="cc-learn-panel__badge" aria-hidden="true">${padNoteLearn ? 'NOTE' : 'CC'}</div>
+          <strong>${padNoteLearn ? 'Learn Note' : 'Learn CC'}</strong>
+          <p data-cc-learn-status>${padNoteLearn ? 'Toque a nota desejada no canal MIDI 10.' : 'Mova o controle MIDI que deseja usar.'}</p>
+          <small data-cc-learn-current>${currentController === undefined ? 'Ainda não mapeado'
+            : padNoteLearn ? `Mapeamento atual: ${formatMidiNote(currentController)} · CH 10`
+              : `Mapeamento atual: CC ${currentController}`}</small>
           ${continuous ? `
             <div class="cc-learn-curve" aria-label="Curva do controle contínuo">
               <button class="${this.pendingCcInverted ? 'is-selected' : ''}" type="button"
                 data-modal-action="toggle-cc-invert" aria-pressed="${this.pendingCcInverted}">Inverter</button>
               <label>
-                <span>Limite CC <output data-cc-limit-output>${ccLimit}</output></span>
-                <input type="range" min="0" max="100" step="0.1" value="${this.pendingCcLimitPercent}"
-                  data-cc-limit aria-label="Limite CC" aria-valuetext="${ccLimit}">
+                <span>Limite CC <output data-cc-limit-output>${ccMaximum}</output></span>
+                <div class="cc-limit-endpoints">
+                  <button type="button" data-modal-action="select-cc-limit-endpoint"
+                    data-cc-limit-endpoint="minimum" aria-pressed="false">
+                    <small>Mínimo</small><output data-cc-limit-minimum-output>${ccMinimum}</output>
+                  </button>
+                  <button class="is-selected" type="button" data-modal-action="select-cc-limit-endpoint"
+                    data-cc-limit-endpoint="maximum" aria-pressed="true">
+                    <small>Máximo</small><output data-cc-limit-maximum-output>${ccMaximum}</output>
+                  </button>
+                </div>
+                <div class="cc-limit-range" data-cc-limit-range
+                  style="--cc-limit-minimum:${this.pendingCcMinimumPercent}%;--cc-limit-maximum:${this.pendingCcMaximumPercent}%">
+                  <input type="range" min="0" max="100" step="0.1" value="${this.pendingCcMinimumPercent}"
+                    data-cc-limit="minimum" aria-label="Limite mínimo do CC" aria-valuetext="${ccMinimum}">
+                  <input class="is-active" type="range" min="0" max="100" step="0.1" value="${this.pendingCcMaximumPercent}"
+                    data-cc-limit="maximum" aria-label="Limite máximo do CC" aria-valuetext="${ccMaximum}">
+                </div>
               </label>
-              <small>O curso completo do controle físico termina neste ponto do knob ou fader.</small>
+              <small>Arraste as duas alças da mesma barra para definir o mínimo e o máximo do curso do CC.</small>
             </div>
           ` : ''}
         </section>
@@ -5648,7 +5875,7 @@ export class PlayerScreen {
             <button class="${this.metronome.isDoubleTimeEnabled() ? 'is-selected' : ''}" type="button" data-modal-action="toggle-metronome-double" aria-pressed="${this.metronome.isDoubleTimeEnabled()}">2x</button>
           </div>
           <div class="metronome-panel__sounds" aria-label="Som do metrônomo">
-            ${([1, 2, 3] as const).map((sound) => `
+            ${([1, 2, 3, 4] as const).map((sound) => `
               <button class="${this.metronome.getClickSound() === sound ? 'is-selected' : ''}" type="button" data-metronome-sound="${sound}">Click ${sound}</button>
             `).join('')}
           </div>
@@ -5666,7 +5893,7 @@ export class PlayerScreen {
         <section class="tempo-editor">
           <label>
             <span>Tempo</span>
-            <input type="${this.desktopRuntime ? 'number' : 'text'}" min="60" max="600" maxlength="5" step="0.5" inputmode="decimal" aria-label="BPM" value="${formatBpm(this.metronome.getBpm())}" data-tempo-input data-keyboard-numeric="true" data-keyboard-decimal="true">
+            <input type="${this.desktopRuntime ? 'number' : 'text'}" min="60" max="300" maxlength="5" step="0.5" inputmode="decimal" aria-label="BPM" value="${formatBpm(this.metronome.getBpm())}" data-tempo-input data-keyboard-numeric="true" data-keyboard-decimal="true">
             <small>60 a 600 BPM</small>
           </label>
           <div class="player-modal__inline-cc-actions">
@@ -5725,7 +5952,7 @@ export class PlayerScreen {
         <section
           class="effect-pad-editor${supportsAudioAssignment ? ' has-audio-options' : ''}${hasFixedEffectName ? ' has-fixed-name' : ''}"
           data-effect-color-index="${activeColorIndex}"
-          data-effect-mode="${effectPadState?.triggerMode ?? 'toggle'}"
+          data-effect-mode="${hasFixedEffectName ? 'gate' : effectPadState?.triggerMode ?? 'toggle'}"
           data-effect-gate-release="${effectPadState?.gateRelease ?? 'infinite'}"
         >
           ${hasFixedEffectName ? '' : `
@@ -5773,7 +6000,7 @@ export class PlayerScreen {
           </label>
           <div class="cc-action-pair effect-pad-editor__cc-actions">
             <button class="effect-pad-editor__learn" type="button" data-modal-action="learn-effect-cc">
-              <span>Learn CC</span>
+              <span>Learn Note · CH 10</span>
               <small>${this.ccMappingLabel({ kind: 'effect', bank: this.activeEffectBank, effectNumber: moduleNumber })}</small>
             </button>
             <button class="cc-action-pair__clean" type="button" data-modal-action="clean-effect-cc">Clean</button>
@@ -5837,7 +6064,6 @@ export class PlayerScreen {
               <button class="user-panel__action-button" type="button" data-modal-action="reset-password">Redefinir senha</button>
               <button class="user-panel__action-button" type="button" data-modal-action="show-devices">Dispositivos</button>
               <button class="user-panel__action-button" type="button" data-modal-action="acquire-license" disabled>Adquirir mais licença</button>
-              <button class="user-panel__action-button" type="button" data-modal-action="open-support" disabled>Suporte</button>
             </nav>
             <div class="user-panel__licenses" data-user-licenses>
               <span class="loading-orbit" aria-hidden="true"></span>
@@ -5884,6 +6110,7 @@ export class PlayerScreen {
           : kind === 'module-delay' ? 'delay'
             : kind === 'module-rotary' ? 'rotary'
               : kind === 'module-chorus' ? 'chorus'
+                : kind === 'module-lofi' ? 'lofi'
                 : kind === 'module-env-filter' ? 'cutoffEnvelope' : null;
     const patternKind = kind === 'module-arpeggiator' ? 'arpeggiator'
       : kind === 'module-trance-gate' ? 'trance-gate' : null;
@@ -5903,6 +6130,8 @@ export class PlayerScreen {
               ? readModuleRotarySettings(moduleState?.settings.rotary).enabled
               : processorKind === 'chorus'
                 ? readModuleChorusSettings(moduleState?.settings.chorus).enabled
+                : processorKind === 'lofi'
+                  ? readModuleLoFiSettings(moduleState?.settings.lofi).enabled
                 : processorKind === 'cutoffEnvelope'
                   ? readModuleCutoffEnvelopeSettings(moduleState?.settings.cutoffEnvelope).enabled : false;
     const settingsPagePower = kind === 'module-settings'
@@ -5944,6 +6173,8 @@ export class PlayerScreen {
           <button class="player-modal__confirm-button" type="button" data-modal-action="download-backup-sounds">Baixar timbres</button>
         `
       : kind === 'sound-download' || kind === 'performance-download'
+        ? `<button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>`
+      : kind === 'module-power-learn-choice'
         ? `<button class="player-modal__back-button" type="button" data-modal-action="cancel">Voltar</button>`
       : kind === 'cc-learn'
         ? `
@@ -6014,12 +6245,15 @@ export class PlayerScreen {
           <p class="player-modal__eyebrow"></p>
           <h2 id="${titleId}"></h2>
           ${kind === 'sound-selection' ? `
-            <span class="sound-library-total">Total - ${formatSoundfontTotal(
-              this.soundCatalog.sounds.reduce(
-                (total, sound) => total + (sound.sf2ObjectKey ? sound.byteSize ?? 0 : 0),
-                0,
-              ),
-            )}</span>
+            <span class="sound-library-total">
+              <span data-sound-library-size>Total - ${formatSoundfontTotal(
+                this.soundCatalog.sounds.reduce(
+                  (total, sound) => total + (sound.sf2ObjectKey ? sound.byteSize ?? 0 : 0),
+                  0,
+                ),
+              )}</span>
+              <b>${this.soundCatalog.sounds.length} ${this.soundCatalog.sounds.length === 1 ? 'timbre' : 'timbres'}</b>
+            </span>
             ${(() => {
               const downloadable = this.soundCatalog.sounds.filter((sound) => Boolean(sound.sf2ObjectKey));
               const done = downloadable.length > 0
@@ -6101,7 +6335,7 @@ export class PlayerScreen {
         ? moduleState.timbreName
         : 'Timbre';
       title.textContent = 'EQ';
-    } else if (kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-rotary' || kind === 'module-chorus') {
+    } else if (kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-rotary' || kind === 'module-chorus' || kind === 'module-lofi') {
       eyebrow.textContent = moduleState?.timbreId && moduleState.timbreName !== 'Sem timbre'
         ? moduleState.timbreName
         : 'Timbre';
@@ -6109,7 +6343,8 @@ export class PlayerScreen {
         ? 'Compressor'
         : kind === 'module-reverb' ? 'Reverb'
           : kind === 'module-rotary' ? 'Rotary Speaker'
-            : kind === 'module-chorus' ? 'Chorus' : 'Delay';
+            : kind === 'module-chorus' ? 'Chorus'
+              : kind === 'module-lofi' ? 'Lo-Fi' : 'Delay';
     } else if (kind === 'module-organ') {
       eyebrow.textContent = `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
       title.textContent = 'Hook B3';
@@ -6169,9 +6404,12 @@ export class PlayerScreen {
     } else if (kind === 'bank-advanced' && this.pendingBankEdit) {
       eyebrow.textContent = `Banco ${this.pendingBankEdit}`;
       title.textContent = 'Advanced';
+    } else if (kind === 'module-power-learn-choice') {
+      eyebrow.textContent = `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
+      title.textContent = 'Escolher mapeamento';
     } else if (kind === 'cc-learn' && this.pendingCcLearn) {
       eyebrow.textContent = ccLearnTargetLabel(this.pendingCcLearn);
-      title.textContent = 'Learn CC';
+      title.textContent = isPadNoteTarget(this.pendingCcLearn) ? 'Learn Note · CH 10' : 'Learn CC';
     } else if (kind === 'cc-clear-confirm' && this.pendingCcClear) {
       eyebrow.textContent = ccLearnTargetLabel(this.pendingCcClear);
       title.textContent = 'Clean CC';
@@ -6233,6 +6471,18 @@ export class PlayerScreen {
         noticeClose.closest('[data-default-settings-notice]')?.remove();
         return;
       }
+      const modulePowerLearnButton = target instanceof Element
+        ? target.closest<HTMLButtonElement>('[data-modal-action="learn-module-power"]') : null;
+      if (kind === 'module-power-learn-choice' && moduleNumber !== null && modulePowerLearnButton) {
+        const choice = modulePowerLearnButton.dataset.moduleLearnChoice;
+        const learnTarget: CcLearnTarget | null = choice === 'power'
+          ? { kind: 'module-power', moduleNumber }
+          : choice === 'solo' ? { kind: 'module-solo', moduleNumber } : null;
+        if (!learnTarget) return;
+        this.closeModal();
+        this.openCcLearn(learnTarget, modulePowerLearnButton);
+        return;
+      }
       const bankAdvanced = target instanceof Element
         ? target.closest<HTMLButtonElement>('[data-modal-action="open-bank-advanced"]') : null;
       if (kind === 'bank-name' && bankAdvanced && this.pendingBankEdit) {
@@ -6244,7 +6494,7 @@ export class PlayerScreen {
         ? target.closest<HTMLButtonElement>('[data-bank-fader-mode]') : null;
       if (kind === 'bank-advanced' && bankModeButton && this.pendingBankEdit) {
         const mode = bankModeButton.dataset.bankFaderMode;
-        if (mode === 'default' || mode === 'master' || mode === 'bank' || mode === 'bank2') {
+        if (mode === 'default' || mode === 'master' || mode === 'bank2') {
           this.setBankFaderMode(this.pendingBankEdit, mode, modal);
         }
         return;
@@ -6637,7 +6887,7 @@ export class PlayerScreen {
         : null;
       if (
         moduleNumber !== null
-        && (pageKind() === 'module-eq' || pageKind() === 'module-compressor' || pageKind() === 'module-reverb' || pageKind() === 'module-delay' || pageKind() === 'module-rotary' || pageKind() === 'module-chorus' || pageKind() === 'module-arpeggiator' || pageKind() === 'module-trance-gate' || pageKind() === 'module-env-filter' || kind === 'module-organ')
+        && (pageKind() === 'module-eq' || pageKind() === 'module-compressor' || pageKind() === 'module-reverb' || pageKind() === 'module-delay' || pageKind() === 'module-rotary' || pageKind() === 'module-chorus' || pageKind() === 'module-lofi' || pageKind() === 'module-arpeggiator' || pageKind() === 'module-trance-gate' || pageKind() === 'module-env-filter' || kind === 'module-organ')
         && effectPowerButton
       ) {
         this.toggleModuleEffectPower(effectPowerButton, moduleNumber);
@@ -6728,7 +6978,7 @@ export class PlayerScreen {
         : null;
       if (kind === 'metronome' && metronomeSoundButton) {
         const sound = Number(metronomeSoundButton.dataset.metronomeSound);
-        if (sound === 1 || sound === 2 || sound === 3) {
+        if (sound === 1 || sound === 2 || sound === 3 || sound === 4) {
           this.metronome.setClickSound(sound);
           for (const option of modal.querySelectorAll<HTMLButtonElement>('[data-metronome-sound]')) {
             option.classList.toggle('is-selected', option === metronomeSoundButton);
@@ -7055,6 +7305,17 @@ export class PlayerScreen {
         button?.setAttribute('aria-pressed', String(this.pendingCcInverted));
         return;
       }
+      if (kind === 'cc-learn' && modalAction === 'select-cc-limit-endpoint' && this.pendingCcLearn &&
+          isContinuousCcTarget(this.pendingCcLearn)) {
+        const button = target instanceof Element
+          ? target.closest<HTMLButtonElement>('[data-cc-limit-endpoint]') : null;
+        const endpoint = button?.dataset.ccLimitEndpoint;
+        if (endpoint === 'minimum' || endpoint === 'maximum') {
+          this.pendingCcLimitEndpoint = endpoint;
+          this.renderPendingCcLimits(modal);
+        }
+        return;
+      }
       if (kind === 'cc-learn' && modalAction === 'open-cc-clear' && this.pendingCcLearn) {
         this.pendingCcClear = this.pendingCcLearn;
         this.openChildModal('cc-clear-confirm', null,
@@ -7077,7 +7338,8 @@ export class PlayerScreen {
           if (isContinuousCcTarget(this.pendingCcLearn)) {
             this.ccMappingOptions.set(pendingKey, {
               inverted: this.pendingCcInverted,
-              limitPercent: this.pendingCcLimitPercent,
+              minimumPercent: this.pendingCcMinimumPercent,
+              maximumPercent: this.pendingCcMaximumPercent,
             });
           } else this.ccMappingOptions.delete(pendingKey);
           this.markPlayerStateChanged(false);
@@ -7235,7 +7497,7 @@ export class PlayerScreen {
         if (modalAction === 'confirm' && kind === 'module-polyphony' && moduleNumber !== null) {
           this.commitModulePolyphony(modal, moduleNumber);
         }
-        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'bank-advanced' || kind === 'synth-preset-name' || kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'module-env-filter' || kind === 'glide-config' || kind === 'module-voice-mode' || kind === 'module-arpeggiator' || kind === 'module-trance-gate' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-chorus'))) && this.modalHistory.length > 0) {
+        if ((modalAction === 'cancel' || modalAction === 'confirm') && ((kind === 'bank-advanced' || kind === 'synth-preset-name' || kind === 'module-polyphony' || kind === 'module-velocity' || kind === 'module-filter-velocity' || kind === 'module-env-filter' || kind === 'glide-config' || kind === 'module-voice-mode' || kind === 'module-arpeggiator' || kind === 'module-trance-gate' || kind === 'module-synth' || kind === 'module-rotary') || (modalAction === 'cancel' && (kind === 'user-name' || kind === 'sound-download' || kind === 'cc-learn' || kind === 'keyboard-settings' || kind === 'app-settings-midi' || kind === 'app-settings-audio' || kind === 'module-eq' || kind === 'module-compressor' || kind === 'module-reverb' || kind === 'module-delay' || kind === 'module-chorus' || kind === 'module-lofi'))) && this.modalHistory.length > 0) {
           this.returnToPreviousModal();
         } else {
           this.closeModal();
@@ -7282,13 +7544,6 @@ export class PlayerScreen {
         const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
         const url = button?.dataset.purchaseUrl;
         if (url) window.open(url, '_blank', 'noopener,noreferrer');
-        return;
-      }
-
-      if (modalAction === 'open-support') {
-        const button = target instanceof Element ? target.closest<HTMLButtonElement>('button') : null;
-        const url = button?.dataset.supportUrl;
-        if (url) void openWhatsAppSupport(url);
         return;
       }
 
@@ -7626,13 +7881,18 @@ export class PlayerScreen {
       const input = event.target;
       if (!(input instanceof HTMLInputElement)) return;
       if (kind === 'cc-learn' && input.matches('[data-cc-limit]')) {
-        this.pendingCcLimitPercent = Math.round(boundedNumber(input.value, 0, 100, 100) * 10) / 10;
-        const output = modal.querySelector<HTMLOutputElement>('[data-cc-limit-output]');
-        const formatted = this.pendingCcLearn
-          ? formatCcLimit(this.pendingCcLearn, this.pendingCcLimitPercent)
-          : `${this.pendingCcLimitPercent}%`;
-        if (output) output.value = formatted;
-        input.setAttribute('aria-valuetext', formatted);
+        const endpoint = input.dataset.ccLimit;
+        if (endpoint !== 'minimum' && endpoint !== 'maximum') return;
+        this.pendingCcLimitEndpoint = endpoint;
+        const value = Math.round(boundedNumber(input.value, 0, 100, 100) * 10) / 10;
+        if (endpoint === 'minimum') {
+          this.pendingCcMinimumPercent = value;
+          if (value > this.pendingCcMaximumPercent) this.pendingCcMaximumPercent = value;
+        } else {
+          this.pendingCcMaximumPercent = value;
+          if (value < this.pendingCcMinimumPercent) this.pendingCcMinimumPercent = value;
+        }
+        this.renderPendingCcLimits(modal);
         return;
       }
       if ((kind === 'module-settings' || kind === 'module-synth' || kind === 'module-voice-mode')
@@ -7670,6 +7930,9 @@ export class PlayerScreen {
         this.updateModuleEnvelopeControl(modal, input, moduleNumber);
       } else if ((kind === 'module-settings' || kind === 'module-env-filter') && moduleNumber !== null && input.matches('[data-module-cutoff]')) {
         this.updateModuleCutoffControl(modal, input, moduleNumber);
+        // `input` dispara durante o movimento. Sem esta sincronização o valor
+        // só chegava ao motor no `change`, depois que o fader era solto.
+        this.scheduleNativeEngineSync();
       } else if (kind === 'module-filter-velocity' && moduleNumber !== null && input.matches('[data-filter-velocity-cutoff]')) {
         this.updateFilterVelocityCutoff(modal, input, moduleNumber);
         this.scheduleNativeEngineSync();
@@ -7680,6 +7943,8 @@ export class PlayerScreen {
         const denominator = Number(denominatorInput?.value);
         if (Number.isFinite(numerator) && Number.isFinite(denominator)) {
           this.metronome.setTimeSignature(numerator, denominator);
+          this.patternPlayback.settingsChanged();
+          this.scheduleNativeEngineSync();
           this.markPlayerStateChanged();
         }
       } else if (input.matches('[data-preset-name-input]')) {
@@ -7711,7 +7976,7 @@ export class PlayerScreen {
       if (pageKind() === 'module-eq' && moduleNumber !== null && input.matches('[data-module-eq-q]')) {
         this.updateModuleEqQ(modal, input, moduleNumber);
       }
-      if ((pageKind() === 'module-compressor' || pageKind() === 'module-reverb' || pageKind() === 'module-delay' || pageKind() === 'module-rotary' || pageKind() === 'module-organ' || pageKind() === 'module-chorus' || pageKind() === 'module-env-filter') && moduleNumber !== null && input.matches('[data-module-effect-control]')) {
+      if ((pageKind() === 'module-compressor' || pageKind() === 'module-reverb' || pageKind() === 'module-delay' || pageKind() === 'module-rotary' || pageKind() === 'module-organ' || pageKind() === 'module-chorus' || pageKind() === 'module-lofi' || pageKind() === 'module-env-filter') && moduleNumber !== null && input.matches('[data-module-effect-control]')) {
         this.updateModuleEffectControl(modal, input, moduleNumber);
       }
     });
@@ -7838,7 +8103,6 @@ export class PlayerScreen {
     } else if (kind === 'user') {
       void this.loadUserDevices(modal);
       void this.loadAcquireLicenseUrl(modal);
-      void this.loadSupportUrl(modal);
       void this.loadUserProfile(modal);
     } else if (kind === 'backup-download') {
       void this.prepareBackupDownloadCapacity(modal);
@@ -8348,7 +8612,7 @@ export class PlayerScreen {
         (total, sound) => total + (sound.sf2ObjectKey ? sound.byteSize ?? 0 : 0),
         0,
       );
-      const libraryTotal = modal.querySelector<HTMLElement>('.sound-library-total');
+      const libraryTotal = modal.querySelector<HTMLElement>('[data-sound-library-size]');
       if (libraryTotal) libraryTotal.textContent = `Total - ${formatSoundfontTotal(officialBytes + userBytes)}`;
       const userTotal = modal.querySelector<HTMLElement>('[data-user-sf2-total]');
       if (userTotal) userTotal.textContent = `Total - ${formatSoundfontTotal(userBytes)}`;
@@ -8735,19 +8999,6 @@ export class PlayerScreen {
       const url = await this.accountControls.getAcquireLicenseUrl();
       if (!modal.isConnected || !url) return;
       button.dataset.purchaseUrl = url;
-      button.disabled = false;
-    } catch {
-      // O botão permanece indisponível até que a conexão volte.
-    }
-  }
-
-  private async loadSupportUrl(modal: HTMLElement): Promise<void> {
-    const button = modal.querySelector<HTMLButtonElement>('[data-modal-action="open-support"]');
-    if (!button) return;
-    try {
-      const url = await this.accountControls.getSupportUrl();
-      if (!modal.isConnected || !isWhatsAppSupportUrl(url)) return;
-      button.dataset.supportUrl = url;
       button.disabled = false;
     } catch {
       // O botão permanece indisponível até que a conexão volte.
@@ -9826,6 +10077,9 @@ export class PlayerScreen {
       'chorus:rateHz': [0.05, 8],
       'chorus:depth': [0, 100],
       'chorus:mix': [0, 100],
+      'lofi:bitDepth': [4, 16],
+      'lofi:sampleRateHz': [1_000, 48_000],
+      'lofi:mix': [0, 100],
       'cutoffEnvelope:attackMs': [0, 5_000],
       'cutoffEnvelope:decayMs': [0, 5_000],
       'cutoffEnvelope:sustain': [0, 100],
@@ -10213,6 +10467,9 @@ export class PlayerScreen {
     } else if (processor === 'chorus') {
       restore('chorus', readModuleChorusSettings,
         readModuleChorusSettings(moduleState.settings.chorus).enabled);
+    } else if (processor === 'lofi') {
+      restore('lofi', readModuleLoFiSettings,
+        readModuleLoFiSettings(moduleState.settings.lofi).enabled);
     } else if (processor === 'cutoffEnvelope') {
       restore('cutoffEnvelope', readModuleCutoffEnvelopeSettings,
         readModuleCutoffEnvelopeSettings(moduleState.settings.cutoffEnvelope).enabled);
@@ -10230,6 +10487,7 @@ export class PlayerScreen {
           : processor === 'reverb' ? 'module-reverb'
             : processor === 'rotary' ? 'module-rotary'
               : processor === 'chorus' ? 'module-chorus'
+                : processor === 'lofi' ? 'module-lofi'
                 : processor === 'cutoffEnvelope' ? 'module-env-filter' : 'module-delay',
       moduleNumber, trigger, true);
     this.setStatus(`${processor === 'eq' ? 'EQ resetado para flat' : `${processor} resetado`} no módulo ${moduleNumber}.`);
@@ -10875,11 +11133,16 @@ export class PlayerScreen {
       : effect.colorIndex;
     const triggerMode = editor.dataset.effectMode;
     const gateRelease = editor.dataset.effectGateRelease;
-    if (triggerMode === 'toggle' || triggerMode === 'gate') {
-      if (effect.triggerMode !== triggerMode) effect.active = false;
-      effect.triggerMode = triggerMode;
+    if (this.activeEffectBank === '1') {
+      effect.triggerMode = 'gate';
+      effect.gateRelease = 'infinite';
+    } else {
+      if (triggerMode === 'toggle' || triggerMode === 'gate') {
+        if (effect.triggerMode !== triggerMode) effect.active = false;
+        effect.triggerMode = triggerMode;
+      }
+      if (gateRelease === 'infinite' || gateRelease === 'continue-press') effect.gateRelease = gateRelease;
     }
-    if (gateRelease === 'infinite' || gateRelease === 'continue-press') effect.gateRelease = gateRelease;
     const volumeInput = modal.querySelector<HTMLInputElement>('[data-effect-pad-volume]');
     effect.volumeDb = boundedNumber(
       volumeInput?.value,
@@ -11294,7 +11557,9 @@ export class PlayerScreen {
       this.pendingCcLearn = null;
       this.pendingCcController = null;
       this.pendingCcInverted = false;
-      this.pendingCcLimitPercent = 100;
+      this.pendingCcMinimumPercent = 0;
+      this.pendingCcMaximumPercent = 100;
+      this.pendingCcLimitEndpoint = 'maximum';
     }
     if (this.modal.classList.contains('player-modal--cc-clear-confirm') && !preserveHistory) {
       this.pendingCcClear = null;
@@ -11656,15 +11921,16 @@ export class PlayerScreen {
         : [0, 0, 0, 0] as const;
       configurationTasks.push(hookKeysNative.configureModule({
         moduleIndex,
-        enabled: Boolean(moduleState?.enabled && (moduleIndex === 6 || moduleIndex === 7 ||
+        enabled: Boolean(moduleState?.enabled
+          && (this.soloedModuleNumber === null || this.soloedModuleNumber === moduleIndex + 1)
+          && (moduleIndex === 6 || moduleIndex === 7 ||
           (moduleState.timbreId && moduleState.timbreId === this.nativeLoadedTimbres[moduleIndex]))),
-        inputSlot: patternInputSlot ?? (selectedSlot >= 0 ? selectedSlot : 3),
+        inputSlot: patternInputSlot ?? (selectedSlot >= 0 ? selectedSlot : ALL_MIDI_INPUTS),
         lowNote: moduleState?.lowNote ?? 0,
         highNote: moduleState?.highNote ?? 127,
         octave: moduleState?.octaveShift ?? 0,
-        // O pedal vale também no arpeggiator: pisado, ele segura as teclas e a
-        // frase continua rodando. Quem não quiser desliga no botão Sustain do
-        // próprio módulo.
+        // Com o arpeggiator ligado, o controlador segura as notas-fonte. O
+        // motor não repassa CC64 às vozes geradas, para não formar um acorde.
         sustain: moduleState?.sustainInputEnabled ?? true,
         modulation: moduleState?.modulationInputEnabled ?? true,
         gmDrumHiHatChoke: drumSound,
@@ -11779,6 +12045,9 @@ export class PlayerScreen {
             moduleIndex, enabled: gate.enabled,
             steps: gate.steps.reduce((mask, enabled, index) => enabled ? mask | (1 << index) : mask, 0),
             length: gate.length, beatMultiplier: tranceGateStepBeats(gate, this.metronome.getBpm()),
+            measureBeats: gate.sync
+              ? this.metronome.getTimeSignatureNumerator() * 4 / this.metronome.getTimeSignatureDenominator()
+              : 0,
             gate: gate.gate / 100, depth: gate.depth / 100, attackMs: gate.attackMs,
             releaseMs: gate.releaseMs, swing: gate.swing / 100,
           }));
@@ -11798,6 +12067,7 @@ export class PlayerScreen {
         const reverb = readModuleReverbSettings(moduleState.settings.reverb);
         const rotary = readModuleRotarySettings(moduleState.settings.rotary);
         const chorus = readModuleChorusSettings(moduleState.settings.chorus);
+        const loFi = readModuleLoFiSettings(moduleState.settings.lofi);
         // O Auto Fader mora dentro dos ajustes do arpeggiator.
         const autoFader = readModuleAutoFaderSettings(moduleState.settings.arpeggiator);
         configurationTasks.push(hookKeysNative.configureModuleEffects({
@@ -11852,8 +12122,19 @@ export class PlayerScreen {
           chorusRateHz: chorus.rateHz,
           chorusDepth: chorus.depth / 100,
           chorusMix: chorus.mix / 100,
-          autoFaderEnabled: autoFader.enabled,
-          autoFaderBeats: autoFader.division === '1/2' ? 2 : 1,
+          loFiEnabled: moduleIndex !== 6 && loFi.enabled,
+          loFiBitDepth: loFi.bitDepth,
+          loFiSampleRateHz: loFi.sampleRateHz,
+          loFiMix: loFi.mix / 100,
+          // O Auto Fader é parte do Arpeggiator: a preferência continua salva,
+          // mas o DSP só roda enquanto o Arpeggiator deste módulo estiver ON.
+          autoFaderEnabled: arpeggiatorSettings.enabled && autoFader.enabled,
+          // A volta completa segue o compasso global escolhido no metrônomo.
+          autoFaderBeats: autoFaderCycleBeats(
+            this.metronome.getTimeSignatureNumerator(),
+            this.metronome.getTimeSignatureDenominator(),
+            autoFader.division,
+          ),
           autoFaderDepthDb: autoFader.depthDb,
           inputGainDb: readModuleGainDb(moduleState.settings),
         }));
@@ -12090,7 +12371,7 @@ export class PlayerScreen {
     this.metronome.applySavedSettings(
       boundedNumber(savedMetronome.bpm, 60, 600, 120),
       boundedNumber(savedMetronome.volume, 0, 10 ** (12 / 20), 1),
-      (savedClickSound === 2 || savedClickSound === 3 ? savedClickSound : 1) as MetronomeClickSound,
+      (savedClickSound === 2 || savedClickSound === 3 || savedClickSound === 4 ? savedClickSound : 1) as MetronomeClickSound,
       savedMetronome.accentEnabled === true,
       savedMetronome.doubleTimeEnabled === true,
       boundedNumber(savedMetronome.timeSignatureNumerator, 1, 16, 4),
@@ -12136,7 +12417,7 @@ export class PlayerScreen {
     const savedEffectBankNames = isRecord(value.effectBankNames) ? value.effectBankNames : {};
     for (const effectBank of EFFECT_BANK_IDS) {
       if (effectBank === '1') {
-        this.effectBankNames.set(effectBank, `FX ${effectBank}`);
+        this.effectBankNames.set(effectBank, 'Church');
         continue;
       }
       const name = typeof savedEffectBankNames[effectBank] === 'string'
@@ -12179,11 +12460,13 @@ export class PlayerScreen {
             colorIndex: Number.isInteger(requestedColorIndex) && EFFECT_PAD_COLORS[requestedColorIndex]
               ? requestedColorIndex
               : effect.colorIndex,
-            gateRelease: source.gateRelease === 'continue-press' ? 'continue-press' : 'infinite',
+            gateRelease: effectBank === '1'
+              ? 'infinite'
+              : source.gateRelease === 'continue-press' ? 'continue-press' : 'infinite',
             name: effectBank !== '1' && typeof source.name === 'string'
               ? source.name.trim().slice(0, 12) || effect.name
               : effect.name,
-            triggerMode: source.triggerMode === 'gate' ? 'gate' : 'toggle',
+            triggerMode: effectBank === '1' || source.triggerMode === 'gate' ? 'gate' : 'toggle',
             volumeDb: boundedNumber(source.volumeDb, EFFECT_PAD_MIN_DB, EFFECT_PAD_MAX_DB, effect.volumeDb),
           };
         }),
@@ -12198,8 +12481,7 @@ export class PlayerScreen {
       defaults.name = typeof sourceBank.name === 'string'
         ? sourceBank.name.trim().slice(0, 12) || bankId
         : bankId;
-      defaults.faderMode = sourceBank.faderMode === 'master' || sourceBank.faderMode === 'bank'
-          || sourceBank.faderMode === 'bank2'
+      defaults.faderMode = sourceBank.faderMode === 'master' || sourceBank.faderMode === 'bank2'
         ? sourceBank.faderMode
         : 'default';
       const savedMasterVolumes = Array.isArray(sourceBank.masterVolumes) ? sourceBank.masterVolumes : [];
@@ -12505,7 +12787,7 @@ function isModuleEnvelopeParameter(value: string | undefined): value is ModuleEn
 
 function isModuleEffectKind(value: string | undefined): value is ModuleEffectKind {
   return value === 'compressor' || value === 'reverb' || value === 'delay' || value === 'rotary'
-      || value === 'chorus' || value === 'cutoffEnvelope';
+      || value === 'chorus' || value === 'lofi' || value === 'cutoffEnvelope';
 }
 
 function isArpeggiatorModeValue(value: string | undefined): value is ArpeggiatorMode {
@@ -12553,6 +12835,7 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
     velocityLimit: 127,
     velocityCeiling: 127,
     reverb: { ...FACTORY_MODULE_REVERB },
+    lofi: { ...readModuleLoFiSettings(undefined) },
     rotary: {
       ...readModuleRotarySettings(undefined),
       enabled: moduleIndex === 6,

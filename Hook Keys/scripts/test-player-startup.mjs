@@ -94,6 +94,11 @@ try {
   assert(!calls.some(({ command }) => command === 'send_midi'),
     'motor pronto continua bloqueado até a animação terminar');
   await player.activateLiveMidi();
+  const initialModuleConfigs = calls.filter(({ command }) => command === 'configure_module')
+    .slice(-8);
+  assert.equal(initialModuleConfigs.length, 8, 'a abertura configura os oito módulos no motor');
+  assert(initialModuleConfigs.every(({ args }) => args.config.inputSlot === 0xff),
+    'sem dispositivo específico, todos os módulos aceitam qualquer entrada MIDI e o teclado da tela');
   assert(!root.querySelector('.player-next-field'), 'o campo Próxima saiu do topo');
   const globalOctaveUp = root.querySelector('[data-action="global-octave-up"]');
   assert(globalOctaveUp, 'o topo mostra o controle de oitava geral');
@@ -324,6 +329,16 @@ try {
   await new Promise(resolve => setTimeout(resolve, 150));
   assert(calls.some(({ command, args }) => command === 'configure_metronome' && args.enabled && args.volume > 0), 'click deve enviar metrônomo audível');
   assert(calls.some(({ command, args }) => command === 'set_output_gain' && args.enabled && args.db > -60), 'master deve estar audível');
+  assert.equal(root.querySelectorAll('[data-action="adjust-tempo"]').length, 2, 'BPM tem botões menos e mais nas laterais');
+  root.querySelector('[data-tempo-step="0.5"]').click();
+  assert.equal(player.metronome.getBpm(), 120.5, 'mais aumenta o BPM em 0,5');
+  root.querySelector('[data-tempo-step="-0.5"]').click();
+  assert.equal(player.metronome.getBpm(), 120, 'menos diminui o BPM em 0,5');
+  player.metronome.setBpm(999);
+  assert.equal(player.metronome.getBpm(), 300, 'BPM máximo é 300');
+  player.metronome.setBpm(1);
+  assert.equal(player.metronome.getBpm(), 60, 'BPM mínimo é 60');
+  player.metronome.setBpm(120);
   const panel = root.querySelector('[data-player-bottom-panel]');
   assert(panel.classList.contains('player-presets--combined'));
   assert(!panel.classList.contains('is-keyboard'), 'combined layout must not inherit keyboard-only CSS');
@@ -468,6 +483,9 @@ try {
     const learn = (selector, controller) => {
       const button = root.querySelector(selector);
       player.onRootContextMenu({ target: button, preventDefault() {} });
+      if (player.currentModalKind === 'module-power-learn-choice') {
+        window.document.querySelector('[data-module-learn-choice="power"]').click();
+      }
       assert.equal(player.currentModalKind, 'cc-learn', `${selector} abre o Learn CC`);
       cc(controller, 127);
       window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
@@ -486,6 +504,20 @@ try {
     assert.equal(root.querySelector('[data-action="toggle-module"][data-module="3"]').getAttribute('aria-pressed'), String(!enabled));
     press(40);
     assert.equal(moduleState(3).enabled, enabled);
+
+    const moduleThreePower = root.querySelector('[data-action="toggle-module"][data-module="3"]');
+    player.onRootContextMenu({ target: moduleThreePower, preventDefault() {} });
+    assert.equal(player.currentModalKind, 'module-power-learn-choice');
+    assert.deepEqual([...window.document.querySelectorAll('[data-module-learn-choice]')]
+      .map(button => button.textContent.trim().split(/\s+/)[0]), ['ON/OFF', 'SOLO']);
+    window.document.querySelector('[data-module-learn-choice="solo"]').click();
+    cc(43, 127);
+    window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+    assert.equal(player.ccMappings.get('solo:3'), 43);
+    press(43);
+    assert.equal(player.soloedModuleNumber, 3, 'CC ativa o Solo escolhido no modal');
+    press(43);
+    assert.equal(player.soloedModuleNumber, null, 'o mesmo CC desativa o Solo');
 
     learn('[data-action="toggle-sustain-input"][data-module="4"]', 41);
     learn('[data-action="toggle-modulation-input"][data-module="4"]', 42);
@@ -535,19 +567,31 @@ try {
     // físico do controlador. Botões continuam binários e não exibem a curva.
     const moduleFader = root.querySelector('[data-module-fader="1"] .player-module__fader-rail');
     player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, moduleFader);
-    assert(window.document.querySelector('[data-cc-limit]'), 'Learn de fader mostra Limite CC');
-    const limit = window.document.querySelector('[data-cc-limit]');
-    limit.value = '76.4';
-    limit.dispatchEvent(new window.Event('input', { bubbles: true }));
+    const minimumLimit = window.document.querySelector('[data-cc-limit="minimum"]');
+    const maximumLimit = window.document.querySelector('[data-cc-limit="maximum"]');
+    assert(minimumLimit && maximumLimit, 'Learn de fader mostra as duas alças na mesma barra de Limite CC');
+    maximumLimit.value = '76.4';
+    maximumLimit.dispatchEvent(new window.Event('input', { bubbles: true }));
     assert.match(window.document.querySelector('[data-cc-limit-output]').textContent, /dB$/,
       'limite do fader é mostrado em dB, não em porcentagem genérica');
+    window.document.querySelector('[data-cc-limit-endpoint="minimum"]').click();
+    assert.equal(minimumLimit.value, '0', 'a alça mínima preserva sua própria posição');
+    minimumLimit.value = '20';
+    minimumLimit.dispatchEvent(new window.Event('input', { bubbles: true }));
+    window.document.querySelector('[data-cc-limit-endpoint="maximum"]').click();
+    assert.equal(maximumLimit.value, '76.4', 'a alça máxima preserva sua própria posição');
     cc(46, 127);
     window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
     assert.equal(player.ccMappingOptions.get('module:1').inverted, false);
-    assert.equal(player.ccMappingOptions.get('module:1').limitPercent, 76.4);
+    assert.equal(player.ccMappingOptions.get('module:1').minimumPercent, 20);
+    assert.equal(player.ccMappingOptions.get('module:1').maximumPercent, 76.4);
     cc(46, 127);
     assert(Math.abs(player.faders.get(1).getValueDb() - (-5.1)) < 0.11,
       '100% físico respeita o limite configurado abaixo do novo teto de 0 dB');
+    cc(46, 0);
+    const mappedMinimumDb = player.faders.get(1).getValueDb();
+    assert(mappedMinimumDb > -90 && mappedMinimumDb < -5.1,
+      '0% físico respeita o novo limite mínimo em vez de cair no fundo do fader');
 
     player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, moduleFader);
     window.document.querySelector('[data-modal-action="toggle-cc-invert"]').click();
@@ -556,14 +600,17 @@ try {
     assert(Math.abs(player.faders.get(1).getValueDb() - (-5.1)) < 0.11,
       'Inverter troca o sentido e mantém o mesmo limite');
     cc(46, 127);
-    assert.equal(player.faders.get(1).getValueDb(), -90, 'fim invertido chega ao mínimo do fader');
+    assert(Math.abs(player.faders.get(1).getValueDb() - mappedMinimumDb) < 0.01,
+      'fim invertido chega ao limite mínimo configurado');
     const curveBackup = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
     player.ccMappingOptions.clear();
     player.applySavedPlayerState(curveBackup);
     assert.equal(player.ccMappingOptions.get('module:1').inverted, true,
       'inversão sobrevive ao backup');
-    assert.equal(player.ccMappingOptions.get('module:1').limitPercent, 76.4,
-      'limite sobrevive ao backup');
+    assert.equal(player.ccMappingOptions.get('module:1').minimumPercent, 20,
+      'limite mínimo sobrevive ao backup');
+    assert.equal(player.ccMappingOptions.get('module:1').maximumPercent, 76.4,
+      'limite máximo sobrevive ao backup');
 
     player.openCcLearn({ kind: 'module-power', moduleNumber: 1 }, root.querySelector('[data-action="toggle-module"][data-module="1"]'));
     assert(!window.document.querySelector('[data-cc-limit]'), 'botões não recebem opções de curva contínua');
@@ -580,6 +627,24 @@ try {
       'limite do Cutoff é mostrado em frequência');
     player.closeModal();
   }
+
+  // A prévia do editor também usa o visual de pad, mas não é um dos 12 pads
+  // numerados. Atualizar o banco nunca pode transformar seu nome em Efeito NaN.
+  player.activeEffectBank = '2';
+  player.renderActiveEffectBank();
+  const firstEffect = root.querySelector(
+    '.performance-pad--effect[data-performance-kind="effect"][data-performance-value="1"]',
+  );
+  player.openEffectPadEditor(firstEffect);
+  const effectPreviewName = window.document.querySelector('.effect-pad-editor__preview-button span');
+  assert.equal(effectPreviewName.textContent.trim(), 'Efeito 1');
+  const effectVolume = window.document.querySelector('[data-effect-pad-volume]');
+  effectVolume.value = '-8';
+  effectVolume.dispatchEvent(new window.Event('input', { bubbles: true }));
+  player.renderActiveEffectBank();
+  assert.equal(effectPreviewName.textContent.trim(), 'Efeito 1', 'volume não renomeia a prévia para Efeito NaN');
+  player.closeModal();
+
   assert.equal(synthShortcut.textContent.trim(), 'Synth', 'alternar modo não muda o atalho frontal');
   player.openModal('module-settings', 8, master);
   useUserSettings();
@@ -1314,7 +1379,7 @@ try {
     player.onRootContextMenu({ target: bankButton('B'), preventDefault() {} });
     window.document.querySelector('[data-modal-action="open-bank-advanced"]').click();
     assert.deepEqual([...window.document.querySelectorAll('[data-bank-fader-mode]')].map(button => button.textContent.trim()),
-      ['Default', 'Master', 'Bank 1', 'Bank 2'], 'Advanced oferece os quatro modos de fader');
+      ['Default', 'Master', 'Bank'], 'Advanced oferece apenas Default, Master e Bank');
     window.document.querySelector('[data-bank-fader-mode="master"]').click();
     assert.equal(player.bankStates.get('B').faderMode, 'master');
     player.closeModal();
@@ -1325,50 +1390,40 @@ try {
 
     player.onRootContextMenu({ target: bankButton('B'), preventDefault() {} });
     window.document.querySelector('[data-modal-action="open-bank-advanced"]').click();
-    window.document.querySelector('[data-bank-fader-mode="bank"]').click();
+    window.document.querySelector('[data-bank-fader-mode="bank2"]').click();
     player.closeModal();
-    player.faders.get(1).setValueDb(-15, true);
+    assert.equal(player.bankStates.get('B').faderMode, 'bank2');
+    assert.equal(bankButton('B').dataset.bankModeLabel, 'Bank');
+    player.faders.get(1).setValueDb(-22, true);
+    const presetFiveVolume = player.bankStates.get('B').presets[4].modules[0].volumeDb;
     presetButton(5).click();
-    assert(Math.abs(player.faders.get(1).getValueDb() + 15) < 0.01,
-      'Bank 1 herda do Master e mantém o volume do fader ao trocar de preset');
+    assert(Math.abs(player.faders.get(1).getValueDb() - presetFiveVolume) < 0.01,
+      'Bank restaura o volume individual do preset de destino');
+    player.faders.get(1).setValueDb(-8, true);
     presetButton(6).click();
-    assert(Math.abs(player.faders.get(1).getValueDb() + 15) < 0.01,
-      'Bank 1 mantém o mesmo volume também ao retornar ao preset anterior');
+    assert(Math.abs(player.faders.get(1).getValueDb() + 22) < 0.01,
+      'Bank recupera o volume salvo no preset 6');
+    presetButton(5).click();
+    assert(Math.abs(player.faders.get(1).getValueDb() + 8) < 0.01,
+      'Bank recupera o volume salvo no preset 5');
+    presetButton(6).click();
     const bankFader = root.querySelector('[data-module-fader="1"] .player-module__fader-rail');
     player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, bankFader);
     player.handleMidiControlChange({ controller: 118, value: 127, channel: 1, inputId: 'bank-cc' });
     window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
     assert.equal(player.ccMappings.get('module-bank:B:6:1'), 118,
-      'Bank 1 grava o CC do fader no preset atual');
+      'Bank grava o CC do fader no preset atual');
     presetButton(5).click();
     player.openCcLearn({ kind: 'module-volume', moduleNumber: 1 }, bankFader);
     player.handleMidiControlChange({ controller: 118, value: 127, channel: 1, inputId: 'bank-cc' });
     window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
     assert.equal(player.ccMappings.get('module-bank:B:5:1'), 118,
-      'o mesmo CC pode ser remapeado no outro preset do modo Bank 1');
-
-    player.onRootContextMenu({ target: bankButton('B'), preventDefault() {} });
-    window.document.querySelector('[data-modal-action="open-bank-advanced"]').click();
-    window.document.querySelector('[data-bank-fader-mode="bank2"]').click();
-    player.closeModal();
-    assert.equal(player.bankStates.get('B').faderMode, 'bank2');
-    assert.equal(bankButton('B').dataset.bankModeLabel, 'Bank 2');
-    player.faders.get(1).setValueDb(-22, true);
-    const presetSixVolume = player.bankStates.get('B').presets[5].modules[0].volumeDb;
+      'o mesmo CC pode ser remapeado no outro preset do modo Bank');
     presetButton(6).click();
-    assert(Math.abs(player.faders.get(1).getValueDb() - presetSixVolume) < 0.01,
-      'Bank 2 restaura o volume individual do preset de destino');
-    player.faders.get(1).setValueDb(-8, true);
-    presetButton(5).click();
-    assert(Math.abs(player.faders.get(1).getValueDb() + 22) < 0.01,
-      'Bank 2 recupera o volume salvo no primeiro preset');
-    presetButton(6).click();
-    assert(Math.abs(player.faders.get(1).getValueDb() + 8) < 0.01,
-      'Bank 2 recupera o volume salvo no segundo preset');
     assert.equal(player.ccMappingKeyForTarget({ kind: 'module-volume', moduleNumber: 1 }), 'module-bank:B:6:1',
-      'Bank 2 mantém o Learn CC do fader individual por preset');
+      'Bank mantém o Learn CC do fader individual por preset');
     assert.equal(player.createSavedPlayerState().banks.B.faderMode, 'bank2',
-      'Bank 2 é preservado no estado salvo');
+      'Bank é preservado no estado salvo');
     player.onRootContextMenu({ target: bankButton('B'), preventDefault() {} });
     window.document.querySelector('[data-modal-action="open-bank-advanced"]').click();
     window.document.querySelector('[data-bank-fader-mode="default"]').click();
@@ -1618,6 +1673,31 @@ try {
   window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
   assert.equal(player.ccMappings.get('metronome:toggle'), 71);
   player.closeModal();
+
+  const tempoDecreaseButton = root.querySelector('[data-action="adjust-tempo"][data-tempo-step="-0.5"]');
+  const tempoIncreaseButton = root.querySelector('[data-action="adjust-tempo"][data-tempo-step="0.5"]');
+  context(tempoDecreaseButton);
+  assert.equal(player.pendingCcLearn.kind, 'tempo-adjust');
+  assert.equal(player.pendingCcLearn.direction, -1);
+  player.handleMidiControlChange({ channel: 1, controller: 72, inputId: 'test-midi', value: 127 });
+  window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+  assert.equal(player.ccMappings.get('metronome:decrease'), 72);
+  context(tempoIncreaseButton);
+  assert.equal(player.pendingCcLearn.kind, 'tempo-adjust');
+  assert.equal(player.pendingCcLearn.direction, 1);
+  player.handleMidiControlChange({ channel: 1, controller: 73, inputId: 'test-midi', value: 127 });
+  window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
+  assert.equal(player.ccMappings.get('metronome:increase'), 73);
+  player.metronome.setBpm(145);
+  player.handleMidiControlChange({ channel: 1, controller: 72, inputId: 'test-midi', value: 0 });
+  player.handleMidiControlChange({ channel: 1, controller: 72, inputId: 'test-midi', value: 127 });
+  assert.equal(player.metronome.getBpm(), 144.5, 'CC do botão menos diminui exatamente 0,5 BPM');
+  player.handleMidiControlChange({ channel: 1, controller: 72, inputId: 'test-midi', value: 127 });
+  assert.equal(player.metronome.getBpm(), 144.5, 'CC mantido pressionado não repete o botão menos');
+  player.handleMidiControlChange({ channel: 1, controller: 73, inputId: 'test-midi', value: 0 });
+  player.handleMidiControlChange({ channel: 1, controller: 73, inputId: 'test-midi', value: 127 });
+  assert.equal(player.metronome.getBpm(), 145, 'CC do botão mais aumenta exatamente 0,5 BPM');
+
   const midiToggle = value => player.handleMidiControlChange({ channel: 1, controller: 71, inputId: 'test-midi', value });
   const initialRunning = player.metronome.isRunning();
   midiToggle(0); midiToggle(127);
@@ -1628,6 +1708,8 @@ try {
   player.ccMappings.delete('metronome:toggle');
   player.applySavedPlayerState(mappingBackup);
   assert.equal(player.ccMappings.get('metronome:toggle'), 71, 'ON/OFF mapping survives backup restoration');
+  assert.equal(player.ccMappings.get('metronome:decrease'), 72, 'mapeamento do botão menos sobrevive ao backup');
+  assert.equal(player.ccMappings.get('metronome:increase'), 73, 'mapeamento do botão mais sobrevive ao backup');
 
   const tempoPointer = { target: tempoButton, isPrimary: true, pointerType: 'mouse', button: 0,
     pointerId: 30, clientX: 80, clientY: 200, timeStamp: 30000, preventDefault() {} };

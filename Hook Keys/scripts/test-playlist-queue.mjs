@@ -83,6 +83,102 @@ for (const [available, expectsPicker] of [[true, false], [false, true]]) {
 }
 console.log('ADD_MUSIC_PICKER_OK: seletor nativo no iOS, campo de arquivo nas outras plataformas');
 
+// Loops é uma playlist fixa do app e não abre edição nem exclusão.
+{
+  const host = window.document.createElement('div');
+  host.innerHTML = window.Tracks.createTracksSplitPanelMarkup();
+  window.document.body.append(host);
+  const library = {
+    list: async () => [], listPlaylists: async () => [], listBlocks: async () => [], getListLayout: async () => [],
+  };
+  const controller = new window.Tracks.TracksPanelController(host, library);
+  controller.mount();
+  await settle();
+  const loops = host.querySelector('[data-playlist-id="fixed:loops"]');
+  assert(loops, 'playlist fixa Loops sempre aparece');
+  loops.click();
+  await settle();
+  const fixedLoopNames = [...host.querySelectorAll('[data-tracks-library] [data-track-id] .track-name')]
+    .map(label => label.textContent.trim());
+  assert.deepEqual(fixedLoopNames, ['Beat 4/4', 'Beat 4/4 - 2', 'Beat 6/8'],
+    'loops fixos aparecem na ordem definida pelo app');
+  assert.deepEqual(
+    [...host.querySelectorAll('[data-tracks-library] [data-track-id]')]
+      .map(card => [...card.classList].find(name => name.startsWith('track-card--loop-'))),
+    ['track-card--loop-green', 'track-card--loop-blue', 'track-card--loop-orange'],
+    'Beat 4/4 fica verde, Beat 4/4 - 2 azul bebê e Beat 6/8 laranja',
+  );
+  assert.equal(host.querySelector('[data-tracks-action="toggle-edit"]').disabled, true, 'Loops não entra em edição');
+  assert.equal(host.querySelector('[data-tracks-action="add-bl"]').disabled, true, 'Loops não recebe blocos do usuário');
+  assert.equal(host.querySelector('[data-tracks-action="toggle-auto"]').disabled, true,
+    'Auto fica desativado na playlist fixa de loops');
+  assert.equal(host.querySelector('[data-tracks-action="toggle-loop"]').disabled, true,
+    'Repeat fica desativado na playlist fixa de loops');
+  controller.destroy();
+  host.remove();
+}
+console.log('FIXED_LOOPS_OK: playlist fixa, protegida e independente dos sets do usuário');
+
+// Ao criar playlist, o usuário escolhe Normal ou Loop antes do nome.
+{
+  const host = window.document.createElement('div');
+  host.innerHTML = window.Tracks.createTracksPanelMarkup()
+    + '<button type="button" data-tracks-action="create-playlist">Create playlist</button>';
+  window.document.body.append(host);
+  const library = {
+    list: async () => [], listPlaylists: async () => [], listBlocks: async () => [], getListLayout: async () => [],
+  };
+  const controller = new window.Tracks.TracksPanelController(host, library);
+  controller.mount();
+  await settle();
+  host.querySelector('[data-tracks-action="create-playlist"]').click();
+  assert(host.querySelector('[data-tracks-action="playlist-kind-normal"]'), 'oferece Normal Playlist');
+  const loopChoice = host.querySelector('[data-tracks-action="playlist-kind-loop"]');
+  assert(loopChoice, 'oferece Playlist de loop');
+  assert.match(host.querySelector('[data-playlist-editor]').textContent, /120 BPM.*pronta para loop/i);
+  loopChoice.click();
+  assert.equal(controller.draft.kind, 'loop', 'a escolha fica salva no rascunho da playlist');
+  controller.destroy();
+  host.remove();
+}
+console.log('LOOP_PLAYLIST_TYPE_OK: criação escolhe Normal ou Loop e orienta arquivos em 120 BPM');
+
+// Uma playlist de loop marca só suas próprias faixas para sincronizar em 120 BPM.
+{
+  const host = window.document.createElement('div');
+  host.innerHTML = window.Tracks.createTracksSplitPanelMarkup();
+  window.document.body.append(host);
+  const track = { id: 'beat', name: 'Beat', fileName: 'beat.mp3', mimeType: 'audio/mpeg', size: 1, addedAt: '' };
+  let selected = null;
+  const library = {
+    list: async () => [track],
+    listPlaylists: async () => [{ id: 'loop-set', name: 'Meu loop', trackIds: ['beat'], createdAt: '', updatedAt: '', kind: 'loop' }],
+    listBlocks: async () => [], getListLayout: async () => [],
+  };
+  const controller = new window.Tracks.TracksPanelController(host, library, {
+    onTrackSelected: trackToPlay => { selected = trackToPlay; },
+  });
+  controller.mount();
+  await settle();
+  host.querySelector('[data-playlist-id="loop-set"]').click();
+  assert.equal(host.querySelector('[data-tracks-action="toggle-auto"]').disabled, true,
+    'Auto fica desativado também numa playlist de loop criada pelo usuário');
+  assert.equal(host.querySelector('[data-tracks-action="toggle-loop"]').disabled, true,
+    'Repeat fica desativado também numa playlist de loop criada pelo usuário');
+  host.querySelector('[data-track-id="beat"]').click();
+  assert.equal(selected.loopSourceBpm, 120, 'faixa ganha sincronização dentro da playlist de loop');
+  host.querySelector('[data-tracks-action="show-all"]').click();
+  assert.equal(host.querySelector('[data-tracks-action="toggle-auto"]').disabled, false,
+    'Auto volta a ficar disponível fora das playlists de loop');
+  assert.equal(host.querySelector('[data-tracks-action="toggle-loop"]').disabled, false,
+    'Repeat volta a ficar disponível fora das playlists de loop');
+  host.querySelector('[data-track-id="beat"]').click();
+  assert.equal(selected.loopSourceBpm, undefined, 'a mesma música continua normal fora da playlist de loop');
+  controller.destroy();
+  host.remove();
+}
+console.log('LOOP_PLAYBACK_SCOPE_OK: mudança de BPM fica restrita às playlists de loop');
+
 // Delete All: em All apaga a biblioteca; numa playlist limpa só a associação.
 for (const scope of ['all', 'playlist']) {
   const host = window.document.createElement('div');

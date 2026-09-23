@@ -5,7 +5,6 @@ export interface AppSettingsResponse {
   ok: true;
   acquireLicenseUrl: string;
   compatibilityVideoUrl: string;
-  supportUrl: string;
 }
 
 export interface SoundCatalogResponse {

@@ -62,6 +62,8 @@ import java.util.concurrent.Executors;
 public class HookKeysNativePlugin extends Plugin {
     private static final int MIDI_SLOT_COUNT = 3;
     private static final int MODULE_COUNT = 8;
+    private static final int ROUTABLE_MIDI_INPUT_COUNT = 4 + MODULE_COUNT;
+    private static final int ALL_MIDI_INPUTS = 0xff;
 
     static {
         System.loadLibrary("hook_keys_native");
@@ -595,10 +597,14 @@ public class HookKeysNativePlugin extends Plugin {
             call.reject("Módulo inválido.");
             return;
         }
+        int requestedInputSlot = call.getInt("inputSlot", ALL_MIDI_INPUTS);
+        int inputSlot = requestedInputSlot >= 0 && requestedInputSlot < ROUTABLE_MIDI_INPUT_COUNT
+            ? requestedInputSlot
+            : ALL_MIDI_INPUTS;
         boolean ok = nativeConfigureModule(
             moduleIndex,
             call.getBoolean("enabled", true),
-            Math.max(0, Math.min(5, call.getInt("inputSlot", 3))),
+            inputSlot,
             Math.max(0, Math.min(127, call.getInt("lowNote", 0))),
             Math.max(0, Math.min(127, call.getInt("highNote", 127))),
             Math.max(-3, Math.min(3, call.getInt("octave", 0))),
@@ -708,8 +714,12 @@ public class HookKeysNativePlugin extends Plugin {
             call.getFloat("chorusRateHz", 0.6f),
             call.getFloat("chorusDepth", 0.5f),
             call.getFloat("chorusMix", 0.35f),
+            call.getBoolean("loFiEnabled", false),
+            call.getFloat("loFiBitDepth", 8.0f),
+            call.getFloat("loFiSampleRateHz", 12000.0f),
+            call.getFloat("loFiMix", 0.5f),
             call.getBoolean("autoFaderEnabled", false),
-            call.getFloat("autoFaderBeats", 1.0f),
+            call.getFloat("autoFaderBeats", 4.0f),
             call.getFloat("autoFaderDepthDb", 6.0f),
             call.getFloat("inputGainDb", 0.0f)
         );
@@ -818,7 +828,7 @@ public class HookKeysNativePlugin extends Plugin {
     @PluginMethod
     public void sendMidi(PluginCall call) {
         boolean ok = nativeSendMidi(
-            Math.max(0, Math.min(5, call.getInt("inputSlot", 0))),
+            Math.max(0, Math.min(ROUTABLE_MIDI_INPUT_COUNT - 1, call.getInt("inputSlot", 0))),
             call.getInt("status", 0),
             call.getInt("data1", 0),
             call.getInt("data2", 0),
@@ -879,14 +889,18 @@ public class HookKeysNativePlugin extends Plugin {
 
     @PluginMethod
     public void configureMetronome(PluginCall call) {
+        int denominator = call.getInt("timeSignatureDenominator", 4);
+        if (denominator != 2 && denominator != 4 && denominator != 8 && denominator != 16) denominator = 4;
         boolean ok = nativeConfigureMetronome(
             call.getBoolean("enabled", false),
             call.getFloat("bpm", 120.0f),
             Math.max(0.0f, Math.min(1.0f, call.getFloat("volume", 1.0f))),
-            Math.max(1, Math.min(3, call.getInt("clickSound", 1))),
+            Math.max(1, Math.min(4, call.getInt("clickSound", 1))),
             call.getBoolean("accentEnabled", false),
             call.getBoolean("doubleTimeEnabled", false),
-            Math.max(1, Math.min(16, call.getInt("timeSignatureNumerator", 4)))
+            Math.max(1, Math.min(16, call.getInt("timeSignatureNumerator", 4))),
+            denominator,
+            call.getBoolean("restart", false)
         );
         if (ok) call.resolve();
         else call.reject("O motor ainda não foi inicializado.");
@@ -1178,7 +1192,10 @@ public class HookKeysNativePlugin extends Plugin {
                 (type == 0xc0 || (type == 0xb0 &&
                  (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 || data1 == 16 ||
                   data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101)));
-            if (!blockedCompatibilityMessage) nativeSendMidi(inputSlot, status, data1, data2, timestamp);
+            boolean reservedPadNote = (type == 0x80 || type == 0x90) && (status & 0x0f) == 9;
+            if (!blockedCompatibilityMessage && !reservedPadNote) {
+                nativeSendMidi(inputSlot, status, data1, data2, timestamp);
+            }
             if (type == 0x80 || type == 0x90) {
                 JSObject event = new JSObject();
                 event.put("channel", (status & 0x0f) + 1);
@@ -1304,6 +1321,7 @@ public class HookKeysNativePlugin extends Plugin {
         float rotaryDepth, float rotaryMix, boolean rotaryModulationEnabled,
         boolean rotaryCabinetEnabled,
         boolean chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
+        boolean loFiEnabled, float loFiBitDepth, float loFiSampleRateHz, float loFiMix,
         boolean autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
         float inputGainDb
     );
@@ -1334,12 +1352,13 @@ public class HookKeysNativePlugin extends Plugin {
     private static native boolean nativeSetTempo(float bpm);
     private static native boolean nativeSetGlobalTranspose(int semitones);
     private static native boolean nativeConfigureTranceGate(int moduleIndex, boolean enabled, int steps,
-        int length, float beatMultiplier, float gate, float depth, float attackMs, float releaseMs, float swing);
+        int length, float beatMultiplier, float measureBeats, float gate, float depth, float attackMs, float releaseMs, float swing);
 
     @PluginMethod
     public void configureTranceGate(PluginCall call) {
         boolean ok = nativeConfigureTranceGate(call.getInt("moduleIndex", -1), call.getBoolean("enabled", false),
             call.getInt("steps", 65535), call.getInt("length", 16), call.getFloat("beatMultiplier", 0.25f),
+            call.getFloat("measureBeats", 0.0f),
             call.getFloat("gate", 0.5f), call.getFloat("depth", 1.0f), call.getFloat("attackMs", 3.0f),
             call.getFloat("releaseMs", 3.0f), call.getFloat("swing", 0.0f));
         if (ok) call.resolve(); else call.reject("Não foi possível configurar o Trance Gate.");
@@ -1347,7 +1366,8 @@ public class HookKeysNativePlugin extends Plugin {
     private static native boolean nativeSetMetronomeOutput(int channelStart, int channelCount);
     private static native boolean nativeConfigureMetronome(
         boolean enabled, float bpm, float volume, int clickSound,
-        boolean accentEnabled, boolean doubleTimeEnabled, int timeSignatureNumerator
+        boolean accentEnabled, boolean doubleTimeEnabled, int timeSignatureNumerator, int timeSignatureDenominator,
+        boolean restart
     );
     private static native boolean nativeSetOutputGain(
         float db, boolean enabled, int channelStart, int channelCount);

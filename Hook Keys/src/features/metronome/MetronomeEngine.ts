@@ -1,16 +1,18 @@
 import { hookKeysNative } from '../../platform/native/HookKeysNative';
 
-export type MetronomeClickSound = 1 | 2 | 3;
+export type MetronomeClickSound = 1 | 2 | 3 | 4;
 
 const MIN_BPM = 60;
-const MAX_BPM = 600;
+const MAX_BPM = 300;
 const BPM_STEP = 0.5;
 const LOOK_AHEAD_SECONDS = 0.75;
 const SCHEDULER_INTERVAL_MS = 20;
 
 export class MetronomeEngine {
   private audioContext: AudioContext | null = null;
-  private clickBuffers: Record<MetronomeClickSound, AudioBuffer> | null = null;
+  private clickBuffers: Record<1 | 2 | 3, AudioBuffer> | null = null;
+  private click4Buffer: AudioBuffer | null = null;
+  private click4Loading: Promise<AudioBuffer | null> | null = null;
   private masterGain: GainNode | null = null;
   private timer: number | null = null;
   private nextBeatTime = 0;
@@ -24,6 +26,7 @@ export class MetronomeEngine {
   private timeSignatureDenominator = 4;
   private beatIndex = 0;
   private running = false;
+  private loopClockActive = false;
   private nativeSyncTimer: number | null = null;
 
   constructor(private readonly onStateChanged: () => void = () => {}) {}
@@ -53,7 +56,7 @@ export class MetronomeEngine {
   setVolume(value: number): void {
     this.volume = Math.min(10 ** (12 / 20), Math.max(0, value));
     if (this.audioContext && this.masterGain) {
-      this.masterGain.gain.setTargetAtTime(this.volume, this.audioContext.currentTime, 0.008);
+      this.masterGain.gain.setTargetAtTime(this.audibleVolume(), this.audioContext.currentTime, 0.008);
     }
     this.scheduleNativeSync();
     this.onStateChanged();
@@ -61,7 +64,13 @@ export class MetronomeEngine {
 
   setClickSound(value: MetronomeClickSound): void {
     this.clickSound = value;
-    if (!this.running && !hookKeysNative.isAvailable()) this.previewClick();
+    if (value === 4 && !hookKeysNative.isAvailable()) {
+      void this.loadClick4Buffer().then((buffer) => {
+        if (buffer && this.clickSound === 4 && !this.clockActive()) this.previewClick();
+      });
+    } else if (!this.clockActive() && !hookKeysNative.isAvailable()) {
+      this.previewClick();
+    }
     this.scheduleNativeSync();
     this.onStateChanged();
   }
@@ -108,30 +117,55 @@ export class MetronomeEngine {
 
   start(): void {
     if (this.running) return;
-    if (hookKeysNative.isAvailable()) {
-      this.running = true;
-      this.beatIndex = 0;
+    this.running = true;
+    if (this.loopClockActive) {
+      this.applyWebVolume();
       this.scheduleNativeSync(true);
       this.onStateChanged();
       return;
     }
-    const context = this.getAudioContext();
-    void context.resume();
-    this.running = true;
-    this.beatIndex = 0;
-    this.nextBeatTime = context.currentTime + 0.03;
-    this.schedule();
-    this.timer = window.setInterval(() => this.schedule(), SCHEDULER_INTERVAL_MS);
+    if (hookKeysNative.isAvailable()) {
+      this.beatIndex = 0;
+      this.scheduleNativeSync(true, true);
+      this.onStateChanged();
+      return;
+    }
+    this.restartWebClock();
     this.onStateChanged();
   }
 
   stop(): void {
     if (!this.running) return;
     this.running = false;
+    if (this.loopClockActive) {
+      this.applyWebVolume();
+      this.scheduleNativeSync(true);
+      this.onStateChanged();
+      return;
+    }
+    this.stopClock();
+    this.onStateChanged();
+  }
+
+  setLoopPlaybackActive(active: boolean, restart = false): void {
+    if (this.loopClockActive === active && !(active && restart)) return;
+    this.loopClockActive = active;
+    if (active) {
+      if (hookKeysNative.isAvailable()) this.scheduleNativeSync(true, true);
+      else this.restartWebClock();
+    } else if (this.running) {
+      this.applyWebVolume();
+      this.scheduleNativeSync(true);
+    } else {
+      this.stopClock();
+    }
+    this.onStateChanged();
+  }
+
+  private stopClock(): void {
     if (this.timer !== null) window.clearInterval(this.timer);
     this.timer = null;
     this.scheduleNativeSync(true);
-    this.onStateChanged();
   }
 
   applySavedSettings(
@@ -146,6 +180,7 @@ export class MetronomeEngine {
     this.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(bpm / BPM_STEP) * BPM_STEP));
     this.volume = Math.min(10 ** (12 / 20), Math.max(0, volume));
     this.clickSound = clickSound;
+    if (clickSound === 4 && !hookKeysNative.isAvailable()) void this.loadClick4Buffer();
     this.accentEnabled = accentEnabled;
     this.doubleTimeEnabled = doubleTimeEnabled;
     this.timeSignatureNumerator = Math.min(16, Math.max(1, Math.round(numerator)));
@@ -153,7 +188,7 @@ export class MetronomeEngine {
       ? Math.round(denominator)
       : 4;
     if (this.audioContext && this.masterGain) {
-      this.masterGain.gain.setValueAtTime(this.volume, this.audioContext.currentTime);
+      this.masterGain.gain.setValueAtTime(this.audibleVolume(), this.audioContext.currentTime);
     }
     this.scheduleNativeSync();
     this.onStateChanged();
@@ -169,28 +204,52 @@ export class MetronomeEngine {
     if (this.audioContext) void this.audioContext.close();
     this.audioContext = null;
     this.clickBuffers = null;
+    this.click4Buffer = null;
+    this.click4Loading = null;
     this.masterGain = null;
   }
 
-  private scheduleNativeSync(immediate = false): void {
+  private scheduleNativeSync(immediate = false, restart = false): void {
     if (!hookKeysNative.isAvailable()) return;
     if (this.nativeSyncTimer !== null) window.clearTimeout(this.nativeSyncTimer);
     this.nativeSyncTimer = window.setTimeout(() => {
       this.nativeSyncTimer = null;
-      void hookKeysNative.configureMetronome(this.nativeConfig()).catch(() => undefined);
+      void hookKeysNative.configureMetronome(this.nativeConfig(undefined, restart)).catch(() => undefined);
     }, immediate ? 0 : 32);
   }
 
-  private nativeConfig(enabled = this.running) {
+  private nativeConfig(enabled = this.clockActive(), restart = false) {
     return {
       enabled,
       bpm: this.bpm,
-      volume: this.volume,
+      volume: this.audibleVolume(),
       clickSound: this.clickSound,
       accentEnabled: this.accentEnabled,
       doubleTimeEnabled: this.doubleTimeEnabled,
       timeSignatureNumerator: this.timeSignatureNumerator,
+      timeSignatureDenominator: this.timeSignatureDenominator,
+      restart,
     };
+  }
+
+  private clockActive(): boolean { return this.running || this.loopClockActive; }
+
+  private audibleVolume(): number { return this.running ? this.volume : 0; }
+
+  private applyWebVolume(): void {
+    if (this.audioContext && this.masterGain) {
+      this.masterGain.gain.setTargetAtTime(this.audibleVolume(), this.audioContext.currentTime, 0.008);
+    }
+  }
+
+  private restartWebClock(): void {
+    const context = this.getAudioContext();
+    void context.resume();
+    if (this.timer !== null) window.clearInterval(this.timer);
+    this.beatIndex = 0;
+    this.nextBeatTime = context.currentTime + 0.005;
+    this.schedule();
+    this.timer = window.setInterval(() => this.schedule(), SCHEDULER_INTERVAL_MS);
   }
 
   private previewClick(): void {
@@ -200,11 +259,12 @@ export class MetronomeEngine {
   }
 
   private schedule(): void {
-    if (!this.running) return;
+    if (!this.clockActive()) return;
     const context = this.getAudioContext();
     while (this.nextBeatTime < context.currentTime + LOOK_AHEAD_SECONDS) {
       this.createClick(this.nextBeatTime, this.accentEnabled && this.beatIndex === 0);
-      this.nextBeatTime += 60 / this.bpm / (this.doubleTimeEnabled ? 2 : 1);
+      this.nextBeatTime += 60 / this.bpm * (4 / this.timeSignatureDenominator)
+        / (this.doubleTimeEnabled ? 2 : 1);
       const beatsPerMeasure = this.timeSignatureNumerator * (this.doubleTimeEnabled ? 2 : 1);
       this.beatIndex = (this.beatIndex + 1) % beatsPerMeasure;
     }
@@ -214,7 +274,9 @@ export class MetronomeEngine {
     const context = this.getAudioContext();
     const source = context.createBufferSource();
     const gain = context.createGain();
-    source.buffer = this.getClickBuffers()[this.clickSound];
+    source.buffer = this.clickSound === 4
+      ? this.click4Buffer ?? this.getClickBuffers()[1]
+      : this.getClickBuffers()[this.clickSound];
     source.playbackRate.setValueAtTime(accented ? 1.28 : 1, at);
     gain.gain.setValueAtTime(accented ? 1.33 : 1, at);
     source.connect(gain).connect(this.getMasterGain());
@@ -225,7 +287,7 @@ export class MetronomeEngine {
     if (!this.audioContext) {
       this.audioContext = new AudioContext({ latencyHint: 'interactive' });
       this.masterGain = this.audioContext.createGain();
-      this.masterGain.gain.setValueAtTime(this.volume, this.audioContext.currentTime);
+      this.masterGain.gain.setValueAtTime(this.audibleVolume(), this.audioContext.currentTime);
       this.masterGain.connect(this.audioContext.destination);
     }
     return this.audioContext;
@@ -237,7 +299,7 @@ export class MetronomeEngine {
     return this.masterGain;
   }
 
-  private getClickBuffers(): Record<MetronomeClickSound, AudioBuffer> {
+  private getClickBuffers(): Record<1 | 2 | 3, AudioBuffer> {
     if (this.clickBuffers) return this.clickBuffers;
     const context = this.getAudioContext();
     this.clickBuffers = {
@@ -246,6 +308,26 @@ export class MetronomeEngine {
       3: createClickBuffer(context, 760, 0.072, 'triangle'),
     };
     return this.clickBuffers;
+  }
+
+  private loadClick4Buffer(): Promise<AudioBuffer | null> {
+    if (this.click4Buffer) return Promise.resolve(this.click4Buffer);
+    if (this.click4Loading) return this.click4Loading;
+    const context = this.getAudioContext();
+    const url = new URL('assets/loops/Click%204.wav', document.baseURI).toString();
+    this.click4Loading = fetch(url)
+      .then((response) => {
+        if (!response.ok) throw new Error(`click_4_http_${response.status}`);
+        return response.arrayBuffer();
+      })
+      .then((bytes) => context.decodeAudioData(bytes))
+      .then((buffer) => {
+        this.click4Buffer = buffer;
+        return buffer;
+      })
+      .catch(() => null)
+      .finally(() => { this.click4Loading = null; });
+    return this.click4Loading;
   }
 }
 

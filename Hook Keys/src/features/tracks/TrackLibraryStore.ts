@@ -1,3 +1,5 @@
+import { bundledLoopBlob } from './BundledLoops';
+
 export interface LocalTrack {
   id: string;
   name: string;
@@ -5,7 +7,13 @@ export interface LocalTrack {
   mimeType: string;
   size: number;
   addedAt: string;
+  fixedLoop?: true;
+  // Presente somente durante a reprodução por uma playlist de loop. O arquivo
+  // foi preparado neste BPM e acompanha o BPM global sem afetar músicas comuns.
+  loopSourceBpm?: number;
 }
+
+export type LocalPlaylistKind = 'normal' | 'loop';
 
 export interface LocalPlaylist {
   id: string;
@@ -13,6 +21,7 @@ export interface LocalPlaylist {
   trackIds: string[];
   createdAt: string;
   updatedAt: string;
+  kind: LocalPlaylistKind;
 }
 
 export interface LocalTrackBlock {
@@ -323,6 +332,8 @@ export class TrackLibraryStore {
   }
 
   async getFile(trackId: string): Promise<Blob | null> {
+    const bundledLoop = await bundledLoopBlob(trackId);
+    if (bundledLoop) return bundledLoop;
     const database = await this.openDatabase();
     const record = await requestResult<StoredLocalTrack | undefined>(
       database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(trackId),
@@ -341,12 +352,17 @@ export class TrackLibraryStore {
     return records
       .filter((playlist) => playlist.accountKey === this.accountKey)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-      .map(({ id, name, trackIds, createdAt, updatedAt }) => ({
+      .map(({ id, name, trackIds, createdAt, updatedAt, kind }) => ({
         id, name, trackIds: [...trackIds], createdAt, updatedAt,
+        kind: kind === 'loop' ? 'loop' : 'normal',
       }));
   }
 
-  async createPlaylist(name: string, trackIds: readonly string[]): Promise<LocalPlaylist> {
+  async createPlaylist(
+    name: string,
+    trackIds: readonly string[],
+    kind: LocalPlaylistKind = 'normal',
+  ): Promise<LocalPlaylist> {
     const now = new Date().toISOString();
     const playlist: StoredLocalPlaylist = {
       id: createId('playlist'),
@@ -355,12 +371,18 @@ export class TrackLibraryStore {
       trackIds: uniqueTrackIds(trackIds),
       createdAt: now,
       updatedAt: now,
+      kind,
     };
     await this.putPlaylist(playlist);
     return playlist;
   }
 
-  async updatePlaylist(id: string, name: string, trackIds: readonly string[]): Promise<LocalPlaylist> {
+  async updatePlaylist(
+    id: string,
+    name: string,
+    trackIds: readonly string[],
+    kind: LocalPlaylistKind = 'normal',
+  ): Promise<LocalPlaylist> {
     const playlists = await this.listPlaylists();
     const current = playlists.find((playlist) => playlist.id === id);
     if (!current) throw new Error('playlist_not_found');
@@ -370,6 +392,7 @@ export class TrackLibraryStore {
       name: normalizePlaylistName(name),
       trackIds: uniqueTrackIds(trackIds),
       updatedAt: new Date().toISOString(),
+      kind,
     };
     await this.putPlaylist(playlist);
     return playlist;

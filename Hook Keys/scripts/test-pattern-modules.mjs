@@ -50,6 +50,39 @@ test('arpeggiator settings are normalized, and the old step sequencer is gone', 
   assert.equal(views.createSequencerMarkup, undefined);
 });
 
+test('Auto Fader uses 1/1 as the slower cycle and 1/2 as the faster cycle', () => {
+  assert.equal(views.readArpeggiatorSettings(undefined).autoFaderDivision, '1/1');
+  assert.equal(views.readArpeggiatorSettings({ autoFaderDivision: '1/2' }).autoFaderDivision, '1/2');
+  assert.equal(views.autoFaderCycleBeats(4, 4, '1/1'), 4);
+  assert.equal(views.autoFaderCycleBeats(4, 4, '1/2'), 2);
+  assert.equal(views.autoFaderCycleBeats(6, 8, '1/1'), 3);
+  assert.equal(views.autoFaderCycleBeats(6, 8, '1/2'), 1.5);
+  assert.equal(views.patternStepsPerMeasure(4, 4, '1/16'), 16);
+  assert.equal(views.patternStepsPerMeasure(6, 8, '1/16'), 12);
+  const markup = views.createArpeggiatorMarkup({ autoFaderDivision: '1/1' });
+  assert.match(markup, /data-arpeggiator-auto-fader="1\/1"[^>]*class="[^"]*auto-fader-choice--green[^"]*is-selected"/);
+  assert.match(markup, /data-arpeggiator-auto-fader="1\/2"/);
+  assert.match(markup, /auto-fader-choice--blue/);
+  assert.doesNotMatch(markup, /data-arpeggiator-auto-fader="(?:4\/4|6\/8)"/);
+  assert.doesNotMatch(markup, /data-arpeggiator-auto-fader="1\/4"/);
+
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  assert.match(player, /autoFaderEnabled:\s*arpeggiatorSettings\.enabled\s*&&\s*autoFader\.enabled/,
+    'Auto Fader só chega ligado ao DSP quando o Arpeggiator também está ligado');
+  assert.match(player, /autoFaderBeats:\s*autoFaderCycleBeats\([\s\S]*getTimeSignatureNumerator\(\)[\s\S]*getTimeSignatureDenominator\(\)[\s\S]*autoFader\.division/);
+  assert.match(player, /measureBeats:\s*gate\.sync[\s\S]*getTimeSignatureNumerator\(\)\s*\*\s*4\s*\/\s*this\.metronome\.getTimeSignatureDenominator\(\)/,
+    'Pulse em Sync recebe o mesmo compasso global do metrônomo');
+  const dspTypes = readFileSync(new URL('../native-engine/include/hook_keys/DspTypes.hpp', import.meta.url), 'utf8');
+  assert.match(dspTypes, /beats = std::clamp\(beats, 0\.25f, 16\.0f\)/,
+    'the native engine must preserve 4, 3 and 1.5 beats instead of forcing every cycle to 2');
+  const engine = readFileSync(new URL('../native-engine/src/ModuleEffects.cpp', import.meta.url), 'utf8');
+  assert.match(engine, /cycleSeconds[^;]+fader\.beats/);
+  assert.match(engine, /0\.5 - 0\.5 \* std::cos/,
+    'the cosine crosses between its extremes in half of the complete cycle');
+  assert.match(engine, /gateMeasurePhaseSamples_[\s\S]*gateStep_ = 0/,
+    'Pulse reinicia o desenho ao completar o compasso selecionado');
+});
+
 test('division clock keeps swing pairs at the same total duration', () => {
   const straight = views.patternStepMilliseconds(120, '1/16', 0, 0);
   const long = views.patternStepMilliseconds(120, '1/16', 50, 0);
@@ -89,6 +122,7 @@ test('every module runs its own independent Arpeggiator, each on its own engine 
     bpm: 120,
     arpeggiator: {
       moduleEnabled: true, hasSound: true, midiInputId: null, lowNote: 0, highNote: 127,
+      sustainEnabled: true,
       settings: { enabled: true, mode: 'up', division: '1/16', octaves: 1, gate: 70, swing: 0 },
     },
   };
@@ -111,15 +145,79 @@ test('every module runs its own independent Arpeggiator, each on its own engine 
   controller.destroy();
 });
 
-test('arpeggiator follows physical key-up and the pedal holds it like any module', () => {
+test('arpeggiator receives the whole chord immediately and the pedal sustains its source notes', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  // O pedal voltou a valer no arpeggiator: pisado, ele segura as teclas e a
-  // frase continua. Quem nao quiser desliga no botao Sustain do modulo.
-  assert.match(player, /sustain: moduleState\?\.sustainInputEnabled \?\? true,/,
-    'the pedal reaches the arpeggiator through the module Sustain switch');
+  assert.match(player, /sustainEnabled: arpeggiator\?\.sustainInputEnabled \?\? true/);
+  assert.match(player, /input\.controller === 64[\s\S]+patternPlayback\.handleSustain/,
+    'CC64 reaches the arpeggiator chord controller');
   assert.match(player, /inputSlot:\s*patternInputSlot \?\?/,
     'enabled arpeggiator must receive only its generated note stream');
-  const playback = readFileSync(new URL('../src/features/player/PatternPlaybackController.ts', import.meta.url), 'utf8');
-  assert.match(playback, /if \(existing >= 0\) state\.held\.splice\(existing, 1\);\s*if \(state\.held\.length === 0\) this\.stop\(moduleNumber, false\);/,
-    'physical Note Off must stop the arpeggio as soon as the final key is released');
+  const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
+  assert.match(android, /ROUTABLE_MIDI_INPUT_COUNT = 4 \+ MODULE_COUNT/);
+  assert.match(android, /Math\.min\(ROUTABLE_MIDI_INPUT_COUNT - 1, call\.getInt\("inputSlot"/);
+  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
+  assert.match(ios, /kRoutableMidiInputCount - 1/,
+    'mobile bridges preserve every independent arpeggiator slot instead of collapsing modules together');
+  for (const path of ['../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp']) {
+    assert.match(readFileSync(new URL(path, import.meta.url), 'utf8'), /kRoutableMidiInputCount/,
+      `${path} must preserve every independent arpeggiator slot`);
+  }
+
+  let timerId = 0;
+  const timers = new Map();
+  const fakeWindow = {
+    setTimeout(callback) {
+      timerId += 1;
+      timers.set(timerId, callback);
+      return timerId;
+    },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  const playback = transpile(
+    '../src/features/player/PatternPlaybackController.ts',
+    (specifier) => specifier === './PatternModulesView' ? views : {},
+    { window: fakeWindow, Math },
+  );
+  const activeSnapshot = {
+    bpm: 120,
+    arpeggiator: {
+      moduleEnabled: true, hasSound: true, midiInputId: 'keyboard', lowNote: 0, highNote: 127,
+      sustainEnabled: true,
+      settings: { enabled: true, mode: 'up', division: '1/16', octaves: 1, gate: 70, swing: 0 },
+    },
+  };
+  const inactiveSnapshot = {
+    ...activeSnapshot,
+    arpeggiator: { ...activeSnapshot.arpeggiator, moduleEnabled: false },
+  };
+  const sent = [];
+  const controller = new playback.PatternPlaybackController(
+    (moduleNumber) => moduleNumber === 1 ? activeSnapshot : inactiveSnapshot,
+    (moduleNumber, slot, status, note, velocity) => sent.push([moduleNumber, slot, status, note, velocity]),
+  );
+  const note = (noteNumber, pressed, velocity = 100) => controller.handleInput({
+    channel: 1, inputId: 'keyboard', noteNumber, pressed, velocity,
+  });
+
+  note(60, true);
+  note(64, true);
+  note(67, true);
+  const scheduledStep = controller.states[0].timer;
+  assert.notEqual(scheduledStep, null);
+  timers.get(scheduledStep)();
+  const noteOns = sent.filter(([, , status]) => status === 0x90);
+  assert.deepEqual(noteOns.map(([, , , midiNote]) => midiNote), [60, 64],
+    'the second arpeggio step uses the second chord note instead of repeating the first');
+
+  controller.handleSustain('keyboard', 1, true);
+  note(60, false, 0);
+  note(64, false, 0);
+  note(67, false, 0);
+  assert.equal(controller.states[0].held.length, 3,
+    'released keys remain available while CC64 is down');
+  assert.notEqual(controller.states[0].timer, null, 'the phrase keeps running under the pedal');
+  controller.handleSustain('keyboard', 1, false);
+  assert.equal(controller.states[0].held.length, 0);
+  assert.equal(controller.states[0].timer, null, 'pedal-up stops after the last physical key was released');
+  controller.destroy();
 });

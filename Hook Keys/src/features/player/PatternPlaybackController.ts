@@ -1,5 +1,6 @@
 import {
   patternStepMilliseconds,
+  patternStepsPerMeasure,
   readArpeggiatorSettings,
   type ArpeggiatorSettings,
 } from './PatternModulesView';
@@ -15,6 +16,7 @@ export function arpeggiatorInputSlotForModule(moduleNumber: number): number {
 }
 
 export interface PatternInput {
+  channel?: number;
   inputId: string | null;
   noteNumber: number;
   pressed: boolean;
@@ -23,21 +25,26 @@ export interface PatternInput {
 
 export interface PatternPlaybackSnapshot {
   bpm: number;
+  timeSignatureNumerator: number;
+  timeSignatureDenominator: number;
   arpeggiator: {
     moduleEnabled: boolean;
     hasSound: boolean;
     midiInputId: string | null;
     lowNote: number;
     highNote: number;
+    sustainEnabled: boolean;
     settings: unknown;
   };
 }
 
 interface HeldNote {
+  channel: number;
   inputId: string | null;
   noteNumber: number;
   velocity: number;
   order: number;
+  released: boolean;
 }
 
 interface PlaybackState {
@@ -51,6 +58,7 @@ interface PlaybackState {
 
 export class PatternPlaybackController {
   private order = 0;
+  private readonly sustainInputs = new Set<string>();
   private readonly states: PlaybackState[] = Array.from({ length: MODULE_COUNT }, createPlaybackState);
 
   constructor(
@@ -67,17 +75,41 @@ export class PatternPlaybackController {
     }
   }
 
+  handleSustain(inputId: string | null, channel: number, down: boolean): void {
+    const key = sustainKey(inputId, channel);
+    if (down) this.sustainInputs.add(key);
+    else this.sustainInputs.delete(key);
+    if (down) return;
+    for (let moduleNumber = 1; moduleNumber <= MODULE_COUNT; moduleNumber += 1) {
+      const config = this.snapshot(moduleNumber).arpeggiator;
+      const state = this.states[moduleNumber - 1];
+      if (!state || !acceptsInput(config.midiInputId, inputId)) continue;
+      state.held = state.held.filter((note) => (
+        !note.released || sustainKey(note.inputId, note.channel) !== key
+      ));
+      if (state.held.length === 0) this.stop(moduleNumber, false);
+    }
+  }
+
   settingsChanged(): void {
     for (let moduleNumber = 1; moduleNumber <= MODULE_COUNT; moduleNumber += 1) {
       const state = this.states[moduleNumber - 1];
       if (!state) continue;
-      const active = isArpeggiatorActive(this.snapshot(moduleNumber));
+      const snapshot = this.snapshot(moduleNumber);
+      const active = isArpeggiatorActive(snapshot);
+      // Se o sustain for desligado enquanto o pedal segura notas já soltas,
+      // descarte-as imediatamente e mantenha apenas as teclas ainda pressionadas.
+      if (!snapshot.arpeggiator.sustainEnabled) {
+        state.held = state.held.filter((note) => !note.released);
+      }
       if (!active) this.stop(moduleNumber, true);
+      else if (state.held.length === 0) this.stop(moduleNumber, false);
       else if (state.held.length > 0 && state.timer === null) this.tick(moduleNumber);
     }
   }
 
   reset(): void {
+    this.sustainInputs.clear();
     for (let moduleNumber = 1; moduleNumber <= MODULE_COUNT; moduleNumber += 1) this.stop(moduleNumber, true);
   }
 
@@ -94,14 +126,18 @@ export class PatternPlaybackController {
       return;
     }
     if (!acceptsInput(config.midiInputId, input.inputId)) return;
-    const existing = state.held.findIndex((held) => held.noteNumber === input.noteNumber && held.inputId === input.inputId);
+    const channel = normalizeChannel(input.channel);
+    const existing = state.held.findIndex((held) => held.noteNumber === input.noteNumber
+      && held.inputId === input.inputId && held.channel === channel);
     if (input.pressed) {
       if (input.noteNumber < config.lowNote || input.noteNumber > config.highNote) return;
       const note: HeldNote = {
+        channel,
         inputId: input.inputId,
         noteNumber: clampMidi(input.noteNumber),
         velocity: Math.min(127, Math.max(1, Math.round(input.velocity))),
         order: ++this.order,
+        released: false,
       };
       if (existing >= 0) state.held.splice(existing, 1);
       state.held.push(note);
@@ -111,7 +147,12 @@ export class PatternPlaybackController {
       }
       return;
     }
-    if (existing >= 0) state.held.splice(existing, 1);
+    if (existing >= 0) {
+      const held = state.held[existing];
+      const pedalDown = held && this.sustainInputs.has(sustainKey(held.inputId, held.channel));
+      if (config.sustainEnabled && pedalDown && held) held.released = true;
+      else state.held.splice(existing, 1);
+    }
     if (state.held.length === 0) this.stop(moduleNumber, false);
   }
 
@@ -137,7 +178,14 @@ export class PatternPlaybackController {
     }
     this.pulse(moduleNumber, state.step % Math.max(1, notes.length));
     const duration = patternStepMilliseconds(snapshot.bpm, settings.division, settings.swing, state.step);
-    state.step = (state.step + 1) % Math.max(1, notes.length);
+    // Não faça módulo pelo tamanho momentâneo do acorde. Eventos MIDI do mesmo
+    // acorde chegam em sequência; reduzir 1 % 1 a zero repetia a primeira nota
+    // e atrasava a entrada das demais por um passo inteiro.
+    state.step = (state.step + 1) % patternStepsPerMeasure(
+      snapshot.timeSignatureNumerator,
+      snapshot.timeSignatureDenominator,
+      settings.division,
+    );
     this.scheduleNext(moduleNumber, duration);
   }
 
@@ -226,4 +274,12 @@ function velocityForNote(held: readonly HeldNote[], target: number): number {
 
 function clampMidi(note: number): number {
   return Math.min(127, Math.max(0, Math.round(note)));
+}
+
+function normalizeChannel(channel: number | undefined): number {
+  return Math.min(16, Math.max(1, Math.round(channel ?? 1)));
+}
+
+function sustainKey(inputId: string | null, channel: number): string {
+  return `${inputId ?? 'virtual'}:${normalizeChannel(channel)}`;
 }

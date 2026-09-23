@@ -6,17 +6,30 @@ import {
 import {
   TrackLibraryStore,
   type LocalPlaylist,
+  type LocalPlaylistKind,
   type LocalTrack,
   type LocalTrackBlock,
 } from './TrackLibraryStore';
 import type { TrackPlaybackSnapshot } from './TrackTransport';
 import { Capacitor } from '@capacitor/core';
 import { isDesktopRuntime } from '../../platform/runtime';
+import {
+  BUNDLED_LOOP_TRACKS,
+  FIXED_LOOPS_PLAYLIST,
+  isBundledLoopTrack,
+  isFixedLoopsPlaylist,
+} from './BundledLoops';
+
+const BUNDLED_LOOP_CARD_CLASSES = new Map(BUNDLED_LOOP_TRACKS.map((track, index) => [
+  track.id,
+  ['track-card--loop-green', 'track-card--loop-blue', 'track-card--loop-orange'][index] ?? '',
+]));
 
 interface PlaylistDraft {
   id: string | null;
   name: string;
   trackIds: Set<string>;
+  kind: LocalPlaylistKind;
 }
 
 interface HoldGesture {
@@ -242,7 +255,7 @@ export class TracksPanelController {
       if (this.editMode && this.root.matches('.tracks-split-panel')) return;
       const track = this.tracks.find(({ id }) => id === trackButton.dataset.trackId);
       if (!track) return;
-      this.options.onTrackSelected?.(track);
+      this.options.onTrackSelected?.(this.asPlaybackTrack(track));
       return;
     }
 
@@ -253,9 +266,15 @@ export class TracksPanelController {
         return;
       }
       this.activePlaylistId = playlistButton.dataset.playlistId ?? null;
+      this.disableNormalPlaybackModesForLoopPlaylist();
+      if (isFixedLoopsPlaylist(this.activePlaylistId)) {
+        this.editMode = false;
+        this.root.classList.remove('is-track-editing');
+      }
       this.setSetMenuOpen(false);
       this.renderLibrary();
       this.renderPlaylists();
+      this.renderSplitControlState();
       return;
     }
 
@@ -268,25 +287,33 @@ export class TracksPanelController {
     } else if (action === 'delete-all') {
       this.renderDeleteAllConfirmation();
     } else if (action === 'create-playlist') {
-      this.openNameEditor(null);
+      this.openPlaylistTypeSelector();
+    } else if (action === 'playlist-kind-normal') {
+      this.openNameEditor(null, 'normal');
+    } else if (action === 'playlist-kind-loop') {
+      this.openNameEditor(null, 'loop');
     } else if (action === 'show-all') {
       this.activePlaylistId = null;
       this.setSetMenuOpen(false);
       this.renderLibrary();
       this.renderPlaylists();
+      this.renderSplitControlState();
     } else if (action === 'toggle-set-menu') {
       this.setSetMenuOpen(!this.setMenuOpen);
     } else if (action === 'add-bl') {
       void this.addBlock();
     } else if (action === 'toggle-loop') {
+      if (this.activePlaylistIsLoop()) return;
       this.loopEnabled = !this.loopEnabled;
       this.renderSplitControlState();
       this.options.onLoopEnabledChanged?.(this.loopEnabled);
     } else if (action === 'toggle-auto') {
+      if (this.activePlaylistIsLoop()) return;
       this.autoEnabled = !this.autoEnabled;
       this.renderSplitControlState();
       this.options.onAutoEnabledChanged?.(this.autoEnabled);
     } else if (action === 'toggle-edit') {
+      if (isFixedLoopsPlaylist(this.activePlaylistId)) return;
       this.editMode = !this.editMode;
       this.root.classList.toggle('is-track-editing', this.editMode);
       this.renderSplitControlState();
@@ -365,15 +392,16 @@ export class TracksPanelController {
     const block = target instanceof Element
       ? target.closest<HTMLElement>('.track-block[data-list-item-id]')
       : null;
-    const holdTarget = button ?? block;
+    const editableButton = button && !isFixedLoopsPlaylist(button.dataset.playlistId) ? button : null;
+    const holdTarget = editableButton ?? block;
     if (!holdTarget) return;
     if (isDesktopRuntime()) return;
     this.clearHoldGesture();
     const timer = window.setTimeout(() => {
       this.holdGesture = null;
-      if (button) {
+      if (editableButton) {
         this.suppressNextPlaylistClick = true;
-        const id = button.dataset.playlistId;
+        const id = editableButton.dataset.playlistId;
         if (id) this.openPlaylistManager(id);
         return;
       }
@@ -399,6 +427,7 @@ export class TracksPanelController {
       if (!id) return;
       event.preventDefault();
       event.stopPropagation();
+      if (isFixedLoopsPlaylist(id)) return;
       this.clearHoldGesture();
       this.openPlaylistManager(id);
       return;
@@ -468,13 +497,16 @@ export class TracksPanelController {
       const trackIds = orderedIds.filter((itemId) => this.tracks.some((track) => track.id === itemId));
       if (this.activePlaylistId) {
         const playlist = this.playlists.find(({ id }) => id === this.activePlaylistId);
-        if (!playlist) return;
-        const updated = await this.library.updatePlaylist(playlist.id, playlist.name, trackIds);
+        if (!playlist || isFixedLoopsPlaylist(playlist.id)) return;
+        const updated = await this.library.updatePlaylist(playlist.id, playlist.name, trackIds, playlist.kind);
         this.playlists = this.playlists.map((item) => item.id === updated.id ? updated : item);
       } else {
         await this.library.saveTrackOrder(trackIds);
         const byId = new Map(this.tracks.map((track) => [track.id, track]));
-        this.tracks = trackIds.map((trackId) => byId.get(trackId)).filter((track): track is LocalTrack => Boolean(track));
+        this.tracks = [
+          ...trackIds.map((trackId) => byId.get(trackId)).filter((track): track is LocalTrack => Boolean(track)),
+          ...this.tracks.filter(isBundledLoopTrack),
+        ];
       }
       await this.library.saveListLayout(scopeId, orderedIds);
       const orderedBlocks = await this.library.saveBlockOrder(scopeId, orderedIds);
@@ -525,15 +557,17 @@ export class TracksPanelController {
 
   private async refresh(): Promise<void> {
     try {
-      [this.tracks, this.playlists] = await Promise.all([
+      const [localTracks, userPlaylists] = await Promise.all([
         this.library.list(),
         this.library.listPlaylists(),
       ]);
+      this.tracks = [...localTracks, ...BUNDLED_LOOP_TRACKS];
+      this.playlists = [FIXED_LOOPS_PLAYLIST, ...userPlaylists];
       if (!this.root.isConnected) return;
       if (this.activePlaylistId && !this.playlists.some(({ id }) => id === this.activePlaylistId)) {
         this.activePlaylistId = null;
       }
-      const scopes = ['all', ...this.playlists.map(({ id }) => id)];
+      const scopes = ['all', ...userPlaylists.map(({ id }) => id)];
       const storedLists = await Promise.all(scopes.map(async (scopeId) => ({
         scopeId,
         blocks: await this.library.listBlocks(scopeId),
@@ -545,6 +579,8 @@ export class TracksPanelController {
         this.blocksByScope.set(scopeId, blocks);
         this.layoutsByScope.set(scopeId, layout);
       });
+      this.blocksByScope.set(FIXED_LOOPS_PLAYLIST.id, []);
+      this.layoutsByScope.set(FIXED_LOOPS_PLAYLIST.id, []);
       if (!this.root.isConnected) return;
       this.renderPlaylists();
       this.renderSplitControlState();
@@ -589,18 +625,19 @@ export class TracksPanelController {
       ? active.trackIds
         .map((trackId) => this.tracks.find(({ id }) => id === trackId))
         .filter((track): track is LocalTrack => Boolean(track))
-      : this.tracks;
-    this.syncDeleteAllButton(visibleTracks.length === 0);
+      : this.tracks.filter((track) => !isBundledLoopTrack(track));
+    this.syncDeleteAllButton(visibleTracks.length === 0 || isFixedLoopsPlaylist(this.activePlaylistId));
     const visibleItems = this.orderVisibleItems(visibleTracks);
     const orderedTracks = visibleItems
       .filter((item): item is Extract<TrackListItem, { kind: 'track' }> => item.kind === 'track')
-      .map(({ track }) => track);
+      .map(({ track }) => this.asPlaybackTrack(track));
     this.options.onVisibleTracksChanged?.(orderedTracks);
     if (visibleItems.length === 0) {
       grid.innerHTML = `<p class="tracks-library-grid__empty">${active ? 'Esta playlist ainda não possui músicas.' : 'Nenhuma música adicionada.'}</p>`;
       return;
     }
-    grid.classList.toggle('is-editing', this.editMode && this.root.matches('.tracks-split-panel'));
+    grid.classList.toggle('is-editing', this.editMode && !isFixedLoopsPlaylist(this.activePlaylistId)
+      && this.root.matches('.tracks-split-panel'));
     const showListNumbers = this.root.matches('.tracks-split-panel');
     let musicNumber = 0;
     const fresh: HTMLElement[] = [];
@@ -682,6 +719,7 @@ export class TracksPanelController {
   }
 
   private async addBlock(): Promise<void> {
+    if (isFixedLoopsPlaylist(this.activePlaylistId)) return;
     const scopeId = this.activeScopeId();
     const button = this.root.querySelector<HTMLButtonElement>('[data-tracks-action="add-bl"]');
     if (button) button.disabled = true;
@@ -691,7 +729,7 @@ export class TracksPanelController {
           ? (this.playlists.find(({ id }) => id === this.activePlaylistId)?.trackIds ?? [])
             .map((trackId) => this.tracks.find(({ id }) => id === trackId))
             .filter((track): track is LocalTrack => Boolean(track))
-          : this.tracks,
+          : this.tracks.filter((track) => !isBundledLoopTrack(track)),
       );
       const block = await this.library.addBlock(scopeId);
       const previousBlocks = this.blocksByScope.get(scopeId) ?? [];
@@ -725,6 +763,22 @@ export class TracksPanelController {
       if (!button) continue;
       button.classList.toggle('is-selected', selected);
       button.setAttribute('aria-pressed', String(selected));
+    }
+    const fixedLoops = isFixedLoopsPlaylist(this.activePlaylistId);
+    const loopPlaylist = this.activePlaylistIsLoop();
+    const loopButton = this.root.querySelector<HTMLButtonElement>('[data-tracks-action="toggle-loop"]');
+    if (loopButton) {
+      loopButton.disabled = loopPlaylist;
+      loopButton.setAttribute('aria-disabled', String(loopPlaylist));
+    }
+    const autoButton = this.root.querySelector<HTMLButtonElement>('[data-tracks-action="toggle-auto"]');
+    if (autoButton) {
+      autoButton.disabled = loopPlaylist;
+      autoButton.setAttribute('aria-disabled', String(loopPlaylist));
+    }
+    for (const action of ['add-bl', 'toggle-edit']) {
+      const button = this.root.querySelector<HTMLButtonElement>(`[data-tracks-action="${action}"]`);
+      if (button) button.disabled = fixedLoops;
     }
   }
 
@@ -787,14 +841,38 @@ export class TracksPanelController {
     }
   }
 
-  private openNameEditor(playlistId: string | null): void {
+  private openNameEditor(playlistId: string | null, requestedKind?: LocalPlaylistKind): void {
     const playlist = playlistId ? this.playlists.find(({ id }) => id === playlistId) : null;
     this.draft = {
       id: playlist?.id ?? null,
       name: playlist?.name ?? '',
       trackIds: new Set(playlist?.trackIds ?? []),
+      kind: requestedKind ?? playlist?.kind ?? 'normal',
     };
     this.renderNameEditor();
+  }
+
+  private openPlaylistTypeSelector(): void {
+    this.draft = null;
+    const editor = this.getEditor();
+    editor.hidden = false;
+    editor.innerHTML = `
+      <div class="tracks-playlist-kind-stage">
+        <header><span>Nova playlist</span><strong>Escolha o tipo</strong></header>
+        <div class="tracks-playlist-kind-options">
+          <button type="button" data-tracks-action="playlist-kind-normal">
+            <strong>Normal Playlist</strong><span>Músicas na velocidade original</span>
+          </button>
+          <button type="button" data-tracks-action="playlist-kind-loop">
+            <strong>Playlist de loop</strong><span>Sincronizada com o BPM do Hook Keys</span>
+          </button>
+        </div>
+        <p class="tracks-playlist-loop-notice">Importe arquivos em 120 BPM com edição pronta para loop.</p>
+        <div class="tracks-playlist-editor__actions">
+          <button type="button" data-tracks-action="playlist-editor-cancel">Cancelar</button>
+        </div>
+      </div>
+    `;
   }
 
   private renderNameEditor(): void {
@@ -825,6 +903,15 @@ export class TracksPanelController {
     if (input && input.value !== (this.draft?.name ?? '')) input.value = this.draft?.name ?? '';
   }
 
+  private asPlaybackTrack(track: LocalTrack): LocalTrack {
+    const playlist = this.activePlaylistId
+      ? this.playlists.find(({ id }) => id === this.activePlaylistId)
+      : null;
+    return playlist?.kind === 'loop' && !isBundledLoopTrack(track)
+      ? { ...track, loopSourceBpm: 120 }
+      : track;
+  }
+
   private openTrackSelector(): void {
     if (!this.draft) return;
     this.draft.name = this.draft.name.trim().replace(/\s+/g, ' ').slice(0, PLAYLIST_NAME_LIMIT);
@@ -835,10 +922,12 @@ export class TracksPanelController {
     const editor = this.getEditor();
     editor.innerHTML = `
       <div class="tracks-playlist-selection-stage">
-        <header><span>${this.draft.id ? 'Editar playlist' : 'Criar playlist'}</span><strong>${escapeMarkup(this.draft.name)}</strong></header>
+        <header><span>${this.draft.id ? 'Editar playlist' : 'Criar playlist'} · ${this.draft.kind === 'loop' ? 'Loop' : 'Normal'}</span><strong>${escapeMarkup(this.draft.name)}</strong></header>
+        ${this.draft.kind === 'loop' ? '<p class="tracks-playlist-loop-notice">Importe arquivos em 120 BPM com edição pronta para loop.</p>' : ''}
         <div class="tracks-playlist-selection-grid" data-playlist-track-grid>
-          ${this.tracks.length > 0
-            ? this.tracks.map((track) => createTrackButton(track, this.draft?.trackIds.has(track.id) ?? false, true)).join('')
+          ${this.tracks.some((track) => !isBundledLoopTrack(track))
+            ? this.tracks.filter((track) => !isBundledLoopTrack(track))
+              .map((track) => createTrackButton(track, this.draft?.trackIds.has(track.id) ?? false, true)).join('')
             : '<p class="tracks-library-grid__empty">Nenhuma música adicionada. Você pode criar a playlist vazia.</p>'}
         </div>
         <p data-playlist-message role="alert"></p>
@@ -857,9 +946,10 @@ export class TracksPanelController {
     if (saveButton) saveButton.disabled = true;
     try {
       const playlist = this.draft.id
-        ? await this.library.updatePlaylist(this.draft.id, this.draft.name, [...this.draft.trackIds])
-        : await this.library.createPlaylist(this.draft.name, [...this.draft.trackIds]);
+        ? await this.library.updatePlaylist(this.draft.id, this.draft.name, [...this.draft.trackIds], this.draft.kind)
+        : await this.library.createPlaylist(this.draft.name, [...this.draft.trackIds], this.draft.kind);
       this.activePlaylistId = playlist.id;
+      this.disableNormalPlaybackModesForLoopPlaylist();
       this.closeEditor();
       await this.refresh();
       this.setMessage('Playlist salva.');
@@ -870,9 +960,10 @@ export class TracksPanelController {
   }
 
   private openPlaylistManager(playlistId: string): void {
+    if (isFixedLoopsPlaylist(playlistId)) return;
     const playlist = this.playlists.find(({ id }) => id === playlistId);
     if (!playlist) return;
-    this.draft = { id: playlist.id, name: playlist.name, trackIds: new Set(playlist.trackIds) };
+    this.draft = { id: playlist.id, name: playlist.name, trackIds: new Set(playlist.trackIds), kind: playlist.kind };
     const editor = this.getEditor();
     editor.hidden = false;
     editor.innerHTML = `
@@ -921,13 +1012,18 @@ export class TracksPanelController {
     `;
   }
 
+  private activePlaylistIsLoop(): boolean {
+    return this.playlists.find(({ id }) => id === this.activePlaylistId)?.kind === 'loop';
+  }
+
   private renderDeleteAllConfirmation(): void {
+    if (isFixedLoopsPlaylist(this.activePlaylistId)) return;
     const playlist = this.activePlaylistId
       ? this.playlists.find(({ id }) => id === this.activePlaylistId)
       : null;
     const trackCount = playlist
       ? playlist.trackIds.filter((trackId) => this.tracks.some(({ id }) => id === trackId)).length
-      : this.tracks.length;
+      : this.tracks.filter((track) => !isBundledLoopTrack(track)).length;
     if (trackCount === 0) return;
     const editor = this.getEditor();
     editor.hidden = false;
@@ -948,6 +1044,7 @@ export class TracksPanelController {
   }
 
   private async deleteAllVisibleTracks(): Promise<void> {
+    if (isFixedLoopsPlaylist(this.activePlaylistId)) return;
     const confirmButton = this.root.querySelector<HTMLButtonElement>('[data-tracks-action="delete-all-confirm"]');
     if (confirmButton) confirmButton.disabled = true;
     const playlist = this.activePlaylistId
@@ -958,11 +1055,11 @@ export class TracksPanelController {
         const removedIds = new Set(playlist.trackIds);
         const layout = (this.layoutsByScope.get(playlist.id) ?? []).filter((itemId) => !removedIds.has(itemId));
         await Promise.all([
-          this.library.updatePlaylist(playlist.id, playlist.name, []),
+          this.library.updatePlaylist(playlist.id, playlist.name, [], playlist.kind),
           this.library.saveListLayout(playlist.id, layout),
         ]);
       } else {
-        await this.options.onTracksDeleting?.([...this.tracks]);
+        await this.options.onTracksDeleting?.(this.tracks.filter((track) => !isBundledLoopTrack(track)));
         await this.library.deleteAllTracks();
       }
       this.closeEditor();
@@ -973,6 +1070,18 @@ export class TracksPanelController {
     } catch {
       this.setEditorMessage('Não foi possível apagar todas as músicas.');
       if (confirmButton) confirmButton.disabled = false;
+    }
+  }
+
+  private disableNormalPlaybackModesForLoopPlaylist(): void {
+    if (!this.activePlaylistIsLoop()) return;
+    if (this.loopEnabled) {
+      this.loopEnabled = false;
+      this.options.onLoopEnabledChanged?.(false);
+    }
+    if (this.autoEnabled) {
+      this.autoEnabled = false;
+      this.options.onAutoEnabledChanged?.(false);
     }
   }
 
@@ -1081,7 +1190,7 @@ export class TracksPanelController {
         ? (this.playlists.find(({ id }) => id === this.activePlaylistId)?.trackIds ?? [])
           .map((trackId) => this.tracks.find(({ id }) => id === trackId))
           .filter((track): track is LocalTrack => Boolean(track))
-        : this.tracks,
+        : this.tracks.filter((track) => !isBundledLoopTrack(track)),
     );
     const remainingItemIds = currentItems.map(({ id }) => id).filter((id) => id !== blockId);
     try {
@@ -1135,9 +1244,10 @@ function createTrackButton(
   selectable = false,
   listNumber: string | null = null,
 ): string {
+  const bundledLoopClass = BUNDLED_LOOP_CARD_CLASSES.get(track.id) ?? '';
   return `
     <button
-      class="track-card${selected ? ' is-selected' : ''}"
+      class="track-card${bundledLoopClass ? ` ${bundledLoopClass}` : ''}${selected ? ' is-selected' : ''}"
       type="button"
       ${selectable ? `data-playlist-track-id="${track.id}" aria-pressed="${selected}"` : `data-track-id="${track.id}" data-list-item-id="${track.id}" aria-pressed="${selected}"`}
       title="${escapeMarkup(track.name)}"

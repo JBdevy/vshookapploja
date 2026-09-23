@@ -12,7 +12,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 @interface HookKeysNativeEngine : NSObject
 - (BOOL)beginPresetTransition;
 - (BOOL)commitPresetTransition;
-- (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing;
+- (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier measureBeats:(float)measureBeats gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing;
 
 @property(nonatomic, copy, nullable) HKMidiNoteHandler onMidiNote;
 @property(nonatomic, copy, nullable) HKMidiControlHandler onMidiControl;
@@ -112,6 +112,10 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                    chorusRateHz:(float)chorusRateHz
                     chorusDepth:(float)chorusDepth
                       chorusMix:(float)chorusMix
+                  loFiEnabled:(BOOL)loFiEnabled
+                 loFiBitDepth:(float)loFiBitDepth
+             loFiSampleRateHz:(float)loFiSampleRateHz
+                       loFiMix:(float)loFiMix
                autoFaderEnabled:(BOOL)autoFaderEnabled
                  autoFaderBeats:(float)autoFaderBeats
                autoFaderDepthDb:(float)autoFaderDepthDb
@@ -185,12 +189,15 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                        clickSound:(NSInteger)clickSound
                     accentEnabled:(BOOL)accentEnabled
                 doubleTimeEnabled:(BOOL)doubleTimeEnabled
-           timeSignatureNumerator:(NSInteger)timeSignatureNumerator;
+           timeSignatureNumerator:(NSInteger)timeSignatureNumerator
+         timeSignatureDenominator:(NSInteger)timeSignatureDenominator
+                          restart:(BOOL)restart;
 - (BOOL)setOutputGainDb:(float)db enabled:(BOOL)enabled
        channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;
 // Músicas no motor. loadTrack devolve a duração em segundos, ou -1.
 - (double)loadTrackId:(NSInteger)sourceId path:(NSString *)path;
-- (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds loop:(BOOL)loop;
+- (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds
+                  loop:(BOOL)loop playbackRate:(double)playbackRate;
 - (NSDictionary<NSString *, id> *)trackStatus;
 - (BOOL)configureTrackOutputChannelStart:(NSInteger)channelStart
                             channelCount:(NSInteger)channelCount

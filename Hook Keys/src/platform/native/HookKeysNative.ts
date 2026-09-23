@@ -105,8 +105,12 @@ export interface NativeModuleEffectsConfig {
   chorusRateHz: number;
   chorusDepth: number;
   chorusMix: number;
+  loFiEnabled: boolean;
+  loFiBitDepth: number;
+  loFiSampleRateHz: number;
+  loFiMix: number;
   autoFaderEnabled: boolean;
-  // 1 = 1/4 do compasso por volta, 0,5 = 1/8.
+  // Duração da volta completa em semínimas, derivada do compasso global.
   autoFaderBeats: number;
   autoFaderDepthDb: number;
   // Gain de entrada do módulo, antes dos processadores.
@@ -161,6 +165,8 @@ export interface NativeTranceGateConfig {
   steps: number;
   length: number;
   beatMultiplier: number;
+  // Tamanho do compasso em semínimas; zero desliga o reset por compasso.
+  measureBeats: number;
   gate: number;
   depth: number;
   attackMs: number;
@@ -207,10 +213,12 @@ export interface NativeMetronomeConfig {
   enabled: boolean;
   bpm: number;
   volume: number;
-  clickSound: 1 | 2 | 3;
+  clickSound: 1 | 2 | 3 | 4;
   accentEnabled: boolean;
   doubleTimeEnabled: boolean;
   timeSignatureNumerator: number;
+  timeSignatureDenominator: number;
+  restart?: boolean;
 }
 
 interface NativeMidiNoteEvent {
@@ -297,7 +305,13 @@ interface HookKeysNativePlugin {
   appendTrackChunk(options: { key: string; base64: string }): Promise<void>;
   finishTrackUpload(options: { key: string }): Promise<void>;
   loadTrack(options: { sourceId: number; key: string; extension: string }): Promise<{ durationSeconds: number }>;
-  controlTrack(options: { sourceId: number; action: NativeTrackAction; seconds?: number; loop?: boolean }): Promise<void>;
+  controlTrack(options: {
+    sourceId: number;
+    action: NativeTrackAction;
+    seconds?: number;
+    loop?: boolean;
+    playbackRate?: number;
+  }): Promise<void>;
   trackStatus(): Promise<NativeTrackStatus>;
   configureTrackOutput(options: { channelStart: number; channelCount: number; db: number; enabled: boolean }): Promise<void>;
   addListener(eventName: 'midiNote', listener: (event: NativeMidiNoteEvent) => void): Promise<PluginListenerHandle>;
@@ -747,17 +761,20 @@ class HookKeysNativeBridge {
     if (!await this.initialize()) return;
     const normalized: NativeMetronomeConfig = {
       enabled: Boolean(config.enabled),
-      bpm: Math.min(600, Math.max(60, Math.round(config.bpm * 2) / 2)),
+      bpm: Math.min(300, Math.max(60, Math.round(config.bpm * 2) / 2)),
       volume: Math.min(10 ** (12 / 20), Math.max(0, config.volume)),
-      clickSound: Math.min(3, Math.max(1, Math.round(config.clickSound))) as 1 | 2 | 3,
+      clickSound: Math.min(4, Math.max(1, Math.round(config.clickSound))) as 1 | 2 | 3 | 4,
       accentEnabled: Boolean(config.accentEnabled),
       doubleTimeEnabled: Boolean(config.doubleTimeEnabled),
       timeSignatureNumerator: Math.min(16, Math.max(1, Math.round(config.timeSignatureNumerator))),
+      timeSignatureDenominator: [2, 4, 8, 16].includes(Math.round(config.timeSignatureDenominator))
+        ? Math.round(config.timeSignatureDenominator) : 4,
+      restart: Boolean(config.restart),
     };
     const key = JSON.stringify(normalized);
-    if (key === this.lastMetronomeKey) return;
+    if (!normalized.restart && key === this.lastMetronomeKey) return;
     await this.call('configure_metronome', { ...normalized }, () => plugin.configureMetronome(normalized));
-    this.lastMetronomeKey = key;
+    this.lastMetronomeKey = JSON.stringify({ ...normalized, restart: false });
   }
 
   async setMetronomeOutput(channelStart: number, channelCount: 1 | 2): Promise<void> {

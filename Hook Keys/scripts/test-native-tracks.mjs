@@ -44,6 +44,7 @@ const bridge = {
     if (action === 'pause' && engine.activeId === sourceId) engine.playing = false;
     if (action === 'seek') source.position = options.seconds;
     if (action === 'loop') source.loop = options.loop;
+    if (action === 'rate') source.playbackRate = options.playbackRate;
   },
   async trackStatus() {
     const source = engine.sources.get(engine.activeId);
@@ -55,6 +56,7 @@ const bridge = {
 const tracks = {
   a: { id: 'a', name: 'Primeira', fileName: 'Primeira.MP3', mimeType: 'audio/mpeg', size: 3, addedAt: '' },
   b: { id: 'b', name: 'Segunda', fileName: 'Segunda.m4a', mimeType: 'audio/mp4', size: 4, addedAt: '' },
+  loop: { id: 'fixed-loop:test', name: 'Loop', fileName: 'Loop.mp3', mimeType: 'audio/mpeg', size: 4, addedAt: '', fixedLoop: true, loopSourceBpm: 120 },
 };
 const library = { getFile: async (id) => new window.Blob([id === 'a' ? 'aaa' : 'bbbb']) };
 
@@ -82,6 +84,7 @@ try {
   await transport.togglePlayStop();
   await settle();
   assert.equal(snapshot.state, 'playing', 'Play toca no motor');
+  assert.equal(snapshot.loopPlaying, false, 'música normal não força o relógio do metrônomo');
   assert.deepEqual(controls('play').map(([, id]) => id), [firstSource]);
 
   engine.sources.get(firstSource).position = 60;
@@ -111,6 +114,7 @@ try {
   await transport.togglePlayStop();
   await settle();
   assert.equal(snapshot.state, 'stopped');
+  assert.equal(snapshot.loopPlaying, false);
   assert.equal(engine.playing, false, 'Stop pausa no motor');
   assert.deepEqual(JSON.parse(JSON.stringify(controls('seek').at(-1))), ['control', secondSource, 'seek', { seconds: 0 }],
     'Stop volta ao início');
@@ -125,6 +129,26 @@ try {
   assert.equal(engine.activeId, secondSource);
   assert.equal(snapshot.state, 'playing', 'e continua tocando');
   assert.deepEqual(messages, [], 'nenhum erro para o usuário');
+
+  await transport.togglePlayStop();
+  transport.setLoopEnabled(false);
+  await transport.selectTrack(tracks.loop);
+  await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(controls('loop').at(-1))).slice(2), ['loop', { loop: true }],
+    'áudio da playlist Loops repete mesmo com o Repeat geral desligado');
+  transport.setTempoBpm(180);
+  await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(controls('rate').at(-1))).slice(2), ['rate', { playbackRate: 1.5 }],
+    'loop preparado em 120 BPM acompanha o BPM global');
+  await transport.togglePlayStop();
+  await settle();
+  assert.equal(snapshot.loopPlaying, true,
+    'um loop tocando informa que o relógio do metrônomo deve ficar ativo e alinhado');
+  await transport.selectTrack(tracks.a);
+  await settle();
+  assert.equal(transport.audio.playbackRate, 1, 'música normal permanece na velocidade original');
+  assert.equal(snapshot.selectedTrackId, 'a', 'escolher outro áudio troca imediatamente o loop infinito');
+  assert.equal(snapshot.queuedTrackId, null, 'o próximo áudio não fica preso atrás do loop');
   transport.destroy();
   await settle();
   assert.equal(engine.sources.size, 0, 'fechar o transporte libera o motor');

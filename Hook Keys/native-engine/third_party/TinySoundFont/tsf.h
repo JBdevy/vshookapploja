@@ -1774,7 +1774,7 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 		if (f->hookVolumeEnvelopeOverride)
 		{
 			struct tsf_envelope envelope = region->ampenv;
-			envelope.sustain = f->hookSustain;
+			if (f->hookSustain >= 0.0f) envelope.sustain = f->hookSustain;
 			if (f->hookAttackSeconds >= 0.0f) envelope.attack = f->hookAttackSeconds;
 			if (f->hookHoldSeconds >= 0.0f) { envelope.hold = f->hookHoldSeconds; envelope.keynumToHold = 0.0f; }
 			if (f->hookDecaySeconds >= 0.0f) { envelope.decay = f->hookDecaySeconds; envelope.keynumToDecay = 0.0f; }

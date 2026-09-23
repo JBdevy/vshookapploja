@@ -87,7 +87,7 @@ bool HookKeysEngine::setModuleConfig(std::size_t moduleIndex, ModuleConfig confi
 }
 
 bool HookKeysEngine::setTempoBpm(float tempoBpm) noexcept {
-  return push(EngineCommand::tempo(std::clamp(tempoBpm, 60.0f, 600.0f)));
+  return push(EngineCommand::tempo(std::clamp(tempoBpm, 60.0f, 300.0f)));
 }
 
 bool HookKeysEngine::setGlobalTranspose(int semitones) noexcept {
@@ -394,7 +394,7 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
       }
       break;
     case CommandType::setTempo:
-      settings_.tempoBpm = std::clamp(command.tempoBpm, 60.0f, 600.0f);
+      settings_.tempoBpm = std::clamp(command.tempoBpm, 60.0f, 300.0f);
       for (auto& processor : effects_) processor.setTempo(settings_.tempoBpm);
       break;
     case CommandType::allNotesOff:
@@ -425,18 +425,22 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
       auto* synth = modules_[index];
       const auto& config = configs_[index];
       if (synth == nullptr) continue;
-      // Módulo desligado ignora todo controle, menos soltar o sustain: sem
-      // isso um pad que ficou preso no pedal nunca mais solta.
-      const auto pedalRelease = message.data1 == kSustainController && message.data2 < 64;
-      if (!config.enabled && !pedalRelease) continue;
+      // Módulo desligado (inclusive temporariamente por Solo) fecha a porta
+      // para notas e controles, mas continua acompanhando o pedal sustain.
+      // Assim uma cauda pode ser sustentada/solta sem o módulo receber notas
+      // novas enquanto estiver fora do Solo.
+      const auto sustainMessage = message.data1 == kSustainController;
+      if (!config.enabled && !sustainMessage) continue;
       // O módulo tocado pelo arpeggiator recebe as notas pela entrada gerada,
-      // mas pedal, roda e expressão só existem no teclado físico: para eles
-      // vale qualquer entrada, senão o pedal nunca alcançaria o módulo.
+      // mas roda e expressão só existem no teclado físico. O pedal é tratado
+      // pelo controlador do arpejo: repassá-lo ao synth prenderia cada nota
+      // gerada e formaria um acorde por baixo da sequência.
       const auto generatedNotes = config.midiInputSlot != kAllMidiInputs && config.midiInputSlot >= kArpeggiatorInputBase;
       const auto acceptsInput = config.midiInputSlot == kAllMidiInputs || generatedNotes ||
                                 message.inputSlot == kKeyboardBroadcastInput ||
                                 message.inputSlot == config.midiInputSlot;
       if (!acceptsInput) continue;
+      if (sustainMessage && generatedNotes) continue;
       if (message.data1 == kSustainController && !config.sustainInputEnabled) continue;
       if (message.data1 == kModulationController && !config.modulationInputEnabled) continue;
       if (message.data1 == kModulationController) effects_[index].setModulation(message.data2);
@@ -543,17 +547,21 @@ void HookKeysEngine::routeNoteOn(
 }
 
 void HookKeysEngine::routeNoteOff(std::uint8_t inputSlot, std::uint8_t sourceNote) noexcept {
+  const auto generatedNote = inputSlot >= kArpeggiatorInputBase;
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     const auto targetNote = activeNotes_[index][inputSlot][sourceNote];
     if (targetNote < 0) continue;
     if (modules_[index] != nullptr) {
-      if (configs_[index].gmDrumHiHatChoke && configs_[index].drumNoteUsesZeroRelease(sourceNote)) {
+      if (generatedNote || (configs_[index].gmDrumHiHatChoke && configs_[index].drumNoteUsesZeroRelease(sourceNote))) {
+        // O Gate do arpejador define o comprimento real da nota. Uma soltura
+        // curta anti-click evita que envelopes longos acumulem vozes e virem
+        // um acorde por baixo da sequência.
         modules_[index]->stealNote(static_cast<std::uint8_t>(targetNote));
       } else {
         modules_[index]->noteOff(static_cast<std::uint8_t>(targetNote));
       }
     }
-    if (configs_[index].gmDrumHiHatChoke && configs_[index].drumNoteUsesZeroRelease(sourceNote)) {
+    if (generatedNote || (configs_[index].gmDrumHiHatChoke && configs_[index].drumNoteUsesZeroRelease(sourceNote))) {
       activeNotes_[index][inputSlot][sourceNote] = -1;
       activeNoteOrders_[index][inputSlot][sourceNote] = 0;
       activeNoteCounts_[index][inputSlot][sourceNote] = 0;

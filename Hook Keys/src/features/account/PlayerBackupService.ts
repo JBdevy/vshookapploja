@@ -20,7 +20,10 @@ export class PlayerBackupService {
   private snapshotProvider: (() => unknown) | null = null;
   private readonly accountEmail: string;
 
-  constructor(accountEmail: string) {
+  constructor(
+    accountEmail: string,
+    private readonly accountName?: string | (() => string | undefined),
+  ) {
     this.accountEmail = accountEmail.trim().toLowerCase();
   }
 
@@ -34,7 +37,7 @@ export class PlayerBackupService {
       throw new Error('backup_state_unavailable');
     }
     const createdAt = new Date().toISOString();
-    const fileName = `Hook Keys Backup ${createdAt.slice(0, 19).replaceAll(':', '-')}.json`;
+    const fileName = `${this.backupUserName()}HK.json`;
     const content = JSON.stringify({
       format: 'hook-keys-backup', version: 2, createdAt, state: snapshot,
     } satisfies BackupDocument, null, 2);
@@ -70,6 +73,20 @@ export class PlayerBackupService {
 
   destroy(): void {
     this.snapshotProvider = null;
+  }
+
+  private backupUserName(): string {
+    const suppliedName = typeof this.accountName === 'function' ? this.accountName() : this.accountName;
+    const emailName = this.accountEmail.split('@')[0] ?? '';
+    const candidate = suppliedName?.trim() || emailName.trim() || 'User';
+    // Mantém letras, espaços e acentos, removendo somente caracteres proibidos
+    // em nomes de arquivo no Windows e caracteres de controle.
+    const safeName = candidate
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '')
+      .replace(/[. ]+$/g, '')
+      .slice(0, 100)
+      .trim();
+    return safeName || 'User';
   }
 }
 

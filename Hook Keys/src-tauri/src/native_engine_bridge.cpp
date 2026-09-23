@@ -44,13 +44,14 @@ void hk_runtime_set_midi_input_enabled(void* handle, int enabled) noexcept {
 }
 
 int hk_runtime_set_trance_gate(void* handle, std::size_t moduleIndex, int enabled, int steps,
-    int length, float beatMultiplier, float gate, float depth, float attackMs, float releaseMs, float swing) noexcept {
+    int length, float beatMultiplier, float measureBeats, float gate, float depth, float attackMs, float releaseMs, float swing) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
   hook_keys::ModuleEffectsConfig::TranceGateConfig config;
   config.enabled = enabled != 0;
   config.steps = static_cast<std::uint16_t>(steps);
   config.length = static_cast<std::uint8_t>(std::clamp(length, 1, 16));
   config.beatMultiplier = beatMultiplier;
+  config.measureBeats = measureBeats;
   config.gate = gate;
   config.depth = depth;
   config.attackMs = attackMs;
@@ -122,9 +123,8 @@ int hk_runtime_configure_module(
   if (!handle || moduleIndex >= hook_keys::kModuleCount) return 0;
   hook_keys::ModuleConfig config;
   config.enabled = enabled != 0;
-  config.midiInputSlot = inputSlot == static_cast<int>(hook_keys::kArpeggiatorInput)
-      ? static_cast<std::uint8_t>(inputSlot)
-      : inputSlot >= 0 && inputSlot < static_cast<int>(hook_keys::kMidiInputCount)
+  config.midiInputSlot = inputSlot >= 0 &&
+      inputSlot < static_cast<int>(hook_keys::kRoutableMidiInputCount)
           ? static_cast<std::uint8_t>(inputSlot) : hook_keys::kAllMidiInputs;
   config.lowNote = static_cast<std::uint8_t>(std::clamp(lowNote, 0, 127));
   config.highNote = static_cast<std::uint8_t>(std::clamp(highNote, 0, 127));
@@ -204,6 +204,7 @@ int hk_runtime_configure_effects(
     float rotaryDepth, float rotaryMix, int rotaryModulationEnabled,
     int rotaryCabinetEnabled,
     int chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
+    int loFiEnabled, float loFiBitDepth, float loFiSampleRateHz, float loFiMix,
     int autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
     float inputGainDb) noexcept {
   if (!handle || moduleIndex >= hook_keys::kModuleCount || !cutoffVelocity || !eqTypes || !eqFrequencies ||
@@ -245,6 +246,7 @@ int hk_runtime_configure_effects(
                     rotaryModulationEnabled != 0};
   effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled != 0;
   effects.chorus = {chorusEnabled != 0, chorusRateHz, chorusDepth, chorusMix};
+  effects.loFi = {loFiEnabled != 0, loFiBitDepth, loFiSampleRateHz, loFiMix};
   effects.autoFader = {autoFaderEnabled != 0, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;
   return runtime(handle)->setModuleEffects(moduleIndex, effects) ? 1 : 0;
@@ -315,13 +317,14 @@ void hk_runtime_set_metronome_output(void* handle, int channelStart, int channel
 
 void hk_runtime_configure_metronome(
     void* handle, int enabled, float bpm, float volume, int clickSound,
-    int accentEnabled, int doubleTimeEnabled, int numerator) noexcept {
+    int accentEnabled, int doubleTimeEnabled, int numerator, int denominator, int restart) noexcept {
   if (!handle) return;
   runtime(handle)->setMetronome(
       enabled != 0, bpm, volume,
-      static_cast<std::uint8_t>(std::clamp(clickSound, 1, 3)),
+      static_cast<std::uint8_t>(std::clamp(clickSound, 1, 4)),
       accentEnabled != 0, doubleTimeEnabled != 0,
-      static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)));
+      static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)),
+      static_cast<std::uint8_t>(denominator), restart != 0);
 }
 
 void hk_runtime_set_output_gain(

@@ -137,7 +137,7 @@ export class HookKeysApp {
     if (changeId !== this.screenChangeId) return;
     this.stopLicenseMonitoring = this.sessions.startLicenseMonitoring(session, () => { void this.showLogin(); });
     const playerState = new PlayerStateService(session.account.email);
-    const playerBackup = new PlayerBackupService(session.account.email);
+    const playerBackup = new PlayerBackupService(session.account.email, () => session.account.name);
     this.playerScreen = new PlayerScreen(
       this.screenRoot,
       session.account,
@@ -148,7 +148,6 @@ export class HookKeysApp {
         getCompatibilityVideoUrl: async () => (
           await this.accountApi.getAppSettings(session.token)
         ).compatibilityVideoUrl,
-        getSupportUrl: async () => (await this.accountApi.getAppSettings(session.token)).supportUrl,
         getSoundCatalog: async () => (await this.accountApi.getSoundCatalog(session.token)).catalog,
         getSoundAssetUrl: async (objectKey, kind) => (
           await this.accountApi.getSoundAssetUrl(session.token, objectKey, kind)

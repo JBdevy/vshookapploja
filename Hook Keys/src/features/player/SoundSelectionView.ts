@@ -62,8 +62,11 @@ export function createSoundCategoryContentMarkup(
       <section class="fixed-sound-panel">
         <header class="fixed-sound-panel__header">
           <h3>${escapeMarkup(category.name)}</h3>
-          <button class="fixed-sound-clean" type="button" data-sound-clean
-            aria-label="Deixar o modulo sem timbre selecionado">Clean</button>
+          <div class="fixed-sound-panel__actions">
+            <span class="fixed-sound-category-count">${category.sounds.length} ${category.sounds.length === 1 ? 'timbre' : 'timbres'}</span>
+            <button class="fixed-sound-clean" type="button" data-sound-clean
+              aria-label="Deixar o modulo sem timbre selecionado">Clean</button>
+          </div>
         </header>
         <div class="fixed-sound-grid">
           ${category.sounds.map((sound) => {

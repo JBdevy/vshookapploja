@@ -9,7 +9,7 @@ export interface ArpeggiatorSettings {
   gate: number;
   swing: number;
   autoFaderEnabled: boolean;
-  autoFaderDivision: '1/2' | '1/4';
+  autoFaderDivision: '1/1' | '1/2';
   autoFaderDepthDb: number;
 }
 
@@ -27,7 +27,7 @@ export const DEFAULT_ARPEGGIATOR_SETTINGS: Readonly<ArpeggiatorSettings> = Objec
   gate: 72,
   swing: 0,
   autoFaderEnabled: false,
-  autoFaderDivision: '1/4',
+  autoFaderDivision: '1/1',
   autoFaderDepthDb: 5,
 });
 
@@ -41,16 +41,17 @@ export function readArpeggiatorSettings(value: unknown): ArpeggiatorSettings {
     gate: numberInRange(source.gate, 10, 100, DEFAULT_ARPEGGIATOR_SETTINGS.gate),
     swing: numberInRange(source.swing, 0, 75, DEFAULT_ARPEGGIATOR_SETTINGS.swing),
     autoFaderEnabled: source.autoFaderEnabled === true,
-    autoFaderDivision: source.autoFaderDivision === '1/2' ? '1/2' : '1/4',
+    autoFaderDivision: source.autoFaderDivision === '1/1' || source.autoFaderDivision === '1/2'
+      ? source.autoFaderDivision : DEFAULT_ARPEGGIATOR_SETTINGS.autoFaderDivision,
     autoFaderDepthDb: numberInRange(source.autoFaderDepthDb, 0, 40, 5),
   };
 }
 
-// Auto Fader do arpeggiator: o volume desce autoFaderDepthDb a partir do
-// volume atual do módulo e volta, uma volta por tempo (1/4) ou colcheia (1/8).
+// Auto Fader do arpeggiator: 1/1 ocupa o compasso global inteiro e 1/2 ocupa
+// metade dele. Cada trajeto entre os extremos ocupa metade do ciclo.
 export function readModuleAutoFaderSettings(value: unknown): {
   enabled: boolean;
-  division: '1/2' | '1/4';
+  division: '1/1' | '1/2';
   depthDb: number;
 } {
   const settings = readArpeggiatorSettings(value);
@@ -59,6 +60,36 @@ export function readModuleAutoFaderSettings(value: unknown): {
     division: settings.autoFaderDivision,
     depthDb: settings.autoFaderDepthDb,
   };
+}
+
+export function measureQuarterBeats(numerator: number, denominator: number): number {
+  const roundedNumerator = Math.round(numerator);
+  const safeNumerator = Number.isFinite(roundedNumerator)
+    ? Math.min(16, Math.max(1, roundedNumerator)) : 4;
+  const roundedDenominator = Math.round(denominator);
+  const safeDenominator = [2, 4, 8, 16].includes(roundedDenominator) ? roundedDenominator : 4;
+  return safeNumerator * 4 / safeDenominator;
+}
+
+export function autoFaderCycleBeats(
+  numerator: number,
+  denominator: number,
+  division: '1/1' | '1/2',
+): number {
+  const measureBeats = measureQuarterBeats(numerator, denominator);
+  return division === '1/1' ? measureBeats : measureBeats / 2;
+}
+
+export function patternStepsPerMeasure(numerator: number, denominator: number, division: PatternDivision): number {
+  const stepBeats = division === '1/4' ? 1
+    : division === '1/8' ? 0.5
+    : division === '1/32' ? 0.125
+    : division === '1/4 T' ? 2 / 3
+    : division === '1/8 T' ? 1 / 3
+    : division === '1/16 T' ? 1 / 6
+    : division === '1/32 T' ? 1 / 12
+    : 0.25;
+  return Math.max(1, Math.round(measureQuarterBeats(numerator, denominator) / stepBeats));
 }
 
 export function createArpeggiatorMarkup(value: unknown): string {
@@ -86,9 +117,9 @@ export function createArpeggiatorMarkup(value: unknown): string {
             class="${settings.autoFaderEnabled ? 'is-selected' : ''}"
             aria-pressed="${settings.autoFaderEnabled}">Auto Fader</button>
           <div role="group" aria-label="Tempo do Auto Fader">
-            ${(['1/2', '1/4'] as const).map((division) => `
+            ${(['1/1', '1/2'] as const).map((division) => `
               <button type="button" data-arpeggiator-auto-fader="${division}"
-                class="${settings.autoFaderDivision === division ? 'is-selected' : ''}"
+                class="auto-fader-choice auto-fader-choice--${division === '1/1' ? 'green' : 'blue'}${settings.autoFaderDivision === division ? ' is-selected' : ''}"
                 aria-pressed="${settings.autoFaderDivision === division}">${division}</button>
             `).join('')}
           </div>
@@ -121,7 +152,7 @@ export function updatePatternRangeOutput(input: HTMLInputElement): number {
 }
 
 export function patternStepMilliseconds(bpm: number, division: PatternDivision, swing: number, stepIndex: number): number {
-  const quarter = 60_000 / Math.min(600, Math.max(60, Number.isFinite(bpm) ? bpm : 120));
+  const quarter = 60_000 / Math.min(300, Math.max(60, Number.isFinite(bpm) ? bpm : 120));
   const multiplier = division === '1/4' ? 1
     : division === '1/8' ? 0.5
     : division === '1/32' ? 0.125

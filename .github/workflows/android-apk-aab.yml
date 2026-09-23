@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - uses: actions/setup-java@v4
         with:
@@ -55,6 +57,7 @@ jobs:
           python3 scripts/configure-media-permissions.py android
           python3 scripts/configure-fullscreen.py android
           python3 scripts/apply-native-icons.py android
+          python3 scripts/configure-android-release-optimization.py
 
       - name: Definir versão Android
         run: |
@@ -171,3 +174,11 @@ jobs:
           path: |
             android/app/build/outputs/apk/**/*.apk
             android/app/build/outputs/bundle/**/*.aab
+
+      - name: Enviar mapping.txt (R8/ProGuard)
+        if: env.ANDROID_SIGNED == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VS-Hook-Android-mapping
+          path: android/app/build/outputs/mapping/**/mapping.txt
+          if-no-files-found: error

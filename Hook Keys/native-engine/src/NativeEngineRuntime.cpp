@@ -1,10 +1,11 @@
 #include "hook_keys/NativeEngineRuntime.hpp"
+#include "hook_keys/MetronomeClickData.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 
-#if defined(_M_IX86) || defined(_M_X64) || defined(__SSE__)
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
 #include <xmmintrin.h>
 #endif
 
@@ -15,12 +16,24 @@ constexpr float kMasterLimiterCeiling = 0.97723722096f; // -0.2 dBFS
 constexpr float kMasterLimiterReleaseSeconds = 0.08f;
 
 void prepareRealtimeFloatingPoint() noexcept {
-#if defined(_M_IX86) || defined(_M_X64) || defined(__SSE__)
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
   // Recursive filters and long releases eventually reach denormal values.
   // Processing those values in hardware can suddenly become hundreds of times
   // slower and cause exactly the chord-dependent ticks heard at small buffers.
   thread_local const bool prepared = [] {
     _mm_setcsr(_mm_getcsr() | 0x8040u); // Flush-to-zero + denormals-are-zero.
+    return true;
+  }();
+  static_cast<void>(prepared);
+#elif defined(__i386__) || defined(__x86_64__)
+  // Clang's Apple cross-target headers do not always expose _mm_getcsr and
+  // _mm_setcsr even on x86_64. Read/write MXCSR directly so Intel macOS keeps
+  // the realtime denormal protection without depending on those declarations.
+  thread_local const bool prepared = [] {
+    unsigned int control = 0;
+    __asm__ __volatile__("stmxcsr %0" : "=m"(control));
+    control |= 0x8040u;
+    __asm__ __volatile__("ldmxcsr %0" : : "m"(control));
     return true;
   }();
   static_cast<void>(prepared);
@@ -37,6 +50,34 @@ NativeEngineRuntime::NativeEngineRuntime(double sampleRate, std::size_t maximumB
       padLeftScratch_(maximumBlockFrames_, 0.0f),
       padRightScratch_(maximumBlockFrames_, 0.0f),
       tracks_(std::make_unique<TrackPlayer>(sampleRate_)) {
+  const auto prepareClick = [this](const auto& sourceLeft, const auto& sourceRight,
+                                   std::uint32_t sourceRate,
+                                   std::vector<float>& outputLeft,
+                                   std::vector<float>& outputRight) {
+    const auto sourceFrames = sourceLeft.size();
+    const auto outputFrames = static_cast<std::size_t>(std::ceil(
+        static_cast<double>(sourceFrames) * sampleRate_ / static_cast<double>(sourceRate)));
+    outputLeft.resize(outputFrames);
+    outputRight.resize(outputFrames);
+    const auto sourceStep = static_cast<double>(sourceRate) / sampleRate_;
+    for (std::size_t frame = 0; frame < outputFrames; ++frame) {
+      const auto position = std::min(static_cast<double>(sourceFrames - 1), frame * sourceStep);
+      const auto first = static_cast<std::size_t>(position);
+      const auto second = std::min(first + 1, sourceFrames - 1);
+      const auto fraction = static_cast<float>(position - static_cast<double>(first));
+      const auto interpolate = [first, second, fraction](const auto& samples) {
+        const auto a = static_cast<float>(samples[first]) / 32768.0f;
+        const auto b = static_cast<float>(samples[second]) / 32768.0f;
+        return a + (b - a) * fraction;
+      };
+      outputLeft[frame] = interpolate(sourceLeft);
+      outputRight[frame] = interpolate(sourceRight);
+    }
+  };
+  prepareClick(embedded_metronome_click::kClick4Left, embedded_metronome_click::kClick4Right,
+      embedded_metronome_click::kClick4SampleRate, metronomeClick4Left_, metronomeClick4Right_);
+  prepareClick(embedded_metronome_click::kClick5Left, embedded_metronome_click::kClick5Right,
+      embedded_metronome_click::kClick5SampleRate, metronomeClick5Left_, metronomeClick5Right_);
   masterLimiterRelease_ = 1.0f - std::exp(
       -1.0f / (static_cast<float>(sampleRate_) * kMasterLimiterReleaseSeconds));
   layers_.reserve(kMaximumPresetLayers);
@@ -61,8 +102,12 @@ bool NativeEngineRuntime::loadPadBank(std::size_t bankIndex, const char* utf8Pat
   std::scoped_lock lock(soundFontMutex_);
   if (bankIndex >= padModules_.size() || utf8Path == nullptr || *utf8Path == '\0') return false;
   if (!padModules_[bankIndex]->loadFromFile(utf8Path)) return false;
-  // Preserve a envoltória criada dentro do SF2 do pad.
-  padModules_[bankIndex]->useEmbeddedVolumeEnvelope();
+  // Preserva o desenho original do SF2, mas garante que desligar/trocar um
+  // pad contínuo não corte seco. O novo pad já entra enquanto o anterior
+  // termina esta cauda curta.
+  // Pads contínuos: ao parar ou trocar, a voz anterior desaparece em 5 s
+  // enquanto o próximo Pad já entra, produzindo uma transição suave.
+  padModules_[bankIndex]->setReleaseOverride(5000.0f);
   return true;
 }
 
@@ -341,7 +386,10 @@ bool NativeEngineRuntime::setModuleEffects(
   if (moduleIndex >= kModuleCount) return false;
   std::scoped_lock lock(configMutex_);
   effects.normalize();
-  if (moduleIndex == 6) effects.cutoff.enabled = false;
+  if (moduleIndex == 6) {
+    effects.cutoff.enabled = false;
+    effects.loFi.enabled = false;
+  }
   effects.tranceGate = controlLayer_->configs[moduleIndex].effects.tranceGate;
   controlLayer_->configs[moduleIndex].effects = effects;
   return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
@@ -357,7 +405,7 @@ bool NativeEngineRuntime::setModuleEnvelope(
   // envoltoria gravada no proprio arquivo. O override do app so entra quando
   // o usuario realmente altera um dos controles.
   constexpr float epsilon = 0.001f;
-  const auto near = [epsilon](float left, float right) noexcept {
+  const auto near = [](float left, float right) noexcept {
     return std::abs(left - right) <= epsilon;
   };
   const bool usesFactoryEnvelope = near(attackMs, 0.0f) && near(holdMs, 15000.0f)
@@ -447,17 +495,22 @@ bool NativeEngineRuntime::setGlobalTranspose(int semitones) noexcept {
 void NativeEngineRuntime::setMetronome(
     bool enabled, float bpm, float volume, std::uint8_t clickSound,
     bool accentEnabled, bool doubleTimeEnabled,
-    std::uint8_t timeSignatureNumerator) noexcept {
-  metronomeBpm_.store(std::clamp(bpm, 60.0f, 600.0f), std::memory_order_release);
+    std::uint8_t timeSignatureNumerator, std::uint8_t timeSignatureDenominator,
+    bool restart) noexcept {
+  metronomeBpm_.store(std::clamp(bpm, 60.0f, 300.0f), std::memory_order_release);
   metronomeVolume_.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_release);
   metronomeClickSound_.store(
-      static_cast<std::uint8_t>(std::clamp<int>(clickSound, 1, 3)),
+      static_cast<std::uint8_t>(std::clamp<int>(clickSound, 1, 5)),
       std::memory_order_release);
   metronomeAccentEnabled_.store(accentEnabled, std::memory_order_release);
   metronomeDoubleTimeEnabled_.store(doubleTimeEnabled, std::memory_order_release);
   metronomeNumerator_.store(
       static_cast<std::uint8_t>(std::clamp<int>(timeSignatureNumerator, 1, 16)),
       std::memory_order_release);
+  const auto denominator = timeSignatureDenominator == 2 || timeSignatureDenominator == 8 ||
+      timeSignatureDenominator == 16 ? timeSignatureDenominator : 4;
+  metronomeDenominator_.store(denominator, std::memory_order_release);
+  if (restart) metronomeResetRequested_.store(true, std::memory_order_release);
   metronomeEnabled_.store(enabled, std::memory_order_release);
 }
 
@@ -813,10 +866,13 @@ bool NativeEngineRuntime::beginMetronomeBlock() noexcept {
     metronomeClickLength_ = 0;
     return false;
   }
-  if (!metronomeWasEnabled_) {
+  const auto resetRequested = metronomeResetRequested_.exchange(false, std::memory_order_acq_rel);
+  if (!metronomeWasEnabled_ || resetRequested) {
     metronomeWasEnabled_ = true;
     metronomeFramesUntilBeat_ = 0.0;
     metronomeBeatIndex_ = 0;
+    metronomeClickFrame_ = 0;
+    metronomeClickLength_ = 0;
   }
   return true;
 }
@@ -827,8 +883,8 @@ void NativeEngineRuntime::addMetronome(
   if (!beginMetronomeBlock()) return;
   for (std::size_t frame = 0; frame < frames; ++frame) {
     const auto sample = renderMetronomeSample();
-    left[frame] += sample;
-    right[frame] += sample;
+    left[frame] += sample[0];
+    right[frame] += sample[1];
   }
 }
 
@@ -840,23 +896,30 @@ void NativeEngineRuntime::addMetronomeInterleaved(
   const auto requested = static_cast<std::size_t>(metronomeOutputStart_.load(std::memory_order_acquire));
   const auto first = requested < channels ? requested : 0;
   const bool stereo = metronomeOutputCount_.load(std::memory_order_acquire) == 2 && first + 1 < channels;
-  float blockPeak = 0.0f;
+  std::array<float, 2> blockPeaks{};
   for (std::size_t frame = 0; frame < frames; ++frame) {
     const auto sample = renderMetronomeSample();
-    blockPeak = std::max(blockPeak, std::abs(sample));
     auto* destination = output + frame * channels;
-    destination[first] += sample;
-    if (stereo) destination[first + 1] += sample;
+    if (stereo) {
+      destination[first] += sample[0];
+      destination[first + 1] += sample[1];
+      blockPeaks[0] = std::max(blockPeaks[0], std::abs(sample[0]));
+      blockPeaks[1] = std::max(blockPeaks[1], std::abs(sample[1]));
+    } else {
+      const auto mono = (sample[0] + sample[1]) * 0.5f;
+      destination[first] += mono;
+      blockPeaks[0] = std::max(blockPeaks[0], std::abs(mono));
+    }
   }
   const auto sides = stereo ? 2u : 1u;
   for (std::size_t channel = 0; channel < sides; ++channel) {
     auto previous = metronomePeaks_[channel].load(std::memory_order_relaxed);
-    while (blockPeak > previous && !metronomePeaks_[channel].compare_exchange_weak(
-        previous, blockPeak, std::memory_order_release, std::memory_order_relaxed)) {}
+    while (blockPeaks[channel] > previous && !metronomePeaks_[channel].compare_exchange_weak(
+        previous, blockPeaks[channel], std::memory_order_release, std::memory_order_relaxed)) {}
   }
 }
 
-float NativeEngineRuntime::renderMetronomeSample() noexcept {
+std::array<float, 2> NativeEngineRuntime::renderMetronomeSample() noexcept {
   constexpr double kPi = 3.14159265358979323846;
   if (metronomeFramesUntilBeat_ <= 0.0) {
     const auto sound = metronomeClickSound_.load(std::memory_order_acquire);
@@ -869,13 +932,17 @@ float NativeEngineRuntime::renderMetronomeSample() noexcept {
         metronomeVolume_.load(std::memory_order_acquire);
     metronomeClickWaveform_ = sound;
     metronomeClickFrame_ = 0;
-    metronomeClickLength_ = std::max<std::size_t>(
-        1, static_cast<std::size_t>(sampleRate_ * duration));
+    metronomeClickLength_ = sound == 5 && !metronomeClick5Left_.empty()
+        ? metronomeClick5Left_.size()
+        : sound == 4 && !metronomeClick4Left_.empty() ? metronomeClick4Left_.size()
+        : std::max<std::size_t>(1, static_cast<std::size_t>(sampleRate_ * duration));
 
     const auto bpm = static_cast<double>(
         metronomeBpm_.load(std::memory_order_acquire));
     const auto speed = metronomeDoubleTimeEnabled_.load(std::memory_order_acquire) ? 2.0 : 1.0;
-    metronomeFramesUntilBeat_ += sampleRate_ * 60.0 / bpm / speed;
+    const auto denominator = static_cast<double>(
+        metronomeDenominator_.load(std::memory_order_acquire));
+    metronomeFramesUntilBeat_ += sampleRate_ * 60.0 / bpm * (4.0 / denominator) / speed;
     const auto beatsPerMeasure = static_cast<std::size_t>(
         metronomeNumerator_.load(std::memory_order_acquire)) *
         (speed > 1.0 ? 2u : 1u);
@@ -884,7 +951,21 @@ float NativeEngineRuntime::renderMetronomeSample() noexcept {
   }
   metronomeFramesUntilBeat_ -= 1.0;
 
-  if (metronomeClickFrame_ >= metronomeClickLength_) return 0.0f;
+  if (metronomeClickFrame_ >= metronomeClickLength_) return {0.0f, 0.0f};
+  if (metronomeClickWaveform_ == 4 && metronomeClickFrame_ < metronomeClick4Left_.size()) {
+    const auto frame = metronomeClickFrame_++;
+    return {
+      metronomeClick4Left_[frame] * metronomeClickAmplitude_,
+      metronomeClick4Right_[frame] * metronomeClickAmplitude_,
+    };
+  }
+  if (metronomeClickWaveform_ == 5 && metronomeClickFrame_ < metronomeClick5Left_.size()) {
+    const auto frame = metronomeClickFrame_++;
+    return {
+      metronomeClick5Left_[frame] * metronomeClickAmplitude_,
+      metronomeClick5Right_[frame] * metronomeClickAmplitude_,
+    };
+  }
   const auto frame = static_cast<double>(metronomeClickFrame_++);
   const auto length = static_cast<double>(metronomeClickLength_);
   const auto time = frame / sampleRate_;
@@ -897,7 +978,8 @@ float NativeEngineRuntime::renderMetronomeSample() noexcept {
       : metronomeClickWaveform_ == 3
           ? (2.0 / kPi) * std::asin(std::sin(phase))
           : std::sin(phase);
-  return static_cast<float>(oscillator * attack * decay) * metronomeClickAmplitude_;
+  const auto sample = static_cast<float>(oscillator * attack * decay) * metronomeClickAmplitude_;
+  return {sample, sample};
 }
 
 HookKeysEngine::SynthModules NativeEngineRuntime::modulePointers(

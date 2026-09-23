@@ -118,11 +118,23 @@ void TinySoundFontModule::setVolumeEnvelope(
   holdMs_.store(holdMs < 0.0f ? -1.0f : std::clamp(holdMs, 0.0f, 15000.0f), std::memory_order_relaxed);
   decayMs_.store(decayMs < 0.0f ? -1.0f : std::clamp(decayMs, 0.0f, 25000.0f), std::memory_order_relaxed);
   releaseMs_.store(releaseMs < 0.0f ? -1.0f : std::clamp(releaseMs, 0.0f, 25000.0f), std::memory_order_relaxed);
+  preserveEmbeddedSustain_.store(false, std::memory_order_relaxed);
+  volumeEnvelopeOverrideEnabled_.store(true, std::memory_order_relaxed);
+  envelopeGeneration_.fetch_add(1, std::memory_order_release);
+}
+
+void TinySoundFontModule::setReleaseOverride(float releaseMs) noexcept {
+  attackMs_.store(-1.0f, std::memory_order_relaxed);
+  holdMs_.store(-1.0f, std::memory_order_relaxed);
+  decayMs_.store(-1.0f, std::memory_order_relaxed);
+  releaseMs_.store(std::clamp(releaseMs, 0.0f, 25000.0f), std::memory_order_relaxed);
+  preserveEmbeddedSustain_.store(true, std::memory_order_relaxed);
   volumeEnvelopeOverrideEnabled_.store(true, std::memory_order_relaxed);
   envelopeGeneration_.fetch_add(1, std::memory_order_release);
 }
 
 void TinySoundFontModule::useEmbeddedVolumeEnvelope() noexcept {
+  preserveEmbeddedSustain_.store(false, std::memory_order_relaxed);
   volumeEnvelopeOverrideEnabled_.store(false, std::memory_order_relaxed);
   envelopeGeneration_.fetch_add(1, std::memory_order_release);
 }
@@ -165,7 +177,9 @@ void TinySoundFontModule::beginBlock() noexcept {
           holdMs_.load(std::memory_order_relaxed) / 1000.0f,
           decayMs_.load(std::memory_order_relaxed) / 1000.0f,
           releaseMs_.load(std::memory_order_relaxed) / 1000.0f,
-          sustainDb <= -60.0f ? 0.0f : std::pow(10.0f, sustainDb / 20.0f));
+          preserveEmbeddedSustain_.load(std::memory_order_relaxed)
+              ? -1.0f
+              : sustainDb <= -60.0f ? 0.0f : std::pow(10.0f, sustainDb / 20.0f));
     } else {
       hook_keys_tsf_use_embedded_volume_envelope(active_);
     }

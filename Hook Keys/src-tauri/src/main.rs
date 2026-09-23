@@ -36,7 +36,7 @@ unsafe extern "C" {
     );
     fn hk_runtime_set_midi_input_enabled(handle: *mut c_void, enabled: i32);
     fn hk_runtime_set_trance_gate(handle: *mut c_void, module_index: usize, enabled: i32, steps: i32,
-        length: i32, beat_multiplier: f32, gate: f32, depth: f32, attack_ms: f32, release_ms: f32, swing: f32) -> i32;
+        length: i32, beat_multiplier: f32, measure_beats: f32, gate: f32, depth: f32, attack_ms: f32, release_ms: f32, swing: f32) -> i32;
     fn hk_runtime_create(sample_rate: f64, maximum_block_frames: usize) -> *mut c_void;
     fn hk_runtime_destroy(handle: *mut c_void);
     fn hk_runtime_load_soundfont(
@@ -174,6 +174,10 @@ unsafe extern "C" {
         chorus_rate_hz: f32,
         chorus_depth: f32,
         chorus_mix: f32,
+        lo_fi_enabled: i32,
+        lo_fi_bit_depth: f32,
+        lo_fi_sample_rate_hz: f32,
+        lo_fi_mix: f32,
         auto_fader_enabled: i32,
         auto_fader_beats: f32,
         auto_fader_depth_db: f32,
@@ -232,6 +236,8 @@ unsafe extern "C" {
         accent_enabled: i32,
         double_time_enabled: i32,
         numerator: i32,
+        denominator: i32,
+        restart: i32,
     );
     fn hk_runtime_set_output_gain(
         handle: *mut c_void, db: f32, enabled: i32, channel_start: i32, channel_count: i32);
@@ -251,6 +257,7 @@ struct NativeTranceGateConfig {
     steps: i32,
     length: i32,
     beat_multiplier: f32,
+    measure_beats: f32,
     gate: f32,
     depth: f32,
     attack_ms: f32,
@@ -333,7 +340,8 @@ fn configure_module_modulation(
 fn configure_trance_gate(config: NativeTranceGateConfig, state: State<'_, AppState>) -> Result<(), String> {
     let engine = state.engine.current()?;
     let applied = unsafe { hk_runtime_set_trance_gate(engine.pointer(), config.module_index,
-        config.enabled as i32, config.steps, config.length, config.beat_multiplier, config.gate,
+        config.enabled as i32, config.steps, config.length, config.beat_multiplier,
+        config.measure_beats, config.gate,
         config.depth, config.attack_ms, config.release_ms, config.swing) };
     if applied != 0 { Ok(()) } else { Err("Não foi possível configurar o Trance Gate.".into()) }
 }
@@ -594,6 +602,9 @@ fn default_one() -> f32 { 1.0 }
 fn default_synth_oscillator3() -> i32 { 1 }
 fn default_synth_oscillator2_detune() -> f32 { 7.0 }
 fn default_synth_oscillator3_detune() -> f32 { -7.0 }
+fn default_lo_fi_bit_depth() -> f32 { 8.0 }
+fn default_lo_fi_sample_rate() -> f32 { 12_000.0 }
+fn default_lo_fi_mix() -> f32 { 0.5 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -662,6 +673,14 @@ struct EffectsConfig {
     chorus_depth: f32,
     #[serde(default)]
     chorus_mix: f32,
+    #[serde(default)]
+    lo_fi_enabled: bool,
+    #[serde(default = "default_lo_fi_bit_depth")]
+    lo_fi_bit_depth: f32,
+    #[serde(default = "default_lo_fi_sample_rate")]
+    lo_fi_sample_rate_hz: f32,
+    #[serde(default = "default_lo_fi_mix")]
+    lo_fi_mix: f32,
     #[serde(default)]
     auto_fader_enabled: bool,
     #[serde(default)]
@@ -1332,6 +1351,10 @@ fn configure_module_effects(
             config.chorus_rate_hz,
             config.chorus_depth,
             config.chorus_mix,
+            if config.lo_fi_enabled { 1 } else { 0 },
+            config.lo_fi_bit_depth,
+            config.lo_fi_sample_rate_hz,
+            config.lo_fi_mix,
             if config.auto_fader_enabled { 1 } else { 0 },
             config.auto_fader_beats,
             config.auto_fader_depth_db,
@@ -1461,6 +1484,8 @@ fn configure_metronome(
     accent_enabled: bool,
     double_time_enabled: bool,
     time_signature_numerator: i32,
+    time_signature_denominator: i32,
+    restart: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let engine = state.engine.current()?;
@@ -1468,12 +1493,16 @@ fn configure_metronome(
         hk_runtime_configure_metronome(
             engine.pointer(),
             enabled as i32,
-            bpm.clamp(60.0, 600.0),
+            bpm.clamp(60.0, 300.0),
             volume.clamp(0.0, 1.0),
-            click_sound.clamp(1, 3),
+            click_sound.clamp(1, 4),
             accent_enabled as i32,
             double_time_enabled as i32,
             time_signature_numerator.clamp(1, 16),
+            if [2, 4, 8, 16].contains(&time_signature_denominator) {
+                time_signature_denominator
+            } else { 4 },
+            restart as i32,
         )
     };
     Ok(())
@@ -1695,7 +1724,9 @@ fn set_midi_inputs(
                         && (message_type == 0xc0
                             || (message_type == 0xb0
                                 && matches!(data1, 0 | 6 | 7 | 10 | 16 | 32 | 91 | 100 | 101)));
-                    if !blocked_compatibility_message {
+                    let reserved_pad_note = (message_type == 0x80 || message_type == 0x90)
+                        && (status & 0x0f) == 9;
+                    if !blocked_compatibility_message && !reserved_pad_note {
                         if let Ok(engine) = hub.current() {
                             unsafe {
                                 hk_runtime_send_midi(
@@ -2407,10 +2438,18 @@ mod tests {
     fn metronome_renders_through_the_shared_output() {
         let engine = NativeRuntime::new(48_000.0, 512).expect("runtime");
         unsafe {
-            hk_runtime_configure_metronome(engine.pointer(), 1, 120.0, 1.0, 1, 1, 0, 4);
+            hk_runtime_configure_metronome(engine.pointer(), 1, 120.0, 1.0, 1, 1, 0, 4, 4, 0);
         }
         let mut output = vec![0.0_f32; 2048 * 2];
         unsafe { hk_runtime_render(engine.pointer(), output.as_mut_ptr(), 2048, 2) };
         assert!(output.iter().any(|sample| sample.abs() > 0.00001));
+
+        unsafe {
+            hk_runtime_configure_metronome(engine.pointer(), 1, 120.0, 1.0, 4, 0, 0, 4, 4, 1);
+        }
+        let mut sampled_click = vec![0.0_f32; 16_384 * 2];
+        unsafe { hk_runtime_render(engine.pointer(), sampled_click.as_mut_ptr(), 16_384, 2) };
+        assert!(sampled_click.iter().any(|sample| sample.abs() > 0.00001),
+            "Click 4.wav must render through the native metronome");
     }
 }

@@ -262,6 +262,7 @@ void ModuleEffects::prepare(double sampleRate, bool organModule) {
   if (organModule) cabinet_.prepare(sampleRate_);
   rotary_.prepare(sampleRate_);
   chorus_.prepare(sampleRate_);
+  loFi_.prepare(sampleRate_);
   configureCutoff();
   equalizer_.configure(config_.equalizer, sampleRate_);
   compressor_.configure(config_.compressor, sampleRate_);
@@ -278,8 +279,10 @@ void ModuleEffects::reset() noexcept {
   reverb_.reset();
   cabinet_.reset();
   rotary_.reset();
+  loFi_.reset();
   configureCutoff();
   gatePhaseSamples_ = 0.0;
+  gateMeasurePhaseSamples_ = 0.0;
   gateStep_ = 0;
   gateGain_ = 1.0f;
   currentInputGain_ = decibelsToLinear(config_.inputGainDb);
@@ -291,17 +294,29 @@ void ModuleEffects::reset() noexcept {
 
 void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexcept {
   config.normalize();
-  tempoBpm_ = std::clamp(tempoBpm, 60.0f, 600.0f);
+  tempoBpm_ = std::clamp(tempoBpm, 60.0f, 300.0f);
 
+  const bool cutoffChanged = !sameCutoff(config_.cutoff, config.cutoff);
+  const bool cutoffBypassChanged =
+      (config_.cutoff.enabled && config_.cutoff.frequencyHz < 19999.0f) !=
+      (config.cutoff.enabled && config.cutoff.frequencyHz < 19999.0f);
+  const bool equalizerChanged = !sameEq(config_.equalizer, config.equalizer);
+  const bool equalizerBypassChanged = config_.equalizer.enabled != config.equalizer.enabled;
+  const bool reverbTopologyChanged = config_.reverb.enabled != config.reverb.enabled ||
+      config_.reverb.impulse != config.reverb.impulse;
   // Qualquer troca de parâmetros pode criar uma descontinuidade na saída:
-  // EQ, compressor, tamanho do reverb e estados ON/OFF inclusive.
+  // compressor, tamanho do reverb e estados ON/OFF inclusive. Cutoff e bandas
+  // do EQ já interpolam seus próprios coeficientes amostra a amostra; aplicar
+  // também este offset global em cada passo do arrasto produzia ruído.
   const bool soundChanged = config_.inputGainDb != config.inputGainDb ||
-      !sameCutoff(config_.cutoff, config.cutoff) || !sameEq(config_.equalizer, config.equalizer) ||
+      cutoffBypassChanged || equalizerBypassChanged ||
       !sameCompressor(config_.compressor, config.compressor) ||
-      !sameDelay(config_.delay, config.delay) || !sameReverb(config_.reverb, config.reverb) ||
+      !sameDelay(config_.delay, config.delay) || reverbTopologyChanged ||
       !sameRotary(config_.rotary, config.rotary) ||
       config_.chorus.enabled != config.chorus.enabled || config_.chorus.rateHz != config.chorus.rateHz ||
       config_.chorus.depth != config.chorus.depth || config_.chorus.mix != config.chorus.mix ||
+      config_.loFi.enabled != config.loFi.enabled || config_.loFi.bitDepth != config.loFi.bitDepth ||
+      config_.loFi.sampleRateHz != config.loFi.sampleRateHz || config_.loFi.mix != config.loFi.mix ||
       config_.autoFader.enabled != config.autoFader.enabled ||
       config_.autoFader.depthDb != config.autoFader.depthDb ||
       config_.autoFader.beats != config.autoFader.beats ||
@@ -309,6 +324,7 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
       config_.tranceGate.steps != config.tranceGate.steps ||
       config_.tranceGate.length != config.tranceGate.length ||
       config_.tranceGate.beatMultiplier != config.tranceGate.beatMultiplier ||
+      config_.tranceGate.measureBeats != config.tranceGate.measureBeats ||
       config_.tranceGate.gate != config.tranceGate.gate ||
       config_.tranceGate.depth != config.tranceGate.depth ||
       config_.tranceGate.attackMs != config.tranceGate.attackMs ||
@@ -316,11 +332,11 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
       config_.tranceGate.swing != config.tranceGate.swing;
   if (soundChanged && hasProcessedOutput_) effectTransitionPending_ = true;
 
-  if (!sameCutoff(config_.cutoff, config.cutoff)) {
+  if (cutoffChanged) {
     config_.cutoff = config.cutoff;
     configureCutoff();
   }
-  if (!sameEq(config_.equalizer, config.equalizer)) equalizer_.configure(config.equalizer, sampleRate_);
+  if (equalizerChanged) equalizer_.configure(config.equalizer, sampleRate_);
   if (!sameCompressor(config_.compressor, config.compressor)) {
     compressor_.configure(config.compressor, sampleRate_);
   }
@@ -343,7 +359,7 @@ void ModuleEffects::configureCutoff() noexcept {
 }
 
 void ModuleEffects::setTempo(float tempoBpm) noexcept {
-  tempoBpm_ = std::clamp(tempoBpm, 60.0f, 600.0f);
+  tempoBpm_ = std::clamp(tempoBpm, 60.0f, 300.0f);
   delay_.setTempo(tempoBpm_);
 }
 
@@ -387,6 +403,7 @@ ModuleProcessorLevels ModuleEffects::process(
   cabinet_.process(left, right, frames, config_.rotary.cabinetEnabled, config_.rotary.enabled);
   if (config_.rotary.enabled) rotary_.process(left, right, frames);
   if (config_.chorus.enabled) chorus_.process(config_.chorus, left, right, frames);
+  if (config_.loFi.enabled) loFi_.process(config_.loFi, left, right, frames);
   processTranceGate(left, right, frames);
   if (config_.delay.enabled) delay_.process(left, right, frames);
   if (config_.reverb.enabled) reverb_.process(left, right, frames);
@@ -416,8 +433,8 @@ ModuleProcessorLevels ModuleEffects::process(
   return levels;
 }
 
-// Auto Fader: o volume desce até -depthDb e volta, uma volta inteira por
-// tempo (1/4) ou por colcheia (1/8). Só abaixa, nunca passa do volume atual.
+// Auto Fader: o volume desce até -depthDb e volta. `beats` representa a volta
+// inteira; cada trajeto entre os extremos dura metade desse ciclo.
 void ModuleEffects::processAutoFader(float* left, float* right, std::size_t frames) noexcept {
   const auto& fader = config_.autoFader;
   if (!fader.enabled) {
@@ -481,8 +498,44 @@ void ModuleEffects::Chorus::process(
   }
 }
 
+void ModuleEffects::LoFi::prepare(double nextSampleRate) noexcept {
+  sampleRate = std::clamp(nextSampleRate, 8000.0, 384000.0);
+  reset();
+}
+
+void ModuleEffects::LoFi::reset() noexcept {
+  heldLeft = 0.0f;
+  heldRight = 0.0f;
+  framesUntilCapture = 0;
+}
+
+void ModuleEffects::LoFi::process(
+    const LoFiConfig& config, float* left, float* right, std::size_t frames) noexcept {
+  if (!config.enabled || config.mix <= 0.0001f) return;
+  const auto bitDepth = static_cast<unsigned int>(std::round(config.bitDepth));
+  const auto quantization = static_cast<float>((1u << (bitDepth - 1u)) - 1u);
+  const auto holdFrames = std::max<std::uint32_t>(
+      1u, static_cast<std::uint32_t>(std::round(sampleRate / config.sampleRateHz)));
+  const auto quantize = [quantization](float sample) noexcept {
+    return std::round(std::clamp(sample, -1.0f, 1.0f) * quantization) / quantization;
+  };
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    const auto dryLeft = left[frame];
+    const auto dryRight = right[frame];
+    if (framesUntilCapture == 0) {
+      heldLeft = quantize(dryLeft);
+      heldRight = quantize(dryRight);
+      framesUntilCapture = holdFrames;
+    }
+    --framesUntilCapture;
+    left[frame] = dryLeft + (heldLeft - dryLeft) * config.mix;
+    right[frame] = dryRight + (heldRight - dryRight) * config.mix;
+  }
+}
+
 void ModuleEffects::triggerTranceGate() noexcept {
   gatePhaseSamples_ = 0.0;
+  gateMeasurePhaseSamples_ = 0.0;
   gateStep_ = 0;
 }
 
@@ -490,7 +543,15 @@ void ModuleEffects::processTranceGate(float* left, float* right, std::size_t fra
   const auto& gate = config_.tranceGate;
   if (!gate.enabled && gateGain_ >= 0.99999f) { gateGain_ = 1.0f; return; }
   const double baseDuration = sampleRate_ * 60.0 / tempoBpm_ * gate.beatMultiplier;
+  const double measureDuration = gate.measureBeats > 0.0f
+      ? sampleRate_ * 60.0 / tempoBpm_ * gate.measureBeats
+      : 0.0;
   for (std::size_t frame = 0; frame < frames; ++frame) {
+    if (measureDuration > 0.0 && gateMeasurePhaseSamples_ >= measureDuration) {
+      gateMeasurePhaseSamples_ = std::fmod(gateMeasurePhaseSamples_, measureDuration);
+      gatePhaseSamples_ = 0.0;
+      gateStep_ = 0;
+    }
     double duration = baseDuration * (gateStep_ % 2 == 0 ? 1.0 + gate.swing : 1.0 - gate.swing);
     while (gatePhaseSamples_ >= duration) {
       gatePhaseSamples_ -= duration;
@@ -503,6 +564,7 @@ void ModuleEffects::processTranceGate(float* left, float* right, std::size_t fra
     left[frame] *= gateGain_;
     right[frame] *= gateGain_;
     gatePhaseSamples_ += 1.0;
+    if (measureDuration > 0.0) gateMeasurePhaseSamples_ += 1.0;
   }
 }
 
@@ -788,8 +850,8 @@ void ModuleEffects::Biquad::configure(const EqBandConfig& config, double sampleR
   }
 
   // Ao mover frequência, ganho ou Q, interpolar os coeficientes evita zipper
-  // noise. Quinze milissegundos continuam parecendo instantâneos na interface
-  // e terminam antes da próxima atualização normal do arrasto.
+  // noise. Trinta milissegundos mantêm a resposta imediata, mas suavizam
+  // também movimentos rápidos e sucessivos do ponto na tela.
   if (!enabled && targetEnabled) {
     enabled = true;
     b0 = 1.0f;
@@ -806,7 +868,7 @@ void ModuleEffects::Biquad::configure(const EqBandConfig& config, double sampleR
     return;
   }
   smoothingSamplesRemaining = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(sampleRate * 0.015));
+      1, static_cast<std::uint32_t>(sampleRate * 0.030));
   const auto divisor = static_cast<float>(smoothingSamplesRemaining);
   stepB0 = (targetB0 - b0) / divisor;
   stepB1 = (targetB1 - b1) / divisor;
@@ -941,7 +1003,7 @@ void ModuleEffects::StereoDelay::configure(DelayConfig next, float nextTempoBpm)
 }
 
 void ModuleEffects::StereoDelay::setTempo(float nextTempoBpm) noexcept {
-  tempoBpm = std::clamp(nextTempoBpm, 60.0f, 600.0f);
+  tempoBpm = std::clamp(nextTempoBpm, 60.0f, 300.0f);
 }
 
 void ModuleEffects::StereoDelay::reset() noexcept {
@@ -989,6 +1051,7 @@ float ModuleEffects::StereoDelay::targetDelaySamples() const noexcept {
 
 void ModuleEffects::Reverb::prepare(double nextSampleRate) {
   sampleRate = nextSampleRate;
+  currentMix = config.mix;
   const auto bank = impulseBank(sampleRate);
   for (std::size_t impulse = 0; impulse < convolvers.size(); ++impulse) {
     const auto& source = (*bank)[impulse];
@@ -1016,6 +1079,7 @@ void ModuleEffects::Reverb::reset() noexcept {
     pair->left.clearHistory();
     pair->right.clearHistory();
   }
+  currentMix = config.mix;
 }
 
 void ModuleEffects::Reverb::process(float* left, float* right, std::size_t frames) noexcept {
@@ -1025,13 +1089,18 @@ void ModuleEffects::Reverb::process(float* left, float* right, std::size_t frame
   if (pair == nullptr || !pair->ready) return;
   // Mix como send: até 50% o som original fica inteiro e só entra reverb; de
   // 50% para cima o original é que vai embora, até sobrar só o processado.
-  const auto dryGain = config.mix <= 0.5f ? 1.0f : 1.0f - (config.mix - 0.5f) * 2.0f;
-  const auto wetGain = config.mix <= 0.5f ? config.mix * 2.0f : 1.0f;
+  // A rampa é calculada por amostra: movimentos contínuos do knob não trocam
+  // dry/wet em degraus no começo de cada callback.
+  const auto mixSmoothing = 1.0f - std::exp(
+      -1.0f / (0.030f * static_cast<float>(sampleRate)));
   for (std::size_t offset = 0; offset < frames;) {
     const auto count = std::min<std::size_t>(wetLeft.size(), frames - offset);
     pair->left.process(left + offset, wetLeft.data(), count);
     pair->right.process(right + offset, wetRight.data(), count);
     for (std::size_t frame = 0; frame < count; ++frame) {
+      currentMix += (config.mix - currentMix) * mixSmoothing;
+      const auto dryGain = currentMix <= 0.5f ? 1.0f : 1.0f - (currentMix - 0.5f) * 2.0f;
+      const auto wetGain = currentMix <= 0.5f ? currentMix * 2.0f : 1.0f;
       left[offset + frame] = left[offset + frame] * dryGain + wetLeft[frame] * wetGain;
       right[offset + frame] = right[offset + frame] * dryGain + wetRight[frame] * wetGain;
     }

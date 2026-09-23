@@ -1,6 +1,6 @@
 import type { LocalTrack } from './TrackLibraryStore';
 
-export type NativeTrackAction = 'play' | 'pause' | 'seek' | 'loop' | 'unload';
+export type NativeTrackAction = 'play' | 'pause' | 'seek' | 'loop' | 'rate' | 'unload';
 
 export interface NativeTrackStatus {
   activeId: number;
@@ -12,7 +12,11 @@ export interface NativeTrackStatus {
 export interface NativeTrackBridge {
   storeTrackFile(key: string, extension: string, file: Blob): Promise<void>;
   loadTrack(sourceId: number, key: string, extension: string): Promise<number>;
-  controlTrack(sourceId: number, action: NativeTrackAction, options?: { seconds?: number; loop?: boolean }): Promise<void>;
+  controlTrack(sourceId: number, action: NativeTrackAction, options?: {
+    seconds?: number;
+    loop?: boolean;
+    playbackRate?: number;
+  }): Promise<void>;
   trackStatus(): Promise<NativeTrackStatus>;
 }
 
@@ -73,6 +77,7 @@ export class NativeTrackSource extends EventTarget {
   private positionAt = 0;
   private playing = false;
   private loopEnabled = false;
+  private playbackRateValue = 1;
   private loaded: Promise<boolean> | null = null;
   private engineLoaded = false;
   private openSerial = 0;
@@ -101,7 +106,8 @@ export class NativeTrackSource extends EventTarget {
 
   get currentTime(): number {
     if (!this.playing) return this.position;
-    const elapsed = this.position + (performance.now() - this.positionAt) / 1000;
+    const elapsed = this.position
+      + ((performance.now() - this.positionAt) / 1000) * this.playbackRateValue;
     const duration = this.durationSeconds;
     if (!Number.isFinite(duration) || duration <= 0) return elapsed;
     return this.loopEnabled ? elapsed % duration : Math.min(duration, elapsed);
@@ -125,6 +131,21 @@ export class NativeTrackSource extends EventTarget {
     this.loopEnabled = value;
     if (!this.engineLoaded) return;
     void this.enqueue(() => this.bridge.controlTrack(this.id, 'loop', { loop: value })).catch(() => undefined);
+  }
+
+  get playbackRate(): number {
+    return this.playbackRateValue;
+  }
+
+  set playbackRate(value: number) {
+    const normalized = Math.min(2.5, Math.max(0.5, Number.isFinite(value) ? value : 1));
+    if (normalized === this.playbackRateValue) return;
+    this.position = this.currentTime;
+    this.positionAt = performance.now();
+    this.playbackRateValue = normalized;
+    if (!this.engineLoaded) return;
+    void this.enqueue(() => this.bridge.controlTrack(this.id, 'rate', { playbackRate: normalized }))
+      .catch(() => undefined);
   }
 
   open(track: LocalTrack, blob: Blob): void {
@@ -215,6 +236,9 @@ export class NativeTrackSource extends EventTarget {
     if (serial !== this.openSerial) return;
     this.engineLoaded = true;
     if (this.loopEnabled) await this.bridge.controlTrack(this.id, 'loop', { loop: true });
+    if (this.playbackRateValue !== 1) {
+      await this.bridge.controlTrack(this.id, 'rate', { playbackRate: this.playbackRateValue });
+    }
     if (this.position > 0) await this.bridge.controlTrack(this.id, 'seek', { seconds: this.position });
     const changed = this.durationSeconds !== duration;
     this.durationSeconds = duration;

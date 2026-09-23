@@ -75,7 +75,8 @@ public:
   void setMetronome(
       bool enabled, float bpm, float volume, std::uint8_t clickSound,
       bool accentEnabled, bool doubleTimeEnabled,
-      std::uint8_t timeSignatureNumerator) noexcept;
+      std::uint8_t timeSignatureNumerator, std::uint8_t timeSignatureDenominator,
+      bool restart = false) noexcept;
   // Saída do metrônomo: primeiro canal (0 = saídas 1+2) e 1 (mono) ou 2 (estéreo).
   void setMetronomeOutput(std::uint8_t channelStart, std::uint8_t channelCount) noexcept {
     metronomeOutputStart_.store(std::min<std::uint8_t>(channelStart, 31), std::memory_order_release);
@@ -198,6 +199,8 @@ private:
   std::atomic<bool> metronomeAccentEnabled_{false};
   std::atomic<bool> metronomeDoubleTimeEnabled_{false};
   std::atomic<std::uint8_t> metronomeNumerator_{4};
+  std::atomic<std::uint8_t> metronomeDenominator_{4};
+  std::atomic<bool> metronomeResetRequested_{false};
   bool metronomeWasEnabled_ = false;
   double metronomeFramesUntilBeat_ = 0.0;
   std::size_t metronomeBeatIndex_ = 0;
@@ -206,6 +209,10 @@ private:
   float metronomeClickFrequency_ = 1350.0f;
   float metronomeClickAmplitude_ = 0.0f;
   std::uint8_t metronomeClickWaveform_ = 1;
+  std::vector<float> metronomeClick4Left_;
+  std::vector<float> metronomeClick4Right_;
+  std::vector<float> metronomeClick5Left_;
+  std::vector<float> metronomeClick5Right_;
   std::unique_ptr<TrackPlayer> tracks_;
   std::atomic<float> outputGainLinear_{1.0f};
   float currentOutputGain_ = 1.0f;
@@ -236,7 +243,7 @@ private:
   void addMetronome(float* left, float* right, std::size_t frames) noexcept;
   void addMetronomeInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
   void addPadsInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
-  [[nodiscard]] float renderMetronomeSample() noexcept;
+  [[nodiscard]] std::array<float, 2> renderMetronomeSample() noexcept;
   [[nodiscard]] float nextOutputGain() noexcept;
   [[nodiscard]] float nextPadGain() noexcept;
   void applyMasterLimiter(float* frame, std::size_t channels) noexcept;

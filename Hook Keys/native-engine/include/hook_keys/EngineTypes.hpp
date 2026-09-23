@@ -105,7 +105,7 @@ struct EngineSettings final {
   void normalize() noexcept {
     sampleRate = std::clamp(sampleRate, 8000.0, 384000.0);
     maximumBlockFrames = std::clamp<std::size_t>(maximumBlockFrames, 16, 8192);
-    tempoBpm = std::clamp(tempoBpm, 60.0f, 600.0f);
+    tempoBpm = std::clamp(tempoBpm, 60.0f, 300.0f);
     globalTransposeSemitones = std::clamp<std::int8_t>(globalTransposeSemitones, -60, 60);
   }
 };

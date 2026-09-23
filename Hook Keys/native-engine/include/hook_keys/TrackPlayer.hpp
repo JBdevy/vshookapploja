@@ -85,6 +85,7 @@ public:
     source->frameCount = decoder->frameCount();
     source->position = 0;
     source->loop = false;
+    source->playbackRate = 1.0f;
     source->decoder = std::move(decoder);
     if (!reader_.joinable()) reader_ = std::thread([this] { readLoop(); });
     return true;
@@ -120,6 +121,7 @@ public:
       }
       if (source->position >= source->frameCount) source->position = 0;
       activeId_.store(id, std::memory_order_release);
+      playbackRate_.store(source->playbackRate, std::memory_order_release);
       restartLocked(*source);
       playing_.store(true, std::memory_order_release);
     }
@@ -158,6 +160,14 @@ public:
   void setLoop(std::uint32_t id, bool loop) {
     std::scoped_lock lock(mutex_);
     if (auto* source = findLocked(id)) source->loop = loop;
+  }
+
+  void setPlaybackRate(std::uint32_t id, float rate) {
+    std::scoped_lock lock(mutex_);
+    auto* source = findLocked(id);
+    if (source == nullptr) return;
+    source->playbackRate = std::clamp(std::isfinite(rate) ? rate : 1.0f, 0.5f, 2.5f);
+    if (source == activeLocked()) playbackRate_.store(source->playbackRate, std::memory_order_release);
   }
 
   void setGainDb(float db, bool enabled) noexcept {
@@ -205,6 +215,7 @@ public:
     if (generation != renderGeneration_) {
       renderGeneration_ = generation;
       hasBlock_ = false;
+      playbackPhase_ = 0.0f;
       fade_ = 0.0f;
       // Antes da primeira leitura da nova geração a agulha já mostra o destino.
       renderPosition_ = restartPosition_.load(std::memory_order_acquire);
@@ -223,6 +234,7 @@ public:
       gainStep_ = (target - gain_) / static_cast<float>(gainRampFrames_);
     }
     std::array<float, 2> blockPeaks{};
+    const auto playbackRate = std::clamp(playbackRate_.load(std::memory_order_acquire), 0.5f, 2.5f);
     for (std::size_t frame = 0; frame < frames; ++frame) {
       if (!hasBlock_ && !nextBlock(generation)) break;
       if (block_.end) {
@@ -238,8 +250,11 @@ public:
         if (--gainRampFrames_ == 0) gain_ = gainTargetSeen_;
       }
       const auto amount = gain_ * fade_;
-      const auto left = block_.samples[blockOffset_ * 2] * amount;
-      const auto right = block_.samples[blockOffset_ * 2 + 1] * amount;
+      const auto nextOffset = std::min<std::size_t>(blockOffset_ + 1, block_.frames - 1);
+      const auto leftSample = block_.samples[blockOffset_ * 2];
+      const auto rightSample = block_.samples[blockOffset_ * 2 + 1];
+      const auto left = (leftSample + (block_.samples[nextOffset * 2] - leftSample) * playbackPhase_) * amount;
+      const auto right = (rightSample + (block_.samples[nextOffset * 2 + 1] - rightSample) * playbackPhase_) * amount;
       blockPeaks[0] = std::max(blockPeaks[0], std::abs(left));
       blockPeaks[1] = std::max(blockPeaks[1], std::abs(right));
       auto* destination = output + frame * channels;
@@ -249,8 +264,18 @@ public:
       } else {
         destination[first] += (left + right) * 0.5f;
       }
-      renderPosition_ = block_.startFrame + blockOffset_ + 1;
-      if (++blockOffset_ >= block_.frames) hasBlock_ = false;
+      playbackPhase_ += playbackRate;
+      const auto advance = static_cast<std::size_t>(playbackPhase_);
+      playbackPhase_ -= static_cast<float>(advance);
+      for (std::size_t skipped = 0; skipped < advance; ++skipped) {
+        ++blockOffset_;
+        renderPosition_ = block_.startFrame + blockOffset_;
+        if (blockOffset_ >= block_.frames) {
+          hasBlock_ = false;
+          break;
+        }
+      }
+      if (advance == 0) renderPosition_ = block_.startFrame + blockOffset_;
       if (!wantsPlay && fade_ <= 0.0f) break;
     }
     for (std::size_t channel = 0; channel < blockPeaks.size(); ++channel) {
@@ -277,6 +302,7 @@ private:
     std::uint64_t position = 0;   // onde a leitura recomeça
     std::uint64_t readFrame = 0;  // próximo quadro que a thread de leitura decodifica
     bool loop = false;
+    float playbackRate = 1.0f;
     bool endQueued = false;
   };
 
@@ -375,6 +401,7 @@ private:
   std::atomic<std::uint64_t> positionFrames_{0};
   std::atomic<std::uint64_t> restartPosition_{0};
   std::atomic<float> gainTarget_{1.0f};
+  std::atomic<float> playbackRate_{1.0f};
   std::atomic<std::uint8_t> outputStart_{0};
   std::atomic<std::uint8_t> outputCount_{2};
 
@@ -385,6 +412,7 @@ private:
   std::uint32_t renderGeneration_ = 0;
   std::uint64_t renderPosition_ = 0;
   float fade_ = 0.0f;
+  float playbackPhase_ = 0.0f;
   float fadeStep_ = 0.0f;
   float gain_ = 1.0f;
   float gainTargetSeen_ = 1.0f;

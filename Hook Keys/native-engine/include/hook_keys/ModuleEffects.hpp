@@ -118,6 +118,9 @@ private:
 
     ReverbConfig config{};
     double sampleRate = 48000.0;
+    // O Mix é automatizado enquanto o áudio toca. O valor corrente segue o
+    // alvo por uma rampa curta para não criar degraus/estalos no dry/wet.
+    float currentMix = config.mix;
     // Todos os perfis são preparados antes da thread de áudio: alternar IR
     // durante uma apresentação não faz alocação nem processamento pesado.
     std::array<std::unique_ptr<ConvolutionPair>, 4> convolvers{};
@@ -222,6 +225,17 @@ private:
     void process(const ChorusConfig& config, float* left, float* right, std::size_t frames) noexcept;
   };
 
+  struct LoFi final {
+    double sampleRate = 48000.0;
+    float heldLeft = 0.0f;
+    float heldRight = 0.0f;
+    std::uint32_t framesUntilCapture = 0;
+
+    void prepare(double nextSampleRate) noexcept;
+    void reset() noexcept;
+    void process(const LoFiConfig& config, float* left, float* right, std::size_t frames) noexcept;
+  };
+
   double sampleRate_ = 48000.0;
   float tempoBpm_ = 120.0f;
   ModuleEffectsConfig config_{};
@@ -233,9 +247,11 @@ private:
   Cabinet cabinet_{};
   RotarySpeaker rotary_{};
   Chorus chorus_{};
+  LoFi loFi_{};
   // Auto Fader: fase da onda que abaixa e devolve o volume no tempo do BPM.
   double autoFaderPhase_ = 0.0;
   double gatePhaseSamples_ = 0.0;
+  double gateMeasurePhaseSamples_ = 0.0;
   std::uint8_t gateStep_ = 0;
   float gateGain_ = 1.0f;
   float gateAttackCoefficient_ = 0.01f;

@@ -34,6 +34,10 @@ public:
   void noteOff(std::uint8_t note) noexcept override {
     events.push_back({Event::Type::noteOff, note, 0});
   }
+  void stealNote(std::uint8_t note) noexcept override {
+    ++stealCount;
+    noteOff(note);
+  }
   void controlChange(std::uint8_t controller, std::uint8_t value) noexcept override {
     events.push_back({Event::Type::controlChange, controller, value});
   }
@@ -48,6 +52,7 @@ public:
 
   std::vector<Event> events;
   bool voicePoolNearlyFull = false;
+  int stealCount = 0;
 };
 
 class StereoSignalSynth final : public hook_keys::ModuleSynth {
@@ -260,6 +265,23 @@ void testPatternGeneratorRouting() {
     expect(synths[index].events.size() == expected, "generated notes stay inside their module");
   }
   expect(synths[4].events[0].data1 == 67, "arpeggiator reaches module 5");
+  for (auto& synth : synths) synth.events.clear();
+
+  // O pedal físico segura o acorde-fonte no controlador do arpejador, mas não
+  // pode chegar ao synth e prender todas as notas geradas em forma de acorde.
+  expect(engine.enqueueMidi(midi(0xb0, 64, 127, 0)), "queue physical sustain for arpeggiator source");
+  process(engine);
+  expect(synths[4].events.empty(), "physical sustain does not latch generated arpeggiator voices");
+  expect(engine.enqueueMidi(midi(0x90, 69, 100, hook_keys::arpeggiatorInputForModule(4))),
+      "queue generated note while the physical pedal is down");
+  expect(engine.enqueueMidi(midi(0x80, 69, 0, hook_keys::arpeggiatorInputForModule(4))),
+      "release generated note while the physical pedal is down");
+  process(engine);
+  expect(synths[4].events.size() == 2 && synths[4].events[0].type == Event::Type::noteOn &&
+         synths[4].events[1].type == Event::Type::noteOff,
+      "generated notes still release under the physical sustain pedal");
+  expect(synths[4].stealCount == 1,
+      "arpeggiator Gate uses the short anti-click release instead of stacking envelope tails");
   for (auto& synth : synths) synth.events.clear();
 
   // Um segundo módulo com seu próprio Arpeggiator não ouve a frase do
@@ -490,12 +512,18 @@ void testDisableAndPanic() {
   process(engine);
   expect(synth.events.size() == beforeDisable, "a disabled module takes no notes and no controllers");
 
-  // Menos soltar o pedal: sem isso o pad preso no sustain nunca solta.
+  // O sustain continua inteiro: Solo/Off fecha notas novas, mas o pedal ainda
+  // pode soltar e voltar a segurar as caudas que já pertencem ao módulo.
   expect(engine.enqueueMidi(midi(0xB0, 64, 0)), "queue pedal release while disabled");
   process(engine);
   expect(synth.events.size() == beforeDisable + 1 &&
          synth.events.back().data1 == 64 && synth.events.back().data2 == 0,
       "releasing the pedal still reaches a disabled module");
+  expect(engine.enqueueMidi(midi(0xB0, 64, 127)), "queue pedal down while disabled");
+  process(engine);
+  expect(synth.events.size() == beforeDisable + 2 &&
+         synth.events.back().data1 == 64 && synth.events.back().data2 == 127,
+      "pressing the pedal still reaches a disabled module");
 
   // E a tecla solta depois de desligar ainda para a nota dela.
   expect(engine.enqueueMidi(midi(0x80, 64, 0)), "queue note off while disabled");
@@ -1122,8 +1150,8 @@ void testMetronomeRunsOnTheAudioCallback() {
 
   hook_keys::NativeEngineRuntime small(sampleRate, 512);
   hook_keys::NativeEngineRuntime large(sampleRate, 2048);
-  small.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
-  large.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  small.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4);
+  large.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4);
 
   const auto smallOnsets = metronomeOnsets(small, totalFrames, 64);
   const auto largeOnsets = metronomeOnsets(large, totalFrames, 2048);
@@ -1136,13 +1164,26 @@ void testMetronomeRunsOnTheAudioCallback() {
   }
 
   hook_keys::NativeEngineRuntime doubled(sampleRate, 512);
-  doubled.setMetronome(true, 120.0f, 1.0f, 1, false, true, 4);
+  doubled.setMetronome(true, 120.0f, 1.0f, 1, false, true, 4, 4);
   expect(metronomeOnsets(doubled, totalFrames, 256).size() == 8,
          "double time doubles the click rate");
 
   hook_keys::NativeEngineRuntime quiet(sampleRate, 512);
-  quiet.setMetronome(true, 120.0f, 0.0f, 1, false, false, 4);
+  quiet.setMetronome(true, 120.0f, 0.0f, 1, false, false, 4, 4);
   expect(metronomeOnsets(quiet, totalFrames, 256).empty(), "zero volume silences the click");
+
+  hook_keys::NativeEngineRuntime sampled(sampleRate, 512);
+  sampled.setMetronome(true, 120.0f, 1.0f, 4, false, false, 4, 4);
+  expect(!metronomeOnsets(sampled, 16384, 256).empty(),
+         "Click 4 plays the embedded WAV sample");
+
+  hook_keys::NativeEngineRuntime restarted(sampleRate, 512);
+  restarted.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4);
+  (void)metronomeOnsets(restarted, 12000, 256);
+  restarted.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4, true);
+  const auto restartedOnsets = metronomeOnsets(restarted, 4096, 256);
+  expect(restartedOnsets.size() == 1 && restartedOnsets.front() < 16,
+         "an explicit metronome restart begins a new beat at the next audio block");
 }
 
 void testMetronomeOutputRoute() {
@@ -1161,7 +1202,7 @@ void testMetronomeOutputRoute() {
   };
 
   hook_keys::NativeEngineRuntime main(48000.0, 512);
-  main.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  main.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4);
   const auto mainEnergy = energyPerChannel(main);
   expect(mainEnergy[0] > 0.0 && mainEnergy[1] > 0.0, "the default metronome route plays on outputs 1+2");
   expect(mainEnergy[2] == 0.0 && mainEnergy[3] == 0.0, "the default metronome route leaves outputs 3+4 silent");
@@ -1170,21 +1211,21 @@ void testMetronomeOutputRoute() {
       "Click meter reads both post-volume metronome channels");
 
   hook_keys::NativeEngineRuntime cue(48000.0, 512);
-  cue.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  cue.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4);
   cue.setMetronomeOutput(2, 2);
   const auto cueEnergy = energyPerChannel(cue);
   expect(cueEnergy[0] == 0.0 && cueEnergy[1] == 0.0, "a 3+4 metronome route leaves outputs 1+2 silent");
   expect(cueEnergy[2] > 0.0 && cueEnergy[3] > 0.0, "a 3+4 metronome route plays on outputs 3+4");
 
   hook_keys::NativeEngineRuntime mono(48000.0, 512);
-  mono.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  mono.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4);
   mono.setMetronomeOutput(3, 1);
   const auto monoEnergy = energyPerChannel(mono);
   expect(monoEnergy[3] > 0.0 && monoEnergy[0] == 0.0 && monoEnergy[1] == 0.0 && monoEnergy[2] == 0.0,
          "a mono metronome route plays only on its output");
 
   hook_keys::NativeEngineRuntime missing(48000.0, 512);
-  missing.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4);
+  missing.setMetronome(true, 120.0f, 1.0f, 1, false, false, 4, 4);
   missing.setMetronomeOutput(8, 2);
   const auto missingEnergy = energyPerChannel(missing);
   expect(missingEnergy[0] > 0.0 && missingEnergy[1] > 0.0,
@@ -1305,6 +1346,17 @@ void testTrackPlayerPlaysRoutesLoopsAndEnds() {
          "playback continues from the needle");
   expect(player->status().positionFrames < 36000, "playback did not restart from the beginning");
 
+  player->pause(7);
+  expect(player->seek(7, 24000), "seek before playback-rate test");
+  player->setPlaybackRate(7, 2.0f);
+  expect(player->play(7), "play a tempo-synced loop at double rate");
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  audio.assign(256 * channels, 0.0f);
+  player->render(audio.data(), 256, channels);
+  expect(player->status().positionFrames >= 24500,
+         "double playback rate advances about two source frames per output frame");
+  player->setPlaybackRate(7, 1.0f);
+
   expect(player->load(8, std::make_unique<ConstantTrackDecoder>(4800, 0.1f, 0.1f)), "queue a second track");
   expect(player->play(8) && player->status().activeId == 8, "the queued track becomes the active one");
   expect(renderTracksUntil(*player, audio, channels, [&] { return std::abs(audio[0] - 0.1f) < 0.01f; }),
@@ -1340,6 +1392,17 @@ void testTrackPlayerPlaysRoutesLoopsAndEnds() {
     runtime.renderInterleaved(engineAudio.data(), 512, 2);
     heard = std::abs(engineAudio[1022] - 0.3f) < 0.01f;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  hook_keys::NativeEngineRuntime sixEight(sampleRate, 512);
+  sixEight.setMetronome(true, 120.0f, 1.0f, 1, false, false, 6, 8);
+  const auto sixEightOnsets = metronomeOnsets(sixEight, totalFrames, 256);
+  expect(sixEightOnsets.size() == 8,
+         "6/8 uses eighth-note pulses instead of treating the measure as six quarter notes");
+  for (std::size_t index = 1; index < sixEightOnsets.size(); ++index) {
+    expect(sixEightOnsets[index] - sixEightOnsets[index - 1] ==
+               static_cast<std::size_t>(sampleRate * 0.25),
+           "the metronome denominator controls the pulse duration");
   }
   expect(heard, "music is mixed into the engine output");
   const auto trackPeaks = runtime.consumeTrackPeaks();
@@ -1749,6 +1812,31 @@ void testReverbProcessing() {
   double tailEnergy = 0.0;
   for (std::size_t index = 128; index < left.size(); ++index) tailEnergy += std::abs(left[index]);
   expect(tailEnergy > 0.01, "reverb creates an audible tail");
+}
+
+void testReverbMixMovesWithoutBoundaryJump() {
+  hook_keys::ModuleEffects effects;
+  hook_keys::ModuleEffectsConfig config;
+  config.reverb.enabled = true;
+  config.reverb.mix = 0.0f;
+  effects.setConfig(config, 120.0f);
+  effects.prepare(48000.0);
+
+  std::array<float, 256> left{};
+  std::array<float, 256> right{};
+  left.fill(1.0f);
+  right.fill(1.0f);
+  effects.process(left.data(), right.data(), left.size());
+  const auto before = left.back();
+
+  config.reverb.mix = 1.0f;
+  effects.setConfig(config, 120.0f);
+  left.fill(1.0f);
+  right.fill(1.0f);
+  effects.process(left.data(), right.data(), left.size());
+
+  expect(std::abs(left.front() - before) < 0.02f,
+         "moving reverb mix starts with a smoothed dry/wet transition");
 }
 
 void testReverbImpulseSelection() {
@@ -2950,7 +3038,7 @@ void testOutputBoost() {
   const auto render = [](float master, float click) {
     hook_keys::NativeEngineRuntime runtime(48000, 128);
     runtime.setOutputGainDb(master, true);
-    runtime.setMetronome(true, 120, click, 1, false, false, 4);
+    runtime.setMetronome(true, 120, click, 1, false, false, 4, 4);
     std::array<float, 512> left{}, right{};
     runtime.render(left.data(), right.data(), left.size());
     left.fill(0);
@@ -3378,6 +3466,7 @@ int main() {
   testCompressorProcessing();
   testDelayProcessing();
   testReverbProcessing();
+  testReverbMixMovesWithoutBoundaryJump();
   testReverbImpulseSelection();
   testOrganCabinetImpulseSelection();
   testBypassedModuleEffectsAreBitTransparent();

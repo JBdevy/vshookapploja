@@ -2,6 +2,7 @@ import { type LocalTrack, TrackLibraryStore } from './TrackLibraryStore';
 import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
 import { isDesktopRuntime } from '../../platform/runtime';
 import type { NativeTrackPlayer, NativeTrackSource } from './NativeTrackPlayer';
+import { isTempoSyncedLoopTrack } from './BundledLoops';
 
 export type TrackPlaybackState = 'empty' | 'loading' | 'stopped' | 'playing' | 'paused';
 export type TrackQueueSource = 'manual' | 'auto';
@@ -14,6 +15,7 @@ export interface TrackPlaybackSnapshot {
   queueSource: TrackQueueSource | null;
   selectedTrackId: string | null;
   playingTrackId: string | null;
+  loopPlaying: boolean;
   state: TrackPlaybackState;
 }
 
@@ -50,7 +52,7 @@ export function createTrackTransportMarkup(): string {
       <button type="button" data-transport-action="play-stop" disabled>Play</button>
       <button class="track-transport__name" type="button" data-transport-track-name disabled><span>Nenhuma música selecionada</span></button>
       <output data-transport-remaining aria-label="Tempo restante">00:00</output>
-      <span class="track-transport__progress" data-top-transport-progress aria-hidden="true"></span>
+      <span class="track-transport__progress" data-top-transport-progress aria-hidden="true"><i></i></span>
     </section>
   `;
 }
@@ -90,6 +92,7 @@ export class TrackTransportController {
   private queueSequence = 0;
   private autoplayPending = false;
   private loopEnabled = false;
+  private tempoBpm = 120;
   private outputDb = 0;
   private outputEnabled = true;
   private audioContext: AudioContext | null = null;
@@ -110,6 +113,7 @@ export class TrackTransportController {
     private readonly onMessage: (message: string) => void,
     private readonly onPositionRequested: (trigger: HTMLElement) => void,
     private readonly nativeTracks: NativeTrackPlayer | null = null,
+    private readonly onLoopPlaybackStarting: () => void = () => {},
   ) {
     this.audio = this.createAudio();
     this.audio.preload = 'metadata';
@@ -162,8 +166,15 @@ export class TrackTransportController {
     this.applyLoop();
   }
 
+  setTempoBpm(bpm: number): void {
+    this.tempoBpm = Math.min(300, Math.max(60, Math.round(bpm * 2) / 2));
+    this.applyPlaybackRate(this.audio, this.selectedTrack);
+    if (this.queuedAudio) this.applyPlaybackRate(this.queuedAudio, this.queuedTrack);
+  }
+
   private applyLoop(): void {
-    this.audio.loop = this.loopEnabled && this.queueSource !== 'manual';
+    this.audio.loop = isTempoSyncedLoopTrack(this.selectedTrack)
+      || (this.loopEnabled && this.queueSource !== 'manual');
   }
 
   getSelectedTrackId(): string | null {
@@ -183,6 +194,7 @@ export class TrackTransportController {
       queueSource: this.queueSource,
       selectedTrackId: this.selectedTrack?.id ?? null,
       playingTrackId,
+      loopPlaying: this.state === 'playing' && isTempoSyncedLoopTrack(this.selectedTrack),
       state: this.state,
     };
   }
@@ -192,11 +204,22 @@ export class TrackTransportController {
   }
 
   async selectTrack(track: LocalTrack): Promise<void> {
-    if (track.id === this.selectedTrack?.id && this.state !== 'empty') return;
+    if (track.id === this.selectedTrack?.id && this.state !== 'empty') {
+      this.selectedTrack = track;
+      this.applyPlaybackRate(this.audio, track);
+      this.render();
+      return;
+    }
     if (track.id === this.queuedTrack?.id) {
       this.autoQueueSuppressedForTrackId = this.selectedTrack?.id ?? null;
       this.clearQueuedTrack();
       this.renderTimeline();
+      return;
+    }
+    // Um loop fixo nunca chega ao evento ended. Ao escolher outro item enquanto
+    // ele toca, a troca precisa acontecer agora em vez de ficar eternamente na fila.
+    if (isTempoSyncedLoopTrack(this.selectedTrack)) {
+      await this.loadCurrentTrack(track, this.state === 'playing' || this.state === 'paused');
       return;
     }
     if (this.state === 'playing' || this.state === 'paused') {
@@ -240,6 +263,7 @@ export class TrackTransportController {
       this.queuedAudio = this.createAudio();
       this.queuedAudio.preload = 'auto';
       this.queuedObjectUrl = this.attachFile(this.queuedAudio, track, file);
+      this.applyPlaybackRate(this.queuedAudio, track);
     } catch {
       if (sequence !== this.queueSequence || this.queuedTrack?.id !== track.id) return;
       this.clearQueuedTrack();
@@ -382,11 +406,13 @@ export class TrackTransportController {
     if (this.hasDuration() && this.audio.currentTime >= this.audio.duration) this.audio.currentTime = 0;
     try {
       await this.prepareAudioOutput(this.audio);
+      if (isTempoSyncedLoopTrack(this.selectedTrack)) this.onLoopPlaybackStarting();
       await this.audio.play();
       this.state = 'playing';
       this.render();
     } catch {
       this.onMessage('Não foi possível reproduzir essa música.');
+      this.render();
     }
   }
 
@@ -428,7 +454,9 @@ export class TrackTransportController {
       if (sequence !== this.loadSequence) return;
       if (!file) throw new Error('track_file_not_found');
       this.objectUrl = this.attachFile(this.audio, track, file);
+      this.applyPlaybackRate(this.audio, track);
       if (autoplay) {
+        if (isTempoSyncedLoopTrack(track)) this.onLoopPlaybackStarting();
         await this.audio.play();
         if (sequence !== this.loadSequence) return;
         this.state = 'playing';
@@ -473,9 +501,11 @@ export class TrackTransportController {
     this.state = 'loading';
     this.autoplayPending = true;
     this.bindCurrentAudio();
+    this.applyPlaybackRate(this.audio, track);
     this.render();
     try {
       await this.prepareAudioOutput(this.audio);
+      if (isTempoSyncedLoopTrack(track)) this.onLoopPlaybackStarting();
       await this.audio.play();
       this.state = 'playing';
       this.autoplayPending = false;
@@ -523,7 +553,7 @@ export class TrackTransportController {
     const ready = Boolean(this.selectedTrack) && this.state !== 'loading' && this.hasDuration();
     const ratio = this.currentProgress();
     this.root.querySelector<HTMLElement>('[data-top-transport-progress]')
-      ?.style.setProperty('--track-progress', `${ratio * 100}%`);
+      ?.style.setProperty('--track-progress-ratio', String(ratio));
     if (progress) {
       progress.value = String(Math.round(ratio * 1000));
       // Tocando, a agulha fica travada mas o toque continua chegando: quem
@@ -694,6 +724,18 @@ export class TrackTransportController {
     audio.src = url;
     audio.load();
     return url;
+  }
+
+  private applyPlaybackRate(audio: TrackAudio, track: LocalTrack | null): void {
+    const sourceBpm = track?.loopSourceBpm;
+    const tempoSynced = Number.isFinite(sourceBpm) && (sourceBpm ?? 0) > 0;
+    const rate = tempoSynced
+      ? this.tempoBpm / (sourceBpm ?? 120)
+      : 1;
+    // Varispeed mantém navegador/Android e o motor nativo do iOS com o mesmo
+    // resultado; músicas normais nunca saem de 1x.
+    if (audio instanceof HTMLAudioElement) audio.preservesPitch = !tempoSynced;
+    audio.playbackRate = Math.min(2.5, Math.max(0.5, rate));
   }
 
   private async prepareAudioOutput(audio: TrackAudio): Promise<void> {

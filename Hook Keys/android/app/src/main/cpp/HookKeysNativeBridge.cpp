@@ -321,9 +321,8 @@ public:
     if (runtime == nullptr) return false;
     hook_keys::ModuleConfig config;
     config.enabled = enabled;
-    config.midiInputSlot = inputSlot == hook_keys::kArpeggiatorInput
-        ? inputSlot
-        : inputSlot >= hook_keys::kMidiInputCount ? hook_keys::kAllMidiInputs : inputSlot;
+    config.midiInputSlot = inputSlot < hook_keys::kRoutableMidiInputCount
+        ? inputSlot : hook_keys::kAllMidiInputs;
     config.lowNote = lowNote;
     config.highNote = highNote;
     config.octaveShift = octave;
@@ -390,6 +389,7 @@ public:
       float rotaryDepth, float rotaryMix, bool rotaryModulationEnabled,
       bool rotaryCabinetEnabled,
       bool chorusEnabled, float chorusRateHz, float chorusDepth, float chorusMix,
+      bool loFiEnabled, float loFiBitDepth, float loFiSampleRateHz, float loFiMix,
       bool autoFaderEnabled, float autoFaderBeats, float autoFaderDepthDb,
       float inputGainDb) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
@@ -432,6 +432,7 @@ public:
                       rotaryModulationEnabled};
     effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled;
     effects.chorus = {chorusEnabled, chorusRateHz, chorusDepth, chorusMix};
+    effects.loFi = {loFiEnabled, loFiBitDepth, loFiSampleRateHz, loFiMix};
     effects.autoFader = {autoFaderEnabled, autoFaderBeats, autoFaderDepthDb};
     effects.inputGainDb = inputGainDb;
     return runtime->setModuleEffects(moduleIndex, effects);
@@ -483,7 +484,7 @@ public:
   }
 
   bool configureTranceGate(std::size_t moduleIndex, bool enabled, int steps, int length,
-      float beatMultiplier, float gate, float depth, float attackMs, float releaseMs, float swing) noexcept {
+      float beatMultiplier, float measureBeats, float gate, float depth, float attackMs, float releaseMs, float swing) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     hook_keys::ModuleEffectsConfig::TranceGateConfig config;
@@ -491,6 +492,7 @@ public:
     config.steps = static_cast<std::uint16_t>(steps);
     config.length = static_cast<std::uint8_t>(std::clamp(length, 1, 16));
     config.beatMultiplier = beatMultiplier;
+    config.measureBeats = measureBeats;
     config.gate = gate;
     config.depth = depth;
     config.attackMs = attackMs;
@@ -562,14 +564,15 @@ public:
 
   bool configureMetronome(
       bool enabled, float bpm, float volume, int clickSound,
-      bool accentEnabled, bool doubleTimeEnabled, int numerator) noexcept {
+      bool accentEnabled, bool doubleTimeEnabled, int numerator, int denominator, bool restart) noexcept {
     auto* runtime = activeRuntime_.load(std::memory_order_acquire);
     if (runtime == nullptr) return false;
     runtime->setMetronome(
         enabled, bpm, volume,
-        static_cast<std::uint8_t>(std::clamp(clickSound, 1, 3)),
+        static_cast<std::uint8_t>(std::clamp(clickSound, 1, 4)),
         accentEnabled, doubleTimeEnabled,
-        static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)));
+        static_cast<std::uint8_t>(std::clamp(numerator, 1, 16)),
+        static_cast<std::uint8_t>(denominator), restart);
     return true;
   }
 
@@ -931,9 +934,9 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetModuleGain(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureTranceGate(
     JNIEnv*, jclass, jint moduleIndex, jboolean enabled, jint steps, jint length,
-    jfloat beatMultiplier, jfloat gate, jfloat depth, jfloat attackMs, jfloat releaseMs, jfloat swing) {
+    jfloat beatMultiplier, jfloat measureBeats, jfloat gate, jfloat depth, jfloat attackMs, jfloat releaseMs, jfloat swing) {
   return gEngine.configureTranceGate(static_cast<std::size_t>(moduleIndex), enabled == JNI_TRUE,
-      steps, length, beatMultiplier, gate, depth, attackMs, releaseMs, swing) ? JNI_TRUE : JNI_FALSE;
+      steps, length, beatMultiplier, measureBeats, gate, depth, attackMs, releaseMs, swing) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -995,6 +998,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
     jfloat rotaryDepth, jfloat rotaryMix, jboolean rotaryModulationEnabled,
     jboolean rotaryCabinetEnabled,
     jboolean chorusEnabled, jfloat chorusRateHz, jfloat chorusDepth, jfloat chorusMix,
+    jboolean loFiEnabled, jfloat loFiBitDepth, jfloat loFiSampleRateHz, jfloat loFiMix,
     jboolean autoFaderEnabled, jfloat autoFaderBeats, jfloat autoFaderDepthDb,
     jfloat inputGainDb) {
   const auto readInts = [](JNIEnv* env, jintArray source, jsize start, jsize count, int* target) {
@@ -1024,6 +1028,7 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureModuleEffect
              rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
              rotaryModulationEnabled == JNI_TRUE, rotaryCabinetEnabled == JNI_TRUE,
              chorusEnabled == JNI_TRUE, chorusRateHz, chorusDepth, chorusMix,
+             loFiEnabled == JNI_TRUE, loFiBitDepth, loFiSampleRateHz, loFiMix,
              autoFaderEnabled == JNI_TRUE, autoFaderBeats, autoFaderDepthDb, inputGainDb)
              ? JNI_TRUE
              : JNI_FALSE;
@@ -1112,10 +1117,11 @@ Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeSetMetronomeOutput(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hookdeveloper_hookkeys_HookKeysNativePlugin_nativeConfigureMetronome(
     JNIEnv*, jclass, jboolean enabled, jfloat bpm, jfloat volume, jint clickSound,
-    jboolean accentEnabled, jboolean doubleTimeEnabled, jint numerator) {
+    jboolean accentEnabled, jboolean doubleTimeEnabled, jint numerator, jint denominator, jboolean restart) {
   return gEngine.configureMetronome(
              enabled == JNI_TRUE, bpm, volume, clickSound,
-             accentEnabled == JNI_TRUE, doubleTimeEnabled == JNI_TRUE, numerator)
+             accentEnabled == JNI_TRUE, doubleTimeEnabled == JNI_TRUE, numerator, denominator,
+             restart == JNI_TRUE)
              ? JNI_TRUE
              : JNI_FALSE;
 }

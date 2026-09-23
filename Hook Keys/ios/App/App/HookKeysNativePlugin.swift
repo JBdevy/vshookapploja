@@ -477,7 +477,7 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
         let ok = engine.configureModule(
             call.getInt("moduleIndex", -1),
             enabled: call.getBool("enabled", true),
-            inputSlot: call.getInt("inputSlot", 3),
+            inputSlot: call.getInt("inputSlot", 0xff),
             lowNote: call.getInt("lowNote", 0),
             highNote: call.getInt("highNote", 127),
             octave: call.getInt("octave", 0),
@@ -537,7 +537,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
     @objc func configureTranceGate(_ call: CAPPluginCall) {
         let ok = engine.configureTranceGate(call.getInt("moduleIndex", -1), enabled: call.getBool("enabled", false),
             steps: call.getInt("steps", 65535), length: call.getInt("length", 16),
-            beatMultiplier: call.getFloat("beatMultiplier", 0.25), gate: call.getFloat("gate", 0.5),
+            beatMultiplier: call.getFloat("beatMultiplier", 0.25),
+            measureBeats: call.getFloat("measureBeats", 0), gate: call.getFloat("gate", 0.5),
             depth: call.getFloat("depth", 1), attackMs: call.getFloat("attackMs", 3),
             releaseMs: call.getFloat("releaseMs", 3), swing: call.getFloat("swing", 0))
         if ok { call.resolve() } else { call.reject("Não foi possível configurar o Trance Gate.") }
@@ -609,8 +610,12 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             chorusRateHz: call.getFloat("chorusRateHz", 0.6),
             chorusDepth: call.getFloat("chorusDepth", 0.5),
             chorusMix: call.getFloat("chorusMix", 0.35),
+            loFiEnabled: call.getBool("loFiEnabled", false),
+            loFiBitDepth: call.getFloat("loFiBitDepth", 8),
+            loFiSampleRateHz: call.getFloat("loFiSampleRateHz", 12000),
+            loFiMix: call.getFloat("loFiMix", 0.5),
             autoFaderEnabled: call.getBool("autoFaderEnabled", false),
-            autoFaderBeats: call.getFloat("autoFaderBeats", 1),
+            autoFaderBeats: call.getFloat("autoFaderBeats", 4),
             autoFaderDepthDb: call.getFloat("autoFaderDepthDb", 6),
             inputGainDb: call.getFloat("inputGainDb", 0)
         )
@@ -740,10 +745,13 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             call.getBool("enabled", false),
             bpm: call.getFloat("bpm", 120),
             volume: min(1, max(0, call.getFloat("volume", 1))),
-            clickSound: min(3, max(1, call.getInt("clickSound", 1))),
+            clickSound: min(4, max(1, call.getInt("clickSound", 1))),
             accentEnabled: call.getBool("accentEnabled", false),
             doubleTimeEnabled: call.getBool("doubleTimeEnabled", false),
-            timeSignatureNumerator: min(16, max(1, call.getInt("timeSignatureNumerator", 4)))
+            timeSignatureNumerator: min(16, max(1, call.getInt("timeSignatureNumerator", 4))),
+            timeSignatureDenominator: [2, 4, 8, 16].contains(call.getInt("timeSignatureDenominator", 4))
+                ? call.getInt("timeSignatureDenominator", 4) : 4,
+            restart: call.getBool("restart", false)
         )
         if ok { call.resolve() } else { call.reject("O motor ainda não foi inicializado.") }
     }
@@ -1111,7 +1119,8 @@ public final class HookKeysNativePlugin: CAPPlugin, CAPBridgedPlugin, UIDocument
             call.getInt("sourceId", 0),
             action: call.getString("action", ""),
             seconds: call.getDouble("seconds", 0),
-            loop: call.getBool("loop", false)
+            loop: call.getBool("loop", false),
+            playbackRate: call.getDouble("playbackRate", 1)
         )
         if ok { call.resolve() } else { call.reject("A música não está carregada no motor.", "track_not_loaded") }
     }

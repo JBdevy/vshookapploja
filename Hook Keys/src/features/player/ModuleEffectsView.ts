@@ -1,6 +1,6 @@
 import { createParameterKnobMarkup } from './ParameterKnobView';
 
-export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary' | 'chorus' | 'cutoffEnvelope';
+export type ModuleEffectKind = 'compressor' | 'reverb' | 'delay' | 'rotary' | 'chorus' | 'lofi' | 'cutoffEnvelope';
 export type ModuleProcessorReplacement =
   'compressor' | 'chorus' | 'rotary' | 'arpeggiator' | 'trance-gate' | 'organ' | 'synth';
 
@@ -293,11 +293,25 @@ export interface ModuleChorusSettings {
   mix: number;
 }
 
+export interface ModuleLoFiSettings {
+  enabled: boolean;
+  bitDepth: number;
+  sampleRateHz: number;
+  mix: number;
+}
+
 const DEFAULT_CHORUS: ModuleChorusSettings = {
   enabled: false,
   rateHz: 0.6,
   depth: 50,
   mix: 35,
+};
+
+const DEFAULT_LOFI: ModuleLoFiSettings = {
+  enabled: false,
+  bitDepth: 8,
+  sampleRateHz: 12_000,
+  mix: 50,
 };
 
 export function readModuleChorusSettings(value: unknown): ModuleChorusSettings {
@@ -321,6 +335,32 @@ export function createModuleChorusMarkup(settings: Readonly<Record<string, unkno
     <section class="module-effect-editor module-chorus-editor" data-module-effect-editor="chorus">
       <div class="module-effect-controls module-effect-controls--chorus">
         ${controls.map((item) => createEffectKnob('chorus', item)).join('')}
+      </div>
+    </section>
+  `;
+}
+
+export function readModuleLoFiSettings(value: unknown): ModuleLoFiSettings {
+  const source = record(value);
+  return {
+    enabled: source.enabled === true,
+    bitDepth: numberInRange(source.bitDepth, 4, 16, DEFAULT_LOFI.bitDepth),
+    sampleRateHz: numberInRange(source.sampleRateHz, 1_000, 48_000, DEFAULT_LOFI.sampleRateHz),
+    mix: numberInRange(source.mix, 0, 100, DEFAULT_LOFI.mix),
+  };
+}
+
+export function createModuleLoFiMarkup(settings: Readonly<Record<string, unknown>>): string {
+  const value = readModuleLoFiSettings(settings.lofi);
+  const controls: EffectControlDefinition[] = [
+    control('bitDepth', 'Bits', 4, 16, 1, value.bitDepth, `${Math.round(value.bitDepth)} bit`),
+    control('sampleRateHz', 'Rate', 1_000, 48_000, 100, value.sampleRateHz, formatLoFiRate(value.sampleRateHz)),
+    control('mix', 'Mix', 0, 100, 1, value.mix, `${Math.round(value.mix)}%`),
+  ];
+  return `
+    <section class="module-effect-editor module-lofi-editor" data-module-effect-editor="lofi">
+      <div class="module-effect-controls module-effect-controls--lofi">
+        ${controls.map((item) => createEffectKnob('lofi', item)).join('')}
       </div>
     </section>
   `;
@@ -487,6 +527,7 @@ export function readModuleEffectSettings(kind: ModuleEffectKind, value: unknown)
   if (kind === 'reverb') return readModuleReverbSettings(value);
   if (kind === 'rotary') return readModuleRotarySettings(value);
   if (kind === 'chorus') return readModuleChorusSettings(value);
+  if (kind === 'lofi') return readModuleLoFiSettings(value);
   if (kind === 'cutoffEnvelope') return readModuleCutoffEnvelopeSettings(value);
   return readModuleDelaySettings(value);
 }
@@ -504,6 +545,11 @@ export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, val
     return `${key === 'releaseMs' ? Math.round(value) : formatNumber(value)} ms`;
   }
   if (kind === 'chorus') return key === 'rateHz' ? `${value.toFixed(2)} Hz` : `${Math.round(value)}%`;
+  if (kind === 'lofi') {
+    if (key === 'bitDepth') return `${Math.round(value)} bit`;
+    if (key === 'sampleRateHz') return formatLoFiRate(value);
+    return `${Math.round(value)}%`;
+  }
   if (kind === 'reverb') return key === 'decay' ? `${formatNumber(value)} s` : `${Math.round(value)}%`;
   if (kind === 'cutoffEnvelope') {
     if (key === 'depthOctaves') return `${value.toFixed(1)} oct`;
@@ -555,8 +601,12 @@ function formatNumber(value: number): string {
   return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
 }
 
+function formatLoFiRate(value: number): string {
+  return value >= 1_000 ? `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)} kHz` : `${Math.round(value)} Hz`;
+}
+
 export function delayMillisecondsForBpm(bpm: number, division: string): number {
-  const safeBpm = Math.min(600, Math.max(60, Number.isFinite(bpm) ? bpm : 120));
+  const safeBpm = Math.min(300, Math.max(60, Number.isFinite(bpm) ? bpm : 120));
   const multiplier = division === '1/1' ? 4
     : division === '1/2' ? 2
       : division === '1/8' ? 0.5

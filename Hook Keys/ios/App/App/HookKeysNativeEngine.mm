@@ -636,9 +636,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
   hook_keys::ModuleConfig config;
   config.enabled = enabled;
-  config.midiInputSlot = inputSlot == hook_keys::kArpeggiatorInput
-      ? static_cast<std::uint8_t>(inputSlot)
-      : inputSlot >= 0 && inputSlot < kMidiSlotCount
+  config.midiInputSlot = inputSlot >= 0 &&
+      inputSlot < static_cast<NSInteger>(hook_keys::kRoutableMidiInputCount)
           ? static_cast<std::uint8_t>(inputSlot) : hook_keys::kAllMidiInputs;
   config.lowNote = static_cast<std::uint8_t>(std::clamp<NSInteger>(lowNote, 0, 127));
   config.highNote = static_cast<std::uint8_t>(std::clamp<NSInteger>(highNote, 0, 127));
@@ -711,6 +710,10 @@ static NSString *describeFormat(AVAudioFormat *format) {
                    chorusRateHz:(float)chorusRateHz
                     chorusDepth:(float)chorusDepth
                       chorusMix:(float)chorusMix
+                  loFiEnabled:(BOOL)loFiEnabled
+                 loFiBitDepth:(float)loFiBitDepth
+             loFiSampleRateHz:(float)loFiSampleRateHz
+                       loFiMix:(float)loFiMix
                autoFaderEnabled:(BOOL)autoFaderEnabled
                  autoFaderBeats:(float)autoFaderBeats
                autoFaderDepthDb:(float)autoFaderDepthDb
@@ -757,6 +760,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
                     rotaryModulationEnabled != NO};
   effects.rotary.cabinetEnabled = moduleIndex == 6 && rotaryCabinetEnabled != NO;
   effects.chorus = {chorusEnabled != NO, chorusRateHz, chorusDepth, chorusMix};
+  effects.loFi = {loFiEnabled != NO, loFiBitDepth, loFiSampleRateHz, loFiMix};
   effects.autoFader = {autoFaderEnabled != NO, autoFaderBeats, autoFaderDepthDb};
   effects.inputGainDb = inputGainDb;
   return runtime->setModuleEffects(static_cast<std::size_t>(moduleIndex), effects);
@@ -820,7 +824,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
              static_cast<std::uint8_t>(std::clamp(static_cast<int>(mode), 0, 4)), rateHz, intensity);
 }
 
-- (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing {
+- (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier measureBeats:(float)measureBeats gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr || moduleIndex < 0 || moduleIndex >= 8) return NO;
   hook_keys::ModuleEffectsConfig::TranceGateConfig config;
@@ -828,6 +832,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
   config.steps = static_cast<std::uint16_t>(steps);
   config.length = static_cast<std::uint8_t>(std::clamp<NSInteger>(length, 1, 16));
   config.beatMultiplier = beatMultiplier;
+  config.measureBeats = measureBeats;
   config.gate = gate;
   config.depth = depth;
   config.attackMs = attackMs;
@@ -902,7 +907,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
                    data2:(NSInteger)data2 timestamp:(uint64_t)timestamp {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && runtime->sendMidi(
-      static_cast<std::uint8_t>(std::clamp<NSInteger>(slot, 0, hook_keys::kArpeggiatorInput)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(
+          slot, 0, static_cast<NSInteger>(hook_keys::kRoutableMidiInputCount - 1))),
       static_cast<std::uint8_t>(status), static_cast<std::uint8_t>(data1),
       static_cast<std::uint8_t>(data2), timestamp);
 }
@@ -948,14 +954,17 @@ static NSString *describeFormat(AVAudioFormat *format) {
 - (BOOL)configureMetronomeEnabled:(BOOL)enabled bpm:(float)bpm volume:(float)volume
                        clickSound:(NSInteger)clickSound accentEnabled:(BOOL)accentEnabled
                 doubleTimeEnabled:(BOOL)doubleTimeEnabled
-           timeSignatureNumerator:(NSInteger)timeSignatureNumerator {
+           timeSignatureNumerator:(NSInteger)timeSignatureNumerator
+         timeSignatureDenominator:(NSInteger)timeSignatureDenominator
+                          restart:(BOOL)restart {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime == nullptr) return NO;
   runtime->setMetronome(
       enabled, bpm, volume,
-      static_cast<std::uint8_t>(std::clamp<NSInteger>(clickSound, 1, 3)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(clickSound, 1, 4)),
       accentEnabled, doubleTimeEnabled,
-      static_cast<std::uint8_t>(std::clamp<NSInteger>(timeSignatureNumerator, 1, 16)));
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(timeSignatureNumerator, 1, 16)),
+      static_cast<std::uint8_t>(timeSignatureDenominator), restart);
   return YES;
 }
 
@@ -980,7 +989,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return static_cast<double>(frames) / player.sampleRate();
 }
 
-- (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds loop:(BOOL)loop {
+- (BOOL)controlTrackId:(NSInteger)sourceId action:(NSString *)action seconds:(double)seconds
+                  loop:(BOOL)loop playbackRate:(double)playbackRate {
   std::scoped_lock lock(_controlMutex);
   if (!_audioState || !_audioState->runtime || sourceId <= 0) return NO;
   auto &player = _audioState->runtime->tracks();
@@ -993,6 +1003,10 @@ static NSString *describeFormat(AVAudioFormat *format) {
   if ([action isEqualToString:@"play"]) return player.play(identifier);
   if ([action isEqualToString:@"pause"]) { player.pause(identifier); return YES; }
   if ([action isEqualToString:@"loop"]) { player.setLoop(identifier, loop); return YES; }
+  if ([action isEqualToString:@"rate"]) {
+    player.setPlaybackRate(identifier, static_cast<float>(playbackRate));
+    return YES;
+  }
   if ([action isEqualToString:@"seek"]) {
     const auto frame = std::isfinite(seconds) ? std::max(0.0, seconds) * player.sampleRate() : 0.0;
     return player.seek(identifier, static_cast<std::uint64_t>(std::llround(frame)));
@@ -1115,7 +1129,8 @@ static NSString *describeFormat(AVAudioFormat *format) {
       (type == 0xc0 || (type == 0xb0 &&
        (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 || data1 == 16 ||
         data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101)));
-  if (!blockedCompatibilityMessage) {
+  const bool reservedPadNote = (type == 0x80 || type == 0x90) && (status & 0x0f) == 9;
+  if (!blockedCompatibilityMessage && !reservedPadNote) {
     [self sendMidiFromSlot:slot status:status data1:data1 data2:data2 timestamp:timestamp];
   }
   NSString *deviceId = slot < _selectedDeviceIds.count && [_selectedDeviceIds[slot] isKindOfClass:NSString.class]

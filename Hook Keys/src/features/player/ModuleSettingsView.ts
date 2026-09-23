@@ -3,12 +3,14 @@ import {
   createModuleChorusMarkup,
   createModuleCompressorMarkup,
   createModuleDelayMarkup,
+  createModuleLoFiMarkup,
   createModuleReverbMarkup,
   createModuleRotaryMarkup,
   readModuleChorusSettings,
   readModuleCompressorSettings,
   readModuleCutoffEnvelopeSettings,
   readModuleDelaySettings,
+  readModuleLoFiSettings,
   readModuleReverbSettings,
   readModuleRotarySettings,
   readCutoffFilterType,
@@ -261,7 +263,7 @@ const ENVELOPE_CONTROLS: readonly {
 // Páginas do Config. O topo (MIDI, saída, Polifonia, Modo) e o rodapé (Gain,
 // Velocity, Glide, Mod) ficam sempre na tela; só o miolo troca de página.
 export type ModuleSettingsPage =
-  'envelope' | 'eq' | 'compressor' | 'chorus' | 'reverb' | 'delay'
+  'envelope' | 'eq' | 'compressor' | 'chorus' | 'lofi' | 'reverb' | 'delay'
   | 'rotary' | 'arpeggiator' | 'trance-gate';
 export type ModuleSettingsMode = 'default' | 'user';
 
@@ -270,6 +272,7 @@ const MODULE_SETTINGS_PAGE_LABELS: Readonly<Record<ModuleSettingsPage, string>> 
   eq: 'EQ',
   compressor: 'Compressor',
   chorus: 'Chorus',
+  lofi: 'Lo-Fi',
   reverb: 'Reverb',
   delay: 'Delay',
   rotary: 'Rotary',
@@ -281,8 +284,10 @@ export function moduleSettingsPages(
   processorReplacement: ModuleProcessorReplacement,
 ): readonly ModuleSettingsPage[] {
   const pages: ModuleSettingsPage[] = processorReplacement === 'synth'
-    ? ['eq', 'compressor', 'chorus', 'reverb', 'delay']
-    : ['envelope', 'eq', 'compressor', 'chorus', 'reverb', 'delay'];
+    ? ['eq', 'compressor', 'chorus', 'lofi', 'reverb', 'delay']
+    : processorReplacement === 'organ'
+      ? ['envelope', 'eq', 'compressor', 'chorus', 'reverb', 'delay']
+      : ['envelope', 'eq', 'compressor', 'chorus', 'lofi', 'reverb', 'delay'];
   // O processador próprio do módulo (se houver) vem depois do Delay.
   if (processorReplacement === 'rotary') pages.push('rotary');
   // Todo módulo tem seu próprio Arpeggiator e Pulse, independente dos demais.
@@ -302,6 +307,7 @@ export function moduleSettingsPagePower(
   if (page === 'eq') return settings.eqEnabled !== false;
   if (page === 'compressor') return readModuleCompressorSettings(settings.compressor).enabled;
   if (page === 'chorus') return readModuleChorusSettings(settings.chorus).enabled;
+  if (page === 'lofi') return readModuleLoFiSettings(settings.lofi).enabled;
   if (page === 'reverb') return readModuleReverbSettings(settings.reverb).enabled;
   if (page === 'delay') return readModuleDelaySettings(settings.delay).enabled;
   if (page === 'rotary') return readModuleRotarySettings(settings.rotary).enabled;
@@ -319,6 +325,7 @@ export function createModuleSettingsPageMarkup(
   if (page === 'eq') return createModuleEqMarkup(settings);
   if (page === 'compressor') return createModuleCompressorMarkup(settings);
   if (page === 'chorus') return createModuleChorusMarkup(settings);
+  if (page === 'lofi') return createModuleLoFiMarkup(settings);
   if (page === 'reverb') return createModuleReverbMarkup(settings);
   if (page === 'delay') return createModuleDelayMarkup(settings, bpm);
   if (page === 'rotary') return createModuleRotaryMarkup(settings);

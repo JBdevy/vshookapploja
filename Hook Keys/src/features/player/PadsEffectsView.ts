@@ -77,7 +77,7 @@ function createEffectBankButton(bank: EffectBankId): string {
       data-action="select-effect-bank"
       data-effect-bank="${bank}"
       aria-pressed="${isSelected}"
-    ><span>FX ${bank}</span></button>
+    ><span>${bank === '1' ? 'Church' : `FX ${bank}`}</span></button>
   `;
 }
 

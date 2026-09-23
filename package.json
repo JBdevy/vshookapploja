@@ -32,7 +32,6 @@
     "@capacitor/ios": "^6.2.0",
     "@capacitor/keyboard": "^6.0.4",
     "@capacitor/screen-orientation": "^6.0.4",
-    "@capacitor/status-bar": "^6.0.1",
     "capacitor-voice-recorder": "6.0.3",
     "vshook-local-network": "file:plugins/vshook-local-network",
     "vshook-orientation": "file:plugins/vshook-orientation",
