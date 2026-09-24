@@ -184,12 +184,14 @@ struct ReverbConfig final {
   // 0 Room 1, 1 Room 2, 2 Hall 1, 3 Hall 2. Todos são IRs reais.
   std::uint8_t impulse = 0;
   // Campos legados continuam no formato dos presets antigos, mas o DSP de
-  // convolução usa somente impulse e mix: o IR determina cauda e tonalidade.
+  // convolução usa impulse, mix e tail. tail encurta a cauda do IR real.
   float decay = 0.50f;
   float dampen = 0.45f;
   float size = 0.50f;
   float mix = 0.20f;
   float mod = 0.0f;
+  // Fraction of the original convolution IR retained. 1 keeps it unchanged.
+  float tail = 1.0f;
 
   void normalize() noexcept {
     impulse = std::min<std::uint8_t>(impulse, 3);
@@ -198,6 +200,7 @@ struct ReverbConfig final {
     size = std::clamp(size, 0.0f, 1.0f);
     mix = std::clamp(mix, 0.0f, 1.0f);
     mod = std::clamp(mod, 0.0f, 1.0f);
+    tail = std::clamp(tail, 0.1f, 1.0f);
   }
 };
 

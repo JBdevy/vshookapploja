@@ -74,6 +74,15 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var moduleSoundFonts: [UserSoundFont?] = Array(repeating: nil, count: 6) { didSet { scheduleSessionSave() } }
     @Published private(set) var moduleEnvelopes = Array(repeating: ModuleEnvelope(), count: 8) { didSet { scheduleSessionSave() } }
     @Published private(set) var moduleEqualizers = Array(repeating: BronzeEqualizer(), count: 8) { didSet { scheduleSessionSave() } }
+    @Published private(set) var moduleReverbs = Array(repeating: BronzeReverb(), count: 8)
+    @Published private(set) var updatingReverb = false
+    private var committedReverbs = Array(repeating: BronzeReverb(), count: 8)
+    private var pendingReverbs: [Int: BronzeReverb] = [:]
+    @Published private(set) var moduleDelays = Array(repeating: BronzeDelay(), count: 8)
+    @Published private(set) var updatingDelay = false
+    private var committedDelays = Array(repeating: BronzeDelay(), count: 8)
+    private var pendingDelays: [Int: BronzeDelay] = [:]
+    var updatingEffects: Bool { updatingReverb || updatingDelay }
     @Published private(set) var padFilterLow = 0.0 { didSet { scheduleSessionSave() } }
     @Published private(set) var padFilterHigh = 1.0 { didSet { scheduleSessionSave() } }
     @Published private(set) var selectedPadBank = 0 { didSet { scheduleSessionSave() } }
@@ -428,6 +437,79 @@ final class BronzeNativeAppModel: ObservableObject {
         applyMetronome(restart: metronomeEnabled && !loopPlaying)
     }
 
+    func setReverb(_ reverb: BronzeReverb, moduleIndex: Int) {
+        guard moduleReverbs.indices.contains(moduleIndex), !isApplyingSnapshot, engineState == .ready else { return }
+        do { try reverb.validate() } catch { return }
+        guard moduleReverbs[moduleIndex] != reverb else { return }
+        moduleReverbs[moduleIndex] = reverb
+        // Only the newest drag value waits behind an IR preparation. No long
+        // FIFO of obsolete Mix positions and no convolution allocation on main.
+        pendingReverbs[moduleIndex] = reverb
+        if !updatingReverb { sendNextReverb() }
+    }
+
+    private func sendNextReverb() {
+        guard let index = pendingReverbs.keys.min(), let next = pendingReverbs.removeValue(forKey: index) else {
+            updatingReverb = false
+            scheduleSessionSave()
+            return
+        }
+        updatingReverb = true
+        let engine = self.engine
+        audioQueue.async { [weak self] in
+            let success = engine.configureReverb(index, enabled: next.enabled, impulse: next.impulse,
+                mix: Float(next.mix), decay: Float(next.decay))
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if success {
+                    self.committedReverbs[index] = next
+                } else if self.pendingReverbs[index] == nil {
+                    self.moduleReverbs[index] = self.committedReverbs[index]
+                    self.controlError = "Não foi possível preparar o reverb. O ajuste anterior foi mantido."
+                }
+                self.sendNextReverb()
+            }
+        }
+    }
+
+    func setDelay(_ delay: BronzeDelay, moduleIndex: Int) {
+        guard moduleDelays.indices.contains(moduleIndex), !isApplyingSnapshot, engineState == .ready else { return }
+        do { try delay.validate() } catch { return }
+        guard moduleDelays[moduleIndex] != delay else { return }
+        moduleDelays[moduleIndex] = delay
+        pendingDelays[moduleIndex] = delay
+        if !updatingDelay { sendNextDelay() }
+    }
+
+    private func sendNextDelay() {
+        guard let index = pendingDelays.keys.min(), let next = pendingDelays.removeValue(forKey: index) else {
+            updatingDelay = false
+            scheduleSessionSave()
+            return
+        }
+        updatingDelay = true
+        let engine = self.engine
+        audioQueue.async { [weak self] in
+            let success = Self.sendDelay(next, moduleIndex: index, engine: engine)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if success {
+                    self.committedDelays[index] = next
+                } else if self.pendingDelays[index] == nil {
+                    self.moduleDelays[index] = self.committedDelays[index]
+                    self.controlError = "Não foi possível preparar o Delay. O ajuste anterior foi mantido."
+                }
+                self.sendNextDelay()
+            }
+        }
+    }
+
+    nonisolated private static func sendDelay(_ delay: BronzeDelay, moduleIndex: Int, engine: HookKeysNativeEngine) -> Bool {
+        engine.configureDelay(moduleIndex, enabled: delay.enabled, sync: delay.sync,
+            milliseconds: Float(delay.milliseconds), beatMultiplier: Float(delay.beatMultiplier),
+            feedback: Float(delay.feedback), mix: Float(delay.mix))
+    }
+
     func selectMetronomeClick(_ sound: Int) {
         metronomeClickSound = min(5, max(1, sound))
         applyMetronome(restart: false)
@@ -701,7 +783,8 @@ final class BronzeNativeAppModel: ObservableObject {
             let url = index < 6 ? moduleSoundFonts[index]?.url : nil
             let key = url.map { $0.deletingLastPathComponent().lastPathComponent + "/" + $0.lastPathComponent }
             return BronzeModuleSnapshot(soundFontKey: key, enabled: moduleEnabled[index],
-                fader: moduleFaders[index], envelope: moduleEnvelopes[index], equalizer: moduleEqualizers[index])
+                fader: moduleFaders[index], envelope: moduleEnvelopes[index], equalizer: moduleEqualizers[index],
+                reverb: moduleReverbs[index], delay: moduleDelays[index])
         }
     }
 
@@ -728,7 +811,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     private func scheduleSessionSave() {
-        guard persistenceAvailable, !isApplyingSnapshot else { return }
+        guard persistenceAvailable, !isApplyingSnapshot, !updatingEffects else { return }
         pendingSessionSave?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.saveSessionNow() }
         pendingSessionSave = work
@@ -738,7 +821,7 @@ final class BronzeNativeAppModel: ObservableObject {
     private func saveSessionNow() {
         pendingSessionSave?.cancel()
         pendingSessionSave = nil
-        guard persistenceAvailable, !isApplyingSnapshot else { return }
+        guard persistenceAvailable, !isApplyingSnapshot, !updatingEffects else { return }
         let session = sessionSnapshot()
         persistenceQueue.async { [weak self] in
             do { try BronzeSessionStore.applicationStore().save(session) }
@@ -811,7 +894,7 @@ final class BronzeNativeAppModel: ObservableObject {
 
     func savePreset(_ index: Int, name: String, color: Int) {
         guard presets.indices.contains(index), !isApplyingSnapshot, loadingSoundFontModule == nil,
-              persistenceAvailable else { return }
+              !updatingEffects, persistenceAvailable else { return }
         let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
         presets[index] = BronzePresetSlot(name: name.isEmpty ? "Preset \(index % 16 + 1)" : name,
             color: min(7, max(0, color)), modules: moduleSnapshot())
@@ -830,7 +913,7 @@ final class BronzeNativeAppModel: ObservableObject {
 
     func recallPreset(_ index: Int) {
         guard presets.indices.contains(index), let modules = presets[index].modules,
-              !isApplyingSnapshot, loadingSoundFontModule == nil, engineState == .ready else { return }
+              !isApplyingSnapshot, !updatingEffects, loadingSoundFontModule == nil, engineState == .ready else { return }
         isApplyingSnapshot = true
         let previous = moduleSnapshot()
         let engine = self.engine
@@ -862,6 +945,10 @@ final class BronzeNativeAppModel: ObservableObject {
         moduleFaders = modules.map(\.fader)
         moduleEnvelopes = modules.map(\.envelope)
         moduleEqualizers = modules.map(\.equalizer)
+        moduleReverbs = modules.map(\.reverb)
+        committedReverbs = moduleReverbs
+        moduleDelays = modules.map(\.delay)
+        committedDelays = moduleDelays
         soloModule = solo
         // The B3 generator is shared, so change its envelope only after commit.
         let envelope = modules[6].envelope
@@ -903,6 +990,10 @@ final class BronzeNativeAppModel: ObservableObject {
             let db = module.fader <= 0 ? Float(-90) : Float(-36 + module.fader * 36)
             guard engine.setModuleGainDb(db, moduleIndex: index) else { throw BronzeSessionError.invalid }
             guard Self.sendEqualizer(module.equalizer, moduleIndex: index, engine: engine) else { throw BronzeSessionError.invalid }
+            guard engine.configureReverb(index, enabled: module.reverb.enabled,
+                impulse: module.reverb.impulse, mix: Float(module.reverb.mix),
+                decay: Float(module.reverb.decay)) else { throw BronzeSessionError.invalid }
+            guard Self.sendDelay(module.delay, moduleIndex: index, engine: engine) else { throw BronzeSessionError.invalid }
             if index != 6 {
                 let e = module.envelope
                 guard engine.configureModuleEnvelope(index, attackMs: Float(e.attackMs), holdMs: Float(e.holdMs),

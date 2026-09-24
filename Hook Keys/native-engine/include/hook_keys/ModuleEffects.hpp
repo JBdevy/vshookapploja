@@ -30,6 +30,8 @@ public:
   // effects off; now a module pays only for what it plays. Safe while the audio
   // thread runs; HookKeysEngine::setModuleConfig calls it for every module.
   void prepareFor(const ModuleEffectsConfig& config) noexcept;
+  [[nodiscard]] bool prepareReverbImpulse(std::uint8_t impulse, float tail = 1.0f) noexcept;
+  [[nodiscard]] bool prepareDelayLines() noexcept;
   void reset() noexcept;
 
   // Audio thread only. These operations are bounded and never allocate.
@@ -142,6 +144,7 @@ private:
       fftconvolver::TwoStageFFTConvolver left;
       fftconvolver::TwoStageFFTConvolver right;
       bool ready = false;
+      float tail = 1.0f;
     };
     static constexpr std::uint8_t kNoImpulse = 0xff;
 
@@ -154,12 +157,17 @@ private:
     // O Mix é automatizado enquanto o áudio toca. O valor corrente segue o
     // alvo por uma rampa curta para não criar degraus/estalos no dry/wet.
     float currentMix = config.mix;
-    // Cada perfil ocupa megabytes (o Hall 1 tem 4,5 s). Ele nasce na thread de
-    // controle na primeira configuração que o escolhe e depois fica pronto:
-    // voltar a ele durante a apresentação não aloca. O callback só lê o
-    // ponteiro publicado.
+    // One cached Decay version per IR. Control workers replace it if Decay
+    // changes; the playing version stays pinned until audio adopts the new IR.
+    // Mix-only edits and selecting an unchanged cached profile never rebuild it.
     std::array<std::atomic<ConvolutionPair*>, 4> convolvers{};
     std::array<std::unique_ptr<ConvolutionPair>, 4> ownedConvolvers{};
+    // Two hazard slots: one pins the playing IR, one protects acquisition.
+    // Retired versions are deleted only by the control worker, never in audio.
+    std::atomic<ConvolutionPair*> playing{nullptr};
+    std::atomic<ConvolutionPair*> acquiring{nullptr};
+    std::vector<std::unique_ptr<ConvolutionPair>> retiredConvolvers;
+    ConvolutionPair* activePair = nullptr; // audio thread only
     std::mutex preparation;
     // Perfil que está soando. Ligar de novo, trocar de IR ou o panic começam
     // do silêncio: o histórico do perfil é limpo antes do primeiro bloco, em
@@ -169,7 +177,7 @@ private:
     std::array<float, 256> wetRight{};
 
     void prepare(double nextSampleRate);
-    bool prepareImpulse(std::uint8_t impulse) noexcept;
+    bool prepareImpulse(std::uint8_t impulse, float tail = 1.0f) noexcept;
     void configure(ReverbConfig next) noexcept;
     void reset() noexcept;
     void process(float* left, float* right, std::size_t frames) noexcept;

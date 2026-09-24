@@ -511,7 +511,7 @@ bool NativeEngineRuntime::setModuleConfig(std::size_t moduleIndex, ModuleConfig 
   }
   config.normalize();
   controlLayer_->configs[moduleIndex] = config;
-  return controlLayer_->engine->setModuleConfig(moduleIndex, config);
+  return controlLayer_->engine->setPreparedModuleConfig(moduleIndex, config);
 }
 
 bool NativeEngineRuntime::setModuleGainDb(std::size_t moduleIndex, float db) noexcept {
@@ -520,7 +520,7 @@ bool NativeEngineRuntime::setModuleGainDb(std::size_t moduleIndex, float db) noe
   const float safeDb = std::isfinite(db) ? std::clamp(db, -90.0f, 0.0f) : 0.0f;
   controlLayer_->configs[moduleIndex].gainLinear = safeDb <= -90.0f
       ? 0.0f : std::pow(10.0f, safeDb / 20.0f);
-  return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
+  return controlLayer_->engine->setPreparedModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
 }
 
 bool NativeEngineRuntime::setTranceGate(std::size_t moduleIndex, ModuleEffectsConfig::TranceGateConfig config) noexcept {
@@ -528,7 +528,7 @@ bool NativeEngineRuntime::setTranceGate(std::size_t moduleIndex, ModuleEffectsCo
   std::scoped_lock lock(configMutex_);
   config.normalize();
   controlLayer_->configs[moduleIndex].effects.tranceGate = config;
-  return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
+  return controlLayer_->engine->setPreparedModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
 }
 
 bool NativeEngineRuntime::setModuleEffects(
@@ -556,7 +556,7 @@ bool NativeEngineRuntime::setModuleEqualizer(std::size_t moduleIndex, EqConfig e
   auto next = controlLayer_->configs[moduleIndex];
   // A band edit must not reconstruct/reset Rotary, Reverb, Pulse or routing.
   next.effects.equalizer = equalizer;
-  if (!controlLayer_->engine->setModuleConfig(moduleIndex, next)) return false;
+  if (!controlLayer_->engine->setPreparedModuleConfig(moduleIndex, next)) return false;
   controlLayer_->configs[moduleIndex] = next;
   return true;
 }
@@ -570,19 +570,67 @@ bool NativeEngineRuntime::setModuleEnabledMask(std::uint8_t mask) noexcept {
   return true;
 }
 
+bool NativeEngineRuntime::setModuleReverb(std::size_t moduleIndex, bool enabled,
+    std::uint8_t impulse, float mix, float tail) noexcept {
+  if (moduleIndex >= kModuleCount || impulse > 3 || !std::isfinite(mix) || !std::isfinite(tail)) return false;
+  tail = std::clamp(tail, 0.1f, 1.0f);
+  // Pin the layer on the control thread, but release configMutex_ while the
+  // FFT/IR is built. Faders, EQ and meters need not wait for that preparation.
+  std::scoped_lock soundLock(soundFontMutex_);
+  PresetLayer* layer;
+  { std::scoped_lock configLock(configMutex_); layer = controlLayer_; }
+  if (enabled && !layer->engine->prepareModuleReverb(moduleIndex, impulse, tail)) return false;
+  ReverbConfig previous;
+  {
+    std::scoped_lock configLock(configMutex_);
+    auto next = layer->configs[moduleIndex];
+    previous = next.effects.reverb;
+    next.effects.reverb.enabled = enabled;
+    next.effects.reverb.impulse = impulse;
+    next.effects.reverb.mix = std::clamp(mix, 0.0f, 1.0f);
+    next.effects.reverb.tail = tail;
+    if (layer->engine->setPreparedModuleConfig(moduleIndex, next)) {
+      layer->configs[moduleIndex] = next;
+      return true;
+    }
+  }
+  // A full command queue must not leave only the rejected IR in the cache.
+  // Restore the accepted version on this worker, outside the UI config lock.
+  if (previous.enabled) (void)layer->engine->prepareModuleReverb(moduleIndex, previous.impulse, previous.tail);
+  return false;
+}
+
+bool NativeEngineRuntime::setModuleDelay(std::size_t moduleIndex, DelayConfig delay) noexcept {
+  if (moduleIndex >= kModuleCount || !std::isfinite(delay.delayMs) ||
+      !std::isfinite(delay.beatMultiplier) || !std::isfinite(delay.feedback) ||
+      !std::isfinite(delay.mix)) return false;
+  delay.normalize();
+  // Allocate on the control worker, without holding the UI configuration lock.
+  std::scoped_lock soundLock(soundFontMutex_);
+  PresetLayer* layer;
+  { std::scoped_lock configLock(configMutex_); layer = controlLayer_; }
+  if (delay.enabled && !layer->engine->prepareModuleDelay(moduleIndex)) return false;
+  std::scoped_lock configLock(configMutex_);
+  auto next = layer->configs[moduleIndex];
+  next.effects.delay = delay;
+  if (!layer->engine->setPreparedModuleConfig(moduleIndex, next)) return false;
+  layer->configs[moduleIndex] = next;
+  return true;
+}
+
 bool NativeEngineRuntime::setOrganRotaryFast(bool fast) noexcept {
   std::scoped_lock lock(configMutex_);
   auto &config = controlLayer_->configs[6];
   config.effects.rotary.enabled = true;
   config.effects.rotary.speed = fast ? 2 : 1;
-  return controlLayer_->engine->setModuleConfig(6, config);
+  return controlLayer_->engine->setPreparedModuleConfig(6, config);
 }
 
 bool NativeEngineRuntime::setOrganCabinetEnabled(bool enabled) noexcept {
   std::scoped_lock lock(configMutex_);
   auto &config = controlLayer_->configs[6];
   config.effects.rotary.cabinetEnabled = enabled;
-  return controlLayer_->engine->setModuleConfig(6, config);
+  return controlLayer_->engine->setPreparedModuleConfig(6, config);
 }
 
 bool NativeEngineRuntime::setModuleEnvelope(
@@ -683,7 +731,7 @@ bool NativeEngineRuntime::setVelocityLimits(
   config.velocityIgnoreAbove = moduleIndex == 6 ? 127 : ignoreAbove;
   config.velocityCeiling = moduleIndex == 6 ? 127 : ceiling;
   config.normalize();
-  return controlLayer_->engine->setModuleConfig(moduleIndex, config);
+  return controlLayer_->engine->setPreparedModuleConfig(moduleIndex, config);
 }
 
 bool NativeEngineRuntime::setTempo(float bpm) noexcept {

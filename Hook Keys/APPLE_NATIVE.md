@@ -66,7 +66,7 @@ Implementado nesta etapa:
 - Bancos A–F com 16 posições, salvar/renomear/cor e seleção com borda RGB
   pulsante (respeita Reduzir Movimento). Segurar abre o menu de edição; substituir
   um preset existente exige confirmação. Os snapshots guardam SF2, ON/OFF,
-  faders, envelopes e EQ disponíveis na UI, não efeitos ainda não migrados.
+  faders, envelopes, EQ, reverb e Delay disponíveis na UI, não efeitos ainda não migrados.
 - Sessão local em Application Support/BronzeKeys/native-session.json, escrita
   atômica fora da thread principal, com debounce. Guarda também Solo, BPM,
   compasso/click, filtros/banco dos pads e seleção do loop. Ao reabrir não toca
@@ -83,6 +83,32 @@ Implementado nesta etapa:
   `setModuleEqualizer` altera exclusivamente o EQ, preservando rotary e demais
   efeitos. Usa a suavização de coeficientes já existente no DSP. Reset exige
   confirmação e restaura somente o EQ. Estado incluído na sessão e presets.
+
+- Reverb por convolução nos oito módulos: Room 1, Room 2, Hall 1 e Hall 2,
+  cada um com Mix e Decay independentes, ON/OFF e selo Convolution. Knobs Skia
+  e +/− de 1 ponto percentual. Sessão e presets guardam os quatro Mix/Decay e
+  a seleção. Decay vai de 10% a 100% da duração do IR: 100% mantém exatamente
+  o arquivo original; abaixo disso o IR é encurtado com fade cosseno no quarto
+  final da cauda mantida, sem reamostragem nem mudança de afinação. Não é RT60
+  em segundos e não estende o IR além da duração gravada.
+  A preparação dos IRs acontece na fila de controle, fora da thread da UI e
+  do callback de áudio. Arrastes acumulam apenas o último valor pendente por
+  módulo; falhas restauram o último ajuste confirmado. Trocar/salvar presets
+  aguarda o término dessa fila. O comando dedicado preserva EQ, rotary e
+  demais efeitos, usando a suavização de Mix existente no DSP.
+  Cada IR guarda somente a versão mais recente de Decay. Ponteiros protegidos
+  mantêm a versão em reprodução até a troca; versões antigas são recolhidas
+  na thread de controle, sem alocação/liberação nem espera no callback. A troca
+  reinicia o histórico do IR, assim como a troca Room/Hall; a transição precisa
+  também de avaliação auditiva no dispositivo. Faders/EQ enfileiram configurações
+  já preparadas e não disputam o mutex que monta a nova convolução.
+- Delay nativo nos oito módulos: ON/OFF, Sync, Tap, sete divisões (incluindo
+  pontuada e tercina), Feedback, Mix e tempo manual de 1 a 2000 ms. Knobs Skia
+  e +/− com repetição; tempo avança 10 ms abaixo de 1 s e 100 ms acima.
+  Sync usa BPM fracionário e preserva o tempo manual. A divisão multiplica
+  tanto o tempo manual quanto a batida em Sync; o display de eco respeita
+  o limite de 4 s da linha C++. Estado incluído na sessão e presets. Preparação
+  e ajustes coalescidos usam a fila de controle, sem substituir outros efeitos.
 
 Ainda pendentes: paridade dos presets com todos os efeitos, catálogo/conta,
 edição completa de efeitos e synth, playlists do usuário, MIDI Learn na UI,

@@ -75,6 +75,28 @@ assert.match(nativeRoot, /\.onChanged \{ value in[\s\S]*?model.editEQBand/,
 assert.match(nativeModel, /equalizer: moduleEqualizers\[index\]/);
 assert.match(nativeModel, /sendEqualizer\(module.equalizer, moduleIndex: index, engine: engine\)/);
 assert.match(engine, /runtime->setModuleEqualizer/);
+assert.match(engine, /runtime->setModuleReverb/);
+assert.match(engineHeader, /NS_SWIFT_NAME\(configureReverb\(_:enabled:impulse:mix:decay:\)\)/);
+assert.match(nativeRoot, /BronzeNativeReverbEditor\(model: model, moduleIndex: model.selectedModule\)/);
+assert.match(nativeRoot, /Text\("Convolution"\)/);
+assert.match(nativeModel, /reverb: moduleReverbs\[index\]/);
+assert.match(nativeModel, /engine.configureReverb\(index, enabled: module.reverb.enabled/,
+  'restaurar sessão e preset precisa aplicar o reverb ao motor');
+assert.match(nativeModel, /pendingReverbs\[moduleIndex\] = reverb/,
+  'somente o valor mais recente aguarda a preparação do IR');
+assert.match(nativeModel, /audioQueue.async \{ \[weak self\] in\s*let success = engine.configureReverb/,
+  'preparar convolução não pode bloquear a thread da interface');
+assert.match(nativeModel, /!isApplyingSnapshot, !updatingEffects, loadingSoundFontModule/,
+  'troca de preset não pode ultrapassar uma alteração pendente de reverb ou Delay');
+assert.match(nativeRoot, /BronzeNativeDelayEditor\(model: model, moduleIndex: model.selectedModule\)/);
+assert.match(nativeModel, /Self.sendDelay\(module.delay, moduleIndex: index, engine: engine\)/);
+assert.match(nativeModel, /pendingDelays\[moduleIndex\] = delay/);
+assert.match(nativeModel, /audioQueue.async \{ \[weak self\] in\s*let success = Self.sendDelay/);
+assert.match(nativeModel, /nonisolated private static func sendDelay/,
+  'o envio ao motor precisa funcionar na fila de áudio sem isolamento MainActor');
+assert.match(engine, /runtime->setModuleDelay/);
+assert.match(nativeModel, /decay: Float\(module.reverb.decay\)/);
+assert.match(nativeRoot, /\$0.setDecay\(/);
 assert.match(nativeRoot, /repetition\?\.cancel\(\)/);
 assert.match(nativeModel, /setModuleEnabledMask\(mask\)/);
 assert.match(engineHeader, /NS_SWIFT_NAME\(setModuleEnabledMask\(_:\)\)/);

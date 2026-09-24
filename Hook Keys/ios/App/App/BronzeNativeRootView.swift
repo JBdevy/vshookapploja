@@ -6,7 +6,8 @@ struct BronzeNativeRootView: View {
     private struct LibraryTarget: Identifiable { let id: Int }
     @State private var libraryTarget: LibraryTarget?
     @State private var presetTarget: LibraryTarget?
-    @State private var showingEqualizer = false
+    private enum ModulePage: Equatable { case envelope, equalizer, reverb, delay }
+    @State private var modulePage: ModulePage = .envelope
 
     var body: some View {
         ZStack {
@@ -223,17 +224,29 @@ struct BronzeNativeRootView: View {
     private var moduleEditor: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                Button("Envelope") { showingEqualizer = false }
-                    .buttonStyle(BronzeCompactButtonStyle(active: !showingEqualizer))
-                Button("EQ") { showingEqualizer = true }
-                    .buttonStyle(BronzeCompactButtonStyle(active: showingEqualizer))
+                Button("Envelope") { modulePage = .envelope }
+                    .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .envelope))
+                Button("EQ") { modulePage = .equalizer }
+                    .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .equalizer))
+                Button("Reverb") { modulePage = .reverb }
+                    .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .reverb))
+                Button("Delay") { modulePage = .delay }
+                    .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .delay))
                 Spacer()
                 Text("Módulo \(model.selectedModule + 1)").font(.caption.bold())
             }
-            if showingEqualizer {
+            switch modulePage {
+            case .equalizer:
                 BronzeNativeEqualizerEditor(model: model, moduleIndex: model.selectedModule)
                     .id(model.selectedModule)
-            } else { envelopeEditor }
+            case .reverb:
+                BronzeNativeReverbEditor(model: model, moduleIndex: model.selectedModule)
+                    .id(model.selectedModule)
+            case .delay:
+                BronzeNativeDelayEditor(model: model, moduleIndex: model.selectedModule)
+                    .id(model.selectedModule)
+            case .envelope: envelopeEditor
+            }
         }
     }
 
@@ -376,7 +389,7 @@ struct BronzeNativeRootView: View {
             Text("Toque para carregar. Segure para salvar, renomear ou mudar a cor.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
-        .disabled(model.loadingSoundFontModule != nil)
+        .disabled(model.loadingSoundFontModule != nil || model.updatingEffects)
     }
 
     private func presetButton(_ index: Int) -> some View {
@@ -434,6 +447,165 @@ struct BronzeNativeRootView: View {
         let names = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"]
         let relatives = ["Am", "B♭m", "Bm", "Cm", "C♯m", "Dm", "E♭m", "Em", "Fm", "F♯m", "Gm", "A♭m"]
         return relative ? relatives[index] : names[index]
+    }
+}
+
+struct BronzeNativeDelayEditor: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    let moduleIndex: Int
+    @State private var confirmReset = false
+    @State private var tap = BronzeDelayTap()
+    private var delay: BronzeDelay { model.moduleDelays[moduleIndex] }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Button(delay.enabled ? "Delay ON" : "Delay OFF") { change { $0.enabled.toggle() } }
+                    .buttonStyle(BronzeCompactButtonStyle(active: delay.enabled))
+                Button("Sync") { change { $0.sync.toggle() } }
+                    .buttonStyle(BronzeCompactButtonStyle(active: delay.sync))
+                if model.updatingDelay { ProgressView().scaleEffect(0.7).accessibilityLabel("Atualizando Delay") }
+                Spacer()
+                Button("Reset") { confirmReset = true }.font(.caption)
+            }
+            HStack(spacing: 6) {
+                ForEach(BronzeDelay.divisions.indices, id: \.self) { index in
+                    Button(BronzeDelay.divisions[index]) { change { $0.division = index } }
+                        .buttonStyle(BronzeCompactButtonStyle(active: delay.division == index))
+                }
+            }
+            HStack(spacing: 18) {
+                VStack(spacing: 6) {
+                    Button("Tap") {
+                        if let milliseconds = tap.tap(at: ProcessInfo.processInfo.systemUptime) {
+                            change { $0.milliseconds = milliseconds }
+                        }
+                    }.buttonStyle(BronzeCompactButtonStyle(active: false)).disabled(delay.sync)
+                    Text(String(format: "Eco: %.0f ms", delay.effectiveMilliseconds(bpm: model.tempo)))
+                        .font(.caption.monospacedDigit())
+                }
+                ForEach(BronzeDelayParameter.allCases) { parameter in parameterControl(parameter) }
+            }
+            Text(delay.sync ? "Sync usa o BPM global. O tempo manual fica guardado." : "A divisão multiplica o tempo manual; a cauda de Delay tem limite de 4 s.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .onChange(of: delay.sync) { _ in tap.reset() }
+        .onDisappear { tap.reset() }
+        .alert("Restaurar o Delay deste módulo?", isPresented: $confirmReset) {
+            Button("Cancelar", role: .cancel) {}
+            Button("Restaurar", role: .destructive) {
+                tap.reset()
+                model.setDelay(BronzeDelay(), moduleIndex: moduleIndex)
+            }
+        } message: { Text("Somente o Delay será restaurado. Reverb, EQ e outros efeitos não mudam.") }
+    }
+
+    private func parameterControl(_ parameter: BronzeDelayParameter) -> some View {
+        let inactive = parameter == .milliseconds && delay.sync
+        return VStack(spacing: 2) {
+            Text(parameter.rawValue).font(.caption2.bold())
+            HStack(spacing: 4) {
+                VStack(spacing: 3) {
+                    BronzeRepeatButton(label: "+", accessibilityText: "Aumentar \(parameter.rawValue) do Delay") {
+                        change { $0.step(parameter, direction: 1) }
+                    }
+                    BronzeRepeatButton(label: "−", accessibilityText: "Diminuir \(parameter.rawValue) do Delay") {
+                        change { $0.step(parameter, direction: -1) }
+                    }
+                }
+                BronzeSkiaControl(kind: .knob, value: Binding(
+                    get: { delay.normalized(parameter) },
+                    set: { value in change { $0.setNormalized(parameter, value) } }
+                ), accessibilityLabel: "\(parameter.rawValue) do Delay").frame(width: 58, height: 58)
+            }.disabled(inactive).opacity(inactive ? 0.4 : 1)
+            Text(delay.text(parameter, bpm: model.tempo)).font(.caption2.monospacedDigit())
+        }
+    }
+
+    private func change(_ edit: (inout BronzeDelay) -> Void) {
+        var next = delay
+        edit(&next)
+        model.setDelay(next, moduleIndex: moduleIndex)
+    }
+}
+
+struct BronzeNativeReverbEditor: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    let moduleIndex: Int
+    @State private var confirmReset = false
+    private var reverb: BronzeReverb { model.moduleReverbs[moduleIndex] }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Button(reverb.enabled ? "Reverb ON" : "Reverb OFF") {
+                    change { $0.enabled.toggle() }
+                }.buttonStyle(BronzeCompactButtonStyle(active: reverb.enabled))
+                if model.updatingReverb { ProgressView().scaleEffect(0.7).accessibilityLabel("Atualizando reverb") }
+                Spacer()
+                Button("Reset") { confirmReset = true }.font(.caption)
+                Text("Convolution").font(.caption2.bold())
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Color.bronze.opacity(0.3)).clipShape(Capsule())
+            }
+            HStack(spacing: 14) {
+                ForEach(0..<4, id: \.self) { index in
+                    impulseButton(index)
+                }
+            }
+            HStack(spacing: 20) {
+                parameterControl(decay: false)
+                parameterControl(decay: true)
+                Text("Decay: 100% mantém o IR original; valores menores encurtam sua cauda, sem mudar a afinação.")
+                    .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: 230)
+            }
+            Text("Cada Room e Hall mantém seu próprio Mix e Decay.").font(.caption2).foregroundStyle(.secondary)
+        }
+        .alert("Restaurar o reverb deste módulo?", isPresented: $confirmReset) {
+            Button("Cancelar", role: .cancel) {}
+            Button("Restaurar", role: .destructive) { model.setReverb(BronzeReverb(), moduleIndex: moduleIndex) }
+        } message: { Text("Desliga o reverb e restaura Mix e Decay dos quatro IRs. Os outros efeitos não mudam.") }
+    }
+
+    private func parameterControl(decay: Bool) -> some View {
+        let label = decay ? "Decay" : "Mix"
+        return VStack(spacing: 2) {
+            Text(label).font(.caption2.bold())
+            HStack(spacing: 4) {
+                VStack(spacing: 3) {
+                    BronzeRepeatButton(label: "+", accessibilityText: "Aumentar \(label) do reverb") { step(decay: decay, direction: 1) }
+                    BronzeRepeatButton(label: "−", accessibilityText: "Diminuir \(label) do reverb") { step(decay: decay, direction: -1) }
+                }
+                BronzeSkiaControl(kind: .knob, value: Binding(
+                    get: { decay ? (reverb.decay - 0.1) / 0.9 : reverb.mix },
+                    set: { value in change { if decay { $0.setDecay(0.1 + value * 0.9) } else { $0.setMix(value) } } }
+                ), accessibilityLabel: "\(label) do reverb \(BronzeReverb.names[reverb.impulse])").frame(width: 58, height: 58)
+            }
+            Text(String(format: "%.0f%%", (decay ? reverb.decay : reverb.mix) * 100)).font(.caption.monospacedDigit())
+        }
+    }
+
+    private func step(decay: Bool, direction: Double) {
+        change {
+            if decay { $0.setDecay(($0.decay * 100 + direction).rounded() / 100) }
+            else { $0.setMix(($0.mix * 100 + direction).rounded() / 100) }
+        }
+    }
+
+    private func impulseButton(_ index: Int) -> some View {
+        Button { change { $0.select(index) } } label: {
+            VStack(spacing: 5) {
+                Text(BronzeReverb.names[index]).font(.caption.bold())
+                Text(String(format: "%.0f%%", reverb.mixes[index] * 100)).font(.caption2.monospacedDigit())
+                Text(String(format: "Decay %.0f%%", reverb.decays[index] * 100)).font(.caption2.monospacedDigit())
+            }.padding(.vertical, 8)
+        }.buttonStyle(BronzeButtonStyle(active: reverb.impulse == index))
+    }
+
+    private func change(_ edit: (inout BronzeReverb) -> Void) {
+        var next = reverb
+        edit(&next)
+        model.setReverb(next, moduleIndex: moduleIndex)
     }
 }
 
@@ -656,14 +828,14 @@ struct BronzeNativePresetEditor: View {
                     if model.presets[index].modules != nil { confirmOverwrite = true }
                     else { save() }
                 }
-                Text("Salva os timbres, ON/OFF, volumes, envelopes e EQ disponíveis na tela nativa. Drawbars e rotary do Bronze B3 continuam globais.")
+                Text("Salva os timbres, ON/OFF, volumes, envelopes, EQ, reverb e Delay disponíveis na tela nativa. Drawbars e rotary do Bronze B3 continuam globais.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !model.persistenceAvailable {
                     Text("Salvamento suspenso por uma falha na sessão. Seus dados anteriores foram preservados.")
                         .foregroundStyle(.orange)
                 }
             }
-            .disabled(!model.persistenceAvailable || model.isApplyingSnapshot || model.loadingSoundFontModule != nil)
+            .disabled(!model.persistenceAvailable || model.isApplyingSnapshot || model.updatingEffects || model.loadingSoundFontModule != nil)
             .navigationTitle("\(["A", "B", "C", "D", "E", "F"][index / 16]) · Preset \(index % 16 + 1)")
             .toolbar { Button("Fechar") { dismiss() } }
             .alert("Substituir este preset?", isPresented: $confirmOverwrite) {

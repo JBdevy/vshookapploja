@@ -86,6 +86,12 @@ bool HookKeysEngine::setModuleConfig(std::size_t moduleIndex, ModuleConfig confi
   // Linha do Delay e IR do Reverb nascem aqui, na thread de controle, antes
   // de a configuração que os liga chegar ao callback.
   effects_[moduleIndex].prepareFor(config.effects);
+  return setPreparedModuleConfig(moduleIndex, config);
+}
+
+bool HookKeysEngine::setPreparedModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept {
+  if (moduleIndex >= kModuleCount) return false;
+  config.normalize();
   return push(EngineCommand::configureModule(moduleIndex, config));
 }
 
@@ -98,6 +104,14 @@ bool HookKeysEngine::setModuleEnabledMask(std::uint8_t mask) noexcept {
   command.type = CommandType::setModuleEnabledMask;
   command.moduleEnabledMask = mask;
   return push(command);
+}
+
+bool HookKeysEngine::prepareModuleReverb(std::size_t moduleIndex, std::uint8_t impulse, float tail) noexcept {
+  return moduleIndex < kModuleCount && effects_[moduleIndex].prepareReverbImpulse(impulse, tail);
+}
+
+bool HookKeysEngine::prepareModuleDelay(std::size_t moduleIndex) noexcept {
+  return moduleIndex < kModuleCount && effects_[moduleIndex].prepareDelayLines();
 }
 
 bool HookKeysEngine::setGlobalTranspose(int semitones) noexcept {

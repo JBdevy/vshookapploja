@@ -139,6 +139,12 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                     gains:(NSArray<NSNumber *> *)gains qualities:(NSArray<NSNumber *> *)qualities
                 cutStages:(NSArray<NSNumber *> *)cutStages
     NS_SWIFT_NAME(configureEqualizer(_:enabled:types:frequencies:gains:qualities:cutStages:));
+- (BOOL)configureReverb:(NSInteger)moduleIndex enabled:(BOOL)enabled impulse:(NSInteger)impulse mix:(float)mix decay:(float)decay
+    NS_SWIFT_NAME(configureReverb(_:enabled:impulse:mix:decay:));
+- (BOOL)configureDelay:(NSInteger)moduleIndex enabled:(BOOL)enabled sync:(BOOL)sync
+          milliseconds:(float)milliseconds beatMultiplier:(float)beatMultiplier
+              feedback:(float)feedback mix:(float)mix
+    NS_SWIFT_NAME(configureDelay(_:enabled:sync:milliseconds:beatMultiplier:feedback:mix:));
 // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
 - (BOOL)configureModuleModulation:(NSInteger)moduleIndex
                               mode:(NSInteger)mode

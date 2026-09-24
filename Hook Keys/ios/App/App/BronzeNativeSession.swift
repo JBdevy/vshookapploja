@@ -87,6 +87,120 @@ struct BronzeEqualizer: Codable, Equatable, Sendable {
     }
 }
 
+struct BronzeReverb: Codable, Equatable, Sendable {
+    static let names = ["Room 1", "Room 2", "Hall 1", "Hall 2"]
+    var enabled = false
+    var impulse = 0
+    var mixes = [0.2, 0.2, 0.2, 0.2]
+    var decays = [1.0, 1.0, 1.0, 1.0]
+    var mix: Double { mixes[impulse] }
+    var decay: Double { decays[impulse] }
+
+    mutating func select(_ index: Int) {
+        guard mixes.indices.contains(index) else { return }
+        impulse = index
+    }
+
+    mutating func setMix(_ value: Double) {
+        guard value.isFinite, mixes.indices.contains(impulse) else { return }
+        mixes[impulse] = min(1, max(0, value))
+    }
+
+    mutating func setDecay(_ value: Double) {
+        guard value.isFinite, decays.indices.contains(impulse) else { return }
+        decays[impulse] = min(1, max(0.1, value))
+    }
+
+    func validate() throws {
+        guard (0..<4).contains(impulse), mixes.count == 4, decays.count == 4,
+              mixes.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+              decays.allSatisfy({ $0.isFinite && (0.1...1).contains($0) }) else { throw BronzeSessionError.invalid }
+    }
+}
+
+enum BronzeDelayParameter: String, CaseIterable, Identifiable {
+    case milliseconds = "Tempo", feedback = "Feedback", mix = "Mix"
+    var id: String { rawValue }
+}
+
+struct BronzeDelay: Codable, Equatable, Sendable {
+    static let divisions = ["1/1", "1/2", "1/4", "1/8", "1/16", "1/8 D", "1/8 T"]
+    static let multipliers = [4.0, 2, 1, 0.5, 0.25, 0.75, 1.0 / 3]
+    var enabled = false
+    var sync = false
+    var division = 2
+    var milliseconds = 500.0
+    var feedback = 0.35
+    var mix = 0.25
+    var beatMultiplier: Double { Self.multipliers[division] }
+
+    func effectiveMilliseconds(bpm: Double) -> Double {
+        let beat = sync ? 60000 / min(300, max(60, bpm)) : milliseconds
+        // Match the C++ delay-line capacity, including long manual divisions.
+        return min(4000, beat * beatMultiplier)
+    }
+
+    func normalized(_ parameter: BronzeDelayParameter) -> Double {
+        switch parameter {
+        case .milliseconds: return log(milliseconds) / log(2000)
+        case .feedback: return feedback / 0.95
+        case .mix: return mix
+        }
+    }
+
+    mutating func setNormalized(_ parameter: BronzeDelayParameter, _ value: Double) {
+        guard value.isFinite else { return }
+        let value = min(1, max(0, value))
+        switch parameter {
+        case .milliseconds: if !sync { milliseconds = pow(2000, value) }
+        case .feedback: feedback = value * 0.95
+        case .mix: mix = value
+        }
+    }
+
+    mutating func step(_ parameter: BronzeDelayParameter, direction: Int) {
+        let sign = direction < 0 ? -1.0 : 1.0
+        switch parameter {
+        case .milliseconds:
+            guard !sync else { return }
+            let increment = (sign > 0 ? milliseconds >= 1000 : milliseconds > 1000) ? 100.0 : 10.0
+            milliseconds = min(2000, max(1, (milliseconds + sign * increment).rounded()))
+        case .feedback: feedback = min(0.95, max(0, (feedback * 100 + sign).rounded() / 100))
+        case .mix: mix = min(1, max(0, (mix * 100 + sign).rounded() / 100))
+        }
+    }
+
+    func text(_ parameter: BronzeDelayParameter, bpm: Double) -> String {
+        switch parameter {
+        case .milliseconds:
+            if sync { return String(format: "%.1f BPM", bpm) }
+            return milliseconds >= 1000 ? String(format: "%.1f s", milliseconds / 1000) : String(format: "%.0f ms", milliseconds)
+        case .feedback: return String(format: "%.0f%%", feedback * 100)
+        case .mix: return String(format: "%.0f%%", mix * 100)
+        }
+    }
+
+    func validate() throws {
+        guard Self.divisions.indices.contains(division), milliseconds.isFinite, (1...2000).contains(milliseconds),
+              feedback.isFinite, (0...0.95).contains(feedback), mix.isFinite, (0...1).contains(mix)
+        else { throw BronzeSessionError.invalid }
+    }
+}
+
+// Transient gesture state, never saved in a preset/session. Timestamps are monotonic.
+struct BronzeDelayTap {
+    private var previous: Double?
+    mutating func reset() { previous = nil }
+    mutating func tap(at timestamp: Double) -> Double? {
+        guard timestamp.isFinite else { return nil }
+        defer { previous = timestamp }
+        guard let previous else { return nil }
+        let interval = (timestamp - previous) * 1000
+        guard (1...2000).contains(interval) else { return nil }
+        return interval.rounded()
+    }
+}
+
 struct BronzeModuleSnapshot: Codable, Equatable, Sendable {
     // Relative UUID/file.sf2; absolute sandbox paths change after reinstall/update.
     var soundFontKey: String?
@@ -94,6 +208,8 @@ struct BronzeModuleSnapshot: Codable, Equatable, Sendable {
     var fader = 1.0
     var envelope = BronzeEnvelope()
     var equalizer = BronzeEqualizer()
+    var reverb = BronzeReverb()
+    var delay = BronzeDelay()
 
     static var defaults: [Self] {
         (0..<8).map { index in
@@ -155,6 +271,8 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
             guard module.fader.isFinite, (0...1).contains(module.fader) else { throw BronzeSessionError.invalid }
             try module.envelope.validate()
             try module.equalizer.validate()
+            try module.reverb.validate()
+            try module.delay.validate()
             if let key = module.soundFontKey {
                 guard index < 6 else { throw BronzeSessionError.invalid }
                 try BronzeSessionStore.validateSoundFontKey(key)

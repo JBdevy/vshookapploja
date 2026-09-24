@@ -30,8 +30,13 @@ public:
   [[nodiscard]] bool enqueueMidi(MidiMessage message) noexcept;
   // Control thread: also allocates the Delay line / Reverb IR the config uses.
   [[nodiscard]] bool setModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept;
+  // For edits that preserve prepared resources (gain/EQ) or explicitly prepare
+  // them on a worker first. Does not enter any IR/allocation lock.
+  [[nodiscard]] bool setPreparedModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept;
   // One queued command switches all MIDI gates without touching voices or effects.
   [[nodiscard]] bool setModuleEnabledMask(std::uint8_t mask) noexcept;
+  [[nodiscard]] bool prepareModuleReverb(std::size_t moduleIndex, std::uint8_t impulse, float tail = 1.0f) noexcept;
+  [[nodiscard]] bool prepareModuleDelay(std::size_t moduleIndex) noexcept;
   [[nodiscard]] bool setTempoBpm(float tempoBpm) noexcept;
   // Transpose geral de entrada (semitons, -60..60), somado por cima do Oct de
   // cada módulo antes de chegar no sintetizador.

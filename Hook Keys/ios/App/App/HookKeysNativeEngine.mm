@@ -873,6 +873,28 @@ static NSString *describeFormat(AVAudioFormat *format) {
              static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs, glideMs, sustainDb);
 }
 
+- (BOOL)configureReverb:(NSInteger)moduleIndex enabled:(BOOL)enabled impulse:(NSInteger)impulse mix:(float)mix decay:(float)decay {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime && moduleIndex >= 0 && moduleIndex < 8 && impulse >= 0 && impulse < 4 &&
+      runtime->setModuleReverb(static_cast<std::size_t>(moduleIndex), enabled,
+          static_cast<std::uint8_t>(impulse), mix, decay);
+}
+
+- (BOOL)configureDelay:(NSInteger)moduleIndex enabled:(BOOL)enabled sync:(BOOL)sync
+          milliseconds:(float)milliseconds beatMultiplier:(float)beatMultiplier
+              feedback:(float)feedback mix:(float)mix {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime || moduleIndex < 0 || moduleIndex >= 8) return NO;
+  hook_keys::DelayConfig delay;
+  delay.enabled = enabled;
+  delay.sync = sync;
+  delay.delayMs = milliseconds;
+  delay.beatMultiplier = beatMultiplier;
+  delay.feedback = feedback;
+  delay.mix = mix;
+  return runtime->setModuleDelay(static_cast<std::size_t>(moduleIndex), delay);
+}
+
 - (BOOL)configureEqualizer:(NSInteger)moduleIndex enabled:(BOOL)enabled
                     types:(NSArray<NSNumber *> *)types frequencies:(NSArray<NSNumber *> *)frequencies
                     gains:(NSArray<NSNumber *> *)gains qualities:(NSArray<NSNumber *> *)qualities

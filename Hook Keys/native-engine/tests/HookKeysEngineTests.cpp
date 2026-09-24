@@ -1807,6 +1807,96 @@ void testNativeEqualizerEditsPreserveOtherEffects() {
   }
 }
 
+void testNativeReverbEditsPreserveOtherEffects() {
+  for (const std::size_t moduleIndex : {0u, 6u, 7u}) {
+    hook_keys::NativeEngineRuntime actual(48000, 128), reference(48000, 128);
+    hook_keys::ModuleConfig module;
+    module.gainLinear = 0.12f;
+    module.effects.equalizer.enabled = true;
+    module.effects.equalizer.bands[2].gainDb = -6;
+    module.effects.rotary.enabled = true;
+    module.effects.rotary.speed = 2;
+    module.effects.rotary.cabinetEnabled = false;
+    module.effects.delay.enabled = true;
+    module.effects.delay.mix = 0.1f;
+    module.effects.delay.delayMs = 80;
+    hook_keys::AnalogSynthConfig synth;
+    synth.voiceMode = 0;
+    synth.oscillator2Enabled = synth.oscillator3Enabled = false;
+    for (auto* runtime : {&actual, &reference}) {
+      const auto* sf2 = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+      if (moduleIndex == 0) expect(runtime->loadSoundFont(0, sf2), "load SF2 for native reverb test");
+      if (moduleIndex == 6) {
+        expect(runtime->loadOrganVoice(0, sf2), "load B3 for native reverb test");
+        runtime->setOrganDrawbarPosition(0, 8);
+      }
+      expect(runtime->setModuleConfig(moduleIndex, module), "configure native reverb test routing");
+      expect(runtime->setModuleEffects(moduleIndex, module.effects), "configure existing EQ, Rotary and Delay");
+      expect(runtime->setSynthConfig(synth), "configure reverb test oscillator");
+      expect(runtime->sendMidi(0, 0x90, 64, 80), "hold tone while reverb changes");
+    }
+    std::array<float, 256> a{}, b{};
+    double energy = 0;
+    const auto compare = [&] {
+      actual.renderInterleaved(a.data(), 128, 2);
+      reference.renderInterleaved(b.data(), 128, 2);
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        expect(std::isfinite(a[i]) && std::abs(a[i] - b[i]) < 0.000001f,
+            "dedicated reverb preserves EQ, Rotary, Delay, gain and held voices sample-for-sample");
+        energy += std::abs(a[i]);
+      }
+    };
+    for (int block = 0; block < 60; ++block) compare();
+    for (int step = 0; step < 80; ++step) {
+      auto& reverb = module.effects.reverb;
+      reverb.enabled = step % 20 != 0;
+      reverb.impulse = static_cast<std::uint8_t>(step / 20);
+      reverb.mix = (step % 20) * 0.04f;
+      reverb.tail = step % 20 < 10 ? 1.0f : 0.25f;
+      expect(actual.setModuleReverb(moduleIndex, reverb.enabled, reverb.impulse, reverb.mix, reverb.tail),
+          "prepare all four IRs and update native mix continuously");
+      expect(reference.setModuleEffects(moduleIndex, module.effects), "apply matching reference reverb");
+      for (int block = 0; block < 4; ++block) compare();
+    }
+    expect(!actual.setModuleReverb(8, true, 0, 0.2f), "reject invalid reverb module");
+    expect(!actual.setModuleReverb(moduleIndex, true, 4, 0.2f), "reject invalid IR");
+    expect(!actual.setModuleReverb(moduleIndex, true, 0, std::numeric_limits<float>::quiet_NaN()),
+        "reject non-finite mix without mutating state");
+    expect(!actual.setModuleReverb(moduleIndex, true, 0, 0.2f, std::numeric_limits<float>::infinity()),
+        "reject non-finite Decay without mutating state");
+    for (int block = 0; block < 20; ++block) compare();
+    for (const float mix : {-1.0f, 2.0f}) {
+      module.effects.reverb.mix = std::clamp(mix, 0.0f, 1.0f);
+      expect(actual.setModuleReverb(moduleIndex, true, 3, mix, module.effects.reverb.tail), "clamp finite out-of-range mix");
+      expect(reference.setModuleEffects(moduleIndex, module.effects), "reference uses clamped mix");
+      compare();
+    }
+    for (int step = 0; step < 60; ++step) {
+      auto& delay = module.effects.delay;
+      delay.enabled = step % 20 != 0;
+      delay.sync = step >= 30;
+      delay.delayMs = 50.0f + step * 10;
+      delay.beatMultiplier = step % 2 == 0 ? 0.75f : 1.0f / 3;
+      delay.feedback = (step % 10) * 0.08f;
+      delay.mix = (step % 10) * 0.1f;
+      expect(actual.setModuleDelay(moduleIndex, delay), "dedicated Delay edits preserve Reverb, EQ and Rotary");
+      expect(reference.setModuleEffects(moduleIndex, module.effects), "reference Delay configuration");
+      expect(actual.setTempo(132.5f) && reference.setTempo(132.5f), "Delay Sync accepts fractional BPM");
+      for (int block = 0; block < 4; ++block) compare();
+    }
+    for (int field = 0; field < 4; ++field) {
+      auto invalid = module.effects.delay;
+      auto* value = field == 0 ? &invalid.delayMs : field == 1 ? &invalid.beatMultiplier :
+          field == 2 ? &invalid.feedback : &invalid.mix;
+      *value = std::numeric_limits<float>::quiet_NaN();
+      expect(!actual.setModuleDelay(moduleIndex, invalid), "reject each non-finite Delay parameter");
+    }
+    expect(!actual.setModuleDelay(8, {}), "reject invalid Delay module");
+    for (int block = 0; block < 20; ++block) compare();
+    expect(energy > 1.0, "reverb comparison contains sounding audio");
+  }
+}
+
 void testEqualizerCutSlope() {
   const auto subtleEnergy = highCutToneEnergy(1);
   const auto brickwallEnergy = highCutToneEnergy(8);
@@ -2084,6 +2174,105 @@ void testReverbMixMovesWithoutBoundaryJump() {
 
   expect(std::abs(left.front() - before) < 0.02f,
          "moving reverb mix starts with a smoothed dry/wet transition");
+}
+
+void testReverbDecayShapesTheRealImpulse() {
+  for (std::uint8_t impulse = 0; impulse < 4; ++impulse) {
+    const auto render = [impulse](float tail) {
+      hook_keys::ModuleEffects effects;
+      effects.prepare(48000);
+      hook_keys::ModuleEffectsConfig config;
+      config.reverb.enabled = true;
+      config.reverb.mix = 1;
+      config.reverb.impulse = impulse;
+      config.reverb.tail = tail;
+      effects.prepareFor(config);
+      effects.setConfig(config, 120);
+      effects.reset();
+      std::vector<float> left(48000 * 8), right(left.size());
+      left[0] = right[0] = 1;
+      effects.process(left.data(), right.data(), left.size());
+      return left;
+    };
+    const auto full = render(1), shortTail = render(0.1f);
+    std::size_t fullEnd = 0, shortEnd = 0;
+    for (std::size_t i = 0; i < full.size(); ++i) {
+      expect(std::isfinite(full[i]) && std::isfinite(shortTail[i]), "Decay impulse output remains finite");
+      if (std::abs(full[i]) > 1e-7f) fullEnd = i;
+      if (std::abs(shortTail[i]) > 1e-7f) shortEnd = i;
+      if (i < 128) expect(std::abs(full[i] - shortTail[i]) < 1e-6f, "Decay preserves the IR attack");
+    }
+    expect(fullEnd > 4096 && shortEnd < fullEnd * 0.3 + 2048, "Decay shortens every IR, not only its wet volume");
+    expect(full == render(1), "100 percent Decay returns the unchanged original response");
+  }
+}
+
+void testReverbDecayPublicationDuringAudio() {
+  hook_keys::NativeEngineRuntime runtime(48000, 128);
+  hook_keys::ModuleConfig module;
+  module.enabled = true;
+  module.gainLinear = 0.12f;
+  expect(runtime.setModuleConfig(7, module), "enable synth for concurrent Decay test");
+  expect(runtime.setModuleReverb(7, true, 2, 0.4f), "prepare initial concurrent reverb");
+  expect(runtime.sendMidi(0, 0x90, 64, 80), "hold synth while preparing new decay versions");
+  std::atomic<bool> done{false};
+  std::atomic<unsigned> blocks{0};
+  std::atomic<bool> sounded{false};
+  std::thread audio([&] {
+    std::array<float, 256> output{};
+    while (!done.load()) {
+      runtime.renderInterleaved(output.data(), 128, 2);
+      for (const auto sample : output) {
+        expect(std::isfinite(sample), "concurrent Decay never produces invalid samples");
+        if (std::abs(sample) > 0.0001f) sounded.store(true);
+      }
+      blocks.fetch_add(1);
+      std::this_thread::yield();
+    }
+  });
+  for (int step = 0; step < 32; ++step) {
+    expect(runtime.setModuleReverb(7, true, step % 4, 0.4f, 0.1f + (step % 7) * 0.15f),
+        "publish a new IR while the old one is rendering");
+    expect(runtime.setModuleGainDb(7, -12), "gain does not re-prepare a retired IR");
+    if (step % 4 == 0) expect(runtime.setModuleReverb(7, false, step % 4, 0.4f), "bypass releases the pinned IR safely");
+  }
+  done.store(true);
+  audio.join();
+  expect(blocks.load() > 0, "concurrent rendering actually ran during preparation");
+  expect(sounded.load(), "concurrent test must exercise a sounding convolver, not disabled modules");
+}
+
+void testRejectedReverbDecayRestoresCache() {
+  hook_keys::NativeEngineRuntime actual(48000, 128), reference(48000, 128);
+  hook_keys::ModuleConfig module;
+  module.enabled = true;
+  module.gainLinear = 0.12f;
+  for (auto* runtime : {&actual, &reference}) {
+    expect(runtime->setModuleConfig(7, module), "enable synth for rejected Decay test");
+    expect(runtime->setModuleReverb(7, true, 2, 1, 1), "prepare original Hall for rejected Decay test");
+  }
+  bool full = false;
+  for (int i = 0; i < 100000; ++i) {
+    const bool accepted = actual.setTempo(120);
+    expect(accepted == reference.setTempo(120), "fill matching command queues");
+    if (!accepted) { full = true; break; }
+  }
+  expect(full, "test reaches a full command queue");
+  expect(!actual.setModuleReverb(7, true, 2, 1, 0.1f), "full queue rejects Decay after preparation");
+  std::array<float, 256> a{}, b{};
+  actual.renderInterleaved(a.data(), 128, 2);
+  reference.renderInterleaved(b.data(), 128, 2);
+  expect(actual.sendMidi(0, 0x90, 64, 80) && reference.sendMidi(0, 0x90, 64, 80), "play after rejected Decay");
+  double energy = 0;
+  for (int block = 0; block < 200; ++block) {
+    actual.renderInterleaved(a.data(), 128, 2);
+    reference.renderInterleaved(b.data(), 128, 2);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+      expect(std::abs(a[i] - b[i]) < 1e-6f, "rejected Decay restores the cached original IR even before first audio");
+      energy += std::abs(a[i]);
+    }
+  }
+  expect(energy > 0.1, "rejected Decay comparison contains audible wet output");
 }
 
 void testReverbImpulseSelection() {
@@ -3954,12 +4143,16 @@ int main() {
   testMonoLegatoRetunePreservesEnvelope();
   testEqualizerProcessing();
   testNativeEqualizerEditsPreserveOtherEffects();
+  testNativeReverbEditsPreserveOtherEffects();
   testEqualizerCutSlope();
   testCompressorProcessing();
   testDelayProcessing();
   testReverbProcessing();
   testReverbMixMovesWithoutBoundaryJump();
   testReverbImpulseSelection();
+  testReverbDecayShapesTheRealImpulse();
+  testReverbDecayPublicationDuringAudio();
+  testRejectedReverbDecayRestoresCache();
   testTwoStageConvolverMatchesDirectConvolution();
   testReenabledEffectsDoNotReplayOldAudio();
   testEngineReverbAndDelayThroughConfig();

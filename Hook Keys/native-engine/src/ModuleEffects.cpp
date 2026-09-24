@@ -244,7 +244,7 @@ bool sameDelay(const DelayConfig& left, const DelayConfig& right) noexcept {
 
 bool sameReverb(const ReverbConfig& left, const ReverbConfig& right) noexcept {
   return left.enabled == right.enabled && left.impulse == right.impulse &&
-         left.mix == right.mix;
+         left.mix == right.mix && left.tail == right.tail;
 }
 
 bool sameRotary(const RotaryConfig& left, const RotaryConfig& right) noexcept {
@@ -274,7 +274,15 @@ void ModuleEffects::prepare(double sampleRate, bool organModule) {
 
 void ModuleEffects::prepareFor(const ModuleEffectsConfig& config) noexcept {
   if (config.delay.enabled) (void)delay_.prepareLines();
-  if (config.reverb.enabled) (void)reverb_.prepareImpulse(config.reverb.impulse);
+  if (config.reverb.enabled) (void)reverb_.prepareImpulse(config.reverb.impulse, config.reverb.tail);
+}
+
+bool ModuleEffects::prepareReverbImpulse(std::uint8_t impulse, float tail) noexcept {
+  return impulse < 4 && reverb_.prepareImpulse(impulse, tail);
+}
+
+bool ModuleEffects::prepareDelayLines() noexcept {
+  return delay_.prepareLines();
 }
 
 // Panic: tudo aqui é limitado. Delay, Vibes e Reverb marcam o que é antigo
@@ -314,7 +322,7 @@ void ModuleEffects::setConfig(ModuleEffectsConfig config, float tempoBpm) noexce
   const bool equalizerChanged = !sameEq(config_.equalizer, config.equalizer);
   const bool equalizerBypassChanged = config_.equalizer.enabled != config.equalizer.enabled;
   const bool reverbTopologyChanged = config_.reverb.enabled != config.reverb.enabled ||
-      config_.reverb.impulse != config.reverb.impulse;
+      config_.reverb.impulse != config.reverb.impulse || config_.reverb.tail != config.reverb.tail;
   // Qualquer troca de parâmetros pode criar uma descontinuidade na saída:
   // compressor, tamanho do reverb e estados ON/OFF inclusive. Cutoff e bandas
   // do EQ já interpolam seus próprios coeficientes amostra a amostra; aplicar
@@ -1252,6 +1260,10 @@ float ModuleEffects::StereoDelay::targetDelaySamples() const noexcept {
 
 void ModuleEffects::Reverb::prepare(double nextSampleRate) {
   // Controle, antes do áudio: perfis feitos para outra taxa não servem mais.
+  activePair = nullptr;
+  playing.store(nullptr);
+  acquiring.store(nullptr);
+  retiredConvolvers.clear();
   for (std::size_t impulse = 0; impulse < convolvers.size(); ++impulse) {
     convolvers[impulse].store(nullptr, std::memory_order_release);
     ownedConvolvers[impulse].reset();
@@ -1262,29 +1274,62 @@ void ModuleEffects::Reverb::prepare(double nextSampleRate) {
   // Decodifica os IRs embutidos (uma vez por processo e taxa) já aqui, fora do
   // caminho de ligar o Reverb durante a apresentação.
   (void)impulseBank(sampleRate);
-  if (config.enabled) (void)prepareImpulse(config.impulse);
+  if (config.enabled) (void)prepareImpulse(config.impulse, config.tail);
 }
 
-bool ModuleEffects::Reverb::prepareImpulse(std::uint8_t impulse) noexcept {
+bool ModuleEffects::Reverb::prepareImpulse(std::uint8_t impulse, float tail) noexcept {
+  if (!std::isfinite(tail)) return false;
+  tail = std::clamp(tail, 0.1f, 1.0f);
   impulse = std::min<std::uint8_t>(impulse, 3);
-  if (convolvers[impulse].load(std::memory_order_acquire) != nullptr) return true;
   try {
     std::scoped_lock lock(preparation);
-    if (convolvers[impulse].load(std::memory_order_relaxed) != nullptr) return true;
+    const auto collect = [&] {
+      retiredConvolvers.erase(std::remove_if(retiredConvolvers.begin(), retiredConvolvers.end(),
+          // Scan source before destination: audio promotes acquiring -> playing.
+          [&](const auto& pair) { return pair.get() != acquiring.load() && pair.get() != playing.load(); }),
+          retiredConvolvers.end());
+    };
+    collect();
+    if (ownedConvolvers[impulse] && ownedConvolvers[impulse]->tail == tail) return true;
     const auto bank = impulseBank(sampleRate);
     const auto& source = (*bank)[impulse];
     if (source.left.empty() || source.right.empty()) return false;
+    // Shorten the real IR, preserving its attack and stereo image. The last
+    // quarter of the retained tail fades with a raised cosine. No resampling,
+    // pitch change or output-only gate; 100% is the exact original IR.
+    StereoImpulse shaped;
+    const StereoImpulse* response = &source;
+    if (tail < 1.0f) {
+      const auto count = std::min(source.left.size(),
+          std::max<std::size_t>(2, static_cast<std::size_t>(source.left.size() * tail)));
+      shaped.left.assign(source.left.begin(), source.left.begin() + count);
+      shaped.right.assign(source.right.begin(), source.right.begin() + count);
+      const auto fadeStart = count * 3 / 4;
+      for (std::size_t i = fadeStart; i < count; ++i) {
+        const auto phase = static_cast<double>(i - fadeStart) / std::max<std::size_t>(1, count - 1 - fadeStart);
+        const auto gain = static_cast<float>(0.5 + 0.5 * std::cos(kPi * phase));
+        shaped.left[i] *= gain;
+        shaped.right[i] *= gain;
+      }
+      response = &shaped;
+    }
     auto pair = std::make_unique<ConvolutionPair>();
+    pair->tail = tail;
     constexpr std::size_t headBlockSize = 128;
     constexpr std::size_t tailBlockSize = 4096;
     const auto leftReady = pair->left.init(
-        headBlockSize, tailBlockSize, source.left.data(), source.left.size());
+        headBlockSize, tailBlockSize, response->left.data(), response->left.size());
     const auto rightReady = pair->right.init(
-        headBlockSize, tailBlockSize, source.right.data(), source.right.size());
+        headBlockSize, tailBlockSize, response->right.data(), response->right.size());
     pair->ready = leftReady && rightReady;
     if (!pair->ready) return false;
+    // Reserve before publication so allocation failure leaves the old IR intact.
+    retiredConvolvers.reserve(retiredConvolvers.size() + 1);
+    auto previous = std::move(ownedConvolvers[impulse]);
     ownedConvolvers[impulse] = std::move(pair);
-    convolvers[impulse].store(ownedConvolvers[impulse].get(), std::memory_order_release);
+    convolvers[impulse].store(ownedConvolvers[impulse].get());
+    if (previous) retiredConvolvers.push_back(std::move(previous));
+    collect();
     return true;
   } catch (...) {
     // Sem memória o Reverb fica seco; o resto do módulo continua tocando.
@@ -1294,7 +1339,11 @@ bool ModuleEffects::Reverb::prepareImpulse(std::uint8_t impulse) noexcept {
 
 void ModuleEffects::Reverb::configure(ReverbConfig next) noexcept {
   next.normalize();
-  if (!next.enabled) activeImpulse = kNoImpulse;
+  if (!next.enabled) {
+    activeImpulse = kNoImpulse;
+    activePair = nullptr;
+    playing.store(nullptr);
+  }
   config = next;
 }
 
@@ -1302,20 +1351,29 @@ void ModuleEffects::Reverb::reset() noexcept {
   // O próximo bloco limpa o perfil que for tocar; os outros são limpos quando
   // forem escolhidos de novo.
   activeImpulse = kNoImpulse;
+  activePair = nullptr;
+  playing.store(nullptr);
   currentMix = config.mix;
 }
 
 void ModuleEffects::Reverb::process(float* left, float* right, std::size_t frames) noexcept {
   if (!config.enabled) return;
   const auto impulse = std::min<std::uint8_t>(config.impulse, 3);
-  auto* pair = convolvers[impulse].load(std::memory_order_acquire);
-  if (pair == nullptr || !pair->ready) return;
-  if (impulse != activeImpulse) {
-    // Religado, trocado de IR ou depois do panic: começa do silêncio.
-    pair->left.clearHistory();
-    pair->right.clearHistory();
+  auto* candidate = convolvers[impulse].load();
+  acquiring.store(candidate);
+  // A single bounded acquisition attempt. If the worker publishes meanwhile,
+  // keep rendering the pinned old IR; retry next callback, never spin or lock.
+  if (candidate == convolvers[impulse].load() && candidate != nullptr &&
+      candidate->ready && candidate->tail == config.tail && candidate != activePair) {
+    activePair = candidate;
+    playing.store(activePair);
+    activePair->left.clearHistory();
+    activePair->right.clearHistory();
     activeImpulse = impulse;
   }
+  acquiring.store(nullptr);
+  auto* pair = activePair;
+  if (pair == nullptr) return;
   // Mix como send: até 50% o som original fica inteiro e só entra reverb; de
   // 50% para cima o original é que vai embora, até sobrar só o processado.
   // A rampa é calculada por amostra: movimentos contínuos do knob não trocam
