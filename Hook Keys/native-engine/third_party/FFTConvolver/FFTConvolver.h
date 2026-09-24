@@ -76,11 +76,25 @@ public:
   /** Clears only the accumulated audio history while preserving the IR. */
   void clearHistory();
 
+  // Hook Keys: a mesma convolucao de um bloco inteiro que process() faz, mas
+  // dividida em passos limitados (FFT, um segmento por passo, IFFT). A cauda
+  // do TwoStageFFTConvolver usa isso para espalhar o trabalho pelo periodo
+  // seguinte em vez de pagar tudo num unico callback de audio. So vale com o
+  // buffer de entrada vazio: a cauda so recebe blocos inteiros.
+  size_t stepCount() const;
+  // fftAfterSteps: quantos segmentos somar antes da FFT da entrada (os
+  // segmentos antigos nao dependem dela). Muda so QUANDO o passo pesado roda;
+  // a soma continua na mesma ordem.
+  void beginSteppedBlock(const Sample* input, size_t fftAfterSteps = 0);
+  // Executa ate `steps` passos; o ultimo escreve blockSize amostras em output.
+  // Devolve true quando o bloco terminou.
+  bool advanceSteppedBlock(size_t steps, Sample* output);
+
   /**
   * @brief Resets the convolver and discards the set impulse response
   */
   void reset();
-  
+
 private:
   size_t _blockSize;
   size_t _segSize;
@@ -88,6 +102,11 @@ private:
   size_t _fftComplexSize;
   std::vector<SplitComplex*> _segments;
   std::vector<SplitComplex*> _segmentsIR;
+  // Hook Keys: geracao de cada espectro de entrada guardado. clearHistory()
+  // so avanca _generation: um espectro antigo passa a valer silencio sem
+  // zerar megabytes dentro do callback (IR longo de Hall, panic, religar).
+  std::vector<unsigned> _segmentGeneration;
+  unsigned _generation;
   SampleBuffer _fftBuffer;
   audiofft::AudioFFT _fft;
   SplitComplex _preMultiplied;
@@ -96,6 +115,9 @@ private:
   size_t _current;
   SampleBuffer _inputBuffer;
   size_t _inputBufferFill;
+  bool _steppedPending;
+  size_t _stepNext;
+  size_t _stepFftPosition;
 
   // Prevent uncontrolled usage
   FFTConvolver(const FFTConvolver&);

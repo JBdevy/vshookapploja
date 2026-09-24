@@ -134,7 +134,15 @@ void OrganModule::renderAdd(float* left, float* right, std::size_t frames, float
   for (std::size_t index = 0; index < kDrawbarCount; ++index) {
     const auto target = drawbarGain_[index].load(std::memory_order_acquire);
     auto& current = currentDrawbarGain_[index];
-    if (target <= 0.0f && current <= 0.00001f) { current = 0.0f; continue; }
+    if (target <= 0.0f && current <= 0.00001f) {
+      current = 0.0f;
+      // Fechado, o drawbar não é renderizado e suas vozes não andam. As já
+      // soltas terminariam nunca: o Organ não ficava ocioso (gabinete e
+      // Rotary rodando no silêncio) e a nota antiga voltava ao abrir o drawbar.
+      // As teclas presas continuam, para o drawbar entrar nelas ao ser aberto.
+      voices_[index]->killReleasedVoices();
+      continue;
+    }
     std::fill_n(voiceScratchLeft_.data(), frames, 0.0f);
     std::fill_n(voiceScratchRight_.data(), frames, 0.0f);
     voices_[index]->renderAdd(voiceScratchLeft_.data(), voiceScratchRight_.data(), frames, 1.0f);

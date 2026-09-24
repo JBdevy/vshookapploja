@@ -1051,8 +1051,11 @@ static int tsf_load_samples(void** pRawBuffer, TSF_SAMPLE_TYPE** pSampleBuffer, 
 	// centenas de megabytes logo depois de ler. A escala vira ganho de voz.
 	(void)pRawBuffer;
 	*pSmplCount = chunkSmpl->size / (unsigned int)sizeof(short);
-	*pSampleBuffer = (short*)TSF_MALLOC(*pSmplCount * sizeof(short));
+	// Folga de zeros depois da ultima amostra: a interpolacao le ate duas
+	// posicoes adiante no fim de uma amostra sem loop.
+	*pSampleBuffer = (short*)TSF_MALLOC((*pSmplCount + 4) * sizeof(short));
 	if (!*pSampleBuffer || !stream->read(stream->data, *pSampleBuffer, chunkSmpl->size)) return 0;
+	TSF_MEMSET(*pSampleBuffer + *pSmplCount, 0, 4 * sizeof(short));
 	return 1;
 	#endif
 }
@@ -1286,6 +1289,25 @@ static void tsf_voice_calcpitchratio(struct tsf_voice* v, float pitchShift, floa
 	v->pitchOutputFactor = v->region->sample_rate / (tsf_timecents2Secsd(v->region->pitch_keycenter * 100.0) * outSampleRate);
 }
 
+// Hook Keys: interpolacao cubica (Hermite de 4 pontos, Catmull-Rom) no lugar
+// da linear. A linear abafava o topo das amostras (cerca de -3 dB em 15 kHz
+// numa amostra de 44,1 kHz tocada a 48 kHz) e deixava mais aliasing ao
+// transpor; a cubica e a mesma ordem que o FluidSynth usa por padrao. O loop
+// continua fechado: depois de loopEnd vem loopStart, e antes de loopStart,
+// loopEnd. O banco de amostras tem folga de zeros no fim (tsf_load_samples).
+static float tsf_hook_interpolate(const TSF_SAMPLE_TYPE* input, unsigned int pos, float alpha,
+	TSF_BOOL isLooping, unsigned int loopStart, unsigned int loopEnd)
+{
+	unsigned int prevPos = (isLooping && pos == loopStart ? loopEnd : (pos ? pos - 1 : 0));
+	unsigned int nextPos = (pos >= loopEnd && isLooping ? loopStart : pos + 1);
+	unsigned int next2Pos = (nextPos >= loopEnd && isLooping ? loopStart : nextPos + 1);
+	float x0 = input[prevPos], x1 = input[pos], x2 = input[nextPos], x3 = input[next2Pos];
+	float c1 = 0.5f * (x2 - x0);
+	float c2 = x0 - 2.5f * x1 + 2.0f * x2 - 0.5f * x3;
+	float c3 = 0.5f * (x3 - x0) + 1.5f * (x1 - x2);
+	return ((c3 * alpha + c2) * alpha + c1) * alpha + x1;
+}
+
 static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, int numSamples)
 {
 	struct tsf_region* region = v->region;
@@ -1363,10 +1385,10 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				gainLeftStep = gainMonoStep * v->panFactorLeft, gainRightStep = gainMonoStep * v->panFactorRight;
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
-					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
+					unsigned int pos = (unsigned int)tmpSourceSamplePosition;
 
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					// Hook Keys: cubic interpolation (see tsf_hook_interpolate).
+					float alpha = (float)(tmpSourceSamplePosition - pos), val = tsf_hook_interpolate(input, pos, alpha, isLooping, tmpLoopStart, tmpLoopEnd);
 					if (!isLooping && TSF_RENDER_SAMPLEEND_FADE > 0)
 					{
 						double fadeDistance = pitchRatio * TSF_RENDER_SAMPLEEND_FADE;
@@ -1394,10 +1416,10 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				gainLeftStep = gainMonoStep * v->panFactorLeft, gainRightStep = gainMonoStep * v->panFactorRight;
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
-					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
+					unsigned int pos = (unsigned int)tmpSourceSamplePosition;
 
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					// Hook Keys: cubic interpolation (see tsf_hook_interpolate).
+					float alpha = (float)(tmpSourceSamplePosition - pos), val = tsf_hook_interpolate(input, pos, alpha, isLooping, tmpLoopStart, tmpLoopEnd);
 					if (!isLooping && TSF_RENDER_SAMPLEEND_FADE > 0)
 					{
 						double fadeDistance = pitchRatio * TSF_RENDER_SAMPLEEND_FADE;
@@ -1423,10 +1445,10 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 			case TSF_MONO:
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
-					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
+					unsigned int pos = (unsigned int)tmpSourceSamplePosition;
 
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					// Hook Keys: cubic interpolation (see tsf_hook_interpolate).
+					float alpha = (float)(tmpSourceSamplePosition - pos), val = tsf_hook_interpolate(input, pos, alpha, isLooping, tmpLoopStart, tmpLoopEnd);
 					if (!isLooping && TSF_RENDER_SAMPLEEND_FADE > 0)
 					{
 						double fadeDistance = pitchRatio * TSF_RENDER_SAMPLEEND_FADE;

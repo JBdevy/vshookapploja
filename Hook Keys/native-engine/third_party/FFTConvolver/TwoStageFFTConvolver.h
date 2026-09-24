@@ -121,6 +121,18 @@ private:
   size_t _tailInputFill;
   size_t _precalculatedPos;
   SampleBuffer _backgroundProcessingInput;
+  // Hook Keys: a cauda longa do periodo anterior e calculada aos poucos,
+  // proporcionalmente ao quanto o periodo atual ja andou, em vez de inteira
+  // dentro do callback que fecha o periodo (pico de varios ms com um Hall).
+  bool _backgroundPending;
+  size_t _backgroundStepsDone;
+  // Varios reverbs (e os dois canais de cada um) comecam juntos e fechariam
+  // o periodo no mesmo callback, somando ali as FFTs grandes. Cada instancia
+  // termina a cauda num ponto diferente do periodo e faz sua FFT num ponto
+  // diferente da soma.
+  size_t _stepFinishFill;
+  size_t _stepFftPosition;
+  void advanceBackgroundProcessing();
 
   // Prevent uncontrolled usage
   TwoStageFFTConvolver(const TwoStageFFTConvolver&);

@@ -38,6 +38,10 @@ void hook_keys_tsf_advance_filter_envelope(
     tsf* synth, const hook_keys::CutoffConfig& config, std::size_t frames, float sampleRate) noexcept;
 void hook_keys_tsf_steal_note(tsf* synth, HookKeysGlideState& state,
     int channel, std::uint8_t note) noexcept;
+// Encerra na hora as vozes que ja estao em release. Para um timbre que esta
+// mudo e por isso nao e renderizado (drawbar fechado do Organ): sem render a
+// voz nao anda, nunca terminaria e voltaria a soar quando o drawbar abrisse.
+void hook_keys_tsf_kill_released_voices(tsf* synth, HookKeysGlideState& state) noexcept;
 // Legato mono: reafina a(s) voz(es) já soando de oldNote para newNote sem
 // reiniciar o envelope nem a posição da amostra, só o pitch desliza (ou
 // pula na hora, sem milliseconds). Retorna false se não havia voz ativa

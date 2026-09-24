@@ -1809,6 +1809,7 @@ void testDelayProcessing() {
   config.delay.delayMs = 1.0f;
   config.delay.feedback = 0.0f;
   config.delay.mix = 1.0f;
+  effects.prepareFor(config);
   effects.setConfig(config, 120.0f);
 
   std::array<float, 128> left{};
@@ -1828,6 +1829,7 @@ void testReverbProcessing() {
   config.reverb.dampen = 0.4f;
   config.reverb.size = 0.5f;
   config.reverb.mix = 1.0f;
+  effects.prepareFor(config);
   effects.setConfig(config, 120.0f);
 
   std::array<float, 8192> left{};
@@ -1872,6 +1874,7 @@ void testReverbImpulseSelection() {
     config.reverb.enabled = true;
     config.reverb.mix = 1.0f;
     config.reverb.impulse = impulse;
+    effects.prepareFor(config);
     effects.setConfig(config, 120.0f);
     std::vector<float> left(8192, 0.0f), right(8192, 0.0f);
     left[0] = right[0] = 1.0f;
@@ -1886,6 +1889,185 @@ void testReverbImpulseSelection() {
   }
   expect(differs, "Room 1 and Hall 1 use different convolution impulses");
   expect(room1 == renderTail(0), "the same IR produces a deterministic convolution tail");
+}
+
+// A cauda longa do convolvedor é calculada aos poucos ao longo do período
+// seguinte; o resultado precisa continuar sendo exatamente a convolução, com
+// qualquer tamanho de bloco e também depois de clearHistory().
+void testTwoStageConvolverMatchesDirectConvolution() {
+  std::uint32_t seed = 0x1234567u;
+  const auto random = [&seed] {
+    seed = seed * 1664525u + 1013904223u;
+    return static_cast<float>(seed >> 8) / 8388608.0f - 1.0f;
+  };
+  std::vector<float> impulse(700);
+  for (auto& sample : impulse) sample = random() * 0.1f;
+  fftconvolver::TwoStageFFTConvolver convolver;
+  expect(convolver.init(8, 32, impulse.data(), impulse.size()), "two-stage convolver accepts the test IR");
+
+  std::vector<float> input(3000);
+  for (auto& sample : input) sample = random();
+  const std::size_t clearAt = 1700;
+  std::vector<float> output(input.size(), 0.0f);
+  std::size_t position = 0;
+  std::size_t chunkSeed = 7;
+  while (position < input.size()) {
+    if (position == clearAt) convolver.clearHistory();
+    chunkSeed = (chunkSeed * 31 + 11) % 97;
+    auto chunk = std::min<std::size_t>(1 + chunkSeed, input.size() - position);
+    if (position < clearAt) chunk = std::min(chunk, clearAt - position);
+    convolver.process(input.data() + position, output.data() + position, chunk);
+    position += chunk;
+  }
+
+  double worst = 0.0;
+  for (std::size_t frame = 0; frame < input.size(); ++frame) {
+    // Depois do clearHistory() o que veio antes vale silêncio.
+    const std::size_t start = frame >= clearAt ? clearAt : 0;
+    double expected = 0.0;
+    for (std::size_t tap = 0; tap < impulse.size() && tap + start <= frame; ++tap) {
+      expected += static_cast<double>(impulse[tap]) * input[frame - tap];
+    }
+    worst = std::max(worst, std::abs(expected - output[frame]));
+  }
+  expect(worst < 1e-3, "sliced two-stage convolution equals the direct convolution");
+}
+
+// Delay e Reverb desligados guardavam o som antigo e o tocavam de novo ao
+// serem religados; o panic tampouco pode deixar eco voltar.
+void testReenabledEffectsDoNotReplayOldAudio() {
+  const auto ghostPeak = [](auto enable, bool panicInstead) {
+    hook_keys::ModuleEffects effects;
+    effects.prepare(48000.0);
+    hook_keys::ModuleEffectsConfig config;
+    enable(config, true);
+    effects.prepareFor(config);
+    effects.setConfig(config, 120.0f);
+    std::vector<float> left(256), right(256);
+    const auto run = [&](int blocks, bool impulse) {
+      float peak = 0.0f;
+      for (int block = 0; block < blocks; ++block) {
+        std::fill(left.begin(), left.end(), 0.0f);
+        std::fill(right.begin(), right.end(), 0.0f);
+        if (impulse && block == 0) {
+          std::fill_n(left.begin(), 64, 0.8f);
+          std::fill_n(right.begin(), 64, 0.8f);
+        }
+        effects.process(left.data(), right.data(), left.size());
+        for (const auto sample : left) peak = std::max(peak, std::abs(sample));
+      }
+      return peak;
+    };
+    expect(run(20, true) > 0.01f, "the effect is audible before it is turned off");
+    if (panicInstead) {
+      effects.reset();
+    } else {
+      enable(config, false);
+      effects.setConfig(config, 120.0f);
+      run(400, false);
+      enable(config, true);
+      effects.prepareFor(config);
+      effects.setConfig(config, 120.0f);
+    }
+    return run(200, false);
+  };
+  const auto delay = [](hook_keys::ModuleEffectsConfig& config, bool on) {
+    config.delay.enabled = on;
+    config.delay.mix = 0.5f;
+    config.delay.feedback = 0.6f;
+    config.delay.delayMs = 500.0f;
+  };
+  const auto reverb = [](hook_keys::ModuleEffectsConfig& config, bool on) {
+    config.reverb.enabled = on;
+    config.reverb.impulse = 2;
+    config.reverb.mix = 0.5f;
+  };
+  expect(ghostPeak(delay, false) < 0.0001f, "Delay turned on again starts silent, without old echoes");
+  expect(ghostPeak(reverb, false) < 0.0001f, "Reverb turned on again starts silent, without the old tail");
+  expect(ghostPeak(delay, true) < 0.0001f, "panic silences the Delay without zeroing it in the callback");
+  expect(ghostPeak(reverb, true) < 0.0001f, "panic silences the Reverb tail");
+}
+
+// A linha do Delay e o IR do Reverb nascem em setModuleConfig, na thread de
+// controle: pelo motor, os dois continuam soando assim que ligados.
+void testEngineReverbAndDelayThroughConfig() {
+  class ImpulseSynth final : public hook_keys::ModuleSynth {
+  public:
+    void noteOn(std::uint8_t, std::uint8_t) noexcept override { pending_ = true; }
+    void noteOff(std::uint8_t) noexcept override {}
+    void controlChange(std::uint8_t, std::uint8_t) noexcept override {}
+    void pitchBend(std::uint16_t) noexcept override {}
+    void allNotesOff() noexcept override {}
+    void renderAdd(float* left, float* right, std::size_t frames, float gain) noexcept override {
+      if (!pending_ || frames == 0) return;
+      left[0] += 0.5f * gain;
+      right[0] += 0.5f * gain;
+      pending_ = false;
+    }
+  private:
+    bool pending_ = false;
+  };
+  const auto tailEnergy = [](auto enable) {
+    ImpulseSynth synth;
+    hook_keys::HookKeysEngine::SynthModules modules{};
+    modules[0] = &synth;
+    hook_keys::HookKeysEngine engine(modules);
+    hook_keys::ModuleConfig config;
+    config.midiInputSlot = hook_keys::kAllMidiInputs;
+    enable(config.effects);
+    expect(engine.setModuleConfig(0, config), "engine accepts the effect config");
+    expect(engine.enqueueMidi({0x90, 60, 100, 0, 0}), "engine queues the note");
+    std::vector<float> left(128), right(128);
+    double energy = 0.0;
+    for (int block = 0; block < 400; ++block) {
+      engine.render(left.data(), right.data(), left.size());
+      if (block == 0) continue;
+      for (const auto sample : left) energy += std::abs(sample);
+    }
+    return energy;
+  };
+  expect(tailEnergy([](hook_keys::ModuleEffectsConfig& effects) {
+    effects.reverb.enabled = true;
+    effects.reverb.impulse = 3;
+    effects.reverb.mix = 1.0f;
+  }) > 0.01, "Reverb enabled through the engine renders its tail");
+  expect(tailEnergy([](hook_keys::ModuleEffectsConfig& effects) {
+    effects.delay.enabled = true;
+    effects.delay.delayMs = 100.0f;
+    effects.delay.feedback = 0.5f;
+    effects.delay.mix = 0.5f;
+  }) > 0.01, "Delay enabled through the engine renders its echoes");
+}
+
+// Drawbar fechado não é renderizado e suas vozes não andavam: a nota solta
+// nunca terminava (o Organ nunca ficava ocioso) e voltava ao abrir o drawbar.
+void testClosedOrganDrawbarDoesNotKeepReleasedVoices() {
+  hook_keys::OrganModule organ(48000.0, 512);
+  expect(organ.loadVoice(0, "assets/hook-b3/drawbar-0.sf2"), "Organ loads the 16' drawbar");
+  expect(organ.loadVoice(2, "assets/hook-b3/drawbar-2.sf2"), "Organ loads the 8' drawbar");
+  for (std::size_t index = 0; index < hook_keys::OrganModule::kDrawbarCount; ++index) {
+    organ.setDrawbarPosition(index, index == 2 ? 8 : 0);
+  }
+  std::vector<float> left(512), right(512);
+  const auto render = [&](double seconds) {
+    float peak = 0.0f;
+    for (int block = 0; block < static_cast<int>(48000.0 * seconds / 512.0); ++block) {
+      organ.beginBlock();
+      std::fill(left.begin(), left.end(), 0.0f);
+      std::fill(right.begin(), right.end(), 0.0f);
+      organ.renderAdd(left.data(), right.data(), left.size(), 1.0f);
+      for (const auto sample : left) peak = std::max(peak, std::abs(sample));
+    }
+    return peak;
+  };
+  organ.beginBlock();
+  organ.noteOn(60, 127);
+  expect(render(0.5) > 0.001f, "the open 8' drawbar sounds");
+  organ.noteOff(60);
+  render(5.0);
+  expect(!organ.hasActiveVoices(), "released notes of a closed drawbar do not stay alive");
+  organ.setDrawbarPosition(0, 8);
+  expect(render(1.0) < 0.0001f, "opening a drawbar later does not bring back an old note");
 }
 
 void testOrganCabinetImpulseSelection() {
@@ -2153,6 +2335,7 @@ void testEffectParametersDoNotClickOnChange() {
       "compressor change starts continuously, without a click");
   previous = left.back();
   config.reverb = {true, 0, 0.8f, 0.5f, 0.9f, 0.8f, 0.2f};
+  effects.prepareFor(config);
   effects.setConfig(config, 120.0f);
   render();
   expect(std::abs(left.front() - previous) < 0.0001f,
@@ -3059,6 +3242,7 @@ void testDelayDivisionsFollowTempo() {
     config.delay.beatMultiplier = beatMultiplier;
     config.delay.feedback = 0.0f;
     config.delay.mix = 1.0f;
+    effects.prepareFor(config);
     effects.setConfig(config, bpm);
     std::vector<float> left(4 * 48000 + 4800, 0.0f), right(left.size(), 0.0f);
     left[0] = right[0] = 1.0f;
@@ -3551,6 +3735,10 @@ int main() {
   testReverbProcessing();
   testReverbMixMovesWithoutBoundaryJump();
   testReverbImpulseSelection();
+  testTwoStageConvolverMatchesDirectConvolution();
+  testReenabledEffectsDoNotReplayOldAudio();
+  testEngineReverbAndDelayThroughConfig();
+  testClosedOrganDrawbarDoesNotKeepReleasedVoices();
   testOrganCabinetImpulseSelection();
   testBypassedModuleEffectsAreBitTransparent();
   testOrganCabinetDoesNotBoostResonances();

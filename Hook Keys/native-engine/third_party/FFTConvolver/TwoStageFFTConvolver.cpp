@@ -22,11 +22,19 @@
 #include "TwoStageFFTConvolver.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 
 namespace fftconvolver
 {
+
+namespace
+{
+// Hook Keys: cada instancia recebe uma posicao diferente para o trabalho da
+// cauda dentro do periodo (ver _stepFinishFill/_stepFftPosition).
+std::atomic<unsigned> scheduleSlots(0);
+}
 
 TwoStageFFTConvolver::TwoStageFFTConvolver() :
   _headBlockSize(0),
@@ -41,7 +49,11 @@ TwoStageFFTConvolver::TwoStageFFTConvolver() :
   _tailInput(),
   _tailInputFill(0),
   _precalculatedPos(0),
-  _backgroundProcessingInput()
+  _backgroundProcessingInput(),
+  _backgroundPending(false),
+  _backgroundStepsDone(0),
+  _stepFinishFill(0),
+  _stepFftPosition(0)
 {
 }
 
@@ -68,6 +80,8 @@ void TwoStageFFTConvolver::reset()
   _tailInputFill = 0;
   _precalculatedPos = 0;
   _backgroundProcessingInput.clear();
+  _backgroundPending = false;
+  _backgroundStepsDone = 0;
 }
 
 
@@ -76,14 +90,17 @@ void TwoStageFFTConvolver::clearHistory()
   _headConvolver.clearHistory();
   _tailConvolver0.clearHistory();
   _tailConvolver.clearHistory();
+  // _tailInput e _backgroundProcessingInput sao reescritos antes de qualquer
+  // leitura; os precalculados voltam a ser somados na saida e os de saida
+  // viram precalculados na proxima troca.
   _tailOutput0.setZero();
   _tailPrecalculated0.setZero();
   _tailOutput.setZero();
   _tailPrecalculated.setZero();
-  _tailInput.setZero();
-  _backgroundProcessingInput.setZero();
   _tailInputFill = 0;
   _precalculatedPos = 0;
+  _backgroundPending = false;
+  _backgroundStepsDone = 0;
 }
 
   
@@ -138,6 +155,16 @@ bool TwoStageFFTConvolver::init(size_t headBlockSize,
     _tailOutput.resize(_tailBlockSize);
     _tailPrecalculated.resize(_tailBlockSize);
     _backgroundProcessingInput.resize(_tailBlockSize);
+
+    // Hook Keys: termina a cauda entre ~53% e 100% do periodo e faz a FFT
+    // em pontos diferentes da soma, conforme a instancia.
+    const unsigned slot = scheduleSlots.fetch_add(1, std::memory_order_relaxed) % 16u;
+    const size_t headBlocks = _tailBlockSize / _headBlockSize;
+    const size_t finishBlocks = std::max<size_t>(1,
+        (headBlocks * (16 + ((slot * 7u) % 16u + 1u)) + 31) / 32);
+    _stepFinishFill = std::min(_tailBlockSize, finishBlocks * _headBlockSize);
+    const size_t segments = _tailConvolver.stepCount() > 0 ? _tailConvolver.stepCount() - 1 : 0;
+    _stepFftPosition = segments > 0 ? ((slot * 5u) % 16u) * (segments - 1) / 16u : 0;
   }
 
   if (_tailPrecalculated0.size() > 0 || _tailPrecalculated.size() > 0)
@@ -212,6 +239,13 @@ void TwoStageFFTConvolver::process(const Sample* input, Sample* output, size_t l
         }
       }
 
+      // Hook Keys: avanca a cauda do periodo anterior na proporcao do periodo
+      // atual. No fechamento do periodo o alvo e o total: nada fica pendente.
+      if (_backgroundPending)
+      {
+        advanceBackgroundProcessing();
+      }
+
       // Convolution: 2nd-Nth tail block (might be done in some background thread)
       if (_tailPrecalculated.size() > 0 &&
           _tailInputFill == _tailBlockSize &&
@@ -238,18 +272,46 @@ void TwoStageFFTConvolver::process(const Sample* input, Sample* output, size_t l
 
 void TwoStageFFTConvolver::startBackgroundProcessing()
 {
-  doBackgroundProcessing();
+  // Hook Keys: so registra o bloco; o calculo anda em advanceBackgroundProcessing().
+  _tailConvolver.beginSteppedBlock(_backgroundProcessingInput.data(), _stepFftPosition);
+  _backgroundPending = true;
+  _backgroundStepsDone = 0;
 }
 
 
 void TwoStageFFTConvolver::waitForBackgroundProcessing()
 {
+  doBackgroundProcessing();
 }
 
 
 void TwoStageFFTConvolver::doBackgroundProcessing()
 {
-  _tailConvolver.process(_backgroundProcessingInput.data(), _tailOutput.data(), _tailBlockSize);
+  // Termina o que ainda faltar do bloco pendente (normalmente nada).
+  if (!_backgroundPending)
+  {
+    return;
+  }
+  _tailConvolver.advanceSteppedBlock(static_cast<size_t>(-1), _tailOutput.data());
+  _backgroundPending = false;
+}
+
+
+void TwoStageFFTConvolver::advanceBackgroundProcessing()
+{
+  const size_t total = _tailConvolver.stepCount();
+  const size_t finish = _stepFinishFill > 0 ? _stepFinishFill : _tailBlockSize;
+  const size_t fill = std::min(_tailInputFill, finish);
+  const size_t target = (total * fill + finish - 1) / finish;
+  if (target <= _backgroundStepsDone)
+  {
+    return;
+  }
+  if (_tailConvolver.advanceSteppedBlock(target - _backgroundStepsDone, _tailOutput.data()))
+  {
+    _backgroundPending = false;
+  }
+  _backgroundStepsDone = target;
 }
     
 } // End of namespace fftconvolver

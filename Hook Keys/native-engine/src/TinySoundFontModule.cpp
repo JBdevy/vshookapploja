@@ -319,6 +319,10 @@ void TinySoundFontModule::allNotesOff() noexcept {
   tsf_channel_note_off_all(active_, kChannel);
 }
 
+void TinySoundFontModule::killReleasedVoices() noexcept {
+  if (active_ != nullptr) hook_keys_tsf_kill_released_voices(active_, glide_);
+}
+
 bool TinySoundFontModule::hasActiveVoices() const noexcept {
   return active_ != nullptr && tsf_active_voice_count(active_) > 0;
 }

@@ -28,6 +28,7 @@ public:
   // Producer side: UI and MIDI threads. Returns false for invalid input or
   // when the bounded real-time queue is full.
   [[nodiscard]] bool enqueueMidi(MidiMessage message) noexcept;
+  // Control thread: also allocates the Delay line / Reverb IR the config uses.
   [[nodiscard]] bool setModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept;
   [[nodiscard]] bool setTempoBpm(float tempoBpm) noexcept;
   // Transpose geral de entrada (semitons, -60..60), somado por cima do Oct de

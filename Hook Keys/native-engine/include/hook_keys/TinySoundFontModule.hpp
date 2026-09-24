@@ -83,6 +83,10 @@ public:
   bool isVoicePoolNearlyFull() const noexcept override;
   bool canSkipRenderingWhenIdle() const noexcept override { return true; }
   void renderAdd(float* left, float* right, std::size_t frames, float gainLinear) noexcept override;
+  // Audio thread, for a timbre that is muted and therefore not rendered (a
+  // closed Organ drawbar): voices already released end now instead of
+  // freezing forever and sounding again when it opens.
+  void killReleasedVoices() noexcept;
 
 private:
   void stage(tsf* prepared) noexcept;

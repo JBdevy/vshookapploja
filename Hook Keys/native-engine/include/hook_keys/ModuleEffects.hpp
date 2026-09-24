@@ -4,8 +4,10 @@
 #include "../../third_party/FFTConvolver/TwoStageFFTConvolver.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace hook_keys {
@@ -19,8 +21,15 @@ class ModuleEffects final {
 public:
   ModuleEffects() = default;
 
-  // Call before starting audio. All delay, reverb and rotary memory is allocated here.
+  // Call before starting audio. Rotary, Chorus, Vibes and the Organ cabinet are
+  // allocated here; Delay and Reverb wait for prepareFor().
   void prepare(double sampleRate, bool organModule = false);
+  // Control thread, before a configuration reaches setConfig(): allocates the
+  // Delay line and the selected Reverb IR the first time they are used. Four
+  // IRs and 4 s of Delay in every module cost ~16 MB per module even with both
+  // effects off; now a module pays only for what it plays. Safe while the audio
+  // thread runs; HookKeysEngine::setModuleConfig calls it for every module.
+  void prepareFor(const ModuleEffectsConfig& config) noexcept;
   void reset() noexcept;
 
   // Audio thread only. These operations are bounded and never allocate.
@@ -89,6 +98,8 @@ private:
     float attackCoefficient = 0.0f;
     float releaseCoefficient = 0.0f;
     float outputGain = 1.0f;
+    // Abaixo do threshold o ganho e so o de saida: pula log10/pow por amostra.
+    float thresholdLinear = 1.0f;
 
     void configure(CompressorConfig next, double nextSampleRate) noexcept;
     void reset() noexcept;
@@ -96,19 +107,33 @@ private:
   };
 
   struct StereoDelay final {
+    struct Lines final {
+      std::vector<float> left;
+      std::vector<float> right;
+    };
+
     DelayConfig config{};
     double sampleRate = 48000.0;
     float tempoBpm = 120.0f;
-    std::vector<float> leftBuffer;
-    std::vector<float> rightBuffer;
+    // 4 s estéreo (1,5 MB) por módulo: a linha nasce na thread de controle na
+    // primeira configuração que liga o Delay; o callback só lê o ponteiro.
+    std::atomic<Lines*> lines{nullptr};
+    std::unique_ptr<Lines> ownedLines;
+    std::mutex preparation;
     std::size_t writeIndex = 0;
+    // Amostras escritas desde que o Delay (re)começou. O que é mais antigo é
+    // som de antes (ligar de novo, panic): lê como silêncio, sem zerar 1,5 MB
+    // dentro do callback e sem repetir ecos velhos.
+    std::size_t freshSamples = 0;
     float currentDelaySamples = 1.0f;
 
     void prepare(double nextSampleRate);
+    bool prepareLines() noexcept;
     void configure(DelayConfig next, float nextTempoBpm) noexcept;
     void setTempo(float nextTempoBpm) noexcept;
     void reset() noexcept;
     void process(float* left, float* right, std::size_t frames) noexcept;
+    [[nodiscard]] std::size_t capacity() const noexcept;
     [[nodiscard]] float targetDelaySamples() const noexcept;
   };
 
@@ -118,19 +143,33 @@ private:
       fftconvolver::TwoStageFFTConvolver right;
       bool ready = false;
     };
+    static constexpr std::uint8_t kNoImpulse = 0xff;
+
+    Reverb() noexcept {
+      for (auto& convolver : convolvers) convolver.store(nullptr, std::memory_order_relaxed);
+    }
 
     ReverbConfig config{};
     double sampleRate = 48000.0;
     // O Mix é automatizado enquanto o áudio toca. O valor corrente segue o
     // alvo por uma rampa curta para não criar degraus/estalos no dry/wet.
     float currentMix = config.mix;
-    // Todos os perfis são preparados antes da thread de áudio: alternar IR
-    // durante uma apresentação não faz alocação nem processamento pesado.
-    std::array<std::unique_ptr<ConvolutionPair>, 4> convolvers{};
+    // Cada perfil ocupa megabytes (o Hall 1 tem 4,5 s). Ele nasce na thread de
+    // controle na primeira configuração que o escolhe e depois fica pronto:
+    // voltar a ele durante a apresentação não aloca. O callback só lê o
+    // ponteiro publicado.
+    std::array<std::atomic<ConvolutionPair*>, 4> convolvers{};
+    std::array<std::unique_ptr<ConvolutionPair>, 4> ownedConvolvers{};
+    std::mutex preparation;
+    // Perfil que está soando. Ligar de novo, trocar de IR ou o panic começam
+    // do silêncio: o histórico do perfil é limpo antes do primeiro bloco, em
+    // vez de a cauda de antes voltar a tocar.
+    std::uint8_t activeImpulse = kNoImpulse;
     std::array<float, 256> wetLeft{};
     std::array<float, 256> wetRight{};
 
     void prepare(double nextSampleRate);
+    bool prepareImpulse(std::uint8_t impulse) noexcept;
     void configure(ReverbConfig next) noexcept;
     void reset() noexcept;
     void process(float* left, float* right, std::size_t frames) noexcept;
@@ -232,6 +271,8 @@ private:
     double sampleRate = 48000.0;
     std::array<std::vector<float>, 2> buffers;
     std::size_t writeIndex = 0;
+    // Amostras escritas desde o último reset: o panic não zera a linha inteira.
+    std::size_t freshSamples = 0;
     double phase = 0.0;
     float currentRateHz = 1.0f;
     float currentAmountSemitones = 0.0f;

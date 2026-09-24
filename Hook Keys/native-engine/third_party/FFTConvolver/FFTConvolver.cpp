@@ -39,6 +39,8 @@ FFTConvolver::FFTConvolver() :
   _fftComplexSize(0),
   _segments(),
   _segmentsIR(),
+  _segmentGeneration(),
+  _generation(1),
   _fftBuffer(),
   _fft(),
   _preMultiplied(),
@@ -46,7 +48,10 @@ FFTConvolver::FFTConvolver() :
   _overlap(),
   _current(0),
   _inputBuffer(),
-  _inputBufferFill(0)
+  _inputBufferFill(0),
+  _steppedPending(false),
+  _stepNext(0),
+  _stepFftPosition(0)
 {
 }
 
@@ -71,6 +76,8 @@ void FFTConvolver::reset()
   _fftComplexSize = 0;
   _segments.clear();
   _segmentsIR.clear();
+  _segmentGeneration.clear();
+  _generation = 1;
   _fftBuffer.clear();
   _fft.init(0);
   _preMultiplied.clear();
@@ -79,22 +86,28 @@ void FFTConvolver::reset()
   _current = 0;
   _inputBuffer.clear();
   _inputBufferFill = 0;
+  _steppedPending = false;
+  _stepNext = 0;
 }
 
 
 void FFTConvolver::clearHistory()
 {
-  for (size_t i=0; i<_segments.size(); ++i)
+  // Hook Keys: zerar os espectros de um Hall (megabytes) travava o callback
+  // no panic e ao religar o reverb. Uma geracao nova faz cada espectro antigo
+  // valer silencio; so os buffers que voltam a ser somados sao zerados.
+  // _fftBuffer, _preMultiplied e _conv sao reescritos antes de qualquer leitura.
+  if (++_generation == 0)
   {
-    _segments[i]->setZero();
+    std::fill(_segmentGeneration.begin(), _segmentGeneration.end(), 0u);
+    _generation = 1;
   }
-  _fftBuffer.setZero();
-  _preMultiplied.setZero();
-  _conv.setZero();
   _overlap.setZero();
   _inputBuffer.setZero();
   _current = 0;
   _inputBufferFill = 0;
+  _steppedPending = false;
+  _stepNext = 0;
 }
 
   
@@ -143,8 +156,11 @@ bool FFTConvolver::init(size_t blockSize, const Sample* ir, size_t irLen)
     _fft.fft(_fftBuffer.data(), segment->re(), segment->im());
     _segmentsIR.push_back(segment);
   }
-  
-  // Prepare convolution buffers  
+  // Nenhum espectro de entrada foi calculado ainda: todos valem silencio.
+  _segmentGeneration.assign(_segCount, 0u);
+  _generation = 1;
+
+  // Prepare convolution buffers
   _preMultiplied.resize(_fftComplexSize);
   _conv.resize(_fftComplexSize);
   _overlap.resize(_blockSize);
@@ -177,8 +193,9 @@ void FFTConvolver::process(const Sample* input, Sample* output, size_t len)
     ::memcpy(_inputBuffer.data()+inputBufferPos, input+processed, processing * sizeof(Sample));
 
     // Forward FFT
-    CopyAndPad(_fftBuffer, &_inputBuffer[0], _blockSize); 
+    CopyAndPad(_fftBuffer, &_inputBuffer[0], _blockSize);
     _fft.fft(_fftBuffer.data(), _segments[_current]->re(), _segments[_current]->im());
+    _segmentGeneration[_current] = _generation;
 
     // Complex multiplication
     if (inputBufferWasEmpty)
@@ -188,6 +205,8 @@ void FFTConvolver::process(const Sample* input, Sample* output, size_t len)
       {
         const size_t indexIr = i;
         const size_t indexAudio = (_current + i) % _segCount;
+        // Espectro de antes do ultimo clearHistory(): silencio, nada a somar.
+        if (_segmentGeneration[indexAudio] != _generation) continue;
         ComplexMultiplyAccumulate(_preMultiplied, *_segmentsIR[indexIr], *_segments[indexAudio]);
       }
     }
@@ -218,5 +237,69 @@ void FFTConvolver::process(const Sample* input, Sample* output, size_t len)
     processed += processing;
   }
 }
-  
+
+
+size_t FFTConvolver::stepCount() const
+{
+  // Uma FFT da entrada, N-1 segmentos do IR (um por passo) e, por ultimo, a
+  // IFFT com a saida.
+  return _segCount > 0 ? _segCount + 1 : 0;
+}
+
+
+void FFTConvolver::beginSteppedBlock(const Sample* input, size_t fftAfterSteps)
+{
+  if (_segCount == 0)
+  {
+    return;
+  }
+  assert(_inputBufferFill == 0);
+  ::memcpy(_inputBuffer.data(), input, _blockSize * sizeof(Sample));
+  _preMultiplied.setZero();
+  _steppedPending = true;
+  _stepNext = 0;
+  _stepFftPosition = std::min(fftAfterSteps, _segCount - 1);
+}
+
+
+bool FFTConvolver::advanceSteppedBlock(size_t steps, Sample* output)
+{
+  // Mesmas operacoes que process() faz com um bloco inteiro e o buffer de
+  // entrada vazio, com os segmentos somados na mesma ordem (1..N-1): o
+  // resultado e identico bit a bit. So a FFT pode vir no meio da soma, porque
+  // nenhum segmento antigo depende dela.
+  while (steps > 0 && _steppedPending)
+  {
+    if (_stepNext == _stepFftPosition)
+    {
+      CopyAndPad(_fftBuffer, &_inputBuffer[0], _blockSize);
+      _fft.fft(_fftBuffer.data(), _segments[_current]->re(), _segments[_current]->im());
+      _segmentGeneration[_current] = _generation;
+    }
+    else if (_stepNext < _segCount)
+    {
+      const size_t indexIr = _stepNext < _stepFftPosition ? _stepNext + 1 : _stepNext;
+      const size_t indexAudio = (_current + indexIr) % _segCount;
+      if (_segmentGeneration[indexAudio] == _generation)
+      {
+        ComplexMultiplyAccumulate(_preMultiplied, *_segmentsIR[indexIr], *_segments[indexAudio]);
+      }
+    }
+    else
+    {
+      _conv.copyFrom(_preMultiplied);
+      ComplexMultiplyAccumulate(_conv, *_segments[_current], *_segmentsIR[0]);
+      _fft.ifft(_fftBuffer.data(), _conv.re(), _conv.im());
+      Sum(output, _fftBuffer.data(), _overlap.data(), _blockSize);
+      _inputBuffer.setZero();
+      ::memcpy(_overlap.data(), _fftBuffer.data()+_blockSize, _blockSize * sizeof(Sample));
+      _current = (_current > 0) ? (_current - 1) : (_segCount - 1);
+      _steppedPending = false;
+    }
+    ++_stepNext;
+    --steps;
+  }
+  return !_steppedPending;
+}
+
 } // End of namespace fftconvolver

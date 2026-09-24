@@ -83,6 +83,9 @@ bool HookKeysEngine::enqueueMidi(MidiMessage message) noexcept {
 bool HookKeysEngine::setModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept {
   if (moduleIndex >= kModuleCount) return false;
   config.normalize();
+  // Linha do Delay e IR do Reverb nascem aqui, na thread de controle, antes
+  // de a configuração que os liga chegar ao callback.
+  effects_[moduleIndex].prepareFor(config.effects);
   return push(EngineCommand::configureModule(moduleIndex, config));
 }
 

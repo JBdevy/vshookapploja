@@ -144,6 +144,17 @@ void hook_keys_tsf_steal_note(tsf* synth, HookKeysGlideState& state,
   }
 }
 
+void hook_keys_tsf_kill_released_voices(tsf* synth, HookKeysGlideState& state) noexcept {
+  if (!synth) return;
+  const auto count = std::min(synth->voiceNum, static_cast<int>(state.voices.size()));
+  for (int i = 0; i < count; ++i) {
+    auto& voice = synth->voices[i];
+    if (voice.playingPreset < 0 || voice.ampenv.segment < TSF_SEGMENT_RELEASE) continue;
+    tsf_voice_kill(&voice);
+    state.voices[i] = {};
+  }
+}
+
 bool hook_keys_tsf_legato_retune(tsf* synth, HookKeysGlideState& state,
     int channel, std::uint8_t oldNote, std::uint8_t newNote, float milliseconds,
     const hook_keys::CutoffConfig* cutoff, std::uint8_t filterVelocity,

@@ -272,6 +272,13 @@ void ModuleEffects::prepare(double sampleRate, bool organModule) {
   rotary_.configure(config_.rotary);
 }
 
+void ModuleEffects::prepareFor(const ModuleEffectsConfig& config) noexcept {
+  if (config.delay.enabled) (void)delay_.prepareLines();
+  if (config.reverb.enabled) (void)reverb_.prepareImpulse(config.reverb.impulse);
+}
+
+// Panic: tudo aqui é limitado. Delay, Vibes e Reverb marcam o que é antigo
+// em vez de zerar megabytes de linha e de espectros dentro do callback.
 void ModuleEffects::reset() noexcept {
   cutoff_.reset();
   equalizer_.reset();
@@ -280,6 +287,7 @@ void ModuleEffects::reset() noexcept {
   reverb_.reset();
   cabinet_.reset();
   rotary_.reset();
+  chorus_.reset();
   loFi_.reset();
   configureCutoff();
   gatePhaseSamples_ = 0.0;
@@ -554,8 +562,9 @@ void ModuleEffects::LoFi::prepare(double nextSampleRate) {
 }
 
 void ModuleEffects::LoFi::reset() noexcept {
-  for (auto& buffer : buffers) std::fill(buffer.begin(), buffer.end(), 0.0f);
+  // A linha não é zerada: o que for mais antigo que freshSamples vale silêncio.
   writeIndex = 0;
+  freshSamples = 0;
   phase = 0.0;
   currentRateHz = 1.0f;
   currentAmountSemitones = 0.0f;
@@ -577,7 +586,15 @@ float ModuleEffects::LoFi::read(
   const auto first = static_cast<std::size_t>(position) % buffer.size();
   const auto second = (first + 1) % buffer.size();
   const auto fraction = position - std::floor(position);
-  return buffer[first] + (buffer[second] - buffer[first]) * fraction;
+  auto older = buffer[first];
+  auto newer = buffer[second];
+  if (freshSamples < buffer.size()) {
+    // Escrito antes do último reset vale silêncio, como se a linha tivesse
+    // sido zerada. A amostra atual já está em writeIndex (idade 0).
+    if ((writeIndex + buffer.size() - first) % buffer.size() >= freshSamples) older = 0.0f;
+    if ((writeIndex + buffer.size() - second) % buffer.size() >= freshSamples) newer = 0.0f;
+  }
+  return older + (newer - older) * fraction;
 }
 
 float ModuleEffects::LoFi::readNoise(std::size_t channel) const noexcept {
@@ -593,8 +610,27 @@ float ModuleEffects::LoFi::readNoise(std::size_t channel) const noexcept {
 void ModuleEffects::LoFi::process(
     const LoFiConfig& config, float* left, float* right, std::size_t frames) noexcept {
   if (buffers[0].empty() || buffers[1].empty()) return;
+  const auto capacity = buffers[0].size();
   const auto targetAmount = config.enabled ? config.amountSemitones : 0.0f;
   const auto targetVinylGain = config.enabled && config.vinylEnabled ? 1.0f : 0.0f;
+  if (targetAmount <= 0.0f && targetVinylGain <= 0.0f && currentAmountSemitones <= 0.0001f &&
+      currentVinylGain <= 0.000001f && currentNoiseGain <= 0.000001f) {
+    // Vibes em bypass e rampas no fim: a saída já é o próprio sinal. Só a
+    // linha continua alimentada para religar sem buraco, sem tanh, filtros e
+    // ruído por amostra em todo módulo que toca.
+    currentAmountSemitones = currentVinylGain = currentNoiseGain = 0.0f;
+    currentRateHz = config.rateHz;
+    toneLowPass.fill(0.0f);
+    toneHighPassInput.fill(0.0f);
+    toneHighPassOutput.fill(0.0f);
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      buffers[0][writeIndex] = left[frame];
+      buffers[1][writeIndex] = right[frame];
+      writeIndex = (writeIndex + 1) % capacity;
+    }
+    freshSamples = std::min(capacity, freshSamples + frames);
+    return;
+  }
   const auto targetNoiseGain = targetVinylGain * std::pow(10.0f, config.noiseGainDb / 20.0f);
   const auto smoothing = 1.0f - std::exp(-1.0f / (0.030f * static_cast<float>(sampleRate)));
   const auto toneLowPassCoefficient = 1.0f - std::exp(
@@ -605,6 +641,7 @@ void ModuleEffects::LoFi::process(
     const std::array<float, 2> dry{{left[frame], right[frame]}};
     buffers[0][writeIndex] = dry[0];
     buffers[1][writeIndex] = dry[1];
+    if (freshSamples < capacity) ++freshSamples;
     currentRateHz += (config.rateHz - currentRateHz) * smoothing;
     currentAmountSemitones += (targetAmount - currentAmountSemitones) * smoothing;
     currentVinylGain += (targetVinylGain - currentVinylGain) * smoothing;
@@ -1072,6 +1109,7 @@ void ModuleEffects::Compressor::configure(CompressorConfig next, double nextSamp
   attackCoefficient = std::exp(-1.0f / (0.001f * config.attackMs * static_cast<float>(sampleRate)));
   releaseCoefficient = std::exp(-1.0f / (0.001f * config.releaseMs * static_cast<float>(sampleRate)));
   outputGain = decibelsToLinear(config.outputGainDb);
+  thresholdLinear = decibelsToLinear(config.thresholdDb);
 }
 
 void ModuleEffects::Compressor::reset() noexcept {
@@ -1087,10 +1125,15 @@ void ModuleEffects::Compressor::process(float* left, float* right, std::size_t f
     const auto coefficient = detector > envelope ? attackCoefficient : releaseCoefficient;
     envelope = coefficient * envelope + (1.0f - coefficient) * detector;
 
-    const auto levelDb = 20.0f * std::log10(std::max(envelope, 0.00000001f));
-    const auto aboveThreshold = std::max(0.0f, levelDb - config.thresholdDb);
-    const auto reductionDb = aboveThreshold * (1.0f / config.ratio - 1.0f);
-    const auto compressedGain = decibelsToLinear(reductionDb) * outputGain;
+    // Abaixo do threshold a redução é 0 dB: o ganho é só o de saída, sem
+    // log10/pow por amostra durante a maior parte do tempo.
+    auto compressedGain = outputGain;
+    if (envelope > thresholdLinear) {
+      const auto levelDb = 20.0f * std::log10(std::max(envelope, 0.00000001f));
+      const auto aboveThreshold = std::max(0.0f, levelDb - config.thresholdDb);
+      const auto reductionDb = aboveThreshold * (1.0f / config.ratio - 1.0f);
+      compressedGain = decibelsToLinear(reductionDb) * outputGain;
+    }
     const auto wetLeft = dryLeft * compressedGain;
     const auto wetRight = dryRight * compressedGain;
     left[frame] = dryLeft + (wetLeft - dryLeft) * config.mix;
@@ -1098,13 +1141,36 @@ void ModuleEffects::Compressor::process(float* left, float* right, std::size_t f
   }
 }
 
+std::size_t ModuleEffects::StereoDelay::capacity() const noexcept {
+  return static_cast<std::size_t>(std::ceil(sampleRate * 4.0)) + 2;
+}
+
 void ModuleEffects::StereoDelay::prepare(double nextSampleRate) {
+  // Controle, antes do áudio: uma linha feita para outra taxa não serve mais.
+  lines.store(nullptr, std::memory_order_release);
+  ownedLines.reset();
   sampleRate = nextSampleRate;
-  const auto capacity = static_cast<std::size_t>(std::ceil(sampleRate * 4.0)) + 2;
-  leftBuffer.assign(capacity, 0.0f);
-  rightBuffer.assign(capacity, 0.0f);
   writeIndex = 0;
+  freshSamples = 0;
   currentDelaySamples = targetDelaySamples();
+  if (config.enabled) (void)prepareLines();
+}
+
+bool ModuleEffects::StereoDelay::prepareLines() noexcept {
+  if (lines.load(std::memory_order_acquire) != nullptr) return true;
+  try {
+    std::scoped_lock lock(preparation);
+    if (lines.load(std::memory_order_relaxed) != nullptr) return true;
+    auto created = std::make_unique<Lines>();
+    created->left.assign(capacity(), 0.0f);
+    created->right.assign(capacity(), 0.0f);
+    ownedLines = std::move(created);
+    lines.store(ownedLines.get(), std::memory_order_release);
+    return true;
+  } catch (...) {
+    // Sem memória o Delay fica seco; o resto do módulo continua tocando.
+    return false;
+  }
 }
 
 void ModuleEffects::StereoDelay::configure(DelayConfig next, float nextTempoBpm) noexcept {
@@ -1112,7 +1178,11 @@ void ModuleEffects::StereoDelay::configure(DelayConfig next, float nextTempoBpm)
   const auto wasEnabled = config.enabled;
   config = next;
   setTempo(nextTempoBpm);
-  if (!wasEnabled && config.enabled) currentDelaySamples = targetDelaySamples();
+  if (!wasEnabled && config.enabled) {
+    currentDelaySamples = targetDelaySamples();
+    // O que ficou na linha é de quando o Delay estava ligado antes.
+    freshSamples = 0;
+  }
 }
 
 void ModuleEffects::StereoDelay::setTempo(float nextTempoBpm) noexcept {
@@ -1120,14 +1190,16 @@ void ModuleEffects::StereoDelay::setTempo(float nextTempoBpm) noexcept {
 }
 
 void ModuleEffects::StereoDelay::reset() noexcept {
-  std::fill(leftBuffer.begin(), leftBuffer.end(), 0.0f);
-  std::fill(rightBuffer.begin(), rightBuffer.end(), 0.0f);
   writeIndex = 0;
+  freshSamples = 0;
   currentDelaySamples = targetDelaySamples();
 }
 
 void ModuleEffects::StereoDelay::process(float* left, float* right, std::size_t frames) noexcept {
-  if (!config.enabled || leftBuffer.empty()) return;
+  auto* active = config.enabled ? lines.load(std::memory_order_acquire) : nullptr;
+  if (active == nullptr || active->left.empty()) return;
+  auto& leftBuffer = active->left;
+  auto& rightBuffer = active->right;
   const auto target = targetDelaySamples();
   const auto smoothing = 1.0f - std::exp(-1.0f / (0.020f * static_cast<float>(sampleRate)));
   const auto capacity = leftBuffer.size();
@@ -1139,8 +1211,23 @@ void ModuleEffects::StereoDelay::process(float* left, float* right, std::size_t 
     const auto first = static_cast<std::size_t>(readPosition) % capacity;
     const auto second = (first + 1) % capacity;
     const auto fraction = readPosition - std::floor(readPosition);
-    const auto delayedLeft = leftBuffer[first] + (leftBuffer[second] - leftBuffer[first]) * fraction;
-    const auto delayedRight = rightBuffer[first] + (rightBuffer[second] - rightBuffer[first]) * fraction;
+    auto firstLeft = leftBuffer[first];
+    auto firstRight = rightBuffer[first];
+    auto secondLeft = leftBuffer[second];
+    auto secondRight = rightBuffer[second];
+    if (freshSamples < capacity) {
+      // Escrito antes do (re)começo vale silêncio, exatamente como se a
+      // linha tivesse sido zerada. writeIndex ainda guarda a amostra mais
+      // velha (idade = capacidade): ela é sobrescrita logo abaixo.
+      const auto age = [&](std::size_t index) {
+        const auto value = (writeIndex + capacity - index) % capacity;
+        return value == 0 ? capacity : value;
+      };
+      if (age(first) > freshSamples) firstLeft = firstRight = 0.0f;
+      if (age(second) > freshSamples) secondLeft = secondRight = 0.0f;
+    }
+    const auto delayedLeft = firstLeft + (secondLeft - firstLeft) * fraction;
+    const auto delayedRight = firstRight + (secondRight - firstRight) * fraction;
     const auto dryLeft = left[frame];
     const auto dryRight = right[frame];
 
@@ -1149,6 +1236,7 @@ void ModuleEffects::StereoDelay::process(float* left, float* right, std::size_t 
     left[frame] = dryLeft + (delayedLeft - dryLeft) * config.mix;
     right[frame] = dryRight + (delayedRight - dryRight) * config.mix;
     writeIndex = (writeIndex + 1) % capacity;
+    if (freshSamples < capacity) ++freshSamples;
   }
 }
 
@@ -1158,17 +1246,34 @@ float ModuleEffects::StereoDelay::targetDelaySamples() const noexcept {
   const auto beatMs = config.sync ? 60000.0f / tempoBpm : config.delayMs;
   const auto milliseconds = beatMs * config.beatMultiplier;
   const auto samples = milliseconds * 0.001f * static_cast<float>(sampleRate);
-  const auto maximum = leftBuffer.size() > 2 ? static_cast<float>(leftBuffer.size() - 2) : 1.0f;
+  const auto maximum = static_cast<float>(capacity() - 2);
   return std::clamp(samples, 1.0f, maximum);
 }
 
 void ModuleEffects::Reverb::prepare(double nextSampleRate) {
+  // Controle, antes do áudio: perfis feitos para outra taxa não servem mais.
+  for (std::size_t impulse = 0; impulse < convolvers.size(); ++impulse) {
+    convolvers[impulse].store(nullptr, std::memory_order_release);
+    ownedConvolvers[impulse].reset();
+  }
   sampleRate = nextSampleRate;
   currentMix = config.mix;
-  const auto bank = impulseBank(sampleRate);
-  for (std::size_t impulse = 0; impulse < convolvers.size(); ++impulse) {
+  activeImpulse = kNoImpulse;
+  // Decodifica os IRs embutidos (uma vez por processo e taxa) já aqui, fora do
+  // caminho de ligar o Reverb durante a apresentação.
+  (void)impulseBank(sampleRate);
+  if (config.enabled) (void)prepareImpulse(config.impulse);
+}
+
+bool ModuleEffects::Reverb::prepareImpulse(std::uint8_t impulse) noexcept {
+  impulse = std::min<std::uint8_t>(impulse, 3);
+  if (convolvers[impulse].load(std::memory_order_acquire) != nullptr) return true;
+  try {
+    std::scoped_lock lock(preparation);
+    if (convolvers[impulse].load(std::memory_order_relaxed) != nullptr) return true;
+    const auto bank = impulseBank(sampleRate);
     const auto& source = (*bank)[impulse];
-    if (source.left.empty() || source.right.empty()) return;
+    if (source.left.empty() || source.right.empty()) return false;
     auto pair = std::make_unique<ConvolutionPair>();
     constexpr std::size_t headBlockSize = 128;
     constexpr std::size_t tailBlockSize = 4096;
@@ -1177,29 +1282,40 @@ void ModuleEffects::Reverb::prepare(double nextSampleRate) {
     const auto rightReady = pair->right.init(
         headBlockSize, tailBlockSize, source.right.data(), source.right.size());
     pair->ready = leftReady && rightReady;
-    convolvers[impulse] = std::move(pair);
+    if (!pair->ready) return false;
+    ownedConvolvers[impulse] = std::move(pair);
+    convolvers[impulse].store(ownedConvolvers[impulse].get(), std::memory_order_release);
+    return true;
+  } catch (...) {
+    // Sem memória o Reverb fica seco; o resto do módulo continua tocando.
+    return false;
   }
 }
 
 void ModuleEffects::Reverb::configure(ReverbConfig next) noexcept {
   next.normalize();
+  if (!next.enabled) activeImpulse = kNoImpulse;
   config = next;
 }
 
 void ModuleEffects::Reverb::reset() noexcept {
-  for (auto& pair : convolvers) {
-    if (!pair || !pair->ready) continue;
-    pair->left.clearHistory();
-    pair->right.clearHistory();
-  }
+  // O próximo bloco limpa o perfil que for tocar; os outros são limpos quando
+  // forem escolhidos de novo.
+  activeImpulse = kNoImpulse;
   currentMix = config.mix;
 }
 
 void ModuleEffects::Reverb::process(float* left, float* right, std::size_t frames) noexcept {
   if (!config.enabled) return;
   const auto impulse = std::min<std::uint8_t>(config.impulse, 3);
-  auto* pair = convolvers[impulse].get();
+  auto* pair = convolvers[impulse].load(std::memory_order_acquire);
   if (pair == nullptr || !pair->ready) return;
+  if (impulse != activeImpulse) {
+    // Religado, trocado de IR ou depois do panic: começa do silêncio.
+    pair->left.clearHistory();
+    pair->right.clearHistory();
+    activeImpulse = impulse;
+  }
   // Mix como send: até 50% o som original fica inteiro e só entra reverb; de
   // 50% para cima o original é que vai embora, até sobrar só o processado.
   // A rampa é calculada por amostra: movimentos contínuos do knob não trocam
