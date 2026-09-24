@@ -17,12 +17,83 @@ struct BronzeEnvelope: Codable, Equatable, Sendable {
     }
 }
 
+enum BronzeEQParameter: String, CaseIterable, Identifiable {
+    case frequency = "Frequência", gain = "Gain", quality = "Q"
+    var id: String { rawValue }
+}
+
+struct BronzeEQBand: Codable, Equatable, Sendable {
+    // Same codes as EqBandType in the C++ engine.
+    var type = 2
+    var frequency = 1000.0
+    var gain = 0.0
+    var quality = 0.7071
+    var cutStages = 1
+    var isCut: Bool { type == 0 || type == 4 }
+
+    func normalized(_ parameter: BronzeEQParameter) -> Double {
+        switch parameter {
+        case .frequency: return log(frequency / 20) / log(1000)
+        case .gain: return (gain + 24) / 48
+        case .quality: return log(quality / 0.1) / log(120)
+        }
+    }
+
+    mutating func setNormalized(_ parameter: BronzeEQParameter, _ value: Double) {
+        guard value.isFinite else { return }
+        let value = min(1, max(0, value))
+        switch parameter {
+        case .frequency: frequency = 20 * pow(1000, value)
+        case .gain: gain = -24 + value * 48
+        case .quality: quality = 0.1 * pow(120, value)
+        }
+    }
+
+    mutating func step(_ parameter: BronzeEQParameter, direction: Int) {
+        let direction = direction < 0 ? -1.0 : 1.0
+        switch parameter {
+        case .frequency:
+            // Crossing 1 kHz remains reversible: 990, 1000, 1100…
+            let increment = (direction > 0 ? frequency >= 1000 : frequency > 1000) ? 100.0 : 10.0
+            frequency = min(20000, max(20, (frequency + direction * increment).rounded()))
+        case .gain: gain = min(24, max(-24, (gain * 10 + direction).rounded() / 10))
+        case .quality: quality = min(12, max(0.1, (quality * 10 + direction).rounded() / 10))
+        }
+    }
+
+    func text(_ parameter: BronzeEQParameter) -> String {
+        switch parameter {
+        case .frequency: return frequency >= 1000 ? String(format: "%.1f kHz", frequency / 1000) : String(format: "%.0f Hz", frequency)
+        case .gain: return String(format: "%.1f dB", gain)
+        case .quality: return String(format: "%.2f", quality)
+        }
+    }
+}
+
+struct BronzeEqualizer: Codable, Equatable, Sendable {
+    var enabled = false
+    var bands = [BronzeEQBand(type: 1, frequency: 80), BronzeEQBand(frequency: 250),
+                 BronzeEQBand(frequency: 1000), BronzeEQBand(frequency: 4000),
+                 BronzeEQBand(type: 3, frequency: 12000)]
+
+    func validate() throws {
+        guard bands.count == 5 else { throw BronzeSessionError.invalid }
+        for band in bands {
+            guard (0...4).contains(band.type), (1...8).contains(band.cutStages),
+                  band.frequency.isFinite, (20...20000).contains(band.frequency),
+                  band.gain.isFinite, (-24...24).contains(band.gain),
+                  band.quality.isFinite, (0.1...12).contains(band.quality) else { throw BronzeSessionError.invalid }
+        }
+    }
+}
+
 struct BronzeModuleSnapshot: Codable, Equatable, Sendable {
     // Relative UUID/file.sf2; absolute sandbox paths change after reinstall/update.
     var soundFontKey: String?
     var enabled = false
     var fader = 1.0
     var envelope = BronzeEnvelope()
+    var equalizer = BronzeEqualizer()
 
     static var defaults: [Self] {
         (0..<8).map { index in
@@ -83,6 +154,7 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
         for (index, module) in modules.enumerated() {
             guard module.fader.isFinite, (0...1).contains(module.fader) else { throw BronzeSessionError.invalid }
             try module.envelope.validate()
+            try module.equalizer.validate()
             if let key = module.soundFontKey {
                 guard index < 6 else { throw BronzeSessionError.invalid }
                 try BronzeSessionStore.validateSoundFontKey(key)

@@ -873,6 +873,25 @@ static NSString *describeFormat(AVAudioFormat *format) {
              static_cast<std::size_t>(moduleIndex), attackMs, holdMs, decayMs, releaseMs, glideMs, sustainDb);
 }
 
+- (BOOL)configureEqualizer:(NSInteger)moduleIndex enabled:(BOOL)enabled
+                    types:(NSArray<NSNumber *> *)types frequencies:(NSArray<NSNumber *> *)frequencies
+                    gains:(NSArray<NSNumber *> *)gains qualities:(NSArray<NSNumber *> *)qualities
+                cutStages:(NSArray<NSNumber *> *)cutStages {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime || moduleIndex < 0 || moduleIndex >= 8 || types.count != 5 ||
+      frequencies.count != 5 || gains.count != 5 || qualities.count != 5 || cutStages.count != 5) return NO;
+  hook_keys::EqConfig eq;
+  eq.enabled = enabled;
+  for (NSUInteger index = 0; index < 5; ++index) {
+    const auto type = types[index].integerValue;
+    const auto stages = cutStages[index].integerValue;
+    if (type < 0 || type > 4 || stages < 1 || stages > 8) return NO;
+    eq.bands[index] = {true, static_cast<hook_keys::EqBandType>(type), frequencies[index].floatValue,
+        gains[index].floatValue, qualities[index].floatValue, static_cast<std::uint8_t>(stages)};
+  }
+  return runtime->setModuleEqualizer(static_cast<std::size_t>(moduleIndex), eq);
+}
+
 - (BOOL)configureVelocityLimits:(NSInteger)moduleIndex
                      ignoreAbove:(NSInteger)ignoreAbove
                          ceiling:(NSInteger)ceiling

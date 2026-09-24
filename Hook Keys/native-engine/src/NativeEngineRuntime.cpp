@@ -545,6 +545,22 @@ bool NativeEngineRuntime::setModuleEffects(
   return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
 }
 
+bool NativeEngineRuntime::setModuleEqualizer(std::size_t moduleIndex, EqConfig equalizer) noexcept {
+  if (moduleIndex >= kModuleCount) return false;
+  for (const auto& band : equalizer.bands) {
+    if (!std::isfinite(band.frequencyHz) || !std::isfinite(band.gainDb) ||
+        !std::isfinite(band.quality) || static_cast<unsigned>(band.type) > 4) return false;
+  }
+  equalizer.normalize();
+  std::scoped_lock lock(configMutex_);
+  auto next = controlLayer_->configs[moduleIndex];
+  // A band edit must not reconstruct/reset Rotary, Reverb, Pulse or routing.
+  next.effects.equalizer = equalizer;
+  if (!controlLayer_->engine->setModuleConfig(moduleIndex, next)) return false;
+  controlLayer_->configs[moduleIndex] = next;
+  return true;
+}
+
 bool NativeEngineRuntime::setModuleEnabledMask(std::uint8_t mask) noexcept {
   std::scoped_lock lock(configMutex_);
   if (!controlLayer_->engine->setModuleEnabledMask(mask)) return false;

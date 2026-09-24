@@ -56,6 +56,7 @@ public:
   [[nodiscard]] bool setModuleGainDb(std::size_t moduleIndex, float db) noexcept;
   [[nodiscard]] bool setModuleEnabledMask(std::uint8_t mask) noexcept;
   [[nodiscard]] bool setModuleEffects(std::size_t moduleIndex, ModuleEffectsConfig effects) noexcept;
+  [[nodiscard]] bool setModuleEqualizer(std::size_t moduleIndex, EqConfig equalizer) noexcept;
   [[nodiscard]] bool setOrganRotaryFast(bool fast) noexcept;
   [[nodiscard]] bool setOrganCabinetEnabled(bool enabled) noexcept;
   // sustainDb: 0 dB segura o som cheio depois do Decay; abaixo disso a nota

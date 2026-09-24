@@ -73,6 +73,7 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var loadingSoundFontModule: Int?
     @Published private(set) var moduleSoundFonts: [UserSoundFont?] = Array(repeating: nil, count: 6) { didSet { scheduleSessionSave() } }
     @Published private(set) var moduleEnvelopes = Array(repeating: ModuleEnvelope(), count: 8) { didSet { scheduleSessionSave() } }
+    @Published private(set) var moduleEqualizers = Array(repeating: BronzeEqualizer(), count: 8) { didSet { scheduleSessionSave() } }
     @Published private(set) var padFilterLow = 0.0 { didSet { scheduleSessionSave() } }
     @Published private(set) var padFilterHigh = 1.0 { didSet { scheduleSessionSave() } }
     @Published private(set) var selectedPadBank = 0 { didSet { scheduleSessionSave() } }
@@ -395,6 +396,33 @@ final class BronzeNativeAppModel: ObservableObject {
         applyMetronome(restart: false)
     }
 
+    func setEqualizer(_ equalizer: BronzeEqualizer, moduleIndex: Int) {
+        guard moduleEqualizers.indices.contains(moduleIndex), !isApplyingSnapshot else { return }
+        do { try equalizer.validate() } catch { return }
+        guard Self.sendEqualizer(equalizer, moduleIndex: moduleIndex, engine: engine) else {
+            controlError = "Não foi possível ajustar o equalizador."
+            return
+        }
+        moduleEqualizers[moduleIndex] = equalizer
+    }
+
+    func editEQBand(_ index: Int, moduleIndex: Int, edit: (inout BronzeEQBand) -> Void) {
+        guard moduleEqualizers.indices.contains(moduleIndex), (0..<5).contains(index) else { return }
+        var eq = moduleEqualizers[moduleIndex]
+        edit(&eq.bands[index])
+        setEqualizer(eq, moduleIndex: moduleIndex)
+    }
+
+    nonisolated private static func sendEqualizer(_ eq: BronzeEqualizer, moduleIndex: Int,
+                                                  engine: HookKeysNativeEngine) -> Bool {
+        engine.configureEqualizer(moduleIndex, enabled: eq.enabled,
+            types: eq.bands.map { NSNumber(value: $0.type) },
+            frequencies: eq.bands.map { NSNumber(value: $0.frequency) },
+            gains: eq.bands.map { NSNumber(value: $0.gain) },
+            qualities: eq.bands.map { NSNumber(value: $0.quality) },
+            cutStages: eq.bands.map { NSNumber(value: $0.cutStages) })
+    }
+
     func toggleMetronome() {
         metronomeEnabled.toggle()
         applyMetronome(restart: metronomeEnabled && !loopPlaying)
@@ -673,7 +701,7 @@ final class BronzeNativeAppModel: ObservableObject {
             let url = index < 6 ? moduleSoundFonts[index]?.url : nil
             let key = url.map { $0.deletingLastPathComponent().lastPathComponent + "/" + $0.lastPathComponent }
             return BronzeModuleSnapshot(soundFontKey: key, enabled: moduleEnabled[index],
-                fader: moduleFaders[index], envelope: moduleEnvelopes[index])
+                fader: moduleFaders[index], envelope: moduleEnvelopes[index], equalizer: moduleEqualizers[index])
         }
     }
 
@@ -833,6 +861,7 @@ final class BronzeNativeAppModel: ObservableObject {
         moduleEnabled = modules.map(\.enabled)
         moduleFaders = modules.map(\.fader)
         moduleEnvelopes = modules.map(\.envelope)
+        moduleEqualizers = modules.map(\.equalizer)
         soloModule = solo
         // The B3 generator is shared, so change its envelope only after commit.
         let envelope = modules[6].envelope
@@ -873,6 +902,7 @@ final class BronzeNativeAppModel: ObservableObject {
             let module = modules[index]
             let db = module.fader <= 0 ? Float(-90) : Float(-36 + module.fader * 36)
             guard engine.setModuleGainDb(db, moduleIndex: index) else { throw BronzeSessionError.invalid }
+            guard Self.sendEqualizer(module.equalizer, moduleIndex: index, engine: engine) else { throw BronzeSessionError.invalid }
             if index != 6 {
                 let e = module.envelope
                 guard engine.configureModuleEnvelope(index, attackMs: Float(e.attackMs), holdMs: Float(e.holdMs),

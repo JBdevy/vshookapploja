@@ -19,6 +19,15 @@ const releaseWorkflow = read('../.github/workflows/hook-keys-release.yml');
 const skiaRevision = read('scripts/skia-apple.revision').trim();
 const skiaBuild = read('scripts/build-skia-apple.sh');
 
+const definitions = [...project.matchAll(/^\s*([A-F0-9]{24})\s+\/\*[^\n]*?\*\/\s*=\s*\{/gm)].map(match => match[1]);
+assert.equal(new Set(definitions).size, definitions.length,
+  'cada objeto Xcode precisa de um UUID único, inclusive configurações e arquivos Swift');
+const sessionRef = project.match(/([A-F0-9]{24}) \/\* BronzeNativeSession\.swift \*\/ = \{isa = PBXFileReference;[^\n]+path = BronzeNativeSession\.swift;/)?.[1];
+assert.ok(sessionRef, 'a sessão precisa ser um arquivo Swift real, não uma referência a xcconfig');
+assert.match(project, new RegExp(`fileRef = ${sessionRef} /\\* BronzeNativeSession\\.swift \\*/`));
+assert.doesNotMatch(nativeRoot, /\? \.secondary : \.green/,
+  'a cor condicional precisa de tipos ShapeStyle compatíveis');
+
 assert.doesNotMatch(info, /UIMainStoryboardFile/,
   'o storyboard não pode instanciar a WebView antes da escolha do root nativo');
 assert.match(info, /<key>BronzeNativeUIEnabled<\/key>\s*<true\/>/,
@@ -60,6 +69,13 @@ assert.match(engineHeader, /setOrganRotaryFast/);
 assert.match(engineHeader, /setOrganCabinetEnabled/);
 assert.match(nativeRoot, /toggleOrganRotarySpeed/);
 assert.match(nativeRoot, /toggleOrganCabinet/);
+assert.match(nativeRoot, /BronzeNativeEqualizerEditor\(model: model, moduleIndex: model.selectedModule\)/);
+assert.match(nativeRoot, /\.onChanged \{ value in[\s\S]*?model.editEQBand/,
+  'o arraste precisa enviar o EQ enquanto move, não somente ao soltar');
+assert.match(nativeModel, /equalizer: moduleEqualizers\[index\]/);
+assert.match(nativeModel, /sendEqualizer\(module.equalizer, moduleIndex: index, engine: engine\)/);
+assert.match(engine, /runtime->setModuleEqualizer/);
+assert.match(nativeRoot, /repetition\?\.cancel\(\)/);
 assert.match(nativeModel, /setModuleEnabledMask\(mask\)/);
 assert.match(engineHeader, /NS_SWIFT_NAME\(setModuleEnabledMask\(_:\)\)/);
 assert.match(nativeRoot, /toggleModuleSolo\(index\)/);
@@ -92,7 +108,7 @@ assert.match(project, /common\.xcconfig/);
 assert.match(releaseWorkflow, /build-skia-apple\.sh/);
 assert.match(releaseWorkflow, /Skia\.xcframework/);
 for (const file of [
-  'BronzeNativeAppModel.swift', 'BronzeNativeControls.swift',
+  'BronzeNativeAppModel.swift', 'BronzeNativeSession.swift', 'BronzeNativeControls.swift',
   'BronzeNativeRootView.swift', 'BronzeNativeHostingController.swift',
   'BronzeSkiaControlView.mm'
 ]) {

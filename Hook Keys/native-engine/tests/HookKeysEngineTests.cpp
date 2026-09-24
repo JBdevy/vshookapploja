@@ -1744,6 +1744,69 @@ double highCutToneEnergy(std::uint8_t cutStages) {
   return energy;
 }
 
+void testNativeEqualizerEditsPreserveOtherEffects() {
+  for (const std::size_t moduleIndex : {0u, 6u, 7u}) {
+  hook_keys::NativeEngineRuntime actual(48000, 128), reference(48000, 128);
+  hook_keys::ModuleConfig module;
+  module.gainLinear = 0.12f;
+  module.effects.rotary.enabled = true;
+  module.effects.rotary.speed = 2;
+  module.effects.rotary.cabinetEnabled = false;
+  module.effects.delay.enabled = true;
+  module.effects.delay.mix = 0.1f;
+  module.effects.delay.delayMs = 80;
+  module.effects.chorus.enabled = true;
+  module.effects.chorus.mix = 0.1f;
+  hook_keys::AnalogSynthConfig synth;
+  synth.voiceMode = 0;
+  synth.oscillator1 = 0;
+  synth.oscillator2Enabled = synth.oscillator3Enabled = false;
+  for (auto* runtime : {&actual, &reference}) {
+    const auto* sf2 = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+    if (moduleIndex == 0) expect(runtime->loadSoundFont(0, sf2), "load SF2 for dedicated EQ test");
+    if (moduleIndex == 6) {
+      expect(runtime->loadOrganVoice(0, sf2), "load B3 voice for dedicated EQ test");
+      runtime->setOrganDrawbarPosition(0, 8);
+    }
+    expect(runtime->setModuleConfig(moduleIndex, module), "configure native EQ test routing and gain");
+    expect(runtime->setModuleEffects(moduleIndex, module.effects), "configure existing Rotary, Delay and Chorus");
+    expect(runtime->setSynthConfig(synth), "configure EQ test oscillator");
+    expect(runtime->sendMidi(0, 0x90, 64, 80), "hold tone during continuous band edits");
+  }
+  std::array<float, 256> a{}, b{};
+  double energy = 0;
+  const auto compare = [&] {
+    actual.renderInterleaved(a.data(), 128, 2);
+    reference.renderInterleaved(b.data(), 128, 2);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+      expect(std::isfinite(a[i]) && std::abs(a[i] - b[i]) < 0.000001f,
+          "dedicated EQ edit preserves Rotary, Delay, Chorus, gain and active voices sample-for-sample");
+      energy += std::abs(a[i]);
+    }
+  };
+  for (int block = 0; block < 60; ++block) compare();
+  for (int step = 0; step < 120; ++step) {
+    auto& eq = module.effects.equalizer;
+    eq.enabled = step % 30 != 0;
+    eq.bands[2].frequencyHz = 300.0f + step * 20.0f;
+    eq.bands[2].gainDb = std::sin(step * 0.1f) * 8.0f;
+    eq.bands[2].quality = 0.5f + (step % 10) * 0.1f;
+    expect(actual.setModuleEqualizer(moduleIndex, eq), "drag sends native EQ settings on every step");
+    expect(reference.setModuleEffects(moduleIndex, module.effects), "full reference retains identical effects");
+    compare();
+  }
+  auto invalid = module.effects.equalizer;
+  invalid.bands[0].frequencyHz = std::numeric_limits<float>::quiet_NaN();
+  expect(!actual.setModuleEqualizer(moduleIndex, invalid), "reject non-finite native EQ without changing state");
+  invalid = module.effects.equalizer;
+  invalid.bands[0].type = static_cast<hook_keys::EqBandType>(99);
+  expect(!actual.setModuleEqualizer(moduleIndex, invalid), "reject unknown filter type");
+  expect(!actual.setModuleEqualizer(8, {}), "reject invalid module");
+  for (int block = 0; block < 20; ++block) compare();
+  expect(energy > 1.0, "native EQ comparison must contain sounding audio");
+  }
+}
+
 void testEqualizerCutSlope() {
   const auto subtleEnergy = highCutToneEnergy(1);
   const auto brickwallEnergy = highCutToneEnergy(8);
@@ -3890,6 +3953,7 @@ int main() {
   testMonoNoteReturnsToStillHeldKey();
   testMonoLegatoRetunePreservesEnvelope();
   testEqualizerProcessing();
+  testNativeEqualizerEditsPreserveOtherEffects();
   testEqualizerCutSlope();
   testCompressorProcessing();
   testDelayProcessing();

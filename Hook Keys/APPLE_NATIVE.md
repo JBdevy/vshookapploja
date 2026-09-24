@@ -66,7 +66,7 @@ Implementado nesta etapa:
 - Bancos A–F com 16 posições, salvar/renomear/cor e seleção com borda RGB
   pulsante (respeita Reduzir Movimento). Segurar abre o menu de edição; substituir
   um preset existente exige confirmação. Os snapshots guardam SF2, ON/OFF,
-  faders e envelopes disponíveis na UI, não efeitos ainda não migrados.
+  faders, envelopes e EQ disponíveis na UI, não efeitos ainda não migrados.
 - Sessão local em Application Support/BronzeKeys/native-session.json, escrita
   atômica fora da thread principal, com debounce. Guarda também Solo, BPM,
   compasso/click, filtros/banco dos pads e seleção do loop. Ao reabrir não toca
@@ -75,6 +75,14 @@ Implementado nesta etapa:
   validados antes de restaurar; falha suspende autosave para não sobrescrever o
   arquivo anterior. Uma troca que falha cancela a camada preparada no C++, sem
   cortar o preset atual. Sustain continua sendo propagado pelo runtime.
+- EQ nativo por módulo: cinco bandas, ON/OFF explícito, Bell/Shelves/Cuts,
+  frequência, ganho, Q e inclinação dos cortes. Os pontos editam frequência e
+  ganho durante o arraste (o painel é um mapa de posição, não uma curva de
+  resposta calculada). Knobs Skia e botões +/− com repetição moderada; Gain/Q
+  ficam indisponíveis nos cortes, cuja inclinação determina os polos.
+  `setModuleEqualizer` altera exclusivamente o EQ, preservando rotary e demais
+  efeitos. Usa a suavização de coeficientes já existente no DSP. Reset exige
+  confirmação e restaura somente o EQ. Estado incluído na sessão e presets.
 
 Ainda pendentes: paridade dos presets com todos os efeitos, catálogo/conta,
 edição completa de efeitos e synth, playlists do usuário, MIDI Learn na UI,
@@ -86,3 +94,6 @@ e receita Skia simulada. Compilação Swift/Objective-C++, desenho Skia real,
 gestos e sincronismo audível precisam ser verificados em Xcode/IPA e iPad.
 `test-native-session.mjs` compila e executa testes Foundation com `swiftc` no
 CI Apple; em máquinas sem Swift registra explicitamente o teste não executado.
+O teste de integração Xcode rejeita UUIDs duplicados: `BronzeNativeSession.swift`
+não pode compartilhar o identificador de `common.xcconfig`. A validação SwiftUI
+completa ainda exige a build Apple; testes de texto não substituem o compilador.

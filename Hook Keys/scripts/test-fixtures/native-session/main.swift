@@ -18,6 +18,12 @@ session.modules[0].soundFontKey = key
 session.modules[0].enabled = true
 session.modules[0].fader = 0.7
 session.modules[0].envelope.releaseMs = 1234
+session.modules[0].equalizer.enabled = true
+session.modules[0].equalizer.bands[0].type = 0
+session.modules[0].equalizer.bands[0].cutStages = 4
+session.modules[0].equalizer.bands[2].gain = -9.5
+session.modules[6].equalizer.enabled = true
+session.modules[6].equalizer.bands[4].frequency = 8500
 session.organDrawbars = [8, 7, 6, 5, 4, 3, 2, 1, 0]
 session.organRotaryFast = true
 session.organCabinetEnabled = false
@@ -51,6 +57,36 @@ rejects { try store.save(invalid) }
 invalid = session
 invalid.presets[0].color = 8
 rejects { try store.save(invalid) }
+invalid = session
+invalid.modules[0].equalizer.bands.removeLast()
+rejects { try store.save(invalid) }
+invalid = session
+invalid.modules[0].equalizer.bands[0].quality = .infinity
+rejects { try store.save(invalid) }
+invalid = session
+invalid.presets[95].modules?[6].equalizer.bands[0].type = 5
+rejects { try store.save(invalid) }
+invalid = session
+invalid.modules[0].equalizer.bands[0].cutStages = 9
+rejects { try store.save(invalid) }
+var band = BronzeEQBand(frequency: 990)
+band.step(.frequency, direction: 1)
+expect(band.frequency == 1000, "below 1k, frequency step is 10 Hz")
+band.step(.frequency, direction: 1)
+expect(band.frequency == 1100, "above 1k, frequency step is 100 Hz")
+band.step(.frequency, direction: -1)
+band.step(.frequency, direction: -1)
+expect(band.frequency == 990, "frequency steps cross 1k reversibly")
+for parameter in BronzeEQParameter.allCases {
+    for value in [0.0, 0.2, 0.5, 0.9, 1.0] {
+        band.setNormalized(parameter, value)
+        expect(abs(band.normalized(parameter) - value) < 0.000001, "EQ knob round-trips normalized values")
+    }
+}
+band.setNormalized(.gain, 2)
+expect(band.gain == 24, "EQ gain clamps to upper limit")
+band.setNormalized(.gain, .nan)
+expect(band.gain == 24, "non-finite knob input is ignored")
 for key in ["../../outside.sf2", "/tmp/file.sf2", "x/file.sf2", UUID().uuidString + "/../file.sf2", UUID().uuidString + "\\file.sf2"] {
     rejects { _ = try store.soundFontURL(for: key) }
 }
