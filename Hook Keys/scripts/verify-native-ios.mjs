@@ -46,8 +46,22 @@ function requiredAudio() {
   ];
 }
 
+export function verifyNativeFrameworks(project) {
+  const phase = project.match(/isa = PBXFrameworksBuildPhase;[\s\S]*?files = \(([\s\S]*?)\);/);
+  assert(phase, 'Fase de linkagem dos frameworks ausente.');
+  for (const name of ['AVFoundation', 'AudioToolbox', 'CoreMIDI']) {
+    const file = [...project.matchAll(/([A-F0-9]{24}) \/\* [^\n]*? \*\/ = \{isa = PBXFileReference;([^\n]+)\};/g)]
+      .find(([, , body]) => body.includes(`path = System/Library/Frameworks/${name}.framework;`) && body.includes('sourceTree = SDKROOT;'));
+    assert(file, `Framework nativo ausente: ${name}`);
+    const build = [...project.matchAll(/([A-F0-9]{24}) \/\* [^\n]*? \*\/ = \{isa = PBXBuildFile; fileRef = ([A-F0-9]{24})/g)]
+      .find(([, , reference]) => reference === file[1]);
+    assert(build && phase[1].includes(build[1]), `Framework fora da linkagem: ${name}`);
+  }
+}
+
 export function verifyNativeProject() {
   const project = read('ios/App/App.xcodeproj/project.pbxproj');
+  verifyNativeFrameworks(project);
   const definitions = new Set([...project.matchAll(/([A-F0-9]{24})\s+(?:\/\*[^\n]*?\*\/\s*)?=\s*\{/g)]
     .map(match => match[1]));
   for (const [id] of project.matchAll(/\b[A-F0-9]{24}\b/g)) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hook_keys/DspTypes.hpp"
+#include "hook_keys/NativeArpeggiator.hpp"
 
 #include <algorithm>
 #include <array>
@@ -69,6 +70,7 @@ struct ModuleConfig final {
   bool mono = false;
   bool legato = false;
   ModuleEffectsConfig effects{};
+  NativeArpeggiatorConfig nativeArpeggiator{};
 
   [[nodiscard]] bool drumNoteUsesZeroRelease(std::uint8_t note) const noexcept {
     return (drumZeroReleaseNoteMasks[note / 32] & (std::uint32_t{1} << (note % 32))) != 0;

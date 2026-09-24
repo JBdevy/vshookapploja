@@ -11,6 +11,13 @@ empacotadas como `loops` e `fx-1`, sem HTML, JavaScript ou CSS. SF2 continuam
 referenciados em `native-engine/assets`. A tela permanece ligada pelo UIKit,
 sem o antigo plugin KeepAwake. Orientação é controlada pelo host nativo.
 
+CoreMIDI, AVFoundation e AudioToolbox são vinculados explicitamente na fase
+Frameworks do target, tanto em Debug quanto Release. A remoção da dependência
+transitiva anterior deixou essa fase vazia e causou `symbol(s) not found for
+architecture arm64`. O verificador agora exige as referências SDKROOT e sua
+inclusão efetiva na fase de linkagem; os testes também removem cada ligação
+para comprovar que a ausência é detectada antes de iniciar o archive.
+
 O caminho de performance já é direto:
 
 `Core MIDI -> HookKeysNativeEngine -> NativeEngineRuntime C++ -> AVAudioSourceNode -> Core Audio`
@@ -158,8 +165,26 @@ Implementado nesta etapa:
   O limite C++ foi ampliado para representar todo o Rate livre entre 60 e
   300 BPM, sem encurtar 2000 ms ou alongar 20 ms silenciosamente.
 
-Ainda pendentes: arpeggiator/Auto Fader nativos, demais configurações de
-roteamento/velocity/modulação, presets próprios do synth, catálogo/conta,
+- Arpeggiator executado na thread de áudio C++, sem temporizador da UI:
+  Up, Down, Up/Down, Played e Random, 1–4 oitavas, Gate, Swing e oito divisões
+  em Sync; Rate livre de 20–2000 ms. Em Sync reinicia a sequência no compasso
+  do metrônomo. Auto Fader acompanha 1/1 ou 1/2 desse compasso e fica inativo
+  quando o Arpeggiator está desligado. B3 não oferece Arpeggiator.
+  Sustain mantém as teclas de origem, sem segurar as vozes geradas e sem
+  deixar o acorde polifônico passar. Estado físico do pedal é lembrado por
+  entrada e canal MIDI, incluindo a transferência para novos presets.
+- Config nativa por módulo: entrada MIDI, faixa de notas, oitava, polifonia,
+  modos Poly/Mono/Legato quando disponíveis, sustain/modulação, canal de saída
+  e Stereo/Mono. Velocity oferece presets, cinco pontos, No Sens e limites.
+  Modulação tem seleção de modo, Rate e intensidade; Glide dos SF2 tem tempo,
+  Sync, Auto/Portamento e gate por velocity. B3 mantém Wheel Rotary disponível
+  e No Sens obrigatório. O Synth usa seu próprio editor de LFO/Glide.
+- Filtro dos SF2: LP12/LP24/HP12/HP24, Cutoff, curva de velocity e envelope
+  ADSR/Depth. Gain de −36 a +12 dB em todos os módulos. Comandos dedicados
+  preservam efeitos, fader e ON/OFF; todos os novos parâmetros participam da
+  sessão e dos snapshots. Knobs Skia com +/− e repetição.
+
+Ainda pendentes: presets próprios do synth, catálogo/conta,
 playlists do usuário, edição dos bancos FX do usuário, MIDI Learn na UI,
 backup e host nativo macOS. A preparação do Skia macOS não cria, por si só, um
 app macOS nativo. Model e controles também precisam de adaptação de plataforma.

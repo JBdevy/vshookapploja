@@ -659,7 +659,7 @@ test('presets usam cores claras variadas, texto preto e paleta salva no modal', 
 test('trocar OCT do módulo libera a nota ativa antes de aplicar a nova oitava', () => {
   const engine = readFileSync(new URL('../native-engine/src/HookKeysEngine.cpp', import.meta.url), 'utf8');
   assert.match(engine, /const auto octaveChanged = configs_\[index\]\.octaveShift != command\.moduleConfig\.octaveShift;/);
-  assert.match(engine, /\(inputRouteChanged \|\| octaveChanged\)[\s\S]*?modules_\[index\]->allNotesOff\(\);[\s\S]*?clearActiveNoteState\(index\);/);
+  assert.match(engine, /\(inputRouteChanged \|\| octaveChanged \|\| arpChanged\)[\s\S]*?modules_\[index\]->allNotesOff\(\);[\s\S]*?clearActiveNoteState\(index\);/);
 });
 
 test('módulos nascem com Reverb Room, exceto o Bronze B3, que nasce com Rotary', () => {

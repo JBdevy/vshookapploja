@@ -60,6 +60,10 @@ public:
   [[nodiscard]] ModuleAnalysis consumeModuleAnalysis(std::size_t moduleIndex) noexcept;
 
 private:
+  std::size_t beginArpeggiatorSlice(std::size_t limit) noexcept;
+  void advanceArpeggiators(std::size_t frames) noexcept;
+  std::array<NativeArpeggiator, kModuleCount> arpeggiators_{};
+  std::array<bool, 64> physicalPedals_{};
   void publishModulePeak(std::size_t index, float leftPeak, float rightPeak) noexcept;
   void publishProcessorLevels(std::size_t index, ModuleProcessorLevels levels) noexcept;
   [[nodiscard]] float nextModuleGain(std::size_t index) noexcept;

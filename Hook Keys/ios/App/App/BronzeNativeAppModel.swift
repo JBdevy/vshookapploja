@@ -85,6 +85,9 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var moduleSoundEffects = Array(repeating: BronzeSoundEffects(), count: 8)
     @Published private(set) var synth = BronzeSynth()
     @Published private(set) var modulePulses = Array(repeating: BronzePulse(), count: 8) { didSet { scheduleSessionSave() } }
+    @Published private(set) var moduleArpeggiators = Array(repeating: BronzeArpeggiator(), count: 8) { didSet { scheduleSessionSave() } }
+    @Published private(set) var modulePerformance = (0..<8).map({ BronzeModulePerformance.initial($0) }) { didSet { scheduleSessionSave() } }
+    @Published private(set) var moduleTones = Array(repeating: BronzeTone(), count: 8) { didSet { scheduleSessionSave() } }
     @Published private(set) var updatingSoundEffects = false
     private var committedSoundEffects = Array(repeating: BronzeSoundEffects(), count: 8)
     private var pendingSoundEffects: [Int: BronzeSoundEffects] = [:]
@@ -391,7 +394,7 @@ final class BronzeNativeAppModel: ObservableObject {
             holdMs: Float(envelope.holdMs),
             decayMs: Float(envelope.decayMs),
             releaseMs: Float(envelope.releaseMs),
-            glideMs: 0,
+            glideMs: Float(modulePerformance[moduleIndex].glideTime(bpm: tempo)),
             sustainDb: Float(envelope.sustainDb)
         ) else {
             controlError = "Não foi possível ajustar o envelope."
@@ -606,6 +609,16 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     private func refreshPulseClock() {
+        for index in 0..<6 where modulePerformance[index].glideSync {
+            if !Self.sendPerformanceGlide(modulePerformance[index], envelope: moduleEnvelopes[index],
+                moduleIndex: index, tempo: tempo, engine: engine) { controlError = "Não foi possível sincronizar o Glide." }
+        }
+        for index in moduleArpeggiators.indices where moduleArpeggiators[index].enabled {
+            if !Self.sendArpeggiator(moduleArpeggiators[index], moduleIndex: index, tempo: tempo,
+                numerator: timeSignatureNumerator, denominator: timeSignatureDenominator, engine: engine) {
+                controlError = "Não foi possível sincronizar o Arpeggiator."
+            }
+        }
         for index in modulePulses.indices where modulePulses[index].enabled {
             if !Self.sendPulse(modulePulses[index], moduleIndex: index, tempo: tempo,
                 numerator: timeSignatureNumerator, denominator: timeSignatureDenominator, engine: engine) {
@@ -621,6 +634,81 @@ final class BronzeNativeAppModel: ObservableObject {
             measureBeats: Float(pulse.measureBeats(numerator: numerator, denominator: denominator)),
             gate: Float(pulse.gate), depth: Float(pulse.depth), attackMs: Float(pulse.attack),
             releaseMs: Float(pulse.release), swing: Float(pulse.swing))
+    }
+
+    func setArpeggiator(_ arp: BronzeArpeggiator, moduleIndex: Int) {
+        guard moduleArpeggiators.indices.contains(moduleIndex), moduleIndex != 6,
+              engineState == .ready, !isApplyingSnapshot else { return }
+        do { try arp.validate(moduleIndex: moduleIndex) } catch { return }
+        guard Self.sendArpeggiator(arp, moduleIndex: moduleIndex, tempo: tempo,
+            numerator: timeSignatureNumerator, denominator: timeSignatureDenominator, engine: engine) else {
+            controlError = "Não foi possível ajustar o Arpeggiator."
+            return
+        }
+        moduleArpeggiators[moduleIndex] = arp
+    }
+
+    func setPerformance(_ value: BronzeModulePerformance, moduleIndex: Int) {
+        guard modulePerformance.indices.contains(moduleIndex), engineState == .ready, !isApplyingSnapshot else { return }
+        do { try value.validate() } catch { return }
+        guard Self.sendPerformance(value, moduleIndex: moduleIndex, engine: engine),
+              Self.sendPerformanceGlide(value, envelope: moduleEnvelopes[moduleIndex], moduleIndex: moduleIndex,
+                tempo: tempo, engine: engine) else {
+            controlError = "Não foi possível ajustar a configuração do módulo."
+            return
+        }
+        modulePerformance[moduleIndex] = value
+        if moduleIndex == 6 {
+            _ = engine.configureModuleModulation(6, mode: value.modulationMode,
+                rateHz: Float(value.modulationRate), intensity: Float(value.modulationIntensity))
+        }
+    }
+
+    nonisolated private static func sendPerformance(_ value: BronzeModulePerformance,
+        moduleIndex: Int, engine: HookKeysNativeEngine) -> Bool {
+        guard engine.configurePerformance(moduleIndex, routing: value.routingValues.map { NSNumber(value: $0) },
+            velocity: value.velocityValues.map { NSNumber(value: $0) }, sustain: value.sustain,
+            modulation: value.modulation, noSens: value.noSens, dualMono: value.dualMono) else { return false }
+        if moduleIndex == 6 || moduleIndex == 7 { return true }
+        return engine.configureModuleModulation(moduleIndex, mode: value.modulationMode,
+            rateHz: Float(value.modulationRate), intensity: Float(value.modulationIntensity))
+    }
+
+    nonisolated private static func sendPerformanceGlide(_ value: BronzeModulePerformance, envelope: BronzeEnvelope,
+        moduleIndex: Int, tempo: Double, engine: HookKeysNativeEngine) -> Bool {
+        if moduleIndex == 6 || moduleIndex == 7 { return true }
+        guard engine.configureGlide(moduleIndex, portamento: value.portamento,
+            velocityGateEnabled: value.glideVelocityGate, velocityGateInverted: value.glideVelocityInverted,
+            velocityThreshold: value.glideVelocityThreshold) else { return false }
+        return engine.configureModuleEnvelope(moduleIndex, attackMs: Float(envelope.attackMs), holdMs: Float(envelope.holdMs),
+            decayMs: Float(envelope.decayMs), releaseMs: Float(envelope.releaseMs),
+            glideMs: Float(value.glideTime(bpm: tempo)), sustainDb: Float(envelope.sustainDb))
+    }
+
+    func setTone(_ value: BronzeTone, moduleIndex: Int) {
+        guard moduleTones.indices.contains(moduleIndex), engineState == .ready, !isApplyingSnapshot else { return }
+        do { try value.validate(moduleIndex: moduleIndex) } catch { return }
+        guard Self.sendTone(value, moduleIndex: moduleIndex, engine: engine) else {
+            controlError = "Não foi possível ajustar o filtro/Gain."
+            return
+        }
+        moduleTones[moduleIndex] = value
+    }
+
+    nonisolated private static func sendTone(_ value: BronzeTone, moduleIndex: Int, engine: HookKeysNativeEngine) -> Bool {
+        engine.configureTone(moduleIndex, enabled: value.enabled, type: value.type,
+            values: value.values.map { NSNumber(value: $0) }, velocity: value.velocity.map { NSNumber(value: $0) },
+            envelopeEnabled: value.envelopeEnabled)
+    }
+
+    nonisolated private static func sendArpeggiator(_ arp: BronzeArpeggiator, moduleIndex: Int, tempo: Double,
+        numerator: Int, denominator: Int, engine: HookKeysNativeEngine) -> Bool {
+        engine.configureArpeggiator(moduleIndex, enabled: arp.enabled, mode: arp.mode, octaves: arp.octaves,
+            beatMultiplier: Float(arp.beatMultiplier(bpm: tempo)),
+            measureBeats: arp.sync ? Float(arp.measureBeats(numerator: numerator, denominator: denominator)) : 0,
+            gate: Float(arp.gate), swing: Float(arp.swing), autoFaderEnabled: arp.enabled && arp.autoFaderEnabled,
+            autoFaderBeats: Float(arp.autoFaderBeats(numerator: numerator, denominator: denominator)),
+            autoFaderDepthDb: Float(arp.autoFaderDepthDb))
     }
 
     func selectLoop(_ loop: BundledLoop) {
@@ -887,7 +975,8 @@ final class BronzeNativeAppModel: ObservableObject {
             return BronzeModuleSnapshot(soundFontKey: key, enabled: moduleEnabled[index],
                 fader: moduleFaders[index], envelope: moduleEnvelopes[index], equalizer: moduleEqualizers[index],
                 reverb: moduleReverbs[index], delay: moduleDelays[index], soundEffects: moduleSoundEffects[index],
-                synth: index == 7 ? synth : nil, pulse: modulePulses[index])
+                synth: index == 7 ? synth : nil, pulse: modulePulses[index], arpeggiator: moduleArpeggiators[index],
+                performance: modulePerformance[index], tone: moduleTones[index])
         }
     }
 
@@ -1059,6 +1148,12 @@ final class BronzeNativeAppModel: ObservableObject {
         committedSoundEffects = moduleSoundEffects
         synth = modules[7].synth ?? BronzeSynth()
         modulePulses = modules.map { $0.pulse ?? BronzePulse() }
+        moduleArpeggiators = modules.map { $0.arpeggiator ?? BronzeArpeggiator() }
+        modulePerformance = modules.enumerated().map { $0.element.performance ?? BronzeModulePerformance.initial($0.offset) }
+        moduleTones = modules.map { $0.tone ?? BronzeTone() }
+        let organMod = modulePerformance[6]
+        _ = engine.configureModuleModulation(6, mode: organMod.modulationMode,
+            rateHz: Float(organMod.modulationRate), intensity: Float(organMod.modulationIntensity))
         soloModule = solo
         // The B3 generator is shared, so change its envelope only after commit.
         let envelope = modules[6].envelope
@@ -1097,6 +1192,11 @@ final class BronzeNativeAppModel: ObservableObject {
                 } else { engine.unloadSoundFont(fromModule: index) }
             }
             let module = modules[index]
+            guard Self.sendPerformance(module.performance ?? BronzeModulePerformance.initial(index), moduleIndex: index, engine: engine)
+            else { throw BronzeSessionError.invalid }
+            guard Self.sendPerformanceGlide(module.performance ?? BronzeModulePerformance.initial(index), envelope: module.envelope,
+                moduleIndex: index, tempo: tempo, engine: engine),
+                Self.sendTone(module.tone ?? BronzeTone(), moduleIndex: index, engine: engine) else { throw BronzeSessionError.invalid }
             let db = module.fader <= 0 ? Float(-90) : Float(-36 + module.fader * 36)
             guard engine.setModuleGainDb(db, moduleIndex: index) else { throw BronzeSessionError.invalid }
             guard Self.sendEqualizer(module.equalizer, moduleIndex: index, engine: engine) else { throw BronzeSessionError.invalid }
@@ -1108,10 +1208,13 @@ final class BronzeNativeAppModel: ObservableObject {
             else { throw BronzeSessionError.invalid }
             guard Self.sendPulse(module.pulse ?? BronzePulse(), moduleIndex: index, tempo: tempo,
                 numerator: numerator, denominator: denominator, engine: engine) else { throw BronzeSessionError.invalid }
+            guard Self.sendArpeggiator(module.arpeggiator ?? BronzeArpeggiator(), moduleIndex: index, tempo: tempo,
+                numerator: numerator, denominator: denominator, engine: engine) else { throw BronzeSessionError.invalid }
             if index != 6 {
                 let e = module.envelope
                 guard engine.configureModuleEnvelope(index, attackMs: Float(e.attackMs), holdMs: Float(e.holdMs),
-                    decayMs: Float(e.decayMs), releaseMs: Float(e.releaseMs), glideMs: 0,
+                    decayMs: Float(e.decayMs), releaseMs: Float(e.releaseMs),
+                    glideMs: Float((module.performance ?? BronzeModulePerformance.initial(index)).glideTime(bpm: tempo)),
                     sustainDb: Float(e.sustainDb)) else { throw BronzeSessionError.invalid }
             }
         }

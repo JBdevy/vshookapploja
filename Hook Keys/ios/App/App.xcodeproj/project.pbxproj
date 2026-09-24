@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D10000000000000000000001 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* AVFoundation.framework */; };
+		D10000000000000000000002 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002 /* AudioToolbox.framework */; };
+		D10000000000000000000003 /* CoreMIDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000003 /* CoreMIDI.framework */; };
 		C10000000000000000000001 /* loops in Resources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* loops */; };
 		C10000000000000000000002 /* fx-1 in Resources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000002 /* fx-1 */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
@@ -34,6 +37,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		D20000000000000000000001 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		D20000000000000000000002 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		D20000000000000000000003 /* CoreMIDI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMIDI.framework; path = System/Library/Frameworks/CoreMIDI.framework; sourceTree = SDKROOT; };
 		C20000000000000000000001 /* loops */ = {isa = PBXFileReference; lastKnownFileType = folder; name = loops; path = "../../public/assets/loops"; sourceTree = SOURCE_ROOT; };
 		C20000000000000000000002 /* fx-1 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "fx-1"; path = "../../public/assets/fx/fx-1"; sourceTree = SOURCE_ROOT; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -72,6 +78,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10000000000000000000001 /* AVFoundation.framework in Frameworks */,
+				D10000000000000000000002 /* AudioToolbox.framework in Frameworks */,
+				D10000000000000000000003 /* CoreMIDI.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -81,6 +90,7 @@
 		504EC2FB1FED79650016851F = {
 			isa = PBXGroup;
 			children = (
+				D30000000000000000000001 /* Frameworks */,
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				B20000000000000000000007 /* common.xcconfig */,
 				504EC3061FED79650016851F /* App */,
@@ -137,6 +147,16 @@
 				A2000000000000000000001A /* Utilities.cpp */,
 			);
 			name = "Hook Keys Engine";
+			sourceTree = "<group>";
+		};
+		D30000000000000000000001 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				D20000000000000000000001 /* AVFoundation.framework */,
+				D20000000000000000000002 /* AudioToolbox.framework */,
+				D20000000000000000000003 /* CoreMIDI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

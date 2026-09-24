@@ -90,6 +90,7 @@ bool HookKeysEngine::setModuleConfig(std::size_t moduleIndex, ModuleConfig confi
 }
 
 bool HookKeysEngine::setPreparedModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept {
+  if (!config.nativeArpeggiator.valid() || (moduleIndex == 6 && config.nativeArpeggiator.enabled)) return false;
   if (moduleIndex >= kModuleCount) return false;
   config.normalize();
   return push(EngineCommand::configureModule(moduleIndex, config));
@@ -141,7 +142,7 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
 
   std::size_t rendered = 0;
   while (rendered < frames) {
-    const auto blockFrames = std::min(settings_.maximumBlockFrames, frames - rendered);
+    const auto blockFrames = beginArpeggiatorSlice(std::min(settings_.maximumBlockFrames, frames - rendered));
     for (std::size_t index = 0; index < kModuleCount; ++index) {
       // Desligar o módulo só fecha a porta do MIDI: o que já estava soando
       // continua até acabar, então ele segue sendo renderizado.
@@ -179,6 +180,7 @@ void HookKeysEngine::render(float* left, float* right, std::size_t frames) noexc
       }
       publishModulePeak(index, leftPeak, rightPeak);
     }
+    advanceArpeggiators(blockFrames);
     rendered += blockFrames;
   }
 }
@@ -192,7 +194,7 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
   while (commands_.tryPop(command)) applyCommand(command);
   std::size_t rendered = 0;
   while (rendered < frames) {
-    const auto blockFrames = std::min(settings_.maximumBlockFrames, frames - rendered);
+    const auto blockFrames = beginArpeggiatorSlice(std::min(settings_.maximumBlockFrames, frames - rendered));
     for (std::size_t index = 0; index < kModuleCount; ++index) {
       auto* synth = modules_[index];
       const auto& config = configs_[index];
@@ -240,6 +242,7 @@ void HookKeysEngine::renderInterleaved(float* output, std::size_t frames, std::s
       }
       publishModulePeak(index, leftPeak, rightPeak);
     }
+    advanceArpeggiators(blockFrames);
     rendered += blockFrames;
   }
 }
@@ -248,9 +251,31 @@ std::uint64_t HookKeysEngine::droppedCommandCount() const noexcept {
   return droppedCommands_.load(std::memory_order_relaxed);
 }
 
+std::size_t HookKeysEngine::beginArpeggiatorSlice(std::size_t limit) noexcept {
+  for (std::size_t index = 0; index < kModuleCount; ++index) {
+    if (!configs_[index].nativeArpeggiator.enabled || !modules_[index] || tailExcludedModules_[index]) continue;
+    const auto input = arpeggiatorInputForModule(index);
+    limit = arpeggiators_[index].begin(configs_[index].nativeArpeggiator, settings_.sampleRate,
+        settings_.tempoBpm, limit, [this, input, index](auto note, auto velocity) {
+          // A muted module admits no new notes; its generated note-off still runs.
+          if (velocity) { if (configs_[index].enabled) routeNoteOn(input, note, velocity); }
+          else routeNoteOff(input, note);
+        });
+  }
+  return limit;
+}
+
+void HookKeysEngine::advanceArpeggiators(std::size_t frames) noexcept {
+  for (std::size_t index = 0; index < kModuleCount; ++index) {
+    if (configs_[index].nativeArpeggiator.enabled)
+      arpeggiators_[index].advance(frames, settings_.sampleRate, settings_.tempoBpm);
+  }
+}
+
 bool HookKeysEngine::hasActiveVoices() const noexcept {
   for (std::size_t index = 0; index < kModuleCount; ++index) {
     if (modules_[index] == nullptr) continue;
+    if (configs_[index].nativeArpeggiator.enabled && arpeggiators_[index].active()) return true;
     // Para um instrumento compartilhado, só o estado de roteamento desta
     // camada mantém a cauda viva. As vozes físicas são renderizadas uma única
     // vez pela camada atual.
@@ -375,7 +400,20 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
         const auto index = static_cast<std::size_t>(command.moduleIndex);
         const auto inputRouteChanged = configs_[index].midiInputSlot != command.moduleConfig.midiInputSlot;
         const auto octaveChanged = configs_[index].octaveShift != command.moduleConfig.octaveShift;
-        if ((inputRouteChanged || octaveChanged) &&
+        const auto arpChanged = configs_[index].nativeArpeggiator.enabled != command.moduleConfig.nativeArpeggiator.enabled;
+        if (arpChanged || inputRouteChanged || octaveChanged) {
+          const auto input = arpeggiatorInputForModule(index);
+          arpeggiators_[index].reset([this, input](auto note, auto) { routeNoteOff(input, note); });
+          if (command.moduleConfig.sustainInputEnabled) {
+            for (std::uint8_t slot = 0; slot < 4; ++slot) {
+              if (slot != kKeyboardBroadcastInput && command.moduleConfig.midiInputSlot != kAllMidiInputs &&
+                  command.moduleConfig.midiInputSlot != slot) continue;
+              for (std::uint8_t channel = 0; channel < 16; ++channel)
+                arpeggiators_[index].sustain(slot, channel, physicalPedals_[slot * 16 + channel]);
+            }
+          }
+        }
+        if ((inputRouteChanged || octaveChanged || arpChanged) &&
             modules_[index] != nullptr) {
           // Uma voz iniciada numa oitava não pode sobreviver à troca e perder
           // seu Note Off. Limpa somente este módulo; as demais continuam.
@@ -386,6 +424,7 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
           clearActiveNoteState(index);
         } else if (configs_[index].sustainInputEnabled &&
                    !command.moduleConfig.sustainInputEnabled && modules_[index] != nullptr) {
+          arpeggiators_[index].releasePedals();
           if (sustainDown_[index]) modules_[index]->controlChange(kSustainController, 0);
           sustainDown_[index] = false;
           releaseSustainedNotes(index);
@@ -410,10 +449,21 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
           compressorMeterRequests_[index].store(false, std::memory_order_release);
         }
         configs_[index] = command.moduleConfig;
+        if (arpChanged && !configs_[index].nativeArpeggiator.enabled && configs_[index].sustainInputEnabled && modules_[index]) {
+          bool down = false;
+          for (std::size_t slot = 0; slot < 4; ++slot) {
+            if (slot != kKeyboardBroadcastInput && configs_[index].midiInputSlot != kAllMidiInputs &&
+                configs_[index].midiInputSlot != slot) continue;
+            for (std::size_t channel = 0; channel < 16; ++channel) down = down || physicalPedals_[slot * 16 + channel];
+          }
+          sustainDown_[index] = down;
+          modules_[index]->controlChange(kSustainController, down ? 127 : 0);
+        }
         // O Organ tem dinâmica fixa de Hammond e não possui Velocity, Glide
         // ou Cutoff próprios. Presets antigos não podem reativar esses
         // controles invisíveis ao reenviar uma configuração salva.
         if (index == 6) {
+          configs_[index].nativeArpeggiator.enabled = false;
           configs_[index].noVelocitySensitivity = true;
           configs_[index].velocityIgnoreAbove = 127;
           configs_[index].velocityCeiling = 127;
@@ -451,6 +501,26 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
 
 void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
   const auto type = static_cast<std::uint8_t>(message.status & kMessageTypeMask);
+  if (message.inputSlot < kArpeggiatorInputBase) {
+    if (type == kControlChange && message.data1 == kSustainController)
+      physicalPedals_[message.inputSlot * 16 + (message.status & 15)] = message.data2 >= 64;
+    for (std::size_t index = 0; index < kModuleCount; ++index) {
+      const auto& config = configs_[index];
+      if (!config.nativeArpeggiator.enabled) continue;
+      const bool accepts = config.midiInputSlot == kAllMidiInputs ||
+          message.inputSlot == kKeyboardBroadcastInput || config.midiInputSlot == message.inputSlot;
+      const bool on = type == kNoteOn && message.data2 != 0;
+      const bool off = type == kNoteOff || (type == kNoteOn && message.data2 == 0);
+      if (on && accepts && config.enabled && message.data1 >= config.lowNote &&
+          message.data1 <= config.highNote && message.data2 <= config.velocityIgnoreAbove) {
+        arpeggiators_[index].note(message.inputSlot, message.status & 15, message.data1, message.data2);
+      } else if (off) {
+        arpeggiators_[index].note(message.inputSlot, message.status & 15, message.data1, 0);
+      } else if (type == kControlChange && message.data1 == kSustainController && accepts && config.sustainInputEnabled) {
+        arpeggiators_[index].sustain(message.inputSlot, message.status & 15, message.data2 >= 64);
+      }
+    }
+  }
   if (type == kNoteOn && message.data2 > 0) {
     routeNoteOn(message.inputSlot, message.data1, message.data2);
     return;
@@ -483,7 +553,7 @@ void HookKeysEngine::routeMidi(const MidiMessage& message) noexcept {
                                 message.inputSlot == kKeyboardBroadcastInput ||
                                 message.inputSlot == config.midiInputSlot;
       if (!acceptsInput) continue;
-      if (sustainMessage && generatedNotes) continue;
+      if (sustainMessage && (generatedNotes || config.nativeArpeggiator.enabled)) continue;
       if (message.data1 == kSustainController && !config.sustainInputEnabled) continue;
       if (message.data1 == kModulationController && !config.modulationInputEnabled) continue;
       if (message.data1 == kModulationController) effects_[index].setModulation(message.data2);
@@ -523,6 +593,7 @@ void HookKeysEngine::routeNoteOn(
     const auto& config = configs_[index];
     const auto generatedForDifferentModule = generatedModule >= 0 &&
         index != static_cast<std::size_t>(generatedModule);
+    if (config.nativeArpeggiator.enabled && generatedModule < 0) continue;
     const auto generatedConfig = config.midiInputSlot != kAllMidiInputs && config.midiInputSlot >= kArpeggiatorInputBase;
     const auto regularInputMismatch = generatedModule < 0 && (
         (inputSlot == kKeyboardBroadcastInput && generatedConfig) ||
@@ -643,7 +714,9 @@ void HookKeysEngine::releaseSustainedNotes(std::size_t moduleIndex) noexcept {
 }
 
 void HookKeysEngine::applyAllNotesOff() noexcept {
+  physicalPedals_.fill(false);
   for (std::size_t index = 0; index < kModuleCount; ++index) {
+    arpeggiators_[index].reset([](auto, auto) {});
     if (modules_[index] != nullptr) modules_[index]->allNotesOff();
     // Panic deve cortar também as caudas de delay/reverb e estados dos demais
     // processadores, em vez de apenas soltar as teclas.

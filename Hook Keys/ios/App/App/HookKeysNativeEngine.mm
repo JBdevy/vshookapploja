@@ -928,6 +928,69 @@ static NSString *describeFormat(AVAudioFormat *format) {
           static_cast<std::uint8_t>(impulse), mix, decay);
 }
 
+- (BOOL)configureTone:(NSInteger)moduleIndex enabled:(BOOL)enabled type:(NSInteger)type
+               values:(NSArray<NSNumber *> *)values velocity:(NSArray<NSNumber *> *)velocity
+      envelopeEnabled:(BOOL)envelopeEnabled {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime || moduleIndex < 0 || moduleIndex >= 8 || type < 0 || type > 3 || values.count != 7 || velocity.count != 5) return NO;
+  for (NSNumber *value in values) if (!std::isfinite(value.doubleValue)) return NO;
+  hook_keys::CutoffConfig filter;
+  filter.enabled = enabled; filter.type = static_cast<hook_keys::FilterKind>(type);
+  filter.frequencyHz = values[0].floatValue;
+  for (std::size_t index = 0; index < 5; ++index) {
+    const auto value = velocity[index].doubleValue;
+    if (!std::isfinite(value) || value < 0 || value > 127 || std::floor(value) != value) return NO;
+    filter.velocityCurve[index] = velocity[index].unsignedCharValue;
+  }
+  filter.envelope = {envelopeEnabled != NO, values[2].floatValue, values[3].floatValue,
+      values[4].floatValue, values[5].floatValue, values[6].floatValue};
+  return runtime->setModuleTone(static_cast<std::size_t>(moduleIndex), filter, values[1].floatValue);
+}
+
+- (BOOL)configurePerformance:(NSInteger)moduleIndex routing:(NSArray<NSNumber *> *)routing
+                   velocity:(NSArray<NSNumber *> *)velocity sustain:(BOOL)sustain modulation:(BOOL)modulation
+                     noSens:(BOOL)noSens dualMono:(BOOL)dualMono {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime || moduleIndex < 0 || moduleIndex >= 8 || routing.count != 8 || velocity.count != 7) return NO;
+  const std::array<int, 8> lower{-1, 0, 0, -3, 1, 0, 1, 0}, upper{2, 127, 127, 3, 128, 31, 2, 2};
+  for (std::size_t index = 0; index < lower.size(); ++index) {
+    const auto value = routing[index].doubleValue;
+    if (!std::isfinite(value) || value < lower[index] || value > upper[index] || std::floor(value) != value) return NO;
+  }
+  for (NSNumber *number in velocity) {
+    const auto value = number.doubleValue;
+    if (!std::isfinite(value) || value < 0 || value > 127 || std::floor(value) != value) return NO;
+  }
+  if (routing[1].intValue > routing[2].intValue || velocity[6].intValue == 0 ||
+      routing[5].intValue + routing[6].intValue > 32) return NO;
+  hook_keys::ModuleConfig config;
+  config.midiInputSlot = routing[0].intValue < 0 ? hook_keys::kAllMidiInputs : routing[0].unsignedCharValue;
+  config.lowNote = routing[1].unsignedCharValue; config.highNote = routing[2].unsignedCharValue;
+  config.octaveShift = static_cast<std::int8_t>(routing[3].intValue); config.polyphony = routing[4].unsignedShortValue;
+  config.outputChannelStart = routing[5].unsignedCharValue; config.outputChannelCount = routing[6].unsignedCharValue;
+  config.mono = routing[7].intValue > 0; config.legato = routing[7].intValue == 2;
+  config.sustainInputEnabled = sustain; config.modulationInputEnabled = modulation;
+  config.noVelocitySensitivity = noSens; config.outputDualMono = dualMono;
+  for (std::size_t index = 0; index < 5; ++index) config.velocityCurve[index] = velocity[index].unsignedCharValue;
+  config.velocityIgnoreAbove = velocity[5].unsignedCharValue; config.velocityCeiling = velocity[6].unsignedCharValue;
+  return runtime->setModulePerformance(static_cast<std::size_t>(moduleIndex), config);
+}
+
+- (BOOL)configureArpeggiator:(NSInteger)moduleIndex enabled:(BOOL)enabled mode:(NSInteger)mode
+                    octaves:(NSInteger)octaves beatMultiplier:(float)beatMultiplier measureBeats:(float)measureBeats
+                       gate:(float)gate swing:(float)swing autoFaderEnabled:(BOOL)autoFaderEnabled
+             autoFaderBeats:(float)autoFaderBeats autoFaderDepthDb:(float)autoFaderDepthDb {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime || moduleIndex < 0 || moduleIndex >= 8 || mode < 0 || mode > 4 || octaves < 1 || octaves > 4) return NO;
+  hook_keys::NativeArpeggiatorConfig config;
+  config.enabled = enabled; config.mode = static_cast<std::uint8_t>(mode);
+  config.octaves = static_cast<std::uint8_t>(octaves); config.beatMultiplier = beatMultiplier;
+  config.measureBeats = measureBeats; config.gate = gate; config.swing = swing;
+  config.autoFaderEnabled = autoFaderEnabled; config.autoFaderBeats = autoFaderBeats;
+  config.autoFaderDepthDb = autoFaderDepthDb;
+  return runtime->setNativeArpeggiator(static_cast<std::size_t>(moduleIndex), config);
+}
+
 - (BOOL)configureDelay:(NSInteger)moduleIndex enabled:(BOOL)enabled sync:(BOOL)sync
           milliseconds:(float)milliseconds beatMultiplier:(float)beatMultiplier
               feedback:(float)feedback mix:(float)mix {

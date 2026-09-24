@@ -38,6 +38,17 @@ assert.match(delegate, /isIdleTimerDisabled = true/,
   'UIKit mantém a tela ligada, sem o antigo plugin KeepAwake');
 assert.match(engine, /MIDIInputPortCreate/);
 assert.match(engine, /AVAudioSourceNode/);
+assert.match(engine, /runtime->setNativeArpeggiator/);
+assert.match(nativeRoot, /BronzeNativeArpeggiatorEditor/);
+assert.match(nativeModel, /autoFaderEnabled: arp.enabled && arp.autoFaderEnabled/);
+assert.match(nativeModel, /arpeggiator: moduleArpeggiators\[index\]/);
+assert.match(nativeModel, /sendArpeggiator\(module.arpeggiator/);
+assert.match(nativeModel, /performance: modulePerformance\[index\], tone: moduleTones\[index\]/);
+assert.match(nativeModel, /sendPerformanceGlide\(module.performance/);
+assert.match(nativeRoot, /BronzeNativeToneEditor/);
+assert.match(nativeRoot, /BronzeNativePerformanceEditor/);
+assert.match(engine, /runtime->setModuleTone/);
+assert.match(engine, /runtime->setModulePerformance/);
 const startupBoundary = engine.slice(engine.indexOf('- (BOOL)startWithBufferFrames:'),
   engine.indexOf('- (void)recordStartupStage:(NSString *)stage {'));
 assert.match(startupBoundary, /@try[\s\S]*startAudioWithBufferFrames/,

@@ -267,7 +267,7 @@ struct AutoFaderConfig final {
   float depthDb = 6.0f;
 
   void normalize() noexcept {
-    beats = std::clamp(beats, 0.25f, 16.0f);
+    beats = std::clamp(beats, 0.125f, 32.0f);
     depthDb = std::clamp(depthDb, 0.0f, 40.0f);
   }
 };

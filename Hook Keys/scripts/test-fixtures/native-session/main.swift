@@ -51,6 +51,51 @@ try store.save(session)
 let restored = try store.load()
 expect(restored == session, "all 96 slots and current settings round-trip exactly")
 let before = try Data(contentsOf: store.sessionURL)
+var arp = BronzeArpeggiator()
+arp.enabled = true
+arp.mode = 4
+arp.octaves = 4
+arp.autoFaderEnabled = true
+expect(arp.autoFaderBeats(numerator: 4, denominator: 4) == 4, "Auto Fader 1/1 follows whole measure")
+arp.autoFaderHalf = true
+expect(arp.autoFaderBeats(numerator: 4, denominator: 4) == 2, "Auto Fader 1/2 follows half measure")
+expect(arp.autoFaderBeats(numerator: 6, denominator: 8) == 1.5, "Auto Fader follows 6/8 from metronome")
+arp.sync = false; arp.rateMs = 1000
+expect(arp.beatMultiplier(bpm: 132.5) == 132.5 / 60, "free arp rate preserves fractional BPM")
+var arpSession = session
+arpSession.modules[0].arpeggiator = arp
+try arpSession.validate()
+expect(try JSONDecoder().decode(BronzeNativeSession.self, from: JSONEncoder().encode(arpSession)) == arpSession,
+       "arp parameters round-trip")
+rejects { try arp.validate(moduleIndex: 6) }
+arp.gate = .nan
+rejects { try arp.validate(moduleIndex: 0) }
+var performance = BronzeModulePerformance.initial(6)
+expect(performance.modulationMode == 4, "B3 starts with Wheel Rotary")
+performance = BronzeModulePerformance.initial(0)
+performance.input = -1; performance.octave = -3; performance.lowNote = 25; performance.highNote = 110
+performance.outputStart = 30; performance.outputCount = 2; performance.glideSync = true
+performance.velocityCurve = [1, 20, 40, 90, 126]
+expect(performance.glideTime(bpm: 120) == 500, "Glide Sync is one beat")
+try performance.validate()
+var tone = BronzeTone()
+tone.enabled = true; tone.type = 3; tone[.cutoff] = 1200; tone[.gain] = -36
+tone.envelopeEnabled = true; tone[.depth] = 8
+try tone.validate(moduleIndex: 0)
+rejects { try tone.validate(moduleIndex: 6) }
+var toneSession = session
+toneSession.modules[0].performance = performance
+toneSession.modules[0].tone = tone
+expect(try JSONDecoder().decode(BronzeNativeSession.self, from: JSONEncoder().encode(toneSession)) == toneSession,
+       "routing, velocity, glide and filter parameters round-trip")
+tone[.gain] = .infinity
+rejects { try tone.validate(moduleIndex: 0) }
+performance.outputStart = 31
+rejects { try performance.validate() }
+performance.outputStart = 30; performance.lowNote = 111
+rejects { try performance.validate() }
+arp.gate = 0.72; arp.mode = 5
+rejects { try arp.validate(moduleIndex: 0) }
 var invalid = session
 invalid.modules.removeLast()
 rejects { try store.save(invalid) }

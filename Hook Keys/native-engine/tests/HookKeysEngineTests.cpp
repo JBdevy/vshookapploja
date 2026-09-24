@@ -4148,7 +4148,202 @@ void testNewSoftNoteDoesNotFilterHeldChord() {
   }
 }
 
+void testNativeArpeggiatorScheduler() {
+  hook_keys::NativeArpeggiator arp;
+  hook_keys::NativeArpeggiatorConfig config;
+  config.enabled = true;
+  config.gate = 0.5f;
+  std::vector<std::array<int, 3>> events;
+  int clock = 0;
+  const auto emit = [&](auto note, auto velocity) { events.push_back({clock, note, velocity}); };
+  const auto render = [&](int frames, float bpm = 120.0f) {
+    const auto end = clock + frames;
+    while (clock < end) {
+      const auto block = arp.begin(config, 48000, bpm, std::min(512, end - clock), emit);
+      arp.advance(block, 48000, bpm);
+      clock += static_cast<int>(block);
+    }
+  };
+  arp.note(0, 0, 60, 100); arp.note(0, 0, 64, 80); arp.note(0, 0, 67, 90);
+  render(18001);
+  expect(events.size() == 7, "native arp emits three gates and the next onset, no direct chord");
+  expect(events[0] == std::array<int, 3>{0, 60, 100}, "first note starts at the first sample");
+  expect(events[1] == std::array<int, 3>{3000, 60, 0}, "gate note off is sample accurate");
+  expect(events[2] == std::array<int, 3>{6000, 64, 80}, "second step follows exact BPM");
+  expect(events[4] == std::array<int, 3>{12000, 67, 90}, "third step keeps source velocity");
+  arp.sustain(0, 0, true);
+  for (auto note : {60, 64, 67}) arp.note(0, 0, note, 0);
+  expect(arp.active(), "sustain keeps source keys in sequence");
+  render(6000);
+  const auto before = events.size();
+  arp.sustain(0, 0, false);
+  render(24000);
+  expect(events.size() <= before + 1 && !arp.active(), "pedal release ends sequence without stuck notes");
+  for (int mode = 0; mode < 4; ++mode) {
+    arp.reset(emit); clock = 0; events.clear(); config.mode = mode;
+    arp.note(0, 0, 67, 100); arp.note(0, 0, 60, 100); arp.note(0, 0, 64, 100);
+    render(18001);
+    const std::array<std::array<int, 4>, 4> expected{{{60, 64, 67, 60}, {67, 64, 60, 67}, {60, 64, 67, 64}, {67, 60, 64, 67}}};
+    for (std::size_t n = 0; n < 4; ++n) expect(events[n * 2][1] == expected[mode][n], "native arp mode sequence");
+  }
+  arp.reset(emit); clock = 0; events.clear(); config.mode = 0;
+  config.measureBeats = 3; config.octaves = 2; config.swing = 0.5f;
+  arp.note(0, 0, 60, 100); arp.note(0, 0, 64, 100); arp.note(0, 0, 67, 100);
+  render(72001);
+  expect(events[2][0] == 9000 && events[4][0] == 12000, "swing alternates long and short while preserving pair length");
+  expect(events[6][1] == 72, "octave expansion starts next octave");
+  expect(events.back()[0] == 72000 && events.back()[1] == 60, "6/8 measure restarts on its exact downbeat");
+  arp.reset(emit); clock = 0; events.clear(); config.swing = 0; config.octaves = 1; config.measureBeats = 0;
+  arp.note(0, 0, 60, 100);
+  render(480001, 132.5f);
+  int onset = 0;
+  for (const auto& event : events) if (event[2]) {
+    const auto expected = onset++ * 48000.0 * 60.0 / 132.5 * 0.25;
+    expect(std::abs(event[0] - expected) <= 1.001, "fractional BPM does not accumulate rounding drift");
+  }
+  arp.reset(emit);
+  arp.note(0, 0, 60, 100); arp.note(1, 1, 60, 90);
+  arp.sustain(0, 0, true); arp.note(0, 0, 60, 0); arp.sustain(0, 0, false);
+  expect(arp.active(), "releasing one input does not release another keyboard");
+  arp.note(1, 1, 60, 0); render(1);
+  expect(!arp.active(), "last input releases the note");
+}
+
+void testNativeArpeggiatorEngineRouting() {
+  RecordingSynth arpeggiated, normal;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  modules[0] = &arpeggiated; modules[1] = &normal;
+  auto engine = std::make_unique<hook_keys::HookKeysEngine>(modules);
+  hook_keys::ModuleConfig config;
+  config.nativeArpeggiator.enabled = true;
+  expect(engine->setModuleConfig(0, config), "enable native arp");
+  hook_keys::ModuleConfig normalConfig;
+  expect(engine->setModuleConfig(1, normalConfig), "configure normal module on same input");
+  for (auto note : {60, 64, 67}) expect(engine->enqueueMidi(midi(0x90, note, 100)), "queue chord");
+  process(*engine);
+  const auto noteCount = [](const RecordingSynth& synth) {
+    return std::count_if(synth.events.begin(), synth.events.end(), [](auto event) { return event.type == Event::Type::noteOn; });
+  };
+  expect(noteCount(arpeggiated) == 1, "native arp never leaks the source chord");
+  expect(noteCount(normal) == 3, "other modules remain polyphonic");
+  expect(engine->enqueueMidi(midi(0xb0, 64, 127)), "sustain down");
+  for (auto note : {60, 64, 67}) expect(engine->enqueueMidi(midi(0x80, note, 0)), "release chord");
+  std::vector<float> audio(24000 * 2);
+  engine->renderInterleaved(audio.data(), 24000, 2);
+  expect(noteCount(arpeggiated) > 1, "arp continues under pedal");
+  expect(std::none_of(arpeggiated.events.begin(), arpeggiated.events.end(), [](auto event) {
+    return event.type == Event::Type::controlChange && event.data1 == 64 && event.data2 >= 64;
+  }), "sustain never reaches generated voices");
+  const auto count = noteCount(arpeggiated);
+  expect(engine->enqueueMidi(midi(0xb0, 64, 0)), "sustain up");
+  engine->renderInterleaved(audio.data(), 24000, 2);
+  expect(noteCount(arpeggiated) == count, "pedal up stops arp");
+  expect(engine->enqueueMidi(midi(0xb0, 64, 127)), "pedal before disabling");
+  process(*engine);
+  config.nativeArpeggiator.enabled = false;
+  expect(engine->setModuleConfig(0, config), "disable arp"); process(*engine);
+  config.nativeArpeggiator.enabled = true;
+  expect(engine->setModuleConfig(0, config), "enable with pedal held"); process(*engine);
+  expect(engine->enqueueMidi(midi(0x90, 62, 100)), "new chord with held pedal"); process(*engine);
+  expect(engine->enqueueMidi(midi(0x80, 62, 0)), "release key with held pedal");
+  const auto held = noteCount(arpeggiated);
+  engine->renderInterleaved(audio.data(), 24000, 2);
+  expect(noteCount(arpeggiated) > held, "enabling arp inherits pedal without repedaling");
+  expect(engine->stopAllNotes(), "panic native arp"); process(*engine);
+  const auto panicked = noteCount(arpeggiated);
+  engine->renderInterleaved(audio.data(), 24000, 2);
+  expect(noteCount(arpeggiated) == panicked, "panic clears held arp keys and clock");
+  expect(!engine->setModuleConfig(6, config), "B3 rejects arp");
+  config.nativeArpeggiator.gate = std::nanf("");
+  expect(!engine->setModuleConfig(0, config), "nonfinite arp settings rejected");
+}
+
+void testNativePresetArpeggiatorPreservesSustainChannel() {
+  auto actual = std::make_unique<hook_keys::NativeEngineRuntime>(48000, 128);
+  auto reference = std::make_unique<hook_keys::NativeEngineRuntime>(48000, 128);
+  hook_keys::ModuleConfig module;
+  module.gainLinear = 0.15f;
+  hook_keys::NativeArpeggiatorConfig arp;
+  arp.enabled = true;
+  for (auto* runtime : {actual.get(), reference.get()}) {
+    expect(runtime->sendMidi(0, 0xb2, 64, 127), "pedal channel 3 before switching preset");
+    expect(runtime->beginPresetTransition(), "prepare native arp preset");
+    expect(runtime->setModuleConfig(7, module), "enable native synth in next preset");
+    expect(runtime->setNativeArpeggiator(7, arp), "configure arp before commit");
+    expect(runtime->commitPresetTransition(), "commit native arp preset");
+  }
+  // The reference explicitly repedals. Actual must inherit the same channel.
+  expect(reference->sendMidi(0, 0xb2, 64, 127), "reference pedal channel 3");
+  for (auto* runtime : {actual.get(), reference.get()}) {
+    expect(runtime->sendMidi(0, 0xb0, 64, 0), "other channel pedal does not release channel 3");
+    expect(runtime->sendMidi(0, 0x92, 60, 100), "play channel 3 after switch");
+    expect(runtime->sendMidi(0, 0x82, 60, 0), "release key; arp must remain held by inherited pedal");
+  }
+  std::array<float, 256> a{}, b{};
+  double energy = 0;
+  for (int block = 0; block < 240; ++block) {
+    actual->renderInterleaved(a.data(), 128, 2);
+    reference->renderInterleaved(b.data(), 128, 2);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+      expect(std::abs(a[i] - b[i]) < 0.000001f, "preset restores sustain on its original MIDI channel");
+      energy += std::abs(a[i]);
+    }
+  }
+  expect(energy > 1, "inherited pedal keeps arpeggiator sounding after key release");
+}
+
+void testNativePerformanceAndTonePreserveEffects() {
+  auto actual = std::make_unique<hook_keys::NativeEngineRuntime>(48000, 128);
+  auto reference = std::make_unique<hook_keys::NativeEngineRuntime>(48000, 128);
+  hook_keys::ModuleConfig module;
+  module.gainLinear = 0.12f;
+  module.effects.equalizer.enabled = true;
+  module.effects.equalizer.bands[2].gainDb = -5;
+  module.effects.delay.enabled = true;
+  module.effects.delay.mix = 0.2f;
+  module.effects.delay.delayMs = 80;
+  hook_keys::NativeArpeggiatorConfig arp;
+  arp.enabled = true;
+  arp.autoFaderEnabled = true;
+  for (auto* runtime : {actual.get(), reference.get()}) {
+    expect(runtime->setModuleConfig(7, module), "configure performance test synth");
+    expect(runtime->setModuleEffects(7, module.effects), "set EQ and Delay before performance edits");
+    expect(runtime->setNativeArpeggiator(7, arp), "enable arp before performance edits");
+    expect(runtime->sendMidi(0, 0x90, 60, 100), "hold source during tone edits");
+  }
+  module.effects.autoFader = {true, arp.autoFaderBeats, arp.autoFaderDepthDb};
+  std::array<float, 256> a{}, b{};
+  double energy = 0;
+  for (int block = 0; block < 200; ++block) {
+    if (block % 10 == 0) {
+      auto performance = module;
+      performance.gainLinear = 0; performance.enabled = false; performance.effects = {};
+      expect(actual->setModulePerformance(7, performance), "routing edit cannot change fader, ON/OFF, FX or arp");
+      auto& cutoff = module.effects.cutoff;
+      cutoff.enabled = true;
+      cutoff.frequencyHz = 200 + block * 60.0f;
+      module.effects.inputGainDb = -12 + block * 0.05f;
+      expect(actual->setModuleTone(7, cutoff, module.effects.inputGainDb), "native tone edits");
+      expect(reference->setModuleEffects(7, module.effects), "equivalent reference FX config");
+    }
+    actual->renderInterleaved(a.data(), 128, 2);
+    reference->renderInterleaved(b.data(), 128, 2);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+      expect(std::isfinite(a[i]) && std::abs(a[i] - b[i]) < 0.000001f, "performance and tone preserve held arp, EQ, Delay, fader and Auto Fader");
+      energy += std::abs(a[i]);
+    }
+  }
+  expect(energy > 1, "tone comparison renders sounding audio");
+  expect(!actual->setModuleTone(6, module.effects.cutoff, 0), "B3 rejects generic cutoff");
+  expect(!actual->setModuleTone(7, {}, std::nanf("")), "tone rejects nonfinite gain");
+  expect(!actual->setModulePerformance(8, module), "performance rejects invalid module");
+}
+
 int main() {
+  testNativePresetArpeggiatorPreservesSustainChannel();
+  testNativePerformanceAndTonePreserveEffects();
+  testNativeArpeggiatorScheduler();
+  testNativeArpeggiatorEngineRouting();
   expect(hook_keys::ModuleConfig{}.polyphony == 128, "new modules default to 128-note polyphony");
   testVibesPitchModulationAndZeroBypass();
   testNewSoftNoteDoesNotFilterHeldChord();

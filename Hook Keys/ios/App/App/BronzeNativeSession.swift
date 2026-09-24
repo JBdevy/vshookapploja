@@ -221,7 +221,7 @@ enum BronzeProcessorKind: String, CaseIterable, Identifiable, Sendable {
 }
 
 struct BronzeProcessorParameter: Sendable {
-    enum Unit: Equatable, Sendable { case decibels, ratio, milliseconds, hertz, frequency, percent, cents, rawCents, amplitude }
+    enum Unit: Equatable, Sendable { case decibels, ratio, milliseconds, hertz, frequency, percent, cents, rawCents, amplitude, octaves }
     let name: String
     let minimum: Double
     let maximum: Double
@@ -247,7 +247,7 @@ struct BronzeProcessorParameter: Sendable {
         case .milliseconds, .frequency: increment = (sign > 0 ? value >= 1000 : value > 1000) ? 100 : 10
         case .percent, .cents, .hertz, .amplitude: increment = 0.01
         case .rawCents: increment = 1
-        case .decibels, .ratio: increment = 0.1
+        case .decibels, .ratio, .octaves: increment = 0.1
         }
         return min(maximum, max(minimum, ((value + increment * sign) * 100).rounded() / 100))
     }
@@ -255,6 +255,7 @@ struct BronzeProcessorParameter: Sendable {
         switch unit {
         case .decibels: return String(format: "%.1f dB", value)
         case .ratio: return String(format: "%.1f:1", value)
+        case .octaves: return String(format: "%.1f oct", value)
         case .milliseconds: return value >= 1000 ? String(format: "%.1f s", value / 1000) : String(format: "%.0f ms", value)
         case .hertz: return String(format: "%.2f Hz", value)
         case .frequency: return value >= 1000 ? String(format: "%.1f kHz", value / 1000) : String(format: "%.0f Hz", value)
@@ -402,6 +403,115 @@ struct BronzePulse: Codable, Equatable, Sendable {
     }
 }
 
+struct BronzeArpeggiator: Codable, Equatable, Sendable {
+    static let modes = ["Up", "Down", "Up / Down", "Played", "Random"]
+    var enabled = false
+    var sync = true
+    var mode = 0
+    var division = 2
+    var rateMs = 125.0
+    var octaves = 1
+    var gate = 0.72
+    var swing = 0.0
+    var autoFaderEnabled = false
+    var autoFaderHalf = false
+    var autoFaderDepthDb = 5.0
+    func beatMultiplier(bpm: Double) -> Double { sync ? BronzePulse.multipliers[division] : rateMs * bpm / 60000 }
+    func measureBeats(numerator: Int, denominator: Int) -> Double { Double(numerator) * 4 / Double(denominator) }
+    func autoFaderBeats(numerator: Int, denominator: Int) -> Double {
+        measureBeats(numerator: numerator, denominator: denominator) * (autoFaderHalf ? 0.5 : 1)
+    }
+    func validate(moduleIndex: Int) throws {
+        guard moduleIndex != 6 || !enabled, Self.modes.indices.contains(mode),
+              BronzePulse.divisions.indices.contains(division), (1...4).contains(octaves),
+              rateMs.isFinite, (20...2000).contains(rateMs), gate.isFinite, (0.1...1).contains(gate),
+              swing.isFinite, (0...0.75).contains(swing), autoFaderDepthDb.isFinite,
+              (0...40).contains(autoFaderDepthDb) else { throw BronzeSessionError.invalid }
+    }
+}
+
+struct BronzeModulePerformance: Codable, Equatable, Sendable {
+    var input = 0
+    var lowNote = 0
+    var highNote = 127
+    var octave = 0
+    var polyphony = 128
+    var outputStart = 0
+    var outputCount = 2
+    var mode = 0
+    var sustain = true
+    var modulation = true
+    var noSens = false
+    var dualMono = false
+    var velocityCurve = [0, 32, 64, 96, 127]
+    var velocityIgnoreAbove = 127
+    var velocityCeiling = 127
+    var modulationMode = 1
+    var modulationRate = 6.85
+    var modulationIntensity = 1.0
+    var glideMs = 0.0
+    var glideSync = false
+    var portamento = false
+    var glideVelocityGate = false
+    var glideVelocityInverted = false
+    var glideVelocityThreshold = 64
+    func glideTime(bpm: Double) -> Double { glideSync ? 60000 / bpm : glideMs }
+    static func initial(_ moduleIndex: Int) -> Self {
+        var value = Self()
+        if moduleIndex == 6 { value.modulationMode = 4; value.noSens = true }
+        return value
+    }
+    var routingValues: [Int] { [input, lowNote, highNote, octave, polyphony, outputStart, outputCount, mode] }
+    var velocityValues: [Int] { velocityCurve + [velocityIgnoreAbove, velocityCeiling] }
+    func validate() throws {
+        guard (-1...2).contains(input), (0...127).contains(lowNote), (lowNote...127).contains(highNote),
+              (-3...3).contains(octave), (1...128).contains(polyphony), (0...31).contains(outputStart),
+              (1...2).contains(outputCount), outputStart + outputCount <= 32, (0...2).contains(mode),
+              velocityCurve.count == 5, velocityCurve.allSatisfy({ (0...127).contains($0) }),
+              (0...127).contains(velocityIgnoreAbove), (1...127).contains(velocityCeiling),
+              (0...4).contains(modulationMode), modulationRate.isFinite, (0.1...20).contains(modulationRate),
+              modulationIntensity.isFinite, (0...1).contains(modulationIntensity),
+              glideMs.isFinite, (0...5000).contains(glideMs), (0...127).contains(glideVelocityThreshold)
+        else { throw BronzeSessionError.invalid }
+    }
+}
+
+enum BronzeToneParameter: String, CaseIterable, Identifiable {
+    case cutoff = "Cutoff", gain = "Gain", attack = "Attack", decay = "Decay", sustain = "Sustain", release = "Release", depth = "Depth"
+    var id: String { rawValue }
+    var index: Int { Self.allCases.firstIndex(of: self)! }
+    var definition: BronzeProcessorParameter {
+        switch self {
+        case .cutoff: return .init(rawValue, 20, 20000, 20000, .frequency)
+        case .gain: return .init(rawValue, -36, 12, 0, .decibels)
+        case .attack: return .init(rawValue, 0, 15000, 5, .milliseconds)
+        case .decay, .release: return .init(rawValue, 0, 25000, 200, .milliseconds)
+        case .sustain: return .init(rawValue, 0, 1, 1, .percent)
+        case .depth: return .init(rawValue, 0, 8, 4, .octaves)
+        }
+    }
+}
+
+struct BronzeTone: Codable, Equatable, Sendable {
+    var enabled = false
+    var type = 0
+    var values = BronzeToneParameter.allCases.map { $0.definition.initial }
+    var velocity = [127, 127, 127, 127, 127]
+    var envelopeEnabled = false
+    subscript(_ parameter: BronzeToneParameter) -> Double {
+        get { values[parameter.index] }
+        set { values[parameter.index] = newValue }
+    }
+    func validate(moduleIndex: Int) throws {
+        guard moduleIndex != 6 || !enabled, (0...3).contains(type), values.count == 7,
+              velocity.count == 5, velocity.allSatisfy({ (0...127).contains($0) }) else { throw BronzeSessionError.invalid }
+        for parameter in BronzeToneParameter.allCases {
+            let p = parameter.definition
+            guard self[parameter].isFinite, (p.minimum...p.maximum).contains(self[parameter]) else { throw BronzeSessionError.invalid }
+        }
+    }
+}
+
 struct BronzeModuleSnapshot: Codable, Equatable, Sendable {
     // Relative UUID/file.sf2; absolute sandbox paths change after reinstall/update.
     var soundFontKey: String?
@@ -415,6 +525,9 @@ struct BronzeModuleSnapshot: Codable, Equatable, Sendable {
     var soundEffects: BronzeSoundEffects?
     var synth: BronzeSynth?
     var pulse: BronzePulse?
+    var arpeggiator: BronzeArpeggiator?
+    var performance: BronzeModulePerformance?
+    var tone: BronzeTone?
 
     static var defaults: [Self] {
         (0..<8).map { index in
@@ -480,6 +593,9 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
             try module.delay.validate()
             try module.soundEffects?.validate(moduleIndex: index)
             try module.pulse?.validate()
+            try module.arpeggiator?.validate(moduleIndex: index)
+            try module.performance?.validate()
+            try module.tone?.validate(moduleIndex: index)
             if let synth = module.synth {
                 guard index == 7 else { throw BronzeSessionError.invalid }
                 try synth.validate()

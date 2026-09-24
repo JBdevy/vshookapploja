@@ -73,6 +73,23 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
             outputDualMono:(BOOL)outputDualMono;
 - (BOOL)setModuleGainDb:(float)db moduleIndex:(NSInteger)moduleIndex;
 - (BOOL)setModuleEnabledMask:(NSInteger)mask NS_SWIFT_NAME(setModuleEnabledMask(_:));
+// values: cutoff Hz, gain dB, filter attack/decay/sustain/release/depth octaves.
+- (BOOL)configureTone:(NSInteger)moduleIndex enabled:(BOOL)enabled type:(NSInteger)type
+               values:(NSArray<NSNumber *> *)values velocity:(NSArray<NSNumber *> *)velocity
+      envelopeEnabled:(BOOL)envelopeEnabled
+    NS_SWIFT_NAME(configureTone(_:enabled:type:values:velocity:envelopeEnabled:));
+// routing: input (-1=all), lowNote, highNote, octave, polyphony, outputStart,
+// outputCount, mode (0 poly/1 mono/2 legato). velocity: five curve points,
+// ignoreAbove, ceiling. Does not change ON/OFF, Solo, fader or effects.
+- (BOOL)configurePerformance:(NSInteger)moduleIndex routing:(NSArray<NSNumber *> *)routing
+                   velocity:(NSArray<NSNumber *> *)velocity sustain:(BOOL)sustain modulation:(BOOL)modulation
+                     noSens:(BOOL)noSens dualMono:(BOOL)dualMono
+    NS_SWIFT_NAME(configurePerformance(_:routing:velocity:sustain:modulation:noSens:dualMono:));
+- (BOOL)configureArpeggiator:(NSInteger)moduleIndex enabled:(BOOL)enabled mode:(NSInteger)mode
+                    octaves:(NSInteger)octaves beatMultiplier:(float)beatMultiplier measureBeats:(float)measureBeats
+                       gate:(float)gate swing:(float)swing autoFaderEnabled:(BOOL)autoFaderEnabled
+             autoFaderBeats:(float)autoFaderBeats autoFaderDepthDb:(float)autoFaderDepthDb
+    NS_SWIFT_NAME(configureArpeggiator(_:enabled:mode:octaves:beatMultiplier:measureBeats:gate:swing:autoFaderEnabled:autoFaderBeats:autoFaderDepthDb:));
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex
                        cutoffHz:(float)cutoffHz
                  cutoffVelocity:(NSArray<NSNumber *> *)cutoffVelocity

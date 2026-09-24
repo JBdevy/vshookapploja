@@ -53,10 +53,13 @@ public:
       std::uint8_t data2,
       std::uint64_t timestampNanoseconds = 0) noexcept;
   [[nodiscard]] bool setModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept;
+  [[nodiscard]] bool setModulePerformance(std::size_t moduleIndex, ModuleConfig config) noexcept;
   [[nodiscard]] bool setModuleGainDb(std::size_t moduleIndex, float db) noexcept;
   [[nodiscard]] bool setModuleEnabledMask(std::uint8_t mask) noexcept;
+  [[nodiscard]] bool setNativeArpeggiator(std::size_t moduleIndex, NativeArpeggiatorConfig config) noexcept;
   [[nodiscard]] bool setModuleEffects(std::size_t moduleIndex, ModuleEffectsConfig effects) noexcept;
   [[nodiscard]] bool setModuleEqualizer(std::size_t moduleIndex, EqConfig equalizer) noexcept;
+  [[nodiscard]] bool setModuleTone(std::size_t moduleIndex, CutoffConfig cutoff, float inputGainDb) noexcept;
   [[nodiscard]] bool setModuleReverb(std::size_t moduleIndex, bool enabled,
       std::uint8_t impulse, float mix, float tail = 1.0f) noexcept;
   [[nodiscard]] bool setModuleDelay(std::size_t moduleIndex, DelayConfig delay) noexcept;
@@ -239,13 +242,15 @@ private:
   std::atomic<std::uint16_t> effectOutputRoute_{2u << 8};
   std::array<std::atomic<float>, 2> effectPeaks_{};
   struct LiveExpression final {
-    int sustain = -1;
+    std::array<int, 16> sustain{};
+    LiveExpression() noexcept { sustain.fill(-1); }
     int modulation = -1;
     int pitch = -1;
   };
   std::array<LiveExpression, kRoutableMidiInputCount> liveExpression_{}; // audio thread only
   struct CurrentExpression final {
-    std::atomic<int> sustain{-1};
+    std::array<std::atomic<int>, 16> sustain{};
+    CurrentExpression() noexcept { for (auto& value : sustain) value.store(-1, std::memory_order_relaxed); }
     std::atomic<int> modulation{-1};
     std::atomic<int> pitch{-1};
   };

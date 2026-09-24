@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { verifyNativeBundle, verifyNativeProject } from './verify-native-ios.mjs';
+import { verifyNativeBundle, verifyNativeProject, verifyNativeFrameworks } from './verify-native-ios.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 function fixture(t) {
@@ -25,6 +25,16 @@ function fixture(t) {
 }
 
 test('projeto iOS contém somente host nativo e referências de áudio existentes', verifyNativeProject);
+test('frameworks de áudio e MIDI precisam estar na fase de linkagem, não só listados', () => {
+  const project = fs.readFileSync(path.join(root, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8');
+  verifyNativeFrameworks(project);
+  for (const name of ['AVFoundation', 'AudioToolbox', 'CoreMIDI']) {
+    const disconnected = project.replace(new RegExp(`\\t+[A-F0-9]{24} /\\* ${name}\\.framework in Frameworks \\*/,`), '');
+    assert.notEqual(disconnected, project);
+    assert.throws(() => verifyNativeFrameworks(disconnected), /Framework fora da linkagem/);
+    assert.throws(() => verifyNativeFrameworks(project.replace(`path = System/Library/Frameworks/${name}.framework;`, 'path = missing;')), /Framework nativo ausente/);
+  }
+});
 test('bundle nativo aceita áudio sem recursos da interface web', t => {
   const app = fixture(t);
   const inspected = [];

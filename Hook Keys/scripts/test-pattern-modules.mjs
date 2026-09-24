@@ -73,8 +73,8 @@ test('Auto Fader uses 1/1 as the slower cycle and 1/2 as the faster cycle', () =
   assert.match(player, /measureBeats:\s*gate\.sync[\s\S]*getTimeSignatureNumerator\(\)\s*\*\s*4\s*\/\s*this\.metronome\.getTimeSignatureDenominator\(\)/,
     'Pulse em Sync recebe o mesmo compasso global do metrônomo');
   const dspTypes = readFileSync(new URL('../native-engine/include/hook_keys/DspTypes.hpp', import.meta.url), 'utf8');
-  assert.match(dspTypes, /beats = std::clamp\(beats, 0\.25f, 16\.0f\)/,
-    'the native engine must preserve 4, 3 and 1.5 beats instead of forcing every cycle to 2');
+  assert.match(dspTypes, /beats = std::clamp\(beats, 0\.125f, 32\.0f\)/,
+    'the native engine preserves 4, 3 and 1.5 beats and supports every native meter, including half of 1/16');
   const engine = readFileSync(new URL('../native-engine/src/ModuleEffects.cpp', import.meta.url), 'utf8');
   assert.match(engine, /cycleSeconds[^;]+fader\.beats/);
   assert.match(engine, /0\.5 - 0\.5 \* std::cos/,

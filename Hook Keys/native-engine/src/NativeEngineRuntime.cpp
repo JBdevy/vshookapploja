@@ -353,11 +353,13 @@ void NativeEngineRuntime::enqueueCurrentExpression(PresetLayer* layer) noexcept 
   if (layer == nullptr) return;
   for (std::size_t slot = 0; slot < currentExpression_.size(); ++slot) {
     const auto input = static_cast<std::uint8_t>(slot);
-    const auto sustain = currentExpression_[slot].sustain.load(std::memory_order_acquire);
     const auto modulation = currentExpression_[slot].modulation.load(std::memory_order_acquire);
     const auto pitch = currentExpression_[slot].pitch.load(std::memory_order_acquire);
-    if (sustain >= 0) (void)layer->engine->enqueueMidi(
-        {0xb0, 64, static_cast<std::uint8_t>(sustain), input, 0});
+    for (std::uint8_t channel = 0; channel < 16; ++channel) {
+      const auto sustain = currentExpression_[slot].sustain[channel].load(std::memory_order_acquire);
+      if (sustain >= 0) (void)layer->engine->enqueueMidi(
+          {static_cast<std::uint8_t>(0xb0 | channel), 64, static_cast<std::uint8_t>(sustain), input, 0});
+    }
     if (modulation >= 0) (void)layer->engine->enqueueMidi(
         {0xb0, 1, static_cast<std::uint8_t>(modulation), input, 0});
     if (pitch >= 0) (void)layer->engine->enqueueMidi(
@@ -480,7 +482,7 @@ bool NativeEngineRuntime::sendMidi(
   if (blockedCompatibilityMessage) return true;
   if (inputSlot >= kRoutableMidiInputCount || data1 > 127 || data2 > 127) return false;
   if (messageType == 0xb0 && data1 == 64) {
-    currentExpression_[inputSlot].sustain.store(data2, std::memory_order_release);
+    currentExpression_[inputSlot].sustain[status & 15].store(data2, std::memory_order_release);
   } else if (messageType == 0xb0 && data1 == 1) {
     currentExpression_[inputSlot].modulation.store(data2, std::memory_order_release);
   } else if (messageType == 0xe0) {
@@ -502,6 +504,7 @@ bool NativeEngineRuntime::setModuleConfig(std::size_t moduleIndex, ModuleConfig 
   std::scoped_lock lock(configMutex_);
   // Effects and the velocity limits arrive through their own commands.
   config.effects = controlLayer_->configs[moduleIndex].effects;
+  config.nativeArpeggiator = controlLayer_->configs[moduleIndex].nativeArpeggiator;
   config.velocityIgnoreAbove = controlLayer_->configs[moduleIndex].velocityIgnoreAbove;
   config.velocityCeiling = controlLayer_->configs[moduleIndex].velocityCeiling;
   if (moduleIndex == 6) {
@@ -552,6 +555,36 @@ bool NativeEngineRuntime::setModuleEffects(
   return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
 }
 
+bool NativeEngineRuntime::setModulePerformance(std::size_t moduleIndex, ModuleConfig config) noexcept {
+  if (moduleIndex >= kModuleCount) return false;
+  std::scoped_lock lock(configMutex_);
+  const auto& previous = controlLayer_->configs[moduleIndex];
+  config.effects = previous.effects;
+  config.nativeArpeggiator = previous.nativeArpeggiator;
+  config.enabled = previous.enabled;
+  config.gainLinear = previous.gainLinear;
+  if (moduleIndex == 6) {
+    config.noVelocitySensitivity = true;
+    config.velocityIgnoreAbove = 127; config.velocityCeiling = 127;
+    config.mono = false; config.legato = false;
+  }
+  config.normalize();
+  if (!controlLayer_->engine->setPreparedModuleConfig(moduleIndex, config)) return false;
+  controlLayer_->configs[moduleIndex] = config;
+  return true;
+}
+
+bool NativeEngineRuntime::setNativeArpeggiator(std::size_t moduleIndex, NativeArpeggiatorConfig config) noexcept {
+  if (moduleIndex >= kModuleCount || (moduleIndex == 6 && config.enabled) || !config.valid()) return false;
+  std::scoped_lock lock(configMutex_);
+  auto next = controlLayer_->configs[moduleIndex];
+  next.nativeArpeggiator = config;
+  next.effects.autoFader = {config.enabled && config.autoFaderEnabled, config.autoFaderBeats, config.autoFaderDepthDb};
+  if (!controlLayer_->engine->setPreparedModuleConfig(moduleIndex, next)) return false;
+  controlLayer_->configs[moduleIndex] = next;
+  return true;
+}
+
 bool NativeEngineRuntime::setModuleEqualizer(std::size_t moduleIndex, EqConfig equalizer) noexcept {
   if (moduleIndex >= kModuleCount) return false;
   for (const auto& band : equalizer.bands) {
@@ -563,6 +596,23 @@ bool NativeEngineRuntime::setModuleEqualizer(std::size_t moduleIndex, EqConfig e
   auto next = controlLayer_->configs[moduleIndex];
   // A band edit must not reconstruct/reset Rotary, Reverb, Pulse or routing.
   next.effects.equalizer = equalizer;
+  if (!controlLayer_->engine->setPreparedModuleConfig(moduleIndex, next)) return false;
+  controlLayer_->configs[moduleIndex] = next;
+  return true;
+}
+
+bool NativeEngineRuntime::setModuleTone(std::size_t moduleIndex, CutoffConfig cutoff, float inputGainDb) noexcept {
+  if (moduleIndex >= kModuleCount || (moduleIndex == 6 && cutoff.enabled) ||
+      static_cast<unsigned>(cutoff.type) > 3 || !std::isfinite(inputGainDb)) return false;
+  for (const auto value : {cutoff.frequencyHz, cutoff.envelope.attackMs, cutoff.envelope.decayMs,
+      cutoff.envelope.sustain, cutoff.envelope.releaseMs, cutoff.envelope.depthOctaves}) {
+    if (!std::isfinite(value)) return false;
+  }
+  cutoff.normalize();
+  std::scoped_lock lock(configMutex_);
+  auto next = controlLayer_->configs[moduleIndex];
+  next.effects.cutoff = cutoff;
+  next.effects.inputGainDb = std::clamp(inputGainDb, -36.0f, 12.0f);
   if (!controlLayer_->engine->setPreparedModuleConfig(moduleIndex, next)) return false;
   controlLayer_->configs[moduleIndex] = next;
   return true;
@@ -832,8 +882,10 @@ void NativeEngineRuntime::processRuntimeCommands() noexcept {
       for (std::size_t slot = 0; slot < liveExpression_.size(); ++slot) {
         const auto& expression = liveExpression_[slot];
         const auto input = static_cast<std::uint8_t>(slot);
-        if (expression.sustain >= 0) (void)renderLayer_->engine->enqueueMidi(
-            {0xb0, 64, static_cast<std::uint8_t>(expression.sustain), input, 0});
+        for (std::uint8_t channel = 0; channel < 16; ++channel) {
+          if (expression.sustain[channel] >= 0) (void)renderLayer_->engine->enqueueMidi(
+              {static_cast<std::uint8_t>(0xb0 | channel), 64, static_cast<std::uint8_t>(expression.sustain[channel]), input, 0});
+        }
         if (expression.modulation >= 0) (void)renderLayer_->engine->enqueueMidi(
             {0xb0, 1, static_cast<std::uint8_t>(expression.modulation), input, 0});
         if (expression.pitch >= 0) (void)renderLayer_->engine->enqueueMidi(
@@ -905,7 +957,7 @@ void NativeEngineRuntime::processRuntimeCommands() noexcept {
       (void)renderLayer_->engine->enqueueMidi(command.midi);
       const auto type = command.midi.status & 0xf0;
       auto& expression = liveExpression_[command.midi.inputSlot];
-      if (type == 0xb0 && command.midi.data1 == 64) expression.sustain = command.midi.data2;
+      if (type == 0xb0 && command.midi.data1 == 64) expression.sustain[command.midi.status & 15] = command.midi.data2;
       if (type == 0xb0 && command.midi.data1 == 1) expression.modulation = command.midi.data2;
       if (type == 0xe0) expression.pitch = command.midi.data1 | (command.midi.data2 << 7);
       // Old layers never receive fresh note-ons. Key releases and live MIDI
