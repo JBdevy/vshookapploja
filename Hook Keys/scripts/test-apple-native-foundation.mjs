@@ -19,6 +19,8 @@ const skiaRevision = read('scripts/skia-apple.revision').trim();
 
 assert.doesNotMatch(info, /UIMainStoryboardFile/,
   'o storyboard não pode instanciar a WebView antes da escolha do root nativo');
+assert.match(info, /<key>BronzeNativeUIEnabled<\/key>\s*<true\/>/,
+  'a IPA precisa abrir a interface nativa por padrão');
 assert.match(delegate, /--bronze-native-ui/);
 assert.match(delegate, /BronzeNativeHostingController\(\)/);
 assert.match(delegate, /HookKeysBridgeViewController\(\)/,

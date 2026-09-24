@@ -1,4 +1,4 @@
-name: Hook Keys - APK, AAB e IPA
+name: Bronze Keys - APK, AAB e IPA
 
 on:
   workflow_dispatch:
@@ -28,7 +28,7 @@ env:
 
 jobs:
   metadata:
-    name: Validar versao do Hook Keys
+    name: Validar versao do Bronze Keys
     runs-on: ubuntu-latest
     outputs:
       version_name: ${{ steps.version.outputs.version_name }}
@@ -76,12 +76,12 @@ jobs:
           # (disparo manual pelo Actions) volta para o nome padrao.
           RELEASE_NAME="$(printf '%s' "${COMMIT_MESSAGE:-}" | head -n 1)"
           if [ -z "$RELEASE_NAME" ]; then
-            RELEASE_NAME="Hook Keys $VERSION_NAME - Build $BUILD_NUMBER"
+            RELEASE_NAME="Bronze Keys $VERSION_NAME - Build $BUILD_NUMBER"
           fi
           echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
 
   android:
-    name: Gerar APK e AAB do Hook Keys
+    name: Gerar APK e AAB do Bronze Keys
     needs: metadata
     runs-on: ubuntu-latest
     defaults:
@@ -223,19 +223,19 @@ jobs:
           "$APKSIGNER" verify --verbose "$APK"
           jarsigner -verify "$AAB" >/dev/null
           mkdir -p build/release
-          cp "$APK" 'build/release/Hook Keys.apk'
-          cp "$AAB" 'build/release/Hook Keys.aab'
+          cp "$APK" 'build/release/Bronze Keys.apk'
+          cp "$AAB" 'build/release/Bronze Keys.aab'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Hook-Keys-Android
+          name: Bronze-Keys-Android
           if-no-files-found: error
           path: |
-            Hook Keys/build/release/Hook Keys.apk
-            Hook Keys/build/release/Hook Keys.aab
+            Hook Keys/build/release/Bronze Keys.apk
+            Hook Keys/build/release/Bronze Keys.aab
 
   ios:
-    name: Gerar IPA do Hook Keys
+    name: Gerar IPA do Bronze Keys
     needs: metadata
     runs-on: macos-26
     defaults:
@@ -309,7 +309,7 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
-      - name: Instalar provisioning profile do Hook Keys
+      - name: Instalar provisioning profile do Bronze Keys
         shell: bash
         env:
           HOOK_KEYS_IOS_PROVISION_PROFILE_BASE64: ${{ secrets.HOOK_KEYS_IOS_PROVISION_PROFILE_BASE64 }}
@@ -339,7 +339,7 @@ jobs:
           echo "HOOK_KEYS_PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
           echo "Provisioning profile instalado: $PROFILE_NAME ($PROFILE_UUID)"
 
-      - name: Arquivar Hook Keys para iOS
+      - name: Arquivar Bronze Keys para iOS
         shell: bash
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
@@ -357,7 +357,7 @@ jobs:
             -scheme App \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$PWD/build/Hook-Keys.xcarchive" \
+            -archivePath "$PWD/build/Bronze-Keys.xcarchive" \
             DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY='Apple Distribution' \
@@ -393,13 +393,13 @@ jobs:
           </plist>
           EOF
           xcodebuild -exportArchive \
-            -archivePath "$PWD/build/Hook-Keys.xcarchive" \
+            -archivePath "$PWD/build/Bronze-Keys.xcarchive" \
             -exportPath "$PWD/build/export" \
             -exportOptionsPlist "$RUNNER_TEMP/HookKeysExportOptions.plist"
           IPA_PATH="$(find build/export -maxdepth 1 -type f -name '*.ipa' -print -quit)"
           test -n "$IPA_PATH"
           mkdir -p build/release
-          cp "$IPA_PATH" 'build/release/Hook Keys.ipa'
+          cp "$IPA_PATH" 'build/release/Bronze Keys.ipa'
 
       - name: Preparar chave da App Store Connect
         shell: bash
@@ -438,7 +438,7 @@ jobs:
             --apiKey "$ASC_KEY_ID" \
             --apiIssuer "$ASC_ISSUER_ID"
 
-      - name: Enviar Hook Keys para a App Store Connect
+      - name: Enviar Bronze Keys para a App Store Connect
         shell: bash
         env:
           ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
@@ -453,13 +453,13 @@ jobs:
             --type ios \
             --apiKey "$ASC_KEY_ID" \
             --apiIssuer "$ASC_ISSUER_ID"
-          echo 'IPA do Hook Keys enviado. Aguarde o processamento na App Store Connect.'
+          echo 'IPA do Bronze Keys enviado. Aguarde o processamento na App Store Connect.'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Hook-Keys-iOS
+          name: Bronze-Keys-iOS
           if-no-files-found: error
-          path: Hook Keys/build/release/Hook Keys.ipa
+          path: Hook Keys/build/release/Bronze Keys.ipa
 
   release:
     name: Publicar somente APK, AAB e IPA
@@ -472,7 +472,7 @@ jobs:
       - name: Baixar os tres arquivos
         uses: actions/download-artifact@v4
         with:
-          pattern: Hook-Keys-*
+          pattern: Bronze-Keys-*
           merge-multiple: true
           path: release-assets
 
@@ -480,9 +480,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s 'release-assets/Hook Keys.apk'
-          test -s 'release-assets/Hook Keys.aab'
-          test -s 'release-assets/Hook Keys.ipa'
+          test -s 'release-assets/Bronze Keys.apk'
+          test -s 'release-assets/Bronze Keys.aab'
+          test -s 'release-assets/Bronze Keys.ipa'
           FILE_COUNT="$(find release-assets -type f | wc -l | tr -d ' ')"
           if [ "$FILE_COUNT" != '3' ]; then
             echo "O Release deveria conter 3 arquivos, mas recebeu $FILE_COUNT."
@@ -490,7 +490,7 @@ jobs:
             exit 1
           fi
 
-      - name: Publicar Release do Hook Keys
+      - name: Publicar Release do Bronze Keys
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.metadata.outputs.tag_name }}
@@ -498,6 +498,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            release-assets/Hook Keys.apk
-            release-assets/Hook Keys.aab
-            release-assets/Hook Keys.ipa
+            release-assets/Bronze Keys.apk
+            release-assets/Bronze Keys.aab
+            release-assets/Bronze Keys.ipa

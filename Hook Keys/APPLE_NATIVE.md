@@ -1,9 +1,9 @@
 # Bronze Keys nativo para Apple
 
-O modo nativo é ativado no Scheme do Xcode com o argumento de lançamento
-`--bronze-native-ui`. A build normal continua abrindo a interface atual até a
-migração de autenticação, biblioteca e presets ser concluída. Como o root é
-criado no `AppDelegate`, o modo nativo não instancia `WKWebView`.
+O modo nativo está ativado por padrão por `BronzeNativeUIEnabled` no
+`Info.plist`. Como o root é criado no `AppDelegate`, ele não instancia
+`WKWebView`. O argumento `--bronze-native-ui` continua disponível para testes
+em configurações cujo `Info.plist` desative temporariamente a nova interface.
 
 O caminho de performance já é direto:
 
