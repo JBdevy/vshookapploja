@@ -523,11 +523,23 @@ test('Auto ligado fica amarelo e Repetir ligado pisca verde acima do tema geral'
   assert.match(css, /\.player-screen \.tracks-split-controls button\[data-tracks-action="toggle-loop"\]:is\(\.is-selected, \[aria-pressed="true"\]\) \{[^}]*animation:\s*tracks-loop-blink/);
 });
 
-test('Modo Lite não tira a transição nem desacelera o meter', () => {
+test('Modo Lite reduz o trabalho contínuo sem tirar a transição do meter', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const lite = css.match(/\.hook-keys-lite :is\(\.player-module__meter-fill, \.player-module__meter-fill > i\) \{([^}]*)\}/)[1];
   assert.doesNotMatch(lite, /transition:\s*none/);
-  assert.doesNotMatch(player, /LITE_MODULE_METER_INTERVAL_MS/);
+  assert.match(player, /MOBILE_LITE_MODULE_METER_INTERVAL_MS = 180/);
+  assert.match(player, /this\.liteMode \? MOBILE_LITE_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS/);
+  assert.match(css, /\.hook-keys-lite :is\([\s\S]*?\.performance-pad\.is-active[\s\S]*?animation: none !important;/);
+});
+
+test('FX da WebView recupera o áudio nativo no iOS sem descarregar SF2 nem o Pad contínuo', () => {
+  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
+  const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
+  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
+  assert.match(player, /audio\.play\(\)\.then\(\(\) => \{\s*this\.scheduleNativeRecoveryAfterEffectStart\(\)/);
+  assert.match(player, /recoverPreservedNativeAudioIfNeeded[\s\S]*?hookKeysNative\.recoverAudioOutput/);
+  assert.match(bridge, /async recoverAudioOutput[\s\S]*?preserveEngine: true/);
+  assert.match(ios, /HTMLMediaElement[\s\S]*?setCategory:AVAudioSessionCategoryPlayback/);
 });
 
 test('iOS mantém a interface USB escolhida enquanto a rota reconecta', () => {
@@ -707,16 +719,16 @@ test('trocar OCT do módulo libera a nota ativa antes de aplicar a nova oitava',
   assert.match(engine, /\(inputRouteChanged \|\| octaveChanged\)[\s\S]*?modules_\[index\]->allNotesOff\(\);[\s\S]*?clearActiveNoteState\(index\);/);
 });
 
-test('módulos nascem com Reverb Room e o Organ com Rotary ligado à roda Mod', () => {
+test('módulos nascem com Reverb Room, exceto o Bronze B3, que nasce com Rotary', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const effects = readFileSync(new URL('../src/features/player/ModuleEffectsView.ts', import.meta.url), 'utf8');
   assert.match(effects, /FACTORY_MODULE_REVERB: ModuleReverbSettings = \{\s*enabled: true,\s*decay: 1\.2,\s*dampen: 62,\s*mod: 0,\s*size: 18,\s*mix: 50,/);
   assert.match(player, /modulationMode: moduleIndex === 6 \? 'rotary' : 'user',/);
-  assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB \},/);
+  assert.match(player, /reverb: \{ \.\.\.FACTORY_MODULE_REVERB, enabled: moduleIndex !== 6 \},/);
   assert.match(player, /enabled: moduleIndex === 6,\s*modulationEnabled: moduleIndex === 6,/);
 });
 
-test('Config do Organ remove controles sem função e mantém Envelope, Mod, Arpeggiator e Pulse reais', () => {
+test('Config do Bronze B3 remove controles sem função e mantém Envelope, Mod e Pulse reais', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   const settings = readFileSync(new URL('../src/features/player/ModuleSettingsView.ts', import.meta.url), 'utf8');
   const runtime = readFileSync(new URL('../native-engine/src/NativeEngineRuntime.cpp', import.meta.url), 'utf8');
@@ -738,9 +750,15 @@ test('Config do Organ remove controles sem função e mantém Envelope, Mod, Arp
     'os nomes dos quatro modos do Organ usam fonte maior');
   assert.match(settings, /processorReplacement === 'organ' \? '' : `<div class="module-settings-bottom-row">/,
     'o Organ não deve renderizar os cards inferiores de Velocity e Glide');
+  assert.match(settings, /processorReplacement === 'organ'\s*\? \['envelope', 'eq', 'chorus', 'reverb', 'delay'\]/,
+    'o Bronze B3 não mostra a aba Compressor');
+  assert.match(settings, /if \(processorReplacement !== 'organ'\) pages\.push\('arpeggiator'\);/,
+    'o Bronze B3 não mostra a aba Arpeggiator');
   assert.match(player, /const noSens = moduleIndex === 6 \? true/);
-  assert.match(player, /hasSound: moduleNumber >= 7 \|\| Boolean\(arpeggiator\?\.timbreId\)/,
-    'Arpeggiator reconhece Organ e Synth mesmo sem timbreId de biblioteca');
+  assert.match(player, /moduleEnabled: moduleNumber !== 7 && arpeggiator\?\.enabled === true/,
+    'o Arpeggiator fica bloqueado no Bronze B3 inclusive para estados antigos');
+  assert.match(player, /compressorMix: moduleIndex !== 6 && compressor\.enabled \? compressor\.mix \/ 100 : 0/,
+    'o Compressor fica bloqueado no DSP do Bronze B3');
   assert.match(runtime, /if \(moduleIndex == 6\) \{[\s\S]{0,240}organModule_->setVolumeEnvelope/,
     'Envelope do Organ precisa alcançar as nove drawbars');
   assert.match(organ, /void OrganModule::setNoVelocitySensitivity\(bool\)[\s\S]*?setNoVelocitySensitivity\(true\)/,

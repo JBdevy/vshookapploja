@@ -106,7 +106,7 @@ export function createPerformanceKeyboardSettingsMarkup(
         <div role="group" aria-label="Estilo visual do teclado">
           ${createChoiceButton('keyboard-style', 'standard', 'Default', style === 'standard')}
           ${createChoiceButton('keyboard-style', 'black', 'Black', style === 'black')}
-          ${createChoiceButton('keyboard-style', 'hook', 'Hook', style === 'hook')}
+          ${createChoiceButton('keyboard-style', 'hook', 'Bronze', style === 'hook')}
         </div>
       </article>
     </section>

@@ -90,7 +90,7 @@ public:
   void setMidiInputEnabled(bool enabled) noexcept;
   void setCompatibilityMode(bool enabled) noexcept { compatibilityMode_.store(enabled, std::memory_order_release); }
   bool setTranceGate(std::size_t moduleIndex, ModuleEffectsConfig::TranceGateConfig config) noexcept;
-  // Hook B3: os nove SF2 dos drawbars, fixos e compartilhados por todo
+  // Bronze B3: os nove SF2 dos drawbars, fixos e compartilhados por todo
   // preset (carregados uma vez só, nunca por camada — são ~200 MB juntos).
   // drawbarIndex vai de 0 (16') a 8 (1'), a mesma ordem do app.
   [[nodiscard]] bool loadOrganVoice(std::size_t drawbarIndex, const char* utf8Path) noexcept;

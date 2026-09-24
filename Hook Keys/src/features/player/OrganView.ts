@@ -1,4 +1,4 @@
-// Hook B3: o módulo 7 toca órgão. No lugar da Biblioteca ele abre esta tela,
+// Bronze B3: o módulo 7 toca órgão. No lugar da Biblioteca ele abre esta tela,
 // com o Rotary em cima e os nove drawbars embaixo. Cada drawbar tem um SF2
 // próprio e o quanto ele está puxado para baixo vira o volume daquela barra.
 import { createModuleRotaryMarkup } from './ModuleEffectsView';

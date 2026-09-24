@@ -153,6 +153,15 @@ export class TracksPanelController {
   private activePlaylistId: string | null = null;
   private draft: PlaylistDraft | null = null;
   private holdGesture: HoldGesture | null = null;
+  private backspaceHold: {
+    button: HTMLButtonElement;
+    pointerId: number;
+    delayTimer: number;
+    repeatTimer: number | null;
+    repeated: boolean;
+    interval: number;
+  } | null = null;
+  private suppressNextBackspaceClick = false;
   private reorderGesture: TrackReorderGesture | null = null;
   private suppressNextPlaylistClick = false;
   private managedBlockId: string | null = null;
@@ -194,6 +203,7 @@ export class TracksPanelController {
 
   destroy(): void {
     this.clearHoldGesture();
+    this.clearBackspaceHold(false);
     this.clearReorderGesture();
     this.root.removeEventListener('click', this.handleClick);
     this.root.removeEventListener('change', this.handleChange);
@@ -220,24 +230,11 @@ export class TracksPanelController {
     const rawKey = keyButton?.dataset.onScreenKey;
     if (keyButton && rawKey && (this.draft || this.managedBlockId)) {
       const key = resolveOnScreenKey(keyButton, rawKey);
-      if (this.managedBlockId && !this.draft) {
-        if (key === 'enter') void this.saveManagedBlockName();
-        else if (key) {
-          this.managedBlockNameDraft = applyOnScreenKey(this.managedBlockNameDraft, key, BLOCK_NAME_LIMIT);
-          this.renderManagedBlockName();
-          this.clearMessage();
-        }
-      } else if (key === 'enter') {
-        this.setNameKeyboardOpen(false);
-        this.openTrackSelector();
+      if (rawKey === 'backspace' && this.suppressNextBackspaceClick) {
+        this.suppressNextBackspaceClick = false;
+        return;
       }
-      else if (key) {
-        const draft = this.draft;
-        if (!draft) return;
-        draft.name = applyOnScreenKey(draft.name, key, PLAYLIST_NAME_LIMIT);
-        this.renderDraftName();
-        this.clearMessage();
-      }
+      if (key) this.applyNameKeyboardKey(key);
       return;
     }
 
@@ -375,6 +372,13 @@ export class TracksPanelController {
 
   private onPointerDown(event: PointerEvent): void {
     const target = event.target;
+    const backspace = target instanceof Element
+      ? target.closest<HTMLButtonElement>('button[data-on-screen-key="backspace"]')
+      : null;
+    if (backspace && this.root.contains(backspace) && (this.draft || this.managedBlockId)) {
+      this.startBackspaceHold(backspace, event.pointerId);
+      return;
+    }
     const track = target instanceof Element
       ? target.closest<HTMLElement>('[data-list-item-id]')
       : null;
@@ -472,6 +476,9 @@ export class TracksPanelController {
   }
 
   private onPointerEnd(event: PointerEvent): void {
+    if (this.backspaceHold?.pointerId === event.pointerId) {
+      this.clearBackspaceHold(event.type === 'pointerup');
+    }
     if (this.reorderGesture?.pointerId === event.pointerId) {
       const gesture = this.reorderGesture;
       const orderedIds = Array.from(
@@ -482,6 +489,43 @@ export class TracksPanelController {
       void this.persistVisibleOrder(orderedIds);
     }
     this.clearHoldGesture();
+  }
+
+  private startBackspaceHold(button: HTMLButtonElement, pointerId: number): void {
+    this.clearBackspaceHold(false);
+    this.suppressNextBackspaceClick = false;
+    const hold = {
+      button,
+      pointerId,
+      delayTimer: 0,
+      repeatTimer: null as number | null,
+      repeated: false,
+      interval: 145,
+    };
+    hold.delayTimer = window.setTimeout(() => {
+      if (this.backspaceHold !== hold) return;
+      hold.repeated = true;
+      this.repeatBackspace(hold);
+    }, 420);
+    this.backspaceHold = hold;
+    try { button.setPointerCapture(pointerId); } catch { /* captura opcional */ }
+  }
+
+  private repeatBackspace(hold: NonNullable<TracksPanelController['backspaceHold']>): void {
+    if (this.backspaceHold !== hold || (!this.draft && !this.managedBlockId)) return;
+    this.applyNameKeyboardKey('backspace');
+    hold.interval = Math.max(72, hold.interval - 9);
+    hold.repeatTimer = window.setTimeout(() => this.repeatBackspace(hold), hold.interval);
+  }
+
+  private clearBackspaceHold(suppressClick: boolean): void {
+    const hold = this.backspaceHold;
+    if (!hold) return;
+    window.clearTimeout(hold.delayTimer);
+    if (hold.repeatTimer !== null) window.clearTimeout(hold.repeatTimer);
+    if (hold.button.hasPointerCapture(hold.pointerId)) hold.button.releasePointerCapture(hold.pointerId);
+    if (suppressClick && hold.repeated) this.suppressNextBackspaceClick = true;
+    this.backspaceHold = null;
   }
 
   private clearReorderGesture(): void {
@@ -686,6 +730,28 @@ export class TracksPanelController {
 
   private activeScopeId(): string {
     return this.activePlaylistId ?? 'all';
+  }
+
+  private applyNameKeyboardKey(key: string): void {
+    if (this.managedBlockId && !this.draft) {
+      if (key === 'enter') void this.saveManagedBlockName();
+      else {
+        this.managedBlockNameDraft = applyOnScreenKey(this.managedBlockNameDraft, key, BLOCK_NAME_LIMIT);
+        this.renderManagedBlockName();
+        this.clearMessage();
+      }
+      return;
+    }
+    if (key === 'enter') {
+      this.setNameKeyboardOpen(false);
+      this.openTrackSelector();
+      return;
+    }
+    const draft = this.draft;
+    if (!draft) return;
+    draft.name = applyOnScreenKey(draft.name, key, PLAYLIST_NAME_LIMIT);
+    this.renderDraftName();
+    this.clearMessage();
   }
 
   private syncDeleteAllButton(disabled: boolean): void {

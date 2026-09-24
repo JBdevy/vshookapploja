@@ -37,7 +37,7 @@ export class PlayerBackupService {
       throw new Error('backup_state_unavailable');
     }
     const createdAt = new Date().toISOString();
-    const fileName = `${this.backupUserName()}HK.json`;
+    const fileName = `${this.backupUserName()}BK.json`;
     const content = JSON.stringify({
       format: 'hook-keys-backup', version: 2, createdAt, state: snapshot,
     } satisfies BackupDocument, null, 2);

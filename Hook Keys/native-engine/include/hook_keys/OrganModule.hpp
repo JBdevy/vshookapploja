@@ -12,7 +12,7 @@
 
 namespace hook_keys {
 
-// Hook B3: nove drawbars, cada um o próprio SF2 tocando junto, com o volume
+// Bronze B3: nove drawbars, cada um o próprio SF2 tocando junto, com o volume
 // dependendo de quanto aquela barra foi puxada. Uma nota do módulo 7 dispara
 // as nove vozes ao mesmo tempo; renderAdd soma as nove com o ganho de cada
 // drawbar aplicado por cima do ganho do módulo.

@@ -574,6 +574,36 @@ class HookKeysNativeBridge {
     return this.setAudioOutputDevice('', 2, bufferSize, sampleRate);
   }
 
+  async recoverAudioOutput(
+    deviceId: string,
+    channels: number,
+    bufferSize: number,
+    sampleRate = 48_000,
+  ): Promise<boolean> {
+    if (!this.isAvailable()) return false;
+    // A WebView móvel pode ativar a própria sessão ao iniciar um FX e parar o
+    // stream nativo sem mudar a rota. Nesse caso a chave continua igual, então
+    // a recuperação precisa atravessar a ponte mesmo sem alteração de aparelho.
+    const key = `${deviceId}:${channels}:${bufferSize}:${sampleRate}`;
+    this.lastAudioDeviceKey = null;
+    try {
+      await this.call(
+        'set_audio_output_device',
+        { deviceId, channels, bufferSize, sampleRate, preserveEngine: true },
+        () => plugin.setAudioOutputDevice({ deviceId, channels, bufferSize, sampleRate, preserveEngine: true }),
+      );
+      this.lastAudioDeviceKey = key;
+      this.initialized = true;
+      this.initializePromise = null;
+      return true;
+    } catch (error) {
+      this.initialized = false;
+      this.initializePromise = null;
+      this.lastInitializationError = error;
+      return false;
+    }
+  }
+
   initializationErrorMessage(): string | null {
     return errorMessage(this.lastInitializationError);
   }

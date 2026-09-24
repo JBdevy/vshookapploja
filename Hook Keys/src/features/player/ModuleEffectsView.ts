@@ -111,11 +111,11 @@ const DEFAULT_ROTARY: ModuleRotarySettings = {
   cabinetEnabled: true,
   modulationEnabled: false,
   speed: 'slow',
-  // OpenB3/Beatrix b_whirl: corneta a 40,32 e 423,36 RPM.
-  slowHz: 0.672,
-  fastHz: 7.056,
+  // Configuração inicial do Rotary do Bronze B3.
+  slowHz: 1.2,
+  fastHz: 10,
   rampSeconds: 1.2,
-  depth: 70,
+  depth: 100,
   mix: 100,
 };
 

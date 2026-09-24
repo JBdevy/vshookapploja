@@ -68,6 +68,15 @@ try {
   assert(modal.querySelector('[data-on-screen-key="A"]'), 'volta ao teclado de letras');
   assert.equal(modal.querySelectorAll('.on-screen-keyboard').length, 1);
   assert.equal(name.readOnly, true, 'não chama teclado nativo');
+  for (let index = 0; index < 8; index += 1) key('A');
+  const lengthBeforeHold = Array.from(name.value).length;
+  const backspace = modal.querySelector('[data-on-screen-key="backspace"]');
+  backspace.dispatchEvent(new window.PointerEvent('pointerdown', { bubbles: true, pointerId: 41 }));
+  await new Promise(resolve => setTimeout(resolve, 610));
+  backspace.dispatchEvent(new window.PointerEvent('pointerup', { bubbles: true, pointerId: 41 }));
+  backspace.click();
+  assert(Array.from(name.value).length <= lengthBeforeHold - 2,
+    'segurar Backspace apaga repetidamente e o clique da soltura não acrescenta outra ação');
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.on-screen-keyboard__row button \{[^}]*border-radius: 4px;/s,
     'todas as teclas usam arredondamento de 4px');

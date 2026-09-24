@@ -270,6 +270,13 @@ private:
     if (_audioEngine.isRunning) return YES;
     NSError *restartError = nil;
     AVAudioSession *session = AVAudioSession.sharedInstance;
+    // O primeiro HTMLMediaElement da WebView pode alterar a sessão compartilhada
+    // e parar o AVAudioEngine. Reafirma a categoria antes de reabrir o stream,
+    // preservando o runtime (SF2 e vozes que já estavam tocando).
+    [session setCategory:AVAudioSessionCategoryPlayback
+                    mode:AVAudioSessionModeDefault
+                 options:AVAudioSessionCategoryOptionMixWithOthers
+                   error:nil];
     [session setPreferredSampleRate:requestedSampleRate error:nil];
     const double preferredRate = requestedSampleRate;
     // Tamanho de buffer é uma preferência, não uma condição para existir áudio.
@@ -437,6 +444,10 @@ static NSString *describeFormat(AVAudioFormat *format) {
                     sampleRate:(double)sampleRate
                 preserveEngine:(BOOL)preserveEngine {
   AVAudioSession *session = AVAudioSession.sharedInstance;
+  [session setCategory:AVAudioSessionCategoryPlayback
+                  mode:AVAudioSessionModeDefault
+               options:AVAudioSessionCategoryOptionMixWithOthers
+                 error:nil];
   if (deviceId.length > 0) {
     BOOL currentRouteContainsDevice = NO;
     for (AVAudioSessionPortDescription *output in session.currentRoute.outputs) {

@@ -12549,6 +12549,21 @@ html[data-platform="ios"] .player-module__meter-fill {
   transform: none !important;
 }
 
+/* Estados que pulsam sem parar ficam estáticos no Lite. Isso elimina filtros
+   e sombras recalculados continuamente sem esconder qual item está ativo. */
+.hook-keys-lite :is(
+  .performance-pad.is-active,
+  .player-presets .player-preset-button.is-selected,
+  .player-presets .player-navigation__bank-button[data-action="show-bank"].is-selected,
+  .synth-preset-button.is-selected,
+  .synth-oscillator-tabs [data-synth-oscillator-tab].is-selected,
+  .track-card.is-selected,
+  .track-card.is-playing
+) {
+  animation: none !important;
+  filter: none !important;
+}
+
 .player-module__fader.is-clipping .player-module__meter-fill {
   filter: saturate(1.25) brightness(1.18);
 }
@@ -13343,7 +13358,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 }
 
 /* Gain: o trim do módulo, à esquerda do card de Velocity. */
-/* Hook B3: cinco presets em cima e os nove faders embaixo. A barra puxada
+/* Bronze B3: cinco presets em cima e os nove faders embaixo. A barra puxada
    para baixo é a voz entrando, como no órgão de verdade. */
 .organ-panel {
   display: grid;
@@ -13356,7 +13371,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   padding: clamp(6px, 1vh, 12px);
   border: 1.5px solid rgba(126, 255, 31, 0.4);
   border-radius: 12px;
-  /* Só dentro do Hook B3: um verde mais claro, diferente do laranja do resto do app. */
+  /* Só dentro do Bronze B3: um verde mais claro, diferente do laranja do resto do app. */
   background: linear-gradient(170deg, rgba(36, 66, 38, 0.98), rgba(16, 28, 17, 0.99));
 }
 
@@ -13600,7 +13615,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
   border-radius: 9px;
 }
 
-/* Os cards dos knobs do Rotary também ganham o verde do Hook B3. */
+/* Os cards dos knobs do Rotary também ganham o verde do Bronze B3. */
 .organ-panel .module-effect-knob {
   border-color: rgba(126, 255, 31, 0.35);
   background: rgba(16, 26, 14, 0.75);
@@ -14531,7 +14546,7 @@ html[data-keyboard="open"][data-app-mode="login"] .access-card {
 .player-modal--module-organ .player-modal__header { position: relative; width: 100%; }
 .player-modal--module-organ .player-modal__header h2 { color: #ffe077; }
 .player-modal--module-organ .player-modal__description:empty { display: none; }
-/* Sem "Módulo 07": o título Hook B3 sobe e sobra mais altura pros faders. */
+/* Sem "Módulo 07": o título Bronze B3 sobe e sobra mais altura pros faders. */
 .player-modal--module-organ .player-modal__eyebrow { display: none; }
 .player-modal--module-organ .player-modal__body { align-content: stretch; overflow: hidden; }
 
@@ -16284,7 +16299,7 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
     max(1px, env(safe-area-inset-left)) !important;
 }
 /* A moldura externa de qualquer modal usa o mesmo 1 px da tela principal.
-   Isso inclui Config, Hook B3 e Synth; a safe area física ainda é respeitada. */
+   Isso inclui Config, Bronze B3 e Synth; a safe area física ainda é respeitada. */
 .player-modal {
   padding:
     max(1px, env(safe-area-inset-top))

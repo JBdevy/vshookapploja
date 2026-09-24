@@ -35,7 +35,7 @@ test('backup is created locally without email, network or account data', async (
   const result = await service.backupNow({ version: 9, activeBank: 'A' });
   const document = JSON.parse(written.content);
   assert.equal(result.saved, true);
-  assert.equal(result.fileName, 'João SilvaHK.json');
+  assert.equal(result.fileName, 'João SilvaBK.json');
   assert.equal(document.format, 'hook-keys-backup');
   assert.equal(document.version, 2);
   assert.deepEqual(document.state, { version: 9, activeBank: 'A' });
@@ -47,9 +47,9 @@ test('backup filename follows the current user name and removes invalid filename
   let currentName = 'Jobswin';
   const PlayerBackupService = loadService(async () => true);
   const service = new PlayerBackupService('cliente@example.com', () => currentName);
-  assert.equal((await service.backupNow({ version: 1 })).fileName, 'JobswinHK.json');
+  assert.equal((await service.backupNow({ version: 1 })).fileName, 'JobswinBK.json');
   currentName = 'João: Hook/Keys?';
-  assert.equal((await service.backupNow({ version: 1 })).fileName, 'João HookKeysHK.json');
+  assert.equal((await service.backupNow({ version: 1 })).fileName, 'João HookKeysBK.json');
 });
 
 test('cancelled native picker is reported without uploading anything', async () => {

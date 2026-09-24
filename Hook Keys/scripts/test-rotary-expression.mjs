@@ -82,8 +82,10 @@ test('Rotary defaults to OFF/Slow, validates ranges and no longer duplicates Mod
   assert.equal(effects.readModuleRotarySettings(undefined).cabinetEnabled, true);
   assert.equal(effects.readModuleRotarySettings(undefined).speed, 'slow');
   assert.equal(effects.readModuleRotarySettings(undefined).modulationEnabled, false);
-  assert.equal(effects.readModuleRotarySettings(undefined).slowHz, 0.672);
-  assert.equal(effects.readModuleRotarySettings(undefined).fastHz, 7.056);
+  assert.equal(effects.readModuleRotarySettings(undefined).slowHz, 1.2);
+  assert.equal(effects.readModuleRotarySettings(undefined).fastHz, 10);
+  assert.equal(effects.readModuleRotarySettings(undefined).rampSeconds, 1.2);
+  assert.equal(effects.readModuleRotarySettings(undefined).depth, 100);
   const stored = effects.readModuleRotarySettings({ enabled: true, cabinetEnabled: false, modulationEnabled: true, speed: 'fast', slowHz: 1.5, fastHz: 8, rampSeconds: 3, depth: 55, mix: 80 });
   assert.deepEqual({ ...effects.readModuleEffectSettings('rotary', JSON.parse(JSON.stringify(stored))) }, { ...stored });
   const invalid = effects.readModuleRotarySettings({ speed: 'bad', slowHz: -9, fastHz: 99, rampSeconds: 99, depth: -1, mix: 200 });
@@ -100,7 +102,7 @@ test('Rotary defaults to OFF/Slow, validates ranges and no longer duplicates Mod
   assert.doesNotMatch(effects.createModuleRotaryMarkup({}), /data-module-rotary-cabinet/);
   assert.match(effects.createModuleRotaryMarkup({}, true), /data-module-rotary-cabinet[\s\S]*aria-pressed="true">Gabinet/);
   assert.match(effects.createModuleRotaryMarkup({ rotary: { cabinetEnabled: false } }, true), /data-module-rotary-cabinet[\s\S]*aria-pressed="false">Gabinet/);
-  assert.equal(effects.formatModuleEffectValue('rotary', 'fastHz', 7.056), '7.056 Hz');
+  assert.equal(effects.formatModuleEffectValue('rotary', 'fastHz', 10), '10.000 Hz');
   assert.equal(effects.formatModuleEffectValue('rotary', 'rampSeconds', 1.2), '1.2 s');
 });
 

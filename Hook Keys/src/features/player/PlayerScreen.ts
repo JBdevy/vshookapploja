@@ -602,6 +602,7 @@ const DESKTOP_CPU_METER_INTERVAL_MS = 250;
 // uma roda/lista nativa diferente em cada plataforma.
 const APP_SELECT_QUERY = 'select[data-setting], select[data-module-setting]';
 const MOBILE_MODULE_METER_INTERVAL_MS = 90;
+const MOBILE_LITE_MODULE_METER_INTERVAL_MS = 180;
 const EFFECT_PAD_MAX_DB = 0;
 const KNOB_FOCUS_IDLE_MS = 2_000;
 const BANK_IDS: readonly BankId[] = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -1306,6 +1307,7 @@ export class PlayerScreen {
   private nativeSyncInFlight = false;
   private nativeSyncRequested = false;
   private audioDeviceMonitorTimer: number | null = null;
+  private effectAudioRecoveryTimer: number | null = null;
   private selectedAudioDeviceMissCount = 0;
   private moduleMeterTimer: number | null = null;
   private ramMeterTimer: number | null = null;
@@ -1710,7 +1712,7 @@ export class PlayerScreen {
         if (!this.mounted) return;
         if (usage) this.renderRamMeter(usage);
       }
-      this.scheduleRamMeter();
+      this.scheduleRamMeter(this.liteMode && !this.desktopRuntime ? 5_000 : 2_000);
     }, delay);
   }
 
@@ -1787,9 +1789,9 @@ export class PlayerScreen {
       } finally {
         this.scheduleModuleMeters();
       }
-    // O Lite não desacelera o meter: com menos quadros ele andava em degraus e
-    // parecia a tela inteira travando, sem economia perceptível.
-    }, this.desktopRuntime ? DESKTOP_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS);
+    }, this.desktopRuntime
+      ? DESKTOP_MODULE_METER_INTERVAL_MS
+      : this.liteMode ? MOBILE_LITE_MODULE_METER_INTERVAL_MS : MOBILE_MODULE_METER_INTERVAL_MS);
   }
 
   // Uso real do executável Hook Keys, na mesma escala de CPU total mostrada
@@ -2020,6 +2022,8 @@ export class PlayerScreen {
     this.nativeSyncTimer = null;
     if (this.audioDeviceMonitorTimer !== null) window.clearTimeout(this.audioDeviceMonitorTimer);
     this.audioDeviceMonitorTimer = null;
+    if (this.effectAudioRecoveryTimer !== null) window.clearTimeout(this.effectAudioRecoveryTimer);
+    this.effectAudioRecoveryTimer = null;
     if (this.moduleMeterTimer !== null) window.clearTimeout(this.moduleMeterTimer);
     this.moduleMeterTimer = null;
     if (this.ramMeterTimer !== null) window.clearTimeout(this.ramMeterTimer);
@@ -3613,10 +3617,29 @@ export class PlayerScreen {
     audio.volume = Math.min(1, Math.max(0, baseGain * effectsGain));
     audio.addEventListener('ended', () => this.finishEffectPadAudioVoice(key, audio), { once: true });
     await this.attachEffectMeter(audio);
-    await audio.play().catch(() => {
+    await audio.play().then(() => {
+      this.scheduleNativeRecoveryAfterEffectStart();
+    }).catch(() => {
       this.finishEffectPadAudioVoice(key, audio);
       this.setStatus('Não foi possível tocar o áudio deste efeito.');
     });
+  }
+
+  private scheduleNativeRecoveryAfterEffectStart(): void {
+    if (!this.iosRuntime || !hookKeysNative.isAvailable()) return;
+    if (this.effectAudioRecoveryTimer !== null) window.clearTimeout(this.effectAudioRecoveryTimer);
+    // HTMLMediaElement e AVAudioEngine dividem a AVAudioSession. Aguarda a
+    // ativação do player da WebView terminar e então confirma que o motor dos
+    // módulos/pads continuou recebendo callback.
+    this.effectAudioRecoveryTimer = window.setTimeout(() => {
+      this.effectAudioRecoveryTimer = null;
+      void this.recoverPreservedNativeAudioIfNeeded().then(async () => {
+        // Algumas versões do WebKit terminam a troca de sessão depois que o
+        // play() já resolveu. A segunda conferência cobre essa janela tardia.
+        await new Promise(resolve => window.setTimeout(resolve, 320));
+        if (this.mounted) await this.recoverPreservedNativeAudioIfNeeded();
+      });
+    }, 180);
   }
 
   private stopEffectPadAudio(bank: EffectBankId, effectNumber: number): void {
@@ -4396,15 +4419,15 @@ export class PlayerScreen {
   }
 
   private createPatternPlaybackSnapshot(moduleNumber: number): PatternPlaybackSnapshot {
-    // Cada módulo tem seu próprio Arpeggiator, lido do seu próprio índice.
+    // Cada módulo, exceto o Bronze B3, tem seu próprio Arpeggiator.
     const arpeggiator = this.getActivePresetState()?.modules[moduleNumber - 1];
     return {
       bpm: this.metronome.getBpm(),
       timeSignatureNumerator: this.metronome.getTimeSignatureNumerator(),
       timeSignatureDenominator: this.metronome.getTimeSignatureDenominator(),
       arpeggiator: {
-        moduleEnabled: arpeggiator?.enabled === true,
-        // Organ e Synth sao internos e nao possuem timbreId da biblioteca.
+        moduleEnabled: moduleNumber !== 7 && arpeggiator?.enabled === true,
+        // O Synth é interno e não possui timbreId da biblioteca.
         hasSound: moduleNumber >= 7 || Boolean(arpeggiator?.timbreId),
         midiInputId: arpeggiator?.midiInputId ?? null,
         lowNote: arpeggiator?.lowNote ?? 0,
@@ -6443,7 +6466,7 @@ export class PlayerScreen {
               : kind === 'module-lofi' ? 'Vibes' : 'Delay';
     } else if (kind === 'module-organ') {
       eyebrow.textContent = `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
-      title.textContent = 'Hook B3';
+      title.textContent = 'Bronze B3';
     } else if (kind === 'sound-selection') {
       eyebrow.textContent = `Módulo ${(moduleNumber ?? 0).toString().padStart(2, '0')}`;
       title.textContent = 'Library';
@@ -9291,11 +9314,9 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
-  // O perfil leve (menos sombra, menos transição) vale sempre: no iPad antigo
-  // é ele que mantém a interface fluida e no aparelho novo não faz falta.
+  // O perfil leve reduz composição, animações e frequência dos medidores.
   private applyLiteMode(): void {
-    this.root.classList.add('hook-keys-lite');
-    // A tecla acesa é a única parte do Lite que se liga e desliga por aqui.
+    this.root.classList.toggle('hook-keys-lite', this.liteMode);
     this.root.classList.toggle('hook-keys-lite-keys', this.liteMode);
     this.performanceKeyboard?.setKeyLighting(!this.liteMode);
   }
@@ -9504,7 +9525,7 @@ export class PlayerScreen {
     this.scheduleNativeEngineSync();
   }
 
-  // Drawbars do Hook B3: são faders. O dedo cai na calha e a barra vai para
+  // Drawbars do Bronze B3: são faders. O dedo cai na calha e a barra vai para
   // onde ele está; quanto mais para baixo, mais aquela voz entra.
   private organDrawbarPositionAt(track: HTMLElement, clientY: number): number {
     const rect = track.getBoundingClientRect();
@@ -10818,12 +10839,16 @@ export class PlayerScreen {
     const selectedId = this.selectedAudioDeviceId;
     if (!hookKeysNative.isAvailable()) return;
     if (await hookKeysNative.audioOutputFailed()) {
-      // No iOS, a troca USB interrompe o callback por alguns instantes. Forçar
-      // fallback aqui reinicia a AVAudioSession repetidamente e faz a interface
-      // conectar/desconectar em ciclo. O observador nativo recupera o motor uma
-      // única vez quando a rota estabiliza.
-      if (this.iosRuntime) return;
       this.selectedAudioDeviceMissCount += 1;
+      if (this.iosRuntime) {
+        // Uma troca física de rota costuma se resolver sozinha. Duas leituras
+        // falhando confirmam o caso permanente causado pela mídia da WebView;
+        // reabre apenas o stream e preserva SF2, vozes e o pad contínuo ativo.
+        if (this.selectedAudioDeviceMissCount < 2) return;
+        this.selectedAudioDeviceMissCount = 0;
+        await this.recoverPreservedNativeAudioIfNeeded(true);
+        return;
+      }
       if (this.selectedAudioDeviceMissCount < 3) return;
       this.selectedAudioDeviceMissCount = 0;
       await this.fallbackToDefaultAudioOutput(true);
@@ -10881,6 +10906,34 @@ export class PlayerScreen {
       await this.refreshAudioDeviceOptions(this.modal);
     }
     this.setStatus('A saída de áudio foi desconectada. Usando o dispositivo padrão.');
+  }
+
+  private async recoverPreservedNativeAudioIfNeeded(knownFailed = false): Promise<void> {
+    if (!this.mounted || !hookKeysNative.isAvailable()) return;
+    if (this.nativeRecoveryPromise) return this.nativeRecoveryPromise;
+    this.nativeRecoveryPromise = (async () => {
+      if (!knownFailed && (await hookKeysNative.audioOutputStatus()).ready) return;
+      this.nativeEngineReady = false;
+      const device = this.audioDevices.find(({ id }) => id === this.selectedAudioDeviceId);
+      const recovered = await hookKeysNative.recoverAudioOutput(
+        device?.id ?? '',
+        device?.channels ?? 2,
+        this.bufferSize,
+        this.sampleRate,
+      );
+      if (!recovered || !this.mounted) return;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        if ((await hookKeysNative.audioOutputStatus()).ready) {
+          this.nativeEngineReady = true;
+          this.selectedAudioDeviceMissCount = 0;
+          this.applySelectedMidiInputs();
+          if (this.liveMidiEnabled) await hookKeysNative.setMidiInputEnabled(true);
+          return;
+        }
+        await new Promise(resolve => window.setTimeout(resolve, 25));
+      }
+    })().finally(() => { this.nativeRecoveryPromise = null; });
+    return this.nativeRecoveryPromise;
   }
 
   private applyNativeAudioOutputWithFeedback(preserveEngine: boolean): Promise<void> {
@@ -12069,9 +12122,10 @@ export class PlayerScreen {
       // roteador rouba a nota antes do motor conseguir devolvê-la.
       const mono = moduleIndex < 7 && moduleState?.settings.voiceMode === 'mono';
       const legato = mono && readLegato(moduleState?.settings ?? {});
-      // Todo módulo tem seu próprio Arpeggiator: cada um escuta seu próprio
-      // slot gerado (base + índice do módulo) — ver arpeggiatorInputSlotForModule.
+      // O Bronze B3 não usa Arpeggiator. Os demais escutam seu próprio slot
+      // gerado (base + índice do módulo) — ver arpeggiatorInputSlotForModule.
       const arpeggiatorSettings = readArpeggiatorSettings(moduleState?.settings.arpeggiator);
+      if (moduleIndex === 6) arpeggiatorSettings.enabled = false;
       const patternInputSlot = arpeggiatorSettings.enabled
         ? arpeggiatorInputSlotForModule(moduleIndex + 1)
         : null;
@@ -12256,7 +12310,7 @@ export class PlayerScreen {
           compressorAttackMs: compressor.attackMs,
           compressorReleaseMs: compressor.releaseMs,
           compressorGainDb: compressor.gainDb,
-          compressorMix: compressor.enabled ? compressor.mix / 100 : 0,
+          compressorMix: moduleIndex !== 6 && compressor.enabled ? compressor.mix / 100 : 0,
           delaySync: delay.sync,
           delayMs: delay.milliseconds,
           delayBeatMultiplier: delayDivisionMultiplier(delay.division),
@@ -13022,8 +13076,10 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
   return {
     ...MODULE_ENVELOPE_DEFAULTS,
     sustain: 100,
+    sustainDb: 0,
+    gainDb: 0,
     cutoffHz: 20_000,
-    eqEnabled: true,
+    eqEnabled: moduleIndex !== 6,
     polyphony: 128,
     voiceMode: 'poly',
     glideMs: DEFAULT_MODULE_GLIDE_MS,
@@ -13035,13 +13091,19 @@ function createDefaultModuleSettings(moduleIndex = -1): Record<string, unknown> 
     panIntensity: 100,
     velocityLimit: 127,
     velocityCeiling: 127,
-    reverb: { ...FACTORY_MODULE_REVERB },
+    reverb: { ...FACTORY_MODULE_REVERB, enabled: moduleIndex !== 6 },
     lofi: { ...readModuleLoFiSettings(undefined) },
     rotary: {
       ...readModuleRotarySettings(undefined),
       enabled: moduleIndex === 6,
       modulationEnabled: moduleIndex === 6,
     },
+    ...(moduleIndex === 6 ? {
+      organ: readOrganSettings(undefined),
+      compressor: { ...readModuleCompressorSettings(undefined), enabled: false },
+      chorus: { ...readModuleChorusSettings(undefined), enabled: false },
+      delay: { ...readModuleDelaySettings(undefined), enabled: false },
+    } : {}),
     synth: factorySynthPreset(1),
     synthPresets: FACTORY_SYNTH_PRESETS.map((preset) => ({ ...preset })),
     synthActivePreset: 1,

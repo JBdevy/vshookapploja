@@ -5,7 +5,7 @@ app.className = 'player-modal player-modal--module-organ is-open';
 app.innerHTML = `<div class="player-modal__surface">
   <header class="player-modal__header">
     <p class="player-modal__eyebrow">Módulo 07</p>
-    <h2>Hook B3</h2>
+    <h2>Bronze B3</h2>
     ${createOrganHeaderControlsMarkup({ organ: { soundEnabled: false, clickVolumeDb: -12 } })}
     <p class="player-modal__description"></p>
   </header>

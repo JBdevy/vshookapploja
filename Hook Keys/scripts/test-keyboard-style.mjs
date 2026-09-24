@@ -47,8 +47,8 @@ try {
   const choices = [...modal.querySelectorAll('[data-keyboard-style]')];
   assert.deepEqual(choices.map(button => button.dataset.keyboardStyle), ['standard', 'black', 'hook'],
     'os três estilos aparecem');
-  assert.deepEqual(choices.map(button => button.textContent.trim()), ['Default', 'Black', 'Hook'],
-    'os estilos se chamam Default, Black e Hook');
+  assert.deepEqual(choices.map(button => button.textContent.trim()), ['Default', 'Black', 'Bronze'],
+    'os estilos se chamam Default, Black e Bronze');
 
   // Cada escolha precisa trocar a classe no teclado, e só uma pode ficar.
   for (const wanted of ['hook', 'black', 'standard', 'hook', 'standard']) {
@@ -66,7 +66,7 @@ try {
   player.openModal('app-settings', null, window.document.createElement('button'));
   const settings = player.modal;
   const desktopChoices = [...settings.querySelectorAll('[data-keyboard-style]')];
-  assert.deepEqual(desktopChoices.map(button => button.textContent.trim()), ['Default', 'Black', 'Hook'],
+  assert.deepEqual(desktopChoices.map(button => button.textContent.trim()), ['Default', 'Black', 'Bronze'],
     'as Configuracoes do desktop oferecem os tres estilos');
   assert.deepEqual([...settings.querySelectorAll('[data-desktop-keyboard-midi-slot]')].map(b => b.textContent.trim()),
     ['MIDI 1', 'MIDI 2', 'MIDI 3'], 'o grupo de cima diz que roteia MIDI, nao que muda o visual');

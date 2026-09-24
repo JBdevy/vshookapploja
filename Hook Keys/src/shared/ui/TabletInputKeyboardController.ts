@@ -16,7 +16,17 @@ export class TabletInputKeyboardController {
   private keyboard: HTMLElement | null = null;
   private caret: HTMLElement | null = null;
   private observer: MutationObserver | null = null;
+  private backspaceHold: {
+    button: HTMLButtonElement;
+    pointerId: number;
+    delayTimer: number;
+    repeatTimer: number | null;
+    repeated: boolean;
+    interval: number;
+  } | null = null;
+  private suppressNextBackspaceClick = false;
   private readonly handlePointerDown = (event: PointerEvent) => this.onPointerDown(event);
+  private readonly handlePointerEnd = (event: PointerEvent) => this.onPointerEnd(event);
   private readonly handleClick = (event: Event) => this.onClick(event);
   private readonly handleInput = () => this.scheduleCaretPosition();
   private readonly handleViewportChange = () => this.scheduleCaretPosition();
@@ -26,6 +36,8 @@ export class TabletInputKeyboardController {
   mount(): void {
     this.prepareInputs(this.modal);
     this.modal.addEventListener('pointerdown', this.handlePointerDown, true);
+    this.modal.addEventListener('pointerup', this.handlePointerEnd, true);
+    this.modal.addEventListener('pointercancel', this.handlePointerEnd, true);
     this.modal.addEventListener('click', this.handleClick);
     this.modal.addEventListener('input', this.handleInput);
     window.addEventListener('resize', this.handleViewportChange);
@@ -44,10 +56,13 @@ export class TabletInputKeyboardController {
     this.observer?.disconnect();
     this.observer = null;
     this.modal.removeEventListener('pointerdown', this.handlePointerDown, true);
+    this.modal.removeEventListener('pointerup', this.handlePointerEnd, true);
+    this.modal.removeEventListener('pointercancel', this.handlePointerEnd, true);
     this.modal.removeEventListener('click', this.handleClick);
     this.modal.removeEventListener('input', this.handleInput);
     window.removeEventListener('resize', this.handleViewportChange);
     window.removeEventListener('scroll', this.handleViewportChange, true);
+    this.clearBackspaceHold(false);
     this.close();
   }
 
@@ -88,6 +103,7 @@ export class TabletInputKeyboardController {
   }
 
   private close(): void {
+    this.clearBackspaceHold(false);
     this.activeInput?.classList.remove('is-tablet-input-active');
     this.activeInput?.blur();
     this.activeInput = null;
@@ -100,6 +116,13 @@ export class TabletInputKeyboardController {
 
   private onPointerDown(event: PointerEvent): void {
     const target = event.target;
+    const backspace = target instanceof Element
+      ? target.closest<HTMLButtonElement>('.player-modal__tablet-keyboard button[data-on-screen-key="backspace"]')
+      : null;
+    if (backspace && this.activeInput) {
+      this.startBackspaceHold(backspace, event.pointerId);
+      return;
+    }
     const input = target instanceof Element
       ? target.closest<EditableInput>(EDITABLE_INPUT_SELECTOR)
       : null;
@@ -107,6 +130,49 @@ export class TabletInputKeyboardController {
       event.preventDefault();
       this.openFor(input);
     }
+  }
+
+  private onPointerEnd(event: PointerEvent): void {
+    if (this.backspaceHold?.pointerId === event.pointerId) {
+      this.clearBackspaceHold(event.type === 'pointerup');
+    }
+  }
+
+  private startBackspaceHold(button: HTMLButtonElement, pointerId: number): void {
+    this.clearBackspaceHold(false);
+    this.suppressNextBackspaceClick = false;
+    const hold = {
+      button,
+      pointerId,
+      delayTimer: 0,
+      repeatTimer: null as number | null,
+      repeated: false,
+      interval: 145,
+    };
+    hold.delayTimer = window.setTimeout(() => {
+      if (this.backspaceHold !== hold) return;
+      hold.repeated = true;
+      this.repeatBackspace(hold);
+    }, 420);
+    this.backspaceHold = hold;
+    try { button.setPointerCapture(pointerId); } catch { /* captura opcional */ }
+  }
+
+  private repeatBackspace(hold: NonNullable<TabletInputKeyboardController['backspaceHold']>): void {
+    if (this.backspaceHold !== hold || !this.activeInput) return;
+    this.applyKey(this.activeInput, 'backspace');
+    hold.interval = Math.max(72, hold.interval - 9);
+    hold.repeatTimer = window.setTimeout(() => this.repeatBackspace(hold), hold.interval);
+  }
+
+  private clearBackspaceHold(suppressClick: boolean): void {
+    const hold = this.backspaceHold;
+    if (!hold) return;
+    window.clearTimeout(hold.delayTimer);
+    if (hold.repeatTimer !== null) window.clearTimeout(hold.repeatTimer);
+    if (hold.button.hasPointerCapture(hold.pointerId)) hold.button.releasePointerCapture(hold.pointerId);
+    if (suppressClick && hold.repeated) this.suppressNextBackspaceClick = true;
+    this.backspaceHold = null;
   }
 
   private onClick(event: Event): void {
@@ -124,6 +190,10 @@ export class TabletInputKeyboardController {
       if (!(target instanceof Element) || !target.closest('.player-modal__tablet-keyboard')) {
         this.close();
       }
+      return;
+    }
+    if (rawKey === 'backspace' && this.suppressNextBackspaceClick) {
+      this.suppressNextBackspaceClick = false;
       return;
     }
 

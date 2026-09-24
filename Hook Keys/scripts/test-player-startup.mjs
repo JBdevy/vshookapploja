@@ -159,9 +159,49 @@ try {
     'o Reverb de fábrica nasce no ambiente Room em todos os módulos',
   );
   assert.equal(factoryModules[6].settings.modulationMode, 'rotary',
-    'a roda Mod do Organ nasce em Rotary');
+    'o Wheel Rotary do Bronze B3 nasce habilitado');
   assert.equal(factoryModules[6].settings.rotary.modulationEnabled, true,
     'o Rotary do Organ responde à roda Mod sem um segundo botão On/Off');
+  assert.equal(JSON.stringify(factoryModules[6].settings.organ.drawbars), JSON.stringify([8, 8, 8, 0, 0, 0, 0, 0, 0]),
+    'o Bronze B3 nasce com as três primeiras drawbars no 8 e as demais no 0');
+  assert.equal(factoryModules[6].settings.rotary.depth, 100,
+    'o Rotary do Bronze B3 nasce com Depth em 100%');
+  assert.equal(factoryModules[6].settings.rotary.slowHz, 1.2,
+    'o Rotary do Bronze B3 nasce com Slow em 1.2 Hz');
+  assert.equal(factoryModules[6].settings.rotary.fastHz, 10,
+    'o Rotary do Bronze B3 nasce com Fast em 10 Hz');
+  assert.equal(factoryModules[6].settings.rotary.rampSeconds, 1.2,
+    'o Rotary do Bronze B3 nasce com aceleração em 1.2 s');
+  assert.equal(factoryModules[6].settings.rotary.enabled, true,
+    'o Leslie do Bronze B3 nasce ligado');
+  assert.equal(factoryModules[6].settings.rotary.speed, 'slow',
+    'o Leslie do Bronze B3 nasce em Slow');
+  assert.equal(factoryModules[6].settings.rotary.cabinetEnabled, true,
+    'o Gabinet do Bronze B3 nasce ligado');
+  assert.equal(factoryModules[6].settings.gainDb, 0,
+    'o Bronze B3 nasce com Gain em 0 dB');
+  assert.equal(factoryModules[6].settings.attackMs, 0,
+    'o Bronze B3 nasce com Attack em 0 ms');
+  assert.equal(factoryModules[6].settings.holdMs, 15_000,
+    'o Bronze B3 nasce com Hold no máximo');
+  assert.equal(factoryModules[6].settings.decayMs, 25_000,
+    'o Bronze B3 nasce com Decay no máximo');
+  assert.equal(factoryModules[6].settings.sustainDb, 0,
+    'o Bronze B3 nasce com Sustain no máximo');
+  assert.equal(factoryModules[6].settings.releaseMs, 300,
+    'o Bronze B3 nasce com Release em 300 ms');
+  assert.equal(factoryModules[6].settings.eqEnabled, false,
+    'o Bronze B3 nasce com o EQ desligado');
+  assert.equal(factoryModules[6].settings.compressor.enabled, false,
+    'o Bronze B3 nasce com o Compressor desligado');
+  assert.equal(factoryModules[6].settings.reverb.enabled, false,
+    'o Bronze B3 nasce com o Reverb desligado');
+  assert.equal(factoryModules[6].settings.chorus.enabled, false,
+    'o Bronze B3 nasce com o Chorus desligado');
+  assert.equal(factoryModules[6].settings.delay.enabled, false,
+    'o Bronze B3 nasce com o Delay desligado');
+  assert.equal(factoryModules[6].settings.arpeggiator.enabled, false,
+    'o Bronze B3 nasce com o Arpeggiator desligado');
   assert.strictEqual(
     player.bankStates.get('A').presets[0].modules[6].settings,
     player.bankStates.get('B').presets[8].modules[6].settings,
@@ -363,9 +403,8 @@ try {
   assert.match(root.querySelector('[data-module="1"] .player-module__sound-button').getAttribute('aria-label'), /Sem timbre/);
   player.openModal('app-settings', null, root.querySelector('[data-action="open-app-settings"]'));
   {
-    // O perfil leve (sem animações) vale sempre. O Modo Lite que se liga em
-    // Settings é só para o App: no desktop ele nem aparece.
-    assert(root.classList.contains('hook-keys-lite'), 'o perfil leve fica sempre aplicado');
+    // O perfil leve só entra quando o usuário ativa o Modo Lite no App.
+    assert(!root.classList.contains('hook-keys-lite'), 'desktop não recebe o perfil Lite automaticamente');
     assert(!window.document.querySelector('[data-setting="lite-mode"]'),
       'o Modo Lite é só do App, não do desktop');
 

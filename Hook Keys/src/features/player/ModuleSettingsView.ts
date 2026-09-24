@@ -286,12 +286,13 @@ export function moduleSettingsPages(
   const pages: ModuleSettingsPage[] = processorReplacement === 'synth'
     ? ['eq', 'compressor', 'chorus', 'lofi', 'reverb', 'delay']
     : processorReplacement === 'organ'
-      ? ['envelope', 'eq', 'compressor', 'chorus', 'reverb', 'delay']
+      ? ['envelope', 'eq', 'chorus', 'reverb', 'delay']
       : ['envelope', 'eq', 'compressor', 'chorus', 'lofi', 'reverb', 'delay'];
   // O processador próprio do módulo (se houver) vem depois do Delay.
   if (processorReplacement === 'rotary') pages.push('rotary');
-  // Todo módulo tem seu próprio Arpeggiator e Pulse, independente dos demais.
-  pages.push('arpeggiator', 'trance-gate');
+  // O Bronze B3 não usa Arpeggiator; Pulse continua disponível.
+  if (processorReplacement !== 'organ') pages.push('arpeggiator');
+  pages.push('trance-gate');
   return pages;
 }
 
