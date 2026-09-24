@@ -16,6 +16,21 @@ const write = (file, contents) => {
   fs.chmodSync(file, 0o755);
 };
 try {
+  const patchProbe = path.join(temp, 'patch-probe');
+  write(path.join(patchProbe, 'gn/skia/BUILD.gn'), `    } else if (current_cpu == "arm64") {
+      _arch_flags = [
+        "-arch",
+        "arm64",
+        "-arch",
+        "arm64e",
+      ]
+    } else if (current_cpu == "x86") {
+`);
+  const patchFile = path.join(root, 'scripts/skia-apple-arm64.patch');
+  const patchResult = spawnSync('git', ['apply', patchFile], { cwd: patchProbe, encoding: 'utf8' });
+  assert.equal(patchResult.status, 0, patchResult.stderr);
+  assert.doesNotMatch(fs.readFileSync(path.join(patchProbe, 'gn/skia/BUILD.gn'), 'utf8'), /arm64e/);
+  assert.equal(spawnSync('git', ['apply', '--reverse', '--check', patchFile], { cwd: patchProbe }).status, 0);
   const project = path.join(temp, 'project with spaces');
   const tools = path.join(temp, 'tools');
   const skia = path.join(temp, 'runner', 'bronze-skia', 'skia');
@@ -23,6 +38,7 @@ try {
   const log = path.join(temp, 'calls.log');
   write(path.join(project, 'scripts', 'build-skia-apple.sh'), fs.readFileSync(path.join(root, 'scripts/build-skia-apple.sh')));
   write(path.join(project, 'scripts', 'skia-apple.revision'), fs.readFileSync(path.join(root, 'scripts/skia-apple.revision')));
+  write(path.join(project, 'scripts', 'skia-apple-arm64.patch'), fs.readFileSync(path.join(root, 'scripts/skia-apple-arm64.patch')));
   fs.mkdirSync(path.join(skia, '.git'), { recursive: true });
   write(path.join(skia, '.gn'), '');
   write(path.join(skia, 'include', 'core', 'SkCanvas.h'), '// test header');
@@ -41,8 +57,14 @@ esac
 set -eu
 test -f .gn
 test "$1" = gen
-case "$3" in *skia_enable_gpu=*) exit 11;; esac
-case "$3" in *skia_enable_ganesh=false*skia_enable_graphite=false*) ;; *) exit 12;; esac
+test "$3" = --fail-on-unused-args
+case "$4" in *skia_enable_gpu=*|*skia_use_libpng=*|*mac_deployment_target=*) exit 11;; esac
+case "$4" in *skia_enable_ganesh=false*skia_enable_graphite=false*) ;; *) exit 12;; esac
+case "$4" in *skia_use_libpng_decode=false*skia_use_libpng_encode=false*) ;; *) exit 13;; esac
+case "$4" in *skia_use_partition_alloc=false*skia_use_zlib=false*) ;; *) exit 14;; esac
+case "$2" in
+  out/macos-*) case "$4" in *-mmacosx-version-min=12.0*) ;; *) exit 15;; esac ;;
+esac
 mkdir -p "$2"
 echo "gn:$2" >> "$SKIA_TEST_LOG"
 `);

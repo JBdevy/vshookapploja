@@ -253,7 +253,7 @@ NativeEngineRuntime::~NativeEngineRuntime() {
   layers_.clear(); // caller has already stopped the audio callback
 }
 
-bool NativeEngineRuntime::beginPresetTransition() noexcept {
+bool NativeEngineRuntime::beginPresetTransition(bool preserveConfig) noexcept {
   std::scoped_lock lock(configMutex_, soundFontMutex_);
   if (pendingTransitionLayer_ != nullptr) return true;
   collectLayersLocked();
@@ -267,7 +267,17 @@ bool NativeEngineRuntime::beginPresetTransition() noexcept {
           !layer->modules[index]->copySoundFontFrom(*controlLayer_->modules[index])) return false;
     }
     auto* next = layer.get();
+    if (preserveConfig) {
+      next->configs = controlLayer_->configs;
+      next->synthConfig = controlLayer_->synthConfig;
+      if (!next->synth->setConfig(next->synthConfig)) return false;
+      for (std::size_t index = 0; index < kModuleCount; ++index) {
+        if (!next->engine->setModuleConfig(index, next->configs[index])) return false;
+      }
+    }
+    previousSoundFontPaths_ = currentSoundFontPaths_;
     layers_.push_back(std::move(layer));
+    previousControlLayer_ = controlLayer_;
     controlLayer_ = pendingTransitionLayer_ = next;
     return true;
   } catch (...) {
@@ -283,7 +293,20 @@ bool NativeEngineRuntime::commitPresetTransition() noexcept {
   command.layer = pendingTransitionLayer_;
   if (!runtimeCommands_.tryPush(command)) return false;
   pendingTransitionLayer_ = nullptr;
+  previousControlLayer_ = nullptr;
   return true;
+}
+
+void NativeEngineRuntime::cancelPresetTransition() noexcept {
+  std::scoped_lock lock(configMutex_, soundFontMutex_);
+  if (pendingTransitionLayer_ == nullptr) return;
+  // A pending layer has never been published to the audio callback.
+  const auto* discarded = pendingTransitionLayer_;
+  controlLayer_ = previousControlLayer_;
+  currentSoundFontPaths_.swap(previousSoundFontPaths_);
+  pendingTransitionLayer_ = previousControlLayer_ = nullptr;
+  layers_.erase(std::remove_if(layers_.begin(), layers_.end(),
+      [discarded](const auto& layer) { return layer.get() == discarded; }), layers_.end());
 }
 
 bool NativeEngineRuntime::loadSoundFont(std::size_t moduleIndex, const char* utf8Path) noexcept {
@@ -550,6 +573,17 @@ bool NativeEngineRuntime::setModuleEnvelope(
     std::size_t moduleIndex, float attackMs, float holdMs,
     float decayMs, float releaseMs, float glideMs, float sustainDb) noexcept {
   std::scoped_lock lock(configMutex_);
+  if (moduleIndex == 7) {
+    auto config = controlLayer_->synthConfig;
+    config.attackMs = attackMs;
+    config.holdMs = holdMs;
+    config.decayMs = decayMs;
+    config.releaseMs = releaseMs;
+    config.normalize(sampleRate_);
+    if (!controlLayer_->synth->setConfig(config)) return false;
+    controlLayer_->synthConfig = config;
+    return true;
+  }
   if (moduleIndex >= controlLayer_->modules.size()) return false;
   // Estes sao os valores que a interface usa para representar o estado
   // inicial. No estado inicial, qualquer modulo SF2 deve respeitar a
@@ -582,7 +616,10 @@ bool NativeEngineRuntime::setModuleEnvelope(
 
 bool NativeEngineRuntime::setSynthConfig(AnalogSynthConfig config) noexcept {
   std::scoped_lock lock(configMutex_);
-  return controlLayer_->synth->setConfig(config);
+  config.normalize(sampleRate_);
+  if (!controlLayer_->synth->setConfig(config)) return false;
+  controlLayer_->synthConfig = config;
+  return true;
 }
 
 bool NativeEngineRuntime::setModuleModulationMode(

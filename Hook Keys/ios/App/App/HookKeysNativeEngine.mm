@@ -1021,6 +1021,16 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return YES;
 }
 
+- (BOOL)beginNativePresetTransition {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && runtime->beginPresetTransition(true);
+}
+
+- (void)cancelPresetTransition {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime) runtime->cancelPresetTransition();
+}
+
 - (BOOL)setModuleEnabledMask:(NSInteger)mask {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && mask >= 0 && mask <= 255 &&

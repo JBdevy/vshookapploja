@@ -30,6 +30,7 @@
 		B10000000000000000000001 /* BronzeSkiaControlView.mm in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* BronzeSkiaControlView.mm */; };
 		B10000000000000000000002 /* BronzeNativeControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* BronzeNativeControls.swift */; };
 		B10000000000000000000003 /* BronzeNativeAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* BronzeNativeAppModel.swift */; };
+		B10000000000000000000006 /* BronzeNativeSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000007 /* BronzeNativeSession.swift */; };
 		B10000000000000000000004 /* BronzeNativeRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* BronzeNativeRootView.swift */; };
 		B10000000000000000000005 /* BronzeNativeHostingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000006 /* BronzeNativeHostingController.swift */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
@@ -65,6 +66,7 @@
 		B20000000000000000000002 /* BronzeSkiaControlView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BronzeSkiaControlView.h; sourceTree = "<group>"; };
 		B20000000000000000000003 /* BronzeNativeControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeControls.swift; sourceTree = "<group>"; };
 		B20000000000000000000004 /* BronzeNativeAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeAppModel.swift; sourceTree = "<group>"; };
+		B20000000000000000000007 /* BronzeNativeSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeSession.swift; sourceTree = "<group>"; };
 		B20000000000000000000005 /* BronzeNativeRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeRootView.swift; sourceTree = "<group>"; };
 		B20000000000000000000006 /* BronzeNativeHostingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeHostingController.swift; sourceTree = "<group>"; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
@@ -115,6 +117,7 @@
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				B20000000000000000000004 /* BronzeNativeAppModel.swift */,
+				B20000000000000000000007 /* BronzeNativeSession.swift */,
 				B20000000000000000000003 /* BronzeNativeControls.swift */,
 				B20000000000000000000005 /* BronzeNativeRootView.swift */,
 				B20000000000000000000006 /* BronzeNativeHostingController.swift */,
@@ -253,6 +256,7 @@
 				B10000000000000000000001 /* BronzeSkiaControlView.mm in Sources */,
 				B10000000000000000000002 /* BronzeNativeControls.swift in Sources */,
 				B10000000000000000000003 /* BronzeNativeAppModel.swift in Sources */,
+				B10000000000000000000006 /* BronzeNativeSession.swift in Sources */,
 				B10000000000000000000004 /* BronzeNativeRootView.swift in Sources */,
 				B10000000000000000000005 /* BronzeNativeHostingController.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,

@@ -40,6 +40,13 @@ if [[ ! -d "$SKIA_ROOT/.git" ]]; then
 fi
 git -C "$SKIA_ROOT" fetch --tags origin
 git -C "$SKIA_ROOT" checkout --detach "$SKIA_REVISION"
+# This revision emits both arm64 and arm64e for target_cpu=arm64. Build a
+# single, predictable slice; arm64e is not an iOS simulator architecture.
+ARM64_PATCH="$PROJECT_ROOT/scripts/skia-apple-arm64.patch"
+if ! git -C "$SKIA_ROOT" apply --reverse --check "$ARM64_PATCH" 2>/dev/null; then
+  git -C "$SKIA_ROOT" apply --check "$ARM64_PATCH"
+  git -C "$SKIA_ROOT" apply "$ARM64_PATCH"
+fi
 python3 "$SKIA_ROOT/tools/git-sync-deps"
 
 build_slice() {
@@ -53,7 +60,7 @@ build_slice() {
   # executar o GN dentro do checkout do Skia.
   (
   cd "$SKIA_ROOT"
-  bin/gn gen "out/$name" --args="
+  bin/gn gen "out/$name" --fail-on-unused-args --args="
     is_official_build=true
     is_debug=false
     target_os=\"$target_os\"
@@ -70,10 +77,13 @@ build_slice() {
     skia_use_icu=false
     skia_use_libjpeg_turbo_decode=false
     skia_use_libjpeg_turbo_encode=false
-    skia_use_libpng=false
+    skia_use_libpng_decode=false
+    skia_use_libpng_encode=false
+    skia_use_wuffs=false
+    skia_use_partition_alloc=false
     skia_use_libwebp_decode=false
     skia_use_libwebp_encode=false
-    skia_use_system_zlib=false
+    skia_use_zlib=false
     $extra_args
   "
   )
@@ -83,8 +93,9 @@ build_slice() {
 build_slice ios-arm64 ios arm64 'ios_min_target="15.0"'
 build_slice ios-simulator-arm64 ios arm64 'ios_min_target="15.0" ios_use_simulator=true'
 build_slice ios-simulator-x64 ios x64 'ios_min_target="15.0" ios_use_simulator=true'
-build_slice macos-arm64 mac arm64 'mac_deployment_target="12.0"'
-build_slice macos-x64 mac x64 'mac_deployment_target="12.0"'
+MACOS_ARGS='extra_cflags=["-mmacosx-version-min=12.0"] extra_asmflags=["-mmacosx-version-min=12.0"] extra_ldflags=["-mmacosx-version-min=12.0"]'
+build_slice macos-arm64 mac arm64 "$MACOS_ARGS"
+build_slice macos-x64 mac x64 "$MACOS_ARGS"
 
 STAGE_ROOT="$WORK_ROOT/stage"
 rm -rf "$STAGE_ROOT" "$XCFRAMEWORK_PATH"
@@ -113,7 +124,7 @@ SKIA_LIBRARY[sdk=iphoneos*] = $(SRCROOT)/Vendor/Skia.xcframework/ios-arm64/libsk
 SKIA_LIBRARY[sdk=iphonesimulator*] = $(SRCROOT)/Vendor/Skia.xcframework/ios-arm64_x86_64-simulator/libskia-ios-simulator.a
 SKIA_LIBRARY[sdk=macosx*] = $(SRCROOT)/Vendor/Skia.xcframework/macos-arm64_x86_64/libskia-macos.a
 HEADER_SEARCH_PATHS = $(inherited) "$(SKIA_HEADERS)"
-OTHER_LDFLAGS = $(inherited) "$(SKIA_LIBRARY)"
+OTHER_LDFLAGS = $(inherited) "$(SKIA_LIBRARY)" -framework CoreText -framework CoreGraphics -framework CoreFoundation
 GCC_PREPROCESSOR_DEFINITIONS = $(inherited) BRONZE_KEYS_REQUIRE_SKIA=1
 EOF
 

@@ -5,6 +5,7 @@ struct BronzeNativeRootView: View {
     @StateObject private var model = BronzeNativeAppModel()
     private struct LibraryTarget: Identifiable { let id: Int }
     @State private var libraryTarget: LibraryTarget?
+    @State private var presetTarget: LibraryTarget?
 
     var body: some View {
         ZStack {
@@ -23,6 +24,9 @@ struct BronzeNativeRootView: View {
         .onDisappear { model.stopPerformanceNotes() }
         .sheet(item: $libraryTarget) { target in
             BronzeNativeSoundFontLibrary(model: model, moduleIndex: target.id)
+        }
+        .sheet(item: $presetTarget) { target in
+            BronzeNativePresetEditor(model: model, index: target.id)
         }
         .alert("Controle do módulo", isPresented: Binding(
             get: { model.controlError != nil },
@@ -75,8 +79,13 @@ struct BronzeNativeRootView: View {
                 }
                 modules
                     .frame(height: max(170, geometry.size.height * 0.36))
+                    .disabled(model.isApplyingSnapshot)
                 pageSelector
                 pageContent
+                    .disabled(model.isApplyingSnapshot)
+                if model.isApplyingSnapshot {
+                    ProgressView("Carregando configuração…").font(.caption)
+                }
                 BronzePerformanceKeyboard { note, pressed, velocity in
                     model.setKeyboardNote(note, pressed: pressed, velocity: velocity)
                 }
@@ -95,10 +104,12 @@ struct BronzeNativeRootView: View {
                     .foregroundStyle(Color.bronzeLight)
                 Spacer()
                 Button("−") { model.setTempo(model.tempo - 0.5) }
+                    .disabled(model.isApplyingSnapshot)
                 Text(String(format: "%.1f BPM", model.tempo))
                     .font(.caption.monospacedDigit().bold())
                     .frame(width: 86)
                 Button("+") { model.setTempo(model.tempo + 0.5) }
+                    .disabled(model.isApplyingSnapshot)
                 Divider().frame(height: 24)
                 Button(model.metronomeEnabled ? "CLICK ON" : "CLICK OFF") {
                     model.toggleMetronome()
@@ -210,7 +221,9 @@ struct BronzeNativeRootView: View {
 
     private var moduleEditor: some View {
         HStack(spacing: 8) {
-            ForEach(BronzeNativeAppModel.EnvelopeParameter.allCases) { parameter in
+            ForEach(BronzeNativeAppModel.EnvelopeParameter.allCases.filter {
+                model.selectedModule != 7 || $0 != .sustain
+            }) { parameter in
                 BronzePanel {
                     VStack(spacing: 4) {
                         Text(parameter.rawValue).font(.caption.monospaced().bold())
@@ -329,12 +342,40 @@ struct BronzeNativeRootView: View {
     }
 
     private var presetGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 8), spacing: 5) {
-            ForEach(1...16, id: \.self) { index in
-                Button(String(format: "%02d\nEmpty", index)) {}
-                    .buttonStyle(BronzeButtonStyle(active: index == 1))
+        VStack(spacing: 7) {
+            HStack(spacing: 8) {
+                ForEach(0..<6, id: \.self) { bank in
+                    Button(["A", "B", "C", "D", "E", "F"][bank]) { model.selectPresetBank(bank) }
+                        .buttonStyle(BronzeButtonStyle(active: model.presetBank == bank))
+                        .overlay { if model.presetBank == bank { BronzePresetHighlight() } }
+                }
             }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 8), spacing: 5) {
+                ForEach((model.presetBank * 16)..<(model.presetBank * 16 + 16), id: \.self) { index in
+                    Button {
+                        if model.presets[index].modules == nil { presetTarget = LibraryTarget(id: index) }
+                        else { model.recallPreset(index) }
+                    } label: {
+                        VStack(spacing: 2) {
+                            Text(String(format: "%02d", index % 16 + 1)).font(.caption2)
+                            Text(model.presets[index].name).font(.caption.bold()).lineLimit(1)
+                        }
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                        .background(BronzePresetPalette.colors[model.presets[index].color])
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay { if model.activePreset == index { BronzePresetHighlight() } }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("Salvar / Renomear / Cor") { presetTarget = LibraryTarget(id: index) }
+                    }
+                }
+            }
+            Text("Toque para carregar. Segure para salvar, renomear ou mudar a cor.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
+        .disabled(model.loadingSoundFontModule != nil)
     }
 
     private var loopLibrary: some View {
@@ -369,6 +410,88 @@ struct BronzeNativeRootView: View {
         let names = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"]
         let relatives = ["Am", "B♭m", "Bm", "Cm", "C♯m", "Dm", "E♭m", "Em", "Fm", "F♯m", "Gm", "A♭m"]
         return relative ? relatives[index] : names[index]
+    }
+}
+
+enum BronzePresetPalette {
+    static let colors: [Color] = [.init(red: 0.25, green: 0.95, blue: 0.42), .cyan,
+        .init(red: 1, green: 0.58, blue: 0.20), .yellow,
+        .init(red: 0.90, green: 0.50, blue: 1), .init(red: 1, green: 0.45, blue: 0.65),
+        .init(red: 0.35, green: 0.72, blue: 1), .init(red: 0.2, green: 0.95, blue: 0.78)]
+}
+
+struct BronzePresetHighlight: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: reduceMotion)) { context in
+            let phase = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red],
+                    center: .center, angle: .degrees(phase * 360)), lineWidth: 3)
+                .opacity(reduceMotion ? 1 : 0.72 + 0.28 * cos(phase * .pi * 2))
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+struct BronzeNativePresetEditor: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    let index: Int
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var color: Int
+    @State private var confirmOverwrite = false
+
+    init(model: BronzeNativeAppModel, index: Int) {
+        self.model = model
+        self.index = index
+        _name = State(initialValue: model.presets[index].modules == nil ? "" : model.presets[index].name)
+        _color = State(initialValue: model.presets[index].color)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                TextField("Nome do preset", text: $name)
+                HStack {
+                    ForEach(0..<8, id: \.self) { value in
+                        Button { color = value } label: {
+                            Circle().fill(BronzePresetPalette.colors[value]).frame(width: 30, height: 30)
+                                .overlay(Circle().stroke(color == value ? Color.white : .clear, lineWidth: 3))
+                        }.buttonStyle(.plain).accessibilityLabel("Cor \(value + 1)")
+                    }
+                }
+                if model.presets[index].modules != nil {
+                    Button("Alterar apenas nome e cor") {
+                        model.renamePreset(index, name: name, color: color)
+                        dismiss()
+                    }
+                }
+                Button("Salvar configuração atual nesta posição") {
+                    if model.presets[index].modules != nil { confirmOverwrite = true }
+                    else { save() }
+                }
+                Text("Salva os timbres, ON/OFF, volumes e envelopes disponíveis na tela nativa. Drawbars e rotary do Bronze B3 continuam globais.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !model.persistenceAvailable {
+                    Text("Salvamento suspenso por uma falha na sessão. Seus dados anteriores foram preservados.")
+                        .foregroundStyle(.orange)
+                }
+            }
+            .disabled(!model.persistenceAvailable || model.isApplyingSnapshot || model.loadingSoundFontModule != nil)
+            .navigationTitle("\(["A", "B", "C", "D", "E", "F"][index / 16]) · Preset \(index % 16 + 1)")
+            .toolbar { Button("Fechar") { dismiss() } }
+            .alert("Substituir este preset?", isPresented: $confirmOverwrite) {
+                Button("Cancelar", role: .cancel) {}
+                Button("Substituir", role: .destructive) { save() }
+            } message: { Text("A configuração salva nesta posição será substituída pela configuração atual.") }
+        }.navigationViewStyle(.stack)
+    }
+
+    private func save() {
+        model.savePreset(index, name: name, color: color)
+        dismiss()
     }
 }
 

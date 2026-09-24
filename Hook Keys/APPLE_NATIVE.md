@@ -35,6 +35,14 @@ depot_tools. O cache de CI inclui a revisão e o script de compilação. O teste
 verificar os cinco destinos, diretórios com espaços e empacotamento. Ele não
 substitui a compilação real no macOS.
 
+A receita desativa explicitamente `skia_use_libpng_decode` e
+`skia_use_libpng_encode` (não existe `skia_use_libpng` nesta revisão). Knobs e
+faders são desenhados, sem codecs externos. `--fail-on-unused-args` rejeita
+argumentos obsoletos. O patch versionado `skia-apple-arm64.patch` limita as
+slices iOS a arm64: o upstream adicionava também arm64e, incompatível com o
+simulador e com os caminhos previstos do XCFramework. O deployment macOS usa
+as flags do compilador em `extra_cflags/extra_asmflags/extra_ldflags`.
+
 ## Estado da migração
 
 A interface nativa ainda não tem paridade funcional com o app anterior.
@@ -48,16 +56,27 @@ Implementado nesta etapa:
   Solo restaura os ON/OFF anteriores.
 - Biblioteca local User nos módulos 1–6: importação pelo seletor de documentos,
   cópia privada de SF2, nome automático do arquivo e seleção sem JavaScript.
-  Os arquivos permanecem no dispositivo; as atribuições aos módulos ainda não
-  são restauradas ao reabrir.
+  Arquivos e atribuições aos módulos permanecem no dispositivo.
 - Seleção e transporte dos três Beats fixos, loop contínuo, velocidade relativa
   a 120 BPM e progresso. Cada Play parte do início. O click roda silencioso
   enquanto o loop toca; ON/OFF muda o volume sem reiniciar a fase. O início
   do loop solicita o reset do click no callback de áudio.
 - Dois bancos de pads contínuos, filtros Low/High em knobs Skia e notas
   relativas menores. Os FX Church não redisparam ao mover o dedo durante um toque.
+- Bancos A–F com 16 posições, salvar/renomear/cor e seleção com borda RGB
+  pulsante (respeita Reduzir Movimento). Segurar abre o menu de edição; substituir
+  um preset existente exige confirmação. Os snapshots guardam SF2, ON/OFF,
+  faders e envelopes disponíveis na UI, não efeitos ainda não migrados.
+- Sessão local em Application Support/BronzeKeys/native-session.json, escrita
+  atômica fora da thread principal, com debounce. Guarda também Solo, BPM,
+  compasso/click, filtros/banco dos pads e seleção do loop. Ao reabrir não toca
+  automaticamente notas, loops ou click. SF2 usa UUID/nome relativo ao sandbox.
+- Drawbars, Slow/Fast e Gabinet são globais, fora dos presets. Os dados são
+  validados antes de restaurar; falha suspende autosave para não sobrescrever o
+  arquivo anterior. Uma troca que falha cancela a camada preparada no C++, sem
+  cortar o preset atual. Sustain continua sendo propagado pelo runtime.
 
-Ainda pendentes: presets completos e persistência de sessão, catálogo/conta,
+Ainda pendentes: paridade dos presets com todos os efeitos, catálogo/conta,
 edição completa de efeitos e synth, playlists do usuário, MIDI Learn na UI,
 backup e host nativo macOS. A preparação do Skia macOS não cria, por si só, um
 app macOS nativo. Model e controles também precisam de adaptação de plataforma.
@@ -65,3 +84,5 @@ app macOS nativo. Model e controles também precisam de adaptação de plataform
 Validação local: testes do motor C++ compilados em Windows/MSVC, testes Node
 e receita Skia simulada. Compilação Swift/Objective-C++, desenho Skia real,
 gestos e sincronismo audível precisam ser verificados em Xcode/IPA e iPad.
+`test-native-session.mjs` compila e executa testes Foundation com `swiftc` no
+CI Apple; em máquinas sem Swift registra explicitamente o teste não executado.

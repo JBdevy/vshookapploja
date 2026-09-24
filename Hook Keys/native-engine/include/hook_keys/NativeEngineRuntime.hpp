@@ -35,8 +35,9 @@ public:
   void collectRetiredSoundFonts() noexcept;
   // Control thread: create an independent preset layer, sharing sample data
   // only. The audio callback keeps the previous voices/effects until silent.
-  [[nodiscard]] bool beginPresetTransition() noexcept;
+  [[nodiscard]] bool beginPresetTransition(bool preserveConfig = false) noexcept;
   [[nodiscard]] bool commitPresetTransition() noexcept;
+  void cancelPresetTransition() noexcept;
   // O cache de SF2 retem bancos de amostras inteiros: um SoundFont de 480 MB
   // ocupa 458 MB. Sem teto, alternar timbres empurrava o banco em uso para o
   // disco e o callback passava a travar em I/O. O host informa o orcamento a
@@ -171,6 +172,7 @@ private:
     std::unique_ptr<AnalogSynthModule> synth;
     std::unique_ptr<HookKeysEngine> engine;
     std::array<ModuleConfig, kModuleCount> configs{};
+    AnalogSynthConfig synthConfig{};
     std::size_t silentFrames = 0;
   };
   struct RuntimeCommand final {
@@ -187,6 +189,8 @@ private:
   std::vector<std::unique_ptr<PresetLayer>> layers_;
   PresetLayer* controlLayer_ = nullptr; // guarded by control mutexes
   PresetLayer* pendingTransitionLayer_ = nullptr;
+  PresetLayer* previousControlLayer_ = nullptr;
+  std::array<std::string, kModuleCount - 1> previousSoundFontPaths_{};
   PresetLayer* renderLayer_ = nullptr; // audio thread only
   std::array<PresetLayer*, kMaximumPresetLayers - 1> tailLayers_{};
   std::size_t tailLayerCount_ = 0;

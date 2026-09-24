@@ -269,7 +269,7 @@ jobs:
           path: |
             Hook Keys/ios/App/Vendor/Skia.xcframework
             Hook Keys/ios/Skia.generated.xcconfig
-          key: skia-apple-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Hook Keys/scripts/skia-apple.revision', 'Hook Keys/scripts/build-skia-apple.sh') }}
+          key: skia-apple-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Hook Keys/scripts/skia-apple.revision', 'Hook Keys/scripts/build-skia-apple.sh', 'Hook Keys/scripts/skia-apple-arm64.patch') }}
 
       - name: Compilar Skia para iPadOS, simulador e macOS
         if: steps.skia-cache.outputs.cache-hit != 'true'

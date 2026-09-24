@@ -1216,6 +1216,47 @@ void testIndependentPresetTails() {
   }
 }
 
+void testCancelledNativePresetLeavesCurrentAudioUntouched() {
+  hook_keys::NativeEngineRuntime actual(48000, 128), reference(48000, 128);
+  hook_keys::ModuleConfig config;
+  config.gainLinear = 0.15f;
+  hook_keys::AnalogSynthConfig synth;
+  synth.oscillator1 = 0;
+  synth.oscillator2Enabled = synth.oscillator3Enabled = false;
+  synth.voiceMode = 0;
+  for (auto* runtime : {&actual, &reference}) {
+    expect(runtime->setModuleConfig(7, config), "enable test synth");
+    expect(runtime->setSynthConfig(synth), "configure test synth");
+    expect(runtime->sendMidi(0, 0xb0, 64, 127), "hold pedal before native preset");
+    expect(runtime->sendMidi(0, 0x90, 60, 100), "hold note before native preset");
+  }
+  std::array<float, 256> a{}, b{};
+  const auto compare = [&] {
+    actual.renderInterleaved(a.data(), 128, 2);
+    reference.renderInterleaved(b.data(), 128, 2);
+    for (std::size_t i = 0; i < a.size(); ++i)
+      expect(std::abs(a[i] - b[i]) < 0.000001f, "cancel leaves sounding voices and controls unchanged");
+  };
+  compare();
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    expect(actual.beginPresetTransition(true), "cancelled layers do not consume the preset limit");
+    expect(actual.setModuleEnabledMask(0), "stage disabled modules");
+    expect(actual.setModuleEnvelope(7, 1000, 0, 1000, 1000), "stage native synth envelope");
+    expect(!actual.loadSoundFont(0, "missing-native-preset.sf2"), "invalid SF2 rejects staged preset");
+    compare();
+    actual.cancelPresetTransition();
+    compare();
+  }
+  for (auto* runtime : {&actual, &reference}) {
+    expect(runtime->setModuleGainDb(7, -20), "controls return to the live layer after cancel");
+    expect(runtime->sendMidi(0, 0x80, 60, 0), "release held key");
+    expect(runtime->sendMidi(0, 0xb0, 64, 0), "release original sustain");
+  }
+  for (int i = 0; i < 20; ++i) compare();
+  actual.cancelPresetTransition(); // no pending layer is a safe no-op
+  compare();
+}
+
 // Collects the frame index of every metronome attack, rendering the runtime in
 // blocks of `blockFrames` so the caller can compare different callback sizes.
 // A click is an oscillator, so its samples cross zero constantly: a new onset
@@ -3831,6 +3872,7 @@ int main() {
   testDryOrganPreservesItsSoundFontVoice();
   testOrganEnvelopeAndPermanentNoSens();
   testIndependentPresetTails();
+  testCancelledNativePresetLeavesCurrentAudioUntouched();
   testCompatibilityBlocksCc7();
   testSharedSoundFontEnvelopeIsolation();
   testIndependentOscillatorVolumes();

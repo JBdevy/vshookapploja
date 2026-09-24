@@ -12,6 +12,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 @interface HookKeysNativeEngine : NSObject
 - (BOOL)beginPresetTransition;
 - (BOOL)commitPresetTransition;
+- (BOOL)beginNativePresetTransition;
+- (void)cancelPresetTransition;
 - (BOOL)configureTranceGate:(NSInteger)moduleIndex enabled:(BOOL)enabled steps:(NSInteger)steps length:(NSInteger)length beatMultiplier:(float)beatMultiplier measureBeats:(float)measureBeats gate:(float)gate depth:(float)depth attackMs:(float)attackMs releaseMs:(float)releaseMs swing:(float)swing;
 
 @property(nonatomic, copy, nullable) HKMidiNoteHandler onMidiNote;

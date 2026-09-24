@@ -13,13 +13,7 @@ final class BronzeNativeAppModel: ObservableObject {
         var id: String { rawValue }
     }
 
-    struct ModuleEnvelope {
-        var attackMs = 0.0
-        var releaseMs = 300.0
-        var holdMs = 15_000.0
-        var decayMs = 25_000.0
-        var sustainDb = 0.0
-    }
+    typealias ModuleEnvelope = BronzeEnvelope
 
     enum EngineState: Equatable {
         case idle
@@ -52,7 +46,7 @@ final class BronzeNativeAppModel: ObservableObject {
         BundledLoop(id: 2, name: "Beat 4/4 - 2", fileName: "Beat 4-4 2", numerator: 4, denominator: 4),
         BundledLoop(id: 3, name: "Beat 6/8", fileName: "Beat 6-8", numerator: 6, denominator: 8)
     ]
-    @Published private(set) var selectedLoop: BundledLoop?
+    @Published private(set) var selectedLoop: BundledLoop? { didSet { scheduleSessionSave() } }
     @Published private(set) var loadingLoop = false
     @Published private(set) var loopPlaying = false
     @Published private(set) var loopPosition = 0.0
@@ -63,34 +57,41 @@ final class BronzeNativeAppModel: ObservableObject {
     let engine = HookKeysNativeEngine()
     @Published private(set) var engineState: EngineState = .idle
     @Published private(set) var midiDevices: [MidiDevice] = []
-    @Published var selectedModule = 0
+    @Published var selectedModule = 0 { didSet { scheduleSessionSave() } }
     @Published var page: Page = .modules
-    @Published var tempo = 120.0
+    @Published var tempo = 120.0 { didSet { scheduleSessionSave() } }
     @Published private(set) var metronomeEnabled = false
-    @Published private(set) var metronomeClickSound = 1
-    @Published private(set) var timeSignatureNumerator = 4
-    @Published private(set) var timeSignatureDenominator = 4
+    @Published private(set) var metronomeClickSound = 1 { didSet { scheduleSessionSave() } }
+    @Published private(set) var timeSignatureNumerator = 4 { didSet { scheduleSessionSave() } }
+    @Published private(set) var timeSignatureDenominator = 4 { didSet { scheduleSessionSave() } }
     @Published var moduleLevels = Array(repeating: 0.0, count: 8)
-    @Published var moduleFaders = Array(repeating: 1.0, count: 8)
-    @Published private(set) var moduleEnabled = [false, false, false, false, false, false, true, false]
-    @Published private(set) var soloModule: Int?
+    @Published var moduleFaders = Array(repeating: 1.0, count: 8) { didSet { scheduleSessionSave() } }
+    @Published private(set) var moduleEnabled = [false, false, false, false, false, false, true, false] { didSet { scheduleSessionSave() } }
+    @Published private(set) var soloModule: Int? { didSet { scheduleSessionSave() } }
     @Published var controlError: String?
     @Published private(set) var userSoundFonts: [UserSoundFont] = []
     @Published private(set) var loadingSoundFontModule: Int?
-    @Published private(set) var moduleSoundFonts: [UserSoundFont?] = Array(repeating: nil, count: 6)
-    @Published private(set) var moduleEnvelopes = Array(repeating: ModuleEnvelope(), count: 8)
-    @Published private(set) var padFilterLow = 0.0
-    @Published private(set) var padFilterHigh = 1.0
-    @Published private(set) var selectedPadBank = 0
+    @Published private(set) var moduleSoundFonts: [UserSoundFont?] = Array(repeating: nil, count: 6) { didSet { scheduleSessionSave() } }
+    @Published private(set) var moduleEnvelopes = Array(repeating: ModuleEnvelope(), count: 8) { didSet { scheduleSessionSave() } }
+    @Published private(set) var padFilterLow = 0.0 { didSet { scheduleSessionSave() } }
+    @Published private(set) var padFilterHigh = 1.0 { didSet { scheduleSessionSave() } }
+    @Published private(set) var selectedPadBank = 0 { didSet { scheduleSessionSave() } }
     private var activePadBank = 0
     private var pressedEffects = Set<Int>()
     @Published var activePad: Int?
     @Published var activeEffect: Int?
-    @Published var organDrawbars = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    @Published private(set) var organRotaryFast = false
-    @Published private(set) var organCabinetEnabled = true
+    @Published var organDrawbars = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] { didSet { scheduleSessionSave() } }
+    @Published private(set) var organRotaryFast = false { didSet { scheduleSessionSave() } }
+    @Published private(set) var organCabinetEnabled = true { didSet { scheduleSessionSave() } }
     @Published private(set) var bundledEffectsReady = false
     private var heldKeyboardNotes = Set<Int>()
+    @Published private(set) var presets = BronzeNativeSession().presets
+    @Published private(set) var presetBank = 0
+    @Published private(set) var activePreset: Int?
+    @Published private(set) var isApplyingSnapshot = false
+    @Published private(set) var persistenceAvailable = false
+    private var pendingSessionSave: DispatchWorkItem?
+    private let persistenceQueue = DispatchQueue(label: "app.bronzekeys.native.session", qos: .utility)
 
     enum Page: String, CaseIterable, Identifiable {
         case modules = "Módulos"
@@ -144,6 +145,7 @@ final class BronzeNativeAppModel: ObservableObject {
                     self.startMeters()
                     self.loadBundledEffects()
                     self.refreshUserSoundFonts()
+                    self.restoreSession()
                 } else {
                     self.engineState = .failed(message.isEmpty
                         ? "Não foi possível iniciar o áudio nativo."
@@ -239,7 +241,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func importSoundFont(_ source: URL, moduleIndex: Int) {
-        guard (0..<6).contains(moduleIndex), loadingSoundFontModule == nil, engineState == .ready else { return }
+        guard (0..<6).contains(moduleIndex), loadingSoundFontModule == nil, !isApplyingSnapshot, engineState == .ready else { return }
         guard source.pathExtension.lowercased() == "sf2" else {
             controlError = "Selecione um arquivo .sf2."
             return
@@ -280,7 +282,7 @@ final class BronzeNativeAppModel: ObservableObject {
 
     func selectUserSoundFont(_ entry: UserSoundFont, moduleIndex: Int) {
         guard (0..<6).contains(moduleIndex), loadingSoundFontModule == nil,
-              engineState == .ready, userSoundFonts.contains(entry) else { return }
+              !isApplyingSnapshot, engineState == .ready, userSoundFonts.contains(entry) else { return }
         loadingSoundFontModule = moduleIndex
         let engine = self.engine
         audioQueue.async { [weak self] in
@@ -306,9 +308,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     nonisolated private static func soundFontDirectory() throws -> URL {
-        try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                    appropriateFor: nil, create: true)
-            .appendingPathComponent("BronzeKeys/UserSoundFonts", isDirectory: true)
+        try BronzeSessionStore.applicationStore().soundFontDirectory
     }
 
     nonisolated private static func readUserSoundFonts() throws -> [UserSoundFont] {
@@ -359,7 +359,7 @@ final class BronzeNativeAppModel: ObservableObject {
         moduleIndex: Int,
         normalized rawValue: Double
     ) {
-        guard moduleEnvelopes.indices.contains(moduleIndex) else { return }
+        guard moduleEnvelopes.indices.contains(moduleIndex), rawValue.isFinite else { return }
         let normalized = min(1, max(0, rawValue))
         var envelope = moduleEnvelopes[moduleIndex]
         switch parameter {
@@ -369,8 +369,7 @@ final class BronzeNativeAppModel: ObservableObject {
         case .decay: envelope.decayMs = normalized * 25_000
         case .sustain: envelope.sustainDb = -60 + normalized * 60
         }
-        moduleEnvelopes[moduleIndex] = envelope
-        _ = engine.configureModuleEnvelope(
+        guard engine.configureModuleEnvelope(
             moduleIndex,
             attackMs: Float(envelope.attackMs),
             holdMs: Float(envelope.holdMs),
@@ -378,7 +377,11 @@ final class BronzeNativeAppModel: ObservableObject {
             releaseMs: Float(envelope.releaseMs),
             glideMs: 0,
             sustainDb: Float(envelope.sustainDb)
-        )
+        ) else {
+            controlError = "Não foi possível ajustar o envelope."
+            return
+        }
+        moduleEnvelopes[moduleIndex] = envelope
     }
 
     func setTempo(_ value: Double) {
@@ -520,6 +523,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func silenceForBackground() {
+        saveSessionNow()
         stopPerformanceNotes()
         endEffectTouches()
         engine.stopAllNotes()
@@ -662,6 +666,228 @@ final class BronzeNativeAppModel: ObservableObject {
                 self?.bundledEffectsReady = loaded == 12
             }
         }
+    }
+
+    private func moduleSnapshot() -> [BronzeModuleSnapshot] {
+        (0..<8).map { index in
+            let url = index < 6 ? moduleSoundFonts[index]?.url : nil
+            let key = url.map { $0.deletingLastPathComponent().lastPathComponent + "/" + $0.lastPathComponent }
+            return BronzeModuleSnapshot(soundFontKey: key, enabled: moduleEnabled[index],
+                fader: moduleFaders[index], envelope: moduleEnvelopes[index])
+        }
+    }
+
+    private func sessionSnapshot() -> BronzeNativeSession {
+        var session = BronzeNativeSession()
+        session.modules = moduleSnapshot()
+        session.presets = presets
+        session.bank = presetBank
+        session.activePreset = activePreset
+        session.selectedModule = selectedModule
+        session.soloModule = soloModule
+        session.organDrawbars = organDrawbars.map { Int(($0 * 8).rounded()) }
+        session.organRotaryFast = organRotaryFast
+        session.organCabinetEnabled = organCabinetEnabled
+        session.tempo = tempo
+        session.clickSound = metronomeClickSound
+        session.numerator = timeSignatureNumerator
+        session.denominator = timeSignatureDenominator
+        session.padBank = selectedPadBank
+        session.padLow = padFilterLow
+        session.padHigh = padFilterHigh
+        session.loopID = selectedLoop?.id
+        return session
+    }
+
+    private func scheduleSessionSave() {
+        guard persistenceAvailable, !isApplyingSnapshot else { return }
+        pendingSessionSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.saveSessionNow() }
+        pendingSessionSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    private func saveSessionNow() {
+        pendingSessionSave?.cancel()
+        pendingSessionSave = nil
+        guard persistenceAvailable, !isApplyingSnapshot else { return }
+        let session = sessionSnapshot()
+        persistenceQueue.async { [weak self] in
+            do { try BronzeSessionStore.applicationStore().save(session) }
+            catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    self?.persistenceAvailable = false
+                    self?.controlError = "Falha ao salvar a sessão: \(message). O último arquivo salvo foi mantido."
+                }
+            }
+        }
+    }
+
+    private func restoreSession() {
+        isApplyingSnapshot = true
+        let engine = self.engine
+        audioQueue.async { [weak self] in
+            do {
+                let store = try BronzeSessionStore.applicationStore()
+                let session = try store.load()
+                var fonts: [UserSoundFont?] = Array(repeating: nil, count: 6)
+                if let session {
+                    fonts = try Self.applySnapshot(session.modules, previous: [],
+                        solo: session.soloModule, tempo: session.tempo, engine: engine, store: store)
+                }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if let session {
+                        self.adoptModules(session.modules, fonts: fonts, solo: session.soloModule)
+                        self.presets = session.presets
+                        self.presetBank = session.bank
+                        self.activePreset = session.activePreset
+                        self.selectedModule = session.selectedModule
+                        self.organDrawbars = session.organDrawbars.map { Double($0) / 8 }
+                        _ = engine.configureOrganDrawbars(session.organDrawbars.map { NSNumber(value: $0) })
+                        self.organRotaryFast = session.organRotaryFast
+                        self.organCabinetEnabled = session.organCabinetEnabled
+                        _ = engine.setOrganRotaryFast(session.organRotaryFast)
+                        _ = engine.setOrganCabinetEnabled(session.organCabinetEnabled)
+                        self.setTempo(session.tempo)
+                        self.selectMetronomeClick(session.clickSound)
+                        self.setTimeSignature(numerator: session.numerator, denominator: session.denominator)
+                        self.selectPadBank(session.padBank)
+                        self.setPadFilter(low: true, normalized: session.padLow)
+                        self.setPadFilter(low: false, normalized: session.padHigh)
+                    }
+                    self.isApplyingSnapshot = false
+                    self.persistenceAvailable = true
+                    // Restore selection, never autoplay a loop, pad, FX or click.
+                    if let id = session?.loopID, let loop = self.bundledLoops.first(where: { $0.id == id }) {
+                        self.selectLoop(loop)
+                    }
+                }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    self?.isApplyingSnapshot = false
+                    self?.persistenceAvailable = false
+                    self?.controlError = "Não foi possível restaurar a sessão: \(message) O salvamento automático está suspenso para preservar seus dados."
+                }
+            }
+        }
+    }
+
+    func selectPresetBank(_ bank: Int) {
+        guard (0..<6).contains(bank), !isApplyingSnapshot else { return }
+        presetBank = bank
+        scheduleSessionSave()
+    }
+
+    func savePreset(_ index: Int, name: String, color: Int) {
+        guard presets.indices.contains(index), !isApplyingSnapshot, loadingSoundFontModule == nil,
+              persistenceAvailable else { return }
+        let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        presets[index] = BronzePresetSlot(name: name.isEmpty ? "Preset \(index % 16 + 1)" : name,
+            color: min(7, max(0, color)), modules: moduleSnapshot())
+        activePreset = index
+        saveSessionNow()
+    }
+
+    func renamePreset(_ index: Int, name: String, color: Int) {
+        guard presets.indices.contains(index), presets[index].modules != nil,
+              persistenceAvailable, !isApplyingSnapshot else { return }
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        if !trimmed.isEmpty { presets[index].name = trimmed }
+        presets[index].color = min(7, max(0, color))
+        saveSessionNow()
+    }
+
+    func recallPreset(_ index: Int) {
+        guard presets.indices.contains(index), let modules = presets[index].modules,
+              !isApplyingSnapshot, loadingSoundFontModule == nil, engineState == .ready else { return }
+        isApplyingSnapshot = true
+        let previous = moduleSnapshot()
+        let engine = self.engine
+        let bpm = tempo
+        audioQueue.async { [weak self] in
+            do {
+                let fonts = try Self.applySnapshot(modules, previous: previous, solo: nil, tempo: bpm,
+                    engine: engine, store: BronzeSessionStore.applicationStore())
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.adoptModules(modules, fonts: fonts, solo: nil)
+                    self.activePreset = index
+                    self.isApplyingSnapshot = false
+                    self.saveSessionNow()
+                }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    self?.isApplyingSnapshot = false
+                    self?.controlError = "Não foi possível abrir o preset: \(message) O preset anterior continua ativo."
+                }
+            }
+        }
+    }
+
+    private func adoptModules(_ modules: [BronzeModuleSnapshot], fonts: [UserSoundFont?], solo: Int?) {
+        moduleSoundFonts = fonts
+        moduleEnabled = modules.map(\.enabled)
+        moduleFaders = modules.map(\.fader)
+        moduleEnvelopes = modules.map(\.envelope)
+        soloModule = solo
+        // The B3 generator is shared, so change its envelope only after commit.
+        let envelope = modules[6].envelope
+        _ = engine.configureModuleEnvelope(6, attackMs: Float(envelope.attackMs), holdMs: Float(envelope.holdMs),
+            decayMs: Float(envelope.decayMs), releaseMs: Float(envelope.releaseMs), glideMs: 0,
+            sustainDb: Float(envelope.sustainDb))
+    }
+
+    nonisolated private static func applySnapshot(_ modules: [BronzeModuleSnapshot],
+        previous: [BronzeModuleSnapshot], solo: Int?, tempo: Double,
+        engine: HookKeysNativeEngine, store: BronzeSessionStore) throws -> [UserSoundFont?] {
+        try BronzeNativeSession.validateModules(modules)
+        let fonts: [UserSoundFont?] = try modules.prefix(6).map { module in
+            guard let key = module.soundFontKey else { return nil }
+            let url = try store.soundFontURL(for: key)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw NSError(domain: "BronzePreset", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "SF2 ausente: \(url.lastPathComponent)."
+                ])
+            }
+            return UserSoundFont(url: url)
+        }
+        guard engine.beginNativePresetTransition() else {
+            throw NSError(domain: "BronzePreset", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Aguarde as notas anteriores terminarem e tente novamente."
+            ])
+        }
+        var committed = false
+        defer { if !committed { engine.cancelPresetTransition() } }
+        for index in 0..<8 {
+            if index < 6 {
+                if let font = fonts[index] {
+                    if previous.count != 8 || previous[index].soundFontKey != modules[index].soundFontKey {
+                        guard engine.loadSoundFont(atPath: font.url.path, moduleIndex: index) else { throw BronzeSessionError.invalid }
+                    }
+                } else { engine.unloadSoundFont(fromModule: index) }
+            }
+            let module = modules[index]
+            let db = module.fader <= 0 ? Float(-90) : Float(-36 + module.fader * 36)
+            guard engine.setModuleGainDb(db, moduleIndex: index) else { throw BronzeSessionError.invalid }
+            if index != 6 {
+                let e = module.envelope
+                guard engine.configureModuleEnvelope(index, attackMs: Float(e.attackMs), holdMs: Float(e.holdMs),
+                    decayMs: Float(e.decayMs), releaseMs: Float(e.releaseMs), glideMs: 0,
+                    sustainDb: Float(e.sustainDb)) else { throw BronzeSessionError.invalid }
+            }
+        }
+        let mask = modules.indices.reduce(0) { mask, index in
+            (solo.map { $0 == index } ?? modules[index].enabled) ? mask | (1 << index) : mask
+        }
+        guard engine.setModuleEnabledMask(mask), engine.setTempo(Float(tempo)), engine.commitPresetTransition() else {
+            throw BronzeSessionError.invalid
+        }
+        committed = true
+        return fonts
     }
 
     private static func formatMilliseconds(_ value: Double) -> String {
