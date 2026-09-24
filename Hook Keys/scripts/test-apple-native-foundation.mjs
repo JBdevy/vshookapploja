@@ -38,6 +38,20 @@ assert.match(delegate, /HookKeysBridgeViewController\(\)/,
   'a interface atual continua disponível durante a migração controlada');
 assert.match(engine, /MIDIInputPortCreate/);
 assert.match(engine, /AVAudioSourceNode/);
+const startupBoundary = engine.slice(engine.indexOf('- (BOOL)startWithBufferFrames:'),
+  engine.indexOf('- (void)recordStartupStage:(NSString *)stage {'));
+assert.match(startupBoundary, /@try[\s\S]*startAudioWithBufferFrames/,
+  'a abertura do grafo precisa capturar NSException, não apenas NSError');
+assert.match(startupBoundary, /@catch \(NSException \*exception\)/);
+assert.match(startupBoundary, /catch \(const std::exception& exception\)/);
+assert.doesNotMatch(startupBoundary, /\[self stop\]/,
+  'a recuperação não pode readquirir o mutex de controle que já está bloqueado');
+assert.match(startupBoundary, /_audioState\.reset\(\)/);
+assert.match(engine, /\[BronzeStartup\]/);
+assert.match(releaseWorkflow, /-resultBundlePath/);
+assert.match(releaseWorkflow, /name: Bronze-Keys-iOS-diagnostics/);
+assert.match(releaseWorkflow, /Bronze-Keys\.xcarchive\/dSYMs/,
+  'os símbolos da build precisam ser preservados para simbolicar o crash do iPad');
 assert.doesNotMatch(engine, /reservedPadNote/,
   'canal MIDI 10 precisa entrar no runtime C++, não parar no callback visual');
 assert.match(engineHeader, /loadEffectAtPath/);

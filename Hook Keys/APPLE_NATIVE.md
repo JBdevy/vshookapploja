@@ -45,6 +45,27 @@ as flags do compilador em `extra_cflags/extra_asmflags/extra_ldflags`.
 
 ## Estado da migração
 
+### Diagnóstico de abertura no iPad
+
+O deployment target continua em iOS 15, incluindo iPadOS 16. Instalar a IPA
+não comprova que a inicialização funciona nesse sistema. O relato de falha
+no iPad de 5ª geração ainda exige o `.ips` do dispositivo para determinar
+a causa; não foi reproduzido localmente em Windows.
+
+A entrada `startWithBufferFrames` agora trata exceções Objective-C do grafo
+Core Audio e exceções C++ recuperáveis, além dos NSError já tratados. A UI
+pode apresentar a etapa/motivo e tentar novamente. Isso não captura aborts,
+acessos inválidos, falhas anteriores ao início do áudio nem encerramentos
+por memória (Jetsam). Não é uma confirmação de correção do crash relatado.
+O console registra as etapas com `[BronzeStartup]`, incluindo SF2 e grafo.
+
+O Actions guarda `Bronze-Keys-iOS-diagnostics` por 30 dias com o resultado
+Xcode, Info.plist e dSYMs, separado do IPA distribuído. Para investigar,
+usar o `.ips` e os dSYMs **da mesma build**; um simulador recente não
+substitui o teste no iPadOS 16. No dispositivo, procurar o registro do app
+ou JetsamEvent em Ajustes > Privacidade e Segurança > Análise e Melhorias
+> Dados de Análise.
+
 A interface nativa ainda não tem paridade funcional com o app anterior.
 O modo nativo está ligado para permitir testes da IPA; não remover ainda o
 fallback Capacitor nem os recursos usados para empacotar SF2, FX e loops.

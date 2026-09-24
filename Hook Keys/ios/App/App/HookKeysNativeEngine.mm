@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -242,7 +243,10 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
   std::atomic<bool> _compatibilityMode;
   NSInteger _requestedOutputChannels;
   NSString *_lastAudioErrorMessage;
+  NSString *_startupStage;
 }
+- (BOOL)startAudioWithBufferFrames:(NSInteger)bufferFrames sampleRate:(double)requestedSampleRate;
+- (void)recordStartupStage:(NSString *)stage;
 - (void)setAudioErrorStage:(NSString *)stage error:(nullable NSError *)error;
 - (BOOL)connectSourceNodeForState:(std::shared_ptr<AudioState>)state
                     outputChannels:(AVAudioChannelCount)channels;
@@ -289,9 +293,45 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
 - (BOOL)startWithBufferFrames:(NSInteger)bufferFrames sampleRate:(double)requestedSampleRate {
   std::scoped_lock lock(_controlMutex);
   _lastAudioErrorMessage = @"";
+  [self recordStartupStage:@"iniciar áudio nativo"];
+  // NSError does not cover NSException raised by AVAudioEngine graph setup.
+  // Keep this boundary off the realtime callback and let Swift show a retry.
+  try {
+    @try {
+      const BOOL started = [self startAudioWithBufferFrames:bufferFrames sampleRate:requestedSampleRate];
+      if (started) [self recordStartupStage:@"áudio iniciado"];
+      else NSLog(@"[BronzeStartup] %@", _lastAudioErrorMessage);
+      return started;
+    } @catch (NSException *exception) {
+      _lastAudioErrorMessage = [NSString stringWithFormat:@"%@: %@ — %@",
+          _startupStage, exception.name, exception.reason ?: @"falha do Core Audio"];
+    }
+  } catch (const std::exception& exception) {
+    _lastAudioErrorMessage = [NSString stringWithFormat:@"%@: falha do motor nativo (%s)",
+        _startupStage, exception.what()];
+  }
+  NSLog(@"[BronzeStartup] %@", _lastAudioErrorMessage);
+  // Do not call stop here: this scope already owns _controlMutex.
+  if (_audioState) _audioState->activeRuntime.store(nullptr, std::memory_order_release);
+  @try { [_audioEngine stop]; }
+  @catch (NSException *exception) { NSLog(@"[BronzeStartup] Encerrar áudio: %@", exception.name); }
+  _sourceNode = nil;
+  _audioEngine = nil;
+  _audioState.reset();
+  return NO;
+}
+
+- (void)recordStartupStage:(NSString *)stage {
+  _startupStage = stage;
+  NSLog(@"[BronzeStartup] %@", stage);
+}
+
+// Called exclusively by startWithBufferFrames, while holding _controlMutex.
+- (BOOL)startAudioWithBufferFrames:(NSInteger)bufferFrames sampleRate:(double)requestedSampleRate {
   requestedSampleRate = std::abs(requestedSampleRate - 44100.0) < 1.0 ? 44100.0 : 48000.0;
   if (_audioEngine != nil && _audioState && _audioState->runtime) {
     if (_audioEngine.isRunning) return YES;
+    [self recordStartupStage:@"reativar sessão de áudio"];
     NSError *restartError = nil;
     AVAudioSession *session = AVAudioSession.sharedInstance;
     // O primeiro HTMLMediaElement da WebView pode alterar a sessão compartilhada
@@ -334,6 +374,7 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
     return NO;
   }
 
+  [self recordStartupStage:@"configurar sessão de áudio"];
   AVAudioSession *session = AVAudioSession.sharedInstance;
   NSError *sessionError = nil;
   if (![session setCategory:AVAudioSessionCategoryPlayback
@@ -358,6 +399,7 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
 
   // A taxa da sessão é uma preferência negociada. O callback precisa usar o
   // mesmo relógio do DSP, não um formato implícito escolhido pelo mainMixer.
+  [self recordStartupStage:@"consultar formato da saída"];
   _audioEngine = [[AVAudioEngine alloc] init];
   AVAudioFormat *outputFormat = [_audioEngine.outputNode inputFormatForBus:0];
   const double sampleRate = outputFormat.sampleRate > 0
@@ -366,9 +408,11 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
 
   auto state = std::make_shared<AudioState>();
   state->sampleRate = sampleRate;
+  [self recordStartupStage:@"preparar motor C++"];
   state->runtime = std::make_unique<hook_keys::NativeEngineRuntime>(sampleRate, kRenderChunkFrames);
   state->runtime->setMidiInputEnabled(false);
   for (NSInteger index = 0; index < 9; ++index) {
+    [self recordStartupStage:[NSString stringWithFormat:@"carregar Bronze B3 %ld/9", static_cast<long>(index + 1)]];
     NSString *name = [NSString stringWithFormat:@"drawbar-%ld", static_cast<long>(index)];
     NSString *path = [NSBundle.mainBundle pathForResource:name ofType:@"sf2" inDirectory:@"hook-b3"];
     if (path.length == 0 || !state->runtime->loadOrganVoice(
@@ -381,6 +425,7 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
     }
   }
   for (NSInteger index = 0; index < 2; ++index) {
+    [self recordStartupStage:[NSString stringWithFormat:@"carregar Pad %ld/2", static_cast<long>(index + 1)]];
     NSString *resourceName = [NSString stringWithFormat:@"pads-%ld", static_cast<long>(index + 1)];
     NSString *padPath = [NSBundle.mainBundle pathForResource:resourceName ofType:@"sf2" inDirectory:@"pads"];
     if (padPath.length == 0 || !state->runtime->loadPadBank(static_cast<std::size_t>(index), padPath.UTF8String)) {
@@ -395,6 +440,7 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
 
   // O formato vem da rota real (inclusive mono/Bluetooth), sem fixar estéreo
   // ou 48 kHz.
+  [self recordStartupStage:@"conectar saída de áudio"];
   if (![self connectSourceNodeForState:state outputChannels:channelCount]) {
     state->activeRuntime.store(nullptr, std::memory_order_release);
     _sourceNode = nil;
@@ -402,7 +448,9 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
     [self setAudioErrorStage:@"preparar formato da saída" error:nil];
     return NO;
   }
+  [self recordStartupStage:@"preparar grafo Core Audio"];
   [_audioEngine prepare];
+  [self recordStartupStage:@"iniciar grafo Core Audio"];
   if (![_audioEngine startAndReturnError:&sessionError]) {
     state->activeRuntime.store(nullptr, std::memory_order_release);
     state->runtime.reset();
