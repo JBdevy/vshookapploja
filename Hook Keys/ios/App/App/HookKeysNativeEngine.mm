@@ -672,6 +672,16 @@ static NSString *describeFormat(AVAudioFormat *format) {
       runtime->setModuleEnvelope(6, 0.0f, 15000.0f, 25000.0f, 300.0f, 0.0f, 0.0f);
 }
 
+- (BOOL)setOrganRotaryFast:(BOOL)fast {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && runtime->setOrganRotaryFast(fast != NO);
+}
+
+- (BOOL)setOrganCabinetEnabled:(BOOL)enabled {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && runtime->setOrganCabinetEnabled(enabled != NO);
+}
+
 - (BOOL)cloneSoundFontFromModule:(NSInteger)sourceModuleIndex
                         toModule:(NSInteger)targetModuleIndex {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;

@@ -38,6 +38,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 - (BOOL)loadSoundFontAtPath:(NSString *)path moduleIndex:(NSInteger)moduleIndex;
 - (BOOL)configureOrganDrawbars:(NSArray<NSNumber *> *)drawbars;
 - (BOOL)applyOrganFactoryDefaults;
+- (BOOL)setOrganRotaryFast:(BOOL)fast;
+- (BOOL)setOrganCabinetEnabled:(BOOL)enabled;
 - (BOOL)cloneSoundFontFromModule:(NSInteger)sourceModuleIndex
                         toModule:(NSInteger)targetModuleIndex;
 - (void)unloadSoundFontFromModule:(NSInteger)moduleIndex;

@@ -17,6 +17,7 @@ struct BronzeNativeRootView: View {
         }
         .preferredColorScheme(.dark)
         .onAppear { model.start() }
+        .onDisappear { model.stopPerformanceNotes() }
     }
 
     private var startupView: some View {
@@ -50,6 +51,10 @@ struct BronzeNativeRootView: View {
                     .frame(height: max(170, geometry.size.height * 0.36))
                 pageSelector
                 pageContent
+                BronzePerformanceKeyboard { note, pressed, velocity in
+                    model.setKeyboardNote(note, pressed: pressed, velocity: velocity)
+                }
+                .frame(height: max(92, geometry.size.height * 0.20))
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
@@ -68,6 +73,27 @@ struct BronzeNativeRootView: View {
                     .font(.caption.monospacedDigit().bold())
                     .frame(width: 86)
                 Button("+") { model.setTempo(model.tempo + 0.5) }
+                Divider().frame(height: 24)
+                Button(model.metronomeEnabled ? "CLICK ON" : "CLICK OFF") {
+                    model.toggleMetronome()
+                }
+                .buttonStyle(BronzeCompactButtonStyle(active: model.metronomeEnabled))
+                ForEach(1...5, id: \.self) { sound in
+                    Button("C\(sound)") { model.selectMetronomeClick(sound) }
+                        .buttonStyle(BronzeCompactButtonStyle(
+                            active: model.metronomeClickSound == sound
+                        ))
+                }
+                Button("4/4") { model.setTimeSignature(numerator: 4, denominator: 4) }
+                    .buttonStyle(BronzeCompactButtonStyle(
+                        active: model.timeSignatureNumerator == 4
+                            && model.timeSignatureDenominator == 4
+                    ))
+                Button("6/8") { model.setTimeSignature(numerator: 6, denominator: 8) }
+                    .buttonStyle(BronzeCompactButtonStyle(
+                        active: model.timeSignatureNumerator == 6
+                            && model.timeSignatureDenominator == 8
+                    ))
                 Divider().frame(height: 24)
                 Label("Core MIDI", systemImage: "pianokeys")
                     .font(.caption.bold())
@@ -138,15 +164,28 @@ struct BronzeNativeRootView: View {
 
     private var moduleEditor: some View {
         HStack(spacing: 8) {
-            ForEach(["Envelope", "EQ", "Vibes", "Reverb", "Delay"], id: \.self) { title in
+            ForEach(BronzeNativeAppModel.EnvelopeParameter.allCases) { parameter in
                 BronzePanel {
                     VStack(spacing: 4) {
-                        Text(title).font(.caption.monospaced().bold())
+                        Text(parameter.rawValue).font(.caption.monospaced().bold())
                         BronzeSkiaControl(
                             kind: .knob,
-                            value: .constant(title == "Envelope" ? 0.7 : 0.35),
-                            accessibilityLabel: title
+                            value: Binding(
+                                get: { model.envelopeValue(parameter, moduleIndex: model.selectedModule) },
+                                set: {
+                                    model.setEnvelopeValue(
+                                        parameter,
+                                        moduleIndex: model.selectedModule,
+                                        normalized: $0
+                                    )
+                                }
+                            ),
+                            accessibilityLabel: "\(parameter.rawValue) do módulo \(model.selectedModule + 1)"
                         )
+                        .frame(minHeight: 74)
+                        Text(model.envelopeValueText(parameter, moduleIndex: model.selectedModule))
+                            .font(.caption2.monospacedDigit().bold())
+                            .foregroundStyle(Color.bronzeLight)
                     }
                 }
             }
@@ -174,8 +213,14 @@ struct BronzeNativeRootView: View {
             BronzePanel {
                 VStack {
                     Text("LESLIE").font(.caption.monospaced().bold())
-                    Button("SLOW") {}.buttonStyle(BronzeButtonStyle(active: true))
-                    Button("GABINET") {}.buttonStyle(BronzeButtonStyle(active: true))
+                    Button(model.organRotaryFast ? "FAST" : "SLOW") {
+                        model.toggleOrganRotarySpeed()
+                    }
+                    .buttonStyle(BronzeButtonStyle(active: model.organRotaryFast))
+                    Button(model.organCabinetEnabled ? "GABINET ON" : "GABINET OFF") {
+                        model.toggleOrganCabinet()
+                    }
+                    .buttonStyle(BronzeButtonStyle(active: model.organCabinetEnabled))
                 }
             }
         }
@@ -237,5 +282,24 @@ struct BronzeButtonStyle: ButtonStyle {
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
+    }
+}
+
+struct BronzeCompactButtonStyle: ButtonStyle {
+    var active: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 9, weight: .black, design: .monospaced))
+            .foregroundStyle(active ? Color.black : Color.white)
+            .frame(minWidth: 28, minHeight: 25)
+            .padding(.horizontal, 4)
+            .background(active ? Color.bronzeLight : Color(red: 0.10, green: 0.085, blue: 0.12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(active ? Color.white : Color.bronze.opacity(0.75), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
     }
 }

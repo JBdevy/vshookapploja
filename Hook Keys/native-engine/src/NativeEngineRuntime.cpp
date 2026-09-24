@@ -522,6 +522,21 @@ bool NativeEngineRuntime::setModuleEffects(
   return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
 }
 
+bool NativeEngineRuntime::setOrganRotaryFast(bool fast) noexcept {
+  std::scoped_lock lock(configMutex_);
+  auto &config = controlLayer_->configs[6];
+  config.effects.rotary.enabled = true;
+  config.effects.rotary.speed = fast ? 2 : 1;
+  return controlLayer_->engine->setModuleConfig(6, config);
+}
+
+bool NativeEngineRuntime::setOrganCabinetEnabled(bool enabled) noexcept {
+  std::scoped_lock lock(configMutex_);
+  auto &config = controlLayer_->configs[6];
+  config.effects.rotary.cabinetEnabled = enabled;
+  return controlLayer_->engine->setModuleConfig(6, config);
+}
+
 bool NativeEngineRuntime::setModuleEnvelope(
     std::size_t moduleIndex, float attackMs, float holdMs,
     float decayMs, float releaseMs, float glideMs, float sustainDb) noexcept {

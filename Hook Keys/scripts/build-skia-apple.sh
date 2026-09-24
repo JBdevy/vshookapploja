@@ -42,7 +42,12 @@ build_slice() {
   local target_cpu="$3"
   local extra_args="$4"
   local output="$SKIA_ROOT/out/$name"
-  "$SKIA_ROOT/bin/gn" gen "$output" --args="
+  # O wrapper bin/gn procura o arquivo .gn a partir do diretório atual. No
+  # Actions o script roda na raiz do Bronze Keys, portanto é obrigatório
+  # executar o GN dentro do checkout do Skia.
+  (
+  cd "$SKIA_ROOT"
+  bin/gn gen "out/$name" --args="
     is_official_build=true
     is_debug=false
     target_os=\"$target_os\"
@@ -64,6 +69,7 @@ build_slice() {
     skia_use_system_zlib=false
     $extra_args
   "
+  )
   ninja -C "$output" skia
 }
 
