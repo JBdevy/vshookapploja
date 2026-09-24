@@ -145,6 +145,11 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
           milliseconds:(float)milliseconds beatMultiplier:(float)beatMultiplier
               feedback:(float)feedback mix:(float)mix
     NS_SWIFT_NAME(configureDelay(_:enabled:sync:milliseconds:beatMultiplier:feedback:mix:));
+- (BOOL)configureSoundEffects:(NSInteger)moduleIndex
+           compressorEnabled:(BOOL)compressorEnabled compressor:(NSArray<NSNumber *> *)compressor
+               chorusEnabled:(BOOL)chorusEnabled chorus:(NSArray<NSNumber *> *)chorus
+                vibesEnabled:(BOOL)vibesEnabled vibes:(NSArray<NSNumber *> *)vibes vinylEnabled:(BOOL)vinylEnabled
+    NS_SWIFT_NAME(configureSoundEffects(_:compressorEnabled:compressor:chorusEnabled:chorus:vibesEnabled:vibes:vinylEnabled:));
 // mode: 0 User, 1 LFO de pitch, 2 Tremolo.
 - (BOOL)configureModuleModulation:(NSInteger)moduleIndex
                               mode:(NSInteger)mode

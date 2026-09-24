@@ -1,9 +1,15 @@
 # Bronze Keys nativo para Apple
 
-O modo nativo está ativado por padrão por `BronzeNativeUIEnabled` no
-`Info.plist`. Como o root é criado no `AppDelegate`, ele não instancia
-`WKWebView`. O argumento `--bronze-native-ui` continua disponível para testes
-em configurações cujo `Info.plist` desative temporariamente a nova interface.
+O app iOS inicia exclusivamente em `BronzeNativeHostingController`.
+Capacitor, Cordova, plugins JavaScript, storyboard da bridge e fallback web
+foram removidos do target e do código iOS. Não há flag para voltar à WebView.
+Android e desktop ainda mantêm suas implementações atuais; esta remoção é iOS.
+
+`npm run native:sync:ios` valida o projeto e seus recursos sem Vite ou Capacitor.
+Loops e Church são referências diretas às pastas de áudio em `public/assets`,
+empacotadas como `loops` e `fx-1`, sem HTML, JavaScript ou CSS. SF2 continuam
+referenciados em `native-engine/assets`. A tela permanece ligada pelo UIKit,
+sem o antigo plugin KeepAwake. Orientação é controlada pelo host nativo.
 
 O caminho de performance já é direto:
 
@@ -67,8 +73,9 @@ ou JetsamEvent em Ajustes > Privacidade e Segurança > Análise e Melhorias
 > Dados de Análise.
 
 A interface nativa ainda não tem paridade funcional com o app anterior.
-O modo nativo está ligado para permitir testes da IPA; não remover ainda o
-fallback Capacitor nem os recursos usados para empacotar SF2, FX e loops.
+A remoção do fallback web foi solicitada antes da paridade. Recursos ainda
+não migrados não voltam pela tela antiga; precisam de implementação nativa.
+A remoção das dependências web não confirma a causa do crash no iPadOS 16.
 
 Implementado nesta etapa:
 
@@ -87,7 +94,8 @@ Implementado nesta etapa:
 - Bancos A–F com 16 posições, salvar/renomear/cor e seleção com borda RGB
   pulsante (respeita Reduzir Movimento). Segurar abre o menu de edição; substituir
   um preset existente exige confirmação. Os snapshots guardam SF2, ON/OFF,
-  faders, envelopes, EQ, reverb e Delay disponíveis na UI, não efeitos ainda não migrados.
+  faders, envelopes, EQ, reverb, Delay, Compressor, Chorus, Vibes, Pulse e
+  controles do Synth disponíveis na UI, não efeitos ainda não migrados.
 - Sessão local em Application Support/BronzeKeys/native-session.json, escrita
   atômica fora da thread principal, com debounce. Guarda também Solo, BPM,
   compasso/click, filtros/banco dos pads e seleção do loop. Ao reabrir não toca
@@ -131,8 +139,28 @@ Implementado nesta etapa:
   o limite de 4 s da linha C++. Estado incluído na sessão e presets. Preparação
   e ajustes coalescidos usam a fila de controle, sem substituir outros efeitos.
 
-Ainda pendentes: paridade dos presets com todos os efeitos, catálogo/conta,
-edição completa de efeitos e synth, playlists do usuário, MIDI Learn na UI,
+- Compressor, Chorus e Vibes têm editores nativos, knobs Skia e +/− com
+  repetição. Vibes usa Rate, Amount de 0 a 100 cents, Vinyl ON/OFF e ruído
+  de −36 a 0 dB, sem Mix. Desligar Vibes desliga também o vinil. Compressor
+  e Vibes são recusados no B3 tanto na UI quanto no comando C++ dedicado.
+  O comando preserva EQ, Rotary, Reverb, Delay e Pulse; alterações são
+  coalescidas na fila de controle e participam da sessão e dos presets.
+- Editor Synth: OSC 1/2/3, quatro formas de onda, ON/OFF, volume independente,
+  Detune, oitava, Poly/Mono/Legato, Cutoff, Resonance, Filter Env, LFO e Glide.
+  Página OSC selecionada tem destaque animado. Envelope usa a página já
+  existente e a configuração do synth é salva somente no módulo 8. O envio
+  de synth preserva os valores atuais do envelope, e restauração aplica o
+  synth na camada preparada antes de confirmar a troca.
+- Pulse nativo nos oito módulos: 16 passos, comprimento, Gate, Depth, Attack,
+  Release e Swing; Rate livre 20–2000 ms ou oito divisões discretas em Sync.
+  Sync usa o compasso do metrônomo. Atualizar BPM reaplica a conversão de ms
+  dos Pulses livres, preservando seu tempo. Sessão/preset guardam o padrão.
+  O limite C++ foi ampliado para representar todo o Rate livre entre 60 e
+  300 BPM, sem encurtar 2000 ms ou alongar 20 ms silenciosamente.
+
+Ainda pendentes: arpeggiator/Auto Fader nativos, demais configurações de
+roteamento/velocity/modulação, presets próprios do synth, catálogo/conta,
+playlists do usuário, edição dos bancos FX do usuário, MIDI Learn na UI,
 backup e host nativo macOS. A preparação do Skia macOS não cria, por si só, um
 app macOS nativo. Model e controles também precisam de adaptação de plataforma.
 

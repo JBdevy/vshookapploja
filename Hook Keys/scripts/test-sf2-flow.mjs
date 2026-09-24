@@ -9,7 +9,6 @@ const desktop = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url
 const androidCpp = readFileSync(new URL('../android/app/src/main/cpp/HookKeysNativeBridge.cpp', import.meta.url), 'utf8');
 const androidJava = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
 const iosEngine = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
-const iosPlugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
 const soundStore = readFileSync(new URL('../src/features/sound-library/SoundLibraryStore.ts', import.meta.url), 'utf8');
 const soundSelection = readFileSync(new URL('../src/features/player/SoundSelectionView.ts', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
@@ -119,7 +118,7 @@ assert.match(androidCpp, /streamReady_[\s\S]*callbackSeen_[\s\S]*nativeAudioOutp
 assert.match(androidJava, /public void audioOutputStatus\(PluginCall call\)/);
 assert.match(iosEngine, /callbackSeen[\s\S]*audioOutputReady[\s\S]*_audioEngine\.isRunning/,
   'iOS precisa detectar a rota suspensa');
-assert.match(iosPlugin, /CAPPluginMethod\(name: "audioOutputStatus"/);
+assert.match(iosEngine, /- \(BOOL\)audioOutputReady/);
 assert.match(nativeBridge, /preserveEngine[\s\S]*if \(!preserveEngine\) this\.resetSynchronizationCache/,
   'Trocar somente o buffer não pode invalidar os SF2 já decodificados');
 assert.match(desktop, /preserve_engine[\s\S]*reusable_engine/,
@@ -129,7 +128,7 @@ assert.match(androidCpp, /preserveRuntime[\s\S]*preservedRuntime/,
 assert.match(iosEngine, /preserveEngine[\s\S]*_audioEngine pause/,
   'iOS precisa reiniciar o stream sem destruir o motor ao trocar somente o buffer');
 for (const [name, source] of [['TypeScript', nativeBridge], ['desktop', desktop], ['Android C++', androidCpp],
-  ['Android Java', androidJava], ['iOS engine', iosEngine], ['iOS plugin', iosPlugin]]) {
+  ['Android Java', androidJava], ['iOS engine', iosEngine]]) {
   assert.match(source, /[Mm]oduleAnalysis|module_analysis/, `${name} precisa encaminhar os medidores do compressor`);
   assert.match(source, /[Cc]loneSoundFont|clone_sound_font|clone_soundfont/,
     `${name} precisa encaminhar a cópia otimizada e independente do SF2`);
@@ -152,7 +151,7 @@ assert.match(tinySoundFontLibrary, /TSF_RENDER_SAMPLEEND_FADE 64[\s\S]*remaining
 assert.match(nativeBridge, /SOUNDFONT_CHUNK_BYTES = 4 \* 1024 \* 1024/,
   'SF2 grandes usam menos chamadas da WebView e leitura base64 pelo FileReader');
 assert.match(nativeBridge, /reader\.readAsDataURL\(blob\)/);
-for (const bridge of [desktop, androidJava, iosPlugin]) {
+for (const bridge of [desktop, androidJava]) {
   assert.match(bridge, /assetKey|asset_key/, 'cache nativo é identificado pelo timbre, não pelo módulo');
   assert.match(bridge, /cached/, 'cache válido evita retransmitir o arquivo inteiro');
 }

@@ -15,6 +15,7 @@ const tests = [
   ['scripts/test-playlist-queue.mjs'],
   ['scripts/test-native-tracks.mjs'],
   ['scripts/test-apple-native-foundation.mjs'],
+  ['scripts/test-native-ios-bundle.mjs'],
   ['scripts/test-skia-apple-build.mjs'],
   ['scripts/test-native-session.mjs'],
   ['scripts/test-loop-metronome.mjs'],

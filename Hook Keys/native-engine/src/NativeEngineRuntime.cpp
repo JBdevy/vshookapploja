@@ -525,10 +525,17 @@ bool NativeEngineRuntime::setModuleGainDb(std::size_t moduleIndex, float db) noe
 
 bool NativeEngineRuntime::setTranceGate(std::size_t moduleIndex, ModuleEffectsConfig::TranceGateConfig config) noexcept {
   if (moduleIndex >= kModuleCount) return false;
+  for (float value : {config.beatMultiplier, config.measureBeats, config.gate,
+      config.depth, config.attackMs, config.releaseMs, config.swing}) {
+    if (!std::isfinite(value)) return false;
+  }
   std::scoped_lock lock(configMutex_);
   config.normalize();
-  controlLayer_->configs[moduleIndex].effects.tranceGate = config;
-  return controlLayer_->engine->setPreparedModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
+  auto next = controlLayer_->configs[moduleIndex];
+  next.effects.tranceGate = config;
+  if (!controlLayer_->engine->setPreparedModuleConfig(moduleIndex, next)) return false;
+  controlLayer_->configs[moduleIndex] = next;
+  return true;
 }
 
 bool NativeEngineRuntime::setModuleEffects(
@@ -615,6 +622,29 @@ bool NativeEngineRuntime::setModuleDelay(std::size_t moduleIndex, DelayConfig de
   next.effects.delay = delay;
   if (!layer->engine->setPreparedModuleConfig(moduleIndex, next)) return false;
   layer->configs[moduleIndex] = next;
+  return true;
+}
+
+bool NativeEngineRuntime::setModuleSoundEffects(std::size_t moduleIndex,
+    CompressorConfig compressor, ChorusConfig chorus, LoFiConfig vibes) noexcept {
+  if (moduleIndex >= kModuleCount || (moduleIndex == 6 && (compressor.enabled || vibes.enabled))) return false;
+  for (float value : {compressor.thresholdDb, compressor.ratio, compressor.attackMs,
+      compressor.releaseMs, compressor.outputGainDb, compressor.mix, chorus.rateHz,
+      chorus.depth, chorus.mix, vibes.rateHz, vibes.amountSemitones, vibes.noiseGainDb}) {
+    if (!std::isfinite(value)) return false;
+  }
+  compressor.normalize();
+  chorus.normalize();
+  vibes.normalize();
+  std::scoped_lock lock(configMutex_);
+  auto next = controlLayer_->configs[moduleIndex];
+  next.effects.compressor = compressor;
+  next.effects.chorus = chorus;
+  next.effects.loFi = vibes;
+  // These processors are prepared at engine creation. No IR rebuilding,
+  // delay allocation, or overwrite of Rotary/EQ/Pulse while dragging a knob.
+  if (!controlLayer_->engine->setPreparedModuleConfig(moduleIndex, next)) return false;
+  controlLayer_->configs[moduleIndex] = next;
   return true;
 }
 

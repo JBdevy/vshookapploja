@@ -287,7 +287,8 @@ struct ModuleEffectsConfig final {
     float swing = 0.0f;
     void normalize() noexcept {
       length = std::clamp<std::uint8_t>(length, 1, 16);
-      beatMultiplier = std::clamp(beatMultiplier, 0.0625f, 4.0f);
+      // Free Pulse: 20 ms at 60 BPM through 2000 ms at 300 BPM.
+      beatMultiplier = std::clamp(beatMultiplier, 0.02f, 10.0f);
       measureBeats = std::clamp(measureBeats, 0.0f, 16.0f);
       gate = std::clamp(gate, 0.05f, 1.0f);
       depth = std::clamp(depth, 0.0f, 1.0f);

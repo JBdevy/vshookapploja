@@ -334,8 +334,8 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
     [self recordStartupStage:@"reativar sessão de áudio"];
     NSError *restartError = nil;
     AVAudioSession *session = AVAudioSession.sharedInstance;
-    // O primeiro HTMLMediaElement da WebView pode alterar a sessão compartilhada
-    // e parar o AVAudioEngine. Reafirma a categoria antes de reabrir o stream,
+    // Interrupções e trocas de rota podem suspender o AVAudioEngine.
+    // Reafirma a categoria antes de reabrir o stream,
     // preservando o runtime (SF2 e vozes que já estavam tocando).
     [session setCategory:AVAudioSessionCategoryPlayback
                     mode:AVAudioSessionModeDefault
@@ -941,6 +941,19 @@ static NSString *describeFormat(AVAudioFormat *format) {
   delay.feedback = feedback;
   delay.mix = mix;
   return runtime->setModuleDelay(static_cast<std::size_t>(moduleIndex), delay);
+}
+
+- (BOOL)configureSoundEffects:(NSInteger)moduleIndex
+           compressorEnabled:(BOOL)compressorEnabled compressor:(NSArray<NSNumber *> *)compressor
+               chorusEnabled:(BOOL)chorusEnabled chorus:(NSArray<NSNumber *> *)chorus
+                vibesEnabled:(BOOL)vibesEnabled vibes:(NSArray<NSNumber *> *)vibes vinylEnabled:(BOOL)vinylEnabled {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime || moduleIndex < 0 || moduleIndex >= 8 || compressor.count != 6 || chorus.count != 3 || vibes.count != 3) return NO;
+  return runtime->setModuleSoundEffects(static_cast<std::size_t>(moduleIndex),
+      {compressorEnabled != NO, compressor[0].floatValue, compressor[1].floatValue,
+       compressor[2].floatValue, compressor[3].floatValue, compressor[4].floatValue, compressor[5].floatValue},
+      {chorusEnabled != NO, chorus[0].floatValue, chorus[1].floatValue, chorus[2].floatValue},
+      {vibesEnabled != NO, vibes[0].floatValue, vibes[1].floatValue, vinylEnabled != NO, vibes[2].floatValue});
 }
 
 - (BOOL)configureEqualizer:(NSInteger)moduleIndex enabled:(BOOL)enabled

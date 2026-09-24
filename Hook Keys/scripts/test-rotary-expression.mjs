@@ -354,7 +354,7 @@ test('all native bridges forward Rotary modulation enablement', () => {
     '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
     '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
-    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
   ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('rotaryModulationEnabled'), path);
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('rotary_modulation_enabled'));
 });
@@ -369,7 +369,6 @@ test('Gabinet do Organ é salvo e encaminhado até o IR nas três plataformas', 
     '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
     '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
-    '../ios/App/App/HookKeysNativePlugin.swift',
   ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('rotaryCabinetEnabled'), path);
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('rotary_cabinet_enabled'));
 });
@@ -379,7 +378,7 @@ test('all native bridges forward the Cutoff filter type and envelope', () => {
     '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
     '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
-    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
   ]) {
     const content = readFileSync(new URL(path, import.meta.url), 'utf8');
     assert(content.includes('cutoffFilterType'), `${path} missing cutoffFilterType`);
@@ -396,7 +395,7 @@ test('all native bridges forward the Reverb Mod knob', () => {
     '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
     '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
-    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
   ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('reverbMod'), path);
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('reverb_mod'));
 });
@@ -406,7 +405,7 @@ test('all native bridges forward No Sens (velocity does not drive the amp envelo
     '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
     '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
-    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
   ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('noVelocitySensitivity'), path);
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('no_velocity_sensitivity'));
 });
@@ -416,7 +415,7 @@ test('all native bridges forward Mono and Legato', () => {
     '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
     '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
-    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
   ]) {
     const content = readFileSync(new URL(path, import.meta.url), 'utf8');
     assert(content.includes('mono'), `${path} missing mono`);
@@ -432,7 +431,7 @@ test('module-only Stereo/Mono reaches every native bridge as dual mono routing',
     '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
     '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
-    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
     '../native-engine/include/hook_keys/EngineTypes.hpp', '../native-engine/src/HookKeysEngine.cpp',
   ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('outputDualMono'), path);
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('output_dual_mono'));
@@ -443,7 +442,7 @@ test('all native bridges forward the global transpose', () => {
     '../src/platform/native/HookKeysNative.ts', '../src/features/player/PlayerScreen.ts',
     '../src-tauri/src/native_engine_bridge.cpp', '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
-    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm', '../ios/App/App/HookKeysNativePlugin.swift',
+    '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
   ]) assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes('GlobalTranspose'), path);
   assert(readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8').includes('set_global_transpose'));
 });

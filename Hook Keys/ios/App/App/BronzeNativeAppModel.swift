@@ -82,7 +82,13 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var updatingDelay = false
     private var committedDelays = Array(repeating: BronzeDelay(), count: 8)
     private var pendingDelays: [Int: BronzeDelay] = [:]
-    var updatingEffects: Bool { updatingReverb || updatingDelay }
+    @Published private(set) var moduleSoundEffects = Array(repeating: BronzeSoundEffects(), count: 8)
+    @Published private(set) var synth = BronzeSynth()
+    @Published private(set) var modulePulses = Array(repeating: BronzePulse(), count: 8) { didSet { scheduleSessionSave() } }
+    @Published private(set) var updatingSoundEffects = false
+    private var committedSoundEffects = Array(repeating: BronzeSoundEffects(), count: 8)
+    private var pendingSoundEffects: [Int: BronzeSoundEffects] = [:]
+    var updatingEffects: Bool { updatingReverb || updatingDelay || updatingSoundEffects }
     @Published private(set) var padFilterLow = 0.0 { didSet { scheduleSessionSave() } }
     @Published private(set) var padFilterHigh = 1.0 { didSet { scheduleSessionSave() } }
     @Published private(set) var selectedPadBank = 0 { didSet { scheduleSessionSave() } }
@@ -398,6 +404,7 @@ final class BronzeNativeAppModel: ObservableObject {
         guard value.isFinite, !loadingLoop else { return }
         tempo = min(300, max(60, value))
         _ = engine.setTempo(Float(tempo))
+        refreshPulseClock()
         if let selectedLoop {
             _ = engine.controlTrackId(selectedLoop.id, action: "rate", seconds: 0,
                                       loop: true, playbackRate: tempo / 120, syncMetronome: false)
@@ -510,6 +517,71 @@ final class BronzeNativeAppModel: ObservableObject {
             feedback: Float(delay.feedback), mix: Float(delay.mix))
     }
 
+    func setSoundEffects(_ effects: BronzeSoundEffects, moduleIndex: Int) {
+        guard moduleSoundEffects.indices.contains(moduleIndex), !isApplyingSnapshot, engineState == .ready else { return }
+        do { try effects.validate(moduleIndex: moduleIndex) } catch { return }
+        guard moduleSoundEffects[moduleIndex] != effects else { return }
+        moduleSoundEffects[moduleIndex] = effects
+        pendingSoundEffects[moduleIndex] = effects
+        if !updatingSoundEffects { sendNextSoundEffects() }
+    }
+
+    private func sendNextSoundEffects() {
+        guard let index = pendingSoundEffects.keys.min(), let next = pendingSoundEffects.removeValue(forKey: index) else {
+            updatingSoundEffects = false
+            scheduleSessionSave()
+            return
+        }
+        updatingSoundEffects = true
+        let engine = self.engine
+        audioQueue.async { [weak self] in
+            let success = Self.sendSoundEffects(next, moduleIndex: index, engine: engine)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if success { self.committedSoundEffects[index] = next }
+                else if self.pendingSoundEffects[index] == nil {
+                    self.moduleSoundEffects[index] = self.committedSoundEffects[index]
+                    self.controlError = "Não foi possível ajustar o efeito. O ajuste anterior foi mantido."
+                }
+                self.sendNextSoundEffects()
+            }
+        }
+    }
+
+    nonisolated private static func sendSoundEffects(_ effects: BronzeSoundEffects, moduleIndex: Int,
+                                                     engine: HookKeysNativeEngine) -> Bool {
+        engine.configureSoundEffects(moduleIndex,
+            compressorEnabled: effects.compressor.enabled, compressor: effects.compressor.values.map { NSNumber(value: $0) },
+            chorusEnabled: effects.chorus.enabled, chorus: effects.chorus.values.map { NSNumber(value: $0) },
+            vibesEnabled: effects.vibes.enabled, vibes: effects.vibes.values.map { NSNumber(value: $0) },
+            vinylEnabled: effects.vibes.vinylEnabled)
+    }
+
+    func setSynth(_ next: BronzeSynth) {
+        guard engineState == .ready, !isApplyingSnapshot else { return }
+        do { try next.validate() } catch { return }
+        guard Self.sendSynth(next, envelope: moduleEnvelopes[7], engine: engine) else {
+            controlError = "Não foi possível ajustar o synth."
+            return
+        }
+        synth = next
+        scheduleSessionSave()
+    }
+
+    nonisolated private static func sendSynth(_ s: BronzeSynth, envelope e: BronzeEnvelope,
+                                              engine: HookKeysNativeEngine) -> Bool {
+        let a = s.oscillators[0], b = s.oscillators[1], c = s.oscillators[2]
+        return engine.configureSynth(a.shape, oscillator2: b.shape, oscillator3: c.shape,
+            oscillator1Enabled: a.enabled, oscillator2Enabled: b.enabled, oscillator3Enabled: c.enabled,
+            voiceMode: s.mode, lfoTarget: s.lfoTarget,
+            oscillator1Volume: Float(a.volume), oscillator2Volume: Float(b.volume), oscillator3Volume: Float(c.volume),
+            oscillator1DetuneCents: Float(a.detune), oscillator2DetuneCents: Float(b.detune), oscillator3DetuneCents: Float(c.detune),
+            attackMs: Float(e.attackMs), holdMs: Float(e.holdMs), decayMs: Float(e.decayMs), sustain: 1, releaseMs: Float(e.releaseMs),
+            filterCutoffHz: Float(s.cutoff), filterResonance: Float(s.resonance), filterEnvelope: Float(s.filterEnvelope),
+            lfoRateHz: Float(s.lfoRate), lfoDepth: Float(s.lfoDepth), glideMs: Float(s.glide),
+            oscillator1Octave: a.octave, oscillator2Octave: b.octave, oscillator3Octave: c.octave)
+    }
+
     func selectMetronomeClick(_ sound: Int) {
         metronomeClickSound = min(5, max(1, sound))
         applyMetronome(restart: false)
@@ -518,14 +590,44 @@ final class BronzeNativeAppModel: ObservableObject {
     func setTimeSignature(numerator: Int, denominator: Int) {
         timeSignatureNumerator = min(16, max(1, numerator))
         timeSignatureDenominator = [2, 4, 8, 16].contains(denominator) ? denominator : 4
+        refreshPulseClock()
         applyMetronome(restart: metronomeEnabled && !loopPlaying)
+    }
+
+    func setPulse(_ pulse: BronzePulse, moduleIndex: Int) {
+        guard modulePulses.indices.contains(moduleIndex), !isApplyingSnapshot, engineState == .ready else { return }
+        do { try pulse.validate() } catch { return }
+        guard Self.sendPulse(pulse, moduleIndex: moduleIndex, tempo: tempo,
+            numerator: timeSignatureNumerator, denominator: timeSignatureDenominator, engine: engine) else {
+            controlError = "Não foi possível ajustar o Pulse."
+            return
+        }
+        modulePulses[moduleIndex] = pulse
+    }
+
+    private func refreshPulseClock() {
+        for index in modulePulses.indices where modulePulses[index].enabled {
+            if !Self.sendPulse(modulePulses[index], moduleIndex: index, tempo: tempo,
+                numerator: timeSignatureNumerator, denominator: timeSignatureDenominator, engine: engine) {
+                controlError = "Não foi possível sincronizar o Pulse. Tente novamente."
+            }
+        }
+    }
+
+    nonisolated private static func sendPulse(_ pulse: BronzePulse, moduleIndex: Int, tempo: Double,
+        numerator: Int, denominator: Int, engine: HookKeysNativeEngine) -> Bool {
+        engine.configureTranceGate(moduleIndex, enabled: pulse.enabled, steps: pulse.steps, length: pulse.length,
+            beatMultiplier: Float(pulse.beatMultiplier(bpm: tempo)),
+            measureBeats: Float(pulse.measureBeats(numerator: numerator, denominator: denominator)),
+            gate: Float(pulse.gate), depth: Float(pulse.depth), attackMs: Float(pulse.attack),
+            releaseMs: Float(pulse.release), swing: Float(pulse.swing))
     }
 
     func selectLoop(_ loop: BundledLoop) {
         guard !loadingLoop, engineState == .ready else { return }
         guard selectedLoop?.id != loop.id else { return }
         guard let url = Bundle.main.url(forResource: loop.fileName, withExtension: "mp3",
-                                        subdirectory: "public/assets/loops") else {
+                                        subdirectory: "loops") else {
             controlError = "O arquivo de \(loop.name) não foi encontrado no app."
             return
         }
@@ -764,7 +866,7 @@ final class BronzeNativeAppModel: ObservableObject {
     private func loadBundledEffects() {
         let urls = Bundle.main.urls(
             forResourcesWithExtension: "mp3",
-            subdirectory: "public/assets/fx/fx-1"
+            subdirectory: "fx-1"
         )?.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending } ?? []
         let engine = self.engine
         audioQueue.async { [weak self] in
@@ -784,7 +886,8 @@ final class BronzeNativeAppModel: ObservableObject {
             let key = url.map { $0.deletingLastPathComponent().lastPathComponent + "/" + $0.lastPathComponent }
             return BronzeModuleSnapshot(soundFontKey: key, enabled: moduleEnabled[index],
                 fader: moduleFaders[index], envelope: moduleEnvelopes[index], equalizer: moduleEqualizers[index],
-                reverb: moduleReverbs[index], delay: moduleDelays[index])
+                reverb: moduleReverbs[index], delay: moduleDelays[index], soundEffects: moduleSoundEffects[index],
+                synth: index == 7 ? synth : nil, pulse: modulePulses[index])
         }
     }
 
@@ -845,7 +948,8 @@ final class BronzeNativeAppModel: ObservableObject {
                 var fonts: [UserSoundFont?] = Array(repeating: nil, count: 6)
                 if let session {
                     fonts = try Self.applySnapshot(session.modules, previous: [],
-                        solo: session.soloModule, tempo: session.tempo, engine: engine, store: store)
+                        solo: session.soloModule, tempo: session.tempo, numerator: session.numerator,
+                        denominator: session.denominator, engine: engine, store: store)
                 }
                 DispatchQueue.main.async {
                     guard let self else { return }
@@ -918,9 +1022,11 @@ final class BronzeNativeAppModel: ObservableObject {
         let previous = moduleSnapshot()
         let engine = self.engine
         let bpm = tempo
+        let numerator = timeSignatureNumerator, denominator = timeSignatureDenominator
         audioQueue.async { [weak self] in
             do {
                 let fonts = try Self.applySnapshot(modules, previous: previous, solo: nil, tempo: bpm,
+                    numerator: numerator, denominator: denominator,
                     engine: engine, store: BronzeSessionStore.applicationStore())
                 DispatchQueue.main.async {
                     guard let self else { return }
@@ -949,6 +1055,10 @@ final class BronzeNativeAppModel: ObservableObject {
         committedReverbs = moduleReverbs
         moduleDelays = modules.map(\.delay)
         committedDelays = moduleDelays
+        moduleSoundEffects = modules.map { $0.soundEffects ?? BronzeSoundEffects() }
+        committedSoundEffects = moduleSoundEffects
+        synth = modules[7].synth ?? BronzeSynth()
+        modulePulses = modules.map { $0.pulse ?? BronzePulse() }
         soloModule = solo
         // The B3 generator is shared, so change its envelope only after commit.
         let envelope = modules[6].envelope
@@ -958,7 +1068,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     nonisolated private static func applySnapshot(_ modules: [BronzeModuleSnapshot],
-        previous: [BronzeModuleSnapshot], solo: Int?, tempo: Double,
+        previous: [BronzeModuleSnapshot], solo: Int?, tempo: Double, numerator: Int, denominator: Int,
         engine: HookKeysNativeEngine, store: BronzeSessionStore) throws -> [UserSoundFont?] {
         try BronzeNativeSession.validateModules(modules)
         let fonts: [UserSoundFont?] = try modules.prefix(6).map { module in
@@ -994,6 +1104,10 @@ final class BronzeNativeAppModel: ObservableObject {
                 impulse: module.reverb.impulse, mix: Float(module.reverb.mix),
                 decay: Float(module.reverb.decay)) else { throw BronzeSessionError.invalid }
             guard Self.sendDelay(module.delay, moduleIndex: index, engine: engine) else { throw BronzeSessionError.invalid }
+            guard Self.sendSoundEffects(module.soundEffects ?? BronzeSoundEffects(), moduleIndex: index, engine: engine)
+            else { throw BronzeSessionError.invalid }
+            guard Self.sendPulse(module.pulse ?? BronzePulse(), moduleIndex: index, tempo: tempo,
+                numerator: numerator, denominator: denominator, engine: engine) else { throw BronzeSessionError.invalid }
             if index != 6 {
                 let e = module.envelope
                 guard engine.configureModuleEnvelope(index, attackMs: Float(e.attackMs), holdMs: Float(e.holdMs),
@@ -1001,6 +1115,8 @@ final class BronzeNativeAppModel: ObservableObject {
                     sustainDb: Float(e.sustainDb)) else { throw BronzeSessionError.invalid }
             }
         }
+        guard Self.sendSynth(modules[7].synth ?? BronzeSynth(), envelope: modules[7].envelope, engine: engine)
+        else { throw BronzeSessionError.invalid }
         let mask = modules.indices.reduce(0) { mask, index in
             (solo.map { $0 == index } ?? modules[index].enabled) ? mask | (1 << index) : mask
         }

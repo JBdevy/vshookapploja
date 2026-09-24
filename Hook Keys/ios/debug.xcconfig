@@ -1,2 +1,1 @@
 #include "common.xcconfig"
-CAPACITOR_DEBUG = true

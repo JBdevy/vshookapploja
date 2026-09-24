@@ -60,6 +60,8 @@ public:
   [[nodiscard]] bool setModuleReverb(std::size_t moduleIndex, bool enabled,
       std::uint8_t impulse, float mix, float tail = 1.0f) noexcept;
   [[nodiscard]] bool setModuleDelay(std::size_t moduleIndex, DelayConfig delay) noexcept;
+  [[nodiscard]] bool setModuleSoundEffects(std::size_t moduleIndex, CompressorConfig compressor,
+      ChorusConfig chorus, LoFiConfig vibes) noexcept;
   [[nodiscard]] bool setOrganRotaryFast(bool fast) noexcept;
   [[nodiscard]] bool setOrganCabinetEnabled(bool enabled) noexcept;
   // sustainDb: 0 dB segura o som cheio depois do Decay; abaixo disso a nota

@@ -30,12 +30,12 @@ assert.doesNotMatch(nativeRoot, /\? \.secondary : \.green/,
 
 assert.doesNotMatch(info, /UIMainStoryboardFile/,
   'o storyboard não pode instanciar a WebView antes da escolha do root nativo');
-assert.match(info, /<key>BronzeNativeUIEnabled<\/key>\s*<true\/>/,
-  'a IPA precisa abrir a interface nativa por padrão');
-assert.match(delegate, /--bronze-native-ui/);
-assert.match(delegate, /BronzeNativeHostingController\(\)/);
-assert.match(delegate, /HookKeysBridgeViewController\(\)/,
-  'a interface atual continua disponível durante a migração controlada');
+assert.doesNotMatch(info, /BronzeNativeUIEnabled|CAPACITOR/);
+assert.match(delegate, /rootViewController = BronzeNativeHostingController\(\)/);
+assert.doesNotMatch(delegate + project, /Capacitor|CapApp-SPM|HookKeysBridgeViewController|SessionVaultPlugin|HookKeysNativePlugin/,
+  'iOS deve iniciar e vincular exclusivamente a interface nativa');
+assert.match(delegate, /isIdleTimerDisabled = true/,
+  'UIKit mantém a tela ligada, sem o antigo plugin KeepAwake');
 assert.match(engine, /MIDIInputPortCreate/);
 assert.match(engine, /AVAudioSourceNode/);
 const startupBoundary = engine.slice(engine.indexOf('- (BOOL)startWithBufferFrames:'),
@@ -109,6 +109,21 @@ assert.match(nativeModel, /audioQueue.async \{ \[weak self\] in\s*let success = 
 assert.match(nativeModel, /nonisolated private static func sendDelay/,
   'o envio ao motor precisa funcionar na fila de áudio sem isolamento MainActor');
 assert.match(engine, /runtime->setModuleDelay/);
+assert.match(engine, /runtime->setModuleSoundEffects/);
+assert.match(nativeRoot, /BronzeNativeProcessorEditor\(model: model/);
+assert.match(nativeRoot, /model.selectedModule != 6 \|\| \$0 == .chorus/);
+assert.match(nativeModel, /Self.sendSoundEffects\(module.soundEffects \?\? BronzeSoundEffects\(\)/);
+assert.match(nativeModel, /soundEffects: moduleSoundEffects\[index\]/);
+assert.match(nativeModel, /pendingSoundEffects\[moduleIndex\] = effects/);
+assert.match(nativeRoot, /VINYL ON/);
+assert.match(nativeRoot, /BronzeNativePulseEditor\(model: model/);
+assert.match(nativeModel, /Self.sendPulse\(module.pulse \?\? BronzePulse\(\)/);
+assert.match(nativeModel, /pulse: modulePulses\[index\]/);
+assert.match(nativeModel, /measureBeats: Float\(pulse.measureBeats\(numerator: numerator, denominator: denominator\)\)/);
+assert.match(nativeRoot, /BronzeNativeSynthEditor\(model: model\)/);
+assert.match(nativeModel, /synth: index == 7 \? synth : nil/);
+assert.match(nativeModel, /Self.sendSynth\(modules\[7\].synth \?\? BronzeSynth\(\)/);
+assert.match(nativeModel, /oscillator1Octave: a.octave, oscillator2Octave: b.octave, oscillator3Octave: c.octave/);
 assert.match(nativeModel, /decay: Float\(module.reverb.decay\)/);
 assert.match(nativeRoot, /\$0.setDecay\(/);
 assert.match(nativeRoot, /repetition\?\.cancel\(\)/);

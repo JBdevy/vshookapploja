@@ -1807,6 +1807,84 @@ void testNativeEqualizerEditsPreserveOtherEffects() {
   }
 }
 
+void testNativeSoundEffectsEditsPreserveOtherEffects() {
+  hook_keys::ModuleEffectsConfig::TranceGateConfig pulse;
+  pulse.beatMultiplier = 0.02f;
+  pulse.normalize();
+  expect(pulse.beatMultiplier == 0.02f, "free Pulse supports 20 ms at 60 BPM without clamp");
+  pulse.beatMultiplier = 10.0f;
+  pulse.normalize();
+  expect(pulse.beatMultiplier == 10.0f, "free Pulse supports 2000 ms at 300 BPM without clamp");
+  for (const std::size_t moduleIndex : {0u, 6u, 7u}) {
+    hook_keys::NativeEngineRuntime actual(48000, 128), reference(48000, 128);
+    hook_keys::ModuleConfig module;
+    module.gainLinear = 0.12f;
+    module.effects.equalizer.enabled = true;
+    module.effects.equalizer.bands[2].gainDb = -4;
+    module.effects.rotary.enabled = true;
+    module.effects.rotary.speed = 2;
+    module.effects.delay.enabled = true;
+    module.effects.delay.mix = 0.1f;
+    module.effects.delay.delayMs = 80;
+    module.effects.tranceGate.enabled = true;
+    module.effects.tranceGate.steps = 0xaaaa;
+    module.effects.tranceGate.depth = 0.7f;
+    for (auto* runtime : {&actual, &reference}) {
+      const auto* sf2 = "third_party/TinySoundFont/examples/florestan-subset.sf2";
+      if (moduleIndex == 0) expect(runtime->loadSoundFont(0, sf2), "load SF2 for processor edit test");
+      if (moduleIndex == 6) {
+        expect(runtime->loadOrganVoice(0, sf2), "load B3 for processor edit test");
+        runtime->setOrganDrawbarPosition(0, 8);
+      }
+      expect(runtime->setModuleConfig(moduleIndex, module), "configure processor test routing");
+      expect(runtime->setModuleEffects(moduleIndex, module.effects), "configure other effects before editing");
+      expect(runtime->setTranceGate(moduleIndex, module.effects.tranceGate), "configure Pulse before processor edits");
+      expect(runtime->sendMidi(0, 0x90, 64, 80), "hold note during processor edits");
+    }
+    std::array<float, 256> a{}, b{};
+    double energy = 0;
+    const auto compare = [&] {
+      actual.renderInterleaved(a.data(), 128, 2);
+      reference.renderInterleaved(b.data(), 128, 2);
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        expect(std::isfinite(a[i]) && std::abs(a[i] - b[i]) < 0.000001f,
+            "processor editor preserves EQ, Rotary, Delay and held voices sample-for-sample");
+        energy += std::abs(a[i]);
+      }
+    };
+    for (int block = 0; block < 60; ++block) compare();
+    for (int step = 0; step < 80; ++step) {
+      auto& e = module.effects;
+      e.compressor.enabled = moduleIndex != 6 && step % 20 != 0;
+      e.compressor.thresholdDb = -40 + step * 0.2f;
+      e.chorus.enabled = step % 15 != 0;
+      e.chorus.depth = step / 80.0f;
+      e.loFi.enabled = moduleIndex != 6 && step % 20 != 0;
+      e.loFi.vinylEnabled = step % 3 == 0;
+      e.loFi.noiseGainDb = -36 + step * 0.4f;
+      e.loFi.amountSemitones = step / 80.0f;
+      expect(actual.setModuleSoundEffects(moduleIndex, e.compressor, e.chorus, e.loFi), "apply native processor edits");
+      expect(reference.setModuleEffects(moduleIndex, e), "apply matching reference processor edits");
+      compare();
+    }
+    auto bad = module.effects.loFi;
+    bad.rateHz = std::numeric_limits<float>::quiet_NaN();
+    expect(!actual.setModuleSoundEffects(moduleIndex, {}, {}, bad), "reject non-finite processor without mutation");
+    expect(!actual.setModuleSoundEffects(8, {}, {}, {}), "reject invalid processor module");
+    auto invalidPulse = pulse;
+    invalidPulse.beatMultiplier = std::numeric_limits<float>::quiet_NaN();
+    expect(!actual.setTranceGate(moduleIndex, invalidPulse), "reject non-finite Pulse without state mutation");
+    auto blockedVibes = hook_keys::LoFiConfig{};
+    blockedVibes.enabled = true;
+    expect(!actual.setModuleSoundEffects(6, {}, {}, blockedVibes), "B3 cannot enable Vibes");
+    auto blockedCompressor = hook_keys::CompressorConfig{};
+    blockedCompressor.enabled = true;
+    expect(!actual.setModuleSoundEffects(6, blockedCompressor, {}, {}), "B3 cannot enable compressor");
+    compare();
+    expect(energy > 1.0, "processor comparison must render actual audio");
+  }
+}
+
 void testNativeReverbEditsPreserveOtherEffects() {
   for (const std::size_t moduleIndex : {0u, 6u, 7u}) {
     hook_keys::NativeEngineRuntime actual(48000, 128), reference(48000, 128);
@@ -4144,6 +4222,7 @@ int main() {
   testEqualizerProcessing();
   testNativeEqualizerEditsPreserveOtherEffects();
   testNativeReverbEditsPreserveOtherEffects();
+  testNativeSoundEffectsEditsPreserveOtherEffects();
   testEqualizerCutSlope();
   testCompressorProcessing();
   testDelayProcessing();

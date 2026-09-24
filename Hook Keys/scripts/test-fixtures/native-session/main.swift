@@ -192,6 +192,92 @@ invalid.presets[95].modules?[0].delay.milliseconds = .nan
 rejects { try store.save(invalid) }
 expect(try Data(contentsOf: store.sessionURL) == before, "invalid Delay leaves the original session intact")
 let relocated = BronzeSessionStore(directory: directory.appendingPathComponent("new-container"))
+var pulse = BronzePulse()
+try pulse.validate()
+expect(pulse.measureBeats(numerator: 6, denominator: 8) == 3, "Pulse sync follows 6/8")
+expect(pulse.measureBeats(numerator: 4, denominator: 4) == 4, "Pulse sync follows 4/4")
+for (division, multiplier) in BronzePulse.multipliers.enumerated() {
+    pulse.division = division
+    expect(pulse.beatMultiplier(bpm: 132.5) == multiplier, "Pulse has all eight sync divisions")
+}
+pulse.sync = false
+for bpm in [60.0, 132.5, 300.0] {
+    for rate in [20.0, 125.0, 2000.0] {
+        pulse.rateMs = rate
+        expect(abs(pulse.beatMultiplier(bpm: bpm) * 60000 / bpm - rate) < 0.000001,
+            "free Pulse retains milliseconds at every BPM")
+    }
+}
+expect(pulse.measureBeats(numerator: 6, denominator: 8) == 0, "free Pulse does not reset at bar boundaries")
+invalid = session
+invalid.modules[6].pulse = pulse
+let pulseRoundTrip = try JSONDecoder().decode(BronzeNativeSession.self, from: JSONEncoder().encode(invalid))
+expect(pulseRoundTrip.modules[6].pulse == pulse, "Pulse works on B3 and survives session encoding")
+invalid.modules[6].pulse?.steps = -1
+rejects { try store.save(invalid) }
+pulse.division = 8
+rejects { try pulse.validate() }
+var synth = BronzeSynth()
+try synth.validate()
+synth.oscillators[0].shape = 3
+synth.oscillators[1].volume = 0
+synth.oscillators[2].octave = -3
+synth.oscillators[2].detune = -99
+synth.lfoTarget = 2
+synth.glide = 1100
+invalid = session
+invalid.modules[7].synth = synth
+let synthRoundTrip = try JSONDecoder().decode(BronzeNativeSession.self, from: JSONEncoder().encode(invalid))
+expect(synthRoundTrip.modules[7].synth == synth, "synth oscillators and modulation survive session encoding")
+invalid.modules[0].synth = synth
+rejects { try store.save(invalid) }
+for parameter in BronzeSynthParameter.allCases {
+    let spec = parameter.definition
+    for n in [0.0, 0.2, 0.5, 0.9, 1.0] {
+        expect(abs(spec.normalized(spec.value(n)) - n) < 0.000001, "synth knob round-trips")
+    }
+}
+synth.oscillators.removeLast()
+rejects { try synth.validate() }
+synth = BronzeSynth()
+synth.cutoff = .infinity
+rejects { try synth.validate() }
+synth = BronzeSynth()
+synth.oscillators[0].octave = 4
+rejects { try synth.validate() }
+for kind in BronzeProcessorKind.allCases {
+    let processor = BronzeProcessor(kind)
+    try processor.validate(kind)
+    for parameter in kind.parameters {
+        for n in [0.0, 0.2, 0.5, 0.9, 1.0] {
+            expect(abs(parameter.normalized(parameter.value(n)) - n) < 0.000001, "processor knob round-trips")
+        }
+        expect(parameter.value(-1) == parameter.minimum, "processor clamp minimum")
+        expect(abs(parameter.value(2) - parameter.maximum) < 0.000001, "processor clamp maximum")
+    }
+}
+var processors = BronzeSoundEffects()
+processors.vibes.enabled = true
+processors.vibes.vinylEnabled = false
+processors.vibes.values = [2, 1, -36]
+try processors.validate(moduleIndex: 7)
+rejects { try processors.validate(moduleIndex: 6) }
+invalid = session
+invalid.modules[0].soundEffects = processors
+let processorRoundTrip = try JSONDecoder().decode(BronzeNativeSession.self, from: JSONEncoder().encode(invalid))
+expect(processorRoundTrip.modules[0].soundEffects == processors, "processor values survive session encoding")
+invalid.modules[0].soundEffects?.vibes.values[0] = .nan
+rejects { try store.save(invalid) }
+invalid = session
+invalid.modules[6].soundEffects = processors
+rejects { try store.save(invalid) }
+processors.vibes.enabled = false
+processors.compressor.enabled = true
+rejects { try processors.validate(moduleIndex: 6) }
+processors = BronzeSoundEffects()
+processors.chorus.values.removeLast()
+rejects { try processors.validate(moduleIndex: 0) }
+expect(try Data(contentsOf: store.sessionURL) == before, "invalid processor leaves saved session intact")
 let url = try relocated.soundFontURL(for: key)
 expect(url.path.hasPrefix(relocated.soundFontDirectory.path + "/"), "relative SF2 keys follow the new sandbox")
 let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)) as! [String: Any]

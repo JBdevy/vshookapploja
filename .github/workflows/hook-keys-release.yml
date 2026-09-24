@@ -252,7 +252,7 @@ jobs:
           cache: npm
           cache-dependency-path: Hook Keys/package-lock.json
 
-      - name: Instalar dependencias e compilar interface
+      - name: Validar projeto iOS nativo e recursos de áudio
         run: |
           npm ci
           npm run test:release
@@ -349,9 +349,6 @@ jobs:
             echo 'Falta IOS_TEAM_ID.'
             exit 1
           fi
-          xcodebuild -resolvePackageDependencies \
-            -project ios/App/App.xcodeproj \
-            -scheme App
           xcodebuild \
             -project ios/App/App.xcodeproj \
             -scheme App \
@@ -365,6 +362,9 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="$HOOK_KEYS_PROFILE_NAME" \
             PRODUCT_BUNDLE_IDENTIFIER="$HOOK_KEYS_IOS_ID" \
             archive
+
+      - name: Conferir IPA nativa sem WebView
+        run: node scripts/verify-native-ios.mjs --app build/Bronze-Keys.xcarchive/Products/Applications/App.app
 
       - name: Guardar diagnóstico da build nativa
         if: always()

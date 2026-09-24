@@ -35,18 +35,16 @@
     "preview": "vite preview",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
-    "native:sync": "npm run build && cap sync && node scripts/fix-ios-spm-paths.mjs",
-    "native:sync:ios": "npm run build && cap sync ios && node scripts/fix-ios-spm-paths.mjs",
+    "native:sync": "npm run build && cap sync android && npm run native:sync:ios",
+    "native:sync:ios": "node scripts/verify-native-ios.mjs",
     "native:add:android": "cap add android",
-    "native:add:ios": "cap add ios",
     "native:open:android": "cap open android",
-    "native:open:ios": "cap open ios"
+    "native:open:ios": "open ios/App/App.xcodeproj"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "^8.0.1",
     "@capacitor/android": "8.4.2",
     "@capacitor/core": "8.4.2",
-    "@capacitor/ios": "8.4.2",
     "@capacitor/keyboard": "8.0.5",
     "@capacitor/screen-orientation": "^8.0.0",
     "@tauri-apps/api": "^2.8.0",

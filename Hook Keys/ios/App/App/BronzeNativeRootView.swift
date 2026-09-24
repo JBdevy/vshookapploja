@@ -6,7 +6,7 @@ struct BronzeNativeRootView: View {
     private struct LibraryTarget: Identifiable { let id: Int }
     @State private var libraryTarget: LibraryTarget?
     @State private var presetTarget: LibraryTarget?
-    private enum ModulePage: Equatable { case envelope, equalizer, reverb, delay }
+    private enum ModulePage: Equatable { case envelope, equalizer, reverb, delay, synth, pulse, processor(BronzeProcessorKind) }
     @State private var modulePage: ModulePage = .envelope
 
     var body: some View {
@@ -223,19 +223,40 @@ struct BronzeNativeRootView: View {
 
     private var moduleEditor: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 8) {
+            ScrollView(.horizontal) {
+              HStack(spacing: 8) {
                 Button("Envelope") { modulePage = .envelope }
                     .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .envelope))
+                if model.selectedModule == 7 {
+                    Button("Synth") { modulePage = .synth }
+                        .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .synth))
+                }
                 Button("EQ") { modulePage = .equalizer }
                     .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .equalizer))
                 Button("Reverb") { modulePage = .reverb }
                     .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .reverb))
                 Button("Delay") { modulePage = .delay }
                     .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .delay))
+                ForEach(BronzeProcessorKind.allCases.filter { model.selectedModule != 6 || $0 == .chorus }) { kind in
+                    Button(kind.rawValue) { modulePage = .processor(kind) }
+                        .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .processor(kind)))
+                }
+                Button("Pulse") { modulePage = .pulse }
+                    .buttonStyle(BronzeCompactButtonStyle(active: modulePage == .pulse))
                 Spacer()
                 Text("Módulo \(model.selectedModule + 1)").font(.caption.bold())
+              }
             }
             switch modulePage {
+            case .pulse: BronzeNativePulseEditor(model: model, moduleIndex: model.selectedModule).id(model.selectedModule)
+            case .synth:
+                if model.selectedModule == 7 { BronzeNativeSynthEditor(model: model) }
+                else { envelopeEditor }
+            case .processor(let kind):
+                if model.selectedModule != 6 || kind == .chorus {
+                    BronzeNativeProcessorEditor(model: model, moduleIndex: model.selectedModule, kind: kind)
+                        .id("\(model.selectedModule)-\(kind.rawValue)")
+                } else { envelopeEditor }
             case .equalizer:
                 BronzeNativeEqualizerEditor(model: model, moduleIndex: model.selectedModule)
                     .id(model.selectedModule)
@@ -606,6 +627,231 @@ struct BronzeNativeReverbEditor: View {
         var next = reverb
         edit(&next)
         model.setReverb(next, moduleIndex: moduleIndex)
+    }
+}
+
+struct BronzeNativeValueKnob: View {
+    let definition: BronzeProcessorParameter
+    @Binding var value: Double
+    var body: some View {
+        BronzePanel {
+            VStack(spacing: 4) {
+                Text(definition.name).font(.caption.bold())
+                HStack(spacing: 3) {
+                    VStack(spacing: 3) {
+                        BronzeRepeatButton(label: "+", accessibilityText: "Aumentar \(definition.name)") {
+                            value = definition.stepped(value, direction: 1)
+                        }
+                        BronzeRepeatButton(label: "−", accessibilityText: "Diminuir \(definition.name)") {
+                            value = definition.stepped(value, direction: -1)
+                        }
+                    }
+                    BronzeSkiaControl(kind: .knob, value: Binding(
+                        get: { definition.normalized(value) },
+                        set: { if $0.isFinite { value = definition.value($0) } }
+                    ), accessibilityLabel: definition.name).frame(width: 56, height: 56)
+                }
+                Text(definition.text(value)).font(.caption2.monospacedDigit())
+            }.frame(minWidth: 94)
+        }
+    }
+}
+
+struct BronzeNativePulseEditor: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    let moduleIndex: Int
+    @State private var confirmReset = false
+    private var pulse: BronzePulse { model.modulePulses[moduleIndex] }
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 8) {
+                Button(pulse.enabled ? "PULSE ON" : "PULSE OFF") { edit { $0.enabled.toggle() } }
+                    .buttonStyle(BronzeCompactButtonStyle(active: pulse.enabled))
+                Button("Sync") { edit { $0.sync.toggle() } }
+                    .buttonStyle(BronzeCompactButtonStyle(active: pulse.sync))
+                Menu("\(pulse.length) passos") {
+                    ForEach(1...16, id: \.self) { length in Button("\(length)") { edit { $0.length = length } } }
+                }
+                Text("\(model.timeSignatureNumerator)/\(model.timeSignatureDenominator)").font(.caption)
+                Spacer()
+                Button("Reset") { confirmReset = true }.font(.caption)
+            }
+            HStack(spacing: 3) {
+                ForEach(0..<16, id: \.self) { index in
+                    Button("\(index + 1)") { edit { $0.steps ^= 1 << index } }
+                        .buttonStyle(BronzeCompactButtonStyle(active: (pulse.steps & (1 << index)) != 0))
+                        .disabled(index >= pulse.length).opacity(index < pulse.length ? 1 : 0.3)
+                        .accessibilityLabel("Passo \(index + 1)")
+                }
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 10) {
+                    if pulse.sync {
+                        VStack(spacing: 3) {
+                            Text("Divisão").font(.caption.bold())
+                            HStack(spacing: 3) {
+                                VStack(spacing: 3) {
+                                    BronzeRepeatButton(label: "+", accessibilityText: "Próxima divisão") { edit { $0.division = min(7, $0.division + 1) } }
+                                    BronzeRepeatButton(label: "−", accessibilityText: "Divisão anterior") { edit { $0.division = max(0, $0.division - 1) } }
+                                }
+                                BronzeSkiaControl(kind: .knob, value: Binding(
+                                    get: { Double(pulse.division) / 7 },
+                                    set: { n in guard n.isFinite else { return }; edit { $0.division = min(7, max(0, Int((n * 7).rounded()))) } }
+                                ), accessibilityLabel: "Divisão do Pulse").frame(width: 56, height: 56)
+                            }
+                            Text(BronzePulse.divisions[pulse.division]).font(.caption2.monospacedDigit())
+                        }
+                    } else {
+                        BronzeNativeValueKnob(definition: .init("Rate", 20, 2000, 125, .milliseconds), value: Binding(
+                            get: { pulse.rateMs }, set: { value in edit { $0.rateMs = value } }))
+                    }
+                    ForEach(BronzePulseParameter.allCases) { parameter in
+                        BronzeNativeValueKnob(definition: parameter.definition, value: Binding(
+                            get: { pulse[parameter] }, set: { value in edit { $0[parameter] = value } }))
+                    }
+                }.padding(.vertical, 4)
+            }
+        }
+        .confirmationDialog("Restaurar Pulse?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Restaurar", role: .destructive) { model.setPulse(BronzePulse(), moduleIndex: moduleIndex) }
+            Button("Cancelar", role: .cancel) {}
+        }
+    }
+    private func edit(_ change: (inout BronzePulse) -> Void) {
+        var next = pulse; change(&next); model.setPulse(next, moduleIndex: moduleIndex)
+    }
+}
+
+struct BronzeNativeSynthEditor: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    @State private var oscillatorIndex = 0
+    @State private var showModulation = false
+    @State private var confirmReset = false
+    private var oscillator: BronzeOscillator { model.synth.oscillators[oscillatorIndex] }
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                ForEach(0..<3, id: \.self) { index in
+                    Button("OSC \(index + 1)") { oscillatorIndex = index; showModulation = false }
+                        .buttonStyle(BronzeCompactButtonStyle(active: !showModulation && oscillatorIndex == index))
+                        .overlay { if !showModulation && oscillatorIndex == index { BronzePresetHighlight() } }
+                }
+                Button("Filter / LFO") { showModulation = true }
+                    .buttonStyle(BronzeCompactButtonStyle(active: showModulation))
+                Menu(BronzeSynth.modes[model.synth.mode]) {
+                    ForEach(0..<3, id: \.self) { mode in Button(BronzeSynth.modes[mode]) { edit { $0.mode = mode } } }
+                }
+                Spacer()
+                Button("Reset Synth") { confirmReset = true }.font(.caption)
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
+                    if showModulation {
+                        ForEach(BronzeSynthParameter.allCases) { parameter in
+                            BronzeNativeValueKnob(definition: parameter.definition, value: Binding(
+                                get: { model.synth[parameter] }, set: { value in edit { $0[parameter] = value } }))
+                        }
+                        Menu("LFO → \(BronzeSynth.targets[model.synth.lfoTarget])") {
+                            ForEach(0..<3, id: \.self) { target in Button(BronzeSynth.targets[target]) { edit { $0.lfoTarget = target } } }
+                        }
+                    } else {
+                        VStack(spacing: 8) {
+                            Button(oscillator.enabled ? "OSC ON" : "OSC OFF") { editOscillator { $0.enabled.toggle() } }
+                                .buttonStyle(BronzeCompactButtonStyle(active: oscillator.enabled))
+                            Menu(BronzeSynth.shapes[oscillator.shape]) {
+                                ForEach(0..<4, id: \.self) { shape in Button(BronzeSynth.shapes[shape]) { editOscillator { $0.shape = shape } } }
+                            }
+                        }
+                        BronzeNativeValueKnob(definition: .init("Volume", 0, 1, 1, .amplitude), value: Binding(
+                            get: { oscillator.volume }, set: { value in editOscillator { $0.volume = value } }))
+                        BronzeNativeValueKnob(definition: .init("Detune", -100, 100, 0, .rawCents), value: Binding(
+                            get: { oscillator.detune }, set: { value in editOscillator { $0.detune = value } }))
+                        VStack(spacing: 6) {
+                            Text("Octave \(oscillator.octave)").font(.caption.bold())
+                            Button("+") { editOscillator { $0.octave = min(3, $0.octave + 1) } }.disabled(oscillator.octave == 3)
+                            Button("−") { editOscillator { $0.octave = max(-3, $0.octave - 1) } }.disabled(oscillator.octave == -3)
+                        }
+                    }
+                }.padding(.vertical, 4)
+            }
+        }
+        .confirmationDialog("Restaurar os parâmetros do Synth?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Restaurar", role: .destructive) { model.setSynth(BronzeSynth()) }
+            Button("Cancelar", role: .cancel) {}
+        }
+    }
+    private func edit(_ change: (inout BronzeSynth) -> Void) {
+        var next = model.synth; change(&next); model.setSynth(next)
+    }
+    private func editOscillator(_ change: (inout BronzeOscillator) -> Void) {
+        edit { change(&$0.oscillators[oscillatorIndex]) }
+    }
+}
+
+struct BronzeNativeProcessorEditor: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    let moduleIndex: Int
+    let kind: BronzeProcessorKind
+    @State private var confirmReset = false
+    private var settings: BronzeProcessor { model.moduleSoundEffects[moduleIndex][kind] }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Button(settings.enabled ? "\(kind.rawValue) ON" : "\(kind.rawValue) OFF") { edit { $0.enabled.toggle() } }
+                    .buttonStyle(BronzeCompactButtonStyle(active: settings.enabled))
+                if kind == .vibes { Text("Afinação • 0–100 cents").font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+                Button("Reset") { confirmReset = true }.font(.caption)
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 18) {
+                    ForEach(kind.parameters.indices, id: \.self) { index in control(index) }
+                }.padding(.vertical, 4)
+            }
+        }
+        .confirmationDialog("Restaurar \(kind.rawValue)?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Restaurar", role: .destructive) { edit { $0 = BronzeProcessor(kind) } }
+            Button("Cancelar", role: .cancel) {}
+        }
+    }
+
+    private func control(_ index: Int) -> some View {
+        let parameter = kind.parameters[index]
+        let isVinyl = kind == .vibes && index == 2
+        return BronzePanel {
+            VStack(spacing: 5) {
+                Text(parameter.name).font(.caption.bold())
+                HStack(spacing: 3) {
+                    VStack(spacing: 3) {
+                        BronzeRepeatButton(label: "+", accessibilityText: "Aumentar \(parameter.name)") {
+                            edit { $0.values[index] = parameter.stepped($0.values[index], direction: 1) }
+                        }
+                        BronzeRepeatButton(label: "−", accessibilityText: "Diminuir \(parameter.name)") {
+                            edit { $0.values[index] = parameter.stepped($0.values[index], direction: -1) }
+                        }
+                    }
+                    BronzeSkiaControl(kind: .knob, value: Binding(
+                        get: { parameter.normalized(settings.values[index]) },
+                        set: { value in guard value.isFinite else { return }; edit { $0.values[index] = parameter.value(value) } }
+                    ), accessibilityLabel: "\(kind.rawValue) \(parameter.name)")
+                        .frame(width: 58, height: 58)
+                }
+                Text(parameter.text(settings.values[index])).font(.caption2.monospacedDigit())
+                if isVinyl {
+                    Button(settings.vinylEnabled ? "VINYL ON" : "VINYL OFF") { edit { $0.vinylEnabled.toggle() } }
+                        .buttonStyle(BronzeCompactButtonStyle(active: settings.vinylEnabled))
+                }
+            }.frame(minWidth: 95)
+        }
+    }
+
+    private func edit(_ change: (inout BronzeProcessor) -> Void) {
+        var effects = model.moduleSoundEffects[moduleIndex]
+        var processor = effects[kind]
+        change(&processor)
+        effects[kind] = processor
+        model.setSoundEffects(effects, moduleIndex: moduleIndex)
     }
 }
 

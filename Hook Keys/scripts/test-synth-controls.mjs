@@ -606,7 +606,6 @@ test('each native bridge forwards all three independent oscillator volumes rathe
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
     '../ios/App/App/HookKeysNativeEngine.h',
     '../ios/App/App/HookKeysNativeEngine.mm',
-    '../ios/App/App/HookKeysNativePlugin.swift',
   ]) {
     const source = readFileSync(new URL(path, import.meta.url), 'utf8');
     assert(source.includes('oscillator1Volume'), `${path} must forward volume 1`);
@@ -698,7 +697,6 @@ test('all platform bridges forward independent octaves to the native DSP', () =>
     '../android/app/src/main/cpp/HookKeysNativeBridge.cpp',
     '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java',
     '../ios/App/App/HookKeysNativeEngine.h', '../ios/App/App/HookKeysNativeEngine.mm',
-    '../ios/App/App/HookKeysNativePlugin.swift',
   ]) {
     const source = readFileSync(new URL(path, import.meta.url), 'utf8');
     assert(source.includes('oscillator1Octave'), path);

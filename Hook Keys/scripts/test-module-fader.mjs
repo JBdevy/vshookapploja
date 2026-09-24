@@ -18,12 +18,12 @@ test('módulos sem timbre descarregam o SF2 nas três plataformas', () => {
   const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
   const desktop = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
-  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
+  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.h', import.meta.url), 'utf8');
   assert.match(player, /if \(!timbreId\)[\s\S]*?hookKeysNative\.unloadSoundFont\(moduleIndex\)/);
   assert.match(bridge, /async unloadSoundFont\(moduleIndex: number\)/);
   assert.match(desktop, /fn unload_sound_font\(/);
   assert.match(android, /public void unloadSoundFont\(PluginCall call\)/);
-  assert.match(ios, /@objc func unloadSoundFont\(_ call: CAPPluginCall\)/);
+  assert.match(ios, /unloadSoundFontFromModule:/);
 });
 
 test('players temporários dos pads liberam a URL ao trocar arquivo ou fechar', () => {
@@ -189,13 +189,11 @@ test('FX escolhidos para os pads voltam do armazenamento local ao reabrir o app'
   assert.match(player, /effect\.audioFileName = fileName/);
 });
 
-test('iOS bridge registers a plugin instance rather than a type skipped by auto-registration', () => {
-  const controller = readFileSync(new URL('../ios/App/App/HookKeysBridgeViewController.swift', import.meta.url), 'utf8');
-  assert.match(controller, /private let hookKeysNativePlugin = HookKeysNativePlugin\(\)/);
-  assert.match(controller, /bridge\?\.registerPluginInstance\(hookKeysNativePlugin\)/);
-  assert.doesNotMatch(controller, /bridge\?\.registerPluginType\(/);
+test('iOS inicia diretamente no host nativo, sem registro de plugins', () => {
+  const delegate = readFileSync(new URL('../ios/App/App/AppDelegate.swift', import.meta.url), 'utf8');
+  assert.match(delegate, /rootViewController = BronzeNativeHostingController\(\)/);
+  assert.doesNotMatch(delegate, /Capacitor|Bridge|registerPlugin/);
 });
-
 test('iOS generator and DSP use the same sample-rate clock negotiated by the route', () => {
   const engine = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
   assert.match(engine, /outputFormat\s*=\s*\[_audioEngine\.outputNode inputFormatForBus:0\]/);
@@ -206,17 +204,6 @@ test('iOS generator and DSP use the same sample-rate clock negotiated by the rou
   assert.doesNotMatch(engine, /connect:_sourceNode to:_audioEngine\.mainMixerNode format:nil/);
 });
 
-test('iOS keeps a USB audio route stable during the system hand-off', () => {
-  const plugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
-  assert.match(plugin, /cachedAudioOutputs/);
-  assert.match(plugin, /AVAudioSession\.routeChangeNotification/);
-  assert.match(plugin, /reason\s*==\s*\.oldDeviceUnavailable/);
-  assert.match(plugin, /AVAudioSessionRouteChangePreviousRouteKey/);
-  assert.match(plugin, /currentRoute\.outputs/);
-  assert.match(plugin, /scheduleAudioRouteRecovery/);
-  assert.match(plugin, /if alreadyActive[\s\S]*?call\.resolve\(\)[\s\S]*?return/);
-  assert.doesNotMatch(plugin, /audioOutputGracePeriod/);
-});
 
 test('Android and desktop build their DSP clock from the actual 44.1/48 kHz stream', () => {
   const android = readFileSync(new URL('../android/app/src/main/cpp/HookKeysNativeBridge.cpp', import.meta.url), 'utf8');
@@ -238,10 +225,8 @@ test('iOS batches MIDI paint and isolates dynamic keyboard and meter layers', ()
 
 test('mobile effects omitted from a call stay bypassed rather than activating compression', () => {
   const plugin = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
-  const iosPlugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
   for (const effect of ['compressorMix', 'delayMix', 'reverbMix']) {
     assert(plugin.includes(`call.getFloat("${effect}", 0.0f)`), `${effect} deve nascer em zero`);
-    assert(iosPlugin.includes(`call.getFloat("${effect}", 0)`), `${effect} deve nascer em zero no iOS`);
   }
 });
 
@@ -332,7 +317,6 @@ test('live fader gain is forwarded by every native platform bridge', () => {
     ['../src-tauri/src/native_engine_bridge.cpp', 'hk_runtime_set_module_gain'],
     ['../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', 'setModuleGain'],
     ['../android/app/src/main/cpp/HookKeysNativeBridge.cpp', 'nativeSetModuleGain'],
-    ['../ios/App/App/HookKeysNativePlugin.swift', 'setModuleGain'],
     ['../ios/App/App/HookKeysNativeEngine.mm', 'setModuleGainDb'],
   ]) {
     assert(readFileSync(new URL(path, import.meta.url), 'utf8').includes(marker), path);
@@ -405,7 +389,6 @@ test('velocity limits are forwarded by every native platform bridge', () => {
     ['../src/platform/native/HookKeysNative.ts', ["'configure_velocity_limits'", 'plugin.configureVelocityLimits']],
     ['../src-tauri/src/main.rs', ['fn configure_velocity_limits', '            configure_velocity_limits,']],
     ['../src-tauri/src/native_engine_bridge.cpp', ['hk_runtime_configure_velocity_limits', 'setVelocityLimits']],
-    ['../ios/App/App/HookKeysNativePlugin.swift', ['name: "configureVelocityLimits"', 'func configureVelocityLimits']],
     ['../ios/App/App/HookKeysNativeEngine.h', ['configureVelocityLimits:']],
     ['../ios/App/App/HookKeysNativeEngine.mm', ['configureVelocityLimits:', 'setVelocityLimits']],
     ['../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', ['public void configureVelocityLimits', 'nativeConfigureVelocityLimits(']],
@@ -421,7 +404,6 @@ test('metronome output route is forwarded by every native platform bridge', () =
     ['../src/platform/native/HookKeysNative.ts', ["'set_metronome_output'", 'plugin.setMetronomeOutput']],
     ['../src-tauri/src/main.rs', ['fn set_metronome_output', 'hk_runtime_set_metronome_output', '            set_metronome_output,']],
     ['../src-tauri/src/native_engine_bridge.cpp', ['hk_runtime_set_metronome_output', 'setMetronomeOutput']],
-    ['../ios/App/App/HookKeysNativePlugin.swift', ['name: "setMetronomeOutput"', 'func setMetronomeOutput']],
     ['../ios/App/App/HookKeysNativeEngine.h', ['setMetronomeOutputChannelStart:']],
     ['../ios/App/App/HookKeysNativeEngine.mm', ['setMetronomeOutputChannelStart:', 'setMetronomeOutput(']],
     ['../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', ['public void setMetronomeOutput', 'nativeSetMetronomeOutput(']],
@@ -436,9 +418,6 @@ test('music plays inside the iOS engine with its own output', () => {
   for (const [path, markers] of [
     ['../src/platform/native/HookKeysNative.ts', ['plugin.beginTrackUpload', 'plugin.loadTrack', 'plugin.controlTrack',
       'plugin.trackStatus', 'plugin.configureTrackOutput', 'plugin.adoptPickedAudioFile']],
-    ['../ios/App/App/HookKeysNativePlugin.swift', ['name: "loadTrack"', 'name: "controlTrack"', 'name: "trackStatus"',
-      'name: "configureTrackOutput"', 'name: "beginTrackUpload"', 'name: "appendTrackChunk"', 'name: "finishTrackUpload"',
-      'name: "adoptPickedAudioFile"', '"track_not_loaded"', 'applicationSupportDirectory']],
     ['../ios/App/App/HookKeysNativeEngine.h', ['loadTrackId:', 'controlTrackId:', 'trackStatus', 'configureTrackOutputChannelStart:']],
     ['../ios/App/App/HookKeysNativeEngine.mm', ['ExtAudioFileOpenURL', 'kExtAudioFileProperty_ClientDataFormat', 'tracks()']],
     ['../native-engine/src/NativeEngineRuntime.cpp', ['tracks_->render(output, frames, channels)']],
@@ -453,7 +432,6 @@ test('Glide mode and velocity gate are forwarded by every native platform bridge
     ['../src/platform/native/HookKeysNative.ts', ["'configure_glide'", 'plugin.configureGlide']],
     ['../src-tauri/src/main.rs', ['fn configure_glide', 'hk_runtime_configure_glide', '            configure_glide,']],
     ['../src-tauri/src/native_engine_bridge.cpp', ['hk_runtime_configure_glide', 'setGlideBehavior']],
-    ['../ios/App/App/HookKeysNativePlugin.swift', ['name: "configureGlide"', 'func configureGlide', 'velocityThreshold']],
     ['../ios/App/App/HookKeysNativeEngine.h', ['configureGlide:']],
     ['../ios/App/App/HookKeysNativeEngine.mm', ['configureGlide:', 'setGlideBehavior']],
     ['../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', ['public void configureGlide', 'nativeConfigureGlide(']],
@@ -484,24 +462,6 @@ test('track waveform peaks follow the loudness of the music', () => {
   assert.equal(transport.TRACK_WAVEFORM_BARS, 96);
 });
 
-test('iOS Add música opens the native document picker directly', () => {
-  const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
-  const swift = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
-  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  for (const method of ['pickAudioFiles', 'releasePickedAudioFile']) {
-    assert(bridge.includes(`plugin.${method}(`), `TypeScript chama ${method}`);
-    assert(swift.includes(`CAPPluginMethod(name: "${method}"`), `Swift registra ${method}`);
-    assert(swift.includes(`@objc func ${method}(_ call: CAPPluginCall)`), `Swift implementa ${method}`);
-  }
-  assert(swift.includes('UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)'), 'abre o seletor de documentos direto, em áudio');
-  assert(swift.includes('picker.allowsMultipleSelection = true'), 'várias músicas de uma vez');
-  assert(swift.includes('FileManager.default.copyItem(at: url, to: destination)'), 'aceita músicas vindas de outro volume/provedor do app Arquivos');
-  assert(!/fileBrowser|FileBrowser/.test(swift + bridge + player), 'o gerenciador próprio saiu');
-  assert(bridge.includes("Capacitor.getPlatform() === 'ios'"), 'só no app iOS');
-  assert(player.includes('hookKeysNative.audioPicker.isAvailable()'), 'Add música usa o seletor nativo no iOS');
-  assert(player.includes('this.trackLibrary.addNativeFile({'), 'a biblioteca registra a música depois da adoção nativa');
-  assert(!player.includes('fetch(picker.fileUrl(file.path))'), 'não duplica a música inteira na memória e no IndexedDB');
-});
 
 test('App Store icon has no alpha channel (Apple rejects transparent icons, error 90717)', () => {
   const png = readFileSync(new URL('../ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png', import.meta.url));
@@ -532,23 +492,11 @@ test('Modo Lite reduz o trabalho contínuo sem tirar a transição do meter', ()
   assert.match(css, /\.hook-keys-lite :is\([\s\S]*?\.performance-pad\.is-active[\s\S]*?animation: none !important;/);
 });
 
-test('FX da WebView recupera o áudio nativo no iOS sem descarregar SF2 nem o Pad contínuo', () => {
-  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  const bridge = readFileSync(new URL('../src/platform/native/HookKeysNative.ts', import.meta.url), 'utf8');
+test('iOS preserva o runtime ao reativar a sessão de áudio', () => {
   const ios = readFileSync(new URL('../ios/App/App/HookKeysNativeEngine.mm', import.meta.url), 'utf8');
-  assert.match(player, /audio\.play\(\)\.then\(\(\) => \{\s*this\.scheduleNativeRecoveryAfterEffectStart\(\)/);
-  assert.match(player, /recoverPreservedNativeAudioIfNeeded[\s\S]*?hookKeysNative\.recoverAudioOutput/);
-  assert.match(bridge, /async recoverAudioOutput[\s\S]*?preserveEngine: true/);
-  assert.match(ios, /HTMLMediaElement[\s\S]*?setCategory:AVAudioSessionCategoryPlayback/);
-});
-
-test('iOS mantém a interface USB escolhida enquanto a rota reconecta', () => {
-  const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  const plugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
-  assert.match(player, /devices\.some\(\(\{ id \}\) => id === selectedId\)\)[\s\S]{0,120}return;[\s\S]{0,500}if \(this\.iosRuntime\) return;/);
-  assert.match(player, /this\.selectedAudioDeviceId && !device && !this\.iosRuntime/);
-  assert.match(plugin, /alreadyActive = \(requestedId\.isEmpty\s*\|\|/);
-  assert.match(plugin, /CAPPluginMethod\(name: "audioRouteLog"/);
+  assert.match(ios, /if \(_audioEngine != nil && _audioState && _audioState->runtime\)/);
+  assert.match(ios, /setCategory:AVAudioSessionCategoryPlayback/);
+  assert.match(ios, /preserveEngine/);
 });
 
 test('música importada no iOS não grava Blob no IndexedDB', () => {
@@ -616,20 +564,15 @@ test('Modo Lite corta a pintura dos botões no toque', () => {
   assert.match(css, /\.hook-keys-lite :is\(\.player-screen, \.player-modal\) :is\(button, \[role="button"\], \.app-select__toggle\) \{\s*text-shadow: none !important;\s*transition: none !important;/);
 });
 
-test('apps mostram a RAM do aparelho ao lado do User; desktop mantém CPU', () => {
+test('Android e desktop mostram RAM; desktop mantém CPU', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
   // No desktop os dois ficam lado a lado; no app, só a RAM.
   assert.match(player, /this\.desktopRuntime \? `[\s\S]*?data-cpu-meter[\s\S]*?` : ''\}\s*\$\{this\.desktopRuntime \|\| Capacitor\.isNativePlatform\(\) \? `[\s\S]*?data-ram-meter/);
   const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
   assert.match(rust, /fn memory_usage\(\) -> Result<HashMap<&'static str, f64>, String>/);
   assert.match(rust, /pub fn status_bytes\(\) -> \(u64, u64\)/);
-  assert.match(ios, /CAPPluginMethod\(name: "memoryUsage"/);
   // A conta é do aparelho inteiro, não só do app.
-  assert.match(ios, /private lazy var hostPort: host_t = mach_host_self\(\)/);
-  assert.match(ios, /host_statistics64\(self\.hostPort, host_flavor_t\(HOST_VM_INFO64\)/);
-  assert.match(ios, /ProcessInfo\.processInfo\.physicalMemory[\s\S]*?deviceMemoryUsedBytes\(\) \?\? appMemoryUsedBytes\(\)/);
   assert.match(android, /public void memoryUsage\(PluginCall call\)\s*\{\s*memoryExecutor\.execute/);
   assert.match(android, /used = Math\.max\(0, memory\.totalMem - memory\.availMem\);/);
   assert.match(player, /Memória usada no aparelho: \$\{formatGigabytes\(usage\.usedBytes\)\} de \$\{formatGigabytes\(usage\.limitBytes\)\}/);
@@ -848,13 +791,12 @@ test('Hook Keys: long press só abre os 30%; com eles abertos, um toque fecha', 
 
 test('paisagem dos dois lados no iOS e no Android', () => {
   const runtime = readFileSync(new URL('../src/platform/runtime.ts', import.meta.url), 'utf8');
-  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
-  const iosController = readFileSync(new URL('../ios/App/App/HookKeysBridgeViewController.swift', import.meta.url), 'utf8');
+  const iosController = readFileSync(new URL('../ios/App/App/BronzeNativeHostingController.swift', import.meta.url), 'utf8');
   const orientationTransition = readFileSync(new URL('../src/platform/orientationTransition.ts', import.meta.url), 'utf8');
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
   assert.match(runtime, /if \(await hookKeysNative\.lockOrientation\(mode\)\) return;/);
   assert.match(runtime, /window\.addEventListener\('resize', refreshNotchSideAfterOrientationChange\)/);
-  assert.match(ios, /let mask: UIInterfaceOrientationMask = landscape \? \.landscape : \.portrait/);
+  assert.match(iosController, /supportedInterfaceOrientations: UIInterfaceOrientationMask \{ \.landscape \}/);
   assert.match(iosController, /override var shouldAutorotate: Bool \{ true \}/);
   assert.match(orientationTransition, /await refreshNativeNotchSide\(\);/);
   assert.match(android, /SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);
@@ -1053,7 +995,6 @@ test('knobs dos cinco volumes ficam circulares e separados do meter no desktop',
 test('celular usa a mesma margem segura no notch e na porta e mantém os cinco knobs circulares', () => {
   const runtime = readFileSync(new URL('../src/platform/runtime.ts', import.meta.url), 'utf8');
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
-  const ios = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
   assert.match(runtime, /const nativeSide = await hookKeysNative\.displayCutoutSide\(\);/,
     'o layout consulta o lado físico informado pelo app nativo');
   assert.match(runtime, /if \(!isNative\) \{[^}]*await updateNativeNotchSide\(\);[^}]*addEventListener\('resize'/s,
@@ -1069,11 +1010,6 @@ test('celular usa a mesma margem segura no notch e na porta e mantém os cinco k
     'nenhum lado lateral pode ficar com margem menor que o outro');
   assert.match(android, /getDisplayCutout\(\)/);
   assert.match(android, /cutout\.getBoundingRects\(\)/);
-  assert.match(ios, /@objc func displayCutoutSide/);
-  assert.match(ios, /case \.landscapeLeft: side = "right"/,
-    'UIInterfaceOrientation landscapeLeft deixa o notch físico à direita');
-  assert.match(ios, /case \.landscapeRight: side = "left"/,
-    'UIInterfaceOrientation landscapeRight deixa o notch físico à esquerda');
   assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \.player-output-knob__face \{[^}]*flex: 0 0 clamp\(20px,[^}]*width: clamp\(20px,[^}]*height: clamp\(20px,[^}]*border-radius: 50%;/s);
   assert.match(css, /:root:not\(\[data-runtime="desktop"\]\) \.player-screen--cellular \.player-output-mini-meter \{[^}]*height: clamp\(20px,/s);
 });
@@ -1119,10 +1055,6 @@ test('card do Glide: botões compactos no Synth e título acompanha Glide ou Por
   assert.match(css, /\.module-glide-card output \{[^}]*width: 7\.5ch;[^}]*text-align: center;/);
 });
 
-test('diagnóstico da rota mostra o Áudio Mono do iOS (soma L+R só nas saídas 1-2)', () => {
-  const plugin = readFileSync(new URL('../ios/App/App/HookKeysNativePlugin.swift', import.meta.url), 'utf8');
-  assert.match(plugin, /UIAccessibility\.isMonoAudioEnabled/);
-});
 
 test('seletor próprio: tocar no rótulo (ou nos próprios botões dentro dele) não abre o select nativo do sistema', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');

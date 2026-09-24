@@ -34,7 +34,7 @@ test('Trance Gate defaults and normalized settings contain only volume steps, wi
   assert.doesNotMatch(markup, /Velocity|Semitone|data-pattern-parameter="semitone"/);
   assert.equal([...markup.matchAll(/data-trance-gate-step=/g)].length, 16);
   assert.equal(tranceGate.tranceGateBeatMultiplier('1/8 T'), 1 / 3);
-  for (const path of ['../src-tauri/src/main.rs', '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', '../ios/App/App/HookKeysNativePlugin.swift']) {
+  for (const path of ['../src-tauri/src/main.rs', '../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', '../ios/App/App/HookKeysNativeEngine.h']) {
     assert.match(readFileSync(new URL(path, import.meta.url), 'utf8'), /configure_trance_gate|configureTranceGate/);
   }
 });

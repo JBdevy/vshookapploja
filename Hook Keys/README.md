@@ -37,7 +37,8 @@ O token fica atrás da interface `SessionVault`. O preview usa `sessionStorage`,
 - `src/features/auth`: fluxo e interface de autenticação.
 - `src/shared/api`: transporte HTTP e erros padronizados.
 - `src/platform`: diferenças entre navegador, iOS e Android.
-- `src/platform/native/HookKeysNative.ts`: ponte única entre a interface e o motor C++ no Android/iOS.
+- `src/platform/native/HookKeysNative.ts`: ponte entre a interface web e o motor C++ no Android/desktop.
+- `ios/App/App`: interface SwiftUI/UIKit, controles Skia e motor C++ direto, sem WebView.
 - `native-engine`: núcleo C++ compartilhado pelos dois projetos nativos.
 
 O navegador continua sendo o preview visual. Áudio SF2 de baixa latência e entrada MIDI física são executados somente no aplicativo nativo. O motor recebe os três slots MIDI, carrega um SF2 diferente por módulo e aplica faixa, oitava, sustain, modulation, envelope, cutoff, EQ, compressor, delay, reverb, volume do módulo e Master.
@@ -45,11 +46,16 @@ O navegador continua sendo o preview visual. Áudio SF2 de baixa latência e ent
 ## Projetos nativos
 
 Os projetos `android/` e `ios/` fazem parte desta base e devem ser versionados.
-Para atualizar os arquivos web e os plugins antes de abrir as IDEs:
+Para atualizar a interface web do Android e verificar os recursos do iOS:
 
 ```text
 npm run native:sync
 ```
+
+No iOS não se executa `cap sync ios`: o projeto não depende mais de Capacitor.
+Use `npm run native:sync:ios` para validar áudio/projeto e
+`npm run native:open:ios` no Mac para abrir o Xcode. A lista de recursos já
+migrados e os que ainda faltam está em [APPLE_NATIVE.md](APPLE_NATIVE.md).
 
 A inicialização reforça paisagem e tela ativa no runtime nativo. A orientação
 também está fixada nos projetos: Android usa as duas posições horizontais e
