@@ -1021,6 +1021,12 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return YES;
 }
 
+- (BOOL)setModuleEnabledMask:(NSInteger)mask {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && mask >= 0 && mask <= 255 &&
+      runtime->setModuleEnabledMask(static_cast<std::uint8_t>(mask));
+}
+
 - (void)clearPerformanceMappings {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (runtime) runtime->clearPerformanceMappings();

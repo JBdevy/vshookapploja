@@ -553,6 +553,58 @@ void testDisableAndPanic() {
   expect(synth.events.back().type == Event::Type::allNotesOff, "panic reaches every module");
 }
 
+void testModuleEnabledMaskPreservesTailsAndSustain() {
+  std::array<RecordingSynth, hook_keys::kModuleCount> synths;
+  hook_keys::HookKeysEngine::SynthModules modules{};
+  for (std::size_t index = 0; index < synths.size(); ++index) modules[index] = &synths[index];
+  auto engine = std::make_unique<hook_keys::HookKeysEngine>(modules);
+  expect(engine->enqueueMidi(midi(0x90, 60, 100)), "start a note in every module");
+  expect(engine->enqueueMidi(midi(0xB0, 64, 127)), "hold pedal before solo");
+  process(*engine);
+  for (auto& synth : synths) synth.events.clear();
+
+  expect(engine->setModuleEnabledMask(1u << 6), "solo organ with one atomic command");
+  process(*engine);
+  for (const auto& synth : synths) {
+    expect(synth.events.empty(), "solo must not cut, retrigger or reset existing voices");
+  }
+  expect(engine->enqueueMidi(midi(0x90, 64, 100)), "new note while organ is soloed");
+  expect(engine->enqueueMidi(midi(0xB0, 1, 100)), "mod wheel while soloed");
+  expect(engine->enqueueMidi(midi(0xE0, 0, 80)), "pitch wheel while soloed");
+  process(*engine);
+  for (std::size_t index = 0; index < synths.size(); ++index) {
+    expect(synths[index].events.size() == (index == 6 ? 3u : 0u),
+        "only solo module receives new notes, modulation and pitch");
+    synths[index].events.clear();
+  }
+  expect(engine->enqueueMidi(midi(0x80, 60, 0)), "release original keys under solo");
+  expect(engine->enqueueMidi(midi(0xB0, 64, 0)), "release pedal under solo");
+  process(*engine);
+  for (auto& synth : synths) {
+    expect(synth.events.size() == 2 && synth.events[0].type == Event::Type::noteOff &&
+        synth.events[1].type == Event::Type::controlChange && synth.events[1].data1 == 64,
+        "note-off and sustain release still reach all original modules");
+    synth.events.clear();
+  }
+  expect(engine->setModuleEnabledMask(0x81), "restore original on/off mask, modules 1 and 8");
+  expect(engine->enqueueMidi(midi(0x90, 67, 100, hook_keys::kKeyboardBroadcastInput)),
+      "screen keyboard follows restored power states");
+  process(*engine);
+  for (std::size_t index = 0; index < synths.size(); ++index) {
+    expect(synths[index].events.size() == (index == 0 || index == 7 ? 1u : 0u),
+        "restoring power states must not enable modules that were off before solo");
+  }
+
+  StereoSignalSynth tail;
+  modules.fill(nullptr);
+  modules[0] = &tail;
+  auto tailEngine = std::make_unique<hook_keys::HookKeysEngine>(modules);
+  expect(tailEngine->setModuleEnabledMask(0), "close all MIDI gates");
+  std::array<float, 32> left{}, right{};
+  tailEngine->render(left.data(), right.data(), left.size());
+  expect(left.back() > 0 && right.back() > 0, "disabled modules continue rendering their tails");
+}
+
 void testMidiInputRouting() {
   RecordingSynth synth;
   hook_keys::HookKeysEngine::SynthModules modules{};
@@ -1469,6 +1521,36 @@ void testTrackPlayerPlaysRoutesLoopsAndEnds() {
       "Playlist meter reads the post-volume stereo track signal");
   expect(runtime.consumeTrackPeaks() == std::array<float, 2>{},
       "Playlist meter peaks reset after the UI reads them");
+}
+
+void testMutedMetronomeKeepsPhaseWhenUnmuted() {
+  for (int sound = 1; sound <= 5; ++sound) {
+    for (const int denominator : {4, 8}) {
+      hook_keys::NativeEngineRuntime reference(48000.0, 512);
+      hook_keys::NativeEngineRuntime muted(48000.0, 512);
+      const int numerator = denominator == 8 ? 6 : 4;
+      reference.setMetronome(true, 132.5f, 1, sound, false, false, numerator, denominator);
+      muted.setMetronome(true, 132.5f, 0, sound, false, false, numerator, denominator);
+      (void)metronomeOnsets(reference, 7000, 256);
+      expect(metronomeOnsets(muted, 7000, 256).empty(), "loop clock stays silent while click is off");
+      muted.setMetronome(true, 132.5f, 1, sound, false, false, numerator, denominator, false);
+      const auto expected = metronomeOnsets(reference, 48000, 256);
+      const auto actual = metronomeOnsets(muted, 48000, 256);
+      if (actual != expected) {
+        std::cerr << "click=" << sound << " denominator=" << denominator << " expected:";
+        for (auto onset : expected) std::cerr << ' ' << onset;
+        std::cerr << " actual:";
+        for (auto onset : actual) std::cerr << ' ' << onset;
+        std::cerr << '\n';
+      }
+      expect(!actual.empty() && actual == expected,
+          "unmuting any click at fractional BPM preserves the running 4/4 or 6/8 phase");
+      // A sampled click can still be sounding between beats. OFF must gate
+      // that existing tail too, without resetting the clock.
+      muted.setMetronome(true, 132.5f, 0, sound, false, false, numerator, denominator, false);
+      expect(metronomeOnsets(muted, 1024, 256).empty(), "mute also gates an already running click");
+    }
+  }
 }
 
 void testVelocityCurveMapping() {
@@ -3733,6 +3815,7 @@ int main() {
   testArpeggiatorRouteClearsSustain();
   testPerModuleControllerFilters();
   testDisableAndPanic();
+  testModuleEnabledMaskPreservesTailsAndSustain();
   testMidiInputRouting();
   testAllMidiInputsRouting();
   testConcurrentProducers();
@@ -3756,6 +3839,7 @@ int main() {
   testSynthPitchIsIndependentOfSampleRate();
   testIndependentOscillatorOctaves();
   testMetronomeRunsOnTheAudioCallback();
+  testMutedMetronomeKeepsPhaseWhenUnmuted();
   testVelocityCurveMapping();
   testCutoffProcessing();
   testCutoffVelocityCurve();

@@ -70,6 +70,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
       outputChannelCount:(NSInteger)outputChannelCount
             outputDualMono:(BOOL)outputDualMono;
 - (BOOL)setModuleGainDb:(float)db moduleIndex:(NSInteger)moduleIndex;
+- (BOOL)setModuleEnabledMask:(NSInteger)mask NS_SWIFT_NAME(setModuleEnabledMask(_:));
 - (BOOL)configureModuleEffects:(NSInteger)moduleIndex
                        cutoffHz:(float)cutoffHz
                  cutoffVelocity:(NSArray<NSNumber *> *)cutoffVelocity

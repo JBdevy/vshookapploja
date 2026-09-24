@@ -522,6 +522,15 @@ bool NativeEngineRuntime::setModuleEffects(
   return controlLayer_->engine->setModuleConfig(moduleIndex, controlLayer_->configs[moduleIndex]);
 }
 
+bool NativeEngineRuntime::setModuleEnabledMask(std::uint8_t mask) noexcept {
+  std::scoped_lock lock(configMutex_);
+  if (!controlLayer_->engine->setModuleEnabledMask(mask)) return false;
+  for (std::size_t index = 0; index < kModuleCount; ++index) {
+    controlLayer_->configs[index].enabled = (mask & (1u << index)) != 0;
+  }
+  return true;
+}
+
 bool NativeEngineRuntime::setOrganRotaryFast(bool fast) noexcept {
   std::scoped_lock lock(configMutex_);
   auto &config = controlLayer_->configs[6];
@@ -1158,6 +1167,9 @@ void NativeEngineRuntime::applyMasterLimiter(float* frame, std::size_t channels)
 // Reads the control-thread state once per block: the click keeps its own frame
 // clock, so its timing never depends on how often the interface calls back.
 bool NativeEngineRuntime::beginMetronomeBlock() noexcept {
+  // Volume is a gate on the running waveform, not part of the beat trigger.
+  // This also mutes long sampled clicks without waiting for the next beat.
+  metronomeBlockVolume_ = metronomeVolume_.load(std::memory_order_acquire);
   if (!metronomeEnabled_.load(std::memory_order_acquire)) {
     metronomeWasEnabled_ = false;
     metronomeClickFrame_ = 0;
@@ -1226,8 +1238,7 @@ std::array<float, 2> NativeEngineRuntime::renderMetronomeSample() noexcept {
     const float baseFrequency = sound == 2 ? 1900.0f : sound == 3 ? 760.0f : 1350.0f;
     const float duration = sound == 2 ? 0.032f : sound == 3 ? 0.072f : 0.045f;
     metronomeClickFrequency_ = baseFrequency * (accented ? 1.28f : 1.0f);
-    metronomeClickAmplitude_ = (accented ? 1.33f : 1.0f) *
-        metronomeVolume_.load(std::memory_order_acquire);
+    metronomeClickAmplitude_ = accented ? 1.33f : 1.0f;
     metronomeClickWaveform_ = sound;
     metronomeClickFrame_ = 0;
     metronomeClickLength_ = sound == 5 && !metronomeClick5Left_.empty()
@@ -1253,15 +1264,15 @@ std::array<float, 2> NativeEngineRuntime::renderMetronomeSample() noexcept {
   if (metronomeClickWaveform_ == 4 && metronomeClickFrame_ < metronomeClick4Left_.size()) {
     const auto frame = metronomeClickFrame_++;
     return {
-      metronomeClick4Left_[frame] * metronomeClickAmplitude_,
-      metronomeClick4Right_[frame] * metronomeClickAmplitude_,
+      metronomeClick4Left_[frame] * metronomeClickAmplitude_ * metronomeBlockVolume_,
+      metronomeClick4Right_[frame] * metronomeClickAmplitude_ * metronomeBlockVolume_,
     };
   }
   if (metronomeClickWaveform_ == 5 && metronomeClickFrame_ < metronomeClick5Left_.size()) {
     const auto frame = metronomeClickFrame_++;
     return {
-      metronomeClick5Left_[frame] * metronomeClickAmplitude_,
-      metronomeClick5Right_[frame] * metronomeClickAmplitude_,
+      metronomeClick5Left_[frame] * metronomeClickAmplitude_ * metronomeBlockVolume_,
+      metronomeClick5Right_[frame] * metronomeClickAmplitude_ * metronomeBlockVolume_,
     };
   }
   const auto frame = static_cast<double>(metronomeClickFrame_++);
@@ -1276,7 +1287,7 @@ std::array<float, 2> NativeEngineRuntime::renderMetronomeSample() noexcept {
       : metronomeClickWaveform_ == 3
           ? (2.0 / kPi) * std::asin(std::sin(phase))
           : std::sin(phase);
-  const auto sample = static_cast<float>(oscillator * attack * decay) * metronomeClickAmplitude_;
+  const auto sample = static_cast<float>(oscillator * attack * decay) * metronomeClickAmplitude_ * metronomeBlockVolume_;
   return {sample, sample};
 }
 

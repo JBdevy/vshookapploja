@@ -60,6 +60,26 @@ assert.match(engineHeader, /setOrganRotaryFast/);
 assert.match(engineHeader, /setOrganCabinetEnabled/);
 assert.match(nativeRoot, /toggleOrganRotarySpeed/);
 assert.match(nativeRoot, /toggleOrganCabinet/);
+assert.match(nativeModel, /setModuleEnabledMask\(mask\)/);
+assert.match(engineHeader, /NS_SWIFT_NAME\(setModuleEnabledMask\(_:\)\)/);
+assert.match(nativeRoot, /toggleModuleSolo\(index\)/);
+assert.match(nativeModel, /startAccessingSecurityScopedResource\(\)/);
+assert.match(nativeModel, /stopAccessingSecurityScopedResource\(\)/);
+assert.match(nativeRoot, /fileImporter\(/);
+assert.match(nativeModel, /loadSoundFont\(atPath:/);
+assert.match(nativeModel, /metronomeEnabled \|\| loopPlaying/);
+assert.match(nativeModel, /volume: metronomeEnabled \? 1 : 0/);
+assert.match(nativeModel, /syncMetronome: true/);
+assert.match(nativeModel, /playbackRate: tempo \/ 120/);
+assert.match(nativeModel, /bankIndex: activePadBank, enabled: false/);
+assert.match(nativeModel, /bankIndex: selectedPadBank, enabled: true/);
+assert.match(nativeModel, /guard !pressedEffects\.contains\(index\)/,
+  'mover o dedo dentro do FX não pode dispará-lo novamente');
+assert.match(nativeRoot, /model\.setPadFilter\(low: low, normalized: \$0\)/);
+for (const loop of ['Beat 4-4', 'Beat 4-4 2', 'Beat 6-8']) {
+  assert.ok(fs.existsSync(path.join(root, 'public/assets/loops', `${loop}.mp3`)),
+    `loop nativo precisa estar empacotado: ${loop}`);
+}
 assert.doesNotMatch(nativeRoot, /UIHostingController|UIKit/,
   'a view principal deve continuar compartilhável com o target macOS');
 assert.match(nativeHost, /UIHostingController<BronzeNativeRootView>/);

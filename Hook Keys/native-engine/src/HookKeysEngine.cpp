@@ -93,6 +93,13 @@ bool HookKeysEngine::setTempoBpm(float tempoBpm) noexcept {
   return push(EngineCommand::tempo(std::clamp(tempoBpm, 60.0f, 300.0f)));
 }
 
+bool HookKeysEngine::setModuleEnabledMask(std::uint8_t mask) noexcept {
+  EngineCommand command;
+  command.type = CommandType::setModuleEnabledMask;
+  command.moduleEnabledMask = mask;
+  return push(command);
+}
+
 bool HookKeysEngine::setGlobalTranspose(int semitones) noexcept {
   return push(EngineCommand::globalTranspose(
       static_cast<std::int8_t>(std::clamp(semitones, -60, 60))));
@@ -419,6 +426,11 @@ void HookKeysEngine::applyCommand(const EngineCommand& command) noexcept {
       break;
     case CommandType::setGlobalTranspose:
       settings_.globalTransposeSemitones = command.globalTransposeSemitones;
+      break;
+    case CommandType::setModuleEnabledMask:
+      for (std::size_t index = 0; index < kModuleCount; ++index) {
+        configs_[index].enabled = (command.moduleEnabledMask & (1u << index)) != 0;
+      }
       break;
   }
 }

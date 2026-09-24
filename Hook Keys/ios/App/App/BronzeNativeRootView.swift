@@ -1,7 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct BronzeNativeRootView: View {
     @StateObject private var model = BronzeNativeAppModel()
+    private struct LibraryTarget: Identifiable { let id: Int }
+    @State private var libraryTarget: LibraryTarget?
 
     var body: some View {
         ZStack {
@@ -18,6 +21,17 @@ struct BronzeNativeRootView: View {
         .preferredColorScheme(.dark)
         .onAppear { model.start() }
         .onDisappear { model.stopPerformanceNotes() }
+        .sheet(item: $libraryTarget) { target in
+            BronzeNativeSoundFontLibrary(model: model, moduleIndex: target.id)
+        }
+        .alert("Controle do módulo", isPresented: Binding(
+            get: { model.controlError != nil },
+            set: { if !$0 { model.controlError = nil } }
+        )) {
+            Button("OK") { model.controlError = nil }
+        } message: {
+            Text(model.controlError ?? "")
+        }
     }
 
     private var startupView: some View {
@@ -47,6 +61,18 @@ struct BronzeNativeRootView: View {
         GeometryReader { geometry in
             VStack(spacing: 6) {
                 transport
+                if let loop = model.selectedLoop {
+                    HStack(spacing: 8) {
+                        Button(model.loopPlaying ? "Parar" : "Play") { model.toggleLoopPlayback() }
+                            .buttonStyle(BronzeCompactButtonStyle(active: model.loopPlaying))
+                            .disabled(model.loadingLoop)
+                        Text(loop.name).font(.caption.bold())
+                        ProgressView(value: min(1, model.loopPosition / max(0.001, model.loopDuration)))
+                            .tint(.bronzeLight)
+                        Text(String(format: "%.1f s", model.loopPosition))
+                            .font(.caption2.monospacedDigit())
+                    }
+                }
                 modules
                     .frame(height: max(170, geometry.size.height * 0.36))
                 pageSelector
@@ -110,13 +136,26 @@ struct BronzeNativeRootView: View {
             ForEach(0..<8, id: \.self) { index in
                 BronzePanel {
                     VStack(spacing: 2) {
-                        Text(index == 6 ? "B3" : "\(index + 1)")
+                        Button(index == 6 ? "B3 · EDIT" : "\(index + 1) · EDIT") {
+                            model.selectModule(index)
+                        }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Editar módulo \(index + 1)")
                             .font(.caption2.monospaced().bold())
                             .foregroundStyle(model.selectedModule == index ? .black : .bronzeLight)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(model.selectedModule == index ? Color.bronzeLight : .clear)
                             .clipShape(Capsule())
+                        if index < 6 {
+                            Button(model.moduleSoundFonts[index]?.name ?? "Empty") {
+                                libraryTarget = LibraryTarget(id: index)
+                            }
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, minHeight: 28)
+                            .accessibilityLabel("Escolher timbre do módulo \(index + 1)")
+                        }
                         GeometryReader { _ in
                             BronzeSkiaControl(
                                 kind: .fader,
@@ -129,13 +168,18 @@ struct BronzeNativeRootView: View {
                         }
                         ProgressView(value: min(1, model.moduleLevels[index] * 2.5))
                             .tint(.green)
-                        Button(model.selectedModule == index ? "EDIT" : "ON") {
-                            model.selectedModule = index
+                        Button(model.moduleReceivesNotes(index) ? "ON" : "OFF") {
+                            model.toggleModuleEnabled(index)
                         }
                         .font(.caption2.monospaced().bold())
-                        .buttonStyle(BronzeButtonStyle(active: model.selectedModule == index))
+                        .buttonStyle(BronzeButtonStyle(active: model.moduleReceivesNotes(index)))
+                        .accessibilityLabel("Ligar ou desligar módulo \(index + 1)")
+                        Button("SOLO") { model.toggleModuleSolo(index) }
+                            .buttonStyle(BronzeCompactButtonStyle(active: model.soloModule == index))
+                            .accessibilityLabel("Solo do módulo \(index + 1)")
                     }
                 }
+                .saturation(model.soloModule != nil && model.soloModule != index ? 0 : 1)
             }
         }
     }
@@ -159,6 +203,8 @@ struct BronzeNativeRootView: View {
             performancePads
         case .presets:
             presetGrid
+        case .loops:
+            loopLibrary
         }
     }
 
@@ -228,10 +274,27 @@ struct BronzeNativeRootView: View {
 
     private var performancePads: some View {
         HStack(spacing: 8) {
+            VStack(spacing: 5) {
+                HStack {
+                    ForEach(0..<2, id: \.self) { bank in
+                        Button("Pad \(bank + 1)") { model.selectPadBank(bank) }
+                            .buttonStyle(BronzeCompactButtonStyle(active: model.selectedPadBank == bank))
+                    }
+                }
+                HStack(spacing: 6) {
+                    padFilter(low: true)
+                    padFilter(low: false)
+                }
+            }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 6), spacing: 5) {
                 ForEach(0..<12, id: \.self) { index in
-                    Button(noteName(index)) { model.togglePad(index) }
-                        .buttonStyle(BronzeButtonStyle(active: model.activePad == index))
+                    Button { model.togglePad(index) } label: {
+                        VStack(spacing: 2) {
+                            Text(noteName(index, relative: false)).font(.headline)
+                            Text(noteName(index, relative: true)).font(.caption2)
+                        }.padding(.vertical, 4)
+                    }
+                    .buttonStyle(BronzeButtonStyle(active: model.isPadActive(index)))
                 }
             }
             .frame(maxWidth: .infinity)
@@ -247,6 +310,21 @@ struct BronzeNativeRootView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            .disabled(!model.bundledEffectsReady)
+        }
+        .onDisappear { model.endEffectTouches() }
+    }
+
+    private func padFilter(low: Bool) -> some View {
+        VStack(spacing: 2) {
+            Text(low ? "Low" : "High").font(.caption.bold())
+            BronzeSkiaControl(kind: .knob, value: Binding(
+                get: { low ? model.padFilterLow : model.padFilterHigh },
+                set: { model.setPadFilter(low: low, normalized: $0) }
+            ), accessibilityLabel: low ? "Filtro passa-altas dos pads" : "Filtro passa-baixas dos pads")
+                .frame(width: 48, height: 48)
+            Text(model.padFilterText(low ? model.padFilterLow : model.padFilterHigh))
+                .font(.caption2.monospacedDigit())
         }
     }
 
@@ -259,10 +337,38 @@ struct BronzeNativeRootView: View {
         }
     }
 
-    private func noteName(_ index: Int) -> String {
+    private var loopLibrary: some View {
+        VStack(spacing: 8) {
+            Text("Playlist de loops · Bronze Keys").font(.caption.bold())
+            if model.loadingLoop { ProgressView("Carregando loop…") }
+            HStack(spacing: 8) {
+                ForEach(model.bundledLoops) { loop in
+                    Button { model.selectLoop(loop) } label: {
+                        VStack(spacing: 8) {
+                            Text(loop.name).font(.headline)
+                            Text(model.selectedLoop?.id == loop.id ? "Selecionado" : "120 BPM original")
+                                .font(.caption)
+                        }
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity, minHeight: 70)
+                        .background(loop.id == 1 ? Color.green : loop.id == 2 ? Color.cyan : Color.orange)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6)
+                            .stroke(model.selectedLoop?.id == loop.id ? Color.white : Color.clear, lineWidth: 3))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.loadingLoop)
+                }
+            }
+            Text("Loops contínuos sincronizados ao BPM. Play inicia do começo.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func noteName(_ index: Int, relative: Bool) -> String {
         let names = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"]
         let relatives = ["Am", "B♭m", "Bm", "Cm", "C♯m", "Dm", "E♭m", "Em", "Fm", "F♯m", "Gm", "A♭m"]
-        return "\(names[index])\n\(relatives[index])"
+        return relative ? relatives[index] : names[index]
     }
 }
 
@@ -301,5 +407,66 @@ struct BronzeCompactButtonStyle: ButtonStyle {
             )
             .clipShape(RoundedRectangle(cornerRadius: 5))
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
+    }
+}
+
+struct BronzeNativeSoundFontLibrary: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    let moduleIndex: Int
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingImporter = false
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 12) {
+                Button("Importar SF2") { showingImporter = true }
+                    .buttonStyle(BronzeButtonStyle(active: true))
+                    .disabled(model.loadingSoundFontModule != nil)
+                    .padding(.horizontal)
+                if let loading = model.loadingSoundFontModule {
+                    ProgressView("Carregando timbre no módulo \(loading + 1)…")
+                }
+                if model.userSoundFonts.isEmpty {
+                    Text("Importe um arquivo SF2. O nome do arquivo será usado automaticamente.")
+                        .foregroundStyle(.secondary)
+                        .padding()
+                }
+                List(model.userSoundFonts) { entry in
+                    Button {
+                        model.selectUserSoundFont(entry, moduleIndex: moduleIndex)
+                    } label: {
+                        HStack {
+                            Text(entry.name)
+                            Spacer()
+                            if model.moduleSoundFonts[moduleIndex] == entry {
+                                Image(systemName: "checkmark").foregroundStyle(.green)
+                            }
+                        }
+                    }
+                    .disabled(model.loadingSoundFontModule != nil)
+                }
+            }
+            .navigationTitle("User · Módulo \(moduleIndex + 1)")
+            .toolbar { Button("Concluir") { dismiss() } }
+        }
+        .navigationViewStyle(.stack)
+        .onAppear { model.refreshUserSoundFonts() }
+        .fileImporter(isPresented: $showingImporter,
+                      allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { model.importSoundFont(url, moduleIndex: moduleIndex) }
+            case .failure(let error):
+                model.controlError = "Não foi possível abrir o arquivo: \(error.localizedDescription)"
+            }
+        }
+        .alert("Biblioteca SF2", isPresented: Binding(
+            get: { model.controlError != nil },
+            set: { if !$0 { model.controlError = nil } }
+        )) {
+            Button("OK") { model.controlError = nil }
+        } message: {
+            Text(model.controlError ?? "")
+        }
     }
 }

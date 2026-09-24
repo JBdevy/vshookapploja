@@ -17,3 +17,4 @@ ios/App/Pods/
 ios/App/DerivedData/
 src-tauri/target/
 src-tauri/gen/
+.apple-build/

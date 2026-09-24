@@ -53,6 +53,7 @@ public:
       std::uint64_t timestampNanoseconds = 0) noexcept;
   [[nodiscard]] bool setModuleConfig(std::size_t moduleIndex, ModuleConfig config) noexcept;
   [[nodiscard]] bool setModuleGainDb(std::size_t moduleIndex, float db) noexcept;
+  [[nodiscard]] bool setModuleEnabledMask(std::uint8_t mask) noexcept;
   [[nodiscard]] bool setModuleEffects(std::size_t moduleIndex, ModuleEffectsConfig effects) noexcept;
   [[nodiscard]] bool setOrganRotaryFast(bool fast) noexcept;
   [[nodiscard]] bool setOrganCabinetEnabled(bool enabled) noexcept;
@@ -272,6 +273,7 @@ private:
   std::size_t metronomeClickLength_ = 0;
   float metronomeClickFrequency_ = 1350.0f;
   float metronomeClickAmplitude_ = 0.0f;
+  float metronomeBlockVolume_ = 0.0f;
   std::uint8_t metronomeClickWaveform_ = 1;
   std::vector<float> metronomeClick4Left_;
   std::vector<float> metronomeClick4Right_;

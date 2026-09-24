@@ -116,11 +116,13 @@ enum class CommandType : std::uint8_t {
   setTempo,
   allNotesOff,
   setGlobalTranspose,
+  setModuleEnabledMask,
 };
 
 struct EngineCommand final {
   CommandType type = CommandType::midi;
   std::uint8_t moduleIndex = 0;
+  std::uint8_t moduleEnabledMask = 0;
   MidiMessage midi{};
   ModuleConfig moduleConfig{};
   float tempoBpm = 120.0f;

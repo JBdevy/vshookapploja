@@ -18,16 +18,22 @@ if [[ ! "$SKIA_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   exit 1
 fi
 WORK_ROOT="${RUNNER_TEMP:-$PROJECT_ROOT/.apple-build}/bronze-skia"
-DEPOT_TOOLS="$WORK_ROOT/depot_tools"
 SKIA_ROOT="$WORK_ROOT/skia"
 VENDOR_ROOT="$PROJECT_ROOT/ios/App/Vendor"
 XCFRAMEWORK_PATH="$VENDOR_ROOT/Skia.xcframework"
 
 mkdir -p "$WORK_ROOT" "$VENDOR_ROOT"
-if [[ ! -d "$DEPOT_TOOLS/.git" ]]; then
-  git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS"
+# Use o executável real do Ninja, não o wrapper Python do depot_tools.
+# O wrapper exige bootstrap próprio e pode mascarar o Ninja do runner no PATH.
+if ! command -v brew >/dev/null 2>&1; then
+  echo "Instale o Homebrew e o Ninja para compilar o Skia Apple." >&2
+  exit 1
 fi
-export PATH="$DEPOT_TOOLS:$PATH"
+if ! brew list --versions ninja >/dev/null 2>&1; then
+  brew install ninja
+fi
+NINJA_BIN="$(brew --prefix ninja)/bin/ninja"
+"$NINJA_BIN" --version
 
 if [[ ! -d "$SKIA_ROOT/.git" ]]; then
   git clone https://skia.googlesource.com/skia.git "$SKIA_ROOT"
@@ -52,7 +58,8 @@ build_slice() {
     is_debug=false
     target_os=\"$target_os\"
     target_cpu=\"$target_cpu\"
-    skia_enable_gpu=false
+    skia_enable_ganesh=false
+    skia_enable_graphite=false
     skia_enable_pdf=false
     skia_enable_skottie=false
     skia_enable_svg=false
@@ -70,7 +77,7 @@ build_slice() {
     $extra_args
   "
   )
-  ninja -C "$output" skia
+  "$NINJA_BIN" -C "$output" skia
 }
 
 build_slice ios-arm64 ios arm64 'ios_min_target="15.0"'
