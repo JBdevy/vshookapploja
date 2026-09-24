@@ -126,6 +126,89 @@ bool NativeEngineRuntime::setPadNote(
   return runtimeCommands_.tryPush(command);
 }
 
+void NativeEngineRuntime::clearPerformanceMappings() noexcept {
+  for (auto& mapping : performanceMappings_) mapping.store(0, std::memory_order_release);
+}
+
+void NativeEngineRuntime::setPerformanceMapping(
+    std::uint8_t midiNote, std::uint8_t kind, std::uint8_t bankIndex,
+    std::uint8_t itemIndex, std::uint8_t mode, float gainDb) noexcept {
+  if (midiNote > 127) return;
+  if (kind == 0 || kind > 2) {
+    performanceMappings_[midiNote].store(0, std::memory_order_release);
+    return;
+  }
+  const auto gainTenths = static_cast<std::uint32_t>(std::lround(
+      std::clamp(std::isfinite(gainDb) ? gainDb : 0.0f, -90.0f, 6.0f) * 10.0f) + 900.0f);
+  const auto packed = static_cast<std::uint32_t>(kind)
+      | (static_cast<std::uint32_t>(bankIndex & 7u) << 2)
+      | (static_cast<std::uint32_t>(itemIndex & 15u) << 5)
+      | (static_cast<std::uint32_t>(mode & 3u) << 9)
+      | (gainTenths << 11);
+  performanceMappings_[midiNote].store(packed, std::memory_order_release);
+}
+
+bool NativeEngineRuntime::loadEffectSample(
+    std::size_t sampleIndex, const float* stereoInterleaved,
+    std::size_t frames, double sourceSampleRate) noexcept {
+  if (sampleIndex >= effectSamples_.size() || stereoInterleaved == nullptr ||
+      frames == 0 || !std::isfinite(sourceSampleRate) || sourceSampleRate <= 0.0) return false;
+  try {
+    auto sample = std::make_unique<EffectSample>();
+    const auto outputFrames = std::max<std::size_t>(1, static_cast<std::size_t>(std::llround(
+        static_cast<double>(frames) * sampleRate_ / sourceSampleRate)));
+    sample->stereo.resize(outputFrames * 2);
+    const auto step = sourceSampleRate / sampleRate_;
+    for (std::size_t frame = 0; frame < outputFrames; ++frame) {
+      const auto position = std::min(static_cast<double>(frames - 1), frame * step);
+      const auto first = static_cast<std::size_t>(position);
+      const auto second = std::min(first + 1, frames - 1);
+      const auto fraction = static_cast<float>(position - static_cast<double>(first));
+      for (std::size_t channel = 0; channel < 2; ++channel) {
+        const auto a = stereoInterleaved[first * 2 + channel];
+        const auto b = stereoInterleaved[second * 2 + channel];
+        sample->stereo[frame * 2 + channel] = std::isfinite(a) && std::isfinite(b)
+            ? a + (b - a) * fraction : 0.0f;
+      }
+    }
+    auto* published = sample.get();
+    std::scoped_lock lock(effectSampleMutex_);
+    effectSampleOwners_.push_back(std::move(sample));
+    effectSamples_[sampleIndex].store(published, std::memory_order_release);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+void NativeEngineRuntime::clearEffectSample(std::size_t sampleIndex) noexcept {
+  if (sampleIndex < effectSamples_.size()) {
+    effectSamples_[sampleIndex].store(nullptr, std::memory_order_release);
+    (void)triggerEffectSample(sampleIndex, false);
+  }
+}
+
+bool NativeEngineRuntime::triggerEffectSample(
+    std::size_t sampleIndex, bool enabled, float gainDb) noexcept {
+  if (sampleIndex >= effectSamples_.size()) return false;
+  RuntimeCommand command;
+  command.kind = RuntimeCommand::Kind::effect;
+  command.midi.data1 = static_cast<std::uint8_t>(sampleIndex);
+  command.midi.data2 = enabled ? 127 : 0;
+  command.value = std::clamp(std::isfinite(gainDb) ? gainDb : 0.0f, -90.0f, 6.0f);
+  return runtimeCommands_.tryPush(command);
+}
+
+void NativeEngineRuntime::setEffectOutput(
+    float db, bool enabled, std::uint8_t channelStart, std::uint8_t channelCount) noexcept {
+  effectOutputRoute_.store(static_cast<std::uint16_t>(
+      static_cast<std::uint16_t>(std::min<std::uint8_t>(channelStart, 31))
+      | (static_cast<std::uint16_t>(channelCount == 1 ? 1 : 2) << 8)), std::memory_order_release);
+  effectGainLinear_.store(enabled && db > -90.0f
+      ? std::pow(10.0f, std::clamp(db, -90.0f, 0.0f) / 20.0f) : 0.0f,
+      std::memory_order_release);
+}
+
 void NativeEngineRuntime::setPadOutput(
     float db, bool enabled, std::uint8_t channelStart, std::uint8_t channelCount,
     float lowCutHz, float highCutHz) noexcept {
@@ -354,6 +437,18 @@ bool NativeEngineRuntime::sendMidi(
     std::uint64_t timestampNanoseconds) noexcept {
   if (!midiInputEnabled_.load(std::memory_order_acquire)) return true;
   const auto messageType = status & 0xf0;
+  // Canal 10 pertence exclusivamente a Pads/FX. A decisão é feita aqui, na
+  // thread MIDI nativa; a WebView recebe depois apenas a cópia para desenhar.
+  if ((status & 0x0f) == 9 && (messageType == 0x80 || messageType == 0x90)) {
+    if (data1 > 127 || data2 > 127) return false;
+    const auto mapping = performanceMappings_[data1].load(std::memory_order_acquire);
+    if (mapping == 0) return true;
+    RuntimeCommand command;
+    command.kind = RuntimeCommand::Kind::performance;
+    command.midi = {status, data1, data2, inputSlot, timestampNanoseconds};
+    command.packed = mapping;
+    return runtimeCommands_.tryPush(command);
+  }
   const bool blockedCompatibilityMessage = compatibilityMode_.load(std::memory_order_acquire) && (
       messageType == 0xc0 ||
       (messageType == 0xb0 &&
@@ -595,10 +690,62 @@ void NativeEngineRuntime::processRuntimeCommands() noexcept {
         (void)tailLayers_[index]->engine->stopAllNotes();
       }
       for (auto& pad : padModules_) pad->allNotesOff();
+      activePadBank_ = -1;
+      activePadNote_ = -1;
+      for (auto& voice : effectVoices_) voice.releasing = true;
+      effectToggleActive_.fill(false);
     } else if (command.kind == RuntimeCommand::Kind::padNote) {
       auto& pad = padModules_[std::min<std::size_t>(command.midi.inputSlot, padModules_.size() - 1)];
-      if (command.midi.data2 == 0) pad->noteOff(command.midi.data1);
-      else pad->noteOn(command.midi.data1, command.midi.data2);
+      if (command.midi.data2 == 0) {
+        pad->noteOff(command.midi.data1);
+        if (activePadBank_ == command.midi.inputSlot && activePadNote_ == command.midi.data1) {
+          activePadBank_ = activePadNote_ = -1;
+        }
+      } else {
+        pad->noteOn(command.midi.data1, command.midi.data2);
+        activePadBank_ = command.midi.inputSlot;
+        activePadNote_ = command.midi.data1;
+      }
+    } else if (command.kind == RuntimeCommand::Kind::effect) {
+      const auto sampleIndex = command.midi.data1;
+      if (command.midi.data2 == 0) releaseEffectVoices(sampleIndex);
+      else startEffectVoice(sampleIndex, std::pow(10.0f, command.value / 20.0f));
+    } else if (command.kind == RuntimeCommand::Kind::performance) {
+      const auto kind = static_cast<std::uint8_t>(command.packed & 3u);
+      const auto bank = static_cast<std::uint8_t>((command.packed >> 2) & 7u);
+      const auto item = static_cast<std::uint8_t>((command.packed >> 5) & 15u);
+      const auto mode = static_cast<std::uint8_t>((command.packed >> 9) & 3u);
+      const auto gainDb = (static_cast<int>((command.packed >> 11) & 1023u) - 900) / 10.0f;
+      const auto type = command.midi.status & 0xf0;
+      const bool pressed = type == 0x90 && command.midi.data2 > 0;
+      if (kind == 1 && bank < padModules_.size() && item < 12 && pressed) {
+        const auto note = static_cast<std::uint8_t>(60 + item);
+        if (activePadBank_ >= 0 && activePadNote_ >= 0) {
+          padModules_[static_cast<std::size_t>(activePadBank_)]->noteOff(
+              static_cast<std::uint8_t>(activePadNote_));
+          if (activePadBank_ == bank && activePadNote_ == note) {
+            activePadBank_ = activePadNote_ = -1;
+            continue;
+          }
+        }
+        padModules_[bank]->noteOn(note, std::max<std::uint8_t>(1, command.midi.data2));
+        activePadBank_ = bank;
+        activePadNote_ = note;
+      } else if (kind == 2 && bank < 8 && item < 12) {
+        const auto sampleIndex = static_cast<std::uint8_t>(bank * 12 + item);
+        if (pressed) {
+          if (mode == 1 && effectToggleActive_[sampleIndex]) {
+            releaseEffectVoices(sampleIndex);
+            effectToggleActive_[sampleIndex] = false;
+          } else {
+            startEffectVoice(sampleIndex, std::pow(10.0f, gainDb / 20.0f));
+            effectToggleActive_[sampleIndex] = mode == 1 || mode == 2;
+          }
+        } else if (mode == 2) {
+          releaseEffectVoices(sampleIndex);
+          effectToggleActive_[sampleIndex] = false;
+        }
+      }
     } else {
       (void)renderLayer_->engine->enqueueMidi(command.midi);
       const auto type = command.midi.status & 0xf0;
@@ -676,6 +823,13 @@ std::array<float, 2> NativeEngineRuntime::consumePadPeaks() noexcept {
   };
 }
 
+std::array<float, 2> NativeEngineRuntime::consumeEffectPeaks() noexcept {
+  return {
+      effectPeaks_[0].exchange(0.0f, std::memory_order_acq_rel),
+      effectPeaks_[1].exchange(0.0f, std::memory_order_acq_rel),
+  };
+}
+
 void NativeEngineRuntime::render(float* left, float* right, std::size_t frames) noexcept {
   if (left == nullptr || right == nullptr) return;
   for (std::size_t rendered = 0; rendered < frames;) {
@@ -738,8 +892,9 @@ void NativeEngineRuntime::renderInterleaved(float* output, std::size_t frames, s
     while (masterBlockPeaks[channel] > previous && !masterPeaks_[channel].compare_exchange_weak(
         previous, masterBlockPeaks[channel], std::memory_order_release, std::memory_order_relaxed)) {}
   }
-  // Pads, Click e Playlist têm volumes/rotas próprios; não passam por Módulos.
+  // Pads, FX, Click e Playlist têm volumes/rotas próprios; não passam por Módulos.
   addPadsInterleaved(output, frames, channels);
+  addEffectsInterleaved(output, frames, channels);
   // O Play do loop e o primeiro tempo do Click são consumidos pelo mesmo
   // callback de áudio. Assim não existe diferença variável entre duas calls
   // vindas do JavaScript/Capacitor.
@@ -809,6 +964,87 @@ float NativeEngineRuntime::nextPadGain() noexcept {
     if (--padGainRampFrames_ == 0) currentPadGain_ = padGainTargetSeen_;
   }
   return currentPadGain_;
+}
+
+float NativeEngineRuntime::nextEffectGain() noexcept {
+  const auto target = effectGainLinear_.load(std::memory_order_acquire);
+  if (target != effectGainTargetSeen_) {
+    effectGainTargetSeen_ = target;
+    effectGainRampFrames_ = std::max<std::size_t>(
+        1, static_cast<std::size_t>(sampleRate_ * 0.005));
+    effectGainStep_ = (target - currentEffectGain_) / static_cast<float>(effectGainRampFrames_);
+  }
+  if (effectGainRampFrames_ > 0) {
+    currentEffectGain_ += effectGainStep_;
+    if (--effectGainRampFrames_ == 0) currentEffectGain_ = effectGainTargetSeen_;
+  }
+  return currentEffectGain_;
+}
+
+void NativeEngineRuntime::startEffectVoice(std::uint8_t sampleIndex, float gain) noexcept {
+  if (sampleIndex >= effectSamples_.size()) return;
+  const auto* sample = effectSamples_[sampleIndex].load(std::memory_order_acquire);
+  if (sample == nullptr || sample->stereo.empty()) return;
+  auto* selected = &effectVoices_[0];
+  for (auto& voice : effectVoices_) {
+    if (voice.sample == nullptr) { selected = &voice; break; }
+    if (voice.serial < selected->serial) selected = &voice;
+  }
+  *selected = {sample, 0, std::clamp(gain, 0.0f, 2.0f), 1.0f, false,
+      sampleIndex, ++effectVoiceSerial_};
+}
+
+void NativeEngineRuntime::releaseEffectVoices(std::uint8_t sampleIndex) noexcept {
+  for (auto& voice : effectVoices_) {
+    if (voice.sample != nullptr && voice.sampleIndex == sampleIndex) voice.releasing = true;
+  }
+}
+
+void NativeEngineRuntime::addEffectsInterleaved(
+    float* output, std::size_t frames, std::size_t channels) noexcept {
+  if (output == nullptr || frames == 0 || channels == 0) return;
+  const auto route = effectOutputRoute_.load(std::memory_order_acquire);
+  const auto requested = static_cast<std::size_t>(route & 0xffu);
+  const auto first = requested < channels ? requested : 0;
+  const bool stereo = ((route >> 8) & 0xffu) == 2 && first + 1 < channels;
+  const auto releaseStep = 1.0f / static_cast<float>(std::max(1.0, sampleRate_ * 0.012));
+  std::array<float, 2> peaks{};
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    float left = 0.0f;
+    float right = 0.0f;
+    for (auto& voice : effectVoices_) {
+      if (voice.sample == nullptr) continue;
+      const auto sampleFrames = voice.sample->stereo.size() / 2;
+      if (voice.frame >= sampleFrames || voice.fade <= 0.0f) {
+        voice = {};
+        continue;
+      }
+      if (voice.releasing) voice.fade = std::max(0.0f, voice.fade - releaseStep);
+      const auto amount = voice.gain * voice.fade;
+      left += voice.sample->stereo[voice.frame * 2] * amount;
+      right += voice.sample->stereo[voice.frame * 2 + 1] * amount;
+      ++voice.frame;
+    }
+    const auto outputGain = nextEffectGain();
+    left *= outputGain;
+    right *= outputGain;
+    auto* destination = output + frame * channels;
+    if (stereo) {
+      destination[first] += left;
+      destination[first + 1] += right;
+      peaks[0] = std::max(peaks[0], std::abs(left));
+      peaks[1] = std::max(peaks[1], std::abs(right));
+    } else {
+      const auto mono = (left + right) * 0.5f;
+      destination[first] += mono;
+      peaks[0] = peaks[1] = std::max(peaks[0], std::abs(mono));
+    }
+  }
+  for (std::size_t channel = 0; channel < peaks.size(); ++channel) {
+    auto previous = effectPeaks_[channel].load(std::memory_order_relaxed);
+    while (peaks[channel] > previous && !effectPeaks_[channel].compare_exchange_weak(
+        previous, peaks[channel], std::memory_order_release, std::memory_order_relaxed)) {}
+  }
 }
 
 void NativeEngineRuntime::addPadsInterleaved(

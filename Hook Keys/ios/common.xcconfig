@@ -1,0 +1,4 @@
+// Gerado localmente por scripts/build-skia-apple.sh. O include opcional
+// mantém o app compilável antes de baixar o Skia; builds nativas de entrega
+// devem executar o script e, assim, definir BRONZE_KEYS_REQUIRE_SKIA=1.
+#include? "Skia.generated.xcconfig"

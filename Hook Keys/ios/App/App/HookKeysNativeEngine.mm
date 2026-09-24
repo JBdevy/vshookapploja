@@ -204,6 +204,30 @@ private:
   UInt32 channels_;
 };
 
+bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& stereo) {
+  auto decoder = ExtAudioFileTrackDecoder::open(path, sampleRate);
+  if (!decoder) return false;
+  const auto expectedFrames = decoder->frameCount();
+  if (expectedFrames == 0 || expectedFrames > static_cast<std::uint64_t>(sampleRate * 60.0 * 20.0)) {
+    return false;
+  }
+  try {
+    stereo.assign(static_cast<std::size_t>(expectedFrames) * 2, 0.0f);
+  } catch (...) {
+    return false;
+  }
+  std::size_t decodedFrames = 0;
+  while (decodedFrames < expectedFrames) {
+    const auto count = decoder->read(
+        stereo.data() + decodedFrames * 2,
+        static_cast<std::size_t>(expectedFrames) - decodedFrames);
+    if (count == 0) break;
+    decodedFrames += count;
+  }
+  stereo.resize(decodedFrames * 2);
+  return decodedFrames > 0;
+}
+
 } // namespace
 
 @interface HookKeysNativeEngine () {
@@ -610,6 +634,44 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return YES;
 }
 
+- (BOOL)applyOrganFactoryDefaults {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime == nullptr) return NO;
+  for (std::size_t index = 0; index < 9; ++index) {
+    runtime->setOrganDrawbarPosition(index, index < 3 ? 8 : 0);
+  }
+  hook_keys::ModuleConfig module;
+  module.enabled = true;
+  module.midiInputSlot = hook_keys::kAllMidiInputs;
+  module.sustainInputEnabled = true;
+  module.modulationInputEnabled = true;
+  module.noVelocitySensitivity = true;
+  module.gainLinear = 1.0f;
+  hook_keys::ModuleEffectsConfig effects;
+  effects.cutoff.enabled = false;
+  effects.equalizer.enabled = false;
+  effects.compressor.enabled = false;
+  effects.reverb.enabled = false;
+  effects.delay.enabled = false;
+  effects.chorus.enabled = false;
+  effects.loFi.enabled = false;
+  effects.autoFader.enabled = false;
+  effects.tranceGate.enabled = false;
+  effects.rotary.enabled = true;
+  effects.rotary.speed = 1; // Slow
+  effects.rotary.slowHz = 1.2f;
+  effects.rotary.fastHz = 10.0f;
+  effects.rotary.rampSeconds = 1.2f;
+  effects.rotary.depth = 1.0f;
+  effects.rotary.mix = 1.0f;
+  effects.rotary.modulationEnabled = true; // Wheel Rotary
+  effects.rotary.cabinetEnabled = true;
+  module.effects = effects;
+  return runtime->setModuleConfig(6, module) &&
+      runtime->setModuleEffects(6, effects) &&
+      runtime->setModuleEnvelope(6, 0.0f, 15000.0f, 25000.0f, 300.0f, 0.0f, 0.0f);
+}
+
 - (BOOL)cloneSoundFontFromModule:(NSInteger)sourceModuleIndex
                         toModule:(NSInteger)targetModuleIndex {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
@@ -949,6 +1011,67 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return YES;
 }
 
+- (void)clearPerformanceMappings {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (runtime) runtime->clearPerformanceMappings();
+}
+
+- (void)setPerformanceMappingForNote:(NSInteger)midiNote
+                                kind:(NSInteger)kind
+                           bankIndex:(NSInteger)bankIndex
+                           itemIndex:(NSInteger)itemIndex
+                                mode:(NSInteger)mode
+                              gainDb:(float)gainDb {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime) return;
+  runtime->setPerformanceMapping(
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(midiNote, 0, 127)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(kind, 0, 2)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(bankIndex, 0, 7)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(itemIndex, 0, 11)),
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(mode, 0, 2)), gainDb);
+}
+
+- (BOOL)loadEffectAtPath:(NSString *)path
+               bankIndex:(NSInteger)bankIndex
+               itemIndex:(NSInteger)itemIndex {
+  std::scoped_lock lock(_controlMutex);
+  if (!_audioState || !_audioState->runtime || path.length == 0 ||
+      bankIndex < 0 || bankIndex >= 8 || itemIndex < 0 || itemIndex >= 12) return NO;
+  std::vector<float> stereo;
+  if (!decodeEffectFile(path, _audioState->sampleRate, stereo)) return NO;
+  const auto sampleIndex = static_cast<std::size_t>(bankIndex * 12 + itemIndex);
+  return _audioState->runtime->loadEffectSample(
+      sampleIndex, stereo.data(), stereo.size() / 2, _audioState->sampleRate);
+}
+
+- (BOOL)triggerEffectBankIndex:(NSInteger)bankIndex
+                      itemIndex:(NSInteger)itemIndex
+                        enabled:(BOOL)enabled
+                         gainDb:(float)gainDb {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime || bankIndex < 0 || bankIndex >= 8 || itemIndex < 0 || itemIndex >= 12) return NO;
+  return runtime->triggerEffectSample(
+      static_cast<std::size_t>(bankIndex * 12 + itemIndex), enabled, gainDb);
+}
+
+- (BOOL)setEffectOutputGainDb:(float)db enabled:(BOOL)enabled
+                 channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime) return NO;
+  runtime->setEffectOutput(db, enabled,
+      static_cast<std::uint8_t>(std::clamp<NSInteger>(channelStart, 0, 31)),
+      channelCount == 1 ? 1 : 2);
+  return YES;
+}
+
+- (NSArray<NSNumber *> *)effectMeterLevels {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime) return @[@0.0f, @0.0f];
+  const auto peaks = runtime->consumeEffectPeaks();
+  return @[@(peaks[0]), @(peaks[1])];
+}
+
 - (BOOL)setTempo:(float)bpm {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && runtime->setTempo(bpm);
@@ -1146,8 +1269,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
       (type == 0xc0 || (type == 0xb0 &&
        (data1 == 0 || data1 == 6 || data1 == 7 || data1 == 10 || data1 == 16 ||
         data1 == 32 || data1 == 91 || data1 == 100 || data1 == 101)));
-  const bool reservedPadNote = (type == 0x80 || type == 0x90) && (status & 0x0f) == 9;
-  if (!blockedCompatibilityMessage && !reservedPadNote) {
+  if (!blockedCompatibilityMessage) {
     [self sendMidiFromSlot:slot status:status data1:data1 data2:data2 timestamp:timestamp];
   }
   NSString *deviceId = slot < _selectedDeviceIds.count && [_selectedDeviceIds[slot] isKindOfClass:NSString.class]

@@ -151,7 +151,7 @@ export class NativeTrackSource extends EventTarget {
 
   open(track: LocalTrack, blob: Blob): void {
     const serial = ++this.openSerial;
-    this.file = { key: track.id, extension: trackFileExtension(track.fileName), blob };
+    this.file = { key: track.nativeAssetKey ?? track.id, extension: trackFileExtension(track.fileName), blob };
     this.durationSeconds = Number.NaN;
     this.position = 0;
     this.engineLoaded = false;

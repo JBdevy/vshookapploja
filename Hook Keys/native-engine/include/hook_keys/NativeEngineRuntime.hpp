@@ -104,6 +104,24 @@ public:
   void setPadOutput(float db, bool enabled,
       std::uint8_t channelStart = 0, std::uint8_t channelCount = 2,
       float lowCutHz = 20.0f, float highCutHz = 20000.0f) noexcept;
+  // Canal MIDI 10: a associação aprendida vive no runtime para que o callback
+  // do Core MIDI/Android MIDI/Midir não precise consultar a interface web.
+  // kind: 0 limpa, 1 Pad contínuo, 2 FX. mode do FX: 0 one-shot, 1 toggle,
+  // 2 gate enquanto pressionado.
+  void clearPerformanceMappings() noexcept;
+  void setPerformanceMapping(std::uint8_t midiNote, std::uint8_t kind,
+      std::uint8_t bankIndex, std::uint8_t itemIndex, std::uint8_t mode,
+      float gainDb = 0.0f) noexcept;
+  // O arquivo é decodificado uma vez fora da thread de áudio. O runtime faz
+  // somente leitura de PCM pré-alocado durante a performance.
+  static constexpr std::size_t kEffectSampleCount = 8 * 12;
+  [[nodiscard]] bool loadEffectSample(std::size_t sampleIndex,
+      const float* stereoInterleaved, std::size_t frames, double sourceSampleRate) noexcept;
+  void clearEffectSample(std::size_t sampleIndex) noexcept;
+  [[nodiscard]] bool triggerEffectSample(
+      std::size_t sampleIndex, bool enabled, float gainDb = 0.0f) noexcept;
+  void setEffectOutput(float db, bool enabled,
+      std::uint8_t channelStart = 0, std::uint8_t channelCount = 2) noexcept;
   void render(float* left, float* right, std::size_t frames) noexcept;
   void renderInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
 
@@ -113,6 +131,7 @@ public:
   [[nodiscard]] std::array<float, 2> consumeTrackPeaks() noexcept { return tracks_->consumePeaks(); }
   [[nodiscard]] std::array<float, 2> consumeMetronomePeaks() noexcept;
   [[nodiscard]] std::array<float, 2> consumePadPeaks() noexcept;
+  [[nodiscard]] std::array<float, 2> consumeEffectPeaks() noexcept;
   [[nodiscard]] HookKeysEngine::ModuleAnalysis consumeModuleAnalysis(
       std::size_t moduleIndex) noexcept;
   [[nodiscard]] std::size_t maximumBlockFrames() const noexcept { return maximumBlockFrames_; }
@@ -152,9 +171,11 @@ private:
     std::size_t silentFrames = 0;
   };
   struct RuntimeCommand final {
-    enum class Kind : std::uint8_t { midi, transition, panic, padNote } kind = Kind::midi;
+    enum class Kind : std::uint8_t { midi, transition, panic, padNote, performance, effect } kind = Kind::midi;
     MidiMessage midi{};
     PresetLayer* layer = nullptr;
+    std::uint32_t packed = 0;
+    float value = 0.0f;
   };
   static constexpr std::size_t kMaximumPresetLayers = 16;
   std::unique_ptr<PresetLayer> createPresetLayer();
@@ -173,6 +194,37 @@ private:
   std::array<std::unique_ptr<TinySoundFontModule>, 2> padModules_;
   std::vector<float> padLeftScratch_;
   std::vector<float> padRightScratch_;
+  // Mapping compactado: kind(2), bank(3), item(4), mode(2), gain em décimos
+  // de dB com offset. Um load atômico basta na thread que recebe o MIDI.
+  std::array<std::atomic<std::uint32_t>, 128> performanceMappings_{};
+  int activePadBank_ = -1; // audio thread only
+  int activePadNote_ = -1; // audio thread only
+  struct EffectSample final { std::vector<float> stereo; };
+  struct EffectVoice final {
+    const EffectSample* sample = nullptr;
+    std::size_t frame = 0;
+    float gain = 1.0f;
+    float fade = 1.0f;
+    bool releasing = false;
+    std::uint8_t sampleIndex = 0;
+    std::uint64_t serial = 0;
+  };
+  static constexpr std::size_t kEffectVoiceCount = 32;
+  std::mutex effectSampleMutex_;
+  // Gerações antigas são retidas para garantir que nenhum ponteiro lido pelo
+  // callback seja invalidado durante uma troca de arquivo.
+  std::vector<std::unique_ptr<EffectSample>> effectSampleOwners_;
+  std::array<std::atomic<const EffectSample*>, kEffectSampleCount> effectSamples_{};
+  std::array<EffectVoice, kEffectVoiceCount> effectVoices_{}; // audio thread only
+  std::array<bool, kEffectSampleCount> effectToggleActive_{}; // audio thread only
+  std::uint64_t effectVoiceSerial_ = 0;
+  std::atomic<float> effectGainLinear_{1.0f};
+  float currentEffectGain_ = 1.0f;
+  float effectGainTargetSeen_ = 1.0f;
+  float effectGainStep_ = 0.0f;
+  std::size_t effectGainRampFrames_ = 0;
+  std::atomic<std::uint16_t> effectOutputRoute_{2u << 8};
+  std::array<std::atomic<float>, 2> effectPeaks_{};
   struct LiveExpression final {
     int sustain = -1;
     int modulation = -1;
@@ -253,9 +305,13 @@ private:
   void addMetronome(float* left, float* right, std::size_t frames) noexcept;
   void addMetronomeInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
   void addPadsInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
+  void addEffectsInterleaved(float* output, std::size_t frames, std::size_t channels) noexcept;
   [[nodiscard]] std::array<float, 2> renderMetronomeSample() noexcept;
   [[nodiscard]] float nextOutputGain() noexcept;
   [[nodiscard]] float nextPadGain() noexcept;
+  [[nodiscard]] float nextEffectGain() noexcept;
+  void startEffectVoice(std::uint8_t sampleIndex, float gain) noexcept;
+  void releaseEffectVoices(std::uint8_t sampleIndex) noexcept;
   void applyMasterLimiter(float* frame, std::size_t channels) noexcept;
 };
 

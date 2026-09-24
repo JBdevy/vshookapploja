@@ -262,6 +262,28 @@ jobs:
             --version-name '${{ needs.metadata.outputs.version_name }}' \
             --build-number '${{ needs.metadata.outputs.build_number }}'
 
+      - name: Restaurar Skia Apple compilado
+        id: skia-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            Hook Keys/ios/App/Vendor/Skia.xcframework
+            Hook Keys/ios/Skia.generated.xcconfig
+          key: skia-apple-${{ runner.os }}-${{ hashFiles('Hook Keys/scripts/skia-apple.revision') }}
+
+      - name: Compilar Skia para iPadOS, simulador e macOS
+        if: steps.skia-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/build-skia-apple.sh
+
+      - name: Conferir integração obrigatória do Skia
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ios/Skia.generated.xcconfig
+          test -d ios/App/Vendor/Skia.xcframework
+          grep -q 'BRONZE_KEYS_REQUIRE_SKIA=1' ios/Skia.generated.xcconfig
+
       - name: Importar certificado iOS
         shell: bash
         env:

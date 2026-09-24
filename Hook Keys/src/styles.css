@@ -8030,6 +8030,15 @@ html[data-runtime="desktop"] .is-tracks-split .player-module__fader-rail { width
   }
 }
 
+/* A seleção dos beats continua visível mesmo no Modo Lite, onde a pulsação é
+   removida para economizar pintura. Outline não muda o tamanho do card. */
+:is(.player-screen, .player-modal) .track-card:is(
+  .track-card--loop-green, .track-card--loop-blue, .track-card--loop-orange
+):is(.is-selected, .is-playing) {
+  outline: 2px solid #ffffff;
+  outline-offset: -3px;
+}
+
 .track-name {
   display: block;
   min-width: 100%;

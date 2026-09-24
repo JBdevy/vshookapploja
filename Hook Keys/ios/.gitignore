@@ -4,6 +4,8 @@ App/output
 App/App/public
 DerivedData
 xcuserdata
+App/Vendor/Skia.xcframework
+Skia.generated.xcconfig
 
 # Cordova plugins for Capacitor
 capacitor-cordova-ios-plugins

@@ -27,6 +27,11 @@
 		A1000000000000000000000E /* TwoStageFFTConvolver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* TwoStageFFTConvolver.cpp */; };
 		A1000000000000000000000F /* Utilities.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* Utilities.cpp */; };
 		A10000000000000000000010 /* pads in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001B /* pads */; };
+		B10000000000000000000001 /* BronzeSkiaControlView.mm in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* BronzeSkiaControlView.mm */; };
+		B10000000000000000000002 /* BronzeNativeControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* BronzeNativeControls.swift */; };
+		B10000000000000000000003 /* BronzeNativeAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* BronzeNativeAppModel.swift */; };
+		B10000000000000000000004 /* BronzeNativeRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* BronzeNativeRootView.swift */; };
+		B10000000000000000000005 /* BronzeNativeHostingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000006 /* BronzeNativeHostingController.swift */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -56,12 +61,19 @@
 		A20000000000000000000019 /* TwoStageFFTConvolver.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TwoStageFFTConvolver.cpp; path = "../../native-engine/third_party/FFTConvolver/TwoStageFFTConvolver.cpp"; sourceTree = SOURCE_ROOT; };
 		A2000000000000000000001A /* Utilities.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Utilities.cpp; path = "../../native-engine/third_party/FFTConvolver/Utilities.cpp"; sourceTree = SOURCE_ROOT; };
 		A2000000000000000000001B /* pads */ = {isa = PBXFileReference; lastKnownFileType = folder; name = pads; path = "../../native-engine/assets/pads"; sourceTree = SOURCE_ROOT; };
+		B20000000000000000000001 /* BronzeSkiaControlView.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = BronzeSkiaControlView.mm; sourceTree = "<group>"; };
+		B20000000000000000000002 /* BronzeSkiaControlView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BronzeSkiaControlView.h; sourceTree = "<group>"; };
+		B20000000000000000000003 /* BronzeNativeControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeControls.swift; sourceTree = "<group>"; };
+		B20000000000000000000004 /* BronzeNativeAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeAppModel.swift; sourceTree = "<group>"; };
+		B20000000000000000000005 /* BronzeNativeRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeRootView.swift; sourceTree = "<group>"; };
+		B20000000000000000000006 /* BronzeNativeHostingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeHostingController.swift; sourceTree = "<group>"; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
+		B20000000000000000000007 /* common.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = common.xcconfig; path = ../common.xcconfig; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -80,6 +92,7 @@
 			isa = PBXGroup;
 			children = (
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
+				B20000000000000000000007 /* common.xcconfig */,
 				504EC3061FED79650016851F /* App */,
 				504EC3051FED79650016851F /* Products */,
 			);
@@ -101,6 +114,12 @@
 				A2000000000000000000001B /* pads */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
+				B20000000000000000000004 /* BronzeNativeAppModel.swift */,
+				B20000000000000000000003 /* BronzeNativeControls.swift */,
+				B20000000000000000000005 /* BronzeNativeRootView.swift */,
+				B20000000000000000000006 /* BronzeNativeHostingController.swift */,
+				B20000000000000000000002 /* BronzeSkiaControlView.h */,
+				B20000000000000000000001 /* BronzeSkiaControlView.mm */,
 				A20000000000000000000001 /* HookKeysNativePlugin.swift */,
 				A20000000000000000000002 /* HookKeysBridgeViewController.swift */,
 				A20000000000000000000003 /* HookKeysNativeEngine.mm */,
@@ -231,6 +250,11 @@
 				A1000000000000000000000D /* FFTConvolver.cpp in Sources */,
 				A1000000000000000000000E /* TwoStageFFTConvolver.cpp in Sources */,
 				A1000000000000000000000F /* Utilities.cpp in Sources */,
+				B10000000000000000000001 /* BronzeSkiaControlView.mm in Sources */,
+				B10000000000000000000002 /* BronzeNativeControls.swift in Sources */,
+				B10000000000000000000003 /* BronzeNativeAppModel.swift in Sources */,
+				B10000000000000000000004 /* BronzeNativeRootView.swift in Sources */,
+				B10000000000000000000005 /* BronzeNativeHostingController.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -317,6 +341,7 @@
 		};
 		504EC3151FED79650016851F /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B20000000000000000000007 /* common.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -397,6 +422,7 @@
 		};
 		504EC3181FED79650016851F /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B20000000000000000000007 /* common.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;

@@ -808,6 +808,40 @@ void testNativeRuntimeSignalPath() {
   expect(mutedEnergy == 0.0, "native runtime maps the minimum fader position to silence");
 }
 
+void testNativeRuntimeEffectPadsAndMidiChannel10() {
+  hook_keys::NativeEngineRuntime runtime(48000.0, 128);
+  std::array<float, 128 * 2> sample{};
+  for (std::size_t frame = 0; frame < 128; ++frame) {
+    sample[frame * 2] = 0.25f;
+    sample[frame * 2 + 1] = -0.5f;
+  }
+  expect(runtime.loadEffectSample(0, sample.data(), 128, 48000.0),
+      "native runtime decodes an FX pad into preallocated PCM");
+  expect(runtime.triggerEffectSample(0, true), "UI can trigger a native FX pad");
+  std::array<float, 128 * 2> output{};
+  runtime.renderInterleaved(output.data(), 128, 2);
+  expect(std::abs(output[0] - 0.25f) < 0.0001f && std::abs(output[1] + 0.5f) < 0.0001f,
+      "native FX keeps stereo samples off the UI thread");
+  const auto peaks = runtime.consumeEffectPeaks();
+  expect(peaks[0] >= 0.25f && peaks[1] >= 0.5f,
+      "FX meter measures the native post-gain output");
+
+  runtime.setPerformanceMapping(48, 2, 0, 0, 0, -6.0f);
+  output.fill(0.0f);
+  expect(runtime.sendMidi(0, 0x99, 48, 127),
+      "MIDI channel 10 reaches the native performance mapping");
+  runtime.renderInterleaved(output.data(), 128, 2);
+  expect(std::abs(output[0]) > 0.12f && std::abs(output[0]) < 0.13f,
+      "channel 10 triggers the mapped FX with its saved gain");
+
+  runtime.clearPerformanceMappings();
+  output.fill(0.0f);
+  expect(runtime.sendMidi(0, 0x99, 48, 127), "unmapped channel 10 note is consumed safely");
+  runtime.renderInterleaved(output.data(), 128, 2);
+  expect(std::all_of(output.begin(), output.end(), [](float value) { return value == 0.0f; }),
+      "clearing the native mapping prevents a stale FX trigger");
+}
+
 void testNeutralRuntimeSoundFontPathPreservesEmbeddedEnvelope() {
   constexpr std::size_t frames = 4096;
   constexpr std::size_t block = 128;
@@ -3707,6 +3741,7 @@ int main() {
   testSameSoundFontRunsIndependentlyAcrossModules();
   testDefaultVolumeEnvelopes();
   testNativeRuntimeSignalPath();
+  testNativeRuntimeEffectPadsAndMidiChannel10();
   testNeutralRuntimeSoundFontPathPreservesEmbeddedEnvelope();
   testModulesMeterUsesEveryOutput();
   testNativeRuntimeOrganDrawbars();

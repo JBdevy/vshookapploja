@@ -8,6 +8,9 @@ export interface LocalTrack {
   size: number;
   addedAt: string;
   fixedLoop?: true;
+  // Versão do arquivo fixo usada pelo cache do player nativo. Ela muda quando
+  // o MP3 empacotado é substituído, sem alterar o id exibido pela playlist.
+  nativeAssetKey?: string;
   // Presente somente durante a reprodução por uma playlist de loop. O arquivo
   // foi preparado neste BPM e acompanha o BPM global sem afetar músicas comuns.
   loopSourceBpm?: number;

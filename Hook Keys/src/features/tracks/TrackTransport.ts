@@ -2,7 +2,7 @@ import { type LocalTrack, TrackLibraryStore } from './TrackLibraryStore';
 import { LongPressGesture } from '../../shared/gestures/LongPressGesture';
 import { isDesktopRuntime } from '../../platform/runtime';
 import type { NativeTrackPlayer, NativeTrackSource } from './NativeTrackPlayer';
-import { isTempoSyncedLoopTrack } from './BundledLoops';
+import { bundledLoopAssetUrl, isTempoSyncedLoopTrack } from './BundledLoops';
 
 export type TrackPlaybackState = 'empty' | 'loading' | 'stopped' | 'playing' | 'paused';
 export type TrackQueueSource = 'manual' | 'auto';
@@ -460,10 +460,13 @@ export class TrackTransportController {
     this.render();
 
     try {
-      const file = await this.library.getFile(track.id);
+      const directUrl = this.audio instanceof HTMLAudioElement ? bundledLoopAssetUrl(track.id) : null;
+      const file = directUrl ? null : await this.library.getFile(track.id);
       if (sequence !== this.loadSequence) return;
-      if (!file) throw new Error('track_file_not_found');
-      this.objectUrl = this.attachFile(this.audio, track, file);
+      if (!directUrl && !file) throw new Error('track_file_not_found');
+      this.objectUrl = directUrl
+        ? this.attachUrl(this.audio, directUrl)
+        : this.attachFile(this.audio, track, file!);
       this.applyPlaybackRate(this.audio, track);
       if (autoplay) {
         const synchronizedLoop = isTempoSyncedLoopTrack(track);
@@ -748,6 +751,13 @@ export class TrackTransportController {
     audio.src = url;
     audio.load();
     return url;
+  }
+
+  private attachUrl(audio: TrackAudio, url: string): null {
+    if (!(audio instanceof HTMLAudioElement)) throw new Error('direct_track_url_requires_html_audio');
+    audio.src = url;
+    audio.load();
+    return null;
   }
 
   private applyPlaybackRate(audio: TrackAudio, track: LocalTrack | null): void {

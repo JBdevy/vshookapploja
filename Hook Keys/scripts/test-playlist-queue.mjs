@@ -93,7 +93,10 @@ console.log('ADD_MUSIC_PICKER_OK: seletor nativo no iOS, campo de arquivo nas ou
   const library = {
     list: async () => [], listPlaylists: async () => [], listBlocks: async () => [], getListLayout: async () => [],
   };
-  const controller = new window.Tracks.TracksPanelController(splitPanel, library);
+  let selectedFixedLoop = null;
+  const controller = new window.Tracks.TracksPanelController(splitPanel, library, {
+    onTrackSelected: track => { selectedFixedLoop = track; },
+  });
   controller.mount();
   await settle();
   const loops = host.querySelector('[data-playlist-id="fixed:loops"]');
@@ -111,10 +114,15 @@ console.log('ADD_MUSIC_PICKER_OK: seletor nativo no iOS, campo de arquivo nas ou
     'Beat 4/4 fica verde, Beat 4/4 - 2 azul bebê e Beat 6/8 laranja',
   );
   const firstLoop = host.querySelector('[data-track-id="fixed-loop-beat-4-4"]');
+  firstLoop.click();
+  assert.equal(selectedFixedLoop?.id, 'fixed-loop-beat-4-4', 'o toque no Beat 4/4 chega ao transporte');
+  assert.equal(selectedFixedLoop?.loopSourceBpm, 120, 'o beat selecionado mantém a origem em 120 BPM');
   controller.syncPlayback({ selectedTrackId: 'fixed-loop-beat-4-4', playingTrackId: null,
     queuedTrackId: null, queuedTrackName: null, queueSource: null, state: 'stopped', progress: 0, queueProgress: 0,
     loopPlaying: false });
   assert(firstLoop.classList.contains('is-selected'), 'loop escolhido recebe o estado pulsante de seleção');
+  assert.match(style.textContent, /track-card--loop-green[\s\S]*\.is-playing\)[\s\S]*outline:\s*2px solid #ffffff/,
+    'loop escolhido mantém contorno visível mesmo quando o Modo Lite remove a pulsação');
   assert.equal(window.getComputedStyle(firstLoop.querySelector('.track-list-number')).color, '#17120d',
     'número da coluna do loop fica preto');
   assert.equal(host.querySelector('[data-tracks-action="toggle-edit"]').disabled, true, 'Loops não entra em edição');

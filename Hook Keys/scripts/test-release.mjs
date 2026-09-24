@@ -14,6 +14,7 @@ const tests = [
   ['scripts/test-keyboard-midi-router.mjs'],
   ['scripts/test-playlist-queue.mjs'],
   ['scripts/test-native-tracks.mjs'],
+  ['scripts/test-apple-native-foundation.mjs'],
   ['scripts/test-loop-metronome.mjs'],
   ['scripts/test-keyboard-style.mjs'],
   ['scripts/test-input-keyboard.mjs'],

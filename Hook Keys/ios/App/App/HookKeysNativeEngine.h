@@ -37,6 +37,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 - (void)setMidiDeviceIds:(NSArray *)deviceIds;
 - (BOOL)loadSoundFontAtPath:(NSString *)path moduleIndex:(NSInteger)moduleIndex;
 - (BOOL)configureOrganDrawbars:(NSArray<NSNumber *> *)drawbars;
+- (BOOL)applyOrganFactoryDefaults;
 - (BOOL)cloneSoundFontFromModule:(NSInteger)sourceModuleIndex
                         toModule:(NSInteger)targetModuleIndex;
 - (void)unloadSoundFontFromModule:(NSInteger)moduleIndex;
@@ -182,6 +183,27 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 - (BOOL)setPadOutputGainDb:(float)db enabled:(BOOL)enabled
              channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount
                    lowCutHz:(float)lowCutHz highCutHz:(float)highCutHz;
+// Pads e FX aprendidos no canal MIDI 10 são resolvidos no runtime C++.
+// A thread Core MIDI não atravessa Swift/JavaScript para disparar áudio.
+- (void)clearPerformanceMappings;
+- (void)setPerformanceMappingForNote:(NSInteger)midiNote
+                                kind:(NSInteger)kind
+                           bankIndex:(NSInteger)bankIndex
+                           itemIndex:(NSInteger)itemIndex
+                                mode:(NSInteger)mode
+                              gainDb:(float)gainDb;
+- (BOOL)loadEffectAtPath:(NSString *)path
+               bankIndex:(NSInteger)bankIndex
+               itemIndex:(NSInteger)itemIndex
+    NS_SWIFT_NAME(loadEffect(path:bankIndex:itemIndex:));
+- (BOOL)triggerEffectBankIndex:(NSInteger)bankIndex
+                      itemIndex:(NSInteger)itemIndex
+                        enabled:(BOOL)enabled
+                         gainDb:(float)gainDb
+    NS_SWIFT_NAME(triggerEffect(bankIndex:itemIndex:enabled:gainDb:));
+- (BOOL)setEffectOutputGainDb:(float)db enabled:(BOOL)enabled
+                 channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;
+- (NSArray<NSNumber *> *)effectMeterLevels;
 - (BOOL)setTempo:(float)bpm;
 - (BOOL)setGlobalTranspose:(NSInteger)semitones;
 - (BOOL)setMetronomeOutputChannelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;

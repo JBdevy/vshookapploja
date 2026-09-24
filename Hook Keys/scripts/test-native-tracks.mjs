@@ -4,14 +4,14 @@ import { Window } from 'happy-dom';
 
 const compiled = await build({
   stdin: {
-    contents: "export * from './src/features/tracks/TrackTransport'; export * from './src/features/tracks/NativeTrackPlayer';",
+    contents: "export * from './src/features/tracks/TrackTransport'; export * from './src/features/tracks/NativeTrackPlayer'; export * from './src/features/tracks/BundledLoops';",
     resolveDir: '.', loader: 'ts',
   },
   bundle: true, write: false, format: 'iife', globalName: 'Tracks', platform: 'browser',
 });
 const window = new Window({ url: 'http://localhost', settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
 window.eval(compiled.outputFiles[0].text);
-const { TrackTransportController, NativeTrackPlayer, trackFileExtension } = window.Tracks;
+const { TrackTransportController, NativeTrackPlayer, trackFileExtension, bundledLoopAssetUrl } = window.Tracks;
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const settle = async () => { for (let index = 0; index < 20; index += 1) await new Promise(resolve => setImmediate(resolve)); };
 
@@ -56,7 +56,7 @@ const bridge = {
 const tracks = {
   a: { id: 'a', name: 'Primeira', fileName: 'Primeira.MP3', mimeType: 'audio/mpeg', size: 3, addedAt: '' },
   b: { id: 'b', name: 'Segunda', fileName: 'Segunda.m4a', mimeType: 'audio/mp4', size: 4, addedAt: '' },
-  loop: { id: 'fixed-loop:test', name: 'Loop', fileName: 'Loop.mp3', mimeType: 'audio/mpeg', size: 4, addedAt: '', fixedLoop: true, loopSourceBpm: 120 },
+  loop: { id: 'fixed-loop:test', name: 'Loop', fileName: 'Loop.mp3', mimeType: 'audio/mpeg', size: 4, addedAt: '', fixedLoop: true, loopSourceBpm: 120, nativeAssetKey: 'fixed-loop-test-20260924a' },
 };
 const library = { getFile: async (id) => new window.Blob([id === 'a' ? 'aaa' : 'bbbb']) };
 
@@ -74,6 +74,8 @@ const controls = (action) => calls.filter(([kind, , name]) => kind === 'control'
 try {
   assert.equal(trackFileExtension('Louvor.Final.FLAC'), 'flac');
   assert.equal(trackFileExtension('sem-extensao'), 'audio');
+  assert.equal(bundledLoopAssetUrl('fixed-loop-beat-4-4'), 'http://localhost/assets/loops/Beat%204-4.mp3',
+    'desktop aponta o player direto para o MP3 empacotado e codifica os espaços');
 
   await transport.selectTrack(tracks.a);
   await settle();
@@ -155,6 +157,8 @@ try {
   assert.equal(snapshot.queuedTrackId, null, 'o próximo áudio não fica preso atrás do loop');
   await transport.selectTrack(tracks.loop);
   await settle();
+  assert(calls.some(([kind, key]) => kind === 'store' && key === 'fixed-loop-test-20260924a'),
+    'loop fixo usa uma chave versionada e não reaproveita MP3 antigo do cache nativo');
   assert.equal(snapshot.selectedTrackId, 'fixed-loop:test',
     'escolher um loop durante música normal troca imediatamente em vez de selecionar e voltar');
   assert.equal(snapshot.queuedTrackId, null, 'loop de acompanhamento nunca fica na fila comum');

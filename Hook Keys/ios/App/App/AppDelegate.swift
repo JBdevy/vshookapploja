@@ -7,7 +7,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // O root é criado aqui, em vez de pelo Main.storyboard. Assim o modo
+        // nativo nunca chega a instanciar WKWebView/Capacitor. Enquanto a
+        // migração está em andamento, --bronze-native-ui habilita a nova tela
+        // sem retirar a interface atual da build de produção.
+        let nativeFromInfo = Bundle.main.object(forInfoDictionaryKey: "BronzeNativeUIEnabled") as? Bool ?? false
+        let nativeFromArgument = ProcessInfo.processInfo.arguments.contains("--bronze-native-ui")
+        let root: UIViewController = nativeFromInfo || nativeFromArgument
+            ? BronzeNativeHostingController()
+            : HookKeysBridgeViewController()
+        let appWindow = UIWindow(frame: UIScreen.main.bounds)
+        appWindow.rootViewController = root
+        appWindow.makeKeyAndVisible()
+        window = appWindow
         return true
     }
 
@@ -30,6 +42,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        if let native = self.window?.rootViewController as? BronzeNativeHostingController {
+            return native.supportedInterfaceOrientations
+        }
         guard let bridgeViewController = self.window?.rootViewController as? CAPBridgeViewController else {
             // Durante o lançamento a bridge ainda pode não existir. O login é
             // sempre retrato; o plugin libera paisagem ao entrar no player.
