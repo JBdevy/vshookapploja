@@ -412,6 +412,10 @@ jobs:
             -exportOptionsPlist "$RUNNER_TEMP/HookKeysExportOptions.plist"
           IPA_PATH="$(find build/export -maxdepth 1 -type f -name '*.ipa' -print -quit)"
           test -n "$IPA_PATH"
+          # Validate the exported payload too, not only the pre-export archive.
+          IPA_CHECK="$(mktemp -d "$RUNNER_TEMP/bronze-ipa-check.XXXXXX")"
+          ditto -x -k "$IPA_PATH" "$IPA_CHECK"
+          node scripts/verify-native-ios.mjs --app "$IPA_CHECK/Payload/App.app"
           mkdir -p build/release
           cp "$IPA_PATH" 'build/release/Bronze Keys.ipa'
 
@@ -483,11 +487,16 @@ jobs:
       - ios
     runs-on: ubuntu-latest
     steps:
-      - name: Baixar os tres arquivos
+      - name: Baixar APK e AAB
         uses: actions/download-artifact@v4
         with:
-          pattern: Bronze-Keys-*
-          merge-multiple: true
+          name: Bronze-Keys-Android
+          path: release-assets
+
+      - name: Baixar IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: Bronze-Keys-iOS
           path: release-assets
 
       - name: Validar conteudo do Release

@@ -545,6 +545,7 @@ struct BronzePresetSlot: Codable, Equatable, Sendable {
 }
 
 struct BronzeNativeSession: Codable, Equatable, Sendable {
+    var workspace: BronzeUserWorkspace?
     var modules = BronzeModuleSnapshot.defaults
     var presets = (0..<96).map { BronzePresetSlot(color: $0 % 8) }
     var bank = 0
@@ -565,6 +566,7 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
     var loopID: Int?
 
     func validate() throws {
+        try workspace?.validate()
         guard presets.count == 96, (0..<6).contains(bank),
               (0..<8).contains(selectedModule), soloModule.map({ (0..<8).contains($0) }) ?? true,
               activePreset.map({ (0..<96).contains($0) }) ?? true,

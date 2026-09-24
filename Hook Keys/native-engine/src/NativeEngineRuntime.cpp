@@ -1252,6 +1252,10 @@ void NativeEngineRuntime::addEffectsInterleaved(
     while (peaks[channel] > previous && !effectPeaks_[channel].compare_exchange_weak(
         previous, peaks[channel], std::memory_order_release, std::memory_order_relaxed)) {}
   }
+  std::array<std::uint64_t, 2> activity{};
+  for (const auto& voice : effectVoices_) if (voice.sample != nullptr)
+    activity[voice.sampleIndex / 64] |= std::uint64_t{1} << (voice.sampleIndex % 64);
+  for (std::size_t i = 0; i < activity.size(); ++i) effectActivity_[i].store(activity[i], std::memory_order_release);
 }
 
 void NativeEngineRuntime::addPadsInterleaved(

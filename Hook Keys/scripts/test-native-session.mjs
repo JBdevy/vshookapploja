@@ -20,7 +20,9 @@ if (compiler.error?.code === 'ENOENT' && process.platform !== 'darwin') {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'bronze-session-test-'));
   try {
     const binary = path.join(temp, process.platform === 'win32' ? 'session-test.exe' : 'session-test');
-    const build = spawnSync('swiftc', [source, path.join(root, 'scripts/test-fixtures/native-session/main.swift'), '-o', binary], { encoding: 'utf8' });
+    const build = spawnSync('swiftc', [source, path.join(root, 'ios/App/App/BronzeUserWorkspace.swift'),
+      path.join(root, 'ios/App/App/BronzeNativeBackup.swift'),
+      path.join(root, 'scripts/test-fixtures/native-session/main.swift'), '-o', binary], { encoding: 'utf8' });
     assert.equal(build.status, 0, build.stdout + build.stderr);
     const run = spawnSync(binary, [], { encoding: 'utf8' });
     assert.equal(run.status, 0, run.stdout + run.stderr);

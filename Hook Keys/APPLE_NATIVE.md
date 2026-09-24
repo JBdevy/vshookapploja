@@ -60,10 +60,20 @@ as flags do compilador em `extra_cflags/extra_asmflags/extra_ldflags`.
 
 ### Diagnóstico de abertura no iPad
 
-O deployment target continua em iOS 15, incluindo iPadOS 16. Instalar a IPA
-não comprova que a inicialização funciona nesse sistema. O relato de falha
-no iPad de 5ª geração ainda exige o `.ips` do dispositivo para determinar
-a causa; não foi reproduzido localmente em Windows.
+O registro recebido da build 98 (1.0.0), iPad6,12 com iOS 16.7.16, identifica
+SIGABRT/DYLD `Library missing`: o executável exige SwiftUICore.framework,
+ausente nesse sistema. A falha ocorre antes de executar a interface e o áudio.
+O mesmo registro lista Capacitor.framework e Cordova.framework no pacote antigo;
+não corresponde ao target atual sem essas dependências. Isso não demonstra
+que o motor de áudio ou a WebView tenha provocado este encerramento.
+
+Debug e Release agora explicitam `-weak_framework SwiftUICore`, mantendo
+`$(inherited)` para não perder as flags Skia, e o deployment target iOS 15.
+O verificador usa `otool -l` no archive e na IPA efetivamente exportada: rejeita
+SwiftUICore obrigatório em qualquer binário, dependências web, executável ausente,
+plataforma de simulador/macOS e mínimo acima de iOS 15.0. Testes simulam os
+comandos Mach-O da falha e a ligação opcional. A nova IPA ainda precisa ser
+compilada em macOS e testada no iPad; Windows não valida a execução Apple.
 
 A entrada `startWithBufferFrames` agora trata exceções Objective-C do grafo
 Core Audio e exceções C++ recuperáveis, além dos NSError já tratados. A UI
@@ -184,10 +194,24 @@ Implementado nesta etapa:
   preservam efeitos, fader e ON/OFF; todos os novos parâmetros participam da
   sessão e dos snapshots. Knobs Skia com +/− e repetição.
 
-Ainda pendentes: presets próprios do synth, catálogo/conta,
-playlists do usuário, edição dos bancos FX do usuário, MIDI Learn na UI,
-backup e host nativo macOS. A preparação do Skia macOS não cria, por si só, um
-app macOS nativo. Model e controles também precisam de adaptação de plataforma.
+Implementados nesta etapa, ainda sem validação em Xcode/dispositivo:
+presets próprios do synth; conta com Keychain e catálogo com download manual;
+playlists normais e de loops do usuário; edição/importação dos bancos FX;
+MIDI Learn com limites e modo compatibilidade; backup local UserBK em streaming
+com verificação de integridade antes da restauração. Os testes Foundation dessas
+rotinas exigem Swift/CryptoKit no CI Apple.
+
+Ainda pendentes: validação de todos esses fluxos na IPA, paridade completa das
+configurações do catálogo/backend e da interface anterior, e host nativo macOS.
+A preparação do Skia macOS não cria, por si só, um app macOS nativo. Model,
+importação/exportação e controles também precisam de adaptação de plataforma.
+Não considerar a migração concluída enquanto essas etapas não forem verificadas.
+
+O Release baixa por nome apenas Bronze-Keys-Android e Bronze-Keys-iOS. O artifact
+Bronze-Keys-iOS-diagnostics fica separado, com dSYM e resultado do archive para
+investigar falhas. O diagnóstico da build 98 e a correção de ligação estão na
+seção de abertura acima; aprovação dos testes locais não demonstra que a nova
+IPA iniciou no aparelho.
 
 Validação local: testes do motor C++ compilados em Windows/MSVC, testes Node
 e receita Skia simulada. Compilação Swift/Objective-C++, desenho Skia real,

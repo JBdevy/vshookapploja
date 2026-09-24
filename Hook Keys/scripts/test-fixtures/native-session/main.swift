@@ -334,4 +334,64 @@ expect(encoded["loopPlaying"] == nil && encoded["activePad"] == nil && encoded["
 try Data("invalid-json".utf8).write(to: store.sessionURL)
 rejects { _ = try store.load() }
 expect(try String(contentsOf: store.sessionURL, encoding: .utf8) == "invalid-json", "corrupt original is not overwritten")
-print("NATIVE_SESSION_OK: 96 presets, global B3, relative paths, validation and atomic persistence")
+var workspace = BronzeUserWorkspace()
+workspace.synthPresets[3] = BronzeSynthPreset(name: "Lead", sound: BronzeSynth(), envelope: BronzeEnvelope(), color: 4)
+workspace.activeSynthPreset = 3
+let mediaDirectory = directory.appendingPathComponent("MediaFixture", isDirectory: true)
+try FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
+let originalAudio = mediaDirectory.appendingPathComponent("Beat.wav")
+try Data(repeating: 37, count: 700_000).write(to: originalAudio)
+let mediaStore = BronzeUserMediaStore(session: store)
+let mediaKey = try mediaStore.importFile(originalAudio)
+expect(try Data(contentsOf: mediaStore.url(mediaKey)) == Data(contentsOf: originalAudio), "audio copied without editing original")
+let track = BronzeUserTrack(name: "Beat", key: mediaKey)
+let list = BronzeUserPlaylist(name: "My loops", isLoop: true, tracks: [track])
+workspace.playlists = [list]; workspace.selectedPlaylist = list.id; workspace.selectedTrack = track.id
+workspace.fxBanks[1].pads[0] = BronzeUserFX(name: "FX test", key: mediaKey, gainDb: -18, color: 5)
+try workspace.validate()
+var invalidWorkspace = workspace
+invalidWorkspace.fxBanks[0].name = "Renamed Church"
+rejects { try invalidWorkspace.validate() }
+invalidWorkspace = workspace; invalidWorkspace.playlists[0].repeatEnabled = true
+rejects { try invalidWorkspace.validate() }
+invalidWorkspace = workspace; invalidWorkspace.playlists[0].tracks.append(track)
+rejects { try invalidWorkspace.validate() }
+invalidWorkspace = workspace; invalidWorkspace.selectedTrack = UUID()
+rejects { try invalidWorkspace.validate() }
+for badKey in ["../escape.wav", UUID().uuidString + "/../../escape.wav", UUID().uuidString + "/evil.exe", "/abs.wav"] {
+    rejects { _ = try mediaStore.url(badKey) }
+}
+var backedUp = session
+backedUp.workspace = workspace
+let font = try store.soundFontURL(for: key)
+try FileManager.default.createDirectory(at: font.deletingLastPathComponent(), withIntermediateDirectories: true)
+try Data("RIFFsf2fixture".utf8).write(to: font)
+try store.save(backedUp)
+let backup = directory.appendingPathComponent("UserBK_Test.bkbackup")
+expect(BronzeNativeBackup.fileName(user: "João / Test:*") == "UserBK_João  Test.bkbackup", "backup sanitizes user name")
+try BronzeNativeBackup.export(session: backedUp, store: store, destination: backup)
+let staged = try BronzeNativeBackup.stage(backup)
+defer { try? FileManager.default.removeItem(at: staged.directory) }
+expect(try staged.load() == backedUp, "complete native session round-trips through backup")
+expect(try Data(contentsOf: staged.soundFontURL(for: key)) == Data(contentsOf: font), "backup contains actual SF2 bytes")
+expect(try Data(contentsOf: BronzeUserMediaStore(session: staged).url(mediaKey)) == Data(contentsOf: originalAudio), "backup contains actual media bytes")
+let destination = BronzeSessionStore(directory: directory.appendingPathComponent("Restored"))
+try BronzeNativeBackup.installAssets(from: staged, into: destination)
+try BronzeNativeBackup.installAssets(from: staged, into: destination)
+expect(try Data(contentsOf: destination.soundFontURL(for: key)) == Data(contentsOf: font), "matching immutable assets can be restored twice")
+try Data("existing different SF2".utf8).write(to: destination.soundFontURL(for: key))
+rejects { try BronzeNativeBackup.installAssets(from: staged, into: destination) }
+expect(try String(contentsOf: destination.soundFontURL(for: key), encoding: .utf8) == "existing different SF2", "restore never overwrites conflicting user files")
+let archiveBytes = try Data(contentsOf: backup)
+let broken = directory.appendingPathComponent("broken.bkbackup")
+var corruptArchive = archiveBytes
+corruptArchive[corruptArchive.count - 1] ^= 1
+try corruptArchive.write(to: broken)
+rejects { _ = try BronzeNativeBackup.stage(broken) }
+try archiveBytes.prefix(20).write(to: broken)
+rejects { _ = try BronzeNativeBackup.stage(broken) }
+var trailing = archiveBytes; trailing.append(0)
+try trailing.write(to: broken)
+rejects { _ = try BronzeNativeBackup.stage(broken) }
+expect(try store.load() == backedUp, "corrupt and truncated backups leave live session intact")
+print("NATIVE_SESSION_OK: presets, playlists, FX, relative assets, streaming backup and corruption rejection")

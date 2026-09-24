@@ -9,6 +9,36 @@ const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const forbidden = /Capacitor|Cordova|CAPPlugin|CAPBridge|WKWebView|UIWebView|WebKit|CapApp-SPM/i;
 const webFile = /\.(?:html?|[cm]?js|css|wasm)$/i;
 
+// Inspect load commands, not just otool -L: that list does not distinguish
+// LC_LOAD_DYLIB (mandatory at launch) from LC_LOAD_WEAK_DYLIB (optional).
+// Build 98 aborted in dyld on iOS 16 because SwiftUICore was mandatory.
+export function verifyIOSLoadCommands(output, executable = false) {
+  const commands = output.split(/^Load command \d+\s*$/m).slice(1);
+  assert(commands.length > 0, 'Comandos Mach-O ausentes: use otool -l.');
+  for (const block of commands) {
+    const command = block.match(/^\s*cmd (LC_\w+)\s*$/m)?.[1];
+    const name = block.match(/^\s*name (.+?) \(offset \d+\)/m)?.[1];
+    if (name?.includes('/SwiftUICore.framework/')) {
+      assert.equal(command, 'LC_LOAD_WEAK_DYLIB',
+        'SwiftUICore obrigatório impede abrir no iOS 16; use -weak_framework SwiftUICore.');
+    }
+  }
+  if (executable) {
+    const versions = commands.filter(block => /^\s*cmd LC_(BUILD_VERSION|VERSION_MIN_IPHONEOS)\s*$/m.test(block));
+    assert(versions.length > 0, 'Executável sem versão mínima do iOS.');
+    for (const block of versions) {
+      if (/cmd LC_BUILD_VERSION/.test(block)) {
+        assert(/^\s*platform (2|IOS)\s*$/m.test(block), 'IPA deve conter executável de dispositivo iOS, não simulador/macOS.');
+      }
+      const version = block.match(/^\s*(?:minos|version) (\d+)\.(\d+)(?:\.(\d+))?\s*$/m);
+      assert(version, 'Versão mínima inválida no executável.');
+      const [, major, minor, patch = '0'] = version;
+      assert(Number(major) < 15 || (Number(major) === 15 && Number(minor) === 0 && Number(patch) === 0),
+        `Executável exige iOS ${major}.${minor}.${patch}, acima do mínimo suportado 15.0.`);
+    }
+  }
+}
+
 export function verifyNativeBundle(bundle, inspectBinary) {
   const walk = folder => fs.readdirSync(folder, { withFileTypes: true }).flatMap(entry => {
     const item = path.join(folder, entry.name);
@@ -18,6 +48,9 @@ export function verifyNativeBundle(bundle, inspectBinary) {
     return entry.isDirectory() ? walk(item) : [item];
   });
   const files = walk(bundle);
+  const executable = path.join(bundle, 'App');
+  assert(files.includes(executable), 'Executável App ausente na IPA.');
+  let executableInspected = false;
   for (const folder of ['hook-b3', 'pads', 'loops', 'fx-1']) {
     assert(fs.statSync(path.join(bundle, folder)).isDirectory(), `Recurso ausente: ${folder}`);
   }
@@ -32,8 +65,11 @@ export function verifyNativeBundle(bundle, inspectBinary) {
     if (['cffaedfe', 'cefaedfe', 'cafebabe', 'bebafeca'].includes(magic.toString('hex'))) {
       const dependencies = inspectBinary(file);
       assert(!forbidden.test(dependencies), `Biblioteca web vinculada em ${file}: ${dependencies}`);
+      verifyIOSLoadCommands(dependencies, file === executable);
+      if (file === executable) executableInspected = true;
     }
   }
+  assert(executableInspected, 'Executável App não é Mach-O válido.');
 }
 
 function requiredAudio() {
@@ -68,6 +104,9 @@ export function verifyNativeProject() {
     assert(definitions.has(id), `Referência Xcode órfã: ${id}`);
   }
   assert(!forbidden.test(project), 'O target iOS não pode vincular bibliotecas web.');
+  // Keep the generated Skia flags inherited in both Debug and Release.
+  assert.equal([...project.matchAll(/OTHER_LDFLAGS = \("\$\(inherited\)", "-weak_framework", SwiftUICore\);/g)].length, 2,
+    'Debug e Release precisam manter SwiftUICore opcional sem perder as flags Skia.');
   assert(!/Main\.storyboard|capacitor\.config|config\.xml|\/\* public \*\//i.test(project),
     'O target iOS não pode empacotar a interface web.');
   const sources = [...project.matchAll(/path = ([\w.-]+\.(?:swift|mm|h));/g)].map(match => match[1]);
@@ -99,7 +138,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (process.argv[2]) {
     assert.equal(process.argv[2], '--app');
     assert(process.argv[3], 'Use --app caminho/App.app');
-    verifyNativeBundle(path.resolve(process.argv[3]), file => execFileSync('otool', ['-L', file], { encoding: 'utf8' }));
-    console.log('IOS_NATIVE_BUNDLE_OK: sem HTML/JS/CSS ou bibliotecas web vinculadas.');
+    verifyNativeBundle(path.resolve(process.argv[3]), file => execFileSync('otool', ['-l', file], { encoding: 'utf8' }));
+    console.log('IOS_NATIVE_BUNDLE_OK: sem runtime web; SwiftUICore não obrigatório; mínimo iOS 15.0.');
   }
 }

@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E10000000000000000000004 /* BronzeNativeAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000004 /* BronzeNativeAccount.swift */; };
+		E10000000000000000000005 /* BronzeNativeAccountViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000005 /* BronzeNativeAccountViews.swift */; };
+		D10000000000000000000004 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000004 /* Security.framework */; };
+		E10000000000000000000003 /* BronzeNativeBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000003 /* BronzeNativeBackup.swift */; };
+		E10000000000000000000001 /* BronzeUserWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000001 /* BronzeUserWorkspace.swift */; };
+		E10000000000000000000002 /* BronzeNativeWorkspaceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000002 /* BronzeNativeWorkspaceViews.swift */; };
 		D10000000000000000000001 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* AVFoundation.framework */; };
 		D10000000000000000000002 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002 /* AudioToolbox.framework */; };
 		D10000000000000000000003 /* CoreMIDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20000000000000000000003 /* CoreMIDI.framework */; };
@@ -37,6 +43,12 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		E20000000000000000000004 /* BronzeNativeAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeAccount.swift; sourceTree = "<group>"; };
+		E20000000000000000000005 /* BronzeNativeAccountViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeAccountViews.swift; sourceTree = "<group>"; };
+		D20000000000000000000004 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		E20000000000000000000003 /* BronzeNativeBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeBackup.swift; sourceTree = "<group>"; };
+		E20000000000000000000001 /* BronzeUserWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeUserWorkspace.swift; sourceTree = "<group>"; };
+		E20000000000000000000002 /* BronzeNativeWorkspaceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BronzeNativeWorkspaceViews.swift; sourceTree = "<group>"; };
 		D20000000000000000000001 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		D20000000000000000000002 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		D20000000000000000000003 /* CoreMIDI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMIDI.framework; path = System/Library/Frameworks/CoreMIDI.framework; sourceTree = SDKROOT; };
@@ -78,6 +90,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10000000000000000000004 /* Security.framework in Frameworks */,
 				D10000000000000000000001 /* AVFoundation.framework in Frameworks */,
 				D10000000000000000000002 /* AudioToolbox.framework in Frameworks */,
 				D10000000000000000000003 /* CoreMIDI.framework in Frameworks */,
@@ -109,6 +122,11 @@
 		504EC3061FED79650016851F /* App */ = {
 			isa = PBXGroup;
 			children = (
+				E20000000000000000000004 /* BronzeNativeAccount.swift */,
+				E20000000000000000000005 /* BronzeNativeAccountViews.swift */,
+				E20000000000000000000003 /* BronzeNativeBackup.swift */,
+				E20000000000000000000001 /* BronzeUserWorkspace.swift */,
+				E20000000000000000000002 /* BronzeNativeWorkspaceViews.swift */,
 				A30000000000000000000001 /* Hook Keys Engine */,
 				A20000000000000000000016 /* hook-b3 */,
 				A2000000000000000000001B /* pads */,
@@ -152,6 +170,7 @@
 		D30000000000000000000001 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				D20000000000000000000004 /* Security.framework */,
 				D20000000000000000000001 /* AVFoundation.framework */,
 				D20000000000000000000002 /* AudioToolbox.framework */,
 				D20000000000000000000003 /* CoreMIDI.framework */,
@@ -238,6 +257,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E10000000000000000000004 /* BronzeNativeAccount.swift in Sources */,
+				E10000000000000000000005 /* BronzeNativeAccountViews.swift in Sources */,
+				E10000000000000000000003 /* BronzeNativeBackup.swift in Sources */,
+				E10000000000000000000001 /* BronzeUserWorkspace.swift in Sources */,
+				E10000000000000000000002 /* BronzeNativeWorkspaceViews.swift in Sources */,
 				A10000000000000000000003 /* HookKeysNativeEngine.mm in Sources */,
 				A10000000000000000000004 /* HookKeysEngine.cpp in Sources */,
 				A10000000000000000000005 /* ModuleEffects.cpp in Sources */,
@@ -403,6 +427,7 @@
 				);
 				MARKETING_VERSION = 1.0.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
+				OTHER_LDFLAGS = ("$(inherited)", "-weak_framework", SwiftUICore);
 				PRODUCT_BUNDLE_IDENTIFIER = com.hookdeveloper.hookkeys;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -434,6 +459,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.hookdeveloper.hookkeys;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+				OTHER_LDFLAGS = ("$(inherited)", "-weak_framework", SwiftUICore);
 				SWIFT_OBJC_BRIDGING_HEADER = "App/HookKeys-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";

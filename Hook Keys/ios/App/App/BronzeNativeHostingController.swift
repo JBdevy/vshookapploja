@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Host exclusivo do iPad/iPhone. BronzeNativeRootView permanece SwiftUI puro
-/// e pode entrar no futuro target macOS sem carregar UIKit ou storyboard.
+/// Host do iPad/iPhone. Os painéis usam SwiftUI; importação/exportação e
+/// controles UIKit ainda precisam de adaptação para um futuro host macOS.
 final class BronzeNativeHostingController: UIHostingController<BronzeNativeRootView> {
     init() { super.init(rootView: BronzeNativeRootView()) }
 

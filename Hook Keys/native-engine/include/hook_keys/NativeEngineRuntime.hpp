@@ -145,6 +145,9 @@ public:
   [[nodiscard]] std::array<float, 2> consumeMetronomePeaks() noexcept;
   [[nodiscard]] std::array<float, 2> consumePadPeaks() noexcept;
   [[nodiscard]] std::array<float, 2> consumeEffectPeaks() noexcept;
+  [[nodiscard]] bool effectIsActive(std::size_t sampleIndex) const noexcept {
+    return sampleIndex < 96 && (effectActivity_[sampleIndex / 64].load(std::memory_order_acquire) & (std::uint64_t{1} << (sampleIndex % 64)));
+  }
   [[nodiscard]] HookKeysEngine::ModuleAnalysis consumeModuleAnalysis(
       std::size_t moduleIndex) noexcept;
   [[nodiscard]] std::size_t maximumBlockFrames() const noexcept { return maximumBlockFrames_; }
@@ -241,6 +244,7 @@ private:
   std::size_t effectGainRampFrames_ = 0;
   std::atomic<std::uint16_t> effectOutputRoute_{2u << 8};
   std::array<std::atomic<float>, 2> effectPeaks_{};
+  std::array<std::atomic<std::uint64_t>, 2> effectActivity_{};
   struct LiveExpression final {
     std::array<int, 16> sustain{};
     LiveExpression() noexcept { sustain.fill(-1); }

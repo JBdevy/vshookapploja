@@ -1256,6 +1256,13 @@ static NSString *describeFormat(AVAudioFormat *format) {
   return YES;
 }
 
+- (NSArray<NSNumber *> *)effectActivity {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  NSMutableArray<NSNumber *> *result = [NSMutableArray arrayWithCapacity:96];
+  for (std::size_t index = 0; index < 96; ++index) [result addObject:@(runtime && runtime->effectIsActive(index))];
+  return result;
+}
+
 - (NSArray<NSNumber *> *)effectMeterLevels {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   if (!runtime) return @[@0.0f, @0.0f];

@@ -229,7 +229,8 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                            bankIndex:(NSInteger)bankIndex
                            itemIndex:(NSInteger)itemIndex
                                 mode:(NSInteger)mode
-                              gainDb:(float)gainDb;
+                              gainDb:(float)gainDb
+    NS_SWIFT_NAME(setPerformanceMapping(note:kind:bankIndex:itemIndex:mode:gainDb:));
 - (BOOL)loadEffectAtPath:(NSString *)path
                bankIndex:(NSInteger)bankIndex
                itemIndex:(NSInteger)itemIndex
@@ -242,6 +243,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
 - (BOOL)setEffectOutputGainDb:(float)db enabled:(BOOL)enabled
                  channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;
 - (NSArray<NSNumber *> *)effectMeterLevels;
+- (NSArray<NSNumber *> *)effectActivity;
 - (BOOL)setTempo:(float)bpm;
 - (BOOL)setGlobalTranspose:(NSInteger)semitones;
 - (BOOL)setMetronomeOutputChannelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;

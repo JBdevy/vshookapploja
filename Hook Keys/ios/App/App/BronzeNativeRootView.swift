@@ -3,15 +3,23 @@ import UniformTypeIdentifiers
 
 struct BronzeNativeRootView: View {
     @StateObject private var model = BronzeNativeAppModel()
+    @StateObject private var account = BronzeNativeAccount()
     private struct LibraryTarget: Identifiable { let id: Int }
     @State private var libraryTarget: LibraryTarget?
     @State private var presetTarget: LibraryTarget?
+    @State private var showFXEditor = false
+    @State private var showBackup = false
+    @State private var showMIDI = false
+    @State private var showAccount = false
     private enum ModulePage: Equatable { case performance, tone, envelope, equalizer, reverb, delay, synth, pulse, arpeggiator, processor(BronzeProcessorKind) }
     @State private var modulePage: ModulePage = .envelope
 
     var body: some View {
         ZStack {
             Color.bronzeBackground.ignoresSafeArea()
+            if account.restoring { ProgressView("Validando acesso…").tint(.bronze) }
+            else if !account.authorized { BronzeNativeAccountView(account: account) }
+            else {
             switch model.engineState {
             case .idle, .starting:
                 startupView
@@ -20,16 +28,25 @@ struct BronzeNativeRootView: View {
             case .ready:
                 playerView
             }
+            }
         }
         .preferredColorScheme(.dark)
-        .onAppear { model.start() }
+        .task { await account.restore(); if account.authorized { model.start() } }
+        .onChange(of: account.authorized) { authorized in
+            if authorized { model.start() } else { model.suspendForLogout() }
+        }
+        .onChange(of: model.engineState) { state in if state == .idle && account.authorized { model.start() } }
         .onDisappear { model.stopPerformanceNotes() }
         .sheet(item: $libraryTarget) { target in
-            BronzeNativeSoundFontLibrary(model: model, moduleIndex: target.id)
+            BronzeNativeSoundFontLibrary(model: model, account: account, moduleIndex: target.id)
         }
         .sheet(item: $presetTarget) { target in
             BronzeNativePresetEditor(model: model, index: target.id)
         }
+        .sheet(isPresented: $showFXEditor) { BronzeNativeFXEditor(model: model) }
+        .sheet(isPresented: $showBackup) { BronzeNativeBackupPanel(model: model, userName: account.session?.account.name ?? "Usuario") }
+        .sheet(isPresented: $showMIDI) { BronzeNativeMIDIPanel(model: model) }
+        .sheet(isPresented: $showAccount) { BronzeNativeAccountView(account: account) }
         .alert("Controle do módulo", isPresented: Binding(
             get: { model.controlError != nil },
             set: { if !$0 { model.controlError = nil } }
@@ -95,6 +112,7 @@ struct BronzeNativeRootView: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
+            .disabled(model.backupBusy)
         }
     }
 
@@ -105,6 +123,10 @@ struct BronzeNativeRootView: View {
                     .font(.headline.monospaced().weight(.black))
                     .foregroundStyle(Color.bronzeLight)
                 Spacer()
+                Button { showBackup = true } label: { Image(systemName: "externaldrive") }
+                    .accessibilityLabel("Backup local")
+                Button("MIDI") { showMIDI = true }
+                Button { showAccount = true } label: { Image(systemName: "person.circle") }
                 Button("−") { model.setTempo(model.tempo - 0.5) }
                     .disabled(model.isApplyingSnapshot)
                 Text(String(format: "%.1f BPM", model.tempo))
@@ -354,6 +376,15 @@ struct BronzeNativeRootView: View {
     }
 
     private var performancePads: some View {
+      VStack(spacing: 6) {
+        HStack {
+            ForEach(0..<8, id: \.self) { bank in
+                Button(model.workspace.fxBanks[bank].name) { model.selectFXBank(bank) }
+                    .buttonStyle(BronzeCompactButtonStyle(active: model.workspace.fxBank == bank))
+            }
+            Button("Edit") { showFXEditor = true }
+            if model.loadingFXBank { ProgressView() }
+        }.disabled(model.loadingFXBank || model.importingMedia)
         HStack(spacing: 8) {
             VStack(spacing: 5) {
                 HStack {
@@ -381,18 +412,24 @@ struct BronzeNativeRootView: View {
             .frame(maxWidth: .infinity)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 6), spacing: 5) {
                 ForEach(0..<12, id: \.self) { index in
-                    Button("FX \(index + 1)") {}
-                        .buttonStyle(BronzeButtonStyle(active: model.activeEffect == index))
+                    Button(model.workspace.fxBanks[model.workspace.fxBank].pads[index].name) {}
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity, minHeight: 35)
+                        .background(BronzePresetPalette.colors[model.workspace.fxBanks[model.workspace.fxBank].pads[index].color])
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .overlay { if model.effectLevels[index] > 0 { BronzePresetHighlight() } }
                         .simultaneousGesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { _ in model.triggerEffect(index, pressed: true) }
                                 .onEnded { _ in model.triggerEffect(index, pressed: false) }
                         )
+                        .disabled(!model.isFXReady(index))
                 }
             }
             .frame(maxWidth: .infinity)
-            .disabled(!model.bundledEffectsReady)
+            .disabled(model.loadingFXBank)
         }
+      }
         .onDisappear { model.endEffectTouches() }
     }
 
@@ -454,6 +491,8 @@ struct BronzeNativeRootView: View {
 
     private var loopLibrary: some View {
         VStack(spacing: 8) {
+            BronzeNativePlaylistLibrary(model: model)
+            if model.workspace.selectedPlaylist == nil {
             Text("Playlist de loops · Bronze Keys").font(.caption.bold())
             if model.loadingLoop { ProgressView("Carregando loop…") }
             HStack(spacing: 8) {
@@ -470,6 +509,7 @@ struct BronzeNativeRootView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .overlay(RoundedRectangle(cornerRadius: 6)
                             .stroke(model.selectedLoop?.id == loop.id ? Color.white : Color.clear, lineWidth: 3))
+                        .overlay { if model.selectedLoop?.id == loop.id { BronzePresetHighlight() } }
                     }
                     .buttonStyle(.plain)
                     .disabled(model.loadingLoop)
@@ -477,6 +517,7 @@ struct BronzeNativeRootView: View {
             }
             Text("Loops contínuos sincronizados ao BPM. Play inicia do começo.")
                 .font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1011,6 +1052,7 @@ struct BronzeNativeSynthEditor: View {
     @State private var oscillatorIndex = 0
     @State private var showModulation = false
     @State private var confirmReset = false
+    @State private var showPresets = false
     private var oscillator: BronzeOscillator { model.synth.oscillators[oscillatorIndex] }
     var body: some View {
         VStack(spacing: 6) {
@@ -1026,6 +1068,7 @@ struct BronzeNativeSynthEditor: View {
                     ForEach(0..<3, id: \.self) { mode in Button(BronzeSynth.modes[mode]) { edit { $0.mode = mode } } }
                 }
                 Spacer()
+                Button("Presets Synth") { showPresets = true }
                 Button("Reset Synth") { confirmReset = true }.font(.caption)
             }
             ScrollView(.horizontal) {
@@ -1059,6 +1102,7 @@ struct BronzeNativeSynthEditor: View {
                 }.padding(.vertical, 4)
             }
         }
+        .sheet(isPresented: $showPresets) { BronzeNativeSynthPresets(model: model) }
         .confirmationDialog("Restaurar os parâmetros do Synth?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Restaurar", role: .destructive) { model.setSynth(BronzeSynth()) }
             Button("Cancelar", role: .cancel) {}
@@ -1421,13 +1465,28 @@ struct BronzeCompactButtonStyle: ButtonStyle {
 
 struct BronzeNativeSoundFontLibrary: View {
     @ObservedObject var model: BronzeNativeAppModel
+    @ObservedObject var account: BronzeNativeAccount
     let moduleIndex: Int
     @Environment(\.dismiss) private var dismiss
     @State private var showingImporter = false
+    @State private var category = "User"
 
     var body: some View {
         NavigationView {
             VStack(spacing: 12) {
+                HStack {
+                    Menu(category == "User" ? "User" : account.categories.first(where: { $0.id == category })?.name ?? "Biblioteca") {
+                        Button("User") { category = "User" }
+                        ForEach(account.categories.filter { $0.visibleModule == nil || $0.visibleModule == moduleIndex + 1 }) { value in
+                            Button("\(value.name) · \(value.sounds.count)") { category = value.id }
+                        }
+                    }
+                    Text("Total geral: \(account.categories.reduce(0) { $0 + $1.sounds.count })").font(.caption)
+                    Button("Atualizar") { Task { await account.loadCatalog() } }.disabled(account.catalogBusy)
+                }.padding(.horizontal)
+                if category != "User" {
+                    BronzeNativeCatalogList(model: model, account: account, moduleIndex: moduleIndex, categoryID: category)
+                } else {
                 Button("Importar SF2") { showingImporter = true }
                     .buttonStyle(BronzeButtonStyle(active: true))
                     .disabled(model.loadingSoundFontModule != nil)
@@ -1435,12 +1494,12 @@ struct BronzeNativeSoundFontLibrary: View {
                 if let loading = model.loadingSoundFontModule {
                     ProgressView("Carregando timbre no módulo \(loading + 1)…")
                 }
-                if model.userSoundFonts.isEmpty {
+                if model.userOnlySoundFonts.isEmpty {
                     Text("Importe um arquivo SF2. O nome do arquivo será usado automaticamente.")
                         .foregroundStyle(.secondary)
                         .padding()
                 }
-                List(model.userSoundFonts) { entry in
+                List(model.userOnlySoundFonts) { entry in
                     Button {
                         model.selectUserSoundFont(entry, moduleIndex: moduleIndex)
                     } label: {
@@ -1454,8 +1513,9 @@ struct BronzeNativeSoundFontLibrary: View {
                     }
                     .disabled(model.loadingSoundFontModule != nil)
                 }
+                }
             }
-            .navigationTitle("User · Módulo \(moduleIndex + 1)")
+            .navigationTitle("Biblioteca · Módulo \(moduleIndex + 1)")
             .toolbar { Button("Concluir") { dismiss() } }
         }
         .navigationViewStyle(.stack)
