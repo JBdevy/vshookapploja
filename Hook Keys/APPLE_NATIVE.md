@@ -255,3 +255,23 @@ macOS, falha de compilação ou de execução continuam bloqueando o Release.
 O teste de integração Xcode rejeita UUIDs duplicados: `BronzeNativeSession.swift`
 não pode compartilhar o identificador de `common.xcconfig`. A validação SwiftUI
 completa ainda exige a build Apple; testes de texto não substituem o compilador.
+
+### Controles e organização dos editores
+
+Toque curto e toque longo dos bancos, logo, teclado, timbres, metrônomo e
+MIDI Learn de botões usam um único par de reconhecedores UIKit. Um hold
+concluído não executa a ação de toque ao soltar. Sliders e teclas de performance
+mantêm seu tratamento próprio; o host dá prioridade ao toque na borda inferior
+quando autenticado. A latência percebida precisa ser conferida no iPad físico.
+
+EQ mantém o gráfico acima de Q/tipo de banda dentro do mesmo card. Velocity
+abre apenas a curva e seus limites, com memória separada de User e Fixed;
+Glide e Mod conservam seus próprios controles. Pulse distribui os 16 passos
+e os seis parâmetros pela área disponível. Organ reserva mais altura aos
+drawbars, e Synth usa cinco presets inline, com edição por toque longo.
+Presets nativos antigos permanecem preservados no arquivo de sessão.
+
+Menus de saída derivam os canais da rota AVAudioSession e mantêm a instância
+UIKit durante atualizações dos medidores. MIDI apresenta somente os três
+seletores de dispositivo. RAM exibe a porcentagem de memória ativa, wired e
+comprimida do aparelho, excluindo cache inativo. Nenhuma destas telas usa WebView.

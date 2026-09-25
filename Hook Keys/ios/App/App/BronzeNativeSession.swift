@@ -444,6 +444,10 @@ struct BronzeModulePerformance: Codable, Equatable, Sendable {
     var noSens = false
     var dualMono = false
     var velocityCurve = [0, 32, 64, 96, 127]
+    // Optional so older sessions retain their existing curve unchanged.
+    var velocityMode: Int?
+    var velocityUserCurve: [Int]?
+    var velocityFixedValue: Int?
     var velocityIgnoreAbove = 127
     var velocityCeiling = 127
     var modulationMode = 1
@@ -468,6 +472,9 @@ struct BronzeModulePerformance: Codable, Equatable, Sendable {
               (-3...3).contains(octave), (1...128).contains(polyphony), (0...31).contains(outputStart),
               (1...2).contains(outputCount), outputStart + outputCount <= 32, (0...2).contains(mode),
               velocityCurve.count == 5, velocityCurve.allSatisfy({ (0...127).contains($0) }),
+              velocityMode.map({ (0...4).contains($0) }) ?? true,
+              velocityUserCurve.map({ $0.count == 5 && $0.allSatisfy { (0...127).contains($0) } }) ?? true,
+              velocityFixedValue.map({ (0...127).contains($0) }) ?? true,
               (0...127).contains(velocityIgnoreAbove), (1...127).contains(velocityCeiling),
               (0...4).contains(modulationMode), modulationRate.isFinite, (0.1...20).contains(modulationRate),
               modulationIntensity.isFinite, (0...1).contains(modulationIntensity),
@@ -774,5 +781,16 @@ extension BronzeEQBand {
         let numerator = hypot(b0 + b1 * cos(w) + b2 * cos(2 * w), -b1 * sin(w) - b2 * sin(2 * w))
         let denominator = hypot(a0 + a1 * cos(w) + a2 * cos(2 * w), -a1 * sin(w) - a2 * sin(2 * w))
         return 20 * log10(max(1e-8, numerator / max(1e-8, denominator)))
+    }
+}
+
+struct BronzeAudioRouteOption: Equatable {
+    let start: Int
+    let count: Int
+    var title: String { count == 2 ? "\(start + 1) + \(start + 2)" : "\(start + 1) · Mono" }
+    static func available(channels: Int) -> [Self] {
+        let count = max(1, min(32, channels))
+        return stride(from: 0, to: count - 1, by: 2).map { Self(start: $0, count: 2) }
+            + (0..<count).map { Self(start: $0, count: 1) }
     }
 }

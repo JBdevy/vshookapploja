@@ -4,6 +4,7 @@ struct TPPreviewGrid: View {
     @ObservedObject var session: HookSession
     let slot: Int
     let settings: JSON
+    var hideBorders = false
     private var blocks: [JSON] {
         let nested = session.snapshot["tp\(slot)"]
         let raw = session.snapshot["telepromptPreview"].exists ? session.snapshot["telepromptPreview"] : nested.first("previewOverlay", "preview")
@@ -58,7 +59,7 @@ struct TPPreviewGrid: View {
                     .underline(settings["previewUnderlineEnabled"].bool).lineLimit(2)
             }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(color.opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(hideBorders ? .clear : color.opacity(0.7)))
     }
     private func display(_ text: String) -> String { settings["textCase"].string == "original" ? text : settings["textCase"].string == "lowercase" ? text.lowercased() : text.uppercased() }
 }

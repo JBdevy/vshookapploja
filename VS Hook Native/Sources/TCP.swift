@@ -80,7 +80,7 @@ struct TCPView: View {
         .overlay {
             if selectedItem.exists || selectedTrack.exists {
                 let itemMode = selectedItem.exists
-                let current = itemMode ? (items.first { $0.first("itemId", "id", "guid") == selectedItem.first("itemId", "id", "guid") } ?? selectedItem) : (tracks.first { $0.identifier == selectedTrack.identifier } ?? selectedTrack)
+                let current = itemMode ? (items.first { $0.first("itemId", "id", "guid") == selectedItem.first("itemId", "id", "guid") } ?? session.displayedTCPItem(selectedItem)) : (tracks.first { $0.identifier == selectedTrack.identifier } ?? selectedTrack)
                 GeometryReader { geometry in
                     ZStack {
                         Color.black.opacity(0.001).contentShape(Rectangle()).onTapGesture { closeItem() }
@@ -108,7 +108,7 @@ struct TCPView: View {
     private func trackGrid(width: CGFloat, totalWidth: CGFloat) -> some View {
         let left = master ? width : min(width, totalWidth * min(1, max(0.25, trackFraction)))
         let right = max(1, width - left)
-        let rows = TCPTrackRows.make(tracks: tracks, items: items, focused: focus.exists)
+        let rows = model.rowCache.rows(tracks: tracks, items: items, focused: focus.exists)
         let regions = session.snapshot["regions"].array
         return VStack(spacing: 0) {
             if !master {
@@ -128,10 +128,10 @@ struct TCPView: View {
                         let track = row.track
                         HStack(spacing: 0) {
                             TCPTrackStrip(session: session, track: track, view: master ? "master" : "tracks") { selectedTrack = track }
-                                .padding(.trailing, master ? 0 : 24).frame(width: left)
+                                .equatable().padding(.trailing, master ? 0 : 24).frame(width: left)
                             if !master {
                                 TCPGridRow(track: track, items: row.items, regions: regions, range: visibleRange, focused: focus.exists,
-                                           shadow: row.shadow, cursor: currentCursor, playing: session.playing && session.connected, updatedAt: session.lastUpdate,
+                                           shadow: row.shadow,
                                            onSeek: { ratio in selectedHandle = ""; seek(ratio) }, onItem: { selectedItem = $0 }, canPan: zoom > 1,
                                            onPan: { ratio, ended in
                                                if panStart == nil { panStart = pan }
@@ -143,6 +143,11 @@ struct TCPView: View {
                         }.frame(height: 72)
                     }
                     if tracks.isEmpty { HookStatus(text: model.loading ? "CARREGANDO TCP…" : "TCP SEM DADOS").padding() }
+                }
+            }.overlay(alignment: .trailing) {
+                if !master {
+                    TCPMovingCursor(range: visibleRange, position: currentCursor, playing: session.playing && session.connected, updatedAt: session.lastUpdate, head: false)
+                        .frame(width: right).clipped().allowsHitTesting(false)
                 }
             }.accessibilityIdentifier("vshook.tcp.tracks")
                 .simultaneousGesture(MagnificationGesture().onChanged { zoom = min(16, max(1, zoomStart * $0)) }.onEnded { _ in zoomStart = zoom })
@@ -172,8 +177,11 @@ struct TCPView: View {
         session.command("edit_cursor_move", ["position": .number(position), "minPos": .number(bounds.start), "maxPos": .number(bounds.end), "cursorMoveSeq": .number(Date().timeIntervalSince1970 * 1_000_000)])
     }
 }
-private struct TCPTrackStrip: View {
-    @ObservedObject var session: HookSession
+private struct TCPTrackStrip: View, Equatable {
+    let session: HookSession
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.session === rhs.session && lhs.track == rhs.track && lhs.view == rhs.view
+    }
     let track: JSON
     let view: String
     let open: () -> Void

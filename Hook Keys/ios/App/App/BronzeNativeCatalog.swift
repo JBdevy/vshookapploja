@@ -8,6 +8,8 @@ struct BronzeCatalogSound: Identifiable, Sendable {
     let version: Int
     let byteSize: Int?
     let sha256: String?
+    var previewObjectKey: String?
+    var publishedAt: String?
     var color: UInt32 = 0x35d273
     var defaultsData: Data?
 }
@@ -74,6 +76,12 @@ enum BronzeNativeCatalog {
                 }
                 var value = BronzeCatalogSound(id: soundID, name: try text(sound["name"], limit: 120), objectKey: key,
                     version: try positiveInteger(sound["assetVersion"], fallback: revision), byteSize: bytes, sha256: sha, color: color(sound["color"], fallback: 0x35d273))
+                let previewKey = (sound["previewObjectKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let previewURL = (sound["previewUrl"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let preview = previewKey?.isEmpty == false ? previewKey : previewURL, !preview.isEmpty {
+                    value.previewObjectKey = try text(preview, limit: 2048)
+                }
+                value.publishedAt = sound["publishedAt"] as? String
                 let global = (payload["defaultSettings"] as? [String: Any])?["modules1To6"] as? [String: Any] ?? [:]
                 let categoryDefaults = (category["defaultSettings"] as? [String: Any])?["modules1To6"] as? [String: Any] ?? [:]
                 let soundDefaults = (sound["moduleSettings"] as? [String: Any])?["modules1To6"] as? [String: Any] ?? [:]
@@ -135,8 +143,15 @@ extension BronzeCatalogSound {
         performance.velocityIgnoreAbove = Int(number(values, "velocityLimit", 127, 0...127))
         performance.modulationMode = ["user", "lfo", "tremolo", "pan", "rotary"].firstIndex(of: values["modulationMode"] as? String ?? "user") ?? 0
         performance.modulationRate = number(values, "modulationRateHz", performance.modulationRate, 0.1...20)
-        if let points = (values["velocityCurve"] as? [String: Any])?["points"] as? [Double], points.count == 5, points.allSatisfy({ $0.isFinite }) {
-            performance.velocityCurve = points.map { Int(min(127, max(0, $0)).rounded()) }
+        if let curve = values["velocityCurve"] as? [String: Any] {
+            if let points = curve["points"] as? [Double], points.count == 5, points.allSatisfy({ $0.isFinite }) {
+                performance.velocityCurve = points.map { Int(min(127, max(0, $0)).rounded()) }
+            }
+            performance.velocityMode = ["soft", "middle", "hard", "fixed", "user"].firstIndex(of: curve["mode"] as? String ?? "")
+            if let points = curve["userPoints"] as? [Double], points.count == 5, points.allSatisfy({ $0.isFinite }) {
+                performance.velocityUserCurve = points.map { Int(min(127, max(0, $0)).rounded()) }
+            } else if performance.velocityMode == 4 { performance.velocityUserCurve = performance.velocityCurve }
+            performance.velocityFixedValue = Int(number(curve, "fixedValue", 100, 0...127))
         }
         settings.performance = performance
         var tone = settings.tone ?? BronzeTone()

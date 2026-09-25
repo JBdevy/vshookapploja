@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct BronzeOscillatorWaveform: View {
     let shape: Int
@@ -25,11 +26,13 @@ struct BronzeOscillatorWaveform: View {
 
 struct BronzeNativeOrganEditor: View {
     @ObservedObject var model: BronzeNativeAppModel
-    @Environment(\.verticalSizeClass) private var sizeClass
+    @Environment(\.bronzeContentSize) private var size
+    private var compact: Bool { size.height < 480 }
+    private var rotaryHeight: CGFloat { compact ? 68 : 124 }
     private var rotary: BronzeOrganRotary { model.organRotary }
     var body: some View {
-        VStack(spacing: 24) {
-            HStack(spacing: 10) {
+        VStack(spacing: 2) {
+            HStack(spacing: 5) {
                 VStack(spacing: 8) {
                     HStack {
                         speedButton("Brake", speed: 0)
@@ -40,35 +43,35 @@ struct BronzeNativeOrganEditor: View {
                         Button("Gabinet") { model.toggleOrganCabinet() }
                             .buttonStyle(BronzeDeckButtonStyle(palette: model.organCabinetEnabled ? .green : .grey, selected: model.organCabinetEnabled))
                     }
-                }.frame(maxWidth: .infinity).frame(height: 74)
+                }.frame(maxWidth: .infinity).frame(height: compact ? 48 : 74)
                 rotaryKnob("Slow", definition: .init("Slow", 0.2, 2, 1.2, .hertz), key: \.slowHz, tint: .yellow)
                 rotaryKnob("Fast", definition: .init("Fast", 2, 10, 10, .hertz), key: \.fastHz, tint: .orange)
                 rotaryKnob("Acceleration", definition: .init("Acceleration", 100, 10000, 1200, .milliseconds), key: \.rampSeconds, tint: .purple, multiplier: 1000)
                 rotaryKnob("Depth", definition: .init("Depth", 0, 1, 1, .percent), key: \.depth, tint: .mint)
-            }.padding(12).background(.black.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))
+            }.padding(compact ? 4 : 10).frame(height: rotaryHeight).background(.black.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.green.opacity(0.5)))
-            HStack(spacing: 18) {
+            HStack(spacing: compact ? 8 : 18) {
                 ForEach(0..<9, id: \.self) { index in
                     BronzeOrganDrawbar(index: index, value: Binding(get: { model.organDrawbars[index] }, set: { model.setOrganDrawbar(index, normalized: $0) }))
                 }
-            }.frame(maxWidth: 760).frame(height: sizeClass == .compact ? 210 : 390).padding(14)
+            }.frame(maxWidth: .infinity).frame(height: max(80, size.height - rotaryHeight - 34)).padding(6)
                 .background(Color(bronzeHex: 0x060d07)).clipShape(RoundedRectangle(cornerRadius: 9))
-        }.padding(24).background(BronzeTheme.panelGradient)
+        }.padding(6).background(BronzeTheme.panelGradient)
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .frame(maxWidth: 1110).frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity)
     }
     private func speedButton(_ title: String, speed: Int) -> some View {
         Button(title) { var next = rotary; next.speed = speed; model.setOrganRotary(next) }
             .buttonStyle(BronzeDeckButtonStyle(palette: rotary.speed == speed ? .green : .grey, selected: rotary.speed == speed))
     }
     private func rotaryKnob(_ title: String, definition: BronzeProcessorParameter, key: WritableKeyPath<BronzeOrganRotary, Double>, tint: Color, multiplier: Double = 1) -> some View {
-        VStack(spacing: 6) {
-            Text(title).font(.bronzeUI(12)).lineLimit(1).minimumScaleFactor(0.7)
+        VStack(spacing: 2) {
+            Text(title).font(.bronzeUI(compact ? 10 : 12)).lineLimit(1).minimumScaleFactor(0.7)
             BronzeDial(value: Binding(get: { definition.normalized(rotary[keyPath: key] * multiplier) }, set: { value in
                 var next = rotary; next[keyPath: key] = definition.value(value) / multiplier; model.setOrganRotary(next)
-            }), tint: tint, label: title).frame(width: 58, height: 58)
-            Text(definition.text(rotary[keyPath: key] * multiplier)).font(.bronzeUI(12)).foregroundStyle(Color.bronzeLight)
-        }.frame(maxWidth: .infinity).padding(8).background(.black.opacity(0.35))
+            }), tint: tint, label: title).frame(width: compact ? 30 : 58, height: compact ? 30 : 58)
+            Text(definition.text(rotary[keyPath: key] * multiplier)).font(.bronzeUI(compact ? 10 : 12)).foregroundStyle(Color.bronzeLight)
+        }.frame(maxWidth: .infinity).padding(compact ? 2 : 8).background(.black.opacity(0.35))
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.green.opacity(0.3)))
     }
 }
@@ -81,6 +84,7 @@ struct BronzeOrganDrawbar: View {
         VStack(spacing: 8) {
             Text(["16", "5⅓", "8", "4", "2⅔", "2", "1⅗", "1⅓", "1"][index]).font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
             GeometryReader { proxy in
+                let handle = min(65, max(24, proxy.size.height * 0.24))
                 HStack(spacing: 5) {
                     ZStack(alignment: .top) {
                         Color.black
@@ -88,14 +92,14 @@ struct BronzeOrganDrawbar: View {
                             Text("\(stage)").font(.bronzeUI(10)).foregroundStyle(.gray).frame(maxHeight: .infinity)
                         }}.padding(.vertical, 12)
                         RoundedRectangle(cornerRadius: 8).fill(tint)
-                            .frame(height: 65).overlay(RoundedRectangle(cornerRadius: 3).stroke(.gray.opacity(0.7)))
-                            .offset(y: value * max(1, proxy.size.height - 65))
+                            .frame(height: handle).overlay(RoundedRectangle(cornerRadius: 3).stroke(.gray.opacity(0.7)))
+                            .offset(y: value * max(1, proxy.size.height - handle))
                     }.clipShape(RoundedRectangle(cornerRadius: 3)).overlay(RoundedRectangle(cornerRadius: 3).stroke(.gray.opacity(0.4)))
                     VStack(spacing: 3) { ForEach((0..<16).reversed(), id: \.self) { segment in
                         Rectangle().fill(Double(segment) < (value * 8).rounded() * 2 ? Color.green : Color.green.opacity(0.12))
                     }}.frame(width: 12)
                 }.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { gesture in
-                    let position = Double((gesture.location.y - 32.5) / max(1, proxy.size.height - 65))
+                    let position = Double((gesture.location.y - handle / 2) / max(1, proxy.size.height - handle))
                     value = (min(1, max(0, position)) * 8).rounded() / 8
                 })
             }
@@ -106,6 +110,7 @@ struct BronzeOrganDrawbar: View {
 }
 
 struct BronzeModuleRoutingHeader: View {
+    @State private var channels = max(1, AVAudioSession.sharedInstance().outputNumberOfChannels)
     @Environment(\.bronzeContentSize) private var contentSize
     private var compact: Bool { contentSize.height < 480 }
     @ObservedObject var model: BronzeNativeAppModel
@@ -118,20 +123,18 @@ struct BronzeModuleRoutingHeader: View {
                 Menu(config.input < 0 ? "Todos os dispositivos ativos" : "MIDI \(config.input + 1)") {
                     Button("Todos os dispositivos ativos") { edit { $0.input = -1 } }
                     ForEach(0..<3, id: \.self) { slot in
-                        Button("MIDI \(slot + 1) · \(model.midiDevices.indices.contains(slot) ? model.midiDevices[slot].name : "Não conectado")") { edit { $0.input = slot } }
+                        Button("MIDI \(slot + 1) · \(model.midiSlotName(slot))") { edit { $0.input = slot } }
                     }
                 }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: compact ? 26 : 44)
             }.frame(maxWidth: .infinity)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Saída do módulo").font(.bronzeUI(11)).foregroundStyle(.secondary)
-                Menu(config.outputStart == 0 && config.outputCount == 2 ? "Padrão · 1 + 2" : "\(config.outputStart + 1)\(config.outputCount == 2 ? " + \(config.outputStart + 2)" : "")") {
-                    ForEach(0..<16, id: \.self) { pair in
-                        Button("Saída \(pair * 2 + 1) + \(pair * 2 + 2)") { edit { $0.outputStart = pair * 2; $0.outputCount = 2 } }
-                    }
-                    ForEach(0..<32, id: \.self) { channel in
-                        Button("Mono · \(channel + 1)") { edit { $0.outputStart = channel; $0.outputCount = 1 } }
-                    }
-                }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: compact ? 26 : 44)
+                let routes = BronzeAudioRouteOption.available(channels: channels)
+                BronzeStableMenu(title: routes.first(where: { $0.start == config.outputStart && $0.count == config.outputCount })?.title ?? "Saída indisponível",
+                                 choices: routes.map(\.title), selected: routes.firstIndex(where: { $0.start == config.outputStart && $0.count == config.outputCount }) ?? -1) { selection in
+                    edit { $0.outputStart = routes[selection].start; $0.outputCount = routes[selection].count }
+                }.frame(height: compact ? 26 : 44)
+
             }.frame(maxWidth: .infinity)
             VStack(spacing: 2) {
                 if index < 6 {
@@ -156,6 +159,9 @@ struct BronzeModuleRoutingHeader: View {
                 }.frame(width: compact ? 60 : 90, height: compact ? 62 : 88)
             }
         }.padding(compact ? 3 : 8).modifier(BronzeDeckSurface())
+            .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification).receive(on: RunLoop.main)) { _ in
+                channels = max(1, AVAudioSession.sharedInstance().outputNumberOfChannels)
+            }
     }
     private func edit(_ change: (inout BronzeModulePerformance) -> Void) {
         var next = config; change(&next); model.setPerformance(next, moduleIndex: index)
@@ -218,11 +224,11 @@ struct BronzeModulePerformanceCards: View {
     private var compact: Bool { contentSize.height < 480 }
     @ObservedObject var model: BronzeNativeAppModel
     let index: Int
-    let advanced: () -> Void
+    let advanced: (Int) -> Void
     private var config: BronzeModulePerformance { model.modulePerformance[index] }
     var body: some View {
         HStack(spacing: 4) {
-            Button(action: advanced) {
+            Button(action: { advanced(1) }) {
                 HStack(spacing: 3) {
                     Text("Velocity").font(.bronzeUI(compact ? 11 : 17))
                     Canvas { context, size in
@@ -244,7 +250,7 @@ struct BronzeModulePerformanceCards: View {
                             Button("Auto") { edit { $0.portamento.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: config.portamento ? .green : .grey))
                         }
                         HStack(spacing: 2) {
-                            Button("Config", action: advanced).buttonStyle(BronzeDeckButtonStyle(palette: .grey))
+                            Button("Config", action: { advanced(3) }).buttonStyle(BronzeDeckButtonStyle(palette: .grey))
                             Button("No Sens") { edit { $0.noSens.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: config.noSens ? .green : .red))
                         }
                     }
@@ -267,7 +273,7 @@ struct BronzeModulePerformanceCards: View {
                 if index != 7 {
                     VStack(spacing: 3) {
                         BronzeDial(value: Binding(get: { (config.modulationRate - 0.1) / 19.9 }, set: { value in edit { $0.modulationRate = 0.1 + value * 19.9 } }), tint: .orange, label: "Rate do Mod").frame(width: compact ? 30 : 64, height: compact ? 30 : 64).disabled(config.modulationMode == 0 || config.modulationMode == 4)
-                            .contextMenu { Button("Intensity", action: advanced) }
+                            .contextMenu { Button("Intensity", action: { advanced(2) }) }
                         Text(String(format: "%.2f Hz", config.modulationRate)).font(.bronzeUI(compact ? 9 : 12)).foregroundStyle(.purple)
                     }
                 }

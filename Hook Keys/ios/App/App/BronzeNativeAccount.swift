@@ -114,6 +114,10 @@ final class BronzeNativeAccount: ObservableObject {
         #if DEBUG && targetEnvironment(simulator)
         if ProcessInfo.processInfo.environment["BRONZE_UI_TEST"] == "1" {
             session = BronzeAccountSession(token: "", account: BronzeAccountIdentity(email: "preview@example.invalid", name: "Teste"))
+            if ProcessInfo.processInfo.environment["BRONZE_LIBRARY_UI_TEST"] == "1" {
+                categories = [BronzeCatalogCategory(id: "fixture", name: "Pianos", visibleModule: nil,
+                    sounds: (0..<20).map { BronzeCatalogSound(id: "fixture-\($0)", name: "Piano \($0 + 1)", objectKey: "fixture.sf2", version: 1, byteSize: 50_000_000, sha256: nil, previewObjectKey: "fixture-preview", color: 0x35d273) })]
+            }
             restoring = false
             return
         }
@@ -342,6 +346,26 @@ final class BronzeNativeAccount: ObservableObject {
         }
         delivered = true
         return downloaded
+    }
+
+    func previewData(_ sound: BronzeCatalogSound) async throws -> Data {
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.environment["BRONZE_LIBRARY_UI_TEST"] == "1",
+           let url = Bundle.main.url(forResource: "01-kick", withExtension: "mp3", subdirectory: "fx-1") {
+            return try Data(contentsOf: url)
+        }
+        #endif
+        guard let token = session?.token, let key = sound.previewObjectKey else { throw BronzeAPIError.invalid }
+        let result = try await request("account/sound-assets/url", body: ["objectKey": key, "kind": "preview"], token: token)
+        guard session?.token == token else { throw CancellationError() }
+        guard let address = result["url"] as? String, let url = URL(string: address), url.scheme == "https" else { throw BronzeAPIError.invalid }
+        // Signed asset URL only; the bearer token stays with the account API.
+        let (temporary, response) = try await network.download(from: url)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        guard session?.token == token else { throw CancellationError() }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), http.url?.scheme == "https",
+              let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize, (1...100_000_000).contains(size) else { throw BronzeAPIError.invalid }
+        return try await Task.detached(priority: .utility) { try Data(contentsOf: temporary) }.value
     }
 
     // Only a UUID directory created by download(), never an imported user file.

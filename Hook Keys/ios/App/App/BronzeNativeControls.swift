@@ -436,7 +436,49 @@ struct BronzeTapHoldSurface: UIViewRepresentable {
 extension View {
     func bronzeTapHold(tap: @escaping () -> Void, hold: @escaping () -> Void) -> some View {
         self.allowsHitTesting(false)
-            .overlay(BronzeTapHoldSurface(tap: tap, hold: hold))
-            .accessibilityAction(tap)
+            .overlay(BronzeTapHoldSurface(tap: tap, hold: hold).accessibilityHidden(true))
+            .accessibilityElement(children: .combine)
+            .accessibilityAction { tap() }
+    }
+}
+
+// Keep the menu instance stable while meters publish updates. Replacing an open
+// menu resets its scroll offset on older iOS releases.
+struct BronzeStableMenu: UIViewRepresentable {
+    @Environment(\.isEnabled) private var enabled
+    let title: String
+    let choices: [String]
+    let selected: Int
+    let select: (Int) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .system)
+        button.showsMenuAsPrimaryAction = true
+        button.backgroundColor = UIColor(white: 0.17, alpha: 1)
+        button.layer.cornerRadius = 6
+        button.titleLabel?.font = UIFont(name: "JetBrainsMono-ExtraBold", size: 12) ?? .boldSystemFont(ofSize: 12)
+        button.titleLabel?.adjustsFontSizeToFitWidth = true
+        button.tintColor = .white
+        return button
+    }
+    func updateUIView(_ view: UIButton, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.select = select
+        view.isEnabled = enabled
+        if view.title(for: .normal) != title { view.setTitle(title, for: .normal) }
+        guard coordinator.choices != choices || coordinator.selected != selected else { return }
+        coordinator.choices = choices; coordinator.selected = selected
+        let snapshot = choices
+        view.menu = UIMenu(children: choices.enumerated().map { index, label in
+            UIAction(title: label, state: index == selected ? .on : .off) { [weak coordinator] _ in
+                guard let coordinator, coordinator.choices == snapshot else { return }
+                coordinator.select(index)
+            }
+        })
+    }
+    final class Coordinator {
+        var choices: [String] = []
+        var selected = -2
+        var select: (Int) -> Void = { _ in }
     }
 }

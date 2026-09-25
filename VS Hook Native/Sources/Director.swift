@@ -25,7 +25,7 @@ struct DirectorView: View {
             if session.requiresAuth && !session.authenticated { auth }
             else if showSearch { DirectorSearchView(session: session) { showSearch = false; session.query = "" } }
             else if session.panel == "tp" {
-                TelepromptView(session: session, openPlaylists: { sheet = "playlists" }, songTools: { item in toolSong = item; session.select(item, sourcePage: "playlist"); sheet = "songTools" }).padding(8).background(Color(hex: "05070B").ignoresSafeArea())
+                TelepromptView(session: session, openPlaylists: { sheet = "playlists" }, songTools: { item in toolSong = item; session.select(item, sourcePage: "playlist"); sheet = "songTools" }).background(Color(hex: "05070B").ignoresSafeArea())
             }
             else if session.tablet { tabletWorkspace }
             else { phoneWorkspace }
@@ -141,62 +141,70 @@ struct DirectorView: View {
         }.allowsHitTesting(false)
     }
     private var tabletWorkspace: some View {
-        HStack(spacing: 8) {
-            if session.panel != "tp" && session.panel != "mixer" { leftRail }
-            VStack(spacing: 0) {
-                tabletNavigation
-                VStack(spacing: 8) {
-                    if session.panel == "mixer" { tcpNavigation } else { tabletStatus }
-                    mainContent.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    if gridOpen && session.panel != "mixer" { DirectorGridPanel(session: session) }
-                    if !session.message.isEmpty { HookStatus(text: session.message).onTapGesture { session.message = "" } }
-                }.padding(6)
-                    .background(light ? Color(hex: "D7DCE2") : Color(hex: "080D14"))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(borderOutline)
-            }
-            if session.panel != "tp" && session.panel != "mixer" { rightRail }
-        }.padding(8).frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background((light ? Color(hex: "D7DCE2") : Color(hex: "080D14")).ignoresSafeArea())
+        GeometryReader { geometry in
+            HStack(spacing: 8) {
+                if session.panel != "tp" && session.panel != "mixer" { leftRail }
+                VStack(spacing: 0) {
+                    tabletNavigation
+                    VStack(spacing: 8) {
+                        if session.panel == "mixer" { tcpNavigation } else { tabletStatus }
+                        mainContent.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        if gridOpen && session.panel != "mixer" { DirectorGridPanel(session: session) }
+                        if !session.message.isEmpty { HookStatus(text: session.message).onTapGesture { session.message = "" } }
+                    }.padding(6)
+                        .background(light ? Color(hex: "D7DCE2") : Color(hex: "080D14"))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(borderOutline)
+                }
+                if session.panel != "tp" && session.panel != "mixer" { rightRail }
+            }.padding(.top, 8).padding(.bottom, session.readOnly ? 8 : 8 + geometry.safeAreaInsets.top - geometry.safeAreaInsets.bottom)
+                .padding(.leading, -min(12, geometry.safeAreaInsets.leading))
+                .padding(.trailing, -min(12, geometry.safeAreaInsets.trailing))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background((light ? Color(hex: "D7DCE2") : Color(hex: "080D14")).ignoresSafeArea())
+        }
     }
     private var phoneWorkspace: some View {
-        VStack(spacing: 7) {
-            if session.panel == "mixer" { tcpNavigation } else { header }
-            if !session.readOnly { navigation }
-            mainContent.frame(maxWidth: .infinity, maxHeight: .infinity)
-            if !session.message.isEmpty { HookStatus(text: session.message).onTapGesture { session.message = "" } }
-        }.padding(6)
-            .background(light ? Color(hex: "E1E4E8") : Color(hex: "080D14"))
-            .clipShape(RoundedRectangle(cornerRadius: 6)).overlay(borderOutline).padding(8)
-            .background((light ? Color(hex: "E1E4E8") : HookTheme.background).ignoresSafeArea())
-            .overlay(alignment: .topTrailing) {
-                if showPhoneMenu {
-                    ZStack(alignment: .topTrailing) {
-                        Color.black.opacity(0.01).contentShape(Rectangle()).onTapGesture { showPhoneMenu = false }
-                        ScrollView {
-                            VStack(spacing: 10) {
-                                phoneMenuButton("LUPA") { showSearch = true }
-                                phoneMenuButton("SESSÃO") { sheet = "projects" }
-                                phoneMenuButton("TCP") { togglePanel("mixer") }
-                                phoneMenuButton("TUNER", color: "164E63") { togglePanel("tuner") }
-                                phoneMenuButton("BPM", color: "082F49") { togglePanel("bpm") }
-                                phoneMenuButton("RECADOS", color: "592326") { sheet = "recados" }
-                                phoneMenuButton("MODO LIVE", color: session.liveEnabled ? "15803D" : "991B1B") { confirmLive = true }
-                                phoneMenuButton("BY", color: session.snapshot.first("multiloopBypassEnabled", "multiLoopBypass", "bypassEnabled").bool ? "15803D" : "991B1B") { session.toggleBypass() }
-                                if session.page == "playlist" {
-                                    phoneMenuButton("AT/BL", color: session.snapshot["autoBlocoEnabled"].bool ? "15803D" : "1F2937") {
-                                        let next = !session.snapshot["autoBlocoEnabled"].bool
-                                        session.command("auto_bloco_set", ["desiredAutoBloco": .bool(next), "autoBlocoEnabled": .bool(next), "desiredState": .string(next ? "on" : "off")], optimistic: ["autoBlocoEnabled": .bool(next)])
+        GeometryReader { container in
+            VStack(spacing: 7) {
+                if session.panel == "mixer" { tcpNavigation } else { header }
+                if !session.readOnly { navigation }
+                mainContent.frame(maxWidth: .infinity, maxHeight: .infinity)
+                if !session.message.isEmpty { HookStatus(text: session.message).onTapGesture { session.message = "" } }
+            }.padding(6)
+                .background(light ? Color(hex: "E1E4E8") : Color(hex: "080D14"))
+                .clipShape(RoundedRectangle(cornerRadius: 6)).overlay(borderOutline)
+                .padding(.top, -min(8, container.safeAreaInsets.top)).padding(.bottom, 8).padding(.horizontal, 2)
+                .background((light ? Color(hex: "E1E4E8") : HookTheme.background).ignoresSafeArea())
+                .overlay(alignment: .topTrailing) {
+                    if showPhoneMenu {
+                        ZStack(alignment: .topTrailing) {
+                            Color.black.opacity(0.01).contentShape(Rectangle()).onTapGesture { showPhoneMenu = false }
+                            ScrollView {
+                                VStack(spacing: 10) {
+                                    phoneMenuButton("LUPA") { showSearch = true }
+                                    phoneMenuButton("SESSÃO") { sheet = "projects" }
+                                    phoneMenuButton("TCP") { togglePanel("mixer") }
+                                    phoneMenuButton("TUNER", color: "164E63") { togglePanel("tuner") }
+                                    phoneMenuButton("BPM", color: "082F49") { togglePanel("bpm") }
+                                    phoneMenuButton("RECADOS", color: "592326") { sheet = "recados" }
+                                    phoneMenuButton("MODO LIVE", color: session.liveEnabled ? "15803D" : "991B1B") { confirmLive = true }
+                                    phoneMenuButton("BY", color: session.snapshot.first("multiloopBypassEnabled", "multiLoopBypass", "bypassEnabled").bool ? "15803D" : "991B1B") { session.toggleBypass() }
+                                    if session.page == "playlist" {
+                                        phoneMenuButton("AT/BL", color: session.snapshot["autoBlocoEnabled"].bool ? "15803D" : "1F2937") {
+                                            let next = !session.snapshot["autoBlocoEnabled"].bool
+                                            session.command("auto_bloco_set", ["desiredAutoBloco": .bool(next), "autoBlocoEnabled": .bool(next), "desiredState": .string(next ? "on" : "off")], optimistic: ["autoBlocoEnabled": .bool(next)])
+                                        }
                                     }
-                                }
-                            }.padding(12)
-                        }.frame(width: 176, height: session.page == "playlist" ? 590 : 526)
-                            .background(Color(hex: "0F172A")).cornerRadius(14)
-                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color(hex: "334155")))
-                            .padding(.top, 47).padding(.trailing, 50)
+                                }.padding(12)
+                            }.frame(width: 176, height: session.page == "playlist" ? 590 : 526)
+                                .background(Color(hex: "0F172A")).cornerRadius(14)
+                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color(hex: "334155")))
+                                .padding(.top, 47).padding(.trailing, 50)
+                        }
                     }
                 }
-            }
+        }
     }
     private func phoneMenuButton(_ title: String, color: String = "1F2937", action: @escaping () -> Void) -> some View {
         DirectorControl(title: title, background: Color(hex: color), height: 54, size: 18) { showPhoneMenu = false; action() }

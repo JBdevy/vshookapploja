@@ -7,6 +7,34 @@ struct BronzeSynthPreset: Codable, Equatable, Sendable {
     var color = 0
 }
 
+extension BronzeSynthPreset {
+    // Same five factory sounds as the current SynthModuleView reference.
+    static func factory(_ index: Int) -> Self? {
+        guard (0..<5).contains(index) else { return nil }
+        var sound = BronzeSynth()
+        sound.oscillators = Array(repeating: BronzeOscillator(), count: 3)
+        sound.lfoTarget = 0; sound.lfoDepth = 0; sound.lfoRate = 6.85
+        sound.mode = [0, 0, 2, 0, 2][index]
+        sound.glide = [205, 205, 0, 129, 0][index]
+        sound.cutoff = [20000, 49.09, 20000, 308.3, 20000][index]
+        sound.resonance = [0, 0, 0.18, 0.31, 0][index]
+        sound.filterEnvelope = [1, 1, 0.24, 0.14, 0.24][index]
+        sound.oscillators[0].shape = [0, 1, 0, 1, 0][index]
+        sound.oscillators[1].shape = [0, 1, 0, 1, 2][index]
+        sound.oscillators[1].octave = [1, 0, 1, 0, 0][index]
+        sound.oscillators[1].enabled = index != 4
+        if index < 2 {
+            sound.oscillators[0].volume = pow(10, (-9 + (89.0 - 72) / 28 * 9) / 20)
+            sound.oscillators[1].volume = pow(10, -13.5 / 20)
+        }
+        if index == 3 { sound.lfoTarget = 1 }
+        var envelope = BronzeEnvelope()
+        envelope.attackMs = index < 2 ? 8 : 0
+        envelope.releaseMs = [85, 85, 25, 49, 47][index]
+        return Self(name: "Preset \(index + 1)", sound: sound, envelope: envelope, color: index)
+    }
+}
+
 struct BronzeUserTrack: Codable, Equatable, Sendable, Identifiable {
     var id = UUID()
     var name: String

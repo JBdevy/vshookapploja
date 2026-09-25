@@ -88,10 +88,12 @@ private struct DirectorSongRow: View {
                             .font(.custom("Arial-BoldMT", size: 10)).padding(.horizontal, 6).frame(height: 28)
                     }.buttonStyle(DirectorButtonStyle()).frame(width: 64)
                 }
-                TimelineView(.periodic(from: .now, by: 0.2)) { context in
-                    Text(item.songDuration > 0 ? directorTime(playing ? ceil(item.songDuration * (1 - session.progress(at: context.date)) - 0.0005) : item.songDuration) : "")
-                        .font(.custom("Arial-BoldMT", size: session.tablet ? 16 : 14)).monospacedDigit()
-                        .foregroundColor(block ? Color(hex: "22C55E") : textColor).frame(width: session.tablet ? 72 : 48, alignment: .trailing)
+                Group {
+                    if playing {
+                        TimelineView(.periodic(from: .now, by: 0.2)) { context in
+                            durationText(ceil(item.songDuration * (1 - session.progress(at: context.date)) - 0.0005))
+                        }
+                    } else { durationText(item.songDuration) }
                 }
                 if session.tablet && ["tuner", "bpm"].contains(session.panel) {
                     DirectorInlineTuning(session: session, item: item).frame(width: session.panel == "bpm" ? 232 : 152)
@@ -121,6 +123,11 @@ private struct DirectorSongRow: View {
             }
             .accessibilityIdentifier("vshook.song." + item.identifier)
             .accessibilityAction(named: Text("Selecionar"), select)
+    }
+    private func durationText(_ seconds: Double) -> some View {
+        Text(item.songDuration > 0 ? directorTime(seconds) : "")
+            .font(.custom("Arial-BoldMT", size: session.tablet ? 16 : 14)).monospacedDigit()
+            .foregroundColor(block ? Color(hex: "22C55E") : textColor).frame(width: session.tablet ? 72 : 48, alignment: .trailing)
     }
     private func select() {
         guard !session.readOnly else { return }

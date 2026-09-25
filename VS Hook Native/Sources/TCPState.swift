@@ -82,9 +82,25 @@ enum TCPTrackRows {
         return keys
     }
 }
+// Transport positions change more often than the arrangement. Keep the row index
+// until its actual inputs change, including folder order and item volume previews.
+final class TCPRowCache {
+    private var tracks: [JSON] = []
+    private var items: [JSON] = []
+    private var focused = false
+    private var cached: [TCPTrackRow] = []
+    func rows(tracks: [JSON], items: [JSON], focused: Bool) -> [TCPTrackRow] {
+        if self.tracks != tracks || self.items != items || self.focused != focused {
+            self.tracks = tracks; self.items = items; self.focused = focused
+            cached = TCPTrackRows.make(tracks: tracks, items: items, focused: focused)
+        }
+        return cached
+    }
+}
 @MainActor final class TCPModel: ObservableObject {
     @Published private(set) var items: [JSON] = []
     @Published private(set) var loading = false
+    let rowCache = TCPRowCache()
     private var projectKey = ""
     func load(session: HookSession) async {
         let data = session.snapshot
@@ -109,7 +125,10 @@ enum TCPTrackRows {
         if loaded.isEmpty, data["mixerTimelineRevision"].int > 0,
            let live = try? await BridgeHTTP.shared.request(session.base, "/mixer-timeline", timeout: 3) { loaded = live["items"].array }
         guard !Task.isCancelled, projectKey == key else { return }
-        if !loaded.isEmpty { items = loaded.filter(MixerScale.visible) }
+        if !loaded.isEmpty {
+            session.reconcileTCPItemVolumes(session.tcpItems + loaded)
+            items = loaded.filter(MixerScale.visible)
+        }
     }
     static func matches(_ item: JSON, track: JSON) -> Bool {
         let ids = [track["id"].string, track["guid"].string, track["trackId"].string].filter { !$0.isEmpty }

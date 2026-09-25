@@ -70,7 +70,12 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var timeSignatureDenominator = 4 { didSet { scheduleSessionSave() } }
     @Published var moduleLevels = Array(repeating: 0.0, count: 8)
     @Published private(set) var outputLevels = Array(repeating: 0.0, count: 5)
+    @Published private(set) var catalogDownloadTotal = 0
+    @Published private(set) var catalogDownloadCompleted = 0
+    @Published private(set) var catalogDownloadName: String?
+    private var catalogDownloadTask: Task<Void, Never>?
     @Published private(set) var memoryMB = 0
+    @Published private(set) var memoryPercent: Int?
     private var meterFrame = 0
     @Published var moduleFaders = Array(repeating: 1.0, count: 8) { didSet { scheduleSessionSave() } }
     @Published private(set) var moduleEnabled = [false, false, false, false, false, false, true, false] { didSet { scheduleSessionSave() } }
@@ -308,6 +313,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func suspendForLogout() {
+        catalogDownloadTask?.cancel()
         saveSessionNow(); stopSelectedTrack(); stopPerformanceNotes(); engine.stopAllNotes()
         meterTimer?.invalidate(); meterTimer = nil
         engine.setMidiInputEnabled(false)
@@ -330,6 +336,12 @@ final class BronzeNativeAppModel: ObservableObject {
         }
         let selected: [Any] = UserDefaults.standard.stringArray(forKey: "bronze.midiDevices") ?? Array(midiDevices.prefix(3).map(\.id))
         engine.setMidiDeviceIds(selected)
+    }
+
+    func midiSlotName(_ slot: Int) -> String {
+        let selected = UserDefaults.standard.stringArray(forKey: "bronze.midiDevices") ?? Array(midiDevices.prefix(3).map(\.id))
+        guard selected.indices.contains(slot), !selected[slot].isEmpty else { return "Nenhum" }
+        return midiDevices.first(where: { $0.id == selected[slot] })?.name ?? "Não conectado"
     }
 
     func clearSoundFont(_ index: Int) {
@@ -505,6 +517,56 @@ final class BronzeNativeAppModel: ObservableObject {
 
     func catalogNeedsUpdate(_ sound: BronzeCatalogSound) -> Bool {
         workspace.catalogInstalls?[sound.id]?.matches(sound) != true
+    }
+
+    func downloadCatalogSounds(_ sounds: [BronzeCatalogSound], account: BronzeNativeAccount) {
+        guard catalogDownloadTask == nil, !backupBusy, persistenceAvailable else { return }
+        let remaining = sounds.filter { catalogFont($0.id) == nil || catalogNeedsUpdate($0) }
+        guard !remaining.isEmpty else { return }
+        catalogDownloadTotal = remaining.count; catalogDownloadCompleted = 0
+        catalogDownloadName = remaining.first?.name
+        catalogDownloadTask = Task {
+            defer { catalogDownloadName = nil; catalogDownloadTask = nil }
+            do {
+                for sound in remaining {
+                    try Task.checkCancellation()
+                    catalogDownloadName = sound.name
+                    let url = try await account.download(sound)
+                    defer { account.discardDownload(url) }
+                    try await installCatalogDownload(url, sound: sound)
+                    catalogDownloadCompleted += 1
+                }
+            } catch is CancellationError { }
+            catch { controlError = "Falha ao baixar biblioteca: \(error.localizedDescription)" }
+        }
+    }
+
+    func cancelCatalogDownload() { catalogDownloadTask?.cancel() }
+
+    private func installCatalogDownload(_ source: URL, sound: BronzeCatalogSound) async throws {
+        guard !backupBusy else { throw BronzeSessionError.invalid }
+        // Downloading a library never loads a bank or changes the current sound.
+        let directory = try Self.soundFontDirectory().appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let destination = directory.appendingPathComponent(source.lastPathComponent)
+        do {
+            try await Task.detached(priority: .utility) {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: source, to: destination)
+            }.value
+            try Task.checkCancellation()
+            guard !backupBusy else { throw BronzeSessionError.invalid }
+            var downloads = workspace.catalogDownloads ?? [:]
+            downloads[sound.id] = directory.lastPathComponent + "/" + destination.lastPathComponent
+            var installs = workspace.catalogInstalls ?? [:]
+            installs[sound.id] = BronzeCatalogInstall(version: sound.version, objectKey: sound.objectKey)
+            workspace.catalogDownloads = downloads; workspace.catalogInstalls = installs
+            userSoundFonts.append(UserSoundFont(url: destination))
+            downloadedSoundID = sound.id
+            saveSessionNow()
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
     }
 
     func clearDownloadHighlight() { downloadedSoundID = nil }
@@ -1225,9 +1287,11 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func recallSynthPreset(_ index: Int) {
-        guard workspace.synthPresets.indices.contains(index), !isApplyingSnapshot,
-              let next = workspace.synthPresets[index].sound else { return }
-        let envelope = workspace.synthPresets[index].envelope
+        guard workspace.synthPresets.indices.contains(index), !isApplyingSnapshot else { return }
+        let stored = workspace.synthPresets[index]
+        let preset = stored.sound == nil ? BronzeSynthPreset.factory(index) : stored
+        guard let preset, let next = preset.sound else { return }
+        let envelope = preset.envelope
         guard Self.sendSynth(next, envelope: envelope, engine: engine) else { controlError = "Não foi possível abrir o preset do Synth."; return }
         synth = next; moduleEnvelopes[7] = envelope; workspace.activeSynthPreset = index
     }
@@ -1391,23 +1455,25 @@ final class BronzeNativeAppModel: ObservableObject {
             let nextOutputs = [peak(18), peak(22), fx, peak(20), peak(16)]
             if self.outputLevels != nextOutputs { self.outputLevels = nextOutputs }
             self.meterFrame += 1
-            if self.meterFrame % 30 == 0 {
-                var info = mach_task_basic_info()
-                var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
-                let result = withUnsafeMutablePointer(to: &info) { pointer in
+            if self.meterFrame % 60 == 0 {
+                var stats = vm_statistics64()
+                var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+                let result = withUnsafeMutablePointer(to: &stats) { pointer in
                     pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                        task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                        host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
                     }
                 }
                 if result == KERN_SUCCESS {
-                    let memory = Int(info.resident_size / 1_048_576)
-                    if self.memoryMB != memory { self.memoryMB = memory }
+                    let used = (UInt64(stats.active_count) + UInt64(stats.wire_count) + UInt64(stats.compressor_page_count)) * UInt64(vm_kernel_page_size)
+                    let percent = min(100, Int((100 * Double(used) / Double(ProcessInfo.processInfo.physicalMemory)).rounded()))
+                    if self.memoryPercent != percent { self.memoryPercent = percent }
                 }
             }
             if self.page == .pads {
                 let levels = self.engine.effectActivity()
                 let start = self.workspace.fxBank * 12
-                self.effectLevels = (0..<12).map { start + $0 < levels.count ? levels[start + $0].doubleValue : 0 }
+                let nextLevels = (0..<12).map { start + $0 < levels.count ? levels[start + $0].doubleValue : 0 }
+                if self.effectLevels != nextLevels { self.effectLevels = nextLevels }
             }
             self.refreshLoopPosition()
         }

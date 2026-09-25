@@ -303,55 +303,35 @@ struct BronzeNativeFXEditor: View {
     }
 }
 
-struct BronzeNativeSynthPresets: View {
+struct BronzeNativeSynthPresetEditor: View {
     @ObservedObject var model: BronzeNativeAppModel
+    let index: Int
     @Environment(\.dismiss) private var dismiss
-    @State private var target = 0
-    @State private var name = ""
-    @State private var color = 0
-    @State private var editing = false
+    @State private var name: String
+    @State private var color: Int
     @State private var replacing = false
+    init(model: BronzeNativeAppModel, index: Int) {
+        self.model = model; self.index = index
+        let preset = model.workspace.synthPresets[index]
+        _name = State(initialValue: preset.sound == nil ? "Preset \(index + 1)" : preset.name)
+        _color = State(initialValue: preset.color)
+    }
     var body: some View {
-        BronzeNativeModal(title: "Presets do Synth") {
-            VStack {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4)) {
-                    ForEach(0..<16, id: \.self) { index in
-                        let preset = model.workspace.synthPresets[index]
-                        VStack(spacing: 4) {
-                            Button {
-                                if preset.sound == nil { edit(index) } else { model.recallSynthPreset(index) }
-                            } label: {
-                                Text("\(index + 1) · \(preset.name)").font(.bronzeUI(12))
-                                    .foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 50)
-                                    .background(BronzePresetPalette.colors[preset.color]).clipShape(RoundedRectangle(cornerRadius: 6))
-                                    .overlay { if model.workspace.activeSynthPreset == index { BronzePresetHighlight() } }
-                            }
-                            Button("Salvar / Editar") { edit(index) }.font(.bronzeUI(10))
-                        }
-                    }
-                }.padding()
-            }
-
-            .sheet(isPresented: $editing) {
-                NavigationView {
-                    Form {
-                        TextField("Nome", text: $name)
-                        Picker("Cor", selection: $color) { ForEach(0..<8, id: \.self) { Text("Cor \($0 + 1)").tag($0) } }
-                        Text("Guarda os três osciladores, filtro, LFO, Glide e envelope. Não altera os outros módulos.").font(.bronzeUI(12))
-                        Button("Salvar o som atual aqui") {
-                            if model.workspace.synthPresets[target].sound != nil { replacing = true } else { save() }
-                        }
-                    }.navigationTitle("Synth \(target + 1)").toolbar { Button("Cancelar") { editing = false } }
-                }.navigationViewStyle(.stack)
-                .confirmationDialog("Substituir este preset do Synth?", isPresented: $replacing, titleVisibility: .visible) {
-                    Button("Substituir", role: .destructive) { save() }
-                    Button("Cancelar", role: .cancel) {}
+        NavigationView {
+            Form {
+                TextField("Nome", text: $name)
+                Picker("Cor", selection: $color) { ForEach(0..<8, id: \.self) { Text("Cor \($0 + 1)").tag($0) } }
+                Button("Salvar o som atual aqui") {
+                    if model.workspace.synthPresets[index].sound != nil { replacing = true } else { save() }
                 }
-            }
+            }.navigationTitle("Synth · Preset \(index + 1)").toolbar { Button("Cancelar") { dismiss() } }
+        }.navigationViewStyle(.stack)
+        .confirmationDialog("Substituir este preset do Synth?", isPresented: $replacing, titleVisibility: .visible) {
+            Button("Substituir", role: .destructive) { save() }
+            Button("Cancelar", role: .cancel) {}
         }
     }
-    private func edit(_ index: Int) { target = index; name = model.workspace.synthPresets[index].name; color = model.workspace.synthPresets[index].color; editing = true }
-    private func save() { model.saveSynthPreset(target, name: name, color: color); editing = false }
+    private func save() { model.saveSynthPreset(index, name: name, color: color); dismiss() }
 }
 
 /// Native counterpart of the original 30% playlist panel.

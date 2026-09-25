@@ -46,63 +46,73 @@ struct TelepromptView: View {
         return ["mp4", "mov", "m4v", "webm"].contains(ext) ? "video" : ext == "pdf" ? "pdf" : "image"
     }
     var body: some View {
-        VStack(spacing: 8) {
-            if !fullscreen {
-                HStack(spacing: 6) {
-                    DirectorControl(title: "CONFIG/TP", height: session.tablet ? 30 : 40, size: 11) { showSettings = true }
-                    DirectorControl(title: "TP/1", background: Color(hex: slot == 1 ? "EAB308" : "172033"), foreground: slot == 1 ? .black : .white, height: session.tablet ? 30 : 40, size: 11) { slot = 1 }
-                    DirectorControl(title: "TP/2", background: Color(hex: slot == 2 ? "EAB308" : "172033"), foreground: slot == 2 ? .black : .white, height: session.tablet ? 30 : 40, size: 11) { slot = 2 }
-                    DirectorControl(title: "VOLTAR", height: session.tablet ? 30 : 40, size: 11) { session.panel = "" }
-                }
-            }
-            GeometryReader { geometry in
-                HStack(spacing: 0) {
-                    if listOpen && !fullscreen && !session.readOnly {
-                        playlistPane.frame(width: session.tablet ? geometry.size.width * 0.40 : geometry.size.width)
-                    }
-                    if session.tablet || fullscreen || (!listOpen && !partsOpen) {
-                        VStack(spacing: 8) {
-                            if !settings["hideTransport"].bool && !listOpen && !fullscreen { DirectorPlaybackHeader(session: session) }
-                            viewport.onTapGesture(count: 2) { fullscreen.toggle() }
-                                .simultaneousGesture(MagnificationGesture().onChanged { scale in
-                                    guard !pinchHandled else { return }
-                                    if !fullscreen && scale >= 1.16 { fullscreen = true; pinchHandled = true }
-                                    else if fullscreen && scale <= 0.86 { fullscreen = false; pinchHandled = true }
-                                }.onEnded { _ in pinchHandled = false })
-                        }.padding(fullscreen ? 0 : 8).frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    if partsOpen && !fullscreen && !session.readOnly {
-                        DirectorPartsView(session: session).padding(8)
-                            .frame(width: session.tablet ? geometry.size.width * 0.40 : geometry.size.width)
-                            .background(Color(hex: "111B28"))
-                            .accessibilityElement(children: .contain).accessibilityIdentifier("vshook.tp.parts")
+        GeometryReader { container in
+            VStack(spacing: 3) {
+                if !fullscreen {
+                    HStack(spacing: 3) {
+                        DirectorControl(title: "CONFIG/TP", height: session.tablet ? 30 : 40, size: 11) { showSettings = true }
+                        DirectorControl(title: "TP/1", background: Color(hex: slot == 1 ? "EAB308" : "172033"), foreground: slot == 1 ? .black : .white, height: session.tablet ? 30 : 40, size: 11) { slot = 1 }
+                        DirectorControl(title: "TP/2", background: Color(hex: slot == 2 ? "EAB308" : "172033"), foreground: slot == 2 ? .black : .white, height: session.tablet ? 30 : 40, size: 11) { slot = 2 }
+                        DirectorControl(title: "VOLTAR", height: session.tablet ? 30 : 40, size: 11) { session.panel = "" }
                     }
                 }
-            }
-            if !fullscreen { footer }
-        }.background(Color(hex: "05070B")).accessibilityHidden(showSettings)
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        if listOpen && !fullscreen && !session.readOnly {
+                            playlistPane.frame(width: session.tablet ? geometry.size.width * 0.40 : geometry.size.width)
+                        }
+                        if session.tablet || fullscreen || (!listOpen && !partsOpen) {
+                            VStack(spacing: 3) {
+                                if !settings["hideTransport"].bool && !listOpen && !fullscreen { DirectorPlaybackHeader(session: session) }
+                                viewport.onTapGesture(count: 2) { fullscreen.toggle() }
+                                    .simultaneousGesture(MagnificationGesture().onChanged { scale in
+                                        guard !pinchHandled else { return }
+                                        if !fullscreen && scale >= 1.16 { fullscreen = true; pinchHandled = true }
+                                        else if fullscreen && scale <= 0.86 { fullscreen = false; pinchHandled = true }
+                                    }.onEnded { _ in pinchHandled = false })
+                            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        if partsOpen && !fullscreen && !session.readOnly {
+                            DirectorPartsView(session: session).padding(4)
+                                .frame(width: session.tablet ? geometry.size.width * 0.40 : geometry.size.width)
+                                .background(Color(hex: "111B28"))
+                                .accessibilityElement(children: .contain).accessibilityIdentifier("vshook.tp.parts")
+                        }
+                    }
+                }
+                if !fullscreen { footer }
+            }.padding(.top, fullscreen ? 0 : session.tablet ? 4 : -min(8, container.safeAreaInsets.top))
+                .padding(.bottom, fullscreen ? 0 : (session.tablet && !session.readOnly) ? 4 + container.safeAreaInsets.top - container.safeAreaInsets.bottom : 4)
+                .padding(.leading, fullscreen ? 0 : session.tablet ? -min(12, container.safeAreaInsets.leading) : 4)
+                .padding(.trailing, fullscreen ? 0 : session.tablet ? -min(12, container.safeAreaInsets.trailing) : 4)
+                .background(Color(hex: "05070B"))
+        }
+            .ignoresSafeArea(.container, edges: fullscreen ? .all : [])
+            .statusBar(hidden: fullscreen)
+            .accessibilityElement(children: .contain).accessibilityIdentifier("vshook.tp.viewport")
+            .accessibilityHidden(showSettings)
             .task { await notice.poll(base: session.base, fallback: session.snapshot["technicalNotice"]) }
             .overlay {
                 if showSettings { DirectorModal { TPConfigView(preferences: preferences, tablet: session.tablet, close: { showSettings = false }) } }
             }
     }
     private var playlistPane: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 3) {
             DirectorControl(title: session.activePlaylist.name.uppercased(), height: 42, size: 12) { openPlaylists?() }
                 .accessibilityIdentifier("vshook.tp.playlist.open")
             DirectorSongList(session: session, hideNumbers: true, playlistOnly: true) { songTools?($0) }
-        }.padding(8).background(Color(hex: "111B28"))
+        }.padding(4).background(Color(hex: "111B28"))
             .accessibilityElement(children: .contain).accessibilityIdentifier("vshook.tp.list")
     }
     private var viewport: some View {
         GeometryReader { viewportGeometry in
         TimelineView(.periodic(from: .now, by: 0.2)) { context in
-            VStack(spacing: 6) {
+            VStack(spacing: 3) {
                 decorations(top: true, date: context.date, size: viewportGeometry.size)
                 GeometryReader { geometry in
                     ZStack {
                         Color.black
-                        if !clear, previewActive { TPPreviewGrid(session: session, slot: slot, settings: settings) }
+                        if !clear, previewActive { TPPreviewGrid(session: session, slot: slot, settings: settings, hideBorders: fullscreen) }
                         else if !clear {
                             if let url {
                                 Group {
@@ -113,33 +123,37 @@ struct TelepromptView: View {
                                 }.scaleEffect(settings["mediaScale"].double / 100)
                             }
                             if !text.isEmpty {
-                                highlightedText.font(tpFont(settings["fontFamily"].string, size: fittedFont(geometry.size)))
-                                    .multilineTextAlignment(settings["textAlignment"].string == "left" ? .leading : settings["textAlignment"].string == "right" ? .trailing : .center)
+                                TPFittedText(text: text, settings: settings,
+                                             highlight: session.snapshot["telepromptPreviewSettings"]["tp\(slot)"]["highlightColor"].string,
+                                             size: geometry.size).equatable()
+                                    .padding(6)
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(!fullscreen && settings["textBoxEnabled"].bool ? dynamicColor("textBoxColor", rgb: "rgbTextBoxBorderEnabled", date: context.date) : .clear, lineWidth: 2))
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .padding(12)
-                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings["textBoxEnabled"].bool ? dynamicColor("textBoxColor", rgb: "rgbTextBoxBorderEnabled", date: context.date) : .clear, lineWidth: 2))
                             }
                             if text.isEmpty && url == nil { Text("SEM CONTEÚDO NO TP/\(slot)").font(.headline).foregroundColor(HookTheme.muted) }
                         }
                     }.clipped().accessibilityIdentifier("vshook.tp.content")
                 }
                 decorations(top: false, date: context.date, size: viewportGeometry.size)
-            }.padding(8).background(Color.black)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings["windowBorderEnabled"].bool ? dynamicColor("borderColor", rgb: "rgbWindowBorderEnabled", date: context.date) : .clear, lineWidth: 2))
+            }.padding(fullscreen ? 0 : 3).background(Color.black)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(!fullscreen && settings["windowBorderEnabled"].bool ? dynamicColor("borderColor", rgb: "rgbWindowBorderEnabled", date: context.date) : .clear, lineWidth: 2))
         }
         }.overlay { TPNoticeOverlay(model: notice, settings: preferences.notice, slot: slot, base: session.base) }
     }
+    private var compactClocks: Bool { session.tablet && listOpen && partsOpen && !fullscreen && !session.readOnly }
     @ViewBuilder private func decorations(top: Bool, date: Date, size: CGSize) -> some View {
         if !clear {
-            let timerHere = settings["clockEnabled"].bool && settings["clockPosition"].string.hasSuffix(top ? "top" : "bottom")
-            let localHere = settings["localClockEnabled"].bool && (settings["clockEnabled"].bool ? timerHere : top)
+            let timerHere = settings["clockEnabled"].bool && (compactClocks ? top : settings["clockPosition"].string.hasSuffix(top ? "top" : "bottom"))
+            let localHere = settings["localClockEnabled"].bool && (compactClocks ? top : settings["clockEnabled"].bool ? timerHere : top)
             if timerHere || localHere { clockRow(date, size: size, timer: timerHere, local: localHere) }
             if settings["songNameEnabled"].bool && settings["songNamePosition"].string == (top ? "top" : "bottom") { titleLine(nested.first("songName", "song", "currentSongName").string, prefix: "songName") }
             if settings["queueNameEnabled"].bool && settings["queueNamePosition"].string == (top ? "top" : "bottom") { titleLine(session.queueID.isEmpty ? "FILA DE ESPERA VAZIA" : session.song(withID: session.queueID).name, prefix: "queueName") }
             if settings["chordsEnabled"].bool && !chords.isEmpty && settings["chordPosition"].string == (top ? "top" : "bottom") {
                 Text(chords).font(tpFont(settings["chordFontFamily"].string, size: min(70, settings["chordScale"].double)))
-                    .foregroundColor(Color(hex: settings["chordColor"].string)).lineLimit(2).minimumScaleFactor(0.4).frame(maxWidth: .infinity).padding(6)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(dynamicColor("chordColor", rgb: "rgbChordBorderEnabled", date: date), lineWidth: 1))
+                    .foregroundColor(Color(hex: settings["chordColor"].string)).lineLimit(2).minimumScaleFactor(0.4).padding(6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(fullscreen ? .clear : dynamicColor("chordColor", rgb: "rgbChordBorderEnabled", date: date), lineWidth: 1))
+                    .accessibilityIdentifier("vshook.tp.chords")
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
             if settings["progressEnabled"].bool && settings["progressPosition"].string == (top ? "top" : "bottom") {
                 GeometryReader { geometry in Color(hex: settings["progressColor"].string).frame(width: geometry.size.width * itemProgress(date)) }.frame(height: 5).background(Color.white.opacity(0.1))
@@ -154,7 +168,16 @@ struct TelepromptView: View {
         let height = max(28, font + (side && local ? 10 : 18))
         let timerWidth = min(width, max(118, ("-00 : 00 : 00" as NSString).size(withAttributes: [.font: UIFont(name: "Arial-BoldMT", size: font) ?? UIFont.boldSystemFont(ofSize: font)]).width + 36))
         return ZStack {
-            if side && timer && local {
+            if compactClocks {
+                let boxWidth = max(1, (size.width - 20) / 2)
+                let compactFont = min(15, max(9, size.width / 18))
+                HStack(spacing: 6) {
+                    if timer { clockText(date, font: compactFont, boxWidth: boxWidth, boxHeight: 30) }
+                    else { Color.clear.frame(width: boxWidth, height: 30) }
+                    if local { localClock(date, font: compactFont, boxWidth: boxWidth, boxHeight: 30) }
+                    else { Color.clear.frame(width: boxWidth, height: 30) }
+                }
+            } else if side && timer && local {
                 HStack(spacing: 8) {
                     if position.hasPrefix("right") { localClock(date, font: font).frame(maxWidth: .infinity) }
                     clockText(date, font: font).frame(maxWidth: .infinity)
@@ -172,19 +195,24 @@ struct TelepromptView: View {
                     }.frame(maxHeight: .infinity, alignment: position.hasSuffix("bottom") ? .bottom : .top)
                 }
             }
-        }.frame(height: height).frame(maxWidth: .infinity)
+        }.frame(height: compactClocks ? 30 : height).frame(maxWidth: .infinity)
     }
-    private func clockText(_ date: Date, font: CGFloat) -> some View {
+    private func clockText(_ date: Date, font: CGFloat, boxWidth: CGFloat? = nil, boxHeight: CGFloat? = nil) -> some View {
         Text(session.timerText(at: date)).font(.custom("Arial-BoldMT", size: font)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.3)
-            .foregroundColor(Color(hex: settings[session.snapshot["timerDisplaySec"].double < 0 ? "clockExpiredColor" : "clockColor"].string)).padding(.horizontal, 10).padding(.vertical, 5)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings["clockBorderEnabled"].bool ? dynamicColor("clockBorderColor", rgb: "rgbClockBorderEnabled", date: date) : .clear, lineWidth: 2))
+            .foregroundColor(Color(hex: settings[session.snapshot["timerDisplaySec"].double < 0 ? "clockExpiredColor" : "clockColor"].string)).padding(.horizontal, boxWidth == nil ? 10 : 3).padding(.vertical, boxWidth == nil ? 5 : 4)
+            .frame(width: boxWidth, height: boxHeight)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(!fullscreen && settings["clockBorderEnabled"].bool ? dynamicColor("clockBorderColor", rgb: "rgbClockBorderEnabled", date: date) : .clear, lineWidth: 2))
             .accessibilityIdentifier("vshook.tp.timer")
     }
-    private func localClock(_ date: Date, font: CGFloat) -> some View {
+    private func localClock(_ date: Date, font: CGFloat, boxWidth: CGFloat? = nil, boxHeight: CGFloat? = nil) -> some View {
         let components = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
         return Text(String(format: "%02d:%02d:%02d", components.hour ?? 0, components.minute ?? 0, components.second ?? 0)).font(.custom("Arial-BoldMT", size: font)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.3)
-            .foregroundColor(Color(hex: settings["localClockColor"].string)).padding(5)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings["localClockBorderEnabled"].bool ? dynamicColor("localClockBorderColor", rgb: "rgbClockBorderEnabled", date: date) : .clear, lineWidth: 1))
+            .foregroundColor(Color(hex: settings["localClockColor"].string))
+            .padding(.horizontal, boxWidth == nil ? 5 : 3).padding(.vertical, boxWidth == nil ? 5 : 4)
+            .frame(width: boxWidth, height: boxHeight)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(!fullscreen && settings["localClockBorderEnabled"].bool ? dynamicColor("localClockBorderColor", rgb: "rgbClockBorderEnabled", date: date) : .clear, lineWidth: 1))
+            .padding(.horizontal, fullscreen ? 24 : 0)
+            .accessibilityIdentifier("vshook.tp.localClock")
     }
     private func titleLine(_ text: String, prefix: String) -> some View {
         Text(text.uppercased()).font(tpFont(settings[prefix + "FontFamily"].string, size: (session.tablet ? 22 : 15) * settings[prefix + "Scale"].double / 100))
@@ -200,34 +228,13 @@ struct TelepromptView: View {
         let pos = item["position"].exists ? item["position"].double : session.snapshot.first("playPosition", "position").double
         return min(1, max(0, (pos + (session.playing ? min(1, date.timeIntervalSince(session.lastUpdate)) : 0) - start) / (end - start)))
     }
-    private var highlightedText: Text {
-        let base = Color(hex: settings["textColor"].string)
-        let highlight = Color(hex: session.snapshot["telepromptPreviewSettings"]["tp\(slot)"]["highlightColor"].string.isEmpty ? settings["highlightColor"].string : session.snapshot["telepromptPreviewSettings"]["tp\(slot)"]["highlightColor"].string)
-        let chars = Array(text); var cursor = 0, result = Text("")
-        while cursor < chars.count {
-            if chars[cursor] == "*", cursor + 1 < chars.count, !chars[cursor + 1].isWhitespace,
-               let closing = ((cursor + 1)..<chars.count).first(where: { chars[$0] == "*" && $0 > cursor + 1 && !chars[$0 - 1].isWhitespace }) {
-                result = result + Text(String(chars[(cursor + 1)..<closing])).foregroundColor(highlight); cursor = closing + 1
-            } else { result = result + Text(String(chars[cursor])).foregroundColor(base); cursor += 1 }
-        }
-        return result
-    }
-    private func fittedFont(_ size: CGSize) -> CGFloat {
-        let width = max(10, size.width - 32), height = max(10, size.height - 32)
-        var points = min(110, max(16, height / CGFloat(max(1, text.components(separatedBy: "\n").count)) / 1.15)) * settings["textScale"].double / 100
-        while points > 9 {
-            let rect = (text as NSString).boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: UIFont.boldSystemFont(ofSize: points)], context: nil)
-            if rect.height <= height { break }; points -= 1
-        }
-        return points
-    }
     private var previewActive: Bool {
         let raw = session.snapshot["telepromptPreview"].exists ? session.snapshot["telepromptPreview"] : nested.first("previewOverlay", "preview")
         let mode = raw.first("mode", "previewMode").exists ? raw.first("mode", "previewMode").int : session.snapshot["previewMode"].int
         return settings["previewEnabled"].bool && mode > 0 && raw.first("active", "enabled") != false && (raw.exists || session.snapshot["previewBlocks"].exists)
     }
     private var footer: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 3) {
             ForEach(controls.filter { preferences.control($0.0, tablet: session.tablet) }, id: \.0) { id,label in
                 DirectorControl(title: id == "play" && session.playing ? "STOP" : label, background: Color(hex: controlActive(id) ? "15803D" : ["list","parts"].contains(id) ? "991B1B" : "172033"), height: 42, size: session.tablet ? 12 : 10) { controlAction(id) }.accessibilityIdentifier("vshook.tp.control." + id)
             }
@@ -251,6 +258,39 @@ struct TelepromptView: View {
         }
     }
 }
+// Do not repeat text shaping and font fitting on every clock/progress update.
+private struct TPFittedText: View, Equatable {
+    let text: String
+    let settings: JSON
+    let highlight: String
+    let size: CGSize
+    var body: some View {
+        highlightedText.font(tpFont(settings["fontFamily"].string, size: fittedFont(size)))
+            .multilineTextAlignment(settings["textAlignment"].string == "left" ? .leading : settings["textAlignment"].string == "right" ? .trailing : .center)
+    }
+    private var highlightedText: Text {
+        let base = Color(hex: settings["textColor"].string)
+        let highlight = Color(hex: self.highlight.isEmpty ? settings["highlightColor"].string : self.highlight)
+        let chars = Array(text); var cursor = 0, result = Text("")
+        while cursor < chars.count {
+            if chars[cursor] == "*", cursor + 1 < chars.count, !chars[cursor + 1].isWhitespace,
+               let closing = ((cursor + 1)..<chars.count).first(where: { chars[$0] == "*" && $0 > cursor + 1 && !chars[$0 - 1].isWhitespace }) {
+                result = result + Text(String(chars[(cursor + 1)..<closing])).foregroundColor(highlight); cursor = closing + 1
+            } else { result = result + Text(String(chars[cursor])).foregroundColor(base); cursor += 1 }
+        }
+        return result
+    }
+    private func fittedFont(_ size: CGSize) -> CGFloat {
+        let width = max(10, size.width - 32), height = max(10, size.height - 32)
+        var points = min(110, max(16, height / CGFloat(max(1, text.components(separatedBy: "\n").count)) / 1.15)) * settings["textScale"].double / 100
+        while points > 9 {
+            let rect = (text as NSString).boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: UIFont.boldSystemFont(ofSize: points)], context: nil)
+            if rect.height <= height { break }; points -= 1
+        }
+        return points
+    }
+}
+
 func tpFont(_ name: String, size: CGFloat) -> Font {
     let names = ["arial":"Arial-BoldMT", "verdana":"Verdana-Bold", "tahoma":"Tahoma-Bold", "georgia":"Georgia-Bold", "trebuchet":"TrebuchetMS-Bold", "impact":"Impact", "mono":"CourierNewPS-BoldMT"]
     return names[name].map { Font.custom($0, size: size) } ?? .system(size: size, weight: .bold)

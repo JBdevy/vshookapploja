@@ -7,7 +7,8 @@ final class VisualTests: XCTestCase {
         app.launchEnvironment["BRONZE_UI_TEST"] = "1"
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["bronze.logo"].waitForExistence(timeout: 60))
-        Thread.sleep(forTimeInterval: 8)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        Thread.sleep(forTimeInterval: 3)
         return app
     }
     private func capture(_ name: String) {
@@ -34,6 +35,81 @@ final class VisualTests: XCTestCase {
         app.buttons["bronze.settings.back"].tap()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Dispositivo de áudio")).firstMatch.tap()
         capture("audio")
+    }
+    func testPerformanceTapsAndHolds() throws {
+        let app = start()
+        let keyboard = app.buttons["bronze.keyboard.toggle"]
+        let before = keyboard.label
+        keyboard.tap()
+        XCTAssertNotEqual(keyboard.label, before)
+        keyboard.tap()
+        XCTAssertEqual(keyboard.label, before)
+        let range = keyboard.value as? String
+        keyboard.press(forDuration: 0.8)
+        XCTAssertNotEqual(keyboard.value as? String, range)
+        XCTAssertEqual(keyboard.label, "Keyboard")
+        for bank in 0..<6 {
+            app.buttons["bronze.bank.\(bank)"].tap()
+            XCTAssertEqual(app.buttons["bronze.bank.\(bank)"].value as? String, "Selecionado")
+        }
+        app.buttons["bronze.bank.0"].press(forDuration: 0.8)
+        XCTAssertTrue(app.textFields["Nome"].waitForExistence(timeout: 3))
+        app.buttons["Voltar"].tap()
+        app.buttons["bronze.logo"].press(forDuration: 0.8)
+        let closedWidth = keyboard.frame.width
+        app.buttons["bronze.logo"].tap()
+        XCTAssertGreaterThan(keyboard.frame.width, closedWidth)
+        let click = app.buttons["bronze.metronome"]
+        let clickBefore = click.value as? String
+        click.tap()
+        XCTAssertNotEqual(click.value as? String, clickBefore)
+        click.tap()
+        XCTAssertEqual(click.value as? String, clickBefore)
+        app.buttons["bronze.metronome"].press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["Voltar"].waitForExistence(timeout: 3))
+        app.buttons["Voltar"].tap()
+        app.buttons["bronze.sound.6"].tap()
+        XCTAssertTrue(app.buttons["Brake"].waitForExistence(timeout: 3))
+        capture("organ-adaptive")
+        app.buttons["Voltar"].tap()
+        app.buttons["bronze.sound.7"].tap()
+        XCTAssertTrue(app.buttons["OSC 1"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "bronze.synth.preset.")).count, 5)
+        app.buttons["bronze.synth.preset.1"].tap()
+        XCTAssertTrue(app.buttons["OSC 1"].exists)
+        capture("synth-adaptive")
+        app.buttons["bronze.synth.preset.1"].press(forDuration: 0.8)
+        XCTAssertTrue(app.textFields["Nome"].waitForExistence(timeout: 3))
+        app.buttons["Cancelar"].tap()
+        app.buttons["Voltar"].tap()
+        app.buttons["bronze.sound.0"].tap()
+        XCTAssertTrue(app.buttons["Voltar"].waitForExistence(timeout: 3))
+        app.buttons["Voltar"].tap()
+        app.buttons["Config"].firstMatch.tap()
+        app.buttons["User"].firstMatch.tap()
+        app.buttons["Velocity"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Soft"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["MIDI / Saída"].exists)
+        XCTAssertFalse(app.buttons["Glide"].exists)
+        capture("velocity-graph")
+    }
+    func testSynthEditingAndVelocity() throws {
+        let app = start()
+        app.buttons["bronze.sound.7"].tap()
+        let preset = app.buttons["bronze.synth.preset.1"]
+        XCTAssertTrue(preset.waitForExistence(timeout: 5))
+        preset.tap()
+        preset.press(forDuration: 1.1)
+        XCTAssertTrue(app.textFields["Nome"].waitForExistence(timeout: 5))
+        app.buttons["Cancelar"].tap()
+        app.buttons["Voltar"].tap()
+        app.buttons["Config"].firstMatch.tap()
+        app.buttons["User"].firstMatch.tap()
+        app.buttons["Velocity"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Soft"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["MIDI / Saída"].exists)
+        XCTAssertFalse(app.buttons["Glide"].exists)
+        capture("velocity-graph")
     }
     func testSettingsSourceAndKnob() throws {
         let app = start()

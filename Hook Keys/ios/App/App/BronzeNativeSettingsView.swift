@@ -5,7 +5,7 @@ import AVKit
 struct BronzeNativeSettingsView: View {
     @ObservedObject var model: BronzeNativeAppModel
     @State private var page = 0
-    @State private var learn = false
+    @State private var channels = max(1, AVAudioSession.sharedInstance().outputNumberOfChannels)
     @State private var bufferBusy = false
     @State private var audioError = ""
     @State private var deviceSelections: [String] = []
@@ -20,6 +20,8 @@ struct BronzeNativeSettingsView: View {
 
     var body: some View {
         BronzeNativeModal(title: page == 0 ? "Configurações" : page == 1 ? "Dispositivos MIDI" : "Dispositivo de áudio", scrollable: false) {
+            GeometryReader { bounds in
+            let compact = bounds.size.height < 480
             BronzeFittedEditor {
             VStack(spacing: 8) {
                 if page != 0 { Button("Configurações") { page = 0 }.accessibilityIdentifier("bronze.settings.back").buttonStyle(BronzeCompactButtonStyle(active: false)).frame(maxWidth: .infinity, alignment: .leading) }
@@ -48,23 +50,20 @@ struct BronzeNativeSettingsView: View {
                         }.padding(8).modifier(BronzeDeckSurface())
                     }
                 } else if page == 1 {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                    ForEach(0..<3, id: \.self) { index in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Dispositivo MIDI \(index + 1)").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
-                            Menu(deviceName(index)) {
-                                Button("Nenhum") { selectDevice(index, id: "") }
-                                ForEach(model.midiDevices) { device in Button(device.name) { selectDevice(index, id: device.id) } }
-                            }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 44)
-                        }.padding(6).modifier(BronzeDeckSurface())
+                    VStack(spacing: compact ? 6 : 18) {
+                        ForEach(0..<3, id: \.self) { index in
+                            VStack(alignment: .leading, spacing: compact ? 4 : 10) {
+                                Text("Dispositivo MIDI \(index + 1)").font(.bronzeUI(compact ? 13 : 18)).foregroundStyle(Color.bronzeLight)
+                                let devices = model.midiDevices
+                                BronzeStableMenu(title: deviceName(index), choices: ["Nenhum"] + devices.map(\.name),
+                                                 selected: devices.firstIndex(where: { deviceSelections.indices.contains(index) && $0.id == deviceSelections[index] }).map { $0 + 1 } ?? 0) { selected in
+                                    selectDevice(index, id: selected == 0 ? "" : devices[selected - 1].id)
+                                }.frame(height: compact ? 34 : 58)
+                            }.padding(compact ? 8 : 16).modifier(BronzeDeckSurface())
+                        }
                     }
-                    }
-                    HStack {
-                        Button("Atualizar dispositivos") { model.refreshMidiDevices() }
-                        Button("MIDI Learn") { learn = true }
-                    }.buttonStyle(BronzeDeckButtonStyle()).frame(height: 44)
                 } else {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: compact ? 4 : 2), spacing: compact ? 8 : 16) {
                         VStack(spacing: 5) {
                             Text("Dispositivo de áudio").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
                             HStack {
@@ -84,14 +83,12 @@ struct BronzeNativeSettingsView: View {
                         ForEach([4, 0, 1, 2, 3], id: \.self) { bus in
                             VStack(spacing: 5) {
                                 Text("Saídas · \(busNames[bus])").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
-                                Menu("\(model.mixer.channelStart(bus) + 1)\(model.mixer.channelCount(bus) == 2 ? " + \(model.mixer.channelStart(bus) + 2)" : " · Mono")") {
-                                    ForEach(0..<max(1, session.outputNumberOfChannels), id: \.self) { channel in
-                                        Button("\(channel + 1) · Mono") { model.setMixerRoute(bus, start: channel, count: 1) }
-                                        if channel + 1 < session.outputNumberOfChannels {
-                                            Button("\(channel + 1) + \(channel + 2)") { model.setMixerRoute(bus, start: channel, count: 2) }
-                                        }
-                                    }
-                                }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 32).disabled(bus == 0)
+                                let routes = BronzeAudioRouteOption.available(channels: channels)
+                                BronzeStableMenu(title: bus == 0 ? "1 + 2" : routes.first(where: { $0.start == model.mixer.channelStart(bus) && $0.count == model.mixer.channelCount(bus) })?.title ?? "Indisponível",
+                                                 choices: routes.map(\.title), selected: routes.firstIndex(where: { $0.start == model.mixer.channelStart(bus) && $0.count == model.mixer.channelCount(bus) }) ?? -1) { selected in
+                                    model.setMixerRoute(bus, start: routes[selected].start, count: routes[selected].count)
+                                }.frame(height: compact ? 36 : 52).disabled(bus == 0)
+
                             }.padding(6).modifier(BronzeDeckSurface())
                         }
                         VStack(spacing: 5) {
@@ -108,11 +105,13 @@ struct BronzeNativeSettingsView: View {
                 }
             }
             }
+            }
         }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification).receive(on: RunLoop.main)) { _ in channels = max(1, session.outputNumberOfChannels) }
         .onAppear { model.refreshMidiDevices(); deviceSelections = UserDefaults.standard.stringArray(forKey: "bronze.midiDevices") ?? Array(model.midiDevices.prefix(3).map(\.id)) }
         .onChange(of: seamless) { model.engine.setSeamlessPresetSwitching($0 && !lite) }
         .onChange(of: lite) { value in model.engine.setSeamlessPresetSwitching(seamless && !value) }
-        .sheet(isPresented: $learn) { BronzeNativeMIDIPanel(model: model) }
+
     }
 
     private func settingToggle(_ name: String, detail: String, value: Binding<Bool>) -> some View {

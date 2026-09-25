@@ -31,15 +31,31 @@ struct TCPGridRow: View {
     let range: TCPRange
     let focused: Bool
     let shadow: Bool
-    let cursor: Double?
-    let playing: Bool
-    let updatedAt: Date
     let onSeek: (Double) -> Void
     let onItem: (JSON) -> Void
     let canPan: Bool
     let onPan: (Double, Bool) -> Void
     var body: some View {
         GeometryReader { geometry in
+            TCPTrackDrawing(track: track, items: items, regions: regions, range: range, focused: focused, shadow: shadow).equatable()
+            TCPTouchSurface(tap: { point in onSeek(point.x / max(1, geometry.size.width)) }, open: { point in
+                let time = range.start + range.duration * point.x / max(1, geometry.size.width)
+                if !shadow, let item = items.last(where: { $0.first("startPos", "start_pos").double <= time && $0.first("endPos", "end_pos").double > time }) { onItem(item) }
+            }, canPan: canPan, pan: { translation, ended in onPan(translation / max(1, geometry.size.width), ended) })
+        }.background(Color(hex: "11151B")).clipped()
+            .overlay(alignment: .bottom) { Color(hex: "7C3AED").frame(height: 1) }
+            .accessibilityElement().accessibilityLabel("Linha do tempo de " + track.name)
+    }
+}
+// Playback ticks only update the shared cursor, not the waveform and text canvas.
+private struct TCPTrackDrawing: View, Equatable {
+    let track: JSON
+    let items: [JSON]
+    let regions: [JSON]
+    let range: TCPRange
+    let focused: Bool
+    let shadow: Bool
+    var body: some View {
             Canvas { context, size in
                 guard focused else { return }
                 for item in items {
@@ -93,14 +109,6 @@ struct TCPGridRow: View {
                 }
 
             }
-            TCPTouchSurface(tap: { point in onSeek(point.x / max(1, geometry.size.width)) }, open: { point in
-                let time = range.start + range.duration * point.x / max(1, geometry.size.width)
-                if !shadow, let item = items.last(where: { $0.first("startPos", "start_pos").double <= time && $0.first("endPos", "end_pos").double > time }) { onItem(item) }
-            }, canPan: canPan, pan: { translation, ended in onPan(translation / max(1, geometry.size.width), ended) })
-            TCPMovingCursor(range: range, position: cursor, playing: playing, updatedAt: updatedAt, head: false).allowsHitTesting(false)
-        }.background(Color(hex: "11151B")).clipped()
-            .overlay(alignment: .bottom) { Color(hex: "7C3AED").frame(height: 1) }
-            .accessibilityElement().accessibilityLabel("Linha do tempo de " + track.name)
     }
     private func mix(_ color: UIColor, with hex: String, amount: Double) -> Color {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -114,8 +122,15 @@ struct TCPGridRow: View {
         let font = UIFont(name: "Arial-BoldMT", size: 8) ?? .boldSystemFont(ofSize: 8)
         var label = text
         if (label as NSString).size(withAttributes: [.font: font]).width > rect.width {
-            while !label.isEmpty && ((label + "…") as NSString).size(withAttributes: [.font: font]).width > rect.width { label.removeLast() }
-            label += "…"
+            let characters = Array(text)
+            var low = 0, high = characters.count
+            while low < high {
+                let middle = (low + high + 1) / 2
+                let candidate = String(characters.prefix(middle)) + "…"
+                if (candidate as NSString).size(withAttributes: [.font: font]).width <= rect.width { low = middle }
+                else { high = middle - 1 }
+            }
+            label = String(characters.prefix(low)) + "…"
         }
         var clipped = context; clipped.clip(to: Path(rect))
         clipped.draw(Text(label).font(.custom("Arial-BoldMT", size: 8)).foregroundColor(color), at: CGPoint(x: rect.minX, y: rect.midY), anchor: .leading)
@@ -133,9 +148,15 @@ private struct TCPTouchSurface: UIViewRepresentable {
         let double = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.double(_:))); double.numberOfTapsRequired = 2
         single.require(toFail: double)
         let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hold(_:)))
+        hold.minimumPressDuration = 0.5
+        hold.allowableMovement = 10
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.drag(_:)))
         pan.maximumNumberOfTouches = 1; pan.delegate = context.coordinator
-        single.require(toFail: pan); hold.require(toFail: pan)
+        single.require(toFail: pan)
+        single.require(toFail: hold)
+        double.require(toFail: hold)
+        // A stationary pan remains possible until finger-up. Making hold wait
+        // for it delays the modal. Movement still cancels the hold naturally.
         view.addGestureRecognizer(pan)
         view.addGestureRecognizer(single); view.addGestureRecognizer(double); view.addGestureRecognizer(hold)
         return view
@@ -158,7 +179,7 @@ private struct TCPTouchSurface: UIViewRepresentable {
     }
 }
 
-private struct TCPMovingCursor: View {
+struct TCPMovingCursor: View {
     let range: TCPRange
     let position: Double?
     let playing: Bool

@@ -36,6 +36,8 @@ enum HookMode: String, CaseIterable, Identifiable {
     private var volumeTasks: [String: Task<Void, Never>] = [:]
     @Published private(set) var itemVolumePreviews: [String: Double] = [:]
     private var volumeRevisions: [String: UUID] = [:]
+    private var acceptedItemVolumes: [String: Double] = [:]
+    private var itemVolumeBaselines: [String: Double] = [:]
     var base: URL { mode == .musician ? project.musicians : project.director }
     var readOnly: Bool { mode != .director }
     var playing: Bool {
@@ -73,7 +75,7 @@ enum HookMode: String, CaseIterable, Identifiable {
             }
         }
     }
-    func suspend() { generation = UUID(); loop?.cancel(); loop = nil; volumeTasks.values.forEach { $0.cancel() }; volumeTasks = [:]; itemVolumePreviews = [:]; volumeRevisions = [:]; connected = false }
+    func suspend() { generation = UUID(); loop?.cancel(); loop = nil; volumeTasks.values.forEach { $0.cancel() }; volumeTasks = [:]; itemVolumePreviews = acceptedItemVolumes; volumeRevisions = [:]; connected = false }
     private func refresh(_ token: UUID) async {
         do {
             if !readOnly && !projectSelected {
@@ -84,6 +86,13 @@ enum HookMode: String, CaseIterable, Identifiable {
             let data = try await http.request(base, "/state", timeout: 2.8)
             guard !Task.isCancelled, generation == token else { return }
             guard data["connected"] != false, data["reaperOnline"] != false else { throw BridgeError(message: "O Hook Center está aberto, mas o projeto está desconectado.") }
+            let previousProject = snapshot.first("currentProjectId", "projectId", "projectPath").string
+            let incomingProject = data.first("currentProjectId", "projectId", "projectPath").string
+            if !previousProject.isEmpty && !incomingProject.isEmpty && previousProject != incomingProject {
+                volumeTasks.values.forEach { $0.cancel() }
+                volumeTasks = [:]; volumeRevisions = [:]
+                acceptedItemVolumes = [:]; itemVolumeBaselines = [:]; itemVolumePreviews = [:]
+            }
             var next = snapshot.merging(data)
             for (key, held) in pending {
                 if data[key] == held.value || Date() > held.until { pending[key] = nil }
@@ -91,6 +100,7 @@ enum HookMode: String, CaseIterable, Identifiable {
             }
             lastUpdate = Date()
             if snapshot != next { snapshot = next }
+            reconcileTCPItemVolumes(tcpItems)
             if !connected { connected = true }
             if message == "Conexão interrompida. Tentando reconectar…" { message = "" }
             let remotePage = data.first("activePage", "activeTab", "currentPage").string
@@ -206,7 +216,13 @@ enum HookMode: String, CaseIterable, Identifiable {
         let key = (premix ? "item:" : "track:") + id
         let revision = UUID()
         volumeRevisions[key] = revision
-        if premix { itemVolumePreviews[id] = min(1, max(0, ratio)) }
+        if premix {
+            if itemVolumeBaselines[id] == nil {
+                let remote = tcpItems.first { $0.first("itemId", "mediaItemId", "id", "guid").string == id } ?? item
+                itemVolumeBaselines[id] = MixerScale.ratio(remote, max: 24)
+            }
+            itemVolumePreviews[id] = min(1, max(0, ratio))
+        }
         volumeTasks[key]?.cancel()
         volumeTasks[key] = Task {
             do {
@@ -217,14 +233,39 @@ enum HookMode: String, CaseIterable, Identifiable {
                     if item["trackId"].exists { payload["trackId"] = item["trackId"] }
                 } else { payload["id"] = .string(id); payload["trackId"] = .string(id) }
                 try await post(premix ? "premix_item_set_volume" : "mixer_set_volume", payload)
-                // Keep the visual response while the bridge publishes its next snapshot.
-                if premix { try await Task.sleep(nanoseconds: 2_000_000_000) }
-                if volumeRevisions[key] == revision { if premix { itemVolumePreviews[id] = nil }; volumeRevisions[key] = nil; volumeTasks[key] = nil }
+                if volumeRevisions[key] == revision {
+                    // Catalog snapshots can remain unchanged after a successful command.
+                    // Keep the accepted value across modal reopenings until fresh volume
+                    // data arrives, instead of dropping it after an arbitrary timeout.
+                    if premix { acceptedItemVolumes[id] = min(1, max(0, ratio)) }
+                    volumeRevisions[key] = nil; volumeTasks[key] = nil
+                }
             } catch is CancellationError {} catch {
                 if !Task.isCancelled && volumeRevisions[key] == revision {
-                    if premix { itemVolumePreviews[id] = nil }; volumeRevisions[key] = nil; volumeTasks[key] = nil
+                    if premix {
+                        itemVolumePreviews[id] = acceptedItemVolumes[id]
+                        if acceptedItemVolumes[id] == nil { itemVolumeBaselines[id] = nil }
+                    }
+                    volumeRevisions[key] = nil; volumeTasks[key] = nil
                     message = error.localizedDescription
                 }
+            }
+        }
+    }
+    func reconcileTCPItemVolumes(_ items: [JSON]) {
+        guard !itemVolumePreviews.isEmpty else { return }
+        var seen = Set<String>()
+        for item in items {
+            let id = item.first("itemId", "mediaItemId", "id", "guid").string
+            guard seen.insert(id).inserted else { continue }
+            guard volumeRevisions["item:" + id] == nil,
+                  let accepted = acceptedItemVolumes[id], let baseline = itemVolumeBaselines[id],
+                  item.first("volumeRatio", "volume_ratio", "db", "volumeDb", "volume_db", "volume").exists else { continue }
+            let remote = MixerScale.ratio(item, max: 24)
+            // Matching data acknowledges our command; a changed remote value is a
+            // subsequent edit from the computer. Unchanged stale data cannot reset it.
+            if abs(remote - accepted) < 0.0001 || abs(remote - baseline) > 0.0001 {
+                itemVolumePreviews[id] = nil; acceptedItemVolumes[id] = nil; itemVolumeBaselines[id] = nil
             }
         }
     }

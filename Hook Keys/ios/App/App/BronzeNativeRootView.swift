@@ -19,6 +19,7 @@ struct BronzeNativeRootView: View {
     @State private var welcomePending = true
     @State private var loadingFinished = false
     private enum ModulePage: Equatable { case performance, tone, envelope, equalizer, reverb, delay, synth, pulse, arpeggiator, processor(BronzeProcessorKind) }
+    @State private var performanceSection = 1
     @State private var modulePage: ModulePage = .envelope
 
     init(account: BronzeNativeAccount) {
@@ -110,7 +111,7 @@ struct BronzeNativeRootView: View {
             }
         }
         .fullScreenCover(isPresented: $showOrgan) {
-            BronzeNativeModal(title: "Organ · Bronze B3") { organEditor }
+            BronzeNativeModal(title: "Organ · Bronze B3", scrollable: false) { BronzeFittedEditor { organEditor } }
         }
         .fullScreenCover(isPresented: $showTracks) {
             BronzeNativeModal(title: "Playlist") { loopLibrary }
@@ -139,7 +140,7 @@ struct BronzeNativeRootView: View {
             case .tone:
                 BronzeNativeToneEditor(model: model, moduleIndex: model.selectedModule).id(model.selectedModule)
             case .performance:
-                BronzeNativePerformanceEditor(model: model, moduleIndex: model.selectedModule).id(model.selectedModule)
+                BronzeNativePerformanceEditor(model: model, moduleIndex: model.selectedModule, section: performanceSection).id(model.selectedModule)
             case .arpeggiator:
                 if model.selectedModule != 6 {
                     BronzeNativeArpeggiatorEditor(model: model, moduleIndex: model.selectedModule).id(model.selectedModule)
@@ -166,8 +167,8 @@ struct BronzeNativeRootView: View {
                 BronzeModuleEnvelopeGrid(model: model, index: model.selectedModule) { modulePage = .tone }
             }
             }.frame(maxHeight: .infinity).disabled(model.selectedModule < 6 && model.moduleSettingsSources[model.selectedModule] == "default")
-            if model.selectedModule != 6 && modulePage != .performance && modulePage != .synth {
-                BronzeModulePerformanceCards(model: model, index: model.selectedModule) { modulePage = .performance }
+            if model.selectedModule != 6 && modulePage != .performance && modulePage != .synth && modulePage != .equalizer {
+                BronzeModulePerformanceCards(model: model, index: model.selectedModule) { section in performanceSection = section; modulePage = .performance }
                     .disabled(model.selectedModule < 6 && model.moduleSettingsSources[model.selectedModule] == "default")
             }
         }
@@ -368,6 +369,7 @@ struct BronzeNativeRootView: View {
 }
 
 struct BronzeNativeDelayEditor: View {
+    @Environment(\.bronzeContentSize) private var size
     @ObservedObject var model: BronzeNativeAppModel
     let moduleIndex: Int
     @State private var confirmReset = false
@@ -379,32 +381,28 @@ struct BronzeNativeDelayEditor: View {
             HStack {
                 Button(delay.enabled ? "Delay ON" : "Delay OFF") { change { $0.enabled.toggle() } }
                     .buttonStyle(BronzeCompactButtonStyle(active: delay.enabled))
-                Button("Sync") { change { $0.sync.toggle() } }
-                    .buttonStyle(BronzeCompactButtonStyle(active: delay.sync))
                 if model.updatingDelay { ProgressView().scaleEffect(0.7).accessibilityLabel("Atualizando Delay") }
                 Spacer()
                 Button("Reset") { confirmReset = true }.font(.bronzeUI(16))
             }
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 ForEach(BronzeDelay.divisions.indices, id: \.self) { index in
                     Button(BronzeDelay.divisions[index]) { change { $0.division = index } }
-                        .buttonStyle(BronzeCompactButtonStyle(active: delay.division == index))
+                        .buttonStyle(BronzeDeckButtonStyle(palette: delay.division == index ? .purple : .grey, selected: delay.division == index, size: 12))
                 }
-            }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 4), spacing: 3) {
-                VStack(spacing: 6) {
+                Button("Sync") { change { $0.sync.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: delay.sync ? .green : .grey, selected: delay.sync))
+            }.frame(height: size.height < 260 ? 34 : 46)
+            HStack(spacing: 8) {
+                VStack(spacing: 5) {
                     Button("Tap") {
-                        if let milliseconds = tap.tap(at: ProcessInfo.processInfo.systemUptime) {
-                            change { $0.milliseconds = milliseconds }
-                        }
-                    }.buttonStyle(BronzeCompactButtonStyle(active: false)).disabled(delay.sync)
-                    Text(String(format: "Eco: %.0f ms", delay.effectiveMilliseconds(bpm: model.tempo)))
-                        .font(.caption.monospacedDigit())
-                }
-                ForEach(BronzeDelayParameter.allCases) { parameter in parameterControl(parameter) }
-            }
-            Text(delay.sync ? "Sync usa o BPM global. O tempo manual fica guardado." : "A divisão multiplica o tempo manual; a cauda de Delay tem limite de 4 s.")
-                .font(.bronzeUI(14)).foregroundStyle(.secondary)
+                        if let milliseconds = tap.tap(at: ProcessInfo.processInfo.systemUptime) { change { $0.milliseconds = milliseconds } }
+                    }.buttonStyle(BronzeDeckButtonStyle(palette: .purple, size: 24)).disabled(delay.sync)
+                    Text(delay.sync ? String(format: "%.0f BPM", model.tempo) : String(format: "%.0f ms", delay.milliseconds))
+                        .font(.bronzeUI(18)).frame(height: 26)
+                }.frame(width: size.width * 0.30)
+                ForEach([BronzeDelayParameter.feedback, .mix, .milliseconds]) { parameter in parameterControl(parameter).frame(maxWidth: .infinity) }
+            }.frame(height: max(60, size.height - (size.height < 260 ? 80 : 94)))
+
         }
         .onChange(of: delay.sync) { _ in tap.reset() }
         .onDisappear { tap.reset() }
@@ -433,7 +431,7 @@ struct BronzeNativeDelayEditor: View {
                 BronzeSkiaControl(kind: .knob, value: Binding(
                     get: { delay.normalized(parameter) },
                     set: { value in change { $0.setNormalized(parameter, value) } }
-                ), accessibilityLabel: "\(parameter.rawValue) do Delay").modifier(BronzeParameterDialSize())
+                ), accessibilityLabel: "\(parameter.rawValue) do Delay").frame(width: min(86, max(24, size.height - 132)), height: min(86, max(24, size.height - 132)))
             }.disabled(inactive).opacity(inactive ? 0.4 : 1)
             Text(delay.text(parameter, bpm: model.tempo)).font(.bronzeUI(14))
         }
@@ -473,6 +471,7 @@ struct BronzeNativeReverbEditor: View {
             }
             HStack(spacing: 4) {
                 parameterControl(decay: false).frame(maxWidth: .infinity)
+                parameterControl(decay: true).frame(maxWidth: .infinity)
             }
         }
         .alert("Restaurar o reverb deste módulo?", isPresented: $confirmReset) {
@@ -618,93 +617,14 @@ struct BronzeNativeToneEditor: View {
 struct BronzeNativePerformanceEditor: View {
     @ObservedObject var model: BronzeNativeAppModel
     let moduleIndex: Int
-    @State private var tab = 0
-    @State private var confirmReset = false
+    let section: Int
     private var config: BronzeModulePerformance { model.modulePerformance[moduleIndex] }
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Button("MIDI / Saída") { tab = 0 }.buttonStyle(BronzeCompactButtonStyle(active: tab == 0))
-                if moduleIndex != 6 {
-                    Button("Velocity") { tab = 1 }.buttonStyle(BronzeCompactButtonStyle(active: tab == 1))
-                }
-                if moduleIndex != 7 {
-                    Button("Mod") { tab = 2 }.buttonStyle(BronzeCompactButtonStyle(active: tab == 2))
-                }
-                if moduleIndex < 6 {
-                    Button("Glide") { tab = 3 }.buttonStyle(BronzeCompactButtonStyle(active: tab == 3))
-                }
-                Spacer()
-                Button("Reset Config") { confirmReset = true }.font(.bronzeUI(16))
-            }
-            ScrollView(.horizontal) {
-                HStack(alignment: .center, spacing: 14) {
-                    if tab == 0 {
-                        VStack(spacing: 10) {
-                            Menu(config.input < 0 ? "MIDI: Todos" : "MIDI: \(config.input + 1)") {
-                                Button("Todos") { edit { $0.input = -1 } }
-                                ForEach(0..<3, id: \.self) { input in
-                                    Button("\(input + 1): \(model.midiDevices.indices.contains(input) ? model.midiDevices[input].name : "Não conectado")") {
-                                        edit { $0.input = input }
-                                    }
-                                }
-                            }
-                            Button("Sustain") { edit { $0.sustain.toggle() } }
-                                .buttonStyle(BronzeCompactButtonStyle(active: config.sustain))
-                            Button("Mod Wheel") { edit { $0.modulation.toggle() } }
-                                .buttonStyle(BronzeCompactButtonStyle(active: config.modulation))
-                        }
-                        VStack {
-                            Stepper("Low: \(config.lowNote)", value: integer(\.lowNote), in: 0...config.highNote)
-                            Stepper("High: \(config.highNote)", value: integer(\.highNote), in: config.lowNote...127)
-                            Stepper("Oct: \(config.octave)", value: integer(\.octave), in: -3...3)
-                        }.frame(width: 205)
-                        VStack {
-                            Stepper("Poly: \(config.polyphony)", value: integer(\.polyphony), in: 1...128)
-                            if moduleIndex < 6 {
-                                Menu(BronzeSynth.modes[config.mode]) {
-                                    ForEach(0..<3, id: \.self) { mode in Button(BronzeSynth.modes[mode]) { edit { $0.mode = mode } } }
-                                }
-                            }
-                        }.frame(width: 200)
-                        VStack(spacing: 10) {
-                            Menu(config.outputCount == 1 ? "Saída \(config.outputStart + 1)" : "Saída \(config.outputStart + 1)+\(config.outputStart + 2)") {
-                                ForEach(0..<(config.outputCount == 1 ? 32 : 31), id: \.self) { start in
-                                    Button(config.outputCount == 1 ? "\(start + 1)" : "\(start + 1)+\(start + 2)") { edit { $0.outputStart = start } }
-                                }
-                            }
-                            Button(config.outputCount == 1 ? "1 canal" : "2 canais") {
-                                edit { $0.outputCount = $0.outputCount == 1 ? 2 : 1; $0.outputStart = min($0.outputStart, 32 - $0.outputCount) }
-                            }
-                            Button(config.dualMono ? "MONO" : "STEREO") { edit { $0.dualMono.toggle() } }
-                                .buttonStyle(BronzeCompactButtonStyle(active: config.dualMono))
-                        }
-                    } else if tab == 1 {
-                        VStack(spacing: 8) {
-                            Button("No Sens") { edit { $0.noSens.toggle() } }.buttonStyle(BronzeCompactButtonStyle(active: config.noSens))
-                            Menu("Curva") {
-                                Button("Soft") { edit { $0.velocityCurve = [0, 50, 85, 110, 127] } }
-                                Button("Middle") { edit { $0.velocityCurve = [0, 32, 64, 96, 127] } }
-                                Button("Hard") { edit { $0.velocityCurve = [0, 15, 40, 75, 127] } }
-                                Button("Fixed") { edit { $0.velocityCurve = [127, 127, 127, 127, 127] } }
-                            }
-                        }
-                        ForEach(0..<5, id: \.self) { point in
-                            VStack {
-                                Text("Ponto \(point + 1)").font(.bronzeUI(16))
-                                BronzeSkiaControl(kind: .knob, value: Binding(
-                                    get: { Double(config.velocityCurve[point]) / 127 },
-                                    set: { value in guard value.isFinite else { return }; edit { $0.velocityCurve[point] = min(127, max(0, Int((value * 127).rounded()))) } }
-                                ), accessibilityLabel: "Velocity ponto \(point + 1)").modifier(BronzeParameterDialSize(regular: 144, compact: 120))
-                                Stepper("\(config.velocityCurve[point])", value: Binding(
-                                    get: { config.velocityCurve[point] }, set: { value in edit { $0.velocityCurve[point] = value } }), in: 0...127)
-                            }.frame(width: 145)
-                        }
-                        VStack {
-                            Stepper("Ignorar > \(config.velocityIgnoreAbove)", value: integer(\.velocityIgnoreAbove), in: 0...127)
-                            Stepper("Limitar: \(config.velocityCeiling)", value: integer(\.velocityCeiling), in: 1...127)
-                        }.frame(width: 235)
-                    } else if tab == 3 {
+        if section == 1 {
+            BronzeNativeVelocityEditor(model: model, moduleIndex: moduleIndex)
+        } else {
+            HStack(spacing: 14) {
+            if section == 3 {
                         Button("Sync") { edit { $0.glideSync.toggle() } }.buttonStyle(BronzeCompactButtonStyle(active: config.glideSync))
                         Button(config.portamento ? "Portamento" : "Auto") { edit { $0.portamento.toggle() } }
                         BronzeNativeValueKnob(definition: .init("Glide", 0, 5000, 0, .milliseconds),
@@ -728,16 +648,93 @@ struct BronzeNativePerformanceEditor: View {
                         BronzeNativeValueKnob(definition: .init("Intensity", 0, 1, 1, .percent),
                             value: Binding(get: { config.modulationIntensity }, set: { value in edit { $0.modulationIntensity = value } }))
                     }
-                }.padding(.vertical, 4)
-            }
-        }
-        .confirmationDialog("Restaurar configuração do módulo?", isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("Restaurar", role: .destructive) { model.setPerformance(BronzeModulePerformance.initial(moduleIndex), moduleIndex: moduleIndex) }
-            Button("Cancelar", role: .cancel) {}
+            }.padding(8)
         }
     }
     private func integer(_ key: WritableKeyPath<BronzeModulePerformance, Int>) -> Binding<Int> {
         Binding(get: { config[keyPath: key] }, set: { value in edit { $0[keyPath: key] = value } })
+    }
+    private func edit(_ change: (inout BronzeModulePerformance) -> Void) {
+        var next = config; change(&next); model.setPerformance(next, moduleIndex: moduleIndex)
+    }
+}
+
+struct BronzeNativeVelocityEditor: View {
+    @Environment(\.bronzeContentSize) private var size
+    @ObservedObject var model: BronzeNativeAppModel
+    let moduleIndex: Int
+    private var config: BronzeModulePerformance { model.modulePerformance[moduleIndex] }
+    private let curves = [[0,16,44,84,127], [0,32,64,96,127], [0,52,84,108,127]]
+    private var mode: Int { config.velocityMode ?? curves.firstIndex(of: config.velocityCurve) ?? (Set(config.velocityCurve).count == 1 ? 3 : 4) }
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 5) {
+                ForEach(0..<5, id: \.self) { index in
+                    Button(["Soft", "Middle", "Hard", "Fixed", "User"][index]) { select(index) }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: .purple, selected: mode == index))
+                }
+            }.frame(height: 30)
+            HStack(spacing: 8) {
+                GeometryReader { geometry in
+                    let width = max(1, geometry.size.width - 28)
+                    let height = max(1, geometry.size.height - 28)
+                    ZStack(alignment: .topLeading) {
+                        Canvas { context, _ in
+                            var grid = Path()
+                            for i in 0...4 {
+                                let x = 14 + width * CGFloat(i) / 4
+                                let y = 14 + height * CGFloat(i) / 4
+                                grid.move(to: CGPoint(x: x, y: 14)); grid.addLine(to: CGPoint(x: x, y: height + 14))
+                                grid.move(to: CGPoint(x: 14, y: y)); grid.addLine(to: CGPoint(x: width + 14, y: y))
+                            }
+                            context.stroke(grid, with: .color(.white.opacity(0.15)), lineWidth: 1)
+                            var curve = Path()
+                            for i in 0..<5 {
+                                let point = CGPoint(x: 14 + width * CGFloat(i) / 4, y: 14 + height * (1 - Double(config.velocityCurve[i]) / 127))
+                                if i == 0 { curve.move(to: point) } else { curve.addLine(to: point) }
+                            }
+                            context.stroke(curve, with: .color(.purple), lineWidth: 3)
+                            let ceiling = 14 + height * (1 - Double(config.velocityCeiling) / 127)
+                            var limit = Path(); limit.move(to: CGPoint(x: 14, y: ceiling)); limit.addLine(to: CGPoint(x: width + 14, y: ceiling))
+                            context.stroke(limit, with: .color(.orange), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                        }.allowsHitTesting(false)
+                        ForEach(0..<5, id: \.self) { index in
+                            Circle().fill(Color.purple).overlay(Circle().stroke(.white, lineWidth: 2)).frame(width: 20, height: 20)
+                                .position(x: 14 + width * CGFloat(index) / 4, y: 14 + height * (1 - Double(config.velocityCurve[index]) / 127))
+                                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("velocityGraph")).onChanged { gesture in
+                                    let value = Int((127 * (1 - (gesture.location.y - 14) / height)).rounded())
+                                    edit { $0.velocityCurve[index] = min(127, max(0, value)); $0.velocityMode = 4; $0.velocityUserCurve = $0.velocityCurve }
+                                })
+                                .accessibilityLabel("Velocity ponto \(index + 1)")
+                                .accessibilityValue("\(config.velocityCurve[index])")
+                                .accessibilityAdjustableAction { direction in edit {
+                                    $0.velocityCurve[index] = min(127, max(0, $0.velocityCurve[index] + (direction == .increment ? 1 : -1)))
+                                    $0.velocityMode = 4; $0.velocityUserCurve = $0.velocityCurve
+                                } }
+                        }
+                    }.coordinateSpace(name: "velocityGraph").background(Color.black.opacity(0.4)).cornerRadius(6)
+                }.accessibilityIdentifier("bronze.velocity.graph")
+                VStack(spacing: 6) {
+                    Text("Limitador").font(.bronzeUI(12))
+                    Slider(value: Binding(get: { Double(config.velocityCeiling) }, set: { value in edit { $0.velocityCeiling = Int(value) } }), in: 1...127, step: 1)
+                    Text("\(config.velocityCeiling)").font(.bronzeUI(16))
+                    Text("Limite Velocity").font(.bronzeUI(11))
+                    Slider(value: Binding(get: { Double(config.velocityIgnoreAbove) }, set: { value in edit { $0.velocityIgnoreAbove = Int(value) } }), in: 0...127, step: 1)
+                    Text("\(config.velocityIgnoreAbove)").font(.bronzeUI(16))
+                }.frame(width: size.width * 0.18)
+            }.frame(height: max(90, size.height - (mode == 3 ? 75 : 40)))
+            if mode == 3 {
+                HStack { Text("Fixed: \(config.velocityCurve[0])"); Slider(value: Binding(get: { Double(config.velocityCurve[0]) }, set: { value in edit { $0.velocityFixedValue = Int(value); $0.velocityCurve = Array(repeating: Int(value), count: 5) } }), in: 0...127, step: 1) }.frame(height: 30)
+            }
+        }
+    }
+    private func select(_ index: Int) {
+        edit {
+            $0.velocityMode = index
+            if index < 3 { $0.velocityCurve = curves[index] }
+            else if index == 3 { $0.velocityCurve = Array(repeating: $0.velocityFixedValue ?? 100, count: 5) }
+            else { $0.velocityCurve = $0.velocityUserCurve ?? [0,32,64,96,127] }
+        }
     }
     private func edit(_ change: (inout BronzeModulePerformance) -> Void) {
         var next = config; change(&next); model.setPerformance(next, moduleIndex: moduleIndex)
@@ -820,6 +817,7 @@ struct BronzeNativeArpeggiatorEditor: View {
 }
 
 struct BronzeNativePulseEditor: View {
+    @Environment(\.bronzeContentSize) private var contentSize
     @ObservedObject var model: BronzeNativeAppModel
     let moduleIndex: Int
     @State private var confirmReset = false
@@ -838,129 +836,130 @@ struct BronzeNativePulseEditor: View {
                 Spacer()
                 Button("Reset") { confirmReset = true }.font(.bronzeUI(16))
             }
-            HStack(spacing: 3) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: contentSize.width < 900 ? 8 : 16), spacing: 4) {
                 ForEach(0..<16, id: \.self) { index in
                     Button("\(index + 1)") { edit { $0.steps ^= 1 << index } }
-                        .buttonStyle(BronzeCompactButtonStyle(active: (pulse.steps & (1 << index)) != 0))
+                        .buttonStyle(BronzeDeckButtonStyle(palette: (pulse.steps & (1 << index)) != 0 ? .red : .grey, selected: (pulse.steps & (1 << index)) != 0))
+                        .frame(height: contentSize.height < 260 ? 28 : 40)
                         .disabled(index >= pulse.length).opacity(index < pulse.length ? 1 : 0.3)
                         .accessibilityLabel("Passo \(index + 1)")
                 }
             }
-            Group {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 5), spacing: 3) {
-                    if pulse.sync {
-                        VStack(spacing: 3) {
-                            Text("Divisão").font(.bronzeUI(16))
-                            HStack(spacing: 3) {
-                                VStack(spacing: 3) {
-                                    BronzeRepeatButton(label: "+", accessibilityText: "Próxima divisão") { edit { $0.division = min(7, $0.division + 1) } }
-                                    BronzeRepeatButton(label: "−", accessibilityText: "Divisão anterior") { edit { $0.division = max(0, $0.division - 1) } }
-                                }
-                                BronzeSkiaControl(kind: .knob, value: Binding(
-                                    get: { Double(pulse.division) / 7 },
-                                    set: { n in guard n.isFinite else { return }; edit { $0.division = min(7, max(0, Int((n * 7).rounded()))) } }
-                                ), accessibilityLabel: "Divisão do Pulse").modifier(BronzeParameterDialSize())
-                            }
-                            Text(BronzePulse.divisions[pulse.division]).font(.bronzeUI(14))
-                        }
-                    } else {
-                        BronzeNativeValueKnob(definition: .init("Rate", 20, 2000, 125, .milliseconds), value: Binding(
-                            get: { pulse.rateMs }, set: { value in edit { $0.rateMs = value } }))
-                    }
-                    ForEach(BronzePulseParameter.allCases) { parameter in
-                        BronzeNativeValueKnob(definition: parameter.definition, value: Binding(
-                            get: { pulse[parameter] }, set: { value in edit { $0[parameter] = value } }))
-                    }
-                }.padding(.vertical, 4)
+            HStack(spacing: 4) {
+                if pulse.sync {
+                    pulseControl("Divisão", text: BronzePulse.divisions[pulse.division], value: Binding(
+                        get: { Double(pulse.division) / 7 }, set: { n in edit { $0.division = min(7, max(0, Int((n * 7).rounded()))) } }))
+                } else {
+                    pulseParameter(.init("Rate", 20, 2000, 125, .milliseconds), value: Binding(get: { pulse.rateMs }, set: { value in edit { $0.rateMs = value } }))
+                }
+                ForEach(BronzePulseParameter.allCases) { parameter in
+                    pulseParameter(parameter.definition, value: Binding(get: { pulse[parameter] }, set: { value in edit { $0[parameter] = value } }))
+                }
             }
+
         }
         .confirmationDialog("Restaurar Pulse?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Restaurar", role: .destructive) { model.setPulse(BronzePulse(), moduleIndex: moduleIndex) }
             Button("Cancelar", role: .cancel) {}
         }
     }
+    private var controlHeight: CGFloat {
+        let stepRows: CGFloat = contentSize.width < 900 ? 2 : 1
+        let stepHeight: CGFloat = contentSize.height < 260 ? 28 : 40
+        return max(48, contentSize.height - 48 - stepRows * (stepHeight + 4))
+    }
+    private func pulseParameter(_ definition: BronzeProcessorParameter, value: Binding<Double>) -> some View {
+        pulseControl(definition.name, text: definition.text(value.wrappedValue), value: Binding(
+            get: { definition.normalized(value.wrappedValue) }, set: { value.wrappedValue = definition.value($0) }))
+    }
+    private func pulseControl(_ title: String, text: String, value: Binding<Double>) -> some View {
+        let side = min(100, max(22, controlHeight - 30), contentSize.width / 6 - 12)
+        return VStack(spacing: 2) {
+            Text(title).font(.bronzeUI(11))
+            BronzeDial(value: value, tint: .red, label: title).frame(width: side, height: side)
+            Text(text).font(.bronzeUI(10))
+        }.frame(maxWidth: .infinity).frame(height: controlHeight).modifier(BronzeDeckSurface())
+    }
     private func edit(_ change: (inout BronzePulse) -> Void) {
         var next = pulse; change(&next); model.setPulse(next, moduleIndex: moduleIndex)
     }
 }
 
+private struct BronzeSynthPresetTarget: Identifiable { let id: Int }
+
 struct BronzeNativeSynthEditor: View {
+    @Environment(\.bronzeContentSize) private var size
     @ObservedObject var model: BronzeNativeAppModel
     @State private var oscillatorIndex = 0
-    @State private var showModulation = false
     @State private var confirmReset = false
-    @State private var showPresets = false
+    @State private var presetToEdit: BronzeSynthPresetTarget?
     private var oscillator: BronzeOscillator { model.synth.oscillators[oscillatorIndex] }
+    private var rowHeight: CGFloat { max(44, (size.height - 72) / 4) }
+    private var dialSize: CGFloat { min(86, max(20, rowHeight - 30)) }
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 6) {
+        VStack(spacing: 3) {
+            HStack(spacing: 4) {
                 ForEach(0..<3, id: \.self) { index in
                     Button("OSC \(index + 1)") { oscillatorIndex = index }
                         .buttonStyle(BronzeDeckButtonStyle(palette: [.green, .pink, .blue][index], selected: oscillatorIndex == index))
                 }
-            }.frame(height: 34)
-            HStack(spacing: 8) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 5) {
-                        ForEach(0..<16, id: \.self) { index in
-                            Button(model.workspace.synthPresets[index].sound == nil ? "Preset \(index + 1)" : model.workspace.synthPresets[index].name) {
-                                if model.workspace.synthPresets[index].sound != nil { model.recallSynthPreset(index) }
-                                else { showPresets = true }
-                            }.buttonStyle(BronzeDeckButtonStyle(palette: model.workspace.activeSynthPreset == index ? .green : .grey, selected: model.workspace.activeSynthPreset == index))
-                                .frame(width: 146, height: 34).contextMenu { Button("Editar presets") { showPresets = true } }
-                        }
-                    }
+            }.frame(height: 28)
+            HStack(spacing: 4) {
+                ForEach(0..<5, id: \.self) { index in
+                    let preset = model.workspace.synthPresets[index]
+                    Button(preset.sound == nil ? "Preset \(index + 1)" : preset.name) { model.recallSynthPreset(index) }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: model.workspace.activeSynthPreset == index, size: 10))
+                        .bronzeTapHold(tap: { model.recallSynthPreset(index) }, hold: { presetToEdit = BronzeSynthPresetTarget(id: index) })
+                        .accessibilityIdentifier("bronze.synth.preset.\(index)")
                 }
-                Button(model.synth.mode == 0 ? "Poly" : "Mono") { edit { $0.mode = $0.mode == 0 ? 1 : 0 } }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(width: 112)
-                Button("Legato") { edit { $0.mode = $0.mode == 2 ? 1 : 2 } }.buttonStyle(BronzeDeckButtonStyle(palette: model.synth.mode == 2 ? .green : .grey, selected: model.synth.mode == 2)).frame(width: 112)
-            }.frame(height: 34)
+                Button(model.synth.mode == 0 ? "Poly" : "Mono") { edit { $0.mode = $0.mode == 0 ? 1 : 0 } }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: 10))
+                Button("Legato") { edit { $0.mode = $0.mode == 2 ? 1 : 2 } }.buttonStyle(BronzeDeckButtonStyle(palette: model.synth.mode == 2 ? .green : .grey, selected: model.synth.mode == 2, size: 10))
+            }.frame(height: 28)
             HStack(spacing: 3) {
-                VStack(spacing: 12) {
-                    BronzeOscillatorWaveform(shape: oscillator.shape).frame(height: 38)
-                    HStack { Text("OSC \(oscillatorIndex + 1)"); Spacer(); Button(oscillator.enabled ? "ON" : "OFF") { editOscillator { $0.enabled.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: oscillator.enabled ? .green : .red)).frame(width: 120, height: 29) }
-                    HStack(spacing: 5) { ForEach(0..<4, id: \.self) { shape in
-                        Button(BronzeSynth.shapes[shape]) { editOscillator { $0.shape = shape } }.buttonStyle(BronzeDeckButtonStyle(palette: oscillator.shape == shape ? .green : .grey, selected: oscillator.shape == shape))
-                    }}.frame(height: 33)
-                }.padding(12).frame(maxWidth: .infinity).frame(height: 172).modifier(BronzeDeckSurface(radius: 3))
-                VStack(spacing: 3) {
+                VStack(spacing: 2) {
                     HStack(spacing: 3) {
-                        synthCell(.init("Volume OSC \(oscillatorIndex + 1)", 0, 1, 1, .amplitude), value: Binding(get: { oscillator.volume }, set: { value in editOscillator { $0.volume = value } }), tint: .orange)
-                        synthCell(.init("Detune OSC \(oscillatorIndex + 1)", -100, 100, 0, .rawCents), value: Binding(get: { oscillator.detune }, set: { value in editOscillator { $0.detune = value } }), tint: .green)
-                    }
-                    HStack(spacing: 8) {
-                        Text("OSC \(oscillatorIndex + 1) · \(oscillator.octave)").font(.bronzeUI(11))
-                        Button("OCT −") { editOscillator { $0.octave = max(-3, $0.octave - 1) } }.buttonStyle(BronzeDeckButtonStyle(palette: .grey))
-                        Button("OCT +") { editOscillator { $0.octave = min(3, $0.octave + 1) } }.buttonStyle(BronzeDeckButtonStyle(palette: .grey))
-                    }.frame(height: 29).padding(8).modifier(BronzeDeckSurface(radius: 3))
-                }.frame(maxWidth: .infinity)
+                        BronzeOscillatorWaveform(shape: oscillator.shape)
+                        Button(oscillator.enabled ? "ON" : "OFF") { editOscillator { $0.enabled.toggle() } }
+                            .buttonStyle(BronzeDeckButtonStyle(palette: oscillator.enabled ? .green : .red, size: 10)).frame(width: 40)
+                    }.frame(height: max(18, rowHeight / 2 - 5))
+                    HStack(spacing: 2) { ForEach(0..<4, id: \.self) { shape in
+                        Button(BronzeSynth.shapes[shape]) { editOscillator { $0.shape = shape } }.buttonStyle(BronzeDeckButtonStyle(palette: oscillator.shape == shape ? .green : .grey, selected: oscillator.shape == shape, size: 9))
+                    }}.frame(height: max(20, rowHeight / 2 - 7))
+                }.padding(4).frame(maxWidth: .infinity).frame(height: rowHeight).modifier(BronzeDeckSurface(radius: 3))
+                synthCell(.init("Volume OSC \(oscillatorIndex + 1)", 0, 1, 1, .amplitude), value: Binding(get: { oscillator.volume }, set: { value in editOscillator { $0.volume = value } }), tint: .orange)
+                synthCell(.init("Detune OSC \(oscillatorIndex + 1)", -100, 100, 0, .rawCents), value: Binding(get: { oscillator.detune }, set: { value in editOscillator { $0.detune = value } }), tint: .green)
+                VStack(spacing: 4) {
+                    Text("OSC \(oscillatorIndex + 1) · \(oscillator.octave)").font(.bronzeUI(11))
+                    HStack(spacing: 3) {
+                        Button("OCT −") { editOscillator { $0.octave = max(-3, $0.octave - 1) } }
+                        Button("OCT +") { editOscillator { $0.octave = min(3, $0.octave + 1) } }
+                    }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: 10)).frame(height: 24)
+                }.frame(maxWidth: .infinity).frame(height: rowHeight).modifier(BronzeDeckSurface(radius: 3))
             }
             HStack(spacing: 3) {
                 ForEach(Array([BronzeNativeAppModel.EnvelopeParameter.attack, .hold, .decay, .release].enumerated()), id: \.offset) { index, parameter in
-                    VStack(spacing: 5) {
-                        Text(parameter.rawValue)
-                        BronzeDial(value: Binding(get: { model.envelopeValue(parameter, moduleIndex: 7) }, set: { model.setEnvelopeValue(parameter, moduleIndex: 7, normalized: $0) }), tint: [.cyan, .pink, .orange, .green][index], label: parameter.rawValue).frame(width: 65, height: 65)
+                    VStack(spacing: 2) {
+                        Text(parameter.rawValue).font(.bronzeUI(11))
+                        BronzeDial(value: Binding(get: { model.envelopeValue(parameter, moduleIndex: 7) }, set: { model.setEnvelopeValue(parameter, moduleIndex: 7, normalized: $0) }), tint: [.cyan, .pink, .orange, .green][index], label: parameter.rawValue).frame(width: dialSize, height: dialSize)
                         Text(model.envelopeValueText(parameter, moduleIndex: 7)).font(.bronzeUI(10))
-                    }.frame(maxWidth: .infinity).frame(height: 112).modifier(BronzeDeckSurface(radius: 3))
+                    }.frame(maxWidth: .infinity).frame(height: rowHeight).modifier(BronzeDeckSurface(radius: 3))
                 }
             }
             HStack(spacing: 3) {
-                HStack(spacing: 3) { parameter(.cutoff, tint: .cyan); parameter(.resonance, tint: .pink) }.frame(maxWidth: .infinity)
-                parameter(.filterEnvelope, tint: .orange).frame(maxWidth: .infinity)
+                parameter(.cutoff, tint: .cyan); parameter(.resonance, tint: .pink); parameter(.filterEnvelope, tint: .orange)
+                VStack(spacing: 4) {
+                    Text("LFO destino").font(.bronzeUI(11))
+                    HStack(spacing: 2) { ForEach(0..<3, id: \.self) { target in
+                        Button(BronzeSynth.targets[target]) { edit { $0.lfoTarget = target } }.buttonStyle(BronzeDeckButtonStyle(palette: model.synth.lfoTarget == target ? .green : .grey, selected: model.synth.lfoTarget == target, size: 9))
+                    }}.frame(height: 24)
+                }.frame(maxWidth: .infinity).frame(height: rowHeight).modifier(BronzeDeckSurface(radius: 3))
             }
             HStack(spacing: 3) {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("LFO destino")
-                    HStack(spacing: 4) { ForEach(0..<3, id: \.self) { target in
-                        Button(BronzeSynth.targets[target]) { edit { $0.lfoTarget = target } }.buttonStyle(BronzeDeckButtonStyle(palette: model.synth.lfoTarget == target ? .green : .grey, selected: model.synth.lfoTarget == target))
-                    }}.frame(height: 33)
-                }.padding(12).frame(maxWidth: .infinity).frame(height: 112).modifier(BronzeDeckSurface(radius: 3))
-                HStack(spacing: 3) { parameter(.lfoRate, tint: .cyan); parameter(.lfoDepth, tint: .pink) }.frame(maxWidth: .infinity)
+                parameter(.lfoRate, tint: .cyan); parameter(.lfoDepth, tint: .pink); parameter(.glide, tint: .cyan)
+                Button("Reset Synth") { confirmReset = true }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(maxWidth: .infinity).frame(height: rowHeight)
             }
-            HStack { parameter(.glide, tint: .cyan); Button("Presets Synth") { showPresets = true }; Button("Reset Synth") { confirmReset = true } }.buttonStyle(BronzeCompactButtonStyle(active: false))
-        }.padding(16).background(LinearGradient(colors: [Color.purple.opacity(0.13), Color.blue.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.purple.opacity(0.7)))
-            .frame(maxWidth: 1110).frame(maxWidth: .infinity)
-        .sheet(isPresented: $showPresets) { BronzeNativeSynthPresets(model: model) }
+        }.frame(maxWidth: .infinity)
+        .fullScreenCover(item: $presetToEdit) { target in BronzeNativeSynthPresetEditor(model: model, index: target.id) }
         .confirmationDialog("Restaurar os parâmetros do Synth?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Restaurar", role: .destructive) { model.setSynth(BronzeSynth()) }
             Button("Cancelar", role: .cancel) {}
@@ -970,18 +969,14 @@ struct BronzeNativeSynthEditor: View {
         synthCell(parameter.definition, value: Binding(get: { model.synth[parameter] }, set: { value in edit { $0[parameter] = value } }), tint: tint)
     }
     private func synthCell(_ definition: BronzeProcessorParameter, value: Binding<Double>, tint: Color) -> some View {
-        VStack(spacing: 5) {
-            Text(definition.name).font(.bronzeUI(11))
-            BronzeDial(value: Binding(get: { definition.normalized(value.wrappedValue) }, set: { value.wrappedValue = definition.value($0) }), tint: tint, label: definition.name).frame(width: 65, height: 65)
+        VStack(spacing: 2) {
+            Text(definition.name).font(.bronzeUI(11)).lineLimit(1).minimumScaleFactor(0.7)
+            BronzeDial(value: Binding(get: { definition.normalized(value.wrappedValue) }, set: { value.wrappedValue = definition.value($0) }), tint: tint, label: definition.name).frame(width: dialSize, height: dialSize)
             Text(definition.text(value.wrappedValue)).font(.bronzeUI(10)).foregroundStyle(tint)
-        }.frame(maxWidth: .infinity).frame(height: 112).modifier(BronzeDeckSurface(radius: 3))
+        }.frame(maxWidth: .infinity).frame(height: rowHeight).modifier(BronzeDeckSurface(radius: 3))
     }
-    private func edit(_ change: (inout BronzeSynth) -> Void) {
-        var next = model.synth; change(&next); model.setSynth(next)
-    }
-    private func editOscillator(_ change: (inout BronzeOscillator) -> Void) {
-        edit { change(&$0.oscillators[oscillatorIndex]) }
-    }
+    private func edit(_ change: (inout BronzeSynth) -> Void) { var next = model.synth; change(&next); model.setSynth(next) }
+    private func editOscillator(_ change: (inout BronzeOscillator) -> Void) { edit { change(&$0.oscillators[oscillatorIndex]) } }
 }
 
 struct BronzeNativeProcessorEditor: View {
@@ -1063,30 +1058,32 @@ struct BronzeNativeEqualizerEditor: View {
                 Spacer()
                 Button("Reset") { confirmReset = true }.font(.bronzeUI(18))
             }
-            bandPad.frame(height: max(50, contentSize.height * 0.38))
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 4), spacing: 3) {
-                ForEach(BronzeEQParameter.allCases) { parameter in
-                    parameterControl(parameter)
-                }
-                VStack(spacing: 6) {
-                    Menu {
+            VStack(spacing: 4) {
+                bandPad.frame(height: max(70, contentSize.height - 82))
+                HStack(spacing: 10) {
+                    Text(band.text(.frequency)).foregroundStyle(.cyan)
+                    Text(band.text(.gain)).foregroundStyle(.cyan)
+                    Text("Q")
+                    Slider(value: Binding(get: { band.normalized(.quality) }, set: { value in
+                        model.editEQBand(selectedBand, moduleIndex: moduleIndex) { $0.setNormalized(.quality, value) }
+                    })).disabled(band.isCut).accessibilityLabel("Q da banda")
+                    Text(band.text(.quality)).frame(width: 50)
+                    Menu(typeNames[band.type]) {
                         ForEach(0..<5, id: \.self) { type in
-                            Button(typeNames[type]) {
-                                model.editEQBand(selectedBand, moduleIndex: moduleIndex) { $0.type = type }
+                            Button(typeNames[type]) { model.editEQBand(selectedBand, moduleIndex: moduleIndex) { $0.type = type } }
+                        }
+                    }.frame(minWidth: 90)
+                    if band.isCut {
+                        Menu("\(band.cutStages * 12) dB/oit") {
+                            ForEach(1...8, id: \.self) { stages in
+                                Button("\(stages * 12) dB/oitava") { model.editEQBand(selectedBand, moduleIndex: moduleIndex) { $0.cutStages = stages } }
                             }
                         }
-                    } label: { Text(typeNames[band.type]).font(.bronzeUI(18)) }
-                    if band.isCut {
-                        Menu {
-                            ForEach(1...8, id: \.self) { stages in
-                                Button("\(stages * 12) dB/oitava") {
-                                    model.editEQBand(selectedBand, moduleIndex: moduleIndex) { $0.cutStages = stages }
-                                }
-                            }
-                        } label: { Text("\(band.cutStages * 12) dB/oit").font(.bronzeUI(16)) }
                     }
-                }.frame(width: 94)
-            }
+                }.font(.bronzeUI(12)).frame(height: 32).padding(.horizontal, 8)
+            }.padding(4).background(Color.black.opacity(0.35)).cornerRadius(6)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cyan.opacity(0.5)).allowsHitTesting(false))
+
         }
         .alert("Restaurar o EQ deste módulo?", isPresented: $confirmReset) {
             Button("Cancelar", role: .cancel) {}
@@ -1340,75 +1337,128 @@ struct BronzeNativeSoundFontLibrary: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showingImporter = false
     @State private var category = "User"
-
+    @State private var selectedSound: BronzeCatalogSound?
+    @State private var confirmDownloadAll = false
+    @State private var userBytes = 0.0
+    @State private var selecting = false
+    private var categories: [BronzeCatalogCategory] { account.categories.filter { $0.visibleModule == nil || $0.visibleModule == moduleIndex + 1 } }
+    private var allSounds: [BronzeCatalogSound] { account.categories.flatMap(\.sounds) }
+    private var totalBytes: Double { allSounds.reduce(userBytes) { $0 + Double($1.byteSize ?? 0) } }
+    private var busy: Bool { model.loadingSoundFontModule != nil || model.isApplyingSnapshot || model.backupBusy || model.updatingEffects }
     var body: some View {
-        BronzeNativeModal(title: "Biblioteca · Módulo \(moduleIndex + 1)") {
-            HStack(alignment: .top, spacing: 16) {
-                VStack(spacing: 8) {
-                    Button("User") { category = "User" }
-                        .buttonStyle(BronzeDeckButtonStyle(palette: .purple, selected: category == "User")).frame(height: 46)
-                    Divider().overlay(Color.bronze)
-                    ForEach(Array(account.categories.filter { $0.visibleModule == nil || $0.visibleModule == moduleIndex + 1 }.enumerated()), id: \.element.id) { index, value in
-                        Button { category = value.id } label: {
-                            Text("\(index + 1) - \(value.name)").font(.bronzeUI(12)).lineLimit(2)
-                                .foregroundStyle(.white).frame(maxWidth: .infinity, minHeight: 48)
-                                .background(LinearGradient(colors: [Color(bronzeHex: value.color), Color(bronzeHex: value.color).opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(category == value.id ? .white : .clear, lineWidth: category == value.id ? 2 : 1))
-                        }.buttonStyle(.plain)
-                    }
-                    Button("Atualizar") { Task { await account.loadCatalog() } }
-                        .buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 40).disabled(account.catalogBusy)
-                    if account.catalogBusy { ProgressView() }
-                }.frame(width: 185)
-                VStack(spacing: 12) {
+        GeometryReader { geometry in
+            let compact = geometry.size.height < 500
+            VStack(spacing: 8) {
+                HStack(spacing: 10) {
+                    Text("Biblioteca").font(.bronzeUI(compact ? 18 : 24)).foregroundStyle(Color.bronzeLight)
+                    Spacer()
+                    VStack(spacing: 2) {
+                        Text("Total - " + gigabytes(totalBytes)).font(.bronzeUI(compact ? 14 : 19))
+                        Text("\(allSounds.count) timbres").font(.bronzeUI(compact ? 10 : 13)).foregroundStyle(Color.bronzeLight)
+                    }.accessibilityElement(children: .combine).accessibilityIdentifier("bronze.library.total")
+                    Spacer()
+                    Button("Baixar tudo") { confirmDownloadAll = true }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(width: compact ? 105 : 150)
+                        .disabled(allSounds.isEmpty || model.catalogDownloadName != nil || allSounds.allSatisfy { model.catalogFont($0.id) != nil && !model.catalogNeedsUpdate($0) })
+                        .accessibilityIdentifier("bronze.library.downloadAll")
+                    Button("Voltar") { dismiss() }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(width: compact ? 80 : 100)
+                }.frame(height: compact ? 38 : 48)
+                if let name = model.catalogDownloadName {
                     HStack {
-                        Text(category == "User" ? "User" : account.categories.first(where: { $0.id == category })?.name ?? "Biblioteca")
-                            .font(.bronzeUI(18)).foregroundStyle(Color.bronzeLight)
+                        ProgressView(value: Double(model.catalogDownloadCompleted), total: Double(max(1, model.catalogDownloadTotal))).frame(maxWidth: 180)
+                        Text("\(model.catalogDownloadCompleted)/\(model.catalogDownloadTotal) · \(name)").font(.bronzeUI(11)).lineLimit(1)
                         Spacer()
-                        Button("Clean") { model.clearSoundFont(moduleIndex) }
-                            .buttonStyle(BronzeDeckButtonStyle(palette: .red)).frame(width: 80, height: 36)
-                    }
-                    if category != "User" {
-                        BronzeNativeCatalogList(model: model, account: account, moduleIndex: moduleIndex, categoryID: category)
-                    } else {
-                        if model.userOnlySoundFonts.isEmpty {
-                            Text("Importe seus timbres SF2 para tocar offline.").font(.bronzeUI(13)).foregroundStyle(.secondary).padding(24)
-                        }
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                            ForEach(Array(model.userOnlySoundFonts.enumerated()), id: \.element.id) { index, entry in
-                                Button { model.selectUserSoundFont(entry, moduleIndex: moduleIndex) } label: {
-                                    Text(entry.name).font(.bronzeUI(13)).lineLimit(2).frame(maxWidth: .infinity, minHeight: 70)
-                                        .foregroundStyle(.black).background(BronzePresetPalette.colors[index % 16])
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                        .overlay { if model.moduleSoundFonts[moduleIndex] == entry { BronzePresetHighlight() } }
-                                }.buttonStyle(.plain)
+                        Button("Cancelar") { model.cancelCatalogDownload() }
+                    }.frame(height: 24)
+                }
+                HStack(alignment: .top, spacing: compact ? 6 : 12) {
+                    ScrollView {
+                        VStack(spacing: 5) {
+                            categoryButton("User", id: "User", color: 0x7254bb, height: compact ? 34 : 42)
+                            Divider().overlay(Color.gray)
+                            ForEach(Array(categories.enumerated()), id: \.element.id) { index, value in
+                                categoryButton("\(index + 1) - \(value.name)", id: value.id, color: value.color, height: compact ? 34 : 42)
                             }
+                            if categories.isEmpty { Text(account.catalogBusy ? "Carregando…" : "Conecte-se para carregar as categorias.").font(.bronzeUI(10)).foregroundStyle(.secondary) }
                         }
-                        Button("Add SF2    +") { showingImporter = true }
-                            .buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(height: 52)
-                    }
-                    if let loading = model.loadingSoundFontModule { ProgressView("Carregando timbre no módulo \(loading + 1)…") }
-                }.frame(maxWidth: .infinity)
-            }.disabled(model.loadingSoundFontModule != nil || model.isApplyingSnapshot || model.backupBusy || model.updatingEffects)
-        }
-        .onAppear { model.refreshUserSoundFonts() }
-        .fileImporter(isPresented: $showingImporter,
-                      allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first { model.importSoundFont(url, moduleIndex: moduleIndex) }
-            case .failure(let error):
-                model.controlError = "Não foi possível abrir o arquivo: \(error.localizedDescription)"
+                    }.frame(width: compact ? 125 : 200)
+                    VStack(spacing: 6) {
+                        HStack {
+                            Text(category == "User" ? "User" : categories.first(where: { $0.id == category })?.name ?? "Biblioteca").font(.bronzeUI(compact ? 16 : 22))
+                            Spacer()
+                            Text(category == "User" ? "Total - " + gigabytes(userBytes) : "\(categories.first(where: { $0.id == category })?.sounds.count ?? 0) timbres").font(.bronzeUI(11)).foregroundStyle(.secondary)
+                            Button("Clean") { model.clearSoundFont(moduleIndex); dismiss() }.buttonStyle(BronzeDeckButtonStyle(palette: .red)).frame(width: 70, height: 30)
+                        }
+                        if category == "User" {
+                            GeometryReader { grid in
+                                let height = max(36, (grid.size.height - 18) / 4)
+                                ScrollView {
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+                                        ForEach(Array(model.userOnlySoundFonts.enumerated()), id: \.element.id) { index, entry in
+                                            Button { selecting = true; model.selectUserSoundFont(entry, moduleIndex: moduleIndex) } label: {
+                                                Text(entry.name).font(.bronzeUI(compact ? 11 : 14)).lineLimit(2).frame(maxWidth: .infinity).frame(height: height)
+                                                    .foregroundStyle(.white).background(LinearGradient(colors: [BronzePresetPalette.colors[index % 16], .black.opacity(0.8)], startPoint: .top, endPoint: .bottom))
+                                                    .cornerRadius(5).overlay { if model.moduleSoundFonts[moduleIndex] == entry { BronzePresetHighlight().allowsHitTesting(false) } }
+                                            }.buttonStyle(.plain)
+                                        }
+                                    }
+                                    if model.userOnlySoundFonts.isEmpty { Text("Nenhum SF2 adicionado.").foregroundStyle(.secondary).padding(20) }
+                                }
+                            }
+                            Button { showingImporter = true } label: { HStack { Text("Add SF2"); Spacer(); Text("+").font(.bronzeUI(24)) } }
+                                .buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(height: compact ? 34 : 46)
+                        } else {
+                            BronzeNativeCatalogList(model: model, account: account, moduleIndex: moduleIndex, categoryID: category,
+                                preview: { selectedSound = $0 }, selected: { selecting = true })
+                        }
+                    }.padding(8).frame(maxWidth: .infinity, maxHeight: .infinity).background(.black.opacity(0.22)).cornerRadius(6)
+                }.disabled(busy)
+            }.padding(12)
+        }.background(BronzeScreenBackground()).preferredColorScheme(.dark)
+        .overlay {
+            if let sound = selectedSound {
+                ZStack {
+                    Color.black.opacity(0.75).ignoresSafeArea()
+                    BronzeNativeSoundPreview(model: model, account: account, sound: sound) { selectedSound = nil }
+                        .padding(18).frame(maxWidth: 640).background(BronzeTheme.panelGradient).cornerRadius(10).padding(24)
+                }.accessibilityIdentifier("bronze.library.preview")
+            }
+            if model.loadingSoundFontModule == moduleIndex {
+                ZStack { Color.black.opacity(0.75).ignoresSafeArea(); ProgressView("Carregando timbre…").padding(30).background(BronzeTheme.panelGradient).cornerRadius(8) }
             }
         }
-        .alert("Biblioteca SF2", isPresented: Binding(
-            get: { model.controlError != nil },
-            set: { if !$0 { model.controlError = nil } }
-        )) {
-            Button("OK") { model.controlError = nil }
-        } message: {
-            Text(model.controlError ?? "")
+        .onAppear {
+            model.refreshUserSoundFonts()
+            category = categories.first(where: { cat in cat.sounds.contains { model.catalogFont($0.id) == model.moduleSoundFonts[moduleIndex] && model.catalogFont($0.id) != nil } })?.id
+                ?? (model.moduleSoundFonts[moduleIndex] == nil ? categories.first?.id ?? "User" : "User")
         }
+        .task(id: model.userOnlySoundFonts) {
+            let fonts = model.userOnlySoundFonts
+            userBytes = await Task.detached(priority: .utility) { fonts.reduce(0.0) { $0 + Double((try? $1.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) } }.value
+        }
+        .onChange(of: model.loadingSoundFontModule) { loading in
+            if selecting && loading == nil { selecting = false; if model.controlError == nil { dismiss() } }
+        }
+        .confirmationDialog("Baixar biblioteca?", isPresented: $confirmDownloadAll, titleVisibility: .visible) {
+            Button("Baixar tudo") { model.downloadCatalogSounds(allSounds, account: account) }
+            Button("Cancelar", role: .cancel) {}
+        } message: { Text("\(allSounds.count) timbres · Total - \(gigabytes(totalBytes)). Os timbres já instalados serão mantidos.") }
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls): if let url = urls.first { selecting = true; model.importSoundFont(url, moduleIndex: moduleIndex) }
+            case .failure(let error): model.controlError = "Não foi possível abrir o arquivo: \(error.localizedDescription)"
+            }
+        }
+        .alert("Biblioteca SF2", isPresented: Binding(get: { model.controlError != nil }, set: { if !$0 { model.controlError = nil } })) {
+            Button("OK") { model.controlError = nil }
+        } message: { Text(model.controlError ?? "") }
+    }
+    private func gigabytes(_ bytes: Double) -> String { String(format: "%.2f GB", bytes / 1_073_741_824) }
+    private func categoryButton(_ title: String, id: String, color: UInt32, height: CGFloat) -> some View {
+        Button(title) { category = id }.font(.bronzeUI(12)).lineLimit(2)
+            .frame(maxWidth: .infinity).frame(height: height).foregroundStyle(.white)
+            .background(LinearGradient(colors: [Color(bronzeHex: color), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)).cornerRadius(5)
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(category == id ? .white : .clear, lineWidth: 2).allowsHitTesting(false))
+            .buttonStyle(.plain)
     }
 }

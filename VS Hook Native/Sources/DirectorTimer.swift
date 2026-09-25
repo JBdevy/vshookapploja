@@ -54,7 +54,7 @@ struct DirectorTimerDialog: View {
                     DirectorControl(title: "FECHAR", height: 36, size: 11, action: close)
                 }.padding(.top, 6)
         }.padding(12).background(Color(hex: "101827")).cornerRadius(6)
-            .frame(idealHeight: countdown ? 412 : 186, maxHeight: countdown ? 412 : 186)
+            .frame(idealHeight: countdown ? 412 : 201, maxHeight: countdown ? 412 : 201)
             .onAppear { let seconds = max(0, session.snapshot["timerTargetSec"].int); digits = [String(format: "%02d", seconds / 3600), String(format: "%02d", seconds % 3600 / 60), String(format: "%02d", seconds % 60)] }
             .alert("PARAR CRONÔMETRO?", isPresented: $stop) {
                 Button("CANCELAR", role: .cancel) {}; Button("PARAR", role: .destructive) { send("timer_stop_reset", running: false, seconds: 0) }

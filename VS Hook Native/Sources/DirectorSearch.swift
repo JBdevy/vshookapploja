@@ -46,7 +46,11 @@ struct DirectorSearchView: View {
                     }
                 }
                 if session.tablet { keyboard(height: min(38, max(28, geometry.size.height * 0.062))) }
-            }.padding(8).background(Color(hex: "0B1220"))
+            }.padding(.top, session.tablet ? 8 : 6 - min(8, geometry.safeAreaInsets.top))
+                .padding(.bottom, session.tablet && !session.readOnly ? 8 + geometry.safeAreaInsets.top - geometry.safeAreaInsets.bottom : 8)
+                .padding(.leading, session.tablet ? -min(12, geometry.safeAreaInsets.leading) : 8)
+                .padding(.trailing, session.tablet ? -min(12, geometry.safeAreaInsets.trailing) : 8)
+                .background(Color(hex: "0B1220"))
         }.background(Color(hex: "05070B").ignoresSafeArea()).onAppear { HookOrientation.set(tablet: session.tablet) }
     }
     private func keyboard(height: CGFloat) -> some View {

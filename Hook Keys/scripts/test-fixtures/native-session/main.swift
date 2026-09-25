@@ -536,3 +536,31 @@ expect(catalogParameters.envelope.attackMs == 12 && catalogParameters.envelope.r
 expect(!catalogParameters.reverb.enabled && catalogParameters.reverb.mix == 0.35, "nested defaults merge without discarding siblings")
 try catalogParameters.validate(index: 0)
 print("NATIVE_CATALOG_DEFAULTS_OK")
+
+// Velocity editor memories remain optional for older sessions and validate independently.
+var curveSettings = BronzeModulePerformance()
+curveSettings.velocityMode = 4
+curveSettings.velocityUserCurve = [0, 20, 70, 100, 127]
+curveSettings.velocityFixedValue = 93
+try curveSettings.validate()
+expect(try JSONDecoder().decode(BronzeModulePerformance.self, from: JSONEncoder().encode(curveSettings)) == curveSettings, "velocity editor memories round trip")
+curveSettings.velocityUserCurve = [0, 1]
+rejects { try curveSettings.validate() }
+curveSettings.velocityUserCurve = nil
+curveSettings.velocityMode = 5
+rejects { try curveSettings.validate() }
+for channels in [1, 2, 3, 8, 32] {
+    let routes = BronzeAudioRouteOption.available(channels: channels)
+    expect(routes.filter { $0.count == 1 }.count == channels, "every connected mono channel is selectable")
+    expect(routes.filter { $0.count == 2 }.count == channels / 2, "only connected stereo pairs are selectable")
+    expect(routes.allSatisfy { $0.start >= 0 && $0.start + $0.count <= channels }, "no route exceeds connected channels")
+}
+for index in 0..<5 {
+    let factory = BronzeSynthPreset.factory(index)!
+    try factory.sound!.validate(); try factory.envelope.validate()
+    expect(factory.sound!.oscillators.count == 3, "factory synth retains three oscillators")
+}
+expect(BronzeSynthPreset.factory(5) == nil, "only five factory slots")
+expect(BronzeSynthPreset.factory(2)!.sound!.mode == 2, "third synth factory preset uses legato")
+expect(BronzeSynthPreset.factory(4)!.sound!.oscillators[1].enabled == false, "fifth factory preset disables second oscillator")
+print("NATIVE_CONTROL_LAYOUT_DATA_OK")

@@ -225,7 +225,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
             }
             Button(action: openSettings) { Image(systemName: "gearshape") }.accessibilityLabel("Configurações").buttonStyle(BronzeDeckButtonStyle(palette: .yellow, size: 17)).frame(width: compact ? 30 : 40)
             Button(action: openAccount) { Image(systemName: "person") }.accessibilityLabel("Conta").buttonStyle(BronzeDeckButtonStyle(palette: .green, size: 17)).frame(width: compact ? 30 : 42)
-            VStack(spacing: 3) { Text("RAM").foregroundStyle(Color.bronzeLight); Text(model.memoryMB == 0 ? "--" : "\(model.memoryMB)").foregroundStyle(.white) }.font(.bronzeUI(compact ? 7 : 9)).frame(width: compact ? 34 : 49).frame(maxHeight: .infinity).modifier(BronzeDeckSurface())
+            VStack(spacing: 3) { Text("RAM").foregroundStyle(Color.bronzeLight); Text(model.memoryPercent.map { "\($0)%" } ?? "--").foregroundStyle(.white) }.font(.bronzeUI(compact ? 7 : 9)).frame(width: compact ? 34 : 49).frame(maxHeight: .infinity).modifier(BronzeDeckSurface())
                 .accessibilityElement(children: .combine).accessibilityIdentifier("bronze.memory")
         }.padding(.leading, compact ? 2 : 6).padding(.trailing, compact ? 8 : 10).padding(.top, 3)
     }
@@ -267,7 +267,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 .buttonStyle(BronzeDeckButtonStyle(palette: .cyan, selected: model.metronomeEnabled, size: 24))
                 .frame(width: compact ? 36 : 52, height: compact ? 38 : 52)
                 .bronzeTapHold(tap: { model.toggleMetronome() }, hold: { showClick = true })
-                .accessibilityIdentifier("bronze.metronome")
+                .accessibilityIdentifier("bronze.metronome").accessibilityValue(model.metronomeEnabled ? "Ligado" : "Desligado")
             HStack(spacing: 4) {
                 Button("−") { model.setTempo(model.tempo - 0.5) }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: 18)).frame(width: compact ? 25 : 34)
                 Button { model.tapTempo() } label: {
@@ -364,7 +364,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
                     Button(model.presetBankName(bank)) { model.selectPresetBank(bank) }
                         .buttonStyle(BronzeDeckButtonStyle(palette: [.blue, .purple, .green, .bronze, .pink, .cyan][bank], selected: model.presetBank == bank, size: compact ? 11 : 15))
                         .bronzeTapHold(tap: { model.selectPresetBank(bank) }, hold: { bankToRename = bank; bankName = model.presetBankName(bank); renameBank = true })
-                        .accessibilityIdentifier("bronze.bank.\(bank)")
+                        .accessibilityIdentifier("bronze.bank.\(bank)").accessibilityValue(model.presetBank == bank ? "Selecionado" : "")
                 }
                 Button(showingKeyboard ? "Keyboard" : "Presets") { showingKeyboard.toggle() }
                     .buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: compact ? 9 : 12))

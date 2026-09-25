@@ -98,17 +98,29 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         try await until { MockBridge.sent.contains { $0["type"] == "premix_item_set_volume" } }
         let clipVolume = MockBridge.sent.first { $0["type"] == "premix_item_set_volume" }!["payload"]
         check(clipVolume["id"] == "song" && clipVolume["itemId"] == "clip" && clipVolume["trackId"] == "track", "TCP item volume preserves separate song, item and track identities")
-        director.setVolume(["itemId": "clip-live", "trackId": "track"], ratio: 0.8, premix: true, song: ["id": "playing-song", "startPos": 100, "endPos": 200])
+        director.setVolume(["itemId": "clip-live", "trackId": "track", "volumeRatio": 0.2], ratio: 0.8, premix: true, song: ["id": "playing-song", "startPos": 100, "endPos": 200])
         try await until { MockBridge.sent.contains { $0["payload"]["itemId"] == "clip-live" } }
         let liveVolume = MockBridge.sent.first { $0["payload"]["itemId"] == "clip-live" }!["payload"]
         check(liveVolume["id"] == "playing-song" && liveVolume["startPos"] == 100, "TCP sends the displayed song context even when another song remains selected")
         let previewItem: JSON = ["itemId": "clip-live", "volumeRatio": 0.2]
         check(MixerScale.ratio(director.displayedTCPItem(previewItem), max: 24) == 0.8, "waveform immediately follows the item fader while remote state is stale")
+        try await Task.sleep(nanoseconds: 2_200_000_000)
+        director.reconcileTCPItemVolumes([previewItem, previewItem.merging(["volumeRatio": 0.8])])
+        check(MixerScale.ratio(director.displayedTCPItem(previewItem), max: 24) == 0.8, "reopening the item after two seconds keeps the accepted volume despite a stale catalog")
         MockBridge.reject("premix_item_set_volume")
         director.setVolume(previewItem, ratio: 0.1, premix: true)
         check(MixerScale.ratio(director.displayedTCPItem(previewItem), max: 24) == 0.1, "new item drag supersedes prior visual hold")
-        try await until { director.itemVolumePreviews["clip-live"] == nil }
-        check(MixerScale.ratio(director.displayedTCPItem(previewItem), max: 24) == 0.2, "rejected item volume restores remote waveform")
+        try await until { director.itemVolumePreviews["clip-live"] == 0.8 }
+        check(MixerScale.ratio(director.displayedTCPItem(previewItem), max: 24) == 0.8, "rejected edit restores the last accepted volume")
+        let acknowledgedItem = previewItem.merging(["volumeRatio": 0.8])
+        director.reconcileTCPItemVolumes([acknowledgedItem])
+        check(director.itemVolumePreviews["clip-live"] == nil, "matching bridge data releases the local override")
+        check(MixerScale.ratio(director.displayedTCPItem(previewItem.merging(["volumeRatio": 0.6])), max: 24) == 0.6, "later remote edits are visible after acknowledgment")
+        MockBridge.reject("")
+        director.setVolume(previewItem, ratio: 0.3, premix: true)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        director.reconcileTCPItemVolumes([previewItem.merging(["volumeRatio": 0.4])])
+        check(director.itemVolumePreviews["clip-live"] == nil, "a new remote volume supersedes an accepted value even without an exact echo")
         MockBridge.reject("")
         director.snapshot["selectedRegionId"] = "old-region"
         director.select(director.allItems[0])
@@ -202,6 +214,13 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         }
         check(indexedRows[0].shadow && indexedRows[0].items.count == 3, "folder waveform contains its child tracks")
         check(TCPTrackRows.make(tracks: indexedTracks, items: indexedItems, focused: false).allSatisfy { $0.items.isEmpty }, "unfocused timeline does not show items")
+        let rowCache = TCPRowCache()
+        check(rowCache.rows(tracks: indexedTracks, items: indexedItems, focused: true)[0].items == indexedRows[0].items, "cached folders preserve child waveforms")
+        check(rowCache.rows(tracks: indexedTracks, items: indexedItems, focused: false).allSatisfy { $0.items.isEmpty }, "changing focus clears cached waveforms")
+        let revisedItems = [indexedItems[0].merging(["volumeRatio": 0.2])]
+        check(rowCache.rows(tracks: indexedTracks, items: revisedItems, focused: true)[1].items == revisedItems, "cached waveforms refresh when item volume changes")
+        check(rowCache.rows(tracks: Array(indexedTracks.reversed()), items: revisedItems, focused: true).map(\.track) == Array(indexedTracks.reversed()), "cache follows track reordering")
+        check(rowCache.rows(tracks: [], items: [], focused: false).isEmpty, "cache clears when the project closes")
         let suite = "vshook-test-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }

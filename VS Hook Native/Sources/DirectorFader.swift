@@ -6,18 +6,18 @@ struct DirectorFader: UIViewRepresentable {
     var label = "Volume"
     var identifier = ""
     var editingChanged: (Bool) -> Void = { _ in }
+    // Reuse the same image when lazy mixer rows enter the viewport.
+    private static let thumb = UIGraphicsImageRenderer(size: CGSize(width: 14, height: 18)).image { _ in
+        UIColor(Color(hex: "FACC15")).setFill()
+        UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: 14, height: 18), cornerRadius: 4).fill()
+    }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UISlider {
         let slider = ThinSlider()
         slider.minimumValue = 0; slider.maximumValue = 1
         slider.minimumTrackTintColor = UIColor(Color(hex: "FACC15"))
         slider.maximumTrackTintColor = UIColor(Color(hex: "374151"))
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 14, height: 18))
-        let thumb = renderer.image { _ in
-            UIColor(Color(hex: "FACC15")).setFill()
-            UIBezierPath(roundedRect: CGRect(x: 0,y: 0,width: 14,height: 18),cornerRadius: 4).fill()
-        }
-        slider.setThumbImage(thumb, for: .normal)
+        slider.setThumbImage(Self.thumb, for: .normal)
         slider.addTarget(context.coordinator, action: #selector(Coordinator.start), for: .touchDown)
         slider.addTarget(context.coordinator, action: #selector(Coordinator.change(_:)), for: .valueChanged)
         slider.addTarget(context.coordinator, action: #selector(Coordinator.end), for: [.touchUpInside, .touchUpOutside, .touchCancel])
