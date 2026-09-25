@@ -63,11 +63,17 @@ test('compile and test failures still fail the release on either platform', () =
 
 test('the Swift fixture only gates backup tests, not the session/workspace checks', () => {
   const fixture = fs.readFileSync(new URL('./test-fixtures/native-session/main.swift', import.meta.url), 'utf8');
-  const [shared, apple] = fixture.split('#if os(macOS)');
+  const appleBlock = fixture.match(/^#if os\(macOS\)\s*\n([\s\S]*?)^#endif[^\S\r\n]*$/m);
+  assert(appleBlock, 'the backup checks have a complete macOS-only block');
+  const apple = appleBlock[1];
+  const shared = fixture.replace(appleBlock[0], '');
   assert.match(shared, /NATIVE_SESSION_OK:/);
   assert.doesNotMatch(shared, /BronzeNativeBackup\./);
+  assert.match(shared, /NATIVE_PLAYLIST_SIDEBAR_OK/);
+  assert.match(shared, /mixer gains, mute, octave, transpose and mono round-trip/);
+  assert.doesNotMatch(shared, /^#(?:if|elseif|else|endif)\b/m,
+    'session/workspace checks before and after backup run on every Swift host');
   assert.match(apple, /BronzeNativeBackup\.export/);
   assert.match(apple, /BronzeNativeBackup\.stage/);
   assert.match(apple, /NATIVE_BACKUP_OK:/);
-  assert.match(apple, /#endif\s*$/);
 });
