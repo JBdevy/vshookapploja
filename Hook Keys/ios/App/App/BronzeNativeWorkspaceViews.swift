@@ -527,9 +527,7 @@ struct BronzeLearnOnHold: ViewModifier {
     func body(content: Content) -> some View {
         Group {
             if let tapAction {
-                content.highPriorityGesture(LongPressGesture(minimumDuration: 0.56, maximumDistance: 8).exclusively(before: TapGesture()).onEnded { value in
-                    switch value { case .first: open = true; case .second: tapAction() }
-                })
+                content.bronzeTapHold(tap: tapAction, hold: { open = true })
             } else {
                 content.simultaneousGesture(LongPressGesture(minimumDuration: 0.56, maximumDistance: 8).onEnded { _ in open = true })
             }

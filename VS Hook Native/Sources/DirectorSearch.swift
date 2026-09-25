@@ -47,7 +47,7 @@ struct DirectorSearchView: View {
                 }
                 if session.tablet { keyboard(height: min(38, max(28, geometry.size.height * 0.062))) }
             }.padding(8).background(Color(hex: "0B1220"))
-        }.background(Color(hex: "05070B").ignoresSafeArea()).onAppear { HookOrientation.set(tablet: false) }.onDisappear { HookOrientation.set(tablet: session.tablet) }
+        }.background(Color(hex: "05070B").ignoresSafeArea()).onAppear { HookOrientation.set(tablet: session.tablet) }
     }
     private func keyboard(height: CGFloat) -> some View {
         VStack(spacing: 4) {

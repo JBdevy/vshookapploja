@@ -399,3 +399,44 @@ struct BronzeFittedEditor<Content: View>: View {
         }.onPreferenceChange(BronzeEditorHeight.self) { measuredHeight = $0 }
     }
 }
+
+// A single UIKit recognizer pair owns taps and holds on iOS 15 and later.
+// Releasing before the hold threshold fires the tap; a completed hold never taps.
+struct BronzeTapHoldSurface: UIViewRepresentable {
+    @Environment(\.isEnabled) private var enabled
+    let tap: () -> Void
+    let hold: () -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        let short = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap))
+        let long = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hold(_:)))
+        long.minimumPressDuration = 0.56
+        long.allowableMovement = 10
+        short.require(toFail: long)
+        view.addGestureRecognizer(short)
+        view.addGestureRecognizer(long)
+        view.isAccessibilityElement = false
+        return view
+    }
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.parent = self
+        view.isUserInteractionEnabled = enabled
+    }
+    final class Coordinator: NSObject {
+        var parent: BronzeTapHoldSurface
+        init(_ parent: BronzeTapHoldSurface) { self.parent = parent }
+        @objc func tap() { if parent.enabled { parent.tap() } }
+        @objc func hold(_ gesture: UILongPressGestureRecognizer) {
+            if parent.enabled && gesture.state == .began { parent.hold() }
+        }
+    }
+}
+
+extension View {
+    func bronzeTapHold(tap: @escaping () -> Void, hold: @escaping () -> Void) -> some View {
+        self.allowsHitTesting(false)
+            .overlay(BronzeTapHoldSurface(tap: tap, hold: hold))
+            .accessibilityAction(tap)
+    }
+}

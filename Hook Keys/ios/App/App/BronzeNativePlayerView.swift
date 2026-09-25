@@ -44,8 +44,8 @@ struct BronzeDeckButtonStyle: ButtonStyle {
             .padding(.horizontal, 3)
             .background(LinearGradient(colors: palette.colors.prefix(2).map { $0 }, startPoint: .topLeading, endPoint: .bottomTrailing))
             .clipShape(RoundedRectangle(cornerRadius: 4))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(selected ? .white : (palette == .bronze ? .clear : palette.colors[2]), lineWidth: selected ? 2 : 1))
-            .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.06), lineWidth: 1).padding(1))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(selected ? .white : (palette == .bronze ? .clear : palette.colors[2]), lineWidth: selected ? 2 : 1).allowsHitTesting(false))
+            .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.06), lineWidth: 1).padding(1).allowsHitTesting(false))
             .brightness(configuration.isPressed ? 0.15 : 0)
             .saturation(enabled ? 1 : 0).opacity(enabled ? 1 : 0.5)
     }
@@ -57,7 +57,7 @@ struct BronzeDeckSurface: ViewModifier {
     func body(content: Content) -> some View {
         content.background(BronzeTheme.panelGradient)
             .clipShape(RoundedRectangle(cornerRadius: radius))
-            .overlay(RoundedRectangle(cornerRadius: radius).stroke(configurationBorders ? Color.bronze.opacity(0.8) : .clear, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: radius).stroke(configurationBorders ? Color.bronze.opacity(0.8) : .clear, lineWidth: 1).allowsHitTesting(false))
     }
 }
 
@@ -186,13 +186,9 @@ struct BronzeNativePlayerView<Pads: View>: View {
                     (Text("Bronze").foregroundColor(.bronzeLight) + Text(" Keys").foregroundColor(.white))
                         .font(.bronzeUI(compact ? 12 : 16))
                 }.padding(5).frame(width: compact ? 138 : 176).frame(maxHeight: .infinity).modifier(BronzeDeckSurface())
-                .gesture(LongPressGesture(minimumDuration: 0.5).exclusively(before: TapGesture()).onEnded { gesture in
-                    switch gesture {
-                    case .first: splitPlaylist = true
-                    case .second:
-                        if splitPlaylist { splitPlaylist = false } else { showAbout = true }
-                    }
-                })
+                .bronzeTapHold(tap: {
+                    if splitPlaylist { splitPlaylist = false } else { showAbout = true }
+                }, hold: { splitPlaylist = true })
                 .accessibilityElement(children: .ignore)
                 .accessibilityAddTraits(.isButton).accessibilityLabel("Bronze Keys")
                 .accessibilityIdentifier("bronze.logo")
@@ -270,13 +266,14 @@ struct BronzeNativePlayerView<Pads: View>: View {
             Button { model.toggleMetronome() } label: { Image(systemName: "metronome") }
                 .buttonStyle(BronzeDeckButtonStyle(palette: .cyan, selected: model.metronomeEnabled, size: 24))
                 .frame(width: compact ? 36 : 52, height: compact ? 38 : 52)
-                .highPriorityGesture(LongPressGesture(minimumDuration: 0.56).onEnded { _ in showClick = true })
+                .bronzeTapHold(tap: { model.toggleMetronome() }, hold: { showClick = true })
+                .accessibilityIdentifier("bronze.metronome")
             HStack(spacing: 4) {
                 Button("−") { model.setTempo(model.tempo - 0.5) }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: 18)).frame(width: compact ? 25 : 34)
                 Button { model.tapTempo() } label: {
                     VStack(spacing: 0) { Text(String(format: model.tempo.truncatingRemainder(dividingBy: 1) == 0 ? "%.0f" : "%.1f", model.tempo)).font(.bronzeUI(compact ? 19 : 26)); Text("BPM").font(.bronzeUI(9)) }
                 }.buttonStyle(BronzeDeckButtonStyle(palette: .yellow)).frame(width: compact ? 57 : 78).accessibilityLabel("Tap tempo")
-                    .highPriorityGesture(LongPressGesture(minimumDuration: 0.56).onEnded { _ in tempoText = String(format: "%.1f", model.tempo); showTempo = true })
+                    .bronzeTapHold(tap: { model.tapTempo() }, hold: { tempoText = String(format: "%.1f", model.tempo); showTempo = true })
                 Button("+") { model.setTempo(model.tempo + 0.5) }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: 18)).frame(width: compact ? 25 : 34)
             }.frame(height: compact ? 38 : 52)
         }.padding(.horizontal, 8).modifier(BronzeDeckSurface())
@@ -294,9 +291,8 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 .background(LinearGradient(colors: [Color(bronzeHex: 0x18874e), Color(bronzeHex: 0x064526)], startPoint: .top, endPoint: .bottom))
                 .clipShape(RoundedRectangle(cornerRadius: 7))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color(bronzeHex: 0x459a6b)))
-                .gesture(LongPressGesture(minimumDuration: 0.56).exclusively(before: TapGesture()).onEnded { value in
-                    switch value { case .first: model.toggleModuleSolo(index); case .second: openSound(index) }
-                })
+                .bronzeTapHold(tap: { openSound(index) }, hold: { model.toggleModuleSolo(index) })
+                .accessibilityIdentifier("bronze.sound.\(index)")
                 .accessibilityAddTraits(.isButton).accessibilityLabel("Timbre do módulo \(index + 1): \(sound)")
                 .accessibilityAction { openSound(index) }
                 .accessibilityAction(named: "Solo") { model.toggleModuleSolo(index) }
@@ -367,18 +363,13 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 ForEach(0..<6, id: \.self) { bank in
                     Button(model.presetBankName(bank)) { model.selectPresetBank(bank) }
                         .buttonStyle(BronzeDeckButtonStyle(palette: [.blue, .purple, .green, .bronze, .pink, .cyan][bank], selected: model.presetBank == bank, size: compact ? 11 : 15))
-                        .highPriorityGesture(LongPressGesture(minimumDuration: 0.56).onEnded { _ in bankToRename = bank; bankName = model.presetBankName(bank); renameBank = true })
+                        .bronzeTapHold(tap: { model.selectPresetBank(bank) }, hold: { bankToRename = bank; bankName = model.presetBankName(bank); renameBank = true })
+                        .accessibilityIdentifier("bronze.bank.\(bank)")
                 }
                 Button(showingKeyboard ? "Keyboard" : "Presets") { showingKeyboard.toggle() }
                     .buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: compact ? 9 : 12))
-                    .highPriorityGesture(LongPressGesture(minimumDuration: 0.5).exclusively(before: TapGesture()).onEnded { gesture in
-                        switch gesture {
-                        case .first:
-                            model.stopPerformanceNotes()
-                            fullKeyboard.toggle()
-                            showingKeyboard = true
-                        case .second: showingKeyboard.toggle()
-                        }
+                    .bronzeTapHold(tap: { showingKeyboard.toggle() }, hold: {
+                        model.stopPerformanceNotes(); fullKeyboard.toggle(); showingKeyboard = true
                     })
                     .accessibilityIdentifier("bronze.keyboard.toggle")
                     .accessibilityValue(fullKeyboard ? "88 teclas" : "4 oitavas")
@@ -416,13 +407,8 @@ struct BronzeNativePlayerView<Pads: View>: View {
             .background(LinearGradient(colors: [color, color.opacity(0.68)], startPoint: .topLeading, endPoint: .bottomTrailing))
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay { if model.activePreset == index { BronzePresetHighlight() } }
-            .gesture(LongPressGesture(minimumDuration: 0.56).exclusively(before: TapGesture()).onEnded { gesture in
-                selectedSlot = index
-                switch gesture {
-                case .first: openPreset(index)
-                case .second: model.recallPreset(index)
-                }
-            })
+            .bronzeTapHold(tap: { selectedSlot = index; model.recallPreset(index) },
+                           hold: { selectedSlot = index; openPreset(index) })
             .accessibilityAddTraits(.isButton).accessibilityLabel("Preset \(index % 16 + 1): \(slot.name)")
             .accessibilityAction { selectedSlot = index; model.recallPreset(index) }
             .accessibilityAction(named: "Editar preset") { openPreset(index) }

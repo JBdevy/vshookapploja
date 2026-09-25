@@ -254,7 +254,7 @@ struct BronzeNativeRootView: View {
                             Button(model.workspace.fxBanks[bank].name) { model.selectFXBank(bank) }
                                 .buttonStyle(BronzeDeckButtonStyle(palette: bank == model.workspace.fxBank ? .green : .purple, selected: bank == model.workspace.fxBank, size: compact ? 9 : 12))
                                 .overlay(alignment: .top) { if effectEditMode && bank == model.workspace.fxBank { editBadge } }
-                                .highPriorityGesture(LongPressGesture(minimumDuration: 0.56).onEnded { _ in
+                                .bronzeTapHold(tap: { model.selectFXBank(bank) }, hold: {
                                     model.endEffectTouches(); model.selectFXBank(bank); effectEditMode.toggle()
                                 })
                                 .accessibilityAction(named: "Alternar edição de efeitos") { model.selectFXBank(bank); effectEditMode.toggle() }

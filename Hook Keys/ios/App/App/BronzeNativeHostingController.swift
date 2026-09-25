@@ -27,6 +27,11 @@ final class BronzeNativeHostingController: UIHostingController<BronzeNativeRootV
 
     override var prefersStatusBarHidden: Bool { true }
     override var shouldAutorotate: Bool { true }
+    // Performance keys extend to the bottom edge. Give their touch-down priority
+    // over the home gesture so the high-velocity region sounds immediately.
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+        authorized ? [.bottom] : []
+    }
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
         authorized ? .landscape : .portrait
     }
@@ -41,6 +46,7 @@ final class BronzeNativeHostingController: UIHostingController<BronzeNativeRootV
 
     private func updateOrientation() {
         guard isViewLoaded, let window = view.window else { return }
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
         if #available(iOS 16.0, *), let scene = window.windowScene {
             setNeedsUpdateOfSupportedInterfaceOrientations()
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: supportedInterfaceOrientations)) { error in
