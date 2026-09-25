@@ -52,6 +52,12 @@ struct BronzePlaylistSidebarSettings: Codable, Equatable, Sendable {
 }
 
 struct BronzeUserFX: Codable, Equatable, Sendable {
+    var triggerMode: String?
+    var gateRelease: String?
+    func mode(bank: Int) -> Int {
+        if bank == 0 { return 0 }
+        return (triggerMode ?? "toggle") == "toggle" ? 1 : gateRelease == "continue-press" ? 2 : 0
+    }
     var name = "Empty"
     var key: String?
     var gainDb = 0.0
@@ -64,6 +70,7 @@ struct BronzeFXBank: Codable, Equatable, Sendable {
 }
 
 struct BronzeUserWorkspace: Codable, Equatable, Sendable {
+    var presetBankNames: [String]?
     var playlistSidebar: BronzePlaylistSidebarSettings?
     var mixer: BronzeMixerSettings?
     var catalogDownloads: [String: String]?
@@ -75,10 +82,26 @@ struct BronzeUserWorkspace: Codable, Equatable, Sendable {
     // nil is the immutable bundled playlist. IDs survive reordering/removal.
     var selectedPlaylist: UUID?
     var selectedTrack: UUID?
-    var fxBanks = (0..<8).map { BronzeFXBank(name: $0 == 0 ? "Church" : "FX \($0 + 1)") }
+    static let churchNames = ["Kick", "Bump", "SineDrop", "BourineFx", "ClapFx", "ClapVerb", "ClapBourine", "PluckFx", "ClipVerb", "Carillon", "DoupFx", "Reverse"]
+    var fxBanks = (0..<8).map { bank in
+        BronzeFXBank(name: bank == 0 ? "Church" : "FX \(bank + 1)", pads: (0..<12).map {
+            BronzeUserFX(name: bank == 0 ? Self.churchNames[$0] : "FX \($0 + 1)", color: $0 % 8)
+        })
+    }
+
+    mutating func restoreChurchNames() {
+        guard fxBanks.count == 8, fxBanks[0].pads.count == 12 else { return }
+        for index in 0..<12 where fxBanks[0].pads[index].name == "FX \(index + 1)" {
+            fxBanks[0].pads[index].name = Self.churchNames[index]
+        }
+    }
     var fxBank = 0
 
     func validate() throws {
+        if let presetBankNames {
+            guard presetBankNames.count == 6 else { throw BronzeSessionError.invalid }
+            for name in presetBankNames { try Self.validateName(name); guard name.count <= 12 else { throw BronzeSessionError.invalid } }
+        }
         try playlistSidebar?.validate()
         try mixer?.validate()
         for (id, install) in catalogInstalls ?? [:] {
@@ -118,6 +141,8 @@ struct BronzeUserWorkspace: Codable, Equatable, Sendable {
             guard bank.pads.count == 12 else { throw BronzeSessionError.invalid }
             for pad in bank.pads {
                 try Self.validateName(pad.name)
+                guard pad.triggerMode.map({ ["toggle", "gate"].contains($0) }) ?? true,
+                      pad.gateRelease.map({ ["infinite", "continue-press"].contains($0) }) ?? true else { throw BronzeSessionError.invalid }
                 guard pad.gainDb.isFinite, (-36...0).contains(pad.gainDb), (0..<8).contains(pad.color) else { throw BronzeSessionError.invalid }
                 if let key = pad.key {
                     guard bankIndex != 0 else { throw BronzeSessionError.invalid }
@@ -204,6 +229,7 @@ struct BronzeMIDITarget: Identifiable, Equatable {
         var result: [Self] = [Self(id: "tempo:-", name: "BPM −0,5"), Self(id: "tempo:+", name: "BPM +0,5"),
             Self(id: "click", name: "Metrônomo ON/OFF"), Self(id: "transport", name: "Play / Stop"),
             Self(id: "padLow", name: "Pads · Low", continuous: true), Self(id: "padHigh", name: "Pads · High", continuous: true)]
+        for bus in 0..<5 { result.append(Self(id: "output:\(bus)", name: "Volume · \(["Playlist", "Pads", "Effects", "Metrônomo", "Módulos"][bus])", continuous: true)) }
         for module in 0..<8 {
             let prefix = "Módulo \(module + 1) · "
             for (key, title, continuous) in [("fader", "Volume", true), ("on", "ON/OFF", false), ("solo", "Solo", false)] {

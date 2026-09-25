@@ -9,6 +9,7 @@ struct BronzeCatalogSound: Identifiable, Sendable {
     let byteSize: Int?
     let sha256: String?
     var color: UInt32 = 0x35d273
+    var defaultsData: Data?
 }
 
 struct BronzeCatalogCategory: Identifiable, Sendable {
@@ -71,8 +72,12 @@ enum BronzeNativeCatalog {
                     guard hash.count == 64, hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw Invalid.payload }
                     sha = hash
                 }
-                let value = BronzeCatalogSound(id: soundID, name: try text(sound["name"], limit: 120), objectKey: key,
+                var value = BronzeCatalogSound(id: soundID, name: try text(sound["name"], limit: 120), objectKey: key,
                     version: try positiveInteger(sound["assetVersion"], fallback: revision), byteSize: bytes, sha256: sha, color: color(sound["color"], fallback: 0x35d273))
+                let global = (payload["defaultSettings"] as? [String: Any])?["modules1To6"] as? [String: Any] ?? [:]
+                let categoryDefaults = (category["defaultSettings"] as? [String: Any])?["modules1To6"] as? [String: Any] ?? [:]
+                let soundDefaults = (sound["moduleSettings"] as? [String: Any])?["modules1To6"] as? [String: Any] ?? [:]
+                value.defaultsData = try JSONSerialization.data(withJSONObject: merge(merge(global, categoryDefaults), soundDefaults))
                 sounds.append((try positiveInteger(sound["order"], fallback: soundIndex + 1), soundIndex, value))
             }
             sounds.sort { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0 }
@@ -80,6 +85,12 @@ enum BronzeNativeCatalog {
         }
         sortedCategories.sort { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0 }
         return sortedCategories.map { $0.2 }
+    }
+    private static func merge(_ base: [String: Any], _ overrides: [String: Any]) -> [String: Any] {
+        base.merging(overrides) { old, new in
+            if let old = old as? [String: Any], let new = new as? [String: Any] { return merge(old, new) }
+            return new
+        }
     }
     private static func color(_ value: Any?, fallback: UInt32) -> UInt32 {
         guard let raw = value as? String, raw.count == 7, raw.first == "#",
@@ -98,5 +109,62 @@ enum BronzeNativeCatalog {
         let n = number.doubleValue
         guard n.isFinite, n >= 1, n <= 9_007_199_254_740_991, n.rounded() == n else { throw Invalid.payload }
         return Int(n)
+    }
+}
+
+extension BronzeCatalogSound {
+    func nativeDefaults(moduleIndex: Int) -> BronzeModuleSettings {
+        var settings = BronzeModuleSettings.factory(moduleIndex)
+        guard let defaultsData, let values = try? JSONSerialization.jsonObject(with: defaultsData) as? [String: Any] else { return settings }
+        func number(_ dictionary: [String: Any], _ key: String, _ fallback: Double, _ range: ClosedRange<Double>) -> Double {
+            guard let n = dictionary[key] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return fallback }
+            return min(range.upperBound, max(range.lowerBound, n.doubleValue))
+        }
+        settings.envelope.attackMs = number(values, "attackMs", settings.envelope.attackMs, 0...15000)
+        settings.envelope.holdMs = number(values, "holdMs", settings.envelope.holdMs, 0...15000)
+        settings.envelope.decayMs = number(values, "decayMs", settings.envelope.decayMs, 0...25000)
+        settings.envelope.releaseMs = number(values, "releaseMs", settings.envelope.releaseMs, 0...25000)
+        settings.envelope.sustainDb = number(values, "sustainDb", settings.envelope.sustainDb, -60...0)
+        settings.equalizer.enabled = values["eqEnabled"] as? Bool ?? settings.equalizer.enabled
+        var performance = settings.performance ?? BronzeModulePerformance.initial(moduleIndex)
+        performance.polyphony = Int(number(values, "polyphony", Double(performance.polyphony), 1...128))
+        performance.mode = values["voiceMode"] as? String == "mono" ? 1 : 0
+        performance.glideMs = number(values, "glideMs", performance.glideMs, 0...5000)
+        performance.glideSync = values["glideSync"] as? Bool ?? performance.glideSync
+        performance.velocityCeiling = Int(number(values, "velocityCeiling", 127, 1...127))
+        performance.velocityIgnoreAbove = Int(number(values, "velocityLimit", 127, 0...127))
+        performance.modulationMode = ["user", "lfo", "tremolo", "pan", "rotary"].firstIndex(of: values["modulationMode"] as? String ?? "user") ?? 0
+        performance.modulationRate = number(values, "modulationRateHz", performance.modulationRate, 0.1...20)
+        if let points = (values["velocityCurve"] as? [String: Any])?["points"] as? [Double], points.count == 5, points.allSatisfy({ $0.isFinite }) {
+            performance.velocityCurve = points.map { Int(min(127, max(0, $0)).rounded()) }
+        }
+        settings.performance = performance
+        var tone = settings.tone ?? BronzeTone()
+        tone[.gain] = number(values, "gainDb", tone[.gain], -36...12)
+        tone[.cutoff] = number(values, "cutoffHz", tone[.cutoff], 20...20000)
+        let reverb = values["reverb"] as? [String: Any] ?? [:]
+        settings.reverb.enabled = reverb["enabled"] as? Bool ?? settings.reverb.enabled
+        let spaces = ["room1", "room2", "hall1", "hall2"]
+        settings.reverb.impulse = spaces.firstIndex(of: values["reverbSpace"] as? String ?? "room1") ?? 0
+        let savedSpaces = values["reverbSpaces"] as? [String: [String: Any]] ?? [:]
+        for (index, space) in spaces.enumerated() {
+            settings.reverb.mixes[index] = number(savedSpaces[space] ?? [:], "mix", number(reverb, "mix", 50, 0...100), 0...100) / 100
+        }
+        var effects = settings.soundEffects ?? BronzeSoundEffects()
+        for (kind, key, names) in [(BronzeProcessorKind.compressor, "compressor", ["thresholdDb", "ratio", "attackMs", "releaseMs", "gainDb", "mix"]), (.chorus, "chorus", ["rateHz", "depth", "mix"]), (.vibes, "lofi", ["rateHz", "amountSemitones", "noiseDb"])] {
+            guard let raw = values[key] as? [String: Any] else { continue }
+            var processor = effects[kind]
+            processor.enabled = raw["enabled"] as? Bool ?? processor.enabled
+            processor.vinylEnabled = raw["vinylEnabled"] as? Bool ?? processor.vinylEnabled
+            for (index, name) in names.enumerated() {
+                let parameter = kind.parameters[index]
+                let multiplier = (name == "mix" || name == "depth") ? 100.0 : 1.0
+                processor.values[index] = number(raw, name, processor.values[index] * multiplier, (parameter.minimum * multiplier)...(parameter.maximum * multiplier)) / multiplier
+            }
+            effects[kind] = processor
+        }
+        settings.soundEffects = effects
+        settings.tone = tone
+        return settings
     }
 }

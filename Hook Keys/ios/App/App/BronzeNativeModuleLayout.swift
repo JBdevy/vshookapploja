@@ -106,21 +106,23 @@ struct BronzeOrganDrawbar: View {
 }
 
 struct BronzeModuleRoutingHeader: View {
+    @Environment(\.bronzeContentSize) private var contentSize
+    private var compact: Bool { contentSize.height < 480 }
     @ObservedObject var model: BronzeNativeAppModel
     let index: Int
     private var config: BronzeModulePerformance { model.modulePerformance[index] }
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Dispositivo MIDI").font(.bronzeUI(11)).foregroundStyle(.secondary)
                 Menu(config.input < 0 ? "Todos os dispositivos ativos" : "MIDI \(config.input + 1)") {
                     Button("Todos os dispositivos ativos") { edit { $0.input = -1 } }
                     ForEach(0..<3, id: \.self) { slot in
                         Button("MIDI \(slot + 1) · \(model.midiDevices.indices.contains(slot) ? model.midiDevices[slot].name : "Não conectado")") { edit { $0.input = slot } }
                     }
-                }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 44)
+                }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: compact ? 26 : 44)
             }.frame(maxWidth: .infinity)
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Saída do módulo").font(.bronzeUI(11)).foregroundStyle(.secondary)
                 Menu(config.outputStart == 0 && config.outputCount == 2 ? "Padrão · 1 + 2" : "\(config.outputStart + 1)\(config.outputCount == 2 ? " + \(config.outputStart + 2)" : "")") {
                     ForEach(0..<16, id: \.self) { pair in
@@ -129,17 +131,31 @@ struct BronzeModuleRoutingHeader: View {
                     ForEach(0..<32, id: \.self) { channel in
                         Button("Mono · \(channel + 1)") { edit { $0.outputStart = channel; $0.outputCount = 1 } }
                     }
-                }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 44)
+                }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: compact ? 26 : 44)
             }.frame(maxWidth: .infinity)
-            Menu {
-                ForEach([8, 16, 32, 64, 96, 128], id: \.self) { count in Button("\(count)") { edit { $0.polyphony = count } } }
-            } label: { VStack { Text("Polifonia"); Text("\(config.polyphony)").font(.bronzeUI(20)) } }
-                .buttonStyle(BronzeDeckButtonStyle(palette: .bronze)).frame(width: 110, height: 66)
+            VStack(spacing: 2) {
+                if index < 6 {
+                    Button("Default") { model.setModuleSettingsSource(index, source: "default") }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: model.moduleSettingsSources[index] == "default", size: compact ? 10 : 12))
+                        .frame(height: compact ? 20 : 26)
+                }
+                Menu {
+                    ForEach([8, 16, 32, 64, 96, 128], id: \.self) { count in Button("\(count)") { edit { $0.polyphony = count } } }
+                } label: { VStack(spacing: 0) { Text("Polifonia"); Text("\(config.polyphony)").font(.bronzeUI(compact ? 14 : 20)) } }
+                    .buttonStyle(BronzeDeckButtonStyle(palette: .bronze))
+            }.frame(width: compact ? 76 : 110, height: compact ? 62 : 88)
             if index != 7 {
-                Button { edit { $0.mode = $0.mode == 0 ? 1 : 0 } } label: { VStack { Text("Modo"); Text(config.mode == 0 ? "Poly" : "Mono").font(.bronzeUI(18)) } }
-                    .buttonStyle(BronzeDeckButtonStyle(palette: config.mode == 0 ? .blue : .purple)).frame(width: 90, height: 66)
+                VStack(spacing: 2) {
+                    if index < 6 {
+                        Button("User") { model.setModuleSettingsSource(index, source: "user") }
+                            .buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: model.moduleSettingsSources[index] == "user", size: compact ? 10 : 12))
+                            .frame(height: compact ? 20 : 26)
+                    }
+                    Button { edit { $0.mode = $0.mode == 0 ? 1 : 0 } } label: { VStack(spacing: 0) { Text("Modo"); Text(config.mode == 0 ? "Poly" : "Mono").font(.bronzeUI(compact ? 14 : 18)) } }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: config.mode == 0 ? .blue : .purple))
+                }.frame(width: compact ? 60 : 90, height: compact ? 62 : 88)
             }
-        }.padding(12).modifier(BronzeDeckSurface())
+        }.padding(compact ? 3 : 8).modifier(BronzeDeckSurface())
     }
     private func edit(_ change: (inout BronzeModulePerformance) -> Void) {
         var next = config; change(&next); model.setPerformance(next, moduleIndex: index)
@@ -153,12 +169,12 @@ struct BronzeModuleEnvelopeGrid: View {
     let openFilter: () -> Void
     private let envelopeColors: [UInt32] = [0xff4d67, 0xff9f2f, 0x39d878, 0xa855f7, 0xff9f2f]
     // Reserve routing, tabs, performance controls and spacing before sizing both rows.
-    private var columnCount: Int { contentSize.width < 900 ? 3 : 4 }
-    private var rowHeight: CGFloat { max(256, (contentSize.height - 303) / 2) }
-    private var dialSize: CGFloat { min(176, rowHeight - 112, max(120, contentSize.width / CGFloat(columnCount) - 32)) }
+    private var columnCount: Int { 4 }
+    private var rowHeight: CGFloat { max(54, (contentSize.height - 2) / 2) }
+    private var dialSize: CGFloat { min(176, max(24, rowHeight - 38), contentSize.width / 4 - 20) }
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: columnCount), spacing: 6) {
-            ForEach(Array(BronzeNativeAppModel.EnvelopeParameter.allCases.enumerated()), id: \.element.id) { offset, parameter in
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: columnCount), spacing: 2) {
+            ForEach(Array([BronzeNativeAppModel.EnvelopeParameter.attack, .hold, .decay, .release, .sustain].enumerated()), id: \.element.id) { offset, parameter in
                 cell(parameter.rawValue, color: envelopeColors[offset], value: Binding(
                     get: { model.envelopeValue(parameter, moduleIndex: index) },
                     set: { model.setEnvelopeValue(parameter, moduleIndex: index, normalized: $0) }),
@@ -184,16 +200,13 @@ struct BronzeModuleEnvelopeGrid: View {
         }
     }
     private func cell(_ title: String, color: UInt32, value: Binding<Double>, text: String) -> some View {
-        VStack(spacing: 4) {
-            if title == "Cutoff" {
-                Button("Envelope", action: openFilter).buttonStyle(BronzeDeckButtonStyle(palette: .cyan, size: 12)).frame(height: 28)
-            }
-            Text(title).font(.bronzeUI(20)).foregroundStyle(Color(bronzeHex: color)).lineLimit(1).minimumScaleFactor(0.7)
-            Spacer(minLength: 3)
+        VStack(spacing: 1) {
+            Text(title).font(.bronzeUI(rowHeight < 120 ? 11 : 18)).foregroundStyle(Color(bronzeHex: color)).lineLimit(1).minimumScaleFactor(0.7)
+            Spacer(minLength: 0)
             BronzeDial(value: value, tint: Color(bronzeHex: color), label: title).frame(width: dialSize, height: dialSize)
-            Spacer(minLength: 3)
-            Text(text).font(.bronzeUI(18))
-        }.frame(maxWidth: .infinity).padding(8).frame(height: rowHeight)
+            Spacer(minLength: 0)
+            Text(text).font(.bronzeUI(rowHeight < 120 ? 10 : 16))
+        }.frame(maxWidth: .infinity).padding(3).frame(height: rowHeight)
             .background(LinearGradient(colors: [Color(bronzeHex: color).opacity(0.12), Color(bronzeHex: 0x0b090d)], startPoint: .top, endPoint: .bottom))
             .clipShape(RoundedRectangle(cornerRadius: 3)).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(bronzeHex: color).opacity(0.6)))
     }
@@ -201,6 +214,8 @@ struct BronzeModuleEnvelopeGrid: View {
 }
 
 struct BronzeModulePerformanceCards: View {
+    @Environment(\.bronzeContentSize) private var contentSize
+    private var compact: Bool { contentSize.height < 480 }
     @ObservedObject var model: BronzeNativeAppModel
     let index: Int
     let advanced: () -> Void
@@ -208,8 +223,8 @@ struct BronzeModulePerformanceCards: View {
     var body: some View {
         HStack(spacing: 4) {
             Button(action: advanced) {
-                HStack(spacing: 8) {
-                    Text("Velocity").font(.bronzeUI(17))
+                HStack(spacing: 3) {
+                    Text("Velocity").font(.bronzeUI(compact ? 11 : 17))
                     Canvas { context, size in
                         var curve = Path()
                         for i in 0..<5 {
@@ -218,46 +233,46 @@ struct BronzeModulePerformanceCards: View {
                         }
                         context.stroke(curve, with: .color(.white), lineWidth: 2)
                     }.frame(height: 32)
-                }.padding(12).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }.padding(compact ? 4 : 12).frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(LinearGradient(colors: [Color(bronzeHex: 0x7763ff), Color(bronzeHex: 0x31227c)], startPoint: .topLeading, endPoint: .bottomTrailing))
             }.buttonStyle(.plain).modifier(BronzeDeckSurface(radius: 3))
             if index < 6 {
-                HStack(spacing: 8) {
-                    VStack(spacing: 5) {
-                        HStack(spacing: 5) {
+                HStack(spacing: 3) {
+                    VStack(spacing: 2) {
+                        HStack(spacing: 2) {
                             Button("Sync") { edit { $0.glideSync.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: config.glideSync ? .green : .red))
                             Button("Auto") { edit { $0.portamento.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: config.portamento ? .green : .grey))
                         }
-                        HStack(spacing: 5) {
+                        HStack(spacing: 2) {
                             Button("Config", action: advanced).buttonStyle(BronzeDeckButtonStyle(palette: .grey))
                             Button("No Sens") { edit { $0.noSens.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: config.noSens ? .green : .red))
                         }
                     }
                     VStack(spacing: 2) {
                         Text("Glide")
-                        BronzeDial(value: Binding(get: { config.glideMs / 5000 }, set: { value in edit { $0.glideMs = value * 5000 } }), tint: .cyan, label: "Glide").frame(width: 64, height: 64).disabled(config.glideSync)
-                        Text(String(format: "%.0f ms", config.glideTime(bpm: model.tempo))).font(.bronzeUI(12)).foregroundStyle(.cyan)
-                    }.frame(width: 88)
-                }.padding(8).frame(maxWidth: .infinity).modifier(BronzeDeckSurface(radius: 3))
+                        BronzeDial(value: Binding(get: { config.glideMs / 5000 }, set: { value in edit { $0.glideMs = value * 5000 } }), tint: .cyan, label: "Glide").frame(width: compact ? 30 : 64, height: compact ? 30 : 64).disabled(config.glideSync)
+                        Text(String(format: "%.0f ms", config.glideTime(bpm: model.tempo))).font(.bronzeUI(compact ? 9 : 12)).foregroundStyle(.cyan)
+                    }.frame(width: compact ? 52 : 88)
+                }.padding(compact ? 3 : 8).frame(maxWidth: .infinity).modifier(BronzeDeckSurface(radius: 3))
             }
-            HStack(spacing: 8) {
+            HStack(spacing: 3) {
                 Text("Mod")
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
                     ForEach(index == 7 ? [0, 1] : index == 6 ? [4, 2, 3] : [0, 1, 2, 3], id: \.self) { mode in
                         Button(["User", "LFO", "Tremolo", "Pan", "Rotary"][mode]) { edit { $0.modulationMode = mode } }
-                            .buttonStyle(BronzeDeckButtonStyle(palette: config.modulationMode == mode ? .green : .grey, selected: config.modulationMode == mode)).frame(height: 40)
+                            .buttonStyle(BronzeDeckButtonStyle(palette: config.modulationMode == mode ? .green : .grey, selected: config.modulationMode == mode)).frame(height: compact ? 23 : 40)
                     }
-                    if index == 6 { Button("Toggle") { model.toggleOrganRotarySpeed() }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 40) }
+                    if index == 6 { Button("Toggle") { model.toggleOrganRotarySpeed() }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: compact ? 23 : 40) }
                 }
                 if index != 7 {
                     VStack(spacing: 3) {
-                        BronzeDial(value: Binding(get: { (config.modulationRate - 0.1) / 19.9 }, set: { value in edit { $0.modulationRate = 0.1 + value * 19.9 } }), tint: .orange, label: "Rate do Mod").frame(width: 64, height: 64).disabled(config.modulationMode == 0 || config.modulationMode == 4)
+                        BronzeDial(value: Binding(get: { (config.modulationRate - 0.1) / 19.9 }, set: { value in edit { $0.modulationRate = 0.1 + value * 19.9 } }), tint: .orange, label: "Rate do Mod").frame(width: compact ? 30 : 64, height: compact ? 30 : 64).disabled(config.modulationMode == 0 || config.modulationMode == 4)
                             .contextMenu { Button("Intensity", action: advanced) }
-                        Text(String(format: "%.2f Hz", config.modulationRate)).font(.bronzeUI(12)).foregroundStyle(.purple)
+                        Text(String(format: "%.2f Hz", config.modulationRate)).font(.bronzeUI(compact ? 9 : 12)).foregroundStyle(.purple)
                     }
                 }
-            }.padding(8).frame(maxWidth: .infinity, maxHeight: .infinity).modifier(BronzeDeckSurface(radius: 3))
-        }.frame(height: 112)
+            }.padding(compact ? 3 : 8).frame(maxWidth: .infinity, maxHeight: .infinity).modifier(BronzeDeckSurface(radius: 3))
+        }.frame(height: compact ? 62 : 112)
     }
     private func edit(_ change: (inout BronzeModulePerformance) -> Void) {
         var next = config; change(&next); model.setPerformance(next, moduleIndex: index)

@@ -111,6 +111,13 @@ final class BronzeNativeAccount: ObservableObject {
     }
     func restore() async {
         guard restoring else { return }
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.environment["BRONZE_UI_TEST"] == "1" {
+            session = BronzeAccountSession(token: "", account: BronzeAccountIdentity(email: "preview@example.invalid", name: "Teste"))
+            restoring = false
+            return
+        }
+        #endif
         defer { restoring = false }
         do {
             guard let data = try BronzeKeychain.read("session") else { return }

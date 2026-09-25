@@ -547,10 +547,15 @@ static NSString *describeFormat(AVAudioFormat *format) {
       [self setAudioErrorStage:@"reativar sessão após trocar buffer" error:error];
       return NO;
     }
-    const double sampleRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
+    // The source retains the runtime's rate; AVAudioEngine resamples into the
+    // negotiated hardware format without discarding voices or loaded SF2s.
+    if (sampleRate == 44100.0 || sampleRate == 48000.0) {
+      [session setPreferredSampleRate:sampleRate error:nil];
+    }
+    const double actualRate = session.sampleRate > 0 ? session.sampleRate : 48000.0;
     // Assim como no boot, rejeitar uma preferência de buffer não significa que
     // a rota esteja indisponível. Reinicie usando o tamanho aceito pelo iOS.
-    [session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / sampleRate)
+    [session setPreferredIOBufferDuration:(std::clamp<NSInteger>(bufferFrames, 64, 512) / actualRate)
                                     error:nil];
     [_audioEngine prepare];
     _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);

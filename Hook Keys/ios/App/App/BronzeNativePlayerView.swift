@@ -78,6 +78,11 @@ struct BronzeNativePlayerView<Pads: View>: View {
     @State private var openPlaylistAfterAbout = false
     @State private var splitPlaylist = false
     @State private var showClick = false
+    @State private var showTempo = false
+    @State private var tempoText = ""
+    @State private var renameBank = false
+    @State private var bankName = ""
+    @State private var bankToRename = 0
     @State private var selectedSlot: Int?
     @State private var copiedPreset: BronzePresetSlot?
     @State private var pasteTarget: Int?
@@ -136,6 +141,23 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 }.padding()
             }
         }
+        .sheet(isPresented: $renameBank) {
+            BronzeNativeModal(title: "Nome do banco") {
+                TextField("Nome", text: $bankName).textFieldStyle(BronzeNativeFieldStyle())
+                Button("Salvar") { model.renamePresetBank(bankToRename, name: bankName); renameBank = false }
+                    .buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(height: 44)
+            }
+        }
+        .sheet(isPresented: $showTempo) {
+            BronzeNativeModal(title: "BPM") {
+                HStack {
+                    TextField("BPM", text: $tempoText).keyboardType(.decimalPad).textFieldStyle(BronzeNativeFieldStyle())
+                    Button("Salvar") {
+                        if let value = Double(tempoText.replacingOccurrences(of: ",", with: ".")) { model.setTempo(value); showTempo = false }
+                    }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(width: 110, height: 44)
+                }.padding(20)
+            }
+        }
         .alert("Substituir este preset?", isPresented: $confirmPaste) {
             Button("Cancelar", role: .cancel) { pasteTarget = nil }
             Button("Colar", role: .destructive) { paste() }
@@ -191,7 +213,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 }.allowsHitTesting(false) }
                 .frame(maxWidth: .infinity)
             if !splitPlaylist {
-            let buttonWidth: CGFloat = ((compact ? 246 : 430) - 15) / 6
+            let buttonWidth: CGFloat = compact ? 35 : 48
             HStack(spacing: 3) {
                 ForEach(0..<4, id: \.self) { index in
                     pitchButton(octave: index < 2, direction: index % 2 == 0 ? -1 : 1, compact: compact)
@@ -236,6 +258,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
                         BronzeDial(value: Binding(get: { model.mixer.levels[bus] }, set: { model.setMixerLevel(bus, value: $0) }),
                             tint: Color(bronzeHex: busColors[bus]), label: "Volume \(busNames[bus])")
                             .frame(width: compact ? 24 : 40, height: compact ? 24 : 40)
+                            .modifier(BronzeLearnOnHold(model: model, target: "output:\(bus)"))
                             .contextMenu { Button(model.mixer.enabled[bus] ? "Desligar saída" : "Ligar saída") { model.toggleMixerOutput(bus) } }
                             .opacity(model.mixer.enabled[bus] ? 1 : 0.35)
                         BronzeMiniMeter(level: model.outputLevels[bus]).frame(width: compact ? 5 : 7, height: compact ? 24 : 38)
@@ -247,12 +270,13 @@ struct BronzeNativePlayerView<Pads: View>: View {
             Button { model.toggleMetronome() } label: { Image(systemName: "metronome") }
                 .buttonStyle(BronzeDeckButtonStyle(palette: .cyan, selected: model.metronomeEnabled, size: 24))
                 .frame(width: compact ? 36 : 52, height: compact ? 38 : 52)
-                .contextMenu { Button("Configurar metrônomo") { showClick = true } }
+                .highPriorityGesture(LongPressGesture(minimumDuration: 0.56).onEnded { _ in showClick = true })
             HStack(spacing: 4) {
                 Button("−") { model.setTempo(model.tempo - 0.5) }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: 18)).frame(width: compact ? 25 : 34)
                 Button { model.tapTempo() } label: {
                     VStack(spacing: 0) { Text(String(format: model.tempo.truncatingRemainder(dividingBy: 1) == 0 ? "%.0f" : "%.1f", model.tempo)).font(.bronzeUI(compact ? 19 : 26)); Text("BPM").font(.bronzeUI(9)) }
                 }.buttonStyle(BronzeDeckButtonStyle(palette: .yellow)).frame(width: compact ? 57 : 78).accessibilityLabel("Tap tempo")
+                    .highPriorityGesture(LongPressGesture(minimumDuration: 0.56).onEnded { _ in tempoText = String(format: "%.1f", model.tempo); showTempo = true })
                 Button("+") { model.setTempo(model.tempo + 0.5) }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: 18)).frame(width: compact ? 25 : 34)
             }.frame(height: compact ? 38 : 52)
         }.padding(.horizontal, 8).modifier(BronzeDeckSurface())
@@ -270,17 +294,20 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 .background(LinearGradient(colors: [Color(bronzeHex: 0x18874e), Color(bronzeHex: 0x064526)], startPoint: .top, endPoint: .bottom))
                 .clipShape(RoundedRectangle(cornerRadius: 7))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color(bronzeHex: 0x459a6b)))
-                .onTapGesture { openSound(index) }
-                .onLongPressGesture { model.toggleModuleSolo(index) }
+                .gesture(LongPressGesture(minimumDuration: 0.56).exclusively(before: TapGesture()).onEnded { value in
+                    switch value { case .first: model.toggleModuleSolo(index); case .second: openSound(index) }
+                })
                 .accessibilityAddTraits(.isButton).accessibilityLabel("Timbre do módulo \(index + 1): \(sound)")
                 .accessibilityAction { openSound(index) }
                 .accessibilityAction(named: "Solo") { model.toggleModuleSolo(index) }
             HStack(spacing: 4) {
                 VStack(spacing: compact ? 3 : 6) {
                     BronzeModuleFader(value: Binding(get: { model.moduleFaders[index] }, set: { model.setModuleFader(index, normalized: $0) }), level: model.moduleLevels[index], label: "Volume do módulo \(index + 1)")
+                        .modifier(BronzeLearnOnHold(model: model, target: "fader:\(index)"))
                     Button(model.moduleReceivesNotes(index) ? "ON" : "OFF") { model.toggleModuleEnabled(index) }
                         .buttonStyle(BronzeDeckButtonStyle(palette: model.moduleReceivesNotes(index) ? .green : .red, size: compact ? 8 : 11))
                         .frame(height: compact ? 23 : 31)
+                        .modifier(BronzeLearnOnHold(model: model, target: "on:\(index)", tapAction: { model.toggleModuleEnabled(index) }))
                 }.frame(maxWidth: .infinity)
                 if !splitPlaylist {
                 VStack(spacing: compact ? 4 : 9) {
@@ -338,8 +365,9 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 }.buttonStyle(BronzeDeckButtonStyle(palette: copiedPreset == nil ? .red : .yellow, size: compact ? 9 : 12))
                     .contextMenu { Button("Cancelar cópia") { copiedPreset = nil } }
                 ForEach(0..<6, id: \.self) { bank in
-                    Button(["A", "B", "C", "D", "E", "F"][bank]) { model.selectPresetBank(bank) }
+                    Button(model.presetBankName(bank)) { model.selectPresetBank(bank) }
                         .buttonStyle(BronzeDeckButtonStyle(palette: [.blue, .purple, .green, .bronze, .pink, .cyan][bank], selected: model.presetBank == bank, size: compact ? 11 : 15))
+                        .highPriorityGesture(LongPressGesture(minimumDuration: 0.56).onEnded { _ in bankToRename = bank; bankName = model.presetBankName(bank); renameBank = true })
                 }
                 Button(showingKeyboard ? "Keyboard" : "Presets") { showingKeyboard.toggle() }
                     .buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: compact ? 9 : 12))
@@ -380,7 +408,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
 
     private func preset(_ index: Int, compact: Bool) -> some View {
         let slot = model.presets[index]
-        let color = BronzePresetPalette.colors[slot.modules == nil ? BronzePresetPalette.order[index % 16] : slot.color]
+        let color = BronzePresetPalette.colors[slot.modules == nil && slot.name == "Empty" ? BronzePresetPalette.order[index % 16] : slot.color]
         return HStack(spacing: 8) {
             Text(String(format: "%02d", index % 16 + 1)).font(.bronzeUI(compact ? 9 : 12))
             Text(slot.modules == nil && slot.name == "Empty" ? "Preset" : slot.name).font(.bronzeUI(compact ? 10 : 13)).lineLimit(1).minimumScaleFactor(0.6)
@@ -388,10 +416,15 @@ struct BronzeNativePlayerView<Pads: View>: View {
             .background(LinearGradient(colors: [color, color.opacity(0.68)], startPoint: .topLeading, endPoint: .bottomTrailing))
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay { if model.activePreset == index { BronzePresetHighlight() } }
-            .onTapGesture { selectedSlot = index; if slot.modules != nil { model.recallPreset(index) } }
-            .onLongPressGesture { selectedSlot = index; openPreset(index) }
+            .gesture(LongPressGesture(minimumDuration: 0.56).exclusively(before: TapGesture()).onEnded { gesture in
+                selectedSlot = index
+                switch gesture {
+                case .first: openPreset(index)
+                case .second: model.recallPreset(index)
+                }
+            })
             .accessibilityAddTraits(.isButton).accessibilityLabel("Preset \(index % 16 + 1): \(slot.name)")
-            .accessibilityAction { selectedSlot = index; if slot.modules != nil { model.recallPreset(index) } }
+            .accessibilityAction { selectedSlot = index; model.recallPreset(index) }
             .accessibilityAction(named: "Editar preset") { openPreset(index) }
     }
 
@@ -411,7 +444,7 @@ struct BronzeDial: View {
             let side = min(geometry.size.width, geometry.size.height)
             ZStack {
                 Circle().fill(Color(bronzeHex: 0x282a2f))
-                Circle().trim(from: 0, to: value).stroke(tint.opacity(0.9), lineWidth: side * 0.18)
+                Circle().trim(from: 0, to: min(1, max(0, value)) * 0.75).stroke(tint.opacity(0.9), lineWidth: side * 0.18)
                     .padding(side * 0.1).rotationEffect(.degrees(135))
                     .shadow(color: tint.opacity(0.55), radius: 3)
                 Circle().fill(RadialGradient(colors: [Color(bronzeHex: 0x34373c), Color(bronzeHex: 0x020304), .black], center: .topLeading, startRadius: 0, endRadius: side * 0.6))
@@ -419,7 +452,7 @@ struct BronzeDial: View {
                     .overlay(Circle().stroke(.black, lineWidth: 2).padding(-2))
                     .padding(side * 0.2)
                 Capsule().fill(tint.opacity(0.85)).frame(width: max(1, side * 0.035), height: side * 0.3)
-                    .offset(y: -side * 0.18).rotationEffect(.degrees(-135 + value * 270))
+                    .offset(y: -side * 0.18).rotationEffect(.degrees(-135 + min(1, max(0, value)) * 270))
             }.padding(3).contentShape(Circle())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { gesture in
                     if dragValue == nil { dragValue = value }
@@ -489,20 +522,22 @@ struct BronzeModuleFader: View {
 struct BronzeNativeModal<Content: View>: View {
     let title: String
     var canDismiss = true
+    var scrollable = true
     @ViewBuilder let content: () -> Content
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 6) {
             HStack {
                 Text(title).font(.bronzeUI(20)).foregroundStyle(Color.bronzeLight)
                 Spacer()
                 Button("Voltar") { dismiss() }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(width: 90, height: 36).disabled(!canDismiss)
             }
             GeometryReader { geometry in
-                ScrollView {
-                    content().frame(maxWidth: .infinity).padding(.bottom, 12)
-                        .environment(\.bronzeContentSize, geometry.size)
-                }
+                Group {
+                    if scrollable {
+                        ScrollView { content().frame(maxWidth: .infinity).padding(.bottom, 12) }
+                    } else { content().frame(width: geometry.size.width, height: geometry.size.height) }
+                }.environment(\.bronzeContentSize, geometry.size)
             }
         }.padding(12)
             .font(.bronzeUI(12)).background(BronzeScreenBackground()).preferredColorScheme(.dark)

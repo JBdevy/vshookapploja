@@ -23,11 +23,11 @@ final class BronzeSceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneWillResignActive(_ scene: UIScene) {
-        NotificationCenter.default.post(name: .bronzeKeysStopAllNotes, object: nil)
+        NotificationCenter.default.post(name: .bronzeKeysReleaseTouches, object: nil)
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
-        NotificationCenter.default.post(name: .bronzeKeysStopAllNotes, object: nil)
+        NotificationCenter.default.post(name: .bronzeKeysReleaseTouches, object: nil)
         UIApplication.shared.isIdleTimerDisabled = false
     }
 

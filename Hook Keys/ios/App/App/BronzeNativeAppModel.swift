@@ -121,6 +121,9 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var presets = BronzeNativeSession().presets
     @Published private(set) var presetBank = 0
     @Published private(set) var activePreset: Int?
+    @Published private(set) var moduleSettingsSources = Array(repeating: "default", count: 8)
+    private var moduleDefaultSettings: [BronzeModuleSettings?] = Array(repeating: nil, count: 8)
+    private var moduleUserSettings: [BronzeModuleSettings?] = Array(repeating: nil, count: 8)
     @Published private(set) var isApplyingSnapshot = false
     @Published private(set) var persistenceAvailable = false
     struct BackupExport: Identifiable { let url: URL; var id: String { url.path } }
@@ -185,7 +188,8 @@ final class BronzeNativeAppModel: ObservableObject {
     func pastePreset(_ preset: BronzePresetSlot, at index: Int) {
         guard presets.indices.contains(index), preset.modules != nil, persistenceAvailable,
               !isApplyingSnapshot, !updatingEffects, loadingSoundFontModule == nil else { return }
-        presets[index] = preset; saveSessionNow(); recallPreset(index)
+        storeActivePreset()
+        recallPreset(index, replacement: preset)
     }
 
     private func outputDb(_ index: Int) -> Float {
@@ -233,6 +237,7 @@ final class BronzeNativeAppModel: ObservableObject {
 
     private var meterTimer: Timer?
     private var lifecycleObserver: NSObjectProtocol?
+    private var disconnectObserver: NSObjectProtocol?
     private let audioQueue = DispatchQueue(
         label: "app.bronzekeys.native.audio-start",
         qos: .userInitiated
@@ -249,16 +254,20 @@ final class BronzeNativeAppModel: ObservableObject {
             DispatchQueue.main.async { self?.refreshMidiDevices() }
         }
         lifecycleObserver = NotificationCenter.default.addObserver(
-            forName: .bronzeKeysStopAllNotes,
+            forName: .bronzeKeysReleaseTouches,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.silenceForBackground() }
+            Task { @MainActor in self?.prepareForBackground() }
+        }
+        disconnectObserver = NotificationCenter.default.addObserver(forName: .bronzeKeysStopAllNotes, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.panic() }
         }
     }
 
     deinit {
         meterTimer?.invalidate()
+        if let disconnectObserver { NotificationCenter.default.removeObserver(disconnectObserver) }
         if let lifecycleObserver { NotificationCenter.default.removeObserver(lifecycleObserver) }
         engine.stop()
     }
@@ -269,7 +278,8 @@ final class BronzeNativeAppModel: ObservableObject {
         let engine = self.engine
         audioQueue.async { [weak self] in
             let savedBuffer = UserDefaults.standard.integer(forKey: "bronze.audioBuffer")
-            let started = engine.start(withBufferFrames: [64, 128, 256, 512].contains(savedBuffer) ? savedBuffer : 128, sampleRate: 48_000)
+            let savedRate = UserDefaults.standard.integer(forKey: "bronze.sampleRate")
+            let started = engine.start(withBufferFrames: [64, 128, 256, 512].contains(savedBuffer) ? savedBuffer : 256, sampleRate: savedRate == 44100 ? 44100 : 48000)
             let message = engine.lastAudioErrorMessage
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -429,7 +439,7 @@ final class BronzeNativeAppModel: ObservableObject {
                 }
                 let entry = UserSoundFont(url: destination)
                 DispatchQueue.main.async {
-                    self?.finishSoundFontLoad(entry, moduleIndex: moduleIndex)
+                    self?.finishSoundFontLoad(entry, moduleIndex: moduleIndex, catalogSound: catalogSound)
                     if let catalogSound, let self {
                         var downloads = self.workspace.catalogDownloads ?? [:]
                         downloads[catalogSound.id] = destination.deletingLastPathComponent().lastPathComponent + "/" + destination.lastPathComponent
@@ -453,7 +463,7 @@ final class BronzeNativeAppModel: ObservableObject {
         }
     }
 
-    func selectUserSoundFont(_ entry: UserSoundFont, moduleIndex: Int) {
+    func selectUserSoundFont(_ entry: UserSoundFont, moduleIndex: Int, catalogSound: BronzeCatalogSound? = nil) {
         guard (0..<6).contains(moduleIndex), loadingSoundFontModule == nil,
               !isApplyingSnapshot, engineState == .ready, userSoundFonts.contains(entry) else { return }
         loadingSoundFontModule = moduleIndex
@@ -464,7 +474,7 @@ final class BronzeNativeAppModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if loaded {
-                    self.finishSoundFontLoad(entry, moduleIndex: moduleIndex)
+                    self.finishSoundFontLoad(entry, moduleIndex: moduleIndex, catalogSound: catalogSound)
                 } else {
                     self.loadingSoundFontModule = nil
                     self.controlError = "Não foi possível carregar \(entry.name). O timbre anterior foi mantido."
@@ -473,12 +483,14 @@ final class BronzeNativeAppModel: ObservableObject {
         }
     }
 
-    private func finishSoundFontLoad(_ entry: UserSoundFont, moduleIndex: Int) {
+    private func finishSoundFontLoad(_ entry: UserSoundFont, moduleIndex: Int, catalogSound: BronzeCatalogSound? = nil) {
         moduleSoundFonts[moduleIndex] = entry
         loadingSoundFontModule = nil
         var next = moduleEnabled
         next[moduleIndex] = true
         applyModuleActivation(next, solo: soloModule)
+        moduleDefaultSettings[moduleIndex] = catalogSound?.nativeDefaults(moduleIndex: moduleIndex) ?? BronzeModuleSettings.factory(moduleIndex)
+        if moduleSettingsSources[moduleIndex] == "default" { setModuleSettingsSource(moduleIndex, source: "default", force: true) }
     }
 
     nonisolated private static func soundFontDirectory() throws -> URL {
@@ -1021,12 +1033,13 @@ final class BronzeNativeAppModel: ObservableObject {
         heldKeyboardNotes.removeAll()
     }
 
-    func silenceForBackground() {
+    func prepareForBackground() {
         setKeyboardPitch(0.5)
         saveSessionNow()
         stopPerformanceNotes()
+        // Only release screen touches. Continuous pads and one-shot FX keep
+        // rendering through the playback audio session while the app is hidden.
         endEffectTouches()
-        engine.stopAllNotes()
     }
 
     func togglePad(_ index: Int) {
@@ -1260,11 +1273,15 @@ final class BronzeNativeAppModel: ObservableObject {
         }
     }
 
-    func editFX(bank: Int, index: Int, name: String, gain: Double, color: Int) {
+    func editFX(bank: Int, index: Int, name: String, gain: Double, color: Int, triggerMode: String? = nil, gateRelease: String? = nil) {
         guard (0..<8).contains(bank), (0..<12).contains(index), gain.isFinite, !importingMedia else { return }
         workspace.fxBanks[bank].pads[index].name = BronzeUserWorkspace.name(name, fallback: "FX \(index + 1)")
         workspace.fxBanks[bank].pads[index].gainDb = min(0, max(-36, gain))
         workspace.fxBanks[bank].pads[index].color = min(7, max(0, color))
+        if bank != 0 {
+            if let triggerMode, ["toggle", "gate"].contains(triggerMode) { workspace.fxBanks[bank].pads[index].triggerMode = triggerMode }
+            if let gateRelease, ["infinite", "continue-press"].contains(gateRelease) { workspace.fxBanks[bank].pads[index].gateRelease = gateRelease }
+        }
         applyMIDISettings()
     }
 
@@ -1303,7 +1320,9 @@ final class BronzeNativeAppModel: ObservableObject {
         guard (0..<12).contains(index), isFXReady(index), !loadingFXBank else { return }
         if pressed {
             guard !pressedEffects.contains(index) else { return }
-            guard engine.triggerEffect(bankIndex: workspace.fxBank, itemIndex: index, enabled: true,
+            let mode = workspace.fxBanks[workspace.fxBank].pads[index].mode(bank: workspace.fxBank)
+            let active = engine.effectActivity()[workspace.fxBank * 12 + index].boolValue
+            guard engine.triggerEffect(bankIndex: workspace.fxBank, itemIndex: index, enabled: mode != 1 || !active,
                 gainDb: Float(workspace.fxBanks[workspace.fxBank].pads[index].gainDb)) else {
                 controlError = "Não foi possível tocar o efeito."
                 return
@@ -1311,14 +1330,18 @@ final class BronzeNativeAppModel: ObservableObject {
             pressedEffects.insert(index)
             activeEffect = index
         } else {
-            // FX 1 é momentâneo, mas o arquivo continua até o fim (Infinite
-            // Release); soltar só encerra o estado visual do botão.
+            if workspace.fxBanks[workspace.fxBank].pads[index].mode(bank: workspace.fxBank) == 2 {
+                _ = engine.triggerEffect(bankIndex: workspace.fxBank, itemIndex: index, enabled: false, gainDb: 0)
+            }
             pressedEffects.remove(index)
             if activeEffect == index { activeEffect = pressedEffects.sorted().last }
         }
     }
 
     func endEffectTouches() {
+        for index in pressedEffects where workspace.fxBanks[workspace.fxBank].pads[index].mode(bank: workspace.fxBank) == 2 {
+            _ = engine.triggerEffect(bankIndex: workspace.fxBank, itemIndex: index, enabled: false, gainDb: 0)
+        }
         pressedEffects.removeAll()
         activeEffect = nil
     }
@@ -1427,7 +1450,7 @@ final class BronzeNativeAppModel: ObservableObject {
         (0..<8).map { index in
             let url = index < 6 ? moduleSoundFonts[index]?.url : nil
             let key = url.map { $0.deletingLastPathComponent().lastPathComponent + "/" + $0.lastPathComponent }
-            return BronzeModuleSnapshot(soundFontKey: key, enabled: moduleEnabled[index],
+            return BronzeModuleSnapshot(settingsSource: moduleSettingsSources[index], defaultSettings: moduleDefaultSettings[index], userSettings: moduleUserSettings[index], soundFontKey: key, enabled: moduleEnabled[index],
                 fader: moduleFaders[index], envelope: moduleEnvelopes[index], equalizer: moduleEqualizers[index],
                 reverb: moduleReverbs[index], delay: moduleDelays[index], soundEffects: moduleSoundEffects[index],
                 synth: index == 7 ? synth : nil, pulse: modulePulses[index], arpeggiator: moduleArpeggiators[index],
@@ -1435,7 +1458,21 @@ final class BronzeNativeAppModel: ObservableObject {
         }
     }
 
+    private func storeActivePreset() {
+        guard !isApplyingSnapshot else { return }
+        // A legacy session can have an unslotted current sound. Adopt a free slot
+        // before switching so that sound is never silently discarded.
+        if activePreset == nil {
+            activePreset = presets.indices.first { presets[$0].modules == nil }
+        }
+        guard let index = activePreset else { return }
+        if presets[index].modules == nil && presets[index].name == "Empty" { presets[index].color = BronzePresetPalette.order[index % 16] }
+        presets[index].modules = moduleSnapshot()
+        if presets[index].name == "Empty" { presets[index].name = "Preset" }
+    }
+
     private func sessionSnapshot() -> BronzeNativeSession {
+        storeActivePreset()
         var session = BronzeNativeSession()
         session.workspace = workspace
         session.modules = moduleSnapshot()
@@ -1501,6 +1538,7 @@ final class BronzeNativeAppModel: ObservableObject {
                     guard let self else { return }
                     if let session {
                         self.workspace = session.workspace ?? BronzeUserWorkspace()
+                        self.workspace.restoreChurchNames()
                         self.adoptModules(session.modules, fonts: fonts, solo: session.soloModule)
                         self.presets = session.presets
                         self.presetBank = session.bank
@@ -1682,7 +1720,7 @@ final class BronzeNativeAppModel: ObservableObject {
         for mapping in midiSettings.notes {
             let gain = mapping.kind == 2 ? workspace.fxBanks[mapping.bank].pads[mapping.item].gainDb : 0
             engine.setPerformanceMapping(note: mapping.note, kind: mapping.kind, bankIndex: mapping.bank,
-                itemIndex: mapping.item, mode: 0, gainDb: Float(gain))
+                itemIndex: mapping.item, mode: mapping.kind == 2 ? workspace.fxBanks[mapping.bank].pads[mapping.item].mode(bank: mapping.bank) : 0, gainDb: Float(gain))
         }
     }
 
@@ -1734,6 +1772,7 @@ final class BronzeNativeAppModel: ObservableObject {
         case "tempo": setTempo(tempo + (parts[1] == "+" ? 0.5 : -0.5))
         case "click": toggleMetronome()
         case "transport": toggleLoopPlayback()
+        case "output": setMixerLevel(module, value: n)
         case "fader": setModuleFader(module, normalized: n)
         case "on": toggleModuleEnabled(module)
         case "solo": toggleModuleSolo(module)
@@ -1777,6 +1816,43 @@ final class BronzeNativeAppModel: ObservableObject {
         }
     }
 
+    func setModuleSettingsSource(_ index: Int, source: String, force: Bool = false) {
+        guard (0..<6).contains(index), ["default", "user"].contains(source),
+              (moduleSettingsSources[index] != source || force), !isApplyingSnapshot,
+              !updatingEffects, loadingSoundFontModule == nil, engineState == .ready else { return }
+        let previous = moduleSnapshot()
+        var modules = previous
+        if source == "default" && moduleSettingsSources[index] == "user" { modules[index].userSettings = BronzeModuleSettings(previous[index]) }
+        let defaults = modules[index].defaultSettings ?? BronzeModuleSettings.factory(index)
+        let settings = source == "default" ? defaults : modules[index].userSettings ?? defaults
+        modules[index] = settings.applying(to: modules[index])
+        modules[index].settingsSource = source
+        let target = modules, engine = self.engine, bpm = tempo, solo = soloModule
+        let numerator = timeSignatureNumerator, denominator = timeSignatureDenominator
+        isApplyingSnapshot = true
+        audioQueue.async { [weak self] in
+            do {
+                let fonts = try Self.applySnapshot(target, previous: previous, solo: solo, tempo: bpm,
+                    numerator: numerator, denominator: denominator, engine: engine, store: BronzeSessionStore.applicationStore())
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.adoptModules(target, fonts: fonts, solo: solo)
+                    self.isApplyingSnapshot = false; self.saveSessionNow()
+                }
+            } catch {
+                DispatchQueue.main.async { self?.isApplyingSnapshot = false; self?.controlError = error.localizedDescription }
+            }
+        }
+    }
+
+    func presetBankName(_ bank: Int) -> String { workspace.presetBankNames?[bank] ?? ["A", "B", "C", "D", "E", "F"][bank] }
+    func renamePresetBank(_ bank: Int, name: String) {
+        guard (0..<6).contains(bank) else { return }
+        var names = workspace.presetBankNames ?? ["A", "B", "C", "D", "E", "F"]
+        names[bank] = String(BronzeUserWorkspace.name(name, fallback: ["A", "B", "C", "D", "E", "F"][bank]).prefix(12))
+        workspace.presetBankNames = names
+    }
+
     func selectPresetBank(_ bank: Int) {
         guard (0..<6).contains(bank), !isApplyingSnapshot else { return }
         presetBank = bank
@@ -1786,6 +1862,7 @@ final class BronzeNativeAppModel: ObservableObject {
     func savePreset(_ index: Int, name: String, color: Int) {
         guard presets.indices.contains(index), !isApplyingSnapshot, loadingSoundFontModule == nil,
               !updatingEffects, persistenceAvailable else { return }
+        storeActivePreset()
         let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
         presets[index] = BronzePresetSlot(name: name.isEmpty ? "Preset \(index % 16 + 1)" : name,
             color: min(15, max(0, color)), modules: moduleSnapshot())
@@ -1794,7 +1871,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func renamePreset(_ index: Int, name: String, color: Int) {
-        guard presets.indices.contains(index), presets[index].modules != nil,
+        guard presets.indices.contains(index),
               persistenceAvailable, !isApplyingSnapshot else { return }
         let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
         if !trimmed.isEmpty { presets[index].name = trimmed }
@@ -1802,9 +1879,15 @@ final class BronzeNativeAppModel: ObservableObject {
         saveSessionNow()
     }
 
-    func recallPreset(_ index: Int) {
-        guard presets.indices.contains(index), let modules = presets[index].modules,
+    func recallPreset(_ index: Int, replacement: BronzePresetSlot? = nil) {
+        guard presets.indices.contains(index),
               !isApplyingSnapshot, !updatingEffects, loadingSoundFontModule == nil, engineState == .ready else { return }
+        storeActivePreset()
+        guard activePreset != index || replacement != nil else { saveSessionNow(); return }
+        let target = replacement ?? presets[index]
+        let modules = target.modules ?? BronzeModuleSnapshot.defaults.map { module in
+            var empty = module; empty.enabled = false; return empty
+        }
         isApplyingSnapshot = true
         let previous = moduleSnapshot()
         let engine = self.engine
@@ -1818,6 +1901,7 @@ final class BronzeNativeAppModel: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.adoptModules(modules, fonts: fonts, solo: nil)
+                    self.presets[index] = target
                     self.activePreset = index
                     self.isApplyingSnapshot = false
                     self.saveSessionNow()
@@ -1833,6 +1917,9 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     private func adoptModules(_ modules: [BronzeModuleSnapshot], fonts: [UserSoundFont?], solo: Int?) {
+        moduleSettingsSources = modules.map { $0.settingsSource ?? "user" }
+        moduleDefaultSettings = modules.map(\.defaultSettings)
+        moduleUserSettings = modules.map(\.userSettings)
         moduleSoundFonts = fonts
         moduleEnabled = modules.map(\.enabled)
         moduleFaders = modules.map(\.fader)
@@ -1937,5 +2024,6 @@ final class BronzeNativeAppModel: ObservableObject {
 }
 
 extension Notification.Name {
+    static let bronzeKeysReleaseTouches = Notification.Name("BronzeKeysReleaseTouches")
     static let bronzeKeysStopAllNotes = Notification.Name("BronzeKeysStopAllNotes")
 }

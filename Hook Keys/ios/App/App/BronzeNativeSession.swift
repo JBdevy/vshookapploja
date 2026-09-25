@@ -431,7 +431,7 @@ struct BronzeArpeggiator: Codable, Equatable, Sendable {
 }
 
 struct BronzeModulePerformance: Codable, Equatable, Sendable {
-    var input = 0
+    var input = -1
     var lowNote = 0
     var highNote = 127
     var octave = 0
@@ -512,7 +512,73 @@ struct BronzeTone: Codable, Equatable, Sendable {
     }
 }
 
+// Independent parameter snapshots keep Default and User reversible without
+// copying SF2 paths, preset selection, module power or faders.
+struct BronzeModuleSettings: Codable, Equatable, Sendable {
+    var envelope: BronzeEnvelope
+    var equalizer: BronzeEqualizer
+    var reverb: BronzeReverb
+    var delay: BronzeDelay
+    var soundEffects: BronzeSoundEffects?
+    var pulse: BronzePulse?
+    var arpeggiator: BronzeArpeggiator?
+    var performance: BronzeModulePerformance?
+    var tone: BronzeTone?
+    init(_ module: BronzeModuleSnapshot) {
+        envelope = module.envelope
+        equalizer = module.equalizer
+        reverb = module.reverb
+        delay = module.delay
+        soundEffects = module.soundEffects
+        pulse = module.pulse
+        arpeggiator = module.arpeggiator
+        performance = module.performance
+        tone = module.tone
+    }
+    func applying(to module: BronzeModuleSnapshot) -> BronzeModuleSnapshot {
+        var result = module
+        result.envelope = envelope
+        result.equalizer = equalizer
+        result.reverb = reverb
+        result.delay = delay
+        result.soundEffects = soundEffects
+        result.pulse = pulse
+        result.arpeggiator = arpeggiator
+        result.performance = performance
+        result.tone = tone
+        // Routing and the playable range belong to the module strip.
+        if let original = module.performance {
+            result.performance?.input = original.input
+            result.performance?.outputStart = original.outputStart
+            result.performance?.outputCount = original.outputCount
+            result.performance?.lowNote = original.lowNote
+            result.performance?.highNote = original.highNote
+            result.performance?.octave = original.octave
+        }
+        return result
+    }
+    static func factory(_ index: Int) -> Self {
+        var module = BronzeModuleSnapshot()
+        module.performance = BronzeModulePerformance.initial(index)
+        module.performance?.modulationMode = index == 6 ? 4 : 0
+        module.equalizer.enabled = index != 6
+        module.reverb.enabled = index != 6
+        module.reverb.mixes = Array(repeating: 0.5, count: 4)
+        module.pulse = BronzePulse()
+        module.pulse?.enabled = index != 6
+        return Self(module)
+    }
+    func validate(index: Int) throws {
+        try envelope.validate(); try equalizer.validate(); try reverb.validate(); try delay.validate()
+        try soundEffects?.validate(moduleIndex: index); try pulse?.validate()
+        try arpeggiator?.validate(moduleIndex: index); try performance?.validate(); try tone?.validate(moduleIndex: index)
+    }
+}
+
 struct BronzeModuleSnapshot: Codable, Equatable, Sendable {
+    var settingsSource: String?
+    var defaultSettings: BronzeModuleSettings?
+    var userSettings: BronzeModuleSettings?
     // Relative UUID/file.sf2; absolute sandbox paths change after reinstall/update.
     var soundFontKey: String?
     var enabled = false
@@ -604,6 +670,9 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
         guard modules.count == 8 else { throw BronzeSessionError.invalid }
         for (index, module) in modules.enumerated() {
             guard module.fader.isFinite, (0...1).contains(module.fader) else { throw BronzeSessionError.invalid }
+            guard module.settingsSource.map({ ["default", "user"].contains($0) }) ?? true else { throw BronzeSessionError.invalid }
+            try module.defaultSettings?.validate(index: index)
+            try module.userSettings?.validate(index: index)
             try module.envelope.validate()
             try module.equalizer.validate()
             try module.reverb.validate()
@@ -638,6 +707,11 @@ struct BronzeSessionStore: Sendable {
     static func applicationStore() throws -> Self {
         let root = try FileManager.default.url(for: .applicationSupportDirectory,
             in: .userDomainMask, appropriateFor: nil, create: true)
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.environment["BRONZE_UI_TEST"] == "1" {
+            return Self(directory: root.appendingPathComponent("BronzeKeysUITests", isDirectory: true))
+        }
+        #endif
         return Self(directory: root.appendingPathComponent("BronzeKeys", isDirectory: true))
     }
 

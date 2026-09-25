@@ -24,53 +24,76 @@ struct BronzeNativePhotoPicker: UIViewControllerRepresentable {
 
 struct BronzeProfilePhotoEditor: View {
     let image: UIImage
+    var chooseAgain: () -> Void = {}
     let save: (Data) -> Void
     @State private var zoom = 1.0
     @State private var offset = CGSize.zero
     @State private var dragOrigin = CGSize.zero
     @State private var previewSize = CGSize(width: 720, height: 405)
     var body: some View {
-        BronzeNativeModal(title: "Prévia da foto") {
-            VStack(spacing: 18) {
-                GeometryReader { proxy in
-                    Image(uiImage: image).resizable().scaledToFill()
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .scaleEffect(zoom).offset(offset)
-                        .clipped().contentShape(Rectangle())
-                        .gesture(DragGesture().onChanged { gesture in
-                            offset = bounded(CGSize(width: dragOrigin.width + gesture.translation.width, height: dragOrigin.height + gesture.translation.height))
-                        }.onEnded { _ in dragOrigin = offset })
-                        .onAppear { previewSize = proxy.size }
-                        .onChange(of: proxy.size) { previewSize = $0 }
-                }.aspectRatio(16.0 / 9, contentMode: .fit).clipped().overlay(Rectangle().stroke(Color.purple))
-                HStack {
-                    Button("−") { zoom = max(1, zoom - 0.1); offset = bounded(offset); dragOrigin = offset }
-                    Text(String(format: "%.0f%%", zoom * 100)).font(.bronzeUI(14))
-                    Button("+") { zoom = min(4, zoom + 0.1) }
-                    Spacer()
-                    Button("Salvar foto") { crop() }
-                }.buttonStyle(BronzeCompactButtonStyle(active: false))
-            }.padding(12)
+        BronzeNativeModal(title: "Prévia da foto", scrollable: false) {
+            GeometryReader { bounds in
+                VStack(spacing: 8) {
+                    GeometryReader { proxy in
+                        let diameter = proxy.size.height * 0.68
+                        let scale = max(diameter / image.size.width, diameter / image.size.height) * zoom
+                        ZStack {
+                            Color(bronzeHex: 0x090604)
+                            Image(uiImage: image).resizable()
+                                .frame(width: image.size.width * scale, height: image.size.height * scale)
+                                .offset(offset)
+                            Canvas { context, size in
+                                var mask = Path(CGRect(origin: .zero, size: size))
+                                mask.addEllipse(in: CGRect(x: (size.width - diameter) / 2, y: (size.height - diameter) / 2, width: diameter, height: diameter))
+                                context.fill(mask, with: .color(.black.opacity(0.65)), style: FillStyle(eoFill: true))
+                            }.allowsHitTesting(false)
+                            Circle().stroke(Color.white.opacity(0.85), lineWidth: 2).frame(width: diameter, height: diameter).allowsHitTesting(false)
+                        }.frame(width: proxy.size.width, height: proxy.size.height).clipped().contentShape(Rectangle())
+                            .gesture(DragGesture().onChanged { gesture in
+                                offset = bounded(CGSize(width: dragOrigin.width + gesture.translation.width, height: dragOrigin.height + gesture.translation.height))
+                            }.onEnded { _ in dragOrigin = offset })
+                            .onAppear { previewSize = proxy.size }
+                            .onChange(of: proxy.size) { previewSize = $0; offset = bounded(offset); dragOrigin = offset }
+                    }.frame(height: max(80, min(bounds.size.height - 80, bounds.size.width * 9 / 16)))
+                    Text("Arraste a imagem e ajuste o zoom. A área dentro do círculo será usada no perfil.")
+                        .font(.bronzeUI(11)).lineLimit(2)
+                    HStack {
+                        Button("−") { changeZoom(zoom / 1.18) }.accessibilityLabel("Diminuir foto")
+                        Text(String(format: "%.0f%%", zoom * 100)).font(.bronzeUI(12))
+                        Button("+") { changeZoom(zoom * 1.18) }.accessibilityLabel("Aumentar foto")
+                        Spacer()
+                        Button("Escolher outra", action: chooseAgain)
+                        Button("Usar esta foto") { crop() }
+                    }.buttonStyle(BronzeCompactButtonStyle(active: false))
+                }
+            }
         }
     }
+    private func changeZoom(_ value: Double) {
+        let next = min(4, max(1, value)), ratio = next / zoom
+        zoom = next
+        offset = bounded(CGSize(width: offset.width * ratio, height: offset.height * ratio)); dragOrigin = offset
+    }
     private func bounded(_ proposed: CGSize) -> CGSize {
-        let scale = max(previewSize.width / image.size.width, previewSize.height / image.size.height) * zoom
-        let x = max(0, (image.size.width * scale - previewSize.width) / 2)
-        let y = max(0, (image.size.height * scale - previewSize.height) / 2)
+        let diameter = previewSize.height * 0.68
+        let scale = max(diameter / image.size.width, diameter / image.size.height) * zoom
+        let x = max(0, (image.size.width * scale - diameter) / 2)
+        let y = max(0, (image.size.height * scale - diameter) / 2)
         return CGSize(width: min(x, max(-x, proposed.width)), height: min(y, max(-y, proposed.height)))
     }
     private func crop() {
-        let target = CGSize(width: 720, height: 405)
+        let target = CGSize(width: 256, height: 256)
         let scale = max(target.width / image.size.width, target.height / image.size.height) * zoom
         let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let origin = CGPoint(x: (target.width - size.width) / 2 + offset.width * target.width / max(1, previewSize.width),
-                             y: (target.height - size.height) / 2 + offset.height * target.height / max(1, previewSize.height))
+        let ratio = 256 / max(1, previewSize.height * 0.68)
+        let origin = CGPoint(x: (256 - size.width) / 2 + offset.width * ratio,
+                             y: (256 - size.height) / 2 + offset.height * ratio)
         let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
         let result = UIGraphicsImageRenderer(size: target, format: format).image { context in
             UIColor.black.setFill(); context.fill(CGRect(origin: .zero, size: target))
             image.draw(in: CGRect(origin: origin, size: size))
         }
-        if let data = result.jpegData(compressionQuality: 0.88) { save(data) }
+        if let data = result.jpegData(compressionQuality: 0.82) { save(data) }
     }
 }
 
@@ -82,6 +105,7 @@ struct BronzeNativeAccountView: View {
     @State private var editingName = false
     @State private var pickPhoto = false
     @State private var previewPhoto = false
+    @State private var choosePhotoAgain = false
     @State private var photoCandidate: UIImage?
     @Environment(\.dismiss) private var dismiss
     @State private var password = ""
@@ -101,7 +125,7 @@ struct BronzeNativeAccountView: View {
                                     if let bytes = account.profilePhoto.split(separator: ",", maxSplits: 1).last.flatMap({ Data(base64Encoded: String($0)) }), let image = UIImage(data: bytes) {
                                         Image(uiImage: image).resizable().scaledToFill()
                                     } else { Image(systemName: "person.crop.circle.fill").resizable().scaledToFit().padding(14).foregroundStyle(Color.bronzeLight) }
-                                }.frame(width: 160, height: 90).clipped().modifier(BronzeDeckSurface())
+                                }.frame(width: 90, height: 90).clipShape(Circle())
                                 Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(Color.bronzeLight).padding(4)
                             }
                         }.buttonStyle(.plain).accessibilityLabel("Escolher foto do perfil")
@@ -169,8 +193,11 @@ struct BronzeNativeAccountView: View {
         .sheet(isPresented: $pickPhoto, onDismiss: { if photoCandidate != nil { previewPhoto = true } }) {
             BronzeNativePhotoPicker { photoCandidate = $0; pickPhoto = false }
         }
-        .sheet(isPresented: $previewPhoto, onDismiss: { photoCandidate = nil }) {
-            if let image = photoCandidate { BronzeProfilePhotoEditor(image: image) { data in
+        .sheet(isPresented: $previewPhoto, onDismiss: {
+            photoCandidate = nil
+            if choosePhotoAgain { choosePhotoAgain = false; pickPhoto = true }
+        }) {
+            if let image = photoCandidate { BronzeProfilePhotoEditor(image: image, chooseAgain: { choosePhotoAgain = true; previewPhoto = false }) { data in
                 previewPhoto = false
                 Task { await account.saveProfilePhoto(data) }
             } }
@@ -212,7 +239,7 @@ struct BronzeNativeCatalogList: View {
                 ForEach(sounds) { sound in
                     VStack(spacing: 5) {
                         Button {
-                            if let font = model.catalogFont(sound.id) { model.selectUserSoundFont(font, moduleIndex: moduleIndex) }
+                            if let font = model.catalogFont(sound.id) { model.selectUserSoundFont(font, moduleIndex: moduleIndex, catalogSound: sound) }
                             else { download(sound) }
                         } label: {
                             VStack(spacing: 7) {

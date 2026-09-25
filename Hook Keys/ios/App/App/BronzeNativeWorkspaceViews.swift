@@ -69,6 +69,18 @@ struct BronzeNativeMIDIPanel: View {
     @State private var bank = 0
     @State private var item = 0
     @State private var minimumEnd = true
+    private let initialTarget: String?
+    init(model: BronzeNativeAppModel, initialTarget: String? = nil) {
+        self.model = model; self.initialTarget = initialTarget
+        if let initialTarget {
+            let parts = initialTarget.split(separator: ":")
+            if parts.first == "note", parts.count == 4 {
+                _section = State(initialValue: Int(parts[1]) ?? 1)
+                _bank = State(initialValue: Int(parts[2]) ?? 0)
+                _item = State(initialValue: Int(parts[3]) ?? 0)
+            } else { _target = State(initialValue: initialTarget) }
+        }
+    }
     private var selectedTarget: String { section == 0 ? target : "note:\(section):\(bank):\(item)" }
     private var mapping: BronzeCCMapping? { model.midiSettings.controls[target] }
     private var locked: Bool { section == 0 && target.hasPrefix("preset:") && model.midiSettings.compatibility }
@@ -124,6 +136,7 @@ struct BronzeNativeMIDIPanel: View {
             }
             .pickerStyle(.menu).textFieldStyle(BronzeNativeFieldStyle())
         }
+        .onAppear { if initialTarget != nil { model.beginMIDILearn(selectedTarget) } }
         .onChange(of: section) { _ in bank = 0; model.learningTarget = nil }
         .onChange(of: target) { _ in model.learningTarget = nil }
         .onDisappear { model.learningTarget = nil }
@@ -233,6 +246,10 @@ struct BronzeNativeFXEditor: View {
     @State private var importing = false
     @State private var bankName = ""
     private var bank: Int { model.workspace.fxBank }
+    init(model: BronzeNativeAppModel, initialIndex: Int = 0) {
+        self.model = model
+        _index = State(initialValue: min(11, max(0, initialIndex)))
+    }
     private var pad: BronzeUserFX { model.workspace.fxBanks[bank].pads[index] }
     var body: some View {
         BronzeNativeModal(title: model.workspace.fxBanks[bank].name, canDismiss: !model.importingMedia) {
@@ -255,7 +272,18 @@ struct BronzeNativeFXEditor: View {
                     Text(pad.key == nil ? "Nenhum arquivo" : "Arquivo importado").font(.bronzeUI(12))
                     Button("Importar / substituir áudio") { importing = true }
                 }
-                Text("Gate · Infinite Release: um toque dispara o áudio até o final. Não é Toggle.").font(.bronzeUI(12))
+                if bank == 0 {
+                    Text("Gate · Infinite Release").font(.bronzeUI(12))
+                } else {
+                    Picker("Modo", selection: Binding(get: { pad.triggerMode ?? "toggle" }, set: { mode in
+                        model.editFX(bank: bank, index: index, name: pad.name, gain: pad.gainDb, color: pad.color, triggerMode: mode)
+                    })) { Text("Toggle").tag("toggle"); Text("Gate").tag("gate") }.pickerStyle(.segmented)
+                    if pad.triggerMode == "gate" {
+                        Picker("Soltar", selection: Binding(get: { pad.gateRelease ?? "infinite" }, set: { mode in
+                            model.editFX(bank: bank, index: index, name: pad.name, gain: pad.gainDb, color: pad.color, gateRelease: mode)
+                        })) { Text("Infinite Release").tag("infinite"); Text("Continue Press").tag("continue-press") }.pickerStyle(.segmented)
+                    }
+                }
                 if model.importingMedia { ProgressView("Importando…") }
             }
             .disabled(model.importingMedia)
@@ -489,4 +517,24 @@ private struct BronzePlaylistRowDrop: DropDelegate {
     func dropEntered(info: DropInfo) { if enabled, let source = draggedID, source != id { move(source, id) } }
     func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
     func performDrop(info: DropInfo) -> Bool { draggedID = nil; return enabled }
+}
+
+struct BronzeLearnOnHold: ViewModifier {
+    @ObservedObject var model: BronzeNativeAppModel
+    let target: String
+    var tapAction: (() -> Void)? = nil
+    @State private var open = false
+    func body(content: Content) -> some View {
+        Group {
+            if let tapAction {
+                content.highPriorityGesture(LongPressGesture(minimumDuration: 0.56, maximumDistance: 8).exclusively(before: TapGesture()).onEnded { value in
+                    switch value { case .first: open = true; case .second: tapAction() }
+                })
+            } else {
+                content.simultaneousGesture(LongPressGesture(minimumDuration: 0.56, maximumDistance: 8).onEnded { _ in open = true })
+            }
+        }
+            .accessibilityAction(named: "MIDI Learn") { open = true }
+            .fullScreenCover(isPresented: $open) { BronzeNativeMIDIPanel(model: model, initialTarget: target) }
+    }
 }

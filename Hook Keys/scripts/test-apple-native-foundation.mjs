@@ -88,8 +88,16 @@ assert.match(nativeModel, /configureMetronomeEnabled/,
 assert.match(nativeRoot, /model.toggleMetronome\(\)/);
 assert.match(nativeRoot, /model.setTimeSignature\(numerator: beats/);
 assert.match(nativeRoot, /beats >= 6 \? 8 : 4/);
-assert.match(delegate, /bronzeKeysStopAllNotes/,
-  'ir para segundo plano precisa liberar todas as notas nativas');
+for (const event of ['sceneWillResignActive', 'sceneDidEnterBackground']) {
+  const body = delegate.match(new RegExp(`func ${event}[^}]+}`))?.[0] ?? '';
+  assert.match(body, /bronzeKeysReleaseTouches/, 'background releases touch input');
+  assert.doesNotMatch(body, /bronzeKeysStopAllNotes/, 'background must preserve continuous pads and FX');
+}
+const background = nativeModel.match(/func prepareForBackground\(\)[\s\S]*?\n    }/)?.[0] ?? '';
+assert.match(background, /stopPerformanceNotes/);
+assert.doesNotMatch(background, /stopAllNotes|panic\(/);
+assert.match(nativeModel, /storeActivePreset\(\)/);
+
 assert.match(engineHeader, /setOrganRotaryFast/);
 assert.match(engineHeader, /setOrganCabinetEnabled/);
 assert.match(nativeRoot, /toggleOrganRotarySpeed/);

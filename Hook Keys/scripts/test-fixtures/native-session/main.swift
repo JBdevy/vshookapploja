@@ -502,3 +502,37 @@ expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: JSONEncoder().en
 sidebarWorkspace.playlistSidebar?.blocks.append(sidebarBlock)
 rejects { try sidebarWorkspace.validate() }
 print("NATIVE_PLAYLIST_SIDEBAR_OK")
+
+var currentWorkspace = BronzeUserWorkspace()
+expect(currentWorkspace.fxBanks[0].pads.map(\.name) == BronzeUserWorkspace.churchNames, "Church factory names")
+currentWorkspace.fxBanks[0].pads[1].name = "FX 2"
+currentWorkspace.fxBanks[0].pads[2].name = "Personalizado"
+currentWorkspace.restoreChurchNames()
+expect(currentWorkspace.fxBanks[0].pads[1].name == "Bump", "migrate legacy FX names")
+expect(currentWorkspace.fxBanks[0].pads[2].name == "Personalizado", "keep user FX names")
+expect(currentWorkspace.fxBanks[0].pads[0].mode(bank: 0) == 0, "Church infinite gate")
+expect(currentWorkspace.fxBanks[1].pads[0].mode(bank: 1) == 1, "custom banks toggle")
+currentWorkspace.fxBanks[1].pads[0].triggerMode = "gate"
+currentWorkspace.fxBanks[1].pads[0].gateRelease = "continue-press"
+expect(currentWorkspace.fxBanks[1].pads[0].mode(bank: 1) == 2, "custom gate release")
+try currentWorkspace.validate()
+expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: JSONEncoder().encode(currentWorkspace)) == currentWorkspace, "FX mode persistence")
+var moduleWithUser = BronzeModuleSnapshot()
+moduleWithUser.envelope.attackMs = 456
+moduleWithUser.performance = BronzeModulePerformance(input: 2)
+let userParameters = BronzeModuleSettings(moduleWithUser)
+var defaultParameters = BronzeModuleSettings(BronzeModuleSnapshot())
+defaultParameters.performance = BronzeModulePerformance(input: 0)
+let resetModule = defaultParameters.applying(to: moduleWithUser)
+expect(resetModule.envelope.attackMs == 0 && resetModule.performance?.input == 2, "Default preserves MIDI routing")
+expect(userParameters.applying(to: resetModule).envelope.attackMs == 456, "User restores configured envelope")
+try userParameters.validate(index: 0)
+print("NATIVE_FX_AND_SETTINGS_OK")
+
+let defaultsCatalog = Data(#"{"categories":[{"id":"pianos","name":"Pianos","defaultSettings":{"modules1To6":{"attackMs":12,"reverb":{"mix":35}}},"sounds":[{"id":"grand","name":"Grand","sf2ObjectKey":"test/grand.sf2","moduleSettings":{"modules1To6":{"releaseMs":900,"reverb":{"enabled":false}}}}]}],"defaultSettings":{"modules1To6":{"attackMs":5,"reverb":{"enabled":true,"mix":50}}}}"#.utf8)
+let defaultSound = try BronzeNativeCatalog.parse(defaultsCatalog)[0].sounds[0]
+let catalogParameters = defaultSound.nativeDefaults(moduleIndex: 0)
+expect(catalogParameters.envelope.attackMs == 12 && catalogParameters.envelope.releaseMs == 900, "catalog/category/sound defaults merge")
+expect(!catalogParameters.reverb.enabled && catalogParameters.reverb.mix == 0.35, "nested defaults merge without discarding siblings")
+try catalogParameters.validate(index: 0)
+print("NATIVE_CATALOG_DEFAULTS_OK")

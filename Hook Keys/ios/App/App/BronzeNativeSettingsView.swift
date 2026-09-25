@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import AVKit
 
 struct BronzeNativeSettingsView: View {
     @ObservedObject var model: BronzeNativeAppModel
@@ -12,13 +13,15 @@ struct BronzeNativeSettingsView: View {
     @AppStorage("bronze.lite") private var lite = false
     @AppStorage("bronze.showKeyboard") private var keyboard = false
     @AppStorage("bronze.keyboardStyle") private var keyboardStyle = 0
-    @AppStorage("bronze.audioBuffer") private var buffer = 128
+    @AppStorage("bronze.audioBuffer") private var buffer = 256
+    @AppStorage("bronze.sampleRate") private var sampleRate = 48000
     private var session: AVAudioSession { .sharedInstance() }
     private let busNames = ["Playlist", "Pads", "Efects", "Metrônomo", "Módulos"]
 
     var body: some View {
-        BronzeNativeModal(title: page == 0 ? "Configurações" : page == 1 ? "Dispositivos MIDI" : "Dispositivo de áudio") {
-            VStack(spacing: 12) {
+        BronzeNativeModal(title: page == 0 ? "Configurações" : page == 1 ? "Dispositivos MIDI" : "Dispositivo de áudio", scrollable: false) {
+            BronzeFittedEditor {
+            VStack(spacing: 8) {
                 if page != 0 { Button("Configurações") { page = 0 }.accessibilityIdentifier("bronze.settings.back").buttonStyle(BronzeCompactButtonStyle(active: false)).frame(maxWidth: .infinity, alignment: .leading) }
                 if page == 0 {
                     HStack(spacing: 12) {
@@ -35,16 +38,17 @@ struct BronzeNativeSettingsView: View {
                                 Button("Presets") { keyboard = false }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: !keyboard))
                                 Button("Keyboard") { keyboard = true }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: keyboard))
                             }.frame(height: 42)
-                        }.padding(16).modifier(BronzeDeckSurface())
+                        }.padding(8).modifier(BronzeDeckSurface())
                         VStack(spacing: 12) {
                             Text("Estilo do teclado").font(.bronzeUI(14))
                             HStack { ForEach(0..<3, id: \.self) { style in
                                 Button(["Default", "Black", "Bronze"][style]) { keyboardStyle = style }
                                     .buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: keyboardStyle == style))
                             }}.frame(height: 42)
-                        }.padding(16).modifier(BronzeDeckSurface())
+                        }.padding(8).modifier(BronzeDeckSurface())
                     }
                 } else if page == 1 {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                     ForEach(0..<3, id: \.self) { index in
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Dispositivo MIDI \(index + 1)").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
@@ -52,7 +56,8 @@ struct BronzeNativeSettingsView: View {
                                 Button("Nenhum") { selectDevice(index, id: "") }
                                 ForEach(model.midiDevices) { device in Button(device.name) { selectDevice(index, id: device.id) } }
                             }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 44)
-                        }.padding(12).modifier(BronzeDeckSurface())
+                        }.padding(6).modifier(BronzeDeckSurface())
+                    }
                     }
                     HStack {
                         Button("Atualizar dispositivos") { model.refreshMidiDevices() }
@@ -60,15 +65,24 @@ struct BronzeNativeSettingsView: View {
                     }.buttonStyle(BronzeDeckButtonStyle()).frame(height: 44)
                 } else {
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                        infoCard("Dispositivo de áudio", value: session.currentRoute.outputs.map(\.portName).joined(separator: " · "))
-                        VStack(spacing: 10) {
-                            Text("Buffer").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
-                            HStack { ForEach([64, 128, 256, 512], id: \.self) { frames in
-                                Button("\(frames)") { changeBuffer(frames) }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: buffer == frames))
-                            }}.frame(height: 40)
-                        }.padding(12).modifier(BronzeDeckSurface())
+                        VStack(spacing: 5) {
+                            Text("Dispositivo de áudio").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
+                            HStack {
+                                Text(session.currentRoute.outputs.map(\.portName).joined(separator: " · ")).lineLimit(1)
+                                Spacer()
+                                BronzeAudioRoutePicker().frame(width: 32, height: 32)
+                            }
+                        }.padding(8).modifier(BronzeDeckSurface())
+                        VStack(spacing: 5) {
+                            Text("Buffer Size").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
+                            Menu("\(buffer)") {
+                                ForEach([64, 128, 256, 512], id: \.self) { frames in
+                                    Button("\(frames)") { changeAudio(frames: frames, rate: sampleRate) }
+                                }
+                            }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 32)
+                        }.padding(6).modifier(BronzeDeckSurface())
                         ForEach([4, 0, 1, 2, 3], id: \.self) { bus in
-                            VStack(spacing: 10) {
+                            VStack(spacing: 5) {
                                 Text("Saídas · \(busNames[bus])").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
                                 Menu("\(model.mixer.channelStart(bus) + 1)\(model.mixer.channelCount(bus) == 2 ? " + \(model.mixer.channelStart(bus) + 2)" : " · Mono")") {
                                     ForEach(0..<max(1, session.outputNumberOfChannels), id: \.self) { channel in
@@ -77,14 +91,22 @@ struct BronzeNativeSettingsView: View {
                                             Button("\(channel + 1) + \(channel + 2)") { model.setMixerRoute(bus, start: channel, count: 2) }
                                         }
                                     }
-                                }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 40)
-                            }.padding(12).modifier(BronzeDeckSurface())
+                                }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 32).disabled(bus == 0)
+                            }.padding(6).modifier(BronzeDeckSurface())
                         }
-                        infoCard("Sample rate", value: String(format: "%.0f Hz", session.sampleRate))
+                        VStack(spacing: 5) {
+                            Text("Sample Rate").font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight)
+                            Menu("\(sampleRate == 44100 ? "44.100" : "48.000") Hz") {
+                                ForEach([44100, 48000], id: \.self) { rate in
+                                    Button("\(rate == 44100 ? "44.100" : "48.000") Hz") { changeAudio(frames: buffer, rate: rate) }
+                                }
+                            }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 32)
+                        }.padding(8).modifier(BronzeDeckSurface())
                     }.disabled(bufferBusy)
                     if bufferBusy { ProgressView("Ajustando áudio…") }
                     if !audioError.isEmpty { Text(audioError).foregroundStyle(.orange) }
                 }
+            }
             }
         }
         .onAppear { model.refreshMidiDevices(); deviceSelections = UserDefaults.standard.stringArray(forKey: "bronze.midiDevices") ?? Array(model.midiDevices.prefix(3).map(\.id)) }
@@ -96,17 +118,17 @@ struct BronzeNativeSettingsView: View {
     private func settingToggle(_ name: String, detail: String, value: Binding<Bool>) -> some View {
         Toggle(isOn: value) {
             VStack(alignment: .leading, spacing: 5) { Text(name).font(.bronzeUI(14)); Text(detail).font(.bronzeUI(11)).foregroundStyle(.secondary) }
-        }.tint(.bronze).padding(18).modifier(BronzeDeckSurface())
+        }.tint(.bronze).padding(8).modifier(BronzeDeckSurface())
     }
     private func navigationCard(_ title: String, detail: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 8) { Text(title).font(.bronzeUI(16)); Text(detail).font(.bronzeUI(11)).foregroundStyle(.secondary) }
-                .frame(maxWidth: .infinity, alignment: .leading).padding(22).modifier(BronzeDeckSurface())
+                .frame(maxWidth: .infinity, alignment: .leading).padding(10).modifier(BronzeDeckSurface())
         }.buttonStyle(.plain)
     }
     private func infoCard(_ title: String, value: String) -> some View {
         VStack(spacing: 12) { Text(title).font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight); Text(value).font(.bronzeUI(14)).lineLimit(2) }
-            .frame(maxWidth: .infinity, minHeight: 70).padding(12).modifier(BronzeDeckSurface())
+            .frame(maxWidth: .infinity, minHeight: 70).padding(6).modifier(BronzeDeckSurface())
     }
     private func deviceName(_ index: Int) -> String {
         guard deviceSelections.indices.contains(index), !deviceSelections[index].isEmpty else { return "Nenhum" }
@@ -118,17 +140,28 @@ struct BronzeNativeSettingsView: View {
         UserDefaults.standard.set(deviceSelections, forKey: "bronze.midiDevices")
         model.refreshMidiDevices()
     }
-    private func changeBuffer(_ frames: Int) {
+    private func changeAudio(frames: Int, rate: Int) {
         guard !bufferBusy else { return }
         bufferBusy = true; audioError = ""
         let engine = model.engine
-        let channels = max(1, session.outputNumberOfChannels), rate = session.sampleRate
+        let channels = max(1, session.outputNumberOfChannels)
         DispatchQueue.global(qos: .userInitiated).async {
-            let success = engine.setAudioOutputDeviceId("", channels: channels, bufferFrames: frames, sampleRate: rate, preserveEngine: true)
+            let success = engine.setAudioOutputDeviceId("", channels: channels, bufferFrames: frames, sampleRate: Double(rate), preserveEngine: true)
             DispatchQueue.main.async {
                 bufferBusy = false
-                if success { buffer = frames } else { audioError = engine.lastAudioErrorMessage }
+                if success { buffer = frames; sampleRate = rate } else { audioError = engine.lastAudioErrorMessage }
             }
         }
     }
+}
+
+// iOS owns USB/Bluetooth/AirPlay routing. Its native route picker exposes the
+// routes actually available to this device rather than fabricated device IDs.
+struct BronzeAudioRoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.tintColor = .white; picker.activeTintColor = .systemOrange
+        return picker
+    }
+    func updateUIView(_ view: AVRoutePickerView, context: Context) {}
 }

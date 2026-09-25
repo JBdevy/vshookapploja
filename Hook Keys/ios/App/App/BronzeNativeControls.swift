@@ -66,12 +66,12 @@ private struct BronzeContentSizeKey: EnvironmentKey {
 }
 
 struct BronzeParameterDialSize: ViewModifier {
-    @Environment(\.verticalSizeClass) private var sizeClass
+    @Environment(\.bronzeContentSize) private var contentSize
     var regular: CGFloat = 176
     var compact: CGFloat = 144
 
     func body(content: Content) -> some View {
-        let side = sizeClass == .compact ? compact : regular
+        let side = min(regular, max(40, contentSize.height - 90), max(40, contentSize.width / 5 - 48))
         content.frame(width: side, height: side)
     }
 }
@@ -375,5 +375,27 @@ struct BronzeKeyboardExpressionWheel: View {
             .accessibilityAdjustableAction { direction in value = min(1, max(0, value + (direction == .increment ? 0.05 : -0.05))) }
             .accessibilityAction(named: "Zerar") { value = spring ? 0.5 : 0 }
             .onDisappear { if spring { value = 0.5 } }
+    }
+}
+
+// Measures intrinsically sized editor rows inside a bounded workspace. Most
+// pages use the available dimensions directly; this also keeps advanced panels
+// usable on the shortest supported landscape displays without vertical scroll.
+private struct BronzeEditorHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 1
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+struct BronzeFittedEditor<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @State private var measuredHeight: CGFloat = 1
+    var body: some View {
+        GeometryReader { geometry in
+            let scale = min(1, geometry.size.height / max(1, measuredHeight))
+            content().frame(width: geometry.size.width).fixedSize(horizontal: false, vertical: true)
+                .background(GeometryReader { size in Color.clear.preference(key: BronzeEditorHeight.self, value: size.size.height) })
+                .scaleEffect(scale, anchor: .top)
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+                .environment(\.bronzeContentSize, geometry.size)
+        }.onPreferenceChange(BronzeEditorHeight.self) { measuredHeight = $0 }
     }
 }
