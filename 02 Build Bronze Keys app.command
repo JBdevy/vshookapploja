@@ -1,6 +1,7 @@
 #!/bin/bash
 # Equivalente macOS de "02 Build Bronze Keys app.bat".
 set -euo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 finish() {
   local status=$?
@@ -17,6 +18,8 @@ fail() { printf '\nERRO: %s\n' "$*" >&2; exit 1; }
 cd -- "$(dirname -- "$0")"
 printf '\nBUILD BRONZE KEYS — APK, AAB E IPA\n\n'
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 'Esta pasta não é um repositório Git.'
+git lfs version >/dev/null 2>&1 || fail 'Git LFS não está instalado. Instale o Git LFS antes de enviar os arquivos de áudio.'
+git lfs install --local >/dev/null || fail 'Não foi possível configurar o Git LFS neste repositório.'
 branch=$(git symbolic-ref --quiet --short HEAD) || fail 'Selecione uma branch antes de executar.'
 package_version=$(/usr/bin/plutil -extract version raw -o - 'Hook Keys/package.json')
 read -r -p "Versão do Bronze Keys [$package_version]: " version || exit 1
