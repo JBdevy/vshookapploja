@@ -49,3 +49,7 @@ A revisão inclui também LIST/PARTS do TP em tela inteira no celular, entrada T
 `Tests/UI/fixture.py` também oferece templates, recados e arquivos de teste. `VSHOOK_TEST_CHAT=1` habilita exclusivamente em Debug uma conversa local sem autenticação nem envio ao servidor. Os testes de interface normais nunca enviam mensagens reais.
 
 O workflow `.github/workflows/ios-ipa.yml` compila este projeto SwiftUI, executa os testes do núcleo e verifica o archive antes de exportar o IPA. O projeto Android mantém seu pipeline próprio.
+
+A revisão de gestos respeita a área segura no modo Tablet usado em iPhone, permite retornar do TP deslizando o transporte e usa pinça de abrir/fechar para tela cheia. Reprodução e fila compartilham gradientes vermelho/laranja e barras verde/amarela nos modos Diretor e Músico. O TCP usa Mixer/Master no cabeçalho, indexa os itens por pista e desenha a agulha com ponta triangular e rastro luminoso. A lista usa reconhecimento nativo de toque/toque longo que deixa a rolagem vertical com o UIScrollView. No Chat, deslizar para a direita prepara uma resposta sem interceptar o slider do áudio.
+
+Os testes de regressão incluem ida/volta do TP, pinça, margem do notch em ambas as orientações, resposta por swipe, seleção e rolagem de 80 músicas e 60 pistas. Esses testes usam o runtime de simulador disponível; a verificação do bundle mantém o mínimo iOS 15, mas não substitui a confirmação do comportamento no iOS 16 físico.

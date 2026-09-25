@@ -181,6 +181,27 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         check(!TCPModel.matches(overlapping, track: ["id": "other"]), "timeline does not leak media to other tracks")
         layoutSession.snapshot = ["playing": true, "playPosition": 125, "regions": [solo, ["id": "child-span", "name": "Trecho", "startPos": 120, "endPos": 130]]]
         check(layoutSession.tcpFocus.identifier == "child-span", "TCP falls back to the smallest playing region when the bridge omits playback ID")
+        for tablet in [false, true] {
+            for mode: HookMode in [.director, .musician] {
+                let navigation = HookSession(project: layoutSession.project, mode: mode, tablet: tablet)
+                navigation.swipeTransport(right: true)
+                check(navigation.panel == "tp", "transport swipe opens TP in each role/layout")
+                navigation.swipeTransport(right: false)
+                check(navigation.panel == "", "reverse swipe returns from TP in each role/layout")
+                navigation.swipeTransport(right: false)
+                check(navigation.panel == (mode == .director ? "parts" : ""), "parts remains director-only")
+                navigation.swipeTransport(right: true)
+                check(navigation.panel == (mode == .director ? "" : "tp"), "parts reverse swipe returns to list")
+            }
+        }
+        let indexedTracks: [JSON] = [["id": "folder", "folderDepth": 1], ["id": "one", "guid": "guid-track", "trackIndex": 1, "name": "PIANO"], ["id": "two", "trackIndex": 2, "name": "BASS", "folderDepth": -1]]
+        let indexedItems: [JSON] = [overlapping, ["id": "by-index", "trackIndex": 2], ["id": "by-name", "trackName": "piano"], ["id": "outside", "trackId": "missing"]]
+        let indexedRows = TCPTrackRows.make(tracks: indexedTracks, items: indexedItems, focused: true)
+        for index in 1..<indexedTracks.count {
+            check(indexedRows[index].items == indexedItems.filter { TCPModel.matches($0, track: indexedTracks[index]) }, "indexed timeline preserves GUID, index and name matching")
+        }
+        check(indexedRows[0].shadow && indexedRows[0].items.count == 3, "folder waveform contains its child tracks")
+        check(TCPTrackRows.make(tracks: indexedTracks, items: indexedItems, focused: false).allSatisfy { $0.items.isEmpty }, "unfocused timeline does not show items")
         let suite = "vshook-test-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }

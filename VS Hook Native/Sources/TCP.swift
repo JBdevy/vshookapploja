@@ -3,9 +3,8 @@ import UIKit
 
 struct TCPView: View {
     @ObservedObject var session: HookSession
-    let settings: () -> Void
+    @Binding var master: Bool
     @StateObject private var model = TCPModel()
-    @State private var master = false
     @State private var listOpen = false
     @State private var selectedItem: JSON = .null
     @State private var selectedTrack: JSON = .null
@@ -45,11 +44,6 @@ struct TCPView: View {
     }
     var body: some View {
         VStack(spacing: 8) {
-            if !session.tablet { HStack(spacing: 6) {
-                DirectorControl(title: "MIXER", background: Color(hex: master ? "172033" : "15803D"), height: 30, size: 12) { setMaster(false) }
-                DirectorControl(title: "MASTER", background: Color(hex: master ? "15803D" : "172033"), height: 30, size: 12) { setMaster(true) }
-                DirectorControl(title: "⚙", height: 30, size: 20, action: settings).frame(width: 38)
-            } }
             HStack(spacing: 5) {
                 DirectorControl(title: session.playing ? "STOP" : "PLAY", background: Color(hex: session.playing ? "DC2626" : "166534")) { session.command("play_button") }
                 DirectorControl(title: "AUTO 1", background: Color(hex: session.autoEnabled(1) ? "15803D" : "172033")) { session.toggleAuto(1) }
@@ -79,7 +73,7 @@ struct TCPView: View {
                     }
                 }
             }.coordinateSpace(name: "tcpPanel").background(Color(hex: "11151B")).clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: "334155")))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: "334155")).allowsHitTesting(false))
         }
         .task(id: revision) { await model.load(session: session) }
         .onChange(of: focus.identifier) { _ in zoom = 1; zoomStart = 1; pan = 0; cursor = nil }
@@ -111,13 +105,11 @@ struct TCPView: View {
         
     }
     private func closeItem() { selectedItem = .null; selectedTrack = .null }
-    private func setMaster(_ enabled: Bool) {
-        master = enabled
-        session.command("mixer_focus", ["view": .string(enabled ? "master" : "tracks"), "page": "mixer", "selectedId": .string(focus.identifier)])
-    }
     private func trackGrid(width: CGFloat, totalWidth: CGFloat) -> some View {
         let left = master ? width : min(width, totalWidth * min(1, max(0.25, trackFraction)))
         let right = max(1, width - left)
+        let rows = TCPTrackRows.make(tracks: tracks, items: items, focused: focus.exists)
+        let regions = session.snapshot["regions"].array
         return VStack(spacing: 0) {
             if !master {
                 HStack(spacing: 0) {
@@ -127,18 +119,19 @@ struct TCPView: View {
                     }.font(.custom("Arial-BoldMT", size: 9)).foregroundColor(Color(hex: "F02EE6"))
                         .padding(.leading, 8).frame(width: left, alignment: .leading)
 
-                    TCPRegionHeader(regions: session.snapshot["regions"].array, range: visibleRange, focused: focus.exists).frame(width: right, height: 36)
+                    TCPRegionHeader(regions: regions, range: visibleRange, focused: focus.exists, cursor: currentCursor, playing: session.playing && session.connected, updatedAt: session.lastUpdate).frame(width: right, height: 36)
                 }.frame(height: 36).background(Color(hex: "070A0F"))
             }
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
+                    ForEach(rows) { row in
+                        let track = row.track
                         HStack(spacing: 0) {
                             TCPTrackStrip(session: session, track: track, view: master ? "master" : "tracks") { selectedTrack = track }
                                 .padding(.trailing, master ? 0 : 24).frame(width: left)
                             if !master {
-                                TCPGridRow(track: track, items: trackItems(track, index: index), regions: session.snapshot["regions"].array, range: visibleRange, focused: focus.exists,
-                                           shadow: isGroup(track) && !items.contains { TCPModel.matches($0, track: track) }, cursor: currentCursor,
+                                TCPGridRow(track: track, items: row.items, regions: regions, range: visibleRange, focused: focus.exists,
+                                           shadow: row.shadow, cursor: currentCursor, playing: session.playing && session.connected, updatedAt: session.lastUpdate,
                                            onSeek: { ratio in selectedHandle = ""; seek(ratio) }, onItem: { selectedItem = $0 }, canPan: zoom > 1,
                                            onPan: { ratio, ended in
                                                if panStart == nil { panStart = pan }
@@ -151,7 +144,8 @@ struct TCPView: View {
                     }
                     if tracks.isEmpty { HookStatus(text: model.loading ? "CARREGANDO TCP…" : "TCP SEM DADOS").padding() }
                 }
-            }.simultaneousGesture(MagnificationGesture().onChanged { zoom = min(16, max(1, zoomStart * $0)) }.onEnded { _ in zoomStart = zoom })
+            }.accessibilityIdentifier("vshook.tcp.tracks")
+                .simultaneousGesture(MagnificationGesture().onChanged { zoom = min(16, max(1, zoomStart * $0)) }.onEnded { _ in zoomStart = zoom })
         }.overlay(alignment: .leading) {
             if !master {
                 TCPWidthHandle(selected: selectedHandle == "tracks", label: "Ajustar largura das pistas", value: trackFraction, identifier: "vshook.tcp.trackWidth", leading: false)
@@ -169,19 +163,6 @@ struct TCPView: View {
         if let cursor, !session.playing { return cursor }
         let position = session.snapshot.first("playPosition", "currentPlayPosition", "position", "editCursorPosition")
         return position.exists ? position.double : nil
-    }
-    private func isGroup(_ track: JSON) -> Bool { track["group"].bool || track["folderDepth"].int > 0 }
-    private func trackItems(_ track: JSON, index: Int) -> [JSON] {
-        guard focus.exists else { return [] }
-        let own = items.filter { TCPModel.matches($0, track: track) }
-        guard own.isEmpty && isGroup(track) else { return own }
-        var remaining = max(1, track["folderDepth"].int), result: [JSON] = []
-        for child in tracks.dropFirst(index + 1) {
-            guard remaining > 0 else { break }
-            result += items.filter { TCPModel.matches($0, track: child) }
-            remaining += child["folderDepth"].int
-        }
-        return result
     }
     private func seek(_ ratio: Double) {
         guard focus.exists else { return }

@@ -27,6 +27,61 @@ struct TCPRange: Equatable {
         return ((a - start) / duration, (b - a) / duration)
     }
 }
+struct TCPTrackRow: Identifiable {
+    let id: String
+    let track: JSON
+    let items: [JSON]
+    let shadow: Bool
+}
+enum TCPTrackRows {
+    // Index once per snapshot, rather than re-filtering the complete timeline
+    // for every visible row and every child of a folder while scrolling.
+    static func make(tracks: [JSON], items: [JSON], focused: Bool) -> [TCPTrackRow] {
+        var lookup: [String: Set<Int>] = [:]
+        for (index, track) in tracks.enumerated() {
+            for key in trackKeys(track) { lookup[key, default: []].insert(index) }
+        }
+        var own = Array(repeating: [JSON](), count: tracks.count)
+        if focused {
+            for item in items {
+                var matches = Set<Int>()
+                for key in itemKeys(item) { matches.formUnion(lookup[key] ?? []) }
+                for index in matches { own[index].append(item) }
+            }
+        }
+        return tracks.enumerated().map { index, track in
+            let shadow = own[index].isEmpty && (track["group"].bool || track["folderDepth"].int > 0)
+            var displayed = own[index]
+            if shadow && focused {
+                var depth = max(1, track["folderDepth"].int)
+                for child in (index + 1)..<tracks.count {
+                    guard depth > 0 else { break }
+                    displayed += own[child]
+                    depth += tracks[child]["folderDepth"].int
+                }
+            }
+            let identity = track.first("id", "guid", "trackId").string
+            return TCPTrackRow(id: identity.isEmpty ? "index:\(index)" : identity, track: track, items: displayed, shadow: shadow)
+        }
+    }
+    private static func trackKeys(_ track: JSON) -> [String] {
+        var keys = ["id", "guid", "trackId"].map { track[$0].string }.filter { !$0.isEmpty }.map { "id:" + $0 }
+        let index = track.first("trackIndex", "index")
+        if index.exists { keys.append("index:\(index.int)") }
+        if !track.name.isEmpty { keys.append("name:" + track.name.lowercased()) }
+        return keys
+    }
+    private static func itemKeys(_ item: JSON) -> [String] {
+        var keys: [String] = []
+        let id = item.first("trackId", "trackGuid", "track_id").string
+        if !id.isEmpty { keys.append("id:" + id) }
+        let index = item.first("trackIndex", "track_index")
+        if index.exists { keys.append("index:\(index.int)") }
+        let name = item.first("trackName", "track_name", "track").string
+        if !name.isEmpty { keys.append("name:" + name.lowercased()) }
+        return keys
+    }
+}
 @MainActor final class TCPModel: ObservableObject {
     @Published private(set) var items: [JSON] = []
     @Published private(set) var loading = false

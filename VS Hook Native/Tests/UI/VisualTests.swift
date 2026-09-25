@@ -272,4 +272,134 @@ final class VisualTests: XCTestCase {
         shot("drop-received-local-file")
     }
 
+    @discardableResult
+    func fixture(_ path: String, body: [String: Any]? = nil) throws -> Any {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:58150" + path)!)
+        if let body { request.httpMethod = "POST"; request.httpBody = try JSONSerialization.data(withJSONObject: body) }
+        let done = expectation(description: path)
+        var result: Data?
+        URLSession.shared.dataTask(with: request) { data, _, error in XCTAssertNil(error); result = data; done.fulfill() }.resume()
+        wait(for: [done], timeout: 5)
+        return try JSONSerialization.jsonObject(with: XCTUnwrap(result))
+    }
+    func checkTransportGestures(_ app: XCUIApplication) {
+        let now = app.otherElements["vshook.transport.header"].firstMatch
+        XCTAssertTrue(now.waitForExistence(timeout: 15), app.debugDescription)
+        for _ in 0..<2 {
+            now.swipeRight()
+            XCTAssertTrue(app.buttons["CONFIG/TP"].waitForExistence(timeout: 5), app.debugDescription)
+            now.swipeLeft()
+            XCTAssertTrue(app.buttons["vshook.config.open"].exists || !app.buttons["CONFIG/TP"].exists, app.debugDescription)
+        }
+        now.swipeRight()
+        XCTAssertTrue(app.buttons["CONFIG/TP"].waitForExistence(timeout: 5))
+        let viewport = app.descendants(matching: .any)["vshook.tp.content"].firstMatch
+        viewport.pinch(withScale: 1.8, velocity: 1.5)
+        XCTAssertFalse(app.buttons["CONFIG/TP"].exists, "Pinch outward enters full screen")
+        shot("tp-pinch-fullscreen")
+        viewport.pinch(withScale: 0.5, velocity: -1)
+        XCTAssertTrue(app.buttons["CONFIG/TP"].waitForExistence(timeout: 5), "Pinch inward restores controls")
+        now.swipeLeft()
+        XCTAssertFalse(app.buttons["CONFIG/TP"].exists)
+    }
+    func testPhoneTransportGestures() throws {
+        continueAfterFailure = false
+        checkTransportGestures(launchMode("director", tablet: false))
+    }
+    func testTabletTransportAndNotch() throws {
+        continueAfterFailure = false
+        let app = launchMode("director", tablet: true)
+        let config = app.buttons.matching(NSPredicate(format: "label == %@", "CONFIG")).firstMatch
+        XCTAssertTrue(config.waitForExistence(timeout: 15))
+        for orientation: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            XCUIDevice.shared.orientation = orientation
+            Thread.sleep(forTimeInterval: 1)
+            let inset: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 30 : 0
+            XCTAssertGreaterThan(config.frame.minX, app.frame.minX + inset, "The side rail must stay beyond the device safe area")
+            XCTAssertLessThan(config.frame.maxX, app.frame.maxX - inset)
+        }
+        shot("tablet-on-phone-safe-area")
+        checkTransportGestures(app)
+        app.buttons["TCP"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["vshook.tcp.master"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["vshook.timer.open"].exists)
+        XCTAssertFalse(app.buttons["REFERÊNCIA TCP"].exists)
+        XCTAssertFalse(app.buttons["RPTS"].exists)
+        app.buttons["vshook.tcp.master"].tap()
+        XCTAssertFalse(app.descendants(matching: .any)["vshook.tcp.trackWidth"].exists)
+        app.buttons["vshook.tcp.mixer"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["vshook.tcp.trackWidth"].exists)
+        shot("tcp-mixer-master-header")
+    }
+    func testMusicianTransportGestures() throws {
+        continueAfterFailure = false
+        checkTransportGestures(launchMode("musician"))
+    }
+    func testSongSelectionAndLongListScrolling() throws {
+        continueAfterFailure = false
+        let songs: [[String: Any]] = (1...80).map { ["id": "song\($0)", "name": String(format: "MÚSICA %03d", $0), "startPos": ($0-1)*100, "endPos": $0*100] }
+        let tracks: [[String: Any]] = (1...60).map { ["id": "track\($0)", "name": String(format: "PISTA %03d", $0), "trackIndex": $0, "volumeRatio": 0.76, "displayColor": "#38bdf8"] }
+        try fixture("/configure", body: ["regions": songs, "playlists": [["id": "fixture-list", "name": "LISTA LONGA", "songs": songs]], "selectedPlaylistSongId": "song1", "mixerTracks": tracks, "mixerMaster": ["id": "master", "name": "MASTER", "volumeRatio": 0.76]])
+        let app = launchMode("director", tablet: false)
+        let second = app.staticTexts["MÚSICA 002"].firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 15))
+        second.tap()
+        Thread.sleep(forTimeInterval: 0.4)
+        let commands = try fixture("/commands") as! [[String: Any]]
+        XCTAssertTrue(commands.contains { $0["type"] as? String == "select_playlist_song" }, "A normal tap must select a song")
+        let scroll = app.scrollViews["vshook.song.list"]
+        let before = second.frame.minY
+        scroll.swipeUp()
+        XCTAssertTrue(!second.isHittable || abs(second.frame.minY - before) > 40, "Dragging song rows must scroll the list")
+        scroll.swipeDown()
+        second.press(forDuration: 0.7)
+        XCTAssertTrue(app.buttons["PREMIX"].waitForExistence(timeout: 5), "Long press still opens song tools")
+        app.buttons["FECHAR"].firstMatch.tap()
+        app.buttons["vshook.phone.menu"].tap(); app.buttons["TCP"].tap()
+        XCTAssertTrue(app.buttons["vshook.tcp.master"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["vshook.timer.open"].exists)
+        let trackScroll = app.scrollViews["vshook.tcp.tracks"]
+        let first = app.staticTexts["PISTA 001"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        let y = first.frame.minY
+        trackScroll.coordinate(withNormalizedOffset: CGVector(dx: 0.07, dy: 0.85)).press(forDuration: 0.05, thenDragTo: trackScroll.coordinate(withNormalizedOffset: CGVector(dx: 0.07, dy: 0.2)))
+        XCTAssertTrue(!first.isHittable || abs(first.frame.minY - y) > 40, "Mixer track rows scroll without changing volume")
+        let after = try fixture("/commands") as! [[String: Any]]
+        XCTAssertFalse(after.contains { ($0["type"] as? String)?.contains("set_volume") == true })
+        shot("long-track-list-scrolled")
+    }
+    func testChatSwipeReply() throws {
+        continueAfterFailure = false
+        let app = launchMode("chat")
+        let message = app.staticTexts["Mensagem do administrador"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 15))
+        message.swipeRight()
+        XCTAssertTrue(app.staticTexts["Respondendo a Diretor teste"].waitForExistence(timeout: 5), app.debugDescription)
+        shot("chat-swipe-reply")
+        app.buttons["Cancelar"].firstMatch.tap()
+        app.sliders["Posição do áudio"].adjust(toNormalizedSliderPosition: 0.8)
+        XCTAssertFalse(app.staticTexts["Respondendo a Diretor teste"].exists, "The audio slider must not trigger Reply")
+        app.staticTexts["Mensagem do músico"].firstMatch.swipeRight()
+        XCTAssertTrue(app.staticTexts["Respondendo a Músico teste"].waitForExistence(timeout: 5))
+    }
+
+    func testPlaybackColoursAndGridCursor() throws {
+        continueAfterFailure = false
+        let next: [String: Any] = ["id": "next-song", "name": "PRÓXIMA MÚSICA", "startPos": 100, "endPos": 200]
+        let now: [String: Any] = ["id": "fixture-song", "name": "MÚSICA DE TESTE", "startPos": 0, "endPos": 100]
+        try fixture("/configure", body: ["playing": true, "playingId": "fixture-song", "queuedSongId": "next-song", "playPosition": 35, "regions": [now, next], "playlists": [["id": "fixture-list", "name": "REFERÊNCIA TCP", "songs": [now, next]]]])
+        for (mode, tablet) in [("director", false), ("director", true), ("musician", false)] {
+            let app = launchMode(mode, tablet: mode == "director" ? tablet : nil)
+            XCTAssertTrue(app.staticTexts["REPRODUZINDO"].firstMatch.waitForExistence(timeout: 15))
+            shot("playing-queued-\(mode)-\(tablet ? "tablet" : "phone")")
+            if tablet {
+                if !app.descendants(matching: .any)["vshook.grid.panel"].exists { app.buttons["Representação gráfica"].tap() }
+                shot("grid-triangle-glowing-trail")
+                app.buttons["TCP"].firstMatch.tap()
+                XCTAssertTrue(app.buttons["vshook.tcp.master"].waitForExistence(timeout: 5))
+                shot("tcp-triangle-glowing-trail")
+            }
+        }
+    }
+
 }

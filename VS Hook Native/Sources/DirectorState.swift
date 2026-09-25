@@ -41,6 +41,12 @@ struct DirectorSongEntry: Identifiable {
     var id: String { "\(position):\(item.first("playlistEntryId", "id").string)" }
 }
 @MainActor extension HookSession {
+    func swipeTransport(right: Bool) {
+        if panel == "tp" { if !right { panel = "" } }
+        else if panel == "parts" { if right { panel = "" } }
+        else if right { panel = "tp" }
+        else if !readOnly { panel = "parts" }
+    }
     var songEntries: [DirectorSongEntry] { songEntries(for: allItems) }
     func songEntries(for items: [JSON]) -> [DirectorSongEntry] {
         var block = 0, song = 0

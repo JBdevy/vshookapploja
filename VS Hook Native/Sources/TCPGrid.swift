@@ -5,6 +5,9 @@ struct TCPRegionHeader: View {
     let regions: [JSON]
     let range: TCPRange
     let focused: Bool
+    var cursor: Double? = nil
+    var playing = false
+    var updatedAt = Date()
     var body: some View {
         Canvas { context, size in
             guard focused else { return }
@@ -18,6 +21,7 @@ struct TCPRegionHeader: View {
                 local.draw(Text(item.name.uppercased()).font(.custom("Arial-BoldMT", size: 8)).foregroundColor(.white), at: CGPoint(x: rect.minX + 3, y: rect.midY), anchor: .leading)
             }
         }.background(Color(hex: "070A0F"))
+            .overlay { TCPMovingCursor(range: range, position: cursor, playing: playing, updatedAt: updatedAt, head: true).allowsHitTesting(false) }
     }
 }
 struct TCPGridRow: View {
@@ -28,6 +32,8 @@ struct TCPGridRow: View {
     let focused: Bool
     let shadow: Bool
     let cursor: Double?
+    let playing: Bool
+    let updatedAt: Date
     let onSeek: (Double) -> Void
     let onItem: (JSON) -> Void
     let canPan: Bool
@@ -85,15 +91,13 @@ struct TCPGridRow: View {
                     }
                     context.stroke(line, with: .color(color.opacity(region.isFamilyChild ? 0.62 : 0.88)), lineWidth: 1)
                 }
-                if let cursor, cursor >= range.start && cursor <= range.end {
-                    let x = (cursor - range.start) / range.duration * size.width
-                    context.fill(Path(CGRect(x: x, y: 0, width: 2, height: size.height)), with: .color(Color(hex: "A3E635")))
-                }
+
             }
             TCPTouchSurface(tap: { point in onSeek(point.x / max(1, geometry.size.width)) }, open: { point in
                 let time = range.start + range.duration * point.x / max(1, geometry.size.width)
                 if !shadow, let item = items.last(where: { $0.first("startPos", "start_pos").double <= time && $0.first("endPos", "end_pos").double > time }) { onItem(item) }
             }, canPan: canPan, pan: { translation, ended in onPan(translation / max(1, geometry.size.width), ended) })
+            TCPMovingCursor(range: range, position: cursor, playing: playing, updatedAt: updatedAt, head: false).allowsHitTesting(false)
         }.background(Color(hex: "11151B")).clipped()
             .overlay(alignment: .bottom) { Color(hex: "7C3AED").frame(height: 1) }
             .accessibilityElement().accessibilityLabel("Linha do tempo de " + track.name)
@@ -150,6 +154,26 @@ private struct TCPTouchSurface: UIViewRepresentable {
             guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
             let velocity = pan.velocity(in: pan.view)
             return parent.canPan && abs(velocity.x) > abs(velocity.y)
+        }
+    }
+}
+
+private struct TCPMovingCursor: View {
+    let range: TCPRange
+    let position: Double?
+    let playing: Bool
+    let updatedAt: Date
+    let head: Bool
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !playing)) { timeline in
+            Canvas { context, size in
+                guard let position else { return }
+                let current = position + (playing ? min(1, max(0, timeline.date.timeIntervalSince(updatedAt))) : 0)
+                guard current >= range.start && current <= range.end else { return }
+                let x = (current - range.start) / range.duration * size.width
+                let trail = playing ? max(8, min(42, size.width / range.duration * 0.7)) : 0
+                drawGridPlayhead(context: &context, size: size, x: x, trail: trail, headVisible: head)
+            }
         }
     }
 }

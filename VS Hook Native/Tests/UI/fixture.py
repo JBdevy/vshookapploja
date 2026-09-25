@@ -89,6 +89,8 @@ class Handler(BaseHTTPRequestHandler):
                 commands.clear()
                 notice = None
                 templates[:] = ['RECADO DE TESTE', '', '']
+            elif self.path == '/configure':
+                state.update(body)
             elif self.path == '/technical-notice':
                 commands.append(body)
                 if body.get('action') == 'cancel': notice = None

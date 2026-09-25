@@ -12,6 +12,7 @@ struct DirectorView: View {
     @State private var showSearch = false
     @State private var showPhoneMenu = false
     @AppStorage("vshook.native.grid.open") private var gridOpen = false
+    @State private var tcpMaster = false
     @State private var confirmSave = false
     @State private var confirmLive = false
     @AppStorage("vshook.native.mainTransport.hidden") private var hideTransport = false
@@ -145,7 +146,7 @@ struct DirectorView: View {
             VStack(spacing: 0) {
                 tabletNavigation
                 VStack(spacing: 8) {
-                    tabletStatus
+                    if session.panel == "mixer" { tcpNavigation } else { tabletStatus }
                     mainContent.frame(maxWidth: .infinity, maxHeight: .infinity)
                     if gridOpen && session.panel != "mixer" { DirectorGridPanel(session: session) }
                     if !session.message.isEmpty { HookStatus(text: session.message).onTapGesture { session.message = "" } }
@@ -157,11 +158,10 @@ struct DirectorView: View {
             if session.panel != "tp" && session.panel != "mixer" { rightRail }
         }.padding(8).frame(maxWidth: .infinity, maxHeight: .infinity)
             .background((light ? Color(hex: "D7DCE2") : Color(hex: "080D14")).ignoresSafeArea())
-            .ignoresSafeArea()
     }
     private var phoneWorkspace: some View {
         VStack(spacing: 7) {
-            header
+            if session.panel == "mixer" { tcpNavigation } else { header }
             if !session.readOnly { navigation }
             mainContent.frame(maxWidth: .infinity, maxHeight: .infinity)
             if !session.message.isEmpty { HookStatus(text: session.message).onTapGesture { session.message = "" } }
@@ -206,7 +206,6 @@ struct DirectorView: View {
             tabletTab("REPERTÓRIO", active: session.page == "playlist" && session.panel != "mixer", primary: true) { session.setPage("playlist"); session.panel = "" }
             tabletTab("MÚSICAS", active: session.page == "regions" && session.panel != "mixer", primary: true) { session.setPage("regions"); session.panel = "" }
             if session.panel == "mixer" {
-                DirectorControl(title: "RPTS", background: Color(hex: "FACC15"), foreground: .black, height: 32, size: 11) { sheet = "playlists" }
                 DirectorControl(title: "LUPA", background: Color(hex: showSearch ? "22C55E" : "7C3AED"), height: 32, size: 11) { showSearch.toggle() }
             } else {
                 tabletTab("TUNER", active: session.panel == "tuner") { togglePanel("tuner") }
@@ -222,6 +221,20 @@ struct DirectorView: View {
         DirectorControl(title: title, background: Color(hex: active ? "22C55E" : primary ? "FACC15" : "C90000"),
                         foreground: primary && !active ? Color(hex: "050505") : .white,
                         border: Color(hex: active ? "4ADE80" : primary ? "FDE047" : "FF2A2A"), height: 32, size: 11, action: action)
+    }
+    private var tcpNavigation: some View {
+        HStack(spacing: 6) {
+            DirectorControl(title: "MIXER", background: Color(hex: tcpMaster ? "172033" : "15803D"), height: 30, size: 12) { setTCPMaster(false) }
+                .accessibilityIdentifier("vshook.tcp.mixer")
+            DirectorControl(title: "MASTER", background: Color(hex: tcpMaster ? "15803D" : "172033"), height: 30, size: 12) { setTCPMaster(true) }
+                .accessibilityIdentifier("vshook.tcp.master")
+            Button { sheet = "settings" } label: { Image(systemName: "gearshape.fill").frame(width: 32, height: 30) }
+                .buttonStyle(DirectorButtonStyle()).accessibilityLabel("CONFIG")
+        }
+    }
+    private func setTCPMaster(_ enabled: Bool) {
+        tcpMaster = enabled
+        session.command("mixer_focus", ["view": .string(enabled ? "master" : "tracks"), "page": "mixer", "selectedId": .string(session.tcpFocus.identifier)])
     }
     private var tabletStatus: some View {
         HStack(spacing: 6) {
@@ -262,7 +275,7 @@ struct DirectorView: View {
     private var mainContent: some View {
         VStack(spacing: 8) {
             if session.panel == "tp" { TelepromptView(session: session, openPlaylists: { sheet = "playlists" }, songTools: { item in toolSong = item; session.select(item, sourcePage: "playlist"); sheet = "songTools" }) }
-            else if session.panel == "mixer" { TCPView(session: session, settings: { sheet = "settings" }) }
+            else if session.panel == "mixer" { TCPView(session: session, master: $tcpMaster) }
             else if session.tablet && ["tuner", "bpm"].contains(session.panel) { songList }
             else if ["parts", "tuner", "bpm"].contains(session.panel) {
                 if session.tablet && session.panel == "parts" {
@@ -277,11 +290,7 @@ struct DirectorView: View {
     private var songList: some View {
         VStack(spacing: 8) {
             if !session.readOnly { playbackControls } else { DirectorControl(title: "TP", height: 42) { togglePanel("tp") } }
-            if !hideTransport { DirectorPlaybackHeader(session: session).simultaneousGesture(DragGesture(minimumDistance: 28).onEnded { value in
-                guard abs(value.translation.width) > abs(value.translation.height) * 0.8 else { return }
-                if value.translation.width > 0 { session.panel = "tp" }
-                else if !session.readOnly { session.panel = "parts" }
-            }).onLongPressGesture { if session.tablet { gridOpen.toggle() } else { sheet = "seek" } } }
+            if !hideTransport { DirectorPlaybackHeader(session: session).onLongPressGesture { if session.tablet { gridOpen.toggle() } else { sheet = "seek" } } }
             DirectorSongList(session: session) { item in
                 toolSong = item; session.select(item); sheet = "songTools"
             }
@@ -315,7 +324,7 @@ struct DirectorView: View {
         session.panel = previous == value ? "" : value
         if previous == "tuner" || previous == "bpm" { session.command("set_\(previous)_visibility", ["visible": false]) }
         if session.panel == "tuner" || session.panel == "bpm" { session.command("\(value)_focus", ["visible": true]) }
-        if session.panel == "mixer" { session.command("mixer_focus", ["view": "tracks"]) }
+        if session.panel == "mixer" { tcpMaster = false; session.command("mixer_focus", ["view": "tracks"]) }
     }
     @ViewBuilder private var sheetContent: some View {
         if sheet == "recados" { RecadosView(base: session.base, identity: session.noticeIdentity, back: { sheet = nil }) }

@@ -287,6 +287,8 @@ struct ChatView: View {
                 .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder((item["isAdmin"].bool ? Color(hex: "9EFF00") : Color(hex: "CF37FF")).opacity(0.24)))
             if !item["isAdmin"].bool { avatarView(item) } else { Spacer(minLength: 30) }
         }
+            .modifier(ChatReplySwipe { if !model.closed { model.reply = item } })
+            .accessibilityIdentifier("vshook.chat.message." + item["id"].string)
             .contextMenu {
                 Button("Responder") { model.reply = item }
                 if model.mayEdit(item) {

@@ -20,7 +20,7 @@ enum HookMode: String, CaseIterable, Identifiable {
     @Published var panel = ""
     @Published var query = ""
     @Published var dismissed = false
-    @Published var lastUpdate = Date()
+    var lastUpdate = Date()
     @Published var openFamilies: Set<String> = []
     private var loop: Task<Void, Never>?
     private var generation = UUID()
@@ -89,18 +89,22 @@ enum HookMode: String, CaseIterable, Identifiable {
                 if data[key] == held.value || Date() > held.until { pending[key] = nil }
                 else { next[key] = held.value }
             }
-            snapshot = next; connected = true; lastUpdate = Date()
+            lastUpdate = Date()
+            if snapshot != next { snapshot = next }
+            if !connected { connected = true }
             if message == "Conexão interrompida. Tentando reconectar…" { message = "" }
             let remotePage = data.first("activePage", "activeTab", "currentPage").string
-            if Date() > pageHoldUntil, ["playlist", "regions"].contains(remotePage) { page = remotePage }
+            if Date() > pageHoldUntil, ["playlist", "regions"].contains(remotePage) { if page != remotePage { page = remotePage } }
             if Date() > drawerHoldUntil {
                 let drawers = data.first("openDrawerIds", "familyDrawerOpenIds")
                 if drawers.exists {
-                    openFamilies = Set(drawers.array.isEmpty ? drawers.string.split(separator: "|").map(String.init) : drawers.array.map(\.string))
+                    let families = Set(drawers.array.isEmpty ? drawers.string.split(separator: "|").map(String.init) : drawers.array.map(\.string))
+                    if openFamilies != families { openFamilies = families }
                 }
             }
             let revision = data.first("directorAuthRevision", "authRevision", "accessAuthRevision").string
-            authenticated = !requiresAuth || (!sessionHash.isEmpty && sessionHash == authHash && (revision.isEmpty || revision == authRevision))
+            let authorized = !requiresAuth || (!sessionHash.isEmpty && sessionHash == authHash && (revision.isEmpty || revision == authRevision))
+            if authenticated != authorized { authenticated = authorized }
             if !authenticated { claimed = false }
             if !readOnly && ["forceDirectorLogout", "directorLogoutRequested", "logoutDirector"].contains(where: { data[$0].bool }) {
                 try? await post("director_force_logout_ack", ["logoutToken": data["directorLogoutToken"]], bypassAuth: true)

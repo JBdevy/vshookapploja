@@ -10,6 +10,7 @@ struct TelepromptView: View {
     @State private var listOpen = false
     @State private var partsOpen = false
     @State private var fullscreen = false
+    @State private var pinchHandled = false
     let openPlaylists: (() -> Void)?
     let songTools: ((JSON) -> Void)?
     @StateObject private var notice = TPNoticeModel()
@@ -63,6 +64,11 @@ struct TelepromptView: View {
                         VStack(spacing: 8) {
                             if !settings["hideTransport"].bool && !listOpen && !fullscreen { DirectorPlaybackHeader(session: session) }
                             viewport.onTapGesture(count: 2) { fullscreen.toggle() }
+                                .simultaneousGesture(MagnificationGesture().onChanged { scale in
+                                    guard !pinchHandled else { return }
+                                    if !fullscreen && scale >= 1.16 { fullscreen = true; pinchHandled = true }
+                                    else if fullscreen && scale <= 0.86 { fullscreen = false; pinchHandled = true }
+                                }.onEnded { _ in pinchHandled = false })
                         }.padding(fullscreen ? 0 : 8).frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     if partsOpen && !fullscreen && !session.readOnly {
