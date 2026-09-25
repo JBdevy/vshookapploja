@@ -1,11 +1,11 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-title Build Hook Keys - Android e iOS
+title Build Bronze Keys - Android e iOS
 
 cd /d "%~dp0"
 
 echo ==========================================
-echo   BUILD HOOK KEYS - APK, AAB E IPA
+echo   BUILD BRONZE KEYS - APK, AAB E IPA
 echo ==========================================
 echo.
 
@@ -17,12 +17,12 @@ if errorlevel 1 (
 
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Get-Content -Raw -LiteralPath 'Hook Keys\package.json' | ConvertFrom-Json).version"`) do set "PACKAGE_VERSION=%%V"
 if not defined PACKAGE_VERSION (
-  echo ERRO: nao consegui ler a versao do Hook Keys.
+  echo ERRO: nao consegui ler a versao do Bronze Keys.
   goto erro
 )
 
 set "VERSION_NAME="
-set /p "VERSION_NAME=Versao do Hook Keys [%PACKAGE_VERSION%]: "
+set /p "VERSION_NAME=Versao do Bronze Keys [%PACKAGE_VERSION%]: "
 if not defined VERSION_NAME set "VERSION_NAME=%PACKAGE_VERSION%"
 
 echo(%VERSION_NAME%| findstr /r /x "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
@@ -46,25 +46,25 @@ if errorlevel 1 (
 )
 
 set "TAG_NAME=hook-keys-v%VERSION_NAME%-build%BUILD_NUMBER%"
-set "COMMIT_MSG=Hook Keys %VERSION_NAME% build %BUILD_NUMBER%"
+set "COMMIT_MSG=Bronze Keys %VERSION_NAME% build %BUILD_NUMBER%"
 set "CUSTOM_MSG="
 set /p "CUSTOM_MSG=Mensagem do commit [%COMMIT_MSG%]: "
 if defined CUSTOM_MSG set "COMMIT_MSG=%CUSTOM_MSG%"
 
 echo.
-echo Projeto:       Hook Keys
+echo Projeto:       Bronze Keys
 echo Versao:        %VERSION_NAME%
 echo Proximo build: %BUILD_NUMBER% (automatico)
 echo Tag exclusiva: %TAG_NAME%
 echo.
-choice /c SN /n /m "Confirma o commit, push e build do Hook Keys no GitHub? [S/N]: "
+choice /c SN /n /m "Confirma o commit, push e build do Bronze Keys no GitHub? [S/N]: "
 if errorlevel 2 goto cancelado
 
 echo.
 echo ==========================================
-echo   PREPARANDO SOMENTE O HOOK KEYS
+echo   PREPARANDO SOMENTE O BRONZE KEYS
 echo ==========================================
-git add -- ".github/workflows/hook-keys-release.yml" "Hook Keys" "02 Build Hook Keys app.bat" "proximo-build.ps1"
+git add -- ".github/workflows/hook-keys-release.yml" "Hook Keys" "02 Build Bronze Keys app.bat" "proximo-build.ps1"
 if errorlevel 1 goto erro
 
 rem Sempre cria um commit proprio para este disparo. Sem --allow-empty, quando
@@ -102,7 +102,7 @@ if errorlevel 1 goto erro
 
 echo.
 echo ==========================================
-echo   DISPARANDO APENAS O HOOK KEYS
+echo   DISPARANDO APENAS O BRONZE KEYS
 echo ==========================================
 git tag -a "%TAG_NAME%" -m "%COMMIT_MSG%"
 if errorlevel 1 goto erro
@@ -111,13 +111,13 @@ if errorlevel 1 goto erro
 
 echo.
 echo ==========================================
-echo   HOOK KEYS DISPARADO
+echo   BRONZE KEYS DISPARADO
 echo ==========================================
 echo Nenhuma compilacao foi feita neste computador.
 echo O GitHub Actions vai publicar somente:
-echo   Hook Keys.apk
-echo   Hook Keys.aab
-echo   Hook Keys.ipa
+echo   Bronze Keys.apk
+echo   Bronze Keys.aab
+echo   Bronze Keys.ipa
 echo.
 echo Acompanhe em:
 echo https://github.com/JBdevy/vshookapploja/actions
@@ -133,6 +133,6 @@ exit /b 0
 
 :erro
 echo.
-echo ERRO: o build do Hook Keys nao foi disparado.
+echo ERRO: o build do Bronze Keys nao foi disparado.
 pause
 exit /b 1

@@ -90,8 +90,12 @@ for (const usageDescription of [
   assert.match(iosMediaPermissions, new RegExp(`data\\["${usageDescription}"\\]`),
     `A preparação do Info.plist não configura ${usageDescription}.`)
 }
-assert.match(iosWorkflow, /python3 scripts\/configure-media-permissions\.py ios/,
-  'O workflow do IPA não aplica as permissões de mídia ao Info.plist.')
+assert.match(iosWorkflow, /-project 'VS Hook Native\/VSHook\.xcodeproj'/,
+  'O IPA deve compilar o projeto nativo do VS Hook.')
+for (const key of ['NSMicrophoneUsageDescription', 'NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription']) {
+  assert.match(read('VS Hook Native/Info.plist'), new RegExp(`<key>${key}</key>\\s*<string>[^<]+</string>`),
+    `O app nativo deve declarar ${key}.`)
+}
 
 assert.equal(packageManifest.dependencies?.['@capacitor/push-notifications'], undefined,
   'O plugin de push não deve fazer parte do app Android/iOS.')
@@ -106,7 +110,7 @@ assert.doesNotMatch(iosWorkflow, /configure-push-notifications/,
 assert.doesNotMatch(androidWorkflow, /ANDROID_GOOGLE_SERVICES_JSON_BASE64|google-services\.json/,
   'O workflow Android ainda instala Firebase para notificações.')
 
-for (const forbiddenDirectory of ['Hook Keys', 'android', 'ios', 'node_modules', 'plugins']) {
+for (const forbiddenDirectory of ['Hook Keys', 'VS Hook Native', 'android', 'ios', 'node_modules', 'plugins']) {
   assert.equal(fs.existsSync(path.join(root, 'dist', forbiddenDirectory)), false,
     `${forbiddenDirectory} não pode ser copiado para o pacote web do VS Hook.`)
 }

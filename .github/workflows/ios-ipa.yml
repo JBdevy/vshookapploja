@@ -32,28 +32,10 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Instalar dependências
-        run: npm install
-
-      - name: Preparar app web
+      - name: Preparar e testar VS Hook nativo
         run: |
-          npm run build
-          npm run test:discovery
-          npm run test:apple-peer
-
-      - name: Sincronizar iOS
-        run: |
-          node scripts/set-capacitor-app-id.js com.hookdeveloper.vshook
-          if [ ! -d ios ]; then
-            npx cap add ios
-          fi
-          python3 scripts/configure-ios-minimum.py
-          npx cap sync ios
-          python3 scripts/configure-ios-minimum.py
-          python3 scripts/apply-native-icons.py ios
-          python3 scripts/configure-local-network.py ios
-          python3 scripts/configure-media-permissions.py ios
-          python3 scripts/configure-fullscreen.py ios
+          python3 'VS Hook Native/scripts/generate-project.py'
+          bash 'VS Hook Native/scripts/test-core.sh'
 
       - name: Importar certificado iOS
         env:
@@ -127,28 +109,29 @@ jobs:
           [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION_NAME invalido: $VERSION_NAME"; exit 1; }
           [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "BUILD_NUMBER invalido: $BUILD_NUMBER"; exit 1; }
           echo "iOS: versao $VERSION_NAME, build $BUILD_NUMBER"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION_NAME" ios/App/App/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" ios/App/App/Info.plist
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
 
-      - name: Configurar assinatura iOS no projeto
+      - name: Arquivar app iOS nativo
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
         run: |
-          if [ -z "$IOS_TEAM_ID" ]; then
-            echo "Falta IOS_TEAM_ID"
-            exit 1
-          fi
-          python3 scripts/configure-ios-signing.py
-
-      - name: Arquivar app iOS
-        run: |
+          set -euo pipefail
+          test -n "$IOS_TEAM_ID"
           xcodebuild \
-            -workspace ios/App/App.xcworkspace \
-            -scheme App \
+            -project 'VS Hook Native/VSHook.xcodeproj' \
+            -scheme VSHook \
             -configuration Release \
             -destination generic/platform=iOS \
             -archivePath "$PWD/build/VS-Hook.xcarchive" \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY='Apple Distribution' \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            MARKETING_VERSION="$VERSION_NAME" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             archive
+          python3 'VS Hook Native/scripts/verify-ios.py' "$PWD/build/VS-Hook.xcarchive/Products/Applications/VS Hook.app"
 
       - name: Gerar IPA
         env:
