@@ -3,7 +3,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { verifyNativeBundle, verifyNativeProject, verifyNativeFrameworks, verifyIOSLoadCommands } from './verify-native-ios.mjs';
+import { verifyNativeBundle as inspectNativeBundle, verifyNativeProject, verifyNativeFrameworks, verifyIOSLoadCommands, verifyIOSSymbolBindings } from './verify-native-ios.mjs';
+
+const legacyViewSymbol = '_$s7SwiftUI14ZIndexTraitKeyVMn';
+const symbolBindings = (framework = 'SwiftUI', weak = false) =>
+  `                 (undefined) ${weak ? 'weak ' : ''}external ${legacyViewSymbol} (from ${framework})\n`;
+const verifyNativeBundle = (app, inspectBinary, inspectSymbols = () => symbolBindings()) =>
+  inspectNativeBundle(app, inspectBinary, inspectSymbols);
 
 const loadCommands = (command = 'LC_LOAD_WEAK_DYLIB', version = '15.0', platform = '2') => `App:
 Load command 0
@@ -82,6 +88,22 @@ test('valida versão mínima e plataforma do executável, inclusive formato anti
   }
   assert.throws(() => verifyIOSLoadCommands('App: /System/Library/Frameworks/SwiftUICore.framework/SwiftUICore'), /otool -l/);
   assert.throws(() => verifyIOSLoadCommands('Load command 0\n cmd LC_UUID\n', true), /sem versão mínima/);
+});
+
+test('reproduz a build 105: biblioteca opcional com metadados ligados a SwiftUICore é rejeitada', t => {
+  const app = fixture(t);
+  verifyNativeBundle(app, () => loadCommands(), () => symbolBindings());
+  for (const weak of [false, true]) {
+    assert.throws(() => verifyNativeBundle(app, () => loadCommands(),
+      () => symbolBindings('SwiftUICore', weak)), /crash da build 105/);
+  }
+  // A correct binding in one architecture cannot hide a bad one in another.
+  assert.throws(() => verifyIOSSymbolBindings(symbolBindings() + symbolBindings('SwiftUICore', true)), /crash da build 105/);
+  assert.throws(() => verifyIOSSymbolBindings(undefined), /nm -m ausente/);
+  fs.mkdirSync(path.join(app, 'Frameworks'));
+  fs.writeFileSync(path.join(app, 'Frameworks', 'Extra'), Buffer.from('cffaedfe', 'hex'));
+  assert.throws(() => verifyNativeBundle(app, () => loadCommands(),
+    file => symbolBindings(path.basename(file) === 'App' ? 'SwiftUI' : 'SwiftUICore', true)), /crash da build 105/);
 });
 
 test('dependências embarcadas também não podem exigir SwiftUICore', t => {

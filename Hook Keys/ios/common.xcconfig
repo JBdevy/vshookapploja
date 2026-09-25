@@ -2,3 +2,9 @@
 // mantém o app compilável antes de baixar o Skia; builds nativas de entrega
 // devem executar o script e, assim, definir BRONZE_KEYS_REQUIRE_SKIA=1.
 #include? "Skia.generated.xcconfig"
+
+// Resolve SwiftUI types through its public back-deployment facade. Direct
+// SwiftUICore autolinking binds legacy view metadata to an iOS 18+ library;
+// weak-linking that library only turns the iOS 16 launch failure into a null
+// metadata dereference (TestFlight build 105).
+OTHER_SWIFT_FLAGS = $(inherited) -Xfrontend -disable-autolink-framework -Xfrontend SwiftUICore

@@ -20,7 +20,7 @@ export function verifyIOSLoadCommands(output, executable = false) {
     const name = block.match(/^\s*name (.+?) \(offset \d+\)/m)?.[1];
     if (name?.includes('/SwiftUICore.framework/')) {
       assert.equal(command, 'LC_LOAD_WEAK_DYLIB',
-        'SwiftUICore obrigatório impede abrir no iOS 16; use -weak_framework SwiftUICore.');
+        'SwiftUICore obrigatório impede abrir no iOS 16; vincule a interface pelo framework público SwiftUI.');
     }
   }
   if (executable) {
@@ -39,7 +39,19 @@ export function verifyIOSLoadCommands(output, executable = false) {
   }
 }
 
-export function verifyNativeBundle(bundle, inspectBinary) {
+// LC_LOAD_WEAK_DYLIB alone is insufficient: build 105 passed that check but
+// bound SwiftUI view metadata to the absent SwiftUICore library. Inspect the
+// actual two-level symbol bindings, including weak imports, in every Mach-O.
+export function verifyIOSSymbolBindings(output) {
+  assert.equal(typeof output, 'string', 'Saída de nm -m ausente.');
+  const directImports = output.split(/\r?\n/).filter(line =>
+    /\(undefined\)/.test(line) && /\(from SwiftUICore\)/.test(line));
+  assert.equal(directImports.length, 0,
+    `Símbolos vinculados diretamente a SwiftUICore podem causar o crash da build 105 no iOS 16:\n${directImports.join('\n')}`);
+}
+
+export function verifyNativeBundle(bundle, inspectBinary,
+  inspectSymbols = file => execFileSync('xcrun', ['nm', '-m', '-u', file], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })) {
   const walk = folder => fs.readdirSync(folder, { withFileTypes: true }).flatMap(entry => {
     const item = path.join(folder, entry.name);
     assert(!forbidden.test(entry.name), `Dependência web na IPA: ${item}`);
@@ -66,6 +78,7 @@ export function verifyNativeBundle(bundle, inspectBinary) {
       const dependencies = inspectBinary(file);
       assert(!forbidden.test(dependencies), `Biblioteca web vinculada em ${file}: ${dependencies}`);
       verifyIOSLoadCommands(dependencies, file === executable);
+      verifyIOSSymbolBindings(inspectSymbols(file));
       if (file === executable) executableInspected = true;
     }
   }
@@ -104,9 +117,12 @@ export function verifyNativeProject() {
     assert(definitions.has(id), `Referência Xcode órfã: ${id}`);
   }
   assert(!forbidden.test(project), 'O target iOS não pode vincular bibliotecas web.');
-  // Keep the generated Skia flags inherited in both Debug and Release.
-  assert.equal([...project.matchAll(/OTHER_LDFLAGS\s*=\s*\(\s*"\$\(inherited\)",\s*"-weak_framework",\s*SwiftUICore\s*,?\s*\);/g)].length, 2,
-    'Debug e Release precisam manter SwiftUICore opcional sem perder as flags Skia.');
+  // Keep Skia flags inherited, and resolve SwiftUI through the public facade.
+  assert.equal([...project.matchAll(/OTHER_LDFLAGS\s*=\s*\(\s*"\$\(inherited\)",\s*"-framework",\s*SwiftUI\s*,?\s*\);/g)].length, 2,
+    'Debug e Release precisam vincular SwiftUI sem perder as flags Skia.');
+  assert(!/\bSwiftUICore\b/.test(project), 'Não vincule SwiftUICore diretamente, nem como framework opcional.');
+  assert.match(read('ios/common.xcconfig'), /^OTHER_SWIFT_FLAGS\s*=\s*\$\(inherited\).*?-Xfrontend -disable-autolink-framework -Xfrontend SwiftUICore\s*$/m,
+    'A compilação deve impedir autolink direto de SwiftUICore no iOS 15/16.');
   assert(!/Main\.storyboard|capacitor\.config|config\.xml|\/\* public \*\//i.test(project),
     'O target iOS não pode empacotar a interface web.');
   const sources = [...project.matchAll(/path = ([\w.-]+\.(?:swift|mm|h));/g)].map(match => match[1]);
@@ -139,6 +155,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     assert.equal(process.argv[2], '--app');
     assert(process.argv[3], 'Use --app caminho/App.app');
     verifyNativeBundle(path.resolve(process.argv[3]), file => execFileSync('otool', ['-l', file], { encoding: 'utf8' }));
-    console.log('IOS_NATIVE_BUNDLE_OK: sem runtime web; SwiftUICore não obrigatório; mínimo iOS 15.0.');
+    console.log('IOS_NATIVE_BUNDLE_OK: sem runtime web; sem símbolos diretos de SwiftUICore; mínimo iOS 15.0.');
   }
 }
