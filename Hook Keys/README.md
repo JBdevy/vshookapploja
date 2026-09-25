@@ -1,8 +1,21 @@
 # Bronze Keys
 
-Aplicativo móvel da Hook Developer para reprodução de instrumentos SF2 por MIDI. O repositório contém a interface multiplataforma, autenticação, persistência dos presets e o motor C++ ligado aos projetos Android e iOS.
+Aplicativo Bronze Keys para reprodução de instrumentos SF2 por MIDI. O motor C++
+é compartilhado entre as plataformas. O iOS já usa interface SwiftUI/UIKit nativa;
+Android e desktop ainda usam a interface web enquanto seus hosts são migrados.
 
-## Desenvolvimento local
+## iPad: desenvolvimento nativo no Mac
+
+Abra a pasta no VS Code e `ios/App/App.xcodeproj` no Xcode. O código SwiftUI é
+editado nos arquivos de `ios/App/App`; Vite/Node/Safari não mostram essa interface.
+Preview no Canvas exige uma view com preview e um projeto que compile para o
+destino escolhido. Para áudio/MIDI reais, execute no iPad pelo Xcode.
+
+Preparação e limitações: [APPLE_NATIVE.md](APPLE_NATIVE.md).
+Transferência para o Mac e separação das plataformas:
+[NATIVE_PLATFORMS.md](NATIVE_PLATFORMS.md).
+
+## Interface web atual: Android, desktop e navegador
 
 1. Copie `.env.example` para `.env` e, se necessário, ajuste o endereço do backend local.
 2. Execute `npm install`.
@@ -41,7 +54,10 @@ O token fica atrás da interface `SessionVault`. O preview usa `sessionStorage`,
 - `ios/App/App`: interface SwiftUI/UIKit, controles Skia e motor C++ direto, sem WebView.
 - `native-engine`: núcleo C++ compartilhado pelos dois projetos nativos.
 
-O navegador continua sendo o preview visual. Áudio SF2 de baixa latência e entrada MIDI física são executados somente no aplicativo nativo. O motor recebe os três slots MIDI, carrega um SF2 diferente por módulo e aplica faixa, oitava, sustain, modulation, envelope, cutoff, EQ, compressor, delay, reverb, volume do módulo e Master.
+O navegador mostra somente a interface web ainda usada por Android/desktop, não
+a interface nativa do iPad. O motor C++ recebe os três slots MIDI, carrega um SF2
+diferente por módulo e aplica faixa, oitava, sustain, modulation, envelope,
+cutoff, EQ, compressor, delay, reverb, volume do módulo e Master.
 
 ## Projetos nativos
 

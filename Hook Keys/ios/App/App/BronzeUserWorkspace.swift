@@ -24,6 +24,33 @@ struct BronzeUserPlaylist: Codable, Equatable, Sendable, Identifiable {
     var denominator = 4
 }
 
+struct BronzePlaylistBlock: Codable, Equatable, Sendable, Identifiable {
+    var id = UUID()
+    var scope: String
+    var name: String
+}
+
+struct BronzePlaylistSidebarSettings: Codable, Equatable, Sendable {
+    var scope = "all"
+    var repeatEnabled = false
+    var autoAdvance = false
+    var blocks: [BronzePlaylistBlock] = []
+    var order: [String: [String]] = [:]
+
+    func validate() throws {
+        guard blocks.count <= 2000, Set(blocks.map(\.id)).count == blocks.count,
+              scope.count <= 64, order.count <= 258 else { throw BronzeSessionError.invalid }
+        for block in blocks {
+            try BronzeUserWorkspace.validateName(block.name)
+            guard block.scope.count <= 64 else { throw BronzeSessionError.invalid }
+        }
+        for (key, ids) in order {
+            guard key.count <= 64, ids.count <= 10000, Set(ids).count == ids.count,
+                  ids.allSatisfy({ $0.count <= 64 }) else { throw BronzeSessionError.invalid }
+        }
+    }
+}
+
 struct BronzeUserFX: Codable, Equatable, Sendable {
     var name = "Empty"
     var key: String?
@@ -37,7 +64,10 @@ struct BronzeFXBank: Codable, Equatable, Sendable {
 }
 
 struct BronzeUserWorkspace: Codable, Equatable, Sendable {
+    var playlistSidebar: BronzePlaylistSidebarSettings?
+    var mixer: BronzeMixerSettings?
     var catalogDownloads: [String: String]?
+    var catalogInstalls: [String: BronzeCatalogInstall]?
     var midi: BronzeMIDISettings?
     var synthPresets = (0..<16).map { BronzeSynthPreset(color: $0 % 8) }
     var activeSynthPreset: Int?
@@ -49,6 +79,13 @@ struct BronzeUserWorkspace: Codable, Equatable, Sendable {
     var fxBank = 0
 
     func validate() throws {
+        try playlistSidebar?.validate()
+        try mixer?.validate()
+        for (id, install) in catalogInstalls ?? [:] {
+            guard catalogDownloads?[id] != nil, install.version > 0,
+                  !install.objectKey.isEmpty, install.objectKey.count <= 2048,
+                  !install.objectKey.contains("\0") else { throw BronzeSessionError.invalid }
+        }
         for (id, key) in catalogDownloads ?? [:] {
             guard !id.isEmpty, id.count <= 120 else { throw BronzeSessionError.invalid }
             try BronzeSessionStore.validateSoundFontKey(key)
@@ -96,6 +133,27 @@ struct BronzeUserWorkspace: Codable, Equatable, Sendable {
     static func name(_ value: String, fallback: String) -> String {
         let clean = String(value.replacingOccurrences(of: "\0", with: "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
         return clean.isEmpty ? fallback : clean
+    }
+}
+
+// Optional in older backups; opening those sessions keeps the original defaults.
+struct BronzeMixerSettings: Codable, Equatable, Sendable {
+    var levels = Array(repeating: 1.0, count: 5)
+    var enabled = Array(repeating: true, count: 5)
+    var octave = 0
+    var transpose = 0
+    var mono = false
+    var channelStarts: [Int]?
+    var channelCounts: [Int]?
+    func channelStart(_ index: Int) -> Int { channelStarts?[index] ?? 0 }
+    func channelCount(_ index: Int) -> Int { channelCounts?[index] ?? 2 }
+    func validate() throws {
+        guard levels.count == 5, levels.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+              enabled.count == 5, (-3...3).contains(octave), (-12...12).contains(transpose)
+        else { throw BronzeSessionError.invalid }
+        if let starts = channelStarts { guard starts.count == 5, starts.allSatisfy({ (0...31).contains($0) }) else { throw BronzeSessionError.invalid } }
+        if let counts = channelCounts { guard counts.count == 5, counts.allSatisfy({ (1...2).contains($0) }) else { throw BronzeSessionError.invalid } }
+        for index in 0..<5 { guard channelStart(index) + channelCount(index) <= 32 else { throw BronzeSessionError.invalid } }
     }
 }
 

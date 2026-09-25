@@ -720,6 +720,12 @@ static NSString *describeFormat(AVAudioFormat *format) {
       runtime->setModuleEnvelope(6, 0.0f, 15000.0f, 25000.0f, 300.0f, 0.0f, 0.0f);
 }
 
+- (BOOL)setOrganRotaryParameters:(NSInteger)speed slowHz:(float)slowHz fastHz:(float)fastHz rampSeconds:(float)rampSeconds depth:(float)depth {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  return runtime != nullptr && speed >= 0 && speed <= 2 &&
+      runtime->setOrganRotaryParameters(static_cast<std::uint8_t>(speed), slowHz, fastHz, rampSeconds, depth);
+}
+
 - (BOOL)setOrganRotaryFast:(BOOL)fast {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
   return runtime != nullptr && runtime->setOrganRotaryFast(fast != NO);

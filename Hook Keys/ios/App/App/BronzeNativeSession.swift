@@ -544,6 +544,19 @@ struct BronzePresetSlot: Codable, Equatable, Sendable {
     var modules: [BronzeModuleSnapshot]?
 }
 
+struct BronzeOrganRotary: Codable, Equatable, Sendable {
+    var speed = 1
+    var slowHz = 1.2
+    var fastHz = 10.0
+    var rampSeconds = 1.2
+    var depth = 1.0
+    func validate() throws {
+        guard (0...2).contains(speed), slowHz.isFinite, (0.2...2).contains(slowHz),
+              fastHz.isFinite, (2...10).contains(fastHz), rampSeconds.isFinite,
+              (0.1...10).contains(rampSeconds), depth.isFinite, (0...1).contains(depth) else { throw BronzeSessionError.invalid }
+    }
+}
+
 struct BronzeNativeSession: Codable, Equatable, Sendable {
     var workspace: BronzeUserWorkspace?
     var modules = BronzeModuleSnapshot.defaults
@@ -555,6 +568,7 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
     // Organ performance state is global, deliberately outside preset slots.
     var organDrawbars = [8, 8, 8, 0, 0, 0, 0, 0, 0]
     var organRotaryFast = false
+    var organRotary: BronzeOrganRotary?
     var organCabinetEnabled = true
     var tempo = 120.0
     var clickSound = 1
@@ -567,6 +581,7 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
 
     func validate() throws {
         try workspace?.validate()
+        try organRotary?.validate()
         guard presets.count == 96, (0..<6).contains(bank),
               (0..<8).contains(selectedModule), soloModule.map({ (0..<8).contains($0) }) ?? true,
               activePreset.map({ (0..<96).contains($0) }) ?? true,
@@ -578,7 +593,7 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
               loopID.map({ (1...3).contains($0) }) ?? true else { throw BronzeSessionError.invalid }
         try Self.validateModules(modules)
         for preset in presets {
-            guard !preset.name.isEmpty, preset.name.count <= 40, (0..<8).contains(preset.color) else {
+            guard !preset.name.isEmpty, preset.name.count <= 40, (0..<16).contains(preset.color) else {
                 throw BronzeSessionError.invalid
             }
             if let modules = preset.modules { try Self.validateModules(modules) }
@@ -654,5 +669,36 @@ struct BronzeSessionStore: Sendable {
         let data = try JSONEncoder().encode(session)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: sessionURL, options: .atomic)
+    }
+}
+
+// Same response calculation as the original EQ graph; display follows the DSP settings.
+extension BronzeEQBand {
+    func responseDb(at frequency: Double, sampleRate: Double = 48000) -> Double {
+        if isCut {
+            if cutStages >= 8 { return (type == 0 ? frequency < self.frequency : frequency > self.frequency) ? -240 : 0 }
+            let ratio = type == 0 ? self.frequency / frequency : frequency / self.frequency
+            let exponent = 4 * Double(min(7, max(1, cutStages))) * log(max(1e-8, ratio))
+            return -10 / log(10) * (exponent > 50 ? exponent : log1p(exp(exponent)))
+        }
+        let w = 2 * Double.pi * frequency / sampleRate
+        let center = 2 * Double.pi * min(sampleRate * 0.49, self.frequency) / sampleRate
+        let a = pow(10, gain / 40), c = cos(center), alpha = sin(center) / (2 * quality)
+        var b0 = 1 + alpha * a, b1 = -2 * c, b2 = 1 - alpha * a
+        var a0 = 1 + alpha / a, a1 = -2 * c, a2 = 1 - alpha / a
+        if type == 1 || type == 3 {
+            let slope = min(1, max(0.1, quality))
+            let t = sqrt(a) * sin(center) * sqrt((a + 1 / a) * (1 / slope - 1) + 2)
+            if type == 1 {
+                b0 = a * ((a + 1) - (a - 1) * c + t); b1 = 2 * a * ((a - 1) - (a + 1) * c); b2 = a * ((a + 1) - (a - 1) * c - t)
+                a0 = (a + 1) + (a - 1) * c + t; a1 = -2 * ((a - 1) + (a + 1) * c); a2 = (a + 1) + (a - 1) * c - t
+            } else {
+                b0 = a * ((a + 1) + (a - 1) * c + t); b1 = -2 * a * ((a - 1) + (a + 1) * c); b2 = a * ((a + 1) + (a - 1) * c - t)
+                a0 = (a + 1) - (a - 1) * c + t; a1 = 2 * ((a - 1) - (a + 1) * c); a2 = (a + 1) - (a - 1) * c - t
+            }
+        }
+        let numerator = hypot(b0 + b1 * cos(w) + b2 * cos(2 * w), -b1 * sin(w) - b2 * sin(2 * w))
+        let denominator = hypot(a0 + a1 * cos(w) + a2 * cos(2 * w), -a1 * sin(w) - a2 * sin(2 * w))
+        return 20 * log10(max(1e-8, numerator / max(1e-8, denominator)))
     }
 }

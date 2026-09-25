@@ -110,7 +110,7 @@ invalid = session
 invalid.activePreset = 96
 rejects { try store.save(invalid) }
 invalid = session
-invalid.presets[0].color = 8
+invalid.presets[0].color = 16
 rejects { try store.save(invalid) }
 invalid = session
 invalid.modules[0].equalizer.bands.removeLast()
@@ -334,7 +334,50 @@ expect(encoded["loopPlaying"] == nil && encoded["activePad"] == nil && encoded["
 try Data("invalid-json".utf8).write(to: store.sessionURL)
 rejects { _ = try store.load() }
 expect(try String(contentsOf: store.sessionURL, encoding: .utf8) == "invalid-json", "corrupt original is not overwritten")
+let catalogPayload: [String: Any] = ["revision": 9, "categories": [
+    ["id": "later", "name": "Later", "order": 2, "visibleModule": 8, "sounds": []],
+    ["id": "piano", "name": "Pianos", "order": 1, "visibleModule": NSNull(), "sounds": [
+        ["id": "grand", "name": "Grand", "sf2ObjectKey": "sounds/grand.sf2", "order": 2, "byteSize": 700000],
+        ["id": "bright", "name": "Bright", "sf2ObjectKey": "", "sf2Url": "https://example.com/bright.sf2", "order": 1,
+         "assetVersion": 3, "sha256": String(repeating: "AB", count: 32)],
+        ["id": "soft", "name": "Soft", "sf2ObjectKey": "sounds/soft.sf2", "order": 1]
+    ]]
+]]
+func parseCatalogFixture(_ object: [String: Any]) throws -> [BronzeCatalogCategory] {
+    try BronzeNativeCatalog.parse(JSONSerialization.data(withJSONObject: object))
+}
+let catalog = try parseCatalogFixture(catalogPayload)
+expect(catalog.map(\.id) == ["piano", "later"], "category order follows backend")
+expect(catalog[0].sounds.map(\.id) == ["bright", "soft", "grand"], "sound order is stable for ties")
+expect(catalog[0].visibleModule == nil && catalog[1].visibleModule == 8, "module visibility follows backend schema")
+expect(catalog[0].sounds[0].objectKey == "https://example.com/bright.sf2", "empty object key falls back to URL")
+expect(catalog[0].sounds[0].sha256 == String(repeating: "ab", count: 32), "hash normalized for verification")
+expect(catalog[0].sounds[2].version == 9, "asset version falls back to catalog revision")
+expect(catalog[0].sounds[0].version == 3, "explicit asset version retained")
+let installedCatalogSound = catalog[0].sounds[2]
+let catalogInstall = BronzeCatalogInstall(version: 9, objectKey: installedCatalogSound.objectKey)
+expect(catalogInstall.matches(installedCatalogSound), "matching installed asset does not need download")
+expect(!BronzeCatalogInstall(version: 8, objectKey: installedCatalogSound.objectKey).matches(installedCatalogSound), "updated version needs download")
+expect(!BronzeCatalogInstall(version: 9, objectKey: "other.sf2").matches(installedCatalogSound), "replaced object needs download")
+let oneSound: [String: Any] = ["id": "one", "name": "One", "sf2ObjectKey": "one.sf2"]
+func catalogWithSounds(_ sounds: [[String: Any]]) -> [String: Any] {
+    ["categories": [["id": "piano", "name": "Piano", "sounds": sounds]]]
+}
+rejects { _ = try parseCatalogFixture(catalogWithSounds([oneSound, oneSound])) }
+rejects { _ = try parseCatalogFixture(["categories": [
+    ["id": "repeat", "name": "One", "sounds": []], ["id": "repeat", "name": "Two", "sounds": []]]]) }
+let invalidCatalogFields: [[String: Any]] = [["assetVersion": true], ["assetVersion": 2.5], ["byteSize": -1], ["sha256": "invalid"], ["name": ""], ["order": 0]]
+for change in invalidCatalogFields {
+    var badSound = oneSound
+    for (key, value) in change { badSound[key] = value }
+    rejects { _ = try parseCatalogFixture(catalogWithSounds([badSound])) }
+}
+rejects { _ = try parseCatalogFixture(["categories": [["id": "one", "name": "One", "visibleModule": 9, "sounds": []]]]) }
+expect(try parseCatalogFixture(["categories": [["id": "empty", "name": "Empty"]]])[0].sounds.isEmpty, "empty category without sounds is accepted")
+
 var workspace = BronzeUserWorkspace()
+workspace.catalogDownloads = [installedCatalogSound.id: key]
+workspace.catalogInstalls = [installedCatalogSound.id: catalogInstall]
 workspace.synthPresets[3] = BronzeSynthPreset(name: "Lead", sound: BronzeSynth(), envelope: BronzeEnvelope(), color: 4)
 workspace.activeSynthPreset = 3
 let mediaDirectory = directory.appendingPathComponent("MediaFixture", isDirectory: true)
@@ -350,6 +393,9 @@ workspace.playlists = [list]; workspace.selectedPlaylist = list.id; workspace.se
 workspace.fxBanks[1].pads[0] = BronzeUserFX(name: "FX test", key: mediaKey, gainDb: -18, color: 5)
 try workspace.validate()
 var invalidWorkspace = workspace
+invalidWorkspace.catalogDownloads = [:]
+rejects { try invalidWorkspace.validate() }
+invalidWorkspace = workspace
 invalidWorkspace.fxBanks[0].name = "Renamed Church"
 rejects { try invalidWorkspace.validate() }
 invalidWorkspace = workspace; invalidWorkspace.playlists[0].repeatEnabled = true
@@ -361,6 +407,15 @@ rejects { try invalidWorkspace.validate() }
 for badKey in ["../escape.wav", UUID().uuidString + "/../../escape.wav", UUID().uuidString + "/evil.exe", "/abs.wav"] {
     rejects { _ = try mediaStore.url(badKey) }
 }
+var workspaceSession = session
+workspaceSession.workspace = workspace
+try store.save(workspaceSession)
+expect(try store.load() == workspaceSession, "workspace and session round-trip without Apple-only frameworks")
+print("NATIVE_SESSION_OK: presets, playlists, FX, relative assets and invalid session rejection")
+
+// CryptoKit is provided by the Apple SDK. The Android/Linux job still executes
+// all Foundation checks above; macOS CI must compile and run the backup below.
+#if os(macOS)
 var backedUp = session
 backedUp.workspace = workspace
 let font = try store.soundFontURL(for: key)
@@ -394,4 +449,56 @@ var trailing = archiveBytes; trailing.append(0)
 try trailing.write(to: broken)
 rejects { _ = try BronzeNativeBackup.stage(broken) }
 expect(try store.load() == backedUp, "corrupt and truncated backups leave live session intact")
-print("NATIVE_SESSION_OK: presets, playlists, FX, relative assets, streaming backup and corruption rejection")
+print("NATIVE_BACKUP_OK: streaming backup, asset restoration and corruption rejection")
+#endif
+
+// New native mixer settings survive backup/session encoding; older sessions omit them.
+var mixerWorkspace = BronzeUserWorkspace()
+var mixer = BronzeMixerSettings()
+mixer.levels = [0, 0.25, 0.5, 0.75, 1]
+mixer.enabled = [false, true, false, true, true]
+mixer.octave = -2; mixer.transpose = 7; mixer.mono = true
+mixerWorkspace.mixer = mixer
+try mixerWorkspace.validate()
+expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: JSONEncoder().encode(mixerWorkspace)) == mixerWorkspace,
+       "mixer gains, mute, octave, transpose and mono round-trip")
+var badMixer = mixer
+badMixer.levels[0] = .nan
+rejects { try badMixer.validate() }
+badMixer = mixer; badMixer.transpose = 13
+rejects { try badMixer.validate() }
+badMixer = mixer; badMixer.enabled.removeLast()
+rejects { try badMixer.validate() }
+let oldWorkspaceData = try JSONEncoder().encode(BronzeUserWorkspace())
+expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: oldWorkspaceData).mixer == nil,
+       "legacy workspace retains default mixer")
+
+var rotarySession = session
+rotarySession.organRotary = BronzeOrganRotary(speed: 0, slowHz: 0.8, fastHz: 6.4, rampSeconds: 2.5, depth: 0.7)
+try rotarySession.validate()
+expect(try JSONDecoder().decode(BronzeNativeSession.self, from: JSONEncoder().encode(rotarySession)) == rotarySession,
+       "Organ Brake, speeds, acceleration and depth survive session encoding")
+var invalidRotary = BronzeOrganRotary(); invalidRotary.depth = .nan
+rejects { try invalidRotary.validate() }
+invalidRotary = BronzeOrganRotary(); invalidRotary.speed = 3
+rejects { try invalidRotary.validate() }
+expect(try JSONDecoder().decode(BronzeNativeSession.self, from: JSONEncoder().encode(session)).organRotary == nil,
+       "older sessions keep their original Rotary defaults")
+
+let flatBand = BronzeEQBand()
+expect(abs(flatBand.responseDb(at: 1000)) < 0.0001, "flat EQ graph remains at zero dB")
+let peakBand = BronzeEQBand(frequency: 1000, gain: 9)
+expect(abs(peakBand.responseDb(at: 1000) - 9) < 0.0001, "EQ graph matches peaking gain at its center")
+let cutBand = BronzeEQBand(type: 0, frequency: 1000, cutStages: 8)
+expect(cutBand.responseDb(at: 500) == -240 && cutBand.responseDb(at: 2000) == 0, "brickwall graph follows cutoff direction")
+
+// The optional sidebar data must preserve older sessions and block ordering.
+expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: oldWorkspaceData).playlistSidebar == nil, "legacy sidebar remains optional")
+var sidebarWorkspace = BronzeUserWorkspace()
+let sidebarBlock = BronzePlaylistBlock(scope: "all", name: "Bloco 1")
+sidebarWorkspace.playlistSidebar = BronzePlaylistSidebarSettings(scope: "all", repeatEnabled: true, autoAdvance: true, blocks: [sidebarBlock], order: ["all": [sidebarBlock.id.uuidString]])
+try sidebarWorkspace.validate()
+expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: JSONEncoder().encode(sidebarWorkspace)) == sidebarWorkspace, "sidebar blocks, order and playback options round trip")
+sidebarWorkspace.playlistSidebar?.blocks.append(sidebarBlock)
+rejects { try sidebarWorkspace.validate() }
+print("NATIVE_PLAYLIST_SIDEBAR_OK")

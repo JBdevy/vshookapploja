@@ -105,7 +105,7 @@ export function verifyNativeProject() {
   }
   assert(!forbidden.test(project), 'O target iOS não pode vincular bibliotecas web.');
   // Keep the generated Skia flags inherited in both Debug and Release.
-  assert.equal([...project.matchAll(/OTHER_LDFLAGS = \("\$\(inherited\)", "-weak_framework", SwiftUICore\);/g)].length, 2,
+  assert.equal([...project.matchAll(/OTHER_LDFLAGS\s*=\s*\(\s*"\$\(inherited\)",\s*"-weak_framework",\s*SwiftUICore\s*,?\s*\);/g)].length, 2,
     'Debug e Release precisam manter SwiftUICore opcional sem perder as flags Skia.');
   assert(!/Main\.storyboard|capacitor\.config|config\.xml|\/\* public \*\//i.test(project),
     'O target iOS não pode empacotar a interface web.');

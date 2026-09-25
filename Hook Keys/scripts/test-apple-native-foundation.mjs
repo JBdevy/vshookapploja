@@ -10,7 +10,7 @@ const delegate = read('ios/App/App/AppDelegate.swift');
 const engine = read('ios/App/App/HookKeysNativeEngine.mm');
 const engineHeader = read('ios/App/App/HookKeysNativeEngine.h');
 const nativeModel = read('ios/App/App/BronzeNativeAppModel.swift');
-const nativeRoot = read('ios/App/App/BronzeNativeRootView.swift');
+const nativeRoot = read('ios/App/App/BronzeNativeRootView.swift') + read('ios/App/App/BronzeNativePlayerView.swift') + read('ios/App/App/BronzeNativeModuleLayout.swift');
 const nativeControls = read('ios/App/App/BronzeNativeControls.swift');
 const nativeHost = read('ios/App/App/BronzeNativeHostingController.swift');
 const skia = read('ios/App/App/BronzeSkiaControlView.mm');
@@ -79,15 +79,15 @@ assert.match(nativeRoot, /BronzePerformanceKeyboard/);
 assert.match(nativeModel, /fromSlot:\s*3/,
   'o teclado da tela deve usar diretamente o slot MIDI nativo reservado');
 assert.match(nativeControls, /isMultipleTouchEnabled = true/);
-assert.match(nativeControls, /firstNote = 48/);
-assert.match(nativeControls, /lastNote = 84/);
+assert.match(nativeControls, /firstNote: Int \{ fullRange \? 21 : 48 \}/);
+assert.match(nativeControls, /lastNote: Int \{ fullRange \? 108 : 84 \}/);
 assert.match(nativeControls, /touchesCancelled/,
   'o teclado nativo precisa soltar notas quando o sistema cancela o toque');
 assert.match(nativeModel, /configureMetronomeEnabled/,
   'o transporte nativo precisa controlar o metrônomo do runtime C++');
-assert.match(nativeRoot, /CLICK ON/);
-assert.match(nativeRoot, /Button\("4\/4"\)/);
-assert.match(nativeRoot, /Button\("6\/8"\)/);
+assert.match(nativeRoot, /model.toggleMetronome\(\)/);
+assert.match(nativeRoot, /model.setTimeSignature\(numerator: beats/);
+assert.match(nativeRoot, /beats >= 6 \? 8 : 4/);
 assert.match(delegate, /bronzeKeysStopAllNotes/,
   'ir para segundo plano precisa liberar todas as notas nativas');
 assert.match(engineHeader, /setOrganRotaryFast/);
@@ -122,7 +122,7 @@ assert.match(nativeModel, /nonisolated private static func sendDelay/,
 assert.match(engine, /runtime->setModuleDelay/);
 assert.match(engine, /runtime->setModuleSoundEffects/);
 assert.match(nativeRoot, /BronzeNativeProcessorEditor\(model: model/);
-assert.match(nativeRoot, /model.selectedModule != 6 \|\| \$0 == .chorus/);
+assert.match(nativeRoot, /model.selectedModule != 6 \|\| kind == .chorus/);
 assert.match(nativeModel, /Self.sendSoundEffects\(module.soundEffects \?\? BronzeSoundEffects\(\)/);
 assert.match(nativeModel, /soundEffects: moduleSoundEffects\[index\]/);
 assert.match(nativeModel, /pendingSoundEffects\[moduleIndex\] = effects/);
@@ -148,7 +148,7 @@ assert.match(nativeModel, /loadSoundFont\(atPath:/);
 assert.match(nativeModel, /let syncLoop = loopPlaying && selectedLoop\?\.isLoop == true/);
 assert.match(nativeModel, /metronomeEnabled \|\| syncLoop/);
 assert.match(nativeModel, /selectedLoop.isLoop \? tempo \/ 120 : 1/);
-assert.match(nativeModel, /volume: metronomeEnabled \? 1 : 0/);
+assert.match(nativeModel, /volume: metronomeEnabled && mixer.enabled\[3\] \? pow\(10, outputDb\(3\) \/ 20\) : 0/);
 assert.match(nativeModel, /syncMetronome: selectedLoop.isLoop/);
 assert.match(nativeModel, /playbackRate: tempo \/ 120/);
 assert.match(nativeModel, /bankIndex: activePadBank, enabled: false/);

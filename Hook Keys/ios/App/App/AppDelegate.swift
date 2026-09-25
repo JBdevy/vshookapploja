@@ -2,31 +2,41 @@ import UIKit
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
-    var window: UIWindow?
-
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        let appWindow = UIWindow(frame: UIScreen.main.bounds)
-        appWindow.rootViewController = BronzeNativeHostingController()
-        appWindow.makeKeyAndVisible()
-        window = appWindow
-        application.isIdleTimerDisabled = true
         return true
     }
 
-    func applicationWillResignActive(_ application: UIApplication) {
-        NotificationCenter.default.post(name: .bronzeKeysStopAllNotes, object: nil)
-    }
-
-    func applicationDidEnterBackground(_ application: UIApplication) {
-        NotificationCenter.default.post(name: .bronzeKeysStopAllNotes, object: nil)
-        application.isIdleTimerDisabled = false
-    }
-
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        application.isIdleTimerDisabled = true
-    }
-
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        .landscape
+        window?.rootViewController?.supportedInterfaceOrientations ?? .portrait
+    }
+}
+
+final class BronzeSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        guard let windowScene = scene as? UIWindowScene else { return }
+        let appWindow = UIWindow(windowScene: windowScene)
+        appWindow.rootViewController = BronzeNativeHostingController()
+        window = appWindow
+        appWindow.makeKeyAndVisible()
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        NotificationCenter.default.post(name: .bronzeKeysStopAllNotes, object: nil)
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        NotificationCenter.default.post(name: .bronzeKeysStopAllNotes, object: nil)
+        UIApplication.shared.isIdleTimerDisabled = false
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    func sceneDidDisconnect(_ scene: UIScene) {
+        NotificationCenter.default.post(name: .bronzeKeysStopAllNotes, object: nil)
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 }

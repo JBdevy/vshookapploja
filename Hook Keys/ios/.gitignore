@@ -7,8 +7,9 @@ xcuserdata
 App/Vendor/Skia.xcframework
 Skia.generated.xcconfig
 
-# Cordova plugins for Capacitor
+# Resíduos locais da antiga interface iOS; não pertencem ao target nativo.
 capacitor-cordova-ios-plugins
+App/CapApp-SPM/
 
 # Generated Config files
 App/App/capacitor.config.json

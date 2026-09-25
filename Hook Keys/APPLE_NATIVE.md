@@ -4,6 +4,8 @@ O app iOS inicia exclusivamente em `BronzeNativeHostingController`.
 Capacitor, Cordova, plugins JavaScript, storyboard da bridge e fallback web
 foram removidos do target e do código iOS. Não há flag para voltar à WebView.
 Android e desktop ainda mantêm suas implementações atuais; esta remoção é iOS.
+O mapa de dependências, próximas interfaces e instruções para levar a pasta ao
+Mac estão em [NATIVE_PLATFORMS.md](NATIVE_PLATFORMS.md).
 
 `npm run native:sync:ios` valida o projeto e seus recursos sem Vite ou Capacitor.
 Loops e Church são referências diretas às pastas de áudio em `public/assets`,
@@ -72,8 +74,10 @@ Debug e Release agora explicitam `-weak_framework SwiftUICore`, mantendo
 O verificador usa `otool -l` no archive e na IPA efetivamente exportada: rejeita
 SwiftUICore obrigatório em qualquer binário, dependências web, executável ausente,
 plataforma de simulador/macOS e mínimo acima de iOS 15.0. Testes simulam os
-comandos Mach-O da falha e a ligação opcional. A nova IPA ainda precisa ser
-compilada em macOS e testada no iPad; Windows não valida a execução Apple.
+comandos Mach-O da falha e a ligação opcional. Windows não valida a execução
+Apple. Após essas correções, o usuário confirmou que uma build posterior abriu
+no iPad, com áudio do B3, FX e pads. Isso não substitui testes dos demais fluxos
+nem valida alterações posteriores a essa build.
 
 A entrada `startWithBufferFrames` agora trata exceções Objective-C do grafo
 Core Audio e exceções C++ recuperáveis, além dos NSError já tratados. A UI
@@ -93,6 +97,18 @@ A interface nativa ainda não tem paridade funcional com o app anterior.
 A remoção do fallback web foi solicitada antes da paridade. Recursos ainda
 não migrados não voltam pela tela antiga; precisam de implementação nativa.
 A remoção das dependências web não confirma a causa do crash no iPadOS 16.
+
+Interface do player restaurada em SwiftUI/UIKit: barra de transporte, mixer de
+cinco saídas, oito módulos, bancos A–F, 16 cores de presets, teclado, Pads/FX,
+playlist (inclusive lateral ao segurar a marca), biblioteca, configurações,
+perfil e backup. A fonte JetBrains Mono ExtraBold acompanha sua licença OFL.
+Os controles usam o motor C++ existente; nenhuma página web é embarcada.
+Login permanece em retrato. Depois da autenticação, o carregamento aguarda o
+motor e precede as boas-vindas com digitação incremental do nome.
+
+Preferências locais de teclado, Lite, MIDI, buffer e troca sem corte ficam no
+UserDefaults. Volumes, mute, roteamento de saídas, oitava e transpose globais
+ficam no workspace da sessão/backup, com defaults para arquivos anteriores.
 
 Implementado nesta etapa:
 
@@ -117,14 +133,14 @@ Implementado nesta etapa:
   atômica fora da thread principal, com debounce. Guarda também Solo, BPM,
   compasso/click, filtros/banco dos pads e seleção do loop. Ao reabrir não toca
   automaticamente notas, loops ou click. SF2 usa UUID/nome relativo ao sandbox.
-- Drawbars, Slow/Fast e Gabinet são globais, fora dos presets. Os dados são
+- Drawbars, Brake/Slow/Fast, velocidades, aceleração, profundidade e Gabinet são globais, fora dos presets. Os dados são
   validados antes de restaurar; falha suspende autosave para não sobrescrever o
   arquivo anterior. Uma troca que falha cancela a camada preparada no C++, sem
   cortar o preset atual. Sustain continua sendo propagado pelo runtime.
 - EQ nativo por módulo: cinco bandas, ON/OFF explícito, Bell/Shelves/Cuts,
   frequência, ganho, Q e inclinação dos cortes. Os pontos editam frequência e
-  ganho durante o arraste (o painel é um mapa de posição, não uma curva de
-  resposta calculada). Knobs Skia e botões +/− com repetição moderada; Gain/Q
+  ganho durante o arraste, sobre uma curva de resposta calculada com as mesmas
+  fórmulas da interface anterior. Knobs nativos e botões +/− com repetição moderada; Gain/Q
   ficam indisponíveis nos cortes, cuja inclinação determina os polos.
   `setModuleEqualizer` altera exclusivamente o EQ, preservando rotary e demais
   efeitos. Usa a suavização de coeficientes já existente no DSP. Reset exige
@@ -198,8 +214,21 @@ Implementados nesta etapa, ainda sem validação em Xcode/dispositivo:
 presets próprios do synth; conta com Keychain e catálogo com download manual;
 playlists normais e de loops do usuário; edição/importação dos bancos FX;
 MIDI Learn com limites e modo compatibilidade; backup local UserBK em streaming
-com verificação de integridade antes da restauração. Os testes Foundation dessas
-rotinas exigem Swift/CryptoKit no CI Apple.
+com verificação de integridade antes da restauração. Os testes de sessão e
+workspace usam Foundation nos hosts com Swift; os testes do backup exigem
+CryptoKit e são obrigatórios no CI macOS.
+
+Catálogo nativo: categorias/timbres respeitam a ordem do backend com desempate
+estável; IDs duplicados, hashes e metadados inválidos são recusados. A versão
+instalada e a chave do objeto acompanham a sessão e o backup. Um SF2 atualizado
+oferece botão Atualizar sem apagar a versão referenciada por presets anteriores;
+a seleção da cópia existente continua disponível offline. Importação concluída
+ou recusada limpa a cópia temporária do download, sem remover documentos do
+usuário. Respostas de catálogo/download/validação de sessão de uma conta anterior
+não podem reativar essa conta depois de logout. Os testes de parsing e atualização
+fazem parte da fixture Foundation, sem exigir CryptoKit no Linux.
+Esta etapa não converte nem aplica `moduleSettings`/`defaultSettings` do catálogo:
+a escolha de timbre ainda preserva os ajustes atuais do módulo.
 
 Ainda pendentes: validação de todos esses fluxos na IPA, paridade completa das
 configurações do catálogo/backend e da interface anterior, e host nativo macOS.
@@ -217,7 +246,12 @@ Validação local: testes do motor C++ compilados em Windows/MSVC, testes Node
 e receita Skia simulada. Compilação Swift/Objective-C++, desenho Skia real,
 gestos e sincronismo audível precisam ser verificados em Xcode/IPA e iPad.
 `test-native-session.mjs` compila e executa testes Foundation com `swiftc` no
-CI Apple; em máquinas sem Swift registra explicitamente o teste não executado.
+Linux e no macOS. Somente no macOS inclui `BronzeNativeBackup.swift` e executa
+os testes CryptoKit: o runner exige o marcador de conclusão do backup e falha
+se ele não executar. No job Android/Linux, não tenta importar o SDK Apple e
+informa que apenas o backup foi omitido. Em máquinas não Apple sem Swift,
+registra explicitamente que nenhuma fixture Swift executou. Falta de Swift no
+macOS, falha de compilação ou de execução continuam bloqueando o Release.
 O teste de integração Xcode rejeita UUIDs duplicados: `BronzeNativeSession.swift`
 não pode compartilhar o identificador de `common.xcconfig`. A validação SwiftUI
 completa ainda exige a build Apple; testes de texto não substituem o compilador.

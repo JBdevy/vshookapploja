@@ -65,6 +65,7 @@ public:
   [[nodiscard]] bool setModuleDelay(std::size_t moduleIndex, DelayConfig delay) noexcept;
   [[nodiscard]] bool setModuleSoundEffects(std::size_t moduleIndex, CompressorConfig compressor,
       ChorusConfig chorus, LoFiConfig vibes) noexcept;
+  [[nodiscard]] bool setOrganRotaryParameters(std::uint8_t speed, float slowHz, float fastHz, float rampSeconds, float depth) noexcept;
   [[nodiscard]] bool setOrganRotaryFast(bool fast) noexcept;
   [[nodiscard]] bool setOrganCabinetEnabled(bool enabled) noexcept;
   // sustainDb: 0 dB segura o som cheio depois do Decay; abaixo disso a nota

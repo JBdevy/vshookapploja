@@ -17,20 +17,6 @@ struct BronzeAccountDevice: Identifiable {
     let name: String
     let current: Bool
 }
-struct BronzeCatalogSound: Identifiable, Sendable {
-    let id: String
-    let name: String
-    let objectKey: String
-    let version: Int
-    let byteSize: Int?
-    let sha256: String?
-}
-struct BronzeCatalogCategory: Identifiable {
-    let id: String
-    let name: String
-    let visibleModule: Int?
-    let sounds: [BronzeCatalogSound]
-}
 enum BronzeAPIError: LocalizedError {
     case response(Int, String)
     case invalid
@@ -72,13 +58,17 @@ enum BronzeKeychain {
 
 @MainActor
 final class BronzeNativeAccount: ObservableObject {
-    enum Step { case password, code, setup, deviceName, replacement }
+    enum Step: Equatable { case password, code, setup, deviceName, replacement }
     @Published private(set) var restoring = true
     @Published private(set) var session: BronzeAccountSession?
     @Published private(set) var step = Step.password
     @Published private(set) var busy = false
     @Published var message = ""
     @Published private(set) var devices: [BronzeAccountDevice] = []
+    @Published private(set) var totalLicenses: Int?
+    @Published private(set) var usedLicenses: Int?
+    @Published private(set) var profilePhoto = ""
+    @Published private(set) var profileCreatedAt: String?
     @Published private(set) var categories: [BronzeCatalogCategory] = []
     @Published private(set) var catalogBusy = false
     @Published private(set) var downloading: String?
@@ -150,6 +140,10 @@ final class BronzeNativeAccount: ObservableObject {
                 "password": password, "deviceKey": BronzeKeychain.deviceKey(), "platform": "iOS"]))
         }
     }
+    func resetLoginFlow() {
+        guard !busy, !authorized else { return }
+        step = .password; flowID = ""; devices = []; message = ""
+    }
     func startEmailVerification(email: String) async {
         await perform {
             let value = try await self.request("auth/start", body: ["email": email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()])
@@ -210,7 +204,31 @@ final class BronzeNativeAccount: ObservableObject {
     func listDevices() async {
         await perform {
             guard let token = self.session?.token else { return }
-            self.devices = self.readDevices(try await self.request("account/devices", token: token))
+            let result = try await self.request("account/devices", token: token)
+            guard self.session?.token == token else { return }
+            self.devices = self.readDevices(result)
+            self.totalLicenses = result["totalLicenses"] as? Int
+            self.usedLicenses = result["usedLicenses"] as? Int
+        }
+    }
+
+    func loadProfile() async {
+        await perform {
+            guard let token = self.session?.token else { return }
+            let result = try await self.request("account/profile", token: token)
+            guard self.session?.token == token, let profile = result["profile"] as? [String: Any] else { return }
+            self.profilePhoto = profile["photoDataUrl"] as? String ?? ""
+            self.profileCreatedAt = profile["createdAt"] as? String
+        }
+    }
+
+    func saveProfilePhoto(_ jpeg: Data) async {
+        await perform {
+            guard let token = self.session?.token, jpeg.count <= 4 * 1024 * 1024 else { return }
+            let result = try await self.request("account/profile/photo", body: ["imageDataUrl": "data:image/jpeg;base64," + jpeg.base64EncodedString()], token: token, method: "PUT")
+            guard self.session?.token == token, let profile = result["profile"] as? [String: Any] else { return }
+            self.profilePhoto = profile["photoDataUrl"] as? String ?? ""
+            self.message = "Foto atualizada."
         }
     }
     func removeDevice(_ id: String, password: String) async {
@@ -229,6 +247,7 @@ final class BronzeNativeAccount: ObservableObject {
         }
     }
     private func clearSession() {
+        profilePhoto = ""; profileCreatedAt = nil; totalLicenses = nil; usedLicenses = nil
         monitor?.cancel(); monitor = nil; BronzeKeychain.remove("session"); session = nil; categories = []; devices = []; step = .password
     }
     private func readDevices(_ response: [String: Any]) -> [BronzeAccountDevice] {
@@ -245,8 +264,11 @@ final class BronzeNativeAccount: ObservableObject {
                 guard let self, let token = self.session?.token else { return }
                 do {
                     let response = try await self.request("auth/me", token: token)
-                    if var current = self.session { current.account = try self.identity(response["account"]); try self.store(current) }
-                } catch BronzeAPIError.response(let status, _) where status == 401 || status == 403 { self.clearSession(); return }
+                    guard !Task.isCancelled, var current = self.session, current.token == token else { return }
+                    current.account = try self.identity(response["account"]); try self.store(current)
+                } catch BronzeAPIError.response(let status, _) where status == 401 || status == 403 {
+                    if self.session?.token == token { self.clearSession() }; return
+                }
                 catch { /* Network loss must not interrupt a performance. */ }
             }
         }
@@ -257,6 +279,7 @@ final class BronzeNativeAccount: ObservableObject {
         catalogBusy = true; defer { catalogBusy = false }
         do {
             let result = try await request("account/sound-catalog", token: token)
+            guard session?.token == token else { return }
             guard let catalog = result["catalog"] as? [String: Any] else { throw BronzeAPIError.invalid }
             let data = try JSONSerialization.data(withJSONObject: catalog)
             categories = try Self.parseCatalog(data)
@@ -264,6 +287,7 @@ final class BronzeNativeAccount: ObservableObject {
             try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
             try data.write(to: store.directory.appendingPathComponent("catalog.json"), options: .atomic)
         } catch {
+            guard session?.token == token else { return }
             if let store = try? BronzeSessionStore.applicationStore(),
                let data = try? Data(contentsOf: store.directory.appendingPathComponent("catalog.json")),
                let cached = try? Self.parseCatalog(data) { categories = cached }
@@ -271,35 +295,28 @@ final class BronzeNativeAccount: ObservableObject {
         }
     }
     nonisolated static func parseCatalog(_ data: Data) throws -> [BronzeCatalogCategory] {
-        guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let categories = payload["categories"] as? [[String: Any]], categories.count <= 256 else { throw BronzeAPIError.invalid }
-        var ids = Set<String>()
-        return try categories.map { category in
-            guard let id = category["id"] as? String, let name = category["name"] as? String,
-                  let sounds = category["sounds"] as? [[String: Any]], sounds.count <= 10000 else { throw BronzeAPIError.invalid }
-            return BronzeCatalogCategory(id: id, name: name, visibleModule: category["visibleModule"] as? Int, sounds: try sounds.map {
-                guard let id = $0["id"] as? String, ids.insert(id).inserted, let name = $0["name"] as? String,
-                      let key = ($0["sf2ObjectKey"] ?? $0["sf2Url"]) as? String, !key.isEmpty else { throw BronzeAPIError.invalid }
-                return BronzeCatalogSound(id: id, name: name, objectKey: key, version: $0["assetVersion"] as? Int ?? 1,
-                    byteSize: $0["byteSize"] as? Int, sha256: $0["sha256"] as? String)
-            })
-        }
+        try BronzeNativeCatalog.parse(data)
     }
     func download(_ sound: BronzeCatalogSound) async throws -> URL {
         guard let token = session?.token, downloading == nil else { throw BronzeAPIError.invalid }
         downloading = sound.id; defer { downloading = nil }
         let result = try await request("account/sound-assets/url", body: ["objectKey": sound.objectKey, "kind": "sf2"], token: token)
+        guard session?.token == token else { throw CancellationError() }
         guard let address = result["url"] as? String, let url = URL(string: address), url.scheme == "https" else { throw BronzeAPIError.invalid }
         // Do not forward the account bearer token to the asset/CDN host.
         let (temporary, response) = try await network.download(from: url)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        guard session?.token == token else { throw CancellationError() }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), http.url?.scheme == "https" else { throw BronzeAPIError.invalid }
         let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 12, sound.byteSize.map({ $0 <= 0 || $0 == size }) ?? true else { throw BronzeAPIError.invalid }
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        var delivered = false
+        defer { if !delivered { try? FileManager.default.removeItem(at: destination) } }
         let safeName = BronzeNativeBackup.fileName(user: sound.name).replacingOccurrences(of: ".bkbackup", with: ".sf2")
         let output = destination.appendingPathComponent(String(safeName.dropFirst(7)))
         // Hashing/copying SF2 must not block SwiftUI while it draws audio meters.
-        return try await Task.detached(priority: .utility) {
+        let downloaded = try await Task.detached(priority: .utility) {
             let input = try FileHandle(forReadingFrom: temporary); defer { try? input.close() }
             let header = try input.read(upToCount: 12) ?? Data()
             guard header.count == 12, String(data: header.prefix(4), encoding: .ascii) == "RIFF",
@@ -313,5 +330,19 @@ final class BronzeNativeAccount: ObservableObject {
             try FileManager.default.moveItem(at: temporary, to: output)
             return output
         }.value
+        guard session?.token == token else {
+            throw CancellationError()
+        }
+        delivered = true
+        return downloaded
+    }
+
+    // Only a UUID directory created by download(), never an imported user file.
+    func discardDownload(_ url: URL) {
+        let directory = url.deletingLastPathComponent().standardizedFileURL
+        guard UUID(uuidString: directory.lastPathComponent) != nil,
+              directory.deletingLastPathComponent().resolvingSymlinksInPath().path == FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL.path,
+              url.pathExtension.lowercased() == "sf2" else { return }
+        try? FileManager.default.removeItem(at: directory)
     }
 }

@@ -9,9 +9,13 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Gerados pelo Capacitor na etapa de criação dos projetos nativos.
+# Saídas locais; nunca transferir caches de Windows para a build do Mac.
+/build/
 android/.gradle/
+android/.cxx/
+android/app/.cxx/
 android/local.properties
+android/build/
 android/app/build/
 ios/App/Pods/
 ios/App/DerivedData/

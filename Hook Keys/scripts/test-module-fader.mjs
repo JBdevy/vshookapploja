@@ -796,7 +796,7 @@ test('paisagem dos dois lados no iOS e no Android', () => {
   const android = readFileSync(new URL('../android/app/src/main/java/com/hookdeveloper/hookkeys/HookKeysNativePlugin.java', import.meta.url), 'utf8');
   assert.match(runtime, /if \(await hookKeysNative\.lockOrientation\(mode\)\) return;/);
   assert.match(runtime, /window\.addEventListener\('resize', refreshNotchSideAfterOrientationChange\)/);
-  assert.match(iosController, /supportedInterfaceOrientations: UIInterfaceOrientationMask \{ \.landscape \}/);
+  assert.match(iosController, /supportedInterfaceOrientations: UIInterfaceOrientationMask \{\s*authorized \? \.landscape : \.portrait\s*\}/);
   assert.match(iosController, /override var shouldAutorotate: Bool \{ true \}/);
   assert.match(orientationTransition, /await refreshNativeNotchSide\(\);/);
   assert.match(android, /SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);

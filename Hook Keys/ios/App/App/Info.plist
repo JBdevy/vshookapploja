@@ -10,6 +10,8 @@
 	<string>O Bronze Keys usa Bluetooth para receber notas e controles de dispositivos MIDI conectados.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>O Bronze Keys usa Bluetooth para receber notas e controles de dispositivos MIDI conectados.</string>
+	<key>UIAppFonts</key>
+	<array><string>Fonts/JetBrainsMono-ExtraBold.ttf</string></array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
@@ -38,17 +40,36 @@
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Bronze Keys</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).BronzeSceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>armv7</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
+		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
+		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>

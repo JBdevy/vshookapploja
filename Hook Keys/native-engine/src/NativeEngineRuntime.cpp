@@ -698,6 +698,25 @@ bool NativeEngineRuntime::setModuleSoundEffects(std::size_t moduleIndex,
   return true;
 }
 
+bool NativeEngineRuntime::setOrganRotaryParameters(std::uint8_t speed, float slowHz,
+    float fastHz, float rampSeconds, float depth) noexcept {
+  if (speed > 2 || !std::isfinite(slowHz) || !std::isfinite(fastHz) ||
+      !std::isfinite(rampSeconds) || !std::isfinite(depth)) return false;
+  std::scoped_lock lock(configMutex_);
+  auto next = controlLayer_->configs[6];
+  auto &rotary = next.effects.rotary;
+  rotary.enabled = true;
+  rotary.speed = speed;
+  rotary.slowHz = slowHz;
+  rotary.fastHz = fastHz;
+  rotary.rampSeconds = rampSeconds;
+  rotary.depth = depth;
+  rotary.normalize();
+  if (!controlLayer_->engine->setPreparedModuleConfig(6, next)) return false;
+  controlLayer_->configs[6] = next;
+  return true;
+}
+
 bool NativeEngineRuntime::setOrganRotaryFast(bool fast) noexcept {
   std::scoped_lock lock(configMutex_);
   auto &config = controlLayer_->configs[6];

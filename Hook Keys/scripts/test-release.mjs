@@ -19,6 +19,7 @@ const tests = [
   ['scripts/test-native-release-artifacts.mjs'],
   ['scripts/test-skia-apple-build.mjs'],
   ['scripts/test-native-session.mjs'],
+  ['scripts/test-native-session-runner.mjs'],
   ['scripts/test-loop-metronome.mjs'],
   ['scripts/test-keyboard-style.mjs'],
   ['scripts/test-input-keyboard.mjs'],
