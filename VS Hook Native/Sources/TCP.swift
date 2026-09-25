@@ -45,9 +45,9 @@ struct TCPView: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 5) {
-                DirectorControl(title: session.playing ? "STOP" : "PLAY", background: Color(hex: session.playing ? "DC2626" : "166534")) { session.command("play_button") }
-                DirectorControl(title: "AUTO 1", background: Color(hex: session.autoEnabled(1) ? "15803D" : "172033")) { session.toggleAuto(1) }
-                DirectorControl(title: "STOP BREAK") { session.command("director_stop_break", session.target.merging(["noSeek": true, "preserveCursor": true, "transportOnly": true, "ignoreFadeout": true, "stopBreak": true])) }
+                DirectorTransportControl(session: session)
+                DirectorAutoControl(session: session, mode: 1)
+                DirectorTransportControl(session: session, stopBreak: true)
                 DirectorControl(title: "LIST", background: Color(hex: listOpen ? "15803D" : "991B1B")) { listOpen.toggle() }.accessibilityIdentifier("vshook.tcp.list")
             }
             GeometryReader { geometry in
@@ -76,6 +76,8 @@ struct TCPView: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: "334155")).allowsHitTesting(false))
         }
         .task(id: revision) { await model.load(session: session) }
+        .onChange(of: session.playing) { if $0 { cursor = nil } }
+        .onChange(of: session.snapshot["editCursorPosition"]) { _ in cursor = nil }
         .onChange(of: focus.identifier) { _ in zoom = 1; zoomStart = 1; pan = 0; cursor = nil }
         .overlay {
             if selectedItem.exists || selectedTrack.exists {
@@ -94,7 +96,7 @@ struct TCPView: View {
                                 DirectorControl(title: "FECHAR", height: 34, size: 12) { closeItem() }.frame(width: 84)
                             }
                             TCPItemControls(session: session, item: current, itemMode: itemMode, view: master ? "master" : "tracks", song: focus)
-                        }.padding(16).frame(width: min(520, geometry.size.width * 0.92))
+                        }.foregroundColor(.white).padding(16).frame(width: min(520, geometry.size.width * 0.92))
                             .background(Color(hex: "101827")).clipShape(RoundedRectangle(cornerRadius: 6))
                             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: "475569")))
                             .accessibilityAddTraits(.isModal)
@@ -110,6 +112,7 @@ struct TCPView: View {
         let right = max(1, width - left)
         let rows = model.rowCache.rows(tracks: tracks, items: items, focused: focus.exists)
         let regions = session.snapshot["regions"].array
+        let loopGeometry = focus.exists ? TCPLoopOverlayGeometry.all(session.snapshot, visible: visibleRange, songRange: bounds) : []
         return VStack(spacing: 0) {
             if !master {
                 HStack(spacing: 0) {
@@ -120,6 +123,16 @@ struct TCPView: View {
                         .padding(.leading, 8).frame(width: left, alignment: .leading)
 
                     TCPRegionHeader(regions: regions, range: visibleRange, focused: focus.exists, cursor: currentCursor, playing: session.playing && session.connected, updatedAt: session.lastUpdate).frame(width: right, height: 36)
+                        .overlay { TCPLoopOverlay(geometry: loopGeometry, header: true) }
+                        .contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                            guard !session.playing else { return }
+                            seek(value.location.x / max(1, right))
+                        }.onEnded { value in
+                            guard !session.playing else { return }
+                            seek(value.location.x / max(1, right))
+                        })
+                        .accessibilityLabel("Arrastar cursor do TCP")
                 }.frame(height: 36).background(Color(hex: "070A0F"))
             }
             ScrollView {
@@ -127,12 +140,16 @@ struct TCPView: View {
                     ForEach(rows) { row in
                         let track = row.track
                         HStack(spacing: 0) {
-                            TCPTrackStrip(session: session, track: track, view: master ? "master" : "tracks") { selectedTrack = track }
+                            TCPTrackStrip(session: session, fadeout: session.fadeoutActive, track: track, view: master ? "master" : "tracks") { selectedTrack = track }
                                 .equatable().padding(.trailing, master ? 0 : 24).frame(width: left)
                             if !master {
                                 TCPGridRow(track: track, items: row.items, regions: regions, range: visibleRange, focused: focus.exists,
                                            shadow: row.shadow,
-                                           onSeek: { ratio in selectedHandle = ""; seek(ratio) }, onItem: { selectedItem = $0 }, canPan: zoom > 1,
+                                           onSeek: { ratio in selectedHandle = ""; seek(ratio) }, onItem: { selectedItem = $0 },
+                                           canSeek: focus.exists && !session.playing,
+                                           cursorRatio: currentCursor.map { ($0 - visibleRange.start) / visibleRange.duration },
+                                           onCursorDrag: { ratio, _ in selectedHandle = ""; seek(ratio) },
+                                           cancelCursorDrag: { cursor = nil }, canPan: zoom > 1,
                                            onPan: { ratio, ended in
                                                if panStart == nil { panStart = pan }
                                                pan = min(bounds.duration - visibleRange.duration, max(0, (panStart ?? pan) - ratio * visibleRange.duration))
@@ -146,8 +163,10 @@ struct TCPView: View {
                 }
             }.overlay(alignment: .trailing) {
                 if !master {
-                    TCPMovingCursor(range: visibleRange, position: currentCursor, playing: session.playing && session.connected, updatedAt: session.lastUpdate, head: false)
-                        .frame(width: right).clipped().allowsHitTesting(false)
+                    ZStack {
+                        TCPLoopOverlay(geometry: loopGeometry)
+                        TCPMovingCursor(range: visibleRange, position: currentCursor, playing: session.playing && session.connected, updatedAt: session.lastUpdate, head: false)
+                    }.frame(width: right).clipped().allowsHitTesting(false)
                 }
             }.accessibilityIdentifier("vshook.tcp.tracks")
                 .simultaneousGesture(MagnificationGesture().onChanged { zoom = min(16, max(1, zoomStart * $0)) }.onEnded { _ in zoomStart = zoom })
@@ -166,7 +185,8 @@ struct TCPView: View {
     }
     private var currentCursor: Double? {
         if let cursor, !session.playing { return cursor }
-        let position = session.snapshot.first("playPosition", "currentPlayPosition", "position", "editCursorPosition")
+        if session.playing { return session.playbackPosition(at: session.lastUpdate) }
+        let position = session.snapshot.first("editCursorPosition", "cursorPosition", "playPosition", "currentPlayPosition", "position")
         return position.exists ? position.double : nil
     }
     private func seek(_ ratio: Double) {
@@ -174,13 +194,14 @@ struct TCPView: View {
         guard !session.playing else { session.message = "APENAS COM A MÚSICA PARADA"; return }
         let position = visibleRange.start + visibleRange.duration * min(1, max(0, ratio))
         cursor = position
-        session.command("edit_cursor_move", ["position": .number(position), "minPos": .number(bounds.start), "maxPos": .number(bounds.end), "cursorMoveSeq": .number(Date().timeIntervalSince1970 * 1_000_000)])
+        session.moveEditCursor(to: position, song: focus)
     }
 }
 private struct TCPTrackStrip: View, Equatable {
     let session: HookSession
+    let fadeout: Bool
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.session === rhs.session && lhs.track == rhs.track && lhs.view == rhs.view
+        lhs.session === rhs.session && lhs.track == rhs.track && lhs.view == rhs.view && lhs.fadeout == rhs.fadeout
     }
     let track: JSON
     let view: String
@@ -189,19 +210,28 @@ private struct TCPTrackStrip: View, Equatable {
     @State private var editing = false
     @State private var holdUntil = Date.distantPast
     var body: some View {
-        HStack(spacing: 5) {
+        Group {
+            if fadeout && session.fadeoutClock.trackRatio(track, at: .now) != nil {
+                TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in row(at: context.date) }
+            } else { row(at: .now) }
+        }
+    }
+    private func row(at date: Date) -> some View {
+        let visualRatio = !editing && fadeout ? session.fadeoutClock.trackRatio(track, at: date) ?? ratio : ratio
+        let db = MixerScale.decibels(visualRatio)
+        return HStack(spacing: 5) {
             Image(systemName: "arrow.up.and.down").font(.system(size: 13)).foregroundColor(Color(hex: "64748B")).frame(width: 33, height: 72).background(Color(hex: "0F172A"))
             Rectangle().fill(Color(hex: TCPAppearance.trackColor(track))).frame(width: 5, height: 56)
             VStack(spacing: 1) {
                 HStack(spacing: 4) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(track.name.uppercased()).font(.custom("Arial-BoldMT", size: 11)).lineLimit(1)
-                        Text(dbText).font(.custom("Arial-BoldMT", size: 9)).foregroundColor(Color(hex: "94A3B8"))
+                        Text(db.isFinite ? String(format: "%+.1f dB", db) : "−∞ dB").font(.custom("Arial-BoldMT", size: 9)).foregroundColor(Color(hex: "94A3B8"))
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()).onTapGesture(perform: open)
                     mini("M", on: track.first("mute", "muted").bool, color: "DC2626", command: "mixer_toggle_mute")
                     mini("S", on: track.first("solo", "trackSolo").bool, color: "EAB308", command: "mixer_toggle_solo")
                 }.frame(height: 30)
-                DirectorFader(value: $ratio, label: "Volume de " + track.name, editingChanged: { active in editing = active; holdUntil = Date().addingTimeInterval(2); if !active { session.setVolume(track, ratio: ratio, view: view) } })
+                DirectorFader(value: Binding(get: { visualRatio }, set: { ratio = $0 }), label: "Volume de " + track.name, editingChanged: { active in editing = active; holdUntil = Date().addingTimeInterval(2); if !active { session.setVolume(track, ratio: ratio, view: view) } })
                     .tint(.white).frame(height: 28).accessibilityLabel("Volume de " + track.name)
                     .onChange(of: ratio) { _ in if editing { session.setVolume(track, ratio: ratio, view: view) } }
             }.padding(.trailing, 12)

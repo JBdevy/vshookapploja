@@ -1,8 +1,8 @@
 import SwiftUI
 
-func drawGridPlayhead(context: inout GraphicsContext, size: CGSize, x: CGFloat, trail: CGFloat, headVisible: Bool = true) {
+func drawGridPlayhead(context: inout GraphicsContext, size: CGSize, x: CGFloat, trail: CGFloat, headVisible: Bool = true, headWidth: CGFloat = 30) {
     let color = Color(hex: "39FF14")
-    let top: CGFloat = headVisible ? 16 : 0
+    let top: CGFloat = headVisible ? headWidth / 2 + 1 : 0
     let tail = min(x, max(0, trail))
     if tail > 0 {
         let rect = CGRect(x: x - tail, y: top, width: tail, height: max(0, size.height - top))
@@ -17,8 +17,8 @@ func drawGridPlayhead(context: inout GraphicsContext, size: CGSize, x: CGFloat, 
     context.fill(line, with: .color(color))
     guard headVisible else { return }
     var head = Path()
-    head.move(to: CGPoint(x: max(0, x - 15), y: 1))
-    head.addLine(to: CGPoint(x: min(size.width, x + 15), y: 1))
+    head.move(to: CGPoint(x: max(0, x - headWidth / 2), y: 1))
+    head.addLine(to: CGPoint(x: min(size.width, x + headWidth / 2), y: 1))
     head.addLine(to: CGPoint(x: x, y: top))
     head.closeSubpath()
     context.fill(head, with: .color(Color(hex: "D2D600")))
@@ -35,9 +35,8 @@ struct DirectorGridPanel: View {
     private var start: Double { song.first("startPos", "start_pos").double }
     private var end: Double { max(start + 0.001, song.first("endPos", "end_pos").double) }
     private func current(at date: Date) -> Double {
-        let base = position ?? (session.playing ? session.snapshot.first("playPosition", "position").double : session.snapshot.first("editCursorPosition", "playPosition", "position").double)
-        let elapsed = session.playing && session.connected ? min(1, max(0, date.timeIntervalSince(session.lastUpdate))) : 0
-        return min(end, max(start, base + elapsed))
+        let current = position ?? (session.playing ? session.playbackPosition(at: date) : session.snapshot.first("editCursorPosition", "playPosition", "position").double)
+        return min(end, max(start, current))
     }
     var body: some View {
         VStack(spacing: 3) {
@@ -69,10 +68,12 @@ struct DirectorGridPanel: View {
                         drawGridPlayhead(context: &context, size: size, x: x, trail: trail)
                     }.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { value in
                         guard song.exists, !session.playing else { return }
-                        position = start + min(1, max(0, value.location.x / max(1, geometry.size.width))) * (end - start)
+                        let point = start + min(1, max(0, value.location.x / max(1, geometry.size.width))) * (end - start)
+                        position = point
+                        session.moveEditCursor(to: point, song: song)
                     }.onEnded { _ in
                         guard song.exists, !session.playing, let position else { return }
-                        session.command("edit_cursor_move", session.targetPayload(song).merging(["position": .number(position), "targetPosition": .number(position), "noPlay": true, "preservePlayback": true]))
+                        session.moveEditCursor(to: position, song: song)
                     }).accessibilityLabel("Mover cursor dentro da música")
                     }
                 }.frame(height: session.tablet ? 52 : 126).background(LinearGradient(colors: [Color(hex: "1B1F2A"), Color(hex: "0F172A")], startPoint: .top, endPoint: .bottom))

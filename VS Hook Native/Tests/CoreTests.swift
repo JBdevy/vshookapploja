@@ -5,9 +5,11 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
     private static var snapshot: JSON = [:]
     private static var commands: [JSON] = []
     private static var rejected = ""
+    private static var delayedType = ""
     static func reset(_ value: JSON) { lock.lock(); defer { lock.unlock() }; snapshot = value; commands = []; rejected = "" }
     static func state(_ value: JSON) { lock.lock(); defer { lock.unlock() }; snapshot = value }
     static func reject(_ type: String) { lock.lock(); defer { lock.unlock() }; rejected = type }
+    static func delay(_ type: String) { lock.lock(); defer { lock.unlock() }; delayedType = type }
     static var sent: [JSON] { lock.lock(); defer { lock.unlock() }; return commands }
     override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "fixture.invalid" }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -15,6 +17,7 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         Self.lock.lock()
         var response = Self.snapshot
         var status = 200
+        var delay = false
         if request.url?.path == "/command" {
             var data = request.httpBody ?? Data()
             if let stream = request.httpBodyStream {
@@ -24,10 +27,12 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
             }
             let command = (try? JSONDecoder().decode(JSON.self, from: data)) ?? .null
             Self.commands.append(command)
+            delay = command["type"].string == Self.delayedType
             if command["type"].string == Self.rejected { status = 503; response = ["ok": false, "error": "fixture rejection"] }
             else { response = ["ok": true] }
         }
         Self.lock.unlock()
+        if delay { Thread.sleep(forTimeInterval: 0.15) }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: try! JSONEncoder().encode(response))
         client?.urlProtocolDidFinishLoading(self)
@@ -145,6 +150,12 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         try await Task.sleep(nanoseconds: 400_000_000)
         check(MockBridge.sent.isEmpty, "musician cannot claim session, switch project or control playback")
         musician.suspend()
+        try await testImmediateFeedback(project: project, http: http)
+        try await testAutoBlockFeedback(project: project, http: http)
+        testContinuousClock()
+        try await testFadeoutFeedback(project: project, http: http)
+        try await testPlayFromCursor(project: project, http: http)
+        try await testLiveCursorDrag(project: project, http: http)
         let layoutSession = HookSession(project: project, mode: .director, tablet: true, http: http)
         let block: JSON = ["id": "block", "name": "Bloco", "sourceNumber": -1]
         let parent: JSON = ["id": "parent", "name": "Família", "isHashParent": true]
@@ -180,6 +191,42 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         let familyChildren = DirectorFamily.children(of: family, data: familyData)
         check(familyChildren.map(\.identifier) == ["m7", "m8"] && familyChildren[0]["endPos"] == 30 && familyChildren[1]["endPos"] == 50, "marker drawer preserves exact boundaries and excludes Parts markers")
         check(DirectorSearch.entries(familyData, query: "cancao medley").map(\.identifier) == ["m7"], "LUPA finds legacy marker children by parent")
+        for tablet in [false, true] {
+            MockBridge.reset(state)
+            let searchSession = HookSession(project: project, mode: .director, tablet: tablet, http: http)
+            searchSession.connected = true; searchSession.authenticated = true
+            searchSession.snapshot = state
+            searchSession.page = "regions"; searchSession.panel = "tp"; searchSession.query = "old filter"
+            searchSession.selectSearchResult(state["regions"].array[0])
+            let request = searchSession.searchScrollRequest!
+            check(searchSession.page == "playlist" && searchSession.panel.isEmpty && searchSession.query.isEmpty, "LUPA returns to the active repertoire and clears hidden filters in both layouts")
+            check(request.playlistEntryID == "entry2" && request.rowID(in: searchSession.songEntries, page: "playlist") == "0:entry2", "LUPA targets the actual playlist occurrence after list remount")
+            check(request.rowID(in: searchSession.songEntries, page: "regions") == nil && request.rowID(in: [], page: "playlist") == nil, "scroll waits for the matching page and its rows")
+            searchSession.selectSearchResult(state["regions"].array[0])
+            check(searchSession.searchScrollRequest?.id != request.id, "choosing the same search result issues a new scroll")
+            searchSession.snapshot["regions"] = .array(state["regions"].array + [solo])
+            searchSession.selectSearchResult(solo)
+            check(searchSession.page == "regions" && searchSession.selectedID == "solo" && searchSession.searchScrollRequest?.rowID(in: searchSession.songEntries, page: "regions") == "1:solo", "song outside the active repertoire opens and targets MÚSICAS")
+            searchSession.snapshot = familyData
+            searchSession.selectSearchResult(familyChildren[0])
+            check(searchSession.page == "playlist" && searchSession.openFamilies.contains(family.identifier), "LUPA opens a closed family in the active repertoire")
+            check(searchSession.searchScrollRequest?.rowID(in: searchSession.songEntries, page: "playlist") == "1:m7", "generated family child can be revealed and scrolled to")
+            try await until { MockBridge.sent.contains { $0["type"] == "select_playlist_song" && $0["payload"]["targetId"] == "m7" } }
+            MockBridge.reset(state)
+            searchSession.snapshot = state.merging(["playing": true, "playingSongId": "current", "selectedPlaylistSongId": "current", "regions": .array(state["regions"].array + [solo])])
+            searchSession.selectSearchResult(state["regions"].array[0])
+            try await until { MockBridge.sent.contains { $0["type"] == "queue_playlist_song" } }
+            let searchQueue = MockBridge.sent.first { $0["type"] == "queue_playlist_song" }!["payload"]
+            check(searchSession.queueID == "song" && searchSession.playingID == "current" && searchSession.selectedID == "current", "LUPA queues without replacing playback or selection")
+            check(searchQueue["playlistEntryId"] == "entry2" && searchQueue["manual"] == true, "search queue preserves the exact repertoire entry and manual intent")
+            searchSession.selectSearchResult(state["regions"].array[0])
+            check(searchSession.queueID == "song", "choosing an already queued search result keeps it queued")
+            searchSession.selectSearchResult(solo)
+            try await until { MockBridge.sent.contains { $0["type"] == "queue_region_song" } }
+            check(searchSession.page == "regions" && searchSession.queueID == "solo" && searchSession.playingID == "current", "search queues songs outside the repertoire while navigating to MÚSICAS")
+            check(!MockBridge.sent.contains { ["select_region", "select_playlist_song", "clear_queue"].contains($0["type"].string) }, "search during playback only sends queue commands")
+            searchSession.suspend()
+        }
         check(DirectorPlaylistCopy.text(familyList, data: familyData, includeChildren: false) == "CULTO\n\nTempo total: 00:50\n\n--MEDLEY--", "COPY retains playlist header and duration")
         check(DirectorPlaylistCopy.text(familyList, data: familyData, includeChildren: true).hasSuffix("--MEDLEY--\nCanção antiga\nPróxima"), "COPY can include drawer children in song order")
         let parts = DirectorParts.markers(partData, song: partsSong)
@@ -189,6 +236,23 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         let overlapping: JSON = ["id": "media", "trackGuid": "guid-track", "startPos": 90, "endPos": 150]
         check(range.span(overlapping)?.left == 0 && range.span(overlapping)?.width == 0.5, "TCP clips media to selected song bounds")
         check(range.span(["startPos": 10, "endPos": 99]) == nil, "TCP excludes media outside selected song")
+        let loopState: JSON = ["loopEnabled": true, "loopStartPos": 120, "loopEndPos": 180]
+        let loopGeometry = TCPLoopOverlayGeometry.make(loopState, visible: range)!
+        check(loopGeometry.startMarker == 0.2 && loopGeometry.endMarker == 0.8, "TCP loop boundaries align with timeline seconds")
+        let zoomedLoop = TCPLoopOverlayGeometry.make(loopState, visible: TCPRange(start: 140, end: 200))!
+        check(zoomedLoop.startMarker == nil && zoomedLoop.left == 0 && zoomedLoop.endMarker == 2.0 / 3, "zoom clips the loop fill without inventing an offscreen start marker")
+        check(TCPLoopOverlayGeometry.make(loopState.merging(["loopEnabled": false]), visible: range) == nil, "disabled loop has no TCP markers")
+        check(TCPLoopOverlayGeometry.make(loopState, visible: TCPRange(start: 0, end: 100)) == nil, "loop outside focused song is hidden")
+        let configuredLoops: JSON = ["loopActive": false, "tcpMultiLoopRanges": [["songId": "a", "slot": 2, "startPos": 120, "endPos": 180]]]
+        let enabledShapes = TCPLoopOverlayGeometry.all(configuredLoops, visible: range)
+        check(enabledShapes.count == 1 && enabledShapes[0].slot == 2 && enabledShapes[0].startMarker == 0.2, "enabled multiloop appears before the playhead reaches it")
+        check(TCPLoopOverlayGeometry.all(configuredLoops.merging(loopState), visible: range).count == 1, "Repeat does not duplicate enabled multiloop boundaries")
+        check(TCPLoopOverlayGeometry.all(configuredLoops.merging(["tcpMultiLoopRanges": []]), visible: range).isEmpty, "disabled multiloop slots leave the grid")
+        let existingMarkers: JSON = ["loopActive": false, "markers": [["name": "*1", "pos": 11760.64], ["name": "*1", "pos": 11768.32]]]
+        let oldBridgeShapes = TCPLoopOverlayGeometry.all(existingMarkers, visible: TCPRange(start: 11728, end: 11906.56))
+        check(oldBridgeShapes.count == 1 && oldBridgeShapes[0].slot == 1 && oldBridgeShapes[0].startMarker != nil && oldBridgeShapes[0].endMarker != nil, "existing Grid marker catalog draws both TCP limits without a new bridge field")
+        check(TCPLoopOverlayGeometry.all(existingMarkers, visible: TCPRange(start: 11764, end: 11780), songRange: TCPRange(start: 11728, end: 11906.56)).first?.startMarker == nil, "zoom retains a marker pair whose beginning is offscreen")
+        check(TCPLoopOverlayGeometry.all(existingMarkers.merging(["tcpMultiLoopRanges": []]), visible: TCPRange(start: 11728, end: 11906.56)).isEmpty, "explicit disabled slots override compatibility markers")
         check(TCPModel.matches(overlapping, track: ["id": "track", "guid": "guid-track"]), "timeline items match track GUID aliases")
         check(!TCPModel.matches(overlapping, track: ["id": "other"]), "timeline does not leak media to other tracks")
         layoutSession.snapshot = ["playing": true, "playPosition": 125, "regions": [solo, ["id": "child-span", "name": "Trecho", "startPos": 120, "endPos": 130]]]
@@ -250,5 +314,290 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         check(DirectorNumberOrder.ascending([["id": 1], ["id": 2]]) && !DirectorNumberOrder.ascending([["id": 2], ["id": 1]]), "0-9 alternates direction from the current list order")
         print("VSHOOK_DIRECTOR_REFERENCE_OK: blocks, families, bridge controls, timer and song progress")
         print("VSHOOK_CORE_OK: protocol, discovery, authentication, queue, volume, rollback and passive musician")
+    }
+
+    @MainActor static func testLiveCursorDrag(project: HookProject, http: BridgeHTTP) async throws {
+        let song: JSON = ["id": "a", "startPos": 10, "endPos": 100]
+        let data: JSON = ["connected": true, "playing": false, "playingId": "", "playPosition": 10, "editCursorPosition": 10, "selectedPlaylistSongId": "a", "selectedRegionId": "", "regions": [song], "playlists": [["id": "list", "songs": [song]]]]
+        MockBridge.reset(data); MockBridge.delay("edit_cursor_move")
+        let session = HookSession(project: project, mode: .director, tablet: true, http: http)
+        session.start()
+        try await until { session.connected && session.authenticated }
+        session.moveEditCursor(to: 20, song: song)
+        try await until { MockBridge.sent.contains { $0["type"] == "edit_cursor_move" } }
+        check(MockBridge.sent.first { $0["type"] == "edit_cursor_move" }?["payload"]["position"] == 20, "drag sends cursor to engine before finger-up")
+        for point in 21...45 { session.moveEditCursor(to: Double(point), song: song) }
+        check(session.snapshot["editCursorPosition"] == 45, "rapid drag tracks latest finger position locally")
+        session.command("play_button")
+        check(abs(session.playbackPosition(at: Date()) - 45) < 0.1, "PLAY uses final drag position while bridge is still processing")
+        session.command("director_stop_break")
+        for point in 60...70 { session.moveEditCursor(to: Double(point), song: song) }
+        try await until { MockBridge.sent.contains { $0["type"] == "edit_cursor_move" && $0["payload"]["position"] == 70 } }
+        let sent = MockBridge.sent
+        let moves = sent.filter { $0["type"] == "edit_cursor_move" }
+        check(moves.map { $0["payload"]["position"].int } == [20, 45, 70], "slow network coalesces obsolete drag samples without losing final positions")
+        let finalBeforePlay = sent.firstIndex { $0["type"] == "edit_cursor_move" && $0["payload"]["position"] == 45 }!
+        let play = sent.firstIndex { $0["type"] == "play_button" }!
+        let stop = sent.firstIndex { $0["type"] == "director_stop_break" }!
+        let laterDrag = sent.firstIndex { $0["type"] == "edit_cursor_move" && $0["payload"]["position"] == 70 }!
+        check(finalBeforePlay < play && play < stop && stop < laterDrag, "new drag never erases or overtakes the cursor move needed by an earlier PLAY")
+        check(moves.allSatisfy { $0["payload"]["noPlay"] == true && $0["payload"]["preservePlayback"] == true }, "both grids move only the edit cursor without starting playback")
+        session.suspend(); MockBridge.delay("")
+        print("VSHOOK_LIVE_CURSOR_OK: movement before release, slow-network coalescing and ordered final position before PLAY")
+    }
+    @MainActor static func testPlayFromCursor(project: HookProject, http: BridgeHTTP) async throws {
+        let a: JSON = ["id": "a", "name": "A", "startPos": 10, "endPos": 100]
+        let b: JSON = ["id": "b", "name": "B", "startPos": 100, "endPos": 160]
+        let part: JSON = ["id": "m1", "name": "$REFRÃO", "position": 130]
+        let base: JSON = ["connected": true, "playing": false, "playingId": "", "playPosition": 10, "editCursorPosition": 10, "selectedPlaylistSongId": "a", "selectedRegionId": "", "regions": [a, b], "playlists": [["id": "list", "songs": [a, b]]], "markers": [part]]
+        for tablet in [false, true] {
+            MockBridge.reset(base)
+            let session = HookSession(project: project, mode: .director, tablet: tablet, http: http)
+            session.start()
+            try await until { session.connected && session.authenticated }
+            session.command("edit_cursor_move", ["position": 42, "minPos": 10, "maxPos": 100])
+            check(session.snapshot["editCursorPosition"] == 42, "cursor movement is immediate before bridge confirmation")
+            session.command("play_button")
+            check(abs(session.playbackPosition(at: Date()) - 42) < 0.1, "PLAY clock starts at the manually chosen cursor")
+            try await until { MockBridge.sent.contains { $0["type"] == "play_button" } }
+            let sent = MockBridge.sent
+            check(sent.firstIndex(where: { $0["type"] == "edit_cursor_move" })! < sent.firstIndex(where: { $0["type"] == "play_button" })!, "cursor movement reaches the engine before PLAY")
+            let play = sent.first { $0["type"] == "play_button" }!["payload"]
+            check(play["noSeek"] == true && play["targetId"] == "a", "PLAY preserves edit cursor while retaining song metadata for tuner and AUTO")
+            MockBridge.state(base.merging(["tick": 1]))
+            try await until { session.snapshot["tick"] == 1 }
+            check(session.playbackPosition(at: Date()) >= 42 && session.snapshot["editCursorPosition"] == 42, "old bridge cursor cannot rewind a rapid local PLAY")
+            session.suspend()
+
+            MockBridge.reset(base)
+            let parts = HookSession(project: project, mode: .director, tablet: tablet, http: http)
+            parts.start()
+            try await until { parts.connected && parts.authenticated }
+            parts.selectPart(part, song: b)
+            check(parts.snapshot["editCursorPosition"] == 130, "stopped PARTS selection prepares its position locally")
+            parts.command("play_button")
+            check(parts.playingID == "b" && abs(parts.playbackPosition(at: Date()) - 130) < 0.1, "PLAY starts from selected PART rather than region start")
+            try await until { MockBridge.sent.contains { $0["type"] == "play_button" } }
+            let partCommands = MockBridge.sent
+            check(partCommands.firstIndex(where: { $0["type"] == "marker_go" })! < partCommands.firstIndex(where: { $0["type"] == "play_button" })!, "PARTS seek is ordered before PLAY")
+            check(partCommands.first { $0["type"] == "play_button" }?["payload"]["noSeek"] == true, "PARTS PLAY does not send a region-start seek")
+            parts.suspend()
+        }
+        let projection = HookSession(project: project, mode: .director, tablet: false, http: http)
+        projection.snapshot = base.merging(["editCursorPosition": 42])
+        let select = projection.localCommandState("select_playlist_song", payload: projection.targetPayload(b))
+        projection.snapshot = projection.snapshot.merging(select.state).merging(["selectedPlaylistSongId": "b"])
+        check(projection.localCommandState("play_button", payload: [:]).position == 100, "selecting a different song replaces old cursor with its start")
+        projection.snapshot = base.merging(["editCursorPosition": 130, "selectedPlaylistSongId": "a"])
+        let next = projection.localCommandState("play_button", payload: [:])
+        check(next.position == 10 && next.payload["noSeek"] != true, "cursor outside prepared song cannot steal the next PLAY target")
+        projection.snapshot = base.merging(["editCursorPosition": 42])
+        check(projection.localCommandState("play_start", payload: projection.targetPayload(a)).position == 10, "explicit play-from-start commands retain their meaning")
+        print("VSHOOK_CURSOR_PLAY_OK: phone/tablet cursor, PARTS, ordered commands, stale polls and new selection")
+    }
+    @MainActor static func testFadeoutFeedback(project: HookProject, http: BridgeHTTP) async throws {
+        let track: JSON = ["id": "track", "guid": "track-guid", "volume": 1, "volumeRatio": 0.76]
+        var data: JSON = ["connected": true, "playing": true, "playingId": "a", "playPosition": 20, "regions": [["id": "a", "startPos": 10, "endPos": 100]], "manualStopFadeout": ["enabled": true, "durationSec": 3, "selectedCount": 1, "selectedTrackIds": ["track-guid"], "active": false, "progress": 0], "mixerTracks": [track]]
+        MockBridge.reset(data)
+        let session = HookSession(project: project, mode: .director, tablet: false, http: http)
+        session.start()
+        try await until { session.connected && session.authenticated }
+        check(session.fadeoutConfigured && session.snapshot["manualStopFadeoutDurationSec"] == 3, "nested bridge fade configuration normalizes into native settings")
+        session.command("play_button")
+        let start = Date()
+        check(session.fadeoutActive && session.playing && session.playingID == "a", "STOP begins fade locally while keeping song playing")
+        check(session.fadeoutClock.remaining(at: start) > 0.95, "popup and button regression begin immediately")
+        check(abs(session.fadeoutClock.remaining(at: start.addingTimeInterval(1.5)) - 0.5) < 0.03, "fade countdown advances without bridge polls")
+        let half = session.fadeoutClock.trackRatio(track, at: start.addingTimeInterval(1.5))!
+        check(abs(MixerScale.decibels(half) - 20 * log10(0.5)) < 0.2, "TCP fader follows engine linear gain on logarithmic slider")
+        check(session.fadeoutClock.trackRatio(["id": "unselected"], at: start) == nil, "unselected tracks do not move")
+        data["tick"] = 1; MockBridge.state(data)
+        try await until { session.snapshot["tick"] == 1 }
+        check(session.fadeoutActive && session.playing, "stale bridge cannot remove newly started fade")
+        data["manualStopFadeout"]["active"] = true
+        data["manualStopFadeout"]["progress"] = 0.01
+        data["tick"] = 2; MockBridge.state(data)
+        try await until { session.snapshot["tick"] == 2 }
+        check(abs(session.fadeoutClock.remaining(at: start.addingTimeInterval(1.5)) - 0.5) < 0.03, "bridge progress never rewinds local fade")
+        session.command("play_button")
+        check(!session.fadeoutActive && session.playing, "second STOP cancels fade locally without stopping playback")
+        try await until { MockBridge.sent.filter { $0["type"] == "play_button" }.count == 2 }
+        check(MockBridge.sent.filter { $0["type"] == "play_button" }.allSatisfy { $0["payload"]["desiredPlaying"] == false }, "cancel uses engine STOP-fade toggle protocol")
+        session.command("play_button")
+        check(session.fadeoutActive, "fade can restart locally after cancellation")
+        session.command("director_stop_break", ["ignoreFadeout": true, "stopBreak": true])
+        check(!session.fadeoutActive && !session.playing, "STOP BREAK interrupts fade and transport immediately")
+        session.suspend()
+
+        data["manualStopFadeout"]["active"] = false
+        MockBridge.reset(data); MockBridge.reject("play_button")
+        let rejected = HookSession(project: project, mode: .director, tablet: true, http: http)
+        rejected.start()
+        try await until { rejected.connected && rejected.authenticated }
+        rejected.command("play_button")
+        check(rejected.fadeoutActive, "fade feedback is immediate even before rejection arrives")
+        try await until { rejected.message == "fixture rejection" }
+        check(!rejected.fadeoutActive && rejected.playing, "failed STOP restores playback and removes fade feedback")
+        data["manualStopFadeout"]["active"] = true; data["tick"] = 3; MockBridge.state(data)
+        try await until { rejected.fadeoutActive }
+        data["manualStopFadeout"]["active"] = false; data["playing"] = false; data["playingId"] = ""; data["tick"] = 4; MockBridge.state(data)
+        try await until { rejected.snapshot["tick"] == 4 }
+        check(!rejected.fadeoutActive && !rejected.playing, "confirmed fade completion clears popup, regression and transport")
+        rejected.suspend(); MockBridge.reject("")
+        var clock = DirectorFadeoutClock()
+        let epoch = Date(timeIntervalSinceReferenceDate: 1000)
+        let middle: JSON = ["manualStopFadeoutActive": true, "manualStopFadeoutDurationSec": 4, "manualStopFadeoutTrackIds": ["track-guid"], "manualStopFadeout": ["progress": 0.5], "mixerTracks": [["guid": "track-guid", "volume": 0.5]]]
+        clock.update(middle, at: epoch)
+        check(clock.remaining(at: epoch) == 0.5 && clock.remaining(at: epoch.addingTimeInterval(2)) == 0, "joining an active fade begins at remote progress and ends locally")
+        check(abs(MixerScale.decibels(clock.trackRatio(track, at: epoch.addingTimeInterval(1))!) - 20 * log10(0.25)) < 0.001, "mid-fade attachment reconstructs original gain")
+        clock.update(["manualStopFadeoutActive": false], at: epoch.addingTimeInterval(2))
+        check(clock.trackRatio(track, at: epoch.addingTimeInterval(3)) == nil, "completed fade releases faders back to confirmed mixer values")
+        print("VSHOOK_FADEOUT_OK: immediate start, countdown, stale polls, cancel, STOP BREAK and smooth selected faders")
+    }
+    static func testContinuousClock() {
+        let epoch = Date(timeIntervalSinceReferenceDate: 1000)
+        var clock = DirectorPlaybackClock()
+        var data: JSON = ["playing": true, "playingId": "a", "playPosition": 10]
+        clock.update(data, at: epoch)
+        var previous = 10.0
+        for step in 1...80 {
+            let elapsed = Double(step) * 0.3
+            // Alternating bridge latency must never move the visual backwards.
+            data["playPosition"] = .number(10 + elapsed - (step % 2 == 0 ? 0.45 : 0.05))
+            clock.update(data, at: epoch.addingTimeInterval(elapsed))
+            let position = clock.position(at: epoch.addingTimeInterval(elapsed), fallback: data)
+            check(position >= previous && abs(position - (10 + elapsed)) < 0.00001, "local clock ignores jitter in bridge refreshes")
+            previous = position
+        }
+        check(clock.position(at: epoch.addingTimeInterval(30), fallback: data) == 40, "clock continues locally between polls")
+        data["playPosition"] = 5
+        clock.update(data, at: epoch.addingTimeInterval(31))
+        check(clock.position(at: epoch.addingTimeInterval(32), fallback: data) == 6, "a real PARTS seek reanchors the local clock")
+        data = data.merging(["playing": false, "playPosition": 6])
+        clock.update(data, at: epoch.addingTimeInterval(32))
+        check(clock.position(at: epoch.addingTimeInterval(40), fallback: data) == 6, "paused song time does not keep counting")
+        data = data.merging(["playing": true, "playPosition": 19, "loopEnabled": true, "loopStartPos": 10, "loopEndPos": 20])
+        clock.update(data, at: epoch.addingTimeInterval(40))
+        check(clock.position(at: epoch.addingTimeInterval(42), fallback: data) == 11, "loop wraps on the local clock without waiting for bridge")
+        let marked: JSON = ["liveEnabled": true, "liveMarkColorMode": "red", "regions": [["id": "a", "liveMarked": true], ["id": "b", "liveMarked": false]], "playlists": [["songs": [["id": "b", "liveMarked": true]]]]]
+        check(DirectorLiveMarks.ids(marked) == ["a"], "LIVE honors canonical region marks and clears stale playlist marks")
+        check(DirectorLiveMarks.colors(marked).background == "991B1B", "LIVE uses original red background")
+        print("VSHOOK_LOCAL_CLOCK_OK: jitter, seek, pause, local loop and LIVE marks")
+    }
+    @MainActor static func testAutoBlockFeedback(project: HookProject, http: BridgeHTTP) async throws {
+        let a: JSON = ["id": "a", "startPos": 10, "endPos": 100]
+        let b: JSON = ["id": "b", "startPos": 100, "endPos": 160]
+        let block: JSON = ["id": "block", "isBlock": true, "name": "BLOCO"]
+        var data: JSON = ["connected": true, "playing": true, "playingId": "a", "playPosition": 20, "queuedSongId": "", "queuedManual": false, "autoBlocoArmed": false, "regions": [a, b], "playlists": [["id": "list", "songs": [a, block, b]]]]
+        MockBridge.reset(data)
+        let session = HookSession(project: project, mode: .director, tablet: false, http: http)
+        session.start()
+        try await until { session.connected && session.authenticated }
+        session.toggleAuto(1)
+        check(session.autoEnabled(1) && session.queueID == "b", "AUTO1 queues next song synchronously")
+        session.toggleAuto(2)
+        check(session.autoEnabled(2) && !session.autoEnabled(1) && session.queueID == "b", "AUTO2 switches local queue mode before bridge confirms")
+        session.toggleAutoBlock()
+        check(session.autoBlockEnabled && session.queueID.isEmpty && session.rawQueueID == "b", "AT/BL immediately hides boundary queue without losing target")
+        data["testTick"] = 1; MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 1 }
+        check(session.autoBlockEnabled && session.queueID.isEmpty, "stale bridge cannot undo local AT/BL or queue")
+        session.toggleAutoBlock()
+        check(!session.autoBlockEnabled && session.queueID == "b", "disabling AT/BL immediately restores boundary queue")
+        session.toggleAuto(2)
+        check(!session.autoEnabled(2) && session.queueID.isEmpty, "disabling AUTO clears automatic queue locally")
+        session.select(b, queue: true)
+        session.toggleAuto(1); session.toggleAuto(1)
+        check(session.queueID == "b" && session.snapshot["queuedManual"].bool, "AUTO toggles preserve manual queue")
+        try await until { MockBridge.sent.filter { $0["type"] == "auto_bloco_set" }.count == 2 }
+        session.suspend()
+        data = data.merging(["playing": false, "playingId": "", "selectedPlaylistSongId": "a", "autoplay1Enabled": true, "autoplay2Enabled": false])
+        MockBridge.reset(data)
+        let stopped = HookSession(project: project, mode: .director, tablet: true, http: http)
+        stopped.start()
+        try await until { stopped.connected && stopped.authenticated }
+        stopped.command("play_button")
+        check(stopped.playingID == "a" && stopped.queueID == "b", "PLAY prepares AUTO queue locally before bridge responds")
+        stopped.suspend()
+        let boundary = HookSession(project: project, mode: .director, tablet: false, http: http)
+        let c: JSON = ["id": "c", "startPos": 160, "endPos": 200]
+        boundary.snapshot = ["playing": true, "playingId": "a", "autoBlocoEnabled": true, "queuedSongId": "c", "regions": [a, b, c], "playlists": [["songs": [a, b, block, c]]]]
+        check(boundary.queueID.isEmpty, "AT/BL hides next block target even with more songs in current block")
+        boundary.snapshot["queuedSongId"] = "b"
+        check(boundary.queueID == "b", "AT/BL keeps a queue inside the current block visible")
+        print("VSHOOK_LOCAL_AUTO_ATBL_OK: immediate queue, modes, block boundary, stale polls, manual queue and PLAY")
+    }
+    @MainActor static func testImmediateFeedback(project: HookProject, http: BridgeHTTP) async throws {
+        let a: JSON = ["id": "a", "name": "A", "startPos": 10, "endPos": 100]
+        let b: JSON = ["id": "b", "name": "B", "startPos": 100, "endPos": 160]
+        var data: JSON = ["connected": true, "playing": false, "transportPaused": false, "playingSongId": .null, "queuedSongId": .null, "selectedPlaylistSongId": "a", "selectedRegionId": .null, "playPosition": 10, "regions": [a, b], "playlists": [["id": "list", "songs": [a, b]]], "markers": [["id": "m1", "name": "$REFRÃO", "pos": 40], ["id": "m2", "name": "*1 PONTE", "pos": 70]], "armedMarkerId": .null, "selectedMarkerId": .null]
+        MockBridge.reset(data)
+        let session = HookSession(project: project, mode: .director, tablet: false, http: http)
+        session.start()
+        try await until { session.connected && session.authenticated }
+        session.command("play_button")
+        check(session.playing && session.playingID == "a", "PLAY and the playing song update before the request completes")
+        try await until { MockBridge.sent.contains { $0["type"] == "play_button" } }
+        check(MockBridge.sent.first { $0["type"] == "play_button" }?["payload"]["desiredPlaying"] == true, "PLAY transmits the explicit local intent")
+        data["testTick"] = 1; MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 1 }
+        check(session.playing && session.playingID == "a" && session.playbackPosition(at: Date()) > 10, "stale bridge polls cannot undo local play or reset its progress")
+        session.select(b, queue: true)
+        check(session.queueID == "b", "queued stripe updates synchronously")
+        session.command("director_stop_break")
+        check(!session.playing && session.playingID.isEmpty && session.queueID.isEmpty && session.selectedID == "b", "STOP immediately prepares the queued song and clears playback/queue highlights")
+        session.command("play_button")
+        check(session.playing && session.playingID == "b", "rapid PLAY uses the newly prepared local selection")
+        try await until { MockBridge.sent.filter { $0["type"] == "play_button" }.count == 2 }
+        data = data.merging(["playing": true, "playingSongId": "b", "selectedPlaylistSongId": "b", "playPosition": 110, "testTick": 2])
+        MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 2 }
+        data["playing"] = false; data["playingSongId"] = .null; data["testTick"] = 3
+        MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 3 }
+        check(!session.playing, "after confirmation, remote transport changes remain authoritative")
+        MockBridge.reject("play_button"); MockBridge.delay("play_button")
+        session.command("play_button")
+        check(session.playing, "failed PLAY is still optimistic until the response arrives")
+        try await until { session.message == "fixture rejection" }
+        check(!session.playing, "rejected PLAY restores confirmed transport")
+        session.command("play_button")
+        session.command("director_stop_break")
+        session.command("play_start", session.targetPayload(b))
+        try await Task.sleep(nanoseconds: 250_000_000)
+        check(session.playing && session.playingID == "b", "an older failed PLAY cannot roll back a newer PLAY with the same value")
+        MockBridge.reject(""); MockBridge.delay("")
+        data = data.merging(["playing": true, "playingSongId": "b", "selectedPlaylistSongId": "b", "playPosition": 120, "testTick": 4])
+        MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 4 }
+        let start = DirectorParts.markers(data, song: b)[0]
+        check(start.identifier == "start:b" && start["position"] == 100, "INÍCIO uses the native extension's virtual marker protocol")
+        session.selectPart(start, song: b)
+        check(session.snapshot["selectedMarkerId"] == "start:b" && session.snapshot["partsArmedMarkerId"].string.isEmpty, "first PART tap selects locally")
+        session.selectPart(start, song: b)
+        check(session.snapshot["partsArmedMarkerId"] == "start:b", "second PART tap arms locally")
+        try await until { MockBridge.sent.contains { $0["type"] == "marker_go" } }
+        let markerCommand = MockBridge.sent.first { $0["type"] == "marker_go" }!["payload"]
+        check(markerCommand["markerId"] == "start:b" && markerCommand["position"] == 100 && markerCommand["armed"] == true, "INÍCIO sends a real virtual start target")
+        data["playPosition"] = 100.1; data["armedMarkerId"] = "start:b"; data["selectedMarkerId"] = "start:b"; data["testTick"] = 5
+        MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 5 }
+        check(session.snapshot["partsArmedMarkerId"].string.isEmpty, "arrival clears the armed effect even when the bridge still repeats the old armed ID")
+        check(session.snapshot["selectedMarkerId"].string.isEmpty, "arrival also clears the yellow PART selection")
+        data["playPosition"] = 100.5; data["testTick"] = 6; MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 6 }
+        check(session.snapshot["partsArmedMarkerId"].string.isEmpty, "a repeated consumed marker cannot re-arm the visual")
+        check(abs(DirectorParts.remainingFraction(data, song: a, position: 55) - 0.5) < 0.0001, "PART countdown uses the current segment between markers")
+        check(DirectorParts.remainingFraction(data, song: a, position: 100) == 0, "PART countdown ends at the song boundary")
+        session.toggleLoop()
+        data["loopActive"] = true; data["loopStartPos"] = 100; data["loopEndPos"] = 130; data["testTick"] = 7
+        MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 7 }
+        check(session.snapshot["loopEnabled"].bool, "native loopActive confirms the app's canonical loop state")
+        data["loopActive"] = false; data["testTick"] = 8; MockBridge.state(data)
+        try await until { session.snapshot["testTick"] == 8 }
+        check(!session.snapshot["loopEnabled"].bool, "remote loop changes cannot be masked by an old local loopEnabled value")
+        session.suspend()
+        print("VSHOOK_LOCAL_FEEDBACK_OK: transport, queue, stale polls, rapid commands, rejection and PARTS arrival")
     }
 }

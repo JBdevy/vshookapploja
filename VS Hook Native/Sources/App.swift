@@ -58,8 +58,11 @@ struct HookRootView: View {
             }
         }
         .onAppear {
-            HookOrientation.set(tablet: false)
+            HookOrientation.set(tablet: chosenMode == .director && tablet && (session != nil || ["computers", "projects"].contains(route)))
             discovery.search()
+        }
+        .onChange(of: route) { route in
+            if session == nil { HookOrientation.set(tablet: chosenMode == .director && tablet && ["computers", "projects"].contains(route)) }
         }
         .onChange(of: phase) { phase in
             UIApplication.shared.isIdleTimerDisabled = phase == .active && session != nil
@@ -136,7 +139,7 @@ struct HookRootView: View {
         }
     }
     private func deviceButton(_ text: String, icon: String, tablet: Bool) -> some View {
-        Button { self.tablet = tablet; showComputers() } label: {
+        Button { self.tablet = tablet; HookOrientation.set(tablet: tablet); showComputers() } label: {
             VStack(spacing: 16) { Image(systemName: icon).font(.system(size: 45)); Text(text) }.frame(maxWidth: .infinity).padding(.vertical, 18)
         }.buttonStyle(HookButtonStyle(filled: false))
     }

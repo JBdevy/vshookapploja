@@ -2,6 +2,7 @@ import SwiftUI
 
 enum DirectorPlaybackColors {
     static let playing = [Color(hex: "EF4444"), Color(hex: "B91C1C"), Color(hex: "7F1D1D")]
+    static let prepared = [Color(hex: "22C55E"), Color(hex: "22C55E")]
     static let queued = [Color(hex: "FB923C"), Color(hex: "E67A29"), Color(hex: "C2410C")]
 }
 
@@ -19,16 +20,26 @@ struct DirectorSongList: View {
     }
     var body: some View {
         let rows = entries
+        let request = session.searchScrollRequest
+        let searchRowID = request?.rowID(in: rows, page: playlistOnly ? "playlist" : session.page)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(rows) { entry in
                         DirectorSongRow(session: session, entry: entry, hideNumbers: hideNumbers, playlistOnly: playlistOnly, tools: tools).id(entry.id)
                     }
-                    if rows.isEmpty { HookStatus(text: session.connected ? "NENHUM ITEM ENCONTRADO" : "AGUARDANDO O HOOK CENTER…").padding(24) }
+                    if rows.isEmpty { HookStatus(text: session.connected ? "NENHUM ITEM ENCONTRADO" : "AGUARDANDO O HOOK CENTER…", color: Color(hex: scheme == .light ? "475569" : "AAB2C0")).padding(24) }
                 }
             }.accessibilityIdentifier("vshook.song.list").onChange(of: session.playingID) { id in
-                if let entry = rows.first(where: { $0.item.identifier == id }) { withAnimation { proxy.scrollTo(entry.id, anchor: .center) } }
+                if session.searchScrollRequest == nil, let entry = rows.first(where: { $0.item.identifier == id }) { withAnimation { proxy.scrollTo(entry.id, anchor: .center) } }
+            }.task(id: searchRowID.map { (request?.id.uuidString ?? "") + $0 }) {
+                guard let request, let searchRowID else { return }
+                // Search replaces this view. Wait for its rows to be mounted
+                // before consuming the one-shot navigation request.
+                await Task.yield()
+                guard !Task.isCancelled, session.searchScrollRequest == request else { return }
+                withAnimation { proxy.scrollTo(searchRowID, anchor: .center) }
+                session.searchScrollRequest = nil
             }
         }.background(Color(hex: scheme == .light ? "F8FAFC" : "111820")).clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: "334155")).allowsHitTesting(false))
@@ -48,6 +59,9 @@ private struct DirectorSongRow: View {
     var selected: Bool { !session.playing && item.identifier == (playlistOnly ? session.snapshot["selectedPlaylistSongId"].string : session.selectedID) && !item.identifier.isEmpty }
     var queued: Bool { !item.identifier.isEmpty && item.identifier == session.queueID }
     var block: Bool { item.isSongBlock }
+    var liveMarked: Bool { session.liveMarkedIDs.contains(item.identifier) }
+    var liveBackground: Bool { liveMarked && session.snapshot.first("liveMarkColorMode", "liveMarkColor", "live_mark_color_mode").string != "none" }
+
     var baseColor: Color {
         let plain = scheme == .light ? Color(hex: "111827") : .white
         if (playlistOnly || session.page == "playlist") && session.snapshot["blockSongColorMode"].string == "white" && !block { return plain }
@@ -55,29 +69,34 @@ private struct DirectorSongRow: View {
         if block && session.snapshot["blockColorMode"].string == "none" { return plain }
         return raw.isEmpty || ["#334155", "#ffffff"].contains(raw.lowercased()) ? plain : Color(hex: raw)
     }
-    var textColor: Color { playing ? .white : queued || selected ? Color(hex: "050505") : baseColor }
+    var textColor: Color {
+        if playing || (selected && !block) { return .white }
+        if queued || selected { return Color(hex: "050505") }
+        if liveMarked { return .white }
+        return baseColor
+    }
     var rowBackground: Color {
         if playing { return Color(hex: "B91C1C") }
         if selected { return Color(hex: block ? "F472B6" : "60A5FA") }
         if queued { return Color(hex: "EA580C") }
-        if session.liveEnabled && item.first("liveExecuted", "liveMarked").bool { return Color(hex: "45245E") }
+        if liveBackground { return Color(hex: DirectorLiveMarks.colors(session.snapshot).background) }
         return block && session.snapshot["blockColorMode"].string != "none" ? baseColor.opacity(0.22) : Color(hex: scheme == .light ? "F8FAFC" : "151D25")
     }
     var body: some View {
         HStack(spacing: 0) {
             if !session.readOnly && !hideNumbers {
-                Text(regionNumber && !block ? String(format: "%02d", abs(item.first("source_number", "sourceNumber", "number", "id").int)) : entry.ordinal).font(.custom("Arial-BoldMT", size: 11)).foregroundColor(block ? baseColor : Color(hex: "94A3B8"))
-                    .frame(width: 38).frame(maxHeight: .infinity).background(Color(hex: "0F172A").opacity(0.4))
-                    .overlay(alignment: .trailing) { Rectangle().fill(Color(hex: "263244")).frame(width: 1) }
+                Text(regionNumber && !block ? String(format: "%02d", abs(item.first("source_number", "sourceNumber", "number", "id").int)) : entry.ordinal).font(.custom("Arial-BoldMT", size: 11)).foregroundColor(scheme == .light ? .black : block ? baseColor : Color(hex: "94A3B8"))
+                    .frame(width: 38).frame(maxHeight: .infinity).background(scheme == .light ? Color(hex: "E2E8F0") : Color(hex: "0F172A").opacity(0.4))
+                    .overlay(alignment: .trailing) { Rectangle().fill(Color(hex: scheme == .light ? "94A3B8" : "263244")).frame(width: 1) }
             }
             HStack(spacing: 8) {
-                if !entry.parent.isEmpty { Text("↳").foregroundColor(Color(hex: "67E8F9")) }
+                if !entry.parent.isEmpty { Text("↳").foregroundColor(scheme == .light ? (playing || selected ? .white : Color(hex: "0E7490")) : Color(hex: "67E8F9")) }
                 HStack(spacing: 5) {
                     if block && session.snapshot["blockSymbolMode"].string != "none" && session.snapshot["blockSymbolMode"].exists { ornament(left: true) }
                     if marquee && !block {
-                        DirectorMarquee(text: item.name.uppercased(), size: session.tablet ? 16 : 14).foregroundColor(textColor)
+                        DirectorMarquee(text: item.name.uppercased(), size: session.tablet ? 16 : 14, struck: liveMarked).foregroundColor(textColor)
                     } else {
-                        Text(item.name.uppercased()).font(.custom("Arial-BoldMT", size: session.tablet ? 16 : 14))
+                        Text(item.name.uppercased()).strikethrough(liveMarked).font(.custom("Arial-BoldMT", size: session.tablet ? 16 : 14))
                             .foregroundColor(textColor).lineLimit(session.tablet || block ? 1 : 2)
                     }
                     if block && session.snapshot["blockSymbolMode"].string != "none" && session.snapshot["blockSymbolMode"].exists { ornament(left: false) }
@@ -100,7 +119,8 @@ private struct DirectorSongRow: View {
                 }
             }.padding(.horizontal, 10)
         }.frame(height: session.tablet ? 44 : 48)
-            .background(LinearGradient(colors: selected && !block ? [Color(hex: "0284C7"), Color(hex: "4338CA")] : playing ? DirectorPlaybackColors.playing : queued ? DirectorPlaybackColors.queued : [rowBackground, rowBackground], startPoint: .leading, endPoint: .trailing))
+            .background(LinearGradient(colors: selected && !block ? [Color(hex: "0284C7"), Color(hex: "4338CA")] : playing ? DirectorPlaybackColors.playing : queued ? (session.autoEnabled(2) ? DirectorPlaybackColors.prepared : DirectorPlaybackColors.queued) : [rowBackground, rowBackground], startPoint: .leading, endPoint: .trailing))
+            .overlay { if liveBackground && !playing && !queued && !selected { RoundedRectangle(cornerRadius: 2).strokeBorder(Color(hex: DirectorLiveMarks.colors(session.snapshot).border), lineWidth: 1).allowsHitTesting(false) } }
             .overlay { if block { Rectangle().strokeBorder(baseColor.opacity(0.8), lineWidth: 1).allowsHitTesting(false) } }
             .overlay(alignment: .bottom) { Rectangle().fill(Color(hex: "1F2937")).frame(height: 1).allowsHitTesting(false) }
             .overlay(alignment: .bottomLeading) {
@@ -127,7 +147,7 @@ private struct DirectorSongRow: View {
     private func durationText(_ seconds: Double) -> some View {
         Text(item.songDuration > 0 ? directorTime(seconds) : "")
             .font(.custom("Arial-BoldMT", size: session.tablet ? 16 : 14)).monospacedDigit()
-            .foregroundColor(block ? Color(hex: "22C55E") : textColor).frame(width: session.tablet ? 72 : 48, alignment: .trailing)
+            .foregroundColor(block ? Color(hex: scheme == .light ? "166534" : "22C55E") : textColor).frame(width: session.tablet ? 72 : 48, alignment: .trailing)
     }
     private func select() {
         guard !session.readOnly else { return }
@@ -171,13 +191,13 @@ struct DirectorPlaybackHeader: View {
             let active = session.playing || session.snapshot["transportPaused"].bool
             VStack(spacing: 0) {
                 line("REPRODUZINDO", title: active ? (song.name.isEmpty ? session.snapshot["playingSongName"].string : song.name) : "NENHUMA MÚSICA EM REPRODUÇÃO",
-                     time: active && song.songDuration > 0 ? directorTime(ceil(song.songDuration * (1 - progress) - 0.0005)) : "", color: Color(hex: "00CE55"), height: 30, active: active, queued: false)
+                     time: active && song.songDuration > 0 ? directorTime(ceil(song.songDuration * (1 - progress) - 0.0005)) : "", color: Color(hex: "00CE55"), height: 18, active: active, queued: false)
                 progressBar(progress, color: Color(hex: "00CE55"))
                 line("PRÓXIMA", title: session.queueID.isEmpty ? "FILA DE ESPERA VAZIA" : next.name,
-                     time: next.songDuration > 0 ? directorTime(next.songDuration) : "", color: Color(hex: "FFE000"), height: 30, active: !session.queueID.isEmpty, queued: true)
+                     time: next.songDuration > 0 ? directorTime(next.songDuration) : "", color: Color(hex: "FFE000"), height: 18, active: !session.queueID.isEmpty, queued: true)
                 progressBar(session.queueID.isEmpty ? 0 : 1 - progress, color: Color(hex: "FFE000"))
-                line("MULTILOOPS", title: loopText, time: "", color: Color(hex: "FFE000"), height: 22, arrow: false)
-            }.frame(height: 94).background(Color(hex: "0A1018"))
+                line("MULTILOOPS", title: loopText, time: "", color: Color(hex: "FFE000"), height: 18, arrow: false)
+            }.frame(height: 62).background(Color(hex: "0A1018"))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: "263244")).allowsHitTesting(false))
         }.contentShape(Rectangle())
@@ -194,16 +214,16 @@ struct DirectorPlaybackHeader: View {
         return session.snapshot["selectedOrPlayingMultiLoopActive"].bool ? "ESSA MÚSICA TEM MULTILOOP ATIVO" : "−"
     }
     private func line(_ label: String, title: String, time: String, color: Color, height: CGFloat, arrow: Bool = true, active: Bool = false, queued: Bool = false) -> some View {
-        HStack(spacing: 8) {
-            Text(label).font(.custom("Arial-BoldMT", size: 9)).foregroundColor(active ? Color(hex: "050505") : arrow ? Color(hex: "94A3B8") : color).frame(width: 82, alignment: .leading)
-            if arrow { Text("⟶").font(.system(size: 20, weight: .heavy)).foregroundColor(color) }
-            Text(title.uppercased()).font(.custom("Arial-BoldMT", size: arrow ? 12 : 9)).foregroundColor(active ? .white : color).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-            if !time.isEmpty { Text(time).font(.custom("Arial-BoldMT", size: 13)).monospacedDigit().foregroundColor(active && !queued ? .white : color) }
-        }.padding(.horizontal, 10).frame(height: height)
-            .background(LinearGradient(colors: active ? (queued ? DirectorPlaybackColors.queued : DirectorPlaybackColors.playing) : [.clear, .clear], startPoint: .leading, endPoint: .trailing))
+        HStack(spacing: 5) {
+            Text(label).font(.custom("Arial-BoldMT", size: 9)).foregroundColor(active ? Color(hex: "050505") : arrow ? Color(hex: "94A3B8") : color).frame(width: 74, alignment: .leading)
+            if arrow { Text("⟶").font(.system(size: 18, weight: .heavy)).foregroundColor(color) }
+            Text(title.uppercased()).font(.custom("Arial-BoldMT", size: arrow ? 12 : 9)).foregroundColor(active && queued && session.autoEnabled(2) ? Color(hex: "050505") : active ? .white : color).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            if !time.isEmpty { Text(time).font(.custom("Arial-BoldMT", size: 13)).monospacedDigit().foregroundColor(active && queued && session.autoEnabled(2) ? Color(hex: "050505") : active && !queued ? .white : color) }
+        }.padding(.horizontal, 8).frame(height: height)
+            .background(LinearGradient(colors: active ? (queued ? (session.autoEnabled(2) ? DirectorPlaybackColors.prepared : DirectorPlaybackColors.queued) : DirectorPlaybackColors.playing) : [.clear, .clear], startPoint: .leading, endPoint: .trailing))
     }
     private func progressBar(_ progress: Double, color: Color) -> some View {
         GeometryReader { geometry in color.frame(width: geometry.size.width * min(1, max(0, progress))) }
-            .frame(height: 6).background(Color(hex: "151E2A"))
+            .frame(height: 4).background(Color(hex: "151E2A"))
     }
 }

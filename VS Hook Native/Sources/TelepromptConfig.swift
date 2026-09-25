@@ -25,7 +25,7 @@ struct TPConfigView: View {
                         let slot = Int(page) ?? 1
                         ForEach(["color", "range", "select", "toggle"], id: \.self) { kind in
                             VStack(alignment: .leading, spacing: 12) {
-                                Text(["color":"CORES", "range":"ESCALAS", "select":"FONTES E POSIÇÃO", "toggle":"MOSTRAR"][kind]!).font(.custom("Arial-BoldMT", size: 12)).foregroundColor(Color(hex: "A3FF12"))
+                                Text(["color":"CORES", "range":"ESCALAS", "select":"FONTES E POSIÇÃO", "toggle":"MOSTRAR"][kind]!).font(.custom("Arial-BoldMT", size: 12)).foregroundColor(Color(hex: light ? "365314" : "A3FF12"))
                                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: geometry.size.width > 520 ? 2 : 1), spacing: 8) {
                                     ForEach(TPSchema.data["fields"].array.filter { kind == "toggle" ? ($0["kind"] == "toggle" || $0["key"] == "preset") : ($0["kind"].string == kind && $0["key"] != "preset") }, id: \.tpFieldKey) { field in
                                         fieldView(field, slot: slot).font(.custom("Arial-BoldMT", size: 11)).padding(.horizontal, 9).padding(.vertical, 7).frame(maxWidth: .infinity, minHeight: kind == "color" || kind == "toggle" ? 48 : 70, alignment: .leading)
@@ -91,7 +91,7 @@ struct TPConfigView: View {
     }
     private func noticeFields(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("APARÊNCIA DOS RECADOS").font(.custom("Arial-BoldMT", size: 12)).foregroundColor(Color(hex: "A3FF12"))
+            Text("APARÊNCIA DOS RECADOS").font(.custom("Arial-BoldMT", size: 12)).foregroundColor(Color(hex: light ? "365314" : "A3FF12"))
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: width > 520 ? 2 : 1), spacing: 8) {
                 noticeCard {
                     VStack(alignment: .leading) {

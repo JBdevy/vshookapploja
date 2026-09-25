@@ -12,13 +12,15 @@ enum HookMode: String, CaseIterable, Identifiable {
     let project: HookProject
     let mode: HookMode
     let tablet: Bool
-    @Published var snapshot: JSON = [:]
+    @Published var snapshot: JSON = [:] { didSet { liveMarkedIDs = DirectorLiveMarks.ids(snapshot) } }
+    private(set) var liveMarkedIDs: Set<String> = []
     @Published var connected = false
     @Published var authenticated = false
     @Published var message = ""
     @Published var page = "playlist"
     @Published var panel = ""
     @Published var query = ""
+    @Published var searchScrollRequest: DirectorSearchScrollRequest?
     @Published var dismissed = false
     var lastUpdate = Date()
     @Published var openFamilies: Set<String> = []
@@ -32,7 +34,25 @@ enum HookMode: String, CaseIterable, Identifiable {
     private var sessionHash = ""
     private var authRevision = ""
     private var lastHeartbeat = Date.distantPast
-    private var pending: [String: (value: JSON, until: Date)] = [:]
+    private struct PendingValue {
+        let value: JSON
+        let before: JSON
+        let until: Date
+        let revision: Int
+        var accepted = false
+    }
+    private var pending: [String: PendingValue] = [:]
+    private var commandRevision = 0
+    private var commandTail: Task<Void, Never>?
+    private final class CursorCommandGroup { var latestRevision = 0 }
+    private var cursorCommandGroup: CursorCommandGroup?
+    private var lastCursorPost = Date.distantPast
+    private var remoteSnapshot: JSON = [:]
+    var playbackClock = DirectorPlaybackClock()
+    var fadeoutClock = DirectorFadeoutClock()
+    private var transportAnchor: (position: Double, date: Date, playing: Bool, revision: Int)?
+    private var partArrival: (id: String, target: Double, previous: Double, revision: Int)?
+    private var consumedPartID = ""
     private var volumeTasks: [String: Task<Void, Never>] = [:]
     @Published private(set) var itemVolumePreviews: [String: Double] = [:]
     private var volumeRevisions: [String: UUID] = [:]
@@ -45,7 +65,12 @@ enum HookMode: String, CaseIterable, Identifiable {
         return flag.exists ? flag.bool : !playingID.isEmpty
     }
     var playingID: String { snapshot.first("playingId", "playingSongId", "playingRegionId", "currentRegionId").string }
-    var queueID: String { snapshot.first("queuedSongId", "queuedRegionId").string }
+    var rawQueueID: String { snapshot.first("queuedSongId", "queuedRegionId").string }
+    var queueID: String {
+        guard autoBlockEnabled && playing && !rawQueueID.isEmpty else { return rawQueueID }
+        let candidate = automaticQueueCandidate(nextBlockOnly: true)
+        return candidate.crossedBlock && candidate.id == rawQueueID ? "" : rawQueueID
+    }
     var selectedID: String { snapshot[page == "regions" ? "selectedRegionId" : "selectedPlaylistSongId"].string }
     var projectName: String { let name = snapshot.first("currentProjectName", "projectName").string; return name.isEmpty ? project.name : name }
     var playlists: [JSON] { snapshot["playlists"].array }
@@ -75,7 +100,7 @@ enum HookMode: String, CaseIterable, Identifiable {
             }
         }
     }
-    func suspend() { generation = UUID(); loop?.cancel(); loop = nil; volumeTasks.values.forEach { $0.cancel() }; volumeTasks = [:]; itemVolumePreviews = acceptedItemVolumes; volumeRevisions = [:]; connected = false }
+    func suspend() { generation = UUID(); loop?.cancel(); loop = nil; commandTail?.cancel(); commandTail = nil; cursorCommandGroup = nil; lastCursorPost = .distantPast; pending = [:]; transportAnchor = nil; playbackClock = DirectorPlaybackClock(); fadeoutClock = DirectorFadeoutClock(); partArrival = nil; consumedPartID = ""; volumeTasks.values.forEach { $0.cancel() }; volumeTasks = [:]; itemVolumePreviews = acceptedItemVolumes; volumeRevisions = [:]; connected = false }
     private func refresh(_ token: UUID) async {
         do {
             if !readOnly && !projectSelected {
@@ -83,7 +108,8 @@ enum HookMode: String, CaseIterable, Identifiable {
                 guard !Task.isCancelled, generation == token else { return }
                 projectSelected = true
             }
-            let data = try await http.request(base, "/state", timeout: 2.8)
+            let readRevision = commandRevision
+            var data = normalizedState(try await http.request(base, "/state", timeout: 2.8))
             guard !Task.isCancelled, generation == token else { return }
             guard data["connected"] != false, data["reaperOnline"] != false else { throw BridgeError(message: "O Hook Center está aberto, mas o projeto está desconectado.") }
             let previousProject = snapshot.first("currentProjectId", "projectId", "projectPath").string
@@ -92,13 +118,49 @@ enum HookMode: String, CaseIterable, Identifiable {
                 volumeTasks.values.forEach { $0.cancel() }
                 volumeTasks = [:]; volumeRevisions = [:]
                 acceptedItemVolumes = [:]; itemVolumeBaselines = [:]; itemVolumePreviews = [:]
+                pending = [:]; transportAnchor = nil; playbackClock = DirectorPlaybackClock(); fadeoutClock = DirectorFadeoutClock(); remoteSnapshot = [:]; partArrival = nil; consumedPartID = ""
             }
+            if let arrival = partArrival, readRevision >= arrival.revision, data["playing"].bool {
+                let position = data["playPosition"].double
+                let moved = abs(position - arrival.previous) > 0.02
+                let nearTarget = position >= arrival.target - 0.04 && position <= arrival.target + 0.8
+                let crossed = arrival.previous < arrival.target - 0.04 || position < arrival.previous - 0.05
+                if moved && nearTarget && crossed {
+                    if pending["partsArmedMarkerId"]?.revision == arrival.revision { pending["partsArmedMarkerId"] = nil }
+                    if pending["selectedMarkerId"]?.revision == arrival.revision { pending["selectedMarkerId"] = nil }
+                    consumedPartID = arrival.id; partArrival = nil
+                } else { partArrival?.previous = position }
+            }
+            if !consumedPartID.isEmpty {
+                let repeatsArmed = data["partsArmedMarkerId"].string == consumedPartID
+                let repeatsSelected = data["selectedMarkerId"].string == consumedPartID
+                if repeatsArmed { data["partsArmedMarkerId"] = "" }
+                if repeatsSelected { data["selectedMarkerId"] = "" }
+                if !repeatsArmed && !repeatsSelected { consumedPartID = "" }
+            }
+            remoteSnapshot = remoteSnapshot.merging(data)
             var next = snapshot.merging(data)
+            // Confirm related fields together, and never acknowledge a local
+            // action with a poll that started before that action was sent.
+            let confirmed = Set(Dictionary(grouping: pending, by: { $0.value.revision }).compactMap { revision, fields -> Int? in
+                guard revision <= readRevision, fields.allSatisfy({ key, held in
+                    held.accepted && (data[key] == held.value || (held.value == "" && !data[key].exists))
+                }) else { return nil }
+                return revision
+            })
             for (key, held) in pending {
-                if data[key] == held.value || Date() > held.until { pending[key] = nil }
+                if confirmed.contains(held.revision) || Date() > held.until { pending[key] = nil }
                 else { next[key] = held.value }
             }
-            lastUpdate = Date()
+            if let anchor = transportAnchor {
+                if pending["playing"]?.revision == anchor.revision {
+                    next["playPosition"] = .number(anchor.position + (anchor.playing ? max(0, Date().timeIntervalSince(anchor.date)) : 0))
+                } else { transportAnchor = nil }
+            }
+            let receivedAt = Date()
+            playbackClock.update(next, at: receivedAt)
+            fadeoutClock.update(next, at: receivedAt)
+            lastUpdate = receivedAt
             if snapshot != next { snapshot = next }
             reconcileTCPItemVolumes(tcpItems)
             if !connected { connected = true }
@@ -145,17 +207,116 @@ enum HookMode: String, CaseIterable, Identifiable {
     func command(_ type: String, _ payload: JSON = [:], optimistic: JSON = [:]) {
         guard !readOnly else { return }
         guard connected && authenticated else { message = "Conecte-se e entre como Diretor para controlar o projeto."; return }
-        let before = snapshot
-        for (key, value) in optimistic.object { pending[key] = (value, Date().addingTimeInterval(5)); snapshot[key] = value }
+        let projection = localCommandState(type, payload: payload)
+        let changes = projection.state.merging(optimistic)
+        let outgoing: JSON = JSON.object(["page": .string(page), "activeTab": .string(page)]).merging(projection.payload)
+        commandRevision += 1
+        let revision = commandRevision
+        let token = generation
+        let cursorGroup: CursorCommandGroup?
+        if type == "edit_cursor_move" {
+            let group = cursorCommandGroup ?? CursorCommandGroup()
+            group.latestRevision = revision
+            cursorCommandGroup = group
+            cursorGroup = group
+        } else {
+            // PLAY/selection form a boundary: later drags must never erase the
+            // final cursor move that precedes a transport command.
+            cursorCommandGroup = nil
+            cursorGroup = nil
+        }
+        if type == "marker_go", playing {
+            partArrival = (payload.first("markerId", "id").string, payload.first("pos", "position", "startPos", "start_pos").double, playbackPosition(at: Date()), revision)
+            consumedPartID = ""
+        } else if changes["partsArmedMarkerId"].exists {
+            partArrival = nil; consumedPartID = ""
+        }
+        var next = snapshot
+        for (key, value) in changes.object {
+            pending[key] = PendingValue(value: value, before: pending[key]?.before ?? snapshot[key], until: Date().addingTimeInterval(5), revision: revision)
+            next[key] = value
+        }
+        if let position = projection.position {
+            transportAnchor = (position, Date(), changes["playing"].bool, revision)
+            next["playPosition"] = .number(position)
+            lastUpdate = Date()
+            playbackClock.update(next, at: lastUpdate, force: true)
+        }
+        fadeoutClock.update(next, at: Date(), restart: changes["manualStopFadeoutActive"] == true)
+        if next != snapshot { snapshot = next }
         // An earlier successful request must not erase a newer command failure.
         message = ""
-        Task {
-            do { try await post(type, payload) }
+        let previous = commandTail
+        commandTail = Task {
+            await previous?.value
+            guard !Task.isCancelled, generation == token else { return }
+            if let cursorGroup {
+                guard cursorGroup.latestRevision == revision else { return }
+                let delay = max(0, 0.04 - Date().timeIntervalSince(lastCursorPost))
+                if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+                guard !Task.isCancelled, generation == token, cursorGroup.latestRevision == revision else { return }
+                lastCursorPost = Date()
+            }
+            do {
+                try await post(type, outgoing)
+                guard generation == token else { return }
+                for key in changes.object.keys where pending[key]?.revision == revision { pending[key]?.accepted = true }
+            }
             catch {
-                for (key, value) in optimistic.object where pending[key]?.value == value { pending[key] = nil; snapshot[key] = before[key] }
+                guard generation == token else { return }
+                var restored = snapshot
+                for key in changes.object.keys where pending[key]?.revision == revision {
+                    restored[key] = remoteSnapshot.object[key] ?? pending[key]!.before
+                    pending[key] = nil
+                }
+                if transportAnchor?.revision == revision {
+                    transportAnchor = nil
+                    restored["playPosition"] = remoteSnapshot["playPosition"]
+                    lastUpdate = Date()
+                    playbackClock.update(restored, at: lastUpdate, force: true)
+                }
+                if partArrival?.revision == revision { partArrival = nil }
+                fadeoutClock.update(restored, at: Date())
+                if restored != snapshot { snapshot = restored }
                 message = error.localizedDescription
             }
         }
+    }
+    private func normalizedState(_ data: JSON) -> JSON {
+        var value = data
+        let fade = data["manualStopFadeout"]
+        value["manualStopFadeoutActive"] = .bool(fade["active"].bool || fade["fading"].bool || data["manualStopFadeoutActive"].bool)
+        if fade["enabled"].exists { value["manualStopFadeoutEnabled"] = fade["enabled"] }
+        let duration = fade.first("durationSec", "duration").exists ? fade.first("durationSec", "duration") : data.first("manualStopFadeoutDurationSec", "manualStopFadeoutDuration")
+        if duration.exists { value["manualStopFadeoutDurationSec"] = duration }
+        if fade["selectedTrackIds"].exists { value["manualStopFadeoutTrackIds"] = fade["selectedTrackIds"] }
+        for (key, aliases) in [
+            ("playing", ["playing", "isPlaying", "transportPlaying"]),
+            ("playingId", ["playingId", "playingSongId", "playingRegionId", "currentRegionId"]),
+            ("queuedSongId", ["queuedSongId", "queuedRegionId"]),
+            ("autoBlocoEnabled", ["autoBlocoEnabled", "autoBlocoArmed", "autoblockEnabled"]),
+            ("queuedManual", ["queuedManual", "queueManual", "queuedByManual"]),
+            ("loopEnabled", ["loopEnabled", "loopActive", "repeatEnabled", "loop"]),
+            ("partsArmedMarkerId", ["partsArmedMarkerId", "armedMarkerId", "markerGoId"]),
+            ("editCursorPosition", ["editCursorPosition", "cursorPosition"]),
+            ("playPosition", ["playPosition", "currentPlayPosition", "currentPosition", "playbackPosition", "position"])
+        ] {
+            if let alias = aliases.first(where: { data.object[$0] != nil }) { value[key] = data[alias] }
+        }
+        return value
+    }
+    func moveEditCursor(to position: Double, song: JSON) {
+        guard !playing, !readOnly, song.exists, position.isFinite else { return }
+        let start = song.first("startPos", "start_pos").double
+        let end = song.first("endPos", "end_pos").double
+        guard end > start else { return }
+        let point = max(start, min(end, position))
+        command("edit_cursor_move", targetPayload(song).merging([
+            "position": .number(point), "targetPosition": .number(point),
+            "minPos": .number(start), "maxPos": .number(end),
+            "noPlay": true, "preservePlayback": true, "noSeek": true,
+            "cursorMoveSeq": .number(Date().timeIntervalSince1970 * 1_000_000)
+        ]))
     }
     func setPage(_ next: String) { guard !readOnly else { return }; page = next; pageHoldUntil = Date().addingTimeInterval(2); query = ""; command("set_page", ["page": .string(next), "activeTab": .string(next)]) }
     func toggleFamily(_ id: String) {
@@ -195,16 +356,35 @@ enum HookMode: String, CaseIterable, Identifiable {
             return
         }
         let selectedKey = page == "regions" ? "selectedRegionId" : "selectedPlaylistSongId"
-        if queue && queueID == item.identifier { command("clear_queue", targetPayload(item, sourcePage: sourcePage), optimistic: ["queuedSongId": ""]); return }
+        if queue && rawQueueID == item.identifier { command("clear_queue", targetPayload(item, sourcePage: sourcePage), optimistic: ["queuedSongId": "", "queuedManual": false]); return }
         let payload = queue ? targetPayload(item, sourcePage: sourcePage).merging(["queued": true, "manual": true, "queuedManual": true, "auto": false, "autoQueue": false]) : targetPayload(item, sourcePage: sourcePage)
         var selection: JSON = .object([queue ? "queuedSongId" : selectedKey: .string(item.identifier)])
+        if queue { selection["queuedManual"] = true }
         if !queue { selection[page == "regions" ? "selectedPlaylistSongId" : "selectedRegionId"] = "" }
         command(queue ? (page == "regions" ? "queue_region_song" : "queue_playlist_song") : (page == "regions" ? "select_region" : "select_playlist_song"), payload, optimistic: selection)
     }
     func toggleAuto(_ mode: Int) {
         guard page == "playlist" else { message = "AUTO disponível apenas em Repertórios."; return }
         let next = !autoEnabled(mode)
-        command(mode == 2 ? "autoplay2_set" : "autoplay_set", ["desiredState": .string(next ? "on" : "off"), "autoplayEnabled": .bool(next), "autoPlayEnabled": .bool(next), "autoplayMode": .number(next ? Double(mode) : 0), mode == 2 ? "desiredAutoplay2" : "desiredAutoplay": .bool(next)], optimistic: ["autoplayEnabled": .bool(next), "autoplayMode": .number(next ? Double(mode) : 0), "autoplay1Enabled": .bool(next && mode == 1), "autoplay2Enabled": .bool(next && mode == 2)])
+        let local: JSON = ["autoplayEnabled": .bool(next), "autoplayMode": .number(next ? Double(mode) : 0), "autoplay1Enabled": .bool(next && mode == 1), "autoplay2Enabled": .bool(next && mode == 2)]
+        command(mode == 2 ? "autoplay2_set" : "autoplay_set", ["desiredState": .string(next ? "on" : "off"), "autoplayEnabled": .bool(next), "autoPlayEnabled": .bool(next), "autoplayMode": .number(next ? Double(mode) : 0), mode == 2 ? "desiredAutoplay2" : "desiredAutoplay": .bool(next)], optimistic: local.merging(immediateAutoQueueState(mode: next ? mode : 0)))
+    }
+    var autoBlockEnabled: Bool { snapshot.first("autoBlocoEnabled", "autoBlocoArmed", "autoblockEnabled").bool }
+    func toggleAutoBlock() {
+        let next = !autoBlockEnabled
+        var local: JSON = ["autoBlocoEnabled": .bool(next)]
+        // Keep the real queued target. The visible boundary queue is hidden
+        // locally while AT/BL is armed, and restored immediately when disabled.
+        if !next && rawQueueID.isEmpty && (autoEnabled(1) || autoEnabled(2)) {
+            local = local.merging(immediateAutoQueueState(mode: autoEnabled(2) ? 2 : 1, blockEnabled: false))
+        }
+        command("auto_bloco_set", ["desiredAutoBloco": .bool(next), "autoBlocoEnabled": .bool(next), "desiredState": .string(next ? "on" : "off")], optimistic: local)
+    }
+    var fadeoutActive: Bool { snapshot["manualStopFadeoutActive"].bool }
+    var fadeoutConfigured: Bool {
+        let tracks = snapshot["manualStopFadeoutTrackIds"]
+        return snapshot["manualStopFadeoutEnabled"].bool &&
+            (tracks.exists ? !tracks.array.isEmpty : snapshot["manualStopFadeout"]["selectedCount"].int > 0)
     }
     func toggleLoop() {
         let next = !snapshot.first("loopEnabled", "loopActive", "loop").bool

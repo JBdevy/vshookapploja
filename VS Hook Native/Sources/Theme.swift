@@ -87,8 +87,9 @@ struct HookScreen<Content: View>: View {
 }
 struct HookStatus: View {
     var text: String
+    var color: Color = HookTheme.muted
     var body: some View {
-        if !text.isEmpty { Text(text).font(.subheadline).foregroundColor(HookTheme.muted).multilineTextAlignment(.center).padding(8).accessibilityIdentifier("vshook.status") }
+        if !text.isEmpty { Text(text).font(.subheadline).foregroundColor(color).multilineTextAlignment(.center).padding(8).accessibilityIdentifier("vshook.status") }
     }
 }
 func timeText(_ seconds: Double) -> String {

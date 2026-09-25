@@ -11056,6 +11056,21 @@ html body #app .app .item.partsSongStartPart::after {
   box-shadow: none !important;
 }
 
+/* Loop ativo sobre a linha do tempo; não intercepta toque, rolagem ou zoom. */
+.mixerLoopLimits {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  overflow: hidden;
+}
+.mixerLoopShade { position: absolute; top: 0; bottom: 0; background: rgba(250, 204, 21, .07); }
+.mixerLoopBoundary { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed #facc15; }
+.mixerLoopBoundary-end { transform: translateX(-2px); }
+.mixerLoopLimitsHeader .mixerLoopBoundary { border-left-style: solid; }
+.mixerLoopBoundary b { position: absolute; top: 0; left: 0; padding: 1px 4px; border-radius: 2px; background: #facc15; color: #000; font: bold 8px Arial, sans-serif; white-space: nowrap; }
+.mixerLoopBoundary-end b { left: auto; right: 0; }
+
 /* A Part verde confirmada pisca até o engatilhamento ser consumido. */
 @keyframes partsArmedConfirmedBlink {
   0%, 49% { opacity: 1; filter: brightness(1.18); }

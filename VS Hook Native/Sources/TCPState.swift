@@ -27,6 +27,51 @@ struct TCPRange: Equatable {
         return ((a - start) / duration, (b - a) / duration)
     }
 }
+struct TCPLoopOverlayGeometry {
+    let left: Double
+    let width: Double
+    let startMarker: Double?
+    let endMarker: Double?
+    var slot = 0
+    static func all(_ data: JSON, visible: TCPRange, songRange: TCPRange? = nil) -> [Self] {
+        let song = songRange ?? visible
+        var ranges = data["tcpMultiLoopRanges"].array
+        // Same marker catalog already used by the transport Grid panel.
+        // It is available on existing bridges, before Repeat is engaged.
+        for slot in 1...4 where !data["tcpMultiLoopRanges"].exists {
+            let points = data["markers"].array.filter {
+                $0.name.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("*\(slot)")
+            }.map { $0.first("pos", "position", "startPos").double }
+                .filter { $0 >= song.start && $0 <= song.end + 0.0005 }.sorted()
+            if points.count >= 2, points[1] > points[0] {
+                ranges.append(["slot": .number(Double(slot)), "startPos": .number(points[0]), "endPos": .number(points[1])])
+            }
+        }
+        var result: [Self] = []
+        for range in ranges {
+            guard (1...4).contains(range["slot"].int) else { continue }
+            var shape = make(["loopEnabled": true, "loopStartPos": range["startPos"], "loopEndPos": range["endPos"]], visible: visible)
+            shape?.slot = range["slot"].int
+            if let shape, !result.contains(where: { $0.slot == shape.slot && $0.left == shape.left && $0.width == shape.width && $0.startMarker == shape.startMarker && $0.endMarker == shape.endMarker }) { result.append(shape) }
+        }
+        if let active = make(data, visible: visible), !result.contains(where: {
+            abs($0.left - active.left) < 0.00001 && abs($0.width - active.width) < 0.00001 && $0.startMarker == active.startMarker && $0.endMarker == active.endMarker
+        }) { result.append(active) }
+        return result
+    }
+    static func make(_ data: JSON, visible: TCPRange) -> Self? {
+        guard data.first("loopEnabled", "loopActive", "loop").bool else { return nil }
+        let start = data.first("loopStartPos", "loopStart", "loopSelectionStart", "timeSelectionStart")
+        let end = data.first("loopEndPos", "loopEnd", "loopSelectionEnd", "timeSelectionEnd")
+        guard start.exists, end.exists, start.double.isFinite, end.double.isFinite,
+              end.double > start.double, end.double >= visible.start, start.double <= visible.end else { return nil }
+        let a = (start.double - visible.start) / visible.duration
+        let b = (end.double - visible.start) / visible.duration
+        return Self(left: max(0, a), width: max(0, min(1, b) - max(0, a)),
+                    startMarker: (0...1).contains(a) ? a : nil,
+                    endMarker: (0...1).contains(b) ? b : nil)
+    }
+}
 struct TCPTrackRow: Identifiable {
     let id: String
     let track: JSON

@@ -8666,6 +8666,69 @@
     return { parentRegions: [focusedRegion], childRegions }
   }
 
+  function getMixerLoopGeometry(bounds, data = state.snapshot || {}) {
+    if (!getLoopActive(data)) return null
+    const loop = getLoopRange(data)
+    const duration = bounds.end - bounds.start
+    if (!loop.valid || !(duration > 0) || loop.end < bounds.start || loop.start > bounds.end) return null
+    const start = (loop.start - bounds.start) / duration
+    const end = (loop.end - bounds.start) / duration
+    return {
+      left: Math.max(0, start),
+      width: Math.max(0, Math.min(1, end) - Math.max(0, start)),
+      start: start >= 0 && start <= 1 ? start : null,
+      end: end >= 0 && end <= 1 ? end : null,
+    }
+  }
+
+  function getMixerLoopGeometries(bounds, data = state.snapshot || {}) {
+    const ranges = Array.isArray(data.tcpMultiLoopRanges) ? [...data.tcpMultiLoopRanges] : []
+    if (!Array.isArray(data.tcpMultiLoopRanges)) {
+      // Existing marker catalog, also used by the transport Grid panel.
+      for (let slot = 1; slot <= 4; slot++) {
+        const points = (Array.isArray(data.markers) ? data.markers : [])
+          .filter(marker => String(marker.name ?? marker.label ?? '').trim().startsWith(`*${slot}`))
+          .map(marker => Number(marker.pos ?? marker.position ?? marker.startPos))
+          .filter(pos => Number.isFinite(pos) && pos >= bounds.start && pos <= bounds.end + .0005)
+          .sort((a, b) => a - b)
+        if (points.length >= 2 && points[1] > points[0]) ranges.push({slot, startPos: points[0], endPos: points[1]})
+      }
+    }
+    const shapes = ranges.flatMap(range => {
+      const slot = Number(range.slot)
+      if (![1, 2, 3, 4].includes(slot)) return []
+      // These pairs are enabled in Multiloops, even before Repeat is engaged.
+      const duration = bounds.end - bounds.start
+      const a = Number(range.startPos), b = Number(range.endPos)
+      if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a || !(duration > 0) || b < bounds.start || a > bounds.end) return []
+      const start = (a - bounds.start) / duration, end = (b - bounds.start) / duration
+      return [{left: Math.max(0, start), width: Math.max(0, Math.min(1, end) - Math.max(0, start)), start: start >= 0 && start <= 1 ? start : null, end: end >= 0 && end <= 1 ? end : null, slot}]
+    })
+    const active = getMixerLoopGeometry(bounds, data)
+    if (active && !shapes.some(shape => Math.abs(shape.left - active.left) < .00001 && Math.abs(shape.width - active.width) < .00001 && shape.start === active.start && shape.end === active.end)) shapes.push({...active, slot: 0})
+    return shapes
+  }
+
+  function renderMixerLoopLimits(bounds, data = state.snapshot || {}, header = false) {
+    return getMixerLoopGeometries(bounds, data).map(loop => {
+      const shade = `<span class="mixerLoopShade" style="left:${(loop.left * 100).toFixed(4)}%;width:${(loop.width * 100).toFixed(4)}%"></span>`
+      return shade + ['start', 'end'].map(key => {
+        if (loop[key] === null) return ''
+        return `<span class="mixerLoopBoundary mixerLoopBoundary-${key}" style="left:${(loop[key] * 100).toFixed(4)}%">${header ? '<b>LOOP</b>' : ''}</span>`
+      }).join('')
+    }).join('')
+  }
+
+  function syncMixerLoopLimitsDom(grid, headerViewport, bounds, data = state.snapshot || {}) {
+    const signature = JSON.stringify(getMixerLoopGeometries(bounds, data))
+    for (const [container, header] of [[grid, false], [headerViewport, true]]) {
+      const overlay = container?.querySelector('.mixerLoopLimits')
+      if (!overlay || overlay.dataset.loopSignature === signature) continue
+      overlay.innerHTML = renderMixerLoopLimits(bounds, data, header)
+      overlay.dataset.loopSignature = signature
+    }
+  }
+
   function renderMixerTimelineRegions(bounds, data = state.snapshot || {}, focusedRegion = null) {
     const duration = Math.max(0.0005, bounds.end - bounds.start)
     const inset = 0
@@ -8837,11 +8900,11 @@
     const gridRows = showTimelineGrid ? tracks.map((track, trackIndex) =>
       renderMixerTabletGridRow(track, premixItems, premixBounds, trackIndex, tracks)).join('') : ''
     const timelineHeader = tracks.length && showTimelineGrid
-      ? `<div class="mixerTimelineFixedHeader mixerTimelineUnifiedHeader" style="--mixer-timeline-width:${timelineWidth}px"><div class="mixerTimelineFixedTrackCap"><span class="mixerTimelineTrackCapLane">Músicas/Blocos</span><span class="mixerTimelineTrackCapLane">Músicas/Filhos</span><span class="mixerTrackWidthHandle" role="separator" aria-orientation="vertical" aria-label="Ajustar largura das pistas" aria-valuemin="25" aria-valuemax="100" aria-valuenow="${Math.round(trackWidthPercent)}"></span></div><div class="mixerTimelineHeaderViewport"><div class="mixerTimelineHeaderCanvas" style="width:${timelineWidth}px">${hasFocusedRegion ? renderMixerTimelineRegions(premixBounds, data, focusItem) : ''}</div></div></div>`
+      ? `<div class="mixerTimelineFixedHeader mixerTimelineUnifiedHeader" style="--mixer-timeline-width:${timelineWidth}px"><div class="mixerTimelineFixedTrackCap"><span class="mixerTimelineTrackCapLane">Músicas/Blocos</span><span class="mixerTimelineTrackCapLane">Músicas/Filhos</span><span class="mixerTrackWidthHandle" role="separator" aria-orientation="vertical" aria-label="Ajustar largura das pistas" aria-valuemin="25" aria-valuemax="100" aria-valuenow="${Math.round(trackWidthPercent)}"></span></div><div class="mixerTimelineHeaderViewport"><div class="mixerTimelineHeaderCanvas" style="width:${timelineWidth}px">${hasFocusedRegion ? renderMixerTimelineRegions(premixBounds, data, focusItem) + '<div class="mixerLoopLimits mixerLoopLimitsHeader" aria-hidden="true">' + renderMixerLoopLimits(premixBounds, data, true) + '</div>' : ''}</div></div></div>`
       : ''
     const playlistSide = listOpen ? renderMixerPlaylistSide(data) : ''
     const trackGrid = showTimelineGrid
-      ? `<div class="mixerTabletTimeline mixerTabletTimelineUnified" style="--mixer-timeline-width:${timelineWidth}px"><div class="mixerTabletTrackRows">${rows}</div><div class="mixerTabletGridViewport"${hasFocusedRegion ? ' data-action="mixer-grid-seek"' : ''} data-mixer-focus-ratio="${focusRatio.toFixed(6)}"><div class="mixerTabletGrid" style="width:${timelineWidth}px" data-mixer-focus-id="${escapeHtml(getId(focusItem) || '')}" data-mixer-timeline-start="${premixBounds.start}" data-mixer-timeline-end="${premixBounds.end}" aria-label="Itens do Pre-Mix por pista">${hasFocusedRegion ? `${renderMixerTimelineRegionGuides(premixBounds, data, focusItem)}<div class="mixerTimelineCursor" aria-hidden="true"></div>` : ''}${gridRows}</div></div></div>`
+      ? `<div class="mixerTabletTimeline mixerTabletTimelineUnified" style="--mixer-timeline-width:${timelineWidth}px"><div class="mixerTabletTrackRows">${rows}</div><div class="mixerTabletGridViewport"${hasFocusedRegion ? ' data-action="mixer-grid-seek"' : ''} data-mixer-focus-ratio="${focusRatio.toFixed(6)}"><div class="mixerTabletGrid" style="width:${timelineWidth}px" data-mixer-focus-id="${escapeHtml(getId(focusItem) || '')}" data-mixer-timeline-start="${premixBounds.start}" data-mixer-timeline-end="${premixBounds.end}" aria-label="Itens do Pre-Mix por pista">${hasFocusedRegion ? `${renderMixerTimelineRegionGuides(premixBounds, data, focusItem)}<div class="mixerLoopLimits" aria-hidden="true">${renderMixerLoopLimits(premixBounds, data)}</div><div class="mixerTimelineCursor" aria-hidden="true"></div>` : ''}${gridRows}</div></div></div>`
       : ''
     const timeline = tracks.length
       ? (showTimelineGrid
@@ -13376,7 +13439,7 @@
           html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineRegionLane{position:relative!important;height:18px!important;overflow:hidden!important}.mixerTimelineChildLane{border-top:1px solid #263241!important}
           html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineRegion{position:absolute!important;top:1px!important;height:16px!important;box-sizing:border-box!important;overflow:hidden!important;padding:1px 4px!important;border:1px solid color-mix(in srgb,var(--mixer-region-color) 70%,#fff 30%)!important;background:var(--mixer-region-color)!important;color:#fff!important;font-size:8px!important;font-weight:1000!important;line-height:12px!important;text-overflow:ellipsis!important;white-space:nowrap!important;text-shadow:0 1px 1px #000!important}.mixerTimelineChildRegion{filter:brightness(1.12)!important}
           html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineCursor{position:absolute!important;z-index:8!important;top:0!important;bottom:0!important;left:0;width:2px!important;background:#a3e635!important;box-shadow:0 0 0 1px rgba(0,0,0,.45),0 0 7px rgba(163,230,53,.72)!important;pointer-events:none!important;transform:translateX(-1px)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineCursor::before{content:""!important;position:absolute!important;left:50%!important;top:0!important;width:0!important;height:0!important;border-left:7px solid transparent!important;border-right:7px solid transparent!important;border-top:8px solid #a3e635!important;transform:translateX(-50%)!important;filter:drop-shadow(0 1px 1px #000)!important}
+          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineCursor::before{content:""!important;position:absolute!important;left:50%!important;top:0!important;width:0!important;height:0!important;border-left:5px solid transparent!important;border-right:5px solid transparent!important;border-top:6px solid #a3e635!important;transform:translateX(-50%)!important;filter:drop-shadow(0 1px 1px #000)!important}
           html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTrackRows,html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow,html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow::before,html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow::after{border-radius:0!important}
           html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineRegionGuides{position:absolute!important;z-index:5!important;inset:0!important;pointer-events:none!important;overflow:hidden!important}html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineHeaderCanvas>.mixerTimelineRegionGuides{z-index:12!important}.mixerTimelineRegionGuideSpan{position:absolute!important;top:0!important;bottom:0!important;box-sizing:border-box!important;border-left:1px solid var(--mixer-region-guide-color)!important;border-right:1px solid var(--mixer-region-guide-color)!important;opacity:.88!important}.mixerTimelineChildGuideSpan{opacity:.62!important}
           html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineHeaderCanvas>.mixerTimelineRegionGuides>.mixerTimelineChildGuideSpan{top:18px!important}
@@ -14636,6 +14699,7 @@
       scheduleRender(true)
       return
     }
+    syncMixerLoopLimitsDom(grid, headerViewport, { start, end })
     const position = isPlaying(state.snapshot)
       ? getSmoothSeekPlayPositionSec(state.snapshot, sampledAt, {
           id: getId(focusItem) || getPlayingId(state.snapshot), start, end,

@@ -236,7 +236,15 @@ struct TelepromptView: View {
     private var footer: some View {
         HStack(spacing: 3) {
             ForEach(controls.filter { preferences.control($0.0, tablet: session.tablet) }, id: \.0) { id,label in
-                DirectorControl(title: id == "play" && session.playing ? "STOP" : label, background: Color(hex: controlActive(id) ? "15803D" : ["list","parts"].contains(id) ? "991B1B" : "172033"), height: 42, size: session.tablet ? 12 : 10) { controlAction(id) }.accessibilityIdentifier("vshook.tp.control." + id)
+                Group {
+                    if id == "play" || id == "stopBreak" {
+                        DirectorTransportControl(session: session, stopBreak: id == "stopBreak", height: 42, size: session.tablet ? 12 : 10)
+                    } else if id == "auto1" || id == "auto2" {
+                        DirectorAutoControl(session: session, mode: id == "auto1" ? 1 : 2, height: 42, size: session.tablet ? 12 : 10)
+                    } else {
+                        DirectorControl(title: id == "play" && session.playing ? "STOP" : label, background: Color(hex: controlActive(id) ? "15803D" : ["list","parts"].contains(id) ? "991B1B" : "172033"), height: 42, size: session.tablet ? 12 : 10) { controlAction(id) }
+                    }
+                }.accessibilityIdentifier("vshook.tp.control." + id)
             }
         }
     }

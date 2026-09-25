@@ -1,6 +1,32 @@
 import SwiftUI
 import UIKit
 
+struct TCPLoopOverlay: View {
+    let geometry: [TCPLoopOverlayGeometry]
+    var header = false
+    var body: some View {
+        Canvas { context, size in
+            for geometry in geometry {
+            let color = Color(hex: "FACC15")
+            context.fill(Path(CGRect(x: geometry.left * size.width, y: 0, width: geometry.width * size.width, height: size.height)), with: .color(color.opacity(0.07)))
+            for (fraction, start) in [(geometry.startMarker, true), (geometry.endMarker, false)] {
+                guard let fraction else { continue }
+                let x = min(max(1, fraction * size.width), max(1, size.width - 1))
+                var line = Path(); line.move(to: CGPoint(x: x, y: 0)); line.addLine(to: CGPoint(x: x, y: size.height))
+                context.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: header ? [] : [5, 3]))
+                if header {
+                    let flagX = min(max(0, start ? x : x - 44), max(0, size.width - 44))
+                    let rect = CGRect(x: flagX, y: 0, width: 44, height: 12)
+                    context.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(color))
+                    let label = "LOOP"
+                    context.draw(Text(label).font(.custom("Arial-BoldMT", size: 8)).foregroundColor(.black), at: CGPoint(x: rect.midX, y: rect.midY))
+                }
+            }
+            }
+        }.clipped().allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
 struct TCPRegionHeader: View {
     let regions: [JSON]
     let range: TCPRange
@@ -33,6 +59,10 @@ struct TCPGridRow: View {
     let shadow: Bool
     let onSeek: (Double) -> Void
     let onItem: (JSON) -> Void
+    let canSeek: Bool
+    let cursorRatio: Double?
+    let onCursorDrag: (Double, Bool) -> Void
+    let cancelCursorDrag: () -> Void
     let canPan: Bool
     let onPan: (Double, Bool) -> Void
     var body: some View {
@@ -41,7 +71,10 @@ struct TCPGridRow: View {
             TCPTouchSurface(tap: { point in onSeek(point.x / max(1, geometry.size.width)) }, open: { point in
                 let time = range.start + range.duration * point.x / max(1, geometry.size.width)
                 if !shadow, let item = items.last(where: { $0.first("startPos", "start_pos").double <= time && $0.first("endPos", "end_pos").double > time }) { onItem(item) }
-            }, canPan: canPan, pan: { translation, ended in onPan(translation / max(1, geometry.size.width), ended) })
+            }, canSeek: canSeek, cursorRatio: cursorRatio,
+                cursorDrag: { point, ended in onCursorDrag(point.x / max(1, geometry.size.width), ended) },
+                cancelCursorDrag: cancelCursorDrag,
+                canPan: canPan, pan: { translation, ended in onPan(translation / max(1, geometry.size.width), ended) })
         }.background(Color(hex: "11151B")).clipped()
             .overlay(alignment: .bottom) { Color(hex: "7C3AED").frame(height: 1) }
             .accessibilityElement().accessibilityLabel("Linha do tempo de " + track.name)
@@ -139,6 +172,10 @@ private struct TCPTrackDrawing: View, Equatable {
 private struct TCPTouchSurface: UIViewRepresentable {
     var tap: (CGPoint) -> Void
     var open: (CGPoint) -> Void
+    var canSeek: Bool
+    var cursorRatio: Double?
+    var cursorDrag: (CGPoint, Bool) -> Void
+    var cancelCursorDrag: () -> Void
     var canPan: Bool
     var pan: (CGFloat, Bool) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -164,17 +201,30 @@ private struct TCPTouchSurface: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) { context.coordinator.parent = self }
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: TCPTouchSurface
+        private var draggingCursor = false
         init(_ parent: TCPTouchSurface) { self.parent = parent }
         @objc func single(_ gesture: UITapGestureRecognizer) { parent.tap(gesture.location(in: gesture.view)) }
         @objc func double(_ gesture: UITapGestureRecognizer) { parent.open(gesture.location(in: gesture.view)) }
         @objc func hold(_ gesture: UILongPressGestureRecognizer) { if gesture.state == .began { parent.open(gesture.location(in: gesture.view)) } }
         @objc func drag(_ gesture: UIPanGestureRecognizer) {
-            parent.pan(gesture.translation(in: gesture.view).x, [.ended, .cancelled, .failed].contains(gesture.state))
+            if draggingCursor {
+                if gesture.state == .cancelled || gesture.state == .failed { parent.cancelCursorDrag() }
+                else { parent.cursorDrag(gesture.location(in: gesture.view), gesture.state == .ended) }
+            } else {
+                parent.pan(gesture.translation(in: gesture.view).x, [.ended, .cancelled, .failed].contains(gesture.state))
+            }
         }
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
             let velocity = pan.velocity(in: pan.view)
-            return parent.canPan && abs(velocity.x) > abs(velocity.y)
+            guard abs(velocity.x) > abs(velocity.y) else { return false }
+            let width = max(1, pan.view?.bounds.width ?? 1)
+            let startX = pan.location(in: pan.view).x - pan.translation(in: pan.view).x
+            let nearCursor = parent.cursorRatio.map { (0...1).contains($0) && abs(startX - $0 * width) <= 22 } ?? false
+            // At normal zoom, horizontal dragging seeks. With zoom, grabbing
+            // the needle seeks while dragging elsewhere pans the timeline.
+            draggingCursor = parent.canSeek && (!parent.canPan || nearCursor)
+            return draggingCursor || parent.canPan
         }
     }
 }
@@ -193,7 +243,7 @@ struct TCPMovingCursor: View {
                 guard current >= range.start && current <= range.end else { return }
                 let x = (current - range.start) / range.duration * size.width
                 let trail = playing ? max(8, min(42, size.width / range.duration * 0.7)) : 0
-                drawGridPlayhead(context: &context, size: size, x: x, trail: trail, headVisible: head)
+                drawGridPlayhead(context: &context, size: size, x: x, trail: trail, headVisible: head, headWidth: 14)
             }
         }
     }

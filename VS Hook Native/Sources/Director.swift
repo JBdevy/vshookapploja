@@ -77,6 +77,7 @@ struct DirectorView: View {
                     }
                 }
             }
+            .overlay { DirectorFadeoutPopup(session: session) }
             .alert("Salvar o projeto no computador?", isPresented: $confirmSave) {
                 Button("Cancelar", role: .cancel) {}
                 Button("Salvar") { session.command("save_project", ["confirmed": true]) }
@@ -188,13 +189,12 @@ struct DirectorView: View {
                                     phoneMenuButton("TUNER", color: "164E63") { togglePanel("tuner") }
                                     phoneMenuButton("BPM", color: "082F49") { togglePanel("bpm") }
                                     phoneMenuButton("RECADOS", color: "592326") { sheet = "recados" }
-                                    phoneMenuButton("MODO LIVE", color: session.liveEnabled ? "15803D" : "991B1B") { confirmLive = true }
-                                    phoneMenuButton("BY", color: session.snapshot.first("multiloopBypassEnabled", "multiLoopBypass", "bypassEnabled").bool ? "15803D" : "991B1B") { session.toggleBypass() }
+                                    phoneMenuButton("MODO LIVE", color: session.liveEnabled ? "15803D" : "991B1B", border: session.liveEnabled ? "4ADE80" : "F87171") { confirmLive = true }
+                                        .modifier(DirectorActiveBlink(active: session.liveEnabled))
+                                    phoneMenuButton("BY", color: session.bypassActive ? "FACC15" : "B00000", foreground: session.bypassActive ? "111827" : "FFFFFF", border: session.bypassActive ? "FFF176" : "FF2A2A") { session.toggleBypass() }
+                                        .modifier(DirectorActiveBlink(active: session.bypassActive))
                                     if session.page == "playlist" {
-                                        phoneMenuButton("AT/BL", color: session.snapshot["autoBlocoEnabled"].bool ? "15803D" : "1F2937") {
-                                            let next = !session.snapshot["autoBlocoEnabled"].bool
-                                            session.command("auto_bloco_set", ["desiredAutoBloco": .bool(next), "autoBlocoEnabled": .bool(next), "desiredState": .string(next ? "on" : "off")], optimistic: ["autoBlocoEnabled": .bool(next)])
-                                        }
+                                        phoneMenuButton("AT/BL", color: session.autoBlockEnabled ? "FACC15" : "1F2937", foreground: session.autoBlockEnabled ? "111827" : "FFFFFF", border: session.autoBlockEnabled ? "FDE047" : "475569") { session.toggleAutoBlock() }
                                     }
                                 }.padding(12)
                             }.frame(width: 176, height: session.page == "playlist" ? 590 : 526)
@@ -206,8 +206,8 @@ struct DirectorView: View {
                 }
         }
     }
-    private func phoneMenuButton(_ title: String, color: String = "1F2937", action: @escaping () -> Void) -> some View {
-        DirectorControl(title: title, background: Color(hex: color), height: 54, size: 18) { showPhoneMenu = false; action() }
+    private func phoneMenuButton(_ title: String, color: String = "1F2937", foreground: String = "FFFFFF", border: String = "475569", action: @escaping () -> Void) -> some View {
+        DirectorControl(title: title, background: Color(hex: color), foreground: Color(hex: foreground), border: Color(hex: border), height: 54, size: 18) { showPhoneMenu = false; action() }
     }
     private var tabletNavigation: some View {
         HStack(spacing: 4) {
@@ -269,6 +269,7 @@ struct DirectorView: View {
             DirectorSideButton(title: "BY", background: Color(hex: session.bypassActive ? "FACC15" : "B00000"),
                                foreground: session.bypassActive ? Color(hex: "111827") : .white,
                                border: Color(hex: session.bypassActive ? "FFF176" : "FF2A2A"), vertical: false) { session.toggleBypass() }.frame(height: 72)
+                .modifier(DirectorActiveBlink(active: session.bypassActive))
             ForEach(1...3, id: \.self) { value in
                 let slot = value + previewPage * 3
                 DirectorSideButton(title: "P\(slot)", background: Color(hex: session.snapshot["previewMode"].int == slot ? "15803D" : "172033"), vertical: false) {
@@ -306,24 +307,20 @@ struct DirectorView: View {
     }
     private var playbackControls: some View {
         HStack(spacing: 5) {
-            DirectorControl(title: session.playing ? "STOP" : "PLAY", background: Color(hex: session.playing ? "DC2626" : "166534"), border: Color(hex: session.playing ? "F87171" : "22C55E")) { session.command("play_button") }
+            DirectorTransportControl(session: session)
                 .accessibilityIdentifier("vshook.transport.play")
                 .highPriorityGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in sheet = "playHold" })
             if session.page == "playlist" {
-                DirectorControl(title: "AUTO 1", background: Color(hex: session.autoEnabled(1) ? "15803D" : "172033")) { session.toggleAuto(1) }
-                DirectorControl(title: "AUTO 2", background: Color(hex: session.autoEnabled(2) ? "15803D" : "172033")) { session.toggleAuto(2) }
+                DirectorAutoControl(session: session, mode: 1)
+                DirectorAutoControl(session: session, mode: 2)
                 if session.tablet {
-                    DirectorControl(title: "AT/BL", background: Color(hex: session.snapshot["autoBlocoEnabled"].bool ? "15803D" : "172033")) {
-                        let next = !session.snapshot["autoBlocoEnabled"].bool
-                        session.command("auto_bloco_set", ["desiredAutoBloco": .bool(next), "autoBlocoEnabled": .bool(next), "desiredState": .string(next ? "on" : "off")], optimistic: ["autoBlocoEnabled": .bool(next)])
-                    }
+                    DirectorControl(title: "AT/BL", background: Color(hex: session.autoBlockEnabled ? "CA8A04" : "172033"), foreground: Color(hex: session.autoBlockEnabled ? "111827" : "FFFFFF"), border: Color(hex: session.autoBlockEnabled ? "FACC15" : "475569")) { session.toggleAutoBlock() }
                 }
             }
-            DirectorControl(title: "STOP BREAK", background: Color(hex: session.playing ? "DC2626" : "374151")) {
-                session.command("director_stop_break", session.target.merging(["noSeek": true, "preserveCursor": true, "transportOnly": true, "ignoreFadeout": true, "stopBreak": true]))
-            }
+            DirectorTransportControl(session: session, stopBreak: true)
             if session.tablet {
-                DirectorControl(title: "LIVE", background: Color(hex: session.liveEnabled ? "15803D" : "991B1B")) { confirmLive = true }
+                DirectorControl(title: "LIVE", background: Color(hex: session.liveEnabled ? "15803D" : "991B1B"), border: Color(hex: session.liveEnabled ? "4ADE80" : "F87171")) { confirmLive = true }
+                    .modifier(DirectorActiveBlink(active: session.liveEnabled))
             }
         }.disabled(!session.connected || !session.authenticated)
     }
