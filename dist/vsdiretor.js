@@ -3430,8 +3430,8 @@
     syncTransportSeekModalDom()
   }
 
-  function setTransportSeekCursorRatio(ratio) {
-    const target = getTransportSeekTarget(state.snapshot)
+  function setTransportSeekCursorRatio(ratio, explicitTarget = null) {
+    const target = explicitTarget || getTransportSeekTarget(state.snapshot)
     if (!target || getTransportSeekPlaying(state.snapshot)) return false
     const songStart = Number(target.start) || 0
     const songEnd = Number(target.end) || 0
@@ -8855,7 +8855,7 @@
       : []
     const premixDuration = Math.max(1, premixBounds.end - premixBounds.start)
     const tabletLayout = isTabletMixerLayout()
-    const listOpen = tabletLayout && state.mixerListOpen
+    const listOpen = state.mixerListOpen
     const playlistItems = listOpen ? getPlaylistWithOpenDrawers(data) : []
     const mixerTimelineCacheSource = JSON.stringify({
       view: state.mixerView,
@@ -8916,7 +8916,7 @@
               : `<div class="mixerRowsBox mixerMasterOnlyRows">${rows}</div>`))
       : `<div class="emptyBox">TCP SEM DADOS</div>`
     const viewControls = tabletLayout ? '' : renderMixerViewButtons('mixerTopControls')
-    const actionControls = tabletLayout ? renderMixerActionControls(data) : ''
+    const actionControls = renderMixerActionControls(data)
     return `<div class="contentPanel mixerContentPanel cachedMainSurface${listOpen ? ' mixerContentListOpen' : ''}" style="--mixer-track-width:${trackWidthPercent}%;--mixer-list-width:${getMixerListWidthPercent()}%" data-main-pane-tab="mixer" data-main-pane-cache-key="${cacheKey}">${viewControls}${actionControls}<div class="listBox mixerListBox${listOpen ? ' mixerListMode' : ' mixerUnifiedScroll'}" data-scroll-key="mixer" data-mixer-timeline-cache-key="${mixerTimelineCacheKey}">${listOpen ? '' : timelineHeader}${timeline}</div></div>`
   }
 
@@ -13347,8 +13347,8 @@
         </style>
         <style>
           html[data-director-device="tablet"] .tabletTopBarTcpShortcut{display:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .tabletDirectorTopBar .tabletTopBarTuner,html[data-director-device="tablet"] .app[data-active-tab="mixer"] .tabletDirectorTopBar .tabletTopBarBpm{display:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .tabletDirectorTopBar .tabletTopBarTcpShortcut{display:flex!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .tabletDirectorTopBar .tabletTopBarTuner,html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .tabletDirectorTopBar .tabletTopBarBpm{display:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .tabletDirectorTopBar .tabletTopBarTcpShortcut{display:flex!important}
           html[data-director-device="tablet"] .tabletTopBarTcpRpts{align-items:center!important;justify-content:center!important;text-align:center!important;line-height:1!important;background:linear-gradient(180deg,#fde047,#d9a600)!important;border-color:#facc15!important;color:#111827!important}
           html[data-director-device="tablet"] .tabletTopBarTcpSearch{align-items:center!important;justify-content:center!important;text-align:center!important;line-height:1!important;background:linear-gradient(180deg,#9333ea,#6d28d9)!important;border-color:#c084fc!important;color:#fff!important}
           html[data-director-device="tablet"] .app:not(.musicianMonitor)>.container,html[data-director-device="phone"] .app:not(.musicianMonitor)>.container,.app.musicianMonitor>.container{padding:4px!important}
@@ -13397,89 +13397,89 @@
         </style>
         <style>
           .mixerTabletTimeline,.mixerTabletTrackRows,.mixerTabletGridViewport{display:contents}.mixerTabletGrid,.mixerMiniItemMute,.mixerTabletTrackHeaderSpacer,.mixerTimelineFixedHeader{display:none}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"]:not(.musicianMonitor){padding-left:max(8px,var(--tablet-safe-left,var(--vsh-safe-left)))!important;padding-right:max(8px,var(--tablet-safe-right,var(--vsh-safe-right)))!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"]>.tabletDirectorSidebar{display:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"]:not(.musicianMonitor){padding-left:max(8px,var(--tablet-safe-left,var(--vsh-safe-left)))!important;padding-right:max(8px,var(--tablet-safe-right,var(--vsh-safe-right)))!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"]>.tabletDirectorSidebar{display:none!important}
           html[data-director-device="phone"] .app .mixerListBox,html[data-director-device="tablet"] .app .mixerListBox,html[data-director-device="phone"] .app .premixFullList,html[data-director-device="tablet"] .app .premixFullList,html[data-director-device="phone"] .app [data-main-pane-tab="premix"] .listBox,html[data-director-device="tablet"] .app [data-main-pane-tab="premix"] .listBox{overscroll-behavior:none!important;overscroll-behavior-y:none!important;-webkit-overflow-scrolling:auto!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerListBox{overflow-y:auto!important;overflow-x:hidden!important;-webkit-overflow-scrolling:touch!important;background:#080b10!important;border:1px solid #25303d!important;padding-bottom:0!important;scroll-padding-bottom:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerListBox.mixerListMode{overflow:hidden!important;-webkit-overflow-scrolling:auto!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerListBox.mixerListMode{position:relative!important;padding:0!important;margin:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerListBox.mixerListMode>.mixerTabletListWorkspace,html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerListBox.mixerListMode>.mixerTabletMasterListOpen{position:absolute!important;inset:0!important;width:auto!important;height:auto!important;min-height:0!important;margin:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerListBox.mixerUnifiedScroll{display:flex!important;flex-direction:column!important;overflow-y:auto!important;overflow-x:hidden!important;overscroll-behavior:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTimeline{display:grid!important;grid-template-columns:var(--mixer-track-width,30%) minmax(0,1fr)!important;align-items:stretch!important;min-width:0!important;min-height:0!important;background:#11151b!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTimelineUnified{flex:1 0 auto!important;grid-template-columns:var(--mixer-track-width,30%) minmax(0,1fr)!important;width:100%!important;min-width:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTimelineUnified>.mixerTabletTrackRows{position:sticky!important;left:0!important;z-index:14!important;align-self:stretch!important;min-height:100%!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTimelineUnified>.mixerTabletGridViewport{overflow:hidden!important;width:auto!important;align-self:stretch!important;min-height:100%!important;touch-action:pan-y!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTimelineUnified .mixerTabletGrid{width:100%!important;height:100%!important;min-width:0!important;min-height:100%!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTimelineListOpen{grid-template-columns:clamp(140px,18vw,190px) minmax(0,1fr) clamp(270px,34%,380px)!important;height:100%!important;min-height:0!important;align-items:start!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTimelineListOpen>.mixerTabletGridViewport{overflow:auto!important;touch-action:pan-x pan-y!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletMasterListOpen{grid-template-columns:minmax(320px,1fr) clamp(220px,var(--mixer-list-width,34%),75%)!important;align-items:stretch!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletMasterListOpen>.mixerMasterOnlyRows{display:block!important;min-width:0!important;overflow-y:auto!important;border-right:2px solid #66717f!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineFixedHeader{display:grid!important;grid-template-columns:var(--mixer-track-width,30%) minmax(0,1fr)!important;flex:0 0 36px!important;height:36px!important;min-height:36px!important;overflow:hidden!important;border:0!important;border-bottom:1px solid #25303d!important;box-sizing:border-box!important;background:#070a0f!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineUnifiedHeader{position:sticky!important;top:0!important;z-index:20!important;grid-template-columns:var(--mixer-track-width,30%) minmax(0,1fr)!important;width:100%!important;min-width:0!important;overflow:visible!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineUnifiedHeader>.mixerTimelineFixedTrackCap{position:sticky!important;left:0!important;z-index:21!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineUnifiedHeader>.mixerTimelineHeaderViewport{overflow:hidden!important;width:auto!important;touch-action:pan-y!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineUnifiedHeader .mixerTimelineHeaderCanvas{width:100%!important;min-width:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineFixedHeaderListOpen{grid-template-columns:clamp(140px,18vw,190px) minmax(0,1fr) clamp(270px,34%,380px)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelinePlaylistCap{display:flex!important;align-items:center!important;justify-content:center!important;border-left:2px solid #66717f!important;background:#0b1017!important;color:#f8fafc!important;font-size:11px!important;font-weight:1000!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineFixedTrackCap{position:relative!important;display:grid!important;grid-template-rows:18px 18px!important;border-right:0!important;background:#0b1017!important;overflow:visible!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineTrackCapLane{position:relative!important;display:flex!important;align-items:center!important;min-width:0!important;height:18px!important;padding:0 40px 0 8px!important;box-sizing:border-box!important;overflow:hidden!important;color:#f02ee6!important;font-size:9px!important;font-weight:1000!important;line-height:17px!important;white-space:nowrap!important;text-overflow:ellipsis!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineTrackCapLane+ .mixerTimelineTrackCapLane{border-top:1px solid #263241!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineTrackCapLane::after{content:""!important;position:absolute!important;right:27px!important;top:50%!important;width:0!important;height:0!important;border-top:4px solid transparent!important;border-bottom:4px solid transparent!important;border-left:6px solid #f02ee6!important;transform:translateY(-50%)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTrackWidthHandle{position:absolute!important;z-index:30!important;right:0!important;top:0!important;width:24px!important;height:100%!important;cursor:ew-resize!important;touch-action:none!important;user-select:none!important;background:transparent!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTrackWidthHandle::before{content:""!important;position:absolute!important;left:7px!important;top:0!important;bottom:0!important;width:14px!important;box-sizing:border-box!important;border:1px solid #9ca3af!important;border-radius:0!important;background:repeating-linear-gradient(90deg,#9ca3af 0 2px,transparent 2px 5px)!important;background-color:#1f2937!important;box-shadow:0 0 5px rgba(107,114,128,.72)!important;pointer-events:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerListBox{overflow-y:auto!important;overflow-x:hidden!important;-webkit-overflow-scrolling:touch!important;background:#080b10!important;border:1px solid #25303d!important;padding-bottom:0!important;scroll-padding-bottom:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerListBox.mixerListMode{overflow:hidden!important;-webkit-overflow-scrolling:auto!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerListBox.mixerListMode{position:relative!important;padding:0!important;margin:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerListBox.mixerListMode>.mixerTabletListWorkspace,html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerListBox.mixerListMode>.mixerTabletMasterListOpen{position:absolute!important;inset:0!important;width:auto!important;height:auto!important;min-height:0!important;margin:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerListBox.mixerUnifiedScroll{display:flex!important;flex-direction:column!important;overflow-y:auto!important;overflow-x:hidden!important;overscroll-behavior:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTimeline{display:grid!important;grid-template-columns:var(--mixer-track-width,30%) minmax(0,1fr)!important;align-items:stretch!important;min-width:0!important;min-height:0!important;background:#11151b!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTimelineUnified{flex:1 0 auto!important;grid-template-columns:var(--mixer-track-width,30%) minmax(0,1fr)!important;width:100%!important;min-width:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTimelineUnified>.mixerTabletTrackRows{position:sticky!important;left:0!important;z-index:14!important;align-self:stretch!important;min-height:100%!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTimelineUnified>.mixerTabletGridViewport{overflow:hidden!important;width:auto!important;align-self:stretch!important;min-height:100%!important;touch-action:pan-y!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTimelineUnified .mixerTabletGrid{width:100%!important;height:100%!important;min-width:0!important;min-height:100%!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTimelineListOpen{grid-template-columns:clamp(140px,18vw,190px) minmax(0,1fr) clamp(270px,34%,380px)!important;height:100%!important;min-height:0!important;align-items:start!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTimelineListOpen>.mixerTabletGridViewport{overflow:auto!important;touch-action:pan-x pan-y!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletMasterListOpen{grid-template-columns:minmax(320px,1fr) clamp(220px,var(--mixer-list-width,34%),75%)!important;align-items:stretch!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletMasterListOpen>.mixerMasterOnlyRows{display:block!important;min-width:0!important;overflow-y:auto!important;border-right:2px solid #66717f!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineFixedHeader{display:grid!important;grid-template-columns:var(--mixer-track-width,30%) minmax(0,1fr)!important;flex:0 0 36px!important;height:36px!important;min-height:36px!important;overflow:hidden!important;border:0!important;border-bottom:1px solid #25303d!important;box-sizing:border-box!important;background:#070a0f!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineUnifiedHeader{position:sticky!important;top:0!important;z-index:20!important;grid-template-columns:var(--mixer-track-width,30%) minmax(0,1fr)!important;width:100%!important;min-width:0!important;overflow:visible!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineUnifiedHeader>.mixerTimelineFixedTrackCap{position:sticky!important;left:0!important;z-index:21!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineUnifiedHeader>.mixerTimelineHeaderViewport{overflow:hidden!important;width:auto!important;touch-action:pan-y!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineUnifiedHeader .mixerTimelineHeaderCanvas{width:100%!important;min-width:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineFixedHeaderListOpen{grid-template-columns:clamp(140px,18vw,190px) minmax(0,1fr) clamp(270px,34%,380px)!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelinePlaylistCap{display:flex!important;align-items:center!important;justify-content:center!important;border-left:2px solid #66717f!important;background:#0b1017!important;color:#f8fafc!important;font-size:11px!important;font-weight:1000!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineFixedTrackCap{position:relative!important;display:grid!important;grid-template-rows:18px 18px!important;border-right:0!important;background:#0b1017!important;overflow:visible!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineTrackCapLane{position:relative!important;display:flex!important;align-items:center!important;min-width:0!important;height:18px!important;padding:0 40px 0 8px!important;box-sizing:border-box!important;overflow:hidden!important;color:#f02ee6!important;font-size:9px!important;font-weight:1000!important;line-height:17px!important;white-space:nowrap!important;text-overflow:ellipsis!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineTrackCapLane+ .mixerTimelineTrackCapLane{border-top:1px solid #263241!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineTrackCapLane::after{content:""!important;position:absolute!important;right:27px!important;top:50%!important;width:0!important;height:0!important;border-top:4px solid transparent!important;border-bottom:4px solid transparent!important;border-left:6px solid #f02ee6!important;transform:translateY(-50%)!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTrackWidthHandle{position:absolute!important;z-index:30!important;right:0!important;top:0!important;width:24px!important;height:100%!important;cursor:ew-resize!important;touch-action:none!important;user-select:none!important;background:transparent!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTrackWidthHandle::before{content:""!important;position:absolute!important;left:7px!important;top:0!important;bottom:0!important;width:14px!important;box-sizing:border-box!important;border:1px solid #9ca3af!important;border-radius:0!important;background:repeating-linear-gradient(90deg,#9ca3af 0 2px,transparent 2px 5px)!important;background-color:#1f2937!important;box-shadow:0 0 5px rgba(107,114,128,.72)!important;pointer-events:none!important}
           html.mixerTrackWidthResizing,html.mixerTrackWidthResizing body,html.mixerListWidthResizing,html.mixerListWidthResizing body{cursor:ew-resize!important;user-select:none!important}
           html.mixerTrackWidthResizing .mixerTrackWidthHandle::before,html.mixerListWidthResizing .mixerListWidthHandle::before{border-color:#fde047!important;background:repeating-linear-gradient(90deg,#facc15 0 2px,transparent 2px 5px)!important;background-color:#713f12!important;box-shadow:0 0 12px rgba(250,204,21,.98)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineHeaderViewport{min-width:0!important;overflow:hidden!important;overscroll-behavior-x:none!important;touch-action:pan-y!important;scrollbar-width:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineHeaderCanvas{position:relative!important;min-width:100%!important;height:36px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTrackRows{display:block!important;min-width:0!important;border-right:0!important;background:#0b1017!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTrackHeaderSpacer{position:relative!important;z-index:11!important;height:36px!important;border-bottom:1px solid #66717f!important;background:#0b1017!important;will-change:transform!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridViewport{display:block!important;min-width:0!important;overflow-x:auto!important;overflow-y:hidden!important;overscroll-behavior-x:none!important;-webkit-overflow-scrolling:touch!important;scrollbar-width:thin!important;background:#11151b!important;touch-action:pan-y!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGrid{display:block!important;position:relative!important;min-width:100%!important;background-color:#11151b!important;background-image:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineRegionLanes{position:relative!important;z-index:10!important;height:36px!important;border-bottom:1px solid #66717f!important;background:#070a0f!important;overflow:hidden!important;will-change:transform!important;box-shadow:0 2px 4px rgba(0,0,0,.42)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineRegionLane{position:relative!important;height:18px!important;overflow:hidden!important}.mixerTimelineChildLane{border-top:1px solid #263241!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineRegion{position:absolute!important;top:1px!important;height:16px!important;box-sizing:border-box!important;overflow:hidden!important;padding:1px 4px!important;border:1px solid color-mix(in srgb,var(--mixer-region-color) 70%,#fff 30%)!important;background:var(--mixer-region-color)!important;color:#fff!important;font-size:8px!important;font-weight:1000!important;line-height:12px!important;text-overflow:ellipsis!important;white-space:nowrap!important;text-shadow:0 1px 1px #000!important}.mixerTimelineChildRegion{filter:brightness(1.12)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineCursor{position:absolute!important;z-index:8!important;top:0!important;bottom:0!important;left:0;width:2px!important;background:#a3e635!important;box-shadow:0 0 0 1px rgba(0,0,0,.45),0 0 7px rgba(163,230,53,.72)!important;pointer-events:none!important;transform:translateX(-1px)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineCursor::before{content:""!important;position:absolute!important;left:50%!important;top:0!important;width:0!important;height:0!important;border-left:5px solid transparent!important;border-right:5px solid transparent!important;border-top:6px solid #a3e635!important;transform:translateX(-50%)!important;filter:drop-shadow(0 1px 1px #000)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletTrackRows,html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow,html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow::before,html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow::after{border-radius:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineRegionGuides{position:absolute!important;z-index:5!important;inset:0!important;pointer-events:none!important;overflow:hidden!important}html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineHeaderCanvas>.mixerTimelineRegionGuides{z-index:12!important}.mixerTimelineRegionGuideSpan{position:absolute!important;top:0!important;bottom:0!important;box-sizing:border-box!important;border-left:1px solid var(--mixer-region-guide-color)!important;border-right:1px solid var(--mixer-region-guide-color)!important;opacity:.88!important}.mixerTimelineChildGuideSpan{opacity:.62!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTimelineHeaderCanvas>.mixerTimelineRegionGuides>.mixerTimelineChildGuideSpan{top:18px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow.mixerInlineRow{box-sizing:border-box!important;height:72px!important;min-height:72px!important;max-height:72px!important;grid-template-columns:5px minmax(52px,1fr) 32px 32px!important;grid-template-rows:30px 28px!important;grid-template-areas:"color main mute solo" "color slider slider slider"!important;column-gap:4px!important;row-gap:2px!important;padding:5px 19px 5px 44px!important;border-bottom:1px solid #7c3aed!important;contain:layout paint style!important;content-visibility:visible!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow.mixerInlineRow::after{display:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .appScrollLane{left:0!important;width:38px!important;min-width:38px!important;max-width:38px!important;font-size:14px!important;gap:2px!important;background:rgba(15,23,42,.78)!important;border-right:1px solid #334155!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRowColor{width:5px!important;height:56px!important;border-radius:2px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRowDb{display:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRowName{font-size:11px!important;line-height:14px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRowGroupName{font-size:9px!important;line-height:12px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerInlineSliderWrap{height:28px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow.mixerInlineRow .mixerMiniBtn{width:30px!important;height:28px!important;min-height:28px!important;border-radius:5px!important;font-size:12px!important;padding:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridRow{position:relative!important;box-sizing:border-box!important;height:72px!important;min-height:72px!important;border-bottom:1px solid #7c3aed!important;overflow:hidden!important;contain:layout paint style!important;content-visibility:visible!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridItem{position:absolute!important;left:var(--mixer-grid-left)!important;top:0!important;width:var(--mixer-grid-width)!important;height:72px!important;min-width:1px!important;box-sizing:border-box!important;overflow:hidden!important;border:1px solid var(--mixer-grid-color)!important;border:1px solid color-mix(in srgb,var(--mixer-grid-color) 72%,#fff 28%)!important;border-radius:2px!important;background:var(--mixer-grid-color)!important;background:color-mix(in srgb,var(--mixer-grid-color) 78%,#111827 22%)!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)!important;color:#fff!important;contain:layout paint style!important;content-visibility:visible!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridItemMuted{background:#050505!important;border-color:#374151!important;color:#6b7280!important}.mixerTabletGridItemMuted .mixerTabletGridHeader{background:#050505!important;color:#ef4444!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridHeader{position:absolute;left:0;right:0;top:0;z-index:2;height:13px;display:flex;align-items:center;gap:4px;padding:0 3px;box-sizing:border-box;overflow:hidden;border-bottom:1px solid rgba(255,255,255,.5);background:var(--mixer-grid-color);background:color-mix(in srgb,var(--mixer-grid-color) 78%,#020617 22%);color:#fff}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridMuteLabel{display:none;flex:0 0 auto;height:10px;padding:0 3px;border:1px solid rgba(255,255,255,.76);border-radius:2px;background:#111827;color:#fff;font-size:7px;font-weight:1000;line-height:9px;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridItemMuted .mixerTabletGridMuteLabel{display:block;background:#dc2626!important;border-color:#f87171!important;color:#fff!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridItemName{min-width:0;flex:1 1 auto;overflow:hidden;color:#050505!important;font-size:8px;font-weight:1000;line-height:11px;text-overflow:ellipsis;white-space:nowrap;text-shadow:none!important}html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridItemMuted .mixerTabletGridItemName{color:#ef4444!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridWaveform{position:absolute;left:4px;right:4px;top:16px;bottom:3px;display:flex;align-items:center;gap:1px;overflow:hidden;opacity:.9}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGridWaveform>i{display:block;flex:1 1 0;min-width:1px;height:var(--mixer-wave-height);border-radius:999px!important;background:#6b7280!important;box-shadow:0 0 0 1px rgba(0,0,0,.08);transform:scaleY(var(--mixer-wave-volume-scale,1));transform-origin:center;transition:transform 60ms linear;will-change:transform}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGroupWaveShadow{position:absolute!important;left:var(--mixer-grid-left)!important;top:4px!important;width:var(--mixer-grid-width)!important;height:63px!important;min-width:1px!important;overflow:hidden!important;pointer-events:none!important;opacity:.52!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGroupWaveShadow .mixerTabletGridWaveform{inset:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletGroupWaveShadow .mixerTabletGridWaveform>i{background:#737b86!important;box-shadow:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineHeaderViewport{min-width:0!important;overflow:hidden!important;overscroll-behavior-x:none!important;touch-action:pan-y!important;scrollbar-width:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineHeaderCanvas{position:relative!important;min-width:100%!important;height:36px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTrackRows{display:block!important;min-width:0!important;border-right:0!important;background:#0b1017!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTrackHeaderSpacer{position:relative!important;z-index:11!important;height:36px!important;border-bottom:1px solid #66717f!important;background:#0b1017!important;will-change:transform!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridViewport{display:block!important;min-width:0!important;overflow-x:auto!important;overflow-y:hidden!important;overscroll-behavior-x:none!important;-webkit-overflow-scrolling:touch!important;scrollbar-width:thin!important;background:#11151b!important;touch-action:pan-y!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGrid{display:block!important;position:relative!important;min-width:100%!important;background-color:#11151b!important;background-image:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineRegionLanes{position:relative!important;z-index:10!important;height:36px!important;border-bottom:1px solid #66717f!important;background:#070a0f!important;overflow:hidden!important;will-change:transform!important;box-shadow:0 2px 4px rgba(0,0,0,.42)!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineRegionLane{position:relative!important;height:18px!important;overflow:hidden!important}.mixerTimelineChildLane{border-top:1px solid #263241!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineRegion{position:absolute!important;top:1px!important;height:16px!important;box-sizing:border-box!important;overflow:hidden!important;padding:1px 4px!important;border:1px solid color-mix(in srgb,var(--mixer-region-color) 70%,#fff 30%)!important;background:var(--mixer-region-color)!important;color:#fff!important;font-size:8px!important;font-weight:1000!important;line-height:12px!important;text-overflow:ellipsis!important;white-space:nowrap!important;text-shadow:0 1px 1px #000!important}.mixerTimelineChildRegion{filter:brightness(1.12)!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineCursor{position:absolute!important;z-index:8!important;top:0!important;bottom:0!important;left:0;width:2px!important;background:#a3e635!important;box-shadow:0 0 0 1px rgba(0,0,0,.45),0 0 7px rgba(163,230,53,.72)!important;pointer-events:none!important;transform:translateX(-1px)!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineCursor::before{content:""!important;position:absolute!important;left:50%!important;top:0!important;width:0!important;height:0!important;border-left:5px solid transparent!important;border-right:5px solid transparent!important;border-top:6px solid #a3e635!important;transform:translateX(-50%)!important;filter:drop-shadow(0 1px 1px #000)!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletTrackRows,html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow,html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow::before,html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow::after{border-radius:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineRegionGuides{position:absolute!important;z-index:5!important;inset:0!important;pointer-events:none!important;overflow:hidden!important}html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineHeaderCanvas>.mixerTimelineRegionGuides{z-index:12!important}.mixerTimelineRegionGuideSpan{position:absolute!important;top:0!important;bottom:0!important;box-sizing:border-box!important;border-left:1px solid var(--mixer-region-guide-color)!important;border-right:1px solid var(--mixer-region-guide-color)!important;opacity:.88!important}.mixerTimelineChildGuideSpan{opacity:.62!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTimelineHeaderCanvas>.mixerTimelineRegionGuides>.mixerTimelineChildGuideSpan{top:18px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow.mixerInlineRow{box-sizing:border-box!important;height:72px!important;min-height:72px!important;max-height:72px!important;grid-template-columns:5px minmax(52px,1fr) 32px 32px!important;grid-template-rows:30px 28px!important;grid-template-areas:"color main mute solo" "color slider slider slider"!important;column-gap:4px!important;row-gap:2px!important;padding:5px 19px 5px 44px!important;border-bottom:1px solid #7c3aed!important;contain:layout paint style!important;content-visibility:visible!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow.mixerInlineRow::after{display:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .appScrollLane{left:0!important;width:38px!important;min-width:38px!important;max-width:38px!important;font-size:14px!important;gap:2px!important;background:rgba(15,23,42,.78)!important;border-right:1px solid #334155!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRowColor{width:5px!important;height:56px!important;border-radius:2px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRowDb{display:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRowName{font-size:11px!important;line-height:14px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRowGroupName{font-size:9px!important;line-height:12px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerInlineSliderWrap{height:28px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow.mixerInlineRow .mixerMiniBtn{width:30px!important;height:28px!important;min-height:28px!important;border-radius:5px!important;font-size:12px!important;padding:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridRow{position:relative!important;box-sizing:border-box!important;height:72px!important;min-height:72px!important;border-bottom:1px solid #7c3aed!important;overflow:hidden!important;contain:layout paint style!important;content-visibility:visible!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridItem{position:absolute!important;left:var(--mixer-grid-left)!important;top:0!important;width:var(--mixer-grid-width)!important;height:72px!important;min-width:1px!important;box-sizing:border-box!important;overflow:hidden!important;border:1px solid var(--mixer-grid-color)!important;border:1px solid color-mix(in srgb,var(--mixer-grid-color) 72%,#fff 28%)!important;border-radius:2px!important;background:var(--mixer-grid-color)!important;background:color-mix(in srgb,var(--mixer-grid-color) 78%,#111827 22%)!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)!important;color:#fff!important;contain:layout paint style!important;content-visibility:visible!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridItemMuted{background:#050505!important;border-color:#374151!important;color:#6b7280!important}.mixerTabletGridItemMuted .mixerTabletGridHeader{background:#050505!important;color:#ef4444!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridHeader{position:absolute;left:0;right:0;top:0;z-index:2;height:13px;display:flex;align-items:center;gap:4px;padding:0 3px;box-sizing:border-box;overflow:hidden;border-bottom:1px solid rgba(255,255,255,.5);background:var(--mixer-grid-color);background:color-mix(in srgb,var(--mixer-grid-color) 78%,#020617 22%);color:#fff}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridMuteLabel{display:none;flex:0 0 auto;height:10px;padding:0 3px;border:1px solid rgba(255,255,255,.76);border-radius:2px;background:#111827;color:#fff;font-size:7px;font-weight:1000;line-height:9px;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridItemMuted .mixerTabletGridMuteLabel{display:block;background:#dc2626!important;border-color:#f87171!important;color:#fff!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridItemName{min-width:0;flex:1 1 auto;overflow:hidden;color:#050505!important;font-size:8px;font-weight:1000;line-height:11px;text-overflow:ellipsis;white-space:nowrap;text-shadow:none!important}html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridItemMuted .mixerTabletGridItemName{color:#ef4444!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridWaveform{position:absolute;left:4px;right:4px;top:16px;bottom:3px;display:flex;align-items:center;gap:1px;overflow:hidden;opacity:.9}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGridWaveform>i{display:block;flex:1 1 0;min-width:1px;height:var(--mixer-wave-height);border-radius:999px!important;background:#6b7280!important;box-shadow:0 0 0 1px rgba(0,0,0,.08);transform:scaleY(var(--mixer-wave-volume-scale,1));transform-origin:center;transition:transform 60ms linear;will-change:transform}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGroupWaveShadow{position:absolute!important;left:var(--mixer-grid-left)!important;top:4px!important;width:var(--mixer-grid-width)!important;height:63px!important;min-width:1px!important;overflow:hidden!important;pointer-events:none!important;opacity:.52!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGroupWaveShadow .mixerTabletGridWaveform{inset:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletGroupWaveShadow .mixerTabletGridWaveform>i{background:#737b86!important;box-shadow:none!important}
           html[data-director-device="tablet"] .app[data-theme="light"][data-active-tab="mixer"] .mixerListBox{background:#dbe2ea!important}
           html[data-director-device="tablet"] .app[data-theme="light"][data-active-tab="mixer"] .mixerTabletTrackRows{background:#eef2f7!important}
           html[data-director-device="tablet"] .app[data-theme="light"][data-active-tab="mixer"] .mixerTabletGrid{background-color:#d7dee7!important;background-image:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerActionControls{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:6px!important;margin:0 0 7px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerActionControls>button{height:38px!important;min-height:38px!important;min-width:0!important;font-size:11px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .topStatusRow.mixerTopStatusRow{grid-template-columns:minmax(0,1fr)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .topStatusRow.mixerTopStatusRow>.topHeaderTools{display:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerHeaderViewControls{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important;min-width:0!important;width:100%!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerHeaderViewControls>button{height:30px!important;min-height:30px!important;min-width:0!important;padding:0 5px!important;font-size:10.5px!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerPlaylistSide{position:relative!important;display:flex!important;flex-direction:column!important;width:100%!important;max-width:none!important;min-width:0!important;min-height:0!important;height:100%!important;border-left:2px solid #66717f!important;background:#0b1017!important;padding:5px!important;box-sizing:border-box!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerListWidthHandle{position:absolute!important;z-index:35!important;left:0!important;top:0!important;width:24px!important;height:100%!important;cursor:ew-resize!important;touch-action:none!important;user-select:none!important;background:transparent!important;transform:translateX(-2px)!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerListWidthHandle::before{content:""!important;position:absolute!important;left:2px!important;top:0!important;bottom:0!important;width:14px!important;box-sizing:border-box!important;border:1px solid #9ca3af!important;border-radius:0!important;background:repeating-linear-gradient(90deg,#9ca3af 0 2px,transparent 2px 5px)!important;background-color:#1f2937!important;box-shadow:0 0 5px rgba(107,114,128,.72)!important;pointer-events:none!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerPlaylistTitle{flex:0 0 30px!important;height:30px!important;margin-bottom:5px!important;justify-content:center!important;text-align:center!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerPlaylistRows{flex:1 1 auto!important;min-height:0!important;overflow-y:auto!important;overscroll-behavior:none!important;-webkit-overflow-scrolling:touch!important;box-sizing:border-box!important;padding-left:16px!important;padding-bottom:0!important;scroll-padding-bottom:0!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTabletListWorkspace{display:grid!important;grid-template-columns:minmax(0,1fr) clamp(220px,var(--mixer-list-width,34%),75%)!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;overflow:hidden!important}
-          html[data-director-device="tablet"] .app[data-active-tab="mixer"] .mixerTrackGridPane{display:flex!important;flex-direction:column!important;min-width:0!important;min-height:0!important;overflow-y:auto!important;overflow-x:hidden!important;overscroll-behavior:none!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-y!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerActionControls{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:6px!important;margin:0 0 7px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerActionControls>button{height:38px!important;min-height:38px!important;min-width:0!important;font-size:11px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .topStatusRow.mixerTopStatusRow{grid-template-columns:minmax(0,1fr)!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .topStatusRow.mixerTopStatusRow>.topHeaderTools{display:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerHeaderViewControls{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important;min-width:0!important;width:100%!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerHeaderViewControls>button{height:30px!important;min-height:30px!important;min-width:0!important;padding:0 5px!important;font-size:10.5px!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerPlaylistSide{position:relative!important;display:flex!important;flex-direction:column!important;width:100%!important;max-width:none!important;min-width:0!important;min-height:0!important;height:100%!important;border-left:2px solid #66717f!important;background:#0b1017!important;padding:5px!important;box-sizing:border-box!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerListWidthHandle{position:absolute!important;z-index:35!important;left:0!important;top:0!important;width:24px!important;height:100%!important;cursor:ew-resize!important;touch-action:none!important;user-select:none!important;background:transparent!important;transform:translateX(-2px)!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerListWidthHandle::before{content:""!important;position:absolute!important;left:2px!important;top:0!important;bottom:0!important;width:14px!important;box-sizing:border-box!important;border:1px solid #9ca3af!important;border-radius:0!important;background:repeating-linear-gradient(90deg,#9ca3af 0 2px,transparent 2px 5px)!important;background-color:#1f2937!important;box-shadow:0 0 5px rgba(107,114,128,.72)!important;pointer-events:none!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerPlaylistTitle{flex:0 0 30px!important;height:30px!important;margin-bottom:5px!important;justify-content:center!important;text-align:center!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerPlaylistRows{flex:1 1 auto!important;min-height:0!important;overflow-y:auto!important;overscroll-behavior:none!important;-webkit-overflow-scrolling:touch!important;box-sizing:border-box!important;padding-left:16px!important;padding-bottom:0!important;scroll-padding-bottom:0!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTabletListWorkspace{display:grid!important;grid-template-columns:minmax(0,1fr) clamp(220px,var(--mixer-list-width,34%),75%)!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;overflow:hidden!important}
+          html:is([data-director-device="tablet"],[data-director-device="phone"]) .app[data-active-tab="mixer"] .mixerTrackGridPane{display:flex!important;flex-direction:column!important;min-width:0!important;min-height:0!important;overflow-y:auto!important;overflow-x:hidden!important;overscroll-behavior:none!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-y!important}
         </style>
         <style>
           .app .item.selectedBlue .selectedBlueText,.app .item.selectedBlue .selectedBlueTimeText,.app .item.selectedPink .selectedPinkText,.app .item.selectedPink .selectedPinkTimeText,.app .item.queuedYellow .queuedYellowText,.app .item.queuedYellow .queuedYellowTimeText,.app .item.queuedGreen .queuedGreenText,.app .item.queuedGreen .queuedGreenTimeText,.app .item.queuedYellow .leftCol span,.app .item.queuedYellow .rightCol span,.app .item.queuedGreen .leftCol span,.app .item.queuedGreen .rightCol span,.app .item.queuedYellow .marqueeStatic,.app .item.queuedYellow .marqueeTrack,.app .item.queuedYellow .marqueeSegment,.app .item.queuedGreen .marqueeStatic,.app .item.queuedGreen .marqueeTrack,.app .item.queuedGreen .marqueeSegment,.app .item.playing .playingText,.app .item.playing .playingTimeText,.app .item.playing .leftCol span,.app .item.playing .rightCol span,.app .item.playing .marqueeStatic,.app .item.playing .marqueeTrack,.app .item.playing .marqueeSegment{color:#050505!important;text-shadow:none!important}
@@ -14734,22 +14734,39 @@
       (event?.touches && event.touches[0]) || event
     const clientX = Number(point?.clientX)
     if (!Number.isFinite(clientX)) return
-    const insetPx = rect.width * .015
-    const ratio = Math.max(0, Math.min(1,
-      (clientX - rect.left - insetPx) / Math.max(1, rect.width - (insetPx * 2))))
-    const position = start + ((end - start) * ratio)
-    state.transportSeekCursorPos = position
-    state.transportSeekPauseVisualHoldPos = position
-    state.transportSeekPauseVisualHoldUntil = now() + 8000
-    state.transportSeekLocalCursorHeld = true
-    state.transportSeekCommandSeq = Math.max(Number(state.transportSeekCommandSeq) + 1 || 1, Date.now() * 1000)
-    postCommand('edit_cursor_move', {
-      position, minPos: start, maxPos: end,
-      cursorMoveSeq: state.transportSeekCommandSeq,
-    }).then((response) => {
-      if (!response?.ok) showPopup('EXTENSÃO SEM RESPOSTA', 'error', 1100)
-    })
+    const rotated = document.documentElement.dataset.directorDevice === 'tablet'
+      && window.matchMedia?.('(orientation: portrait)')?.matches
+    const extent = rotated ? rect.height : rect.width
+    const coordinate = rotated ? Number(point?.clientY) - rect.top : clientX - rect.left
+    const insetPx = extent * .015
+    const ratio = Math.max(0, Math.min(1, (coordinate - insetPx) / Math.max(1, extent - insetPx * 2)))
+    setTransportSeekCursorRatio(ratio, { start, end })
     syncMixerTimelineCursorDom()
+  }
+
+  let mixerCursorDrag = null
+
+  function handleMixerCursorDrag(event) {
+    if (event.type === 'pointerdown') {
+      if (mixerCursorDrag || event.button > 0 || state.activeTab !== 'mixer' || isPlaying(state.snapshot)) return
+      const cursor = event.target?.closest?.('.mixerTimelineCursor')
+      const viewport = cursor?.closest?.('.mixerTabletGridViewport')
+      if (!viewport) return
+      cancelMixerItemHold()
+      stopMixerGridMomentum()
+      mixerCursorDrag = { pointerId: event.pointerId, viewport }
+      state.transportSeekDragging = true
+      try { viewport.setPointerCapture?.(event.pointerId) } catch (_) {}
+    } else if (!mixerCursorDrag || event.pointerId !== mixerCursorDrag.pointerId) return
+    event.preventDefault?.()
+    event.stopImmediatePropagation?.()
+    if (event.type !== 'pointercancel') handleMixerGridSeek(mixerCursorDrag.viewport, event)
+    if (event.type === 'pointerup' || event.type === 'pointercancel') {
+      try { mixerCursorDrag.viewport.releasePointerCapture?.(event.pointerId) } catch (_) {}
+      mixerCursorDrag = null
+      state.transportSeekDragging = false
+      state.ignoreTapUntil = now() + 400
+    }
   }
 
   function getMixerTimelineScroller(viewport) {
@@ -18365,12 +18382,18 @@
     state.mixerItemTarget = id
     state.showMixerItemModal = true
     state.ignoreTapUntil = now() + 650
+    // Mount only the modal: list rendering intentionally waits until the finger
+    // leaves the screen, but the completed long press must not wait for that.
+    if (!root.querySelector('.mixerItemModalBox')) {
+      const host = root.querySelector('.app') || root
+      host.insertAdjacentHTML('beforeend', renderMixerItemModal())
+    }
     scheduleRender(true)
     return true
   }
 
   function handleMixerItemHold(event) {
-    if (IS_MUSICIAN_MONITOR || state.activeTab !== 'mixer') return
+    if (IS_MUSICIAN_MONITOR || state.activeTab !== 'mixer' || mixerCursorDrag) return
     if (event.type === 'pointerdown') {
       if (event.pointerType === 'mouse') return
       const item = event.target?.closest?.('.mixerTabletGridItem[data-premix-item-id]')
@@ -18417,6 +18440,7 @@
   }
 
   function handleMixerGridPinchStart(event) {
+    if (mixerCursorDrag) return
     const touchedViewport = event.target?.closest?.('.mixerTabletGridViewport,.mixerTimelineHeaderViewport')
     const contentPanel = touchedViewport?.closest?.('.mixerContentPanel')
     const viewport = contentPanel?.querySelector?.('.mixerTabletGridViewport')
@@ -18460,6 +18484,7 @@
   }
 
   function handleMixerGridPinchMove(event) {
+    if (mixerCursorDrag) return
     if (!mixerGridPinch && mixerGridPan && event.touches?.length === 1) {
       const touch = event.touches[0]
       const dx = (Number(touch.clientX) || 0) - mixerGridPan.x
@@ -19179,6 +19204,9 @@
       document.addEventListener('pointermove', handlePlaylistScrollGesture, { passive: true })
       document.addEventListener('pointerup', handlePlaylistScrollGesture, { passive: true })
       document.addEventListener('pointercancel', handlePlaylistScrollGesture, { passive: true })
+      for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+        document.addEventListener(type, handleMixerCursorDrag, { passive: false, capture: true })
+      }
       document.addEventListener('pointerdown', handleMixerItemHold, { passive: true })
       document.addEventListener('pointermove', handleMixerItemHold, { passive: true })
       document.addEventListener('pointerup', handleMixerItemHold, { passive: true })

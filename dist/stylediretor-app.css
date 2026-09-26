@@ -12193,19 +12193,19 @@ html body #app .app button {
 
 /* O TCP monta todos os itens antes do scroll. Evita superfícies de pintura
    isoladas que o WebView só rasterizava quando entravam na tela. */
-html[data-director-device="tablet"] body #app .app[data-active-tab="mixer"] .mixerContentPanel,
-html[data-director-device="tablet"] body #app .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow.mixerInlineRow,
-html[data-director-device="tablet"] body #app .app[data-active-tab="mixer"] .mixerTabletGridRow,
-html[data-director-device="tablet"] body #app .app[data-active-tab="mixer"] .mixerTabletGridItem {
+html:is([data-director-device="tablet"],[data-director-device="phone"]) body #app .app[data-active-tab="mixer"] .mixerContentPanel,
+html:is([data-director-device="tablet"],[data-director-device="phone"]) body #app .app[data-active-tab="mixer"] .mixerContentPanel .mixerRow.mixerInlineRow,
+html:is([data-director-device="tablet"],[data-director-device="phone"]) body #app .app[data-active-tab="mixer"] .mixerTabletGridRow,
+html:is([data-director-device="tablet"],[data-director-device="phone"]) body #app .app[data-active-tab="mixer"] .mixerTabletGridItem {
   contain: layout style !important;
   content-visibility: visible !important;
 }
-html[data-director-device="tablet"] body #app .app[data-active-tab="mixer"] .mixerTabletGridWaveform > i {
+html:is([data-director-device="tablet"],[data-director-device="phone"]) body #app .app[data-active-tab="mixer"] .mixerTabletGridWaveform > i {
   will-change: auto !important;
   transition: none !important;
 }
 
-html[data-director-device="tablet"] body #app .app[data-active-tab="mixer"] .mixerPlaylistRows {
+html:is([data-director-device="tablet"],[data-director-device="phone"]) body #app .app[data-active-tab="mixer"] .mixerPlaylistRows {
   contain: none !important;
   will-change: auto !important;
 }
@@ -12239,9 +12239,92 @@ html body #app .app .directorTpListPane .directorTpSideList .item:not(.numberedI
 }
 
 /* A alça selecionada fica amarela até o próximo toque fora dela. */
-html[data-director-device="tablet"] body #app .app[data-active-tab="mixer"] :is(.mixerTrackWidthHandle,.mixerListWidthHandle).mixerHandleSelected::before {
+html:is([data-director-device="tablet"],[data-director-device="phone"]) body #app .app[data-active-tab="mixer"] :is(.mixerTrackWidthHandle,.mixerListWidthHandle).mixerHandleSelected::before {
   border-color: #fde047 !important;
   background: repeating-linear-gradient(90deg, #facc15 0 2px, transparent 2px 5px) !important;
   background-color: #713f12 !important;
   box-shadow: 0 0 12px rgba(250, 204, 21, .98) !important;
+}
+
+/* TCP compartilhado: alças e grid também no celular. A agulha mantém uma
+   área de toque larga sem aumentar a espessura da linha desenhada. */
+html body #app .app[data-active-tab="mixer"] .mixerTimelineCursor {
+  width: 28px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: translateX(-50%) !important;
+  pointer-events: auto !important;
+  touch-action: none !important;
+}
+html body #app .app[data-active-tab="mixer"] .mixerTimelineCursor::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 13px;
+  width: 2px;
+  background: #a3e635;
+  box-shadow: 0 0 7px #a3e635, -3px 0 8px rgba(163,230,53,.3);
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletListWorkspace,
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletMasterListOpen {
+  grid-template-columns: minmax(0, 1fr) minmax(100px, var(--mixer-list-width, 34%)) !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerPlaylistSide {
+  min-width: 0 !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerRowName {
+  font-size: 10px !important;
+}
+
+/* Mesmos recuos compactos da interface nativa. O modo celular mantém os
+   lados/rodapé seguros e reduz só o topo; tablet iguala topo e rodapé. */
+html[data-director-device="phone"] body #app .app:not(.musicianMonitor),
+html body #app .app.musicianMonitor {
+  padding-top: max(0px, calc(var(--vsh-safe-top) - 8px)) !important;
+}
+html[data-director-device="tablet"] body #app .app:not(.musicianMonitor) {
+  padding-top: max(8px, var(--tablet-safe-top, var(--vsh-safe-top))) !important;
+  padding-bottom: max(8px, var(--tablet-safe-top, var(--vsh-safe-top))) !important;
+  padding-left: max(4px, calc(var(--tablet-safe-left, var(--vsh-safe-left)) - 12px)) !important;
+  padding-right: max(4px, calc(var(--tablet-safe-right, var(--vsh-safe-right)) - 12px)) !important;
+}
+html body #app .directorTpOverlay:not(.directorTpFullscreen) {
+  padding: max(0px, calc(var(--vsh-safe-top) - 8px)) max(4px, var(--vsh-safe-right)) max(4px, var(--vsh-safe-bottom)) max(4px, var(--vsh-safe-left)) !important;
+}
+html[data-director-device="tablet"] body #app .directorTpOverlay:not(.directorTpFullscreen) {
+  padding: max(4px, var(--tablet-safe-top, var(--vsh-safe-top))) max(0px, calc(var(--tablet-safe-right, var(--vsh-safe-right)) - 12px)) max(4px, var(--tablet-safe-top, var(--vsh-safe-top))) max(0px, calc(var(--tablet-safe-left, var(--vsh-safe-left)) - 12px)) !important;
+}
+html body #app .directorTpPanel,
+html body #app .directorTpContent {
+  gap: 3px !important;
+}
+html body #app .directorTpPanel > .directorTpControls,
+html body #app .directorTpContent > .playbackQueueHeader {
+  margin-block: 0 !important;
+}
+html body #app .tabletSearchScreen {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  padding: max(0px, calc(var(--vsh-safe-top) - 8px)) max(8px, var(--vsh-safe-right)) max(8px, var(--vsh-safe-bottom)) max(8px, var(--vsh-safe-left)) !important;
+}
+html[data-director-device="tablet"] body #app .tabletSearchScreen {
+  padding: max(8px, var(--tablet-safe-top, var(--vsh-safe-top))) max(0px, calc(var(--tablet-safe-right, var(--vsh-safe-right)) - 12px)) max(8px, var(--tablet-safe-top, var(--vsh-safe-top))) max(0px, calc(var(--tablet-safe-left, var(--vsh-safe-left)) - 12px)) !important;
+}
+html body #app .directorTpOverlay.directorTpFullscreen {
+  /* safe-area-ok: conteúdo TP ocupa a tela inteira; somente os relógios recebem recuo. */
+  padding: 0 !important;
+  inset: 0 !important;
+}
+html body #app .directorTpFullscreen :is(.directorTpPanel,.directorTpViewport,.directorTpContent) {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  gap: 0 !important;
+}
+html body #app .directorTpFullscreen :is(.directorTpClock,.directorTpLocalClock)[data-position^="left"] {
+  left: max(16px, var(--vsh-safe-left)) !important;
+}
+html body #app .directorTpFullscreen :is(.directorTpClock,.directorTpLocalClock)[data-position^="right"] {
+  right: max(16px, var(--vsh-safe-right)) !important;
 }

@@ -56,10 +56,11 @@ struct BronzeDeckButtonStyle: ButtonStyle {
 struct BronzeDeckSurface: ViewModifier {
     @Environment(\.bronzeConfigurationBorders) private var configurationBorders
     var radius: CGFloat = 5
+    var bordered = false
     func body(content: Content) -> some View {
         content.background(BronzeTheme.panelGradient)
             .clipShape(RoundedRectangle(cornerRadius: radius))
-            .overlay(RoundedRectangle(cornerRadius: radius).stroke(configurationBorders ? Color.bronze.opacity(0.8) : .clear, lineWidth: 1).allowsHitTesting(false))
+            .overlay(RoundedRectangle(cornerRadius: radius).stroke(configurationBorders || bordered ? Color.bronze.opacity(0.8) : .clear, lineWidth: 1).allowsHitTesting(false))
     }
 }
 
@@ -285,7 +286,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 Button("PANIC") { model.panic() }
                     .buttonStyle(BronzeDeckButtonStyle(palette: .red, size: transportControlFont(compact: compact)))
                     .frame(width: buttonWidth)
-            }.padding(5).modifier(BronzeDeckSurface())
+            }.padding(5).modifier(BronzeDeckSurface(bordered: true))
             }
             Button(action: openSettings) { Image(systemName: "gearshape") }.accessibilityLabel("Configurações").buttonStyle(BronzeDeckButtonStyle(palette: .yellow, size: 17)).frame(width: compact ? 30 : 40)
             Button(action: openAccount) { Image(systemName: "person") }.accessibilityLabel("Conta").buttonStyle(BronzeDeckButtonStyle(palette: .green, size: 17)).frame(width: compact ? 30 : 42)
@@ -332,7 +333,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
                     .bronzeTapHold(tap: { model.tapTempo() }, hold: { tempoText = String(format: "%.1f", model.tempo); showTempo = true })
                 Button("+") { model.setTempo(model.tempo + 0.5) }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, size: 18)).frame(width: compact ? 25 : 34)
             }.frame(height: compact ? 38 : 52)
-        }.padding(.horizontal, 8).modifier(BronzeDeckSurface())
+        }.padding(.horizontal, 8).modifier(BronzeDeckSurface(bordered: true))
     }
 
     private func requestMetronome() {
