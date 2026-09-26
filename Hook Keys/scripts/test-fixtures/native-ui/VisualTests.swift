@@ -55,7 +55,9 @@ final class VisualTests: XCTestCase {
         app.buttons["bronze.bank.0"].press(forDuration: 0.8)
         XCTAssertTrue(app.textFields["Nome"].waitForExistence(timeout: 3))
         app.buttons["Voltar"].tap()
-        app.buttons["bronze.logo"].press(forDuration: 0.8)
+        let moduleHeight = app.otherElements["Volume do módulo 1"].firstMatch.frame.height
+        app.buttons["bronze.logo"].tap()
+        XCTAssertEqual(app.otherElements["Volume do módulo 1"].firstMatch.frame.height, moduleHeight, accuracy: 1)
         let closedWidth = keyboard.frame.width
         app.buttons["bronze.logo"].tap()
         XCTAssertGreaterThan(keyboard.frame.width, closedWidth)
@@ -91,6 +93,7 @@ final class VisualTests: XCTestCase {
         XCTAssertTrue(app.buttons["Soft"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["MIDI / Saída"].exists)
         XCTAssertFalse(app.buttons["Glide"].exists)
+        XCTAssertFalse(app.staticTexts["Limite Velocity"].exists)
         capture("velocity-graph")
     }
     func testSynthEditingAndVelocity() throws {
@@ -109,6 +112,7 @@ final class VisualTests: XCTestCase {
         XCTAssertTrue(app.buttons["Soft"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["MIDI / Saída"].exists)
         XCTAssertFalse(app.buttons["Glide"].exists)
+        XCTAssertFalse(app.staticTexts["Limite Velocity"].exists)
         capture("velocity-graph")
     }
     func testSettingsSourceAndKnob() throws {
@@ -117,23 +121,27 @@ final class VisualTests: XCTestCase {
         let user = app.buttons["User"].firstMatch
         XCTAssertTrue(user.waitForExistence(timeout: 5))
         user.tap(); Thread.sleep(forTimeInterval: 1)
-        // Adjustable native knobs expose their normalized percentage to VoiceOver.
-        let attack = app.otherElements["Attack"].firstMatch
+        let attack = app.buttons["Attack"].firstMatch
         XCTAssertTrue(attack.exists)
         let before = attack.value as? String
-        let origin = attack.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        origin.press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: 0, dy: -35)))
+        attack.tap()
+        let slider = app.otherElements["bronze.knob.slider"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 3))
+        XCTAssertEqual(attack.value as? String, before, "Opening a knob must not change its value")
+        app.buttons["Aumentar Attack"].tap()
         let edited = attack.value as? String
         XCTAssertNotEqual(before, edited)
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: slider)
+        XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 4), .completed)
         app.buttons["Default"].tap(); Thread.sleep(forTimeInterval: 1)
-        XCTAssertEqual(attack.value as? String, "0%")
+        XCTAssertEqual(attack.value as? String, "0 ms")
         user.tap(); Thread.sleep(forTimeInterval: 1)
         XCTAssertEqual(attack.value as? String, edited)
         capture("user-parameters-restored")
     }
     func testBackgroundKeepsPad() throws {
         let app = start()
-        app.buttons["Pads - Efects"].tap()
+        app.buttons["bronze.pads.toggle"].tap()
         let pad = app.buttons["bronze.pad.0"]
         XCTAssertTrue(pad.waitForExistence(timeout: 10))
         if pad.value as? String != "Tocando" { pad.tap() }
@@ -157,7 +165,7 @@ final class VisualTests: XCTestCase {
         XCTAssertTrue(app.buttons["Salvar nome e cor"].waitForExistence(timeout: 5))
         capture("preset-editor")
         app.buttons["Voltar"].tap()
-        app.buttons["Pads - Efects"].tap()
+        app.buttons["bronze.pads.toggle"].tap()
         XCTAssertTrue(app.buttons["Bump"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["Church"].press(forDuration: 0.8)
         XCTAssertGreaterThan(app.staticTexts.matching(identifier: "EDIT").count, 0)

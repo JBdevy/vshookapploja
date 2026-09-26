@@ -8,7 +8,11 @@ struct BronzeNativeLoginView: View {
     @State private var password = ""
     @State private var confirmation = ""
     @State private var code = ""
+    #if targetEnvironment(macCatalyst)
+    @State private var deviceName = "Meu Mac"
+    #else
     @State private var deviceName = "Meu iPad"
+    #endif
     @State private var showPassword = false
     @State private var replacement: BronzeAccountDevice?
     @FocusState private var focus: Field?
@@ -43,6 +47,10 @@ struct BronzeNativeLoginView: View {
             }
         }
         .onChange(of: account.step) { _ in clearSecrets(); code = ""; focus = nil; replacement = nil }
+        .onReceive(NotificationCenter.default.publisher(for: .bronzeLoginFocusTraversal)) { notification in
+            guard !account.busy, replacement == nil else { return }
+            moveFocus(backwards: notification.userInfo?["backwards"] as? Bool ?? false)
+        }
         .onDisappear { clearSecrets(); code = "" }
         .confirmationDialog("Substituir este dispositivo?", isPresented: Binding(
             get: { replacement != nil }, set: { if !$0 { replacement = nil } }
@@ -55,11 +63,27 @@ struct BronzeNativeLoginView: View {
             }
             Button("Cancelar", role: .cancel) { replacement = nil }
         } message: {
-            Text("O dispositivo escolhido perderá o acesso para liberar uma vaga para este iPad.")
+            Text("O dispositivo escolhido perderá o acesso para liberar uma vaga para este dispositivo.")
         }
     }
 
     private var backdrop: some View { BronzeScreenBackground() }
+
+    private func moveFocus(backwards: Bool) {
+        let order: [Field]
+        switch account.step {
+        case .password: order = [.email, .password]
+        case .code: order = [.code]
+        case .setup: order = [.password, .confirmation]
+        case .deviceName: order = [.device]
+        case .replacement: order = [.device, .password]
+        }
+        guard let current = focus, let index = order.firstIndex(of: current) else {
+            focus = backwards ? order.last : order.first
+            return
+        }
+        focus = order[(index + (backwards ? -1 : 1) + order.count) % order.count]
+    }
 
     private func wordmark(size: CGFloat) -> some View {
         (Text("Bronze").foregroundColor(gold) + Text(" Keys").foregroundColor(paper))

@@ -13,6 +13,18 @@ defer { try? FileManager.default.removeItem(at: directory) }
 let store = BronzeSessionStore(directory: directory)
 expect(try store.load() == nil, "first launch is empty")
 var session = BronzeNativeSession()
+var metronomeSession = BronzeNativeSession()
+metronomeSession.metronomeAccent = true
+metronomeSession.metronomeDoubleTime = true
+metronomeSession.loopClickEnabled = false
+let metronomeData = try JSONEncoder().encode(metronomeSession)
+expect(try JSONDecoder().decode(BronzeNativeSession.self, from: metronomeData) == metronomeSession, "metronome options survive session restore")
+var legacyMetronome = try JSONSerialization.jsonObject(with: metronomeData) as! [String: Any]
+legacyMetronome.removeValue(forKey: "metronomeAccent")
+legacyMetronome.removeValue(forKey: "metronomeDoubleTime")
+legacyMetronome.removeValue(forKey: "loopClickEnabled")
+let restoredLegacyMetronome = try JSONDecoder().decode(BronzeNativeSession.self, from: JSONSerialization.data(withJSONObject: legacyMetronome))
+expect(restoredLegacyMetronome.metronomeAccent == nil && restoredLegacyMetronome.metronomeDoubleTime == nil && restoredLegacyMetronome.loopClickEnabled == nil, "older sessions retain optional metronome settings")
 let key = UUID().uuidString + "/Grand Piano.sf2"
 session.modules[0].soundFontKey = key
 session.modules[0].enabled = true
@@ -564,3 +576,117 @@ expect(BronzeSynthPreset.factory(5) == nil, "only five factory slots")
 expect(BronzeSynthPreset.factory(2)!.sound!.mode == 2, "third synth factory preset uses legato")
 expect(BronzeSynthPreset.factory(4)!.sound!.oscillators[1].enabled == false, "fifth factory preset disables second oscillator")
 print("NATIVE_CONTROL_LAYOUT_DATA_OK")
+
+// All is a library, not another copy of each playlist's audio files.
+expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: oldWorkspaceData).libraryTracks == nil, "legacy music library remains optional")
+let libraryTrack = BronzeUserTrack(name: "Música original", key: "\(UUID().uuidString)/song.wav")
+var libraryWorkspace = BronzeUserWorkspace()
+libraryWorkspace.playlists = [BronzeUserPlaylist(name: "Antiga", tracks: [libraryTrack])]
+expect(libraryWorkspace.allLibraryTracks == [libraryTrack], "old playlist songs appear in All")
+libraryWorkspace.libraryTracks = libraryWorkspace.allLibraryTracks
+libraryWorkspace.playlists.append(BronzeUserPlaylist(name: "Novo set", tracks: [BronzeUserTrack(name: libraryTrack.name, key: libraryTrack.key)]))
+expect(libraryWorkspace.allLibraryTracks.count == 1, "shared files appear only once in All")
+libraryWorkspace.selectedPlaylist = BronzeUserWorkspace.libraryPlaylistID
+libraryWorkspace.selectedTrack = libraryTrack.id
+try libraryWorkspace.validate()
+libraryWorkspace.playlists.removeAll()
+expect(libraryWorkspace.playlist(BronzeUserWorkspace.libraryPlaylistID)?.tracks == [libraryTrack], "deleting playlists keeps library songs")
+try libraryWorkspace.validate()
+expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: JSONEncoder().encode(libraryWorkspace)) == libraryWorkspace, "All selection survives session round trip")
+var invalidLibrary = libraryWorkspace
+invalidLibrary.libraryTracks?.append(libraryTrack)
+rejects { try invalidLibrary.validate() }
+invalidLibrary = libraryWorkspace
+invalidLibrary.libraryTracks?[0].key = "../outside.wav"
+rejects { try invalidLibrary.validate() }
+print("NATIVE_MUSIC_LIBRARY_OK")
+
+expect(abs(BronzeMeterDisplay.position(peak: pow(10, -9.0 / 20)) - 0.65) < 0.000001, "meter uses Android's dB curve")
+expect(BronzeMeterDisplay.position(peak: 0) == 0 && BronzeMeterDisplay.position(peak: 2) == 1, "silence and clipping remain bounded")
+expect(BronzeMeterDisplay.position(peak: .nan) == 0, "invalid meter samples are silent")
+expect(BronzeMeterDisplay.smooth(peak: 1, previous: 0, elapsed: 1.0 / 30) == 1, "meter attack is immediate")
+let release30 = (0..<3).reduce(1.0) { value, _ in BronzeMeterDisplay.smooth(peak: 0, previous: value, elapsed: 1.0 / 30) }
+let release60 = (0..<6).reduce(1.0) { value, _ in BronzeMeterDisplay.smooth(peak: 0, previous: value, elapsed: 1.0 / 60) }
+expect(abs(release30 - release60) < 0.000001 && abs(20 * log10(release30) + 10.0 / 3) < 0.000001, "meter decay is frame-rate independent and matches mobile web")
+expect(BronzeMeterDisplay.position(peak: release30) > 0.85, "short gaps between notes do not collapse the meter")
+expect(BronzeMeterDisplay.smooth(peak: 0, previous: 0.00001, elapsed: 1) == 0, "meter eventually reaches exact silence")
+print("NATIVE_METER_BALLISTICS_OK")
+
+var midiKeyboard = BronzeMIDIKeyboardState()
+midiKeyboard.receive(device: "A", channel: 1, note: 60, velocity: 100)
+midiKeyboard.receive(device: "A", channel: 1, note: 64, velocity: 80)
+midiKeyboard.receive(device: "B", channel: 2, note: 60, velocity: 127)
+expect(midiKeyboard.notes == [60, 64], "external MIDI lights chords")
+expect(midiKeyboard.notes(forDevice: "A") == [60, 64], "selected MIDI input lights its chord")
+expect(midiKeyboard.notes(forDevice: "B") == [60], "another MIDI input does not leak into the selected keyboard")
+expect(midiKeyboard.notes(forDevice: "missing").isEmpty, "unconnected selected input has no held keys")
+midiKeyboard.receive(device: "A", channel: 1, note: 60, velocity: 0)
+expect(midiKeyboard.notes == [60, 64], "one controller cannot release another controller's held key")
+midiKeyboard.clear(device: "B", channel: 2)
+expect(midiKeyboard.notes == [64], "all-notes-off clears only its source/channel")
+midiKeyboard.receive(device: "A", channel: 10, note: 70, velocity: 127)
+expect(midiKeyboard.notes == [64], "pads and FX do not light the piano")
+midiKeyboard.receive(device: "A", channel: 1, note: 64, velocity: 0)
+expect(midiKeyboard.notes.isEmpty, "zero velocity clears note highlight")
+midiKeyboard.receive(device: "A", channel: 1, note: 60, velocity: 100)
+midiKeyboard.clear()
+expect(midiKeyboard.notes.isEmpty, "panic/disconnect clears external key highlights")
+print("NATIVE_MIDI_KEYBOARD_OK")
+
+var transfer = BronzeDownloadProgress(expected: 1000)
+expect(transfer.fraction == 0, "download starts at zero bytes")
+transfer.record(received: 250, expected: -1)
+expect(transfer.fraction == 0.25, "catalog size provides progress when server size is unknown")
+transfer.record(received: 200, expected: -1)
+expect(transfer.received == 250, "late progress callbacks cannot move received bytes backwards")
+transfer.record(received: 500, expected: 2000)
+expect(transfer.fraction == 0.25, "server byte count overrides catalog estimate")
+transfer.record(received: 2500, expected: 2000)
+expect(transfer.fraction == 1, "progress stays bounded")
+var unknownTransfer = BronzeDownloadProgress()
+unknownTransfer.record(received: 150, expected: -1)
+expect(unknownTransfer.fraction == nil && unknownTransfer.received == 150, "unknown size shows bytes, not invented percent")
+unknownTransfer.record(received: 150, expected: 150)
+expect(unknownTransfer.fraction == 1, "completed file resolves unknown total")
+print("NATIVE_DOWNLOAD_PROGRESS_OK")
+
+let installedFontKey = "\(UUID().uuidString)/Piano Grand.sf2"
+let sandboxFont = URL(fileURLWithPath: "/var/mobile/Containers/Data/Application/OLD/Library/Application Support/BronzeKeys/UserSoundFonts/").appendingPathComponent(installedFontKey)
+let resolvedFont = URL(fileURLWithPath: "/private/var/mobile/Containers/Data/Application/NEW/Library/Application Support/BronzeKeys/UserSoundFonts/").appendingPathComponent(installedFontKey)
+expect(BronzeSessionStore.soundFontIdentity(sandboxFont) == installedFontKey, "catalog identity uses stored file key")
+expect(BronzeSessionStore.soundFontIdentity(resolvedFont) == installedFontKey, "installed status survives sandbox aliases and app updates")
+let anotherFont = resolvedFont.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(UUID().uuidString).appendingPathComponent("Piano Grand.sf2")
+expect(BronzeSessionStore.soundFontIdentity(anotherFont) != installedFontKey, "same sound name in a different directory is not the installed asset")
+print("NATIVE_CATALOG_INSTALLED_IDENTITY_OK")
+
+// Native config mappings must survive persistence, with bounded/inverted ranges.
+var mappedConfigWorkspace = BronzeUserWorkspace()
+var mappedConfigMIDI = BronzeMIDISettings()
+for target in ["env:0:0", "reverb:0:1", "delay:0:2", "performance:0:modRate", "performance:0:velocity", "arp:0:gate", "pulse:0:Depth", "rotaryParam:0:Slow", "synth:\(BronzeSynthParameter.cutoff.rawValue)"] {
+    expect(BronzeMIDITarget.all.contains(where: { $0.id == target }), "configuration MIDI target is registered: \(target)")
+    var mapping = BronzeCCMapping(device: "test-input", channel: 1, controller: 74)
+    mapping.minimum = 0.2; mapping.maximum = 0.8; mapping.inverted = true
+    expect(abs(mapping.normalized(0) - 0.8) < 0.001 && abs(mapping.normalized(127) - 0.2) < 0.001, "CC inversion preserves both range endpoints")
+    mappedConfigMIDI.controls[target] = mapping
+}
+mappedConfigWorkspace.midi = mappedConfigMIDI
+try mappedConfigWorkspace.validate()
+expect(try JSONDecoder().decode(BronzeUserWorkspace.self, from: JSONEncoder().encode(mappedConfigWorkspace)) == mappedConfigWorkspace, "config MIDI mappings and CC limits persist")
+print("NATIVE_CONFIG_MIDI_MAPPING_OK")
+
+var glideTiming = BronzeModulePerformance()
+glideTiming.glideSync = true
+expect(glideTiming.glideTime(bpm: 120) == 500, "glide sync uses beat duration")
+expect(glideTiming.glideTime(bpm: 30) == 1000, "glide sync clamps minimum BPM like web")
+expect(glideTiming.glideTime(bpm: 700) == 100, "glide sync clamps maximum BPM like web")
+expect(glideTiming.glideTime(bpm: .nan) == 500, "glide sync rejects nonfinite tempo")
+glideTiming.glideSync = false
+glideTiming.glideMs = 237
+expect(glideTiming.glideTime(bpm: 120) == 237, "manual glide remains independent of tempo")
+var outputFollow = BronzeModulePerformance()
+expect(outputFollow.usesDefaultOutput, "legacy stereo output follows default")
+outputFollow.outputUsesDefault = false
+expect(!outputFollow.usesDefaultOutput, "explicit stereo routing is distinct from default")
+let outputRoundTrip = try JSONDecoder().decode(BronzeModulePerformance.self, from: JSONEncoder().encode(outputFollow))
+expect(!outputRoundTrip.usesDefaultOutput, "explicit output persists")
+print("NATIVE_GLIDE_AND_OUTPUT_DEFAULT_OK")

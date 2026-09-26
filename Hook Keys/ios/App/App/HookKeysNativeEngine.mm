@@ -3,6 +3,9 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <CoreMIDI/CoreMIDI.h>
+#if TARGET_OS_MACCATALYST
+#import <CoreAudio/CoreAudio.h>
+#endif
 
 #include "hook_keys/NativeEngineRuntime.hpp"
 
@@ -17,6 +20,41 @@
 #include <vector>
 
 namespace {
+
+#if TARGET_OS_MACCATALYST
+// Prefer the output unit device. Catalyst RemoteIO follows the system output
+// but does not expose CurrentDevice; query that route through Core Audio.
+AudioDeviceID outputDevice(AVAudioEngine *engine) {
+  AudioDeviceID device = kAudioObjectUnknown;
+  UInt32 size = sizeof(device);
+  AudioUnit unit = engine.outputNode.audioUnit;
+  if (unit != nullptr && AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+      kAudioUnitScope_Global, 0, &device, &size) == noErr && device != kAudioObjectUnknown) return device;
+  AudioObjectPropertyAddress address{kAudioHardwarePropertyDefaultOutputDevice,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+  size = sizeof(device);
+  if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr,
+      &size, &device) != noErr) return kAudioObjectUnknown;
+  return device;
+}
+UInt32 deviceBufferFrames(AVAudioEngine *engine) {
+  const auto device = outputDevice(engine);
+  AudioObjectPropertyAddress address{kAudioDevicePropertyBufferFrameSize,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+  UInt32 frames = 0, size = sizeof(frames);
+  if (device == kAudioObjectUnknown || AudioObjectGetPropertyData(device, &address,
+      0, nullptr, &size, &frames) != noErr) return 0;
+  return frames;
+}
+OSStatus setDeviceBufferFrames(AVAudioEngine *engine, NSInteger requested) {
+  const auto device = outputDevice(engine);
+  if (device == kAudioObjectUnknown) return kAudioHardwareBadDeviceError;
+  AudioObjectPropertyAddress address{kAudioDevicePropertyBufferFrameSize,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+  UInt32 frames = static_cast<UInt32>(std::clamp<NSInteger>(requested, 64, 512));
+  return AudioObjectSetPropertyData(device, &address, 0, nullptr, sizeof(frames), &frames);
+}
+#endif
 
 constexpr std::size_t kRenderChunkFrames = 512;
 constexpr NSInteger kMidiSlotCount = 3;
@@ -368,6 +406,9 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
     }
     _audioState->callbackSeen.store(false, std::memory_order_release);
     _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
+#if TARGET_OS_MACCATALYST
+    setDeviceBufferFrames(_audioEngine, bufferFrames);
+#endif
     if ([_audioEngine startAndReturnError:&restartError]) return YES;
     _audioState->activeRuntime.store(nullptr, std::memory_order_release);
     [self setAudioErrorStage:@"reiniciar AVAudioEngine" error:restartError];
@@ -450,6 +491,9 @@ bool decodeEffectFile(NSString *path, double sampleRate, std::vector<float>& ste
   }
   [self recordStartupStage:@"preparar grafo Core Audio"];
   [_audioEngine prepare];
+#if TARGET_OS_MACCATALYST
+  setDeviceBufferFrames(_audioEngine, bufferFrames);
+#endif
   [self recordStartupStage:@"iniciar grafo Core Audio"];
   if (![_audioEngine startAndReturnError:&sessionError]) {
     state->activeRuntime.store(nullptr, std::memory_order_release);
@@ -511,6 +555,85 @@ static NSString *describeFormat(AVAudioFormat *format) {
       describeFormat([_audioEngine.outputNode outputFormatForBus:0])];
 }
 
+- (BOOL)refreshAudioRouteWithBufferFrames:(NSInteger)bufferFrames sampleRate:(double)sampleRate {
+  {
+    std::scoped_lock lock(_controlMutex);
+    if (_audioState) _audioState->activeRuntime.store(nullptr, std::memory_order_release);
+    [_audioEngine pause];
+  }
+  return [self startWithBufferFrames:bufferFrames sampleRate:sampleRate];
+}
+
+- (NSArray<NSDictionary<NSString *, id> *> *)listAudioOutputDevices {
+#if TARGET_OS_MACCATALYST
+  AudioObjectPropertyAddress address{kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+  UInt32 bytes = 0;
+  if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, nullptr, &bytes) != noErr) return @[];
+  std::vector<AudioDeviceID> devices(bytes / sizeof(AudioDeviceID));
+  if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr, &bytes, devices.data()) != noErr) return @[];
+  NSMutableArray *result = [NSMutableArray array];
+  for (const auto device : devices) {
+    AudioObjectPropertyAddress streams{kAudioDevicePropertyStreamConfiguration, kAudioDevicePropertyScopeOutput, kAudioObjectPropertyElementMain};
+    UInt32 streamBytes = 0;
+    if (AudioObjectGetPropertyDataSize(device, &streams, 0, nullptr, &streamBytes) != noErr || streamBytes == 0) continue;
+    std::vector<std::uint8_t> storage(streamBytes);
+    auto *buffers = reinterpret_cast<AudioBufferList *>(storage.data());
+    if (AudioObjectGetPropertyData(device, &streams, 0, nullptr, &streamBytes, buffers) != noErr) continue;
+    UInt32 channels = 0;
+    for (UInt32 i = 0; i < buffers->mNumberBuffers; ++i) channels += buffers->mBuffers[i].mNumberChannels;
+    if (channels == 0) continue;
+    CFStringRef uid = nullptr, name = nullptr;
+    UInt32 stringBytes = sizeof(CFStringRef);
+    AudioObjectPropertyAddress uidAddress{kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    AudioObjectPropertyAddress nameAddress{kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    if (AudioObjectGetPropertyData(device, &uidAddress, 0, nullptr, &stringBytes, &uid) != noErr || uid == nullptr) continue;
+    stringBytes = sizeof(CFStringRef);
+    AudioObjectGetPropertyData(device, &nameAddress, 0, nullptr, &stringBytes, &name);
+    [result addObject:@{@"id": (__bridge NSString *)uid, @"name": name ? (__bridge NSString *)name : (__bridge NSString *)uid,
+        @"channels": @(channels), @"device": @(device)}];
+    CFRelease(uid);
+    if (name) CFRelease(name);
+  }
+  return result;
+#else
+  NSMutableArray *result = [NSMutableArray array];
+  for (AVAudioSessionPortDescription *port in AVAudioSession.sharedInstance.currentRoute.outputs) {
+    [result addObject:@{@"id": port.UID, @"name": port.portName, @"channels": @(port.channels.count)}];
+  }
+  return result;
+#endif
+}
+
+- (NSString *)selectedAudioOutputDeviceId {
+#if TARGET_OS_MACCATALYST
+  std::scoped_lock lock(_controlMutex);
+  const auto device = outputDevice(_audioEngine);
+  AudioObjectPropertyAddress address{kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+  CFStringRef uid = nullptr;
+  UInt32 bytes = sizeof(uid);
+  if (device == kAudioObjectUnknown || AudioObjectGetPropertyData(device, &address, 0, nullptr, &bytes, &uid) != noErr || uid == nullptr) return @"";
+  return CFBridgingRelease(uid);
+#else
+  return AVAudioSession.sharedInstance.currentRoute.outputs.firstObject.UID ?: @"";
+#endif
+}
+
+- (BOOL)selectSystemAudioOutputDeviceId:(NSString *)deviceId {
+#if TARGET_OS_MACCATALYST
+  for (NSDictionary *device in [self listAudioOutputDevices]) {
+    if (![device[@"id"] isEqualToString:deviceId]) continue;
+    AudioDeviceID identifier = [device[@"device"] unsignedIntValue];
+    AudioObjectPropertyAddress address{kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    const auto status = AudioObjectSetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr, sizeof(identifier), &identifier);
+    if (status == noErr) return YES;
+    _lastAudioErrorMessage = [NSString stringWithFormat:@"Não foi possível selecionar a saída de áudio (Core Audio: %d).", (int)status];
+    return NO;
+  }
+  _lastAudioErrorMessage = @"O dispositivo de áudio não está mais conectado.";
+#endif
+  return NO;
+}
+
 - (BOOL)setAudioOutputDeviceId:(NSString *)deviceId channels:(NSInteger)channels
                   bufferFrames:(NSInteger)bufferFrames
                     sampleRate:(double)sampleRate
@@ -559,7 +682,21 @@ static NSString *describeFormat(AVAudioFormat *format) {
                                     error:nil];
     [_audioEngine prepare];
     _audioState->activeRuntime.store(_audioState->runtime.get(), std::memory_order_release);
-    if ([_audioEngine startAndReturnError:&error]) return YES;
+#if TARGET_OS_MACCATALYST
+    const OSStatus bufferStatus = setDeviceBufferFrames(_audioEngine, bufferFrames);
+#endif
+    if ([_audioEngine startAndReturnError:&error]) {
+#if TARGET_OS_MACCATALYST
+      const auto effective = deviceBufferFrames(_audioEngine);
+      if (bufferStatus != noErr || effective != bufferFrames) {
+        _lastAudioErrorMessage = [NSString stringWithFormat:
+            @"A saída não aceitou %ld amostras. Buffer efetivo: %u (Core Audio: %d).",
+            (long)bufferFrames, effective, (int)bufferStatus];
+        return NO;
+      }
+#endif
+      return YES;
+    }
     _audioState->activeRuntime.store(nullptr, std::memory_order_release);
     [self setAudioErrorStage:@"reiniciar motor após trocar buffer" error:error];
     return NO;
@@ -569,6 +706,22 @@ static NSString *describeFormat(AVAudioFormat *format) {
   _requestedOutputChannels = 2;
   static_cast<void>([self startWithBufferFrames:bufferFrames sampleRate:sampleRate]);
   return NO;
+}
+
+- (NSInteger)effectiveBufferFrames {
+  std::scoped_lock lock(_controlMutex);
+#if TARGET_OS_MACCATALYST
+  if (_audioEngine != nil) return deviceBufferFrames(_audioEngine);
+  return 0;
+#else
+  AVAudioSession *session = AVAudioSession.sharedInstance;
+  return static_cast<NSInteger>(std::llround(session.IOBufferDuration * session.sampleRate));
+#endif
+}
+
+- (double)effectiveSampleRate {
+  std::scoped_lock lock(_controlMutex);
+  return _audioEngine != nil ? [_audioEngine.outputNode outputFormatForBus:0].sampleRate : 0;
 }
 
 - (BOOL)audioOutputReady {
@@ -1199,7 +1352,9 @@ static NSString *describeFormat(AVAudioFormat *format) {
 
 - (BOOL)beginNativePresetTransition {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
-  return runtime != nullptr && runtime->beginPresetTransition(true);
+  // Swift applies a complete snapshot, including every target reverb/delay,
+  // before commit. Do not build the outgoing preset's IR on this fresh layer.
+  return runtime != nullptr && runtime->beginPresetTransition(true, true);
 }
 
 - (void)cancelPresetTransition {
@@ -1255,6 +1410,12 @@ static NSString *describeFormat(AVAudioFormat *format) {
   if (!runtime || bankIndex < 0 || bankIndex >= 8 || itemIndex < 0 || itemIndex >= 12) return NO;
   return runtime->triggerEffectSample(
       static_cast<std::size_t>(bankIndex * 12 + itemIndex), enabled, gainDb);
+}
+
+- (BOOL)setEffectPadGainDb:(float)db bankIndex:(NSInteger)bankIndex itemIndex:(NSInteger)itemIndex {
+  auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
+  if (!runtime || bankIndex < 0 || bankIndex >= 8 || itemIndex < 0 || itemIndex >= 12) return NO;
+  return runtime->setEffectSampleGain(static_cast<std::size_t>(bankIndex * 12 + itemIndex), db);
 }
 
 - (BOOL)setEffectOutputGainDb:(float)db enabled:(BOOL)enabled
@@ -1349,6 +1510,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
     return YES;
   }
   if (!player.hasSource(identifier)) return NO;
+  if ([action isEqualToString:@"right-mono"]) { player.setRightChannelOnly(loop); return YES; }
   if ([action isEqualToString:@"play"]) return player.play(identifier, syncMetronome);
   if ([action isEqualToString:@"pause"]) { player.pause(identifier); return YES; }
   if ([action isEqualToString:@"loop"]) { player.setLoop(identifier, loop); return YES; }
@@ -1398,7 +1560,23 @@ static NSString *describeFormat(AVAudioFormat *format) {
 
 - (void)setSeamlessPresetSwitching:(BOOL)enabled {
   auto *runtime = _audioState ? _audioState->activeRuntime.load(std::memory_order_acquire) : nullptr;
-  if (runtime) runtime->setSeamlessPresetSwitching(enabled);
+  // 2 GB iPad: 512 MB, enough for S6 Grand + Felt Upright, whose samples
+  // are shared with live voices rather than copied by the cache. Stay bounded.
+  // Reported RAM can be slightly below the nominal device capacity. Round to
+  // 64 MiB so a 2 GB model does not accidentally reject a 249 MiB piano again.
+  constexpr std::size_t quantum = 64u * 1024u * 1024u;
+  const auto quarterRAM = static_cast<std::size_t>(NSProcessInfo.processInfo.physicalMemory / 4);
+  const auto budget = std::clamp<std::size_t>(((quarterRAM + quantum - 1) / quantum) * quantum,
+      128u * 1024u * 1024u, 768u * 1024u * 1024u);
+  if (runtime) runtime->setSeamlessPresetSwitching(enabled, budget);
+}
+
+- (BOOL)preloadSoundFontAtPath:(NSString *)path {
+  std::shared_ptr<AudioState> state;
+  { std::scoped_lock lock(_controlMutex); state = _audioState; }
+  // Pin lifetime across logout/restart without holding the control mutex
+  // while a large SF2 is read. Preparation never changes the sounding preset.
+  return state && state->runtime && state->runtime->preloadSoundFont(path.UTF8String);
 }
 
 - (void)stopAllNotes {

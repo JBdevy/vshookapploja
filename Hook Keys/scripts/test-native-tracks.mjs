@@ -146,13 +146,24 @@ try {
   await transport.togglePlayStop();
   await settle();
   assert.equal(snapshot.loopPlaying, true,
-    'um loop tocando informa que o relógio do metrônomo deve ficar ativo e alinhado');
-  assert.equal(loopClockStarts, 1, 'o relógio do metrônomo é armado antes do Play nativo do loop');
-  assert.equal(controls('play').at(-1)[3].syncMetronome, true,
-    'o Play nativo reinicia loop e metrônomo no mesmo callback de áudio');
+    'um loop tocando informa que o metrônomo normal deve permanecer bloqueado');
+  assert.equal(loopClockStarts, 1, 'a preparação desliga o metrônomo antes do Play do loop');
+  assert.equal(controls('play').at(-1)[3].syncMetronome, false,
+    'o Play do loop não reinicia nem sincroniza metrônomo');
+  transport.setLoopClickEnabled(false);
+  await settle();
+  assert.equal(controls('right-mono').at(-1)[3].loop, true, 'Click OFF usa o canal R nos dois lados');
+  const playsBeforeRouting = controls('play').length;
+  transport.setLoopClickEnabled(true);
+  await settle();
+  assert.equal(controls('right-mono').at(-1)[3].loop, false, 'Click ON restaura estéreo');
+  assert.equal(controls('play').length, playsBeforeRouting, 'mudar Click não reinicia o loop');
+  transport.setLoopClickEnabled(false);
+  await settle();
   await transport.selectTrack(tracks.a);
   await settle();
   assert.equal(transport.audio.playbackRate, 1, 'música normal permanece na velocidade original');
+  assert.equal(controls('right-mono').at(-1)[3].loop, false, 'música normal mantém estéreo mesmo com Click OFF');
   assert.equal(snapshot.selectedTrackId, 'a', 'escolher outro áudio troca imediatamente o loop infinito');
   assert.equal(snapshot.queuedTrackId, null, 'o próximo áudio não fica preso atrás do loop');
   await transport.selectTrack(tracks.loop);

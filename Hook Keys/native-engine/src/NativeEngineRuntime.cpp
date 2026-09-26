@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <fstream>
 
 #if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
 #include <xmmintrin.h>
@@ -199,6 +200,15 @@ bool NativeEngineRuntime::triggerEffectSample(
   return runtimeCommands_.tryPush(command);
 }
 
+bool NativeEngineRuntime::setEffectSampleGain(std::size_t sampleIndex, float gainDb) noexcept {
+  if (sampleIndex >= effectSamples_.size() || !std::isfinite(gainDb)) return false;
+  RuntimeCommand command;
+  command.kind = RuntimeCommand::Kind::effectGain;
+  command.midi.data1 = static_cast<std::uint8_t>(sampleIndex);
+  command.value = std::clamp(gainDb, -90.0f, 6.0f);
+  return runtimeCommands_.tryPush(command);
+}
+
 void NativeEngineRuntime::setEffectOutput(
     float db, bool enabled, std::uint8_t channelStart, std::uint8_t channelCount) noexcept {
   effectOutputRoute_.store(static_cast<std::uint16_t>(
@@ -253,7 +263,7 @@ NativeEngineRuntime::~NativeEngineRuntime() {
   layers_.clear(); // caller has already stopped the audio callback
 }
 
-bool NativeEngineRuntime::beginPresetTransition(bool preserveConfig) noexcept {
+bool NativeEngineRuntime::beginPresetTransition(bool preserveConfig, bool deferEffects) noexcept {
   std::scoped_lock lock(configMutex_, soundFontMutex_);
   if (pendingTransitionLayer_ != nullptr) return true;
   collectLayersLocked();
@@ -272,7 +282,10 @@ bool NativeEngineRuntime::beginPresetTransition(bool preserveConfig) noexcept {
       next->synthConfig = controlLayer_->synthConfig;
       if (!next->synth->setConfig(next->synthConfig)) return false;
       for (std::size_t index = 0; index < kModuleCount; ++index) {
-        if (!next->engine->setModuleConfig(index, next->configs[index])) return false;
+        const bool configured = deferEffects
+            ? next->engine->setPreparedModuleConfig(index, next->configs[index])
+            : next->engine->setModuleConfig(index, next->configs[index]);
+        if (!configured) return false;
       }
     }
     previousSoundFontPaths_ = currentSoundFontPaths_;
@@ -334,6 +347,39 @@ bool NativeEngineRuntime::loadSoundFont(std::size_t moduleIndex, const char* utf
   retainSoundFontLocked(path, *layer->modules[moduleIndex]);
   enqueueCurrentExpression(layer);
   return true;
+}
+
+bool NativeEngineRuntime::preloadSoundFont(const char* utf8Path) noexcept {
+  if (utf8Path == nullptr || *utf8Path == '\0') return false;
+  try {
+    const std::string path(utf8Path);
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file || file.tellg() <= 0) return false;
+    const auto estimatedBytes = static_cast<std::size_t>(file.tellg());
+    const auto fits = [&](std::size_t bytes) {
+      std::size_t total = 0;
+      for (const auto& entry : soundFontCache_) total += entry.second->sampleBytes();
+      return bytes <= soundFontCacheBudgetBytes_ / 2 &&
+          total <= soundFontCacheBudgetBytes_ - bytes;
+    };
+    {
+      std::scoped_lock lock(soundFontMutex_);
+      if (!seamlessPresetSwitching_) return false;
+      if (soundFontCache_.find(path) != soundFontCache_.end()) return true;
+      if (!fits(estimatedBytes)) return false;
+    }
+    auto prepared = std::make_unique<TinySoundFontModule>(sampleRate_, maximumBlockFrames_, kHookKeysMaximumVoices);
+    if (!prepared->loadFromFile(utf8Path)) return false;
+    std::scoped_lock lock(soundFontMutex_);
+    if (!seamlessPresetSwitching_) return false;
+    if (soundFontCache_.find(path) != soundFontCache_.end()) return true;
+    if (!fits(prepared->sampleBytes())) return false;
+    retainSoundFontLocked(path, *prepared);
+    // tsf_copy/close share a non-atomic reference count. Drop the temporary
+    // owner before unlocking, alongside all other cache-copy operations.
+    prepared.reset();
+    return soundFontCache_.find(path) != soundFontCache_.end();
+  } catch (...) { return false; }
 }
 
 bool NativeEngineRuntime::cloneSoundFont(
@@ -549,6 +595,7 @@ bool NativeEngineRuntime::setModuleEffects(
   if (moduleIndex == 6) {
     effects.cutoff.enabled = false;
     effects.loFi.enabled = false;
+    effects.rotary.dopplerEnabled = false;
   }
   effects.tranceGate = controlLayer_->configs[moduleIndex].effects.tranceGate;
   controlLayer_->configs[moduleIndex].effects = effects;
@@ -932,6 +979,11 @@ void NativeEngineRuntime::processRuntimeCommands() noexcept {
         activePadBank_ = command.midi.inputSlot;
         activePadNote_ = command.midi.data1;
       }
+    } else if (command.kind == RuntimeCommand::Kind::effectGain) {
+      const auto gain = std::pow(10.0f, command.value / 20.0f);
+      for (auto& voice : effectVoices_) {
+        if (voice.sample && voice.sampleIndex == command.midi.data1) voice.targetGain = gain;
+      }
     } else if (command.kind == RuntimeCommand::Kind::effect) {
       const auto sampleIndex = command.midi.data1;
       if (command.midi.data2 == 0) releaseEffectVoices(sampleIndex);
@@ -1216,7 +1268,7 @@ void NativeEngineRuntime::startEffectVoice(std::uint8_t sampleIndex, float gain)
     if (voice.sample == nullptr) { selected = &voice; break; }
     if (voice.serial < selected->serial) selected = &voice;
   }
-  *selected = {sample, 0, std::clamp(gain, 0.0f, 2.0f), 1.0f, false,
+  *selected = {sample, 0, std::clamp(gain, 0.0f, 2.0f), std::clamp(gain, 0.0f, 2.0f), 1.0f, false,
       sampleIndex, ++effectVoiceSerial_};
 }
 
@@ -1246,6 +1298,7 @@ void NativeEngineRuntime::addEffectsInterleaved(
         continue;
       }
       if (voice.releasing) voice.fade = std::max(0.0f, voice.fade - releaseStep);
+      voice.gain += (voice.targetGain - voice.gain) * releaseStep;
       const auto amount = voice.gain * voice.fade;
       left += voice.sample->stereo[voice.frame * 2] * amount;
       right += voice.sample->stereo[voice.frame * 2 + 1] * amount;

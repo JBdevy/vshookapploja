@@ -145,151 +145,254 @@ struct BronzeNativeMIDIPanel: View {
 
 struct BronzeNativePlaylistLibrary: View {
     @ObservedObject var model: BronzeNativeAppModel
-    var compact = false
-    @State private var adding = false
+    @Environment(\.dismiss) private var dismiss
     @State private var importing = false
+    @State private var importTarget = BronzeUserWorkspace.libraryPlaylistID
+    @State private var editorStage = 0
+    @State private var editorID: UUID?
     @State private var name = ""
     @State private var loop = false
+    @State private var selectedTracks = Set<UUID>()
     @State private var deleteList = false
+    @State private var deleteAll = false
     private var playlist: BronzeUserPlaylist? { model.selectedUserPlaylist }
+    private var isAll: Bool { model.workspace.selectedPlaylist == BronzeUserWorkspace.libraryPlaylistID }
+    private var bundled: Bool { model.workspace.selectedPlaylist == nil }
+    private var busy: Bool { model.importingMedia || model.loadingLoop }
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if !compact {
-                VStack(spacing: 8) {
-                    Button("Loops Bronze Keys") { model.selectPlaylist(nil) }.buttonStyle(BronzeDeckButtonStyle(palette: .red, selected: playlist == nil)).frame(height: 46)
-                    ForEach(model.workspace.playlists) { list in
-                        Button(list.name) { model.selectPlaylist(list.id) }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: playlist?.id == list.id)).frame(height: 46)
-                    }
-                    Button("Add Playlist") { name = ""; loop = false; adding = true }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(height: 46)
-                }.frame(width: 190)
+        GeometryReader { g in
+            let compact = g.size.height < 500
+            VStack(spacing: compact ? 5 : 10) {
+                Text("Playlist").font(.bronzeUI(compact ? 15 : 22)).frame(height: compact ? 20 : 30)
+                HStack(spacing: compact ? 5 : 10) {
+                    ScrollView {
+                        LazyVStack(spacing: 5) {
+                            setButton("All", id: BronzeUserWorkspace.libraryPlaylistID, height: compact ? 32 : 44)
+                            Divider()
+                            setButton("Loops Gospel", id: nil, height: compact ? 32 : 44)
+                            ForEach(model.workspace.playlists) { list in
+                                setButton(list.name, id: list.id, height: compact ? 32 : 44)
+                                    .bronzeTapHold(tap: { model.selectPlaylist(list.id) }, hold: { edit(list) })
+                            }
+                        }.padding(5)
+                    }.frame(width: compact ? 120 : 190).background(.black.opacity(0.2)).cornerRadius(6)
+                    GeometryReader { _ in
+                        ScrollView {
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 4), spacing: 5) {
+                                if bundled {
+                                    ForEach(model.bundledLoops) { track in
+                                        Button(track.name) { model.selectLoop(track) }
+                                            .buttonStyle(BronzePlaylistMusicStyle(palette: track.id == 1 ? .green : track.id == 2 ? .blue : .bronze, selected: model.selectedLoop?.id == track.id))
+                                            .frame(height: compact ? 44 : 56)
+                                    }
+                                } else {
+                                    ForEach(playlist?.tracks ?? []) { track in
+                                        Button(track.name) { model.selectUserTrack(track.id) }
+                                            .buttonStyle(BronzePlaylistMusicStyle(selected: model.selectedLoop?.trackID == track.id))
+                                            .frame(height: compact ? 44 : 56)
+                                            .contextMenu {
+                                                Button(isAll ? "Apagar música da biblioteca" : "Retirar da playlist", role: .destructive) {
+                                                    if isAll { model.removeLibraryTrack(track.id) }
+                                                    else if let id = playlist?.id { model.removeTrack(track.id, playlistID: id) }
+                                                }
+                                            }
+                                    }
+                                }
+                            }
+                            if !bundled && playlist?.tracks.isEmpty != false {
+                                Text(isAll ? "Nenhuma música adicionada." : "Esta playlist ainda não possui músicas.").font(.bronzeUI(12)).foregroundStyle(.secondary).padding(20)
+                            }
+                        }.padding(5)
+                    }.background(.black.opacity(0.2)).cornerRadius(6)
+                }.disabled(busy)
+                if busy { ProgressView("Adicionando músicas…").font(.bronzeUI(11)) }
+                HStack(spacing: compact ? 5 : 10) {
+                    Button("Voltar") { dismiss() }.buttonStyle(BronzeConfigActionStyle(kind: .back))
+                    Button("Delete All") { deleteAll = true }.buttonStyle(BronzeConfigActionStyle(kind: .off)).disabled(bundled || playlist?.tracks.isEmpty != false)
+                    Button("Add música") { importTarget = playlist?.id ?? BronzeUserWorkspace.libraryPlaylistID; importing = true }.buttonStyle(BronzeConfigActionStyle(kind: .on))
+                    Button("Create playlist") { editorID = nil; selectedTracks = []; name = ""; loop = false; editorStage = 1 }.buttonStyle(BronzeConfigActionStyle(kind: .reset))
+                }.frame(height: compact ? 36 : 50).disabled(busy)
+            }.padding(10)
+            if editorStage > 0 {
+                editor(compact: compact).padding(compact ? 12 : 30).frame(width: g.size.width, height: g.size.height)
+                    .background(BronzeScreenBackground())
             }
-            VStack(spacing: 12) {
-                if compact {
-                    Menu(playlist?.name ?? "Loops Bronze Keys") {
-                        Button("Loops Bronze Keys") { model.selectPlaylist(nil) }
-                        ForEach(model.workspace.playlists) { list in Button(list.name) { model.selectPlaylist(list.id) } }
-                        Button("Add Playlist") { name = ""; loop = false; adding = true }
-                    }.buttonStyle(BronzeDeckButtonStyle(palette: .red)).frame(height: 38)
-                }
-                HStack(spacing: 6) {
-                    Button(model.loopPlaying ? "Stop" : "Play") { model.toggleLoopPlayback() }.buttonStyle(BronzeDeckButtonStyle(palette: model.loopPlaying ? .red : .green)).disabled(model.selectedLoop == nil)
-                    if let playlist {
-                        Button("Repeat") { edit { $0.repeatEnabled.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: playlist.repeatEnabled ? .green : .grey)).disabled(playlist.isLoop)
-                        Button("Auto") { edit { $0.autoAdvance.toggle() } }.buttonStyle(BronzeDeckButtonStyle(palette: playlist.autoAdvance ? .green : .grey)).disabled(playlist.isLoop)
-                        Menu("Edit") {
-                            Button("Adicionar músicas") { importing = true }
-                            Button("Excluir playlist", role: .destructive) { deleteList = true }
-                        }.buttonStyle(BronzeDeckButtonStyle(palette: .grey))
-                    }
-                }.frame(height: 38)
-                if model.importingMedia || model.loadingLoop { ProgressView("Carregando…") }
-                if let playlist {
-                    if playlist.isLoop {
-                        HStack { ForEach([4, 6], id: \.self) { beats in
-                            Button(beats == 4 ? "4/4" : "6/8") { edit { $0.numerator = beats; $0.denominator = beats == 4 ? 4 : 8 } }
-                                .buttonStyle(BronzeDeckButtonStyle(palette: .cyan, selected: playlist.numerator == beats))
-                        }}.frame(height: 32)
-                    }
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: compact ? 1 : 3), spacing: 8) {
-                        ForEach(Array(playlist.tracks.enumerated()), id: \.element.id) { index, track in
-                            Button { model.selectUserTrack(track.id) } label: { HStack { Text(String(format: "%02d", index + 1)); Text(track.name).lineLimit(2); Spacer(minLength: 0) }.padding(10) }
-                                .buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: model.selectedLoop?.trackID == track.id)).frame(height: compact ? 52 : 76)
-                                .contextMenu { Button("Retirar da playlist", role: .destructive) { model.removeTrack(track.id, playlistID: playlist.id) } }
-                        }
-                        Button("+ Adicionar músicas") { importing = true }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(height: compact ? 52 : 76)
-                    }
-                } else {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: compact ? 1 : 3), spacing: 8) {
-                        ForEach(model.bundledLoops) { track in
-                            Button(track.name) { model.selectLoop(track) }
-                                .buttonStyle(BronzeDeckButtonStyle(palette: track.id == 1 ? .green : track.id == 2 ? .blue : .bronze, selected: model.selectedLoop?.id == track.id))
-                                .frame(height: compact ? 60 : 96)
-                        }
-                    }
-                }
-            }.frame(maxWidth: .infinity).disabled(model.importingMedia || model.loadingLoop)
-        }
-        .sheet(isPresented: $adding) {
-            BronzeNativeModal(title: "Nova playlist") {
-                VStack(spacing: 18) {
-                    TextField("Nome da playlist", text: $name).textFieldStyle(BronzeNativeFieldStyle())
-                    HStack {
-                        Button("Normal Playlist") { loop = false }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: !loop))
-                        Button("Playlist de loop") { loop = true }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: loop))
-                    }.frame(height: 44)
-                    if loop { Text("Importe arquivos em 120 BPM, com edição pronta para loop.") }
-                    Button("Criar") { model.createPlaylist(name: name, loop: loop); adding = false }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(height: 46)
-                }
-            }
-        }
+        }.background(BronzeScreenBackground()).preferredColorScheme(.dark)
+        .onAppear { if model.workspace.selectedPlaylist == nil { model.selectPlaylist(BronzeUserWorkspace.libraryPlaylistID) } }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: true) { result in
-            guard let id = playlist?.id else { return }
             switch result {
-            case .success(let urls): model.importTracks(urls, playlistID: id)
+            case .success(let urls): model.importTracks(urls, playlistID: importTarget)
             case .failure(let error): model.controlError = error.localizedDescription
             }
         }
-        .confirmationDialog("Excluir esta playlist? Os arquivos originais não serão apagados.", isPresented: $deleteList, titleVisibility: .visible) {
-            Button("Excluir playlist", role: .destructive) { if let id = playlist?.id { model.deletePlaylist(id) } }
+        .confirmationDialog("Apagar esta playlist? As músicas continuam na biblioteca All.", isPresented: $deleteList, titleVisibility: .visible) {
+            Button("Apagar playlist", role: .destructive) { if let editorID { model.deletePlaylist(editorID) }; editorStage = 0; model.selectPlaylist(BronzeUserWorkspace.libraryPlaylistID) }
             Button("Cancelar", role: .cancel) {}
         }
+        .confirmationDialog(isAll ? "Apagar todas as músicas da biblioteca e das playlists?" : "Retirar todas as músicas desta playlist?", isPresented: $deleteAll, titleVisibility: .visible) {
+            Button("Confirmar", role: .destructive) {
+                for track in playlist?.tracks ?? [] {
+                    if isAll { model.removeLibraryTrack(track.id) }
+                    else if let id = playlist?.id { model.removeTrack(track.id, playlistID: id) }
+                }
+            }
+            Button("Cancelar", role: .cancel) {}
+        }
+        .alert("Playlist", isPresented: Binding(get: { model.controlError != nil }, set: { if !$0 { model.controlError = nil } })) {
+            Button("OK") { model.controlError = nil }
+        } message: { Text(model.controlError ?? "") }
     }
-    private func edit(_ update: (inout BronzeUserPlaylist) -> Void) {
-        guard var next = playlist else { return }; update(&next); model.editPlaylist(next)
+    private func setButton(_ title: String, id: UUID?, height: CGFloat) -> some View {
+        Button(title) { model.selectPlaylist(id) }.buttonStyle(BronzeDeckButtonStyle(palette: model.workspace.selectedPlaylist == id ? .green : .grey, selected: model.workspace.selectedPlaylist == id)).frame(height: height)
+    }
+    private func edit(_ list: BronzeUserPlaylist) {
+        editorID = list.id; name = list.name; loop = list.isLoop
+        let keys = Set(list.tracks.map(\.key))
+        selectedTracks = Set(model.workspace.allLibraryTracks.filter { keys.contains($0.key) }.map(\.id))
+        editorStage = 2
+    }
+    @ViewBuilder private func editor(compact: Bool) -> some View {
+        VStack(spacing: 12) {
+            Text(editorID == nil ? "Nova playlist" : "Editar playlist").font(.bronzeUI(compact ? 18 : 26))
+            if editorStage == 1 {
+                Spacer(minLength: 0)
+                Text("Escolha o tipo").font(.bronzeUI(18))
+                HStack(spacing: 12) {
+                    Button { loop = false; editorStage = 2 } label: { VStack(spacing: 8) { Text("Normal Playlist"); Text("Músicas na velocidade original").font(.bronzeUI(11)) } }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: .grey))
+                    Button { loop = true; editorStage = 2 } label: { VStack(spacing: 8) { Text("Playlist de loop"); Text("Sincronizada com o BPM do Bronze Keys").font(.bronzeUI(11)) } }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: .grey))
+                }.frame(height: compact ? 80 : 140)
+                Text("Importe arquivos em 120 BPM com edição pronta para loop.").font(.bronzeUI(11)).foregroundStyle(Color.bronzeLight)
+                Spacer(minLength: 0)
+            } else if editorStage == 2 {
+                Spacer(minLength: 0)
+                TextField("Nome da playlist", text: $name).textFieldStyle(BronzeNativeFieldStyle()).font(.bronzeUI(20))
+                Spacer(minLength: 0)
+            } else {
+                Text(name).font(.bronzeUI(18)).foregroundStyle(Color.bronzeLight)
+                if loop { Text("Importe arquivos em 120 BPM com edição pronta para loop.").font(.bronzeUI(11)) }
+                ScrollView {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 4), spacing: 5) {
+                        ForEach(model.workspace.allLibraryTracks) { track in
+                            Button(track.name) { if selectedTracks.contains(track.id) { selectedTracks.remove(track.id) } else { selectedTracks.insert(track.id) } }
+                                .buttonStyle(BronzePlaylistMusicStyle(selected: selectedTracks.contains(track.id)))
+                                .frame(height: compact ? 44 : 56)
+                        }
+                    }
+                    if model.workspace.allLibraryTracks.isEmpty { Text("Nenhuma música adicionada. Você pode criar a playlist vazia.").font(.bronzeUI(12)).padding(20) }
+                }
+            }
+            HStack(spacing: 10) {
+                Button(editorStage == 3 ? "Voltar" : "Cancelar") { if editorStage == 3 { editorStage = 2 } else { editorStage = 0 } }.buttonStyle(BronzeConfigActionStyle(kind: .back))
+                if editorStage == 2 && editorID != nil { Button("Apagar playlist") { deleteList = true }.buttonStyle(BronzeConfigActionStyle(kind: .off)) }
+                if editorStage > 1 {
+                    Button(editorStage == 3 ? "Salvar" : "Continuar") {
+                        if editorStage == 2 { editorStage = 3 }
+                        else { model.savePlaylist(editorID, name: name, loop: loop, trackIDs: selectedTracks); editorStage = 0 }
+                    }.buttonStyle(BronzeConfigActionStyle(kind: .on)).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }.frame(height: compact ? 36 : 48)
+        }
     }
 }
 
 struct BronzeNativeFXEditor: View {
     @ObservedObject var model: BronzeNativeAppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var index = 0
+    let index: Int
+    let bank: Int
+    @State private var name: String
+    @State private var color: Int
+    @State private var mode: String
+    @State private var release: String
     @State private var importing = false
+    @State private var showMode = false
+    @State private var showLearn = false
+    @State private var clean = false
+    @State private var renameBank = false
     @State private var bankName = ""
-    private var bank: Int { model.workspace.fxBank }
     init(model: BronzeNativeAppModel, initialIndex: Int = 0) {
         self.model = model
-        _index = State(initialValue: min(11, max(0, initialIndex)))
+        let item = min(11, max(0, initialIndex)), bank = model.workspace.fxBank
+        index = item; self.bank = bank
+        let pad = model.workspace.fxBanks[bank].pads[item]
+        _name = State(initialValue: pad.name); _color = State(initialValue: pad.color)
+        _mode = State(initialValue: pad.triggerMode ?? "toggle")
+        _release = State(initialValue: pad.gateRelease ?? "infinite")
     }
     private var pad: BronzeUserFX { model.workspace.fxBanks[bank].pads[index] }
+    private var target: String { "note:2:\(bank):\(index)" }
     var body: some View {
-        BronzeNativeModal(title: model.workspace.fxBanks[bank].name, canDismiss: !model.importingMedia) {
-            VStack(alignment: .leading, spacing: 18) {
-                Section("Banco") {
-                    TextField("Nome do banco", text: $bankName).disabled(bank == 0)
-                    if bank != 0 { Button("Renomear banco") { model.renameFXBank(bank, name: bankName) } }
-                    else { Text("Church é fixo. Nome, volume e cor dos efeitos podem ser editados.").font(.bronzeUI(12)) }
-                }
-                Picker("Efeito", selection: $index) {
-                    ForEach(0..<12, id: \.self) { i in Text("\(i + 1) · \(model.workspace.fxBanks[bank].pads[i].name)").tag(i) }
-                }
-                TextField("Nome", text: Binding(get: { pad.name }, set: { edit(name: $0) }))
-                BronzeNativeValueKnob(definition: .init("Volume", -36, 0, 0, .decibels),
-                    value: Binding(get: { pad.gainDb }, set: { edit(gain: $0) }))
-                Picker("Cor", selection: Binding(get: { pad.color }, set: { edit(color: $0) })) {
-                    ForEach(0..<8, id: \.self) { color in Text("Cor \(color + 1)").foregroundStyle(BronzePresetPalette.colors[color]).tag(color) }
-                }
+        BronzeEditDialog(title: "\(model.workspace.fxBanks[bank].name) · Efeito \(index + 1)", height: bank == 0 ? 360 : showMode ? 570 : 460) {
+            VStack(spacing: 12) {
                 if bank != 0 {
-                    Text(pad.key == nil ? "Nenhum arquivo" : "Arquivo importado").font(.bronzeUI(12))
-                    Button("Importar / substituir áudio") { importing = true }
+                    TextField("Nome do efeito", text: $name).textFieldStyle(BronzeNativeFieldStyle())
+                        .onChange(of: name) { if $0.count > 12 { name = String($0.prefix(12)) } }
                 }
-                if bank == 0 {
-                    Text("Gate · Infinite Release").font(.bronzeUI(12))
-                } else {
-                    Picker("Modo", selection: Binding(get: { pad.triggerMode ?? "toggle" }, set: { mode in
-                        model.editFX(bank: bank, index: index, name: pad.name, gain: pad.gainDb, color: pad.color, triggerMode: mode)
-                    })) { Text("Toggle").tag("toggle"); Text("Gate").tag("gate") }.pickerStyle(.segmented)
-                    if pad.triggerMode == "gate" {
-                        Picker("Soltar", selection: Binding(get: { pad.gateRelease ?? "infinite" }, set: { mode in
-                            model.editFX(bank: bank, index: index, name: pad.name, gain: pad.gainDb, color: pad.color, gateRelease: mode)
-                        })) { Text("Infinite Release").tag("infinite"); Text("Continue Press").tag("continue-press") }.pickerStyle(.segmented)
+                Text(bank == 0 ? pad.name : name).font(.bronzeUI(19)).frame(maxWidth: .infinity).frame(height: 65)
+                    .background(LinearGradient(colors: [BronzePresetPalette.colors[color], BronzePresetPalette.colors[color].opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                HStack(spacing: 6) {
+                    ForEach(0..<8, id: \.self) { item in
+                        Button { color = item } label: {
+                            RoundedRectangle(cornerRadius: 5).fill(BronzePresetPalette.colors[item]).frame(height: 30)
+                                .overlay(RoundedRectangle(cornerRadius: 5).stroke(color == item ? .white : .clear, lineWidth: 2))
+                        }.buttonStyle(.plain).accessibilityLabel("Cor \(item + 1)")
                     }
                 }
+                HStack(spacing: 8) {
+                    Button { showLearn = true } label: {
+                        VStack(spacing: 3) {
+                            Text("Learn Note")
+                            Text(model.midiSettings.notes.first(where: { $0.kind == 2 && $0.bank == bank && $0.item == index }).map { "Nota \($0.note) · CH 10" } ?? "Ainda não mapeado").font(.bronzeUI(10))
+                        }
+                    }.buttonStyle(BronzeDeckButtonStyle(palette: .bronze))
+                    Button("Clean") { clean = true }.buttonStyle(BronzeDeckButtonStyle(palette: .red)).frame(width: 90)
+                }.frame(height: 46)
+                if bank != 0 {
+                    HStack {
+                        Button("Modo · \(mode == "gate" ? "Gate" : "Toggle")") { showMode.toggle() }
+                        Button("Escolher FX") { importing = true }
+                    }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 40)
+                    if showMode {
+                        HStack {
+                            ForEach(["toggle", "gate"], id: \.self) { value in
+                                Button(value == "gate" ? "Gate" : "Toggle") { mode = value }
+                                    .buttonStyle(BronzeDeckButtonStyle(palette: mode == value ? .green : .grey, selected: mode == value))
+                            }
+                        }.frame(height: 36)
+                        if mode == "gate" {
+                            HStack {
+                                ForEach(["infinite", "continue-press"], id: \.self) { value in
+                                    Button(value == "infinite" ? "Infinite Release" : "Continue Press") { release = value }
+                                        .buttonStyle(BronzeDeckButtonStyle(palette: release == value ? .green : .grey, selected: release == value, size: 10))
+                                }
+                            }.frame(height: 36)
+                        }
+                    }
+                    Text(pad.key == nil ? "Nenhum arquivo" : "Arquivo importado").font(.bronzeUI(10)).foregroundStyle(.secondary)
+                    Button("Renomear banco") { bankName = model.workspace.fxBanks[bank].name; renameBank = true }.font(.bronzeUI(10))
+                }
                 if model.importingMedia { ProgressView("Importando…") }
-            }
-            .disabled(model.importingMedia)
-            .pickerStyle(.menu).textFieldStyle(BronzeNativeFieldStyle())
+            }.disabled(model.importingMedia)
+        } actions: {
+            Button("Voltar") { dismiss() }.buttonStyle(BronzeConfigActionStyle(kind: .back)).disabled(model.importingMedia)
+            Button("OK") {
+                model.editFX(bank: bank, index: index, name: bank == 0 ? pad.name : name, gain: pad.gainDb, color: color, triggerMode: mode, gateRelease: release)
+                dismiss()
+            }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).disabled(model.importingMedia)
         }
-        .onAppear { bankName = model.workspace.fxBanks[bank].name }
+        .fullScreenCover(isPresented: $showLearn) { BronzeMIDILearnDialog(model: model, target: target) }
+        .alert("Limpar mapeamento?", isPresented: $clean) {
+            Button("Cancelar", role: .cancel) {}
+            Button("Limpar", role: .destructive) { model.clearMIDIMapping(target) }
+        }
+        .alert("Nome do banco", isPresented: $renameBank) {
+            TextField("Nome", text: $bankName)
+            Button("Cancelar", role: .cancel) {}
+            Button("OK") { model.renameFXBank(bank, name: bankName) }
+        }
         .interactiveDismissDisabled(model.importingMedia)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio]) { result in
             switch result {
@@ -297,9 +400,6 @@ struct BronzeNativeFXEditor: View {
             case .failure(let error): model.controlError = error.localizedDescription
             }
         }
-    }
-    private func edit(name: String? = nil, gain: Double? = nil, color: Int? = nil) {
-        model.editFX(bank: bank, index: index, name: name ?? pad.name, gain: gain ?? pad.gainDb, color: color ?? pad.color)
     }
 }
 
@@ -363,16 +463,25 @@ struct BronzeNativePlaylistSidebar: View {
     var body: some View {
         VStack(spacing: 8) {
             Button { setsOpen.toggle() } label: {
-                HStack { Text(bundled ? "Loops Bronze Keys" : playlist?.name ?? "All").lineLimit(1); Spacer(); Image(systemName: "chevron.down") }
+                HStack { Text(bundled ? "Loops Gospel" : playlist?.name ?? "All").lineLimit(1); Spacer(); Image(systemName: "chevron.down") }
             }.buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(height: 40)
                 .accessibilityIdentifier("bronze.playlist.sets")
-            LazyVGrid(columns: [GridItem(.fixed(38), spacing: 5)] + Array(repeating: GridItem(.flexible(), spacing: 5), count: 3), spacing: 5) {
+            if isLoop {
+                Button(model.loopClickEnabled ? "Click ON" : "Click OFF") {
+                    model.setLoopClickEnabled(!model.loopClickEnabled)
+                }.buttonStyle(BronzeDeckButtonStyle(palette: model.loopClickEnabled ? .green : .red))
+                    .frame(height: 36)
+                    .accessibilityIdentifier("bronze.loop.click")
+                    .accessibilityValue(model.loopClickEnabled ? "Estéreo" : "Canal R nos dois lados")
+            } else {
+            HStack(spacing: 5) {
                 Button { toggleRepeat() } label: { Image(systemName: "repeat") }
-                    .buttonStyle(BronzeDeckButtonStyle(palette: repeatEnabled ? .green : .red)).accessibilityLabel("Repetir música").disabled(isLoop)
+                    .buttonStyle(BronzeDeckButtonStyle(palette: repeatEnabled ? .green : .red)).accessibilityLabel("Repetir música").frame(width: 44)
                 Button("Auto") { toggleAuto() }.buttonStyle(BronzeDeckButtonStyle(palette: autoAdvance ? .yellow : .red)).disabled(isLoop)
                 Button("Add-BL") { addBlock() }.buttonStyle(BronzeDeckButtonStyle(palette: .purple)).disabled(bundled)
                 Button("Edit") { editing.toggle() }.buttonStyle(BronzeDeckButtonStyle(palette: editing ? .green : .red)).disabled(bundled)
-            }.frame(height: 36)
+            }.frame(height: 48)
+            }
             ZStack(alignment: .top) {
                 ScrollView {
                     LazyVStack(spacing: 5) {
@@ -396,7 +505,7 @@ struct BronzeNativePlaylistSidebar: View {
                         VStack(spacing: 5) {
                             setButton("All", id: "all")
                             Divider()
-                            setButton("Loops Bronze Keys", id: "bundled")
+                            setButton("Loops Gospel", id: "bundled")
                             ForEach(model.workspace.playlists) { list in setButton(list.name, id: list.id.uuidString) }
                         }.padding(7)
                     }.background(BronzeTheme.panelGradient).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -449,7 +558,10 @@ struct BronzeNativePlaylistSidebar: View {
             } label: { row(number: "\(index + 1)", name: entry.track.name) }
                 .buttonStyle(BronzeDeckButtonStyle(palette: model.selectedLoop?.trackID == entry.track.id ? .green : .grey)).frame(height: 48)
                 .contextMenu {
-                    Button("Retirar da playlist", role: .destructive) { model.removeTrack(entry.track.id, playlistID: entry.playlist.id) }
+                    Button(scope == "all" ? "Apagar música da biblioteca" : "Retirar da playlist", role: .destructive) {
+                        if scope == "all" { model.removeLibraryTrack(entry.track.id) }
+                        else { model.removeTrack(entry.track.id, playlistID: entry.playlist.id) }
+                    }
                 }
         }
     }
@@ -457,7 +569,8 @@ struct BronzeNativePlaylistSidebar: View {
     private func setButton(_ name: String, id: String) -> some View {
         Button(name) {
             model.editPlaylistSidebar { $0.scope = id }
-            if id == "bundled" { model.selectPlaylist(nil) }
+            if id == "all" { model.selectPlaylist(BronzeUserWorkspace.libraryPlaylistID) }
+            else if id == "bundled" { model.selectPlaylist(nil) }
             else if let uuid = UUID(uuidString: id) { model.selectPlaylist(uuid) }
             setsOpen = false; editing = false
         }.buttonStyle(BronzeDeckButtonStyle(palette: scope == id ? .green : .grey)).frame(height: 40)
@@ -509,10 +622,146 @@ struct BronzeLearnOnHold: ViewModifier {
             if let tapAction {
                 content.bronzeTapHold(tap: tapAction, hold: { open = true })
             } else {
+                #if targetEnvironment(macCatalyst)
+                content.contextMenu { Button("Mapear MIDI") { open = true } }
+                #else
                 content.simultaneousGesture(LongPressGesture(minimumDuration: 0.56, maximumDistance: 8).onEnded { _ in open = true })
+                #endif
             }
         }
             .accessibilityAction(named: "MIDI Learn") { open = true }
-            .fullScreenCover(isPresented: $open) { BronzeNativeMIDIPanel(model: model, initialTarget: target) }
+            .fullScreenCover(isPresented: $open) { BronzeMIDILearnDialog(model: model, target: target) }
+    }
+}
+
+private struct BronzeLearnActionKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+extension EnvironmentValues {
+    var bronzeLearnAction: (() -> Void)? {
+        get { self[BronzeLearnActionKey.self] }
+        set { self[BronzeLearnActionKey.self] = newValue }
+    }
+}
+struct BronzeConfigLearn: ViewModifier {
+    @ObservedObject var model: BronzeNativeAppModel
+    let target: String
+    @State private var open = false
+    func body(content: Content) -> some View {
+        content.environment(\.bronzeLearnAction, { open = true })
+            .fullScreenCover(isPresented: $open) { BronzeMIDILearnDialog(model: model, target: target) }
+    }
+}
+
+struct BronzeEditDialog<Content: View, Actions: View>: View {
+    let title: String
+    var height: CGFloat = 430
+    @ViewBuilder let content: () -> Content
+    @ViewBuilder let actions: () -> Actions
+    var body: some View {
+        GeometryReader { g in
+            VStack(spacing: 16) {
+                Text(title).font(.bronzeUI(20)).foregroundStyle(Color.bronzeLight)
+                ScrollView { content().frame(maxWidth: .infinity) }
+                HStack(spacing: 8) { actions() }.frame(height: 44)
+            }.padding(20)
+                .frame(width: min(540, max(1, g.size.width - 24)), height: min(height, max(1, g.size.height - 24)))
+                .background(BronzeTheme.panelGradient).clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.bronze.opacity(0.7)).allowsHitTesting(false))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.background(Color.black.opacity(0.65)).background(BronzeTransparentModalBackground())
+            .preferredColorScheme(.dark)
+    }
+}
+
+struct BronzeMIDILearnDialog: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    let target: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var minimum = 0.0
+    @State private var maximum = 1.0
+    @State private var inverted = false
+    @State private var minimumEnd = false
+    @State private var clear = false
+    private var note: Bool { target.hasPrefix("note:") }
+    private var continuous: Bool { BronzeMIDITarget.all.first(where: { $0.id == target })?.continuous == true }
+    private var canConfirm: Bool { note ? model.midiLearnNoteCandidate != nil : model.midiLearnCandidate != nil }
+    var body: some View {
+        BronzeEditDialog(title: BronzeMIDITarget.all.first(where: { $0.id == target })?.name ?? "Mapeamento MIDI", height: continuous ? 480 : 310) {
+            VStack(spacing: 12) {
+                Text(note ? "NOTE" : "CC").font(.bronzeUI(25)).padding(12).background(Color.bronze.opacity(0.2)).clipShape(RoundedRectangle(cornerRadius: 8))
+                Text(note ? "Learn Note" : "Learn CC").font(.bronzeUI(18))
+                Text(model.midiLearnMessage).font(.bronzeUI(12)).multilineTextAlignment(.center)
+                Text(note ? model.midiLearnNoteCandidate.map { "Mapeamento: Nota \($0) · CH 10" } ?? "Ainda não mapeado"
+                    : model.midiLearnCandidate.map { "Mapeamento: CC \($0.controller) · CH \($0.channel)" } ?? "Ainda não mapeado")
+                    .font(.bronzeUI(11)).foregroundStyle(Color.bronzeLight)
+                if continuous {
+                    Button("Inverter") { inverted.toggle() }.buttonStyle(BronzeDeckButtonStyle(palette: inverted ? .green : .grey, selected: inverted)).frame(height: 34)
+                    HStack(spacing: 8) {
+                        Button(String(format: "Mínimo  %.1f%%", minimum * 100)) { minimumEnd = true }
+                            .buttonStyle(BronzeDeckButtonStyle(palette: minimumEnd ? .bronze : .grey, selected: minimumEnd))
+                        Button(String(format: "Máximo  %.1f%%", maximum * 100)) { minimumEnd = false }
+                            .buttonStyle(BronzeDeckButtonStyle(palette: minimumEnd ? .grey : .bronze, selected: !minimumEnd))
+                    }.frame(height: 38)
+                    GeometryReader { g in
+                        let width = max(1, g.size.width - 24)
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.gray.opacity(0.35)).frame(height: 6)
+                            Capsule().fill(Color.bronzeLight).frame(width: max(1, width * (maximum - minimum)), height: 6).offset(x: 12 + width * minimum)
+                            ForEach([true, false], id: \.self) { low in
+                                Circle().fill(minimumEnd == low ? Color.bronzeLight : .white).frame(width: 24, height: 24)
+                                    .offset(x: width * (low ? minimum : maximum))
+                                    .zIndex(minimumEnd == low ? 1 : 0)
+                                    .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("ccRange")).onChanged { event in
+                                        minimumEnd = low
+                                        let n = min(1, max(0, (event.location.x - 12) / width))
+                                        if low { minimum = min(maximum, n) } else { maximum = max(minimum, n) }
+                                    })
+                                    .accessibilityLabel(low ? "Limite mínimo" : "Limite máximo")
+                                    .accessibilityValue(String(format: "%.1f%%", (low ? minimum : maximum) * 100))
+                                    .accessibilityAdjustableAction { direction in
+                                        let delta = direction == .increment ? 0.01 : -0.01
+                                        if low { minimum = min(maximum, max(0, minimum + delta)) }
+                                        else { maximum = max(minimum, min(1, maximum + delta)) }
+                                    }
+                            }
+                        }.frame(height: g.size.height).coordinateSpace(name: "ccRange")
+                    }.frame(height: 32)
+                    Text("Arraste as duas alças para definir o mínimo e o máximo do curso do CC.").font(.bronzeUI(10)).foregroundStyle(.secondary)
+                }
+            }
+        } actions: {
+            Button("Voltar") { dismiss() }.buttonStyle(BronzeConfigActionStyle(kind: .back))
+            Button("Clean") { clear = true }.buttonStyle(BronzeDeckButtonStyle(palette: .red))
+            Button("OK") { model.commitMIDILearnDraft(target, minimum: minimum, maximum: maximum, inverted: inverted); dismiss() }
+                .buttonStyle(BronzeDeckButtonStyle(palette: .green)).disabled(!canConfirm)
+        }
+        .onAppear {
+            if let map = model.midiSettings.controls[target] { minimum = map.minimum; maximum = map.maximum; inverted = map.inverted }
+            model.beginMIDILearnDraft(target)
+        }
+        .onDisappear { model.cancelMIDILearnDraft() }
+        .alert("Limpar mapeamento?", isPresented: $clear) {
+            Button("Cancelar", role: .cancel) {}
+            Button("Limpar", role: .destructive) { model.clearMIDIMapping(target); dismiss() }
+        } message: { Text("O mapeamento deste controle será removido.") }
+    }
+}
+
+private struct BronzePlaylistMusicStyle: ButtonStyle {
+    var palette: BronzeDeckPalette? = nil
+    var selected = false
+    func makeBody(configuration: Configuration) -> some View {
+        let colors = palette?.colors ?? (selected
+            ? [Color(bronzeHex: 0x168b3d), Color(bronzeHex: 0x063c1a)]
+            : [Color(bronzeHex: 0x2f2f33), Color(bronzeHex: 0x0f0f11)])
+        configuration.label.font(.bronzeUI(12)).lineLimit(2)
+            .multilineTextAlignment(.leading).foregroundStyle(Color.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .background(LinearGradient(colors: Array(colors.prefix(2)), startPoint: .topLeading, endPoint: .bottomTrailing))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(selected ? Color(bronzeHex: 0x41ea77) : Color(bronzeHex: 0x65564c), lineWidth: 1.5).allowsHitTesting(false))
+            .brightness(configuration.isPressed ? 0.12 : 0)
     }
 }

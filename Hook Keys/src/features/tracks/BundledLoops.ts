@@ -31,7 +31,7 @@ export const BUNDLED_LOOP_TRACKS: readonly LocalTrack[] = BUNDLED_LOOP_FILES.map
 
 export const FIXED_LOOPS_PLAYLIST: LocalPlaylist = {
   id: FIXED_LOOPS_PLAYLIST_ID,
-  name: 'Loops',
+  name: 'Loops Gospel',
   trackIds: BUNDLED_LOOP_TRACKS.map(({ id }) => id),
   createdAt: '2000-01-01T00:00:00.000Z',
   updatedAt: '2000-01-01T00:00:00.000Z',

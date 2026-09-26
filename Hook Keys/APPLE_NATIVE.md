@@ -275,3 +275,278 @@ Menus de saída derivam os canais da rota AVAudioSession e mantêm a instância
 UIKit durante atualizações dos medidores. MIDI apresenta somente os três
 seletores de dispositivo. RAM exibe a porcentagem de memória ativa, wired e
 comprimida do aparelho, excluindo cache inativo. Nenhuma destas telas usa WebView.
+
+### Referência visual compartilhada com Android — 25/09/2026
+
+O Android permanece em WebView. A referência dos ajustes Apple é o código atual
+de `src/features/player`, `src/features/tracks` e as regras finais de `styles.css`.
+Não substituir essa referência por capturas de versões antigas nem alterar o
+Android para acomodar diferenças da implementação nativa.
+
+Os editores Apple agora distribuem os cards pela altura disponível, limitando o
+tamanho dos knobs sem reduzir a página inteira. Envelope usa duas linhas de
+quatro posições; EQ mantém o gráfico e os cinco controles de banda no mesmo
+card, sem Velocity/Glide/Mod abaixo. Efeitos preservam suas cores, divisões e
+ações inferiores. Delay reserva espaço para Tap e divisões; Reverb conserva o
+Decay solicitado. Config do Glide apresenta o limite de velocity e Inverter;
+o filtro apresenta curva arrastável e os controles de Env-Filter. As telas
+principais de Organ e Synth não foram redesenhadas nesta revisão.
+
+MIDI mantém três dispositivos em duas colunas. Áudio usa duas colunas e quatro
+linhas, com saídas calculadas a partir da rota real do AVAudioSession. Biblioteca
+mantém grade 4×4, preview antes do download, Baixar tudo, tamanho e quantidade de
+timbres; nomes usam o contraste preto da referência. O gerenciador de músicas
+tem All, Add música e criação de playlists normais ou de loop selecionando os
+áudios importados. `libraryTracks` é opcional para sessões antigas; playlists
+compartilham arquivos por chave, e apagar uma playlist preserva a biblioteca.
+Backups também validam arquivos que existem somente em All.
+
+Meters usam a escala de dB e a queda temporal da referência. A suavização é
+apenas visual, sem mudar o ganho do áudio. Testes Swift cobrem compatibilidade
+das sessões, seleção de All, deduplicação e independência da taxa de atualização
+dos meters. Build de dispositivo e inspeção Mach-O validam compilação, mínimo
+iOS 15 e ausência de imports diretos de SwiftUICore; isso não substitui a
+conferência visual e de toque no iPad/iPhone físicos.
+
+Na revisão seguinte, a logo passou a alternar os 30% com toque simples; o
+transporte abre o gerenciador e a tela intermediária de versão foi removida.
+O breakpoint vertical depende apenas da altura da tela, não da playlist aberta.
+Limite Velocity permanece no Envelope; o editor da curva mantém seu limitador
+de saída, que é outro parâmetro.
+
+Knobs abrem um painel nativo transparente com dial, slider vertical relativo e
+botões +/− com repetição. Abrir o painel não escreve no parâmetro. Inatividade
+por dois segundos ou toque fora fecha o painel; segurar o slider/botões pausa
+esse prazo. A apresentação UIKit evita a conversão em sheet no iOS 15/16.
+
+Downloads usam URLSessionDownloadTask com delegate da sessão e arquivo em disco.
+O adaptador async com delegate por tarefa não entregou callbacks intermediários
+no teste local, por isso foi substituído. Há barra do arquivo, bytes/percentual,
+barra geral por quantidade de timbres e erros dentro da biblioteca/preview.
+Respostas inválidas, falhas de tamanho/integridade e indisponibilidade do
+salvamento não encerram mais a ação sem uma mensagem visível.
+Teste local HTTP verificou 1 MiB, progresso intermediário e cancelamento;
+o download autenticado de produção ainda exige confirmação no aparelho.
+
+O relato posterior confirmou que o arquivo havia baixado, mas continuava marcado
+como não instalado. A consulta do catálogo passou a usar `UUID/arquivo.sf2`, a
+mesma chave persistida na sessão, em vez da igualdade entre URLs completas;
+aliases `/var` e `/private/var` e mudanças do contêiner após instalar o app não
+alteram essa identidade. Entradas de SF2 também normalizam seus URLs na leitura.
+O teste de regressão cobre aliases, troca de contêiner e arquivos homônimos em
+pastas diferentes. A biblioteca usa quatro colunas e altura fixa de 40/46 pontos
+por botão, conforme o CSS atual, sem esticar quatro linhas pela altura da tela.
+
+Com os 30% abertos, o botão Pads–Effects usa a legenda FX e as dimensões do
+metrônomo. Os cinco buses mostram nome acima do knob/meter e valor abaixo,
+mantendo a altura do cabeçalho e dos módulos. Sem a playlist lateral, a legenda
+completa e a distribuição horizontal anterior são mantidas.
+
+O teclado visual agora recebe também Note On/Off do controlador, com estado por
+dispositivo/canal: soltar uma nota em um controlador não apaga a mesma nota ainda
+pressionada em outro. Canal 10 continua reservado aos Pads/FX. Panic, reconexão,
+logout e CC120/123 limpam os destaques correspondentes; o modo Lite continua sem
+iluminação. Esse caminho não reenvia notas ao áudio.
+
+A queda visual dos meters segue os 3 dB por 90 ms da versão web móvel, calculada
+pelo tempo decorrido (antes eram 90 dB/s). Download ativo substitui a área de
+transporte por nome, contador x/x e progresso do arquivo; ao encerrar, o transporte
+retorna. O último timbre instalado pulsa na biblioteca até tocar em outro timbre,
+com destaque estático quando Reduzir Movimento ou Lite estão ativos.
+
+Buffer Size mantém a preferência escolhida e exibe separadamente as amostras e
+milissegundos efetivos reportados por AVAudioSession após a mudança e na troca
+de rota. Uma preferência aceita pela API não garante que a rota use esse valor.
+
+Snapshots nativos adiam a preparação dos efeitos copiados até aplicar os efeitos
+do destino, evitando construir primeiro a IR do preset anterior. A API comum
+mantém o comportamento anterior por padrão. Os testes C++ comparam áudio amostra
+por amostra entre a preparação anterior e a adiada, incluindo caudas, bypass,
+mudança de IR/Decay e cancelamento. Testes Swift cobrem notas MIDI sobrepostas e
+a velocidade dos meters. Build de desenvolvimento para teste físico compilada
+com otimização C++/Swift; sensação de latência e aparência precisam ser conferidas
+com o controlador e os timbres reais no aparelho.
+
+A investigação seguinte usou a sessão real do iPad: sem corte estava ativo, mas
+S6 Grand (260.942.190 bytes) e Felt Upright (226.943.806 bytes) excediam o teto por
+banco do cache fixo de 384 MiB (metade desse orçamento), causando releitura a cada
+alternância. O host iOS agora informa aproximadamente 1/4 da RAM física,
+arredondado para cima em blocos de 64 MiB e limitado a 128–768 MiB;
+no iPad de 2 GiB são 512 MiB, suficientes para os dois bancos, com amostras
+compartilhadas entre cache e vozes.
+
+Com sem corte ativo, os SF2 dos presets do banco selecionado são preparados em
+uma fila separada ao restaurar a sessão, selecionar banco, salvar preset ou
+ativar a opção. O carregamento preventivo não muda o preset ativo, não segura o
+mutex de configuração durante leitura e não remove outro timbre pronto para
+abrir espaço. Lite/desativar sem corte cancelam a sequência. Uma indicação de
+carregamento só aparece se a operação ultrapassar 300 ms, evitando um flash nas
+trocas já prontas.
+
+Teste C++ carrega dois bancos preventivamente, remove os arquivos temporários e
+confirma seis alternâncias pelo cache; verifica limite, ausência de áudio na
+preparação e liberação ao desligar sem corte. Teste offline no Mac com os dois
+SF2 reais mediu 31–76 ms no caminho antigo versus 0,63–0,70 ms na preparação da
+camada/carga/commit com cache aquecido. Isso não mede a latência física do iPad
+nem toda a apresentação SwiftUI. O primeiro preparo e bancos fora do orçamento
+ainda exigem leitura; a fila antecipada reduz essa espera durante o uso normal.
+
+
+### Mac Catalyst e controles de configuração (25/09/2026)
+
+O target App também compila para Mac Catalyst com as mesmas telas SwiftUI/UIKit
+usadas no iPad e o mesmo motor C++. `Abrir Bronze Keys no Mac.command` compila
+Release assinado para uso local, instala em `~/Applications/Bronze Keys.app` e
+abre o app, sem publicar no Git. Exige a conta de desenvolvimento no Xcode.
+O Keychain do Catalyst usa entitlement próprio e perfil de desenvolvimento;
+a execução de diagnóstico confirmou gravação/leitura e saída de áudio ativa.
+Esta compilação usa os controles CoreGraphics nativos; a biblioteca Skia macOS
+existente não é um slice Catalyst. O fluxo Tauri e seus artifacts de release
+continuam separados desta compilação nativa local.
+
+Clique direito substitui o long press nos controles de edição no Mac. Pads FX
+só oferecem mapeamento MIDI em Edit. A lateral de playlist no Mac mantém todos
+os controles, sem usar a compactação do iPad. Os cinco knobs de buses usam
+sempre título acima e valor abaixo.
+
+Configurações expõe Keyboard com MIDI 1/2/3 e Default/Black/Bronze. A entrada
+selecionada determina o roteamento e a iluminação do teclado; sem dispositivos,
+a entrada virtual continua tocando todos os módulos. Note-off preserva a entrada
+do note-on, inclusive se um dispositivo desconectar. Lite e Compatibilidade usam
+a área inteira do card como botão, mantendo o estado persistente e sua aplicação
+ao motor. Compilação iOS 15+, verificação de bundle e testes de sessão passaram;
+a validação final de toque físico fica no aparelho.
+
+No Mac, Tab e Shift+Tab percorrem explicitamente os campos de cada etapa do
+login (incluindo senha visível/oculta); o comando é desativado após autenticar.
+O cabeçalho do player usa 56 pontos de altura e botões OCT/TRS/Stereo/Panic
+de largura igual, adaptada à janela (64–100 pontos), com fonte de 13 pontos.
+O transporte ocupa o espaço restante. As dimensões do iPad não mudam.
+
+Meters: a interpolação visual agora acompanha os 90 ms lineares do CSS atual,
+com verde #00e568–#79f52a até 76,7%, amarelo #ffe633 até 88,3% e laranja
+#ff981a no topo. A paleta foi intensificada a pedido do usuário e o sombreado
+lateral reduzido para não apagar barras estreitas. As cores permanecem fixas na
+escala; somente a janela de nível se move. Mantido o polling de áudio a 30 Hz.
+
+No Catalyst, os presets e o teclado de 88 teclas permanecem juntos (presets acima),
+inclusive na página de Pads/Effects. O botão de alternância fica somente no
+iPhone/iPad. Modulation recupera o preenchimento proporcional laranja
+#e95b08–#ffad45; Pitch continua com retorno ao centro. Ambos os botões móveis ocupam toda a
+largura do trilho, sem recuo lateral.
+
+Na troca de preset, a faixa de módulos bloqueia hit testing enquanto aplica
+o snapshot, em vez de propagar `disabled` aos controles. Isso preserva as
+cores e elimina o flash cinza do estilo desabilitado durante a troca.
+
+Config MIDI: os knobs abrem o Learn específico via clique direito no Mac e
+long press no iPad; clique normal mantém o ajuste com slider/−/+. Inclui
+Envelope, Filter, Reverb, Delay, processadores, Arp, Pulse, Mod, Glide, Rotary
+e Synth. Foram registrados os targets adicionais e seus destinos no motor.
+O modal compacto oferece badge CC/NOTE, estado, Clean com confirmação e OK;
+contínuos têm Inverter e duas alças de limite. Captura MIDI é provisória até OK;
+Voltar descarta sem alterar a configuração persistida. O editor de preset tem
+nome, prévia, paleta, Learn CC/Clean e Voltar/OK.
+
+Validação: fixture de sessão cobre persistência dos novos targets e extremos
+invertidos; o smoke nativo Catalyst injeta callbacks MIDI na sessão de teste e
+verifica captura sem salvar, cancelar, confirmar, limite invertido aplicado ao
+Attack e captura Note cancelada sem alterar mapeamentos. Log:
+MIDI_DRAFT_CANCEL_CONFIRM_RANGE_AND_ROUTING_OK. Capturas da própria janela
+confirmaram os modais sobre o player e as 88 teclas abaixo dos presets.
+
+Atualização de paridade — 25/09/2026:
+- Catalyst aplica Buffer Frame Size no Core Audio e mostra a leitura efetiva.
+  RemoteIO segue a saída padrão quando não expõe CurrentDevice. Troca preserva
+  runtime/SF2; recusa aparece em Config. Smoke confirmou 64/128/256/512 e restaurou
+  o valor anterior.
+- Organ gira volume/estéreo/balanço das bandas sem Doppler, atrasos móveis ou
+  filtro de fase modulada. Slow/Fast a Depth máximo mediram menos de 1 cent nas
+  senoides de 220, 800 e 2500 Hz. Demais rotarys preservam processamento anterior.
+- FX: pads contínuos menores, slider individual abaixo de cada efeito, ganho
+  das vozes em andamento com rampa e editor sem knob de volume. Editor/Mapear
+  exige Edit. Church mantém nomes de fábrica.
+- Config: Default/User alinhados, polifonia numérica 1–128, MIDI por dispositivo,
+  saída Padrão seguindo bus Módulos, Portamento ligado a Mono/Poly e Sync seguindo
+  os limites de BPM da referência web.
+- Clique contextual Catalyst usa UIContextMenuInteraction nos controles tap/hold.
+  Transporte: toque abre playlists; hold/clique direito abre posição com agulha.
+  Play respeita posição escolhida quando parado. Presets inativos ficam cinza;
+  cor salva aparece apenas no selecionado, no nativo e web.
+
+Android/Windows permanecem WebView. Fonte compartilhada ganhou sliders FX
+(ajustam vozes já tocando e salvam por banco), logo abre/fecha 30%, transporte
+abre gerenciador e preserva hold/clique direito da agulha. Decay do Reverb
+10–100% guarda cauda independente nos quatro ambientes de convolução. O campo
+legado reverbDecay do bridge web entrega essa fração à propriedade tail em
+Android/Windows. Sem valor salvo, 100% preserva a IR completa.
+Validação: test-performance-parity.mjs cobre volume em execução/isolamento de
+bancos, Decay por ambiente e gestos do transporte. TypeScript, Vite, testes de
+sessão e motor C++ passaram. Assets copiados para Android; APK/Windows não foram
+empacotados neste Mac. Nativo instalado no iPad via USB e em
+~/Applications/Bronze Keys.app; sem Git push ou acompanhamento de CI.
+
+Transporte contextual: no Catalyst, marcador da área do transporte instala
+UITapGestureRecognizer com buttonMaskRequired=.secondary na janela e filtra
+pela área visível. Isso evita depender do menu contextual e de acertar apenas
+o texto. Nome e relógio mantêm clique primário para playlists; Play/Stop mantém
+sua ação primária. Modal da agulha abre também vazio com orientação para escolher
+música. iOS mantém hold no conjunto nome/relógio. Web Windows recebe contextmenu
+em toda .track-transport. Teste DOM despacha botão direito sobre nome, relógio e
+Play e confirma abertura sem disparar reprodução; clique no relógio abre lista.
+
+Drawbars nativas espelham OrganView.ts/styles.css atuais: régua com laterais
+claras e centro preto revelada apenas acima da ponteira, mesma ordem numérica
+do markup web, cores #7a1f1f/#c7c7c7/#17161a e base arredondada. Dezesseis LEDs
+quadrados verdes, dois por estágio, acendem de cima para baixo. Web já tinha
+esse comportamento e permanece como referência.
+
+Bancos A–F: apenas o banco selecionado usa a paleta colorida; inativos usam
+cinza neutro (#616161/#424242), tanto no nativo quanto na WebView compartilhada
+por Android/Windows. Drawbars nativas agora respeitam o limite de 760 pt de
+largura, espaçamento de 1–3 pt e teto de altura de 470 pt da referência CSS;
+ponteira e LEDs têm proporções compactas no celular. VST3 não faz parte do escopo.
+
+Na tela Pads/Effects, presets e teclado ficam ocultos também no Mac; retornam
+ao voltar aos módulos. Pads 1 e Pads 2 ficam empilhados, com Low/High lado a
+lado abaixo deles, no nativo e na WebView. Cada módulo nativo volta a ter
+contorno bronze de 1,5 pt com opacidade 78%, conforme a referência web.
+Os nomes dos presets e dos bancos inativos usam sua cor sobre o fundo cinza;
+selecionados mantêm o fundo colorido. A coleção incluída se chama Loops Gospel.
+Segurar os knobs de Playlist a Módulos (clique direito no Mac) abre o
+mapeamento MIDI; o menu de ligar/desligar saída foi removido desses controles.
+O modal do metrônomo segue a WebView: A-B, compasso editável, 2x, Click 1–5,
+Learn CC ON/OFF e Clean. Acento e tempo duplo são enviados ao motor e salvos
+na sessão como campos opcionais, mantendo leitura de backups anteriores.
+
+Playlists de loop (incluídas ou do usuário) substituem Repeat/Auto/Add-BL/Edit
+no painel de 30% por Click ON/OFF. ON preserva L/R; OFF envia somente R aos
+dois canais, sem somar L e sem reiniciar a faixa. A preferência é salva e não
+altera músicas de playlists normais. Selecionar uma playlist de loop desliga
+e deixa o metrônomo normal em preto e branco. O toque mostra “Saia da playlist
+de loops para usar o metrônomo”; o Play de loops não inicia nem sincroniza seu
+relógio. Enquanto um loop toca, MIDI também não pode ligar o metrônomo.
+Android/Windows usam o mesmo roteamento no grafo Web Audio. Toggle Rotary
+abre Learn no long press/clique direito e conserva Slow/Fast no toque simples.
+
+Repeat/Auto/Add-BL/Edit no painel de 30% usam altura de 48 pt/px no nativo
+e na WebView, mantendo os quatro controles na mesma linha.
+
+O gerenciador usa cartões de música retangulares de 44–56 pt, sem esticar
+quatro linhas até a altura total. Nomes ficam à esquerda com até duas linhas,
+com o mesmo padrão na seleção de músicas para playlists. Pads 1/2 empilhados
+usam altura de 32 pt no compacto e 38 pt nas telas maiores.
+
+Desktop: tamanho inicial externo de 1128 × 673 pontos lógicos, medido na
+janela do Mac em uso. Catalyst aplica a geometria uma vez por abertura da
+janela; Windows desconta bordas/barra de título conforme o DPI ao configurar
+a área interna. Redimensionamento durante o uso continua disponível.
+
+Seletor de áudio: Catalyst lista saídas Core Audio com UID/nome/canais,
+incluindo USB. O motor RemoteIO segue a saída padrão do macOS (CurrentDevice
+retorna -10879); por isso a escolha altera a saída do sistema, informado no
+próprio campo. Smoke com o motor compilado enumerou Scarlett 8i6 USB (6 canais)
+e alto-falantes internos (2), e confirmou seleção do UID atual sem mudar a rota.
+No iPad/iPhone o campo inteiro aciona AVRoutePickerView, com nome/canais da rota
+atualizados após mudanças. A seleção de rotas continua sob controle do iPadOS.
+A retomada de áudio pausa/reabre o grafo preservando o runtime e os SF2.

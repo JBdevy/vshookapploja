@@ -78,6 +78,14 @@ final class BronzeNativeAccount: ObservableObject {
     // Same production backend as src/main.ts; credentials are never in the binary.
     private let base = URL(string: "https://hookupdate7.up.railway.app")!
     var authorized: Bool { session != nil }
+    private static var platformName: String {
+        #if targetEnvironment(macCatalyst)
+        return "macOS"
+        #else
+        return "iOS"
+        #endif
+    }
+
 
     init() {
         let config = URLSessionConfiguration.ephemeral
@@ -111,7 +119,7 @@ final class BronzeNativeAccount: ObservableObject {
     }
     func restore() async {
         guard restoring else { return }
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG && (targetEnvironment(simulator) || targetEnvironment(macCatalyst))
         if ProcessInfo.processInfo.environment["BRONZE_UI_TEST"] == "1" {
             session = BronzeAccountSession(token: "", account: BronzeAccountIdentity(email: "preview@example.invalid", name: "Teste"))
             if ProcessInfo.processInfo.environment["BRONZE_LIBRARY_UI_TEST"] == "1" {
@@ -148,7 +156,7 @@ final class BronzeNativeAccount: ObservableObject {
     func login(email: String, password: String) async {
         await perform {
             try await self.accept(self.request("auth/password/login", body: ["email": email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-                "password": password, "deviceKey": BronzeKeychain.deviceKey(), "platform": "iOS"]))
+                "password": password, "deviceKey": BronzeKeychain.deviceKey(), "platform": Self.platformName]))
         }
     }
     func resetLoginFlow() {
@@ -164,11 +172,11 @@ final class BronzeNativeAccount: ObservableObject {
     }
     func submitCode(_ code: String) async {
         await perform { try await self.accept(self.request("auth/verify-code", body: ["challengeId": self.flowID, "code": code,
-            "deviceKey": BronzeKeychain.deviceKey(), "platform": "iOS"])) }
+            "deviceKey": BronzeKeychain.deviceKey(), "platform": Self.platformName])) }
     }
     func setupPassword(_ password: String) async {
         await perform { try await self.accept(self.request("auth/password/setup", body: ["passwordToken": self.flowID, "password": password,
-            "deviceKey": BronzeKeychain.deviceKey(), "platform": "iOS"])) }
+            "deviceKey": BronzeKeychain.deviceKey(), "platform": Self.platformName])) }
     }
     func registerDevice(name: String) async {
         await perform { try await self.accept(self.request("auth/device-registration/complete", body: ["registrationId": self.flowID, "deviceName": name])) }
@@ -308,19 +316,29 @@ final class BronzeNativeAccount: ObservableObject {
     nonisolated static func parseCatalog(_ data: Data) throws -> [BronzeCatalogCategory] {
         try BronzeNativeCatalog.parse(data)
     }
-    func download(_ sound: BronzeCatalogSound) async throws -> URL {
-        guard let token = session?.token, downloading == nil else { throw BronzeAPIError.invalid }
+    func download(_ sound: BronzeCatalogSound, progress: @escaping @MainActor @Sendable (Int64, Int64) -> Void) async throws -> URL {
+        guard let token = session?.token else { throw BronzeAPIError.response(401, "Entre novamente para baixar os timbres.") }
+        guard downloading == nil else { throw BronzeAPIError.response(0, "Já existe um timbre sendo baixado. Aguarde ou cancele o download atual.") }
         downloading = sound.id; defer { downloading = nil }
         let result = try await request("account/sound-assets/url", body: ["objectKey": sound.objectKey, "kind": "sf2"], token: token)
         guard session?.token == token else { throw CancellationError() }
-        guard let address = result["url"] as? String, let url = URL(string: address), url.scheme == "https" else { throw BronzeAPIError.invalid }
+        guard let address = result["url"] as? String, let url = URL(string: address), url.scheme == "https" else {
+            throw BronzeAPIError.response(0, "O servidor não forneceu um endereço válido para este timbre.")
+        }
         // Do not forward the account bearer token to the asset/CDN host.
-        let (temporary, response) = try await network.download(from: url)
+        let observer = BronzeCatalogDownloadObserver(progress: progress)
+        let (temporary, response) = try await observer.download(from: url, configuration: network.configuration)
         defer { try? FileManager.default.removeItem(at: temporary) }
+        try Task.checkCancellation()
         guard session?.token == token else { throw CancellationError() }
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), http.url?.scheme == "https" else { throw BronzeAPIError.invalid }
+        guard let http = response as? HTTPURLResponse, http.url?.scheme == "https" else { throw BronzeAPIError.invalid }
+        guard (200..<300).contains(http.statusCode) else { throw BronzeAPIError.response(http.statusCode, "O servidor do arquivo respondeu HTTP \(http.statusCode). Tente baixar novamente.") }
         let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size > 12, sound.byteSize.map({ $0 <= 0 || $0 == size }) ?? true else { throw BronzeAPIError.invalid }
+        guard size > 12 else { throw BronzeAPIError.response(0, "O arquivo recebido está vazio ou incompleto.") }
+        guard sound.byteSize.map({ $0 <= 0 || $0 == size }) ?? true else {
+            throw BronzeAPIError.response(0, "O tamanho do arquivo recebido não confere com o catálogo. Atualize o catálogo e tente novamente.")
+        }
+        progress(Int64(size), Int64(size))
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         var delivered = false
         defer { if !delivered { try? FileManager.default.removeItem(at: destination) } }
@@ -331,11 +349,11 @@ final class BronzeNativeAccount: ObservableObject {
             let input = try FileHandle(forReadingFrom: temporary); defer { try? input.close() }
             let header = try input.read(upToCount: 12) ?? Data()
             guard header.count == 12, String(data: header.prefix(4), encoding: .ascii) == "RIFF",
-                  String(data: header.suffix(4), encoding: .ascii) == "sfbk" else { throw BronzeAPIError.invalid }
+                  String(data: header.suffix(4), encoding: .ascii) == "sfbk" else { throw BronzeAPIError.response(0, "O arquivo recebido não é um timbre SF2 válido.") }
             if let expected = sound.sha256, !expected.isEmpty {
                 try input.seek(toOffset: 0); var hash = SHA256()
                 while let data = try input.read(upToCount: 256 * 1024), !data.isEmpty { hash.update(data: data) }
-                guard hash.finalize().map({ String(format: "%02x", $0) }).joined() == expected.lowercased() else { throw BronzeAPIError.invalid }
+                guard hash.finalize().map({ String(format: "%02x", $0) }).joined() == expected.lowercased() else { throw BronzeAPIError.response(0, "A integridade do arquivo não confere com o catálogo. Tente baixar novamente.") }
             }
             try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: temporary, to: output)
@@ -349,7 +367,7 @@ final class BronzeNativeAccount: ObservableObject {
     }
 
     func previewData(_ sound: BronzeCatalogSound) async throws -> Data {
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG && (targetEnvironment(simulator) || targetEnvironment(macCatalyst))
         if ProcessInfo.processInfo.environment["BRONZE_LIBRARY_UI_TEST"] == "1",
            let url = Bundle.main.url(forResource: "01-kick", withExtension: "mp3", subdirectory: "fx-1") {
             return try Data(contentsOf: url)
@@ -375,5 +393,72 @@ final class BronzeNativeAccount: ObservableObject {
               directory.deletingLastPathComponent().resolvingSymlinksInPath().path == FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL.path,
               url.pathExtension.lowercased() == "sf2" else { return }
         try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+// A download task without a completion-handler adapter delivers byte callbacks
+// to the session delegate on iOS 15/16. Files stay on disk throughout transfer.
+private final class BronzeCatalogDownloadObserver: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let progress: @MainActor @Sendable (Int64, Int64) -> Void
+    private let lock = NSLock()
+    private var lastUpdate = 0.0
+    private var continuation: CheckedContinuation<(URL, URLResponse), Error>?
+    private var task: URLSessionDownloadTask?
+    private var cancelled = false
+    init(progress: @escaping @MainActor @Sendable (Int64, Int64) -> Void) { self.progress = progress }
+
+    func download(from url: URL, configuration: URLSessionConfiguration) async throws -> (URL, URLResponse) {
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                if cancelled {
+                    lock.unlock(); continuation.resume(throwing: CancellationError()); return
+                }
+                self.continuation = continuation
+                let next = session.downloadTask(with: url)
+                task = next
+                lock.unlock()
+                next.resume()
+            }
+        }, onCancel: { self.cancel() })
+    }
+    private func cancel() {
+        lock.lock(); cancelled = true; let active = task; lock.unlock()
+        active?.cancel()
+    }
+    private func finish(_ result: Result<(URL, URLResponse), Error>) {
+        lock.lock()
+        let pending = continuation; continuation = nil; task = nil
+        let wasCancelled = cancelled
+        lock.unlock()
+        if pending == nil || wasCancelled {
+            if case .success(let value) = result { try? FileManager.default.removeItem(at: value.0) }
+        }
+        if wasCancelled { pending?.resume(throwing: CancellationError()) }
+        else { pending?.resume(with: result) }
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        let publish = !cancelled && (now - lastUpdate >= 0.1 || (totalBytesExpectedToWrite > 0 && totalBytesWritten >= totalBytesExpectedToWrite))
+        if publish { lastUpdate = now }
+        lock.unlock()
+        guard publish else { return }
+        Task { @MainActor [progress] in progress(totalBytesWritten, totalBytesExpectedToWrite) }
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        // Delegate temporary files disappear when this callback returns.
+        let saved = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".download")
+        do {
+            guard let response = downloadTask.response else { throw URLError(.badServerResponse) }
+            try FileManager.default.moveItem(at: location, to: saved)
+            finish(.success((saved, response)))
+        } catch { try? FileManager.default.removeItem(at: saved); finish(.failure(error)) }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error { finish(.failure(error)) }
     }
 }

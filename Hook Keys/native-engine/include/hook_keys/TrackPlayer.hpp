@@ -186,6 +186,10 @@ public:
     outputCount_.store(channelCount == 1 ? 1 : 2, std::memory_order_release);
   }
 
+  void setRightChannelOnly(bool enabled) noexcept {
+    rightChannelOnly_.store(enabled, std::memory_order_release);
+  }
+
   [[nodiscard]] std::uint64_t frameCount(std::uint32_t id) {
     std::scoped_lock lock(mutex_);
     const auto* source = findLocked(id);
@@ -240,6 +244,7 @@ public:
     }
     std::array<float, 2> blockPeaks{};
     const auto playbackRate = std::clamp(playbackRate_.load(std::memory_order_acquire), 0.5f, 2.5f);
+    const bool rightOnly = rightChannelOnly_.load(std::memory_order_acquire);
     for (std::size_t frame = 0; frame < frames; ++frame) {
       if (!hasBlock_ && !nextBlock(generation)) break;
       if (block_.end) {
@@ -258,8 +263,9 @@ public:
       const auto nextOffset = std::min<std::size_t>(blockOffset_ + 1, block_.frames - 1);
       const auto leftSample = block_.samples[blockOffset_ * 2];
       const auto rightSample = block_.samples[blockOffset_ * 2 + 1];
-      const auto left = (leftSample + (block_.samples[nextOffset * 2] - leftSample) * playbackPhase_) * amount;
+      const auto originalLeft = (leftSample + (block_.samples[nextOffset * 2] - leftSample) * playbackPhase_) * amount;
       const auto right = (rightSample + (block_.samples[nextOffset * 2 + 1] - rightSample) * playbackPhase_) * amount;
+      const auto left = rightOnly ? right : originalLeft;
       blockPeaks[0] = std::max(blockPeaks[0], std::abs(left));
       blockPeaks[1] = std::max(blockPeaks[1], std::abs(right));
       auto* destination = output + frame * channels;
@@ -409,6 +415,7 @@ private:
   std::atomic<float> gainTarget_{1.0f};
   std::atomic<float> playbackRate_{1.0f};
   std::atomic<std::uint8_t> outputStart_{0};
+  std::atomic<bool> rightChannelOnly_{false};
   std::atomic<std::uint8_t> outputCount_{2};
 
   // Somente o callback de áudio.

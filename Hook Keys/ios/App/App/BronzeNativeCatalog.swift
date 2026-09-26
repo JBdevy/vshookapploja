@@ -183,3 +183,16 @@ extension BronzeCatalogSound {
         return settings
     }
 }
+
+struct BronzeDownloadProgress: Equatable, Sendable {
+    var received: Int64 = 0
+    var expected: Int64 = 0
+    var fraction: Double? {
+        guard expected > 0 else { return nil }
+        return min(1, max(0, Double(received) / Double(expected)))
+    }
+    mutating func record(received: Int64, expected: Int64) {
+        self.received = max(self.received, received)
+        if expected > 0 { self.expected = expected }
+    }
+}

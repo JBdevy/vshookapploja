@@ -1,6 +1,6 @@
 import type { LocalTrack } from './TrackLibraryStore';
 
-export type NativeTrackAction = 'play' | 'pause' | 'seek' | 'loop' | 'rate' | 'unload';
+export type NativeTrackAction = 'play' | 'pause' | 'seek' | 'loop' | 'rate' | 'unload' | 'right-mono';
 
 export interface NativeTrackStatus {
   activeId: number;
@@ -79,6 +79,7 @@ export class NativeTrackSource extends EventTarget {
   private playing = false;
   private loopEnabled = false;
   private playbackRateValue = 1;
+  private rightChannelOnly = false;
   private loaded: Promise<boolean> | null = null;
   private engineLoaded = false;
   private openSerial = 0;
@@ -180,6 +181,13 @@ export class NativeTrackSource extends EventTarget {
     void this.enqueue(() => this.bridge.controlTrack(this.id, 'unload')).catch(() => undefined);
   }
 
+  setRightChannelOnly(enabled: boolean): void {
+    this.rightChannelOnly = enabled;
+    void this.enqueue(async () => {
+      if (this.engineLoaded) await this.bridge.controlTrack(this.id, 'right-mono', { loop: enabled });
+    }).catch(() => undefined);
+  }
+
   async play(syncMetronome = false): Promise<void> {
     if (!this.loaded || !await this.loaded) throw new Error('track_not_ready');
     if (this.durationSeconds > 0 && this.position >= this.durationSeconds) this.position = 0;
@@ -187,11 +195,13 @@ export class NativeTrackSource extends EventTarget {
     try {
       await this.enqueue(async () => {
         try {
+          await this.bridge.controlTrack(this.id, 'right-mono', { loop: this.rightChannelOnly });
           await this.bridge.controlTrack(this.id, 'play', { syncMetronome });
         } catch (error) {
           // O motor foi recriado (troca de saída): carrega de novo e retoma.
           if (!isTrackNotLoaded(error)) throw error;
           await this.loadIntoEngine(this.openSerial);
+          await this.bridge.controlTrack(this.id, 'right-mono', { loop: this.rightChannelOnly });
           await this.bridge.controlTrack(this.id, 'play', { syncMetronome });
         }
       });

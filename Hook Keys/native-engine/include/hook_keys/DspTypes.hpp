@@ -216,6 +216,7 @@ struct RotaryConfig final {
   // O módulo 7 (Organ) mantém a resposta real do gabinete mesmo com a
   // rotação desligada; o bridge nativo liga esta opção somente nele.
   bool cabinetEnabled = false;
+  bool dopplerEnabled = true; // Organ keeps rotation without pitch modulation.
 
   void normalize() noexcept {
     speed = std::min<std::uint8_t>(speed, 2);

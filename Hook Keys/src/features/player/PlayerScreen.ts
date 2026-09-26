@@ -128,6 +128,7 @@ import {
   isReverbSpace,
   readReverbSpace,
   readReverbSpaceMix,
+  readReverbSpaceDecay,
   REVERB_SPACES,
   createModuleChorusMarkup,
   createModuleLoFiMarkup,
@@ -505,7 +506,7 @@ function formatCcLimit(target: CcLearnTarget, limitPercent: number): string {
   const ranges: Record<string, readonly [number, number]> = {
     'compressor:thresholdDb': [-60, 0], 'compressor:ratio': [1, 20], 'compressor:gainDb': [0, 24],
     'compressor:attackMs': [0.1, 100], 'compressor:releaseMs': [10, 1_000], 'compressor:mix': [0, 100],
-    'reverb:decay': [0.1, 20], 'reverb:dampen': [0, 100], 'reverb:size': [0, 100], 'reverb:mix': [0, 100],
+    'reverb:decay': [10, 100], 'reverb:dampen': [0, 100], 'reverb:size': [0, 100], 'reverb:mix': [0, 100],
     'delay:feedback': [0, 95], 'delay:mix': [0, 100], 'delay:milliseconds': [1, 2_000],
     'rotary:slowHz': [0.2, 2], 'rotary:fastHz': [2, 10], 'rotary:rampSeconds': [0.1, 10],
     'rotary:depth': [0, 100], 'rotary:mix': [0, 100],
@@ -1120,7 +1121,8 @@ export class PlayerScreen {
   private outputFaderController: OutputFaderPanelController | null = null;
   private trackTransport: TrackTransportController | null = null;
   private tracksAutoEnabled = false;
-  private loopMetronomePlaying = false;
+  private loopPlaylistSelected = false;
+  private loopClickEnabled = true;
   private tracksLoopEnabled = false;
   private tracksActivePlaylistId: string | null = null;
   private visibleTrackSequence: LocalTrack[] = [];
@@ -1294,7 +1296,6 @@ export class PlayerScreen {
   private soloedModuleNumber: number | null = null;
   private suppressNextModuleSoundClick = false;
   private suppressNextPresetClick = false;
-  private suppressNextTracksClick = false;
   private suppressNextEffectBankClick = false;
   private suppressNextMetronomeClick = false;
   private suppressNextTempoClick = false;
@@ -1421,7 +1422,7 @@ export class PlayerScreen {
                 class="player-brand"
                 type="button"
                 data-action="open-about"
-                aria-label="Sobre o Bronze Keys"
+                aria-label="Mostrar ou ocultar playlist lateral"
               >
                 <img class="player-brand__image" src="/assets/icons/256x256.png" alt="">
                 <span class="player-brand__name"><strong>Bronze</strong> Keys</span>
@@ -1648,12 +1649,12 @@ export class PlayerScreen {
       (trigger) => this.openModal('track-position', null, trigger),
       hookKeysNative.tracksAvailable() ? new NativeTrackPlayer(hookKeysNative.trackBridge) : null,
       async () => {
-        // O relógio começa mudo no mesmo gesto do Play. O botão Click apenas
-        // abre/fecha seu volume depois, sem reiniciar nem perder a fase.
-        this.loopMetronomePlaying = true;
-        await this.metronome.startLoopPlaybackClock();
+        this.metronome.stop();
+        await this.metronome.syncNativeState();
       },
+      (trigger) => this.openModal('tracks', null, trigger),
     );
+    this.trackTransport.setLoopClickEnabled(this.loopClickEnabled);
     this.trackTransport.mount();
     if (this.desktopRuntime) {
       document.addEventListener('keydown', this.handleDesktopPlaylistKeydown);
@@ -2322,18 +2323,8 @@ export class PlayerScreen {
     }
 
     if (action === 'open-about') {
-      // Long press no Hook Keys abre a Playlist 30%; o clique que o mesmo toque
-      // gera depois não abre o modal por cima. Com os 30% abertos, um toque
-      // simples só fecha a Playlist; o modal (Modo Lite) abre com ela fechada.
-      if (this.suppressNextTracksClick) {
-        this.suppressNextTracksClick = false;
-        return;
-      }
-      if (this.splitTracksController) {
-        this.closeTracksSplitView();
-        return;
-      }
-      this.openModal('about', null, actionButton);
+      if (this.splitTracksController) this.closeTracksSplitView();
+      else this.openTracksSplitView();
       return;
     }
 
@@ -2403,6 +2394,23 @@ export class PlayerScreen {
   private onRootInput(event: Event): void {
     const input = event.target;
     if (!(input instanceof HTMLInputElement)) return;
+    if (input.matches('[data-effect-inline-volume]')) {
+      const number = Number(input.dataset.effectInlineVolume);
+      const state = this.effectPadStates.get(this.activeEffectBank)?.[number - 1];
+      if (!state || !Number.isFinite(Number(input.value))) return;
+      state.volumeDb = boundedNumber(input.value, EFFECT_PAD_MIN_DB, EFFECT_PAD_MAX_DB, state.volumeDb);
+      const baseGain = Math.pow(10, state.volumeDb / 20);
+      const busGain = this.outputEnabled.effects ? Math.pow(10, this.outputLevels.effects / 20) : 0;
+      for (const audio of this.effectPadAudio.get(`${this.activeEffectBank}:${number}`)?.voices ?? []) {
+        this.effectAudioBaseGain.set(audio, baseGain);
+        audio.volume = Math.min(1, Math.max(0, baseGain * busGain));
+      }
+      input.setAttribute('aria-valuetext', formatOutputDb(state.volumeDb));
+      const output = input.parentElement?.querySelector('output');
+      if (output) output.textContent = formatOutputDb(state.volumeDb);
+      this.markPlayerStateChanged();
+      return;
+    }
     if (input.matches('[data-knob-focus-fader]')) {
       const source = this.knobFocusInput;
       if (!source?.isConnected || source.disabled) return;
@@ -2508,6 +2516,9 @@ export class PlayerScreen {
     if (tempoButton) tempoButton.setAttribute('aria-label', `Tap Tempo. ${bpm} BPM`);
     const running = this.metronome.isRunning();
     for (const metronomeButton of this.root.querySelectorAll<HTMLButtonElement>('[data-action="toggle-metronome"]')) {
+      metronomeButton.hidden = false;
+      metronomeButton.disabled = false;
+      metronomeButton.classList.toggle('is-loop-blocked', this.loopPlaylistSelected || this.trackPlaybackSnapshot.loopPlaying);
       metronomeButton.classList.toggle('is-active', running);
       metronomeButton.setAttribute('aria-pressed', String(running));
       metronomeButton.setAttribute('aria-label', `${running ? 'Desligar' : 'Ligar'} metrônomo`);
@@ -2549,7 +2560,26 @@ export class PlayerScreen {
     this.markPlayerStateChanged();
   }
 
+  private setLoopPlaylistSelected(isLoop: boolean): void {
+    this.loopPlaylistSelected = isLoop;
+    if (isLoop) this.metronome.stop();
+    this.renderMetronomeState();
+  }
+
   private toggleMetronome(): void {
+    if (this.loopPlaylistSelected || this.trackPlaybackSnapshot.loopPlaying) {
+      this.root.querySelector('[data-metronome-notice]')?.remove();
+      const notice = document.createElement('div');
+      notice.dataset.metronomeNotice = '';
+      notice.className = 'metronome-notice';
+      notice.setAttribute('role', 'alert');
+      notice.textContent = this.loopPlaylistSelected
+        ? 'Saia da playlist de loops para usar o metrônomo.'
+        : 'Pare o loop para usar o metrônomo.';
+      this.root.append(notice);
+      window.setTimeout(() => notice.remove(), 5000);
+      return;
+    }
     this.metronome.toggle();
     this.markPlayerStateChanged();
     if (this.metronome.isRunning()) {
@@ -2799,13 +2829,6 @@ export class PlayerScreen {
         });
       }
       this.updateMetronomeFaderFromPointer(this.metronomeFaderDrag, event.clientX);
-      return;
-    }
-
-    const brandButton = eventTarget.closest<HTMLButtonElement>('[data-action="open-about"]');
-    if (brandButton && this.root.contains(brandButton)) {
-      // O long press só abre; fechar é com um toque simples.
-      if (!this.splitTracksController) this.startTracksHoldGesture(brandButton, event);
       return;
     }
 
@@ -3247,7 +3270,8 @@ export class PlayerScreen {
 
     const brandButton = target.closest<HTMLButtonElement>('[data-action="open-about"]');
     if (brandButton) {
-      if (!this.splitTracksController) this.openTracksSplitView();
+      if (this.splitTracksController) this.closeTracksSplitView();
+      else this.openTracksSplitView();
       return;
     }
 
@@ -3322,29 +3346,6 @@ export class PlayerScreen {
     this.effectEditHoldGesture = null;
   }
 
-  private startTracksHoldGesture(button: HTMLButtonElement, event: PointerEvent): void {
-    if (this.desktopRuntime) return;
-    this.clearTracksHoldGesture();
-    this.releaseCapturedTracksPointer();
-    button.setPointerCapture(event.pointerId);
-    this.capturedTracksPointer = { button, pointerId: event.pointerId };
-    const timer = window.setTimeout(() => {
-      this.tracksHoldGesture = null;
-      this.suppressNextTracksClick = true;
-      window.setTimeout(() => {
-        this.suppressNextTracksClick = false;
-      }, 700);
-      this.openTracksSplitView();
-    }, 560);
-    this.tracksHoldGesture = {
-      button,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      timer,
-    };
-  }
-
   private clearTracksHoldGesture(): void {
     if (!this.tracksHoldGesture) return;
     window.clearTimeout(this.tracksHoldGesture.timer);
@@ -3378,6 +3379,13 @@ export class PlayerScreen {
         initialPlaylistId: this.tracksActivePlaylistId,
         getPlaybackSnapshot: () => this.trackTransport?.getSnapshot() ?? this.trackPlaybackSnapshot,
         onActivePlaylistChanged: (playlistId) => { this.tracksActivePlaylistId = playlistId; },
+        loopClickEnabled: this.loopClickEnabled,
+        onLoopPlaylistChanged: (isLoop) => this.setLoopPlaylistSelected(isLoop),
+        onLoopClickChanged: (enabled) => {
+          this.loopClickEnabled = enabled;
+          this.trackTransport?.setLoopClickEnabled(enabled);
+          this.markPlayerStateChanged();
+        },
         onAutoEnabledChanged: (enabled) => this.setTracksAutoEnabled(enabled),
         onLoopEnabledChanged: (enabled) => {
           this.tracksLoopEnabled = enabled;
@@ -3404,11 +3412,10 @@ export class PlayerScreen {
   }
 
   private handleTrackPlaybackSnapshot(snapshot: TrackPlaybackSnapshot): void {
-    if (snapshot.loopPlaying !== this.loopMetronomePlaying) {
-      this.loopMetronomePlaying = snapshot.loopPlaying;
-      this.metronome.setLoopPlaybackActive(snapshot.loopPlaying, snapshot.loopPlaying);
-    }
+    if (snapshot.loopPlaying) this.metronome.stop();
+    const loopStateChanged = this.trackPlaybackSnapshot.loopPlaying !== snapshot.loopPlaying;
     this.trackPlaybackSnapshot = snapshot;
+    if (loopStateChanged) this.renderMetronomeState();
     this.renderQueuedTrackName(snapshot.queuedTrackName);
     this.tracksPanelController?.syncPlayback(snapshot);
     this.splitTracksController?.syncPlayback(snapshot);
@@ -3895,6 +3902,14 @@ export class PlayerScreen {
       button.setAttribute('aria-label', name);
       button.classList.toggle('is-active', state?.active === true);
       button.setAttribute('aria-pressed', String(state?.active === true));
+      const slider = button.parentElement?.querySelector<HTMLInputElement>('[data-effect-inline-volume]');
+      if (slider) {
+        slider.value = String(state?.volumeDb ?? 0);
+        slider.setAttribute('aria-label', `Volume de ${name}`);
+        slider.setAttribute('aria-valuetext', formatOutputDb(state?.volumeDb ?? 0));
+        const output = slider.parentElement?.querySelector('output');
+        if (output) output.textContent = formatOutputDb(state?.volumeDb ?? 0);
+      }
     }
   }
 
@@ -6059,13 +6074,6 @@ export class PlayerScreen {
           ?? `Efeito ${moduleNumber}`
         : effectPadState?.name ?? `Efeito ${moduleNumber}`;
       const supportsAudioAssignment = this.activeEffectBank !== '1';
-      const effectVolumeDb = boundedNumber(
-        effectPadState?.volumeDb,
-        EFFECT_PAD_MIN_DB,
-        EFFECT_PAD_MAX_DB,
-        EFFECT_PAD_MAX_DB,
-      );
-      const effectVolumePosition = ((effectVolumeDb - EFFECT_PAD_MIN_DB) / (EFFECT_PAD_MAX_DB - EFFECT_PAD_MIN_DB)) * 100;
       bodyMarkup = `
         <section
           class="effect-pad-editor${supportsAudioAssignment ? ' has-audio-options' : ''}${hasFixedEffectName ? ' has-fixed-name' : ''}"
@@ -6100,22 +6108,6 @@ export class PlayerScreen {
               ></button>
             `).join('')}
           </div>
-          <label class="effect-pad-volume">
-            <span>Volume do pad</span>
-            <div class="effect-pad-volume__control" style="--effect-pad-volume-position:${effectVolumePosition}%">
-              <input
-                type="range"
-                min="${EFFECT_PAD_MIN_DB}"
-                max="${EFFECT_PAD_MAX_DB}"
-                step="0.1"
-                value="${effectVolumeDb}"
-                data-effect-pad-volume
-                aria-label="Volume individual do pad"
-                aria-valuetext="${formatOutputDb(effectVolumeDb)}"
-              >
-            </div>
-            <output data-effect-pad-volume-value>${formatOutputDb(effectVolumeDb)}</output>
-          </label>
           <div class="cc-action-pair effect-pad-editor__cc-actions">
             <button class="effect-pad-editor__learn" type="button" data-modal-action="learn-effect-cc">
               <span>Learn Note · CH 10</span>
@@ -8146,6 +8138,13 @@ export class PlayerScreen {
           initialPlaylistId: this.tracksActivePlaylistId,
           getPlaybackSnapshot: () => this.trackTransport?.getSnapshot() ?? this.trackPlaybackSnapshot,
           onActivePlaylistChanged: (playlistId) => { this.tracksActivePlaylistId = playlistId; },
+        loopClickEnabled: this.loopClickEnabled,
+        onLoopPlaylistChanged: (isLoop) => this.setLoopPlaylistSelected(isLoop),
+        onLoopClickChanged: (enabled) => {
+          this.loopClickEnabled = enabled;
+          this.trackTransport?.setLoopClickEnabled(enabled);
+          this.markPlayerStateChanged();
+        },
           onTrackSelected: (track) => this.selectTrack(track),
           onTracksDeleting: (tracks) => this.deleteStoredTracks(tracks),
           onAddMusicRequested: () => {
@@ -10213,7 +10212,7 @@ export class PlayerScreen {
       'compressor:attackMs': [0.1, 100],
       'compressor:releaseMs': [10, 1_000],
       'compressor:mix': [0, 100],
-      'reverb:decay': [0.1, 20],
+      'reverb:decay': [10, 100],
       'reverb:dampen': [0, 100],
       'reverb:size': [0, 100],
       'reverb:mix': [0, 100],
@@ -10241,11 +10240,11 @@ export class PlayerScreen {
     if (!range) return;
     const value = range[0] + (range[1] - range[0]) * progress;
     const settings = readModuleEffectSettings(effectKind, moduleState.settings[effectKind]);
-    const reverbMixes = effectKind === 'reverb' && effectControl === 'mix'
+    const reverbMixes = effectKind === 'reverb' && (effectControl === 'mix' || effectControl === 'decay')
       ? ensureReverbMixPresets(moduleState.settings) : null;
     (settings as unknown as Record<string, number | string | boolean>)[effectControl] = value;
     moduleState.settings[effectKind] = settings;
-    if (reverbMixes) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)].mix = value;
+    if (reverbMixes && (effectControl === 'mix' || effectControl === 'decay')) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)][effectControl] = value;
     this.markPlayerStateChanged();
   }
 
@@ -10421,10 +10420,10 @@ export class PlayerScreen {
 
     const settings = readModuleEffectSettings(kind, moduleState.settings[kind]);
     if (!(key in settings)) return;
-    const reverbMixes = kind === 'reverb' && key === 'mix' ? ensureReverbMixPresets(moduleState.settings) : null;
+    const reverbMixes = kind === 'reverb' && (key === 'mix' || key === 'decay') ? ensureReverbMixPresets(moduleState.settings) : null;
     (settings as unknown as Record<string, number | string>)[key] = value;
     moduleState.settings[kind] = settings;
-    if (reverbMixes) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)].mix = value;
+    if (reverbMixes && (key === 'mix' || key === 'decay')) reverbMixes[readReverbSpace(moduleState.settings.reverbSpace)][key] = value;
 
     const minimum = Number(input.min);
     const maximum = Number(input.max);
@@ -12316,7 +12315,7 @@ export class PlayerScreen {
           delayBeatMultiplier: delayDivisionMultiplier(delay.division),
           delayFeedback: delay.feedback / 100,
           delayMix: delay.enabled ? delay.mix / 100 : 0,
-          reverbDecay: (reverb.decay - 0.1) / 19.9,
+          reverbDecay: readReverbSpaceDecay(moduleState.settings) / 100,
           reverbDampen: reverb.dampen / 100,
           reverbMod: reverb.mod / 100,
           reverbSize: reverb.size / 100,
@@ -12495,6 +12494,7 @@ export class PlayerScreen {
       audioRouting: { ...this.audioRouting },
       outputLevels: { ...this.outputLevels },
       outputEnabled: { ...this.outputEnabled },
+      loopClickEnabled: this.loopClickEnabled,
       metronome: {
         accentEnabled: this.metronome.isAccentEnabled(),
         bpm: this.metronome.getBpm(),
@@ -12609,6 +12609,8 @@ export class PlayerScreen {
       effects: typeof savedOutputEnabled.effects === 'boolean' ? savedOutputEnabled.effects : true,
       master: typeof savedOutputEnabled.master === 'boolean' ? savedOutputEnabled.master : true,
     };
+    this.loopClickEnabled = value.loopClickEnabled !== false;
+    this.trackTransport?.setLoopClickEnabled(this.loopClickEnabled);
     const savedMetronome = isRecord(value.metronome) ? value.metronome : {};
     const savedClickSound = Number(savedMetronome.clickSound);
     this.metronome.applySavedSettings(
@@ -13021,16 +13023,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function ensureReverbMixPresets(settings: Record<string, unknown>): Record<keyof typeof REVERB_SPACES, { mix: number }> {
+function ensureReverbMixPresets(settings: Record<string, unknown>): Record<keyof typeof REVERB_SPACES, { mix: number; decay: number }> {
   const existing = isRecord(settings.reverbSpaces) ? settings.reverbSpaces : {};
   const fallback = readModuleReverbSettings(settings.reverb).mix;
   const legacy: Partial<Record<keyof typeof REVERB_SPACES, string>> = { room1: 'room', room2: 'stage', hall1: 'hall' };
-  const mixes = {} as Record<keyof typeof REVERB_SPACES, { mix: number }>;
+  const mixes = {} as Record<keyof typeof REVERB_SPACES, { mix: number; decay: number }>;
   for (const key of Object.keys(REVERB_SPACES) as Array<keyof typeof REVERB_SPACES>) {
     const legacyKey = legacy[key];
     const saved = existing[key] ?? (legacyKey ? existing[legacyKey] : undefined);
     const value = isRecord(saved) ? Number(saved.mix) : Number.NaN;
-    mixes[key] = { mix: Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback };
+    const decay = isRecord(saved) ? Number(saved.decay) : Number.NaN;
+    mixes[key] = { mix: Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback,
+      decay: Number.isFinite(decay) ? Math.max(10, Math.min(100, decay)) : 100 };
   }
   settings.reverbSpaces = mixes;
   return mixes;

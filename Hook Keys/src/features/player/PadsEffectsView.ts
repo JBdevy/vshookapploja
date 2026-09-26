@@ -103,6 +103,7 @@ function createNoteButton(note: string): string {
 function createEffectButton(effectNumber: number): string {
   const colors = EFFECT_PAD_COLORS[effectNumber - 1] ?? EFFECT_PAD_COLORS[0];
   return `
+    <div class="performance-effect-cell">
     <button
       class="performance-pad performance-pad--effect"
       type="button"
@@ -113,6 +114,12 @@ function createEffectButton(effectNumber: number): string {
     >
       <span>Efeito ${effectNumber}</span>
     </button>
+    <label class="performance-effect-volume">
+      <input type="range" min="-36" max="0" step="0.1" value="0"
+        data-effect-inline-volume="${effectNumber}" aria-label="Volume do efeito ${effectNumber}">
+      <output>0 dB</output>
+    </label>
+    </div>
   `;
 }
 

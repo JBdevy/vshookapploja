@@ -28,7 +28,14 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                   bufferFrames:(NSInteger)bufferFrames
                     sampleRate:(double)sampleRate
                 preserveEngine:(BOOL)preserveEngine;
+// macOS uses the system output route; iOS exposes its current route.
+- (NSArray<NSDictionary<NSString *, id> *> *)listAudioOutputDevices;
+- (NSString *)selectedAudioOutputDeviceId;
+- (BOOL)selectSystemAudioOutputDeviceId:(NSString *)deviceId;
+- (BOOL)refreshAudioRouteWithBufferFrames:(NSInteger)bufferFrames sampleRate:(double)sampleRate;
 - (BOOL)audioOutputReady;
+@property(nonatomic, readonly) NSInteger effectiveBufferFrames;
+@property(nonatomic, readonly) double effectiveSampleRate;
 // Caminho do gerador até a saída (mixer ou direto), formatos e layouts de canais.
 - (NSString *)outputGraphDescription;
 - (void)setMidiInputEnabled:(BOOL)enabled;
@@ -241,6 +248,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                         enabled:(BOOL)enabled
                          gainDb:(float)gainDb
     NS_SWIFT_NAME(triggerEffect(bankIndex:itemIndex:enabled:gainDb:));
+- (BOOL)setEffectPadGainDb:(float)db bankIndex:(NSInteger)bankIndex itemIndex:(NSInteger)itemIndex;
 - (BOOL)setEffectOutputGainDb:(float)db enabled:(BOOL)enabled
                  channelStart:(NSInteger)channelStart channelCount:(NSInteger)channelCount;
 - (NSArray<NSNumber *> *)effectMeterLevels;
@@ -271,6 +279,7 @@ typedef void (^HKMidiPitchHandler)(NSInteger slot, NSString *deviceId, NSInteger
                                  enabled:(BOOL)enabled;
 - (void)setCompatibilityMode:(BOOL)enabled;
 - (void)setSeamlessPresetSwitching:(BOOL)enabled;
+- (BOOL)preloadSoundFontAtPath:(NSString *)path NS_SWIFT_NAME(preloadSoundFont(atPath:));
 - (void)stopAllNotes;
 
 @end

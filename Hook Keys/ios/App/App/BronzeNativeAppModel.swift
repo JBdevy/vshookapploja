@@ -29,7 +29,8 @@ final class BronzeNativeAppModel: ObservableObject {
 
     struct UserSoundFont: Identifiable, Hashable, Sendable {
         let url: URL
-        var id: String { url.path }
+        init(url: URL) { self.url = url.resolvingSymlinksInPath().standardizedFileURL }
+        var id: String { BronzeSessionStore.soundFontIdentity(url) }
         var name: String { url.deletingPathExtension().lastPathComponent }
     }
 
@@ -65,7 +66,10 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published var page: Page = .modules
     @Published var tempo = 120.0 { didSet { scheduleSessionSave() } }
     @Published private(set) var metronomeEnabled = false
+    @Published private(set) var loopClickEnabled = true { didSet { scheduleSessionSave() } }
     @Published private(set) var metronomeClickSound = 1 { didSet { scheduleSessionSave() } }
+    @Published private(set) var metronomeAccent = false { didSet { scheduleSessionSave() } }
+    @Published private(set) var metronomeDoubleTime = false { didSet { scheduleSessionSave() } }
     @Published private(set) var timeSignatureNumerator = 4 { didSet { scheduleSessionSave() } }
     @Published private(set) var timeSignatureDenominator = 4 { didSet { scheduleSessionSave() } }
     @Published var moduleLevels = Array(repeating: 0.0, count: 8)
@@ -73,10 +77,20 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var catalogDownloadTotal = 0
     @Published private(set) var catalogDownloadCompleted = 0
     @Published private(set) var catalogDownloadName: String?
+    @Published private(set) var catalogDownloadID: String?
+    @Published private(set) var catalogDownloadProgress = BronzeDownloadProgress()
+    @Published private(set) var catalogDownloadInstalling = false
+    @Published private(set) var catalogDownloadError: String?
+    var catalogDownloadOverall: Double {
+        min(1, (Double(catalogDownloadCompleted) + (catalogDownloadProgress.fraction ?? 0)) / Double(max(1, catalogDownloadTotal)))
+    }
     private var catalogDownloadTask: Task<Void, Never>?
     @Published private(set) var memoryMB = 0
     @Published private(set) var memoryPercent: Int?
     private var meterFrame = 0
+    private var lastMeterTime = ProcessInfo.processInfo.systemUptime
+    var compressorMeterModule: Int?
+    @Published private(set) var compressorLevels = [0.0, 0.0]
     @Published var moduleFaders = Array(repeating: 1.0, count: 8) { didSet { scheduleSessionSave() } }
     @Published private(set) var moduleEnabled = [false, false, false, false, false, false, true, false] { didSet { scheduleSessionSave() } }
     @Published private(set) var soloModule: Int? { didSet { scheduleSessionSave() } }
@@ -123,12 +137,19 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var effectLevels = Array(repeating: 0.0, count: 12)
     private var readyFX = Set<Int>()
     private var heldKeyboardNotes = Set<Int>()
+    private var keyboardNoteRoutes: [Int: Int] = [:]
+    private var keyboardPitchRoute: Int?
+    private var keyboardModulationRoute: Int?
+    private var midiKeyboard = BronzeMIDIKeyboardState()
+    @Published private(set) var midiKeyboardNotes = Set<Int>()
     @Published private(set) var presets = BronzeNativeSession().presets
     @Published private(set) var presetBank = 0
     @Published private(set) var activePreset: Int?
     @Published private(set) var moduleSettingsSources = Array(repeating: "default", count: 8)
     private var moduleDefaultSettings: [BronzeModuleSettings?] = Array(repeating: nil, count: 8)
     private var moduleUserSettings: [BronzeModuleSettings?] = Array(repeating: nil, count: 8)
+    private let presetWarmQueue = DispatchQueue(label: "bronze.preset.warm", qos: .utility)
+    private var presetWarmTask: Task<Void, Never>?
     @Published private(set) var isApplyingSnapshot = false
     @Published private(set) var persistenceAvailable = false
     struct BackupExport: Identifiable { let url: URL; var id: String { url.path } }
@@ -209,13 +230,34 @@ final class BronzeNativeAppModel: ObservableObject {
         next.channelStarts?[index] = start; next.channelCounts?[index] = count
         guard (try? next.validate()) != nil else { return }
         workspace.mixer = next; applyMixer()
+        if index == 4 {
+            for module in modulePerformance.indices where modulePerformance[module].usesDefaultOutput {
+                var config = modulePerformance[module]; config.outputUsesDefault = true
+                config.outputStart = start; config.outputCount = count
+                setPerformance(config, moduleIndex: module)
+            }
+            // Presets that follow the shared output must not restore an old route.
+            for preset in presets.indices {
+                guard var modules = presets[preset].modules else { continue }
+                for module in modules.indices {
+                    var config = modules[module].performance ?? BronzeModulePerformance()
+                    if config.usesDefaultOutput {
+                        config.outputUsesDefault = true; config.outputStart = start; config.outputCount = count
+                        modules[module].performance = config
+                    }
+                }
+                presets[preset].modules = modules
+            }
+        }
     }
 
     func panic() {
         stopPerformanceNotes(); endEffectTouches(); engine.stopAllNotes(); activePad = nil
+        midiKeyboard.clear(); publishMIDIKeyboard()
     }
 
     private func applyMixer() {
+        applyLoopChannelMode()
         _ = engine.configureTrackOutputChannelStart(mixer.channelStart(0), channelCount: mixer.channelCount(0), gainDb: outputDb(0), enabled: mixer.enabled[0])
         _ = engine.setPadOutputGainDb(outputDb(1), enabled: mixer.enabled[1], channelStart: mixer.channelStart(1), channelCount: mixer.channelCount(1),
             lowCutHz: Float(20 * pow(1000, padFilterLow)), highCutHz: Float(20 * pow(1000, padFilterHigh)))
@@ -252,8 +294,13 @@ final class BronzeNativeAppModel: ObservableObject {
         engine.onMidiControl = { [weak self] _, device, channel, cc, value in
             DispatchQueue.main.async { self?.receiveControl(device: device, channel: channel, cc: cc, value: value) }
         }
-        engine.onMidiNote = { [weak self] _, _, channel, note, velocity in
-            DispatchQueue.main.async { self?.receiveLearnNote(channel: channel, note: note, velocity: velocity) }
+        engine.onMidiNote = { [weak self] _, device, channel, note, velocity in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.midiKeyboard.receive(device: device, channel: channel, note: note, velocity: velocity)
+                self.publishMIDIKeyboard()
+                self.receiveLearnNote(channel: channel, note: note, velocity: velocity)
+            }
         }
         engine.onMidiDevicesChanged = { [weak self] in
             DispatchQueue.main.async { self?.refreshMidiDevices() }
@@ -313,8 +360,10 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func suspendForLogout() {
+        presetWarmTask?.cancel()
         catalogDownloadTask?.cancel()
         saveSessionNow(); stopSelectedTrack(); stopPerformanceNotes(); engine.stopAllNotes()
+        midiKeyboard.clear(); publishMIDIKeyboard()
         meterTimer?.invalidate(); meterTimer = nil
         engine.setMidiInputEnabled(false)
         // Keep the allocated runtime until its queued control work finishes.
@@ -329,6 +378,8 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func refreshMidiDevices() {
+        // Reconnecting inputs can discard a pending note-off from the old source.
+        midiKeyboard.clear(); publishMIDIKeyboard()
         let values = engine.listMidiDevices()
         midiDevices = values.compactMap { value in
             guard let id = value["id"], let name = value["name"] else { return nil }
@@ -510,9 +561,10 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func catalogFont(_ id: String) -> UserSoundFont? {
-        guard let key = workspace.catalogDownloads?[id], let store = try? BronzeSessionStore.applicationStore(),
-              let url = try? store.soundFontURL(for: key) else { return nil }
-        return userSoundFonts.first(where: { $0.url == url })
+        guard let key = workspace.catalogDownloads?[id], (try? BronzeSessionStore.validateSoundFontKey(key)) != nil else { return nil }
+        // Sandbox URLs may use /var or /private/var and may change after install.
+        // The persisted UUID/file key is the identity, not URL representation.
+        return userSoundFonts.first(where: { $0.id == key })
     }
 
     func catalogNeedsUpdate(_ sound: BronzeCatalogSound) -> Bool {
@@ -520,24 +572,40 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func downloadCatalogSounds(_ sounds: [BronzeCatalogSound], account: BronzeNativeAccount) {
-        guard catalogDownloadTask == nil, !backupBusy, persistenceAvailable else { return }
+        guard catalogDownloadTask == nil else { return }
+        catalogDownloadError = nil
+        guard !backupBusy else { catalogDownloadError = "Aguarde o backup terminar para baixar os timbres."; return }
+        guard persistenceAvailable else {
+            catalogDownloadError = controlError ?? "O salvamento da sessão está indisponível. Feche e abra o app para tentar novamente; os timbres salvos serão mantidos."
+            return
+        }
         let remaining = sounds.filter { catalogFont($0.id) == nil || catalogNeedsUpdate($0) }
         guard !remaining.isEmpty else { return }
         catalogDownloadTotal = remaining.count; catalogDownloadCompleted = 0
         catalogDownloadName = remaining.first?.name
+        catalogDownloadID = remaining.first?.id
+        catalogDownloadProgress = BronzeDownloadProgress(expected: Int64(remaining.first?.byteSize ?? 0))
         catalogDownloadTask = Task {
-            defer { catalogDownloadName = nil; catalogDownloadTask = nil }
+            defer { catalogDownloadName = nil; catalogDownloadID = nil; catalogDownloadInstalling = false; catalogDownloadTask = nil }
             do {
                 for sound in remaining {
                     try Task.checkCancellation()
-                    catalogDownloadName = sound.name
-                    let url = try await account.download(sound)
+                    catalogDownloadName = sound.name; catalogDownloadID = sound.id
+                    catalogDownloadInstalling = false
+                    catalogDownloadProgress = BronzeDownloadProgress(expected: Int64(sound.byteSize ?? 0))
+                    let url = try await account.download(sound) { [weak self] received, expected in
+                        guard let self, self.catalogDownloadID == sound.id, !self.catalogDownloadInstalling else { return }
+                        self.catalogDownloadProgress.record(received: received, expected: expected)
+                    }
                     defer { account.discardDownload(url) }
+                    try Task.checkCancellation()
+                    catalogDownloadInstalling = true
                     try await installCatalogDownload(url, sound: sound)
                     catalogDownloadCompleted += 1
+                    catalogDownloadProgress = BronzeDownloadProgress()
                 }
             } catch is CancellationError { }
-            catch { controlError = "Falha ao baixar biblioteca: \(error.localizedDescription)" }
+            catch { if !Task.isCancelled { catalogDownloadError = "\(catalogDownloadName ?? "Timbre"): \(error.localizedDescription)" } }
         }
     }
 
@@ -689,6 +757,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func toggleMetronome() {
+        guard !loopPlaylistSelected, !(loopPlaying && selectedLoop?.isLoop == true) else { return }
         metronomeEnabled.toggle()
         applyMetronome(restart: metronomeEnabled && !loopPlaying)
     }
@@ -836,6 +905,12 @@ final class BronzeNativeAppModel: ObservableObject {
         applyMetronome(restart: false)
     }
 
+    func setMetronomeOptions(accent: Bool, doubleTime: Bool) {
+        metronomeAccent = accent
+        metronomeDoubleTime = doubleTime
+        applyMetronome(restart: false)
+    }
+
     func setTimeSignature(numerator: Int, denominator: Int) {
         timeSignatureNumerator = min(16, max(1, numerator))
         timeSignatureDenominator = [2, 4, 8, 16].contains(denominator) ? denominator : 4
@@ -896,6 +971,15 @@ final class BronzeNativeAppModel: ObservableObject {
 
     func setPerformance(_ value: BronzeModulePerformance, moduleIndex: Int) {
         guard modulePerformance.indices.contains(moduleIndex), engineState == .ready, !isApplyingSnapshot else { return }
+        var value = value
+        if value.usesDefaultOutput {
+            value.outputUsesDefault = true
+            value.outputStart = mixer.channelStart(4); value.outputCount = mixer.channelCount(4)
+        }
+        if moduleIndex < 6 {
+            if value.mode != modulePerformance[moduleIndex].mode { value.portamento = value.mode == 1 }
+            else if value.portamento != modulePerformance[moduleIndex].portamento { value.mode = value.portamento ? 1 : 0 }
+        }
         do { try value.validate() } catch { return }
         guard Self.sendPerformance(value, moduleIndex: moduleIndex, engine: engine),
               Self.sendPerformanceGlide(value, envelope: moduleEnvelopes[moduleIndex], moduleIndex: moduleIndex,
@@ -959,7 +1043,8 @@ final class BronzeNativeAppModel: ObservableObject {
 
     func selectLoop(_ loop: BundledLoop, autoplay: Bool = false) {
         guard !loadingLoop, engineState == .ready else { return }
-        guard selectedLoop?.id != loop.id || selectedLoop?.mediaKey != loop.mediaKey else { return }
+        guard selectedLoop?.id != loop.id || selectedLoop?.mediaKey != loop.mediaKey ||
+              selectedLoop?.playlistID != loop.playlistID || selectedLoop?.isLoop != loop.isLoop else { return }
         let mediaURL = loop.mediaKey.flatMap { try? BronzeUserMediaStore(session: BronzeSessionStore.applicationStore()).url($0) }
         guard let url = mediaURL ?? Bundle.main.url(forResource: loop.fileName, withExtension: "mp3",
                                         subdirectory: "loops") else {
@@ -985,6 +1070,7 @@ final class BronzeNativeAppModel: ObservableObject {
                 }
                 if loop.mediaKey == nil { self.loopDurations[loop.id] = duration }
                 self.selectedLoop = loop
+                self.applyLoopChannelMode()
                 self.loopDuration = duration
                 self.loopPosition = 0
                 self.loopPlaying = false
@@ -993,6 +1079,13 @@ final class BronzeNativeAppModel: ObservableObject {
                 if autoplay { self.toggleLoopPlayback() }
             }
         }
+    }
+
+    func seekLoop(to seconds: Double) {
+        guard let selectedLoop, !loadingLoop, !loopPlaying, seconds.isFinite else { return }
+        let position = min(loopDuration, max(0, seconds))
+        if engine.controlTrackId(selectedLoop.id, action: "seek", seconds: position,
+            loop: true, playbackRate: 1, syncMetronome: false) { loopPosition = position }
     }
 
     func toggleLoopPlayback() {
@@ -1005,15 +1098,15 @@ final class BronzeNativeAppModel: ObservableObject {
             applyMetronome(restart: false)
             return
         }
-        // Cada Play começa do início. O runtime reinicia o click no mesmo
-        // callback de áudio que começa a reproduzir o loop.
+        // O click dos loops vem do arquivo, sem sincronizar o metrônomo.
+        applyLoopChannelMode()
         let id = selectedLoop.id
         let shouldRepeat = selectedLoop.isLoop || (workspace.playlistSidebar?.scope == "all" ? playlistSidebar.repeatEnabled : workspace.playlists.first(where: { $0.id == selectedLoop.playlistID })?.repeatEnabled == true)
         guard engine.controlTrackId(id, action: "loop", seconds: 0, loop: shouldRepeat,
                                     playbackRate: 1, syncMetronome: false),
               engine.controlTrackId(id, action: "rate", seconds: 0, loop: true,
                                     playbackRate: selectedLoop.isLoop ? tempo / 120 : 1, syncMetronome: false),
-              engine.controlTrackId(id, action: "seek", seconds: 0, loop: true,
+              engine.controlTrackId(id, action: "seek", seconds: loopPosition, loop: true,
                                     playbackRate: 1, syncMetronome: false) else {
             controlError = "Não foi possível preparar o loop."
             return
@@ -1021,7 +1114,7 @@ final class BronzeNativeAppModel: ObservableObject {
         loopPlaying = true
         applyMetronome(restart: false)
         guard engine.controlTrackId(id, action: "play", seconds: 0, loop: true,
-                                    playbackRate: selectedLoop.isLoop ? tempo / 120 : 1, syncMetronome: selectedLoop.isLoop) else {
+                                    playbackRate: selectedLoop.isLoop ? tempo / 120 : 1, syncMetronome: false) else {
             loopPlaying = false
             applyMetronome(restart: false)
             controlError = "Não foi possível iniciar o loop."
@@ -1056,43 +1149,67 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var keyboardPitch = 0.5
     @Published private(set) var keyboardModulation = 0.0
 
+    private var keyboardInputSlot: Int {
+        midiDevices.isEmpty ? 3 : min(2, max(0, UserDefaults.standard.integer(forKey: "bronze.keyboardMidiSlot") - 1))
+    }
+
+    func selectKeyboardMidiSlot(_ slot: Int) {
+        stopPerformanceNotes()
+        setKeyboardPitch(0.5)
+        setKeyboardModulation(0)
+        UserDefaults.standard.set(min(3, max(1, slot)), forKey: "bronze.keyboardMidiSlot")
+        publishMIDIKeyboard()
+    }
+
     func setKeyboardPitch(_ normalized: Double) {
         guard normalized.isFinite else { return }
         keyboardPitch = min(1, max(0, normalized))
+        let route = keyboardPitchRoute ?? keyboardInputSlot
         let value = Int((keyboardPitch * 16383).rounded())
-        _ = engine.sendMidi(fromSlot: 3, status: 0xE0, data1: value & 0x7F, data2: (value >> 7) & 0x7F, timestamp: 0)
+        _ = engine.sendMidi(fromSlot: route, status: 0xE0, data1: value & 0x7F, data2: (value >> 7) & 0x7F, timestamp: 0)
+        keyboardPitchRoute = keyboardPitch == 0.5 ? nil : route
     }
 
     func setKeyboardModulation(_ normalized: Double) {
         guard normalized.isFinite else { return }
         keyboardModulation = min(1, max(0, normalized))
-        _ = engine.sendMidi(fromSlot: 3, status: 0xB0, data1: 1, data2: Int((keyboardModulation * 127).rounded()), timestamp: 0)
+        let route = keyboardInputSlot
+        if let previous = keyboardModulationRoute, previous != route {
+            _ = engine.sendMidi(fromSlot: previous, status: 0xB0, data1: 1, data2: 0, timestamp: 0)
+        }
+        _ = engine.sendMidi(fromSlot: route, status: 0xB0, data1: 1, data2: Int((keyboardModulation * 127).rounded()), timestamp: 0)
+        keyboardModulationRoute = keyboardModulation == 0 ? nil : route
+    }
+
+    private func publishMIDIKeyboard() {
+        let selected = UserDefaults.standard.stringArray(forKey: "bronze.midiDevices") ?? Array(midiDevices.prefix(3).map(\.id))
+        let slot = keyboardInputSlot
+        let device = selected.indices.contains(slot) ? selected[slot] : ""
+        let notes = midiKeyboard.notes(forDevice: device)
+        if notes != midiKeyboardNotes { midiKeyboardNotes = notes }
     }
 
     func setKeyboardNote(_ note: Int, pressed: Bool, velocity: Int) {
         guard (0...127).contains(note) else { return }
-        if pressed { acceptRangeNote(note) }
         if pressed {
+            acceptRangeNote(note)
             guard heldKeyboardNotes.insert(note).inserted else { return }
-            _ = engine.sendMidi(
-                fromSlot: 3, status: 0x90, data1: note,
-                data2: min(127, max(1, velocity)), timestamp: 0
-            )
+            let route = keyboardInputSlot
+            keyboardNoteRoutes[note] = route
+            _ = engine.sendMidi(fromSlot: route, status: 0x90, data1: note, data2: min(127, max(1, velocity)), timestamp: 0)
         } else {
             guard heldKeyboardNotes.remove(note) != nil else { return }
-            _ = engine.sendMidi(
-                fromSlot: 3, status: 0x80, data1: note, data2: 0, timestamp: 0
-            )
+            let route = keyboardNoteRoutes.removeValue(forKey: note) ?? keyboardInputSlot
+            _ = engine.sendMidi(fromSlot: route, status: 0x80, data1: note, data2: 0, timestamp: 0)
         }
     }
 
     func stopPerformanceNotes() {
         for note in heldKeyboardNotes {
-            _ = engine.sendMidi(
-                fromSlot: 3, status: 0x80, data1: note, data2: 0, timestamp: 0
-            )
+            _ = engine.sendMidi(fromSlot: keyboardNoteRoutes[note] ?? keyboardInputSlot, status: 0x80, data1: note, data2: 0, timestamp: 0)
         }
         heldKeyboardNotes.removeAll()
+        keyboardNoteRoutes.removeAll()
     }
 
     func prepareForBackground() {
@@ -1151,7 +1268,25 @@ final class BronzeNativeAppModel: ObservableObject {
         padFilterHigh = nextHigh
     }
 
-    var selectedUserPlaylist: BronzeUserPlaylist? { workspace.playlists.first { $0.id == workspace.selectedPlaylist } }
+    var selectedUserPlaylist: BronzeUserPlaylist? { workspace.playlist(workspace.selectedPlaylist) }
+
+    var loopPlaylistSelected: Bool {
+        if let scope = workspace.playlistSidebar?.scope {
+            return scope == "bundled" || workspace.playlists.first(where: { $0.id.uuidString == scope })?.isLoop == true
+        }
+        return selectedUserPlaylist?.isLoop == true
+    }
+
+    func setLoopClickEnabled(_ enabled: Bool) {
+        loopClickEnabled = enabled
+        applyLoopChannelMode()
+    }
+
+    private func applyLoopChannelMode() {
+        guard let track = selectedLoop else { return }
+        _ = engine.controlTrackId(track.id, action: "right-mono", seconds: 0,
+            loop: track.isLoop && !loopClickEnabled, playbackRate: 1, syncMetronome: false)
+    }
 
     var playlistSidebar: BronzePlaylistSidebarSettings { workspace.playlistSidebar ?? BronzePlaylistSidebarSettings() }
 
@@ -1160,6 +1295,7 @@ final class BronzeNativeAppModel: ObservableObject {
         change(&next)
         guard (try? next.validate()) != nil else { return }
         workspace.playlistSidebar = next
+        applyMetronome(restart: false)
         if let track = selectedLoop, !track.isLoop {
             let repeatTrack = next.scope == "all" ? next.repeatEnabled : workspace.playlists.first(where: { $0.id == track.playlistID })?.repeatEnabled == true
             _ = engine.controlTrackId(track.id, action: "loop", seconds: 0, loop: repeatTrack, playbackRate: 1, syncMetronome: false)
@@ -1167,7 +1303,8 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     var allSidebarTracks: [(playlist: BronzeUserPlaylist, track: BronzeUserTrack)] {
-        let tracks = workspace.playlists.flatMap { list in list.tracks.map { (playlist: list, track: $0) } }
+        let library = workspace.playlist(BronzeUserWorkspace.libraryPlaylistID)!
+        let tracks = library.tracks.map { (playlist: library, track: $0) }
         let order = playlistSidebar.order["all"] ?? []
         let ranks = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
         return tracks.enumerated().sorted {
@@ -1179,9 +1316,12 @@ final class BronzeNativeAppModel: ObservableObject {
         guard !loadingLoop, !importingMedia else { return }
         workspace.selectedPlaylist = id
         workspace.selectedTrack = nil
-        if !preserveSidebarScope, workspace.playlistSidebar != nil {
-            workspace.playlistSidebar?.scope = id?.uuidString ?? "bundled"
+        if !preserveSidebarScope {
+            var sidebar = playlistSidebar
+            sidebar.scope = id == BronzeUserWorkspace.libraryPlaylistID ? "all" : id?.uuidString ?? "bundled"
+            workspace.playlistSidebar = sidebar
         }
+        applyMetronome(restart: false)
     }
 
     func createPlaylist(name: String, loop: Bool) {
@@ -1197,15 +1337,51 @@ final class BronzeNativeAppModel: ObservableObject {
         edited.playlists[index] = next
         guard (try? edited.validate()) != nil else { return }
         workspace = edited
+        applyMetronome(restart: false)
         if selectedLoop?.playlistID == next.id, let track = selectedLoop {
             _ = engine.controlTrackId(track.id, action: "loop", seconds: 0, loop: next.isLoop || next.repeatEnabled,
                 playbackRate: 1, syncMetronome: false)
         }
     }
 
+    func savePlaylist(_ id: UUID?, name: String, loop: Bool, trackIDs: Set<UUID>) {
+        guard !importingMedia, !loadingLoop, id != BronzeUserWorkspace.libraryPlaylistID else { return }
+        let library = workspace.allLibraryTracks
+        let old = workspace.playlist(id)
+        var next = old ?? BronzeUserPlaylist(name: "Playlist")
+        next.name = BronzeUserWorkspace.name(String(name.prefix(40)), fallback: "Playlist")
+        next.isLoop = loop
+        if loop { next.repeatEnabled = false; next.autoAdvance = false }
+        let selected = library.filter { trackIDs.contains($0.id) }
+        let selectedKeys = Set(selected.map(\.key))
+        next.tracks = (old?.tracks ?? []).filter { selectedKeys.contains($0.key) }
+        let retained = Set(next.tracks.map(\.key))
+        next.tracks += selected.filter { !retained.contains($0.key) }.map { BronzeUserTrack(name: $0.name, key: $0.key) }
+        guard next.tracks.count <= 2000 else { controlError = "Limite de 2000 músicas por playlist."; return }
+        workspace.libraryTracks = library
+        var candidate = workspace
+        if let position = candidate.playlists.firstIndex(where: { $0.id == next.id }) { candidate.playlists[position] = next }
+        else { candidate.playlists.append(next) }
+        candidate.selectedPlaylist = next.id; candidate.selectedTrack = nil
+        guard (try? candidate.validate()) != nil else { return }
+        workspace = candidate
+        if selectedLoop?.playlistID == next.id && !next.tracks.contains(where: { $0.id == selectedLoop?.trackID }) { stopSelectedTrack() }
+        editPlaylist(next)
+        selectPlaylist(next.id)
+    }
+
+    func removeLibraryTrack(_ id: UUID) {
+        guard !importingMedia, !loadingLoop, let track = workspace.allLibraryTracks.first(where: { $0.id == id }) else { return }
+        workspace.libraryTracks = workspace.allLibraryTracks.filter { $0.key != track.key }
+        if selectedLoop?.mediaKey == track.key { stopSelectedTrack() }
+        for index in workspace.playlists.indices { workspace.playlists[index].tracks.removeAll { $0.key == track.key } }
+        if let selected = workspace.selectedTrack, workspace.playlist(workspace.selectedPlaylist)?.tracks.contains(where: { $0.id == selected }) != true { workspace.selectedTrack = nil }
+    }
+
     func deletePlaylist(_ id: UUID) {
         guard !importingMedia, !loadingLoop else { return }
         if selectedLoop?.playlistID == id { stopSelectedTrack() }
+        workspace.libraryTracks = workspace.allLibraryTracks
         workspace.playlists.removeAll { $0.id == id }
         if workspace.selectedPlaylist == id { workspace.selectedPlaylist = nil; workspace.selectedTrack = nil }
         // Original documents and private audio files remain recoverable in backup.
@@ -1214,6 +1390,7 @@ final class BronzeNativeAppModel: ObservableObject {
     func removeTrack(_ id: UUID, playlistID: UUID) {
         guard let list = workspace.playlists.firstIndex(where: { $0.id == playlistID }), !importingMedia, !loadingLoop else { return }
         if selectedLoop?.trackID == id { stopSelectedTrack() }
+        workspace.libraryTracks = workspace.allLibraryTracks
         workspace.playlists[list].tracks.removeAll { $0.id == id }
         if workspace.selectedTrack == id { workspace.selectedTrack = nil }
     }
@@ -1242,7 +1419,7 @@ final class BronzeNativeAppModel: ObservableObject {
             selectUserTrack(tracks[index + 1].track.id, autoplay: true)
             return
         }
-        guard let current = selectedLoop, let list = workspace.playlists.first(where: { $0.id == current.playlistID }),
+        guard let current = selectedLoop, let list = workspace.playlist(current.playlistID),
               !list.isLoop, list.autoAdvance, let index = list.tracks.firstIndex(where: { $0.id == current.trackID }),
               list.tracks.indices.contains(index + 1) else { return }
         workspace.selectedPlaylist = list.id
@@ -1250,8 +1427,11 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func importTracks(_ urls: [URL], playlistID: UUID) {
-        guard !importingMedia, !isApplyingSnapshot, workspace.playlists.contains(where: { $0.id == playlistID }),
+        guard !importingMedia, !isApplyingSnapshot, workspace.playlist(playlistID) != nil,
               urls.count <= 2000 else { return }
+        guard workspace.allLibraryTracks.count + urls.count <= 10000 else {
+            controlError = "Limite de 10000 músicas na biblioteca."; return
+        }
         importingMedia = true
         let access = urls.map { $0.startAccessingSecurityScopedResource() }
         audioQueue.async { [weak self] in
@@ -1268,6 +1448,9 @@ final class BronzeNativeAppModel: ObservableObject {
             let results = imported, rejected = failures
             DispatchQueue.main.async {
                 guard let self else { return }
+                var library = self.workspace.allLibraryTracks
+                library.append(contentsOf: results)
+                self.workspace.libraryTracks = library
                 if let index = self.workspace.playlists.firstIndex(where: { $0.id == playlistID }) {
                     let available = max(0, 2000 - self.workspace.playlists[index].tracks.count)
                     self.workspace.playlists[index].tracks.append(contentsOf: results.prefix(available))
@@ -1335,6 +1518,14 @@ final class BronzeNativeAppModel: ObservableObject {
                 if failed > 0 { self?.controlError = "\(failed) efeito(s) não puderam ser carregados." }
             }
         }
+    }
+
+    func setEffectPadGain(bank: Int, index: Int, gain: Double) {
+        guard (0..<8).contains(bank), (0..<12).contains(index), gain.isFinite, !importingMedia else { return }
+        let value = min(0, max(-36, gain))
+        guard engine.setEffectPadGainDb(Float(value), bankIndex: bank, itemIndex: index) else { return }
+        workspace.fxBanks[bank].pads[index].gainDb = value
+        applyMIDISettings()
     }
 
     func editFX(bank: Int, index: Int, name: String, gain: Double, color: Int, triggerMode: String? = nil, gateRelease: String? = nil) {
@@ -1438,12 +1629,15 @@ final class BronzeNativeAppModel: ObservableObject {
         meterTimer?.invalidate()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             guard let self else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            let elapsed = now - self.lastMeterTime
+            self.lastMeterTime = now
             let values = self.engine.moduleMeterLevels()
             var nextLevels = Array(repeating: 0.0, count: self.moduleLevels.count)
             for index in nextLevels.indices {
                 let left = index * 2 < values.count ? values[index * 2].doubleValue : 0
                 let right = index * 2 + 1 < values.count ? values[index * 2 + 1].doubleValue : 0
-                nextLevels[index] = max(left, right)
+                nextLevels[index] = BronzeMeterDisplay.smooth(peak: max(left, right), previous: self.moduleLevels[index], elapsed: elapsed)
             }
             // Só publicar alterações: silêncio não precisa reconstruir os controles.
             if self.moduleLevels != nextLevels { self.moduleLevels = nextLevels }
@@ -1452,8 +1646,14 @@ final class BronzeNativeAppModel: ObservableObject {
                 return max(values[offset].doubleValue, values[offset + 1].doubleValue)
             }
             let fx = self.engine.effectMeterLevels().map(\.doubleValue).max() ?? 0
-            let nextOutputs = [peak(18), peak(22), fx, peak(20), peak(16)]
+            let peaks = [peak(18), peak(22), fx, peak(20), peak(16)]
+            let nextOutputs = peaks.indices.map { BronzeMeterDisplay.smooth(peak: peaks[$0], previous: self.outputLevels[$0], elapsed: elapsed) }
             if self.outputLevels != nextOutputs { self.outputLevels = nextOutputs }
+            if let module = self.compressorMeterModule {
+                let analysis = self.engine.moduleAnalysis(module)
+                let next = (0..<2).map { BronzeMeterDisplay.smooth(peak: $0 < analysis.count ? analysis[$0].doubleValue : 0, previous: self.compressorLevels[$0], elapsed: elapsed) }
+                if next != self.compressorLevels { self.compressorLevels = next }
+            }
             self.meterFrame += 1
             if self.meterFrame % 60 == 0 {
                 var stats = vm_statistics64()
@@ -1481,14 +1681,14 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     private func applyMetronome(restart: Bool) {
-        let syncLoop = loopPlaying && selectedLoop?.isLoop == true
+        if loopPlaylistSelected || (loopPlaying && selectedLoop?.isLoop == true) { metronomeEnabled = false }
         _ = engine.configureMetronomeEnabled(
-            metronomeEnabled || syncLoop,
+            metronomeEnabled,
             bpm: Float(tempo),
             volume: metronomeEnabled && mixer.enabled[3] ? pow(10, outputDb(3) / 20) : 0,
             clickSound: metronomeClickSound,
-            accentEnabled: !syncLoop,
-            doubleTimeEnabled: false,
+            accentEnabled: metronomeAccent,
+            doubleTimeEnabled: metronomeDoubleTime,
             timeSignatureNumerator: timeSignatureNumerator,
             timeSignatureDenominator: timeSignatureDenominator,
             restart: restart
@@ -1553,6 +1753,9 @@ final class BronzeNativeAppModel: ObservableObject {
         session.organCabinetEnabled = organCabinetEnabled
         session.tempo = tempo
         session.clickSound = metronomeClickSound
+        session.metronomeAccent = metronomeAccent
+        session.metronomeDoubleTime = metronomeDoubleTime
+        session.loopClickEnabled = loopClickEnabled
         session.numerator = timeSignatureNumerator
         session.denominator = timeSignatureDenominator
         session.padBank = selectedPadBank
@@ -1618,6 +1821,8 @@ final class BronzeNativeAppModel: ObservableObject {
                         _ = engine.setOrganCabinetEnabled(session.organCabinetEnabled)
                         self.setTempo(session.tempo)
                         self.selectMetronomeClick(session.clickSound)
+                        self.setMetronomeOptions(accent: session.metronomeAccent ?? false, doubleTime: session.metronomeDoubleTime ?? false)
+                        self.setLoopClickEnabled(session.loopClickEnabled ?? true)
                         self.setTimeSignature(numerator: session.numerator, denominator: session.denominator)
                         self.selectPadBank(session.padBank)
                         self.setPadFilter(low: true, normalized: session.padLow)
@@ -1634,6 +1839,7 @@ final class BronzeNativeAppModel: ObservableObject {
                     }
                     self.loadSelectedFXBank()
                     self.applyMIDISettings()
+                    self.preparePresetSounds()
                 }
             } catch {
                 let message = error.localizedDescription
@@ -1738,6 +1944,8 @@ final class BronzeNativeAppModel: ObservableObject {
         organRotaryFast = session.organRotaryFast; organCabinetEnabled = session.organCabinetEnabled
         setOrganRotary(session.organRotary ?? BronzeOrganRotary(speed: session.organRotaryFast ? 2 : 1)); _ = engine.setOrganCabinetEnabled(session.organCabinetEnabled)
         setTempo(session.tempo); selectMetronomeClick(session.clickSound)
+        setMetronomeOptions(accent: session.metronomeAccent ?? false, doubleTime: session.metronomeDoubleTime ?? false)
+        setLoopClickEnabled(session.loopClickEnabled ?? true)
         setTimeSignature(numerator: session.numerator, denominator: session.denominator)
         selectPadBank(session.padBank)
         setPadFilter(low: true, normalized: session.padLow); setPadFilter(low: false, normalized: session.padHigh)
@@ -1756,7 +1964,43 @@ final class BronzeNativeAppModel: ObservableObject {
         engine.setCompatibilityMode(enabled)
     }
 
+    @Published private(set) var midiLearnCandidate: BronzeCCMapping?
+    @Published private(set) var midiLearnNoteCandidate: Int?
+    private var midiLearnDraftTarget: String?
+
+    func beginMIDILearnDraft(_ target: String) {
+        beginMIDILearn(target)
+        guard learningTarget == target else { return }
+        midiLearnDraftTarget = target
+        midiLearnCandidate = midiSettings.controls[target]
+        let parts = target.split(separator: ":").dropFirst().compactMap { Int($0) }
+        midiLearnNoteCandidate = parts.count == 3 ? midiSettings.notes.first(where: { $0.kind == parts[0] && $0.bank == parts[1] && $0.item == parts[2] })?.note : nil
+    }
+
+    func cancelMIDILearnDraft() {
+        learningTarget = nil; midiLearnDraftTarget = nil
+        midiLearnCandidate = nil; midiLearnNoteCandidate = nil
+    }
+
+    func commitMIDILearnDraft(_ target: String, minimum: Double, maximum: Double, inverted: Bool) {
+        guard midiLearnDraftTarget == target else { return }
+        var next = midiSettings
+        if target.hasPrefix("note:"), let note = midiLearnNoteCandidate {
+            let parts = target.split(separator: ":").dropFirst().compactMap { Int($0) }
+            guard parts.count == 3 else { return }
+            next.notes.removeAll { $0.note == note || ($0.kind == parts[0] && $0.bank == parts[1] && $0.item == parts[2]) }
+            next.notes.append(BronzeMIDINoteMapping(note: note, kind: parts[0], bank: parts[1], item: parts[2]))
+        } else if var map = midiLearnCandidate {
+            map.minimum = min(1, max(0, minimum)); map.maximum = min(1, max(map.minimum, maximum)); map.inverted = inverted
+            next.controls[target] = map
+        } else { return }
+        guard (try? next.validate()) != nil else { return }
+        workspace.midi = next; cancelMIDILearnDraft(); applyMIDISettings()
+        if target.hasPrefix("note:") { loadSelectedFXBank() }
+    }
+
     func beginMIDILearn(_ target: String) {
+        cancelMIDILearnDraft()
         if midiSettings.compatibility && target.hasPrefix("preset:") {
             midiLearnMessage = "Desative o modo compatibilidade."; return
         }
@@ -1796,6 +2040,10 @@ final class BronzeNativeAppModel: ObservableObject {
         guard channel == 10 else { midiLearnMessage = "Use o canal MIDI 10 para Pads e FX."; return }
         let parts = target.split(separator: ":").dropFirst().compactMap { Int($0) }
         guard parts.count == 3 else { return }
+        if midiLearnDraftTarget == target {
+            midiLearnNoteCandidate = note; midiLearnMessage = "Nota \(note) recebida · CH 10"
+            return
+        }
         var next = midiSettings
         next.notes.removeAll { $0.note == note || ($0.kind == parts[0] && $0.bank == parts[1] && $0.item == parts[2]) }
         next.notes.append(BronzeMIDINoteMapping(note: note, kind: parts[0], bank: parts[1], item: parts[2]))
@@ -1806,6 +2054,9 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     private func receiveControl(device: String, channel: Int, cc: Int, value: Int) {
+        if cc == 120 || cc == 123 {
+            midiKeyboard.clear(device: device, channel: channel); publishMIDIKeyboard()
+        }
         guard !backupBusy, !isApplyingSnapshot, engineState == .ready else { return }
         let settings = midiSettings
         if settings.compatibility {
@@ -1813,6 +2064,11 @@ final class BronzeNativeAppModel: ObservableObject {
             if [0, 6, 7, 10, 16, 32, 91, 100, 101].contains(cc) { return }
         }
         if let target = learningTarget, !target.hasPrefix("note:"), BronzeMIDITarget.all.contains(where: { $0.id == target }) {
+            if midiLearnDraftTarget == target {
+                midiLearnCandidate = BronzeCCMapping(device: device, channel: channel, controller: cc)
+                midiLearnMessage = "CC \(cc) recebido · Canal \(channel)"
+                return
+            }
             var next = settings
             next.controls[target] = BronzeCCMapping(device: device, channel: channel, controller: cc)
             workspace.midi = next; learningTarget = nil; midiLearnMessage = "CC \(cc), canal \(channel), mapeado."
@@ -1849,6 +2105,38 @@ final class BronzeNativeAppModel: ObservableObject {
         case "drawbar": setOrganDrawbar(module, normalized: n)
         case "rotary": toggleOrganRotarySpeed()
         case "cabinet": toggleOrganCabinet()
+        case "performance":
+            var next = modulePerformance[module]
+            switch parts[2] {
+            case "velocity": next.velocityIgnoreAbove = Int((n * 127).rounded())
+            case "modRate": next.modulationRate = 0.1 + n * 19.9
+            case "modDepth": next.modulationIntensity = n
+            default: next.glideMs = n * 5000
+            }
+            setPerformance(next, moduleIndex: module)
+        case "arp":
+            var next = moduleArpeggiators[module]
+            switch parts[2] {
+            case "rate": next.rateMs = 20 + n * 1980
+            case "gate": next.gate = 0.1 + n * 0.9
+            case "swing": next.swing = n * 0.75
+            default: next.autoFaderDepthDb = n * 40
+            }
+            setArpeggiator(next, moduleIndex: module)
+        case "pulse":
+            var next = modulePulses[module]
+            if parts[2] == "rate" { next.rateMs = 20 + n * 1980 }
+            else if let p = BronzePulseParameter(rawValue: parts[2]) { next[p] = p.definition.value(n) }
+            setPulse(next, moduleIndex: module)
+        case "rotaryParam":
+            var next = organRotary
+            switch parts[2] {
+            case "Slow": next.slowHz = 0.2 + n * 1.8
+            case "Fast": next.fastHz = 2 + n * 8
+            case "Acceleration": next.rampSeconds = 0.1 + n * 9.9
+            default: next.depth = n
+            }
+            setOrganRotary(next)
         case "env": setEnvelopeValue(EnvelopeParameter.allCases[parameter], moduleIndex: module, normalized: n)
         case "eq":
             let p = BronzeEQParameter.allCases[Int(parts[3]) ?? 0]
@@ -1923,6 +2211,7 @@ final class BronzeNativeAppModel: ObservableObject {
         guard (0..<6).contains(bank), !isApplyingSnapshot else { return }
         presetBank = bank
         scheduleSessionSave()
+        preparePresetSounds()
     }
 
     func savePreset(_ index: Int, name: String, color: Int) {
@@ -1934,6 +2223,33 @@ final class BronzeNativeAppModel: ObservableObject {
             color: min(15, max(0, color)), modules: moduleSnapshot())
         activePreset = index
         saveSessionNow()
+        preparePresetSounds()
+    }
+
+    func preparePresetSounds() {
+        presetWarmTask?.cancel()
+        guard engineState == .ready, !isApplyingSnapshot,
+              UserDefaults.standard.bool(forKey: "bronze.seamless"),
+              !UserDefaults.standard.bool(forKey: "bronze.lite"),
+              let store = try? BronzeSessionStore.applicationStore() else { return }
+        var seen = Set<String>()
+        let paths = presets.dropFirst(presetBank * 16).prefix(16).flatMap { $0.modules ?? [] }
+            .compactMap(\.soundFontKey).filter { seen.insert($0).inserted }
+            .compactMap { try? store.soundFontURL(for: $0).path }
+        let engine = self.engine, queue = presetWarmQueue
+        presetWarmTask = Task {
+            for path in paths {
+                guard !Task.isCancelled else { return }
+                // Optional work uses a separate queue: it cannot sit ahead of
+                // preset recall on audioQueue. Runtime admits only banks that fit.
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    queue.async {
+                        _ = engine.preloadSoundFont(atPath: path)
+                        continuation.resume()
+                    }
+                }
+            }
+        }
     }
 
     func renamePreset(_ index: Int, name: String, color: Int) {
@@ -2093,3 +2409,49 @@ extension Notification.Name {
     static let bronzeKeysReleaseTouches = Notification.Name("BronzeKeysReleaseTouches")
     static let bronzeKeysStopAllNotes = Notification.Name("BronzeKeysStopAllNotes")
 }
+
+#if DEBUG && targetEnvironment(macCatalyst)
+extension BronzeNativeAppModel {
+    func runMIDILearnSmoke() async {
+        guard ProcessInfo.processInfo.environment["BRONZE_UI_TEST"] == "1" else { return }
+        let originalFrames = engine.effectiveBufferFrames
+        for frames in [64, 128, 256, 512] {
+            let accepted = engine.setAudioOutputDeviceId("", channels: 2, bufferFrames: frames,
+                sampleRate: engine.effectiveSampleRate, preserveEngine: true)
+            NSLog("[BronzeMacSmoke] BUFFER requested=%d actual=%d accepted=%d", frames,
+                  engine.effectiveBufferFrames, accepted ? 1 : 0)
+            precondition(accepted && engine.effectiveBufferFrames == frames)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        _ = engine.setAudioOutputDeviceId("", channels: 2, bufferFrames: originalFrames,
+            sampleRate: engine.effectiveSampleRate, preserveEngine: true)
+        NSLog("[BronzeMacSmoke] BUFFER_HARDWARE_ROUNDTRIP_OK")
+        let target = "env:0:0"
+        let previous = midiSettings.controls[target]
+        beginMIDILearnDraft(target)
+        engine.onMidiControl?(0, "smoke-midi", 1, 74, 100)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        precondition(midiLearnCandidate?.controller == 74 && midiSettings.controls[target] == previous)
+        cancelMIDILearnDraft()
+        precondition(midiSettings.controls[target] == previous)
+        beginMIDILearnDraft(target)
+        engine.onMidiControl?(0, "smoke-midi", 1, 71, 100)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        commitMIDILearnDraft(target, minimum: 0.2, maximum: 0.8, inverted: true)
+        precondition(midiSettings.controls[target]?.controller == 71)
+        precondition(abs((midiSettings.controls[target]?.normalized(127) ?? -1) - 0.2) < 0.001)
+        engine.onMidiControl?(0, "smoke-midi", 1, 71, 127)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        precondition(abs(envelopeValue(.attack, moduleIndex: 0) - 0.2) < 0.001)
+        let notes = midiSettings.notes
+        beginMIDILearnDraft("note:1:0:0")
+        engine.onMidiNote?(0, "smoke-midi", 10, 60, 100)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        precondition(midiLearnNoteCandidate == 60 && midiSettings.notes == notes)
+        cancelMIDILearnDraft()
+        precondition(midiSettings.notes == notes)
+        NSLog("[BronzeMacSmoke] MIDI_DRAFT_CANCEL_CONFIRM_RANGE_AND_ROUTING_OK")
+        beginMIDILearnDraft(target)
+    }
+}
+#endif

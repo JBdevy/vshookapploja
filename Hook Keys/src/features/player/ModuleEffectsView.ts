@@ -261,10 +261,17 @@ export function readReverbSpaceMix(settings: Readonly<Record<string, unknown>>, 
     : readModuleReverbSettings(settings.reverb).mix;
 }
 
+export function readReverbSpaceDecay(settings: Readonly<Record<string, unknown>>, space = readReverbSpace(settings.reverbSpace)): number {
+  const saved = Number(record(record(settings.reverbSpaces)[space]).decay);
+  return Number.isFinite(saved) ? Math.max(10, Math.min(100, saved)) : 100;
+}
+
 export function createModuleReverbMarkup(settings: Readonly<Record<string, unknown>>): string {
   const space = readReverbSpace(settings.reverbSpace);
   const mix = readReverbSpaceMix(settings, space);
+  const decay = readReverbSpaceDecay(settings, space);
   const controls: EffectControlDefinition[] = [
+    control('decay', 'Decay', 10, 100, 1, decay, `${Math.round(decay)}%`),
     control('mix', 'Mix', 0, 100, 1, mix, `${Math.round(mix)}%`),
   ];
   return `
@@ -560,7 +567,7 @@ export function formatModuleEffectValue(kind: ModuleEffectKind, key: string, val
     if (key === 'noiseDb') return `${value.toFixed(1)} dB`;
     return formatVibesAmount(value);
   }
-  if (kind === 'reverb') return key === 'decay' ? `${formatNumber(value)} s` : `${Math.round(value)}%`;
+  if (kind === 'reverb') return `${Math.round(value)}%`;
   if (kind === 'cutoffEnvelope') {
     if (key === 'depthOctaves') return `${value.toFixed(1)} oct`;
     if (key === 'sustain') return `${Math.round(value)}%`;

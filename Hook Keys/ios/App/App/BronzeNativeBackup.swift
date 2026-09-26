@@ -115,7 +115,7 @@ struct BronzeNativeBackup {
         fontKeys += session.presets.flatMap { $0.modules?.compactMap(\.soundFontKey) ?? [] }
         let workspace = session.workspace ?? BronzeUserWorkspace()
         fontKeys += Array((workspace.catalogDownloads ?? [:]).values)
-        let mediaKeys = workspace.playlists.flatMap { $0.tracks.map(\.key) } + workspace.fxBanks.flatMap { $0.pads.compactMap(\.key) }
+        let mediaKeys = workspace.allLibraryTracks.map(\.key) + workspace.fxBanks.flatMap { $0.pads.compactMap(\.key) }
         for key in fontKeys { guard FileManager.default.fileExists(atPath: try store.soundFontURL(for: key).path) else { throw BronzeSessionError.invalid } }
         for key in mediaKeys { guard FileManager.default.fileExists(atPath: try BronzeUserMediaStore(session: store).url(key).path) else { throw BronzeSessionError.invalid } }
         complete = true

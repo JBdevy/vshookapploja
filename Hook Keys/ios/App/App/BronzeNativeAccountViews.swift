@@ -236,19 +236,27 @@ struct BronzeNativeCatalogList: View {
     private var sounds: [BronzeCatalogSound] { account.categories.first(where: { $0.id == categoryID })?.sounds ?? [] }
     var body: some View {
         GeometryReader { geometry in
-            let height = max(36, (geometry.size.height - 18) / 4)
+            let height: CGFloat = geometry.size.height < 300 ? 40 : 46
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
                     ForEach(sounds) { sound in
                         Button {
+                            model.clearDownloadHighlight()
                             if let font = model.catalogFont(sound.id) { selected(); model.selectUserSoundFont(font, moduleIndex: moduleIndex, catalogSound: sound) }
                             else { preview(sound) }
                         } label: {
                             VStack(spacing: 4) {
-                                Text(sound.name).font(.bronzeUI(12)).lineLimit(2)
-                                Text(model.catalogFont(sound.id) == nil ? "Baixar" : "No dispositivo").font(.bronzeUI(9)).opacity(0.75)
+                                Text(sound.name).font(.bronzeUI(12)).foregroundStyle(.black).lineLimit(2)
+                                if model.catalogDownloadID == sound.id {
+                                    ProgressView(value: model.catalogDownloadProgress.fraction).progressViewStyle(.linear).tint(.white).padding(.horizontal, 8)
+                                    Text(model.catalogDownloadInstalling ? "Salvando…" : model.catalogDownloadProgress.fraction.map { "\(Int($0 * 100))%" } ?? "Baixando…").font(.bronzeUI(9))
+                                } else {
+                                    Text(model.catalogFont(sound.id) == nil ? "Baixar" : "No dispositivo").font(.bronzeUI(9))
+                                        .foregroundStyle(model.catalogFont(sound.id) == nil ? Color.white.opacity(0.7) : Color(bronzeHex: 0x8dffb4))
+                                }
                             }.foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: height)
-                                .background(LinearGradient(colors: [Color(bronzeHex: sound.color), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)).cornerRadius(5)
+                                .modifier(BronzeCatalogSurface(color: Color(bronzeHex: sound.color)))
+                                .modifier(BronzeDownloadCompletionHighlight(active: model.downloadedSoundID == sound.id, color: Color(bronzeHex: sound.color)))
                                 .overlay { if model.catalogFont(sound.id) == model.moduleSoundFonts[moduleIndex] && model.catalogFont(sound.id) != nil { BronzePresetHighlight().allowsHitTesting(false) } }
                         }.buttonStyle(.plain).accessibilityIdentifier("bronze.library.sound.\(sound.id)")
                             .contextMenu { Button("Detalhes / Preview") { preview(sound) } }
@@ -256,6 +264,22 @@ struct BronzeNativeCatalogList: View {
                 }
                 if sounds.isEmpty { Text("Nenhum timbre nesta categoria.").foregroundStyle(.secondary).padding(20) }
             }.accessibilityIdentifier("bronze.library.grid")
+        }
+    }
+}
+
+private struct BronzeDownloadCompletionHighlight: ViewModifier {
+    let active: Bool
+    let color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("bronze.lite") private var lite = false
+    func body(content: Content) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active || reduceMotion || lite)) { context in
+            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.82) / 0.82
+            let pulse = !active ? 0 : reduceMotion || lite ? 0.6 : (1 - cos(phase * .pi * 2)) / 2
+            content.brightness(pulse * 0.18)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(active ? 0.3 + pulse * 0.7 : 0), lineWidth: 1 + pulse).allowsHitTesting(false))
+                .shadow(color: active ? color.opacity(0.6) : .clear, radius: 2 + pulse * 5)
         }
     }
 }
@@ -293,18 +317,18 @@ struct BronzeNativeSoundPreview: View {
     @ObservedObject var account: BronzeNativeAccount
     let sound: BronzeCatalogSound
     let close: () -> Void
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @StateObject private var audio = BronzeCatalogPreviewAudio()
     private var installed: Bool { model.catalogFont(sound.id) != nil }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: verticalSizeClass == .compact ? 8 : 18) {
             HStack {
-                RoundedRectangle(cornerRadius: 6).fill(Color(bronzeHex: sound.color)).frame(width: 46, height: 46)
+                Capsule().fill(Color(bronzeHex: sound.color)).frame(width: 10, height: 46).shadow(color: Color(bronzeHex: sound.color), radius: 6)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(installed ? "Salvo neste dispositivo" : "Disponível para download").font(.bronzeUI(11)).foregroundStyle(.secondary)
                     Text(sound.name).font(.bronzeUI(22))
                 }
                 Spacer()
-                Button("Voltar", action: close).buttonStyle(BronzeDeckButtonStyle(palette: .grey)).frame(width: 85, height: 36)
             }
             if let bytes = sound.byteSize { Text(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)).font(.bronzeUI(14)).foregroundStyle(Color.bronzeLight) }
             HStack(spacing: 12) {
@@ -312,11 +336,49 @@ struct BronzeNativeSoundPreview: View {
                     .buttonStyle(BronzeDeckButtonStyle(palette: .purple)).disabled(sound.previewObjectKey == nil)
                     .accessibilityIdentifier("bronze.library.listen")
                 Button(installed && !model.catalogNeedsUpdate(sound) ? "No dispositivo" : "Baixar") {
-                    audio.stop(); model.downloadCatalogSounds([sound], account: account); close()
+                    audio.stop(); model.downloadCatalogSounds([sound], account: account)
                 }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).disabled(model.catalogDownloadName != nil || (installed && !model.catalogNeedsUpdate(sound)))
-            }.frame(height: 52)
+            }.frame(height: verticalSizeClass == .compact ? 42 : 52)
             if sound.previewObjectKey == nil { Text("Preview ainda não publicado").font(.bronzeUI(12)).foregroundStyle(.secondary) }
             if !audio.error.isEmpty { Text(audio.error).font(.bronzeUI(12)).foregroundStyle(.orange) }
+            if model.catalogDownloadID == sound.id { BronzeCatalogDownloadStatus(model: model) }
+            if let error = model.catalogDownloadError { Text(error).font(.bronzeUI(11)).foregroundStyle(.orange).lineLimit(3) }
+            Button("Voltar", action: close).buttonStyle(BronzeConfigActionStyle(kind: .back)).frame(height: 36)
         }.onDisappear { audio.stop() }
+    }
+}
+
+struct BronzeCatalogSurface: ViewModifier {
+    let color: Color
+    func body(content: Content) -> some View {
+        content.background(LinearGradient(stops: [.init(color: .white.opacity(0.24), location: 0), .init(color: .white.opacity(0.04), location: 0.42), .init(color: .black.opacity(0.62), location: 1)], startPoint: .topLeading, endPoint: .bottomTrailing).background(color))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(color.opacity(0.8)).allowsHitTesting(false))
+    }
+}
+
+struct BronzeCatalogDownloadStatus: View {
+    @ObservedObject var model: BronzeNativeAppModel
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                Text(model.catalogDownloadName ?? "Download").lineLimit(1)
+                Spacer(minLength: 0)
+                Text(model.catalogDownloadInstalling ? "Salvando…" : model.catalogDownloadProgress.fraction.map { "\(Int($0 * 100))%" } ?? "Baixando…")
+                Button("Cancelar") { model.cancelCatalogDownload() }.foregroundStyle(Color.bronzeLight)
+            }.font(.bronzeUI(11))
+            ProgressView(value: model.catalogDownloadProgress.fraction).progressViewStyle(.linear).tint(.green)
+                .accessibilityLabel("Download do timbre").accessibilityIdentifier("bronze.library.downloadProgress")
+            HStack {
+                Text(ByteCountFormatter.string(fromByteCount: model.catalogDownloadProgress.received, countStyle: .file) +
+                     (model.catalogDownloadProgress.expected > 0 ? " / " + ByteCountFormatter.string(fromByteCount: model.catalogDownloadProgress.expected, countStyle: .file) : ""))
+                Spacer(minLength: 0)
+                if model.catalogDownloadTotal > 1 { Text("\(model.catalogDownloadCompleted)/\(model.catalogDownloadTotal) timbres · Total \(Int(model.catalogDownloadOverall * 100))%") }
+            }.font(.bronzeUI(9)).foregroundStyle(.secondary)
+            if model.catalogDownloadTotal > 1 {
+                ProgressView(value: model.catalogDownloadOverall).progressViewStyle(.linear).tint(.bronze)
+                    .accessibilityLabel("Download de toda a biblioteca").accessibilityIdentifier("bronze.library.downloadAllProgress")
+            }
+        }
     }
 }

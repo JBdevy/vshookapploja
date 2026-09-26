@@ -76,8 +76,8 @@ assert.match(nativeRoot, /BronzeSkiaControl/);
 assert.doesNotMatch(nativeRoot, /value:\s*\.constant/,
   'controles da tela nativa não podem ser apenas demonstrativos');
 assert.match(nativeRoot, /BronzePerformanceKeyboard/);
-assert.match(nativeModel, /fromSlot:\s*3/,
-  'o teclado da tela deve usar diretamente o slot MIDI nativo reservado');
+assert.match(nativeModel, /fromSlot:\s*route/,
+  'o teclado da tela deve enviar MIDI pela entrada selecionada');
 assert.match(nativeControls, /isMultipleTouchEnabled = true/);
 assert.match(nativeControls, /firstNote: Int \{ fullRange \? 21 : 48 \}/);
 assert.match(nativeControls, /lastNote: Int \{ fullRange \? 108 : 84 \}/);
@@ -134,7 +134,9 @@ assert.match(nativeRoot, /model.selectedModule != 6 \|\| kind == .chorus/);
 assert.match(nativeModel, /Self.sendSoundEffects\(module.soundEffects \?\? BronzeSoundEffects\(\)/);
 assert.match(nativeModel, /soundEffects: moduleSoundEffects\[index\]/);
 assert.match(nativeModel, /pendingSoundEffects\[moduleIndex\] = effects/);
-assert.match(nativeRoot, /VINYL ON/);
+assert.match(nativeRoot, /settings\.vinylEnabled \? "ON" : "OFF"/);
+assert.match(nativeRoot, /\$0\.vinylEnabled\.toggle\(\)/,
+  'o botão Noise deve continuar controlando o vinil do processador');
 assert.match(nativeRoot, /BronzeNativePulseEditor\(model: model/);
 assert.match(nativeModel, /Self.sendPulse\(module.pulse \?\? BronzePulse\(\)/);
 assert.match(nativeModel, /pulse: modulePulses\[index\]/);

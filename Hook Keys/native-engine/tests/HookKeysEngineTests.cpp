@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <numeric>
@@ -860,6 +861,25 @@ void testNativeRuntimeSignalPath() {
   expect(mutedEnergy == 0.0, "native runtime maps the minimum fader position to silence");
 }
 
+void testNativeRuntimeLiveEffectGain() {
+  hook_keys::NativeEngineRuntime runtime(48000.0, 128);
+  std::vector<float> sample(48000 * 2, 0.25f);
+  expect(runtime.loadEffectSample(0, sample.data(), 48000, 48000.0), "load long FX");
+  expect(runtime.triggerEffectSample(0, true), "start long FX");
+  std::array<float, 256> output{};
+  runtime.renderInterleaved(output.data(), 128, 2);
+  expect(std::abs(output[0] - 0.25f) < 0.001f, "FX begins at unity");
+  expect(runtime.setEffectSampleGain(1, -36.0f), "other FX gain accepted");
+  runtime.renderInterleaved(output.data(), 128, 2);
+  expect(std::abs(output[0] - 0.25f) < 0.001f, "other pad gain does not change playing FX");
+  expect(runtime.setEffectSampleGain(0, -12.0f), "change playing FX gain");
+  runtime.renderInterleaved(output.data(), 128, 2);
+  expect(output[0] > 0.24f && output.back() < output[0], "gain starts a smooth ramp");
+  for (int i = 0; i < 60; ++i) runtime.renderInterleaved(output.data(), 128, 2);
+  expect(std::abs(output.back() - 0.25f * std::pow(10.0f, -12.0f / 20.0f)) < 0.001f,
+      "playing FX reaches slider gain without restarting");
+}
+
 void testNativeRuntimeEffectPadsAndMidiChannel10() {
   hook_keys::NativeEngineRuntime runtime(48000.0, 128);
   std::array<float, 128 * 2> sample{};
@@ -1239,7 +1259,7 @@ void testCancelledNativePresetLeavesCurrentAudioUntouched() {
   };
   compare();
   for (int attempt = 0; attempt < 20; ++attempt) {
-    expect(actual.beginPresetTransition(true), "cancelled layers do not consume the preset limit");
+    expect(actual.beginPresetTransition(true, attempt % 2 == 0), "cancelled layers do not consume the preset limit, including deferred effects");
     expect(actual.setModuleEnabledMask(0), "stage disabled modules");
     expect(actual.setModuleEnvelope(7, 1000, 0, 1000, 1000), "stage native synth envelope");
     expect(!actual.loadSoundFont(0, "missing-native-preset.sf2"), "invalid SF2 rejects staged preset");
@@ -1255,6 +1275,84 @@ void testCancelledNativePresetLeavesCurrentAudioUntouched() {
   for (int i = 0; i < 20; ++i) compare();
   actual.cancelPresetTransition(); // no pending layer is a safe no-op
   compare();
+}
+
+void testPresetSoundFontWarmupIsBoundedAndReused() {
+  namespace fs = std::filesystem;
+  const auto root = fs::temp_directory_path() / ("bronze-warm-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  fs::create_directory(root);
+  const auto a = root / "a.sf2", b = root / "b.sf2", c = root / "c.sf2";
+  const auto fixture = fs::path("third_party/TinySoundFont/examples/florestan-subset.sf2");
+  for (const auto& path : {a, b, c}) fs::copy_file(fixture, path);
+  hook_keys::NativeEngineRuntime runtime(48000, 128);
+  const auto budget = static_cast<std::size_t>(fs::file_size(fixture)) * 2;
+  expect(!runtime.preloadSoundFont(a.string().c_str()), "warm-up requires seamless mode");
+  runtime.setSeamlessPresetSwitching(true, budget);
+  expect(runtime.preloadSoundFont(a.string().c_str()), "prepare first preset before touch");
+  expect(runtime.preloadSoundFont(b.string().c_str()), "prepare second preset within the shared sample budget");
+  expect(!runtime.preloadSoundFont(c.string().c_str()), "optional warm-up cannot evict ready presets to load a third bank");
+  std::array<float, 256> silence{};
+  runtime.renderInterleaved(silence.data(), 128, 2);
+  expect(std::all_of(silence.begin(), silence.end(), [](float v) { return v == 0; }), "warm-up does not activate any module");
+  fs::remove(a); fs::remove(b);
+  for (int preset = 0; preset < 6; ++preset) {
+    expect(runtime.beginPresetTransition(true, true), "stage warmed preset");
+    const auto path = preset % 2 == 0 ? a : b;
+    expect(runtime.loadSoundFont(0, path.string().c_str()), "repeated preset switches reuse samples without reopening deleted files");
+    expect(runtime.commitPresetTransition(), "activate warmed preset");
+    for (int block = 0; block < 128; ++block) runtime.renderInterleaved(silence.data(), 128, 2);
+    runtime.collectRetiredSoundFonts();
+  }
+  runtime.setSeamlessPresetSwitching(false);
+  expect(!runtime.loadSoundFont(0, a.string().c_str()), "disabling seamless releases retained cache");
+  fs::remove_all(root);
+}
+
+void testDeferredNativePresetEffectsMatchPreparedTransition() {
+  hook_keys::NativeEngineRuntime actual(48000, 128), reference(48000, 128);
+  std::array<float, 256> a{}, b{};
+  const auto compare = [&] {
+    actual.renderInterleaved(a.data(), 128, 2);
+    reference.renderInterleaved(b.data(), 128, 2);
+    for (std::size_t i = 0; i < a.size(); ++i)
+      expect(std::abs(a[i] - b[i]) < 0.000001f,
+          "deferred preparation preserves old voices and new reverb/delay sample-for-sample");
+  };
+  for (int preset = 0; preset < 3; ++preset) {
+    if (preset > 0) {
+      expect(actual.beginPresetTransition(true, true), "defer outgoing preset effects");
+      expect(reference.beginPresetTransition(true), "prepare outgoing preset effects as reference");
+    }
+    for (auto* runtime : {&actual, &reference}) {
+      hook_keys::ModuleConfig module;
+      module.gainLinear = 0.1f;
+      expect(runtime->setModulePerformance(7, module), "configure target synth route");
+      hook_keys::AnalogSynthConfig synth;
+      synth.oscillator1 = 0;
+      synth.oscillator2Enabled = synth.oscillator3Enabled = false;
+      synth.releaseMs = 400;
+      expect(runtime->setSynthConfig(synth), "configure target synth");
+      expect(runtime->setModuleReverb(7, preset != 1, preset == 2 ? 3 : 2, 0.4f, preset == 2 ? 0.4f : 1.0f),
+          "prepare only the target reverb, including bypass and a different tail");
+      hook_keys::DelayConfig delay;
+      delay.enabled = preset != 1;
+      delay.sync = false;
+      delay.delayMs = 20;
+      delay.mix = 0.4f;
+      expect(runtime->setModuleDelay(7, delay), "prepare target delay");
+    }
+    if (preset > 0) {
+      compare(); // preparing the next layer must not alter the audible old one
+      expect(actual.commitPresetTransition(), "commit deferred snapshot");
+      expect(reference.commitPresetTransition(), "commit reference snapshot");
+    }
+    for (auto* runtime : {&actual, &reference})
+      expect(runtime->sendMidi(0, 0x90, static_cast<std::uint8_t>(60 + preset), 100), "play target preset");
+    for (int block = 0; block < 100; ++block) compare();
+    for (auto* runtime : {&actual, &reference})
+      expect(runtime->sendMidi(0, 0x80, static_cast<std::uint8_t>(60 + preset), 0), "release target preset");
+  }
 }
 
 // Collects the frame index of every metronome attack, rendering the runtime in
@@ -1444,6 +1542,16 @@ void testTrackPlayerPlaysRoutesLoopsAndEnds() {
          "the start fade reaches full level");
   expect(std::abs(audio[1] + 0.25f) < 0.01f, "the right channel keeps its own samples");
   expect(player->status().playing && player->status().positionFrames > 0, "playback advances the position");
+
+  player->setRightChannelOnly(true);
+  expect(renderTracksUntil(*player, audio, channels, [&] { return audio[0] < -0.24f; }),
+         "click off replaces left with right without stopping playback");
+  expect(std::abs(audio[0] - audio[1]) < 0.0001f && player->status().playing,
+         "click off sends R to both sides, without summing L or doubling volume");
+  player->setRightChannelOnly(false);
+  expect(renderTracksUntil(*player, audio, channels, [&] { return audio[0] > 0.49f; }),
+         "click on restores the original stereo signal live");
+  expect(std::abs(audio[1] + 0.25f) < 0.01f, "right remains untouched after routing changes");
 
   player->setOutput(2, 2);
   renderTracksUntil(*player, audio, channels, [] { return true; });
@@ -3101,13 +3209,14 @@ void testRotarySurvivesEqualizerActivation() {
 // Leslie, não vibrato: a rotação deve soar como giro (volume, brilho e
 // espaço), sem entortar a afinação. Mede o desvio de altura, em cents, de uma
 // senoide grave (vai para o tambor) e de uma aguda (vai para a corneta).
-double rotaryPeakPitchDeviationCents(double frequency, float depth, std::uint8_t speed) {
+double rotaryPeakPitchDeviationCents(double frequency, float depth, std::uint8_t speed, bool doppler = true) {
   constexpr double sampleRate = 48000.0;
   hook_keys::ModuleEffects effects;
   effects.prepare(sampleRate);
   hook_keys::ModuleEffectsConfig config;
   // Mede o comportamento com os valores de fábrica do OpenB3/Beatrix.
   config.rotary = {true, speed, 0.672f, 7.056f, 1.2f, depth, 1.0f};
+  config.rotary.dopplerEnabled = doppler;
   effects.setConfig(config, 120.0f);
   std::vector<float> left(144000), right(144000);
   for (std::size_t index = 0; index < left.size(); ++index) {
@@ -3194,6 +3303,13 @@ void testAutoFaderRidesTheVolume() {
 }
 
 void testRotaryPitchStaysInTune() {
+  for (auto frequency : {220.0, 800.0, 2500.0}) {
+    for (std::uint8_t speed : {1, 2}) {
+      std::cerr << "Organ pitch: " << frequency << " speed " << (int)speed << " cents " << rotaryPeakPitchDeviationCents(frequency, 1.0f, speed, false) << std::endl;
+      expect(rotaryPeakPitchDeviationCents(frequency, 1.0f, speed, false) < 3.0,
+          "Organ rotary keeps pitch stable at full depth in Slow and Fast");
+    }
+  }
   expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 2) > 30.0, "Leslie Fast really swings the horn");
   expect(rotaryPeakPitchDeviationCents(2500.0, 0.7f, 2) < 60.0, "the horn swing stays a Leslie, not a siren");
   expect(rotaryPeakPitchDeviationCents(2500.0, 1.0f, 1) < 10.0, "Leslie Slow barely moves the pitch");
@@ -4391,6 +4507,7 @@ int main() {
   testDefaultVolumeEnvelopes();
   testNativeRuntimeSignalPath();
   testNativeRuntimeEffectPadsAndMidiChannel10();
+  testNativeRuntimeLiveEffectGain();
   testNeutralRuntimeSoundFontPathPreservesEmbeddedEnvelope();
   testModulesMeterUsesEveryOutput();
   testNativeRuntimeOrganDrawbars();
@@ -4398,6 +4515,8 @@ int main() {
   testOrganEnvelopeAndPermanentNoSens();
   testIndependentPresetTails();
   testCancelledNativePresetLeavesCurrentAudioUntouched();
+  testDeferredNativePresetEffectsMatchPreparedTransition();
+  testPresetSoundFontWarmupIsBoundedAndReused();
   testCompatibilityBlocksCc7();
   testSharedSoundFontEnvelopeIsolation();
   testIndependentOscillatorVolumes();

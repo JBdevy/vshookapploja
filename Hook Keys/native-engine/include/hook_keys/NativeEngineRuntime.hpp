@@ -29,13 +29,18 @@ public:
   NativeEngineRuntime& operator=(const NativeEngineRuntime&) = delete;
 
   [[nodiscard]] bool loadSoundFont(std::size_t moduleIndex, const char* utf8Path) noexcept;
+  // Worker-only, optional warm-up. Does not change a module or evict another
+  // bank to make room. Disk parsing never holds the live configuration lock.
+  [[nodiscard]] bool preloadSoundFont(const char* utf8Path) noexcept;
   [[nodiscard]] bool cloneSoundFont(
       std::size_t sourceModuleIndex, std::size_t targetModuleIndex) noexcept;
   void unloadSoundFont(std::size_t moduleIndex) noexcept;
   void collectRetiredSoundFonts() noexcept;
   // Control thread: create an independent preset layer, sharing sample data
   // only. The audio callback keeps the previous voices/effects until silent.
-  [[nodiscard]] bool beginPresetTransition(bool preserveConfig = false) noexcept;
+  // deferEffects is for full native snapshots: they prepare every target
+  // reverb/delay before commit, so preparing the old IR first is unnecessary.
+  [[nodiscard]] bool beginPresetTransition(bool preserveConfig = false, bool deferEffects = false) noexcept;
   [[nodiscard]] bool commitPresetTransition() noexcept;
   void cancelPresetTransition() noexcept;
   // O cache de SF2 retem bancos de amostras inteiros: um SoundFont de 480 MB
@@ -134,6 +139,7 @@ public:
   void clearEffectSample(std::size_t sampleIndex) noexcept;
   [[nodiscard]] bool triggerEffectSample(
       std::size_t sampleIndex, bool enabled, float gainDb = 0.0f) noexcept;
+  bool setEffectSampleGain(std::size_t sampleIndex, float gainDb) noexcept;
   void setEffectOutput(float db, bool enabled,
       std::uint8_t channelStart = 0, std::uint8_t channelCount = 2) noexcept;
   void render(float* left, float* right, std::size_t frames) noexcept;
@@ -189,7 +195,7 @@ private:
     std::size_t silentFrames = 0;
   };
   struct RuntimeCommand final {
-    enum class Kind : std::uint8_t { midi, transition, panic, padNote, performance, effect } kind = Kind::midi;
+    enum class Kind : std::uint8_t { midi, transition, panic, padNote, performance, effect, effectGain } kind = Kind::midi;
     MidiMessage midi{};
     PresetLayer* layer = nullptr;
     std::uint32_t packed = 0;
@@ -224,6 +230,7 @@ private:
     const EffectSample* sample = nullptr;
     std::size_t frame = 0;
     float gain = 1.0f;
+    float targetGain = 1.0f;
     float fade = 1.0f;
     bool releasing = false;
     std::uint8_t sampleIndex = 0;

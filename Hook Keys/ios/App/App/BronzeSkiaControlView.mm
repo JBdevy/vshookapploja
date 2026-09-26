@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-#if defined(BRONZE_KEYS_REQUIRE_SKIA) && !__has_include("include/core/SkBitmap.h")
+#if defined(BRONZE_KEYS_REQUIRE_SKIA) && BRONZE_KEYS_REQUIRE_SKIA && !__has_include("include/core/SkBitmap.h")
 #error "BRONZE_KEYS_REQUIRE_SKIA está ativo, mas os headers do Skia não foram encontrados"
 #endif
 

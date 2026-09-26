@@ -50,7 +50,7 @@ export function createTrackTransportMarkup(): string {
   return `
     <section class="track-transport" aria-label="Transporte da música">
       <button type="button" data-transport-action="play-stop" disabled>Play</button>
-      <button class="track-transport__name" type="button" data-transport-track-name disabled><span>Nenhuma música selecionada</span></button>
+      <button class="track-transport__name" type="button" data-transport-track-name><span>Nenhuma música selecionada</span></button>
       <output data-transport-remaining aria-label="Tempo restante">00:00</output>
       <span class="track-transport__progress" data-top-transport-progress aria-hidden="true"><i></i></span>
     </section>
@@ -80,6 +80,7 @@ export class TrackTransportController {
   private needleDrag: { pointerId: number; waveform: HTMLElement } | null = null;
   private readonly handleContextMenu = (event: MouseEvent) => this.onContextMenu(event);
   private readonly nameHoldGesture = new LongPressGesture(620);
+  private suppressNameClick = false;
   private objectUrl: string | null = null;
   private queuedAudio: TrackAudio | null = null;
   private queuedObjectUrl: string | null = null;
@@ -93,6 +94,9 @@ export class TrackTransportController {
   private autoplayPending = false;
   private loopEnabled = false;
   private tempoBpm = 120;
+  private loopClickEnabled = true;
+  private readonly loopSources = new WeakMap<TrackAudio, boolean>();
+  private readonly channelRoutes = new WeakMap<HTMLAudioElement, { left: GainNode; rightToLeft: GainNode }>();
   private outputDb = 0;
   private outputEnabled = true;
   private audioContext: AudioContext | null = null;
@@ -114,6 +118,7 @@ export class TrackTransportController {
     private readonly onPositionRequested: (trigger: HTMLElement) => void,
     private readonly nativeTracks: NativeTrackPlayer | null = null,
     private readonly onLoopPlaybackStarting: () => Promise<void> = () => Promise.resolve(),
+    private readonly onLibraryRequested: (trigger: HTMLElement) => void = () => {},
   ) {
     this.audio = this.createAudio();
     this.audio.preload = 'metadata';
@@ -278,7 +283,12 @@ export class TrackTransportController {
     const action = target instanceof Element
       ? target.closest<HTMLButtonElement>('[data-transport-action]')?.dataset.transportAction
       : undefined;
-    if (action === 'play-stop') void this.togglePlayStop();
+    if (action === 'play-stop') { void this.togglePlayStop(); return; }
+    const name = target instanceof Element ? target.closest<HTMLElement>('.track-transport') : null;
+    if (name) {
+      if (this.suppressNameClick) { this.suppressNameClick = false; return; }
+      this.onLibraryRequested(name);
+    }
   }
 
   private onPointerDown(event: PointerEvent): void {
@@ -311,19 +321,24 @@ export class TrackTransportController {
     const nameButton = target instanceof Element
       ? target.closest<HTMLButtonElement>('[data-transport-track-name]')
       : null;
-    if (!nameButton || nameButton.disabled || !this.selectedTrack) return;
-    event.preventDefault();
+    if (!nameButton || nameButton.disabled) return;
+    this.suppressNameClick = false;
+    if (!this.selectedTrack) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     if (!isDesktopRuntime()) {
-      this.nameHoldGesture.start(event, () => this.onPositionRequested(nameButton));
+      this.nameHoldGesture.start(event, () => {
+        this.suppressNameClick = true;
+        this.onPositionRequested(nameButton);
+      });
     }
   }
 
   private onContextMenu(event: MouseEvent): void {
     if (!isDesktopRuntime()) return;
     const nameButton = event.target instanceof Element
-      ? event.target.closest<HTMLButtonElement>('[data-transport-track-name]')
+      ? event.target.closest<HTMLElement>('.track-transport')
       : null;
-    if (!nameButton || nameButton.disabled || !this.selectedTrack) return;
+    if (!nameButton) return;
     event.preventDefault();
     event.stopPropagation();
     this.nameHoldGesture.cancel();
@@ -407,17 +422,9 @@ export class TrackTransportController {
     if (this.hasDuration() && this.audio.currentTime >= this.audio.duration) this.audio.currentTime = 0;
     try {
       await this.prepareAudioOutput(this.audio);
-      const synchronizedLoop = isTempoSyncedLoopTrack(this.selectedTrack);
-      if (synchronizedLoop && !(this.audio instanceof HTMLAudioElement)) {
-        await this.onLoopPlaybackStarting();
-      }
-      if (this.audio instanceof HTMLAudioElement) await this.audio.play();
-      else await this.audio.play(synchronizedLoop);
-      if (synchronizedLoop && this.audio instanceof HTMLAudioElement) {
-        // O HTMLAudioElement só informa o instante real depois que play()
-        // resolve. Reiniciar aqui elimina a diferença variável do carregamento.
-        await this.onLoopPlaybackStarting();
-      }
+      if (isTempoSyncedLoopTrack(this.selectedTrack)) await this.onLoopPlaybackStarting();
+      this.applyLoopChannelRoute(this.audio);
+      await this.audio.play();
       this.state = 'playing';
       this.render();
     } catch {
@@ -469,15 +476,9 @@ export class TrackTransportController {
         : this.attachFile(this.audio, track, file!);
       this.applyPlaybackRate(this.audio, track);
       if (autoplay) {
-        const synchronizedLoop = isTempoSyncedLoopTrack(track);
-        if (synchronizedLoop && !(this.audio instanceof HTMLAudioElement)) {
-          await this.onLoopPlaybackStarting();
-        }
-        if (this.audio instanceof HTMLAudioElement) await this.audio.play();
-        else await this.audio.play(synchronizedLoop);
-        if (synchronizedLoop && this.audio instanceof HTMLAudioElement) {
-          await this.onLoopPlaybackStarting();
-        }
+        if (isTempoSyncedLoopTrack(track)) await this.onLoopPlaybackStarting();
+        this.applyLoopChannelRoute(this.audio);
+        await this.audio.play();
         if (sequence !== this.loadSequence) return;
         this.state = 'playing';
       }
@@ -525,15 +526,9 @@ export class TrackTransportController {
     this.render();
     try {
       await this.prepareAudioOutput(this.audio);
-      const synchronizedLoop = isTempoSyncedLoopTrack(track);
-      if (synchronizedLoop && !(this.audio instanceof HTMLAudioElement)) {
-        await this.onLoopPlaybackStarting();
-      }
-      if (this.audio instanceof HTMLAudioElement) await this.audio.play();
-      else await this.audio.play(synchronizedLoop);
-      if (synchronizedLoop && this.audio instanceof HTMLAudioElement) {
-        await this.onLoopPlaybackStarting();
-      }
+      if (isTempoSyncedLoopTrack(track)) await this.onLoopPlaybackStarting();
+      this.applyLoopChannelRoute(this.audio);
+      await this.audio.play();
       this.state = 'playing';
       this.autoplayPending = false;
       this.render();
@@ -558,7 +553,7 @@ export class TrackTransportController {
     }
     if (trackName) {
       const nextName = this.selectedTrack?.name ?? 'Nenhuma música selecionada';
-      trackName.disabled = !this.selectedTrack;
+      trackName.disabled = false;
       trackName.title = this.selectedTrack?.name ?? '';
       if (trackNameLabel && nextName !== this.renderedTrackName) {
         this.renderedTrackName = nextName;
@@ -760,7 +755,24 @@ export class TrackTransportController {
     return null;
   }
 
+  setLoopClickEnabled(enabled: boolean): void {
+    this.loopClickEnabled = enabled;
+    this.applyLoopChannelRoute(this.audio);
+    if (this.queuedAudio) this.applyLoopChannelRoute(this.queuedAudio);
+  }
+
+  private applyLoopChannelRoute(audio: TrackAudio): void {
+    const rightOnly = this.loopSources.get(audio) === true && !this.loopClickEnabled;
+    if (!(audio instanceof HTMLAudioElement)) { if (audio === this.audio) audio.setRightChannelOnly(rightOnly); return; }
+    const route = this.channelRoutes.get(audio);
+    if (!route || !this.audioContext) return;
+    route.left.gain.setTargetAtTime(rightOnly ? 0 : 1, this.audioContext.currentTime, 0.005);
+    route.rightToLeft.gain.setTargetAtTime(rightOnly ? 1 : 0, this.audioContext.currentTime, 0.005);
+  }
+
   private applyPlaybackRate(audio: TrackAudio, track: LocalTrack | null): void {
+    this.loopSources.set(audio, isTempoSyncedLoopTrack(track));
+    this.applyLoopChannelRoute(audio);
     const sourceBpm = track?.loopSourceBpm;
     const tempoSynced = Number.isFinite(sourceBpm) && (sourceBpm ?? 0) > 0;
     const rate = tempoSynced
@@ -795,7 +807,23 @@ export class TrackTransportController {
         this.outputAnalysers = [left, right];
       }
       if (!this.connectedAudio.has(audio)) {
-        this.audioContext.createMediaElementSource(audio).connect(this.outputGain!);
+        const source = this.audioContext.createMediaElementSource(audio);
+        const stereoInput = this.audioContext.createGain();
+        stereoInput.channelCount = 2;
+        stereoInput.channelCountMode = 'explicit';
+        const split = this.audioContext.createChannelSplitter(2);
+        const merge = this.audioContext.createChannelMerger(2);
+        const left = this.audioContext.createGain();
+        const rightToLeft = this.audioContext.createGain();
+        rightToLeft.gain.value = 0;
+        source.connect(stereoInput);
+        stereoInput.connect(split);
+        split.connect(left, 0); left.connect(merge, 0, 0);
+        split.connect(rightToLeft, 1); rightToLeft.connect(merge, 0, 0);
+        split.connect(merge, 1, 1);
+        merge.connect(this.outputGain!);
+        this.channelRoutes.set(audio, { left, rightToLeft });
+        this.applyLoopChannelRoute(audio);
         this.connectedAudio.add(audio);
       }
       audio.volume = 1;

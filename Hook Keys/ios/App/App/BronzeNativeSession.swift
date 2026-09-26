@@ -438,6 +438,8 @@ struct BronzeModulePerformance: Codable, Equatable, Sendable {
     var polyphony = 128
     var outputStart = 0
     var outputCount = 2
+    var outputUsesDefault: Bool?
+    var usesDefaultOutput: Bool { outputUsesDefault ?? (outputStart == 0 && outputCount == 2) }
     var mode = 0
     var sustain = true
     var modulation = true
@@ -459,7 +461,7 @@ struct BronzeModulePerformance: Codable, Equatable, Sendable {
     var glideVelocityGate = false
     var glideVelocityInverted = false
     var glideVelocityThreshold = 64
-    func glideTime(bpm: Double) -> Double { glideSync ? 60000 / bpm : glideMs }
+    func glideTime(bpm: Double) -> Double { glideSync ? (60000 / min(600, max(60, bpm.isFinite ? bpm : 120)).rounded()).rounded() : glideMs }
     static func initial(_ moduleIndex: Int) -> Self {
         var value = Self()
         if moduleIndex == 6 { value.modulationMode = 4; value.noSens = true }
@@ -645,6 +647,9 @@ struct BronzeNativeSession: Codable, Equatable, Sendable {
     var organCabinetEnabled = true
     var tempo = 120.0
     var clickSound = 1
+    var metronomeAccent: Bool?
+    var metronomeDoubleTime: Bool?
+    var loopClickEnabled: Bool?
     var numerator = 4
     var denominator = 4
     var padBank = 0
@@ -714,12 +719,16 @@ struct BronzeSessionStore: Sendable {
     static func applicationStore() throws -> Self {
         let root = try FileManager.default.url(for: .applicationSupportDirectory,
             in: .userDomainMask, appropriateFor: nil, create: true)
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG && (targetEnvironment(simulator) || targetEnvironment(macCatalyst))
         if ProcessInfo.processInfo.environment["BRONZE_UI_TEST"] == "1" {
             return Self(directory: root.appendingPathComponent("BronzeKeysUITests", isDirectory: true))
         }
         #endif
         return Self(directory: root.appendingPathComponent("BronzeKeys", isDirectory: true))
+    }
+
+    static func soundFontIdentity(_ url: URL) -> String {
+        url.deletingLastPathComponent().lastPathComponent + "/" + url.lastPathComponent
     }
 
     static func validateSoundFontKey(_ key: String) throws {
@@ -792,5 +801,55 @@ struct BronzeAudioRouteOption: Equatable {
         let count = max(1, min(32, channels))
         return stride(from: 0, to: count - 1, by: 2).map { Self(start: $0, count: 2) }
             + (0..<count).map { Self(start: $0, count: 1) }
+    }
+}
+
+// Display-only ballistics shared by the small bus meters and module faders.
+// Matches Android's fast attack / 3 dB release per 30 Hz frame, independent of
+// delayed UI frames. It never changes audio gain or MIDI velocity.
+/// Visual state only: never sends a second note to the audio engine.
+struct BronzeMIDIKeyboardState {
+    private struct Source: Hashable { let device: String; let channel: Int }
+    private var held: [Source: Set<Int>] = [:]
+    var notes: Set<Int> { held.values.reduce(into: Set<Int>()) { $0.formUnion($1) } }
+    func notes(forDevice device: String) -> Set<Int> {
+        held.filter { $0.key.device == device }.values.reduce(into: Set<Int>()) { $0.formUnion($1) }
+    }
+
+    mutating func receive(device: String, channel: Int, note: Int, velocity: Int) {
+        // Channel 10 belongs to Pads/FX, as in the web keyboard.
+        guard (1...16).contains(channel), channel != 10, (0...127).contains(note) else { return }
+        let source = Source(device: device, channel: channel)
+        if velocity > 0 { held[source, default: []].insert(note) }
+        else {
+            held[source]?.remove(note)
+            if held[source]?.isEmpty == true { held.removeValue(forKey: source) }
+        }
+    }
+    mutating func clear(device: String, channel: Int) {
+        held.removeValue(forKey: Source(device: device, channel: channel))
+    }
+    mutating func clear() { held.removeAll() }
+}
+
+enum BronzeMeterDisplay {
+    static func smooth(peak: Double, previous: Double, elapsed: Double) -> Double {
+        let input = peak.isFinite ? max(0, peak) : 0
+        let old = previous.isFinite ? max(0, previous) : 0
+        let dt = elapsed.isFinite ? min(1, max(0, elapsed)) : 1.0 / 30
+        // Web mobile: 3 dB per 90 ms. Keep that release speed at any UI frame rate.
+        let releaseDbPerSecond = 3.0 / 0.09
+        let value = max(input, old * pow(10, -releaseDbPerSecond * dt / 20))
+        return value < pow(10, -90.0 / 20) ? 0 : value
+    }
+    static func position(peak: Double) -> Double {
+        guard peak.isFinite, peak > 0 else { return 0 }
+        let db = min(0, max(-90, 20 * log10(peak)))
+        let points: [(db: Double, position: Double)] = [(-90, 0), (-60, 0.06), (-36, 0.18), (-18, 0.37), (-9, 0.65), (0, 1)]
+        for i in 1..<points.count where db <= points[i].db {
+            let a = points[i - 1], b = points[i]
+            return a.position + (db - a.db) / (b.db - a.db) * (b.position - a.position)
+        }
+        return 1
     }
 }

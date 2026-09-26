@@ -8,9 +8,11 @@ struct BronzeSkiaControl: View {
     @Binding var value: Double
     var accent: UIColor = UIColor(red: 0.80, green: 0.42, blue: 0.18, alpha: 1)
     var accessibilityLabel: String
+    var displayValue: String? = nil
+    var definition: BronzeProcessorParameter? = nil
     var body: some View {
         if kind == .knob {
-            BronzeDial(value: $value, tint: Color(accent), label: accessibilityLabel)
+            BronzeDial(value: $value, tint: Color(accent), label: accessibilityLabel, displayValue: displayValue, definition: definition)
         } else {
             BronzeSkiaNativeControl(kind: kind, value: $value, accent: accent, accessibilityLabel: accessibilityLabel)
         }
@@ -132,7 +134,12 @@ extension Color {
 struct BronzePerformanceKeyboard: UIViewRepresentable {
     @AppStorage("bronze.keyboardStyle") private var keyboardStyle = 0
     @AppStorage("bronze.lite") private var lite = false
+    #if targetEnvironment(macCatalyst)
+    private let fullRange = true
+    #else
     @AppStorage("bronze.keyboardFullRange") private var fullRange = false
+    #endif
+    var midiNotes: Set<Int> = []
     let onNote: (_ note: Int, _ pressed: Bool, _ velocity: Int) -> Void
 
     func makeUIView(context: Context) -> BronzePerformanceKeyboardView {
@@ -146,6 +153,7 @@ struct BronzePerformanceKeyboard: UIViewRepresentable {
         view.keyboardStyle = keyboardStyle
         view.lite = lite
         view.fullRange = fullRange
+        view.midiNotes = midiNotes
     }
 
     static func dismantleUIView(_ view: BronzePerformanceKeyboardView, coordinator: ()) {
@@ -163,7 +171,8 @@ final class BronzePerformanceKeyboardView: UIView {
         }
     }
     var keyboardStyle = 0 { didSet { if oldValue != keyboardStyle { setNeedsDisplay() } } }
-    var lite = false
+    var lite = false { didSet { if oldValue != lite { setNeedsDisplay() } } }
+    var midiNotes: Set<Int> = [] { didSet { if oldValue != midiNotes { setNeedsDisplay() } } }
     var onNote: ((_ note: Int, _ pressed: Bool, _ velocity: Int) -> Void)?
 
     private var firstNote: Int { fullRange ? 21 : 48 }
@@ -199,7 +208,7 @@ final class BronzePerformanceKeyboardView: UIView {
         context.setAllowsAntialiasing(true)
         for note in whiteRects.keys.sorted() {
             guard let keyRect = whiteRects[note] else { continue }
-            let held = !lite && (noteTouchCounts[note] ?? 0) > 0
+            let held = !lite && ((noteTouchCounts[note] ?? 0) > 0 || midiNotes.contains(note))
             let colors: [UIColor] = held ? [.init(red: 0.41, green: 0.97, blue: 0.59, alpha: 1), .init(red: 0.08, green: 0.65, blue: 0.29, alpha: 1)]
                 : keyboardStyle == 0 ? [.init(white: 0.7, alpha: 1), .init(white: 0.98, alpha: 1), .init(white: 0.7, alpha: 1)]
                 : [.init(white: 0.02, alpha: 1), .init(white: 0.16, alpha: 1), .init(white: 0.025, alpha: 1)]
@@ -225,7 +234,7 @@ final class BronzePerformanceKeyboardView: UIView {
         }
         for note in blackRects.keys.sorted() {
             guard let keyRect = blackRects[note] else { continue }
-            let held = !lite && (noteTouchCounts[note] ?? 0) > 0
+            let held = !lite && ((noteTouchCounts[note] ?? 0) > 0 || midiNotes.contains(note))
             let path = UIBezierPath(
                 roundedRect: keyRect.insetBy(dx: 0.5, dy: 0),
                 byRoundingCorners: [.bottomLeft, .bottomRight],
@@ -354,13 +363,20 @@ struct BronzeKeyboardExpressionWheel: View {
                 let travel = max(1, geometry.size.height - thumb)
                 ZStack(alignment: .top) {
                     RoundedRectangle(cornerRadius: 5).fill(LinearGradient(colors: [.black, Color(white: 0.22), .black], startPoint: .leading, endPoint: .trailing))
+                    if !spring {
+                        LinearGradient(colors: [Color(bronzeHex: 0xe95b08), Color(bronzeHex: 0xffad45)], startPoint: .bottom, endPoint: .top)
+                            .frame(height: geometry.size.height * min(1, max(0, value)))
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .allowsHitTesting(false)
+                    }
                     VStack(spacing: 0) {
                         ForEach(0..<12) { _ in Rectangle().fill(.white.opacity(0.12)).frame(height: 1).frame(maxHeight: .infinity) }
                     }.padding(.horizontal, 5)
                     RoundedRectangle(cornerRadius: 4)
                         .fill(LinearGradient(colors: [Color(white: 0.7), Color(white: 0.2), Color(white: 0.5)], startPoint: .top, endPoint: .bottom))
                         .overlay(Text(mark).font(.bronzeUI(13)).foregroundStyle(Color.bronzeLight))
-                        .frame(height: thumb).padding(.horizontal, 3)
+                        .frame(maxWidth: .infinity).frame(height: thumb)
                         .offset(y: (1 - value) * travel)
                 }.contentShape(Rectangle())
                     .gesture(DragGesture(minimumDistance: 0).onChanged { gesture in
@@ -410,12 +426,17 @@ struct BronzeTapHoldSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         let short = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap))
+        #if targetEnvironment(macCatalyst)
+        short.buttonMaskRequired = .primary
+        view.addInteraction(UIContextMenuInteraction(delegate: context.coordinator))
+        #else
         let long = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hold(_:)))
         long.minimumPressDuration = 0.56
         long.allowableMovement = 10
         short.require(toFail: long)
-        view.addGestureRecognizer(short)
         view.addGestureRecognizer(long)
+        #endif
+        view.addGestureRecognizer(short)
         view.isAccessibilityElement = false
         return view
     }
@@ -423,15 +444,98 @@ struct BronzeTapHoldSurface: UIViewRepresentable {
         context.coordinator.parent = self
         view.isUserInteractionEnabled = enabled
     }
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, UIContextMenuInteractionDelegate {
         var parent: BronzeTapHoldSurface
         init(_ parent: BronzeTapHoldSurface) { self.parent = parent }
         @objc func tap() { if parent.enabled { parent.tap() } }
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+            guard parent.enabled else { return nil }
+            // Catalyst routes secondary clicks through contextual interactions,
+            // not through UITapGestureRecognizer's button mask.
+            DispatchQueue.main.async { [weak self] in self?.parent.hold() }
+            return nil
+        }
         @objc func hold(_ gesture: UILongPressGestureRecognizer) {
             if parent.enabled && gesture.state == .began { parent.hold() }
         }
     }
 }
+
+#if targetEnvironment(macCatalyst)
+/// Reserve desktop window space for the sidebar instead of applying the
+/// phone/tablet's condensed transport and mixer layout.
+struct BronzeMacSidebarWindow: UIViewRepresentable {
+    let expanded: Bool
+    final class WindowSizingView: UIView {
+        var expanded = false { didSet { if oldValue != expanded { applySize() } } }
+        override func didMoveToWindow() { super.didMoveToWindow(); applySize() }
+        private func applySize() {
+            window?.windowScene?.sizeRestrictions?.minimumSize = CGSize(width: expanded ? 1464 : 1024, height: 680)
+        }
+    }
+    func makeUIView(context: Context) -> WindowSizingView {
+        let view = WindowSizingView(); view.isUserInteractionEnabled = false; view.expanded = expanded; return view
+    }
+    func updateUIView(_ view: WindowSizingView, context: Context) { view.expanded = expanded }
+}
+
+#if DEBUG
+/// Local smoke capture of this app's own window, without screen recording or
+/// Accessibility permissions. Only enabled by an explicit test environment.
+enum BronzeMacSmoke {
+    static let navigate = Notification.Name("BronzeMacSmokeNavigate")
+    static func start(window: UIWindow) {
+        guard ProcessInfo.processInfo.environment["BRONZE_UI_TEST"] == "1",
+              let directory = ProcessInfo.processInfo.environment["BRONZE_MAC_CAPTURE"] else { return }
+        Task { @MainActor in
+            do {
+                try BronzeKeychain.write(Data("local-smoke".utf8), key: "mac-smoke")
+                let restored = try BronzeKeychain.read("mac-smoke") == Data("local-smoke".utf8)
+                BronzeKeychain.remove("mac-smoke")
+                NSLog("[BronzeMacSmoke] keychain=%d", restored)
+            } catch { NSLog("[BronzeMacSmoke] keychain error: %@", error.localizedDescription) }
+            try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            for scene in ["home", "sidebar", "home", "pads", "fxEditor", "home", "eq", "settings", "home", "preset", "home", "learn", "home"] {
+                NotificationCenter.default.post(name: navigate, object: scene)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                try? image.pngData()?.write(to: URL(fileURLWithPath: directory).appendingPathComponent(scene + ".png"))
+                NSLog("[BronzeMacSmoke] %@ %.0fx%.0f", scene, window.bounds.width, window.bounds.height)
+            }
+        }
+    }
+}
+#endif
+
+/// Only secondary mouse events land here. Primary dragging still reaches
+/// the underlying knob, fader or button unchanged.
+struct BronzeSecondaryClickSurface: UIViewRepresentable {
+    @Environment(\.isEnabled) private var enabled
+    let action: () -> Void
+    final class Surface: UIView {
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            event?.buttonMask.contains(.secondary) == true && super.point(inside: point, with: event)
+        }
+    }
+    final class Coordinator: NSObject {
+        var parent: BronzeSecondaryClickSurface
+        init(_ parent: BronzeSecondaryClickSurface) { self.parent = parent }
+        @objc func click() { if parent.enabled { parent.action() } }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> Surface {
+        let view = Surface()
+        let click = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.click))
+        click.buttonMaskRequired = .secondary
+        view.addGestureRecognizer(click)
+        return view
+    }
+    func updateUIView(_ view: Surface, context: Context) { context.coordinator.parent = self }
+}
+#endif
 
 extension View {
     func bronzeTapHold(tap: @escaping () -> Void, hold: @escaping () -> Void) -> some View {
@@ -482,3 +586,262 @@ struct BronzeStableMenu: UIViewRepresentable {
         var select: (Int) -> Void = { _ in }
     }
 }
+
+// UIKit presents a transparent floating panel on iOS 15/16 as well as newer
+// systems; SwiftUI's compact popover adaptation would turn it into a sheet.
+struct BronzeKnobFocusPresenter: UIViewRepresentable {
+    @Binding var isPresented: Bool
+    @Binding var value: Double
+    let label: String
+    var displayValue: String?
+    var definition: BronzeProcessorParameter?
+    let step: Double
+    let tint: Color
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(); view.isUserInteractionEnabled = false
+        return view
+    }
+    func updateUIView(_ view: UIView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        guard isPresented || coordinator.isVisible else { return }
+        // Presentation and dismissal must happen after SwiftUI's update pass.
+        DispatchQueue.main.async { [weak view, weak coordinator] in
+            guard let view, let coordinator else { return }
+            coordinator.state.synchronize(coordinator.parent)
+            if coordinator.parent.isPresented { coordinator.show(from: view) }
+            else { coordinator.hide() }
+        }
+    }
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) { coordinator.hide() }
+
+    final class Coordinator {
+        var parent: BronzeKnobFocusPresenter
+        let state = BronzeKnobFocusState()
+        private var controller: BronzeKnobFocusController?
+        var isVisible: Bool { controller != nil }
+        init(_ parent: BronzeKnobFocusPresenter) {
+            self.parent = parent
+            state.write = { [weak self] value in self?.parent.value = value }
+            state.close = { [weak self] in
+                self?.parent.isPresented = false
+                self?.hide()
+            }
+        }
+        func show(from source: UIView) {
+            guard controller == nil, source.window != nil else { return }
+            var responder: UIResponder? = source
+            while responder != nil && !(responder is UIViewController) { responder = responder?.next }
+            guard var presenter = responder as? UIViewController else { return }
+            while let presented = presenter.presentedViewController { presenter = presented }
+            guard !presenter.isBeingDismissed, !presenter.isBeingPresented else { return }
+            let next = BronzeKnobFocusController(rootView: BronzeKnobFocusPanel(state: state))
+            next.orientationMask = presenter.supportedInterfaceOrientations
+            next.modalPresentationStyle = .overFullScreen
+            next.modalTransitionStyle = .crossDissolve
+            next.view.backgroundColor = .clear
+            controller = next
+            presenter.present(next, animated: false)
+        }
+        func hide() {
+            guard let controller else { return }
+            self.controller = nil
+            controller.dismiss(animated: false)
+        }
+    }
+}
+
+final class BronzeKnobFocusController: UIHostingController<BronzeKnobFocusPanel> {
+    var orientationMask: UIInterfaceOrientationMask = .landscape
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { orientationMask }
+    override var prefersStatusBarHidden: Bool { true }
+}
+
+final class BronzeKnobFocusState: ObservableObject {
+    @Published var value = 0.0
+    @Published var text = ""
+    var label = ""
+    var tint = Color.bronzeLight
+    var definition: BronzeProcessorParameter?
+    var step = 0.01
+    var write: (Double) -> Void = { _ in }
+    var close: () -> Void = {}
+    func synchronize(_ source: BronzeKnobFocusPresenter) {
+        label = source.label; tint = source.tint; definition = source.definition; step = source.step
+        if value != source.value { value = source.value }
+        let next = source.displayValue ?? definition.map { $0.text($0.value(value)) } ?? "\(Int((value * 100).rounded()))%"
+        if text != next { text = next }
+    }
+    func setValue(_ next: Double) {
+        guard next.isFinite else { return }
+        value = min(1, max(0, next))
+        if let definition { text = definition.text(definition.value(value)) }
+        write(value)
+    }
+    func adjust(_ direction: Int) {
+        if let definition {
+            setValue(definition.normalized(definition.stepped(definition.value(value), direction: direction)))
+        } else {
+            setValue(value + step * Double(direction))
+        }
+    }
+}
+
+struct BronzeKnobFocusPanel: View {
+    @ObservedObject var state: BronzeKnobFocusState
+    @State private var idle: Task<Void, Never>?
+    @State private var slidingFrom: Double?
+    @GestureState private var sliding = false
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.001).ignoresSafeArea().onTapGesture { state.close() }
+            VStack(spacing: 12) {
+                Text(state.label).font(.bronzeUI(18)).foregroundStyle(.white).lineLimit(2)
+                HStack(spacing: 14) {
+                    VStack(spacing: 10) {
+                        stepButton("+", direction: 1)
+                        stepButton("−", direction: -1)
+                    }
+                    BronzeDialFace(value: state.value, tint: state.tint).frame(width: 118, height: 118).accessibilityHidden(true)
+                    ZStack(alignment: .top) {
+                        RoundedRectangle(cornerRadius: 3).fill(Color(bronzeHex: 0x0b0c10)).frame(width: 8)
+                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.gray.opacity(0.6)))
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(LinearGradient(colors: [Color(bronzeHex: 0x444b55), .black, Color(bronzeHex: 0x353b44)], startPoint: .top, endPoint: .bottom))
+                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.gray))
+                            .shadow(color: state.tint.opacity(0.45), radius: 5)
+                            .frame(width: 30, height: 20).offset(y: (1 - state.value) * 98)
+                    }.frame(width: 34, height: 118).contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0).updating($sliding) { _, active, _ in active = true }.onChanged { gesture in
+                            if slidingFrom == nil { slidingFrom = state.value; editing(true) }
+                            // Relative movement: touching the track never jumps the value.
+                            state.setValue((slidingFrom ?? state.value) - gesture.translation.height / 98)
+                        }.onEnded { _ in slidingFrom = nil; editing(false) })
+                        .onChange(of: sliding) { active in if !active { slidingFrom = nil; editing(false) } }
+                        .accessibilityElement().accessibilityLabel("Ajustar \(state.label)").accessibilityValue(state.text)
+                        .accessibilityAdjustableAction { direction in state.adjust(direction == .increment ? 1 : -1); editing(false) }
+                        .accessibilityIdentifier("bronze.knob.slider")
+                }
+                Text(state.text).font(.bronzeUI(16)).foregroundStyle(state.tint).monospacedDigit()
+                    .accessibilityIdentifier("bronze.knob.value")
+            }.padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 18)
+                .background(Color(bronzeHex: 0x0d0c10).opacity(0.96))
+                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .overlay(RoundedRectangle(cornerRadius: 22).stroke(state.tint.opacity(0.8), lineWidth: 1.5))
+                .shadow(color: .black.opacity(0.7), radius: 25, y: 16)
+                .shadow(color: state.tint.opacity(0.22), radius: 15)
+                .padding(12)
+                .accessibilityIdentifier("bronze.knob.focus")
+        }.preferredColorScheme(.dark)
+            .onAppear { editing(false) }
+            .onDisappear { idle?.cancel() }
+    }
+    private func stepButton(_ label: String, direction: Int) -> some View {
+        BronzeKnobStepButton(label: label, tint: state.tint, editing: editing) { state.adjust(direction) }
+            .accessibilityLabel("\(direction > 0 ? "Aumentar" : "Diminuir") \(state.label)")
+    }
+    private func editing(_ active: Bool) {
+        idle?.cancel(); idle = nil
+        guard !active else { return }
+        idle = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
+            guard !Task.isCancelled else { return }
+            state.close()
+        }
+    }
+}
+
+private struct BronzeKnobStepButton: View {
+    let label: String
+    let tint: Color
+    let editing: (Bool) -> Void
+    let action: () -> Void
+    @State private var repeating: Task<Void, Never>?
+    @State private var pressed = false
+    @GestureState private var touching = false
+    var body: some View {
+        Text(label).font(.bronzeUI(22)).foregroundStyle(.white).frame(width: 34, height: 46)
+            .background(LinearGradient(colors: [Color(bronzeHex: 0x343943), Color(bronzeHex: 0x121419)], startPoint: .top, endPoint: .bottom))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(tint.opacity(0.7)))
+            .brightness(pressed ? 0.2 : 0).contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).updating($touching) { _, active, _ in active = true }.onChanged { _ in
+                guard !pressed else { return }
+                pressed = true; editing(true); action()
+                repeating = Task { @MainActor in
+                    do {
+                        try await Task.sleep(nanoseconds: 280_000_000)
+                        while !Task.isCancelled {
+                            action()
+                            try await Task.sleep(nanoseconds: 60_000_000)
+                        }
+                    } catch {}
+                }
+            }.onEnded { _ in stop(); editing(false) })
+            .onChange(of: touching) { active in if !active { stop(); editing(false) } }
+            .onDisappear { stop() }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { action(); editing(false) }
+    }
+    private func stop() { repeating?.cancel(); repeating = nil; pressed = false }
+}
+
+struct BronzeTransparentModalBackground: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView { ClearView() }
+    func updateUIView(_ view: UIView, context: Context) {}
+    private final class ClearView: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                var responder: UIResponder? = self
+                while let current = responder {
+                    if let controller = current as? UIViewController {
+                        controller.view.backgroundColor = .clear
+                        break
+                    }
+                    responder = current.next
+                }
+            }
+        }
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+/// Listen on the window so SwiftUI labels/overlays cannot swallow the secondary
+/// button. The marker restricts recognition to this transport's visible bounds.
+struct BronzeTransportSecondaryClick: UIViewRepresentable {
+    let action: () -> Void
+    final class Marker: UIView, UIGestureRecognizerDelegate {
+        var action: () -> Void = {}
+        private weak var installedWindow: UIWindow?
+        private lazy var click: UITapGestureRecognizer = {
+            let value = UITapGestureRecognizer(target: self, action: #selector(secondaryClick))
+            value.buttonMaskRequired = .secondary
+            value.cancelsTouchesInView = false
+            value.delegate = self
+            return value
+        }()
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            installedWindow?.removeGestureRecognizer(click)
+            installedWindow = window
+            window?.addGestureRecognizer(click)
+        }
+        func detach() { installedWindow?.removeGestureRecognizer(click); installedWindow = nil }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard window != nil, !isHidden, alpha > 0,
+                  window?.rootViewController?.presentedViewController == nil else { return false }
+            return bounds.contains(touch.location(in: self))
+        }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+        @objc private func secondaryClick() { action() }
+    }
+    func makeUIView(context: Context) -> Marker {
+        let view = Marker(); view.isUserInteractionEnabled = false; view.action = action; return view
+    }
+    func updateUIView(_ view: Marker, context: Context) { view.action = action }
+    static func dismantleUIView(_ view: Marker, coordinator: ()) { view.detach() }
+}
+#endif

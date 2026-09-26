@@ -242,6 +242,8 @@ int hk_runtime_configure_effects(
   effects.reverb = {reverbMix > 0.0001f,
                     static_cast<std::uint8_t>(std::clamp(reverbImpulse, 0, 3)),
                     reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};
+  // Web Decay is the retained fraction of the selected convolution impulse.
+  effects.reverb.tail = std::isfinite(reverbDecay) ? std::clamp(reverbDecay, 0.1f, 1.0f) : 1.0f;
   effects.rotary = {rotaryEnabled != 0, static_cast<std::uint8_t>(std::clamp(rotarySpeed, 0, 2)),
                     rotarySlowHz, rotaryFastHz, rotaryRampSeconds, rotaryDepth, rotaryMix,
                     rotaryModulationEnabled != 0};

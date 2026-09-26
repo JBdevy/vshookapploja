@@ -829,6 +829,7 @@ void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_
   // OpenB3/Beatrix b_whirl: 36/40,32 RPM no Slow e 357,3/423,36 no Fast.
   const auto drumTargetHz = targetHz * (effectiveSpeed == 2 ? (357.3f / 423.36f) : (36.0f / 40.32f));
   const auto depth = config.depth;
+  const auto motionDepth = config.dopplerEnabled ? depth : 0.0f;
   const auto toneScale = static_cast<float>(2.0 * kPi / sampleRate);
   // Microfones a +/-72 graus (0,2 de volta): cada lado ouve a corneta chegar e
   // ir embora em momentos diferentes; o giro aparece no estéreo e ainda soa
@@ -877,12 +878,24 @@ void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_
       const auto hornFacing = std::cos(static_cast<float>(2.0 * kPi) * hornTurns);
       const auto drumFacing = std::cos(static_cast<float>(2.0 * kPi) * drumTurns);
 
+      if (!config.dopplerEnabled) {
+        // Organ: rotate the level of phase-aligned crossover bands. No moving
+        // delay, reflection comb or modulated filter phase can bend the pitch.
+        const auto hornGain = 1.0f - hornTremolo * depth * (0.5f - 0.5f * hornFacing);
+        const auto drumGain = 1.0f - drumTremolo * depth * (0.5f - 0.5f * drumFacing);
+        const auto horn = channel == 0 ? hornLeft : hornRight;
+        const auto drum = channel == 0 ? drumLeft : drumRight;
+        const auto rotated = std::tanh((horn * hornGain + drum * drumGain) * drive) / drive;
+        wet[channel] = rotated * (1.0f - leak) + reference[channel] * leak;
+        continue;
+      }
+
       // Doppler geométrico: o atraso é a distância real até o microfone.
-      const auto hornDelay = displacementAt(hornDisplacement, hornTurns, depth);
-      const auto drumDelay = displacementAt(drumDisplacement, drumTurns, depth);
+      const auto hornDelay = displacementAt(hornDisplacement, hornTurns, motionDepth);
+      const auto drumDelay = displacementAt(drumDisplacement, drumTurns, motionDepth);
       // Reflexão: o lobo de costas bate no gabinete e chega depois.
-      const auto hornEchoDelay = displacementAt(hornDisplacement, hornTurns + 0.5f, depth) + hornReflectionSamples;
-      const auto drumEchoDelay = displacementAt(drumDisplacement, drumTurns + 0.5f, depth) + drumReflectionSamples;
+      const auto hornEchoDelay = displacementAt(hornDisplacement, hornTurns + 0.5f, motionDepth) + hornReflectionSamples;
+      const auto drumEchoDelay = displacementAt(drumDisplacement, drumTurns + 0.5f, motionDepth) + drumReflectionSamples;
 
       const auto hornSource = read(hornBuffers[channel], hornDelay) + read(hornBuffers[other], hornDelay) * crossfeed;
       const auto hornEcho = read(hornBuffers[channel], hornEchoDelay) + read(hornBuffers[other], hornEchoDelay) * crossfeed;

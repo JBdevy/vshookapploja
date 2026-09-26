@@ -107,6 +107,21 @@ struct BronzeUserWorkspace: Codable, Equatable, Sendable {
     var synthPresets = (0..<16).map { BronzeSynthPreset(color: $0 % 8) }
     var activeSynthPreset: Int?
     var playlists: [BronzeUserPlaylist] = []
+    // Library files are independent of playlists, as in the Android manager.
+    // Optional for old sessions; existing playlist files appear in All too.
+    var libraryTracks: [BronzeUserTrack]?
+    static let libraryPlaylistID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    var allLibraryTracks: [BronzeUserTrack] {
+        var keys = Set<String>()
+        return ((libraryTracks ?? []) + playlists.flatMap(\.tracks)).filter { keys.insert($0.key).inserted }
+    }
+    func playlist(_ id: UUID?) -> BronzeUserPlaylist? {
+        if id == Self.libraryPlaylistID {
+            return BronzeUserPlaylist(id: Self.libraryPlaylistID, name: "All", tracks: allLibraryTracks,
+                repeatEnabled: playlistSidebar?.repeatEnabled ?? false, autoAdvance: playlistSidebar?.autoAdvance ?? false)
+        }
+        return playlists.first { $0.id == id }
+    }
     // nil is the immutable bundled playlist. IDs survive reordering/removal.
     var selectedPlaylist: UUID?
     var selectedTrack: UUID?
@@ -145,7 +160,13 @@ struct BronzeUserWorkspace: Codable, Equatable, Sendable {
         guard synthPresets.count == 16, activeSynthPreset.map({ (0..<16).contains($0) }) ?? true,
               fxBanks.count == 8, fxBanks[0].name == "Church", (0..<8).contains(fxBank),
               playlists.count <= 256, Set(playlists.map(\.id)).count == playlists.count,
-              selectedPlaylist.map({ id in playlists.contains { $0.id == id } }) ?? true else { throw BronzeSessionError.invalid }
+              !playlists.contains(where: { $0.id == Self.libraryPlaylistID }),
+              selectedPlaylist.map({ playlist($0) != nil }) ?? true else { throw BronzeSessionError.invalid }
+        if let libraryTracks {
+            guard libraryTracks.count <= 10000, Set(libraryTracks.map(\.id)).count == libraryTracks.count,
+                  Set(libraryTracks.map(\.key)).count == libraryTracks.count else { throw BronzeSessionError.invalid }
+            for track in libraryTracks { try Self.validateName(track.name); try BronzeUserMediaStore.validateKey(track.key) }
+        }
         for preset in synthPresets {
             try Self.validateName(preset.name); try preset.sound?.validate(); try preset.envelope.validate()
             guard (0..<8).contains(preset.color) else { throw BronzeSessionError.invalid }
@@ -161,7 +182,7 @@ struct BronzeUserWorkspace: Codable, Equatable, Sendable {
             }
         }
         if let selectedTrack {
-            guard let list = playlists.first(where: { $0.id == selectedPlaylist }),
+            guard let list = playlist(selectedPlaylist),
                   list.tracks.contains(where: { $0.id == selectedTrack }) else { throw BronzeSessionError.invalid }
         }
         for (bankIndex, bank) in fxBanks.enumerated() {
@@ -263,6 +284,15 @@ struct BronzeMIDITarget: Identifiable, Equatable {
             for (key, title, continuous) in [("fader", "Volume", true), ("on", "ON/OFF", false), ("solo", "Solo", false)] {
                 result.append(Self(id: "\(key):\(module)", name: prefix + title, continuous: continuous))
             }
+            for key in ["velocity", "modRate", "modDepth", "glide"] {
+                result.append(Self(id: "performance:\(module):\(key)", name: prefix + ["velocity": "Limite Velocity", "modRate": "Mod · Rate", "modDepth": "Mod · Intensity", "glide": "Glide"][key]!, continuous: true))
+            }
+            for key in ["rate", "gate", "swing", "depth"] where module != 6 {
+                result.append(Self(id: "arp:\(module):\(key)", name: prefix + "Arpeggiator · " + key, continuous: true))
+            }
+            for key in ["rate"] + BronzePulseParameter.allCases.map(\.rawValue) {
+                result.append(Self(id: "pulse:\(module):\(key)", name: prefix + "Pulse · " + key, continuous: true))
+            }
             for (index, title) in ["Attack", "Release", "Hold", "Decay", "Sustain"].enumerated() {
                 result.append(Self(id: "env:\(module):\(index)", name: prefix + title, continuous: true))
             }
@@ -290,6 +320,7 @@ struct BronzeMIDITarget: Identifiable, Equatable {
         for index in 0..<96 { result.append(Self(id: "preset:\(index)", name: "Preset \(["A", "B", "C", "D", "E", "F"][index / 16])\(index % 16 + 1)")) }
         for index in 0..<6 { result.append(Self(id: "bank:\(index)", name: "Banco \(["A", "B", "C", "D", "E", "F"][index])")) }
         for index in 0..<9 { result.append(Self(id: "drawbar:\(index)", name: "B3 · Drawbar \(index + 1)", continuous: true)) }
+        for key in ["Slow", "Fast", "Acceleration", "Depth"] { result.append(Self(id: "rotaryParam:0:\(key)", name: "Rotary · " + key, continuous: true)) }
         result.append(Self(id: "rotary", name: "B3 · Slow/Fast")); result.append(Self(id: "cabinet", name: "B3 · Gabinet"))
         for parameter in BronzeSynthParameter.allCases { result.append(Self(id: "synth:\(parameter.rawValue)", name: "Synth · " + parameter.rawValue, continuous: true)) }
         for oscillator in 0..<3 { for parameter in ["Volume", "Detune", "Octave"] {

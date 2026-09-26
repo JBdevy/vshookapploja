@@ -2145,6 +2145,17 @@ fn main() {
             // edição de texto como Ctrl+C/Ctrl+V continuam disponíveis.
             #[cfg(windows)]
             if let Some(main_webview) = app.get_webview_window("main") {
+                // Match the Mac window's outer 1128 x 673 logical-point frame,
+                // subtracting the actual Windows border/title bar at this DPI.
+                if let (Ok(outer), Ok(inner), Ok(scale)) = (
+                    main_webview.outer_size(), main_webview.inner_size(), main_webview.scale_factor(),
+                ) {
+                    let border_width = outer.width.saturating_sub(inner.width) as f64 / scale;
+                    let border_height = outer.height.saturating_sub(inner.height) as f64 / scale;
+                    let _ = main_webview.set_size(tauri::LogicalSize::new(
+                        1128.0 - border_width, 673.0 - border_height,
+                    ));
+                }
                 let _ = main_webview.with_webview(|webview| unsafe {
                     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
                     use windows::core::Interface;

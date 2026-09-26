@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "Bronze Keys", "width": 1100, "height": 650, "minWidth": 900, "minHeight": 520 }],
+    "windows": [{ "title": "Bronze Keys", "width": 1128, "height": 673, "minWidth": 900, "minHeight": 520 }],
     "security": { "csp": null }
   },
   "bundle": {

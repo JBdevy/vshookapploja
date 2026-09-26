@@ -51,6 +51,9 @@ type TrackListItem =
   | { kind: 'block'; id: string; block: LocalTrackBlock };
 
 interface TracksPanelOptions {
+  loopClickEnabled?: boolean;
+  onLoopClickChanged?: (enabled: boolean) => void;
+  onLoopPlaylistChanged?: (isLoop: boolean) => void;
   autoEnabled?: boolean;
   loopEnabled?: boolean;
   initialPlaylistId?: string | null;
@@ -124,6 +127,7 @@ export function createTracksSplitPanelMarkup(): string {
         <button class="tracks-split-active-set" type="button" data-tracks-active-set data-tracks-action="toggle-set-menu" aria-expanded="false">All</button>
         <div class="tracks-split-controls" aria-label="Controles da lista">
           <button type="button" data-tracks-action="toggle-loop" aria-pressed="false" aria-label="Repetir música"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg></button>
+          <button type="button" data-tracks-action="toggle-loop-click" hidden aria-pressed="true">Click ON</button>
           <button type="button" data-tracks-action="toggle-auto" aria-pressed="false">Auto</button>
           <button type="button" data-tracks-action="add-bl">Add-BL</button>
           <button type="button" data-tracks-action="toggle-edit" aria-pressed="false">Edit</button>
@@ -166,6 +170,7 @@ export class TracksPanelController {
   private suppressNextPlaylistClick = false;
   private managedBlockId: string | null = null;
   private managedBlockNameDraft = '';
+  private loopClickEnabled: boolean;
   private autoEnabled: boolean;
   private loopEnabled: boolean;
   private editMode = false;
@@ -184,6 +189,7 @@ export class TracksPanelController {
     private readonly library: TrackLibraryStore,
     private readonly options: TracksPanelOptions = {},
   ) {
+    this.loopClickEnabled = options.loopClickEnabled ?? true;
     this.autoEnabled = options.autoEnabled ?? false;
     this.loopEnabled = options.loopEnabled ?? false;
     this.activePlaylistId = options.initialPlaylistId ?? null;
@@ -267,7 +273,7 @@ export class TracksPanelController {
       }
       this.setActivePlaylist(playlistButton.dataset.playlistId ?? null);
       this.disableNormalPlaybackModesForLoopPlaylist();
-      if (isFixedLoopsPlaylist(this.activePlaylistId)) {
+      if (this.activePlaylistIsLoop()) {
         this.editMode = false;
         this.root.classList.remove('is-track-editing');
       }
@@ -302,6 +308,11 @@ export class TracksPanelController {
       this.setSetMenuOpen(!this.setMenuOpen);
     } else if (action === 'add-bl') {
       void this.addBlock();
+    } else if (action === 'toggle-loop-click') {
+      if (!this.activePlaylistIsLoop()) return;
+      this.loopClickEnabled = !this.loopClickEnabled;
+      this.options.onLoopClickChanged?.(this.loopClickEnabled);
+      this.renderSplitControlState();
     } else if (action === 'toggle-loop') {
       if (this.activePlaylistIsLoop()) return;
       this.loopEnabled = !this.loopEnabled;
@@ -835,6 +846,20 @@ export class TracksPanelController {
     }
     const fixedLoops = isFixedLoopsPlaylist(this.activePlaylistId);
     const loopPlaylist = this.activePlaylistIsLoop();
+    this.options.onLoopPlaylistChanged?.(loopPlaylist);
+    const toolbar = this.root.querySelector<HTMLElement>('.tracks-split-controls');
+    toolbar?.classList.toggle('is-loop-playlist', loopPlaylist);
+    if (toolbar) {
+      for (const button of toolbar.querySelectorAll<HTMLButtonElement>('button')) {
+        const click = button.dataset.tracksAction === 'toggle-loop-click';
+        button.hidden = click ? !loopPlaylist : loopPlaylist;
+        if (click) {
+          button.textContent = this.loopClickEnabled ? 'Click ON' : 'Click OFF';
+          button.classList.toggle('is-selected', this.loopClickEnabled);
+          button.setAttribute('aria-pressed', String(this.loopClickEnabled));
+        }
+      }
+    }
     const loopButton = this.root.querySelector<HTMLButtonElement>('[data-tracks-action="toggle-loop"]');
     if (loopButton) {
       loopButton.disabled = loopPlaylist;
