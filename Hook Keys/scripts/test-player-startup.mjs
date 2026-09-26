@@ -440,7 +440,7 @@ try {
   player.openTracksSplitView();
   assert(!root.querySelector('.tracks-horizontal-scroll-guide'), 'desktop has no drag-here bar');
   {
-    const controls = [...root.querySelectorAll('.tracks-split-controls button')].map((button) => button.dataset.tracksAction);
+    const controls = [...root.querySelectorAll('.tracks-split-controls button')].filter((button) => !button.hidden).map((button) => button.dataset.tracksAction);
     assert.equal(JSON.stringify(controls.slice(0, 2)), JSON.stringify(['toggle-loop', 'toggle-auto']), 'Repetir fica à esquerda do Auto');
     const loop = root.querySelector('[data-tracks-action="toggle-loop"]');
     assert.equal(loop.getAttribute('aria-pressed'), 'false');
@@ -685,7 +685,7 @@ try {
   player.openEffectPadEditor(firstEffect);
   const effectPreviewName = window.document.querySelector('.effect-pad-editor__preview-button span');
   assert.equal(effectPreviewName.textContent.trim(), 'Efeito 1');
-  const effectVolume = window.document.querySelector('[data-effect-pad-volume]');
+  const effectVolume = firstEffect.parentElement.querySelector('[data-effect-inline-volume]');
   effectVolume.value = '-8';
   effectVolume.dispatchEvent(new window.Event('input', { bubbles: true }));
   player.renderActiveEffectBank();
@@ -1246,6 +1246,7 @@ try {
   let playCalls = 0;
   transport.audio = {
     src: 'blob:desktop-space-test',
+    setRightChannelOnly() {},
     duration: 180,
     currentTime: 42,
     volume: 1,

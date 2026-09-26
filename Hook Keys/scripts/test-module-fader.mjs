@@ -163,13 +163,18 @@ test('app limita o custo dos pads e não reinicializa o player ao terminar um FX
   assert.doesNotMatch(finishEffect, /audio\.load\(\)/);
 });
 
-test('FX 1 mantém o nome Church fixo, mas preserva cor, volume e Learn CC', () => {
+test('FX 1 mantém Church fixo e Learn CC no editor, com volume abaixo dos pads', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
   assert.match(player, /const hasFixedEffectName = this\.activeEffectBank === '1'/);
   assert.match(player, /hasFixedEffectName \? '' : `[\s\S]*?data-effect-name-input/);
   assert.match(player, /if \(this\.activeEffectBank !== '1' && input\)[\s\S]*?effect\.name =/);
   assert.match(player, /if \(bank !== '1'\)[\s\S]*?openModal\('effect-bank-name'/);
-  assert.match(player, /class="effect-pad-editor[\s\S]*?data-effect-pad-volume[\s\S]*?learn-effect-cc/);
+  const editor = player.slice(player.indexOf('class="effect-pad-editor'), player.indexOf('class="effect-pad-editor') + 8000);
+  assert.match(editor, /learn-effect-cc/);
+  assert.doesNotMatch(editor, /data-effect-pad-volume/);
+  const pads = readFileSync(new URL('../src/features/player/PadsEffectsView.ts', import.meta.url), 'utf8');
+  assert.match(pads, /performance-effect-cell[\s\S]*?data-effect-inline-volume/);
+  assert.match(player, /input\.matches\('\[data-effect-inline-volume\]'\)/);
   assert.match(css, /\.effect-pad-editor\.has-fixed-name\s*\{[\s\S]*?"preview preview"/);
 });
 
@@ -782,11 +787,14 @@ test('área do teclado/módulos sem :has() (Safari 16 recalculava tudo a cada te
   assert.match(player, /class="player-bank-view player-bank-view--combined\$\{this\.cellularLayout \? ' player-bank-view--cellular' : ''\}"/);
 });
 
-test('Hook Keys: long press só abre os 30%; com eles abertos, um toque fecha', () => {
+test('logo alterna os 30% por clique normal ou direito, sem abrir a tela de versão', () => {
   const player = readFileSync(new URL('../src/features/player/PlayerScreen.ts', import.meta.url), 'utf8');
-  assert.match(player, /if \(this\.splitTracksController\) \{\s*this\.closeTracksSplitView\(\);\s*return;\s*\}\s*this\.openModal\('about'/);
-  assert.match(player, /if \(!this\.splitTracksController\) this\.startTracksHoldGesture\(brandButton, event\);/);
-  assert.doesNotMatch(player, /toggleTracksSplitView/);
+  const toggle = /if \(this\.splitTracksController\) this\.closeTracksSplitView\(\);\s*else this\.openTracksSplitView\(\);/;
+  const click = player.slice(player.indexOf("if (action === 'open-about')"), player.indexOf("if (action === 'open-app-settings')"));
+  assert.match(click, toggle);
+  assert.doesNotMatch(click, /openModal/);
+  const rightClick = player.match(/const brandButton = target\.closest<HTMLButtonElement>\('\[data-action="open-about"\]'\);[\s\S]*?\n    }/)?.[0] ?? '';
+  assert.match(rightClick, toggle);
 });
 
 test('paisagem dos dois lados no iOS e no Android', () => {
@@ -887,7 +895,7 @@ test('Default bloqueia parâmetros, orienta mudar para User e o timbre só fecha
   }
 });
 
-test('Reverb seleciona os quatro IRs reais e expõe apenas o Mix', () => {
+test('Reverb seleciona os quatro IRs reais e oferece Mix e Decay por ambiente', () => {
   const knob = transpile('../src/features/player/ParameterKnobView.ts');
   const effects = transpile('../src/features/player/ModuleEffectsView.ts', { './ParameterKnobView': knob });
   const markup = effects.createModuleReverbMarkup({
@@ -897,7 +905,8 @@ test('Reverb seleciona os quatro IRs reais e expõe apenas o Mix', () => {
   assert.match(markup, /data-module-reverb-space="hall1"\s+class="is-selected"\s+aria-pressed="true"/);
   assert.match(markup, /Convolution/);
   assert.match(markup, /data-module-effect-control="mix"/);
-  assert.doesNotMatch(markup, /data-module-effect-control="(?:decay|dampen|mod|size)"/);
+  assert.match(markup, /data-module-effect-control="decay"/);
+  assert.doesNotMatch(markup, /data-module-effect-control="(?:dampen|mod|size)"/);
   const presetMixes = {
     reverbSpace: 'hall1', reverb: { enabled: true, mix: 39 },
     reverbSpaces: { room1: { mix: 11 }, room2: { mix: 22 }, hall1: { mix: 33 }, hall2: { mix: 44 } },

@@ -881,8 +881,13 @@ void ModuleEffects::RotarySpeaker::process(float* left, float* right, std::size_
       if (!config.dopplerEnabled) {
         // Organ: rotate the level of phase-aligned crossover bands. No moving
         // delay, reflection comb or modulated filter phase can bend the pitch.
-        const auto hornGain = 1.0f - hornTremolo * depth * (0.5f - 0.5f * hornFacing);
-        const auto drumGain = 1.0f - drumTremolo * depth * (0.5f - 0.5f * drumFacing);
+        // A horn has a narrower forward lobe than the bass drum. Shaping the
+        // directivity gives the cabinet a distinct sweep instead of two plain
+        // sine tremolos, while retaining fixed phase and unchanged pitch.
+        const auto hornFront = 0.5f + 0.5f * hornFacing;
+        const auto hornGain = 1.0f - depth * 0.78f * (1.0f - hornFront * hornFront);
+        const auto drumFront = 0.5f + 0.5f * drumFacing;
+        const auto drumGain = 1.0f - depth * 0.38f * (1.0f - drumFront);
         const auto horn = channel == 0 ? hornLeft : hornRight;
         const auto drum = channel == 0 ? drumLeft : drumRight;
         const auto rotated = std::tanh((horn * hornGain + drum * drumGain) * drive) / drive;

@@ -83,7 +83,7 @@ struct BronzeNativeMIDIPanel: View {
     }
     private var selectedTarget: String { section == 0 ? target : "note:\(section):\(bank):\(item)" }
     private var mapping: BronzeCCMapping? { model.midiSettings.controls[target] }
-    private var locked: Bool { section == 0 && target.hasPrefix("preset:") && model.midiSettings.compatibility }
+    private var locked: Bool { section == 0 && target.hasPrefix("preset-slot:") && model.midiSettings.compatibility }
     var body: some View {
         BronzeNativeModal(title: "MIDI Learn") {
             VStack(alignment: .leading, spacing: 16) {

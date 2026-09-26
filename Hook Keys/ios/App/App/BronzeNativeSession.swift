@@ -507,6 +507,23 @@ struct BronzeTone: Codable, Equatable, Sendable {
     var values = BronzeToneParameter.allCases.map { $0.definition.initial }
     var velocity = [127, 127, 127, 127, 127]
     var envelopeEnabled = false
+    // Optional fields preserve existing sessions and their original filter curve.
+    var velocityEnabled: Bool?
+    var velocityCutoffHz: Double?
+    var velocityMode: Int?
+    var velocityUserCurve: [Int]?
+    var velocityFixedValue: Int?
+    var engineVelocity: [Int] {
+        guard let velocityEnabled else { return velocity }
+        guard velocityEnabled else { return Array(repeating: 127, count: 5) }
+        let top = self[.cutoff], floor = min(top, velocityCutoffHz ?? 100)
+        let span = log(top / 20)
+        return velocity.map { point in
+            guard span > 0 else { return 127 }
+            let frequency = floor * pow(top / floor, Double(point) / 127)
+            return min(127, max(0, Int((127 * log(frequency / 20) / span).rounded())))
+        }
+    }
     subscript(_ parameter: BronzeToneParameter) -> Double {
         get { values[parameter.index] }
         set { values[parameter.index] = newValue }
@@ -514,6 +531,10 @@ struct BronzeTone: Codable, Equatable, Sendable {
     func validate(moduleIndex: Int) throws {
         guard moduleIndex != 6 || !enabled, (0...3).contains(type), values.count == 7,
               velocity.count == 5, velocity.allSatisfy({ (0...127).contains($0) }) else { throw BronzeSessionError.invalid }
+        if let hz = velocityCutoffHz, !hz.isFinite || !(20...20000).contains(hz) { throw BronzeSessionError.invalid }
+        if let mode = velocityMode, !(0...4).contains(mode) { throw BronzeSessionError.invalid }
+        if let fixed = velocityFixedValue, !(0...127).contains(fixed) { throw BronzeSessionError.invalid }
+        if let points = velocityUserCurve, points.count != 5 || !points.allSatisfy({ (0...127).contains($0) }) { throw BronzeSessionError.invalid }
         for parameter in BronzeToneParameter.allCases {
             let p = parameter.definition
             guard self[parameter].isFinite, (p.minimum...p.maximum).contains(self[parameter]) else { throw BronzeSessionError.invalid }

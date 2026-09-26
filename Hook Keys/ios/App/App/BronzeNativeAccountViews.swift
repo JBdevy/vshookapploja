@@ -335,9 +335,9 @@ struct BronzeNativeSoundPreview: View {
                 Button(audio.loading ? "Carregando preview…" : audio.playing ? "Parar preview" : "Ouvir preview") { audio.toggle(sound: sound, account: account) }
                     .buttonStyle(BronzeDeckButtonStyle(palette: .purple)).disabled(sound.previewObjectKey == nil)
                     .accessibilityIdentifier("bronze.library.listen")
-                Button(installed && !model.catalogNeedsUpdate(sound) ? "No dispositivo" : "Baixar") {
+                Button(model.catalogDownloadQueued(sound.id) ? "Na fila" : installed && !model.catalogNeedsUpdate(sound) ? "No dispositivo" : "Baixar") {
                     audio.stop(); model.downloadCatalogSounds([sound], account: account)
-                }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).disabled(model.catalogDownloadName != nil || (installed && !model.catalogNeedsUpdate(sound)))
+                }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).disabled(model.catalogDownloadQueued(sound.id) || model.backupBusy || (installed && !model.catalogNeedsUpdate(sound)))
             }.frame(height: verticalSizeClass == .compact ? 42 : 52)
             if sound.previewObjectKey == nil { Text("Preview ainda não publicado").font(.bronzeUI(12)).foregroundStyle(.secondary) }
             if !audio.error.isEmpty { Text(audio.error).font(.bronzeUI(12)).foregroundStyle(.orange) }

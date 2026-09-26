@@ -690,3 +690,24 @@ expect(!outputFollow.usesDefaultOutput, "explicit stereo routing is distinct fro
 let outputRoundTrip = try JSONDecoder().decode(BronzeModulePerformance.self, from: JSONEncoder().encode(outputFollow))
 expect(!outputRoundTrip.usesDefaultOutput, "explicit output persists")
 print("NATIVE_GLIDE_AND_OUTPUT_DEFAULT_OK")
+
+// Backend defaults must reach the same parameter state used by native controls.
+var detailedSound = defaultSound
+detailedSound.defaultsData = Data(#"{"cutoffHz":4000,"filterVelocityEnabled":true,"filterVelocityCutoffHz":100,"filterVelocityCurve":{"mode":"user","points":[0,20,60,100,127],"userPoints":[0,20,60,100,127]},"cutoffEnvelope":{"enabled":true,"attackMs":120,"decayMs":900,"sustain":60,"releaseMs":400,"depthOctaves":2},"delay":{"enabled":true,"sync":true,"division":"1/8 D","feedback":42,"mix":31},"reverbSpace":"hall2","reverbSpaces":{"hall2":{"mix":27,"decay":45}},"arpeggiator":{"enabled":true,"mode":"random","octaves":3},"tranceGate":{"enabled":true,"length":8,"steps":[true,false,true,false,true,false,true,false,true,false,true,false,true,false,true,false]},"glideMode":"portamento"}"#.utf8)
+let detailed = detailedSound.nativeDefaults(moduleIndex: 0)
+try detailed.validate(index: 0)
+expect(detailed.tone?[.cutoff] == 4000 && detailed.tone?[.attack] == 120 && detailed.tone?[.sustain] == 0.6, "cutoff and its envelope share backend defaults")
+expect(detailed.tone?.velocityMode == 4 && detailed.tone?.engineVelocity.last == 127, "filter velocity curve maps to principal cutoff")
+expect((detailed.tone?.engineVelocity.first ?? 0) > 0, "velocity floor maps logarithmically above 20 Hz")
+expect(detailed.delay.division == 5 && detailed.delay.feedback == 0.42, "delay dotted division and feedback imported")
+expect(detailed.reverb.decay == 0.45 && detailed.reverb.mix == 0.27, "reverb space keeps its own decay and mix")
+expect(detailed.arpeggiator?.mode == 4 && detailed.arpeggiator?.octaves == 3, "arpeggiator defaults imported")
+expect(detailed.pulse?.steps == 21845 && detailed.pulse?.length == 8, "pulse mask imported")
+expect(detailed.performance?.portamento == true && detailed.performance?.mode == 1, "portamento defaults select mono")
+var filterTone = detailed.tone!
+filterTone.velocityEnabled = false
+expect(filterTone.engineVelocity == [127,127,127,127,127], "disabled filter velocity leaves the main cutoff unchanged")
+expect(try JSONDecoder().decode(BronzeTone.self, from: JSONEncoder().encode(filterTone)) == filterTone, "filter curve settings round trip")
+filterTone.velocityCutoffHz = 0
+rejects { try filterTone.validate(moduleIndex: 0) }
+print("NATIVE_CATALOG_PARAMETER_PARITY_OK")

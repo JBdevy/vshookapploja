@@ -139,6 +139,13 @@ extension BronzeCatalogSound {
         performance.mode = values["voiceMode"] as? String == "mono" ? 1 : 0
         performance.glideMs = number(values, "glideMs", performance.glideMs, 0...5000)
         performance.glideSync = values["glideSync"] as? Bool ?? performance.glideSync
+        performance.portamento = values["glideMode"] as? String == "portamento"
+        if performance.portamento { performance.mode = 1 }
+        performance.glideVelocityGate = values["glideVelocityEnabled"] as? Bool ?? false
+        performance.glideVelocityInverted = values["glideVelocityInverted"] as? Bool ?? false
+        performance.glideVelocityThreshold = Int(number(values, "glideVelocityThreshold", 64, 0...127))
+        performance.noSens = values["noVelocitySensitivity"] as? Bool ?? performance.noSens
+        performance.modulationIntensity = number(values, values["modulationMode"] as? String == "pan" ? "panIntensity" : "tremoloIntensity", 100, 0...100) / 100
         performance.velocityCeiling = Int(number(values, "velocityCeiling", 127, 1...127))
         performance.velocityIgnoreAbove = Int(number(values, "velocityLimit", 127, 0...127))
         performance.modulationMode = ["user", "lfo", "tremolo", "pan", "rotary"].firstIndex(of: values["modulationMode"] as? String ?? "user") ?? 0
@@ -157,12 +164,83 @@ extension BronzeCatalogSound {
         var tone = settings.tone ?? BronzeTone()
         tone[.gain] = number(values, "gainDb", tone[.gain], -36...12)
         tone[.cutoff] = number(values, "cutoffHz", tone[.cutoff], 20...20000)
+        tone.type = ["lowpass2", "lowpass4", "highpass2", "highpass4"].firstIndex(of: values["cutoffFilterType"] as? String ?? "lowpass2") ?? 0
+        tone.velocityEnabled = values["filterVelocityEnabled"] as? Bool ?? false
+        tone.velocityCutoffHz = number(values, "filterVelocityCutoffHz", 100, 20...20000)
+        if let curve = values["filterVelocityCurve"] as? [String: Any] {
+            tone.velocityMode = ["soft", "middle", "hard", "fixed", "user"].firstIndex(of: curve["mode"] as? String ?? "")
+            if let points = curve["points"] as? [Double], points.count == 5, points.allSatisfy({ $0.isFinite }) {
+                tone.velocity = points.map { Int(min(127, max(0, $0)).rounded()) }
+            }
+            if let points = curve["userPoints"] as? [Double], points.count == 5, points.allSatisfy({ $0.isFinite }) {
+                tone.velocityUserCurve = points.map { Int(min(127, max(0, $0)).rounded()) }
+            }
+            tone.velocityFixedValue = Int(number(curve, "fixedValue", 127, 0...127))
+        }
+        if let env = values["cutoffEnvelope"] as? [String: Any] {
+            tone.envelopeEnabled = env["enabled"] as? Bool ?? false
+            tone[.attack] = number(env, "attackMs", 5, 0...15000)
+            tone[.decay] = number(env, "decayMs", 200, 0...25000)
+            tone[.sustain] = number(env, "sustain", 100, 0...100) / 100
+            tone[.release] = number(env, "releaseMs", 200, 0...25000)
+            tone[.depth] = number(env, "depthOctaves", 4, 0...8)
+        }
+        if let bands = values["eqBands"] as? [[String: Any]], bands.count == 5 {
+            for (index, band) in bands.enumerated() {
+                settings.equalizer.bands[index].type = ["low-cut", "low-shelf", "band", "high-shelf", "high-cut"].firstIndex(of: band["type"] as? String ?? "band") ?? 2
+                settings.equalizer.bands[index].frequency = number(band, "frequency", settings.equalizer.bands[index].frequency, 20...20000)
+                settings.equalizer.bands[index].gain = number(band, "gain", 0, -24...24)
+                settings.equalizer.bands[index].quality = number(band, "q", 1, 0.1...12)
+                settings.equalizer.bands[index].cutStages = Int(number(band, "cutStages", 1, 1...8))
+            }
+        }
+        if let delay = values["delay"] as? [String: Any] {
+            settings.delay.enabled = delay["enabled"] as? Bool ?? false
+            settings.delay.sync = delay["sync"] as? Bool ?? false
+            settings.delay.division = BronzeDelay.divisions.firstIndex(of: delay["division"] as? String ?? "1/4") ?? 2
+            settings.delay.milliseconds = number(delay, "milliseconds", 500, 1...2000)
+            settings.delay.feedback = number(delay, "feedback", 35, 0...95) / 100
+            settings.delay.mix = number(delay, "mix", 25, 0...100) / 100
+        }
+        if let raw = values["arpeggiator"] as? [String: Any] {
+            var arp = settings.arpeggiator ?? BronzeArpeggiator()
+            arp.enabled = moduleIndex != 6 && (raw["enabled"] as? Bool ?? false)
+            arp.sync = raw["sync"] as? Bool ?? true
+            arp.mode = ["up", "down", "up-down", "played", "random"].firstIndex(of: raw["mode"] as? String ?? "up") ?? 0
+            arp.division = BronzePulse.divisions.firstIndex(of: raw["division"] as? String ?? "1/16") ?? 2
+            arp.rateMs = number(raw, "rateMs", 125, 20...2000)
+            arp.octaves = Int(number(raw, "octaves", 1, 1...4))
+            arp.gate = number(raw, "gate", 72, 10...100) / 100
+            arp.swing = number(raw, "swing", 0, 0...75) / 100
+            arp.autoFaderEnabled = raw["autoFaderEnabled"] as? Bool ?? false
+            arp.autoFaderHalf = raw["autoFaderDivision"] as? String == "1/2"
+            arp.autoFaderDepthDb = number(raw, "autoFaderDepthDb", 5, 0...40)
+            settings.arpeggiator = arp
+        }
+        if let raw = values["tranceGate"] as? [String: Any] {
+            var pulse = settings.pulse ?? BronzePulse()
+            pulse.enabled = raw["enabled"] as? Bool ?? false
+            pulse.sync = raw["sync"] as? Bool ?? true
+            pulse.division = BronzePulse.divisions.firstIndex(of: raw["division"] as? String ?? "1/16") ?? 2
+            pulse.rateMs = number(raw, "rateMs", 125, 20...2000)
+            pulse.length = Int(number(raw, "length", 16, 1...16))
+            pulse.gate = number(raw, "gate", 50, 5...100) / 100
+            pulse.depth = number(raw, "depth", 100, 0...100) / 100
+            pulse.attack = number(raw, "attackMs", 3, 0.1...100)
+            pulse.release = number(raw, "releaseMs", 3, 0.1...100)
+            pulse.swing = number(raw, "swing", 0, 0...75) / 100
+            if let steps = raw["steps"] as? [Bool], steps.count == 16 {
+                pulse.steps = steps.enumerated().reduce(0) { $0 | ($1.element ? 1 << $1.offset : 0) }
+            }
+            settings.pulse = pulse
+        }
         let reverb = values["reverb"] as? [String: Any] ?? [:]
         settings.reverb.enabled = reverb["enabled"] as? Bool ?? settings.reverb.enabled
         let spaces = ["room1", "room2", "hall1", "hall2"]
         settings.reverb.impulse = spaces.firstIndex(of: values["reverbSpace"] as? String ?? "room1") ?? 0
         let savedSpaces = values["reverbSpaces"] as? [String: [String: Any]] ?? [:]
         for (index, space) in spaces.enumerated() {
+            settings.reverb.decays[index] = number(savedSpaces[space] ?? [:], "decay", 100, 10...100) / 100
             settings.reverb.mixes[index] = number(savedSpaces[space] ?? [:], "mix", number(reverb, "mix", 50, 0...100), 0...100) / 100
         }
         var effects = settings.soundEffects ?? BronzeSoundEffects()

@@ -255,8 +255,19 @@ struct BronzeMIDISettings: Codable, Equatable, Sendable {
     var compatibility = false
     var controls: [String: BronzeCCMapping] = [:]
     var notes: [BronzeMIDINoteMapping] = []
+    func unifiedPresetMappings() -> Self {
+        var result = self
+        // Keep explicit shared mappings; migrate legacy banks in A–F order.
+        for index in 0..<96 {
+            if let mapping = result.controls.removeValue(forKey: "preset:\(index)") {
+                let key = "preset-slot:\(index % 16)"
+                if result.controls[key] == nil { result.controls[key] = mapping }
+            }
+        }
+        return result
+    }
     func validate() throws {
-        let allowed = Set(BronzeMIDITarget.all.map(\.id))
+        let allowed = Set(BronzeMIDITarget.all.map(\.id)).union((0..<96).map { "preset:\($0)" })
         guard controls.count <= allowed.count, notes.count <= 128,
               Set(notes.map(\.note)).count == notes.count else { throw BronzeSessionError.invalid }
         for (target, map) in controls {
@@ -317,7 +328,9 @@ struct BronzeMIDITarget: Identifiable, Equatable {
                 result.append(Self(id: "\(effect):\(module)", name: prefix + effect))
             }
         }
-        for index in 0..<96 { result.append(Self(id: "preset:\(index)", name: "Preset \(["A", "B", "C", "D", "E", "F"][index / 16])\(index % 16 + 1)")) }
+        for index in 0..<16 { result.append(Self(id: "preset-slot:\(index)", name: "Preset \(index + 1) · Banco selecionado")) }
+        result.append(Self(id: "bank-step:-1", name: "Banco anterior"))
+        result.append(Self(id: "bank-step:1", name: "Próximo banco"))
         for index in 0..<6 { result.append(Self(id: "bank:\(index)", name: "Banco \(["A", "B", "C", "D", "E", "F"][index])")) }
         for index in 0..<9 { result.append(Self(id: "drawbar:\(index)", name: "B3 · Drawbar \(index + 1)", continuous: true)) }
         for key in ["Slow", "Fast", "Acceleration", "Depth"] { result.append(Self(id: "rotaryParam:0:\(key)", name: "Rotary · " + key, continuous: true)) }

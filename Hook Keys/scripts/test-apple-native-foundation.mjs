@@ -86,8 +86,8 @@ assert.match(nativeControls, /touchesCancelled/,
 assert.match(nativeModel, /configureMetronomeEnabled/,
   'o transporte nativo precisa controlar o metrônomo do runtime C++');
 assert.match(nativeRoot, /model.toggleMetronome\(\)/);
-assert.match(nativeRoot, /model.setTimeSignature\(numerator: beats/);
-assert.match(nativeRoot, /beats >= 6 \? 8 : 4/);
+assert.match(nativeRoot, /model.setTimeSignature\(\s*numerator: numerator \? value : model.timeSignatureNumerator/);
+assert.match(nativeRoot, /denominator: numerator \? model.timeSignatureDenominator : value/);
 for (const event of ['sceneWillResignActive', 'sceneDidEnterBackground']) {
   const body = delegate.match(new RegExp(`func ${event}[^}]+}`))?.[0] ?? '';
   assert.match(body, /bronzeKeysReleaseTouches/, 'background releases touch input');
@@ -155,11 +155,11 @@ assert.match(nativeModel, /startAccessingSecurityScopedResource\(\)/);
 assert.match(nativeModel, /stopAccessingSecurityScopedResource\(\)/);
 assert.match(nativeRoot, /fileImporter\(/);
 assert.match(nativeModel, /loadSoundFont\(atPath:/);
-assert.match(nativeModel, /let syncLoop = loopPlaying && selectedLoop\?\.isLoop == true/);
-assert.match(nativeModel, /metronomeEnabled \|\| syncLoop/);
+assert.match(nativeModel, /if loopPlaylistSelected \|\| \(loopPlaying && selectedLoop\?\.isLoop == true\) \{ metronomeEnabled = false \}/);
+assert.doesNotMatch(nativeModel, /metronomeEnabled \|\| syncLoop/);
 assert.match(nativeModel, /selectedLoop.isLoop \? tempo \/ 120 : 1/);
 assert.match(nativeModel, /volume: metronomeEnabled && mixer.enabled\[3\] \? pow\(10, outputDb\(3\) \/ 20\) : 0/);
-assert.match(nativeModel, /syncMetronome: selectedLoop.isLoop/);
+assert.match(nativeModel, /syncMetronome: false/);
 assert.match(nativeModel, /playbackRate: tempo \/ 120/);
 assert.match(nativeModel, /bankIndex: activePadBank, enabled: false/);
 assert.match(nativeModel, /bankIndex: selectedPadBank, enabled: true/);

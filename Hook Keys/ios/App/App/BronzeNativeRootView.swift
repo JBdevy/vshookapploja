@@ -190,10 +190,10 @@ struct BronzeNativeRootView: View {
                 BronzeModuleEnvelopeGrid(model: model, index: model.selectedModule) { modulePage = .tone }
             }
             }.environment(\.bronzeContentSize, workspace.size)
-            }.frame(maxHeight: .infinity).disabled(model.selectedModule < 6 && model.moduleSettingsSources[model.selectedModule] == "default")
+            }.frame(maxHeight: .infinity).modifier(BronzeDefaultSettingsLock(active: defaultModuleSettings))
             if model.selectedModule != 6 && modulePage != .performance && modulePage != .synth && modulePage != .equalizer {
                 BronzeModulePerformanceCards(model: model, index: model.selectedModule) { section in performanceSection = section; modulePage = .performance }
-                    .disabled(model.selectedModule < 6 && model.moduleSettingsSources[model.selectedModule] == "default")
+                    .modifier(BronzeDefaultSettingsLock(active: defaultModuleSettings))
             }
             HStack(spacing: compact ? 6 : 12) {
                 Button("Voltar") {
@@ -202,7 +202,7 @@ struct BronzeNativeRootView: View {
                 }.buttonStyle(BronzeConfigActionStyle(kind: .back))
                 if let enabled = modulePageEnabled {
                     Button(enabled ? "ON" : "OFF") { setModulePageEnabled(!enabled) }
-                        .buttonStyle(BronzeConfigActionStyle(kind: enabled ? .on : .off)).disabled(defaultModuleSettings)
+                        .buttonStyle(BronzeConfigActionStyle(kind: enabled ? .on : .off)).modifier(BronzeDefaultSettingsLock(active: defaultModuleSettings))
                 }
                 if !defaultModuleSettings {
                     Button("Reset") { confirmModuleReset = true }
@@ -588,13 +588,13 @@ struct BronzeNativeToneEditor: View {
     let moduleIndex: Int
     @State private var tab = 1
     private var tone: BronzeTone { model.moduleTones[moduleIndex] }
+    private let curves = [[0,16,44,84,127], [0,32,64,96,127], [0,52,84,108,127]]
+    private var velocityMode: Int { tone.velocityMode ?? curves.firstIndex(of: tone.velocity) ?? (Set(tone.velocity).count == 1 ? 3 : 4) }
     var body: some View {
         VStack(spacing: 6) {
             HStack(spacing: 5) {
                 Button("Velocity") { tab = 0 }.buttonStyle(BronzeConfigTabStyle(palette: .purple, selected: tab == 0))
                 Button("Env-Filter") { tab = 1 }.buttonStyle(BronzeConfigTabStyle(palette: .cyan, selected: tab == 1))
-                Button(tone.enabled ? "FILTER ON" : "FILTER OFF") { edit { $0.enabled.toggle() } }
-                    .buttonStyle(BronzeDeckButtonStyle(palette: tone.enabled ? .green : .red))
             }.frame(height: 28)
             if tab == 1 {
                 HStack(spacing: 4) {
@@ -612,9 +612,32 @@ struct BronzeNativeToneEditor: View {
                     }
                 }
             } else {
+                HStack(spacing: 5) {
+                    ForEach(0..<5, id: \.self) { mode in
+                        Button(["Soft", "Middle", "Hard", "Fixed", "User"][mode]) {
+                            edit {
+                                $0.velocityMode = mode
+                                $0.velocity = mode < 3 ? curves[mode] : mode == 3 ? Array(repeating: $0.velocityFixedValue ?? 127, count: 5) : $0.velocityUserCurve ?? [0,32,64,96,127]
+                            }
+                        }.buttonStyle(BronzeDeckButtonStyle(palette: .purple, selected: velocityMode == mode))
+                    }
+                }.frame(height: 30)
                 HStack(spacing: 8) {
-                    BronzeVelocityCurveGraph(points: Binding(get: { tone.velocity }, set: { points in edit { $0.velocity = points } }), label: "Velocity do filtro")
-                    parameter(.cutoff, tint: .cyan).frame(maxWidth: 150)
+                    BronzeVelocityCurveGraph(points: Binding(get: { tone.velocity }, set: { points in edit { $0.velocity = points; $0.velocityMode = 4; $0.velocityUserCurve = points } }), label: "Velocity do filtro")
+                    VStack(spacing: 5) {
+                        let definition = BronzeToneParameter.cutoff.definition
+                        BronzeParameterCard(title: "Cutoff", text: definition.text(tone.velocityCutoffHz ?? 100), value: Binding(
+                            get: { definition.normalized(tone.velocityCutoffHz ?? 100) },
+                            set: { n in edit { $0.velocityCutoffHz = definition.value(n); $0.velocityEnabled = $0.velocityEnabled ?? true } }), tint: .cyan, definition: definition)
+                        Button((tone.velocityEnabled ?? true) ? "ON" : "OFF") { edit { $0.velocityEnabled = !($0.velocityEnabled ?? true) } }
+                            .buttonStyle(BronzeDeckButtonStyle(palette: (tone.velocityEnabled ?? true) ? .green : .red)).frame(height: 30)
+                    }.frame(maxWidth: 150)
+                }
+                if velocityMode == 3 {
+                    HStack {
+                        Text("Fixed: \(tone.velocity[0])")
+                        Slider(value: Binding(get: { Double(tone.velocity[0]) }, set: { n in edit { $0.velocityFixedValue = Int(n); $0.velocity = Array(repeating: Int(n), count: 5) } }), in: 0...127, step: 1)
+                    }.frame(height: 28)
                 }
             }
         }.modifier(BronzeEffectSurface(tint: .cyan, fill: 0x12343d))
@@ -1270,7 +1293,7 @@ struct BronzeNativePresetEditor: View {
         _color = State(initialValue: model.presets[index].modules == nil && model.presets[index].name == "Empty" ? BronzePresetPalette.order[index % 16] : model.presets[index].color)
     }
 
-    private var target: String { "preset:\(index)" }
+    private var target: String { "preset-slot:\(index % 16)" }
     var body: some View {
         BronzeEditDialog(title: "Preset \(index % 16 + 1) · Banco \(["A", "B", "C", "D", "E", "F"][index / 16])", height: 430) {
             VStack(alignment: .leading, spacing: 14) {
@@ -1392,7 +1415,7 @@ struct BronzeNativeSoundFontLibrary: View {
                     Spacer()
                     Button("Baixar tudo") { confirmDownloadAll = true }
                         .buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(width: compact ? 105 : 150)
-                        .disabled(allSounds.isEmpty || model.catalogDownloadName != nil || allSounds.allSatisfy { model.catalogFont($0.id) != nil && !model.catalogNeedsUpdate($0) })
+                        .disabled(allSounds.isEmpty || model.backupBusy || allSounds.allSatisfy { model.catalogDownloadQueued($0.id) || (model.catalogFont($0.id) != nil && !model.catalogNeedsUpdate($0)) })
                         .accessibilityIdentifier("bronze.library.downloadAll")
                 }.frame(height: compact ? 38 : 48)
                 if model.catalogDownloadName != nil {
@@ -1487,10 +1510,12 @@ struct BronzeNativeSoundFontLibrary: View {
     }
     private func gigabytes(_ bytes: Double) -> String { String(format: "%.2f GB", bytes / 1_073_741_824) }
     private func categoryButton(_ title: String, id: String, color: UInt32, height: CGFloat) -> some View {
-        Button(title) { category = id }.font(.bronzeUI(12)).lineLimit(2)
+        Button { category = id } label: {
+            Text(title).font(.bronzeUI(12)).lineLimit(2)
             .frame(maxWidth: .infinity).frame(height: height).foregroundStyle(category == id ? .black : .white)
             .modifier(BronzeCatalogSurface(color: Color(bronzeHex: category == id ? 0x2cf604 : color)))
             .overlay(RoundedRectangle(cornerRadius: 5).stroke(category == id ? .white : .clear, lineWidth: 2).allowsHitTesting(false))
-            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain)
     }
 }

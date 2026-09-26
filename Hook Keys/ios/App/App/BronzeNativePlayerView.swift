@@ -84,6 +84,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
     @State private var showConfigurationProgress = false
     @State private var tempoText = ""
     @State private var renameBank = false
+    @State private var learnBank = false
     @State private var bankName = ""
     @State private var bankToRename = 0
     @State private var selectedSlot: Int?
@@ -153,6 +154,9 @@ struct BronzeNativePlayerView<Pads: View>: View {
         .sheet(isPresented: $renameBank) {
             BronzeNativeModal(title: "Nome do banco") {
                 TextField("Nome", text: $bankName).textFieldStyle(BronzeNativeFieldStyle())
+                Button("Learn CC") { learnBank = true }
+                    .buttonStyle(BronzeDeckButtonStyle(palette: .bronze)).frame(height: 44)
+                    .fullScreenCover(isPresented: $learnBank) { BronzeMIDILearnDialog(model: model, target: "bank:\(bankToRename)") }
                 Button("Salvar") { model.renamePresetBank(bankToRename, name: bankName); renameBank = false }
                     .buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(height: 44)
             }
@@ -445,6 +449,14 @@ struct BronzeNativePlayerView<Pads: View>: View {
                             textColor: model.presetBank == bank ? nil : Color(bronzeHex: [0x27b9ff, 0xbd63ff, 0x35d273, 0xe8ad70, 0xff5f9e, 0x19c9d8][bank])))
                         .bronzeTapHold(tap: { model.selectPresetBank(bank) }, hold: { bankToRename = bank; bankName = model.presetBankName(bank); renameBank = true })
                         .accessibilityIdentifier("bronze.bank.\(bank)").accessibilityValue(model.presetBank == bank ? "Selecionado" : "")
+                }
+                ForEach([-1, 1], id: \.self) { direction in
+                    Button { model.stepPresetBank(direction) } label: {
+                        Image(systemName: direction < 0 ? "chevron.left" : "chevron.right")
+                    }.buttonStyle(BronzeDeckButtonStyle(palette: .grey))
+                        .frame(width: compact ? 28 : 36)
+                        .modifier(BronzeLearnOnHold(model: model, target: "bank-step:\(direction)", tapAction: { model.stepPresetBank(direction) }))
+                        .accessibilityLabel(direction < 0 ? "Banco anterior" : "Próximo banco")
                 }
                 #if !targetEnvironment(macCatalyst)
                 Button(showingKeyboard ? "Keyboard" : "Presets") { showingKeyboard.toggle() }

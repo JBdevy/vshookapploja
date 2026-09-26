@@ -206,6 +206,7 @@ struct BronzeModuleRoutingHeader: View {
                 Button { polyphonyText = "\(config.polyphony)"; showPolyphony = true } label: {
                     VStack(spacing: 2) { Text("Polifonia").font(.bronzeUI(compact ? 9 : 12)); Text("\(config.polyphony)").font(.bronzeUI(compact ? 14 : 20)) }
                 }.buttonStyle(BronzeDeckButtonStyle(palette: .bronze)).frame(height: compact ? 40 : 60)
+                    .modifier(BronzeDefaultSettingsLock(active: index < 6 && model.moduleSettingsSources[index] == "default"))
 
             }.frame(width: compact ? 76 : 110, height: compact ? 62 : 88)
             if index != 7 {
@@ -217,6 +218,7 @@ struct BronzeModuleRoutingHeader: View {
                     }
                     Button { edit { $0.mode = $0.mode == 0 ? 1 : 0 } } label: { VStack(spacing: 0) { Text("Modo").font(.bronzeUI(compact ? 9 : 12)); Text(config.mode == 0 ? "Poly" : "Mono").font(.bronzeUI(compact ? 14 : 20)) } }
                         .buttonStyle(BronzeDeckButtonStyle(palette: config.mode == 0 ? .blue : .purple)).frame(height: compact ? 40 : 60)
+                        .modifier(BronzeDefaultSettingsLock(active: index < 6 && model.moduleSettingsSources[index] == "default"))
                 }.frame(width: compact ? 76 : 110, height: compact ? 62 : 88)
             }
         }.padding(compact ? 3 : 8).modifier(BronzeDeckSurface())
@@ -457,5 +459,27 @@ struct BronzeParameterCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(border.opacity(0.6), lineWidth: 1))
         }
+    }
+}
+
+
+struct BronzeDefaultSettingsLock: ViewModifier {
+    let active: Bool
+    @State private var showingNotice = false
+    func body(content: Content) -> some View {
+        content.disabled(active)
+            .overlay {
+                if active {
+                    Color.clear.contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0).onChanged { _ in showingNotice = true })
+                        .onTapGesture { showingNotice = true }
+                        .accessibilityLabel("Parâmetros bloqueados no modo Default")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction { showingNotice = true }
+                }
+            }
+            .alert("Configuração Default", isPresented: $showingNotice) {
+                Button("Entendi", role: .cancel) { }
+            } message: { Text("Mude para User para configurar.") }
     }
 }

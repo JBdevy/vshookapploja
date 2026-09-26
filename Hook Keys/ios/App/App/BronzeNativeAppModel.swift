@@ -85,6 +85,11 @@ final class BronzeNativeAppModel: ObservableObject {
         min(1, (Double(catalogDownloadCompleted) + (catalogDownloadProgress.fraction ?? 0)) / Double(max(1, catalogDownloadTotal)))
     }
     private var catalogDownloadTask: Task<Void, Never>?
+    @Published private(set) var catalogDownloadQueue: [BronzeCatalogSound] = []
+
+    func catalogDownloadQueued(_ id: String) -> Bool {
+        catalogDownloadID == id || catalogDownloadQueue.contains { $0.id == id }
+    }
     @Published private(set) var memoryMB = 0
     @Published private(set) var memoryPercent: Int?
     private var meterFrame = 0
@@ -572,23 +577,26 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func downloadCatalogSounds(_ sounds: [BronzeCatalogSound], account: BronzeNativeAccount) {
-        guard catalogDownloadTask == nil else { return }
         catalogDownloadError = nil
         guard !backupBusy else { catalogDownloadError = "Aguarde o backup terminar para baixar os timbres."; return }
         guard persistenceAvailable else {
             catalogDownloadError = controlError ?? "O salvamento da sessão está indisponível. Feche e abra o app para tentar novamente; os timbres salvos serão mantidos."
             return
         }
-        let remaining = sounds.filter { catalogFont($0.id) == nil || catalogNeedsUpdate($0) }
+        var seen = Set<String>()
+        let remaining = sounds.filter { seen.insert($0.id).inserted && !catalogDownloadQueued($0.id) && (catalogFont($0.id) == nil || catalogNeedsUpdate($0)) }
         guard !remaining.isEmpty else { return }
+        catalogDownloadQueue.append(contentsOf: remaining)
+        if catalogDownloadTask != nil { catalogDownloadTotal += remaining.count; return }
         catalogDownloadTotal = remaining.count; catalogDownloadCompleted = 0
         catalogDownloadName = remaining.first?.name
         catalogDownloadID = remaining.first?.id
         catalogDownloadProgress = BronzeDownloadProgress(expected: Int64(remaining.first?.byteSize ?? 0))
         catalogDownloadTask = Task {
-            defer { catalogDownloadName = nil; catalogDownloadID = nil; catalogDownloadInstalling = false; catalogDownloadTask = nil }
+            defer { catalogDownloadQueue.removeAll(); catalogDownloadName = nil; catalogDownloadID = nil; catalogDownloadInstalling = false; catalogDownloadTask = nil }
             do {
-                for sound in remaining {
+                while !catalogDownloadQueue.isEmpty {
+                    let sound = catalogDownloadQueue.removeFirst()
                     try Task.checkCancellation()
                     catalogDownloadName = sound.name; catalogDownloadID = sound.id
                     catalogDownloadInstalling = false
@@ -1026,8 +1034,8 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     nonisolated private static func sendTone(_ value: BronzeTone, moduleIndex: Int, engine: HookKeysNativeEngine) -> Bool {
-        engine.configureTone(moduleIndex, enabled: value.enabled, type: value.type,
-            values: value.values.map { NSNumber(value: $0) }, velocity: value.velocity.map { NSNumber(value: $0) },
+        engine.configureTone(moduleIndex, enabled: moduleIndex != 6 && (value.enabled || value[.cutoff] < 20000 || value.envelopeEnabled || value.velocityEnabled == true), type: value.type,
+            values: value.values.map { NSNumber(value: $0) }, velocity: value.engineVelocity.map { NSNumber(value: $0) },
             envelopeEnabled: value.envelopeEnabled)
     }
 
@@ -1956,7 +1964,7 @@ final class BronzeNativeAppModel: ObservableObject {
         else if let track = workspace.selectedTrack { selectUserTrack(track) }
     }
 
-    var midiSettings: BronzeMIDISettings { workspace.midi ?? BronzeMIDISettings() }
+    var midiSettings: BronzeMIDISettings { (workspace.midi ?? BronzeMIDISettings()).unifiedPresetMappings() }
 
     func setCompatibility(_ enabled: Bool) {
         var next = midiSettings; next.compatibility = enabled; workspace.midi = next
@@ -2001,7 +2009,7 @@ final class BronzeNativeAppModel: ObservableObject {
 
     func beginMIDILearn(_ target: String) {
         cancelMIDILearnDraft()
-        if midiSettings.compatibility && target.hasPrefix("preset:") {
+        if midiSettings.compatibility && target.hasPrefix("preset-slot:") {
             midiLearnMessage = "Desative o modo compatibilidade."; return
         }
         learningTarget = target
@@ -2009,7 +2017,7 @@ final class BronzeNativeAppModel: ObservableObject {
     }
 
     func clearMIDIMapping(_ target: String) {
-        if midiSettings.compatibility && target.hasPrefix("preset:") { midiLearnMessage = "Desative o modo compatibilidade."; return }
+        if midiSettings.compatibility && target.hasPrefix("preset-slot:") { midiLearnMessage = "Desative o modo compatibilidade."; return }
         var next = midiSettings
         if target.hasPrefix("note:") {
             let parts = target.split(separator: ":").dropFirst().compactMap { Int($0) }
@@ -2081,7 +2089,7 @@ final class BronzeNativeAppModel: ObservableObject {
         for target in BronzeMIDITarget.all {
             guard let mapping = settings.controls[target.id], mapping.device == device,
                   mapping.channel == channel, mapping.controller == cc,
-                  target.continuous || pressed, !(settings.compatibility && target.id.hasPrefix("preset:")) else { continue }
+                  target.continuous || pressed, !(settings.compatibility && target.id.hasPrefix("preset-slot:")) else { continue }
             applyMappedControl(target.id, normalized: mapping.normalized(value))
         }
     }
@@ -2098,7 +2106,8 @@ final class BronzeNativeAppModel: ObservableObject {
         case "fader": setModuleFader(module, normalized: n)
         case "on": toggleModuleEnabled(module)
         case "solo": toggleModuleSolo(module)
-        case "preset": recallPreset(module)
+        case "preset-slot": recallPreset(presetBank * 16 + module)
+        case "bank-step": stepPresetBank(module)
         case "bank": selectPresetBank(module)
         case "padLow": setPadFilter(low: true, normalized: n)
         case "padHigh": setPadFilter(low: false, normalized: n)
@@ -2205,6 +2214,10 @@ final class BronzeNativeAppModel: ObservableObject {
         var names = workspace.presetBankNames ?? ["A", "B", "C", "D", "E", "F"]
         names[bank] = String(BronzeUserWorkspace.name(name, fallback: ["A", "B", "C", "D", "E", "F"][bank]).prefix(12))
         workspace.presetBankNames = names
+    }
+
+    func stepPresetBank(_ direction: Int) {
+        selectPresetBank((presetBank + (direction < 0 ? 5 : 1)) % 6)
     }
 
     func selectPresetBank(_ bank: Int) {

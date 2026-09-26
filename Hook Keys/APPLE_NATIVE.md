@@ -550,3 +550,12 @@ e alto-falantes internos (2), e confirmou seleção do UID atual sem mudar a rot
 No iPad/iPhone o campo inteiro aciona AVRoutePickerView, com nome/canais da rota
 atualizados após mudanças. A seleção de rotas continua sob controle do iPadOS.
 A retomada de áudio pausa/reabre o grafo preservando o runtime e os SF2.
+
+
+### Biblioteca e defaults — setembro de 2026
+
+- Pedidos individuais e Baixar tudo acrescentam timbres à fila ativa, sem duplicar itens já instalados/na fila. O botão de categoria recebe toque na área inteira.
+- Velocity do filtro agora tem Soft/Middle/Hard/Fixed/User, memória User/Fixed, liga/desliga e Cutoff mínimo independente. Env-Filter usa o mesmo Cutoff principal do painel. Campos novos são opcionais para preservar sessões anteriores.
+- Defaults do catálogo importam também envelope/velocity do filtro, EQ completo, Delay, Arpeggiator, Pulse, Glide e Decay por IR. O painel administrativo em backendhookupdate acompanha Decay, Cutoff, Tap e Portamento; requer publicação separada do backend.
+- A corneta do Organ usa resposta direcional mais estreita que o tambor, mantendo o caminho sem Doppler. Testes de áudio verificam afinação, Slow/Fast e roteamento MIDI.
+- Config em Default intercepta toque/arraste dos parâmetros e mostra “Mude para User para configurar.”, incluindo Polifonia/Poly-Mono, sem bloquear seleção User, abas, MIDI ou saída.
