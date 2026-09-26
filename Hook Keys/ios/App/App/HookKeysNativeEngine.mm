@@ -1048,7 +1048,7 @@ static NSString *describeFormat(AVAudioFormat *format) {
   }
   effects.compressor = {compressorMix > 0.0001f, compressorThresholdDb, compressorRatio, compressorAttackMs,
                         compressorReleaseMs, compressorGainDb, compressorMix};
-  effects.delay = {delayMix > 0.0001f, delaySync, delayMs, delayBeatMultiplier, delayFeedback, delayMix};
+  effects.delay = {delayMix > 0.0001f, static_cast<bool>(delaySync), delayMs, delayBeatMultiplier, delayFeedback, delayMix};
   effects.reverb = {reverbMix > 0.0001f,
                     static_cast<std::uint8_t>(std::clamp<NSInteger>(reverbImpulse, 0, 3)),
                     reverbDecay, reverbDampen, reverbSize, reverbMix, reverbMod};

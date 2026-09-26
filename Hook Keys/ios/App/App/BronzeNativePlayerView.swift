@@ -292,10 +292,19 @@ struct BronzeNativePlayerView<Pads: View>: View {
             HStack(spacing: 2) {
             Button(action: openSettings) { Image(systemName: "gearshape") }.accessibilityLabel("Configurações").buttonStyle(BronzeDeckButtonStyle(palette: .yellow, size: 17)).frame(width: compact ? 30 : 40)
             Button(action: openAccount) { Image(systemName: "person") }.accessibilityLabel("Conta").buttonStyle(BronzeDeckButtonStyle(palette: .green, size: 17)).frame(width: compact ? 30 : 42)
+            #if targetEnvironment(macCatalyst)
+            VStack(spacing: 3) { Text("CPU").foregroundStyle(Color.bronzeLight); Text(model.cpuPercent.map { "\($0)%" } ?? "--").foregroundStyle(.white) }.font(.bronzeUI(compact ? 7 : 9)).frame(width: compact ? 34 : 49).frame(maxHeight: .infinity).modifier(BronzeDeckSurface())
+                .accessibilityElement(children: .combine).accessibilityIdentifier("bronze.cpu")
+            #endif
             VStack(spacing: 3) { Text("RAM").foregroundStyle(Color.bronzeLight); Text(model.memoryPercent.map { "\($0)%" } ?? "--").foregroundStyle(.white) }.font(.bronzeUI(compact ? 7 : 9)).frame(width: compact ? 34 : 49).frame(maxHeight: .infinity).modifier(BronzeDeckSurface())
                 .accessibilityElement(children: .combine).accessibilityIdentifier("bronze.memory")
             }.padding(3).modifier(BronzeDeckSurface(bordered: true))
-        }.padding(.leading, compact ? 2 : 6).padding(.trailing, compact ? 8 : 10).padding(.top, 3)
+        }
+        #if targetEnvironment(macCatalyst)
+        .padding(.top, 3)
+        #else
+        .padding(.leading, compact ? 2 : 6).padding(.trailing, compact ? 8 : 10).padding(.top, 3)
+        #endif
     }
 
     private var remainingTime: String {
