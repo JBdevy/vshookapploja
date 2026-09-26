@@ -255,17 +255,6 @@ struct BronzeMIDISettings: Codable, Equatable, Sendable {
     var compatibility = false
     var controls: [String: BronzeCCMapping] = [:]
     var notes: [BronzeMIDINoteMapping] = []
-    func unifiedPresetMappings() -> Self {
-        var result = self
-        // Keep explicit shared mappings; migrate legacy banks in A–F order.
-        for index in 0..<96 {
-            if let mapping = result.controls.removeValue(forKey: "preset:\(index)") {
-                let key = "preset-slot:\(index % 16)"
-                if result.controls[key] == nil { result.controls[key] = mapping }
-            }
-        }
-        return result
-    }
     func validate() throws {
         let allowed = Set(BronzeMIDITarget.all.map(\.id)).union((0..<96).map { "preset:\($0)" })
         guard controls.count <= allowed.count, notes.count <= 128,

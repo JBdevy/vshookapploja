@@ -1267,40 +1267,42 @@ try {
   transport.selectedTrack = originalSelectedTrack;
   transport.state = originalState;
   transport.prepareAudioOutput = originalPrepareAudioOutput;
-  player.ccMappings.set('preset:A:2', 22);
+  player.ccMappings.set('preset:2', 22);
   player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 127 });
-  assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2, 'CC mapeado aciona o preset');
-  player.activateMappedPreset('A', 1);
-  player.lastCcValues.set('keyboard-a:1:22', { value: 127, receivedAt: performance.now() - 200 });
-  player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 127 });
-  assert.equal(player.bankStates.get(player.activeBank).selectedPreset, 2,
-    'teclado que envia somente 127 consegue acionar o mesmo CC novamente');
-  // Os seis bancos são independentes: o Preset 3 do Banco D tem o seu próprio
-  // controle e, tocado com a tela no Banco A, leva ao Banco D.
-  assert.equal(player.activeBank, 'A');
-  player.ccMappings.set('preset:D:3', 23);
+  assert.equal(player.bankStates.get('A').selectedPreset, 2, 'CC seleciona o número no banco atual');
+  player.ccMappings.set('preset:3', 23);
+  player.ccMappings.set('bank:D', 24);
+  player.handleMidiControlChange({ channel: 1, controller: 24, inputId: 'keyboard-a', value: 127 });
+  assert.equal(player.activeBank, 'D', 'banco pode ser selecionado por CC');
   player.handleMidiControlChange({ channel: 1, controller: 23, inputId: 'keyboard-a', value: 127 });
-  assert.equal(player.activeBank, 'D', 'preset mapeado do Banco D troca a tela para o Banco D na hora');
-  assert.equal(player.bankStates.get('D').selectedPreset, 3, 'o Preset 3 do Banco D fica selecionado');
-  assert.equal(player.bankStates.get('A').selectedPreset, null, 'só um preset fica ativo entre os seis bancos');
-  assert.equal(window.document.querySelector('[data-action="show-bank"][data-bank="D"]').getAttribute('aria-pressed'), 'true',
-    'o botão do Banco D acende');
-  assert.equal(window.document.querySelector('.player-preset-button[data-preset="3"]').getAttribute('aria-pressed'), 'true',
-    'o botão do Preset 3 acende no Banco D');
-  player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 0 });
-  player.handleMidiControlChange({ channel: 1, controller: 22, inputId: 'keyboard-a', value: 127 });
-  assert.equal(player.activeBank, 'A', 'o controle do Preset 2 do Banco A volta ao Banco A');
-  assert.equal(player.bankStates.get('A').selectedPreset, 2);
+  assert.equal(player.activeBank, 'D');
+  assert.equal(player.bankStates.get('D').selectedPreset, 3);
+  player.showBank('A');
+  player.handleMidiControlChange({ channel: 1, controller: 23, inputId: 'keyboard-a', value: 0 });
+  player.handleMidiControlChange({ channel: 1, controller: 23, inputId: 'keyboard-a', value: 127 });
+  assert.equal(player.activeBank, 'A', 'o CC do preset nunca troca o banco');
+  assert.equal(player.bankStates.get('A').selectedPreset, 3, 'o mesmo CC seleciona o Preset 3 do Banco A');
   assert.equal(player.bankStates.get('D').selectedPreset, null);
+  player.ccMappings.set('bank-step:-1', 25);
+  player.ccMappings.set('bank-step:1', 26);
+  player.handleMidiControlChange({ channel: 1, controller: 25, inputId: 'keyboard-a', value: 127 });
+  assert.equal(player.activeBank, 'F', 'seta anterior passa de A para F');
+  player.handleMidiControlChange({ channel: 1, controller: 26, inputId: 'keyboard-a', value: 127 });
+  assert.equal(player.activeBank, 'A', 'seta seguinte passa de F para A');
+  const arrows = [...root.querySelectorAll('[data-action="step-bank"]')];
+  assert.equal(arrows.length, 2);
+  arrows[1].click();
+  assert.equal(player.activeBank, 'B', 'seta também funciona por toque');
+  player.showBank('A');
   const savedBankPresets = JSON.parse(JSON.stringify(player.createSavedPlayerState()));
-  savedBankPresets.ccMappings = { ...savedBankPresets.ccMappings, 'preset:A:3': 61, 'preset:3': 62 };
+  savedBankPresets.ccMappings = { ...savedBankPresets.ccMappings, 'preset:3': 62 };
   player.applySavedPlayerState(savedBankPresets);
-  assert.equal(player.ccMappings.get('preset:A:3'), 61, 'Preset 3 do Banco A é salvo à parte');
-  assert.equal(player.ccMappings.get('preset:D:3'), 23, 'Preset 3 do Banco D é salvo à parte');
-  assert(!player.ccMappings.has('preset:3'), 'preset sem banco não é mais um destino');
-  player.ccMappings.delete('preset:A:3');
-  player.ccMappings.delete('preset:D:3');
-  // Learn CC do Preset 5 aberto no Banco B grava o destino do Banco B.
+  assert.equal(player.ccMappings.get('preset:3'), 62, 'mapeamento compartilhado sobrevive ao backup');
+  player.ccMappings.delete('preset:3');
+  player.ccMappings.delete('bank:D');
+  player.ccMappings.delete('bank-step:-1');
+  player.ccMappings.delete('bank-step:1');
+  // Learn CC no Banco B grava o mesmo destino para todos os bancos.
   player.showBank('B');
   window.document.querySelector('.player-preset-button[data-preset="5"]').click();
   player.openModal('preset-name', 5, window.document.querySelector('.player-preset-button[data-preset="5"]'));
@@ -1308,10 +1310,10 @@ try {
   assert.equal(JSON.stringify(player.pendingCcLearn), JSON.stringify({ kind: 'preset', bank: 'B', presetNumber: 5 }));
   player.handleMidiControlChange({ channel: 1, controller: 31, inputId: 'keyboard-a', value: 127 });
   window.document.querySelector('[data-modal-action="confirm-cc-learn"]').click();
-  assert.equal(player.ccMappings.get('preset:B:5'), 31, 'Learn no Banco B mapeia o Preset 5 do Banco B');
-  assert(!player.ccMappings.has('preset:A:5'), 'o Preset 5 do Banco A continua livre');
+  assert.equal(player.ccMappings.get('preset:5'), 31, 'Learn no Banco B mapeia o número 5 compartilhado');
+  assert(!player.ccMappings.has('preset:B:5'), 'não cria um mapeamento separado por banco');
   player.closeModal();
-  player.ccMappings.delete('preset:B:5');
+  player.ccMappings.delete('preset:5');
   player.showBank('A');
   window.document.querySelector('.player-preset-button[data-preset="2"]').click();
   assert.equal(player.bankStates.get('A').selectedPreset, 2);
@@ -1349,8 +1351,8 @@ try {
     const header = [...window.document.querySelectorAll('.player-presets__header > button')].map((button) => button.textContent.trim());
     // Este player roda como desktop, onde o Keyboard fica sempre à mostra e o
     // botão Presets/Keyboard não existe; no app ele entra no fim da linha.
-    assert.equal(JSON.stringify(header), JSON.stringify(['Copy', 'A', 'B', 'C', 'D', 'E', 'F']),
-      'a linha de cima tem Copy e os seis bancos');
+    assert.equal(JSON.stringify(header), JSON.stringify(['Copy', 'A', 'B', 'C', 'D', 'E', 'F', '‹', '›']),
+      'as duas setas ficam depois do Banco F');
     assert.equal(window.document.querySelector('[data-action="toggle-bottom-view"]'), null,
       'o desktop não tem o botão Presets/Keyboard');
     assert.equal(window.document.querySelector('[data-performance-keyboard]').hidden, false,
@@ -1503,7 +1505,7 @@ try {
 
     player.ccMappings.set('bank:E', 41);
     player.applySavedPlayerState(JSON.parse(JSON.stringify({ ...player.createSavedPlayerState(), ccMappings: { 'bank:E': 41 } })));
-    assert(!player.ccMappings.has('bank:E'), 'mapeamento de banco não é mais um destino salvo');
+    assert.equal(player.ccMappings.get('bank:E'), 41, 'mapeamento de banco sobrevive ao backup');
 
     source.name = 'Preset';
     source.modules[0].settings.cutoffHz = 20_000;
@@ -1884,7 +1886,7 @@ try {
     'preset switches do not panic/restart the audio engine');
   // O snapshot de compatibilidade é uma camada temporária. Este Learn precisa
   // sobreviver intacto à ativação e à desativação do modo.
-  player.ccMappings.set('preset:B:4', 70);
+  player.ccMappings.set('preset:4', 70);
   player.compatibilityMode = true;
   player.midiInput.setCompatibilityMode(true);
   player.openModal('preset-name', 1, root.querySelector('.player-preset-button[data-preset="1"]'));
@@ -1899,7 +1901,7 @@ try {
   window.document.querySelector('[data-modal-action="clean-preset-cc"]').click();
   assert.equal(player.currentModalKind, 'compatibility-preset-learn-blocked',
     'Clean também apenas explica que a compatibilidade precisa ser desativada');
-  assert.equal(player.ccMappings.get('preset:B:4'), 70, 'o aviso não apaga o Learn que já estava salvo');
+  assert.equal(player.ccMappings.get('preset:4'), 70, 'o aviso não apaga o Learn que já estava salvo');
   window.document.querySelector('[data-modal-action="dismiss-compatibility-preset-block"]').click();
   player.closeModal();
   const beforeBlockedCc7 = player.metronome.isRunning();
@@ -1938,7 +1940,7 @@ try {
   player.midiInput.emitControlChange({ channel: 1, controller: 91, inputId: 'test-midi', value: 17 });
   assert.equal(player.bankStates.get('B').selectedPreset, 16,
     'Reverb values above 16 do not create synthetic CC messages');
-  assert.equal(player.ccMappings.get('preset:B:4'), 70,
+  assert.equal(player.ccMappings.get('preset:4'), 70,
     'ativar compatibilidade não sobrescreve o Learn CC salvo pelo usuário');
   player.compatibilityMode = false;
   player.midiInput.setCompatibilityMode(false);

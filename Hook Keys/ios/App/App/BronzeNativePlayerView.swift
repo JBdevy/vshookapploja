@@ -280,7 +280,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
                         .frame(width: buttonWidth)
                 }
                 Button(model.mixer.mono ? "MONO" : "STEREO") { model.toggleGlobalMono() }
-                    .buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: model.mixer.mono, size: transportControlFont(compact: compact)))
+                    .buttonStyle(BronzeDeckButtonStyle(palette: model.mixer.mono ? .green : .grey, selected: model.mixer.mono, size: transportControlFont(compact: compact)))
                     .frame(width: buttonWidth)
                 Button("PANIC") { model.panic() }
                     .buttonStyle(BronzeDeckButtonStyle(palette: .red, size: transportControlFont(compact: compact)))
@@ -303,7 +303,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
         let value = octave ? model.mixer.octave : model.mixer.transpose
         return Button("\(octave ? "OCT" : "TRS") \(direction < 0 ? "−" : "+")\(value * direction > 0 ? "\(abs(value))" : "")") {
             model.shiftGlobalPitch(octave: octave ? direction : 0, transpose: octave ? 0 : direction)
-        }.buttonStyle(BronzeDeckButtonStyle(palette: .grey, selected: value * direction > 0, size: transportControlFont(compact: compact)))
+        }.buttonStyle(BronzeDeckButtonStyle(palette: value * direction > 0 ? .green : .grey, selected: value * direction > 0, size: transportControlFont(compact: compact)))
     }
 
     private func mixerHeader(compact: Bool) -> some View {

@@ -1395,11 +1395,14 @@ struct BronzeNativeSoundFontLibrary: View {
     @State private var category = "User"
     @State private var selectedSound: BronzeCatalogSound?
     @State private var confirmDownloadAll = false
+    @State private var confirmDeleteAll = false
+    @State private var removeUserFont: BronzeNativeAppModel.UserSoundFont?
     @State private var userBytes = 0.0
     @State private var selecting = false
     private var categories: [BronzeCatalogCategory] { account.categories.filter { $0.visibleModule == nil || $0.visibleModule == moduleIndex + 1 } }
     private var allSounds: [BronzeCatalogSound] { account.categories.flatMap(\.sounds) }
-    private var totalBytes: Double { allSounds.reduce(0) { $0 + Double($1.byteSize ?? 0) } }
+    private var allDownloaded: Bool { !allSounds.isEmpty && allSounds.allSatisfy { model.catalogFont($0.id) != nil && !model.catalogNeedsUpdate($0) } }
+    private var totalBytes: Double { userBytes + allSounds.reduce(0) { $0 + Double($1.byteSize ?? 0) } }
     private var busy: Bool { model.loadingSoundFontModule != nil || model.isApplyingSnapshot || model.backupBusy || model.updatingEffects }
     var body: some View {
         GeometryReader { geometry in
@@ -1413,9 +1416,11 @@ struct BronzeNativeSoundFontLibrary: View {
                         Text("\(allSounds.count) timbres").font(.bronzeUI(compact ? 10 : 13)).foregroundStyle(Color.bronzeLight)
                     }.accessibilityElement(children: .combine).accessibilityIdentifier("bronze.library.total")
                     Spacer()
-                    Button("Baixar tudo") { confirmDownloadAll = true }
-                        .buttonStyle(BronzeDeckButtonStyle(palette: .green)).frame(width: compact ? 105 : 150)
-                        .disabled(allSounds.isEmpty || model.backupBusy || allSounds.allSatisfy { model.catalogDownloadQueued($0.id) || (model.catalogFont($0.id) != nil && !model.catalogNeedsUpdate($0)) })
+                    Button(model.catalogDownloadName != nil ? "Baixado \(model.catalogDownloadCompleted)/\(model.catalogDownloadTotal)" : allDownloaded ? "Apagar biblioteca" : "Baixar tudo") {
+                        if allDownloaded { confirmDeleteAll = true } else { confirmDownloadAll = true }
+                    }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: allDownloaded ? .red : .green)).frame(width: compact ? 105 : 150)
+                        .disabled(allSounds.isEmpty || model.backupBusy || model.catalogDownloadName != nil)
                         .accessibilityIdentifier("bronze.library.downloadAll")
                 }.frame(height: compact ? 38 : 48)
                 if model.catalogDownloadName != nil {
@@ -1454,6 +1459,7 @@ struct BronzeNativeSoundFontLibrary: View {
                                                     .foregroundStyle(.black).modifier(BronzeCatalogSurface(color: BronzePresetPalette.colors[index % 16]))
                                                     .cornerRadius(5).overlay { if model.moduleSoundFonts[moduleIndex] == entry { BronzePresetHighlight().allowsHitTesting(false) } }
                                             }.buttonStyle(.plain)
+                                                .bronzeTapHold(tap: { selecting = true; model.selectUserSoundFont(entry, moduleIndex: moduleIndex) }, hold: { removeUserFont = entry })
                                         }
                                     }
                                     if model.userOnlySoundFonts.isEmpty { Text("Nenhum SF2 adicionado.").foregroundStyle(.secondary).padding(20) }
@@ -1494,6 +1500,14 @@ struct BronzeNativeSoundFontLibrary: View {
         .onChange(of: model.loadingSoundFontModule) { loading in
             if selecting && loading == nil { selecting = false; if model.controlError == nil { dismiss() } }
         }
+        .confirmationDialog("Apagar SF2?", isPresented: Binding(get: { removeUserFont != nil }, set: { if !$0 { removeUserFont = nil } }), titleVisibility: .visible) {
+            Button("Apagar", role: .destructive) { if let font = removeUserFont { model.removeUserSoundFont(font) }; removeUserFont = nil }
+            Button("Cancelar", role: .cancel) { removeUserFont = nil }
+        } message: { Text("O SF2 será apagado deste dispositivo e retirado dos presets que o utilizam.") }
+        .confirmationDialog("Apagar todos os timbres baixados?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+            Button("Apagar biblioteca", role: .destructive) { model.removeCatalogSounds(allSounds) }
+            Button("Cancelar", role: .cancel) {}
+        } message: { Text("Os timbres oficiais serão apagados deste aparelho. Módulos e presets que os usam ficarão sem esses timbres. Seus SF2 de User serão mantidos.") }
         .confirmationDialog("Baixar biblioteca?", isPresented: $confirmDownloadAll, titleVisibility: .visible) {
             Button("Baixar tudo") { model.downloadCatalogSounds(allSounds, account: account) }
             Button("Cancelar", role: .cancel) {}

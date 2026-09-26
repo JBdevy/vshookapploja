@@ -42,6 +42,7 @@ try {
   fs.mkdirSync(path.join(skia, '.git'), { recursive: true });
   write(path.join(skia, '.gn'), '');
   write(path.join(skia, 'include', 'core', 'SkCanvas.h'), '// test header');
+  write(path.join(tools, 'xcrun'), '#!/bin/bash\necho /FakeMacOS.sdk\n');
   write(path.join(tools, 'uname'), '#!/bin/bash\necho Darwin\n');
   write(path.join(tools, 'git'), '#!/bin/bash\nexit 0\n');
   write(path.join(tools, 'python3'), '#!/bin/bash\nexit 0\n');
@@ -108,11 +109,13 @@ done
   });
   assert.equal(result.status, 0, result.stdout + result.stderr + (result.error ?? ''));
   const calls = fs.readFileSync(log, 'utf8').trim().split(/\r?\n/);
-  assert.deepEqual(calls, ['ios-arm64', 'ios-simulator-arm64', 'ios-simulator-x64', 'macos-arm64', 'macos-x64']
+  assert.deepEqual(calls, ['ios-arm64', 'ios-simulator-arm64', 'ios-simulator-x64', 'macos-arm64', 'macos-x64', 'catalyst-arm64', 'catalyst-x64']
     .flatMap((slice) => [`gn:out/${slice}`, `ninja:${slice}`]));
   assert.ok(fs.existsSync(path.join(project, 'ios/App/Vendor/Skia.xcframework')));
-  assert.match(fs.readFileSync(path.join(project, 'ios/Skia.generated.xcconfig'), 'utf8'), /BRONZE_KEYS_REQUIRE_SKIA=1/);
-  console.log('SKIA_BUILD_SCRIPT_OK: five slices, source root, standalone Ninja, paths with spaces and packaging');
+  const config = fs.readFileSync(path.join(project, 'ios/Skia.generated.xcconfig'), 'utf8');
+  assert.match(config, /BRONZE_KEYS_REQUIRE_SKIA=1/);
+  assert.match(config, /ios-arm64_x86_64-maccatalyst\/libskia-catalyst.a/);
+  console.log('SKIA_BUILD_SCRIPT_OK: seven slices including Catalyst, source root, standalone Ninja, paths with spaces and packaging');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }

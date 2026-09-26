@@ -711,3 +711,16 @@ expect(try JSONDecoder().decode(BronzeTone.self, from: JSONEncoder().encode(filt
 filterTone.velocityCutoffHz = 0
 rejects { try filterTone.validate(moduleIndex: 0) }
 print("NATIVE_CATALOG_PARAMETER_PARITY_OK")
+
+let sharedPresetTargets = BronzeMIDITarget.all.filter { $0.id.hasPrefix("preset-slot:") }
+expect(sharedPresetTargets.count == 16, "exactly sixteen shared preset CC destinations")
+var sharedPresetMIDI = BronzeMIDISettings()
+sharedPresetMIDI.controls["preset-slot:0"] = BronzeCCMapping(device: "keyboard", channel: 1, controller: 22)
+sharedPresetMIDI.controls["bank:5"] = BronzeCCMapping(device: "keyboard", channel: 1, controller: 23)
+sharedPresetMIDI.controls["bank-step:-1"] = BronzeCCMapping(device: "keyboard", channel: 1, controller: 24)
+sharedPresetMIDI.controls["bank-step:1"] = BronzeCCMapping(device: "keyboard", channel: 1, controller: 25)
+try sharedPresetMIDI.validate()
+expect(try JSONDecoder().decode(BronzeMIDISettings.self, from: JSONEncoder().encode(sharedPresetMIDI)) == sharedPresetMIDI, "shared presets, banks and arrows survive backup")
+sharedPresetMIDI.controls["preset-slot:16"] = BronzeCCMapping(device: "keyboard", channel: 1, controller: 26)
+rejects { try sharedPresetMIDI.validate() }
+print("NATIVE_SHARED_PRESET_MIDI_OK")

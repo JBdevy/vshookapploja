@@ -559,3 +559,27 @@ A retomada de áudio pausa/reabre o grafo preservando o runtime e os SF2.
 - Defaults do catálogo importam também envelope/velocity do filtro, EQ completo, Delay, Arpeggiator, Pulse, Glide e Decay por IR. O painel administrativo em backendhookupdate acompanha Decay, Cutoff, Tap e Portamento; requer publicação separada do backend.
 - A corneta do Organ usa resposta direcional mais estreita que o tambor, mantendo o caminho sem Doppler. Testes de áudio verificam afinação, Slow/Fast e roteamento MIDI.
 - Config em Default intercepta toque/arraste dos parâmetros e mostra “Mude para User para configurar.”, incluindo Polifonia/Poly-Mono, sem bloquear seleção User, abas, MIDI ou saída.
+
+
+### MIDI dos presets e bancos
+
+Fora do modo compatibilidade, os 16 destinos `preset-slot:0...15` chamam o número correspondente no banco selecionado. Bancos A–F oferecem Learn CC no editor do nome; as setas após F têm Learn por long press/clique direito e percorrem os bancos em ciclo. O modo compatibilidade conserva CC 91/valores 1–16. A versão web usa destinos `preset:1...16`, `bank:A...F` e `bank-step:-1/1`. Não converte mapeamentos antigos. OCT/TRS ativos e MONO usam verde, conforme a referência web.
+
+### Biblioteca e conferência da referência web (26/09/2026)
+
+A conferência usa os arquivos atuais de `src/features/player`, incluindo os
+controles de configuração, roteamento, curvas, pads, presets e biblioteca.
+Nesta passagem foram corrigidas diferenças da biblioteca: contador
+“Baixado X/Y”, ação “Apagar biblioteca”, preview direto ao segurar/clicar com
+o direito, exclusão do SF2 instalado e remoção de User com confirmação. A
+exclusão descarrega os módulos envolvidos e remove referências dos presets;
+os demais timbres permanecem. O total inclui os SF2 de User.
+
+`test-native-library-removal.mjs` executa o código de exclusão em Swift com
+arquivos temporários e verifica também bloqueio durante download e rejeição
+de caminhos inválidos. As verificações de código/build não representam uma
+comparação visual pixel a pixel em todos os tamanhos de tela.
+
+O build Skia inclui agora duas slices com ABI Mac Catalyst, além das slices
+iOS, simulador e macOS. O pacote nativo de desktop não pode ligar a biblioteca
+macOS convencional ao executável Catalyst.

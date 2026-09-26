@@ -251,7 +251,7 @@ struct BronzeNativeCatalogList: View {
                                     ProgressView(value: model.catalogDownloadProgress.fraction).progressViewStyle(.linear).tint(.white).padding(.horizontal, 8)
                                     Text(model.catalogDownloadInstalling ? "Salvando…" : model.catalogDownloadProgress.fraction.map { "\(Int($0 * 100))%" } ?? "Baixando…").font(.bronzeUI(9))
                                 } else {
-                                    Text(model.catalogFont(sound.id) == nil ? "Baixar" : "No dispositivo").font(.bronzeUI(9))
+                                    Text(model.catalogDownloadQueued(sound.id) ? "Aguardando" : model.catalogFont(sound.id) == nil ? "Baixar" : "No dispositivo").font(.bronzeUI(9))
                                         .foregroundStyle(model.catalogFont(sound.id) == nil ? Color.white.opacity(0.7) : Color(bronzeHex: 0x8dffb4))
                                 }
                             }.foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: height)
@@ -259,7 +259,11 @@ struct BronzeNativeCatalogList: View {
                                 .modifier(BronzeDownloadCompletionHighlight(active: model.downloadedSoundID == sound.id, color: Color(bronzeHex: sound.color)))
                                 .overlay { if model.catalogFont(sound.id) == model.moduleSoundFonts[moduleIndex] && model.catalogFont(sound.id) != nil { BronzePresetHighlight().allowsHitTesting(false) } }
                         }.buttonStyle(.plain).accessibilityIdentifier("bronze.library.sound.\(sound.id)")
-                            .contextMenu { Button("Detalhes / Preview") { preview(sound) } }
+                            .bronzeTapHold(tap: {
+                                model.clearDownloadHighlight()
+                                if let font = model.catalogFont(sound.id) { selected(); model.selectUserSoundFont(font, moduleIndex: moduleIndex, catalogSound: sound) }
+                                else { preview(sound) }
+                            }, hold: { preview(sound) })
                     }
                 }
                 if sounds.isEmpty { Text("Nenhum timbre nesta categoria.").foregroundStyle(.secondary).padding(20) }
@@ -330,14 +334,23 @@ struct BronzeNativeSoundPreview: View {
                 }
                 Spacer()
             }
+            if let date = sound.publishedAt, let parsed = ISO8601DateFormatter().date(from: date) { Text(parsed, style: .date).font(.bronzeUI(12)).foregroundStyle(.secondary) }
             if let bytes = sound.byteSize { Text(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)).font(.bronzeUI(14)).foregroundStyle(Color.bronzeLight) }
             HStack(spacing: 12) {
                 Button(audio.loading ? "Carregando preview…" : audio.playing ? "Parar preview" : "Ouvir preview") { audio.toggle(sound: sound, account: account) }
                     .buttonStyle(BronzeDeckButtonStyle(palette: .purple)).disabled(sound.previewObjectKey == nil)
                     .accessibilityIdentifier("bronze.library.listen")
-                Button(model.catalogDownloadQueued(sound.id) ? "Na fila" : installed && !model.catalogNeedsUpdate(sound) ? "No dispositivo" : "Baixar") {
+                if installed {
+                    Button("Apagar") { audio.stop(); model.removeCatalogSounds([sound]) }
+                        .buttonStyle(BronzeDeckButtonStyle(palette: .red))
+                        .disabled(model.catalogDownloadName != nil || model.backupBusy)
+                        .accessibilityIdentifier("bronze.library.remove")
+                }
+                if !installed || model.catalogNeedsUpdate(sound) {
+                Button(model.catalogDownloadID == sound.id ? "Baixando…" : model.catalogDownloadQueued(sound.id) ? "Na fila" : "Baixar") {
                     audio.stop(); model.downloadCatalogSounds([sound], account: account)
                 }.buttonStyle(BronzeDeckButtonStyle(palette: .green)).disabled(model.catalogDownloadQueued(sound.id) || model.backupBusy || (installed && !model.catalogNeedsUpdate(sound)))
+                }
             }.frame(height: verticalSizeClass == .compact ? 42 : 52)
             if sound.previewObjectKey == nil { Text("Preview ainda não publicado").font(.bronzeUI(12)).foregroundStyle(.secondary) }
             if !audio.error.isEmpty { Text(audio.error).font(.bronzeUI(12)).foregroundStyle(.orange) }

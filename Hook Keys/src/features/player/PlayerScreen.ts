@@ -390,8 +390,10 @@ type CcLearnTarget =
   | { kind: 'tap-tempo' }
   | { kind: 'tempo-adjust'; direction: -1 | 1 }
   | { kind: 'synth-preset'; presetNumber: number }
-  // Banco A e Banco B são independentes: cada um tem os seus 8 presets mapeáveis.
+  // Preset numbers share one mapping across the selected bank.
   | { kind: 'preset'; bank: BankId; presetNumber: number }
+  | { kind: 'bank'; bank: BankId }
+  | { kind: 'bank-step'; direction: -1 | 1 }
   | { kind: 'pad'; bank: PadBankId; note: string }
   | { kind: 'effect'; bank: EffectBankId; effectNumber: number };
 
@@ -667,7 +669,9 @@ function ccMappingKey(target: CcLearnTarget): string {
   if (target.kind === 'tap-tempo') return 'metronome:tap';
   if (target.kind === 'tempo-adjust') return `metronome:${target.direction > 0 ? 'increase' : 'decrease'}`;
   if (target.kind === 'synth-preset') return `synth-preset:${target.presetNumber}`;
-  if (target.kind === 'preset') return `preset:${target.bank}:${target.presetNumber}`;
+  if (target.kind === 'preset') return `preset:${target.presetNumber}`;
+  if (target.kind === 'bank') return `bank:${target.bank}`;
+  if (target.kind === 'bank-step') return `bank-step:${target.direction}`;
   if (target.kind === 'pad') return `pad:${target.bank}:${target.note}`;
   return `effect:${target.bank}:${target.effectNumber}`;
 }
@@ -700,8 +704,10 @@ function ccLearnTargetLabel(target: CcLearnTarget): string {
   if (target.kind === 'tempo-adjust') return `${target.direction > 0 ? 'Aumentar' : 'Diminuir'} BPM em 0,5`;
   if (target.kind === 'synth-preset') return `Synth · Preset ${target.presetNumber}`;
   if (target.kind === 'preset') {
-    return `Banco ${target.bank} · Preset ${target.presetNumber.toString().padStart(2, '0')}`;
+    return `Preset ${target.presetNumber.toString().padStart(2, '0')} · Banco selecionado`;
   }
+  if (target.kind === 'bank') return `Banco ${target.bank}`;
+  if (target.kind === 'bank-step') return target.direction < 0 ? 'Banco anterior' : 'Próximo banco';
   if (target.kind === 'pad') return `Pads ${PAD_BANK_IDS.indexOf(target.bank) + 1} · ${target.note}`;
   return `FX ${target.bank} · Efeito ${target.effectNumber}`;
 }
@@ -725,7 +731,7 @@ function isCcMappingKey(value: string): boolean {
   if (/^synth-preset:[1-5]$/.test(value)) return true;
   if (/^pad:[AB]:(C|C#|D|D#|E|F|F#|G|G#|A|A#|B)$/.test(value)) return true;
   if (/^effect:[1-8]:([1-9]|1[0-2])$/.test(value)) return true;
-  return /^preset:[A-F]:([1-9]|1[0-6])$/.test(value);
+  return /^preset:([1-9]|1[0-6])$/.test(value) || /^bank:[A-F]$/.test(value) || /^bank-step:(-1|1)$/.test(value);
 }
 
 function ccMappingConflictScope(key: string): string {
@@ -1056,6 +1062,8 @@ function createBankNavigationMarkup(withViewToggle: boolean): string {
       aria-label="Copiar o preset selecionado"
     >Copy</button>
     ${banks}
+    <button class="player-navigation__button player-navigation__bank-step" type="button" data-action="step-bank" data-direction="-1" aria-label="Banco anterior">‹</button>
+    <button class="player-navigation__button player-navigation__bank-step" type="button" data-action="step-bank" data-direction="1" aria-label="Próximo banco">›</button>
     ${withViewToggle ? `
       <button
         class="player-navigation__button player-presets__view-button"
@@ -2214,6 +2222,12 @@ export class PlayerScreen {
     // Com o Keyboard à mostra, Copy e bancos ficam apagados e sem ação.
     if (actionButton.getAttribute('aria-disabled') === 'true') return;
 
+    if (action === 'step-bank') {
+      if (this.suppressNextBankClick) { this.suppressNextBankClick = false; return; }
+      this.stepBank(Number(actionButton.dataset.direction) < 0 ? -1 : 1);
+      return;
+    }
+
     if (action === 'show-bank') {
       if (this.suppressNextBankClick) {
         this.suppressNextBankClick = false;
@@ -2838,6 +2852,16 @@ export class PlayerScreen {
       return;
     }
 
+    const bankStep = eventTarget.closest<HTMLButtonElement>('[data-action="step-bank"]');
+    if (bankStep && this.root.contains(bankStep)) {
+      if (!this.desktopRuntime) this.bankHoldGesture.start(event, () => {
+        this.suppressNextBankClick = true;
+        window.setTimeout(() => { this.suppressNextBankClick = false; }, 900);
+        this.openCcLearn({ kind: 'bank-step', direction: Number(bankStep.dataset.direction) < 0 ? -1 : 1 }, bankStep);
+      });
+      return;
+    }
+
     const bankButton = eventTarget.closest<HTMLButtonElement>('[data-action="show-bank"]');
     if (bankButton && this.root.contains(bankButton)) {
       const bank = bankButton.dataset.bank;
@@ -3105,6 +3129,12 @@ export class PlayerScreen {
     const voiceModeButton = target.closest<HTMLButtonElement>('button[data-module-setting-action="toggle-voice-mode"]');
     if (voiceModeButton && this.modal && this.currentModalKind === 'module-settings' && this.currentModalModuleNumber !== null) {
       this.openChildModal('module-voice-mode', this.currentModalModuleNumber, voiceModeButton);
+      return;
+    }
+
+    const bankStep = target.closest<HTMLButtonElement>('[data-action="step-bank"]');
+    if (bankStep) {
+      this.openCcLearn({ kind: 'bank-step', direction: Number(bankStep.dataset.direction) < 0 ? -1 : 1 }, bankStep);
       return;
     }
 
@@ -3974,6 +4004,10 @@ export class PlayerScreen {
     this.activeView = 'pads-effects';
     this.updateVisibleView();
     this.markPlayerStateChanged();
+  }
+
+  private stepBank(direction: -1 | 1): void {
+    this.showBank(BANK_IDS[(BANK_IDS.indexOf(this.activeBank) + direction + BANK_IDS.length) % BANK_IDS.length]!);
   }
 
   private showBank(bank: BankId): void {
@@ -5295,11 +5329,13 @@ export class PlayerScreen {
         continue;
       }
 
-      const presetMatch = /^preset:([A-F]):([1-9]|1[0-6])$/.exec(targetKey);
-      // O snapshot Reverb 1..16 substitui temporariamente apenas os Learn dos
-      // presets principais. Os valores continuam no mapa e voltam ao desligar.
-      if (presetMatch && !this.compatibilityMode && risingEdge && this.isBankId(presetMatch[1])) {
-        this.activateMappedPreset(presetMatch[1], Number(presetMatch[2]));
+      const bankMatch = /^bank:([A-F])$/.exec(targetKey);
+      if (bankMatch && risingEdge && this.isBankId(bankMatch[1])) { this.showBank(bankMatch[1]); continue; }
+      const bankStepMatch = /^bank-step:(-1|1)$/.exec(targetKey);
+      if (bankStepMatch && risingEdge) { this.stepBank(bankStepMatch[1] === '-1' ? -1 : 1); continue; }
+      const presetMatch = /^preset:([1-9]|1[0-6])$/.exec(targetKey);
+      if (presetMatch && !this.compatibilityMode && risingEdge) {
+        this.activateMappedPreset(this.activeBank, Number(presetMatch[1]));
       }
     }
 
@@ -5856,6 +5892,7 @@ export class PlayerScreen {
             <input type="text" maxlength="12" autocomplete="off" data-bank-name-input
               value="${escapeMarkup(bankState?.name || this.pendingBankEdit)}">
           </label>
+          <button class="preset-name-editor__learn" type="button" data-modal-action="learn-bank-cc">Learn CC · ${this.ccMappingLabel({ kind: 'bank', bank: this.pendingBankEdit })}</button>
           <button class="bank-name-editor__advanced" type="button" data-modal-action="open-bank-advanced">Advanced</button>
         </section>
       `;
@@ -7322,6 +7359,11 @@ export class PlayerScreen {
         const button = target instanceof Element
           ? target.closest<HTMLButtonElement>('[data-modal-action]') : null;
         if (button) this.openChildModal('compatibility-preset-learn-blocked', null, button);
+        return;
+      }
+      if (modalAction === 'learn-bank-cc' && this.pendingBankEdit && target instanceof HTMLElement) {
+        this.commitBankName(modal);
+        this.openCcLearn({ kind: 'bank', bank: this.pendingBankEdit }, target);
         return;
       }
       if (modalAction === 'learn-preset-cc' && kind === 'preset-name' && moduleNumber !== null) {

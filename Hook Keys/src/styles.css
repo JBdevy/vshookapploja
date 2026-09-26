@@ -16915,3 +16915,13 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
   grid-auto-rows: clamp(44px, 8vh, 56px);
   align-content: start;
 }
+
+.player-presets__header .player-navigation__bank-step {
+  min-width: 0;
+  padding-inline: 2px;
+  background: linear-gradient(180deg, #34343a, #141417);
+  border-color: #666;
+  color: #fff;
+  font-size: clamp(16px, 2vw, 23px);
+  line-height: 1;
+}

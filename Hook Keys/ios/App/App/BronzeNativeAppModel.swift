@@ -617,6 +617,53 @@ final class BronzeNativeAppModel: ObservableObject {
         }
     }
 
+    func removeCatalogSounds(_ sounds: [BronzeCatalogSound]) {
+        guard !backupBusy, !isApplyingSnapshot, loadingSoundFontModule == nil, !updatingEffects,
+              catalogDownloadTask == nil else {
+            catalogDownloadError = "Aguarde a operação atual terminar para apagar os timbres."
+            return
+        }
+        catalogDownloadError = nil
+        do {
+            for sound in sounds {
+                guard let font = catalogFont(sound.id) else { continue }
+                try removeLibrarySoundFont(font)
+            }
+        } catch { catalogDownloadError = "Não foi possível apagar o timbre: \(error.localizedDescription)" }
+    }
+
+    func removeUserSoundFont(_ font: UserSoundFont) {
+        guard !backupBusy, !isApplyingSnapshot, loadingSoundFontModule == nil, !updatingEffects,
+              catalogDownloadTask == nil, userOnlySoundFonts.contains(font) else { return }
+        do { try removeLibrarySoundFont(font) }
+        catch { controlError = "Não foi possível apagar o SF2: \(error.localizedDescription)" }
+    }
+
+    private func removeLibrarySoundFont(_ font: UserSoundFont) throws {
+        // Resolve only validated relative keys inside the private SF2 store.
+        try BronzeSessionStore.validateSoundFontKey(font.id)
+        let file = try Self.soundFontDirectory().appendingPathComponent(font.id)
+        if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        for index in moduleSoundFonts.indices where moduleSoundFonts[index]?.id == font.id { clearSoundFont(index) }
+        var updatedPresets = presets
+        for preset in updatedPresets.indices {
+            guard var modules = updatedPresets[preset].modules else { continue }
+            for index in modules.indices where modules[index].soundFontKey == font.id {
+                modules[index].soundFontKey = nil
+                modules[index].enabled = false
+            }
+            updatedPresets[preset].modules = modules
+        }
+        presets = updatedPresets
+        for (id, key) in workspace.catalogDownloads ?? [:] where key == font.id {
+            workspace.catalogDownloads?[id] = nil
+            workspace.catalogInstalls?[id] = nil
+            if downloadedSoundID == id { downloadedSoundID = nil }
+        }
+        userSoundFonts.removeAll { $0.id == font.id }
+        saveSessionNow()
+    }
+
     func cancelCatalogDownload() { catalogDownloadTask?.cancel() }
 
     private func installCatalogDownload(_ source: URL, sound: BronzeCatalogSound) async throws {
@@ -1964,7 +2011,7 @@ final class BronzeNativeAppModel: ObservableObject {
         else if let track = workspace.selectedTrack { selectUserTrack(track) }
     }
 
-    var midiSettings: BronzeMIDISettings { (workspace.midi ?? BronzeMIDISettings()).unifiedPresetMappings() }
+    var midiSettings: BronzeMIDISettings { workspace.midi ?? BronzeMIDISettings() }
 
     func setCompatibility(_ enabled: Bool) {
         var next = midiSettings; next.compatibility = enabled; workspace.midi = next

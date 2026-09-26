@@ -97,6 +97,16 @@ MACOS_ARGS='extra_cflags=["-mmacosx-version-min=12.0"] extra_asmflags=["-mmacosx
 build_slice macos-arm64 mac arm64 "$MACOS_ARGS"
 build_slice macos-x64 mac x64 "$MACOS_ARGS"
 
+# Catalyst has an iOS ABI on the macOS SDK. A plain macOS archive cannot be
+# linked into the native Mac app even when the CPU architecture matches.
+CATALYST_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+for CATALYST_CPU in arm64 x64; do
+  CATALYST_ARCH="$CATALYST_CPU"
+  [[ "$CATALYST_CPU" != x64 ]] || CATALYST_ARCH=x86_64
+  CATALYST_FLAGS="[\"-target\",\"$CATALYST_ARCH-apple-ios15.0-macabi\",\"-isystem\",\"$CATALYST_SDK/System/iOSSupport/usr/include\",\"-iframework\",\"$CATALYST_SDK/System/iOSSupport/System/Library/Frameworks\"]"
+  build_slice "catalyst-$CATALYST_CPU" ios "$CATALYST_CPU" "ios_min_target=\"\" xcode_sysroot=\"$CATALYST_SDK\" extra_cflags=$CATALYST_FLAGS extra_asmflags=$CATALYST_FLAGS extra_ldflags=$CATALYST_FLAGS"
+done
+
 STAGE_ROOT="$WORK_ROOT/stage"
 rm -rf "$STAGE_ROOT" "$XCFRAMEWORK_PATH"
 mkdir -p "$STAGE_ROOT/Headers"
@@ -110,19 +120,24 @@ lipo -create \
   "$SKIA_ROOT/out/macos-x64/libskia.a" \
   -output "$STAGE_ROOT/libskia-macos.a"
 
+lipo -create \
+  "$SKIA_ROOT/out/catalyst-arm64/libskia.a" \
+  "$SKIA_ROOT/out/catalyst-x64/libskia.a" \
+  -output "$STAGE_ROOT/libskia-catalyst.a"
 xcodebuild -create-xcframework \
   -library "$SKIA_ROOT/out/ios-arm64/libskia.a" -headers "$STAGE_ROOT/Headers" \
   -library "$STAGE_ROOT/libskia-ios-simulator.a" -headers "$STAGE_ROOT/Headers" \
   -library "$STAGE_ROOT/libskia-macos.a" -headers "$STAGE_ROOT/Headers" \
+  -library "$STAGE_ROOT/libskia-catalyst.a" -headers "$STAGE_ROOT/Headers" \
   -output "$XCFRAMEWORK_PATH"
 
 cat > "$PROJECT_ROOT/ios/Skia.generated.xcconfig" <<'EOF'
 SKIA_HEADERS[sdk=iphoneos*] = $(SRCROOT)/Vendor/Skia.xcframework/ios-arm64/Headers
 SKIA_HEADERS[sdk=iphonesimulator*] = $(SRCROOT)/Vendor/Skia.xcframework/ios-arm64_x86_64-simulator/Headers
-SKIA_HEADERS[sdk=macosx*] = $(SRCROOT)/Vendor/Skia.xcframework/macos-arm64_x86_64/Headers
+SKIA_HEADERS[sdk=macosx*] = $(SRCROOT)/Vendor/Skia.xcframework/ios-arm64_x86_64-maccatalyst/Headers
 SKIA_LIBRARY[sdk=iphoneos*] = $(SRCROOT)/Vendor/Skia.xcframework/ios-arm64/libskia.a
 SKIA_LIBRARY[sdk=iphonesimulator*] = $(SRCROOT)/Vendor/Skia.xcframework/ios-arm64_x86_64-simulator/libskia-ios-simulator.a
-SKIA_LIBRARY[sdk=macosx*] = $(SRCROOT)/Vendor/Skia.xcframework/macos-arm64_x86_64/libskia-macos.a
+SKIA_LIBRARY[sdk=macosx*] = $(SRCROOT)/Vendor/Skia.xcframework/ios-arm64_x86_64-maccatalyst/libskia-catalyst.a
 HEADER_SEARCH_PATHS = $(inherited) "$(SKIA_HEADERS)"
 OTHER_LDFLAGS = $(inherited) "$(SKIA_LIBRARY)" -framework CoreText -framework CoreGraphics -framework CoreFoundation
 GCC_PREPROCESSOR_DEFINITIONS = $(inherited) BRONZE_KEYS_REQUIRE_SKIA=1
