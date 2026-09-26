@@ -4610,10 +4610,10 @@ html[data-keyboard="open"][data-app-mode="login"] .form-footnote {
   text-shadow: 0 1px rgba(255, 255, 255, .28);
 }
 
-/* Inativos mantêm o fundo cinza e o nome na cor salva. */
+/* Inativos usam uma tonalidade suave da cor salva; selecionados usam a cor plena. */
 .player-preset-button:not(.is-selected) {
   border-color: #494949;
-  background: linear-gradient(145deg, #616161, #424242);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--preset-accent) 20%, #202020), color-mix(in srgb, var(--preset-accent) 8%, #202020));
   box-shadow: inset 0 1px rgba(255, 255, 255, .12), 0 5px 11px rgba(0, 0, 0, .22);
 }
 .player-preset-button:not(.is-selected) .player-preset-button__number,
@@ -15739,14 +15739,14 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-pres
   text-shadow: 0 1px 2px rgba(0, 0, 0, .7) !important;
 }
 
-/* Apenas o banco selecionado mostra sua cor. Os demais ficam cinza. */
+/* Bancos inativos mantêm sua identidade em uma tonalidade suave. */
 :is(.player-screen, .player-modal) .player-presets .player-navigation__bank-button[data-action="show-bank"] {
   opacity: 1;
 }
 
 :is(.player-screen, .player-modal) .player-presets .player-navigation__bank-button[data-action="show-bank"]:not(.is-selected) {
-  --button-color-a: #616161 !important;
-  --button-color-b: #424242 !important;
+  --button-color-a: color-mix(in srgb, var(--bank-name-color) 20%, #202020) !important;
+  --button-color-b: color-mix(in srgb, var(--bank-name-color) 8%, #202020) !important;
   --button-border: #494949 !important;
   color: var(--bank-name-color) !important;
   border-color: var(--button-border) !important;
@@ -16925,3 +16925,6 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
   font-size: clamp(16px, 2vw, 23px);
   line-height: 1;
 }
+
+/* Fundo geral compartilhado com o player nativo. */
+.player-screen { background: linear-gradient(135deg, #1c1c1c, #141414, #0e0e0e) !important; }

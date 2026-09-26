@@ -26,7 +26,8 @@ try {
       ]
     } else if (current_cpu == "x86") {
 `);
-  const patchFile = path.join(root, 'scripts/skia-apple-arm64.patch');
+  const patchFile = path.join(temp, 'skia-apple-arm64.patch');
+  fs.writeFileSync(patchFile, fs.readFileSync(path.join(root, 'scripts/skia-apple-arm64.patch'), 'utf8').replaceAll('\r\n', '\n'));
   const patchResult = spawnSync('git', ['apply', patchFile], { cwd: patchProbe, encoding: 'utf8' });
   assert.equal(patchResult.status, 0, patchResult.stderr);
   assert.doesNotMatch(fs.readFileSync(path.join(patchProbe, 'gn/skia/BUILD.gn'), 'utf8'), /arm64e/);

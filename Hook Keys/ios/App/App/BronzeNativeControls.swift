@@ -91,11 +91,11 @@ extension EnvironmentValues {
 
 enum BronzeTheme {
     static var screenGradient: LinearGradient {
-        LinearGradient(colors: [Color(bronzeHex: 0x303030), Color(bronzeHex: 0x242424), Color(bronzeHex: 0x181818)],
+        LinearGradient(colors: [Color(bronzeHex: 0x1c1c1c), Color(bronzeHex: 0x141414), Color(bronzeHex: 0x0e0e0e)],
                        startPoint: .topLeading, endPoint: .bottomTrailing)
     }
     static var panelGradient: LinearGradient {
-        LinearGradient(colors: [Color(bronzeHex: 0x2b2b2b).opacity(0.92), Color(bronzeHex: 0x1c1c1c).opacity(0.94)],
+        LinearGradient(colors: [Color(bronzeHex: 0x242424).opacity(0.92), Color(bronzeHex: 0x171717).opacity(0.94)],
                        startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 }

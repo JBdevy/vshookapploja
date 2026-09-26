@@ -38,13 +38,14 @@ struct BronzeDeckButtonStyle: ButtonStyle {
     var selected = false
     var size: CGFloat = 12
     var textColor: Color? = nil
+    var subtleTint: Color? = nil
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.bronzeUI(size)).lineLimit(1).minimumScaleFactor(0.65)
             .foregroundStyle(textColor ?? (palette == .bronze || palette == .yellow ? Color.black : Color.white))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 3)
-            .background(LinearGradient(colors: palette.colors.prefix(2).map { $0 }, startPoint: .topLeading, endPoint: .bottomTrailing))
+            .background(LinearGradient(colors: subtleTint.map { [$0.opacity(0.20), $0.opacity(0.08)] } ?? Array(palette.colors.prefix(2)), startPoint: .topLeading, endPoint: .bottomTrailing).background(Color(bronzeHex: 0x202020)))
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(selected ? .white : (palette == .bronze ? .clear : palette.colors[2]), lineWidth: selected ? 2 : 1).allowsHitTesting(false))
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.06), lineWidth: 1).padding(1).allowsHitTesting(false))
@@ -227,7 +228,7 @@ struct BronzeNativePlayerView<Pads: View>: View {
                     Image("BronzeBrand").resizable().scaledToFit().frame(width: compact ? 23 : 32)
                     (Text("Bronze").foregroundColor(.bronzeLight) + Text(" Keys").foregroundColor(.white))
                         .font(.bronzeUI(compact ? 12 : 16))
-                }.padding(5).frame(width: compact ? 138 : 176).frame(maxHeight: .infinity).modifier(BronzeDeckSurface())
+                }.padding(5).frame(width: compact ? 138 : 176).frame(maxHeight: .infinity).modifier(BronzeDeckSurface(bordered: true))
                 .bronzeTapHold(tap: { splitPlaylist.toggle() }, hold: { splitPlaylist.toggle() })
                 .accessibilityElement(children: .ignore)
                 .accessibilityAddTraits(.isButton).accessibilityLabel("Bronze Keys")
@@ -288,10 +289,12 @@ struct BronzeNativePlayerView<Pads: View>: View {
                     .frame(width: buttonWidth)
             }.padding(5).modifier(BronzeDeckSurface(bordered: true))
             }
+            HStack(spacing: 2) {
             Button(action: openSettings) { Image(systemName: "gearshape") }.accessibilityLabel("Configurações").buttonStyle(BronzeDeckButtonStyle(palette: .yellow, size: 17)).frame(width: compact ? 30 : 40)
             Button(action: openAccount) { Image(systemName: "person") }.accessibilityLabel("Conta").buttonStyle(BronzeDeckButtonStyle(palette: .green, size: 17)).frame(width: compact ? 30 : 42)
             VStack(spacing: 3) { Text("RAM").foregroundStyle(Color.bronzeLight); Text(model.memoryPercent.map { "\($0)%" } ?? "--").foregroundStyle(.white) }.font(.bronzeUI(compact ? 7 : 9)).frame(width: compact ? 34 : 49).frame(maxHeight: .infinity).modifier(BronzeDeckSurface())
                 .accessibilityElement(children: .combine).accessibilityIdentifier("bronze.memory")
+            }.padding(3).modifier(BronzeDeckSurface(bordered: true))
         }.padding(.leading, compact ? 2 : 6).padding(.trailing, compact ? 8 : 10).padding(.top, 3)
     }
 
@@ -447,7 +450,8 @@ struct BronzeNativePlayerView<Pads: View>: View {
                 ForEach(0..<6, id: \.self) { bank in
                     Button(model.presetBankName(bank)) { model.selectPresetBank(bank) }
                         .buttonStyle(BronzeDeckButtonStyle(palette: model.presetBank == bank ? [.blue, .purple, .green, .bronze, .pink, .cyan][bank] : .presetGrey, selected: model.presetBank == bank, size: compact ? 11 : 15,
-                            textColor: model.presetBank == bank ? nil : Color(bronzeHex: [0x27b9ff, 0xbd63ff, 0x35d273, 0xe8ad70, 0xff5f9e, 0x19c9d8][bank])))
+                            textColor: model.presetBank == bank ? nil : Color(bronzeHex: [0x27b9ff, 0xbd63ff, 0x35d273, 0xe8ad70, 0xff5f9e, 0x19c9d8][bank]),
+                            subtleTint: model.presetBank == bank ? nil : Color(bronzeHex: [0x27b9ff, 0xbd63ff, 0x35d273, 0xe8ad70, 0xff5f9e, 0x19c9d8][bank])))
                         .bronzeTapHold(tap: { model.selectPresetBank(bank) }, hold: { bankToRename = bank; bankName = model.presetBankName(bank); renameBank = true })
                         .accessibilityIdentifier("bronze.bank.\(bank)").accessibilityValue(model.presetBank == bank ? "Selecionado" : "")
                 }
@@ -507,13 +511,13 @@ struct BronzeNativePlayerView<Pads: View>: View {
         let presetColor = BronzePresetPalette.colors[slot.modules == nil && slot.name == "Empty" ? BronzePresetPalette.order[index % 16] : slot.color]
         let color = model.activePreset == index
             ? presetColor
-            : Color(white: 0.38)
+            : presetColor.opacity(0.20)
         return HStack(spacing: 8) {
             Text(String(format: "%02d", index % 16 + 1)).font(.bronzeUI(compact ? 9 : 12))
             Text(slot.modules == nil && slot.name == "Empty" ? "Preset" : slot.name).font(.bronzeUI(compact ? 10 : 13)).lineLimit(1).minimumScaleFactor(0.6)
                 .foregroundStyle(model.activePreset == index ? Color.black : presetColor)
         }.foregroundStyle(model.activePreset == index ? Color.black : Color.white).padding(.horizontal, 10).frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(LinearGradient(colors: [color, color.opacity(0.68)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .background(LinearGradient(colors: [color, model.activePreset == index ? color.opacity(0.68) : presetColor.opacity(0.08)], startPoint: .topLeading, endPoint: .bottomTrailing).background(Color(bronzeHex: 0x202020)))
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay { if model.activePreset == index { BronzePresetHighlight() } }
             .bronzeTapHold(tap: { selectedSlot = index; model.recallPreset(index) },
