@@ -333,12 +333,12 @@ test('EQ: a curva do shelf segue a mesma inclinação do motor (Q vira o slope, 
   assert.equal(settingsView.createEqCurve(bands, 420, 170), standard, 'acima de 1 o motor limita o slope em 1');
 });
 
-test('desktop opens smaller and Param clips every preview inside its available grid row', () => {
+test('desktop opens at the requested 1128 × 673 size and Param clips every preview inside its available grid row', () => {
   const config = JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
   const window = config.app.windows[0];
   assert.deepEqual(
     { width: window.width, height: window.height, minWidth: window.minWidth, minHeight: window.minHeight },
-    { width: 1100, height: 650, minWidth: 900, minHeight: 520 },
+    { width: 1128, height: 673, minWidth: 900, minHeight: 520 },
   );
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.player-modal--module-settings \.module-settings-panel\s*\{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/s);
