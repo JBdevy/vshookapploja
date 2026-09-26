@@ -94,24 +94,19 @@ final class BronzeNativeAppModel: ObservableObject {
     @Published private(set) var memoryPercent: Int?
     #if targetEnvironment(macCatalyst)
     @Published private(set) var cpuPercent: Int?
-    private var previousCPUTicks: [UInt32]?
+    private var previousCPUSample: (wall: Double, cpu: Double)?
 
     private func refreshCPUUsage() {
-        var stats = host_cpu_load_info()
-        var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info>.size / MemoryLayout<integer_t>.size)
-        let result = withUnsafeMutablePointer(to: &stats) { pointer in
-            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
-            }
-        }
-        guard result == KERN_SUCCESS else { return }
-        let ticks = [stats.cpu_ticks.0, stats.cpu_ticks.1, stats.cpu_ticks.2, stats.cpu_ticks.3]
-        defer { previousCPUTicks = ticks }
-        guard let previous = previousCPUTicks else { return }
-        let delta = zip(ticks, previous).map { UInt64($0 &- $1) }
-        let total = delta.reduce(0, +)
-        guard total > 0 else { return }
-        let percent = min(100, Int((100 * Double(total - delta[Int(CPU_STATE_IDLE)]) / Double(total)).rounded()))
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return }
+        let cpu = Double(usage.ru_utime.tv_sec) + Double(usage.ru_utime.tv_usec) / 1_000_000
+            + Double(usage.ru_stime.tv_sec) + Double(usage.ru_stime.tv_usec) / 1_000_000
+        let now = ProcessInfo.processInfo.systemUptime
+        defer { previousCPUSample = (now, cpu) }
+        guard let previous = previousCPUSample, now > previous.wall else { return }
+        // Same scale as Windows: this process divided by total logical CPU capacity.
+        let capacity = Double(max(1, ProcessInfo.processInfo.activeProcessorCount))
+        let percent = min(100, max(0, Int((100 * (cpu - previous.cpu) / (now - previous.wall) / capacity).rounded())))
         if cpuPercent != percent { cpuPercent = percent }
     }
     #endif

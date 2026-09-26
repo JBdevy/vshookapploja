@@ -16928,3 +16928,9 @@ html[data-runtime="desktop"] .player-screen--tablet.is-tracks-split .player-outp
 
 /* Fundo geral compartilhado com o player nativo. */
 .player-screen { background: linear-gradient(135deg, #1c1c1c, #141414, #0e0e0e) !important; }
+
+/* Desktop não precisa reservar espaço para notch/cantos de dispositivos móveis. */
+html[data-runtime="desktop"] .player-screen.player-screen--tablet {
+  padding-left: 1px;
+  padding-right: 1px;
+}
