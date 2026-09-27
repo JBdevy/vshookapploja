@@ -6,7 +6,7 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
     private static var commands: [JSON] = []
     private static var rejected = ""
     private static var delayedType = ""
-    static func reset(_ value: JSON) { lock.lock(); defer { lock.unlock() }; snapshot = value; commands = []; rejected = "" }
+    static func reset(_ value: JSON) { lock.lock(); defer { lock.unlock() }; snapshot = value; commands = []; rejected = ""; delayedType = "" }
     static func state(_ value: JSON) { lock.lock(); defer { lock.unlock() }; snapshot = value }
     static func reject(_ type: String) { lock.lock(); defer { lock.unlock() }; rejected = type }
     static func delay(_ type: String) { lock.lock(); defer { lock.unlock() }; delayedType = type }
@@ -122,10 +122,20 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         check(director.itemVolumePreviews["clip-live"] == nil, "matching bridge data releases the local override")
         check(MixerScale.ratio(director.displayedTCPItem(previewItem.merging(["volumeRatio": 0.6])), max: 24) == 0.6, "later remote edits are visible after acknowledgment")
         MockBridge.reject("")
+        MockBridge.delay("premix_item_set_volume")
         director.setVolume(previewItem, ratio: 0.3, premix: true)
-        try await Task.sleep(nanoseconds: 150_000_000)
-        director.reconcileTCPItemVolumes([previewItem.merging(["volumeRatio": 0.4])])
+        let changedRemoteItem = previewItem.merging(["volumeRatio": 0.4])
+        director.reconcileTCPItemVolumes([changedRemoteItem])
+        check(director.itemVolumePreviews["clip-live"] == 0.3, "remote data cannot replace a volume command while it is pending")
+        // Reconcile as polling does: acceptance may arrive after the 70 ms debounce
+        // plus network/scheduler latency. A fixed 150 ms sleep races on CI.
+        try await until {
+            director.reconcileTCPItemVolumes([changedRemoteItem])
+            return director.itemVolumePreviews["clip-live"] == nil
+        }
         check(director.itemVolumePreviews["clip-live"] == nil, "a new remote volume supersedes an accepted value even without an exact echo")
+        check(MixerScale.ratio(director.displayedTCPItem(changedRemoteItem), max: 24) == 0.4, "the newer remote volume is displayed after acceptance")
+        MockBridge.delay("")
         MockBridge.reject("")
         director.snapshot["selectedRegionId"] = "old-region"
         director.select(director.allItems[0])
