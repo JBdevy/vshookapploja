@@ -402,6 +402,25 @@ enum DirectorParts {
     }
 }
 
+enum DirectorPremixState {
+    static func matches(_ data: JSON, song: JSON) -> Bool {
+        guard data.exists else { return false }
+        // Older bridges may omit selection metadata. When it is supplied,
+        // never show another song's cached item controls while focus changes.
+        if data["selectedSongId"].exists || data["selectedCanonicalSongId"].exists {
+            let ids = [data["selectedSongId"].string, data["selectedCanonicalSongId"].string]
+            guard !song.identifier.isEmpty, ids.contains(song.identifier) else { return false }
+        }
+        let bounds = [
+            (data["selectedSongStart"], song.first("startPos", "start_pos", "pos", "rgnstart", "regionStart")),
+            (data["selectedSongEnd"], song.first("endPos", "end_pos", "rgnend", "regionEnd")),
+        ]
+        return bounds.allSatisfy { actual, expected in
+            !actual.exists || !expected.exists || abs(actual.double - expected.double) <= 0.001
+        }
+    }
+}
+
 // Current bridges publish native child regions; marker children are the fallback
 // used by the current desktop interface for sessions that still use song markers.
 extension JSON {

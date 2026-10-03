@@ -6,6 +6,7 @@ struct DirectorPremixView: View {
     let close: () -> Void
     @State private var chosen: JSON = .null
     private var data: JSON { session.snapshot["premix"] }
+    private var ready: Bool { DirectorPremixState.matches(data, song: song) }
     private var sections: [JSON] { data.first("songSections", "sections").array }
     private var target: JSON { chosen.exists ? chosen : song }
     var body: some View {
@@ -26,7 +27,9 @@ struct DirectorPremixView: View {
             }.font(.custom("Arial-BoldMT", size: 14)).padding(.horizontal, 4)
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if !sections.isEmpty {
+                    if !ready {
+                        Text("CARREGANDO PREMIX...").font(.caption.bold()).padding(20)
+                    } else if !sections.isEmpty {
                         ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
                             let item = section.merging(["id": section.first("songId", "regionId", "id"), "name": section.first("songName", "name")])
                             DirectorOptionRow(title: String(format: "%02d  ", index + 1) + item.name.uppercased(), active: target.identifier == item.identifier) { chosen = item }

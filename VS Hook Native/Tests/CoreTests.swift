@@ -200,6 +200,19 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         let familyData: JSON = ["regions": [family], "playlists": [familyList], "markers": [["id": "7", "number": 7, "name": "Canção antiga", "pos": 10], ["id": "8", "number": 8, "name": "Próxima", "pos": 30], ["id": "9", "name": "$PONTE", "pos": 35]]]
         let familyChildren = DirectorFamily.children(of: family, data: familyData)
         check(familyChildren.map(\.identifier) == ["m7", "m8"] && familyChildren[0]["endPos"] == 30 && familyChildren[1]["endPos"] == 50, "marker drawer preserves exact boundaries and excludes Parts markers")
+        let premixChild = familyChildren[0]
+        let premixPayload = layoutSession.targetPayload(premixChild, sourcePage: "regions")
+        check(premixPayload["songId"] == "m7" && premixPayload["selectedRegionId"] == "m7" && premixPayload["sourceNumber"] == 7 && premixPayload["startPos"] == 10 && premixPayload["endPos"] == 30, "store app Premix preserves the marker alias and exact child bounds for the native resolver")
+        let premixSnapshot: JSON = ["selectedSongId": "m7", "selectedCanonicalSongId": "7", "selectedSongStart": 10, "selectedSongEnd": 30, "items": [["itemId": "audio", "trackName": "Piano", "name": "MEDIA"]]]
+        check(DirectorPremixState.matches(premixSnapshot, song: premixChild), "echoed legacy Premix alias accepts the requested drawer child")
+        check(DirectorPremixState.matches(premixSnapshot, song: premixChild.merging(["id": "7"])), "canonical child and echoed alias identify the same selected song")
+        check(!DirectorPremixState.matches(premixSnapshot, song: familyChildren[1]), "opening the next child cannot show the previous song's cached items")
+        check(!DirectorPremixState.matches(premixSnapshot.merging(["selectedSongStart": 11]), song: premixChild), "same song ID with stale bounds is not a ready Premix snapshot")
+        check(!DirectorPremixState.matches(.null, song: premixChild), "wait for the first Premix snapshot")
+        check(!DirectorPremixState.matches(["selectedSongId": ""], song: premixChild), "explicitly missing native selection is not ready")
+        check(DirectorPremixState.matches(["items": []], song: premixChild), "legacy Premix payloads without selection metadata remain compatible")
+        check(MixerScale.visible(premixSnapshot["items"].array[0]), "store app keeps MEDIA-named audio on an ordinary track")
+        check(!MixerScale.visible(["trackName": "MÉDIA", "name": "Piano take"]), "store app still excludes actual technical tracks")
         check(DirectorSearch.entries(familyData, query: "cancao medley").map(\.identifier) == ["m7"], "LUPA finds legacy marker children by parent")
         for tablet in [false, true] {
             MockBridge.reset(state)
