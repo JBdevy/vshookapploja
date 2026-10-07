@@ -2,10 +2,10 @@ import Foundation
 import Combine
 
 enum HookMode: String, CaseIterable, Identifiable {
-    case director, musician, recados, chat, drop
+    case director, musician, recados, drop
     var id: String { rawValue }
-    var title: String { switch self { case .director: return "Diretor"; case .musician: return "Músico"; case .recados: return "Recados"; case .chat: return "Chat Hook"; case .drop: return "Drop Hook" } }
-    var icon: String { switch self { case .director: return "slider.horizontal.3"; case .musician: return "music.mic"; case .recados: return "megaphone.fill"; case .chat: return "bubble.left.and.bubble.right.fill"; case .drop: return "arrow.up.arrow.down" } }
+    var title: String { switch self { case .director: return "Diretor"; case .musician: return "Músico"; case .recados: return "Recados"; case .drop: return "Drop Hook" } }
+    var icon: String { switch self { case .director: return "slider.horizontal.3"; case .musician: return "music.mic"; case .recados: return "megaphone.fill"; case .drop: return "arrow.up.arrow.down" } }
 }
 
 @MainActor final class HookSession: ObservableObject {

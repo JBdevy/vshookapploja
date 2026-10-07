@@ -16,7 +16,7 @@ Verifique os comandos, autenticação, fila, controles do TCP e preferências de
 bash scripts/test-core.sh
 ```
 
-Antes de distribuir uma build de dispositivo, confira o bundle:
+Antes de distribuir uma build de dispositivo, confira o bundle. A verificação também rejeita código, rotas e recursos do Chat Hook no app:
 
 ```sh
 python3 scripts/verify-ios.py '/caminho/VS Hook.app'
@@ -44,14 +44,14 @@ xcodebuild -project Tests/UI/VisualTests.xcodeproj -scheme VisualTests \
 
 A ponte escuta somente `127.0.0.1:58150` e não encaminha comandos para o Hook Center. Os testes conferem alças, resposta visual do volume, centralização do TP, navegação dos modais, teclado do timer, toque longo sem disparar PLAY e layout do modo Celular. Capturas ficam nos anexos do resultado do Xcode. A comparação foi feita com os arquivos atuais do repositório; não representa certificação de igualdade de todas as telas ou validação em aparelho físico.
 
-A revisão inclui também LIST/PARTS do TP em tela inteira no celular, entrada TP do músico, navegação por gesto no painel de transporte, Recados (standalone e dentro do Diretor nos dois modos), Chat Hook e Drop Hook. Recados mantém templates em leitura até EDITAR, sincroniza imagens e o relógio de fixar/desafixar; sair retira o recado. O Chat usa avatares, respostas, imagens, player nativo de voz, limite de um minuto na gravação e permissões de administrador. O Drop recebe em blocos HTTP Range e mantém os arquivos disponíveis para salvar/compartilhar.
+A revisão inclui também LIST/PARTS do TP em tela inteira no celular, entrada TP do músico, navegação por gesto no painel de transporte, Recados (standalone e dentro do Diretor nos dois modos) e Drop Hook. Recados mantém templates em leitura até EDITAR, sincroniza imagens e o relógio de fixar/desafixar; sair retira o recado. O Drop recebe em blocos HTTP Range e mantém os arquivos disponíveis para salvar/compartilhar.
 
-`Tests/UI/fixture.py` também oferece templates, recados e arquivos de teste. `VSHOOK_TEST_CHAT=1` habilita exclusivamente em Debug uma conversa local sem autenticação nem envio ao servidor. Os testes de interface normais nunca enviam mensagens reais.
+`Tests/UI/fixture.py` também oferece templates, recados e arquivos de teste.
 
 O workflow `.github/workflows/ios-ipa.yml` compila este projeto SwiftUI, executa os testes do núcleo e verifica o archive antes de exportar o IPA. O projeto Android mantém seu pipeline próprio.
 
-A revisão de gestos respeita a área segura no modo Tablet usado em iPhone, permite retornar do TP deslizando o transporte e usa pinça de abrir/fechar para tela cheia. Reprodução e fila compartilham gradientes vermelho/laranja e barras verde/amarela nos modos Diretor e Músico. O TCP usa Mixer/Master no cabeçalho, indexa os itens por pista e desenha a agulha com ponta triangular e rastro luminoso. A lista usa reconhecimento nativo de toque/toque longo que deixa a rolagem vertical com o UIScrollView. No Chat, deslizar para a direita prepara uma resposta sem interceptar o slider do áudio.
+A revisão de gestos respeita a área segura no modo Tablet usado em iPhone, permite retornar do TP deslizando o transporte e usa pinça de abrir/fechar para tela cheia. Reprodução e fila compartilham gradientes vermelho/laranja e barras verde/amarela nos modos Diretor e Músico. O TCP usa Mixer/Master no cabeçalho, indexa os itens por pista e desenha a agulha com ponta triangular e rastro luminoso. A lista usa reconhecimento nativo de toque/toque longo que deixa a rolagem vertical com o UIScrollView.
 
-Os testes de regressão incluem ida/volta do TP, pinça, margem do notch em ambas as orientações, resposta por swipe, seleção e rolagem de 80 músicas e 60 pistas. Esses testes usam o runtime de simulador disponível; a verificação do bundle mantém o mínimo iOS 15, mas não substitui a confirmação do comportamento no iOS 16 físico.
+Os testes de regressão incluem ida/volta do TP, pinça, margem do notch em ambas as orientações, seleção e rolagem de 80 músicas e 60 pistas. Esses testes usam o runtime de simulador disponível; a verificação do bundle mantém o mínimo iOS 15, mas não substitui a confirmação do comportamento no iOS 16 físico.
 
 O TP usa espaçamento compacto entre cabeçalho, transporte e conteúdo; em tela cheia remove as margens e ocupa também a área do notch. Os contornos do texto e das cifras acompanham seu conteúdo. No TCP, a agulha das pistas usa uma única camada animada, separada das waveforms; o índice das pistas é reaproveitado até os dados mudarem. Músicas paradas não mantêm temporizadores por linha. O toque longo do item abre o modal ao completar 0,5 segundo, sem esperar soltar o dedo. Essas otimizações precisam de confirmação de fluidez no aparelho antigo com iOS 16; compilação e testes do núcleo não medem a rolagem nesse aparelho.

@@ -1,7 +1,7 @@
 (() => {
   'use strict'
 
-  const VERSION = '1.0.2-director-performance-v47'
+  const VERSION = '1.0.2-android-phone-tcp-v48'
   const userAgent = navigator.userAgent || ''
   const iPadDesktopMode = navigator.platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1
   const POLL_MS = 300
@@ -3778,11 +3778,10 @@
       const master = data?.mixerMaster || mixer?.master || data?.masterTrack || null
       return master && typeof master === 'object' ? [master] : []
     }
-    if (!isTabletMixerLayout() && state.mixerView === 'groups') {
+    if (!isMixerTimelineLayout() && state.mixerView === 'groups') {
       return getAppVisibleMixerTracks(Array.isArray(data?.mixerGroups) ? data.mixerGroups : (Array.isArray(mixer?.groups) ? mixer.groups : []))
     }
-    // O tablet mantem grupos junto das demais pistas; no celular, a aba
-    // GRUPOS usa a lista separada como antes.
+    // Celular e tablet mantêm grupos junto das pistas e seus itens no TCP.
     return getAppVisibleMixerTracks(Array.isArray(data?.mixerTracks) ? data.mixerTracks : (Array.isArray(mixer?.tracks) ? mixer.tracks : []))
   }
 
@@ -8785,16 +8784,21 @@
       document.documentElement.dataset.directorDevice === 'tablet'
   }
 
+  function isMixerTimelineLayout() {
+    return !IS_MUSICIAN_MONITOR &&
+      ['phone', 'tablet'].includes(document.documentElement.dataset.directorDevice)
+  }
+
   function renderMixerViewButtons(className = '') {
-    const tablet = isTabletMixerLayout()
-    const tracksLabel = tablet ? 'MIXER' : 'TRACKS'
-    const groupsButton = tablet ? '' : `<button class="${state.mixerView === 'groups' ? 'btnAutoplayActive' : 'btn'}" data-action="mixer-groups">GRUPOS</button>`
-    return `<div class="mixerViewControls${className ? ` ${className}` : ''}"><button class="${state.mixerView === 'tracks' || (tablet && state.mixerView === 'groups') ? 'btnAutoplayActive' : 'btn'}" data-action="mixer-tracks">${tracksLabel}</button>${groupsButton}<button class="${state.mixerView === 'master' ? 'btnAutoplayActive' : 'btn'}" data-action="mixer-master">MASTER</button></div>`
+    const timeline = isMixerTimelineLayout()
+    const tracksLabel = timeline ? 'MIXER' : 'TRACKS'
+    const groupsButton = timeline ? '' : `<button class="${state.mixerView === 'groups' ? 'btnAutoplayActive' : 'btn'}" data-action="mixer-groups">GRUPOS</button>`
+    return `<div class="mixerViewControls${className ? ` ${className}` : ''}"><button class="${state.mixerView === 'tracks' || (timeline && state.mixerView === 'groups') ? 'btnAutoplayActive' : 'btn'}" data-action="mixer-tracks">${tracksLabel}</button>${groupsButton}<button class="${state.mixerView === 'master' ? 'btnAutoplayActive' : 'btn'}" data-action="mixer-master">MASTER</button></div>`
   }
 
   function syncMixerViewButtonsDom() {
     const activeAction = state.mixerView === 'master' ? 'mixer-master' :
-      !isTabletMixerLayout() && state.mixerView === 'groups' ? 'mixer-groups' : 'mixer-tracks'
+      !isMixerTimelineLayout() && state.mixerView === 'groups' ? 'mixer-groups' : 'mixer-tracks'
     root.querySelectorAll('[data-action="mixer-tracks"],[data-action="mixer-groups"],[data-action="mixer-master"]').forEach((button) => {
       const active = button.getAttribute('data-action') === activeAction
       button.classList.toggle('btnAutoplayActive', active)
@@ -8857,7 +8861,7 @@
         })
       : []
     const premixDuration = Math.max(1, premixBounds.end - premixBounds.start)
-    const tabletLayout = isTabletMixerLayout()
+    const timelineLayout = isMixerTimelineLayout()
     const listOpen = state.mixerListOpen
     const playlistItems = listOpen ? getPlaylistWithOpenDrawers(data) : []
     const mixerTimelineCacheSource = JSON.stringify({
@@ -8918,7 +8922,7 @@
               ? `<div class="mixerTabletTimeline mixerTabletTimelineListOpen mixerTabletMasterListOpen"><div class="mixerRowsBox mixerMasterOnlyRows">${rows}</div>${playlistSide}</div>`
               : `<div class="mixerRowsBox mixerMasterOnlyRows">${rows}</div>`))
       : `<div class="emptyBox">TCP SEM DADOS</div>`
-    const viewControls = tabletLayout ? '' : renderMixerViewButtons('mixerTopControls')
+    const viewControls = timelineLayout ? '' : renderMixerViewButtons('mixerTopControls')
     const actionControls = renderMixerActionControls(data)
     return `<div class="contentPanel mixerContentPanel cachedMainSurface${listOpen ? ' mixerContentListOpen' : ''}" style="--mixer-track-width:${trackWidthPercent}%;--mixer-list-width:${getMixerListWidthPercent()}%" data-main-pane-tab="mixer" data-main-pane-cache-key="${cacheKey}">${viewControls}${actionControls}<div class="listBox mixerListBox${listOpen ? ' mixerListMode' : ' mixerUnifiedScroll'}" data-scroll-key="mixer" data-mixer-timeline-cache-key="${mixerTimelineCacheKey}">${listOpen ? '' : timelineHeader}${timeline}</div></div>`
   }
@@ -13510,11 +13514,11 @@
         ${renderTabletSidebar()}
         ${renderTabletTopBar()}
         <div class="container">
-          <div class="topStatusRow${isTabletMixerLayout() && state.activeTab === 'mixer' ? ' mixerTopStatusRow' : ''}">
+          <div class="topStatusRow${isMixerTimelineLayout() && state.activeTab === 'mixer' ? ' mixerTopStatusRow' : ''}">
             ${IS_MUSICIAN_MONITOR
               ? `<button type="button" class="topPlaylistButton musicianStaticTopPlaylist" tabindex="-1" aria-disabled="true">${renderTopPlaylistTitle(topPlaylistTitle)}</button><button type="button" class="topTimerBtn ${isCountdownOverrun(data) ? 'timerOverrunBlink' : ''}" tabindex="-1" aria-disabled="true">${escapeHtml(getTimerDisplayText(data))}</button><div class="topHeaderTools"><button class="topMiniBtn topSettingsBtn" data-action="settings" aria-label="Configurações">⚙</button></div>`
-              : isTabletMixerLayout() && state.activeTab === 'mixer'
-                ? `${renderMixerViewButtons('mixerHeaderViewControls')}<div class="topHeaderTools"><button class="topMiniBtn topMenuBtn" data-action="top-menu" aria-label="Menu"><span class="topMenuIcon">☰</span></button><button class="topMiniBtn topSettingsBtn" data-action="settings" aria-label="Configurações">⚙</button></div>`
+              : isMixerTimelineLayout() && state.activeTab === 'mixer'
+                ? `${renderMixerViewButtons('mixerHeaderViewControls')}<div class="topHeaderTools"><button class="topMiniBtn topSettingsBtn" data-action="settings" aria-label="Configurações">⚙</button></div>`
                 : `${state.activeTab === 'regions'
                   ? `<div class="topPlaylistButton topPlaylistButtonStatic" aria-label="Lista Geral">${renderTopPlaylistTitle(topPlaylistTitle)}</div>`
                   : `<button class="topPlaylistButton" data-action="open-playlist-modal">${renderTopPlaylistTitle(topPlaylistTitle)}</button>`}<button class="topTimerBtn ${isCountdownOverrun(data) ? 'timerOverrunBlink' : ''}" data-action="timer-open">${escapeHtml(getTimerDisplayText(data))}</button><div class="topHeaderTools"><button class="topMiniBtn topMenuBtn" data-action="top-menu" aria-label="Menu"><span class="topMenuIcon">☰</span></button><button class="topMiniBtn topSettingsBtn" data-action="settings" aria-label="Configurações">⚙</button></div>`}
@@ -14722,7 +14726,7 @@
       : getTransportSeekCursorPos({ start, end }, state.snapshot, sampledAt)
     const ratio = position === null ? -1 : Math.max(0, Math.min(1, (position - start) / (end - start)))
     cursor.style.display = ratio < 0 ? 'none' : 'block'
-    if (ratio >= 0) cursor.style.left = `${(1.5 + (ratio * 97)).toFixed(4)}%`
+    if (ratio >= 0) cursor.style.left = `${(ratio * 100).toFixed(4)}%`
     if (viewport.dataset.mixerInitialFocusDone !== '1') {
       const focusRatio = Math.max(0, Math.min(1, Number(viewport.getAttribute('data-mixer-focus-ratio')) || 0))
       setMixerTimelineScrollLeft(viewport, Math.max(0,
@@ -14753,8 +14757,7 @@
       && window.matchMedia?.('(orientation: portrait)')?.matches
     const extent = rotated ? rect.height : rect.width
     const coordinate = rotated ? Number(point?.clientY) - rect.top : clientX - rect.left
-    const insetPx = extent * .015
-    const ratio = Math.max(0, Math.min(1, (coordinate - insetPx) / Math.max(1, extent - insetPx * 2)))
+    const ratio = Math.max(0, Math.min(1, coordinate / Math.max(1, extent)))
     setTransportSeekCursorRatio(ratio, { start, end })
     syncMixerTimelineCursorDom()
   }
@@ -17194,7 +17197,7 @@
       }
       case 'mixer-tracks': state.mixerView = 'tracks'; syncMixerViewButtonsDom(); if (!mountMainContentInPlace()) scheduleRender(true); loadMixerTimeline(); postCommand('mixer_focus', { view: 'tracks', page: state.activeTab, selectedId: state.selectedRegionId || state.selectedPlaylistSongId || '' }); break
       case 'mixer-groups':
-        state.mixerView = isTabletMixerLayout() ? 'tracks' : 'groups'; syncMixerViewButtonsDom(); if (!mountMainContentInPlace()) scheduleRender(true); loadMixerTimeline(); postCommand('mixer_focus', { view: state.mixerView, page: state.activeTab, selectedId: state.selectedRegionId || state.selectedPlaylistSongId || '' }); break
+        state.mixerView = isMixerTimelineLayout() ? 'tracks' : 'groups'; syncMixerViewButtonsDom(); if (!mountMainContentInPlace()) scheduleRender(true); loadMixerTimeline(); postCommand('mixer_focus', { view: state.mixerView, page: state.activeTab, selectedId: state.selectedRegionId || state.selectedPlaylistSongId || '' }); break
       case 'mixer-master': state.mixerView = 'master'; syncMixerViewButtonsDom(); if (!mountMainContentInPlace()) scheduleRender(true); postCommand('mixer_focus', { view: 'master', page: state.activeTab, selectedId: state.selectedRegionId || state.selectedPlaylistSongId || '' }); break
       case 'mixer-focus': state.mixerView = 'master'; syncMixerViewButtonsDom(); if (!mountMainContentInPlace()) scheduleRender(true); postCommand('mixer_focus', { view: 'master', page: state.activeTab, selectedId: state.selectedRegionId || state.selectedPlaylistSongId || '' }); break
       case 'mixer-list-toggle': {
@@ -18455,7 +18458,7 @@
   }
 
   function handleMixerGridPinchStart(event) {
-    if (mixerCursorDrag) return
+    if (!isTabletMixerLayout() || mixerCursorDrag) return
     const touchedViewport = event.target?.closest?.('.mixerTabletGridViewport,.mixerTimelineHeaderViewport')
     const contentPanel = touchedViewport?.closest?.('.mixerContentPanel')
     const viewport = contentPanel?.querySelector?.('.mixerTabletGridViewport')
@@ -18499,7 +18502,7 @@
   }
 
   function handleMixerGridPinchMove(event) {
-    if (mixerCursorDrag) return
+    if (!isTabletMixerLayout() || mixerCursorDrag) return
     if (!mixerGridPinch && mixerGridPan && event.touches?.length === 1) {
       const touch = event.touches[0]
       const dx = (Number(touch.clientX) || 0) - mixerGridPan.x
@@ -18607,7 +18610,7 @@
   }
 
   function handleMixerGridPointer(event) {
-    if (event.pointerType !== 'mouse') return
+    if (!isTabletMixerLayout() || event.pointerType !== 'mouse') return
     if (event.pointerType === 'mouse' && event.button !== 0 && event.type === 'pointerdown') return
     if (event.type === 'pointerdown') {
       const context = getMixerPointerContext(event.target)

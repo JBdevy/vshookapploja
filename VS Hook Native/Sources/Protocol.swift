@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 // The desktop bridge evolves independently of the mobile app. Preserve unknown
 // fields while giving views and commands typed access to the published contract.
@@ -97,26 +96,6 @@ final class BridgeHTTP: @unchecked Sendable {
         }
         guard json.exists else { throw BridgeError(message: "O servidor não retornou os dados do VS Hook.") }
         return json
-    }
-}
-
-enum SecretStore {
-    static func read(_ account: String) -> Data? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.hookdeveloper.vshook.native", kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
-    }
-    static func write(_ data: Data?, account: String) throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.hookdeveloper.vshook.native", kSecAttrAccount as String: account]
-        guard let data else { SecItemDelete(query as CFDictionary); return }
-        let update = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if update == errSecSuccess { return }
-        guard update == errSecItemNotFound else { throw BridgeError(message: "Não foi possível guardar a sessão com segurança.") }
-        var insert = query
-        insert[kSecValueData as String] = data
-        insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        guard SecItemAdd(insert as CFDictionary, nil) == errSecSuccess else { throw BridgeError(message: "Não foi possível guardar a sessão com segurança.") }
     }
 }
 

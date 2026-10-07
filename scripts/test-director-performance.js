@@ -623,11 +623,11 @@ assert.match(source,
   /\.mixerTabletGridWaveform>i\{[^}]*border-radius:999px!important/,
   'waveform falsa dos itens deve usar barras arredondadas como o painel Grid')
 assert.match(extractFunction('renderMixerViewButtons'),
-  /tablet \? 'MIXER' : 'TRACKS'[\s\S]*?tablet \? '' : `[\s\S]*?data-action="mixer-groups">GRUPOS<\/button>`/,
-  'celular deve manter TRACKS, GRUPOS e MASTER; tablet deve manter MIXER e MASTER')
+  /timeline \? 'MIXER' : 'TRACKS'[\s\S]*?timeline \? '' : `[\s\S]*?data-action="mixer-groups">GRUPOS<\/button>`/,
+  'celular e tablet devem manter MIXER e MASTER')
 assert.match(extractFunction('getMixerTracks'),
-  /!isTabletMixerLayout\(\) && state\.mixerView === 'groups'[\s\S]*?data\?\.mixerGroups/,
-  'GRUPOS do celular deve usar a lista separada sem alterar o tablet')
+  /!isMixerTimelineLayout\(\) && state\.mixerView === 'groups'[\s\S]*?data\?\.mixerGroups/,
+  'TCP de celular e tablet deve manter grupos junto às pistas')
 assert.match(extractFunction('getMusicPaneStructureSignature'),
   /getMixerFocusItem\(data\)[\s\S]*?state\.mixerTimelineLoadedRevision/,
   'cache do TCP deve atualizar quando a musica ou o catalogo de itens muda')

@@ -44,6 +44,7 @@ jobs:
         run: |
           npm run build
           npm run test:discovery
+          npm run test:tcp-grid
 
       - name: Sincronizar Android
         run: |

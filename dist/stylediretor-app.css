@@ -12328,3 +12328,61 @@ html body #app .directorTpFullscreen :is(.directorTpClock,.directorTpLocalClock)
 html body #app .directorTpFullscreen :is(.directorTpClock,.directorTpLocalClock)[data-position^="right"] {
   right: max(16px, var(--vsh-safe-right)) !important;
 }
+
+/* TCP no celular: a faixa estreita preserva controles e espaço para os itens. */
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerRow.mixerInlineRow {
+  grid-template-columns: 3px minmax(0, 1fr) minmax(0, 1fr) !important;
+  grid-template-rows: 18px 26px 21px !important;
+  grid-template-areas: "color main main" "color mute solo" "color slider slider" !important;
+  gap: 1px 3px !important;
+  padding: 2px 21px 2px 3px !important;
+  min-width: 0 !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .appScrollLane {
+  display: none !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerRowMain {
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 3px !important;
+  height: 18px !important;
+  min-height: 0 !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerRowName {
+  flex: 1 1 auto !important;
+  font-size: 10px !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerRowGroupName {
+  flex: 0 1 auto !important;
+  font-size: 7px !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerRow.mixerInlineRow .mixerMiniBtn {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 26px !important;
+  min-height: 26px !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerInlineSliderWrap {
+  min-width: 0 !important;
+  height: 21px !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerInlineSlider {
+  height: 21px !important;
+  min-height: 0 !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerInlineSlider::-webkit-slider-runnable-track {
+  height: 6px !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .mixerTabletTrackRows .mixerInlineSlider::-webkit-slider-thumb {
+  width: 14px !important;
+  height: 18px !important;
+  margin-top: -6px !important;
+}
+
+/* No TCP, MIXER/MASTER e Config ocupam o cabeçalho também no celular. */
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .topStatusRow.mixerTopStatusRow {
+  grid-template-columns: minmax(0, 1fr) 34px !important;
+}
+html[data-director-device="phone"] body #app .app[data-active-tab="mixer"] .topStatusRow.mixerTopStatusRow > .topHeaderTools {
+  display: contents !important;
+}

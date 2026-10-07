@@ -49,8 +49,6 @@ struct HookRootView: View {
                 } else {
                     DirectorView(session: session, projects: discovery.projects, back: leave)
                 }
-            } else if route == "chat" {
-                ChatView(back: { route = "home" })
             } else if route == "drop" {
                 DropView(host: discovery.manualHost, back: { route = "home" })
             } else {
@@ -71,11 +69,8 @@ struct HookRootView: View {
         }
         .onChange(of: session?.dismissed) { if $0 == true { leave() } }
         .onOpenURL { url in
-            // A scanned desktop QR URL contains the same host and optional chatKey.
+            // Keep desktop host pairing when opening a scanned QR URL.
             if let host = url.host, LocalNetwork.number(host) != nil { discovery.manualHost = host; discovery.search(manual: true) }
-            if let key = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "chatKey" })?.value, key.count == 64 {
-                ChatModel.bootstrapURL = url; route = "chat"
-            }
         }
     }
     private var shell: some View {
@@ -108,11 +103,10 @@ struct HookRootView: View {
             if discovery.searching { ProgressView().tint(HookTheme.gold) }
             if !discovery.projects.isEmpty {
                 ForEach(HookMode.allCases) { mode in
-                    HookButton(title: mode == .chat || mode == .drop ? "Entrar no \(mode.title)" : "Entrar como \(mode.title)", icon: mode.icon, expand: true) { choose(mode) }
+                    HookButton(title: mode == .drop ? "Entrar no \(mode.title)" : "Entrar como \(mode.title)", icon: mode.icon, expand: true) { choose(mode) }
                         .accessibilityIdentifier("vshook.mode.\(mode.rawValue)")
                 }
             } else {
-                HookButton(title: "Entrar no Chat Hook", icon: "bubble.left.and.bubble.right", expand: true) { route = "chat"; discovery.stop() }
                 HookButton(title: "Entrar no Drop Hook", icon: "arrow.up.arrow.down", expand: true) { route = "drop"; discovery.stop() }
             }
             ForEach(discovery.peers, id: \.id) { peer in
@@ -166,8 +160,7 @@ struct HookRootView: View {
     }
     private func choose(_ mode: HookMode) {
         discovery.stop(); chosenMode = mode
-        if mode == .chat { route = "chat" }
-        else if mode == .director { route = "device" }
+        if mode == .director { route = "device" }
         else if let project = discovery.projects.first(where: \.active) ?? discovery.projects.first { enter(project, mode: mode) }
     }
     private func showComputers() {

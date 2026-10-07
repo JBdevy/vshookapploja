@@ -4,7 +4,7 @@
   "private": true,
   "description": "VS Hook Mobile - Android/iOS",
   "scripts": {
-    "test:tcp-grid": "node scripts/test-tcp-loop-limits.js && node scripts/test-tcp-pointer-parity.js",
+    "test:tcp-grid": "node scripts/test-tcp-loop-limits.js && node scripts/test-tcp-pointer-parity.js && node scripts/test-tcp-phone-layout.js",
     "test:teleprompt-phone-panels": "node scripts/test-teleprompt-phone-panels.js",
     "test:director-search": "node scripts/test-director-search.js",
     "test:director-touch-feedback": "node scripts/test-director-touch-feedback.js",

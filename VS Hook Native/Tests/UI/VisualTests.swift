@@ -168,7 +168,6 @@ final class VisualTests: XCTestCase {
     func launchMode(_ mode: String, tablet: Bool? = nil) -> XCUIApplication {
         let app = XCUIApplication(bundleIdentifier: "com.hookdeveloper.vshook")
         app.launchEnvironment["VSHOOK_TEST_BRIDGE"] = "http://127.0.0.1:58150"
-        app.launchEnvironment["VSHOOK_TEST_CHAT"] = "1"
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["vshook.mode." + mode].waitForExistence(timeout: 25))
         app.buttons["vshook.mode." + mode].tap()
@@ -248,19 +247,8 @@ final class VisualTests: XCTestCase {
             checkRecados(app)
         }
     }
-    func testChatAndDrop() throws {
+    func testDrop() throws {
         continueAfterFailure = false
-        let app = launchMode("chat")
-        XCTAssertTrue(app.staticTexts["Mensagem do administrador"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["2/10 hoje"].exists)
-        let admin = app.staticTexts["Mensagem do administrador"], musician = app.staticTexts["Mensagem do músico"]
-        XCTAssertLessThan(app.buttons.matching(identifier: "Foto de Diretor teste").firstMatch.frame.maxX, admin.frame.minX)
-        XCTAssertGreaterThan(app.buttons.matching(identifier: "Foto de Músico teste").allElementsBoundByIndex.last!.frame.minX, musician.frame.maxX)
-        XCTAssertTrue(app.buttons["Reproduzir áudio"].exists)
-        app.buttons["Reproduzir áudio"].tap()
-        XCTAssertTrue(app.buttons["Pausar áudio"].waitForExistence(timeout: 2))
-        app.buttons["Pausar áudio"].tap()
-        shot("chat-current-avatars-bubbles-quota")
         let drop = launchMode("drop")
         XCTAssertTrue(drop.staticTexts["Enviar para o computador"].waitForExistence(timeout: 10))
         XCTAssertTrue(drop.buttons["Galeria"].exists)
@@ -368,21 +356,6 @@ final class VisualTests: XCTestCase {
         XCTAssertFalse(after.contains { ($0["type"] as? String)?.contains("set_volume") == true })
         shot("long-track-list-scrolled")
     }
-    func testChatSwipeReply() throws {
-        continueAfterFailure = false
-        let app = launchMode("chat")
-        let message = app.staticTexts["Mensagem do administrador"].firstMatch
-        XCTAssertTrue(message.waitForExistence(timeout: 15))
-        message.swipeRight()
-        XCTAssertTrue(app.staticTexts["Respondendo a Diretor teste"].waitForExistence(timeout: 5), app.debugDescription)
-        shot("chat-swipe-reply")
-        app.buttons["Cancelar"].firstMatch.tap()
-        app.sliders["Posição do áudio"].adjust(toNormalizedSliderPosition: 0.8)
-        XCTAssertFalse(app.staticTexts["Respondendo a Diretor teste"].exists, "The audio slider must not trigger Reply")
-        app.staticTexts["Mensagem do músico"].firstMatch.swipeRight()
-        XCTAssertTrue(app.staticTexts["Respondendo a Músico teste"].waitForExistence(timeout: 5))
-    }
-
     func testPlaybackColoursAndGridCursor() throws {
         continueAfterFailure = false
         let next: [String: Any] = ["id": "next-song", "name": "PRÓXIMA MÚSICA", "startPos": 100, "endPos": 200]

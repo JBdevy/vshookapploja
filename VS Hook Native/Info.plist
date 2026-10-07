@@ -42,9 +42,9 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>O VS Hook procura o Hook Center na sua rede para acompanhar e controlar as sessões.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Grave mensagens de áudio para o Chat Hook e vídeos para o Drop Hook.</string>
+	<string>Grave o áudio dos vídeos para enviar pelo Drop Hook.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Selecione fotos e vídeos para enviar pelo Chat Hook e Drop Hook.</string>
+	<string>Selecione fotos para os Recados e fotos e vídeos para enviar pelo Drop Hook.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

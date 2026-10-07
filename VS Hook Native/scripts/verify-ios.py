@@ -7,6 +7,27 @@ import sys
 from pathlib import Path
 
 
+CHAT_MARKERS = (
+    b"chat hook", b"chatmodel", b"chatview", b"chatadminview", b"chatreplyswipe",
+    b"nativechataudioplayer", b"vshookchatvoiceplayback", b"vshook_test_chat",
+    b"/api/chat/", b"/chat/bootstrap", b"chatmobiletoken", b"chatkey", b"vshcm_",
+    b"hookupdate7.up.railway.app",
+)
+
+
+def reject_chat(file):
+    # Scan every bundled file, including the executable, resources and plists.
+    # Keep overlap so a marker crossing a read boundary cannot escape detection.
+    overlap = max(map(len, CHAT_MARKERS)) - 1
+    tail = b""
+    with file.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            data = tail + chunk.lower()
+            for marker in CHAT_MARKERS:
+                assert marker not in data, f"Chat Hook presente no bundle: {file.name} ({marker.decode()})"
+            tail = data[-overlap:]
+
+
 def inspect(app):
     with (app / "Info.plist").open("rb") as stream:
         info = plistlib.load(stream)
@@ -19,6 +40,7 @@ def inspect(app):
         assert not forbidden.search(file.name), f"Dependência web: {file.name}"
         if not file.is_file():
             continue
+        reject_chat(file)
         with file.open("rb") as stream:
             magic = stream.read(4).hex()
         if magic not in {"cffaedfe", "cefaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"}:
@@ -38,7 +60,7 @@ def inspect(app):
                 assert tuple(map(int, version.split("."))) <= (15, 0, 0), f"Mínimo acima de iOS 15: {version}"
             inspected = True
     assert inspected, "Executável Mach-O não encontrado"
-    print("VSHOOK_IOS_OK: app nativo; mínimo iOS 15; sem vínculos diretos com SwiftUICore.")
+    print("VSHOOK_IOS_OK: app nativo; mínimo iOS 15; sem Chat Hook ou vínculos diretos com SwiftUICore.")
 
 
 if __name__ == "__main__":
