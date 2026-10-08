@@ -165,15 +165,115 @@ final class VisualTests: XCTestCase {
         try checkName();shot("list-name-clear-after-resize")
     }
 
-    func launchMode(_ mode: String, tablet: Bool? = nil) -> XCUIApplication {
+    func launchMode(_ mode: String, tablet: Bool? = nil, stabilizeProjectLayout: Bool = false) -> XCUIApplication {
         let app = XCUIApplication(bundleIdentifier: "com.hookdeveloper.vshook")
         app.launchEnvironment["VSHOOK_TEST_BRIDGE"] = "http://127.0.0.1:58150"
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["vshook.mode." + mode].waitForExistence(timeout: 25))
         app.buttons["vshook.mode." + mode].tap()
         if let tablet { app.buttons[tablet ? "Tablet" : "Celular"].tap() }
-        if mode == "director" { app.buttons["Referência local"].firstMatch.tap() }
+        if mode == "director" {
+            let project = app.buttons["Referência local"].firstMatch
+            if stabilizeProjectLayout, let tablet {
+                XCTAssertTrue(project.waitForExistence(timeout: 15))
+                var previousFrame = CGRect.zero
+                var stableSince = Date()
+                let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    let frame = project.frame
+                    let orientationReady = (app.frame.width > app.frame.height) == tablet
+                    if !orientationReady || !project.isHittable || frame != previousFrame {
+                        previousFrame = frame
+                        stableSince = Date()
+                        return false
+                    }
+                    return Date().timeIntervalSince(stableSince) >= 0.5
+                }, object: nil)
+                wait(for: [settled], timeout: 10)
+            }
+            project.tap()
+        }
         return app
+    }
+    private func checkMainPlayTouchRouting(tablet: Bool) throws {
+        // Change every response so normal 300 ms polling rebuilds the view
+        // during a contact, instead of testing only an unchanged fixture.
+        try fixture("/configure", body: ["fixturePollRevision": 0])
+        let app = launchMode("director", tablet: tablet, stabilizeProjectLayout: true)
+        let play = app.buttons["vshook.transport.play"]
+        XCTAssertTrue(play.waitForExistence(timeout: 15), app.debugDescription)
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            play.isEnabled && play.isHittable
+        }, object: nil)
+        wait(for: [ready], timeout: 5)
+        XCTAssertEqual(play.label, "PLAY")
+        var count = try playCommands()
+
+        func expectCommand(playing: Bool, button: XCUIElement) throws {
+            count += 1
+            let deadline = Date().addingTimeInterval(5)
+            while try playCommands() < count && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+            XCTAssertEqual(try playCommands(), count, "One gesture must send exactly one transport command")
+            let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                button.exists && button.label == (playing ? "STOP" : "PLAY")
+            }, object: nil)
+            wait(for: [changed], timeout: 5)
+            let state = try fixture("/state") as! [String: Any]
+            XCTAssertEqual(state["playing"] as? Bool, playing, "The bridge confirms the transport change")
+            XCTAssertEqual(state["playingId"] as? String, playing ? "fixture-song" : "")
+            Thread.sleep(forTimeInterval: 0.35)
+            XCTAssertEqual(try playCommands(), count, "Release, polling and view updates cannot duplicate Play/Stop")
+        }
+        func expectNoCommand(_ reason: String) throws {
+            Thread.sleep(forTimeInterval: 0.35)
+            XCTAssertEqual(try playCommands(), count, reason)
+        }
+
+        play.tap(); try expectCommand(playing: true, button: play)
+        play.tap(); try expectCommand(playing: false, button: play)
+        play.press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["ESCOLHER PISTAS"].waitForExistence(timeout: 5), app.debugDescription)
+        try expectNoCommand("A hold opens its menu; releasing that same contact must never send Play")
+        app.buttons["FECHAR"].firstMatch.tap()
+        XCTAssertTrue(play.waitForExistence(timeout: 5))
+        play.tap(); try expectCommand(playing: true, button: play)
+        play.tap(); try expectCommand(playing: false, button: play)
+
+        let center = play.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 0, dy: play.frame.height + 30)))
+        try expectNoCommand("Leaving the Play target cancels the gesture")
+        XCTAssertFalse(app.buttons["ESCOLHER PISTAS"].exists, "An aborted drag must not become a hold")
+
+        let beforePoll = (try fixture("/state-polls") as! [String: Int])["count"]!
+        play.press(forDuration: 0.4)
+        let afterPoll = (try fixture("/state-polls") as! [String: Int])["count"]!
+        XCTAssertGreaterThan(afterPoll, beforePoll, "State polling remains active across the pressed contact")
+        try expectCommand(playing: true, button: play)
+        play.tap(); try expectCommand(playing: false, button: play)
+
+        if !tablet { app.buttons["vshook.phone.menu"].tap() }
+        app.buttons.matching(NSPredicate(format: "label == %@", "TCP")).firstMatch.tap()
+        XCTAssertTrue(app.buttons["vshook.tcp.master"].waitForExistence(timeout: 5))
+        let tcpPlay = app.buttons.matching(NSPredicate(format: "label == %@", "PLAY")).firstMatch
+        XCTAssertTrue(tcpPlay.waitForExistence(timeout: 5), app.debugDescription)
+        tcpPlay.tap()
+        let tcpStop = app.buttons.matching(NSPredicate(format: "label == %@", "STOP")).firstMatch
+        try expectCommand(playing: true, button: tcpStop)
+        tcpStop.tap()
+        try expectCommand(playing: false, button: tcpPlay)
+        let commands = try fixture("/commands") as! [[String: Any]]
+        let desired = commands.filter { $0["type"] as? String == "play_button" }
+            .compactMap { ($0["payload"] as? [String: Any])?["desiredPlaying"] as? Bool }
+        XCTAssertEqual(desired, [true, false, true, false, true, false, true, false],
+                       "Main and TCP controls send one explicit, correctly ordered intent per completed tap")
+        shot("transport-play-touch-\(tablet ? "tablet" : "phone")")
+    }
+    func testPhoneMainPlayTouchRouting() throws {
+        continueAfterFailure = false
+        try checkMainPlayTouchRouting(tablet: false)
+    }
+    func testTabletMainPlayTouchRouting() throws {
+        continueAfterFailure = false
+        try checkMainPlayTouchRouting(tablet: true)
     }
     func testPhoneTelepromptPanels() throws {
         continueAfterFailure = false

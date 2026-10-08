@@ -307,9 +307,7 @@ struct DirectorView: View {
     }
     private var playbackControls: some View {
         HStack(spacing: 5) {
-            DirectorTransportControl(session: session)
-                .accessibilityIdentifier("vshook.transport.play")
-                .highPriorityGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in sheet = "playHold" })
+            DirectorTransportControl(session: session, holdAction: { sheet = "playHold" })
             if session.page == "playlist" {
                 DirectorAutoControl(session: session, mode: 1)
                 DirectorAutoControl(session: session, mode: 2)

@@ -147,24 +147,42 @@ struct DirectorTransportControl: View {
     var stopBreak = false
     var height: CGFloat = 36
     var size: CGFloat = 14
+    var holdAction: (() -> Void)? = nil
     var body: some View {
         Group {
-            if session.fadeoutActive {
-                TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-                    control(remaining: session.fadeoutClock.remaining(at: context.date), date: context.date)
-                }
-            } else { control(remaining: nil, date: .now) }
+            if let holdAction {
+                appearance.accessibilityHidden(true)
+                    .overlay {
+                        TransportButtonTouchSurface(title: title, tap: performAction, hold: holdAction)
+                    }
+            } else {
+                Button(action: performAction) { appearance }.buttonStyle(.plain)
+            }
+        }.transaction { transaction in
+            // A song-list scroll can carry an animation transaction. Transport
+            // state must switch immediately, including on iOS 16. The explicit
+            // audio fade progress below still follows its own clock.
+            transaction.animation = nil
+            transaction.disablesAnimations = true
         }
     }
-    private func control(remaining: Double?, date: Date) -> some View {
+    private var title: String { stopBreak ? "STOP BREAK" : session.playing ? "STOP" : "PLAY" }
+    private func performAction() {
+        HookFeedback.tap()
+        if stopBreak {
+            session.command("director_stop_break", session.target.merging(["noSeek": true, "preserveCursor": true, "transportOnly": true, "ignoreFadeout": true, "stopBreak": true]))
+        } else { session.command("play_button") }
+    }
+    @ViewBuilder private var appearance: some View {
+        if session.fadeoutActive {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                label(remaining: session.fadeoutClock.remaining(at: context.date), date: context.date)
+            }
+        } else { label(remaining: nil, date: .now) }
+    }
+    private func label(remaining: Double?, date: Date) -> some View {
         let pulse = !stopBreak && remaining != nil ? (1 - cos(date.timeIntervalSinceReferenceDate / 0.62 * 2 * .pi)) / 2 : 0
-        return Button {
-            HookFeedback.tap()
-            if stopBreak {
-                session.command("director_stop_break", session.target.merging(["noSeek": true, "preserveCursor": true, "transportOnly": true, "ignoreFadeout": true, "stopBreak": true]))
-            } else { session.command("play_button") }
-        } label: {
-            Text(stopBreak ? "STOP BREAK" : session.playing ? "STOP" : "PLAY")
+        return Text(title)
                 .font(.custom("Arial-BoldMT", size: size)).lineLimit(1).minimumScaleFactor(0.65)
                 .foregroundColor(.white).frame(maxWidth: .infinity).frame(height: height)
                 .background {
@@ -182,7 +200,6 @@ struct DirectorTransportControl: View {
                 .brightness(pulse * 0.12)
                 .shadow(color: .red.opacity(pulse * 0.65), radius: 6)
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain)
     }
 }
 

@@ -29,6 +29,7 @@ initial = dict(connected=True, reaperOnline=True, directorAuthEnabled=False, pla
     openDrawerIds=[], tp1=dict(lyricsText='REFERÊNCIA DO TELEPROMPT', songName=song['name']))
 state = copy.deepcopy(initial)
 commands = []
+state_polls = 0
 notice = None
 templates = ["RECADO DE TESTE", "", ""]
 images = ["", "", ""]
@@ -51,9 +52,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode())
 
     def do_GET(self):
+        global state_polls
         with lock:
             if self.path == '/state':
+                state_polls += 1
+                if 'fixturePollRevision' in state:
+                    state['fixturePollRevision'] += 1
                 self.respond(state)
+            elif self.path == '/state-polls':
+                self.respond(dict(count=state_polls))
             elif self.path == '/test-voice.wav':
                 self.send_response(200); self.send_header('Content-Type', 'audio/wav')
                 self.send_header('Content-Length', str(len(voice_data)))
@@ -80,13 +87,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(dict(ok=True))
 
     def do_POST(self):
-        global notice
+        global notice, state_polls
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
         with lock:
             if self.path == '/reset':
                 state.clear()
                 state.update(copy.deepcopy(initial))
                 commands.clear()
+                state_polls = 0
                 notice = None
                 templates[:] = ['RECADO DE TESTE', '', '']
             elif self.path == '/configure':
@@ -108,6 +116,30 @@ class Handler(BaseHTTPRequestHandler):
                 kind, payload = body.get('type'), body.get('payload', {})
                 if kind == 'set_page':
                     state['currentPage'] = payload.get('page', 'playlist')
+                if kind in ['select_playlist_song', 'select_region']:
+                    selected_page = 'regions' if kind == 'select_region' else 'playlist'
+                    selected = payload.get('targetId') or payload.get('songId') or payload.get('id', '')
+                    state['selectedRegionId'] = selected if selected_page == 'regions' else ''
+                    state['selectedPlaylistSongId'] = selected if selected_page == 'playlist' else ''
+                    if 'startPos' in payload:
+                        state['editCursorPosition'] = payload['startPos']
+                if kind in ['play_button', 'director_play_button', 'play_toggle']:
+                    playing = payload.get('desiredPlaying', not state.get('playing', False))
+                    page = payload.get('activeTab', payload.get('page', state.get('currentPage', 'playlist')))
+                    selection_key = 'selectedRegionId' if page == 'regions' else 'selectedPlaylistSongId'
+                    other_selection = 'selectedPlaylistSongId' if page == 'regions' else 'selectedRegionId'
+                    target = payload.get('targetId') or payload.get('songId') or state.get(selection_key) or state.get('playingId', '')
+                    if playing:
+                        songs = state.get('regions', []) + [item for playlist in state.get('playlists', []) for item in playlist.get('songs', [])]
+                        selected = next((item for item in songs if item.get('id') == target), {})
+                        position = state.get('editCursorPosition', state.get('playPosition', 0)) if payload.get('noSeek') else payload.get('startPos', selected.get('startPos', 0))
+                        state.update(playingId=target, playPosition=position)
+                    else:
+                        state[selection_key] = state.get('queuedSongId') or state.get('playingId', '')
+                        state[other_selection] = ''
+                        state.update(playingId='', queuedSongId='', queuedManual=False)
+                    state.update(playing=bool(playing), transportPaused=False, manualStopFadeoutActive=False,
+                                 partsArmedMarkerId='', selectedMarkerId='')
                 if kind == 'premix_item_set_volume':
                     for item in state['premix']['items']:
                         if item['itemId'] == payload.get('itemId'):
