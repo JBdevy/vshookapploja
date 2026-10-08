@@ -19,7 +19,17 @@ enum MixerScale {
         return min(1, 0.76 + (db.double / max) * 0.24)
     }
     static func visible(_ item: JSON) -> Bool {
-        let name = item.first("trackName", "track_name", "trackLabel", "track", "name").string.folding(options: .diacriticInsensitive, locale: .current).uppercased().filter(\.isLetter)
-        return !["TELEPROMPT", "CIFRAS", "MEDIA"].contains(name)
+        // Match the desktop/Web client technical-track names exactly. Dropping
+        // digits hid ordinary audio tracks such as MEDIA 2 or TELEPROMPT 3.
+        // For an item, its take name must not override the owning track name.
+        let trackNames = ["trackName", "track_name", "trackLabel", "track"].compactMap { key -> String? in
+            guard case .string(let value) = item[key], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return value
+        }
+        return !(trackNames.isEmpty ? [item.name] : trackNames).contains { raw in
+            let name = raw.folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+                .uppercased().unicodeScalars.filter { (65...90).contains($0.value) || (48...57).contains($0.value) }
+            return ["TELEPROMPT1", "TELEPROMPT2", "CIFRAS", "MEDIA", "TIMECODE"].contains(String(String.UnicodeScalarView(name)))
+        }
     }
 }

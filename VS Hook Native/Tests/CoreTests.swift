@@ -213,6 +213,32 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         check(DirectorPremixState.matches(["items": []], song: premixChild), "legacy Premix payloads without selection metadata remain compatible")
         check(MixerScale.visible(premixSnapshot["items"].array[0]), "store app keeps MEDIA-named audio on an ordinary track")
         check(!MixerScale.visible(["trackName": "MÉDIA", "name": "Piano take"]), "store app still excludes actual technical tracks")
+        let musicalPremixTracks = ["Piano", "MÉDIA 2", "Cifras 2", "Teleprompt 3", "Teleprompt", "Timecode 2", "10 MEDIA", "#CIFRAS 3"]
+        let technicalPremixTracks = ["MÉDIA", "Cifras", "Teleprompt 1", "TELEPROMPT_2", " time-code "]
+        for field in ["trackName", "track_name", "trackLabel", "track"] {
+            for name in musicalPremixTracks {
+                let row = JSON.object([field: .string(name), "itemId": "audio", "name": "MEDIA"])
+                check(MixerScale.visible(row), "Premix preserves numbered musical track \(name) through \(field), regardless of take name")
+            }
+            for name in technicalPremixTracks {
+                check(!MixerScale.visible(.object([field: .string(name), "name": "Piano take"])), "Premix hides exact technical track \(name) through \(field)")
+            }
+        }
+        for name in musicalPremixTracks { check(MixerScale.visible(["name": .string(name)]), "Mixer track row keeps \(name)") }
+        for name in technicalPremixTracks { check(!MixerScale.visible(["name": .string(name)]), "Mixer track row hides \(name)") }
+        check(MixerScale.visible(["trackName": " ", "track_name": "Piano", "name": "MEDIA"]), "blank track alias cannot fall back to a technical take name")
+        check(!MixerScale.visible(["trackName": "Piano", "trackLabel": "Timecode", "name": "take"]), "all explicit track aliases use the same technical-track rule as the Web client")
+        let numberedRows = JSON.array(musicalPremixTracks.enumerated().map { index, name in
+            ["itemId": .string("numbered-\(index)"), "trackName": .string(name), "name": "Stem", "startPos": 10, "endPos": 50, "mute": true]
+        })
+        let numberedSnapshot = try JSONDecoder().decode(JSON.self, from: JSONEncoder().encode(premixSnapshot.merging(["items": numberedRows])))
+        check(DirectorPremixState.matches(numberedSnapshot, song: premixChild), "numbered-track rows load after matching song focus")
+        check(numberedSnapshot["items"].array.filter(MixerScale.visible).count == musicalPremixTracks.count, "all numbered tracks survive bridge JSON decoding and the actual Premix row filter, including muted stems")
+        check(!DirectorPremixState.matches(numberedSnapshot, song: familyChildren[1]), "switching songs still waits for the requested song, even when it has the same track names")
+        let nextNumberedSnapshot = numberedSnapshot.merging(["selectedSongId": "m8", "selectedCanonicalSongId": "8", "selectedSongStart": 30, "selectedSongEnd": 50])
+        check(DirectorPremixState.matches(nextNumberedSnapshot, song: familyChildren[1]) && nextNumberedSnapshot["items"].array.filter(MixerScale.visible).count == musicalPremixTracks.count, "next-song reply restores all numbered track rows")
+        let sectionSnapshot: JSON = ["songSections": [["songId": "m7", "items": numberedRows], ["songId": "m8", "items": []]]]
+        check(sectionSnapshot["songSections"].array[0].first("items", "itemRows").array.filter(MixerScale.visible).count == musicalPremixTracks.count, "family Premix uses the same numbered-track visibility rule")
         check(DirectorSearch.entries(familyData, query: "cancao medley").map(\.identifier) == ["m7"], "LUPA finds legacy marker children by parent")
         for tablet in [false, true] {
             MockBridge.reset(state)
