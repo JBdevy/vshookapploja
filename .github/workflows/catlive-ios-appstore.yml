@@ -1,0 +1,46 @@
+name: CatLive iOS - App Store Connect
+run-name: CatLive iOS ${{ inputs.version }} - ${{ inputs.source_ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versão pública X.XX'
+        required: true
+        default: '1.01'
+      source_ref:
+        description: 'SHA completo do commit em JBdevy/hookupdatecenter'
+        required: true
+      build_number:
+        description: 'Build inteiro; vazio usa o número automático da execução'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validar commit de origem
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[a-f0-9]{40}$ ]] || { echo 'Informe o SHA completo do commit do CatLive'; exit 1; }
+
+  catlive:
+    needs: validate
+    uses: JBdevy/hookupdatecenter/.github/workflows/catlive-ios-appstore.yml@aa9f16fc363e52ed72dbf7dad45f9161647f630e
+    with:
+      version: ${{ inputs.version }}
+      source_ref: ${{ inputs.source_ref }}
+      build_number: ${{ inputs.build_number }}
+    secrets:
+      IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+      IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
+      IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+      IOS_PROVISION_PROFILE_BASE64: ${{ secrets.CATLIVE_IOS_PROVISION_PROFILE_BASE64 }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
