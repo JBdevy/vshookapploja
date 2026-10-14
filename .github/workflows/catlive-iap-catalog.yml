@@ -1,0 +1,49 @@
+name: CatLive - Check App Store purchase catalog
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read CatLive purchase configuration
+        env:
+          ASC_KEY_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_KEY_BASE64: ${{ secrets.CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import {createPrivateKey, sign} from 'node:crypto';
+          const b64 = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+          const at = Math.floor(Date.now()/1000);
+          const input = b64({alg:'ES256',kid:process.env.ASC_KEY_ID,typ:'JWT'})+'.'+b64({iss:process.env.ASC_ISSUER_ID,iat:at,exp:at+300,aud:'appstoreconnect-v1'});
+          const key = createPrivateKey(Buffer.from(process.env.ASC_KEY_BASE64,'base64'));
+          const token = input+'.'+sign('sha256',Buffer.from(input),{key,dsaEncoding:'ieee-p1363'}).toString('base64url');
+          const api = async path => {
+            if (!/^\/v[12]\//.test(path)) throw Error('Unexpected API path');
+            const response = await fetch('https://api.appstoreconnect.apple.com'+path,{headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(30000)});
+            const body=await response.json();
+            if (!response.ok) throw Error(JSON.stringify({status:response.status,errors:body.errors?.map(x=>({code:x.code,detail:x.detail}))}));
+            return body;
+          };
+          const purchases=await api('/v1/apps/6822558735/inAppPurchasesV2?limit=200');
+          for(const purchase of purchases.data) {
+            const id=purchase.id;
+            console.log('PRODUCT',JSON.stringify(purchase.attributes));
+            const localization=await api('/v2/inAppPurchases/'+id+'/inAppPurchaseLocalizations');
+            console.log('LOCALIZATIONS',JSON.stringify(localization.data.map(x=>x.attributes)));
+            const availability=await api('/v2/inAppPurchases/'+id+'/inAppPurchaseAvailability');
+            const territories=await api('/v1/inAppPurchaseAvailabilities/'+availability.data.id+'/availableTerritories?limit=200');
+            console.log('AVAILABLE_TERRITORIES',territories.data.length);
+            const schedule=await api('/v2/inAppPurchases/'+id+'/iapPriceSchedule');
+            const prices=await api('/v1/inAppPurchasePriceSchedules/'+schedule.data.id+'/manualPrices?include=inAppPurchasePricePoint,territory&limit=200');
+            console.log('PRICE_DATES',JSON.stringify(prices.data.map(x=>x.attributes)));
+            console.log('PRICES',JSON.stringify(prices.included?.filter(x=>x.type==='inAppPurchasePricePoints').map(x=>x.attributes)));
+          }
+          const builds=await api('/v1/builds?filter[app]=6822558735&sort=-uploadedDate&limit=3&include=buildBetaDetail');
+          console.log('BUILDS',JSON.stringify(builds.data.map(x=>({version:x.attributes.version,processingState:x.attributes.processingState,usesNonExemptEncryption:x.attributes.usesNonExemptEncryption}))));
+          console.log('BETA',JSON.stringify(builds.included?.map(x=>x.attributes)));
+          JS
