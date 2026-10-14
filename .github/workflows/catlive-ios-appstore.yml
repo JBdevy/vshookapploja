@@ -31,7 +31,7 @@ jobs:
 
   catlive:
     needs: validate
-    uses: JBdevy/hookupdatecenter/.github/workflows/catlive-ios-appstore.yml@aa9f16fc363e52ed72dbf7dad45f9161647f630e
+    uses: JBdevy/hookupdatecenter/.github/workflows/catlive-ios-appstore.yml@5470fb59ad2c232faf68c6a97ffd787c3feece64
     with:
       version: ${{ inputs.version }}
       source_ref: ${{ inputs.source_ref }}
