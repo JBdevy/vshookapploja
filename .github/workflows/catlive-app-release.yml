@@ -31,14 +31,14 @@ jobs:
           assert re.fullmatch(r'[0-9]+\.[0-9]{2}', version), 'Invalid version'
           assert re.fullmatch(r'[1-9][0-9]*', build), 'Invalid build'
           assert re.fullmatch(r'[0-9a-f]{40}', source), 'Invalid source commit'
-          assert source == '4f35350a9597624eeb5ef8ee0d4dff2f093af080', 'Workflow/source mismatch'
+          assert source == '3073090f7360fe6774df8b69c51fd78b4a4eb48f', 'Workflow/source mismatch'
           assert os.environ['RELEASE_TAG'] == f'catlive-app-v{version}-build{build}', 'Tag/manifest mismatch'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write(f'version={version}\nbuild_number={build}\nsource_ref={source}\n')
           PY
   ios:
     needs: prepare
-    uses: JBdevy/hookupdatecenter/.github/workflows/catlive-ios-appstore.yml@4f35350a9597624eeb5ef8ee0d4dff2f093af080
+    uses: JBdevy/hookupdatecenter/.github/workflows/catlive-ios-appstore.yml@3073090f7360fe6774df8b69c51fd78b4a4eb48f
     with:
       version: ${{ needs.prepare.outputs.version }}
       build_number: ${{ needs.prepare.outputs.build_number }}
