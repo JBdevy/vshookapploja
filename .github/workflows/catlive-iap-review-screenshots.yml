@@ -1,0 +1,54 @@
+name: CatLive - Complete purchase review screenshots
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/catlive-review-assets
+          persist-credentials: false
+      - name: Attach the real iPad purchase screen to both draft products
+        env:
+          ASC_KEY_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_KEY_BASE64: ${{ secrets.CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import {createPrivateKey, createHash, sign} from 'node:crypto';
+          import {readFileSync} from 'node:fs';
+          const b64=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+          const at=Math.floor(Date.now()/1000);
+          const input=b64({alg:'ES256',kid:process.env.ASC_KEY_ID,typ:'JWT'})+'.'+b64({iss:process.env.ASC_ISSUER_ID,iat:at,exp:at+300,aud:'appstoreconnect-v1'});
+          const key=createPrivateKey(Buffer.from(process.env.ASC_KEY_BASE64,'base64'));
+          const token=input+'.'+sign('sha256',Buffer.from(input),{key,dsaEncoding:'ieee-p1363'}).toString('base64url');
+          const api=async(path,method='GET',data)=>{
+            if(!/^\/v[12]\//.test(path))throw Error('Unexpected API path');
+            const r=await fetch('https://api.appstoreconnect.apple.com'+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined,redirect:'error',signal:AbortSignal.timeout(30000)});
+            const json=await r.json();
+            if(!r.ok)throw Error(JSON.stringify({status:r.status,errors:json.errors?.map(x=>({code:x.code,detail:x.detail}))}));
+            return json;
+          };
+          const image=readFileSync('.github/catlive-review-assets/native-purchase.png');
+          for(const id of ['6822580960','6822598543']){
+            const current=await api('/v2/inAppPurchases/'+id+'/appStoreReviewScreenshot');
+            if(current.data){console.log('Existing screenshot preserved for',id);continue;}
+            const created=await api('/v1/inAppPurchaseAppStoreReviewScreenshots','POST',{data:{type:'inAppPurchaseAppStoreReviewScreenshots',attributes:{fileName:'CatLive-Native-iPad.png',fileSize:image.length},relationships:{inAppPurchaseV2:{data:{type:'inAppPurchases',id}}}}});
+            const resource=created.data;
+            for(const op of resource.attributes.uploadOperations){
+              const url=new URL(op.url);
+              if(url.protocol!=='https:'||!(url.hostname.endsWith('.apple.com')||url.hostname.endsWith('.icloud.com')))throw Error('Unexpected upload host');
+              const headers=Object.fromEntries(op.requestHeaders.map(x=>[x.name,x.value]));
+              const response=await fetch(url,{method:op.method,headers,body:image.subarray(op.offset,op.offset+op.length),redirect:'error',signal:AbortSignal.timeout(30000)});
+              if(!response.ok)throw Error('Screenshot upload failed with status '+response.status);
+            }
+            const committed=await api('/v1/inAppPurchaseAppStoreReviewScreenshots/'+resource.id,'PATCH',{data:{type:'inAppPurchaseAppStoreReviewScreenshots',id:resource.id,attributes:{uploaded:true,sourceFileChecksum:createHash('md5').update(image).digest('hex')}}});
+            console.log('Screenshot saved for',id,JSON.stringify(committed.data.attributes.assetDeliveryState));
+          }
+          console.log('Draft metadata only. No submission to App Review.');
+          JS
