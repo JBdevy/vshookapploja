@@ -117,21 +117,122 @@ struct JarasBlink: ViewModifier {
     let active: Bool
     var interval = 0.5
     var lowOpacity = 0.4
+    #if os(macOS)
+    @Environment(\.self) private var environment
+    #else
     @State private var bright = true
-    func body(content: Content) -> some View {
-        content.opacity(!active || bright ? 1 : lowOpacity)
+    #endif
+    private var blinkInterval: Double {
+        #if os(iOS)
+        return max(0.10, min(0.25, interval * 0.6))
+        #else
+        return interval
+        #endif
+    }
+    private var dimOpacity: Double {
+        #if os(iOS)
+        return min(0.06, lowOpacity)
+        #else
+        return lowOpacity
+        #endif
+    }
+    @ViewBuilder func body(content: Content) -> some View {
+        #if os(macOS)
+        if active {
+            NativeJarasBlink(content: AnyView(content.environment(\.self, environment)), active: true,
+                interval: blinkInterval, lowOpacity: dimOpacity)
+                // These controls have an explicit or natural size. The native
+                // host must keep it while flashing, rather than absorb spare
+                // stack space and move its neighboring controls.
+                .fixedSize(horizontal: true, vertical: true)
+        } else { content }
+        #else
+        content.opacity(!active || bright ? 1 : dimOpacity)
             .task(id: active) {
                 bright = true
                 guard active else { return }
                 while !Task.isCancelled {
-                    do { try await Task.sleep(nanoseconds: UInt64(max(0.05, interval) * 1_000_000_000)) }
+                    do { try await Task.sleep(nanoseconds: UInt64(max(0.05, blinkInterval) * 1_000_000_000)) }
                     catch { return }
                     guard !Task.isCancelled else { return }
                     bright.toggle()
                 }
             }
+        #endif
     }
 }
+
+#if os(macOS)
+/// The compositor owns the discrete flash. Its hosted controls keep their
+/// normal hit testing, while opacity transitions leave SwiftUI layout alone.
+private struct NativeJarasBlink: NSViewRepresentable {
+    let content: AnyView
+    let active: Bool
+    let interval: Double
+    let lowOpacity: Double
+    func makeNSView(context: Context) -> NativeJarasBlinkHost {
+        let host = NativeJarasBlinkHost(rootView: content)
+        host.setBlink(active: active, interval: interval, lowOpacity: lowOpacity)
+        return host
+    }
+    func updateNSView(_ host: NativeJarasBlinkHost, context: Context) {
+        host.rootView = content
+        host.setBlink(active: active, interval: interval, lowOpacity: lowOpacity)
+    }
+    static func dismantleNSView(_ host: NativeJarasBlinkHost, coordinator: ()) { host.stop() }
+}
+private final class NativeJarasBlinkHost: NSHostingView<AnyView> {
+    private var active = false
+    private var interval = 0.5, lowOpacity = 0.4
+    private var startedAt = 0.0
+    private var revision = 0, appliedRevision = -1
+    private weak var installedLayer: CALayer?
+    required init(rootView: AnyView) {
+        super.init(rootView: rootView)
+        wantsLayer = true
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override var layer: CALayer? { didSet { applyBlink() } }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); applyBlink() }
+    override func viewDidHide() { super.viewDidHide(); applyBlink() }
+    override func viewDidUnhide() { super.viewDidUnhide(); applyBlink() }
+    func setBlink(active: Bool, interval: Double, lowOpacity: Double) {
+        let interval = max(0.05, interval)
+        if self.active != active || self.interval != interval || self.lowOpacity != lowOpacity {
+            self.active = active; self.interval = interval; self.lowOpacity = lowOpacity
+            startedAt = CACurrentMediaTime(); revision += 1
+        }
+        applyBlink()
+    }
+    private func applyBlink() {
+        guard let layer else {
+            installedLayer?.removeAnimation(forKey: "jarasBlink")
+            installedLayer = nil; appliedRevision = -1
+            return
+        }
+        if installedLayer !== layer {
+            installedLayer?.removeAnimation(forKey: "jarasBlink")
+            installedLayer = layer; appliedRevision = -1
+            var actions = layer.actions ?? [:]; actions["opacity"] = NSNull(); layer.actions = actions
+        }
+        if layer.opacity != 1 { layer.opacity = 1 }
+        guard active, window != nil, !isHiddenOrHasHiddenAncestor else {
+            layer.removeAnimation(forKey: "jarasBlink"); appliedRevision = -1
+            return
+        }
+        guard appliedRevision != revision || layer.animation(forKey: "jarasBlink") == nil else { return }
+        let blink = CAKeyframeAnimation(keyPath: "opacity")
+        blink.values = [1, lowOpacity, 1]; blink.keyTimes = [0, 0.5, 1]
+        blink.calculationMode = .discrete; blink.duration = interval * 2
+        blink.repeatCount = .infinity
+        // Retain the phase if AppKit replaces the backing surface or hides
+        // the view temporarily, rather than restarting each flash cycle.
+        blink.beginTime = layer.convertTime(startedAt, from: nil)
+        layer.add(blink, forKey: "jarasBlink"); appliedRevision = revision
+    }
+    func stop() { active = false; applyBlink() }
+}
+#endif
 
 /// A color drag publishes only to the views that paint that color. Persistence
 /// happens on confirmation, rather than broadcasting UserDefaults on every pixel.
@@ -158,8 +259,8 @@ struct JarasBlink: ViewModifier {
 /// CatLive factory colors. Explicit user timeline choices remain intact.
 enum TimelineAppearanceDefaults {
     static let background = 0x1E1E1E
-    static let primaryGrid = 0x414141
-    static let secondaryGrid = 0x282828
+    static let primaryGrid = 0x535250
+    static let secondaryGrid = 0x333235
     static let playCursor = 0x7548DD
     static let editCursor = 0xB9E229
     static let subPlayCursor = 0xFF6F00

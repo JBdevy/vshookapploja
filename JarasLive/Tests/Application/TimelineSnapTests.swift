@@ -24,6 +24,22 @@ final class TimelineSnapTests: XCTestCase {
             XCTAssertEqual(snapped / step, (snapped / step).rounded(), accuracy: 0.000001)
         }
     }
+    func testCursorUsesHiddenDivisionsAtEveryZoomAndTempo() {
+        var song = Project.empty(name: "Hidden subdivisions").songs[0]
+        song.bpm = 120; song.duration = 100; song.parts = []
+        var settings = ProjectTimeSettings(); settings.divisions = 8; song.timeSettings = settings
+        song.markers = [TimelineMarker(id: UUID(), name: "Tempo", position: 10.13, color: 0xffffff,
+            tempoBPM: 150, tempoBeats: 3, tempoUnit: 8)]
+        for scale in [0.05, 0.3, 1, 10, 100, 1000] {
+            XCTAssertEqual(TimelineTempo.snap(3.29, song: song, pixelsPerSecond: scale, includeHiddenDivisions: true), 3.25, accuracy: 1e-9)
+            XCTAssertEqual(TimelineTempo.snap(10.76, song: song, pixelsPerSecond: scale, includeHiddenDivisions: true), 10.73, accuracy: 1e-9)
+            XCTAssertEqual(TimelineTempo.snap(10.76, song: song, pixelsPerSecond: scale, enabled: false, includeHiddenDivisions: true), 10.76)
+            XCTAssertEqual(TimelineTempo.snap(10.14, song: song, pixelsPerSecond: scale, includeHiddenDivisions: true), 10.13, accuracy: 1e-9)
+        }
+        settings.divisions = 0; song.timeSettings = settings
+        XCTAssertEqual(TimelineTempo.snap(3.29, song: song, pixelsPerSecond: 1, includeHiddenDivisions: true), 0,
+            "Disabling grid divisions retains only explicit anchors")
+    }
     private func snap(_ time: Double, starts: [Double] = [30.15], ends: [Double]? = nil,
                       cursor: Double? = nil, scale: Double = 100) -> Double {
         TimelineTempo.snap(time, bar: 2, beats: 4, pixelsPerSecond: scale, anchors: starts,
@@ -32,7 +48,7 @@ final class TimelineSnapTests: XCTestCase {
     func testCursorSnapsToNearbyOffGridRegionStart() {
         XCTAssertEqual(snap(30.18), 30.15)
         XCTAssertEqual(snap(30.09), 30.15)
-        XCTAssertEqual(snap(30.24), 30, "outside the magnetic area, drawn grid divisions still win")
+        XCTAssertEqual(snap(30.24), 30.15, "the nearest anchor wins even outside the old magnetic radius")
         XCTAssertEqual(snap(-2), 0)
     }
     func testItemPlacementSnapsToRegionOrEditingNeedle() {
@@ -43,13 +59,34 @@ final class TimelineSnapTests: XCTestCase {
     func testBothRegionEdgesCatchItemResize() {
         XCTAssertEqual(snap(39.29, ends: [39.27]), 39.27)
         XCTAssertEqual(snap(30.13, ends: [39.27]), 30.15)
-        XCTAssertEqual(snap(39.38, ends: [39.27]), 39.5)
+        XCTAssertEqual(snap(39.38, ends: [39.27]), 39.27)
         XCTAssertEqual(snap(39.28), 39.5, "end anchors are requested only for edge adjustments")
     }
-    func testToleranceIsConstantOnScreenAcrossZoom() {
+    func testNearestAnchorCompetesWithVisibleGridAcrossZoom() {
         XCTAssertEqual(snap(30.3, scale: 40), 30.15)
-        XCTAssertEqual(snap(30.3, scale: 100), 30.5)
+        XCTAssertEqual(snap(30.3, scale: 100), 30.15)
         XCTAssertEqual(snap(10, starts: [.nan, .infinity, -1], cursor: .nan), 10)
         XCTAssertEqual(snap(.nan), 0)
     }
+    func testAbsoluteAnchorsAndShiftAcrossTempoChanges() {
+        var song = Project.empty(name: "Snap").songs[0]
+        song.bpm = 120; song.duration = 100
+        song.parts = [Part(id: UUID(), name: "Off grid", startTime: 30.15, endTime: 39.27)]
+        let normal = TimelineMarker(id: UUID(), name: "Marker", position: 42.17, color: 0xffffff)
+        let tempo = TimelineMarker(id: UUID(), name: "Tempo", position: 50.13, color: 0xffffff,
+                                   tempoBPM: 180, tempoBeats: 4, tempoUnit: 4)
+        song.markers = [normal, tempo]
+        for (time, expected) in [(30.24, 30.15), (39.38, 39.27), (42.28, 42.17), (50.10, 50.13)] {
+            XCTAssertEqual(TimelineTempo.snap(time, song: song, pixelsPerSecond: 100), expected, accuracy: 1e-9)
+            XCTAssertEqual(TimelineTempo.snap(time, song: song, pixelsPerSecond: 100, enabled: false), time)
+        }
+        XCTAssertEqual(TimelineTempo.snap(44.18, song: song, pixelsPerSecond: 100, cursor: 44.23), 44.23)
+        XCTAssertEqual(TimelineTempo.snap(44.18, song: song, pixelsPerSecond: 100,
+            cursor: 44.23, otherCursors: [44.15]), 44.15)
+        XCTAssertEqual(TimelineTempo.snap(30.24, song: song, pixelsPerSecond: 100,
+            excludingRegion: song.parts[0].id), 30)
+        XCTAssertEqual(TimelineTempo.snap(42.28, song: song, pixelsPerSecond: 100,
+            excludingMarker: normal.id), 42.5)
+    }
+
 }

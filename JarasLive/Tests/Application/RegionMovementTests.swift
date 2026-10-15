@@ -44,6 +44,30 @@ final class RegionMovementTests: XCTestCase {
         XCTAssertEqual(song.previewMovingRegion(child.id, to: 50), song)
         XCTAssertEqual(song.previewMovingRegion(root.id, to: -1), song)
     }
+    func testPersistedOwnershipPreventsStealingOnOverlapAndReturn() throws {
+        var song = Project.empty(name: "Explicit ownership").songs[0]
+        let a = Part(id: UUID(), name: "A", startTime: 10, endTime: 20)
+        let b = Part(id: UUID(), name: "B", startTime: 40, endTime: 60)
+        song.parts = [a, b]; song.duration = 100; song.regionOwnershipInitialized = true
+        var track = Track(id: UUID(), name: "Audio", role: .other)
+        track.clips = [AudioClip(id: UUID(), name: "Own", startTime: 12, duration: 2, regionOwnerID: a.id),
+            AudioClip(id: UUID(), name: "Foreign", startTime: 45, duration: 2, regionOwnerID: b.id),
+            AudioClip(id: UUID(), name: "Loose", startTime: 75, duration: 2)]
+        song.tracks = [track]
+        song.markers = [TimelineMarker(id: UUID(), name: "Own", position: 14, color: 0, regionOwnerID: a.id),
+            TimelineMarker(id: UUID(), name: "Foreign", position: 47, color: 0, regionOwnerID: b.id),
+            TimelineMarker(id: UUID(), name: "Loose", position: 78, color: 0)]
+        let overlap = song.previewMovingRegion(a.id, to: 40)
+        let reopened = try JSONDecoder().decode(Song.self, from: JSONEncoder().encode(overlap))
+        XCTAssertEqual(reopened.previewMovingRegion(a.id, to: 10), song)
+        let overLoose = reopened.previewMovingRegion(a.id, to: 70)
+        XCTAssertEqual(overLoose.tracks[0].clips[2].startTime, 75)
+        XCTAssertEqual(overLoose.markers?[2].position, 78)
+        XCTAssertEqual(overLoose.previewMovingRegion(a.id, to: 10), song)
+        // The obstacle belongs to B even when it lies underneath moved A.
+        let repulsion = RegionMarkerRepulsion(song: overlap, region: overlap.parts[0])
+        XCTAssertEqual(repulsion.resolve(43), 43.01, accuracy: 1e-8)
+    }
     func testNativeTimecodeWithExtendedEdgesMatchesCommittedRegionMove() {
         var song = Project.empty(name: "Native TC").songs[0]
         let root = Part(id: UUID(), name: "Song", startTime: 10, endTime: 20)
@@ -56,6 +80,25 @@ final class RegionMovementTests: XCTestCase {
         XCTAssertEqual(moved.tracks[0].clips[0].duration, 15)
         XCTAssertEqual(moved.duration, 53)
     }
+    func testDragPreviewAllocatesOverlappingLanesBeforeCommitAndReleasesThemOnReturn() {
+        var song = Project.empty(name: "Live drag lanes").songs[0]
+        let a = Part(id: UUID(), name: "A", startTime: 0, endTime: 10)
+        let b = Part(id: UUID(), name: "B", startTime: 20, endTime: 30)
+        song.parts = [a, b]; song.duration = 30; song.regionOwnershipInitialized = true
+        var track = Track(id: UUID(), name: "Audio", role: .other)
+        track.clips = [AudioClip(id: UUID(), name: "A", startTime: 2, duration: 5, regionOwnerID: a.id),
+                       AudioClip(id: UUID(), name: "B", startTime: 22, duration: 5, regionOwnerID: b.id)]
+        song.tracks = [track]
+        XCTAssertEqual(TrackLanes(track: track).count, 1)
+        let preview = song.previewMovingRegion(a.id, to: 20)
+        let lanes = TrackLanes(track: preview.tracks[0])
+        XCTAssertEqual(preview.tracks[0].clips.map(\.startTime), [22, 22])
+        XCTAssertEqual(lanes.count, 2)
+        XCTAssertNotEqual(lanes.lanes[track.clips[0].id], lanes.lanes[track.clips[1].id])
+        XCTAssertEqual(TrackLanes(track: preview.previewMovingRegion(a.id, to: 0).tracks[0]).count, 1)
+        XCTAssertEqual(song.tracks[0], track, "Preview must not mutate the committed project")
+    }
+
     func testMarkerRepulsionMovesWholeRegionToNearestFreeSide() {
         var song = Project.empty(name: "Repulsion").songs[0]
         let region = Part(id: UUID(), name: "Moving", startTime: 10, endTime: 20)

@@ -119,6 +119,26 @@ public struct NativeLimiterSettings: Codable, Equatable, Sendable {
         else { throw ProjectError.invalid("Invalid limiter settings") }
     }
 }
+/// Independent controls for the five sources of a track's CatStem processor.
+/// Order is Vocal, Drum, Bass, Guitar, Other (including piano).
+public struct NativeStemMix: Codable, Equatable, Sendable {
+    public struct Source: Codable, Equatable, Sendable {
+        public var gain = 1.0
+        public var mute = false
+        public var solo = false
+        public init() {}
+    }
+    public var sources = Array(repeating: Source(), count: 5)
+    public init() {}
+    public func validate() throws {
+        guard sources.count == 5, sources.allSatisfy({ $0.gain.isFinite && (0...4).contains($0.gain) })
+        else { throw ProjectError.invalid("Invalid CatStem source controls") }
+    }
+    public var gains: [Double] {
+        let soloed = sources.contains { $0.solo }
+        return sources.map { $0.mute || (soloed && !$0.solo) ? 0 : $0.gain }
+    }
+}
 public struct NativeFXSettings: Codable, Equatable, Sendable {
     public var instances: [NativeFXInstance]?
 
@@ -127,6 +147,13 @@ public struct NativeFXSettings: Codable, Equatable, Sendable {
     public var instrumentParameters: InstrumentParameters?
     public var inserted: [String] = []
     public static let order = ["Instruments", "EQ", "Compressor", "Pitch", "Delay", "Reverb", "Limiter"]
+    public static let stemSeparator = "CatStemSeparation 5"
+    public var stemSeparatorEnabled: Bool?
+    public var stemMix: NativeStemMix?
+    public var stemParameters: NativeStemMix {
+        get { stemMix ?? NativeStemMix() }
+        set { stemMix = newValue }
+    }
     public var eqEnabled = false
     public var bands = [EQBand(frequency: 30, type: "lowCut"), EQBand(frequency: 200), EQBand(frequency: 1000), EQBand(frequency: 5000), EQBand(frequency: 18000, type: "highCut")]
     public var instrumentBypassed: Bool?
@@ -150,11 +177,13 @@ public struct NativeFXSettings: Codable, Equatable, Sendable {
     public init() {}
     public func validateForClip() throws {
         try validate()
-        guard inserted.allSatisfy({ Self.order.dropFirst().contains($0) }),
-              instances?.isEmpty != false, externalPlugins?.isEmpty != false, instrumentID == nil, instrumentParameters == nil, instrumentBypassed == nil
-        else { throw ProjectError.invalid("Items support EQ, Compressor, Pitch, Delay, Reverb and Limiter only") }
+        guard inserted.allSatisfy({ key in Self.order.dropFirst().contains(key) || key == Self.stemSeparator || externalPlugins?.contains(where: { $0.effectKey == key }) == true || instances?.contains(where: { $0.effectKey == key }) == true }),
+              instrumentID == nil, instrumentParameters == nil, instrumentBypassed == nil
+        else { throw ProjectError.invalid("Items support native audio effects and VST3 effects, without native instruments") }
+        for instance in instances ?? [] { try instance.settings.validateForClip() }
     }
     public func validate() throws {
+        try stemMix?.validate()
         try limiter?.validate()
         try instrumentParameters?.validate()
         guard semitones.isFinite, (-12...12).contains(semitones), semitones == semitones.rounded() else { throw ProjectError.invalid("Invalid pitch") }
@@ -169,7 +198,7 @@ public struct NativeFXSettings: Codable, Equatable, Sendable {
         let external = externalPlugins ?? []
         guard Set(external.map(\.id)).count == external.count,
               external.allSatisfy({ !$0.id.isEmpty && $0.classID.count == 32 && $0.classID.allSatisfy(\.isHexDigit) && !$0.name.isEmpty && !$0.path.isEmpty }) else { throw ProjectError.invalid("Invalid external plugin") }
-        guard Set(inserted).count == inserted.count, inserted.allSatisfy({ effect in Self.order.contains(effect) || external.contains(where: { $0.effectKey == effect }) || native.contains(where: { $0.effectKey == effect }) }), bands.count <= 10, Set(bands.map(\.id)).count == bands.count,
+        guard Set(inserted).count == inserted.count, inserted.allSatisfy({ effect in Self.order.contains(effect) || effect == Self.stemSeparator || external.contains(where: { $0.effectKey == effect }) || native.contains(where: { $0.effectKey == effect }) }), bands.count <= 10, Set(bands.map(\.id)).count == bands.count,
               bands.allSatisfy({ $0.frequency.isFinite && (20...20000).contains($0.frequency) && $0.gain.isFinite && (-24...24).contains($0.gain) && $0.q.isFinite && (0.1...18).contains($0.q) && [6,12,24,36,48,72,96,192].contains($0.slope) && ["bell","lowCut","highCut","lowShelf","highShelf"].contains($0.type) }),
               [threshold, ratio, attack, release, makeup, delayTime, feedback, delayMix, reverbMix, reverbDecay, reverbLowCut, reverbHighCut].allSatisfy(\.isFinite),
               (-60...0).contains(threshold), (1...20).contains(ratio), (0.0001...0.2).contains(attack), (0.01...3).contains(release), (-12...24).contains(makeup),
@@ -180,10 +209,18 @@ public struct NativeFXSettings: Codable, Equatable, Sendable {
 
 extension NativeFXSettings {
     public var effectKeys: [String] { inserted }
+    /// Item audio keeps the original native stages before repeated inserts
+    /// and external plugins. Show that execution order without rewriting the
+    /// persisted insertion order or enabling unsupported item reordering.
+    public var clipEffectKeys: [String] {
+        let originals = Self.order.dropFirst().filter { inserted.contains($0) }
+        return originals + inserted.filter { !originals.contains($0) }
+    }
     public func kind(of key: String) -> String { instances?.first { $0.effectKey == key }?.kind ?? key }
     public func settings(for key: String) -> Self { instances?.first { $0.effectKey == key }?.settings ?? self }
     public var instrumentKeys: [String] { inserted.filter { kind(of: $0) == "Instruments" && settings(for: $0).instrumentID != nil } }
     @discardableResult public mutating func appendNative(_ kind: String, instrument: String? = nil, parameters: InstrumentParameters? = nil) -> String {
+        if kind == Self.stemSeparator, inserted.contains(kind) { return kind }
         if !inserted.contains(kind) {
             inserted.append(kind); setEnabled(kind, enabled: true)
             if kind == "Instruments" { instrumentID = instrument; instrumentParameters = parameters; instrumentBypassed = false }
@@ -200,12 +237,17 @@ extension NativeFXSettings {
     public func isEnabled(_ effect: String) -> Bool {
         if let instance = instances?.first(where: { $0.effectKey == effect }) { return instance.settings.isEnabled(instance.kind) }
         if let plugin = externalPlugins?.first(where: { $0.effectKey == effect }) { return !plugin.bypassed }
-        switch effect { case "Instruments": return instrumentID != nil && instrumentBypassed != true; case "EQ": return eqEnabled; case "Compressor": return compressorEnabled; case "Limiter": return limiterEnabled == true; case "Pitch": return pitchEnabled == true; case "Delay": return delayEnabled; case "Reverb": return reverbEnabled; default: return false }
+        switch effect { case Self.stemSeparator: return stemSeparatorEnabled == true && stemMix != nil; case "Instruments": return instrumentID != nil && instrumentBypassed != true; case "EQ": return eqEnabled; case "Compressor": return compressorEnabled; case "Limiter": return limiterEnabled == true; case "Pitch": return pitchEnabled == true; case "Delay": return delayEnabled; case "Reverb": return reverbEnabled; default: return false }
     }
     public mutating func setEnabled(_ effect: String, enabled: Bool) {
         if let index = instances?.firstIndex(where: { $0.effectKey == effect }), let kind = instances?[index].kind { instances?[index].settings.setEnabled(kind, enabled: enabled); return }
         if let index = externalPlugins?.firstIndex(where: { $0.effectKey == effect }) { externalPlugins?[index].bypassed = !enabled; return }
-        switch effect { case "Instruments": instrumentBypassed = !enabled; case "EQ": eqEnabled = enabled; case "Compressor": compressorEnabled = enabled; case "Limiter": limiterEnabled = enabled; case "Pitch": pitchEnabled = enabled; case "Delay": delayEnabled = enabled; case "Reverb": reverbEnabled = enabled; default: break }
+        switch effect { case Self.stemSeparator:
+            stemSeparatorEnabled = enabled
+            // Older projects used CatStem only as an offline editor. Opening
+            // them must not silently insert a new high-latency audio processor.
+            if enabled && stemMix == nil { stemMix = NativeStemMix() }
+        case "Instruments": instrumentBypassed = !enabled; case "EQ": eqEnabled = enabled; case "Compressor": compressorEnabled = enabled; case "Limiter": limiterEnabled = enabled; case "Pitch": pitchEnabled = enabled; case "Delay": delayEnabled = enabled; case "Reverb": reverbEnabled = enabled; default: break }
     }
     /// Editors for different effects can remain open; each updates only its own parameters.
     public func merging(effect: String, from draft: Self) -> Self {
@@ -215,6 +257,7 @@ extension NativeFXSettings {
             return next
         }
         switch effect {
+        case Self.stemSeparator: next.stemSeparatorEnabled = draft.stemSeparatorEnabled; next.stemMix = draft.stemMix
         case "Instruments": next.instrumentID = draft.instrumentID; next.instrumentParameters = draft.instrumentParameters
         case "EQ": next.eqEnabled = draft.eqEnabled; next.bands = draft.bands
         case "Compressor":
@@ -233,6 +276,7 @@ extension NativeFXSettings {
 public enum EffectPresentation {
     public static func title(_ effect: String) -> String {
         switch effect {
+        case NativeFXSettings.stemSeparator: return NativeFXSettings.stemSeparator
         case "EQ": return "CatLive EQ"
         case "Reverb": return "CatLive Reverb"
         case "Pitch": return "CatLive Pitch"

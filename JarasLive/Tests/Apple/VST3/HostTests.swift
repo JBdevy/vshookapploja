@@ -9,9 +9,10 @@ precondition(scanError == nil)
 precondition(catalog.count == 1 && catalog[0]["name"] as? String == "Gain fixture")
 let engine = AVAudioEngine(), format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
 try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 512)
+var sourceLevels: [Float] = [0.2, 0.2]
 let source = AVAudioSourceNode(format: format) { silent, _, frames, list in
     silent.pointee = false
-    for b in UnsafeMutableAudioBufferListPointer(list) { b.mData!.assumingMemoryBound(to: Float.self).update(repeating: 0.2, count: Int(frames)) }
+    for (channel, b) in UnsafeMutableAudioBufferListPointer(list).enumerated() { b.mData!.assumingMemoryBound(to: Float.self).update(repeating: sourceLevels[min(channel, 1)], count: Int(frames)) }
     return noErr
 }
 let plugin = JarasVST3.makeNode(); engine.attach(source); engine.attach(plugin)
@@ -40,6 +41,35 @@ func peak() throws -> Float {
 }
 func check(_ expected: Float, _ message: String = "DSP level") throws { let result = try peak(); precondition(abs(result-expected) < 0.00001, message + ": \(result) vs \(expected)") }
 try check(0.1)
+let aliasFolder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+try FileManager.default.createDirectory(at: aliasFolder, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: aliasFolder) }
+let alias = aliasFolder.appendingPathComponent("GainAlias.vst3")
+try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: URL(fileURLWithPath: path))
+for scanPath in [path, alias.path, path] {
+    var rescanError: NSError?
+    let again = JarasVST3.scan(scanPath, error: &rescanError)
+    precondition(rescanError == nil && again.count == 1)
+    try check(0.1, "rescanning a loaded VST3, including a path alias, must preserve its live module and PCM")
+    precondition(JarasVST3.state(plugin, identifier: "fixture") != nil)
+}
+print("VST3_RESCAN_LOADED_MODULE_AND_PATH_ALIAS_PRESERVE_PROCESSOR_AND_PCM_OK")
+func inputSilenceMask() -> UInt64 {
+    let state = JarasVST3.state(plugin, identifier: "fixture")!
+    let bytes = Data(base64Encoded: state["componentState"] as! String)!
+    return bytes.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt64.self) }
+}
+precondition(inputSilenceMask() == 0, "audible channels are never marked silent")
+sourceLevels = [0, 0.2]; try check(0)
+precondition(inputSilenceMask() == 1, "silence is reported independently per channel")
+sourceLevels = [0, 0]; try check(0)
+precondition(inputSilenceMask() == 3, "a silent stereo block reaches the plugin with both flags")
+JarasVST3.sendMIDI(plugin, status: 0x90, data1: 60, data2: 100)
+try check(0.125, "silent input must still render MIDI-generated audio")
+JarasVST3.silence(plugin); try check(0)
+sourceLevels = [0.2, 0.2]; try check(0.1)
+precondition(inputSilenceMask() == 0, "resuming input clears the silence flags immediately")
+print("VST3_CHANNEL_SILENCE_FLAGS_AND_MIDI_DURING_SILENCE_OK")
 let original = JarasVST3.state(plugin, identifier: "fixture")!
 JarasVST3.setParameter(plugin, identifier: "fixture", parameter: 0, value: 0.25)
 try check(0.05)

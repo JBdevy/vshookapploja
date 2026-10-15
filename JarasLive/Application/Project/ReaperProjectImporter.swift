@@ -10,6 +10,10 @@ public enum ReaperProjectImporter {
         var notes: [String] = []
         var midiEvents: [[String]] = []
         var children: [Chunk] = []
+        var effectBypass: [String] = []
+        var effectEnvelopes: [Chunk] = []
+        var pendingEffectBypass: [String] = []
+        var lastEffect: Chunk?
         init(_ header: [String]) { self.header = header }
         func line(_ key: String) -> [String] { lines.first { $0.first == key } ?? [] }
         func child(_ key: String) -> Chunk? { children.first { $0.header.first == key } }
@@ -24,6 +28,295 @@ public enum ReaperProjectImporter {
             return try ReaperProjectImporter.number(text)
         }
     }
+    public struct VST3Request: Sendable {
+        public var plugin: ExternalPlugin
+        public var parameterIndices: Set<Int>
+        public init(plugin: ExternalPlugin, parameterIndices: Set<Int> = []) { self.plugin = plugin; self.parameterIndices = parameterIndices }
+    }
+    public struct VST3Resolution: Sendable {
+        public var plugin: ExternalPlugin
+        public var parameterIDs: [Int: UInt32]
+        public init(plugin: ExternalPlugin, parameterIDs: [Int: UInt32] = [:]) { self.plugin = plugin; self.parameterIDs = parameterIDs }
+    }
+    /// Keep warning templates separate from project/plugin names so the UI can
+    /// use its selected language without translating user data or plugin IDs.
+    private struct Warnings {
+        var values = Set<String>()
+        let localize: (String) -> String
+        func errorDescription(_ error: Error) -> String {
+            let message = error.localizedDescription, prefix = "REAPER: "
+            if message.hasPrefix(prefix) {
+                return prefix + localize(String(message.dropFirst(prefix.count)))
+            }
+            return localize(message)
+        }
+        mutating func insert(_ key: String, _ arguments: CVarArg...) {
+            values.insert(arguments.isEmpty ? localize(key) : String(format: localize(key), arguments: arguments))
+        }
+    }
+    private struct ImportedFX {
+        var settings: NativeFXSettings?
+        var envelopes: [TrackEnvelope] = []
+    }
+    /// REAPER's VST3 chunk has its own routing header and tagged state records.
+    /// Verified against REAPER's GetNamedConfigParm("vst_chunk") using GainFixture:
+    /// [byteCount:u32, kind:u32, bytes] kind 1 = processor, 0 = controller.
+    /// The routing header and program-name trailer are not plugin component state.
+    static func vst3States(_ lines: [String]) throws -> (component: String?, controller: String?) {
+        guard !lines.isEmpty else { return (nil, nil) }
+        var bytes = Data()
+        for line in lines {
+            guard let data = Data(base64Encoded: line), bytes.count + data.count <= 64 * 1024 * 1024 else { throw invalid("Invalid VST3 state encoding or size.") }
+            bytes.append(data)
+        }
+        func u32(_ offset: Int) throws -> Int {
+            guard offset >= 0, offset + 4 <= bytes.count else { throw invalid("Truncated VST3 state.") }
+            return (0..<4).reduce(0) { $0 | Int(bytes[offset + $1]) << (8 * $1) }
+        }
+        guard try u32(4) == 0xfeed5eee else { throw invalid("Unsupported VST3 routing-state format.") }
+        let inputs = try u32(8)
+        guard inputs <= 4096 else { throw invalid("Invalid VST3 input count.") }
+        let outputOffset = 12 + 8 * inputs, outputs = try u32(outputOffset)
+        guard outputs <= 4096 else { throw invalid("Invalid VST3 output count.") }
+        let lengthOffset = outputOffset + 4 + 8 * outputs
+        let length = try u32(lengthOffset), begin = lengthOffset + 12, end = begin + length
+        guard length <= 64 * 1024 * 1024, end <= bytes.count else { throw invalid("Truncated VST3 processor state.") }
+        var cursor = begin, component: String?, controller: String?
+        while cursor < end {
+            let count = try u32(cursor), kind = try u32(cursor + 4)
+            cursor += 8
+            guard cursor + count <= end, kind == 0 || kind == 1 else { throw invalid("Unsupported VST3 state record.") }
+            if count > 0 {
+                let state = bytes.subdata(in: cursor..<cursor + count).base64EncodedString()
+                if kind == 1 {
+                    guard component == nil else { throw invalid("Duplicate VST3 processor state.") }
+                    component = state
+                } else {
+                    guard controller == nil else { throw invalid("Duplicate VST3 controller state.") }
+                    controller = state
+                }
+            }
+            cursor += count
+        }
+        return (component, controller)
+    }
+    private static func importFX(_ chain: Chunk?, scope: String, resolve: ((VST3Request) throws -> VST3Resolution?)?, warnings: inout Warnings) throws -> ImportedFX {
+        guard let chain else { return ImportedFX() }
+        var result = ImportedFX(), settings = NativeFXSettings()
+        if chain.children.contains(where: { $0.header.first == "CONTAINER" }) {
+            warnings.insert("%@: REAPER FX containers are not supported; effects inside containers were not imported.", scope)
+        }
+        settings.inserted = []
+        for node in chain.children where ["VST", "AU", "JS", "DX", "CLAP", "VIDEO_EFFECT"].contains(node.header.first ?? "") {
+            let header = node.header
+            guard header.first == "VST", header.count > 5,
+                  header[1].hasPrefix("VST3:") || header[1].hasPrefix("VST3i:") else {
+                let name = header.dropFirst().first ?? header.first ?? "FX"
+                warnings.insert("%@: %@ was not imported; only VST3 effects are supported during REAPER migration.", scope, name)
+                continue
+            }
+            guard let open = header[5].firstIndex(of: "{"), let close = header[5].firstIndex(of: "}"), open < close else {
+                warnings.insert("%@: VST3 %@ has no class ID and was not imported.", scope, header[1]); continue
+            }
+            let rawID = String(header[5][header[5].index(after: open)..<close]).uppercased()
+            guard rawID.count == 32, rawID.allSatisfy(\.isHexDigit) else { throw invalid("Invalid VST3 class ID.") }
+            let classID = rawID
+            let name = header[1].split(separator: ":", maxSplits: 1).last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? header[1]
+            var plugin = ExternalPlugin(classID: classID, name: name, path: header[2], category: header[1].hasPrefix("VST3i:") ? "Instrument" : "Fx")
+            plugin.bypassed = node.effectBypass.dropFirst().first == "1" || node.effectBypass.dropFirst(2).first == "1"
+            var validState = true, available = false
+            do {
+                let state = try vst3States(node.notes)
+                plugin.componentState = state.component; plugin.controllerState = state.controller
+            } catch {
+                warnings.insert("%@: %@ state was not imported: %@", scope, name, warnings.errorDescription(error))
+                // Retain the exact plugin reference, but never silently play its
+                // default preset when the saved preset could not be restored.
+                plugin.bypassed = true; validState = false
+            }
+            var parameterIDs: [Int: UInt32] = [:]
+            let indices = try Set(node.effectEnvelopes.map { envelope -> Int in
+                guard envelope.header.count > 1 else { throw invalid("Missing VST3 automation parameter identity.") }
+                let identity = envelope.header[1].split(separator: ":", omittingEmptySubsequences: false)
+                guard (1...2).contains(identity.count), let index = Int(identity[0]), index >= 0,
+                      identity.count == 1 || UInt32(identity[1]) != nil else {
+                    throw invalid("Invalid VST3 automation parameter identity: " + envelope.header[1])
+                }
+                return index
+            })
+            do {
+                if let found = try resolve?(VST3Request(plugin: plugin, parameterIndices: indices)) {
+                    guard found.plugin.classID.uppercased() == plugin.classID else { throw invalid("VST3 resolver returned a different plugin class.") }
+                    // The source preset, instance identity and bypass flag belong
+                    // to this particular track/take, not the catalog entry.
+                    plugin.path = found.plugin.path; plugin.category = found.plugin.category
+                    parameterIDs = found.parameterIDs
+                    available = validState
+                } else {
+                    plugin.bypassed = true
+                    warnings.insert("%@: VST3 %@ was not found. Its saved state was retained, but the effect was not inserted. Install the same VST3 and import again.", scope, name)
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch {
+                plugin.bypassed = true
+                warnings.insert("%@: VST3 %@ could not be restored. Its reference was retained but the effect was not inserted: %@", scope, name, warnings.errorDescription(error))
+            }
+            if plugin.category.localizedCaseInsensitiveContains("midi") {
+                warnings.insert("%@: %@ is categorized as a MIDI effect; VST3 MIDI-output transformations are not supported and were not migrated.", scope, name)
+            }
+            settings.externalPlugins = (settings.externalPlugins ?? []) + [plugin]
+            if available { settings.inserted.append(plugin.effectKey) }
+            for envelope in node.effectEnvelopes {
+                let identity = envelope.header.count > 1 ? envelope.header[1].split(separator: ":").map(String.init) : []
+                let parameter = identity.count == 2 ? UInt32(identity[1]) : identity.first.flatMap(Int.init).flatMap { parameterIDs[$0] }
+                guard let parameter else {
+                    warnings.insert("%@: %@ automation parameter %@ could not be identified; that envelope was not applied.", scope, name, identity.joined(separator: ":")); continue
+                }
+                let label = envelope.header.count > 5 ? envelope.header[5] : name + " · " + identity.joined(separator: ":")
+                let target = AutomationTarget(.externalFX, plugin: plugin.id, parameter: parameter)
+                if let imported = try importEnvelope(envelope, target: target, name: label, warnings: &warnings, scope: scope) { result.envelopes.append(imported) }
+            }
+        }
+        if settings.externalPlugins?.isEmpty == false { result.settings = settings }
+        return result
+    }
+    private static func importAutomation(_ node: Chunk, fx: [TrackEnvelope], take: Bool = false, offset: Double = 0, scope: String, warnings: inout Warnings) throws -> TrackAutomation? {
+        var result = TrackAutomation()
+        let mode = try node.integer("AUTOMODE")
+        result.mode = [0: .trimRead, 1: .read, 2: .touch, 3: .write, 4: .latch][mode] ?? .read
+        if mode > 4 { warnings.insert("%@: unsupported REAPER automation mode was imported as Read.", scope) }
+        result.envelopes = fx
+        for child in node.children {
+            let key = child.header.first ?? ""
+            let kind: AutomationTarget.Kind?
+            switch key {
+            case "VOLENV2": kind = take ? nil : .volume
+            case "PANENV2": kind = take ? nil : .pan
+            case "VOLENV": kind = take ? .volume : nil
+            case "PANENV": kind = take ? .pan : nil
+            case "MUTEENV": kind = .mute
+            default: kind = nil
+            }
+            if let kind {
+                if let envelope = try importEnvelope(child, target: AutomationTarget(kind), name: kind.rawValue.capitalized, warnings: &warnings, scope: scope) { result.envelopes.append(envelope) }
+            } else if key.contains("ENV"), key != "PARMENV", key != "TEMPOENVEX" {
+                let points = child.lines.filter { $0.first == "PT" }.count
+                if points > 0 {
+                    warnings.insert("%@: REAPER %@ automation is not supported and was not applied (%ld points).", scope, key, points)
+                }
+            }
+        }
+        guard !result.envelopes.isEmpty else { return nil }
+        for index in result.envelopes.indices {
+            for point in result.envelopes[index].points.indices { result.envelopes[index].points[point].time += offset }
+            if result.envelopes[index].points.first?.time ?? 0 < 0 {
+                let boundary = result.envelopes[index].value(at: 0)
+                result.envelopes[index].points.removeAll { $0.time < 0 }
+                if result.envelopes[index].points.first?.time != 0 {
+                    result.envelopes[index].points.insert(EnvelopePoint(time: 0, value: boundary), at: 0)
+                }
+            }
+            // In CatLive hiding a track Env disables its playback. Keep active
+            // imported envelopes visible so a hidden REAPER lane keeps sounding.
+            if !take, result.envelopes[index].enabled { result.envelopes[index].visible = true }
+        }
+        result.lanesVisible = true
+        return result
+    }
+    private struct ImportPoint {
+        var time: Double, value: Double, shape: Int, tension: Double
+    }
+    private static func importEnvelope(_ node: Chunk, target: AutomationTarget, name: String, warnings: inout Warnings, scope: String) throws -> TrackEnvelope? {
+        if !node.line("POOLEDENVINST").isEmpty || node.children.contains(where: { ["POOLEDENVINST", "AI"].contains($0.header.first ?? "") }) {
+            warnings.insert("%@: %@ contains automation items; pooled automation items were not imported.", scope, name)
+        }
+        var points: [ImportPoint] = []
+        for row in node.lines where row.first == "PT" {
+            guard row.count >= 3 else { throw invalid("Invalid envelope point.") }
+            let time = try number(row[1]), value = try number(row[2]), shape = row.count > 3 ? Int(row[3]) : 0
+            guard let shape, (0...5).contains(shape) else { throw invalid("Invalid envelope point time or shape.") }
+            let point = ImportPoint(time: time, value: value, shape: shape, tension: row.count > 7 ? try number(row[7]) : 0)
+            if let last = points.last, last.time == time { points[points.count - 1] = point }
+            else { points.append(point) }
+        }
+        guard !points.isEmpty else { return nil }
+        guard zip(points, points.dropFirst()).allSatisfy({ $0.time < $1.time }) else { throw invalid("Unsorted envelope points.") }
+        let volume = target.kind == .volume, fader = try volume && node.integer("VOLTYPE") == 1
+        let range: ClosedRange<Double> = volume ? 0...pow(10, 12.0 / 20) : target.kind == .pan ? -1...1 : 0...1
+        if points.contains(where: { !range.contains($0.value) }) {
+            warnings.insert("%@: %@ envelope exceeds the CatLive parameter range and was not applied.", scope, name); return nil
+        }
+        func normalized(_ value: Double) -> Double {
+            if volume { return TrackEnvelope.normalizedGain(value) }
+            if target.kind == .pan { return (value + 1) * 0.5 }
+            if target.kind == .mute { return 1 - value }
+            return value
+        }
+        let neutral: Double = volume ? TrackEnvelope.normalizedGain(1) : target.kind == .pan ? 0.5 : target.kind == .mute ? 0 : points[0].value
+        var result = TrackEnvelope(target: target, name: name, defaultValue: neutral)
+        result.enabled = try node.integer("ACT", default: 1) != 0
+        result.visible = try node.integer("VIS", default: 1) != 0
+        result.armed = try node.integer("ARM") != 0
+        if volume { result.valueScale = .linearGain }
+        let shapes: [EnvelopeShape] = [.linear, .square, .smooth, .fastStart, .fastEnd]
+        // REAPER fader scaling, checked against its ScaleFromEnvelopeMode oracle.
+        let faderGain = pow(10, 12.0 / 20) / 2
+        func toFader(_ value: Double) -> Double { pow((sqrt(1 + 4 * value / faderGain) - 1) / 2, 1.0 / 3) }
+        func fromFader(_ value: Double) -> Double { let q = value * value * value; return faderGain * q * (1 + q) }
+        func domain(_ value: Double) -> Double { fader ? toFader(value) : value }
+        func rawValue(_ index: Int, _ fraction: Double) -> Double {
+            let a = points[index], b = points[index + 1], av = domain(a.value), bv = domain(b.value)
+            let value: Double
+            if a.shape < 5 { value = av + (bv - av) * shapes[a.shape].interpolate(fraction) }
+            else {
+                // Cubic cardinal segment, tension-adjusted as used by REAPER.
+                let previous = index > 0 ? points[index - 1] : a
+                let next = index + 2 < points.count ? points[index + 2] : b
+                let span = b.time - a.time, tension = min(1, max(-1, a.tension))
+                var x1 = 0.25, x2 = 0.75
+                var y1 = av + (bv - domain(previous.value)) / (b.time - previous.time) * span * 0.25
+                var y2 = bv - (domain(next.value) - av) / (next.time - a.time) * span * 0.25
+                x1 += tension * (tension > 0 ? 1 - x1 : x1)
+                x2 += tension * (tension > 0 ? 1 - x2 : x2)
+                y1 -= tension * (tension > 0 ? y1 - av : bv - y1)
+                y2 -= tension * (tension > 0 ? y2 - av : bv - y2)
+                y1 = min(domain(range.upperBound), max(domain(range.lowerBound), y1))
+                y2 = min(domain(range.upperBound), max(domain(range.lowerBound), y2))
+                func cubic(_ t: Double, _ p0: Double, _ p1: Double, _ p2: Double, _ p3: Double) -> Double {
+                    let u = 1 - t
+                    return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3
+                }
+                var low = 0.0, high = 1.0
+                for _ in 0..<36 { let mid = (low + high) * 0.5; if cubic(mid, 0, x1, x2, 1) < fraction { low = mid } else { high = mid } }
+                value = cubic((low + high) * 0.5, av, y1, y2, bv)
+            }
+            return fader ? fromFader(value) : value
+        }
+        for index in points.indices {
+            let point = points[index]
+            let resample = index + 1 < points.count && point.shape != 1 && (fader || point.shape == 5)
+            result.points.append(EnvelopePoint(time: point.time, value: normalized(point.value), shape: resample ? .linear : shapes[min(4, point.shape)]))
+            guard resample else { continue }
+            let end = points[index + 1]
+            func sample(_ a: Double, _ av: Double, _ b: Double, _ bv: Double, _ depth: Int) throws {
+                var error = 0.0
+                for weight in [0.25, 0.5, 0.75] {
+                    let exact = rawValue(index, a + (b - a) * weight), estimate = av + (bv - av) * weight
+                    error = max(error, abs(exact - estimate))
+                }
+                if error > 0.00001, depth < 16, (b - a) * (end.time - point.time) > 0.000001 {
+                    let middle = (a + b) * 0.5, mv = rawValue(index, middle)
+                    try sample(a, av, middle, mv, depth + 1)
+                    result.points.append(EnvelopePoint(time: point.time + (end.time - point.time) * middle, value: normalized(mv)))
+                    guard result.points.count < 200_000 else { throw invalid("Envelope contains too many resampled points.") }
+                    try sample(middle, mv, b, bv, depth + 1)
+                }
+            }
+            try sample(0, point.value, 1, end.value, 0)
+        }
+        return result
+    }
+
     private static func invalid(_ detail: String) -> ProjectError { .invalid("REAPER: " + detail) }
     private static func number(_ text: String) throws -> Double {
         guard let value = Double(text), value.isFinite else { throw invalid("Invalid numeric value.") }
@@ -48,13 +341,19 @@ public enum ReaperProjectImporter {
     }
     private static func parse(_ text: String) throws -> Chunk {
         var stack: [Chunk] = [], root: Chunk?, count = 0
-        let keys: Set<String> = ["NAME", "TEMPO", "MARKER", "PT", "VOLPAN", "MUTESOLO", "ISBUS", "PEAKCOL", "POSITION", "LENGTH", "SOFFS", "PLAYRATE", "MUTE", "FADEIN", "FADEOUT", "CHANMODE", "LOOP", "FILE", "TAKE", "SEL", "ALLTAKES", "STARTPOS", "MODE", "MASTER_VOLUME", "MASTERMUTESOLO", "AUXRECV", "MAINSEND", "PANMODE", "SM", "PITCHENV", "STARTTIME", "FRAMERATE", "SEND", "USERDATA", "HASDATA", "IGNTEMPO", "POOLEDEVTS", "E", "e", "Em", "em"]
+        let keys: Set<String> = ["POOLEDENVINST", "ACT", "VIS", "ARM", "VOLTYPE", "AUTOMODE", "BYPASS", "FX", "IPHASE", "NAME", "TEMPO", "MARKER", "PT", "VOLPAN", "MUTESOLO", "ISBUS", "PEAKCOL", "POSITION", "LENGTH", "TAKEVOLPAN", "SOFFS", "PLAYRATE", "MUTE", "FADEIN", "FADEOUT", "CHANMODE", "LOOP", "FILE", "TAKE", "SEL", "ALLTAKES", "STARTPOS", "MODE", "MASTER_VOLUME", "MASTERMUTESOLO", "AUXRECV", "MAINSEND", "PANMODE", "SM", "PITCHENV", "STARTTIME", "FRAMERATE", "SEND", "USERDATA", "HASDATA", "IGNTEMPO", "POOLEDEVTS", "E", "e", "Em", "em"]
         for raw in text.split(whereSeparator: \.isNewline) {
             count += 1
             if count % 1024 == 0 { try Task.checkCancellation() }
             guard count <= 2_000_000 else { throw invalid("Project is too large.") }
             let line = raw.drop(while: \.isWhitespace)
             if line.isEmpty { continue }
+            if stack.last?.header.first == "VST", line != ">", !line.hasPrefix("<") {
+                stack.last?.notes.append(String(line)); continue
+            }
+            if stack.last?.header.first == "BIN", line != ">" {
+                stack.last?.notes.append(String(line)); continue
+            }
             if stack.last?.header.first == "NOTES", line.first == "|" { stack.last?.notes.append(String(line.dropFirst())); continue }
             if line.first == "<" {
                 let header = try tokens(line.dropFirst())
@@ -62,9 +361,20 @@ public enum ReaperProjectImporter {
                 let chunk = Chunk(header)
                 if let parent = stack.last {
                     parent.children.append(chunk)
+                    if ["FXCHAIN", "TAKEFX", "MASTERFXLIST", "MASTERFXCHAIN"].contains(parent.header.first ?? "") {
+                        if header.first == "PARMENV" { parent.lastEffect?.effectEnvelopes.append(chunk) }
+                        else if ["VST", "AU", "JS", "DX", "CLAP", "VIDEO_EFFECT"].contains(header.first ?? "") {
+                            chunk.effectBypass = parent.pendingEffectBypass
+                            parent.lastEffect = chunk
+                        }
+                    }
                     if ["X", "x", "Xm", "xm"].contains(header[0]), parent.header == ["SOURCE", "MIDI"] { parent.midiEvents.append(header) }
                 }
-                else { guard root == nil else { throw invalid("Multiple project roots.") }; root = chunk }
+                else {
+                    guard root == nil else { throw invalid("Multiple project roots.") }
+                    guard header.first == "REAPER_PROJECT" else { throw invalid("Incomplete or invalid .rpp project.") }
+                    root = chunk
+                }
                 stack.append(chunk)
             } else if line.trimmingCharacters(in: .whitespaces) == ">" {
                 guard !stack.isEmpty else { throw invalid("Unexpected chunk end.") }
@@ -75,14 +385,17 @@ public enum ReaperProjectImporter {
             } else {
                 guard let parent = stack.last else { throw invalid("Data outside project.") }
                 let key = String(line.prefix(while: { !$0.isWhitespace }))
-                guard keys.contains(key) else { continue }
+                let hookSection = ["CHATGPT_REGION_PLAYLIST", "VS_HOOK_MULTILOOPS"].contains(parent.header.first ?? "")
+                guard keys.contains(key) || hookSection else { continue }
                 let row = try tokens(line)
                 if key == "TAKE", parent.header.first == "ITEM" || parent.header.first == "TAKE_INLINE" {
                     if parent.header.first == "TAKE_INLINE" { stack.removeLast() }
+                    guard let item = stack.last, item.header.first == "ITEM" else { throw invalid("Invalid take nesting.") }
                     let take = Chunk(["TAKE_INLINE"] + row.dropFirst())
-                    stack.last!.children.append(take); stack.append(take)
+                    item.children.append(take); stack.append(take)
                 } else {
                     parent.lines.append(row)
+                    if key == "BYPASS" { parent.pendingEffectBypass = row }
                     if ["E", "e", "Em", "em"].contains(key), parent.header == ["SOURCE", "MIDI"] { parent.midiEvents.append(row) }
                 }
             }
@@ -90,21 +403,38 @@ public enum ReaperProjectImporter {
         guard stack.isEmpty, let root, root.header.first == "REAPER_PROJECT" else { throw invalid("Incomplete or invalid .rpp project.") }
         return root
     }
-    public static func read(_ source: URL) throws -> ProjectMigration.Result {
+    public static func read(_ source: URL, resolveVST3: ((VST3Request) throws -> VST3Resolution?)? = nil,
+                            localizeWarning: @escaping (String) -> String = { $0 }) throws -> ProjectMigration.Result {
         guard source.pathExtension.lowercased() == "rpp" else { throw invalid("Select a .rpp project.") }
         let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 0, size <= 256 * 1024 * 1024 else { throw invalid("Invalid project size.") }
         let data = try Data(contentsOf: source, options: .mappedIfSafe)
         guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1252) else { throw invalid("Invalid text encoding.") }
         let root = try parse(text.trimmingCharacters(in: CharacterSet(charactersIn: "\u{feff}")))
+        // REAPER POSITION values are seconds from the physical start of the
+        // arrangement. PROJOFFS/measure numbering label the ruler; they do not
+        // move that boundary. Keep this start at CatLive 00:00.
+        var hookState: [String: [String: String]] = [:]
+        for section in root.child("EXTSTATE")?.children ?? [] where ["CHATGPT_REGION_PLAYLIST", "VS_HOOK_MULTILOOPS"].contains(section.header.first ?? "") {
+            var values: [String: String] = [:]
+            for row in section.lines where row.count >= 2 { values[row[0]] = row.dropFirst().joined(separator: " ") }
+            for binary in section.children where binary.header.first == "BIN" && binary.header.count == 2 {
+                if let data = Data(base64Encoded: binary.notes.joined()), let value = String(data: data, encoding: .utf8) {
+                    values[binary.header[1]] = value.trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
+                } else { throw invalid("Invalid VS Hook project metadata.") }
+            }
+            hookState[section.header[0]] = values
+        }
+        var hook = VSHookProjectMigration(state: hookState)
         var project = Project.empty(name: source.deletingPathExtension().lastPathComponent)
         project.importedTimeline = true
         var song = project.songs[0]
-        song.tracks = []; song.parts = []; song.markers = []; song.timeSettings = .legacy
+        song.tracks = []; song.parts = []; song.markers = []; song.timeSettings = ProjectTimeSettings()
         song.bpm = try root.number("TEMPO", default: 120)
         song.beatsPerBar = try root.integer("TEMPO", 2, default: 4)
         song.beatUnit = try root.integer("TEMPO", 3, default: 4)
-        var warnings = Set<String>()
+        var warnings = Warnings(localize: localizeWarning)
+        var ignoredItems = 0
         let midiTempo = try MIDITempoMap(root)
         var midiPools: [String: Chunk] = [:]
         func collectPools(_ chunk: Chunk) {
@@ -112,14 +442,19 @@ public enum ReaperProjectImporter {
             for child in chunk.children { collectPools(child) }
         }
         collectPools(root)
-        let unsupported = "REAPER effects, automation, sends, pitch processing and advanced playback settings are not converted. Review the migrated mix."
+        let unsupported = "REAPER sends and advanced playback settings are not converted. Review the migrated mix."
         func limitedVolume(_ value: Double) -> Double {
             let limited = min(pow(10, 12.0 / 20), max(0, value))
             if limited != value { warnings.insert("REAPER mixer volumes above +12 dB were limited to the CatLive mixer range.") }
             return limited
         }
         project.masterVolume = limitedVolume(try root.number("MASTER_VOLUME", default: 1))
-        if try root.number("PLAYRATE", default: 1) != 1 || root.child("MASTERFXLIST") != nil || root.child("MASTERFXCHAIN") != nil || root.number("MASTERMUTESOLO") != 0 { warnings.insert(unsupported) }
+        project.masterPan = try root.number("MASTER_VOLUME", 2)
+        project.masterMute = try root.integer("MASTERMUTESOLO") & 1 != 0
+        let masterFX = try importFX(root.child("MASTERFXLIST") ?? root.child("MASTERFXCHAIN"), scope: "Master", resolve: resolveVST3, warnings: &warnings)
+        project.masterFX = masterFX.settings
+        project.masterAutomation = try importAutomation(root, fx: masterFX.envelopes, scope: "Master", warnings: &warnings)
+        if try root.number("PLAYRATE", default: 1) != 1 { warnings.insert(unsupported) }
         let base = source.deletingLastPathComponent()
         let mediaRoot = "Stems/REAPER-" + UUID().uuidString
         var media: [String: ProjectMigration.Media] = [:]
@@ -145,7 +480,6 @@ public enum ReaperProjectImporter {
         }
         var folders: [UUID] = []
         let tracks = root.children.filter { $0.header.first == "TRACK" }
-        guard tracks.count <= Project.maximumTrackCount else { throw invalid("A project supports at most 1000 tracks") }
         for node in tracks {
             try Task.checkCancellation()
             var track = Track(id: UUID(), name: node.value("NAME").flatMap { $0.isEmpty ? nil : $0 } ?? "Track \(song.tracks.count + 1)", role: .other)
@@ -154,10 +488,12 @@ public enum ReaperProjectImporter {
             track.mute = try node.number("MUTESOLO") != 0
             track.solo = try node.number("MUTESOLO", 2) != 0
             track.color = color(node.value("PEAKCOL"))
-            track.parentTrackID = folders.first
+            track.parentTrackID = folders.last
             let special = specialKind(track.name)
+            hook.trackIDs["TRACK_\(song.tracks.count + 1)"] = track.id
+            if let guid = node.header.dropFirst().first { hook.trackIDs[guid.uppercased()] = track.id }
             if let special {
-                track.role = TrackRole(rawValue: special.rawValue); track.name = special.title
+                track.role = special == .video ? .other : TrackRole(rawValue: special.rawValue); track.name = special.title
                 track.parentTrackID = nil; track.color = special.defaultColor
                 if special.isText { track.mute = false }
                 if special != .video { track.solo = false }
@@ -166,19 +502,29 @@ public enum ReaperProjectImporter {
             let delta = try node.integer("ISBUS", 2)
             guard (-1000...1).contains(delta), delta >= -folders.count else { throw invalid("Invalid track folder structure.") }
             if delta > 0 {
-                if !folders.isEmpty { warnings.insert("Nested REAPER folders were placed inside their top-level group.") }
                 if special != nil { throw invalid("Uma pista especial não pode ser uma pasta de áudio no projeto de origem.") }
                 folders.append(track.id)
             }
-            if node.child("FXCHAIN") != nil || !node.line("AUXRECV").isEmpty || node.children.contains(where: { $0.header.first?.contains("ENV") == true }) { warnings.insert(unsupported) }
+            track.phaseInverted = try node.integer("IPHASE") != 0
+            let importedFX = try importFX(node.child("FXCHAIN"), scope: track.name, resolve: resolveVST3, warnings: &warnings)
+            track.fx = importedFX.settings
+            if node.value("FX") == "0", let plugins = track.fx?.externalPlugins {
+                track.fx?.externalPlugins = plugins.map { var plugin = $0; plugin.bypassed = true; return plugin }
+            }
+            track.automation = try importAutomation(node, fx: importedFX.envelopes, scope: track.name, warnings: &warnings)
+            if !node.line("AUXRECV").isEmpty { warnings.insert(unsupported) }
             for item in node.children where item.header.first == "ITEM" {
-                var take = item
-                let takes = item.children.filter { ["TAKE", "TAKE_INLINE"].contains($0.header.first ?? "") }
-                if let selected = takes.first(where: { $0.header.contains("SEL") || $0.value("SEL") == "1" }) { take = selected }
-                else if item.child("SOURCE") == nil, let first = takes.first { take = first }
-                if !takes.isEmpty { warnings.insert("Only the active REAPER take is imported for each item.") }
                 let start = try item.number("POSITION"), duration = try item.number("LENGTH")
-                guard start >= 0, duration > 0 else { throw invalid("Invalid item position or length.") }
+                guard duration > 0, (start + duration).isFinite else { throw invalid("Invalid item position or length.") }
+                if start < 0 { ignoredItems += 1; continue }
+                // Each take is an independent item in CatLive. Keep inactive
+                // audio/MIDI takes at the same bounds so the existing item lanes
+                // expose every source instead of discarding all but the active take.
+                var takes = item.children.filter { ["TAKE", "TAKE_INLINE"].contains($0.header.first ?? "") }
+                if item.child("SOURCE") != nil || takes.isEmpty { takes.insert(item, at: 0) }
+                let activeTake = takes.first { $0 !== item && ($0.header.contains("SEL") || $0.value("SEL") == "1") } ?? takes.first
+                let playAllTakes = try item.integer("ALLTAKES") != 0
+                for take in takes {
                 var clip = AudioClip(id: UUID(), name: take.value("NAME") ?? item.value("NAME") ?? "Item", startTime: start, duration: duration)
                 if let special {
                     let source = take.child("SOURCE")
@@ -197,7 +543,7 @@ public enum ReaperProjectImporter {
                         guard source.line("USERDATA").dropFirst().allSatisfy({ Double($0) == 0 }) else { throw invalid("Timecode com user bits personalizados ainda não é suportado pelo CatLive.") }
                         try settings.validate()
                         clip.timecode = settings; clip.name = settings.mode.uppercased()
-                        clip.muted = try item.number("MUTE") != 0
+                        clip.muted = try item.number("MUTE") != 0 || (!playAllTakes && take !== activeTake)
                         if track.clips.isEmpty { track.timecode = settings }
                     } else if let filename = source?.value("FILE"), special == .video || special.isTeleprompter {
                         let ref = try reference(filename, projection: true)
@@ -206,22 +552,39 @@ public enum ReaperProjectImporter {
                         clip.playbackRate = try take.number("PLAYRATE", default: 1)
                     } else if special.isText {
                         let text = item.child("NOTES")?.notes.joined(separator: "\n") ?? take.child("NOTES")?.notes.joined(separator: "\n") ?? take.value("NAME") ?? ""
-                        try AudioClip.validateText(text, maximum: special.maximumTextLength ?? 400)
                         clip.text = text
                         clip.name = text.components(separatedBy: "\n").first ?? ""
                     }
                     track.clips.append(clip)
                     continue
                 }
+                let itemPitch = try take.number("PLAYRATE", 3)
+                if (-12...12).contains(itemPitch) { clip.pitchSemitones = itemPitch == 0 ? nil : itemPitch }
+                else { warnings.insert("Item pitch outside the supported ±12 semitone range was not converted.") }
                 clip.sourceOffset = try take.number("SOFFS")
                 clip.playbackRate = try take.number("PLAYRATE", default: 1)
-                clip.gain = abs(try take.number("VOLPAN", default: 1) * take.number("VOLPAN", 3, default: 1))
-                clip.muted = try item.number("MUTE") != 0
+                let takeGain: Double, takePan: Double
+                if !take.line("TAKEVOLPAN").isEmpty {
+                    takeGain = try item.number("VOLPAN", default: 1) * take.number("TAKEVOLPAN", 2, default: 1)
+                    takePan = try take.number("TAKEVOLPAN")
+                } else {
+                    takeGain = try take.number("VOLPAN", default: item.number("VOLPAN", default: 1)) * take.number("VOLPAN", 3, default: 1)
+                    takePan = try take.number("VOLPAN", 2)
+                }
+                clip.gain = abs(takeGain)
+                clip.phaseInverted = takeGain < 0 ? true : nil
+                clip.pan = takePan
+                clip.muted = try item.number("MUTE") != 0 || (!playAllTakes && take !== activeTake)
                 clip.fadeIn = try item.number("FADEIN", 2)
                 clip.fadeOut = try item.number("FADEOUT", 2)
                 let mode = try take.integer("CHANMODE")
                 clip.channelMode = [0: 0, 2: 3, 3: 1, 4: 2][mode] ?? 0
-                if try ![0, 2, 3, 4].contains(mode) || take.child("TAKEFX") != nil || take.number("PLAYRATE", 3) != 0 || take.number("VOLPAN", 2) != 0 || !take.line("SM").isEmpty || item.number("ALLTAKES") != 0 { warnings.insert(unsupported) }
+                if try ![0, 2, 3, 4].contains(mode) || !take.line("SM").isEmpty { warnings.insert(unsupported) }
+                let takeFX = try importFX(take.child("TAKEFX"), scope: track.name + " / " + clip.name, resolve: resolveVST3, warnings: &warnings)
+                clip.fx = takeFX.settings
+                let hasTakeInstrument = clip.fxBypassed != true && (clip.fx?.externalPlugins ?? []).contains {
+                    $0.category.contains("Instrument") && !$0.bypassed && clip.fx?.inserted.contains($0.effectKey) == true
+                }
                 var audio = take.child("SOURCE"), sectionStart = 0.0, sectionLength: Double?
                 if let section = audio, section.header.dropFirst().first == "SECTION" {
                     sectionStart = try section.number("STARTPOS")
@@ -255,12 +618,36 @@ public enum ReaperProjectImporter {
                     clip.sourceOffset = 0; clip.playbackRate = 1
                     clip.loopStart = nil; clip.loopLength = nil
                     clip.channelMode = nil; clip.fadeIn = nil; clip.fadeOut = nil
-                    warnings.insert("MIDI notes were imported. Choose an instrument in CatLive; REAPER instruments and plug-ins are not migrated.")
+                    if !hasTakeInstrument, clip.fx?.externalPlugins?.isEmpty == false {
+                        warnings.insert("%@ / %@: MIDI take VST3 effects and their saved states were retained, but no active take instrument generates audio for them. MIDI-only transformations are not supported; these take effects are not applied.", track.name, clip.name)
+                    }
+                    if !hasTakeInstrument, !(track.fx?.externalPlugins ?? []).contains(where: { $0.category.contains("Instrument") && track.fx?.inserted.contains($0.effectKey) == true }) {
+                        warnings.insert("MIDI notes were imported. Choose an instrument in CatLive; no compatible VST3 instrument was inserted on this track or take.")
+                    }
                 } else if !kind.isEmpty {
                     clip.name = "[\(kind)] " + clip.name
                     warnings.insert("REAPER video and unsupported sources are retained as empty items. Render them to audio in REAPER to migrate their sound.")
                 }
+                var takeAutomation = try importAutomation(take, fx: takeFX.envelopes, take: true, offset: clip.sourceOffset, scope: track.name + " / " + clip.name, warnings: &warnings)
+                if clip.midi != nil, var automation = takeAutomation {
+                    // MIDI notes were flattened into timeline seconds above.
+                    // REAPER take envelopes use item-relative time multiplied
+                    // by take rate (unaffected by media SOFFS or source loops).
+                    // Flatten this clock to match the reset clip rate of one.
+                    let rate = try take.number("PLAYRATE", default: 1)
+                    for envelope in automation.envelopes.indices {
+                        for point in automation.envelopes[envelope].points.indices {
+                            automation.envelopes[envelope].points[point].time /= rate
+                        }
+                    }
+                    takeAutomation = automation
+                    if !hasTakeInstrument {
+                        warnings.insert("%@ / %@: MIDI take automation was retained, but cannot be applied independently through a shared track instrument. An active VST3 instrument on the take is required.", track.name, clip.name)
+                    }
+                }
+                clip.automation = takeAutomation
                 track.clips.append(clip)
+                }
             }
             if track.kind.isSingleLane {
                 // VS Hook projects can contain empty placeholders underneath their
@@ -279,15 +666,20 @@ public enum ReaperProjectImporter {
         for row in root.lines where row.first == "MARKER" {
             guard row.count >= 5, let flags = Int(row[4]) else { throw invalid("Invalid marker.") }
             let position = try number(row[2]), title = row[3].isEmpty ? "Marker " + row[1] : row[3]
-            guard position >= 0 else { throw invalid("Invalid marker position.") }
             let tint = color(row.count > 5 ? row[5] : nil)
             if flags & 1 != 0 {
                 if let begin = regionStarts.removeValue(forKey: row[1]) {
                     guard position > begin.0 else { throw invalid("Invalid region length.") }
-                    song.parts.append(Part(id: UUID(), name: begin.1, startTime: begin.0, endTime: position, color: begin.2))
+                    guard position > 0 else { continue }
+                    let part = Part(id: UUID(), name: begin.1, startTime: max(0, begin.0), endTime: position, color: begin.2)
+                    song.parts.append(part)
+                    hook.regionIDs[row[1]] = part.id
                 } else { regionStarts[row[1]] = (position, row[3].isEmpty ? "Region " + row[1] : row[3], tint) }
             } else {
-                song.markers?.append(TimelineMarker(id: UUID(), name: title, position: position, color: tint ?? 0xC7AB40))
+                guard position >= 0 else { continue }
+                let marker = TimelineMarker(id: UUID(), name: title, position: position, color: tint ?? 0xC7AB40)
+                song.markers?.append(marker)
+                hook.sourceMarkers.append(.init(number: row[1], marker: marker))
             }
         }
         guard regionStarts.isEmpty else { throw invalid("Incomplete region.") }
@@ -304,28 +696,75 @@ public enum ReaperProjectImporter {
             }
         }
         song.parts = accepted
-        convertSpecialRegions(in: &song)
+        // VS Hook accepts a closing point within half a millisecond of the end.
+        for index in song.markers?.indices ?? 0..<0 where hook.isTechnicalMarker(song.markers![index].name) {
+            let position = song.markers![index].position
+            if let end = song.parts.map(\.endTime).filter({ abs($0 - position) <= 0.0005 }).min(by: { abs($0 - position) < abs($1 - position) }) {
+                song.markers![index].position = end
+            }
+        }
+        // Loop endpoints and VS Hook commands are not songs in a unified region.
+        let technical = (song.markers ?? []).filter { hook.isTechnicalMarker($0.name) }
+        song.markers?.removeAll { hook.isTechnicalMarker($0.name) }
+        let hookMarkerParents = hook.hasMetadata ? Set(song.parts.filter {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("--")
+        }.map(\.id)) : nil
+        convertSpecialRegions(in: &song, markerParentIDs: hookMarkerParents)
+        for original in technical {
+            guard original.position >= 0 else { continue }
+            var marker = original
+            let label = marker.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if label.hasPrefix("*") || label.hasPrefix("$") {
+                // Source names remain intact in hook.sourceMarkers for loop pairing.
+                let slotPrefix = (1...4).contains { label.hasPrefix("*\($0)") }
+                let suffix = slotPrefix ? label.dropFirst(2) : label.dropFirst()
+                let name = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
+                marker.name = name.isEmpty ? "Trecho" : name
+                if song.parts.contains(where: { marker.position >= $0.startTime && marker.position <= $0.endTime }) { marker.section = true; marker.loopSection = label.hasPrefix("*") }
+                else { warnings.insert("VS Hook: um marcador de trecho fora de uma música foi mantido como marcador comum.") }
+            }
+            if let index = song.markers?.firstIndex(where: { abs($0.position - marker.position) <= 0.000001 }) {
+                if marker.isSection {
+                    song.markers?[index].section = true
+                    if marker.isLoopSection { song.markers?[index].loopSection = true }
+                }
+            } else {
+                marker.name = String((marker.isSection ? marker.name.uppercased() : marker.name).prefix(marker.isSection ? TimelineMarker.maximumSectionNameLength : TimelineMarker.maximumNameLength))
+                song.markers?.append(marker)
+            }
+        }
         if let tempo = root.child("TEMPOENVEX") {
+            var initialTempo: TimelineMarker?
             for row in tempo.lines where row.first == "PT" {
                 guard row.count >= 3 else { throw invalid("Invalid tempo point.") }
                 let position = try number(row[1]), bpm = try number(row[2])
-                if TimelineTempo.bpmRange.contains(bpm), position >= 0 {
+                if TimelineTempo.bpmRange.contains(bpm) {
                     let signature = row.count > 4 ? Int(row[4]) ?? 0 : 0
                     if signature != 0 { song.beatsPerBar = signature & 0xffff; song.beatUnit = signature >> 16 }
                     let meterBeats = song.meterBeats, meterUnit = song.meterUnit
-                    song.markers?.append(TimelineMarker(id: UUID(), name: String(format: "%g", bpm), position: position, color: 0xAAAAAA, tempoBPM: bpm, tempoBeats: meterBeats, tempoUnit: meterUnit, tempoTimebase: .free))
+                    let marker = TimelineMarker(id: UUID(), name: String(format: "%g", bpm), position: max(0, position), color: 0xAAAAAA, tempoBPM: bpm, tempoBeats: meterBeats, tempoUnit: meterUnit, tempoTimebase: .global, tempoReferenceBPM: bpm)
+                    if position < 0 { initialTempo = marker } else { song.markers?.append(marker) }
                 } else { warnings.insert("Tempo points outside the CatLive tempo range were omitted; item positions in seconds are unchanged.") }
                 if row.count > 3 && row[3] != "1" { warnings.insert("REAPER tempo ramps were imported as discrete tempo points; item positions in seconds are unchanged.") }
+            }
+            if let initialTempo, song.markers?.contains(where: { $0.isTempo && $0.position == 0 }) != true {
+                song.markers?.append(initialTempo)
             }
         }
         // The initial meter is independent from later tempo/time-signature changes.
         song.beatsPerBar = try root.integer("TEMPO", 2, default: 4); song.beatUnit = try root.integer("TEMPO", 3, default: 4)
-        song.duration = max(1, song.tracks.flatMap(\.clips).map { $0.startTime + $0.duration }.max() ?? 0, song.parts.map(\.endTime).max() ?? 0, song.markers?.map(\.position).max() ?? 0)
-        if song.parts.isEmpty { song.parts = [Part(id: UUID(), name: song.name, startTime: 0, endTime: song.duration)] }
+        let contentEnd = max(song.tracks.flatMap(\.clips).map { $0.startTime + $0.duration }.max() ?? 0,
+                             song.parts.map(\.endTime).max() ?? 0, song.markers?.map(\.position).max() ?? 0)
+        song.duration = max(1, contentEnd)
+        if song.parts.isEmpty { song.parts = [Part(id: UUID(), name: song.name, startTime: 0, endTime: max(1, contentEnd))] }
         project.songs = [song]
+        var hookWarnings = Set<String>()
+        hook.apply(to: &project, warnings: &hookWarnings)
+        for warning in hookWarnings { warnings.insert(warning) }
+        if ignoredItems > 0 { warnings.insert("%ld REAPER items before the project start were ignored.", ignoredItems) }
         project.orderSpecialTracks()
         try project.validate()
-        return ProjectMigration.Result(project: project, media: media.values.sorted { $0.relativePath < $1.relativePath }, warnings: warnings.sorted())
+        return ProjectMigration.Result(project: project, media: media.values.sorted { $0.relativePath < $1.relativePath }, warnings: warnings.values.sorted())
     }
     /// RPP MIDI uses source quarter notes. Integrate the original tempo map
     /// before flattening into the imported free timeline, including linear ramps.
@@ -335,13 +774,14 @@ public enum ReaperProjectImporter {
         init(_ root: Chunk) throws {
             let initial = try root.number("TEMPO", default: 120)
             guard initial > 0 else { throw invalid("Invalid MIDI project tempo.") }
-            var values = [Point(time: 0, bpm: initial, linear: false)]
+            var values: [Point] = []
             for row in root.child("TEMPOENVEX")?.lines ?? [] where row.first == "PT" {
                 guard row.count >= 3 else { throw invalid("Invalid tempo point.") }
                 let time = try number(row[1]), bpm = try number(row[2])
-                guard time >= 0, bpm > 0 else { throw invalid("Invalid MIDI tempo point.") }
+                guard bpm > 0 else { throw invalid("Invalid MIDI tempo point.") }
                 values.append(Point(time: time, bpm: bpm, linear: row.count > 3 && row[3] == "0"))
             }
+            values.insert(Point(time: min(0, values.map(\.time).min() ?? 0), bpm: initial, linear: false), at: 0)
             let sorted = values.enumerated().sorted { $0.element.time == $1.element.time ? $0.offset < $1.offset : $0.element.time < $1.element.time }
             var result: [Point] = []
             for entry in sorted {
@@ -370,7 +810,7 @@ public enum ReaperProjectImporter {
         }
     }
     private struct MIDISource { let notes: [MIDINote]; let length: Double }
-    private static func inlineMIDI(_ source: Chunk, warnings: inout Set<String>) throws -> MIDISource {
+    private static func inlineMIDI(_ source: Chunk, warnings: inout Warnings) throws -> MIDISource {
         let ppq = try source.number("HASDATA", 2, default: 960)
         guard ppq > 0, ppq <= 1_000_000, source.value("HASDATA", 3).map({ $0 == "QN" }) ?? true else { throw invalid("Unsupported MIDI tick format.") }
         struct Pending { let start: Double; let velocity: Int; let muted: Bool }
@@ -424,7 +864,7 @@ public enum ReaperProjectImporter {
         return MIDISource(notes: notes, length: max(ticks / ppq, notes.map(\.end).max() ?? 0))
     }
     private static func midiItem(source: Chunk, take: Chunk, item: Chunk, clip: AudioClip, base: URL,
-                                 tempo: MIDITempoMap, pools: [String: Chunk], warnings: inout Set<String>) throws -> MIDIItem {
+                                 tempo: MIDITempoMap, pools: [String: Chunk], warnings: inout Warnings) throws -> MIDIItem {
         let data: MIDISource
         if let filename = source.value("FILE") {
             let path = filename.replacingOccurrences(of: "\\", with: "/")
@@ -498,7 +938,7 @@ public enum ReaperProjectImporter {
     }
     /// REAPER can describe a special region either with child regions or with
     /// marker starts. Materialize both as CatLive drawer entries and linked flags.
-    private static func convertSpecialRegions(in song: inout Song) {
+    private static func convertSpecialRegions(in song: inout Song, markerParentIDs: Set<UUID>? = nil) {
         let epsilon = 0.000001
         func samePoint(_ a: Double, _ b: Double) -> Bool { abs(a - b) <= epsilon }
         let ordered = (song.markers ?? []).enumerated().sorted {
@@ -515,6 +955,7 @@ public enum ReaperProjectImporter {
         for root in roots {
             // At a shared edge, the marker belongs to the region that starts there.
             let inside = markers.filter { marker in
+                if let markerParentIDs, !markerParentIDs.contains(root.id) { return false }
                 guard marker.position >= root.startTime && marker.position < root.endTime else { return false }
                 let owner = roots.filter { marker.position >= $0.startTime && marker.position < $0.endTime }
                     .min { $0.endTime - $0.startTime < $1.endTime - $1.startTime }
@@ -553,7 +994,7 @@ public enum ReaperProjectImporter {
         for entry in sorted {
             var marker = entry.element
             if let last = result.last, samePoint(last.position, marker.position) { continue }
-            if marker.unifiedRegionID == nil { marker.name = String(marker.name.prefix(TimelineMarker.maximumNameLength)) }
+            if marker.unifiedRegionID == nil { marker.name = String((marker.isSection ? marker.name.uppercased() : marker.name).prefix(marker.isSection ? TimelineMarker.maximumSectionNameLength : TimelineMarker.maximumNameLength)) }
             result.append(marker)
         }
         song.markers = result

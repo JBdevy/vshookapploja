@@ -7,7 +7,93 @@
 #include <stdexcept>
 #include <unordered_map>
 namespace jaras {
+// Imported region boundaries are commonly rounded to microseconds while item
+// positions retain sample/tempo precision. Less than one microsecond is the
+// same placement edge; it is still below one sample at 384 kHz.
+static constexpr double regionPlacementTolerance = 1e-6;
+static constexpr int regionOwnershipVersion = 2;
+// Membership is established on placement, never by moving a region across material.
+std::optional<ID> regionOwnerAt(const Song& song, double start, std::optional<double> end) {
+    const Part* selected = nullptr;
+    for (const auto& part : song.parts) {
+        if (start < part.startTime - regionPlacementTolerance || start >= part.endTime - regionPlacementTolerance || (end && *end > part.endTime + regionPlacementTolerance)) continue;
+        if (!selected || (part.parentRegionID.has_value() != selected->parentRegionID.has_value() ? part.parentRegionID.has_value() :
+            part.endTime - part.startTime != selected->endTime - selected->startTime ? part.endTime - part.startTime < selected->endTime - selected->startTime : part.id < selected->id)) selected = &part;
+    }
+    return selected ? std::optional<ID>(selected->id) : std::nullopt;
+}
+bool regionOwns(const Song& song, const ID& root, const std::optional<ID>& owner) {
+    if (!owner) return false;
+    if (*owner == root) return true;
+    for (const auto& part : song.parts) if (part.id == *owner) return part.parentRegionID == root;
+    return false;
+}
+void synchronizeRegionOwnership(Project& project, const Project* previous) {
+    for (auto& song : project.songs) {
+        const Song* old = nullptr;
+        if (previous) for (const auto& candidate : previous->songs) if (candidate.id == song.id) { old = &candidate; break; }
+        const bool initialize = !song.regionOwnershipInitialized;
+        // Earlier documents persisted nil when an onset was a fraction of a
+        // microsecond before its rounded region start. Repair only that narrow
+        // old boundary case, once at load. Nil within a region remains loose;
+        // subsequent loads must never acquire items covered by a region move.
+        const bool repairRoundedBoundary = !old && !initialize && song.regionOwnershipVersion < regionOwnershipVersion;
+        const auto roundedBoundaryOwner = [&](double position) -> std::optional<ID> {
+            if (!repairRoundedBoundary) return {};
+            const auto owner = regionOwnerAt(song, position);
+            if (!owner) return {};
+            const auto part = std::find_if(song.parts.begin(), song.parts.end(), [&](const auto& value) { return value.id == *owner; });
+            const double gap = part->startTime - position;
+            return gap > 1e-8 && gap <= regionPlacementTolerance ? owner : std::nullopt;
+        };
+        const auto valid = [&](const std::optional<ID>& owner) { return !owner || std::any_of(song.parts.begin(), song.parts.end(), [&](const auto& part) { return part.id == *owner; }); };
+        const auto regionMoved = [&](const std::optional<ID>& owner) {
+            if (!old || !owner) return false;
+            const auto a = std::find_if(old->parts.begin(), old->parts.end(), [&](const auto& p) { return p.id == *owner; });
+            const auto b = std::find_if(song.parts.begin(), song.parts.end(), [&](const auto& p) { return p.id == *owner; });
+            return a != old->parts.end() && b != song.parts.end() && (a->startTime != b->startTime || a->endTime != b->endTime);
+        };
+        std::unordered_map<ID, const AudioClip*> oldClips;
+        std::unordered_map<ID, const TimelineMarker*> oldMarkers;
+        Song created;
+        if (old) {
+            for (const auto& t : old->tracks) for (const auto& c : t.clips) oldClips[c.id] = &c;
+            if (old->markers) for (const auto& m : *old->markers) oldMarkers[m.id] = &m;
+            for (const auto& p : song.parts) if (!p.parentRegionID &&
+                std::none_of(old->parts.begin(), old->parts.end(), [&](const auto& q) { return q.id == p.id; }) &&
+                std::none_of(song.parts.begin(), song.parts.end(), [&](const auto& child) { return child.parentRegionID == p.id; })) created.parts.push_back(p);
+        }
+        for (auto& track : song.tracks) for (auto& clip : track.clips) {
+            // Generated Timecode has an explicit owner even when its edges extend.
+            if (track.role.id == "timecode" && !track.importedTimecodeItems) continue;
+            const auto priorEntry = oldClips.find(clip.id);
+            const AudioClip* prior = priorEntry == oldClips.end() ? nullptr : priorEntry->second;
+            if (initialize || (old && !prior)) clip.regionOwnerID = regionOwnerAt(song, clip.startTime);
+            else if (prior && clip.startTime != prior->startTime && !regionMoved(prior->regionOwnerID)) clip.regionOwnerID = regionOwnerAt(song, clip.startTime);
+            else if (!valid(clip.regionOwnerID)) clip.regionOwnerID.reset();
+            else if (prior && !clip.regionOwnerID) clip.regionOwnerID = regionOwnerAt(created, clip.startTime);
+            else if (!clip.regionOwnerID) clip.regionOwnerID = roundedBoundaryOwner(clip.startTime);
+        }
+        if (song.markers) for (auto& marker : *song.markers) {
+            const auto priorEntry = oldMarkers.find(marker.id);
+            const TimelineMarker* prior = priorEntry == oldMarkers.end() ? nullptr : priorEntry->second;
+            if (marker.unifiedRegionID) marker.regionOwnerID = marker.sourceRegionID ? marker.sourceRegionID : marker.unifiedRegionID;
+            else if (initialize || (old && !prior)) marker.regionOwnerID = regionOwnerAt(song, marker.position);
+            else if (prior && marker.position != prior->position && !regionMoved(prior->regionOwnerID)) marker.regionOwnerID = regionOwnerAt(song, marker.position);
+            else if (!valid(marker.regionOwnerID)) marker.regionOwnerID.reset();
+            else if (prior && !marker.regionOwnerID) marker.regionOwnerID = regionOwnerAt(created, marker.position);
+            else if (!marker.regionOwnerID) marker.regionOwnerID = roundedBoundaryOwner(marker.position);
+        }
+        song.regionOwnershipInitialized = true;
+        song.regionOwnershipVersion = std::max(song.regionOwnershipVersion, regionOwnershipVersion);
+    }
+}
 void orderSpecialTracks(Project& project) {
+    for (auto& song : project.songs) if (song.markers) {
+        std::set<ID> endpoints;
+        for (const auto& part : song.parts) for (const auto& loop : part.multiLoops) { endpoints.insert(loop.marker1); endpoints.insert(loop.marker2); }
+        for (auto& marker : *song.markers) if (!marker.tempoBPM && endpoints.count(marker.id)) { marker.section = true; marker.loopSection = true; }
+    }
     const auto rank = [](const Track& track) {
         return track.role.id == "timecode" ? 0 : track.role.id == "generatedClick" ? 1 : track.role.id == "chords" ? 2 : track.role.id == "teleprompt" ? 3 : track.role.id == "teleprompt2" ? 4 : track.role.id == "video" ? 5 : 6;
     };
@@ -17,9 +103,8 @@ void orderSpecialTracks(Project& project) {
             std::stable_sort(song.tracks.begin(), song.tracks.end(), earlier);
     }
 }
-void validateClipText(const std::string& text, size_t maximum) {
-    // Count Unicode scalars rather than UTF-8 bytes; portable on macOS and Windows.
-    size_t characters = 0;
+void validateClipText(const std::string& text) {
+    // Reject malformed UTF-8 without imposing a character limit.
     for (size_t index = 0; index < text.size();) {
         const auto first = static_cast<unsigned char>(text[index++]);
         unsigned value = first, continuation = 0, minimum = 0;
@@ -35,15 +120,14 @@ void validateClipText(const std::string& text, size_t maximum) {
             value = (value << 6) | (next & 0x3f);
         }
         if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) throw std::invalid_argument("Invalid text encoding");
-        if (++characters > maximum) throw std::invalid_argument(maximum == 30 ? "Chords text must contain at most 30 characters" : "Teleprompter text must contain at most 400 characters");
     }
 }
 void validateClipFXJSON(const std::string& json) {
     const auto first = json.find_first_not_of(" \t\r\n"), last = json.find_last_not_of(" \t\r\n");
-    if (json.empty() || json.size() > 65536 || first == std::string::npos || json[first] != '{' || json[last] != '}')
+    if (json.empty() || json.size() > 32 * 1024 * 1024 || first == std::string::npos || json[first] != '{' || json[last] != '}')
         throw std::invalid_argument("Invalid item FX data");
     // The native bridge parses and canonicalizes JSON before it reaches the core.
-    for (const auto* instrument : {"\"Instruments\"", "\"instrumentID\"", "\"instrumentParameters\"", "\"instrumentBypassed\""})
+    for (const auto* instrument : {"\"instrumentID\"", "\"instrumentParameters\"", "\"instrumentBypassed\""})
         if (json.find(instrument) != std::string::npos) throw std::invalid_argument("Items cannot contain instruments");
     const auto key = json.find("\"inserted\"");
     if (key == std::string::npos) throw std::invalid_argument("Missing item FX selection");
@@ -53,13 +137,14 @@ void validateClipFXJSON(const std::string& json) {
     if (position == std::string::npos || json[position] != '[') throw std::invalid_argument("Invalid item FX selection");
     position = json.find_first_not_of(" \t\r\n", position + 1);
     std::set<std::string> effects;
-    const std::set<std::string> allowed{"EQ", "Compressor", "Pitch", "Delay", "Reverb"};
+    const std::set<std::string> allowed{"EQ", "Compressor", "Pitch", "Delay", "Reverb", "Limiter", "CatStemSeparation 5"};
     while (position != std::string::npos && json[position] != ']') {
         if (json[position] != '"') throw std::invalid_argument("Invalid item FX selection");
         const auto end = json.find('"', position + 1);
         if (end == std::string::npos) throw std::invalid_argument("Invalid item FX selection");
         const auto effect = json.substr(position + 1, end - position - 1);
-        if (!allowed.count(effect) || !effects.insert(effect).second) throw std::invalid_argument("Invalid item FX selection");
+        const bool external = effect.rfind("External:", 0) == 0 && effect.size() > 9 && json.find("\"externalPlugins\"") != std::string::npos;
+        if ((!allowed.count(effect) && !external) || !effects.insert(effect).second) throw std::invalid_argument("Invalid item FX selection");
         position = json.find_first_not_of(" \t\r\n", end + 1);
         if (position == std::string::npos || (json[position] != ',' && json[position] != ']')) throw std::invalid_argument("Invalid item FX selection");
         if (json[position] == ',') {
@@ -136,11 +221,6 @@ void validate(const Project& p) {
     auto finite = [](double x) { return std::isfinite(x); };
     require(p.projectFormatVersion == 1 && p.minimumJarasVersion == "1.0.0", "Unsupported project version");
     require(!p.id.empty() && !p.name.empty(), "Missing project identity");
-    size_t trackCount = 0;
-    for (const auto& song : p.songs) {
-        trackCount += song.tracks.size();
-        require(trackCount <= Project::maximumTrackCount, "A project supports at most 1000 tracks");
-    }
     auto validatePatch = [&](const OutputPatch& patch, bool masterAllowed, bool groupAllowed = false, bool noneAllowed = false) {
         if (patch.channelCount == 2 && ((noneAllowed && patch.firstChannel == -1) || (groupAllowed && patch.firstChannel == -2))) return;
         require(patch.firstChannel >= (masterAllowed ? 0 : 1) && patch.firstChannel <= 1024 &&
@@ -148,6 +228,8 @@ void validate(const Project& p) {
                 (patch.firstChannel != 0 || patch.channelCount == 2), "Invalid output patch");
     };
     require(!p.masterColor || *p.masterColor <= 0xffffff, "Invalid master color");
+    require(!p.savedCursor || (finite(p.savedCursor->position) && p.savedCursor->position >= 0), "Invalid saved cursor position");
+    require(finite(p.masterPan) && p.masterPan >= -1 && p.masterPan <= 1, "Invalid master pan");
     require(finite(p.masterVolume) && p.masterVolume >= 0 && p.masterVolume <= std::pow(10.0, 12.0 / 20.0), "Invalid master volume");
     if (p.masterPatch) validatePatch(*p.masterPatch, false, false, true);
     if (p.masterSecondaryPatch) validatePatch(*p.masterSecondaryPatch, false, false, true);
@@ -161,10 +243,16 @@ void validate(const Project& p) {
         require(finite(s.duration) && s.duration > 0 && finite(s.bpm) && s.bpm > 0, "Invalid song timing");
         require(s.beatsPerBar >= 1 && s.beatsPerBar <= 32 && s.beatUnit >= 1 && s.beatUnit <= 64 && (s.beatUnit & (s.beatUnit - 1)) == 0, "Invalid time signature");
         require(!s.timeSettings || validProjectTimeSettings(*s.timeSettings), "Invalid project timebase");
-        std::optional<ID> folder;
+        std::vector<ID> ancestors;
+        std::set<ID> audioTracks;
+        for (const auto& t : s.tracks) if (fixedTrackName(t.role).empty()) audioTracks.insert(t.id);
         for (const auto& t : s.tracks) {
-            if (t.parentTrackID) require(folder && *folder == *t.parentTrackID && t.id != *folder, "Invalid track group");
-            else folder = t.id;
+            if (t.parentTrackID) {
+                const auto parent = std::find(ancestors.begin(), ancestors.end(), *t.parentTrackID);
+                require(parent != ancestors.end() && t.id != *t.parentTrackID && audioTracks.count(*t.parentTrackID), "Invalid track group");
+                ancestors.erase(parent + 1, ancestors.end());
+            } else ancestors.clear();
+            ancestors.push_back(t.id);
             unique(t.id);
             const auto fixed = fixedTrackName(t.role);
             require(fixed.empty() || ((t.name == fixed || (t.role.id == "teleprompt" && t.name == "Teleprompter")) && (!t.solo || t.role.id == "video" || t.role.id == "generatedClick") && !t.parentTrackID), "Invalid special track");
@@ -194,6 +282,7 @@ void validate(const Project& p) {
                 require((tc.mode == "mtc" || tc.mode == "ltc") && (tc.frameRate == 24 || tc.frameRate == 25 || tc.frameRate == 29.97 || tc.frameRate == 30) && finite(tc.offset) && tc.offset >= 0 && tc.offset < 86400, "Invalid timecode settings");
             }
             require(!t.color || *t.color <= 0xffffff, "Invalid track color");
+            require(!t.heightScale || (finite(*t.heightScale) && *t.heightScale >= 0.1 && *t.heightScale <= 10), "Invalid track height");
             require(!t.midiChannel || (*t.midiChannel >= 1 && *t.midiChannel <= 16), "Invalid MIDI channel");
             require(!t.midiInput || (*t.midiInput >= 1 && *t.midiInput <= 3), "Invalid MIDI input");
             if (t.inputPatch) validatePatch(*t.inputPatch, false);
@@ -216,7 +305,7 @@ void validate(const Project& p) {
             require(!t.clickSound || t.role.id == "generatedClick", "Custom click sound requires a Click track");
             if (t.clickSound) files.push_back(*t.clickSound);
             for (const auto& clip : t.clips) {
-                require((clip.frozenMIDI != true && clip.renderedTiming != true) || (fixed.empty() && clip.audioFile && !clip.midi), "Printed timing requires an audio item");
+                require((clip.frozenMIDI != true && clip.renderedTiming != true && clip.renderedTempo != true) || (fixed.empty() && clip.audioFile && !clip.midi), "Printed timing requires an audio item");
                 if(clip.midi) {
                     const auto& m=*clip.midi;
                     require(fixed.empty() && !clip.audioFile && !clip.text && !clip.loopLength, "MIDI items require an instrument track");
@@ -228,15 +317,14 @@ void validate(const Project& p) {
                         require(!n.id.empty() && noteIDs.insert(n.id).second && finite(n.start) && finite(n.length) && n.start>=0 && n.length>0 && n.start+n.length<=10000000 && n.pitch>=0 && n.pitch<=127 && n.velocity>=1 && n.velocity<=127 && n.channel>=1 && n.channel<=16, "Invalid MIDI note");
                     }
                 }
-                require(t.role.id != "generatedClick" || !clip.audioFile, "Click items use the built-in sound");
+                require(t.role.id != "generatedClick" || !clip.audioFile || clip.audioFile->path.rfind("Videos/", 0) == 0, "Click items use the built-in sound");
                 require(!clip.text || textTrack, "Text items require a Teleprompter or Chords track");
-                if (clip.text) validateClipText(*clip.text, t.role.id == "chords" ? 30 : 400);
+                if (clip.text) validateClipText(*clip.text);
                 const bool media = clip.audioFile && clip.audioFile->path.rfind("Videos/", 0) == 0;
-                require(!media || t.role.id == "video" || isTeleprompterRole(t.role), "Videos require a Video or Teleprompter track");
-                if (isTeleprompterRole(t.role) && media) require(!clip.text && !clip.gain && !clip.muted && clip.waveform.empty() && clip.waveformChannels.empty() && !clip.loopStart && !clip.loopLength, "Teleprompter media cannot contain audio controls");
-                else require(!textTrack || (!clip.audioFile && !clip.gain && !clip.muted && clip.waveform.empty() && clip.waveformChannels.empty() && clip.sourceOffset == 0 && !clip.loopStart && !clip.loopLength), "Text items cannot contain audio");
-                require(!clip.fxJSON || fixed.empty(), "Item FX requires an audio track");
-                require(!clip.fxBypassed || fixed.empty(), "Item FX requires an audio track");
+                // Text can retain source timing for its visual repeat seams, without audio.
+                require(!textTrack || media || (!clip.audioFile && !clip.gain && !clip.muted && clip.waveform.empty() && clip.waveformChannels.empty() && (clip.loopLength || (clip.sourceOffset == 0 && !clip.loopStart))), "Text items cannot contain audio");
+                require(!clip.fxJSON || fixed.empty() || media, "Item FX requires an audio item");
+                require(!clip.fxBypassed || fixed.empty() || media, "Item FX requires an audio item");
                 if (clip.fxJSON) validateClipFXJSON(*clip.fxJSON);
                 if (clip.timecode) {
                     const auto& tc = *clip.timecode;
@@ -244,17 +332,20 @@ void validate(const Project& p) {
                 }
                 require(!clip.timecodeStartOffset || (finite(*clip.timecodeStartOffset) && t.role.id == "timecode"), "Invalid Timecode start span");
                 require(!clip.timecodeEndOffset || (finite(*clip.timecodeEndOffset) && t.role.id == "timecode"), "Invalid Timecode end span");
-                require(t.role.id != "timecode" || (!clip.loopStart && !clip.loopLength), "Timecode items cannot repeat their source");
+                require(t.role.id != "timecode" || media || (!clip.loopStart && !clip.loopLength), "Timecode items cannot repeat their source");
                 if (clip.audioFile) files.push_back(*clip.audioFile);
                 require(!clip.loopStart || (finite(*clip.loopStart) && *clip.loopStart >= 0), "Invalid loop start");
                 require(!clip.loopLength || (finite(*clip.loopLength) && *clip.loopLength > 0), "Invalid loop length");
+                require(!clip.pan || (finite(*clip.pan) && *clip.pan >= -1 && *clip.pan <= 1), "Invalid item pan");
                 require(!clip.gain || (finite(*clip.gain) && *clip.gain >= 0), "Invalid clip gain");
                 require(!clip.channelMode || (*clip.channelMode >= 0 && *clip.channelMode <= 3), "Invalid item channel mode");
                 require((!clip.fadeIn || (finite(*clip.fadeIn) && *clip.fadeIn >= 0)) && (!clip.fadeOut || (finite(*clip.fadeOut) && *clip.fadeOut >= 0)), "Invalid item fade");
+                require(!clip.pitchSemitones || (finite(*clip.pitchSemitones) && *clip.pitchSemitones >= -12 && *clip.pitchSemitones <= 12), "Invalid item pitch");
                 require(!clip.normalizationGain || (finite(*clip.normalizationGain) && *clip.normalizationGain >= 0 && *clip.normalizationGain <= std::pow(10.0, 24.0 / 20.0)), "Invalid normalization gain");
                 unique(clip.id);
                 require(finite(clip.startTime) && finite(clip.duration) && clip.startTime >= 0 && clip.duration > 0 && clip.startTime + clip.duration <= s.duration, "Invalid clip interval");
                 require(finite(clip.playbackRate) && clip.playbackRate >= 1.0/32 && clip.playbackRate <= 32, "Invalid clip playback rate");
+                require(!clip.tempoBasePlaybackRate || (finite(*clip.tempoBasePlaybackRate) && *clip.tempoBasePlaybackRate >= 1.0/32 && *clip.tempoBasePlaybackRate <= 32), "Invalid tempo playback reference");
                 require(finite(clip.sourceOffset) && clip.sourceOffset >= 0, "Invalid source offset");
                 for (const auto& channel : clip.waveformChannels) for (double peak : channel) require(finite(peak) && peak >= 0 && peak <= 1, "Invalid channel waveform");
                 for (double peak : clip.waveform) require(finite(peak) && peak >= 0 && peak <= 1, "Invalid waveform peak");
@@ -290,7 +381,7 @@ void validate(const Project& p) {
                 std::set<ID> targets;
                 for (const auto& track : loop.tracks) require(targets.insert(track.id).second && finite(track.gain) && track.gain >= 0 && track.gain <= std::pow(10.0, 12.0 / 20.0), "Invalid multiloop track");
             }
-            require(!part.pitchSemitones || (*part.pitchSemitones >= -6 && *part.pitchSemitones <= 6), "Invalid region pitch");
+            require(!part.pitchSemitones || (*part.pitchSemitones >= -12 && *part.pitchSemitones <= 12), "Invalid region pitch");
             unique(part.id);
             if (!part.parentRegionID) { regionEdges.emplace_back(part.startTime, 1); regionEdges.emplace_back(part.endTime, -1); }
             else {
@@ -318,7 +409,8 @@ void synchronizeTimecode(Project& project) {
         previous.reserve(track.clips.size());
         for (auto& clip : track.clips) { const auto id = clip.id; previous.emplace(id, std::move(clip)); }
         track.clips.clear();
-        track.clips.reserve(song.parts.size());
+        track.clips.reserve(song.parts.size() + previous.size());
+        for (auto& entry : previous) if (entry.second.audioFile) track.clips.push_back(std::move(entry.second));
         for (const auto& part : song.parts) {
             if (part.parentRegionID) continue;
             ID id = part.id;
@@ -328,9 +420,10 @@ void synchronizeTimecode(Project& project) {
                 id[0] = "0123456789ABCDEF"[value];
             } else id += "-timecode";
             AudioClip clip;
-            if (auto existing = previous.find(id); existing != previous.end()) clip = std::move(existing->second);
+            if (auto existing = previous.find(id); existing != previous.end() && !existing->second.audioFile) clip = std::move(existing->second);
             clip.id = std::move(id);
             clip.name = "TIMECODE";
+            clip.regionOwnerID = part.id;
             clip.startTime = std::max(0.0, part.startTime + clip.timecodeStartOffset.value_or(0));
             const double end = std::max(clip.startTime + 0.01, part.endTime + clip.timecodeEndOffset.value_or(0));
             clip.duration = end - clip.startTime;

@@ -9,6 +9,20 @@ import AppKit
     func event(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat = 1, flags: NSEvent.ModifierFlags = []) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: y), modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
     }
+    view.mouseEntered(with: event(.mouseMoved, 8))
+    precondition(NSCursor.current == .resizeLeftRight, "region left edge advertises resizing")
+    view.mouseMoved(with: event(.mouseMoved, 110))
+    precondition(NSCursor.current == .arrow, "moving from an edge into the same region restores the arrow")
+    view.mouseMoved(with: event(.mouseMoved, 212))
+    precondition(NSCursor.current == .resizeLeftRight, "region right edge advertises resizing")
+    view.mouseExited(with: event(.mouseMoved, 225))
+    precondition(NSCursor.current == .arrow, "leaving the region cannot retain its resize cursor")
+    view.mouseMoved(with: event(.mouseMoved, 225))
+    precondition(NSCursor.current == .arrow, "outside points are not region resize handles")
+    view.resizable = false
+    view.mouseMoved(with: event(.mouseMoved, 8))
+    precondition(NSCursor.current == .arrow, "non-resizable regions never advertise resizing")
+    view.resizable = true
     var original: [(CGFloat, Bool, Int)] = [], replacement: [(CGFloat, Bool, Int)] = []
     view.drag = { original.append(($0, $1, $2)) }
     // Grab beside the cap and above its painted band; keep the captured edge
@@ -73,6 +87,13 @@ import AppKit
     view.mouseUp(with: event(.leftMouseUp, 110, flags: .option))
     precondition(deletes == 1, "cancelled Option clicks cannot delete")
     deletes = 0
+    var exports = 0
+    view.exportAudio = { exports += 1 }
+    let exportMenu = view.regionMenu()
+    let exportItem = exportMenu.items.first { $0.action == NSSelectorFromString("exportAudioSelected") }!
+    NSApp.sendAction(exportItem.action!, to: exportItem.target, from: exportItem)
+    precondition(exports == 1, "Export menu dispatches exactly once")
+    view.exportAudio = nil
     let menu = view.regionMenu()
     precondition(menu.items.count == 2, "normal regions offer edit and delete before opening an editor")
     for item in menu.items { NSApp.sendAction(item.action!, to: item.target, from: item) }

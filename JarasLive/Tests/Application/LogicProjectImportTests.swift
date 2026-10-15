@@ -3,6 +3,25 @@ import XCTest
 @testable import JarasApplication
 
 final class LogicProjectImportTests: XCTestCase {
+    func testMigrationCreatesIndependentFoldersForRepeatedImportsAndEmptyProjects() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let existing = root.appendingPathComponent("Existing.jl")
+        try ProjectDocumentCodec.write(.empty(name: "Existing"), to: existing)
+        let selected = root.appendingPathComponent("Imported.jl")
+        let first = ProjectMigration.isolatedDestination(for: selected)
+        XCTAssertEqual(first, root.appendingPathComponent("Imported/Imported.jl"))
+        let result = ProjectMigration.Result(project: .empty(name: "Imported"), media: [], warnings: [])
+        try ProjectMigration.save(result, to: first)
+        let second = ProjectMigration.isolatedDestination(for: selected)
+        XCTAssertEqual(second, root.appendingPathComponent("Imported-001/Imported.jl"))
+        try ProjectMigration.save(result, to: second)
+        XCTAssertTrue(fm.fileExists(atPath: existing.path))
+        XCTAssertEqual(try ProjectDocumentCodec.decode(Data(contentsOf: first)), result.project)
+        XCTAssertEqual(try ProjectDocumentCodec.decode(Data(contentsOf: second)), result.project)
+    }
     private func put(_ value: UInt64, in data: inout Data, at offset: Int, width: Int = 4) {
         for byte in 0..<width { data[offset + byte] = UInt8(truncatingIfNeeded: value >> (8 * byte)) }
     }
@@ -48,6 +67,7 @@ final class LogicProjectImportTests: XCTestCase {
         text("Trimmed guitar", in: &region, at: 74)
         records.append(record("gRuA", body: region, kind: 11))
         var event = Data(count: 80); event[0] = 0x24
+        event[53] = UInt8(bitPattern: -5); event[50] = 25
         put(34560 + 8 * 960, in: &event, at: 4)
         put(0x100, in: &event, at: 12)
         put(2, in: &event, at: 20)
@@ -70,6 +90,65 @@ final class LogicProjectImportTests: XCTestCase {
         data.append(records); try data.write(to: alternative.appendingPathComponent("ProjectData"))
         return bundle
     }
+    func testDeclaredActiveAlternativeMustExistAndMatchExactly() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundle = try fixture(directory, active: "002")
+        let information = bundle.appendingPathComponent("Resources/ProjectInformation.plist")
+        func active(_ value: Any) throws {
+            try PropertyListSerialization.data(fromPropertyList: ["ActiveVariant": value], format: .binary, options: 0).write(to: information)
+        }
+        for value: Any in [2, "2", "002"] {
+            try active(value)
+            XCTAssertNoThrow(try LogicProjectImporter.read(bundle))
+        }
+        for value: Any in [7, "007", "missing", 2.5, true, [2]] {
+            try active(value)
+            XCTAssertThrowsError(try LogicProjectImporter.read(bundle), "An invalid declared alternative must not read the first available arrangement")
+        }
+        let other = bundle.appendingPathComponent("Alternatives/000")
+        try FileManager.default.copyItem(at: bundle.appendingPathComponent("Alternatives/002"), to: other)
+        try Data("deliberately invalid unrelated arrangement".utf8).write(to: other.appendingPathComponent("ProjectData"))
+        try active(2)
+        XCTAssertNoThrow(try LogicProjectImporter.read(bundle), "The selected valid arrangement must win over the first folder")
+    }
+
+    func testNonnumericAlternativeNamesNeverMatchFailedIntegerConversions() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundle = try fixture(directory)
+        let information = bundle.appendingPathComponent("Resources/ProjectInformation.plist")
+        try FileManager.default.moveItem(at: bundle.appendingPathComponent("Alternatives/000"), to: bundle.appendingPathComponent("Alternatives/Main"))
+        try FileManager.default.copyItem(at: bundle.appendingPathComponent("Alternatives/Main"), to: bundle.appendingPathComponent("Alternatives/Backup"))
+        try Data("do not read the backup".utf8).write(to: bundle.appendingPathComponent("Alternatives/Backup/ProjectData"))
+        try PropertyListSerialization.data(fromPropertyList: ["ActiveVariant": "Main"], format: .binary, options: 0).write(to: information)
+        XCTAssertNoThrow(try LogicProjectImporter.read(bundle))
+        try PropertyListSerialization.data(fromPropertyList: ["ActiveVariant": "Missing"], format: .binary, options: 0).write(to: information)
+        XCTAssertThrowsError(try LogicProjectImporter.read(bundle)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("active project alternative was not found"))
+        }
+    }
+
+    func testMissingActiveSelectionIsAllowedOnlyForOneUnambiguousAlternative() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundle = try fixture(directory)
+        let information = bundle.appendingPathComponent("Resources/ProjectInformation.plist")
+        try FileManager.default.removeItem(at: information)
+        XCTAssertNoThrow(try LogicProjectImporter.read(bundle))
+        try PropertyListSerialization.data(fromPropertyList: [String: String](), format: .binary, options: 0).write(to: information)
+        XCTAssertNoThrow(try LogicProjectImporter.read(bundle))
+        try Data("corrupt project information".utf8).write(to: information)
+        XCTAssertThrowsError(try LogicProjectImporter.read(bundle), "Corrupt metadata must not be erased as though it was missing")
+        try PropertyListSerialization.data(fromPropertyList: ["not a dictionary"], format: .binary, options: 0).write(to: information)
+        XCTAssertThrowsError(try LogicProjectImporter.read(bundle))
+        try FileManager.default.removeItem(at: information)
+        try FileManager.default.copyItem(at: bundle.appendingPathComponent("Alternatives/000"), to: bundle.appendingPathComponent("Alternatives/001"))
+        XCTAssertThrowsError(try LogicProjectImporter.read(bundle)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("without an active selection"))
+        }
+    }
+
     func testOfflineMigrationRoundTripAndRecoveryPreserveGrid() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -79,7 +158,11 @@ final class LogicProjectImportTests: XCTestCase {
         var openedProject = result.project
         GlobalProjectTiming(bpm: 200).applyOnOpen(to: &openedProject)
         XCTAssertEqual(openedProject, result.project, "global timing cannot move imported clips or markers")
-        XCTAssertFalse(openedProject.songs[0].tempoMarkersAffectAudio)
+        XCTAssertEqual(openedProject.songs[0].projectTime.timebase, .relative)
+        for track in openedProject.songs[0].tracks { for clip in track.clips {
+            XCTAssertTrue(openedProject.songs[0].tempoAudioSegments(clip).allSatisfy { abs($0.audioRate - clip.audioRate) < 1e-9 },
+                          "Imported tempo markers preserve the recorded audio until explicitly edited")
+        } }
         let destination = directory.appendingPathComponent("Migrated.jl")
         try LogicProjectImporter.save(result, to: destination)
         let loaded = try await ProjectStore(url: destination).load()
@@ -89,6 +172,7 @@ final class LogicProjectImportTests: XCTestCase {
         let clip = try XCTUnwrap(song.tracks[1].clips.first)
         XCTAssertEqual(clip.startTime, 6, accuracy: 0.000001) // 4 beats at 60 + 4 at 120.
         XCTAssertEqual(clip.duration, 10)
+        XCTAssertEqual(clip.pitchSemitones, -4.75)
         XCTAssertEqual(clip.sourceOffset, 1)
         XCTAssertEqual(clip.muted, true)
         XCTAssertEqual(song.parts[0].name, "Introduction")

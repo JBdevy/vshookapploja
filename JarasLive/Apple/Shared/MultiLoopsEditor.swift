@@ -3,6 +3,7 @@ import SwiftUI
 struct MultiLoopsEditor: View {
     @ObservedObject var show: ShowController
     let regionID: UUID
+    var close: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var stage = 0
     @State private var name = ""
@@ -30,14 +31,19 @@ struct MultiLoopsEditor: View {
             Divider()
             HStack {
                 Button(stage == 0 ? "Close" : "Cancel") {
-                    if stage == 0 { dismiss() } else { stage = 0; draft = nil }
+                    if stage == 0 { if let close { close() } else { dismiss() } } else { stage = 0; draft = nil }
                 }.keyboardShortcut(.cancelAction)
                 Spacer()
                 if stage == 1 { Button("Next", action: acceptName).keyboardShortcut(.defaultAction) }
                 if stage == 2 { Button("OK", action: acceptMarkers).keyboardShortcut(.defaultAction).disabled(!validPair) }
                 if stage == 3 { Button("Save") { if let draft { commit(draft) } }.keyboardShortcut(.defaultAction) }
             }
-        }.padding(20).frame(width: 660, height: 490)
+        }.padding(20)
+            #if os(macOS)
+            .frame(width: 660, height: 490)
+            #else
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #endif
             .alert("A multiloop cannot exist inside another multiloop.", isPresented: $pairWarning) {
                 Button("OK", role: .cancel) { pairWarning = false }
             }
@@ -58,7 +64,10 @@ struct MultiLoopsEditor: View {
                 LazyVStack {
                     ForEach(loops) { loop in
                         HStack {
-                            Text(loop.name).lineLimit(1).opacity(bypassed ? 0.45 : 1)
+                            flag(loop.isEnabled ? "On" : "Off", active: loop.isEnabled, color: JarasTheme.green) {
+                                var next = loop; next.enabled = !loop.isEnabled; commit(next)
+                            }.help("Enable multiloop").disabled(bypassed)
+                            Text(loop.name).lineLimit(1).opacity(bypassed || !loop.isEnabled ? 0.45 : 1)
                             if bypassed { Text("Bypass").font(.caption).foregroundStyle(.secondary) }
                             Spacer()
                             Button("Markers") { draft = loop; name = loop.name; first = loop.marker1; second = loop.marker2; stage = 2 }
@@ -157,6 +166,8 @@ struct MultiLoopsEditor: View {
         VStack(alignment: .leading) {
             Text(loop.name).font(.headline)
             HStack {
+                flag("M/S", active: loop.usesMixer, color: .yellow) { draft?.mixerEnabled = !loop.usesMixer }
+                    .help("Apply saved mute and solo settings")
                 Text("Auto Fader")
                 Button("−") { draft?.fadeSeconds = max(1, loop.fadeSeconds - 1) }.disabled(loop.fadeSeconds <= 1)
                 Text("\(Int(loop.fadeSeconds))s").monospacedDigit().frame(width: 32)
@@ -182,7 +193,7 @@ struct MultiLoopsEditor: View {
         }.padding(.vertical, 5)
     }
     private func flag(_ label: String, active: Bool, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Text(label).font(.caption.bold()).padding(5).background(active ? color : Color.white.opacity(0.1)).foregroundStyle(active ? .black : .white).cornerRadius(3) }.buttonStyle(.plain)
+        Button(action: action) { Text(LocalizedStringKey(label)).font(.caption.bold()).padding(5).background(active ? color : Color.white.opacity(0.1)).foregroundStyle(active ? .black : .white).cornerRadius(3) }.buttonStyle(.plain)
     }
     private func change(_ id: UUID, edit: (inout MultiLoopTrack) -> Void) {
         guard var next = draft, let i = next.tracks.firstIndex(where: { $0.id == id }) else { return }

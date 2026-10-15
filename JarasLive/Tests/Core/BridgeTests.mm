@@ -34,7 +34,13 @@ int main(int argc,char**argv){@autoreleasepool{
     NSDictionary* original=[NSJSONSerialization JSONObjectWithData:input options:0 error:&error];
     NSDictionary* snapshot=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     expect(equalJSON(original,snapshot[@"project"]),"bridge round trip preserves all fields and clips");
+    expect([snapshot[@"project"][@"songs"][0][@"regionOwnershipVersion"] intValue] == 2,
+           "native snapshots retain versioned region ownership so loose items are not migrated again");
     expectMetadataSnapshot(core,snapshot);
+    expect([core executeCommand:@"toggleMultiLoopBypass" target:nil value:0 error:&error], "global bypass command reaches engine");
+    NSDictionary* bypassState=[NSJSONSerialization JSONObjectWithData:[core playbackSnapshotWithError:&error] options:0 error:&error];
+    expect([bypassState[@"transport"][@"multiLoopsBypassed"] boolValue], "global bypass reaches playback snapshot");
+    expect([core executeCommand:@"toggleMultiLoopBypass" target:nil value:0 error:&error], "global bypass can be restored");
     expect([core executeCommand:@"solo" target:nil value:0 error:&error], "Master solo is a native mixer command");
     NSString* phaseTrack=original[@"songs"][0][@"tracks"][0][@"id"];
     expect([core executeCommand:@"phase" target:nil value:0 error:&error],"Master phase command");
@@ -66,11 +72,27 @@ int main(int argc,char**argv){@autoreleasepool{
     stopList[@"stopAtRegionEnd"] = @YES;
     stopList[@"prepareWithoutPlayback"] = @YES;
     stopList[@"automaticSubplay"] = @YES; stopList[@"automaticSubplaySeconds"] = @3;
+    stopList[@"autoUntilBlockEnd"] = @YES;
+    stopList[@"liveEnabled"] = @NO;
     expect([core configureRegionSetlistData:[NSJSONSerialization dataWithJSONObject:stopList options:0 error:&error] error:&error], "enable region Stop through bridge");
     NSDictionary* stopSnapshot = [NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     expect([stopSnapshot[@"project"][@"regionSetlist"][@"automaticSubplay"] boolValue] && [stopSnapshot[@"project"][@"regionSetlist"][@"automaticSubplaySeconds"] doubleValue] == 3, "automatic subplay settings survive native serialization");
     expect([stopSnapshot[@"project"][@"regionSetlist"][@"prepareWithoutPlayback"] boolValue], "prepare without playback survives native serialization");
     expect([stopSnapshot[@"project"][@"regionSetlist"][@"stopAtRegionEnd"] boolValue], "region Stop survives native serialization");
+    expect([stopSnapshot[@"project"][@"regionSetlist"][@"autoUntilBlockEnd"] boolValue], "block queue limit survives native serialization");
+    expect([stopSnapshot[@"project"][@"regionSetlist"][@"liveEnabled"] isEqual:@NO] &&
+           equalJSON(stopSnapshot[@"project"][@"regionSetlist"][@"playedLiveRegionIDs"], original[@"regionSetlist"][@"playedLiveRegionIDs"]),
+           "disabling Live preserves the portable played-region history");
+    expect([core loadProjectData:[NSJSONSerialization dataWithJSONObject:stopSnapshot[@"project"] options:0 error:&error] error:&error], "reload project with enabled block queue limit");
+    NSDictionary* blockReloaded = [NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
+    expect([blockReloaded[@"project"][@"regionSetlist"][@"autoUntilBlockEnd"] boolValue], "enabled block queue limit survives project save and reload");
+    stopList[@"autoUntilBlockEnd"] = @NO;
+    expect([core configureRegionSetlistData:[NSJSONSerialization dataWithJSONObject:stopList options:0 error:&error] error:&error], "disable block queue limit explicitly");
+    NSDictionary* blockDisabled = [NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
+    expect(![blockDisabled[@"project"][@"regionSetlist"][@"autoUntilBlockEnd"] boolValue], "explicit false disables the block queue limit");
+    expect([core loadProjectData:[NSJSONSerialization dataWithJSONObject:blockDisabled[@"project"] options:0 error:&error] error:&error], "reload project with disabled block queue limit");
+    blockReloaded = [NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
+    expect(![blockReloaded[@"project"][@"regionSetlist"][@"autoUntilBlockEnd"] boolValue], "disabled block queue limit stays disabled after reload");
     expect([core configureRegionSetlistData:[NSJSONSerialization dataWithJSONObject:original[@"regionSetlist"] options:0 error:&error] error:&error], "restore disabled region Stop");
     NSString* midiTrack=original[@"songs"][0][@"tracks"][0][@"id"];
     expect([core setMIDIInput:midiTrack slot:2 error:&error],"select MIDI slot");
@@ -80,12 +102,22 @@ int main(int argc,char**argv){@autoreleasepool{
     expect([core setMIDIInput:midiTrack slot:0 error:&error],"clear MIDI slot");
     snapshot=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     expect(snapshot[@"project"][@"songs"][0][@"tracks"][0][@"midiInput"]==nil,"cleared MIDI slot absent");
+    expect([core setInputMonitoring:midiTrack enabled:NO error:&error], "disable live audio monitoring");
+    NSDictionary* monitorState=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
+    expect([monitorState[@"project"][@"songs"][0][@"tracks"][0][@"inputMonitoring"] isEqual:@NO], "Monitor Off persists independently of record mode");
+    expect([core setInputMonitoring:midiTrack enabled:YES error:&error], "enable live audio monitoring");
     expect([core executeCommand:@"play" target:nil value:0 error:&error],"main play");
     [core executeCommand:@"subSeek" target:nil value:20 error:&error]; [core executeCommand:@"subPlay" target:nil value:0 error:&error]; [core advance:2];
     NSDictionary* playback=[NSJSONSerialization JSONObjectWithData:[core playbackSnapshotWithError:&error] options:0 error:&error];
     expect([playback[@"transport"][@"position"] doubleValue]==2,"main position");
     expect([playback[@"transport"][@"subPlay"][@"position"] doubleValue]==22,"secondary independent position");
     NSString* gainClipID=original[@"songs"][0][@"tracks"][0][@"clips"][0][@"id"];
+    expect([core executeCommand:@"clipPitch" target:gainClipID value:-7.25 error:&error],"set item pitch without transport reset");
+    snapshot=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
+    expect([snapshot[@"project"][@"songs"][0][@"tracks"][0][@"clips"][0][@"pitchSemitones"] doubleValue]==-7.25,"item pitch reaches bridge snapshot");
+    expect(equalJSON(snapshot[@"transport"],playback[@"transport"]),"item pitch preserves live transport");
+    expect(![core executeCommand:@"clipPitch" target:gainClipID value:13 error:&error],"reject out of range item pitch");
+    expect([core executeCommand:@"clipPitch" target:gainClipID value:0 error:&error],"reset item pitch");
     expect([core executeCommand:@"clipGain" target:gainClipID value:0.25 error:&error],"set item gain without project serialization");
     snapshot=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     expect([snapshot[@"project"][@"songs"][0][@"tracks"][0][@"clips"][0][@"gain"] doubleValue]==0.25,"item gain reaches bridge snapshot");
@@ -147,6 +179,8 @@ int main(int argc,char**argv){@autoreleasepool{
     NSDictionary* tempoSnapshot=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     NSDictionary* tempoMarker=[tempoSnapshot[@"project"][@"songs"][0][@"markers"] lastObject];
     expect([tempoMarker[@"tempoBPM"] doubleValue]==180 && [tempoMarker[@"tempoBeats"] intValue]==3 && [tempoMarker[@"tempoUnit"] intValue]==8, "tempo marker BPM and meter survive bridge snapshot");
+    NSString* tempoOwner=tempoSnapshot[@"project"][@"songs"][0][@"parts"][0][@"id"];
+    expect([tempoMarker[@"regionOwnerID"] isEqual:tempoOwner], "manual tempo creation persists its region owner through the bridge");
     expect(equalJSON(snapshot[@"transport"],tempoSnapshot[@"transport"]), "tempo marker preserves both playback heads");
     expect([tempoMarker[@"tempoTimebase"] isEqual:@"global"], "new tempo marker follows global timebase");
     expect(![core setTempoMarker:tempoID position:8 bpm:301 beats:3 unit:8 timebase:@"global" error:&error], "reject out-of-range marker tempo");
@@ -177,6 +211,8 @@ int main(int argc,char**argv){@autoreleasepool{
     detectedTempo[@"tempoReferenceBPM"] = @120;
     NSData* detectedBatch = [NSJSONSerialization dataWithJSONObject:@[detectedTempo] options:0 error:&error];
     expect([core setTempoMarkers:detectedBatch error:&error], "detected marker batch accepts original tempo reference");
+    NSDictionary* batchTempoSnapshot=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
+    expect([[[batchTempoSnapshot[@"project"][@"songs"][0][@"markers"] lastObject] objectForKey:@"regionOwnerID"] isEqual:tempoOwner], "batch tempo edit retains the existing region owner before another single-marker edit");
     expect([core setTempoMarker:tempoID position:8 bpm:240 beats:4 unit:4 timebase:@"global" error:&error], "detected BPM remains editable");
     tempoSnapshot=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     NSDictionary* editedDetected = [tempoSnapshot[@"project"][@"songs"][0][@"markers"] lastObject];
@@ -186,6 +222,16 @@ int main(int argc,char**argv){@autoreleasepool{
     expect([tempoCore loadProjectData:tempoData error:&error], "reload tempo marker metadata");
     NSDictionary* tempoReloaded=[NSJSONSerialization JSONObjectWithData:[tempoCore snapshotWithError:&error] options:0 error:&error];
     expect(equalJSON(tempoSnapshot[@"project"],tempoReloaded[@"project"]), "tempo map project round trip");
+    NSMutableDictionary* looseTempoProject=[NSJSONSerialization JSONObjectWithData:tempoData options:NSJSONReadingMutableContainers error:&error];
+    NSMutableDictionary* looseTempo=[looseTempoProject[@"songs"][0][@"markers"] lastObject];
+    [looseTempo removeObjectForKey:@"regionOwnerID"];
+    looseTempoProject[@"songs"][0][@"regionOwnershipInitialized"]=@YES;
+    JarasCoreBridge* looseTempoCore=[JarasCoreBridge new];
+    expect([looseTempoCore loadProjectData:[NSJSONSerialization dataWithJSONObject:looseTempoProject options:0 error:&error] error:&error], "load a tempo explicitly persisted without region ownership");
+    looseTempo[@"tempoBPM"]=@230;
+    expect([looseTempoCore setTempoMarkers:[NSJSONSerialization dataWithJSONObject:@[looseTempo] options:0 error:&error] error:&error], "edit an imported loose tempo in place through the batch bridge");
+    NSDictionary* looseTempoSnapshot=[NSJSONSerialization JSONObjectWithData:[looseTempoCore snapshotWithError:&error] options:0 error:&error];
+    expect(![[looseTempoSnapshot[@"project"][@"songs"][0][@"markers"] lastObject] objectForKey:@"regionOwnerID"], "initialized imported nil ownership is preserved instead of inferred from overlap");
     NSString* correctedTempoID = NSUUID.UUID.UUIDString;
     NSDictionary* correctedTempo = @{@"id":correctedTempoID,@"name":@"TEMPO",@"position":@7.9,@"tempoBPM":@140,@"tempoBeats":@4,@"tempoUnit":@4,@"tempoTimebase":@"global",@"tempoReferenceBPM":@140};
     NSData* correctedData = [NSJSONSerialization dataWithJSONObject:@[correctedTempo] options:0 error:&error];
@@ -194,6 +240,7 @@ int main(int argc,char**argv){@autoreleasepool{
     NSArray* correctedMarkers = correctedSnapshot[@"project"][@"songs"][0][@"markers"];
     expect(![correctedMarkers filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"id == %@", tempoID]].count, "wrong marker is gone");
     expect([correctedMarkers filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"id == %@", correctedTempoID]].count == 1, "one corrected marker exists");
+    expect([[[correctedMarkers filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"id == %@", correctedTempoID]] firstObject][@"regionOwnerID"] isEqual:tempoOwner], "redetected tempo placement receives its region owner through the batch bridge");
     expect(equalJSON(tempoReloaded[@"project"][@"songs"][0][@"tracks"], correctedSnapshot[@"project"][@"songs"][0][@"tracks"]), "redetect leaves audio positions and rates intact");
     expect(equalJSON(tempoReloaded[@"project"][@"songs"][0][@"timeSettings"] ?: NSNull.null, correctedSnapshot[@"project"][@"songs"][0][@"timeSettings"] ?: NSNull.null), "redetect restores project timebase");
     expect([core deleteManualMarker:tempoID error:&error], "delete tempo marker");
@@ -226,11 +273,18 @@ int main(int argc,char**argv){@autoreleasepool{
     NSData* batch=[NSJSONSerialization dataWithJSONObject:@[imported] options:0 error:&error];
     expect([core insertAudioTracks:batch song:original[@"songs"][0][@"id"] error:&error],"import audio through bridge");
     snapshot=[NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
-    expect(equalJSON([snapshot[@"project"][@"songs"][0][@"tracks"] lastObject],imported),"audio import preserves complete track and clip metadata");
+    // Re-placement computes new region membership; other import metadata is unchanged.
+    NSMutableDictionary* importedResult=[[snapshot[@"project"][@"songs"][0][@"tracks"] lastObject] mutableCopy];
+    NSMutableArray* importedClips=[NSMutableArray new];
+    for(NSDictionary* value in importedResult[@"clips"]) { NSMutableDictionary* c=[value mutableCopy]; [c removeObjectForKey:@"regionOwnerID"]; [importedClips addObject:c]; }
+    importedResult[@"clips"]=importedClips;
+    for(NSMutableDictionary* value in clips) [value removeObjectForKey:@"regionOwnerID"];
+    expect(equalJSON(importedResult,imported),"audio import preserves complete track and clip metadata except recomputed membership");
     expect([snapshot[@"transport"][@"playing"] boolValue],"import preserves playback");
     NSMutableDictionary* recorded = [snapshot[@"project"][@"songs"][0][@"tracks"][0][@"clips"][0] mutableCopy];
     recorded[@"id"] = NSUUID.UUID.UUIDString; recorded[@"recordingLane"] = @4;
     recorded[@"startTime"] = @32; recorded[@"duration"] = @8;
+    [recorded removeObjectForKey:@"regionOwnerID"];
     NSMutableDictionary* recordedSource = [recorded[@"audioFile"] mutableCopy];
     recordedSource[@"sha256"] = [@"" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0]; recorded[@"audioFile"] = recordedSource;
     expect([core addRecordedClip:[NSJSONSerialization dataWithJSONObject:recorded options:0 error:&error] track:midiTrack error:&error], "recorded clip insertion accepts complete item settings");
@@ -265,12 +319,14 @@ int main(int argc,char**argv){@autoreleasepool{
     NSDictionary* textSnapshot = [NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     NSDictionary* chordsTrack = nil;
     for (NSDictionary* track in textSnapshot[@"project"][@"songs"][0][@"tracks"]) if ([track[@"id"] isEqual:chordsTrackID]) chordsTrack = track;
-    expect(equalJSON(chordsTrack[@"clips"][0], textItem), "text content persists independently of fixed item and track names");
-    NSString* maximumEmoji = [@"" stringByPaddingToLength:60 withString:@"🎵" startingAtIndex:0];
-    expect([core setClipText:textItemID text:maximumEmoji error:&error], "30 non-ASCII emoji are accepted through native scalar setter");
+    NSMutableDictionary* ownedTextItem = [textItem mutableCopy];
+    ownedTextItem[@"regionOwnerID"] = regionID;
+    expect(equalJSON(chordsTrack[@"clips"][0], ownedTextItem), "text content persists with the region owning this newly inserted item");
+    NSString* longText = [[@"" stringByPaddingToLength:40000 withString:@"🎵" startingAtIndex:0] stringByAppendingString:@"\nC#m / G♭ — Fim"];
+    expect([core setClipText:textItemID text:longText error:&error], "long Unicode Chords text is accepted through native scalar setter");
     NSDictionary* textEditedSnapshot = [NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
+    for (NSDictionary* track in textEditedSnapshot[@"project"][@"songs"][0][@"tracks"]) if ([track[@"id"] isEqual:chordsTrackID]) expect([track[@"clips"][0][@"text"] isEqual:longText], "long Chords text is preserved without truncation");
     expect(equalJSON(textSnapshot[@"transport"], textEditedSnapshot[@"transport"]), "text edits preserve both active transport heads");
-    expect(![core setClipText:textItemID text:[maximumEmoji stringByAppendingString:@"A"] error:&error], "Chords text above 30 Unicode scalars is rejected");
     expect(![core setClipText:gainClipID text:@"Invalid" error:&error] && ![core setClipText:@"missing" text:@"Invalid" error:&error], "text setter rejects wrong kind and missing target");
     NSDictionary* textRejectedSnapshot = [NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     expect(equalJSON(textEditedSnapshot, textRejectedSnapshot), "rejected text edits leave complete native state unchanged");
@@ -287,7 +343,7 @@ int main(int argc,char**argv){@autoreleasepool{
     }
     const unichar textCharacters[] = {'A', 0, 'B'};
     NSString* embeddedNullText = [[NSString alloc] initWithCharacters:textCharacters length:3];
-    expect([core setClipText:textItemID text:embeddedNullText error:&error], "bounded Unicode text setter retains embedded NUL without C-string truncation");
+    expect([core setClipText:textItemID text:embeddedNullText error:&error], "Unicode text setter retains embedded NUL without C-string truncation");
     NSDictionary* nullTextSnapshot = [NSJSONSerialization JSONObjectWithData:[core snapshotWithError:&error] options:0 error:&error];
     for (NSDictionary* track in nullTextSnapshot[@"project"][@"songs"][0][@"tracks"]) if ([track[@"id"] isEqual:chordsTrackID]) expect([track[@"clips"][0][@"text"] isEqual:embeddedNullText], "text snapshot preserves every Unicode scalar including NUL");
     expect([reloadedText loadProjectData:[NSJSONSerialization dataWithJSONObject:nullTextSnapshot[@"project"] options:0 error:&error] error:&error], "full project load retains embedded NUL text");
@@ -356,10 +412,11 @@ int main(int argc,char**argv){@autoreleasepool{
     NSDictionary *after=[NSJSONSerialization JSONObjectWithData:[routeCore metadataSnapshotWithError:&error] options:0 error:&error];
     expect([routed[@"project"] isEqual:after[@"project"]], "rejected native routing restores both slots");
     JarasMeterBank* bank=[JarasMeterBank new];
-    [bank recordPeak:0.5f slot:1998]; [bank recordPeak:0.25f slot:1999];
-    [bank recordPeak:0.75f slot:2000]; [bank recordPeak:1.0f slot:2001];
-    expect([bank takePeak:1998]==0.5f && [bank takePeak:1999]==0.25f, "track 1000 has independent stereo meter slots");
-    expect([bank takePeak:2000]==0.75f && [bank takePeak:2001]==1.0f, "Master meter does not collide with track 1000");
+    JarasMeterBank* masterBank=[JarasMeterBank new];
+    [bank recordPeak:0.5f slot:0]; [bank recordPeak:0.25f slot:1];
+    [masterBank recordPeak:0.75f slot:0]; [masterBank recordPeak:1.0f slot:1];
+    expect([bank takePeak:0]==0.5f && [bank takePeak:1]==0.25f, "track stereo meter is independent of track count");
+    expect([masterBank takePeak:0]==0.75f && [masterBank takePeak:1]==1.0f, "Master has its own meter bank");
     // Imported Timecode must survive Swift -> native core -> metadata snapshot.
     NSMutableDictionary* importedTimecodeProject=[NSJSONSerialization JSONObjectWithData:input options:NSJSONReadingMutableContainers error:&error];
     NSDictionary* tcSettings=@{@"mode":@"mtc",@"frameRate":@25,@"offset":@3602,@"regionRelative":@YES,@"midiDestination":@0};
@@ -373,5 +430,22 @@ int main(int argc,char**argv){@autoreleasepool{
     expect([tcResult[@"importedTimecodeItems"] boolValue] && [tcResult[@"clips"] count]==1,"imported generator edges are not replaced by automatic region items");
     expect(equalJSON(tcResult[@"clips"][0][@"timecode"],tcSettings),"per-item Timecode settings survive metadata bridge");
     expect([tcResult[@"clips"][0][@"startTime"] doubleValue]==5 && [tcResult[@"clips"][0][@"duration"] doubleValue]==7,"generator position/duration survive native load");
+    for (NSString* role in @[@"teleprompt", @"teleprompt2", @"chords"]) {
+        JarasCoreBridge* textCore = [JarasCoreBridge new];
+        expect([textCore loadProjectData:input error:&error], "load independent text fixture");
+        NSString* trackID = NSUUID.UUID.UUIDString;
+        NSString* clipID = NSUUID.UUID.UUIDString;
+        expect([textCore addTrackWithId:trackID name:@"Text" role:role error:&error], "create text track for long-content bridge regression");
+        NSDictionary* clip = @{@"id":clipID, @"name":@"Text", @"startTime":@4, @"duration":@10, @"sourceOffset":@0, @"playbackRate":@1, @"waveform":@[], @"text":longText};
+        expect([textCore addRecordedClip:[NSJSONSerialization dataWithJSONObject:clip options:0 error:&error] track:trackID error:&error], "insert long text without limiting characters");
+        NSString* edited = [longText stringByAppendingString:@"\nÚltima linha"];
+        expect([textCore setClipText:clipID text:edited error:&error], "edit entire long text on either teleprompter or Chords");
+        NSDictionary* saved = [NSJSONSerialization JSONObjectWithData:[textCore snapshotWithError:&error] options:0 error:&error];
+        JarasCoreBridge* reopened = [JarasCoreBridge new];
+        expect([reopened loadProjectData:[NSJSONSerialization dataWithJSONObject:saved[@"project"] options:0 error:&error] error:&error], "reopen long text project through native validation");
+        NSDictionary* restored = [NSJSONSerialization JSONObjectWithData:[reopened snapshotWithError:&error] options:0 error:&error];
+        expect(equalJSON(saved[@"project"], restored[@"project"]), "long text survives full native project round trip");
+        for (NSDictionary* track in restored[@"project"][@"songs"][0][@"tracks"]) if ([track[@"id"] isEqual:trackID]) expect([track[@"clips"][0][@"text"] isEqual:edited], "round trip preserves every long-text character");
+    }
     std::cout<<"JARAS_BRIDGE_OK\n";
 }}

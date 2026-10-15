@@ -28,6 +28,9 @@ for name in ['VST3-LICENSE.txt','VST3-SOURCE.txt']:
  legalRefs.append(add('vst3:'+name, f'isa = PBXFileReference; lastKnownFileType = text; path = {q("Core/ThirdParty/VST3/"+name)}; sourceTree = SOURCE_ROOT;'))
 stemWorker=add('stemWorker', 'isa = PBXFileReference; lastKnownFileType = folder; path = Apple/Resources/StemSeparation; sourceTree = SOURCE_ROOT;')
 stemRuntime=add('stemRuntime', 'isa = PBXFileReference; lastKnownFileType = folder; path = build/StemSeparationRuntime; sourceTree = SOURCE_ROOT;')
+stemModel=add('stemCoreMLModel', 'isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = Apple/Resources/CatStemHTDemucs6.mlpackage; sourceTree = SOURCE_ROOT;')
+stemModelLicense=add('stemCoreMLLicense', 'isa = PBXFileReference; lastKnownFileType = text; path = Apple/Resources/CatStemModel-LICENSE.txt; sourceTree = SOURCE_ROOT;')
+stemFrameworks=[add('framework:'+name, f'isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = System/Library/Frameworks/{name}.framework; sourceTree = SDKROOT;') for name in ['CoreML','Accelerate']]
 products=[];targets=[];attributes=[]
 for platform,label,bundle in [('macosx','macOS','com.hookdeveloper.jaraslive.mac'),('iphoneos','iPadOS','com.hookdeveloper.jaraslive')]:
  key='target:'+label;tid=uid(key)
@@ -35,19 +38,22 @@ for platform,label,bundle in [('macosx','macOS','com.hookdeveloper.jaraslive.mac
  builds=[]
  for rel,ref in refs.items():
   if Path(rel).suffix in ['.swift','.cpp','.mm','.c']: builds.append(add('build:'+label+rel,f'isa = PBXBuildFile; fileRef = {ref};'))
+ if platform=='iphoneos': builds.append(add('stemCoreMLBuild:'+label, f'isa = PBXBuildFile; fileRef = {stemModel};'))
  sources=add('sources:'+label,f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {arr(builds)}; runOnlyForDeploymentPostprocessing = 0;')
- frameworks=add('frameworks:'+label,'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')
+ frameworkBuilds=[add('frameworkBuild:'+label+ref, f'isa = PBXBuildFile; fileRef = {ref};') for ref in stemFrameworks] if platform=='iphoneos' else []
+ frameworks=add('frameworks:'+label,f'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = {arr(frameworkBuilds)}; runOnlyForDeploymentPostprocessing = 0;')
  assetBuild=add('assetBuild:'+label,f'isa = PBXBuildFile; fileRef = {assets};')
  localizedBuild=add('localizedBuild:'+label,f'isa = PBXBuildFile; fileRef = {localization};')
  legalBuilds=[add('legalBuild:'+label+ref,f'isa = PBXBuildFile; fileRef = {ref};') for ref in legalRefs]
  if platform=='macosx': legalBuilds += [add('stemBuild:'+ref, f'isa = PBXBuildFile; fileRef = {ref};') for ref in [stemWorker,stemRuntime]]
+ if platform=='iphoneos': legalBuilds.append(add('stemCoreMLLicenseBuild:'+label, f'isa = PBXBuildFile; fileRef = {stemModelLicense};'))
  iconBuilds=[add('iconBuild:'+label,f'isa = PBXBuildFile; fileRef = {icon};')] if platform=='macosx' else []
  resources=add('resources:'+label,f'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = {arr([localizedBuild,assetBuild]+legalBuilds+iconBuilds)}; runOnlyForDeploymentPostprocessing = 0;')
  configs=[]
  for config in ['Debug','Release']:
-  settings={'PRODUCT_NAME':'CatLive','PRODUCT_BUNDLE_IDENTIFIER':bundle,'SDKROOT':platform,'SWIFT_VERSION':'5.0','CLANG_CXX_LANGUAGE_STANDARD':'c++17','CLANG_ENABLE_MODULES':'YES','CLANG_ENABLE_OBJC_ARC':'YES','SWIFT_OBJC_BRIDGING_HEADER':'Apple/Bridge/JarasLive-Bridging-Header.h','GENERATE_INFOPLIST_FILE':'YES','INFOPLIST_KEY_CFBundleDisplayName':'CatLive','MARKETING_VERSION':'1.0.0','CURRENT_PROJECT_VERSION':'3','CODE_SIGN_STYLE':'Automatic','DEVELOPMENT_TEAM':'573QZX9H7Y','SWIFT_OPTIMIZATION_LEVEL':'-Onone' if config=='Debug' else '-O','GCC_OPTIMIZATION_LEVEL':'0' if config=='Debug' else '3','ENABLE_USER_SCRIPT_SANDBOXING':'YES','HEADER_SEARCH_PATHS':'$(SRCROOT)/Core $(SRCROOT)/Core/ThirdParty/Lame $(SRCROOT)/Core/ThirdParty/VST3','GCC_PREPROCESSOR_DEFINITIONS':'$(inherited) HAVE_CONFIG_H=1','ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS':'NO'}
+  settings={'PRODUCT_NAME':'CatLive','PRODUCT_BUNDLE_IDENTIFIER':bundle,'SDKROOT':platform,'SWIFT_VERSION':'5.0','CLANG_CXX_LANGUAGE_STANDARD':'c++17','CLANG_ENABLE_MODULES':'YES','CLANG_ENABLE_OBJC_ARC':'YES','SWIFT_OBJC_BRIDGING_HEADER':'Apple/Bridge/JarasLive-Bridging-Header.h','GENERATE_INFOPLIST_FILE':'YES','INFOPLIST_KEY_CFBundleDisplayName':'CatLive','MARKETING_VERSION':'1.01','CURRENT_PROJECT_VERSION':'4','CODE_SIGN_STYLE':'Automatic','DEVELOPMENT_TEAM':'573QZX9H7Y','SWIFT_OPTIMIZATION_LEVEL':'-Onone' if config=='Debug' else '-O','GCC_OPTIMIZATION_LEVEL':'0' if config=='Debug' else '3','ENABLE_USER_SCRIPT_SANDBOXING':'YES','HEADER_SEARCH_PATHS':'$(SRCROOT)/Core $(SRCROOT)/Core/ThirdParty/Lame $(SRCROOT)/Core/ThirdParty/VST3','GCC_PREPROCESSOR_DEFINITIONS':'$(inherited) HAVE_CONFIG_H=1','ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS':'NO'}
   if platform=='macosx': settings.update({'MACOSX_DEPLOYMENT_TARGET':'12.0','INFOPLIST_KEY_LSApplicationCategoryType':'public.app-category.music','ENABLE_APP_SANDBOX':'NO','GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'Apple/Info-mac.plist','COMBINE_HIDPI_IMAGES':'YES','ASSETCATALOG_COMPILER_APPICON_NAME':'CatLiveIcon'})
-  else: settings.update({'ASSETCATALOG_COMPILER_APPICON_NAME':'CatLivePadIcon','IPHONEOS_DEPLOYMENT_TARGET':'16.0','TARGETED_DEVICE_FAMILY':'2','SUPPORTED_PLATFORMS':'iphoneos iphonesimulator','INFOPLIST_KEY_UILaunchScreen_Generation':'YES','INFOPLIST_KEY_UIApplicationSceneManifest_Generation':'YES','INFOPLIST_KEY_UISupportedInterfaceOrientations':'UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight','INFOPLIST_KEY_UIRequiresFullScreen':'YES','INFOPLIST_FILE':'Apple/Info-iPad.plist'})
+  else: settings.update({'ASSETCATALOG_COMPILER_APPICON_NAME':'CatLivePadIcon','IPHONEOS_DEPLOYMENT_TARGET':'16.0','TARGETED_DEVICE_FAMILY':'1,2','SUPPORTED_PLATFORMS':'iphoneos iphonesimulator','INFOPLIST_KEY_UILaunchScreen_Generation':'YES','INFOPLIST_KEY_UIApplicationSceneManifest_Generation':'YES','INFOPLIST_KEY_UISupportedInterfaceOrientations':'UIInterfaceOrientationPortrait','INFOPLIST_KEY_UIRequiresFullScreen':'YES','INFOPLIST_FILE':'Apple/Info-iPad.plist'})
   configs.append(add('config:'+label+config,'isa = XCBuildConfiguration; name = '+config+'; buildSettings = {'+''.join(k+' = '+q(v)+';' for k,v in settings.items())+'};'))
  configList=add('configs:'+label,f'isa = XCConfigurationList; buildConfigurations = {arr(configs)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
  add(key,f'isa = PBXNativeTarget; buildConfigurationList = {configList}; buildPhases = {arr([sources,frameworks,resources])}; buildRules = (); dependencies = (); name = "CatLive {label}"; productName = "CatLive"; productReference = {product}; productType = "com.apple.product-type.application";')
@@ -60,7 +66,7 @@ def folderGroup(folder):
  direct=sorted({folder+'/'+rest[len(prefix):].split('/')[0] for rest in subfolders})
  for child in direct: children.append(folderGroup(child))
  children += [ref for rel,ref in refs.items() if str(Path(rel).parent)==folder]
- if folder=='Apple': children += [localization,assets,icon]
+ if folder=='Apple': children += [localization,assets,icon,stemModel,stemModelLicense]+stemFrameworks
  return add('group:'+folder,f'isa = PBXGroup; children = {arr(children)}; name = {q(Path(folder).name)}; sourceTree = "<group>";')
 group=add('root',f'isa = PBXGroup; children = {arr([folderGroup(folder) for folder in ["Core","Application","Apple"]]+[productGroup])}; sourceTree = "<group>";')
 

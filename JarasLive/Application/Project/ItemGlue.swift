@@ -18,24 +18,26 @@ public enum ItemGlue {
               clips.allSatisfy({ $0.duration > 0 && $0.startTime.isFinite && $0.duration.isFinite }) else {
             throw ProjectError.invalid("Select audio or MIDI items to unify.")
         }
-        let midi = clips.filter { $0.midi != nil }.count
-        guard midi == 0 || midi == clips.count else {
-            throw ProjectError.invalid("Unify audio and MIDI separately on each track.")
-        }
-        if midi == 0 {
-            guard clips.allSatisfy({ ($0.audioFile ?? track.audioFile) != nil }) else {
-                throw ProjectError.invalid("Select audio or MIDI items to unify.")
-            }
-            let frozen = clips.filter { $0.frozenMIDI == true }.count
-            guard frozen == 0 || frozen == clips.count else {
-                throw ProjectError.invalid("Unify converted MIDI audio separately from other audio on the same track.")
-            }
+        guard clips.allSatisfy({ $0.midi != nil || ($0.audioFile ?? track.audioFile) != nil }) else {
+            throw ProjectError.invalid("Select audio or MIDI items to unify.")
         }
     }
 
     public static func midi(song: Song, track: Track, clips: [AudioClip]) throws -> AudioClip {
         try validate(track: track, clips: clips)
         guard clips.allSatisfy({ $0.midi != nil }) else { throw ProjectError.invalid("Select MIDI items to unify.") }
+        if clips.count == 1 {
+            // Nothing has to be flattened: retaining the original source clock
+            // also retains its take FX state, loops, trims and envelope mapping.
+            var result = clips[0]; result.id = UUID(); return result
+        }
+        guard clips.allSatisfy({ clip in
+            (clip.fx?.inserted.isEmpty != false) && (clip.automation?.envelopes.isEmpty != false) &&
+            (clip.pan ?? 0) == 0 && clip.phaseInverted != true && (clip.normalizationGain ?? 1) == 1 &&
+            (clip.channelMode ?? 0) == 0 && (clip.fadeIn ?? 0) == 0 && (clip.fadeOut ?? 0) == 0 && (clip.pitchSemitones ?? 0) == 0
+        }) else {
+            throw ProjectError.invalid("These MIDI items have independent take effects, envelopes or mix settings. Re-render them as audio before unifying to preserve their sound.")
+        }
         let ordered = clips.sorted { $0.startTime == $1.startTime ? $0.id.uuidString < $1.id.uuidString : $0.startTime < $1.startTime }
         let start = ordered[0].startTime, end = ordered.map { $0.startTime + $0.duration }.max()!
         let allMuted = ordered.allSatisfy { $0.muted == true }

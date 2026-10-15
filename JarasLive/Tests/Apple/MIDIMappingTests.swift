@@ -1,6 +1,11 @@
 import SwiftUI
 import CoreMIDI
 let mappingTestApplicationActive = true
+@MainActor enum RegionShortcutView {
+    static var editingEnvelope = false
+    static func envelopeOwnsEditingKey(_ event: NSEvent) -> Bool { editingEnvelope && [51, 117, 53].contains(event.keyCode) }
+    static func handleSelectedObjectsDelete(_ event: NSEvent) -> Bool { false }
+}
 
 // Only the external devices and project are replaced. The test compiles the
 // production MIDI learner, conflict detection, latch and continuous routing.
@@ -83,7 +88,11 @@ enum ProjectError: Error { case invalid(String) }
         let legacy = [MappedControl(project: show.snapshot.project.id, track: track, command: "mute", input: ControlInput(kind: "midi", label: "CC 91", device: 123, channel: 0, status: 0xb0, number: 91)),
                       MappedControl(project: UUID(), track: nil, command: "mute", input: ControlInput(kind: "midi", label: "CC 90", device: 123, channel: 0, status: 0xb0, number: 90))]
         defaults.set(try! JSONEncoder().encode(legacy), forKey: "jaras.controlMappings")
+        var oldSubPlay = DAWActionBinding(action: .subPlayStop)
+        oldSubPlay.keyboard = ControlInput(kind: "keyboard", label: "Enter", key: 36, modifiers: 0)
+        defaults.set(try! JSONEncoder().encode([oldSubPlay]), forKey: "jaras.actions")
         let mappings = ControlMappings.shared
+        precondition(mappings.actions.binding(.subPlayStop).keyboard == DAWAction.subPlayStop.defaultKeyboard, "stored Enter defaults migrate to Shift+Space at startup")
         show.snapshot.project.songs = [MappingTestSong(tracks: [MappingTestTrack(id: track, name: "Piano")])]
         mappings.show = show
         mappings.migrateActionMappings()
@@ -277,14 +286,16 @@ enum ProjectError: Error { case invalid(String) }
         alert.beginSheetModal(for: parent) { _ in }
         precondition(alert.window.sheetParent === parent && alert.window.attachedSheet == nil)
         let beforeDialog = show.actionsReceived.count
-        func key(_ code: UInt16, in window: NSWindow) -> NSEvent {
-            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil, characters: code == 53 ? "\u{1b}" : "\r", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code)!
+        func key(_ code: UInt16, modifiers: NSEvent.ModifierFlags = [], in window: NSWindow, isRepeat: Bool = false) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: code == 53 ? "\u{1b}" : code == 49 ? " " : "\r", charactersIgnoringModifiers: "", isARepeat: isRepeat, keyCode: code)!
         }
         for code: UInt16 in [36, 76, 53] {
             precondition(!mappings.handleKey(key(code, in: alert.window)), "a sheet must receive its Enter/Escape keys before any DAW shortcut")
             precondition(!mappings.handleKey(key(code, in: parent)), "the parent must not dispatch shortcuts while its sheet is open")
         }
+        precondition(!mappings.handleKey(key(49, modifiers: .shift, in: alert.window)), "the sheet owns Shift+Space while it is open")
+        precondition(!mappings.handleKey(key(49, modifiers: .shift, in: parent)), "the parent cannot start Sub Play while its sheet is open")
         precondition(show.actionsReceived.count == beforeDialog, "confirming a dialog must never start Sub Play")
         mappings.beginAction(.projectEnd, kind: "keyboard")
         mappings.candidate = ControlInput(kind: "keyboard", label: "Test dialog key", key: 119, modifiers: 0)
@@ -295,13 +306,73 @@ enum ProjectError: Error { case invalid(String) }
         parent.endSheet(alert.window)
         alert.window.orderOut(nil)
         NativeTimelineInputGate.shared.setBlocked(true, for: parent)
-        precondition(!mappings.handleKey(key(36, in: parent)), "an in-window editor owns Enter instead of Sub Play")
+        precondition(!mappings.handleKey(key(49, modifiers: .shift, in: parent)), "an in-window editor owns Shift+Space instead of Sub Play")
         mappings.beginAction(.projectEnd, kind: "keyboard")
         precondition(mappings.handleKey(key(53, in: parent)) && mappings.editing == nil, "Escape still cancels the active shortcut learner")
         NativeTimelineInputGate.shared.setBlocked(false, for: parent)
-        precondition(mappings.handleKey(key(36, in: parent)), "Sub Play remains available after the dialog closes")
+        for code: UInt16 in [36, 76] {
+            precondition(!mappings.handleKey(key(code, in: parent)), "Enter and keypad Enter no longer start Sub Play")
+        }
+        precondition(mappings.handleKey(key(49, modifiers: .shift, in: parent)), "Shift+Space starts Sub Play after the dialog closes")
         precondition(show.actionsReceived.last == .subPlayStop)
+        let afterSubPlay = show.actionsReceived.count
+        precondition(mappings.handleKey(key(49, modifiers: .shift, in: parent, isRepeat: true)))
+        precondition(show.actionsReceived.count == afterSubPlay, "holding Shift+Space must not toggle Sub Play repeatedly")
+        for code: UInt16 in [51, 117, 53] {
+            mappings.beginAction(.projectEnd, kind: "keyboard")
+            mappings.candidate = ControlInput(kind: "keyboard", label: "Envelope key", key: code, modifiers: 0)
+            mappings.save()
+            precondition(mappings.editing == nil)
+            let before = show.actionsReceived.count
+            RegionShortcutView.editingEnvelope = true
+            precondition(!mappings.handleKey(key(code, in: parent)), "even remapped Delete and Escape belong to the active envelope")
+            precondition(show.actionsReceived.count == before)
+            RegionShortcutView.editingEnvelope = false
+            precondition(mappings.handleKey(key(code, in: parent)), "the mapping resumes after leaving the envelope editor")
+        }
+        RegionShortcutView.editingEnvelope = true
+        mappings.beginAction(.projectEnd, kind: "keyboard")
+        precondition(mappings.handleKey(key(53, in: parent)) && mappings.editing == nil, "the shortcut learner retains its explicit Escape priority")
+        RegionShortcutView.editingEnvelope = false
+        print("ENVELOPE_DELETE_ESCAPE_KEYS_BEFORE_GLOBAL_MAPPINGS_OK")
         parent.orderOut(nil)
         print("DIALOG_ENTER_ESCAPE_PRIORITY_AND_TRANSPORT_RESTORATION_OK")
+        // Exercise the real CoreMIDI receive thread, not only the injected
+        // learner calls above. Actor race checks stay enabled in this harness.
+        var virtualClient: MIDIClientRef = 0, virtualSource: MIDIEndpointRef = 0
+        precondition(MIDIClientCreateWithBlock("CatLive mapping test source" as CFString, &virtualClient, nil) == noErr)
+        precondition(MIDISourceCreateWithProtocol(virtualClient, "CatLive virtual controller" as CFString, ._1_0, &virtualSource) == noErr)
+        defer { MIDIEndpointDispose(virtualSource); MIDIClientDispose(virtualClient) }
+        var sourceID: Int32 = 0
+        precondition(MIDIObjectGetIntegerProperty(virtualSource, kMIDIPropertyUniqueID, &sourceID) == noErr)
+        AudioDeviceSettings.shared.midiSlots = [sourceID]
+        mappings.bind(show)
+        mappings.beginAction(.play, kind: "midi")
+        func transmit(_ words: UInt32...) {
+            var list = MIDIEventList()
+            withUnsafeMutablePointer(to: &list) { pointer in
+                let packet = MIDIEventListInit(pointer, ._1_0)
+                words.withUnsafeBufferPointer { buffer in
+                    _ = MIDIEventListAdd(pointer, MemoryLayout<MIDIEventList>.size, packet, 0, buffer.count, buffer.baseAddress!)
+                }
+                precondition(MIDIReceivedEventList(virtualSource, pointer) == noErr)
+            }
+        }
+        transmit(0x20936364) // Group 0, channel 4, note 99, velocity 100.
+        var deadline = ProcessInfo.processInfo.systemUptime + 3
+        while mappings.candidate == nil && ProcessInfo.processInfo.systemUptime < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        precondition(mappings.candidate?.device == sourceID && mappings.candidate?.channel == 3 && mappings.candidate?.number == 99, "real UMP messages reach the MIDI learner on MainActor")
+        mappings.save()
+        let beforePlay = show.actionsReceived.count
+        transmit(0x20836300, 0x20936364)
+        deadline = ProcessInfo.processInfo.systemUptime + 3
+        while show.actionsReceived.count == beforePlay && ProcessInfo.processInfo.systemUptime < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        precondition(show.actionsReceived.count == beforePlay + 1 && show.actionsReceived.last == .play)
+        print("REAL_COREMIDI_UMP_PORT_LEARNING_AND_MAPPED_PLAY_ON_MAIN_ACTOR_OK")
+
     }
 }

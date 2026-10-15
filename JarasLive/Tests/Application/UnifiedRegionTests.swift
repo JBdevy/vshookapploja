@@ -2,6 +2,53 @@ import XCTest
 @testable import JarasApplication
 
 final class UnifiedRegionTests: XCTestCase {
+    func testConflictingDrawerMarkersRejectUnificationWithoutChangingTheProject() throws {
+        var project = fixture()
+        let group = try project.unifyRegions(containing: project.songs[0].parts[0].id, name: "Group")
+        project.songs[0].parts.removeAll { $0.name == "Separate song" }
+        project.regionSetlist = nil
+        let next = Part(id: UUID(), name: "Next", startTime: 75, endTime: 90)
+        project.songs[0].parts.append(next)
+        var duplicate = try XCTUnwrap(project.songs[0].markers?.first)
+        duplicate.id = UUID(); duplicate.name = "Conflicting drawer marker"
+        project.songs[0].markers!.append(duplicate)
+        try project.validate()
+        let before = project
+        XCTAssertThrowsError(try project.unifyRegions(containing: group, name: ""))
+        XCTAssertEqual(project, before, "An ambiguous marker must not remove or reparent any region")
+    }
+    func testFlatteningGroupsAndDisunifyingPreservesExplicitContentOwnership() throws {
+        var project = fixture()
+        let first = project.songs[0].parts[0].id
+        let originalGroup = try project.unifyRegions(containing: first, name: "Original")
+        let third = Part(id: UUID(), name: "Third", startTime: 100, endTime: 120)
+        let fourth = Part(id: UUID(), name: "Fourth", startTime: 115, endTime: 135)
+        project.songs[0].duration = 180
+        project.songs[0].parts.removeAll { $0.name == "Separate song" }
+        project.regionSetlist = nil
+        project.songs[0].parts += [third, fourth]
+        let otherGroup = try project.unifyRegions(containing: third.id, name: "Other")
+        project.songs[0].regionOwnershipInitialized = true
+        project.songs[0] = project.songs[0].previewMovingRegion(otherGroup, to: 75)
+        let owned = AudioClip(id: UUID(), name: "Owned", startTime: 92, duration: 1, regionOwnerID: otherGroup)
+        let loose = AudioClip(id: UUID(), name: "Loose", startTime: 93, duration: 1)
+        project.songs[0].tracks[0].clips += [owned, loose]
+        let cue = TimelineMarker(id: UUID(), name: "Owned cue", position: 92, color: 0, regionOwnerID: otherGroup)
+        project.songs[0].markers!.append(cue)
+        let merged = try project.unifyRegions(containing: originalGroup, name: "")
+        XCTAssertEqual(merged, originalGroup)
+        XCTAssertEqual(project.songs[0].tracks[0].clips.first { $0.id == owned.id }?.regionOwnerID, merged)
+        XCTAssertEqual(project.songs[0].markers?.first { $0.id == cue.id }?.regionOwnerID, merged)
+        XCTAssertNil(project.songs[0].tracks[0].clips.first { $0.id == loose.id }?.regionOwnerID)
+        try project.disunifyRegion(merged)
+        let owner = try XCTUnwrap(project.songs[0].tracks[0].clips.first { $0.id == owned.id }?.regionOwnerID)
+        XCTAssertTrue(project.songs[0].parts.contains { $0.id == owner })
+        XCTAssertEqual(project.songs[0].markers?.first { $0.id == cue.id }?.regionOwnerID, owner)
+        XCTAssertNil(project.songs[0].tracks[0].clips.first { $0.id == loose.id }?.regionOwnerID)
+        let moved = project.songs[0].previewMovingRegion(owner, to: 140)
+        XCTAssertNotEqual(moved.tracks[0].clips.first { $0.id == owned.id }?.startTime, owned.startTime)
+        XCTAssertEqual(moved.tracks[0].clips.first { $0.id == loose.id }?.startTime, loose.startTime)
+    }
     private func fixture() -> Project {
         var project = Project.empty(name: "Unified")
         let first = Part(id: UUID(), name: "First song (original case)", startTime: 30, endTime: 55, color: 0x123456)
@@ -39,9 +86,9 @@ final class UnifiedRegionTests: XCTestCase {
         XCTAssertEqual(project.overlappingRegions(containing: second.id).map(\.id), [first.id, second.id])
         let groupID = try project.unifyRegions(containing: first.id, name: "  Special region  ")
         let group = try XCTUnwrap(project.songs[0].parts.first { $0.id == groupID })
-        XCTAssertEqual(group.name, "Special region"); XCTAssertEqual(group.startTime, 32); XCTAssertEqual(group.endTime, 80)
+        XCTAssertEqual(group.name, "Special region"); XCTAssertEqual(group.startTime, 30); XCTAssertEqual(group.endTime, 80)
         XCTAssertEqual(project.songs[0].parts.filter { $0.parentRegionID == groupID }.map(\.id), [first.id, second.id])
-        XCTAssertEqual(project.songs[0].parts.first { $0.id == first.id }?.startTime, 32)
+        XCTAssertEqual(project.songs[0].parts.first { $0.id == first.id }?.startTime, 30)
         XCTAssertEqual(project.songs[0].tracks, unchanged.songs[0].tracks)
         XCTAssertEqual(project.songs[0].markers?.map(\.name), [first.name, second.name])
         XCTAssertEqual(project.songs[0].markers?.map(\.position), [30, 50])
@@ -120,7 +167,7 @@ final class UnifiedRegionTests: XCTestCase {
         XCTAssertEqual(restored.color, 0xff8040)
     }
 
-    func testDeletingSpecialRegionFromAllRegionsRestoresEditedSongsAndKeepsManualMarkers() throws {
+    func testDeletingSpecialRegionFromAllRegionsDeletesDrawerAndKeepsOutsideMarkers() throws {
         var project = fixture()
         let original = project
         let first = project.songs[0].parts[0].id
@@ -131,11 +178,9 @@ final class UnifiedRegionTests: XCTestCase {
         let manual = TimelineMarker(id: UUID(), name: "Manual", position: 90, color: 0x123456)
         project.songs[0].markers!.append(manual)
         project.deleteSetlistEntries([group], song: project.songs[0].id, playlist: nil)
-        XCTAssertEqual(project.songs[0].parts.count, original.songs[0].parts.count)
-        XCTAssertEqual(project.songs[0].parts.first { $0.id == first }?.name, "Edited name (Original)")
-        XCTAssertEqual(project.songs[0].parts.first { $0.id == first }?.color, 0xff8040)
-        XCTAssertEqual(project.regionSetlist?.playlists[0].regionIds, original.regionSetlist?.playlists[0].regionIds)
-        XCTAssertEqual(project.songs[0].tracks, original.songs[0].tracks)
+        XCTAssertEqual(project.songs[0].parts, [original.songs[0].parts[2]])
+        XCTAssertEqual(project.regionSetlist?.playlists[0].regionIds, [original.songs[0].parts[2].id])
+        XCTAssertTrue(project.songs[0].tracks[0].clips.isEmpty)
         XCTAssertEqual(project.songs[0].markers, [manual])
         try project.validate()
     }

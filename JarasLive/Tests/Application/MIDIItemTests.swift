@@ -34,6 +34,22 @@ final class MIDIItemTests: XCTestCase {
         XCTAssertEqual(playback.count,1,"a held note must not retrigger at a tempo marker")
         XCTAssertEqual(playback.first?.start,0); XCTAssertEqual(playback.first?.end,4)
     }
+    func testLoopedNotesRetriggerAndKeepIdentityAcrossTempoBoundaries() {
+        var song = Project.empty(name: "MIDI repeats").songs[0]
+        var clip = AudioClip(id: UUID(), name: "Loop", startTime: 0, duration: 6, loopStart: 0, loopLength: 2,
+                             midi: MIDIItem(notes: [MIDINote(start: 0, length: 4, pitch: 60)]))
+        let notes = song.midiPlaybackNotes(in: clip)
+        XCTAssertEqual(notes.map(\.start), [0, 2, 4])
+        XCTAssertEqual(notes.map(\.end), [2, 4, 6])
+        XCTAssertEqual(Set(notes.map(\.sourceID)).count, 3)
+        song.timeSettings = ProjectTimeSettings(); song.timeSettings?.timebase = .relative
+        song.markers = [TimelineMarker(id: UUID(), name: "Tempo", position: 3, color: 0, tempoBPM: 240)]
+        clip.duration = 4.5
+        let changed = song.midiPlaybackNotes(in: clip)
+        XCTAssertEqual(changed.map(\.start), [0, 2, 3.5])
+        XCTAssertEqual(changed.map(\.end), [2, 3.5, 4.5])
+        XCTAssertEqual(changed.map(\.sourceID), notes.map(\.sourceID))
+    }
     func testTrimRateMuteAndSerialization() throws {
         let data=MIDIItem(notes:[MIDINote(start:0,length:4,pitch:60),MIDINote(start:6,length:1,pitch:64)],sourceBPM:120)
         var clip=AudioClip(id:UUID(),name:"MIDI",startTime:10,duration:1,sourceOffset:0.5,playbackRate:2,midi:data)
@@ -43,6 +59,19 @@ final class MIDIItemTests: XCTestCase {
         var invalid=data;invalid.notes[0].pitch=128;XCTAssertThrowsError(try invalid.validate())
         invalid=data;invalid.notes.append(invalid.notes[0]);XCTAssertThrowsError(try invalid.validate())
         invalid=data;invalid.notes[0].length = .nan;XCTAssertThrowsError(try invalid.validate())
+    }
+    func testMutedAndSilentTakeNotesRemainVisibleWithoutBecomingAudible() {
+        let data = MIDIItem(notes: [MIDINote(start: 0, length: 4, pitch: 60), MIDINote(start: 6, length: 1, pitch: 64)], sourceBPM: 120)
+        let base = AudioClip(id: UUID(), name: "Inactive take", startTime: 10, duration: 1, sourceOffset: 0.5, playbackRate: 2, midi: data)
+        let expected = base.midiPlaybackNotes()
+        XCTAssertEqual(expected.count, 1)
+        for (muted, gain) in [(true, 1.0), (false, 0.0), (true, 0.0)] {
+            var clip = base; clip.muted = muted; clip.gain = gain
+            let before = clip
+            XCTAssertEqual(clip.midiDisplayNotes(), expected)
+            XCTAssertTrue(clip.midiPlaybackNotes().isEmpty)
+            XCTAssertEqual(clip, before, "drawing cannot unmute or change the saved gain")
+        }
     }
 }
 
@@ -55,6 +84,13 @@ final class MIDIItemTests: XCTestCase {
     func setRecordingChannels(_ track: UUID, channel: Int) throws { project.songs[0].tracks[0].recordingChannels = channel }
     func setMIDIInput(_ track: UUID, slot: Int) throws { project.songs[0].tracks[0].midiInput = slot }
     func addRecordedClip(_ clip: AudioClip, track: UUID) throws { project.songs[0].tracks[0].clips.append(clip); project.songs[0].duration = max(project.songs[0].duration, clip.startTime + clip.duration) }
+    func insertAudioTracks(_ tracks: [Track], song: UUID) throws {
+        guard let index = project.songs.firstIndex(where: { $0.id == song }) else { return }
+        for track in tracks {
+            if let row = project.songs[index].tracks.firstIndex(where: { $0.id == track.id }) { project.songs[index].tracks[row].clips += track.clips }
+            else { project.songs[index].tracks.append(track) }
+        }
+    }
     func execute(_ command:ShowCommand,target:UUID?,value:Double) throws {}
     func addTrack(id:UUID,name:String,role:TrackRole) throws {}
     func advance(_ elapsed:Double) {}
@@ -62,6 +98,110 @@ final class MIDIItemTests: XCTestCase {
 }
 
 extension MIDIItemTests {
+    private func ownedRecordingProject() -> Project {
+        var project = Project.empty(name: "Owned MIDI capture")
+        let group = Part(id: UUID(), name: "Unified", startTime: 0, endTime: 30)
+        let a = Part(id: UUID(), name: "A", startTime: 0, endTime: 10, parentRegionID: group.id)
+        let b = Part(id: UUID(), name: "B", startTime: 10, endTime: 30, parentRegionID: group.id)
+        project.songs[0].bpm = 120
+        project.songs[0].duration = 60
+        project.songs[0].regionOwnershipInitialized = true
+        project.songs[0].timeSettings = ProjectTimeSettings()
+        project.songs[0].timeSettings?.timebase = .relative
+        project.songs[0].parts = [a, b, group]
+        project.songs[0].tracks = [Track(id: UUID(), name: "MIDI", role: .keys)]
+        project.songs[0].markers = [
+            TimelineMarker(id: UUID(), name: "A", position: 0, color: 0, regionOwnerID: a.id, tempoBPM: 120, tempoReferenceBPM: 120),
+            TimelineMarker(id: UUID(), name: "A internal", position: 6, color: 0, regionOwnerID: a.id, tempoBPM: 180, tempoReferenceBPM: 120),
+            TimelineMarker(id: UUID(), name: "B", position: 10, color: 0, regionOwnerID: b.id, tempoBPM: 240, tempoReferenceBPM: 120),
+            TimelineMarker(id: UUID(), name: "B internal", position: 12, color: 0, regionOwnerID: b.id, tempoBPM: 60, tempoReferenceBPM: 120)
+        ]
+        return project
+    }
+    func testRecordingKeepsOwningSongTempoThroughFollowingSong() throws {
+        let song = ownedRecordingProject().songs[0]
+        var take = MIDIRecordingTake(track: song.tracks[0].id, song: song, startTime: 8)
+        take.receive(source: 1, status: 0x90, number: 60, value: 100, position: 9)
+        take.receive(source: 1, status: 0x91, number: 64, value: 90, position: 9.5)
+        take.receive(source: 1, status: 0x80, number: 60, value: 0, position: 13)
+        let clip = try XCTUnwrap(take.finish(at: 14))
+        XCTAssertEqual(clip.regionOwnerID, song.parts[0].id)
+        XCTAssertEqual(clip.midi?.sourceBPM, 120)
+        XCTAssertEqual(clip.midi?.notes[0].start, 3)
+        XCTAssertEqual(clip.midi?.notes[0].length, 12)
+        let notes = song.midiPlaybackNotes(in: clip)
+        XCTAssertEqual(notes.count, 2)
+        XCTAssertEqual(notes[0].start, 9, accuracy: 1e-8)
+        XCTAssertEqual(notes[0].end, 13, accuracy: 1e-8)
+        XCTAssertEqual(notes[1].start, 9.5, accuracy: 1e-8)
+        XCTAssertEqual(notes[1].end, 14, accuracy: 1e-8, "finish must use the same owner as note-on and note-off")
+    }
+    @MainActor func testRecordedMIDIPreservesFrozenOwnerAndLooseStateThroughFinalization() throws {
+        for start in [8.0, 32.0] {
+            let original = ownedRecordingProject()
+            let song = original.songs[0], track = song.tracks[0].id
+            var take = MIDIRecordingTake(track: track, song: song, startTime: start)
+            take.receive(source: 1, status: 0x90, number: 60, value: 100, position: start + 0.25)
+            take.receive(source: 1, status: 0x80, number: 60, value: 0, position: start + 1.5)
+            let clip = try XCTUnwrap(take.finish(at: start + 2))
+            var changed = original
+            // Simulate a region moving away from an owned take, or over a loose take.
+            changed.songs[0].parts[0].startTime = start == 8 ? 40 : 30
+            changed.songs[0].parts[0].endTime = start == 8 ? 50 : 40
+            changed.songs[0].parts[2].endTime = 60
+            let show = try ShowController(executor: MIDIEditExecutor(), persistence: MemoryProjectStore(), initialProject: changed)
+            show.addRecordedClip(clip, track: track)
+            let inserted = try XCTUnwrap(show.current?.tracks[0].clips.first)
+            XCTAssertEqual(inserted, clip)
+            XCTAssertEqual(inserted.regionOwnerID, start == 8 ? song.parts[0].id : nil)
+            show.undo(); XCTAssertEqual(show.current?.tracks[0].clips, [])
+            show.redo(); XCTAssertEqual(show.current?.tracks[0].clips, [clip])
+            let reopened = try ProjectDocumentCodec.decode(ProjectDocumentCodec.encode(show.snapshot.project))
+            XCTAssertEqual(reopened.songs[0].tracks[0].clips, [clip])
+        }
+    }
+    @MainActor func testCreateMIDIUsesTheSameOwnedProbeAsPlayback() throws {
+        var project = ownedRecordingProject()
+        let track = project.songs[0].tracks[0].id, a = project.songs[0].parts[0].id, b = project.songs[0].parts[1].id
+        // A foreign marker is ignored by A's tempo map, but remains the global active BPM.
+        project.songs[0].markers?.append(TimelineMarker(id: UUID(), name: "Foreign", position: 7, color: 0, regionOwnerID: b, tempoBPM: 240, tempoReferenceBPM: 120))
+        let show = try ShowController(executor: MIDIEditExecutor(), persistence: MemoryProjectStore(), initialProject: project)
+        let id = try XCTUnwrap(show.addMIDIItem(track: track, start: 8, duration: 30))
+        let clip = try XCTUnwrap(show.current?.tracks[0].clips.first { $0.id == id })
+        XCTAssertEqual(clip.regionOwnerID, a, "a tail beyond both B and the unified end still belongs to its onset")
+        XCTAssertEqual(clip.midi?.sourceBPM, 160, "source BPM must divide by the owned playback rate of 1.5, not the foreign global rate of 2")
+        show.undo(); XCTAssertEqual(show.current?.tracks[0].clips, [])
+        show.redo(); XCTAssertEqual(show.current?.tracks[0].clips, [clip])
+    }
+    @MainActor func testAudioImportAndRecordingAcquireOwnerFromOnsetOnly() throws {
+        let project = ownedRecordingProject(), song = project.songs[0]
+        let track = song.tracks[0].id, owner = song.parts[0].id
+        let show = try ShowController(executor: MIDIEditExecutor(), persistence: MemoryProjectStore(), initialProject: project)
+        let recorded = AudioClip(id: UUID(), name: "Audio take", startTime: 8, duration: 30, audioFile: AudioFile(path: "Stems/take.wav"))
+        show.addRecordedClip(recorded, track: track)
+        var importedTrack = song.tracks[0]
+        importedTrack.clips = [AudioClip(id: UUID(), name: "Imported", startTime: 9, duration: 30, audioFile: AudioFile(path: "Stems/import.wav"))]
+        try show.insertAudioTracks([importedTrack], song: song.id, project: project.id)
+        XCTAssertEqual(show.current?.tracks[0].clips.map(\.regionOwnerID), [owner, owner])
+    }
+    func testDisunifyingAndLegacyMovementKeepCrossingMIDITailWithOnsetSong() throws {
+        var project = ownedRecordingProject()
+        let a = project.songs[0].parts[0].id, group = project.songs[0].parts[2].id
+        let clip = AudioClip(id: UUID(), name: "Crossing MIDI", startTime: 8, duration: 30, midi: MIDIItem(), regionOwnerID: group)
+        var loose = clip; loose.id = UUID(); loose.regionOwnerID = nil
+        project.songs[0].tracks[0].clips = [clip, loose]
+        try project.disunifyRegion(group)
+        XCTAssertEqual(project.songs[0].tracks[0].clips[0].regionOwnerID, a)
+        XCTAssertNil(project.songs[0].tracks[0].clips[1].regionOwnerID)
+        XCTAssertEqual(project.songs[0].tracks[0].clips.map(\.duration), [30, 30])
+
+        var legacy = ownedRecordingProject().songs[0]
+        legacy.regionOwnershipInitialized = nil
+        legacy.tracks[0].clips = [loose]
+        let moved = legacy.previewMovingRegion(legacy.parts[2].id, to: 40)
+        XCTAssertEqual(moved.tracks[0].clips[0].startTime, 48, "legacy preview uses the same onset membership as native initialization")
+        XCTAssertEqual(moved.tracks[0].clips[0].duration, 30)
+    }
     func testRecordingPreservesNoteOffZeroVelocityChannelsAndHeldNotes() throws {
         let song = Project.empty(name: "Capture").songs[0]
         var take = MIDIRecordingTake(track: UUID(), song: song, startTime: 10)
@@ -87,7 +227,9 @@ extension MIDIItemTests {
     func testRecordingSustainRetriggerAllNotesOffAndEmptyTake() throws {
         let song = Project.empty(name: "Capture").songs[0]
         var empty = MIDIRecordingTake(track: UUID(), song: song, startTime: 0)
-        XCTAssertNil(empty.finish(at: 4))
+        let emptyClip = try XCTUnwrap(empty.finish(at: 4))
+        XCTAssertEqual(emptyClip.duration, 4)
+        XCTAssertEqual(emptyClip.midi?.notes, [])
         var take = MIDIRecordingTake(track: UUID(), song: song, startTime: 0)
         take.receive(source: 1, status: 0xb0, number: 64, value: 127, position: 0)
         take.receive(source: 1, status: 0x90, number: 60, value: 88, position: 0)
@@ -146,6 +288,20 @@ extension MIDIItemTests {
     }
 }
 extension MIDIItemTests {
+    func testLargeFiniteClipGainSaturatesMIDIVelocityBeforeIntegerConversion() throws {
+        var project = Project.empty(name: "MIDI gain")
+        let note = MIDINote(start: 0, length: 1, pitch: 60, velocity: 64)
+        var clip = AudioClip(id: UUID(), name: "MIDI", startTime: 0, duration: 1, waveform: [])
+        clip.midi = MIDIItem(notes: [note])
+        var track = Track(id: UUID(), name: "MIDI", role: .keys)
+        for (gain, expected) in [(0.0, nil), (0.5, 32), (1.0, 64), (2.0, 127), (1e300, 127), (Double.greatestFiniteMagnitude, 127)] as [(Double, Int?)] {
+            clip.gain = gain
+            track.clips = [clip]; project.songs[0].tracks = [track]
+            try project.validate()
+            XCTAssertEqual(clip.midiPlaybackNotes().first?.velocity, expected)
+            XCTAssertEqual(clip.midiDisplayNotes().first?.velocity, 64)
+        }
+    }
     @MainActor func testCreateEditUndoRedoEncryptedSaveResizeAndSplit() throws {
         let executor=MIDIEditExecutor()
         var project=Project.empty(name:"MIDI")

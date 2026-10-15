@@ -12,6 +12,26 @@ private final class BackendURLProtocol: URLProtocol {
             payload = ["status":"active","planId":"trial","expiresAt":"2026-10-09T06:00:00.000Z",
                        "offlineValidUntil":"2026-10-03T06:00:00.000Z","serverTime":"2026-10-02T06:00:00.000Z",
                        "maxDevices":4,"features":["desktop"]]
+        } else if path == "/api/access-status" {
+            var bodyData = request.httpBody ?? Data()
+            if bodyData.isEmpty, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&bytes, maxLength: bytes.count)
+                    guard count > 0 else { break }
+                    bodyData.append(contentsOf: bytes.prefix(count))
+                }
+            }
+            let body = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any]
+            XCTAssertNotNil(body)
+            if body?["refreshToken"] as? String == "expired-refresh" {
+                XCTAssertEqual(body?["activationProof"] as? [String: String], ["payload": "signed-payload", "signature": "signature"])
+            } else {
+                XCTAssertEqual(body?["refreshToken"] as? String, "refresh-test")
+                XCTAssertNil(body?["activationProof"], "Legacy callers remain compatible")
+            }
+            status = 403; payload = ["error":"quarantined"]
         } else if path == "/api/login" {
             status = 409; payload = ["error":"deviceLimit"]
         } else if path == "/api/refresh" {
@@ -31,6 +51,8 @@ final class RemoteBackendTests: XCTestCase {
         defer { session.invalidateAndCancel() }
         let backend = RemoteBackendClient(baseURL: URL(string: "https://backcatlive.up.railway.app")!, session: session)
         let credentials = AuthSession(accessToken: "access-test", refreshToken: "refresh-test", expiresAt: Date())
+        do { try await backend.accessStatus(credentials); XCTFail("quarantine must reach the client") }
+        catch BackendFailure.quarantined {}
         let entitlement = try await backend.entitlement(credentials)
         XCTAssertEqual(entitlement.maxDevices, 4)
         XCTAssertEqual(entitlement.planId, "trial")
@@ -40,6 +62,18 @@ final class RemoteBackendTests: XCTestCase {
         let device = try DeviceAuthorizationService.installation(store: MemorySecureStore(), name: "Test", platform: "macOS")
         do { _ = try await backend.login(email: "test@example.com", password: "52998224725", device: device); XCTFail("fifth seat rejected") }
         catch BackendFailure.deviceLimit {}
+    }
+    func testQuarantineRequestIncludesActivationProofWithExpiredSession() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BackendURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let backend = RemoteBackendClient(baseURL: URL(string: "https://backcatlive.up.railway.app")!, session: session)
+        let credentials = AuthSession(accessToken: "expired-access", refreshToken: "expired-refresh", expiresAt: .distantPast)
+        do {
+            try await backend.accessStatus(credentials, activationProof: LicenseLeaseProof(payload: "signed-payload", signature: "signature"))
+            XCTFail("Quarantine must reach the client even when the original session expired")
+        } catch BackendFailure.quarantined {}
     }
 }
 private actor RestrictionThenTimeoutBackend: BackendClient {

@@ -2,6 +2,10 @@ import AppKit
 import SwiftUI
 
 private final class ChromeGeometryProbe: NSView { var name = "" }
+private final class ChromeResizeWindow: NSWindow {
+    var trackingResize = false
+    override var inLiveResize: Bool { trackingResize }
+}
 private final class ChromeCloseHandler: NSObject {
     var calls = 0
     @objc func requestSaveBeforeClosing(_ sender: Any?) { calls += 1 }
@@ -37,7 +41,7 @@ private func settle(_ window: NSWindow) {
     window.contentView?.layoutSubtreeIfNeeded()
 }
 private func makeWindow(size: NSSize) -> NSWindow {
-    let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+    let window = ChromeResizeWindow(contentRect: NSRect(origin: .zero, size: size),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
@@ -54,6 +58,10 @@ private func geometry(_ window: NSWindow) -> [NSRect] {
 }
 
 MainActor.assumeIsolated {
+    precondition(ProjectTitlebarVersionView.text(for: "1.0.0") == "CatLive Version 1.00")
+    precondition(ProjectTitlebarVersionView.text(for: "1.1.0") == "CatLive Version 1.01")
+    precondition(ProjectTitlebarVersionView.text(for: "1.12.0") == "CatLive Version 1.12")
+    precondition(ProjectTitlebarVersionView.text(for: "2.0.0") == "CatLive Version 2.00")
     _ = NSApplication.shared
     UserDefaults.standard.removeObject(forKey: "jaras.editorWindowFrame")
     for size in [NSSize(width: 1440, height: 791), NSSize(width: 600, height: 460), NSSize(width: 840, height: 540)] {
@@ -111,6 +119,19 @@ MainActor.assumeIsolated {
     let rememberedOrigin = NSPoint(x: screen.minX + min(15, screen.width - rememberedSize.width),
                                     y: screen.minY + min(20, screen.height - rememberedSize.height))
     let remembered = NSRect(origin: rememberedOrigin, size: rememberedSize)
+    editorWindow.setFrame(remembered, display: false); settle(editorWindow)
+    let resizeWindow = editorWindow as! ChromeResizeWindow
+    let beforeDrag = UserDefaults.standard.string(forKey: "jaras.editorWindowFrame")
+    resizeWindow.trackingResize = true
+    let dragged = NSRect(origin: remembered.origin, size: NSSize(width: remembered.width, height: remembered.height + 20))
+    editorWindow.setFrame(dragged, display: false); settle(editorWindow)
+    NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: editorWindow)
+    precondition(UserDefaults.standard.string(forKey: "jaras.editorWindowFrame") == beforeDrag,
+                 "a live drag must not publish preference writes to every AppStorage subscriber")
+    resizeWindow.trackingResize = false
+    NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification, object: editorWindow)
+    precondition(UserDefaults.standard.string(forKey: "jaras.editorWindowFrame") == NSStringFromRect(dragged),
+                 "mouse release must persist the final frame even without a final resize notification")
     editorWindow.setFrame(remembered, display: false); settle(editorWindow)
     editorWindow.close()
     let reopened = makeWindow(size: NSSize(width: 600, height: 460))

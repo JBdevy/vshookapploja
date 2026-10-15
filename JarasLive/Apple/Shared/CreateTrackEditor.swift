@@ -14,18 +14,29 @@ struct CreateTrackEditor: View {
     @State private var countShake = 0.0
     @State private var failure = ""
     @FocusState private var nameFocused: Bool
-    private var existingCount: Int { show.snapshot.project.songs.reduce(0) { $0 + $1.tracks.count } }
-    private var availableCount: Int { max(0, Project.maximumTrackCount - existingCount) }
     private var specialTrackExists: Bool {
         kind != .standard && show.snapshot.project.songs.contains { $0.tracks.contains { $0.kind == kind } }
     }
-    private var unavailable: Bool { availableCount == 0 || specialTrackExists }
+    private var availableKinds: [TrackKind] {
+        #if os(iOS)
+        TrackKind.allCases.filter { $0 != .video && $0 != .timecode }
+        #else
+        TrackKind.allCases.filter { $0 != .video }
+        #endif
+    }
+    private var unavailable: Bool { specialTrackExists || !availableKinds.contains(kind) }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Criar pista").font(.title2.bold())
             Picker("Type", selection: $kind) {
-                ForEach(TrackKind.allCases, id: \.self) { kind in Text(LocalizedStringKey(kind.title)).tag(kind) }
+                ForEach(availableKinds, id: \.self) { kind in Text(LocalizedStringKey(kind.title)).tag(kind) }
             }
+            #if os(iOS)
+            .pickerStyle(.menu).padding(10).frame(maxWidth: .infinity)
+            .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.25)))
+            .tint(JarasTheme.green)
+            #endif
             if kind == .standard {
                 TextField("Nome da pista", text: $name).textFieldStyle(.roundedBorder)
                     .focused($nameFocused).onSubmit(create)
@@ -46,15 +57,12 @@ struct CreateTrackEditor: View {
                     Text("No audio inputs available.").font(.caption).foregroundStyle(JarasTheme.secondary)
                 }
                 if invalidCount {
-                    Text("Enter a quantity between 1 and \(max(1, availableCount)).").font(.caption).foregroundStyle(.red)
+                    Text("Enter a positive whole number.").font(.caption).foregroundStyle(.red)
                 }
             } else { Text(LocalizedStringKey(kind.title)).foregroundStyle(JarasTheme.secondary) }
             if specialTrackExists {
                 Text(String(format: JarasLocalization.string("A %@ track already exists."), JarasLocalization.string(kind.title)))
                     .font(.caption).foregroundStyle(.orange)
-            }
-            if availableCount == 0 {
-                Text("Maximum of 1000 tracks per project.").font(.caption).foregroundStyle(.orange)
             }
             if !failure.isEmpty { Text(LocalizedStringKey(failure)).font(.caption).foregroundStyle(.red) }
             HStack {
@@ -71,26 +79,20 @@ struct CreateTrackEditor: View {
             }
             .onChange(of: kind) { _ in failure = ""; nameFocused = kind == .standard }
             .onReceive(AudioDeviceSettings.shared.$devices.dropFirst()) { _ in refreshInputs() }
-            .onReceive(AudioDeviceSettings.shared.$selectedUID.dropFirst()) { _ in refreshInputs() }
+            .onReceive(AudioDeviceSettings.shared.$inputUID.dropFirst()) { _ in refreshInputs() }
     }
     private func refreshInputs() {
         inputChannels = TrackRecording.shared.inputChannels
         if inputChannels == 0 { sequential = false }
     }
     private func validateCount() -> Int? {
-        let maximum = max(1, availableCount)
-        let draft = countDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parsed = Int(draft)
-        let fallback = Double(draft).map { $0 > Double(maximum) ? maximum : 1 } ?? 1
-        let clamped = min(maximum, max(1, parsed ?? fallback))
-        countDraft = String(clamped)
-        guard parsed == clamped else {
+        guard let parsed = Int(countDraft.trimmingCharacters(in: .whitespacesAndNewlines)), parsed > 0 else {
             invalidCount = true
             withAnimation(.linear(duration: 0.32)) { countShake += 1 }
             return nil
         }
         invalidCount = false
-        return clamped
+        return parsed
     }
     private func create() {
         guard !unavailable else { return }

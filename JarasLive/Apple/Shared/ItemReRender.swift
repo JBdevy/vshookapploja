@@ -9,11 +9,17 @@ enum ItemReRender {
                        settings: MediaProcessingFormat, cancellation: AudioExportCancellation,
                        progress: (AudioExportProgress) -> Void = { _ in }) throws -> AudioClip {
         var source = song
-        var time = source.projectTime; time.timebase = .free; source.timeSettings = time
-        source.markers?.removeAll { $0.isTempo }
+        if let index = source.tracks.firstIndex(where: { $0.id == track.id }), clip.isProjectionMedia {
+            source.tracks[index].role = .other
+            source.tracks[index].clips = [clip]
+        }
+        // Print the same owned tempo sections heard in playback. The result
+        // below records that timing is baked, so these markers cannot stretch
+        // the newly written source a second time.
         for index in source.parts.indices { source.parts[index].pitchSemitones = 0 }
         for index in source.tracks.indices {
             source.tracks[index].fx = nil; source.tracks[index].volume = 1; source.tracks[index].pan = 0
+            source.tracks[index].automation = nil
             source.tracks[index].mute = false; source.tracks[index].solo = false
             for item in source.tracks[index].clips.indices { source.tracks[index].clips[item].muted = false }
         }
@@ -36,15 +42,22 @@ enum ItemReRender {
             result.name = url.deletingPathExtension().lastPathComponent
             result.audioFile = AudioFile(path: "Stems/" + name)
             result.fadeIn = nil; result.fadeOut = nil; result.fadeTimelineStart = nil; result.fadeTimelineDuration = nil
-            result.sourceOffset = 0; result.playbackRate = 1; result.gain = 1; result.normalizationGain = nil; result.channelMode = nil
+            result.pitchSemitones = nil
+            result.fx = nil; result.fxBypassed = nil
+            result.automation = nil; result.automationSourceOffset = nil
+            result.fadeIn = nil; result.fadeOut = nil
+            result.sourceOffset = 0; result.playbackRate = 1; result.gain = 1; result.normalizationGain = nil; result.channelMode = nil; result.phaseInverted = nil; result.pan = nil
+            result.tempoBasePlaybackRate = nil
+            result.renderedTempo = true
             result.loopStart = nil; result.loopLength = nil; result.fx = nil; result.fxBypassed = nil
+            result.automation = nil; result.automationSourceOffset = nil
             result.waveform = overview.waveform; result.waveformChannels = overview.channels
             return result
         } catch { try? FileManager.default.removeItem(at: url); throw error }
     }
 
     static func glueSelection(project: Project, song: Song, ids: Set<UUID>, directory: URL,
-                              cancellation: AudioExportCancellation,
+                              cancellation: AudioExportCancellation, instruments: [UUID: [String: OfflineMIDIInstrument]] = [:],
                               progress: (Int, Int, AudioExportProgress) -> Void = { _, _, _ in }) throws -> [GluedItemReplacement] {
         let groups = song.tracks.filter { $0.kind == .standard }.compactMap { track -> (Track, [AudioClip])? in
             let clips = track.clips.filter { ids.contains($0.id) }
@@ -59,7 +72,7 @@ enum ItemReRender {
                 progress(index, groups.count, AudioExportProgress(completed: 0, total: 1, fileName: group.0.name,
                     fraction: 0, waveform: [], clipped: [], peak: 0))
                 let rendered = try glue(project: project, song: song, track: group.0, clips: group.1, directory: directory,
-                    cancellation: cancellation) { progress(index, groups.count, $0) }
+                    cancellation: cancellation, instruments: instruments[group.0.id] ?? [:]) { progress(index, groups.count, $0) }
                 replacements.append(GluedItemReplacement(track: group.0.id, originals: group.1, rendered: rendered))
             }
             if cancellation.cancelled { throw CancellationError() }
@@ -77,10 +90,10 @@ enum ItemReRender {
     }
 
     static func glue(project: Project, song: Song, track: Track, clips: [AudioClip], directory: URL,
-                     cancellation: AudioExportCancellation, progress: (AudioExportProgress) -> Void = { _ in }) throws -> AudioClip {
+                     cancellation: AudioExportCancellation, instruments: [String: OfflineMIDIInstrument] = [:], progress: (AudioExportProgress) -> Void = { _ in }) throws -> AudioClip {
         if cancellation.cancelled { throw CancellationError() }
         try ItemGlue.validate(track: track, clips: clips)
-        if clips[0].midi != nil {
+        if clips.allSatisfy({ $0.midi != nil }) {
             let result = try ItemGlue.midi(song: song, track: track, clips: clips)
             if cancellation.cancelled { throw CancellationError() }
             return result
@@ -89,9 +102,17 @@ enum ItemReRender {
         let start = ordered[0].startTime, end = ordered.map { $0.startTime + $0.duration }.max()!
         let allMuted = ordered.allSatisfy { $0.muted == true }
         var source = song, renderedTrack = track
+        let containsMIDI = ordered.contains { $0.midi != nil }
+        let frozenCount = ordered.filter { $0.frozenMIDI == true }.count
+        let printTrackFX = containsMIDI || (frozenCount > 0 && frozenCount < ordered.count)
         renderedTrack.clips = ordered
         if allMuted { for index in renderedTrack.clips.indices { renderedTrack.clips[index].muted = false } }
-        renderedTrack.fx = nil; renderedTrack.volume = 1; renderedTrack.pan = 0
+        // Offline MIDI sequencing already combines the track's ordinary notes.
+        // Keep the original clips so take instruments retain separate states,
+        // envelopes and source clocks until their audio is printed.
+        if !printTrackFX { renderedTrack.fx = nil }
+        renderedTrack.automation = nil
+        renderedTrack.volume = 1; renderedTrack.pan = 0
         renderedTrack.mute = false; renderedTrack.solo = false; renderedTrack.parentTrackID = nil
         source.tracks = [renderedTrack]
         let folder = directory.appendingPathComponent("Stems")
@@ -104,17 +125,17 @@ enum ItemReRender {
         do {
             try OfflineAudioExport.run(project: project, song: source, plan: AudioExportPlan(jobs: [job]), mediaDirectory: directory,
                 outputDirectory: folder, sampleRate: 48000, encoding: AudioExportEncoding(channels: 2),
-                cancellation: cancellation, progress: progress)
+                cancellation: cancellation, midiInstruments: instruments, progress: progress)
             if cancellation.cancelled { throw CancellationError() }
             let overview = try StemProjectImporter.audioOverview(url, duration: end - start)
             return AudioClip(id: id, name: url.deletingPathExtension().lastPathComponent, startTime: start, duration: end - start,
                 waveform: overview.waveform, audioFile: AudioFile(path: "Stems/" + name), gain: 1,
                 waveformChannels: overview.channels, muted: allMuted ? true : nil, playbackRate: 1,
-                recordingLane: ordered[0].recordingLane, frozenMIDI: ordered[0].frozenMIDI == true ? true : nil, renderedTiming: true)
+                recordingLane: ordered[0].recordingLane, frozenMIDI: printTrackFX || frozenCount == ordered.count ? true : nil, renderedTiming: true)
         } catch { try? FileManager.default.removeItem(at: url); throw error }
     }
 
-    @MainActor static func midiInstruments(for track: Track) -> [String: OfflineMIDIInstrument] {
+    @MainActor static func midiInstruments(for track: Track, projectDirectory: URL? = nil) -> [String: OfflineMIDIInstrument] {
         guard let fx = track.fx else { return [:] }
         var sources: [String: OfflineMIDIInstrument] = [:]
         for key in fx.instrumentKeys where fx.isEnabled(key) {
@@ -123,7 +144,7 @@ enum ItemReRender {
             let category = InstrumentLibrary.category(id)
             var parameters = voice.instrumentParameters ?? InstrumentLibrary.parameters(id)
             if parameters.controllers == nil { parameters.controllers = InstrumentLibrary.controllers(category) }
-            sources[key] = OfflineMIDIInstrument(url: InstrumentLibrary.shared.file(id), parameters: parameters,
+            sources[key] = OfflineMIDIInstrument(url: InstrumentLibrary.shared.file(id, projectDirectory: projectDirectory), parameters: parameters,
                                                 drums: category == .drum, monophonic: category == .lead)
         }
         return sources
@@ -138,6 +159,7 @@ enum ItemReRender {
         var source = song, renderedTrack = track, sourceClip = clip
         sourceClip.muted = false
         renderedTrack.clips = [sourceClip]
+        renderedTrack.automation = nil
         renderedTrack.volume = 1; renderedTrack.pan = 0; renderedTrack.mute = false; renderedTrack.solo = false
         renderedTrack.parentTrackID = nil
         source.tracks = [renderedTrack]
@@ -155,7 +177,12 @@ enum ItemReRender {
             var result = clip
             result.name = url.deletingPathExtension().lastPathComponent
             result.audioFile = AudioFile(path: "Stems/" + name); result.midi = nil; result.frozenMIDI = true
-            result.sourceOffset = 0; result.playbackRate = 1; result.gain = 1; result.normalizationGain = nil; result.channelMode = nil
+            result.pitchSemitones = nil
+            result.fx = nil; result.fxBypassed = nil
+            result.automation = nil; result.automationSourceOffset = nil
+            result.fadeIn = nil; result.fadeOut = nil
+            result.sourceOffset = 0; result.playbackRate = 1; result.gain = 1; result.normalizationGain = nil; result.channelMode = nil; result.phaseInverted = nil; result.pan = nil
+            result.tempoBasePlaybackRate = nil
             result.loopStart = nil; result.loopLength = nil
             result.waveform = overview.waveform; result.waveformChannels = overview.channels
             return result

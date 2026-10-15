@@ -2,6 +2,21 @@ import XCTest
 @testable import JarasApplication
 
 final class TeleprompterSettingsTests: XCTestCase {
+    func testIgnorePreviewPersistsIndependentlyAndOlderSettingsDefaultToFalse() throws {
+        let (defaults,suite) = preferences(); defer { defaults.removePersistentDomain(forName: suite) }
+        let first = TeleprompterSettingsStore(defaults: defaults)
+        let second = TeleprompterSettingsStore(defaults: defaults, key: "tp2")
+        var settings = first.current; settings.ignoresPreview = true; first.update(settings)
+        XCTAssertFalse(first.current.displaysPreview(true))
+        XCTAssertTrue(second.current.displaysPreview(true))
+        XCTAssertFalse(second.current.displaysPreview(false))
+        XCTAssertTrue(TeleprompterSettingsStore(defaults: defaults).current.ignoresPreview)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        legacy.removeValue(forKey: "ignorePreview")
+        let decoded = try JSONDecoder().decode(TeleprompterSettings.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertFalse(decoded.ignoresPreview)
+        XCTAssertTrue(decoded.displaysPreview(true))
+    }
     func testLegacySettingsDecodeWithoutStretchAndNewStretchPersists() throws {
         var settings = TeleprompterSettings()
         let legacy = try JSONEncoder().encode(settings)
@@ -45,16 +60,16 @@ final class TeleprompterSettingsTests: XCTestCase {
     }
     func testSanitizationProtectsSliderRangesAndDisplayChoices() {
         var value = TeleprompterSettings()
-        value.chordScale = 70; value.textScale = .nan; value.clockScale = 600; value.songNameScale = 0
+        value.chordScale = 170; value.textScale = .nan; value.clockScale = 600; value.songNameScale = 0
         value.mediaScale = .infinity; value.previewScale = -50; value.clockPosition = "invalid"; value.fontFamily = "missing"
         value.borderColor = 0xff123456
         let result = value.sanitized()
-        XCTAssertEqual(result.chordScale,50)
+        XCTAssertEqual(result.chordScale,100)
         XCTAssertEqual(result.textScale,100)
-        XCTAssertEqual(result.clockScale,100)
-        XCTAssertEqual(result.songNameScale,50)
+        XCTAssertEqual(result.clockScale,150)
+        XCTAssertEqual(result.songNameScale,35)
         XCTAssertEqual(result.mediaScale,100)
-        XCTAssertEqual(result.previewScale,50)
+        XCTAssertEqual(result.previewScale,35)
         XCTAssertEqual(result.clockPosition,"center-top")
         XCTAssertEqual(result.fontFamily,"system")
         XCTAssertEqual(result.borderColor,0x123456)

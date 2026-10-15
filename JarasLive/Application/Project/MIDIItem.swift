@@ -74,30 +74,85 @@ public struct MIDIPlaybackNote: Equatable, Sendable {
     public var velocity: Int
     public var channel: Int
 }
+public extension MIDIPlaybackNote {
+    /// Integer UUID words remain exact in the numeric bridge dictionary and
+    /// identify the same held note after a tempo/timebase remap.
+    var sequenceValues: [String: Double] {
+        var result = ["start": start, "end": end, "pitch": Double(pitch), "velocity": Double(velocity), "channel": Double(channel)]
+        var uuid = sourceID.uuid
+        withUnsafeBytes(of: &uuid) { bytes in
+            for word in 0..<4 {
+                var value: UInt32 = 0
+                for byte in 0..<4 { value |= UInt32(bytes[word * 4 + byte]) << (byte * 8) }
+                result["sourceID\(word)"] = Double(value)
+            }
+        }
+        return result
+    }
+}
 public extension AudioClip {
+    /// A take instrument owns its own notes and audio; it must not also feed
+    /// the track instrument. Bypassed/missing inserts retain the track path.
+    var hasTakeInstrument: Bool {
+        midi != nil && fxBypassed != true && fx?.externalPlugins?.contains(where: {
+            !$0.bypassed && $0.category.contains("Instrument") && fx?.inserted.contains($0.effectKey) == true
+        }) == true
+    }
     /// Same source offset/rate contract as audio, including left trims and splits.
     func midiPlaybackNotes() -> [MIDIPlaybackNote] {
         guard let midi, muted != true else { return [] }
         let seconds = 60 / midi.sourceBPM
         let rate = audioRate
         var result: [MIDIPlaybackNote] = []
+        let sourceEnd = sourceOffset + duration * rate
         for note in midi.notes {
-            let rawStart = note.start * seconds, rawEnd = note.end * seconds
-            let start = max(startTime, startTime + (rawStart - sourceOffset) / rate)
-            let end = min(startTime + duration, startTime + (rawEnd - sourceOffset) / rate)
-            if end > start {
-                result.append(MIDIPlaybackNote(sourceID: note.id, start: start, end: end, pitch: note.pitch,
-                    velocity: max(1, min(127, Int((Double(note.velocity) * (gain ?? 1)).rounded()))), channel: note.channel))
+            let noteStart = note.start * seconds, noteEnd = note.end * seconds
+            let loop = loopLength.flatMap { $0 > 0 && $0.isFinite ? $0 : nil }
+            let origin = loopStart ?? 0
+            let firstCycle = loop.map { max(0, Int(floor((sourceOffset - origin) / $0))) } ?? 0
+            let lastCycle = loop.map { max(firstCycle, Int(ceil((sourceEnd - origin) / $0)) - 1) } ?? 0
+            for cycle in firstCycle...lastCycle {
+                let shift = Double(cycle) * (loop ?? 0)
+                let rawStart = loop == nil ? noteStart : max(origin, noteStart) + shift
+                let rawEnd = loop.map { min(origin + $0, noteEnd) + shift } ?? noteEnd
+                guard rawEnd > rawStart else { continue }
+                let start = max(startTime, startTime + (rawStart - sourceOffset) / rate)
+                let end = min(startTime + duration, startTime + (rawEnd - sourceOffset) / rate)
+                if end > start {
+                    // Each repetition must retrigger; only pieces of the same
+                    // held note across tempo boundaries share an identity.
+                    var identifier = note.id.uuid
+                    if cycle > 0 {
+                        withUnsafeMutableBytes(of: &identifier) { bytes in
+                            for index in 0..<8 { bytes[index + 8] ^= UInt8(truncatingIfNeeded: UInt64(cycle) >> (index * 8)) }
+                        }
+                    }
+                    result.append(MIDIPlaybackNote(sourceID: UUID(uuid: identifier), start: start, end: end, pitch: note.pitch,
+                        // Saturate in floating point before converting: a valid
+                        // finite item gain can exceed Int.max when multiplied.
+                        velocity: Int(min(127, max(1, (Double(note.velocity) * (gain ?? 1)).rounded()))), channel: note.channel))
+                }
             }
         }
         return (gain ?? 1) <= 0 ? [] : result.sorted { $0.start < $1.start }
+    }
+    /// Muting a take or lowering its gain must not erase its notes from the
+    /// timeline. Keep the same trim/rate/loop mapping as playback, without its
+    /// audibility filters; the source item's saved state remains unchanged.
+    func midiDisplayNotes() -> [MIDIPlaybackNote] {
+        var visible = self
+        visible.muted = false; visible.gain = 1
+        return visible.midiPlaybackNotes()
     }
 }
 
 public extension Song {
     func midiPlaybackNotes(in clip: AudioClip) -> [MIDIPlaybackNote] {
         var result: [MIDIPlaybackNote] = [], last: [UUID: Int] = [:]
-        for segment in tempoAudioSegments(clip) {
+        var source = clip.sourceOffset
+        for var segment in tempoAudioSegments(clip) {
+            segment.sourceOffset = source
+            source += segment.duration * segment.audioRate
             for note in segment.midiPlaybackNotes() {
                 if let index = last[note.sourceID], abs(result[index].end - note.start) < 0.000001 {
                     result[index].end = note.end
@@ -115,24 +170,27 @@ public struct MIDIRecordingTake: Sendable {
     public let track: UUID
     public let startTime: Double
     public let sourceBPM: Double
+    public let name: String
     private let song: Song
     private let lane: Int
+    private let regionOwnerID: UUID?
     private struct Key: Hashable, Sendable { let source: Int32; let channel: Int; let pitch: Int }
     private struct Press: Sendable { var note: MIDINote; var released = false }
     private struct Pedal: Hashable, Sendable { let source: Int32; let channel: Int }
     private var pressed: [Key: Press] = [:]
     private var sustain: Set<Pedal> = []
     private var notes: [MIDINote] = []
-    public init(track: UUID, song: Song, startTime: Double, lane: Int = 0, id: UUID = UUID()) {
-        self.track = track; self.song = song; self.startTime = startTime; self.lane = lane; self.id = id
-        let probe = AudioClip(id: id, name: "MIDI", startTime: startTime, duration: 0.01)
+    public init(track: UUID, song: Song, startTime: Double, lane: Int = 0, id: UUID = UUID(), name: String = "MIDI recording") {
+        self.track = track; self.song = song; self.startTime = startTime; self.lane = lane; self.id = id; self.name = name
+        regionOwnerID = song.regionOwner(at: startTime)
+        let probe = AudioClip(id: id, name: "MIDI", startTime: startTime, duration: 0.01, regionOwnerID: regionOwnerID)
         let rate = song.tempoAudioSegments(probe).first?.audioRate ?? 1
         sourceBPM = (song.activeTempoMarker(at: startTime)?.tempoBPM ?? song.bpm) / rate
     }
     private func beat(at position: Double) -> Double {
         let elapsed = max(0, position - startTime)
         guard elapsed > 0 else { return 0 }
-        let probe = AudioClip(id: id, name: "MIDI", startTime: startTime, duration: elapsed)
+        let probe = AudioClip(id: id, name: "MIDI", startTime: startTime, duration: elapsed, regionOwnerID: regionOwnerID)
         return song.tempoAudioSegments(probe).reduce(0) { $0 + $1.duration * $1.audioRate } * sourceBPM / 60
     }
     private mutating func release(_ key: Key, at beat: Double) {
@@ -170,9 +228,9 @@ public struct MIDIRecordingTake: Sendable {
         let end = max(startTime, position), time = beat(at: end)
         for key in Array(pressed.keys) { release(key, at: time) }
         sustain.removeAll()
-        guard !notes.isEmpty else { return nil }
+        guard end > startTime || !notes.isEmpty else { return nil }
         notes.sort { $0.start == $1.start ? ($0.channel == $1.channel ? $0.pitch < $1.pitch : $0.channel < $1.channel) : $0.start < $1.start }
-        return AudioClip(id: id, name: "MIDI recording", startTime: startTime, duration: max(0.01, end - startTime),
-            recordingLane: lane, midi: MIDIItem(notes: notes, sourceBPM: sourceBPM))
+        return AudioClip(id: id, name: name, startTime: startTime, duration: max(0.01, end - startTime),
+            recordingLane: lane, midi: MIDIItem(notes: notes, sourceBPM: sourceBPM), regionOwnerID: regionOwnerID)
     }
 }

@@ -3,11 +3,12 @@ import Foundation
 public enum DAWAction: String, Codable, CaseIterable, Sendable {
     case selectTrack, muteTrack, soloTrack, volumeTrack, panTrack
     case muteMaster, soloMaster, volumeMaster
-    case tempoDown, tempoUp, tapTempo, playStop, pause, repeatPlayback, subPlayStop, addTrack
+    case tempoDown, tempoUp, tapTempo, playStop, play, stop, pause, repeatPlayback, subPlayStop, subPlay, addTrack
+    case tunerDown, tunerUp, partsUp, partsDown, toggleParts
     case setlistUp, setlistDown, toggleAuto, splitItems, ignoreNext
     case projectStart, projectEnd, nextRegion, previousRegion, nextTimelinePoint, previousTimelinePoint
     case toggleVideo, toggleTeleprompter, normalizeItems, createTempoMarker
-    case toggleTracks, toggleSetlist
+    case toggleTracks, toggleSetlist, toggleMultiLoopBypass
 
     public static let visible = allCases
     public var needsTrack: Bool { [.selectTrack, .muteTrack, .soloTrack, .volumeTrack, .panTrack].contains(self) }
@@ -28,6 +29,14 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
         case .tempoDown: return "BPM −"
         case .tempoUp: return "BPM +"
         case .tapTempo: return "Tap Tempo"
+        case .play: return "Play"
+        case .stop: return "Stop"
+        case .subPlay: return "Sub Play"
+        case .tunerDown: return "Tuner −"
+        case .tunerUp: return "Tuner +"
+        case .partsUp: return "Parts Up"
+        case .partsDown: return "Parts Down"
+        case .toggleParts: return "Parts show/hide"
         case .playStop: return "Play/Stop"
         case .pause: return "Pause"
         case .repeatPlayback: return "Repeat"
@@ -50,13 +59,14 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
         case .toggleTeleprompter: return "Teleprompter window on/off"
         case .toggleTracks: return "Tracks show/hide"
         case .toggleSetlist: return "Setlist show/hide"
+        case .toggleMultiLoopBypass: return "Multiloops BYPASS on/off"
         }
     }
     public var defaultKeyboard: ControlInput? {
         let command: UInt = 1 << 20, shift: UInt = 1 << 17, option: UInt = 1 << 19
         let key: UInt16, modifiers: UInt, label: String
         switch self {
-        case .selectTrack: return nil
+        case .selectTrack, .toggleMultiLoopBypass, .play, .stop, .subPlay, .tunerDown, .tunerUp, .partsUp, .partsDown, .toggleParts: return nil
         case .muteTrack: (key, modifiers, label) = (46, 0, "M")
         case .soloTrack: (key, modifiers, label) = (1, shift, "⇧S")
         case .tempoDown: (key, modifiers, label) = (27, 0, "−")
@@ -65,7 +75,7 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
         case .playStop: (key, modifiers, label) = (49, 0, "Space")
         case .pause: return nil
         case .repeatPlayback: (key, modifiers, label) = (15, 0, "R")
-        case .subPlayStop: (key, modifiers, label) = (36, 0, "Enter")
+        case .subPlayStop: (key, modifiers, label) = (49, shift, "⇧Space")
         case .addTrack: (key, modifiers, label) = (17, command, "⌘T")
         case .setlistUp: (key, modifiers, label) = (126, 0, "↑")
         case .setlistDown: (key, modifiers, label) = (125, 0, "↓")
@@ -117,7 +127,6 @@ public struct DAWActionBinding: Codable, Equatable, Identifiable {
         case .addTrack: return input.key == 17 && input.modifiers == 1 << 18
         case .createTempoMarker: return input.key == 17 && input.modifiers == (1 << 18 | 1 << 17)
         case .ignoreNext: return input.key == 82 && input.modifiers == 0
-        case .subPlayStop: return input.key == 76 && input.modifiers == 0
         case .tempoUp: return input.key == 69 && input.modifiers == 0
         case .tempoDown: return input.key == 78 && input.modifiers == 0
         default: return false
@@ -132,6 +141,14 @@ public struct DAWActionBindings: Codable, Equatable {
         if let index = stored.firstIndex(where: { $0.action == .selectTrack }),
            stored[index].keyboard?.key == 17, stored[index].keyboard?.modifiers == (1 << 20 | 1 << 17) {
             stored[index].keyboard = nil
+        }
+        let oldSubPlayDefault = ControlInput(kind: "keyboard", label: "Enter", key: 36, modifiers: 0)
+        if let index = stored.firstIndex(where: { $0.action == .subPlayStop }),
+           stored[index].keyboard == oldSubPlayDefault, let replacement = DAWAction.subPlayStop.defaultKeyboard,
+           !stored.contains(where: { $0.action != .subPlayStop && $0.matches(replacement) }) {
+            // Move the old default only when the replacement is free. Keep
+            // custom/unbound shortcuts and both bindings when a conflict exists.
+            stored[index].keyboard = replacement
         }
         entries = DAWAction.allCases.map { action in
             var binding = stored.first { $0.action == action } ?? DAWActionBinding(action: action)
@@ -168,7 +185,7 @@ public struct DAWActionBindings: Codable, Equatable {
     }
     public mutating func setTrack(_ number: Int?, action: DAWAction) {
         guard let index = entries.firstIndex(where: { $0.action == action }) else { return }
-        entries[index].trackNumber = number.map { min(Project.maximumTrackCount, max(1, $0)) }
+        entries[index].trackNumber = number.map { max(1, $0) }
     }
     public mutating func reset(_ action: DAWAction, kind: String? = nil) {
         guard let index = entries.firstIndex(where: { $0.action == action }) else { return }
@@ -185,5 +202,25 @@ public enum DAWActionValue {
     public static func pan(_ value: UInt8) -> Double {
         let clamped = min(127, value)
         return clamped < 64 ? Double(Int(clamped) - 64) / 64 : Double(Int(clamped) - 64) / 63
+    }
+}
+
+/// Shared action organization; iPad exposes performance controls, desktop also
+/// exposes the editing shortcuts used with a keyboard.
+public enum DAWActionCategory: String, CaseIterable, Identifiable {
+    case transport = "Transport", volume = "Volume", mute = "Mute", solo = "Solo", setlist = "Setlist", shortcuts = "Shortcuts"
+    public var id: String { rawValue }
+    public var actions: [DAWAction] { DAWAction.visible.filter { $0.category == self } }
+}
+extension DAWAction {
+    public var category: DAWActionCategory {
+        switch self {
+        case .playStop, .play, .stop, .pause, .subPlay, .subPlayStop, .repeatPlayback, .tempoDown, .tempoUp, .tapTempo, .tunerDown, .tunerUp: return .transport
+        case .volumeMaster, .volumeTrack, .panTrack: return .volume
+        case .muteMaster, .muteTrack: return .mute
+        case .soloMaster, .soloTrack: return .solo
+        case .setlistUp, .setlistDown, .toggleAuto, .ignoreNext, .toggleSetlist, .toggleMultiLoopBypass, .partsUp, .partsDown, .toggleParts: return .setlist
+        default: return .shortcuts
+        }
     }
 }

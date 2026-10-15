@@ -1,3 +1,4 @@
+#include "JarasRealtimeClock.hpp"
 #import "JarasTimecode.h"
 #import <CoreMIDI/CoreMIDI.h>
 #include "../../Core/Timecode/Timecode.hpp"
@@ -23,6 +24,7 @@ struct TimecodeSignal {
     explicit TimecodeSignal(double rate):sampleRate(rate) { mach_timebase_info_data_t info; mach_timebase_info(&info); ticksPerSecond=1e9*info.denom/info.numer; }
     double clock(uint64_t now) const { return position.load()+double(int64_t(now-host.load()))/ticksPerSecond; }
     void render(const AudioTimeStamp* time, AVAudioFrameCount count, AudioBufferList* list) {
+        const auto physical = jaras::physicalRenderTime(*time, sampleRate); time = &physical;
         const bool enabled=active.load(std::memory_order_acquire);
         const double rate=fps.load(), actualRate=rate==29.97 ? 30000.0/1001 : rate;
         const auto version=generation.load(std::memory_order_acquire);
@@ -158,6 +160,7 @@ struct MetronomeProgram {
     std::vector<float> a, b;
     int mode = 0;
     bool bounded = false;
+    uint64_t timingRevision = 0;
 };
 struct MetronomeSignal {
     std::atomic<MetronomeProgram*> program{nullptr}, reading{nullptr};
@@ -166,55 +169,158 @@ struct MetronomeSignal {
     std::vector<std::unique_ptr<MetronomeProgram>> programs;
     std::atomic<double> position{0}, loopStart{0}, loopEnd{0}, referenceSample{NAN};
     std::atomic<uint64_t> host{0}, generation{0};
+    std::atomic<uint64_t> retimedGeneration{~uint64_t(0)};
     std::atomic<bool> running{false}, enabled{true};
+    struct Jump { uint64_t version=0, host=0; double position=0, sample=NAN, first=0, last=0; };
+    std::atomic<uint64_t> jumpVersion{0}, jumpHost{0};
+    std::atomic<double> jumpPosition{0}, jumpSample{NAN}, jumpFirst{0}, jumpLast{0};
+    std::atomic<uint64_t> acknowledgedJump{0};
+    Jump renderJump;
+    uint64_t consumedJump=0;
+    void scheduleJump(double destination, uint64_t deadline, double sample, double first=0, double last=0) {
+        if(jumpHost.load()==deadline) return;
+        // UI promotion can lead audible output by one buffer. Preserve that
+        // pending edge before accepting the following short loop/queued song.
+        if(jumpHost.load() && acknowledgedJump.load(std::memory_order_acquire)!=jumpVersion.load()) return;
+        // Commit the previous mapping on the control side before replacing it.
+        // The renderer already owns that anchor; no generation/reset is needed.
+        if(jumpHost.load()) {
+            position.store(jumpPosition.load()); host.store(jumpHost.load()); referenceSample.store(jumpSample.load());
+        }
+        jumpVersion.fetch_add(1,std::memory_order_acq_rel);
+        jumpPosition.store(destination); jumpSample.store(sample); jumpHost.store(deadline);
+        jumpFirst.store(first); jumpLast.store(last);
+        jumpVersion.fetch_add(1,std::memory_order_release);
+    }
+    void cancelJump() {
+        jumpVersion.fetch_add(1,std::memory_order_acq_rel);
+        jumpHost.store(0);
+        jumpVersion.fetch_add(1,std::memory_order_release);
+    }
     uint64_t renderedGeneration = ~uint64_t(0);
+    uint64_t renderedTimingRevision = 0, nextTimingRevision = 0, configuredTimingRevision = 0;
     double sampleRate, ticksPerSecond, anchorSample=0, anchorPosition=0;
     double previousPosition=-1, previousSample=-1; int64_t previousBeat=-1; size_t previousSection=~size_t(0);
-    MetronomeProgram* renderedProgram=nullptr;
-    struct Voice { size_t frame=0; bool a=true, active=false; };
+    struct Voice { size_t frame=0; bool a=true; MetronomeProgram* sound=nullptr; };
     std::array<Voice,32> voices{};
+    std::array<std::atomic<MetronomeProgram*>,32> voicePrograms;
+    uint32_t activeVoices=0;
     size_t nextVoice=0; float gain=0;
     explicit MetronomeSignal(double rate):sampleRate(rate) {
+        for(auto& sound : voicePrograms) sound.store(nullptr);
         mach_timebase_info_data_t info; mach_timebase_info(&info); ticksPerSecond=1e9*info.denom/info.numer;
+    }
+    void clearVoices() {
+        for(uint32_t pending=activeVoices;pending;pending&=pending-1)
+            voicePrograms[unsigned(__builtin_ctz(pending))].store(nullptr);
+        activeVoices=0;
     }
     double wrap(double p) const {
         const double first=loopStart.load(), last=loopEnd.load();
         return last>first && p>=last ? first+std::fmod(p-first,last-first) : p;
     }
-    double clock(uint64_t now) const { return position.load()+double(int64_t(now-host.load()))/ticksPerSecond; }
+    double clock(uint64_t now) const {
+        const auto deadline=jumpHost.load();
+        if(deadline && now>=deadline) return jumpPosition.load()+double(now-deadline)/ticksPerSecond;
+        return position.load()+double(int64_t(now-host.load()))/ticksPerSecond;
+    }
     void publish(std::unique_ptr<MetronomeProgram> value) {
+        const auto* current=program.load();
+        bool sameTiming=current && current->bounded==value->bounded && current->sections.size()==value->sections.size();
+        if(sameTiming) for(size_t i=0;i<value->sections.size();++i) {
+            const auto& a=current->sections[i]; const auto& b=value->sections[i];
+            if(a.start!=b.start || a.bpm!=b.bpm || a.beats!=b.beats || a.unit!=b.unit || a.end!=b.end ||
+               !(a.origin==b.origin || (std::isnan(a.origin) && std::isnan(b.origin)))) { sameTiming=false; break; }
+        }
+        value->timingRevision=sameTiming ? current->timingRevision : ++nextTimingRevision;
         auto* next=value.get(); programs.push_back(std::move(value)); program.store(next);
         const auto* protectedProgram=reading.load();
+        // Read the callback hazard before the voice hazards: the callback
+        // publishes a voice's sound before releasing its program hazard.
+        std::array<MetronomeProgram*,32> sounding{};
+        for(size_t i=0;i<sounding.size();++i) sounding[i]=voicePrograms[i].load();
         programs.erase(std::remove_if(programs.begin(),programs.end(),[&](const auto& p) {
-            return p.get()!=next && p.get()!=protectedProgram;
+            return p.get()!=next && p.get()!=protectedProgram &&
+                std::find(sounding.begin(),sounding.end(),p.get())==sounding.end();
         }),programs.end());
     }
+    void configure(double nextPosition, uint64_t nextHost, bool nextRunning, double first, double last, double sample) {
+        loopStart.store(first); loopEnd.store(last);
+        const bool wasRunning=running.load();
+        const auto* current=program.load();
+        const bool retime=wasRunning && nextRunning && current && configuredTimingRevision!=0 &&
+            current->timingRevision!=configuredTimingRevision;
+        if(current) configuredTimingRevision=current->timingRevision;
+        if(retime || wasRunning!=nextRunning || std::abs(wrap(clock(nextHost))-nextPosition)>0.06) {
+            cancelJump();
+            position.store(nextPosition); host.store(nextHost); referenceSample.store(sample);
+            const auto version=generation.load()+1;
+            if(retime && wasRunning && nextRunning) retimedGeneration.store(version);
+            generation.store(version,std::memory_order_release);
+        }
+        if(jumpHost.load() && acknowledgedJump.load(std::memory_order_acquire)==jumpVersion.load()) {
+            position.store(jumpPosition.load()); host.store(jumpHost.load()); referenceSample.store(jumpSample.load());
+            cancelJump();
+        }
+        running.store(nextRunning);
+    }
     void render(const AudioTimeStamp* time, AVAudioFrameCount count, AudioBufferList* list) {
+        const auto physical = jaras::physicalRenderTime(*time, sampleRate); time = &physical;
         MetronomeProgram* p;
         do { p=program.load(); reading.store(p); } while(p!=program.load());
         const auto version=generation.load(std::memory_order_acquire);
+        const auto jumpSerial=jumpVersion.load(std::memory_order_acquire);
+        if(!(jumpSerial&1)) {
+            Jump next{jumpSerial,jumpHost.load(),jumpPosition.load(),jumpSample.load(),jumpFirst.load(),jumpLast.load()};
+            if(jumpVersion.load(std::memory_order_acquire)==jumpSerial) renderJump=next;
+        }
         const bool active=running.load() && enabled.load(std::memory_order_acquire);
         if(!active && gain==0) {
             for(unsigned b=0;b<list->mNumberBuffers;++b) if(list->mBuffers[b].mData) std::memset(list->mBuffers[b].mData,0,list->mBuffers[b].mDataByteSize);
             reading.store(nullptr); return;
         }
+        bool rebaseBeat=p && renderedTimingRevision!=0 && renderedTimingRevision!=p->timingRevision;
+        if(p) renderedTimingRevision=p->timingRevision;
+        const int64_t beatBeforeRetime=previousBeat;
+        const bool preservingPulse=renderedGeneration!=~uint64_t(0) && renderedGeneration!=version &&
+            version==retimedGeneration.load();
         if(renderedGeneration!=version || time->mSampleTime<previousSample) {
+            // Start/seek still owns its destination downbeat. Only an in-place
+            // retiming carries the currently sounding pulse across this reset.
+            rebaseBeat=preservingPulse;
             renderedGeneration=version; anchorSample=time->mSampleTime;
             const double reference=referenceSample.load();
             if(std::isfinite(reference)) { anchorSample=reference; anchorPosition=position.load(); }
             else anchorPosition=clock((time->mFlags & kAudioTimeStampHostTimeValid) ? time->mHostTime : mach_absolute_time());
             previousPosition=-1; previousBeat=-1; previousSection=~size_t(0);
-            if(p && p->bounded) for(auto& voice:voices) voice.active=false;
+            if(p && p->bounded && !preservingPulse) clearVoices();
         }
         previousSample=time->mSampleTime;
-        if(renderedProgram!=p) { renderedProgram=p; for(auto& voice:voices) voice.active=false; previousBeat=-1; }
-        const double start=(time->mFlags & kAudioTimeStampSampleTimeValid) ? anchorPosition+(time->mSampleTime-anchorSample)/sampleRate : clock(mach_absolute_time());
+        double start=(time->mFlags & kAudioTimeStampSampleTimeValid) ? anchorPosition+(time->mSampleTime-anchorSample)/sampleRate : clock(mach_absolute_time());
         const float step=float(1.0/(sampleRate*0.003));
         const float targetA=gainA.load(std::memory_order_relaxed), targetB=gainB.load(std::memory_order_relaxed);
-        const double first=position.load();
+        double first=renderJump.host && consumedJump==renderJump.version ? renderJump.position : position.load();
         size_t section=0;
         for(unsigned sample=0;sample<count;++sample) {
-            const double position=wrap(start+sample/sampleRate);
+            if(active && renderJump.host && consumedJump!=renderJump.version) {
+                const double since=std::isfinite(renderJump.sample) && (time->mFlags & kAudioTimeStampSampleTimeValid)
+                    ? (time->mSampleTime+sample-renderJump.sample)/sampleRate
+                    : double(int64_t(time->mHostTime-renderJump.host))/ticksPerSecond+sample/sampleRate;
+                if(since>=-0.5/sampleRate) {
+                    consumedJump=renderJump.version;
+                    anchorPosition=renderJump.position;
+                    anchorSample=time->mSampleTime+sample-std::max(0.0,since)*sampleRate;
+                    start=anchorPosition+(time->mSampleTime-anchorSample)/sampleRate;
+                    first=renderJump.position;
+                    previousPosition=-1; previousBeat=-1; previousSection=~size_t(0);
+                    section=0; rebaseBeat=false; clearVoices();
+                    acknowledgedJump.store(consumedJump,std::memory_order_release);
+                }
+            }
+            const double raw=start+sample/sampleRate;
+            const bool jumped=renderJump.host && consumedJump==renderJump.version;
+            const double position=jumped ? (renderJump.last>renderJump.first && raw>=renderJump.last
+                ? renderJump.first+std::fmod(raw-renderJump.first,renderJump.last-renderJump.first) : raw) : wrap(raw);
             bool inside = !p || !p->bounded;
             if(p && !p->sections.empty() && active && position>=0 && start+sample/sampleRate>=first) {
                 if(position<previousPosition) { section=0; previousBeat=-1; previousPosition=-1; }
@@ -226,27 +332,45 @@ struct MetronomeSignal {
                 const double exact=(position-(std::isfinite(tempo.origin) ? tempo.origin : tempo.start))/beatSeconds;
                 const int64_t beat=int64_t(std::floor(std::max(0.0,exact)+1e-9));
                 const double phase=(exact-double(beat))*beatSeconds;
+                // A tempo edit changes the mapping of the current sample, not
+                // the musical event being heard. Adopt its new beat identity
+                // once, then trigger only the following real beat crossings.
+                if(rebaseBeat) {
+                    const bool exactCrossing=preservingPulse && beat!=beatBeforeRetime && phase>=-0.5/sampleRate && phase<=1.0/sampleRate;
+                    if(!exactCrossing) { previousBeat=beat; previousSection=section; }
+                    rebaseBeat=false;
+                }
                 if((beat!=previousBeat || section!=previousSection) && (previousPosition>=0 || phase<0.003)) {
-                    auto& voice=voices[nextVoice++%voices.size()];
-                    voice={0,p->mode==1 || (p->mode==0 && beat%tempo.beats==0),true};
+                    const auto index=nextVoice++%voices.size();
+                    voices[index]={0,p->mode==1 || (p->mode==0 && beat%tempo.beats==0),p};
+                    voicePrograms[index].store(p);
+                    activeVoices|=uint32_t(1)<<index;
                 }
                 previousBeat=beat; previousSection=section; previousPosition=position;
                 }
             }
             if(!inside) {
-                for(auto& voice:voices) voice.active=false;
+                clearVoices();
                 previousPosition=-1; previousBeat=-1; previousSection=~size_t(0);
             }
             gain=active ? std::min(1.0f,gain+step) : std::max(0.0f,gain-step);
             renderedA += (targetA-renderedA)*step;
             renderedB += (targetB-renderedB)*step;
             float value=0;
-            if(p && gain>0) for(auto& voice:voices) if(voice.active) {
-                const auto& data=voice.a ? p->a : p->b;
-                if(voice.frame<data.size()) value+=data[voice.frame++]*(voice.a ? renderedA : renderedB); else voice.active=false;
+            // Visit only sounding slots, from lowest to highest index, so
+            // overlapping one-shots retain the exact original summation order.
+            if(p && gain>0) for(uint32_t pending=activeVoices;pending;pending&=pending-1) {
+                const auto index=unsigned(__builtin_ctz(pending));
+                auto& voice=voices[index];
+                const auto& data=voice.a ? voice.sound->a : voice.sound->b;
+                if(voice.frame<data.size()) value+=data[voice.frame++]*(voice.a ? renderedA : renderedB);
+                else {
+                    activeVoices&=~(uint32_t(1)<<index);
+                    voicePrograms[index].store(nullptr);
+                }
             }
             value*=gain;
-            if(!active && gain==0) for(auto& voice:voices) voice.active=false;
+            if(!active && gain==0) clearVoices();
             for(unsigned b=0;b<list->mNumberBuffers;++b) {
                 auto& buffer=list->mBuffers[b]; auto* data=static_cast<float*>(buffer.mData);
                 if(data) for(unsigned ch=0;ch<buffer.mNumberChannels;++ch) data[sample*buffer.mNumberChannels+ch]=value;
@@ -282,14 +406,12 @@ struct MetronomeSignal {
     _signal->publish(std::move(value));
 }
 - (void)setEnabled:(BOOL)enabled { _signal->enabled.store(enabled, std::memory_order_release); }
+- (void)scheduleJump:(double)position hostTime:(uint64_t)host sampleTime:(double)sampleTime loopStart:(double)first loopEnd:(double)last {
+    _signal->scheduleJump(position,host,sampleTime,first,last);
+}
+- (void)cancelJump { _signal->cancelJump(); }
 - (void)setGainA:(float)a gainB:(float)b { _signal->gainA.store(a); _signal->gainB.store(b); }
 - (void)configurePosition:(double)position hostTime:(uint64_t)host running:(BOOL)running loopStart:(double)first loopEnd:(double)last sampleTime:(double)sampleTime {
-    _signal->loopStart.store(first); _signal->loopEnd.store(last);
-    const bool wasRunning=_signal->running.load();
-    if(wasRunning!=bool(running) || std::abs(_signal->wrap(_signal->clock(host))-position)>0.06) {
-        _signal->position.store(position); _signal->host.store(host); _signal->referenceSample.store(sampleTime);
-        _signal->generation.fetch_add(1,std::memory_order_release);
-    }
-    _signal->running.store(running);
+    _signal->configure(position,host,running,first,last,sampleTime);
 }
 @end

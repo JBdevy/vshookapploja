@@ -80,7 +80,6 @@ precondition(mixerController.metrics.offset > 150 && setlistController.metrics.o
 let firstScroll = mixerController.metrics.offset
 divider.mouseDragged(with: pointer(divider, .leftMouseDragged, CGPoint(x: 90, y: 95)))
 precondition(mixerController.metrics.offset > firstScroll, "later drag events move synchronously with the pointer")
-divider.advanceScrollFrame()
 precondition(mixerController.metrics.offset > firstScroll && widths.isEmpty, "vertical axis remains locked even if pointer subsequently moves far sideways")
 divider.mouseExited(with: pointer(divider, .mouseMoved, CGPoint(x: 90, y: 95)))
 settle()
@@ -109,15 +108,15 @@ divider.mouseExited(with: hover)
 settle(1.05)
 precondition(divider.scrollIndicatorVisible, "pointer exit and prolonged inactivity never hide the permanent scrollbar")
 divider.mouseMoved(with: hover)
-precondition(NSCursor.current.image.size == NSSize(width: 24, height: 24), "hover uses the cached four-arrow move cursor")
+precondition(NSCursor.current.image.size == NSSize(width: 28, height: 16), "hover uses the cached horizontal-only resize cursor")
 divider.mouseExited(with: pointer(divider, .mouseMoved, CGPoint(x: 90, y: 50)))
 precondition(NSCursor.current == NSCursor.arrow, "leaving the scrollbar restores the pointer without needing a click")
 divider.cursorUpdate(with: hover)
-precondition(NSCursor.current.image.size == NSSize(width: 24, height: 24), "AppKit cursor updates restore the divider cursor on reentry")
+precondition(NSCursor.current.image.size == NSSize(width: 28, height: 16), "AppKit cursor updates restore the divider cursor on reentry")
 divider.mouseDown(with: pointer(divider, .leftMouseDown, CGPoint(x: 6, y: 50)))
 divider.mouseDragged(with: pointer(divider, .leftMouseDragged, CGPoint(x: 60, y: 80)))
 divider.mouseExited(with: pointer(divider, .mouseMoved, CGPoint(x: 60, y: 80)))
-precondition(NSCursor.current.image.size == NSSize(width: 24, height: 24), "an active divider drag keeps its cursor outside the narrow rail")
+precondition(NSCursor.current.image.size == NSSize(width: 28, height: 16), "an active divider drag keeps its cursor outside the narrow rail")
 divider.mouseUp(with: pointer(divider, .leftMouseUp, CGPoint(x: 60, y: 80)))
 precondition(NSCursor.current == NSCursor.arrow, "releasing outside the rail clears the drag cursor")
 
@@ -154,7 +153,7 @@ precondition(unflipped.contentView.bounds.minY == 800 && otherController.metrics
 otherController.scroll(to: 800)
 precondition(unflipped.contentView.bounds.minY == 0 && otherController.metrics.offset == 800)
 
-// A physical wheel interpolates its exact destination; trackpad keeps native momentum.
+// A physical wheel applies its exact step immediately; trackpad keeps native momentum.
 final class SidebarWheelEvent: NSEvent {
     var targetWindow: NSWindow!
     var point = NSPoint.zero
@@ -172,7 +171,7 @@ physicalWheel.targetWindow = window
 physicalWheel.point = mixerScroll.convert(NSPoint(x: 100, y: 100), to: nil)
 precondition(mixerController.handleWheel(physicalWheel))
 let firstWheelPosition = mixerController.metrics.offset
-precondition(firstWheelPosition > 0 && firstWheelPosition < 64, "wheel starts immediately without jumping the entire step")
+precondition(abs(firstWheelPosition - 64) < 0.001, "physical wheel applies its complete step immediately")
 settle(0.65)
 precondition(abs(mixerController.metrics.offset - 64) < 0.001, "wheel settles at its exact distance")
 physicalWheel.delta = -8
@@ -190,7 +189,7 @@ for _ in 0..<120 {
     precondition(!mixerController.handleWheel(physicalWheel), "trackpad remains native")
 }
 precondition(hitProbe.hitCount == previousHits, "trackpad zoom must not hit-test the sidebar's entire hosted document")
-print("SIDEBAR_PHYSICAL_WHEEL_SMOOTH_EXACT_TARGET_AND_REVERSAL_OK")
+print("SIDEBAR_PHYSICAL_WHEEL_IMMEDIATE_EXACT_TARGET_AND_REVERSAL_OK")
 
 // Every thumb event commits immediately, including reversal and mouse-up.
 mixerController.scroll(to: 0)
@@ -205,14 +204,13 @@ for y: CGFloat in [320, 270, 150] {
     divider.mouseDragged(with: pointer(divider, .leftMouseDragged, CGPoint(x: 6, y: y)))
 }
 precondition(preparedTargets.count == 4, "every native drag position commits synchronously")
-divider.advanceScrollFrame()
-precondition(preparedTargets.count == 4 && mixerController.metrics.offset == 0, "the next display frame commits only the latest reversed destination")
+precondition(preparedTargets.count == 4 && mixerController.metrics.offset == 0, "reversal commits its exact destination without waiting for a display frame")
 divider.mouseDragged(with: pointer(divider, .leftMouseDragged, CGPoint(x: 6, y: 350)))
 divider.mouseUp(with: pointer(divider, .leftMouseUp, CGPoint(x: 6, y: 210)))
-precondition(preparedTargets.count == 6 && abs(mixerController.metrics.offset - 10 * ratio) < 0.01, "mouse-up immediately flushes its exact newest position and discards an older pending target")
+precondition(preparedTargets.count == 6 && abs(mixerController.metrics.offset - 10 * ratio) < 0.01, "mouse-up immediately commits its exact newest position")
 let finalOffset = mixerController.metrics.offset
-divider.advanceScrollFrame(); settle()
-precondition(preparedTargets.count == 6 && mixerController.metrics.offset == finalOffset, "stopped display links cannot replay old destinations after release")
+settle()
+precondition(preparedTargets.count == 6 && mixerController.metrics.offset == finalOffset, "settling after release cannot replay old destinations")
 let detachedDivider = MixerDividerView(frame: CGRect(x: 300, y: 0, width: 20, height: 400))
 detachedDivider.scrollController = mixerController; root.addSubview(detachedDivider)
 detachedDivider.mouseDown(with: pointer(detachedDivider, .leftMouseDown, CGPoint(x: 10, y: 80)))
@@ -220,9 +218,9 @@ detachedDivider.mouseDragged(with: pointer(detachedDivider, .leftMouseDragged, C
 detachedDivider.mouseDragged(with: pointer(detachedDivider, .leftMouseDragged, CGPoint(x: 10, y: 300)))
 let offsetBeforeDetach = mixerController.metrics.offset, preparesBeforeDetach = preparedTargets.count
 detachedDivider.removeFromSuperview()
-detachedDivider.advanceScrollFrame(); settle()
+settle()
 precondition(mixerController.metrics.offset == offsetBeforeDetach && preparedTargets.count == preparesBeforeDetach,
-             "detaching the divider cancels every pending frame without moving an old project later")
+             "detaching the divider cannot move an old project later")
 mixerController.prepareScroll = nil
 
 // Horizontal resizing also publishes every native event immediately.

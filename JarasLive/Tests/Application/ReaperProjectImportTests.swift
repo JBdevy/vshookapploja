@@ -9,6 +9,67 @@ final class ReaperProjectImportTests: XCTestCase {
         try text.write(to: url, atomically: true, encoding: .utf8)
         return url
     }
+    func testThreeNestedFoldersKeepImmediateParentsAndCloseMultipleLevels() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try fixture("""
+        <REAPER_PROJECT 0.1
+          <TRACK
+            NAME Root
+            ISBUS 1 1
+          >
+          <TRACK
+            NAME Middle
+            ISBUS 1 1
+          >
+          <TRACK
+            NAME Inner
+            ISBUS 1 1
+          >
+          <TRACK
+            NAME Deepest
+            ISBUS 2 -2
+          >
+          <TRACK
+            NAME RootMember
+            ISBUS 2 -1
+          >
+          <TRACK
+            NAME Outside
+            ISBUS 0 0
+          >
+        >
+        """, in: directory)
+        let result = try ReaperProjectImporter.read(source)
+        let song = result.project.songs[0], tracks = song.tracks
+        XCTAssertEqual(tracks.map(\.name), ["Root", "Middle", "Inner", "Deepest", "RootMember", "Outside"])
+        XCTAssertEqual(tracks.map(\.parentTrackID), [nil, tracks[0].id, tracks[1].id, tracks[2].id, tracks[0].id, nil])
+        XCTAssertEqual(TrackHierarchy(tracks).ancestors(of: tracks[3].id), [tracks[2].id, tracks[1].id, tracks[0].id])
+        XCTAssertEqual(tracks[3].outputPatches, [.masterGroup])
+        XCTAssertEqual(tracks[5].outputPatches, [.master])
+        XCTAssertEqual(song.trackGroupDepths[tracks[3].id], 3)
+        XCTAssertFalse(result.warnings.contains { $0.contains("Nested REAPER") })
+        XCTAssertEqual(try ProjectDocumentCodec.decode(ProjectDocumentCodec.encode(result.project)), result.project)
+    }
+    func testMalformedTakeNestingFailsWithoutCrashingOrChangingSource() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let malformed = [
+            "<TAKE_INLINE\nTAKE\n>\n",
+            "<ITEM\nTAKE\n>\n",
+            "<REAPER_PROJECT\n<TAKE_INLINE\nTAKE\n>\n>\n",
+            "<REAPER_PROJECT\n<TRACK\n<TAKE_INLINE\nTAKE\n>\n>\n>\n",
+            "<REAPER_PROJECT\n<TRACK\n<ITEM\nTAKE\n"
+        ]
+        for text in malformed {
+            let source = try fixture(text, in: directory)
+            let original = try Data(contentsOf: source)
+            XCTAssertThrowsError(try ReaperProjectImporter.read(source), text) { error in
+                XCTAssertTrue(error is ProjectError, "Malformed take structures must produce an import error")
+            }
+            XCTAssertEqual(try Data(contentsOf: source), original)
+        }
+    }
     func testTrackMixerVolumePanMuteIncludingFoldersSurvivesSave() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -43,6 +104,7 @@ final class ReaperProjectImportTests: XCTestCase {
         """, in: directory)
         let original = try Data(contentsOf: url)
         let result = try ReaperProjectImporter.read(url)
+        XCTAssertEqual(result.project.songs[0].projectTime.timebase, .relative)
         let tracks = result.project.songs[0].tracks
         XCTAssertEqual(tracks.map(\.volume), [0.5, 1.9952623149688795, 0, 0.125, 1])
         XCTAssertEqual(tracks.map(\.pan), [-1, 1, 0, 0.35, 0])
@@ -87,7 +149,7 @@ final class ReaperProjectImportTests: XCTestCase {
               POSITION 4.25
               LENGTH 6.5
               SOFFS 1.125
-              PLAYRATE 1.25 1 0
+              PLAYRATE 1.25 1 -3.25
               VOLPAN 0.8 0 2 -1
               MUTE 1
               NAME "Guitar item"
@@ -106,13 +168,14 @@ final class ReaperProjectImportTests: XCTestCase {
         let song = result.project.songs[0]
         XCTAssertEqual(song.tracks.count, 3)
         XCTAssertEqual(song.tracks[1].parentTrackID, song.tracks[0].id)
-        XCTAssertEqual(song.tracks[2].parentTrackID, song.tracks[0].id)
+        XCTAssertEqual(song.tracks[2].parentTrackID, song.tracks[1].id)
         XCTAssertEqual(song.tracks[2].volume, 0.5)
         XCTAssertEqual(song.tracks[2].pan, -0.25)
         XCTAssertTrue(song.tracks[2].mute)
         let clip = try XCTUnwrap(song.tracks[2].clips.first)
         XCTAssertEqual(clip.startTime, 4.25)
         XCTAssertEqual(clip.duration, 6.5)
+        XCTAssertEqual(clip.pitchSemitones, -3.25)
         XCTAssertEqual(clip.sourceOffset, 1.125)
         XCTAssertEqual(clip.audioRate, 1.25)
         XCTAssertEqual(clip.gain, 1.6)
@@ -140,7 +203,7 @@ final class ReaperProjectImportTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), original)
         XCTAssertThrowsError(try ProjectMigration.save(result, to: destination))
     }
-    func testSelectedTakeMediaCopyAndIndependentSameNames() throws {
+    func testAllTakeMediaCopyAndIndependentSameNames() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = try fixture("""
@@ -176,16 +239,18 @@ final class ReaperProjectImportTests: XCTestCase {
         let bytes = Data("original".utf8); try bytes.write(to: audio)
         let result = try ReaperProjectImporter.read(url)
         let clips = result.project.songs[0].tracks[0].clips
-        XCTAssertEqual(clips[0].name, "active")
-        XCTAssertEqual(clips[0].sourceOffset, 3)
-        XCTAssertEqual(result.media.count, 2)
+        XCTAssertEqual(clips.map(\.name), ["old", "active", "Guitar.wav"])
+        XCTAssertEqual(clips[1].sourceOffset, 3)
+        XCTAssertEqual(clips[0].startTime, clips[1].startTime)
+        XCTAssertEqual(clips[0].duration, clips[1].duration)
+        XCTAssertEqual(result.media.count, 3)
         XCTAssertNotEqual(clips[0].audioFile, clips[1].audioFile)
         XCTAssertEqual(result.media.filter { $0.source != nil }.count, 1)
         let destination = directory.appendingPathComponent("Out.jl")
         try ProjectMigration.save(result, to: destination)
-        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(clips[0].audioFile!.path)), bytes)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(clips[1].audioFile!.path)), bytes)
         XCTAssertEqual(try Data(contentsOf: audio), bytes)
-        XCTAssertEqual(ProjectAudioRecovery.missingPaths(in: result.project, directory: directory), [clips[1].audioFile!.path])
+        XCTAssertEqual(ProjectAudioRecovery.missingPaths(in: result.project, directory: directory), [clips[0].audioFile!.path, clips[2].audioFile!.path].sorted())
     }
     func testRejectsMalformedInputWithoutCreatingDestination() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -241,6 +306,34 @@ final class ReaperProjectImportTests: XCTestCase {
         var disunified = result.project
         _ = try disunified.disunifyRegion(roots[0].id)
         XCTAssertTrue(disunified.songs[0].parts.contains { $0.name == "First full song name" && $0.parentRegionID == nil })
+    }
+    func testLongTeleprompterAndChordsNotesImportWithoutTruncation() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let text = String(repeating: "Canção 🎵 C#m / G♭\n", count: 1000) + "Fim"
+        let notes = text.components(separatedBy: "\n").map { "|" + $0 }.joined(separator: "\n")
+        let tracks = ["Teleprompt 1", "TELEPROMPT2", "CIFRAS"].map { name in
+            """
+            <TRACK
+              NAME "\(name)"
+              <ITEM
+                POSITION 2
+                LENGTH 10
+                <NOTES
+            \(notes)
+                >
+              >
+            >
+            """
+        }.joined(separator: "\n")
+        let source = try fixture("<REAPER_PROJECT 0.1\n\(tracks)\n>", in: directory)
+        let original = try Data(contentsOf: source)
+        let result = try ReaperProjectImporter.read(source)
+        let imported = result.project.songs[0].tracks
+        XCTAssertEqual(imported.map(\.kind), [.chords, .teleprompt, .teleprompt2])
+        XCTAssertEqual(imported.compactMap { $0.clips.first?.text }, [text, text, text])
+        XCTAssertEqual(try ProjectDocumentCodec.decode(ProjectDocumentCodec.encode(result.project)), result.project)
+        XCTAssertEqual(try Data(contentsOf: source), original)
     }
     func testSpecialTracksNotesMediaAndRegeneratedTimecode() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -328,7 +421,7 @@ final class ReaperProjectImportTests: XCTestCase {
         """, in: directory)
         let result = try ReaperProjectImporter.read(source)
         let tracks = result.project.songs[0].tracks
-        XCTAssertEqual(tracks.map(\.kind), [.timecode, .chords, .teleprompt, .teleprompt2, .video])
+        XCTAssertEqual(tracks.map(\.kind), [.timecode, .chords, .teleprompt, .teleprompt2, .standard])
         XCTAssertEqual(tracks[2].clips.count, 2, "remove only empty placeholders overlapping actual content")
         XCTAssertEqual(tracks[2].clips[0].text, "Primeira linha\nSegunda linha")
         XCTAssertEqual(tracks[3].clips[0].text, "Texto do segundo TP")

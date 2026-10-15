@@ -74,20 +74,16 @@ enum StemProjectImporter {
         let sources = try droppedSources(urls)
         guard let kind = sources.first?.kind else { throw ProjectError.invalid("No media files to import") }
         guard sources.allSatisfy({ $0.kind == kind }) else { throw ProjectError.invalid("Drop audio and video separately") }
-        if kind == .video {
-            guard destinationKind == .video || destinationKind?.isTeleprompter == true, !destinationTracks.isEmpty else {
-                throw ProjectError.invalid(videoTrackAvailable ? "Drop videos on an existing Video track" : "Create a Video track first, then drop the video on it")
-            }
-            guard layout == .sameTrack || sources.count <= destinationTracks.count else {
-                throw ProjectError.invalid("Choose Same track to add these videos to the existing Video track")
-            }
-        } else {
+        if kind != .video {
             guard destinationKind == nil || destinationKind == .standard else { throw ProjectError.invalid("Audio files must be dropped on a standard audio track") }
         }
         let fm = FileManager.default
         let batch = UUID().uuidString
         var audioNames = MediaFileNames(directory: destination.deletingLastPathComponent().appendingPathComponent("Stems"))
         var videoNames = MediaFileNames(directory: destination.deletingLastPathComponent().appendingPathComponent("Videos"))
+        let projectDirectory = destination.deletingLastPathComponent().resolvingSymlinksInPath()
+        var audioMedia = ExistingProjectMedia(directory: projectDirectory.appendingPathComponent("Stems"))
+        var videoMedia = ExistingProjectMedia(directory: projectDirectory.appendingPathComponent("Videos"))
         var folders: [URL] = []
         do {
             var tracks: [Track] = []
@@ -98,22 +94,33 @@ enum StemProjectImporter {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 progress?(index, sources.count, url.lastPathComponent)
-                let name = isVideo ? videoNames.allocate(url.lastPathComponent) : audioNames.allocate(url.lastPathComponent)
-                let relative = (isVideo ? "Videos/" : "Stems/") + batch
-                let folder = destination.deletingLastPathComponent().appendingPathComponent(relative, isDirectory: true)
-                if !folders.contains(folder) {
-                    try fm.createDirectory(at: folder, withIntermediateDirectories: true); folders.append(folder)
+                let existing = try (isVideo ? videoMedia : audioMedia).identical(to: url)
+                let copied: URL
+                if let existing {
+                    copied = existing
+                } else {
+                    let name = isVideo ? videoNames.allocate(url.lastPathComponent) : audioNames.allocate(url.lastPathComponent)
+                    let folder = projectDirectory.appendingPathComponent((isVideo ? "Videos/" : "Stems/") + batch, isDirectory: true)
+                    if !folders.contains(folder) {
+                        try fm.createDirectory(at: folder, withIntermediateDirectories: true); folders.append(folder)
+                    }
+                    copied = folder.appendingPathComponent(name)
+                    try fm.copyItem(at: url, to: copied)
+                    if isVideo { try videoMedia.register(copied) } else { try audioMedia.register(copied) }
                 }
-                let copied = folder.appendingPathComponent(name)
-                try fm.copyItem(at: url, to: copied)
+                let basePath = (projectDirectory.path as NSString).resolvingSymlinksInPath
+                let copiedPath = (copied.path as NSString).resolvingSymlinksInPath
+                guard copiedPath.hasPrefix(basePath + "/") else { throw ProjectError.invalid("Imported media must stay inside the project folder") }
+                let mediaPath = String(copiedPath.dropFirst(basePath.count + 1))
+                if isVideo && !AVURLAsset(url: copied).tracks(withMediaType: .audio).isEmpty { _ = try AudioFileRead.openMedia(copied) }
                 let overview = isVideo ? (waveform: [Double](), peak: 0.0, channels: [[Double]]()) : try audioOverview(copied, duration: source.duration)
                 let itemName = url.deletingPathExtension().lastPathComponent
                 let clip = AudioClip(id: UUID(), name: itemName, startTime: layout == .sameTrack ? cursor : start, duration: source.duration,
-                                     waveform: overview.waveform, audioFile: AudioFile(path: relative + "/" + name), waveformChannels: overview.channels)
+                                     waveform: overview.waveform, audioFile: AudioFile(path: mediaPath), waveformChannels: overview.channels)
                 if layout == .sameTrack, !tracks.isEmpty { tracks[0].clips.append(clip) }
                 else {
                     let trackID = tracks.count < destinationTracks.count ? destinationTracks[tracks.count] : UUID()
-                    var track = Track(id: trackID, name: isVideo ? (destinationKind?.title ?? "Video") : itemName, role: TrackRole(rawValue: isVideo ? (destinationKind?.rawValue ?? "video") : "other"), color: isVideo ? nil : Track.defaultStandardColor)
+                    var track = Track(id: trackID, name: isVideo && destinationKind?.isText == true ? destinationKind!.title : itemName, role: TrackRole(rawValue: isVideo && !destinationTracks.isEmpty && destinationKind != .video ? (destinationKind?.rawValue ?? "other") : "other"), color: Track.defaultStandardColor)
                     track.clips = [clip]; tracks.append(track)
                 }
                 cursor += source.duration + gap
@@ -154,8 +161,23 @@ enum StemProjectImporter {
                 let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                 guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
                 do {
+                    let duration: Double
+                    #if os(iOS)
+                    var coordinationError: NSError?
+                    var read: Result<Double, Error>?
+                    NSFileCoordinator().coordinate(readingItemAt: file, options: [], error: &coordinationError) { available in
+                        read = Result {
+                            let audio = try AVAudioFile(forReading: available)
+                            return Double(audio.length) / audio.processingFormat.sampleRate
+                        }
+                    }
+                    if let coordinationError { throw coordinationError }
+                    guard let read else { throw ProjectError.invalid("Could not access the selected file.") }
+                    duration = try read.get()
+                    #else
                     let audio = try AVAudioFile(forReading: file)
-                    let duration = Double(audio.length) / audio.processingFormat.sampleRate
+                    duration = Double(audio.length) / audio.processingFormat.sampleRate
+                    #endif
                     guard duration.isFinite, duration > 0 else { throw ProjectError.invalid("Invalid duration") }
                     // Duration comes from the container; scanning names must not decode every sample.
                     files.append(ImportSourceFile(url: file, name: file.lastPathComponent, duration: duration))
@@ -215,7 +237,7 @@ enum StemProjectImporter {
                 for item in project.songs[song].tracks[track].clips.indices {
                     try Task.checkCancellation()
                     let clip = project.songs[song].tracks[track].clips[item]
-                    guard clip.waveformChannels == nil, let file = clip.audioFile else { continue }
+                    guard !clip.isProjectionMedia, clip.waveformChannels == nil, let file = clip.audioFile else { continue }
                     if cache[file.path] == nil {
                         let url = directory.appendingPathComponent(file.path)
                         guard FileManager.default.fileExists(atPath: url.path) else { continue }

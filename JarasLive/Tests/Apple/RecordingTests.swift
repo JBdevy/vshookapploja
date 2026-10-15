@@ -10,7 +10,7 @@ let overflow = JarasCaptureRing(channels: 4, capacity: 100)
 overflow.push(buffer)
 precondition(overflow.droppedFrames == 47900, "overflow must be reported")
 let stereo = UUID(), mono = UUID(), mp3 = UUID(), floatWav = UUID()
-let writer = try CaptureWriter(targets: [CaptureTarget(track: stereo, input: OutputPatch(firstChannel: 3, channelCount: 2), format: "wav"), CaptureTarget(track: mono, input: OutputPatch(firstChannel: 1, channelCount: 1), format: "wav"), CaptureTarget(track: mp3, input: .stereo, format: "mp3"), CaptureTarget(track: floatWav, input: OutputPatch(firstChannel: 3, channelCount: 2), format: "wav32")], directory: directory, format: format)
+let writer = try CaptureWriter(targets: [CaptureTarget(track: stereo, input: OutputPatch(firstChannel: 3, channelCount: 2), format: "wav", name: "Capture - 001"), CaptureTarget(track: mono, input: OutputPatch(firstChannel: 1, channelCount: 1), format: "wav", name: "Capture - 002"), CaptureTarget(track: mp3, input: .stereo, format: "mp3", name: "Capture - 003"), CaptureTarget(track: floatWav, input: OutputPatch(firstChannel: 3, channelCount: 2), format: "wav32", name: "Capture - 004")], directory: directory, format: format)
 let previewed = DispatchSemaphore(value: 0)
 writer.start { duration, waveforms in
     precondition(duration == 1, "live preview follows captured frames")
@@ -48,7 +48,7 @@ writer.finish(start: 30) { items, error in
 }
 precondition(completed.wait(timeout: .now() + 30) == .success, "recording finalization must complete")
 
-let empty = try CaptureWriter(targets: [CaptureTarget(track: UUID(),input: .stereo,format: "wav")],directory: directory,format: format)
+let empty = try CaptureWriter(targets: [CaptureTarget(track: UUID(),input: .stereo,format: "wav", name: "Capture - 005")],directory: directory,format: format)
 let emptyFinished = DispatchSemaphore(value: 0)
 empty.start()
 empty.finish(start: 0) { items,error in
@@ -65,7 +65,7 @@ print("RECORDING_MISSING_INPUT_HANDLED_OK")
 let reusable = JarasCaptureRing(channels: 4, capacity: 96000)
 for take in 0..<3 {
     let captured = DispatchSemaphore(value: 0)
-    let writer = try CaptureWriter(targets: [CaptureTarget(track: stereo, input: .stereo, format: "wav")], directory: directory, format: format, ring: reusable)
+    let writer = try CaptureWriter(targets: [CaptureTarget(track: stereo, input: .stereo, format: "wav", name: "Repeated - \(take)")], directory: directory, format: format, ring: reusable)
     writer.start()
     reusable.push(buffer)
     writer.finish(start: Double(take) * 2) { items, error in
@@ -90,10 +90,68 @@ precondition(producerFinished.wait(timeout: .now() + 3) == .success, "realtime p
 let late = samples.withUnsafeMutableBufferPointer { stoppedRing.readFrames($0.baseAddress!, maximum: 96000) }
 precondition(late == 0 && accepted % 48000 == 0, "stop drains complete accepted buffers without a late write")
 print("RECORDING_STOP_GATE_REUSE_AND_CONCURRENT_PRODUCER_OK")
+
+// Overflow reports a partial take, preserving every PCM frame accepted by
+// the real bridge ring. A later armed track and a new session must not inherit
+// loss that happened before their capture began.
+let lossWarningKey = "Some audio was lost during recording. The captured audio was preserved, but the recording may be incomplete."
+precondition(JarasLocalization.string(lossWarningKey, language: "en") == lossWarningKey)
+precondition(JarasLocalization.string(lossWarningKey, language: "pt-BR") == "Parte do áudio foi perdida durante a gravação. O áudio capturado foi preservado, mas a gravação pode estar incompleta.",
+             "recording loss warning follows the selected application language")
+let lossRing = JarasCaptureRing(channels: 4, capacity: 100)
+lossRing.push(buffer)
+precondition(lossRing.droppedFrames == 47900, "fixture starts with a previously used ring")
+let lossTrack = CaptureTarget(track: UUID(), input: .stereo, format: "wav32", name: "Overflow - 001")
+let cleanTrack = CaptureTarget(track: UUID(), input: .stereo, format: "wav32", name: "Overflow - 002")
+let lossWriter = try CaptureWriter(targets: [lossTrack], directory: directory, format: format, ring: lossRing)
+lossWriter.start()
+precondition(lossRing.droppedFrames == 0, "beginCapture clears loss from a prior session")
+lossRing.push(buffer)
+precondition(lossRing.droppedFrames == 47900, "one oversized capture block deterministically overflows the tiny ring")
+let lossDone = DispatchSemaphore(value: 0)
+lossWriter.changeTargets([cleanTrack], position: 10) { items, message in
+    precondition(items.count == 1 && items[0].track == lossTrack.track, "overflow preserves the partially recorded item")
+    precondition(message == JarasLocalization.string(lossWarningKey), "a partial take explicitly reports the lost audio")
+    let file = try! AVAudioFile(forReading: directory.appendingPathComponent(items[0].clip.audioFile!.path))
+    precondition(file.length == 100 && items[0].clip.duration == 100.0 / 48000,
+                 "overflow does not invent missing samples or delete accepted frames")
+    let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 100)!
+    try! file.read(into: pcm)
+    for channel in 0..<2 { for frame in 0..<100 {
+        precondition(abs(pcm.floatChannelData![channel][frame] - buffer.floatChannelData![channel][frame]) < 0.000001,
+                     "overflow leaves captured PCM intact")
+    } }
+    lossDone.signal()
+}
+precondition(lossDone.wait(timeout: .now() + 5) == .success, "partial take warning completes while another track stays armed")
+let cleanBlock = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 64)!
+cleanBlock.frameLength = 64
+for channel in 0..<4 { for frame in 0..<64 { cleanBlock.floatChannelData![channel][frame] = buffer.floatChannelData![channel][frame] } }
+lossRing.push(cleanBlock)
+let cleanDone = DispatchSemaphore(value: 0)
+lossWriter.finish(start: 10) { items, message in
+    precondition(items.count == 1 && items[0].track == cleanTrack.track && message == nil,
+                 "a track armed after the overflow does not inherit an earlier take's warning")
+    precondition(items[0].clip.duration == 64.0 / 48000, "the later track only receives its own captured frames")
+    cleanDone.signal()
+}
+precondition(cleanDone.wait(timeout: .now() + 5) == .success)
+let cleanSession = try CaptureWriter(targets: [CaptureTarget(track: UUID(), input: .stereo, format: "wav32", name: "Overflow - 003")],
+                                     directory: directory, format: format, ring: lossRing)
+cleanSession.start(); lossRing.push(cleanBlock)
+let cleanSessionDone = DispatchSemaphore(value: 0)
+cleanSession.finish(start: 20) { items, message in
+    precondition(items.count == 1 && message == nil && lossRing.droppedFrames == 0,
+                 "a new recording reusing the ring starts without a stale loss warning")
+    cleanSessionDone.signal()
+}
+precondition(cleanSessionDone.wait(timeout: .now() + 5) == .success)
+print("RECORDING_OVERFLOW_LOCALIZED_PARTIAL_TAKE_WARNING_PRESERVED_PCM_NEW_TARGET_AND_REUSED_SESSION_OK")
+
 // Independent arming while global REC stays active, including zero targets.
 let dynamic = try CaptureWriter(targets: [], directory: directory, format: format)
-let a = CaptureTarget(track: UUID(), input: .stereo, format: "wav", lane: 4)
-let b = CaptureTarget(track: UUID(), input: .stereo, format: "wav", lane: 2)
+let a = CaptureTarget(track: UUID(), input: .stereo, format: "wav", name: "Capture - 007", lane: 4)
+let b = CaptureTarget(track: UUID(), input: .stereo, format: "wav", name: "Capture - 008", lane: 2)
 let disarmed = DispatchSemaphore(value: 0), final = DispatchSemaphore(value: 0)
 dynamic.start()
 dynamic.changeTargets([a,b], position: 40) { _,_ in }
@@ -117,7 +175,7 @@ precondition(final.wait(timeout: .now()+3) == .success)
 print("RECORDING_EMPTY_REC_DYNAMIC_ARM_DISARM_AND_CONTINUOUS_OTHER_TRACK_OK")
 
 for formatKey in ["wav24pcm", "wav32pcm", "aiff24pcm", "aiff32pcm", "mp3-128", "mp3-320"] {
-    let target = CaptureTarget(track: UUID(), input: .stereo, format: formatKey)
+    let target = CaptureTarget(track: UUID(), input: .stereo, format: formatKey, name: formatKey)
     let take = try CaptureWriter(targets: [target], directory: directory, format: format)
     take.start(); take.ring.push(buffer)
     let done = DispatchSemaphore(value: 0)
@@ -138,8 +196,8 @@ for formatKey in ["wav24pcm", "wav32pcm", "aiff24pcm", "aiff32pcm", "mp3-128", "
 print("RECORD_GLOBAL_WAV_AIFF_24_32_INTEGER_PCM_AND_MP3_128_320_OK")
 
 let outputModes = try CaptureWriter(targets: [
-    CaptureTarget(track: UUID(), input: OutputPatch(firstChannel: 3, channelCount: 2), format: "wav", recordedChannels: 1),
-    CaptureTarget(track: UUID(), input: OutputPatch(firstChannel: 2, channelCount: 1), format: "wav", recordedChannels: 2)
+    CaptureTarget(track: UUID(), input: OutputPatch(firstChannel: 3, channelCount: 2), format: "wav", name: "Capture - 009", recordedChannels: 1),
+    CaptureTarget(track: UUID(), input: OutputPatch(firstChannel: 2, channelCount: 1), format: "wav", name: "Capture - 010", recordedChannels: 2)
 ], directory: directory, format: format)
 outputModes.start { _, _ in }
 outputModes.ring.push(buffer)
@@ -162,3 +220,26 @@ outputModes.finish(start: 0) { items, error in
 }
 precondition(outputDone.wait(timeout: .now()+5) == .success)
 print("RECORDING_OUTPUT_MODE_INDEPENDENT_OF_INPUT_PATCH_OK")
+
+var names = RecordingNames(directory: directory, clips: [AudioClip(id: UUID(), name: "Piano - 001", startTime: 0, duration: 1)])
+precondition(names.allocate(track: "Piano") == "Piano - 002")
+precondition(names.allocate(track: "Piano") == "Piano - 003")
+precondition(names.allocate(track: "PIANO") == "PIANO - 004")
+print("RECORDING_NAMES_OK")
+
+let monitorEngine = AVAudioEngine()
+let monitorFormat = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
+try monitorEngine.enableManualRenderingMode(.offline, format: monitorFormat, maximumFrameCount: 512)
+let monitorRing = JarasCaptureRing(channels: 4, capacity: 4096)
+let monitorSource = monitorRing.monitorSource(withSampleRate: 48000, firstChannel: 2, channelCount: 2)
+monitorEngine.attach(monitorSource); monitorEngine.connect(monitorSource, to: monitorEngine.mainMixerNode, format: monitorFormat)
+try monitorEngine.start()
+let small = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024)!
+small.frameLength = 1024
+for c in 0..<4 { small.floatChannelData![c].update(repeating: Float(c + 1) / 10, count: 1024) }
+monitorRing.push(small)
+let monitorPCM = AVAudioPCMBuffer(pcmFormat: monitorFormat, frameCapacity: 512)!
+let monitorStatus = try monitorEngine.renderOffline(512, to: monitorPCM); precondition(monitorStatus == .success)
+precondition(abs(monitorPCM.floatChannelData![0][100] - 0.3) < 0.0001 && abs(monitorPCM.floatChannelData![1][100] - 0.4) < 0.0001, "live monitor maps input channels 3/4 independently from the recording writer")
+monitorEngine.stop()
+print("INPUT_MONITOR_NATIVE_RING_CHANNEL_MAPPING_OK")

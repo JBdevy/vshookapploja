@@ -48,17 +48,40 @@ public enum LogicProjectImporter {
         let fm = FileManager.default
         guard bundle.pathExtension.lowercased() == "logicx" else { throw invalid("Select a .logicx project.") }
         let alternatives = bundle.appendingPathComponent("Alternatives")
-        let information = (try? plist(bundle.appendingPathComponent("Resources/ProjectInformation.plist"))) ?? [:]
+        let information: [String: Any]
+        do { information = try plist(bundle.appendingPathComponent("Resources/ProjectInformation.plist")) }
+        catch {
+            let failure = error as NSError
+            guard failure.domain == NSCocoaErrorDomain,
+                  failure.code == NSFileReadNoSuchFileError || failure.code == NSFileNoSuchFileError else { throw error }
+            information = [:]
+        }
         let available = try fm.contentsOfDirectory(at: alternatives, includingPropertiesForKeys: nil)
             .filter { fm.fileExists(atPath: $0.appendingPathComponent("ProjectData").path) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        let selected: URL?
-        if let value = information["ActiveVariant"] as? NSNumber {
-            selected = available.first { Int($0.lastPathComponent) == value.intValue }
-        } else if let value = information["ActiveVariant"] as? String {
-            selected = available.first { $0.lastPathComponent == value || Int($0.lastPathComponent) == Int(value) }
-        } else { selected = nil }
-        guard let alternative = selected ?? available.first else { throw invalid("No project alternative was found.") }
+        guard !available.isEmpty else { throw invalid("No project alternative was found.") }
+        let alternative: URL
+        if let active = information["ActiveVariant"] {
+            let matches: [URL]
+            if let value = active as? String {
+                // Exact names may be nonnumeric; nil integer conversions must
+                // never make two unrelated alternative names compare equal.
+                let exact = available.filter { $0.lastPathComponent == value }
+                if !exact.isEmpty { matches = exact }
+                else if let number = Int(value) { matches = available.filter { Int($0.lastPathComponent) == number } }
+                else { matches = [] }
+            } else if let value = active as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+                      value.doubleValue.isFinite, value.doubleValue.rounded() == value.doubleValue {
+                matches = available.filter { Int($0.lastPathComponent).map { Double($0) == value.doubleValue } == true }
+            } else { throw invalid("Invalid active project alternative.") }
+            guard matches.count == 1 else {
+                throw invalid(matches.isEmpty ? "The active project alternative was not found." : "The active project alternative is ambiguous.")
+            }
+            alternative = matches[0]
+        } else {
+            guard available.count == 1 else { throw invalid("Multiple project alternatives were found without an active selection. Open and save the desired alternative in Logic first.") }
+            alternative = available[0]
+        }
         let metadata = try plist(alternative.appendingPathComponent("MetaData.plist"))
         let url = alternative.appendingPathComponent("ProjectData")
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
@@ -68,7 +91,7 @@ public enum LogicProjectImporter {
         var project = Project.empty(name: name)
         project.importedTimeline = true
         var song = project.songs[0]
-        song.name = name; song.tracks = []; song.parts = []; song.markers = []; song.timeSettings = .legacy
+        song.name = name; song.tracks = []; song.parts = []; song.markers = []; song.timeSettings = ProjectTimeSettings()
         let rate = (metadata["SampleRate"] as? NSNumber)?.doubleValue ?? 44100
         let defaultBPM = (metadata["BeatsPerMinute"] as? NSNumber)?.doubleValue ?? 120
         guard (8000...768000).contains(rate), (1...1000).contains(defaultBPM) else { throw invalid("Invalid sample rate or tempo.") }
@@ -110,7 +133,7 @@ public enum LogicProjectImporter {
         let beats = song.meterBeats, unit = song.meterUnit
         for point in tempos where point.tick >= 0 {
             song.markers?.append(TimelineMarker(id: UUID(), name: String(format: "%g", point.bpm), position: seconds(point.tick), color: 0xAAAAAA,
-                tempoBPM: point.bpm, tempoBeats: beats, tempoUnit: unit, tempoTimebase: .free))
+                tempoBPM: point.bpm, tempoBeats: beats, tempoUnit: unit, tempoTimebase: .global, tempoReferenceBPM: point.bpm))
         }
         var files: [Int: FileReference] = [:]
         var regions: [String: Bytes] = [:]
@@ -213,6 +236,7 @@ public enum LogicProjectImporter {
         guard !song.tracks.isEmpty else { throw invalid("No arrangement tracks were found.") }
         var media: [String: Media] = [:]
         var midiItems = 0, extendedItems = 0
+        var unsupportedItemPitch = false
         var unsupportedMIDIEvents = false
         var trimmedMIDINotes = false
         let sequenceEvents = Dictionary(grouping: records.filter { $0.tag == "qSvE" && $0.kind == 23 }, by: \.owner)
@@ -315,6 +339,12 @@ public enum LogicProjectImporter {
                 media[path] = Media(relativePath: path, source: file.source)
                 var clip = AudioClip(id: UUID(), name: try region.text(74), startTime: max(0, start), duration: end - max(0, start),
                                      sourceOffset: sourceFrame / file.rate + max(0, -start), audioFile: AudioFile(path: path))
+                // Logic's audio arrangement event stores signed transpose at +53
+                // and signed fine tuning (cents) at +50. Confirmed with positive
+                // and negative region edits saved by Logic 10.7.6.
+                let itemPitch = Double(Int8(bitPattern: event.data[53])) + Double(Int8(bitPattern: event.data[50])) / 100
+                if (-12...12).contains(itemPitch) { clip.pitchSemitones = itemPitch == 0 ? nil : itemPitch }
+                else { unsupportedItemPitch = true }
                 // Region mute is represented independently of selection flags.
                 clip.muted = (try event.int(12) & 0x100) != 0
                 if musicTracks.contains(trackIndex) {
@@ -336,8 +366,17 @@ public enum LogicProjectImporter {
             }
         }
         markers.sort { $0.start < $1.start }
-        song.duration = max(1, song.tracks.flatMap(\.clips).map { $0.startTime + $0.duration }.max() ?? 0,
-                            markers.map(\.end).max() ?? 0, musicRegions.map(\.endTime).max() ?? 0, song.markers?.map(\.position).max() ?? 0, markers.map(\.start).max() ?? 0)
+        var duration = 1.0
+        for track in song.tracks {
+            for clip in track.clips { duration = max(duration, clip.startTime + clip.duration) }
+        }
+        for marker in markers {
+            duration = max(duration, marker.start)
+            duration = max(duration, marker.end)
+        }
+        for region in musicRegions { duration = max(duration, region.endTime) }
+        for marker in song.markers ?? [] { duration = max(duration, marker.position) }
+        song.duration = duration
         for (index, marker) in markers.enumerated() {
             song.markers?.append(TimelineMarker(id: UUID(), name: String(marker.name.prefix(TimelineMarker.maximumNameLength)), position: marker.start, color: 0xC7AB40))
             let next = index + 1 < markers.count ? markers[index + 1].start : song.duration
@@ -349,6 +388,7 @@ public enum LogicProjectImporter {
         for index in song.tracks.indices { song.tracks[index].clips.sort { $0.startTime < $1.startTime } }
         project.songs = [song]
         var warnings: [String] = []
+        if unsupportedItemPitch { warnings.append("Item pitch outside the supported ±12 semitone range was not converted.") }
         if missingMixerSettings { warnings.append("Some Logic mixer channels use an unsupported layout. Their volume, pan and mute were left at defaults; review those tracks.") }
         if midiItems > 0 { warnings.append("MIDI notes were imported. Choose an instrument in CatLive; Logic instruments and plug-ins are not migrated.") }
         if unsupportedMIDIEvents { warnings.append("Logic MIDI controller, expression and nested sequence events are not migrated; review those regions.") }

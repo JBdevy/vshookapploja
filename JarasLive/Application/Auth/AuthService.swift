@@ -12,12 +12,17 @@ public final class AuthService: ObservableObject {
     @Published public private(set) var graceNotice = ""
     private var announcedGrace: String?
     @Published public private(set) var workspaceAllowed = false
-    public let installation: AuthorizedDevice
+    @Published public private(set) var installation: AuthorizedDevice
+    @Published public private(set) var requiresDeviceName = false
+    private var pendingLogin: (email: String, password: String)?
+    public var onDeviceNameChanged: (String) -> Void = { _ in }
     private let backend: any BackendClient, store: any SecureStore
     private let entitlements: EntitlementService, authorization: DeviceAuthorizationService
     private let feature: String
     private let verifier: LicenseLeaseVerifier?
     private var trustedCache: SessionCache?
+    private var checkingOnlineAccess = false
+    private let quarantineNoticeKey = "catlive.production.quarantineNotice"
     private var clockWrite: Task<Void, Error>?
     private var lastClockWrite = 0.0
     private let trialClockKey = "catlive.production.trialClock"
@@ -36,9 +41,9 @@ public final class AuthService: ObservableObject {
         self.backend = backend; self.store = store; self.installation = installation; self.feature = feature; self.verifier = verifier
         entitlements = EntitlementService(backend: backend); authorization = DeviceAuthorizationService(backend: backend)
     }
-    private func readSessionData() async throws -> Data? {
+    private func readSecureData(_ key: String) async throws -> Data? {
         let store = self.store
-        return try await Task.detached(priority: .utility) { try store.read("catlive.production.session") }.value
+        return try await Task.detached(priority: .utility) { try store.read(key) }.value
     }
     private func writeSessionData(_ data: Data) async throws {
         let store = self.store
@@ -87,7 +92,7 @@ public final class AuthService: ObservableObject {
     }
     private func reason(_ entitlement: Entitlement) -> String {
         if entitlement.permits(feature, at: serverNow) {
-            return "Conecte-se à internet para validar sua licença. O áudio está desativado até a validação."
+            return "Não foi possível restaurar a ativação deste dispositivo. Faça login novamente."
         }
         switch entitlement.status {
         case "blocked": return "Esta conta está bloqueada. Entre em contato com o suporte. O áudio está desativado."
@@ -99,14 +104,16 @@ public final class AuthService: ObservableObject {
     }
     private func accept(_ result: LoginResult, validatedAt: Date, offline: Bool, trustedTime: Date? = nil) {
         guard (try? requireVerified(result)) != nil else {
-            setAudio(false, reason: "Não foi possível verificar sua licença. Conecte-se à internet para validar novamente.")
+            setAudio(false, reason: "Não foi possível restaurar a ativação deste dispositivo. Faça login novamente.")
             return
         }
         trustedCache = SessionCache(login: result, validatedAt: validatedAt)
         loginResult = result; workspaceAllowed = true
         phase = offline ? .offlineAuthorized : .authorized
         earliestDate = validatedAt.addingTimeInterval(-300)
-        let end = min(result.entitlement.accessExpiresAt, result.entitlement.offlineValidUntil)
+        // The saved activation has no periodic online-renewal requirement.
+        // Only the purchased plan/trial's own expiry (including grace) applies.
+        let end = result.entitlement.accessExpiresAt
         validationWallDate = Date()
         validationUptime = ProcessInfo.processInfo.systemUptime
         serverDate = trustedTime ?? result.entitlement.serverTime.map { $0.addingTimeInterval(max(0, Date().timeIntervalSince(validatedAt))) } ?? Date()
@@ -125,7 +132,7 @@ public final class AuthService: ObservableObject {
         }
         guard audioAllowed, let result = loginResult else { return }
         guard result.entitlement.permits(feature, at: serverNow), Date() >= earliestDate,
-              result.entitlement.offlineValidUntil > serverNow, ProcessInfo.processInfo.systemUptime < deadline else {
+              ProcessInfo.processInfo.systemUptime < deadline else {
             setAudio(false, reason: reason(result.entitlement)); updateGraceNotice(); return
         }
     }
@@ -133,34 +140,83 @@ public final class AuthService: ObservableObject {
         guard !busy else { return }; busy = true; defer { busy = false }
         phase = .checkingSession
         do {
-            guard let data = try await readSessionData() else { phase = .unauthenticated; return }
+            // A quarantine already received from the server remains effective
+            // even if an old activation cache survived a failed deletion.
+            if try await readSecureData(quarantineNoticeKey) != nil { throw BackendFailure.quarantined }
+            guard let data = try await readSecureData("catlive.production.session") else {
+                phase = .unauthenticated
+                return
+            }
             let cache = try JSONDecoder().decode(SessionCache.self, from: data)
             guard cache.login.device.installationId == installation.installationId else { throw BackendFailure.invalidSession }
             loginResult = cache.login; workspaceAllowed = true; trustedCache = cache
             try requireVerified(cache.login)
+            guard cache.login.device.status == .active else { throw BackendFailure.revoked }
+            guard Date() >= cache.validatedAt.addingTimeInterval(-300) else { throw BackendFailure.clockChanged }
+            var trustedTime: Date?
             if cache.login.entitlement.planId == "trial" {
                 if try store.read(consumedTrialKey) != nil { throw BackendFailure.trialConsumed }
                 if let clockData = try store.read(trialClockKey) {
                     let clock = try JSONDecoder().decode(OfflineTrialClock.self, from: clockData)
-                    let now = try clock.resume(account: cache.login.account.id, installation: installation.id, expiresAt: cache.login.entitlement.expiresAt)
-                    accept(cache.login, validatedAt: cache.validatedAt, offline: true, trustedTime: now)
-                    if allowed { try await checkpointTrial()?.value; return }
+                    trustedTime = try clock.resume(account: cache.login.account.id, installation: installation.id, expiresAt: cache.login.entitlement.expiresAt)
                 }
-                // Initial activation / legacy cache migration, or the trial has ended.
-                try await validate(cache: cache)
-            } else if entitlements.permitsOffline(cache, installationId: installation.installationId, feature: feature) {
-                accept(cache.login, validatedAt: cache.validatedAt, offline: true)
-            } else { try await validate(cache: cache) }
+            }
+            // Startup never refreshes tokens or contacts the licensing backend.
+            // Legacy trial caches use their signed server time until checkpointed.
+            accept(cache.login, validatedAt: cache.validatedAt, offline: true, trustedTime: trustedTime)
+            if allowed { try await checkpointTrial()?.value }
         } catch { await deny(error) }
     }
+    /// Validate credentials before asking for a name, without occupying a seat
+    /// or consuming a trial until the user completes the mandatory second step.
+    @discardableResult public func beginLogin(email: String, password: String) async -> Bool {
+        guard !busy else { return false }
+        do {
+            if let name = try DeviceDisplayName.saved(in: store) {
+                installation.deviceName = name
+                return await login(email: email, password: password)
+            }
+            busy = true; defer { busy = false }
+            message = ""
+            _ = try await backend.credentialDevices(email: email, cpf: password)
+            pendingLogin = (email, password)
+            requiresDeviceName = true
+            return false
+        } catch { message = error.localizedDescription; return false }
+    }
+    public func cancelDeviceNaming() {
+        guard !busy else { return }
+        pendingLogin = nil; requiresDeviceName = false; message = ""
+    }
+    @discardableResult public func completeDeviceNaming(_ value: String) async -> Bool {
+        guard !busy, let credentials = pendingLogin else { return false }
+        guard let name = DeviceDisplayName.validated(value) else {
+            message = "Digite um nome válido e curto para o dispositivo, sem quebras de linha."
+            return false
+        }
+        var device = installation; device.deviceName = name
+        return await signIn(email: credentials.email, password: credentials.password, device: device, chosenName: name)
+    }
     @discardableResult public func login(email: String, password: String) async -> Bool {
+        await signIn(email: email, password: password, device: installation)
+    }
+    private func signIn(email: String, password: String, device: AuthorizedDevice, chosenName: String? = nil) async -> Bool {
         guard !busy else { return false }; busy = true; defer { busy = false }
         message = ""
         do {
-            let result = try await backend.login(email: email, password: password, device: installation)
+            let result = try await backend.login(email: email, password: password, device: device)
             try requireVerified(result)
             try await prepareTrialState(result)
+            if let chosenName {
+                guard result.device.deviceName == chosenName else { throw BackendFailure.invalidSession }
+                try store.write(Data(chosenName.utf8), key: DeviceDisplayName.storageKey)
+            }
+            let secureStore = store, quarantineKey = quarantineNoticeKey
+            try await Task.detached(priority: .utility) { try secureStore.delete(quarantineKey) }.value
             try await writeSessionData(JSONEncoder().encode(SessionCache(login: result, validatedAt: Date())))
+            installation.deviceName = device.deviceName
+            pendingLogin = nil; requiresDeviceName = false
+            onDeviceNameChanged(device.deviceName)
             accept(result, validatedAt: Date(), offline: false)
             devices = (try? await backend.devices(result.session)) ?? [result.device]
             return true
@@ -224,21 +280,37 @@ public final class AuthService: ObservableObject {
             try await validate(cache: cache)
         } catch { await deny(error) }
     }
+    /// Automatic online checks enforce only device-activation quarantine.
+    /// Token expiry and network failures leave the saved activation intact.
+    public func checkOnlineAccess() async {
+        guard !busy, !checkingOnlineAccess, let result = loginResult else { return }
+        checkingOnlineAccess = true; defer { checkingOnlineAccess = false }
+        do { try await backend.accessStatus(result.session, activationProof: result.entitlement.proof) }
+        catch {
+            guard !busy, loginResult?.session.refreshToken == result.session.refreshToken,
+                  let failure = error as? BackendFailure,
+                  failure == .quarantined else { return }
+            await deny(failure)
+        }
+    }
     private func deny(_ error: Error) async {
         message = error.localizedDescription
         phase = .unauthorized; revokedPending = false; onPendingRevocation(false)
-        setAudio(false, reason: loginResult.map { result in
+        setAudio(false, reason: (error as? BackendFailure) == .quarantined ? error.localizedDescription : loginResult.map { result in
             if !result.entitlement.permits(feature, at: serverNow) { return reason(result.entitlement) }
             return error.localizedDescription + " O áudio está desativado."
         } ?? "")
-        if let failure = error as? BackendFailure, [.revoked, .blocked, .expired, .invalidSession].contains(failure), var result = loginResult {
+        if let failure = error as? BackendFailure, [.revoked, .blocked, .quarantined, .expired, .invalidSession].contains(failure), var result = loginResult {
             result.device.status = .revoked; loginResult = result
             trustedCache = SessionCache(login: result, validatedAt: Date())
             if let data = try? JSONEncoder().encode(SessionCache(login: result, validatedAt: Date())) {
                 try? await writeSessionData(data)
             }
         }
-        if (error as? BackendFailure) == .invalidSession {
+        if (error as? BackendFailure) == .quarantined {
+            try? store.write(Data([1]), key: quarantineNoticeKey)
+        }
+        if let failure = error as? BackendFailure, [.invalidSession, .quarantined].contains(failure) {
             // The server no longer recognizes these credentials (for example,
             // after deleting the account). Keep the editor alive for saving,
             // but discard its login, devices and old signed plan together.
@@ -255,7 +327,7 @@ public final class AuthService: ObservableObject {
         }
     }
     private func handleAccountRequestFailure(_ error: Error) async {
-        if let failure = error as? BackendFailure, [.invalidSession, .revoked, .blocked, .expired].contains(failure) {
+        if let failure = error as? BackendFailure, [.invalidSession, .revoked, .blocked, .quarantined, .expired].contains(failure) {
             await deny(error)
         } else { message = error.localizedDescription }
     }

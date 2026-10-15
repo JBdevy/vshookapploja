@@ -5,7 +5,10 @@ mkdir -p build/bridge-tests
 cat > build/bridge-tests/main.swift <<'SWIFT'
 import Foundation
 var project = Project.demo()
-project.songs[0].markers = [TimelineMarker(id: UUID(), name: "Refrão", position: 12, color: 0xffcc00)]
+var resolume = ResolumeSettings(); resolume.oscPort = 7001; resolume.withMarkers = ["region:example": "2:0"]
+project.resolume = resolume
+project.savedCursor = SavedProjectCursor(songID: project.songs[0].id, position: 42.125)
+project.songs[0].markers = [TimelineMarker(id: UUID(), name: "Refrão", position: 12, color: 0xffcc00, section: true, loopSection: true)]
 project.songs[0].tracks[1].parentTrackID = project.songs[0].tracks[0].id
 project.songs[0].tracks[1].patch = .masterGroup
 project.songs[0].tracks[1].secondaryPatch = OutputPatch(firstChannel: 3, channelCount: 2)
@@ -32,20 +35,23 @@ let loopStart = TimelineMarker(id: UUID(), name: "Loop start", position: 3, colo
 let loopEnd = TimelineMarker(id: UUID(), name: "Loop end", position: 9, color: 0xffffff)
 // Keep unresolved marker references here to verify lossless persistence after marker deletion.
 var multiLoop = MultiLoop(name: "Verse loop", marker1: loopStart.id, marker2: loopEnd.id)
+multiLoop.enabled = false; multiLoop.mixerEnabled = false
 var loopTrack = MultiLoopTrack(id: project.songs[0].tracks[0].id, gain: 0.2)
 loopTrack.autoFader = true; loopTrack.mute = true; loopTrack.solo = true
 multiLoop.tracks = [loopTrack, MultiLoopTrack(id: MultiLoopTrack.masterID, gain: 0.5)]
 project.songs[0].parts[0].multiLoops = [multiLoop]
-project.songs[0].parts[0].pitchSemitones = 6
+project.songs[0].parts[0].pitchSemitones = 12
 project.songs[0].parts[0].pitchTrackIDs = [project.songs[0].tracks[0].id]
 project.songs[0].parts[0].pitchGroupIDs = []
-project.songs[0].parts[1].pitchSemitones = -6
+project.songs[0].parts[1].pitchSemitones = -12
 project.songs[0].parts[1].pitchTrackIDs = []
 project.songs[0].parts[1].pitchGroupIDs = [project.songs[0].tracks[0].id]
 project.songs[0].parts[0].uppercaseName = true
 project.songs[0].parts[1].uppercaseName = false
 let list = RegionPlaylist(id: UUID(), name: "Show order", songId: project.songs[0].id, regionIds: [second.id, first.id])
 project.regionSetlist = RegionSetlist(playlists: [list], selectedId: list.id, autoAdvance: false)
+project.regionSetlist?.liveEnabled = true
+project.regionSetlist?.playedLiveRegionIDs = [first.id]
 let gridID = project.songs[0].id
 project.regionSetlist?.blocks = [
     SetlistBlock(id: UUID(), songId: gridID, playlistId: list.id, name: "Bloco 01", color: 0x45c68b, beforeRegionId: second.id, symbol: false),
@@ -61,10 +67,22 @@ for song in project.songs.indices {
         }
     }
 }
+// Persist both attached and intentionally loose material across the bridge.
+for index in project.songs.indices {
+    project.songs[index].regionOwnershipInitialized = true
+    project.songs[index].regionOwnershipVersion = 2
+}
+project.songs[0].tracks[0].clips[0].regionOwnerID = first.id
+project.songs[0].markers?[0].regionOwnerID = first.id
+var automation = TrackAutomation(); automation.mode = .latch
+var envelope = TrackEnvelope(target: AutomationTarget(.pan), name: "Pan", defaultValue: 0.5)
+envelope.armed = true; envelope.points = [.init(time: 0, value: 0.1), .init(time: 12, value: 0.9, shape: .smooth)]
+automation.envelopes = [envelope]
+project.songs[0].tracks[0].automation = automation; project.masterAutomation = automation; project.masterPan = -0.25
 let data = try JSONEncoder().encode(project)
 try data.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
 SWIFT
-swiftc Application/Project/OutputPatch.swift Application/Project/NativeFXSettings.swift Application/Project/TrackRouting.swift Application/Project/MultiLoop.swift Application/Project/ProjectModels.swift Application/Project/MIDIItem.swift Application/Project/TimelineTempo.swift build/bridge-tests/main.swift -o build/bridge-tests/fixture
+swiftc Application/Project/OutputPatch.swift Application/Project/NativeFXSettings.swift Application/Project/TrackRouting.swift Application/Project/MultiLoop.swift Application/Project/TrackAutomation.swift Application/Controls/NativeFXParameter.swift Application/Project/ProjectModels.swift Application/Project/MIDIItem.swift Application/Project/TimelineTempo.swift build/bridge-tests/main.swift -o build/bridge-tests/fixture
 build/bridge-tests/fixture build/bridge-tests/demo.json
 clang++ -std=c++17 -fobjc-arc -framework Foundation Core/Project/Models.cpp Core/Transport/Engine.cpp Core/Import/TrackTaxonomy.cpp Apple/Bridge/JarasCoreBridge.mm Tests/Core/BridgeTests.mm -o build/bridge-tests/test
 build/bridge-tests/test build/bridge-tests/demo.json

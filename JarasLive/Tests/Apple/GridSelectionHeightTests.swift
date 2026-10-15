@@ -22,10 +22,11 @@ MainActor.assumeIsolated {
         }
     }
     let cache = TimelineSelectionLayoutCache()
+    let content = NSObject()
     var metadataBuilds = 0
     @MainActor func cached(_ height: CGFloat, top: CGFloat = 71, revision: Int = 1) -> GridSelectionLayout {
         let rows = geometry(height)
-        return cache.layout(key: TimelineRenderKey(revision: revision), rowHeight: height, rulerHeight: top,
+        return cache.layout(key: TimelineRenderKey(revision: revision), content: content, rowHeight: height, rulerHeight: top,
                             rowOffsets: rows.offsets, laneHeights: rows.heights) {
             metadataBuilds += 1
             return items(rows, top: top)
@@ -74,10 +75,51 @@ MainActor.assumeIsolated {
         }
         precondition(cached(height, top: top) === projected,"identical frames reuse the whole layout")
     }
+    // Individual height changes keep the global row height and project key unchanged.
+    var individual = geometry(64)
+    individual.heights[17] = 91
+    var offset: CGFloat = 0
+    for index in lanes.indices {
+        individual.offsets[index] = offset
+        offset += CGFloat(lanes[index]) * individual.heights[index]
+    }
+    let individualLayout = cache.layout(key: TimelineRenderKey(revision: 1), content: content, rowHeight: 64, rulerHeight: 71,
+                                       rowOffsets: individual.offsets, laneHeights: individual.heights) {
+        metadataBuilds += 1; return items(individual, top: 71)
+    }
+    let rebuiltIndividual = GridSelectionLayout(items: items(individual, top: 71), timeCoordinates: true)
+    precondition(metadataBuilds == 1 && individualLayout.items.withUnsafeBufferPointer { $0.baseAddress } == initialStorage)
+    for track in [16, 17, 18, 111, 199] {
+        let index = track * clipsPerTrack + 18
+        let actual = individualLayout.projectedItem(at: index, pixelsPerSecond: 10)
+        precondition(actual.rect == rebuiltIndividual.projectedItem(at: index, pixelsPerSecond: 10).rect)
+        precondition(individualLayout.candidates(in: actual.rect, pixelsPerSecond: 10) == rebuiltIndividual.candidates(in: actual.rect, pixelsPerSecond: 10))
+    }
+    print("INDIVIDUAL_HEIGHT_50K_SHARED_METADATA_LANES_OFFSETS_HIT_TEST_OK")
     let sorted = projectedTimes.dropFirst(5).sorted(), baseline = rebuildTimes.sorted()
     print("HEIGHT_SELECTION_50K_PROJECT_MS median=\(sorted[sorted.count/2]) p95=\(sorted[Int(Double(sorted.count-1)*0.95)]) max=\(sorted.last!)")
     print("HEIGHT_SELECTION_50K_REBUILD_MS median=\(baseline[baseline.count/2]) metadataBuilds=\(metadataBuilds) hits=\(hits)")
     let edited = cached(64, revision: 2)
     precondition(metadataBuilds == 2 && edited.items.count == ids.count,"real project edits rebuild metadata exactly once")
     print("GRID_SELECTION_HEIGHT_INDEX_REUSE_EXACT_LANES_HIT_TEST_MARQUEE_ZOOM_REVISION_OK")
+    weak var retainedContent: NSObject?
+    let contentID = UUID(), replacementID = UUID()
+    @MainActor func installContent() {
+        let snapshot = NSObject()
+        retainedContent = snapshot
+        let fresh = cache.layout(key: TimelineRenderKey(revision: 2), content: snapshot,
+            rowHeight: 64, rulerHeight: 71, rowOffsets: [0], laneHeights: [64]) {
+            [GridSelectionItem(id: contentID, rect: CGRect(x: 0, y: 74, width: 1, height: 58), trackIndex: 0)]
+        }
+        precondition(fresh.items.map(\.id) == [contentID], "A new snapshot with unchanged revision must replace selection items")
+    }
+    installContent()
+    precondition(retainedContent != nil, "Selection retains its snapshot identity while its items remain cached")
+    let replacement = cache.layout(key: TimelineRenderKey(revision: 2), content: NSObject(),
+        rowHeight: 64, rulerHeight: 71, rowOffsets: [0], laneHeights: [64]) {
+        [GridSelectionItem(id: replacementID, rect: CGRect(x: 0, y: 74, width: 1, height: 58), trackIndex: 0)]
+    }
+    precondition(retainedContent == nil && replacement.items.map(\.id) == [replacementID],
+                 "Replacing content retires both old hit targets and the retained snapshot")
+    print("GRID_SELECTION_SAME_REVISION_CONTENT_REPLACEMENT_RETAINS_IDENTITY_UNTIL_RETIREMENT_OK")
 }

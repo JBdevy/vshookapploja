@@ -3,22 +3,35 @@ import SwiftUI
 struct AdvancedView: View {
     @ObservedObject var show: ShowController
     let documents: ProjectDocuments?
+    var close: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     private enum Tab: String, CaseIterable {
-        case timeProject = "TimeProject", timeline = "Timeline", record = "Record", reRender = "Re-render", video = "Video", setlist = "Setlist"
-        var icon: String { switch self { case .timeProject: return "metronome"; case .timeline: return "square.grid.3x3"; case .record: return "record.circle"; case .reRender: return "waveform"; case .video: return "video"; case .setlist: return "list.bullet" } }
+        case transport = "Transport", timeProject = "TimeProject", timeline = "Timeline", record = "Record", reRender = "Re-render", video = "Video", setlist = "Setlist"
+        var icon: String { switch self { case .transport: return "playpause"; case .timeProject: return "metronome"; case .timeline: return "square.grid.3x3"; case .record: return "record.circle"; case .reRender: return "waveform"; case .video: return "video"; case .setlist: return "list.bullet" } }
     }
+    private var availableTabs: [Tab] {
+        #if os(iOS)
+        [.timeline, .setlist, .transport]
+        #else
+        Tab.allCases.filter { $0 != .transport }
+        #endif
+    }
+    #if os(iOS)
+    @State private var tab = Tab.timeline
+    #else
     @State private var tab = Tab.timeProject
+    #endif
     @State private var bpm: String
     @State private var beats: String
     @State private var unit: String
     @State private var settings: ProjectTimeSettings
     @State private var invalidField: Int?
+    @State private var applyError = ""
     @State private var shake = 0.0
     @FocusState private var focus: Int?
 
-    init(show: ShowController, documents: ProjectDocuments? = nil) {
-        self.show = show; self.documents = documents
+    init(show: ShowController, documents: ProjectDocuments? = nil, close: (() -> Void)? = nil) {
+        self.show = show; self.documents = documents; self.close = close
         let timing = GlobalProjectTiming.load() ?? show.current.map { GlobalProjectTiming(song: $0) } ?? GlobalProjectTiming()
         _bpm = State(initialValue: String(format: "%g", timing.bpm))
         _beats = State(initialValue: String(timing.beats))
@@ -28,18 +41,22 @@ struct AdvancedView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            #if os(iOS)
+            IpadModalHeader(title: "Advanced", close: finish)
+            #else
             HStack {
                 Text("Advanced").font(.headline)
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 32, height: 32).contentShape(Rectangle()) }
+                Button { finish() } label: { Image(systemName: "xmark").frame(width: 32, height: 32).contentShape(Rectangle()) }
                     .buttonStyle(.plain).accessibilityLabel("Close")
             }.padding(.horizontal, 16).padding(.vertical, 6)
+            #endif
             Divider()
             HStack(spacing: 0) {
                 VStack(spacing: 6) {
-                    ForEach(Tab.allCases, id: \.self) { item in
-                        Button { tab = item } label: {
-                            Label { Text(LocalizedStringKey(item.rawValue)) } icon: { Image(systemName: item.icon) }
+                    ForEach(availableTabs, id: \.self) { item in
+                        Button { tab = item; invalidField = nil; applyError = "" } label: {
+                            Label { Text(LocalizedStringKey(item.rawValue)).lineLimit(2).minimumScaleFactor(0.8) } icon: { Image(systemName: item.icon) }
                                 .font(.system(size: 12, weight: .semibold)).frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 10).frame(height: 36)
                                 .background(tab == item ? JarasTheme.green.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 6))
@@ -54,6 +71,7 @@ struct AdvancedView: View {
                     Text(LocalizedStringKey(tab.rawValue)).font(.title3.bold())
                     if tab == .timeProject { timingControls }
                     if tab == .timeline { AdvancedTimelineSettings(documents: documents) }
+                    if tab == .transport { AdvancedTransportSettings() }
                     if tab == .video { AdvancedVideoSettings() }
                     if tab == .setlist { AdvancedSetlistColors() }
                     if tab == .record || tab == .reRender { MediaProcessingFormatEditor(scope: tab == .record ? "record" : "rerender").id(tab.rawValue) }
@@ -66,13 +84,20 @@ struct AdvancedView: View {
                 if let invalidField {
                     Text(LocalizedStringKey(invalidField == 0 ? "Enter a BPM between 60 and 300." : "Invalid time signature."))
                         .font(.caption).foregroundStyle(.red)
-                } else if !show.message.isEmpty { Text(LocalizedStringKey(show.message)).font(.caption).foregroundStyle(.red) }
+                } else if !applyError.isEmpty { Text(LocalizedStringKey(applyError)).font(.caption).foregroundStyle(.red) }
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { finish() }.keyboardShortcut(.cancelAction)
                 if tab == .timeProject { Button("Apply", action: apply).keyboardShortcut(.defaultAction) }
             }.padding(14).fixedSize(horizontal: false, vertical: true)
-        }.frame(width: 760, height: 420).foregroundStyle(JarasTheme.text).background(JarasTheme.background)
+        }
+        #if os(macOS)
+        .frame(width: 760, height: 420)
+        #else
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #endif
+        .foregroundStyle(JarasTheme.text).background(JarasTheme.background)
     }
+    private func finish() { if let close { close() } else { dismiss() } }
     private var timingControls: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 14) {
@@ -114,9 +139,12 @@ struct AdvancedView: View {
         guard let numerator = Int(beats), (1...32).contains(numerator) else { reject(1); return }
         guard let denominator = Int(unit), TimelineTempo.beatUnits.contains(denominator) else { reject(2); return }
         invalidField = nil
+        applyError = ""
         if show.configureProjectTime(bpm: tempo, beats: numerator, unit: denominator, settings: settings) {
             GlobalProjectTiming(bpm: tempo, beats: numerator, unit: denominator, settings: settings).save()
-            dismiss()
+            finish()
+        } else {
+            applyError = show.message
         }
     }
 }
@@ -182,16 +210,20 @@ private struct AdvancedTimelineSettings: View {
     @AppStorage("jaras.timeline.gridlines") private var gridlines = GlobalProjectTiming.load()?.settings.divisions != 0
     var body: some View {
         VStack(spacing: 18) {
-            Picker("Gridline", selection: $gridlines) {
-                Text("Enabled").tag(true)
-                Text("Disabled").tag(false)
+            HStack {
+                Text("Gridline")
+                Spacer()
+                Picker("Gridline", selection: $gridlines) {
+                    Text("Enabled").tag(true)
+                    Text("Disabled").tag(false)
+                }.labelsHidden()
             }
-            SetlistTextColorRow(title: "Timeline background", key: "jaras.timeline.background", defaultColor: TimelineAppearanceDefaults.background)
-            SetlistTextColorRow(title: "Primary grid color", key: "jaras.timeline.primaryGrid", defaultColor: TimelineAppearanceDefaults.primaryGrid)
-            SetlistTextColorRow(title: "Secondary grid color", key: "jaras.timeline.secondaryGrid", defaultColor: TimelineAppearanceDefaults.secondaryGrid)
-            SetlistTextColorRow(title: "Playback cursor color", key: "jaras.timeline.playCursor", defaultColor: TimelineAppearanceDefaults.playCursor)
-            SetlistTextColorRow(title: "Edit cursor color", key: "jaras.timeline.editCursor", defaultColor: TimelineAppearanceDefaults.editCursor)
-            SetlistTextColorRow(title: "Sub Play cursor color", key: "jaras.timeline.subPlayCursor", defaultColor: TimelineAppearanceDefaults.subPlayCursor)
+            SetlistTextColorRow(title: "Timeline background", key: "jaras.timeline.background", defaultColor: TimelineAppearanceDefaults.background, showsReset: true)
+            SetlistTextColorRow(title: "Primary grid color", key: "jaras.timeline.primaryGrid", defaultColor: TimelineAppearanceDefaults.primaryGrid, showsReset: true)
+            SetlistTextColorRow(title: "Secondary grid color", key: "jaras.timeline.secondaryGrid", defaultColor: TimelineAppearanceDefaults.secondaryGrid, showsReset: true)
+            SetlistTextColorRow(title: "Playback cursor color", key: "jaras.timeline.playCursor", defaultColor: TimelineAppearanceDefaults.playCursor, showsReset: true)
+            SetlistTextColorRow(title: "Edit cursor color", key: "jaras.timeline.editCursor", defaultColor: TimelineAppearanceDefaults.editCursor, showsReset: true)
+            SetlistTextColorRow(title: "Sub Play cursor color", key: "jaras.timeline.subPlayCursor", defaultColor: TimelineAppearanceDefaults.subPlayCursor, showsReset: true)
             if let documents {
                 Divider()
                 HStack {
@@ -229,10 +261,14 @@ private struct AdvancedSetlistColors: View {
 
 private struct SetlistTextColorRow: View {
     let title: String
+    let defaultColor: Int
+    let showsReset: Bool
     @ObservedObject private var color: AppearanceColor
     @State private var editing = false
-    init(title: String, key: String, defaultColor: Int) {
+    init(title: String, key: String, defaultColor: Int, showsReset: Bool = false) {
         self.title = title
+        self.defaultColor = defaultColor
+        self.showsReset = showsReset
         self.color = AppearanceColor.shared(key, default: defaultColor)
     }
     var body: some View {
@@ -249,6 +285,12 @@ private struct SetlistTextColorRow: View {
                         save: { _, value in color.save(Int(value)) }, close: { editing = false }, nameEditable: false, showsName: false,
                         previewColor: { if color.value != Int($0) { color.value = Int($0) } })
                 }
+            if showsReset {
+                Button("Reset") { color.save(defaultColor) }
+                    .font(.caption)
+                    .disabled(color.value == defaultColor)
+                    .accessibilityLabel(Text("Reset") + Text(" ") + Text(LocalizedStringKey(title)))
+            }
         }
     }
 }
@@ -296,6 +338,61 @@ private struct TimelineMediaCleanupConfirmation: View {
             do { try await documents.cleanTimelineMedia(); dismiss() }
             catch { self.error = error.localizedDescription }
             working = false
+        }
+    }
+}
+
+/// Stored per device: hiding a transport control never disables its action.
+enum IpadTransportControl: String, CaseIterable, Identifiable {
+    case play, pause, subPlay, repeatPlayback, record, metronome, bpm, tuner
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .play: return "Play / Stop"
+        case .pause: return "Pause"
+        case .subPlay: return "Sub Play"
+        case .repeatPlayback: return "Repeat"
+        case .record: return "Record"
+        case .metronome: return "Metronome"
+        case .bpm: return "BPM"
+        case .tuner: return "Tuner"
+        }
+    }
+    var weight: Double {
+        switch self {
+        case .play, .pause: return 60
+        case .subPlay: return 66
+        case .repeatPlayback: return 52
+        case .record: return 47
+        case .metronome: return 34
+        case .bpm, .tuner: return 120
+        }
+    }
+    static func visible(hidden: String) -> [Self] {
+        let values = Set(hidden.split(separator: ",").map(String.init))
+        return allCases.filter { !values.contains($0.rawValue) }
+    }
+    static func width(_ control: Self, available: Double, hidden: String) -> Double {
+        let controls = visible(hidden: hidden)
+        guard controls.contains(control) else { return 0 }
+        let total = controls.reduce(0) { $0 + $1.weight }
+        return max(0, available - Double(max(0, controls.count - 1)) * 4) * control.weight / total
+    }
+}
+private struct AdvancedTransportSettings: View {
+    @AppStorage("jaras.ipad.transport.hidden") private var hidden = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(IpadTransportControl.allCases) { control in
+                Toggle(LocalizedStringKey(control.title), isOn: Binding(get: {
+                    IpadTransportControl.visible(hidden: hidden).contains(control)
+                }, set: { visible in
+                    var values = Set(hidden.split(separator: ",").map(String.init))
+                    if visible { values.remove(control.rawValue) } else { values.insert(control.rawValue) }
+                    hidden = values.sorted().joined(separator: ",")
+                })).toggleStyle(.switch)
+            }
+            Button("Reset") { hidden = "" }
         }
     }
 }

@@ -1,6 +1,161 @@
 import XCTest
 @testable import JarasApplication
 final class ClickTempoTests: XCTestCase {
+    func testAttackJitterAndOffBeatTailDoNotSplitStableSections() {
+        for pair in [[93.75, 107.3], [120.0, 140.0], [87.4, 156.2]] {
+            let source = clicks(pair, beats: [36, 324])
+            let offsets = [0.0, -0.002, -0.004, 0.004, 0.006, -0.006, 0.002, 0.0]
+            var onsets = source.onsets.enumerated().map { index, time in time + offsets[index % offsets.count] }
+            onsets.append(onsets.last! + 8.7 * 60 / pair[1])
+            let detected = ClickTempoDetector.sections(onsets: onsets)
+            XCTAssertEqual(detected.count, 2, "Attack differences must not create local tempo corrections: \(pair)")
+            guard detected.count == 2 else { continue }
+            XCTAssertEqual(detected[0].bpm, pair[0], accuracy: 0.1)
+            XCTAssertEqual(detected[1].bpm, pair[1], accuracy: 0.1)
+            assertPhase(detected, follows: Array(onsets.dropLast()), accuracy: 0.0201)
+        }
+    }
+    func testWholeBeatRestAndSustainedSlowEndingArePreserved() {
+        let fixed = (0..<80).map { 0.123 + Double($0) * 0.5 }
+        XCTAssertEqual(ClickTempoDetector.sections(onsets: fixed + [fixed.last! + 2]), [.init(position: 0.123, bpm: 120)])
+        let changing = clicks([120, 60], beats: [32, 8])
+        XCTAssertEqual(ClickTempoDetector.sections(onsets: changing.onsets).map(\.bpm), [120, 60])
+    }
+    func testNearIntegerDetectionNoiseDoesNotProduceFractionalMarkers() throws {
+        for sampleRate in [44100.0, 48000.0] {
+            for measured in [147.999, 130.001, 119.9995, 155.998] {
+                for count in [8, 64, 600] {
+                    let onsets = (0..<count).map { ((0.123 + Double($0) * 60 / measured) * sampleRate).rounded() / sampleRate }
+                    let result = ClickTempoDetector.sections(onsets: onsets)
+                    XCTAssertEqual(result, [.init(position: onsets[0], bpm: measured.rounded())], "\(measured), \(count) clicks at \(sampleRate) Hz")
+                    assertPhase(result, follows: onsets, accuracy: 0.0201)
+                }
+            }
+        }
+        var song = Project.empty(name: "Integer clock").songs[0]
+        let region = Part(id: UUID(), name: "Song", startTime: 0, endTime: 600)
+        var track = Track(id: UUID(), name: "Click", role: .click)
+        track.clips = [AudioClip(id: UUID(), name: "Click", startTime: 0, duration: 600, audioFile: AudioFile(path: "click.wav"))]
+        song.tracks = [track]
+        let onsets = (0..<600).map { 0.123 + Double($0) * 60 / 130.001 }
+        let detection = try ClickTempoDetector.markers(song: song, region: region) { _ in onsets }
+        XCTAssertEqual(detection.markers.count, 2)
+        XCTAssertEqual(detection.markers.map(\.position), [region.startTime, onsets[0]])
+        XCTAssertEqual(detection.markers.first?.tempoBPM, 130)
+        XCTAssertEqual(detection.markers.first?.tempoReferenceBPM, 130)
+        song.insertDetectedTempo(detection.markers, replacing: region)
+        let restored = try JSONDecoder().decode(Song.self, from: JSONEncoder().encode(song))
+        XCTAssertEqual(restored.markers?.first(where: { $0.position == onsets[0] })?.tempoBPM, 130)
+        XCTAssertEqual(restored.tracks[0].clips, track.clips, "Detection must not stretch the source audio")
+    }
+
+    func testNearIntegerTempoChangeKeepsBothMeasuredAnchors() {
+        let input = clicks([130.001, 147.999], beats: [32, 64])
+        let sections = ClickTempoDetector.sections(onsets: input.onsets)
+        XCTAssertEqual(sections.map(\.bpm), [130, 148])
+        XCTAssertEqual(sections.map(\.position), input.starts)
+        assertPhase(sections, follows: input.onsets, accuracy: 0.0201)
+    }
+
+    func testDelayedClickProtectsRegionIntroAndRedetectionReplacesOldTempos() throws {
+        for start in [0.0, 20.0] {
+            var song = Project.empty(name: "Delayed click").songs[0]
+            let region = Part(id: UUID(), name: "Song", startTime: start, endTime: start + 30)
+            song.parts = [region]
+            var track = Track(id: UUID(), name: "Click", role: .click)
+            let click = AudioClip(id: UUID(), name: "Click", startTime: start + 5, duration: 20,
+                                  audioFile: AudioFile(path: "click.wav"), regionOwnerID: region.id)
+            let intro = AudioClip(id: UUID(), name: "Intro", startTime: start, duration: 10,
+                                  audioFile: AudioFile(path: "intro.wav"), regionOwnerID: region.id)
+            track.clips = [click]
+            var audio = Track(id: UUID(), name: "Intro", role: .other); audio.clips = [intro]
+            song.tracks = [track, audio]
+            let previous = TimelineMarker(id: UUID(), name: "Previous", position: max(0, start - 10), color: 0,
+                                         tempoBPM: 90, tempoReferenceBPM: 120)
+            let old = TimelineMarker(id: UUID(), name: "Old", position: start + 8, color: 0,
+                                    tempoBPM: 160, tempoReferenceBPM: 120)
+            let following = TimelineMarker(id: UUID(), name: "Following", position: region.endTime, color: 0,
+                                          tempoBPM: 100, tempoReferenceBPM: 100)
+            song.markers = [previous, old, following]
+            let before = song
+            let detected = try ClickTempoDetector.markersWithMeter(song: song, region: region) { _ in
+                (0..<36).map { .init(position: 0.125 + Double($0) * 0.4, peak: $0 % 6 == 0 ? 0.9 : 0.45) }
+            }
+            XCTAssertEqual(detected.markers.map(\.position), [start, start + 5.125])
+            XCTAssertEqual(detected.markers.map(\.tempoBPM), [150, 150])
+            XCTAssertEqual(detected.markers.map(\.tempoBeats), [6, 6])
+            XCTAssertEqual(detected.markers.map(\.tempoReferenceBPM), [150, 150])
+            song.insertDetectedTempo(detected.markers, replacing: region)
+            song.insertDetectedTempo(detected.markers, replacing: region)
+            let within = (song.markers ?? []).filter { $0.position >= start && $0.position < region.endTime }
+            XCTAssertEqual(within.count, 2, "Redetection must replace, not accumulate tempo markers")
+            XCTAssertTrue(within.allSatisfy { $0.regionOwnerID == region.id })
+            XCTAssertFalse(song.markers!.contains { $0.id == old.id })
+            XCTAssertTrue(song.markers!.contains(following))
+            if start > 0 { XCTAssertTrue(song.markers!.contains(previous)) }
+            XCTAssertEqual(song.tempoSection(at: start + 1).bpm, 150)
+            XCTAssertTrue(song.tempoAudioSegments(intro).allSatisfy { $0.audioRate == 1 })
+            XCTAssertEqual(song.tracks, before.tracks)
+            XCTAssertEqual(song.parts, before.parts)
+            XCTAssertEqual(song.timeSettings, before.timeSettings)
+        }
+    }
+
+    func testClickAtRegionStartUsesOneTempoMarker() throws {
+        var song = Project.empty(name: "Aligned click").songs[0]
+        let region = Part(id: UUID(), name: "Song", startTime: 10, endTime: 30)
+        var track = Track(id: UUID(), name: "Click", role: .click)
+        track.clips = [AudioClip(id: UUID(), name: "Click", startTime: 10, duration: 20,
+                                audioFile: AudioFile(path: "click.wav"))]
+        song.tracks = [track]
+        let detected = try ClickTempoDetector.markers(song: song, region: region) { _ in
+            (0..<30).map { Double($0) * 0.5 }
+        }
+        XCTAssertEqual(detected.markers.count, 1)
+        XCTAssertEqual(detected.markers.first?.position, region.startTime)
+        XCTAssertEqual(detected.markers.first?.tempoBPM, 120)
+    }
+
+    func testSubBPMOscillationAndAttackNoiseDoNotFloodTheGrid() {
+        var time = 0.125, onsets: [Double] = []
+        for i in 0..<600 {
+            onsets.append(time + [0.0, 0.003, -0.002, 0.005][i % 4])
+            time += 60 / (i % 16 < 8 ? 119.8 : 120.2)
+        }
+        let sections = ClickTempoDetector.sections(onsets: onsets)
+        XCTAssertEqual(sections.count, 1)
+        XCTAssertEqual(sections.first?.bpm, 120)
+        assertPhase(sections, follows: onsets, accuracy: 0.0201)
+    }
+    func testRepeatingAttackOffsetsKeepTheSourceClockInsteadOfEndpointFractions() {
+        for bpm in [120.0, 130, 140, 156] {
+            for count in [8, 48, 600] {
+                for accent in [3, 4, 8] {
+                    let delay = accent == 3 ? 0.015 : 0.025
+                    let beatDuration: Double = 60.0 / bpm
+                    let onsets: [Double] = (0..<count).map { index in
+                        let beat: Double = 0.123 + Double(index) * beatDuration
+                        let attack: Double = index % accent == 0 ? delay : 0.0
+                        return beat + attack
+                    }
+                    let result = ClickTempoDetector.sections(onsets: onsets)
+                    XCTAssertEqual(result, [.init(position: onsets[0], bpm: bpm)], "\(bpm) BPM, \(count) clicks, accent \(accent)")
+                }
+            }
+        }
+    }
+    func testFractionalClockWithRepeatingAttackOffsetsIsNotForcedToAnInteger() {
+        let bpm = 130.6
+        let beatDuration: Double = 60.0 / bpm
+        let onsets: [Double] = (0..<600).map { index in
+            let beat: Double = 0.123 + Double(index) * beatDuration
+            let attack: Double = index % 4 == 0 ? 0.009 : 0.0
+            return beat + attack
+        }
+        let sections = ClickTempoDetector.sections(onsets: onsets)
+        XCTAssertTrue(sections.allSatisfy { abs($0.bpm - 131) > 0.01 })
+        assertPhase(sections, follows: onsets, accuracy: 0.0201)
+    }
     func testTempoChangesKeepTheirFirstBeatAndIgnoreDroppedBeats() {
         let first = (0..<12).map { 0.123 + Double($0) * 0.5 }
         let second = (0..<12).filter { $0 != 5 }.map { 6.123 + Double($0) * (2.0 / 3.0) }
@@ -55,14 +210,20 @@ final class ClickTempoTests: XCTestCase {
             for (section, start) in zip(result, input.starts) { XCTAssertEqual(section.position, start, accuracy: 1e-9) }
         }
     }
-    func testContinuousTwoBarChangesUseOneGenericMarkerInTheCurrentMeter() {
-        for meter in [3,4,6] {
+    func testContinuousTwoBarChangesKeepEveryMeasuredTempo() {
+        for meter in [2,3,4,6] {
             let rates = [100.0,140,160,110,150]
             let input = clicks(rates, beats: [Int](repeating: meter * 2, count: rates.count))
-            XCTAssertEqual(ClickTempoDetector.sections(onsets: input.onsets, beatsPerBar: meter), [.init(position: 0.123, bpm: 120)])
+            let result = ClickTempoDetector.sections(onsets: input.onsets, beatsPerBar: meter)
+            XCTAssertEqual(result.map(\.bpm), rates)
+            for (section, start) in zip(result, input.starts) { XCTAssertEqual(section.position, start, accuracy: 1e-9) }
         }
         let input = clicks([119.6,130.6,140.6,150.6], beats: [8,8,8,16])
-        XCTAssertEqual(ClickTempoDetector.sections(onsets: input.onsets), [.init(position: 0.123, bpm: 120)], "rounding must not change the two-bar boundary")
+        let precise = ClickTempoDetector.sections(onsets: input.onsets)
+        XCTAssertEqual(precise.count, 4)
+        for (section, expected) in zip(precise, [119.6,130.6,140.6,150.6]) {
+            XCTAssertEqual(section.bpm, expected, accuracy: 1e-8)
+        }
     }
     func testLongStableSectionBreaksTheSequenceOfFrequentChanges() {
         let rates = [100.0,140,160,110,150,130]
@@ -81,17 +242,17 @@ final class ClickTempoTests: XCTestCase {
         XCTAssertEqual(detected.map(\.bpm), [120,122])
         XCTAssertEqual(detected.last?.position, second[0])
     }
-    func testContinuousDriftFallsBackAndLongFixedClickKeepsOneMarker() {
+    func testChangingClickIsNotReplacedByGeneric120AndLongFixedClickKeepsOneMarker() {
         var time = 0.123, drifting: [Double] = []
         for i in 0..<80 { drifting.append(time); time += 60 / (100 + Double(i)) }
-        XCTAssertEqual(ClickTempoDetector.sections(onsets: drifting), [.init(position: 0.123, bpm: 120)])
+        XCTAssertNotEqual(ClickTempoDetector.sections(onsets: drifting), [.init(position: 0.123, bpm: 120)])
         let fixed: [Double] = (0..<20000).map { index in
             let jitter: Double = index % 2 == 0 ? 0.001 : -0.001
             return 0.123 + Double(index)*0.5 + jitter
         }
         XCTAssertEqual(ClickTempoDetector.sections(onsets: fixed), [.init(position: fixed[0], bpm: 120)])
     }
-    func testGenericTempoForRapidChangesHasFourFourMeter() throws {
+    func testRapidTempoChangesPreserveSongMeterAndEverySection() throws {
         var song = Project.empty(name: "Variable").songs[0]
         song.beatsPerBar = 6
         let region = Part(id: UUID(), name: "Variable", startTime: 10, endTime: 80)
@@ -103,10 +264,11 @@ final class ClickTempoTests: XCTestCase {
             for _ in 0..<count { pulses.append(time); time += 60/bpm }
         }
         let result = try ClickTempoDetector.markers(song: song, region: region) { _ in pulses }
-        XCTAssertEqual(result.markers.count, 1)
-        XCTAssertEqual(result.markers[0].position, 10.123, accuracy: 1e-9)
-        XCTAssertEqual(result.markers[0].tempoBPM, 120)
-        XCTAssertEqual(result.markers[0].tempoBeats, 4)
+        XCTAssertEqual(result.markers.count, 5)
+        XCTAssertEqual(result.markers[0].position, 10)
+        XCTAssertEqual(result.markers[1].position, 10.123, accuracy: 1e-9)
+        XCTAssertEqual(result.markers.map(\.tempoBPM), [100,100,140,160,110])
+        XCTAssertTrue(result.markers.allSatisfy { $0.tempoBeats == 6 })
         XCTAssertEqual(result.markers[0].tempoUnit, 4)
     }
     func testMarkerPositionUsesTrimmedRateAdjustedClickOnsets() throws {
@@ -119,16 +281,17 @@ final class ClickTempoTests: XCTestCase {
         let first = (0..<16).map { 2.125 + Double($0) * 0.5 }
         let second = (0..<16).map { 10.125 + Double($0) * 0.75 }
         let result = try ClickTempoDetector.markers(song: song, region: region) { _ in first + second }
-        XCTAssertEqual(result.markers.count, 2)
-        XCTAssertEqual(result.markers.map(\.tempoBPM), [150,100])
-        XCTAssertEqual(result.markers[0].position, 12.1, accuracy: 1e-9)
-        XCTAssertEqual(result.markers[1].position, 18.5, accuracy: 1e-9)
+        XCTAssertEqual(result.markers.count, 3)
+        XCTAssertEqual(result.markers.map(\.tempoBPM), [150,150,100])
+        XCTAssertEqual(result.markers[0].position, region.startTime)
+        XCTAssertEqual(result.markers[1].position, 12.1, accuracy: 1e-9)
+        XCTAssertEqual(result.markers[2].position, 18.5, accuracy: 1e-9)
     }
     func testNoiseDoesNotInventTempo() {
         XCTAssertTrue(ClickTempoDetector.sections(onsets: []).isEmpty)
         XCTAssertTrue(ClickTempoDetector.sections(onsets: [0, 0.01, 0.04, 1.8, 1.85, 1.88, 1.9]).isEmpty)
     }
-    func testMarkersFollowClickClipPositionAndFallBackOnlyWithoutClickAudio() throws {
+    func testMarkersFollowClickClipPositionAndRequireClickAudio() throws {
         var song = Project.empty(name: "Test").songs[0]
         let region = Part(id: UUID(), name: "Song", startTime: 10, endTime: 30)
         var click = Track(id: UUID(), name: "CLICK", role: .click)
@@ -138,34 +301,76 @@ final class ClickTempoTests: XCTestCase {
         let onsets = (0..<12).map { 0.125 + Double($0) * 0.5 }
         let detected = try ClickTempoDetector.markers(song: song, region: region) { _ in onsets }
         XCTAssertTrue(detected.hasClickAudio)
-        XCTAssertEqual(detected.markers.count, 1)
-        XCTAssertEqual(detected.markers[0].position, 12.125, accuracy: 1e-9)
+        XCTAssertEqual(detected.markers.count, 2)
+        XCTAssertEqual(detected.markers[0].position, region.startTime)
+        XCTAssertEqual(detected.markers[1].position, 12.125, accuracy: 1e-9)
         XCTAssertEqual(detected.markers[0].tempoBPM, 120)
 
         song.tracks = []
-        let fallback = try ClickTempoDetector.markers(song: song, region: region) { _ in
+        let absent = try ClickTempoDetector.markers(song: song, region: region) { _ in
             XCTFail("A file should not be read without a Click clip")
             return []
         }
-        XCTAssertFalse(fallback.hasClickAudio)
-        XCTAssertEqual(fallback.markers.map(\.position), [10])
-        XCTAssertEqual(fallback.markers.first?.tempoBPM, 120)
-        XCTAssertEqual(fallback.markers.first?.tempoBeats, 4)
-        XCTAssertEqual(fallback.markers.first?.tempoUnit, 4)
+        XCTAssertFalse(absent.hasClickAudio)
+        XCTAssertTrue(absent.markers.isEmpty, "A missing click must not fabricate a 120 BPM detection")
 
         song.tracks = [click]
         let silent = try ClickTempoDetector.markers(song: song, region: region) { _ in [] }
         XCTAssertTrue(silent.hasClickAudio)
         XCTAssertTrue(silent.markers.isEmpty)
     }
-    func testDetectedTempoRoundsToWholeBPMWithoutMovingTheFirstPulse() throws {
-        for (measured, expected) in [(143.91, 144.0), (143.499, 143.0), (119.501, 120.0)] {
-            let onsets = (0..<20).map { 2.123 + Double($0) * 60 / measured }
+    func testFractionalTempoDoesNotDriftOverTheWholeSong() throws {
+        for measured in [143.91, 143.499, 119.501, 140.4270739] {
+            let onsets = (0..<600).map { 2.123 + Double($0) * 60 / measured }
             let sections = ClickTempoDetector.sections(onsets: onsets)
             XCTAssertEqual(sections.count, 1)
             let section = try XCTUnwrap(sections.first)
-            XCTAssertEqual(section.bpm, expected)
+            XCTAssertEqual(section.bpm, measured, accuracy: 1e-8)
             XCTAssertEqual(section.position, 2.123, accuracy: 1e-9)
+            assertPhase(sections, follows: onsets, accuracy: 1e-8)
+        }
+    }
+    private func assertPhase(_ sections: [ClickTempoDetector.Section], follows onsets: [Double], accuracy: Double,
+                             file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(sections.isEmpty, file: file, line: line)
+        for (index, onset) in onsets.enumerated() {
+            guard let section = sections.last(where: { $0.position <= onset }),
+                  let anchor = onsets.firstIndex(of: section.position) else {
+                XCTFail("Missing measured phase anchor", file: file, line: line); continue
+            }
+            let predicted = section.position + Double(index - anchor) * 60 / section.bpm
+            XCTAssertEqual(predicted, onset, accuracy: accuracy, file: file, line: line)
+        }
+    }
+    func testAccelerando130To140KeepsIntermediateChangesAndFollowingSteadyTempoInPhase() {
+        for sampleRate in [44100.0, 48000.0] {
+            var time = 0.125, onsets: [Double] = []
+            let rates = [Double](repeating: 130, count: 32)
+                + (0..<64).map { 130 + Double($0) * 10 / 63 }
+                + [Double](repeating: 140, count: 400)
+            for bpm in rates {
+                onsets.append((time * sampleRate).rounded() / sampleRate)
+                time += 60 / bpm
+            }
+            let sections = ClickTempoDetector.sections(onsets: onsets)
+            XCTAssertTrue(sections.contains { $0.bpm > 130.1 && $0.bpm < 139.9 })
+            XCTAssertEqual(sections.last?.bpm, 140)
+            assertPhase(sections, follows: onsets, accuracy: 0.0201)
+        }
+    }
+    func testShortIntroAndFractionalFinalClickAtItemPlaybackRate() {
+        // Same timing pattern as the reported click: a single intro interval,
+        // a stable passage, then a fractional tempo for the rest of the song.
+        let source = clicks([120, 130, 138.125], beats: [1,52,297]).onsets
+        for rate in [1.0, 61.0/60.0] {
+            let onsets = source.map { ($0 * 48000).rounded() / 48000 / rate }
+            let sections = ClickTempoDetector.sections(onsets: onsets)
+            XCTAssertEqual(sections.count, 3)
+            XCTAssertEqual(sections[0].position, onsets[0])
+            XCTAssertEqual(sections[1].position, onsets[1])
+            XCTAssertEqual(sections[2].position, onsets[53])
+            XCTAssertEqual(sections[2].bpm, 138.125 * rate, accuracy: 0.0001)
+            assertPhase(sections, follows: onsets, accuracy: 0.001001)
         }
     }
     func testAccentPatternsEstimateSimpleAndCompoundMeters() {
@@ -211,6 +416,29 @@ final class ClickTempoTests: XCTestCase {
             XCTAssertEqual(saved.markers?.first?.tempoReferenceBPM, 150)
         }
     }
+    func testFractionalDetectionInRelativeProjectPreservesItemUntilUserTempoEdit() throws {
+        var song = Project.empty(name: "Detect without retiming").songs[0]
+        song.timeSettings?.timebase = .relative
+        let region = Part(id: UUID(), name: "Song", startTime: 10, endTime: 90)
+        let clip = AudioClip(id: UUID(), name: "Click", startTime: 10, duration: 80,
+            audioFile: AudioFile(path: "click.wav"), playbackRate: 61.0/60.0, regionOwnerID: region.id)
+        var track = Track(id: UUID(), name: "CLICK", role: .click); track.clips = [clip]
+        song.parts = [region]; song.tracks = [track]
+        let detected = try ClickTempoDetector.markers(song: song, region: region) { _ in
+            (0..<170).map { 0.125 + Double($0)*60/138.125 }
+        }
+        let before = song
+        song.insertDetectedTempo(detected.markers, replacing: region)
+        XCTAssertEqual(song.tracks, before.tracks)
+        XCTAssertEqual(song.parts, before.parts)
+        XCTAssertEqual(song.timeSettings, before.timeSettings)
+        XCTAssertTrue(song.tempoAudioSegments(clip).allSatisfy { abs($0.audioRate - clip.audioRate) < 1e-12 })
+        let index = try XCTUnwrap(song.markers?.firstIndex { $0.position > 10 })
+        let baseline = try XCTUnwrap(song.markers?[index].tempoReferenceBPM)
+        XCTAssertEqual(baseline, 138.125 * 61/60, accuracy: 1e-8)
+        song.markers![index].tempoBPM = baseline + 1
+        XCTAssertEqual(song.tempoAudioSegments(clip).last!.audioRate, clip.audioRate * (baseline + 1)/baseline, accuracy: 1e-12)
+    }
     func testNewProjectRelativeAndLegacyProjectFree() throws {
         XCTAssertEqual(ProjectTimeSettings().timebase, .relative)
         var song = Project.empty(name: "New").songs[0]
@@ -225,11 +453,11 @@ final class ClickTempoTests: XCTestCase {
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try Data([1]).write(to: nested.appendingPathComponent("Click.wav"))
-        try Data([1]).write(to: root.appendingPathComponent("click-01.wav"))
+        try Data([1]).write(to: root.appendingPathComponent("click-001.wav"))
         var names = MediaFileNames(directory: root)
-        XCTAssertEqual(names.allocate("Click.wav"), "Click-02.wav")
-        XCTAssertEqual(names.allocate("Click.wav"), "Click-03.wav")
-        XCTAssertEqual(names.allocate("Sanfona.wav", forceSuffix: true), "Sanfona-01.wav")
-        XCTAssertEqual(names.allocate("Sanfona.wav", forceSuffix: true), "Sanfona-02.wav")
+        XCTAssertEqual(names.allocate("Click.wav"), "Click-002.wav")
+        XCTAssertEqual(names.allocate("Click.wav"), "Click-003.wav")
+        XCTAssertEqual(names.allocate("Sanfona.wav", forceSuffix: true), "Sanfona-001.wav")
+        XCTAssertEqual(names.allocate("Sanfona.wav", forceSuffix: true), "Sanfona-002.wav")
     }
 }

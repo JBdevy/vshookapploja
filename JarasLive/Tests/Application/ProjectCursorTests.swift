@@ -6,6 +6,7 @@ import XCTest
     var loadCount = 0
     var snapshotCount = 0
     var regionCommands: [ShowCommand] = []
+    var commands: [(ShowCommand, UUID?)] = []
     var regionCommandResult: TransportState?
     var transport = TransportState(playing: false, position: 0, queue: QueueState(), loop: LoopState(enabled: false), subPlay: SubPlayState(playing: false, position: 0))
     func load(_ project: Project) throws {
@@ -15,6 +16,7 @@ import XCTest
         transport.songId = project.songs.first?.id; transport.position = 0; transport.editPosition = 0
     }
     func execute(_ command: ShowCommand, target: UUID?, value: Double) throws {
+        commands.append((command, target))
         switch command {
         case .editSeek: transport.editPosition = value; if !transport.playing { transport.position = value }
         case .select: transport.songId = target
@@ -27,6 +29,11 @@ import XCTest
         case .selectRegion, .queueRegion:
             regionCommands.append(command)
             if let regionCommandResult { transport = regionCommandResult }
+            else if command == .selectRegion, let part = project.songs.first?.parts.first(where: { $0.id == target }) {
+                transport.position = part.startTime; transport.editPosition = part.startTime
+                transport.regionId = part.id; transport.paused = false
+            }
+        case .queueSection: transport.queuedSectionMarkerId = target
         case .subPlay: transport.subPlay.playing = transport.playing
         case .stop, .stopAll: transport.playing = false
         default: break
@@ -51,6 +58,215 @@ import XCTest
 }
 
 final class ProjectCursorTests: XCTestCase {
+    @MainActor func testHeaderClickPausesFollowWithoutSeekingOrChangingRegionSelection() throws {
+        var project = Project.empty(name: "Header navigation")
+        let part = Part(id: UUID(), name: "Song", startTime: 10, endTime: 40)
+        project.songs[0].parts = [part]; project.songs[0].duration = 40
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        show.send(.editSeek, value: 15)
+        show.send(.play)
+        show.send(.editSeek, value: 27)
+        let position = show.snapshot.transport.position
+        let focusRequest = show.regionFocusRequest
+        show.pauseTimelineFollow()
+        XCTAssertTrue(show.timelineFollowPaused)
+        XCTAssertEqual(show.timelineZoomPosition, 27)
+        XCTAssertEqual(show.snapshot.transport.position, position)
+        XCTAssertEqual(show.snapshot.transport.editPosition, 27)
+        XCTAssertNil(show.selectedTimelineRegion, "Blank header, marker and ruler clicks must not select another band")
+        XCTAssertEqual(show.regionFocusRequest, focusRequest, "Pausing follow must not recenter the grid")
+        show.selectTimelineRegion(part.id)
+        XCTAssertEqual(show.snapshot.transport.editPosition, 27, "The band selects without seeking to the region start")
+        XCTAssertEqual(show.selectedTimelineRegion, part.id)
+        executor.advance(1)
+        show.tick()
+        XCTAssertTrue(show.timelineFollowPaused)
+        show.send(.stop)
+        XCTAssertFalse(show.timelineFollowPaused)
+        show.pauseTimelineFollow()
+        XCTAssertEqual(show.selectedTimelineRegion, part.id, "Header interaction preserves the white selection")
+    }
+
+    @MainActor func testRegionBandClickPausesFollowUntilStopOrNextSongAndKeepsHighlight() throws {
+        var project = Project.empty(name: "Navigation")
+        let first = Part(id: UUID(), name: "First", startTime: 0, endTime: 10)
+        let second = Part(id: UUID(), name: "Second", startTime: 10, endTime: 20)
+        project.songs[0].parts = [first, second]; project.songs[0].duration = 20
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        show.send(.play)
+        show.send(.editSeek, value: 4)
+        XCTAssertFalse(show.timelineFollowPaused, "Editing the cursor alone must not disable continuous follow")
+        XCTAssertEqual(show.timelineZoomPosition, show.snapshot.transport.position)
+        show.selectTimelineRegion(first.id)
+        XCTAssertTrue(show.timelineFollowPaused)
+        XCTAssertEqual(show.selectedTimelineRegion, first.id)
+        XCTAssertEqual(show.timelineZoomPosition, 4)
+        show.send(.editSeek, value: 6)
+        XCTAssertTrue(show.timelineFollowPaused)
+        XCTAssertEqual(show.timelineZoomPosition, 6)
+        executor.transport.position = 10
+        executor.transport.regionId = second.id
+        show.tick()
+        XCTAssertFalse(show.timelineFollowPaused, "Starting another song resumes follow")
+        XCTAssertEqual(show.selectedTimelineRegion, first.id, "Playback changes must preserve the white band selection")
+        XCTAssertEqual(show.timelineZoomPosition, 10, accuracy: 0.05)
+        show.selectTimelineRegion(first.id)
+        XCTAssertTrue(show.timelineFollowPaused, "Clicking the same highlighted band must pause again")
+        show.send(.stop)
+        XCTAssertFalse(show.timelineFollowPaused)
+        XCTAssertEqual(show.selectedTimelineRegion, first.id)
+        show.selectTimelineRegion(UUID())
+        XCTAssertFalse(show.timelineFollowPaused, "Invalid regions must not affect navigation")
+        try show.replaceProject(Project.empty(name: "Another project"))
+        XCTAssertNil(show.selectedTimelineRegion)
+    }
+
+    @MainActor func testRegionBandPauseOverridesSubPlayZoomUntilPlaybackHandoff() throws {
+        var project = Project.empty(name: "SubPlay navigation")
+        let first = Part(id: UUID(), name: "First", startTime: 0, endTime: 10)
+        let second = Part(id: UUID(), name: "Second", startTime: 10, endTime: 20)
+        project.songs[0].parts = [first, second]; project.songs[0].duration = 20
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        executor.transport.playing = true; executor.transport.regionId = first.id
+        executor.transport.subPlay.playing = true; executor.transport.subPlay.position = 12
+        executor.transport.editPosition = 3
+        show.send(.subSeek)
+        XCTAssertEqual(show.timelineZoomPosition, 12)
+        show.selectTimelineRegion(first.id)
+        XCTAssertEqual(show.timelineZoomPosition, 3)
+        executor.transport.subPlay.position = 13
+        show.tick()
+        XCTAssertTrue(show.timelineFollowPaused, "Advancing inside a song must preserve the manual pause")
+        executor.transport.subPlay.playing = false
+        show.send(.subStop)
+        XCTAssertFalse(show.timelineFollowPaused, "The handoff back to main playback resumes follow")
+        XCTAssertEqual(show.selectedTimelineRegion, first.id)
+    }
+
+    @MainActor func testPlayFromBlockUsesFirstFollowingSongInPlaylistOrder() throws {
+        var project = Project.empty(name: "Blocks")
+        let a = Part(id: UUID(), name: "A", startTime: 0, endTime: 10)
+        let b = Part(id: UUID(), name: "B", startTime: 20, endTime: 30)
+        let c = Part(id: UUID(), name: "C", startTime: 40, endTime: 50)
+        project.songs[0].parts = [a,b,c]; project.songs[0].duration = 50
+        let playlist = RegionPlaylist(id: UUID(), name: "Custom order", songId: project.songs[0].id, regionIds: [c.id,b.id,a.id])
+        let block = SetlistBlock(id: UUID(), songId: project.songs[0].id, playlistId: playlist.id, name: "Block", color: 0x00ff00, beforeRegionId: b.id)
+        let secondBlock = SetlistBlock(id: UUID(), songId: project.songs[0].id, playlistId: playlist.id, name: "Another block", color: 0x00ff00, beforeRegionId: b.id)
+        var state = RegionSetlist(); state.playlists = [playlist]; state.selectedId = playlist.id; state.blocks = [block, secondBlock]
+        project.regionSetlist = state
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        show.selectSetlistBlock(block.id)
+        XCTAssertFalse(show.snapshot.transport.playing)
+        XCTAssertTrue(executor.regionCommands.isEmpty, "Clicking a block must not queue or start audio")
+        show.send(.play)
+        XCTAssertTrue(show.snapshot.transport.playing)
+        XCTAssertEqual(show.snapshot.transport.regionId, b.id)
+        XCTAssertEqual(show.snapshot.transport.position, b.startTime, accuracy: 0.01)
+        XCTAssertEqual(show.focusedRegion, b.id)
+        show.send(.stop)
+        show.selectSetlistBlock(block.id)
+        show.send(.editSeek, value: c.startTime)
+        show.send(.play)
+        XCTAssertEqual(show.snapshot.transport.regionId, c.id, "A later grid selection supersedes the block")
+        show.send(.stop)
+        show.selectSetlistBlock(block.id)
+        show.focusRegion(a.id)
+        show.send(.play)
+        XCTAssertEqual(show.snapshot.transport.regionId, a.id, "A later song selection supersedes the block")
+        show.send(.stop)
+    }
+
+    @MainActor func testBlockWithNoFollowingSongDoesNotPlayPreviousSelection() throws {
+        var project = Project.empty(name: "Empty block")
+        let part = Part(id: UUID(), name: "Song", startTime: 0, endTime: 10)
+        project.songs[0].parts = [part]
+        let playlist = RegionPlaylist(id: UUID(), name: "List", songId: project.songs[0].id, regionIds: [part.id])
+        let block = SetlistBlock(id: UUID(), songId: project.songs[0].id, playlistId: playlist.id, name: "End", color: 0x00ff00)
+        var state = RegionSetlist(); state.playlists = [playlist]; state.selectedId = playlist.id; state.blocks = [block]
+        project.regionSetlist = state
+        let show = try ShowController(executor: CursorExecutor(), persistence: MemoryProjectStore(), initialProject: project)
+        show.selectSetlistBlock(block.id); show.send(.play)
+        XCTAssertFalse(show.snapshot.transport.playing)
+        show.selectRegionPlaylist(nil); show.send(.play)
+        XCTAssertTrue(show.snapshot.transport.playing, "Changing the playlist clears the block selection")
+        show.send(.stop)
+    }
+
+    @MainActor func testAddRegionsKeepsPlaylistIdentityOrderAndRejectsDuplicatesAndDrawerChildren() throws {
+        var project = Project.empty(name: "Add songs")
+        let a = Part(id: UUID(), name: "A", startTime: 0, endTime: 10)
+        let b = Part(id: UUID(), name: "B", startTime: 10, endTime: 20)
+        let c = Part(id: UUID(), name: "C", startTime: 20, endTime: 30)
+        let child = Part(id: UUID(), name: "Child", startTime: 10, endTime: 15, parentRegionID: b.id)
+        project.songs[0].parts = [a,b,c,child]
+        let show = try ShowController(executor: CursorExecutor(), persistence: MemoryProjectStore(), initialProject: project)
+        XCTAssertTrue(show.createRegionPlaylist(name: "Existing", selected: [a.id]))
+        let id = try XCTUnwrap(show.regionSetlist.selectedId)
+        XCTAssertTrue(show.addRegionsToPlaylist(id, selected: [c.id, a.id, b.id, c.id, child.id, UUID()]))
+        XCTAssertEqual(show.regionSetlist.playlists.count, 1)
+        XCTAssertEqual(show.regionSetlist.playlists[0].id, id)
+        XCTAssertEqual(show.regionSetlist.playlists[0].name, "Existing")
+        XCTAssertEqual(show.regionSetlist.playlists[0].regionIds, [a.id, c.id, b.id])
+        XCTAssertFalse(show.addRegionsToPlaylist(id, selected: [a.id]))
+    }
+
+    @MainActor func testQueueSelectionAndCancellationDoNotRequestGridRecenter() throws {
+        var project = Project.empty(name: "Queue viewport")
+        let playing = Part(id: UUID(), name: "Playing", startTime: 0, endTime: 60)
+        let queued = Part(id: UUID(), name: "Queued", startTime: 120, endTime: 180)
+        project.songs[0].parts = [playing, queued]; project.songs[0].duration = 180
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        executor.transport.playing = true; executor.transport.position = 20
+        executor.transport.regionId = playing.id
+        show.send(.pause)
+        let gridRequest = show.regionFocusRequest
+        for subplay in [false, true] {
+            executor.transport.subPlay.playing = subplay
+            for target in [queued.id, nil] as [UUID?] {
+                var result = executor.transport; result.queuedRegionId = target
+                executor.regionCommandResult = result
+                let listRequest = show.setlistFocusRequest
+                show.focusRegion(queued.id)
+                XCTAssertEqual(show.regionFocusRequest, gridRequest)
+                XCTAssertNotEqual(show.setlistFocusRequest, listRequest)
+                XCTAssertEqual(show.snapshot.transport.queuedRegionId, target)
+                XCTAssertEqual(show.snapshot.transport.subPlay.playing, subplay)
+                XCTAssertEqual(show.snapshot.transport.position, 20, accuracy: 0.1)
+            }
+            show.focusRegion(playing.id)
+            XCTAssertEqual(show.regionFocusRequest, gridRequest)
+        }
+        show.send(.stopAll)
+        executor.regionCommandResult = nil
+        show.focusRegion(queued.id)
+        XCTAssertNotEqual(show.regionFocusRequest, gridRequest, "Stopped selection must still reveal the song")
+    }
+    @MainActor func testBrowsingSetlistDuringPlaybackDoesNotRequestGridRecenter() async throws {
+        var project = Project.empty(name: "Browse viewport")
+        let first = Part(id: UUID(), name: "First", startTime: 0, endTime: 60)
+        let second = Part(id: UUID(), name: "Second", startTime: 60, endTime: 120)
+        project.songs[0].parts = [first, second]; project.songs[0].duration = 120
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        show.focusRegion(first.id)
+        executor.transport.playing = true; executor.transport.regionId = first.id
+        show.send(.pause)
+        let gridRequest = show.regionFocusRequest, listRequest = show.setlistFocusRequest
+        show.stepRegion(1)
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while show.setlistFocusRequest == listRequest && ProcessInfo.processInfo.systemUptime < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(show.focusedRegion, second.id)
+        XCTAssertEqual(show.regionFocusRequest, gridRequest)
+        XCTAssertNotEqual(show.setlistFocusRequest, listRequest)
+        show.send(.stopAll)
+    }
     @MainActor func testSelectingPlayingSongPreservesQueueForDesktopAndRemoteFocusAction() throws {
         var project = Project.empty(name: "Queue clicks")
         let parent = Part(id: UUID(), name: "Group", startTime: 10, endTime: 80)
@@ -98,6 +314,26 @@ final class ProjectCursorTests: XCTestCase {
         XCTAssertTrue(show.snapshot.transport.playing); XCTAssertTrue(show.snapshot.transport.loop.enabled)
         XCTAssertEqual(executor.loadCount, loads); XCTAssertEqual(executor.snapshotCount, snapshots)
         show.send(.stopAll)
+    }
+    @MainActor func testNormalMarkerPrefixesCreateSectionTypesAndPersistWithoutPrefixes() throws {
+        var project = Project.empty(name: "Typed cues")
+        let region = Part(id: UUID(), name: "Song", startTime: 10, endTime: 60)
+        project.songs[0].parts = [region]
+        let show = try ShowController(executor: CursorExecutor(), persistence: MemoryProjectStore(), initialProject: project)
+        for (index, name) in ["Ordinary marker with a longer name", "$verse", "*1 intro", "*outro"].enumerated() {
+            show.setMarker(TimelineMarker(id: UUID(), name: name, position: 12 + Double(index) * 5, color: 0))
+        }
+        let song = try XCTUnwrap(show.current)
+        XCTAssertEqual(song.sectionMarkers(in: region).map(\.name), ["VERSE", "INTRO", "OUTRO"])
+        XCTAssertEqual(song.multiLoopMarkers(in: region).map(\.name), ["INTRO", "OUTRO"])
+        XCTAssertTrue(song.markers!.contains { $0.name == "Ordinary marker with a longer name" && !$0.isSection })
+        let restored = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(show.snapshot.project)).songs[0]
+        XCTAssertEqual(restored.multiLoopMarkers(in: region).map(\.markerEditorName), ["*INTRO", "*OUTRO"])
+        XCTAssertEqual(restored.sectionMarkers(in: region).first?.markerEditorName, "$VERSE")
+        let outside = UUID()
+        show.setMarker(TimelineMarker(id: outside, name: "*Outside", position: 5, color: 0))
+        XCTAssertFalse(show.current!.markers!.contains { $0.id == outside })
+        XCTAssertEqual(show.modalNotice, "Section markers can only be created inside a song.")
     }
     @MainActor func testDuplicateMarkerCreationIsRejectedBeforeEditingAndAtCommit() throws {
         var project = Project.empty(name: "Duplicate markers")
@@ -306,7 +542,7 @@ final class ProjectCursorTests: XCTestCase {
         XCTAssertEqual(show.focusedRegion, first.id, "ticks and subplay must preserve browsing selection")
         show.send(.stopAll)
         show.send(.editSeek, value: 50); show.send(.play)
-        XCTAssertEqual(show.focusedRegion, first.id, "playing a gap must not select an unrelated region")
+        XCTAssertNil(show.focusedRegion, "playing a gap clears the selected song")
         show.send(.stopAll)
     }
 
@@ -427,6 +663,55 @@ final class ProjectCursorTests: XCTestCase {
         try reopened.replaceProject(other)
         XCTAssertEqual(reopened.snapshot.transport.position, 17)
     }
+    @MainActor func testSaveStoresCursorInEncryptedDocumentAndReopensWithoutLocalPreferences() async throws {
+        let store = MemoryProjectStore()
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: store, initialProject: .empty(name: "Portable cursor"))
+        show.send(.editSeek, value: 42.125)
+        XCTAssertTrue(show.needsSave, "Moving only the editing needle must enable Save")
+        XCTAssertFalse(show.hasUnsavedChanges, "Cursor navigation alone does not require a content-save prompt on close")
+        show.send(.play); executor.advance(12); show.tick()
+        try await show.flushProject()
+        XCTAssertFalse(show.needsSave)
+        let stored = await store.load()
+        let saved = try XCTUnwrap(stored)
+        let decoded = try ProjectDocumentCodec.decode(ProjectDocumentCodec.encode(saved))
+        XCTAssertEqual(decoded.savedCursor?.position, 42.125, "Save preserves the editing needle, not the advancing playback needle")
+        let reopened = try ShowController(executor: CursorExecutor(), persistence: store, initialProject: decoded)
+        XCTAssertFalse(reopened.needsSave)
+        XCTAssertEqual(reopened.snapshot.transport.editPosition, 42.125)
+        XCTAssertEqual(reopened.snapshot.transport.position, 42.125)
+        XCTAssertEqual(reopened.restoredCursorPosition, 42.125)
+        XCTAssertFalse(reopened.isPlaying)
+        reopened.send(.editSeek, value: 60)
+        XCTAssertTrue(reopened.needsSave)
+        try await reopened.flushProject()
+        XCTAssertFalse(reopened.needsSave)
+        show.send(.stopAll)
+        try await show.flushProject()
+        let storedAgain = await store.load()
+        let savedAgain = try XCTUnwrap(storedAgain)
+        XCTAssertEqual(savedAgain.savedCursor?.position, 42.125, "Every save captures the current needle even without a content edit")
+    }
+    @MainActor func testDocumentCursorWinsOverLocalNavigationAndIsRestoredAfterSwitchingProjects() throws {
+        let suite = "catlive-saved-cursor-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let memory = ProjectCursorMemory(preferences: defaults)
+        var project = Project.empty(name: "Saved cursor")
+        project.savedCursor = SavedProjectCursor(songID: project.songs[0].id, position: 65.25)
+        memory.remember(project: project.id, songID: project.songs[0].id, position: 0)
+        let show = try ShowController(executor: CursorExecutor(), persistence: MemoryProjectStore(), initialProject: project, cursorMemory: memory)
+        XCTAssertEqual(show.snapshot.transport.position, 65.25)
+        show.send(.editSeek, value: 7)
+        try show.replaceProject(.empty(name: "Other"))
+        try show.replaceProject(project)
+        XCTAssertEqual(show.snapshot.transport.position, 65.25)
+        XCTAssertFalse(show.hasUnsavedChanges)
+        project.savedCursor = SavedProjectCursor(songID: project.songs[0].id, position: project.songs[0].duration + 90)
+        try show.replaceProject(project)
+        XCTAssertEqual(show.snapshot.transport.position, project.songs[0].duration)
+    }
     @MainActor func testSavedCursorClampsToProjectEndAndIgnoresInvalidPosition() throws {
         let suite = "jaras-test-cursor-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -438,5 +723,81 @@ final class ProjectCursorTests: XCTestCase {
         let show = try ShowController(executor: CursorExecutor(), persistence: MemoryProjectStore(), initialProject: project, cursorMemory: memory)
         XCTAssertEqual(show.snapshot.transport.position, project.songs[0].duration)
         XCTAssertFalse(show.isPlaying)
+    }
+}
+
+
+extension ProjectCursorTests {
+    @MainActor func testPlaybackAndZoomPresentationReadsNeverDirtyOrReloadProject() throws {
+        var project = Project.empty(name: "Dirty-state boundary")
+        let region = Part(id: UUID(), name: "Song", startTime: 0, endTime: 120)
+        project.songs[0].parts = [region]
+        project.songs[0].duration = 120
+        project.savedCursor = SavedProjectCursor(songID: project.songs[0].id, position: 4)
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        let initialSnapshots = executor.snapshotCount, initialLoads = executor.loadCount
+        let initialProject = show.snapshot.project
+        let initialRevision = show.projectRevision
+        XCTAssertFalse(show.hasUnsavedChanges)
+        XCTAssertFalse(show.needsSave)
+        show.send(.play)
+        defer { show.send(.stopAll) }
+        for frame in 0..<300 {
+            executor.advance(1.0 / 30)
+            show.tick()
+            if frame == 100 { show.selectTimelineRegion(region.id) }
+            // The grid reads these anchors and the shared static presentation
+            // while wheel/native drawing updates its separate viewport state.
+            // None may serialize, reload or mutate the document.
+            for _ in 0..<8 {
+                XCTAssertTrue(show.timelineZoomPosition.isFinite)
+                _ = show.timelinePresentationState
+                _ = show.presentationState
+                XCTAssertFalse(show.needsSave)
+            }
+        }
+        show.send(.stopAll)
+        XCTAssertEqual(show.snapshot.project, initialProject)
+        XCTAssertEqual(show.projectRevision, initialRevision)
+        XCTAssertEqual(executor.snapshotCount, initialSnapshots, "Playback/presentation must use lightweight transport snapshots")
+        XCTAssertEqual(executor.loadCount, initialLoads, "Drawing/navigation must never reload the audio project")
+        XCTAssertFalse(show.hasUnsavedChanges)
+        XCTAssertFalse(show.needsSave)
+        XCTAssertFalse(show.canUndo, "Transport and a region-band selection must not add undo entries")
+    }
+}
+
+extension ProjectCursorTests {
+    @MainActor func testExplicitTransportAndPartsActionsUsePlaybackPositionWithoutReloading() throws {
+        var project = Project.empty(name: "MIDI performance")
+        project.songs[0].duration = 60
+        project.songs[0].parts = [Part(id: UUID(), name: "Song", startTime: 0, endTime: 60)]
+        let markers = [0.0, 10, 20].map { TimelineMarker(id: UUID(), name: "Part", position: $0, color: 0xffffff, section: true) }
+        project.songs[0].markers = markers
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        show.send(.editSeek, value: 15)
+        let loads = executor.loadCount
+        show.performAction(.play)
+        XCTAssertTrue(show.snapshot.transport.playing)
+        show.send(.editSeek, value: 0)
+        show.performAction(.partsDown)
+        XCTAssertEqual(executor.commands.last?.0, .queueSection)
+        XCTAssertEqual(executor.commands.last?.1, markers[2].id, "next part follows audible position, independently of edit cursor")
+        let atLast = executor.commands.count
+        show.performAction(.partsDown)
+        XCTAssertEqual(executor.commands.count, atLast, "navigation at the last part must not toggle its queue off")
+        show.performAction(.partsUp)
+        XCTAssertEqual(executor.commands.last?.1, markers[1].id)
+        show.performAction(.subPlay)
+        XCTAssertTrue(show.snapshot.transport.subPlay.playing)
+        show.performAction(.stop)
+        XCTAssertFalse(show.snapshot.transport.playing)
+        var partsOpen = false
+        show.togglePartsPanel = { partsOpen.toggle() }
+        show.performAction(.toggleParts); XCTAssertTrue(partsOpen)
+        show.performAction(.toggleParts); XCTAssertFalse(partsOpen)
+        XCTAssertEqual(executor.loadCount, loads)
     }
 }

@@ -40,14 +40,17 @@ public enum ProjectDocumentCodec {
             // Read existing development documents; all subsequent writes are encrypted.
             plaintext = data
         } else { throw ProjectError.invalid("Invalid or unsupported .jl project.") }
-        let project = try JSONDecoder().decode(Project.self, from: plaintext)
+        var project = try JSONDecoder().decode(Project.self, from: plaintext)
+        project.promoteLoopSectionMarkers()
         try project.validate()
         return project
     }
     public static func writeEncoded(_ data: Data, to url: URL, exclusive: Bool = false) throws {
         try ProjectDirectoryPolicy.validate(url)
         try data.write(to: url, options: exclusive ? .withoutOverwriting : .atomic)
-        ProjectDocumentAppearance.apply(to: url)
+        // Finder obtains the .jl/.bkjl icon from our registered document type.
+        // Do not synchronously enter AppKit (NSWorkspace.setIcon) for every
+        // document and backup write while the transport is running.
     }
     public static func write(_ project: Project, to url: URL, exclusive: Bool = false) throws {
         try writeEncoded(encode(project), to: url, exclusive: exclusive)

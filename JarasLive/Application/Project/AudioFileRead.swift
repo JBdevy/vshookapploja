@@ -4,6 +4,89 @@ import AVFoundation
 /// fraction of one packet. AVAudioFile then reports EOF (sometimes nilError)
 /// after successfully decoding all samples. Other errors remain errors.
 enum AudioFileRead {
+    private static let mediaLock = NSLock()
+    enum MediaError: LocalizedError {
+        /// Only a readable movie with a video track and no audio track can
+        /// produce this result. Decoder and filesystem errors remain errors.
+        case noAudioStream(URL)
+        case invalidAudioFormat(URL)
+        var errorDescription: String? {
+            switch self {
+            case .noAudioStream(let url): return "This video has no audio stream: \(url.lastPathComponent)"
+            case .invalidAudioFormat(let url): return "Cannot decode the audio format: \(url.lastPathComponent)"
+            }
+        }
+    }
+    static func isVideoWithoutAudio(_ error: Error) -> Bool {
+        guard let mediaError = error as? MediaError else { return false }
+        if case .noAudioStream = mediaError { return true }
+        return false
+    }
+    /// Audio-only containers stay on their native decoder. Movie soundtracks
+    /// are decoded once into a bounded disk cache, never in the render callback.
+    static func openMedia(_ url: URL, cancelled: () -> Bool = { false }) throws -> AVAudioFile {
+        if cancelled() { throw CancellationError() }
+        try Task.checkCancellation()
+        let audioError: Error
+        do { return try AVAudioFile(forReading: url) }
+        catch { audioError = error }
+        // Check the source before asking AVAsset for tracks: a missing or
+        // inaccessible file also yields an empty track list, not a silent movie.
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let asset = AVURLAsset(url: url)
+        let tracks = asset.tracks
+        var assetError: NSError?
+        guard asset.statusOfValue(forKey: "tracks", error: &assetError) == .loaded else {
+            throw assetError ?? audioError
+        }
+        guard let track = tracks.first(where: { $0.mediaType == .audio }) else {
+            guard asset.isReadable, tracks.contains(where: { $0.mediaType == .video }) else { throw audioError }
+            throw MediaError.noAudioStream(url)
+        }
+        guard let rawDescription = track.formatDescriptions.first,
+              let source = CMAudioFormatDescriptionGetStreamBasicDescription(rawDescription as! CMAudioFormatDescription)?.pointee,
+              source.mSampleRate.isFinite, source.mSampleRate > 0, source.mChannelsPerFrame > 0 else {
+            throw MediaError.invalidAudioFormat(url)
+        }
+        let signature = url.standardizedFileURL.path + "|" + String(describing: attributes[.size]) + "|" + String((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
+        var hash: UInt64 = 14695981039346656037
+        for byte in signature.utf8 { hash = (hash ^ UInt64(byte)) &* 1099511628211 }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("CatLive-MovieAudio", isDirectory: true)
+        let cached = folder.appendingPathComponent(String(hash, radix: 16) + ".caf")
+        mediaLock.lock(); defer { mediaLock.unlock() }
+        if let file = try? AVAudioFile(forReading: cached) { return file }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let temporary = folder.appendingPathComponent(UUID().uuidString + ".caf")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let rate = source.mSampleRate, channels = source.mChannelsPerFrame
+        let settings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: rate, AVNumberOfChannelsKey: channels,
+            AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false]
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { throw NSError(domain: "CatLive.Media", code: 2) }
+        reader.add(output)
+        guard reader.startReading() else { throw reader.error ?? NSError(domain: "CatLive.Media", code: 3) }
+        do {
+            let writer = try AVAudioFile(forWriting: temporary, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: true)
+            while let sample = output.copyNextSampleBuffer() {
+                try Task.checkCancellation()
+                if cancelled() { throw CancellationError() }
+                let count = CMSampleBufferGetNumSamples(sample)
+                guard count > 0, let data = CMSampleBufferGetDataBuffer(sample),
+                      let buffer = AVAudioPCMBuffer(pcmFormat: writer.processingFormat, frameCapacity: AVAudioFrameCount(count)),
+                      let samples = buffer.floatChannelData?[0] else { throw NSError(domain: "CatLive.Media", code: 4) }
+                buffer.frameLength = AVAudioFrameCount(count)
+                let bytes = count * Int(channels) * MemoryLayout<Float>.size
+                guard CMBlockBufferGetDataLength(data) == bytes,
+                      CMBlockBufferCopyDataBytes(data, atOffset: 0, dataLength: bytes, destination: samples) == kCMBlockBufferNoErr else { throw NSError(domain: "CatLive.Media", code: 5) }
+                try writer.write(from: buffer)
+            }
+            guard reader.status == .completed else { throw reader.error ?? NSError(domain: "CatLive.Media", code: 6) }
+        } catch { reader.cancelReading(); throw error }
+        try FileManager.default.moveItem(at: temporary, to: cached)
+        return try AVAudioFile(forReading: cached)
+    }
     static func hasMP3Padding(_ file: AVAudioFile) -> Bool {
         let format = file.fileFormat.streamDescription.pointee
         let remaining = file.length - file.framePosition

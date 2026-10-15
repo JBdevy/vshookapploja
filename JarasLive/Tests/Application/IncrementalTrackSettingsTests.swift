@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import JarasApplication
 
 @MainActor private final class IncrementalSettingsExecutor: CommandExecutor {
@@ -13,6 +14,11 @@ import XCTest
     var failMixerCommand: ShowCommand?
     var failSettingsCommand: String?
     var failSettingsCommandAt: Int?
+    func setFX(_ track: UUID?, settings: NativeFXSettings) throws {
+        try settings.validate()
+        if let track, let index = project.songs[0].tracks.firstIndex(where: { $0.id == track }) { project.songs[0].tracks[index].fx = settings }
+        else if track == nil { project.masterFX = settings }
+    }
     func load(_ project: Project) throws {
         try project.validate(); self.project = project
         transport.songId = project.songs.first?.id; transport.regionId = project.songs.first?.parts.first?.id
@@ -24,6 +30,7 @@ import XCTest
     func playbackSnapshot() throws -> PlaybackSnapshot { playbackReads += 1; return PlaybackSnapshot(transport: transport) }
     func applyProjectEdit(_ project: Project) throws { try project.validate(); self.project = project; fullEdits += 1 }
     func execute(_ command: ShowCommand,target: UUID?,value: Double) throws {
+        if command == .toggleMultiLoopBypass { transport.multiLoopsBypassed = !(transport.multiLoopsBypassed == true); return }
         if command != .clipGain && command != .clipNormalization && command != .clipChannelMode {
             mixerCommands.append(command)
             if failMixerCommand == command { throw ProjectError.invalid("Injected mixer failure") }
@@ -127,7 +134,39 @@ import XCTest
     func finishCurrentSong(_ enabled: Bool) {}
 }
 
+private actor PresentationSaveStore: ProjectPersistence {
+    private var saving: CheckedContinuation<Void, Never>?
+    private var started: CheckedContinuation<Void, Never>?
+    func load() -> Project? { nil }
+    func save(_ project: Project) async {
+        await withCheckedContinuation { continuation in
+            saving = continuation
+            started?.resume(); started = nil
+        }
+    }
+    func waitUntilSaving() async {
+        guard saving == nil else { return }
+        await withCheckedContinuation { started = $0 }
+    }
+    func completeSave() { saving?.resume(); saving = nil }
+}
+
 final class IncrementalTrackSettingsTests: XCTestCase {
+    @MainActor func testBatchFXInsertionUndoesAndRedoesAllTracksInOneStep() throws {
+        var project = fixture()
+        project.songs[0].tracks.append(Track(id: UUID(), name: "Second", role: .other))
+        let (show, executor) = try show(project)
+        let ids = Array(project.songs[0].tracks.dropFirst().map { Optional($0.id) })
+        let keys = show.insertFX(ids + ids, effect: "Compressor")
+        XCTAssertEqual(keys.count, 2)
+        for id in ids { XCTAssertEqual(show.fxSettings(id).effectKeys.count, 1) }
+        XCTAssertEqual(executor.fullEdits, 0, "Insertion must preserve incremental realtime updates")
+        show.undo()
+        for id in ids { XCTAssertTrue(show.fxSettings(id).effectKeys.isEmpty) }
+        show.redo()
+        for id in ids { XCTAssertEqual(show.fxSettings(id).effectKeys, [keys[id]!]) }
+    }
+
     @MainActor func testMIDIChannelIsIncrementalAndFiltersEveryVoiceMessage() throws {
         let project = fixture(), (show, executor) = try show(project)
         let id = project.songs[0].tracks[1].id
@@ -201,6 +240,232 @@ final class IncrementalTrackSettingsTests: XCTestCase {
         let show = try ShowController(executor: executor,persistence: MemoryProjectStore(),initialProject: project)
         executor.snapshotReads = 0; executor.playbackReads = 0
         return (show,executor)
+    }
+    @MainActor func testGlobalBypassPersistsBothStatesAcrossProjectsAndControllerRestarts() throws {
+        let suite = "catlive.bypass.test." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let executor = IncrementalSettingsExecutor()
+        let controller = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: fixture(), globalDefaults: defaults)
+        XCTAssertFalse(controller.snapshot.transport.multiLoopsBypassed == true)
+        controller.performAction(.toggleMultiLoopBypass)
+        XCTAssertTrue(defaults.bool(forKey: ShowController.multiLoopBypassDefaultsKey))
+        try controller.replaceProject(fixture())
+        XCTAssertTrue(controller.snapshot.transport.multiLoopsBypassed == true)
+        let reopened = try ShowController(executor: IncrementalSettingsExecutor(), persistence: MemoryProjectStore(), initialProject: fixture(), globalDefaults: defaults)
+        XCTAssertTrue(reopened.snapshot.transport.multiLoopsBypassed == true)
+        reopened.performAction(.toggleMultiLoopBypass)
+        XCTAssertFalse(defaults.bool(forKey: ShowController.multiLoopBypassDefaultsKey))
+        let off = try ShowController(executor: IncrementalSettingsExecutor(), persistence: MemoryProjectStore(), initialProject: fixture(), globalDefaults: defaults)
+        XCTAssertFalse(off.snapshot.transport.multiLoopsBypassed == true)
+    }
+    @MainActor func testStaticPresentationIgnoresClockButKeepsControlAndRegionChanges() async throws {
+        var project = fixture()
+        let second = Part(id: UUID(), name: "Second", startTime: 60, endTime: 90)
+        project.songs[0].parts.append(second)
+        let (controller, executor) = try show(project)
+        let observer = controller.presentationObserver
+        let toolbarObserver = controller.presentationObserver
+        XCTAssertTrue(observer === toolbarObserver, "Static controls must share their playback state derivation")
+        var changes = 0, toolbarChanges = 0
+        let subscription = observer.objectWillChange.sink { changes += 1 }
+        let toolbarSubscription = toolbarObserver.objectWillChange.sink { toolbarChanges += 1 }
+        defer { subscription.cancel(); toolbarSubscription.cancel() }
+        func flush() async { await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } } }
+        for step in 1...30 {
+            executor.transport.position = 37.5 + Double(step) / 30
+            controller.tick()
+            await flush()
+        }
+        XCTAssertEqual(changes, 0, "Setlist and toolbar must not rebuild on playback samples")
+        executor.transport.queuedRegionId = second.id
+        executor.transport.queueStartedAt = executor.transport.position
+        controller.tick(); await flush()
+        XCTAssertEqual(changes, 1, "Arming the queue updates controls immediately on the next UI turn")
+        executor.transport.position = 65
+        controller.tick(); await flush()
+        XCTAssertEqual(changes, 2, "Crossing a region updates titles even when regionId stays unchanged")
+        executor.transport.subPlay.playing = true
+        executor.transport.subPlay.position = 40
+        controller.tick(); await flush()
+        XCTAssertEqual(changes, 3)
+        executor.transport.subPlay.position = 65
+        controller.tick(); await flush()
+        XCTAssertEqual(changes, 4, "SubPlay crossing a region must update its displayed song")
+        let track = try XCTUnwrap(controller.current?.tracks.last?.id)
+        controller.sendMixerControl(.mute, target: track)
+        await flush()
+        XCTAssertEqual(changes, 5)
+        executor.transport.playing = false
+        controller.tick(); await flush()
+        XCTAssertEqual(changes, 6, "Stopping restores Play and disables Pause")
+        controller.modalNotice = "A marker already exists at this position."
+        await flush()
+        XCTAssertEqual(changes, 7, "Modal notices still update without observing the playback clock")
+        controller.modalNotice = nil
+        await flush()
+        XCTAssertEqual(changes, 8)
+        controller.sendMixerControl(.volume, target: track, value: 0.5, preview: true)
+        await flush()
+        XCTAssertEqual(changes, 8, "Fader previews keep their direct audio update without redrawing static controls")
+        controller.sendMixerControl(.volume, target: track, value: 0.5)
+        await flush()
+        XCTAssertEqual(changes, 9, "Committing the fader still publishes its project edit")
+        XCTAssertEqual(controller.current?.tracks.last?.volume, 0.5)
+        let region = try XCTUnwrap(controller.current?.parts.first)
+        controller.editRegion(region.id, name: "Renamed", color: 0x44ff88)
+        await flush()
+        XCTAssertEqual(changes, 10, "Region metadata updates titles without a transport boundary change")
+        XCTAssertEqual(controller.current?.parts.first?.name, "Renamed")
+        controller.performAction(.toggleMultiLoopBypass)
+        await flush()
+        XCTAssertEqual(changes, 11)
+        XCTAssertTrue(controller.snapshot.transport.multiLoopsBypassed == true)
+        controller.performAction(.toggleMultiLoopBypass)
+        await flush()
+        XCTAssertEqual(changes, 12)
+        XCTAssertFalse(controller.snapshot.transport.multiLoopsBypassed == true)
+        XCTAssertEqual(toolbarChanges, changes, "Every control subscribed to the shared observer receives the same boundary and edit updates")
+    }
+    @MainActor func testSharedPresentationObserverReleasesWithoutRetainingController() throws {
+        var controller: ShowController? = try show(fixture()).0
+        weak var releasedController = controller
+        var observer: ShowPresentationObserver? = controller?.presentationObserver
+        weak var releasedObserver = observer
+        XCTAssertTrue(observer === controller?.presentationObserver)
+        observer = nil
+        XCTAssertNil(releasedObserver, "The controller's cache must not retain a dismissed presentation observer")
+        observer = controller?.presentationObserver
+        releasedObserver = observer
+        XCTAssertNotNil(observer, "A new presentation can recreate its released observer")
+        controller = nil
+        XCTAssertNotNil(releasedController, "A visible presentation retains its controller")
+        observer = nil
+        XCTAssertNil(releasedObserver)
+        XCTAssertNil(releasedController, "The shared observer must not create a controller retain cycle")
+    }
+    @MainActor func testSharedPresentationPublishesSavingAndSavedStateToEveryControl() async throws {
+        let store = PresentationSaveStore()
+        let controller = try ShowController(executor: IncrementalSettingsExecutor(), persistence: store, initialProject: fixture())
+        let observer = controller.presentationObserver
+        let toolbarObserver = controller.presentationObserver
+        var states: [ShowPresentationState] = [], toolbarStates: [ShowPresentationState] = []
+        let subscription = observer.objectWillChange.sink { states.append(controller.presentationState) }
+        let toolbarSubscription = toolbarObserver.objectWillChange.sink { toolbarStates.append(controller.presentationState) }
+        defer { subscription.cancel(); toolbarSubscription.cancel() }
+        func flush() async { await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } } }
+        let save = Task { try await controller.flushProject() }
+        await store.waitUntilSaving()
+        await flush()
+        XCTAssertEqual(states.count, 1)
+        XCTAssertEqual(states.last?.saving, true)
+        await store.completeSave()
+        try await save.value
+        await flush()
+        XCTAssertEqual(states.count, 2, "Save completion coalesces its saved timestamp, dirty flag and saving flag")
+        XCTAssertEqual(states.last?.saving, false)
+        XCTAssertEqual(states.last?.dirty, false)
+        XCTAssertNotNil(states.last?.savedAt)
+        XCTAssertEqual(toolbarStates, states, "Save feedback must remain synchronized across the shared observer's consumers")
+    }
+    @MainActor func testTimelinePresentationSeparatesPlaybackFromEditingAndActionRequests() async throws {
+        let (controller, executor) = try show(fixture())
+        let observer = ShowTimelinePresentationObserver(show: controller)
+        var changes = 0
+        let subscription = observer.objectWillChange.sink { changes += 1 }
+        defer { subscription.cancel() }
+        func flush() async { await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } } }
+        for step in 1...60 {
+            executor.transport.position = 37.5 + Double(step) / 30
+            controller.tick(); await flush()
+        }
+        XCTAssertEqual(changes, 0, "Playback samples must not reconstruct the static grid")
+        executor.transport.editPosition = 35
+        controller.tick(); await flush()
+        XCTAssertEqual(changes, 1, "Moving the edit cursor still updates input coordinates")
+        controller.selectTimelineRegion(try XCTUnwrap(controller.current?.parts.first?.id))
+        await flush()
+        XCTAssertEqual(changes, 2, "Region selection updates its white outline")
+        let track = try XCTUnwrap(controller.current?.tracks.last?.id)
+        controller.setMixerTrackSelection([track], anchor: track)
+        await flush()
+        XCTAssertEqual(changes, 3, "Mixer selection is reflected in the grid")
+        controller.performAction(.splitItems); await flush()
+        XCTAssertEqual(changes, 4, "Split works even when the project geometry has not changed")
+        controller.performAction(.addTrack); await flush()
+        XCTAssertEqual(changes, 5, "Add-track opens without requiring a playback tick")
+        executor.transport.editPosition = nil
+        controller.tick(); await flush()
+        let before = changes
+        for _ in 0..<30 {
+            executor.transport.position += 0.03
+            controller.tick(); await flush()
+        }
+        XCTAssertEqual(changes, before, "A missing edit cursor must not subscribe geometry to the playhead")
+        executor.transport.subPlay.playing = true
+        controller.tick(); await flush()
+        XCTAssertEqual(changes, before + 1, "SubPlay still enables its cursor")
+        executor.transport.subPlay.playing = false
+        executor.transport.playing = false
+        controller.tick(); await flush()
+        XCTAssertEqual(changes, before + 2, "Stop restores stationary cursor coordinates")
+        XCTAssertEqual(observer.state.editPosition, executor.transport.position)
+    }
+    @MainActor func testMixerPresentationIgnoresPlaybackTicksAndPublishesRealEdits() throws {
+        let (controller, executor) = try show(fixture())
+        var changes = 0
+        let subscription = controller.projectPresentation.objectWillChange.sink { changes += 1 }
+        defer { subscription.cancel() }
+        executor.transport.position += 1
+        for _ in 0..<30 { controller.tick() }
+        XCTAssertEqual(changes, 0, "Playback position must not rebuild mixer controls")
+        let track = try XCTUnwrap(controller.current?.tracks.last?.id)
+        controller.setMixerTrackSelection([track], anchor: track)
+        XCTAssertEqual(changes, 1)
+        controller.setMixerTrackSelection([track], anchor: track)
+        XCTAssertEqual(changes, 1, "Unchanged selection must not invalidate mixer")
+        controller.sendMixerControl(.volume, target: track, value: 0.5)
+        XCTAssertGreaterThan(changes, 1)
+        let afterVolume = changes
+        controller.sendMixerControl(.mute, target: track)
+        XCTAssertGreaterThan(changes, afterVolume)
+        let afterMute = changes
+        controller.sendMixerControl(.solo, target: track)
+        XCTAssertGreaterThan(changes, afterMute)
+        let afterSolo = changes
+        controller.tick()
+        XCTAssertEqual(changes, afterSolo)
+    }
+    @MainActor func testClearAllMixerMuteAndSoloIgnoresSelectionAndPreservesOtherControls() throws {
+        var project = fixture()
+        var a = Track(id: UUID(), name: "A", role: .keys)
+        var b = Track(id: UUID(), name: "B", role: .keys)
+        let c = Track(id: UUID(), name: "C", role: .keys)
+        a.mute = true; b.mute = true; a.solo = true; b.solo = true
+        a.volume = 0.5; b.pan = 0.25
+        project.songs[0].tracks = [a, b, c]
+        project.masterMute = true; project.masterSolo = true
+        let (controller, executor) = try show(project)
+        controller.setMixerTrackSelection([c.id], anchor: c.id)
+        var muteUpdates: [UUID?] = [], soloUpdates: [UUID?] = []
+        controller.audioMute = { id, muted in XCTAssertFalse(muted); muteUpdates.append(id) }
+        controller.audioSolo = { id, solo in XCTAssertFalse(solo); soloUpdates.append(id) }
+        controller.sendMixerControl(.mute, target: c.id, clearAll: true)
+        XCTAssertTrue(controller.current!.tracks.allSatisfy { !$0.mute })
+        XCTAssertTrue(controller.current!.tracks[0].solo)
+        controller.sendMixerControl(.solo, target: c.id, clearAll: true)
+        XCTAssertTrue(controller.current!.tracks.allSatisfy { !$0.solo })
+        XCTAssertEqual(Set(muteUpdates.compactMap { $0 }), [a.id, b.id])
+        XCTAssertEqual(Set(soloUpdates.compactMap { $0 }), [a.id, b.id])
+        XCTAssertEqual(controller.current!.tracks[0].volume, 0.5)
+        XCTAssertEqual(controller.current!.tracks[1].pan, 0.25)
+        XCTAssertEqual(controller.snapshot.project.masterMute, true)
+        XCTAssertEqual(controller.snapshot.project.masterSolo, true)
+        XCTAssertEqual(controller.mixerTrackSelection, [c.id])
+        let count = executor.mixerCommands.count
+        controller.sendMixerControl(.solo, target: c.id, clearAll: true)
+        XCTAssertEqual(executor.mixerCommands.count, count, "Clearing an already-clear mixer does nothing")
+        XCTAssertEqual(executor.fullEdits, 0); XCTAssertEqual(executor.snapshotReads, 0)
     }
     @MainActor func testSelectedMixerControlsShareStatesAndPreserveUnselectedTracks() throws {
         var project = fixture()
@@ -586,4 +851,46 @@ final class IncrementalTrackSettingsTests: XCTestCase {
         XCTAssertEqual(show.setlistNavigationRequest?.direction, -1)
     }
 
+}
+
+
+extension IncrementalTrackSettingsTests {
+    @MainActor func testEnvelopeTouchLatchAndWriteSaveWithoutChangingManualFader() throws {
+        for mode in [AutomationMode.touch, .latch, .write] {
+            var project = fixture()
+            let index = try XCTUnwrap(project.songs[0].tracks.firstIndex { $0.kind == .standard })
+            let track = project.songs[0].tracks[index]
+            var automation = TrackAutomation(); automation.mode = mode
+            var envelope = TrackEnvelope(target: AutomationTarget(.volume), name: "Volume", defaultValue: TrackEnvelope.normalizedGain(track.volume))
+            envelope.armed = true; automation.envelopes = [envelope]
+            project.songs[0].tracks[index].automation = automation
+            let (controller, executor) = try show(project)
+            var overrides: [Double?] = []
+            controller.audioAutomationOverride = { _, _, value in overrides.append(value) }
+            controller.sendMixerControl(.volume, target: track.id, value: 0.5, preview: true)
+            executor.transport.position = 38; controller.tick()
+            controller.sendMixerControl(.volume, target: track.id, value: 0.25, preview: false)
+            executor.transport.position = 39; controller.tick()
+            XCTAssertEqual(controller.current?.tracks[index].volume, track.volume, "Writing an envelope does not overwrite the trim fader")
+            controller.finishAutomationRecording()
+            let saved = try XCTUnwrap(controller.current?.tracks[index].automation)
+            let curve = try XCTUnwrap(saved.envelopes.first)
+            XCTAssertEqual(TrackEnvelope.gain(curve.value(at: 38)), 0.25, accuracy: 1e-8)
+            if mode == .touch { XCTAssertEqual(TrackEnvelope.gain(curve.value(at: 39)), track.volume, accuracy: 1e-8) }
+            else { XCTAssertEqual(TrackEnvelope.gain(curve.value(at: 39)), 0.25, accuracy: 1e-8) }
+            XCTAssertEqual(saved.mode, mode == .write ? .trimRead : mode)
+            XCTAssertTrue(overrides.last! == nil, "The audio override is released after recording")
+            XCTAssertTrue(controller.hasUnsavedChanges)
+            XCTAssertEqual(executor.project.songs[0].tracks[index].automation, saved)
+        }
+    }
+    @MainActor func testAllNativeMasterEffectsExceptInstruments() throws {
+        let (controller, _) = try show(fixture())
+        for kind in ["EQ", "Compressor", "Limiter", "Pitch", "Delay", "Reverb", NativeFXSettings.stemSeparator] {
+            XCTAssertNotNil(controller.insertFX(nil, effect: kind), kind)
+            XCTAssertTrue(controller.fxSettings(nil).inserted.contains(kind))
+        }
+        XCTAssertNil(controller.insertFX(nil, effect: "Instruments"))
+        XCTAssertFalse(controller.fxSettings(nil).inserted.contains("Instruments"))
+    }
 }

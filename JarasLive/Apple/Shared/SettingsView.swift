@@ -5,20 +5,26 @@ struct SettingsView: View {
     let backend: any BackendClient
     @AppStorage("jaras.language") private var language = "en"
     @ObservedObject private var audio = AudioDeviceSettings.shared
-    private enum Section: String, CaseIterable { case general = "General", audio = "Audio", midi = "MIDI", actions = "Actions", mappings = "Mappings", plugins = "Plugins", account = "Account"
+    @ObservedObject private var recorder = TrackRecording.shared
+    private var audioConfigurationLocked: Bool { show.isPlaying || recorder.recording || recorder.busy }
+    enum Section: String, CaseIterable { case general = "General", audio = "Audio", midi = "MIDI", actions = "Actions", mappings = "Mappings", plugins = "Plugins", account = "Account"
         var icon: String { switch self { case .general: return "slider.horizontal.3"; case .audio: return "speaker.wave.2"; case .midi: return "pianokeys"; case .actions: return "keyboard"; case .mappings: return "switch.2"; case .plugins: return "puzzlepiece.extension"; case .account: return "person.crop.circle" } }
     }
     private var availableSections: [Section] {
         #if os(iOS)
-        Section.allCases.filter { $0 != .account && $0 != .plugins }
+        [.general, .audio, .midi, .actions]
         #else
         Section.allCases
         #endif
     }
     @ObservedObject private var mappings = ControlMappings.shared
-    @State private var section = Section.general
+    @State private var section: Section
     @State private var signingIn = false
     @State private var pendingDevice: AuthorizedDevice?
+    init(auth: AuthService, show: ShowController, backend: any BackendClient, initialSection: Section = .general) {
+        self.auth = auth; self.show = show; self.backend = backend
+        _section = State(initialValue: initialSection)
+    }
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 6) {
@@ -34,6 +40,7 @@ struct SettingsView: View {
                 Spacer()
             }.padding(10).frame(width: 144).background(JarasTheme.panel)
             Divider()
+            GeometryReader { viewport in
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
                     Text(LocalizedStringKey(section.rawValue)).font(.title2.bold())
@@ -42,20 +49,34 @@ struct SettingsView: View {
                         Text("Language").font(.headline)
                         Picker("Language", selection: $language) { Text("English").tag("en"); Text("Português").tag("pt-BR") }.pickerStyle(.segmented).labelsHidden()
                     case .audio:
-                        Text("Output device").font(.headline)
-                        Picker("Output device", selection: Binding(get: { audio.selectedUID }, set: { audio.select($0) })) {
-                            if audio.devices.isEmpty { Text("No output device").tag("") }
+                        if audioConfigurationLocked {
+                            Label("Stop the transport before changing the audio device.", systemImage: "pause.circle.fill")
+                                .font(.callout.weight(.medium)).foregroundStyle(JarasTheme.yellow)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Text("Audio device — Input").font(.headline)
+                        Picker("Audio device — Input", selection: Binding(get: { audio.inputUID }, set: { if !audioConfigurationLocked { audio.selectInput($0) } })) {
+                            Text(verbatim: "None").tag("")
+                            if !audio.inputUID.isEmpty && audio.inputDevice == nil { Text("Disconnected").tag(audio.inputUID) }
+                            ForEach(audio.inputDevices) { device in Text(device.name).tag(device.id) }
+                        }.labelsHidden().frame(maxWidth: .infinity).disabled(audioConfigurationLocked)
+                        Text("Audio device — Output").font(.headline)
+                        Picker("Output device", selection: Binding(get: { audio.selectedUID.isEmpty ? "none" : audio.selectedUID }, set: { if !audioConfigurationLocked { audio.select($0) } })) {
+                            Text(verbatim: "None").tag("none")
+                            if !audio.selectedUID.isEmpty && audio.selectedUID != "none" && !audio.devices.contains(where: { $0.id == audio.selectedUID }) {
+                                Text("Disconnected").tag(audio.selectedUID)
+                            }
                             ForEach(audio.devices) { device in Text(device.name).tag(device.id) }
-                        }.labelsHidden().frame(maxWidth: .infinity)
+                        }.labelsHidden().frame(maxWidth: .infinity).disabled(audioConfigurationLocked)
                         Text("\(audio.channels) output channels").foregroundStyle(JarasTheme.secondary)
                         Text("Sample rate").font(.headline)
-                        Picker("Sample rate", selection: Binding(get: { audio.sampleRate }, set: { audio.setSampleRate($0) })) {
+                        Picker("Sample rate", selection: Binding(get: { audio.sampleRate }, set: { if !audioConfigurationLocked { audio.setSampleRate($0) } })) {
                             ForEach(audio.sampleRateChoices, id: \.self) { rate in Text(String(format: "%.0f Hz", rate)).tag(rate) }
-                        }.labelsHidden()
+                        }.labelsHidden().disabled(audioConfigurationLocked)
                         Text("Buffer size").font(.headline)
-                        Picker("Buffer size", selection: Binding(get: { audio.bufferFrames }, set: { audio.setBuffer($0) })) {
+                        Picker("Buffer size", selection: Binding(get: { audio.bufferFrames }, set: { if !audioConfigurationLocked { audio.setBuffer($0) } })) {
                             ForEach(audio.bufferChoices, id: \.self) { frames in Text("\(frames) samples").tag(frames) }
-                        }.labelsHidden()
+                        }.labelsHidden().disabled(audioConfigurationLocked)
                         Text("Smaller buffers reduce latency and use more CPU.").font(.caption).foregroundStyle(JarasTheme.secondary)
                         Button("Refresh devices") { audio.refresh(); audio.refreshSampleRate(); audio.refreshBuffer() }
                         if !audio.error.isEmpty { Text(LocalizedStringKey(audio.error)).foregroundStyle(.red).font(.caption) }
@@ -71,6 +92,7 @@ struct SettingsView: View {
                                 ForEach(audio.midiDevices.filter { device in !audio.midiSlots.enumerated().contains { $0.offset != slot && $0.element == device.id } }) { device in Text(device.name).tag(device.id) }
                             }.padding(10).background(JarasTheme.panel).cornerRadius(6)
                         }
+                        #if os(macOS)
                         Text("MIDI output").font(.headline)
                         Picker("MIDI output", selection: Binding(get: { audio.midiOutput }, set: { audio.selectMIDIOutput($0) })) {
                             Text("None").tag(Int32(0))
@@ -80,6 +102,7 @@ struct SettingsView: View {
                             ForEach(audio.midiOutputs) { device in Text(device.name).tag(device.id) }
                         }.padding(10).background(JarasTheme.panel).cornerRadius(6)
                         if audio.midiOutputs.isEmpty { Text("No MIDI outputs").foregroundStyle(JarasTheme.secondary) }
+                        #endif
                         Button("Refresh devices") { audio.refreshMIDI() }
                     case .actions:
                         DAWActionsList(show: show)
@@ -106,12 +129,14 @@ struct SettingsView: View {
                         Button("Sair e liberar dispositivo") { Task { await auth.logout() } }.buttonStyle(StageButtonStyle(color: .red)).disabled(show.isPlaying || auth.busy)
                         if !auth.message.isEmpty { Text(LocalizedStringKey(auth.message)).font(.caption).foregroundStyle(JarasTheme.yellow) }
                     }
-                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(24).frame(width: viewport.size.width, alignment: .leading)
+            }
             }
         }.foregroundStyle(JarasTheme.text)
         .sheet(isPresented: $signingIn) {
             LoginView(auth: auth, backend: backend, offersTrial: false, onAuthorized: { signingIn = false }).frame(width: 550, height: 620)
         }
+        .onDisappear { mappings.editing = nil }
         .task(id: section) { if section == .account { await auth.refreshDevices() } }
         .alert("Remover dispositivo?", isPresented: Binding(get: { pendingDevice != nil }, set: { if !$0 { pendingDevice = nil } }), presenting: pendingDevice) { device in
             Button("Cancelar", role: .cancel) { pendingDevice = nil }

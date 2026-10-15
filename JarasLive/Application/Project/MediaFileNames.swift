@@ -18,9 +18,65 @@ struct MediaFileNames {
         let tail = ext.isEmpty ? "" : "." + ext
         var index = forceSuffix ? 1 : 0
         while true {
-            let candidate = stem + (index == 0 ? "" : String(format: "-%02d", index)) + tail
+            let candidate = stem + (index == 0 ? "" : String(format: "-%03d", index)) + tail
             if used.insert(candidate.lowercased()).inserted { return candidate }
             index += 1
+        }
+    }
+}
+
+/// Recording numbers share one namespace across formats, existing files and MIDI items.
+struct RecordingNames {
+    private var used: Set<String>
+    init(directory: URL?, clips: [AudioClip] = []) {
+        used = Set(clips.map { $0.name.lowercased() })
+        if let directory, let files = FileManager.default.enumerator(at: directory.appendingPathComponent("Stems"), includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let url as URL in files where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                used.insert(url.deletingPathExtension().lastPathComponent.lowercased())
+            }
+        }
+    }
+    mutating func allocate(track: String, clips: [AudioClip] = []) -> String {
+        used.formUnion(clips.map { $0.name.lowercased() })
+        var name = track.components(separatedBy: CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/:\\"))).joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty || name == "." || name == ".." { name = "Track" }
+        while name.utf8.count > 200 { name.removeLast() }
+        var index = 1
+        while true {
+            let value = name + String(format: " - %03d", index)
+            if used.insert(value.lowercased()).inserted { return value }
+            index += 1
+        }
+    }
+}
+
+/// Reuses project media only when both its filename and bytes match.
+/// Size filtering avoids reading unrelated files; comparison stays off the UI thread.
+struct ExistingProjectMedia {
+    private var filesBySize: [Int: [URL]] = [:]
+    init(directory: URL) {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        if let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]) {
+            for case let url as URL in files {
+                guard let values = try? url.resourceValues(forKeys: keys),
+                      values.isRegularFile == true, values.isSymbolicLink != true,
+                      let size = values.fileSize else { continue }
+                filesBySize[size, default: []].append(url)
+            }
+        }
+    }
+    func identical(to source: URL) throws -> URL? {
+        let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        guard let size else { return nil }
+        for candidate in filesBySize[size] ?? [] where candidate.lastPathComponent == source.lastPathComponent {
+            try Task.checkCancellation()
+            if FileManager.default.contentsEqual(atPath: source.path, andPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
+    mutating func register(_ url: URL) throws {
+        if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+            filesBySize[size, default: []].append(url)
         }
     }
 }

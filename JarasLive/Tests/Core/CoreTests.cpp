@@ -5,7 +5,276 @@
 #include <stdexcept>
 using namespace jaras;
 static void expect(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+static void testAutoUntilBlockEnd() {
+    Project project; project.id = "block-project"; project.name = "Blocks";
+    project.songs = {{"block-song", "Songs", 80, 120, {},
+        {{"a", "A", 0, 10}, {"b", "B", 10, 20}, {"c", "C", 20, 30},
+         {"d", "D", 30, 40}, {"e", "E", 40, 50}, {"f", "F", 50, 60}}}};
+    RegionSetlist state; state.autoAdvance = true; state.selectedId = "block-list";
+    state.playlists = {{"block-list", "Show", "block-song", {"a", "b", "c", "d", "e", "f"}}};
+    state.blocks = std::vector<SetlistBlock>{
+        {"opening", "block-song", "block-list", "Opening", 0, "a"},
+        {"middle", "block-song", "block-list", "Middle", 0, "c"},
+        {"closing", "block-song", "block-list", "Closing", 0, "e"}};
+    project.regionSetlist = state;
+    const auto start = [](Engine& engine, const ID& id) {
+        engine.execute({CommandKind::selectRegion, id}); engine.execute({CommandKind::play});
+    };
+    Engine legacy; legacy.loadProject(project); start(legacy, "b");
+    expect(legacy.transport().queuedRegionId == "c", "block limit defaults off for existing projects");
+    legacy.advance(10);
+    expect(legacy.transport().playing && legacy.transport().regionId == "c", "default Auto crosses block headings");
+
+    state.autoUntilBlockEnd = true; project.regionSetlist = state;
+    Engine limited; limited.loadProject(project); start(limited, "a");
+    expect(limited.transport().queuedRegionId == "b", "block limit queues songs within the current block");
+    limited.advance(80);
+    expect(!limited.transport().playing && limited.transport().position == 20 && limited.transport().regionId == "b" && !limited.transport().queuedRegionId,
+           "large ticks stop exactly at the last song of the block");
+    expect(limited.project().regionSetlist->autoAdvance && limited.project().regionSetlist->autoUntilBlockEnd,
+           "reaching a block boundary leaves Auto and its block policy enabled");
+    auto cosmetic = *limited.project().regionSetlist;
+    cosmetic.blocks->front().name = "Cosmetic"; cosmetic.blocks->front().color = 0x987654;
+    cosmetic.liveEnabled = true; cosmetic.playedLiveRegionIDs = std::vector<ID>{"b"};
+    const auto stopped = limited.transport();
+    limited.configureRegionSetlist(cosmetic);
+    expect(limited.transport().regionId == stopped.regionId && limited.transport().position == stopped.position &&
+           limited.transport().editPosition == stopped.editPosition && limited.transport().playing == stopped.playing &&
+           limited.transport().queuedRegionId == stopped.queuedRegionId && limited.transport().queueStartedAt == stopped.queueStartedAt &&
+           limited.transport().subPlay.position == stopped.subPlay.position && limited.transport().subPlay.playing == stopped.subPlay.playing,
+           "cosmetic and Live edits preserve stopped transport exactly at a contiguous block boundary");
+    start(limited, "c");
+    expect(limited.transport().queuedRegionId == "d", "manual selection starts automatic queueing in the new block");
+    limited.advance(30);
+    expect(!limited.transport().playing && limited.transport().position == 40, "manually selected block also stops before its following block");
+
+    Engine manual; manual.loadProject(project); start(manual, "a");
+    manual.execute({CommandKind::queueRegion, "c"});
+    auto edited = state; edited.blocks->at(1).name = "Renamed";
+    manual.configureRegionSetlist(edited);
+    expect(manual.transport().queuedRegionId == "c" && manual.project().regionSetlist->autoUntilBlockEnd,
+           "manual queue crosses a block boundary without disabling the persistent policy");
+    manual.advance(30);
+    expect(!manual.transport().playing && manual.transport().position == 40 && manual.transport().regionId == "d",
+           "after a manual cross-block queue, Auto runs only to the end of that destination block");
+
+    Engine rename; rename.loadProject(project); start(rename, "a"); rename.advance(2);
+    const double queueOrigin = rename.transport().queueStartedAt;
+    edited = state; edited.blocks->front().name = "New name"; edited.blocks->front().color = 0x123456; edited.blocks->front().symbol = false;
+    rename.configureRegionSetlist(edited);
+    expect(rename.transport().queuedRegionId == "b" && rename.transport().queueStartedAt == queueOrigin,
+           "block name, color and symbol edits preserve the existing queue countdown");
+    edited.blocks->at(1).beforeRegionId = "b";
+    rename.configureRegionSetlist(edited);
+    expect(!rename.transport().queuedRegionId && rename.transport().position == 2, "moving a block heading retracts a newly forbidden automatic queue");
+    edited.blocks->at(1).beforeRegionId = "c";
+    rename.configureRegionSetlist(edited);
+    expect(rename.transport().queuedRegionId == "b", "moving the heading back restores a permitted automatic queue");
+    auto projectEdit = rename.project(); projectEdit.regionSetlist->blocks->at(1).beforeRegionId = "b";
+    rename.applyProjectEdit(projectEdit);
+    expect(!rename.transport().queuedRegionId, "full project edits also revalidate block boundaries");
+    projectEdit.regionSetlist->blocks->at(1).beforeRegionId = "c"; rename.applyProjectEdit(projectEdit);
+    expect(rename.transport().queuedRegionId == "b", "undoing a boundary edit restores queueing without a transport restart");
+
+    auto reordered = project;
+    reordered.regionSetlist->playlists[0].regionIds = {"c", "a", "b", "d", "e", "f"};
+    reordered.regionSetlist->blocks->at(1).beforeRegionId = "d";
+    reordered.regionSetlist->blocks->front().beforeRegionId = "c";
+    Engine order; order.loadProject(reordered); start(order, "c");
+    expect(order.transport().queuedRegionId == "a", "block policy follows playlist sequence rather than timeline order");
+    order.advance(30);
+    expect(!order.transport().playing && order.transport().position == 20 && order.transport().regionId == "b",
+           "reordered playlist stops at its next heading even when time moves backwards");
+
+    auto all = project; all.regionSetlist->selectedId.reset();
+    all.regionSetlist->blocks->push_back({"all-boundary", "block-song", {}, "All regions", 0, "c"});
+    all.regionSetlist->blocks->push_back({"empty-end", "block-song", {}, "Empty", 0, {}});
+    Engine allRegions; allRegions.loadProject(all); start(allRegions, "a");
+    expect(allRegions.transport().queuedRegionId == "b", "All regions ignores headings belonging to a playlist");
+    allRegions.advance(20);
+    expect(!allRegions.transport().playing && allRegions.transport().position == 20,
+           "an unheaded leading group in All regions stops before its first applicable heading");
+    Engine scoped; scoped.loadProject(project); start(scoped, "b");
+    edited = state; edited.blocks->at(1).playlistId.reset(); scoped.configureRegionSetlist(edited);
+    expect(scoped.transport().queuedRegionId == "c", "playlist playback ignores a boundary belonging to All regions");
+
+    for (bool applyWholeProject : {false, true}) {
+        auto runningProject = project; runningProject.regionSetlist->autoUntilBlockEnd = false;
+        runningProject.regionSetlist->automaticSubplay = true;
+        Engine running; running.loadProject(runningProject); start(running, "b"); running.advance(9);
+        expect(running.transport().subPlay.playing && running.transport().queuedRegionId == "c", "fixture starts next-block automatic Subplay before enabling limit");
+        auto next = running.project(); next.regionSetlist->autoUntilBlockEnd = true;
+        if (applyWholeProject) running.applyProjectEdit(next); else running.configureRegionSetlist(*next.regionSetlist);
+        expect(!running.transport().queuedRegionId && !running.transport().subPlay.playing && running.transport().playing && running.transport().position == 19,
+               "enabling the limit retracts next-block queue and its automatic Subplay without moving main playback");
+        running.advance(2);
+        expect(!running.transport().playing && running.transport().position == 20, "changed policy takes effect at the current block end");
+    }
+    for (int manualSubplay : {0, 1, 2}) {
+        auto runningProject = project; runningProject.regionSetlist->autoUntilBlockEnd = false;
+        runningProject.regionSetlist->automaticSubplay = manualSubplay != 0;
+        Engine running; running.loadProject(runningProject); start(running, "b"); running.advance(9);
+        if (manualSubplay == 1) running.execute({CommandKind::subStop});
+        if (manualSubplay == 2) running.execute({CommandKind::subSeek, "", 21});
+        else running.execute({CommandKind::subPlay});
+        const double manualPosition = running.transport().subPlay.position;
+        auto next = *running.project().regionSetlist; next.autoUntilBlockEnd = true;
+        running.configureRegionSetlist(next);
+        expect(!running.transport().queuedRegionId && running.transport().subPlay.playing && running.transport().subPlay.position == manualPosition,
+               "enabling the limit preserves manually started, restarted or repositioned Subplay");
+    }
+    auto crossProject = project; crossProject.regionSetlist->automaticSubplay = true;
+    Engine cross; cross.loadProject(crossProject); start(cross, "a"); cross.advance(9); cross.advance(1);
+    expect(cross.transport().regionId == "b" && cross.transport().subPlayPromotion == 1 && !cross.transport().queuedRegionId,
+           "automatic Subplay still promotes inside a block and never prepares its next block");
+    cross.advance(9);
+    expect(!cross.transport().playing && cross.transport().position == 20 && !cross.transport().subPlay.playing,
+           "Subplay handoff preserves the block end stop");
+    Engine manualCross; manualCross.loadProject(crossProject); start(manualCross, "b");
+    manualCross.execute({CommandKind::queueRegion, "c"}); manualCross.advance(9);
+    manualCross.configureRegionSetlist(*manualCross.project().regionSetlist);
+    expect(manualCross.transport().queuedRegionId == "c" && manualCross.transport().subPlay.playing,
+           "automatic Subplay for a manually chosen cross-block queue remains allowed");
+    manualCross.advance(1); manualCross.advance(19);
+    expect(!manualCross.transport().playing && manualCross.transport().position == 40 && manualCross.project().regionSetlist->autoUntilBlockEnd,
+           "manual queue with automatic Subplay resumes the same limit in its destination block");
+
+    auto pausedProject = crossProject; pausedProject.regionSetlist->autoUntilBlockEnd = false;
+    Engine paused; paused.loadProject(pausedProject); start(paused, "b"); paused.advance(9); paused.execute({CommandKind::pause});
+    edited = *paused.project().regionSetlist; edited.autoUntilBlockEnd = true; paused.configureRegionSetlist(edited);
+    paused.execute({CommandKind::play});
+    expect(!paused.transport().subPlay.playing && !paused.transport().queuedRegionId, "invalidated automatic Subplay cannot resume from Pause");
+    paused.advance(2);
+    expect(!paused.transport().playing && paused.transport().position == 20, "paused policy change stops at the same block boundary");
+
+    auto readyProject = crossProject; readyProject.regionSetlist->prepareWithoutPlayback = true;
+    Engine ready; ready.loadProject(readyProject); start(ready, "a"); ready.advance(10);
+    expect(!ready.transport().playing && ready.transport().regionId == "b" && ready.transport().position == 10,
+           "Without playback prepares the next song within a block");
+    ready.execute({CommandKind::play}); ready.advance(10);
+    expect(!ready.transport().playing && ready.transport().regionId == "b" && ready.transport().position == 20 && !ready.transport().queuedRegionId,
+           "Without playback does not prepare the first song of the next block");
+
+    auto drawer = project;
+    Part child{"drawer-child", "Child", 2, 5}; child.parentRegionID = "a";
+    drawer.songs[0].parts.push_back(child);
+    drawer.regionSetlist->playlists[0].regionIds.insert(drawer.regionSetlist->playlists[0].regionIds.begin() + 1, child.id);
+    drawer.regionSetlist->blocks->at(1).beforeRegionId = "b";
+    Engine unified; unified.loadProject(drawer); start(unified, child.id);
+    expect(!unified.transport().queuedRegionId, "drawer child inherits its listed parent's block boundary, skipping hidden child IDs");
+    unified.advance(20);
+    expect(!unified.transport().playing && unified.transport().position == 10,
+           "unified playback stops at the parent's end, not the child end");
+    drawer.regionSetlist->blocks->at(1).beforeRegionId = child.id;
+    Engine hidden; hidden.loadProject(drawer); start(hidden, child.id);
+    expect(hidden.transport().queuedRegionId == "b", "hidden drawer child anchors do not introduce a visible block boundary");
+
+    Engine toggle; toggle.loadProject(project); start(toggle, "b");
+    edited = state; edited.autoUntilBlockEnd = false; toggle.configureRegionSetlist(edited);
+    expect(toggle.transport().queuedRegionId == "c", "turning off block limit immediately restores normal Auto queue");
+    toggle.execute({CommandKind::queueRegion, "e"});
+    edited.autoUntilBlockEnd = true; toggle.configureRegionSetlist(edited);
+    auto manualEdit = toggle.project(); manualEdit.regionSetlist->blocks->at(1).beforeRegionId = "b";
+    toggle.applyProjectEdit(manualEdit);
+    expect(toggle.transport().queuedRegionId == "e", "setting and full project edits never retract a manually chosen cross-block queue");
+}
+static void testSubplaySurvivesOutgoingEnd() {
+    for (bool automatic : {false, true}) for (bool stop : {false, true}) for (bool queued : {false, true}) {
+        Project project; project.id = "sub-end"; project.name = "Subplay boundary";
+        project.songs = {{"song", "Timeline", 100, 120, {}, {{"a", "Outgoing", 0, 10}, {"b", "Incoming", 30, 50}, {"c", "Queued", 60, 80}}}};
+        RegionSetlist list; list.autoAdvance = automatic; list.stopAtRegionEnd = stop;
+        project.regionSetlist = list;
+        Engine engine; engine.loadProject(project);
+        engine.execute({CommandKind::selectRegion, "a"}); engine.execute({CommandKind::play});
+        engine.advance(8);
+        if (queued) engine.execute({CommandKind::queueRegion, "b"});
+        engine.execute({CommandKind::subPlay}); engine.execute({CommandKind::subSeek, "", 30});
+        engine.advance(2.25);
+        expect(engine.transport().playing && !engine.transport().subPlay.playing && engine.transport().subPlayPromotion == 1 &&
+               engine.transport().regionId == "b" && engine.transport().position == 32.25,
+               "outgoing end promotes running Subplay before STOP, with or without Auto/queue");
+        expect(engine.transport().editPosition == 32.25,
+               "promotion carries the edit cursor to the incoming Subplay position");
+        engine.advance(0.5);
+        expect(engine.transport().playing && engine.transport().position == 32.75 && engine.transport().subPlayPromotion == 1,
+               "incoming playback keeps advancing without repeating or inheriting outgoing STOP");
+        expect(engine.transport().editPosition == 32.25, "promoted edit cursor remains at the handoff position");
+        engine.execute({CommandKind::stopAll});
+        expect(!engine.transport().playing && !engine.transport().subPlay.playing, "explicit Stop All still stops both heads");
+    }
+    for (bool prepare : {false, true}) {
+        Project project; project.id = "auto-sub-stop"; project.name = "Pre-roll";
+        project.songs = {{"song", "Timeline", 60, 120, {}, {{"a", "A", 0, 10}, {"b", "B", 20, 40}}}};
+        RegionSetlist list; list.autoAdvance = true; list.stopAtRegionEnd = true;
+        list.automaticSubplay = true; list.prepareWithoutPlayback = prepare;
+        project.regionSetlist = list;
+        Engine engine; engine.loadProject(project); engine.execute({CommandKind::selectRegion, "a"});
+        engine.execute({CommandKind::play}); engine.advance(9);
+        if (prepare) engine.execute({CommandKind::subPlay});
+        expect(engine.transport().subPlay.playing, "fixture has an active manual or automatic pre-roll");
+        engine.advance(1.25);
+        expect(engine.transport().playing && engine.transport().position == 21.25 && engine.transport().subPlayPromotion == 1,
+               "STOP and prepare-only policies cannot silence a song that already started");
+    }
+    // The final region may also be the end of the complete timeline. Incoming
+    // Subplay earlier in that same timeline must survive that boundary too.
+    Project project; project.id = "timeline-end"; project.name = "End";
+    project.songs = {{"song", "Timeline", 100, 120, {}, {}}};
+    Engine engine; engine.loadProject(project); engine.execute({CommandKind::seek, "", 98});
+    engine.execute({CommandKind::play}); engine.execute({CommandKind::subPlay});
+    engine.execute({CommandKind::subSeek, "", 20}); engine.advance(2.25);
+    expect(engine.transport().playing && engine.transport().position == 22.25 && engine.transport().subPlayPromotion == 1,
+           "timeline end without a region promotes the already-running secondary head");
+}
+
+static void testRegionStopRespectsQueue() {
+    for (bool automatic : {false, true}) for (bool prepare : {false, true}) for (bool drawer : {false, true}) {
+        Project project; project.id = "stop-queue"; project.name = "STOP queue priority";
+        project.songs = {{"song", "Timeline", 80, 120, {},
+            {{"a", "Outgoing", 0, 10}, {"b", "Skipped", 20, 30}, {"c", "Queued", 40, 50}}}};
+        if (drawer) {
+            Part child{"child", "Drawer song", 0, 5}; child.parentRegionID = "a";
+            project.songs[0].parts.push_back(child);
+        }
+        RegionSetlist list; list.autoAdvance = automatic; list.stopAtRegionEnd = true;
+        list.prepareWithoutPlayback = prepare; project.regionSetlist = list;
+        Engine engine; engine.loadProject(project);
+        engine.execute({CommandKind::selectRegion, drawer ? "child" : "a"}); engine.execute({CommandKind::play});
+        engine.execute({CommandKind::queueRegion, "c"});
+        engine.execute({CommandKind::editSeek, "", 2});
+        engine.advance(9.75);
+        expect(engine.transport().playing && engine.transport().position == 9.75 && engine.transport().queuedRegionId == "c",
+               "STOP preserves manual queue and waits for the whole outgoing region, including drawers");
+        expect(engine.transport().editPosition == 2, "arming a song does not move the edit cursor before the jump");
+        engine.advance(0.5);
+        expect(engine.transport().regionId == "c" && engine.transport().playing == !prepare &&
+               engine.transport().position == (prepare ? 40 : 40.25) && !engine.transport().queuedRegionId,
+               "queued song takes precedence over STOP; explicit prepare-only mode still prepares without playing");
+        expect(engine.transport().editPosition == 40, "queue handoff carries the edit cursor to the exact song start");
+        expect(engine.transport().sectionJumpSerial == (prepare ? 0 : 1),
+               "queue transition emits the same discontinuity serial as a smooth seek, without emitting it for prepare-only");
+        if (!prepare) {
+            engine.advance(10);
+            expect(!engine.transport().playing && engine.transport().position == 50,
+                   "STOP still stops at the incoming song's own end when its queue is empty");
+        }
+    }
+    Project project; project.id = "stop-auto-queue"; project.name = "Automatic queue";
+    project.songs = {{"song", "Timeline", 40, 120, {}, {{"a", "A", 0, 10}, {"b", "B", 20, 30}}}};
+    RegionSetlist list; list.autoAdvance = true; list.stopAtRegionEnd = true; project.regionSetlist = list;
+    Engine engine; engine.loadProject(project); engine.execute({CommandKind::selectRegion, "a"}); engine.execute({CommandKind::play});
+    engine.advance(10.25);
+    expect(engine.transport().playing && engine.transport().regionId == "b" && engine.transport().position == 20.25,
+           "STOP also honors a queue populated by AUTO without Subplay");
+    engine.advance(10);
+    expect(!engine.transport().playing && engine.transport().position == 30,
+           "AUTO plus STOP ends normally after the final queued song");
+}
+
 int main() {
+    testRegionStopRespectsQueue();
+    testSubplaySurvivesOutgoingEnd();
+    testAutoUntilBlockEnd();
     Project p; p.id="project"; p.name="Show"; p.songs={{"one","One",10,120,{{"track","Click",{"click"}}},{}},{"two","Two",20,100,{},{}},{"three","Three",30,90,{},{}}};
     p.setlists={{"setlist","Setlist",{"one","two","three"}}};
     ProjectTimeSettings relativeTime; relativeTime.timebase = ProjectTimebase::relative;
@@ -43,10 +312,12 @@ int main() {
     stretched.execute({CommandKind::tempo, "", 240});
     const auto& changed = stretched.project().songs[0];
     expect(changed.tracks[0].clips[0].startTime == 1 && changed.tracks[0].clips[0].duration == 3 && changed.tracks[0].clips[0].playbackRate == 2, "all audio timing follows BPM proportionally");
+    expect(changed.tracks[0].clips[0].tempoBasePlaybackRate == 1, "BPM edit records the original rate explicitly");
     expect(changed.tracks[0].clips[0].sourceOffset == 0.5 && changed.parts[0].endTime == 4 && changed.markers->at(0).position == 1.5, "source offset remains in file seconds; regions and markers follow tempo");
     expect(stretched.transport().position == 1 && stretched.transport().subPlay.position == 2 && stretched.transport().subPlay.playing, "both playback heads preserve their musical position");
     stretched.execute({CommandKind::tempo, "", 120});
     expect(stretched.currentSong()->tracks[0].clips[0].duration == 6 && stretched.currentSong()->tracks[0].clips[0].playbackRate == 1, "restoring tempo restores original audio speed");
+    expect(stretched.currentSong()->tracks[0].clips[0].tempoBasePlaybackRate == 1, "repeated BPM edits preserve the original rate reference");
     stretched.execute({CommandKind::subStop}); stretched.execute({CommandKind::stop});
     expect(stretched.transport().position == 2, "stop anchor follows the tempo changes");
     for (double invalid : {59.0,301.0}) {
@@ -84,6 +355,57 @@ int main() {
     expect(invalidGroup && !groups.project().songs[0].tracks.back().parentTrackID, "invalid group changes nothing");
     groups.groupTracks({"b", "d"}); groups.groupTracks({"track", "b"}); validate(groups.project());
     expect(groups.project().songs[0].tracks[1].parentTrackID == "b", "regrouping keeps existing children");
+    {
+        Project nested = p;
+        auto& tracks = nested.songs[0].tracks;
+        tracks = {{"outer", "Outer", {"other"}}, {"member", "Member", {"other"}},
+                  {"last", "Last", {"other"}}, {"incoming", "Incoming", {"other"}},
+                  {"inner", "Inner", {"other"}}, {"leaf", "Leaf", {"other"}}};
+        tracks[1].parentTrackID = "outer"; tracks[2].parentTrackID = "outer";
+        tracks[4].parentTrackID = "incoming"; tracks[5].parentTrackID = "inner";
+        tracks[3].volume = 0.37; tracks[3].outputs = std::vector<OutputPatch>{{0,2},{5,2}};
+        tracks[4].patch = OutputPatch{-2,2}; tracks[5].patch = OutputPatch{-2,2};
+        Engine tree; tree.loadProject(nested); tree.execute({CommandKind::play}); tree.advance(1);
+        tree.reorderTrack("incoming", "member");
+        auto result = tree.currentSong()->tracks;
+        expect(result[2].id == "last" && result[3].id == "incoming" && result[3].parentTrackID == "outer", "nested drop appends after destination's last child");
+        expect(result[4].parentTrackID == "incoming" && result[5].parentTrackID == "inner", "nested drop preserves all descendant folders");
+        expect(result[3].volume == 0.37 && result[3].outputPatches()[0].firstChannel == -2 && result[3].outputPatches()[1].firstChannel == 5, "folder feeds its new parent while preserving gain and hardware send");
+        expect(tree.transport().playing && tree.transport().position == 1, "nested drop does not reset transport");
+        tree.reorderTrack("outer", "leaf");
+        expect(tree.currentSong()->tracks[0].id == "outer" && !tree.currentSong()->tracks[0].parentTrackID, "self-descendant drop is a no-op");
+        tree.reorderTrack("incoming", "");
+        result = tree.currentSong()->tracks;
+        expect(!result[3].parentTrackID && result[3].outputPatches()[0].firstChannel == 0 && result[4].parentTrackID == "incoming", "moving nested tree out restores root output and keeps inner routes");
+        validate(tree.project());
+        nested.songs[0].tracks[0].routing = TrackRouting{};
+        nested.songs[0].tracks[0].routing->transmitters = {"incoming"};
+        tree.execute({CommandKind::stopAll}); tree.loadProject(nested);
+        bool rejected = false;
+        try { tree.reorderTrack("incoming", "member"); } catch (...) { rejected = true; }
+        expect(rejected && !tree.currentSong()->tracks[3].parentTrackID && tree.currentSong()->tracks[3].outputPatches()[0].firstChannel == 0, "feedback-producing nested drop rolls back atomically");
+    }
+    {
+        auto project = p;
+        auto& tracks = project.songs[0].tracks;
+        tracks = {{"outer", "Outer", {"other"}}, {"inner", "Inner", {"other"}},
+                  {"folder", "Folder", {"other"}}, {"leaf", "Leaf", {"other"}},
+                  {"last", "Last", {"other"}}, {"outside", "Outside", {"other"}}};
+        tracks[1].parentTrackID = "outer"; tracks[2].parentTrackID = "inner";
+        tracks[3].parentTrackID = "folder"; tracks[4].parentTrackID = "inner";
+        tracks[2].patch = OutputPatch{-2,2}; tracks[3].patch = OutputPatch{-2,2};
+        Engine tree; tree.loadProject(project);
+        tree.reorderTrack("folder", "inner");
+        auto result = tree.currentSong()->tracks;
+        expect(result[1].id == "folder" && result[1].parentTrackID == "outer" && result[2].parentTrackID == "folder" && result[3].id == "inner", "dragging a nested folder above its own parent lifts it before that parent with children intact");
+        tree.reorderTrack("folder", "outer");
+        result = tree.currentSong()->tracks;
+        expect(result[0].id == "folder" && !result[0].parentTrackID && result[0].outputPatches()[0].firstChannel == 0 && result[1].parentTrackID == "folder", "dragging above a root folder detaches the child subtree and restores its master output");
+        tree.reorderTrack("leaf", "folder");
+        result = tree.currentSong()->tracks;
+        expect(result[0].id == "leaf" && !result[0].parentTrackID && result[1].id == "folder", "an individual child exits above its folder");
+        validate(tree.project());
+    }
     Project ignoreProject = p; ignoreProject.songs[0].duration = 120;
     ignoreProject.songs[0].parts = {{"ignore-root", "Special", 0, 60}, {"ignore-first", "One", 0, 25}, {"ignore-second", "Two", 20, 40}, {"ignore-third", "Three", 40, 60}, {"ignore-queue", "Queued", 80, 100}};
     for (int i = 1; i <= 3; ++i) ignoreProject.songs[0].parts[i].parentRegionID = "ignore-root";
@@ -108,11 +430,15 @@ int main() {
     ignore.advance(2); expect(!ignore.transport().playing && ignore.transport().position == 25, "late Ignore Next uses actual file end");
     ignore.execute({CommandKind::stopAll}); ignore.execute({CommandKind::selectRegion, "ignore-third"}); ignore.execute({CommandKind::play}); ignore.execute({CommandKind::ignoreNext});
     expect(!ignore.transport().ignoreNextAfter, "last drawer song cannot ignore a nonexistent next song");
-    ignore.setRegionPitch("ignore-first", 6, {"track"}, {});
-    ignore.setRegionPitch("ignore-second", -6, {"track"}, {});
-    expect(ignore.project().songs[0].parts[1].pitchSemitones == 6 && ignore.project().songs[0].parts[2].pitchSemitones == -6, "each drawer song owns its pitch settings");
-    bool pitchRejected = false; try { ignore.setRegionPitch("ignore-first", 7, {"track"}, {}); } catch (...) { pitchRejected = true; }
-    expect(pitchRejected && ignore.project().songs[0].parts[1].pitchSemitones == 6, "region pitch rejects out of range without changing state");
+    ignore.setRegionPitch("ignore-first", 12, {"track"}, {});
+    ignore.setRegionPitch("ignore-second", -12, {"track"}, {});
+    expect(ignore.project().songs[0].parts[1].pitchSemitones == 12 && ignore.project().songs[0].parts[2].pitchSemitones == -12, "each drawer song owns its pitch settings");
+    bool pitchRejected = false; try { ignore.setRegionPitch("ignore-first", 13, {"track"}, {}); } catch (...) { pitchRejected = true; }
+    expect(pitchRejected && ignore.project().songs[0].parts[1].pitchSemitones == 12, "region pitch rejects out of range without changing state");
+    bool lowPitchRejected = false; try { ignore.setRegionPitch("ignore-second", -13, {"track"}, {}); } catch (...) { lowPitchRejected = true; }
+    expect(lowPitchRejected && ignore.project().songs[0].parts[2].pitchSemitones == -12, "region pitch rejects values below one octave without changing state");
+    Engine restoredPitch; restoredPitch.loadProject(ignore.project());
+    expect(restoredPitch.project().songs[0].parts[1].pitchSemitones == 12 && restoredPitch.project().songs[0].parts[2].pitchSemitones == -12, "full-octave region tuner values survive loading the project");
     Project editable = p;
     editable.songs[0].tracks[0].clips.push_back({"clip", {}, "Clip", 2, 3, 0, {0.5}});
     Project trackOrderProject = editable;
@@ -164,12 +490,12 @@ int main() {
     textTracks.addRecordedClip("chords-one", textItem);
     textTracks.execute({CommandKind::play}); textTracks.advance(0.5);
     textTracks.execute({CommandKind::subSeek, "", 4}); textTracks.execute({CommandKind::subPlay});
-    std::string maximumEmoji; for (int n = 0; n < 30; ++n) maximumEmoji += u8"🎤";
+    std::string maximumEmoji; for (int n = 0; n < 10000; ++n) maximumEmoji += u8"🎤";
     textTracks.setClipText("text-item", maximumEmoji);
-    expect(textTracks.project().songs[0].tracks[0].clips[0].text == maximumEmoji, "Chords text permits 30 Unicode emoji rather than counting UTF-8 bytes");
-    for (const auto& invalidText : {maximumEmoji + "A", std::string("\xc0\xaf"), std::string("\xed\xa0\x80"), std::string("\xf4\x90\x80\x80")}) {
+    expect(textTracks.project().songs[0].tracks[0].clips[0].text == maximumEmoji, "Chords text permits long Unicode content without a character limit");
+    for (const auto& invalidText : {std::string("\xc0\xaf"), std::string("\xed\xa0\x80"), std::string("\xf4\x90\x80\x80")}) {
         bool rejectedText = false; try { textTracks.setClipText("text-item", invalidText); } catch (...) { rejectedText = true; }
-        expect(rejectedText && textTracks.project().songs[0].tracks[0].clips[0].text == maximumEmoji, "overlength or malformed Unicode text edits are atomic");
+        expect(rejectedText && textTracks.project().songs[0].tracks[0].clips[0].text == maximumEmoji, "malformed Unicode text edits are atomic");
     }
     for (const auto* id : {"missing", "clip"}) {
         bool rejectedText = false; try { textTracks.setClipText(id, "invalid"); } catch (...) { rejectedText = true; }
@@ -186,19 +512,31 @@ int main() {
     auto textAudio = textItem; textAudio.id = "text-audio"; textAudio.audioFile = AudioFile{"Steams/invalid.wav", {}};
     textMediaRejected = false; try { textTracks.addRecordedClip("lyrics", textAudio); } catch (...) { textMediaRejected = true; }
     expect(textMediaRejected && textTracks.project().songs[0].tracks[2].clips.empty(), "text insertion rejects audio metadata before committing");
-    std::string lyricsMaximum; for (int n=0; n<400; ++n) lyricsMaximum += u8"🎵";
+    std::string lyricsMaximum; for (int n=0; n<10000; ++n) lyricsMaximum += u8"🎵";
     AudioClip lyricsItem{"lyrics-item", {}, "Teleprompter",2,10}; lyricsItem.text=lyricsMaximum;
     textTracks.addRecordedClip("lyrics",lyricsItem);
-    expect(textTracks.project().songs[0].tracks[2].clips[0].text==lyricsMaximum,"Teleprompter permits 400 Unicode characters");
-    bool lyricsTooLong=false;
-    try { textTracks.setClipText("lyrics-item",lyricsMaximum+"A"); } catch(...) { lyricsTooLong=true; }
-    expect(lyricsTooLong && textTracks.project().songs[0].tracks[2].clips[0].text==lyricsMaximum,"Teleprompter rejects character 401 without changing existing text");
+    expect(textTracks.project().songs[0].tracks[2].clips[0].text==lyricsMaximum,"Teleprompter permits long Unicode content without a character limit");
+    textTracks.setClipText("lyrics-item", lyricsMaximum + "A");
+    expect(textTracks.project().songs[0].tracks[2].clips[0].text == lyricsMaximum + "A", "Teleprompter edits retain the entire long text");
     for (const auto kind : {CommandKind::mute, CommandKind::solo, CommandKind::volume, CommandKind::pan}) {
         bool rejectedControl = false; try { textTracks.execute({kind, "chords-one", 0.5}); } catch (...) { rejectedControl = true; }
         expect(rejectedControl, "audio controls are unavailable on Chords tracks");
     }
     expect(textTracks.transport().playing && textTracks.transport().position == 0.5 && textTracks.transport().subPlay.playing && textTracks.transport().subPlay.position == 4, "text creation and edits preserve both live clocks");
     validate(textTracks.project());
+    {
+        auto repeatedText = textTracks.project();
+        repeatedText.songs[0].duration = std::max(repeatedText.songs[0].duration, 26.0);
+        auto& repeated = repeatedText.songs[0].tracks[2].clips[0];
+        repeated.startTime = 0; repeated.duration = 26;
+        repeated.loopStart = 0; repeated.loopLength = 10; repeated.sourceOffset = 8;
+        Engine textRepeat; textRepeat.loadProject(repeatedText);
+        expect(textRepeat.project().songs[0].tracks[2].clips[0].loopLength == 10 && textRepeat.project().songs[0].tracks[2].clips[0].sourceOffset == 8,
+               "stretched lyrics retain visual repeat timing through core project load");
+        repeated.audioFile = AudioFile{"Stems/not-text.wav", {}};
+        bool rejected = false; try { validate(repeatedText); } catch (...) { rejected = true; }
+        expect(rejected, "visual text repetition cannot permit audio media on text items");
+    }
     for (const auto* role : {"teleprompt", "video", "chords"}) {
         auto singleLane = editable;
         auto& track = singleLane.songs[0].tracks[0];
@@ -255,10 +593,12 @@ int main() {
     mediaMoveProject.songs[0].tracks.push_back(videoMoveTrack);
     mediaMoveProject.songs[0].tracks.push_back({"audio-move", "Audio", {"other"}});
     Engine mediaMoves; mediaMoves.loadProject(mediaMoveProject);
-    for (const auto& ids : {std::make_pair(ID("video-move-item"), ID("audio-move")), std::make_pair(ID("clip"), ID("video-move"))}) {
-        bool rejected = false; try { mediaMoves.moveClip(ids.first, 4, ids.second); } catch (...) { rejected = true; }
-        expect(rejected && mediaMoves.project().songs[0].tracks[0].clips[0].id == "video-move-item" && mediaMoves.project().songs[0].tracks[1].clips[0].id == "clip", "video and audio cannot cross incompatible track kinds");
-    }
+    mediaMoves.moveClip("video-move-item", 4, "audio-move");
+    const auto& mediaDestination = mediaMoves.project().songs[0].tracks.back();
+    expect(mediaDestination.id == "audio-move" && mediaDestination.clips[0].id == "video-move-item" && mediaDestination.clips[0].startTime == 4, "video can move into a standard audio track");
+    bool audioToLegacyVideoRejected = false;
+    try { mediaMoves.moveClip("clip", 4, "video-move"); } catch (...) { audioToLegacyVideoRejected = true; }
+    expect(audioToLegacyVideoRejected, "ordinary audio cannot move into the legacy special Video track");
     Project crossMediaProject = mediaMoveProject;
     crossMediaProject.songs[0].tracks.push_back({"teleprompter-move", "Teleprompter", {"teleprompt"}});
     Engine crossMedia; crossMedia.loadProject(crossMediaProject);
@@ -272,22 +612,21 @@ int main() {
     auto mislabeledVideo = editable; mislabeledVideo.songs[0].tracks[0].clips[0].audioFile = AudioFile{"Videos/movie.wav", {}};
     mislabeledVideo.songs[0].tracks.push_back({"audio-move", "Audio", {"other"}});
     mediaMoves.execute({CommandKind::stopAll});
-    bool videoFolderRejected = false; try { mediaMoves.loadProject(mislabeledVideo); } catch (...) { videoFolderRejected = true; }
-    expect(videoFolderRejected, "managed video media cannot be loaded as a standard audio item");
+    mediaMoves.loadProject(mislabeledVideo);
+    expect(mediaMoves.project().songs[0].tracks[0].clips[0].audioFile->path == "Videos/movie.wav", "managed movie soundtracks are permitted on standard tracks");
     Project capacityProject = editable;
     capacityProject.songs[0].tracks.clear();
     for (int index = 0; index < 1000; ++index) capacityProject.songs[0].tracks.push_back({"capacity-" + std::to_string(index), "Track", {"other"}});
     validate(capacityProject);
     Engine trackCapacity; trackCapacity.loadProject(capacityProject);
-    bool capacityRejected = false; try { trackCapacity.addTrack("extra-capacity", "Extra", {"other"}); } catch (...) { capacityRejected = true; }
-    expect(capacityRejected && trackCapacity.project().songs[0].tracks.size() == 1000, "native track creation cannot exceed global 1000 track capacity");
-    Track capacityImport{"extra-capacity", "Extra", {"other"}};
+    trackCapacity.addTrack("extra-created", "Extra", {"other"});
+    expect(trackCapacity.project().songs[0].tracks.size() == 1001, "creation supports more than 1000 tracks");
+    Track capacityImport{"extra-imported", "Extra", {"other"}};
     capacityImport.clips.push_back({"capacity-clip", {}, "Audio", 0, 1});
-    capacityRejected = false; try { trackCapacity.insertAudioTracks("one", {capacityImport}); } catch (...) { capacityRejected = true; }
-    expect(capacityRejected && trackCapacity.project().songs[0].tracks.size() == 1000, "audio import cannot bypass track capacity");
+    trackCapacity.insertAudioTracks("one", {capacityImport});
+    expect(trackCapacity.project().songs[0].tracks.size() == 1002, "audio import supports more than 1000 tracks");
     capacityProject.songs[1].tracks.push_back({"extra-capacity", "Extra", {"other"}});
-    capacityRejected = false; try { validate(capacityProject); } catch (...) { capacityRejected = true; }
-    expect(capacityRejected, "track capacity applies across the whole project");
+    validate(capacityProject);
     Project itemFXProject = editable;
     itemFXProject.songs[0].tracks[0].clips[0].gain = 0.5;
     itemFXProject.songs[0].tracks[0].clips[0].sourceOffset = 1;
@@ -296,6 +635,24 @@ int main() {
     Engine itemEffects; itemEffects.loadProject(itemFXProject);
     itemEffects.execute({CommandKind::play}); itemEffects.advance(0.5);
     itemEffects.execute({CommandKind::subSeek, "", 4}); itemEffects.execute({CommandKind::subPlay});
+    {
+        Engine capturedPresets; capturedPresets.loadProject(itemEffects.project());
+        capturedPresets.execute({CommandKind::play}); capturedPresets.advance(0.5);
+        const auto track = capturedPresets.project().songs[0].tracks[0].id;
+        const std::string preset = "{\"inserted\":[\"External:large\"],\"externalPlugins\":[{\"id\":\"large\",\"componentState\":\"" + std::string(128 * 1024, 'A') + "\"}]}";
+        capturedPresets.setFX(track, preset); capturedPresets.setFX("", preset);
+        expect(capturedPresets.project().songs[0].tracks[0].fxJSON == preset && capturedPresets.project().masterFXJSON == preset,
+               "track and Master save VST3 presets larger than 64 KiB like item FX");
+        expect(capturedPresets.transport().playing && capturedPresets.transport().position == 0.5,
+               "capturing large presets leaves playback untouched");
+        const std::string excessive(32 * 1024 * 1024 + 1, 'x');
+        for (const auto& target : {track, std::string()}) {
+            bool rejected = false;
+            try { capturedPresets.setFX(target, excessive); } catch (...) { rejected = true; }
+            expect(rejected && capturedPresets.project().songs[0].tracks[0].fxJSON == preset && capturedPresets.project().masterFXJSON == preset,
+                   "oversized preset rejection preserves the last captured state");
+        }
+    }
     const std::string itemFXJSON = R"({"inserted":["EQ","Delay"],"eqEnabled":true,"delayMix":25})";
     itemEffects.setClipFX("clip", itemFXJSON);
     const auto& itemWithFX = itemEffects.project().songs[0].tracks[0].clips[0];
@@ -326,6 +683,10 @@ int main() {
     bool missingItemFX = false; try { itemEffects.setClipFX("missing", itemFXJSON); } catch (...) { missingItemFX = true; }
     expect(missingItemFX && itemEffects.project().songs[0].tracks[0].clips[0].fxJSON == itemFXJSON, "unknown item FX target is atomic");
     validate(itemEffects.project());
+    auto externalItemProject = itemEffects.project();
+    externalItemProject.songs[0].tracks[0].clips[0].fxJSON = R"({"inserted":["Limiter","External:take-gain"],"externalPlugins":[{"id":"take-gain","classID":"01234567890123456789012345678901","name":"Instruments","path":"/tmp/GainFixture.vst3"}]})";
+    validate(externalItemProject);
+    expect(externalItemProject.songs[0].tracks[0].clips[0].fxJSON->find("External:take-gain") != std::string::npos, "take VST3 FX and Limiter remain valid item processors");
     auto invalidItemFX = itemEffects.project(); invalidItemFX.songs[0].tracks[0].clips[0].fxJSON = R"({"inserted":["Instruments"]})";
     bool invalidItemFXLoad = false; try { validate(invalidItemFX); } catch (...) { invalidItemFXLoad = true; }
     expect(invalidItemFXLoad, "project load rejects item instruments");
@@ -461,6 +822,38 @@ int main() {
     for(const auto& track:repelled.tracks) expect(std::abs(track.clips[0].startTime-42.01)<1e-8,"repulsion preserves offsets of every media item");
     cargoEngine.loadProject(cargo); cargoEngine.moveRegion("cargo-root",39.999);
     expect(std::abs(cargoEngine.project().songs[0].parts[0].startTime-39.99)<1e-8,"repulsion can choose the left side without moving stationary marker");
+    // Passing over material never transfers membership, even after save/reload.
+    Project attachment; attachment.id="attachment-project"; attachment.name="Attachments";
+    Song attachmentSong; attachmentSong.id="attachment-song"; attachmentSong.name="Show"; attachmentSong.duration=100;
+    attachmentSong.parts={{"attachment-a","A",10,20},{"attachment-b","B",40,60}};
+    Track attachmentTrack{"attachment-track","Audio",{"other"}};
+    attachmentTrack.clips={{"attachment-own",{},"Own",12,2},{"attachment-other",{},"Other",45,2},{"attachment-free",{},"Free",75,2}};
+    attachmentSong.tracks={attachmentTrack};
+    attachmentSong.markers=std::vector<TimelineMarker>{{"attachment-cue","Own cue",14,0},{"attachment-foreign","Foreign",47,0},{"attachment-loose","Loose",78,0}};
+    attachment.songs={attachmentSong}; Engine attachments; attachments.loadProject(attachment);
+    attachments.moveRegion("attachment-a",40);
+    Project persistedAttachments = attachments.project();
+    attachments.loadProject(persistedAttachments); // Ownership, including nil for loose material, survives reload.
+    attachments.moveRegion("attachment-a",10);
+    const auto& restoredAttachments=attachments.project().songs[0];
+    expect(restoredAttachments.tracks[0].clips[0].startTime==12 && restoredAttachments.tracks[0].clips[1].startTime==45,"leaving another region never steals its audio");
+    expect(restoredAttachments.markers->at(0).position==14 && restoredAttachments.markers->at(1).position==47,"leaving another region never steals its markers");
+    attachments.moveRegion("attachment-a",70); attachments.moveRegion("attachment-a",10);
+    expect(attachments.project().songs[0].tracks[0].clips[2].startTime==75 && attachments.project().songs[0].markers->at(2).position==78,"passing over loose items and markers leaves them stationary");
+    attachments.moveClip("attachment-free",15,""); // An explicit item placement attaches it.
+    attachments.setMarker("attachment-loose","Placed cue",18,0);
+    attachments.moveRegion("attachment-a",70);
+    expect(attachments.project().songs[0].tracks[0].clips.back().startTime==75,"an explicitly placed item travels with its assigned region");
+    expect(attachments.project().songs[0].markers->back().position==78,"an explicitly placed marker travels with its assigned region");
+    attachments.moveClip("attachment-free",95,"");
+    attachments.moveRegion("attachment-a",10);
+    expect(attachments.project().songs[0].tracks[0].clips.back().startTime==95,"explicitly moving an item outside detaches it");
+    attachments.execute({CommandKind::toggleMultiLoopBypass});
+    attachments.loadProject(attachments.project());
+    expect(attachments.transport().multiLoopsBypassed,"global bypass survives a native project reload");
+    attachments.execute({CommandKind::toggleMultiLoopBypass});
+    attachments.loadProject(attachments.project());
+    expect(!attachments.transport().multiLoopsBypassed,"global bypass also preserves its disabled state");
     Engine sizing; sizing.loadProject(editable); sizing.regionFromClip("clip", "resize");
     sizing.resizeRegion("resize", 1, 50);
     expect(sizing.project().songs[0].parts[0].startTime == 1 && sizing.project().songs[0].parts[0].endTime == 50, "both region boundaries resize");
@@ -594,7 +987,7 @@ int main() {
     expect(!gated.transport().playing && gated.transport().position == 2, "next stop returns to promoted playback start");
     gated.execute({CommandKind::select,"three"}); gated.execute({CommandKind::seek,"",29});
     gated.execute({CommandKind::play}); gated.execute({CommandKind::subPlay}); gated.advance(2);
-    expect(!gated.transport().playing && !gated.transport().subPlay.playing, "natural main ending stops sub play too");
+    expect(gated.transport().playing && !gated.transport().subPlay.playing && gated.transport().position == 2 && gated.transport().subPlayPromotion == 2, "natural main ending promotes Subplay just like stopping the outgoing head manually");
     Engine returning; returning.loadProject(p);
     returning.execute({CommandKind::seek,"",3}); returning.execute({CommandKind::play}); returning.advance(2);
     returning.execute({CommandKind::play}); returning.execute({CommandKind::stop});
@@ -757,7 +1150,8 @@ int main() {
     drawerPlayback.execute({CommandKind::stopAll}); drawerPlayback.execute({CommandKind::selectRegion, "child-one"});
     drawerList.stopAtRegionEnd = true; drawerPlayback.configureRegionSetlist(drawerList);
     drawerPlayback.execute({CommandKind::play}); drawerPlayback.execute({CommandKind::subPlay}); drawerPlayback.advance(55);
-    expect(!drawerPlayback.transport().playing && !drawerPlayback.transport().subPlay.playing && drawerPlayback.transport().position == 60, "region Stop ends exactly at boundary before queued or SubPlay handoff");
+    expect(drawerPlayback.transport().playing && !drawerPlayback.transport().subPlay.playing && drawerPlayback.transport().position == 135 && drawerPlayback.transport().subPlayPromotion == 1, "region Stop preserves and promotes an already-running Subplay");
+    drawerPlayback.execute({CommandKind::stopAll});
     drawerList.stopAtRegionEnd = false; drawerPlayback.configureRegionSetlist(drawerList);
     drawerPlayback.execute({CommandKind::selectRegion, "child-one"}); drawerPlayback.execute({CommandKind::play}); drawerPlayback.advance(55);
     expect(drawerPlayback.transport().playing && drawerPlayback.transport().regionId == "after-group" && drawerPlayback.transport().position == 85, "disabling region Stop restores gapless Auto transition");
@@ -769,7 +1163,7 @@ int main() {
     drawerPlayback.execute({CommandKind::selectRegion, "after-group"}); drawerPlayback.execute({CommandKind::play});
     drawerPlayback.execute({CommandKind::queueRegion, "child-one"}); drawerPlayback.execute({CommandKind::subPlay}); drawerPlayback.execute({CommandKind::subSeek, "", 35});
     drawerPlayback.advance(15); drawerPlayback.advance(5);
-    expect(drawerPlayback.transport().playing && drawerPlayback.transport().regionId == "child-one" && drawerPlayback.transport().subPlayPromotion == 1 && drawerPlayback.transport().position == 55, "incoming drawer subplay promotion preserves its running position");
+    expect(drawerPlayback.transport().playing && drawerPlayback.transport().regionId == "child-one" && drawerPlayback.transport().subPlayPromotion == 2 && drawerPlayback.transport().position == 55, "incoming drawer subplay promotion preserves its running position");
     bool expandingGroupRejected = false; try { unifiedEngine.resizeRegion("unified", 40, 120); } catch (...) { expandingGroupRejected = true; }
     expect(expandingGroupRejected, "unified regions cannot expand even when all children fit");
 
@@ -872,6 +1266,69 @@ int main() {
         e.setMarker(second.id,"TEMPO",10,0x999999,120,4,4,"global");
         expect(e.currentSong()->tracks[0].clips[0].duration==12 && e.currentSong()->tracks[0].clips[1].duration==10,"drawer tempo reversal preserves independent tails");
 
+    }
+    {
+        Project project; project.id="tempo-ownership"; project.name="Tempo ownership";
+        Song song{"owner-song","Song",100,120,{},{}};
+        song.parts={{"owner-a","A",10,20},{"owner-b","B",20,30}};
+        song.regionOwnershipInitialized=true;
+        const auto tempoMarker=[](ID id,double position) {
+            TimelineMarker marker{std::move(id),"TEMPO",position,0x999999};
+            marker.tempoBPM=120; marker.tempoBeats=4; marker.tempoUnit=4; marker.tempoTimebase="free";
+            return marker;
+        };
+        auto loose=tempoMarker("owner-loose",14), outside=tempoMarker("owner-outside",41);
+        song.markers=std::vector<TimelineMarker>{loose,outside}; project.songs={song};
+        Engine engine; engine.loadProject(project);
+        const auto marker=[&](const ID& id)->const TimelineMarker& {
+            for(const auto& value:*engine.currentSong()->markers) if(value.id==id) return value;
+            throw std::runtime_error("Missing ownership test marker");
+        };
+        engine.setMarker("owner-manual","TEMPO",16,0x999999,120,4,4,"free");
+        engine.setMarker(loose.id,"TEMPO",14,0x999999,121,4,4,"free");
+        expect(marker("owner-manual").regionOwnerID=="owner-a" && !marker(loose.id).regionOwnerID,"single-marker placement attaches while an in-place edit preserves explicit nil ownership");
+        auto batch=tempoMarker("owner-batch",18), boundary=tempoMarker("owner-boundary",20);
+        engine.setMarkers({batch,boundary});
+        expect(marker(batch.id).regionOwnerID=="owner-a" && marker(boundary.id).regionOwnerID=="owner-b","detected tempo batch attaches new markers and gives an adjacent boundary to the next region");
+        expect(!regionOwns(*engine.currentSong(),"owner-a",marker(boundary.id).regionOwnerID),"deleting the preceding region must exclude the next region's boundary tempo");
+        auto manual=tempoMarker("owner-manual",16); manual.tempoBPM=125;
+        loose.tempoBPM=125;
+        engine.setMarkers({manual,loose});
+        expect(marker(manual.id).regionOwnerID=="owner-a" && !marker(loose.id).regionOwnerID,"batch edits without serialized owners retain owned and intentionally loose memberships");
+        engine.moveRegion("owner-a",40);
+        expect(marker(manual.id).position==46 && marker(batch.id).position==48,"new and edited tempo markers travel with their region");
+        expect(marker(loose.id).position==14 && marker(outside.id).position==41 && marker(boundary.id).position==20,"moving a region preserves loose tempo and the adjacent region's boundary");
+        outside.tempoBPM=130; engine.setMarkers({outside},{},true);
+        expect(!marker(outside.id).regionOwnerID,"retime batch cannot capture a loose marker covered by a moved region");
+        engine.loadProject(engine.project()); engine.moveRegion("owner-a",10);
+        expect(marker(outside.id).position==41 && marker(manual.id).position==16,"save/reload and leaving a loose marker preserve established memberships");
+        batch.position=22; manual.position=70; engine.setMarkers({batch,manual});
+        expect(marker(batch.id).regionOwnerID=="owner-b" && !marker(manual.id).regionOwnerID,"explicit batch movement attaches to the destination region or detaches outside");
+        engine.setMarkers({}, {batch.id,manual.id});
+        expect(engine.currentSong()->markers->size()==3 && marker(boundary.id).regionOwnerID=="owner-b" && !marker(loose.id).regionOwnerID,"batch deletion preserves neighboring boundary and loose markers");
+        engine.setMarkers({loose},{loose.id});
+        expect(marker(loose.id).regionOwnerID=="owner-a","explicit deletion followed by reinsertion establishes new placement ownership");
+    }
+    {
+        Project project; project.id="retime-ownership"; project.name="Retime ownership";
+        Song song{"retime-owner-song","Song",50,120,{},{}};
+        song.timeSettings=ProjectTimeSettings{}; song.timeSettings->timebase=ProjectTimebase::relative;
+        song.parts={{"retime-owner-a","A",10,20},{"retime-owner-b","B",20,30}};
+        song.regionOwnershipInitialized=true;
+        TimelineMarker first{"retime-owner-first","TEMPO",10,0x999999};
+        first.tempoBPM=120; first.tempoBeats=4; first.tempoUnit=4; first.tempoTimebase="global"; first.tempoReferenceBPM=120;
+        auto loose=first; loose.id="retime-owner-loose"; loose.position=15;
+        song.markers=std::vector<TimelineMarker>{loose}; project.songs={song};
+        Engine engine; engine.loadProject(project);
+        auto boundary=first; boundary.id="retime-owner-boundary"; boundary.position=20;
+        engine.setMarkers({first,boundary});
+        first.tempoBPM=240; engine.setMarkers({first,loose,boundary},{},true);
+        const auto& markers=*engine.currentSong()->markers;
+        expect(markers[0].position==12.5 && !markers[0].regionOwnerID,"real tempo warp moves a loose marker in time without assigning ownership");
+        expect(markers[1].position==10 && markers[1].regionOwnerID=="retime-owner-a" && markers[2].position==17.5 && markers[2].regionOwnerID=="retime-owner-b","real tempo warp retains owned start and adjacent boundary memberships");
+        expect(engine.currentSong()->parts[0].endTime==17.5 && engine.currentSong()->parts[1].startTime==17.5,"batch ownership preserves the established tempo mapping");
+        engine.moveRegion("retime-owner-a",35);
+        expect(engine.currentSong()->markers->at(0).position==12.5 && engine.currentSong()->markers->at(1).position==35 && engine.currentSong()->markers->at(2).position==17.5,"after retiming only the region's owned tempo marker follows its movement");
     }
     std::cout << "JARAS_CORE_OK\n";
 }

@@ -1,6 +1,9 @@
-#if os(macOS)
 import SwiftUI
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Network
 import CoreImage
 import UniformTypeIdentifiers
@@ -176,24 +179,25 @@ function color(n,rgb){return rgb?'hsl('+((Date.now()/6000*360)%360)+',90%,55%)':
 function duration(v){let n=Math.ceil(v);return (n>=3600?Math.floor(n/3600)+':':'')+String(Math.floor(n/60)%60).padStart(2,'0')+':'+String(n%60).padStart(2,'0')}
 function applyCase(v,s){return s.textCase==='uppercase'?v.toUpperCase():s.textCase==='lowercase'?v.toLowerCase():v}
 function textNode(tag,cls,text){const e=document.createElement(tag);e.className=cls;e.textContent=text;return e}
-function decorations(d,position){const s=d.settings,host=$(position);host.replaceChildren();
+function decorations(d,position){const s=d.settings,host=$(position);host.replaceChildren();if(s.clearMode)return;
  const clockHere=s.clockEnabled&&s.clockPosition.endsWith(position),localHere=s.localClockEnabled&&(s.clockEnabled?clockHere:position==='top');
  if(clockHere||localHere){const row=document.createElement('div');row.className='row';
  const timerFont=Math.max(innerHeight>innerWidth?15:18,Math.min((innerWidth-16)/11,innerHeight/8)*s.clockScale/100);
  if(clockHere){const e=textNode('div','timer'+(d.expired?' expired':''),d.timer);e.style.color=hex(d.expired?s.clockExpiredColor:s.clockColor);e.style.fontSize=timerFont+'px';if(s.clockBorderEnabled)e.style.borderColor=color(s.clockBorderColor,s.rgbClockBorderEnabled);if(d.expired)e.style.animationDelay='-'+Date.now()%1000+'ms';row.append(e)}
  if(localHere){const e=textNode('div','clock',d.localTime);e.style.color=hex(s.localClockColor);const side=clockHere&&!s.clockPosition.startsWith('center');e.style.fontSize=(side?Math.max(innerHeight>innerWidth?15:18,Math.min((innerWidth-16)/11,innerHeight/8)*s.localClockScale/100):Math.max(10,Math.min(24,innerHeight/28)*s.localClockScale/100))+'px';if(s.localClockBorderEnabled)e.style.borderColor=hex(s.localClockBorderColor);if(s.localClockPosition==='left')row.prepend(e);else row.append(e)}
  row.style.justifyContent=s.clockPosition.startsWith('left')?'flex-start':s.clockPosition.startsWith('right')?'flex-end':'center';
- if(clockHere&&localHere){const timer=row.querySelector('.timer'),clock=row.querySelector('.clock');if(s.clockPosition.startsWith('center')){clock.style.position='absolute';clock.style[s.localClockPosition==='left'?'left':'right']='0';clock.style[s.clockPosition.endsWith('bottom')?'bottom':'top']='0';clock.style.maxWidth='calc((100% - '+(timer.textContent.length*parseFloat(timer.style.fontSize)*.65+36)+'px) / 2 - 8px)';clock.style.overflow='hidden'}else{row.replaceChildren(...(s.clockPosition.startsWith('right')?[clock,timer]:[timer,clock]));for(const e of [timer,clock]){e.style.flex='1';e.style.textAlign='center'}}}
+ if(clockHere&&localHere){const timer=row.querySelector('.timer'),clock=row.querySelector('.clock');if(s.clockPosition.startsWith('center')){clock.style.position='absolute';clock.style[s.localClockPosition==='left'?'left':'right']='0';clock.style[s.clockPosition.endsWith('bottom')?'bottom':'top']='0';clock.style.maxWidth='calc((100% - '+(timer.textContent.length*parseFloat(timer.style.fontSize)*.65+36)+'px) / 2 - 8px)';clock.style.overflow='hidden'}else if(s.clockPosition.startsWith(s.localClockPosition)){row.replaceChildren(timer,clock);row.style.flexDirection='column';row.style.alignItems=s.localClockPosition==='left'?'flex-start':'flex-end'}else{row.replaceChildren(...(s.clockPosition.startsWith('right')?[clock,timer]:[timer,clock]));for(const e of [timer,clock]){e.style.flex='1';e.style.textAlign='center'}}}
  else if(localHere){row.style.justifyContent=s.localClockPosition==='left'?'flex-start':'flex-end'}
  const side=clockHere&&localHere&&!s.clockPosition.startsWith('center');
- row.style.height=Math.max(28,(side?Math.max(timerFont,parseFloat(row.querySelector('.clock').style.fontSize)):timerFont)+(side?10:18))+'px';
+ const sameSide=side&&s.clockPosition.startsWith(s.localClockPosition),localFont=localHere?parseFloat(row.querySelector('.clock').style.fontSize):0;
+ row.style.height=(sameSide?timerFont+localFont+24:Math.max(28,(side?Math.max(timerFont,localFont):timerFont)+(side?10:18)))+'px';
  host.append(row)}
- for(const [enabled,pos,value,col,scale,font] of [[s.songNameEnabled,s.songNamePosition,d.song,s.songNameColor,s.songNameScale,s.songNameFontFamily],[s.queueNameEnabled,s.queueNamePosition,d.queued,s.queueNameColor,s.queueNameScale,s.queueNameFontFamily]])if(enabled&&pos===position){const e=textNode('div','title',applyCase(value,s));e.style.color=hex(col);e.style.fontSize=22*scale/100+'px';e.style.fontFamily=fonts[font];host.append(e)}
+ for(const [enabled,pos,value,col,scale,font] of [[s.songNameEnabled,s.songNamePosition,d.song,s.songNameColor,s.songNameScale,s.songNameFontFamily],[s.queueNameEnabled,s.queueNamePosition,d.queued,s.queueNameColor,s.queueNameScale,s.queueNameFontFamily]])if(enabled&&value&&pos===position){const e=textNode('div','title',applyCase(value,s));e.style.color=hex(col);e.style.fontSize=22*scale/100+'px';e.style.fontFamily=fonts[font];host.append(e)}
  if(!d.preview&&s.chordsEnabled&&d.chords&&s.chordPosition===position){const e=textNode('div','chords',applyCase(d.chords,s));e.style.color=hex(s.chordColor);e.style.fontSize=s.chordScale+'px';e.style.fontFamily=fonts[s.chordFontFamily];e.style.borderColor=color(s.chordColor,s.rgbChordBorderEnabled);host.append(e)}
  if(s.progressEnabled&&s.progressPosition===position){const e=document.createElement('div');e.className='progress';const fill=document.createElement('div');fill.style.width=Math.max(0,Math.min(1,d.progress))*100+'%';fill.style.background=hex(s.progressColor);e.append(fill);host.append(e)}
 }
-function render(d){current=d;const s=d.settings;$('screen').style.borderColor=s.windowBorderEnabled?color(s.borderColor,s.rgbWindowBorderEnabled):'transparent';decorations(d,'top');decorations(d,'bottom');
- $('lyrics').style.display=d.preview?'none':'block';$('blocks').style.display=d.preview?'grid':'none';$('lyrics').textContent=applyCase(d.text,s);
+function render(d){current=d;const s=d.settings;$('screen').style.borderColor=!s.clearMode&&s.windowBorderEnabled?color(s.borderColor,s.rgbWindowBorderEnabled):'transparent';decorations(d,'top');decorations(d,'bottom');
+ $('lyrics').style.display=s.clearMode||d.preview?'none':'block';$('blocks').style.display=!s.clearMode&&d.preview?'grid':'none';$('lyrics').textContent=applyCase(d.text,s);
  $('lyrics').style.color=hex(s.textColor);$('lyrics').style.fontFamily=fonts[s.fontFamily];$('lyrics').style.textAlign=s.textAlignment;
  $('lyrics').style.borderColor=s.textBoxEnabled&&d.text?color(s.textBoxColor,s.rgbTextBoxBorderEnabled):'transparent';
  $('content').style.justifyContent=s.textAlignment==='left'?'flex-start':s.textAlignment==='right'?'flex-end':'center';
@@ -201,16 +205,16 @@ function render(d){current=d;const s=d.settings;$('screen').style.borderColor=s.
  $('blocks').replaceChildren();$('blocks').style.gridTemplateColumns='repeat('+Math.max(1,d.blocks.length)+',minmax(0,1fr))';
  const maxSongs=Math.max(1,...d.blocks.map(b=>b.songs.length+(b.name?1:0)));const font=Math.max(9,Math.min((innerWidth/Math.max(1,d.blocks.length)-20)/13,($('content').clientHeight-20)/maxSongs/1.1)*s.previewScale/100);
  for(const b of d.blocks){const e=document.createElement('div');e.className='block';e.style.borderColor=hex(b.color);e.style.fontSize=font+'px';e.style.fontFamily=fonts[s.previewFontFamily];if(b.name){const t=textNode('div','',applyCase(b.name,s)+(s.previewBlockDurationEnabled&&b.duration?' • '+duration(b.duration):''));t.style.color=hex(b.color);e.append(t)}for(const song of b.songs){const t=textNode('div','',applyCase(song.name,s)+(s.previewSongDurationEnabled?' • '+duration(song.duration):''));t.style.color=hex(song.color);if(s.previewUnderlineEnabled)t.style.textDecoration='underline';e.append(t)}$('blocks').append(e)}
- const v=$('video'),im=$('image');v.hidden=d.preview||d.mediaKind!=='video';im.hidden=d.preview||d.mediaKind!=='image';
- v.style.objectFit=d.mediaStretch?'fill':'contain';for(const media of [v,im])media.style.transform='scale('+s.mediaScale/100+')';
- if(d.preview||!d.mediaID){v.pause();if(mediaID){v.removeAttribute('src');v.load();im.removeAttribute('src');mediaID=''}}
+ const v=$('video'),im=$('image');v.hidden=(d.preview&&!s.clearMode)||d.mediaKind!=='video';im.hidden=(d.preview&&!s.clearMode)||d.mediaKind!=='image';
+ for(const media of [v,im]){media.style.objectFit=d.mediaStretch?'fill':'contain';media.style.transform='scale('+s.mediaScale/100+')'}
+ if((d.preview&&!s.clearMode)||!d.mediaID){v.pause();if(mediaID){v.removeAttribute('src');v.load();im.removeAttribute('src');mediaID=''}}
  else if(mediaID!==d.mediaID){mediaID=d.mediaID;if(d.mediaKind==='video'){v.src='media/'+encodeURIComponent(mediaID);v.load()}else {v.pause();im.src='media/'+encodeURIComponent(mediaID)}}
  if(!v.hidden){if(v.readyState>=1&&Math.abs(v.currentTime-d.mediaTime)>.3)v.currentTime=d.mediaTime;if(d.mediaRate>0){v.playbackRate=d.mediaRate;v.play().catch(()=>{})}else v.pause()}
 }
 async function poll(){try{const r=await fetch('state',{cache:'no-store'});if(!r.ok)throw Error();const body=await r.text(),d=JSON.parse(body);if(!d.settings)throw Error();$('connection').style.display='none';lastStamp=performance.now();if(body!==lastBody){lastBody=body;render(d)}}catch{ $('connection').style.display='block';$('video').pause()}finally{setTimeout(poll,250)}}
 addEventListener('resize',()=>{if(current)render(current)});addEventListener('dblclick',()=>{if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen().catch(()=>{})});
 $('video').addEventListener('loadedmetadata',()=>{if(current)$('video').currentTime=current.mediaTime});poll();
-setInterval(()=>{if(!current)return;const s=current.settings;
+setInterval(()=>{if(!current)return;const s=current.settings;if(s.clearMode)return;
  if(s.windowBorderEnabled&&s.rgbWindowBorderEnabled)$('screen').style.borderColor=color(s.borderColor,true);
  const timer=document.querySelector('.timer'),chords=document.querySelector('.chords');
  if(timer&&s.clockBorderEnabled&&s.rgbClockBorderEnabled)timer.style.borderColor=color(s.clockBorderColor,true);
@@ -222,12 +226,21 @@ setInterval(()=>{if(!current)return;const s=current.settings;
 }
 
 @MainActor final class TeleprompterRemote: ObservableObject {
-    static let shared = TeleprompterRemote()
+    static let shared = TeleprompterRemote(index: 1)
+    static let second = TeleprompterRemote(index: 2)
+    static func panel(_ index: Int) -> TeleprompterRemote { index == 2 ? second : shared }
+    static func setProjectDirectory(_ directory: URL?) {
+        shared.setDirectory(directory); second.setDirectory(directory)
+    }
+    let index: Int
+    private var preferences: TeleprompterPreferences { index == 2 ? .second : .shared }
+    init(index: Int) { self.index = index }
     @Published private(set) var enabled = false
     @Published private(set) var link = ""
     @Published private(set) var message = ""
-    @Published private(set) var qrCode: NSImage?
+    @Published private(set) var qrCode: CGImage?
     private var server: TeleprompterHTTPServer?
+    private var listeningPort: UInt16?
     private var refresh: (() -> Void)?
     private var directory: URL?
     private var payload = TeleprompterRemotePayload()
@@ -239,20 +252,18 @@ setInterval(()=>{if(!current)return;const s=current.settings;
     func setEnabled(_ value: Bool) {
         guard value != enabled else { return }
         if !value {
-            enabled = false; server?.stop(); server = nil
+            enabled = false; server?.stop(); server = nil; listeningPort = nil
             heartbeat?.invalidate(); heartbeat = nil; link = ""; qrCode = nil; message = ""
             payload = TeleprompterRemotePayload(); mediaURL = nil
             return
         }
         enabled = true; message = ""; lastPublish = 0
         let service = TeleprompterHTTPServer(); server = service
-        service.start(ready: { [weak self, weak service] port in
+        service.start(port: UInt16(10100 + index), ready: { [weak self, weak service] port in
             Task { @MainActor in
                 guard let self, let service, self.server === service, self.enabled else { return }
-                let address = Self.networkAddress()
-                self.link = "http://\(address ?? "127.0.0.1"):\(port)"
-                self.qrCode = Self.qr(self.link)
-                if address == nil { self.message = "Connect to a local network to use TP Remote." }
+                self.listeningPort = port
+                self.updateNetworkLink()
                 self.refresh?(); self.publish()
             }
         }, failed: { [weak self, weak service] error in
@@ -262,22 +273,30 @@ setInterval(()=>{if(!current)return;const s=current.settings;
             }
         })
         heartbeat = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh?(); self?.publish() }
+            MainActor.assumeIsolated { self?.updateNetworkLink(); self?.refresh?(); self?.publish() }
         }
         RunLoop.main.add(heartbeat!, forMode: .common)
         refresh?(); publish()
+    }
+    private func updateNetworkLink() {
+        guard enabled, let port = listeningPort else { return }
+        let address = Self.networkAddress()
+        let next = address.map { "http://\($0):\(port)" } ?? ""
+        if link != next { link = next; qrCode = next.isEmpty ? nil : Self.qr(next) }
+        let nextMessage = address == nil ? "Connect to a local network to use TP Remote." : ""
+        if message != nextMessage { message = nextMessage }
     }
     func clear() { payload = TeleprompterRemotePayload(); mediaURL = nil; publish() }
     func update(text: String, chords: String, song: String, queued: String, progress: Double, preview: Bool, blocks: [TeleprompterRemoteBlock], snapshot: ShowSnapshot) {
         guard enabled, ProcessInfo.processInfo.systemUptime - lastPublish >= 0.1 else { return }
         payload.text = text; payload.chords = chords; payload.song = song; payload.queued = queued
-        payload.progress = progress; payload.preview = preview; payload.blocks = blocks
-        payload.mediaStretch = TeleprompterPreferences.shared.settings.stretchesMedia
+        payload.progress = progress; payload.preview = preferences.settings.displaysPreview(preview); payload.blocks = blocks
+        payload.mediaStretch = preferences.settings.stretchesMedia
         mediaURL = nil; payload.mediaID = nil; payload.mediaKind = nil
         let t = snapshot.transport, position = t.playing || t.paused == true ? t.position : t.editPosition ?? t.position
-        if !preview, let directory,
+        if !payload.preview || preferences.settings.isClear, let directory,
            let song = snapshot.project.songs.first(where: { $0.id == t.songId }),
-           let clip = song.tracks.lazy.filter({ $0.kind == .teleprompt && !$0.mute }).flatMap(\.clips).first(where: { $0.isProjectionMedia && $0.muted != true && position >= $0.startTime && position < $0.startTime + $0.duration }),
+           let clip = song.tracks.lazy.filter({ $0.kind == (self.index == 2 ? .teleprompt2 : .teleprompt) && !$0.mute }).flatMap(\.clips).first(where: { $0.isProjectionMedia && $0.muted != true && position >= $0.startTime && position < $0.startTime + $0.duration }),
            let file = clip.audioFile {
             mediaURL = directory.appendingPathComponent(file.path)
             payload.mediaID = clip.id.uuidString
@@ -289,7 +308,7 @@ setInterval(()=>{if(!current)return;const s=current.settings;
     }
     private func publish() {
         guard enabled else { return }
-        payload.settings = TeleprompterPreferences.shared.settings
+        payload.settings = preferences.settings
         payload.timer = TeleprompterTimerController.shared.displayText(spaced: true)
         payload.expired = TeleprompterTimerController.shared.expired()
         let values = Calendar.current.dateComponents([.hour, .minute, .second], from: Date())
@@ -297,11 +316,11 @@ setInterval(()=>{if(!current)return;const s=current.settings;
         lastPublish = ProcessInfo.processInfo.systemUptime
         server?.publish(payload, mediaURL: mediaURL)
     }
-    private static func qr(_ link: String) -> NSImage? {
+    private static func qr(_ link: String) -> CGImage? {
         guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         filter.setValue(Data(link.utf8), forKey: "inputMessage"); filter.setValue("M", forKey: "inputCorrectionLevel")
         guard let output = filter.outputImage, let bitmap = CIContext().createCGImage(output, from: output.extent) else { return nil }
-        return NSImage(cgImage: bitmap, size: output.extent.size)
+        return bitmap
     }
     private static func networkAddress() -> String? {
         var addresses: UnsafeMutablePointer<ifaddrs>?
@@ -325,18 +344,18 @@ setInterval(()=>{if(!current)return;const s=current.settings;
 
 struct TeleprompterRemoteView: View {
     let close: () -> Void
-    @ObservedObject private var remote = TeleprompterRemote.shared
+    @ObservedObject var remote: TeleprompterRemote = .shared
     @AppStorage("jaras.language") private var language = "en"
     @State private var copied = false
     var body: some View {
         VStack(spacing: 16) {
             HStack {
-                Text("TP Remoto").font(.headline)
+                Text(verbatim: "TP \(remote.index) · " + JarasLocalization.string("TP Remoto")).font(.headline)
                 Spacer()
                 Toggle("Enabled", isOn: Binding(get: { remote.enabled }, set: { remote.setEnabled($0); copied = false })).toggleStyle(.switch).tint(JarasTheme.green).accessibilityLabel("Enabled")
             }
             if let image = remote.qrCode {
-                Image(nsImage: image).interpolation(.none).resizable().scaledToFit().frame(width: 190, height: 190).padding(10).background(Color.white).cornerRadius(6)
+                Image(decorative: image, scale: 1).interpolation(.none).resizable().scaledToFit().frame(width: 190, height: 190).padding(10).background(Color.white).cornerRadius(6)
             } else {
                 Image(systemName: "qrcode").font(.system(size: 100)).foregroundStyle(JarasTheme.secondary).frame(width: 210, height: 210)
             }
@@ -346,13 +365,17 @@ struct TeleprompterRemoteView: View {
                 Text(remote.link.isEmpty ? "—" : remote.link).font(.system(size: 11, design: .monospaced)).lineLimit(2).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(8).background(JarasTheme.display).cornerRadius(5)
                 Button(copied ? "Copied" : "Copy link") {
-                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(remote.link, forType: .string); copied = true
+                    #if os(macOS)
+                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(remote.link, forType: .string)
+                    #else
+                    UIPasteboard.general.string = remote.link
+                    #endif
+                    copied = true
                 }.disabled(remote.link.isEmpty)
             }
             if !remote.message.isEmpty { Text(LocalizedStringKey(remote.message)).font(.caption).foregroundStyle(JarasTheme.yellow) }
             HStack { Spacer(); Button("Close", action: close).keyboardShortcut(.cancelAction) }
-        }.padding(20).frame(width: 420).background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
+        }.padding(20).frame(maxWidth: 420).background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
             .environment(\.locale, Locale(identifier: language)).preferredColorScheme(.dark)
     }
 }
-#endif

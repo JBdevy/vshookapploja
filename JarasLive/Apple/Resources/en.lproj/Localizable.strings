@@ -60,6 +60,8 @@
 "PARADO" = "STOPPED";
 "Fim do repertório" = "End of setlist";
 "Validando acesso…" = "Checking access…";
+"Restaurando ativação…" = "Restoring activation…";
+"Não foi possível restaurar a ativação deste dispositivo. Faça login novamente." = "This device's activation could not be restored. Please sign in again.";
 "Tentar novamente" = "Try again";
 "Iniciando…" = "Starting…";
 "Idioma" = "Language";
@@ -346,6 +348,7 @@
 "Mute" = "Mute";
 "Solo" = "Solo";
 "Video" = "Video";
+"Image" = "Image";
 "⌘ / Ctrl: multiple · Shift: range" = "⌘ / Ctrl: multiple · Shift: range";
 "%lld output channels" = "%lld output channels";
 "%lld samples" = "%lld samples";
@@ -547,6 +550,7 @@
 "INIT AUTO" = "INIT AUTO";
 "Start timer automatically when a song starts" = "Start timer automatically when a song starts";
 "Stop timer?" = "Stop timer?";
+"Stop timer" = "Stop timer";
 "The timer will be reset." = "The timer will be reset.";
 "Timer settings" = "Timer settings";
 "Timer duration" = "Timer duration";
@@ -559,8 +563,6 @@
 "Teleprompter, Video and Chords items cannot overlap" = "Teleprompter, Video and Chords items cannot overlap";
 "Special items can only move horizontally on their own track" = "Special items can only move horizontally on their own track";
 "Maximum %lld characters." = "Maximum %lld characters.";
-"Chords text must contain at most 30 characters" = "Chords text must contain at most 30 characters";
-"Teleprompter text must contain at most 400 characters" = "Teleprompter text must contain at most 400 characters";
 
 "Uppercase" = "Uppercase";
 
@@ -647,8 +649,6 @@
 "Transmitter 2" = "Transmitter 2";
 "Invalid track routing" = "Invalid track routing";
 "This routing would create an audio feedback loop." = "This routing would create an audio feedback loop.";
-"Maximum of 1000 tracks per project." = "Maximum of 1000 tracks per project.";
-"A project supports at most 1000 tracks" = "A project supports at most 1000 tracks";
 
 "Plugins" = "Plugins";
 "External" = "External";
@@ -1014,32 +1014,32 @@
 "Connect to computer" = "Connect to computer";
 
 "Sair" = "Exit";
-"Choose a project to open on the Mac." = "Choose a project to open on the Mac.";
-"No recent projects on this Mac." = "No recent projects on this Mac.";
-"Stop recording on the Mac to open a project." = "Stop recording on the Mac to open a project.";
+"Choose a project to open on the Mac." = "Choose a project to open on the PC.";
+"No recent projects on this Mac." = "No recent projects on this PC.";
+"Stop recording on the Mac to open a project." = "Stop recording on the PC to open a project.";
 "Stop playback to open a project." = "Stop playback to open a project.";
-"Resolve missing audio on the Mac to continue." = "Resolve missing audio on the Mac to continue.";
-"Could not open the project. Check the Mac for details." = "Could not open the project. Check the Mac for details.";
-"This project is no longer in the Mac’s recent projects." = "This project is no longer in the Mac’s recent projects.";
-"Update CatLive on the Mac to browse recent projects." = "Update CatLive on the Mac to browse recent projects.";
+"Resolve missing audio on the Mac to continue." = "Resolve missing audio on the PC to continue.";
+"Could not open the project. Check the Mac for details." = "Could not open the project. Check the PC for details.";
+"This project is no longer in the Mac’s recent projects." = "This project is no longer in the PC’s recent projects.";
+"Update CatLive on the Mac to browse recent projects." = "Update CatLive on the PC to browse recent projects.";
 
-"Audio continues on the Mac. Keep Wi-Fi and Bluetooth on to connect directly to a nearby iPad." = "Audio continues on the Mac. Keep Wi-Fi and Bluetooth on to connect directly to a nearby iPad.";
+"Audio continues on the Mac. Keep Wi-Fi and Bluetooth on to connect directly to a nearby iPad." = "Audio continues on the PC. Keep Wi-Fi and Bluetooth on to connect directly to a nearby iPad.";
 
-"Deixe o Wi-Fi e o Bluetooth ligados nos dois aparelhos.\nAtive Remote no CatLive do Mac e escolha-o abaixo." = "Keep Wi-Fi and Bluetooth on on both devices.\nEnable Remote in CatLive on the Mac, then choose it below.";
+"Deixe o Wi-Fi e o Bluetooth ligados nos dois aparelhos.\nAtive Remote no CatLive do Mac e escolha-o abaixo." = "Keep Wi-Fi and Bluetooth on on both devices.\nEnable Remote in CatLive on the PC, then choose it below.";
 
 "Conexão direta · sem roteador ou internet" = "Direct connection · no router or internet needed";
 
-"Não foi possível conectar. Aproxime os aparelhos e confira o Remote no Mac." = "Unable to connect. Keep the devices nearby and check Remote on the Mac.";
+"Não foi possível conectar. Aproxime os aparelhos e confira o Remote no Mac." = "Unable to connect. Keep the devices nearby and check Remote on the PC.";
 
-"Searching for nearby Macs…" = "Searching for nearby Macs…";
+"Searching for nearby Macs…" = "Searching for nearby PCs…";
 
-"Connection failed. Keep the devices nearby and enable Remote on the Mac." = "Connection failed. Keep the devices nearby and enable Remote on the Mac.";
+"Connection failed. Keep the devices nearby and enable Remote on the Mac." = "Connection failed. Keep the devices nearby and enable Remote on the PC.";
 
 "Item volume" = "Item volume";
 "Notices" = "Notices";
 "Stop" = "Stop";
-"Atualize o CatLive no Mac para usar este painel." = "Update CatLive on the Mac to use this panel.";
-"Atualize o CatLive no Mac para sincronizar o cronômetro." = "Update CatLive on the Mac to sync the timer.";
+"Atualize o CatLive no Mac para usar este painel." = "Update CatLive on the PC to use this panel.";
+"Atualize o CatLive no Mac para sincronizar o cronômetro." = "Update CatLive on the PC to sync the timer.";
 
 /* Logic project migration */
 "Import Logic project" = "Import Logic project";
@@ -1056,7 +1056,6 @@
 "Project migration" = "Project migration";
 "REAPER effects, automation, sends, pitch processing and advanced playback settings are not converted. Review the migrated mix." = "REAPER effects, automation, sends, pitch processing and advanced playback settings are not converted. Review the migrated mix.";
 "REAPER mixer volumes above +12 dB were limited to the CatLive mixer range." = "REAPER mixer volumes above +12 dB were limited to the CatLive mixer range.";
-"Nested REAPER folders were placed inside their top-level group." = "Nested REAPER folders were placed inside their top-level group.";
 "Only the active REAPER take is imported for each item." = "Only the active REAPER take is imported for each item.";
 "Loop lengths for offline REAPER audio could not be determined. Review looped items after locating the files." = "Loop lengths for offline REAPER audio could not be determined. Review looped items after locating the files.";
 "REAPER MIDI, video and unsupported sources are retained as empty items. Render them to audio in REAPER to migrate their sound." = "REAPER MIDI, video and unsupported sources are retained as empty items. Render them to audio in REAPER to migrate their sound.";
@@ -1143,3 +1142,465 @@
 "The open project changed. Start Add Project again." = "The open project changed. Start Add Project again.";
 
 "Songs will be added in this order after the last song in the open project." = "Songs will be added in this order after the last song in the open project.";
+
+"On" = "On";
+
+"Off" = "Off";
+
+"Enable multiloop" = "Enable multiloop";
+
+"Section marker" = "Section marker";
+"Section markers can only be created inside a song." = "Section markers can only be created inside a song.";
+"Playing / Selected" = "Playing / Selected";
+"Queued" = "Queued";
+
+"Section manager" = "Section manager";
+
+"Now playing" = "Playing";
+
+"Selected song" = "Selected";
+
+"Next song label" = "Next";
+
+"Recent Projects" = "Recent Projects";
+"Audio device — Input" = "Audio device — Input";
+"Audio device — Output" = "Audio device — Output";
+"Stop the transport before changing the audio device." = "Stop the transport before changing the audio device.";
+"The selected audio output could not be confirmed." = "The selected audio output could not be confirmed.";
+"Enter a positive whole number." = "Enter a positive whole number.";
+"Choose an audio input device in Settings." = "Choose an audio input device in Settings.";
+
+"Add regions" = "Add regions";
+
+"Device RAM in use" = "Device RAM in use";
+
+"Waiting for reconnection" = "Waiting for reconnection";
+
+"Open CatLive and enable Remote on your Mac." = "Open CatLive and enable Remote on your PC.";
+
+"Exit Remote" = "Exit Remote";
+
+"Observer" = "Observer";
+
+"Follow your Mac's repertoire." = "Follow your PC’s repertoire.";
+
+"Connect to Mac" = "Connect to PC";
+
+"Control or follow your Mac’s session." = "Control or follow your PC’s session.";
+
+"Senha do modo Recados" = "Notices mode password";
+
+"Acesso apenas aos recados. Deixe vazio para entrar sem senha." = "Notices access only. Leave empty to connect without a password.";
+
+"Salvar senha de Recados" = "Save Notices password";
+
+"Resize sections" = "Resize sections";
+
+"Section display mode" = "Section display mode";
+
+"Horizontal (footer)" = "Horizontal (footer)";
+
+"Vertical" = "Vertical";
+
+"The iPad follows this setting. On iPhone, sections are always vertical." = "The iPad follows this setting. On iPhone, sections are always vertical.";
+
+"Cancel queued section" = "Cancel queued section";
+
+"Choose a project to open on the PC." = "Choose a project to open on the PC.";
+"No recent projects on this PC." = "No recent projects on this PC.";
+"Stop recording on the PC to open a project." = "Stop recording on the PC to open a project.";
+"Resolve missing audio on the PC to continue." = "Resolve missing audio on the PC to continue.";
+"Could not open the project. Check the PC for details." = "Could not open the project. Check the PC for details.";
+"This project is no longer in the PC’s recent projects." = "This project is no longer in the PC’s recent projects.";
+"Update CatLive on the PC to browse recent projects." = "Update CatLive on the PC to browse recent projects.";
+"Audio continues on the PC. Keep Wi-Fi and Bluetooth on to connect directly to a nearby iPad." = "Audio continues on the PC. Keep Wi-Fi and Bluetooth on to connect directly to a nearby iPad.";
+"Deixe o Wi-Fi e o Bluetooth ligados nos dois aparelhos.\nAtive Remote no CatLive do PC e escolha-o abaixo." = "Keep Wi-Fi and Bluetooth on on both devices.\nEnable Remote in CatLive on the PC, then choose it below.";
+"Não foi possível conectar. Aproxime os aparelhos e confira o Remote no PC." = "Unable to connect. Keep the devices nearby and check Remote on the PC.";
+"Searching for nearby PCs…" = "Searching for nearby PCs…";
+"Connection failed. Keep the devices nearby and enable Remote on the PC." = "Connection failed. Keep the devices nearby and enable Remote on the PC.";
+"Atualize o CatLive no PC para usar este painel." = "Update CatLive on the PC to use this panel.";
+"Atualize o CatLive no PC para sincronizar o cronômetro." = "Update CatLive on the PC to sync the timer.";
+"Open CatLive and enable Remote on your PC." = "Open CatLive and enable Remote on your PC.";
+"Follow your PC's repertoire." = "Follow your PC’s repertoire.";
+"Connect to PC" = "Connect to PC";
+"Control or follow your PC’s session." = "Control or follow your PC’s session.";
+"Audio continues on the PC. Direct connection via Wi-Fi and Bluetooth is available only on macOS." = "Audio continues on the PC. Direct connection via Wi-Fi and Bluetooth is available only on macOS.";
+
+"Remove from group" = "Remove from group";
+
+"Drop not allowed" = "Drop not allowed";
+
+"Dissolve this track group?" = "Dissolve this track group?";
+
+"Move this group out of its parent group?" = "Move this group out of its parent group?";
+
+"Confirm" = "Confirm";
+
+"This item cannot be added. Select an audio, video or image file: %@" = "This item cannot be added. Select an audio, video or image file: %@";
+"This item cannot be added. Select audio, video or image files, not folders." = "This item cannot be added. Select audio, video or image files, not folders.";
+
+"Open audio settings" = "Open audio settings";
+
+"Nome deste dispositivo" = "Name this device";
+"Escolha um nome para identificar este PC na sua conta e na lista de conexão do iPad ou celular." = "Choose a name to identify this PC in your account and in the connection list on your iPad or phone.";
+"Ex.: PC do palco" = "E.g. Stage PC";
+"O nome é obrigatório. Use um nome curto e fácil de reconhecer." = "A name is required. Choose a short, recognizable name.";
+"Use um nome mais curto, com letras ou números, sem quebras de linha." = "Use a shorter name with letters or numbers and no line breaks.";
+"Voltar" = "Back";
+"Salvar e continuar" = "Save and continue";
+
+"Multiloops BYPASS on/off" = "Multiloops BYPASS on/off";
+
+"Clear mode (media only)" = "Clear mode (media only)";
+
+"Saved messages" = "Saved messages";
+
+"Ignore Preview" = "Ignore Preview";
+
+"The selected regions, their items and markers will be removed from the timeline. Media files will remain in the project folder." = "The selected regions, their items and markers will be removed from the timeline. Media files will remain in the project folder.";
+
+"Hide setlist controls" = "Hide setlist controls";
+"Show setlist controls" = "Show setlist controls";
+"Reset peak" = "Reset peak";
+"Toggle region drawer" = "Toggle region drawer";
+"Tap to reset the peak" = "Tap to reset the peak";
+"Hide sidebar" = "Hide sidebar";
+"Show sidebar" = "Show sidebar";
+
+"Export Audio" = "Export Audio";
+
+"Export region audio" = "Export region audio";
+
+"Copy to share" = "Copy to share";
+"Playlist copied successfully" = "Playlist copied successfully";
+"Could not copy playlist" = "Could not copy playlist";
+"Paste the list wherever you want to share it." = "Paste the list wherever you want to share it.";
+"Please try copying the playlist again." = "Please try copying the playlist again.";
+"Total duration" = "Total duration";
+
+"Run queue until the end of the block" = "Run queue until the end of the block";
+
+"Turn off Live?" = "Turn off Live?";
+
+"Stop timer?" = "Stop timer?";
+"The timer will stop and the current count will be reset." = "The timer will stop and the current count will be reset.";
+"Turn off Live" = "Turn off Live";
+"Turning off Live clears all played-song marks, including songs inside unified regions. Turning it on again starts the playback count from zero." = "Turning off Live clears all played-song marks, including songs inside unified regions. Turning it on again starts the playback count from zero.";
+
+"Render each selected region through the Master, including tracks routed to hardware outputs." = "Render each selected region through the Master, including tracks routed to hardware outputs.";
+
+"Cut" = "Cut";
+
+"Sending message…" = "Sending message…";
+"Message sent." = "Message sent.";
+"Message was not sent." = "Message was not sent.";
+"Not connected. Message was not sent." = "Not connected. Message was not sent.";
+"Could not confirm delivery. Check the PC." = "Could not confirm delivery. Check the PC.";
+
+/* Compact DAW migration report */
+"Project imported. Review these notes before playback." = "Project imported. Review these notes before playback.";
+"Import notes: %ld" = "Import notes: %ld";
+"%@: REAPER FX containers are not supported; effects inside containers were not imported." = "%@: REAPER FX containers are not supported; effects inside containers were not imported.";
+"%@: %@ was not imported; only VST3 effects are supported during REAPER migration." = "%@: %@ was not imported; only VST3 effects are supported during REAPER migration.";
+"%@: VST3 %@ has no class ID and was not imported." = "%@: VST3 %@ has no class ID and was not imported.";
+"%@: %@ state was not imported: %@" = "%@: %@ state was not imported: %@";
+"%@: VST3 %@ was not found. Its saved state was retained, but the effect was not inserted. Install the same VST3 and import again." = "%@: VST3 %@ was not found. Its saved state was retained, but the effect was not inserted. Install the same VST3 and import again.";
+"%@: VST3 %@ could not be restored. Its reference was retained but the effect was not inserted: %@" = "%@: VST3 %@ could not be restored. Its reference was retained but the effect was not inserted: %@";
+"%@: %@ is categorized as a MIDI effect; VST3 MIDI-output transformations are not supported and were not migrated." = "%@: %@ is categorized as a MIDI effect; VST3 MIDI-output transformations are not supported and were not migrated.";
+"%@: %@ automation parameter %@ could not be identified; that envelope was not applied." = "%@: %@ automation parameter %@ could not be identified; that envelope was not applied.";
+"%@: unsupported REAPER automation mode was imported as Read." = "%@: unsupported REAPER automation mode was imported as Read.";
+"%@: REAPER %@ automation is not supported and was not applied (%ld points)." = "%@: REAPER %@ automation is not supported and was not applied (%ld points).";
+"%@: %@ contains automation items; pooled automation items were not imported." = "%@: %@ contains automation items; pooled automation items were not imported.";
+"%@: %@ envelope exceeds the CatLive parameter range and was not applied." = "%@: %@ envelope exceeds the CatLive parameter range and was not applied.";
+"Item pitch outside the supported ±12 semitone range was not converted." = "Item pitch outside the supported ±12 semitone range was not converted.";
+"%@ / %@: MIDI take VST3 effects and their saved states were retained, but no active take instrument generates audio for them. MIDI-only transformations are not supported; these take effects are not applied." = "%@ / %@: MIDI take VST3 effects and their saved states were retained, but no active take instrument generates audio for them. MIDI-only transformations are not supported; these take effects are not applied.";
+"MIDI notes were imported. Choose an instrument in CatLive; no compatible VST3 instrument was inserted on this track or take." = "MIDI notes were imported. Choose an instrument in CatLive; no compatible VST3 instrument was inserted on this track or take.";
+"REAPER video and unsupported sources are retained as empty items. Render them to audio in REAPER to migrate their sound." = "REAPER video and unsupported sources are retained as empty items. Render them to audio in REAPER to migrate their sound.";
+"%@ / %@: MIDI take automation was retained, but cannot be applied independently through a shared track instrument. An active VST3 instrument on the take is required." = "%@ / %@: MIDI take automation was retained, but cannot be applied independently through a shared track instrument. An active VST3 instrument on the take is required.";
+"MIDI controllers, program changes and SysEx are not migrated; review the instrument settings." = "MIDI controllers, program changes and SysEx are not migrated; review the instrument settings.";
+"Muted MIDI notes were omitted because individual note mute is not supported." = "Muted MIDI notes were omitted because individual note mute is not supported.";
+"MIDI notes without a matching note-off were omitted." = "MIDI notes without a matching note-off were omitted.";
+"Some Logic mixer channels use an unsupported layout. Their volume, pan and mute were left at defaults; review those tracks." = "Some Logic mixer channels use an unsupported layout. Their volume, pan and mute were left at defaults; review those tracks.";
+"MIDI notes were imported. Choose an instrument in CatLive; Logic instruments and plug-ins are not migrated." = "MIDI notes were imported. Choose an instrument in CatLive; Logic instruments and plug-ins are not migrated.";
+"Logic MIDI controller, expression and nested sequence events are not migrated; review those regions." = "Logic MIDI controller, expression and nested sequence events are not migrated; review those regions.";
+"Only MIDI notes within each region's visible bounds were imported." = "Only MIDI notes within each region's visible bounds were imported.";
+"REAPER sends and advanced playback settings are not converted. Review the migrated mix." = "REAPER sends and advanced playback settings are not converted. Review the migrated mix.";
+"Invalid VST3 state encoding or size." = "Invalid VST3 state encoding or size.";
+"Truncated VST3 state." = "Truncated VST3 state.";
+"Unsupported VST3 routing-state format." = "Unsupported VST3 routing-state format.";
+"Invalid VST3 input count." = "Invalid VST3 input count.";
+"Invalid VST3 output count." = "Invalid VST3 output count.";
+"Truncated VST3 processor state." = "Truncated VST3 processor state.";
+"Unsupported VST3 state record." = "Unsupported VST3 state record.";
+"Duplicate VST3 processor state." = "Duplicate VST3 processor state.";
+"Duplicate VST3 controller state." = "Duplicate VST3 controller state.";
+"VST3 import inspection timed out." = "VST3 import inspection timed out.";
+"VST3 import inspection failed or the plugin process crashed." = "VST3 import inspection failed or the plugin process crashed.";
+"VST3 resolver returned a different plugin class." = "VST3 resolver returned a different plugin class.";
+"VS Hook: um marcador de trecho fora de uma música foi mantido como marcador comum." = "VS Hook: a section marker outside a song was retained as a normal marker.";
+"VS Hook: uma pasta e uma pista filha estão marcadas com #. O CatLive aplica a transposição uma única vez; revise essa seleção." = "VS Hook: a folder and a child track are marked with #. CatLive applies transposition only once; review that selection.";
+"VS Hook: um par de multiloop incompleto foi mantido como marcador; revise os pontos *1 a *4." = "VS Hook: an incomplete multiloop pair was retained as markers; review points *1 to *4.";
+"VS Hook: limites de Auto Fader acima de +12 dB foram ajustados ao máximo do CatLive." = "VS Hook: Auto Fader limits above +12 dB were adjusted to the CatLive maximum.";
+"VS Hook: músicas removidas do projeto de origem foram ignoradas nos repertórios." = "VS Hook: songs removed from the source project were omitted from playlists.";
+
+"The selected audio output is disconnected." = "The selected audio output is disconnected.";
+
+"The selected audio input is disconnected." = "The selected audio input is disconnected.";
+
+"Unable to open audio device (%d)." = "Unable to open audio device (%d).";
+
+"Could not open the selected audio input device." = "Could not open the selected audio input device.";
+
+"The audio input changed while preparing the recording. Start recording again." = "The audio input changed while preparing the recording. Start recording again.";
+
+
+"No project is open for saving." = "No project is open for saving.";
+
+"Audio output is unavailable" = "Audio output is unavailable. Check the device in Audio settings.";
+
+"The open project changed before saving. The project was not saved." = "The open project changed before saving. The project was not saved.";
+
+"The project changed while saving. Save again before closing." = "The project changed while saving. Save again before closing.";
+
+"Some audio was lost during recording. The captured audio was preserved, but the recording may be incomplete." = "Some audio was lost during recording. The captured audio was preserved, but the recording may be incomplete.";
+
+"Native" = "Native";
+"Modes" = "Modes";
+"Play your projects directly on this iPad." = "Play your projects directly on this iPad.";
+"Could not open Native mode." = "Could not open Native mode.";
+"Back to project" = "Back to project";
+"ZIP · CatLive iPadOS" = "ZIP · CatLive iPadOS";
+"Add Stems to Open Project" = "Add Stems to Open Project";
+"Project name" = "Project name";
+"Choose a project name without slashes or special path characters." = "Choose a project name without slashes or special path characters.";
+"Importing CatLive project…" = "Importing CatLive project…";
+"Export to CatLive iPadOS" = "Export to CatLive iPadOS";
+"Create a .ziplive package with this project, its media and native instruments." = "Create a .ziplive package with this project, its media and native instruments.";
+"External VST3 plug-ins will not be included. Native effects will be preserved." = "External VST3 plug-ins will not be included. Native effects will be preserved.";
+"Save the project before exporting to iPadOS." = "Save the project before exporting to iPadOS.";
+"Exporting project…" = "Exporting project…";
+"Project exported successfully." = "Project exported successfully.";
+"Show in Finder" = "Show in Finder";
+"Download the native instrument before exporting: %@" = "Download the native instrument before exporting: %@";
+"Export canceled." = "Export canceled.";
+"System audio input" = "System audio input";
+"Audio is interrupted by another app. Try again when it finishes." = "Audio is interrupted by another app. Try again when it finishes.";
+"Open Native mode to record audio." = "Open Native mode to record audio.";
+"Audio device disconnected. Playback stopped." = "Audio device disconnected. Playback stopped.";
+
+"Some output channels are unavailable on this iPad." = "Some output channels are unavailable on this iPad.";
+
+"The CatStem Core ML model is missing from this installation." = "The CatStem Core ML model is missing from this installation.";
+
+"CatStem is still finishing its previous session. Try again shortly." = "CatStem is still finishing its previous session. Try again shortly.";
+
+"Not selected" = "Not selected";
+
+"Patch · Selected tracks" = "Patch · Selected tracks";
+
+"Apply to selected tracks" = "Apply to selected tracks";
+
+"Applied" = "Applied";
+
+"Add .ziplive" = "Add .ziplive";
+
+"Export CatLive project" = "Export CatLive project";
+
+"Save to Files" = "Save to Files";
+
+"Save the project before exporting." = "Save the project before exporting.";
+
+"Choose a folder for the imported project" = "Choose a folder for the imported project";
+
+"Project not found" = "Project not found";
+
+"Rename playlist" = "Rename playlist";
+
+"Delete region and its contents?" = "Delete region and its contents?";
+
+"Remove from playlist?" = "Remove from playlist?";
+
+"Open drawer" = "Open drawer";
+
+"Close drawer" = "Close drawer";
+
+"Convert" = "Convert";
+
+"Color" = "Color";
+
+"Open the folder containing your songs, check the folders you want, then continue." = "Open the folder containing your songs, check the folders you want, then continue.";
+
+"Use this folder" = "Use this folder";
+
+"Open folder" = "Open folder";
+
+"Choose the folder containing your song folders" = "Choose the folder containing your song folders";
+
+"Choose an external folder for CatLive projects" = "Choose an external folder for CatLive projects";
+
+"Project folder" = "Project folder";
+
+"Choose an external folder" = "Choose an external folder";
+
+"External folder selected" = "External folder selected";
+
+"Choose a folder outside CatLive to keep projects and media after deleting the app. Existing projects will be copied there." = "Choose a folder outside CatLive to keep projects and media after deleting the app. Existing projects will be copied there.";
+
+"Choose a folder outside the CatLive app folder. Files inside the app are removed when it is deleted." = "Choose a folder outside the CatLive app folder. Files inside the app are removed when it is deleted.";
+
+"Could not verify the project copy. The original project was preserved." = "Could not verify the project copy. The original project was preserved.";
+
+"Choose the external project folder again to restore access." = "Choose the external project folder again to restore access.";
+
+"Could not access the selected folder." = "Could not access the selected folder.";
+
+"Preparing external project folder…" = "Preparing external project folder…";
+
+"Songs will be added after the last song in your project." = "Songs will be added after the last song in your project.";
+
+"Check your songs before creating the project." = "Check your songs before creating the project.";
+
+"%lld songs" = "%lld songs";
+
+"%lld audio files" = "%lld audio files";
+
+"Import order" = "Import order";
+
+"Track names" = "Track names";
+
+"Remove repeated words from track names, if needed. Original files remain unchanged." = "Remove repeated words from track names, if needed. Original files remain unchanged.";
+
+"Suggestions" = "Suggestions";
+
+"Add to project" = "Add to project";
+
+"%@ contains no readable WAV, AIFF or MP3 files. Open the folder and select the song folders containing audio." = "%@ contains no readable WAV, AIFF or MP3 files. Open the folder and select the song folders containing audio.";
+
+"No audio directly in this folder" = "No audio directly in this folder";
+
+"Select folders containing audio files." = "Select folders containing audio files.";
+
+"Stop playback before importing audio." = "Stop playback before importing audio.";
+
+"Project editing is not available right now." = "Project editing is not available right now.";
+
+"Could not access the selected file." = "Could not access the selected file.";
+
+"Arm an audio track before recording." = "Arm an audio track before recording.";
+"The region and its contents will be deleted." = "The region and its contents will be deleted.";
+
+"Open Remote on another device and choose this iPad." = "Open Remote on another device and choose this iPad.";
+
+"Audio continues on this iPad. Connect both devices to the same local network." = "Audio continues on this iPad. Connect both devices to the same local network.";
+
+"Audio continues on the Mac. Nearby Apple devices can connect directly over peer-to-peer Wi-Fi." = "Audio continues on the Mac. Nearby Apple devices can connect directly over peer-to-peer Wi-Fi.";
+
+"Audio continues on this iPad. Use the same local network or a direct connection between nearby Apple devices." = "Audio continues on this iPad. Use the same local network or a direct connection between nearby Apple devices.";
+
+"Move track" = "Move track";
+
+"Item start" = "Item start";
+
+"Item end" = "Item end";
+
+/* Native iPad one-time purchase */
+"NATIVE ON IPAD" = "NATIVE ON IPAD";
+"Your show.\nOn your iPad." = "Your show.\nOn your iPad.";
+"Create and play your projects directly on iPad, without a computer." = "Create and play your projects directly on iPad, without a computer.";
+"Multitrack playback and audio recording" = "Multitrack playback and audio recording";
+"Mixer, routing and native effects" = "Mixer, routing and native effects";
+"Setlists, loops and teleprompters" = "Setlists, loops and teleprompters";
+"Exchange .ziplive projects with your Mac" = "Exchange .ziplive projects with your Mac";
+"CatLive Native iPad" = "CatLive Native iPad";
+"One-time purchase. No subscription." = "One-time purchase. No subscription.";
+"Purchased" = "Purchased";
+"Price unavailable" = "Price unavailable";
+"Open Native mode" = "Open Native mode";
+"Unlock Native mode" = "Unlock Native mode";
+"Restore purchases" = "Restore purchases";
+"Try again" = "Try again";
+"Payment is handled by the App Store. Restore your purchase using the same Apple Account." = "Payment is handled by the App Store. Restore your purchase using the same Apple Account.";
+"Remote mode stays free on iPad and iPhone." = "Remote mode stays free on iPad and iPhone.";
+"Privacy" = "Privacy";
+"Support" = "Support";
+"The purchase is unavailable right now. Check your connection and try again." = "The purchase is unavailable right now. Check your connection and try again.";
+"Purchase awaiting approval. Access will unlock when Apple confirms it." = "Purchase awaiting approval. Access will unlock when Apple confirms it.";
+"The purchase could not be completed. Please try again." = "The purchase could not be completed. Please try again.";
+"Purchase restored." = "Purchase restored.";
+"No purchase was found for this Apple Account." = "No purchase was found for this Apple Account.";
+"Purchases could not be restored. Check your connection and try again." = "Purchases could not be restored. Check your connection and try again.";
+"Unlock Native mode to play projects on this iPad." = "Unlock Native mode to play projects on this iPad.";
+
+"Host" = "Host";
+"Webserver" = "Webserver";
+"Include markers in the Resolume map" = "Include markers in the Resolume map";
+"Follow CatLive transport" = "Follow CatLive transport";
+"Enable OSC Input in Resolume Preferences (port 7000). For automatic composition creation, enable the Webserver (port 8080) in Resolume Arena 7.22 or later." = "Enable OSC Input in Resolume Preferences (port 7000). For automatic composition creation, enable the Webserver (port 8080) in Resolume Arena 7.22 or later.";
+"Before creating the composition, save your work in Resolume and open a new empty composition. CatLive creates one deck per song and one column per marker. Place your videos in these columns afterward." = "Before creating the composition, save your work in Resolume and open a new empty composition. CatLive creates one deck per song and one column per marker. Place your videos in these columns afterward.";
+"Create / update map" = "Create / update map";
+"Create Resolume project…" = "Create Resolume project…";
+"The map and connection settings are saved with this CatLive project." = "The map and connection settings are saved with this CatLive project.";
+"Create a new Resolume composition?" = "Create a new Resolume composition?";
+"Open a new empty composition in Resolume first. Existing compositions containing media will not be replaced." = "Open a new empty composition in Resolume first. Existing compositions containing media will not be replaced.";
+"Resolume map saved. Save the CatLive project to keep these changes." = "Resolume map saved. Save the CatLive project to keep these changes.";
+"Creating Resolume composition…" = "Creating Resolume composition…";
+"Resolume composition created. Place your videos in the generated columns." = "Resolume composition created. Place your videos in the generated columns.";
+"Invalid Resolume settings" = "Invalid Resolume settings";
+"Invalid Resolume address" = "Invalid Resolume address";
+"Invalid Resolume response" = "Invalid Resolume response";
+"Resolume did not confirm the operation. Check the composition before trying again." = "Resolume did not confirm the operation. Check the composition before trying again.";
+"Resolume is busy. Try again after the current operation finishes." = "Resolume is busy. Try again after the current operation finishes.";
+"Create a Resolume map with song regions first (maximum 1000 decks)." = "Create a Resolume map with song regions first (maximum 1000 decks).";
+"Automatic composition creation requires Resolume Arena 7.22 or later." = "Automatic composition creation requires Resolume Arena 7.22 or later.";
+"Open a new empty composition in Resolume before creating the project." = "Open a new empty composition in Resolume before creating the project.";
+"The Resolume composition contains media. Open a new empty composition first." = "The Resolume composition contains media. Open a new empty composition first.";
+"Resolume did not confirm saving the .avc file. Check its Webserver and save the composition in Resolume." = "Resolume did not confirm saving the .avc file. Check its Webserver and save the composition in Resolume.";
+
+"Free trial: %lld day(s) remaining" = "Free trial: %lld day(s) remaining";
+"Continue free trial" = "Continue free trial";
+"Start 7-day free trial" = "Start 7-day free trial";
+"Your 7-day free trial has ended." = "Your 7-day free trial has ended.";
+"The free trial is unavailable right now. Try again shortly." = "The free trial is unavailable right now. Try again shortly.";
+"Try all Native features for 7 days. Afterward, Native mode requires the one-time purchase shown above. Your projects are kept. Remote stays free. No automatic charge." = "Try all Native features for 7 days. Afterward, Native mode requires the one-time purchase shown above. Your projects are kept. Remote stays free. No automatic charge.";
+"The trial could not be verified. Check the iPad date and time, then try again." = "The trial could not be verified. Check the iPad date and time, then try again.";
+"Trial awaiting approval. Access will unlock when Apple confirms it." = "Trial awaiting approval. Access will unlock when Apple confirms it.";
+"The free trial could not be started. Please try again." = "The free trial could not be started. Please try again.";
+"Free trial restored." = "Free trial restored.";
+
+"The App Store has not made this purchase available yet. Try again shortly." = "The App Store has not made this purchase available yet. Try again shortly.";
+
+"Unable to reach the App Store. Check your connection and try again." = "Unable to reach the App Store. Check your connection and try again.";
+
+"The App Store could not load this purchase. Please try again." = "The App Store could not load this purchase. Please try again.";
+
+"Choose a CatLive project" = "Choose a CatLive project";
+"Choose file" = "Choose file";
+"Select the .ziplive file to open. Next, you will choose where to save the extracted project." = "Select the .ziplive file to open. Next, you will choose where to save the extracted project.";
+"Select a folder where CatLive will extract and save the project and its media. It will open as a normal project, independent of the .ziplive file." = "Select a folder where CatLive will extract and save the project and its media. It will open as a normal project, independent of the .ziplive file.";
+
+
+"Unable to configure audio output channels." = "Unable to configure audio output channels.";
+
+"Audio device is unavailable. Reconnect it or choose an output in Settings." = "Audio device is unavailable. Reconnect it or choose an output in Settings.";
+
+"Transport" = "Transport";
+
+"Category" = "Category";
+
+"Shortcuts" = "Shortcuts";
+
+"Play / Stop" = "Play / Stop";
+
+"Tuner −" = "Tuner −";
+
+"Tuner +" = "Tuner +";
+
+"Parts Up" = "Parts Up";
+
+"Parts Down" = "Parts Down";
+
+"Parts show/hide" = "Parts show/hide";
+
+"Loading waveforms…" = "Loading waveforms…";
+
+"%ld REAPER items before the project start were ignored." = "%ld REAPER items before the project start were ignored.";
