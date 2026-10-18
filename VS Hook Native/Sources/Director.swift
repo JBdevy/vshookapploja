@@ -78,6 +78,7 @@ struct DirectorView: View {
                 }
             }
             .overlay { DirectorFadeoutPopup(session: session) }
+            .overlay { DirectorPartCountdownPopup(session: session) }
             .alert("Salvar o projeto no computador?", isPresented: $confirmSave) {
                 Button("Cancelar", role: .cancel) {}
                 Button("Salvar") { session.command("save_project", ["confirmed": true]) }

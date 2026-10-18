@@ -2,7 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const root = path.resolve(__dirname, '..')
 const dist = path.join(root, 'dist')
-const skip = new Set(['dist', 'node_modules', 'android', 'ios', 'Hook Keys', 'VS Hook Native', '.git', '.github', 'scripts', 'plugins'])
+const skip = new Set(['dist', 'node_modules', 'android', 'ios', 'Hook Keys', 'VS Hook Native', 'JarasLive', '.git', '.github', 'scripts', 'plugins'])
 function rm(target){ if(fs.existsSync(target)) fs.rmSync(target,{recursive:true,force:true}) }
 function mkdir(target){ fs.mkdirSync(target,{recursive:true}) }
 function copyRecursive(src,dest){
@@ -15,6 +15,7 @@ function copyRecursive(src,dest){
     return
   }
   const base = path.basename(src)
+  if (base.startsWith('.') || /\.(command|bat|ps1)$/.test(base)) return
   if(['package.json','package-lock.json','capacitor.config.json','vite.config.js','README.md'].includes(base)) return
   mkdir(path.dirname(dest))
   fs.copyFileSync(src,dest)

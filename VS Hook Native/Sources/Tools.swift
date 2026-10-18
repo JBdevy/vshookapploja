@@ -64,20 +64,20 @@ struct ToolPanel: View {
             ForEach(Array(session.visibleItems.enumerated()), id: \.offset) { _, item in
                 HookCard {
                     Text(item.name).font(.headline).frame(maxWidth: .infinity, alignment: .leading)
-                    let value = tool == "tuner" ? item.songTuner : item.songBPM
+                    let tunerValue = session.tunerValue(for: item)
+                    let value = tool == "tuner" ? (tunerValue ?? 0) : item.songBPM
                     HStack {
-                        HookButton(title: "−", expand: true) { adjust(item, value: value - 1) }
-                        Text(tool == "tuner" ? String(format: "%+.0f", value) : String(format: "%.0f BPM", value)).font(.title2.monospacedDigit().bold()).frame(maxWidth: .infinity)
-                        HookButton(title: "+", expand: true) { adjust(item, value: value + 1) }
+                        HookButton(title: "−", expand: true) { adjust(item, delta: -1) }.disabled(tool == "tuner" && tunerValue == nil)
+                        Text(tool == "tuner" ? (tunerValue.map { String(format: "%+.0f", $0) } ?? "—") : String(format: "%.0f BPM", value)).font(.title2.monospacedDigit().bold()).frame(maxWidth: .infinity)
+                        HookButton(title: "+", expand: true) { adjust(item, delta: 1) }.disabled(tool == "tuner" && tunerValue == nil)
                     }
-                    if tool == "tuner" { HookButton(title: "Zerar", filled: false) { adjust(item, value: 0) } }
+                    if tool == "tuner" { HookButton(title: "Zerar", filled: false) { session.adjustSong(item, tool: tool, delta: 0, reset: true) }.disabled(tunerValue == nil) }
                 }
             }
         }
     }
-    private func adjust(_ item: JSON, value: Double) {
-        let current = tool == "tuner" ? item.songTuner : item.songBPM
-        session.adjustSong(item, tool: tool, delta: value - current)
+    private func adjust(_ item: JSON, delta: Double) {
+        session.adjustSong(item, tool: tool, delta: delta)
     }
     private var timer: some View {
         HookCard {

@@ -227,3 +227,24 @@ struct DirectorFadeoutPopup: View {
         }
     }
 }
+
+struct DirectorPartCountdownPopup: View {
+    @ObservedObject var session: HookSession
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.1)) { context in
+            if !session.partCountdownNotice.isEmpty && context.date < session.partCountdownNoticeUntil {
+                Text(session.partCountdownNotice)
+                    .font(.custom("Arial-BoldMT", size: 28))
+                    .lineLimit(1).minimumScaleFactor(0.65)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24).padding(.vertical, 16)
+                    .frame(maxWidth: 320)
+                    .background(Color(hex: "020617").opacity(0.96))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color(hex: "A78BFA"), lineWidth: 2))
+                    .shadow(color: .black.opacity(0.55), radius: 20, y: 10)
+                    .accessibilityIdentifier("vshook.parts.countdown.popup")
+            }
+        }.allowsHitTesting(false)
+    }
+}

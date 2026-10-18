@@ -335,13 +335,24 @@ struct DirectorSearchScrollRequest: Equatable {
         let elapsed = playbackPosition(at: date) - item.first("startPos", "start_pos").double
         return min(1, max(0, elapsed / item.songDuration))
     }
+    func tunerValue(for item: JSON) -> Double? {
+        let key = item.first("tunerKey", "sourceNumber", "source_number", "regionNumber", "number")
+        let id = item.identifier
+        let region = snapshot["regions"].array.first { candidate in
+            let candidateKey = candidate.first("tunerKey", "sourceNumber", "source_number", "regionNumber", "number")
+            return (key.exists && candidateKey == key) || (!id.isEmpty && candidate.identifier == id)
+        }
+        return region?.songTuner
+    }
     func adjustSong(_ item: JSON, tool: String, delta: Double, reset: Bool = false) {
         guard !item.isSongBlock && !item.isFamilyParent else { return }
         if tool == "bpm" {
             guard !(playing && item.identifier == playingID) else { message = "NÃO É POSSÍVEL ALTERAR O BPM DA MÚSICA TOCANDO"; return }
             guard item.songBPM > 0, item["bpmAvailable"] != false, item["bpmControllable"] != false else { message = "BPM NÃO ENCONTRADO"; return }
         }
-        let value = tool == "tuner" ? min(12, max(-12, reset ? 0 : item.songTuner + delta)) : min(960, max(10, item.songBPM + delta))
+        let currentTuner = tool == "tuner" ? tunerValue(for: item) : nil
+        if tool == "tuner" && !reset && currentTuner == nil { message = "VALOR DO TUNER INDISPONÍVEL PARA ESTA MÚSICA."; return }
+        let value = tool == "tuner" ? min(12, max(-12, reset ? 0 : (currentTuner ?? 0) + delta)) : min(960, max(10, item.songBPM + delta))
         var payload = targetPayload(item).merging(["value": .number(value), tool == "tuner" ? "semitones" : "bpm": .number(value)])
         let number = item.first("sourceNumber", "source_number", "number")
         if number.exists { payload["sourceNumber"] = number; payload["regionNumber"] = number }
@@ -391,14 +402,17 @@ enum DirectorParts {
         return [initial] + data["markers"].array.compactMap { marker in
             let position = marker.first("pos", "position", "startPos", "start_pos").double
             guard position >= start - 0.0005, position < end - 0.0005 else { return nil }
-            let raw = marker.first("rawName", "originalName", "name", "label", "markerName").string.trimmingCharacters(in: .whitespaces)
-            let prefix: String
-            if raw.hasPrefix("$") { prefix = "$" }
-            else if raw.count >= 2 && raw.first == "*" && "1234".contains(raw[raw.index(after: raw.startIndex)]) { prefix = String(raw.prefix(2)) }
-            else { return nil }
-            let name = String(raw.dropFirst(prefix.count)).trimmingCharacters(in: CharacterSet(charactersIn: "-–—: "))
-            return marker.merging(["partsPrefix": .string(prefix), "partsDisplayName": .string(name.isEmpty ? "MARKER" : name)])
+            return markerInfo(marker)
         }
+    }
+    static func markerInfo(_ marker: JSON) -> JSON? {
+        let raw = marker.first("rawName", "originalName", "name", "label", "markerName").string.trimmingCharacters(in: .whitespaces)
+        let prefix: String
+        if raw.hasPrefix("$") { prefix = "$" }
+        else if raw.count >= 2 && raw.first == "*" && "1234".contains(raw[raw.index(after: raw.startIndex)]) { prefix = String(raw.prefix(2)) }
+        else { return nil }
+        let name = String(raw.dropFirst(prefix.count)).trimmingCharacters(in: CharacterSet(charactersIn: "-–—: "))
+        return marker.merging(["partsPrefix": .string(prefix), "partsDisplayName": .string(name.isEmpty ? "MARKER" : name)])
     }
 }
 

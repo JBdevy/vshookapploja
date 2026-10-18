@@ -170,12 +170,13 @@ struct DirectorInlineTuning: View {
         HStack(spacing: 4) {
             if !item.isSongBlock && !item.isFamilyParent {
                 let tuner = session.panel == "tuner"
-                DirectorControl(title: "−", height: 32, size: 20) { session.adjustSong(item, tool: session.panel, delta: -1) }.frame(width: 32)
+                let tunerValue = session.tunerValue(for: item)
+                DirectorControl(title: "−", height: 32, size: 20) { session.adjustSong(item, tool: session.panel, delta: -1) }.frame(width: 32).disabled(tuner && tunerValue == nil)
                 Button { if tuner { session.adjustSong(item, tool: "tuner", delta: 0, reset: true) } } label: {
-                    Text(tuner ? String(format: "%+.0fst", item.songTuner) : String(format: "%+.0f", item.songBPM - item.first("bpmOriginal", "originalBpm", "bpmValue").double))
+                    Text(tuner ? (tunerValue.map { String(format: "%+.0fst", $0) } ?? "—") : String(format: "%+.0f", item.songBPM - item.first("bpmOriginal", "originalBpm", "bpmValue").double))
                         .font(.custom("Arial-BoldMT", size: 14)).frame(width: 58, height: 32)
-                }.buttonStyle(DirectorButtonStyle())
-                DirectorControl(title: "+", height: 32, size: 20) { session.adjustSong(item, tool: session.panel, delta: 1) }.frame(width: 32)
+                }.buttonStyle(DirectorButtonStyle()).disabled(tuner && tunerValue == nil)
+                DirectorControl(title: "+", height: 32, size: 20) { session.adjustSong(item, tool: session.panel, delta: 1) }.frame(width: 32).disabled(tuner && tunerValue == nil)
                 if !tuner { Text(item.songBPM > 0 ? String(format: "%.0f BPM", item.songBPM) : "—").font(.custom("Arial-BoldMT", size: 12)).frame(width: 72).foregroundColor(item["bpmGeneric"].bool ? .yellow : .white) }
             }
         }.disabled(session.readOnly || (session.panel == "bpm" && (session.playing && session.playingID == item.identifier || item.songBPM <= 0)))

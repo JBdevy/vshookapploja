@@ -17,6 +17,8 @@ enum HookMode: String, CaseIterable, Identifiable {
     @Published var connected = false
     @Published var authenticated = false
     @Published var message = ""
+    @Published private(set) var partCountdownNotice = ""
+    @Published private(set) var partCountdownNoticeUntil = Date.distantPast
     @Published var page = "playlist"
     @Published var panel = ""
     @Published var query = ""
@@ -53,6 +55,8 @@ enum HookMode: String, CaseIterable, Identifiable {
     private var transportAnchor: (position: Double, date: Date, playing: Bool, revision: Int)?
     private var partArrival: (id: String, target: Double, previous: Double, revision: Int)?
     private var consumedPartID = ""
+    private var partCountdownKey = ""
+    private var partCountdownLastPosition: Double?
     private var volumeTasks: [String: Task<Void, Never>] = [:]
     @Published private(set) var itemVolumePreviews: [String: Double] = [:]
     private var volumeRevisions: [String: UUID] = [:]
@@ -164,6 +168,7 @@ enum HookMode: String, CaseIterable, Identifiable {
             if snapshot != next { snapshot = next }
             reconcileTCPItemVolumes(tcpItems)
             if !connected { connected = true }
+            updatePartCountdownNotice(next, at: receivedAt)
             if message == "Conexão interrompida. Tentando reconectar…" { message = "" }
             let remotePage = data.first("activePage", "activeTab", "currentPage").string
             if Date() > pageHoldUntil, ["playlist", "regions"].contains(remotePage) { if page != remotePage { page = remotePage } }
@@ -191,6 +196,76 @@ enum HookMode: String, CaseIterable, Identifiable {
             connected = false
             message = "Conexão interrompida. Tentando reconectar…"
         }
+    }
+    private func updatePartCountdownNotice(_ data: JSON, at date: Date) {
+        let playing = data.first("playing", "isPlaying", "transportPlaying").bool
+        let looping = data.first("loopEnabled", "loopActive", "repeatEnabled", "loop").bool
+        guard playing, !looping else {
+            partCountdownKey = ""
+            partCountdownLastPosition = nil
+            if !partCountdownNotice.isEmpty {
+                partCountdownNotice = ""
+                partCountdownNoticeUntil = .distantPast
+            }
+            return
+        }
+
+        let sample = data.first("playPosition", "currentPlayPosition", "currentPosition", "playbackPosition", "position")
+        let songID = data.first("playingId", "playingSongId", "playingRegionId", "currentRegionId").string
+        let playingSong = song(withID: songID)
+        guard sample.exists, playingSong.exists else { return }
+        let position = playbackClock.position(at: date, fallback: data)
+        let start = playingSong.first("startPos", "start_pos").double
+        let end = playingSong.first("endPos", "end_pos").double
+        guard end > start else { return }
+
+        if let previous = partCountdownLastPosition, position < previous - 0.05 {
+            partCountdownKey = ""
+        }
+        partCountdownLastPosition = position
+
+        let upcoming = DirectorParts.markers(data, song: playingSong)
+            .filter { !$0["partsSongStart"].bool }
+            .compactMap { marker -> (marker: JSON, position: Double)? in
+                let markerPosition = marker.first("pos", "position", "startPos", "start_pos").double
+                guard markerPosition > position + 0.0005,
+                      markerPosition >= start - 0.0005,
+                      markerPosition < end - 0.0005 else { return nil }
+                return (marker, markerPosition)
+            }
+            .sorted { $0.position < $1.position }
+
+        let armedID = data.first("partsArmedMarkerId", "armedMarkerId", "markerGoId").string
+        let announcePosition: Double
+        let announceName: String
+        let announceKey: String
+        if !armedID.isEmpty {
+            announcePosition = upcoming.first?.position ?? end
+            let startTargetPrefix = "__parts_song_start__:"
+            if armedID.hasPrefix(startTargetPrefix) {
+                let targetID = String(armedID.dropFirst(startTargetPrefix.count))
+                announceName = song(withID: targetID).name.isEmpty ? "ALVO ENGATILHADO" : song(withID: targetID).name
+            } else if let marker = data["markers"].array.first(where: { $0.identifier == armedID }),
+                      let info = DirectorParts.markerInfo(marker) {
+                announceName = info["partsDisplayName"].string
+            } else {
+                announceName = "ALVO ENGATILHADO"
+            }
+            announceKey = "armed:\(armedID):\(String(format: "%.4f", announcePosition))"
+        } else if let next = upcoming.first {
+            announcePosition = next.position
+            announceName = next.marker["partsDisplayName"].string
+            announceKey = "part:\(next.marker.identifier):\(String(format: "%.4f", next.position))"
+        } else {
+            return
+        }
+
+        let remaining = announcePosition - position
+        guard remaining >= -0.05, remaining <= 5.05,
+              !announceKey.isEmpty, announceKey != partCountdownKey else { return }
+        partCountdownKey = announceKey
+        partCountdownNotice = (announceName.isEmpty ? "PART" : announceName).uppercased()
+        partCountdownNoticeUntil = date.addingTimeInterval(1.6)
     }
     func login(_ password: String) {
         guard bridgePasswordHash(password) == authHash else { message = "Senha inválida."; return }
