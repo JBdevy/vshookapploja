@@ -10,23 +10,31 @@ def configure_android(root: Path) -> None:
     if not manifest.exists():
         raise SystemExit(f"AndroidManifest.xml nao encontrado: {manifest}")
     text = manifest.read_text(encoding="utf-8")
-    permissions = (
+    # Chat Hook no longer needs device capture. Remove legacy permissions,
+    # including declarations merged from an older native recorder/camera plugin.
+    tools_namespace = "http://schemas.android.com/tools"
+    if "xmlns:tools=" not in text:
+        text = text.replace('<manifest ', '<manifest xmlns:tools="' + tools_namespace + '" ', 1)
+    capture_permissions = (
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.CAMERA",
     )
-    missing = [value for value in permissions if value not in text]
-    changed = False
-    if missing:
-        manifest_start = text.find("<manifest")
-        marker = text.find(">", manifest_start)
-        if marker < 0:
-            raise SystemExit(f"Manifesto Android invalido: {manifest}")
-        declarations = "".join(
-            f'\n    <uses-permission android:name="{value}" />'
-            for value in missing
+    for permission in capture_permissions:
+        text = re.sub(
+            r'<uses-permission\b[^>]*android:name=[\"\']' + re.escape(permission) + r'[\"\'][^>]*/>\s*',
+            '', text,
         )
-        text = text[: marker + 1] + declarations + text[marker + 1 :]
-        changed = True
+    manifest_start = text.find("<manifest")
+    marker = text.find(">", manifest_start)
+    if marker < 0:
+        raise SystemExit(f"Manifesto Android invalido: {manifest}")
+    declarations = "".join(
+        f'\n    <uses-permission android:name="{permission}" tools:node="remove" />'
+        for permission in capture_permissions
+    )
+    text = text[:marker + 1] + declarations + text[marker + 1:]
+    changed = text != manifest.read_text(encoding="utf-8")
 
     # O app abre em retrato mesmo quando a rotação do aparelho está livre.
     # O plugin ScreenOrientation substitui esta orientação em tempo de execução
