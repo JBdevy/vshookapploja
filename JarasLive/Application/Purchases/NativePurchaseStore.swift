@@ -40,6 +40,11 @@ public struct NativeTrialEntitlement: Sendable {
     @Published public private(set) var loading = false
     @Published public private(set) var busy = false
     @Published public private(set) var notice = ""
+    /// Advertise the trial only after StoreKit returns both the zero-price
+    /// trial product and the price of the permanent unlock.
+    public var canStartTrial: Bool {
+        !loading && !unlocked && trialExpiresAt == nil && product != nil && trialProduct != nil
+    }
     private let client: any NativePurchaseClient
     private let secureStore: any SecureStore
     private let now: () -> Date
@@ -108,7 +113,7 @@ public struct NativeTrialEntitlement: Sendable {
     }
     public func load() async {
         guard !loading else { return }
-        loading = true; notice = ""
+        loading = true; notice = ""; product = nil; trialProduct = nil
         defer { loading = false }
         await refresh()
         do { product = try await client.product() }
@@ -139,7 +144,7 @@ public struct NativeTrialEntitlement: Sendable {
     }
     public func startTrial() async {
         // The paid price must be visible before starting, as required by Apple's trial rules.
-        guard !busy, trialProduct != nil, product != nil, !unlocked, trialExpiresAt == nil else { return }
+        guard !busy, canStartTrial else { return }
         busy = true; notice = ""
         defer { busy = false }
         do {

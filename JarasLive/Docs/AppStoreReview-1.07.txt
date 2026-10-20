@@ -1,0 +1,80 @@
+CATLIVE 1.07 — PREPARAÇÃO PARA APP REVIEW
+Consulta do catálogo: 20/10/2026.
+Este documento é uma preparação; não confirma envio dos produtos ou do vídeo.
+
+O QUE FOI CONFIRMADO
+- A revisão recebida se refere à versão 1.01, build 1021.
+- O código do build 1021 e o atual usam compras não consumíveis.
+- com.hookdeveloper.jaraslive.ipad.native: desbloqueio permanente por compra única.
+- com.hookdeveloper.jaraslive.ipad.native.trial7days: produto não consumível gratuito para iniciar 7 dias.
+- Os dois produtos estão READY_TO_SUBMIT, ainda não enviados à análise.
+- O produto de teste está com preço zero; a localização inglesa é "7-day Trial".
+- O build 1023 / versão 1.04 já foi processado. Não é o novo build 1.07.
+- Na 1.07, a oferta de teste só aparece quando o StoreKit fornece o teste gratuito
+  e o preço do desbloqueio permanente. A restauração continua disponível.
+
+ENVIO NO APP STORE CONNECT
+1. Após gerar e processar o novo build, conferir sua versão 1.07 e selecioná-lo.
+2. Na versão que será enviada, incluir AMBOS os produtos acima em
+   In-App Purchases and Subscriptions.
+3. Conferir as informações e a captura de tela de revisão de cada produto.
+   READY_TO_SUBMIT não equivale a WAITING_FOR_REVIEW.
+4. Incluir o link acessível do vídeo em App Review Information > Notes.
+5. Enviar a versão e as compras para análise. Só então responder confirmando o envio.
+6. Não criar uma assinatura nem uma oferta promocional de assinatura para esses
+   identificadores: o modelo implementado é compra única e teste separado.
+
+VÍDEO — IPAD FÍSICO COM A MESMA VERSÃO ENVIADA
+Usar um projeto de demonstração sem dados pessoais ou mídia de cliente.
+A gravação de tela do próprio iPad é aceita na mensagem da Apple.
+Confirmar a versão/build antes de gravar. Não usar o simulador como substituto.
+
+Sequência sugerida:
+1. Mostrar o dispositivo e a versão do CatLive; abrir a tela inicial.
+2. Mostrar que o Remoto é gratuito e o Nativo tem compra única.
+3. Mostrar a tela de compra: preço real localizado, teste de 7 dias disponível,
+   duração, ausência de renovação/cobrança automática, restauração de compras.
+4. Demonstrar o teste ou compra no ambiente de teste da Apple, sem registrar
+   senha, credenciais, dados de pagamento ou efetuar compra de produção.
+5. No Nativo: criar/abrir projeto, importar áudio/.ziplive pelo seletor Arquivos,
+   tocar/parar, navegar no Setlist, regular volume/pan/mute/solo, abrir FX,
+   demonstrar loops/Parts e teleprompter quando disponíveis.
+6. Demonstrar gravação e a solicitação real de microfone quando exibida pelo iOS.
+7. No Remoto: mostrar solicitação de rede local, conexão ao CatLive no computador,
+   controle como Diretor, troca de guias e acompanhamento como Observador.
+8. Mostrar configurações relevantes e retornar à tela inicial.
+
+Se uma permissão já foi concedida, explicar isso e mostrar seu estado no Ajustes;
+não simular nem inserir uma solicitação falsa na gravação. Para demonstrar o pedido
+inicial, usar instalação de teste adequada, preservando projetos do usuário.
+
+Não há vídeo pronto neste documento. O link só deve ser incluído após gravar,
+verificar o conteúdo e disponibilizá-lo sem autenticação para App Review.
+
+EXPLICAÇÃO PARA A APPLE — RASCUNHO EM INGLÊS
+Hello App Review,
+
+We would like to clarify the purchase model for CatLive Native on iPad.
+Native mode uses a one-time, non-consumable purchase, not an auto-renewable
+subscription. Remote mode remains free on iPad and iPhone.
+
+The permanent unlock is com.hookdeveloper.jaraslive.ipad.native.
+The separate free non-consumable product
+com.hookdeveloper.jaraslive.ipad.native.trial7days provides the "7-day Trial".
+This follows the time-based trial model for non-subscription apps described
+in Guideline 3.1.1. It does not renew or charge automatically.
+
+Before starting the trial, the app explains its duration, the Native features
+that require purchase after expiry, and the localized price of the permanent
+unlock. Trial expiry preserves projects and access to free Remote mode.
+The trial is timed from the original verified Apple transaction, so restoring
+purchases does not restart the seven days.
+
+ADICIONAR SOMENTE DEPOIS DE CONCLUIR:
+- Confirmação de que os dois produtos foram incluídos no envio para análise.
+- Número real do novo build 1.07 selecionado.
+- Link real do vídeo no iPad físico, com a versão mostrada na gravação.
+
+REFERÊNCIAS OFICIAIS
+https://developer.apple.com/app-store/review/guidelines/#in-app-purchase
+https://developer.apple.com/help/app-store-connect/manage-submissions-to-app-review/submit-an-in-app-purchase

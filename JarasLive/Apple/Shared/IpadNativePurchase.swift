@@ -195,25 +195,24 @@ extension NativePurchaseStore {
                     Button("Continue free trial", action: openNative).buttonStyle(.bordered).tint(green).disabled(store.busy)
                 } else if store.trialExpiresAt != nil {
                     Text("Your 7-day free trial has ended.").font(.subheadline).foregroundStyle(.orange)
-                } else {
+                } else if store.canStartTrial {
                     Button("Start 7-day free trial") { Task { await store.startTrial() } }
                         .buttonStyle(.bordered).tint(green).controlSize(.large)
-                        .disabled(store.busy || store.trialProduct == nil || store.product == nil)
+                        .disabled(store.busy)
                         .accessibilityIdentifier("native-purchase-trial")
-                    if !store.loading && store.trialProduct == nil {
-                        Text("The free trial is unavailable right now. Try again shortly.").font(.caption).foregroundStyle(.white.opacity(0.65))
-                    }
                 }
-                Text("Try all Native features for 7 days. Afterward, Native mode requires the one-time purchase shown above. Your projects are kept. Remote stays free. No automatic charge.")
-                    .font(.caption).foregroundStyle(.white.opacity(0.7)).multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+                if store.canStartTrial || (store.canAccessNative && store.trialExpiresAt != nil) {
+                    Text("Try all Native features for 7 days. Afterward, Native mode requires the one-time purchase shown above. Your projects are kept. Remote stays free. No automatic charge.")
+                        .font(.caption).foregroundStyle(.white.opacity(0.7)).multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             HStack(spacing: 16) {
                 Button { Task { await store.restore() } } label: {
                     Text("Restore purchases").frame(minHeight: 44).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(green).disabled(store.busy)
                     .accessibilityIdentifier("native-purchase-restore")
-                if (store.product == nil || (store.trialProduct == nil && store.trialExpiresAt == nil)) && !store.loading && !store.unlocked {
+                if store.product == nil && !store.loading && !store.unlocked {
                     Button { Task { await store.load() } } label: {
                         Text("Try again").frame(minHeight: 44).contentShape(Rectangle())
                     }.buttonStyle(.plain).foregroundStyle(green).disabled(store.busy)
