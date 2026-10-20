@@ -34,6 +34,10 @@ struct DirectorView: View {
             .environment(\.colorScheme, light ? .light : .dark)
             .onAppear { session.start() }
             .onChange(of: session.authenticated) { HookOrientation.set(tablet: $0 && session.tablet) }
+            .onChange(of: session.projectIdentity) { _ in
+                if ["premix", "songTools", "multiloop"].contains(sheet ?? "") { sheet = nil }
+                toolSong = .null
+            }
             .onChange(of: session.snapshot["blockedInterfaceAttemptRevision"]) { _ in syncAccessNotice() }
             .onDisappear { session.suspend() }
             .sheet(isPresented: Binding(get: { sheet != nil && !["recados", "settings", "projects", "playlists", "timer", "playHold", "songTools", "multiloop", "premix"].contains(sheet ?? "") }, set: { if !$0 { sheet = nil } })) { sheetContent }

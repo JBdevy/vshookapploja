@@ -77,6 +77,7 @@ enum HookMode: String, CaseIterable, Identifiable {
     }
     var selectedID: String { snapshot[page == "regions" ? "selectedRegionId" : "selectedPlaylistSongId"].string }
     var projectName: String { let name = snapshot.first("currentProjectName", "projectName").string; return name.isEmpty ? project.name : name }
+    var projectIdentity: String { DirectorPremixState.projectIdentity(snapshot) }
     var playlists: [JSON] { snapshot["playlists"].array }
     var activePlaylist: JSON { playlists.first { $0.first("id", "playlistId").string == snapshot["activePlaylistId"].string } ?? playlists.first { $0.name == snapshot["currentPlaylistName"].string } ?? playlists.first ?? .null }
     var playlistItems: [JSON] { expandedItems(activePlaylist.first("songs", "items", "tracks").array) }
@@ -116,9 +117,10 @@ enum HookMode: String, CaseIterable, Identifiable {
             var data = normalizedState(try await http.request(base, "/state", timeout: 2.8))
             guard !Task.isCancelled, generation == token else { return }
             guard data["connected"] != false, data["reaperOnline"] != false else { throw BridgeError(message: "O Hook Center está aberto, mas o projeto está desconectado.") }
-            let previousProject = snapshot.first("currentProjectId", "projectId", "projectPath").string
-            let incomingProject = data.first("currentProjectId", "projectId", "projectPath").string
-            if !previousProject.isEmpty && !incomingProject.isEmpty && previousProject != incomingProject {
+            let previousProject = projectIdentity
+            let incomingProject = DirectorPremixState.projectIdentity(data)
+            let projectChanged = !previousProject.isEmpty && !incomingProject.isEmpty && previousProject != incomingProject
+            if projectChanged {
                 volumeTasks.values.forEach { $0.cancel() }
                 volumeTasks = [:]; volumeRevisions = [:]
                 acceptedItemVolumes = [:]; itemVolumeBaselines = [:]; itemVolumePreviews = [:]
@@ -143,7 +145,7 @@ enum HookMode: String, CaseIterable, Identifiable {
                 if !repeatsArmed && !repeatsSelected { consumedPartID = "" }
             }
             remoteSnapshot = remoteSnapshot.merging(data)
-            var next = snapshot.merging(data)
+            var next = projectChanged ? data : snapshot.merging(data)
             // Confirm related fields together, and never acknowledge a local
             // action with a poll that started before that action was sent.
             let confirmed = Set(Dictionary(grouping: pending, by: { $0.value.revision }).compactMap { revision, fields -> Int? in
@@ -284,7 +286,8 @@ enum HookMode: String, CaseIterable, Identifiable {
         guard connected && authenticated else { message = "Conecte-se e entre como Diretor para controlar o projeto."; return }
         let projection = localCommandState(type, payload: payload)
         let changes = projection.state.merging(optimistic)
-        let outgoing: JSON = JSON.object(["page": .string(page), "activeTab": .string(page)]).merging(projection.payload)
+        let scope: JSON = type.hasPrefix("premix") ? DirectorPremixState.projectPayload(snapshot) : [:]
+        let outgoing: JSON = JSON.object(["page": .string(page), "activeTab": .string(page)]).merging(scope).merging(projection.payload)
         commandRevision += 1
         let revision = commandRevision
         let token = generation
@@ -479,10 +482,11 @@ enum HookMode: String, CaseIterable, Identifiable {
             itemVolumePreviews[id] = min(1, max(0, ratio))
         }
         volumeTasks[key]?.cancel()
+        let projectScope = DirectorPremixState.projectPayload(snapshot)
         volumeTasks[key] = Task {
             do {
                 try await Task.sleep(nanoseconds: 70_000_000)
-                var payload = (premix ? (song.map { targetPayload($0) } ?? target) : [:]).merging(["targetId": .string(id), "ratio": .number(min(1, max(0, ratio))), "volumeRatio": .number(min(1, max(0, ratio))), "view": .string(view)])
+                var payload = (premix ? projectScope.merging(song.map { targetPayload($0) } ?? target) : [:]).merging(["targetId": .string(id), "ratio": .number(min(1, max(0, ratio))), "volumeRatio": .number(min(1, max(0, ratio))), "view": .string(view)])
                 if premix {
                     payload["itemId"] = .string(id); payload["mediaItemId"] = .string(id)
                     if item["trackId"].exists { payload["trackId"] = item["trackId"] }

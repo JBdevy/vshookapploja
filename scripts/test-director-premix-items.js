@@ -55,6 +55,8 @@ function fixture() {
     'getPremixItemTrackId', 'getPremixSectionMarkerNumber',
     'getPremixSectionMarkerPosition', 'getPremixSectionTarget',
     'getPremixEffectiveTarget', 'getPremixFullScreenCacheKey',
+    'getProjects', 'getProjectItemId', 'getProjectItemIndex',
+    'getSnapshotActiveProjectSelection', 'getPremixProjectPayload',
     'getAppRenderSignature', 'renderPremixFullScreen',
   ]) vm.runInContext(extract(name), context)
   if (source.includes('  function getPremixStructureSignature(')) {

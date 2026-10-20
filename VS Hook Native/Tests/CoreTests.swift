@@ -211,6 +211,12 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         check(!DirectorPremixState.matches(.null, song: premixChild), "wait for the first Premix snapshot")
         check(!DirectorPremixState.matches(["selectedSongId": ""], song: premixChild), "explicitly missing native selection is not ready")
         check(DirectorPremixState.matches(["items": []], song: premixChild), "legacy Premix payloads without selection metadata remain compatible")
+        let tabA: JSON = ["projectPath": "same.rpp", "projectTabs": [["id": "project-a", "index": 0, "active": true]]]
+        let tabB: JSON = ["projectPath": "same.rpp", "projectTabs": [["id": "project-b", "index": 1, "active": true]]]
+        check(DirectorPremixState.projectIdentity(tabA) != DirectorPremixState.projectIdentity(tabB), "separate tabs of the same RPP have separate Premix identities")
+        check(DirectorPremixState.projectPayload(tabA)["premixProjectId"] == "project-a", "Premix commands carry the actual active project ID")
+        check(DirectorPremixState.projectIdentity(["projectPath": "legacy.rpp"]) == "legacy.rpp", "older snapshots identify the Premix project by path")
+        check(DirectorPremixState.projectPayload([:])["premixProjectId"] == "", "missing project IDs are empty strings rather than JSON null")
         check(MixerScale.visible(premixSnapshot["items"].array[0]), "store app keeps MEDIA-named audio on an ordinary track")
         check(!MixerScale.visible(["trackName": "MÉDIA", "name": "Piano take"]), "store app still excludes actual technical tracks")
         let musicalPremixTracks = ["Piano", "MÉDIA 2", "Cifras 2", "Teleprompt 3", "Teleprompt", "Timecode 2", "10 MEDIA", "#CIFRAS 3"]

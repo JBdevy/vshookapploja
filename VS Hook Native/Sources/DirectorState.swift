@@ -417,6 +417,18 @@ enum DirectorParts {
 }
 
 enum DirectorPremixState {
+    static func projectPayload(_ data: JSON) -> JSON {
+        let projects = data.first("projectTabs", "projects", "openProjects").array
+        let active = projects.first { $0["active"].bool || $0["isActive"].bool || $0["isCurrent"].bool }
+            ?? projects.first { data["activeProjectTabIndex"].exists && $0.first("index", "projectIndex", "tabIndex").int == data["activeProjectTabIndex"].int }
+            ?? .null
+        let id = data.first("currentProjectId", "projectId").exists ? data.first("currentProjectId", "projectId") : active.first("id", "projectId", "tabId")
+        let path = data["projectPath"].exists ? data["projectPath"] : active["projectPath"]
+        return ["premixProjectId": .string(id.string), "premixProjectPath": .string(path.string)]
+    }
+    static func projectIdentity(_ data: JSON) -> String {
+        projectPayload(data).first("premixProjectId", "premixProjectPath").string
+    }
     static func matches(_ data: JSON, song: JSON) -> Bool {
         guard data.exists else { return false }
         // Older bridges may omit selection metadata. When it is supplied,

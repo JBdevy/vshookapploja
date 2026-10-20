@@ -2659,6 +2659,55 @@
     }
   }
 
+  function getPremixProjectPayload(data = state.snapshot) {
+    const selection = getSnapshotActiveProjectSelection(data)
+    return {
+      premixProjectId: String(selection.project ? selection.id :
+        (data?.currentProjectId ?? data?.projectId ?? '')),
+      premixProjectPath: String(data?.projectPath || selection.project?.projectPath || ''),
+    }
+  }
+
+  function snapshotProjectChanged(next, previous) {
+    const before = getPremixProjectPayload(previous)
+    const after = getPremixProjectPayload(next)
+    if (before.premixProjectId && after.premixProjectId) {
+      return before.premixProjectId !== after.premixProjectId
+    }
+    return !!before.premixProjectPath && !!after.premixProjectPath &&
+      before.premixProjectPath !== after.premixProjectPath
+  }
+
+  function resetPremixForProjectChange() {
+    state.showPremixScreen = false
+    state.selectedPremixSongId = ''
+    state.selectedPremixItemId = ''
+    state.selectedPremixTrackId = ''
+    state.premixSongId = ''
+    state.premixSongName = ''
+    state.premixSongStart = 0
+    state.premixSongEnd = 0
+    state.premixPlaySongId = ''
+    state.premixPlaySongName = ''
+    state.premixPlaySongStart = 0
+    state.premixPlaySongEnd = 0
+    state.premixPlayMarkerNumber = 0
+    state.premixPlayMarkerEnumIndex = -1
+    state.showTabletSongToolsModal = false
+    state.tabletSongToolsTarget = null
+    state.hashRegionDrawerChildren = {}
+    premixFaderPointer = null
+    premixFaderLastTap = null
+    cancelPremixHold()
+    for (const cache of [premixFullScreenCache, premixTrackVolumeHold,
+      premixItemMuteHold, premixTrackSoloHold, premixUniqueSoloHold,
+      premixUniqueSoloVisualRestore, premixItemVolumeHold,
+      premixItemVolumeVisualCache, premixItemVolumeLocalUntil]) cache.clear()
+    for (const queue of latestVolumeCommands.values()) {
+      if (String(queue.pending?.type || '').startsWith('premix')) queue.pending = null
+    }
+  }
+
   function getProjectDirtyForUi(data = state.snapshot) {
     if (state.optimisticProjectSaved &&
         now() < Number(state.optimisticProjectSavedUntil || 0)) {
@@ -5926,6 +5975,13 @@
       return Promise.resolve({ ok: false, monitorOnly: true })
     }
     if (!commandType) return Promise.resolve(null)
+    if (commandType.startsWith('premix')) {
+      if (state.pendingProjectId && !snapshotConfirmsProjectSelection(
+        state.snapshot, state.pendingProjectId, state.pendingProjectIndex)) {
+        return Promise.resolve({ ok: false, projectSwitchPending: true })
+      }
+      payload = { ...getPremixProjectPayload(), ...payload }
+    }
     const queueInAnotherProject =
       commandType === 'queue_playlist_song' ||
       commandType === 'queue_region_song'
@@ -5998,8 +6054,12 @@
   }
 
   function queueLatestVolumeCommand(key, type, payload = {}) {
-    const commandKey = String(key || '')
-    if (!commandKey) return
+    if (!key) return
+    const premix = String(type || '').startsWith('premix')
+    if (premix) payload = { ...getPremixProjectPayload(), ...payload }
+    const commandKey = premix
+      ? `${payload.premixProjectId}|${payload.premixProjectPath}|${String(key)}`
+      : String(key)
     let queue = latestVolumeCommands.get(commandKey)
     if (!queue) {
       queue = { inFlight: false, pending: null }
@@ -6438,7 +6498,10 @@
       const data = await response.json()
       if (requestBridgeRevision !== bridgeTargetRevision) return
       const hadRenderableListContent = hasRenderableListContent(state.snapshot || {})
+      const projectChanged = snapshotProjectChanged(data, state.snapshot)
+      if (projectChanged) resetPremixForProjectChange()
       state.snapshot = mergeWithLastGoodSnapshot(data && typeof data === 'object' ? data : {}, state.snapshot)
+      if (projectChanged) scheduleRender(true)
       const gainedRenderableListContent = !hadRenderableListContent &&
         hasRenderableListContent(state.snapshot)
       syncOptimisticMixerRoutesFromBridge(data, state.snapshot)
@@ -6617,6 +6680,8 @@
   }
 
   function mergeWithLastGoodSnapshot(next, previous) {
+    // Um snapshot parcial de outra aba nao pode herdar listas ou Premix.
+    if (snapshotProjectChanged(next, previous)) return next
     // O snapshot de descoberta é deliberadamente leve. Depois que o Diretor
     // já recebeu o estado completo, ele nunca pode substituir transporte,
     // fila, controles e listas pelo estado vazio de standby.
@@ -9035,6 +9100,7 @@
       target?.start || 0,
       getAppTheme(),
       structure,
+      JSON.stringify(getPremixProjectPayload(data)),
     ].join('|')
     return `${signature.length}-${simpleHash(signature)}`
   }
@@ -17124,6 +17190,9 @@
       case 'project-select': {
         const projectId = el.getAttribute('data-project-id') || ''
         const projectIndex = Number(el.getAttribute('data-project-index') || 0)
+        if (!snapshotConfirmsProjectSelection(state.snapshot, projectId, projectIndex)) {
+          resetPremixForProjectChange()
+        }
         state.optimisticProjectSaved = false
         state.optimisticProjectSavedUntil = 0
         state.pendingProjectId = projectId
@@ -19586,6 +19655,7 @@
 
   function handleVshookBridgeFailover(event) {
     bridgeTargetRevision += 1
+    resetPremixForProjectChange()
     state.bridgeOnline = false
     state.lastGoodAt = 0
     state.lastPollAt = 0
