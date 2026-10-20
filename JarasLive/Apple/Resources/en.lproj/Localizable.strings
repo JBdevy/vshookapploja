@@ -1604,3 +1604,135 @@
 "Loading waveforms…" = "Loading waveforms…";
 
 "%ld REAPER items before the project start were ignored." = "%ld REAPER items before the project start were ignored.";
+
+"Phase inverted — restore phase" = "Phase inverted — restore phase";
+
+"Mono — switch to Stereo" = "Mono — switch to Stereo";
+
+"Stereo — switch to Mono" = "Stereo — switch to Mono";
+
+"Interface scale" = "Interface scale";
+
+"Continuous scroll" = "Continuous scroll";
+
+"Duplicate track" = "Duplicate track";
+
+"Duplicate tracks" = "Duplicate tracks";
+
+"REC Multitrack" = "REC Multitrack";
+
+"Track" = "Track";
+
+"Use Advanced setting" = "Use Advanced setting";
+
+"Mono inputs in sequence, all tracks armed, monitoring on." = "Mono inputs in sequence, all tracks armed, monitoring on.";
+
+"Choose between 1 and 128 channels." = "Choose between 1 and 128 channels.";
+
+"Fadeout…" = "Fadeout…";
+
+"Fadeout" = "Fadeout";
+
+"Duration" = "Duration";
+
+"Choose an unused shortcut. Space and standard shortcuts cannot control Fadeout." = "Choose an unused shortcut. Space and standard shortcuts cannot control Fadeout.";
+
+"Fadeout requires playback." = "Fadeout requires playback.";
+
+"Stop Sub Play before starting Fadeout." = "Stop Sub Play before starting Fadeout.";
+
+"Select tracks in the Fadeout settings." = "Select tracks in the Fadeout settings.";
+
+"Cancel Fadeout before starting Sub Play." = "Cancel Fadeout before starting Sub Play.";
+
+"Use the same key or MIDI control again to cancel Fadeout and restore the volumes." = "Use the same key or MIDI control again to cancel Fadeout and restore the volumes.";
+
+"Press a MIDI note or controller button." = "Press a MIDI note or controller button.";
+
+"External (VST3)" = "External (VST3)";
+
+"Same track, in sequence" = "Same track, in sequence";
+
+"Same track, same start time" = "Same track, same start time";
+
+"Company" = "Company";
+
+"Cancel scan" = "Cancel scan";
+
+"Scan cancelled." = "Scan cancelled.";
+
+"Destacar Setlist" = "Undock Setlist";
+
+"Setlist à direita" = "Setlist on the right";
+
+"Setlist à esquerda" = "Setlist on the left";
+
+"Parts à esquerda" = "Parts on the left";
+
+"Visibilidade das pistas" = "Track visibility";
+
+"Painel" = "Panel";
+
+"Mostrar Master à direita" = "Show Master on the right";
+
+"Mostrar Master à esquerda" = "Show Master on the left";
+
+"Show Mode" = "Show Mode";
+
+"When enabled, the Mac lid can be closed without stopping playback." = "When enabled, the Mac lid can be closed without stopping playback.";
+
+"When enabled, the notebook lid can be closed without stopping playback." = "When enabled, the notebook lid can be closed without stopping playback.";
+
+"The system did not confirm the Show Mode change." = "The system did not confirm the Show Mode change.";
+
+"Unable to read the Windows power plan." = "Unable to read the Windows power plan.";
+
+"Unable to read the Windows lid settings." = "Unable to read the Windows lid settings.";
+
+"Show Mode was not changed. Administrator authorization is required." = "Show Mode was not changed. Administrator authorization is required.";
+
+"Unable to change Show Mode. The previous lid settings were restored." = "Unable to change Show Mode. The previous lid settings were restored.";
+
+"Open in new tab" = "Open in new tab";
+
+"Previous project tab" = "Previous project tab";
+
+"Next project tab" = "Next project tab";
+
+"Close tab" = "Close tab";
+
+"Open another project?" = "Open another project?";
+
+"Open project" = "Open project";
+
+"Startup sound" = "Startup sound";
+
+"Undock Setlist" = "Undock Setlist";
+
+"Undock mixer" = "Undock mixer";
+
+"Dock mixer" = "Dock mixer";
+
+"Undock Parts" = "Undock Parts";
+
+"Dock Parts" = "Dock Parts";
+
+"Parts on the left" = "Parts on the left";
+
+"Keyboard style" = "Keyboard style";
+
+"Section start" = "START";
+
+"Allow microphone access in System Settings to record audio." = "Allow microphone access in System Settings to record audio.";
+
+"Recording level" = "Recording level";
+
+"Recording effects" = "Recording effects";
+
+"Pre-fader" = "Pre-fader";
+
+"Post-fader" = "Post-fader";
+
+"Pre-FX" = "Pre-FX";
+
+"Post-FX" = "Post-FX";

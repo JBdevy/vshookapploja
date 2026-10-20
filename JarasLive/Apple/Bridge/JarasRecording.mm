@@ -4,16 +4,28 @@
 #include <vector>
 #include <algorithm>
 #include <thread>
+#include <memory>
+#include <cmath>
 #include "../../Core/ThirdParty/Lame/lame.h"
+
+// Store encoder priming and padding in the standard Xing/LAME frame so that
+// AVAudioFile and the Windows gapless reader expose the same original timeline.
+static bool JarasWriteMP3GaplessTag(lame_t encoder, FILE *output,
+                                    unsigned char *buffer, size_t capacity) {
+    const auto bytes = lame_get_lametag_frame(encoder, buffer, capacity);
+    return bytes > 0 && bytes <= capacity && fseek(output, 0, SEEK_SET) == 0 &&
+           fwrite(buffer, 1, bytes, output) == bytes;
+}
 @implementation JarasCaptureRing {
     std::vector<float> _samples;
+    std::unique_ptr<std::atomic<float>[]> _inputPeaks;
     NSUInteger _channels, _capacity;
     std::atomic<uint64_t> _read, _write, _dropped;
     // Bit 0 accepts input; bit 1 belongs to the single realtime producer.
     std::atomic<unsigned> _captureState;
 }
 - (instancetype)initWithChannels:(NSUInteger)channels capacity:(NSUInteger)frames {
-    if ((self = [super init])) { _channels=channels; _capacity=frames; _samples.resize(channels*frames); _read=0; _write=0; _dropped=0; _captureState=1; }
+    if ((self = [super init])) { _channels=channels; _capacity=frames; _samples.resize(channels*frames); _read=0; _write=0; _dropped=0; _captureState=1; _inputPeaks=std::make_unique<std::atomic<float>[]>(channels); for(NSUInteger c=0;c<channels;++c) _inputPeaks[c]=0; }
     return self;
 }
 - (void)beginCapture {
@@ -28,6 +40,13 @@
 }
 - (void)pushBuffer:(AVAudioPCMBuffer *)buffer {
     if (!buffer.floatChannelData || buffer.format.channelCount != _channels || !_capacity) return;
+    // Input indication is independent of recording and monitor audibility.
+    for(NSUInteger c=0;c<_channels;++c) {
+        float peak=0;
+        for(NSUInteger f=0;f<buffer.frameLength;++f) peak=std::max(peak,std::abs(buffer.floatChannelData[c][f*buffer.stride]));
+        auto previous=_inputPeaks[c].load(std::memory_order_relaxed);
+        while(peak>previous && !_inputPeaks[c].compare_exchange_weak(previous,peak,std::memory_order_relaxed)) {}
+    }
     unsigned accepting = 1;
     if (!_captureState.compare_exchange_strong(accepting, 3, std::memory_order_acquire)) return;
     auto write=_write.load(std::memory_order_relaxed), read=_read.load(std::memory_order_acquire);
@@ -63,6 +82,7 @@
         return noErr;
     }];
 }
+- (float)takeInputPeak:(NSUInteger)channel { return channel<_channels ? _inputPeaks[channel].exchange(0,std::memory_order_relaxed) : 0; }
 - (NSUInteger)droppedFrames { return _dropped.load(std::memory_order_relaxed); }
 @end
 @implementation JarasMP3Encoder
@@ -74,7 +94,8 @@
     lame_set_out_samplerate(encoder,(int)file.processingFormat.sampleRate);
     lame_set_num_channels(encoder,channels); lame_set_brate(encoder,320); lame_set_quality(encoder,0);
     lame_set_mode(encoder,channels==1 ? MONO : JOINT_STEREO);
-    lame_set_bWriteVbrTag(encoder,0);
+    lame_set_bWriteVbrTag(encoder,1);
+    lame_set_write_id3tag_automatic(encoder,0);
     FILE *output=nullptr;
     BOOL ok=lame_init_params(encoder)>=0;
     if(ok) { output=fopen(destination.fileSystemRepresentation,"wb"); ok=output!=nullptr; }
@@ -87,6 +108,7 @@
         if(bytes<0 || fwrite(encoded,1,bytes,output)!=(size_t)bytes) { ok=NO; break; }
     }
     if(ok) { int bytes=lame_encode_flush(encoder,encoded,sizeof(encoded)); ok=bytes>=0 && fwrite(encoded,1,bytes,output)==(size_t)bytes; }
+    if(ok) ok=JarasWriteMP3GaplessTag(encoder,output,encoded,sizeof(encoded));
     if(output && fclose(output)!=0) ok=NO;
     lame_close(encoder);
     if(!ok && error && !*error) *error=[NSError errorWithDomain:@"JarasRecording" code:1 userInfo:@{NSLocalizedDescriptionKey:@"MP3 export failed. The 24-bit WAV recording has been preserved."}];
@@ -105,7 +127,8 @@
         if(!_encoder) return nil;
         lame_set_in_samplerate(_encoder,int(rate)); lame_set_out_samplerate(_encoder,int(rate));
         lame_set_num_channels(_encoder,_channels); lame_set_brate(_encoder,int(bitRate)); lame_set_quality(_encoder,0);
-        lame_set_mode(_encoder,_channels==1 ? MONO : JOINT_STEREO); lame_set_bWriteVbrTag(_encoder,0);
+        lame_set_mode(_encoder,_channels==1 ? MONO : JOINT_STEREO); lame_set_bWriteVbrTag(_encoder,1);
+        lame_set_write_id3tag_automatic(_encoder,0);
         if(lame_init_params(_encoder)<0 || !(_output=fopen(url.fileSystemRepresentation,"wb"))) {
             if(error) *error=[NSError errorWithDomain:@"JarasExport" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Could not create the MP3 output."}];
             return nil;
@@ -124,6 +147,7 @@
     if(!_encoder || !_output) return NO;
     int bytes=lame_encode_flush(_encoder,_encoded,sizeof(_encoded));
     BOOL ok=bytes>=0 && fwrite(_encoded,1,bytes,_output)==size_t(bytes);
+    if(ok) ok=JarasWriteMP3GaplessTag(_encoder,_output,_encoded,sizeof(_encoded));
     if(fclose(_output)!=0) ok=NO; _output=nullptr;
     lame_close(_encoder); _encoder=nullptr;
     if(!ok && error) *error=[NSError errorWithDomain:@"JarasExport" code:3 userInfo:@{NSLocalizedDescriptionKey:@"Could not finish the MP3 output."}];

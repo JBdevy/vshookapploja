@@ -97,7 +97,7 @@ typealias ProjectionImage = UIImage
         window.closesOnRightDoubleClick = true
         window.title = "CatLive Video"; window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 320,height: 180)
-        window.level = .floating; window.hidesOnDeactivate = false; window.delegate = self
+        window.followApplicationWindowOrder(); window.delegate = self
         let host = NSHostingView(rootView: VideoSurface(controller: self))
         if #available(macOS 13, *) { host.sizingOptions = [] }
         window.contentView = host
@@ -137,11 +137,7 @@ typealias ProjectionImage = UIImage
             if clipID != nil { reset() }
             message = ""; return
         }
-        func curve(_ amount: Double) -> Double { let value = min(1, max(0, amount)); return value * value * (3 - 2 * value) }
-        let elapsed = position - (clip.fadeTimelineStart ?? clip.startTime)
-        let duration = clip.fadeTimelineDuration ?? clip.duration
-        let fade = ((clip.fadeIn ?? 0) > 0 ? curve(elapsed / clip.fadeIn!) : 1) *
-                   ((clip.fadeOut ?? 0) > 0 ? curve((duration - elapsed) / clip.fadeOut!) : 1)
+        let fade = clip.fadeGain(at: position)
         if opacity != fade { opacity = fade }
         let url = directory.appendingPathComponent(file.path)
         if UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {

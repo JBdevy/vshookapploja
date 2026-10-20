@@ -1640,3 +1640,133 @@
 "Loading waveforms…" = "Carregando waveforms…";
 
 "%ld REAPER items before the project start were ignored." = "%ld itens do REAPER anteriores ao início do projeto foram ignorados.";
+
+"Phase inverted — restore phase" = "Fase invertida — restaurar fase";
+
+"Mono — switch to Stereo" = "Mono — alternar para Estéreo";
+
+"Stereo — switch to Mono" = "Estéreo — alternar para Mono";
+
+"Interface scale" = "Escala da interface";
+
+"Continuous scroll" = "Scroll contínuo";
+
+"Duplicate track" = "Duplicar pista";
+
+"Duplicate tracks" = "Duplicar pistas";
+
+"REC Multitrack" = "REC Multitrack";
+
+"Track" = "Pista";
+
+"Use Advanced setting" = "Usar configuração do Avançado";
+
+"Mono inputs in sequence, all tracks armed, monitoring on." = "Entradas mono em sequência, todas as pistas armadas e monitor ligado.";
+
+"Choose between 1 and 128 channels." = "Escolha entre 1 e 128 canais.";
+
+"Fadeout…" = "Fadeout…";
+
+"Fadeout" = "Fadeout";
+
+"Duration" = "Duração";
+
+"Choose an unused shortcut. Space and standard shortcuts cannot control Fadeout." = "Escolha um atalho livre. Espaço e atalhos padrão não podem controlar o Fadeout.";
+
+"Fadeout requires playback." = "O Fadeout precisa do transporte tocando.";
+
+"Stop Sub Play before starting Fadeout." = "Pare o Sub Play antes de iniciar o Fadeout.";
+
+"Select tracks in the Fadeout settings." = "Selecione pistas nas configurações de Fadeout.";
+
+"Cancel Fadeout before starting Sub Play." = "Cancele o Fadeout antes de iniciar o Sub Play.";
+
+"Use the same key or MIDI control again to cancel Fadeout and restore the volumes." = "Use a mesma tecla ou controle MIDI novamente para cancelar o Fadeout e restaurar os volumes.";
+
+"Press a MIDI note or controller button." = "Pressione uma nota MIDI ou um botão do controlador.";
+
+"External (VST3)" = "Externo (VST3)";
+
+"Same track, in sequence" = "Na mesma pista, em sequência";
+
+"Same track, same start time" = "Na mesma pista, iniciando juntos";
+
+"Company" = "Empresa";
+
+"Cancel scan" = "Cancelar escaneamento";
+
+"Scan cancelled." = "Escaneamento cancelado.";
+
+"Destacar Setlist" = "Destacar Setlist";
+
+"Setlist à direita" = "Setlist à direita";
+
+"Setlist à esquerda" = "Setlist à esquerda";
+
+"Parts à esquerda" = "Parts à esquerda";
+
+"Visibilidade das pistas" = "Visibilidade das pistas";
+
+"Painel" = "Painel";
+
+"Mostrar Master à direita" = "Mostrar Master à direita";
+
+"Mostrar Master à esquerda" = "Mostrar Master à esquerda";
+
+"Show Mode" = "Modo Show";
+
+"When enabled, the Mac lid can be closed without stopping playback." = "Quando ativo, a tampa do Mac pode ser fechada sem parar a reprodução.";
+
+"When enabled, the notebook lid can be closed without stopping playback." = "Quando ativo, a tampa do notebook pode ser fechada sem parar a reprodução.";
+
+"The system did not confirm the Show Mode change." = "O sistema não confirmou a alteração do Modo Show.";
+
+"Unable to read the Windows power plan." = "Não foi possível consultar o plano de energia do Windows.";
+
+"Unable to read the Windows lid settings." = "Não foi possível consultar a configuração da tampa do notebook.";
+
+"Show Mode was not changed. Administrator authorization is required." = "O Modo Show não foi alterado. É necessária a autorização do administrador.";
+
+"Unable to change Show Mode. The previous lid settings were restored." = "Não foi possível alterar o Modo Show. As configurações anteriores da tampa foram restauradas.";
+
+"Open in new tab" = "Abrir em nova aba";
+
+"Previous project tab" = "Aba anterior";
+
+"Next project tab" = "Próxima aba";
+
+"Close tab" = "Fechar aba";
+
+"The current project will be replaced by %@." = "O projeto atual será substituído por %@.";
+
+"Open another project?" = "Abrir outro projeto?";
+
+"Open project" = "Abrir projeto";
+
+"Startup sound" = "Som da inicialização";
+
+"Undock Setlist" = "Desindexar Setlist";
+
+"Undock Parts" = "Desindexar Parts";
+
+"Dock Parts" = "Indexar Parts";
+
+"Parts on the left" = "Parts à esquerda";
+
+"Keyboard style" = "Estilo do Keyboard";
+
+"Section start" = "INÍCIO";
+
+"Allow microphone access in System Settings to record audio." = "Permita o acesso ao microfone nos Ajustes do Sistema para gravar áudio.";
+
+"Recording level" = "Nível da gravação";
+
+"Recording effects" = "Efeitos na gravação";
+
+"Pre-fader" = "Pré-fader";
+
+"Post-fader" = "Pós-fader";
+
+"Pre-FX" = "Pré-FX";
+
+"Post-FX" = "Pós-FX";

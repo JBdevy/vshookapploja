@@ -38,7 +38,7 @@ struct NameColorEditor: View {
     private var rgb: UInt32 { UInt32(red.rounded()) << 16 | UInt32(green.rounded()) << 8 | UInt32(blue.rounded()) }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(LocalizedStringKey(title)).font(.headline)
+            Text(LocalizedStringKey(title)).font(.jarasHeadline)
             if showsName {
             TextField("Nome", text: $name)
                 .disabled(!nameEditable).textFieldStyle(.roundedBorder)
@@ -122,12 +122,12 @@ struct UnifyRegionEditor: View {
     @State private var shake = 0.0
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Unify regions").font(.headline)
+            Text("Unify regions").font(.jarasHeadline)
             TextField("Name", text: $name).textFieldStyle(.roundedBorder).focused($focused)
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(invalid ? Color.red : .clear))
                 .modifier(InputValidationShake(animatableData: shake))
                 .onSubmit(confirm).onChange(of: name) { _ in invalid = false }
-            if invalid { Text("Choose a name").font(.caption).foregroundStyle(.red) }
+            if invalid { Text("Choose a name").font(.jarasCaption).foregroundStyle(.red) }
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
@@ -415,7 +415,7 @@ final class RegionRightClickView: NSView, NativeTimelineInputObserver {
     override func mouseDragged(with event: NSEvent) {
         guard inputAvailable else { timelineInputGateChanged(blocked: true); return }
         if let startX {
-            let delta = event.locationInWindow.x - startX
+            let delta = (event.locationInWindow.x - startX) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).width))
             if abs(delta) >= (edge == 0 ? 3 : 0.5) || abs(event.locationInWindow.y - startY) >= 3 { didDrag = true }
             if didDrag { activeDrag?(delta, false, edge) }
         }
@@ -423,7 +423,7 @@ final class RegionRightClickView: NSView, NativeTimelineInputObserver {
     override func mouseUp(with event: NSEvent) {
         guard inputAvailable else { timelineInputGateChanged(blocked: true); return }
         if let startX {
-            let delta = event.locationInWindow.x - startX
+            let delta = (event.locationInWindow.x - startX) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).width))
             if didDrag || abs(delta) >= (edge == 0 ? 3 : 0.5) || abs(event.locationInWindow.y - startY) >= 3 { activeDrag?(delta, true, edge) }
             else if let activeDelete {
                 if regionRect.contains(convert(event.locationInWindow, from: nil)) { activeDelete() }
@@ -435,14 +435,34 @@ final class RegionRightClickView: NSView, NativeTimelineInputObserver {
     }
 }
 struct MarkerEditAnchor: NSViewRepresentable {
+    var normalCursor = false
     let edit: () -> Void
     let delete: () -> Void
     var seek: (() -> Void)? = nil
     var drag: ((CGFloat, Bool) -> Void)? = nil
     func makeNSView(context: Context) -> MarkerEditClickView { MarkerEditClickView() }
-    func updateNSView(_ view: MarkerEditClickView, context: Context) { view.action = edit; view.optionClick = delete; view.seek = seek; view.drag = drag }
+    func updateNSView(_ view: MarkerEditClickView, context: Context) { view.action = edit; view.optionClick = delete; view.seek = seek; view.drag = drag; view.normalCursor = normalCursor }
+}
+@MainActor private final class MarkerMenuActions: NSObject {
+    let edit: () -> Void, convert: () -> Void
+    init(edit: @escaping () -> Void, convert: @escaping () -> Void) { self.edit = edit; self.convert = convert }
+    @objc func editSelected() { edit() }
+    @objc func convertSelected() { convert() }
 }
 final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserver {
+    func showMarkerMenu(edit: @escaping () -> Void, convert: @escaping () -> Void) {
+        guard let event = NSApp.currentEvent, inputAvailable else { return }
+        let actions = MarkerMenuActions(edit: edit, convert: convert)
+        let menu = NSMenu()
+        for (title, action) in [("Edit", #selector(MarkerMenuActions.editSelected)), ("Converter para região", #selector(MarkerMenuActions.convertSelected))] {
+            let item = NSMenuItem(title: JarasLocalization.string(title), action: action, keyEquivalent: "")
+            item.target = actions; menu.addItem(item)
+        }
+        withExtendedLifetime(actions) { NSMenu.popUpContextMenu(menu, with: event, for: self) }
+    }
+
+    var normalCursor = false { didSet { if normalCursor != oldValue { window?.invalidateCursorRects(for: self) } } }
+    private var moveCursor: NSCursor { normalCursor ? .arrow : .resizeLeftRight }
     private var nativeInputBounds: CGRect?
     var hasActiveProjectedGesture: Bool { startX != nil }
     override var isFlipped: Bool { nativeInputBounds != nil || super.isFlipped }
@@ -460,7 +480,7 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
     func updateProjectedPointer(at point: CGPoint?) {
         guard startX == nil || point == nil else { return }
         let movable = point.map { inputAvailable && drag != nil && clickBounds.intersection(visibleRect).contains($0) } ?? false
-        let cursor = movable ? NSCursor.resizeLeftRight : NSCursor.arrow
+        let cursor = movable ? moveCursor : NSCursor.arrow
         if NSCursor.current !== cursor { cursor.set() }
     }
     private static let cursorTargets = NSHashTable<MarkerEditClickView>.weakObjects()
@@ -475,11 +495,12 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
     func timelinePendingClickCancelled() {
         if !didDrag { timelineInputGateChanged(blocked: true) }
     }
-    static func usesMoveCursor(for event: NSEvent) -> Bool {
-        cursorTargets.allObjects.contains { view in
+    static func usesMoveCursor(for event: NSEvent) -> Bool { cursor(for: event) != nil }
+    static func cursor(for event: NSEvent) -> NSCursor? {
+        cursorTargets.allObjects.first { view in
             view.window?.windowNumber == event.windowNumber && view.drag != nil && view.inputAvailable
                 && view.clickBounds.intersection(view.visibleRect).contains(view.convert(event.locationInWindow, from: nil))
-        }
+        }?.moveCursor
     }
     var seek: (() -> Void)?
     var drag: ((CGFloat, Bool) -> Void)? { didSet {
@@ -495,7 +516,7 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
         !interactionBlocked && !RightClickRouter.shared.interactionBlocked && !NativeTimelineInputGate.shared.isBlocked(window) && window?.attachedSheet == nil && !isHiddenOrHasHiddenAncestor
     }
     override func resetCursorRects() {
-        if nativeInputBounds == nil, drag != nil, inputAvailable { addCursorRect(bounds, cursor: .resizeLeftRight) }
+        if nativeInputBounds == nil, drag != nil, inputAvailable { addCursorRect(bounds, cursor: moveCursor) }
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -506,7 +527,7 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
     override func cursorUpdate(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseMoved(with event: NSEvent) {
-        if drag != nil, inputAvailable { NSCursor.resizeLeftRight.set() }
+        if drag != nil, inputAvailable { moveCursor.set() }
     }
     override func mouseExited(with event: NSEvent) {
         if drag != nil, startX == nil { NSCursor.arrow.set() }
@@ -534,13 +555,13 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
     override func mouseDragged(with event: NSEvent) {
         guard inputAvailable else { timelineInputGateChanged(blocked: true); return }
         guard let startX else { return }
-        let delta = event.locationInWindow.x - startX
+        let delta = (event.locationInWindow.x - startX) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).width))
         if hypot(delta, event.locationInWindow.y - startY) >= 3 { didDrag = true }
         if didDrag { activeDrag?(delta, false) }
     }
     override func mouseUp(with event: NSEvent) {
         guard let startX else { return }
-        let delta = event.locationInWindow.x - startX
+        let delta = (event.locationInWindow.x - startX) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).width))
         let finish = activeDrag, click = activeSeek
         let moved = didDrag || hypot(delta, event.locationInWindow.y - startY) >= 3
         self.startX = nil; activeDrag = nil; activeSeek = nil; didDrag = false

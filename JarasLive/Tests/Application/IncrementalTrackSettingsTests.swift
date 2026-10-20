@@ -152,6 +152,124 @@ private actor PresentationSaveStore: ProjectPersistence {
 }
 
 final class IncrementalTrackSettingsTests: XCTestCase {
+    @MainActor func testMixerSlotCopiesNativeParametersAndBypassWithoutMovingSource() throws {
+        var project = fixture()
+        var sourceFX = NativeFXSettings(); sourceFX.appendNative("EQ"); sourceFX.bands[2].gain = -9
+        sourceFX.setEnabled("EQ", enabled: false)
+        project.songs[0].tracks[1].fx = sourceFX
+        var destination = Track(id: UUID(), name: "Destination", role: .other)
+        var targetFX = NativeFXSettings(); targetFX.appendNative("Delay"); targetFX.delayTime = 1.7
+        destination.fx = targetFX; project.songs[0].tracks.append(destination)
+        let source = project.songs[0].tracks[1].id
+        let (show, executor) = try show(project)
+        let copied = try XCTUnwrap(show.copyFX(from: source, effect: "EQ", to: destination.id, before: "Delay"))
+        XCTAssertNotEqual(copied, "EQ")
+        XCTAssertEqual(show.fxSettings(source), sourceFX)
+        XCTAssertEqual(show.fxSettings(destination.id).effectKeys, [copied, "Delay"])
+        XCTAssertEqual(show.fxSettings(destination.id).settings(for: copied).bands, sourceFX.bands)
+        XCTAssertFalse(show.fxSettings(destination.id).isEnabled(copied))
+        XCTAssertEqual(show.fxSettings(destination.id).delayTime, 1.7)
+        XCTAssertEqual(executor.fullEdits, 0, "Slot copies must preserve live readers")
+        show.undo(); XCTAssertEqual(show.fxSettings(destination.id), targetFX)
+        show.redo(); XCTAssertEqual(show.fxSettings(destination.id).effectKeys, [copied, "Delay"])
+        let sameTrackCopy = try XCTUnwrap(show.copyFX(from: destination.id, effect: copied, to: destination.id, before: nil))
+        XCTAssertNotEqual(sameTrackCopy, copied)
+        XCTAssertEqual(show.fxSettings(destination.id).effectKeys, [copied, "Delay", sameTrackCopy])
+        XCTAssertEqual(show.fxSettings(destination.id).settings(for: sameTrackCopy), show.fxSettings(destination.id).settings(for: copied))
+        show.undo(); XCTAssertEqual(show.fxSettings(destination.id).effectKeys, [copied, "Delay"])
+    }
+    @MainActor func testMixerSlotCopiesLiveExternalLibraryAndControllerStateAndUndoesOnce() throws {
+        var project = fixture()
+        var sourceFX = NativeFXSettings()
+        var kontakt = ExternalPlugin(classID: String(repeating: "A", count: 32), name: "Kontakt", path: "/test/Kontakt.vst3", category: "Instrument")
+        kontakt.componentState = "b2xk"; kontakt.controllerState = "b2xk"; kontakt.bypassed = true
+        sourceFX.externalPlugins = [kontakt]; sourceFX.inserted = [kontakt.effectKey]
+        project.songs[0].tracks[1].fx = sourceFX
+        let destination = Track(id: UUID(), name: "Destination", role: .other)
+        project.songs[0].tracks.append(destination)
+        let source = project.songs[0].tracks[1].id
+        let (show, _) = try show(project)
+        show.prepareForFXChange = { [weak show] track, clip, effects in
+            XCTAssertNil(clip)
+            if track == source && effects.contains(kontakt.effectKey) {
+                _ = try show?.storeCapturedPluginState(source, identifier: kontakt.id,
+                    componentState: "bGlicmFyeS1lZGl0ZWQ=", controllerState: "dWktc3RhdGU=")
+            }
+        }
+        let key = try XCTUnwrap(show.copyFX(from: source, effect: kontakt.effectKey, to: destination.id, before: nil))
+        let plugin = try XCTUnwrap(show.fxSettings(destination.id).externalPlugins?.first)
+        XCTAssertNotEqual(plugin.id, kontakt.id); XCTAssertEqual(key, plugin.effectKey)
+        XCTAssertEqual(plugin.componentState, "bGlicmFyeS1lZGl0ZWQ=")
+        XCTAssertEqual(plugin.controllerState, "dWktc3RhdGU=")
+        XCTAssertTrue(plugin.bypassed); XCTAssertEqual(plugin.path, kontakt.path)
+        XCTAssertEqual(show.fxSettings(source).inserted, [kontakt.effectKey])
+        show.undo(); XCTAssertTrue(show.fxSettings(destination.id).inserted.isEmpty)
+        XCTAssertEqual(show.fxSettings(source).externalPlugins?[0].componentState, plugin.componentState)
+        show.redo(); XCTAssertEqual(show.fxSettings(destination.id).externalPlugins, [plugin])
+        show.prepareForFXChange = { _, _, _ in throw ProjectError.invalid("Capture failed") }
+        XCTAssertNil(show.copyFX(from: source, effect: kontakt.effectKey, to: destination.id, before: key))
+        XCTAssertEqual(show.fxSettings(destination.id).externalPlugins, [plugin])
+    }
+    @MainActor func testMixerFXBatchBypassRemovalAndLivePluginStateUndo() throws {
+        var project = fixture()
+        project.songs[0].tracks.append(Track(id: UUID(), name: "Second", role: .other))
+        project.songs[0].tracks.append(Track(id: UUID(), name: "Outside selection", role: .other))
+        var fx = NativeFXSettings()
+        fx.appendNative("EQ"); fx.bands[1].gain = 7
+        fx.appendNative("Compressor"); fx.threshold = -39
+        let duplicate = fx.appendNative("Compressor")
+        fx.setEnabled(duplicate, enabled: false)
+        var plugin = ExternalPlugin(classID: String(repeating: "A", count: 32), name: "Kontakt", path: "/test/Kontakt.vst3")
+        plugin.componentState = "b2xk"; plugin.controllerState = "b2xk"
+        fx.externalPlugins = [plugin]; fx.inserted.append(plugin.effectKey)
+        for index in 1...3 { project.songs[0].tracks[index].fx = fx }
+        project.masterFX = fx
+        let ids = project.songs[0].tracks.map(\.id)
+        let (controller, executor) = try show(project)
+        controller.setMixerTrackSelection([ids[1], ids[2]], anchor: ids[1])
+        controller.changeMixerFX(ids[1])
+        XCTAssertTrue(controller.fxSettings(ids[1]).allBypassed)
+        XCTAssertTrue(controller.fxSettings(ids[2]).allBypassed)
+        XCTAssertEqual(controller.fxSettings(ids[3]), fx)
+        XCTAssertEqual(controller.fxSettings(nil), fx)
+        XCTAssertEqual(executor.fullEdits, 0)
+        controller.undo()
+        XCTAssertEqual(controller.fxSettings(ids[1]), fx)
+        XCTAssertEqual(controller.fxSettings(ids[2]), fx)
+        controller.redo()
+        XCTAssertTrue(controller.fxSettings(ids[1]).allBypassed)
+        controller.changeMixerFX(ids[1])
+        XCTAssertTrue(controller.fxSettings(ids[1]).inserted.allSatisfy { controller.fxSettings(ids[1]).isEnabled($0) })
+        var captures: [UUID?] = []
+        controller.prepareForFXChange = { [weak controller] track, clip, effects in
+            XCTAssertNil(clip); XCTAssertTrue(effects.contains(plugin.effectKey))
+            captures.append(track)
+            _ = try controller?.storeCapturedPluginState(track, identifier: plugin.id, componentState: "bGlicmFyeS1lZGl0ZWQ=", controllerState: "dWktc3RhdGU=")
+        }
+        controller.changeMixerFX(ids[1], remove: true)
+        XCTAssertEqual(captures, [ids[1], ids[2]])
+        XCTAssertTrue(controller.fxSettings(ids[1]).inserted.isEmpty)
+        XCTAssertTrue(controller.fxSettings(ids[2]).inserted.isEmpty)
+        controller.undo()
+        for id in ids[1...2] {
+            XCTAssertEqual(controller.fxSettings(id).inserted, fx.inserted)
+            XCTAssertEqual(controller.fxSettings(id).bands[1].gain, 7)
+            XCTAssertEqual(controller.fxSettings(id).externalPlugins?[0].componentState, "bGlicmFyeS1lZGl0ZWQ=")
+            XCTAssertEqual(controller.fxSettings(id).externalPlugins?[0].controllerState, "dWktc3RhdGU=")
+        }
+        controller.redo()
+        XCTAssertTrue(controller.fxSettings(ids[1]).inserted.isEmpty)
+        XCTAssertTrue(controller.fxSettings(ids[2]).inserted.isEmpty)
+        captures = []
+        controller.removeFX(ids[3], effect: plugin.effectKey)
+        XCTAssertEqual(captures, [ids[3]])
+        controller.undo()
+        XCTAssertEqual(controller.fxSettings(ids[3]).externalPlugins?[0].componentState, "bGlicmFyeS1lZGl0ZWQ=")
+        controller.prepareForFXChange = { _, _, _ in throw ProjectError.invalid("Capture failed") }
+        let before = controller.fxSettings(ids[3])
+        controller.changeMixerFX(ids[3], remove: true)
+        XCTAssertEqual(controller.fxSettings(ids[3]), before, "Failed capture must leave the plugin installed")
+    }
     @MainActor func testBatchFXInsertionUndoesAndRedoesAllTracksInOneStep() throws {
         var project = fixture()
         project.songs[0].tracks.append(Track(id: UUID(), name: "Second", role: .other))

@@ -597,6 +597,7 @@ let rolesHost = DAWRemoteSession(role: .host, name: "Roles Mac")
 require(rolesHost.setDirectorPIN("0123"), "four digit PIN accepts leading zero")
 let rolesEndpoint = try rolesHost.testListen()
 var rolesFixture = fixture
+rolesFixture.projectTabs = [.init(id: UUID(), name: "Remote tab A", selected: true), .init(id: UUID(), name: "Remote tab B", selected: false)]
 var roleCommandCount = 0
 rolesHost.stateProviderForSession = { session in
     var state = rolesFixture; state.message = "panel-\(session.requestedPanel)"; return state
@@ -623,7 +624,8 @@ director.requestAccess(.director, pin: "0123")
 waitFor("correct PIN opens director") { director.accessMode == .director && director.remoteState != nil }
 observer.testConnect(rolesEndpoint, access: .observer)
 waitFor("observer joins alongside director without PIN") { observer.accessMode == .observer && observer.remoteState != nil }
-require(observer.remoteState!.tracks.isEmpty && observer.remoteState!.playlists == nil && observer.remoteState!.projects == nil, "observer receives no mixer or project controls")
+require(observer.remoteState!.tracks.isEmpty && observer.remoteState!.playlists == nil && observer.remoteState!.projects == nil && observer.remoteState!.projectTabs == nil, "observer receives no mixer, project controls or tabs")
+require(director.remoteState!.projectTabs == rolesFixture.projectTabs, "director sees the open project tabs")
 observer.testUnchecked(.init(project: project, action: .play))
 observer.testUnchecked(.init(project: project, action: .selectPlaylist))
 observer.send(.init(project: project, action: .remotePanel, value: 2))
@@ -656,7 +658,7 @@ rolesHost.stateProviderForSession = { session in
     var state = rolesFixture; state.project = reboundProject; state.message = "rebound-\(session.requestedPanel)"; return state
 }
 waitFor("secondary client follows replacement project provider instead of waiting on stale binding") {
-    observer.remoteState?.project == reboundProject && observer.remoteState?.message == "rebound-2"
+    observer.remoteState?.project == reboundProject && observer.remoteState?.message == "rebound-2" && observer.remoteState?.projectTabs == nil
 }
 observer.stop(); rolesHost.stop()
 // A notices login is independent from the director and never controls transport.
@@ -1167,3 +1169,38 @@ require(!loopRangeFixture.valid, "reversed loop range is rejected")
 loopRangeFixture.loopStart = 2; loopRangeFixture.loopEnd = .infinity
 require(!loopRangeFixture.valid, "nonfinite loop range is rejected")
 print("REMOTE_LOOP_BOUNDS_BACKWARD_COMPATIBLE_ROUNDTRIP_OK")
+
+if let directory = ProcessInfo.processInfo.environment["CATLIVE_COMPATIBILITY_INPUT"] {
+    let url = URL(fileURLWithPath: directory).appendingPathComponent("remote-state.json")
+    let json = try Data(contentsOf: url)
+    var packet = Data([0x4a, 0x4c, DAWRemoteWire.version, 2])
+    packet.append(json)
+    guard case .state(let windows) = try DAWRemoteWire.decode(packet) else {
+        fatalError("Windows did not produce a Remote state packet")
+    }
+    require(windows.valid && !windows.tracks.isEmpty, "Windows state must satisfy the production Swift protocol")
+    require(windows.teleprompters?.first?.index == 1 && windows.notices != nil && windows.timer != nil,
+            "Windows Remote must include native teleprompter, notices and timer state")
+    print("WINDOWS_REMOTE_SWIFT_PROTOCOL_COMPATIBILITY_OK")
+}
+
+// Tabs are optional for older hosts; selection targets a tab UUID, not a song or path.
+var tabFixture = fixture
+let remoteTabIDs = [UUID(), UUID()]
+tabFixture.projectTabs = [.init(id: remoteTabIDs[0], name: "Show A", selected: false),
+                          .init(id: remoteTabIDs[1], name: "Show B", selected: true)]
+if case .state(let decoded) = try DAWRemoteWire.decode(DAWRemoteWire.state(tabFixture)) {
+    require(decoded.projectTabs == tabFixture.projectTabs, "Project tabs survive the Remote wire packet")
+} else { fatalError("project tabs state packet") }
+var invalidTabFixture = tabFixture
+invalidTabFixture.projectTabs![0].selected = true
+require(!invalidTabFixture.valid, "Only one Remote tab can be selected")
+invalidTabFixture = tabFixture
+invalidTabFixture.projectTabs![1].id = remoteTabIDs[0]
+require(!invalidTabFixture.valid, "Remote tab identities must be unique")
+let selectTab = DAWRemoteCommand(project: project, action: .selectProjectTab, target: remoteTabIDs[0])
+require(selectTab.valid && DAWRemoteAccessRules.allows(selectTab, mode: .director), "Director can select an open project tab")
+require(!DAWRemoteAccessRules.allows(selectTab, mode: .observer) && !DAWRemoteAccessRules.allows(selectTab, mode: .notices), "Observers and notices cannot switch project tabs")
+require(!DAWRemoteCommand(project: project, action: .selectProjectTab).valid, "Tab selection needs a target")
+require(!DAWRemoteCommand(project: project, action: .selectProjectTab, target: remoteTabIDs[0], value: 1).valid, "Tab selection does not accept an index or transport value")
+print("REMOTE_PROJECT_TABS_PROTOCOL_AND_ACCESS_OK")

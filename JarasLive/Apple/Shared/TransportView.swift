@@ -1,11 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import Combine
+
+enum SetlistPlacement: String { case left, right, detached }
+
 struct TransportView: View {
     @State private var showingPortableExport = false
     @State private var showingExport = false
     @State private var showingResolume = false
     @State private var showingAdvanced = false
+    @State private var showingFadeout = false
     let show: ShowController
     @StateObject private var updates: ShowPresentationObserver
     var documents: ProjectDocuments? = nil
@@ -13,19 +17,31 @@ struct TransportView: View {
     var mediaDirectory: URL? = nil
     var toggleNavigation: () -> Void = {}
     var openSettings: () -> Void = {}
+    var openAdvanced: () -> Void = {}
     var mixerCollapsed = false
     var setlistCollapsed = false
     var toggleMixer: () -> Void = {}
     var toggleSetlist: () -> Void = {}
+    var setlistPlacement: SetlistPlacement = .right
+    var placeSetlist: (SetlistPlacement) -> Void = { _ in }
     init(show: ShowController, documents: ProjectDocuments? = nil, remotePresentation: Bool = false,
          mediaDirectory: URL? = nil, toggleNavigation: @escaping () -> Void = {}, openSettings: @escaping () -> Void = {},
+         openAdvanced: @escaping () -> Void = {},
          mixerCollapsed: Bool = false, setlistCollapsed: Bool = false,
-         toggleMixer: @escaping () -> Void = {}, toggleSetlist: @escaping () -> Void = {}) {
+         toggleMixer: @escaping () -> Void = {}, toggleSetlist: @escaping () -> Void = {},
+         setlistPlacement: SetlistPlacement = .right, placeSetlist: @escaping (SetlistPlacement) -> Void = { _ in }) {
         self.show = show; self.documents = documents; self.remotePresentation = remotePresentation
         self.mediaDirectory = mediaDirectory; self.toggleNavigation = toggleNavigation; self.openSettings = openSettings
+        self.openAdvanced = openAdvanced
         self.mixerCollapsed = mixerCollapsed; self.setlistCollapsed = setlistCollapsed
         self.toggleMixer = toggleMixer; self.toggleSetlist = toggleSetlist
+        self.setlistPlacement = setlistPlacement; self.placeSetlist = placeSetlist
         _updates = StateObject(wrappedValue: show.presentationObserver)
+    }
+    @ViewBuilder private func setlistPositionOption(_ title: String, _ placement: SetlistPlacement) -> some View {
+        Toggle(LocalizedStringKey(title), isOn: Binding(
+            get: { setlistPlacement == placement },
+            set: { selected in if selected { placeSetlist(placement) } }))
     }
     var body: some View {
         GeometryReader { geometry in
@@ -42,8 +58,12 @@ struct TransportView: View {
                 .frame(width: width, height: 86, alignment: .leading)
         }.frame(height: 86).clipped()
             .sheet(isPresented: $showingExport) { AudioExportView(project: show.snapshot.project, song: show.current, mediaDirectory: mediaDirectory) }
+            #if !os(macOS)
             .sheet(isPresented: $showingAdvanced) { AdvancedView(show: show, documents: documents) }
+            #endif
+            .sheet(isPresented: $showingFadeout) { TransportFadeoutSettings(show: show) }
             #if os(macOS)
+            .background { if !remotePresentation { TransportFadeoutPresenter(show: show).frame(width: 0, height: 0) } }
             .sheet(isPresented: $showingResolume) { ResolumeSettingsView(show: show) }
             .sheet(isPresented: $showingPortableExport) {
                 if let documents { PortableProjectExportView(documents: documents) }
@@ -65,34 +85,53 @@ struct TransportView: View {
             #if !os(macOS)
             VStack(spacing: 5) {
                 Button(action: toggleNavigation) {
-                    Image(systemName: "line.3.horizontal").font(.system(size: 18)).frame(width: buttonWidth, height: 25).contentShape(Rectangle())
+                    Image(systemName: "line.3.horizontal").font(.jarasSystem(size: 18)).frame(width: buttonWidth, height: 25).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel("Menu")
                 PanelCollapseButton(collapsed: mixerCollapsed, title: "Tracks", label: mixerCollapsed ? "Expandir Track-Mixer" : "Recolher Track-Mixer", tooltip: mixerCollapsed ? "Restaurar largura anterior do Track-Mixer" : "Ocultar Track-Mixer", action: toggleMixer)
                     .frame(height: 43)
             }.frame(width: buttonWidth)
             #endif
             MasterStrip(show: show).frame(width: 230)
+
             VStack(spacing: 5) {
                 HStack(spacing: spacing) {
+            #if os(macOS)
+            if let documents, documents.projectTabCount > 1 {
+                HStack(spacing: 2) {
+                    Button { documents.navigateProjectTab?(-1) } label: {
+                        Image(systemName: "chevron.left").font(.jarasSystem(size: 12, weight: .semibold)).frame(width: 25, height: 25).contentShape(Rectangle())
+                    }.buttonStyle(TransportButtonStyle(width: 25, height: 25)).disabled(documents.projectTabIndex == 0).opacity(documents.projectTabIndex == 0 ? 0.35 : 1).accessibilityLabel("Previous project tab").accessibilityIdentifier("previousProjectTab").jarasHelp(JarasLocalization.string("Previous project tab"))
+                    Button { documents.navigateProjectTab?(1) } label: {
+                        Image(systemName: "chevron.right").font(.jarasSystem(size: 12, weight: .semibold)).frame(width: 25, height: 25).contentShape(Rectangle())
+                    }.buttonStyle(TransportButtonStyle(width: 25, height: 25)).disabled(documents.projectTabIndex >= documents.projectTabCount - 1).opacity(documents.projectTabIndex >= documents.projectTabCount - 1 ? 0.35 : 1).accessibilityLabel("Next project tab").accessibilityIdentifier("nextProjectTab").jarasHelp(JarasLocalization.string("Next project tab"))
+                }.buttonStyle(.plain).disabled(documents.busy || TrackRecording.shared.recording || TrackRecording.shared.busy)
+            }
+            #endif
                     transportDisplay
                     HStack(spacing: 3) {
                         RegionTunerControl(show: show)
-                        Button { showingAdvanced = true } label: {
-                            Text(verbatim: "Advanced").font(.system(size: 10, weight: .semibold)).frame(width: 68, height: 25).contentShape(Rectangle())
+                        Button {
+                            #if os(macOS)
+                            openAdvanced()
+                            #else
+                            showingAdvanced = true
+                            #endif
+                        } label: {
+                            Text(verbatim: "Advanced").font(.jarasSystem(size: 10, weight: .semibold)).frame(width: 68, height: 25).contentShape(Rectangle())
                                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.6)))
                         }.buttonStyle(.plain).accessibilityLabel("Advanced").jarasHelp("Advanced")
                         #if os(macOS)
                         if !remotePresentation {
                         ForEach(["Resolume"], id: \.self) { title in
                             Button { showingResolume = true } label: {
-                                Text(verbatim: title).font(.system(size: 10, weight: .semibold)).frame(width: 64, height: 25).contentShape(Rectangle())
+                                Text(verbatim: title).font(.jarasSystem(size: 10, weight: .semibold)).frame(width: 64, height: 25).contentShape(Rectangle())
                                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.6)))
                             }.buttonStyle(.plain).accessibilityLabel(title)
                         }
                         }
                         #endif
                         Button { showingExport = true } label: {
-                            Text("Export").font(.system(size: 10, weight: .semibold)).frame(width: 82, height: 25).contentShape(Rectangle())
+                            Text("Export").font(.jarasSystem(size: 10, weight: .semibold)).frame(width: 82, height: 25).contentShape(Rectangle())
                                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.8)))
                         }.buttonStyle(.plain).jarasHelp("Export").accessibilityLabel("Export")
                         Button(action: openSettings) {
@@ -107,6 +146,7 @@ struct TransportView: View {
                             Image(systemName: transport.playing ? "stop.fill" : "play.fill").frame(width: 12)
                         }
                     }.buttonStyle(TransportButtonStyle(color: JarasTheme.green, active: transport.playing, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height)).jarasHelp(ControlMappings.shared.shortcutHelp(.playStop))
+                        .contextMenu { Button("Fadeout…") { showingFadeout = true } }
                     Button { show.send(.pause) } label: { Image(systemName: "pause.fill") }
                         .buttonStyle(TransportButtonStyle(fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height))
                         .accessibilityLabel("Pause").jarasHelp("Pause").disabled(!transport.playing)
@@ -115,7 +155,7 @@ struct TransportView: View {
                             Image(systemName: transport.subPlay.playing ? "pause.fill" : "play.fill")
                             Text("Sub Play")
                         }
-                    }.buttonStyle(TransportButtonStyle(color: JarasTheme.yellow, active: transport.subPlay.playing, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height))
+                    }.buttonStyle(TransportButtonStyle(color: Color(hex: 0xffff00), active: true, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height))
                         .disabled(!transport.playing).jarasHelp(ControlMappings.shared.shortcutHelp(.subPlayStop))
                     RepeatControl(active: transport.loop.enabled) { show.send(.toggleLoop) }
                     TransportRecordButton(show: show)
@@ -147,6 +187,15 @@ struct TransportView: View {
                     Spacer(minLength: 0)
                     PanelCollapseButton(collapsed: setlistCollapsed, title: "Setlist", label: setlistCollapsed ? "Expandir Setlist" : "Recolher Setlist", tooltip: setlistCollapsed ? "Restaurar largura anterior do Setlist" : "Ocultar Setlist", action: toggleSetlist)
                         .frame(width: buttonWidth, height: TransportControlMetrics.height)
+                        #if os(macOS)
+                        .contextMenu {
+                            if !remotePresentation {
+                                setlistPositionOption("Destacar Setlist", .detached)
+                                setlistPositionOption("Setlist à direita", .right)
+                                setlistPositionOption("Setlist à esquerda", .left)
+                            }
+                        }
+                        #endif
                 }
             }.frame(maxWidth: .infinity)
 
@@ -182,7 +231,7 @@ private struct TransportDisplaysLive: View {
             }
             Rectangle().fill(JarasTheme.line).frame(width: 1)
             TransportTimeDisplay(show: show).frame(width: 100)
-        }.font(.system(size: 12, weight: .semibold)).lineLimit(1).frame(height: 25)
+        }.font(.jarasSystem(size: 12, weight: .semibold)).lineLimit(1).frame(height: 25)
             .background(JarasTheme.display).clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(JarasTheme.line))
     }
@@ -301,7 +350,7 @@ struct FooterInformationDisplay: View {
             beatPhase: Self.loopBeatPhase(transport: show.snapshot.transport, song: show.current),
             steady: hasMultiLoop && show.snapshot.transport.ignoreNextAfter == nil && !show.snapshot.transport.loop.enabled,
             height: displayHeight, cornerRadius: embedded ? 0 : 4)
-        .font(.system(size: 10, weight: .bold)).lineLimit(1).truncationMode(.tail)
+        .font(.jarasSystem(size: 10, weight: .bold)).lineLimit(1).truncationMode(.tail)
             .overlay { if !embedded { RoundedRectangle(cornerRadius: 4).stroke(JarasTheme.line).allowsHitTesting(false) } }
             .accessibilityLabel("Information").accessibilityValue(message)
     }
@@ -337,7 +386,7 @@ private final class NativeTransportInformationView: NSView {
         let actions = Dictionary(uniqueKeysWithValues: ["position", "bounds", "string", "foregroundColor", "backgroundColor", "cornerRadius", "contentsScale"].map { ($0, NSNull()) })
         layer?.actions = actions; layer?.masksToBounds = true
         text.actions = actions; text.alignmentMode = .center; text.truncationMode = .end
-        text.font = NSFont.systemFont(ofSize: 10, weight: .bold); text.fontSize = 10
+        text.font = NSFont.jarasSystemFont(ofSize: 10, weight: .bold); text.fontSize = 10
         layer?.addSublayer(text)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -353,7 +402,7 @@ private final class NativeTransportInformationView: NSView {
     override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); updateGeometry() }
     private func updateGeometry() {
         text.contentsScale = window?.backingScaleFactor ?? 1
-        let height = ceil(NSFont.systemFont(ofSize: 10, weight: .bold).ascender - NSFont.systemFont(ofSize: 10, weight: .bold).descender + 2)
+        let height = ceil(NSFont.jarasSystemFont(ofSize: 10, weight: .bold).ascender - NSFont.jarasSystemFont(ofSize: 10, weight: .bold).descender + 2)
         let frame = CGRect(x: 3, y: max(0, (bounds.height - height) / 2), width: max(0, bounds.width - 6), height: height)
         if text.frame != frame { text.frame = frame }
     }
@@ -430,16 +479,16 @@ struct SongNameDisplay: View {
             VStack(alignment: .leading, spacing: spacing) {
                 HStack(spacing: 4 * (labelFontScale ?? fontScale)) {
                     Text(LocalizedStringKey(title))
-                        .font(.system(size: 8 * (labelFontScale ?? fontScale), weight: .bold, design: .rounded)).italic()
+                        .font(.jarasSystem(size: 8 * (labelFontScale ?? fontScale), weight: .bold, design: .rounded)).italic()
                         .lineLimit(1)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 7 * (labelFontScale ?? fontScale), weight: .bold))
+                        .font(.jarasSystem(size: 7 * (labelFontScale ?? fontScale), weight: .bold))
                 }
                 .foregroundStyle(JarasTheme.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
                 Text(verbatim: songText)
-                    .font(.system(size: 12 * fontScale, weight: .semibold)).foregroundStyle(color)
+                    .font(.jarasSystem(size: 12 * fontScale, weight: .semibold)).foregroundStyle(color)
                     .multilineTextAlignment(.leading).lineLimit(nil).minimumScaleFactor(0.6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -454,11 +503,11 @@ struct SongNameDisplay: View {
     }
     private var inlineDisplay: some View {
         HStack(spacing: 5 * fontScale) {
-            Text(LocalizedStringKey(title)).font(.system(size: 10 * (labelFontScale ?? fontScale), weight: .bold, design: .rounded)).italic()
+            Text(LocalizedStringKey(title)).font(.jarasSystem(size: 10 * (labelFontScale ?? fontScale), weight: .bold, design: .rounded)).italic()
                 .foregroundStyle(JarasTheme.secondary).fixedSize()
-            Image(systemName: "chevron.right").font(.system(size: 9 * (labelFontScale ?? fontScale), weight: .bold)).foregroundStyle(JarasTheme.secondary)
+            Image(systemName: "chevron.right").font(.jarasSystem(size: 9 * (labelFontScale ?? fontScale), weight: .bold)).foregroundStyle(JarasTheme.secondary)
             Text(verbatim: songText)
-                .font(.system(size: 12 * fontScale, weight: .semibold)).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.6)
+                .font(.jarasSystem(size: 12 * fontScale, weight: .semibold)).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.6)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.horizontal, 8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).clipped()
     }
@@ -484,7 +533,7 @@ struct FooterSongDisplays: View {
                 Rectangle().fill(JarasTheme.line).frame(width: 1)
                 SongNameDisplay(title: subPlaying ? "Sub Play" : "Queued", name: queued, bpm: queuedBPM, fontScale: fontScale, labelFontScale: labelFontScale, stackedHeight: stackedSongNames ? height : nil).frame(width: width * 0.45)
                 Rectangle().fill(JarasTheme.line).frame(width: 1)
-                Text(verbatim: duration).font(.system(size: 12 * fontScale, weight: .semibold)).monospacedDigit()
+                Text(verbatim: duration).font(.jarasSystem(size: 12 * fontScale, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(JarasTheme.yellow).lineLimit(1).minimumScaleFactor(0.3)
                     .frame(width: width * 0.10, height: height).accessibilityLabel("Playlist duration")
             }
@@ -501,7 +550,7 @@ private struct PanelCollapseButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Text(verbatim: title).font(.system(size: 9, weight: .bold))
+            Text(verbatim: title).font(.jarasSystem(size: 9, weight: .bold))
                 .foregroundStyle(collapsed ? Color.white : Color.black)
                 .frame(maxWidth: .infinity).frame(height: TransportControlMetrics.height)
                 .background(collapsed ? Color.red : JarasTheme.green)
@@ -510,6 +559,43 @@ private struct PanelCollapseButton: View {
             .accessibilityValue(collapsed ? "Hidden" : "Shown").jarasHelp(tooltip)
     }
 }
+
+#if os(macOS)
+/// Finish the time-signature edit even when the destination is not focusable.
+private struct TempoFieldOutsideClick: NSViewRepresentable {
+    let active: Bool
+    let dismiss: () -> Void
+    func makeNSView(context: Context) -> TempoFieldOutsideClickView { TempoFieldOutsideClickView() }
+    func updateNSView(_ view: TempoFieldOutsideClickView, context: Context) {
+        view.active = active; view.dismiss = dismiss
+    }
+}
+private final class TempoFieldOutsideClickView: NSView {
+    var active = false
+    var dismiss: (() -> Void)?
+    private var monitor: Any?
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+        guard window != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            self?.handle(event)
+            return event
+        }
+    }
+    func handle(_ event: NSEvent) {
+        guard active, let window, event.window === window,
+              !bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        // Do this before forwarding the event so the destination receives its
+        // usual click and may acquire focus itself (including the other field).
+        window.makeFirstResponder(nil)
+        active = false
+        dismiss?()
+    }
+    deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+}
+#endif
 
 private struct TempoControl: View {
     let show: ShowController
@@ -534,17 +620,25 @@ private struct TempoControl: View {
         HStack(spacing: 3) {
             TextField("4", text: $beats).focused($meterFocus, equals: 0)
                 .frame(width: 30).accessibilityLabel("Beats per bar")
+                #if os(macOS)
+                .background(TempoFieldOutsideClick(active: meterFocus == 0) { meterFocus = nil })
+                .immediateRightClick {}
+                #endif
                 .onSubmit { commitMeter(); meterFocus = nil }
             Text(verbatim: "/").foregroundStyle(JarasTheme.text).frame(width: 8).fixedSize()
             TextField("4", text: $unit).focused($meterFocus, equals: 1)
                 .frame(width: 30).accessibilityLabel("Beat unit")
+                #if os(macOS)
+                .background(TempoFieldOutsideClick(active: meterFocus == 1) { meterFocus = nil })
+                .immediateRightClick {}
+                #endif
                 .onSubmit { commitMeter(); meterFocus = nil }
             Button {
                 show.tapTempo()
             } label: {
                 VStack(spacing: 0) {
-                    Text(bpmText).font(.system(size: 15, weight: .semibold, design: .monospaced))
-                    Text("BPM").font(.system(size: 8))
+                    Text(bpmText).font(.jarasSystem(size: 15, weight: .semibold, design: .monospaced))
+                    Text("BPM").font(.jarasSystem(size: 8))
                 }.frame(width: 58, height: 35).background(JarasTheme.display)
                     .clipShape(RoundedRectangle(cornerRadius: 4)).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel("BPM · Tap tempo")
@@ -555,7 +649,7 @@ private struct TempoControl: View {
                 tempoStep(-1, symbol: "minus")
             }
         }.textFieldStyle(.roundedBorder).multilineTextAlignment(.center)
-            .font(.system(size: 13, design: .monospaced))
+            .font(.jarasSystem(size: 13, design: .monospaced))
             .padding(4)
             .background(JarasTheme.display, in: RoundedRectangle(cornerRadius: 4))
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(JarasTheme.line).allowsHitTesting(false))
@@ -566,11 +660,12 @@ private struct TempoControl: View {
             .onChange(of: show.snapshot.project.id) { _ in show.resetTapTempo(); refreshMeter() }
             .sheet(isPresented: $editing) {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("BPM").font(.headline)
+                    Text("BPM").font(.jarasHeadline)
                     TextField("BPM", text: $bpmDraft).textFieldStyle(.roundedBorder).focused($bpmFocus).onSubmit(commitBPM)
+                        .immediateRightClick {}
                         .overlay(RoundedRectangle(cornerRadius: 4).stroke(invalidBPM ? Color.red : .clear, lineWidth: 1.5))
                         .modifier(InputValidationShake(animatableData: bpmShake))
-                    if invalidBPM { Text("Enter a BPM between 60 and 300.").font(.caption).foregroundStyle(.red) }
+                    if invalidBPM { Text("Enter a BPM between 60 and 300.").font(.jarasCaption).foregroundStyle(.red) }
                     HStack {
                         Button("Cancel") { editing = false }.keyboardShortcut(.cancelAction)
                         Spacer()
@@ -581,7 +676,7 @@ private struct TempoControl: View {
     }
     private func tempoStep(_ delta: Double, symbol: String) -> some View {
         Button { show.resetTapTempo(); show.adjustTempo(delta) } label: {
-            Image(systemName: symbol).font(.system(size: 10, weight: .bold))
+            Image(systemName: symbol).font(.jarasSystem(size: 10, weight: .bold))
                 .frame(width: 25, height: 16).background(JarasTheme.display)
                 .clipShape(RoundedRectangle(cornerRadius: 3)).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel(delta > 0 ? "Increase BPM" : "Decrease BPM")
@@ -619,7 +714,7 @@ private struct ProjectSaveButton: View {
     var body: some View {
         Button { if pending { confirmingSave = true } } label: {
             Label(LocalizedStringKey(saving ? "Salvando…" : pending ? "Save" : "Salvo"), systemImage: pending ? "square.and.arrow.down" : "checkmark")
-                .font(.system(size: TransportControlMetrics.font, weight: .semibold))
+                .font(.jarasSystem(size: TransportControlMetrics.font, weight: .semibold))
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .frame(width: buttonWidth, height: TransportControlMetrics.height)
                 .foregroundStyle(pending ? JarasTheme.green : JarasTheme.secondary)
@@ -718,7 +813,7 @@ struct TransportButtonStyle: ButtonStyle {
     var height: CGFloat = 32
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: fontSize, weight: .semibold, design: .rounded))
+            .font(.jarasSystem(size: fontSize, weight: .semibold, design: .rounded))
             .lineLimit(1).minimumScaleFactor(0.75)
             .fixedSize(horizontal: width == nil, vertical: false)
             .padding(.horizontal, width == nil ? horizontalPadding : 0)
@@ -765,7 +860,7 @@ private struct MetronomeControl: View {
     }
     private var control: some View {
         Button { settings.enabled.toggle() } label: { Image(systemName: "metronome") }
-            .buttonStyle(TransportButtonStyle(color: settings.enabled ? JarasTheme.yellow : Color(hex: 0xc44545), active: true, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: 35))
+            .buttonStyle(TransportButtonStyle(color: settings.enabled ? JarasTheme.yellow : JarasTheme.panel, active: settings.enabled, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: 35))
             #if !os(macOS)
             .opacity(!settings.enabled || pulse ? 1 : 0.45)
             .onReceive(show.$snapshot.map { pulse(for: $0) }.removeDuplicates()) { pulse = $0 }
@@ -888,7 +983,7 @@ struct MetronomeEditor: View {
     @State private var importingA = true
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Metronome").font(.title2.bold())
+            Text("Metronome").font(.jarasTitle2.bold())
             Picker("Click sound", selection: $settings.preset) {
                 Text("Digital").tag("Digital")
                 Text("Wood").tag("Wood")
@@ -919,8 +1014,8 @@ struct MetronomeEditor: View {
             }
             volume("Click A", value: $settings.gainA)
             volume("Click B", value: $settings.gainB)
-            Text("A: first beat · B: remaining beats").font(.caption).foregroundStyle(.secondary)
-            if !settings.error.isEmpty { Text(verbatim: settings.error).foregroundStyle(.red).font(.caption) }
+            Text("A: first beat · B: remaining beats").font(.jarasCaption).foregroundStyle(.secondary)
+            if !settings.error.isEmpty { Text(verbatim: settings.error).foregroundStyle(.red).font(.jarasCaption) }
             HStack { Spacer(); Button("Close") { dismiss() }.keyboardShortcut(.defaultAction) }
         }.padding(20).frame(width: 400)
             .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
@@ -972,7 +1067,7 @@ private struct VideoToggleButton: View {
                 Image(systemName: "video")
                 Text("Video")
             }
-            .font(.system(size: TransportControlMetrics.font, weight: .semibold))
+            .font(.jarasSystem(size: TransportControlMetrics.font, weight: .semibold))
             .lineLimit(1)
             .frame(width: buttonWidth, height: TransportControlMetrics.height)
             .foregroundStyle(video.visible ? Color.black : JarasTheme.text)
@@ -1056,7 +1151,7 @@ struct MultiLoopBypassButton: View {
     var body: some View {
         Button(action: action) {
             Text(verbatim: "B\nY\nP\nA\nS\nS")
-                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                .font(.jarasSystem(size: 10, weight: .heavy, design: .monospaced))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.black)
                 .frame(width: 30, height: 82)

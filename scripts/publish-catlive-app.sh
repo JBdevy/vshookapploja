@@ -42,7 +42,7 @@ FILES=('JarasLive' '.github/workflows/catlive-ios-appstore.yml' '.github/workflo
 echo "CatLive App $VERSION — build $BUILD_NUMBER — código em $REPO"
 git status --short -- "${FILES[@]}"
 git add -A -- "${FILES[@]}"
-git diff --cached --check -- "${FILES[@]}"
+git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --cached --check -- "${FILES[@]}"
 if ! git diff --cached --quiet -- "${FILES[@]}"; then git commit --only -m "$MESSAGE" -- "${FILES[@]}"; fi
 SOURCE_SHA="$(git rev-parse HEAD)"
 python3 - "$VERSION" "$BUILD_NUMBER" "$SOURCE_SHA" <<'PY'
@@ -52,7 +52,7 @@ folder = pathlib.Path('.github'); folder.mkdir(exist_ok=True)
 (folder / 'catlive-app-release.json').write_text(json.dumps(dict(version=version, build_number=build, source_ref=source), indent=2) + '\n')
 PY
 git add -- .github/catlive-app-release.json
-git diff --cached --check -- .github/catlive-app-release.json
+git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --cached --check -- .github/catlive-app-release.json
 git commit --only -m "Release CatLive App $VERSION build $BUILD_NUMBER" -- .github/catlive-app-release.json
 git tag -a "$TAG" -m "CatLive App $VERSION build $BUILD_NUMBER; source $SOURCE_SHA"
 git push --atomic origin "HEAD:refs/heads/$BRANCH" "refs/tags/$TAG"

@@ -50,6 +50,7 @@ private let barLaneHeight = markerLaneHeight
 struct TimelineGridView: View {
     let show: ShowController
     @StateObject private var updates: ShowTimelinePresentationObserver
+    @ObservedObject private var trackVisibility = TrackVisibilityPreferences.shared
     let documents: ProjectDocuments
     var remotePresentation = false
     var toggleMixer: () -> Void = {}
@@ -59,7 +60,7 @@ struct TimelineGridView: View {
         _updates = StateObject(wrappedValue: ShowTimelinePresentationObserver(show: show))
     }
     var body: some View {
-        TimelineGridContent(show: show, documents: documents, presentation: updates.state, revision: show.projectRevision, mixerRevision: show.mixerPlaybackRevision, songID: show.current?.id, focusRequest: show.regionFocusRequest, selectedRegion: show.selectedTimelineRegion, editPosition: show.snapshot.transport.editPosition ?? show.snapshot.transport.position, remotePresentation: remotePresentation, toggleMixer: toggleMixer).equatable()
+        TimelineGridContent(show: show, documents: documents, presentation: updates.state, revision: show.projectRevision, mixerRevision: show.mixerPlaybackRevision, songID: show.current?.id, focusRequest: show.regionFocusRequest, selectedRegion: show.selectedTimelineRegion, editPosition: show.snapshot.transport.editPosition ?? show.snapshot.transport.position, remotePresentation: remotePresentation, toggleMixer: toggleMixer, visibility: remotePresentation ? TrackVisibilityState() : trackVisibility.state(for: show.snapshot.project.id)).equatable()
     }
 }
 private struct TimelineLiveMixerRow<Content: View>: View {
@@ -74,7 +75,7 @@ private struct TimelineLiveMixerRow<Content: View>: View {
     }
     var body: some View {
         let tracks = show.current?.tracks ?? []
-        let current = tracks.indices.contains(index) && tracks[index].id == track.id ? tracks[index] : track
+        let current = tracks.indices.contains(index) && tracks[index].id == track.id ? tracks[index] : tracks.first { $0.id == track.id } ?? track
         content(current)
     }
 }
@@ -91,8 +92,9 @@ private struct TimelineGridContent: View, Equatable {
     let editPosition: Double
     let toggleMixer: () -> Void
     let remotePresentation: Bool
+    let visibility: TrackVisibilityState
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.remotePresentation == rhs.remotePresentation && lhs.show === rhs.show && lhs.presentation == rhs.presentation
+        lhs.remotePresentation == rhs.remotePresentation && lhs.show === rhs.show && lhs.presentation == rhs.presentation && lhs.visibility == rhs.visibility
     }
     @ObservedObject private var recordingLayout = RecordingLaneLayout.shared
     @Environment(\.locale) private var locale
@@ -144,7 +146,7 @@ private struct TimelineGridContent: View, Equatable {
     @State private var resizingItem: UUID?
     @State private var resizedItemStart = 0.0
     @State private var resizedItemEnd = 0.0
-    @State private var itemGainPreview = ItemGainPreview()
+    @State private var itemWaveformPreview = ItemWaveformPreview()
     @State private var insertionPreview = GridInsertionPreview()
     @State private var itemExport: ItemAudioExportRequest?
     @State private var regionExport: RegionAudioExportRequest?
@@ -165,6 +167,7 @@ private struct TimelineGridContent: View, Equatable {
     @State private var selectedTrack: UUID?
     @State private var selectedTracks = Set<UUID>()
     @State private var addingTrack = false
+    @State private var showingTrackVisibility = false
     @State private var draggingMain = false
     @State private var draggingSub = false
     @AppStorage("jaras.trackColumnWidth") private var savedLabelWidth = Double(SidebarWidthLimits.trackMixer)
@@ -175,7 +178,8 @@ private struct TimelineGridContent: View, Equatable {
     @State private var trackHeightPreview: [UUID: Double] = [:]
     #if os(macOS)
     #endif
-    init(show: ShowController, documents: ProjectDocuments, presentation: ShowTimelinePresentationState, revision: UInt64, mixerRevision: UInt64, songID: UUID?, focusRequest: UUID, selectedRegion: UUID?, editPosition: Double, remotePresentation: Bool, toggleMixer: @escaping () -> Void) {
+    init(show: ShowController, documents: ProjectDocuments, presentation: ShowTimelinePresentationState, revision: UInt64, mixerRevision: UInt64, songID: UUID?, focusRequest: UUID, selectedRegion: UUID?, editPosition: Double, remotePresentation: Bool, toggleMixer: @escaping () -> Void, visibility: TrackVisibilityState) {
+        self.visibility = visibility
         self.presentation = presentation
         self.show = show; self.documents = documents; self.revision = revision; self.mixerRevision = mixerRevision; self.songID = songID
         self.focusRequest = focusRequest; self.selectedRegion = selectedRegion; self.editPosition = editPosition
@@ -183,6 +187,11 @@ private struct TimelineGridContent: View, Equatable {
         let prefix = remotePresentation ? "jaras.remote." : "jaras."
         _savedLabelWidth = AppStorage(wrappedValue: remotePresentation ? 280 : Double(SidebarWidthLimits.trackMixer), prefix + "trackColumnWidth")
         _restoreLabelWidth = AppStorage(wrappedValue: remotePresentation ? 280 : 248, prefix + "trackColumnRestoreWidth")
+    }
+    private var visibleSong: Song? {
+        guard var song = show.current else { return nil }
+        song.tracks = visibility.visibleTracks(in: song.tracks, area: .trackMixer)
+        return song
     }
     private var dividerWidth: CGFloat {
         #if os(macOS)
@@ -194,11 +203,12 @@ private struct TimelineGridContent: View, Equatable {
     var body: some View {
         VStack(spacing: 0) {
             GeometryReader { geometry in
-                if let originalSong = show.current {
+                if let originalSong = visibleSong {
                     let projectID = show.snapshot.project.id
-                    let renderKey = TimelineRenderKey(revision: revision, songID: songID, movingClip: movingClip, movingStart: movingStart, movingTrack: movingTrack, movingRegion: movingRegion, regionDelta: regionDelta, resizingRegion: resizingRegion, resizedStart: resizedStart, resizedEnd: resizedEnd, recordingRevision: recordingLayout.revision, resizingItem: resizingItem, itemStart: resizedItemStart, itemEnd: resizedItemEnd, projectID: projectID)
+                    let renderKey = TimelineRenderKey(revision: revision, songID: songID, movingClip: movingClip, movingStart: movingStart, movingTrack: movingTrack, movingRegion: movingRegion, regionDelta: regionDelta, resizingRegion: resizingRegion, resizedStart: resizedStart, resizedEnd: resizedEnd, recordingRevision: recordingLayout.revision, resizingItem: resizingItem, itemStart: resizedItemStart, itemEnd: resizedItemEnd, projectID: projectID, hiddenTracks: visibility.trackMixer)
                     let song = previewTrackHeights(previewItemEdit(previewClipMove(previewRegionResize(previewRegionMove(originalSong)))))
-                    let renderMetadata = renderMetadataCache.metadata(song: song, key: renderKey)
+                    let renderMetadata = renderMetadataCache.metadata(song: song, key: renderKey,
+                        hasSolo: show.current?.tracks.contains(where: { $0.solo }))
                     let regionLanes = rowLayoutCache.regionLanes(song.parts, key: renderKey)
                     let rulerHeight = CGFloat(regionLanes.count) * 16 + markerLaneHeight + tempoLaneHeight + barLaneHeight
                     let maximumLabelWidth = max(161, min(486.5, geometry.size.width - 260))
@@ -233,8 +243,8 @@ private struct TimelineGridContent: View, Equatable {
                                 project: show.snapshot.project.id,
                                 mixerIdentity: TimelineMixerIdentity(revision: revision, mixerRevision: mixerRevision, song: songID, width: mountedLabelWidth,
                                     viewportHeight: ceil(geometry.size.height / 512) * 512, heights: rows.heights, selection: selectedTracks,
-                                    documentHeight: contentHeight, rulerHeight: rulerHeight, widthViewport: resizeViewport)) {
-                                TimelineMixerLayer(position: verticalScroll.tiles, identity: TimelineMixerIdentity(revision: revision, mixerRevision: mixerRevision, song: songID, width: mountedLabelWidth, viewportHeight: ceil(geometry.size.height / 512) * 512, heights: rows.heights, selection: selectedTracks, documentHeight: contentHeight, rulerHeight: rulerHeight, widthViewport: resizeViewport)) { visibleY in
+                                    documentHeight: contentHeight, rulerHeight: rulerHeight, widthViewport: resizeViewport, hiddenTracks: visibility.trackMixer)) {
+                                TimelineMixerLayer(position: verticalScroll.tiles, identity: TimelineMixerIdentity(revision: revision, mixerRevision: mixerRevision, song: songID, width: mountedLabelWidth, viewportHeight: ceil(geometry.size.height / 512) * 512, heights: rows.heights, selection: selectedTracks, documentHeight: contentHeight, rulerHeight: rulerHeight, widthViewport: resizeViewport, hiddenTracks: visibility.trackMixer)) { visibleY in
                                 Group {
                                 #if os(macOS)
                                 let slots = mixerRowPool.slots(ids: song.tracks.map(\.id), offsets: rows.offsets, heights: rows.heights,
@@ -247,7 +257,7 @@ private struct TimelineGridContent: View, Equatable {
                                     ForEach(Array(slots.enumerated()), id: \.element.id) { slotIndex, slot in
                                         let index = slot.index
                                         let track = song.tracks[index]
-                                            let silenced = song.isSilenced(track)
+                                            let silenced = show.current?.isSilenced(track) ?? song.isSilenced(track)
                                             VStack(spacing: 0) {
                                             TimelineLiveMixerRow(show: show, track: track, index: index) { liveTrack in
                                             TrackMixerRow(show: show, projectID: show.snapshot.project.id, track: mixerMetadata(liveTrack), trackSelection: selectedTracks, nextTrack: index + 1 < song.tracks.count ? song.tracks[index + 1].id : nil, number: index + 1, selected: track.kind == .standard && selectedTracks.contains(track.id), silenced: silenced, showsMeterScale: true, showsFader: (slot.width ?? mountedLabelWidth) >= 180, compactHeight: rows.audioHeights[index] < 64, minimalHeight: rows.audioHeights[index] < 56, isFolder: index + 1 < song.tracks.count && song.tracks[index + 1].parentTrackID == track.id, groupDepth: groupDepths[track.id] ?? 0, lastChild: index + 1 == song.tracks.count || song.tracks[index + 1].parentTrackID != track.parentTrackID, groupSelection: selectedTracks.contains(track.id) && selectedTracks.count > 1 ? { show.groupTracks(selectedTracks) } : nil, select: { selectTrack(track.id, in: song) }, importVideo: { documents.chooseVideo(track: track.id) }, projectDirectory: documents.currentURL?.deletingLastPathComponent(), deleteTracks: { requestTrackDeletion($0) }).equatable()
@@ -261,7 +271,7 @@ private struct TimelineGridContent: View, Equatable {
                                                         top: rulerHeight, offsets: rows.offsets, rowHeights: rows.heights) {
                                     ForEach(Array(song.tracks.enumerated()), id: \.element.id) { index, track in
                                         if mixerRowIsMounted(start: rulerHeight + rows.offsets[index], height: rows.heights[index], visibleY: visibleY, viewportHeight: ceil(geometry.size.height / 512) * 512) {
-                                            let silenced = song.isSilenced(track)
+                                            let silenced = show.current?.isSilenced(track) ?? song.isSilenced(track)
                                             VStack(spacing: 0) {
                                             TimelineLiveMixerRow(show: show, track: track, index: index) { liveTrack in
                                             TrackMixerRow(show: show, projectID: show.snapshot.project.id, track: mixerMetadata(liveTrack), trackSelection: selectedTracks, nextTrack: index + 1 < song.tracks.count ? song.tracks[index + 1].id : nil, number: index + 1, selected: track.kind == .standard && selectedTracks.contains(track.id), silenced: silenced, showsMeterScale: true, showsFader: mountedLabelWidth >= 180, compactHeight: rows.audioHeights[index] < 64, minimalHeight: rows.audioHeights[index] < 56, isFolder: index + 1 < song.tracks.count && song.tracks[index + 1].parentTrackID == track.id, groupDepth: groupDepths[track.id] ?? 0, lastChild: index + 1 == song.tracks.count || song.tracks[index + 1].parentTrackID != track.parentTrackID, groupSelection: selectedTracks.contains(track.id) && selectedTracks.count > 1 ? { show.groupTracks(selectedTracks) } : nil, select: { selectTrack(track.id, in: song) }, importVideo: { documents.chooseVideo(track: track.id) }, projectDirectory: documents.currentURL?.deletingLastPathComponent(), deleteTracks: { requestTrackDeletion($0) }).equatable()
@@ -281,7 +291,11 @@ private struct TimelineGridContent: View, Equatable {
                                     }
                                 }.equatable().frame(width: labelWidth, alignment: .leading).clipped().allowsHitTesting(labelWidth > 0)
                                     #if os(macOS)
-                                    .background(EditorSelectionArea(scope: .tracks) { show.selectAllMixerTracks() })
+                                    .background(EditorSelectionArea(scope: .tracks) {
+                                        let tracks = song.tracks.filter { $0.kind == .standard }
+                                        show.setMixerTrackSelection(Set(tracks.map(\.id)), anchor: tracks.first?.id)
+                                        return !tracks.isEmpty
+                                    })
                                     .background(TimelineMixerHeightWheelInput { factor, smoothWheel in
                                     changeTrackHeight(factor, smoothWheel: smoothWheel, rows: rows)
                                     })
@@ -295,7 +309,7 @@ private struct TimelineGridContent: View, Equatable {
                         song.tracks.enumerated().flatMap { index, track -> [GridSelectionItem] in
                         let y = rulerHeight + rows.offsets[index]
                         return track.clips.map { clip in
-                            GridSelectionItem(id: clip.id, rect: CGRect(x: clip.startTime, y: y + CGFloat(rows.lanes[index].lanes[clip.id] ?? 0) * rows.laneHeights[index] + 3, width: clip.duration, height: rows.laneHeights[index] - 6), gain: clip.gain ?? 1, phaseInverted: clip.phaseInverted == true, pan: clip.pan ?? 0, editable: track.kind == .standard || clip.isProjectionMedia, movable: track.kind != .timecode || clip.isProjectionMedia, contextActions: track.kind == .standard || clip.isProjectionMedia, audioExportable: track.kind == .standard && clip.midi == nil && (clip.audioFile ?? track.audioFile) != nil, midiEditable: clip.midi != nil, textEditable: track.kind.isText && !clip.isProjectionMedia, name: renderMetadata.itemTitle(for: clip, track: track), muted: clip.muted == true, hasFX: !(clip.fx?.inserted.isEmpty ?? true), fxBypassed: clip.fxBypassed == true, duration: clip.duration, fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0, trackIndex: index, laneIndex: rows.lanes[index].lanes[clip.id] ?? 0)
+                            GridSelectionItem(id: clip.id, rect: CGRect(x: clip.startTime, y: y + CGFloat(rows.lanes[index].lanes[clip.id] ?? 0) * rows.laneHeights[index] + 3, width: clip.duration, height: rows.laneHeights[index] - 6), gain: clip.gain ?? 1, phaseInverted: clip.phaseInverted == true, pan: clip.pan ?? 0, editable: track.kind == .standard || clip.isProjectionMedia, resizable: !show.timelineMovementLocked, movable: !show.timelineMovementLocked && (track.kind != .timecode || clip.isProjectionMedia), contextActions: track.kind == .standard || clip.isProjectionMedia, audioExportable: track.kind == .standard && clip.midi == nil && (clip.audioFile ?? track.audioFile) != nil, midiEditable: clip.midi != nil, textEditable: track.kind.isText && !clip.isProjectionMedia, name: renderMetadata.itemTitle(for: clip, track: track), muted: clip.muted == true, hasFX: !(clip.fx?.inserted.isEmpty ?? true), fxBypassed: clip.fxBypassed == true, duration: clip.duration, fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0, fadeInCurve: clip.fadeInCurve ?? 0, fadeInSCurve: clip.fadeInSCurve ?? 1, fadeOutCurve: clip.fadeOutCurve ?? 0, fadeOutSCurve: clip.fadeOutSCurve ?? 1, trackIndex: index, laneIndex: rows.lanes[index].lanes[clip.id] ?? 0)
                         }
                     }
                     }
@@ -352,9 +366,9 @@ private struct TimelineGridContent: View, Equatable {
                                                 nativeAudioItems: nativeAudioItems, hostedMetalRequired: hostedMetalRequired).equatable()
                                         }
                                         }.frame(width: layoutWidth, height: contentHeight)
-                                        TimelineGainScaleLayer(state: zoomState, extent: extent, preview: itemGainPreview) { _, width, pixelsPerSecond in
+                                        TimelineWaveformPreviewScaleLayer(state: zoomState, extent: extent, preview: itemWaveformPreview) { _, width, pixelsPerSecond in
                                         TimelineViewportLayer(horizontal: horizontalScroll, vertical: verticalScroll.tiles) { horizontalOffset, visibleY in
-                                            ItemGainPreviewOverlay(preview: itemGainPreview, visibleRect: CGRect(x: horizontalOffset, y: visibleY, width: geometry.size.width, height: geometry.size.height), song: song, rows: rows, renderKey: renderKey, rulerHeight: rulerHeight, extent: extent, selectedClips: selectedClips, mediaDirectory: documents.currentURL?.deletingLastPathComponent(), documentWidth: width, renderMetadata: renderMetadata)
+                                            ItemWaveformPreviewOverlay(preview: itemWaveformPreview, visibleRect: CGRect(x: horizontalOffset, y: visibleY, width: geometry.size.width, height: geometry.size.height), song: song, rows: rows, renderKey: renderKey, rulerHeight: rulerHeight, extent: extent, selectedClips: selectedClips, mediaDirectory: documents.currentURL?.deletingLastPathComponent(), documentWidth: width, renderMetadata: renderMetadata)
                                         }
                                         }.frame(width: layoutWidth, height: contentHeight).allowsHitTesting(false)
                                         TimelineRecordingScaleLayer(state: zoomState, extent: extent) { _, width, pixelsPerSecond in
@@ -529,15 +543,30 @@ private struct TimelineGridContent: View, Equatable {
                                 HStack(spacing: 4) {
                                     Text("Track-Mixer").lineLimit(1)
                                     Spacer(minLength: 0)
+                                    if !remotePresentation {
+                                        Button { showingTrackVisibility = true } label: {
+                                            Image(systemName: "eye").font(.jarasSystem(size: 12))
+                                                .frame(width: 24, height: 24).contentShape(Rectangle())
+                                        }.buttonStyle(.plain).accessibilityLabel("Visibilidade das pistas")
+                                            .jarasHelp("Visibilidade das pistas")
+                                    }
+                                    Button { show.setTimelineMovementLocked(!show.timelineMovementLocked) } label: {
+                                        Image(systemName: show.timelineMovementLocked ? "lock.fill" : "lock.open")
+                                    }
+                                    .buttonStyle(TimelineMovementLockButtonStyle(locked: show.timelineMovementLocked))
+                                    .accessibilityLabel("Lock timeline movement")
+                                    .accessibilityIdentifier("timeline-movement-lock")
+                                    .accessibilityValue(show.timelineMovementLocked ? "Locked" : "Unlocked")
+                                    .jarasHelp(show.timelineMovementLocked ? "Desbloquear posições e bordas no grid" : "Bloquear posições e bordas no grid")
                                     Button { addingTrack = true } label: {
-                                        Text(verbatim: "Add").font(.system(size: 9, weight: .semibold))
+                                        Text(verbatim: "Add").font(.jarasSystem(size: 9, weight: .semibold))
                                             .foregroundStyle(JarasTheme.accent).padding(.horizontal, 7).frame(height: 24)
                                             .background(JarasTheme.accent.opacity(0.09)).clipShape(RoundedRectangle(cornerRadius: 4))
                                             .contentShape(Rectangle()).fixedSize(horizontal: true, vertical: false)
                                     }.buttonStyle(.plain).accessibilityLabel("Add Track").jarasHelp("Criar pista")
                                         .padding(.trailing, 5)
                                 }
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .font(.jarasSystem(size: 9, weight: .bold, design: .monospaced))
                                 .foregroundStyle(JarasTheme.secondary)
                                 .frame(width: labelWidth, height: rulerHeight).clipped().background(JarasTheme.mixer)
                             }
@@ -549,7 +578,7 @@ private struct TimelineGridContent: View, Equatable {
                                 laneCounts: rows.lanes.map(\.count), scales: rows.scales, baseHeight: row,
                                 top: rulerHeight, verticalOffset: verticalScroll.offset,
                                 scrollView: { mixerScrollController.scrollView },
-                                excludedX: labelWidth...(labelWidth + dividerWidth), interactionBlocked: gridInteractionBlocked,
+                                mixerWidth: labelWidth, interactionBlocked: gridInteractionBlocked,
                                 change: { id, scale, ended in
                                     if ended {
                                         show.setTrackHeightScale(id, scale: scale, project: projectID, song: song.id)
@@ -576,7 +605,10 @@ private struct TimelineGridContent: View, Equatable {
             if let range = TimelineAreaSelection.shared.range, range.song == show.current?.id {
                 show.regionFromTimeSelection(song: range.song, start: range.start, end: range.end)
             } else { show.regionsFromSelection(selectedClips) }
-        }, selectAll: { selectAllItems() }, copy: { copyGridItems() }, move: { copyGridItems(moving: true) }, paste: {
+        }, selectAll: { selectAllItems() }, copy: { copyGridItems() }, move: { copyGridItems(moving: true) }, duplicate: {
+            let duplicated = show.duplicateItems(selectedClips)
+            if !duplicated.isEmpty { selectedClips = duplicated; selectedClip = duplicated.first }
+        }, paste: {
             switch GridMediaClipboard.shared.source() {
             case .files(let urls):
                 documents.pasteMedia(urls, track: selectedTrack)
@@ -599,11 +631,23 @@ private struct TimelineGridContent: View, Equatable {
                 selectedTrack = nil; selectedTracks.removeAll()
             }
         }))
-        .onDisappear { trackHeightMotion.cancel(); trackHeightPreview.removeAll() }
+        .onDisappear { trackHeightMotion.cancel(); trackHeightPreview.removeAll(); itemWaveformPreview.clear() }
         .onChange(of: gridInteractionBlocked) { blocked in
             if blocked { trackHeightMotion.cancel(); trackHeightPreview.removeAll() }
         }
         #endif
+        .sheet(isPresented: $showingTrackVisibility) {
+            TrackVisibilityEditor(show: show, close: { showingTrackVisibility = false })
+                .environment(\.locale, locale)
+        }
+        .onChange(of: visibility.trackMixer) { _ in
+            clearClipDrag(); resizingItem = nil; trackHeightPreview.removeAll()
+            let tracks = visibleSong?.tracks ?? []
+            selectedTracks.formIntersection(tracks.map(\.id))
+            selectedTrack = selectedTrack.flatMap { selectedTracks.contains($0) ? $0 : nil } ?? selectedTracks.first
+            selectedClips.formIntersection(tracks.flatMap(\.clips).map(\.id))
+            selectedClip = selectedClip.flatMap { selectedClips.contains($0) ? $0 : nil } ?? selectedClips.first
+        }
         .sheet(isPresented: $showingReRender) {
             ItemReRenderProgressView(progress: reRenderProgress, title: reRenderTitle,
                                      cancel: glueCancellation.map { cancellation in { cancellation.cancel() } }) { showingReRender = false }
@@ -664,6 +708,12 @@ private struct TimelineGridContent: View, Equatable {
         .onReceive(show.$normalizeItemsRequest.dropFirst()) { _ in beginNormalize(selectedClips) }
         .onChange(of: show.splitItemsRequest) { _ in confirmSplit(selectedClips) }
         .onChange(of: show.addTrackRequest) { _ in addingTrack = true }
+        .onChange(of: show.timelineMovementLocked) { locked in
+            guard locked else { return }
+            clearClipDrag(); resizingItem = nil
+            movingRegion = nil; regionDelta = 0; regionMarkerRepulsion = nil
+            resizingRegion = nil; regionSnapPoints = []
+        }
         .onChange(of: selectedTracks) {
             AudioExportSelection.shared.setTracks($0, song: show.current?.id)
             show.setMixerTrackSelection($0, anchor: selectedTrack)
@@ -673,7 +723,7 @@ private struct TimelineGridContent: View, Equatable {
             selectedTrack = show.selectedTrackForActions; selectedTracks = ids
         }
         .onChange(of: selectedClips) { AudioExportSelection.shared.setClips($0, song: show.current?.id) }
-        .onChange(of: show.current?.id) { _ in trackHeightPreview.removeAll(); itemGainPreview.clear(); insertionPreview.update(nil); selectedClip = nil; selectedClips.removeAll(); selectedTrack = nil; selectedTracks.removeAll() }
+        .onChange(of: show.current?.id) { _ in trackHeightPreview.removeAll(); itemWaveformPreview.clear(); insertionPreview.update(nil); selectedClip = nil; selectedClips.removeAll(); selectedTrack = nil; selectedTracks.removeAll() }
         .background(JarasTheme.background).sheet(isPresented: $addingTrack) {
             CreateTrackEditor(show: show, afterTrack: selectedTrack, close: { addingTrack = false }, created: { ids in
                 let selectable = show.current?.tracks.filter { $0.kind == .standard && ids.contains($0.id) }.map(\.id) ?? []
@@ -691,7 +741,7 @@ private struct TimelineGridContent: View, Equatable {
         let bands = song.tracks.enumerated().compactMap { index, track -> TimelineNativeGridBand? in
             guard track.kind == .standard, selectedTracks.contains(track.id) else { return nil }
             return TimelineNativeGridBand(rect: CGRect(x: 0, y: rulerHeight + rows.offsets[index], width: 0, height: rows.heights[index]),
-                color: NSColor(JarasTheme.track(track, emphasized: true).opacity(0.12)).cgColor)
+                color: NSColor(JarasTheme.panel).cgColor)
         }
         let originalParts = Dictionary(uniqueKeysWithValues: originalSong.parts.map { ($0.id, $0) })
         let unifiable = overlapCache.regions(song: originalSong, revision: revision)
@@ -710,7 +760,10 @@ private struct TimelineGridContent: View, Equatable {
             header: NativeTimelineHeaderConfiguration(song: song, lanes: regionLanes,
                 parentIDs: metadata.regionParentIDs, regionTargets: regionTargets,
                 edit: { marker in if marker.isTempo { editingTempoMarker = marker } else { editingMarker = marker } },
-                delete: { show.deleteManualMarker($0) }, seek: { show.send(.editSeek, value: $0.position) }, move: { show.setMarker($0) }),
+                delete: { show.deleteManualMarker($0) }, convert: { show.modalNotice = show.convertMarkersToRegions(markerID: $0) }, seek: { show.send(.editSeek, value: $0.position) }, move: {
+                    guard !show.timelineMovementLocked else { return }
+                    show.setMarker($0)
+                }, movementLocked: show.timelineMovementLocked),
             rows: rows, sections: metadata.sections(until: extent),
             divisions: song.projectTime.divisions, bands: bands, audioBody: audioBody, input: selectionInput,
             hostedItemsGate: hostedItemsGate,
@@ -718,7 +771,7 @@ private struct TimelineGridContent: View, Equatable {
             hasHostedItems: metadata.hasItems && (audioBody?.hasFallbackItems ?? true),
             hasHostedProjection: {
                 editingRegion != nil || unifyingRegion != nil ||
-                itemGainPreview.state != nil || !LiveRecordingPreview.shared.takes.isEmpty ||
+                itemWaveformPreview.state != nil || !LiveRecordingPreview.shared.takes.isEmpty ||
                 insertionPreview.time != nil || TimelineAreaSelection.shared.range?.song == song.id
             },
             itemGuide: { scale in
@@ -779,6 +832,7 @@ private struct TimelineGridContent: View, Equatable {
             selectedClips = next
             selectedClip = selectionLayout.items.first { next.contains($0.id) }?.id
         }, mute: { id in if originalSong.tracks.contains(where: { $0.kind == .standard && $0.clips.contains { $0.id == id } }) { show.send(.clipMute, target: id) } }, move: { id, translation, pointerY, ended in
+            guard !show.timelineMovementLocked else { clearClipDrag(); return }
             let pixelsPerSecond = projection.pixelsPerSecond
 
             guard movingClip == nil || movingClip == id,
@@ -802,6 +856,7 @@ private struct TimelineGridContent: View, Equatable {
         }, seek: { x, freePositioning in
             let pixelsPerSecond = projection.pixelsPerSecond
             show.send(.editSeek, value: gridPosition(x / pixelsPerSecond, song: song, pixelsPerSecond: pixelsPerSecond, freePositioning: freePositioning)) }, createRegion: { show.regionsFromSelection(selectedClips.contains($0) ? selectedClips : [$0]) }, indexedLayout: selectionLayout, pixelsPerSecond: 1, projection: projection, interactionBlocked: gridInteractionBlocked, resize: { id, left, delta, ended in
+            guard !show.timelineMovementLocked else { resizingItem = nil; return }
             let pixelsPerSecond = projection.pixelsPerSecond
 
             guard let clip = originalSong.tracks.flatMap(\.clips).first(where: { $0.id == id }) else { return }
@@ -815,13 +870,24 @@ private struct TimelineGridContent: View, Equatable {
             }
             timelineExtent = max(extent, resizedItemEnd + 120)
             if ended { show.resizeItem(id, start: resizedItemStart, end: resizedItemEnd); resizingItem = nil }
+        }, fadeShape: { id, left, sCurve, value, ended in
+            show.changeItemFadeShape(id, fadeIn: left, sCurve: sCurve, value: value, ended: ended)
+            if ended { itemWaveformPreview.clear() }
+            else if let clip = originalSong.tracks.lazy.flatMap(\.clips).first(where: { $0.id == id }) {
+                itemWaveformPreview.updateShape(clip, fadeIn: left, sCurve: sCurve, value: value)
+            }
         }, fade: { id, left, seconds, ended in
-            if ended { show.setItemFade(id, fadeIn: left, seconds: seconds) }
-            else { show.previewItemFade(id, fadeIn: left, seconds: seconds) }
+            if ended { show.setItemFade(id, fadeIn: left, seconds: seconds); itemWaveformPreview.clear() }
+            else {
+                show.previewItemFade(id, fadeIn: left, seconds: seconds)
+                if let clip = originalSong.tracks.lazy.flatMap(\.clips).first(where: { $0.id == id }) {
+                    itemWaveformPreview.updateFade(clip, fadeIn: left, seconds: seconds)
+                }
+            }
         }, gain: { id, value, ended in
             show.previewItemGain(id, gain: value)
-            if ended { show.setItemGain(id, gain: value); itemGainPreview.clear() }
-            else { itemGainPreview.update(id: id, gain: value) }
+            if ended { show.setItemGain(id, gain: value); itemWaveformPreview.clear() }
+            else { itemWaveformPreview.update(id: id, gain: value) }
         }, phase: { show.toggleItemPhase($0) }, pan: { id, value, ended in
             if ended { show.setItemPan(id, pan: value) }
             else { show.previewItemPan(id, pan: value) }
@@ -910,9 +976,9 @@ private struct TimelineGridContent: View, Equatable {
         ClipDragInput(item: GridSelectionItem(id: clip.id,
             rect: CGRect(x: clip.startTime * pixelsPerSecond + 1, y: itemY,
                 width: max(2, clip.duration * pixelsPerSecond - 2), height: rows.laneHeights[index] - 6),
-            editable: track.kind == .standard || clip.isProjectionMedia, movable: track.kind != .timecode || clip.isProjectionMedia,
+            editable: track.kind == .standard || clip.isProjectionMedia, resizable: !show.timelineMovementLocked, movable: !show.timelineMovementLocked && (track.kind != .timecode || clip.isProjectionMedia),
             muted: clip.muted == true, duration: clip.duration,
-            fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0), originY: itemY, click: { point in
+            fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0, fadeInCurve: clip.fadeInCurve ?? 0, fadeInSCurve: clip.fadeInSCurve ?? 1, fadeOutCurve: clip.fadeOutCurve ?? 0, fadeOutSCurve: clip.fadeOutSCurve ?? 1), originY: itemY, click: { point in
             show.send(.editSeek, value: gridPosition(point.x / pixelsPerSecond, song: song, pixelsPerSecond: pixelsPerSecond))
         }, select: { additive in
             if additive {
@@ -924,6 +990,7 @@ private struct TimelineGridContent: View, Equatable {
                 selectedClips = [clip.id]
             }
         }, resize: { left, delta, ended in
+            guard !show.timelineMovementLocked else { resizingItem = nil; return }
             resizingItem = clip.id
             let position = itemPosition((left ? clip.startTime : clip.startTime + clip.duration) + delta / pixelsPerSecond,
                 song: song, pixelsPerSecond: pixelsPerSecond, snappingRegionEnds: true)
@@ -934,12 +1001,12 @@ private struct TimelineGridContent: View, Equatable {
             timelineExtent = max(extent, resizedItemEnd + 120)
             if ended { show.resizeItem(clip.id, start: resizedItemStart, end: resizedItemEnd); resizingItem = nil }
         }, fade: { left, seconds, ended in
-            if ended { show.setItemFade(clip.id, fadeIn: left, seconds: seconds) }
-            else { show.previewItemFade(clip.id, fadeIn: left, seconds: seconds) }
+            if ended { show.setItemFade(clip.id, fadeIn: left, seconds: seconds); itemWaveformPreview.clear() }
+            else { show.previewItemFade(clip.id, fadeIn: left, seconds: seconds); itemWaveformPreview.updateFade(clip, fadeIn: left, seconds: seconds) }
         }, mute: track.kind == .standard ? { show.send(.clipMute, target: clip.id) } : nil,
            cancel: { clearClipDrag(); resizingItem = nil }) { translation, pointerY, ended in
             // A gesture belongs to the item pressed until mouse-up.
-            guard track.kind != .timecode, movingClip == nil || movingClip == clip.id else { return }
+            guard !show.timelineMovementLocked, track.kind != .timecode, movingClip == nil || movingClip == clip.id else { clearClipDrag(); return }
             movingClip = clip.id
             let originalStart = clip.startTime
             movingStart = abs(translation.width) < 3 ? originalStart : itemPosition(originalStart + translation.width / pixelsPerSecond, song: song, pixelsPerSecond: pixelsPerSecond)
@@ -963,7 +1030,7 @@ private struct TimelineGridContent: View, Equatable {
             }
         if track.kind.isText && !clip.isProjectionMedia && clip.duration * pixelsPerSecond >= 34 {
             Button("Edit") { editTextItem(clip.id) }
-                .font(.system(size: 8 * GridSelectionItem.headerScale, weight: .bold)).foregroundStyle(.white)
+                .font(.jarasSystem(size: 8 * GridSelectionItem.headerScale, weight: .bold)).foregroundStyle(.white)
                 .frame(width: 30 * GridSelectionItem.headerScale, height: GridSelectionItem.headerHeight).background(Color.black.opacity(0.28))
                 .buttonStyle(.plain).offset(x: clip.startTime * pixelsPerSecond + 1, y: itemY)
         }
@@ -1026,7 +1093,7 @@ private struct TimelineGridContent: View, Equatable {
         insertionPreview.update(nil)
     }
     private func selectAllItems() -> Bool {
-        guard let song = show.current else { return false }
+        guard let song = visibleSong else { return false }
         let all = Set(song.tracks.flatMap(\.clips).map(\.id))
         guard !all.isEmpty else { return false }
         selectedClips = all
@@ -1226,9 +1293,7 @@ private struct TimelineGridContent: View, Equatable {
     }
     private var deleteTarget: GridDeleteTarget {
         guard let song = show.current else { return .none }
-        let items = selectedClips.intersection(song.tracks.flatMap(\.clips).map(\.id))
-        let tracks = selectedTracks.intersection(song.tracks.map(\.id))
-        return GridDeleteTarget(items: items, tracks: tracks)
+        return GridDeleteTarget(items: selectedClips, tracks: selectedTracks, song: song, visibility: visibility)
     }
     private func deleteSelection() {
         guard !gridInteractionBlocked, let song = show.current else { return }
@@ -1297,7 +1362,12 @@ private struct TimelineGridContent: View, Equatable {
                   current.parts.contains(where: { $0.id == part.id }) else { return }
             regionExport = RegionAudioExportRequest(project: show.snapshot.project, song: current,
                 regions: [part.id], mediaDirectory: documents.currentURL?.deletingLastPathComponent())
-        }, resizable: !unified, seek: { show.selectTimelineRegion(part.id) }, drag: { translation, ended, edge in
+        }, resizable: !unified && !show.timelineMovementLocked, seek: { show.selectTimelineRegion(part.id) }, drag: { translation, ended, edge in
+            guard !show.timelineMovementLocked else {
+                movingRegion = nil; regionDelta = 0; regionMarkerRepulsion = nil
+                resizingRegion = nil; regionSnapPoints = []
+                return
+            }
             let pixelsPerSecond = nativeBase.pixelsPerSecond
             let original = part
             if edge != 0 {
@@ -1403,7 +1473,7 @@ private struct TimelineGridContent: View, Equatable {
         #else
         let free = freePositioning ?? false
         #endif
-        return TimelineTempo.snap(time, song: song, pixelsPerSecond: pixelsPerSecond, enabled: !free, includeHiddenDivisions: true)
+        return TimelineTempo.snap(time, song: song, pixelsPerSecond: pixelsPerSecond, enabled: !free, includeHiddenDivisions: true, includeItemEdges: true)
     }
 
     @ViewBuilder
@@ -1638,14 +1708,14 @@ private struct TimelineGridContent: View, Equatable {
             let style = NSMutableParagraphStyle(); style.alignment = .center
             style.lineBreakMode = .byTruncatingTail
             return .label(NSAttributedString(string: name, attributes: [
-                .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+                .font: NSFont.jarasSystemFont(ofSize: 9, weight: .medium),
                 .foregroundColor: NSColor.white, .paragraphStyle: style]))
         }
         if missing { return label(JarasLocalization.string("Not found")) }
         if track.kind == .timecode && !clip.isProjectionMedia { return label("TIMECODE") }
         if track.kind.isText && !clip.isProjectionMedia {
             return .text(NSAttributedString(string: clip.text ?? "", attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.black]))
+                .font: NSFont.jarasSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.black]))
         }
         // Standard-track video can also have a waveform. Leave that combined
         // path untouched here; text/video tracks only show a media decoration.
@@ -1730,6 +1800,11 @@ private struct TimelineGridContent: View, Equatable {
     }
     private var projection: Projection?
     private var waveformProjection: Projection?
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        waveformProjection = nil
+        submitWaveforms()
+    }
     private var waveformReadinessRevision: UInt64?
     private var verticalViewportHeight: CGFloat?
     private var visibleWaveforms: [TimelineWaveformItem] = []
@@ -1749,6 +1824,11 @@ private struct TimelineGridContent: View, Equatable {
         }
         if configuration == nil, value == nil, isHidden { return false }
         configuration = value
+        // A replacement can reach configuration before native layout projects
+        // its new rows. Retire the prior pixels immediately, not on the next zoom.
+        visibleWaveforms.removeAll(keepingCapacity: true)
+        fills.submit(MetalWaveformFrame(size: bounds.size, strokes: []))
+        waveforms.submit(MetalWaveformFrame(size: bounds.size, strokes: []))
         bodyInk.update([])
         mediaURLs.prepareClipRevision(directory: value?.mediaDirectory)
         contentRevision &+= 1
@@ -1805,6 +1885,9 @@ private struct TimelineGridContent: View, Equatable {
         verticalViewportHeight = viewport.height
         let next = Projection(viewport: tile, scale: scale, revision: contentRevision)
         guard projection != next else { return }
+        // Retire pixels before moving/resizing their host. Otherwise AppKit can
+        // composite the preceding tile inside the new item's coordinate space.
+        waveforms.submit(MetalWaveformFrame(size: tile.size, strokes: []))
         projection = next
         if frame != tile { frame = tile }
         let local = CGRect(origin: .zero, size: tile.size)
@@ -1902,7 +1985,7 @@ private struct TimelineGridContent: View, Equatable {
         waveformReadinessRevision = revision
         waveforms.submit(TimelineMetalWaveformFrameBuilder.make(items: visibleWaveforms,
             viewport: projection.viewport, scale: projection.scale, cache: .shared,
-            owner: sourceOwner, contentRevision: projection.revision))
+            owner: sourceOwner, contentRevision: projection.revision, pixelDensity: Double(window?.backingScaleFactor ?? 1)))
     }
 }
 
@@ -1954,11 +2037,13 @@ private struct TimelineGridContent: View, Equatable {
     let regionTargets: [NativeTimelineRegionTarget]
     let edit: (TimelineMarker) -> Void
     let delete: (UUID) -> Void
+    var convert: ((UUID) -> Void)? = nil
     let seek: (TimelineMarker) -> Void
     let move: (TimelineMarker) -> Void
+    var movementLocked = false
 
     func hasSameContent(as other: Self) -> Bool {
-        song == other.song && lanes == other.lanes && parentIDs == other.parentIDs &&
+        song == other.song && lanes == other.lanes && parentIDs == other.parentIDs && movementLocked == other.movementLocked &&
             regionTargets.count == other.regionTargets.count && zip(regionTargets, other.regionTargets).allSatisfy {
                 $0.id == $1.id && $0.start == $1.start && $0.end == $1.end && $0.lane == $1.lane &&
                 $0.edgePadding == $1.edgePadding && $0.selected == $1.selected && $0.pinned == $1.pinned
@@ -1996,7 +2081,7 @@ private final class NativeTimelineHeaderText: NSObject {
     let width: CGFloat
     private init?(text: String, color: UInt32, scale: CGFloat) {
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+            .font: NSFont.jarasSystemFont(ofSize: 9, weight: .medium),
             .foregroundColor: NSColor(Color(hex: color))
         ]))
         var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
@@ -2338,7 +2423,7 @@ private final class NativeTimelineHeaderText: NSObject {
             return false
         }
         configuredLanguage = language
-        if configuration?.song.id != value?.song.id || !(value?.song.markers ?? []).contains(where: { $0.id == preview?.id }) {
+        if value?.movementLocked == true || configuration?.song.id != value?.song.id || !(value?.song.markers ?? []).contains(where: { $0.id == preview?.id }) {
             preview = nil
         }
         let nextIDs = Set((value?.song.markers ?? []).map(\.id))
@@ -2523,13 +2608,16 @@ private final class NativeTimelineHeaderText: NSObject {
     }
     private func configure(_ view: MarkerEditClickView, marker: TimelineMarker, scale: CGFloat) {
         guard let value = configuration else { return }
-        view.action = { value.edit(marker) }
+        if MarkerRegionConversion.outsideRegions(marker, in: value.song), let convert = value.convert {
+            view.action = { [weak view] in view?.showMarkerMenu(edit: { value.edit(marker) }, convert: { convert(marker.id) }) }
+        } else { view.action = { value.edit(marker) } }
         view.optionClick = {
             if marker.unifiedRegionID == nil, marker.sourceRegionID == nil { value.delete(marker.id) }
         }
+        view.normalCursor = !marker.isTempo && marker.sourceRegionID == nil && marker.unifiedRegionID == nil
         view.seek = { value.seek(marker) }
-        view.drag = value.song.canDragMarker(marker) ? { [weak self] delta, ended in
-            guard let self else { return }
+        view.drag = !value.movementLocked && value.song.canDragMarker(marker) ? { [weak self] delta, ended in
+            guard let self, self.configuration?.movementLocked != true else { return }
             var moved = marker
             moved.position = value.song.markerDragPosition(marker, to: max(0, marker.position + Double(delta) / scale),
                 pixelsPerSecond: scale, free: NSEvent.modifierFlags.contains(.shift))
@@ -3092,7 +3180,7 @@ private final class NativeTimelineBaseMountView: NSView {
                 state.value = next
             }
         }
-        rulerInput.markerCursor = { MarkerEditClickView.usesMoveCursor(for: $0) }
+        rulerInput.markerCursor = { MarkerEditClickView.cursor(for: $0) }
         rulerInput.extend = value.extend; rulerInput.selectTime = value.selectTime
         rulerInput.selectedTime = value.selectedTime; rulerInput.resizeTime = value.resizeTime
         rulerInput.seek = value.rulerSeek
@@ -3521,7 +3609,7 @@ private final class NativeTimelineNeedlesView: NSView {
             draw(sub, x: subX, color: colors[2], playback: false, glowing: transport.subPlay.playing || dragging == true)
             sub.root.opacity = now.truncatingRemainder(dividingBy: 0.9) < 0.45 ? 1 : 0.3
         }
-        follow.update(position: show?.timelineFollowPaused == true ? nil : playback.followPosition, pixelsPerSecond: size.width / max(1, extent), contentWidth: size.width,
+        follow.update(position: show?.timelineFollowPaused == true || !UserDefaults.standard.bool(forKey: "jaras.timeline.continuousScroll") ? nil : playback.followPosition, pixelsPerSecond: size.width / max(1, extent), contentWidth: size.width,
             source: "\(songID?.uuidString ?? "")-\(playback.followSource == .sub ? "sub" : "main")")
     }
     private func draw(_ needle: Needle, x: CGFloat, color value: Int, playback: Bool, glowing: Bool, merged: Bool = false) {
@@ -3799,6 +3887,7 @@ private struct TimelineMixerIdentity: Equatable {
     var documentHeight: CGFloat = 0
     var rulerHeight: CGFloat = 0
     var widthViewport: CGRect? = nil
+    var hiddenTracks: Set<UUID> = []
 }
 
 private struct TimelineMixerLayer<Content: View>: View, Equatable {
@@ -4109,10 +4198,10 @@ private struct TimelineItemsScaleLayer<Content: View>: View {
         #endif
     }
 }
-private struct TimelineGainScaleLayer<Content: View>: View {
+private struct TimelineWaveformPreviewScaleLayer<Content: View>: View {
     let state: TimelineZoomState
     let extent: Double
-    @ObservedObject var preview: ItemGainPreview
+    @ObservedObject var preview: ItemWaveformPreview
     @ViewBuilder let content: (Binding<Double>, CGFloat, Double) -> Content
     var body: some View {
         if preview.state != nil { TimelineScaleLayer(state: state, extent: extent, content: content) }
@@ -4304,6 +4393,8 @@ private struct TimelineObservedWaveformReadinessLayer<Content: View>: View {
 /// One GPU surface batches all visible audio, including a bounded overscan for
 /// native scrolling. It never allocates a texture as large as the whole project.
 private struct TimelineMetalWaveformLayer: View {
+    @Environment(\.displayScale) private var waveformPixelDensity
+
     @State private var mediaURLs = TimelineMediaURLCache()
     @State private var sourceOwner = TimelineWaveformVertexOwner()
     @ObservedObject private var waveformCache = TimelineAudioWaveform.shared
@@ -4336,7 +4427,8 @@ private struct TimelineMetalWaveformLayer: View {
     }
     private func waveformFrame(viewport: CGRect, scale: Double) -> MetalWaveformFrame {
         TimelineMetalWaveformFrameBuilder.make(items: visibleItems(viewport: viewport, scale: scale),
-            viewport: viewport, scale: scale, cache: waveformCache, owner: sourceOwner, contentRevision: contentRevision)
+            viewport: viewport, scale: scale, cache: waveformCache, owner: sourceOwner, contentRevision: contentRevision,
+            pixelDensity: Double(waveformPixelDensity))
     }
     private var contentRevision: Int {
         var key = Hasher()
@@ -4415,7 +4507,7 @@ private struct TimelineBackdrop: View {
                 guard track.kind == .standard, selectedTracks.contains(track.id) else { return nil }
                 let rect = CGRect(x: tile.minX, y: rulerHeight + rows.offsets[index], width: tile.width, height: rows.heights[index])
                 guard rect.intersects(tile) else { return nil }
-                return TimelineNativeGridBand(rect: rect, color: NSColor(JarasTheme.track(track, emphasized: true).opacity(0.12)).cgColor)
+                return TimelineNativeGridBand(rect: rect, color: NSColor(JarasTheme.panel).cgColor)
             }
             TimelineNativeGridBackdrop(viewport: tile, rulerHeight: rulerHeight, displayScale: displayScale,
                 primary: marks.filter(\.primary).map { $0.time * scale },
@@ -4453,8 +4545,7 @@ private struct TimelineBackdrop: View {
             for (index, track) in song.tracks.enumerated() where track.kind == .standard && selectedTracks.contains(track.id) {
                 let band = CGRect(x: tile.minX, y: rulerHeight + rows.offsets[index], width: tile.width, height: rows.heights[index])
                 guard band.intersects(tile) else { continue }
-                context.fill(Path(band), with: .color(JarasTheme.track(track, emphasized: true).opacity(0.12)))
-                context.fill(Path(band), with: .color(.white.opacity(0.025)))
+                context.fill(Path(band), with: .color(JarasTheme.panel))
             }
             let scale = size.width / extent
             if gridlines {
@@ -4542,19 +4633,17 @@ private final class TimelineNativeGridView: NSView {
         selections.frame = local
         // Keep selection layers through zoom; only changing selected tracks
         // changes their count. Empty grids allocate no selection layers.
-        while (selections.sublayers?.count ?? 0) > content.bands.count * 2 {
+        while (selections.sublayers?.count ?? 0) > content.bands.count {
             selections.sublayers?.last?.removeFromSuperlayer()
         }
-        while (selections.sublayers?.count ?? 0) < content.bands.count * 2 {
+        while (selections.sublayers?.count ?? 0) < content.bands.count {
             selections.addSublayer(CALayer())
         }
         for (index, band) in content.bands.enumerated() {
             let rect = band.rect.offsetBy(dx: -tile.minX, dy: -tile.minY)
             let layers = selections.sublayers!
-            layers[index * 2].frame = rect
-            layers[index * 2].backgroundColor = band.color
-            layers[index * 2 + 1].frame = rect
-            layers[index * 2 + 1].backgroundColor = CGColor(gray: 1, alpha: 0.025)
+            layers[index].frame = rect
+            layers[index].backgroundColor = band.color
         }
         func apply(_ layer: CAShapeLayer, positions: [CGFloat], color: CGColor) {
             let path = CGMutablePath()
@@ -4607,7 +4696,7 @@ private final class TimelineRenderMetadata {
         let fragments: [AudioClip]
     }
     private var audio: [UUID: FragmentEntry] = [:]
-    private var gainPreview: FragmentEntry?
+    private var waveformPreview: FragmentEntry?
     private struct TitleEntry {
         let source: AudioClip
         let name: String
@@ -4619,11 +4708,11 @@ private final class TimelineRenderMetadata {
         let end: Double
     }
     private var itemRatePrograms: [RateProgramKey: [TimelineTempoSection]] = [:]
-    init(song: Song) {
+    init(song: Song, hasSolo: Bool? = nil) {
         self.song = song
         affectsAudio = song.tempoMarkersAffectAudio
         hasClickTrack = song.tracks.contains { $0.kind == .click }
-        hasSolo = song.tracks.contains { $0.solo }
+        self.hasSolo = hasSolo ?? song.tracks.contains { $0.solo }
         hasItems = song.tracks.contains { !$0.clips.isEmpty }
         regionParentIDs = Set(song.parts.compactMap(\.parentRegionID))
         visibleClips = song.tracks.map { track in
@@ -4666,14 +4755,14 @@ private final class TimelineRenderMetadata {
     func fragments(for clip: AudioClip, preview: Bool = false) -> [AudioClip] {
         guard affectsAudio else { return [clip] }
         lock.lock(); defer { lock.unlock() }
-        let cached = preview ? gainPreview : audio[clip.id]
+        let cached = preview ? waveformPreview : audio[clip.id]
         // Preview gain is deliberately outside the document render key. Check
         // the full clip so every preview field reaches the waveform fragments.
         if let cached, cached.source == clip { return cached.fragments }
         let sections = sectionsLocked(until: song.duration)
         let fragments = sections.isEmpty ? [clip] : song.tempoAudioSegments(clip, sections: sections)
         let entry = FragmentEntry(source: clip, fragments: fragments)
-        if preview { gainPreview = entry } else { audio[clip.id] = entry }
+        if preview { waveformPreview = entry } else { audio[clip.id] = entry }
         return fragments
     }
     func itemTitle(for clip: AudioClip, track: Track) -> String {
@@ -4720,19 +4809,19 @@ private final class TimelineRenderMetadata {
 @MainActor private final class TimelineRenderMetadataCache {
     private var key: TimelineRenderKey?
     private var value: TimelineRenderMetadata?
-    func metadata(song: Song, key: TimelineRenderKey) -> TimelineRenderMetadata {
-        if self.key == key, let value, value.matches(song) { return value }
-        let value = TimelineRenderMetadata(song: song)
+    func metadata(song: Song, key: TimelineRenderKey, hasSolo: Bool? = nil) -> TimelineRenderMetadata {
+        if self.key == key, let value, value.matches(song), value.hasSolo == (hasSolo ?? song.tracks.contains { $0.solo }) { return value }
+        let value = TimelineRenderMetadata(song: song, hasSolo: hasSolo)
         self.key = key; self.value = value
         return value
     }
 }
 
-/// During a gain gesture only this bounded surface is invalidated. The base grid,
+/// During a gain or fade gesture only this bounded surface is invalidated. The base grid,
 /// headers, mixer and lane geometry keep their existing render and layout.
-private struct ItemGainPreviewOverlay: View {
+private struct ItemWaveformPreviewOverlay: View {
     @ObservedObject private var backgroundColor = AppearanceColor.shared("jaras.timeline.background", default: TimelineAppearanceDefaults.background)
-    @ObservedObject var preview: ItemGainPreview
+    @ObservedObject var preview: ItemWaveformPreview
     @ObservedObject private var metalRenderer = MetalWaveformRenderer.shared
     let visibleRect: CGRect
     let song: Song
@@ -4756,7 +4845,7 @@ private struct ItemGainPreviewOverlay: View {
             let clip = state.applying(to: source)
             let silenced = song.isSilenced(track) || source.muted == true
             TimelineWaveformReadinessLayer(observesWaveforms: !MetalWaveformRenderer.isSupported) { waveformRevision in
-            ViewportTimelineCanvas(visibleRect: visibleRect, synchronized: true, documentWidth: documentWidth, diagnosticName: "gain-preview", identity: TimelineTileIdentity(renderKey: renderKey, extent: extent, light: colorScheme == .light, trackHeights: rows.heights, gainPreview: state, waveformRevision: waveformRevision, mediaDirectory: mediaDirectory, gridStyle: [backgroundColor.value])) { context, size, tile, waveformOwner in
+            ViewportTimelineCanvas(visibleRect: visibleRect, synchronized: true, documentWidth: documentWidth, diagnosticName: "waveform-preview", identity: TimelineTileIdentity(renderKey: renderKey, extent: extent, light: colorScheme == .light, trackHeights: rows.heights, waveformPreview: state, waveformRevision: waveformRevision, mediaDirectory: mediaDirectory, gridStyle: [backgroundColor.value])) { context, size, tile, waveformOwner in
                 let scale = size.width / extent
                 let rect = CGRect(x: source.startTime * scale + 1, y: y, width: max(2, source.duration * scale - 2), height: height)
                 guard rect.intersects(tile) else { return }
@@ -4776,6 +4865,34 @@ private struct ItemGainPreviewOverlay: View {
             }
         }
     }
+}
+
+private func fadedTimelineWaveform(_ source: Path, clip: AudioClip, middle: CGFloat, scale: Double, origin: CGFloat = 0) -> Path {
+    guard (clip.fadeIn ?? 0) > 0 || (clip.fadeOut ?? 0) > 0 else { return source }
+    var result = Path(), previous: CGPoint?
+    func faded(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x, y: middle + (point.y - middle) * clip.fadeGain(at: (point.x + origin) / scale))
+    }
+    source.forEach { element in
+        switch element {
+        case .move(to: let point): result.move(to: faded(point)); previous = point
+        case .line(to: let point):
+            if let start = previous {
+                // Cached flat segments may span an entire item. Subdivide only
+                // their visible drawing so nonlinear fades retain their shape.
+                let steps = max(1, Int(ceil(abs(point.x - start.x) / 0.5)))
+                for step in 1...steps {
+                    let t = Double(step) / Double(steps)
+                    result.addLine(to: faded(CGPoint(x: start.x + (point.x - start.x) * t, y: start.y + (point.y - start.y) * t)))
+                }
+            } else { result.move(to: faded(point)) }
+            previous = point
+        case .closeSubpath: result.closeSubpath(); previous = nil
+        case .quadCurve(to: let p, control: let c): result.addQuadCurve(to: faded(p), control: faded(c)); previous = p
+        case .curve(to: let p, control1: let a, control2: let b): result.addCurve(to: faded(p), control1: faded(a), control2: faded(b)); previous = p
+        }
+    }
+    return result
 }
 
 private func drawTimelineAudioWaveform(_ clip: AudioClip, url: URL, rect: CGRect, waveTop: CGFloat, scale: Double, tile: CGRect, waveColor: Color, context: inout GraphicsContext, waveformOwner: TimelineAudioWaveform.PresentationStore? = nil) {
@@ -4837,7 +4954,7 @@ private func drawTimelineAudioWaveform(_ clip: AudioClip, url: URL, rect: CGRect
             waveContext.clip(to: Path(roundedRect: localRect, cornerRadius: 3))
             waveContext.clip(to: Path(channelRect.offsetBy(dx: -tile.minX, dy: 0)))
             let band = CGRect(x: first * scale - tile.minX, y: middle + minimum * amplitude, width: (last - first) * scale, height: max(0.5, (maximum - minimum) * amplitude))
-            waveContext.fill(Path(band), with: .color(waveColor))
+            waveContext.fill(fadedTimelineWaveform(Path(band), clip: clip, middle: middle, scale: scale, origin: tile.minX), with: .color(waveColor))
         }
         return
     }
@@ -4887,7 +5004,8 @@ private func drawTimelineAudioWaveform(_ clip: AudioClip, url: URL, rect: CGRect
                             guard sourceChannel(channel) < drawing.cgPaths.count else { continue }
                             let x = position * scale - tile.minX + (Double(drawing.origin) / header.rate - source) * sourceScale
                             var transform = CGAffineTransform(a: sourceScale, b: 0, c: 0, d: amplitude, tx: x, ty: middle)
-                            let wave = Path(drawing.cgPaths[sourceChannel(channel)].copy(using: &transform) ?? drawing.cgPaths[sourceChannel(channel)])
+                            let transformed = Path(drawing.cgPaths[sourceChannel(channel)].copy(using: &transform) ?? drawing.cgPaths[sourceChannel(channel)])
+                            let wave = fadedTimelineWaveform(transformed, clip: clip, middle: middle, scale: scale, origin: tile.minX)
                             blended.opacity = layer.opacity
                             blended.stroke(wave, with: .color(waveColor), style: StrokeStyle(lineWidth: waveStroke, lineCap: .round, lineJoin: .round))
                         }
@@ -4972,7 +5090,7 @@ private func drawTimelineItem(_ clip: AudioClip, track: Track, title: String, re
     #if os(macOS)
     if let editRect = controls.editRect, editRect.intersects(tile) {
         titleContext.fill(Path(editRect), with: .color(.black.opacity(0.28)))
-        let label = Text("Edit").font(.system(size: 8, weight: .bold)).foregroundColor(.white)
+        let label = Text("Edit").font(.jarasSystem(size: 8, weight: .bold)).foregroundColor(.white)
         titleContext.draw(label, at: CGPoint(x: editRect.midX, y: editRect.midY), anchor: .center)
     }
     if let muteRect = controls.muteRect {
@@ -5048,6 +5166,10 @@ private func drawTimelineItem(_ clip: AudioClip, track: Track, title: String, re
         if body.height >= 12 { drawTimelineName(JarasLocalization.string("Not found"), in: body, visibleRect: tile, centered: true, context: &context) }
         return
     }
+    let rgb = TrackNameContrast.components(track.color ?? JarasTheme.roleHex(track.role), emphasized: selected)
+    let luminance = 0.2126 * rgb.red + 0.7152 * rgb.green + 0.0722 * rgb.blue
+    // Audio and generated Click items share the same neutral waveform ink.
+    let waveColor = Color(white: silenced ? 0.78 : luminance > 0.68 ? 0.52 : luminance > 0.42 ? 0.9 : 0.8)
     if track.kind == .click && !clip.isProjectionMedia {
         let body = CGRect(x: rect.minX, y: rect.minY + GridSelectionItem.bodyInset, width: rect.width, height: max(0, rect.height - GridSelectionItem.bodyInset - 2))
         let visible = body.intersection(tile)
@@ -5065,7 +5187,7 @@ private func drawTimelineItem(_ clip: AudioClip, track: Track, title: String, re
             wave.closeSubpath()
         }
         var waveContext = context; waveContext.clip(to: Path(visible))
-        waveContext.fill(wave, with: .color(Color(white: 0.88).opacity(silenced ? 0.5 : 0.9)))
+        waveContext.fill(wave, with: .color(waveColor))
         return
     }
     if (track.kind == .timecode && !clip.isProjectionMedia) || track.kind == .video || (clip.isProjectionMedia && ["mov", "mp4", "m4v", "avi", "mkv", "webm"].contains(URL(fileURLWithPath: clip.audioFile?.path ?? "").pathExtension.lowercased())) {
@@ -5083,16 +5205,12 @@ private func drawTimelineItem(_ clip: AudioClip, track: Track, title: String, re
             let textRect = CGRect(x: rect.minX + 5, y: rect.minY + 17, width: rect.width - 10, height: rect.height - 20)
             if compact { titleContext.clip(to: path) }
             titleContext.clip(to: Path(textRect))
-            titleContext.draw(Text(verbatim: text).font(.system(size: 12, weight: .semibold)).foregroundColor(.black), in: textRect)
+            titleContext.draw(Text(verbatim: text).font(.jarasSystem(size: 12, weight: .semibold)).foregroundColor(.black), in: textRect)
         }
         return
     }
     guard drawWaveform || track.kind != .standard || mediaDirectory == nil || (clip.audioFile ?? track.audioFile) == nil else { return }
     let waveTop = rect.minY + min(GridSelectionItem.bodyInset, rect.height)
-    let rgb = TrackNameContrast.components(track.color ?? JarasTheme.roleHex(track.role), emphasized: selected)
-    let luminance = 0.2126 * rgb.red + 0.7152 * rgb.green + 0.0722 * rgb.blue
-    // Neutral gray ink follows the item brightness, without becoming black.
-    let waveColor = Color(white: silenced ? 0.78 : luminance > 0.68 ? 0.52 : luminance > 0.42 ? 0.9 : 0.8)
     if let mediaDirectory, let file = clip.audioFile ?? track.audioFile, track.kind == .standard {
         for fragment in tempoSegments ?? [clip] {
             var waveformContext = context
@@ -5122,7 +5240,7 @@ private func drawTimelineItem(_ clip: AudioClip, track: Track, title: String, re
     var waveContext = context
     waveContext.clip(to: path)
     waveContext.clip(to: Path(CGRect(x: rect.minX, y: waveTop + channelHeight * CGFloat(channel) + 0.5, width: rect.width, height: max(0, channelHeight - 1))))
-    waveContext.stroke(wave, with: .color(waveColor), lineWidth: 1)
+    waveContext.stroke(fadedTimelineWaveform(wave, clip: clip, middle: middle, scale: scale), with: .color(waveColor), lineWidth: 1)
     }
     }
 
@@ -5209,21 +5327,7 @@ final class MixerDividerView: NSView {
         let area = NSTrackingArea(rect: bounds, options: [.cursorUpdate, .mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(area); hoverArea = area
     }
-    // Fixed horizontal shape, independent of the OS's resize cursor artwork.
-    // This divider never uses a four-direction move cursor.
-    private static let resizeCursor: NSCursor = {
-        let image = NSImage(size: NSSize(width: 28, height: 16), flipped: false) { _ in
-            let path = NSBezierPath()
-            let points: [NSPoint] = [.init(x: 2, y: 8), .init(x: 8, y: 2), .init(x: 8, y: 6),
-                .init(x: 20, y: 6), .init(x: 20, y: 2), .init(x: 26, y: 8),
-                .init(x: 20, y: 14), .init(x: 20, y: 10), .init(x: 8, y: 10), .init(x: 8, y: 14)]
-            path.move(to: points[0]); for point in points.dropFirst() { path.line(to: point) }; path.close()
-            NSColor.white.setFill(); path.fill()
-            NSColor.black.setStroke(); path.lineWidth = 1.5; path.lineJoinStyle = .round; path.stroke()
-            return true
-        }
-        return NSCursor(image: image, hotSpot: NSPoint(x: 14, y: 8))
-    }()
+    private static let resizeCursor = NSCursor.resizeLeftRight
     override func resetCursorRects() { addCursorRect(visibleRect, cursor: Self.resizeCursor) }
     private func releasePointerCursor() {
         guard Self.pointerCursorOwner === self else { return }
@@ -5318,8 +5422,8 @@ final class MixerDividerView: NSView {
     override func mouseDragged(with event: NSEvent) { updateDrag(with: event, layoutResize: true) }
     private func updateDrag(with event: NSEvent, layoutResize: Bool) {
         guard mouseIsDown else { return }
-        let dx = event.locationInWindow.x - startingX
-        let dy = startingY - event.locationInWindow.y
+        let dx = (event.locationInWindow.x - startingX) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).width))
+        let dy = (startingY - event.locationInWindow.y) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).height))
         if dragAxis == .pending {
             guard max(abs(dx), abs(dy)) >= 3 else { return }
             if abs(dy) > abs(dx), scrollPerPoint > 0 { dragAxis = .scroll }
@@ -5333,7 +5437,7 @@ final class MixerDividerView: NSView {
             return
         }
         Self.resizeCursor.set()
-        let width = min(maximum, max(minimum, startingWidth + direction * (event.locationInWindow.x - startingX)))
+        let width = min(maximum, max(minimum, startingWidth + direction * dx))
         latestWidth = width
         // Horizontal width must reach the pointer in this event. Waiting for a
         // new display link here added an entire frame to every subsequent drag.
@@ -5376,12 +5480,13 @@ private struct RegionShortcut: NSViewRepresentable {
     let selectAll: () -> Bool
     let copy: () -> Bool
     let move: () -> Bool
+    let duplicate: () -> Void
     let paste: () -> Void
     let createMarker: () -> Void
     let createSectionMarker: () -> Void
     let escape: () -> Void
     func makeNSView(context: Context) -> RegionShortcutView { RegionShortcutView() }
-    func updateNSView(_ view: RegionShortcutView, context: Context) { view.hasDeletionSelection = hasDeletionSelection; view.escape = escape; view.create = create; view.createMarker = createMarker; view.createSectionMarker = createSectionMarker; view.delete = delete; view.undoEdit = undo; view.redoEdit = redo; view.selectAllItems = selectAll; view.copyItems = copy; view.moveItems = move; view.pasteItems = paste }
+    func updateNSView(_ view: RegionShortcutView, context: Context) { view.hasDeletionSelection = hasDeletionSelection; view.escape = escape; view.create = create; view.createMarker = createMarker; view.createSectionMarker = createSectionMarker; view.delete = delete; view.undoEdit = undo; view.redoEdit = redo; view.selectAllItems = selectAll; view.copyItems = copy; view.moveItems = move; view.duplicateItems = duplicate; view.pasteItems = paste }
 }
 final class RegionShortcutView: NSView {
     private static let owners = NSHashTable<RegionShortcutView>.weakObjects()
@@ -5409,6 +5514,7 @@ final class RegionShortcutView: NSView {
         case "c": _ = owner.copyItems?()
         case "x": _ = owner.moveItems?()
         case "v": owner.pasteItems?()
+        case "d": owner.duplicateItems?()
         default: break
         }
     }
@@ -5439,6 +5545,7 @@ final class RegionShortcutView: NSView {
     var copyItems: (() -> Bool)?
     var moveItems: (() -> Bool)?
     var pasteItems: (() -> Void)?
+    var duplicateItems: (() -> Void)?
     private var monitor: Any?
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() {
@@ -5465,6 +5572,7 @@ final class RegionShortcutView: NSView {
                 case "c": if event.isARepeat || self.copyItems?() == true { return nil }
                 case "x": if event.isARepeat || self.moveItems?() == true { return nil }
                 case "v": if !event.isARepeat { self.pasteItems?() }; return nil
+                case "d": if !event.isARepeat { self.duplicateItems?() }; return nil
                 default: break
                 }
             }
@@ -5865,7 +5973,7 @@ private final class TimelineResolvedName: NSObject {
     static func label(_ name: String, context: GraphicsContext, fontSize: CGFloat = 9) -> TimelineResolvedName {
         let key = "\(fontSize):\(name)" as NSString
         if let value = cache.object(forKey: key) { return value }
-        let value = TimelineResolvedName(context.resolve(Text(verbatim: name).font(.system(size: fontSize, weight: .medium))))
+        let value = TimelineResolvedName(context.resolve(Text(verbatim: name).font(.jarasSystem(size: fontSize, weight: .medium))))
         cache.setObject(value, forKey: key, cost: name.utf8.count * 16 + 128)
         return value
     }
@@ -6010,7 +6118,7 @@ private struct TimelineTileIdentity: Equatable {
     var trackHeights: [CGFloat] = []
     var rulerHeight: CGFloat = 0
     var selectedClips: Set<UUID> = []
-    var gainPreview: ItemGainPreview.State? = nil
+    var waveformPreview: ItemWaveformPreview.State? = nil
     var waveformRevision: UInt64 = 0
     var missingAudioPaths: Set<String> = []
     var mediaDirectory: URL? = nil
@@ -6179,8 +6287,8 @@ private final class ClipDragView: NSView {
     override func mouseUp(with event: NSEvent) { deliver(event, ended: true) }
     private func deliver(_ event: NSEvent, ended: Bool) {
         guard let startPoint else { return }
-        let delta = CGSize(width: event.locationInWindow.x - startPoint.x,
-                           height: startPoint.y - event.locationInWindow.y)
+        let delta = CGSize(width: (event.locationInWindow.x - startPoint.x) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).width)),
+                           height: (startPoint.y - event.locationInWindow.y) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).height)))
         // Window coordinates stay stable when preview lanes change size.
         // AppKit keeps sending this mouse sequence to the original view.
         if ended { self.startPoint = nil }
@@ -6213,7 +6321,7 @@ private struct ClipDragInput: View {
             Color.clear.contentShape(Rectangle()).gesture(input())
             if let mute, let rect = localItem.muteRect {
                 Button(action: mute) {
-                    Text("M").font(.system(size: 9 * GridSelectionItem.headerScale, weight: .bold)).foregroundStyle(.white)
+                    Text("M").font(.jarasSystem(size: 9 * GridSelectionItem.headerScale, weight: .bold)).foregroundStyle(.white)
                         .frame(width: rect.width, height: rect.height)
                         .background(item.muted ? Color.red : Color.black.opacity(0.28)).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel("Mute item")
@@ -6278,6 +6386,20 @@ private struct ClipDragInput: View {
 }
 #endif
 
+private struct TimelineMovementLockButtonStyle: ButtonStyle {
+    let locked: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.jarasSystem(size: 10, weight: .semibold))
+            .foregroundStyle(locked ? Color.black : JarasTheme.text)
+            .frame(width: 24, height: 21)
+            .background(locked ? JarasTheme.yellow.opacity(configuration.isPressed ? 0.75 : 1)
+                : JarasTheme.text.opacity(configuration.isPressed ? 0.24 : 0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .contentShape(Rectangle())
+    }
+}
+
 private struct SubCursorBlink: ViewModifier {
     func body(content: Content) -> some View { content.modifier(JarasBlink(active: true, interval: 0.45, lowOpacity: 0.3)) }
 }
@@ -6297,6 +6419,7 @@ struct TimelineRenderKey: Equatable, Hashable {
     var resizingItem: UUID? = nil
     var itemStart = 0.0, itemEnd = 0.0
     var projectID: UUID? = nil
+    var hiddenTracks: Set<UUID> = []
 }
 /// Controls do not need sample arrays, so SwiftUI never diffs them for each fader.
 private func mixerMetadata(_ source: Track) -> Track {
@@ -6382,7 +6505,7 @@ private final class MarkerTargetLabelWidths {
     private let cache = NSCache<NSString, NSNumber>()
     private let measure: (String) -> Double
     init(measure: @escaping (String) -> Double = { label in
-        Double((label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 9, weight: .semibold)]).width)
+        Double((label as NSString).size(withAttributes: [.font: NSFont.jarasSystemFont(ofSize: 9, weight: .semibold)]).width)
     }) {
         self.measure = measure
         cache.countLimit = 4096
@@ -6516,15 +6639,20 @@ private struct NativeTimelineMarkerLayout {
         var index = lowerBound(max(0, (Double(viewport.minX) - maximumWidth) / scale))
         var includedDrag = false
         while index < orderedEntries.count {
-            let entry = orderedEntries[index], x = entry.marker.position * scale
+            let x = orderedEntries[index].marker.position * scale
             if x > viewport.maxX + 1 { break }
+            let next = (floor(x / 8) + 1) * 8 / scale
+            let nextIndex = max(index + 1, lowerBound(next))
+            // Earlier entries in this column cannot fit a head before their
+            // neighbour. The last entry can, and must not be skipped at zooms
+            // where it has ample room to the next tempo.
+            let entry = orderedEntries[nextIndex - 1]
             project(entry)
             if entry.marker.id == draggingID { includedDrag = true }
             // Jump directly to the next screen column without visiting every
             // tempo in a dense ramp. Columns use world coordinates, so panning
             // does not continually choose different representatives.
-            let next = (floor(x / 8) + 1) * 8 / scale
-            index = max(index + 1, lowerBound(next))
+            index = nextIndex
         }
         if !includedDrag, let draggingID, let entry = entries.first(where: { $0.marker.id == draggingID }) { project(entry) }
     }
@@ -6569,7 +6697,7 @@ private struct MarkerEditTargets: View {
         ZStack(alignment: .topLeading) {
             ForEach(targets) { target in
                 let marker = target.marker
-                MarkerEditAnchor(edit: { edit(marker) }, delete: {
+                MarkerEditAnchor(normalCursor: !marker.isTempo && marker.sourceRegionID == nil && marker.unifiedRegionID == nil, edit: { edit(marker) }, delete: {
                     if marker.unifiedRegionID == nil, marker.sourceRegionID == nil { delete(marker.id) }
                 }, seek: { seek(marker) }, drag: song.canDragMarker(marker) ? drag.map { action in { delta, ended in action(marker, delta, ended) } } : nil)
                     .frame(width: target.width, height: markerLaneHeight)
@@ -6608,16 +6736,16 @@ private struct ItemTunerEditor: View {
     var body: some View {
         VStack(spacing: 14) {
             HStack {
-                Text(verbatim: "Tuner").font(.title3.bold())
+                Text(verbatim: "Tuner").font(.jarasTitle3.bold())
                 Spacer()
-                Text(verbatim: "±12 st").font(.caption).foregroundStyle(JarasTheme.secondary)
+                Text(verbatim: "±12 st").font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
             }
             ScrollView {
                 VStack(spacing: 10) {
                     ForEach(clips) { clip in
                         let pitch = clip.pitchSemitones ?? 0
                         HStack(spacing: 8) {
-                            Text(verbatim: clip.name).font(.system(size: 13, weight: .semibold)).lineLimit(2)
+                            Text(verbatim: clip.name).font(.jarasSystem(size: 13, weight: .semibold)).lineLimit(2)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Button { show.setItemPitch(clip.id, semitones: max(-12, pitch - 1)) } label: {
                                 Image(systemName: "minus").frame(width: 28, height: 28)

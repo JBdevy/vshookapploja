@@ -18,6 +18,8 @@ parts = [between('/// The closed header owns no SwiftUI zoom graph.', '@MainActo
  between('private enum TimelineHeaderViewport', 'private struct TimelineStaticHeaderIdentity'),
  between('private final class MarkerTargetLabelWidths', 'private struct MarkerEditTargets'),
  between('private final class TimelineResolvedName', 'private struct RegionBoundaryOverlay')]
+conversion = Path('Application/Project/ProjectEditing.swift').read_text()
+parts.append(conversion[conversion.index('public struct MarkerRegionConversion {'):conversion.index('public extension Project {')])
 # Instrument the extracted fixture only; production carries no test counters.
 # Instrument layer properties only inside the header drawing class. Native
 # input shape layers keep their independent selection/hover lifecycle.
@@ -56,7 +58,7 @@ PY
 swiftc -swift-version 5 -target "$(uname -m)-apple-macos12.0" \
   Application/Project/OutputPatch.swift Application/Project/NativeFXSettings.swift \
   Application/Project/TrackRouting.swift Application/Project/MultiLoop.swift \
-  Application/Project/TrackAutomation.swift Application/Controls/NativeFXParameter.swift Application/Project/ProjectModels.swift Application/Project/MIDIItem.swift \
+  Application/Project/TrackAutomation.swift Application/Controls/NativeFXParameter.swift Application/Project/ProjectModels.swift Application/Project/MIDIItem.swift Application/Project/ItemFade.swift Application/Project/ItemFadeCurve.swift \
   Application/Project/TimelineTempo.swift Apple/Shared/Theme.swift Apple/Shared/NativeTooltips.swift \
   Apple/Shared/NativeTimelineInputGate.swift Apple/Shared/RightClickRouting.swift \
   Apple/Shared/RegionEditor.swift Apple/Shared/TimelineStaticText.swift "$test_dir/main.swift" -o "$test_dir/test"

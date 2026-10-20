@@ -43,7 +43,13 @@ import UIKit
         retry()
         #endif
     }
-    func retry() { do { container = try AppContainer(); error = nil } catch { self.error = error.localizedDescription } }
+    func retry() { do {
+        let initial = try AppContainer(); container = initial
+        #if os(macOS)
+        DesktopProjectTabs.shared.install(initial)
+        #endif
+        error = nil
+    } catch { self.error = error.localizedDescription } }
 }
 @main @MainActor struct JarasLiveApp: App {
     @StateObject private var bootstrap = Bootstrap()
@@ -62,8 +68,14 @@ import UIKit
         #endif
     }
     @ViewBuilder private var bootstrappedContent: some View {
-        if let container = bootstrap.container { RootView(container: container) }
-        else { VStack(spacing: 20) { Text("CatLive").font(.largeTitle.bold()); Text(LocalizedStringKey(bootstrap.error ?? "Iniciando…")); Button("Tentar novamente") { bootstrap.retry() } }.padding(40) }
+        if let container = bootstrap.container {
+            #if os(macOS)
+            DesktopProjectRoot(initial: container)
+            #else
+            RootView(container: container)
+            #endif
+        }
+        else { VStack(spacing: 20) { Text("CatLive").font(.jarasLargeTitle.bold()); Text(LocalizedStringKey(bootstrap.error ?? "Iniciando…")); Button("Tentar novamente") { bootstrap.retry() } }.padding(40) }
     }
     var body: some Scene {
         #if os(macOS)
@@ -79,6 +91,7 @@ import UIKit
                 Button("Cut") { RegionShortcutView.performClipboard("x") }.keyboardShortcut("x")
                 Button("Copy") { RegionShortcutView.performClipboard("c") }.keyboardShortcut("c")
                 Button("Paste") { RegionShortcutView.performClipboard("v") }.keyboardShortcut("v")
+                Button("Duplicate") { RegionShortcutView.performClipboard("d") }.keyboardShortcut("d")
             }
         }
         #else
@@ -126,7 +139,7 @@ struct RootView: View {
                         HStack {
                             Button("Modes") { leaveNative?() }.disabled(documents.busy)
                             Spacer()
-                            Text("Native").font(.headline).foregroundStyle(JarasTheme.green)
+                            Text("Native").font(.jarasHeadline).foregroundStyle(JarasTheme.green)
                             Spacer()
                             if documents.ready { Button("Back to project") { browsingNative = false } }
                         }.padding(16).background(JarasTheme.panel)
@@ -134,24 +147,46 @@ struct RootView: View {
                     }
                 }
                 #else
-                if documents.ready {
-                    MainView(show: container.show, auth: auth, backend: container.backend, documents: documents)
-                        // A successful open starts a new workspace, even for
-                        // a backup/copy carrying the same project UUID. Native
-                        // surfaces, gestures and local editors cannot survive it.
-                        .id(documents.opened)
+                if documents.ready || documents.projectTabCount > 1 {
+                    ZStack {
+                        DesktopWorkspaceView(container: container)
+                        if !documents.ready {
+                            Color.black.opacity(0.45).ignoresSafeArea()
+                            VStack(spacing: 0) {
+                                HStack {
+                                    Text("Projects").font(.jarasHeadline)
+                                    Spacer()
+                                    if documents.canCancelOpening {
+                                        Button { documents.cancelOpening() } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                                    }
+                                }.padding(16)
+                                Divider()
+                                ProjectBrowserView(documents: documents)
+                            }.frame(width: 560, height: 500)
+                                .background(JarasTheme.background)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                } else {
+                    ProjectBrowserView(documents: documents)
+                        .background(ProjectTitlebarContent { EmptyView() })
                 }
-                else { ProjectBrowserView(documents: documents) }
                 #endif
             }
             else if [.launching,.checkingSession,.checkingLicense,.checkingDevice].contains(auth.phase) {
                 StartupView(progress: nil, stage: [.launching, .checkingSession].contains(auth.phase) ? "Restaurando ativação…" : "Validando acesso…")
-            } else { LoginView(auth: auth, backend: container.backend) }
+            } else {
+                LoginView(auth: auth, backend: container.backend,
+                          offersTrial: auth.trialDaysRemaining != 0,
+                          showsCloseButton: false)
+            }
         }
         #if os(macOS)
-        .frame(minWidth: documents.ready ? 1408 : 600, minHeight: documents.ready ? 650 : 460)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(InterfaceScaleAnchor(preserveFrame: true))
         .background(TrialTitlebar(auth: auth))
-        .background(ProjectWindowSizing(editor: documents.ready, documents: documents))
+        .background(ProjectWindowSizing(editor: (documents.ready || documents.projectTabCount > 1) && auth.workspaceAllowed,
+                                        login: !auth.workspaceAllowed, documents: documents))
         .overlay {
             GeometryReader { geometry in
                 JarasTheme.titlebar
@@ -182,7 +217,7 @@ struct RootView: View {
                     Color.black.opacity(0.45).ignoresSafeArea()
                     VStack(spacing: 16) {
                         ProgressView(value: documents.audioImportProgress).tint(JarasTheme.green)
-                        Text(LocalizedStringKey(documents.status)).font(.callout)
+                        Text(LocalizedStringKey(documents.status)).font(.jarasCallout)
                         if documents.canCancelOpening { Button("Cancel") { documents.cancelOpening() } }
                     }.padding(28).frame(width: 360).background(JarasTheme.panel)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -202,7 +237,7 @@ struct RootView: View {
         }
         .overlay(alignment: .top) {
             if !documents.closeNotice.isEmpty {
-                Text(LocalizedStringKey(documents.closeNotice)).font(.callout)
+                Text(LocalizedStringKey(documents.closeNotice)).font(.jarasCallout)
                     .padding(12).background(JarasTheme.panel)
                     .clipShape(RoundedRectangle(cornerRadius: 8)).padding(.top, 20)
                     .accessibilityAddTraits(.updatesFrequently)
@@ -212,8 +247,70 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .jarasHideScrollIndicators()
         .environment(\.locale, Locale(identifier: language)).task { await container.start() }
+        #if os(macOS)
+        .interfaceScaled()
+        .font(.jarasBody)
+        #endif
     }
 }
+#if os(macOS)
+/// Each tab owns its mounted workspace. Switching tabs detaches and reattaches
+/// that host, preserving timeline/mixer views and their local presentation state.
+@MainActor private struct DesktopWorkspaceView: NSViewRepresentable {
+    let container: AppContainer
+    @Environment(\.locale) private var locale
+    @Environment(\.displayScale) private var displayScale
+    private var environmentKey: String { locale.identifier + "|" + String(describing: displayScale) }
+    private func content() -> AnyView {
+        AnyView(MainView(show: container.show, auth: container.auth, backend: container.backend, documents: container.documents)
+            .environment(\.locale,locale).environment(\.colorScheme,.dark)
+            .environment(\.displayScale,displayScale).font(.jarasBody))
+    }
+    final class Deck: NSView {
+        override func layout() {
+            super.layout()
+            for view in subviews where !view.isHidden { view.frame = bounds }
+        }
+        override var isFlipped: Bool { true }
+    }
+    func makeNSView(context: Context) -> Deck { Deck() }
+    func updateNSView(_ deck: Deck, context: Context) {
+        guard container.documents.ready else { return }
+        let host: NSHostingView<AnyView>
+        if container.desktopWorkspaceIdentity == container.documents.opened,
+           let cached = container.desktopWorkspaceHost { host = cached }
+        else {
+            container.desktopWorkspaceHost?.removeFromSuperview()
+            host = NSHostingView(rootView: content())
+            if #available(macOS 13, *) { host.sizingOptions = [] }
+            if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
+            host.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            host.setContentHuggingPriority(.defaultLow, for: .vertical)
+            container.desktopWorkspaceHost = host
+            container.desktopWorkspaceIdentity = container.documents.opened
+            container.desktopWorkspaceEnvironment = environmentKey
+        }
+        if container.desktopWorkspaceEnvironment != environmentKey {
+            container.desktopWorkspaceEnvironment = environmentKey
+            host.rootView = content()
+        }
+        // Keep mounted workspaces attached to the same window. Removing a
+        // hosting view from its window tears down native descendants on a switch.
+        if host.superview !== deck { deck.addSubview(host) }
+        let live = DesktopProjectTabs.shared.projects.compactMap { $0.desktopWorkspaceHost }
+        for view in deck.subviews {
+            if !live.contains(where: { $0 === view }) && view !== host { view.removeFromSuperview() }
+            else { view.isHidden = view !== host }
+        }
+        host.frame = deck.bounds
+        deck.needsLayout = true
+    }
+    @available(macOS 13, *)
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: Deck, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? nsView.bounds.width, height: proposal.height ?? nsView.bounds.height)
+    }
+}
+#endif
 /// A native alert sizes itself to all of its text, which can put its dismiss
 /// button below the screen for projects with many unsupported effects. Only
 /// the details scroll here; the title and confirmation remain in view.
@@ -227,9 +324,9 @@ struct ProjectMigrationNotice: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(verbatim: text("Project migration")).font(.headline)
+                Text(verbatim: text("Project migration")).font(.jarasHeadline)
                 Text(verbatim: text("Project imported. Review these notes before playback."))
-                    .font(.callout).foregroundStyle(JarasTheme.secondary)
+                    .font(.jarasCallout).foregroundStyle(JarasTheme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }.accessibilityIdentifier("migration-notice-header")
             ScrollView(.vertical, showsIndicators: true) {
@@ -238,10 +335,10 @@ struct ProjectMigrationNotice: View {
                         HStack(alignment: .top, spacing: 8) {
                             Text(verbatim: "\(index + 1).").foregroundStyle(JarasTheme.yellow)
                             Text(verbatim: note).frame(maxWidth: .infinity, alignment: .leading)
-                                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true).textSelection(.disabled)
                         }
                     }
-                }.font(.system(size: 12)).padding(12)
+                }.font(.jarasSystem(size: 12)).padding(12)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(JarasTheme.background)
@@ -249,7 +346,7 @@ struct ProjectMigrationNotice: View {
             .accessibilityIdentifier("migration-notice-details")
             HStack {
                 Text(verbatim: String(format: text("Import notes: %ld"), notes.count))
-                    .font(.caption).foregroundStyle(JarasTheme.secondary)
+                    .font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
                 Spacer()
                 Button(action: dismiss) {
                     Text(verbatim: text("OK")).frame(minWidth: 64, minHeight: 24)
@@ -267,35 +364,59 @@ struct ProjectMigrationNotice: View {
 struct UnauthorizedPreview: PreviewProvider { static var previews: some View { let container = try! AppContainer(preview: true); LoginView(auth: container.auth, backend: container.backend).frame(width: 1100, height: 720) } }
 
 struct StartupView: View {
+    static let panelWidth: CGFloat = 600
+    static let panelHeight: CGFloat = 280
     let progress: Double?
     let stage: String
     var transparent = false
-    @State private var pulse = false
     var body: some View {
         ZStack {
             if !transparent { JarasTheme.background.ignoresSafeArea() }
-            VStack(spacing: 22) {
+            HStack(spacing: 0) {
                 Image("CatLiveSplash").resizable().scaledToFit()
-                    .frame(width: 330, height: 330).accessibilityLabel("CatLive")
-                Group {
-                    if let progress {
-                        GeometryReader { geometry in
-                            Capsule().fill(JarasTheme.green.opacity(0.14))
-                            Capsule().fill(JarasTheme.green)
-                                .frame(width: geometry.size.width * min(1, max(0, progress)))
-                                .opacity(pulse ? 1 : 0.55)
-                                .shadow(color: JarasTheme.green.opacity(pulse ? 0.5 : 0.15), radius: pulse ? 5 : 2)
-                        }.frame(height: 5)
-                    } else {
-                        ProgressView().progressViewStyle(.linear).tint(JarasTheme.green)
+                    .padding(24)
+                    .frame(width: Self.panelWidth * 0.4, height: Self.panelHeight)
+                    .accessibilityLabel("CatLive")
+                Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1)
+                VStack(alignment: .leading, spacing: 0) {
+                    Spacer(minLength: 0)
+                    HStack(spacing: 10) {
+                        HStack(alignment: .center, spacing: 2) {
+                            ForEach(Array([10.0, 20, 30, 38, 26, 18, 8].enumerated()), id: \.offset) { _, height in
+                                Capsule().frame(width: 3, height: height)
+                            }
+                        }.frame(width: 33, height: 38).accessibilityHidden(true)
+                        Text(verbatim: "CatLive").font(.jarasSystem(size: 54, weight: .bold))
+                            .lineLimit(1).minimumScaleFactor(0.8)
                     }
-                }.frame(width: 300)
+                    .foregroundStyle(LinearGradient(colors: [Color(hex: 0x72FFB3), Color(hex: 0x00CF64)],
+                                                    startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Text(verbatim: "Version " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""))
+                        .font(.jarasSystem(size: 12)).foregroundStyle(JarasTheme.secondary).padding(.top, 8)
+                    Spacer(minLength: 24)
+                    Group {
+                        if let progress {
+                            GeometryReader { geometry in
+                                Capsule().fill(JarasTheme.green.opacity(0.14))
+                                Capsule().fill(JarasTheme.green)
+                                    .frame(width: geometry.size.width * min(1, max(0, progress)))
+                            }.frame(height: 5)
+                        } else {
+                            ProgressView().progressViewStyle(.linear).tint(JarasTheme.green)
+                        }
+                    }
                     .accessibilityLabel(LocalizedStringKey(stage))
                     .accessibilityValue(progress.map { "\(Int($0 * 100))%" } ?? "")
-                Text(LocalizedStringKey(stage)).font(.system(size: 12))
-                    .foregroundStyle(JarasTheme.secondary)
+                    Text(LocalizedStringKey(stage)).font(.jarasSystem(size: 12))
+                        .foregroundStyle(JarasTheme.secondary).padding(.top, 10)
+                    Text(verbatim: "© reivsoficial").font(.jarasSystem(size: 10))
+                        .foregroundStyle(JarasTheme.secondary).padding(.top, 4)
+                }.padding(24).frame(width: Self.panelWidth * 0.6 - 1, height: Self.panelHeight)
             }
-            .onAppear { withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) { pulse = true } }
+            .frame(width: Self.panelWidth, height: Self.panelHeight)
+            .background(JarasTheme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
         }
     }
 }
@@ -330,10 +451,10 @@ private final class FloatingStartupAnchor: NSView {
             window.alphaValue = 0
             hidMain = true
             if panel == nil {
-                let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 390, height: 430), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: StartupView.panelWidth, height: StartupView.panelHeight), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
                 panel.isOpaque = false
                 panel.backgroundColor = .clear
-                panel.hasShadow = false
+                panel.hasShadow = true
                 panel.level = .floating
                 panel.isReleasedWhenClosed = false
                 panel.ignoresMouseEvents = true
@@ -343,6 +464,7 @@ private final class FloatingStartupAnchor: NSView {
                 self.panel = panel
                 panel.center()
                 panel.orderFrontRegardless()
+                DispatchQueue.main.async { AppStartupPresentation.playSoundOnce() }
             }
             hosting?.rootView = splashContent
         } else { finish() }
@@ -383,13 +505,13 @@ private final class FloatingStartupAnchor: NSView {
     func begin() {
         remaining = 1
         hiddenWindows = NSApp.windows.filter { $0.isVisible }
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 390, height: 430), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: StartupView.panelWidth, height: StartupView.panelHeight), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.level = .floating; panel.isReleasedWhenClosed = false; panel.ignoresMouseEvents = true
         panel.contentView = NSHostingView(rootView: ClosingLogoView(state: self)
             .environment(\.locale, Locale(identifier: UserDefaults.standard.string(forKey: "jaras.language") ?? "en")))
         if let screen = NSApp.mainWindow?.screen {
-            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - 195, y: screen.visibleFrame.midY - 215))
+            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - StartupView.panelWidth / 2, y: screen.visibleFrame.midY - StartupView.panelHeight / 2))
         } else { panel.center() }
         self.panel = panel
         hiddenWindows.forEach { $0.orderOut(nil) }
@@ -522,9 +644,12 @@ private struct ClosingLogoView: View {
         else { answer(alert.runModal()) }
     }
     private func finishClosing(documents: ProjectDocuments, save: Bool, completion: @escaping (Bool) -> Void) {
-        closingLogo.begin()
         Task { @MainActor in
             do {
+                guard try await DesktopProjectTabs.shared.confirmAndSaveBackgroundProjects(excluding: documents) else {
+                    pending = false; completion(false); return
+                }
+                closingLogo.begin()
                 // Let the transparent logo paint before releasing playback resources.
                 await Task.yield()
                 let capture = TrackRecording.shared
@@ -538,7 +663,7 @@ private struct ClosingLogoView: View {
                 closingLogo.advance(0.25)
                 FXWindows.shared.closeAll()
                 capture.closeProject()
-                StemAudioPlayback.shared.prepareForClosing()
+                DesktopProjectTabs.shared.stopAll()
                 try await documents.rememberProjectMedia()
                 closingLogo.advance(1)
                 await Task.yield()

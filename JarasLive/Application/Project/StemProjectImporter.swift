@@ -21,7 +21,7 @@ struct ImportAudit: Decodable {
 }
 
 /// Runs on a worker task. Audio is read in bounded buffers, never on the UI or audio thread.
-enum AudioDropLayout: String, CaseIterable, Sendable { case separateTracks, sameTrack }
+enum AudioDropLayout: String, CaseIterable, Sendable { case separateTracks, sameTrack, stacked }
 
 enum StemProjectImporter {
     struct DroppedAudio: Sendable { let tracks: [Track]; let folders: [URL]; var folder: URL { folders[0] } }
@@ -67,14 +67,14 @@ enum StemProjectImporter {
         }
         return sources
     }
-    static func prepareDroppedAudio(_ urls: [URL], start: Double, destinationTracks: [UUID], destination: URL, layout: AudioDropLayout = .separateTracks, gap: Double = 0, destinationKind: TrackKind? = nil, videoTrackAvailable: Bool = false,
+    static func prepareDroppedAudio(_ urls: [URL], start: Double, destinationTracks: [UUID], destination: URL, layout: AudioDropLayout = .separateTracks, gap: Double = 0, destinationKind: TrackKind? = nil, videoTrackAvailable: Bool = false, deferWaveform: Bool = false,
                                     progress: (@Sendable (Int, Int, String) -> Void)? = nil) throws -> DroppedAudio {
         guard start.isFinite, start >= 0, gap.isFinite, (0...60).contains(gap), !urls.isEmpty else { throw ProjectError.invalid("No media files to import") }
         // Validate the entire batch before making any project directory or copying media.
         let sources = try droppedSources(urls)
         guard let kind = sources.first?.kind else { throw ProjectError.invalid("No media files to import") }
         guard sources.allSatisfy({ $0.kind == kind }) else { throw ProjectError.invalid("Drop audio and video separately") }
-        if kind != .video {
+        if kind != .video || layout == .stacked {
             guard destinationKind == nil || destinationKind == .standard else { throw ProjectError.invalid("Audio files must be dropped on a standard audio track") }
         }
         let fm = FileManager.default
@@ -113,11 +113,11 @@ enum StemProjectImporter {
                 guard copiedPath.hasPrefix(basePath + "/") else { throw ProjectError.invalid("Imported media must stay inside the project folder") }
                 let mediaPath = String(copiedPath.dropFirst(basePath.count + 1))
                 if isVideo && !AVURLAsset(url: copied).tracks(withMediaType: .audio).isEmpty { _ = try AudioFileRead.openMedia(copied) }
-                let overview = isVideo ? (waveform: [Double](), peak: 0.0, channels: [[Double]]()) : try audioOverview(copied, duration: source.duration)
+                let overview = (isVideo || deferWaveform) ? (waveform: [Double](), peak: 0.0, channels: [[Double]]()) : try audioOverview(copied, duration: source.duration)
                 let itemName = url.deletingPathExtension().lastPathComponent
                 let clip = AudioClip(id: UUID(), name: itemName, startTime: layout == .sameTrack ? cursor : start, duration: source.duration,
                                      waveform: overview.waveform, audioFile: AudioFile(path: mediaPath), waveformChannels: overview.channels)
-                if layout == .sameTrack, !tracks.isEmpty { tracks[0].clips.append(clip) }
+                if layout != .separateTracks, !tracks.isEmpty { tracks[0].clips.append(clip) }
                 else {
                     let trackID = tracks.count < destinationTracks.count ? destinationTracks[tracks.count] : UUID()
                     var track = Track(id: trackID, name: isVideo && destinationKind?.isText == true ? destinationKind!.title : itemName, role: TrackRole(rawValue: isVideo && !destinationTracks.isEmpty && destinationKind != .video ? (destinationKind?.rawValue ?? "other") : "other"), color: Track.defaultStandardColor)

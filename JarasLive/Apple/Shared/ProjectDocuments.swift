@@ -18,6 +18,13 @@ enum PortableProjectImportPrompt: String, Identifiable {
 }
 
 @MainActor final class ProjectDocuments: ObservableObject {
+    var projectAudio: StemAudioPlayback = .shared
+    var activateExistingProjectTab: ((URL) -> Bool)?
+    var openInNewProjectTab: ((URL) -> Void)?
+    var navigateProjectTab: ((Int) -> Void)?
+    @Published var projectTabCount = 1
+    @Published var projectTabIndex = 0
+
     #if os(iOS)
     enum NativePicker: String, Identifiable { case package, packageDestination, stems, trackAudio, trackMedia, storage; var id: String { rawValue } }
     @Published var nativePicker: NativePicker?
@@ -140,7 +147,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
     }
     @Published var nativeNamePrompt = false
     @Published var nativeProjectName = ""
-    private var nativePendingCreation: (scan: StemScan?, detectBPM: Bool)?
+    private var nativePendingCreation: (scan: StemScan?, detectBPM: Bool, recordingChannels: Int?)?
     private var nativeScopedFolders: [URL] = []
     private var nativeAudioTarget: (session: UUID, song: UUID, track: UUID, position: Double)?
     func chooseNativeTrackAudio(_ track: UUID) {
@@ -201,7 +208,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
         error = ""
         if adding { finish(scan: scan, detectBPM: detectBPM, destination: nil) }
         else {
-            nativePendingCreation = (scan, detectBPM)
+            nativePendingCreation = (scan, detectBPM, nil)
             confirmNativeProjectName(presentPrompt: false)
         }
     }
@@ -221,7 +228,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
             error = "A project already exists at this location. Choose another name."; nativeNamePrompt = presentPrompt; return
         }
         nativePendingCreation = nil
-        finish(scan: pending.scan, detectBPM: pending.detectBPM, destination: directory.appendingPathComponent(name).appendingPathExtension("jl"))
+        finish(scan: pending.scan, detectBPM: pending.detectBPM, destination: directory.appendingPathComponent(name).appendingPathExtension("jl"), recordingChannels: pending.recordingChannels)
     }
     func cancelNativeProjectName() { nativePendingCreation = nil }
     #endif
@@ -381,7 +388,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
                 let scoped = sources.filter { $0.startAccessingSecurityScopedResource() }
                 defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
                 prepared = try await Task.detached(priority: .userInitiated) {
-                    try StemProjectImporter.prepareDroppedAudio(sources, start: start, destinationTracks: targets, destination: destination, layout: dropLayout, gap: gap, destinationKind: destinationKind, videoTrackAvailable: videoTrackAvailable) { [weak self] current, total, name in
+                    try StemProjectImporter.prepareDroppedAudio(sources, start: start, destinationTracks: targets, destination: destination, layout: dropLayout, gap: gap, destinationKind: destinationKind, videoTrackAvailable: videoTrackAvailable, deferWaveform: true) { [weak self] current, total, name in
                         Task { @MainActor [weak self] in
                             self?.status = "Importing \(current)/\(total): \(name)"
                             self?.audioImportProgress = total > 0 ? min(1, Double(current) / Double(total)) : nil
@@ -394,17 +401,9 @@ enum PortableProjectImportPrompt: String, Identifiable {
                             throw ProjectError.invalid("The destination Video track no longer exists")
                         }
                     }
-                    #if os(macOS)
-                    var waveProject = show.snapshot.project
-                    if let index = waveProject.songs.firstIndex(where: { $0.id == song }) {
-                        for track in prepared.tracks {
-                            if let existing = waveProject.songs[index].tracks.firstIndex(where: { $0.id == track.id }) {
-                                waveProject.songs[index].tracks[existing].clips += track.clips
-                            } else { waveProject.songs[index].tracks.append(track) }
-                        }
-                        await preloadTimelineWaveforms(waveProject, at: destination)
-                    }
-                    #endif
+                    // Visible items request their waveform cache asynchronously.
+                    // Insert first: analysis must never gate the drop or mutate
+                    // the project later (which could resurrect an undone item).
                     try show.insertAudioTracks(prepared.tracks, song: song, project: projectID)
                 }
             } catch {
@@ -554,7 +553,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
                 VideoPlayback.teleprompter.closeProject()
                 VideoPlayback.teleprompter2.closeProject()
                 TrackRecording.shared.closeProject()
-                StemAudioPlayback.shared.prepareForClosing()
+                projectAudio.prepareForClosing()
                 await store.deselect()
                 try await Task.detached(priority: .userInitiated) { try deletion.remove() }.value
                 recent.removeAll { deletion.contains($0) }
@@ -571,7 +570,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
                 if let url = currentURL {
                     await store.select(url: url, id: show.snapshot.project.id)
                     let directory = url.deletingLastPathComponent()
-                    StemAudioPlayback.shared.open(directory: directory)
+                    projectAudio.open(directory: directory)
                     VideoPlayback.shared.open(directory: directory)
                     VideoPlayback.teleprompter.open(directory: directory)
                     VideoPlayback.teleprompter2.open(directory: directory)
@@ -701,7 +700,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
         VideoPlayback.teleprompter.closeProject()
         VideoPlayback.teleprompter2.closeProject()
         TrackRecording.shared.closeProject()
-        StemAudioPlayback.shared.prepareForClosing()
+        projectAudio.prepareForClosing()
         resetProjectSelections()
         clearImportSelection()
         cancelNativePackageImport(); nativePicker = nil; nativeAudioTarget = nil
@@ -736,8 +735,8 @@ enum PortableProjectImportPrompt: String, Identifiable {
         resetProjectSelections()
         await store.select(url: url, savedProject: project)
         let missing = Set(ProjectAudioRecovery.missingPaths(in: project, directory: url.deletingLastPathComponent()))
-        StemAudioPlayback.shared.open(directory: url.deletingLastPathComponent())
-        StemAudioPlayback.shared.setMissingAudioPaths(missing)
+        projectAudio.open(directory: url.deletingLastPathComponent())
+        projectAudio.setMissingAudioPaths(missing)
         VideoPlayback.shared.open(directory: url.deletingLastPathComponent())
         VideoPlayback.teleprompter.open(directory: url.deletingLastPathComponent())
         VideoPlayback.teleprompter2.open(directory: url.deletingLastPathComponent())
@@ -761,6 +760,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
         if enriched != project { try await ProjectStore(url: url).save(enriched) }
     }
     func open(_ url: URL) {
+        if activateExistingProjectTab?(url) == true { return }
         guard !busy, !show.isPlaying, !TrackRecording.shared.recording, !TrackRecording.shared.busy else { return }
         // Recent Projects and Finder can both request the document already in
         // memory. Reloading its older disk snapshot would discard current edits
@@ -977,8 +977,12 @@ enum PortableProjectImportPrompt: String, Identifiable {
         }
     }
     func createEmpty() { finish(scan: nil, detectBPM: false) }
+    func createRecordingProject(channels: Int) {
+        guard (1...128).contains(channels) else { error = "Choose between 1 and 128 channels."; return }
+        finish(scan: nil, detectBPM: false, recordingChannels: channels)
+    }
     func confirmImport(detectBPM: Bool) { guard let scan else { return }; finish(scan: scan, detectBPM: detectBPM) }
-    private func finish(scan: StemScan?, detectBPM: Bool) {
+    private func finish(scan: StemScan?, detectBPM: Bool, recordingChannels: Int? = nil) {
         guard show.canExecute(), !busy, !show.isPlaying, !TrackRecording.shared.recording, !TrackRecording.shared.busy else { return }
         #if os(iOS)
         if !(scan != nil && adding) {
@@ -986,15 +990,15 @@ enum PortableProjectImportPrompt: String, Identifiable {
             // from the alert's button can leave its keyboard window in charge
             // while Files tries to focus its new-folder rename field.
             guard nativeStorageDirectory != nil else {
-                afterNativeStorage = { [weak self] in self?.finish(scan: scan, detectBPM: detectBPM) }
+                afterNativeStorage = { [weak self] in self?.finish(scan: scan, detectBPM: detectBPM, recordingChannels: recordingChannels) }
                 nativePicker = .storage; return
             }
-            nativePendingCreation = (scan, detectBPM); nativeProjectName = ""; nativeNamePrompt = true; return
+            nativePendingCreation = (scan, detectBPM, recordingChannels); nativeProjectName = ""; nativeNamePrompt = true; return
         }
         #endif
-        finish(scan: scan, detectBPM: detectBPM, destination: nil)
+        finish(scan: scan, detectBPM: detectBPM, destination: nil, recordingChannels: recordingChannels)
     }
-    private func finish(scan: StemScan?, detectBPM: Bool, destination: URL?) {
+    private func finish(scan: StemScan?, detectBPM: Bool, destination: URL?, recordingChannels: Int? = nil) {
         let append = scan != nil && adding
         let url: URL
         if append {
@@ -1044,6 +1048,9 @@ enum PortableProjectImportPrompt: String, Identifiable {
                         throw ProjectError.invalid("The open project changed. Start Add Project again.")
                     }
                     base = saved
+                } else if let recordingChannels {
+                    base = try Project.recordingMultitrack(name: url.deletingPathExtension().lastPathComponent,
+                        channels: recordingChannels, trackPrefix: JarasLocalization.string("Track"))
                 } else { base = Project.empty(name: url.deletingPathExtension().lastPathComponent) }
                 let result = try await Task.detached(priority: .userInitiated) {
                     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1090,7 +1097,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
                 try show.replaceProject(result.0)
                 resetProjectSelections()
                 await store.select(url: url, savedProject: result.0)
-                StemAudioPlayback.shared.open(directory: url.deletingLastPathComponent())
+                projectAudio.open(directory: url.deletingLastPathComponent())
                 VideoPlayback.shared.open(directory: url.deletingLastPathComponent())
                 VideoPlayback.teleprompter.open(directory: url.deletingLastPathComponent())
                 VideoPlayback.teleprompter2.open(directory: url.deletingLastPathComponent())
@@ -1099,6 +1106,9 @@ enum PortableProjectImportPrompt: String, Identifiable {
                 #endif
                 VideoPlayback.shared.update(show.snapshot)
                 TrackRecording.shared.open(directory: url.deletingLastPathComponent(), project: show.snapshot.project.id)
+                if recordingChannels != nil {
+                    TrackRecording.shared.setArmed(Set(result.0.songs.flatMap(\.tracks).map(\.id)), active: true, requiresAudioInput: true)
+                }
                 show.preparePlayback()
                 currentURL = url; remember(url); ready = true; clearImportSelection(); opened = UUID()
                 warnings += result.1
@@ -1139,25 +1149,25 @@ struct MissingAudioRecoveryPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Missing audio files").font(.headline)
+                Text("Missing audio files").font(.jarasHeadline)
                 Text(String(format: JarasLocalization.string(paths.count == 1 ? "%d audio file is missing" : "%d audio files are missing"), paths.count))
-                    .font(.callout).foregroundStyle(JarasTheme.secondary)
+                    .font(.jarasCallout).foregroundStyle(JarasTheme.secondary)
             }.accessibilityIdentifier("missing-audio-header")
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(paths.enumerated()), id: \.offset) { _, path in
-                        Text(verbatim: path).font(.system(.caption, design: .monospaced))
+                        Text(verbatim: path).font(.jarasSystem(.caption, design: .monospaced))
                             .lineLimit(1).truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(6).background(JarasTheme.panel).jarasHelp(path)
                     }
                     ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
-                        Text(verbatim: warning).font(.system(size: 12)).foregroundStyle(JarasTheme.yellow)
+                        Text(verbatim: warning).font(.jarasSystem(size: 12)).foregroundStyle(JarasTheme.yellow)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.disabled)
                     }
                     ForEach(Array(errors.enumerated()), id: \.offset) { _, error in
-                        Text(verbatim: error).font(.caption).foregroundStyle(.red)
+                        Text(verbatim: error).font(.jarasCaption).foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }.padding(10)
@@ -1167,14 +1177,14 @@ struct MissingAudioRecoveryPanel: View {
             .background(JarasTheme.background)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .accessibilityIdentifier("missing-audio-details")
-            if busy { HStack { ProgressView().controlSize(.small); Text(LocalizedStringKey(status)) }.font(.caption).lineLimit(1) }
+            if busy { HStack { ProgressView().controlSize(.small); Text(LocalizedStringKey(status)) }.font(.jarasCaption).lineLimit(1) }
             HStack(spacing: 10) {
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction).disabled(!canCancel)
                 Spacer(minLength: 0)
                 Button("Open anyway", action: open).keyboardShortcut(.defaultAction).disabled(busy)
                 Button("Search", action: search).disabled(busy)
                     .buttonStyle(StageButtonStyle(color: JarasTheme.green))
-            }.font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            }.font(.jarasSystem(size: 12)).fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("missing-audio-actions")
         }
         .padding(20).background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
@@ -1196,8 +1206,11 @@ struct ProjectBrowserView: View {
     @State private var addingOptions = false
     @State private var opening = false
     @State private var recentSearch = ""
+    @State private var recentToOpen: URL?
     private var filteredRecent: [URL] { documents.recent.filter { RecentProjectEntry.matches($0, query: recentSearch) } }
     @State private var askingForBPM = false
+    @State private var recordingSetup = false
+    @State private var recordingChannelCount = 32
     #if os(iOS)
     #endif
     var body: some View {
@@ -1214,10 +1227,10 @@ struct ProjectBrowserView: View {
                 #if os(iOS)
                 NativeStemImportReview(documents: documents, scan: scan)
                 #else
-                Text("Review stems").font(.title3.bold())
-                Text("\(scan.folders.count) song folders · \(scan.folders.reduce(0) { $0 + $1.files.count }) audio files").font(.caption)
+                Text("Review stems").font(.jarasTitle3.bold())
+                Text("\(scan.folders.count) song folders · \(scan.folders.reduce(0) { $0 + $1.files.count }) audio files").font(.jarasCaption)
                 if !scan.suggestions.isEmpty {
-                    Text("Repeated names were found that may identify providers. Select suggestions or type names to remove.").font(.caption).foregroundStyle(JarasTheme.secondary)
+                    Text("Repeated names were found that may identify providers. Select suggestions or type names to remove.").font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(scan.suggestions) { item in
@@ -1233,11 +1246,11 @@ struct ProjectBrowserView: View {
                     }.frame(maxHeight: 120)
                 }
                 TextField("Names to remove, separated by commas", text: $documents.removal).textFieldStyle(.roundedBorder)
-                Text("Original folders remain unchanged. Audio is copied beside the .jl project.").font(.caption2).foregroundStyle(JarasTheme.secondary)
+                Text("Original folders remain unchanged. Audio is copied beside the .jl project.").font(.jarasCaption2).foregroundStyle(JarasTheme.secondary)
                 HStack { Button("Back", action: documents.reviewFolderOrder); Spacer(); Button("Create / Add") { askingForBPM = true }.buttonStyle(StageButtonStyle(color: JarasTheme.green)).keyboardShortcut(.defaultAction) }
                 #endif
             } else {
-                Text("CatLive").font(.title2.bold())
+                Text("CatLive").font(.jarasTitle2.bold())
                 #if os(iOS)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3), spacing: 14) {
                     startupCard("Create Project", icon: "plus.rectangle", color: JarasTheme.green) { creating.toggle(); opening = false; addingOptions = false }
@@ -1256,21 +1269,49 @@ struct ProjectBrowserView: View {
                     Button { documents.chooseNativeStorage() } label: { Label("Project folder", systemImage: "externaldrive") }
                     Spacer()
                     Text(documents.nativeStorageDirectory == nil ? "Choose an external folder" : "External folder selected")
-                        .font(.caption).foregroundStyle(documents.nativeStorageDirectory == nil ? JarasTheme.yellow : JarasTheme.green)
+                        .font(.jarasCaption).foregroundStyle(documents.nativeStorageDirectory == nil ? JarasTheme.yellow : JarasTheme.green)
                 }
                 if documents.nativeStorageDirectory == nil {
                     Text("Choose a folder outside CatLive to keep projects and media after deleting the app. Existing projects will be copied there.")
-                        .font(.caption).foregroundStyle(JarasTheme.secondary)
+                        .font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
                 }
                 #endif
                 if creating {
-                    HStack {
-                        action("Add Stems", icon: "waveform") { documents.chooseStems(adding: false) }
-                        action("Empty", icon: "doc") { documents.createEmpty() }
-                        #if os(macOS)
-                        action("REAPER", icon: "waveform.path") { documents.chooseMigration("rpp") }
-                        action("Logic", icon: "pianokeys") { documents.chooseMigration("logicx") }
-                        #endif
+                    if recordingSetup {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("REC Multitrack").font(.jarasHeadline)
+                            HStack(spacing: 10) {
+                                Text("Channels")
+                                TextField("Channels", value: $recordingChannelCount, formatter: NumberFormatter())
+                                    .textFieldStyle(.roundedBorder).frame(width: 64)
+                                Stepper("Channels", value: $recordingChannelCount, in: 1...128).labelsHidden().fixedSize()
+                                Spacer()
+                            }
+                            Text("Mono inputs in sequence, all tracks armed, monitoring on.")
+                                .font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
+                            HStack {
+                                Button("Back") { recordingSetup = false }
+                                Spacer()
+                                Button("Create Project") { documents.createRecordingProject(channels: recordingChannelCount) }
+                                    .buttonStyle(StageButtonStyle(color: JarasTheme.green))
+                                    .disabled(!(1...128).contains(recordingChannelCount))
+                                    .keyboardShortcut(.defaultAction)
+                            }
+                        }.padding(14).background(JarasTheme.panel).cornerRadius(8)
+                    } else {
+                        VStack(spacing: 8) {
+                            HStack {
+                                action("Add Stems", icon: "waveform") { documents.chooseStems(adding: false) }
+                                action("Empty", icon: "doc") { documents.createEmpty() }
+                                action("REC Multitrack", icon: "record.circle") { recordingSetup = true }
+                            }
+                            #if os(macOS)
+                            HStack {
+                                action("REAPER", icon: "waveform.path") { documents.chooseMigration("rpp") }
+                                action("Logic", icon: "pianokeys") { documents.chooseMigration("logicx") }
+                            }
+                            #endif
+                        }
                     }
                 }
                 if addingOptions {
@@ -1282,7 +1323,7 @@ struct ProjectBrowserView: View {
                     }
                 }
                 if opening {
-                HStack { Text("Recent projects").font(.caption).foregroundStyle(JarasTheme.secondary); Spacer(); Button("Browse…") { documents.browse() } }
+                HStack { Text("Recent projects").font(.jarasCaption).foregroundStyle(JarasTheme.secondary); Spacer(); Button("Browse…") { documents.browse() } }
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(JarasTheme.secondary)
                     TextField("Search recent projects", text: $recentSearch).textFieldStyle(.plain)
@@ -1294,12 +1335,16 @@ struct ProjectBrowserView: View {
                 ScrollView {
                     VStack(spacing: 6) {
                         ForEach(filteredRecent, id: \.path) { url in
-                            Button { documents.open(url) } label: {
+                            Button {
+                                if documents.ready && documents.currentURL?.standardizedFileURL != url.standardizedFileURL {
+                                    recentToOpen = url
+                                } else { documents.open(url) }
+                            } label: {
                                 HStack {
                                     VStack(alignment: .leading) {
-                                        Text(url.deletingPathExtension().lastPathComponent).font(.body.bold())
+                                        Text(url.deletingPathExtension().lastPathComponent).font(.jarasBody.bold())
                                         #if os(macOS)
-                                        Text(url.deletingLastPathComponent().path).font(.caption2).foregroundStyle(JarasTheme.secondary).lineLimit(1)
+                                        Text(url.deletingLastPathComponent().path).font(.jarasCaption2).foregroundStyle(JarasTheme.secondary).lineLimit(1)
                                         #endif
                                     }
                                     Spacer(); Image(systemName: "chevron.right")
@@ -1307,6 +1352,11 @@ struct ProjectBrowserView: View {
                                     .padding(10).frame(maxWidth: .infinity, alignment: .leading).background(JarasTheme.panel).contentShape(Rectangle())
                             }.buttonStyle(.plain)
                                 .contextMenu {
+                                    #if os(macOS)
+                                    if documents.ready, !RecentProjectEntry.isMissing(url), documents.openInNewProjectTab != nil {
+                                        Button("Open in new tab") { documents.openInNewProjectTab?(url); completed() }
+                                    }
+                                    #endif
                                     Button(role: .destructive) { documents.requestDeletion(url) } label: {
                                         Label(RecentProjectEntry.isMissing(url) ? "Remove from recents" : "Delete project", systemImage: "trash")
                                     }
@@ -1314,16 +1364,16 @@ struct ProjectBrowserView: View {
                         }
                     }
                 }.frame(maxHeight: 170)
-                if filteredRecent.isEmpty { Text("No recent projects found.").font(.caption).foregroundStyle(JarasTheme.secondary) }
+                if filteredRecent.isEmpty { Text("No recent projects found.").font(.jarasCaption).foregroundStyle(JarasTheme.secondary) }
                 }
             }
-            }.disabled(documents.busy || documents.show.isPlaying)
-            if !documents.warnings.isEmpty && !nativeReviewVisible { Text(documents.warnings.joined(separator: "\n")).font(.caption).foregroundStyle(JarasTheme.yellow).lineLimit(3).jarasHelp(documents.warnings.joined(separator: "\n")) }
-            if !documents.error.isEmpty { Text(LocalizedStringKey(documents.error)).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+            }.disabled(documents.busy)
+            if !documents.warnings.isEmpty && !nativeReviewVisible { Text(documents.warnings.joined(separator: "\n")).font(.jarasCaption).foregroundStyle(JarasTheme.yellow).lineLimit(3).jarasHelp(documents.warnings.joined(separator: "\n")) }
+            if !documents.error.isEmpty { Text(LocalizedStringKey(documents.error)).font(.jarasCaption).foregroundStyle(.red).textSelection(.disabled) }
             if documents.busy {
                 HStack {
                     ProgressView().controlSize(.small)
-                    Text(LocalizedStringKey(documents.status)).font(.caption)
+                    Text(LocalizedStringKey(documents.status)).font(.jarasCaption)
                     Spacer()
                     if documents.canCancelOpening {
                         Button("Cancel") { documents.cancelOpening() }.keyboardShortcut(.cancelAction)
@@ -1336,8 +1386,15 @@ struct ProjectBrowserView: View {
                 if !documents.ready { opening = false; creating = false; addingOptions = false }
                 completed()
             }
+            .onChange(of: creating) { _ in recordingSetup = false }
             .sheet(item: $documents.pendingDeletion) { deletion in
                 ProjectDeletionConfirmation(documents: documents, deletion: deletion)
+            }
+            .alert("Open another project?", isPresented: Binding(get: { recentToOpen != nil }, set: { if !$0 { recentToOpen = nil } }), presenting: recentToOpen) { url in
+                Button("Cancel", role: .cancel) { recentToOpen = nil }
+                Button("Open project") { recentToOpen = nil; documents.open(url) }
+            } message: { url in
+                Text("The current project will be replaced by \(url.deletingPathExtension().lastPathComponent).")
             }
             .alert("Open a project first", isPresented: $documents.showingOpenProjectAlert) {
                 Button("OK", role: .cancel) {}
@@ -1366,13 +1423,13 @@ struct ProjectBrowserView: View {
             startupCardLabel("Add Project", icon: "folder.badge.plus", color: JarasTheme.purple)
             #else
             Label("Add Project", systemImage: "folder.badge.plus")
-                .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity, minHeight: 38)
+                .font(.jarasSystem(size: 12, weight: .medium)).frame(maxWidth: .infinity, minHeight: 38)
                 .background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 6)).contentShape(Rectangle())
             #endif
         }.buttonStyle(.plain)
     }
     private func action(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Label(LocalizedStringKey(title), systemImage: icon).font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity, minHeight: 38).background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 6)).contentShape(Rectangle()) }.buttonStyle(.plain)
+        Button(action: action) { Label(LocalizedStringKey(title), systemImage: icon).font(.jarasSystem(size: 12, weight: .medium)).frame(maxWidth: .infinity, minHeight: 38).background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 6)).contentShape(Rectangle()) }.buttonStyle(.plain)
     }
     #if os(iOS)
     private func startupCard(_ title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
@@ -1380,11 +1437,11 @@ struct ProjectBrowserView: View {
     }
     private func startupCardLabel(_ title: String, icon: String, color: Color) -> some View {
             VStack(alignment: .leading, spacing: 22) {
-                Image(systemName: icon).font(.system(size: 30, weight: .medium)).foregroundStyle(color)
+                Image(systemName: icon).font(.jarasSystem(size: 30, weight: .medium)).foregroundStyle(color)
                 HStack {
-                    Text(LocalizedStringKey(title)).font(.system(size: 17, weight: .semibold)).lineLimit(2)
+                    Text(LocalizedStringKey(title)).font(.jarasSystem(size: 17, weight: .semibold)).lineLimit(2)
                     Spacer(minLength: 4)
-                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(JarasTheme.secondary)
+                    Image(systemName: "chevron.right").font(.jarasSystem(size: 12, weight: .semibold)).foregroundStyle(JarasTheme.secondary)
                 }
             }.padding(20).frame(maxWidth: .infinity, minHeight: 146, alignment: .leading)
                 .background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -1400,12 +1457,12 @@ private struct ProjectDeletionConfirmation: View {
     @State private var remaining = 3
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Delete project", systemImage: "trash").font(.title3.bold()).foregroundStyle(.red)
-            Text(verbatim: deletion.document.deletingPathExtension().lastPathComponent).font(.headline)
-            Text("The CatLive project and its own media, waveform caches and backups will be permanently deleted. The containing folder, unrelated files and media shared with other projects will be kept. This cannot be undone.").font(.body)
-            Text(verbatim: deletion.target.path).font(.caption).textSelection(.enabled)
+            Label("Delete project", systemImage: "trash").font(.jarasTitle3.bold()).foregroundStyle(.red)
+            Text(verbatim: deletion.document.deletingPathExtension().lastPathComponent).font(.jarasHeadline)
+            Text("The CatLive project and its own media, waveform caches and backups will be permanently deleted. The containing folder, unrelated files and media shared with other projects will be kept. This cannot be undone.").font(.jarasBody)
+            Text(verbatim: deletion.target.path).font(.jarasCaption).textSelection(.disabled)
                 .padding(10).frame(maxWidth: .infinity, alignment: .leading).background(JarasTheme.display).cornerRadius(5)
-            if !documents.error.isEmpty { Text(LocalizedStringKey(documents.error)).font(.caption).foregroundStyle(.red) }
+            if !documents.error.isEmpty { Text(LocalizedStringKey(documents.error)).font(.jarasCaption).foregroundStyle(.red) }
             HStack {
                 Button("Cancel") { documents.pendingDeletion = nil }.keyboardShortcut(.cancelAction).disabled(documents.busy)
                 Spacer()
@@ -1478,7 +1535,8 @@ private final class ProjectTitlebarHostingView<Content: View>: NSHostingView<Con
 }
 
 private final class ProjectTitlebarVersionView: NSView {
-    static let text = text(for: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.01")
+    static let text = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+        .map { text(for: $0) } ?? "CatLive"
     static func text(for version: String) -> String {
         let components = version.split(separator: ".")
         guard components.count >= 2, let major = Int(components[0]), let minor = Int(components[1]) else {
@@ -1490,7 +1548,7 @@ private final class ProjectTitlebarVersionView: NSView {
     var preferredWidth: CGFloat { ceil(label.intrinsicContentSize.width) + 20 }
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 160, height: 22))
-        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.font = .jarasSystemFont(ofSize: 11, weight: .medium)
         label.textColor = .white
         label.alignment = .right
         label.lineBreakMode = .byClipping
@@ -1583,9 +1641,11 @@ final class ProjectTitlebarAnchor<Content: View>: NSView {
 
 struct ProjectWindowSizing: NSViewRepresentable {
     let editor: Bool
+    var login = false
     let documents: ProjectDocuments
+    @AppStorage(InterfaceScale.key) private var interfaceScale = 1.0
     func makeNSView(context: Context) -> ProjectWindowAnchor { ProjectWindowAnchor() }
-    func updateNSView(_ view: ProjectWindowAnchor, context: Context) { view.editor = editor; view.documents = documents; view.update() }
+    func updateNSView(_ view: ProjectWindowAnchor, context: Context) { view.editor = editor; view.login = login; view.documents = documents; view.interfaceScale = CGFloat(InterfaceScale.factor(interfaceScale)); view.update() }
 }
 // The native window already has explicit editor/browser bounds. Do not ask
 // SwiftUI to measure its entire document again for minimum, ideal and maximum
@@ -1612,7 +1672,9 @@ final class ProjectWindowAnchor: NSView {
         window.setFrame(frame, display: false)
     }
     var editor = false
+    var login = false
     weak var documents: ProjectDocuments?
+    var interfaceScale: CGFloat = 1
     private var applied: NSSize?
     private weak var configuredWindow: NSWindow?
     private weak var configuredDocuments: ProjectDocuments?
@@ -1672,17 +1734,17 @@ final class ProjectWindowAnchor: NSView {
             NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in self?.rememberPlacement() }
         }
     }
-    private static func restoredFrame(fallback: NSRect) -> NSRect {
+    private static func restoredFrame(fallback: NSRect, scale: CGFloat) -> NSRect {
         guard let saved = UserDefaults.standard.string(forKey: placementKey) else { return fallback }
         var frame = NSRectFromString(saved)
-        guard frame.width >= 1050, frame.height >= 650, frame.origin.x.isFinite, frame.origin.y.isFinite,
+        guard frame.width >= 1050 * scale, frame.height >= 650 * scale, frame.origin.x.isFinite, frame.origin.y.isFinite,
               frame.width.isFinite, frame.height.isFinite else { return fallback }
         let screen = NSScreen.screens.max { a, b in
             let ar = a.visibleFrame.intersection(frame), br = b.visibleFrame.intersection(frame)
             return (ar.isNull ? 0 : ar.width * ar.height) < (br.isNull ? 0 : br.width * br.height)
         }
         let visible = screen.flatMap { $0.visibleFrame.intersects(frame) ? $0.visibleFrame : nil } ?? NSScreen.main?.visibleFrame ?? fallback
-        frame.size.width = min(max(1408, frame.width), visible.width); frame.size.height = min(max(682, frame.height), visible.height)
+        frame.size.width = min(max(1408 * scale, frame.width), visible.width); frame.size.height = min(max(682 * scale, frame.height), visible.height)
         frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
         frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
         return frame
@@ -1703,25 +1765,31 @@ final class ProjectWindowAnchor: NSView {
             observeTitlebar(window)
         }
         let reviewing = documents?.folderReview != nil
-        let size = editor ? Self.editorFrameSize : reviewing ? NSSize(width: 840, height: 540) : NSSize(width: 600, height: 460)
+        let size = editor ? Self.editorFrameSize : login ? NSSize(width: 600, height: 760) : reviewing ? NSSize(width: 840, height: 540) : NSSize(width: 600, height: 460)
+        let available = window.screen?.visibleFrame.size ?? size
+        let minimum = editor ? NSSize(width: 1408, height: 682) : reviewing ? NSSize(width: 760, height: 460) : NSSize(width: 600, height: 460)
+        window.minSize = NSSize(width: min(available.width, minimum.width * interfaceScale), height: min(available.height, minimum.height * interfaceScale))
         guard applied != size else { return }
         rememberPlacement()
         remembersPlacement = false
         applied = size
         let isEditor = editor
         DispatchQueue.main.async { [weak self, weak window] in
-            guard let self, let window, self.editor == isEditor else { return }
-            window.minSize = isEditor ? NSSize(width: 1408, height: 682) : reviewing ? NSSize(width: 760, height: 460) : NSSize(width: 600, height: 460)
+            guard let self, let window, self.editor == isEditor, self.applied == size else { return }
+            let availableMinimum = window.screen?.visibleFrame.size ?? size
+            window.minSize = NSSize(width: min(availableMinimum.width, minimum.width * self.interfaceScale), height: min(availableMinimum.height, minimum.height * self.interfaceScale))
             if isEditor {
                 let available = window.screen?.visibleFrame.size ?? size
                 let frameSize = NSSize(width: min(size.width, available.width), height: min(size.height, available.height))
-                window.setFrame(Self.restoredFrame(fallback: NSRect(origin: window.frame.origin, size: frameSize)), display: true)
+                window.setFrame(Self.restoredFrame(fallback: NSRect(origin: window.frame.origin, size: frameSize), scale: self.interfaceScale), display: true)
                 self.remembersPlacement = true
                 self.rememberPlacement()
             } else {
                 // These sizes described the full window with the previous
                 // full-size content host; keep that same outer geometry.
-                window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true)
+                let available = window.screen?.visibleFrame.size ?? size
+                let fitted = NSSize(width: min(size.width, available.width), height: min(size.height, available.height))
+                window.setFrame(NSRect(origin: window.frame.origin, size: fitted), display: true)
             }
             if !isEditor { window.center() }
         }

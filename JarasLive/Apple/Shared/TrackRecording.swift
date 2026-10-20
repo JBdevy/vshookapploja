@@ -14,6 +14,10 @@ private struct CaptureTarget: Sendable {
     var id = UUID()
     var lane = 0
     var recordedChannels: Int? = nil
+    var postFader = true
+    var postFX = true
+    var gain: Float = 1
+    var effects: NativeFXSettings? = nil
     var channelCount: Int { recordedChannels ?? input.channelCount }
 }
 private struct CapturedItem: Sendable { let track: UUID; let clip: AudioClip }
@@ -33,18 +37,30 @@ private final class CaptureWriter: @unchecked Sendable {
     private var failure: Error?
     private var lastPreview = 0.0
     private var preview: (@Sendable (Double,[UUID:[[Double]]]) -> Void)?
-    var takePreview: (@Sendable ([UUID: Double], [UUID: [[Double]]]) -> Void)?
+    var takePreview: (@Sendable ([UUID: Double], [UUID: LiveRecordedWaveform]) -> Void)?
     private final class Take {
         let target: CaptureTarget
         let url: URL
         var file: AVAudioFile?
         let buffer: AVAudioPCMBuffer
         var overview: RecordingOverview
+        let waveform: LiveRecordedWaveform
         var frames: Int64 = 0
+        var writtenFrames: Int64 = 0
+        var processor: RecordingInputProcessor?
+        var skipFrames: Int
+        var gain: Float
         var position: Double?
         var droppedFramesAtStart: UInt = 0
-        init(target: CaptureTarget,url: URL,file: AVAudioFile,buffer: AVAudioPCMBuffer) {
+        init(target: CaptureTarget,url: URL,file: AVAudioFile,buffer: AVAudioPCMBuffer) throws {
             self.target=target; self.url=url; self.file=file; self.buffer=buffer
+            gain = target.postFader ? target.gain : 1
+            if target.postFX, let settings = target.effects,
+               settings.effectKeys.contains(where: { settings.isEnabled($0) }) {
+                processor = try RecordingInputProcessor(format: buffer.format, settings: settings)
+            } else { processor = nil }
+            skipFrames = processor?.latency ?? 0
+            waveform = try LiveRecordedWaveform(rate: buffer.format.sampleRate, channels: target.channelCount)
             overview=RecordingOverview(channels: target.channelCount,sampleRate: buffer.format.sampleRate)
         }
     }
@@ -64,7 +80,7 @@ private final class CaptureWriter: @unchecked Sendable {
             let settings: [String: Any] = [AVFormatIDKey:kAudioFormatLinearPCM, AVSampleRateKey:sampleRate, AVNumberOfChannelsKey:target.channelCount, AVLinearPCMBitDepthKey:target.format.hasSuffix("16pcm") ? 16 : (target.format == "wav32" || target.format.hasSuffix("32pcm")) ? 32 : 24, AVLinearPCMIsFloatKey:target.format == "wav32", AVLinearPCMIsBigEndianKey:aiff, AVLinearPCMIsNonInterleaved:false]
             let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
             guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096) else { throw ProjectError.invalid("Could not allocate recording buffer") }
-        let take = Take(target: target, url: url, file: file, buffer: buffer)
+        let take = try Take(target: target, url: url, file: file, buffer: buffer)
         take.droppedFramesAtStart = ring.droppedFrames
         return take
     }
@@ -101,7 +117,7 @@ private final class CaptureWriter: @unchecked Sendable {
             let count = interleaved.withUnsafeMutableBufferPointer { ring.readFrames($0.baseAddress!, maximum: 4096) }
             if count == 0 {
                 let time = Double(frames)/sampleRate
-                if time-lastPreview >= 0.08 { lastPreview=time; takePreview?(Dictionary(uniqueKeysWithValues: takes.map { ($0.target.id, Double($0.frames)/sampleRate) }), Dictionary(uniqueKeysWithValues: takes.map { ($0.target.id, $0.overview.snapshot) })); preview?(time,Dictionary(uniqueKeysWithValues: takes.map { ($0.target.track,$0.overview.snapshot) })) }
+                if time-lastPreview >= 0.08 { lastPreview=time; takePreview?(Dictionary(uniqueKeysWithValues: takes.map { ($0.target.id, Double($0.frames)/sampleRate) }), Dictionary(uniqueKeysWithValues: takes.map { ($0.target.id, $0.waveform) })); preview?(time,Dictionary(uniqueKeysWithValues: takes.map { ($0.target.track,$0.overview.snapshot) })) }
                 return
             }
             guard failure == nil else { continue }
@@ -112,20 +128,79 @@ private final class CaptureWriter: @unchecked Sendable {
                         for channel in 0..<take.target.channelCount {
                             let sample = interleaved[frame * channels + take.target.input.firstChannel - 1 + min(channel, take.target.input.channelCount - 1)]
                             take.buffer.floatChannelData![channel][frame] = sample
-                            take.overview.append(sample,channel: channel)
                         }
-                        take.overview.endFrame()
                     }
-                    try take.file?.write(from: take.buffer)
                     take.frames += Int64(count)
+                    try process(take)
                 }
                 frames += Int64(count)
             } catch { failure = error }
         }
     }
+    // Fader edits are serialized after previously captured PCM. The recording
+    // graph remains independent from the track's playback and monitoring graph.
+    func updateGains(_ gains: [UUID: Float]) {
+        queue.async {
+            self.drain()
+            for take in self.takes where take.target.postFader {
+                if let gain = gains[take.target.track] { take.gain = gain }
+            }
+        }
+    }
+    func updateEffects(_ track: UUID, settings: NativeFXSettings) {
+        queue.async {
+            self.drain()
+            do {
+                for take in self.takes where take.target.track == track && take.target.postFX {
+                    // Finish PCM already inside the old chain before a latency
+                    // change; otherwise removing a lookahead FX shifts the take.
+                    try self.flushLatency(take)
+                    if let processor = take.processor { try processor.update(settings) }
+                    else { take.processor = try RecordingInputProcessor(format: take.buffer.format, settings: settings) }
+                    take.skipFrames = take.processor?.latency ?? 0
+                }
+            } catch { self.failure = error }
+        }
+    }
+    private func process(_ take: Take) throws {
+        try take.processor?.process(take.buffer)
+        let count = Int(take.buffer.frameLength)
+        let skip = min(count, take.skipFrames); take.skipFrames -= skip
+        let kept = min(count - skip, Int(take.frames - take.writtenFrames))
+        guard kept > 0 else { return }
+        for channel in 0..<take.target.channelCount {
+            let data = take.buffer.floatChannelData![channel]
+            for frame in 0..<kept { data[frame] = data[frame + skip] * take.gain }
+        }
+        take.buffer.frameLength = AVAudioFrameCount(kept)
+        if preview != nil {
+            for frame in 0..<kept {
+                for channel in 0..<take.target.channelCount { take.overview.append(take.buffer.floatChannelData![channel][frame], channel: channel) }
+                take.overview.endFrame()
+            }
+        }
+        try take.file?.write(from: take.buffer)
+        try take.waveform.append(take.buffer)
+        take.writtenFrames += Int64(kept)
+    }
+    private func flushLatency(_ take: Take) throws {
+        while take.processor != nil && take.writtenFrames < take.frames {
+            let count = min(4096, Int(take.frames - take.writtenFrames) + take.skipFrames)
+            take.buffer.frameLength = AVAudioFrameCount(count)
+            for ch in 0..<take.target.channelCount { take.buffer.floatChannelData![ch].update(repeating: 0, count: count) }
+            try process(take)
+        }
+    }
     private func finalize(_ completed: [Take], fallbackStart: Double, completion: @escaping @Sendable ([CapturedItem], String?) -> Void) {
         guard !completed.isEmpty else { return }
-        for take in completed { take.file = nil }
+        for take in completed {
+            do {
+                // Recover the delayed end of the input, retaining the exact
+                // captured length. Reverb tails beyond REC are not appended.
+                try flushLatency(take)
+            } catch { self.failure = error }
+            take.file = nil
+        }
         let failure = self.failure?.localizedDescription
         let dropped = ring.droppedFrames
         let lostAudio = completed.contains { dropped > $0.droppedFramesAtStart }
@@ -182,7 +257,9 @@ private final class CaptureWriter: @unchecked Sendable {
 }
 
 @MainActor final class TrackRecording: ObservableObject {
-    static let shared = TrackRecording()
+    static var shared = TrackRecording()
+    weak var projectAudio: StemAudioPlayback?
+    private var projectTabActive = true
     @Published private(set) var armed: Set<UUID> = []
     @Published private(set) var armState = RecordingArmState()
     private var microphoneTracks: Set<UUID> = []
@@ -207,7 +284,9 @@ private final class CaptureWriter: @unchecked Sendable {
         }
     }
     #endif
+    func suspendProjectTab() { projectTabActive = false; releaseInput() }
     func bind(_ show: ShowController) {
+        projectTabActive = true;
         self.show = show
         AudioDeviceSettings.shared.canChangeConfiguration = { [weak self, weak show] in
             show?.isPlaying != true && self?.recording != true && self?.busy != true
@@ -221,7 +300,10 @@ private final class CaptureWriter: @unchecked Sendable {
         ControlMappings.shared.onMIDIReceived = { [weak self] device, status, number, value, timestamp in
             self?.receiveMIDI(device: device, status: status, number: number, value: value, timestamp: timestamp)
         }
-        StemAudioPlayback.shared.onLiveKeyboardMIDI = { [weak self] track, status, number, value in
+        (projectAudio ?? StemAudioPlayback.shared).onRecordingFXChanged = { [weak self] track, settings in
+            self?.writer?.updateEffects(track, settings: settings)
+        }
+        (projectAudio ?? StemAudioPlayback.shared).onLiveKeyboardMIDI = { [weak self] track, status, number, value in
             guard let self, self.recording else { return }
             let position = self.startPosition + ProcessInfo.processInfo.systemUptime - self.midiStartTime
             self.midiTakes[track]?.receive(source: Int32.min, status: status, number: number, value: value, position: position)
@@ -265,11 +347,11 @@ private final class CaptureWriter: @unchecked Sendable {
         guard !updatingMonitoring else { return }
         updatingMonitoring = true; defer { updatingMonitoring = false }
         let tracks = show?.current?.tracks ?? []
-        StemAudioPlayback.shared.armedMIDIRecordingTracks = Set(tracks.filter { armed.contains($0.id) && $0.recordingMode == .midi }.map(\.id))
+        (projectAudio ?? StemAudioPlayback.shared).armedMIDIRecordingTracks = Set(tracks.filter { armed.contains($0.id) && $0.recordingMode == .midi }.map(\.id))
         let desired = inputChannels > 0 && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? tracks.filter {
             armed.contains($0.id) && $0.recordingMode != .midi && $0.kind == .standard
         }.map { MonitorConfig(track: $0.id, patch: $0.inputPatch ?? defaultInputPatch, channels: $0.recordingChannels ?? 2) } : []
-        let playback = StemAudioPlayback.shared
+        let playback = (projectAudio ?? StemAudioPlayback.shared)
         guard desired != monitorConfig || desired.contains(where: { !playback.hasInputMonitor($0.track) }) else { return }
         for config in monitorConfig { playback.setInputMonitor(config.track, source: nil) }
         monitorConfig = []; monitorRings = []
@@ -282,7 +364,7 @@ private final class CaptureWriter: @unchecked Sendable {
             let ring = JarasCaptureRing(channels: UInt(format.channelCount), capacity: UInt(max(8192, format.sampleRate / 4)))
             let count = min(config.channels, config.patch.channelCount)
             let source = ring.monitorSource(withSampleRate: format.sampleRate, firstChannel: UInt(config.patch.firstChannel - 1), channelCount: UInt(count))
-            playback.setInputMonitor(config.track, source: source, format: AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: AVAudioChannelCount(count)))
+            playback.setInputMonitor(config.track, source: source, format: AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: AVAudioChannelCount(count)), input: ring, firstChannel: config.patch.firstChannel - 1, channels: count)
             monitorConfig.append(config); monitorRings.append(ring)
         }
         if captureRing == nil {
@@ -446,6 +528,7 @@ private final class CaptureWriter: @unchecked Sendable {
         reconcileArming()
     }
     private func reconcileArming() {
+        guard projectTabActive else { return }
         #if os(iOS)
         guard localAudioAvailable else { return }
         #endif
@@ -476,7 +559,24 @@ private final class CaptureWriter: @unchecked Sendable {
     }
     private func target(for track: Track, position: Double) -> CaptureTarget {
         let lane = TrackLanes(track: track).recordingLane(start: position, duration: 0.01, clips: track.clips)
-        let target = CaptureTarget(track: track.id, input: track.inputPatch ?? defaultInputPatch, format: MediaProcessingFormat.load("record").recordingKey, name: recordingNames.allocate(track: track.name, clips: track.clips), lane: lane, recordedChannels: track.recordingChannels ?? 2)
+        var target = CaptureTarget(track: track.id, input: track.inputPatch ?? defaultInputPatch, format: MediaProcessingFormat.load("record").recordingKey(for: track), name: recordingNames.allocate(track: track.name, clips: track.clips), lane: lane, recordedChannels: track.recordingChannels ?? 2)
+        target.postFader = track.recordingPostFader != false
+        target.postFX = track.recordingPostFX != false
+        target.gain = Float(track.volume)
+        target.effects = track.fx
+        #if os(macOS)
+        if target.postFX, var fx = target.effects {
+            let chain = (projectAudio ?? StemAudioPlayback.shared).effects(for: track.id)
+            for index in (fx.externalPlugins ?? []).indices {
+                let id = fx.externalPlugins![index].id
+                if let node = chain?.externalNode(id), let state = JarasVST3.state(node, identifier: id) {
+                    fx.externalPlugins![index].componentState = state["componentState"] as? String
+                    fx.externalPlugins![index].controllerState = state["controllerState"] as? String
+                }
+            }
+            target.effects = fx
+        }
+        #endif
         let clip = AudioClip(id: target.id, name: target.name, startTime: position, duration: 0.01, recordingLane: lane)
         RecordingLaneLayout.shared.reserve(track: track, clip: clip)
         LiveRecordingPreview.shared.takes[target.id] = RecordingPreviewTake(start: position, duration: 0.01, channels: Array(repeating: [0], count: target.channelCount))
@@ -631,7 +731,7 @@ private final class CaptureWriter: @unchecked Sendable {
                     for (id, duration) in durations {
                         RecordingLaneLayout.shared.update(id, duration: duration)
                         LiveRecordingPreview.shared.takes[id]?.duration = max(0.01, duration)
-                        if let channels = waveforms[id] { LiveRecordingPreview.shared.takes[id]?.channels = channels }
+                        if let waveform = waveforms[id] { LiveRecordingPreview.shared.takes[id]?.waveform = waveform }
                     }
                 }
             }
@@ -653,14 +753,15 @@ private final class CaptureWriter: @unchecked Sendable {
             throw error
         }
     }
+    private var recordingGains: [UUID: Float] = [:]
     func observe(_ snapshot: ShowSnapshot) {
         // Playback samples carry no arming changes. With no configured REC
         // tracks or capture resources, there is nothing to reconcile or stop.
         // Automatic REC still takes the normal path while it is deselected.
         if !recording, !busy, !armState.hasConfiguredTracks, armed.isEmpty,
            captureRing == nil, monitorConfig.isEmpty, !tapInstalled, !inputEngineRunning {
-            if !StemAudioPlayback.shared.armedMIDIRecordingTracks.isEmpty {
-                StemAudioPlayback.shared.armedMIDIRecordingTracks = []
+            if !(projectAudio ?? StemAudioPlayback.shared).armedMIDIRecordingTracks.isEmpty {
+                (projectAudio ?? StemAudioPlayback.shared).armedMIDIRecordingTracks = []
             }
             return
         }
@@ -676,6 +777,10 @@ private final class CaptureWriter: @unchecked Sendable {
         }
         lastTime = now; lastPosition = snapshot.transport.position
         guard recording else { return }
+        if let song = snapshot.project.songs.first(where: { $0.id == recordingSong }) {
+            let gains = Dictionary(uniqueKeysWithValues: song.tracks.filter { activeTargets[$0.id] != nil }.map { ($0.id, Float($0.volume)) })
+            if gains != recordingGains { recordingGains = gains; writer?.updateGains(gains) }
+        }
         for take in midiTakes.values {
             let duration = max(0.01, snapshot.transport.position - take.startTime)
             RecordingLaneLayout.shared.update(take.id, duration: duration)
@@ -743,7 +848,7 @@ private final class CaptureWriter: @unchecked Sendable {
         finishInputRelease()
     }
     private func finishInputRelease() {
-        for config in monitorConfig { StemAudioPlayback.shared.setInputMonitor(config.track, source: nil) }
+        for config in monitorConfig { (projectAudio ?? StemAudioPlayback.shared).setInputMonitor(config.track, source: nil) }
         monitorConfig = []; monitorRings = []
         captureRing?.endCapture()
         #if os(iOS)
@@ -768,7 +873,7 @@ struct TrackRecordButton: View {
         } label: {
             Group {
                 if recorder.armState.mode(for: track.id) == .automatic {
-                    Text(verbatim: "A").font(.system(size: 11, weight: .bold))
+                    Text(verbatim: "A").font(.jarasSystem(size: 11, weight: .bold))
                 } else { Image(systemName: "record.circle") }
             }
                 .frame(width: 22, height: 21)
@@ -779,7 +884,7 @@ struct TrackRecordButton: View {
         .immediateRightClick { editingMode = true }
         .popover(isPresented: $editingMode) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Recording mode").font(.headline)
+                Text("Recording mode").font(.jarasHeadline)
                 Picker("Recording mode", selection: Binding(get: { track.recordingChannels ?? 2 }, set: { show.setRecordingChannels(track.id, channel: $0) })) {
                     Text("Mono").tag(1)
                     Text("Stereo").tag(2)
@@ -788,6 +893,22 @@ struct TrackRecordButton: View {
                     #endif
                 }.pickerStyle(.segmented).labelsHidden().disabled(recorder.recording || recorder.busy)
                 if track.recordingMode != .midi {
+                    Picker("Format", selection: Binding(get: { track.recordingFormat ?? "" }, set: {
+                        show.setRecordingFormat(track.id, format: $0.isEmpty ? nil : $0)
+                    })) {
+                        Text(verbatim: "Default - " + MediaProcessingFormat.load("record").recordingDisplayName).tag("")
+                        Text(verbatim: "WAV · 24-bit PCM").tag("wav")
+                        Text(verbatim: "WAV · 32-bit float").tag("wav32")
+                        Text(verbatim: "MP3 · \(MediaProcessingFormat.load("record").bitrate) kbps").tag("mp3")
+                    }.disabled(recorder.recording || recorder.busy)
+                    Picker("Recording level", selection: Binding(get: { track.recordingPostFader != false }, set: { show.setRecordingStage(track.id, postFader: $0) })) {
+                        Text("Pre-fader").tag(false)
+                        Text("Post-fader").tag(true)
+                    }.pickerStyle(.segmented).disabled(recorder.recording || recorder.busy)
+                    Picker("Recording effects", selection: Binding(get: { track.recordingPostFX != false }, set: { show.setRecordingStage(track.id, postFX: $0) })) {
+                        Text("Pre-FX").tag(false)
+                        Text("Post-FX").tag(true)
+                    }.pickerStyle(.segmented).disabled(recorder.recording || recorder.busy)
                     Picker("Input monitoring", selection: Binding(get: { track.inputMonitoring != false }, set: { show.setInputMonitoring(track.id, enabled: $0) })) {
                         Text(verbatim: "Monitor On").tag(true)
                         Text(verbatim: "Monitor Off").tag(false)
@@ -801,8 +922,7 @@ struct TrackRecordButton: View {
 
     }
 }
-/// Keep the original idle appearance; only an active REC has a flashing red face.
-/// Its layout and click target stay fixed throughout both phases of the blink.
+/// Armed and recording controls remain solid red throughout recording.
 private struct RecordingButtonStyle: ButtonStyle {
     let active: Bool
     var width: CGFloat = 22
@@ -813,7 +933,7 @@ private struct RecordingButtonStyle: ButtonStyle {
     private let red = Color(red: 1, green: 0.12, blue: 0.12)
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: fontSize, weight: .semibold))
+            .font(.jarasSystem(size: fontSize, weight: .semibold))
             .lineLimit(1).minimumScaleFactor(0.75)
             .frame(width: width, height: height)
             .foregroundStyle(active ? Color.black : transport ? JarasTheme.secondary : Color.red)
@@ -823,7 +943,6 @@ private struct RecordingButtonStyle: ButtonStyle {
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(transport ? (active ? red : Color.white.opacity(0.45)) : .clear))
             .contentShape(Rectangle())
-            .modifier(JarasBlink(active: active, interval: 0.4, lowOpacity: 0.05))
             .transaction { $0.animation = nil }
     }
 }

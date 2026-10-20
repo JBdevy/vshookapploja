@@ -9,7 +9,7 @@ public struct TrackRole: Codable, Hashable, Sendable, RawRepresentable {
     public func encode(to encoder: Encoder) throws { var box = encoder.singleValueContainer(); try box.encode(rawValue) }
 }
 public struct AudioFile: Codable, Equatable, Sendable { public var path: String; public var sha256: String? }
-public struct AudioClip: Codable, Identifiable, Equatable, Sendable { public var id: UUID; public var name: String; public var startTime: Double; public var duration: Double; public var separatedStemTracks: [UUID]?; public var sourceOffset: Double = 0; public var waveform: [Double] = []; public var audioFile: AudioFile?; public var gain: Double?; public var phaseInverted: Bool? = nil; public var pan: Double? = nil; public var normalizationGain: Double?; public var fadeIn: Double?; public var fadeOut: Double?; public var fadeTimelineStart: Double?; public var fadeTimelineDuration: Double?; public var channelMode: Int?; public var waveformChannels: [[Double]]?; public var muted: Bool?; public var playbackRate: Double?; public var recordingLane: Int?; public var loopStart: Double?; public var loopLength: Double?; public var fx: NativeFXSettings?; public var timecode: TimecodeSettings?; public var timecodeStartOffset: Double?; public var timecodeEndOffset: Double?; public var fxBypassed: Bool?; public var text: String?; public var midi: MIDIItem?; public var frozenMIDI: Bool?; public var renderedTiming: Bool?; public var pitchSemitones: Double? = nil; public var regionOwnerID: UUID? = nil; public var automation: TrackAutomation? = nil; public var automationSourceOffset: Double? = nil; public var tempoBasePlaybackRate: Double? = nil; public var renderedTempo: Bool? = nil; public var audioRate: Double { playbackRate ?? 1 } }
+public struct AudioClip: Codable, Identifiable, Equatable, Sendable { public var id: UUID; public var name: String; public var startTime: Double; public var duration: Double; public var separatedStemTracks: [UUID]?; public var sourceOffset: Double = 0; public var waveform: [Double] = []; public var audioFile: AudioFile?; public var gain: Double?; public var phaseInverted: Bool? = nil; public var pan: Double? = nil; public var normalizationGain: Double?; public var fadeIn: Double?; public var fadeOut: Double?; public var fadeInCurve: Double? = nil; public var fadeInSCurve: Double? = nil; public var fadeOutCurve: Double? = nil; public var fadeOutSCurve: Double? = nil;  public var fadeTimelineStart: Double?; public var fadeTimelineDuration: Double?; public var channelMode: Int?; public var waveformChannels: [[Double]]?; public var muted: Bool?; public var playbackRate: Double?; public var recordingLane: Int?; public var loopStart: Double?; public var loopLength: Double?; public var fx: NativeFXSettings?; public var timecode: TimecodeSettings?; public var timecodeStartOffset: Double?; public var timecodeEndOffset: Double?; public var fxBypassed: Bool?; public var text: String?; public var midi: MIDIItem?; public var frozenMIDI: Bool?; public var renderedTiming: Bool?; public var pitchSemitones: Double? = nil; public var regionOwnerID: UUID? = nil; public var automation: TrackAutomation? = nil; public var automationSourceOffset: Double? = nil; public var tempoBasePlaybackRate: Double? = nil; public var renderedTempo: Bool? = nil; public var audioRate: Double { playbackRate ?? 1 } }
 public extension AudioClip {
     var isProjectionMedia: Bool { audioFile?.path.hasPrefix("Videos/") == true }
     var isImage: Bool { isProjectionMedia && ["png", "jpg", "jpeg", "gif", "heic", "heif", "tif", "tiff", "bmp", "webp", "avif"].contains(URL(fileURLWithPath: audioFile?.path ?? "").pathExtension.lowercased()) }
@@ -33,7 +33,7 @@ public struct Track: Codable, Identifiable, Equatable, Sendable {
     public var midiInput: Int?
     public var midiChannel: Int?
     public func acceptsMIDI(status: UInt8) -> Bool {
-        status >= 0x80 && status < 0xf0 && (midiChannel == nil || midiChannel == Int(status & 0x0f) + 1)
+        status >= 0x80 && status < 0xf0 && (midiChannel == nil || midiChannel == 0 || midiChannel == Int(status & 0x0f) + 1)
     }
     public var parentTrackID: UUID?
     public var stereoLink: TrackStereoLink?
@@ -42,6 +42,8 @@ public struct Track: Codable, Identifiable, Equatable, Sendable {
     public var recordingChannels: Int?
     public var recordingMode: TrackRecordingMode { TrackRecordingMode(rawValue: recordingChannels ?? 2) ?? .stereo }
     public var recordingFormat: String?
+    public var recordingPostFader: Bool? = nil
+    public var recordingPostFX: Bool? = nil
     public var timecode: TimecodeSettings?
     public var importedTimecodeItems: Bool?
     public var color: UInt32?
@@ -423,7 +425,50 @@ public struct ResolumeSettings: Codable, Equatable, Sendable {
         }
     }
 }
+/// Opaque platform settings travel with a document even where their editor is unavailable.
+/// Keep integer values exact and preserve nested values, including unknown future settings.
+public indirect enum PortableProjectJSON: Codable, Equatable, Sendable {
+    case null
+    case bool(Bool)
+    case integer(Int64)
+    case unsignedInteger(UInt64)
+    case number(Double)
+    case string(String)
+    case array([PortableProjectJSON])
+    case object([String: PortableProjectJSON])
+
+    public init(from decoder: Decoder) throws {
+        let box = try decoder.singleValueContainer()
+        if box.decodeNil() { self = .null }
+        else if let value = try? box.decode(Bool.self) { self = .bool(value) }
+        else if let value = try? box.decode(Int64.self) { self = .integer(value) }
+        else if let value = try? box.decode(UInt64.self) { self = .unsignedInteger(value) }
+        else if let value = try? box.decode(Double.self) { self = .number(value) }
+        else if let value = try? box.decode(String.self) { self = .string(value) }
+        else if let value = try? box.decode([PortableProjectJSON].self) { self = .array(value) }
+        else { self = .object(try box.decode([String: PortableProjectJSON].self)) }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var box = encoder.singleValueContainer()
+        switch self {
+        case .null: try box.encodeNil()
+        case .bool(let value): try box.encode(value)
+        case .integer(let value): try box.encode(value)
+        case .unsignedInteger(let value): try box.encode(value)
+        case .number(let value): try box.encode(value)
+        case .string(let value): try box.encode(value)
+        case .array(let value): try box.encode(value)
+        case .object(let value): try box.encode(value)
+        }
+    }
+}
+
 public struct Project: Codable, Identifiable, Equatable, Sendable {
+    /// Protect timeline positions and boundaries; nil keeps older projects unlocked.
+    public var timelineMovementLocked: Bool? = nil
+    /// Windows grandMA2 assignments and reserved destinations must survive a Mac save.
+    public var windowsLighting: PortableProjectJSON? = nil
     public var resolume: ResolumeSettings? = nil
     /// Editing position captured by Save, portable with the document and backups.
     public var savedCursor: SavedProjectCursor? = nil
@@ -526,7 +571,7 @@ public struct Project: Codable, Identifiable, Equatable, Sendable {
                         guard track.kind == .standard, clip.audioFile != nil, clip.midi == nil else { throw ProjectError.invalid("Frozen MIDI requires an audio item") }
                     }
                     if let midi = clip.midi {
-                        guard track.kind == .standard, clip.audioFile == nil, clip.text == nil, clip.loopLength == nil else { throw ProjectError.invalid("MIDI items require an instrument track and cannot contain audio") }
+                        guard track.kind == .standard, clip.audioFile == nil, clip.text == nil else { throw ProjectError.invalid("MIDI items require an instrument track and cannot contain audio") }
                         try midi.validate()
                     }
                     guard track.kind != .click || clip.audioFile == nil || clip.isProjectionMedia else { throw ProjectError.invalid("Click items use the built-in sound") }
@@ -553,6 +598,7 @@ public struct Project: Codable, Identifiable, Equatable, Sendable {
                     guard clip.channelMode == nil || (0...3).contains(clip.channelMode!) else { throw ProjectError.invalid("Invalid item channel mode") }
                 guard (clip.pitchSemitones ?? 0).isFinite, (-12...12).contains(clip.pitchSemitones ?? 0) else { throw ProjectError.invalid("Invalid item pitch") }
                 guard clip.normalizationGain == nil || (clip.normalizationGain!.isFinite && clip.normalizationGain! >= 0 && clip.normalizationGain! <= pow(10, 24.0 / 20)) else { throw ProjectError.invalid("Invalid normalization gain") }
+                    guard [clip.fadeInCurve, clip.fadeInSCurve, clip.fadeOutCurve, clip.fadeOutSCurve].allSatisfy({ $0 == nil || ($0!.isFinite && (-1...1).contains($0!)) }) else { throw ProjectError.invalid("Invalid fade curve") }
                     guard [clip.fadeIn, clip.fadeOut].allSatisfy({ $0 == nil || ($0!.isFinite && $0! >= 0) }) else { throw ProjectError.invalid("Invalid item fade") }
                     guard (clip.pan ?? 0).isFinite, (-1...1).contains(clip.pan ?? 0) else { throw ProjectError.invalid("Invalid item pan") }
                     guard clip.gain == nil || (clip.gain!.isFinite && clip.gain! >= 0) else { throw ProjectError.invalid("Invalid clip gain") }
@@ -655,6 +701,8 @@ public struct QueueState: Codable, Equatable, Sendable { public var songId: UUID
 public struct LoopState: Codable, Equatable, Sendable { public var enabled: Bool; public var start: Double? = nil; public var end: Double? = nil }
 public struct SubPlayState: Codable, Equatable, Sendable { public var playing: Bool; public var position: Double }
 public struct TransportState: Codable, Equatable, Sendable {
+    public var playbackStartRegionId: UUID? = nil
+    public var subPlaybackStartRegionId: UUID? = nil
     public var multiLoopsBypassed: Bool? = nil
     public var queuedSectionMarkerId: UUID?
     public var sectionQueueStartedAt: Double?
@@ -669,6 +717,59 @@ public struct TransportState: Codable, Equatable, Sendable {
     public var editPosition: Double?
     public var regionId: UUID?; public var queuedRegionId: UUID?; public var queueStartedAt: Double?
     public var queue: QueueState; public var loop: LoopState; public var subPlay: SubPlayState
+}
+/// Same membership rule as Core/Transport/PlaybackScope.hpp. Playback entry is
+/// supplied by the engine, never recomputed from the advancing playhead.
+public struct PlaybackScope: Equatable {
+    public var minimum: Double = -.infinity
+    public var maximum: Double = .infinity
+    public func allows(_ itemStart: Double?) -> Bool {
+        guard let itemStart else { return true }
+        return itemStart >= minimum - 1e-6 && itemStart < maximum - 1e-6
+    }
+}
+public extension Song {
+    /// Linked flags are editable playback boundaries; stored child bounds
+    /// retain the original song extent for non-destructive arrangement edits.
+    func playbackRegionStart(_ part: Part) -> Double {
+        guard let parent = part.parentRegionID else { return part.startTime }
+        return markers?.first { $0.sourceRegionID == part.id && $0.unifiedRegionID == parent }?.position ?? part.startTime
+    }
+    func playbackEntryRegion(at position: Double) -> UUID? {
+        guard let root = parts.filter({ $0.parentRegionID == nil && position >= $0.startTime - 1e-6 && position < $0.endTime })
+            .min(by: { $0.endTime - $0.startTime < $1.endTime - $1.startTime }) else { return nil }
+        return parts.filter { $0.parentRegionID == root.id && playbackRegionStart($0) <= position + 1e-6 }
+            .sorted { playbackRegionStart($0) == playbackRegionStart($1) ? $0.id.uuidString < $1.id.uuidString : playbackRegionStart($0) > playbackRegionStart($1) }.first?.id
+    }
+    func playbackItemStart(_ clip: AudioClip) -> Double? {
+        guard regionOwnershipInitialized == true else { return clip.startTime }
+        let owner = clip.regionOwnerID
+        if let part = parts.first(where: { $0.id == owner }) {
+            guard let parent = part.parentRegionID else { return clip.startTime }
+            // Moving a song flag earlier includes onsets in the newly exposed
+            // interval, while previous-song tails and deliberately moved items
+            // beyond that interval keep their persisted attachment.
+            if let incoming = parts.filter({
+                $0.parentRegionID == parent && $0.id != part.id &&
+                playbackRegionStart($0) < $0.startTime - 1e-6 &&
+                clip.startTime >= playbackRegionStart($0) - 1e-6 && clip.startTime < $0.startTime - 1e-6 &&
+                $0.startTime > part.startTime
+            }).max(by: { playbackRegionStart($0) < playbackRegionStart($1) }) {
+                return playbackRegionStart(incoming)
+            }
+            return playbackRegionStart(part)
+        }
+        return regionOwnershipInitialized == true ? nil : clip.startTime
+    }
+    func playbackScope(_ transport: TransportState, head: Int = 0, destination: Double? = nil) -> PlaybackScope {
+        let entry: UUID?
+        if let destination { entry = playbackEntryRegion(at: destination) }
+        else if head == 0 { entry = transport.playbackStartRegionId ?? transport.regionId }
+        else { entry = transport.subPlaybackStartRegionId ?? transport.queuedRegionId }
+        let part = parts.first { $0.id == entry && $0.parentRegionID != nil }
+        return PlaybackScope(minimum: part.map { playbackRegionStart($0) } ?? -.infinity,
+            maximum: head == 0 ? transport.ignoreNextAfter ?? .infinity : .infinity)
+    }
 }
 public struct AudioRoute: Codable, Sendable { public var trackId: UUID; public var output: Int }
 public struct AudioRouting: Codable, Sendable { public var routes: [AudioRoute] }
@@ -794,6 +895,11 @@ public extension Song {
         parts.filter { start >= $0.startTime - 1e-6 && start < $0.endTime - 1e-6 && (end == nil || end! <= $0.endTime + 1e-6) }
             .min {
                 if ($0.parentRegionID != nil) != ($1.parentRegionID != nil) { return $0.parentRegionID != nil }
+                // Within a unified region the incoming song owns new onsets,
+                // even while the shorter outgoing song still has a tail.
+                if $0.parentRegionID != nil && $0.parentRegionID == $1.parentRegionID && $0.startTime != $1.startTime {
+                    return $0.startTime > $1.startTime
+                }
                 if $0.endTime - $0.startTime != $1.endTime - $1.startTime { return $0.endTime - $0.startTime < $1.endTime - $1.startTime }
                 return $0.id.uuidString < $1.id.uuidString
             }?.id

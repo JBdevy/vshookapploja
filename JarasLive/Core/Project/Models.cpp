@@ -11,16 +11,20 @@ namespace jaras {
 // positions retain sample/tempo precision. Less than one microsecond is the
 // same placement edge; it is still below one sample at 384 kHz.
 static constexpr double regionPlacementTolerance = 1e-6;
-static constexpr int regionOwnershipVersion = 2;
+static constexpr int regionOwnershipVersion = 3;
 // Membership is established on placement, never by moving a region across material.
-std::optional<ID> regionOwnerAt(const Song& song, double start, std::optional<double> end) {
+static std::optional<ID> resolveRegionOwner(const Song& song, double start, std::optional<double> end, bool legacy) {
     const Part* selected = nullptr;
     for (const auto& part : song.parts) {
         if (start < part.startTime - regionPlacementTolerance || start >= part.endTime - regionPlacementTolerance || (end && *end > part.endTime + regionPlacementTolerance)) continue;
         if (!selected || (part.parentRegionID.has_value() != selected->parentRegionID.has_value() ? part.parentRegionID.has_value() :
+            !legacy && part.parentRegionID && part.parentRegionID == selected->parentRegionID && part.startTime != selected->startTime ? part.startTime > selected->startTime :
             part.endTime - part.startTime != selected->endTime - selected->startTime ? part.endTime - part.startTime < selected->endTime - selected->startTime : part.id < selected->id)) selected = &part;
     }
     return selected ? std::optional<ID>(selected->id) : std::nullopt;
+}
+std::optional<ID> regionOwnerAt(const Song& song, double start, std::optional<double> end) {
+    return resolveRegionOwner(song, start, end, false);
 }
 bool regionOwns(const Song& song, const ID& root, const std::optional<ID>& owner) {
     if (!owner) return false;
@@ -37,7 +41,24 @@ void synchronizeRegionOwnership(Project& project, const Project* previous) {
         // microsecond before its rounded region start. Repair only that narrow
         // old boundary case, once at load. Nil within a region remains loose;
         // subsequent loads must never acquire items covered by a region move.
-        const bool repairRoundedBoundary = !old && !initialize && song.regionOwnershipVersion < regionOwnershipVersion;
+        const bool repairRoundedBoundary = !old && !initialize && song.regionOwnershipVersion < 2;
+        const bool repairUnifiedOverlap = !old && !initialize && song.regionOwnershipVersion < 3;
+        const auto repairOverlap = [&](std::optional<ID>& owner, double position) {
+            // Old placement preferred the shortest song, assigning incoming
+            // onsets to an outgoing tail. Repair only that legacy choice among
+            // siblings. Preserve loose items and explicit foreign ownership.
+            if (!repairUnifiedOverlap || !owner || owner != resolveRegionOwner(song, position, {}, true)) return;
+            const auto incoming = regionOwnerAt(song, position);
+            if (!incoming || incoming == owner) return;
+            const Part* from = nullptr;
+            const Part* to = nullptr;
+            for (const auto& part : song.parts) {
+                if (part.id == *owner) from = &part;
+                if (part.id == *incoming) to = &part;
+            }
+            if (from && to && from->parentRegionID && from->parentRegionID == to->parentRegionID &&
+                to->startTime > from->startTime) owner = incoming;
+        };
         const auto roundedBoundaryOwner = [&](double position) -> std::optional<ID> {
             if (!repairRoundedBoundary) return {};
             const auto owner = regionOwnerAt(song, position);
@@ -73,6 +94,7 @@ void synchronizeRegionOwnership(Project& project, const Project* previous) {
             else if (!valid(clip.regionOwnerID)) clip.regionOwnerID.reset();
             else if (prior && !clip.regionOwnerID) clip.regionOwnerID = regionOwnerAt(created, clip.startTime);
             else if (!clip.regionOwnerID) clip.regionOwnerID = roundedBoundaryOwner(clip.startTime);
+            repairOverlap(clip.regionOwnerID, clip.startTime);
         }
         if (song.markers) for (auto& marker : *song.markers) {
             const auto priorEntry = oldMarkers.find(marker.id);
@@ -83,6 +105,7 @@ void synchronizeRegionOwnership(Project& project, const Project* previous) {
             else if (!valid(marker.regionOwnerID)) marker.regionOwnerID.reset();
             else if (prior && !marker.regionOwnerID) marker.regionOwnerID = regionOwnerAt(created, marker.position);
             else if (!marker.regionOwnerID) marker.regionOwnerID = roundedBoundaryOwner(marker.position);
+            if (!marker.unifiedRegionID) repairOverlap(marker.regionOwnerID, marker.position);
         }
         song.regionOwnershipInitialized = true;
         song.regionOwnershipVersion = std::max(song.regionOwnershipVersion, regionOwnershipVersion);
@@ -95,7 +118,7 @@ void orderSpecialTracks(Project& project) {
         for (auto& marker : *song.markers) if (!marker.tempoBPM && endpoints.count(marker.id)) { marker.section = true; marker.loopSection = true; }
     }
     const auto rank = [](const Track& track) {
-        return track.role.id == "timecode" ? 0 : track.role.id == "generatedClick" ? 1 : track.role.id == "chords" ? 2 : track.role.id == "teleprompt" ? 3 : track.role.id == "teleprompt2" ? 4 : track.role.id == "video" ? 5 : 6;
+        return track.role.id == "timecode" ? 0 : track.role.id == "teleprompt" ? 1 : track.role.id == "teleprompt2" ? 2 : track.role.id == "chords" ? 3 : track.role.id == "generatedClick" ? 4 : track.role.id == "video" ? 5 : 6;
     };
     for (auto& song : project.songs) {
         const auto earlier = [&](const Track& a, const Track& b) { return rank(a) < rank(b); };
@@ -144,7 +167,8 @@ void validateClipFXJSON(const std::string& json) {
         if (end == std::string::npos) throw std::invalid_argument("Invalid item FX selection");
         const auto effect = json.substr(position + 1, end - position - 1);
         const bool external = effect.rfind("External:", 0) == 0 && effect.size() > 9 && json.find("\"externalPlugins\"") != std::string::npos;
-        if ((!allowed.count(effect) && !external) || !effects.insert(effect).second) throw std::invalid_argument("Invalid item FX selection");
+        const bool nativeInstance = effect.rfind("Native:", 0) == 0 && effect.size() > 7 && json.find("\"instances\"") != std::string::npos;
+        if ((!allowed.count(effect) && !external && !nativeInstance) || !effects.insert(effect).second) throw std::invalid_argument("Invalid item FX selection");
         position = json.find_first_not_of(" \t\r\n", end + 1);
         if (position == std::string::npos || (json[position] != ',' && json[position] != ']')) throw std::invalid_argument("Invalid item FX selection");
         if (json[position] == ',') {
@@ -308,7 +332,7 @@ void validate(const Project& p) {
                 require((clip.frozenMIDI != true && clip.renderedTiming != true && clip.renderedTempo != true) || (fixed.empty() && clip.audioFile && !clip.midi), "Printed timing requires an audio item");
                 if(clip.midi) {
                     const auto& m=*clip.midi;
-                    require(fixed.empty() && !clip.audioFile && !clip.text && !clip.loopLength, "MIDI items require an instrument track");
+                    require(fixed.empty() && !clip.audioFile && !clip.text, "MIDI items require an instrument track");
                     require(finite(m.sourceBPM) && m.sourceBPM>=1 && m.sourceBPM<=1000 && m.notes.size()<=100000, "Invalid MIDI item");
                     require(m.division>=1 && m.division<=128 && (m.division&(m.division-1))==0 && finite(m.swing) && m.swing>=0 && m.swing<=.95, "Invalid MIDI grid");
                     require(m.mode=="straight" || m.mode=="triplet" || m.mode=="dotted" || m.mode=="swing", "Invalid MIDI grid mode");
@@ -339,6 +363,7 @@ void validate(const Project& p) {
                 require(!clip.pan || (finite(*clip.pan) && *clip.pan >= -1 && *clip.pan <= 1), "Invalid item pan");
                 require(!clip.gain || (finite(*clip.gain) && *clip.gain >= 0), "Invalid clip gain");
                 require(!clip.channelMode || (*clip.channelMode >= 0 && *clip.channelMode <= 3), "Invalid item channel mode");
+                for (auto value : {clip.fadeInCurve, clip.fadeInSCurve, clip.fadeOutCurve, clip.fadeOutSCurve}) require(!value || (finite(*value) && *value >= -1 && *value <= 1), "Invalid fade curve");
                 require((!clip.fadeIn || (finite(*clip.fadeIn) && *clip.fadeIn >= 0)) && (!clip.fadeOut || (finite(*clip.fadeOut) && *clip.fadeOut >= 0)), "Invalid item fade");
                 require(!clip.pitchSemitones || (finite(*clip.pitchSemitones) && *clip.pitchSemitones >= -12 && *clip.pitchSemitones <= 12), "Invalid item pitch");
                 require(!clip.normalizationGain || (finite(*clip.normalizationGain) && *clip.normalizationGain >= 0 && *clip.normalizationGain <= std::pow(10.0, 24.0 / 20.0)), "Invalid normalization gain");

@@ -1,6 +1,77 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import Combine
+#if os(macOS)
+/// A single detached host owns the Setlist and its optional Parts sidebar.
+/// Dock placement remains in MainView so closing this window restores that side.
+@MainActor final class DetachedSetlistWindow: NSObject, ObservableObject, NSWindowDelegate {
+    @Published private(set) var isDetached = false
+    @Published private(set) var isVisible = false
+    private(set) var window: NSWindow?
+    private var host: NSHostingView<AnyView>?
+    private var onDock: () -> Void = {}
+    private var partsVisible = false
+
+    func open<Content: View>(onDock: @escaping () -> Void = {}, @ViewBuilder content: () -> Content) {
+        self.onDock = onDock
+        if let window {
+            update(content: content)
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil); isVisible = true
+            return
+        }
+        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 700),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        panel.title = "CatLive · Setlist"
+        panel.minSize = NSSize(width: 320, height: 300)
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        let view = NSHostingView(rootView: AnyView(content().interfaceScaled()))
+        if #available(macOS 13, *) { view.sizingOptions = [] }
+        panel.contentView = view
+        InterfaceScaling.shared.register(panel)
+        panel.setFrameAutosaveName("CatLiveDetachedSetlist")
+        if !panel.setFrameUsingName("CatLiveDetachedSetlist") { panel.center() }
+        host = view; window = panel
+        setPartsVisible(partsVisible)
+        isDetached = true; isVisible = true
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func update<Content: View>(@ViewBuilder content: () -> Content) {
+        host?.rootView = AnyView(content().interfaceScaled())
+    }
+    func setPartsVisible(_ visible: Bool) {
+        partsVisible = visible
+        guard let window else { return }
+        let factor = InterfaceScaling.shared.factor
+        window.minSize.width = (visible ? 560 : 320) * factor
+        guard visible, let content = window.contentView, content.frame.width < 600 * factor else { return }
+        window.setContentSize(NSSize(width: 600 * factor, height: content.frame.height))
+    }
+    func hide() { window?.orderOut(nil); isVisible = false }
+    /// Programmatic teardown must not re-dock an outgoing project's Setlist.
+    func close() {
+        window?.delegate = nil
+        window?.close(); window?.contentView = nil
+        window = nil; host = nil; onDock = {}
+        isVisible = false; isDetached = false
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        let restoreDock = onDock
+        close()
+        restoreDock()
+        return false
+    }
+    func windowDidMiniaturize(_ notification: Notification) { isVisible = false }
+    func windowDidDeminiaturize(_ notification: Notification) { isVisible = true }
+    func windowDidResize(_ notification: Notification) {
+        // InterfaceScaling resizes registered windows when the scale changes.
+        // Reapply the active panel's minimum after that resize as well.
+        window?.minSize.width = (partsVisible ? 560 : 320) * InterfaceScaling.shared.factor
+    }
+}
+#endif
 /// Focus follows the visible parent without changing a drawer's manual state.
 private func setlistVisibleRegionID(_ id: UUID, parent: UUID?, expanded: Set<UUID>) -> UUID {
     if let parent, !expanded.contains(parent) { return parent }
@@ -162,13 +233,48 @@ struct SongListView: View {
         let displayedPlaying = transport.playing ? song?.playingSetlistRegion(ignoredRegion?.id ?? transport.regionId, position: ignoredRegion?.startTime ?? transport.position, expanded: expandedRegions) : nil
         let playbackEnd = transport.ignoreNextEnd ?? playingBounds?.endTime ?? transport.position
         VStack(spacing: 0) {
+            GeometryReader { geometry in
+                HStack(spacing: 3) {
+                    Button { show.toggleRegionAuto() } label: {
+                        Text("AUTO").font(.jarasSystem(size: 9, weight: .bold))
+                            .foregroundStyle(setlist.autoAdvance ? .black : JarasTheme.secondary)
+                            .frame(width: max(0, (geometry.size.width - 6) / 3), height: 26)
+                            .background(setlist.autoAdvance ? JarasTheme.green : JarasTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 4)).contentShape(Rectangle())
+                    }.buttonStyle(.plain).jarasHelp("Queue the next song automatically")
+                        .immediateRightClick { showingAutoOptions = true }
+                        .popover(isPresented: $showingAutoOptions) {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Toggle("Run queue until the end of the block", isOn: Binding(get: { show.regionSetlist.autoUntilBlockEnd == true }, set: { show.setAutoUntilBlockEnd($0) }))
+                                Toggle("Without playback", isOn: Binding(get: { show.regionSetlist.preparesWithoutPlayback }, set: { show.setPrepareWithoutPlayback($0) }))
+                                if !show.regionSetlist.preparesWithoutPlayback {
+                                    Toggle("Automatic Subplay", isOn: Binding(get: { show.regionSetlist.automaticSubplay == true }, set: { show.setAutomaticSubplay($0) }))
+                                    Picker("Start before the end", selection: Binding(get: { Int(show.regionSetlist.subplayLeadTime) }, set: { show.setAutomaticSubplay(show.regionSetlist.automaticSubplay == true, seconds: Double($0)) })) {
+                                        ForEach(1...5, id: \.self) { Text("\($0)s").tag($0) }
+                                    }.disabled(show.regionSetlist.automaticSubplay != true)
+                                }
+                            }.toggleStyle(.automatic).padding(18).frame(width: 270)
+                        }
+                    Button { createdBlock = show.addSetlistBlock(symbol: defaultBlockSymbol, namePrefix: JarasLocalization.string("Bloco")) } label: {
+                        Text("Blocks").font(.jarasSystem(size: 9, weight: .bold)).frame(width: max(0, (geometry.size.width - 6) / 3), height: 26)
+                            .background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 4)).contentShape(Rectangle())
+                    }.buttonStyle(.plain).jarasHelp("Add a setlist block").accessibilityLabel("Blocks")
+                        .immediateRightClick {
+                            guard show.selectedRegionPlaylist != nil else { return }
+                            blockSymbolDraft = defaultBlockSymbol; showingBlockDefaults = true
+                        }
+                        .disabled(playlist == nil)
+                        .opacity(playlist == nil ? 0.4 : 1)
+                    RegionStopButton(active: setlist.stopsAtRegionEnd, width: max(0, (geometry.size.width - 6) / 3)) { show.toggleRegionStop() }
+                }
+            }.frame(height: 26).padding(.horizontal, 8).padding(.bottom, 6)
             HStack(spacing: 3) {
                 Button { choosingPlaylist.toggle() } label: {
                     HStack(spacing: 3) {
                         Group { if let playlist { Text(playlist.name) } else { Text("All regions") } }.lineLimit(1)
                         Spacer(minLength: 3)
-                        Image(systemName: "chevron.down").font(.system(size: 8))
-                    }.font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.down").font(.jarasSystem(size: 8))
+                    }.font(.jarasSystem(size: 12, weight: .semibold))
                         .padding(.horizontal, 7).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.white.opacity(0.45)))
                         .contentShape(Rectangle())
@@ -200,37 +306,6 @@ struct SongListView: View {
                         .frame(width: 27, height: 30).contentShape(Rectangle())
                 }.buttonStyle(.plain).jarasHelp("Search songs (Tab)").accessibilityLabel("Search songs")
                     .popover(isPresented: $searching, attachmentAnchor: .rect(.bounds), arrowEdge: .top) { searchPanel }
-                Button { show.toggleRegionAuto() } label: {
-                    Text("AUTO").font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(setlist.autoAdvance ? .black : JarasTheme.secondary)
-                        .frame(width: 34, height: 26)
-                        .background(setlist.autoAdvance ? JarasTheme.green : JarasTheme.panel)
-                        .clipShape(RoundedRectangle(cornerRadius: 4)).contentShape(Rectangle())
-                }.buttonStyle(.plain).jarasHelp("Queue the next song automatically")
-                    .immediateRightClick { showingAutoOptions = true }
-                    .popover(isPresented: $showingAutoOptions) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Toggle("Run queue until the end of the block", isOn: Binding(get: { show.regionSetlist.autoUntilBlockEnd == true }, set: { show.setAutoUntilBlockEnd($0) }))
-                            Toggle("Without playback", isOn: Binding(get: { show.regionSetlist.preparesWithoutPlayback }, set: { show.setPrepareWithoutPlayback($0) }))
-                            if !show.regionSetlist.preparesWithoutPlayback {
-                                Toggle("Automatic Subplay", isOn: Binding(get: { show.regionSetlist.automaticSubplay == true }, set: { show.setAutomaticSubplay($0) }))
-                                Picker("Start before the end", selection: Binding(get: { Int(show.regionSetlist.subplayLeadTime) }, set: { show.setAutomaticSubplay(show.regionSetlist.automaticSubplay == true, seconds: Double($0)) })) {
-                                    ForEach(1...5, id: \.self) { Text("\($0)s").tag($0) }
-                                }.disabled(show.regionSetlist.automaticSubplay != true)
-                            }
-                        }.toggleStyle(.automatic).padding(18).frame(width: 270)
-                    }
-                Button { createdBlock = show.addSetlistBlock(symbol: defaultBlockSymbol, namePrefix: JarasLocalization.string("Bloco")) } label: {
-                    Text("Blocks").font(.system(size: 9, weight: .bold)).padding(.horizontal, 6).frame(height: 26)
-                        .background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 4)).contentShape(Rectangle())
-                }.buttonStyle(.plain).jarasHelp("Add a setlist block").accessibilityLabel("Blocks")
-                    .immediateRightClick {
-                        guard show.selectedRegionPlaylist != nil else { return }
-                        blockSymbolDraft = defaultBlockSymbol; showingBlockDefaults = true
-                    }
-                    .disabled(playlist == nil)
-                    .opacity(playlist == nil ? 0.4 : 1)
-                RegionStopButton(active: setlist.stopsAtRegionEnd) { show.toggleRegionStop() }
             }.padding(.horizontal, 8).padding(.bottom, 6)
             ScrollViewReader { scroll in
                 ScrollView(showsIndicators: false) {
@@ -297,7 +372,7 @@ struct SongListView: View {
                         }
                         if visible.isEmpty {
                             Text("Select an item and press Shift + R to create a region.")
-                                .font(.caption).foregroundStyle(JarasTheme.secondary).padding(12)
+                                .font(.jarasCaption).foregroundStyle(JarasTheme.secondary).padding(12)
                         }
                     }.padding(.leading, 8)
                     // Keep the drawer button inside the scroll viewport.
@@ -373,7 +448,7 @@ struct SongListView: View {
             guard let request, !creatingPlaylist && !choosingPlaylist else { return }
             show.stepRegion(request.direction, entries: visible)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(hex: 0x151b22))
+        .frame(maxWidth: .infinity, maxHeight: .infinity).background(JarasTheme.background)
         .alert(Text(verbatim: JarasLocalization.string(playlistCopySucceeded ? "Playlist copied successfully" : "Could not copy playlist")), isPresented: $showingPlaylistCopyResult) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -420,7 +495,7 @@ struct SongListView: View {
         }
         .sheet(isPresented: $showingBlockDefaults) {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Blocks").font(.headline)
+                Text("Blocks").font(.jarasHeadline)
                 Toggle("SIMBOL", isOn: $blockSymbolDraft)
                 HStack {
                     Button("Cancelar") { showingBlockDefaults = false }.keyboardShortcut(.cancelAction)
@@ -477,12 +552,12 @@ struct SongListView: View {
                                 Text(region.displayName).lineLimit(1)
                                 Spacer(minLength: 0)
                                 Text(regionDurationText(region.endTime - region.startTime))
-                                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(JarasTheme.secondary)
-                            }.font(.system(size: 12)).padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                                    .font(.jarasSystem(size: 10, design: .monospaced)).foregroundStyle(JarasTheme.secondary)
+                            }.font(.jarasSystem(size: 12)).padding(8).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(JarasTheme.background).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
-                    if results.isEmpty { Text("No results").font(.caption).foregroundStyle(JarasTheme.secondary).padding(12) }
+                    if results.isEmpty { Text("No results").font(.jarasCaption).foregroundStyle(JarasTheme.secondary).padding(12) }
                 }
             }.frame(height: 300) // Keep the popover anchored while filtering results.
         }.padding(12).frame(width: 300).onAppear { searchFocused = true }
@@ -493,7 +568,7 @@ struct SongListView: View {
     private var creationPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(addingToPlaylist == nil ? "New playlist" : "Add regions").font(.system(size: 13, weight: .semibold)); Spacer()
+                Text(addingToPlaylist == nil ? "New playlist" : "Add regions").font(.jarasSystem(size: 13, weight: .semibold)); Spacer()
                 Button { creatingPlaylist = false } label: { Image(systemName: "xmark").frame(width: 30, height: 30).contentShape(Rectangle()) }.buttonStyle(.plain).accessibilityLabel("Cancel playlist creation")
             }
             TextField("Playlist name", text: $playlistName).textFieldStyle(.roundedBorder).disabled(addingToPlaylist != nil)
@@ -505,7 +580,7 @@ struct SongListView: View {
                 .overlay(alignment: .topLeading) {
                     if missingPlaylistName {
                         Text("Escolha um nome")
-                            .font(.system(size: 10, weight: .semibold)).foregroundStyle(JarasTheme.text)
+                            .font(.jarasSystem(size: 10, weight: .semibold)).foregroundStyle(JarasTheme.text)
                             .padding(.horizontal, 7).padding(.vertical, 3)
                             .background(Color(red: 0.7, green: 0.12, blue: 0.16))
                             .clipShape(RoundedRectangle(cornerRadius: 4))
@@ -525,7 +600,7 @@ struct SongListView: View {
                 Button("Clear") { selection.removeAll(); selectionAnchor = nil }
                 Spacer(minLength: 0)
             }.buttonStyle(StageButtonStyle()).controlSize(.small)
-            Text("⌘ / Ctrl: multiple · Shift: range").font(.system(size: 9)).foregroundStyle(JarasTheme.secondary)
+            Text("⌘ / Ctrl: multiple · Shift: range").font(.jarasSystem(size: 9)).foregroundStyle(JarasTheme.secondary)
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 3) {
                     ForEach(playlistCandidates) { region in
@@ -537,8 +612,8 @@ struct SongListView: View {
                                 }
                                 Text(region.displayName).lineLimit(1)
                                 Spacer(minLength: 0)
-                                Text(regionDurationText(region.endTime - region.startTime)).font(.system(size: 9, design: .monospaced))
-                            }.font(.system(size: 12)).padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                                Text(regionDurationText(region.endTime - region.startTime)).font(.jarasSystem(size: 9, design: .monospaced))
+                            }.font(.jarasSystem(size: 12)).padding(8).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(selection.contains(region.id) ? JarasTheme.green.opacity(0.25) : JarasTheme.background)
                                 .overlay(Rectangle().stroke(selection.contains(region.id) ? JarasTheme.green.opacity(0.7) : .clear))
                                 .contentShape(Rectangle())
@@ -550,7 +625,7 @@ struct SongListView: View {
                 }
             }
             HStack {
-                Text("\(selection.count)").font(.caption).foregroundStyle(JarasTheme.secondary)
+                Text("\(selection.count)").font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
                 Spacer()
                 Button(addingToPlaylist == nil ? "Create" : "Add regions", action: createPlaylist)
                     .buttonStyle(StageButtonStyle(color: JarasTheme.green))
@@ -629,7 +704,7 @@ struct SetlistFooterControls: View {
             #endif
             Button { visible.toggle() } label: {
                 Image(systemName: visible ? "chevron.down" : "chevron.up")
-                    .font(.system(size: 10, weight: .bold)).foregroundStyle(JarasTheme.green)
+                    .font(.jarasSystem(size: 10, weight: .bold)).foregroundStyle(JarasTheme.green)
                     #if os(iOS)
                     .frame(width: 24, height: visible ? 28 : 16)
                     #else
@@ -669,7 +744,7 @@ struct SetlistFooterControls: View {
     private func control(_ title: String, width: CGFloat, color: Color, highlighted: Bool,
                          darkText: Bool = true, blinking: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(verbatim: title).font(.system(size: 11, weight: .bold)).lineLimit(1).minimumScaleFactor(0.7)
+            Text(verbatim: title).font(.jarasSystem(size: 11, weight: .bold)).lineLimit(1).minimumScaleFactor(0.7)
                 .foregroundStyle(darkText ? Color.black : Color.white)
                 .frame(width: width, height: 22)
                 .background {
@@ -700,13 +775,13 @@ private struct PlaylistNameEditor: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Edit playlist").font(.headline)
+            Text("Edit playlist").font(.jarasHeadline)
             TextField("Playlist name", text: $name).focused($focused)
                 .onSubmit(confirm)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(invalid ? Color.red : Color.clear))
                 .modifier(InputValidationShake(animatableData: shake))
                 .onChange(of: name) { _ in invalid = false }
-            if invalid { Text("Choose a name").font(.caption).foregroundStyle(.red) }
+            if invalid { Text("Choose a name").font(.jarasCaption).foregroundStyle(.red) }
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
@@ -744,7 +819,7 @@ private struct PlaylistSelectionPanel: View {
         let needsScroll = contentHeight > maximumListHeight
         VStack(spacing: 2) {
             HStack {
-                Text("Playlists").font(.headline); Spacer()
+                Text("Playlists").font(.jarasHeadline); Spacer()
                 Button { isPresented = false } label: {
                     Image(systemName: "xmark").frame(width: 30, height: 30).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel("Close playlists")
@@ -784,7 +859,7 @@ private struct PlaylistSelectionPanel: View {
             HStack {
                 Group { if id == nil { Text(LocalizedStringKey(name)) } else { Text(name) } }.lineLimit(1); Spacer()
                 if show.regionSetlist.selectedId == id { Image(systemName: "checkmark").foregroundStyle(JarasTheme.green) }
-            }.font(.system(size: 12)).padding(.horizontal, 8)
+            }.font(.jarasSystem(size: 12)).padding(.horizontal, 8)
                 .frame(maxWidth: .infinity).frame(height: rowHeight)
                 .background(JarasTheme.background).contentShape(Rectangle())
         }.buttonStyle(.plain)
@@ -896,6 +971,15 @@ private struct SetlistPlaybackBinding: Equatable {
         a.show === b.show && a.region == b.region && a.end == b.end && a.playbackEnd == b.playbackEnd
     }
 }
+private struct SetlistPressStyle: ButtonStyle {
+    let select: () -> Void
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.onChange(of: configuration.isPressed) { pressed in
+            if pressed { select() }
+        }
+    }
+}
+
 private struct RegionSetlistRow: View, Equatable {
     let region: Part
     var fontStyle: Int = 0
@@ -921,7 +1005,11 @@ private struct RegionSetlistRow: View, Equatable {
     var body: some View {
         let color = Color(hex: region.color ?? 0x705264)
         let numberWidth = CGFloat(max(2, String(number).count)) * 6
-        Button(action: select) {
+        Button(action: {
+            #if !os(macOS)
+            select()
+            #endif
+        }) {
             #if os(macOS)
             NativeRegionSetlistLabel(number: number, name: region.displayName, duration: regionDurationText(Double(remaining)),
                 color: region.color ?? 0x705264, selected: selected, active: active, queued: queued, prepareOnly: prepareOnly,
@@ -930,10 +1018,10 @@ private struct RegionSetlistRow: View, Equatable {
             #else
             HStack(spacing: 6) {
                 RoundedRectangle(cornerRadius: 2).fill(active ? Color.red : queued ? (prepareOnly ? JarasTheme.green : .orange) : color).frame(width: 3)
-                Text(String(format: "%02d", number)).font(.system(size: 9, design: .monospaced)).foregroundStyle(JarasTheme.secondary)
+                Text(String(format: "%02d", number)).font(.jarasSystem(size: 9, design: .monospaced)).foregroundStyle(JarasTheme.secondary)
                     .frame(width: numberWidth, alignment: .leading)
-                Text(region.displayName).font(fontStyle == 2 ? .system(size: 13, weight: .bold).italic() : .system(size: 13, weight: fontStyle == 0 ? .regular : .bold)).foregroundStyle(Color(hex: nameColor)).strikethrough(playedLive).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                Text(regionDurationText(Double(remaining))).font(.system(size: 9, weight: .medium, design: .monospaced)).monospacedDigit().fixedSize()
+                Text(region.displayName).font(fontStyle == 2 ? .jarasSystem(size: 13, weight: .bold).italic() : .jarasSystem(size: 13, weight: fontStyle == 0 ? .regular : .bold)).foregroundStyle(Color(hex: nameColor)).strikethrough(playedLive).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                Text(regionDurationText(Double(remaining))).font(.jarasSystem(size: 9, weight: .medium, design: .monospaced)).monospacedDigit().fixedSize()
             }.padding(.horizontal, 8).padding(.vertical, 7).frame(height: 34).frame(maxWidth: .infinity)
                 .background {
                     if active || queued {
@@ -955,7 +1043,13 @@ private struct RegionSetlistRow: View, Equatable {
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(selected && !active && !queued ? JarasTheme.green : .clear, lineWidth: 1.5))
                 .contentShape(Rectangle())
             #endif
-        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+        }
+        #if os(macOS)
+        .buttonStyle(SetlistPressStyle(select: select)).accessibilityAction { select() }
+        #else
+        .buttonStyle(.plain)
+        #endif
+        .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityLabel(Text(verbatim: String(format: "%02d", number) + ", " + region.displayName + ", " + regionDurationText(Double(remaining))))
             .frame(maxWidth: .infinity)
             .padding(.trailing, 14)
@@ -964,7 +1058,7 @@ private struct RegionSetlistRow: View, Equatable {
                 if let expanded, let toggleDrawer {
                     Button(action: toggleDrawer) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 11, weight: .bold)).foregroundStyle(JarasTheme.green)
+                            .font(.jarasSystem(size: 11, weight: .bold)).foregroundStyle(JarasTheme.green)
                             .frame(width: 14, height: 34).contentShape(Rectangle())
                     }.buttonStyle(.plain).jarasHelp("Show unified songs").accessibilityLabel("Show unified songs")
                 } else {
@@ -1007,10 +1101,10 @@ private struct NativeRegionSetlistLabel: NSViewRepresentable {
     }
 }
 private final class NativeRegionSetlistLabelView: NSView {
-    private static let nameFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
-    private static let numberFont = NSFont.monospacedSystemFont(ofSize: 9, weight: .regular)
+    private static let nameFont = NSFont.jarasSystemFont(ofSize: 13, weight: .semibold)
+    private static let numberFont = NSFont.jarasMonospacedSystemFont(ofSize: 9, weight: .regular)
     private static let durationFont: NSFont = {
-        let font = NSFont.monospacedSystemFont(ofSize: 9, weight: .medium)
+        let font = NSFont.jarasMonospacedSystemFont(ofSize: 9, weight: .medium)
         let descriptor = font.fontDescriptor.addingAttributes([.featureSettings: [[NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType, .selectorIdentifier: kMonospacedNumbersSelector]]])
         return NSFont(descriptor: descriptor, size: 9) ?? font
     }()
@@ -1130,7 +1224,7 @@ private final class NativeRegionSetlistLabelView: NSView {
         }
         if name != nameText || nameColor != nameColorValue || fontStyle != fontStyleValue {
             fontStyleValue = fontStyle
-            let baseFont = NSFont.systemFont(ofSize: 13, weight: fontStyle == 0 ? .regular : .bold)
+            let baseFont = NSFont.jarasSystemFont(ofSize: 13, weight: fontStyle == 0 ? .regular : .bold)
             let font = fontStyle == 2 ? NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask) : baseFont
             nameColorValue = nameColor
             let ink = NSColor(Color(hex: nameColor))
@@ -1384,7 +1478,7 @@ private struct SetlistBlockRow: View {
                 }.stroke(Color.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
                     .frame(width: 62, height: 12).accessibilityHidden(true)
             }
-            Text(block.name).font(fontStyle == 2 ? .system(size: 13, weight: .bold).italic() : .system(size: 13, weight: fontStyle == 0 ? .regular : .bold)).lineLimit(1)
+            Text(block.name).font(fontStyle == 2 ? .jarasSystem(size: 13, weight: .bold).italic() : .jarasSystem(size: 13, weight: fontStyle == 0 ? .regular : .bold)).lineLimit(1)
                 .foregroundStyle(JarasTheme.green)
         }.padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading).frame(height: 24)
@@ -1544,7 +1638,7 @@ private final class SetlistNativeDragSource: NSObject, NSDraggingSource {
         let source = SetlistNativeDragSource(); source.state = state; state.source = source
         let item = NSDraggingItem(pasteboardWriter: text as NSString)
         let size = NSSize(width: max(80, min(300, row.bounds.width)), height: 34)
-        let title = NSAttributedString(string: row.name, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor])
+        let title = NSAttributedString(string: row.name, attributes: [.font: NSFont.jarasSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor])
         let preview = NSImage(size: size, flipped: true) { rect in
             NSColor.controlBackgroundColor.withAlphaComponent(0.9).setFill()
             NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
@@ -1615,7 +1709,7 @@ private struct LockedRegionDrag: ViewModifier {
             }.onEnded { _ in dragging = false })
             .overlay(alignment: .top) {
                 if warning {
-                    Text("Not possible").font(.caption).foregroundStyle(.white)
+                    Text("Not possible").font(.jarasCaption).foregroundStyle(.white)
                         .padding(6).background(Color.red.opacity(0.9)).clipShape(RoundedRectangle(cornerRadius: 4))
                         .allowsHitTesting(false)
                 }
@@ -1626,12 +1720,13 @@ private struct LockedRegionDrag: ViewModifier {
 
 private struct RegionStopButton: View {
     let active: Bool
+    var width: CGFloat? = nil
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Text("STOP").font(.system(size: 9, weight: .bold))
+            Text("STOP").font(.jarasSystem(size: 9, weight: .bold))
                 .foregroundStyle(active ? JarasTheme.green : Color.red)
-                .padding(.horizontal, 6).frame(height: 26)
+                .padding(.horizontal, width == nil ? 6 : 0).frame(width: width, height: 26)
                 .background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(active ? JarasTheme.green : .red, lineWidth: 1))
                 .contentShape(Rectangle())
@@ -1643,11 +1738,19 @@ private struct RegionStopButton: View {
 #if os(macOS)
 /// AppKit may restore the scroller while SwiftUI updates a ScrollView. Suppress
 /// it during layout, without polling or leaving a reserved strip beside songs.
-private struct SetlistScrollbarsHidden: NSViewRepresentable {
+struct SetlistScrollbarsHidden: NSViewRepresentable {
     func makeNSView(context: Context) -> SetlistScrollbarSuppressionView { SetlistScrollbarSuppressionView() }
     func updateNSView(_ view: SetlistScrollbarSuppressionView, context: Context) { view.suppressScrollbars() }
 }
-private final class SetlistScrollbarSuppressionView: NSView {
+final class SetlistScrollbarSuppressionView: NSView {
+    private weak var observedScroll: NSScrollView?
+    private var observations: [NSKeyValueObservation] = []
+    private var suppressing = false
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        suppressScrollbars()
+    }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         suppressScrollbars()
@@ -1655,7 +1758,25 @@ private final class SetlistScrollbarSuppressionView: NSView {
     }
     override func layout() { super.layout(); suppressScrollbars() }
     func suppressScrollbars() {
-        guard let scroll = enclosingScrollView else { return }
+        let enclosing = enclosingScrollView
+        if observedScroll !== enclosing {
+            observations.removeAll()
+            observedScroll = enclosing
+            if let scroll = enclosing {
+                // SwiftUI/AppKit can recreate indicators after the background
+                // has laid out. Observe this scroll view instead of waiting for
+                // another layout or polling the entire workspace.
+                observations = [
+                    scroll.observe(\.hasVerticalScroller) { [weak self] _, _ in self?.suppressScrollbars() },
+                    scroll.observe(\.hasHorizontalScroller) { [weak self] _, _ in self?.suppressScrollbars() },
+                    scroll.observe(\.verticalScroller) { [weak self] _, _ in self?.suppressScrollbars() },
+                    scroll.observe(\.horizontalScroller) { [weak self] _, _ in self?.suppressScrollbars() }
+                ]
+            }
+        }
+        guard let scroll = enclosing, !suppressing else { return }
+        suppressing = true
+        defer { suppressing = false }
         if scroll.hasVerticalScroller { scroll.hasVerticalScroller = false }
         if scroll.hasHorizontalScroller { scroll.hasHorizontalScroller = false }
         if scroll.verticalScroller != nil { scroll.verticalScroller = nil }
@@ -1679,7 +1800,7 @@ private final class PlaylistSelectionNotice {
         let notice = NSPanel(contentRect: NSRect(x: 0,y: 0,width: 380,height: 90),styleMask: [.borderless,.nonactivatingPanel],backing: .buffered,defer: false)
         notice.isReleasedWhenClosed = false; notice.isOpaque = false; notice.backgroundColor = .clear
         notice.ignoresMouseEvents = true; notice.hasShadow = true
-        notice.contentView = NSHostingView(rootView: Text(name).font(.system(size: 22,weight: .semibold)).lineLimit(2).multilineTextAlignment(.center)
+        notice.contentView = NSHostingView(rootView: Text(name).font(.jarasSystem(size: 22,weight: .semibold)).lineLimit(2).multilineTextAlignment(.center)
             .foregroundStyle(JarasTheme.text).padding(18).frame(width: 380,height: 90)
             .background(RoundedRectangle(cornerRadius: 10).fill(JarasTheme.panel))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(JarasTheme.green,lineWidth: 1)))

@@ -13,7 +13,7 @@ import sys
 folder = Path(sys.argv[1])
 source = Path('Apple/Shared/TimelineGridView.swift').read_text()
 start = source.index('private final class TimelineRenderMetadata {')
-end = source.index('/// During a gain gesture', start)
+end = source.index('/// During a gain or fade gesture', start)
 key = source.index('struct TimelineRenderKey:')
 key_end = source.index('\n}', key) + 2
 tests = Path('Tests/Apple/TimelineRenderMetadataTests.swift').read_text()
@@ -31,7 +31,7 @@ PY
 swiftc -O -swift-version 5 \
   Application/Project/OutputPatch.swift Application/Project/NativeFXSettings.swift \
   Application/Project/TrackRouting.swift Application/Project/MultiLoop.swift \
-  Application/Project/TrackAutomation.swift Application/Controls/NativeFXParameter.swift Application/Project/ProjectModels.swift Application/Project/MIDIItem.swift \
+  Application/Project/TrackAutomation.swift Application/Controls/NativeFXParameter.swift Application/Project/ProjectModels.swift Application/Project/MIDIItem.swift Application/Project/ItemFade.swift Application/Project/ItemFadeCurve.swift \
   Application/Project/ClipRepetition.swift "$test_dir/TimelineTempo.swift" \
   Apple/Shared/TimelineVisibleClipIndex.swift \
   "$test_dir/main.swift" -o "$test_dir/test"

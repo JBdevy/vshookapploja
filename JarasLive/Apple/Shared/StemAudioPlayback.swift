@@ -120,12 +120,14 @@ import SwiftUI
 @MainActor final class KeyboardMIDIMonitor: ObservableObject {
     static let shared = KeyboardMIDIMonitor()
     @Published private(set) var notes: Set<UInt8> = []
-    private var held: [Int32: Set<UInt8>] = [:]
-    var channel: Int = max(1, min(16, UserDefaults.standard.integer(forKey: "jaras.keyboard.channel") == 0 ? 1 : UserDefaults.standard.integer(forKey: "jaras.keyboard.channel"))) {
+    private struct Source: Hashable { let device: Int32; let channel: UInt8 }
+    private var held: [Source: Set<UInt8>] = [:]
+    var channel: Int = max(0, min(16, UserDefaults.standard.integer(forKey: "jaras.keyboard.channel"))) {
         didSet { held.removeAll(); notes = []; UserDefaults.standard.set(channel, forKey: "jaras.keyboard.channel") }
     }
     func receive(source: Int32, status: UInt8, number: UInt8, value: UInt8) {
-        guard status >= 0x80, status < 0xf0, Int(status & 15) + 1 == channel else { return }
+        guard status >= 0x80, status < 0xf0, channel == 0 || Int(status & 15) + 1 == channel else { return }
+        let source = Source(device: source, channel: status & 15)
         switch status & 0xf0 {
         case 0x90 where value > 0: held[source, default: []].insert(number)
         case 0x80, 0x90: held[source]?.remove(number)
@@ -209,7 +211,8 @@ struct TimecodePlaybackSpan {
 
 /// The UI schedules file segments. AVAudioEngine streams and mixes off the UI thread.
 @MainActor final class StemAudioPlayback {
-    static let shared = StemAudioPlayback(engine: AudioDeviceSettings.shared.engine)
+    static var shared = StemAudioPlayback(engine: AudioDeviceSettings.shared.engine)
+    private let auxiliarySelectedHardware: Bool
     private let engine: AVAudioEngine
     private var mobileOutput: JarasMobileAudioOutput?
     private var licenseAllowed = true
@@ -217,7 +220,7 @@ struct TimecodePlaybackSpan {
         #if os(iOS)
         realtime && engine === AudioDeviceSettings.shared.engine
         #else
-        realtime && !engine.isInManualRenderingMode && engine === AudioDeviceSettings.shared.engine
+        realtime && !engine.isInManualRenderingMode && (engine === AudioDeviceSettings.shared.engine || auxiliarySelectedHardware)
         #endif
     }
     private var outputAllowed: Bool {
@@ -229,6 +232,22 @@ struct TimecodePlaybackSpan {
         #endif
         return AudioDeviceSettings.shared.selectedUID != "none"
     }
+    #if os(macOS)
+    private func requireSelectedOutput() throws {
+        try AudioDeviceSettings.shared.requireSelectedOutput()
+        guard auxiliarySelectedHardware else { return }
+        guard let device = AudioDeviceSettings.shared.devices.first(where: { $0.id == AudioDeviceSettings.shared.selectedUID }),
+              let unit = engine.outputNode.audioUnit else { throw ProjectError.invalid("Audio output is unavailable") }
+        var actual: AudioDeviceID = 0
+        var bytes = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let read = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &actual, &bytes)
+        if read == noErr, actual == device.hardwareID { return }
+        engine.stop()
+        var selected = AudioDeviceID(device.hardwareID)
+        let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &selected, bytes)
+        guard status == noErr else { throw ProjectError.invalid(String(format: "Unable to open audio device (%d).", status)) }
+    }
+    #endif
     func setLicenseAllowed(_ allowed: Bool) {
         licenseAllowed = allowed
         // Every hardware channel (master, direct outs, click, LTC and instruments)
@@ -385,13 +404,52 @@ struct TimecodePlaybackSpan {
         let effects = NativeEffectsChain()
     }
     private var trackBuses: [UUID: TrackBus] = [:]
+    private var transportFadeEndpointReached = false
+    private var transportFadeSchedule: (tracks: Set<UUID>, duration: Double, host: UInt64, sample: Double)?
+    /// The existing sample-clock envelope lives after the track insert chain.
+    /// Schedule it once: UI stalls, automation and meter refreshes cannot step
+    /// the ramp or let effect tails escape it.
+    func startTransportFade(tracks ids: Set<UUID>, duration: Double) {
+        transportFadeEndpointReached = false
+        let seconds = duration.isFinite ? min(5, max(1, duration)) : 3
+        let manual = engine.isInManualRenderingMode
+        transportFadeSchedule = (ids, seconds, manual ? 0 : mach_absolute_time(),
+            manual ? Double(engine.manualRenderingSampleTime) : 0)
+        for id in ids { if let bus = trackBuses[id] { configureTransportFade(bus, id: id) } }
+    }
+    private func configureTransportFade(_ bus: TrackBus, id: UUID) {
+        guard let fade = transportFadeSchedule, fade.tracks.contains(id) else { return }
+        JarasEqualizer.setInputFade(bus.controls, fadeIn: 0, fadeOut: fade.duration,
+            fadeInCurve: 0, fadeInSCurve: 0, fadeOutCurve: 0, fadeOutSCurve: 0,
+            duration: fade.duration, position: 0, hostTime: fade.host, sampleTime: fade.sample)
+    }
+    func setTransportFadeGains(_ gains: [UUID: Double]) {
+        // Intermediate gains are presentation samples; the audio kernel already
+        // owns the continuous envelope. An empty map restores unity immediately.
+        guard gains.isEmpty else { transportFadeEndpointReached = gains.values.allSatisfy { $0 <= 0 }; return }
+        // After automatic Stop, keep the audio envelope at zero until the next
+        // Play. Restoring the fader display must not revive a plugin tail.
+        if transportFadeEndpointReached && !transportWasRunning { return }
+        clearTransportFade()
+    }
+    private func clearTransportFade() {
+        guard let fade = transportFadeSchedule else { return }
+        transportFadeEndpointReached = false; transportFadeSchedule = nil
+        for id in fade.tracks { if let bus = trackBuses[id] {
+            JarasEqualizer.setInputFade(bus.controls, fadeIn: 0, fadeOut: 0,
+                duration: 0, position: 0, hostTime: 0, sampleTime: 0)
+        } }
+    }
     var armedMIDIRecordingTracks: Set<UUID> = []
     private struct InputMonitor {
         let source: AVAudioSourceNode
         let gate: AVAudioMixerNode
+        let input: JarasCaptureRing?
+        let firstChannel: Int
+        let channels: Int
     }
     private var inputMonitors: [UUID: InputMonitor] = [:]
-    func setInputMonitor(_ track: UUID, source: AVAudioSourceNode?, format: AVAudioFormat? = nil) {
+    func setInputMonitor(_ track: UUID, source: AVAudioSourceNode?, format: AVAudioFormat? = nil, input: JarasCaptureRing? = nil, firstChannel: Int = 0, channels: Int = 2) {
         if inputMonitors[track]?.source === source { return }
         if let old = inputMonitors.removeValue(forKey: track) { engine.detach(old.source); engine.detach(old.gate) }
         if let source, let format {
@@ -402,7 +460,7 @@ struct TimecodePlaybackSpan {
             engine.attach(source); engine.attach(gate)
             engine.connect(source, to: gate, format: format)
             engine.connect(gate, to: bus.mix, fromBus: 0, toBus: availableInputBus(track: track, node: bus.mix), format: format)
-            inputMonitors[track] = InputMonitor(source: source, gate: gate)
+            inputMonitors[track] = InputMonitor(source: source, gate: gate, input: input, firstChannel: firstChannel, channels: channels)
         }
         if deviceSessionActive { startMeterClock() }
     }
@@ -444,7 +502,7 @@ struct TimecodePlaybackSpan {
     private var clips: [(UUID, AudioClip)] = []
     private var playbackClipIndex = AudioClipPlaybackIndex(clips: [])
     private var missingAudioPaths = Set<String>()
-    private var unifiedPlaybackStarts: [UUID: Double] = [:]
+    private var fragmentPlaybackStarts: [UUID: Double] = [:]
     private var clipIndices: [UUID: Int] = [:]
     private var clipFragments: [UUID: [UUID]] = [:]
     private var contiguousNext: [UUID: UUID] = [:]
@@ -725,7 +783,8 @@ struct TimecodePlaybackSpan {
         guard clock.sampleTime + lead >= first else { return nil }
         return Double(voice.scheduledSourceStart + max(0, clock.sampleTime - first)) / voice.file.processingFormat.sampleRate
     }
-    init(engine: AVAudioEngine, realtime: Bool = true, mobileOutput: JarasMobileAudioOutput? = nil) {
+    init(engine: AVAudioEngine, realtime: Bool = true, mobileOutput: JarasMobileAudioOutput? = nil, auxiliarySelectedHardware: Bool = false) {
+        self.auxiliarySelectedHardware = auxiliarySelectedHardware
         self.engine = engine; self.realtime = realtime
         self.mobileOutput = mobileOutput
         #if os(iOS)
@@ -786,7 +845,7 @@ struct TimecodePlaybackSpan {
             self.deviceRecovery = nil
             do {
                 #if os(macOS)
-                if self.usesSelectedHardware { try AudioDeviceSettings.shared.requireSelectedOutput() }
+                if self.usesSelectedHardware { try self.requireSelectedOutput() }
                 #endif
                 self.engine.mainMixerNode.outputVolume = self.licenseAllowed && self.outputAllowed ? 1 : 0
                 guard !self.engine.isRunning || self.outputFormatChanged else { return }
@@ -799,7 +858,7 @@ struct TimecodePlaybackSpan {
     func reconfigureDevice() throws {
         guard deviceSessionActive || directory != nil, outputAllowed else { return }
         #if os(macOS)
-        if usesSelectedHardware { try AudioDeviceSettings.shared.requireSelectedOutput() }
+        if usesSelectedHardware { try requireSelectedOutput() }
         #endif
         let previous = latestPlayback
         let rebuild = !masterConfigured || outputFormatChanged
@@ -882,9 +941,10 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
     /// decision from the previous one. Device format rebuilds intentionally
     /// retain those same-project values and do not call this reset.
     private func clearProjectState() {
+        transportFadeSchedule = nil; transportFadeEndpointReached = false
         tracks.removeAll(); soloAudibleTracks = nil
         clips.removeAll(); playbackClipIndex = AudioClipPlaybackIndex(clips: [])
-        missingAudioPaths.removeAll(); unifiedPlaybackStarts.removeAll(); clipIndices.removeAll()
+        missingAudioPaths.removeAll(); fragmentPlaybackStarts.removeAll(); clipIndices.removeAll()
         contiguousNext.removeAll(); contiguousPrevious.removeAll(); contiguousSourceEnd.removeAll()
         analysisEffects.removeAll(); armedMIDIRecordingTracks.removeAll(); armedInstrumentTracks.removeAll()
         instrumentRenderPending = false; setGraphRenderEnabled(false)
@@ -941,6 +1001,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         // newly added tracks unclocked (including their native Click source).
         engine.connect(bus.controls, to: destinations, fromBus: 0, format: format)
         bus.effects.apply(tracks[id]?.fx ?? NativeFXSettings())
+        configureTransportFade(bus, id: id)
         #if os(macOS)
         bus.effects.enableInstrumentMIDI(armedInstrumentTracks.contains(id))
         #endif
@@ -1097,7 +1158,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         defer { startMeterClock() }
         guard outputAllowed else { return }
         #if os(macOS)
-        if usesSelectedHardware { try AudioDeviceSettings.shared.requireSelectedOutput() }
+        if usesSelectedHardware { try requireSelectedOutput() }
         #endif
         if masterConfigured && outputFormatChanged {
             // These processors belong to the graph being replaced. Their
@@ -1158,12 +1219,12 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         if engine.isRunning {
             try mobileOutput?.start()
             #if os(macOS)
-            if usesSelectedHardware { try AudioDeviceSettings.shared.validateOutputBinding() }
+            if usesSelectedHardware { try requireSelectedOutput() }
             #endif
             return
         }
         #if os(macOS)
-        if usesSelectedHardware { try AudioDeviceSettings.shared.requireSelectedOutput() }
+        if usesSelectedHardware { try requireSelectedOutput() }
         #endif
         // prepare/start can resolve the system's default route again. Keep
         // output silent until its physical device is confirmed after both.
@@ -1171,12 +1232,12 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         do {
             engine.prepare()
             #if os(macOS)
-            if usesSelectedHardware { try AudioDeviceSettings.shared.validateOutputBinding() }
+            if usesSelectedHardware { try requireSelectedOutput() }
             #endif
             try engine.start()
             try mobileOutput?.start()
             #if os(macOS)
-            if usesSelectedHardware { try AudioDeviceSettings.shared.validateOutputBinding() }
+            if usesSelectedHardware { try requireSelectedOutput() }
             #endif
             engine.mainMixerNode.outputVolume = licenseAllowed && outputAllowed ? 1 : 0
         } catch {
@@ -1344,7 +1405,13 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         resetEffectTails()
         instrumentRenderPending = !armedInstrumentTracks.isEmpty
         setGraphRenderEnabled(instrumentRenderPending)
-        if !realtime { engine.pause() }
+        if !realtime {
+            // Stop releases the converters' render resources but retains the
+            // manual sample counter. Reset it as well: the next Play's players
+            // and converter clocks must all begin on the same timeline.
+            engine.stop()
+            engine.reset()
+        }
         preparedJump = nil
         appliedJumpBoundaries.removeAll(keepingCapacity: true)
         for (voice, _) in boundaryTails { recycle(voice) }; boundaryTails.removeAll()
@@ -1678,14 +1745,24 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
     }
     func previewItemFade(_ id: UUID, fadeIn: Bool, seconds: Double) {
         guard seconds.isFinite, seconds >= 0 else { return }
+        previewFade(id) { clip in
+            if fadeIn { clip.fadeIn = seconds } else { clip.fadeOut = seconds }
+        }
+    }
+    func previewItemFadeShape(_ id: UUID, fadeIn: Bool, curvature: Double, sCurve: Double) {
+        previewFade(id) { clip in
+            if fadeIn { clip.fadeInCurve = curvature; clip.fadeInSCurve = sCurve }
+            else { clip.fadeOutCurve = curvature; clip.fadeOutSCurve = sCurve }
+        }
+    }
+    private func previewFade(_ id: UUID, change: (inout AudioClip) -> Void) {
+        previewMIDITake(id, refreshNotes: true, change: change)
         for fragment in clipFragments[id] ?? [id] {
-            if let index = clipIndices[fragment] {
-                if fadeIn { clips[index].1.fadeIn = seconds } else { clips[index].1.fadeOut = seconds }
-            }
+            if let index = clipIndices[fragment] { change(&clips[index].1) }
             for head in 0...2 {
                 let key = VoiceKey(clip: fragment, head: head)
                 if var voice = voices[key] {
-                    if fadeIn { voice.clip.fadeIn = seconds } else { voice.clip.fadeOut = seconds }
+                    change(&voice.clip)
                     voice.effects?.updateItemFade(voice.clip); setVoice(voice, for: key)
                 }
             }
@@ -1783,6 +1860,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         }
         idleVoices[track] = pool
     }
+    var onRecordingFXChanged: ((UUID, NativeFXSettings) -> Void)?
     func previewFX(_ track: UUID?, settings: NativeFXSettings) {
         if let track, tracks[track] == nil { return }
         appliedJumpBoundaries.removeAll(keepingCapacity: true)
@@ -1795,6 +1873,7 @@ for (key, sampler) in samplers where key.track == track && !settings.isEnabled(k
         }
         if let track { tracks[track]?.fx = settings; trackBuses[track]?.effects.apply(settings) }
         else { masterFXSettings = settings; masterEffects.apply(settings) }
+        if let track { onRecordingFXChanged?(track, settings) }
         applyLevels()
         #if os(macOS)
         if let error = effects(for: track)?.externalError { onError(error) }
@@ -2320,7 +2399,7 @@ return false
         midiTakeVoices[key] = voice
         return voice
     }
-    private func previewMIDITake(_ id: UUID, change: (inout AudioClip) -> Void) {
+    private func previewMIDITake(_ id: UUID, refreshNotes: Bool = false, change: (inout AudioClip) -> Void) {
         guard var source = midiTakeSources[id] else { return }
         let wasInstrument = source.clip.hasTakeInstrument
         change(&source.clip); midiTakeSources[id] = source
@@ -2330,12 +2409,12 @@ return false
             midiTakePlans[id] = source.clip.hasTakeInstrument ? plan : nil
         }
         if let song = latestPlayback?.snapshot.project.songs.first(where: { $0.id == midiPlanSong }) {
-            if source.clip.hasTakeInstrument && midiTakePlans[id] == nil {
+            if source.clip.hasTakeInstrument && (midiTakePlans[id] == nil || refreshNotes) {
                 var notes = source.clip; notes.gain = 1
                 midiTakePlans[id] = MIDITakePlan(track: source.track, clip: source.clip,
                     segments: song.tempoAudioSegments(source.clip), notes: song.midiPlaybackNotes(in: notes).map(\.sequenceValues))
             }
-            if wasInstrument != source.clip.hasTakeInstrument {
+            if wasInstrument != source.clip.hasTakeInstrument || refreshNotes {
                 let notes = midiTakeSources.values.filter { $0.track == source.track && !$0.clip.hasTakeInstrument }
                     .flatMap { song.midiPlaybackNotes(in: $0.clip) }.map(\.sequenceValues)
                 midiPlans[source.track] = notes
@@ -2355,6 +2434,9 @@ for (key, sampler) in samplers where key.track == source.track { sampler.setSequ
             let position = head == 0 ? transport?.position ?? source.clip.startTime : transport?.subPlay.position ?? source.clip.startTime
             let clip = midiTakePlans[id]?.segments.last(where: { $0.startTime <= position }) ?? source.clip
             let values = clip.automatedValues(at: position)
+            #if os(macOS)
+            if refreshNotes, let notes = midiTakePlans[id]?.notes { voice.effects.setMIDISequence(notes) }
+            #endif
             voice.effects.apply(values.fx)
             JarasEqualizer.setInputPan(voice.controls, pan: values.pan)
             JarasEqualizer.setPolarity(voice.controls, inverted: clip.phaseInverted == true)
@@ -2386,7 +2468,8 @@ for (key, sampler) in samplers where key.track == source.track { sampler.setSequ
                 let clip = plan.clip, key = VoiceKey(clip: id, head: head)
                 // Prepare only nearby takes. Ended/idle instances keep their
                 // graph but the gate stops all upstream plugin render work.
-                guard clip.muted != true, clip.startTime < position + 2,
+                guard song.playbackScope(transport, head: head).allows(song.playbackItemStart(clip)),
+                      clip.muted != true, clip.startTime < position + 2,
                       clip.startTime + clip.duration > position - 1 else { continue }
                 let existed = midiTakeVoices[key] != nil
                 guard let voice = preparedMIDITakeVoice(for: key, track: plan.track) else { continue }
@@ -2435,7 +2518,7 @@ for (key, sampler) in samplers where key.track == source.track { sampler.setSequ
                 JarasEqualizer.setPolarity(voice.controls, inverted: clip.phaseInverted == true)
                 JarasEqualizer.setInputChannelMode(voice.controls, mode: Int32(clip.channelMode ?? 0))
                 JarasEqualizer.setInputGain(voice.controls, gain: clip.normalizationGain ?? 1)
-                JarasEqualizer.setInputFade(voice.controls, fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0,
+                JarasEqualizer.setInputFade(voice.controls, fadeIn: 0, fadeOut: 0,
                     duration: clip.duration, position: position - clip.startTime,
                     hostTime: realtime ? host : 0, sampleTime: realtime ? 0 : Double(engine.manualRenderingSampleTime))
                 JarasVoiceGain.setDecibels(voice.gain, decibels: values.muted || values.gain <= 0 ? -96 : min(24, max(-96, 20 * log10(values.gain))))
@@ -2530,7 +2613,7 @@ for sampler in samplers.values { sampler.sequenceHead(Int32(head), position: 0, 
             #endif
         }
     }
-    private var virtualNoteTargets: [UInt8: Set<UUID>] = [:]
+    private var virtualNoteTargets: [UInt8: [UUID: UInt8]] = [:]
     var onLiveKeyboardMIDI: ((UUID, UInt8, UInt8, UInt8) -> Void)?
     func releaseMIDINotes() {
         releaseKeyboardNotes()
@@ -2583,34 +2666,39 @@ for (key,sampler) in samplers {
         guard (21...108).contains(note) else { return }
         releaseKeyboardNote(note)
         let targets = armedInstrumentTracks.union(armedMIDIRecordingTracks).filter { tracks[$0]?.kind == .standard }
-        virtualNoteTargets[note] = targets
+        let selected = max(0, min(16, UserDefaults.standard.integer(forKey: "jaras.keyboard.channel")))
         for id in targets {
-            onLiveKeyboardMIDI?(id, 0x90, note, velocity)
+            let channel = UInt8((selected == 0 ? max(1, tracks[id]?.midiChannel ?? 1) : selected) - 1)
+            let status: UInt8 = 0x90 | channel
+            guard tracks[id]?.acceptsMIDI(status: status) == true else { continue }
+            virtualNoteTargets[note, default: [:]][id] = channel
+            onLiveKeyboardMIDI?(id, status, note, velocity)
             #if os(macOS)
-            trackBuses[id]?.effects.sendExternalMIDI(status: 0x90, number: note, value: velocity)
+            trackBuses[id]?.effects.sendExternalMIDI(status: status, number: note, value: velocity)
             #endif
 
 #if os(macOS)
-for (key, sampler) in samplers where key.track == id && tracks[id]?.fx?.isEnabled(key.effect) == true { sampler.sendStatus(0x90, data1: note, data2: velocity) }
+for (key, sampler) in samplers where key.track == id && tracks[id]?.fx?.isEnabled(key.effect) == true { sampler.sendStatus(status, data1: note, data2: velocity) }
 #endif
 
-            InstrumentKeyboardState.shared.receive(track: id, source: Int32.min, status: 0x90, number: note, value: velocity)
+            InstrumentKeyboardState.shared.receive(track: id, source: Int32.min, status: status, number: note, value: velocity)
         }
 
 #endif
 }
     func releaseKeyboardNote(_ note: UInt8) {
-        for id in virtualNoteTargets.removeValue(forKey: note) ?? [] {
-            onLiveKeyboardMIDI?(id, 0x80, note, 0)
+        for (id, channel) in virtualNoteTargets.removeValue(forKey: note) ?? [:] {
+            let status: UInt8 = 0x80 | channel
+            onLiveKeyboardMIDI?(id, status, note, 0)
             #if os(macOS)
-            trackBuses[id]?.effects.sendExternalMIDI(status: 0x80, number: note, value: 0)
+            trackBuses[id]?.effects.sendExternalMIDI(status: status, number: note, value: 0)
             #endif
 
 #if os(macOS)
-for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, data1: note, data2: 0) }
+for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status, data1: note, data2: 0) }
 #endif
 
-            InstrumentKeyboardState.shared.receive(track: id, source: Int32.min, status: 0x80, number: note, value: 0)
+            InstrumentKeyboardState.shared.receive(track: id, source: Int32.min, status: status, number: note, value: 0)
         }
     }
     func releaseKeyboardNotes() { for note in Array(virtualNoteTargets.keys) { releaseKeyboardNote(note) } }
@@ -2716,6 +2804,18 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
         let destination = AudioDeviceSettings.shared.resolvedMIDIDestination(settings.midiDestination)
         let key = "\(span?.clip.id.uuidString ?? "")-\(span?.clip.startTime ?? 0)-\(active)-\(mode)-\(settings.frameRate)-\(destination)-\(settings.regionRelative)-\(settings.offset)-\(end)"
         let changed = timecodeAnchor.map { $0.key != key || (!mode.isEmpty && abs(time - ($0.position + (active ? now + delay - $0.host : 0))) > (active ? 0.08 : 0.000001)) } ?? true
+        // Re-anchoring clears the generator's native peak. Consume the audio
+        // already rendered before a seek or delayed transport update resets it.
+        // Inactive/MTC states discard pending readings immediately instead.
+        if let bank = trackPeaks[track.id] {
+            let peak = timecodeGenerator?.takePeak() ?? 0
+            if active && mode == "ltc" {
+                bank.recordPeak(peak, slot: 0); bank.recordPeak(peak, slot: 1)
+            } else {
+                _ = bank.takePeak(0); _ = bank.takePeak(1)
+                meters[track.id]?.reset()
+            }
+        }
         if changed {
             timecodeGenerator?.configurePosition(time, end: end, hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: delay), rate: settings.frameRate, mode: mode, running: active, destination: destination)
             timecodeAnchor = (key,time,now + delay)
@@ -2725,11 +2825,6 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
         let manual = timecodePreviewGain?.value ?? track.volume
         timecodeGenerator?.setGain(Float(effectiveLoopGain(track.id, manual: manual)) * (timecodePhaseInverted ? -1 : 1))
         configureRoutes(timecodeRoutes, patches: mode == "ltc" && !masterSolo ? track.outputPatches : [])
-        if let bank = trackPeaks[track.id] {
-            let peak = active && mode == "ltc" ? timecodeGenerator?.takePeak() ?? 0 : 0
-            bank.recordPeak(peak, slot: 0); bank.recordPeak(peak, slot: 1)
-            if mode != "ltc" || !active { meters[track.id]?.reset() }
-        }
     }
     func refreshMetronome() {
         // Apply the user switch directly to the render thread, even without a
@@ -2823,7 +2918,7 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
             return
         }
         #if os(macOS)
-        if usesSelectedHardware, !engine.isRunning { try AudioDeviceSettings.shared.requireSelectedOutput() }
+        if usesSelectedHardware, !engine.isRunning { try requireSelectedOutput() }
         #endif
         // Project loading is permitted without an available audio device.
         // Build its graph only after a valid hardware format is available.
@@ -2906,7 +3001,7 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
             let previousFragmentOwners = Dictionary(uniqueKeysWithValues: clipFragments.flatMap { original, fragments in
                 fragments.map { ($0, original) }
             })
-            clipFragments.removeAll(keepingCapacity: true); fragmentStarts.removeAll(keepingCapacity: true)
+            clipFragments.removeAll(keepingCapacity: true); fragmentStarts.removeAll(keepingCapacity: true); fragmentPlaybackStarts.removeAll(keepingCapacity: true)
             contiguousNext.removeAll(keepingCapacity: true); contiguousPrevious.removeAll(keepingCapacity: true); contiguousSourceEnd.removeAll(keepingCapacity: true)
             clips = song.tracks.flatMap { track in
                 track.clips.filter { clip in
@@ -2926,11 +3021,13 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
                             for (a, b) in zip(fragments, fragments.dropFirst()) { contiguousNext[a.id] = b.id; contiguousPrevious[b.id] = a.id }
                         }
                     }
-                    for fragment in fragments { fragmentStarts[fragment.id] = clip.startTime }
+                    for fragment in fragments {
+                        fragmentStarts[fragment.id] = clip.startTime
+                        fragmentPlaybackStarts[fragment.id] = song.playbackItemStart(clip)
+                    }
                     return fragments.map { (track.id, $0) }
                 }
             }
-            unifiedPlaybackStarts = Dictionary(uniqueKeysWithValues: song.parts.filter { $0.parentRegionID != nil }.map { ($0.id, $0.startTime) })
             playbackClipIndex = AudioClipPlaybackIndex(clips: clips.map { $0.1 })
             clipIndices = Dictionary(uniqueKeysWithValues: clips.enumerated().map { ($0.element.1.id, $0.offset) })
             let metered = song.tracks.filter { $0.kind == .standard || $0.kind == .timecode || $0.kind == .click || $0.clips.contains(where: \.isProjectionMedia) }
@@ -3149,6 +3246,7 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
         if running {
             cancelVoicePreparation()
             if !transportWasRunning {
+                clearTransportFade()
                 // Prepared players keep their graph/clock ready, but unused
                 // slots must not render an entire silent item-effects chain.
                 for pooled in idleVoices.values {
@@ -3270,29 +3368,19 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
                 for key in Array(voices.keys) where key.head == head { remove(key) }
             }
             lastPosition[head] = position
-            let regionID = head == 0 ? transport.regionId : head == 1 ? transport.queuedRegionId : preparedJump?.region
-            let ignoredAfter = head == 0 ? transport.ignoreNextAfter : nil
-            if let ignoredAfter {
-                for key in Array(voices.keys) where key.head == head {
-                    if let voice = voices[key], (fragmentStarts[voice.clip.id] ?? voice.clip.startTime) >= ignoredAfter { remove(key) }
-                }
-                for key in Array(effectTails.keys) where key.head == head {
-                    if let tail = effectTails[key], (fragmentStarts[tail.voice.clip.id] ?? tail.voice.clip.startTime) >= ignoredAfter {
-                        effectTails[key] = nil; recycle(tail.voice)
-                    }
-                }
+            // A loop is continuous playback; queues and section jumps establish
+            // a new entry. Match the core before promoting the prepared head.
+            let preparingLoop = head == 2 && preparedJump?.section == nil && preparedJump?.region == nil
+            let scope = preparingLoop ? song.playbackScope(transport) : song.playbackScope(transport, head: head,
+                destination: head == 2 ? preparedJump?.destination : nil)
+            // Cancel already scheduled sources as well as rejecting new ones.
+            // Fragment onsets can differ from the original item's attachment.
+            for key in Array(voices.keys) where key.head == head {
+                if let voice = voices[key], !scope.allows(fragmentPlaybackStarts[voice.clip.id]) { remove(key) }
             }
-            let minimumStart = regionID.flatMap { unifiedPlaybackStarts[$0] }
-            // Skip stems before the selected drawer song on each head. Future
-            // songs still flow normally until the unified region's final edge.
-            if let minimumStart {
-                for key in Array(voices.keys) where key.head == head {
-                    if let voice = voices[key], (fragmentStarts[voice.clip.id] ?? voice.clip.startTime) < minimumStart { remove(key) }
-                }
-                for key in Array(effectTails.keys) where key.head == head {
-                    if let tail = effectTails[key], (fragmentStarts[tail.voice.clip.id] ?? tail.voice.clip.startTime) < minimumStart {
-                        effectTails[key] = nil; recycle(tail.voice)
-                    }
+            for key in Array(effectTails.keys) where key.head == head {
+                if let tail = effectTails[key], !scope.allows(fragmentPlaybackStarts[tail.voice.clip.id]) {
+                    effectTails[key] = nil; recycle(tail.voice)
                 }
             }
             let audiblePosition: Double
@@ -3336,9 +3424,8 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
             let lookahead = 2 + max(0, position - schedulingPosition)
             for index in playbackClipIndex.candidates(at: schedulingPosition, lookahead: lookahead) {
                 let (track, clip) = clips[index]
-                guard minimumStart == nil || (fragmentStarts[clip.id] ?? clip.startTime) >= minimumStart! else { continue }
+                guard scope.allows(fragmentPlaybackStarts[clip.id]) else { continue }
                 if let prepareEnd, clip.startTime >= prepareEnd { continue }
-                if let ignoredAfter, (fragmentStarts[clip.id] ?? clip.startTime) >= ignoredAfter { continue }
                 let key = VoiceKey(clip: clip.id, head: head)
                 if var voice = voices[key], clip.loopLength != nil {
                     let deadline = min(clip.startTime + clip.duration, schedulingPosition + 5)
@@ -3560,14 +3647,19 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(0x80, 
         #if os(iOS)
         guard !AudioDeviceSettings.shared.localSessionReconfiguring else { return }
         #endif
-        guard engine.isRunning, transportWasRunning || instrumentRenderPending else { return }
+        guard engine.isRunning, transportWasRunning || instrumentRenderPending || !inputMonitors.isEmpty else { return }
         if now - lastMeterUpdate >= 1.0 / 30.0 - 0.002 {
             let elapsed = lastMeterUpdate == 0 ? 1.0 / 30.0 : now - lastMeterUpdate
             lastMeterUpdate = now
             drainNativeMeterPeaks()
             masterMeter.update(left: Double(peaks.takePeak(masterSlot)), right: Double(peaks.takePeak(masterSlot + 1)), elapsed: elapsed)
             for (id, bank) in trackPeaks {
-                let left = Double(bank.takePeak(0)), right = Double(bank.takePeak(1))
+                var left = Double(bank.takePeak(0)), right = Double(bank.takePeak(1))
+                if let monitor = inputMonitors[id], let input = monitor.input {
+                    let rawLeft = Double(input.takeInputPeak(UInt(monitor.firstChannel)))
+                    let rawRight = monitor.channels > 1 ? Double(input.takeInputPeak(UInt(monitor.firstChannel + 1))) : rawLeft
+                    left = max(left, rawLeft); right = max(right, rawRight)
+                }
                 observeTrackPeak(id, left: left, right: right, elapsed: elapsed)
             }
         }
@@ -3693,11 +3785,11 @@ struct VerticalTrackMeter: NSViewRepresentable {
     private var geometryScale: CGFloat = 0
     private var geometryShowsScale: Bool?
     private static let scaleAttributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.monospacedSystemFont(ofSize: 7, weight: .semibold),
+        .font: NSFont.jarasMonospacedSystemFont(ofSize: 7, weight: .semibold),
         .foregroundColor: NSColor.white
     ]
-    private static let peakFont = NSFont.monospacedSystemFont(ofSize: 8, weight: .bold)
-    private static let compactScalePeakFont = NSFont.monospacedSystemFont(ofSize: 6.5, weight: .bold)
+    private static let peakFont = NSFont.jarasMonospacedSystemFont(ofSize: 8, weight: .bold)
+    private static let compactScalePeakFont = NSFont.jarasMonospacedSystemFont(ofSize: 6.5, weight: .bold)
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         let actions = Dictionary(uniqueKeysWithValues:
@@ -3915,7 +4007,7 @@ struct VerticalTrackMeter: View {
                     scaleSlot("−24")
                     Spacer(minLength: 0)
                     scaleSlot("−∞")
-                }.font(.system(size: 7, design: .monospaced)).foregroundStyle(textColor)
+                }.font(.jarasSystem(size: 7, design: .monospaced)).foregroundStyle(textColor)
             }
         }.frame(maxWidth: peakOnly ? .infinity : nil)
             .accessibilityLabel("Stereo meter, L and R")
@@ -3923,7 +4015,7 @@ struct VerticalTrackMeter: View {
     private func scaleSlot(_ text: String) -> some View {
         // Blank typography preserves the existing peak position without drawing
         // or exposing the fixed scale numbers in the Track Mixer style.
-        Text(verbatim: peakOnly ? " " : text).font(.system(size: 7, weight: .semibold, design: .monospaced))
+        Text(verbatim: peakOnly ? " " : text).font(.jarasSystem(size: 7, weight: .semibold, design: .monospaced))
             .foregroundStyle(textColor).accessibilityHidden(peakOnly)
     }
     private func channel(_ level: Double) -> some View {
@@ -3969,7 +4061,7 @@ struct TrackPeakReadout: View {
     var body: some View {
         Button { peak.clear() } label: {
             Text(verbatim: peak.decibels.map { String(format: "%+.2f", $0) } ?? "")
-                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .font(.jarasSystem(size: fontSize, weight: .bold, design: .monospaced))
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .foregroundStyle(redAtZero && (peak.decibels ?? -24) >= 0 ? Color.red : foreground)
                 .frame(width: readoutWidth, height: 12)
