@@ -34,6 +34,7 @@ jobs:
 
       - name: Preparar e testar VS Hook nativo
         run: |
+          python3 'VS Hook Native/scripts/test-project-generation.py'
           python3 'VS Hook Native/scripts/generate-project.py'
           bash 'VS Hook Native/scripts/test-core.sh'
 

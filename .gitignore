@@ -17,3 +17,7 @@ build/
 *.p12
 *.mobileprovision
 ExportOptions.plist
+
+# Metadados do macOS: nao sao codigo nem workflows.
+.DS_Store
+._*

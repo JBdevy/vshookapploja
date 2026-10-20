@@ -23,6 +23,10 @@ def add(name, body):
 sources = []
 source_refs = []
 for file in sorted((ROOT / "Sources").glob("*.swift")):
+    # AppleDouble files (._Foo.swift) contain binary Finder metadata.
+    # Copies from macOS may include them even when Git ignores new files.
+    if not file.is_file() or file.name.startswith("."):
+        continue
     ref = add("file:" + file.name, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {quote(file.name)}; sourceTree = "<group>";')
     source_refs.append(ref)
     sources.append(add("build:" + file.name, f"isa = PBXBuildFile; fileRef = {ref};"))
