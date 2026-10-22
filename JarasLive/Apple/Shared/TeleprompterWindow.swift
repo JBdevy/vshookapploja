@@ -67,7 +67,8 @@ struct TeleprompterProjectionLayout<Media: View>: View {
         let font = max(size.height > size.width ? 15 : 18,min(width / 11,size.height / 8) * settings.clockScale / 100)
         let localSideFont = max(size.height > size.width ? 15 : 18,min(width / 11,size.height / 8) * settings.localClockScale / 100)
         let sameSide = side && timer && local && settings.clockPosition.hasPrefix(settings.localClockPosition)
-        let height = sameSide ? font + localSideFont + 24 : max(28,(side && local ? max(font,localSideFont) : font) + (side && local ? 10 : 18))
+        let localOnlyFont = max(10,min(24,size.height/28) * settings.localClockScale / 100)
+        let height = !timer ? localOnlyFont + 10 : sameSide ? font + localSideFont + 24 : max(28,(side && local ? max(font,localSideFont) : font) + (side && local ? 10 : 18))
         // Keep a real clock column on narrow phone screens, including fullscreen.
         let timerLimit = compactPhone && local && !side ? max(1, width - 152) : width
         let timerWidth = min(timerLimit,max(118,tpTimerTextWidth(font) + 36))
@@ -129,38 +130,49 @@ struct TeleprompterProjectionLayout<Media: View>: View {
         let text = settings.display(content.text)
         let lines = text.components(separatedBy: .newlines)
         let longest = max(1,lines.map(\.count).max() ?? 1)
-        let font = max(9,min(120,min((size.width-20) / (Double(longest)*0.64),(size.height-20) / (Double(max(1,lines.count))*1.2))) * settings.textScale / 100)
-        let textWidth = min(size.width,max(20,Double(longest) * font * 0.64 + 12))
+        let font = max(1,min(max(1,size.width-12) / (Double(longest)*0.64),max(1,size.height-12) / (Double(max(1,lines.count))*1.2)) * settings.textScale / 100)
         let alignment: Alignment = settings.textAlignment == "left" ? .leading : settings.textAlignment == "right" ? .trailing : .center
         let textAlignment: TextAlignment = settings.textAlignment == "left" ? .leading : settings.textAlignment == "right" ? .trailing : .center
         return Text(text).font(tpFont(settings.fontFamily,size: font)).foregroundStyle(Color(hex: settings.textColor))
-            .multilineTextAlignment(textAlignment).lineLimit(nil).minimumScaleFactor(0.3).padding(6).frame(width: textWidth)
+            .multilineTextAlignment(textAlignment).lineLimit(nil).minimumScaleFactor(0.3).padding(6)
+            .frame(width: max(1,size.width),height: max(1,size.height),alignment: alignment)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings.textBoxEnabled ? border(settings.textBoxColor,rgb: settings.rgbTextBoxBorderEnabled,date: date) : .clear,lineWidth: 2))
             .frame(maxWidth: .infinity,maxHeight: .infinity,alignment: alignment)
     }
     private func previewGrid(size: CGSize) -> some View {
         let blocks = content.blocks
-        let columns = max(1,min(4,blocks.count))
-        let longestColumn = max(1,(blocks.count + columns - 1) / columns)
-        let mostSongs = max(1,blocks.map { $0.rows.count + ($0.name.isEmpty ? 0 : 1) }.max() ?? 1)
-        let font = max(9,min((size.width/Double(columns)-20)/13,(size.height/Double(longestColumn)-20)/Double(mostSongs)/1.1) * settings.previewScale / 100)
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(),spacing: 8,alignment: .top),count: columns),alignment: .leading,spacing: 8) {
+        let columns = max(1, blocks.count)
+        let width = max(1, (size.width - 12 - CGFloat(columns - 1) * 8) / CGFloat(columns))
+        let height = max(1, size.height - 12)
+        let mostRows = max(1, blocks.map { $0.rows.count + ($0.name.isEmpty ? 0 : 1) }.max() ?? 1)
+        let fit = max(1, min((width - 12) / 13, (height - 12 - CGFloat(mostRows - 1) * 3) / CGFloat(mostRows) / 2.4))
+        let font = max(1, fit * settings.previewScale / 100)
+        // A preview page contains at most four columns. Eager, explicitly sized
+        // columns avoid stale lazy-grid cells retaining their previous geometry.
+        return HStack(alignment: .top, spacing: 8) {
             ForEach(blocks) { block in
-                VStack(alignment: .leading,spacing: 3) {
+                VStack(alignment: .leading, spacing: 3) {
                     if !block.name.isEmpty {
-                        Text(settings.display(block.name) + (settings.previewBlockDurationEnabled && (block.rows.reduce(0) { $0 + $1.duration }) > 0 ? " • " + tpTime(Int(ceil((block.rows.reduce(0) { $0 + $1.duration })))) : ""))
-                            .font(tpFont(settings.previewFontFamily,size: font * 1.05)).foregroundStyle(Color(hex: block.color)).lineLimit(2)
+                        Text(settings.display(block.name) + (settings.previewBlockDurationEnabled && block.rows.reduce(0, { $0 + $1.duration }) > 0 ? " • " + tpTime(Int(ceil(block.rows.reduce(0, { $0 + $1.duration })))) : ""))
+                            .font(tpFont(settings.previewFontFamily, size: font))
+                            .foregroundStyle(Color(hex: block.color)).lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(block.rows) { song in
                         Text(settings.display(song.name) + (settings.previewSongDurationEnabled ? " • " + tpTime(Int(ceil(song.duration))) : ""))
-                            .font(tpFont(settings.previewFontFamily,size: font))
+                            .font(tpFont(settings.previewFontFamily, size: font))
                             .underline(settings.previewUnderlineEnabled)
                             .foregroundStyle(Color(hex: song.color)).lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                }.frame(maxWidth: .infinity,alignment: .leading).padding(6)
+                }.multilineTextAlignment(.leading)
+                    .padding(6).frame(width: width, alignment: .topLeading)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(hex: block.color).opacity(0.7)))
+                    .frame(width: width, height: height, alignment: .topLeading).clipped()
             }
-        }.padding(6).frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
+        }.id(blocks.map(\.id))
+            .padding(6).frame(width: max(1, size.width), height: max(1, size.height), alignment: .topLeading)
+            .clipped().transaction { $0.animation = nil }
     }
     private func border(_ color: UInt32,rgb: Bool,date: Date) -> Color {
         rgb ? Color(hue: date.timeIntervalSince1970.truncatingRemainder(dividingBy: 6)/6,saturation: 0.9,brightness: 1) : Color(hex: color)
@@ -488,8 +500,8 @@ struct TeleprompterToggleButton: View {
                     .lineLimit(1).minimumScaleFactor(0.8)
                     .frame(width: buttonWidth, height: TransportControlMetrics.height)
                 .foregroundStyle(controller.visible ? Color.black : JarasTheme.text)
-                .background(RoundedRectangle(cornerRadius: 5).fill(controller.visible ? JarasTheme.green : Color(hex: 0xc44545)))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(controller.visible ? JarasTheme.green : Color(hex: 0xc44545)))
+                .background(RoundedRectangle(cornerRadius: 5).fill(controller.visible ? JarasTheme.green : JarasTheme.liveOffRed))
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(controller.visible ? JarasTheme.green : JarasTheme.liveOffRed))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
             .contextMenu {
@@ -509,8 +521,8 @@ struct TeleprompterPreviewButton: View {
             Text("Preview").font(.jarasSystem(size: TransportControlMetrics.font,weight: .semibold))
                 .frame(width: buttonWidth, height: TransportControlMetrics.height)
                 .foregroundStyle(controller.previewActive ? Color.black : JarasTheme.text)
-                .background(RoundedRectangle(cornerRadius: 5).fill(controller.previewActive ? JarasTheme.green : Color(hex: 0xc44545)))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(controller.previewActive ? JarasTheme.green : Color(hex: 0xc44545)))
+                .background(RoundedRectangle(cornerRadius: 5).fill(controller.previewActive ? JarasTheme.green : JarasTheme.liveOffRed))
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(controller.previewActive ? JarasTheme.green : JarasTheme.liveOffRed))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).jarasHelp("Show blocks in the teleprompter")
             .overlay(TeleprompterRightClick(action: { choosingPage = true }))
@@ -690,6 +702,7 @@ struct TPNoticeButton: View {
             }
         }
             .buttonStyle(TransportButtonStyle(color: JarasTheme.yellow, active: false, fontSize: TransportControlMetrics.font, width: buttonWidth, height: TransportControlMetrics.height))
+            .jarasHelp("Messages")
     }
 }
 private struct TPNoticeEditor: View {

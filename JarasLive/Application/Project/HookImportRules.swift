@@ -950,12 +950,32 @@ function canonicalExistingTrackKey(trackName) {
 }
 
 function groupKeyFromFolderName(folderName) {
-  const key = normalizeTrackKey(folderName);
+  const key = normalizeTrackKey(String(folderName || '').replace(/^[#\s]+/, ''));
   const exact = CREATE_PROJECT_TRACK_GROUPS.find((group) => normalizeTrackKey(group.name) === key);
   if (exact) return exact.key;
+  if (key === 'guitarra') return 'guitarras';
+  if (key === 'sanfona') return 'sanfonas';
+  if (key === 'teclado') return 'teclados';
   if (key === 'percussao' || key === 'percussivo') return 'percussivo';
   if (key === 'back-vocal' || key === 'back-vocais' || key === 'backing-vocals') return 'back-vocais';
   return '';
+}
+
+// Shared with CatLive's embedded import rules. A category can live in any
+// user-named folder, or loose in the arrangement. Resolve only where NEW
+// tracks belong; this function never changes existing parents or order.
+function existingImportGroupDestination(tracks, groupKey) {
+  const named = tracks.find(track => track.isFolder && groupKeyFromFolderName(track.name) === groupKey);
+  if (named) return { folderIndex: named.index, anchorIndex: null };
+  const members = tracks.filter(track => {
+    if (track.isFolder) return false;
+    const classification = classifyCreateProjectTrack(`${track.name}.wav`);
+    return classification.recognized && resolveCreateProjectTrackGroup(classification.name).key === groupKey;
+  });
+  const grouped = members.find(track => track.parentIndex != null && tracks.some(folder => folder.index === track.parentIndex && folder.isFolder));
+  if (grouped) return { folderIndex: grouped.parentIndex, anchorIndex: null };
+  const loose = members.filter(track => track.parentIndex == null);
+  return { folderIndex: null, anchorIndex: loose.length ? loose[loose.length - 1].index : null };
 }
 
 

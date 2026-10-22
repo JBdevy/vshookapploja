@@ -100,7 +100,7 @@
 "backingVocal" = "Backing vocal";
 "fx" = "Efeitos";
 "other" = "Outro";
-"Play" = "Reproduzir";
+"Play" = "Play";
 "Pause" = "Pausar";
 "Versão ou nome do projeto inválido." = "Versão ou nome do projeto inválido.";
 "UUID duplicado." = "UUID duplicado.";
@@ -651,7 +651,7 @@
 "This routing would create an audio feedback loop." = "Esse roteamento criaria um ciclo de realimentação de áudio.";
 
 "Plugins" = "Plugins";
-"External" = "Externo";
+"External" = "Externo (VST3)";
 "Plugin" = "Plugin";
 "VST3 paths" = "Caminhos VST3";
 "Add path" = "Adicionar caminho";
@@ -757,7 +757,8 @@
 "Global" = "Global";
 "Free" = "Livre";
 "Relative" = "Relativo";
-"Tracks show/hide" = "Ocultar/mostrar Tracks";
+"Track Mixer show/hide" = "Mostrar/ocultar Track Mixer";
+"Hoz-Mixer show/hide" = "Mostrar/ocultar Hoz-Mixer";
 "Setlist show/hide" = "Ocultar/mostrar Setlist";
 "Divisions" = "Divisões";
 "Grid divisions" = "Divisões da grade";
@@ -802,7 +803,7 @@
 "Quality" = "Qualidade";
 "Re-render" = "Re-renderizar";
 
-"Advanced" = "Avançado";
+"Advanced" = "Advanced";
 "TimeProject" = "Tempo do projeto";
 "Gridline" = "Linhas do grid";
 "Resolution" = "Resolução";
@@ -864,7 +865,7 @@
 
 "Polyphonic" = "Polifônico";
 
-"Drag to resize mixer" = "Arraste para redimensionar a Barra Mixer";
+"Drag to resize mixer" = "Arraste para redimensionar a Hoz-Mixer";
 
 "Show blocks in the teleprompter" = "Mostrar blocos no teleprompter";
 
@@ -936,7 +937,7 @@
 "Multiloop Manager" = "Gerenciador de Multiloops";
 
 "Metronome" = "Metrônomo";
-"Metronome · Right-click to configure" = "Metrônomo · Clique direito para configurar";
+"Metronome · Right-click to configure" = "Metrônomo · clique direito para configurar";
 "Click sound" = "Som do click";
 "Click mode" = "Modo do click";
 "Only A" = "Somente A";
@@ -965,6 +966,9 @@
 "No backups found" = "Nenhum backup encontrado";
 
 "Invert polarity" = "Inverter fase";
+"Phase inverted — restore phase" = "Fase invertida — restaurar fase";
+"Mono — switch to Stereo" = "Mono — alternar para Estéreo";
+"Stereo — switch to Mono" = "Estéreo — alternar para Mono";
 
 "Timeline" = "Timeline";
 
@@ -1641,12 +1645,6 @@
 
 "%ld REAPER items before the project start were ignored." = "%ld itens do REAPER anteriores ao início do projeto foram ignorados.";
 
-"Phase inverted — restore phase" = "Fase invertida — restaurar fase";
-
-"Mono — switch to Stereo" = "Mono — alternar para Estéreo";
-
-"Stereo — switch to Mono" = "Estéreo — alternar para Mono";
-
 "Interface scale" = "Escala da interface";
 
 "Continuous scroll" = "Scroll contínuo";
@@ -1666,19 +1664,12 @@
 "Choose between 1 and 128 channels." = "Escolha entre 1 e 128 canais.";
 
 "Fadeout…" = "Fadeout…";
-
 "Fadeout" = "Fadeout";
-
 "Duration" = "Duração";
-
 "Choose an unused shortcut. Space and standard shortcuts cannot control Fadeout." = "Escolha um atalho livre. Espaço e atalhos padrão não podem controlar o Fadeout.";
-
 "Fadeout requires playback." = "O Fadeout precisa do transporte tocando.";
-
 "Stop Sub Play before starting Fadeout." = "Pare o Sub Play antes de iniciar o Fadeout.";
-
 "Select tracks in the Fadeout settings." = "Selecione pistas nas configurações de Fadeout.";
-
 "Cancel Fadeout before starting Sub Play." = "Cancele o Fadeout antes de iniciar o Sub Play.";
 
 "Use the same key or MIDI control again to cancel Fadeout and restore the volumes." = "Use a mesma tecla ou controle MIDI novamente para cancelar o Fadeout e restaurar os volumes.";
@@ -1704,35 +1695,25 @@
 "Setlist à esquerda" = "Setlist à esquerda";
 
 "Parts à esquerda" = "Parts à esquerda";
-
 "Visibilidade das pistas" = "Visibilidade das pistas";
-
 "Painel" = "Painel";
 
 "Mostrar Master à direita" = "Mostrar Master à direita";
 
 "Mostrar Master à esquerda" = "Mostrar Master à esquerda";
 
+// Show Mode
 "Show Mode" = "Modo Show";
-
 "When enabled, the Mac lid can be closed without stopping playback." = "Quando ativo, a tampa do Mac pode ser fechada sem parar a reprodução.";
-
 "When enabled, the notebook lid can be closed without stopping playback." = "Quando ativo, a tampa do notebook pode ser fechada sem parar a reprodução.";
-
 "The system did not confirm the Show Mode change." = "O sistema não confirmou a alteração do Modo Show.";
-
 "Unable to read the Windows power plan." = "Não foi possível consultar o plano de energia do Windows.";
-
 "Unable to read the Windows lid settings." = "Não foi possível consultar a configuração da tampa do notebook.";
-
 "Show Mode was not changed. Administrator authorization is required." = "O Modo Show não foi alterado. É necessária a autorização do administrador.";
-
 "Unable to change Show Mode. The previous lid settings were restored." = "Não foi possível alterar o Modo Show. As configurações anteriores da tampa foram restauradas.";
 
 "Open in new tab" = "Abrir em nova aba";
-
 "Previous project tab" = "Aba anterior";
-
 "Next project tab" = "Próxima aba";
 
 "Close tab" = "Fechar aba";
@@ -1760,13 +1741,70 @@
 "Allow microphone access in System Settings to record audio." = "Permita o acesso ao microfone nos Ajustes do Sistema para gravar áudio.";
 
 "Recording level" = "Nível da gravação";
-
 "Recording effects" = "Efeitos na gravação";
-
 "Pre-fader" = "Pré-fader";
-
 "Post-fader" = "Pós-fader";
-
 "Pre-FX" = "Pré-FX";
-
 "Post-FX" = "Pós-FX";
+/* Confirm application close while any project tab is playing. */
+"Close CatLive?" = "Encerrar o CatLive?";
+"Playback is in progress. Do you really want to close CatLive?" = "A reprodução está em andamento. Deseja realmente encerrar o CatLive?";
+"Close CatLive" = "Encerrar CatLive";
+"Create at least 2 section markers enabled for looping in this song before creating a multiloop." = "Crie pelo menos 2 marcadores de trecho habilitados para loop nesta música antes de criar um multiloop.";
+
+"Timeline snapping" = "Encaixe na timeline";
+"Snap on — Shift temporarily disables snapping" = "Ímã ativado — Shift desativa o encaixe temporariamente";
+"Snap off — free positioning" = "Ímã desativado — posicionamento livre";
+
+"Remote · Right-click to configure" = "Remote · Clique direito para configurar";
+
+"Hoz-Mixer" = "Hoz-Mixer";
+
+"Swap - LR" = "Inverter - LR";
+
+"Finish recording before changing the audio device." = "Conclua a gravação antes de alterar o dispositivo de áudio.";
+
+"Finish recording and pending operations before importing audio." = "Conclua a gravação e as operações pendentes antes de importar áudio.";
+
+"Finish recording and imports before cleaning timeline files." = "Conclua a gravação e as importações antes de limpar os arquivos da timeline.";
+
+"bar" = "compasso";
+"bars" = "compassos";
+
+"Config Init" = "Config Init";
+"Initial playback" = "Reprodução inicial";
+
+"%@: item \"%@\" at %.6f s was ignored because it overlaps another item on the same special-track layer. The rest of the project was imported." = "%@: o item \"%@\" em %.6f s foi ignorado porque se sobrepõe a outro item na mesma camada da pista especial. O restante do projeto foi importado.";
+
+"Enter a valid project name." = "Digite um nome válido para o projeto.";
+"A project with this name already exists." = "Já existe um projeto com esse nome.";
+
+"Open file location" = "Abrir local do arquivo";
+
+"Relative timebase" = "Timebase relativo";
+
+"Enable relative timebase?" = "Ativar Timebase relativo?";
+
+"Disable relative timebase?" = "Desativar Timebase relativo?";
+
+"Enable" = "Ativar";
+
+"Disable" = "Desativar";
+
+"Relative timebase: changing the project BPM adjusts item duration and playback speed to follow the tempo. With Free timebase, changing the project BPM preserves item duration and playback speed. Tempo markers with their own timebase keep their individual settings." = "Relativo: mudar o BPM do projeto ajusta a duração e a velocidade dos itens para acompanhar o andamento. No modo Livre, mudar o BPM preserva a duração e a velocidade dos itens. Marcadores de tempo com Timebase próprio continuam seguindo suas configurações individuais.";
+
+"Free timebase: changing the project BPM changes the grid without stretching or shortening items. Item duration and playback speed are preserved. Tempo markers with their own timebase keep their individual settings." = "Livre: mudar o BPM do projeto altera a grade sem esticar nem encurtar os itens. A duração e a velocidade dos itens são preservadas. Marcadores de tempo com Timebase próprio continuam seguindo suas configurações individuais.";
+
+"Load sample…" = "Carregar sample…";
+
+"No sample loaded" = "Nenhum sample carregado";
+
+"Save the project before loading a sample." = "Salve o projeto antes de carregar um sample.";
+
+"Choose a WAV or MP3 sample." = "Escolha um sample WAV ou MP3.";
+
+"Choose a mono or stereo sample up to 60 seconds." = "Escolha um sample mono ou estéreo de até 60 segundos.";
+
+"WAV / MP3 · Mono / Stereo · 60 s max" = "WAV / MP3 · Mono / Estéreo · Até 60 s";
+
+"The project folder is unavailable." = "A pasta do projeto não está disponível.";

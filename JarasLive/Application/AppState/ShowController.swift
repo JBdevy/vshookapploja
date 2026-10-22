@@ -93,7 +93,7 @@ public struct ShowTimelinePresentationState: Equatable {
     public var audioTransportFade: ([UUID: Double]) -> Void = { _ in }
     public var audioStartTransportFade: (Set<UUID>, Double) -> Void = { _, _ in }
     var timelinePlaybackNow: Double { playbackClock() }
-    var transportFadeoutCanStart: Bool { canExecute() && !finishing }
+    var transportFadeoutCanStart: Bool { canControl() && !finishing }
     private weak var cachedPresentationObserver: ShowPresentationObserver?
     /// Static controls share one derivation of playback boundary state. Views
     /// retain the observer; the controller's weak cache avoids a retain cycle.
@@ -156,7 +156,7 @@ public struct ShowTimelinePresentationState: Equatable {
     @Published public private(set) var timelineFollowPaused = false
     public var timelineMovementLocked: Bool { snapshot.project.timelineMovementLocked == true }
     public func setTimelineMovementLocked(_ locked: Bool) {
-        guard canExecute(), !finishing, locked != timelineMovementLocked else { return }
+        guard canControl(), !finishing, locked != timelineMovementLocked else { return }
         var project = snapshot.project
         project.timelineMovementLocked = locked
         do {
@@ -267,7 +267,7 @@ public struct ShowTimelinePresentationState: Equatable {
         }.map(\.element).sorted { $0.startTime < $1.startTime }
     }
     @discardableResult public func selectRegionSearchResult(_ id: UUID) -> Bool {
-        guard canExecute(), !finishing, current?.parts.contains(where: { $0.id == id }) == true else { return false }
+        guard canControl(), !finishing, current?.parts.contains(where: { $0.id == id }) == true else { return false }
         let listID = current?.parts.first(where: { $0.id == id })?.parentRegionID ?? id
         if let playlist = selectedRegionPlaylist, !playlist.regionIds.contains(listID) {
             var state = regionSetlist
@@ -466,9 +466,14 @@ public struct ShowTimelinePresentationState: Equatable {
         guard forceReveal || changedPlaylist || focusedRegion != region.id else { return }
         focusedRegion = region.id; setlistFocusRequest = UUID()
     }
-    public func setAutomaticSubplay(_ enabled: Bool, seconds: Double? = nil) {
+    public func setAutomaticSubplay(_ enabled: Bool, seconds: Double? = nil, bars: Int? = nil, next: Bool? = nil) {
         var state = regionSetlist; state.automaticSubplay = enabled
-        if let seconds, seconds.isFinite { state.automaticSubplaySeconds = min(5, max(1, seconds)) }
+        if let seconds, seconds.isFinite {
+            state.automaticSubplaySeconds = min(5, max(1, seconds)); state.automaticSubplayBars = nil
+        }
+        if let bars { state.automaticSubplayBars = min(5, max(1, bars)) }
+        if seconds != nil || bars != nil { state.automaticSubplayNext = false }
+        if let next { state.automaticSubplayNext = next }
         _ = configureRegionSetlist(state)
     }
     public func toggleRegionAuto() {
@@ -502,7 +507,7 @@ public struct ShowTimelinePresentationState: Equatable {
         _ = configureRegionSetlist(state)
     }
     @discardableResult private func configureRegionSetlist(_ state: RegionSetlist) -> Bool {
-        guard canExecute(), !finishing else { return false }
+        guard canControl(), !finishing else { return false }
         do {
             try executor.configureRegionSetlist(state)
             let playback = try executor.playbackSnapshot()
@@ -516,6 +521,7 @@ public struct ShowTimelinePresentationState: Equatable {
         catch { message = error.localizedDescription; return false }
     }
     @Published public var message = ""
+    public var validateAudioOutput: () throws -> Void = {}
     @Published public var modalNotice: String?
     @Published public private(set) var lastSavedAt: String?
     public var current: Song? { snapshot.project.songs.first { $0.id == snapshot.transport.songId } }
@@ -579,7 +585,7 @@ public struct ShowTimelinePresentationState: Equatable {
         return tracks.first { $0.id == selectedTrackForActions && $0.kind == .standard } ?? tracks.first { $0.kind == .standard }
     }
     public func performAction(_ action: DAWAction, trackNumber: Int? = nil, midiValue: UInt8? = nil) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         let track = action.needsTrack ? actionTrack(number: trackNumber) : nil
         if action.needsTrack && track == nil { message = "Track unavailable"; return }
         switch action {
@@ -637,6 +643,7 @@ public struct ShowTimelinePresentationState: Equatable {
         case .previousProjectTab: navigateProjectTab(-1)
         case .nextProjectTab: navigateProjectTab(1)
         case .toggleTracks: toggleTracksPanel()
+        case .toggleBarMixer: toggleBarMixerPanel()
         case .toggleSetlist: toggleSetlistPanel()
         case .projectStart, .projectEnd, .nextRegion, .previousRegion, .nextTimelinePoint, .previousTimelinePoint:
             guard let song = current else { return }
@@ -658,6 +665,7 @@ public struct ShowTimelinePresentationState: Equatable {
     public var toggleTeleprompterWindow: () -> Void = {}
     public var navigateProjectTab: (Int) -> Void = { _ in }
     public var toggleTracksPanel: () -> Void = {}
+    public var toggleBarMixerPanel: () -> Void = {}
     public var toggleSetlistPanel: () -> Void = {}
     public var togglePartsPanel: () -> Void = {}
     public var onSetlistEdited: () -> Void = {}
@@ -808,7 +816,7 @@ public struct ShowTimelinePresentationState: Equatable {
         guard let globalDefaults else { return }
         let requested = globalDefaults.bool(forKey: Self.multiLoopBypassDefaultsKey)
         if (snapshot.transport.multiLoopsBypassed == true) != requested {
-            try executor.execute(.toggleMultiLoopBypass, target: nil, value: 0)
+            try executor.executeAutomation(.toggleMultiLoopBypass, target: nil, value: 0)
             snapshot.transport = try executor.playbackSnapshot().transport
         }
     }
@@ -851,7 +859,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     private func restoreEdit(redo: Bool) {
         if pendingFXEdit { commitFX() }
-        guard canExecute(), !finishing, var next = history else { return }
+        guard canControl(), !finishing, var next = history else { return }
         guard let project = redo ? next.redo() : next.undo() else { return }
         do {
             tick(); try executor.applyProjectEdit(project)
@@ -868,7 +876,7 @@ public struct ShowTimelinePresentationState: Equatable {
         catch { message = error.localizedDescription }
     }
     private func editProject(_ edit: (inout Project) -> Void) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         var project = snapshot.project; edit(&project)
         guard project != snapshot.project else { return }
         do {
@@ -877,7 +885,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     @discardableResult public func replaceRenderedItem(_ rendered: AudioClip, original: AudioClip, track: UUID, project: UUID) -> Bool {
-        guard canExecute(), !finishing, snapshot.project.id == project else { return false }
+        guard canControl(), !finishing, snapshot.project.id == project else { return false }
         for song in snapshot.project.songs.indices {
             guard let channel = snapshot.project.songs[song].tracks.firstIndex(where: { $0.id == track }),
                   let item = snapshot.project.songs[song].tracks[channel].clips.firstIndex(where: { $0.id == original.id }),
@@ -904,7 +912,7 @@ public struct ShowTimelinePresentationState: Equatable {
         message = "The audio item changed during Re-render."; return false
     }
     @discardableResult public func replaceGluedItems(_ replacements: [GluedItemReplacement], project: UUID, song: UUID) -> Bool {
-        guard canExecute(), !finishing, snapshot.project.id == project, current?.id == song, !replacements.isEmpty,
+        guard canControl(), !finishing, snapshot.project.id == project, current?.id == song, !replacements.isEmpty,
               Set(replacements.map(\.track)).count == replacements.count,
               let index = snapshot.project.songs.firstIndex(where: { $0.id == song }) else { return false }
         var next = snapshot.project
@@ -932,7 +940,7 @@ public struct ShowTimelinePresentationState: Equatable {
         audioItemFade(id, fadeIn, seconds)
     }
     public func setItemFade(_ id: UUID, fadeIn: Bool, seconds: Double) {
-        guard canExecute(), !finishing, seconds.isFinite, seconds >= 0 else { return }
+        guard canControl(), !finishing, seconds.isFinite, seconds >= 0 else { return }
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices {
                 guard let index = snapshot.project.songs[song].tracks[track].clips.firstIndex(where: { $0.id == id }) else { continue }
@@ -953,7 +961,7 @@ public struct ShowTimelinePresentationState: Equatable {
         }
     }
     public func changeItemFadeShape(_ id: UUID, fadeIn: Bool, sCurve: Bool, value: Double, ended: Bool) {
-        guard canExecute(), !finishing, value.isFinite else { return }
+        guard canControl(), !finishing, value.isFinite else { return }
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices {
                 guard let index = snapshot.project.songs[song].tracks[track].clips.firstIndex(where: { $0.id == id }) else { continue }
@@ -983,7 +991,7 @@ public struct ShowTimelinePresentationState: Equatable {
         }
     }
     public func setItemPitch(_ id: UUID, semitones: Double) {
-        guard canExecute(), !finishing, (-12...12).contains(semitones) else { return }
+        guard canControl(), !finishing, (-12...12).contains(semitones) else { return }
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices where snapshot.project.songs[song].tracks[track].kind == .standard {
                 guard let item = snapshot.project.songs[song].tracks[track].clips.firstIndex(where: { $0.id == id && $0.midi == nil }) else { continue }
@@ -1010,7 +1018,7 @@ public struct ShowTimelinePresentationState: Equatable {
         setItemMix(id, command: .clipPan, value: min(1, max(-1, pan)))
     }
     private func setItemMix(_ id: UUID, command: ShowCommand, value: Double) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices {
                 guard let index = snapshot.project.songs[song].tracks[track].clips.firstIndex(where: { $0.id == id }) else { continue }
@@ -1033,9 +1041,24 @@ public struct ShowTimelinePresentationState: Equatable {
             }
         }
     }
+    public func setItemsMix(_ ids: Set<UUID>, gain: Double? = nil, pan: Double? = nil, muted: Bool? = nil) {
+        guard gain.map({ $0.isFinite && $0 >= 0 }) ?? true,
+              pan.map({ $0.isFinite && (-1...1).contains($0) }) ?? true else { return }
+        editProject { project in
+            for song in project.songs.indices {
+                for track in project.songs[song].tracks.indices where project.songs[song].tracks[track].kind == .standard {
+                    for item in project.songs[song].tracks[track].clips.indices where ids.contains(project.songs[song].tracks[track].clips[item].id) {
+                        if let gain { project.songs[song].tracks[track].clips[item].gain = min(pow(10, 24.0 / 20), gain) }
+                        if let pan { project.songs[song].tracks[track].clips[item].pan = pan == 0 ? nil : pan }
+                        if let muted { project.songs[song].tracks[track].clips[item].muted = muted }
+                    }
+                }
+            }
+        }
+    }
     public func previewItemGain(_ id: UUID, gain: Double) { audioItemGain(id, gain) }
     public func setItemGain(_ id: UUID, gain: Double) {
-        guard canExecute(), !finishing, gain.isFinite, gain >= 0 else { return }
+        guard canControl(), !finishing, gain.isFinite, gain >= 0 else { return }
         let value = min(pow(10, 24.0 / 20), gain)
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices where snapshot.project.songs[song].tracks[track].kind == .standard {
@@ -1063,7 +1086,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     public func splitItems(_ ids: Set<UUID>, at position: Double) { editProject { $0.splitItems(ids, at: position) } }
     @discardableResult public func normalizeItems(_ gains: [UUID: Double], project: UUID) -> Bool {
-        guard canExecute(), !finishing, snapshot.project.id == project, !gains.isEmpty else { return false }
+        guard canControl(), !finishing, snapshot.project.id == project, !gains.isEmpty else { return false }
         var edits: [(song: Int, track: Int, item: Int, id: UUID, old: Double, gain: Double)] = []
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices where snapshot.project.songs[song].tracks[track].kind == .standard {
@@ -1092,7 +1115,7 @@ public struct ShowTimelinePresentationState: Equatable {
         }
     }
     @discardableResult public func convertItems(_ ids: Set<UUID>, mode: Int) -> Bool {
-        guard canExecute(), !finishing, (0...3).contains(mode), !ids.isEmpty else { return false }
+        guard canControl(), !finishing, (0...4).contains(mode), !ids.isEmpty else { return false }
         var edits: [(song: Int, track: Int, item: Int, id: UUID, old: Int, gain: Int)] = []
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices where snapshot.project.songs[song].tracks[track].kind == .standard {
@@ -1122,18 +1145,18 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     private var itemClipboard: GridItemClipboard?
     @discardableResult public func copyItems(_ ids: Set<UUID>, moving: Bool = false) -> Bool {
-        guard canExecute(), !finishing, let song = current?.id,
+        guard canControl(), !finishing, let song = current?.id,
               let copied = GridItemClipboard(project: snapshot.project, song: song, selected: ids, moving: moving) else { return false }
         if pendingFXEdit { commitFX() }
         itemClipboard = copied
         return true
     }
     @discardableResult public func pasteItems() -> Set<UUID> {
-        guard canExecute(), !finishing, let clipboard = itemClipboard, clipboard.song == current?.id else { return [] }
+        guard canControl(), !finishing, let clipboard = itemClipboard, clipboard.song == current?.id else { return [] }
         return pasteItems(clipboard, at: snapshot.transport.editPosition ?? snapshot.transport.position)
     }
     @discardableResult public func duplicateItems(_ ids: Set<UUID>) -> Set<UUID> {
-        guard canExecute(), !finishing, let song = current?.id,
+        guard canControl(), !finishing, let song = current?.id,
               let clipboard = GridItemClipboard(project: snapshot.project, song: song, selected: ids),
               let end = clipboard.entries.map({ $0.clip.startTime + $0.clip.duration }).max() else { return [] }
         if pendingFXEdit { commitFX() }
@@ -1157,7 +1180,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     public func deleteItems(_ ids: Set<UUID>) { editProject { $0.deleteItems(ids) } }
     @discardableResult public func duplicateTracks(_ ids: Set<UUID>) -> Set<UUID> {
-        guard canExecute(), !finishing, let song = current else { return [] }
+        guard canControl(), !finishing, let song = current else { return [] }
         let targets = song.trackDuplicationTargets(ids)
         guard !targets.isEmpty else { return [] }
         finishAutomationRecording(); commitFX()
@@ -1269,6 +1292,48 @@ public struct ShowTimelinePresentationState: Equatable {
     /// Read synchronously from snapshot publication to distinguish a complete
     /// engine tick, including automated mixer updates, from explicit commands.
     var timelinePlaybackIsPublishingTick: Bool { publishingTimelinePlaybackTick }
+    public func canControl() -> Bool { canExecute() && !ProjectSyncControl.following }
+    public func projectSyncFrame() throws -> Data { try executor.projectSyncFrame() }
+    public func applyProjectSync(_ data: Data, elapsed: Double, first: Bool, focused: UUID? = nil) throws {
+        guard canExecute() else { throw ProjectError.invalid("Project Sync: playback access is unavailable.") }
+        let now = playbackClock()
+        if isPlaying { executor.advance(max(0, now - lastTime)) }
+        let update = try executor.applyProjectSync(data, elapsed: elapsed, first: first)
+        var next = snapshot
+        if let m = update.syncMixer {
+            if next.project.masterVolume != m.masterVolume { next.project.masterVolume = m.masterVolume; audioVolume(nil, m.masterVolume) }
+            if next.project.masterPan != m.masterPan { next.project.masterPan = m.masterPan; audioMasterPan(m.masterPan) }
+            if next.project.masterMute != m.masterMute { next.project.masterMute = m.masterMute; audioMute(nil, m.masterMute) }
+            if next.project.masterSolo != m.masterSolo { next.project.masterSolo = m.masterSolo; audioMasterSolo(m.masterSolo) }
+            let tracks = Dictionary(m.tracks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            for s in next.project.songs.indices {
+                for t in next.project.songs[s].tracks.indices {
+                    var track = next.project.songs[s].tracks[t]
+                    guard let remote = tracks[track.id] else { continue }
+                    if track.volume != remote.volume { track.volume = remote.volume; audioVolume(track.id, remote.volume) }
+                    if track.pan != remote.pan { track.pan = remote.pan; audioPan(track.id, remote.pan) }
+                    if track.mute != remote.mute { track.mute = remote.mute; audioMute(track.id, remote.mute) }
+                    if track.solo != remote.solo { track.solo = remote.solo; audioSolo(track.id, remote.solo) }
+                    next.project.songs[s].tracks[t] = track
+                }
+            }
+            if next.project != snapshot.project { hasUnsavedChanges = true; projectRevision &+= 1 }
+        }
+        next.transport = update.transport; next.nextSongId = update.nextSongId
+        if var setlist = update.syncSetlist {
+            setlist.playlists = snapshot.project.regionSetlist?.playlists ?? []
+            setlist.blocks = snapshot.project.regionSetlist?.blocks
+            next.project.regionSetlist = setlist
+        }
+        updatingPlaybackSnapshot = true
+        snapshot = next
+        updatingPlaybackSnapshot = false
+        let selection = focused.flatMap { id in current?.parts.contains(where: { $0.id == id }) == true ? id : nil }
+        if focusedRegion != selection { focusedRegion = selection; selectedSetlistBlock = nil; setlistFocusRequest = UUID() }
+        lastTime = playbackClock()
+        audioUpdate(snapshot, audioProjectRevision)
+        if isPlaying { startClock() } else { timer?.invalidate(); timer = nil }
+    }
     public func tick() {
         let now = playbackClock(); let delta = now - lastTime; lastTime = now
         guard isPlaying else { return }
@@ -1311,7 +1376,7 @@ public struct ShowTimelinePresentationState: Equatable {
     /// Apply one additive change to every tempo inside the selected song.
     /// The end boundary retains the following song's tempo; retiming runs once.
     private func adjustRegionTempo(_ requestedDelta: Double, region: Part) {
-        guard canExecute(), !finishing, let index = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }) else { return }
+        guard canControl(), !finishing, let index = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }) else { return }
         let before = snapshot.project.songs[index]
         var targets = (before.markers ?? []).filter { $0.isTempo && $0.position >= region.startTime && $0.position < region.endTime }
         func boundary(_ position: Double) -> TimelineMarker {
@@ -1361,7 +1426,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     @discardableResult public func configureProjectTime(bpm: Double, beats: Int, unit: Int, settings: ProjectTimeSettings) -> Bool {
-        guard canExecute(), !finishing, let index = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }) else { return false }
+        guard canControl(), !finishing, let index = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }) else { return false }
         guard bpm.isFinite, TimelineTempo.bpmRange.contains(bpm), (1...32).contains(beats), TimelineTempo.beatUnits.contains(unit) else { return false }
         do {
             try settings.validate()
@@ -1398,7 +1463,7 @@ public struct ShowTimelinePresentationState: Equatable {
         updateTiming(.beatUnit, value: Double(unit))
     }
     private func updateTiming(_ command: ShowCommand, value: Double) {
-        guard canExecute(), !finishing, let index = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }) else { return }
+        guard canControl(), !finishing, let index = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }) else { return }
         let song = snapshot.project.songs[index]
         let old = command == .tempo ? song.bpm : Double(command == .beatsPerBar ? song.meterBeats : song.meterUnit)
         guard old != value else { return }
@@ -1430,7 +1495,17 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public var selectedLoopArea: () -> ClosedRange<Double>? = { nil }
+    public func audioOutputDisconnected(_ notice: String) {
+        do {
+            try executor.execute(.stopAll, target: nil, value: 0)
+            snapshot = try executor.snapshot()
+            audioUpdate(snapshot, audioProjectRevision)
+            onStop()
+        } catch { message = error.localizedDescription }
+        message = notice; modalNotice = notice
+    }
     public func send(_ command: ShowCommand, target: UUID? = nil, value: Double = 0) {
+        guard !ProjectSyncControl.following else { return }
         if command == .subPlay, transportFadeout.active {
             transportFadeout.warn("Cancel Fadeout before starting Sub Play."); return
         }
@@ -1447,8 +1522,12 @@ public struct ShowTimelinePresentationState: Equatable {
                 recordSetlistLivePlayback(before: snapshot.transport, after: advanced.transport, elapsed: elapsed)
             }
         }
-        guard [.pause, .stop, .stopAll, .subStop].contains(command) || (canExecute() && !finishing) else { return }
+        guard [.pause, .stop, .stopAll, .subStop].contains(command) || (canControl() && !finishing) else { return }
         do {
+            if command == .play || command == .subPlay {
+                do { try validateAudioOutput() }
+                catch { message = error.localizedDescription; modalNotice = message; return }
+            }
             let previous = (command == .queueRegion || command == .escape) ? try executor.playbackSnapshot().transport : snapshot.transport
             if command == .play, let block = selectedSetlistBlock {
                 // Resolve at Play time so edits/reordering keep the audible target
@@ -1535,7 +1614,7 @@ public struct ShowTimelinePresentationState: Equatable {
             } else { send(command, value: value) }
             return
         }
-        guard canExecute(), !finishing, let source = current?.tracks.first(where: { $0.id == target }) else { return }
+        guard canControl(), !finishing, let source = current?.tracks.first(where: { $0.id == target }) else { return }
         if command == .volume || command == .pan {
             if mixerGesture?.project != snapshot.project.id || mixerGesture?.target != target || mixerGesture?.command != command {
                 mixerPreviewValues = [:]
@@ -1623,10 +1702,11 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     // Scalar mixer edits update the existing native buses and voices in place.
     private func sendMixer(_ command: ShowCommand, target: UUID?, value: Double) {
-        guard canExecute(), !finishing else { return }
+        guard (canControl() || (applyingLoopMixer && canExecute())), !finishing else { return }
         guard command != .phase || target != nil else { return }
         do {
-            try executor.execute(command, target: target, value: value)
+            if applyingLoopMixer { try executor.executeAutomation(command, target: target, value: value) }
+            else { try executor.execute(command, target: target, value: value) }
             var project = loopMixerProject ?? snapshot.project
             // Transfer ownership of the pending mixer frame before mutation.
             // Otherwise each automatic fader copies the songs/tracks arrays
@@ -1713,27 +1793,27 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     /// Update the engine while dragging without decoding all waveforms every pixel.
     public func previewTrackVolume(_ track: UUID?, gain: Double) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         if recordAutomationControl(track, target: AutomationTarget(.volume), value: TrackEnvelope.normalizedGain(gain)) { return }
         do { try executor.execute(.volume, target: track, value: gain); audioVolume(track, gain); synchronizeLinkedControl(.volume, target: track, value: gain) }
         catch { message = error.localizedDescription }
     }
     public func previewMasterPan(_ pan: Double) {
-        guard canExecute(), !finishing, pan.isFinite else { return }
+        guard canControl(), !finishing, pan.isFinite else { return }
         let value = min(1, max(-1, pan))
         if recordAutomationControl(nil, target: AutomationTarget(.pan), value: (value + 1)/2) { return }
         do { try executor.execute(.pan, target: nil, value: value); audioMasterPan(value) }
         catch { message = error.localizedDescription }
     }
     public func previewTrackPan(_ track: UUID, pan: Double) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         let value = min(1, max(-1, pan))
         if recordAutomationControl(track, target: AutomationTarget(.pan), value: (value + 1)/2) { return }
         do { try executor.execute(.pan, target: track, value: value); audioPan(track, value); synchronizeLinkedControl(.pan, target: track, value: value) }
         catch { message = error.localizedDescription }
     }
     public func previewFX(_ track: UUID?, settings: NativeFXSettings) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         do {
             try settings.validate()
             let previous = fxSettings(track)
@@ -1763,7 +1843,7 @@ public struct ShowTimelinePresentationState: Equatable {
         return defaults
     }
     public func previewClipFX(_ clip: UUID, settings: NativeFXSettings) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices {
                 guard let index = snapshot.project.songs[song].tracks[track].clips.firstIndex(where: { $0.id == clip }) else { continue }
@@ -1810,7 +1890,7 @@ public struct ShowTimelinePresentationState: Equatable {
         previewClipFX(clip, settings: current.merging(effect: effect, from: settings))
     }
     public func toggleClipFXAllBypass(_ clip: UUID) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices {
                 guard let index = snapshot.project.songs[song].tracks[track].clips.firstIndex(where: { $0.id == clip }) else { continue }
@@ -1827,7 +1907,7 @@ public struct ShowTimelinePresentationState: Equatable {
         }
     }
     public func setMIDIInput(_ track: UUID, slot: Int) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         guard let location = trackLocation(track), snapshot.project.songs[location.song].tracks[location.track].midiInput != (slot == 0 ? nil : slot) else { return }
         do {
             try executor.setMIDIInput(track, slot: slot)
@@ -1838,7 +1918,7 @@ public struct ShowTimelinePresentationState: Equatable {
         catch { message = error.localizedDescription }
     }
     public func setMIDIChannel(_ track: UUID, channel: Int) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         guard let location = trackLocation(track), snapshot.project.songs[location.song].tracks[location.track].midiChannel != (channel == 0 ? nil : channel) else { return }
         do {
             try executor.setMIDIChannel(track, channel: channel)
@@ -1849,7 +1929,7 @@ public struct ShowTimelinePresentationState: Equatable {
         catch { message = error.localizedDescription }
     }
     public func setInputMonitoring(_ track: UUID, enabled: Bool) {
-        guard canExecute(), !finishing, let location = trackLocation(track) else { return }
+        guard canControl(), !finishing, let location = trackLocation(track) else { return }
         do {
             try executor.setInputMonitoring(track, enabled: enabled)
             snapshot.project.songs[location.song].tracks[location.track].inputMonitoring = enabled
@@ -1857,7 +1937,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func setRecordingChannels(_ track: UUID, channel: Int) {
-        guard canExecute(), !finishing, TrackRecordingMode(rawValue: channel) != nil else { return }
+        guard canControl(), !finishing, TrackRecordingMode(rawValue: channel) != nil else { return }
         guard let location = trackLocation(track), snapshot.project.songs[location.song].tracks[location.track].recordingChannels != channel else { return }
         do {
             try executor.setRecordingChannels(track, channel: channel)
@@ -1904,7 +1984,7 @@ public struct ShowTimelinePresentationState: Equatable {
         setAutomation(track, settings: settings)
     }
     public func setAutomation(_ track: UUID?, settings: TrackAutomation) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         do {
             try settings.validate()
             finishAutomationRecording()
@@ -1919,7 +1999,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     @discardableResult public func recordAutomationControl(_ track: UUID?, target: AutomationTarget, value: Double) -> Bool {
-        guard isPlaying, value.isFinite, canExecute() else { return false }
+        guard isPlaying, value.isFinite, canControl() else { return false }
         let settings = automation(track)
         guard settings.enabled, settings.mode.writes,
               let envelope = settings.active.first(where: { $0.target.key == target.key && $0.armed }) else { return false }
@@ -2052,7 +2132,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     /// One insertion gesture creates one history entry, regardless of track count.
     @discardableResult public func insertFX(_ targets: [UUID?], effect: String) -> [UUID?: String] {
-        guard canExecute(), !finishing,
+        guard canControl(), !finishing,
               NativeFXSettings.order.contains(effect) || effect == NativeFXSettings.stemSeparator,
               effect != "Instruments" else { return [:] }
         var inserted: [UUID?: String] = [:]
@@ -2086,7 +2166,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     /// A selected track targets the selection; Master and unselected tracks stay independent.
     public func changeMixerFX(_ target: UUID?, remove: Bool = false) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         let targets: [UUID?] = target.map { mixerControlTargets($0).filter { $0.kind == .standard }.map { Optional($0.id) } } ?? [nil]
         let populated = targets.filter { !fxSettings($0).inserted.isEmpty }
         guard !populated.isEmpty else { return }
@@ -2114,7 +2194,7 @@ public struct ShowTimelinePresentationState: Equatable {
     /// A mixer slot drag copies a processor, including its live editor state.
     /// Capture before the history boundary so undo never restores a stale preset.
     @discardableResult public func copyFX(from source: UUID?, effect: String, to destination: UUID?, before target: String?) -> String? {
-        guard canExecute(), !finishing,
+        guard canControl(), !finishing,
               source == nil || current?.tracks.contains(where: { $0.id == source && $0.kind == .standard }) == true,
               destination == nil || current?.tracks.contains(where: { $0.id == destination && $0.kind == .standard }) == true,
               fxSettings(source).inserted.contains(effect),
@@ -2157,7 +2237,7 @@ public struct ShowTimelinePresentationState: Equatable {
         previewFX(track, settings: current.merging(effect: effect, from: settings))
     }
     public func setRecording(_ track: UUID, input: OutputPatch, format: String) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         guard let location = trackLocation(track) else { return }
         let previous = snapshot.project.songs[location.song].tracks[location.track]
         guard previous.inputPatch != input || previous.recordingFormat != format else { return }
@@ -2176,7 +2256,7 @@ public struct ShowTimelinePresentationState: Equatable {
         catch { message = error.localizedDescription }
     }
     public func setRecordingStage(_ track: UUID, postFader: Bool? = nil, postFX: Bool? = nil) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         let ids = Set(mixerControlTargets(track).filter { $0.kind == .standard }.map(\.id))
         var project = snapshot.project
         for song in project.songs.indices {
@@ -2192,7 +2272,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func setRecordingFormat(_ track: UUID, format: String?) {
-        guard canExecute(), !finishing, format == nil || ["wav", "wav32", "mp3"].contains(format!) else { return }
+        guard canControl(), !finishing, format == nil || ["wav", "wav32", "mp3"].contains(format!) else { return }
         let ids = Set(mixerControlTargets(track).filter { $0.kind == .standard }.map(\.id))
         var project = snapshot.project
         for song in project.songs.indices {
@@ -2208,7 +2288,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     /// Changing the input must not silently replace an Advanced format choice.
     public func setRecordingInput(_ track: UUID, input: OutputPatch) {
-        guard canExecute(), !finishing, let location = trackLocation(track) else { return }
+        guard canControl(), !finishing, let location = trackLocation(track) else { return }
         let previous = snapshot.project.songs[location.song].tracks[location.track]
         guard previous.kind == .standard, previous.inputPatch != input else { return }
         do {
@@ -2226,7 +2306,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func setTimecode(_ track: UUID, settings: TimecodeSettings) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         guard let location = trackLocation(track), snapshot.project.songs[location.song].tracks[location.track].kind == .timecode,
               snapshot.project.songs[location.song].tracks[location.track].timecode != settings else { return }
         do {
@@ -2240,7 +2320,7 @@ public struct ShowTimelinePresentationState: Equatable {
         catch { message = error.localizedDescription }
     }
     public func insertSeparatedStems(_ tracks: [Track], song: UUID, sourceTrack: UUID, original: AudioClip, project: UUID) throws {
-        guard canExecute(), !finishing, snapshot.project.id == project else {
+        guard canControl(), !finishing, snapshot.project.id == project else {
             throw ProjectError.invalid("The destination project is no longer available.")
         }
         var updated = snapshot.project
@@ -2250,7 +2330,7 @@ public struct ShowTimelinePresentationState: Equatable {
         markChanged(); onProjectEdited()
     }
     public func insertAudioTracks(_ tracks: [Track], song: UUID, project: UUID) throws {
-        guard canExecute(), !finishing, snapshot.project.id == project,
+        guard canControl(), !finishing, snapshot.project.id == project,
               let index = snapshot.project.songs.firstIndex(where: { $0.id == song }) else {
             throw ProjectError.invalid("The destination project is no longer available.")
         }
@@ -2286,7 +2366,7 @@ public struct ShowTimelinePresentationState: Equatable {
         catch { message = "Recording saved, but could not insert item: " + error.localizedDescription }
     }
     @discardableResult public func addMIDIItem(track: UUID, start: Double? = nil, duration: Double? = nil) -> UUID? {
-        guard canExecute(), !finishing, let current, let row = current.tracks.first(where: { $0.id == track }), row.kind == .standard else { return nil }
+        guard canControl(), !finishing, let current, let row = current.tracks.first(where: { $0.id == track }), row.kind == .standard else { return nil }
         let position = max(0, start ?? snapshot.transport.editPosition ?? snapshot.transport.position)
         let bpm = current.activeTempoMarker(at: position)?.tempoBPM ?? current.bpm
         let length = duration ?? (60 / bpm * Double(current.meterBeats) * 4 / Double(current.meterUnit))
@@ -2300,7 +2380,9 @@ public struct ShowTimelinePresentationState: Equatable {
             project.songs[song].tracks[index].clips.append(clip)
             project.songs[song].duration = max(project.songs[song].duration, position + length)
         }
-        return self.current?.tracks.contains(where: { $0.clips.contains(where: { $0.id == clip.id }) }) == true ? clip.id : nil
+        guard self.current?.tracks.contains(where: { $0.clips.contains(where: { $0.id == clip.id }) }) == true else { return nil }
+        send(.editSeek, value: position + length)
+        return clip.id
     }
     public func setMIDIItem(_ id: UUID, midi: MIDIItem) {
         do { try midi.validate() } catch { message = error.localizedDescription; return }
@@ -2322,7 +2404,7 @@ public struct ShowTimelinePresentationState: Equatable {
         }
     }
     @discardableResult public func addTextItem(track: UUID) -> UUID? {
-        guard canExecute(), !finishing,
+        guard canControl(), !finishing,
               let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }),
               let row = snapshot.project.songs[song].tracks.firstIndex(where: { $0.id == track }),
               snapshot.project.songs[song].tracks[row].kind.isText else { return nil }
@@ -2339,11 +2421,12 @@ public struct ShowTimelinePresentationState: Equatable {
             snapshot.project.songs[song].tracks[row].clips.append(clip)
             snapshot.project.songs[song].duration = max(snapshot.project.songs[song].duration, position + clip.duration)
             markChanged()
+            send(.editSeek, value: position + clip.duration)
             return clip.id
         } catch { message = error.localizedDescription; return nil }
     }
     @discardableResult public func updateTextItem(_ id: UUID, text: String) -> Bool {
-        guard canExecute(), !finishing else { return false }
+        guard canControl(), !finishing else { return false }
         for song in snapshot.project.songs.indices {
             for track in snapshot.project.songs[song].tracks.indices where snapshot.project.songs[song].tracks[track].kind.isText {
                 guard let item = snapshot.project.songs[song].tracks[track].clips.firstIndex(where: { $0.id == id }) else { continue }
@@ -2361,7 +2444,7 @@ public struct ShowTimelinePresentationState: Equatable {
         return false
     }
     public func editMasterColor(_ color: UInt32) {
-        guard canExecute(), !finishing, color <= 0xffffff, snapshot.project.masterColor != color else { return }
+        guard canControl(), !finishing, color <= 0xffffff, snapshot.project.masterColor != color else { return }
         do {
             try executor.editMasterColor(color)
             snapshot.project.masterColor = color
@@ -2369,7 +2452,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func editTrack(_ id: UUID, name: String, color: UInt32) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         guard let location = trackLocation(id) else { return }
         let previous = snapshot.project.songs[location.song].tracks[location.track]
         let finalName = previous.fixedName ?? name
@@ -2384,7 +2467,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     /// Called once when a native row-height drag finishes. Preview lives in the grid.
     public func setTrackHeightScale(_ id: UUID, scale: Double, project: UUID, song: UUID) {
-        guard canExecute(), !finishing, snapshot.project.id == project, current?.id == song,
+        guard canControl(), !finishing, snapshot.project.id == project, current?.id == song,
               TrackHeightGeometry.isValidScale(scale), let location = trackLocation(id),
               snapshot.project.songs[location.song].id == song else { return }
         let value: Double? = abs(scale - 1) < 0.000001 ? nil : scale
@@ -2399,7 +2482,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     /// Color-only batch: keep names and audio untouched and create one undo step.
     public func editTrackColors(_ ids: Set<UUID>, color: UInt32, project: UUID) {
-        guard canExecute(), !finishing, snapshot.project.id == project,
+        guard canControl(), !finishing, snapshot.project.id == project,
               color <= 0xffffff, !ids.isEmpty else { return }
         var updated = snapshot.project
         var changed = false
@@ -2439,7 +2522,7 @@ public struct ShowTimelinePresentationState: Equatable {
         editTrackRouting(ids, receive: receive) { if $0.indices.contains(slot) { $0.remove(at: slot) } }
     }
     private func editTrackRouting(_ ids: Set<UUID>, receive: Bool, change: (inout [UUID?]) -> Void) {
-        guard canExecute(), !finishing, var song = current else { return }
+        guard canControl(), !finishing, var song = current else { return }
         var edits: [UUID: TrackRouting] = [:]
         for index in song.tracks.indices where ids.contains(song.tracks[index].id) && song.tracks[index].kind == .standard {
             var routing = song.tracks[index].routing ?? TrackRouting(receives: [], transmitters: [])
@@ -2454,7 +2537,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func setOutputPatches(track: UUID?, patches: [OutputPatch]) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         let location = track.flatMap(trackLocation)
         guard track == nil || location != nil else { return }
         let previous = location.map { snapshot.project.songs[$0.song].tracks[$0.track].outputPatches } ?? snapshot.project.masterOutputPatches
@@ -2479,7 +2562,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func setOutputPatch(track: UUID?, patch: OutputPatch, slot: Int = 0) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         guard slot >= 0 else { return }
         if let row = track.flatMap({ id in current?.tracks.first { $0.id == id } }), row.outputs != nil || slot > 1 {
             var values = row.outputPatches; while values.count <= slot { values.append(.none) }; values[slot] = patch
@@ -2548,7 +2631,7 @@ public struct ShowTimelinePresentationState: Equatable {
         editProject { project in for song in project.songs.indices { project.songs[song].unlinkTracks(id) } }
     }
     public func groupTracks(_ ids: Set<UUID>) {
-        guard canExecute(), !finishing, ids.count > 1, current?.tracks.contains(where: { ids.contains($0.id) && $0.stereoLink != nil }) != true else { return }
+        guard canControl(), !finishing, ids.count > 1, current?.tracks.contains(where: { ids.contains($0.id) && $0.stereoLink != nil }) != true else { return }
         do { try executor.groupTracks(Array(ids)); snapshot = try executor.snapshot(); markChanged() }
         catch { message = error.localizedDescription }
     }
@@ -2581,7 +2664,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } else { reorderTrack(track, before: before) }
     }
     public func reorderTrack(_ track: UUID, before: UUID?) {
-        guard canExecute(), !finishing, track != before,
+        guard canControl(), !finishing, track != before,
               current?.tracks.contains(where: { $0.id == track && $0.kind == .standard }) == true else { return }
         do { try executor.reorderTrack(track, before: before); snapshot = try executor.snapshot(); markChanged() }
         catch { message = error.localizedDescription }
@@ -2591,7 +2674,7 @@ public struct ShowTimelinePresentationState: Equatable {
         return (0..<count).map { OutputPatch(firstChannel: $0 % channels + 1, channelCount: 1) }
     }
     @discardableResult public func addTracks(name: String, role: TrackRole, count: Int, inputPatches: [OutputPatch] = [], after selected: UUID? = nil) -> [UUID] {
-        guard canExecute(), !finishing, let songIndex = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }) else { return [] }
+        guard canControl(), !finishing, let songIndex = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }) else { return [] }
         guard count > 0 else { return [] }
         let kind = TrackKind(rawValue: role.rawValue) ?? .standard
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2630,7 +2713,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription; return [] }
     }
     @discardableResult public func addTrack(name: String, role: TrackRole, after selected: UUID? = nil) -> UUID? {
-        guard canExecute(), !finishing else { return nil }
+        guard canControl(), !finishing else { return nil }
         let kind = TrackKind(rawValue: role.rawValue) ?? .standard
         if kind != .standard && snapshot.project.songs.contains(where: { $0.tracks.contains { $0.kind == kind } }) {
             message = "A \(kind.title) track already exists."; return nil
@@ -2658,7 +2741,7 @@ public struct ShowTimelinePresentationState: Equatable {
         }
     }
     public func insertClickItems(track id: UUID) {
-        guard canExecute(), !finishing else { return }
+        guard canControl(), !finishing else { return }
         var project = snapshot.project
         guard project.insertClickItems(track: id) > 0 else { return }
         do {
@@ -2668,13 +2751,13 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func resizeRegion(_ id: UUID, start: Double, end: Double) {
-        guard canExecute(), !finishing, !timelineMovementLocked, let region = current?.parts.first(where: { $0.id == id }),
+        guard canControl(), !finishing, !timelineMovementLocked, let region = current?.parts.first(where: { $0.id == id }),
               region.parentRegionID == nil, current?.parts.contains(where: { $0.parentRegionID == id }) != true else { return }
         do { try executor.resizeRegion(id, start: start, end: end); snapshot = try executor.snapshot(); markChanged() }
         catch { message = error.localizedDescription }
     }
     public func moveRegion(_ id: UUID, start: Double) {
-        guard canExecute(), !finishing, !timelineMovementLocked else { return }
+        guard canControl(), !finishing, !timelineMovementLocked else { return }
         do { try executor.moveRegion(id, start: start); snapshot = try executor.snapshot(); markChanged() }
         catch { message = error.localizedDescription }
     }
@@ -2687,8 +2770,23 @@ public struct ShowTimelinePresentationState: Equatable {
         guard let selected = song.parts.first(where: { $0.id == focusedRegion }) ?? song.parts.first(where: { $0.id == snapshot.transport.regionId }) else { return nil }
         return song.parts.filter { $0.parentRegionID == selected.id }.min { $0.startTime < $1.startTime } ?? selected
     }
+    public func setRegionInit(_ id: UUID, selection: Int) {
+        guard canControl(), !finishing, (1...10).contains(selection),
+              let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }),
+              let region = snapshot.project.songs[song].parts.firstIndex(where: { $0.id == id }) else { return }
+        let count = (selection + 1) / 2, bars = selection % 2 == 0
+        do {
+            try executor.setRegionInit(id, count: count, bars: bars)
+            if bars { snapshot.project.songs[song].parts[region].subplayInitBars = count }
+            else {
+                snapshot.project.songs[song].parts[region].subplayInitBars = nil
+                snapshot.project.songs[song].parts[region].subplayInitSeconds = Double(count)
+            }
+            markChanged(refreshAudio: false)
+        } catch { message = error.localizedDescription }
+    }
     public func setRegionPitch(_ id: UUID, semitones: Int, tracks: Set<UUID>, groups: Set<UUID>) {
-        guard canExecute(), !finishing, (-12...12).contains(semitones),
+        guard canControl(), !finishing, (-12...12).contains(semitones),
               let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }),
               let region = snapshot.project.songs[song].parts.firstIndex(where: { $0.id == id }) else { return }
         let t = tracks.sorted { $0.uuidString < $1.uuidString }, g = groups.sorted { $0.uuidString < $1.uuidString }
@@ -2703,7 +2801,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func editRegionColors(_ ids: Set<UUID>, color: UInt32) {
-        guard canExecute(), !finishing, color <= 0xffffff,
+        guard canControl(), !finishing, color <= 0xffffff,
               let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }) else { return }
         var changed = false
         defer { if changed { markChanged(refreshAudio: false); onProjectEdited() } }
@@ -2719,7 +2817,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func editRegion(_ id: UUID, name: String, color: UInt32, uppercaseName: Bool? = nil) {
-        guard canExecute(), !finishing,
+        guard canControl(), !finishing,
               let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }),
               let region = snapshot.project.songs[song].parts.firstIndex(where: { $0.id == id }) else { return }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2735,8 +2833,16 @@ public struct ShowTimelinePresentationState: Equatable {
         }
         catch { message = error.localizedDescription }
     }
+    public func moveItems(_ ids: Set<UUID>, anchor: UUID, start: Double, track: UUID?) {
+        guard canControl(), !finishing, !timelineMovementLocked,
+              let index = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }),
+              let moved = snapshot.project.songs[index].movingItems(ids, anchor: anchor, start: start, track: track) else { return }
+        var project = snapshot.project; project.songs[index] = moved
+        do { try project.validate(); try executor.applyProjectEdit(project); snapshot = try executor.snapshot(); markChanged() }
+        catch { message = error.localizedDescription }
+    }
     public func moveClip(_ id: UUID, start: Double, track: UUID?) {
-        guard canExecute(), !finishing, !timelineMovementLocked else { return }
+        guard canControl(), !finishing, !timelineMovementLocked else { return }
         if let source = current?.tracks.first(where: { $0.clips.contains { $0.id == id } }),
            let clip = source.clips.first(where: { $0.id == id }) {
             guard let destination = track.flatMap({ id in current?.tracks.first { $0.id == id } }) ?? (track == nil ? source : nil) else { return }
@@ -2749,7 +2855,7 @@ public struct ShowTimelinePresentationState: Equatable {
     }
     /// Commit a drop into the first empty mixer row as one undoable project edit.
     public func moveClipToNewStandardTrack(_ id: UUID, start: Double, newTrack: Track) {
-        guard canExecute(), !finishing, !timelineMovementLocked, newTrack.kind == .standard,
+        guard canControl(), !finishing, !timelineMovementLocked, newTrack.kind == .standard,
               start.isFinite, start >= 0,
               let songIndex = snapshot.project.songs.firstIndex(where: { $0.id == current?.id }),
               let sourceIndex = snapshot.project.songs[songIndex].tracks.firstIndex(where: { $0.clips.contains { $0.id == id } }),
@@ -2771,7 +2877,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func deleteManualMarker(_ id: UUID) {
-        guard canExecute(), !finishing, let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }),
+        guard canControl(), !finishing, let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }),
               let marker = snapshot.project.songs[song].markers?.first(where: { $0.id == id }),
               marker.unifiedRegionID == nil, marker.sourceRegionID == nil else { return }
         do {
@@ -2786,7 +2892,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     @discardableResult public func applyDetectedTempo(_ markers: [TimelineMarker], project: UUID, song: UUID, region: UUID? = nil) -> Bool {
-        guard canExecute(), !finishing, project == snapshot.project.id,
+        guard canControl(), !finishing, project == snapshot.project.id,
               let index = snapshot.project.songs.firstIndex(where: { $0.id == song }), snapshot.transport.songId == song,
               !markers.isEmpty, markers.allSatisfy({ $0.isTempo }) else { return false }
         do {
@@ -2842,7 +2948,7 @@ public struct ShowTimelinePresentationState: Equatable {
         return true
     }
     public func setMarker(_ marker: TimelineMarker) {
-        guard canExecute(), !finishing, let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }) else { return }
+        guard canControl(), !finishing, let song = snapshot.project.songs.firstIndex(where: { $0.id == snapshot.transport.songId }) else { return }
         var value = marker
         let previous = snapshot.project.songs[song].markers?.first { $0.id == marker.id }
         if timelineMovementLocked, let previous { value.position = previous.position }
@@ -2884,7 +2990,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     @discardableResult public func unifyRegions(containing id: UUID, name: String) -> Bool {
-        guard canExecute(), !finishing else { return false }
+        guard canControl(), !finishing else { return false }
         do {
             var project = snapshot.project
             let unified = try project.unifyRegions(containing: id, name: name)
@@ -2895,7 +3001,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription; return false }
     }
     @discardableResult public func disunifyRegion(_ id: UUID) -> Bool {
-        guard canExecute(), !finishing else { return false }
+        guard canControl(), !finishing else { return false }
         do {
             var project = snapshot.project
             let members = try project.disunifyRegion(id)
@@ -2906,7 +3012,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription; return false }
     }
     public func regionFromTimeSelection(song: UUID, start: Double, end: Double) {
-        guard canExecute(), !finishing, song == current?.id,
+        guard canControl(), !finishing, song == current?.id,
               start.isFinite, end.isFinite, start >= 0, end > start,
               let index = snapshot.project.songs.firstIndex(where: { $0.id == song }) else { return }
         guard current?.parts.contains(where: { abs($0.startTime - start) < 0.000001 }) != true else {
@@ -2923,7 +3029,7 @@ public struct ShowTimelinePresentationState: Equatable {
         }
     }
     public func regionsFromSelection(_ ids: Set<UUID>) {
-        guard canExecute(), !finishing, let track = current?.tracks.first(where: { $0.kind != .timecode && $0.clips.contains { ids.contains($0.id) } }) else { return }
+        guard canControl(), !finishing, let track = current?.tracks.first(where: { $0.kind != .timecode && $0.clips.contains { ids.contains($0.id) } }) else { return }
         let lanes = TrackLanes(track: track).lanes
         let topLane = track.clips.filter { ids.contains($0.id) }.compactMap { lanes[$0.id] }.min() ?? 0
         let clips = track.clips.filter { ids.contains($0.id) && lanes[$0.id] == topLane }.sorted { $0.startTime < $1.startTime }
@@ -2939,7 +3045,7 @@ public struct ShowTimelinePresentationState: Equatable {
         } catch { message = error.localizedDescription }
     }
     public func regionFromClip(_ id: UUID) {
-        guard canExecute(), !finishing,
+        guard canControl(), !finishing,
               current?.tracks.contains(where: { $0.kind != .timecode && $0.clips.contains { $0.id == id } }) == true else { return }
         if let clip = current?.tracks.flatMap(\.clips).first(where: { $0.id == id }),
            current?.parts.contains(where: { abs($0.startTime - clip.startTime) < 0.000001 }) == true {
@@ -2957,9 +3063,9 @@ public struct ShowTimelinePresentationState: Equatable {
         // preferences from another installation. Local memory serves unsaved documents.
         guard let saved = snapshot.project.savedCursor ?? cursorMemory?.cursor(for: snapshot.project.id),
               let song = snapshot.project.songs.first(where: { $0.id == saved.songID }) else { return }
-        if snapshot.transport.songId != song.id { try executor.execute(.select, target: song.id, value: 0) }
+        if snapshot.transport.songId != song.id { try executor.executeAutomation(.select, target: song.id, value: 0) }
         let position = min(song.duration, saved.position)
-        try executor.execute(.editSeek, target: nil, value: position)
+        try executor.executeAutomation(.editSeek, target: nil, value: position)
         let update = try executor.playbackSnapshot()
         snapshot.transport = update.transport; snapshot.nextSongId = update.nextSongId
         restoredCursorPosition = position; focusedRegion = update.transport.regionId
@@ -2976,6 +3082,7 @@ public struct ShowTimelinePresentationState: Equatable {
         let automationSequence = automationRecordingSequence
         var project = snapshot.project; project.updatedAt = ISO8601DateFormatter().string(from: Date())
         project.savedCursor = editingCursor
+        if project.projectSyncID == nil { project.projectSyncID = UUID() }
         // Saving takes a copy of the current pass. Finishing that pass here
         // would release Touch/Latch overrides, change Write mode and rebuild
         // playback while the user is still performing.
@@ -2986,6 +3093,10 @@ public struct ShowTimelinePresentationState: Equatable {
             }
         }
         try await persistence.save(project)
+        if projectSessionID == session && snapshot.project.id == project.id, let syncID = project.projectSyncID {
+            executor.setProjectSyncID(syncID)
+            snapshot.project.projectSyncID = syncID
+        }
         if projectSessionID == session && snapshot.project.id == project.id { lastSavedCursor = project.savedCursor; lastSavedAt = project.updatedAt }
         if projectSessionID == session && snapshot.project.id == project.id && projectRevision == revision && effectRevision == effects &&
             setlistRevision == setlist && automationRecordingSequence == automationSequence { hasUnsavedChanges = false }
@@ -2995,6 +3106,15 @@ public struct ShowTimelinePresentationState: Equatable {
         guard !hasUnsavedChanges else {
             throw ProjectError.invalid("The project changed while saving. Save again before closing.")
         }
+    }
+    public func renameProject(_ name: String) throws {
+        guard canControl(), !finishing, !saving else { throw ProjectError.invalid("No project is open for saving.") }
+        let name = try ProjectName.validated(name)
+        guard snapshot.project.name != name else { return }
+        var project = snapshot.project; project.name = name
+        try executor.applyProjectEdit(project)
+        snapshot = try executor.snapshot()
+        markChanged(refreshAudio: false); onProjectEdited()
     }
     public func save() async {
         let session = projectSessionID
@@ -3044,6 +3164,16 @@ public struct ShowTimelinePresentationState: Equatable {
         snapshot = loaded
         playedLiveRegionIDs = SetlistLivePlaybackTracker.normalizedMarks(project: loaded.project,
             marked: Set(loaded.project.regionSetlist?.playedLiveRegionIDs ?? []))
+    }
+    /// Add imported material without resetting the current transport or project session.
+    public func applyImportedProject(_ project: Project) throws {
+        guard project.id == snapshot.project.id else { throw ProjectError.invalid("The open project changed. Start Add Project again.") }
+        try project.validate()
+        tick()
+        try executor.applyProjectEdit(project)
+        snapshot = try executor.snapshot()
+        markChanged()
+        onProjectEdited()
     }
     public func replaceProject(_ project: Project) throws {
         try project.validate()

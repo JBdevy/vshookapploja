@@ -59,8 +59,8 @@ private struct MIDIEditor: View {
                     Text(clip.name).foregroundStyle(JarasTheme.secondary).lineLimit(1)
                     Spacer()
                     Button("FX da pista") { if let row { FXWindows.shared.open(show: show, track: row.id, effect: "Chain", language: UserDefaults.standard.string(forKey:"jaras.language") ?? "pt") } }
-                    Button { show.undo() } label: { Image(systemName:"arrow.uturn.backward") }.help("Desfazer")
-                    Button { show.redo() } label: { Image(systemName:"arrow.uturn.forward") }.help("Refazer")
+                    Button { show.undo() } label: { Image(systemName:"arrow.uturn.backward") }.jarasHelp("Desfazer")
+                    Button { show.redo() } label: { Image(systemName:"arrow.uturn.forward") }.jarasHelp("Refazer")
                     Button(show.snapshot.transport.playing ? "Pausar" : "Play") { show.send(show.snapshot.transport.playing ? .pause : .play) }
                 }.padding(10)
                 Divider()
@@ -86,7 +86,7 @@ private struct MIDIEditor: View {
                     Text("Zoom"); Slider(value:$scale,in:24...360).frame(width:110)
                 }.padding(.horizontal,10).padding(.vertical,8)
                 MIDIPianoRoll(clip:clip,selected:$selected,scale:scale,velocity:velocity,channel:max(1,channel),channelFilter:channel,
-                    cursor:show.snapshot.transport.position, enabled:show.canExecute(),
+                    cursor:show.snapshot.transport.position, enabled:show.canControl(),
                     segments:show.current?.tempoAudioSegments(clip) ?? [clip],
                     commit:{ notes in var next=midi; next.notes=notes; show.setMIDIItem(item,midi:next) },
                     seek:{ show.send(show.snapshot.transport.playing ? .seek : .editSeek,value:$0) },

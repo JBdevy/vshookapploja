@@ -52,12 +52,12 @@ private final class CaptureWriter: @unchecked Sendable {
         var gain: Float
         var position: Double?
         var droppedFramesAtStart: UInt = 0
-        init(target: CaptureTarget,url: URL,file: AVAudioFile,buffer: AVAudioPCMBuffer) throws {
+        init(target: CaptureTarget,url: URL,file: AVAudioFile,buffer: AVAudioPCMBuffer, mediaDirectory: URL) throws {
             self.target=target; self.url=url; self.file=file; self.buffer=buffer
             gain = target.postFader ? target.gain : 1
             if target.postFX, let settings = target.effects,
                settings.effectKeys.contains(where: { settings.isEnabled($0) }) {
-                processor = try RecordingInputProcessor(format: buffer.format, settings: settings)
+                processor = try RecordingInputProcessor(format: buffer.format, settings: settings, mediaDirectory: mediaDirectory)
             } else { processor = nil }
             skipFrames = processor?.latency ?? 0
             waveform = try LiveRecordedWaveform(rate: buffer.format.sampleRate, channels: target.channelCount)
@@ -71,7 +71,7 @@ private final class CaptureWriter: @unchecked Sendable {
         for target in targets { takes.append(try makeTake(target)) }
     }
     private func makeTake(_ target: CaptureTarget) throws -> Take {
-        let folder = directory.appendingPathComponent("Stems/Recordings", isDirectory: true)
+        let folder = directory.appendingPathComponent("Stems", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             guard target.input.firstChannel >= 1, target.input.firstChannel + target.input.channelCount - 1 <= channels else { throw ProjectError.invalid("Selected recording input is unavailable.") }
             let aiff = target.format.hasPrefix("aiff")
@@ -80,7 +80,7 @@ private final class CaptureWriter: @unchecked Sendable {
             let settings: [String: Any] = [AVFormatIDKey:kAudioFormatLinearPCM, AVSampleRateKey:sampleRate, AVNumberOfChannelsKey:target.channelCount, AVLinearPCMBitDepthKey:target.format.hasSuffix("16pcm") ? 16 : (target.format == "wav32" || target.format.hasSuffix("32pcm")) ? 32 : 24, AVLinearPCMIsFloatKey:target.format == "wav32", AVLinearPCMIsBigEndianKey:aiff, AVLinearPCMIsNonInterleaved:false]
             let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
             guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096) else { throw ProjectError.invalid("Could not allocate recording buffer") }
-        let take = try Take(target: target, url: url, file: file, buffer: buffer)
+        let take = try Take(target: target, url: url, file: file, buffer: buffer, mediaDirectory: directory)
         take.droppedFramesAtStart = ring.droppedFrames
         return take
     }
@@ -156,7 +156,7 @@ private final class CaptureWriter: @unchecked Sendable {
                     // change; otherwise removing a lookahead FX shifts the take.
                     try self.flushLatency(take)
                     if let processor = take.processor { try processor.update(settings) }
-                    else { take.processor = try RecordingInputProcessor(format: take.buffer.format, settings: settings) }
+                    else { take.processor = try RecordingInputProcessor(format: take.buffer.format, settings: settings, mediaDirectory: self.directory) }
                     take.skipFrames = take.processor?.latency ?? 0
                 }
             } catch { self.failure = error }
@@ -228,7 +228,7 @@ private final class CaptureWriter: @unchecked Sendable {
                     let duration = Double(take.frames) / self.sampleRate
                     let overview = try StemProjectImporter.audioOverview(url, duration: duration)
                     let clip = AudioClip(id: take.target.id, name: take.target.name, startTime: take.position ?? fallbackStart, duration: duration, waveform: overview.waveform,
-                        audioFile: AudioFile(path: "Stems/Recordings/" + url.lastPathComponent), waveformChannels: overview.channels, recordingLane: take.target.lane)
+                        audioFile: AudioFile(path: "Stems/" + url.lastPathComponent), waveformChannels: overview.channels, recordingLane: take.target.lane)
                     items.append(CapturedItem(track: take.target.track, clip: clip))
                 } catch { message = error.localizedDescription }
             }
@@ -288,8 +288,8 @@ private final class CaptureWriter: @unchecked Sendable {
     func bind(_ show: ShowController) {
         projectTabActive = true;
         self.show = show
-        AudioDeviceSettings.shared.canChangeConfiguration = { [weak self, weak show] in
-            show?.isPlaying != true && self?.recording != true && self?.busy != true
+        AudioDeviceSettings.shared.canChangeConfiguration = { [weak self] in
+            self?.recording != true && self?.busy != true
         }
         AudioDeviceSettings.shared.inputDeviceChanged = { [weak self] in
             guard let self else { return }
@@ -655,8 +655,12 @@ private final class CaptureWriter: @unchecked Sendable {
         if let message { error = message }
     }
     func toggle(show: ShowController) {
-        if recording { finish(); return }
-        guard !busy, show.canExecute(), let directory, project == show.snapshot.project.id else { return }
+        if recording {
+            finish()
+            show.send(.stop)
+            return
+        }
+        guard !busy, show.canControl(), let directory, project == show.snapshot.project.id else { return }
         let tracks = show.current?.tracks.filter { $0.kind == .standard && armed.contains($0.id) } ?? []
         #if os(iOS)
         guard !tracks.isEmpty, tracks.allSatisfy({ $0.recordingMode != .midi }) else {
@@ -664,12 +668,12 @@ private final class CaptureWriter: @unchecked Sendable {
         }
         #endif
         let audioTracks = tracks.filter { $0.recordingMode != .midi }
-        if !audioTracks.isEmpty, !AudioDestinationSpace.confirm(at: directory.appendingPathComponent("Stems/Recordings", isDirectory: true)) { return }
+        if !audioTracks.isEmpty, !AudioDestinationSpace.confirm(at: directory.appendingPathComponent("Stems", isDirectory: true)) { return }
         busy = true; self.show = show; error = ""; previewSession = UUID()
         Task {
             do {
                 if !audioTracks.isEmpty { try await startAudioCapture(tracks: audioTracks) }
-                guard self.project == show.snapshot.project.id, show.canExecute() else { busy = false; return }
+                guard self.project == show.snapshot.project.id, show.canControl() else { busy = false; return }
                 startPosition = show.snapshot.transport.playing ? show.snapshot.transport.position : show.snapshot.transport.editPosition ?? show.snapshot.transport.position
                 midiStartTime = ProcessInfo.processInfo.systemUptime
                 recordingSong = show.snapshot.transport.songId
@@ -703,7 +707,7 @@ private final class CaptureWriter: @unchecked Sendable {
         do {
             let writer = try await Task.detached(priority: .userInitiated) { try CaptureWriter(targets: targets, directory: directory, format: format, ring: ring) }.value
             do {
-                guard project == requestedProject, project == show.snapshot.project.id, show.canExecute(), !wasRecording || recording else {
+                guard project == requestedProject, project == show.snapshot.project.id, show.canControl(), !wasRecording || recording else {
                     throw ProjectError.invalid("The destination project is no longer available.")
                 }
                 // Creating files yields to the main actor. The selected input or
@@ -936,12 +940,12 @@ private struct RecordingButtonStyle: ButtonStyle {
             .font(.jarasSystem(size: fontSize, weight: .semibold))
             .lineLimit(1).minimumScaleFactor(0.75)
             .frame(width: width, height: height)
-            .foregroundStyle(active ? Color.black : transport ? JarasTheme.secondary : Color.red)
-            .background(active ? red.opacity(configuration.isPressed ? 0.75 : 1) :
-                transport ? Color.red.opacity(configuration.isPressed ? 0.7 : 0.45) :
+            .foregroundStyle(transport ? Color.white : active ? Color.black : Color.red)
+            .background(transport ? (active ? JarasTheme.transportRed : JarasTheme.liveOffRed).opacity(configuration.isPressed ? 0.85 : 1) :
+                active ? red.opacity(configuration.isPressed ? 0.75 : 1) :
                 JarasTheme.text.opacity(configuration.isPressed ? 0.24 : 0.12))
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(transport ? (active ? red : Color.white.opacity(0.45)) : .clear))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(transport ? (active ? JarasTheme.transportRed : Color.white.opacity(0.45)) : .clear))
             .contentShape(Rectangle())
             .transaction { $0.animation = nil }
     }

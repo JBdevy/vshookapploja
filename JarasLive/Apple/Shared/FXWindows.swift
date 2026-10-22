@@ -42,7 +42,7 @@ struct FXInsertEditor: View {
         #endif
         if targets.count == 1 { result.append(NativeFXSettings.stemSeparator) }
         #if os(macOS)
-        result.append("External")
+        result.insert("External", at: 0)
         #endif
         return result
     }
@@ -216,11 +216,9 @@ import Combine
 }
 
 @MainActor private func attachWorkspacePanel(_ panel: NSPanel) {
-    // Normal child windows remain above the workspace without blocking its
-    // controls, while sheets and application deactivation retain priority.
-    if let parent = NSApp.windows.first(where: { !($0 is NSPanel) && $0.isVisible && $0.title == "CatLive" }) {
-        parent.addChildWindow(panel, ordered: .above)
-    }
+    // Keep the same workspace/tool ordering without linking window movement
+    // or monitor placement to the main interface.
+    ProjectionWindow.followWorkspaceWindow(panel)
 }
 
 @MainActor final class FXWindows: NSObject, NSWindowDelegate {
@@ -271,6 +269,7 @@ import Combine
         }
     }
     private func open(show: ShowController, target key: WindowKey, preferredEffect: String? = nil) {
+        guard !ProjectSyncControl.following else { return }
         guard targetExists(key, in: show) else { return }
         if self.show !== show {
             closeAll(); self.show = show
@@ -337,19 +336,8 @@ private struct WorkspaceSettingsContent: View {
     let show: ShowController
     let backend: any BackendClient
     @ObservedObject var selection: WorkspaceSettingsSelection
-    let close: () -> Void
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Configurações").font(.jarasHeadline)
-                Spacer()
-                Button(action: close) {
-                    Image(systemName: "xmark").frame(width: 44, height: 44).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("Fechar").keyboardShortcut(.cancelAction)
-            }.padding(16)
-            Divider()
-            SettingsView(auth: auth, show: show, backend: backend, selection: $selection.section)
-        }
+        SettingsView(auth: auth, show: show, backend: backend, selection: $selection.section)
     }
 }
 
@@ -368,7 +356,7 @@ private struct WorkspaceToolContent<Content: View>: View {
 /// The workspace owns these panels, just as it owns its detached mixer.
 /// Refocusing a tool keeps its hosting view, selection and unfinished text edits.
 @MainActor final class WorkspaceToolWindows: NSObject, ObservableObject, NSWindowDelegate {
-    private enum Tool: String { case advanced, settings }
+    private enum Tool: String { case advanced, settings, textItem }
     @Published private(set) var settingsOpen = false
     private var windows: [Tool: NSPanel] = [:]
     private var settingsSelection: WorkspaceSettingsSelection?
@@ -382,6 +370,18 @@ private struct WorkspaceToolContent<Content: View>: View {
         projectObservation = show.$snapshot.map { $0.project.id }.removeDuplicates().dropFirst()
             .sink { [weak self] _ in self?.closeAll() }
     }
+    func openTextItem(show: ShowController, id: UUID) {
+        bind(show)
+        guard let track = show.current?.tracks.first(where: { $0.kind.isText && $0.clips.contains { $0.id == id } }),
+              let item = track.clips.first(where: { $0.id == id }) else { return }
+        // Keep the draft in one independent tool window, above the projection
+        // without bringing the whole workspace in front of that projection.
+        present(.textItem, title: "Text Editor", size: NSSize(width: 430, height: 330)) { panel in
+            TextItemEditor(text: item.text ?? "", showHeader: false,
+                           apply: { show.updateTextItem(id, text: $0) },
+                           close: { [weak panel] in panel?.close() })
+        }
+    }
     func openAdvanced(show: ShowController, documents: ProjectDocuments?) {
         bind(show)
         present(.advanced, title: "Advanced", size: NSSize(width: 760, height: 420)) { panel in
@@ -394,9 +394,8 @@ private struct WorkspaceToolContent<Content: View>: View {
         if let section { settingsSelection?.section = section }
         let selection = settingsSelection ?? WorkspaceSettingsSelection(section ?? .general)
         settingsSelection = selection
-        present(.settings, title: "Configurações", size: NSSize(width: 940, height: 540)) { panel in
-            WorkspaceSettingsContent(auth: auth, show: show, backend: backend, selection: selection,
-                                     close: { [weak panel] in panel?.close() })
+        present(.settings, title: "Configurações", size: NSSize(width: 940, height: 540)) { _ in
+            WorkspaceSettingsContent(auth: auth, show: show, backend: backend, selection: selection)
         }
         settingsOpen = true
     }

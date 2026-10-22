@@ -82,7 +82,7 @@ var decoration = MetalTimelineItem(rect: CGRect(x: 10, y: 10, width: 100, height
 let bodyPixels = render([], items: [decoration])
 precondition(engine.lastEncodedItemCount == 1 && engine.lastEncodedStrokeCount == 0)
 precondition(red(bodyPixels, 50, 40) > red(bodyPixels, 50, 100), "GPU preserves vertical item gradient")
-precondition(red(bodyPixels, 50, 20) < red(bodyPixels, 50, 32), "item header has the original dark contrast band")
+precondition(abs(red(bodyPixels, 50, 20) - 48) <= 1 && red(bodyPixels, 50, 20) == green(bodyPixels, 50, 20), "item header is lighter gray, independent of track color")
 precondition(bodyPixels.alpha(3, 20) == 0 && bodyPixels.alpha(10, 10) < 140, "rounded item must not fill outside its bounds")
 precondition(green(bodyPixels, 10, 50) > 80, "selected/item border must remain visible")
 let noWave = MetalWaveformFrame(size: size, strokes: [], items: [decoration])
@@ -131,6 +131,19 @@ precondition(loudSource.alpha(40, 40) > 200 && quietSource.alpha(40, 40) == 0,
     "same-position source envelopes must never reuse another file's GPU pixels")
 precondition(render([envelopeFrame(loudEnvelope)]).bytes == loudSource.bytes)
 print("METAL_DERIVED_ENVELOPES_PRESERVE_SOURCE_IDENTITY_AND_GPU_PIXELS_OK")
+// Constant signed PCM envelopes test actual GPU pixels at known dBFS.
+for level: Float in [0.25, 0.5, pow(10, -1.4 / 20), 1] {
+    let source = envelopeFixture("calibration-\(level)", level)
+    let lane = CGRect(x: 10, y: 20, width: 108, height: 80)
+    let stroke = MetalWaveformStroke(block: source, channel: 0,
+        scale: SIMD2(10, Float(WaveformAmplitude.fullScale(channelHeight: lane.height))),
+        translation: SIMD2(20, 60), clip: lane, color: SIMD4(repeating: 1), itemRect: lane)
+    let pixels = render([stroke])
+    let rows = (20..<100).filter { pixels.alpha(40, $0) > 100 }
+    precondition(abs(Float(rows.count) - 79 * level) <= 2, "waveform must show absolute PCM amplitude, not twice its gain")
+    precondition(pixels.alpha(40, 19) == 0 && pixels.alpha(40, 100) == 0, "full scale remains inside its own lane")
+}
+print("METAL_WAVEFORM_ABSOLUTE_DBFS_CALIBRATION_OK")
 let original = render([waveform()])
 precondition(original.maximumAlpha(36, 26) > 180 && original.maximumAlpha(68, 74) > 180)
 precondition(original.maximumAlpha(36, 50) == 0, "do not replace actual samples by a synthetic centerline")
@@ -141,6 +154,11 @@ precondition(engine.uploadedBufferCount == uploads, "pan/zoom must reuse immutab
 let amplified = render([waveform(scale: SIMD2(1, 48))])
 precondition(amplified.maximumAlpha(36, 14) > 180 && amplified.maximumAlpha(68, 86) > 180)
 precondition(amplified.maximumAlpha(36, 26) == 0, "positive item gain must change displayed amplitude")
+let normalized = render([waveform(scale: SIMD2(1, 32 * Float(WaveformAmplitude.gain(item: 1, normalization: 1.5))))])
+precondition(normalized.bytes == amplified.bytes, "normalization and item gain must draw the same amplitude")
+let compensated = render([waveform(scale: SIMD2(1, 32 * Float(WaveformAmplitude.gain(item: 0.5, normalization: 2))))])
+precondition(compensated.bytes == original.bytes, "item and normalization gains combine multiplicatively")
+precondition(engine.uploadedBufferCount == uploads, "normalization must reuse source PCM buffers")
 let duplicate = render([waveform(), waveform(), waveform()])
 precondition(duplicate.bytes == original.bytes, "overlapping joins/duplicates must not accumulate alpha or darken peaks")
 print("METAL_ACTUAL_VERTICES_TRANSFORM_GAIN_AND_MAX_COVERAGE_OK")

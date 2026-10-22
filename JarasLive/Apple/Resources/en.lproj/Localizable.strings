@@ -651,7 +651,7 @@
 "This routing would create an audio feedback loop." = "This routing would create an audio feedback loop.";
 
 "Plugins" = "Plugins";
-"External" = "External";
+"External" = "External (VST3)";
 "Plugin" = "Plugin";
 "VST3 paths" = "VST3 paths";
 "Add path" = "Add path";
@@ -757,7 +757,8 @@
 "Global" = "Global";
 "Free" = "Free";
 "Relative" = "Relative";
-"Tracks show/hide" = "Tracks show/hide";
+"Track Mixer show/hide" = "Track Mixer show/hide";
+"Hoz-Mixer show/hide" = "Hoz-Mixer show/hide";
 "Setlist show/hide" = "Setlist show/hide";
 "Divisions" = "Divisions";
 "Grid divisions" = "Grid divisions";
@@ -965,6 +966,9 @@
 "No backups found" = "No backups found";
 
 "Invert polarity" = "Invert polarity";
+"Phase inverted — restore phase" = "Phase inverted — restore phase";
+"Mono — switch to Stereo" = "Mono — switch to Stereo";
+"Stereo — switch to Mono" = "Stereo — switch to Mono";
 
 "Timeline" = "Timeline";
 
@@ -1605,12 +1609,6 @@
 
 "%ld REAPER items before the project start were ignored." = "%ld REAPER items before the project start were ignored.";
 
-"Phase inverted — restore phase" = "Phase inverted — restore phase";
-
-"Mono — switch to Stereo" = "Mono — switch to Stereo";
-
-"Stereo — switch to Mono" = "Stereo — switch to Mono";
-
 "Interface scale" = "Interface scale";
 
 "Continuous scroll" = "Continuous scroll";
@@ -1630,19 +1628,12 @@
 "Choose between 1 and 128 channels." = "Choose between 1 and 128 channels.";
 
 "Fadeout…" = "Fadeout…";
-
 "Fadeout" = "Fadeout";
-
 "Duration" = "Duration";
-
 "Choose an unused shortcut. Space and standard shortcuts cannot control Fadeout." = "Choose an unused shortcut. Space and standard shortcuts cannot control Fadeout.";
-
 "Fadeout requires playback." = "Fadeout requires playback.";
-
 "Stop Sub Play before starting Fadeout." = "Stop Sub Play before starting Fadeout.";
-
 "Select tracks in the Fadeout settings." = "Select tracks in the Fadeout settings.";
-
 "Cancel Fadeout before starting Sub Play." = "Cancel Fadeout before starting Sub Play.";
 
 "Use the same key or MIDI control again to cancel Fadeout and restore the volumes." = "Use the same key or MIDI control again to cancel Fadeout and restore the volumes.";
@@ -1668,35 +1659,25 @@
 "Setlist à esquerda" = "Setlist on the left";
 
 "Parts à esquerda" = "Parts on the left";
-
 "Visibilidade das pistas" = "Track visibility";
-
 "Painel" = "Panel";
 
 "Mostrar Master à direita" = "Show Master on the right";
 
 "Mostrar Master à esquerda" = "Show Master on the left";
 
+// Show Mode
 "Show Mode" = "Show Mode";
-
 "When enabled, the Mac lid can be closed without stopping playback." = "When enabled, the Mac lid can be closed without stopping playback.";
-
 "When enabled, the notebook lid can be closed without stopping playback." = "When enabled, the notebook lid can be closed without stopping playback.";
-
 "The system did not confirm the Show Mode change." = "The system did not confirm the Show Mode change.";
-
 "Unable to read the Windows power plan." = "Unable to read the Windows power plan.";
-
 "Unable to read the Windows lid settings." = "Unable to read the Windows lid settings.";
-
 "Show Mode was not changed. Administrator authorization is required." = "Show Mode was not changed. Administrator authorization is required.";
-
 "Unable to change Show Mode. The previous lid settings were restored." = "Unable to change Show Mode. The previous lid settings were restored.";
 
 "Open in new tab" = "Open in new tab";
-
 "Previous project tab" = "Previous project tab";
-
 "Next project tab" = "Next project tab";
 
 "Close tab" = "Close tab";
@@ -1726,13 +1707,70 @@
 "Allow microphone access in System Settings to record audio." = "Allow microphone access in System Settings to record audio.";
 
 "Recording level" = "Recording level";
-
 "Recording effects" = "Recording effects";
-
 "Pre-fader" = "Pre-fader";
-
 "Post-fader" = "Post-fader";
-
 "Pre-FX" = "Pre-FX";
-
 "Post-FX" = "Post-FX";
+/* Confirm application close while any project tab is playing. */
+"Close CatLive?" = "Close CatLive?";
+"Playback is in progress. Do you really want to close CatLive?" = "Playback is in progress. Do you really want to close CatLive?";
+"Close CatLive" = "Close CatLive";
+"Create at least 2 section markers enabled for looping in this song before creating a multiloop." = "Create at least 2 section markers enabled for looping in this song before creating a multiloop.";
+
+"Timeline snapping" = "Timeline snapping";
+"Snap on — Shift temporarily disables snapping" = "Snap on — Shift temporarily disables snapping";
+"Snap off — free positioning" = "Snap off — free positioning";
+
+"Remote · Right-click to configure" = "Remote · Right-click to configure";
+
+"Hoz-Mixer" = "Hoz-Mixer";
+
+"Swap - LR" = "Swap - LR";
+
+"Finish recording before changing the audio device." = "Finish recording before changing the audio device.";
+
+"Finish recording and pending operations before importing audio." = "Finish recording and pending operations before importing audio.";
+
+"Finish recording and imports before cleaning timeline files." = "Finish recording and imports before cleaning timeline files.";
+
+"bar" = "bar";
+"bars" = "bars";
+
+"Config Init" = "Config Init";
+"Initial playback" = "Initial playback";
+
+"%@: item \"%@\" at %.6f s was ignored because it overlaps another item on the same special-track layer. The rest of the project was imported." = "%@: item \"%@\" at %.6f s was ignored because it overlaps another item on the same special-track layer. The rest of the project was imported.";
+
+"Enter a valid project name." = "Enter a valid project name.";
+"A project with this name already exists." = "A project with this name already exists.";
+
+"Open file location" = "Open file location";
+
+"Relative timebase" = "Relative timebase";
+
+"Enable relative timebase?" = "Enable relative timebase?";
+
+"Disable relative timebase?" = "Disable relative timebase?";
+
+"Enable" = "Enable";
+
+"Disable" = "Disable";
+
+"Relative timebase: changing the project BPM adjusts item duration and playback speed to follow the tempo. With Free timebase, changing the project BPM preserves item duration and playback speed. Tempo markers with their own timebase keep their individual settings." = "Relative timebase: changing the project BPM adjusts item duration and playback speed to follow the tempo. With Free timebase, changing the project BPM preserves item duration and playback speed. Tempo markers with their own timebase keep their individual settings.";
+
+"Free timebase: changing the project BPM changes the grid without stretching or shortening items. Item duration and playback speed are preserved. Tempo markers with their own timebase keep their individual settings." = "Free timebase: changing the project BPM changes the grid without stretching or shortening items. Item duration and playback speed are preserved. Tempo markers with their own timebase keep their individual settings.";
+
+"Load sample…" = "Load sample…";
+
+"No sample loaded" = "No sample loaded";
+
+"Save the project before loading a sample." = "Save the project before loading a sample.";
+
+"Choose a WAV or MP3 sample." = "Choose a WAV or MP3 sample.";
+
+"Choose a mono or stereo sample up to 60 seconds." = "Choose a mono or stereo sample up to 60 seconds.";
+
+"WAV / MP3 · Mono / Stereo · 60 s max" = "WAV / MP3 · Mono / Stereo · 60 s max";
+
+"The project folder is unavailable." = "The project folder is unavailable.";

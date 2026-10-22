@@ -89,15 +89,22 @@ grid.items = [GridSelectionItem(id: first, rect: CGRect(x: 100,y: 100,width: 60,
               GridSelectionItem(id: third, rect: CGRect(x: 400,y: 300,width: 80,height: 30))]
 var selections: [Set<UUID>] = []
 grid.selectionChanged = { selections.append($0) }
+var marqueeStarts = 0, followPausedByMarquee = false
+// The controller keeps this pause after release, just like a ruler click.
+grid.marqueeBegan = { marqueeStarts += 1; followPausedByMarquee = true }
 func event(_ type: NSEvent.EventType, _ point: CGPoint, modifiers: NSEvent.ModifierFlags = [], clicks: Int = 1) -> NSEvent {
     NSEvent.mouseEvent(with: type, location: grid.convert(point, to: nil), modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: clicks, pressure: 1)!
 }
 func drag(_ from: CGPoint, _ to: CGPoint, modifiers: NSEvent.ModifierFlags = []) {
+    let starts = marqueeStarts; followPausedByMarquee = false
     precondition(grid.handlePointerEvent(event(.rightMouseDown, from, modifiers: modifiers)))
+    precondition(marqueeStarts == starts, "A context-menu click must not pause playback following")
     precondition(grid.handlePointerEvent(event(.rightMouseDragged, to, modifiers: modifiers)))
+    precondition(marqueeStarts == starts + 1 && followPausedByMarquee, "Starting a marquee must pause playback following once")
     // A delayed hosting update must not overwrite an in-progress selection.
     grid.updateSelection([])
     precondition(grid.handlePointerEvent(event(.rightMouseUp, to, modifiers: modifiers)))
+    precondition(marqueeStarts == starts + 1 && followPausedByMarquee, "Mouse release must not resume playback following")
 }
 for pair in [(CGPoint(x: 90,y: 90),CGPoint(x: 300,y: 190)),
              (CGPoint(x: 300,y: 190),CGPoint(x: 90,y: 90)),
@@ -245,6 +252,39 @@ drag(CGPoint(x: 100,y: 200),CGPoint(x: 300,y: 290))
 precondition(grid.selected == [first],"marquee selection uses the same live native coordinates as the pinned drawing surface")
 precondition(grid.timelineOrigin == CGPoint(x: -23,y: -44),"all native scroll interactions succeeded without a hosted offset update")
 print("GRID_NATIVE_PINNED_HEADER_BOTH_AXES_INPUT_AND_STALE_HOSTED_ORIGIN_OK")
+// Holding at an edge continues both axes without additional pointer events.
+inner.contentView.scroll(to: .zero); outer.contentView.scroll(to: .zero)
+grid.items = [GridSelectionItem(id: first, rect: CGRect(x: 150,y: 180,width: 40,height: 30)),
+              GridSelectionItem(id: second, rect: CGRect(x: 850,y: 650,width: 40,height: 30)),
+              GridSelectionItem(id: third, rect: CGRect(x: 20,y: 100,width: 20,height: 20))]
+grid.updateSelection([third])
+precondition(grid.handlePointerEvent(event(.rightMouseDown, CGPoint(x: 100,y: 150), modifiers: .shift)))
+precondition(grid.handlePointerEvent(event(.rightMouseDragged, CGPoint(x: 699,y: 599), modifiers: .shift)))
+for _ in 0..<24 { grid.advanceSelectionScroll(elapsed: 1.0/60) }
+precondition(inner.contentView.bounds.minX > 200 && outer.contentView.bounds.minY > 200,
+             "the held diagonal marquee scrolls both axes")
+precondition(grid.selected == [first,second,third], "revealed clips join selection without dropping its original anchor or additive baseline")
+precondition(grid.handlePointerEvent(event(.rightMouseDragged, CGPoint(x: 350,y: 300))))
+let centeredOrigin = grid.frame.origin
+for _ in 0..<10 { grid.advanceSelectionScroll(elapsed: 1.0/60) }
+precondition(grid.frame.origin == centeredOrigin, "moving away from edges stops scrolling")
+precondition(grid.handlePointerEvent(event(.rightMouseUp, CGPoint(x: 350,y: 300))))
+for _ in 0..<10 { grid.advanceSelectionScroll(elapsed: 1.0/60) }
+precondition(grid.frame.origin == centeredOrigin, "release cancels auto-scroll")
+inner.contentView.scroll(to: CGPoint(x: 500,y: 0)); outer.contentView.scroll(to: CGPoint(x: 0,y: 500))
+precondition(grid.handlePointerEvent(event(.rightMouseDown, CGPoint(x: 500,y: 400))))
+precondition(grid.handlePointerEvent(event(.rightMouseDragged, CGPoint(x: 1,y: 72))))
+for _ in 0..<20 { grid.advanceSelectionScroll(elapsed: 1.0/60) }
+precondition(inner.contentView.bounds.minX < 320 && outer.contentView.bounds.minY < 320,
+             "left and top edges scroll in the reverse direction")
+NativeTimelineInputGate.shared.setBlocked(true, for: window)
+let gatedOrigin = grid.frame.origin
+grid.advanceSelectionScroll(elapsed: 1)
+precondition(grid.frame.origin == gatedOrigin, "modal input cancels pending marquee scrolling")
+NativeTimelineInputGate.shared.setBlocked(false, for: window)
+inner.contentView.scroll(to: CGPoint(x: 780,y: 0)); outer.contentView.scroll(to: CGPoint(x: 0,y: 300))
+print("GRID_MARQUEE_EDGE_SCROLL_BOTH_AXES_STABLE_ANCHOR_ADDITIVE_RELEASE_AND_GATE_OK")
+
 
 // A stationary pointer must follow controls moving beneath it, while repeated
 // refreshes over the same target must not resend its image to WindowServer.
@@ -253,7 +293,7 @@ let stationaryItem = GridSelectionItem(id: UUID(), rect: CGRect(x: 1000, y: 550,
 grid.items = [stationaryItem]
 let cursorTargets: [(CGPoint, NSCursor)] = [
     (CGPoint(x: 1002, y: 590), .resizeLeftRight),
-    (CGPoint(x: 1002, y: 570), .crosshair),
+    (CGPoint(x: 1002, y: 570), grid.pointerCursor(at: CGPoint(x: 1002, y: 570))),
     (CGPoint(x: stationaryItem.panKnobRect!.midX, y: stationaryItem.panKnobRect!.midY), .resizeUpDown),
     (CGPoint(x: stationaryItem.gainKnobRect!.midX, y: stationaryItem.gainKnobRect!.midY), .resizeUpDown),
     (CGPoint(x: stationaryItem.muteRect!.midX, y: stationaryItem.muteRect!.midY), .pointingHand)
@@ -341,7 +381,7 @@ for points in [(CGPoint(x: 102,y: 130),CGPoint(x: 80,y: 130)),(CGPoint(x: 218,y:
     _ = grid.handlePointerEvent(event(.leftMouseUp,points.1))
 }
 precondition(resized.count == 4 && resized[0].0 && !resized[2].0 && resized[3].1)
-precondition(abs(grid.items[0].muteRect!.minX - grid.items[0].rect.minX - 2 * GridSelectionItem.headerScale) < 0.000001,
+precondition(abs(grid.items[0].gainKnobRect!.minX - grid.items[0].rect.minX - 2 * GridSelectionItem.headerScale) < 0.000001,
              "header controls start near the left edge with the repeat notch below")
 let edgeSeeksBefore = seeks.count
 for x in [101.0, 219.0] {
@@ -452,7 +492,7 @@ _ = grid.handlePointerEvent(event(.leftMouseDown,CGPoint(x: knob.midX,y: knob.mi
 _ = grid.handlePointerEvent(event(.leftMouseUp,CGPoint(x: knob.midX,y: knob.midY),clicks: 2))
 precondition(gainMotions.count == beforeReset+1 && gainMotions.last!.1 == 1 && gainMotions.last!.2, "double click resets the mini knob to 0 dB once")
 let small = GridSelectionItem(id: UUID(),rect: CGRect(x: 0,y: 0,width: 25,height: 30))
-precondition(small.fxRect == nil && small.gainKnobRect == nil && small.titleInset < small.rect.width, "controls collapse before item titles overflow")
+precondition(small.fxRect == nil && small.gainKnobRect == nil && small.titleInset <= small.rect.width, "controls collapse before item titles overflow")
 print("GRID_ITEM_FX_MUTE_HIT_AREAS_AND_MINI_KNOB_RESET_OK")
 
 let textID = UUID()
@@ -590,7 +630,12 @@ for pair in [(CGPoint(x: 102, y: 120), CGPoint(x: 502, y: 120)),
 }
 precondition(fades.count == 4 && fades[0].0 && !fades[2].0 && fades.allSatisfy { $0.1 == 10 }, "both fades can span the entire expanded item")
 precondition(fades[1].2 && fades[3].2, "release commits once per fade gesture")
-precondition(grid.pointerCursor(at: CGPoint(x: 102, y: 120)) === NSCursor.crosshair)
+let fadeInPointer = grid.pointerCursor(at: CGPoint(x: 102, y: 120))
+let fadeOutPointer = grid.pointerCursor(at: CGPoint(x: 498, y: 120))
+precondition(fadeInPointer !== NSCursor.crosshair && fadeInPointer !== fadeOutPointer)
+precondition(fadeLayout.fadeSide(at: CGPoint(x: 111, y: 127)) == nil, "fade hotspot stays near its grip")
+precondition(fadeLayout.fadeSide(at: CGPoint(x: 489, y: 127)) == nil, "fade-out hotspot stays near its grip")
+precondition(fadeInPointer.image.size == NSSize(width: 16, height: 16) && fadeOutPointer.image.size == NSSize(width: 16, height: 16))
 precondition(grid.pointerCursor(at: CGPoint(x: 102, y: 130)) === NSCursor.resizeLeftRight)
 grid.updateSelection([])
 precondition(grid.hitTest(grid.convert(CGPoint(x: 102, y: 130), to: grid.superview)) === grid,
@@ -606,7 +651,7 @@ grid.cursorUpdate(with: event(.mouseMoved, CGPoint(x: 498, y: 130)))
 precondition(NSCursor.current == NSCursor.resizeLeftRight,
              "right edges keep the resize cursor after AppKit cursor-rect resets")
 grid.mouseMoved(with: event(.mouseMoved, CGPoint(x: 102, y: 120)))
-precondition(NSCursor.current == NSCursor.crosshair,
+precondition(NSCursor.current == fadeInPointer,
              "below-header fades use their distinct cursor instead of the trim cursor")
 print("GRID_FADE_CORNERS_FULL_ITEM_LENGTH_PREVIEW_COMMIT_AND_EDGE_CURSOR_OK")
 var fineChanges: [(Bool, Bool, Double, Bool)] = []
@@ -792,8 +837,8 @@ grid.items = [GridSelectionItem(id: first, rect: CGRect(x: 100, y: 100, width: 2
 var phaseClicks: [UUID] = [], panEdits: [(UUID, Double, Bool)] = []
 grid.phase = { phaseClicks.append($0) }; grid.pan = { panEdits.append(($0,$1,$2)) }
 let phaseRect = grid.items[0].phaseRect!, panRect = grid.items[0].panKnobRect!
-precondition(phaseRect.maxX < panRect.minX && panRect.maxX < grid.items[0].gainKnobRect!.minX && grid.items[0].gainLabelRect!.minX > grid.items[0].gainKnobRect!.maxX,
-             "volume is the last knob, immediately before its dB value")
+precondition(phaseRect.maxX < panRect.minX && grid.items[0].gainLabelRect!.maxX < grid.items[0].muteRect!.minX && grid.items[0].gainLabelRect!.minX > grid.items[0].gainKnobRect!.maxX,
+             "volume and its dB value come first, followed by mute, FX, phase and pan")
 let beforeMixSeeks = seeks.count
 _ = grid.handlePointerEvent(event(.leftMouseDown, CGPoint(x: phaseRect.midX, y: phaseRect.midY)))
 _ = grid.handlePointerEvent(event(.leftMouseUp, CGPoint(x: phaseRect.midX, y: phaseRect.midY)))
@@ -814,7 +859,7 @@ for (value, text) in [(0.0, "Center"), (-0.5, "L-50%"), (0.75, "R-75%"), (-1.0, 
     labeledPan.pan = value
     precondition(labeledPan.panLabel == text)
     precondition(labeledPan.panLabelRect!.minX > labeledPan.panKnobRect!.maxX)
-    precondition(labeledPan.panLabelRect!.maxX < labeledPan.gainKnobRect!.minX)
+    precondition(labeledPan.gainLabelRect!.maxX < labeledPan.panKnobRect!.minX)
     precondition(labeledPan.gainKnobRect == originalGainKnob, "pan values must not shift the volume control")
 }
 for width in 20...200 {

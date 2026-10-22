@@ -947,7 +947,7 @@ private final class GridHostingView<Content: View>: NSHostingView<Content> {
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
     override var fittingSize: NSSize { frame.size }
 }
-final class GridNativeScrollView: NSScrollView, NativeTimelineBodyInputHost {
+final class GridNativeScrollView: NSScrollView, NativeTimelineBodyInputHost, NativeTimelineSelectionScrollHost {
     /// Nil keeps ordinary, unbridged scroll views tied to their document frame.
     var logicalDocumentWidth: CGFloat?
     weak var timelineBodyInput: (NSView & NativeTimelineBodyInput)?
@@ -1047,6 +1047,11 @@ final class GridNativeScrollView: NSScrollView, NativeTimelineBodyInputHost {
     var playbackFollowSuspendedUntil: TimeInterval = 0
     var permitsPlaybackFollow: Bool {
         zoomAnchor == nil && ProcessInfo.processInfo.systemUptime >= playbackFollowSuspendedUntil
+    }
+    func prepareSelectionScroll(to origin: CGPoint, horizontal: Bool) {
+        prioritizeZoom()
+        if horizontal { prepareHorizontalViewport(at: origin.x) }
+        else { prepareVerticalViewport(at: origin.y) }
     }
     func prioritizeZoom() { playbackFollowSuspendedUntil = ProcessInfo.processInfo.systemUptime + 0.18 }
     var zoomAnchor: (fraction: Double, screenX: CGFloat, width: CGFloat)?
@@ -1440,5 +1445,54 @@ final class SidebarScrollProbeView: NSView {
             parent = view.superview
         }
     }
+}
+#endif
+
+#if os(macOS)
+/// Native dragging runs in tracking mode. Keep scrolling while the pointer is
+/// held still at an edge, and retire the timer with the dragging session.
+@MainActor final class NativeDragEdgeScroll {
+    private weak var scroll: NSScrollView?
+    private var timer: Timer?
+    private var lastTime: TimeInterval = 0
+    func begin(from view: NSView) {
+        stop()
+        guard let scroll = view.enclosingScrollView else { return }
+        self.scroll = scroll; lastTime = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.step(pointer: NSEvent.mouseLocation, pressedButtons: NSEvent.pressedMouseButtons,
+                           time: ProcessInfo.processInfo.systemUptime)
+            }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .eventTracking)
+    }
+    static func velocity(position: CGFloat, length: CGFloat) -> CGFloat {
+        guard length > 0, position >= 0, position <= length else { return 0 }
+        let edge = min(40, length / 3)
+        if position < edge { return -600 * (1 - position / edge) }
+        if position > length - edge { return 600 * (1 - (length - position) / edge) }
+        return 0
+    }
+    func step(pointer: NSPoint, pressedButtons: Int, time: TimeInterval) {
+        guard let scroll, let window = scroll.window, let document = scroll.documentView else { stop(); return }
+        guard pressedButtons != 0 else { stop(); return }
+        let clip = scroll.contentView
+        let point = clip.convert(window.convertPoint(fromScreen: pointer), from: nil)
+        let local = CGPoint(x: point.x - clip.bounds.minX, y: point.y - clip.bounds.minY)
+        let elapsed = min(0.05, max(0, time - lastTime))
+        lastTime = time
+        guard local.x >= 0, local.x <= clip.bounds.width else { return }
+        let velocity = Self.velocity(position: local.y, length: clip.bounds.height)
+        var origin = clip.bounds.origin
+        origin.y = min(max(document.bounds.minY, origin.y + velocity * elapsed), max(document.bounds.minY, document.bounds.maxY - clip.bounds.height))
+        guard origin != clip.bounds.origin else { return }
+        (scroll as? GridNativeScrollView)?.prepareSelectionScroll(to: origin, horizontal: false)
+        clip.scroll(to: origin); scroll.reflectScrolledClipView(clip)
+    }
+    func stop() { timer?.invalidate(); timer = nil; scroll = nil }
+    deinit { timer?.invalidate() }
 }
 #endif

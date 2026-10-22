@@ -229,6 +229,8 @@ static NSDictionary* regionSetlistJSON(const RegionSetlist& state) {
     }
     if(state.automaticSubplay) result[@"automaticSubplay"]=@(*state.automaticSubplay);
     if(state.automaticSubplaySeconds) result[@"automaticSubplaySeconds"]=@(*state.automaticSubplaySeconds);
+    if(state.automaticSubplayBars) result[@"automaticSubplayBars"]=@(*state.automaticSubplayBars);
+    if(state.automaticSubplayNext) result[@"automaticSubplayNext"]=@(*state.automaticSubplayNext);
     if(state.prepareWithoutPlayback) result[@"prepareWithoutPlayback"]=@(*state.prepareWithoutPlayback);
     if(state.stopAtRegionEnd) result[@"stopAtRegionEnd"]=@(*state.stopAtRegionEnd);
     if(state.selectedId) result[@"selectedId"]=text(*state.selectedId);
@@ -255,6 +257,8 @@ static RegionSetlist readRegionSetlist(NSDictionary* d) {
     }
     if(d[@"automaticSubplay"] && d[@"automaticSubplay"]!=NSNull.null) state.automaticSubplay=clipFXBypass(d[@"automaticSubplay"]);
     if(d[@"automaticSubplaySeconds"] && d[@"automaticSubplaySeconds"]!=NSNull.null) state.automaticSubplaySeconds=std::clamp(number(d[@"automaticSubplaySeconds"]),1.0,5.0);
+    if(d[@"automaticSubplayBars"] && d[@"automaticSubplayBars"]!=NSNull.null) state.automaticSubplayBars=std::clamp(int(number(d[@"automaticSubplayBars"])),1,5);
+    if(d[@"automaticSubplayNext"] && d[@"automaticSubplayNext"]!=NSNull.null) state.automaticSubplayNext=clipFXBypass(d[@"automaticSubplayNext"]);
     if(d[@"prepareWithoutPlayback"] && d[@"prepareWithoutPlayback"]!=NSNull.null) state.prepareWithoutPlayback=clipFXBypass(d[@"prepareWithoutPlayback"]);
     if(d[@"stopAtRegionEnd"] && d[@"stopAtRegionEnd"]!=NSNull.null) state.stopAtRegionEnd=clipFXBypass(d[@"stopAtRegionEnd"]);
     if(d[@"blocks"] && d[@"blocks"]!=NSNull.null) {
@@ -285,6 +289,8 @@ static NSDictionary* projectJSON(const Project& p, bool includeWaveforms = true)
             NSMutableDictionary* region = [@{@"id":text(part.id),@"name":text(part.name),@"startTime":@(part.startTime),@"endTime":@(part.endTime)} mutableCopy];
             if (part.color) region[@"color"] = @(*part.color);
             if (part.uppercaseName) region[@"uppercaseName"] = @(*part.uppercaseName);
+            if (part.subplayInitSeconds) region[@"subplayInitSeconds"] = @(*part.subplayInitSeconds);
+            if (part.subplayInitBars) region[@"subplayInitBars"] = @(*part.subplayInitBars);
             if (part.parentRegionID) region[@"parentRegionID"] = text(*part.parentRegionID);
             if (part.pitchSemitones) region[@"pitchSemitones"] = @(*part.pitchSemitones);
             if (part.pitchTrackIDs) { NSMutableArray* ids = [NSMutableArray new]; for (const auto& id : *part.pitchTrackIDs) [ids addObject:text(id)]; region[@"pitchTrackIDs"] = ids; }
@@ -321,6 +327,7 @@ static NSDictionary* projectJSON(const Project& p, bool includeWaveforms = true)
     NSMutableDictionary* result=[@{@"id":text(p.id),@"name":text(p.name),@"projectFormatVersion":@(p.projectFormatVersion),@"minimumJarasVersion":text(p.minimumJarasVersion),@"createdAt":text(p.createdAt),@"updatedAt":text(p.updatedAt),@"songs":songs,@"setlists":setlists} mutableCopy];
     if(p.timelineMovementLocked) result[@"timelineMovementLocked"]=@(*p.timelineMovementLocked);
     if(p.savedCursor) result[@"savedCursor"]=@{@"songID":text(p.savedCursor->songID), @"position":@(p.savedCursor->position)};
+    if(p.projectSyncID) result[@"projectSyncID"]=text(*p.projectSyncID);
     if(p.masterPan != 0) result[@"masterPan"]=@(p.masterPan);
     if(p.masterVolume != 1) result[@"masterVolume"]=@(p.masterVolume);
     if(p.masterMute) result[@"masterMute"]=@YES;
@@ -369,6 +376,7 @@ static Track readTrack(NSDictionary* td) {
 }
 static Project readProject(NSDictionary* d) {
     Project p; p.id=str(d[@"id"]); p.name=str(d[@"name"]); p.projectFormatVersion=number(d[@"projectFormatVersion"]); p.minimumJarasVersion=str(d[@"minimumJarasVersion"]); p.createdAt=str(d[@"createdAt"]); p.updatedAt=str(d[@"updatedAt"]);
+    if(d[@"projectSyncID"] && d[@"projectSyncID"] != NSNull.null) p.projectSyncID=str(d[@"projectSyncID"]);
     if(d[@"timelineMovementLocked"] && d[@"timelineMovementLocked"] != NSNull.null) p.timelineMovementLocked=number(d[@"timelineMovementLocked"])!=0;
     if(d[@"savedCursor"] && d[@"savedCursor"] != NSNull.null) {
         NSDictionary* cursor=object(d[@"savedCursor"]);
@@ -384,7 +392,7 @@ static Project readProject(NSDictionary* d) {
         }
         if (sd[@"timeSettings"] && sd[@"timeSettings"] != NSNull.null) s.timeSettings = readTimeSettings(object(sd[@"timeSettings"]));
         for (id rawTrack in array(sd[@"tracks"])) s.tracks.push_back(readTrack(object(rawTrack)));
-        for (id rawPart in array(sd[@"parts"])) { NSDictionary* part=object(rawPart); s.parts.push_back({str(part[@"id"]),str(part[@"name"]),number(part[@"startTime"]),number(part[@"endTime"])}); if (part[@"multiLoops"] && part[@"multiLoops"] != NSNull.null) s.parts.back().multiLoops = readMultiLoops(part[@"multiLoops"]); if (part[@"totalLoop"] && part[@"totalLoop"] != NSNull.null) s.parts.back().totalLoop = [part[@"totalLoop"] boolValue]; if (part[@"color"] && part[@"color"] != NSNull.null) { double color = number(part[@"color"]); if (color < 0 || color > 0xFFFFFF || color != (unsigned)color) throw std::invalid_argument("Invalid region color"); s.parts.back().color = (unsigned)color; } if (part[@"uppercaseName"] && part[@"uppercaseName"] != NSNull.null) s.parts.back().uppercaseName = [part[@"uppercaseName"] boolValue]; if (part[@"parentRegionID"] && part[@"parentRegionID"] != NSNull.null) s.parts.back().parentRegionID = str(part[@"parentRegionID"]); if (part[@"pitchSemitones"] && part[@"pitchSemitones"] != NSNull.null) { double value = number(part[@"pitchSemitones"]); if (value != std::round(value) || value < -12 || value > 12) throw std::invalid_argument("Invalid region pitch"); s.parts.back().pitchSemitones = (int)value; } for (NSString* key in @[@"pitchTrackIDs", @"pitchGroupIDs"]) if (part[key] && part[key] != NSNull.null) { std::vector<ID> ids; for (id value in array(part[key])) ids.push_back(str(value)); if ([key isEqualToString:@"pitchTrackIDs"]) s.parts.back().pitchTrackIDs = std::move(ids); else s.parts.back().pitchGroupIDs = std::move(ids); } }
+        for (id rawPart in array(sd[@"parts"])) { NSDictionary* part=object(rawPart); s.parts.push_back({str(part[@"id"]),str(part[@"name"]),number(part[@"startTime"]),number(part[@"endTime"])}); if (part[@"subplayInitSeconds"] && part[@"subplayInitSeconds"] != NSNull.null) s.parts.back().subplayInitSeconds = number(part[@"subplayInitSeconds"]); if (part[@"subplayInitBars"] && part[@"subplayInitBars"] != NSNull.null) s.parts.back().subplayInitBars = int(number(part[@"subplayInitBars"])); if (part[@"multiLoops"] && part[@"multiLoops"] != NSNull.null) s.parts.back().multiLoops = readMultiLoops(part[@"multiLoops"]); if (part[@"totalLoop"] && part[@"totalLoop"] != NSNull.null) s.parts.back().totalLoop = [part[@"totalLoop"] boolValue]; if (part[@"color"] && part[@"color"] != NSNull.null) { double color = number(part[@"color"]); if (color < 0 || color > 0xFFFFFF || color != (unsigned)color) throw std::invalid_argument("Invalid region color"); s.parts.back().color = (unsigned)color; } if (part[@"uppercaseName"] && part[@"uppercaseName"] != NSNull.null) s.parts.back().uppercaseName = [part[@"uppercaseName"] boolValue]; if (part[@"parentRegionID"] && part[@"parentRegionID"] != NSNull.null) s.parts.back().parentRegionID = str(part[@"parentRegionID"]); if (part[@"pitchSemitones"] && part[@"pitchSemitones"] != NSNull.null) { double value = number(part[@"pitchSemitones"]); if (value != std::round(value) || value < -12 || value > 12) throw std::invalid_argument("Invalid region pitch"); s.parts.back().pitchSemitones = (int)value; } for (NSString* key in @[@"pitchTrackIDs", @"pitchGroupIDs"]) if (part[key] && part[key] != NSNull.null) { std::vector<ID> ids; for (id value in array(part[key])) ids.push_back(str(value)); if ([key isEqualToString:@"pitchTrackIDs"]) s.parts.back().pitchTrackIDs = std::move(ids); else s.parts.back().pitchGroupIDs = std::move(ids); } }
         if (sd[@"markers"] && sd[@"markers"] != NSNull.null) {
             s.markers.emplace();
             for (id raw in array(sd[@"markers"])) {
@@ -456,6 +464,32 @@ static void report(NSError** error, const std::exception& e) { if (error) *error
 - (BOOL)loadProjectData:(NSData*)data error:(NSError**)error {
     id decoded=[NSJSONSerialization JSONObjectWithData:data options:0 error:error]; if (!decoded) return NO;
     try { _engine->loadProject(readProject(object(decoded))); return YES; } catch(const std::exception& e) { report(error,e); return NO; }
+}
++ (void)setProjectSyncFollowing:(BOOL)following { projectSync::following=following; }
+- (void)setProjectSyncID:(NSString*)identifier { _engine->setProjectSyncID(str(identifier)); }
+- (NSData*)projectSyncFrameWithError:(NSError**)error {
+    try { auto bytes=projectSync::encode(_engine->projectSyncFrame()); return [NSData dataWithBytes:bytes.data() length:bytes.size()]; }
+    catch(const std::exception& e) { report(error,e); return nil; }
+}
+- (NSData*)applyProjectSyncData:(NSData*)data elapsed:(double)elapsed first:(BOOL)first error:(NSError**)error {
+    try {
+        auto frame=projectSync::decode(data.bytes,data.length);
+        bool mixerChanged=false;
+        _engine->applyProjectSync(frame,elapsed,first,&mixerChanged);
+        NSData* playback=[self playbackSnapshotWithError:error]; if(!playback) return nil;
+        NSMutableDictionary* result=[[NSJSONSerialization JSONObjectWithData:playback options:0 error:error] mutableCopy];
+        if(frame.setlist) result[@"syncSetlist"]=regionSetlistJSON(*frame.setlist);
+        if(mixerChanged || first) {
+            const auto &m=frame.mixer; NSMutableArray *tracks=[NSMutableArray array];
+            for(const auto &t:m.tracks) [tracks addObject:@{@"id":text(t.id),@"volume":@(t.volume),@"pan":@(t.pan),@"mute":@(t.mute),@"solo":@(t.solo)}];
+            result[@"syncMixer"]=@{@"masterVolume":@(m.masterVolume),@"masterPan":@(m.masterPan),@"masterMute":@(m.masterMute),@"masterSolo":@(m.masterSolo),@"tracks":tracks};
+        }
+        return [NSJSONSerialization dataWithJSONObject:result options:0 error:error];
+    } catch(const std::exception& e) { report(error,e); return nil; }
+}
+- (BOOL)executeAutomation:(NSString*)command target:(NSString*)target value:(double)value error:(NSError**)error {
+    projectSync::Internal internal;
+    return [self executeCommand:command target:target value:value error:error];
 }
 - (BOOL)executeCommand:(NSString*)command target:(NSString*)target value:(double)value error:(NSError**)error {
     static const std::map<std::string,CommandKind> commands={{"toggleMultiLoopBypass",CommandKind::toggleMultiLoopBypass},{"queueSection",CommandKind::queueSection},{"cancelSection",CommandKind::cancelSection},{"clipFadeIn",CommandKind::clipFadeIn},{"clipFadeOut",CommandKind::clipFadeOut},{"clipFadeInCurve",CommandKind::clipFadeInCurve},{"clipFadeInSCurve",CommandKind::clipFadeInSCurve},{"clipFadeOutCurve",CommandKind::clipFadeOutCurve},{"clipFadeOutSCurve",CommandKind::clipFadeOutSCurve},{"phase",CommandKind::phase},{"loopStart",CommandKind::loopStart},{"loopEnd",CommandKind::loopEnd},{"escape",CommandKind::escape},{"masterMono",CommandKind::masterMono},{"ignoreNext",CommandKind::ignoreNext},{"tempo",CommandKind::tempo},{"beatsPerBar",CommandKind::beatsPerBar},{"beatUnit",CommandKind::beatUnit},{"selectRegion",CommandKind::selectRegion},{"queueRegion",CommandKind::queueRegion},{"clipMute",CommandKind::clipMute},{"clipGain",CommandKind::clipGain},{"clipPhase",CommandKind::clipPhase},{"clipPan",CommandKind::clipPan},{"clipChannelMode",CommandKind::clipChannelMode},{"clipNormalization",CommandKind::clipNormalization},{"clipPitch",CommandKind::clipPitch},{"pause",CommandKind::pause},{"play",CommandKind::play},{"stop",CommandKind::stop},{"next",CommandKind::next},{"previous",CommandKind::previous},{"queue",CommandKind::queue},{"select",CommandKind::select},{"toggleLoop",CommandKind::toggleLoop},{"seek",CommandKind::seek},{"editSeek",CommandKind::editSeek},{"subPlay",CommandKind::subPlay},{"subStop",CommandKind::subStop},{"subSeek",CommandKind::subSeek},{"stopAll",CommandKind::stopAll},{"volume",CommandKind::volume},{"pan",CommandKind::pan},{"mute",CommandKind::mute},{"solo",CommandKind::solo}};
@@ -596,6 +630,9 @@ static void report(NSError** error, const std::exception& e) { if (error) *error
 }
 - (BOOL)editTrack:(NSString*)identifier name:(NSString*)name color:(unsigned int)color error:(NSError**)error {
     try { _engine->editTrack(str(identifier), str(name), color); return YES; } catch(const std::exception& e) { report(error,e); return NO; }
+}
+- (BOOL)setRegionInit:(NSString*)identifier count:(int)count bars:(BOOL)bars error:(NSError**)error {
+    try { _engine->setRegionInit(str(identifier), count, bars); return YES; } catch(const std::exception& e) { report(error,e); return NO; }
 }
 - (BOOL)setRegionPitch:(NSString*)identifier semitones:(int)semitones tracks:(NSArray<NSString*>*)tracks groups:(NSArray<NSString*>*)groups error:(NSError**)error {
     try { std::vector<ID> t, g; for (NSString* id in tracks) t.push_back(str(id)); for (NSString* id in groups) g.push_back(str(id)); _engine->setRegionPitch(str(identifier), semitones, std::move(t), std::move(g)); return YES; } catch(const std::exception& e) { report(error,e); return NO; }

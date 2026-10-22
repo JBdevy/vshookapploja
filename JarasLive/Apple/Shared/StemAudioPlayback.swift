@@ -144,7 +144,7 @@ import SwiftUI
         @Published private(set) var decibels: Double?
         private var maximum = 0.0
         static let displayThreshold = pow(10.0, -24.0 / 20)
-        static let muteThreshold = pow(10.0, 20.0 / 20)
+        static let muteThreshold = pow(10.0, 30.0 / 20)
         func record(_ amplitude: Double) {
             guard amplitude.isFinite, amplitude >= Self.displayThreshold, amplitude > maximum else { return }
             maximum = amplitude
@@ -320,8 +320,53 @@ struct TimecodePlaybackSpan {
     private struct OnsetKey: Hashable { let path: String; let first: AVAudioFramePosition; let frames: AVAudioFrameCount }
     private var onsetPreparationKey: String?
     private var preparedOnsets: [OnsetKey: AVAudioPCMBuffer] = [:]
+    private let syncDiagnosticsEnabled = ProcessInfo.processInfo.environment["CATLIVE_AUDIO_SYNC_DIAGNOSTICS"] == "1"
+    private let syncDiagnosticsQueue = DispatchQueue(label: "CatLive.audioSyncDiagnostics", qos: .utility)
+    private func recordSyncDiagnostics(_ keys: [VoiceKey], phase: String) {
+        guard syncDiagnosticsEnabled else { return }
+        let now = mach_absolute_time()
+        let records: [[String: Any]] = keys.compactMap { key in
+            guard let voice = voices[key] else { return nil }
+            let node = voice.player.lastRenderTime
+            let player = node.flatMap { voice.player.playerTime(forNodeTime: $0) }
+            return ["phase": phase, "host": now, "head": key.head, "item": voice.clip.id.uuidString,
+                    "name": voice.clip.name, "track": voice.track.uuidString,
+                    "clipStart": voice.clip.startTime, "offset": voice.clip.sourceOffset,
+                    "rate": voice.clip.audioRate, "pitchCents": voice.pitch,
+                    "fileRate": voice.file.processingFormat.sampleRate,
+                    "firstSourceFrame": voice.scheduledSourceStart,
+                    "onsetSample": voice.scheduledOnset?.sampleTime ?? -1,
+                    "onsetHost": voice.scheduledOnset?.hostTime ?? 0,
+                    "nodeSample": node?.sampleTime ?? -1, "nodeHost": node?.hostTime ?? 0,
+                    "playerSample": player?.sampleTime ?? -1, "playerRate": player?.sampleRate ?? 0,
+                    "processingDelay": voice.scheduledProcessingDelay,
+                    "headHost": headAudioClock[key.head]?.host ?? 0,
+                    "headPosition": headAudioClock[key.head]?.position ?? -1,
+                    "sourceClock": sourcePositionAtRenderClock(voice) ?? -1,
+                    "gainHost": voice.gain.lastRenderTime?.hostTime ?? 0,
+                    "gainSample": voice.gain.lastRenderTime?.sampleTime ?? -1,
+                    "stretchHost": voice.stretch.lastRenderTime?.hostTime ?? 0,
+                    "stretchSample": voice.stretch.lastRenderTime?.sampleTime ?? -1,
+                    "masterHost": engine.outputNode.lastRenderTime?.hostTime ?? 0,
+                    "masterSample": engine.outputNode.lastRenderTime?.sampleTime ?? -1]
+        }
+        guard !records.isEmpty, let data = try? JSONSerialization.data(withJSONObject: records) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("catlive-audio-sync-\(ProcessInfo.processInfo.processIdentifier).jsonl")
+        syncDiagnosticsQueue.async {
+            if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+            guard let file = try? FileHandle(forWritingTo: url) else { return }
+            defer { try? file.close() }
+            do { try file.seekToEnd(); try file.write(contentsOf: data); try file.write(contentsOf: Data([10])) } catch { }
+        }
+    }
     private var voices: [VoiceKey: Voice] = [:]
     private var retiredVoices: [Voice] = []
+    /// File sources still retained by the graph must survive timeline cleanup,
+    /// including voices retiring after an edit and voices prepared for a seek.
+    var activeMediaURLs: Set<URL> {
+        let retained = Array(voices.values) + retiredVoices + idleVoices.values.flatMap { $0 } + effectTails.values.map(\.voice)
+        return Set(retained.map { $0.file.url.standardizedFileURL.resolvingSymlinksInPath() })
+    }
     // Idle sources retain their graph connections. Transport commands only stop
     // and reschedule PCM; graph ownership changes on project/device teardown.
     private var pitchClipRevision: UInt64?
@@ -850,7 +895,14 @@ struct TimecodePlaybackSpan {
                 self.engine.mainMixerNode.outputVolume = self.licenseAllowed && self.outputAllowed ? 1 : 0
                 guard !self.engine.isRunning || self.outputFormatChanged else { return }
                 try self.reconfigureDevice()
-            } catch { self.onError(error) }
+            } catch {
+                #if os(macOS)
+                if self.usesSelectedHardware && !AudioDeviceSettings.shared.outputDeviceIsBound {
+                    self.stop(); self.engine.stop(); self.onOutputDisconnected?()
+                }
+                #endif
+                self.onError(error)
+            }
         }
     }
     /// Reconnect the output and resume both heads from the current transport.
@@ -994,6 +1046,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         bus.internalSend.outputVolume = 0
         let destinations = [AVAudioConnectionPoint(node: bus.masterSend, bus: 0), AVAudioConnectionPoint(node: bus.groupSend, bus: 0), AVAudioConnectionPoint(node: bus.internalSend, bus: 0)] + bus.hardware.map { AVAudioConnectionPoint(node: $0, bus: 0) }
         engine.connect(bus.processedMix, to: bus.controls, format: format)
+        bus.effects.mediaDirectory = directory
         bus.effects.attach(to: engine, input: bus.mix, format: format, destinations: [AVAudioConnectionPoint(node: bus.processedMix, bus: 0)])
         engine.connect(bus.silence, to: bus.mix, fromBus: 0, toBus: 0, format: format)
         // Build the upstream path before its fanout. On an already running
@@ -1097,6 +1150,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
             metronome = generator
             MetronomeSettings.shared.changed = { [weak self] in self?.refreshMetronome() }
         }
+        masterEffects.mediaDirectory = directory
         masterEffects.attach(to: engine, input: masterBus, format: format)
         engine.connect(masterEffects.output, to: masterChannelMode, format: format)
         engine.connect(masterChannelMode, to: masterGain, format: format)
@@ -1112,6 +1166,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         masterConfigured = true
     }
     var onPeakLimit: ((UUID) -> Void)?
+    var onOutputDisconnected: (() -> Void)?
     var onError: (Error) -> Void = { _ in }
     private var suspendedEffectChains: [NativeEffectsChain] = []
     #if os(iOS)
@@ -1265,6 +1320,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         guard !usesSelectedHardware || AudioDeviceSettings.shared.localSessionEnabled else { return }
         #endif
         let active = transportWasRunning || instrumentRenderPending || !inputMonitors.isEmpty
+        if !active { resetIdleMeterLevels() }
         guard meterTimer == nil || meterTimerActive != active else { return }
         meterTimer?.invalidate()
         meterTimerActive = active
@@ -1365,6 +1421,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         }
         return frames
     }
+    func effectSampleError(_ target: UUID?, effect: String) -> String? { effects(for: target)?.sampleErrors[effect] }
     func effectPeaks(_ track: UUID?, effect: String) -> [Float] { effects(for: track)?.effectPeaks(effect) ?? [0,0,0,0] }
     func compressorPeaks(for target: UUID?) -> [Float] { effects(for: target)?.compressorPeaks() ?? [0,0,0,0] }
     func meter(for id: UUID) -> TrackMeterLevel {
@@ -1522,6 +1579,8 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         let pool = idleVoices[track] ?? []
         func matches(_ voice: Voice) -> Bool {
             (voice.clip.frozenMIDI == true) == (clip.frozenMIDI == true) &&
+                abs(voice.clip.audioRate - clip.audioRate) < 0.000001 &&
+                abs(voice.pitch - (clipPitches[clip.id] ?? 0)) < 0.000001 &&
                 voice.file.processingFormat.isEqual(file.processingFormat) &&
                 voice.usesStretch == (!realtime || allowsTempoChanges || abs(clip.audioRate - 1) >= 0.000001 || abs(clipPitches[clip.id] ?? 0) >= 0.000001)
         }
@@ -1647,6 +1706,12 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         }
     }
     #endif
+    static func requiresSourceClockRenewal(source: AVAudioTime?, reference: AVAudioTime?, latency: Double) -> Bool {
+        guard let source, let reference, source.isHostTimeValid, reference.isHostTimeValid,
+              reference.hostTime > source.hostTime else { return false }
+        let age = AVAudioTime.seconds(forHostTime: reference.hostTime - source.hostTime)
+        return age > max(0.1, max(0, latency) + 0.05)
+    }
     private func warmPlayer(_ voice: Voice) {
         JarasVoiceGain.setRenderEnabled(voice.gain, enabled: true)
         guard let silence = AVAudioPCMBuffer(pcmFormat: voice.file.processingFormat, frameCapacity: 256) else { return }
@@ -1671,7 +1736,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         guard let voice = voices.removeValue(forKey: key) else { return }
         if let position, voice.clip.muted != true, voice.clip.fxBypassed != true, (voice.clip.gain ?? 1) > 0,
            let settings = voice.clip.fx, voice.effects != nil {
-            var duration = 0.0
+            var duration = voice.effects?.triggerTailDuration ?? 0
             if settings.delayEnabled && settings.delayMix > 0 {
                 let repeats = settings.feedback <= 0 ? 1 : max(1, ceil(log(0.001) / log(settings.feedback / 100)))
                 duration += min(120, settings.delayTime * repeats)
@@ -1795,6 +1860,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         // rewiring can invalidate an active player's scheduled file segments.
         if voice.effects == nil {
             let chain = NativeEffectsChain(reorderable: false)
+            chain.mediaDirectory = directory
             chain.attach(to: engine, input: voice.usesStretch ? voice.rateClock : voice.player, format: voice.file.processingFormat,
                          destinations: [AVAudioConnectionPoint(node: voice.gain, bus: 0)])
             chain.observe(analysisEffects[voice.clip.id.uuidString] ?? [])
@@ -2386,6 +2452,7 @@ return false
         } else {
             voice = MIDITakeVoice(track: track, clip: key.clip)
             engine.attach(voice.source); engine.attach(voice.controls); engine.attach(voice.gain)
+            voice.effects.mediaDirectory = directory
             voice.effects.attach(to: engine, input: voice.source, format: hardwareFormat,
                 destinations: [AVAudioConnectionPoint(node: voice.controls, bus: 0)])
             engine.connect(voice.controls, to: voice.gain, format: hardwareFormat)
@@ -3477,6 +3544,29 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
             }
             if !engine.isRunning { try startEngineIfNeeded() }
             startMeterClock()
+            // A suspended TimePitch/Varispeed path can resume with a current
+            // sample counter but a host timestamp from its previous rate epoch.
+            // stop()/AU reset does not necessarily clear that converter epoch.
+            // Never extrapolate this pair into an audible onset: renew only the
+            // affected idle path before choosing the shared playback deadline.
+            if realtime, mobileOutput == nil, let outputTime = engine.outputNode.lastRenderTime, outputTime.isHostTimeValid {
+                for index in scheduled.indices {
+                    let (key, old, first, count, delay) = scheduled[index]
+                    guard Self.requiresSourceClockRenewal(source: old.player.lastRenderTime, reference: outputTime,
+                                                         latency: old.player.outputPresentationLatency) else { continue }
+                    setVoice(nil, for: key)
+                    detach(old)
+                    var fresh = try makeVoice(track: old.track, clip: old.clip, file: old.file)
+                    fresh.continuousSource = old.continuousSource
+                    fresh.player.volume = old.player.volume
+                    fresh.player.pan = old.player.pan
+                    let gain = old.clip.gain ?? 1
+                    JarasVoiceGain.setDecibels(fresh.gain, decibels: old.clip.muted == true || gain <= 0 ? -96 : min(24, max(-96, 20 * log10(max(0.0000001, gain)))))
+                    warmPlayer(fresh)
+                    setVoice(fresh, for: key)
+                    scheduled[index] = (key, fresh, first, count, delay)
+                }
+            }
             let referenceLatency = realtime && !scheduled.isEmpty ? (metronome?.node.outputPresentationLatency ?? masterBus.outputPresentationLatency) : 0
             func processingDelay(_ voice: Voice) -> Double {
                 guard realtime else { return 0 }
@@ -3555,6 +3645,17 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                 DispatchQueue.concurrentPerform(iterations: commands.count) { commands[$0]() }
             } else { for command in startCommands { command() } }
             if !realtime { for (_, voice, _, _, _) in scheduled { voice.player.play() } }
+            if syncDiagnosticsEnabled && !scheduled.isEmpty {
+                let keys = scheduled.map { $0.0 }, generation = headAudioClock[head]?.host
+                recordSyncDiagnostics(keys, phase: "scheduled")
+                Task { @MainActor [weak self] in
+                    for delay: UInt64 in [300_000_000, 1_700_000_000, 3_000_000_000] {
+                        try? await Task.sleep(nanoseconds: delay)
+                        guard let self, self.headAudioClock[head]?.host == generation else { return }
+                        self.recordSyncDiagnostics(keys, phase: "rendering")
+                    }
+                }
+            }
         }
         if let jump = preparedJump {
             // The generator deduplicates this deadline. Retry until its previous
@@ -3643,11 +3744,23 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
             bank.recordPeak(JarasEqualizer.takeOutputPeak(bus.controls, channel: 1), slot: 1)
         }
     }
+    private func resetIdleMeterLevels() {
+        // The last REC disarm stops the active meter clock. Do not leave its
+        // last input sample painted indefinitely; preserve the held peak number.
+        for meter in meters.values { meter.reset() }
+        masterMeter.reset()
+        for bank in trackPeaks.values { _ = bank.takePeak(0); _ = bank.takePeak(1) }
+        _ = peaks.takePeak(masterSlot); _ = peaks.takePeak(masterSlot + 1)
+        lastMeterUpdate = 0
+    }
     private func pollMeters(now: Double = ProcessInfo.processInfo.systemUptime) {
         #if os(iOS)
         guard !AudioDeviceSettings.shared.localSessionReconfiguring else { return }
         #endif
-        guard engine.isRunning, transportWasRunning || instrumentRenderPending || !inputMonitors.isEmpty else { return }
+        guard engine.isRunning, transportWasRunning || instrumentRenderPending || !inputMonitors.isEmpty else {
+            resetIdleMeterLevels()
+            return
+        }
         if now - lastMeterUpdate >= 1.0 / 30.0 - 0.002 {
             let elapsed = lastMeterUpdate == 0 ? 1.0 / 30.0 : now - lastMeterUpdate
             lastMeterUpdate = now
@@ -3976,8 +4089,17 @@ struct VerticalTrackMeter: NSViewRepresentable {
         if pendingPeak {
             peakLabel.isHidden = !showScale
             if showScale {
+                let clipping = (peakDB ?? -24) >= 0
                 let text = NSAttributedString(string: peakDB.map { String(format: "%+.2f", $0) } ?? "",
-                    attributes: [.font: peakOnly ? Self.peakFont : Self.compactScalePeakFont, .foregroundColor: textColor])
+                    attributes: [.font: peakOnly ? Self.peakFont : Self.compactScalePeakFont,
+                                 .foregroundColor: clipping ? NSColor.red : textColor])
+                let left: CGFloat = peakOnly ? 21 : 13
+                let available = max(0, bounds.width - left)
+                let width = clipping ? min(available, ceil(text.size().width) + 4) : available
+                peakLabel.frame.origin.x = left + (available - width) / 2
+                peakLabel.frame.size.width = width
+                peakLabel.backgroundColor = clipping ? NSColor.black.cgColor : nil
+                peakLabel.cornerRadius = 2
                 if (peakLabel.string as? NSAttributedString) != text { peakLabel.string = text }
             }
             pendingPeak = false
@@ -4043,7 +4165,7 @@ struct TrackPeakReadout: View {
     @ObservedObject var peak: TrackMeterLevel.PeakHold
     var compact = false
     var foreground: Color = .white
-    var redAtZero = false
+    var redAtZero = true
     private var fontSize: CGFloat {
         #if os(macOS)
         return 8
@@ -4064,6 +4186,8 @@ struct TrackPeakReadout: View {
                 .font(.jarasSystem(size: fontSize, weight: .bold, design: .monospaced))
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .foregroundStyle(redAtZero && (peak.decibels ?? -24) >= 0 ? Color.red : foreground)
+                .padding(.horizontal, 2).padding(.vertical, 1)
+                .background(RoundedRectangle(cornerRadius: 2).fill((peak.decibels ?? -24) >= 0 ? Color.black : .clear))
                 .frame(width: readoutWidth, height: 12)
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel("Reset peak")

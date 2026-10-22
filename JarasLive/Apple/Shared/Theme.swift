@@ -15,19 +15,22 @@ extension View {
     }
 }
 enum JarasTheme {
-    static let background = Color(hex: 0x1e1e1e)
-    static let panelHex: UInt32 = 0x252525
+    static let background = Color(hex: 0x161616)
+    static let panelHex: UInt32 = 0x1d1d1d
     static let panel = Color(hex: panelHex)
     static let line = Color(hex: 0x444444)
     static let text = Color(hex: 0xffffff)
     static let secondary = Color(hex: 0xb9b9b9)
-    static let grid = Color(hex: 0x1e1e1e)
-    static let mixerHex: UInt32 = 0x252525
+    static let grid = Color(hex: 0x161616)
+    static let mixerHex: UInt32 = 0x1d1d1d
     static let mixer = Color(hex: mixerHex)
-    static let display = Color(hex: 0x141414)
-    static let titlebar = Color(hex: 0x2b2b2b)
+    static let display = Color(hex: 0x101010)
+    static let titlebar = Color(hex: 0x222222)
     static let accent = Color(hex: 0x79f59a)
     static let green = Color(hex: 0x69ed91)
+    static let transportPlay = Color(hex: 0x24f06a)
+    static let liveOffRed = Color(hex: 0xff3030)
+    static let transportRed = Color(hex: 0x8f2847)
     static let purple = Color(hex: 0xb8b8b8)
     static let yellow = Color(hex: 0xffdc52)
     static func track(_ track: Track, emphasized: Bool = false) -> Color {
@@ -258,7 +261,7 @@ private final class NativeJarasBlinkHost: NSHostingView<AnyView> {
 
 /// CatLive factory colors. Explicit user timeline choices remain intact.
 enum TimelineAppearanceDefaults {
-    static let background = 0x1E1E1E
+    static let background = 0x161616
     static let primaryGrid = 0x535250
     static let secondaryGrid = 0x333235
     static let playCursor = 0x7548DD

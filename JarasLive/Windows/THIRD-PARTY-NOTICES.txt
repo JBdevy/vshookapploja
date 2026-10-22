@@ -1,0 +1,86 @@
+CatLive Windows uses JUCE 8.0.15, copyright Raw Material Software Limited.
+JUCE is available under the JUCE commercial licence or AGPLv3.
+https://juce.com/legal/juce-8-licence/
+This local development build does not establish a commercial JUCE licence.
+Confirm the appropriate JUCE licence before distributing a proprietary product.
+
+Monocypher 4.0.3, by Loup Vaillant and contributors.
+Dual-licensed under CC0-1.0 or BSD-2-Clause; CatLive uses BSD-2-Clause.
+The complete licence accompanies the executable as Monocypher-LICENSE.md.
+https://monocypher.org/
+
+JUCE includes additional third-party components. Their notices and licences are
+in JUCE/modules and JUCE/LICENSE.md. These must accompany distribution as required.
+
+ASIO is a trademark and software of Steinberg Media Technologies GmbH.
+The bundled ASIO sources in JUCE are used under their accompanying licence.
+
+The original CatLive portable C++ core and product artwork remain part of CatLive.
+
+VST 3 plug-in interfaces, copyright Steinberg Media Technologies GmbH.
+The native Windows host uses the vendored interfaces under their MIT license.
+The complete notice accompanies the executable as VST3-LICENSE.txt.
+
+Inter 4.1, copyright 2016 The Inter Project Authors.
+Distributed under the SIL Open Font License, Version 1.1.
+The unmodified font files are bundled with the desktop application.
+The full license is included as Inter-LICENSE.txt and in
+Resources/Fonts/Inter/LICENSE.txt.
+https://github.com/rsms/inter
+
+Signalsmith Stretch 1.4.0 and Signalsmith Linear 0.6.4, by Signalsmith Audio.
+Licensed under MIT. Complete notices accompany the executable as
+Signalsmith-Stretch-LICENSE.txt and Signalsmith-Linear-LICENSE.txt.
+Source revisions and the vendored header list are recorded in
+Windows/ThirdParty/Signalsmith/PROVENANCE.txt.
+https://github.com/Signalsmith-Audio/signalsmith-stretch
+https://github.com/Signalsmith-Audio/linear
+
+TinySoundFont, copyright Bernhard Schelling and contributors.
+Licensed under MIT. The complete notice accompanies the executable as
+TinySoundFont-LICENSE.txt. CatLive includes its existing instrument extensions.
+https://github.com/schellingb/TinySoundFont
+
+libebur128 1.2.6, copyright Jan Kokemüller, and BSD queue macros.
+The same vendored source is used by the Mac build. Complete notices accompany
+the executable as EBUR128-LICENSE.txt and EBUR128-QUEUE-LICENSE.txt.
+https://github.com/jiixyj/libebur128
+
+QR Code generator library 1.8.0, copyright Project Nayuki.
+Licensed under MIT. The complete notice accompanies the executable as
+QRCode-LICENSE.txt and is in Windows/ThirdParty/QRCode/LICENSE.txt.
+https://github.com/nayuki/QR-Code-generator
+
+
+LAME 3.100 (Windows MP3 recording and export)
+https://lame.sourceforge.io/
+Copyright the LAME developers. Licensed under LGPL version 2 or later.
+CatLiveLame.dll is a separate, replaceable shared library. See Licenses/LAME/COPYING, the complete upstream source archive and BUILD.txt supplied beside the application. The application does not restrict reverse engineering for debugging modifications to this LGPL component.
+
+dr_libs (MP3 file decoding and gapless timeline alignment)
+https://github.com/mackron/dr_libs
+Copyright David Reid. Distributed under its MIT license; see Licenses/dr_libs/LICENSE. The pinned source and provenance are in WindowsNative/ThirdParty/dr_libs.
+
+FFmpeg 8.1.x (Windows video decoding)
+https://ffmpeg.org/
+The Windows video window loads replaceable shared FFmpeg libraries from
+CatLiveRuntime/FFmpeg. The LGPL version 2.1 license accompanies them in
+Licenses/FFmpeg/COPYING.LGPLv2.1. FFmpeg source is available from
+https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz (SHA-256:
+464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c).
+The app does not restrict reverse engineering for debugging modifications to
+these libraries.
+
+CatStemSeparation 5 (Windows and Mac model parity)
+Demucs 4.0.1 / HTDemucs6, Meta Platforms, MIT license.
+The isolated Windows Python / PyTorch runtime, exact model SHA256 manifest,
+pinned dependency list and redistribution notices accompany the application
+in StemSeparationRuntime. No model or runtime downloads happen during playback.
+https://github.com/facebookresearch/demucs
+
+OpenVINO 2025.4.0, Intel, Apache License 2.0.
+The Windows CatStem runtime runs the same HTDemucs6 weights through an FP32
+OpenVINO neural graph with PyTorch CPU spectral transforms. Its installed wheel
+licenses and bundled-component notices are retained in StemSeparationRuntime/
+Licenses and python/Lib/site-packages. Telemetry is opted out by the backend.
+https://github.com/openvinotoolkit/openvino

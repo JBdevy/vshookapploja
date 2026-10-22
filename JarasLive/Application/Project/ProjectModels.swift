@@ -155,6 +155,12 @@ public struct Part: Codable, Identifiable, Equatable, Sendable {
     public var pitchGroupIDs: [UUID]? = nil
     public var multiLoops: [MultiLoop]? = nil
     public var totalLoop: Bool? = nil
+    public var subplayInitSeconds: Double? = nil
+    public var subplayInitBars: Int? = nil
+    public var subplayInitSelection: Int {
+        if let bars = subplayInitBars { return min(5, max(1, bars)) * 2 }
+        return Int(min(5, max(1, subplayInitSeconds ?? 1))) * 2 - 1
+    }
     public var semitones: Int { pitchSemitones ?? 0 }
     public var usesUppercase: Bool { uppercaseName ?? true }
     public var displayName: String {
@@ -354,6 +360,13 @@ public struct RegionSetlist: Codable, Equatable, Sendable {
     public var autoUntilBlockEnd: Bool?
     public var automaticSubplay: Bool?
     public var automaticSubplaySeconds: Double?
+    public var automaticSubplayBars: Int?
+    public var automaticSubplayNext: Bool?
+    public var subplayLeadSelection: Int {
+        if automaticSubplayNext == true { return 11 }
+        if let bars = automaticSubplayBars { return min(5, max(1, bars)) * 2 }
+        return Int(subplayLeadTime) * 2 - 1
+    }
     public var subplayLeadTime: Double { min(5, max(1, automaticSubplaySeconds ?? 1)) }
     public var prepareWithoutPlayback: Bool?
     public var preparesWithoutPlayback: Bool { prepareWithoutPlayback ?? false }
@@ -465,6 +478,8 @@ public indirect enum PortableProjectJSON: Codable, Equatable, Sendable {
 }
 
 public struct Project: Codable, Identifiable, Equatable, Sendable {
+    /// Permanent identity shared by copies used for redundant playback. Assigned by Save.
+    public var projectSyncID: UUID? = nil
     /// Protect timeline positions and boundaries; nil keeps older projects unlocked.
     public var timelineMovementLocked: Bool? = nil
     /// Windows grandMA2 assignments and reserved destinations must survive a Mac save.
@@ -595,7 +610,7 @@ public struct Project: Codable, Identifiable, Equatable, Sendable {
                     guard (clip.waveformChannels ?? []).allSatisfy({ $0.allSatisfy { $0.isFinite && (0...1).contains($0) } }) else { throw ProjectError.invalid("Invalid channel waveform") }
                     guard clip.audioRate.isFinite, (1.0/32...32).contains(clip.audioRate) else { throw ProjectError.invalid("Invalid audio playback rate.") }
                     if let reference = clip.tempoBasePlaybackRate { guard reference.isFinite, (1.0/32...32).contains(reference) else { throw ProjectError.invalid("Invalid tempo playback reference.") } }
-                    guard clip.channelMode == nil || (0...3).contains(clip.channelMode!) else { throw ProjectError.invalid("Invalid item channel mode") }
+                    guard clip.channelMode == nil || (0...4).contains(clip.channelMode!) else { throw ProjectError.invalid("Invalid item channel mode") }
                 guard (clip.pitchSemitones ?? 0).isFinite, (-12...12).contains(clip.pitchSemitones ?? 0) else { throw ProjectError.invalid("Invalid item pitch") }
                 guard clip.normalizationGain == nil || (clip.normalizationGain!.isFinite && clip.normalizationGain! >= 0 && clip.normalizationGain! <= pow(10, 24.0 / 20)) else { throw ProjectError.invalid("Invalid normalization gain") }
                     guard [clip.fadeInCurve, clip.fadeInSCurve, clip.fadeOutCurve, clip.fadeOutSCurve].allSatisfy({ $0 == nil || ($0!.isFinite && (-1...1).contains($0!)) }) else { throw ProjectError.invalid("Invalid fade curve") }
@@ -776,7 +791,12 @@ public struct AudioRouting: Codable, Sendable { public var routes: [AudioRoute] 
 public struct MixerState: Codable, Sendable { public var tracks: [Track]; public var routing: AudioRouting }
 public struct ShowSnapshot: Codable, Sendable { public var project: Project; public var transport: TransportState; public var nextSongId: UUID? }
 
-public struct PlaybackSnapshot: Codable, Sendable { public var transport: TransportState; public var nextSongId: UUID? }
+public struct ProjectSyncMixer: Codable, Sendable {
+    public struct Track: Codable, Sendable { public var id: UUID; public var volume: Double; public var pan: Double; public var mute: Bool; public var solo: Bool }
+    public var masterVolume: Double; public var masterPan: Double; public var masterMute: Bool; public var masterSolo: Bool
+    public var tracks: [Track]
+}
+public struct PlaybackSnapshot: Codable, Sendable { public var transport: TransportState; public var nextSongId: UUID?; public var syncSetlist: RegionSetlist? = nil; public var syncMixer: ProjectSyncMixer? = nil }
 
 /// Interval partitioning: adjacent items share a lane; simultaneous items never do.
 public struct TrackLanes: Equatable {
@@ -791,7 +811,7 @@ public struct TrackLanes: Equatable {
         // Lay out existing material first. A new take stays below the material
         // it overlaps, even if recording starts before that material begins.
         for clip in ordered where clip.recordingLane == nil {
-            let lane = ends.firstIndex(where: { $0 <= clip.startTime }) ?? ends.count
+            let lane = ends.firstIndex(where: { $0 <= clip.startTime + 1e-9 }) ?? ends.count
             if lane == ends.count { ends.append(0) }
             ends[lane] = clip.startTime + clip.duration
             lanes[clip.id] = lane
@@ -812,7 +832,7 @@ public struct TrackLanes: Equatable {
     /// No overlapping item means lane zero, regardless of items elsewhere.
     public func recordingLane(start: Double, duration: Double, clips: [AudioClip]) -> Int {
         let end = start + duration
-        return clips.lazy.filter { $0.startTime < end && $0.startTime + $0.duration > start }
+        return clips.lazy.filter { $0.startTime < end - 1e-9 && $0.startTime + $0.duration > start + 1e-9 }
             .compactMap { lanes[$0.id] }.max().map { $0 + 1 } ?? 0
     }
 }

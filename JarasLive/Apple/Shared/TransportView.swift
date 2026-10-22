@@ -126,7 +126,7 @@ struct TransportView: View {
                             Button { showingResolume = true } label: {
                                 Text(verbatim: title).font(.jarasSystem(size: 10, weight: .semibold)).frame(width: 64, height: 25).contentShape(Rectangle())
                                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.6)))
-                            }.buttonStyle(.plain).accessibilityLabel(title)
+                            }.buttonStyle(.plain).accessibilityLabel(title).jarasHelp(title)
                         }
                         }
                         #endif
@@ -136,7 +136,7 @@ struct TransportView: View {
                         }.buttonStyle(.plain).jarasHelp("Export").accessibilityLabel("Export")
                         Button(action: openSettings) {
                             Image(systemName: "gearshape").frame(width: 32, height: 25).contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityLabel("Configurações")
+                        }.buttonStyle(.plain).accessibilityLabel("Configurações").jarasHelp("Configurações")
                     }
                 }
                 HStack(spacing: remainingSpacing) {
@@ -145,7 +145,7 @@ struct TransportView: View {
                         Label { Text(verbatim: transport.playing ? "Stop" : "Play") } icon: {
                             Image(systemName: transport.playing ? "stop.fill" : "play.fill").frame(width: 12)
                         }
-                    }.buttonStyle(TransportButtonStyle(color: JarasTheme.green, active: transport.playing, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height)).jarasHelp(ControlMappings.shared.shortcutHelp(.playStop))
+                    }.buttonStyle(TransportButtonStyle(color: JarasTheme.transportPlay, active: transport.playing, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height)).jarasHelp(ControlMappings.shared.shortcutHelp(.playStop))
                         .contextMenu { Button("Fadeout…") { showingFadeout = true } }
                     Button { show.send(.pause) } label: { Image(systemName: "pause.fill") }
                         .buttonStyle(TransportButtonStyle(fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height))
@@ -183,6 +183,7 @@ struct TransportView: View {
                     #endif
                     Spacer(minLength: 0)
                     ProjectSaveButton(pending: show.needsSave, saving: show.saving, message: show.message,
+                                      projectName: documents?.currentURL?.deletingPathExtension().lastPathComponent ?? show.snapshot.project.name, rename: documents.map { documents in { name in try await documents.renameProject(name) } },
                                       exportToIPad: documents == nil ? nil : { showingPortableExport = true }) { Task { await show.save() } }
                     Spacer(minLength: 0)
                     PanelCollapseButton(collapsed: setlistCollapsed, title: "Setlist", label: setlistCollapsed ? "Expandir Setlist" : "Recolher Setlist", tooltip: setlistCollapsed ? "Restaurar largura anterior do Setlist" : "Ocultar Setlist", action: toggleSetlist)
@@ -708,9 +709,15 @@ private struct ProjectSaveButton: View {
     let pending: Bool
     let saving: Bool
     let message: String
+    var projectName = ""
+    var rename: ((String) async throws -> Void)? = nil
     var exportToIPad: (() -> Void)? = nil
     let action: () -> Void
     @State private var confirmingSave = false
+    @State private var showingOptions = false
+    @State private var draftName = ""
+    @State private var renameError = ""
+    @State private var renaming = false
     var body: some View {
         Button { if pending { confirmingSave = true } } label: {
             Label(LocalizedStringKey(saving ? "Salvando…" : pending ? "Save" : "Salvo"), systemImage: pending ? "square.and.arrow.down" : "checkmark")
@@ -724,7 +731,20 @@ private struct ProjectSaveButton: View {
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(saving)
             #if os(macOS)
-            .immediateRightClick { exportToIPad?() }
+            .immediateRightClick { draftName = projectName; renameError = ""; showingOptions = true }
+            .popover(isPresented: $showingOptions, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Project name").font(.headline)
+                    TextField("Project name", text: $draftName).textFieldStyle(.roundedBorder)
+                        .onSubmit { saveName() }.disabled(renaming)
+                    if !renameError.isEmpty { Text(verbatim: JarasLocalization.string(renameError)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+                    Button("Save") { saveName() }.disabled(rename == nil || renaming || draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if let exportToIPad {
+                        Divider()
+                        Button("Exportar para CatLive iPadOS") { showingOptions = false; exportToIPad() }
+                    }
+                }.padding(16).frame(width: 320)
+            }
             #endif
             .keyboardShortcut("s", modifiers: .command)
             .alert(Text(verbatim: confirmingSave ? JarasLocalization.string("Do you want to save this project?") : ""), isPresented: $confirmingSave) {
@@ -732,6 +752,15 @@ private struct ProjectSaveButton: View {
                 Button("Save") { action() }.keyboardShortcut(.defaultAction)
             }
             .jarasHelp(message.isEmpty ? "Save" : message)
+    }
+    private func saveName() {
+        guard let rename, !renaming else { return }
+        renaming = true; renameError = ""
+        Task { @MainActor in
+            defer { renaming = false }
+            do { try await rename(draftName); showingOptions = false }
+            catch { renameError = error.localizedDescription }
+        }
     }
 }
 private struct JarasSavePulse: ViewModifier {
@@ -807,6 +836,8 @@ extension EnvironmentValues {
 struct TransportButtonStyle: ButtonStyle {
     var color = JarasTheme.panel
     var active = false
+    var inactiveOpacity: Double = 0.45
+    var activeForeground = Color.black
     var horizontalPadding: CGFloat = 9
     var fontSize: CGFloat = 12
     var width: CGFloat? = nil
@@ -818,13 +849,13 @@ struct TransportButtonStyle: ButtonStyle {
             .fixedSize(horizontal: width == nil, vertical: false)
             .padding(.horizontal, width == nil ? horizontalPadding : 0)
             .frame(width: width, height: height)
-            .foregroundStyle(active ? Color.black : JarasTheme.text)
+            .foregroundStyle(active ? activeForeground : JarasTheme.text)
             #if os(iOS)
             .background {
-                RemoteSurface.fill(active ? color : color.opacity(configuration.isPressed ? 0.7 : 0.45))
+                RemoteSurface.fill(active ? color : color.opacity(configuration.isPressed ? max(0.7, inactiveOpacity) : inactiveOpacity))
             }
             #else
-            .background(active ? color : color.opacity(configuration.isPressed ? 0.7 : 0.45))
+            .background(active ? color : color.opacity(configuration.isPressed ? max(0.7, inactiveOpacity) : inactiveOpacity))
             #endif
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(active ? color : Color.white.opacity(0.45)))
@@ -1051,7 +1082,7 @@ private struct RepeatControl: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) { Image(systemName: "repeat") }
-            .buttonStyle(TransportButtonStyle(color: active ? JarasTheme.yellow : .red, active: active, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: TransportControlMetrics.height))
+            .buttonStyle(TransportButtonStyle(color: active ? JarasTheme.yellow : JarasTheme.liveOffRed, active: active, inactiveOpacity: 1, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: TransportControlMetrics.height))
             .modifier(JarasBlink(active: active, interval: 0.55, lowOpacity: 0.45))
             .accessibilityLabel("Repeat").jarasHelp("Repeat (R)")
     }
@@ -1071,8 +1102,8 @@ private struct VideoToggleButton: View {
             .lineLimit(1)
             .frame(width: buttonWidth, height: TransportControlMetrics.height)
             .foregroundStyle(video.visible ? Color.black : JarasTheme.text)
-            .background(RoundedRectangle(cornerRadius: 5).fill(video.visible ? JarasTheme.green : Color(hex: 0xc44545)))
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(video.visible ? JarasTheme.green : Color(hex: 0xc44545)))
+            .background(RoundedRectangle(cornerRadius: 5).fill(video.visible ? JarasTheme.green : JarasTheme.liveOffRed))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(video.visible ? JarasTheme.green : JarasTheme.liveOffRed))
             .contentShape(Rectangle())
         }
             .buttonStyle(.plain)
@@ -1118,8 +1149,9 @@ private struct RemoteToggleButton: View {
                 Image(systemName: "network")
                 Text(verbatim: "Remote")
             }.lineLimit(1)
-        }.buttonStyle(TransportButtonStyle(color: remote.enabled ? JarasTheme.green : Color(hex: 0xc44545), active: true, fontSize: TransportControlMetrics.font, width: buttonWidth, height: TransportControlMetrics.height))
+        }.buttonStyle(TransportButtonStyle(color: remote.enabled ? JarasTheme.green : JarasTheme.transportRed, active: true, activeForeground: remote.enabled ? .black : .white, fontSize: TransportControlMetrics.font, width: buttonWidth, height: TransportControlMetrics.height))
             .accessibilityLabel("Remote").accessibilityValue(remote.enabled ? "On" : "Off")
+            .jarasHelp("Remote · Right-click to configure")
             #if os(macOS)
             .popover(isPresented: $settings) { DAWRemoteHostView() }
             .immediateRightClick { settings = true }

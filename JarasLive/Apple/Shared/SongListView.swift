@@ -7,6 +7,10 @@ import Combine
 @MainActor final class DetachedSetlistWindow: NSObject, ObservableObject, NSWindowDelegate {
     @Published private(set) var isDetached = false
     @Published private(set) var isVisible = false
+    private func remember(detached: Bool, visible: Bool) {
+        UserDefaults.standard.set(detached, forKey: "jaras.layout.setlist.detached")
+        UserDefaults.standard.set(visible, forKey: "jaras.layout.setlist.visible")
+    }
     private(set) var window: NSWindow?
     private var host: NSHostingView<AnyView>?
     private var onDock: () -> Void = {}
@@ -14,6 +18,7 @@ import Combine
 
     func open<Content: View>(onDock: @escaping () -> Void = {}, @ViewBuilder content: () -> Content) {
         self.onDock = onDock
+        remember(detached: true, visible: true)
         if let window {
             update(content: content)
             if window.isMiniaturized { window.deminiaturize(nil) }
@@ -22,6 +27,7 @@ import Combine
         }
         let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 700),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        ProjectionWindow.followWorkspaceWindow(panel)
         panel.title = "CatLive · Setlist"
         panel.minSize = NSSize(width: 320, height: 300)
         panel.isReleasedWhenClosed = false
@@ -49,9 +55,10 @@ import Combine
         guard visible, let content = window.contentView, content.frame.width < 600 * factor else { return }
         window.setContentSize(NSSize(width: 600 * factor, height: content.frame.height))
     }
-    func hide() { window?.orderOut(nil); isVisible = false }
+    func hide() { remember(detached: true, visible: false); window?.orderOut(nil); isVisible = false }
     /// Programmatic teardown must not re-dock an outgoing project's Setlist.
-    func close() {
+    func close(preserveState: Bool = false) {
+        if !preserveState { remember(detached: false, visible: false) }
         window?.delegate = nil
         window?.close(); window?.contentView = nil
         window = nil; host = nil; onDock = {}
@@ -163,6 +170,8 @@ struct SongListView: View {
         return show.allRegions.filter { !existing.contains($0.id) }
     }
     @State private var showingAutoOptions = false
+    @State private var configInitRegion: Part?
+    @State private var configInitSelection = 1
     @State private var searching = false
     @State private var query = ""
     @State private var playlistName = ""
@@ -192,6 +201,13 @@ struct SongListView: View {
         let toggling = flags.contains(.command) || flags.contains(.control)
         #else
         let extending = false, toggling = false
+        #endif
+        #if os(macOS)
+        // Keep the complete drag payload until a plain click is released.
+        if !extending && !toggling && NSApp.currentEvent?.type == .leftMouseDown,
+           show.selectedRegionPlaylist != nil,
+           let part = show.current?.parts.first(where: { $0.id == id }), part.parentRegionID == nil,
+           selectedEntries.count > 1 && selectedEntries.contains(id) { return }
         #endif
         if extending, let anchor = entrySelectionAnchor.map(visibleFocusID),
            let first = visible.firstIndex(where: { $0.id == anchor }), let last = visible.firstIndex(where: { $0.id == id }) {
@@ -249,11 +265,24 @@ struct SongListView: View {
                                 Toggle("Without playback", isOn: Binding(get: { show.regionSetlist.preparesWithoutPlayback }, set: { show.setPrepareWithoutPlayback($0) }))
                                 if !show.regionSetlist.preparesWithoutPlayback {
                                     Toggle("Automatic Subplay", isOn: Binding(get: { show.regionSetlist.automaticSubplay == true }, set: { show.setAutomaticSubplay($0) }))
-                                    Picker("Start before the end", selection: Binding(get: { Int(show.regionSetlist.subplayLeadTime) }, set: { show.setAutomaticSubplay(show.regionSetlist.automaticSubplay == true, seconds: Double($0)) })) {
-                                        ForEach(1...5, id: \.self) { Text("\($0)s").tag($0) }
+                                    Picker("Start before the end", selection: Binding(get: { show.regionSetlist.subplayLeadSelection }, set: { selection in
+                                        if selection == 11 {
+                                            show.setAutomaticSubplay(show.regionSetlist.automaticSubplay == true, next: true)
+                                            return
+                                        }
+                                        let count = (selection + 1) / 2
+                                        show.setAutomaticSubplay(show.regionSetlist.automaticSubplay == true,
+                                            seconds: selection % 2 == 1 ? Double(count) : nil,
+                                            bars: selection % 2 == 0 ? count : nil)
+                                    })) {
+                                        ForEach(1...5, id: \.self) { count in
+                                            Text("\(count)s").tag(count * 2 - 1)
+                                            Text(verbatim: "\(count) " + JarasLocalization.string(count == 1 ? "bar" : "bars")).tag(count * 2)
+                                        }
+                                        Text(verbatim: "Next").tag(11)
                                     }.disabled(show.regionSetlist.automaticSubplay != true)
                                 }
-                            }.toggleStyle(.automatic).padding(18).frame(width: 270)
+                            }.toggleStyle(.automatic).padding(18).frame(width: 320)
                         }
                     Button { createdBlock = show.addSetlistBlock(symbol: defaultBlockSymbol, namePrefix: JarasLocalization.string("Bloco")) } label: {
                         Text("Blocks").font(.jarasSystem(size: 9, weight: .bold)).frame(width: max(0, (geometry.size.width - 6) / 3), height: 26)
@@ -324,7 +353,7 @@ struct SongListView: View {
                                             editingMultipleSymbols = true
                                         } else { editingBlockSymbol = block.showsSymbol; editingEntry = EntryEdit(id: block.id, name: block.name, color: block.color, block: true) }
                                     }
-                                    .modifier(PlaylistRegionDrag(show: show, playlist: playlist?.id, entry: block.id, block: true, selection: $selectedEntries, name: block.name))
+                                    .modifier(PlaylistRegionDrag(show: show, playlist: playlist?.id, entry: block.id, block: true, selection: $selectedEntries, name: block.name, released: { selectEntry(block.id, visible: visible) }))
                                     .id(block.id)
                             case .region(let region, let number):
                             let active = displayedPlaying?.id == region.id
@@ -359,6 +388,7 @@ struct SongListView: View {
                                         regionExport = RegionAudioExportRequest(project: show.snapshot.project, song: current,
                                             regions: selection, mediaDirectory: mediaDirectory)
                                     }
+                                    Button("Config Init") { configInitSelection = region.subplayInitSelection; configInitRegion = region }
                                     Button("Edit song") { editingUppercaseName = region.usesUppercase; editingEntry = EntryEdit(id: region.id, name: region.name, color: region.color ?? 0x705264, block: false, regionTargets: targets) }
                                     if region.parentRegionID == nil {
                                     Button(playlist == nil ? "Delete region" : "Remove from playlist", role: .destructive) {
@@ -366,7 +396,7 @@ struct SongListView: View {
                                     }
                                     }
                                 }
-                                .modifier(PlaylistRegionDrag(show: show, playlist: playlist?.id, entry: region.id, block: false, selection: $selectedEntries, locked: region.parentRegionID != nil, name: region.name))
+                                .modifier(PlaylistRegionDrag(show: show, playlist: playlist?.id, entry: region.id, block: false, selection: $selectedEntries, locked: region.parentRegionID != nil, name: region.name, released: { selectEntry(region.id, visible: visible) }))
                                 .id(region.id)
                             }
                         }
@@ -477,6 +507,23 @@ struct SongListView: View {
         .sheet(item: $regionExport) { request in
             AudioExportView(project: request.project, song: request.song, mediaDirectory: request.mediaDirectory,
                             regionSelection: request.regions)
+        }
+        .sheet(item: $configInitRegion) { region in
+            VStack(alignment: .leading, spacing: 16) {
+                Text(verbatim: "Config Init").font(.jarasHeadline)
+                Text(verbatim: region.name).lineLimit(2)
+                Picker("Initial playback", selection: $configInitSelection) {
+                    ForEach(1...5, id: \.self) { count in
+                        Text("\(count)s").tag(count * 2 - 1)
+                        Text(verbatim: "\(count) " + JarasLocalization.string(count == 1 ? "bar" : "bars")).tag(count * 2)
+                    }
+                }
+                HStack {
+                    Button("Cancelar") { configInitRegion = nil }.keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button("Salvar") { show.setRegionInit(region.id, selection: configInitSelection); configInitRegion = nil }.keyboardShortcut(.defaultAction)
+                }
+            }.padding(20).frame(width: 320).background(JarasTheme.panel)
         }
         .sheet(item: $multiLoopRegion) { region in MultiLoopsEditor(show: show, regionID: region.id) }
         .sheet(item: $editingEntry) { edit in
@@ -692,7 +739,7 @@ struct SetlistFooterControls: View {
                     HStack(spacing: 4) {
                         control("ByPass", width: width, color: Color(hex: bypassed ? 0xffd600 : 0xff3030),
                                 highlighted: bypassed, blinking: bypassed, action: toggleBypass)
-                        control("Live", width: width, color: liveEnabled ? JarasTheme.green : Color(hex: 0xff3030),
+                        control("Live", width: width, color: liveEnabled ? JarasTheme.green : JarasTheme.liveOffRed,
                                 highlighted: liveEnabled, action: requestLiveToggle)
                         control("Parts", width: width, color: partsOpen ? JarasTheme.green : JarasTheme.panel,
                                 highlighted: partsOpen, darkText: partsOpen, action: toggleParts)
@@ -1327,6 +1374,12 @@ final class SetlistKeyView: NSView {
     var released: (() -> Void)?
     var delete: (() -> Void)?
     private static weak var deleteOwner: SetlistKeyView?
+    static func ownsDelete(_ event: NSEvent) -> Bool {
+        guard let owner = deleteOwner else { return false }
+        return event.window === owner.window && owner.acceptsNavigation &&
+            !(owner.window?.firstResponder is any TimelineGridKeyboardTarget) &&
+            !owner.isHiddenOrHasHiddenAncestor && owner.visibleRect.width > 0
+    }
     static func handleDelete(_ event: NSEvent) -> Bool {
         guard !RegionShortcutView.envelopeOwnsEditingKey(event) else { return false }
         if RegionShortcutView.handleSelectedObjectsDelete(event) { return true }
@@ -1534,6 +1587,7 @@ private struct PlaylistRegionDrag: ViewModifier {
     @Binding var selection: Set<UUID>
     var locked = false
     var name = ""
+    var released: () -> Void = {}
     @ObservedObject private var drag = SetlistReorderState.shared
     private var insertionAfter: Bool? { drag.target == entry && drag.scope == scope ? drag.after : nil }
     private var scope: String { (show.current?.id.uuidString ?? "") + ":" + (playlist?.uuidString ?? "all") }
@@ -1567,7 +1621,10 @@ private struct PlaylistRegionDrag: ViewModifier {
             // A native source follows the row after LazyVStack reorders it and
             // reports cancellation, without replacing row identities or data.
             content.background(SetlistNativeDrag(identity: scope + ":" + entry.uuidString,
-                                                 name: name, state: drag, payload: dragPayload))
+                                                 name: name, state: drag, payload: dragPayload, released: {
+                let flags = NSApp.currentEvent?.modifierFlags ?? []
+                if flags.intersection([.command, .control, .shift]).isEmpty, selection.count > 1, selection.contains(entry) { released() }
+            }))
             #else
             content.onDrag { NSItemProvider(object: dragPayload() as NSString) }
             #endif
@@ -1580,9 +1637,10 @@ private struct SetlistNativeDrag: NSViewRepresentable {
     let name: String
     let state: SetlistReorderState
     let payload: () -> String
+    let released: () -> Void
     func makeNSView(context: Context) -> SetlistNativeDragView { SetlistNativeDragView() }
     func updateNSView(_ view: SetlistNativeDragView, context: Context) {
-        view.identity = identity; view.name = name; view.state = state; view.payload = payload
+        view.identity = identity; view.name = name; view.state = state; view.payload = payload; view.released = released
     }
 }
 private final class SetlistNativeDragView: NSView {
@@ -1590,16 +1648,18 @@ private final class SetlistNativeDragView: NSView {
     var name = ""
     weak var state: SetlistReorderState?
     var payload: (() -> String)?
+    var released: (() -> Void)?
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { SetlistNativeDragRouter.shared.add(self) }
     }
 }
-private final class SetlistNativeDragSource: NSObject, NSDraggingSource {
+@MainActor private final class SetlistNativeDragSource: NSObject, NSDraggingSource {
+    let edgeScroll = NativeDragEdgeScroll()
     weak var state: SetlistReorderState?
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .move }
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { state?.finish() }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { edgeScroll.stop(); state?.finish() }
 }
 @MainActor private final class SetlistNativeDragRouter {
     static let shared = SetlistNativeDragRouter()
@@ -1617,7 +1677,15 @@ private final class SetlistNativeDragSource: NSObject, NSDraggingSource {
         }
     }
     private func handle(_ event: NSEvent) -> Bool {
-        if event.type == .leftMouseUp { pressedRow = nil; start = nil; return false }
+        if event.type == .leftMouseUp {
+            let row = pressedRow, origin = start, identity = pressedIdentity
+            reset()
+            if let row, let origin, row.window === event.window, row.identity == identity,
+               hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) < 4 {
+                row.released?()
+            }
+            return false
+        }
         if event.type == .leftMouseDown {
             pressedRow = nil; start = nil
             guard let window = event.window, window.attachedSheet == nil,
@@ -1636,6 +1704,7 @@ private final class SetlistNativeDragSource: NSObject, NSDraggingSource {
         pressedRow = nil; self.start = nil
         let text = payload()
         let source = SetlistNativeDragSource(); source.state = state; state.source = source
+        source.edgeScroll.begin(from: row)
         let item = NSDraggingItem(pasteboardWriter: text as NSString)
         let size = NSSize(width: max(80, min(300, row.bounds.width)), height: 34)
         let title = NSAttributedString(string: row.name, attributes: [.font: NSFont.jarasSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor])

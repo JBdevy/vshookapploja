@@ -279,6 +279,11 @@ enum AppStartupPresentation {
             #endif
             audio.onError = { [weak show] error in show?.message = error.localizedDescription }
             #if os(macOS)
+            show.validateAudioOutput = { try AudioDeviceSettings.shared.requireSelectedOutput() }
+            audio.onOutputDisconnected = { [weak show] in
+                guard let show, show.isPlaying else { return }
+                show.audioOutputDisconnected("Audio device disconnected. Playback stopped.")
+            }
             do { try audio.startDeviceSession() } catch { audio.onError(error) }
             #else
             AudioDeviceSettings.shared.mobileSessionEvent = { [weak self] event in self?.handleMobileAudioEvent(event) }
@@ -516,6 +521,19 @@ enum AppStartupPresentation {
         }
     }
     private func configure(_ container: AppContainer) {
+        container.documents.additionalProtectedMediaURLs = { [weak self, weak container] in
+            guard let self else { return [] }
+            var protected = Set<URL>()
+            for project in self.projects where project !== container {
+                protected.formUnion(project.projectAudio.activeMediaURLs)
+                if let directory = project.documents.currentURL?.deletingLastPathComponent() {
+                    protected.formUnion(project.show.snapshot.project.mediaPaths.map {
+                        directory.appendingPathComponent($0).standardizedFileURL.resolvingSymlinksInPath()
+                    })
+                }
+            }
+            return protected
+        }
         container.documents.activateExistingProjectTab = { [weak self, weak container] url in
             guard let self, let container else { return false }
             let path = url.standardizedFileURL.resolvingSymlinksInPath()
@@ -563,8 +581,8 @@ enum AppStartupPresentation {
         ControlMappings.shared.bind(next.show)
         VideoPlayback.shared.update(next.show.snapshot)
         next.documents.recent = (UserDefaults.standard.stringArray(forKey: "jaras.recentProjects") ?? []).map { URL(fileURLWithPath: $0) }
-        AudioDeviceSettings.shared.canChangeConfiguration = { [weak self] in
-            self?.anyPlaying != true && !TrackRecording.shared.recording && !TrackRecording.shared.busy
+        AudioDeviceSettings.shared.canChangeConfiguration = {
+            !TrackRecording.shared.recording && !TrackRecording.shared.busy
         }
     }
     func open(_ url: URL) {
@@ -656,6 +674,7 @@ enum AppStartupPresentation {
         return true
     }
     func close(_ index: Int) {
+        guard !ProjectSyncControl.following else { return }
         guard !closingTab, projects.indices.contains(index), let current = active,
               !current.documents.busy, !current.documents.importingAudio,
               !current.projectRecorder.recording, !current.projectRecorder.busy else { return }

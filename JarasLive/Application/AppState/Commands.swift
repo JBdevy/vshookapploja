@@ -1,6 +1,11 @@
 import Foundation
 public enum ShowCommand: String, Sendable { case toggleMultiLoopBypass, queueSection, cancelSection, clipFadeIn, clipFadeOut, loopStart, loopEnd, escape, phase, masterMono, ignoreNext, tempo, beatsPerBar, beatUnit, clipChannelMode, clipNormalization, clipPitch, clipGain, clipPhase, clipPan, clipMute, selectRegion, queueRegion, play, pause, stop, next, previous, queue, select, toggleLoop, seek, editSeek, subPlay, subStop, subSeek, stopAll, volume, pan, mute, solo, clipFadeInCurve, clipFadeInSCurve, clipFadeOutCurve, clipFadeOutSCurve }
+@MainActor public enum ProjectSyncControl { public static var following = false }
 @MainActor public protocol CommandExecutor {
+    func setProjectSyncID(_ id: UUID)
+    func executeAutomation(_ command: ShowCommand, target: UUID?, value: Double) throws
+    func projectSyncFrame() throws -> Data
+    func applyProjectSync(_ data: Data, elapsed: Double, first: Bool) throws -> PlaybackSnapshot
     func execute(_ command: ShowCommand, target: UUID?, value: Double) throws
     func configureRegionSetlist(_ state: RegionSetlist) throws
     func setTrackRouting(_ routes: [UUID: TrackRouting]) throws
@@ -27,6 +32,7 @@ public enum ShowCommand: String, Sendable { case toggleMultiLoopBypass, queueSec
     func addRecordedClip(_ clip: AudioClip, track: UUID) throws
     func editMasterColor(_ color: UInt32) throws
     func editTrack(_ id: UUID, name: String, color: UInt32) throws
+    func setRegionInit(_ id: UUID, count: Int, bars: Bool) throws
     func setRegionPitch(_ id: UUID, semitones: Int, tracks: [UUID], groups: [UUID]) throws
     func editRegion(_ id: UUID, name: String, color: UInt32, uppercaseName: Bool) throws
     func moveClip(_ id: UUID, start: Double, track: UUID?) throws
@@ -57,6 +63,10 @@ public enum ShowCommand: String, Sendable { case toggleMultiLoopBypass, queueSec
 }
 
 public extension CommandExecutor {
+    func setProjectSyncID(_ id: UUID) {}
+    func executeAutomation(_ command: ShowCommand, target: UUID?, value: Double) throws { try execute(command, target: target, value: value) }
+    func projectSyncFrame() throws -> Data { throw BackendFailure.notConfigured }
+    func applyProjectSync(_ data: Data, elapsed: Double, first: Bool) throws -> PlaybackSnapshot { throw BackendFailure.notConfigured }
     func replaceAudioClip(_ clip: AudioClip, track: UUID) throws { throw BackendFailure.notConfigured }
     func retimeTempoMarkers(_ markers: [TimelineMarker]) throws { for marker in markers { try setMarker(marker) } }
     func setTempoMarkers(_ markers: [TimelineMarker]) throws { for marker in markers { try setMarker(marker) } }
@@ -91,6 +101,7 @@ public extension CommandExecutor {
     func configureRegionSetlist(_ state: RegionSetlist) throws { throw BackendFailure.notConfigured }
     func resizeRegion(_ id: UUID, start: Double, end: Double) throws { throw BackendFailure.notConfigured }
     func moveRegion(_ id: UUID, start: Double) throws { throw BackendFailure.notConfigured }
+    func setRegionInit(_ id: UUID, count: Int, bars: Bool) throws { throw BackendFailure.notConfigured }
     func setRegionPitch(_ id: UUID, semitones: Int, tracks: [UUID], groups: [UUID]) throws { throw BackendFailure.notConfigured }
     func editRegion(_ id: UUID, name: String, color: UInt32, uppercaseName: Bool) throws { throw BackendFailure.notConfigured }
     func moveClip(_ id: UUID, start: Double, track: UUID?) throws { throw BackendFailure.notConfigured }

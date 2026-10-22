@@ -1,9 +1,14 @@
 #import <Foundation/Foundation.h>
 NS_ASSUME_NONNULL_BEGIN
 @interface JarasCoreBridge : NSObject
++ (void)setProjectSyncFollowing:(BOOL)following;
+- (void)setProjectSyncID:(NSString *)identifier;
+- (nullable NSData *)projectSyncFrameWithError:(NSError **)error NS_SWIFT_NAME(projectSyncFrame());
+- (nullable NSData *)applyProjectSyncData:(NSData *)data elapsed:(double)elapsed first:(BOOL)first error:(NSError **)error NS_SWIFT_NAME(applyProjectSync(_:elapsed:first:));
 - (BOOL)applyProjectEditData:(NSData *)data error:(NSError **)error;
 - (BOOL)applyProjectMetadataEditData:(NSData *)data preservingWaveforms:(NSArray<NSString *> *)identifiers error:(NSError **)error NS_SWIFT_NAME(applyProjectMetadataEdit(_:preservingWaveforms:));
 - (BOOL)loadProjectData:(NSData *)data error:(NSError **)error NS_SWIFT_NAME(load(projectData:));
+- (BOOL)executeAutomation:(NSString *)command target:(nullable NSString *)target value:(double)value error:(NSError **)error NS_SWIFT_NAME(executeAutomation(command:target:value:));
 - (BOOL)executeCommand:(NSString *)command target:(nullable NSString *)target value:(double)value error:(NSError **)error NS_SWIFT_NAME(execute(command:target:value:));
 - (nullable NSData *)snapshotWithError:(NSError **)error NS_SWIFT_NAME(snapshot());
 - (nullable NSData *)metadataSnapshotWithError:(NSError **)error NS_SWIFT_NAME(metadataSnapshot());
@@ -28,6 +33,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)addRecordedClip:(NSData *)data track:(NSString *)track error:(NSError **)error;
 - (BOOL)editMasterColor:(unsigned int)color error:(NSError **)error;
 - (BOOL)editTrack:(NSString *)identifier name:(NSString *)name color:(unsigned int)color error:(NSError **)error;
+- (BOOL)setRegionInit:(NSString *)identifier count:(int)count bars:(BOOL)bars error:(NSError **)error;
 - (BOOL)setRegionPitch:(NSString *)identifier semitones:(int)semitones tracks:(NSArray<NSString *> *)tracks groups:(NSArray<NSString *> *)groups error:(NSError **)error;
 - (BOOL)editRegion:(NSString *)identifier name:(NSString *)name color:(unsigned int)color uppercaseName:(BOOL)uppercaseName error:(NSError **)error;
 - (BOOL)moveClip:(NSString *)clipId start:(double)start track:(NSString *)trackId error:(NSError **)error;

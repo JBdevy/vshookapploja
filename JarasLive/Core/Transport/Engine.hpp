@@ -1,11 +1,22 @@
 #pragma once
 #include "../Project/Models.hpp"
+#include "../ProjectSync/ProjectSync.hpp"
 namespace jaras {
 enum class CommandKind { toggleMultiLoopBypass, queueSection, cancelSection, clipFadeIn, clipFadeOut, loopStart, loopEnd, escape, phase, masterMono, ignoreNext, tempo, beatsPerBar, beatUnit, play, stop, next, previous, queue, select, toggleLoop, seek, editSeek, subPlay, subStop, subSeek, stopAll, volume, pan, mute, solo, selectRegion, queueRegion, pause, clipMute, clipGain, clipPhase, clipPan, clipChannelMode, clipNormalization, clipPitch, clipFadeInCurve, clipFadeInSCurve, clipFadeOutCurve, clipFadeOutSCurve };
 struct Command { CommandKind kind = CommandKind::stop; ID target; double value = 0; };
 class Engine {
 public:
     void loadProject(Project project);
+    void setProjectSyncID(ID id) { if (!project_.projectSyncID) project_.projectSyncID = std::move(id); }
+    projectSync::Frame projectSyncFrame() const {
+        projectSync::Frame frame{project_.projectSyncID.value_or(""), transport_, project_.regionSetlist, syncRevision_,
+            resumeSub_,manualSubCursor_,autoRegionQueue_,automaticSubplayActive_,playStart_,subPlayStart_,automaticSubplayQueue_};
+        frame.mixer={project_.masterVolume,project_.masterPan,project_.masterMute,project_.masterSolo,{}};
+        for(const auto &song:project_.songs) for(const auto &track:song.tracks)
+            frame.mixer.tracks.push_back({track.id,track.volume,track.pan,track.mute,track.solo});
+        return frame;
+    }
+    bool applyProjectSync(projectSync::Frame frame, double elapsed, bool first, bool *mixerChanged=nullptr);
     void applyProjectEdit(Project project);
     const Project& project() const noexcept { return project_; }
     const TransportState& transport() const noexcept { return transport_; }
@@ -40,6 +51,7 @@ public:
     void setMarker(ID id, std::string name, double position, unsigned color, std::optional<double> bpm = {}, std::optional<int> beats = {}, std::optional<int> unit = {}, std::optional<std::string> timebase = {}, std::optional<bool> section = {}, std::optional<bool> loopSection = {});
     void setProjectTiming(double bpm, int beats, int unit, std::optional<ProjectTimeSettings> settings);
     void deleteManualMarker(const ID& id);
+    void setRegionInit(const ID& id, int count, bool bars);
     void setRegionPitch(const ID& id, int semitones, std::vector<ID> tracks, std::vector<ID> groups);
     void editRegion(const ID& id, std::string name, unsigned color, bool uppercaseName = true);
     void moveClip(const ID& clipId, double start, const ID& destination = {});
@@ -58,10 +70,12 @@ private:
     void resetMultiLoop();
     void refreshMultiLoop();
     bool advanceMultiLoop(double elapsed);
+    std::uint64_t syncRevision_ = 0, receivedSyncRevision_ = 0;
     Project project_;
     TransportState transport_;
     bool finishCurrent_ = false;
     bool resumeSub_ = false;
+    bool manualSubCursor_ = false;
     std::optional<double> playStart_, subPlayStart_;
     std::vector<ID> order() const;
     void select(const ID& id);

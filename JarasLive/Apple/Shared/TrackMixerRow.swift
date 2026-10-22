@@ -22,6 +22,7 @@ private struct TrackFXButton: View {
     @Environment(\.openFX) private var openFX
     var body: some View {
         Button("FX") { openFX(track, opensChain ? "Chain" : settings.effectKeys.first ?? "Chain") }
+            .jarasHelp("Track effects")
             .foregroundStyle(settings.inserted.isEmpty ? JarasTheme.text : settings.allBypassed ? Color.red : JarasTheme.green)
             #if os(macOS)
             .overlay {
@@ -147,21 +148,22 @@ struct TrackMixerHeightGeometry {
                        lowerTitle: Bool, controlsWidth: CGFloat, folder: Bool = false) -> [CGRect] {
         let p = progress(height)
         func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * p }
-        let bodyX = (max(meterWidth, standard ? 18 : 0) + 4) * p
-        let meterTop: CGFloat = 4
+        let audioWidth = mix(min(10, meterWidth), meterWidth)
+        let bodyX = mix(audioWidth + 4, max(meterWidth, standard ? 18 : 0) + 4)
+        let meterTop: CGFloat = mix(2, 4)
         let bodyWidth = max(0, width - bodyX - 4)
         let centeredY = max(0, (height - 21) / 2)
         // The group action has its own space immediately before Patch.
         // Anchor it to the control row so widening never separates the two.
         let controlsX = max(0, width - controlsWidth - 4)
-        let titleX = mix(4, bodyX)
+        let titleX = bodyX
         let titleY = lowerTitle ? Self.titleY(height) : mix(centeredY, 3)
         let controlsY = mix(centeredY, 3), controlsHeight = mix(21, 24)
         let clear = lowerTitle ? min(1, max(0, (titleY - controlsY - controlsHeight) / 8)) : 0
         let thinWidth = max(0, width - controlsWidth - 8 - titleX)
         let titleWidth = thinWidth + (max(0, width - titleX - 4) - thinWidth) * clear
         return [
-            CGRect(x: 0, y: 4, width: meterWidth * p, height: max(0, height - 8)),
+            CGRect(x: 0, y: meterTop, width: audioWidth, height: max(0, height - meterTop * 2)),
             CGRect(x: 14 * p, y: meterTop, width: standard ? 4 * p : 0, height: max(0, height - meterTop - 4)),
             CGRect(x: titleX, y: titleY, width: titleWidth, height: titleHeight(height)),
             CGRect(x: controlsX, y: controlsY, width: controlsWidth, height: controlsHeight),
@@ -350,22 +352,19 @@ private struct NativeTrackMixerControls<Meter: View, Activity: View, Controls: V
             controlSize: controlSize, dynamicTypeSize: dynamicTypeSize))
     }
     var body: some View {
-        // Create this above GeometryReader: resizing evaluates only the reader,
-        // while model/environment changes create fresh content for the same hosts.
+        // Geometry changes only propose native frames; model/environment
+        // changes create fresh content for the same retained hosts.
         // Row actions are supplied by the current content closures, including
         // the grid's stable FX/text relays. Only geometry reuses this snapshot;
         // model/action or supported environment changes replace its content.
         let snapshot = TrackMixerNativeContent(meter: hosted(meter()),
             activity: hosted(activity()), controls: hosted(controls()))
-        return GeometryReader { geometry in
-            NativeTrackMixerControlsBridge(track: track, size: geometry.size, meterWidth: meterWidth, standard: standard, snapshot: snapshot)
-                .frame(width: geometry.size.width, height: geometry.size.height)
-        }
+        return NativeTrackMixerControlsBridge(track: track, meterWidth: meterWidth, standard: standard, snapshot: snapshot)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 private struct NativeTrackMixerControlsBridge: NSViewRepresentable {
     let track: UUID
-    let size: CGSize
     let meterWidth: CGFloat
     let standard: Bool
     let snapshot: TrackMixerNativeContent
@@ -379,9 +378,16 @@ private struct NativeTrackMixerControlsBridge: NSViewRepresentable {
             view.snapshot = snapshot
             view.meter.rootView = snapshot.meter; view.activity.rootView = snapshot.activity; view.controls.rootView = snapshot.controls
         }
-        view.logicalSize = size
-        if view.frame.size != size { view.setFrameSize(size) }
         view.place()
+    }
+    @available(macOS 13, *)
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TrackMixerNativeControlView, context: Context) -> CGSize? {
+        // Adopt this layout pass directly. A GeometryReader plus the previous
+        // native fittingSize feeds the old height back into the next row and
+        // leaves its controls centered/clipped inside the new frame.
+        let size = proposal.replacingUnspecifiedDimensions(by: CGSize(width: 248, height: 64))
+        nsView.logicalSize = size
+        return size
     }
 }
 private final class TrackMixerControlHost: NSHostingView<AnyView> {
@@ -453,7 +459,9 @@ private final class TrackMixerNativeControlView: NSView, NativeTimelineControlIn
     let controls = TrackMixerControlHost(rootView: AnyView(Color.clear))
     var meterWidth: CGFloat = 40
     var standard = true
-    var logicalSize: CGSize?
+    var logicalSize: CGSize? {
+        didSet { if oldValue != logicalSize { needsLayout = true } }
+    }
     var snapshot: TrackMixerNativeContent?
     var track: UUID?
     private weak var visibilityClip: NSClipView?
@@ -482,9 +490,9 @@ private final class TrackMixerNativeControlView: NSView, NativeTimelineControlIn
     }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true; autoresizesSubviews = false
+        wantsLayer = true; layer?.masksToBounds = true; autoresizesSubviews = false
         for host in [meter, activity, controls] {
-            host.wantsLayer = true
+            host.wantsLayer = true; host.layer?.masksToBounds = true
             if #available(macOS 13, *) { host.sizingOptions = [] }
             if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
             addSubview(host)
@@ -577,7 +585,10 @@ private final class TrackMixerNativeControlView: NSView, NativeTimelineControlIn
     override func setFrameSize(_ size: NSSize) { super.setFrameSize(size); place() }
     override func setFrameOrigin(_ origin: NSPoint) { super.setFrameOrigin(origin); refreshViewportVisibility() }
     override func layout() { super.layout(); place() }
+    private var placing = false
     func place() {
+        guard !placing else { return }; placing = true
+        defer { placing = false }
         // AppKit pixel rounding can turn 63.9 into 64; use the committed SwiftUI
         // size for the mode boundary, and actual bounds for independent native resizes.
         let height = logicalSize.flatMap { abs($0.height - bounds.height) <= 1 ? $0.height : nil } ?? bounds.height
@@ -587,7 +598,15 @@ private final class TrackMixerNativeControlView: NSView, NativeTimelineControlIn
         defer { CATransaction.commit() }
         func update(_ host: NSView, _ frame: CGRect) {
             host.isHidden = frame.width <= 0 || frame.height <= 0
-            if host.frame != frame { host.frame = frame }
+            if host.frame != frame {
+                let resized = host.frame.size != frame.size
+                host.frame = frame
+                // Commit all row frames before AppKit lays out their controls.
+                // Forcing a nested SwiftUI layout here repeats window-wide work
+                // for every row at the compact boundary, including detached rows.
+                // Moving a compact strip alone does not change its own layout.
+                if resized { host.needsLayout = true; host.needsDisplay = true }
+            }
         }
         update(meter, frames[0]); update(activity, frames[1])
         update(controls, CGRect(x: 0, y: expanded ? 0 : (height - 24) / 2, width: bounds.width, height: expanded ? 64 : 24))
@@ -626,7 +645,10 @@ struct TrackMixerRow: View, Equatable {
     }
     static func == (lhs: Self, rhs: Self) -> Bool {
         #if os(macOS)
-        let sameHeightMode = true // GeometryReader handles continuous height without rebuilding the row body.
+        // Native/legacy layout already hides and repositions the retained
+        // controls from its proposed height. These iPad-only content inputs
+        // must not rebuild every hosted root when crossing 64 or 56 points.
+        let sameHeightMode = true
         #else
         let sameHeightMode = lhs.compactHeight == rhs.compactHeight && lhs.minimalHeight == rhs.minimalHeight
         #endif
@@ -1102,13 +1124,13 @@ struct MasterStrip: View {
                     Button("S") { show.send(.solo) }.frame(width: 26, height: 24).modifier(MappingRightClick(track: nil, command: "solo")).buttonStyle(CompactTrackButtonStyle(activeColor: show.snapshot.project.masterSolo == true ? JarasTheme.yellow : nil)).jarasHelp("Solo")
                 }.font(.jarasSystem(size: 10, weight: .semibold)).buttonStyle(.bordered).controlSize(.small).frame(height: 24)
                     Text("Master").font(.jarasSystem(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(hex: JarasTheme.masterNameHex(show.snapshot.project.masterColor ?? 0xffdc52)))
+                        .foregroundStyle(Color(hex: JarasTheme.masterNameHex(show.snapshot.project.masterColor ?? 0x414141)))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 TrackVolumeFader(show: show, track: nil, volume: show.snapshot.project.masterVolume ?? 1, phaseInverted: show.snapshot.project.masterPhaseInverted == true, compact: true)
                     .frame(height: 20)
             }.padding(.vertical, 4)
         }.padding(.horizontal, 6).frame(minWidth: 230, maxWidth: .infinity).frame(height: 70)
-            .background(Color(hex: show.snapshot.project.masterColor ?? 0xffdc52).opacity(0.5)).cornerRadius(6)
+            .background(Color(hex: show.snapshot.project.masterColor ?? 0x414141).opacity(0.5)).cornerRadius(6)
             .contextMenu {
                 MasterTrackContextMenu(show: show, patch: { patchPresented = true },
                     fx: { fxPresented = true }, edit: { colorPresented = true })
@@ -1120,7 +1142,7 @@ struct MasterStrip: View {
                 FXInsertEditor(show: show, track: nil, targets: [nil]) { fxPresented = false }
             }
             .sheet(isPresented: $colorPresented) {
-                NameColorEditor(title: "Editar pista", initialName: "Master", initialColor: show.snapshot.project.masterColor ?? 0xffdc52,
+                NameColorEditor(title: "Editar pista", initialName: "Master", initialColor: show.snapshot.project.masterColor ?? 0x414141,
                     save: { _, color in show.editMasterColor(color) }, nameEditable: false, showsName: false)
             }
     }
@@ -1206,7 +1228,7 @@ struct PatchEditor: View {
                             Text("Output").font(.jarasSubheadline.bold())
                             Spacer()
                             Button { editOutputs { $0.append(.none) } } label: { Image(systemName: "plus") }
-                                .help("Add output").accessibilityLabel("Add output")
+                                .accessibilityLabel("Add output")
                         }
                         ForEach(Array(outputs.enumerated()), id: \.offset) { entry in
                             let slot = entry.offset
@@ -1216,7 +1238,7 @@ struct PatchEditor: View {
                                     ForEach(outputChoices, id: \.self) { Text($0.title).tag($0) }
                                 }.labelsHidden()
                                 Button { editOutputs { if $0.indices.contains(slot) { $0.remove(at: slot) } } } label: { Image(systemName: "minus.circle") }
-                                    .help("Remove output").accessibilityLabel("Remove output")
+                                    .accessibilityLabel("Remove output")
                             }
                         }
                         if settings?.kind == .standard {
@@ -1226,7 +1248,7 @@ struct PatchEditor: View {
                                     Text(receive ? "Receive" : "Transmitter").font(.jarasSubheadline.bold())
                                     Spacer()
                                     Button { show.addTrackRoute(Set(targets.compactMap { $0 }), receive: receive) } label: { Image(systemName: "plus") }
-                                        .help(receive ? "Add receive" : "Add transmitter").accessibilityLabel(receive ? "Add receive" : "Add transmitter")
+                                        .accessibilityLabel(receive ? "Add receive" : "Add transmitter")
                                 }
                                 ForEach(routes(receive).indices, id: \.self) { slot in
                                     HStack {
@@ -1239,7 +1261,7 @@ struct PatchEditor: View {
                                             }
                                         }.labelsHidden()
                                         Button { show.removeTrackRoute(Set(targets.compactMap { $0 }), receive: receive, slot: slot) } label: { Image(systemName: "minus.circle") }
-                                            .help(receive ? "Remove receive" : "Remove transmitter").accessibilityLabel(receive ? "Remove receive" : "Remove transmitter")
+                                            .accessibilityLabel(receive ? "Remove receive" : "Remove transmitter")
                                     }
                                 }
                             }
@@ -1628,7 +1650,7 @@ private final class DirectVolumeSliderView: NSView {
         doubleValue = gain <= 0 ? -60 : min(12, max(-59.9, 20 * log10(gain)))
     }
     var groupValues: (() -> [UUID: Double])?
-    var mini = false { didSet { updatePanTooltip() } }
+    var mini = false { didSet { updatePanAccessibilityHelp() } }
     var vertical = false
     var rotary = false
     private var rotaryOrigin = NSPoint.zero
@@ -1669,11 +1691,11 @@ private final class DirectVolumeSliderView: NSView {
         lastModelValue = value
         doubleValue = value
     }
-    var doubleValue = 0.0 { didSet { needsDisplay = true; updatePanTooltip() } }
-    private func updatePanTooltip() {
-        guard mini else { toolTip = nil; return }
+    var doubleValue = 0.0 { didSet { needsDisplay = true; updatePanAccessibilityHelp() } }
+    private func updatePanAccessibilityHelp() {
+        guard mini else { setAccessibilityHelp(nil); return }
         let percent = Int((min(1, abs(doubleValue)) * 100).rounded())
-        toolTip = "Pan · " + (percent == 0 ? "Center" : "\(percent)% \(doubleValue < 0 ? "L" : "R")")
+        setAccessibilityHelp("Pan · " + (percent == 0 ? "Center" : "\(percent)% \(doubleValue < 0 ? "L" : "R")"))
     }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -1877,7 +1899,7 @@ private final class TrackReorderState: ObservableObject {
     @Published private(set) var joinsGroup = false
     private(set) var hoveredTrack: UUID?
     var indicatorColor: Color { joinsGroup ? JarasTheme.yellow : JarasTheme.green }
-    private(set) var active = false
+    @Published private(set) var active = false
     #if os(macOS)
     var source: TrackDragSource?
     #endif
@@ -1973,8 +1995,21 @@ private struct FooterTrackInsertion: ViewModifier {
             let next = tracks.firstIndex(where: { $0.id == track }).flatMap { index in
                 index + 1 < tracks.count ? tracks[index + 1].id : nil
             }
-            content.onDrop(of: [TrackReorderState.type], delegate: TrackInsertionDrop(show: show,
-                track: track, nextTrack: next, height: FooterMixerMetrics.width, state: state, horizontal: true))
+            content
+                #if os(macOS)
+                // Drop geometry depends on window coordinates. Register it only
+                // during a track drag, not on every ordinary horizontal scroll.
+                // Keep the controls' identity stable when the receiver appears.
+                .background {
+                    if state.active {
+                        Color.clear.onDrop(of: [TrackReorderState.type], delegate: TrackInsertionDrop(show: show,
+                            track: track, nextTrack: next, height: FooterMixerMetrics.width, state: state, horizontal: true))
+                    }
+                }
+                #else
+                .onDrop(of: [TrackReorderState.type], delegate: TrackInsertionDrop(show: show,
+                    track: track, nextTrack: next, height: FooterMixerMetrics.width, state: state, horizontal: true))
+                #endif
                 .overlay(alignment: state.after ? .trailing : .leading) {
                     if state.target == track {
                         Rectangle().fill(state.indicatorColor).frame(width: 3)
@@ -2153,6 +2188,7 @@ final class TrackControlSelectionExclusionView: NSView, NativeTimelineInputObser
         let state = TrackReorderState.shared
         state.begin(track: row.track)
         let source = TrackDragSource(); source.state = state
+        source.edgeScroll.begin(from: row)
         source.onEnd = { [weak self] in self?.pressedTrack = nil }
         state.source = source
         let item = NSDraggingItem(pasteboardWriter: ("jaras-track:" + row.track.uuidString) as NSString)
@@ -2265,11 +2301,12 @@ private struct TrackDragTitle: NSViewRepresentable {
         view.compact = compact; view.title = title; view.foreground = foreground; view.project = project; view.track = track; view.state = state; view.select = select
     }
 }
-private final class TrackDragSource: NSObject, NSDraggingSource {
+@MainActor private final class TrackDragSource: NSObject, NSDraggingSource {
+    let edgeScroll = NativeDragEdgeScroll()
     weak var state: TrackReorderState?
     var onEnd: (() -> Void)?
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .move }
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { state?.finish(); onEnd?() }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { edgeScroll.stop(); state?.finish(); onEnd?() }
 }
 private final class TrackDragTitleView: NSView {
     var compact = false { didSet { if compact != oldValue { cachedLabel = nil; needsDisplay = true } } }
@@ -2323,6 +2360,7 @@ private final class TrackDragTitleView: NSView {
         self.down = nil
         state.begin(track: track)
         let source = TrackDragSource(); source.state = state; state.source = source
+        source.edgeScroll.begin(from: self)
         let item = NSDraggingItem(pasteboardWriter: ("jaras-track:" + track.uuidString) as NSString)
         let size = NSSize(width: max(1, bounds.width), height: 28)
         // The drag preview has its own native background rather than the
@@ -2629,7 +2667,7 @@ private final class FooterMixerScrollView: NSView {
             let view = FooterMixerHostingView(rootView: content)
             if #available(macOS 13, *) { view.sizingOptions = [] }
             if #available(macOS 13.3, *) { view.safeAreaRegions = [] }
-            view.wantsLayer = true; master = view; addSubview(view, positioned: .below, relativeTo: scroll)
+            view.wantsLayer = true; view.clipsToBounds = true; master = view; addSubview(view, positioned: .below, relativeTo: scroll)
         }
         masterVersion = version
         if masterWidth != width || masterRight != right {
@@ -2644,7 +2682,9 @@ private final class FooterMixerScrollView: NSView {
         let geometryChanged = contentWidth != width || trackStride != stride || trackCount != count
         contentWidth = width; trackStride = stride; trackCount = count; self.versions = versions; self.makeContent = makeContent
         self.retainStrip = retainStrip
-        for index in cachedStripOrder where index >= count { cachedStrips.removeValue(forKey: index) }
+        for index in cachedStripOrder where index >= count {
+            cachedStrips.removeValue(forKey: index)?.view.removeFromSuperview()
+        }
         cachedStripOrder.removeAll { $0 >= count }
         prepare(at: scroll.contentView.bounds.minX, force: true)
         if geometryChanged { needsLayout = true }
@@ -2655,22 +2695,26 @@ private final class FooterMixerScrollView: NSView {
             guard let strip = strips[index] else { continue }
             let ownsFocus = focused.map { $0 === strip || $0.isDescendant(of: strip) } ?? false
             if index < trackCount && (ownsFocus || retainStrip(index)) { continue }
-            strips.removeValue(forKey: index)?.removeFromSuperview()
+            strips.removeValue(forKey: index)
             let version = mountedVersions.removeValue(forKey: index)
             pendingStripLayout.remove(index)
             if index < trackCount {
-                // Keep a bounded, detached reuse cache. No hidden window hosts or
-                // meter drawing remain active while these channels are offscreen.
+                // Keep recently visited channels in their existing hierarchy.
+                // Detaching/re-attaching NSHostingView invalidates its SwiftUI
+                // environment and triggers window-wide layout on every reversal.
+                // These frames remain outside the clip; meters already skip
+                // drawing when visibleRect is empty. Bound retention for large projects.
+                strip.isHidden = true
                 cachedStrips[index] = (strip, version)
                 cachedStripOrder.removeAll { $0 == index }; cachedStripOrder.append(index)
-            }
+            } else { strip.removeFromSuperview() }
         }
-        let cacheLimit = min(24, max(4, preparedRange.count * 2))
+        let cacheLimit = min(64, max(24, preparedRange.count * 3))
         while cachedStripOrder.count > cacheLimit {
-            // A reversal detaches the old viewport before mounting the new
+            // A reversal caches the old viewport before mounting the new
             // one. Never evict a cached destination strip in that interval.
             guard let victim = cachedStripOrder.firstIndex(where: { !preparedRange.contains($0) }) else { break }
-            cachedStrips.removeValue(forKey: cachedStripOrder.remove(at: victim))
+            cachedStrips.removeValue(forKey: cachedStripOrder.remove(at: victim))?.view.removeFromSuperview()
         }
     }
     private func prepare(at x: CGFloat, force: Bool = false) {
@@ -2714,10 +2758,14 @@ private final class FooterMixerScrollView: NSView {
                 if version == nil || cached.version != version {
                     strip.rootView = makeContent(index..<(index + 1))
                 }
-                strips[index] = strip; host.addSubview(strip); changed = true
+                strips[index] = strip
+                if strip.superview !== host { host.addSubview(strip) }
+                strip.isHidden = false
+                changed = true
             } else {
                 strip = FooterMixerHostingView(rootView: makeContent(index..<(index + 1)))
                 if #available(macOS 13, *) { strip.sizingOptions = [] }; strip.wantsLayer = true
+                strip.clipsToBounds = true
                 // The scroll container supplies an explicit channel rectangle;
                 // window safe-area changes must not remeasure every channel.
                 if #available(macOS 13.3, *) { strip.safeAreaRegions = [] }
@@ -2771,7 +2819,8 @@ private final class FooterMixerScrollView: NSView {
         if scroll.frame != scrollFrame { scroll.frame = scrollFrame }
         let hostFrame = NSRect(x: 0, y: 0, width: max(scroll.contentSize.width, contentWidth), height: scroll.contentSize.height)
         if host.frame != hostFrame { host.frame = hostFrame }
-        for strip in strips.values where strip.frame.height != scroll.contentSize.height {
+        for strip in Array(strips.values) + cachedStrips.values.map(\.view)
+            where strip.frame.height != scroll.contentSize.height {
             strip.frame.size.height = scroll.contentSize.height
         }
         move(to: scroll.contentView.bounds.minX)
@@ -2974,7 +3023,7 @@ private struct FooterMixerStrip: View, Equatable {
     @Environment(\.openFX) private var openFX
     private var id: UUID? { track?.id }
     private var settings: NativeFXSettings { track?.fx ?? masterState?.masterFX ?? NativeFXSettings() }
-    private var color: Color { Color(hex: track.map { $0.color ?? JarasTheme.roleHex($0.role) } ?? show.snapshot.project.masterColor ?? 0xffdc52) }
+    private var color: Color { Color(hex: track.map { $0.color ?? JarasTheme.roleHex($0.role) } ?? show.snapshot.project.masterColor ?? 0x414141) }
     private var hasStandardControls: Bool { track == nil || track?.kind == .standard }
     private var buttons: some View {
         VStack(spacing: 5) {
@@ -3106,7 +3155,7 @@ private struct FooterMixerStrip: View, Equatable {
                         }
                     #endif
                 }.frame(maxWidth: .infinity).frame(height: 22).padding(.top, 4)
-                    .foregroundStyle(.white).help(Text(verbatim: track?.name ?? "Master"))
+                    .foregroundStyle(.white).accessibilityHint(Text(verbatim: track?.name ?? "Master"))
             }.padding(4)
         }.frame(width: track == nil ? FooterMixerMetrics.masterWidth : FooterMixerMetrics.width).frame(maxHeight: .infinity)
             .background(color.opacity(selected ? 0.38 : 0.24)).overlay(alignment: .top) { color.frame(height: 3) }
@@ -3167,7 +3216,7 @@ private struct FooterMixerStrip: View, Equatable {
                 FXInsertEditor(show: show, track: id, targets: targets) { fxPresented = false }
             }
             .sheet(isPresented: $colorPresented) {
-                NameColorEditor(title: "Editar pista", initialName: "Master", initialColor: show.snapshot.project.masterColor ?? 0xffdc52,
+                NameColorEditor(title: "Editar pista", initialName: "Master", initialColor: show.snapshot.project.masterColor ?? 0x414141,
                     save: { _, color in show.editMasterColor(color) }, nameEditable: false, showsName: false)
             }
     }
@@ -3253,8 +3302,10 @@ private struct FooterEffectSlot: View {
             }
         }.font(.jarasSystem(size: 10, weight: .medium)).padding(.horizontal, 5).frame(height: 19)
             .background(Color.black.opacity(0.28))
+            #if !os(macOS)
             .overlay { if targeted || hovered { (targeted ? JarasTheme.green.opacity(0.3) : Color.white.opacity(0.09)).allowsHitTesting(false) } }
             .onHover { hovered = $0 }
+            #endif
             .contentShape(Rectangle())
             .jarasHelp(effect == nil ? "Click to open FX Manager" : "Click: open this plugin in FX Manager. Option/Alt + click: remove plugin. Shift + click: toggle bypass (red slot).")
             #if os(macOS)
@@ -3379,8 +3430,10 @@ private final class FooterEffectContextView: RightClickTargetView, NSDraggingSou
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area=NSTrackingArea(rect: bounds,options: [.mouseEnteredAndExited,.activeInKeyWindow,.inVisibleRect],owner: self)
+        // AppKit maintains an inVisibleRect area as its ancestors scroll.
+        // Replacing it on every clip change rebuilds tracking across all FX slots.
+        guard tracking == nil else { return }
+        let area=NSTrackingArea(rect: .zero,options: [.mouseEnteredAndExited,.activeInKeyWindow,.inVisibleRect],owner: self)
         addTrackingArea(area);tracking=area
     }
     override func mouseEntered(with event: NSEvent) { hover=true;needsDisplay=true }
@@ -3476,25 +3529,35 @@ private struct PhaseInvertGlyph: Shape {
 @MainActor final class DetachedMixerWindow: NSObject, ObservableObject, NSWindowDelegate {
     @Published private(set) var isDetached = false
     @Published private(set) var isVisible = false
+    private func remember(detached: Bool, visible: Bool) {
+        UserDefaults.standard.set(detached, forKey: "jaras.layout.mixer.detached")
+        UserDefaults.standard.set(visible, forKey: "jaras.layout.mixer.visible")
+    }
     private(set) var window: NSWindow?
     func open(show: ShowController, openFX: @escaping (UUID?, String) -> Void, editTrack: @escaping (TrackDetailsEditRequest) -> Void) {
-        if let window { window.makeKeyAndOrderFront(nil); isVisible = true; return }
+        remember(detached: true, visible: true)
+        if let window { if window.isMiniaturized { window.deminiaturize(nil) }; window.makeKeyAndOrderFront(nil); isVisible = true; return }
         let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 370),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        panel.title = "CatLive · Barra Mixer"
+        panel.title = "CatLive · Hoz-Mixer"
         panel.minSize = NSSize(width: 360, height: 240)
         panel.isReleasedWhenClosed = false; panel.delegate = self
         let host = NSHostingView(rootView: DetachedMixerContent(show: show, owner: self, openFX: openFX, editTrack: editTrack).interfaceScaled())
         if #available(macOS 13, *) { host.sizingOptions = [] }
         panel.contentView = host
         InterfaceScaling.shared.register(panel)
+        if !panel.setFrameUsingName("CatLiveDetachedMixer", force: true) { panel.center() }
         panel.setFrameAutosaveName("CatLiveDetachedMixer")
-        if !panel.setFrameUsingName("CatLiveDetachedMixer") { panel.center() }
         window = panel; isDetached = true; isVisible = true
         panel.makeKeyAndOrderFront(nil)
     }
-    func hide() { window?.orderOut(nil); isVisible = false }
-    func close() {
+    private func savePlacement() { window?.saveFrame(usingName: "CatLiveDetachedMixer") }
+    func windowDidMove(_ notification: Notification) { savePlacement() }
+    func windowDidResize(_ notification: Notification) { savePlacement() }
+    func hide() { remember(detached: true, visible: false); savePlacement(); window?.orderOut(nil); isVisible = false }
+    func close(preserveState: Bool = false) {
+        if !preserveState { remember(detached: false, visible: false) }
+        savePlacement()
         window?.delegate = nil; window?.close(); window?.contentView = nil; window = nil
         isVisible = false; isDetached = false
     }
@@ -3630,6 +3693,10 @@ final class EditorSelectionAreaView: NSView {
             }).first { focus.setObject(area, forKey: window) }
 
     }
+    func activeScope(in window: NSWindow?) -> EditorSelectionArea.Scope? {
+        guard let window, let area = focus.object(forKey: window), area.window === window, !area.isHiddenOrHasHiddenAncestor else { return nil }
+        return area.scope
+    }
     func selectAll(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .control, .shift, .option])
         guard event.type == .keyDown, flags == .command || flags == .control,
@@ -3667,7 +3734,7 @@ struct TrackVisibilityEditor: View {
             }
             Picker("Painel", selection: $area) {
                 Text(verbatim: "Track Mixer").tag(TrackVisibilityArea.trackMixer)
-                Text("Barra Mixer").tag(TrackVisibilityArea.barMixer)
+                Text("Hoz-Mixer").tag(TrackVisibilityArea.barMixer)
             }.pickerStyle(.segmented).labelsHidden()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {

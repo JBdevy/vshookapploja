@@ -25,6 +25,17 @@ setbuf(stdout, nil)
     return peak
 }
 @MainActor func run() throws {
+// Captured during the real "Pense em Jesus" failure: the Click and Voz
+// Guia had current sample counters, but the latter retained a host epoch
+// 1.869 seconds behind. A sample-valid timestamp alone is not safe to reuse.
+let clickClock = AVAudioTime(hostTime: 1174177059980, sampleTime: 29201918, atRate: 44100)
+let voiceClock = AVAudioTime(hostTime: 1174132199066, sampleTime: 29201920, atRate: 44100)
+precondition(StemAudioPlayback.requiresSourceClockRenewal(source: voiceClock, reference: clickClock, latency: 0.09396825396825396), "Obsolete source epoch would delay a current stem")
+precondition(!StemAudioPlayback.requiresSourceClockRenewal(source: clickClock, reference: clickClock, latency: 0.09396825396825396), "Healthy source clocks must remain reusable")
+let shortPrefetch = AVAudioTime(hostTime: clickClock.hostTime - AVAudioTime.hostTime(forSeconds: 0.04), sampleTime: 29201918, atRate: 48000)
+precondition(!StemAudioPlayback.requiresSourceClockRenewal(source: shortPrefetch, reference: clickClock, latency: 0.09396825396825396), "Normal converter buffering is not an obsolete epoch")
+precondition(!StemAudioPlayback.requiresSourceClockRenewal(source: AVAudioTime(sampleTime: 0, atRate: 44100), reference: clickClock, latency: 0.09396825396825396), "A cold player has no old host epoch to renew")
+print("STALE_SOURCE_CLOCK_REAL_CAPTURE_REGRESSION_OK")
 let meter = TrackMeterLevel()
 meter.update(peak: 0.01, elapsed: 1.0 / 30)
 precondition(meter.level > 0, "quiet audio must register")
@@ -583,15 +594,15 @@ precondition(renderer.meter(for: hiddenTrack).peakHold.decibels == -24,
              "clearing a hidden track peak also resets its previous maximum")
 var automaticMutes: [UUID] = []
 renderer.onPeakLimit = { automaticMutes.append($0) }
-renderer.observeTrackPeak(id, left: pow(10, 19.99 / 20), right: 0, elapsed: 0.03)
+renderer.observeTrackPeak(id, left: pow(10, 29.99 / 20), right: 0, elapsed: 0.03)
 precondition(automaticMutes.isEmpty)
-renderer.observeTrackPeak(id, left: 0, right: pow(10, 20.0 / 20), elapsed: 0.03)
+renderer.observeTrackPeak(id, left: 0, right: pow(10, 30.0 / 20), elapsed: 0.03)
 precondition(automaticMutes == [id])
 let protectionSilence = try peak(); precondition(protectionSilence < 0.0001)
-renderer.observeTrackPeak(id, left: 11, right: 11, elapsed: 0.03)
+renderer.observeTrackPeak(id, left: 32, right: 32, elapsed: 0.03)
 precondition(automaticMutes == [id], "An already-muted track cannot toggle back on")
 renderer.onPeakLimit = nil; renderer.previewMute(id, muted: false)
-print("TRACK_PEAK_HOLD_MAXIMUM_AND_20_DB_AUTOMUTE_BOTH_CHANNELS_OK")
+print("TRACK_PEAK_HOLD_MAXIMUM_AND_30_DB_AUTOMUTE_BOTH_CHANNELS_OK")
 let missingEngine = AVAudioEngine()
 try missingEngine.enableManualRenderingMode(.offline, format: outputFormat, maximumFrameCount: 512)
 let missingRenderer = StemAudioPlayback(engine: missingEngine, realtime: false)
@@ -1156,7 +1167,15 @@ clipDelay.delayEnabled = true; clipDelay.delayTime = 0.01; clipDelay.delayMix = 
 itemFXAudio.previewClipFX(untreatedClipID, settings: clipDelay)
 itemFXAudio.observeEffect(untreatedClipID, effect: "Delay", active: true)
 _ = try itemFXPeak()
-precondition(itemFXAudio.spectrumFrame(untreatedClipID, effect: "Delay") != nil, "clip delay editor receives its own spectrum frame")
+// The analysis tap is asynchronous; offline rendering may finish before its
+// callback runs on a loaded CI machine. Await delivery, retaining the assertion.
+let clipSpectrumDeadline = ProcessInfo.processInfo.systemUptime + 2
+var clipDelaySpectrum = itemFXAudio.spectrumFrame(untreatedClipID, effect: "Delay")
+while clipDelaySpectrum == nil && ProcessInfo.processInfo.systemUptime < clipSpectrumDeadline {
+    Thread.sleep(forTimeInterval: 0.01)
+    clipDelaySpectrum = itemFXAudio.spectrumFrame(untreatedClipID, effect: "Delay")
+}
+precondition(clipDelaySpectrum != nil, "clip delay editor receives its own spectrum frame")
 itemFXAudio.stop()
 precondition(itemFXEngine.attachedNodes.count == afterDynamicInsert, "Stop retains prepared players and effects for immediate replay")
 try itemFXEngine.start()
@@ -2251,6 +2270,12 @@ for route in [0, 1, 2] {
     state.project.songs[0].tracks[i].clips = [AudioClip(id: UUID(), name: "Recorded", startTime: 0, duration: 5, audioFile: AudioFile(path: "tone.wav"))]
     try liveAudio.update(state, revision: 5)
     let recorded = try livePeaks(); print("MONITOR_RECORDED_PCM", route, recorded); precondition(recorded[first] > 0.001, "Monitor Off never silences recorded clips")
+    let playingMeter = liveAudio.meter(for: inputTrack.id)
+    playingMeter.update(peak: Double(recorded[first]), elapsed: 1.0/30)
+    liveAudio.setInputMonitor(inputTrack.id, source: nil)
+    precondition(playingMeter.level > 0.001, "REC disarm does not clear active playback meters")
+    let afterDisarm = try livePeaks()
+    precondition(afterDisarm[first] > 0.001, "REC disarm retains recorded playback PCM")
     var captured: [UInt8] = []
     liveAudio.armedMIDIRecordingTracks = [inputTrack.id]
     liveAudio.onLiveKeyboardMIDI = { _, status, _, _ in captured.append(status) }
@@ -2259,6 +2284,51 @@ for route in [0, 1, 2] {
     liveAudio.prepareForClosing()
 }
 print("INPUT_MONITOR_MASTER_GROUP_HARDWARE_OFF_RECORDED_AUDIO_AND_MIDI_CAPTURE_OK")
+
+// The last REC disarm must clear moving bars even without a transport tick.
+try audioAutoreleasepool {
+    let engine = AVAudioEngine()
+    try engine.enableManualRenderingMode(.offline, format: outputFormat, maximumFrameCount: 512)
+    let playback = StemAudioPlayback(engine: engine, realtime: true)
+    playback.open(directory: directory)
+    var project = Project.empty(name: "Disarm meter")
+    let track = Track(id: UUID(), name: "Input", role: .other)
+    let other = Track(id: UUID(), name: "Second input", role: .other)
+    project.songs[0].tracks = [track, other]
+    let snapshot = ShowSnapshot(project: project, transport: TransportState(playing: false, songId: project.songs[0].id, position: 0,
+        queue: QueueState(), loop: LoopState(enabled: false), subPlay: SubPlayState(playing: false, position: 0)))
+    let meter = playback.meter(for: track.id), otherMeter = playback.meter(for: other.id)
+    try playback.update(snapshot, revision: 1)
+    func monitor() -> AVAudioSourceNode {
+        AVAudioSourceNode(format: outputFormat) { silent, _, frames, buffers in
+            silent.pointee = false
+            for buffer in UnsafeMutableAudioBufferListPointer(buffers) {
+                buffer.mData!.assumingMemoryBound(to: Float.self).update(repeating: 0.2, count: Int(frames))
+            }
+            return noErr
+        }
+    }
+    playback.setInputMonitor(track.id, source: monitor(), format: outputFormat)
+    // Raw input metering bypasses the idle playback graph. Seed the received
+    // input sample; the regression is losing the final UI reset on detach.
+    meter.update(left: 0.2, right: 0.4, elapsed: 1.0/30)
+    playback.masterMeter.update(peak: 0.2, elapsed: 1.0/30)
+    let peak = meter.peakHold.decibels
+    playback.setInputMonitor(track.id, source: nil)
+    precondition(meter.level == 0 && playback.masterMeter.level == 0,
+        "last disarm clears moving bars immediately instead of freezing the last sample")
+    precondition(meter.peakHold.decibels == peak, "disarm preserves the independent held peak readout")
+    playback.setInputMonitor(track.id, source: monitor(), format: outputFormat)
+    playback.setInputMonitor(other.id, source: monitor(), format: outputFormat)
+    otherMeter.update(left: 0.1, right: 0.2, elapsed: 1.0/30)
+    playback.setInputMonitor(track.id, source: nil)
+    precondition(otherMeter.level > 0.01, "disarming one track preserves another armed input's metering")
+    playback.setInputMonitor(other.id, source: nil)
+    precondition(otherMeter.level == 0 && meter.level == 0)
+    playback.prepareForClosing()
+}
+print("REC_DISARM_IDLE_METER_CLEAR_REARM_OTHER_TRACK_AND_PLAYBACK_OK")
+
 
 // Folder inside folder: every gain stage is audible, and child Solo keeps the
 // complete path alive without admitting siblings outside the selected subtree.

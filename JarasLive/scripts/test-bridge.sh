@@ -50,6 +50,9 @@ project.songs[0].parts[0].uppercaseName = true
 project.songs[0].parts[1].uppercaseName = false
 let list = RegionPlaylist(id: UUID(), name: "Show order", songId: project.songs[0].id, regionIds: [second.id, first.id])
 project.regionSetlist = RegionSetlist(playlists: [list], selectedId: list.id, autoAdvance: false)
+project.regionSetlist?.automaticSubplayNext = true
+project.songs[0].parts[0].subplayInitSeconds = 3
+project.songs[0].parts[1].subplayInitBars = 2
 project.regionSetlist?.liveEnabled = true
 project.regionSetlist?.playedLiveRegionIDs = [first.id]
 let gridID = project.songs[0].id
@@ -70,7 +73,7 @@ for song in project.songs.indices {
 // Persist both attached and intentionally loose material across the bridge.
 for index in project.songs.indices {
     project.songs[index].regionOwnershipInitialized = true
-    project.songs[index].regionOwnershipVersion = 2
+    project.songs[index].regionOwnershipVersion = 3
 }
 project.songs[0].tracks[0].clips[0].regionOwnerID = first.id
 project.songs[0].markers?[0].regionOwnerID = first.id
