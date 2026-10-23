@@ -3517,13 +3517,23 @@ private struct RemoteNativeTimeline: View {
             enabled: TimelineSnapPreference.enabled && !scrolling.modifiers.contains(.shift),
             excludingRegion: id, includeItemEdges: true)
     }
-    private func regionLane(width: CGFloat, song: Song?) -> some View {
-        ZStack(alignment: .topLeading) {
-            (local ? JarasTheme.panel : JarasTheme.display).contentShape(Rectangle()).onTapGesture { if local { pauseFollowing(); selectedRegionID = nil } }
-            if local, let song {
-                let lanes = RegionLanes(parts: song.parts)
-                ForEach(song.parts.filter { $0.parentRegionID == nil && $0.startTime < end && $0.endTime > start }) { part in
-                    let left = max(start, part.startTime), right = min(end, part.endTime)
+    @ViewBuilder private func nativeRegionMenu(_ part: Part, song: Song) -> some View {
+
+                            Button("Edit song") { pauseFollowing(); openRegionActions?(part.id) }
+                            Button("Detect BPM…") { regionCommand?(part.id, "bpm") }
+                            if song.parts.contains(where: { $0.parentRegionID == part.id }) {
+                                Button("Disunify regions") { localShow?.disunifyRegion(part.id) }
+                            } else { Button("Multiloops") { regionCommand?(part.id, "loops") } }
+                            if song.parts.contains(where: { $0.id != part.id && $0.parentRegionID == nil && $0.startTime < part.endTime && $0.endTime > part.startTime }) {
+                                Button("Unify regions") { regionCommand?(part.id, "unify") }
+                            }
+                            Button("Config Init") { regionCommand?(part.id, "init") }
+                            Button("Delete region", role: .destructive) { localShow?.deleteRegion(part.id, playlist: nil) }
+
+    }
+    private func nativeRegionHeader(_ part: Part, song: Song, width: Double, lane: Int) -> some View {
+        let left = max(start, part.startTime), right = min(end, part.endTime)
+        return
                     Text(verbatim: part.displayName).font(.jarasSystem(size: 9, weight: .semibold)).lineLimit(1)
                         .foregroundStyle(remoteColor(state.timelineRegions.first(where: { $0.id == part.id })?.nameColor ?? 0xffffff)).padding(.horizontal, 4)
                         .frame(width: max(0, (right - left) / span * width), height: RemoteNativeGridMetrics.regionHeight(local: local), alignment: .leading)
@@ -3543,19 +3553,17 @@ private struct RemoteNativeTimeline: View {
                             }
                         }))
                         .overlay(Rectangle().stroke(selectedRegionID == part.id ? JarasTheme.green : .clear, lineWidth: 2).allowsHitTesting(false))
-                        .contextMenu {
-                            Button("Edit song") { pauseFollowing(); openRegionActions?(part.id) }
-                            Button("Detect BPM…") { regionCommand?(part.id, "bpm") }
-                            if song.parts.contains(where: { $0.parentRegionID == part.id }) {
-                                Button("Disunify regions") { localShow?.disunifyRegion(part.id) }
-                            } else { Button("Multiloops") { regionCommand?(part.id, "loops") } }
-                            if song.parts.contains(where: { $0.id != part.id && $0.parentRegionID == nil && $0.startTime < part.endTime && $0.endTime > part.startTime }) {
-                                Button("Unify regions") { regionCommand?(part.id, "unify") }
-                            }
-                            Button("Config Init") { regionCommand?(part.id, "init") }
-                            Button("Delete region", role: .destructive) { localShow?.deleteRegion(part.id, playlist: nil) }
-                        }
-                        .offset(x: (left - start) / span * width, y: CGFloat(lanes.lanes[part.id] ?? 0) * RemoteNativeGridMetrics.regionHeight(local: local))
+                        .contextMenu { nativeRegionMenu(part, song: song) }
+                        .offset(x: (left - start) / span * width, y: CGFloat(lane) * RemoteNativeGridMetrics.regionHeight(local: local))
+    }
+    private func regionLane(width: CGFloat, song: Song?) -> some View {
+        ZStack(alignment: .topLeading) {
+            (local ? JarasTheme.panel : JarasTheme.display).contentShape(Rectangle()).onTapGesture { if local { pauseFollowing(); selectedRegionID = nil } }
+            if local, let song {
+                let lanes = RegionLanes(parts: song.parts)
+                ForEach(song.parts.filter { $0.parentRegionID == nil && $0.startTime < end && $0.endTime > start }) { part in
+                    nativeRegionHeader(part, song: song, width: width, lane: lanes.lanes[part.id] ?? 0)
+
                 }
             } else if let region {
                 Text(verbatim: region.name).font(.jarasSystem(size: 10, weight: .semibold)).lineLimit(1)
@@ -3870,6 +3878,21 @@ private struct RemoteTimelineTrackRow: View, Equatable {
             if preview.candidate != original { resizeItem?(id, preview.candidate.startTime, preview.candidate.startTime + preview.candidate.duration) }
         }
     }
+    private func gridItem(_ clip: DAWRemoteState.Clip, width itemWidth: Double, height itemHeight: Double, left: Double, right: Double) -> RemoteNativeGridItem {
+        return
+                RemoteNativeGridItem(clip: clip, width: itemWidth, height: itemHeight, color: track.color, nameColor: track.nameColor ?? 0xffffff,
+                    scrolling: scrolling,
+                    sourceFraction: (left - clip.start) / max(0.001, clip.duration),
+                    visibleFraction: (right - left) / max(0.001, clip.duration),
+                    mute: { control(.clipMute, clip.id, 0) },
+                    setGain: { control(.clipGain, clip.id, $0) }, local: local, trackSilenced: track.silenced == true,
+                    nativeClip: previewTrack?.clips.first(where: { $0.id == clip.id }), nativeKind: nativeTrack?.kind,
+                    itemMix: { parameter, value, finished, cancelled in itemMix?(clip.id, parameter, value, finished, cancelled) },
+                    itemPhase: { itemPhase?(clip.id) },
+                    nativeWaveform: nativeDirectory != nil && nativeTrack?.clips.contains(where: { $0.id == clip.id && !$0.isImage && ($0.audioFile ?? nativeTrack?.audioFile) != nil }) == true,
+                    select: local ? { scrolling.selectedItem = clip.id; selectTrack?() } : nil,
+                    openMenu: openItemMenu.map { callback in { callback(clip.id) } }, openFX: openItemFX.map { callback in { callback(clip.id) } })
+    }
     var body: some View {
         let itemGeometry = IpadNativeItemGeometry(track: local ? previewTrack : nil, remoteTrack: track, scale: heightScale)
         ZStack(alignment: .topLeading) {
@@ -3893,18 +3916,7 @@ private struct RemoteTimelineTrackRow: View, Equatable {
             ForEach(previewClips.filter { hasRegion && $0.start < end && $0.start + $0.duration > start && (!local || RecordingLaneLayout.shared.items[$0.id] == nil) }) { clip in
                 let left = max(start, clip.start), right = min(end, clip.start + clip.duration)
                 let itemWidth = max(0, (right - left) / span * width)
-                RemoteNativeGridItem(clip: clip, width: itemWidth, height: itemGeometry.height(clip.id), color: track.color, nameColor: track.nameColor ?? 0xffffff,
-                    scrolling: scrolling,
-                    sourceFraction: (left - clip.start) / max(0.001, clip.duration),
-                    visibleFraction: (right - left) / max(0.001, clip.duration),
-                    mute: { control(.clipMute, clip.id, 0) },
-                    setGain: { control(.clipGain, clip.id, $0) }, local: local, trackSilenced: track.silenced == true,
-                    nativeClip: previewTrack?.clips.first(where: { $0.id == clip.id }), nativeKind: nativeTrack?.kind,
-                    itemMix: { parameter, value, finished, cancelled in itemMix?(clip.id, parameter, value, finished, cancelled) },
-                    itemPhase: { itemPhase?(clip.id) },
-                    nativeWaveform: nativeDirectory != nil && nativeTrack?.clips.contains(where: { $0.id == clip.id && !$0.isImage && ($0.audioFile ?? nativeTrack?.audioFile) != nil }) == true,
-                    select: local ? { scrolling.selectedItem = clip.id; selectTrack?() } : nil,
-                    openMenu: openItemMenu.map { callback in { callback(clip.id) } }, openFX: openItemFX.map { callback in { callback(clip.id) } })
+                gridItem(clip, width: itemWidth, height: itemGeometry.height(clip.id), left: left, right: right)
                     .equatable()
                     .overlay {
                         if local && selectedItems.contains(clip.id) {
