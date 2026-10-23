@@ -2,16 +2,32 @@ import XCTest
 final class TrackTouchTests:XCTestCase {
  func testCompactRowsKeepPatchAndFXUntilTheirControlsActuallyNeedTheSpace() {
   let app=XCUIApplication();app.launch()
-  XCTAssertTrue(app.buttons["Compact 270"].waitForExistence(timeout:10))
-  app.buttons["Compact 270"].tap()
+  XCTAssertTrue(app.buttons["Compact 285"].waitForExistence(timeout:10))
+  let midi = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "MIDI activity")).firstMatch
+  XCTAssertTrue(midi.exists, "Standard track must show MIDI activity separately from audio")
+  let audio = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Audio meter")).firstMatch
+  if midi.exists && audio.exists { XCTAssertGreaterThanOrEqual(midi.frame.minX - audio.frame.maxX, 3.5) }
+  app.buttons["Compact 285"].tap()
+  XCTAssertFalse(midi.exists, "Compact tracks hide MIDI activity while keeping the audio meter")
   XCTAssertTrue(app.buttons["Patch"].exists);XCTAssertTrue(app.buttons["FX"].exists)
   app.buttons["Patch"].tap();XCTAssertEqual(app.staticTexts["event"].label,"patch")
-  app.buttons["Compact 220"].tap()
+  app.buttons["Compact 235"].tap()
   XCTAssertFalse(app.buttons["Patch"].exists);XCTAssertTrue(app.buttons["FX"].exists)
   app.buttons["FX"].tap();XCTAssertEqual(app.staticTexts["event"].label,"fx")
   app.buttons["Compact 190"].tap()
   XCTAssertFalse(app.buttons["Patch"].exists);XCTAssertFalse(app.buttons["FX"].exists)
+  let meter = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Audio meter")).firstMatch
+  XCTAssertTrue(meter.exists,"Compact tracks must retain their audio meter: \(app.debugDescription)")
+  if meter.exists { XCTAssertGreaterThan(meter.frame.height, 0); XCTAssertLessThanOrEqual(meter.frame.height, 60) }
   XCTAssertTrue(app.buttons["REC"].exists);XCTAssertTrue(app.buttons["M"].firstMatch.exists);XCTAssertTrue(app.buttons["S"].firstMatch.exists)
+ }
+ func testEmptyTrackAreaSelectsWithoutChangingControls() {
+  let app=XCUIApplication();app.launch()
+  let row=app.otherElements["normal-row"].firstMatch
+  XCTAssertTrue(row.waitForExistence(timeout:10))
+  row.coordinate(withNormalizedOffset:CGVector(dx:0.15,dy:0.08)).tap()
+  XCTAssertEqual(app.staticTexts["selection"].label,"Selected: 1")
+  XCTAssertEqual(app.staticTexts["event"].label,"none")
  }
  func testLongPressOffersPatchAndAddStems() {
   let app=XCUIApplication();app.launch();let name=app.staticTexts["01  Normal track"]

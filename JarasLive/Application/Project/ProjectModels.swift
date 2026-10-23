@@ -285,7 +285,7 @@ public struct Song: Codable, Identifiable, Equatable, Sendable {
     public func markerLabel(_ marker: TimelineMarker) -> String {
         if let bpm = marker.tempoBPM { return String(format: "%g  %d/%d", bpm, marker.tempoBeats ?? 4, marker.tempoUnit ?? 4) }
         guard let id = marker.sourceRegionID, let region = parts.first(where: { $0.id == id }) else { return marker.isSection ? marker.name.uppercased() : marker.name }
-        return "\(region.semitones)st  " + marker.name
+        return "\(region.semitones)st  " + region.displayName
     }
     public var markerRegionEnds: [UUID: Double] {
         var result: [UUID: Double] = [:]
@@ -782,6 +782,38 @@ public struct PlaybackScope: Equatable {
         return itemStart >= minimum - 1e-6 && itemStart < maximum - 1e-6
     }
 }
+/// Immutable lookup for one audio revision. Avoid scanning every region and
+/// every linked marker again for each playback fragment during a tempo edit.
+public struct PlaybackItemStartIndex {
+    private let initialized: Bool
+    private let parts: [UUID: Part]
+    private let starts: [UUID: Double]
+    private let incoming: [UUID: [Part]]
+    public init(song: Song) {
+        initialized = song.regionOwnershipInitialized == true
+        parts = Dictionary(uniqueKeysWithValues: song.parts.map { ($0.id, $0) })
+        var starts: [UUID: Double] = [:], incoming: [UUID: [Part]] = [:]
+        for part in song.parts {
+            let start = song.playbackRegionStart(part)
+            starts[part.id] = start
+            if let parent = part.parentRegionID, start < part.startTime - 1e-6 {
+                incoming[parent, default: []].append(part)
+            }
+        }
+        self.starts = starts; self.incoming = incoming
+    }
+    public func start(for clip: AudioClip) -> Double? {
+        guard initialized else { return clip.startTime }
+        guard let id = clip.regionOwnerID, let part = parts[id] else { return nil }
+        guard let parent = part.parentRegionID else { return clip.startTime }
+        let candidates = (incoming[parent] ?? []).filter {
+            $0.id != part.id && $0.startTime > part.startTime &&
+            clip.startTime >= starts[$0.id]! - 1e-6 && clip.startTime < $0.startTime - 1e-6
+        }
+        if let next = candidates.max(by: { starts[$0.id]! < starts[$1.id]! }) { return starts[next.id] }
+        return starts[part.id]
+    }
+}
 public extension Song {
     /// Linked flags are editable playback boundaries; stored child bounds
     /// retain the original song extent for non-destructive arrangement edits.
@@ -841,6 +873,8 @@ public struct PlaybackSnapshot: Codable, Sendable { public var transport: Transp
 public struct TrackLanes: Equatable {
     public var lanes: [UUID: Int] = [:]
     public var count: Int = 1
+    private var localCounts: [UUID: Int] = [:]
+    private var localLanes: [UUID: Int] = [:]
     public init(track: Track) {
         var ends: [Double] = []
         let ordered = track.clips.sorted {
@@ -867,6 +901,37 @@ public struct TrackLanes: Equatable {
             placed.append(clip)
         }
         count = max(1, (lanes.values.max() ?? 0) + 1)
+        // Connected overlap components have independent vertical geometry.
+        // A gap (including exactly touching edges) releases the whole height;
+        // a long item connecting two overlaps keeps a stable lane throughout.
+        var component: [AudioClip] = []
+        var componentEnd = -Double.infinity
+        func finishComponent() {
+            guard !component.isEmpty else { return }
+            let used = Set(component.compactMap { lanes[$0.id] }).sorted()
+            let compact = Dictionary(uniqueKeysWithValues: used.enumerated().map { ($0.element, $0.offset) })
+            for clip in component {
+                localCounts[clip.id] = max(1, used.count)
+                localLanes[clip.id] = compact[lanes[clip.id] ?? 0] ?? 0
+            }
+            component.removeAll(keepingCapacity: true)
+        }
+        for clip in ordered {
+            if clip.startTime >= componentEnd - 1e-9 { finishComponent() }
+            if component.isEmpty { componentEnd = clip.startTime + clip.duration }
+            else { componentEnd = max(componentEnd, clip.startTime + clip.duration) }
+            component.append(clip)
+        }
+        finishComponent()
+    }
+    public func localCount(for clipID: UUID) -> Int { localCounts[clipID] ?? count }
+    public func localLane(for clipID: UUID) -> Int { localLanes[clipID] ?? lanes[clipID] ?? 0 }
+    /// An active take grows independently of the project snapshot. Reserve the
+    /// conventional lanes until Stop commits its complete overlap component.
+    public mutating func reserveRecordingLanes(count reserved: Int) {
+        count = max(count, reserved)
+        localCounts.removeAll(keepingCapacity: true)
+        localLanes.removeAll(keepingCapacity: true)
     }
     /// No overlapping item means lane zero, regardless of items elsewhere.
     public func recordingLane(start: Double, duration: Double, clips: [AudioClip]) -> Int {
@@ -1008,6 +1073,7 @@ public extension Song {
                     result.duration = max(result.duration, newEnd)
                 } else if itemBelongs(clip, to: id) {
                     result.tracks[track].clips[index].startTime = max(0, clip.startTime + delta)
+                    result.duration = max(result.duration, result.tracks[track].clips[index].startTime + clip.duration)
                 }
             }
         }

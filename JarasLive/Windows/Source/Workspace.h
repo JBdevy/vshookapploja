@@ -148,6 +148,7 @@ class Workspace final : public Component,
     friend struct PartsDividerTests;
     friend struct TrackVisibilityTests;
     friend struct MasterMixerTests;
+    friend struct HozMixerFocusTests;
     friend struct WorkspaceLayoutTests;
     class Caption;
     Session &session;
@@ -266,8 +267,13 @@ class Workspace final : public Component,
     int rowBodyHeight(int index) const;
     const ItemLanes &itemLanes(int index) const;
     int itemLaneHeight(int index) const;
+    ItemLanes::Geometry itemGeometry(int index, const ID &clip, const ItemLanes *preview = nullptr) const;
     mutable uint64 itemLayoutRevision = ~uint64(0);
     mutable std::vector<ItemLanes> itemLayouts;
+    String itemTitle(const jaras::AudioClip &) const;
+    mutable uint64 itemTitleRevision = ~uint64(0);
+    mutable ID itemTitleSong;
+    mutable std::map<ID,String> itemTitles;
     int rowTop(int index) const;
     int rowAt(int y) const;
     void updateState();
@@ -282,7 +288,7 @@ class Workspace final : public Component,
     void confirm(const String &, const String &, std::function<void()>);
     void newProject();
     void deleteRecentProject(const File &);
-    void createProject(bool withStems, int recordingChannels = 0);
+    void createProject(bool withStems, int recordingChannels = 0, bool inNewTab = false);
     void chooseRecordingProject();
     void choosePackage();
     void choosePackageDestination(const File &);
@@ -299,6 +305,8 @@ class Workspace final : public Component,
     void handleMasterMenu(int choice, bool barMixer);
     void setBarMixerMasterRight(bool);
     void syncBarMixerMasterSide();
+    void setHozMixerSlotsOnly(bool);
+    void syncHozMixerMode();
     void editMasterColour();
     void showTrackMenu(ID, Point<int>);
     void createTrack();

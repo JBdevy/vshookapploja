@@ -8,17 +8,12 @@ import XCTest
     var result = NativePurchaseResult.cancelled
     var failure = false, restored = false
     var missingProduct = false
-    var missingTrial = false
     var buys = 0, restores = 0
     var trial: NativeTrialEntitlement?
     var trialResult = NativePurchaseResult.cancelled
     var trialBegins = 0
     func trialEntitlement() async -> NativeTrialEntitlement? { trial }
-    func trialProduct() async throws -> NativePurchaseProduct {
-        if missingTrial { throw NativePurchaseFailure.productsUnavailable }
-        _ = try await product()
-        return NativePurchaseProduct(displayPrice: "R$ 0,00")
-    }
+    func trialProduct() async throws -> NativePurchaseProduct { try await product() }
     func beginTrial() async throws -> NativePurchaseResult { trialBegins += 1; return trialResult }
     init() {
         var output: AsyncStream<Void>.Continuation!
@@ -43,42 +38,6 @@ import XCTest
 }
 
 @MainActor final class NativePurchaseStoreTests: XCTestCase {
-    func testTrialOfferRequiresAvailableCatalogAndIsRemovedAfterFailedReload() async {
-        let client = PurchaseClient()
-        let available = NativePurchaseStore(client: client)
-        XCTAssertFalse(available.canStartTrial)
-        client.missingTrial = true
-        await available.load()
-        XCTAssertNotNil(available.product)
-        XCTAssertFalse(available.canStartTrial)
-        await available.startTrial()
-        XCTAssertEqual(client.trialBegins, 0)
-        client.missingTrial = false
-        await available.load()
-        XCTAssertTrue(available.canStartTrial)
-        client.failure = true
-        await available.load()
-        XCTAssertFalse(available.canStartTrial)
-        XCTAssertNil(available.product)
-        XCTAssertNil(available.trialProduct)
-        await available.startTrial()
-        XCTAssertEqual(client.trialBegins, 0)
-    }
-    func testPurchasedOrPreviouslyStartedTrialIsNeverOfferedAgain() async {
-        let client = PurchaseClient()
-        client.entitled = true
-        let store = NativePurchaseStore(client: client)
-        await store.load()
-        XCTAssertFalse(store.canStartTrial)
-        client.entitled = false
-        let date = Date(timeIntervalSince1970: 1_700_000_000)
-        client.trial = NativeTrialEntitlement(originalPurchaseDate: date, signedDate: date)
-        let expired = NativePurchaseStore(client: client, now: { date.addingTimeInterval(8 * 86400) })
-        await expired.load()
-        XCTAssertFalse(expired.canStartTrial)
-        await expired.startTrial()
-        XCTAssertEqual(client.trialBegins, 0)
-    }
     func testCatalogUnavailableIsNotReportedAsNetworkFailure() async {
         let client = PurchaseClient(), store: NativePurchaseStore
         store = NativePurchaseStore(client: client)

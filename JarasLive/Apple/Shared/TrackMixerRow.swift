@@ -153,10 +153,10 @@ struct TrackMixerHeightGeometry {
         let meterTop: CGFloat = mix(2, 4)
         let bodyWidth = max(0, width - bodyX - 4)
         let centeredY = max(0, (height - 21) / 2)
-        // The group action has its own space immediately before Patch.
-        // Anchor it to the control row so widening never separates the two.
-        let controlsX = max(0, width - controlsWidth - 4)
-        let titleX = bodyX
+        // Name/number and folder stay anchored to the meter side of the row.
+        // Only the right-hand controls follow the sidebar's changing width.
+        let controlsX = max(folder ? 51 : 0, width - controlsWidth - 4)
+        let titleX: CGFloat = standard ? 22 : 14
         let titleY = lowerTitle ? Self.titleY(height) : mix(centeredY, 3)
         let controlsY = mix(centeredY, 3), controlsHeight = mix(21, 24)
         let clear = lowerTitle ? min(1, max(0, (titleY - controlsY - controlsHeight) / 8)) : 0
@@ -168,7 +168,7 @@ struct TrackMixerHeightGeometry {
             CGRect(x: titleX, y: titleY, width: titleWidth, height: titleHeight(height)),
             CGRect(x: controlsX, y: controlsY, width: controlsWidth, height: controlsHeight),
             CGRect(x: bodyX, y: 27, width: bodyWidth, height: volumeHeight(height)),
-            CGRect(x: folder ? controlsX - 31 : bodyX, y: folder ? controlsY + (controlsHeight - 20) / 2 : 4, width: 28 * p, height: 20 * p),
+            CGRect(x: folder ? 20 : bodyX, y: folder ? controlsY + (controlsHeight - 20) / 2 : 4, width: 28 * p, height: 20 * p),
             CGRect(x: max(bodyX, width - 90), y: 32, width: min(86, bodyWidth), height: 24 * p)
         ]
     }
@@ -234,7 +234,7 @@ private struct TrackMixerButtonsContainer<Content: View>: View {
         } else if standard {
             let expanded = height >= 64
             let controlHeight: CGFloat = expanded ? 24 : 21
-            let widths: [CGFloat] = [34, 28, expanded && !showsFader ? 0 : 22, 22, expanded ? 42 : 0, 22, 22]
+            let widths: [CGFloat] = [expanded ? 34 : 0, expanded ? 28 : 0, expanded && showsFader ? 22 : 0, 22, expanded ? 42 : 0, 22, 22]
             let visibleCount = widths.filter { $0 > 0 }.count
             let width = widths.reduce(0, +) + CGFloat(max(0, visibleCount - 1)) * 3
             let frames = widths.indices.map { index in
@@ -273,7 +273,7 @@ struct TrackMixerContinuousLayout: Layout {
         }
     }
 }
-/// The pan stays mounted, but occupies no space in a collapsed strip.
+/// Patch, Env, FX and pan stay mounted but occupy no space in a collapsed strip.
 @available(macOS 13, *)
 struct TrackMixerButtonsLayout: Layout {
     let showsFader: Bool
@@ -286,14 +286,14 @@ struct TrackMixerButtonsLayout: Layout {
     func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let expanded = (proposal.height ?? 24) >= 24
-        let visible = subviews.indices.filter { !($0 == 4 && !expanded) && !($0 == 2 && expanded && !showsFader) }
+        let visible = subviews.indices.filter { !(!expanded && ($0 < 3 || $0 == 4)) && !($0 == 2 && expanded && !showsFader) }
         return CGSize(width: visible.reduce(CGFloat(0)) { $0 + Self.controlWidths[$1] } + CGFloat(max(0, visible.count - 1)) * 3, height: expanded ? 24 : 21)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let expanded = bounds.height >= 24
         var x = bounds.minX
         for i in subviews.indices {
-            let hidden = (i == 4 && !expanded) || (i == 2 && expanded && !showsFader)
+            let hidden = (!expanded && (i < 3 || i == 4)) || (i == 2 && expanded && !showsFader)
             let width = Self.controlWidths[i]
             subviews[i].place(at: CGPoint(x: hidden ? bounds.maxX + 1024 : x, y: bounds.minY), anchor: .topLeading, proposal: ProposedViewSize(width: width, height: bounds.height))
             if !hidden { x += width + 3 }
@@ -1023,7 +1023,7 @@ private struct TrackGroupSymbol: View {
         }.foregroundStyle(JarasTheme.green)
     }
 }
-private struct TrackGroupButton: View {
+struct TrackGroupButton: View {
     let show: ShowController
     let project: UUID
     let track: UUID
@@ -1195,7 +1195,6 @@ struct PatchEditor: View {
                             ForEach(choices, id: \.self) { choice in Text(choice.title).tag(choice) }
                         }.disabled(TrackRecording.shared.recording)
                     }
-                    #if os(macOS)
                     if let track, let settings = show.snapshot.project.songs.flatMap(\.tracks).first(where: { $0.id == track }), settings.kind == .standard {
                         HStack(alignment: .top, spacing: 10) {
                             VStack(alignment: .leading, spacing: 4) {
@@ -1220,9 +1219,7 @@ struct PatchEditor: View {
                         #else
                         .frame(maxWidth: .infinity)
                         #endif
-
                     }
-                    #endif
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text("Output").font(.jarasSubheadline.bold())
@@ -1303,7 +1300,7 @@ private struct CompactTrackButtonStyle: ButtonStyle {
             else { configuration.label }
         }.font(.jarasSystem(size: 10, weight: .semibold))
             .frame(width: width, height: 21)
-            .background(activeColor.map { $0.opacity(configuration.isPressed ? 0.75 : 1) } ?? JarasTheme.text.opacity(configuration.isPressed ? 0.24 : 0.12))
+            .background(activeColor.map { $0.opacity(configuration.isPressed ? 0.75 : 1) } ?? (configuration.isPressed ? Color(hex: 0x565656) : JarasTheme.trackButton))
             .clipShape(RoundedRectangle(cornerRadius: 3)).contentShape(Rectangle())
     }
 }
@@ -2378,7 +2375,7 @@ private final class TrackDragTitleView: NSView {
 }
 #endif
 
-private struct TrackMIDIIndicator: View {
+struct TrackMIDIIndicator: View {
     @ObservedObject var state: TrackMIDIActivity
     var body: some View {
         GeometryReader { geometry in
@@ -2452,6 +2449,18 @@ private enum FooterMixerMetrics {
     static let stride: CGFloat = width + 3
 }
 
+private struct FooterMixerStripLayout {
+    let controlsHeight: CGFloat
+    let slotsHeight: CGFloat
+    init(height: CGFloat, slotsOnly: Bool) {
+        let innerHeight = max(0, height - 8)
+        // Keep the normal mixer unchanged. The compact mode gives everything
+        // above the fixed lower name row to the existing FX/instrument slots.
+        controlsHeight = slotsOnly ? 0 : min(187, max(100, innerHeight - 26))
+        slotsHeight = max(0, innerHeight - controlsHeight - 26)
+    }
+}
+
 private struct FooterMixerRenderState: Equatable {
     let project: UUID
     let tracks: [Track]
@@ -2464,9 +2473,11 @@ private struct FooterMixerRenderState: Equatable {
     let masterColor: UInt32?
     let selection: Set<UUID>
     var masterRight = false
+    var slotsOnly = false
 }
 struct FooterHorizontalMixer: View {
     @AppStorage("catlive.barMixer.masterRight") private var masterRight = false
+    @AppStorage("catlive.hozMixer.slotsOnly") private var slotsOnly = false
     let show: ShowController
     @ObservedObject private var updates: ShowProjectPresentation
     @ObservedObject private var trackVisibility = TrackVisibilityPreferences.shared
@@ -2483,7 +2494,7 @@ struct FooterHorizontalMixer: View {
         }
         FooterMixerContent(show: show, active: active, state: FooterMixerRenderState(project: project.id, tracks: tracks,
             masterFX: project.masterFX, masterVolume: project.masterVolume ?? 1, masterPan: project.masterPan ?? 0,
-            masterMute: project.masterMute == true, masterSolo: project.masterSolo == true, masterMono: project.masterMono == true, masterColor: project.masterColor, selection: show.mixerTrackSelection.intersection(tracks.map(\.id)), masterRight: masterRight)).equatable()
+            masterMute: project.masterMute == true, masterSolo: project.masterSolo == true, masterMono: project.masterMono == true, masterColor: project.masterColor, selection: show.mixerTrackSelection.intersection(tracks.map(\.id)), masterRight: masterRight, slotsOnly: slotsOnly)).equatable()
             #if os(macOS)
             .background(EditorSelectionArea(scope: .tracks) {
                 let selectable = tracks.filter { $0.kind == .standard }
@@ -2503,12 +2514,12 @@ private final class FooterMixerStripVersions {
     private var counter: UInt64 = 0
     private(set) var masterVersion: UInt64 = 0
     func update(_ state: FooterMixerRenderState, active: Bool, locale: String) -> [UInt64] {
-        let commonChanged = previous?.project != state.project || previous?.selection != state.selection || previousActive != active || previousLocale != locale
+        let commonChanged = previous?.project != state.project || previous?.selection != state.selection || previous?.slotsOnly != state.slotsOnly || previousActive != active || previousLocale != locale
         if previous?.project != state.project || previousActive != active || previousLocale != locale ||
             previous?.masterFX != state.masterFX || previous?.masterVolume != state.masterVolume ||
             previous?.masterPan != state.masterPan || previous?.masterMute != state.masterMute ||
             previous?.masterSolo != state.masterSolo || previous?.masterMono != state.masterMono ||
-            previous?.masterColor != state.masterColor || previous?.masterRight != state.masterRight {
+            previous?.masterColor != state.masterColor || previous?.masterRight != state.masterRight || previous?.slotsOnly != state.slotsOnly {
             counter &+= 1; masterVersion = counter
         }
         let next = state.tracks.enumerated().map { index, track -> UInt64 in
@@ -2534,7 +2545,7 @@ private struct FooterMixerContent: View, Equatable {
         HStack(spacing: 0) {
             HStack(spacing: 3) {
                 ForEach(Array(range), id: \.self) { index in
-                    FooterMixerStrip(show: show, track: state.tracks[index], selection: state.selection, active: active).equatable()
+                    FooterMixerStrip(show: show, track: state.tracks[index], selection: state.selection, active: active, slotsOnly: state.slotsOnly).equatable()
                         .id(state.tracks[index].id)
                 }
             }
@@ -2547,7 +2558,7 @@ private struct FooterMixerContent: View, Equatable {
             let versions = stripVersions.update(state, active: active, locale: locale.identifier)
             FooterMixerScroll(contentWidth: CGFloat(count) * FooterMixerMetrics.stride + 7, stride: FooterMixerMetrics.stride, count: count, active: active,
                 masterWidth: FooterMixerMetrics.masterWidth, masterRight: state.masterRight, masterVersion: stripVersions.masterVersion,
-                masterContent: AnyView(FooterMixerStrip(masterState: state, show: show, track: nil, selection: [], active: active).equatable().padding(5)
+                masterContent: AnyView(FooterMixerStrip(masterState: state, show: show, track: nil, selection: [], active: active, slotsOnly: state.slotsOnly).equatable().padding(5)
                     .environment(\.openFX, openFX).environment(\.locale, locale).environment(\.editTrackDetails, editTrackDetails)),
                 versions: versions, retainStrip: { index in
                     state.tracks.indices.contains(index) && TrackSelectionRouter.shared.pinnedTracks.contains(state.tracks[index].id)
@@ -2555,7 +2566,7 @@ private struct FooterMixerContent: View, Equatable {
             #else
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 3) {
-                    ForEach(state.tracks) { FooterMixerStrip(show: show, track: $0, selection: state.selection, active: active) }
+                    ForEach(state.tracks) { FooterMixerStrip(show: show, track: $0, selection: state.selection, active: active, slotsOnly: state.slotsOnly) }
                 }.padding(5)
             }.scrollIndicators(.visible)
             #endif
@@ -2583,6 +2594,7 @@ private struct FooterMixerScroll: NSViewRepresentable {
     func makeNSView(context: Context) -> FooterMixerScrollView { FooterMixerScrollView() }
     func updateNSView(_ view: FooterMixerScrollView, context: Context) {
         view.isHidden = !active
+        view.setSlotsOnly = { UserDefaults.standard.set($0, forKey: "catlive.hozMixer.slotsOnly") }
         view.updateMaster(content: masterContent, width: masterWidth, version: masterVersion, right: masterRight)
         view.update(width: contentWidth, stride: stride, count: count, versions: versions, retainStrip: retainStrip, makeContent: makeContent)
     }
@@ -2596,6 +2608,29 @@ private final class FooterMixerGreenScroller: NSScroller {
         NSColor(calibratedRed: 84.0 / 255, green: 1, blue: 147.0 / 255, alpha: 1).setFill()
         let knob = rect(for: .knob)
         NSBezierPath(roundedRect: NSRect(x: knob.minX, y: bounds.midY - 3, width: knob.width, height: 6), xRadius: 3, yRadius: 3).fill()
+    }
+}
+/// Deliberate Shift-wheel mode change; a single notch or accelerated spike
+/// cannot hide mixer controls. No preference write occurs until the threshold.
+private struct FooterMixerModeGesture {
+    private var direction = 0
+    private var accumulated: CGFloat = 0
+    private var lastTime: TimeInterval?
+    private var triggered = false
+    private var lastAction: TimeInterval?
+    mutating func reset() { direction = 0; accumulated = 0; lastTime = nil; triggered = false }
+    mutating func consume(delta: CGFloat, precise: Bool, timestamp: TimeInterval, momentum: Bool) -> Bool? {
+        guard !momentum else { return nil }
+        guard delta.isFinite, timestamp.isFinite, delta != 0 else { return nil }
+        let nextDirection = delta > 0 ? 1 : -1
+        if nextDirection != direction || lastTime.map({ timestamp < $0 || timestamp - $0 > 0.6 }) == true { reset() }
+        direction = nextDirection; lastTime = timestamp
+        guard !triggered else { return nil }
+        if let lastAction, timestamp >= lastAction, timestamp - lastAction < 0.6 { return nil }
+        accumulated += min(40, abs(delta) * (precise ? 1 : 40))
+        guard accumulated >= 60 else { return nil }
+        triggered = true; lastAction = timestamp
+        return direction > 0
     }
 }
 private final class FooterMixerDocumentView: NSView {
@@ -2628,6 +2663,8 @@ private final class FooterMixerScrollView: NSView {
     private var pendingStripLayout: Set<Int> = []
     private var layoutWarmup: DispatchWorkItem?
     private var wheelMonitor: Any?
+    private var modeGesture = FooterMixerModeGesture()
+    var setSlotsOnly: (Bool) -> Void = { _ in }
     private var coastTimer: Timer?
     private weak var coastTarget: NSScrollView?
     private var coastHorizontal = true
@@ -2892,12 +2929,16 @@ private final class FooterMixerScrollView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor); self.wheelMonitor = nil }
-        stopCoast()
+        stopCoast(); modeGesture.reset()
         layoutWarmup?.cancel(); layoutWarmup = nil
         guard window != nil else { return }
         scheduleStripWarmup()
-        wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            self?.routeWheel(event) == true ? nil : event
+        wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .flagsChanged]) { [weak self] event in
+            if event.type == .flagsChanged {
+                if !event.modifierFlags.contains(.shift) { self?.modeGesture.reset() }
+                return event
+            }
+            return self?.routeWheel(event) == true ? nil : event
         }
     }
     private func effectScroll(at point: NSPoint) -> NSScrollView? {
@@ -2917,11 +2958,28 @@ private final class FooterMixerScrollView: NSView {
         return nil
     }
     private func routeWheel(_ event: NSEvent) -> Bool {
-        guard event.window === window, window?.attachedSheet == nil,
+        guard window != nil, event.window === window, window?.attachedSheet == nil,
+              !isHiddenOrHasHiddenAncestor,
               visibleRect.contains(convert(event.locationInWindow, from: nil)),
-              event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
-        let horizontal = event.modifierFlags.contains(.shift) ||
-            abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            modeGesture.reset(); return false
+        }
+        if event.modifierFlags.contains(.shift) {
+            stopCoast()
+            if event.phase.contains(.began) { modeGesture.reset() }
+            // AppKit may map a shifted physical wheel onto the horizontal axis.
+            let delta = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.scrollingDeltaX
+            if let slotsOnly = modeGesture.consume(delta: delta, precise: event.hasPreciseScrollingDeltas,
+                                                    timestamp: event.timestamp, momentum: !event.momentumPhase.isEmpty) {
+                setSlotsOnly(slotsOnly)
+            }
+            if !event.phase.intersection([.ended, .cancelled]).isEmpty { modeGesture.reset() }
+            // Consume every Shift-wheel event, including the pre-threshold steps,
+            // so faders, knobs and slot scroll views cannot alter their values.
+            return true
+        }
+        modeGesture.reset()
+        let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
         let delta = horizontal && abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
             ? event.scrollingDeltaX : event.scrollingDeltaY
         if !horizontal, let target = effectScroll(at: event.locationInWindow) {
@@ -2944,12 +3002,13 @@ private final class FooterMixerScrollView: NSView {
 private struct FooterMixerStrip: View, Equatable {
     var masterState: FooterMixerRenderState? = nil
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.show === rhs.show && lhs.track == rhs.track && lhs.selection == rhs.selection && lhs.active == rhs.active && lhs.masterState == rhs.masterState
+        lhs.show === rhs.show && lhs.track == rhs.track && lhs.selection == rhs.selection && lhs.active == rhs.active && lhs.masterState == rhs.masterState && lhs.slotsOnly == rhs.slotsOnly
     }
     let show: ShowController
     let track: Track?
     let selection: Set<UUID>
     let active: Bool
+    var slotsOnly = false
     @Environment(\.editTrackDetails) private var editTrackDetails
     @State private var patchPresented = false
     @State private var fxPresented = false
@@ -3116,28 +3175,29 @@ private struct FooterMixerStrip: View, Equatable {
     var body: some View {
         let deleteIDs = deletionTargets, deleteProject = show.snapshot.project.id
         GeometryReader { geometry in
-            let innerHeight = max(0, geometry.size.height - 8)
-            // 255 pt panel height is the user-selected threshold for FX slots.
-            let controlsHeight = min(187, max(100, innerHeight - 26))
-            let slotsHeight = max(0, innerHeight - controlsHeight - 26)
+            let layout = FooterMixerStripLayout(height: geometry.size.height, slotsOnly: slotsOnly)
+            let controlsHeight = layout.controlsHeight
+            let slotsHeight = layout.slotsHeight
             VStack(spacing: 0) {
                 if hasStandardControls {
                     slots.frame(height: slotsHeight).clipped().opacity(slotsHeight > 0 ? 1 : 0).allowsHitTesting(slotsHeight > 0)
                         .trackControlSelectionExclusion()
                 } else { Color.clear.frame(height: slotsHeight) }
-                ZStack(alignment: .topLeading) {
-                    VStack(spacing: 4) {
-                        if let track, track.kind == .click {
-                            Button("Insert") { show.insertClickItems(track: track.id) }
-                                .buttonStyle(CompactTrackButtonStyle(width: 47))
-                                .jarasHelp("Insert click items in regions without a click")
+                if !slotsOnly {
+                    ZStack(alignment: .topLeading) {
+                        VStack(spacing: 4) {
+                            if let track, track.kind == .click {
+                                Button("Insert") { show.insertClickItems(track: track.id) }
+                                    .buttonStyle(CompactTrackButtonStyle(width: 47))
+                                    .jarasHelp("Insert click items in regions without a click")
+                            }
+                            HStack(spacing: 3) {
+                                buttons
+                                panAndFader.frame(maxHeight: .infinity)
+                            }.frame(maxWidth: .infinity)
                         }
-                        HStack(spacing: 3) {
-                            buttons
-                            panAndFader.frame(maxHeight: .infinity)
-                        }.frame(maxWidth: .infinity)
-                    }
-                }.frame(height: controlsHeight).trackControlSelectionExclusion()
+                    }.frame(height: controlsHeight).trackControlSelectionExclusion()
+                }
                 Group {
                     #if os(macOS)
                     if let track {
@@ -3648,15 +3708,17 @@ private struct BatchPatchEditor: View {
 struct EditorSelectionArea: NSViewRepresentable {
     enum Scope: Int { case grid, tracks, setlist }
     let scope: Scope
+    var moveCursor: ((Int) -> Bool)? = nil
     let selectAll: () -> Bool
     func makeNSView(context: Context) -> EditorSelectionAreaView { EditorSelectionAreaView() }
     func updateNSView(_ view: EditorSelectionAreaView, context: Context) {
-        view.scope = scope; view.selectAll = selectAll
+        view.scope = scope; view.selectAll = selectAll; view.moveCursor = moveCursor
     }
 }
 final class EditorSelectionAreaView: NSView {
     var scope = EditorSelectionArea.Scope.grid
     var selectAll: (() -> Bool)?
+    var moveCursor: ((Int) -> Bool)?
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -3673,7 +3735,7 @@ final class EditorSelectionAreaView: NSView {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
-            if event.type == .keyDown { return self.selectAll(event) ? nil : event }
+            if event.type == .keyDown { return (self.moveCursor(event) || self.selectAll(event)) ? nil : event }
             self.handlePointer(event)
             return event
         }
@@ -3694,6 +3756,17 @@ final class EditorSelectionAreaView: NSView {
     func activeScope(in window: NSWindow?) -> EditorSelectionArea.Scope? {
         guard let window, let area = focus.object(forKey: window), area.window === window, !area.isHiddenOrHasHiddenAncestor else { return nil }
         return area.scope
+    }
+    func moveCursor(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.keyCode == 123 || event.keyCode == 124,
+              event.modifierFlags.intersection([.command, .control, .shift, .option]).isEmpty,
+              let window = event.window, window.isKeyWindow, window.attachedSheet == nil,
+              window.sheetParent == nil, NSApp.modalWindow == nil, ControlMappings.shared.editing == nil,
+              !NativeTimelineInputGate.shared.isBlocked(window),
+              !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField),
+              let area = focus.object(forKey: window), area.scope == .grid,
+              area.window === window, !area.isHiddenOrHasHiddenAncestor else { return false }
+        return area.moveCursor?(event.keyCode == 123 ? -1 : 1) ?? false
     }
     func selectAll(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .control, .shift, .option])

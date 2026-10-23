@@ -1,6 +1,7 @@
 #pragma once
 #include "FloatingShortcuts.h"
 #include "UIFeatureTests.h"
+#include "PlaylistEditor.h"
 namespace catlive::floatingControlTests {
 inline void require(bool okay, const char *message) { if (!okay) throw std::runtime_error(message); }
 inline void pump() {
@@ -14,6 +15,18 @@ inline jaras::Project fixture() {
     p.songs={s};p.savedCursor=jaras::SavedProjectCursor{s.id,0};return p;
 }
 template <typename Test> void registerTests(const File &directory, Test &test) {
+    test("Marker shortcut modal focuses the name before the first typed character", [&] {
+        Component host; host.setWantsKeyboardFocus(true); host.setSize(900,650);
+        host.addToDesktop(ComponentPeer::windowIsTemporary);host.setVisible(true);host.grabKeyboardFocus();pump();
+        auto panel=std::make_unique<RegionEditor>("Marker",0xff0000,false,[](String,unsigned,bool){},[]{},false);
+        ModalSheet::open(host,"Marker",std::move(panel),380,330);pump();
+        auto *editor=dynamic_cast<TextEditor *>(uiFeatureTests::find(host,"nameColourName"));
+        require(editor && editor->hasKeyboardFocus(false),"Marker name did not receive modal focus");
+        require(host.getPeer()->handleKeyPress(KeyPress('x',ModifierKeys(),L'x')),"First marker character was not handled");
+        require(editor->getText()=="x","Typing did not replace the selected marker name");
+        ModalSheet::dismiss(*editor);pump();
+        require(!Component::getCurrentlyModalComponent(),"Marker modal did not dismiss");
+    });
     test("Tap tempo matches Mac rounding, accidental taps, idle reset and limits", [] {
         for(auto measured:{123.2,123.8}){TapTempo tap;require(!tap.tap(0),"First tap must not change tempo");require(tap.tap(60/measured)==std::round(measured),"Mac rounding differs");}
         TapTempo tap;tap.tap(0);require(tap.tap(.5)==120 && tap.tap(1)==120,"Average differs");
@@ -22,7 +35,7 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         tap={};tap.tap(0);require(tap.tap(.15)==300,"Fast taps must clamp");
         tap={};tap.tap(0);require(tap.tap(2)==60,"Slow taps must clamp");
     });
-    test("Delete removes the complete track selection with one confirmation and one Undo", [&] {
+    test("Delete preserves track selection after cancel or a declined edit and retries with one Undo", [&] {
         Session session;session.inspection=true;session.audio.prepareOffline(48000);
         auto p=fixture();auto &tracks=p.songs[0].tracks;
         tracks[1].parentTrackID=tracks[0].id;tracks[1].patch=jaras::OutputPatch{-2,2};
@@ -35,13 +48,67 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         auto select=[&](const ID &id,int flags){auto *row=uiFeatureTests::find(w,"trackRow:"+text(id));require(row,"Track row missing");Point<float> at{15,10};row->mouseDown(MouseEvent(Desktop::getInstance().getMainMouseSource(),at,ModifierKeys(flags|ModifierKeys::leftButtonModifier),1,0,0,0,0,row,row,Time::getCurrentTime(),at,Time::getCurrentTime(),1,false));};
         select(id0,0);select(id1,ModifierKeys::ctrlModifier);
         require(list(get(w.diagnostics(),"selectedTracks")).size()==2,"Fixture did not select two tracks");
-        w.keyPressed(KeyPress(KeyPress::deleteKey));pump();
-        auto *modal=Component::getCurrentlyModalComponent();require(modal,"Delete skipped confirmation");
-        require(session.song()->tracks.size()==3,"Tracks removed before confirmation");
-        modal->exitModalState(1);pump();
+        auto request=[&] {
+            require(w.keyPressed(KeyPress(KeyPress::deleteKey)),"Delete was not handled after the previous confirmation");pump();
+            auto *modal=Component::getCurrentlyModalComponent();require(modal,"Delete skipped confirmation");
+            require(session.song()->tracks.size()==3,"Tracks removed before confirmation");
+            return modal;
+        };
+        auto click=[&](Component *modal,const String &label) {
+            Button *button=nullptr;
+            for(auto *child:modal->getChildren())if(auto *candidate=dynamic_cast<Button *>(child);candidate && candidate->getButtonText()==label)button=candidate;
+            require(button,"Confirmation action button missing");button->triggerClick();pump();
+            require(!Component::getCurrentlyModalComponent(),"Confirmation did not close after clicking its button");
+        };
+        click(request(),"Cancelar");
+        require(list(get(w.diagnostics(),"selectedTracks")).size()==2 && session.song()->tracks.size()==3,"Cancel removed tracks or their selection");
+        auto *pending=request();session.busy=true;click(pending,"Continuar");session.busy=false;
+        require(list(get(w.diagnostics(),"selectedTracks")).size()==2 && session.song()->tracks.size()==3,"Declined edit lost the selection needed to retry Delete");
+        click(request(),"Continuar");
         require(session.song()->tracks.size()==1 && session.song()->tracks[0].id==remaining,"Delete left a selected track or removed the unselected track");
         session.undo();require(JSON::toString(session.snapshot())==before,"One Undo did not restore group, items and FX exactly");
         session.redo();require(session.song()->tracks.size()==1,"One Redo did not remove the selection");
+    });
+    test("Closing the Setlist playlist selector returns Space to transport without stealing text or modal input", [&] {
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(fixture()));session.audio.setOffline(true);
+        Auth auth;Lighting lighting(session);
+        Workspace w(session,auth,lighting,false,directory.getNonexistentChildFile("playlist-focus",".json"));
+        w.setSize(1366,768);w.addToDesktop(ComponentPeer::windowIsTemporary);w.setVisible(true);w.grabKeyboardFocus();pump();
+        auto *selector=dynamic_cast<ComboBox *>(uiFeatureTests::find(w,"setlistPlaylistSelector"));
+        require(selector,"Setlist playlist selector missing");
+        require(!selector->getWantsKeyboardFocus()&&!selector->getMouseClickGrabsKeyboardFocus(),
+                "Playlist mouse click still takes transport keyboard focus");
+        const Point<float> at{10,10};
+        selector->mouseDown(MouseEvent(Desktop::getInstance().getMainMouseSource(),at,
+            ModifierKeys(ModifierKeys::leftButtonModifier),1,0,0,0,0,selector,selector,
+            Time::getCurrentTime(),at,Time::getCurrentTime(),1,false));pump();
+        auto *callout=dynamic_cast<CallOutBox *>(Component::getCurrentlyModalComponent());
+        require(callout,"Playlist mouse click did not open the picker");
+        require(!w.keyPressed(KeyPress(KeyPress::spaceKey))&&!session.transport().playing,
+                "Space escaped the open playlist modal");
+        callout->dismiss();pump();
+        require(!Component::getCurrentlyModalComponent(),"Playlist picker failed to close");
+        require(!selector->keyPressed(KeyPress(KeyPress::spaceKey)),"Closed playlist selector still consumes Space");
+        auto *peer=w.getPeer();require(peer,"Workspace native peer missing");
+        require(peer->handleKeyPress(KeyPress(KeyPress::spaceKey))&&session.transport().playing,
+                "Space after dismissing playlist did not start playback");
+        require(!Component::getCurrentlyModalComponent(),"Space reopened the playlist picker");
+        peer->handleKeyPress(KeyPress(KeyPress::spaceKey));
+        require(session.transport().playing,"Held Space toggled playback repeatedly");
+        peer->handleKeyUpOrDown(false);peer->handleKeyPress(KeyPress(KeyPress::spaceKey));
+        require(!session.transport().playing,"Space after release did not stop playback");peer->handleKeyUpOrDown(false);
+        // Even focus assigned by an accessibility client must bubble Space.
+        selector->setWantsKeyboardFocus(true);selector->grabKeyboardFocus();pump();
+        peer->handleKeyPress(KeyPress(KeyPress::spaceKey));
+        require(session.transport().playing&&!Component::getCurrentlyModalComponent(),
+                "Focused playlist selector reopened instead of routing Space");
+        peer->handleKeyUpOrDown(false);peer->handleKeyPress(KeyPress(KeyPress::spaceKey));peer->handleKeyUpOrDown(false);
+        require(!session.transport().playing,"Focused selector failed to route Stop");
+        TextEditor editor;w.addAndMakeVisible(editor);editor.setBounds(300,100,200,25);editor.grabKeyboardFocus();pump();
+        peer->handleKeyPress(KeyPress(KeyPress::spaceKey,ModifierKeys(),L' '));
+        require(editor.getText()==" "&&!session.transport().playing&&!Component::getCurrentlyModalComponent(),
+                "Typing Space in a text field triggered playback or playlist picker");
     });
     test("FX window routes transport and undo while preserving text, local keys and held Space", [&] {
         Session session;session.inspection=true;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(fixture()));session.audio.setOffline(true);

@@ -221,7 +221,7 @@ private struct TransportDisplaysLive: View {
         return HStack(spacing: 0) {
             GeometryReader { geometry in
                 HStack(spacing: 0) {
-                    SongNameDisplay(title: transport.playing ? "Now playing" : "Selected song", name: displays.current?.displayName ?? show.current?.name,
+                    SongNameDisplay(title: transport.playing ? "Now playing" : "Selected song", name: displays.current?.displayName ?? "",
                         bpm: displays.currentBPM, color: transport.playing ? JarasTheme.green : JarasTheme.text)
                         .frame(width: max(0, (geometry.size.width - 1) * 0.75))
                         .accessibilityLabel("Current song")
@@ -639,6 +639,7 @@ private struct TempoControl: View {
             } label: {
                 VStack(spacing: 0) {
                     Text(bpmText).font(.jarasSystem(size: 15, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(show.tempoControlNeedsRender ? JarasTheme.yellow : JarasTheme.text)
                     Text("BPM").font(.jarasSystem(size: 8))
                 }.frame(width: 58, height: 35).background(JarasTheme.display)
                     .clipShape(RoundedRectangle(cornerRadius: 4)).contentShape(Rectangle())
@@ -1149,7 +1150,7 @@ private struct RemoteToggleButton: View {
                 Image(systemName: "network")
                 Text(verbatim: "Remote")
             }.lineLimit(1)
-        }.buttonStyle(TransportButtonStyle(color: remote.enabled ? JarasTheme.green : JarasTheme.transportRed, active: true, activeForeground: remote.enabled ? .black : .white, fontSize: TransportControlMetrics.font, width: buttonWidth, height: TransportControlMetrics.height))
+        }.buttonStyle(TransportButtonStyle(color: remote.enabled ? JarasTheme.green : JarasTheme.liveOffRed, active: true, activeForeground: remote.enabled ? .black : .white, fontSize: TransportControlMetrics.font, width: buttonWidth, height: TransportControlMetrics.height))
             .accessibilityLabel("Remote").accessibilityValue(remote.enabled ? "On" : "Off")
             .jarasHelp("Remote · Right-click to configure")
             #if os(macOS)

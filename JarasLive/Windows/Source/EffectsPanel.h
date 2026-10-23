@@ -11,26 +11,6 @@
 #include "CatDynamicsEditor.h"
 namespace catlive {
 namespace fxui {
-class EnableButton final : public ToggleButton {
-  public:
-    bool checkbox = false;
-    void paintButton(Graphics &g, bool over, bool down) override {
-        if (checkbox) {
-            ToggleButton::paintButton(g, over, down);
-            return;
-        }
-        g.setColour(Colours::white);
-        g.setFont(theme::font(13));
-        g.drawText(getButtonText(), 0, 0, getWidth() - 58, getHeight(),
-                   Justification::centredRight);
-        const auto r =
-            juce::Rectangle<float>((float)getWidth() - 52, (getHeight() - 22) * .5f, 50, 22);
-        g.setColour(getToggleState() ? theme::green : Colour(0xff555555));
-        g.fillRoundedRectangle(r, 11);
-        g.setColour(Colours::white);
-        g.fillEllipse(getToggleState() ? r.getRight() - 20 : r.getX() + 2, r.getY() + 2, 18, 18);
-    }
-};
 inline String enabledKey(const String &kind) {
     return kind == "CatLive Trigger" ? "triggerEnabled"
            : kind == "Cat Gate" ? "gateEnabled"
@@ -98,79 +78,6 @@ inline void reset(const String &kind, var &settings) {
     for (const auto &key : fxpresets::fields(kind)) fxpresets::erase(settings, Identifier(key));
     defaults(settings);
 }
-class KnobLook final : public LookAndFeel_V4 {
-  public:
-    Font getSliderPopupFont(Slider &) override { return theme::font(12); }
-    Label *createSliderTextBox(Slider &s) override {
-        auto *l = LookAndFeel_V4::createSliderTextBox(s);
-        l->setFont(theme::semiboldFont(12));
-        return l;
-    }
-    void drawRotarySlider(Graphics &g, int x, int y, int w, int h, float value, float start,
-                          float end, Slider &) override {
-        const auto r = juce::Rectangle<float>((float)x, (float)y, (float)w, (float)h)
-                           .withSizeKeepingCentre(78, 78);
-        const float cx = r.getCentreX(), cy = r.getCentreY(), radius = 36,
-                    angle = start + value * (end - start);
-        Path base;
-        base.addCentredArc(cx, cy, radius, radius, 0, start, end, true);
-        g.setColour(Colour(0xff303030));
-        g.strokePath(base, PathStrokeType(4, PathStrokeType::curved, PathStrokeType::rounded));
-        Path fill;
-        fill.addCentredArc(cx, cy, radius, radius, 0, start, angle, true);
-        g.setGradientFill(ColourGradient(theme::green, cx - 35, cy + 30, Colour(0xff2dc5ed),
-                                         cx + 35, cy - 30, false));
-        g.strokePath(fill, PathStrokeType(3.5f, PathStrokeType::curved, PathStrokeType::rounded));
-        g.setColour(Colours::black.withAlpha(.4f));
-        g.fillEllipse(cx - 31, cy - 29, 65, 65);
-        g.setGradientFill(ColourGradient(Colour(0xff383838), cx, cy - 30, Colour(0xff202020), cx,
-                                         cy + 30, false));
-        g.fillEllipse(cx - 30, cy - 30, 60, 60);
-        g.setColour(Colour(0xff424242));
-        g.drawEllipse(cx - 30, cy - 30, 60, 60, 1);
-        g.setColour(theme::green);
-        g.drawLine(cx + std::sin(angle) * 16, cy - std::cos(angle) * 16, cx + std::sin(angle) * 27,
-                   cy - std::cos(angle) * 27, 3);
-    }
-};
-class Knob final : public Component {
-  public:
-    Knob(String title, double low, double high, double step, double value, String suffix,
-         std::function<void(double)> change, std::function<void()> commit)
-        : label(std::move(title)) {
-        slider.setLookAndFeel(&look);
-        addAndMakeVisible(slider);
-        slider.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);
-        slider.setRotaryParameters(MathConstants<float>::pi * 1.25f,
-                                   MathConstants<float>::pi * 2.75f, true);
-        slider.setRange(low, high, step);
-        slider.setTextBoxStyle(Slider::TextBoxBelow, false, 110, 22);
-        slider.setColour(Slider::textBoxTextColourId, Colours::white);
-        slider.setColour(Slider::textBoxOutlineColourId, Colours::transparentBlack);
-        slider.setColour(Slider::textBoxBackgroundColourId, Colours::transparentBlack);
-        slider.setTextValueSuffix(std::move(suffix));
-        slider.setValue(value, dontSendNotification);
-        slider.setDoubleClickReturnValue(true, value);
-        slider.onValueChange = [this, change, commit] {
-            change(slider.getValue());
-            if (!slider.isMouseButtonDown())
-                commit();
-        };
-        slider.onDragEnd = std::move(commit);
-    }
-    ~Knob() override { slider.setLookAndFeel(nullptr); }
-    void paint(Graphics &g) override {
-        g.setColour(theme::secondary);
-        g.setFont(theme::semiboldFont(12));
-        g.drawText(label, 0, 0, getWidth(), 20, Justification::centred);
-    }
-    void resized() override { slider.setBounds(0, 22, getWidth(), getHeight() - 22); }
-    ParameterSlider slider;
-
-  private:
-    String label;
-    KnobLook look;
-};
 class EQGraph final : public Component {
   public:
     var settings;
@@ -178,6 +85,53 @@ class EQGraph final : public Component {
     EQGraph() {
         setWantsKeyboardFocus(true);
         setComponentID("eqGraph");
+        for(auto *box:{&bandChoice,&typeChoice,&slopeChoice})addAndMakeVisible(box);
+        bandChoice.setComponentID("eqBand");typeChoice.setComponentID("eqType");slopeChoice.setComponentID("eqSlope");
+        bandChoice.onChange=[this]{selected=bandChoice.getSelectedId()-1;refreshControls();repaint();};
+        typeChoice.onChange=[this]{
+            const int index=typeChoice.getSelectedId()-1;
+            if(index>=0&&index<types.size())editSelected("type",types[index],true);
+        };
+        for(int slope:{6,12,24,36,48,72,96,192})slopeChoice.addItem(slope==192?"Brickwall":String(slope)+" dB/oct",slope);
+        slopeChoice.onChange=[this]{editSelected("slope",slopeChoice.getSelectedId(),true);};
+        removeBand.setButtonText(localization::translate("Remove band"));
+        removeBand.setComponentID("eqRemoveBand");removeBand.onClick=[this]{remove();};addAndMakeVisible(removeBand);
+        const std::array<String,3> names{"Frequency","Gain","Q"};
+        const std::array<String,3> suffixes{" Hz"," dB",""};
+        for(int i=0;i<3;++i){
+            auto &slider=bandSliders[(size_t)i];auto &label=bandLabels[(size_t)i];
+            label.setText(localization::translate(names[(size_t)i]),dontSendNotification);
+            label.setFont(theme::font(11));label.setColour(Label::textColourId,theme::secondary);addAndMakeVisible(label);
+            slider.setComponentID("eq"+names[(size_t)i]);slider.setSliderStyle(Slider::LinearHorizontal);
+            slider.setTextBoxStyle(Slider::TextBoxRight,false,80,22);slider.setTextValueSuffix(suffixes[(size_t)i]);
+            slider.setColour(Slider::trackColourId,theme::green);slider.setColour(Slider::thumbColourId,theme::green);
+            slider.setRange(i==0?20:i==1?-24:.1,i==0?20000:i==1?24:18,i==0?1:.01);
+            slider.onValueChange=[this,i]{editSelected(i==0?"frequency":i==1?"gain":"q",bandSliders[(size_t)i].getValue(),!bandSliders[(size_t)i].isMouseButtonDown());};
+            slider.onDragEnd=[this]{if(commit)commit();};addAndMakeVisible(slider);
+        }
+    }
+    ~EQGraph() override { clearAnalysis(); }
+    void updateAnalysis(const std::array<std::shared_ptr<analysis::Capture>, 2> &next) {
+        for (std::size_t i = 0; i < sources.size(); ++i) if (sources[i] != next[i]) {
+            if (sources[i]) sources[i]->removeReader();
+            sources[i] = next[i];
+            lastSerial[i] = sources[i] ? sources[i]->serial() : 0;
+            if (sources[i]) sources[i]->addReader();
+        }
+        std::size_t count = 0;
+        for (std::size_t i = 0; i < sources.size(); ++i) if (sources[i]) {
+            analysisRate = sources[i]->sampleRate();
+            if (sources[i]->read(frames[count]) && frames[count].serial != lastSerial[i]) {
+                lastSerial[i] = frames[count].serial; ++count;
+            }
+        }
+        const double now = Time::getMillisecondCounterHiRes() * .001;
+        spectrum = analyzer.analyze(frames.data(), count, lastAnalysis > 0 ? now - lastAnalysis : .05);
+        lastAnalysis = now; repaint();
+    }
+    void clearAnalysis() {
+        for (auto &source : sources) { if (source) source->removeReader(); source.reset(); }
+        lastSerial.fill(0); lastAnalysis = 0; analyzer.reset(); spectrum = {};
     }
     void paint(Graphics &g) override {
         g.setColour(theme::display);
@@ -193,10 +147,11 @@ class EQGraph final : public Component {
             g.drawHorizontalLine((int)yAt(db), area.getX(), area.getRight());
         g.setColour(theme::secondary.withAlpha(.7f));
         g.drawHorizontalLine((int)yAt(0), area.getX(), area.getRight());
+        paintAnalysis(g, area);
         std::vector<dsp::IIR::Coefficients<float>::Ptr> filters;
         for (const auto &band : bands)
             if (flag(band, "enabled", true)) {
-                const auto f = (float)jlimit(20., 20000., num(band, "frequency", 1000)),
+                const auto f = (float)jlimit(20., std::min(20000., analysisRate * .45), num(band, "frequency", 1000)),
                            q = (float)jlimit(.1, 18., num(band, "q", .707));
                 const auto gain = Decibels::decibelsToGain((float)num(band, "gain"));
                 const auto type = str(band, "type", "bell");
@@ -205,7 +160,7 @@ class EQGraph final : public Component {
                     const int order = jlimit(1, 32, (int)num(band, "slope", 12) / 6);
                     for (int stage = 0; stage < std::max(1, order / 2); ++stage) {
                         if (order == 1) {
-                            double k = std::tan(MathConstants<double>::pi * f / 48000.),
+                            double k = std::tan(MathConstants<double>::pi * f / analysisRate),
                                    b0 = (type == "lowCut" ? 1 : k) / (1 + k);
                             filters.push_back(new C((float)b0, (float)(type == "lowCut" ? -b0 : b0),
                                                     0, 1, (float)((k - 1) / (k + 1)), 0));
@@ -213,20 +168,20 @@ class EQGraph final : public Component {
                             const auto sq =
                                 (float)(1 / (2 * std::sin(MathConstants<double>::pi *
                                                           (2 * stage + 1) / (2 * order))));
-                            filters.push_back(type == "lowCut" ? C::makeHighPass(48000, f, sq)
-                                                               : C::makeLowPass(48000, f, sq));
+                            filters.push_back(type == "lowCut" ? C::makeHighPass(analysisRate, f, sq)
+                                                               : C::makeLowPass(analysisRate, f, sq));
                         }
                     }
                 } else
-                    filters.push_back(type == "lowShelf"    ? C::makeLowShelf(48000, f, q, gain)
-                                      : type == "highShelf" ? C::makeHighShelf(48000, f, q, gain)
-                                                            : C::makePeakFilter(48000, f, q, gain));
+                    filters.push_back(type == "lowShelf"    ? C::makeLowShelf(analysisRate, f, q, gain)
+                                      : type == "highShelf" ? C::makeHighShelf(analysisRate, f, q, gain)
+                                                            : C::makePeakFilter(analysisRate, f, q, gain));
             }
         Path response;
         for (int x = (int)area.getX(); x < area.getRight(); ++x) {
             double magnitude = 1;
             for (const auto &f : filters)
-                magnitude *= f->getMagnitudeForFrequency(frequencyAt((float)x), 48000);
+                magnitude *= f->getMagnitudeForFrequency(std::min(frequencyAt((float)x), analysisRate * .49), analysisRate);
             const auto y = yAt(Decibels::gainToDecibels(magnitude, -120.));
             if (x == (int)area.getX())
                 response.startNewSubPath((float)x, y);
@@ -248,7 +203,7 @@ class EQGraph final : public Component {
         g.setFont(theme::font(9));
         for (auto f : {20., 50., 100., 200., 500., 1000., 2000., 5000., 10000., 20000.}) {
             String label = f >= 1000 ? String(f / 1000, 0) + "k" : String(f, 0);
-            g.drawText(label, (int)xAt(f) - 18, getHeight() - 18, 36, 16, Justification::centred);
+            g.drawText(label, (int)xAt(f) - 18, (int)plot().getBottom() + 2, 36, 16, Justification::centred);
         }
         if (selected >= 0 && selected < bands.size()) {
             auto band = bands[selected];
@@ -260,6 +215,7 @@ class EQGraph final : public Component {
     }
     void mouseDown(const MouseEvent &e) override {
         grabKeyboardFocus();
+        if(!plot().expanded(0,8).contains(e.position))return;
         selected = -1;
         auto bands = list(get(settings, "bands"));
         for (int i = 0; i < bands.size(); ++i)
@@ -270,8 +226,8 @@ class EQGraph final : public Component {
         dragging = false;
         wheelBandHeld = selected >= 0 && e.mods.isLeftButtonDown();
         wheelRemainder = 0;
-        if (e.mods.isPopupMenu() && std::abs(e.position.y-getHeight()*.5f)<18) add({e.position.x,getHeight()*.5f});
-        repaint();
+        if (e.mods.isPopupMenu() && std::abs(e.position.y-plot().getCentreY())<18) add({e.position.x,plot().getCentreY()});
+        refreshControls();repaint();
     }
     void mouseDoubleClick(const MouseEvent &e) override {
         if (e.mods.isPopupMenu()) return;
@@ -280,6 +236,7 @@ class EQGraph final : public Component {
             put(bands.getReference(selected), "gain", 0.);
             put(settings, "bands", bands);
             if (changed) changed();
+            refreshControls();
             if (commit) commit();
             repaint();
         } else add(e.position);
@@ -299,7 +256,7 @@ class EQGraph final : public Component {
         dragging = true;
         if (changed)
             changed();
-        repaint();
+        refreshControls();repaint();
     }
     void mouseUp(const MouseEvent &) override {
         wheelBandHeld = false;
@@ -333,6 +290,7 @@ class EQGraph final : public Component {
         put(settings, "bands", bands);
         if (changed) changed();
         if (commit) commit();
+        refreshControls();
         repaint();
     }
     bool keyPressed(const KeyPress &key) override {
@@ -343,12 +301,104 @@ class EQGraph final : public Component {
         return false;
     }
 
+    void refreshControls() {
+        const auto bands=list(get(settings,"bands"));
+        if(selected>=bands.size())selected=bands.isEmpty()?-1:0;
+        // Initial selection matches Mac's first-band selection.
+        if(!initializedSelection&&selected<0&&!bands.isEmpty())selected=0;
+        initializedSelection=true;
+        controlsVisible=selected>=0&&selected<bands.size();
+        for(auto *box:{&bandChoice,&typeChoice,&slopeChoice})box->setVisible(controlsVisible);
+        removeBand.setVisible(controlsVisible);
+        for(size_t i=0;i<3;++i){bandSliders[i].setVisible(controlsVisible);bandLabels[i].setVisible(controlsVisible);}
+        if(controlsVisible){
+            bandChoice.clear(dontSendNotification);
+            for(int i=0;i<bands.size();++i)bandChoice.addItem(localization::translate("Band")+" "+String(i+1),i+1);
+            bandChoice.setSelectedId(selected+1,dontSendNotification);
+            const auto band=bands[selected]; const auto currentType=str(band,"type","bell");
+            int first=0,last=0;
+            for(int i=1;i<bands.size();++i){
+                if(num(bands[i],"frequency")<num(bands[first],"frequency"))first=i;
+                if(num(bands[i],"frequency")>num(bands[last],"frequency"))last=i;
+            }
+            types={"bell"};StringArray titles{localization::translate("Bell")};
+            if(selected==first){types.add("lowCut");types.add("lowShelf");titles.add(localization::translate("Low Cut"));titles.add(localization::translate("Low Shelf"));}
+            if(selected==last){types.add("highCut");types.add("highShelf");titles.add(localization::translate("High Cut"));titles.add(localization::translate("High Shelf"));}
+            if(!types.contains(currentType)){types.add(currentType);titles.add(currentType);}
+            typeChoice.clear(dontSendNotification);typeChoice.addItemList(titles,1);
+            typeChoice.setSelectedId(types.indexOf(currentType)+1,dontSendNotification);
+            const bool cut=currentType.endsWith("Cut");slopeChoice.setVisible(cut);
+            slopeChoice.setSelectedId((int)num(band,"slope",12),dontSendNotification);
+            bandSliders[0].setValue(num(band,"frequency",1000),dontSendNotification);
+            bandSliders[1].setValue(num(band,"gain"),dontSendNotification);
+            bandSliders[2].setValue(num(band,"q",.707),dontSendNotification);
+            bandSliders[1].setEnabled(!cut);bandSliders[2].setEnabled(!cut);
+        }
+        resized();
+    }
+    void resized() override {
+        const int y=getHeight()-90, gap=8, third=(getWidth()-16)/3;
+        bandChoice.setBounds(0,y,90,24);typeChoice.setBounds(98,y,150,24);
+        slopeChoice.setBounds(256,y,120,24);removeBand.setBounds(getWidth()-110,y,110,24);
+        for(int i=0;i<3;++i){bandLabels[(size_t)i].setBounds(i*(third+gap),y+32,third,18);bandSliders[(size_t)i].setBounds(i*(third+gap),y+52,third,26);}
+    }
   private:
+    ComboBox bandChoice,typeChoice,slopeChoice;
+    QuietButton removeBand;
+    std::array<ParameterSlider,3> bandSliders;
+    std::array<Label,3> bandLabels;
+    StringArray types;
+    bool controlsVisible=false, initializedSelection=false;
+    void editSelected(const Identifier &property,const var &value,bool finish) {
+        auto bands=list(get(settings,"bands"));if(selected<0||selected>=bands.size())return;
+        put(bands.getReference(selected),property,value);put(settings,"bands",bands);
+        if(changed)changed();
+        if(finish&&commit)commit();
+        refreshControls();repaint();
+    }
+    std::array<std::shared_ptr<analysis::Capture>, 2> sources;
+    std::array<std::uint64_t, 2> lastSerial{};
+    std::array<analysis::Frame, 2> frames;
+    analysis::Analyzer analyzer;
+    analysis::Spectrum spectrum;
+    double lastAnalysis = 0, analysisRate = 48000;
+    void paintAnalysis(Graphics &g, juce::Rectangle<float> area) {
+        auto path = [&](const std::array<float, analysis::binCount> &levels) {
+            Path result;
+            if (std::none_of(levels.begin(), levels.end(), [](float db) { return db > -95.9f; })) return result;
+            const float step = area.getWidth() / float(levels.size() - 1);
+            auto y = [&](int index) { return area.getY() + area.getHeight() * (6.f - jlimit(-96.f, 6.f, levels[std::size_t(index)])) / 102.f; };
+            auto tangent = [&](int index) {
+                if (index == 0) return y(1) - y(0);
+                if (index == int(levels.size() - 1)) return y(index) - y(index - 1);
+                const auto left = y(index) - y(index - 1), right = y(index + 1) - y(index);
+                return left * right > 0 ? 2 * left * right / (left + right) : 0.f;
+            };
+            float previous = y(0), previousTangent = tangent(0);
+            result.startNewSubPath(area.getX(), previous);
+            for (int index = 1; index < int(levels.size()); ++index) {
+                const auto x = area.getX() + float(index) * step, next = y(index), nextTangent = tangent(index);
+                result.cubicTo(x - step * 2 / 3, previous + previousTangent / 3,
+                               x - step / 3, next - nextTangent / 3, x, next);
+                previous = next; previousTangent = nextTangent;
+            }
+            return result;
+        };
+        auto output = path(spectrum.output), input = path(spectrum.input);
+        if (!output.isEmpty()) {
+            auto fill = output; fill.lineTo(area.getRight(), area.getBottom()); fill.lineTo(area.getX(), area.getBottom()); fill.closeSubPath();
+            g.setColour(theme::green.withAlpha(.12f)); g.fillPath(fill);
+            g.setColour(theme::green.withAlpha(.75f)); g.strokePath(output, PathStrokeType(1, PathStrokeType::curved, PathStrokeType::rounded));
+        }
+        if (!input.isEmpty()) { g.setColour(Colours::white.withAlpha(.38f)); g.strokePath(input, PathStrokeType(1, PathStrokeType::curved, PathStrokeType::rounded)); }
+        g.setColour(Colours::white.withAlpha(.5f)); g.setFont(theme::font(9));
+        g.drawText("RTA  INPUT / OUTPUT", area.reduced(8).removeFromTop(15), Justification::centredRight);
+    }
     int selected = -1;
     bool dragging = false, wheelBandHeld = false;
     double wheelRemainder = 0;
     juce::Rectangle<float> plot() const {
-        return getLocalBounds().toFloat().withTrimmedBottom(20).reduced(8, 0);
+        return getLocalBounds().toFloat().withTrimmedBottom(controlsVisible ? 116.f : 20.f).reduced(8, 0);
     }
     float xAt(double f) const {
         return plot().getX() +
@@ -370,6 +420,7 @@ class EQGraph final : public Component {
                 yAt(type == "lowCut" || type == "highCut" ? 0 : num(b, "gain"))};
     }
     void update() {
+        refreshControls();
         if (changed)
             changed();
         if (commit)
@@ -399,7 +450,7 @@ class EQGraph final : public Component {
             return;
         bands.remove(selected);
         put(settings, "bands", bands);
-        selected = -1;
+        selected = bands.isEmpty() ? -1 : 0;
         update();
     }
 
@@ -456,6 +507,7 @@ class EffectsPanel final : public Component, private ListBoxModel, private Timer
         graph.changed = [this] {
             auto s = current();
             put(s, "bands", get(graph.settings, "bands"));
+            session.audio.previewNativeParameters(track,key(),kind(),current(),settings);
             repaint();
         };
         graph.commit = [this] { commit(); };
@@ -689,6 +741,7 @@ class EffectsPanel final : public Component, private ListBoxModel, private Timer
                                      dontSendNotification);
         }
         graph.setVisible(k == "EQ");
+        if (k != "EQ") graph.clearAnalysis();
         enabled.checkbox = k == "EQ";
         if (!available) {
             resized();
@@ -699,10 +752,11 @@ class EffectsPanel final : public Component, private ListBoxModel, private Timer
         if(k!="External")fxui::defaults(s);
         enabled.setToggleState(fxui::isEnabled(k, s), dontSendNotification);
         graph.settings = s;
+        graph.refreshControls();
         if (k == "CatLive Trigger" || k == "Cat Gate") {
             const auto dynamicsKey = key();
             dynamicsEditor = std::make_unique<CatDynamicsEditor>(k, session.mediaDirectory, [this] { return current(); }, [this] { commit(); chain.repaint(); }, error,
-                [this, dynamicsKey] { session.audio.previewDynamics(track, dynamicsKey, current()); });
+                [this, dynamicsKey] { session.audio.previewDynamics(track, dynamicsKey, current()); }, [this] { return session.audio.fxLevels(track); });
             addAndMakeVisible(*dynamicsEditor);
         }
         if(k=="CatStemSeparation 5") {
@@ -771,6 +825,7 @@ class EffectsPanel final : public Component, private ListBoxModel, private Timer
             [this, property, multiplier, group](double value) {
                 auto s = group.isNotEmpty() ? get(current(), Identifier(group)) : current();
                 put(s, Identifier(property), value / multiplier);
+                session.audio.previewNativeParameters(track,key(),kind(),current(),settings);
             },
             [this] { commit(); }));
         addAndMakeVisible(k);
@@ -894,7 +949,7 @@ class EffectsPanel final : public Component, private ListBoxModel, private Timer
             chain.deselectAllRows();
             show();
         } else {
-            selected = std::min(selected, inserted.size() - 1);
+            selected = inserted.size() - 1;
             chain.selectRow(selected);
             show();
         }
@@ -980,6 +1035,8 @@ class EffectsPanel final : public Component, private ListBoxModel, private Timer
         } catch (const std::exception &e) { error(String::fromUTF8(e.what())); }
     }
     void timerCallback() override {
+        if (isShowing() && graph.isVisible()) graph.updateAnalysis(session.audio.eqAnalysis(track, key()));
+        else graph.clearAnalysis();
         if(externalEditor&&!externalEditor->uses(session.audio.externalEffect(track,externalEditorKey))) {externalEditor.reset();openExternalEditor();}
         for(auto plugin:list(get(settings,"externalPlugins")))if(auto processor=session.audio.externalEffect(track,"External:"+str(plugin,"id")))
             if(processor->consumeEdited())session.dirty=true;

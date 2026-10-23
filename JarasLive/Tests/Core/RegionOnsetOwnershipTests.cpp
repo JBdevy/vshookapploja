@@ -145,6 +145,32 @@ int main() {
             expect(!clip(engine, "captured-loose").regionOwnerID, "captured nil remains loose after reload and region departure");
             near(clip(engine, "captured-loose").startTime, 48, "a region passing over a MIDI take never transports it");
         }
+        {
+            auto project = fixture();
+            project.songs[0].tracks[0].clips = {audio("long-tail", 8, 30, "a"), midi("midi-tail", 8, 30, "a")};
+            Engine engine; engine.loadProject(project); engine.moveRegion("group", 200);
+            near(clip(engine, "long-tail").startTime, 208, "moving past the end carries audio tails");
+            near(clip(engine, "midi-tail").startTime, 208, "moving past the end carries MIDI tails");
+            near(engine.currentSong()->duration, 238, "project extent includes the full moved item, not only region end");
+            engine.loadProject(engine.project()); engine.moveRegion("group", 0);
+            near(clip(engine, "long-tail").startTime, 8, "reloaded tail remains attached for return movement");
+        }
+        {
+            auto project = fixture();
+            TimelineMarker marker{"song-marker", "A", 0, 0x123456};
+            marker.unifiedRegionID = "group"; marker.sourceRegionID = "a";
+            project.songs[0].markers = std::vector<TimelineMarker>{marker};
+            Engine engine; engine.loadProject(project);
+            engine.editRegion("a", "New song name", 0x654321, false);
+            expect(engine.currentSong()->markers->front().name == "New song name", "region edits rename the linked marker");
+            expect(engine.currentSong()->markers->front().color == 0x654321, "region edits recolor the linked marker");
+            engine.setMarker("song-marker", "From marker", 0, 0xabcdef);
+            expect(engine.currentSong()->parts[0].name == "From marker", "marker edits rename the source region");
+            expect(engine.currentSong()->parts[0].color == 0xabcdef, "marker edits recolor the source region");
+            expect(!engine.currentSong()->parts[0].uppercaseName.value_or(true), "marker editing preserves the region case setting");
+            engine.loadProject(engine.project());
+            expect(engine.currentSong()->markers->front().name == engine.currentSong()->parts[0].name, "names stay synchronized after reload");
+        }
         for (bool batch : {false, true}) {
             auto project = fixture();
             TimelineMarker owned{"owned-marker", "Foreign owner", 8, 0}; owned.regionOwnerID = "b";

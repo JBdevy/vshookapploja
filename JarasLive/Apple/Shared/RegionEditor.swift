@@ -5,7 +5,7 @@ struct RegionEditor: View {
     let save: (String, UInt32, Bool) -> Void
     @State private var uppercaseName = true
     var body: some View {
-        NameColorEditor(title: "Editar região", initialName: region.name, initialColor: initialColor,
+        NameColorEditor(title: "Edit song", initialName: region.name, initialColor: initialColor,
                         save: { save($0, $1, uppercaseName) }, uppercaseName: $uppercaseName)
             .onAppear { uppercaseName = region.usesUppercase }
     }
@@ -78,6 +78,16 @@ struct NameColorEditor: View {
                     .disabled(showsName && name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }.padding(18).frame(width: 300)
+            #if os(iOS)
+            .background(Color.clear.contentShape(Rectangle()).onTapGesture { nameFocused = false })
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button("Close") { nameFocused = false }
+                    Spacer()
+                    Button("Salvar") { confirm() }.disabled(showsName && name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            #endif
             .onAppear {
                 originalColor = initialColor
                 colorConfirmed = false

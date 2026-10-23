@@ -1,5 +1,7 @@
 #pragma once
 #include "Session.h"
+#include "TempoEditing.h"
+#include "BPMInputPanel.h"
 namespace catlive {
 class TempoControl final : public Component {
   public:
@@ -44,6 +46,16 @@ class TempoControl final : public Component {
     void refresh() {
         const auto value = session.tempoBPM();
         bpm.setButtonText(String::formatted("%g", value));
+        const auto *song = session.song();
+        const auto *part = song ? tempoEditing::region(*song, session.transport()) : nullptr;
+        const ID regionID = part ? part->id : ID{};
+        if (tempoRevision != session.revision || tempoRegion != regionID) {
+            tempoRevision = session.revision; tempoRegion = regionID;
+            tempoNeedsRender = song && tempoEditing::needsRender(*song, part);
+        }
+        const auto colour = tempoNeedsRender ? theme::yellow : Colours::white;
+        bpm.setColour(TextButton::textColourOffId, colour);
+        bpm.setColour(TextButton::textColourOnId, colour);
         if (!beats.hasKeyboardFocus(false) && !unit.hasKeyboardFocus(false)) refreshMeter();
         repaint();
     }
@@ -79,6 +91,9 @@ class TempoControl final : public Component {
     std::function<void()> resetTap;
     QuietButton up{"+"}, down{String::fromUTF8("−")}, bpm;
     TextEditor beats, unit;
+    uint64 tempoRevision = std::numeric_limits<uint64>::max();
+    ID tempoRegion;
+    bool tempoNeedsRender = false;
     void refreshMeter() {
         const auto *song = session.song();
         beats.setText(String(song ? song->beatsPerBar : 4), false);
@@ -96,19 +111,11 @@ class TempoControl final : public Component {
         refreshMeter();
     }
     void editBPM() {
-        auto *dialog = new AlertWindow("BPM", "", MessageBoxIconType::NoIcon, this);
-        dialog->addTextEditor("bpm", bpm.getButtonText(), "BPM");
-        dialog->getTextEditor("bpm")->setPopupMenuEnabled(false);
-        dialog->addButton("Aplicar", 1, KeyPress(KeyPress::returnKey));
-        dialog->addButton("Cancelar", 0, KeyPress(KeyPress::escapeKey));
-        dialog->enterModalState(true, ModalCallbackFunction::create(
-            [safe = SafePointer<TempoControl>(this), dialog](int result) {
-                if (!safe || result != 1) return;
-                const auto value = dialog->getTextEditorContents("bpm").replaceCharacter(',', '.').getDoubleValue();
-                if (std::isfinite(value) && value >= 60 && value <= 300) safe->apply(value, 0, 0);
-                else if (safe->error) safe->error("Informe um BPM entre 60 e 300.");
-            }), true);
+        auto *parent = getTopLevelComponent();
+        ModalSheet::open(*parent,"BPM",std::make_unique<BPMInputPanel>(bpm.getButtonText(),
+            [safe=SafePointer<TempoControl>(this)](double value){if(safe)safe->apply(value,0,0);},error),390,188);
     }
+
     int signatureWidth() const { return roundToInt(81 * getWidth() / 171.f); }
     void change(int delta) {
         if (const auto *song = session.song())

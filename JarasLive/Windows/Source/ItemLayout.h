@@ -5,10 +5,16 @@ namespace catlive {
 // ProjectModels.TrackLanes: simultaneous items occupy distinct visual lanes.
 struct ItemLanes {
     std::map<ID, int> lanes;
+    struct Placement { int lane = 0, count = 1; };
+    std::map<ID, Placement> placements;
     int count = 1;
-    explicit ItemLanes(const jaras::Track &track) {
-        std::vector<const jaras::AudioClip *> ordered, placed, takes;
-        for (const auto &clip : track.clips) ordered.push_back(&clip);
+    static std::vector<const jaras::AudioClip*> references(const jaras::Track &track) {
+        std::vector<const jaras::AudioClip*> result;result.reserve(track.clips.size());
+        for(const auto &clip:track.clips)result.push_back(&clip);return result;
+    }
+    explicit ItemLanes(const jaras::Track &track):ItemLanes(references(track)) {}
+    explicit ItemLanes(std::vector<const jaras::AudioClip*> ordered) {
+        std::vector<const jaras::AudioClip *> placed, takes;
         const auto chronological = [](const auto *a, const auto *b) {
             return a->startTime != b->startTime ? a->startTime < b->startTime : a->id < b->id;
         };
@@ -32,8 +38,29 @@ struct ItemLanes {
                     lane = std::max(lane, lanes.at(other->id) + 1);
             lanes[clip->id] = lane; placed.push_back(clip); count = std::max(count, lane + 1);
         }
+        // Only items connected by a real temporal overlap share vertical space.
+        // An isolated clip fills the row even if other songs have multiple takes.
+        for (size_t first=0; first<ordered.size();) {
+            size_t last=first+1;
+            double end=ordered[first]->startTime+ordered[first]->duration;
+            while(last<ordered.size() && ordered[last]->startTime<end-1e-9) {
+                end=std::max(end,ordered[last]->startTime+ordered[last]->duration);++last;
+            }
+            std::set<int> used;
+            for(size_t i=first;i<last;++i)used.insert(lanes.at(ordered[i]->id));
+            std::map<int,int> compact;int next=0;for(int lane:used)compact.emplace(lane,next++);
+            for(size_t i=first;i<last;++i)placements.emplace(ordered[i]->id,Placement{compact.at(lanes.at(ordered[i]->id)),(int)used.size()});
+            first=last;
+        }
     }
     int lane(const ID &id) const { const auto at = lanes.find(id); return at == lanes.end() ? 0 : at->second; }
+    Placement placement(const ID &id) const { const auto at=placements.find(id);return at==placements.end()?Placement{}:at->second; }
+    struct Geometry { float top, height; };
+    Geometry geometry(const ID &id, float bodyHeight, bool recording = false) const {
+        const auto p=recording?Placement{lane(id),count}:placement(id);
+        const float height=bodyHeight/std::max(1,p.count);
+        return {p.lane*height,height};
+    }
 };
 // ClipRepetitionBoundaries: show visible source repeats, skipping subpixel seams.
 inline std::vector<float> itemLoopSeams(const jaras::AudioClip &clip, juce::Rectangle<float> bounds, float viewportWidth, double scale) {
@@ -70,7 +97,7 @@ struct ItemHeader {
     juce::Rectangle<float> item, visible, muteRect, fxRect, phaseRect, panRect, panLabel, gainRect, gainLabel;
     float titleLeft = 0;
     bool editable = false, midi = false;
-    ItemHeader(juce::Rectangle<float> bounds, float viewportWidth, const jaras::Track &track, const jaras::AudioClip &clip)
+    ItemHeader(juce::Rectangle<float> bounds, float viewportWidth, const jaras::Track &track, const jaras::AudioClip &clip, const String &title = {})
         : item(bounds), editable(jaras::fixedTrackName(track.role).empty() || (clip.audioFile && clip.audioFile->path.rfind("Videos/",0)==0)), midi(bool(clip.midi)) {
         visible = bounds.getIntersection({0, bounds.getY(), viewportWidth, std::min(17.f,bounds.getHeight())});
         const float x = visible.getX() + 2.6f, y = bounds.getY(), width = visible.getWidth();
@@ -88,7 +115,7 @@ struct ItemHeader {
         const auto labelWidth = [&](const String& label) { return std::ceil(GlyphArrangement::getStringWidth(readoutFont,label)) + 2.f; };
         const float gainWidth = labelWidth(gainText(clip.gain.value_or(1)));
         const float panWidth = labelWidth(panText(clip.pan.value_or(0)));
-        const float nameWidth = std::max(24.f, std::ceil(GlyphArrangement::getStringWidth(readoutFont, text(clip.name)))) + 3.f;
+        const float nameWidth = std::max(24.f, std::ceil(GlyphArrangement::getStringWidth(readoutFont, title.isNotEmpty() ? title : text(clip.name)))) + 3.f;
         const float gainThreshold = 4.6f + 23.1f + nameWidth + 19.5f + .5f + gainWidth + 1.f;
         const float fxThreshold = gainThreshold + ((!midi || clip.fxJSON) ? 27.f : 0.f);
         const float phaseThreshold = fxThreshold + (!midi ? 20.5f : 0.f);
@@ -119,7 +146,7 @@ struct ItemHeader {
             Image image(Image::ARGB, 32, 32, true); Graphics g(image);
             Path curve; curve.startNewSubPath(6, in ? 26.f : 6.f);
             curve.cubicTo(14, in ? 26.f : 6.f, 16, in ? 6.f : 26.f, 26, in ? 6.f : 26.f);
-            g.setColour(Colours::black); g.strokePath(curve, PathStrokeType(6, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setColour(Colour(0xff54ff93)); g.strokePath(curve, PathStrokeType(6, PathStrokeType::curved, PathStrokeType::rounded));
             g.setColour(Colours::white); g.strokePath(curve, PathStrokeType(3, PathStrokeType::curved, PathStrokeType::rounded));
             return MouseCursor(image, 8, 8, 2.f);
         };
