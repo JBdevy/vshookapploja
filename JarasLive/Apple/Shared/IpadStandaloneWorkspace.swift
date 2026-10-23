@@ -39,6 +39,9 @@ import Combine
                           documents.objectWillChange.eraseToAnyPublisher(),
                           TeleprompterTimerController.shared.objectWillChange.eraseToAnyPublisher(),
                           TPNoticeController.shared.objectWillChange.eraseToAnyPublisher(),
+                          TeleprompterWindow.shared.objectWillChange.eraseToAnyPublisher(),
+                          TeleprompterPreferences.shared.objectWillChange.eraseToAnyPublisher(),
+                          TeleprompterPreferences.second.objectWillChange.eraseToAnyPublisher(),
                           LiveRecordingPreview.shared.objectWillChange.eraseToAnyPublisher()] {
             publisher.sink { [weak self] _ in self?.scheduleRefresh() }.store(in: &subscriptions)
         }
@@ -89,6 +92,7 @@ import Combine
             }
         }
         timer.synchronize(state?.timer)
+        for index in 1...2 { refreshTeleprompterRemote(index) }
     }
     private func refreshTeleprompterRemote(_ index: Int) {
         guard running, let show else { return }

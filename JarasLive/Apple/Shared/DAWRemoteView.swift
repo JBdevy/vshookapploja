@@ -686,12 +686,15 @@ struct DAWRemoteClientView: View {
                      cleanDisplay: appearance.cleanDisplay, sentAt: model.sentAt.timeIntervalSince1970, imageID: imageID)
     }
     static func teleprompter(index: Int, snapshot: ShowSnapshot, directory: URL?, remote: DAWRemoteSession) -> DAWRemoteTeleprompter {
-        let settings = (index == 1 ? TeleprompterPreferences.shared : .second).settings
+        var settings = (index == 1 ? TeleprompterPreferences.shared : .second).settings
+        #if os(iOS)
+        settings.isClear = false
+        #endif
         #if os(macOS)
         let controller = index == 1 ? TeleprompterWindow.shared : .second
         let previewActive = controller.previewActive, previewPage = controller.previewPage
         #else
-        let previewActive = false, previewPage = 0
+        let previewActive = TeleprompterWindow.shared.previewActive, previewPage = TeleprompterWindow.shared.previewPage
         #endif
         let transport = snapshot.transport
         let original = snapshot.project.songs.first { $0.id == transport.songId } ?? snapshot.project.songs.first
@@ -1875,6 +1878,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                         }
                     if local, let openRemoteSettings {
                         IpadNativeRemoteToggle(openSettings: openRemoteSettings, width: railButton)
+                        IpadNativePreviewButton(width: railButton)
                     }
                     Spacer(minLength: RemoteSidebarMetrics.groupSpacing)
                     Button {
@@ -6121,5 +6125,29 @@ final class RemoteKeyboardTapView: UIView, UIGestureRecognizerDelegate {
         return true
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+}
+#endif
+
+#if os(iOS)
+private struct IpadNativePreviewButton: View {
+    let width: CGFloat
+    @ObservedObject private var preview = TeleprompterWindow.shared
+    var body: some View {
+        Button { preview.togglePreview() } label: {
+            Text(verbatim: "P\nR\nE\nV\nI\nE\nW")
+                .font(.jarasSystem(size: 10, weight: .heavy)).multilineTextAlignment(.center)
+                .foregroundStyle(Color.black).frame(width: width, height: 108)
+                .modifier(RemoteControlSurface(color: preview.previewActive ? JarasTheme.green : JarasTheme.liveOffRed, radius: 5))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel("Preview")
+            .accessibilityValue(preview.previewActive ? "On" : "Off").contextMenu {
+            ForEach(0..<6) { page in
+                Button { preview.selectPreviewPage(page) } label: {
+                    if preview.previewPage == page { Label("Blocks \(page * 4 + 1)–\(page * 4 + 4)", systemImage: "checkmark") }
+                    else { Text("Blocks \(page * 4 + 1)–\(page * 4 + 4)") }
+                }
+            }
+        }
+    }
 }
 #endif
