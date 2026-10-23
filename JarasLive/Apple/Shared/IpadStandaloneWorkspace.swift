@@ -25,6 +25,7 @@ import Combine
         guard !running, let show, let documents else { return }
         running = true
         ControlMappings.shared.bind(show, session: mappingSession)
+        VinhetasController.shared.bind(show: show)
         DAWRemoteHostBridge.documents = documents
         DAWRemoteHostBridge.bind(show, session: session)
         session.startLocalWorkspace()
@@ -111,6 +112,7 @@ import Combine
     func stop() {
         guard running else { return }
         running = false; subscriptions.removeAll()
+        VinhetasController.shared.unbind()
         if ControlMappings.shared.endNativeSession(mappingSession) {
             show?.togglePartsPanel = {}; show?.toggleSetlistPanel = {}; show?.toggleTracksPanel = {}; show?.toggleTeleprompterWindow = {}
         }
@@ -194,7 +196,7 @@ import Combine
                         guard let first = tracks.first else { return }
                         trackEdit = .init(project: show.snapshot.project.id, tracks: Set(tracks.map(\.id)),
                             name: first.name, color: first.color ?? JarasTheme.roleHex(first.role),
-                            nameEditable: tracks.count == 1 && first.kind == .standard)
+                            nameEditable: tracks.count == 1 && first.kind == .standard && first.role.rawValue != "vinhetas")
                     },
                     openMasterDetails: {
                         trackEdit = .init(project: show.snapshot.project.id, tracks: [], name: "Master",

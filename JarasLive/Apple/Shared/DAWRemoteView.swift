@@ -958,6 +958,8 @@ private struct RemoteSidebarRail<Content: View>: View {
     @State private var sectionsInList = false
     @AppStorage("jaras.ipad.parts.left.open") private var nativeLeftPartsOpen = false
     @AppStorage("jaras.ipad.parts.left.preferredWidth") private var nativeLeftPartsWidth = 240.0
+    @AppStorage("jaras.ipad.vinhetas.open") private var nativeVinhetasOpen = false
+    @AppStorage("jaras.ipad.vinhetas.detached") private var nativeVinhetasDetached = false
     @State private var nativeLeftPartsDragStart: Double?
     @State private var liveNativeLeftPartsWidth: Double?
     @AppStorage("catlive.remote.sections.preferredWidth") private var preferredPartsWidth = 240.0
@@ -1881,6 +1883,19 @@ private struct RemoteSidebarRail<Content: View>: View {
                         IpadNativePreviewButton(width: railButton)
                     }
                     Spacer(minLength: RemoteSidebarMetrics.groupSpacing)
+                    if local, let localShow {
+                        Button { nativeVinhetasOpen.toggle() } label: {
+                            Image(systemName: "square.grid.4x3.fill").font(.jarasSystem(size: 17, weight: .semibold))
+                                .frame(width: railButton, height: 44).contentShape(Rectangle())
+                        }.buttonStyle(RemoteFullAreaButtonStyle(surface: true))
+                            .foregroundStyle(nativeVinhetasOpen ? JarasTheme.green : JarasTheme.secondary)
+                            .accessibilityLabel("Vinhetas")
+                            .contextMenu {
+                                Button(nativeVinhetasDetached ? "Indexar" : "Desindexar") {
+                                    nativeVinhetasDetached.toggle(); nativeVinhetasOpen = true
+                                }
+                            }
+                    }
                     Button {
                         nativeLeftPartsOpen.toggle(); liveNativeLeftPartsWidth = nil; nativeLeftPartsDragStart = nil
                     } label: {
@@ -1983,12 +1998,22 @@ private struct RemoteSidebarRail<Content: View>: View {
                             remoteSections.frame(width: parts.content).clipped()
                         }
                     }
+                    if local, nativeVinhetasOpen, !nativeVinhetasDetached, !prompterFullscreen, let localShow {
+                        IpadVinhetasPanel(touchMenusEnabled: editingTracks, createTrack: { _ = localShow.createVinhetasTrack() })
+                            .frame(height: min(260, geometry.size.height * 0.42))
+                    }
                     if !keyboardVisible && !prompterFullscreen { footer }
 
 
                 }.frame(width: contentWidth).disabled(state.projects?.busy == true)
             }
         }.background(JarasTheme.line)
+            .overlay(alignment: .topLeading) {
+                if local, nativeVinhetasOpen, nativeVinhetasDetached, let localShow {
+                    IpadVinhetasFloatingPanel(touchMenusEnabled: editingTracks, createTrack: { _ = localShow.createVinhetasTrack() },
+                        dock: { nativeVinhetasDetached = false }, close: { nativeVinhetasOpen = false })
+                }
+            }
             .overlay(alignment: .topLeading) {
                 if navigationOpen {
                     ZStack(alignment: .topLeading) {
@@ -4687,6 +4712,7 @@ private struct RemoteNativeMixerRow: View, Equatable {
         GeometryReader { geometry in
         let nativeTrack = localShow?.current?.tracks.first { $0.id == track.id }
         let kind = nativeTrack?.kind ?? .standard
+        let vinhetas = nativeTrack?.role.rawValue == "vinhetas"
         let hasVolume = !local || !kind.isText
         let hierarchyWidth: CGFloat = !groupGuides.isEmpty ? 16 + CGFloat(min(4, groupGuides.count - 1)) * 8 : 0
         let controlLayout = RemoteNativeTrackControlLayout(width: geometry.size.width, compact: compact,
@@ -4696,7 +4722,7 @@ private struct RemoteNativeMixerRow: View, Equatable {
         let fxVisible = !local || controlLayout.fx
         // Compact rows keep only the button strip beside the name. Removing
         // the whole pan stack also removes its width and inter-control gap.
-        let panVisible = !compact && (!local || controlLayout.pan)
+        let panVisible = !vinhetas && !compact && (!local || controlLayout.pan)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 3) {
                 if compact || !hasVolume {
@@ -4754,7 +4780,7 @@ private struct RemoteNativeMixerRow: View, Equatable {
                     .contentShape(Rectangle()).onTapGesture(count: 2) { send(.volume, 1) }
                 RemoteNativeSlider(value: DAWRemoteFaderScale.decibels(track.volume), range: -60...12, height: 22, linked: track.linkedTrack != nil) { send(.volume, DAWRemoteFaderScale.gain($0)) }
                     .accessibilityLabel("Volume " + track.name)
-                if local, let localShow {
+                if local, !vinhetas, let localShow {
                     RemoteNativePhaseButton(inverted: nativePhaseInverted) { localShow.send(.phase, target: track.id) }
                 }
             }.frame(height: 23)
@@ -4772,14 +4798,14 @@ private struct RemoteNativeMixerRow: View, Equatable {
             }
             }
             }
-        }.padding(.leading, local && hasVolume ? (kind == .standard && !compact ? 26 : 19) : 6).padding(.trailing, editing ? 36 : 6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }.padding(.leading, local && hasVolume ? (kind == .standard && !vinhetas && !compact ? 26 : 19) : 6).padding(.trailing, editing ? 36 : 6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .overlay(alignment: .leading) {
                 ZStack(alignment: .leading) {
                     if local && hasVolume && track.canMeter != false {
                         IpadMixerMeter(meter: StemAudioPlayback.shared.meter(for: track.id)).frame(width: 10)
                             .padding(.vertical, 5).padding(.leading, 3)
                     }
-                    if local, kind == .standard, !compact {
+                    if local, kind == .standard, !vinhetas, !compact {
                         TrackMIDIIndicator(state: InstrumentKeyboardState.shared.activity(track.id))
                             .frame(width: 3).padding(.vertical, 5).padding(.leading, 17)
                     }
