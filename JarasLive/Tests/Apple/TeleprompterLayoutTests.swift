@@ -76,6 +76,24 @@ MainActor.assumeIsolated {
     var base = TeleprompterSettings()
     base.songNameEnabled = true; base.progressEnabled = true
     base.textCase = "original"
+    for index in 1...2 {
+        var content = fixture(base, index: index, preview: true)
+        let plain = pixels(content)
+        content.blocks[0].rows[0].liveExecuted = true
+        precondition(pixels(content) != plain, "TP Live strike/red must change actual rendered text")
+        content.blocks[0].rows[0].liveExecuted = false
+        precondition(pixels(content) == plain, "Clearing Live restores the original preview")
+        content.blocks[0].rows[0].playing = true
+        content.blocks[0].rows[0].playbackProgress = 0.25
+        let active = pixels(content)
+        precondition(active != plain, "Playing preview needs a visible background/progress")
+        content.blocks[0].rows[0].playbackProgress = 0.75
+        precondition(pixels(content) != active, "Preview progress advances while song identity is unchanged")
+        content.blocks[0].rows[0].playing = false
+        content.blocks[0].rows[0].queued = true
+        content.blocks[0].rows[0].playbackProgress = 0.25
+        precondition(pixels(content) != active, "Queued song has a yellow background, distinct from playing red")
+    }
     var checked = 0
     for index in 1...2 {
         for field in TPSettingField.all {
