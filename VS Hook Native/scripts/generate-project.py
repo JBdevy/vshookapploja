@@ -50,7 +50,7 @@ for name in ("Debug", "Release"):
         "SDKROOT": "iphoneos", "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator",
         "TARGETED_DEVICE_FAMILY": "1,2", "INFOPLIST_FILE": "Info.plist",
         "CODE_SIGN_STYLE": "Automatic", "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
-        "MARKETING_VERSION": "1.0.3", "CURRENT_PROJECT_VERSION": "1",
+        "MARKETING_VERSION": "1.0.4", "CURRENT_PROJECT_VERSION": "68",
         "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks",
         "SWIFT_OPTIMIZATION_LEVEL": "-Onone" if name == "Debug" else "-O",
         "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG" if name == "Debug" else "",

@@ -8,7 +8,7 @@ const VSHOOK_SCAN_BATCH_SIZE = 72
 const VSHOOK_REDUNDANCY_POLL_MS = 700
 const VSHOOK_REDUNDANCY_TIMEOUT_MS = 600
 const appRoot = document.getElementById('app')
-const VSHOOK_ASSET_VERSION = '1-0-3-parts-state-v2'
+const VSHOOK_ASSET_VERSION = '1-0-4-parts-state-v2'
 const VSHOOK_CHAT_BOOTSTRAP_KEY = 'vshook_chat_bootstrap_key'
 const VSHOOK_CHAT_MOBILE_SESSION_KEY = 'vshook_chat_mobile_session'
 const VSHOOK_CHAT_NOTIFICATION_TARGET_KEY = 'vshook_chat_notification_target'
@@ -1012,7 +1012,7 @@ function renderModeFirst(projects) {
       <button class="vshook-mode-button" id="chooseChatHookBtn">Entrar no Chat Hook</button>
       <button class="vshook-mode-button" id="chooseTransferHookBtn">Entrar no Drop Hook</button>
     </div>
-    <div class="vshook-app-version">Versão 1.0.3 app</div>
+    <div class="vshook-app-version">Versão 1.0.4 app</div>
   `)
 
   document.getElementById('chooseDirectorBtn')?.addEventListener('click', () => {
