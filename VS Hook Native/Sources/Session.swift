@@ -105,7 +105,7 @@ enum HookMode: String, CaseIterable, Identifiable {
             }
         }
     }
-    func suspend() { generation = UUID(); loop?.cancel(); loop = nil; commandTail?.cancel(); commandTail = nil; cursorCommandGroup = nil; lastCursorPost = .distantPast; pending = [:]; transportAnchor = nil; playbackClock = DirectorPlaybackClock(); fadeoutClock = DirectorFadeoutClock(); partArrival = nil; consumedPartID = ""; volumeTasks.values.forEach { $0.cancel() }; volumeTasks = [:]; itemVolumePreviews = acceptedItemVolumes; volumeRevisions = [:]; connected = false }
+    func suspend() { clearPartCountdownNotice(); generation = UUID(); loop?.cancel(); loop = nil; commandTail?.cancel(); commandTail = nil; cursorCommandGroup = nil; lastCursorPost = .distantPast; pending = [:]; transportAnchor = nil; playbackClock = DirectorPlaybackClock(); fadeoutClock = DirectorFadeoutClock(); partArrival = nil; consumedPartID = ""; volumeTasks.values.forEach { $0.cancel() }; volumeTasks = [:]; itemVolumePreviews = acceptedItemVolumes; volumeRevisions = [:]; connected = false }
     private func refresh(_ token: UUID) async {
         do {
             if !readOnly && !projectSelected {
@@ -125,6 +125,16 @@ enum HookMode: String, CaseIterable, Identifiable {
                 volumeTasks = [:]; volumeRevisions = [:]
                 acceptedItemVolumes = [:]; itemVolumeBaselines = [:]; itemVolumePreviews = [:]
                 pending = [:]; transportAnchor = nil; playbackClock = DirectorPlaybackClock(); fadeoutClock = DirectorFadeoutClock(); remoteSnapshot = [:]; partArrival = nil; consumedPartID = ""
+            }
+            if data["standby"].bool && !projectChanged && ["regions", "playlists", "markers"].contains(where: { !snapshot[$0].array.isEmpty }) {
+                // Discovery contains deliberately empty arrays and stopped transport.
+                // It can refresh connection/auth metadata, never erase a full show.
+                let keys = ["standby", "ok", "connected", "reaperOnline", "nativeBridge", "bridgeVersion", "extensionVersion",
+                    "updatedAt", "heartbeatAt", "projectName", "currentProjectName", "projectPath", "projectId", "currentProjectId",
+                    "projects", "projectTabs", "openProjects", "activeProjectTabIndex", "directorAuthEnabled", "authEnabled",
+                    "accessAuthEnabled", "directorAuthHash", "authHash", "accessAuthHash", "directorPasswordHash",
+                    "directorAuthRevision", "authRevision", "accessAuthRevision", "technicalNotice", "technicalNoticeSettings"]
+                data = .object(data.object.filter { keys.contains($0.key) })
             }
             if let arrival = partArrival, readRevision >= arrival.revision, data["playing"].bool {
                 let position = data["playPosition"].double
@@ -164,8 +174,10 @@ enum HookMode: String, CaseIterable, Identifiable {
                 } else { transportAnchor = nil }
             }
             let receivedAt = Date()
-            playbackClock.update(next, at: receivedAt)
-            fadeoutClock.update(next, at: receivedAt)
+            if !next["standby"].bool {
+                playbackClock.update(next, at: receivedAt)
+                fadeoutClock.update(next, at: receivedAt)
+            }
             lastUpdate = receivedAt
             if snapshot != next { snapshot = next }
             reconcileTCPItemVolumes(tcpItems)
@@ -196,30 +208,32 @@ enum HookMode: String, CaseIterable, Identifiable {
         } catch {
             guard !Task.isCancelled, generation == token else { return }
             connected = false
+            clearPartCountdownNotice()
             message = "Conexão interrompida. Tentando reconectar…"
         }
+    }
+    private func clearPartCountdownNotice() {
+        partCountdownKey = ""
+        partCountdownLastPosition = nil
+        if !partCountdownNotice.isEmpty { partCountdownNotice = "" }
+        if partCountdownNoticeUntil != .distantPast { partCountdownNoticeUntil = .distantPast }
     }
     private func updatePartCountdownNotice(_ data: JSON, at date: Date) {
         let playing = data.first("playing", "isPlaying", "transportPlaying").bool
         let looping = data.first("loopEnabled", "loopActive", "repeatEnabled", "loop").bool
-        guard playing, !looping else {
-            partCountdownKey = ""
-            partCountdownLastPosition = nil
-            if !partCountdownNotice.isEmpty {
-                partCountdownNotice = ""
-                partCountdownNoticeUntil = .distantPast
-            }
-            return
-        }
+        guard playing, !data.first("transportPaused", "paused", "isPaused").bool,
+              !data["standby"].bool, data["connected"] != false, data["reaperOnline"] != false else { clearPartCountdownNotice(); return }
 
         let sample = data.first("playPosition", "currentPlayPosition", "currentPosition", "playbackPosition", "position")
         let songID = data.first("playingId", "playingSongId", "playingRegionId", "currentRegionId").string
         let playingSong = song(withID: songID)
-        guard sample.exists, playingSong.exists else { return }
-        let position = playbackClock.position(at: date, fallback: data)
+        guard sample.exists, sample.double.isFinite, playingSong.exists else { clearPartCountdownNotice(); return }
+        // An estimated UI clock can reach a part while the host is stalled.
+        // Announce only from a confirmed playback sample.
+        let position = sample.double
         let start = playingSong.first("startPos", "start_pos").double
         let end = playingSong.first("endPos", "end_pos").double
-        guard end > start else { return }
+        guard end > start, position >= start - 0.0005, position < end else { clearPartCountdownNotice(); return }
 
         if let previous = partCountdownLastPosition, position < previous - 0.05 {
             partCountdownKey = ""
@@ -237,14 +251,13 @@ enum HookMode: String, CaseIterable, Identifiable {
             }
             .sorted { $0.position < $1.position }
 
-        let armedID = data.first("partsArmedMarkerId", "armedMarkerId", "markerGoId").string
+        let armedID = data.object["partsArmedMarkerId"]?.string ?? data.first("armedMarkerId", "markerGoId").string
         let announcePosition: Double
         let announceName: String
         let announceKey: String
         if !armedID.isEmpty {
             announcePosition = upcoming.first?.position ?? end
-            let startTargetPrefix = "__parts_song_start__:"
-            if armedID.hasPrefix(startTargetPrefix) {
+            if let startTargetPrefix = ["__parts_song_start__:", "start:"].first(where: { armedID.hasPrefix($0) }) {
                 let targetID = String(armedID.dropFirst(startTargetPrefix.count))
                 announceName = song(withID: targetID).name.isEmpty ? "ALVO ENGATILHADO" : song(withID: targetID).name
             } else if let marker = data["markers"].array.first(where: { $0.identifier == armedID }),
@@ -259,13 +272,22 @@ enum HookMode: String, CaseIterable, Identifiable {
             announceName = next.marker["partsDisplayName"].string
             announceKey = "part:\(next.marker.identifier):\(String(format: "%.4f", next.position))"
         } else {
-            return
+            clearPartCountdownNotice(); return
         }
 
+        if looping {
+            let loopEnd = data["loopEndPos"]
+            // Only hide an unreachable part: a long loop can contain several parts.
+            guard loopEnd.exists, loopEnd.double > position,
+                  armedID.isEmpty ? announcePosition < loopEnd.double - 0.0005 : announcePosition <= loopEnd.double + 0.0005 else {
+                clearPartCountdownNotice(); return
+            }
+        }
         let remaining = announcePosition - position
-        guard remaining >= -0.05, remaining <= 5.05,
-              !announceKey.isEmpty, announceKey != partCountdownKey else { return }
-        partCountdownKey = announceKey
+        guard remaining >= 0, remaining <= 5.05, !announceKey.isEmpty else { clearPartCountdownNotice(); return }
+        let scopedKey = "\(projectIdentity):\(songID):\(announceKey)"
+        guard scopedKey != partCountdownKey else { return }
+        partCountdownKey = scopedKey
         partCountdownNotice = (announceName.isEmpty ? "PART" : announceName).uppercased()
         partCountdownNoticeUntil = date.addingTimeInterval(1.6)
     }
@@ -322,6 +344,9 @@ enum HookMode: String, CaseIterable, Identifiable {
         }
         fadeoutClock.update(next, at: Date(), restart: changes["manualStopFadeoutActive"] == true)
         if next != snapshot { snapshot = next }
+        if changes["playing"] == false || changes["transportPaused"] == true || changes["partsArmedMarkerId"] == "" {
+            clearPartCountdownNotice()
+        }
         // An earlier successful request must not erase a newer command failure.
         message = ""
         let previous = commandTail

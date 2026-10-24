@@ -45,6 +45,8 @@ jobs:
           npm run build
           npm run test:discovery
           npm run test:tcp-grid
+          npm run test:director-state-loading
+          npm run test:director-parts-notices
 
       - name: Sincronizar Android
         run: |

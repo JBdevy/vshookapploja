@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vshook-mobile-1.0.3-teleprompt-inline-v1';
+const CACHE_NAME = 'vshook-mobile-1.0.3-parts-state-v2';
 const APP_ASSETS = [
   './',
   './index.html',

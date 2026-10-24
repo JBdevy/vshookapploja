@@ -22,7 +22,10 @@
     "sync:android": "node scripts/set-capacitor-app-id.js com.vshook.app && npm run build && npx cap sync android",
     "sync:ios": "node scripts/set-capacitor-app-id.js com.hookdeveloper.vshook && npm run build && npx cap sync ios",
     "build:android:apk": "node scripts/set-capacitor-app-id.js com.vshook.app && npm run build && npx cap sync android && cd android && ./gradlew assembleDebug",
-    "build:android:aab": "node scripts/set-capacitor-app-id.js com.vshook.app && npm run build && npx cap sync android && cd android && ./gradlew bundleRelease"
+    "build:android:aab": "node scripts/set-capacitor-app-id.js com.vshook.app && npm run build && npx cap sync android && cd android && ./gradlew bundleRelease",
+    "test:director-parts-notices": "node scripts/test-director-parts-notices.js",
+    "test:director-state-loading": "node scripts/test-director-state-loading.js",
+    "test:director-state-loading-browser": "node scripts/test-director-state-loading-browser.js"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "5.0.1",

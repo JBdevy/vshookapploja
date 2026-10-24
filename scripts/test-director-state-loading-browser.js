@@ -1,0 +1,252 @@
+// Browser integration with production JS and an entirely intercepted network.
+// Requires playwright-core (NODE_PATH may point to an existing installation).
+// Optional: PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chromium node this-file.js
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const vm = require('node:vm')
+const { chromium } = require('playwright-core')
+
+const root = path.resolve(process.env.VSHOOK_TEST_ROOT || path.join(__dirname, '..'))
+const base = 'http://192.0.2.10:47831'
+const source = fs.readFileSync(path.join(root, 'vsdiretor.js'), 'utf8')
+const full = {
+  connected: true, projectName: 'Projeto de teste', standby: false,
+  runtimeControlActive: false, playing: true, playingId: 'song-1', playPosition: 10,
+  regions: [{ id: 'song-1', name: 'Música fixture', start: 0, end: 120 }],
+  playlists: [], markers: [],
+}
+const html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/stylediretor-app.css"></head><body><div id="app"></div><script src="/vsdiretor.js"></script></body></html>'
+
+async function fixture(browser, role, initial, options = {}) {
+  const page = await browser.newPage({ viewport: options.tablet ? { width: 1024, height: 768 } : { width: 390, height: 844 } })
+  let payload = initial, polls = 0
+  const commands = [], errors = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.addInitScript(({ role, base, tuner, tablet }) => {
+    localStorage.setItem('vshook_selected_mode', role)
+    if (tuner) localStorage.setItem('vshook_director_tuner_open', '1')
+    localStorage.setItem('vshook_director_url', base)
+  }, { role, base, tuner: !!options.tuner, tablet: !!options.tablet })
+  await page.route('**/*', async route => {
+    const request = route.request()
+    const url = new URL(request.url())
+    // No request reaches the LAN, internet or a real project.
+    if (url.origin !== base) return route.abort()
+    if (url.pathname === '/') return route.fulfill({
+      contentType: 'text/html',
+      body: options.shell ? fs.readFileSync(path.join(root, 'index.html')) : (options.tablet ? html.replace('<html>', '<html data-director-device="tablet">') : html),
+    })
+    if (url.pathname === '/projects' || url.pathname === '/discovery') {
+      return route.fulfill({ json: {
+        app: 'VS Hook', appName: 'VS Hook Diretor', projectName: 'Projeto de teste',
+        projects: [{ id: '0', index: 0, name: 'Projeto de teste', active: true }],
+      } })
+    }
+    if (url.pathname === '/state') {
+      polls += 1
+      if (polls === 1 && options.firstStateDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.firstStateDelayMs))
+      }
+      return route.fulfill({ json: payload })
+    }
+    if (url.pathname === '/command') {
+      commands.push(request.postDataJSON())
+      return route.fulfill({ json: { ok: true } })
+    }
+    if (url.pathname === '/technical-notice') return route.fulfill({ json: { ok: true, enabled: false } })
+    if (url.pathname === '/mixer-timeline-cache') return route.fulfill({ json: { ok: true, projects: [] } })
+    const file = path.resolve(root, '.' + url.pathname)
+    if (file.startsWith(root + path.sep) && fs.existsSync(file) && fs.statSync(file).isFile()) {
+      const contentType = file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : 'image/png'
+      return route.fulfill({ contentType, body: fs.readFileSync(file) })
+    }
+    return route.fulfill({ status: 404, body: 'Not found' })
+  })
+  await page.goto(base)
+  return { page, commands, errors, polls: () => polls, set: next => { payload = next } }
+}
+
+async function waitFor(check, message, timeout = 7000) {
+  const deadline = Date.now() + timeout
+  while (!(await check())) {
+    assert(Date.now() < deadline, message)
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+}
+
+async function run() {
+  const browser = await chromium.launch({
+    headless: true,
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}),
+  })
+  try {
+    for (const role of ['director', 'musician']) {
+      for (const pageField of ['currentPage', 'activePage', 'activeTab']) {
+        const f = await fixture(browser, role, { ...full, [pageField]: 'regions', standby: true, playing: false, regions: [] })
+        try {
+          await waitFor(() => f.polls() >= 3, 'initial standby should be polled')
+          assert.equal(await f.page.locator('.musicListRenderCache .item').count(), 0)
+          f.set({ ...full, [pageField]: 'regions' })
+          await f.page.locator('.musicListRenderCache .item').first().waitFor({ state: 'visible', timeout: 6000 })
+          assert((await f.page.locator('.musicListRenderCache').innerText()).includes('MÚSICA FIXTURE'))
+          assert.equal(await f.page.locator('.app').getAttribute('data-active-tab'), 'regions')
+          const afterFull = f.polls()
+          f.set({ ...full, [pageField]: 'regions', standby: true, playing: false, regions: [] })
+          await waitFor(() => f.polls() >= afterFull + 2, 'later standby should arrive')
+          assert.equal(await f.page.locator('.musicListRenderCache .item').count(), 1, 'later standby must retain mounted rows')
+          if (role === 'director') {
+            const enter = f.commands.find(command => command.type === 'director_enter')
+            assert(enter, 'authenticated Director must claim the session')
+            assert.equal(enter.payload.role, 'director')
+            assert.equal(enter.payload.authenticated, true)
+            if (pageField === 'currentPage') {
+              await waitFor(() => f.commands.some(command => command.type === 'app_heartbeat'), 'Director must keep its heartbeat')
+            }
+          } else {
+            assert.equal(f.commands.length, 0, 'Musician must remain a passive reader')
+          }
+          assert.deepEqual(f.errors, [])
+          console.log(`DOM_OK: ${role} ${pageField}, initial standby -> playing full -> later standby; ${f.polls()} polls`)
+        } finally { await f.page.close() }
+      }
+    }
+
+    for (const role of ['director', 'musician']) {
+      const f = await fixture(browser, role, {...full, projectId:'A', activePage:'regions'})
+      try {
+        await f.page.locator('.musicListRenderCache .item').first().waitFor({state:'visible'})
+        const count = f.polls()
+        f.set({connected:true, projectId:'A', activePage:'regions', markers:[{id:'m',name:'$Part',pos:60}]})
+        await waitFor(() => f.polls() >= count+2, 'partial marker state arrives')
+        assert.equal(await f.page.locator('.musicListRenderCache .item').count(), 1, 'partial update retains music')
+        f.set({...full, projectId:'B', standby:true, playing:false, activePage:'regions', regions:[]})
+        await waitFor(async () => (await f.page.locator('.musicListRenderCache .item').count()) === 0, 'another project clears the previous list')
+        f.set({...full, projectId:'B', activePage:'regions', regions:[{id:'song-2',name:'Novo projeto',start:0,end:60}]})
+        await waitFor(async () => (await f.page.locator('.musicListRenderCache').innerText()).includes('NOVO PROJETO'), 'full state of new project becomes visible')
+        assert.deepEqual(f.errors, [])
+        console.log(`DOM_OK: ${role} partial update retains music; project switch clears and reloads the list`)
+      } finally { await f.page.close() }
+    }
+
+    // The same production client serves both QR roles and both screen sizes.
+    for (const role of ['director', 'musician']) {
+      for (const tablet of [false, true]) {
+        const payload = { ...full, currentPage: 'regions', currentSongStart: 0,
+          currentSongEnd: 120, playPosition: 24,
+          markers: [{ id: 'verse', name: '$Verso', pos: 30 }] }
+        const f = await fixture(browser, role, payload, { tablet })
+        try {
+          await waitFor(() => f.polls() >= 3, 'countdown state loaded')
+          assert.equal(await f.page.locator('.directorPopup').count(), 0, 'no early popup at six seconds')
+          f.set({ ...payload, playPosition: 25.1 })
+          await f.page.locator('.directorPopup').filter({ hasText: 'VERSO' }).waitFor({ state: 'visible' })
+          await f.page.locator('.directorPopup').waitFor({ state: 'hidden', timeout: 4000 })
+          const polls = f.polls()
+          await waitFor(() => f.polls() >= polls + 3, 'repeated snapshots observed')
+          assert.equal(await f.page.locator('.directorPopup').count(), 0, 'same part is announced once')
+          if (role === 'musician') assert.equal(f.commands.length, 0, 'announcement must not send control commands')
+          assert.deepEqual(f.errors, [])
+          console.log(`DOM_OK: ${role} ${tablet ? 'tablet' : 'phone'} next-part popup, five-second lead, no repeats`)
+        } finally { await f.page.close() }
+      }
+    }
+
+    for (const role of ['director', 'musician']) {
+      const payload = { ...full, currentPage: 'regions', currentSongStart: 0, currentSongEnd: 120,
+        playPosition: 26, armedMarkerId: 'back',
+        markers: [{id:'verse',name:'$Verso',pos:30}, {id:'back',name:'*2Volta',pos:10}, {id:'far',name:'*1Outra',pos:140}] }
+      const f = await fixture(browser, role, payload, {tablet:true})
+      try {
+        await f.page.locator('.directorPopup').filter({hasText:'VOLTA'}).waitFor({state:'visible'})
+        f.set({...payload, armedMarkerId:'far'})
+        await f.page.locator('.directorPopup').filter({hasText:'OUTRA'}).waitFor({state:'visible'})
+        f.set({...payload, armedMarkerId:null})
+        await f.page.locator('.directorPopup').filter({hasText:'VERSO'}).waitFor({state:'visible'})
+        f.set({...payload, armedMarkerId:null, loopActive:true, loopStartPos:0, loopEndPos:30})
+        await f.page.locator('.directorPopup').waitFor({state:'hidden', timeout:1200})
+        f.set({...payload, armedMarkerId:null, loopActive:true, loopStartPos:0, loopEndPos:60})
+        await f.page.locator('.directorPopup').filter({hasText:'VERSO'}).waitFor({state:'visible'})
+        f.set({...payload, armedMarkerId:'back', loopActive:true, loopStartPos:0, loopEndPos:30})
+        await f.page.locator('.directorPopup').filter({hasText:'VOLTA'}).waitFor({state:'visible'})
+        f.set({...payload, armedMarkerId:null, loopActive:false, playPosition:31})
+        await f.page.locator('.directorPopup').waitFor({state:'hidden', timeout:1200})
+        if (role === 'musician') assert.equal(f.commands.length, 0)
+        assert.deepEqual(f.errors, [])
+        console.log(`DOM_OK: ${role} armed backward/other song, confirmed cancellation, crossing clears cue`)
+      } finally { await f.page.close() }
+    }
+
+    const tunerSong = { id: 'song-1', name: 'Música fixture', sourceNumber: 7, startPos: 0, endPos: 120 }
+    const tunerData = { ...full, playing: false, currentPage: 'playlist', activePlaylistId: 'pl',
+      regions: [{ ...tunerSong, tunerValue: 3 }],
+      playlists: [{ id: 'pl', name: 'Playlist fixture', songs: [{ ...tunerSong, tunerValue: 0 }] }] }
+    const tuner = await fixture(browser, 'director', tunerData, { tuner: true })
+    try {
+      const value = tuner.page.locator('[data-tuner-value-for="song-1"]')
+      await value.waitFor({ state: 'visible' })
+      await waitFor(async () => (await value.innerText()).includes('+3'), 'playlist must use current region pitch, not stale zero')
+      tuner.set({ ...tunerData, regions: [{ ...tunerSong, tunerValue: -2 }] })
+      await waitFor(async () => (await value.innerText()).includes('-2'), 'external pitch change must update the visible row')
+      tuner.set({ ...tunerData, regions: [tunerSong] })
+      await waitFor(async () => (await value.innerText()).includes('—'), 'missing pitch is unavailable, not a false zero')
+      assert(await tuner.page.locator('[data-action="tuner-plus"][data-tuner-song-id="song-1"]').isDisabled())
+      assert.deepEqual(tuner.errors, [])
+      console.log('DOM_OK: Tuner uses live region value, refreshes external edits, disables unavailable pitch')
+    } finally { await tuner.page.close() }
+
+    // A newly opened password-protected Director must not claim ownership
+    // before a valid login, even though GET /state succeeds.
+    const hashStart = source.indexOf('  function simpleHash(')
+    const hashEnd = source.slice(hashStart + 1).search(/\n  (?:async )?function /)
+    const authHash = vm.runInNewContext(source.slice(hashStart, hashStart + 1 + hashEnd) + '; simpleHash("fixture-pass")')
+    const f = await fixture(browser, 'director', { ...full, activePage: 'regions', directorAuthEnabled: true, directorAuthHash: authHash })
+    try {
+      await f.page.locator('#directorPassInput').waitFor({ state: 'visible' })
+      await waitFor(() => f.polls() >= 3, 'protected state should be polled')
+      assert(!f.commands.some(command => command.type === 'director_enter'))
+      await f.page.locator('#directorPassInput').fill('incorrect')
+      await f.page.locator('[data-action="auth-login"]').click()
+      await f.page.waitForFunction(() => document.querySelector('.authGateError')?.textContent.includes('INVÁLIDA'))
+      assert(!f.commands.some(command => command.type === 'director_enter'))
+      await f.page.locator('#directorPassInput').fill('fixture-pass')
+      await f.page.locator('#directorPassInput').press('Enter')
+      await f.page.locator('.musicListRenderCache .item').first().waitFor({ state: 'visible' })
+      await waitFor(() => f.commands.some(command => command.type === 'director_enter'), 'valid login should claim Director')
+      assert.deepEqual(f.errors, [])
+      console.log('DOM_OK: Director authentication preserved; invalid password never claims; valid password loads music')
+    } finally { await f.page.close() }
+
+    const delayed = await fixture(browser, 'director', {
+      ...full, activePage: 'regions', standby: true, regions: [], playing: false,
+    }, { firstStateDelayMs: 1800 })
+    try {
+      await waitFor(() => delayed.commands.some(command => command.type === 'director_enter'), 'bounded server wait must fit the existing client timeout')
+      delayed.set({ ...full, activePage: 'regions' })
+      await delayed.page.locator('.musicListRenderCache .item').first().waitFor({ state: 'visible', timeout: 6000 })
+      assert.deepEqual(delayed.errors, [])
+      console.log('DOM_OK: 1800 ms initial cached response remains inside client timeout; next poll displays refreshed music')
+    } finally { await delayed.page.close() }
+
+    for (const role of ['director', 'musician']) {
+      const shell = await fixture(browser, role, { ...full, currentPage: 'regions' }, { shell: true })
+      try {
+        await shell.page.locator(role === 'director' ? '#chooseDirectorBtn' : '#chooseMusicianBtn').click()
+        if (role === 'director') {
+          await shell.page.locator('#chooseDirectorPhoneBtn').click()
+          await shell.page.locator('[data-project-index="0"]').click()
+        }
+        await shell.page.locator('.musicListRenderCache .item').first().waitFor({ state: 'visible' })
+        assert.equal(await shell.page.locator('.app').getAttribute('data-active-tab'), 'regions')
+        assert.deepEqual(shell.errors, [])
+        if (role === 'musician') assert.equal(shell.commands.length, 0)
+        else assert(shell.commands.some(command => command.type === 'set_project_tab'))
+        const loadedScript = await shell.page.locator('script[data-vshook-mode-script]').getAttribute('src')
+        assert(loadedScript.includes('parts-state-v2'), 'QR shell must request the refreshed client asset')
+        console.log(`DOM_OK: QR index -> project discovery -> ${role} -> visible music, refreshed script loaded`)
+      } finally { await shell.page.close() }
+    }
+  } finally { await browser.close() }
+}
+
+run().catch(error => { console.error(error); process.exitCode = 1 })

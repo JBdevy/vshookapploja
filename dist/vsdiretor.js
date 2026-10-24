@@ -1687,6 +1687,7 @@
   function showPopup(text, kind = 'info', durationMs = 1200) {
     const duration = Math.max(500, Number(durationMs) || 1200)
     const until = now() + duration
+    state.popupOwner = ''
     state.popupText = String(text || '')
     state.popupKind = kind
     state.popupUntil = until
@@ -4956,7 +4957,7 @@
     }
 
     const reportedBridgePage = normalizeSharedPage(
-      data?.activePage || data?.activeTab)
+      data?.activePage || data?.activeTab || data?.currentPage)
     // O app dos músicos acompanha as duas listas compartilhadas, mas não troca
     // para Mixer. Ao abrir Músicas na extensão ou no Diretor, ele passa a exibir
     // a mesma Lista Geral; ao voltar para Repertório, volta junto.
@@ -6690,12 +6691,13 @@
       const discoveryKeys = [
         'ok', 'connected', 'nativeBridge', 'bridgeVersion',
         'extensionVersion', 'updatedAt', 'heartbeatAt',
-        'projectName', 'currentProjectName', 'projectPath',
+        'projectName', 'currentProjectName', 'projectPath', 'projectId', 'currentProjectId',
         'projects', 'projectTabs', 'openProjects',
         'openProjectPlaylists', 'allProjectPlaylists',
         'activeProjectTabIndex', 'directorAuthEnabled',
         'authEnabled', 'accessAuthEnabled', 'directorAuthHash',
         'authHash', 'accessAuthHash', 'directorPasswordHash',
+        'directorAuthRevision', 'authRevision', 'accessAuthRevision',
         'recadosAuthEnabled', 'technicalNoticeAuthEnabled',
         'recadosAuthHash', 'technicalNoticeAuthHash',
         'technicalNoticeSettings', 'technicalNotice',
@@ -6709,7 +6711,7 @@
       merged.listPreservedFromLastGood = true
       return merged
     }
-    if (!previous || !hasAnyListData(previous) || hasAnyListData(next)) return next
+    if (!previous) return next
     const merged = { ...next }
     // Uma lista vazia em snapshot completo é um estado real (por exemplo,
     // projeto sem repertórios). Só preserva dados antigos quando a propriedade
@@ -7636,16 +7638,26 @@
     return visualPosition
   }
 
+  function clearPartCountdownPopup() {
+    state.partCountdownKey = ''
+    state.partCountdownLastPosition = null
+    if (state.popupOwner === 'parts') {
+      state.popupOwner = ''
+      state.popupText = ''
+      state.popupUntil = 0
+      syncDirectorPopupDom()
+    }
+  }
+
   function processPartCountdownPopup(data = state.snapshot) {
-    if (!isPlaying(data) || getLoopActive(data)) {
-      state.partCountdownKey = ''
-      state.partCountdownLastPosition = null
-      return
+    if (!isPlaying(data) || isPaused(data) || data?.standby === true ||
+        data?.connected === false || data?.reaperOnline === false) {
+      clearPartCountdownPopup(); return
     }
 
     const playPos = getCurrentPlaybackPosition(data)
     const playingRegion = getPartsSongTarget('playing', data)
-    if (playPos === null || !playingRegion.available) return
+    if (playPos === null || !playingRegion.available) { clearPartCountdownPopup(); return }
 
     const previousPos = Number(state.partCountdownLastPosition)
     if (Number.isFinite(previousPos) && playPos < previousPos - 0.05) state.partCountdownKey = ''
@@ -7662,7 +7674,8 @@
       .filter((row) => row && row.pos > playPos + 0.0005 && row.pos >= regionStart - 0.0005 && row.pos < regionEnd - 0.0005)
       .sort((a, b) => a.pos - b.pos)
 
-    const armedId = String(state.partsArmedMarkerId || data?.armedMarkerId || data?.markerGoId || '')
+    // Confirmed host state wins over a stale local Parts panel selection.
+    const armedId = String(data?.partsArmedMarkerId ?? data?.armedMarkerId ?? data?.markerGoId ?? '')
     let announcePos = null
     let announceName = ''
     let announceKey = ''
@@ -7673,8 +7686,9 @@
       announcePos = partRows.length ? partRows[0].pos : regionEnd
       const armedMarker = getMarkers(data).find((marker) => String(getId(marker)) === armedId)
       const armedInfo = armedMarker ? getPartsMarkerInfo(armedMarker) : null
-      announceName = armedInfo?.name || (armedId.indexOf('__parts_song_start__:') === 0
-        ? findSongNameById(armedId.slice('__parts_song_start__:'.length), data)
+      const startPrefix = ['__parts_song_start__:', 'start:'].find(prefix => armedId.startsWith(prefix))
+      announceName = armedInfo?.name || (startPrefix
+        ? findSongNameById(armedId.slice(startPrefix.length), data)
         : '') || 'ALVO ENGATILHADO'
       announceKey = `armed:${armedId}:${Number(announcePos).toFixed(4)}`
     } else if (partRows.length) {
@@ -7684,11 +7698,22 @@
       announceKey = `part:${String(getId(next.marker))}:${next.pos.toFixed(4)}`
     }
 
-    if (!Number.isFinite(Number(announcePos))) return
+    if (announcePos === null || !Number.isFinite(Number(announcePos))) { clearPartCountdownPopup(); return }
+    if (getLoopActive(data)) {
+      const loopEnd = firstFiniteNumber([data?.loopEndPos])
+      if (loopEnd === null || loopEnd <= playPos ||
+          (armedId ? announcePos > loopEnd + 0.0005 : announcePos >= loopEnd - 0.0005)) {
+        clearPartCountdownPopup(); return
+      }
+    }
     const remaining = Number(announcePos) - playPos
-    if (remaining < -0.05 || remaining > 5.05 || !announceKey || announceKey === state.partCountdownKey) return
+    if (remaining <= 0 || remaining > 5.05 || !announceKey) { clearPartCountdownPopup(); return }
+    const project = getPremixProjectPayload(data)
+    announceKey = `${project.premixProjectId || project.premixProjectPath}:${playingRegion.id}:${announceKey}`
+    if (announceKey === state.partCountdownKey) return
     state.partCountdownKey = announceKey
     showPopup(upperText(announceName || 'PART'), 'info', 1600)
+    state.popupOwner = 'parts'
   }
 
   // Regresso do marker engatilhado: usa o trecho atual entre dois markers

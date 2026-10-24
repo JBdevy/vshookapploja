@@ -368,7 +368,61 @@ final class MockBridge: URLProtocol, @unchecked Sendable {
         check(!notice.active(at: instant.addingTimeInterval(1), settings: prefs.notice, slot: 1), "cancelled notice immediately clears")
         check(DirectorNumberOrder.ascending([["id": 1], ["id": 2]]) && !DirectorNumberOrder.ascending([["id": 2], ["id": 1]]), "0-9 alternates direction from the current list order")
         print("VSHOOK_DIRECTOR_REFERENCE_OK: blocks, families, bridge controls, timer and song progress")
+        try await testStateLoadingAndPartNotices(project: project, http: http)
         print("VSHOOK_CORE_OK: protocol, discovery, authentication, queue, volume, rollback and passive musician")
+    }
+
+    @MainActor static func testStateLoadingAndPartNotices(project: HookProject, http: BridgeHTTP) async throws {
+        let song: JSON = ["id": "a", "name": "Canção A", "startPos": 0, "endPos": 120]
+        let full: JSON = ["connected": true, "projectId": "project-a", "currentPage": "regions", "standby": false,
+            "playing": true, "playingId": "a", "playPosition": 24, "regions": [song], "playlists": [],
+            "markers": [["id": "verse", "name": "$Verso", "pos": 30], ["id": "bridge", "name": "$Ponte", "pos": 80], ["id": "back", "name": "*2Volta", "pos": 10], ["id": "other", "name": "*4Outra", "pos": 140]]]
+        for mode in [HookMode.director, .musician] {
+            MockBridge.reset(full.merging(["standby": true, "regions": [], "markers": [], "playing": false]))
+            let session = HookSession(project: project, mode: mode, tablet: true, http: http)
+            session.start()
+            defer { session.suspend() }
+            try await until { session.connected }
+            check(session.visibleItems.isEmpty, "initial discovery waits for the full repertoire")
+            MockBridge.state(full)
+            try await until { session.visibleItems.count == 1 }
+            check(session.page == "regions" && session.partCountdownNotice.isEmpty, "legacy page loads music; no cue at six seconds")
+            MockBridge.state(full.merging(["standby": true, "regions": [], "markers": [], "playing": false]))
+            try await until { session.snapshot["standby"].bool }
+            check(session.visibleItems.count == 1, "standby must not erase received songs")
+            MockBridge.state(full.merging(["playPosition": 25.1]))
+            try await until { session.partCountdownNotice == "VERSO" }
+            for (id, name) in [("back", "VOLTA"), ("other", "OUTRA"), ("start:a", "CANÇÃO A"), ("__parts_song_start__:a", "CANÇÃO A")] {
+                MockBridge.state(full.merging(["playPosition": 26, "armedMarkerId": .string(id)]))
+                try await until { session.partCountdownNotice == name && session.snapshot["armedMarkerId"] == .string(id) }
+            }
+            MockBridge.state(full.merging(["playPosition": 26, "armedMarkerId": "bridge"]))
+            try await until { session.partCountdownNotice == "PONTE" }
+            MockBridge.state(full.merging(["playPosition": 26.2, "armedMarkerId": .null, "transportPaused": true]))
+            try await until { session.snapshot["transportPaused"].bool }
+            check(session.partCountdownNotice.isEmpty, "pause removes an armed cue immediately")
+            MockBridge.state(full.merging(["playPosition": 26.3, "transportPaused": false, "armedMarkerId": .null]))
+            try await until { session.partCountdownNotice == "VERSO" }
+            MockBridge.state(full.merging(["playPosition": 26.4, "loopEnabled": true, "loopEndPos": 60, "armedMarkerId": .null]))
+            try await until { session.snapshot["loopEnabled"].bool }
+            check(session.partCountdownNotice == "VERSO", "a part inside a longer loop must still be announced")
+            MockBridge.state(full.merging(["playPosition": 26.4, "loopEnabled": true, "loopEndPos": 30, "armedMarkerId": .null]))
+            try await until { session.snapshot["loopEndPos"] == 30 }
+            check(session.partCountdownNotice.isEmpty, "loop boundary returns before the next natural part")
+            MockBridge.state(full.merging(["playPosition": 26.4, "loopEnabled": true, "loopEndPos": 30, "armedMarkerId": "bridge"]))
+            try await until { session.partCountdownNotice == "PONTE" }
+            MockBridge.state(full.merging(["playPosition": 30.2, "loopEnabled": false, "armedMarkerId": .null]))
+            try await until { session.snapshot["playPosition"] == 30.2 }
+            check(session.partCountdownNotice.isEmpty, "crossing a part removes its popup")
+            MockBridge.state(full.merging(["projectId": "project-b", "standby": true, "regions": [], "playlists": [], "markers": []]))
+            try await until { session.projectIdentity == "project-b" }
+            check(session.visibleItems.isEmpty, "another project's discovery must not reuse previous music")
+            MockBridge.state(full.merging(["projectId": "project-b", "regions": [], "playlists": [], "markers": [], "playing": false]))
+            try await until { session.snapshot["standby"] == false }
+            check(session.visibleItems.isEmpty && session.partCountdownNotice.isEmpty, "a full empty project clears the old list and cue")
+            if mode == .musician { check(MockBridge.sent.isEmpty, "musician loading and cues remain passive") }
+        }
+        print("VSHOOK_STATE_CUES_OK: both roles, standby/full/empty/project transitions, natural/armed cues, pause and crossing")
     }
 
     @MainActor static func testLiveCursorDrag(project: HookProject, http: BridgeHTTP) async throws {
