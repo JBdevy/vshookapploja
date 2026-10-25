@@ -81,6 +81,9 @@ jobs:
           bash JarasLive/scripts/test-native-project-tabs.sh
           bash JarasLive/scripts/test-native-picker-handoff.sh
           bash JarasLive/scripts/test-control-mappings.sh
+          bash JarasLive/scripts/test-remote-midi-actions.sh
+          bash JarasLive/scripts/test-ipad-setlist-blocks.sh
+          bash JarasLive/scripts/test-empty-track-mixer-selection.sh
           bash JarasLive/scripts/test-daw-remote.sh
 
       - name: Preparar assinatura e chave de envio
