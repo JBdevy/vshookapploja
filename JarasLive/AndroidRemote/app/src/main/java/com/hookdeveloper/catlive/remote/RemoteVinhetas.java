@@ -55,19 +55,19 @@ final class RemoteVinhetas extends LinearLayout {
         LinearLayout header=row(activity);
         TextView panic=button("Panic",()->{releaseAll();for(PadCell cell:pads){cell.surface.pending.clear();cell.surface.litBanks.clear();cell.surface.feedback.confirmed.clear();cell.surface.feedback.held.clear();cell.surface.invalidate();}remote.action("vinhetasPanic");});
         panic.setBackground(flat(0xff8d2845));
-        if(!tablet){TextView title=label(activity,"Vinhetas",16,TEXT);title.setTypeface(bold);header.addView(title,new LayoutParams(0,dp(30),1));header.addView(panic,new LayoutParams(dp(60),dp(30)));addView(header);space(this,8);}
-        for(int row=0;row<(tablet?1:2);row++){
+        if(!activity.tabletLayout()){TextView title=label(activity,"Vinhetas",16,TEXT);title.setTypeface(bold);header.addView(title,new LayoutParams(0,dp(30),1));header.addView(panic,new LayoutParams(dp(60),dp(30)));addView(header);space(this,8);}
+        for(int row=0;row<(activity.tabletLayout()?1:2);row++){
             LinearLayout bank=row(activity);
-            for(int column=0;column<(tablet?6:3);column++){
-                int index=row*(tablet?6:3)+column;
+            for(int column=0;column<(activity.tabletLayout()?6:3);column++){
+                int index=row*(activity.tabletLayout()?6:3)+column;
                 TextView button=button("Preset "+(index+1),()->remote.action("vinhetasPreset",null,index));presets[index]=button;
                 LayoutParams lp=new LayoutParams(0,dp(30),1);if(column>0)lp.leftMargin=dp(6);bank.addView(button,lp);
             }
-            if(tablet){LayoutParams lp=new LayoutParams(dp(60),dp(30));lp.leftMargin=dp(6);bank.addView(panic,lp);}
-            addView(bank,new LayoutParams(-1,dp(30)));space(this,row==0&&!tablet?6:8);
+            if(activity.tabletLayout()){LayoutParams lp=new LayoutParams(dp(60),dp(30));lp.leftMargin=dp(6);bank.addView(panic,lp);}
+            addView(bank,new LayoutParams(-1,dp(30)));space(this,row==0&&!activity.tabletLayout()?6:8);
         }
         warning=label(activity,"",11,YELLOW);warning.setVisibility(GONE);addView(warning,new LayoutParams(-1,-2));
-        if(tablet)addView(page(0,8,2),new LayoutParams(-1,0,1));
+        if(activity.tabletLayout())addView(page(0,8,2),new LayoutParams(-1,0,1));
         else {PagedScroll scroll=new PagedScroll(activity);scroll.setFillViewport(false);scroll.setVerticalScrollBarEnabled(true);scroll.setScrollbarFadingEnabled(false);scroll.setScrollBarStyle(SCROLLBARS_INSIDE_OVERLAY);scroll.setHorizontalScrollBarEnabled(false);
             LinearLayout pages=column(activity);pages.addView(page(0,2,4),new LayoutParams(-1,1));pages.addView(page(8,2,4),new LayoutParams(-1,1));scroll.addView(pages,new ScrollView.LayoutParams(-1,-2));addView(scroll,new LayoutParams(-1,0,1));}
         refresh();
@@ -75,7 +75,7 @@ final class RemoteVinhetas extends LinearLayout {
     TextView button(String title,Runnable action){TextView b=label(activity,title,12,TEXT);b.setTypeface(bold);b.setGravity(Gravity.CENTER);b.setMaxLines(1);b.setEllipsize(android.text.TextUtils.TruncateAt.END);b.setPadding(dp(3),0,dp(3),0);b.setClickable(true);b.setFocusable(true);b.setOnClickListener(v->action.run());return b;}
     static void space(LinearLayout parent,int height){parent.addView(new View(parent.getContext()),new LinearLayout.LayoutParams(1,dp(height)));}
     static android.graphics.drawable.GradientDrawable flat(int color){android.graphics.drawable.GradientDrawable d=new android.graphics.drawable.GradientDrawable();d.setColor(color);d.setCornerRadius(dp(5));return d;}
-    LinearLayout page(int start,int columns,int rows){LinearLayout page=column(activity);page.setPadding(0,0,dp(tablet?0:6),0);
+    LinearLayout page(int start,int columns,int rows){LinearLayout page=column(activity);page.setPadding(0,0,dp(activity.tabletLayout()?0:6),0);
         for(int r=0;r<rows;r++){LinearLayout line=row(activity);for(int c=0;c<columns;c++){PadCell cell=new PadCell(start+r*columns+c);pads.add(cell);LayoutParams lp=new LayoutParams(0,-1,1);if(c>0)lp.leftMargin=dp(8);line.addView(cell,lp);}LayoutParams lp=new LayoutParams(-1,0,1);if(r>0)lp.topMargin=dp(8);page.addView(line,lp);}return page;}
     void refresh(){JSONObject next=activity.state==null?null:activity.state.optJSONObject("vinhetas");state=next;selected=next==null?0:Math.max(0,Math.min(5,next.optInt("selectedPreset")));available=next!=null&&next.optBoolean("available");JSONArray banks=RemoteModel.array(next,"presets");
         warning.setText(next==null?"Atualize o CatLive no computador para controlar as Vinhetas.":available?"":"Crie a pista VINHETAS-FX no computador para tocar os pads.");warning.setVisibility(next==null||!available?VISIBLE:GONE);

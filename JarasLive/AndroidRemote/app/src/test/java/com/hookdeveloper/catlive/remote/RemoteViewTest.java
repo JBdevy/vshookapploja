@@ -7,6 +7,16 @@ public class RemoteViewTest {
  @After public void close(){controller.pause().stop().destroy();}
  JSONObject state()throws Exception{return new JSONObject(new String(getClass().getResourceAsStream("/remote-state.json").readAllBytes(),StandardCharsets.UTF_8));}
  void connect(String mode)throws Exception{app.entering=true;app.remote.connected=true;app.remote.mode=mode;app.remote.state=state();app.onChanged();app.root.measure(View.MeasureSpec.makeMeasureSpec(393,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(851,View.MeasureSpec.EXACTLY));app.root.layout(0,0,393,851);}
+ @Test public void footerNoticeExpiresDespiteRepeatedStatePackets()throws Exception{
+  connect("director");app.state.put("message","Salvo").put("footerInformation","Ignore Next");app.refresh();assertEquals("Salvo",app.information.getText().toString());
+  for(int i=0;i<6;i++){Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1));app.refresh();}
+  assertEquals("Ignore Next",app.information.getText().toString());
+  app.state.put("message","Novo aviso");app.refresh();assertEquals("Novo aviso",app.information.getText().toString());
+ }
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletFooterAlsoShowsAndExpiresNotices()throws Exception{
+  connect("director");assertNotNull(app.tabletInformation);app.state.put("message","Salvo").put("loop",true);app.refresh();assertEquals("Salvo",app.tabletInformation.getText().toString());
+  Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(6));app.tick();assertEquals("Loop Ativo",app.tabletInformation.getText().toString());
+ }
  @Test public void connectionLossShowsCenteredModalUntilAccessReturns()throws Exception{
   connect("director");app.remote.peerName="PC real";app.choose("grid");
   app.remote.connected=false;app.remote.mode="";app.remote.lastError="";app.onChanged();
@@ -32,6 +42,18 @@ public class RemoteViewTest {
  @Test public void manyTabsKeepReadableWidthAndScrollHorizontally()throws Exception{connect("director");JSONArray tabs=new JSONArray();for(int i=0;i<8;i++)tabs.put(new JSONObject().put("id","TAB"+i).put("name","Projeto "+i).put("selected",i==0));app.state.put("projectTabs",tabs);app.updateTabs();app.layoutProjectTabs(RemoteWidgets.dp(341));int total=0;for(int i=0;i<8;i++){assertTrue(app.tabs.getChildAt(i).getLayoutParams().width>=RemoteWidgets.dp(120));assertTrue(app.tabs.getChildAt(i).isLongClickable());total+=app.tabs.getChildAt(i).getLayoutParams().width;}assertTrue(total>RemoteWidgets.dp(341));assertSame(app.tabScroll,app.tabs.getParent());}
  @Test public void projectOpeningOverlaySurvivesWorkspaceReplacementAndOnlyReceiptFinishes()throws Exception{connect("director");JSONObject command=new JSONObject().put("id","COMMAND").put("action","openRecentProjectInNewTab");app.remote.projectOpening.begin(command,app.state,0);app.onLocalCommand(command);assertNotNull(app.root.findViewWithTag("project-loading"));assertTrue(app.root.findViewWithTag("project-loading").isClickable());app.buildWorkspace();app.tick();assertNotNull(app.root.findViewWithTag("project-loading"));app.state.put("projects",new JSONObject().put("commandID","COMMAND").put("commandState","completed"));app.remote.projectOpening.receive(app.state);app.tick();assertNull(app.root.findViewWithTag("project-loading"));}
  @Test public void changingPanelDoesNotRetainOldMixerViews()throws Exception{connect("director");app.choose("mixer");assertNotNull(app.trackColumn);app.choose("setlist");assertNull(app.trackColumn);app.choose("tp2");assertNotNull(app.tp);assertNull(app.setlistScroll);}
+ @Test @Config(qualifiers="sw800dp-w800dp-h1280dp-port") public void portraitTabletUsesPhoneControlsAndKeepsMasterInMixer()throws Exception{
+  connect("director");assertTrue(RemoteWidgets.tablet);assertFalse(app.tabletLayout());assertEquals("setlist",app.panel);
+  assertFalse(app.trackRows.containsKey("master"));app.railButtons.get("mixer").performClick();
+  assertEquals("mixer",app.panel);assertNotNull(app.trackRows.get("master"));
+  MainActivity.TrackRow master=app.trackRows.get("master");master.mute.performClick();assertTrue(app.state.optBoolean("masterMute"));master.mute.performClick();assertFalse(app.state.optBoolean("masterMute"));
+  app.railButtons.get("parts").performClick();assertEquals("parts",app.panel);assertNotNull(app.parts);
+ }
+ @Test public void fullscreenTeleprompterHidesRailAndRestoresItWithoutChangingPreference()throws Exception{
+  connect("director");app.choose("tp1");assertTrue(app.rail.getParent().getParent()==app.work);
+  app.fullscreen=true;app.buildWorkspace();assertNull(((View)app.rail.getParent()).getParent());assertNull(app.tabScroll.getParent());assertFalse(app.sidebarHidden);
+  app.fullscreen=false;app.buildWorkspace();assertSame(app.work,app.rail.getParent().getParent());assertNotNull(app.tabScroll.getParent());
+ }
  @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletHasParallelMixerGridSetlistAndPreview()throws Exception{connect("director");assertTrue(RemoteWidgets.tablet);assertNotNull(app.grid);assertNotNull(app.trackColumn);assertNotNull(app.setlistScroll);assertTrue(app.railButtons.containsKey("preview"));assertEquals(44,((LinearLayout.LayoutParams)app.railButtons.get("mixer").getLayoutParams()).height/RemoteWidgets.density,1);}
  @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletObserverRotatesPrompterAndSetlistWithoutReplacingThem()throws Exception{
   connect("observer");assertEquals("setlist",app.panel);assertNull(app.grid);assertNotNull(app.setlistScroll);assertEquals(View.GONE,app.tabs.getVisibility());

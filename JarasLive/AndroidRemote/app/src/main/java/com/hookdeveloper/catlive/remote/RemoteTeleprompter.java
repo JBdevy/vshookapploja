@@ -19,7 +19,7 @@ class RemoteTeleprompter extends View {
         if(tp==null){drawText(c,"Aguardando teleprompter…",new RectF(dp(10),dp(10),getWidth()-dp(10),getHeight()-dp(10)),dp(18),SECONDARY,false,Layout.Alignment.ALIGN_CENTER,0);return;}
         style=tp.optJSONObject("style");settings=tp.optJSONObject("settings");if(style==null)style=new JSONObject();
         preview=tp.optBoolean("preview")&&flag("previewEnabled","",true)&&!flag("ignorePreview","",false);
-        float outer=app.fullscreen?0:dp(3);top=outer;bottom=getHeight()-outer;
+        float outer=dp(6);top=outer;bottom=getHeight()-outer;
         String imageID=RemoteModel.id(tp,"imageID");if(!preview&&!imageID.isEmpty()){app.remote.requestImage(imageID);Bitmap image=app.remote.images.get(imageID.toLowerCase(Locale.ROOT));if(image!=null){boolean stretch=flag("mediaStretch","",false);float scale=(float)number("mediaScale",100)/100;float w,h;if(stretch){w=getWidth()*scale;h=(bottom-top)*scale;}else{float fit=Math.min(getWidth()/(float)image.getWidth(),(bottom-top)/image.getHeight())*scale;w=image.getWidth()*fit;h=image.getHeight()*fit;}c.save();c.clipRect(0,0,getWidth(),getHeight());paint.setColor(Color.WHITE);c.drawBitmap(image,null,new RectF((getWidth()-w)/2,(top+bottom-h)/2,(getWidth()+w)/2,(top+bottom+h)/2),paint);c.restore();}}
         if(!preview&&flag("clearMode","",false))return;
         List<Decoration> above=decorations(tp,true),below=decorations(tp,false);
@@ -109,7 +109,7 @@ class RemoteTeleprompter extends View {
         if(clock&&local&&side){
             RectF left=new RectF(area.left+dp(4),area.top,area.centerX()-dp(4),area.bottom),right=new RectF(area.centerX()+dp(4),area.top,area.right-dp(4),area.bottom);
             boolean timerLeft=position.startsWith("left");
-            clockText(c,timer,timerLeft?left:right,font,timerColor,timerBorder,timerEdge,2,true);
+            clockText(c,timer,timerLeft?left:right,font,timerColor,timerBorder,timerEdge,1,true);
             clockText(c,now,timerLeft?right:left,localFontForPosition(position,true),localColor,localBorder,localEdge,1,false);
             return;
         }
@@ -118,7 +118,7 @@ class RemoteTeleprompter extends View {
             float available=Math.max(1,area.width()-dp(8));float limit=!tablet&&local?Math.max(1,available-dp(152)):available;
             float width=Math.min(limit,Math.max(dp(118),textWidth("-00 : 00 : 00",font)+dp(36)));
             timerArea=new RectF(area.centerX()-width/2,area.top,area.centerX()+width/2,area.bottom);
-            clockText(c,timer,timerArea,font,timerColor,timerBorder,timerEdge,2,true);
+            clockText(c,timer,timerArea,font,timerColor,timerBorder,timerEdge,1,true);
         }
         if(local){
             float localFont=localFontForPosition(position,clock);float available=clock?Math.max(1,(area.width()-timerArea.width())/2-dp(8)):area.width();
