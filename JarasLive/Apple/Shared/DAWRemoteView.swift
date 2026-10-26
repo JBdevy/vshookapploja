@@ -2735,6 +2735,7 @@ private struct RemoteSidebarRail<Content: View>: View {
         case .playStop: action(state.playing || state.paused ? .stop : .play)
         case .repeatPlayback: action(.toggleLoop)
         case .bypass: action(.toggleMultiLoopBypass)
+        case .cancelSection: action(.cancelSection)
         case .toggleParts:
             if UIDevice.current.userInterfaceIdiom == .phone { choosePhonePanel(phonePanel.togglingFooterParts()) }
             else { sectionsInList = true; sectionsOpen.toggle() }
@@ -3168,7 +3169,7 @@ private struct RemoteSetlistRowLabel: View, Equatable {
     }
 }
 private enum RemoteMIDIAction: String, CaseIterable, Identifiable, Codable {
-    case setlistUp, setlistDown, partsUp, partsDown, toggleParts, play, stop, playStop, repeatPlayback, bypass, playlistUp, playlistDown
+    case setlistUp, setlistDown, partsUp, partsDown, toggleParts, cancelSection, play, stop, playStop, repeatPlayback, bypass, playlistUp, playlistDown
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -3177,6 +3178,7 @@ private enum RemoteMIDIAction: String, CaseIterable, Identifiable, Codable {
         case .partsUp: return "Parts Up"
         case .partsDown: return "Parts Down"
         case .toggleParts: return "Parts"
+        case .cancelSection: return "Cancel queued section"
         case .play: return "Play"
         case .stop: return "Stop"
         case .playStop: return "Play / Stop"

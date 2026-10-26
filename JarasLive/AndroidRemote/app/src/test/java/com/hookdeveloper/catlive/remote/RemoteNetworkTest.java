@@ -21,6 +21,19 @@ public class RemoteNetworkTest {
   app.remote.requestAccess("observer","");await(()->app.remote.mode.equals("observer"));assertNull(app.play);assertFalse(app.railButtons.containsKey("mixer"));
   JSONArray before=new JSONArray(new String(Files.readAllBytes(log),java.nio.charset.StandardCharsets.UTF_8));long commands=java.util.stream.IntStream.range(0,before.length()).filter(i->before.optJSONObject(i).has("command")).count();app.remote.action("play");Thread.sleep(250);Shadows.shadowOf(Looper.getMainLooper()).idle();JSONArray after=new JSONArray(new String(Files.readAllBytes(log),java.nio.charset.StandardCharsets.UTF_8));assertEquals(commands,java.util.stream.IntStream.range(0,after.length()).filter(i->after.optJSONObject(i).has("command")).count());
  }
+ @Test public void midiCancelsQueuedSectionWithoutStoppingPlaybackOrLoop()throws Exception{
+  assertTrue(java.util.Arrays.asList(RemoteMidi.ACTIONS).contains("cancelSection"));
+  app.remote.action("play");await(()->app.state.optBoolean("playing"));
+  app.remote.action("toggleLoop");await(()->app.state.optBoolean("loop"));
+  String marker=app.state.getJSONArray("markers").getJSONObject(0).getString("id");
+  app.remote.action("queueSection",marker,0);await(()->app.state.optJSONObject("sectionPlayback").has("queuedMarker"));
+  app.midi.learning="cancelSection";app.midi.received("Cancel test",0xb1,79,127);
+  app.midi.received("Cancel test",0xb1,79,0);app.midi.received("Cancel test",0xb1,79,127);
+  await(()->!app.state.optJSONObject("sectionPlayback").has("queuedMarker"));
+  assertTrue(app.state.optBoolean("playing"));assertTrue(app.state.optBoolean("loop"));
+  assertNotEquals("Learn MIDI",new RemoteMidi(app,a->{}).label("cancelSection"));
+  app.midi.clear("cancelSection");
+ }
  @Test public void backgroundResumeKeepsPanelAndOnlyShowsReconnectingModal()throws Exception{
   for(String panel:new String[]{"grid","tp1"}){
    app.choose(panel);android.view.View original=panel.equals("grid")?app.grid:app.tp;

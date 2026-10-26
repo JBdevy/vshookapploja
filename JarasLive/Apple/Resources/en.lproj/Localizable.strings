@@ -1819,3 +1819,5 @@
 "Continuar mesmo assim" = "Continue anyway";
 
 "A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta." = "The selected folder is on a disk with less than 5 GB available. Free up space before exporting or choose another folder.";
+
+"Cancel queued section" = "Cancel queued section";

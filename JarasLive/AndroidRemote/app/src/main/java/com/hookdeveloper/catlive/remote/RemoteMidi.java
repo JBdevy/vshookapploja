@@ -9,8 +9,8 @@ import java.util.*;
 import java.util.function.Consumer;
 
 final class RemoteMidi {
-    static final String[] ACTIONS={"setlistUp","setlistDown","partsUp","partsDown","toggleParts","play","stop","playStop","repeatPlayback","bypass","playlistUp","playlistDown"};
-    static String title(String key){String[] titles={"Setlist ↑","Setlist ↓","Parts ↑","Parts ↓","Parts","Play","Stop","Play / Stop","Repeat","Bypass Multiloops","Playlist anterior","Próxima playlist"};for(int i=0;i<ACTIONS.length;i++)if(key.equals(ACTIONS[i]))return titles[i];return key;}
+    static final String[] ACTIONS={"setlistUp","setlistDown","partsUp","partsDown","toggleParts","cancelSection","play","stop","playStop","repeatPlayback","bypass","playlistUp","playlistDown"};
+    static String title(String key){String[] titles={"Setlist ↑","Setlist ↓","Parts ↑","Parts ↓","Parts","Cancel queued section","Play","Stop","Play / Stop","Repeat","Bypass Multiloops","Playlist anterior","Próxima playlist"};for(int i=0;i<ACTIONS.length;i++)if(key.equals(ACTIONS[i]))return titles[i];return key;}
     private final MidiManager manager;private final Handler main=new Handler(Looper.getMainLooper());private final SharedPreferences prefs;private final Consumer<String> action;
     private final Map<Integer,MidiDevice> devices=new HashMap<>();private final Set<String> held=new HashSet<>();private final List<MidiOutputPort> ports=new ArrayList<>();private JSONObject bindings;boolean started;int generation;String learning;
     private final MidiManager.DeviceCallback callback=new MidiManager.DeviceCallback(){public void onDeviceAdded(MidiDeviceInfo info){open(info);}public void onDeviceRemoved(MidiDeviceInfo info){MidiDevice d=devices.remove(info.getId());if(d!=null)try{d.close();}catch(IOException ignored){}}};
