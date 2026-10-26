@@ -197,6 +197,10 @@ private struct TimelineGridContent: View, Equatable {
     @State private var itemWaveformPreview = ItemWaveformPreview()
     @State private var insertionPreview = GridInsertionPreview()
     @State private var itemExport: ItemAudioExportRequest?
+    @State private var renamingItem: AudioClip?
+    @State private var midiDocument: MIDIItemDocument?
+    @State private var midiExportName = "Item"
+    @State private var exportingMIDI = false
     @State private var regionExport: RegionAudioExportRequest?
     @State private var normalizingItems = Set<UUID>()
     @State private var showingNormalize = false
@@ -752,6 +756,13 @@ private struct TimelineGridContent: View, Equatable {
                             regionSelection: request.regions)
         }
         .sheet(item: $itemExport) { ItemAudioExportView(request: $0) }
+        .sheet(item: $renamingItem) { clip in
+            ItemNameEditor(name: clip.name, apply: { show.renameItem(clip.id, name: $0) }, close: { renamingItem = nil })
+        }
+        .fileExporter(isPresented: $exportingMIDI, document: midiDocument, contentType: MIDIItemDocument.readableContentTypes[0], defaultFilename: midiExportName) { result in
+            if case .failure(let error) = result { show.message = error.localizedDescription }
+            midiDocument = nil
+        }
         .sheet(isPresented: $showingItemTuner) { ItemTunerEditor(show: show, items: tuningItems) }
         .sheet(isPresented: $showingNormalize) { ItemNormalizationEditor(show: show, documents: documents, items: normalizingItems) }
         .alert(Text(verbatim: JarasLocalization.string(pendingTimebase?.relative == true ? "Enable relative timebase?" : "Disable relative timebase?")), isPresented: $confirmingTimebase) {
@@ -1054,6 +1065,12 @@ private struct TimelineGridContent: View, Equatable {
             selectedTrack = id
             selectedTracks = [id]
         }, pointerDown: { EditorSelectionRouter.shared.handlePointer($0) })
+        input.renameItem = { id in renamingItem = show.current?.tracks.flatMap(\.clips).first { $0.id == id } }
+        input.exportMIDI = { id in
+            guard let clip = show.current?.tracks.flatMap(\.clips).first(where: { $0.id == id }) else { return }
+            do { midiDocument = try MIDIItemDocument(clip: clip); midiExportName = clip.name; exportingMIDI = true }
+            catch { show.message = error.localizedDescription }
+        }
         input.marqueeBegan = { show.pauseTimelineFollow() }
         input.separateAudio = { id in
             showingSeparation = true; separation.start(item: id, show: show, documents: documents)

@@ -77,6 +77,7 @@ struct TestSnapshot { var project = TestProject() }
     struct Tab { let id: UUID; let name: String; let selected: Bool }
     static var projectTabsProvider: () -> [Tab] = { [] }
     static var selectProjectTabHandler: ((UUID) -> Void)?
+    static var closeProjectTabHandler: ((UUID) -> Void)?
     static var documents: ProjectDocuments?
     struct Session { static let nativeHost = Session() }
     static func bind(_ show: ShowController, session: Session) {}
@@ -117,6 +118,11 @@ enum ProjectTabNavigation {
         check(second.documents.activateExistingProjectTab?(a) == false && tabs.active === second, "Recents must not claim to activate a tab when switching is blocked")
         check(second.documents.activateExistingProjectTab?(b) == true, "Returning to the current project must remain possible while recording")
         TrackRecording.shared.recording = false
+        DAWRemoteHostBridge.closeProjectTabHandler?(UUID())
+        check(tabs.closing == nil, "Unknown remote tab must not open a close confirmation")
+        DAWRemoteHostBridge.closeProjectTabHandler?(second.remoteProjectTabID)
+        check(tabs.closing == second.remoteProjectTabID && tabs.projects.count == 2, "Remote close must request confirmation without discarding the project")
+        tabs.closing = nil
         second.show.failSave = true; await tabs.close(second.remoteProjectTabID)
         check(tabs.projects.count == 2 && tabs.active === second, "Failed save discarded a tab")
         second.show.failSave = false; await tabs.close(second.remoteProjectTabID)

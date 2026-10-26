@@ -129,6 +129,8 @@ final class LiveRecordedWaveform: @unchecked Sendable {
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "live.catlive.recording.waveform", qos: .userInitiated)
     private let cache = NSCache<NSString, TimelineAudioWaveform.Geometry>()
+    // Retain the most recent tail while a longer version is prepared.
+    private let latest = NSCache<NSString, TimelineAudioWaveform.Geometry>()
     private var pending = Set<String>()
     private var frames: Int64 = 0
     private var peaks: [[SIMD2<Int16>]]
@@ -146,6 +148,7 @@ final class LiveRecordedWaveform: @unchecked Sendable {
         // the spool automatically, without accumulating temporary recordings.
         Darwin.unlink(url.path)
         cache.totalCostLimit = 16 * 1024 * 1024
+        latest.totalCostLimit = 16 * 1024 * 1024
     }
     deinit { Darwin.close(descriptor) }
     func append(_ buffer: AVAudioPCMBuffer) throws {
@@ -185,10 +188,12 @@ final class LiveRecordedWaveform: @unchecked Sendable {
     func geometry(start: Int64, step: Int, span: Int) -> TimelineAudioWaveform.Geometry? {
         lock.lock(); let available = min(Int64(span + 1), frames - start); lock.unlock()
         guard available > 0 else { return nil }
+        let baseKey = "\(start):\(step):\(span)" as NSString
         let key = "\(start):\(step):\(span):\(available)"
+        let previous = latest.object(forKey: baseKey)
         if let existing = cache.object(forKey: key as NSString) { return existing }
         lock.lock()
-        guard pending.count < 64, pending.insert(key).inserted else { lock.unlock(); return nil }
+        guard pending.count < 64, pending.insert(key).inserted else { lock.unlock(); return previous }
         lock.unlock()
         queue.async { [self] in
             defer { lock.lock(); pending.remove(key); lock.unlock() }
@@ -237,8 +242,9 @@ final class LiveRecordedWaveform: @unchecked Sendable {
             }
             let geometry = TimelineAudioWaveform.Geometry(vertices: vertices)
             cache.setObject(geometry, forKey: key as NSString, cost: geometry.cost)
+            latest.setObject(geometry, forKey: baseKey, cost: geometry.cost)
             Task { @MainActor in LiveRecordingPreview.shared.objectWillChange.send() }
         }
-        return nil
+        return previous
     }
 }

@@ -69,7 +69,7 @@ final class TransportFadeoutTests: XCTestCase {
     }
     @MainActor func testSubplayIsMutuallyExclusiveAndNormalStopRemainsImmediate() throws {
         let (show, executor, _) = try fixture()
-        show.triggerTransportFadeout(); XCTAssertFalse(show.transportFadeout.active)
+        show.triggerTransportFadeout(); XCTAssertFalse(show.transportFadeout.active); XCTAssertNil(show.transportFadeout.notice)
         show.send(.play); show.send(.subPlay); show.triggerTransportFadeout()
         XCTAssertFalse(show.transportFadeout.active); XCTAssertNotNil(show.transportFadeout.notice)
         show.send(.subStop); show.triggerTransportFadeout()

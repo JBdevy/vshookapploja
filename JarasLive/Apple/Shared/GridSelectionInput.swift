@@ -601,6 +601,8 @@ struct GridSelectionInput: NSViewRepresentable {
     var fx: (UUID, Bool) -> Void = { _, _ in }
     var editMIDI: (UUID) -> Void = { _ in }
     var createMIDI: ((CGPoint, CGFloat?) -> Void)? = nil
+    var renameItem: (UUID) -> Void = { _ in }
+    var exportMIDI: (UUID) -> Void = { _ in }
     var editText: (UUID) -> Void = { _ in }
     var reRender: (Set<UUID>) -> Void = { _ in }
     var convert: (Set<UUID>, Int) -> Void = { _, _ in }
@@ -641,6 +643,7 @@ struct GridSelectionInput: NSViewRepresentable {
         view.updateSelection(selected)
         view.fileLocation = fileLocation; view.separateAudio = separateAudio; view.canSeparateAudio = canSeparateAudio
         view.marqueeBegan = marqueeBegan
+        view.renameItem = renameItem; view.exportMIDI = exportMIDI
         view.mute = mute; view.move = move; view.seek = seek; view.selectRow = selectRow; view.selectionChanged = selectionChanged; view.createRegion = createRegion; view.reRender = reRender; view.normalize = normalize; view.convert = convert; view.freezeMIDI = freezeMIDI; view.glue = glue; view.tuner = tuner; view.export = export; view.resize = resize; view.fade = fade; view.fadeShape = fadeShape; view.gain = gain; view.phase = phase; view.pan = pan; view.fx = fx; view.editText = editText; view.editMIDI = editMIDI; view.createMIDI = createMIDI
         view.observeHeaderScroll()
     }
@@ -744,6 +747,8 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
     var phase: ((UUID) -> Void)?
     var pan: ((UUID, Double, Bool) -> Void)?
     var fx: ((UUID, Bool) -> Void)?
+    var renameItem: ((UUID) -> Void)?
+    var exportMIDI: ((UUID) -> Void)?
     var editText: ((UUID) -> Void)?
     private enum HeaderControl { case mute, fx, editText, phase }
     private var pressedHeader: (id: UUID, rect: CGRect, control: HeaderControl)?
@@ -1348,6 +1353,10 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
     func itemContextMenu(for contextItem: UUID) -> NSMenu {
         self.contextItem = contextItem
         let menu = NSMenu()
+        if selected.count == 1, item(id: contextItem)?.midiEditable == true || fileLocation?(contextItem) != nil {
+            let rename = NSMenuItem(title: "Editar nome", action: #selector(renameContextItem), keyEquivalent: "")
+            rename.target = self; menu.addItem(rename); menu.addItem(.separator())
+        }
         if selected.count == 1, fileLocation?(contextItem) != nil {
             let reveal = NSMenuItem(title: JarasLocalization.string("Open file location"), action: #selector(revealContextFile), keyEquivalent: "")
             reveal.target = self; menu.addItem(reveal); menu.addItem(.separator())
@@ -1365,6 +1374,10 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
             if item(id: contextItem)?.hasFX == true {
                 let effect = NSMenuItem(title: "FX", action: #selector(openContextFX), keyEquivalent: "")
                 effect.target = self; menu.addItem(effect)
+            }
+            if selected.count == 1 {
+                let export = NSMenuItem(title: "Exportar MIDI", action: #selector(exportContextMIDI), keyEquivalent: "")
+                export.target = self; menu.addItem(.separator()); menu.addItem(export)
             }
             return menu
         } else if item(id: contextItem)?.contextActions == true {
@@ -1405,6 +1418,8 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
         menu.autoenablesItems = false
         return menu
     }
+    @objc private func renameContextItem() { if selected.count == 1, let contextItem { renameItem?(contextItem) } }
+    @objc private func exportContextMIDI() { if selected.count == 1, let contextItem { exportMIDI?(contextItem) } }
     @objc private func separateContextAudio() {
         guard selected.count == 1, let contextItem, canSeparateAudio?(contextItem) == true else { return }
         separateAudio?(contextItem)
