@@ -1,6 +1,20 @@
 name: CatLive Android - APK e AAB
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versão X.XX'
+        required: true
+        type: string
+      build_number:
+        description: 'Número da build Android'
+        required: true
+        type: string
+      source_ref:
+        description: 'Commit exato do código'
+        required: true
+        type: string
   workflow_call:
     inputs:
       version:
@@ -53,6 +67,8 @@ jobs:
           node-version: '22'
 
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Preparar SDK e conferir versão
         run: |
