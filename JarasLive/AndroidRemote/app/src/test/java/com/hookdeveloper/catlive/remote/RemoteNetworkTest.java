@@ -11,8 +11,9 @@ public class RemoteNetworkTest {
   app.play.performClick();await(()->app.state.optBoolean("playing"));
   String track=app.state.getJSONArray("tracks").getJSONObject(0).getString("id");
   app.remote.action("volume",track,RemoteModel.gain(-3));await(()->Math.abs(app.state.optJSONArray("tracks").optJSONObject(0).optDouble("volume")-RemoteModel.gain(-3))<1e-9);
-  app.remote.action("tempo",null,141);await(()->app.state.optDouble("bpm")==141);assertEquals(RemoteWidgets.YELLOW,app.bpm.getCurrentTextColor());
-  app.remote.action("tempo",null,140);await(()->app.state.optDouble("bpm")==140);assertEquals(RemoteWidgets.TEXT,app.bpm.getCurrentTextColor());
+  // BPM updates optimistically; the render flag arrives with the host acknowledgement.
+  app.remote.action("tempo",null,141);await(()->app.state.optDouble("bpm")==141&&app.state.optBoolean("tempoNeedsRender"));assertEquals(RemoteWidgets.YELLOW,app.bpm.getCurrentTextColor());
+  app.remote.action("tempo",null,140);await(()->app.state.optDouble("bpm")==140&&!app.state.optBoolean("tempoNeedsRender"));assertEquals(RemoteWidgets.TEXT,app.bpm.getCurrentTextColor());
   String second=app.state.getJSONArray("regions").getJSONObject(1).getString("id");app.remote.action("selectRegion",second,0);await(()->RemoteModel.same(second,RemoteModel.id(app.state,"queuedRegion")));
   app.choose("tp1");await(()->RemoteModel.array(app.state,"teleprompters").length()==1);assertNotNull(app.tp);
   app.remote.action("stop");await(()->!app.state.optBoolean("playing"));
