@@ -176,6 +176,9 @@ struct SettingsView: View {
         }.foregroundStyle(JarasTheme.text)
         .sheet(isPresented: $signingIn) {
             LoginView(auth: auth, backend: backend, offersTrial: false, onAuthorized: { signingIn = false }).frame(width: 550, height: 620)
+                #if os(iOS)
+                .background(IpadPresentedOutsideDismissal { signingIn = false })
+                #endif
         }
         .onDisappear { mappings.editing = nil }
         .task(id: section) { if section == .account { await auth.refreshDevices() } }
@@ -185,6 +188,9 @@ struct SettingsView: View {
         } message: { device in
             Text(device.id == auth.installation.id ? "Você sairá da conta neste computador. O áudio será interrompido e a licença ficará disponível." : "Remover \(device.deviceName) e liberar sua licença para outro computador?")
         }
+        #if os(iOS)
+        .background(IpadPresentedOutsideDismissal(active: pendingDevice != nil, alert: true) { pendingDevice = nil })
+        #endif
         .overlay {
             if mappings.editing != nil {
                 ZStack { Color.black.opacity(0.25).contentShape(Rectangle()).onTapGesture { mappings.editing = nil }; ControlMappingEditor() }

@@ -19,8 +19,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--stage", choices=["trace", "convert", "validate"], required=True)
 parser.add_argument("--checkpoint", type=Path, required=True)
 parser.add_argument("--work", type=Path, default=Path("build/CatStemCoreML"))
-parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp16")
+parser.add_argument("--precision", choices=["fp16", "fp32"], default=None)
+parser.add_argument("--offline", action="store_true", help="Preserve the full desktop 7.8-second training context")
 args = parser.parse_args()
+args.precision = args.precision or ("fp32" if args.offline else "fp16")
+if args.offline and args.precision != "fp32":
+    parser.error("Offline separation must preserve the desktop FP32 precision")
 args.work.mkdir(parents=True, exist_ok=True)
 
 import numpy as np
@@ -113,7 +117,9 @@ class SpectralTemporalNetwork(torch.nn.Module):
         temporal = xt.reshape(B, len(m.sources), -1, audio.shape[-1]) * stdt[:, None] + meant[:, None]
         return spectral, temporal
 
-name = "CatStemHTDemucs6"
+name = "CatStemHTDemucs6Offline" if args.offline else "CatStemHTDemucs6"
+window = 343980 if args.offline else 44100
+spectral_frames = (window + 1023) // 1024
 traced_path = args.work / (name + ".pt")
 package_path = args.work / (name + ".mlpackage")
 if args.stage == "trace":
@@ -123,25 +129,28 @@ if args.stage == "trace":
     assert digest == "34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd", "Unexpected model checkpoint"
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     model = load_model(checkpoint).eval()
-    model.use_train_segment = False
-    model.segment = 1.0
+    if args.offline:
+        assert int(model.segment * model.samplerate) == window
+    else:
+        model.use_train_segment = False
+        model.segment = 1.0
     assert model.cac and model.samplerate == 44100 and model.nfft == 4096
     assert model.sources == ["drums", "bass", "other", "vocals", "guitar", "piano"], model.sources
     network = SpectralTemporalNetwork(model).eval()
-    t = torch.arange(44100, dtype=torch.float32) / 44100
+    t = torch.arange(window, dtype=torch.float32) / 44100
     generator = torch.Generator().manual_seed(7357)
     fixtures = {
-        "silence": torch.zeros(1, 2, 44100),
-        "noise": 0.1 * torch.randn(1, 2, 44100, generator=generator),
+        "silence": torch.zeros(1, 2, window),
+        "noise": 0.1 * torch.randn(1, 2, window, generator=generator),
         "tones": torch.stack((0.3 * torch.sin(2 * torch.pi * 220 * t) + 0.2 * torch.sin(2 * torch.pi * 311 * t),
                                0.2 * torch.sin(2 * torch.pi * 440 * t) + 0.15 * torch.sin(2 * torch.pi * 97 * t)))[None],
     }
     with torch.no_grad():
         for key, audio in fixtures.items():
             spectrum = model._magnitude(model._spec(audio))
-            assert tuple(spectrum.shape) == (1, 4, 2048, 44), spectrum.shape
+            assert tuple(spectrum.shape) == (1, 4, 2048, spectral_frames), spectrum.shape
             spectral, temporal = network(audio, spectrum)
-            reconstructed = model._ispec(model._mask(model._spec(audio), spectral), 44100) + temporal
+            reconstructed = model._ispec(model._mask(model._spec(audio), spectral), window) + temporal
             torch.nn.MultiheadAttention.forward = original_attention
             reference = model(audio)
             torch.nn.MultiheadAttention.forward = exportable_attention
@@ -154,8 +163,8 @@ if args.stage == "trace":
         traced = torch.jit.trace(network, (audio, model._magnitude(model._spec(audio))), check_trace=False)
         traced.save(str(traced_path))
     metadata = {"checkpoint": args.checkpoint.stem, "sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
-                "sources": model.sources, "sample_rate": 44100, "window_frames": 44100, "fft": 4096, "hop": 1024,
-                "spectral_frames": 44, "torch": torch.__version__, "precision": args.precision}
+                "sources": model.sources, "sample_rate": 44100, "window_frames": window, "fft": 4096, "hop": 1024,
+                "spectral_frames": spectral_frames, "torch": torch.__version__, "precision": args.precision}
     (args.work / "metadata.json").write_text(json.dumps(metadata, indent=2))
     print("Trace saved", traced_path, flush=True)
 elif args.stage == "convert":
@@ -164,8 +173,8 @@ elif args.stage == "convert":
     metadata = json.loads((args.work / "metadata.json").read_text())
     print("Converting", ct.__version__, args.precision, flush=True)
     converted = ct.convert(traced, convert_to="mlprogram", minimum_deployment_target=ct.target.iOS16,
-        inputs=[ct.TensorType(name="audio", shape=(1, 2, 44100), dtype=np.float32),
-                ct.TensorType(name="spectrum", shape=(1, 4, 2048, 44), dtype=np.float32)],
+        inputs=[ct.TensorType(name="audio", shape=(1, 2, window), dtype=np.float32),
+                ct.TensorType(name="spectrum", shape=(1, 4, 2048, spectral_frames), dtype=np.float32)],
         outputs=[ct.TensorType(name="spectrum_out", dtype=np.float32), ct.TensorType(name="audio_out", dtype=np.float32)],
         compute_precision=ct.precision.FLOAT16 if args.precision == "fp16" else ct.precision.FLOAT32,
         skip_model_load=True)
@@ -173,8 +182,16 @@ elif args.stage == "convert":
     converted.user_defined_metadata["catlive.source_checkpoint"] = metadata["checkpoint"]
     converted.user_defined_metadata["catlive.source_sha256"] = metadata["sha256"]
     converted.user_defined_metadata["catlive.sources"] = ",".join(metadata["sources"])
-    converted.user_defined_metadata["catlive.window_frames"] = "44100"
+    converted.user_defined_metadata["catlive.window_frames"] = str(window)
+    converted.user_defined_metadata["catlive.offline_quality"] = "desktop-full-context" if args.offline else "legacy-streaming"
     converted.save(str(package_path))
+    if args.offline:
+        import subprocess
+        import sys
+        # Keep the monolithic work artifact for numerical validation only.
+        # Ship the generated stages; the iPad must never load this whole graph.
+        subprocess.run([sys.executable, str(Path(__file__).with_name("stage-coreml-offline.py")),
+                        str(package_path), str(args.work / "Staged")], check=True)
     print("Package saved", package_path, flush=True)
 else:
     import coremltools as ct
@@ -200,10 +217,10 @@ else:
             assert rms <= max(2e-5, reference_rms * 0.02), (key, name, errors[name])
         from demucs.spec import ispectro
         spec = torch.from_numpy(output["spectrum_out"].astype(np.float32))
-        complex_spec = torch.view_as_complex(spec.reshape(1, 6, 2, 2, 2048, 44).permute(0, 1, 2, 4, 5, 3).contiguous())
+        complex_spec = torch.view_as_complex(spec.reshape(1, 6, 2, 2, 2048, spectral_frames).permute(0, 1, 2, 4, 5, 3).contiguous())
         complex_spec = torch.nn.functional.pad(complex_spec, (0, 0, 0, 1))
         complex_spec = torch.nn.functional.pad(complex_spec, (2, 2))
-        pcm = ispectro(complex_spec, 1024, length=44*1024+3072)[..., 1536:1536+44100].numpy() + output["audio_out"]
+        pcm = ispectro(complex_spec, 1024, length=spectral_frames*1024+3072)[..., 1536:1536+window].numpy() + output["audio_out"]
         pcm_error = pcm.astype(np.float64) - fixture["pcm"]
         pcm_rms = float(np.sqrt(np.mean(pcm_error**2)))
         reference_rms = float(np.sqrt(np.mean(fixture["pcm"].astype(np.float64)**2)))

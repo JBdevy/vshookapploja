@@ -502,6 +502,7 @@ struct MappingTransferRequest: Identifiable {
 }
 
 struct ControlMappingEditor: View {
+    @Environment(\.jarasNativePalette) private var nativePalette
     @ObservedObject var mappings = ControlMappings.shared
     var body: some View {
         if let edit = mappings.editing {
@@ -535,6 +536,9 @@ struct ControlMappingEditor: View {
                         onKey: mappings.handleHardwareKey)
                     #endif
                 }
+                #if os(iOS)
+                .background(IpadPresentedOutsideDismissal(active: nativePalette && mappings.transferRequest != nil, alert: true) { mappings.cancelTransfer() })
+                #endif
                 .alert("This control is already mapped.", isPresented: Binding(get: { mappings.transferRequest != nil }, set: { if !$0 { mappings.cancelTransfer() } }), presenting: mappings.transferRequest) { request in
                     Button("Cancel", role: .cancel) { mappings.cancelTransfer() }
                     Button("Transfer mapping") { mappings.confirmTransfer(request) }.keyboardShortcut(.defaultAction)

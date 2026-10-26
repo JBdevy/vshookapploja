@@ -124,7 +124,7 @@ struct MobileSeparationPlaybackRegression {
     let repeats = max(1, min(5, Int(ProcessInfo.processInfo.environment["CATLIVE_PROBE_COREML_REPEATS"] ?? "1") ?? 1))
     if coreML {
         let cancellation = AudioExportCancellation()
-        let model = try CatStemRealtimeRuntime.modelURL()
+        let model = try CatStemRealtimeRuntime.offlineModelURL()
         let coreMLTask = Task.detached {
             for iteration in 1...repeats {
                 try Task.checkCancellation()

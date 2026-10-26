@@ -3,7 +3,7 @@
 
 The output is unsigned. Sign it with a development profile for
 com.hookdeveloper.catlive.audioprobe before installing on a test device.
-Pass --model <CatStemHTDemucs6.mlmodelc> to enable the optional real Core ML run.
+Pass --model <CatStemHTDemucs6Offline.mlmodelc> to enable the optional real Core ML run.
 Read Documents/result.txt after launch; a successful run ends with PASS.
 """
 import argparse
@@ -70,7 +70,12 @@ def main():
     if model:
         if not model.is_dir() or model.suffix != ".mlmodelc":
             parser.error("--model must point to a compiled .mlmodelc directory")
-        shutil.copytree(model, app / "CatStemHTDemucs6.mlmodelc", dirs_exist_ok=True)
+        for index in range(1, 33):
+            name = "CatStemHTDemucs6Offline" + ("" if index == 1 else str(index)) + ".mlmodelc"
+            stage = model.parent / name
+            if not stage.is_dir():
+                parser.error(f"The full offline model requires all 32 stages: missing {name}")
+            shutil.copytree(stage, app / name, dirs_exist_ok=True)
     print(f"AUDIO_PROBE_APP={app}")
 
 

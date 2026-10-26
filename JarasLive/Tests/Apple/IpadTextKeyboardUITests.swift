@@ -86,4 +86,32 @@ final class KeyboardTests: XCTestCase {
         key("emoji").tap(); app.descendants(matching: .any)["cat-emoji-😀"].firstMatch.tap()
         XCTAssertEqual(app.textFields["search"].value as? String, "😀")
     }
+    func testOutsideClosesCompactModalAndKeyboardWithoutSaving() {
+        app.buttons["Editar"].tap()
+        XCTAssertTrue(key("a").waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.2)).tap()
+        XCTAssertTrue(app.buttons["Salvar"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(key("a").waitForNonExistence(timeout: 3))
+        XCTAssertEqual(app.staticTexts["saved"].label, "Salvo: ")
+        XCTAssertEqual(app.staticTexts["dismissed"].label, "Dismissed: 1")
+    }
+    func testOutsideClosesSheetThroughBindingAndCanReopen() {
+        app.buttons["Sheet"].tap()
+        XCTAssertTrue(app.buttons["Close sheet"].waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["Close sheet"].waitForNonExistence(timeout: 3))
+        XCTAssertEqual(app.staticTexts["dismissed"].label, "Dismissed: 1")
+        app.buttons["Sheet"].tap()
+        XCTAssertTrue(app.buttons["Close sheet"].waitForExistence(timeout: 3))
+    }
+    func testOutsideAlertCancelsWithoutConfirmingAndCanReopen() {
+        app.buttons["Alert"].tap()
+        XCTAssertTrue(app.alerts["Confirm action"].waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+        XCTAssertTrue(app.alerts["Confirm action"].waitForNonExistence(timeout: 3))
+        XCTAssertEqual(app.staticTexts["saved"].label, "Salvo: ")
+        XCTAssertEqual(app.staticTexts["dismissed"].label, "Dismissed: 1")
+        app.buttons["Alert"].tap()
+        XCTAssertTrue(app.alerts["Confirm action"].waitForExistence(timeout: 3))
+    }
 }

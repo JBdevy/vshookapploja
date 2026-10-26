@@ -1,0 +1,2050 @@
+¿
+
+	input0_63*
+€À
+ €
+
+reshape_101*
+€À
+ €
+
+var_753*
+À Ð €R
+var_860*
+€À
+ €R
+	input_122*
+€Ð €R
+sub_60*
+0Ð €R
+	square_30*
+0Ð €¢û¢:
+,com.github.apple.coremltools.conversion_date
+2026-10-25¢/
+catlive.offline_qualitydesktop-full-context¢
+catlive.window_frames343980¢Y
+catlive.source_sha256@34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd¢
+catlive.stage10¢Ä
+catlive.keep_after­["add_65", "add_69", "add_71", "add_73", "add_74", "add_79", "add_81", "add_83", "add_96", "attn_output0_6", "audio_out", "input0_103", "input0_113_split_0", "input0_113_split_1", "input0_117", "input0_123", "input0_133", "input0_137", "input0_147", "input0_5", "input0_71", "input0_87", "input0_97", "input1_12", "input_122", "input_23", "input_33", "matmul_1", "mean_1", "meant_1", "q0_1", "q0_2", "q_18", "query_18", "real_div_74", "reduce_mean_132", "reshape_153", "reshape_273", "spectrum_out", "sqrt_0", "sqrt_1", "sqrt_73", "square_30", "square_53", "square_59", "src0_1", "src_1", "sub_100", "sub_106", "sub_118", "sub_146", "sub_60", "sub_78", "sub_88", "v1_4", "var_1212", "var_1219", "var_1265", "var_1373", "var_1707", "var_1815", "var_189", "var_1928", "var_2041", "var_2204", "var_2211", "var_2369_split_0", "var_2369_split_1_sigmoid", "var_2388", "var_2489", "var_2603", "var_2704", "var_2771", "var_2818", "var_2906", "var_2919", "var_3031", "var_426", "var_536", "var_643", "var_753", "var_860", "var_953_split_0", "var_953_split_1", "var_970", "x0_5"]¢2
+#com.github.apple.coremltools.sourcemilinternal¢
+catlive.stage_count32¢.
+catlive.source_checkpoint5c90dfd2-34c22ccb¢+
+$com.github.apple.coremltools.version9.0²¹Š“‰
+main‰‰
+'
+	input0_63
+
+
+€
+À
+
+)
+reshape_101
+
+
+€
+À
+
++
+var_753 
+
+
+À
+ 
+ÐCoreML6û‡
+CoreML6î‡var_860	input_122sub_60	square_30¸
+const6
+&model_tencoder_3_dconv_layers_1_0_bias
+
+
+0*<
+name4
+,
+*"(
+&model_tencoder_3_dconv_layers_1_0_bias*9
+val2
+
+
+0*"
+@model_path/weights/weight.bin@×
+constE
+(model_tencoder_3_dconv_layers_1_0_weight
+
+0
+€
+*>
+name6
+.
+,"*
+(model_tencoder_3_dconv_layers_1_0_weight*G
+val@
+
+0
+€
+*#
+@model_path/weights/weight.binÀ¼
+const7
+&model_tencoder_3_dconv_layers_1_3_bias
+
+€*<
+name4
+,
+*"(
+&model_tencoder_3_dconv_layers_1_3_bias*<
+val5
+
+€*$
+@model_path/weights/weight.bin€ÃØ
+constE
+(model_tencoder_3_dconv_layers_1_3_weight
+
+€
+0
+*>
+name6
+.
+,"*
+(model_tencoder_3_dconv_layers_1_3_weight*H
+valA
+
+€
+0
+*$
+@model_path/weights/weight.binÀÛª
+const.
+model_tencoder_3_rewrite_bias
+
+€*3
+name+
+#
+!"
+model_tencoder_3_rewrite_bias*<
+val5
+
+€*$
+@model_path/weights/weight.bin€ÜÈ
+const=
+model_tencoder_3_rewrite_weight
+
+€
+€
+*5
+name-
+%
+#"!
+model_tencoder_3_rewrite_weight*I
+valB
+
+€
+€
+*$
+@model_path/weights/weight.binÀô¢
+const*
+model_encoder_3_conv_bias
+
+€*/
+name'
+
+"
+model_encoder_3_conv_bias*<
+val5
+
+€*$
+@model_path/weights/weight.bin€õ^Ì
+const?
+model_encoder_3_conv_weight 
+
+€
+À
+
+*1
+name)
+!
+"
+model_encoder_3_conv_weight*O
+valH 
+
+€
+À
+
+*$
+@model_path/weights/weight.binÀ_¹
+const5
+%model_encoder_3_dconv_layers_0_0_bias
+
+
+0*;
+name3
++
+)"'
+%model_encoder_3_dconv_layers_0_0_bias*<
+val5
+
+
+0*%
+@model_path/weights/weight.bin€‚ï×
+constD
+'model_encoder_3_dconv_layers_0_0_weight
+
+0
+€
+*=
+name5
+-
++")
+'model_encoder_3_dconv_layers_0_0_weight*I
+valB
+
+0
+€
+*%
+@model_path/weights/weight.bin€„ïŸ
+const(
+reshape_102
+
+
+€
+*!
+name
+
+"
+reshape_102*I
+valB
+
+
+€
+*%
+@model_path/weights/weight.binÀÄüu
+mul
+y
+
+reshape_102
+x
+
+reshape_101$
+mul_27
+
+
+€
+À
+*
+name
+
+
+"
+mul_27Ÿ
+const(
+reshape_103
+
+
+€
+*!
+name
+
+"
+reshape_103*I
+valB
+
+
+€
+*%
+@model_path/weights/weight.bin€Ýüp
+add
+y
+
+reshape_103
+x
+
+
+mul_27$
+add_51
+
+
+€
+À
+*
+name
+
+
+"
+add_51t
+const"
+var_815_split_num_splits_0
+*/
+name'
+
+"
+op_815_split_num_splits_0*
+val
+
+
+h
+const
+var_815_split_axis_0
+*)
+name!
+
+"
+op_815_split_axis_0*
+val
+
+
+ê
+split 
+axis
+
+var_815_split_axis_0
+x
+
+
+add_51,
+
+num_splits
+
+var_815_split_num_splits_0-
+var_815_split_0
+
+
+€
+À
+-
+var_815_split_1
+
+
+€
+À
+*"
+name
+
+"
+op_815_splitˆ
+sigmoid
+x
+
+var_815_split_15
+var_815_split_1_sigmoid
+
+
+€
+À
+*,
+name$
+
+"
+op_815_split_1_sigmoid†
+mul 
+y
+
+var_815_split_1_sigmoid
+x
+
+var_815_split_0%
+var_815
+
+
+€
+À
+*
+name
+
+
+"
+op_815Š
+const
+var_818
+
+€
+*
+name
+
+
+"
+op_818*C
+val<
+
+€
+*%
+@model_path/weights/weight.binÀõün
+mul
+y
+	
+var_815
+x
+	
+var_818%
+var_819
+
+
+€
+À
+*
+name
+
+
+"
+op_819u
+add
+y
+	
+var_819
+x
+
+	input0_63'
+	input0_59
+
+
+€
+À
+*
+name
+
+"
+	input0_59n
+const
+input0_65_pad_type_0
+**
+name"
+
+"
+input0_65_pad_type_0*
+val
+
+
+"
+customp
+const
+input0_65_pad_0
+
+
+*%
+name
+
+"
+input0_65_pad_0*
+val
+
+
+
+
+{
+const%
+input0_65_dilations_0
+
+
+*+
+name#
+
+"
+input0_65_dilations_0*
+val
+
+
+
+
+w
+const#
+input0_65_strides_0
+
+
+*)
+name!
+
+"
+input0_65_strides_0*
+val
+
+
+
+
+e
+const
+input0_65_groups_0
+*(
+name 
+
+"
+input0_65_groups_0*
+val
+
+
+ÿ
+conv2
+bias*
+(
+&model_tencoder_3_dconv_layers_1_0_bias$
+pad_type
+
+input0_65_pad_type_0
+pad
+
+input0_65_pad_0 
+groups
+
+input0_65_groups_0&
+	dilations
+
+input0_65_dilations_0"
+strides
+
+input0_65_strides_0
+x
+
+	input0_596
+weight,
+*
+(model_tencoder_3_dconv_layers_1_0_weight&
+	input0_65
+
+
+0
+À
+*
+name
+
+"
+	input0_65{
+const#
+reshape_104_shape_0
+
+
+*)
+name!
+
+"
+reshape_104_shape_0*"
+val
+
+
+
+	
+0À
+’
+reshape 
+shape
+
+reshape_104_shape_0
+x
+
+	input0_65.
+reshape_104
+
+
+
+0
+À
+*!
+name
+
+"
+reshape_104|
+const%
+reduce_mean_82_axes_0
+
+
+*+
+name#
+
+"
+reduce_mean_82_axes_0*
+val
+
+
+
+
+u
+const"
+reduce_mean_82_keep_dims_0
+*0
+name(
+ 
+"
+reduce_mean_82_keep_dims_0*
+val
+
+
+Ë
+reduce_mean
+x
+
+reshape_104+
+	keep_dims
+
+reduce_mean_82_keep_dims_0!
+axes
+
+reduce_mean_82_axes_00
+reduce_mean_82
+
+
+
+
+*$
+name
+
+"
+reduce_mean_82}
+sub
+y
+
+reduce_mean_82
+x
+
+reshape_104)
+sub_56
+
+
+
+0
+À
+*
+name
+
+
+"
+sub_56h
+square
+x
+
+
+sub_56,
+	square_28
+
+
+
+0
+À
+*
+name
+
+"
+	square_28|
+const%
+reduce_mean_84_axes_0
+
+
+*+
+name#
+
+"
+reduce_mean_84_axes_0*
+val
+
+
+
+
+u
+const"
+reduce_mean_84_keep_dims_0
+*0
+name(
+ 
+"
+reduce_mean_84_keep_dims_0*
+val
+
+
+É
+reduce_mean
+x
+
+	square_28+
+	keep_dims
+
+reduce_mean_84_keep_dims_0!
+axes
+
+reduce_mean_84_axes_00
+reduce_mean_84
+
+
+
+
+*$
+name
+
+"
+reduce_mean_84X
+const
+
+add_52_y_0
+* 
+name
+
+"
+
+add_52_y_0*
+val
+
+
+
+
+¬Å'7{
+add
+y
+
+
+add_52_y_0
+x
+
+reduce_mean_84(
+add_52
+
+
+
+
+*
+name
+
+
+"
+add_52a
+sqrt
+x
+
+
+add_52)
+sqrt_28
+
+
+
+
+*
+name
+
+"	
+sqrt_28€
+real_div
+y
+	
+sqrt_28
+x
+
+
+sub_56.
+real_div_28
+
+
+
+0
+À
+*!
+name
+
+"
+real_div_28z
+const#
+reshape_105_shape_0
+
+
+*)
+name!
+
+"
+reshape_105_shape_0*!
+val
+
+
+
+
+
+0À
+Ž
+reshape 
+shape
+
+reshape_105_shape_0
+x
+
+real_div_28(
+reshape_105
+
+
+0
+À
+*!
+name
+
+"
+reshape_105
+const'
+reshape_106
+
+
+0
+*!
+name
+
+"
+reshape_106*H
+valA
+
+
+0
+*%
+@model_path/weights/weight.bin€‚ýt
+mul
+y
+
+reshape_106
+x
+
+reshape_105#
+mul_28
+
+
+0
+À
+*
+name
+
+
+"
+mul_28
+const'
+reshape_107
+
+
+0
+*!
+name
+
+"
+reshape_107*H
+valA
+
+
+0
+*%
+@model_path/weights/weight.bin€„ýo
+add
+y
+
+reshape_107
+x
+
+
+mul_28#
+add_53
+
+
+0
+À
+*
+name
+
+
+"
+add_53`
+const
+var_836_mode_0
+*#
+name
+
+"
+op_836_mode_0*
+val
+
+	"
+EXACTw
+gelu
+x
+
+
+add_53
+mode
+
+var_836_mode_0$
+var_836
+
+
+0
+À
+*
+name
+
+
+"
+op_836m
+const
+input_110_pad_type_0
+**
+name"
+
+"
+input_110_pad_type_0*
+val
+
+	"
+validw
+const#
+input_110_strides_0
+
+
+*)
+name!
+
+"
+input_110_strides_0*
+val
+
+
+
+
+p
+const
+input_110_pad_0
+
+
+*%
+name
+
+"
+input_110_pad_0*
+val
+
+
+
+
+  {
+const%
+input_110_dilations_0
+
+
+*+
+name#
+
+"
+input_110_dilations_0*
+val
+
+
+
+
+e
+const
+input_110_groups_0
+*(
+name 
+
+"
+input_110_groups_0*
+val
+
+
+þ
+conv2
+bias*
+(
+&model_tencoder_3_dconv_layers_1_3_bias$
+pad_type
+
+input_110_pad_type_0
+pad
+
+input_110_pad_0 
+groups
+
+input_110_groups_0&
+	dilations
+
+input_110_dilations_0"
+strides
+
+input_110_strides_0
+x
+	
+var_8366
+weight,
+*
+(model_tencoder_3_dconv_layers_1_3_weight'
+	input_110
+
+
+€
+À
+*
+name
+
+"
+	input_110|
+const#
+reshape_108_shape_0
+
+
+*)
+name!
+
+"
+reshape_108_shape_0*#
+val
+
+
+
+
+
+€À
+“
+reshape 
+shape
+
+reshape_108_shape_0
+x
+
+	input_110/
+reshape_108 
+
+
+
+€
+À
+*!
+name
+
+"
+reshape_108|
+const%
+reduce_mean_85_axes_0
+
+
+*+
+name#
+
+"
+reduce_mean_85_axes_0*
+val
+
+
+
+
+u
+const"
+reduce_mean_85_keep_dims_0
+*0
+name(
+ 
+"
+reduce_mean_85_keep_dims_0*
+val
+
+
+Ë
+reduce_mean
+x
+
+reshape_108+
+	keep_dims
+
+reduce_mean_85_keep_dims_0!
+axes
+
+reduce_mean_85_axes_00
+reduce_mean_85
+
+
+
+
+*$
+name
+
+"
+reduce_mean_85~
+sub
+y
+
+reduce_mean_85
+x
+
+reshape_108*
+sub_58 
+
+
+
+€
+À
+*
+name
+
+
+"
+sub_58i
+square
+x
+
+
+sub_58-
+	square_29 
+
+
+
+€
+À
+*
+name
+
+"
+	square_29|
+const%
+reduce_mean_87_axes_0
+
+
+*+
+name#
+
+"
+reduce_mean_87_axes_0*
+val
+
+
+
+
+u
+const"
+reduce_mean_87_keep_dims_0
+*0
+name(
+ 
+"
+reduce_mean_87_keep_dims_0*
+val
+
+
+É
+reduce_mean
+x
+
+	square_29+
+	keep_dims
+
+reduce_mean_87_keep_dims_0!
+axes
+
+reduce_mean_87_axes_00
+reduce_mean_87
+
+
+
+
+*$
+name
+
+"
+reduce_mean_87X
+const
+
+add_54_y_0
+* 
+name
+
+"
+
+add_54_y_0*
+val
+
+
+
+
+¬Å'7{
+add
+y
+
+
+add_54_y_0
+x
+
+reduce_mean_87(
+add_54
+
+
+
+
+*
+name
+
+
+"
+add_54a
+sqrt
+x
+
+
+add_54)
+sqrt_29
+
+
+
+
+*
+name
+
+"	
+sqrt_29
+real_div
+y
+	
+sqrt_29
+x
+
+
+sub_58/
+real_div_29 
+
+
+
+€
+À
+*!
+name
+
+"
+real_div_29{
+const#
+reshape_109_shape_0
+
+
+*)
+name!
+
+"
+reshape_109_shape_0*"
+val
+
+
+
+	
+€À
+
+reshape 
+shape
+
+reshape_109_shape_0
+x
+
+real_div_29)
+reshape_109
+
+
+€
+À
+*!
+name
+
+"
+reshape_109Ÿ
+const(
+reshape_110
+
+
+€
+*!
+name
+
+"
+reshape_110*I
+valB
+
+
+€
+*%
+@model_path/weights/weight.bin€†ýu
+mul
+y
+
+reshape_110
+x
+
+reshape_109$
+mul_29
+
+
+€
+À
+*
+name
+
+
+"
+mul_29Ÿ
+const(
+reshape_111
+
+
+€
+*!
+name
+
+"
+reshape_111*I
+valB
+
+
+€
+*%
+@model_path/weights/weight.binÀžýp
+add
+y
+
+reshape_111
+x
+
+
+mul_29$
+add_55
+
+
+€
+À
+*
+name
+
+
+"
+add_55t
+const"
+var_847_split_num_splits_0
+*/
+name'
+
+"
+op_847_split_num_splits_0*
+val
+
+
+h
+const
+var_847_split_axis_0
+*)
+name!
+
+"
+op_847_split_axis_0*
+val
+
+
+ê
+split 
+axis
+
+var_847_split_axis_0
+x
+
+
+add_55,
+
+num_splits
+
+var_847_split_num_splits_0-
+var_847_split_0
+
+
+€
+À
+-
+var_847_split_1
+
+
+€
+À
+*"
+name
+
+"
+op_847_splitˆ
+sigmoid
+x
+
+var_847_split_15
+var_847_split_1_sigmoid
+
+
+€
+À
+*,
+name$
+
+"
+op_847_split_1_sigmoid†
+mul 
+y
+
+var_847_split_1_sigmoid
+x
+
+var_847_split_0%
+var_847
+
+
+€
+À
+*
+name
+
+
+"
+op_847Š
+const
+var_850
+
+€
+*
+name
+
+
+"
+op_850*C
+val<
+
+€
+*%
+@model_path/weights/weight.bin€·ýn
+mul
+y
+	
+var_847
+x
+	
+var_850%
+var_851
+
+
+€
+À
+*
+name
+
+
+"
+op_851s
+add
+y
+	
+var_851
+x
+
+	input0_59&
+input1_8
+
+
+€
+À
+*
+name
+
+"
+
+input1_8m
+const
+input_112_pad_type_0
+**
+name"
+
+"
+input_112_pad_type_0*
+val
+
+	"
+validw
+const#
+input_112_strides_0
+
+
+*)
+name!
+
+"
+input_112_strides_0*
+val
+
+
+
+
+p
+const
+input_112_pad_0
+
+
+*%
+name
+
+"
+input_112_pad_0*
+val
+
+
+
+
+  {
+const%
+input_112_dilations_0
+
+
+*+
+name#
+
+"
+input_112_dilations_0*
+val
+
+
+
+
+e
+const
+input_112_groups_0
+*(
+name 
+
+"
+input_112_groups_0*
+val
+
+
+í
+conv)
+bias!
+
+model_tencoder_3_rewrite_bias$
+pad_type
+
+input_112_pad_type_0
+pad
+
+input_112_pad_0 
+groups
+
+input_112_groups_0&
+	dilations
+
+input_112_dilations_0"
+strides
+
+input_112_strides_0
+x
+
+
+input1_8-
+weight#
+!
+model_tencoder_3_rewrite_weight'
+	input_112
+
+
+€
+À
+*
+name
+
+"
+	input_112t
+const"
+var_860_split_num_splits_0
+*/
+name'
+
+"
+op_860_split_num_splits_0*
+val
+
+
+h
+const
+var_860_split_axis_0
+*)
+name!
+
+"
+op_860_split_axis_0*
+val
+
+
+í
+split 
+axis
+
+var_860_split_axis_0
+x
+
+	input_112,
+
+num_splits
+
+var_860_split_num_splits_0-
+var_860_split_0
+
+
+€
+À
+-
+var_860_split_1
+
+
+€
+À
+*"
+name
+
+"
+op_860_splitˆ
+sigmoid
+x
+
+var_860_split_15
+var_860_split_1_sigmoid
+
+
+€
+À
+*,
+name$
+
+"
+op_860_split_1_sigmoid†
+mul 
+y
+
+var_860_split_1_sigmoid
+x
+
+var_860_split_0%
+var_860
+
+
+€
+À
+*
+name
+
+
+"
+op_860b
+const
+y_4_pad_type_0
+*$
+name
+
+"
+y_4_pad_type_0*
+val
+
+
+"
+customf
+const
+	y_4_pad_0
+
+
+*
+name
+
+"
+	y_4_pad_0*!
+val
+
+
+
+
+
+  l
+const
+y_4_strides_0
+
+
+*#
+name
+
+"
+y_4_strides_0*
+val
+
+
+
+
+p
+const
+y_4_dilations_0
+
+
+*%
+name
+
+"
+y_4_dilations_0*
+val
+
+
+
+
+Y
+const
+y_4_groups_0
+*"
+name
+
+"
+y_4_groups_0*
+val
+
+
+À
+conv%
+bias
+
+model_encoder_3_conv_bias
+pad_type
+
+y_4_pad_type_0
+pad
+
+	y_4_pad_0
+groups
+
+y_4_groups_0 
+	dilations
+
+y_4_dilations_0
+strides
+
+y_4_strides_0
+x
+	
+var_753)
+weight
+
+model_encoder_3_conv_weight'
+y_4 
+
+
+€
+
+Ð*
+name
+	
+"
+y_4[
+const
+y_29_mode_0
+*!
+name
+
+"
+y_29_mode_0*
+val
+
+	"
+EXACTs
+gelu
+x
+
+y_4
+mode
+
+y_29_mode_0(
+y_29 
+
+
+€
+
+Ð*
+name
+
+
+"
+y_29a
+const
+var_887
+
+
+*
+name
+
+
+"
+op_887*!
+val
+
+
+
+
+
+ k
+const
+var_889
+
+
+*
+name
+
+
+"
+op_889*+
+val$
+
+
+
+
+ÿÿÿÿÿÿÿÿÿ€Ð
+	transpose
+x
+
+y_29
+perm
+	
+var_887+
+var_888 
+
+
+
+€
+Ð*!
+name
+
+"
+transpose_0{
+reshape
+shape
+	
+var_889
+x
+	
+var_888'
+	input_122
+
+
+€
+Ð*
+name
+
+"
+	input_122n
+const
+input0_67_pad_type_0
+**
+name"
+
+"
+input0_67_pad_type_0*
+val
+
+
+"
+customp
+const
+input0_67_pad_0
+
+
+*%
+name
+
+"
+input0_67_pad_0*
+val
+
+
+
+
+w
+const#
+input0_67_strides_0
+
+
+*)
+name!
+
+"
+input0_67_strides_0*
+val
+
+
+
+
+{
+const%
+input0_67_dilations_0
+
+
+*+
+name#
+
+"
+input0_67_dilations_0*
+val
+
+
+
+
+e
+const
+input0_67_groups_0
+*(
+name 
+
+"
+input0_67_groups_0*
+val
+
+
+ý
+conv1
+bias)
+'
+%model_encoder_3_dconv_layers_0_0_bias$
+pad_type
+
+input0_67_pad_type_0
+pad
+
+input0_67_pad_0 
+groups
+
+input0_67_groups_0&
+	dilations
+
+input0_67_dilations_0"
+strides
+
+input0_67_strides_0
+x
+
+	input_1225
+weight+
+)
+'model_encoder_3_dconv_layers_0_0_weight&
+	input0_67
+
+
+0
+Ð*
+name
+
+"
+	input0_67{
+const#
+reshape_112_shape_0
+
+
+*)
+name!
+
+"
+reshape_112_shape_0*"
+val
+
+
+
+	
+0Ð’
+reshape 
+shape
+
+reshape_112_shape_0
+x
+
+	input0_67.
+reshape_112
+
+
+
+0
+Ð*!
+name
+
+"
+reshape_112|
+const%
+reduce_mean_88_axes_0
+
+
+*+
+name#
+
+"
+reduce_mean_88_axes_0*
+val
+
+
+
+
+u
+const"
+reduce_mean_88_keep_dims_0
+*0
+name(
+ 
+"
+reduce_mean_88_keep_dims_0*
+val
+
+
+Ë
+reduce_mean
+x
+
+reshape_112+
+	keep_dims
+
+reduce_mean_88_keep_dims_0!
+axes
+
+reduce_mean_88_axes_00
+reduce_mean_88
+
+
+
+
+*$
+name
+
+"
+reduce_mean_88}
+sub
+y
+
+reduce_mean_88
+x
+
+reshape_112)
+sub_60
+
+
+
+0
+Ð*
+name
+
+
+"
+sub_60h
+square
+x
+
+
+sub_60,
+	square_30
+
+
+
+0
+Ð*
+name
+
+"
+	square_30"
+	buildInfo"
+
+
+}"{
+6
+!
+
+"
+coremltools-version
+	
+"
+9.0
+A
+/
+'
+%"#
+!coremltools-component-milinternal
+
+"
+ 

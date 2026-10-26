@@ -4,6 +4,19 @@ import UniformTypeIdentifiers
 import AppKit
 #endif
 
+/// Keep the picker URL itself (including its sandbox extension), not only a
+/// reconstructed path. The render job retains a separate lease until it exits.
+final class AudioExportURLAccess: @unchecked Sendable {
+    let url: URL
+    private let release: () -> Void
+    init(_ url: URL, start: ((URL) -> Bool)? = nil, stop: ((URL) -> Void)? = nil) {
+        self.url = url
+        let acquired = start?(url) ?? url.startAccessingSecurityScopedResource()
+        release = { if acquired { if let stop { stop(url) } else { url.stopAccessingSecurityScopedResource() } } }
+    }
+    deinit { release() }
+}
+
 @MainActor private final class AudioExportSession: ObservableObject {
     @Published var running = false
     @Published var finished = false
@@ -11,14 +24,16 @@ import AppKit
     @Published var progress: AudioExportProgress?
     private var cancellation = AudioExportCancellation()
     func cancel() { cancellation.cancel() }
-    func start(project: Project, song: Song, plan: AudioExportPlan, media: URL, output: URL, rate: Double, encoding: AudioExportEncoding, secondaryEncoding: AudioExportEncoding?, includeHardwareOutputs: Bool = false) {
+    func start(project: Project, song: Song, plan: AudioExportPlan, media: URL, output: URL, rate: Double, encoding: AudioExportEncoding, secondaryEncoding: AudioExportEncoding?, includeHardwareOutputs: Bool = false, mediaAccessURL: URL? = nil) {
         guard !running else { return }
         cancellation = AudioExportCancellation()
         let token = cancellation
+        let mediaAccess = AudioExportURLAccess(mediaAccessURL ?? media), outputAccess = AudioExportURLAccess(output)
         let instruments = Dictionary(uniqueKeysWithValues: song.tracks.filter { $0.clips.contains { $0.midi != nil } }
             .map { ($0.id, ItemReRender.midiInstruments(for: $0, projectDirectory: media)) })
         running = true; finished = false; error = ""; progress = nil
         DispatchQueue.global(qos: .userInitiated).async {
+            defer { withExtendedLifetime((mediaAccess, outputAccess)) {} }
             do {
                 try OfflineAudioExport.run(project: project,song: song,plan: plan,mediaDirectory: media,outputDirectory: output,sampleRate: rate,encoding: encoding,secondaryEncoding: secondaryEncoding,cancellation: token,
                     includeHardwareOutputs: includeHardwareOutputs, midiInstrumentsByTrack: instruments) { update in
@@ -36,7 +51,10 @@ struct AudioExportView: View {
     let project: Project
     let song: Song?
     let mediaDirectory: URL?
+    var mediaAccessURL: URL? = nil
     var regionSelection: Set<UUID>? = nil
+    var close: (() -> Void)? = nil
+    var closeRequested = false
     @ObservedObject private var area = TimelineAreaSelection.shared
     @StateObject private var session = AudioExportSession()
     @Environment(\.dismiss) private var dismiss
@@ -46,6 +64,10 @@ struct AudioExportView: View {
     @State private var clips: Set<UUID> = []
     @State private var regions: Set<UUID> = []
     @State private var choosingDirectory = false
+    @State private var destinationAccess: AudioExportURLAccess?
+    @State private var lowDiskWarning = false
+    @State private var closeAfterRender = false
+    @State private var initialized = false
     @State private var renderScreen = false
     @State private var renderedPlan: AudioExportPlan?
     @AppStorage("jaras.export.sampleRate") private var rate = 48000.0
@@ -61,6 +83,14 @@ struct AudioExportView: View {
     @AppStorage("jaras.export.directory") private var directory = ""
     @AppStorage("jaras.export.fileName") private var fileName = "%project"
     @AppStorage("catlive.export.regionFileName") private var regionFileName = "%region"
+    private var destinationURL: URL? {
+        #if os(iOS)
+        return destinationAccess?.url
+        #else
+        if destinationAccess?.url.path == directory { return destinationAccess?.url }
+        return directory.isEmpty ? nil : URL(fileURLWithPath: directory)
+        #endif
+    }
     private var regionMode: Bool { regionSelection != nil }
     private var effectiveSource: AudioExportSource { regionMode ? .master : source }
     private var effectiveBounds: AudioExportBounds { regionMode ? .regions : bounds }
@@ -83,26 +113,55 @@ struct AudioExportView: View {
                 Spacer()
                 Text("\(renderedPlan?.jobs.count ?? plan.jobs.count) files").font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
                 if !session.running {
-                    Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 28,height: 28).contentShape(Rectangle()) }
+                    Button(action: finish) { Image(systemName: "xmark").frame(width: 28,height: 28).contentShape(Rectangle()) }
                         .buttonStyle(.plain).accessibilityLabel("Close").keyboardShortcut(.cancelAction)
                 }
             }
-            if renderScreen { rendering }
-            else { configuration }
-        }.padding(20).frame(width: 860).background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
+            #if os(iOS)
+            ScrollView {
+                if renderScreen { rendering } else { configuration }
+            }.jarasHideScrollIndicators()
+            #else
+            if renderScreen { rendering } else { configuration }
+            #endif
+        }.padding(20)
+            #if os(macOS)
+            .frame(width: 860)
+            #else
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            #endif
+            .background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
             .interactiveDismissDisabled(session.running)
             .onAppear {
-                guard let song else { return }
+                guard !initialized, let song else { return }
+                initialized = true
                 tracks = AudioExportSelection.shared.tracks(song.id)
                 clips = AudioExportSelection.shared.clips(song.id)
                 regions = regionSelection ?? AudioExportSelection.shared.regions(song.id)
                 if UserDefaults.standard.object(forKey: "jaras.export.sampleRate") == nil {
                     rate = [44100.0,48000.0].contains(AudioDeviceSettings.shared.sampleRate) ? AudioDeviceSettings.shared.sampleRate : 48000
                 }
+                #if os(macOS)
                 if directory.isEmpty { directory = FileManager.default.urls(for: .desktopDirectory,in: .userDomainMask).first?.path ?? "" }
+                #endif
                 if fileName == "$region" { fileName = "%region" }
             }
-            .fileImporter(isPresented: $choosingDirectory,allowedContentTypes: [.folder]) { if case .success(let url) = $0 { directory = url.path } }
+            .fileImporter(isPresented: $choosingDirectory,allowedContentTypes: [.folder]) { result in
+                switch result {
+                case .success(let url): destinationAccess = AudioExportURLAccess(url); directory = url.path
+                case .failure(let error): session.error = error.localizedDescription
+                }
+            }
+            .onDisappear { session.cancel() }
+            .onChange(of: closeRequested) { requested in if requested { finish() } }
+            .onChange(of: session.running) { running in if !running, closeAfterRender { finish() } }
+            #if os(iOS)
+            .alert("Pouco espaço no disco de destino", isPresented: $lowDiskWarning) {
+                Button("Cancelar", role: .cancel) {}
+                Button("Continuar mesmo assim", action: beginRender)
+            } message: { Text("A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta.") }
+            .background(IpadPresentedOutsideDismissal(active: lowDiskWarning, alert: true) { lowDiskWarning = false })
+            #endif
     }
     private var configuration: some View {
         VStack(alignment: .leading,spacing: 12) {
@@ -119,8 +178,18 @@ struct AudioExportView: View {
                                     GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 10) {
                     Text("Directory:")
                     HStack {
+                        #if os(iOS)
+                        Button { choosingDirectory = true } label: {
+                            HStack {
+                                Text(destinationAccess?.url.path ?? JarasLocalization.string("Choose folder"))
+                                    .lineLimit(1).truncationMode(.middle).frame(maxWidth: .infinity, alignment: .leading)
+                                Image(systemName: "folder")
+                            }.frame(minHeight: 30)
+                        }.accessibilityLabel("Choose folder")
+                        #else
                         TextField("Directory",text: $directory)
                         Button { choosingDirectory = true } label: { Image(systemName: "folder").frame(width: 24,height: 20) }.accessibilityLabel("Choose folder")
+                        #endif
                     }
                     Text("File name:")
                     TextField(regionMode ? "%region" : "%project",text: outputName)
@@ -151,17 +220,38 @@ struct AudioExportView: View {
 
                 Picker("Channels",selection: $channels) { Text("Stereo").tag(2); Text("Mono").tag(1) }.frame(width: 135)
                 Spacer()
-                Button("Render") {
-                    guard let song, let mediaDirectory else { return }
-                    guard AudioDestinationSpace.confirm(at: URL(fileURLWithPath: directory)) else { return }
-                    let snapshot = plan
-                    renderedPlan = snapshot
-                    renderScreen = true
-                    session.start(project: project,song: song,plan: snapshot,media: mediaDirectory,output: URL(fileURLWithPath: directory),rate: rate,encoding: AudioExportEncoding(format: format,bitDepth: bits,channels: channels,bitrate: bitrate,sampleRate: rate),secondaryEncoding: secondaryEnabled ? AudioExportEncoding(format: secondaryFormat,bitDepth: secondaryBits,channels: channels,bitrate: secondaryBitrate,sampleRate: rate) : nil,
-                        includeHardwareOutputs: regionMode)
-                }.buttonStyle(.borderedProminent).tint(JarasTheme.green).keyboardShortcut(.defaultAction).disabled(plan.jobs.isEmpty || directory.isEmpty || mediaDirectory == nil)
+                Button("Render", action: requestRender)
+                    .buttonStyle(.borderedProminent).tint(JarasTheme.green).keyboardShortcut(.defaultAction)
+                    .disabled(plan.jobs.isEmpty || destinationURL == nil || mediaDirectory == nil)
             }
+            if !session.error.isEmpty { Text(verbatim: session.error).font(.jarasCaption).foregroundStyle(.red) }
         }
+    }
+    private func finish() {
+        if session.running {
+            closeAfterRender = true; session.cancel(); return
+        }
+        if let close { close() } else { dismiss() }
+    }
+    private func requestRender() {
+        guard let destination = destinationURL else { return }
+        #if os(iOS)
+        if let available = AudioDestinationSpace.availableBytes(at: destination), AudioDestinationSpace.needsWarning(availableBytes: available) {
+            lowDiskWarning = true; return
+        }
+        #else
+        guard AudioDestinationSpace.confirm(at: destination) else { return }
+        #endif
+        beginRender()
+    }
+    private func beginRender() {
+        guard let song, let mediaDirectory, let destination = destinationURL, !plan.jobs.isEmpty else { return }
+        let snapshot = plan
+        renderedPlan = snapshot; renderScreen = true
+        session.start(project: project, song: song, plan: snapshot, media: mediaDirectory, output: destination,
+            rate: rate, encoding: AudioExportEncoding(format: format, bitDepth: bits, channels: channels, bitrate: bitrate, sampleRate: rate),
+            secondaryEncoding: secondaryEnabled ? AudioExportEncoding(format: secondaryFormat, bitDepth: secondaryBits, channels: channels, bitrate: secondaryBitrate, sampleRate: rate) : nil,
+            includeHardwareOutputs: regionMode, mediaAccessURL: mediaAccessURL)
     }
     private var formatOptions: some View {
         let chosenFormat = outputTab == 0 ? $format : $secondaryFormat
@@ -261,7 +351,7 @@ struct AudioExportView: View {
                 else if session.finished { Text("Render complete.").foregroundStyle(JarasTheme.green) }
                 else { Button("Back") { renderScreen = false; renderedPlan = nil } }
                 Spacer()
-                if !session.running { Button("Close") { dismiss() }.keyboardShortcut(.defaultAction) }
+                if !session.running { Button("Close", action: finish).keyboardShortcut(.defaultAction) }
             }
         }
     }

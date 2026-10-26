@@ -30,11 +30,13 @@ with tempfile.TemporaryDirectory(prefix='catlive-app-repo-test-') as temporary:
     run('git', 'symbolic-ref', 'HEAD', 'refs/heads/main', cwd=bare)
     release_template = ROOT/'.github/workflows/catlive-app-release.yml'
     if not release_template.exists(): release_template = ROOT/'scripts/catlive-app-release.yml'
-    for src, dst in [(ROOT/'build catlive app.command', 'build catlive app.command'),
-                     (ROOT/'build catlive ios.command', 'build catlive ios.command'),
+    for src, dst in [(ROOT/'03 build catlive app.bat', '03 build catlive app.bat'),
+                     (ROOT/'03 build catlive app.command', '03 build catlive app.command'),
                      (ROOT/'scripts/publish-catlive-app.sh', 'scripts/publish-catlive-app.sh'),
+                     (ROOT/'scripts/publish-catlive-app.ps1', 'scripts/publish-catlive-app.ps1'),
                      (ROOT/'scripts/test-catlive-app-release.py', 'scripts/test-catlive-app-release.py'),
                      (ROOT/'.github/workflows/catlive-ios-appstore.yml', '.github/workflows/catlive-ios-appstore.yml'),
+                     (ROOT/'.github/workflows/catlive-android-release.yml', '.github/workflows/catlive-android-release.yml'),
                      (release_template, '.github/workflows/catlive-app-release.yml')]:
         target=app/dst; target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src,target)
     (app/'JarasLive').mkdir()
@@ -48,15 +50,15 @@ import sys
 args=sys.argv[1:]
 if args[:2] == ['auth', 'status']: sys.exit(0)
 if args[:2] == ['secret', 'list']:
-    print('\\n'.join('IOS_TEAM_ID IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD CATLIVE_IOS_PROVISION_PROFILE_BASE64 CATLIVE_APP_STORE_CONNECT_KEY_ID CATLIVE_APP_STORE_CONNECT_ISSUER_ID CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64'.split())); sys.exit(0)
+    print('\\n'.join('IOS_TEAM_ID IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD CATLIVE_IOS_PROVISION_PROFILE_BASE64 CATLIVE_APP_STORE_CONNECT_KEY_ID CATLIVE_APP_STORE_CONNECT_ISSUER_ID CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD'.split())); sys.exit(0)
 raise SystemExit('Unexpected gh command: '+repr(args))
 """)
     gh.chmod(0o755)
-    env=dict(os.environ, PATH=str(fake)+':'+os.environ['PATH'], CATLIVE_BUILD_NO_PAUSE='1')
+    env=dict(os.environ, PATH=str(fake)+os.pathsep+os.environ['PATH'], CATLIVE_BUILD_NO_PAUSE='1')
     env.pop('CATLIVE_MIN_BUILD_NUMBER',None); env.pop('CATLIVE_APP_REPO_DIR',None)
     for build,minimum in [(1001,None),(1002,None),(1020,'1020'),(1021,'1019')]:
         if minimum is not None: env['CATLIVE_MIN_BUILD_NUMBER']=minimum
-        result=run('bash',str(app/'build catlive app.command'),'1.01','Publish local app source',cwd=app,env=env,check=False)
+        result=run(shutil.which('bash') or 'bash',str(app/'03 build catlive app.command'),'1.01','Publish local app source',cwd=app,env=env,check=False)
         assert result.returncode == 0, result.stdout+result.stderr
         tag=f'catlive-app-v1.01-build{build}'
         manifest=json.loads(run('git','show',f'{tag}:.github/catlive-app-release.json',cwd=bare).stdout)
@@ -67,7 +69,12 @@ raise SystemExit('Unexpected gh command: '+repr(args))
         reusable=run('git','show',f'{tag}:.github/workflows/catlive-ios-appstore.yml',cwd=bare).stdout
         assert 'uses: ./.github/workflows/catlive-ios-appstore.yml' in workflow
         assert 'hookupdatecenter' not in workflow+reusable
-        assert 'files: release/CatLive.ipa' in workflow
+        assert 'uses: ./.github/workflows/catlive-android-release.yml' in workflow
+        android=run('git','show',f'{source}:.github/workflows/catlive-android-release.yml',cwd=bare).stdout
+        assert 'secrets.KEYSTORE_BASE64' in android
+        assert 'needs: [prepare, ios, android]' in workflow
+        assets=workflow.split('          files: |',1)[1].strip().splitlines()
+        assert [asset.strip() for asset in assets] == ['release/CatLive.ipa', 'release/CatLive.apk', 'release/CatLive.aab']
         assert 'fetch-depth: 2' in workflow
         code=textwrap.dedent('          import json, os, re, subprocess'+workflow.split('          import json, os, re, subprocess',1)[1].split('\n          PY',1)[0])
         prepare=run('python3','-c',code,cwd=app,env=dict(env,RELEASE_TAG=tag,GITHUB_OUTPUT=str(base/'outputs')),check=False)
@@ -75,7 +82,7 @@ raise SystemExit('Unexpected gh command: '+repr(args))
         assert run('git','diff','--cached','--name-only',cwd=app).stdout.strip() == 'README'
         assert run('git','show','HEAD:README',cwd=app).stdout == 'original\n'
     before=run('git','show-ref',cwd=bare).stdout
-    invalid=run('bash',str(app/'build catlive app.command'),'1.0.1','Bad version',cwd=app,env=env,check=False)
+    invalid=run('bash',str(app/'03 build catlive app.command'),'1.0.1','Bad version',cwd=app,env=env,check=False)
     assert invalid.returncode != 0
     assert run('git','show-ref',cwd=bare).stdout == before
 print('CATLIVE_APP_OWN_REPOSITORY_RELEASE_OK: local source, local workflow, parent SHA, sequential builds, atomic tag push, unrelated changes preserved')

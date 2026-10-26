@@ -139,7 +139,10 @@ import UniformTypeIdentifiers
         .disabled(childOpen).accessibilityHidden(childOpen)
         .overlay { childEditor }
         .sheet(isPresented: $locatingFile) {
-            if let fileURL { IpadItemFileBrowser(directory: fileURL.deletingLastPathComponent(), finished: { locatingFile = false }) }
+            if let fileURL {
+                IpadItemFileBrowser(directory: fileURL.deletingLastPathComponent(), finished: { locatingFile = false })
+                    .background(IpadPresentedOutsideDismissal { locatingFile = false })
+            }
         }
     }
     var body: some View {
@@ -191,20 +194,20 @@ import UniformTypeIdentifiers
     }
     @ViewBuilder private var childEditor: some View {
         if separating {
-            IpadCompactModal {
+            IpadCompactModal(onDismiss: { separation.cancel(); separating = false; if initialAction == "separate" { close() } }) {
                 CatStemProgressView(session: separation) {
                     separating = false
                     if initialAction == "separate" { close() }
                 }
             }
         } else if initialAction == "tuner" {
-            IpadCompactModal { VStack { tuner; Button("Close", action: close) }.padding(18).frame(width: 320) }
+            IpadCompactModal(onDismiss: close) { VStack { tuner; Button("Close", action: close) }.padding(18).frame(width: 320) }
         } else if !processing.error.isEmpty {
-            IpadCompactModal {
+            IpadCompactModal(onDismiss: close) {
                 VStack(spacing: 16) { Text(verbatim: processing.error); Button("Close", action: close) }.padding(18).frame(width: 320)
             }
         } else if processing.running {
-            IpadCompactModal {
+            IpadCompactModal(onDismiss: { processing.cancel(); close() }) {
                 VStack(spacing: 16) {
                     Text(LocalizedStringKey(processing.title)).font(.jarasHeadline)
                     Text(verbatim: processing.fileName).lineLimit(2)
@@ -213,17 +216,17 @@ import UniformTypeIdentifiers
                 }.padding(24).frame(width: 380)
             }
         } else if editingText {
-            IpadCompactModal {
+            IpadCompactModal(onDismiss: { editingText = false }) {
                 TextItemEditor(text: context?.1.text ?? "", apply: { show.updateTextItem(item, text: $0) }, close: { editingText = false })
             }
         } else if normalize {
-            IpadCompactModal { ItemNormalizationEditor(show: show, documents: documents, items: audioIDs, close: { normalize = false }) }
+            IpadCompactModal(onDismiss: { normalize = false }) { ItemNormalizationEditor(show: show, documents: documents, items: audioIDs, close: { normalize = false }) }
         } else if fx {
-            IpadCompactModal(preferredSize: CGSize(width: 980, height: 640)) {
+            IpadCompactModal(preferredSize: CGSize(width: 980, height: 640), onDismiss: { fx = false }) {
                 IpadStandaloneFXManager(show: show, track: nil, clip: item, targets: [], close: { fx = false })
             }
         } else if exporting, let song = show.current {
-            IpadCompactModal(preferredSize: CGSize(width: 540, height: 480)) {
+            IpadCompactModal(preferredSize: CGSize(width: 540, height: 480), onDismiss: { exporting = false }) {
                 IpadItemExportEditor(request: .init(project: show.snapshot.project, song: song,
                     items: audioIDs.intersection(editableIDs), mediaDirectory: documents.currentURL?.deletingLastPathComponent()), close: { exporting = false })
             }
@@ -352,6 +355,7 @@ import UniformTypeIdentifiers
             .onChange(of: session.ready) { if $0 { choosingDestination = true } }
             .sheet(isPresented: $choosingDestination, onDismiss: { session.clearOutput() }) {
                 IpadItemFileExporter(urls: session.files, finished: { choosingDestination = false })
+                    .background(IpadPresentedOutsideDismissal { choosingDestination = false })
             }
             .onDisappear { session.cancel(); if !choosingDestination { session.clearOutput() } }
     }

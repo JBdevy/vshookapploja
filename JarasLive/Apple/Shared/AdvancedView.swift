@@ -256,6 +256,9 @@ private struct AdvancedTimelineSettings: View {
                             ScrollView { Text(conversionReport ?? "").frame(maxWidth: .infinity, alignment: .leading) }
                             HStack { Spacer(); Button("OK") { conversionReport = nil }.keyboardShortcut(.defaultAction) }
                         }.padding(20).frame(width: 540, height: 360)
+                            #if os(iOS)
+                            .background(IpadPresentedOutsideDismissal { conversionReport = nil })
+                            #endif
                     }
             }
             ForEach(TimelineBulkDeletion.allCases) { kind in
@@ -274,9 +277,17 @@ private struct AdvancedTimelineSettings: View {
                     Button("Delete", role: .destructive) { confirmingCleanup = true }
                         .disabled(!documents.canCleanTimelineMedia)
                 }
-                .sheet(isPresented: $confirmingCleanup) { TimelineMediaCleanupConfirmation(documents: documents) }
+                .sheet(isPresented: $confirmingCleanup) {
+                    TimelineMediaCleanupConfirmation(documents: documents)
+                        #if os(iOS)
+                        .background(IpadPresentedOutsideDismissal(active: !documents.busy) { confirmingCleanup = false })
+                        #endif
+                }
             }
         }
+        #if os(iOS)
+        .background(IpadPresentedOutsideDismissal(active: deletion != nil, alert: true) { deletion = nil })
+        #endif
         .alert(deletion.map(title) ?? "Deletar", isPresented: Binding(get: { deletion != nil }, set: { if !$0 { deletion = nil } }), presenting: deletion) { kind in
             Button("Cancelar", role: .cancel) { deletion = nil }
             Button("Deletar", role: .destructive) {

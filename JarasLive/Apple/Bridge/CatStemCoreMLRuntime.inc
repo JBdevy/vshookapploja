@@ -1,16 +1,16 @@
 // Included inside CatStemRealtime after State/Resampler. Imports remain in
 // JarasStemSeparator.mm so Objective-C framework declarations stay global.
 // No Core ML operation, file access, mutex or allocation runs in the AU block.
-class MobileModel {
-    static constexpr unsigned context = CatStemMobile::Spectrogram::context;
+template<unsigned context> class WindowModel {
+    using Transform = CatStemMobile::WindowSpectrogram<context>;
     static constexpr unsigned overlapFrames = 1024;
     static constexpr unsigned predictedFrames = hop + overlapFrames;
     MLModel *model = nil;
     MLMultiArray *audioInput = nil, *spectrumInput = nil;
     MLDictionaryFeatureProvider *inputs = nil;
-    CatStemMobile::Spectrogram transform;
+    Transform transform;
     std::vector<float> history = std::vector<float>(context * 2);
-    std::vector<float> spectrum = std::vector<float>(CatStemMobile::Spectrogram::values);
+    std::vector<float> spectrum = std::vector<float>(Transform::values);
     std::vector<float> timeBranch = std::vector<float>(context * 2);
     std::vector<float> inverse = std::vector<float>(context * 2);
     std::vector<float> prediction = std::vector<float>(4 * 2 * predictedFrames);
@@ -33,6 +33,7 @@ class MobileModel {
     }
     // Core ML may pad tensor strides. Only copy one source, respecting its
     // actual layout, instead of assuming the prediction is tightly packed.
+public:
     static void copySource(MLMultiArray *array, unsigned source, float *destination,
                            NSArray<NSNumber *> *expected) {
         if (!array || array.dataType != MLMultiArrayDataTypeFloat32 || !shapeEquals(array.shape, expected))
@@ -59,6 +60,7 @@ class MobileModel {
             destination[index] = base[offset];
         }
     }
+private:
     void estimate(unsigned start = context - rightContext - hop,
                   unsigned frames = predictedFrames, float *destination = nullptr) {
         if (!destination) destination = prediction.data();
@@ -73,8 +75,8 @@ class MobileModel {
         // reconstructed as the mixture residual below, just like the Mac engine.
         static constexpr unsigned sourceOrder[4] = {3, 0, 1, 4};
         for (unsigned stem = 0; stem < 4; ++stem) {
-            copySource(spectral, sourceOrder[stem], spectrum.data(), @[@1, @6, @4, @2048, @44]);
-            copySource(temporal, sourceOrder[stem], timeBranch.data(), @[@1, @6, @2, @44100]);
+            copySource(spectral, sourceOrder[stem], spectrum.data(), @[@1, @6, @4, @2048, @(Transform::frames)]);
+            copySource(temporal, sourceOrder[stem], timeBranch.data(), @[@1, @6, @2, @(context)]);
             transform.decode(spectrum.data(), inverse.data());
             for (unsigned channel = 0; channel < 2; ++channel)
                 for (unsigned frame = 0; frame < frames; ++frame) {
@@ -85,7 +87,7 @@ class MobileModel {
         }
     }
 public:
-    explicit MobileModel(NSURL *url, MLComputeUnits units = NSProcessInfo.processInfo.physicalMemory <= 3ULL * 1024 * 1024 * 1024 ? MLComputeUnitsCPUOnly : MLComputeUnitsAll) {
+    explicit WindowModel(NSURL *url, MLComputeUnits units = NSProcessInfo.processInfo.physicalMemory <= 3ULL * 1024 * 1024 * 1024 ? MLComputeUnitsCPUOnly : MLComputeUnitsAll) {
         MLModelConfiguration *configuration = [MLModelConfiguration new];
         // GPU specialization of this graph can exceed the per-process limit
         // on 2/3 GB iPads before the first prediction. CPU execution uses the
@@ -95,15 +97,20 @@ public:
         model = [MLModel modelWithContentsOfURL:url configuration:configuration error:&failure];
         if (!model) throw error(failure, "Could not load the CatStem Core ML model.");
         NSDictionary *metadata = model.modelDescription.metadata[MLModelCreatorDefinedKey];
-        if (![metadata[@"catlive.source_checkpoint"] isEqual:@"5c90dfd2-34c22ccb"])
+        if (![metadata[@"catlive.source_checkpoint"] isEqual:@"5c90dfd2-34c22ccb"] ||
+            ![metadata[@"catlive.source_sha256"] isEqual:@"34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd"])
             throw std::runtime_error("The CatStem Core ML model has an unexpected source identity.");
-        requireTensor(model.modelDescription.inputDescriptionsByName, @"audio", @[@1, @2, @44100]);
-        requireTensor(model.modelDescription.inputDescriptionsByName, @"spectrum", @[@1, @4, @2048, @44]);
-        requireTensor(model.modelDescription.outputDescriptionsByName, @"spectrum_out", @[@1, @6, @4, @2048, @44]);
-        requireTensor(model.modelDescription.outputDescriptionsByName, @"audio_out", @[@1, @6, @2, @44100]);
-        audioInput = [[MLMultiArray alloc] initWithShape:@[@1, @2, @44100] dataType:MLMultiArrayDataTypeFloat32 error:&failure];
+        if ([metadata[@"catlive.window_frames"] integerValue] != context)
+            throw std::runtime_error("The CatStem Core ML model has an incompatible context length.");
+        if (context == 343980 && ![metadata[@"catlive.offline_quality"] isEqual:@"desktop-full-context"])
+            throw std::runtime_error("The complete CatStem offline model is required for audio separation.");
+        requireTensor(model.modelDescription.inputDescriptionsByName, @"audio", @[@1, @2, @(context)]);
+        requireTensor(model.modelDescription.inputDescriptionsByName, @"spectrum", @[@1, @4, @2048, @(Transform::frames)]);
+        requireTensor(model.modelDescription.outputDescriptionsByName, @"spectrum_out", @[@1, @6, @4, @2048, @(Transform::frames)]);
+        requireTensor(model.modelDescription.outputDescriptionsByName, @"audio_out", @[@1, @6, @2, @(context)]);
+        audioInput = [[MLMultiArray alloc] initWithShape:@[@1, @2, @(context)] dataType:MLMultiArrayDataTypeFloat32 error:&failure];
         if (!audioInput) throw error(failure, "Could not allocate CatStem input audio.");
-        spectrumInput = [[MLMultiArray alloc] initWithShape:@[@1, @4, @2048, @44] dataType:MLMultiArrayDataTypeFloat32 error:&failure];
+        spectrumInput = [[MLMultiArray alloc] initWithShape:@[@1, @4, @2048, @(Transform::frames)] dataType:MLMultiArrayDataTypeFloat32 error:&failure];
         if (!spectrumInput) throw error(failure, "Could not allocate the CatStem input spectrum.");
         inputs = [[MLDictionaryFeatureProvider alloc] initWithDictionary:@{
             @"audio": [MLFeatureValue featureValueWithMultiArray:audioInput],
@@ -163,11 +170,142 @@ public:
     }
 };
 
-/// Every window predicts all five files together. File duration and sample
-/// placement remain exact, including short items, overlap seams and the tail.
+using MobileModel = WindowModel<44100>;
+// Preserve the desktop training context while releasing each Core ML stage.
+// Loading one monolithic graph exceeds the memory limit on 2 GB iPads.
+class OfflineModel {
+    static constexpr unsigned context = 343980;
+    static constexpr unsigned stageCount = 32;
+    using Transform = CatStemMobile::OfflineSpectrogram;
+    NSURL *baseURL;
+    MLComputeUnits units;
+    std::function<void()> check;
+    Transform transform;
+
+    static NSString *stageName(unsigned index) {
+        return index == 1 ? @"CatStemHTDemucs6Offline.mlmodelc"
+            : [NSString stringWithFormat:@"CatStemHTDemucs6Offline%u.mlmodelc", index];
+    }
+    static MLFeatureValue *ownedFeature(MLFeatureValue *feature) {
+        MLMultiArray *source = feature.multiArrayValue;
+        if (!source || source.dataType != MLMultiArrayDataTypeFloat32)
+            throw std::runtime_error("Invalid CatStem stage tensor.");
+        NSError *failure = nil;
+        MLMultiArray *copy = [[MLMultiArray alloc] initWithShape:source.shape
+            dataType:MLMultiArrayDataTypeFloat32 error:&failure];
+        if (!copy) throw std::runtime_error(failure.localizedDescription.UTF8String
+            ?: "Could not allocate CatStem stage output.");
+        const float *input = static_cast<const float *>(source.dataPointer);
+        float *output = static_cast<float *>(copy.dataPointer);
+        const unsigned rank = unsigned(source.shape.count);
+        size_t count = 1, expectedStride = 1;
+        bool contiguous = true;
+        std::vector<size_t> shape(rank), stride(rank);
+        for (unsigned i = rank; i-- > 0;) {
+            shape[i] = source.shape[i].unsignedIntegerValue;
+            stride[i] = source.strides[i].unsignedIntegerValue;
+            contiguous = contiguous && stride[i] == expectedStride;
+            expectedStride *= shape[i];
+            count *= shape[i];
+        }
+        if (contiguous) std::copy_n(input, count, output);
+        else for (size_t i = 0; i < count; ++i) {
+            size_t index = i, offset = 0;
+            for (unsigned d = rank; d-- > 0;) {
+                offset += (index % shape[d]) * stride[d];
+                index /= shape[d];
+            }
+            output[i] = input[offset];
+        }
+        return [MLFeatureValue featureValueWithMultiArray:copy];
+    }
+public:
+    explicit OfflineModel(NSURL *url, MLComputeUnits computeUnits,
+                          std::function<void()> cancellationCheck = []{})
+        : baseURL(url), units(computeUnits), check(std::move(cancellationCheck)) {
+        for (unsigned index = 1; index <= stageCount; ++index) {
+            NSURL *path = [url.URLByDeletingLastPathComponent URLByAppendingPathComponent:stageName(index)];
+            if (![NSFileManager.defaultManager fileExistsAtPath:path.path])
+                throw std::runtime_error("The complete CatStem offline model is missing from this installation.");
+        }
+    }
+    void predictWindow(const float *pcm, float *output,
+                       const std::function<void(double)> &progress = [](double){}) {
+        NSError *failure = nil;
+        MLMultiArray *audio = [[MLMultiArray alloc] initWithShape:@[@1, @2, @(context)]
+            dataType:MLMultiArrayDataTypeFloat32 error:&failure];
+        MLMultiArray *spectrum = [[MLMultiArray alloc] initWithShape:@[@1, @4, @2048, @(Transform::frames)]
+            dataType:MLMultiArrayDataTypeFloat32 error:&failure];
+        if (!audio || !spectrum) throw std::runtime_error("Could not allocate CatStem input.");
+        std::copy_n(pcm, context * 2, static_cast<float *>(audio.dataPointer));
+        transform.encode(pcm, static_cast<float *>(spectrum.dataPointer));
+        NSMutableDictionary<NSString *, MLFeatureValue *> *features = [@{
+            @"audio": [MLFeatureValue featureValueWithMultiArray:audio],
+            @"spectrum": [MLFeatureValue featureValueWithMultiArray:spectrum]
+        } mutableCopy];
+        audio = nil;
+        spectrum = nil;
+        for (unsigned index = 1; index <= stageCount; ++index) { @autoreleasepool {
+            check();
+            NSURL *path = [baseURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:stageName(index)];
+            MLModelConfiguration *configuration = [MLModelConfiguration new];
+            configuration.computeUnits = units;
+            MLModel *model = [MLModel modelWithContentsOfURL:path configuration:configuration error:&failure];
+            if (!model) throw std::runtime_error(failure.localizedDescription.UTF8String
+                ?: "Could not load CatStem stage.");
+            NSDictionary *metadata = model.modelDescription.metadata[MLModelCreatorDefinedKey];
+            if (![metadata[@"catlive.source_sha256"] isEqual:@"34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd"] ||
+                [metadata[@"catlive.window_frames"] integerValue] != context ||
+                [metadata[@"catlive.stage"] integerValue] != index ||
+                [metadata[@"catlive.stage_count"] integerValue] != stageCount)
+                throw std::runtime_error("Incompatible CatStem stage.");
+            NSMutableDictionary *arguments = [NSMutableDictionary new];
+            for (NSString *key in model.modelDescription.inputDescriptionsByName) {
+                MLFeatureValue *value = features[key];
+                if (!value) throw std::runtime_error("Missing CatStem intermediate tensor.");
+                arguments[key] = value;
+            }
+            auto provider = [[MLDictionaryFeatureProvider alloc] initWithDictionary:arguments error:&failure];
+            id<MLFeatureProvider> result = [model predictionFromFeatures:provider error:&failure];
+            if (!result) throw std::runtime_error(failure.localizedDescription.UTF8String
+                ?: "CatStem prediction failed.");
+            check();
+            // Owning boundary tensors avoids retaining the preceding model's
+            // complete working set through Core ML's prediction buffers.
+            for (NSString *key in result.featureNames)
+                features[key] = ownedFeature([result featureValueForName:key]);
+            NSData *data = [metadata[@"catlive.keep_after"] dataUsingEncoding:NSUTF8StringEncoding];
+            NSArray *keep = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:&failure] : nil;
+            if (![keep isKindOfClass:NSArray.class])
+                throw std::runtime_error("Invalid CatStem stage lifetime metadata.");
+            for (NSString *key in features.allKeys)
+                if (![keep containsObject:key]) [features removeObjectForKey:key];
+            progress(double(index) / stageCount);
+        } }
+        MLMultiArray *spectral = features[@"spectrum_out"].multiArrayValue;
+        MLMultiArray *temporal = features[@"audio_out"].multiArrayValue;
+        std::vector<float> spec(Transform::values), time(context * 2), inverse(context * 2);
+        constexpr unsigned sourceOrder[4] = {3, 0, 1, 4};
+        for (unsigned stem = 0; stem < 4; ++stem) {
+            WindowModel<context>::copySource(spectral, sourceOrder[stem], spec.data(),
+                @[@1, @6, @4, @2048, @(Transform::frames)]);
+            WindowModel<context>::copySource(temporal, sourceOrder[stem], time.data(),
+                @[@1, @6, @2, @(context)]);
+            transform.decode(spec.data(), inverse.data());
+            for (unsigned channel = 0; channel < 2; ++channel)
+                for (unsigned frame = 0; frame < context; ++frame) {
+                    const float value = inverse[channel * context + frame] + time[channel * context + frame];
+                    if (!std::isfinite(value)) throw std::runtime_error("CatStem returned nonfinite audio.");
+                    output[(stem * 2 + channel) * context + frame] = value;
+                }
+        }
+    }
+};
+
 static void separateCoreMLFile(NSURL *inputURL, NSURL *directory, NSURL *modelURL,
                               const std::function<bool()> &cancelled,
-                              const std::function<void(double)> &progress) {
+                              const std::function<void(double)> &progress,
+                              MLComputeUnits units = NSProcessInfo.processInfo.physicalMemory <= 3ULL * 1024 * 1024 * 1024 ? MLComputeUnitsCPUOnly : MLComputeUnitsAll) {
     if (NSThread.isMainThread) throw std::runtime_error("CatStem separation must run on its background worker.");
     auto check = [&] { if (cancelled()) throw std::runtime_error("Separação cancelada."); };
     check();
@@ -178,13 +316,40 @@ static void separateCoreMLFile(NSURL *inputURL, NSURL *directory, NSURL *modelUR
         throw std::runtime_error("CatStem separation requires nonempty stereo 44100 Hz PCM.");
     const int64_t frames = input.length;
     AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:modelRate channels:2];
-    constexpr unsigned window = CatStemMobile::Spectrogram::context;
-    // Demucs file processing uses 25% overlap and triangular blending. Keep
-    // only one window of sums/weights: memory does not grow with song length.
+    constexpr unsigned window = CatStemMobile::OfflineSpectrogram::context;
+    // Match desktop apply_model: complete 7.8 s training context, 25% overlap,
+    // triangular blending, no random shifts. Keep memory independent of duration.
     constexpr unsigned stride = window * 3 / 4;
     AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:format frameCapacity:window];
     if (!buffer) throw std::runtime_error("Could not allocate separation audio buffers.");
-    MobileModel model(modelURL); check();
+    // Desktop normalization uses the whole item's mono reference. Accumulate
+    // stably in bounded chunks; never retain a whole song or six-stem tensor.
+    double mean = 0, variance = 0; uint64_t samples = 0;
+    while (input.framePosition < frames) { @autoreleasepool {
+        check(); const unsigned count = unsigned(std::min<int64_t>(window, frames - input.framePosition));
+        if (![input readIntoBuffer:buffer frameCount:count error:&failure] || buffer.frameLength != count)
+            throw std::runtime_error(failure.localizedDescription.UTF8String ?: "Could not analyze separation audio.");
+        for (unsigned frame = 0; frame < count; ++frame) {
+            const float l = buffer.floatChannelData[0][frame], r = buffer.floatChannelData[1][frame];
+            if (!std::isfinite(l) || !std::isfinite(r)) throw std::runtime_error("The separation source contains nonfinite audio.");
+            const double value = (l + r) * .5f, delta = value - mean;
+            mean += delta / ++samples; variance += delta * (value - mean);
+        }
+        progress(.04 * double(samples) / frames);
+    } }
+    const float referenceMean = float(mean), scale = float(std::sqrt(std::max(0., variance / samples)));
+    // Silence/DC does not need a model; preserve the original only in Other.
+    std::unique_ptr<OfflineModel> model;
+#if TARGET_OS_IOS
+    // The physical 2 GB-device regression includes the complete model plus
+    // 256 MiB of project memory. If an unusually large project has already
+    // consumed that headroom, fail before Core ML rather than being killed
+    // by iOS. Never substitute the lower-quality one-second model.
+    if (scale >= 1e-8f && NSProcessInfo.processInfo.physicalMemory <= 3ULL * 1024 * 1024 * 1024 &&
+        os_proc_available_memory() < 1100ULL * 1024 * 1024)
+        throw std::runtime_error("Memória insuficiente para separar com qualidade completa. Feche outras abas de projeto e tente novamente.");
+#endif
+    if (scale >= 1e-8f) { model = std::make_unique<OfflineModel>(modelURL, units, check); check(); }
     NSMutableArray<AVAudioFile *> *writers = [NSMutableArray new];
     for (NSString *name in @[@"Vocal", @"Drum", @"Bass", @"Guitar", @"Other"]) {
         NSURL *url = [directory URLByAppendingPathComponent:[name stringByAppendingPathExtension:@"wav"]];
@@ -200,31 +365,49 @@ static void separateCoreMLFile(NSURL *inputURL, NSURL *directory, NSURL *modelUR
         @autoreleasepool {
             check(); std::fill(pcm.begin(), pcm.end(), 0);
             const unsigned count = unsigned(std::min<int64_t>(window, frames - offset));
-            input.framePosition = offset;
-            if (![input readIntoBuffer:buffer frameCount:count error:&failure] || buffer.frameLength != count)
+            // Demucs TensorChunk.padded supplies left context on a short last
+            // chunk and center-trims the result. Right-padding alone changes
+            // the musical context and produces a different tail estimate.
+            const unsigned crop = (window - count) / 2;
+            const int64_t start = offset - crop;
+            const int64_t readStart = std::max<int64_t>(0, start);
+            const unsigned readCount = unsigned(std::min<int64_t>(frames, start + window) - readStart);
+            const unsigned padLeft = unsigned(readStart - start);
+            input.framePosition = readStart;
+            if (![input readIntoBuffer:buffer frameCount:readCount error:&failure] || buffer.frameLength != readCount)
                 throw std::runtime_error(failure.localizedDescription.UTF8String ?: "The separation source ended unexpectedly.");
-            for (unsigned frame = 0; frame < count; ++frame) for (unsigned channel = 0; channel < 2; ++channel) {
-                const float value = buffer.floatChannelData[channel][frame];
-                if (!std::isfinite(value)) throw std::runtime_error("The separation source contains nonfinite audio.");
-                pcm[channel * window + frame] = value;
-            }
-            model.predictWindow(pcm.data(), separated.data()); check();
+            for (unsigned frame = 0; frame < readCount; ++frame) for (unsigned channel = 0; channel < 2; ++channel)
+                pcm[channel * window + padLeft + frame] = model ? (buffer.floatChannelData[channel][frame] - referenceMean) / scale : 0;
+            if (model) model->predictWindow(pcm.data(), separated.data(), [&](double portion) {
+                // Keep visible progress moving within a complete training window.
+                // Reserve its final fraction for decoding and writing the stems.
+                const double predicted = double(offset) + std::min(stride, count) * portion * .98;
+                progress(.04 + .96 * std::min(1.0, predicted / frames));
+            });
+            else std::fill(separated.begin(), separated.end(), 0);
+            check();
+            // Keep the exact original output span for residual reconstruction.
+            input.framePosition = offset;
+            const unsigned length = std::min(stride, count);
+            if (![input readIntoBuffer:buffer frameCount:length error:&failure] || buffer.frameLength != length)
+                throw std::runtime_error(failure.localizedDescription.UTF8String ?: "Could not read the original residual audio.");
+            for (unsigned channel = 0; channel < 2; ++channel)
+                std::copy_n(buffer.floatChannelData[channel], length, pcm.data() + channel * window);
             for (unsigned frame = 0; frame < count; ++frame) {
                 const float weight = float(std::min(frame + 1, window - frame)) / (window / 2);
                 weights[frame] += weight;
                 for (unsigned plane = 0; plane < 8; ++plane)
-                    sums[plane * window + frame] += separated[plane * window + frame] * weight;
+                    sums[plane * window + frame] += separated[plane * window + crop + frame] * weight;
             }
-            const unsigned length = std::min(stride, count);
             for (unsigned stem = 0; stem < 5; ++stem) {
                 buffer.frameLength = length;
                 for (unsigned channel = 0; channel < 2; ++channel) for (unsigned frame = 0; frame < length; ++frame) {
                     float value;
-                    if (stem < 4) value = sums[(stem * 2 + channel) * window + frame] / weights[frame];
+                    if (stem < 4) value = model ? sums[(stem * 2 + channel) * window + frame] / weights[frame] * scale + referenceMean / 6 : 0;
                     else {
                         float named = 0;
                         for (unsigned source = 0; source < 4; ++source)
-                            named += sums[(source * 2 + channel) * window + frame] / weights[frame];
+                            named += model ? sums[(source * 2 + channel) * window + frame] / weights[frame] * scale + referenceMean / 6 : 0;
                         value = pcm[channel * window + frame] - named;
                     }
                     if (!std::isfinite(value)) throw std::runtime_error("CatStem returned nonfinite audio.");
@@ -241,7 +424,8 @@ static void separateCoreMLFile(NSURL *inputURL, NSURL *directory, NSURL *modelUR
             }
             std::memmove(weights.data(), weights.data() + stride, (window - stride) * sizeof(float));
             std::fill(weights.begin() + window - stride, weights.end(), 0);
-            progress(double(std::min<int64_t>(frames, offset + length)) / frames);
+            const int64_t completed = std::min<int64_t>(frames, offset + length);
+            progress(completed == frames ? 1.0 : .04 + .96 * (double(completed) / frames));
         }
     }
 }

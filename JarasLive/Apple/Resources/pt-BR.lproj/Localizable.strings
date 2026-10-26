@@ -1845,3 +1845,11 @@
 "Only the selected block headers will be removed. Songs and timeline items will be kept." = "Somente os itens de bloco selecionados serão removidos do setlist.";
 
 "Block ID %02d" = "Bloco ID %02d";
+
+"Export audio" = "Exportar áudio";
+
+"Pouco espaço no disco de destino" = "Pouco espaço no disco de destino";
+
+"Continuar mesmo assim" = "Continuar mesmo assim";
+
+"A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta." = "A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta.";

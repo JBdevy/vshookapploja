@@ -80,6 +80,7 @@ import UniformTypeIdentifiers
             #if os(iOS)
             .sheet(item: $exportFile) { file in
                 NativePackageExporter(url: file.url, finished: { exportFile = nil })
+                    .background(IpadPresentedOutsideDismissal { exportFile = nil })
             }
             .onDisappear {
                 worker?.cancel()

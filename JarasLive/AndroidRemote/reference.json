@@ -1,0 +1,13 @@
+{
+  "app_reference_commit": "725ff97e7bb3b224c6ed82c936390c5738a868f5",
+  "desktop_reference_commit": "e16ced667ecc3f53a967d757b5b7a9271424eba6",
+  "files": {
+    "Apple/Shared/DAWRemoteProtocol.swift": "36faff61ee157f6f1af1a1276b9205795ff3b1831aec5a9dea9bb29a304fda03",
+    "Apple/Shared/DAWRemoteSession.swift": "09186ff6daf219bb30260bff91527e983ac47e3966491129423b171d6c5461cb",
+    "Apple/Shared/DAWRemoteView.swift": "e244b1186baaa9f7b248af36fd2a168ff24d2d4628d4c4e01c9a95edc49aa0f4",
+    "Apple/Shared/Theme.swift": "1c58d461ea5ad7d2f853936b9176a22e1af049809848a2cf27103d7056fb0962",
+    "Apple/Shared/TrackInstrumentIcons.swift": "7dbcdbdbd276a0c29c0063eaf7eb9847241308a222c85886dd9fa03966eb45bf",
+    "Apple/Resources/en.lproj/Localizable.strings": "137d15d4b038179d56b0221dfd5a2127ee553793dd38f39638ad5019b0da5cb7",
+    "Apple/Resources/pt-BR.lproj/Localizable.strings": "5a738502bb15db1dcddedcd198fb6997aaf3d29a8fb2a4433a1e8273c7fcbee8"
+  }
+}

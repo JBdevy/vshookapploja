@@ -1,5 +1,5 @@
 # CatLive source, reusable workflow and IPA all belong to this app repository.
-name: CatLive App - IPA and App Store Connect
+name: CatLive App - APK, AAB e IPA
 run-name: CatLive App ${{ github.ref_name }}
 on:
   push:
@@ -52,8 +52,20 @@ jobs:
       APP_STORE_CONNECT_KEY_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_KEY_ID }}
       APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_ISSUER_ID }}
       APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+  android:
+    needs: prepare
+    uses: ./.github/workflows/catlive-android-release.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      build_number: ${{ needs.prepare.outputs.build_number }}
+      source_ref: ${{ needs.prepare.outputs.source_ref }}
+    secrets:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
   release:
-    needs: [prepare, ios]
+    needs: [prepare, ios, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -62,7 +74,11 @@ jobs:
         with:
           name: CatLive-iOS-${{ needs.prepare.outputs.version }}
           path: ipa
-      - name: Prepare IPA
+      - uses: actions/download-artifact@v4
+        with:
+          name: CatLive-Android-${{ needs.prepare.outputs.version }}
+          path: android
+      - name: Preparar somente IPA, APK e AAB
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -70,6 +86,11 @@ jobs:
           assert len(files) == 1, 'Expected exactly one IPA'
           Path('release').mkdir()
           files[0].rename('release/CatLive.ipa')
+          for extension in ('apk', 'aab'):
+              files = list(Path('android').rglob('*.' + extension))
+              assert len(files) == 1, 'Expected exactly one ' + extension
+              files[0].rename('release/CatLive.' + extension)
+          assert {file.name for file in Path('release').iterdir()} == {'CatLive.ipa', 'CatLive.apk', 'CatLive.aab'}
           PY
       - uses: softprops/action-gh-release@v2
         with:
@@ -78,8 +99,11 @@ jobs:
           make_latest: false
           fail_on_unmatched_files: true
           body: |
-            CatLive para iPad e iPhone.
+            CatLive para iPad, iPhone e Android.
             Versão ${{ needs.prepare.outputs.version }}, build ${{ needs.prepare.outputs.build_number }}.
             Código: ${{ github.repository }}@${{ needs.prepare.outputs.source_ref }}
             IPA enviado ao App Store Connect para processamento no TestFlight.
-          files: release/CatLive.ipa
+          files: |
+            release/CatLive.ipa
+            release/CatLive.apk
+            release/CatLive.aab

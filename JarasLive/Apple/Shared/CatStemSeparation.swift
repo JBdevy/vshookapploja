@@ -100,7 +100,7 @@ private enum CatStemRenderer {
         #else
         let separationStarted = ProcessInfo.processInfo.systemUptime
         try JarasStemSeparator.separateAudio(folder.appendingPathComponent("input.wav"),
-            outputDirectory: folder, coreMLModel: CatStemRealtimeRuntime.modelURL(),
+            outputDirectory: folder, coreMLModel: CatStemRealtimeRuntime.offlineModelURL(),
             cancellation: { cancellation.cancelled }, progress: { fraction in
                 var message = "Separando os instrumentos…"
                 let elapsed = ProcessInfo.processInfo.systemUptime - separationStarted
@@ -185,7 +185,7 @@ private enum CatStemRenderer {
             error = "O motor CatStemSeparation 5 não está incluído nesta instalação."; return
         }
         #else
-        do { _ = try CatStemRealtimeRuntime.modelURL() }
+        do { _ = try CatStemRealtimeRuntime.offlineModelURL() }
         catch { self.error = error.localizedDescription; return }
         #endif
         let required = request.clip.duration * 44100 * 2 * 4 * 6 + 16_777_216

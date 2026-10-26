@@ -126,11 +126,12 @@ enum DAWRemoteNoticeDelivery: Equatable {
 struct DAWRemoteCommand: Codable {
     enum Action: String, Codable {
         case play, pause, stop, subPlay, subStop, toggleLoop, seek, queueSection, cancelSection, toggleMultiLoopBypass, toggleSetlistLive
-        case volume, pan, mute, solo, masterMono, resetMeterPeak, selectRegion, selectSong, tempo, pitch, save, toggleRegionAuto, clipGain, clipMute, selectPlaylist, openRecentProject, openRecentProjectInNewTab, selectProjectTab
+        case volume, pan, mute, solo, masterMono, resetMeterPeak, selectRegion, selectSong, tempo, pitch, save, toggleRegionAuto, clipGain, clipMute, selectPlaylist, openRecentProject, openRecentProjectInNewTab, selectProjectTab, closeProjectTab
         case remotePanel, noticeSend, noticeClear, noticePin, noticeDestination, noticeSaveTemplate
         case requestImage
         case timerStart, timerStop
         case togglePreview, selectPreviewPage
+        case vinhetasDown, vinhetasUp, vinhetasPreset, vinhetasVolume, vinhetasGate, vinhetasPanic
         case editRegion, deleteRegion, duplicateRegion, renamePlaylist, duplicatePlaylist, deletePlaylist
     }
     var id = UUID()
@@ -144,15 +145,27 @@ struct DAWRemoteCommand: Codable {
     /// Opt in so hosts never send an unknown packet kind to older clients.
     var noticeReceiptRequested: Bool? = nil
     var playlist: UUID? = nil
+    var pad: Int? = nil
+    var preset: Int? = nil
     var valid: Bool {
         guard value.isFinite else { return false }
         if let text {
             guard [.noticeSend, .noticeSaveTemplate, .editRegion, .renamePlaylist].contains(action), text.count <= 500, text.utf8.count <= 4000 else { return false }
         }
         if playlist != nil && ![.deleteRegion, .duplicateRegion].contains(action) { return false }
-        if enabled != nil && action != .noticeDestination { return false }
+        let padActions: Set<Action> = [.vinhetasDown, .vinhetasVolume, .vinhetasGate]
+        if padActions.contains(action) {
+            guard let pad, (0..<16).contains(pad), let preset, (0..<6).contains(preset) else { return false }
+        } else if pad != nil || preset != nil { return false }
+        if enabled != nil && action != .noticeDestination && action != .vinhetasGate { return false }
         if noticeReceiptRequested != nil && action != .noticeSend { return false }
         switch action {
+        case .vinhetasDown: return target != nil && value == 0 && enabled == nil
+        case .vinhetasUp: return target != nil && value == 0
+        case .vinhetasPreset: return target == nil && (0..<6).contains(value) && value.rounded() == value
+        case .vinhetasVolume: return target == nil && (0...2).contains(value)
+        case .vinhetasGate: return target == nil && value == 0 && enabled != nil
+        case .vinhetasPanic: return target == nil && value == 0
         case .editRegion: return target != nil && text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false && (0...16777215).contains(value) && value.rounded() == value
         case .renamePlaylist: return target != nil && value == 0 && text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         case .duplicateRegion: return target != nil && playlist != nil && value == 0
@@ -170,11 +183,11 @@ struct DAWRemoteCommand: Codable {
         case .noticeClear: return target == nil && value == 0
         case .noticePin: return target == nil && (value == 0 || value == 1)
         case .noticeDestination: return target == nil && (value == 1 || value == 2) && enabled != nil
-        case .openRecentProject, .openRecentProjectInNewTab, .selectProjectTab: return target != nil && value == 0
+        case .openRecentProject, .openRecentProjectInNewTab, .selectProjectTab, .closeProjectTab: return target != nil && value == 0
         case .clipGain: return target != nil && (0...pow(10, 24.0 / 20)).contains(value)
         case .clipMute, .queueSection: return target != nil && value == 0
         case .volume: return (0...4).contains(value)
-        case .pan: return (-1...1).contains(value) && target != nil
+        case .pan: return (-1...1).contains(value)
         case .tempo: return (20...400).contains(value)
         case .pitch: return (-12...12).contains(value) && value.rounded() == value && target != nil
         case .seek: return (0...604800).contains(value)
@@ -209,6 +222,8 @@ struct DAWRemoteState: Codable, Equatable {
         var section: Bool? = nil
         var unifiedRegionID: UUID? = nil
         var sourceRegionID: UUID? = nil
+        var tempoBPM: Double? = nil
+        var isTempo: Bool? = nil
     }
     struct SectionPlayback: Codable, Equatable {
         var currentRegion: UUID?
@@ -286,7 +301,10 @@ struct DAWRemoteState: Codable, Equatable {
         var canOpenInNewTab: Bool? = nil
         var status: String
         var error: String
+        var commandID: UUID? = nil
+        var commandState: String? = nil
         var valid: Bool {
+            (commandState?.utf8.count ?? 0) <= 32 &&
             recent.count <= 20 && Set(recent.map(\.id)).count == recent.count &&
             recent.filter(\.current).count <= 1 && recent.allSatisfy { !$0.name.isEmpty && $0.name.utf8.count <= 1024 } &&
             status.utf8.count <= 2048 && error.utf8.count <= 2048
@@ -327,6 +345,7 @@ struct DAWRemoteState: Codable, Equatable {
     var setlistLiveEnabled: Bool? = nil
     var playedLiveRegionIDs: [UUID]? = nil
     var masterPeakDB: Double? = nil
+    var masterPan: Double? = nil
     var pitchRegion: UUID? = nil
     var pitchSemitones: Int? = nil
     var setlistFontStyle: Int? = nil
@@ -377,6 +396,7 @@ struct DAWRemoteState: Codable, Equatable {
     /// Missing fields identify a host without Preview control support.
     var previewActive: Bool? = nil
     var previewPage: Int? = nil
+    var vinhetas: DAWRemoteVinhetas? = nil
     /// Original unified songs keep their active child; only aliases replace the displayed row ID.
     var setlistCurrentEntryId: UUID? {
         if let id = currentPlaylistEntryId, regions.contains(where: { $0.id == id && $0.sourceRegionId != nil }) { return id }
@@ -386,6 +406,7 @@ struct DAWRemoteState: Codable, Equatable {
     static func validPeak(_ value: Double?) -> Bool { value.map { $0.isFinite && $0 >= -24 } ?? true }
     var valid: Bool {
         position.isFinite && duration.isFinite && bpm.isFinite && masterVolume.isFinite && Self.validPeak(masterPeakDB) &&
+        (masterPan == nil || (masterPan!.isFinite && (-1...1).contains(masterPan!))) &&
         (loopStart == nil || (loopStart!.isFinite && loopStart! >= 0)) &&
         (loopEnd == nil || (loopEnd!.isFinite && loopEnd! >= (loopStart ?? 0))) &&
         (editPosition == nil || (editPosition!.isFinite && editPosition! >= 0)) &&
@@ -394,7 +415,7 @@ struct DAWRemoteState: Codable, Equatable {
         (gridTempo ?? []).count <= 32768 && (gridTempo ?? []).allSatisfy(\.valid) &&
         (footerLoopBeatPhase == nil || [0, 1, 3].contains(footerLoopBeatPhase!)) &&
         (gridDivisions == nil || [0, 2, 4, 8].contains(gridDivisions!)) &&
-        (previewPage == nil || (0...5).contains(previewPage!)) &&
+        (previewPage == nil || (0...5).contains(previewPage!)) && (vinhetas?.valid ?? true) &&
         (playedLiveRegionIDs ?? []).count <= 8192 &&
         Set(playedLiveRegionIDs ?? []).count == (playedLiveRegionIDs ?? []).count &&
         (setlistBlocks ?? []).count <= 8192 && (setlistBlocks ?? []).allSatisfy(\.valid) &&
@@ -459,6 +480,7 @@ enum DAWRemoteSetlistPresentation {
         var number: Int?
         var child: Bool
         var hasDrawer: Bool = false
+        var drawerContinues: Bool = false
         var id: UUID { region.id }
     }
     static func canQueueDuplicate(_ entry: UUID, in state: DAWRemoteState) -> Bool {
@@ -525,6 +547,15 @@ enum DAWRemoteSetlistPresentation {
         }
         appendSection()
         result += (headers[nil] ?? []).filter { query.isEmpty || $0.name.localizedStandardContains(query) }.map(Entry.block)
+        // The connector follows visible adjacency, including filtered drawers.
+        // A playlist copy is a top-level entry, never a child merely by source ID.
+        for index in result.indices {
+            guard case .region(var row) = result[index], row.child else { continue }
+            if index + 1 < result.count, case .region(let next) = result[index + 1] {
+                row.drawerContinues = next.child && row.region.parentRegion != nil && next.region.parentRegion == row.region.parentRegion
+            }
+            result[index] = .region(row)
+        }
         return result
     }
 }
@@ -603,7 +634,7 @@ enum DAWRemoteScrollRange {
 /// always derives its result from the original pair, so reversing also restores
 /// a neighboring panel that the drag temporarily pushed out of view.
 enum DAWRemotePhonePanel: CaseIterable {
-    case grid, mixer, setlist, teleprompter1, teleprompter2, notices, sections
+    case grid, mixer, setlist, teleprompter1, teleprompter2, notices, sections, vinhetas
     func selecting(_ panel: Self) -> Self { panel == self ? .grid : panel }
     func togglingFooterParts() -> Self { self == .sections ? .setlist : .sections }
     var subscription: Int {
@@ -860,4 +891,134 @@ struct DAWRemoteSectionCue: Equatable {
         guard remaining.isFinite, remaining > 0, remaining <= leadTime else { return nil }
         return .init(marker: target.id, name: target.name, seconds: Int(ceil(remaining)), armed: armed)
     }
+}
+
+/// Presentation only: audio paths and MIDI mappings stay on the host.
+struct DAWRemoteVinhetas: Codable, Equatable {
+    struct Pad: Codable, Equatable {
+        var name: String
+        var color: UInt32
+        var volume: Double
+        var gate: Bool
+        var loaded: Bool
+        var active: Bool
+        var valid: Bool { name.utf8.count <= 4096 && color <= 0xffffff && volume.isFinite && (0...2).contains(volume) }
+    }
+    struct Preset: Codable, Equatable {
+        var name: String
+        var color: UInt32
+        var pads: [Pad]
+        var valid: Bool { name.utf8.count <= 4096 && color <= 0xffffff && pads.count == 16 && pads.allSatisfy(\.valid) }
+    }
+    var selectedPreset: Int
+    var available: Bool
+    var presets: [Preset]
+    var receivedPresses: [UUID]? = nil
+    var valid: Bool { (0..<6).contains(selectedPreset) && presets.count == 6 && presets.allSatisfy(\.valid) &&
+        (receivedPresses ?? []).count <= 256 && Set(receivedPresses ?? []).count == (receivedPresses ?? []).count }
+}
+/// Pads light immediately on the client. Host snapshots may end an acknowledged
+/// local trigger, but an older false snapshot can never undo a fresh press.
+struct DAWRemoteVinhetasFeedback {
+    private struct Key: Hashable { let preset: Int; let pad: Int }
+    private struct Press { let id: UUID; let gate: Bool; var held: Bool; var sounding: Bool; var confirmed = false }
+    private var presses: [Key: Press] = [:]
+    private struct Gate { var baseline: Bool; var awaiting: [Bool]; var expires: TimeInterval }
+    private var gates: [Key: Gate] = [:]
+    private(set) var gateRevision = UUID()
+    func gate(preset: Int, pad: Int, confirmed: Bool, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard let gate = gates[Key(preset: preset, pad: pad)], gate.expires > now else { return confirmed }
+        return gate.awaiting.last ?? confirmed
+    }
+    @discardableResult mutating func toggleGate(preset: Int, pad: Int, confirmed: Bool,
+                                               now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        let key = Key(preset: preset, pad: pad)
+        let desired = !gate(preset: preset, pad: pad, confirmed: confirmed, now: now)
+        var prediction = gates[key].flatMap { $0.expires > now ? $0 : nil } ?? Gate(baseline: confirmed, awaiting: [], expires: now)
+        prediction.awaiting.append(desired); prediction.expires = now + 2
+        gates[key] = prediction; gateRevision = UUID()
+        if desired { stop(preset: preset, pad: pad) }
+        return desired
+    }
+    mutating func expireGates(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        gates = gates.filter { $0.value.expires > now }
+    }
+    mutating func stopAll() { presses.removeAll() }
+    mutating func down(id: UUID, preset: Int, pad: Int, gate: Bool) {
+        presses[Key(preset: preset, pad: pad)] = Press(id: id, gate: gate, held: gate, sounding: !gate)
+    }
+    mutating func up(preset: Int, pad: Int) {
+        let key = Key(preset: preset, pad: pad)
+        if presses[key]?.gate == true { presses[key]?.held = false; presses[key]?.sounding = false }
+    }
+    mutating func stop(preset: Int, pad: Int) { presses[Key(preset: preset, pad: pad)] = nil }
+    mutating func reset() { presses.removeAll(); gates.removeAll() }
+    func lit(preset: Int, pad: Int) -> Bool {
+        let press = presses[Key(preset: preset, pad: pad)]
+        return press?.held == true || press?.sounding == true
+    }
+    mutating func receive(_ state: DAWRemoteVinhetas, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        expireGates(now: now)
+        for (key, stored) in gates {
+            var prediction = stored
+            let confirmed = state.presets[key.preset].pads[key.pad].gate
+            // Consume observed transitions in order. A stale initial value
+            // cannot acknowledge the last of two rapid, opposite taps.
+            if confirmed != prediction.baseline {
+                prediction.baseline = confirmed
+                if let index = prediction.awaiting.firstIndex(of: confirmed) { prediction.awaiting.removeFirst(index + 1) }
+            }
+            gates[key] = prediction.awaiting.isEmpty ? nil : prediction
+        }
+        let acknowledged = Set(state.receivedPresses ?? [])
+        for (key, stored) in presses {
+            var press = stored
+            press.confirmed = press.confirmed || acknowledged.contains(press.id)
+            presses[key] = press.confirmed && !press.held && !state.presets[key.preset].pads[key.pad].active ? nil : press
+        }
+    }
+}
+
+/// Tracks a remote request across project/tab replacement. Receiving an older
+/// idle snapshot is not an acknowledgement that opening has finished.
+struct DAWRemoteProjectOpening: Equatable {
+    let id: UUID
+    let initialProject: UUID
+    let initialTab: UUID?
+    let initialError: String
+    let name: String
+    let startedAt: Date
+    var sawBusy = false
+    var phase = "opening"
+    var status = "Carregando projeto…"
+    var error = ""
+    init(command: DAWRemoteCommand, state: DAWRemoteState, now: Date = Date()) {
+        id = command.id; initialProject = state.project
+        initialTab = state.projectTabs?.first(where: { $0.selected })?.id
+        initialError = state.projects?.error ?? ""
+        name = state.projects?.recent.first(where: { $0.id == command.target })?.name ?? ""
+        startedAt = now
+    }
+    mutating func receive(_ state: DAWRemoteState) -> Bool {
+        guard let browser = state.projects else { return false }
+        if browser.commandID == id {
+            phase = browser.commandState ?? "opening"
+            status = browser.status.isEmpty ? "Carregando projeto…" : browser.status
+            error = browser.error
+            return phase == "completed" || phase == "cancelled"
+        }
+        // Legacy hosts have no receipts. Require evidence of a real busy cycle
+        // and the newly selected project/tab before accepting an idle state.
+        if browser.commandID == nil {
+            sawBusy = sawBusy || browser.busy
+            if browser.busy, !browser.status.isEmpty { status = browser.status }
+            if !browser.busy, !browser.error.isEmpty, browser.error != initialError {
+                phase = "failed"; error = browser.error
+            }
+            let changed = state.project != initialProject || state.projectTabs?.first(where: { $0.selected })?.id != initialTab
+            return sawBusy && !browser.busy && changed && browser.error.isEmpty
+        }
+        return false
+    }
+    func canDismiss(at now: Date) -> Bool { phase == "waiting" || phase == "failed" || now.timeIntervalSince(startedAt) >= 20 }
 }

@@ -48,6 +48,7 @@ struct IpadTimelineToolbar: View {
         .foregroundStyle(JarasTheme.text)
         .sheet(isPresented: $showingVisibility) {
             TrackVisibilityEditor(show: show, close: { showingVisibility = false })
+                .background(IpadPresentedOutsideDismissal { showingVisibility = false })
         }
         .alert(Text(verbatim: JarasLocalization.string(pendingTimebase?.relative == true ? "Enable relative timebase?" : "Disable relative timebase?")),
                isPresented: Binding(get: { pendingTimebase != nil }, set: { if !$0 { pendingTimebase = nil } }),
@@ -67,6 +68,7 @@ struct IpadTimelineToolbar: View {
                 ? "Relative timebase: changing the project BPM adjusts item duration and playback speed to follow the tempo. With Free timebase, changing the project BPM preserves item duration and playback speed. Tempo markers with their own timebase keep their individual settings."
                 : "Free timebase: changing the project BPM changes the grid without stretching or shortening items. Item duration and playback speed are preserved. Tempo markers with their own timebase keep their individual settings."))
         }
+        .background(IpadPresentedOutsideDismissal(active: pendingTimebase != nil, alert: true) { pendingTimebase = nil })
         .onChange(of: show.snapshot.project.id) { _ in
             showingVisibility = false
             pendingTimebase = nil

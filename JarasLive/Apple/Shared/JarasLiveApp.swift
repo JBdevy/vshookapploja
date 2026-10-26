@@ -152,7 +152,8 @@ struct RootView: View {
                     ZStack {
                         DesktopWorkspaceView(container: container)
                         if !documents.ready {
-                            Color.black.opacity(0.45).ignoresSafeArea()
+                            Color.black.opacity(0.45).ignoresSafeArea().contentShape(Rectangle())
+                        .onTapGesture { if documents.canCancelOpening { documents.cancelOpening() } }
                             VStack(spacing: 0) {
                                 HStack {
                                     Text("Projects").font(.jarasHeadline)
@@ -230,11 +231,17 @@ struct RootView: View {
         #endif
         .sheet(item: $documents.missingAudioPrompt) { _ in
             MissingAudioRecoveryView(documents: documents)
+                #if os(iOS)
+                .background(IpadPresentedOutsideDismissal(active: !documents.busy || documents.canCancelOpening) { documents.cancelMissingAudioOpen() })
+                #endif
         }
         .sheet(isPresented: Binding(get: { !documents.migrationNotice.isEmpty }, set: { if !$0 { documents.migrationNotice = "" } })) {
             ProjectMigrationNotice(notice: documents.migrationNotice, language: language) {
                 documents.migrationNotice = ""
             }
+            #if os(iOS)
+            .background(IpadPresentedOutsideDismissal { documents.migrationNotice = "" })
+            #endif
         }
         .overlay(alignment: .top) {
             if !documents.closeNotice.isEmpty {
@@ -418,7 +425,23 @@ struct StartupView: View {
             .background(JarasTheme.panel)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            .modifier(MobileStartupPanelFit())
         }
+    }
+}
+
+private struct MobileStartupPanelFit: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        GeometryReader { geometry in
+            let scale = min(1, max(0, geometry.size.width - 32) / StartupView.panelWidth,
+                            max(0, geometry.size.height - 32) / StartupView.panelHeight)
+            content.scaleEffect(scale)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        #else
+        content
+        #endif
     }
 }
 

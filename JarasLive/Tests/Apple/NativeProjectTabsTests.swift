@@ -107,10 +107,15 @@ enum ProjectTabNavigation {
         let second = tabs.active!
         check(first.show.playing && first.show.dirty && first.documents.currentURL == a, "Opening a tab altered the previous project")
         check(first.projectAudio !== second.projectAudio && first.projectRecorder !== second.projectRecorder, "Tabs share project-owned audio/recording state")
+        check(second.documents.activateExistingProjectTab?(b) == true && tabs.active === second, "Recents must return to the already selected project")
+        check(second.documents.activateExistingProjectTab?(URL(fileURLWithPath: "/tmp/native-tabs/unused/../A.jl")) == true, "Recents must recognize the existing tab's canonical path")
+        check(tabs.active === first && tabs.projects.count == 2 && first.show.playing && first.show.dirty, "Returning from recents must preserve the live session and unsaved edits")
         tabs.select(0); check(tabs.active === first && StemAudioPlayback.shared === first.projectAudio, "Selecting must reuse the original session")
         tabs.open(b); await settle(); check(tabs.projects.count == 2 && tabs.active === second, "Already-open projects must reuse their tab")
         TrackRecording.shared.recording = true; tabs.select(0); tabs.open(URL(fileURLWithPath: "/tmp/native-tabs/C.jl")); await settle()
         check(tabs.active === second && tabs.projects.count == 2, "Switching interrupted recording")
+        check(second.documents.activateExistingProjectTab?(a) == false && tabs.active === second, "Recents must not claim to activate a tab when switching is blocked")
+        check(second.documents.activateExistingProjectTab?(b) == true, "Returning to the current project must remain possible while recording")
         TrackRecording.shared.recording = false
         second.show.failSave = true; await tabs.close(second.remoteProjectTabID)
         check(tabs.projects.count == 2 && tabs.active === second, "Failed save discarded a tab")

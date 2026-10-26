@@ -15,6 +15,9 @@ extension Color {
 @main struct KeyboardFixtureApp: App { var body: some Scene { WindowGroup { KeyboardFixture() } } }
 struct KeyboardFixture: View {
     @State private var modal = false
+    @State private var sheet = false
+    @State private var alert = false
+    @State private var dismissed = 0
     @State private var text = ""
     @State private var notes = ""
     @State private var secure = ""
@@ -25,6 +28,9 @@ struct KeyboardFixture: View {
             Color(white: 0.08).ignoresSafeArea()
             VStack {
                 Button("Editar") { modal = true }
+                Button("Sheet") { sheet = true }
+                Button("Alert") { alert = true }
+                Text("Dismissed: \(dismissed)").accessibilityIdentifier("dismissed")
                 TextField("Pesquisa", text: $text).textFieldStyle(.roundedBorder).accessibilityIdentifier("search")
                 SecureField("PIN", text: $secure).textFieldStyle(.roundedBorder).keyboardType(.numberPad).accessibilityIdentifier("pin")
                 TextEditor(text: $notes).frame(height: 120).accessibilityIdentifier("notes")
@@ -34,11 +40,22 @@ struct KeyboardFixture: View {
                 Spacer()
             }.padding(30)
             if modal {
-                IpadCompactModal {
+                IpadCompactModal(onDismiss: { modal = false; dismissed += 1 }) {
                     NameColorEditor(title: "Editar pista", initialName: "Guitarra", initialColor: 0x339944,
                                     save: { name, _ in saved = name }, close: { modal = false }, uppercaseName: $uppercase)
                 }
             }
         }.preferredColorScheme(.dark).background(IpadTextKeyboardScope())
+        .sheet(isPresented: $sheet) {
+            VStack { Text("Sheet content"); Button("Close sheet") { sheet = false } }
+                .frame(width: 400, height: 300)
+                .interactiveDismissDisabled()
+                .background(IpadPresentedOutsideDismissal { sheet = false; dismissed += 1 })
+        }
+        .alert("Confirm action", isPresented: $alert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Confirm", role: .destructive) { saved = "CONFIRMED" }
+        }
+        .background(IpadPresentedOutsideDismissal(active: alert, alert: true) { alert = false; dismissed += 1 })
     }
 }

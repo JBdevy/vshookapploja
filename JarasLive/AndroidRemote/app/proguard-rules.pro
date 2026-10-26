@@ -1,0 +1,2 @@
+-dontwarn javax.naming.**
+-dontwarn javax.security.**

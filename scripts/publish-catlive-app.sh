@@ -19,7 +19,7 @@ esac
 BRANCH="$(git branch --show-current)"
 [[ -n "$BRANCH" ]] || { echo 'Selecione uma branch antes de continuar.' >&2; exit 1; }
 VERSION="${1:-}"
-if [[ -z "$VERSION" ]]; then read -r -p 'Versão do CatLive [1.08]: ' VERSION; VERSION="${VERSION:-1.08}"; fi
+if [[ -z "$VERSION" ]]; then read -r -p 'Versão do CatLive (ex.: 1.16): ' VERSION; fi
 VERSION="${VERSION#v}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]{2}$ ]] || { echo 'Use X.XX (ex.: 1.08).' >&2; exit 1; }
 MESSAGE="${2:-}"
@@ -27,7 +27,7 @@ if [[ -z "$MESSAGE" ]]; then read -r -p 'Mensagem do commit: ' MESSAGE; fi
 [[ -n "${MESSAGE//[[:space:]]/}" ]] || { echo 'Informe a mensagem do commit.' >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo 'Entre no GitHub com gh auth login.' >&2; exit 1; }
 AVAILABLE_SECRETS="$(gh secret list --repo "$REPO" --json name --jq '.[].name')"
-for name in IOS_TEAM_ID IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD CATLIVE_IOS_PROVISION_PROFILE_BASE64 CATLIVE_APP_STORE_CONNECT_KEY_ID CATLIVE_APP_STORE_CONNECT_ISSUER_ID CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64; do
+for name in IOS_TEAM_ID IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD CATLIVE_IOS_PROVISION_PROFILE_BASE64 CATLIVE_APP_STORE_CONNECT_KEY_ID CATLIVE_APP_STORE_CONNECT_ISSUER_ID CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
   grep -Fxq "$name" <<< "$AVAILABLE_SECRETS" || { echo "Secret ausente em $REPO: $name" >&2; exit 1; }
 done
 BUILD_NUMBER="$(git ls-remote --tags --refs origin 'catlive-app-v*-build*' | python3 -c '
@@ -38,7 +38,7 @@ numbers = [int(m.group(1)) for m in re.finditer(r"refs/tags/catlive-app-v[0-9]+\
 print(max(max([1000] + numbers) + 1, int(minimum)))
 ' "${CATLIVE_MIN_BUILD_NUMBER:-1001}")"
 TAG="catlive-app-v$VERSION-build$BUILD_NUMBER"
-FILES=('JarasLive' '.github/workflows/catlive-ios-appstore.yml' '.github/workflows/catlive-app-release.yml' 'build catlive app.command' 'build catlive ios.command' 'scripts/publish-catlive-app.sh' 'scripts/test-catlive-app-release.py')
+FILES=('.gitattributes' 'JarasLive' ':(exclude)JarasLive/Windows/**' ':(exclude)JarasLive/output/**' '.github/workflows/catlive-ios-appstore.yml' '.github/workflows/catlive-android-release.yml' '.github/workflows/catlive-app-release.yml' '03 build catlive app.bat' '03 build catlive app.command' 'scripts/publish-catlive-app.ps1' 'scripts/publish-catlive-app.sh' 'scripts/test-catlive-app-release.py')
 echo "CatLive App $VERSION — build $BUILD_NUMBER — código em $REPO"
 git status --short -- "${FILES[@]}"
 git add -A -- "${FILES[@]}"
@@ -58,5 +58,5 @@ git tag -a "$TAG" -m "CatLive App $VERSION build $BUILD_NUMBER; source $SOURCE_S
 git push --atomic origin "HEAD:refs/heads/$BRANCH" "refs/tags/$TAG"
 echo "Build disparado: $TAG"
 echo "Acompanhar: https://github.com/$REPO/actions/workflows/catlive-app-release.yml"
-echo "IPA: https://github.com/$REPO/releases/tag/$TAG"
+echo "IPA, APK e AAB: https://github.com/$REPO/releases/tag/$TAG"
 echo 'Código e build pertencem ao repositório do app. IPA enviado ao App Store Connect pelo workflow.'

@@ -17,6 +17,7 @@ extension UTType {
     @Published private(set) var selected = 0
     @Published private(set) var transitioning = false
     @Published var error = ""
+    @Published var closing: UUID?
     private var openingObservers: [ObjectIdentifier: Set<AnyCancellable>] = [:]
     var active: AppContainer? { projects.indices.contains(selected) ? projects[selected] : nil }
     func isForeground(_ show: ShowController?) -> Bool { projects.isEmpty || active?.show === show }
@@ -39,6 +40,10 @@ extension UTType {
             guard let self, let index = projects.firstIndex(where: { $0.remoteProjectTabID == id }) else { return }
             select(index)
         }
+        DAWRemoteHostBridge.closeProjectTabHandler = { [weak self] id in
+            guard let self, canChange, projects.contains(where: { $0.remoteProjectTabID == id }) else { return }
+            closing = id
+        }
     }
     private var canChange: Bool {
         !transitioning && active?.documents.busy != true && active?.documents.importingAudio != true &&
@@ -52,11 +57,7 @@ extension UTType {
     }
     private func configure(_ container: AppContainer) {
         container.documents.openInNewProjectTab = { [weak self] in self?.open($0) }
-        container.documents.activateExistingProjectTab = { [weak self, weak container] url in
-            guard let self else { return false }
-            guard let index = projects.firstIndex(where: { $0 !== container && self.canonical($0.documents.currentURL) == self.canonical(url) }) else { return false }
-            select(index); return true
-        }
+        container.documents.activateExistingProjectTab = { [weak self] url in self?.activateOpenProject(url) ?? false }
         container.documents.navigateProjectTab = { [weak self] in self?.navigate($0) }
         container.show.navigateProjectTab = { [weak self] in self?.navigate($0) }
         container.documents.additionalProtectedMediaURLs = { [weak self, weak container] in
@@ -72,6 +73,14 @@ extension UTType {
         }
     }
     private func canonical(_ url: URL?) -> URL? { url?.standardizedFileURL.resolvingSymlinksInPath() }
+    @discardableResult func activateOpenProject(_ url: URL) -> Bool {
+        guard let index = projects.firstIndex(where: { $0.documents.ready && canonical($0.documents.currentURL) == canonical(url) }) else { return false }
+        if index != selected {
+            guard canChange else { return false }
+            activate(index)
+        }
+        return true
+    }
     func navigate(_ direction: Int) {
         guard let index = ProjectTabNavigation.destination(current: selected, count: projects.count, direction: direction) else { return }
         select(index)
@@ -191,39 +200,31 @@ extension UTType {
 
 @MainActor private struct NativeProjectTabBar: View {
     @ObservedObject var tabs: NativeProjectTabs
-    @State private var closing: UUID?
     var body: some View {
         GeometryReader { geometry in
             let count = max(1, tabs.projects.count)
-            let spacing = min(3.0, geometry.size.width / CGFloat(count))
-            let width = max(0, (geometry.size.width - spacing * CGFloat(count - 1)) / CGFloat(count))
-            HStack(spacing: spacing) {
-                ForEach(Array(tabs.projects.enumerated()), id: \.element.remoteProjectTabID) { index, project in
-                    HStack(spacing: 0) {
+            let width = max(140, (geometry.size.width - CGFloat(count - 1) * 3) / CGFloat(count))
+            ScrollView(.horizontal, showsIndicators: true) {
+                HStack(spacing: 3) {
+                    ForEach(Array(tabs.projects.enumerated()), id: \.element.remoteProjectTabID) { index, project in
                         Button { tabs.select(index) } label: {
                             Text(project.documents.currentURL?.deletingPathExtension().lastPathComponent ?? project.show.snapshot.project.name)
                                 .font(.jarasSystem(size: 12, weight: .semibold))
-                                .lineLimit(1).truncationMode(.middle)
-                                .frame(maxWidth: .infinity).frame(height: 38)
-                                .contentShape(Rectangle())
-                        }.frame(minWidth: 0, maxWidth: .infinity)
-                        Button { closing = project.remoteProjectTabID } label: {
-                            Image(systemName: "xmark").font(.jarasSystem(size: 12))
-                                .frame(width: min(32, width * 0.35), height: 38).contentShape(Rectangle())
-                        }.accessibilityLabel("Close tab")
-                    }.buttonStyle(.plain).frame(width: width)
-                        .foregroundStyle(index == tabs.selected ? Color.white : Color.white.opacity(0.6))
-                        .background(index == tabs.selected ? Color.white.opacity(0.12) : Color.white.opacity(0.04))
-                        .overlay(alignment: .bottom) {
-                            if index == tabs.selected { Rectangle().fill(Color.green).frame(height: 2) }
-                        }
+                                .lineLimit(1).truncationMode(.middle).padding(.horizontal, 8)
+                                .frame(width: width, height: 38).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                            .foregroundStyle(index == tabs.selected ? Color.white : Color.white.opacity(0.6))
+                            .background(index == tabs.selected ? Color.white.opacity(0.12) : Color.white.opacity(0.04))
+                            .overlay(alignment: .bottom) {
+                                if index == tabs.selected { Rectangle().fill(Color.green).frame(height: 2) }
+                            }
+                            .contextMenu {
+                                Button("Close tab") { tabs.closing = project.remoteProjectTabID }
+                            }
+                    }
                 }
             }
         }.frame(height: 38).padding(.horizontal, 6).background(Color.black.opacity(0.2))
-            .alert("Close tab", isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } })) {
-                Button("Cancel", role: .cancel) { closing = nil }
-                Button("Save and close") { if let id = closing { closing = nil; Task { await tabs.close(id) } } }
-            } message: { Text("The project will be saved before closing.") }
     }
 }
 
@@ -285,6 +286,12 @@ extension UTType {
         .alert("Project", isPresented: Binding(get: { !tabs.error.isEmpty }, set: { if !$0 { tabs.error = "" } })) {
             Button("OK", role: .cancel) { tabs.error = "" }
         } message: { Text(LocalizedStringKey(tabs.error)) }
+        .background(IpadPresentedOutsideDismissal(active: !tabs.error.isEmpty, alert: true) { tabs.error = "" })
+        .alert("Close tab", isPresented: Binding(get: { tabs.closing != nil }, set: { if !$0 { tabs.closing = nil } })) {
+            Button("Cancel", role: .cancel) { tabs.closing = nil }
+            Button("Save and close") { if let id = tabs.closing { tabs.closing = nil; Task { await tabs.close(id) } } }
+        } message: { Text("The project will be saved before closing.") }
+        .background(IpadPresentedOutsideDismissal(active: tabs.closing != nil, alert: true) { tabs.closing = nil })
         .fullScreenCover(isPresented: $remote) { DAWRemoteClientView().environment(\.locale, Locale(identifier: language)) }
         .fullScreenCover(isPresented: $showingPurchase) {
             IpadNativePurchaseView(store: purchases, close: { showingPurchase = false; pendingPackage = nil }, openNative: {
@@ -467,6 +474,11 @@ struct NativeProjectPresentation: ViewModifier {
                     // rename popovers; a second SwiftUI resize can steal focus.
                     .ignoresSafeArea(.keyboard, edges: .bottom)
                     .interactiveDismissDisabled()
+                    .background(IpadPresentedOutsideDismissal {
+                        let result = pickerHandoff.cancelled(kind)
+                        documents.nativePicker = nil
+                        deliver(result)
+                    })
                     .onAppear { pickerHandoff.begin(kind) }
             }
             .alert(item: $documents.nativePackagePrompt) { prompt in
@@ -483,6 +495,11 @@ struct NativeProjectPresentation: ViewModifier {
                 Button("Cancel", role: .cancel) { documents.cancelNativeProjectName() }
                 Button("Create") { documents.confirmNativeProjectName() }
             }
+            .background(IpadPresentedOutsideDismissal(active: documents.nativePackagePrompt != nil || !documents.audioImportError.isEmpty || documents.nativeNamePrompt, alert: true) {
+                if documents.nativeNamePrompt { documents.nativeNamePrompt = false; documents.cancelNativeProjectName() }
+                else if documents.nativePackagePrompt != nil { documents.cancelNativePackageImport() }
+                else { documents.audioImportError = "" }
+            })
     }
     private func pickerDismissed() {
         deliver(pickerHandoff.didDismiss())
