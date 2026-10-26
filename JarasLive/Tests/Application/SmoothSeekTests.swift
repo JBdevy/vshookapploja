@@ -26,6 +26,16 @@ final class SectionBoundaryTests: XCTestCase {
         transport.playing = false
         XCTAssertNil(song.nextSectionTrigger(for: transport), "Stopped selection starts directly rather than counting down")
     }
+    func testAutomaticSectionWarningUsesConfiguredMarkerBeyondAnEarlierBoundary() {
+        var (song, transport) = fixture()
+        let source = song.markers![0]
+        song.markers?.append(TimelineMarker(id: UUID(), name: "Earlier", position: 8, color: 0, section: true))
+        transport.queuedSectionMarkerId = song.markers![1].id
+        transport.automaticSectionTriggerId = source.id
+        XCTAssertEqual(song.nextSectionTrigger(for: transport), 10)
+        transport.automaticSectionTriggerId = nil
+        XCTAssertEqual(song.nextSectionTrigger(for: transport), 8)
+    }
     func testIgnoreNextPreservesOwnerAndUsesActualAudioEndOnEitherSideOfRegionEnd() {
         let (song, initial) = fixture(); var transport = initial
         transport.position = 15; transport.ignoreNextRegionId = song.parts[1].id

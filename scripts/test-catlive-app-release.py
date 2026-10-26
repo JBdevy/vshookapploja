@@ -30,7 +30,8 @@ with tempfile.TemporaryDirectory(prefix='catlive-app-repo-test-') as temporary:
     run('git', 'symbolic-ref', 'HEAD', 'refs/heads/main', cwd=bare)
     release_template = ROOT/'.github/workflows/catlive-app-release.yml'
     if not release_template.exists(): release_template = ROOT/'scripts/catlive-app-release.yml'
-    for src, dst in [(ROOT/'03 build catlive app.bat', '03 build catlive app.bat'),
+    for src, dst in [(ROOT/'.gitattributes', '.gitattributes'),
+                     (ROOT/'03 build catlive app.bat', '03 build catlive app.bat'),
                      (ROOT/'03 build catlive app.command', '03 build catlive app.command'),
                      (ROOT/'scripts/publish-catlive-app.sh', 'scripts/publish-catlive-app.sh'),
                      (ROOT/'scripts/publish-catlive-app.ps1', 'scripts/publish-catlive-app.ps1'),

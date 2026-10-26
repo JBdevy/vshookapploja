@@ -12,6 +12,7 @@ import Combine
     let timer = RemoteLocalTimer()
     @Published private(set) var state: DAWRemoteState?
     @Published private(set) var projectRevision: UInt64 = 0
+    @Published private(set) var stopsAtRegionEnd = false
     @Published private(set) var timelineFocus: IpadTimelineFocus?
     private var subscriptions = Set<AnyCancellable>()
     private var refreshPending = false
@@ -85,6 +86,9 @@ import Combine
         }
         if let show {
             if projectRevision != show.projectRevision { projectRevision = show.projectRevision }
+            // STOP is a native-only control, absent from the Remote projection.
+            // Publish it even when that projection and the project revision are unchanged.
+            if stopsAtRegionEnd != show.regionSetlist.stopsAtRegionEnd { stopsAtRegionEnd = show.regionSetlist.stopsAtRegionEnd }
             // Publish the request by value: the workspace deliberately does not
             // observe ShowController on every transport tick. Focus must still
             // reach the grid even when the projected remote state is unchanged.
@@ -215,7 +219,7 @@ import Combine
                     addTrackText: { editingTextItem = show.addTextItem(track: $0) }, addTrackMedia: { documents.chooseNativeTrackMedia($0) },
                     createPlaylist: { show.createRegionPlaylist(name: $0, selected: $1) },
                     addBlock: { show.addSetlistBlock(namePrefix: JarasLocalization.string("Bloco")) },
-                    toggleRegionStop: { show.toggleRegionStop() }, stopsAtRegionEnd: show.regionSetlist.stopsAtRegionEnd,
+                    toggleRegionStop: { show.toggleRegionStop() }, stopsAtRegionEnd: local.stopsAtRegionEnd,
                     exportProject: { exportingProject = true }, exportAudio: {
                         audioExportCloseRequested = false
                         exportingAudio = .init(project: show.snapshot.project, song: show.current, document: documents.currentURL)
