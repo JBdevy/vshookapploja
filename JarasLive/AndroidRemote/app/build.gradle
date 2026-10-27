@@ -7,8 +7,8 @@ android {
         applicationId 'com.hookdeveloper.catlive.remote'
         minSdk 26
         targetSdk 36
-        versionCode providers.gradleProperty('catliveVersionCode').orElse('1050').get().toInteger()
-        versionName providers.gradleProperty('catliveVersionName').orElse('1.17').get()
+        versionCode providers.gradleProperty('catliveVersionCode').orElse('1054').get().toInteger()
+        versionName providers.gradleProperty('catliveVersionName').orElse('1.18').get()
     }
     buildFeatures { buildConfig true }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }

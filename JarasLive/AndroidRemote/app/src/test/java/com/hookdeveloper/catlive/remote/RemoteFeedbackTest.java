@@ -44,4 +44,27 @@ public class RemoteFeedbackTest {
   JSONObject host=host().put("setlistLiveEnabled",true).put("playedLiveRegionIDs",new JSONArray().put("R")).put("teleprompters",new JSONArray("[{\"index\":1,\"preview\":false,\"blocks\":[{\"rows\":[{\"liveExecuted\":true}]}]}]"));RemoteFeedback f=new RemoteFeedback();f.record(host,"toggleSetlistLive",null,0,null,0);f.record(f.overlay(host),"togglePreview",null,0,null,1);JSONObject shown=f.overlay(host);
   assertEquals(0,shown.getJSONArray("playedLiveRegionIDs").length());JSONObject tp=shown.getJSONArray("teleprompters").getJSONObject(0);assertTrue(tp.getBoolean("preview"));assertFalse(tp.getJSONArray("blocks").getJSONObject(0).getJSONArray("rows").getJSONObject(0).getBoolean("liveExecuted"));assertEquals(1,host.getJSONArray("playedLiveRegionIDs").length());assertFalse(host.getJSONArray("teleprompters").getJSONObject(0).getBoolean("preview"));
  }
+
+ JSONObject queueHost()throws Exception{return host().put("playing",true).put("currentRegion","A").put("focusedRegion","A").put("regions",new JSONArray("[{\"id\":\"A\",\"name\":\"Atual\",\"start\":0,\"end\":30},{\"id\":\"B\",\"name\":\"Fila\",\"start\":30,\"end\":60},{\"id\":\"C\",\"name\":\"Outra\",\"start\":60,\"end\":90}]"));}
+ @Test public void autoQueuesImmediatelyWithoutSongDisplayObject()throws Exception{
+  JSONObject host=queueHost();RemoteFeedback f=new RemoteFeedback();f.record(host,"toggleRegionAuto",null,0,null,0);JSONObject shown=f.receive(host,10);
+  assertEquals("B",shown.getString("queuedRegion"));assertEquals("Fila",RemoteModel.queuedSongName(shown));assertEquals("Atual",RemoteModel.currentSongName(shown));assertFalse(RemoteModel.showsSetlistSelection(shown));assertFalse(host.has("queuedRegion"));
+  host.put("regionAuto",true).put("queuedRegion","B");assertEquals("B",f.receive(host,20).getString("queuedRegion"));
+ }
+ @Test public void tappingQueueCancelsItAndAutoWithoutBlueSelection()throws Exception{
+  JSONObject host=queueHost().put("regionAuto",true).put("queuedRegion","B").put("focusedRegion","B");RemoteFeedback f=new RemoteFeedback();f.record(host,"selectRegion","B",0,null,0);JSONObject shown=f.receive(host,10);
+  assertTrue(shown.isNull("queuedRegion"));assertTrue(shown.isNull("focusedRegion"));assertFalse(shown.getBoolean("regionAuto"));assertNull(RemoteModel.queuedSongName(shown));assertEquals("A",shown.getString("currentRegion"));
+  shown.put("playing",false);assertTrue(RemoteModel.showsSetlistSelection(shown));assertTrue(shown.isNull("focusedRegion"));shown.put("subPlaying",true);assertFalse(RemoteModel.showsSetlistSelection(shown));
+ }
+ @Test public void autoPreservesManualQueueAndStopsAtBlocks()throws Exception{
+  JSONObject host=queueHost().put("queuedRegion","C");RemoteFeedback f=new RemoteFeedback();f.record(host,"toggleRegionAuto",null,0,null,0);assertEquals("C",f.overlay(host).getString("queuedRegion"));
+  host.remove("queuedRegion");host.put("regionAutoUntilBlockEnd",true).put("setlistBlocks",new JSONArray("[{\"beforeRegion\":\"B\"}]"));f.clear();f.record(host,"toggleRegionAuto",null,0,null,0);assertTrue(f.overlay(host).isNull("queuedRegion"));
+ }
+ @Test public void autoUsesOccurrenceOrderAndSkipsDrawerChildren()throws Exception{
+  JSONObject host=queueHost().put("selectedPlaylist","P").put("currentPlaylistEntryId","ALIAS").put("regions",new JSONArray("[{\"id\":\"A\"},{\"id\":\"B\"},{\"id\":\"ALIAS\",\"sourceRegionId\":\"A\"},{\"id\":\"CHILD\",\"parentRegion\":\"A\"},{\"id\":\"C\",\"name\":\"Outra\"}]"));RemoteFeedback f=new RemoteFeedback();f.record(host,"toggleRegionAuto",null,0,null,0);JSONObject shown=f.overlay(host);assertEquals("C",shown.getString("queuedRegion"));assertEquals("C",shown.getString("queuedPlaylistEntryId"));
+ }
+
+ @Test public void disablingLocallyEnabledAutoRetractsItsQueueImmediately()throws Exception{
+  JSONObject host=queueHost();RemoteFeedback f=new RemoteFeedback();f.record(host,"toggleRegionAuto",null,0,null,0);JSONObject shown=f.overlay(host);f.record(shown,"toggleRegionAuto",null,0,null,1);shown=f.receive(host,2);assertFalse(shown.getBoolean("regionAuto"));assertTrue(shown.isNull("queuedRegion"));
+ }
 }

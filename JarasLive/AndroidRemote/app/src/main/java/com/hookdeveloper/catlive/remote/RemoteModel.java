@@ -28,6 +28,49 @@ final class RemoteModel {
         JSONObject r=region(s,id(s,"gridRegion"));if(r!=null)return root(s,r);
         r=region(s,id(s,s.optBoolean("playing")?"currentRegion":"focusedRegion"));return root(s,r==null?region(s,id(s,"currentRegion")):r);
     }
+    static String currentSongName(JSONObject s) {
+        if(s==null)return "";
+        if(s.optBoolean("playing")) {
+            double position=s.optDouble("position");JSONObject section=s.optJSONObject("sectionPlayback");
+            JSONObject current=region(s,id(section,"currentRegion"));
+            if(current!=null&&position>=current.optDouble("start")&&position<(section==null?current.optDouble("end"):section.optDouble("currentEnd",current.optDouble("end"))))return current.optString("name");
+            JSONArray regions=array(s,"timelineRegions");if(regions.length()==0)regions=array(s,"regions");
+            JSONObject active=null;
+            for(JSONObject part:list(regions))if(position>=part.optDouble("start")&&position<part.optDouble("end")&&(active==null||part.optDouble("end")-part.optDouble("start")<active.optDouble("end")-active.optDouble("start")))active=part;
+            if(active!=null)return active.optString("name");
+            current=region(s,id(s,"currentRegion"));if(current!=null)return current.optString("name");
+        }
+        JSONObject displays=s.optJSONObject("songDisplays");
+        if(displays!=null&&!displays.isNull("current"))return displays.optString("current");
+        JSONObject selected=region(s,id(s,"focusedRegion"));if(selected==null)selected=region(s,id(s,"currentRegion"));
+        return selected==null?s.optString("songName"):selected.optString("name");
+    }
+    static boolean showsSetlistSelection(JSONObject s){return !s.optBoolean("playing")&&!s.optBoolean("subPlaying");}
+    static String queuedSongName(JSONObject s){
+        JSONObject displays=s.optJSONObject("songDisplays");
+        if(displays!=null&&!displays.isNull("queued"))return displays.optString("queued",null);
+        JSONObject queued=region(s,queuedEntry(s));if(queued==null)queued=region(s,id(s,"queuedRegion"));
+        return queued==null?null:queued.optString("name");
+    }
+    // The wire regions follow playlist occurrence order; drawer children are not
+    // independent AUTO entries. Respect block boundaries before skipping aliases.
+    static JSONObject automaticQueueTarget(JSONObject s){
+        JSONObject current=root(s,region(s,id(s,"currentRegion")));if(current==null)return null;
+        String rootID=id(current,"id"),entry=id(s,"currentPlaylistEntryId");
+        List<JSONObject> entries=new ArrayList<>();
+        for(JSONObject r:list(array(s,"regions")))if(id(r,"parentRegion").isEmpty())entries.add(r);
+        if(entries.isEmpty()){for(JSONObject r:list(array(s,"timelineRegions")))if(id(r,"parentRegion").isEmpty())entries.add(r);entries.sort(Comparator.comparingDouble(r->r.optDouble("start")));}
+        int index=-1;for(int i=0;i<entries.size();i++)if(same(id(entries.get(i),"id"),entry)){index=i;break;}
+        if(index<0)for(int i=0;i<entries.size();i++)if(same(id(entries.get(i),"id"),rootID)){index=i;break;}
+        if(index<0)return null;
+        for(int i=index+1;i<entries.size();i++){
+            JSONObject candidate=entries.get(i);String candidateID=id(candidate,"id");
+            if(s.optBoolean("regionAutoUntilBlockEnd"))for(JSONObject block:list(array(s,"setlistBlocks")))if(same(id(block,"beforeRegion"),candidateID))return null;
+            String source=id(candidate,"sourceRegionId");if(source.isEmpty())source=candidateID;
+            if(!same(source,rootID))return candidate;
+        }
+        return null;
+    }
     static double db(double gain){return gain<=0?-60:Math.min(12,Math.max(-59.9,20*Math.log10(gain)));}
     static double gain(double db){return db<=-60?0:Math.pow(10,Math.min(24,db)/20);}
     static String time(double seconds){int n=(int)Math.max(0,seconds);return String.format(Locale.US,"%02d:%02d:%02d",n/3600,(n/60)%60,n%60);}

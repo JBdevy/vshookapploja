@@ -353,6 +353,7 @@ struct DAWRemoteState: Codable, Equatable {
     var masterColor: UInt32? = nil
     var masterNameColor: UInt32? = nil
     var regionAuto: Bool? = nil
+    var regionAutoUntilBlockEnd: Bool? = nil
     var queueStartedAt: Double? = nil
     var playbackEnd: Double? = nil
     var projectSavedAt: String? = nil
@@ -1021,4 +1022,22 @@ struct DAWRemoteProjectOpening: Equatable {
         return false
     }
     func canDismiss(at now: Date) -> Bool { phase == "waiting" || phase == "failed" || now.timeIntervalSince(startedAt) >= 20 }
+}
+
+/// The audible transport owns the title, independently of list browsing or a
+/// cached display string from the previous song.
+extension DAWRemoteState {
+    var showsSetlistSelection: Bool { !playing && !subPlaying }
+    var currentSongName: String {
+        if playing {
+            let regions = timelineRegions.isEmpty ? self.regions : timelineRegions
+            if let id = sectionPlayback?.currentRegion,
+               let part = regions.first(where: { $0.id == id }), position >= part.start,
+               position < (sectionPlayback?.currentEnd ?? part.end) { return part.name }
+            if let part = regions.filter({ position >= $0.start && position < $0.end })
+                .min(by: { $0.end - $0.start < $1.end - $1.start }) { return part.name }
+            if let part = regions.first(where: { $0.id == currentRegion }) { return part.name }
+        }
+        return songDisplays?.current ?? (timelineRegions + regions).first(where: { $0.id == (focusedRegion ?? currentRegion) })?.name ?? songName
+    }
 }

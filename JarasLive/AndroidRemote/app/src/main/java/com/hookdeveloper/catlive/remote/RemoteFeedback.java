@@ -8,8 +8,8 @@ final class RemoteFeedback {
   final String scope,id,field;final Object original;final ArrayDeque<Object> expected=new ArrayDeque<>();long deadline;
   Change(String s,String id,String f,Object original){scope=s;this.id=id;field=f;this.original=original;}
  }
- final Map<String,Change> pending=new LinkedHashMap<>();String project="",song="";
- void clear(){pending.clear();project="";song="";}
+ final Map<String,Change> pending=new LinkedHashMap<>();String project="",song="",localAutoQueue="";
+ void clear(){pending.clear();project="";song="";localAutoQueue="";}
  boolean record(JSONObject state,String action,String target,double value,Boolean enabled,long now){
   if(state==null)return false;scope(state);
   if(action.equals("play")||action.equals("stop")||action.equals("pause")){
@@ -17,6 +17,7 @@ final class RemoteFeedback {
    if(action.equals("stop"))set(state,"","","subPlaying",false,now);return true;
   }
   if(action.equals("selectRegion"))return selectRegion(state,target,now);
+  if(action.equals("toggleRegionAuto"))return toggleAuto(state,now);
   if(action.equals("seek")){
    if(state.optBoolean("playing"))return false;
    JSONObject region=RemoteModel.region(state,target);if(region==null)return false;
@@ -40,7 +41,7 @@ final class RemoteFeedback {
    case "subPlay":case "subStop":f="subPlaying";desired=action.equals("subPlay");break;
    case "noticeClear":s="notices";f="active";desired=false;break;
    case "toggleLoop":f="loop";break;
-   case "toggleRegionAuto":f="regionAuto";break;
+
    case "toggleMultiLoopBypass":f="multiLoopsBypassed";break;
    case "toggleSetlistLive":f="setlistLiveEnabled";break;
    case "togglePreview":f="previewActive";break;
@@ -63,7 +64,7 @@ final class RemoteFeedback {
   Change change=pending.get(key);if(change==null){change=new Change(s,id,f,object.opt(f));pending.put(key,change);}
   if(change.expected.isEmpty()||!equal(change.expected.peekLast(),desired))change.expected.addLast(desired);while(change.expected.size()>128)change.expected.removeFirst();change.deadline=now+TIMEOUT;return true;
  }
- void scope(JSONObject state){String p=RemoteModel.id(state,"project"),s=RemoteModel.id(state,"song");if(!RemoteModel.same(p,project)||!Objects.equals(s,song)){pending.clear();project=p;song=s;}}
+ void scope(JSONObject state){String p=RemoteModel.id(state,"project"),s=RemoteModel.id(state,"song");if(!RemoteModel.same(p,project)||!Objects.equals(s,song)){pending.clear();project=p;song=s;localAutoQueue="";}}
  JSONObject receive(JSONObject host,long now){
   if(host==null)return null;scope(host);
   Iterator<Change> iterator=pending.values().iterator();while(iterator.hasNext()){
@@ -74,6 +75,7 @@ final class RemoteFeedback {
    else if(!equal(actual,c.original)&&equal(actual,c.expected.peekLast()))c.expected.clear();
    if(c.expected.isEmpty())iterator.remove();
   }
+  if(!pending.containsKey("||queuedRegion")&&!RemoteModel.same(localAutoQueue,RemoteModel.id(host,"queuedRegion")))localAutoQueue="";
   return overlay(host);
  }
  JSONObject overlay(JSONObject host){
@@ -89,10 +91,14 @@ final class RemoteFeedback {
   if(playing){
    JSONObject active=RemoteModel.region(state,current);String parent=RemoteModel.id(region,"parentRegion");
    if(!parent.isEmpty()&&(RemoteModel.same(parent,current)||RemoteModel.same(parent,RemoteModel.id(active,"parentRegion"))))return false;
+   String queued=RemoteModel.id(state,"queuedRegion"),queuedEntry=RemoteModel.id(state,"queuedPlaylistEntryId");
+   JSONObject queuedPart=RemoteModel.region(state,queued);
+   if((RemoteModel.same(source,queued)||RemoteModel.same(source,RemoteModel.id(queuedPart,"parentRegion")))&&(queuedEntry.isEmpty()||RemoteModel.same(queuedEntry,id))){
+    localAutoQueue="";setQueue(state,null,now);set(state,"","","focusedRegion",JSONObject.NULL,now);set(state,"","","regionAuto",false,now);return true;
+   }
    set(state,"","","focusedRegion",id,now);
    if(RemoteModel.same(source,current)||RemoteModel.same(source,RemoteModel.id(RemoteModel.root(state,active),"id")))return true;
-   set(state,"","","queuedRegion",source,now);set(state,"","","queuedPlaylistEntryId",id,now);
-   set(state,"songDisplays","","queued",region.optString("name"),now);set(state,"sectionPlayback","","secondaryRegion",source,now);
+   localAutoQueue="";setQueue(state,region,now);
   }else{
    set(state,"","","focusedRegion",id,now);set(state,"","","currentRegion",source,now);
    set(state,"","","gridRegion",RemoteModel.id(RemoteModel.root(state,region),"id"),now);
@@ -101,6 +107,23 @@ final class RemoteFeedback {
    set(state,"sectionPlayback","","currentRegion",source,now);set(state,"sectionPlayback","","position",region.optDouble("start"),now);
   }
   return true;
+ }
+ boolean toggleAuto(JSONObject state,long now){
+  boolean enabled=!state.optBoolean("regionAuto");set(state,"","","regionAuto",enabled,now);
+  if(enabled&&state.optBoolean("playing")&&RemoteModel.id(state,"queuedRegion").isEmpty()){
+   JSONObject next=RemoteModel.automaticQueueTarget(state);if(next!=null){setQueue(state,next,now);localAutoQueue=RemoteModel.id(next,"sourceRegionId");if(localAutoQueue.isEmpty())localAutoQueue=RemoteModel.id(next,"id");}
+  }else if(!enabled&&RemoteModel.same(localAutoQueue,RemoteModel.id(state,"queuedRegion"))){
+   setQueue(state,null,now);localAutoQueue="";
+  }
+  return true;
+ }
+ void setQueue(JSONObject state,JSONObject region,long now){
+  String source=RemoteModel.id(region,"sourceRegionId");if(source.isEmpty())source=RemoteModel.id(region,"id");
+  Object target=region==null?JSONObject.NULL:source;
+  set(state,"","","queuedRegion",target,now);
+  set(state,"","","queuedPlaylistEntryId",region==null||RemoteModel.id(state,"selectedPlaylist").isEmpty()?JSONObject.NULL:RemoteModel.id(region,"id"),now);
+  set(state,"songDisplays","","queued",region==null?JSONObject.NULL:region.optString("name"),now);
+  set(state,"sectionPlayback","","secondaryRegion",target,now);
  }
  void deriveLiveAndPreview(JSONObject display)throws JSONException{
   boolean clearLive=false,preview=false;
