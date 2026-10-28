@@ -1855,3 +1855,7 @@
 "A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta." = "A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta.";
 
 "Cancel queued section" = "Cancelar trecho engatilhado";
+
+/* Unified Native trial and lifetime purchase action. */
+"Buy lifetime access" = "Comprar acesso vitalício";
+"The 7-day trial is free. After it ends, lifetime access is a separate one-time purchase at the price shown above. There is no subscription or automatic charge. Your projects are kept. Remote stays free." = "O teste de 7 dias é gratuito. Depois dele, o acesso vitalício é uma compra única separada, pelo preço mostrado acima. Não há assinatura nem cobrança automática. Seus projetos são preservados. O Remote continua gratuito.";
