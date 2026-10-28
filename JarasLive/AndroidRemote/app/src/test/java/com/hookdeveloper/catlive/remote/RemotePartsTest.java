@@ -11,7 +11,9 @@ public class RemotePartsTest {
   // The grid can show the other region. Parts must still use the transport bank.
   state.put("gridRegion",second);RemoteParts parts=new RemoteParts(app);assertEquals(2,parts.sections.size());assertEquals(first,parts.sections.get(0).id);assertEquals(0,parts.sections.get(0).start,0);assertEquals("REFRÃO",parts.sections.get(1).name);
   parts.queuedTab.performClick();assertTrue(parts.secondary);assertEquals(2,parts.sections.size());assertEquals(second,parts.sections.get(0).id);assertEquals(24,parts.sections.get(0).start,0);assertEquals("SOLO",parts.sections.get(1).name);
-  state.put("subPlaying",true);parts.refresh();assertEquals("Sub Play",parts.queuedTab.title.getText().toString());parts.currentTab.performClick();assertFalse(parts.secondary);assertEquals(first,parts.sections.get(0).id);
+  state.put("subPlaying",true);parts.refresh();assertEquals(RemoteText.ui("Queued"),parts.queuedTab.title.getText().toString());
+  state.put("playing",false);parts.refresh();assertEquals(RemoteText.ui("Selected song"),parts.currentTab.title.getText().toString());
+  state.put("playing",true);parts.refresh();assertEquals(RemoteText.ui("Now playing"),parts.currentTab.title.getText().toString());assertEquals(View.GONE,parts.currentTab.name.getVisibility());parts.currentTab.performClick();assertFalse(parts.secondary);assertEquals(first,parts.sections.get(0).id);
  }
  @Test public void startMarkerAndCancelSendCorrectCommandsAndCancelFollowsHost()throws Exception{
   List<String> sent=new ArrayList<>();RemoteParts parts=new RemoteParts(app,sent::add,()->sent.add("cancelSection"));assertFalse(parts.cancel.isEnabled());assertEquals(1,parts.cancel.getAlpha(),0);

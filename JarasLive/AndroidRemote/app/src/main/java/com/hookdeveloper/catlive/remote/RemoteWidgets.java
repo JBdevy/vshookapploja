@@ -40,6 +40,7 @@ final class RemoteWidgets {
         void style(int color,boolean on){tint=color;active=on;setTextColor(color);setBackground(on?surface(blend(0xff282828,color,.35f),blend(0xff1b1b1b,color,.35f),0x3affffff,5):panel(5));invalidate();}
         void trackStyle(int color,boolean on){tint=color;active=on;setTextColor(on?Color.BLACK:Color.WHITE);setPadding(0,0,0,0);setBackground(new InsetDrawable(on?surface(blend(color,Color.WHITE,.08f),blend(color,Color.BLACK,.08f),0x2affffff,3):surface(0xff414141,0xff353535,0x2affffff,3),dp(3),dp(3),dp(3),dp(3)));invalidate();}
         void solid(int color){setTextColor(Color.BLACK);setBackground(surface(blend(color,Color.WHITE,.10f),blend(color,Color.BLACK,.12f),color,5));}
+        void transportStyle(int background,int foreground){tint=foreground;setTextColor(foreground);setBackground(surface(background,background,Color.TRANSPARENT,6));invalidate();}
         void icon(String key,String accessible){icon=key;setContentDescription(accessible);setText("");invalidate();}
         void leadingIcon(String key){leadingIcon=key;setPadding(dp(34),dp(4),dp(12),dp(4));}
         void trailingIcon(String key){trailingIcon=key;setPadding(dp(9),dp(4),dp(27),dp(4));setSingleLine(true);setEllipsize(android.text.TextUtils.TruncateAt.END);}

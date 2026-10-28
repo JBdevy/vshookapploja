@@ -483,8 +483,9 @@ struct DAWRemoteClientView: View {
                           clips: items?.clips ?? [],
                           nameColor: JarasTheme.trackNameHex(track, emphasized: show.mixerTrackSelection.contains(track.id), silenced: song?.isSilenced(track) ?? track.mute),
                           emphasized: show.mixerTrackSelection.contains(track.id), silenced: song?.isSilenced(track) ?? track.mute, laneCount: items?.lanes ?? 1, linkedTrack: track.stereoLink?.partner, heightScale: track.heightScale,
-                          peakDB: sendsPeaks && !track.kind.isText && track.kind != .timecode ? StemAudioPlayback.shared.meter(for: track.id).peakHold.decibels : nil,
-                          canMeter: !track.kind.isText && track.kind != .timecode, parentTrack: track.parentTrackID,
+                          minimumHeight: remote.isLocalWorkspace && track.kind == .programChange ? Double(max(52, track.programChangeLaneCount * 24 + 8)) : nil,
+                          peakDB: sendsPeaks && !track.kind.isText && track.kind != .timecode && track.kind != .programChange ? StemAudioPlayback.shared.meter(for: track.id).peakHold.decibels : nil,
+                          canMeter: !track.kind.isText && track.kind != .timecode && track.kind != .programChange, parentTrack: track.parentTrackID,
                           instrumentIcon: track.instrumentIcon)
                 }, regions: cachedRegions, timelineRegions: cachedTimelineRegions,
                 currentRegion: transport.regionId, queuedRegion: transport.queuedRegionId, focusedRegion: show.focusedRegion,
@@ -880,7 +881,7 @@ private struct IpadNativeRemoteToggle: View {
             Text(verbatim: "R\nE\nM\nO\nT\nE")
                 .font(.jarasSystem(size: 10, weight: .heavy)).multilineTextAlignment(.center)
                 .foregroundStyle(Color.black).frame(width: width, height: 94)
-                .modifier(RemoteControlSurface(color: host.enabled ? JarasTheme.green : Color(hex: 0xff3434), radius: 5))
+                .modifier(RemoteControlSurface(color: host.enabled ? JarasTheme.green : JarasTheme.liveOffRed, radius: 5, bordered: false))
                 .contentShape(Rectangle())
         }
             .modifier(IpadTeleprompterRemoteHold(open: openSettings))
@@ -1380,6 +1381,12 @@ private struct RemoteSidebarRail<Content: View>: View {
                 setlistSelectionAnchor = localShow.focusedRegion
             }
         }
+        .onReceive(localShow?.$selectedProgramChangeID.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { id in
+            guard local, id != nil else { return }
+            trackScrolling.itemSelection.replace([]); trackScrolling.selectionScope = .grid
+            selectedTracks = []; localShow?.setMixerTrackSelection([], anchor: nil)
+            TimelineAreaSelection.shared.clear()
+        }
         .onChange(of: state.bpm) { _ in tempoStepPending = false }
         .onChange(of: state.pitchSemitones) { _ in pitchStepPending = false }
         .onChange(of: state.pitchRegion) { _ in tempoStepPending = false; pitchStepPending = false }
@@ -1510,10 +1517,18 @@ private struct RemoteSidebarRail<Content: View>: View {
                 }
                 return true
             case 8 where command, 7 where command:
+                if show.selectedProgramChange != nil {
+                    if !event.isRepeat { show.copyProgramChange() }
+                    return true
+                }
                 guard trackScrolling.selectionScope == .grid else { return ControlMappings.shared.handleHardwareKey(event) }
                 if !event.isRepeat { _ = show.copyItems(trackScrolling.itemSelection.items, moving: event.keyCode == 7) }
                 return true
             case 9 where command:
+                if show.hasProgramChangeClipboard {
+                    if !event.isRepeat { show.pasteProgramChange() }
+                    return true
+                }
                 if !event.isRepeat {
                     let pasted = show.pasteItems()
                     if !pasted.isEmpty { trackScrolling.itemSelection.replace(pasted); trackScrolling.selectionScope = .grid }
@@ -1532,13 +1547,18 @@ private struct RemoteSidebarRail<Content: View>: View {
             }
         }
         if flags.isEmpty, event.keyCode == 51 || event.keyCode == 117 {
-            if !event.isRepeat { deleteNativeSelection() }
+            if !event.isRepeat {
+                if let marker = show.selectedProgramChangeID,
+                   let track = show.current?.tracks.first(where: { ($0.programChanges ?? []).contains { $0.id == marker } }) {
+                    show.removeProgramChange(track: track.id, marker: marker)
+                } else { deleteNativeSelection() }
+            }
             return true
         }
         if flags.isEmpty, event.keyCode == 53 {
             if !event.isRepeat {
                 trackScrolling.pointerReset = UUID()
-                show.send(.escape)
+                show.send(.escape); show.selectProgramChange(nil)
                 trackScrolling.itemSelection.replace([]); selectedTracks = []
                 show.setMixerTrackSelection([], anchor: nil)
                 selectedSetlistEntries = []; setlistSelectionAnchor = nil; show.selectSetlistBlock(nil)
@@ -1664,9 +1684,9 @@ private struct RemoteSidebarRail<Content: View>: View {
                 else if let icon { Image(systemName: icon).font(.jarasSystem(size: 18, weight: .semibold)) }
                 else { Text(verbatim: title).font(.jarasSystem(size: 11, weight: .bold)) }
             }.frame(width: 44, height: 44)
-                .modifier(RemoteControlSurface(color: phonePanel == panel ? JarasTheme.green.opacity(0.14) : nil, radius: 5))
+                .modifier(RemoteControlSurface(color: panel == .notices || panel.subscription > 0 ? (phonePanel == panel ? JarasTheme.green : JarasTheme.liveOffRed) : phonePanel == panel ? JarasTheme.green.opacity(0.14) : nil, radius: 5, bordered: panel != .notices && panel.subscription == 0))
         }.buttonStyle(RemoteFullAreaButtonStyle())
-            .foregroundStyle(phonePanel == panel ? JarasTheme.green : panel == .notices ? JarasTheme.yellow : panel.subscription > 0 ? .red : JarasTheme.secondary)
+            .foregroundStyle(panel == .notices || panel.subscription > 0 ? Color.black : phonePanel == panel ? JarasTheme.green : JarasTheme.secondary)
             .accessibilityLabel(LocalizedStringKey(title)).accessibilityValue(phonePanel == panel ? "Shown" : "Hidden")
     }
     private var remoteVinhetasScreen: some View {
@@ -1788,14 +1808,13 @@ private struct RemoteSidebarRail<Content: View>: View {
                 Button("Save") { action(.save) }
             }
     }
-    private func phoneTransportButton(_ title: String, icon: String, active: Bool = false, color: Color = JarasTheme.green, perform: @escaping () -> Void) -> some View {
+    private func phoneTransportButton(_ title: String, icon: String, active: Bool = false, color: Color = JarasTheme.transportPlay, inactiveOpacity: Double = 0.45, perform: @escaping () -> Void) -> some View {
         Button(action: perform) {
             VStack(spacing: 3) {
                 Image(systemName: icon).font(.jarasSystem(size: 14, weight: .semibold))
                 if icon != "repeat" { Text(LocalizedStringKey(title)).font(.jarasSystem(size: 9, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7) }
             }.frame(maxWidth: .infinity, minHeight: 44)
-                .modifier(RemoteControlSurface(color: active ? color.opacity(0.35) : nil, radius: 5))
-        }.buttonStyle(RemoteFullAreaButtonStyle()).foregroundStyle(color).accessibilityLabel(LocalizedStringKey(title))
+        }.buttonStyle(TransportButtonStyle(color: color, active: active, inactiveOpacity: inactiveOpacity, horizontalPadding: 0, height: 44, bordered: false)).accessibilityLabel(LocalizedStringKey(title))
     }
     private var phoneTransport: some View {
         VStack(spacing: 6) {
@@ -1814,11 +1833,11 @@ private struct RemoteSidebarRail<Content: View>: View {
                 phoneTransportButton(state.playing || state.paused ? "Stop" : "Play", icon: state.playing || state.paused ? "stop.fill" : "play.fill", active: state.playing) {
                     action(state.playing || state.paused ? .stop : .play)
                 }
-                phoneTransportButton(state.paused ? "Play" : "Pause", icon: state.paused ? "play.fill" : "pause.fill", active: state.paused, color: JarasTheme.yellow) {
+                phoneTransportButton(state.paused ? "Play" : "Pause", icon: state.paused ? "play.fill" : "pause.fill", color: Color(hex: 0x454545), inactiveOpacity: 1) {
                     action(state.paused ? .play : .pause)
                 }.disabled(!state.playing && !state.paused)
-                phoneTransportButton("Sub Play", icon: "play.fill", active: state.subPlaying, color: JarasTheme.yellow) { action(state.subPlaying ? .subStop : .subPlay) }.disabled(!state.playing)
-                phoneTransportButton("Repeat", icon: "repeat", active: state.loop, color: state.loop ? JarasTheme.yellow : .red) { action(.toggleLoop) }
+                phoneTransportButton("Sub Play", icon: "play.fill", active: true, color: Color(hex: 0xffff00)) { action(state.subPlaying ? .subStop : .subPlay) }.disabled(!state.playing)
+                phoneTransportButton("Repeat", icon: "repeat", active: state.loop, color: state.loop ? JarasTheme.yellow : JarasTheme.liveOffRed, inactiveOpacity: 1) { action(.toggleLoop) }
                     .modifier(JarasBlink(active: state.loop, interval: 0.55, lowOpacity: 0.45))
             }
             HStack(spacing: 6) { bpmControl; tunerControl }
@@ -2032,17 +2051,20 @@ private struct RemoteSidebarRail<Content: View>: View {
                         .accessibilityValue(prompterPanel != nil || mixerCollapsed ? "Hidden" : "Shown")
                     Button { showPrompter(prompterPanel == .first ? nil : .first) } label: {
                         Text(verbatim: "TP1").font(.jarasSystem(size: 10, weight: .bold)).frame(width: railButton, height: 44)
-                    }.foregroundStyle(prompterPanel == .first ? JarasTheme.green : Color(hex: 0xff5555))
+                            .modifier(RemoteControlSurface(color: prompterPanel == .first ? JarasTheme.green : JarasTheme.liveOffRed, radius: 5, bordered: false))
+                    }.foregroundStyle(Color.black)
                         .accessibilityLabel("Teleprompter 1").accessibilityValue(prompterPanel == .first ? "On" : "Off")
-                        .modifier(IpadTeleprompterRemoteHold(open: openTeleprompterRemote.map { callback in { callback(1) } }, surface: true))
+                        .modifier(IpadTeleprompterRemoteHold(open: openTeleprompterRemote.map { callback in { callback(1) } } ))
                     Button { showPrompter(prompterPanel == .second ? nil : .second) } label: {
                         Text(verbatim: "TP2").font(.jarasSystem(size: 10, weight: .bold)).frame(width: railButton, height: 44)
-                    }.foregroundStyle(prompterPanel == .second ? JarasTheme.green : Color(hex: 0xff5555))
+                            .modifier(RemoteControlSurface(color: prompterPanel == .second ? JarasTheme.green : JarasTheme.liveOffRed, radius: 5, bordered: false))
+                    }.foregroundStyle(Color.black)
                         .accessibilityLabel("Teleprompter 2").accessibilityValue(prompterPanel == .second ? "On" : "Off")
-                        .modifier(IpadTeleprompterRemoteHold(open: openTeleprompterRemote.map { callback in { callback(2) } }, surface: true))
+                        .modifier(IpadTeleprompterRemoteHold(open: openTeleprompterRemote.map { callback in { callback(2) } } ))
                     Button { noticesOpen = true } label: {
                         Image(systemName: "text.bubble").font(.jarasSystem(size: 15, weight: .medium)).frame(width: railButton, height: 44)
-                    }.buttonStyle(RemoteFullAreaButtonStyle(surface: true)).foregroundStyle(JarasTheme.yellow).accessibilityLabel("Notices")
+                            .modifier(RemoteControlSurface(color: JarasTheme.liveOffRed, radius: 5, bordered: false))
+                    }.buttonStyle(RemoteFullAreaButtonStyle()).foregroundStyle(Color.black).accessibilityLabel("Notices")
                         .popover(isPresented: $noticesOpen, attachmentAnchor: .rect(.bounds), arrowEdge: .leading) {
                             RemoteNativeNoticesView(close: { noticesOpen = false }, managesSubscription: false, remote: remote)
                                 // An ideal size lets UIKit reduce the popover
@@ -2290,7 +2312,7 @@ private struct RemoteSidebarRail<Content: View>: View {
             if verticalSections {
                 VStack(spacing: 4) {
                     cancelSectionButton.padding([.top, .leading, .trailing], 4)
-                    SectionListTabs(current: current?.name, queued: queued?.name, subPlaying: state.subPlaying) { secondary in
+                    SectionListTabs(current: current?.name, queued: queued?.name, subPlaying: state.subPlaying, playing: state.playing) { secondary in
                         remoteSectionBank(secondary: secondary)
                     }
                 }
@@ -2429,7 +2451,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                     if !local {
                         if let openAdvanced {
                             Button("Advanced", action: openAdvanced)
-                                .buttonStyle(TransportButtonStyle(color: JarasTheme.panel, fontSize: 11, width: 68, height: 28))
+                                .buttonStyle(TransportButtonStyle(color: Color(hex: 0x454545), inactiveOpacity: 1, fontSize: 11, width: 68, height: 28, bordered: false))
                         }
                         transportSaveButton
                     }
@@ -2449,7 +2471,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                 HStack(spacing: 4) {
             if let openAdvanced {
                 Button("Advanced", action: openAdvanced)
-                    .buttonStyle(TransportButtonStyle(color: JarasTheme.panel, fontSize: 11, width: local ? 60 : 68, height: 28))
+                    .buttonStyle(TransportButtonStyle(color: Color(hex: 0x454545), inactiveOpacity: 1, fontSize: 11, width: local ? 60 : 68, height: 28, bordered: false))
             }
             if let exportAudio {
                 Button("Exp") {
@@ -2460,7 +2482,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                     }
                     AudioExportSelection.shared.setRegions(Set(selectedRegions), song: state.song)
                     exportAudio()
-                }.buttonStyle(TransportButtonStyle(color: JarasTheme.panel, fontSize: 11, width: 36, height: 28))
+                }.buttonStyle(TransportButtonStyle(color: Color(hex: 0x454545), inactiveOpacity: 1, fontSize: 11, width: 36, height: 28, bordered: false))
                     .accessibilityLabel("Export audio")
             }
             transportSaveButton
@@ -2488,7 +2510,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                     toggleDrawer(parent)
                 } label: {
                     Image(systemName: drawerExpanded ? "chevron.up" : "chevron.down")
-                }.buttonStyle(TransportButtonStyle(color: JarasTheme.panel, fontSize: 13, width: local ? (exportAudio == nil ? 54 : 94) : 72, height: 28))
+                }.buttonStyle(TransportButtonStyle(color: JarasTheme.panel, fontSize: 13, width: local ? (exportAudio == nil ? 54 : 94) : 72, height: 28, bordered: false))
                     .foregroundStyle(JarasTheme.green).disabled(drawerRegion == nil)
                     .opacity(drawerRegion == nil ? 0.45 : 1)
                     .accessibilityLabel(drawerExpanded ? "Fechar gaveta da região selecionada" : "Abrir gaveta da região selecionada")
@@ -2496,7 +2518,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                     Button("Setlist") {
                         if prompterPanel == nil { toggleMainSetlist() } else { togglePrompterSetlist() }
                     }
-                        .buttonStyle(TransportButtonStyle(color: mainSetlistVisible ? JarasTheme.green : Color(hex: 0xc44545), active: true, fontSize: 11, width: 62, height: 28))
+                        .buttonStyle(TransportButtonStyle(color: mainSetlistVisible ? JarasTheme.green : Color(hex: 0xc44545), active: true, fontSize: 11, width: 62, height: 28, bordered: false))
                         .accessibilityValue(mainSetlistVisible ? "Shown" : "Hidden")
                 }
     }
@@ -2506,14 +2528,14 @@ private struct RemoteSidebarRail<Content: View>: View {
             Button { action(state.playing || state.paused ? .stop : .play) } label: {
                 Label { Text(verbatim: state.playing || state.paused ? JarasLocalization.string("Stop") : "Play") }
                     icon: { Image(systemName: state.playing || state.paused ? "stop.fill" : "play.fill") }
-            }.buttonStyle(TransportButtonStyle(color: JarasTheme.green, active: state.playing, fontSize: 12, width: buttonWidth, height: 28))
+            }.buttonStyle(TransportButtonStyle(color: JarasTheme.transportPlay, active: state.playing, fontSize: 12, width: buttonWidth, height: 28, bordered: false))
             Button { action(state.paused ? .play : .pause) } label: {
                 Label(state.paused ? "Play" : "Pause", systemImage: state.paused ? "play.fill" : "pause.fill")
-            }.buttonStyle(TransportButtonStyle( fontSize: 12, width: buttonWidth, height: 28)).disabled(!state.playing && !state.paused)
+            }.buttonStyle(TransportButtonStyle(color: Color(hex: 0x454545), inactiveOpacity: 1, fontSize: 12, width: buttonWidth, height: 28, bordered: false)).disabled(!state.playing && !state.paused)
             Button("Sub Play") { action(state.subPlaying ? .subStop : .subPlay) }
-                .buttonStyle(TransportButtonStyle(color: Color(hex: 0xffff00), active: true, activeForeground: .black, fontSize: 11, width: buttonWidth, height: 28)).disabled(!state.playing)
+                .buttonStyle(TransportButtonStyle(color: Color(hex: 0xffff00), active: true, activeForeground: .black, fontSize: 11, width: buttonWidth, height: 28, bordered: false)).disabled(!state.playing)
             Button { action(.toggleLoop) } label: { Image(systemName: "repeat").accessibilityLabel("Repeat") }
-                .buttonStyle(TransportButtonStyle(color: state.loop ? JarasTheme.yellow : .red, active: state.loop, fontSize: 12, width: buttonWidth, height: 28))
+                .buttonStyle(TransportButtonStyle(color: state.loop ? JarasTheme.yellow : JarasTheme.liveOffRed, active: state.loop, inactiveOpacity: 1, fontSize: 12, width: buttonWidth, height: 28, bordered: false))
                 .modifier(JarasBlink(active: state.loop, interval: 0.55, lowOpacity: 0.45))
             bpmControl
             tunerControl
@@ -2529,17 +2551,17 @@ private struct RemoteSidebarRail<Content: View>: View {
                         Button { action(state.playing || state.paused ? .stop : .play) } label: {
                             Label { Text(verbatim: state.playing || state.paused ? JarasLocalization.string("Stop") : "Play") }
                                 icon: { Image(systemName: state.playing || state.paused ? "stop.fill" : "play.fill") }
-                        }.buttonStyle(TransportButtonStyle(color: JarasTheme.transportPlay, active: state.playing, fontSize: 10, width: controlWidth, height: 28))
+                        }.buttonStyle(TransportButtonStyle(color: JarasTheme.transportPlay, active: state.playing, fontSize: 10, width: controlWidth, height: 28, bordered: false))
                     case .pause:
                         Button { action(state.paused ? .play : .pause) } label: {
                             Label(state.paused ? "Play" : "Pause", systemImage: state.paused ? "play.fill" : "pause.fill")
-                        }.buttonStyle(TransportButtonStyle( fontSize: 10, width: controlWidth, height: 28)).disabled(!state.playing && !state.paused)
+                        }.buttonStyle(TransportButtonStyle(color: Color(hex: 0x454545), inactiveOpacity: 1, fontSize: 10, width: controlWidth, height: 28, bordered: false)).disabled(!state.playing && !state.paused)
                     case .subPlay:
                         Button("Sub Play") { action(state.subPlaying ? .subStop : .subPlay) }
-                            .buttonStyle(TransportButtonStyle(color: Color(hex: 0xffff00), active: true, activeForeground: .black, fontSize: 10, width: controlWidth, height: 28)).disabled(!state.playing)
+                            .buttonStyle(TransportButtonStyle(color: Color(hex: 0xffff00), active: true, activeForeground: .black, fontSize: 10, width: controlWidth, height: 28, bordered: false)).disabled(!state.playing)
                     case .repeatPlayback:
                         Button { action(.toggleLoop) } label: { Image(systemName: "repeat") }
-                            .buttonStyle(TransportButtonStyle(color: state.loop ? JarasTheme.yellow : JarasTheme.liveOffRed, active: state.loop, inactiveOpacity: 1, fontSize: 12, width: controlWidth, height: 28))
+                            .buttonStyle(TransportButtonStyle(color: state.loop ? JarasTheme.yellow : JarasTheme.liveOffRed, active: state.loop, inactiveOpacity: 1, fontSize: 12, width: controlWidth, height: 28, bordered: false))
                             .accessibilityLabel("Repeat").modifier(JarasBlink(active: state.loop, interval: 0.55, lowOpacity: 0.45))
                     case .record, .metronome:
                         if let localShow { IpadAudioTransportButtons(show: localShow, configureMetronome: openMetronome, only: control, controlWidth: controlWidth) }
@@ -2574,8 +2596,8 @@ private struct RemoteSidebarRail<Content: View>: View {
     private func topPrompterButton(_ panel: PrompterPanel, title: String, minimumHeight: CGFloat = 25) -> some View {
         Button { showPrompter(prompterPanel == panel ? nil : panel) } label: {
             Text(verbatim: title).font(.jarasSystem(size: 12, weight: .semibold)).frame(maxWidth: .infinity, minHeight: minimumHeight)
-                .modifier(RemoteControlSurface(radius: 5))
-        }.buttonStyle(RemoteFullAreaButtonStyle()).foregroundStyle(prompterPanel == panel ? JarasTheme.green : Color(hex: 0xff5555))
+                .modifier(RemoteControlSurface(color: prompterPanel == panel ? JarasTheme.green : JarasTheme.liveOffRed, radius: 5, bordered: false))
+        }.buttonStyle(RemoteFullAreaButtonStyle()).foregroundStyle(Color.black)
             .accessibilityLabel("Teleprompter \(panel.rawValue), controles superiores")
             .accessibilityValue(prompterPanel == panel ? "On" : "Off")
     }
@@ -2669,6 +2691,10 @@ private struct RemoteSidebarRail<Content: View>: View {
                         ForEach(Array(visibleTracks.enumerated()), id: \.element.id) { number, track in
                             let nextAncestors = number + 1 < visibleTracks.count ? ancestors[visibleTracks[number + 1].id] ?? [] : []
                             let guides = (ancestors[track.id] ?? []).map { nextAncestors.contains($0) }
+                            if local, let show = localShow, let source = show.current?.tracks.first(where: { $0.id == track.id }), source.kind == .programChange {
+                                ProgramChangeTrackRow(show: show, track: source, deleteTrack: { requestNativeTrackDeletion([track.id]) })
+                                    .frame(height: DAWRemoteItemLayout.rowHeight(track, scale: trackScrolling.heightScale))
+                            } else {
                             RemoteNativeMixerRow(track: track, project: state.project, song: state.song, number: number + 1,
                                 compact: DAWRemoteItemLayout.rowHeight(track, scale: trackScrolling.heightScale) < 70,
                                 local: local, localShow: localShow, nativeContextMenu: local, showsInstrumentIcons: trackIconWidth > 0, nativePhaseInverted: phaseInvertedTracks.contains(track.id),
@@ -2689,6 +2715,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                                 .modifier(IpadTrackReorderModifier(show: localShow, track: track.id,
                                     enabled: local && editingTracks, controller: trackReordering))
                                 .modifier(nativeTrackMenu(track.id))
+                            }
                         }
                     }
                     #if os(iOS)
@@ -3678,6 +3705,7 @@ private struct RemoteNativeTimeline: View {
                     #if os(iOS)
                     .background(RemoteTrackScrollProbe(controller: scrolling, isGrid: true, gridTap: { fraction in
                         guard local || (!state.playing && region != nil) else { return }
+                        if local { localShow?.selectProgramChange(nil) }
                         let time = start + fraction * span
                         if local, let song {
                             seek(TimelineTempo.snap(time, song: song, pixelsPerSecond: width / span,
@@ -3858,6 +3886,7 @@ private struct RemoteNativeTimeline: View {
         let hits = pointerItems(width: width)
         let time = max(0, start + Double(event.position.x / max(1, width)) * span)
         if event.phase == .began {
+            show.selectProgramChange(nil)
             pauseFollowing(); scrolling.selectionScope = .grid
             let item = hits.first { $0.rect.contains(event.position) }?.id
             pointerStart = (show.snapshot.project.id, song, item, time, event.position, scrolling.itemSelection)
@@ -4346,6 +4375,13 @@ private struct RemoteNativeTimeline: View {
                     }
                 } else { control(action, id, value) }
             }).equatable()
+            .overlay(alignment: .topLeading) {
+                if local, let show = localShow, let source = nativeSong?.tracks.first(where: { $0.id == track.id }), source.kind == .programChange {
+                    ProgramChangeMarkerLane(show: show, track: source, pixelsPerSecond: width / span,
+                        height: DAWRemoteItemLayout.rowHeight(track, scale: scrolling.heightScale), start: start)
+                        .frame(width: width, height: DAWRemoteItemLayout.rowHeight(track, scale: scrolling.heightScale))
+                }
+            }
     }
 
 }
@@ -5945,6 +5981,7 @@ private final class IpadMixerMeterView: UIView {
         gridTap?(min(1, max(0, Double(x / scroll.bounds.width))))
     }
     private func receiveGridTap(_ touch: UITouch) -> Bool {
+        if ProgramChangeHeadAnchorView.contains(touch) { return false }
         if pointerEditing && touch.type == .indirectPointer { return false }
         var view = touch.view
         while let candidate = view, candidate !== gridScrollView {
@@ -6624,12 +6661,13 @@ enum RemoteSurface {
 private struct RemoteControlSurface: ViewModifier {
     var color: Color? = nil
     var radius: CGFloat = 6
+    var bordered = true
     func body(content: Content) -> some View {
         content.background {
-            if let color { RemoteSurface.fill(color) }
+            if let color { if bordered { RemoteSurface.fill(color) } else { color } }
             else { RemoteSurface.panel }
         }.clipShape(RoundedRectangle(cornerRadius: radius))
-            .overlay(RoundedRectangle(cornerRadius: radius).stroke(RemoteSurface.edge, lineWidth: 0.5).allowsHitTesting(false))
+            .overlay { if bordered { RoundedRectangle(cornerRadius: radius).stroke(RemoteSurface.edge, lineWidth: 0.5).allowsHitTesting(false) } }
     }
 }
 
@@ -7017,7 +7055,7 @@ private struct IpadPreviewButton: View {
             Text(verbatim: "P\nR\nE\nV\nI\nE\nW")
                 .font(.jarasSystem(size: 10, weight: .heavy)).multilineTextAlignment(.center)
                 .foregroundStyle(Color.black).frame(width: width, height: 108)
-                .modifier(RemoteControlSurface(color: active ? JarasTheme.green : JarasTheme.liveOffRed, radius: 5))
+                .modifier(RemoteControlSurface(color: active ? JarasTheme.green : JarasTheme.liveOffRed, radius: 5, bordered: false))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel("Preview")
             .accessibilityValue(active ? "On" : "Off").contextMenu {

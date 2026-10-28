@@ -79,12 +79,12 @@ final class RemoteParts extends LinearLayout {
     final class Tab extends LinearLayout {
         final boolean second;final TextView title,name;
         Tab(boolean second){super(app);this.second=second;setOrientation(VERTICAL);pad(this,4,4);setClickable(true);setFocusable(true);
-            title=label(app,"",9,SECONDARY);title.setGravity(Gravity.CENTER);title.setSingleLine();addView(title,new LayoutParams(-1,dp(11)));
-            name=label(app,"—",12,TEXT);name.setTypeface(bold);name.setGravity(Gravity.CENTER);name.setMaxLines(3);name.setAutoSizeTextTypeUniformWithConfiguration(6,12,1,android.util.TypedValue.COMPLEX_UNIT_SP);LayoutParams lp=new LayoutParams(-1,0,1);lp.topMargin=dp(3);addView(name,lp);
+            title=label(app,"",13,SECONDARY);title.setTypeface(bold);title.setGravity(Gravity.CENTER);title.setSingleLine();addView(title,new LayoutParams(-1,-1));
+            name=label(app,"—",12,TEXT);name.setTypeface(bold);name.setGravity(Gravity.CENTER);name.setMaxLines(3);name.setAutoSizeTextTypeUniformWithConfiguration(6,12,1,android.util.TypedValue.COMPLEX_UNIT_SP);LayoutParams lp=new LayoutParams(-1,0,1);lp.topMargin=dp(3);name.setVisibility(GONE);addView(name,lp);
             setOnClickListener(v->{secondary=second;refresh();});
         }
-        void update(JSONObject region){boolean selected=secondary==second;title.setText(RemoteText.ui(second?(app.state.optBoolean("subPlaying")?"Sub Play":"Queued"):"Playing / Selected"));name.setText(region==null?"—":region.optString("name"));
-            title.setTextColor(selected?TEXT:SECONDARY);name.setTextColor(selected?TEXT:SECONDARY);setBackground(selected?surface(blend(0xff171717,second?0xffff9500:GREEN,.55f),blend(0xff171717,second?0xffff9500:GREEN,.48f),0x2affffff,5):display(5));setSelected(selected);setContentDescription(title.getText()+": "+name.getText());}
+        void update(JSONObject region){boolean selected=secondary==second;title.setText(RemoteText.ui(second?"Queued":app.state.optBoolean("playing")?"Now playing":"Selected song"));name.setText(region==null?"—":region.optString("name"));
+            title.setTextColor(selected?TEXT:SECONDARY);name.setTextColor(selected?TEXT:SECONDARY);setBackground(selected?surface(blend(0xff171717,second?0xffff9500:GREEN,.55f),blend(0xff171717,second?0xffff9500:GREEN,.48f),0x2affffff,5):display(5));setSelected(selected);setContentDescription(title.getText());}
     }
     final class SectionRow extends FrameLayout {
         final String id,name;final double start;final boolean first;final TextView title;final Paint paint=new Paint(3);boolean armed,playing;

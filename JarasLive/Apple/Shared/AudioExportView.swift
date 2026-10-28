@@ -23,9 +23,26 @@ final class AudioExportURLAccess: @unchecked Sendable {
     @Published var error = ""
     @Published var progress: AudioExportProgress?
     private var cancellation = AudioExportCancellation()
-    func cancel() { cancellation.cancel() }
-    func start(project: Project, song: Song, plan: AudioExportPlan, media: URL, output: URL, rate: Double, encoding: AudioExportEncoding, secondaryEncoding: AudioExportEncoding?, includeHardwareOutputs: Bool = false, mediaAccessURL: URL? = nil) {
+    @Published var confirmingReplacement = false
+    private(set) var replacementFiles: [String] = []
+    private var pendingExport: (() -> Void)?
+    func cancelReplacement() { pendingExport = nil; replacementFiles = []; confirmingReplacement = false }
+    func confirmReplacement() { let action = pendingExport; cancelReplacement(); action?() }
+    func cancel() { cancellation.cancel(); cancelReplacement() }
+    func start(project: Project, song: Song, plan: AudioExportPlan, media: URL, output: URL, rate: Double, encoding: AudioExportEncoding, secondaryEncoding: AudioExportEncoding?, includeHardwareOutputs: Bool = false, mediaAccessURL: URL? = nil, replacingFiles: Set<String> = []) {
         guard !running else { return }
+        let collisions = plan.jobs.map(\.fileName).filter {
+            FileManager.default.fileExists(atPath: output.appendingPathComponent($0).path) && !replacingFiles.contains($0)
+        }
+        if !collisions.isEmpty {
+            replacementFiles = collisions
+            let approved = replacingFiles.union(collisions)
+            pendingExport = { [weak self] in self?.start(project: project, song: song, plan: plan, media: media, output: output,
+                rate: rate, encoding: encoding, secondaryEncoding: secondaryEncoding,
+                includeHardwareOutputs: includeHardwareOutputs, mediaAccessURL: mediaAccessURL, replacingFiles: approved) }
+            confirmingReplacement = true
+            return
+        }
         cancellation = AudioExportCancellation()
         let token = cancellation
         let mediaAccess = AudioExportURLAccess(mediaAccessURL ?? media), outputAccess = AudioExportURLAccess(output)
@@ -36,7 +53,7 @@ final class AudioExportURLAccess: @unchecked Sendable {
             defer { withExtendedLifetime((mediaAccess, outputAccess)) {} }
             do {
                 try OfflineAudioExport.run(project: project,song: song,plan: plan,mediaDirectory: media,outputDirectory: output,sampleRate: rate,encoding: encoding,secondaryEncoding: secondaryEncoding,cancellation: token,
-                    includeHardwareOutputs: includeHardwareOutputs, midiInstrumentsByTrack: instruments) { update in
+                    includeHardwareOutputs: includeHardwareOutputs, midiInstrumentsByTrack: instruments, replacingFiles: replacingFiles) { update in
                     Task { @MainActor in self.progress = update }
                 }
                 Task { @MainActor in self.running = false; self.finished = true }
@@ -81,6 +98,7 @@ struct AudioExportView: View {
     @AppStorage("jaras.export.secondaryBits") private var secondaryBits = 24
     @AppStorage("jaras.export.secondaryBitrate") private var secondaryBitrate = 320
     @AppStorage("jaras.export.directory") private var directory = ""
+    @AppStorage("jaras.export.directoryBookmark") private var directoryBookmark = Data()
     @AppStorage("jaras.export.fileName") private var fileName = "%project"
     @AppStorage("catlive.export.regionFileName") private var regionFileName = "%region"
     private var destinationURL: URL? {
@@ -132,6 +150,11 @@ struct AudioExportView: View {
             #endif
             .background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
             .interactiveDismissDisabled(session.running)
+            .alert("Replace existing files?", isPresented: $session.confirmingReplacement) {
+                Button("Cancel", role: .cancel) { session.cancelReplacement(); renderScreen = false; renderedPlan = nil }
+                Button("Replace", role: .destructive) { session.confirmReplacement() }
+            } message: { Text(verbatim: session.replacementFiles.joined(separator: "\n")) }
+
             .onAppear {
                 guard !initialized, let song else { return }
                 initialized = true
@@ -141,6 +164,15 @@ struct AudioExportView: View {
                 if UserDefaults.standard.object(forKey: "jaras.export.sampleRate") == nil {
                     rate = [44100.0,48000.0].contains(AudioDeviceSettings.shared.sampleRate) ? AudioDeviceSettings.shared.sampleRate : 48000
                 }
+                #if os(iOS)
+                if !directoryBookmark.isEmpty {
+                    var stale = false
+                    if let url = try? URL(resolvingBookmarkData: directoryBookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) {
+                        destinationAccess = AudioExportURLAccess(url); directory = url.path
+                        if stale, let renewed = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) { directoryBookmark = renewed }
+                    }
+                }
+                #endif
                 #if os(macOS)
                 if directory.isEmpty { directory = FileManager.default.urls(for: .desktopDirectory,in: .userDomainMask).first?.path ?? "" }
                 #endif
@@ -148,7 +180,11 @@ struct AudioExportView: View {
             }
             .fileImporter(isPresented: $choosingDirectory,allowedContentTypes: [.folder]) { result in
                 switch result {
-                case .success(let url): destinationAccess = AudioExportURLAccess(url); directory = url.path
+                case .success(let url):
+                    destinationAccess = AudioExportURLAccess(url); directory = url.path
+                    #if os(iOS)
+                    directoryBookmark = (try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)) ?? Data()
+                    #endif
                 case .failure(let error): session.error = error.localizedDescription
                 }
             }
@@ -383,6 +419,7 @@ struct ItemAudioExportView: View {
     @AppStorage("jaras.export.sampleRate") private var rate = 48000.0
     @AppStorage("jaras.export.itemChannels") private var channels = 0
     @AppStorage("jaras.export.directory") private var directory = ""
+    @AppStorage("jaras.export.directoryBookmark") private var directoryBookmark = Data()
     @State private var choosingDirectory = false
     private var plan: AudioExportPlan {
         AudioExportPlan(project: request.project, song: request.song, source: .stems, bounds: .project,
@@ -446,6 +483,11 @@ struct ItemAudioExportView: View {
             }
         }.padding(20).frame(width: 520).background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
             .interactiveDismissDisabled(session.running)
+            .alert("Replace existing files?", isPresented: $session.confirmingReplacement) {
+                Button("Cancel", role: .cancel) { session.cancelReplacement();  }
+                Button("Replace", role: .destructive) { session.confirmReplacement() }
+            } message: { Text(verbatim: session.replacementFiles.joined(separator: "\n")) }
+
             .onAppear {
                 if directory.isEmpty { directory = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first?.path ?? "" }
             }

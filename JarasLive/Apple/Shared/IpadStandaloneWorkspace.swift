@@ -1415,7 +1415,7 @@ struct IpadDialogButtonStyle: ButtonStyle {
             Button { recorder.toggle(show: show) } label: {
                 Label("REC", systemImage: recorder.recording ? "stop.circle.fill" : "record.circle")
             }.buttonStyle(TransportButtonStyle(color: recorder.recording ? JarasTheme.transportRed : JarasTheme.liveOffRed,
-                    active: true, activeForeground: .white, fontSize: 10, width: controlWidth ?? 47, height: 28))
+                    active: true, activeForeground: .black, fontSize: 10, width: controlWidth ?? 47, height: 28, bordered: false))
                 .overlay {
                     IpadTapHoldTouchSurface(tap: { recorder.toggle(show: show) }, hold: { recordingSettings = true })
                 }
@@ -1428,7 +1428,7 @@ struct IpadDialogButtonStyle: ButtonStyle {
             }
             if only == nil || only == .metronome {
             Button { metronome.enabled.toggle() } label: { Image(systemName: "metronome") }
-                .buttonStyle(TransportButtonStyle(color: metronome.enabled ? JarasTheme.yellow : JarasTheme.panel, active: metronome.enabled, fontSize: 12, width: controlWidth ?? 30, height: 28))
+                .buttonStyle(TransportButtonStyle(color: metronome.enabled ? JarasTheme.yellow : Color(hex: 0x454545), active: metronome.enabled, inactiveOpacity: 1, fontSize: 12, width: controlWidth ?? 30, height: 28, bordered: false))
                 .accessibilityLabel("Metronome").accessibilityValue(metronome.enabled ? "On" : "Off")
                 .contextMenu { Button("Settings") { configureMetronome?() } }
             }

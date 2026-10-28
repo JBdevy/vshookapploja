@@ -122,21 +122,21 @@ struct TransportView: View {
                             #endif
                         } label: {
                             Text(verbatim: "Advanced").font(.jarasSystem(size: 10, weight: .semibold)).frame(width: 68, height: 25).contentShape(Rectangle())
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.6)))
+                                .background(RoundedRectangle(cornerRadius: 6).fill(Color(hex: 0x454545)))
                         }.buttonStyle(.plain).accessibilityLabel("Advanced").jarasHelp("Advanced")
                         #if os(macOS)
                         if !remotePresentation {
                         ForEach(["Resolume"], id: \.self) { title in
                             Button { showingResolume = true } label: {
                                 Text(verbatim: title).font(.jarasSystem(size: 10, weight: .semibold)).frame(width: 64, height: 25).contentShape(Rectangle())
-                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.6)))
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(hex: 0x454545)))
                             }.buttonStyle(.plain).accessibilityLabel(title).jarasHelp(title)
                         }
                         }
                         #endif
                         Button { showingExport = true } label: {
                             Text("Export").font(.jarasSystem(size: 10, weight: .semibold)).frame(width: 82, height: 25).contentShape(Rectangle())
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.8)))
+                                .background(RoundedRectangle(cornerRadius: 6).fill(Color(hex: 0x454545)))
                         }.buttonStyle(.plain).jarasHelp("Export").accessibilityLabel("Export")
                         Button(action: openSettings) {
                             Image(systemName: "gearshape").frame(width: 32, height: 25).contentShape(Rectangle())
@@ -149,17 +149,17 @@ struct TransportView: View {
                         Label { Text(verbatim: transport.playing ? "Stop" : "Play") } icon: {
                             Image(systemName: transport.playing ? "stop.fill" : "play.fill").frame(width: 12)
                         }
-                    }.buttonStyle(TransportButtonStyle(color: JarasTheme.transportPlay, active: transport.playing, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height)).jarasHelp(ControlMappings.shared.shortcutHelp(.playStop))
+                    }.buttonStyle(TransportButtonStyle(color: JarasTheme.transportPlay, active: transport.playing, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height, bordered: false)).jarasHelp(ControlMappings.shared.shortcutHelp(.playStop))
                         .contextMenu { Button("Fadeout…") { showingFadeout = true } }
                     Button { show.send(.pause) } label: { Image(systemName: "pause.fill") }
-                        .buttonStyle(TransportButtonStyle(fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height))
+                        .buttonStyle(TransportButtonStyle(color: Color(hex: 0x454545), inactiveOpacity: 1, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height, bordered: false))
                         .accessibilityLabel("Pause").jarasHelp("Pause").disabled(!transport.playing)
                     Button { show.send(transport.subPlay.playing ? .subStop : .subPlay) } label: {
                         HStack(spacing: 2) {
                             Image(systemName: transport.subPlay.playing ? "pause.fill" : "play.fill")
                             Text("Sub Play")
                         }
-                    }.buttonStyle(TransportButtonStyle(color: Color(hex: 0xffff00), active: true, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height))
+                    }.buttonStyle(TransportButtonStyle(color: Color(hex: 0xffff00), active: true, fontSize: TransportControlMetrics.font, width: max(46, buttonWidth - 8), height: TransportControlMetrics.height, bordered: false))
                         .disabled(!transport.playing).jarasHelp(ControlMappings.shared.shortcutHelp(.subPlayStop))
                     RepeatControl(active: transport.loop.enabled) { show.send(.toggleLoop) }
                     TransportRecordButton(show: show)
@@ -857,6 +857,7 @@ struct TransportButtonStyle: ButtonStyle {
     var fontSize: CGFloat = 12
     var width: CGFloat? = nil
     var height: CGFloat = 32
+    var bordered = true
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.jarasSystem(size: fontSize, weight: .semibold, design: .rounded))
@@ -867,13 +868,14 @@ struct TransportButtonStyle: ButtonStyle {
             .foregroundStyle(active ? activeForeground : JarasTheme.text)
             #if os(iOS)
             .background {
-                RemoteSurface.fill(active ? color : color.opacity(configuration.isPressed ? max(0.7, inactiveOpacity) : inactiveOpacity))
+                if bordered { RemoteSurface.fill(active ? color : color.opacity(configuration.isPressed ? max(0.7, inactiveOpacity) : inactiveOpacity)) }
+                else { active ? color : color.opacity(configuration.isPressed ? max(0.7, inactiveOpacity) : inactiveOpacity) }
             }
             #else
             .background(active ? color : color.opacity(configuration.isPressed ? max(0.7, inactiveOpacity) : inactiveOpacity))
             #endif
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(active ? color : Color.white.opacity(0.45)))
+            .overlay { if bordered { RoundedRectangle(cornerRadius: 6).stroke(active ? color : Color.white.opacity(0.45)) } }
             .contentShape(Rectangle())
     }
 }
@@ -906,7 +908,7 @@ private struct MetronomeControl: View {
     }
     private var control: some View {
         Button { settings.enabled.toggle() } label: { Image(systemName: "metronome") }
-            .buttonStyle(TransportButtonStyle(color: settings.enabled ? JarasTheme.yellow : JarasTheme.panel, active: settings.enabled, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: 35))
+            .buttonStyle(TransportButtonStyle(color: settings.enabled ? JarasTheme.yellow : Color(hex: 0x454545), active: settings.enabled, inactiveOpacity: 1, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: 35, bordered: false))
             #if !os(macOS)
             .opacity(!settings.enabled || pulse ? 1 : 0.45)
             .onReceive(show.$snapshot.map { pulse(for: $0) }.removeDuplicates()) { pulse = $0 }
@@ -1097,7 +1099,7 @@ private struct RepeatControl: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) { Image(systemName: "repeat") }
-            .buttonStyle(TransportButtonStyle(color: active ? JarasTheme.yellow : JarasTheme.liveOffRed, active: active, inactiveOpacity: 1, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: TransportControlMetrics.height))
+            .buttonStyle(TransportButtonStyle(color: active ? JarasTheme.yellow : JarasTheme.liveOffRed, active: active, inactiveOpacity: 1, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: TransportControlMetrics.height, bordered: false))
             .modifier(JarasBlink(active: active, interval: 0.55, lowOpacity: 0.45))
             .accessibilityLabel("Repeat").jarasHelp("Repeat (R)")
     }
@@ -1116,7 +1118,7 @@ private struct VideoToggleButton: View {
             .font(.jarasSystem(size: TransportControlMetrics.font, weight: .semibold))
             .lineLimit(1)
             .frame(width: buttonWidth, height: TransportControlMetrics.height)
-            .foregroundStyle(video.visible ? Color.black : JarasTheme.text)
+            .foregroundStyle(Color.black)
             .background(RoundedRectangle(cornerRadius: 5).fill(video.visible ? JarasTheme.green : JarasTheme.liveOffRed))
             .overlay(RoundedRectangle(cornerRadius: 5).stroke(video.visible ? JarasTheme.green : JarasTheme.liveOffRed))
             .contentShape(Rectangle())
@@ -1161,10 +1163,9 @@ private struct RemoteToggleButton: View {
             #endif
         } label: {
             HStack(spacing: 2) {
-                Image(systemName: "network")
                 Text(verbatim: "Remote")
             }.lineLimit(1)
-        }.buttonStyle(TransportButtonStyle(color: remote.enabled ? JarasTheme.green : JarasTheme.liveOffRed, active: true, activeForeground: remote.enabled ? .black : .white, fontSize: TransportControlMetrics.font, width: buttonWidth, height: TransportControlMetrics.height))
+        }.buttonStyle(TransportButtonStyle(color: remote.enabled ? JarasTheme.green : JarasTheme.liveOffRed, active: true, activeForeground: .black, fontSize: TransportControlMetrics.font, width: buttonWidth, height: TransportControlMetrics.height, bordered: false))
             .accessibilityLabel("Remote").accessibilityValue(remote.enabled ? "On" : "Off")
             .jarasHelp("Remote · Right-click to configure")
             #if os(macOS)

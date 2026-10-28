@@ -1056,12 +1056,11 @@ private struct RecordingButtonStyle: ButtonStyle {
             .font(.jarasSystem(size: fontSize, weight: .semibold))
             .lineLimit(1).minimumScaleFactor(0.75)
             .frame(width: width, height: height)
-            .foregroundStyle(transport ? Color.white : active ? Color.black : Color.red)
+            .foregroundStyle(transport || active ? Color.black : Color.red)
             .background(transport ? (active ? JarasTheme.transportRed : JarasTheme.liveOffRed).opacity(configuration.isPressed ? 0.85 : 1) :
                 active ? red.opacity(configuration.isPressed ? 0.75 : 1) :
                 (configuration.isPressed ? Color(hex: 0x565656) : JarasTheme.trackButton))
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(transport ? (active ? JarasTheme.transportRed : Color.white.opacity(0.45)) : .clear))
             .contentShape(Rectangle())
             .transaction { $0.animation = nil }
     }
