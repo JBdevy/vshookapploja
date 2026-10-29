@@ -370,7 +370,7 @@ struct EQKernel {
     double mix=0;
     EQKernel() { for(unsigned n=0;n<kSections;n++) for(unsigned j=0;j<5;j++) { pending[n][j].store(j==0?1:0); coefficients[n][j]=j==0?1:0; desired[n][j]=j==0?1:0; } }
     void process(AudioBufferList *buffers, unsigned frames) {
-        if (padReleaseRequested.exchange(false, std::memory_order_acq_rel)) padRelease.begin(sampleRate);
+        if (padReleaseRequested.exchange(false, std::memory_order_acq_rel)) padRelease.begin(fade.rate);
         if (padRelease.started) {
             for (unsigned frame=0; frame<frames; ++frame) {
                 const float gain=padRelease.next();

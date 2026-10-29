@@ -4804,8 +4804,8 @@ private struct TimelineBackdrop: View {
                     line.addLine(to: CGPoint(x: x, y: size.height))
                     if mark.primary { primaryLines.addPath(line) } else { secondaryLines.addPath(line) }
                 }
-                context.stroke(primaryLines, with: .color(Color(hex: UInt32(primaryGridColor.value))), lineWidth: pixel)
-                context.stroke(secondaryLines, with: .color(Color(hex: UInt32(secondaryGridColor.value)).opacity(0.85)), lineWidth: pixel)
+                context.stroke(primaryLines, with: .color(Color(hex: UInt32(primaryGridColor.value))), style: StrokeStyle(lineWidth: pixel * 0.75, dash: [1, 3]))
+                context.stroke(secondaryLines, with: .color(Color(hex: UInt32(secondaryGridColor.value)).opacity(0.85)), style: StrokeStyle(lineWidth: pixel * 0.75, dash: [1, 3]))
             }
         }
     }
@@ -4898,7 +4898,9 @@ private final class TimelineNativeGridView: NSView {
             }
             layer.frame = local
             layer.contentsScale = scale
-            layer.lineWidth = pixel
+            layer.lineWidth = pixel * 0.75
+            layer.lineDashPattern = [1, 3]
+            layer.lineDashPhase = max(0, tile.minY - content.rulerHeight).truncatingRemainder(dividingBy: 4)
             layer.strokeColor = color
             layer.path = path
         }

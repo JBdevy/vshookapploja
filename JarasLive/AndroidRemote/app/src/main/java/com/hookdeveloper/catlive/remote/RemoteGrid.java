@@ -53,7 +53,7 @@ final class RemoteGrid extends View {
         String name=region==null?"":region.optString("name");canvas.save();canvas.clipRect(dp(4),0,width-dp(4),dp(REGION_HEIGHT));canvas.drawText(name,dp(4),dp(REGION_HEIGHT)/2f-(paint.ascent()+paint.descent())/2,paint);canvas.restore();
         for(Tick tick:ticks(sections(s,start()+duration()),start()+offset,start()+offset+duration()/zoom,pixelsPerSecond()/density,s.optInt("gridDivisions",4))){
             float at=x(tick.time);paint.setStrokeWidth(1);
-            if(s.optBoolean("gridLines",true)){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x3c3c3c:0x282828)));canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);}
+            if(s.optBoolean("gridLines",true)){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x3c3c3c:0x282828)));paint.setStrokeWidth(.75f);paint.setPathEffect(new DashPathEffect(new float[]{density,3*density},0));canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);paint.setPathEffect(null);paint.setStrokeWidth(1);}
             paint.setColor(0xff54ff93);canvas.drawLine(at,dp(RULER_TOP+1),at,dp(RULER_TOP+(tick.primary?7:4)),paint);
             if(!tick.label.isEmpty()){paint.setTextSize(9*density);paint.setTypeface(Typeface.MONOSPACE);canvas.save();canvas.clipRect(0,dp(RULER_TOP),width,dp(HEADER_HEIGHT));canvas.drawText(tick.label,at+dp(3),dp(RULER_TOP+2)-paint.ascent(),paint);canvas.restore();}
         }

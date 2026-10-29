@@ -1414,8 +1414,8 @@ struct IpadDialogButtonStyle: ButtonStyle {
             if only == nil || only == .record {
             Button { recorder.toggle(show: show) } label: {
                 Label("REC", systemImage: recorder.recording ? "stop.circle.fill" : "record.circle")
-            }.buttonStyle(TransportButtonStyle(color: recorder.recording ? JarasTheme.transportRed : JarasTheme.liveOffRed,
-                    active: true, activeForeground: .black, fontSize: 10, width: controlWidth ?? 47, height: 28, bordered: false))
+            }.buttonStyle(RecordingButtonStyle(active: recorder.recording, width: controlWidth ?? 47,
+                    height: 28, fontSize: 10, cornerRadius: 6, transport: true))
                 .overlay {
                     IpadTapHoldTouchSurface(tap: { recorder.toggle(show: show) }, hold: { recordingSettings = true })
                 }
