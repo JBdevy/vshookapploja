@@ -13,13 +13,13 @@ import static com.hookdeveloper.catlive.remote.RemoteWidgets.*;
 import static com.hookdeveloper.catlive.remote.RemoteTimeline.*;
 
 final class RemoteGrid extends View {
-    final MainActivity app;final Paint paint=new Paint(3);final GestureDetector gesture;final ScaleGestureDetector scale;
+    final MainActivity app;final Paint paint=new Paint(3);final DashPathEffect gridDots;final GestureDetector gesture;final ScaleGestureDetector scale;
     float vertical=0;double zoom=1,offset=0;String regionID="";JSONObject region;float left=0;boolean dragging=false;
     boolean needleDragging=false;double needleCandidate=Double.NaN,needlePreview=Double.NaN;long needlePreviewUntil=0;String needleRegion="";
     final List<Hit> hits=new ArrayList<>();final RemoteItemDrawing items=new RemoteItemDrawing();String pressedMute="";
     String editingClip="";TextView itemName,itemDecibels;Fader itemFader;Button itemMute;
     static final class Hit {final RectF rect,mute;final JSONObject clip;Hit(RectF r,RectF m,JSONObject c){rect=r;mute=m;clip=c;}}
-    RemoteGrid(Context c,MainActivity app){super(c);this.app=app;setContentDescription("Grid de itens");setFocusable(true);
+    RemoteGrid(Context c,MainActivity app){super(c);this.app=app;gridDots=new DashPathEffect(new float[]{density,3*density},0);setContentDescription("Grid de itens");setFocusable(true);
         scale=new ScaleGestureDetector(c,new ScaleGestureDetector.SimpleOnScaleGestureListener(){public boolean onScale(ScaleGestureDetector detector){double before=seconds(detector.getFocusX());zoom=Math.max(1,Math.min(128,zoom*detector.getScaleFactor()));offset=before-start()-detector.getFocusX()/pixelsPerSecond();clamp();invalidate();return true;}});
         gesture=new GestureDetector(c,new GestureDetector.SimpleOnGestureListener(){
             public boolean onDown(MotionEvent e){pressedMute="";for(Hit h:hits)if(h.mute.contains(e.getX(),e.getY())&&e.getY()>=dp(HEADER_HEIGHT)){pressedMute=RemoteModel.id(h.clip,"id");break;}return true;}
@@ -53,7 +53,7 @@ final class RemoteGrid extends View {
         String name=region==null?"":region.optString("name");canvas.save();canvas.clipRect(dp(4),0,width-dp(4),dp(REGION_HEIGHT));canvas.drawText(name,dp(4),dp(REGION_HEIGHT)/2f-(paint.ascent()+paint.descent())/2,paint);canvas.restore();
         for(Tick tick:ticks(sections(s,start()+duration()),start()+offset,start()+offset+duration()/zoom,pixelsPerSecond()/density,s.optInt("gridDivisions",4))){
             float at=x(tick.time);paint.setStrokeWidth(1);
-            if(s.optBoolean("gridLines",true)){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x3c3c3c:0x282828)));paint.setStrokeWidth(.75f);paint.setPathEffect(new DashPathEffect(new float[]{density,3*density},0));canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);paint.setPathEffect(null);paint.setStrokeWidth(1);}
+            if(s.optBoolean("gridLines",true)){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x3c3c3c:0x282828)));paint.setStrokeWidth(.75f);paint.setPathEffect(gridDots);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);paint.setPathEffect(null);paint.setStrokeWidth(1);}
             paint.setColor(0xff54ff93);canvas.drawLine(at,dp(RULER_TOP+1),at,dp(RULER_TOP+(tick.primary?7:4)),paint);
             if(!tick.label.isEmpty()){paint.setTextSize(9*density);paint.setTypeface(Typeface.MONOSPACE);canvas.save();canvas.clipRect(0,dp(RULER_TOP),width,dp(HEADER_HEIGHT));canvas.drawText(tick.label,at+dp(3),dp(RULER_TOP+2)-paint.ascent(),paint);canvas.restore();}
         }
