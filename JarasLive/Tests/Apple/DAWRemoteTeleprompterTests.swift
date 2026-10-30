@@ -132,3 +132,16 @@ if case .state(let decoded) = try DAWRemoteWire.decode(DAWRemoteWire.state(block
     require(decoded.teleprompters?.first?.blocks.first?.nameColor == 0x00ff88, "preview block text follows Setlist color separately from its red strip")
 } else { fatalError("preview block text color packet") }
 print("PREVIEW_BLOCK_SETLIST_TEXT_COLOR_SEPARATE_FROM_STRIP_OK")
+
+var coloredProjection = DAWRemoteTeleprompter(index: 1, text: "Olá 🎵", chords: "Am G", song: "", queued: "", progress: 0, style: .init())
+coloredProjection.textStyled = "\u{001e}CatLiveText/1\n[{\"text\":\"Olá 🎵\",\"color\":16728128}]"
+coloredProjection.chordsStyled = "\u{001e}CatLiveText/1\n[{\"text\":\"Am G\",\"color\":5894}]"
+let coloredData = try JSONEncoder().encode(coloredProjection)
+let coloredDecoded = try JSONDecoder().decode(DAWRemoteTeleprompter.self, from: coloredData)
+require(coloredDecoded == coloredProjection && coloredDecoded.valid, "colored lyrics and chords survive remote protocol")
+var plainColoredProjection = coloredProjection; plainColoredProjection.textStyled = nil; plainColoredProjection.chordsStyled = nil
+let plainColoredDecoded = try JSONDecoder().decode(DAWRemoteTeleprompter.self, from: JSONEncoder().encode(plainColoredProjection))
+require(plainColoredDecoded == plainColoredProjection, "plain hosts remain compatible")
+coloredProjection.textStyled = String(repeating: "x", count: 262145)
+require(!coloredProjection.valid, "reject oversized styled payload")
+print("PASS: styled teleprompter payload compatibility and bounds")

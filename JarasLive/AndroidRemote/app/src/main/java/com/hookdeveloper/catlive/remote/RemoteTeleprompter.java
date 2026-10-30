@@ -3,6 +3,7 @@ package com.hookdeveloper.catlive.remote;
 import android.content.Context;
 import android.graphics.*;
 import android.text.*;
+import android.text.style.ForegroundColorSpan;
 import android.view.*;
 import org.json.*;
 import java.text.SimpleDateFormat;
@@ -29,20 +30,35 @@ class RemoteTeleprompter extends View {
         for(Decoration d:below){d.draw(c,new RectF(outer,lower,getWidth()-outer,lower+d.height));lower+=d.height+dp(3);}
         if(preview){preview(c,tp,new RectF(outer,top,getWidth()-outer,bottom));windowBorder(c,outer);return;}
         fontFace=family(string("fontFamily","font","system"));
-        String lyrics=display(tp.optString("text"));if(!lyrics.trim().isEmpty()){String[] lines=lyrics.split("\\n",-1);int longest=1;for(String line:lines)longest=Math.max(longest,line.length());float font=(float)Math.max(1,Math.min((getWidth()-dp(12))/(longest*.64),(bottom-top-dp(12))/(Math.max(1,lines.length)*1.2))*number("textScale",100)/100);
-        String align=string("textAlignment","textAlignment","center");RectF lyricArea=new RectF(outer,top,getWidth()-outer,bottom);drawText(c,lyrics,inset(lyricArea,dp(6)),font,color("textColor","textColor",0xffea00),true,align.equals("left")?Layout.Alignment.ALIGN_NORMAL:align.equals("right")?Layout.Alignment.ALIGN_OPPOSITE:Layout.Alignment.ALIGN_CENTER,0);if(flag("textBoxEnabled","textBox",true))stroke(c,lyricArea,border("textBoxColor","textBoxColor",0xffea00,"rgbTextBoxBorderEnabled"),2);}
+        CharSequence styledLyrics=styledText(tp,"text");String lyrics=styledLyrics.toString();if(!lyrics.trim().isEmpty()){String[] lines=lyrics.split("\\n",-1);int longest=1;for(String line:lines)longest=Math.max(longest,line.length());float font=(float)Math.max(1,Math.min((getWidth()-dp(12))/(longest*.64),(bottom-top-dp(12))/(Math.max(1,lines.length)*1.2))*number("textScale",100)/100);
+        String align=string("textAlignment","textAlignment","center");RectF lyricArea=new RectF(outer,top,getWidth()-outer,bottom);drawText(c,styledLyrics,inset(lyricArea,dp(6)),font,color("textColor","textColor",0xffea00),true,align.equals("left")?Layout.Alignment.ALIGN_NORMAL:align.equals("right")?Layout.Alignment.ALIGN_OPPOSITE:Layout.Alignment.ALIGN_CENTER,0);if(flag("textBoxEnabled","textBox",true))stroke(c,lyricArea,border("textBoxColor","textBoxColor",0xffea00,"rgbTextBoxBorderEnabled"),2);}
         windowBorder(c,outer);
         drawNotice(c,s.optJSONObject("notices"));
     }
+    CharSequence styledText(JSONObject tp,String key){
+        String encoded=tp.optString(key+"Styled"),prefix="\u001eCatLiveText/1\n";
+        if(encoded.startsWith(prefix)&&encoded.length()<=262144)try{
+            JSONArray runs=new JSONArray(encoded.substring(prefix.length()));SpannableStringBuilder result=new SpannableStringBuilder();
+            for(int i=0;i<runs.length();i++){
+                JSONObject run=runs.getJSONObject(i);if(!(run.get("text") instanceof String))throw new JSONException("Invalid text");
+                int start=result.length();result.append(display(run.getString("text")));
+                if(!run.isNull("color")){Object raw=run.get("color");if(!(raw instanceof Number))throw new JSONException("Invalid color");double color=((Number)raw).doubleValue();if(color<0||color>0xffffff||color!=Math.floor(color))throw new JSONException("Invalid color");result.setSpan(new ForegroundColorSpan(0xff000000|(int)color),start,result.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}
+            }
+            return result;
+        }catch(JSONException ignored){}
+        return display(tp.optString(key));
+    }
     final class Decoration {
-        final String kind,value;final float height,size;final int tint;final boolean clock,local;
+        CharSequence styled;final String kind,value;final float height,size;final int tint;final boolean clock,local;
         Decoration(String kind,String value,float height,float size,int tint,boolean clock,boolean local){this.kind=kind;this.value=value;this.height=height;this.size=size;this.tint=tint;this.clock=clock;this.local=local;}
         void draw(Canvas c,RectF area){
             if(kind.equals("clock")){clocks(c,area,clock,local,string("clockPosition","clockPosition","center-top"));return;}
             if(kind.equals("progress")){paint.setColor(0x19ffffff);c.drawRect(area,paint);paint.setColor(tint);c.drawRect(area.left,area.top,area.left+area.width()*Float.parseFloat(value),area.bottom,paint);return;}
             fontFace=family(string(kind.equals("chords")?"chordFontFamily":kind.equals("song")?"songNameFontFamily":"queueNameFontFamily",kind.equals("chords")?"chordFont":"","system"));
-            boolean chord=kind.equals("chords");RectF inside=chord?inset(area,dp(6)):area;
-            drawText(c,value,inside,chord?size:fit(value,area.width(),height,size),tint,true,Layout.Alignment.ALIGN_CENTER,chord?2:1);
+            boolean chord=kind.equals("chords");
+            if(chord){text.setTypeface(fontFace);text.setTextSize(size);float width=0;for(String line:value.split("\\n",-1))width=Math.max(width,text.measureText(line));width=Math.min(area.width(),width+dp(12));area=new RectF(area.centerX()-width/2,area.top,area.centerX()+width/2,area.bottom);}
+            RectF inside=chord?inset(area,dp(6)):area;
+            drawText(c,styled==null?value:styled,inside,chord?size:fit(value,area.width(),height,size),tint,true,Layout.Alignment.ALIGN_CENTER,chord?2:1);
             if(chord)stroke(c,area,border("chordColor","chordColor",0xfb923c,"rgbChordBorderEnabled"),1);
         }
     }
@@ -55,9 +71,9 @@ class RemoteTeleprompter extends View {
             String prefix=kind.equals("song")?"songName":kind.equals("queued")?"queueName":"chord",old=kind.equals("queued")?"queue":kind.equals("chords")?"chord":"song";
             boolean visible=flag(kind.equals("chords")?"chordsEnabled":prefix+"Enabled",kind.equals("chords")?"chordsEnabled":old+"Enabled",!kind.equals("song"));
             if(!visible||!string(prefix+"Position",old+"Position","top").equals(edge)||tp.optString(kind).isEmpty())continue;
-            String value=display(tp.optString(kind));boolean chord=kind.equals("chords");float size=dp((float)(chord?number("chordScale",50):22*number(prefix+"Scale",100)/100));
+            CharSequence rich=kind.equals("chords")?styledText(tp,kind):display(tp.optString(kind));String value=rich.toString();boolean chord=kind.equals("chords");float size=dp((float)(chord?number("chordScale",50):22*number(prefix+"Scale",100)/100));
             fontFace=family(string(prefix+"FontFamily",chord?"chordFont":"","system"));float h=chord?measureHeight(value,getWidth()-dp(18),size)+dp(12):size+dp(3);
-            result.add(new Decoration(kind,value,h,size,color(prefix+"Color",old+"Color",chord?0xfb923c:kind.equals("song")?0x00ff55:0xffea00),false,false));
+            Decoration decoration=new Decoration(kind,value,h,size,color(prefix+"Color",old+"Color",chord?0xfb923c:kind.equals("song")?0x00ff55:0xffea00),false,false);decoration.styled=rich;result.add(decoration);
         }
         if(flag("progressEnabled","progressEnabled",false)&&string("progressPosition","progressPosition","bottom").equals(edge))result.add(new Decoration("progress",Float.toString((float)Math.max(0,Math.min(1,tp.optDouble("progress")))),dp(5),0,color("progressColor","progressColor",0xffea00),false,false));
         return result;
@@ -143,7 +159,7 @@ class RemoteTeleprompter extends View {
     float textWidth(String value,float size){text.setTypeface(fontFace);text.setTextSize(size);return text.measureText(value);}
     float fit(String value,float width,float height,float max){return Math.max(dp(1),Math.min(max,Math.min(max*Math.max(1,(float)Math.floor(width)-2)/Math.max(1,textWidth(value,max)),height*.8f)));}
     float measureHeight(String value,float width,float font){text.setTypeface(fontFace);text.setTextSize(font);StaticLayout layout=StaticLayout.Builder.obtain(value,0,value.length(),text,Math.max(1,(int)width)).setIncludePad(false).build();return (float)Math.ceil(Math.min(layout.getHeight(),font*2.4))+dp(2);}
-    void drawText(Canvas c,String value,RectF area,float size,int color,boolean strong,Layout.Alignment align,int maxLines){if(value.isEmpty()||area.width()<1||area.height()<1)return;text.setTypeface(strong?fontFace:regular);text.setTextSize(size);text.setColor(color);StaticLayout.Builder builder=StaticLayout.Builder.obtain(value,0,value.length(),text,Math.max(1,(int)area.width())).setAlignment(align).setIncludePad(false);if(maxLines>0)builder.setMaxLines(maxLines).setEllipsize(TextUtils.TruncateAt.END);StaticLayout layout=builder.build();c.save();c.clipRect(area);c.translate(area.left,area.top+Math.max(0,(area.height()-layout.getHeight())/2));layout.draw(c);c.restore();}
+    void drawText(Canvas c,CharSequence value,RectF area,float size,int color,boolean strong,Layout.Alignment align,int maxLines){if(value.length()==0||area.width()<1||area.height()<1)return;text.setTypeface(strong?fontFace:regular);text.setTextSize(size);text.setColor(color);StaticLayout.Builder builder=StaticLayout.Builder.obtain(value,0,value.length(),text,Math.max(1,(int)area.width())).setAlignment(align).setIncludePad(false);if(maxLines>0)builder.setMaxLines(maxLines).setEllipsize(TextUtils.TruncateAt.END);StaticLayout layout=builder.build();c.save();c.clipRect(area);c.translate(area.left,area.top+Math.max(0,(area.height()-layout.getHeight())/2));layout.draw(c);c.restore();}
     RectF inset(RectF r,float n){RectF copy=new RectF(r);copy.inset(n,n);return copy;}
     void stroke(Canvas c,RectF r,int color,float size){paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(size));paint.setColor(color);c.drawRoundRect(r,dp(6),dp(6),paint);paint.setStyle(Paint.Style.FILL);}
     void windowBorder(Canvas c,float outer){if(flag("windowBorderEnabled","windowBorder",true))stroke(c,new RectF(dp(1),dp(1),getWidth()-dp(1),getHeight()-dp(1)),border("borderColor","borderColor",0x00ff55,"rgbWindowBorderEnabled"),2);}

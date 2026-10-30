@@ -3744,7 +3744,7 @@ private struct BatchPatchEditor: View {
                     }
                 }
                 applied = true
-            }.buttonStyle(.borderedProminent).tint(JarasTheme.green)
+            }.buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black)
                 .disabled(tracks.isEmpty || (category == 0 && !inputs.contains(input)) || (category != 2 && (TrackRecording.shared.recording || tracks.contains { $0.kind != .standard })) || (category == 2 && !outputs.contains(output)))
             if applied { Label("Applied", systemImage: "checkmark.circle.fill").foregroundStyle(JarasTheme.green) }
         }.padding(18).frame(minWidth: 320, maxWidth: 480)
@@ -4037,15 +4037,28 @@ struct ProgramChangeMarkerLane: View {
     let pixelsPerSecond: Double
     let height: CGFloat
     var start: Double = 0
+    private func headWidth(_ marker: ProgramChangeMarker) -> CGFloat {
+        #if os(macOS)
+        let font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+        #else
+        let font = UIFont.systemFont(ofSize: 10, weight: .semibold)
+        #endif
+        let natural = ceil((marker.title as NSString).size(withAttributes: [.font: font]).width) + 10
+        return CGFloat(show.current?.programChangeHeadWidth(at: marker.position,
+            naturalWidth: Double(natural), scale: pixelsPerSecond) ?? Double(natural))
+    }
     var body: some View {
         let layout = ProgramChangeLayout(track.programChanges ?? [])
         ZStack(alignment: .topLeading) {
             ForEach(track.programChanges ?? []) { marker in
+                let width = headWidth(marker)
                 VStack(alignment: .leading, spacing: 0) {
+                    if width > 0 {
                     Text(verbatim: marker.title)
                         .font(.jarasSystem(size: 10, weight: .semibold)).foregroundStyle(.black)
-                        .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                        .padding(.horizontal, 5).frame(height: 20, alignment: .leading)
+                        .lineLimit(1)
+                        .padding(.horizontal, 5).frame(width: width, height: 20, alignment: .leading)
+                        .clipped()
                         .background(show.selectedProgramChangeID == marker.id ? JarasTheme.green : Color(hex: 0x91a8ff), in: RoundedRectangle(cornerRadius: 3))
                         .contentShape(Rectangle())
                         #if os(macOS)
@@ -4062,6 +4075,9 @@ struct ProgramChangeMarkerLane: View {
                             Button("Delete", role: .destructive) { show.removeProgramChange(track: track.id, marker: marker.id) }
                         }
                         #endif
+                    } else {
+                        Color.clear.frame(width: 1, height: 20).allowsHitTesting(false)
+                    }
                     Color(hex: 0x91a8ff).frame(width: 1, height: max(0, height - 20 - CGFloat(layout.lanes[marker.id] ?? 0) * 24)).allowsHitTesting(false)
                 }.offset(x: (marker.position - start) * pixelsPerSecond, y: CGFloat(layout.lanes[marker.id] ?? 0) * 24)
             }

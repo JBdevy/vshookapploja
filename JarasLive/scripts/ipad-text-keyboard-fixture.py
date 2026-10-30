@@ -10,6 +10,11 @@ workspace=(root/'Apple/Shared/IpadStandaloneWorkspace.swift').read_text()
 editor=(root/'Apple/Shared/RegionEditor.swift').read_text()
 keyboard=(root/'Apple/Shared/IpadTextKeyboard.swift').read_text()
 parts=[fixture[0],keyboard,section(editor,'struct NameColorEditor:','struct UnifyRegionEditor:'),section(workspace,'struct IpadCompactModal<','struct IpadModalHeader:'),section(workspace,'struct IpadDialogButtonStyle:','@MainActor struct IpadAudioTransportButtons:'),fixture[1]]
+textEditor=(root/'Apple/Shared/TextItemEditor.swift').read_text()
+model=(root/'Application/Project/ProjectModels.swift').read_text()
+parts.insert(-1, model[model.index('public enum ItemTextColors'):])
+parts.insert(-1, section(textEditor, 'struct ItemTextColorPalette:', 'extension ItemTextColors {'))
+parts.insert(-1, textEditor[textEditor.index('#if os(iOS)\nimport UIKit'):])
 (p/'Fixture.swift').write_text('\n'.join(parts))
 objects={}
 def uid(s):return hashlib.sha1(s.encode()).hexdigest()[:24].upper()

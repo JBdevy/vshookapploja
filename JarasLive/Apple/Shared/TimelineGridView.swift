@@ -5452,7 +5452,7 @@ private func drawTimelineItem(_ clip: AudioClip, track: Track, title: String, re
             let textRect = CGRect(x: rect.minX + 5, y: rect.minY + 17, width: rect.width - 10, height: rect.height - 20)
             if compact { titleContext.clip(to: path) }
             titleContext.clip(to: Path(textRect))
-            titleContext.draw(Text(verbatim: text).font(.jarasSystem(size: 12, weight: .semibold)).foregroundColor(.black), in: textRect)
+            titleContext.draw(ItemTextColors.view(text, fallback: .black).font(.jarasSystem(size: 12, weight: .semibold)), in: textRect)
         }
         return
     }

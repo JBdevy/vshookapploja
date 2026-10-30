@@ -461,7 +461,7 @@ import Combine
                     HStack(spacing: 6) {
                         Button { adding = true } label: {
                             Text("Add").frame(maxWidth: .infinity, minHeight: 38).contentShape(Rectangle())
-                        }.buttonStyle(.borderedProminent).tint(JarasTheme.green)
+                        }.buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black)
                         Button {
                             guard let selected else { return }
                             if let clip { show.removeClipFX(clip, effect: selected) }

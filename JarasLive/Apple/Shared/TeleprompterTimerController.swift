@@ -140,7 +140,7 @@ struct TeleprompterTimerConfiguration: View {
             HStack(spacing: 10) {
                 Button(controller.running ? "Stop" : "Start") {
                     if controller.running { stopRunID = controller.runID; confirmStop = true } else { controller.start() }
-                }.buttonStyle(.borderedProminent).tint(controller.running ? .red : JarasTheme.green)
+                }.buttonStyle(.borderedProminent).tint(controller.running ? .red : JarasTheme.green).foregroundStyle(Color.black)
                 Button("INIT AUTO") { controller.setInitAutoEnabled(!controller.initAutoEnabled) }
                     .buttonStyle(.bordered).tint(controller.initAutoEnabled ? JarasTheme.green : JarasTheme.secondary)
                     .jarasHelp("Start timer automatically when a song starts")

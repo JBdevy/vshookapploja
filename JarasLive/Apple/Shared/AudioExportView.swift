@@ -257,7 +257,7 @@ struct AudioExportView: View {
                 Picker("Channels",selection: $channels) { Text("Stereo").tag(2); Text("Mono").tag(1) }.frame(width: 135)
                 Spacer()
                 Button("Render", action: requestRender)
-                    .buttonStyle(.borderedProminent).tint(JarasTheme.green).keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black).keyboardShortcut(.defaultAction)
                     .disabled(plan.jobs.isEmpty || destinationURL == nil || mediaDirectory == nil)
             }
             if !session.error.isEmpty { Text(verbatim: session.error).font(.jarasCaption).foregroundStyle(.red) }
@@ -476,7 +476,7 @@ struct ItemAudioExportView: View {
                 }.keyboardShortcut(.cancelAction)
                 Spacer()
                 if !session.finished {
-                    Button("Export") { start() }.buttonStyle(.borderedProminent).tint(JarasTheme.green)
+                    Button("Export") { start() }.buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black)
                         .keyboardShortcut(.defaultAction)
                         .disabled(session.running || plan.jobs.isEmpty || directory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || request.mediaDirectory == nil)
                 }

@@ -764,6 +764,7 @@ struct DAWRemoteTeleprompter: Codable, Equatable {
     }
     var index: Int
     var text: String, chords: String, song: String, queued: String
+    var textStyled: String? = nil, chordsStyled: String? = nil
     var progress: Double
     var style: Style
     var preview: Bool = false
@@ -791,7 +792,7 @@ struct DAWRemoteTeleprompter: Codable, Equatable {
     }
     var valid: Bool {
         (1...2).contains(index) && progress.isFinite && (0...1).contains(progress) && style.valid &&
-        text.utf8.count <= 65536 && chords.utf8.count <= 65536 && song.utf8.count <= 4096 && queued.utf8.count <= 4096 &&
+        text.utf8.count <= 65536 && chords.utf8.count <= 65536 && (textStyled?.utf8.count ?? 0) <= 262144 && (chordsStyled?.utf8.count ?? 0) <= 262144 && song.utf8.count <= 4096 && queued.utf8.count <= 4096 &&
         blocks.count <= 4 && blocks.allSatisfy { block in
             block.rows.count <= 8192 && block.rows.allSatisfy { $0.duration.isFinite && $0.duration >= 0 &&
                 ($0.playbackProgress.map { $0.isFinite && (0...1).contains($0) } ?? true) }

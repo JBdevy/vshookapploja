@@ -373,7 +373,7 @@ import UniformTypeIdentifiers
                 Button("Export") {
                     session.start(request: request, encoding: AudioExportEncoding(format: format, bitDepth: bits,
                         channels: channels, bitrate: bitrate, sampleRate: rate), rate: rate)
-                }.buttonStyle(.borderedProminent).tint(JarasTheme.green).disabled(session.running)
+                }.buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black).disabled(session.running)
             }
         }.padding(22)
             .onChange(of: session.ready) { if $0 { choosingDestination = true } }

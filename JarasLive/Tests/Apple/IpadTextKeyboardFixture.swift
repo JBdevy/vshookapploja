@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 enum JarasTheme {
-    static let green = Color.green, text = Color.white, secondary = Color.gray
+    static let green = Color.green, text = Color.white, secondary = Color.gray, background = Color.black, panel = Color(white: 0.12)
 }
 enum RemoteSurface { static let panel = Color(white: 0.13) }
 extension Font {
@@ -33,7 +33,7 @@ struct KeyboardFixture: View {
                 Text("Dismissed: \(dismissed)").accessibilityIdentifier("dismissed")
                 TextField("Pesquisa", text: $text).textFieldStyle(.roundedBorder).accessibilityIdentifier("search")
                 SecureField("PIN", text: $secure).textFieldStyle(.roundedBorder).keyboardType(.numberPad).accessibilityIdentifier("pin")
-                TextEditor(text: $notes).frame(height: 120).accessibilityIdentifier("notes")
+                IpadTextItemNotepad(text: $notes).frame(height: 120).accessibilityIdentifier("notes")
                 Text("Pesquisa: " + text).accessibilityIdentifier("search-result")
                 Text("Texto: " + notes).accessibilityIdentifier("notes-result")
                 Text("Salvo: " + saved).accessibilityIdentifier("saved")

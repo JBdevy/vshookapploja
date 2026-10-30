@@ -887,142 +887,16 @@ private struct MetronomeControl: View {
     var documents: ProjectDocuments? = nil
     @ObservedObject private var settings = MetronomeSettings.shared
     @State private var configuring = false
-    #if !os(macOS)
-    @State private var pulse = true
-    private func pulse(for snapshot: ShowSnapshot) -> Bool {
-        guard settings.enabled, snapshot.transport.playing,
-              let song = snapshot.project.songs.first(where: { $0.id == snapshot.transport.songId }) else { return true }
-        let position = snapshot.transport.position
-        let section = song.tempoSection(at: position)
-        let beat = max(0, position - section.start) * section.bpm / 60 * Double(section.unit) / 4
-        return beat.truncatingRemainder(dividingBy: 1) < 0.35
-    }
-    #endif
-    var body: some View {
-        #if os(macOS)
-        NativeMetronomePulse(show: show, enabled: settings.enabled, content: control)
-            .frame(width: max(30, (buttonWidth / 2).rounded()), height: 35)
-        #else
-        control
-        #endif
-    }
+    var body: some View { control }
     private var control: some View {
         Button { settings.enabled.toggle() } label: { Image(systemName: "metronome") }
             .buttonStyle(TransportButtonStyle(color: settings.enabled ? JarasTheme.yellow : Color(hex: 0x454545), active: settings.enabled, inactiveOpacity: 1, fontSize: TransportControlMetrics.font, width: max(30, (buttonWidth / 2).rounded()), height: 35, bordered: false))
-            #if !os(macOS)
-            .opacity(!settings.enabled || pulse ? 1 : 0.45)
-            .onReceive(show.$snapshot.map { pulse(for: $0) }.removeDuplicates()) { pulse = $0 }
-            #endif
             .accessibilityLabel("Metronome").accessibilityValue(settings.enabled ? "On" : "Off")
             .jarasHelp("Metronome · Right-click to configure")
             .immediateRightClick { configuring = true }
             .sheet(isPresented: $configuring) { MetronomeEditor() }
     }
 }
-#if os(macOS)
-private struct NativeMetronomePulse<Content: View>: NSViewRepresentable {
-    let show: ShowController
-    let enabled: Bool
-    let content: Content
-    @Environment(\.locale) private var locale
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.layoutDirection) private var layoutDirection
-    @Environment(\.displayScale) private var displayScale
-    @Environment(\.font) private var font
-    @Environment(\.controlSize) private var controlSize
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    private var hostedContent: AnyView {
-        AnyView(content.environment(\.locale, locale).environment(\.colorScheme, colorScheme)
-            .environment(\.isEnabled, isEnabled)
-            .environment(\.layoutDirection, layoutDirection).environment(\.displayScale, displayScale)
-            .environment(\.font, font).environment(\.controlSize, controlSize)
-            .environment(\.dynamicTypeSize, dynamicTypeSize))
-    }
-    func makeNSView(context: Context) -> NativeMetronomePulseHost {
-        let host = NativeMetronomePulseHost(rootView: hostedContent)
-        host.bind(show, enabled: enabled)
-        return host
-    }
-    func updateNSView(_ host: NativeMetronomePulseHost, context: Context) {
-        host.rootView = hostedContent
-        host.bind(show, enabled: enabled)
-    }
-    static func dismantleNSView(_ host: NativeMetronomePulseHost, coordinator: ()) { host.stop() }
-}
-private final class NativeMetronomePulseHost: NSHostingView<AnyView> {
-    private weak var show: ShowController?
-    private var enabled = false
-    private var songID: UUID?
-    private var song: Song?
-    private var snapshotSubscription: AnyCancellable?
-    private var projectSubscription: AnyCancellable?
-    private var opacity: Float = 1
-    required init(rootView: AnyView) {
-        super.init(rootView: rootView)
-        // This control already has an explicit transport width and height.
-        if #available(macOS 13, *) { sizingOptions = [] }
-        if #available(macOS 13.3, *) { safeAreaRegions = [] }
-        wantsLayer = true; applyOpacity()
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    override var layer: CALayer? { didSet { applyOpacity() } }
-    private func applyOpacity() {
-        guard let layer else { return }
-        var actions = layer.actions ?? [:]
-        if !(actions["opacity"] is NSNull) { actions["opacity"] = NSNull(); layer.actions = actions }
-        if layer.opacity != opacity { layer.opacity = opacity }
-    }
-    func bind(_ show: ShowController, enabled: Bool) {
-        if self.show !== show {
-            snapshotSubscription = nil; projectSubscription = nil
-            self.show = show; refreshSong(show.snapshot)
-        }
-        self.enabled = enabled
-        observe(); paint(show.snapshot.transport)
-    }
-    private func refreshSong(_ snapshot: ShowSnapshot) {
-        songID = snapshot.transport.songId
-        song = snapshot.project.songs.first { $0.id == songID }
-    }
-    private func observe() {
-        guard window != nil, snapshotSubscription == nil, let show else { return }
-        snapshotSubscription = show.$snapshot.sink { [weak self] snapshot in
-            guard let self else { return }
-            if self.songID != snapshot.transport.songId { self.refreshSong(snapshot) }
-            self.paint(snapshot.transport)
-        }
-        // Project changes publish after storage changes. Cache the song once
-        // per edit/transition, rather than search the project on every tick.
-        projectSubscription = show.projectPresentation.objectWillChange.sink { [weak self, weak show] _ in
-            guard let self, let show else { return }
-            self.refreshSong(show.snapshot); self.paint(show.snapshot.transport)
-        }
-    }
-    private func paint(_ transport: TransportState) {
-        var bright = true
-        if enabled, transport.playing, let song, let window, window.isVisible, !window.isMiniaturized,
-           !isHiddenOrHasHiddenAncestor {
-            let section = song.tempoSection(at: transport.position)
-            let beat = max(0, transport.position - section.start) * section.bpm / 60 * Double(section.unit) / 4
-            bright = beat.truncatingRemainder(dividingBy: 1) < 0.35
-        }
-        opacity = bright ? 1 : 0.45
-        applyOpacity()
-    }
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window == nil { snapshotSubscription = nil; projectSubscription = nil; opacity = 1; applyOpacity() }
-        else if let show { refreshSong(show.snapshot); observe(); paint(show.snapshot.transport) }
-    }
-    override func viewDidHide() { super.viewDidHide(); if let show { paint(show.snapshot.transport) } }
-    override func viewDidUnhide() { super.viewDidUnhide(); if let show { paint(show.snapshot.transport) } }
-    func stop() {
-        snapshotSubscription = nil; projectSubscription = nil; show = nil; song = nil
-        opacity = 1; applyOpacity()
-    }
-}
-#endif
 struct MetronomeEditor: View {
     @ObservedObject private var settings = MetronomeSettings.shared
     @ObservedObject private var audio = AudioDeviceSettings.shared
