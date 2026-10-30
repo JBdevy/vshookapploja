@@ -15,6 +15,15 @@ public class RemoteTeleprompterTest {
   tp.remove("textStyled");assertEquals("LETRA RECEBIDA",view.styledText(tp,"text").toString());
   tp.put("chordsStyled","\u001eCatLiveText/1\n[{\"text\":\"Am G\",\"color\":5894}]");assertEquals("AM G",view.styledText(tp,"chords").toString());
  }
+ @Test public void twoColumnsKeepTheirTextAndFollowDisplayOrientation()throws Exception{
+  String first="\u001eCatLiveText/1\n"+new JSONArray().put(new JSONObject().put("text","Primeira").put("color",0xff4040));
+  tp.put("textStyled","\u001eCatLiveColumns/1\n"+new JSONArray().put(first).put("Segunda"));
+  assertArrayEquals(new String[]{first,"Segunda"},RemoteTeleprompter.lyricColumns(tp));
+  view.render(new RecordingCanvas());assertTrue(view.find("Primeira").area.bottom<view.find("Segunda").area.top);
+  assertTrue(view.find("Primeira").styled instanceof android.text.Spanned);
+  view.layout(0,0,900,500);view.render(new RecordingCanvas());assertTrue(view.find("Primeira").area.right<view.find("Segunda").area.left);
+  tp.put("textStyled","\u001eCatLiveColumns/1\n"+new JSONArray().put("Primeira").put(""));view.render(new RecordingCanvas());assertArrayEquals(new String[]{"Primeira",""},RemoteTeleprompter.lyricColumns(tp));
+ }
  @After public void close(){controller.pause().stop().destroy();}
  static class Text {CharSequence styled;String value;RectF area;float font;int color;boolean strike;Text(String v,RectF a,float f,int c,boolean s){value=v;area=new RectF(a);font=f;color=c;strike=s;}}
  class Probe extends RemoteTeleprompter {List<RectF> clockBoxes=new ArrayList<>();List<Float> clockWidths=new ArrayList<>();void clockText(Canvas c,String value,RectF area,float font,int color,boolean border,int borderColor,float width,boolean timer){clockBoxes.add(new RectF(area));clockWidths.add(width);super.clockText(c,value,area,font,color,border,borderColor,width,timer);}List<Text> drawn=new ArrayList<>();List<Integer> borders=new ArrayList<>();Probe(int index){super(RemoteTeleprompterTest.this.app,RemoteTeleprompterTest.this.app,index);}void drawText(Canvas c,CharSequence value,RectF a,float size,int color,boolean strong,Layout.Alignment align,int max){Text entry=new Text(value.toString(),a,size,color,text.isStrikeThruText());entry.styled=value;drawn.add(entry);}void stroke(Canvas c,RectF r,int color,float size){borders.add(color);}void render(Canvas canvas){drawn.clear();borders.clear();onDraw(canvas);}Text find(String value){for(Text t:drawn)if(t.value.contains(value))return t;return null;}}

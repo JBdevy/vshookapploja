@@ -337,7 +337,7 @@ import Combine
                 .id(edit.id)
             } }
         } else if let item = editingTextItem {
-            IpadCompactModal(preferredSize: CGSize(width: 560, height: 360), onDismiss: { editingTextItem = nil }) {
+            IpadCompactModal(preferredSize: CGSize(width: 736, height: 390), onDismiss: { editingTextItem = nil }) {
                 TextItemEditor(text: show.current?.tracks.flatMap(\.clips).first(where: { $0.id == item })?.text ?? "",
                     apply: { show.updateTextItem(item, text: $0) }, close: { editingTextItem = nil })
             }

@@ -1851,3 +1851,10 @@
 "Unlearn MIDI" = "Unlearn MIDI";
 
 "Delete instrument" = "Delete";
+
+"2 columns" = "2 columns";
+"Return to Default?" = "Return to Default?";
+"Remove second column" = "Remove second column";
+"The text in the second column must be removed to continue." = "The text in the second column must be removed to continue.";
+
+"Default text layout" = "Default";

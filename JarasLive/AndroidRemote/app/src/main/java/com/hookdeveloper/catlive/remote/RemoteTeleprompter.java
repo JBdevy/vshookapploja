@@ -30,10 +30,28 @@ class RemoteTeleprompter extends View {
         for(Decoration d:below){d.draw(c,new RectF(outer,lower,getWidth()-outer,lower+d.height));lower+=d.height+dp(3);}
         if(preview){preview(c,tp,new RectF(outer,top,getWidth()-outer,bottom));windowBorder(c,outer);return;}
         fontFace=family(string("fontFamily","font","system"));
-        CharSequence styledLyrics=styledText(tp,"text");String lyrics=styledLyrics.toString();if(!lyrics.trim().isEmpty()){String[] lines=lyrics.split("\\n",-1);int longest=1;for(String line:lines)longest=Math.max(longest,line.length());float font=(float)Math.max(1,Math.min((getWidth()-dp(12))/(longest*.64),(bottom-top-dp(12))/(Math.max(1,lines.length)*1.2))*number("textScale",100)/100);
-        String align=string("textAlignment","textAlignment","center");RectF lyricArea=new RectF(outer,top,getWidth()-outer,bottom);drawText(c,styledLyrics,inset(lyricArea,dp(6)),font,color("textColor","textColor",0xffea00),true,align.equals("left")?Layout.Alignment.ALIGN_NORMAL:align.equals("right")?Layout.Alignment.ALIGN_OPPOSITE:Layout.Alignment.ALIGN_CENTER,0);if(flag("textBoxEnabled","textBox",true))stroke(c,lyricArea,border("textBoxColor","textBoxColor",0xffea00,"rgbTextBoxBorderEnabled"),2);}
+        String[] columns=lyricColumns(tp);
+        RectF full=new RectF(outer,top,getWidth()-outer,bottom);
+        for(int i=0;i<columns.length;i++){
+            RectF area=new RectF(full);
+            if(columns.length==2){if(getWidth()>=getHeight()){float width=(full.width()-dp(8))/2;area.left+=i*(width+dp(8));area.right=area.left+width;}else{float height=(full.height()-dp(8))/2;area.top+=i*(height+dp(8));area.bottom=area.top+height;}}
+            JSONObject value=new JSONObject();try{value.put("text",columns[i]);value.put("textStyled",columns[i]);}catch(JSONException ignored){}
+            CharSequence styledLyrics=columns.length==1?styledText(tp,"text"):styledText(value,"text");String lyrics=styledLyrics.toString();
+            if(!lyrics.isEmpty()||columns.length==2){String[] lines=lyrics.split("\\n",-1);int longest=1;for(String line:lines)longest=Math.max(longest,line.length());float font=(float)Math.max(1,Math.min((area.width()-dp(12))/(longest*.64),(area.height()-dp(12))/(Math.max(1,lines.length)*1.2))*number("textScale",100)/100);
+                String align=string("textAlignment","textAlignment","center");drawText(c,styledLyrics,inset(area,dp(6)),font,color("textColor","textColor",0xffea00),true,align.equals("left")?Layout.Alignment.ALIGN_NORMAL:align.equals("right")?Layout.Alignment.ALIGN_OPPOSITE:Layout.Alignment.ALIGN_CENTER,0);
+                if(flag("textBoxEnabled","textBox",true))stroke(c,area,border("textBoxColor","textBoxColor",0xffea00,"rgbTextBoxBorderEnabled"),2);
+            }
+        }
         windowBorder(c,outer);
         drawNotice(c,s.optJSONObject("notices"));
+    }
+    static String[] lyricColumns(JSONObject tp){
+        String encoded=tp.optString("textStyled"),prefix="\u001eCatLiveColumns/1\n";
+        if(encoded.startsWith(prefix)&&encoded.length()<=262144)try{
+            JSONArray values=new JSONArray(encoded.substring(prefix.length()));
+            if(values.length()==2&&values.get(0) instanceof String&&values.get(1) instanceof String&&!values.getString(0).startsWith(prefix)&&!values.getString(1).startsWith(prefix))return new String[]{values.getString(0),values.getString(1)};
+        }catch(JSONException ignored){}
+        return new String[]{tp.optString("text")};
     }
     CharSequence styledText(JSONObject tp,String key){
         String encoded=tp.optString(key+"Styled"),prefix="\u001eCatLiveText/1\n";

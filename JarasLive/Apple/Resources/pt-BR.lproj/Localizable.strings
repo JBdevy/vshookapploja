@@ -1885,3 +1885,10 @@
 "Unlearn MIDI" = "Remover mapeamento MIDI";
 
 "Delete instrument" = "Deletar";
+
+"2 columns" = "2 colunas";
+"Return to Default?" = "Voltar para Default?";
+"Remove second column" = "Remover segunda coluna";
+"The text in the second column must be removed to continue." = "O texto da segunda coluna precisa ser removido para continuar.";
+
+"Default text layout" = "Default";

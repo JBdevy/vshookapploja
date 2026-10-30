@@ -51,8 +51,6 @@ MainActor.assumeIsolated {
     let defaultChords = pixels(colored)
     colored.chordsStyled = ItemTextColors.encode([.init(text: "Am", color: 0x54ef86), .init(text: " G")])
     precondition(pixels(colored) != defaultChords, "Selected chord colour must change the actual projection pixels")
-    print("TELEPROMPTER_COLORED_LYRICS_AND_CHORDS_RENDER_PIXELS_OK")
-    if ProcessInfo.processInfo.environment["CATLIVE_TP_TEST"] == "colors" { return }
     var spacious = TeleprompterSettings()
     spacious.clockEnabled = false; spacious.localClockEnabled = false
     spacious.songNameEnabled = false; spacious.queueNameEnabled = false
@@ -109,6 +107,33 @@ MainActor.assumeIsolated {
         content.blocks[0].rows[0].playbackProgress = 0.25
         precondition(pixels(content) != active, "Queued song has a yellow background, distinct from playing red")
     }
+    for position in ["left-top", "right-top", "left-bottom", "right-bottom"] {
+        var paired = base; paired.clockPosition = position; paired.localClockPosition = "left"
+        let original = pixels(fixture(paired))
+        paired.localClockPosition = "right"
+        precondition(pixels(fixture(paired)) == original, "Side clocks always occupy opposite halves")
+        paired.localClockScale = 25
+        precondition(pixels(fixture(paired)) == original, "Paired local clock follows timer scale")
+        paired.clockScale = 60
+        precondition(pixels(fixture(paired)) != original, "Timer scale changes the paired clocks")
+    }
+    do {
+        var settings = base
+        settings.songNameEnabled = true; settings.queueNameEnabled = true; settings.progressEnabled = true
+        let visible = pixels(fixture(settings, preview: true))
+        settings.songNameEnabled = false; settings.queueNameEnabled = false; settings.progressEnabled = false
+        precondition(pixels(fixture(settings, preview: true)) == visible, "Preview ignores titles and the global progress bar")
+        settings.isClear = true
+        precondition(pixels(fixture(settings, preview: true)) == visible, "Preview stays opaque and suppresses media even with Clear enabled")
+        settings = base; settings.localClockEnabled = false; settings.clockPosition = "left-top"
+        let soloTimer = pixels(fixture(settings))
+        settings.clockPosition = "right-top"
+        precondition(pixels(fixture(settings)) == soloTimer, "A lone timer is always centered")
+        settings.clockEnabled = false; settings.localClockEnabled = true; settings.localClockPosition = "left"
+        let soloLocal = pixels(fixture(settings))
+        settings.localClockPosition = "right"
+        precondition(pixels(fixture(settings)) == soloLocal, "A lone local clock is always centered")
+    }
     var checked = 0
     for index in 1...2 {
         for field in TPSettingField.all {
@@ -132,10 +157,10 @@ MainActor.assumeIsolated {
             checked += 1
         }
         for edge in ["left", "right"] {
-            base.clockPosition = edge + "-top"
+            base.clockPosition = "center-top"
             var next = base; next.localClockPosition = edge == "left" ? "right" : "left"
             base.localClockPosition = edge
-            precondition(pixels(fixture(base, index: index)) != pixels(fixture(next, index: index)), "local clock edge must not be overridden by timer edge")
+            precondition(pixels(fixture(base, index: index)) != pixels(fixture(next, index: index)), "the central timer preserves the local-clock edge preference")
         }
         for field in TPSettingField.all {
             guard case .choice(_, _, let path, let options) = field, field.id.hasSuffix("FontFamily") || field.id == "fontFamily" else { continue }
@@ -153,6 +178,34 @@ MainActor.assumeIsolated {
         var clear = base; clear.isClear = true
         var scaledClear = clear; scaledClear.mediaScale = 50
         precondition(pixels(fixture(clear, index: index)) != pixels(fixture(scaledClear, index: index)), "media scale also works in media-only mode")
+    }
+    for size in [CGSize(width: 800, height: 400), CGSize(width: 400, height: 800)] {
+        var settings = TeleprompterSettings(); settings.clockEnabled = false; settings.localClockEnabled = false
+        settings.songNameEnabled = false; settings.queueNameEnabled = false; settings.chordsEnabled = false
+        settings.windowBorderEnabled = false; settings.textBoxColor = 0x808080
+        let encoded = ItemTextColors.encodeColumns([
+            ItemTextColors.encode([.init(text: "FIRST", color: 0xff4040)]),
+            ItemTextColors.encode([.init(text: "SECOND", color: 0x54ef86)])])
+        var content = fixture(settings); content.text = ItemTextColors.plain(encoded); content.textStyled = encoded
+        let host = NSHostingView(rootView: TeleprompterProjectionLayout(content: content, fullscreen: false, timerValue: { ("", 1, false) }, media: { EmptyView() }))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; window.orderFrontRegardless()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08)); host.layoutSubtreeIfNeeded()
+        let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        var redX = 0.0, redY = 0.0, greenX = 0.0, greenY = 0.0, redCount = 0.0, greenCount = 0.0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.redComponent > 0.65 && color.redComponent > color.greenComponent * 1.5 { redX += Double(x); redY += Double(y); redCount += 1 }
+                if color.greenComponent > 0.6 && color.greenComponent > color.redComponent * 1.3 { greenX += Double(x); greenY += Double(y); greenCount += 1 }
+            }
+        }
+        if let png = bitmap.representation(using: .png, properties: [:]) { try! png.write(to: URL(fileURLWithPath: "/tmp/catlive124-columns-\(Int(size.width)).png")) }
+        precondition(redCount > 20 && greenCount > 20, "Both independently colored columns must be visible")
+        if size.width > size.height { precondition(redX/redCount < greenX/greenCount, "Landscape orders columns left to right") }
+        else { precondition(redY/redCount < greenY/greenCount, "Portrait orders columns top to bottom") }
+        window.orderOut(nil); window.contentView = nil; window.close()
     }
     let suite = "catlive-tp-live-test-" + UUID().uuidString
     let defaults = UserDefaults(suiteName: suite)!
@@ -181,5 +234,5 @@ MainActor.assumeIsolated {
     let reopened = TeleprompterPreferences(defaults: defaults)
     precondition(reopened.settings.textScale == 45 && reopened.selected == .night, "appearance survives reopening")
     reopened.select(.day); precondition(reopened.settings.textScale == 80, "day appearance survives reopening")
-    print("PASS: \(checked) rendered TP setting checks, same-edge clocks, clear-media scale, live updates, independent windows/presets and persistence")
+    print("PASS: \(checked) rendered TP setting checks, central and paired clocks, clear-media scale, live updates, independent windows/presets and persistence")
 }
