@@ -9,7 +9,7 @@ public struct TrackRole: Codable, Hashable, Sendable, RawRepresentable {
     public func encode(to encoder: Encoder) throws { var box = encoder.singleValueContainer(); try box.encode(rawValue) }
 }
 public struct AudioFile: Codable, Equatable, Sendable { public var path: String; public var sha256: String? }
-public struct AudioClip: Codable, Identifiable, Equatable, Sendable { public var id: UUID; public var name: String; public var startTime: Double; public var duration: Double; public var separatedStemTracks: [UUID]?; public var sourceOffset: Double = 0; public var waveform: [Double] = []; public var audioFile: AudioFile?; public var gain: Double?; public var phaseInverted: Bool? = nil; public var pan: Double? = nil; public var normalizationGain: Double?; public var fadeIn: Double?; public var fadeOut: Double?; public var fadeInCurve: Double? = nil; public var fadeInSCurve: Double? = nil; public var fadeOutCurve: Double? = nil; public var fadeOutSCurve: Double? = nil;  public var fadeTimelineStart: Double?; public var fadeTimelineDuration: Double?; public var channelMode: Int?; public var waveformChannels: [[Double]]?; public var muted: Bool?; public var playbackRate: Double?; public var recordingLane: Int?; public var loopStart: Double?; public var loopLength: Double?; public var fx: NativeFXSettings?; public var timecode: TimecodeSettings?; public var timecodeStartOffset: Double?; public var timecodeEndOffset: Double?; public var fxBypassed: Bool?; public var text: String?; public var midi: MIDIItem?; public var frozenMIDI: Bool?; public var renderedTiming: Bool?; public var pitchSemitones: Double? = nil; public var regionOwnerID: UUID? = nil; public var automation: TrackAutomation? = nil; public var automationSourceOffset: Double? = nil; public var tempoBasePlaybackRate: Double? = nil; public var renderedTempo: Bool? = nil; public var audioRate: Double { playbackRate ?? 1 } }
+public struct AudioClip: Codable, Identifiable, Equatable, Sendable { public var id: UUID; public var name: String; public var startTime: Double; public var duration: Double; public var separatedStemTracks: [UUID]?; public var sourceOffset: Double = 0; public var waveform: [Double] = []; public var audioFile: AudioFile?; public var gain: Double?; public var phaseInverted: Bool? = nil; public var pan: Double? = nil; public var normalizationGain: Double?; public var fadeIn: Double?; public var fadeOut: Double?; public var fadeInCurve: Double? = nil; public var fadeInSCurve: Double? = nil; public var fadeOutCurve: Double? = nil; public var fadeOutSCurve: Double? = nil;  public var fadeTimelineStart: Double?; public var fadeTimelineDuration: Double?; public var channelMode: Int?; public var waveformChannels: [[Double]]?; public var muted: Bool?; public var playbackRate: Double?; public var recordingLane: Int?; public var loopStart: Double?; public var loopLength: Double?; public var fx: NativeFXSettings?; public var timecode: TimecodeSettings?; public var timecodeStartOffset: Double?; public var timecodeEndOffset: Double?; public var fxBypassed: Bool?; public var text: String?; public var midi: MIDIItem?; public var frozenMIDI: Bool?; public var renderedTiming: Bool?; public var pitchSemitones: Double? = nil; public var regionOwnerID: UUID? = nil; public var automation: TrackAutomation? = nil; public var automationSourceOffset: Double? = nil; public var tempoBasePlaybackRate: Double? = nil; public var renderedTempo: Bool? = nil; public var clickDouble: Bool? = nil; public var audioRate: Double { playbackRate ?? 1 } }
 public extension AudioClip {
     var isProjectionMedia: Bool { audioFile?.path.hasPrefix("Videos/") == true }
     var isImage: Bool { isProjectionMedia && ["png", "jpg", "jpeg", "gif", "heic", "heif", "tif", "tiff", "bmp", "webp", "avif"].contains(URL(fileURLWithPath: audioFile?.path ?? "").pathExtension.lowercased()) }
@@ -423,6 +423,7 @@ public struct RegionSetlist: Codable, Equatable, Sendable {
     public var automaticSubplay: Bool?
     public var automaticSubplaySeconds: Double?
     public var automaticSubplayBars: Int?
+    public var subplayExclusiveTrackIDs: [UUID]?
     public var automaticSubplayNext: Bool?
     public var subplayLeadSelection: Int {
         if automaticSubplayNext == true { return 11 }
@@ -808,6 +809,8 @@ public struct SubPlayState: Codable, Equatable, Sendable { public var playing: B
 public struct TransportState: Codable, Equatable, Sendable {
     public var playbackStartRegionId: UUID? = nil
     public var subPlaybackStartRegionId: UUID? = nil
+    public var exclusivePlaybackRegionId: UUID? = nil
+    public var subExclusivePlaybackRegionId: UUID? = nil
     public var multiLoopsBypassed: Bool? = nil
     public var queuedSectionMarkerId: UUID?
     public var automaticSectionTriggerId: UUID? = nil
@@ -900,6 +903,12 @@ public extension Song {
             return playbackRegionStart(part)
         }
         return regionOwnershipInitialized == true ? nil : clip.startTime
+    }
+    func allowsExclusiveSubplay(_ transport: TransportState, head: Int, track: UUID, owner: UUID?, selectedTracks: Set<UUID>) -> Bool {
+        guard head != 2, selectedTracks.contains(track), let owner else { return true }
+        if head == 0, transport.subPlay.playing, transport.subExclusivePlaybackRegionId != nil { return false }
+        guard let required = head == 0 ? transport.exclusivePlaybackRegionId : transport.subExclusivePlaybackRegionId else { return true }
+        return owner == required
     }
     func playbackScope(_ transport: TransportState, head: Int = 0, destination: Double? = nil) -> PlaybackScope {
         let entry: UUID?
@@ -1308,5 +1317,32 @@ public enum ItemTextColors {
         guard merged.contains(where: { $0.color != nil }), let data = try? encoder.encode(merged),
               let json = String(data: data, encoding: .utf8) else { return merged.map(\.text).joined() }
         return prefix + json
+    }
+}
+
+/// Presentation only: never changes the project timeline or a saved playlist.
+public enum SetlistDisplayOrder {
+    public static func sorted<T>(_ values: [T], mode: Int, name: (T) -> String, start: (T) -> Double) -> [T] {
+        values.enumerated().sorted { a, b in
+            if mode != 0 {
+                let result = name(a.element).compare(name(b.element), options: [.numeric, .caseInsensitive, .diacriticInsensitive], locale: .current)
+                if result != .orderedSame { return mode == 1 ? result == .orderedAscending : result == .orderedDescending }
+            }
+            if start(a.element) != start(b.element) { return start(a.element) < start(b.element) }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
+    public static func entries(_ entries: [SetlistEntry], mode: Int) -> [SetlistEntry] {
+        var groups: [(part: Part, blocks: [SetlistEntry])] = []
+        var pending: [SetlistEntry] = []
+        for entry in entries {
+            switch entry {
+            case .block: pending.append(entry)
+            case .region(let part, _): groups.append((part, pending)); pending = []
+            }
+        }
+        return sorted(groups, mode: mode, name: { $0.part.name }, start: { $0.part.startTime }).enumerated().flatMap {
+            $0.element.blocks + [.region($0.element.part, number: $0.offset + 1)]
+        } + pending
     }
 }

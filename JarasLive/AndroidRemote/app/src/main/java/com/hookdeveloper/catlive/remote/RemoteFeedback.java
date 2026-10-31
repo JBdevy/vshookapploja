@@ -49,6 +49,9 @@ final class RemoteFeedback {
    case "tempo":f="bpm";desired=value;break;
    case "clipMute":s="clips";f="muted";break;
    case "noticePin":s="notices";f="pinned";desired=enabled;break;
+   case "noticePinStopped":
+    JSONObject notices=state.optJSONObject("notices");if(enabled==null||notices==null||!notices.has("pinWhenStopped"))return false;
+    s="notices";f="pinWhenStopped";desired=enabled;break;
    case "noticeDestination":s="notices";f="window"+(int)value;desired=enabled;break;
    case "cancelSection":s="sectionPlayback";f="queuedMarker";desired=JSONObject.NULL;break;
    case "queueSection":s="sectionPlayback";f="queuedMarker";desired=id;id="";break;

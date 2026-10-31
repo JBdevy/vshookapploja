@@ -37,6 +37,8 @@ void Engine::commitProjectEdit(Project project) {
     if (!region(transport_.regionId)) { transport_.regionId.reset(); transport_.loop.enabled = false; }
     refreshAutomaticRegionQueue();
     if (!region(transport_.queuedRegionId)) { transport_.queuedRegionId.reset(); transport_.queuedPlaylistEntryId.reset(); autoRegionQueue_ = false; }
+    if(!region(transport_.exclusivePlaybackRegionId)) transport_.exclusivePlaybackRegionId.reset();
+    if(!region(transport_.subExclusivePlaybackRegionId)) transport_.subExclusivePlaybackRegionId.reset();
     syncRegion(); autoQueueRegion(); refreshMultiLoop();
 }
 std::vector<ID> Engine::order() const {
@@ -55,6 +57,7 @@ void Engine::select(const ID& id) {
     playStart_ = transport_.playing ? std::optional<double>(0) : std::nullopt; subPlayStart_.reset();
     clearIgnoreNext();
     transport_.regionId.reset(); transport_.playlistEntryId.reset(); transport_.queuedRegionId.reset(); transport_.queuedPlaylistEntryId.reset(); autoRegionQueue_ = false;
+    transport_.exclusivePlaybackRegionId.reset(); transport_.subExclusivePlaybackRegionId.reset();
     transport_.songId = id; transport_.playbackStartRegionId = playbackEntryRegion(*found, 0); transport_.subPlaybackStartRegionId.reset(); transport_.position = 0; transport_.editPosition = 0; transport_.queue.songId.reset(); transport_.subPlay = {}; manualSubCursor_ = false; automaticSubplayActive_ = false;
 }
 std::optional<ID> Engine::nextSongId() const {
@@ -236,6 +239,8 @@ void Engine::promoteSubPlay(std::optional<ID> preferredRegion) {
     transport_.regionId = std::move(preferredRegion);
     transport_.playlistEntryId = queuedEntry;
     playStart_ = subPlayStart_.value_or(transport_.position);
+    transport_.exclusivePlaybackRegionId = transport_.subExclusivePlaybackRegionId;
+    transport_.subExclusivePlaybackRegionId.reset();
     transport_.playbackStartRegionId = transport_.subPlaybackStartRegionId;
     transport_.subPlaybackStartRegionId.reset();
     transport_.subPlay.playing = false;
@@ -426,6 +431,7 @@ void Engine::moveClip(const ID& clipId, double start, const ID& destination) {
             if (!mediaTransfer && !fixedTrackName(track.role).empty() && target->id != track.id) throw std::invalid_argument("Special items can only move horizontally on their own track");
             if (!mediaTransfer && fixedTrackName(track.role) != fixedTrackName(target->role)) throw std::invalid_argument("Items must stay on a compatible track");
             if (track.role.id == "timecode" && !projectionMedia) throw std::invalid_argument("Timecode items follow their regions");
+            if (track.role.id == "generatedClick" && !projectionMedia) throw std::invalid_argument("Click items follow their regions");
             auto clip = *it;
             clip.startTime = start;
             clip.regionOwnerID = regionOwnerAt(song, start);
@@ -780,6 +786,7 @@ void Engine::pasteItems(const ID& songID, std::vector<Track> tracks, bool moving
         if (target == song->tracks.end() || source.clips.empty()) throw std::invalid_argument("Invalid destination track");
         if (target->role.id == "timecode" && std::any_of(source.clips.begin(), source.clips.end(), [](const auto& clip) { return !clip.audioFile || clip.audioFile->path.rfind("Videos/", 0) != 0; })) throw std::invalid_argument("Timecode items cannot be pasted");
         for (const auto& clip : source.clips) {
+            if (target->role.id == "generatedClick" && (!clip.audioFile || clip.audioFile->path.rfind("Videos/", 0) != 0)) throw std::invalid_argument("Invalid destination track");
             if (!identifiers.insert(clip.id).second) throw std::invalid_argument("Duplicate pasted item");
             if (moving) {
                 auto item = std::find_if(target->clips.begin(), target->clips.end(), [&](const auto& value) { return value.id == clip.id; });
@@ -1217,6 +1224,7 @@ void Engine::execute(const Command& c) {
             if (!transport_.playing && !transport_.paused) {
                 transport_.position = transport_.editPosition;
                 if (transport_.position >= currentSong()->duration) transport_.position = 0;
+                transport_.exclusivePlaybackRegionId.reset();
                 playStart_ = transport_.position;
                 transport_.playbackStartRegionId = playbackEntryRegion(*currentSong(), transport_.position);
             }
@@ -1237,8 +1245,8 @@ void Engine::execute(const Command& c) {
             transport_.subPlay.playing = true;
         }
         break;
-    case CommandKind::subStop: automaticSubplayActive_ = false; transport_.subPlay.playing = false; if (subPlayStart_) transport_.subPlay.position = *subPlayStart_; subPlayStart_.reset(); break;
-    case CommandKind::subSeek: manualSubCursor_ = true; automaticSubplayActive_ = false; if (currentSong()) { transport_.subPlay.position = std::max(0.0, c.value); transport_.subPlaybackStartRegionId = playbackEntryRegion(*currentSong(), transport_.subPlay.position); } break;
+    case CommandKind::subStop: transport_.subExclusivePlaybackRegionId.reset(); automaticSubplayActive_ = false; transport_.subPlay.playing = false; if (subPlayStart_) transport_.subPlay.position = *subPlayStart_; subPlayStart_.reset(); break;
+    case CommandKind::subSeek: transport_.subExclusivePlaybackRegionId.reset(); manualSubCursor_ = true; automaticSubplayActive_ = false; if (currentSong()) { transport_.subPlay.position = std::max(0.0, c.value); transport_.subPlaybackStartRegionId = playbackEntryRegion(*currentSong(), transport_.subPlay.position); } break;
     case CommandKind::stopAll: execute({CommandKind::subStop}); execute({CommandKind::stop}); break;
     case CommandKind::stop:
         automaticSubplayQueue_.reset();
@@ -1271,7 +1279,7 @@ void Engine::execute(const Command& c) {
             }
         }
         break;
-    case CommandKind::seek: clearIgnoreNext(); if (currentSong()) { transport_.position = std::clamp(c.value, 0.0, currentSong()->duration); transport_.editPosition = transport_.position; transport_.playbackStartRegionId = playbackEntryRegion(*currentSong(), transport_.position); transport_.regionId.reset(); transport_.playlistEntryId.reset(); transport_.queuedRegionId.reset(); transport_.queuedPlaylistEntryId.reset(); autoRegionQueue_ = false; syncRegion(); refreshMultiLoop(); } break;
+    case CommandKind::seek: transport_.exclusivePlaybackRegionId.reset(); clearIgnoreNext(); if (currentSong()) { transport_.position = std::clamp(c.value, 0.0, currentSong()->duration); transport_.editPosition = transport_.position; transport_.playbackStartRegionId = playbackEntryRegion(*currentSong(), transport_.position); transport_.regionId.reset(); transport_.playlistEntryId.reset(); transport_.queuedRegionId.reset(); transport_.queuedPlaylistEntryId.reset(); autoRegionQueue_ = false; syncRegion(); refreshMultiLoop(); } break;
     case CommandKind::loopStart:
         if (!std::isfinite(c.value) || c.value < 0) throw std::invalid_argument("Invalid loop start");
         transport_.loop.start = c.value; break;
@@ -1622,6 +1630,8 @@ void Engine::advanceContinuous(double elapsed, const TimelineMarker* sectionDest
                 execute({CommandKind::subPlay});
                 automaticSubplayQueue_ = queued->id;
                 automaticSubplayActive_ = true;
+                if(project_.regionSetlist->subplayExclusiveTrackIDs && !project_.regionSetlist->subplayExclusiveTrackIDs->empty())
+                    transport_.subExclusivePlaybackRegionId = transport_.subPlaybackStartRegionId.value_or(queued->id);
                 subElapsed = std::max(0.0, elapsed - std::max(0.0, trigger - transport_.position));
             }
         }
@@ -1632,6 +1642,12 @@ void Engine::advanceContinuous(double elapsed, const TimelineMarker* sectionDest
     if (!transport_.playing) return;
     if (sectionDestination) {
         const double destination = sectionDestination->position;
+        if(transport_.exclusivePlaybackRegionId) {
+            const auto* target=region(sectionDestination->regionOwnerID);
+            if(!target) target=region(sectionDestination->id);
+            if(!target) target=sectionRegion(destination);
+            if(!target || target->id!=*transport_.exclusivePlaybackRegionId) transport_.exclusivePlaybackRegionId.reset();
+        }
         transport_.queuedSectionMarkerId.reset(); transport_.automaticSectionTriggerId.reset();
         resetMultiLoop(); clearIgnoreNext();
         if (const auto* queued = region(transport_.queuedRegionId); queued && destination >= queued->startTime && destination < queued->endTime) {
@@ -1698,6 +1714,7 @@ void Engine::advanceContinuous(double elapsed, const TimelineMarker* sectionDest
             transport_.position = start; transport_.editPosition = start; transport_.regionId = id;
             transport_.playlistEntryId = transport_.queuedPlaylistEntryId;
             playStart_ = start;
+            transport_.exclusivePlaybackRegionId.reset();
             transport_.playbackStartRegionId = playbackEntryRegion(*song, start);
             transport_.queuedRegionId.reset(); transport_.queuedPlaylistEntryId.reset(); autoRegionQueue_ = false;
             if (project_.regionSetlist && project_.regionSetlist->prepareWithoutPlayback.value_or(false)) {
@@ -1725,6 +1742,10 @@ void Engine::advanceContinuous(double elapsed, const TimelineMarker* sectionDest
         break;
     }
     transport_.position += elapsed;
+    if(transport_.exclusivePlaybackRegionId) {
+        const auto* owner=region(transport_.exclusivePlaybackRegionId);
+        if(!owner || transport_.position>=owner->endTime) transport_.exclusivePlaybackRegionId.reset();
+    }
     refreshMultiLoop();
     syncRegion();
     if (transport_.position < song->duration) return;
@@ -1878,7 +1899,7 @@ bool Engine::applyProjectSync(projectSync::Frame frame, double elapsed, bool fir
         return !id || (song && std::any_of(song->parts.begin(),song->parts.end(),[&](const auto &p){ return p.id==*id; }));
     };
     if(!regionExists(t.regionId) || !regionExists(t.queuedRegionId) || !regionExists(t.playbackStartRegionId) ||
-       !regionExists(t.subPlaybackStartRegionId) || !regionExists(t.ignoreNextRegionId))
+       !regionExists(t.subPlaybackStartRegionId) || !regionExists(t.ignoreNextRegionId) || !regionExists(t.exclusivePlaybackRegionId) || !regionExists(t.subExclusivePlaybackRegionId))
         throw std::invalid_argument("Project Sync: project regions do not match.");
     if(t.queuedSectionMarkerId && (!song || !song->markers || !std::any_of(song->markers->begin(),song->markers->end(),[&](const auto &m){return m.id==*t.queuedSectionMarkerId;})))
         throw std::invalid_argument("Project Sync: project markers do not match.");

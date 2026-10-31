@@ -2,6 +2,17 @@ package com.hookdeveloper.catlive.remote;
 import org.json.*;import org.junit.*;import static org.junit.Assert.*;
 public class RemoteFeedbackTest {
  JSONObject host()throws Exception{return new JSONObject("{\"project\":\"P\",\"song\":\"S\",\"tracks\":[{\"id\":\"T\",\"mute\":false,\"solo\":false,\"clips\":[{\"id\":\"C\",\"muted\":false}]}],\"masterMono\":false,\"loop\":false,\"regionAuto\":false,\"multiLoopsBypassed\":false,\"setlistLiveEnabled\":false,\"previewActive\":false,\"bpm\":140}");}
+ @Test public void stoppedNoticePinRespondsLocallyAndReconcilesRapidToggles()throws Exception{
+  JSONObject host=host().put("notices",new JSONObject().put("pinWhenStopped",false).put("stoppedNoticeActive",false));RemoteFeedback f=new RemoteFeedback();
+  assertTrue(f.record(host,"noticePinStopped",null,-1,true,0));assertTrue(f.overlay(host).getJSONObject("notices").getBoolean("pinWhenStopped"));assertFalse(host.getJSONObject("notices").getBoolean("pinWhenStopped"));
+  f.record(f.overlay(host),"noticePinStopped",null,-1,false,10);assertFalse(f.receive(host,20).getJSONObject("notices").getBoolean("pinWhenStopped"));
+  host.getJSONObject("notices").put("pinWhenStopped",true);assertFalse(f.receive(host,30).getJSONObject("notices").getBoolean("pinWhenStopped"));
+  host.getJSONObject("notices").put("pinWhenStopped",false);assertSame(host,f.receive(host,40));assertTrue(f.pending.isEmpty());
+ }
+ @Test public void stoppedNoticePinDoesNotInventSupportOnLegacyHosts()throws Exception{
+  JSONObject host=host().put("notices",new JSONObject().put("pinned",false));RemoteFeedback f=new RemoteFeedback();
+  assertFalse(f.record(host,"noticePinStopped",null,0,true,0));assertFalse(f.overlay(host).getJSONObject("notices").has("pinWhenStopped"));
+ }
  @Test public void trackTogglesAreImmediateAndDoNotMutateHost()throws Exception{JSONObject host=host();RemoteFeedback f=new RemoteFeedback();assertTrue(f.record(host,"mute","T",0,null,0));JSONObject shown=f.overlay(host);assertTrue(shown.getJSONArray("tracks").getJSONObject(0).getBoolean("mute"));assertFalse(host.getJSONArray("tracks").getJSONObject(0).getBoolean("mute"));assertTrue(f.receive(host,100).getJSONArray("tracks").getJSONObject(0).getBoolean("mute"));host.getJSONArray("tracks").getJSONObject(0).put("mute",true);assertSame(host,f.receive(host,200));assertTrue(f.pending.isEmpty());}
  @Test public void rapidOppositeClicksIgnoreInitialAndIntermediateEchoes()throws Exception{JSONObject host=host();RemoteFeedback f=new RemoteFeedback();f.record(host,"solo","T",0,null,0);f.record(f.overlay(host),"solo","T",0,null,10);assertFalse(f.receive(host,20).getJSONArray("tracks").getJSONObject(0).getBoolean("solo"));assertFalse(f.pending.isEmpty());host.getJSONArray("tracks").getJSONObject(0).put("solo",true);assertFalse(f.receive(host,30).getJSONArray("tracks").getJSONObject(0).getBoolean("solo"));host.getJSONArray("tracks").getJSONObject(0).put("solo",false);assertSame(host,f.receive(host,40));assertTrue(f.pending.isEmpty());}
  @Test public void unconfirmedControlsExpireAndProjectChangesClearPending()throws Exception{JSONObject host=host();RemoteFeedback f=new RemoteFeedback();f.record(host,"toggleLoop",null,0,null,0);assertTrue(f.receive(host,1999).getBoolean("loop"));assertFalse(f.receive(host,2001).getBoolean("loop"));f.record(host,"masterMono",null,0,null,2010);host.put("project","OTHER");assertFalse(f.receive(host,2011).getBoolean("masterMono"));assertTrue(f.pending.isEmpty());}

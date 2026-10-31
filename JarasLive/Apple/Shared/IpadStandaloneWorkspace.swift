@@ -268,6 +268,15 @@ import Combine
         func command(_ title: String, _ action: @escaping () -> Void) -> IpadItemMenuCommand {
             IpadItemMenuCommand(title: JarasLocalization.string(title), action: action)
         }
+        if track.kind == .click, clip.audioFile == nil {
+            var actions = [command(clip.clickDouble == true ? "1x" : "2x", { show.toggleClickDouble(id) })]
+            let position = show.snapshot.transport.editPosition ?? show.snapshot.transport.position
+            if position > clip.startTime, position < clip.startTime + clip.duration {
+                actions.append(command("Split", { show.splitItems(ids, at: position) }))
+            }
+            actions.append(IpadItemMenuCommand(title: JarasLocalization.string("Delete"), destructive: true, action: { show.deleteItems(ids) }))
+            return actions
+        }
         var actions: [IpadItemMenuCommand] = []
         if ids.count == 1, clip.midi != nil || (clip.audioFile ?? track.audioFile) != nil {
             actions.append(command("Editar nome", { open("name") }))
@@ -507,6 +516,34 @@ struct TPNoticeAppearance: Codable {
     private var slot = -1
     @Published private(set) var message = ""
     @Published private(set) var pinned = false
+    @Published private(set) var pinWhenStopped = false
+    private(set) var stoppedNoticeActive = false
+    private var playbackRunning = false
+    private var stoppedText = ""
+    private var stoppedSlot = -1
+    func setPinWhenStopped(_ enabled: Bool, text: String? = nil, selectedSlot: Int? = nil) {
+        pinWhenStopped = enabled
+        if enabled {
+            stoppedText = String((text ?? draft).prefix(500)); stoppedSlot = selectedSlot ?? slot
+            if !playbackRunning { presentStoppedNotice() }
+        } else if stoppedNoticeActive { clear() }
+    }
+    func observeTransport(playing: Bool) {
+        guard playing != playbackRunning else { return }
+        playbackRunning = playing
+        if playing { if stoppedNoticeActive { clear() } }
+        else if pinWhenStopped { presentStoppedNotice() }
+    }
+    private func presentStoppedNotice() {
+        let previousDraft = draft, previousSlot = slot
+        draft = stoppedText; slot = stoppedSlot
+        defer { draft = previousDraft; slot = previousSlot }
+        if send() {
+            stoppedNoticeActive = true; pinned = true
+            schedule(seconds: 20)
+        }
+    }
+
     @Published private(set) var sentAt = Date.distantPast
     private(set) var remoteImage: String?
     private var deadline: Date?
@@ -531,6 +568,7 @@ struct TPNoticeAppearance: Codable {
         let image = slot >= 0 ? images[slot].flatMap { UIImage(data: $0) == nil ? nil : $0 } : nil
         guard !text.isEmpty || image != nil else { return false }
         remoteImage = image.map { "data:image/jpeg;base64," + $0.base64EncodedString() }
+        stoppedNoticeActive = false
         message = text; sentAt = Date(); pausedRemaining = 20
         schedule(seconds: 20)
         return true
@@ -549,6 +587,7 @@ struct TPNoticeAppearance: Codable {
         if active { schedule(seconds: remaining) }
     }
     func clear() {
+        stoppedNoticeActive = false
         expiry?.cancel(); expiry = nil; remoteImage = nil; deadline = nil
         message = ""; pinned = false
     }
@@ -1508,8 +1547,28 @@ struct IpadLeadOptions: View {
 @MainActor struct IpadAutoQueueEditor: View {
     @ObservedObject var show: ShowController
     let close: () -> Void
+    @State private var choosingTracks = false
+    @State private var trackDraft = Set<UUID>()
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if choosingTracks {
+                Text("Choose tracks").font(.jarasHeadline)
+                Text("On these tracks, automatic Subplay stops items from the previous song and keeps only the incoming song's items.")
+                    .font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(show.current?.tracks.filter { $0.kind == .standard || $0.kind == .click } ?? []) { track in
+                            Toggle(isOn: Binding(get: { trackDraft.contains(track.id) }, set: { enabled in
+                                if enabled { trackDraft.insert(track.id) } else { trackDraft.remove(track.id) }
+                            })) { Text(verbatim: track.name) }
+                        }
+                    }.padding(4)
+                }.frame(maxHeight: 280)
+                HStack {
+                    Button("Cancel") { choosingTracks = false }; Spacer()
+                    Button("Apply") { show.setSubplayExclusiveTracks(trackDraft); choosingTracks = false }
+                }
+            } else {
             Text("AUTO").font(.jarasHeadline)
             Toggle("Run queue until the end of the block", isOn: Binding(get: { show.regionSetlist.autoUntilBlockEnd == true }, set: { show.setAutoUntilBlockEnd($0) }))
             Toggle("Without playback", isOn: Binding(get: { show.regionSetlist.preparesWithoutPlayback }, set: { show.setPrepareWithoutPlayback($0) }))
@@ -1521,8 +1580,13 @@ struct IpadLeadOptions: View {
                     else { show.setAutomaticSubplay(enabled, seconds: value % 2 == 1 ? Double((value + 1) / 2) : nil, bars: value % 2 == 0 ? value / 2 : nil) }
                 })) { IpadLeadOptions(); Text(verbatim: "Next").tag(11) }
                     .pickerStyle(.menu).disabled(show.regionSetlist.automaticSubplay != true)
+                Button("Choose tracks") {
+                    trackDraft = Set(show.regionSetlist.subplayExclusiveTrackIDs ?? [])
+                    choosingTracks = true
+                }
             }
             HStack { Spacer(); Button("Close", action: close) }
+            }
         }.padding(18).frame(width: 320)
     }
 }

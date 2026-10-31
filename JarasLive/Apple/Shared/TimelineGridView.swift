@@ -377,7 +377,7 @@ private struct TimelineGridContent: View, Equatable {
                         song.tracks.enumerated().flatMap { index, track -> [GridSelectionItem] in
                         let y = rulerHeight + rows.offsets[index]
                         return track.clips.map { clip in
-                            GridSelectionItem(id: clip.id, rect: CGRect(x: clip.startTime, y: y + rows.itemLaneOffset(clip.id, track: index) + 3, width: clip.duration, height: rows.itemLaneHeight(clip.id, track: index) - 6), gain: clip.gain ?? 1, phaseInverted: clip.phaseInverted == true, pan: clip.pan ?? 0, editable: track.kind == .standard || clip.isProjectionMedia, resizable: !show.timelineMovementLocked, movable: !show.timelineMovementLocked && (track.kind != .timecode || clip.isProjectionMedia), contextActions: track.kind == .standard || clip.isProjectionMedia, audioExportable: track.kind == .standard && clip.midi == nil && (clip.audioFile ?? track.audioFile) != nil, midiEditable: clip.midi != nil, textEditable: track.kind.isText && !clip.isProjectionMedia, name: renderMetadata.itemTitle(for: clip, track: track), muted: clip.muted == true, hasFX: !(clip.fx?.inserted.isEmpty ?? true), fxBypassed: clip.fxBypassed == true, duration: clip.duration, fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0, fadeInCurve: clip.fadeInCurve ?? 0, fadeInSCurve: clip.fadeInSCurve ?? 1, fadeOutCurve: clip.fadeOutCurve ?? 0, fadeOutSCurve: clip.fadeOutSCurve ?? 1, trackIndex: index, laneIndex: rows.lanes[index].localLane(for: clip.id), laneHeightRatio: rows.itemLaneRatio(clip.id, track: index))
+                            GridSelectionItem(id: clip.id, rect: CGRect(x: clip.startTime, y: y + rows.itemLaneOffset(clip.id, track: index) + 3, width: clip.duration, height: rows.itemLaneHeight(clip.id, track: index) - 6), gain: clip.gain ?? 1, phaseInverted: clip.phaseInverted == true, pan: clip.pan ?? 0, editable: track.kind == .standard || clip.isProjectionMedia, resizable: !show.timelineMovementLocked, movable: !show.timelineMovementLocked && ((track.kind != .timecode && track.kind != .click) || clip.isProjectionMedia), contextActions: track.kind == .standard || track.kind == .click || clip.isProjectionMedia, audioExportable: track.kind == .standard && clip.midi == nil && (clip.audioFile ?? track.audioFile) != nil, midiEditable: clip.midi != nil, textEditable: track.kind.isText && !clip.isProjectionMedia, clickDouble: track.kind == .click && clip.audioFile == nil ? clip.clickDouble == true : nil, name: renderMetadata.itemTitle(for: clip, track: track), muted: clip.muted == true, hasFX: !(clip.fx?.inserted.isEmpty ?? true), fxBypassed: clip.fxBypassed == true, duration: clip.duration, fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0, fadeInCurve: clip.fadeInCurve ?? 0, fadeInSCurve: clip.fadeInSCurve ?? 1, fadeOutCurve: clip.fadeOutCurve ?? 0, fadeOutSCurve: clip.fadeOutSCurve ?? 1, trackIndex: index, laneIndex: rows.lanes[index].localLane(for: clip.id), laneHeightRatio: rows.itemLaneRatio(clip.id, track: index))
                         }
                     }
                     }
@@ -995,7 +995,7 @@ private struct TimelineGridContent: View, Equatable {
             let pixelsPerSecond = projection.pixelsPerSecond
 
             guard movingClip == nil || movingClip == id,
-                  !originalSong.tracks.contains(where: { $0.kind == .timecode && $0.clips.contains { $0.id == id } }),
+                  !originalSong.tracks.contains(where: { ($0.kind == .timecode || $0.kind == .click) && $0.clips.contains { $0.id == id } }),
                   let source = originalSong.tracks.firstIndex(where: { $0.clips.contains { $0.id == id } }),
                   let clip = originalSong.tracks[source].clips.first(where: { $0.id == id }) else { return }
             movingClip = id
@@ -1026,6 +1026,10 @@ private struct TimelineGridContent: View, Equatable {
             resizedItemEnd = left ? clip.startTime + clip.duration : max(clip.startTime + minimumDuration, position)
             if let track = originalSong.tracks.first(where: { $0.clips.contains { $0.id == id } }) {
                 (resizedItemStart, resizedItemEnd) = track.constrainedItemEdges(start: resizedItemStart, end: resizedItemEnd, item: clip)
+                if track.kind == .click, !clip.isProjectionMedia {
+                    guard let resized = originalSong.resizedClick(clip, start: resizedItemStart, end: resizedItemEnd) else { resizingItem = nil; return }
+                    resizedItemStart = resized.startTime; resizedItemEnd = resized.startTime + resized.duration
+                }
             }
             timelineExtent = max(extent, resizedItemEnd + 120)
             if ended { show.resizeItem(id, start: resizedItemStart, end: resizedItemEnd); resizingItem = nil }
@@ -1103,6 +1107,7 @@ private struct TimelineGridContent: View, Equatable {
                   track.kind == .standard, let clip = track.clips.first(where: { $0.id == id }) else { return false }
             return AudioSeparation.accepts(clip, on: track)
         }
+        input.toggleClickDouble = { show.toggleClickDouble($0) }
         input.fileLocation = { id in
             guard let directory = documents.currentURL?.deletingLastPathComponent(),
                   let clip = originalSong.tracks.flatMap(\.clips).first(where: { $0.id == id }),
@@ -1180,7 +1185,7 @@ private struct TimelineGridContent: View, Equatable {
         ClipDragInput(item: GridSelectionItem(id: clip.id,
             rect: CGRect(x: clip.startTime * pixelsPerSecond + 1, y: itemY,
                 width: max(2, clip.duration * pixelsPerSecond - 2), height: rows.itemLaneHeight(clip.id, track: index) - 6),
-            editable: track.kind == .standard || clip.isProjectionMedia, resizable: !show.timelineMovementLocked, movable: !show.timelineMovementLocked && (track.kind != .timecode || clip.isProjectionMedia),
+            editable: track.kind == .standard || clip.isProjectionMedia, resizable: !show.timelineMovementLocked, movable: !show.timelineMovementLocked && ((track.kind != .timecode && track.kind != .click) || clip.isProjectionMedia),
             muted: clip.muted == true, duration: clip.duration,
             fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0, fadeInCurve: clip.fadeInCurve ?? 0, fadeInSCurve: clip.fadeInSCurve ?? 1, fadeOutCurve: clip.fadeOutCurve ?? 0, fadeOutSCurve: clip.fadeOutSCurve ?? 1), originY: itemY, click: { point in
             show.send(.editSeek, value: gridPosition(point.x / pixelsPerSecond, song: song, pixelsPerSecond: pixelsPerSecond))
@@ -1202,6 +1207,10 @@ private struct TimelineGridContent: View, Equatable {
             resizedItemStart = left ? min(max(0, position), clip.startTime + clip.duration - minimumDuration) : clip.startTime
             resizedItemEnd = left ? clip.startTime + clip.duration : max(clip.startTime + minimumDuration, position)
             (resizedItemStart, resizedItemEnd) = track.constrainedItemEdges(start: resizedItemStart, end: resizedItemEnd, item: clip)
+            if track.kind == .click, !clip.isProjectionMedia {
+                guard let resized = song.resizedClick(clip, start: resizedItemStart, end: resizedItemEnd) else { resizingItem = nil; return }
+                resizedItemStart = resized.startTime; resizedItemEnd = resized.startTime + resized.duration
+            }
             timelineExtent = max(extent, resizedItemEnd + 120)
             if ended { show.resizeItem(clip.id, start: resizedItemStart, end: resizedItemEnd); resizingItem = nil }
         }, fade: { left, seconds, ended in
@@ -1210,7 +1219,7 @@ private struct TimelineGridContent: View, Equatable {
         }, mute: track.kind == .standard ? { muteSelectedItems(clip.id) } : nil,
            cancel: { clearClipDrag(); resizingItem = nil }) { translation, pointerY, ended in
             // A gesture belongs to the item pressed until mouse-up.
-            guard !show.timelineMovementLocked, track.kind != .timecode, movingClip == nil || movingClip == clip.id else { clearClipDrag(); return }
+            guard !show.timelineMovementLocked, track.kind != .timecode, track.kind != .click || clip.isProjectionMedia, movingClip == nil || movingClip == clip.id else { clearClipDrag(); return }
             movingClip = clip.id
             let originalStart = clip.startTime
             movingStart = abs(translation.width) < 3 ? originalStart : itemPosition(originalStart + translation.width / pixelsPerSecond, song: song, pixelsPerSecond: pixelsPerSecond)
@@ -4896,7 +4905,10 @@ private final class TimelineNativeGridView: NSView {
             let path = CGMutablePath()
             let top = max(0, content.rulerHeight - tile.minY)
             for position in positions {
-                let x = floor(position * scale) / scale + pixel / 2 - tile.minX
+                // Keep the line and fractional viewport in the same continuous
+                // coordinate space. Document-pixel snapping before scrolling
+                // made even the cursor's anchored beat drift by one pixel.
+                let x = position - tile.minX + pixel / 2
                 path.move(to: CGPoint(x: x, y: top))
                 path.addLine(to: CGPoint(x: x, y: tile.height))
             }
@@ -5428,7 +5440,7 @@ private func drawTimelineItem(_ clip: AudioClip, track: Track, title: String, re
         var wave = Path()
         let middle = body.midY, amplitude = body.height * 0.45
         let pulses = ClickTrackProgram.visibleBeats(sections: clickTiming, start: clip.startTime, end: clip.startTime + clip.duration,
-            visibleStart: Double(visible.minX) / scale, visibleEnd: Double(visible.maxX) / scale, pixelsPerSecond: scale)
+            visibleStart: Double(visible.minX) / scale, visibleEnd: Double(visible.maxX) / scale, pixelsPerSecond: scale, doubled: clip.clickDouble == true)
         for time in pulses {
             let x = CGFloat(time * scale)
             let tail = max(1, min(CGFloat(0.08 * scale), 16))
@@ -5557,7 +5569,10 @@ final class MixerDividerView: NSView {
     private var startingWidth: CGFloat = 0
     private var startingX: CGFloat = 0
     private var startingY: CGFloat = 0
-    private var startingScroll: CGFloat = 0
+    private var lastScrollDragY: CGFloat = 0
+    private var scrollAnchorY: CGFloat = 0
+    private var scrollAnchorOffset: CGFloat = 0
+    private var scrollMaximum: CGFloat = 0
     private var scrollPerPoint: CGFloat = 0
     private var mouseIsDown = false
     private enum DragAxis { case pending, resize, scroll }
@@ -5667,7 +5682,8 @@ final class MixerDividerView: NSView {
         startingY = event.locationInWindow.y
         scrollController?.refresh()
         let metrics = scrollController?.metrics ?? SidebarScrollMetrics()
-        startingScroll = metrics.offset
+        lastScrollDragY = 0; scrollAnchorY = 0
+        scrollAnchorOffset = metrics.offset; scrollMaximum = metrics.maximumOffset
         let travel = max(0, bounds.height - 4 - scrollThumbRect.height)
         scrollPerPoint = metrics.canScroll && travel > 0 ? metrics.maximumOffset / travel : 0
     }
@@ -5676,6 +5692,10 @@ final class MixerDividerView: NSView {
         guard mouseIsDown else { return }
         let dx = (event.locationInWindow.x - startingX) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).width))
         let dy = (startingY - event.locationInWindow.y) / max(0.01, abs(convert(NSSize(width: 1, height: 1), to: nil).height))
+        scrollController?.refresh()
+        let metrics = scrollController?.metrics ?? SidebarScrollMetrics()
+        let travel = max(0, bounds.height - 4 - scrollThumbRect.height)
+        scrollPerPoint = metrics.canScroll && travel > 0 ? metrics.maximumOffset / travel : 0
         if dragAxis == .pending {
             guard max(abs(dx), abs(dy)) >= 3 else { return }
             if abs(dy) > abs(dx), scrollPerPoint > 0 { dragAxis = .scroll }
@@ -5685,7 +5705,21 @@ final class MixerDividerView: NSView {
         if dragAxis == .scroll {
             Self.resizeCursor.set()
             // Apply the pointer destination in this event; AppKit already coalesces drag events.
-            scrollController?.scroll(to: startingScroll + dy * scrollPerPoint)
+            // Lazy row measurements may grow the document mid-drag (notably
+            // on Monterey). Reusing the initial fraction then moves the list
+            // downward even while the pointer moves up. Integrate only new motion.
+            if metrics.maximumOffset != scrollMaximum {
+                scrollAnchorOffset = metrics.offset; scrollAnchorY = lastScrollDragY
+                scrollMaximum = metrics.maximumOffset
+            }
+            let delta = dy - lastScrollDragY
+            lastScrollDragY = dy
+            guard abs(delta) > 0.001 else { return }
+            let pointerY = convert(event.locationInWindow, from: nil).y
+            let target = pointerY <= bounds.minY + 2 ? 0
+                : pointerY >= bounds.maxY - 2 ? metrics.maximumOffset
+                : scrollAnchorOffset + (dy - scrollAnchorY) * scrollPerPoint
+            scrollController?.scroll(to: target)
             return
         }
         Self.resizeCursor.set()
@@ -6153,8 +6187,9 @@ private final class TimelineNativeRulerView: NSView {
         let path = CGMutablePath()
         var count = 0
         for tick in value.ticks {
-            // Round in document coordinates, then translate, matching the grid.
-            let x = floor(tick.x * scale) / scale + pixel / 2 - value.viewport.minX
+            // Share the grid's continuous projection: rounding before the
+            // fractional zoom scroll makes ticks and their labels oscillate.
+            let x = tick.x - value.viewport.minX + pixel / 2
             if x >= -1 && x <= rect.width + 1 {
                 path.move(to: CGPoint(x: x, y: top + 1))
                 path.addLine(to: CGPoint(x: x, y: top + (tick.primary ? 7 : 4)))

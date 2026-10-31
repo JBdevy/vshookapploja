@@ -21,6 +21,10 @@ class RemoteTeleprompter extends View {
         style=tp.optJSONObject("style");settings=tp.optJSONObject("settings");if(style==null)style=new JSONObject();
         preview=tp.optBoolean("preview")&&flag("previewEnabled","",true)&&!flag("ignorePreview","",false);
         float outer=dp(6);top=outer;bottom=getHeight()-outer;
+        JSONObject notice=s.optJSONObject("notices");
+        if(!preview&&notice!=null&&notice.optBoolean("active")&&notice.optBoolean("window"+index)){
+            drawNotice(c,notice);windowBorder(c,outer);return;
+        }
         String imageID=RemoteModel.id(tp,"imageID");if(!preview&&!imageID.isEmpty()){app.remote.requestImage(imageID);Bitmap image=app.remote.images.get(imageID.toLowerCase(Locale.ROOT));if(image!=null){boolean stretch=flag("mediaStretch","",false);float scale=(float)number("mediaScale",100)/100;float w,h;if(stretch){w=getWidth()*scale;h=getHeight()*scale;}else{float fit=Math.min(getWidth()/(float)image.getWidth(),getHeight()/(float)image.getHeight())*scale;w=image.getWidth()*fit;h=image.getHeight()*fit;}c.save();c.clipRect(0,0,getWidth(),getHeight());paint.setColor(Color.WHITE);c.drawBitmap(image,null,new RectF((getWidth()-w)/2,(getHeight()-h)/2,(getWidth()+w)/2,(getHeight()+h)/2),paint);c.restore();}}
         if(!preview&&flag("clearMode","",false))return;
         List<Decoration> above=decorations(tp,true),below=decorations(tp,false);
@@ -43,7 +47,6 @@ class RemoteTeleprompter extends View {
             }
         }
         windowBorder(c,outer);
-        drawNotice(c,s.optJSONObject("notices"));
     }
     static String[] lyricColumns(JSONObject tp){
         String encoded=tp.optString("textStyled"),prefix="\u001eCatLiveColumns/1\n";
@@ -102,8 +105,7 @@ class RemoteTeleprompter extends View {
         if(!imageID.isEmpty()){app.remote.requestImage(imageID);image=app.remote.images.get(imageID.toLowerCase(Locale.ROOT));}
         String emoji=notice.optString("emoji"),message=(emoji.isEmpty()?"":emoji+" ")+notice.optString("message").toUpperCase(Locale.getDefault())+(emoji.isEmpty()?"":" "+emoji);
         fontFace=family(notice.optString("font","system"));float size=(float)(Math.min(dp(72),Math.max(dp(24),getWidth()*.078))*notice.optDouble("scale",80)/100);
-        float height=notice.optBoolean("cleanDisplay")||!imageID.isEmpty()?getHeight():Math.min(getHeight(),layoutHeight(message,getWidth()-dp(48),size)+dp(48));
-        RectF area=new RectF(0,0,getWidth(),height);long elapsed=System.currentTimeMillis()-(long)(notice.optDouble("sentAt")*1000);boolean flash=elapsed>=0&&elapsed<1050&&(elapsed/175)%2==0;
+        RectF area=new RectF(0,0,getWidth(),getHeight());long elapsed=System.currentTimeMillis()-(long)(notice.optDouble("sentAt")*1000);boolean flash=elapsed>=0&&elapsed<1050&&(elapsed/175)%2==0;
         paint.setColor(rgb(notice.optLong(flash?"flashColor":"backgroundColor",0)));c.drawRect(area,paint);
         RectF inside=inset(area,dp(24));
         if(!imageID.isEmpty()){

@@ -412,6 +412,8 @@ private final class TrackMixerControlHost: NSHostingView<AnyView> {
     private let views = NSHashTable<TrackMixerNativeControlView>.weakObjects()
     private var tokens: [NSObjectProtocol] = []
     private var accessibilityObservations: [NSKeyValueObservation] = []
+    private var idleDetachment: DispatchWorkItem?
+    private(set) var defersHostDetachment = false
     private(set) var retainsAccessibilityControls = false
     static func forClip(_ clip: NSClipView) -> TrackMixerClipVisibility {
         if let value = observers.object(forKey: clip) { return value }
@@ -425,7 +427,10 @@ private final class TrackMixerControlHost: NSHostingView<AnyView> {
         clip.postsFrameChangedNotifications = true
         for name in [NSView.boundsDidChangeNotification, NSView.frameDidChangeNotification] {
             tokens.append(NotificationCenter.default.addObserver(forName: name, object: clip, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refresh() }
+                MainActor.assumeIsolated {
+                    if name == NSView.boundsDidChangeNotification { self?.deferDetachmentUntilScrollSettles() }
+                    self?.refresh()
+                }
             })
         }
         if let document = clip.documentView {
@@ -445,6 +450,22 @@ private final class TrackMixerControlHost: NSHostingView<AnyView> {
     }
     func add(_ view: TrackMixerNativeControlView) { views.add(view) }
     func remove(_ view: TrackMixerNativeControlView) { views.remove(view) }
+    private func deferDetachmentUntilScrollSettles() {
+        // Detaching a retained NSHostingView invalidates its SwiftUI window
+        // environment. During fast wheel reversals that used to rebuild the
+        // same three roots on every reserve-boundary crossing. Hide immediately
+        // and detach once the gesture rests; the bounded row pool remains warm.
+        defersHostDetachment = true
+        idleDetachment?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.idleDetachment = nil
+            self.defersHostDetachment = false
+            self.refresh()
+        }
+        idleDetachment = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
+    }
     private func updateAccessibility() {
         retainsAccessibilityControls = NSApp.isFullKeyboardAccessEnabled ||
             NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled
@@ -453,7 +474,7 @@ private final class TrackMixerControlHost: NSHostingView<AnyView> {
         updateAccessibility()
         for view in views.allObjects { view.refreshViewportVisibility() }
     }
-    deinit { tokens.forEach(NotificationCenter.default.removeObserver) }
+    deinit { idleDetachment?.cancel(); tokens.forEach(NotificationCenter.default.removeObserver) }
 }
 private final class TrackMixerNativeControlView: NSView, NativeTimelineControlInput {
     let meter = TrackMixerControlHost(rootView: AnyView(Color.clear))
@@ -560,7 +581,7 @@ private final class TrackMixerNativeControlView: NSView, NativeTimelineControlIn
         let hidden = !retained && !nearby
         if hidden {
             if !isHidden { isHidden = true }
-            setHostsAttached(false)
+            if visibilityObserver?.defersHostDetachment != true { setHostsAttached(false) }
         } else {
             // Reattach while the owner is still hidden, before entering the
             // viewport. The same roots keep SwiftUI state and current actions.
@@ -769,6 +790,8 @@ struct TrackMixerRow: View, Equatable {
                                 .buttonStyle(CompactTrackButtonStyle()).jarasHelp("Insert effect")
                             TrackRecordButton(show: show, track: track).buttonStyle(CompactTrackButtonStyle())
                         } else if track.kind == .click {
+                            Button("Patch") { patchTarget = editorTarget(project: project) }
+                                .buttonStyle(CompactTrackButtonStyle(width: 34)).fixedSize(horizontal: true, vertical: false)
                             Button("Insert") { show.insertClickItems(track: track.id) }
                                 .buttonStyle(CompactTrackButtonStyle(width: 47)).fixedSize(horizontal: true, vertical: false)
                         }
@@ -813,6 +836,9 @@ struct TrackMixerRow: View, Equatable {
                     Button("M") { show.sendTrackMixerButton(.mute, target: track.id) }.modifier(MappingRightClick(track: track.id, command: "mute")).buttonStyle(CompactTrackButtonStyle(activeColor: track.mute ? .red : nil)).jarasHelp("Mute")
                     Button("S") { show.sendTrackMixerButton(.solo, target: track.id) }.modifier(MappingRightClick(track: track.id, command: "solo")).buttonStyle(CompactTrackButtonStyle(activeColor: track.solo ? JarasTheme.yellow : nil)).jarasHelp("Solo")
                     } else if track.kind == .click {
+                        Button("Patch") { patchTarget = editorTarget(project: project) }
+                            .buttonStyle(CompactTrackButtonStyle(width: 34)).fixedSize(horizontal: true, vertical: false)
+                            .trackControlSelectionExclusion()
                         Button("Insert") { show.insertClickItems(track: track.id) }.buttonStyle(TrackControlButtonStyle())
                             .fixedSize(horizontal: true, vertical: false)
                         Button("M") { show.sendTrackMixerButton(.mute, target: track.id) }.buttonStyle(CompactTrackButtonStyle(activeColor: track.mute ? .red : nil))
@@ -986,6 +1012,9 @@ struct TrackMixerRow: View, Equatable {
                         TrackPanFader(show: show, track: track.id, pan: track.pan)
                             .frame(width: 42, height: 24).clipped().jarasPlaced(at: 4)
                     } else if track.kind == .click {
+                        Button("Patch") { patchTarget = editorTarget(project: project) }
+                            .buttonStyle(CompactTrackButtonStyle(width: 34)).fixedSize(horizontal: true, vertical: false)
+                            .trackControlSelectionExclusion()
                         Button("Insert") { show.insertClickItems(track: track.id) }
                             .buttonStyle(CompactTrackButtonStyle(width: 47))
                             .fixedSize(horizontal: true, vertical: false).jarasHelp("Insert click items in regions without a click")
@@ -1192,6 +1221,7 @@ struct PatchEditor: View {
     @ObservedObject var show: ShowController
     let track: UUID?
     let targets: [UUID?]
+    @State private var displayedOutputCount = 0
     @ObservedObject private var audio = AudioDeviceSettings.shared
     private var settings: Track? { track.flatMap { id in show.current?.tracks.first { $0.id == id } } }
     private var outputs: [OutputPatch] { settings?.outputPatches ?? show.snapshot.project.masterOutputPatches }
@@ -1200,14 +1230,15 @@ struct PatchEditor: View {
         let allInGroup = !targets.isEmpty && targets.allSatisfy { id in
             id.flatMap { track in show.current?.tracks.first { $0.id == track }?.parentTrackID } != nil
         }
-        return OutputPatch.choices(channels: audio.channels, includeMaster: track != nil && settings?.kind == .standard, includeGroup: allInGroup, includeNone: true)
+        return OutputPatch.choices(channels: audio.channels, includeMaster: track != nil && (settings?.kind == .standard || settings?.kind == .click), includeGroup: allInGroup, includeNone: true)
     }
     var body: some View {
         if targets.count > 1 && settings?.role.rawValue != "vinhetas" { BatchPatchEditor(show: show, targets: targets.compactMap { $0 }) }
         else { singlePatch }
     }
     private var singlePatch: some View {
-        ScrollView(showsIndicators: false) {
+        ScrollViewReader { scroll in
+            ScrollView(showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(settings?.kind == .timecode ? "Timecode" : "Patch").font(.jarasHeadline)
                     if let settings, settings.kind == .timecode { TimecodeOptions(show: show, track: settings) }
@@ -1264,7 +1295,7 @@ struct PatchEditor: View {
                                 }.labelsHidden()
                                 Button { editOutputs { if $0.indices.contains(slot) { $0.remove(at: slot) } } } label: { Image(systemName: "minus.circle") }
                                     .accessibilityLabel("Remove output")
-                            }
+                            }.id("patch-output-\(slot)")
                         }
                         if settings?.kind == .standard && settings?.role.rawValue != "vinhetas" {
                             ForEach([true, false], id: \.self) { receive in
@@ -1299,6 +1330,12 @@ struct PatchEditor: View {
                         #endif
 
                 }.padding(18).foregroundStyle(JarasTheme.text)
+            }
+            .onAppear { displayedOutputCount = outputs.count }
+            .onChange(of: outputs.count) { count in
+                if count > displayedOutputCount { scroll.scrollTo("patch-output-\(count - 1)", anchor: .bottom) }
+                displayedOutputCount = count
+            }
         }.frame(maxHeight: 560)
         #if os(iOS)
         .background(JarasTheme.background)
@@ -3229,6 +3266,7 @@ private struct FooterMixerStrip: View, Equatable {
                     ZStack(alignment: .topLeading) {
                         VStack(spacing: 4) {
                             if let track, track.kind == .click {
+                                Button("Patch") { patchPresented = true }.buttonStyle(CompactTrackButtonStyle(width: 34))
                                 Button("Insert") { show.insertClickItems(track: track.id) }
                                     .buttonStyle(CompactTrackButtonStyle(width: 47))
                                     .jarasHelp("Insert click items in regions without a click")
@@ -3970,8 +4008,8 @@ struct ProgramChangeTrackRow: View {
                 if let deleteTrack { Button("Delete track", role: .destructive, action: deleteTrack) }
             }
             #if os(macOS)
-            .workspaceEditor("Patch", isPresented: $patch) { patchEditor }
-            .workspaceEditor("Program Change", isPresented: $naming) { nameEditor }
+            .popover(isPresented: $patch) { patchEditor }
+            .sheet(isPresented: $naming) { nameEditor }
             #else
             .popover(isPresented: $patch) { patchEditor }
             .sheet(isPresented: $naming) { nameEditor }

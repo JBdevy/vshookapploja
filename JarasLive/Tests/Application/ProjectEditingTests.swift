@@ -254,8 +254,8 @@ final class ProjectEditingTests: XCTestCase {
         XCTAssertEqual(project.songs[0].tracks[0].clips.count, 1)
         try project.validate()
     }
-    func testAllRegionsDeleteRemovesOwnedContentOfEveryKindAndPreservesOverlaps() throws {
-        var project = Project.empty(name: "Delete region contents")
+    func testAllRegionsDeletePreservesEditableContentAndDetachesDeletedOwner() throws {
+        var project = Project.empty(name: "Delete region only")
         let songID = project.songs[0].id
         let first = Part(id: UUID(), name: "Delete", startTime: 10, endTime: 20)
         let other = Part(id: UUID(), name: "Keep", startTime: 15, endTime: 30)
@@ -291,14 +291,27 @@ final class ProjectEditingTests: XCTestCase {
         project.deleteSetlistEntries([first.id], song: songID, playlist: nil)
         history.record(project)
         XCTAssertEqual(project.songs[0].parts, [other])
-        XCTAssertEqual(project.songs[0].tracks[0].clips, [foreign, loose])
-        XCTAssertTrue(project.songs[0].tracks.dropFirst().allSatisfy { $0.clips.isEmpty })
-        XCTAssertEqual(project.songs[0].markers, [otherMarker, looseMarker, boundary])
+        var expectedTracks = before.songs[0].tracks
+        for track in expectedTracks.indices {
+            if expectedTracks[track].kind == .timecode {
+                // Generated timecode is derived from the region, not an editable media item.
+                expectedTracks[track].clips.removeAll { $0.id == Project.timecodeItemID(first.id) }
+            }
+            for item in expectedTracks[track].clips.indices where expectedTracks[track].clips[item].regionOwnerID == first.id {
+                expectedTracks[track].clips[item].regionOwnerID = nil
+            }
+        }
+        var expectedMarkers = before.songs[0].markers!
+        for marker in expectedMarkers.indices where expectedMarkers[marker].regionOwnerID == first.id {
+            expectedMarkers[marker].regionOwnerID = nil
+        }
+        XCTAssertEqual(project.songs[0].tracks, expectedTracks, "All Regions removes only the region; audio and special items stay in place")
+        XCTAssertEqual(project.songs[0].markers, expectedMarkers)
         XCTAssertEqual(project.regionSetlist?.playlists[0].regionIds, [other.id])
         XCTAssertEqual(history.undo(), before)
         XCTAssertEqual(history.redo(), project)
     }
-    func testAllRegionsImportedContentUsesHalfOpenRegionBoundaries() throws {
+    func testAllRegionsDeletePreservesImportedContentAndBoundaryMarkers() throws {
         var project = fixture()
         let first = Part(id: UUID(), name: "First", startTime: 30, endTime: 50)
         let next = Part(id: UUID(), name: "Next", startTime: 50, endTime: 70)
@@ -307,13 +320,14 @@ final class ProjectEditingTests: XCTestCase {
         let cue = TimelineMarker(id: UUID(), name: "Cue", position: 40, color: 0, section: true)
         let boundary = TimelineMarker(id: UUID(), name: "Next tempo", position: 50, color: 0, tempoBPM: 140)
         project.songs[0].markers = [tempo, cue, boundary]
+        let tracks = project.songs[0].tracks
         project.deleteSetlistEntries([first.id], song: project.songs[0].id, playlist: nil)
-        XCTAssertTrue(project.songs[0].tracks[0].clips.isEmpty)
-        XCTAssertEqual(project.songs[0].markers, [boundary])
+        XCTAssertEqual(project.songs[0].tracks, tracks)
+        XCTAssertEqual(project.songs[0].markers, [tempo, cue, boundary])
         XCTAssertEqual(project.songs[0].parts, [next])
         try project.validate()
     }
-    func testAllRegionsClearsPreviouslyUnownedTempoWithoutCapturingItDuringRegionMoves() throws {
+    func testAllRegionsPreservesUnownedTempoWithoutCapturingItDuringRegionMoves() throws {
         var project = fixture()
         let first = Part(id: UUID(), name: "Moving", startTime: 0, endTime: 10)
         let next = Part(id: UUID(), name: "Next", startTime: 30, endTime: 40)
@@ -333,7 +347,7 @@ final class ProjectEditingTests: XCTestCase {
         let original = project
         project.deleteSetlistEntries([first.id], song: project.songs[0].id, playlist: nil)
         history.record(project)
-        XCTAssertEqual(project.songs[0].markers, [before, foreign, boundary, after])
+        XCTAssertEqual(project.songs[0].markers, [before, start, inside, foreign, boundary, after])
         XCTAssertEqual(history.undo(), original)
         XCTAssertEqual(history.redo(), project)
         try project.validate()

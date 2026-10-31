@@ -41,6 +41,23 @@ public class RemoteTeleprompterTest {
   view.render(new RecordingCanvas());assertNull(view.find("Letra"));assertNull(view.find("Não mostrar"));assertTrue(app.remote.requestedImages.isEmpty());assertTrue(view.find("Executada").strike);assertEquals(0xffff4040,view.find("Executada").color);assertFalse(view.find("Tocando").strike);assertEquals(Color.WHITE,view.find("Tocando").color);assertEquals(0xffabcdef,view.find("Bloco").color);assertEquals(view.find("Bloco").font,view.find("Fila").font,0);assertTrue(view.decorations(tp,true).isEmpty());assertTrue(view.decorations(tp,false).isEmpty());
   done.put("liveExecuted",false);view.render(new RecordingCanvas());assertFalse(view.find("Executada").strike);assertEquals(0xff123456,view.find("Executada").color);
  }
+ @Test public void previewHidesStoppedNoticeWithoutClearingItAndRestoresAfterPreview()throws Exception{
+  JSONObject notice=app.state.getJSONObject("notices");notice.put("active",true).put("pinned",true).put("pinWhenStopped",true).put("stoppedNoticeActive",true).put("message","Aviso automático").put("window1",true);
+  tp.put("preview",true);view.render(new RecordingCanvas());assertNull(view.find("AVISO AUTOMÁTICO"));assertTrue(notice.getBoolean("active"));assertTrue(notice.getBoolean("stoppedNoticeActive"));
+  tp.put("preview",false);view.render(new RecordingCanvas());assertNotNull(view.find("AVISO AUTOMÁTICO"));assertTrue(notice.getBoolean("pinWhenStopped"));
+ }
+ @Test public void activeNoticeIsCenteredAndReplacesEveryDecorationAndMediaWhileKeepingWindowBorder()throws Exception{
+  JSONObject notice=app.state.getJSONObject("notices");notice.put("active",true).put("message","Aviso central").put("window1",true).put("window2",false);
+  settings.put("clockEnabled",true).put("localClockEnabled",true).put("songNameEnabled",true).put("queueNameEnabled",true).put("chordsEnabled",true).put("progressEnabled",true).put("textBoxEnabled",true).put("windowBorderEnabled",true).put("borderColor",0x123456);
+  String media=UUID.randomUUID().toString();tp.put("imageID",media);app.remote.images.put(media,Bitmap.createBitmap(8,8,Bitmap.Config.ARGB_8888));
+  for(int[] size:new int[][]{{393,700},{900,500}})for(boolean clean:new boolean[]{false,true}){
+   view.layout(0,0,size[0],size[1]);notice.put("cleanDisplay",clean);view.clockBoxes.clear();RecordingCanvas canvas=new RecordingCanvas();view.render(canvas);
+   assertEquals(1,view.drawn.size());Text message=view.find("AVISO CENTRAL");assertNotNull(message);assertEquals(size[0]/2f,message.area.centerX(),.01f);assertEquals(size[1]/2f,message.area.centerY(),.01f);
+   assertTrue(view.clockBoxes.isEmpty());assertEquals(0,canvas.images);assertTrue(app.remote.requestedImages.isEmpty());assertEquals(Collections.singletonList(0xff123456),view.borders);
+  }
+  settings.put("windowBorderEnabled",false).put("clearMode",true);view.render(new RecordingCanvas());assertNotNull(view.find("AVISO CENTRAL"));assertTrue(view.borders.isEmpty());
+  settings.put("clearMode",false);notice.put("active",false);view.clockBoxes.clear();RecordingCanvas restored=new RecordingCanvas();view.render(restored);assertNull(view.find("AVISO CENTRAL"));assertNotNull(view.find("Letra recebida"));assertFalse(view.clockBoxes.isEmpty());assertEquals(1,restored.images);
+ }
  @Test public void liveStrikeFollowsHostAndSourceRegionForPlaylistCopies()throws Exception{
   JSONObject region=app.state.getJSONArray("regions").getJSONObject(0);String source=region.getString("id");region.put("sourceRegionId",source).put("id",UUID.randomUUID().toString());
   MainActivity.SongRow row=app.new SongRow(region,1,false);row.layout(0,0,393,40);app.state.put("playedLiveRegionIDs",new JSONArray().put(source.toUpperCase(Locale.ROOT)));RecordingCanvas canvas=new RecordingCanvas();row.onDraw(canvas);assertTrue(canvas.struck.contains("Abertura"));
@@ -51,7 +68,7 @@ public class RemoteTeleprompterTest {
   RecordingCanvas canvas=new RecordingCanvas();view.render(canvas);assertTrue(app.remote.requestedImages.contains(id));assertNull(view.find("Fallback"));assertEquals(0,canvas.images);
   app.remote.images.put(id,Bitmap.createBitmap(8,8,Bitmap.Config.ARGB_8888));view.render(canvas);assertEquals(1,canvas.images);
   Probe second=new Probe(2);second.layout(0,0,393,700);JSONObject other=new JSONObject(tp.toString()).put("index",2);app.state.getJSONArray("teleprompters").put(other);second.render(canvas);assertEquals(1,canvas.images);
-  settings.put("clearMode",true);view.render(canvas);assertEquals(1,canvas.images);assertTrue(view.drawn.isEmpty());
+  settings.put("clearMode",true);view.render(canvas);assertEquals(2,canvas.images);assertTrue(view.drawn.isEmpty());
  }
  @Test public void bottomDecorationsKeepTheSameOrderAsIphone()throws Exception{
   settings.put("clockEnabled",true).put("clockPosition","left-bottom").put("localClockEnabled",true).put("songNameEnabled",true).put("songNamePosition","bottom").put("queueNamePosition","bottom").put("chordPosition","bottom").put("progressEnabled",true).put("progressPosition","bottom");view.render(new RecordingCanvas());

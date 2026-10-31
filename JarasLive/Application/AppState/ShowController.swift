@@ -561,6 +561,11 @@ public struct ShowTimelinePresentationState: Equatable {
         guard forceReveal || changedPlaylist || focusedRegion != selection else { return }
         focusedRegion = selection; setlistFocusRequest = UUID()
     }
+    public func setSubplayExclusiveTracks(_ ids: Set<UUID>) {
+        var state = regionSetlist
+        state.subplayExclusiveTrackIDs = current?.tracks.filter { ids.contains($0.id) }.map(\.id) ?? []
+        _ = configureRegionSetlist(state)
+    }
     public func setAutomaticSubplay(_ enabled: Bool, seconds: Double? = nil, bars: Int? = nil, next: Bool? = nil) {
         var state = regionSetlist; state.automaticSubplay = enabled
         if let seconds, seconds.isFinite {
@@ -1240,10 +1245,18 @@ public struct ShowTimelinePresentationState: Equatable {
             return false
         }
     }
-    private var itemClipboard: GridItemClipboard?
+    @Published public private(set) var cutGridItems: Set<UUID> = []
+    private var itemClipboard: GridItemClipboard? {
+        didSet {
+            cutGridItems = itemClipboard.flatMap { $0.moving ? Set($0.entries.map { $0.clip.id }) : nil } ?? []
+        }
+    }
+    public func cancelGridCut() {
+        if itemClipboard?.moving == true { itemClipboard = nil }
+    }
     @discardableResult public func copyItems(_ ids: Set<UUID>, moving: Bool = false) -> Bool {
         if ids.isEmpty, selectedProgramChange != nil { return !moving && copyProgramChange() }
-        guard canControl(), !finishing, let song = current?.id,
+        guard canControl(), !finishing, !moving || !timelineMovementLocked, let song = current?.id,
               let copied = GridItemClipboard(project: snapshot.project, song: song, selected: ids, moving: moving) else { return false }
         if pendingFXEdit { commitFX() }
         itemClipboard = copied; programChangeClipboard = nil; programChangePasteReady = false
@@ -2991,6 +3004,18 @@ public struct ShowTimelinePresentationState: Equatable {
             }
         }
     }
+    public func toggleClickDouble(_ id: UUID) {
+        guard canControl(), !finishing else { return }
+        editProject { project in
+            for song in project.songs.indices {
+                for track in project.songs[song].tracks.indices where project.songs[song].tracks[track].kind == .click {
+                    if let item = project.songs[song].tracks[track].clips.firstIndex(where: { $0.id == id && $0.audioFile == nil }) {
+                        project.songs[song].tracks[track].clips[item].clickDouble = project.songs[song].tracks[track].clips[item].clickDouble != true
+                    }
+                }
+            }
+        }
+    }
     public func insertClickItems(track id: UUID) {
         guard canControl(), !finishing else { return }
         var project = snapshot.project
@@ -3108,6 +3133,7 @@ public struct ShowTimelinePresentationState: Equatable {
         guard canControl(), !finishing, !timelineMovementLocked else { return }
         if let source = current?.tracks.first(where: { $0.clips.contains { $0.id == id } }),
            let clip = source.clips.first(where: { $0.id == id }) {
+            guard source.kind != .click || clip.isProjectionMedia else { return }
             guard let destination = track.flatMap({ id in current?.tracks.first { $0.id == id } }) ?? (track == nil ? source : nil) else { return }
             let mediaTransfer = clip.isProjectionMedia
             guard source.id == destination.id || (source.kind == .standard && destination.kind == .standard) || mediaTransfer else { return }
