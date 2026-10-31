@@ -59,6 +59,17 @@ private func settleNoticeLayout(_ root: NSView) {
 }
 MainActor.assumeIsolated {
     _ = NSApplication.shared
+    let simple = RemoteNoticeActions { Text("Send") } pin: { Text("Pin") }
+    let nested = RemoteNoticeActions {
+        HStack { Button("Send") {}; Button("Withdraw") {} }
+    } pin: {
+        HStack { Label("Pin", systemImage: "pin"); Button("Pin while stopped") {} }
+    }
+    let bodyType = String(reflecting: type(of: simple.body))
+    precondition(bodyType == String(reflecting: type(of: nested.body)),
+                 "Notice action metadata must not depend on generic child tuples on iOS 16")
+    precondition(bodyType.contains("AnyView") && !bodyType.contains("_ConditionalContent"),
+                 "Availability branches must be erased before resolving the notice body metadata")
     let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 440, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
     let host = NSHostingView(rootView: NoticeLayoutFixture(portuguese: true))

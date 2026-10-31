@@ -5642,10 +5642,12 @@ private struct RemoteNativeMixerRow: View, Equatable {
                 } else if kind.isText, let addText {
                     Button("Add text", action: addText).buttonStyle(RemoteNativeTrackButtonStyle(width: 82))
                 }
+                if !local || !kind.isTeleprompter {
                 Button { send(.mute, 0) } label: { Text(verbatim: "M") }
                     .buttonStyle(RemoteNativeTrackButtonStyle(activeColor: track.mute ? .red : nil))
                 Button { send(.solo, 0) } label: { Text(verbatim: "S") }
                     .buttonStyle(RemoteNativeTrackButtonStyle(activeColor: track.solo ? JarasTheme.yellow : nil))
+                }
                 }.anchorPreference(key: IpadTrackControlsBoundsKey.self, value: .bounds) { [$0] }
             }
             if !compact {
@@ -6584,21 +6586,26 @@ struct RemoteNoticePresentation {
 
 /// Keep the stopped-transport option beside Pin, wrapping the two action
 /// groups on narrow phones instead of shrinking or hiding their touch targets.
-struct RemoteNoticeActions<Primary: View, Pin: View>: View {
-    @ViewBuilder let primary: () -> Primary
-    @ViewBuilder let pin: () -> Pin
+struct RemoteNoticeActions: View {
+    private let primary: AnyView
+    private let pin: AnyView
+    init<Primary: View, Pin: View>(@ViewBuilder primary: () -> Primary, @ViewBuilder pin: () -> Pin) {
+        self.primary = AnyView(primary()); self.pin = AnyView(pin())
+    }
     var body: some View {
-        Group {
-            if #available(macOS 13.0, iOS 16.0, *) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { primary(); pin() }
-                        .fixedSize(horizontal: true, vertical: false)
-                    VStack(alignment: .leading, spacing: 8) { primary(); pin() }
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 8) { primary(); pin() }
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        actionLayout.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    // iOS 16 can fail while resolving the symbolic metadata of an availability
+    // branch containing generic action tuples. Keep that branch out of body and
+    // erase both its result and its children before SwiftUI resolves the layout.
+    private var actionLayout: AnyView {
+        let vertical = AnyView(VStack(alignment: .leading, spacing: 8) { primary; pin })
+        if #available(macOS 13.0, iOS 16.0, *) {
+            let horizontal = AnyView(HStack(spacing: 8) { primary; pin }
+                .fixedSize(horizontal: true, vertical: false))
+            return AnyView(ViewThatFits(in: .horizontal) { horizontal; vertical })
+        }
+        return vertical
     }
 }
 
