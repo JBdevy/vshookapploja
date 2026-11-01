@@ -29,6 +29,17 @@ jobs:
             if (!response.ok) throw Error(JSON.stringify({status:response.status,errors:body.errors?.map(x=>({code:x.code,detail:x.detail}))}));
             return body;
           };
+          const app=await api('/v1/apps/6822558735');
+          console.log('APP',JSON.stringify({id:app.data.id,name:app.data.attributes.name,bundleId:app.data.attributes.bundleId}));
+          const appSchedule=await api('/v1/apps/6822558735/appPriceSchedule?include=baseTerritory');
+          console.log('APP_SCHEDULE',JSON.stringify(appSchedule));
+          const appPrices=await api('/v1/appPriceSchedules/'+appSchedule.data.id+'/manualPrices?include=appPricePoint,territory&limit=200');
+          console.log('APP_MANUAL_PRICES',JSON.stringify(appPrices));
+          const appAutomatic=await api('/v1/appPriceSchedules/'+appSchedule.data.id+'/automaticPrices?include=appPricePoint,territory&limit=200');
+          console.log('APP_AUTOMATIC_PRICES',JSON.stringify(appAutomatic));
+          const base=appSchedule.data.relationships.baseTerritory.data.id;
+          const options=await api('/v1/apps/6822558735/appPricePoints?filter[territory]='+base+'&limit=200');
+          console.log('APP_FREE_POINT',JSON.stringify(options.data.filter(x=>Number(x.attributes.customerPrice)===0)));
           const purchases=await api('/v1/apps/6822558735/inAppPurchasesV2?limit=200');
           for(const purchase of purchases.data) {
             const id=purchase.id;
