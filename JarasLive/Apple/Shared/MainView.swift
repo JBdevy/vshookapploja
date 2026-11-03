@@ -1223,10 +1223,16 @@ final class FooterHeightContainerView: NSView {
         if let pendingCommit, storedHeight != pendingCommit.previous || !active { self.pendingCommit = nil }
         self.storedHeight = storedHeight; self.minimum = minimum; self.maximum = maximum
         self.active = active; self.role = role; self.coordinator = coordinator
-        // A zero-height frame still leaves the complete mixer in AppKit's
-        // tracking/layout traversal. Hide the retained native root as well.
+        // Hiding a zero-height panel still leaves its entire hosting tree in
+        // AppKit's window layout/environment walks when another panel opens.
+        // Keep the root and its last geometry, but detach it while closed.
         host.isHidden = !active
-        if !active { FooterVerticalResizeView.cancelDrags(in: self); preview = nil }
+        if active {
+            if host.superview !== self { addSubview(host) }
+        } else {
+            FooterVerticalResizeView.cancelDrags(in: self); preview = nil
+            if host.superview === self { host.removeFromSuperview() }
+        }
         refreshHeight(); coordinator?.register(self, role: role)
     }
     func setContent(identity: AnyHashable, environment: EnvironmentValues, make: () -> AnyView) {

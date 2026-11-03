@@ -144,3 +144,84 @@ require(DAWRemoteSetlistPresentation.canQueueDuplicate(duplicateRowID, in: repea
 repeatedFixture.subPlaying = true
 require(!DAWRemoteSetlistPresentation.canQueueDuplicate(duplicateRowID, in: repeatedFixture), "Copy warns when its source is already in Subplay")
 require(DAWRemoteSetlistPresentation.canQueueDuplicate(plainRegion, in: repeatedFixture), "Normal rows retain their existing selection rules")
+
+// No packet is needed at the boundary; late outgoing packets must not flash
+// the old blue selection back. Host confirmation remains authoritative.
+var localBlock = drawerFixture
+let localFirst = UUID(), localNext = UUID()
+localBlock.regions = [.init(id: localFirst, name: "First", start: 30, end: 40, color: 0),
+                      .init(id: localNext, name: "Next", start: 4, end: 14, color: 0)]
+localBlock.timelineRegions = localBlock.regions
+localBlock.selectedPlaylist = UUID(); localBlock.currentRegion = localFirst
+localBlock.currentPlaylistEntryId = localFirst
+localBlock.playing = true; localBlock.paused = false; localBlock.subPlaying = false; localBlock.loop = false
+localBlock.position = 39; localBlock.playbackEnd = 40; localBlock.queuedRegion = nil
+localBlock.regionAuto = false; localBlock.regionAutoUntilBlockEnd = true; localBlock.sectionPlayback = nil
+localBlock.setlistBlocks = [.init(id: UUID(), name: "Next block", color: 0, beforeRegion: localNext)]
+var localFeedback = DAWRemoteBlockFeedback()
+require(localFeedback.receive(localBlock, now: 10).playing, "Remote keeps playing until the actual boundary")
+require(localFeedback.advance(now: 10.99) == nil, "Remote cannot prepare the next block early")
+let localPrepared = localFeedback.advance(now: 11)!
+require(!localPrepared.playing && localPrepared.focusedRegion == localNext && localPrepared.position == 4 && localPrepared.editPosition == 4,
+        "Remote locally prepares the next block's blue selection and both cursors without AUTO")
+localBlock.position = 39.9
+require(!localFeedback.receive(localBlock, now: 11.01).playing, "Delayed outgoing packet cannot undo local completion")
+localBlock.position = 35
+require(localFeedback.receive(localBlock, now: 11.02).playing, "A seek invalidates local completion")
+for field in 0..<5 {
+    var changed = localBlock
+    switch field {
+    case 0: changed.loop = true
+    case 1: changed.subPlaying = true
+    case 2: changed.queuedRegion = localNext
+    case 3: changed.regionAutoUntilBlockEnd = false
+    default: changed.playbackEnd = 42
+    }
+    require(DAWRemoteBlockPreparation(changed) == nil, "Loop/Subplay/manual queue/policy/ignore-next prohibit a predicted stop")
+}
+localFeedback.reset()
+require(localFeedback.advance(now: 100) == nil, "Disconnect or local transport commands cancel pending prediction")
+var confirmedBlock = localPrepared
+confirmedBlock.focusedRegion = localFirst
+require(localFeedback.receive(confirmedBlock, now: 20).focusedRegion == localFirst, "Authoritative stopped selection wins")
+print("REMOTE_LOCAL_BLOCK_PREPARATION_CLOCK_RECONCILIATION_OK")
+
+let preparationHost = DAWRemoteSession(role: .host, name: "Preparation host")
+let preparationClient = DAWRemoteSession(role: .client, name: "Preparation client")
+let preparationEndpoint = try preparationHost.testListen()
+var preparationPacket = localBlock
+preparationPacket.position = 39.85
+var preparationCommands = 0
+preparationHost.stateProvider = { preparationPacket }
+preparationHost.commandHandler = { _ in preparationCommands += 1 }
+preparationClient.testConnect(preparationEndpoint, access: .director)
+waitFor("Remote receives the outgoing block song") { preparationClient.remoteState?.currentRegion == localFirst }
+waitFor("Remote timer prepares next block without a stopped host packet") {
+    preparationClient.remoteState?.focusedRegion == localNext && preparationClient.remoteState?.playing == false
+}
+require(preparationCommands == 0, "Local completion never sends Play, Stop or selection to the host")
+preparationPacket = localPrepared
+waitFor("Remote accepts host confirmation") { preparationClient.remoteState?.currentRegion == localNext }
+preparationPacket = localBlock
+preparationPacket.position = 35
+waitFor("Remote receives a fresh playing block for manual Stop") { preparationClient.remoteState?.playing == true && preparationClient.remoteState?.position == 35 }
+preparationClient.send(.init(project: preparationPacket.project, song: preparationPacket.song, action: .stop))
+require(preparationClient.remoteState?.focusedRegion == localNext && preparationClient.remoteState?.gridRegion == localNext && preparationClient.remoteState?.playing == false, "Remote Stop selects and reveals synchronously before host acknowledgment")
+waitFor("Remote sends exactly the requested Stop") { preparationCommands == 1 }
+preparationPacket = localPrepared
+waitFor("Remote accepts manual Stop confirmation") { preparationClient.remoteState?.currentRegion == localNext }
+preparationClient.stop(); preparationHost.stop()
+print("REMOTE_NETWORK_LOCAL_BLOCK_TIMER_NO_TRANSPORT_COMMANDS_OK")
+
+// Stop must predict the same grid/blue selection before any host round trip.
+var manualFeedback = DAWRemoteBlockFeedback()
+let manualPrepared = manualFeedback.stop(localBlock, now: 50)!
+require(manualPrepared.focusedRegion == localNext && manualPrepared.gridRegion == localNext && manualPrepared.editPosition == 4 && !manualPrepared.playing, "Manual Remote Stop immediately reveals the next block")
+require(manualFeedback.receive(localBlock, now: 50.1).focusedRegion == localNext, "Late running packets cannot undo a requested Stop")
+require(manualFeedback.receive(manualPrepared, now: 50.2).gridRegion == localNext, "Stopped host confirms next-block grid")
+require(manualFeedback.stop(manualPrepared, now: 51) == nil, "Repeated idle Stop does not advance")
+var pausedBlock = localBlock; pausedBlock.playing = false; pausedBlock.paused = true
+require(manualFeedback.stop(pausedBlock, now: 52)?.focusedRegion == localNext, "Stop after Pause prepares next block")
+_ = manualFeedback.stop(localBlock, now: 53)
+require(manualFeedback.advance(now: 54.5)?.playing == true, "Unconfirmed manual prediction expires")
+print("REMOTE_MANUAL_STOP_BLOCK_PREPARATION_OK")

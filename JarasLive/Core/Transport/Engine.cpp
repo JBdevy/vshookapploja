@@ -135,7 +135,7 @@ void Engine::configureRegionSetlist(RegionSetlist state) {
     syncRegion();
 }
 std::optional<ID> Engine::automaticRegionQueueTarget(bool ignoreBlockBoundary) const {
-    if (!project_.regionSetlist || !project_.regionSetlist->autoAdvance || !transport_.regionId) return {};
+    if (!project_.regionSetlist || (!ignoreBlockBoundary && !project_.regionSetlist->autoAdvance) || !transport_.regionId) return {};
     const auto* song = currentSong(); if (!song) return {};
     const auto& state = *project_.regionSetlist;
     const auto* active = region(transport_.regionId);
@@ -166,6 +166,17 @@ std::optional<ID> Engine::automaticRegionQueueTarget(bool ignoreBlockBoundary) c
             if (block.songId == song->id && block.playlistId == state.selectedId && block.beforeRegionId == target) return {};
     }
     return target;
+}
+std::optional<ID> Engine::nextBlockPreparationTarget() const {
+    if (!project_.regionSetlist || !project_.regionSetlist->autoUntilBlockEnd) return {};
+    const auto& state = *project_.regionSetlist;
+    const auto* song = currentSong();
+    const auto target = automaticRegionQueueTarget(true);
+    if (!song || !target || !state.blocks) return {};
+    for (const auto& block : *state.blocks)
+        if (block.songId == song->id && block.playlistId == state.selectedId && block.beforeRegionId == target)
+            return target;
+    return {};
 }
 void Engine::refreshAutomaticRegionQueue() {
     const auto occurrence = transport_.queuedPlaylistEntryId ? transport_.queuedPlaylistEntryId : transport_.queuedRegionId;
@@ -1254,7 +1265,16 @@ void Engine::execute(const Command& c) {
         if (transport_.subPlay.playing) { promoteSubPlay(); break; }
         {
             const auto* queued = region(transport_.queuedRegionId);
+            // Manual Stop at the last song follows the same block preparation
+            // as natural completion. Repeated Stop while idle must not advance.
+            const auto prepared = !queued && (transport_.playing || transport_.paused)
+                ? nextBlockPreparationTarget() : std::optional<ID>{};
             transport_.paused = false; resumeSub_ = false; execute({CommandKind::subStop}); transport_.playing = false;
+            if (prepared) {
+                playStart_.reset();
+                execute({CommandKind::selectRegion, *prepared});
+                break;
+            }
             if (queued) {
                 transport_.position = queued->startTime; transport_.editPosition = queued->startTime; transport_.regionId = queued->id;
                 transport_.playlistEntryId = transport_.queuedPlaylistEntryId;
@@ -1694,16 +1714,19 @@ void Engine::advanceContinuous(double elapsed, const TimelineMarker* sectionDest
                 return;
             }
         }
+        // Preparing the next block is independent of AUTO. A manually queued
+        // block must leave its next heading ready too, without starting it.
+        if (!ignoring && !queued && !finishCurrent_) if (auto prepared = nextBlockPreparationTarget()) {
+            transport_.playing = false; transport_.paused = false; playStart_.reset();
+            execute({CommandKind::subStop});
+            execute({CommandKind::selectRegion, *prepared});
+            return;
+        }
         // STOP applies only without a valid incoming queue. Both manual and
         // automatic queues own the transition; prepare-only is handled below.
         if (!ignoring && !queued && project_.regionSetlist && project_.regionSetlist->stopAtRegionEnd.value_or(false)) {
-            // STOP must retain the prepared destination at an automatic block
-            // boundary, just like the normal Auto completion path below.
-            const auto prepared = project_.regionSetlist->autoUntilBlockEnd
-                ? automaticRegionQueueTarget(true) : std::nullopt;
             transport_.position = active->endTime; transport_.playing = false; transport_.paused = false;
             execute({CommandKind::subStop});
-            if (prepared) execute({CommandKind::selectRegion, *prepared});
             return;
         }
         if (finishCurrent_) { transport_.position = active->endTime; transport_.playing = false; transport_.queuedRegionId.reset(); transport_.queuedPlaylistEntryId.reset(); execute({CommandKind::subStop}); return; }
@@ -1733,10 +1756,8 @@ void Engine::advanceContinuous(double elapsed, const TimelineMarker* sectionDest
             clearIgnoreNext(); execute({CommandKind::subStop}); return;
         }
         if (project_.regionSetlist && project_.regionSetlist->autoAdvance) {
-            const auto prepared = project_.regionSetlist->autoUntilBlockEnd ? automaticRegionQueueTarget(true) : std::nullopt;
             transport_.position = active->endTime; transport_.playing = false; transport_.paused = false;
             execute({CommandKind::subStop});
-            if (prepared) execute({CommandKind::selectRegion, *prepared});
             return;
         }
         break;

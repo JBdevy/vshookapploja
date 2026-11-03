@@ -150,17 +150,6 @@ func requireZoomFrame(after inputTime: Double, callbackCount: Int) {
     print("ZOOM_FRAME_LATENCY_MS=" + String(format: "%.2f",latency * 1_000))
     precondition(latency <= 0.050,"latest zoom input reaches layout at the display-frame cadence, within bounded native scheduler tolerance")
 }
-func requireWheelZoomTarget(_ target: Double, after inputTime: Double) {
-    // The 90 ms mouse transition retains room for the next native display tick.
-    let deadline = inputTime + 0.125
-    while (zoomValues.last.map { abs($0 - target) > 1e-12 } ?? true) && ProcessInfo.processInfo.systemUptime < deadline {
-        _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.002))
-    }
-    precondition(zoomValues.last.map { abs($0 - target) < 1e-12 } == true,
-                 "mouse zoom reaches its complete input target within 125 ms")
-    precondition(zoomTimes.last! - inputTime <= 0.125,
-                 "mouse animation finishes within its bounded display deadline")
-}
 func requireMonotonicZoom(_ values: [Double], increasing: Bool) {
     precondition(zip(values, values.dropFirst()).allSatisfy { increasing ? $0.1 >= $0.0 : $0.1 <= $0.0 },
                  "mouse zoom cannot overshoot or resume an old direction")
@@ -298,46 +287,35 @@ precondition(zoomValues.count == 2 && zoomValues.last! == finalBurstZoom,
 resetZoomInput(precise: false)
 let savedBeforeWheel = TimelineViewportPreferences.storage.double(forKey: "jaras.timelineZoom")
 event.delta = 2
-let physicalStart = ProcessInfo.processInfo.systemUptime
 precondition(wheel.handleWheelEvent(event))
 precondition(TimelineViewportPreferences.storage.double(forKey: "jaras.timelineZoom") == savedBeforeWheel,
              "wheel input must not publish UserDefaults changes during a grid frame")
 let physicalTarget = exp(2 * TimelineZoomLimits.wheelSensitivity)
-precondition(zoomValues.count == 1 && zoomValues[0] > 1 && zoomValues[0] < physicalTarget,
-             "a physical wheel tick responds immediately and leaves a short visible finish")
-let physicalFirstStep = zoomValues[0]
+precondition(zoomValues.count == 1 && abs(zoomValues[0] - physicalTarget) < 1e-12,
+             "a physical wheel tick applies its full travel before the event returns")
 wheel.acceptRenderedZoom(1)
-precondition(wheel.zoom == physicalFirstStep,
-             "an older SwiftUI update cannot rewind the first mouse animation step")
-requireWheelZoomTarget(physicalTarget, after: physicalStart)
-precondition(zoomValues.count >= 2 && zoomValues.allSatisfy { $0 >= 1 && $0 <= physicalTarget },
-             "mouse animation uses bounded intermediate scale publications")
-requireMonotonicZoom(zoomValues, increasing: true)
-let physicalSettledCount = zoomValues.count
+precondition(wheel.zoom == physicalTarget,
+             "an older SwiftUI update cannot rewind the first mouse response")
 RunLoop.main.run(until: Date().addingTimeInterval(0.6))
-precondition(zoomValues.count == physicalSettledCount && abs(zoomValues.last! - physicalTarget) < 1e-12,
-             "a physical tick ends at its exact input target")
-precondition(abs(TimelineViewportPreferences.storage.double(forKey: "jaras.timelineZoom") - zoomValues.last!) < 1e-12,
+precondition(zoomValues.count == 1 && abs(zoomValues.last! - physicalTarget) < 1e-12,
+             "releasing the physical wheel adds no easing or synthetic movement")
+precondition(abs(TimelineViewportPreferences.storage.double(forKey: "jaras.timelineZoom") - physicalTarget) < 1e-12,
              "the final zoom preference is persisted after the gesture settles")
-let physicalTailCount = zoomValues.count
-RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-precondition(zoomValues.count == physicalTailCount, "physical-wheel zoom settles without idle updates")
+
 resetZoomInput(precise: false)
 event.delta = 2
 precondition(wheel.handleWheelEvent(event))
-RunLoop.main.run(until: Date().addingTimeInterval(0.03))
 let beforeReverse = zoomValues.last!
-let beforeReverseCount = zoomValues.count
 event.delta = -1; event.inputTime += 0.03
 let mouseReversalStart = ProcessInfo.processInfo.systemUptime
 precondition(wheel.handleWheelEvent(event))
+requireZoomFrame(after: mouseReversalStart, callbackCount: 2)
 let reverseTarget = beforeReverse * exp(-TimelineZoomLimits.wheelSensitivity)
-requireWheelZoomTarget(reverseTarget, after: mouseReversalStart)
-requireMonotonicZoom([beforeReverse] + Array(zoomValues.dropFirst(beforeReverseCount)), increasing: false)
-let mouseReversalSettledCount = zoomValues.count
-RunLoop.main.run(until: Date().addingTimeInterval(0.10))
-precondition(zoomValues.count == mouseReversalSettledCount,
-             "mouse reversal drops the unseen forward tail and ends at the reverse input target")
+precondition(abs(zoomValues.last! - reverseTarget) < 1e-12,
+             "the next frame applies the full reverse input, without an old animation tail")
+requireMonotonicZoom(zoomValues, increasing: false)
+RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+precondition(zoomValues.count == 2, "mouse reversal adds no movement after its input")
 
 resetZoomInput(precise: false)
 event.delta = 2
@@ -347,10 +325,14 @@ for _ in 0..<40 {
     event.delta = 0.02; event.inputTime += 1.0 / 120
     precondition(wheel.handleWheelEvent(event))
 }
-precondition(zoomValues.count == 1, "retargeting a mouse burst keeps layout at the display cadence")
+precondition(zoomValues.count == 1, "a mouse burst keeps layout at the display cadence")
 let mouseBurstEnd = ProcessInfo.processInfo.systemUptime
-requireWheelZoomTarget(exp(2.8 * TimelineZoomLimits.wheelSensitivity), after: mouseBurstEnd)
+requireZoomFrame(after: mouseBurstEnd, callbackCount: 2)
+precondition(abs(zoomValues.last! - exp(2.8 * TimelineZoomLimits.wheelSensitivity)) < 1e-12,
+             "the next mouse frame consumes every delta, with no interpolation delay")
 requireMonotonicZoom(zoomValues, increasing: true)
+RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+precondition(zoomValues.count == 2, "a complete burst cannot continue moving during idle")
 
 for phase: NSEvent.Phase in [[], .began] {
     resetZoomInput(precise: false)
@@ -360,11 +342,12 @@ for phase: NSEvent.Phase in [[], .began] {
     event.precise = true; event.gesturePhase = phase; event.delta = -1; event.inputTime += 0.01
     let mouseToPreciseStart = ProcessInfo.processInfo.systemUptime
     precondition(wheel.handleWheelEvent(event))
-    requireWheelZoomTarget(switchBase * exp(-TimelineZoomLimits.preciseSensitivity), after: mouseToPreciseStart)
+    requireZoomFrame(after: mouseToPreciseStart, callbackCount: 2)
+    precondition(abs(zoomValues.last! - switchBase * exp(-TimelineZoomLimits.preciseSensitivity)) < 1e-12,
+                 "switching devices preserves the new device's direct signed travel")
     requireMonotonicZoom([switchBase] + Array(zoomValues.dropFirst(switchCount)), increasing: false)
-    let switchSettledCount = zoomValues.count
-    RunLoop.main.run(until: Date().addingTimeInterval(0.10))
-    precondition(zoomValues.count == switchSettledCount, "precise input cancels the previous mouse animation")
+    RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+    precondition(zoomValues.count == 2, "switching devices must not leave a synthetic tail")
 }
 
 for cancellation in ["modal", "held-pan"] {
@@ -372,6 +355,8 @@ for cancellation in ["modal", "held-pan"] {
     event.delta = 2
     precondition(wheel.handleWheelEvent(event))
     let cancelledScale = zoomValues.last!, cancelledCount = zoomValues.count
+    event.delta = 1; event.inputTime += 0.01
+    precondition(wheel.handleWheelEvent(event) && zoomValues.count == cancelledCount)
     if cancellation == "modal" { gate.setBlocked(true, for: window) }
     else {
         event.delta = -1; event.inputTime += 0.01
@@ -379,7 +364,7 @@ for cancellation in ["modal", "held-pan"] {
     }
     RunLoop.main.run(until: Date().addingTimeInterval(0.12))
     precondition(zoomValues.count == cancelledCount && wheel.zoom == cancelledScale,
-                 "\(cancellation) cancels every remaining mouse zoom animation frame")
+                 "\(cancellation) cancels coalesced zoom input before the next frame")
 }
 resetZoomInput()
 event.gesturePhase = []; event.delta = 2
@@ -388,7 +373,7 @@ precondition(zoomValues.count == 1 && abs(zoomValues[0] - exp(2 * TimelineZoomLi
              "a precise mouse event without gesture phases is immediate too")
 RunLoop.main.run(until: Date().addingTimeInterval(0.12))
 precondition(zoomValues.count == 1)
-print("MOUSE_ZOOM_RELEASE_ANIMATION_REVERSAL_AND_STALE_UPDATE_PROTECTION_OK")
+print("MOUSE_ZOOM_IMMEDIATE_RESPONSE_COALESCING_REVERSAL_AND_STALE_UPDATE_PROTECTION_OK")
 
 // Holding the left button converts only an unmodified physical wheel into pan.
 // A pending trackpad zoom/anchor is cancelled before the viewport moves.

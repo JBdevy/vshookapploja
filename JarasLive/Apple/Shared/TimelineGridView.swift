@@ -1715,7 +1715,7 @@ private struct TimelineGridContent: View, Equatable {
         return TimelineTempo.snap(time, song: song, pixelsPerSecond: pixelsPerSecond, regionEnds: snappingRegionEnds,
                                   cursor: transport.editPosition ?? transport.position,
                                   otherCursors: [transport.position] + (transport.subPlay.playing ? [transport.subPlay.position] : []),
-                                  excludingRegion: excludingRegion, includeItemEdges: true,
+                                  excludingRegion: excludingRegion, includeHiddenDivisions: true, includeItemEdges: true,
                                   excludingItems: movingClip.map { selectedClips.union([$0]) } ?? resizingItem.map { Set([$0]) } ?? [])
     }
     private func gridPosition(_ time: Double, song: Song, pixelsPerSecond: Double, freePositioning: Bool? = nil) -> Double {

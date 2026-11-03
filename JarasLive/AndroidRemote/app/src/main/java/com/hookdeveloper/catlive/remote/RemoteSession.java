@@ -35,6 +35,22 @@ final class RemoteSession {
     private int discoveryGeneration=0;
     volatile JSONObject state;
     JSONObject confirmedState;final RemoteFeedback feedback=new RemoteFeedback();
+    final RemoteBlockFeedback blockFeedback=new RemoteBlockFeedback();
+    private Runnable blockTimer;
+    private void cancelBlockFeedback(){if(blockTimer!=null)main.removeCallbacks(blockTimer);blockTimer=null;blockFeedback.clear();}
+    private JSONObject receiveBlockFeedback(JSONObject value){
+        if(blockTimer!=null)main.removeCallbacks(blockTimer);blockTimer=null;
+        long now=SystemClock.elapsedRealtime();JSONObject shown=blockFeedback.receive(value,now);
+        scheduleBlockFeedback(now);
+        return shown;
+    }
+    private void scheduleBlockFeedback(long now){
+        if(blockTimer!=null)main.removeCallbacks(blockTimer);blockTimer=null;
+        if(blockFeedback.deadline>=0){
+            blockTimer=()->{blockTimer=null;if(!connected||!active||closed)return;JSONObject prepared=blockFeedback.advance(SystemClock.elapsedRealtime());if(prepared!=null){state=feedback.overlay(prepared);if(listener!=null)listener.onLocalChanged();}};
+            main.postDelayed(blockTimer,Math.max(1,blockFeedback.deadline-now));
+        }
+    }
     final RemoteProjectOpening projectOpening=new RemoteProjectOpening();
     volatile String mode="";
     String status="",peerName="",lastError="";
@@ -58,9 +74,9 @@ final class RemoteSession {
     void changed(){if(listener!=null)listener.onChanged();}
     void message(String text){main.post(()->{if(listener!=null)listener.onMessage(text);});}
     void resume(){if(closed||(active&&(connected||connecting)))return;active=true;if(selected!=null)connect(selected);else browse();}
-    void suspend(){feedback.clear();if(confirmedState!=null)state=confirmedState;active=false;generation++;disconnectSocket();connected=false;connecting=false;stopDiscovery();changed();}
+    void suspend(){cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;active=false;generation++;disconnectSocket();connected=false;connecting=false;stopDiscovery();changed();}
     void close(){closed=true;suspend();connectivity.unregisterNetworkCallback(networkCallback);reader.shutdownNow();writer.shutdownNow();images.evictAll();}
-    void exit(){projectOpening.clear();feedback.clear();confirmedState=null;selected=null;resumeMode="";resumePin="";mode="";state=null;sequence=0;subscription=0;noticeRequests.clear();generation++;disconnectSocket();connected=false;connecting=false;status="";browse();changed();}
+    void exit(){cancelBlockFeedback();projectOpening.clear();feedback.clear();confirmedState=null;selected=null;resumeMode="";resumePin="";mode="";state=null;sequence=0;subscription=0;noticeRequests.clear();generation++;disconnectSocket();connected=false;connecting=false;status="";browse();changed();}
     void browse(){
         if(!active||closed)return;stopDiscovery();peers.clear();status="Procurando PCs…";changed();
         final int token=++discoveryGeneration;
@@ -130,7 +146,7 @@ final class RemoteSession {
     private void publishNext(int token){
         if(token!=generation)return;JSONObject value=nextState.getAndSet(null);if(value==null)return;
         if(!RemoteModel.same(RemoteModel.id(value,"project"),RemoteModel.id(state,"project"))){images.evictAll();requestedImages.clear();}
-        projectOpening.receive(value);confirmedState=value;state=feedback.receive(value,SystemClock.elapsedRealtime());changed();
+        projectOpening.receive(value);confirmedState=value;state=feedback.receive(receiveBlockFeedback(value),SystemClock.elapsedRealtime());changed();
     }
     private void accessStatus(JSONObject value,int token){
         if(token!=generation)return;requiresPin=value.optBoolean("requiresPIN");noticesPin=value.optBoolean("noticesRequiresPIN");mode=RemoteModel.id(value,"mode");lastError=value.optString("error","");
@@ -139,7 +155,7 @@ final class RemoteSession {
         else if(!lastError.isEmpty()){resumeMode="";resumePin="";}
         changed();
     }
-    private void lost(int token){if(token!=generation||closed)return;feedback.clear();if(confirmedState!=null)state=confirmedState;connected=false;connecting=false;mode="";status=selected==null?"Desconectado":"Reconectando a "+selected.name+"…";noticeRequests.clear();requestedImages.clear();nextState.set(null);changed();if(active){browse();main.postDelayed(()->{if(token==generation&&selected!=null&&!connected&&!connecting&&active)connect(selected);},2500);}}
+    private void lost(int token){if(token!=generation||closed)return;cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;connected=false;connecting=false;mode="";status=selected==null?"Desconectado":"Reconectando a "+selected.name+"…";noticeRequests.clear();requestedImages.clear();nextState.set(null);changed();if(active){browse();main.postDelayed(()->{if(token==generation&&selected!=null&&!connected&&!connecting&&active)connect(selected);},2500);}}
     private synchronized void disconnectSocket(){Socket s=socket;socket=null;if(s!=null)try{s.close();}catch(IOException ignored){}nextState.set(null);}
     void requestAccess(String mode,String pin){resumeMode=mode;resumePin=pin;try{sendPacket(5,new JSONObject().put("mode",mode).put("pin",pin),generation);}catch(JSONException e){message(e.getMessage());}}
     void subscribe(int panel){subscription=panel;if(state!=null&&!mode.isEmpty())command("remotePanel",null,panel,null,null,null);}
@@ -151,11 +167,16 @@ final class RemoteSession {
         try{JSONObject command=RemoteWire.command(state,action,target,value,text,playlist,enabled);if(command==null)return;
             if(RemoteProjectOpening.isOpen(action))projectOpening.begin(command,state,SystemClock.elapsedRealtime());
             if(action.equals("noticeSend")){command.put("noticeReceiptRequested",true);String id=command.getString("id");noticeRequests.put(id,SystemClock.elapsedRealtime());main.postDelayed(()->{if(noticeRequests.remove(id)!=null)message("O computador não confirmou o recado. Confira a conexão.");},5000);}
+            if(!action.equals("remotePanel")&&!action.equals("requestImage"))cancelBlockFeedback();
+            if(action.equals("stop")){
+                JSONObject prepared=blockFeedback.stop(state,SystemClock.elapsedRealtime());
+                if(prepared!=null){state=prepared;scheduleBlockFeedback(SystemClock.elapsedRealtime());if(listener!=null)listener.onLocalChanged();}
+            }
             if(listener!=null)listener.onLocalCommand(command);
             sendPacket(1,command,generation);
             if(feedback.record(state,action,target,value,enabled,SystemClock.elapsedRealtime())){
-                if(confirmedState==null)confirmedState=state;state=feedback.overlay(confirmedState);if(listener!=null)listener.onLocalChanged();
-                int feedbackGeneration=generation;main.postDelayed(()->{if(feedbackGeneration==generation&&confirmedState!=null){state=feedback.receive(confirmedState,SystemClock.elapsedRealtime());if(listener!=null)listener.onLocalChanged();}},RemoteFeedback.TIMEOUT+1);
+                if(confirmedState==null)confirmedState=state;state=feedback.overlay(receiveBlockFeedback(confirmedState));if(listener!=null)listener.onLocalChanged();
+                int feedbackGeneration=generation;main.postDelayed(()->{if(feedbackGeneration==generation&&confirmedState!=null){state=feedback.receive(receiveBlockFeedback(confirmedState),SystemClock.elapsedRealtime());if(listener!=null)listener.onLocalChanged();}},RemoteFeedback.TIMEOUT+1);
             }
         }catch(Exception e){message("Não foi possível enviar o comando");}
     }

@@ -31,7 +31,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
     @Published var projectTabIndex = 0
 
     #if os(iOS)
-    enum NativePicker: String, Identifiable { case package, packageDestination, stems, trackAudio, trackMedia, storage; var id: String { rawValue } }
+    enum NativePicker: String, Identifiable { case project, projectFolder, package, packageDestination, stems, trackAudio, trackMedia, storage; var id: String { rawValue } }
     @Published var nativePicker: NativePicker?
     @Published var nativePackagePrompt: PortableProjectImportPrompt?
     @Published private(set) var nativeStorageDirectory: URL?
@@ -39,6 +39,52 @@ enum PortableProjectImportPrompt: String, Identifiable {
     private var afterNativeStorage: (() -> Void)?
     private var nativePackageScope: URL?
     private var nativePendingPackage: URL?
+    private var nativePendingProject: URL?
+    private var nativeProjectScope: URL?
+    var nativePickerDirectory: URL? { nativePendingProject?.deletingLastPathComponent() }
+    private func cancelNativeProjectOpen() {
+        nativePendingProject = nil
+        nativeProjectScope?.stopAccessingSecurityScopedResource(); nativeProjectScope = nil
+    }
+    private func receiveNativeProject(_ url: URL) {
+        if ["ziplive", "zip"].contains(url.pathExtension.lowercased()) { importPortablePackage(url); return }
+        guard ["jl", "bkjl"].contains(url.pathExtension.lowercased()) else {
+            error = "Choose a .jl, .bkjl or .ziplive project."; return
+        }
+        guard !busy, !TrackRecording.shared.recording, !TrackRecording.shared.busy else { return }
+        cancelNativeProjectOpen()
+        let container = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        if NativeStemFolderBrowser.contains(url, in: container) ||
+            nativeStorageScopes.contains(where: { NativeStemFolderBrowser.contains(url, in: $0) }) {
+            open(url); return
+        }
+        // Files grants access to the selected document only. A project also
+        // needs its sibling media and permission to save backups in that folder.
+        nativePendingProject = url
+        if url.startAccessingSecurityScopedResource() { nativeProjectScope = url }
+        nativePicker = .projectFolder
+    }
+    private func receiveNativeProjectFolder(_ root: URL) {
+        guard let project = nativePendingProject else { return }
+        defer { cancelNativeProjectOpen() }
+        guard NativeStemFolderBrowser.contains(project, in: root) else {
+            error = "Choose the folder containing the selected project and its media."; return
+        }
+        guard root.startAccessingSecurityScopedResource() else {
+            error = "Could not access the selected folder."; return
+        }
+        do {
+            let bookmark = try root.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            var bookmarks = UserDefaults.standard.array(forKey: "jaras.nativeImportedProjectBookmarks") as? [Data] ?? []
+            bookmarks.removeAll { (try? Self.resolveNativeImportBookmark($0).standardizedFileURL) == root.standardizedFileURL }
+            bookmarks.append(bookmark)
+            UserDefaults.standard.set(bookmarks, forKey: "jaras.nativeImportedProjectBookmarks")
+            if nativeStorageScopes.contains(where: { $0.standardizedFileURL == root.standardizedFileURL }) {
+                root.stopAccessingSecurityScopedResource()
+            } else { nativeStorageScopes.append(root) }
+            open(project)
+        } catch { root.stopAccessingSecurityScopedResource(); self.error = error.localizedDescription }
+    }
     func continueNativePackageImport(_ prompt: PortableProjectImportPrompt) {
         guard nativePackagePrompt == prompt else { return }
         nativePackagePrompt = nil
@@ -166,6 +212,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
         nativePicker = .trackMedia
     }
     func cancelNativePicker(kind: NativePicker? = nil) {
+        if kind == .project || kind == .projectFolder { cancelNativeProjectOpen() }
         if kind == .package || kind == .packageDestination { cancelNativePackageImport() }
         if kind == .storage || nativePicker == .storage {
             afterNativeStorage = nil
@@ -180,6 +227,8 @@ enum PortableProjectImportPrompt: String, Identifiable {
     }
     func receiveNativeFiles(_ urls: [URL], kind: NativePicker) {
         nativePicker = nil
+        if kind == .project { if let url = urls.first { receiveNativeProject(url) }; return }
+        if kind == .projectFolder { if let url = urls.first { receiveNativeProjectFolder(url) } else { cancelNativeProjectOpen() }; return }
         if kind == .storage { if let root = urls.first { receiveNativeStorage(root) }; return }
         if kind == .packageDestination { if let root = urls.first { receiveNativePackageDestination(root) }; return }
         if kind == .trackAudio || kind == .trackMedia {
@@ -1006,7 +1055,10 @@ enum PortableProjectImportPrompt: String, Identifiable {
         let response = withExtendedLifetime(validator) { panel.runModal() }
         if response == .OK, let url = panel.url { open(url) }
         #else
-        browsePortablePackage()
+        guard !busy, !TrackRecording.shared.recording, !TrackRecording.shared.busy,
+              nativePicker == nil, nativePackagePrompt == nil else { return }
+        cancelNativeProjectOpen(); cancelNativePackageImport()
+        nativePicker = .project
         #endif
     }
     func browsePortablePackage() {

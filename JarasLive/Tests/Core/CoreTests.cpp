@@ -27,6 +27,19 @@ static void testAutoUntilBlockEnd() {
     expect(legacy.transport().playing && legacy.transport().regionId == "c", "default Auto crosses block headings");
 
     state.autoUntilBlockEnd = true; project.regionSetlist = state;
+    for (bool automatic : {false, true}) for (bool stop : {false, true}) {
+        auto combination = project;
+        combination.regionSetlist->autoAdvance = automatic;
+        combination.regionSetlist->stopAtRegionEnd = stop;
+        Engine boundary; boundary.loadProject(combination); start(boundary, "b");
+        boundary.advance(10);
+        expect(!boundary.transport().playing && boundary.transport().regionId == "c" &&
+               boundary.transport().position == 20 && boundary.transport().editPosition == 20,
+               "block completion prepares the next block independently of AUTO and STOP");
+        boundary.execute({CommandKind::stop});
+        expect(boundary.transport().position == 20 && boundary.transport().regionId == "c",
+               "Stop after block completion must not restore the previous song's play start");
+    }
     for (bool stop : {false, true}) {
         auto combination = project; combination.regionSetlist->stopAtRegionEnd = stop;
         Engine boundary; boundary.loadProject(combination); start(boundary, "b");
@@ -34,6 +47,33 @@ static void testAutoUntilBlockEnd() {
         expect(!boundary.transport().playing && boundary.transport().regionId == "c" &&
                boundary.transport().editPosition == 20,
                "block end prepares the next block even when STOP is enabled");
+    }
+    for (bool automatic : {false, true}) for (bool paused : {false, true}) for (bool all : {false, true}) {
+        auto manualProject = project; manualProject.regionSetlist->autoAdvance = automatic;
+        // The next block need not be adjacent in the grid.
+        manualProject.songs[0].parts[2].startTime = 60; manualProject.songs[0].parts[2].endTime = 70;
+        Engine manualStop; manualStop.loadProject(manualProject); start(manualStop, "b"); manualStop.advance(2);
+        if (paused) manualStop.execute({CommandKind::pause});
+        manualStop.execute({all ? CommandKind::stopAll : CommandKind::stop});
+        expect(!manualStop.transport().playing && !manualStop.transport().paused &&
+               manualStop.transport().regionId == "c" && manualStop.transport().playlistEntryId == "c" &&
+               manualStop.transport().position == 60 && manualStop.transport().editPosition == 60,
+               "manual Stop prepares the next block and both cursors, also after Pause");
+        manualStop.execute({CommandKind::stop});
+        expect(manualStop.transport().regionId == "c" && manualStop.transport().position == 60,
+               "repeated Stop cannot skip another song or restore the outgoing start");
+        manualStop.execute({CommandKind::play});
+        expect(manualStop.transport().playing && manualStop.transport().regionId == "c" && manualStop.transport().position == 60,
+               "Play starts the prepared next block at its start");
+    }
+    {
+        Engine inside; inside.loadProject(project); start(inside, "a"); inside.advance(2); inside.execute({CommandKind::stop});
+        expect(inside.transport().regionId == "b", "Stop inside a block prepares its queued song, never skips to the next block");
+        auto disabled = project; disabled.regionSetlist->autoUntilBlockEnd = false; disabled.regionSetlist->autoAdvance = false;
+        Engine ordinary; ordinary.loadProject(disabled); start(ordinary, "b"); ordinary.advance(2); ordinary.execute({CommandKind::stop});
+        expect(ordinary.transport().regionId == "b" && ordinary.transport().position == 10, "disabled block policy preserves ordinary Stop");
+        Engine explicitQueue; explicitQueue.loadProject(project); start(explicitQueue, "b"); explicitQueue.execute({CommandKind::queueRegion, "e"}); explicitQueue.execute({CommandKind::stop});
+        expect(explicitQueue.transport().regionId == "e", "manual queue wins over next-block preparation on Stop");
     }
     Engine limited; limited.loadProject(project); start(limited, "a");
     expect(limited.transport().queuedRegionId == "b", "block limit queues songs within the current block");

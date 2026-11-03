@@ -220,6 +220,7 @@ private struct AdvancedTimelineSettings: View {
     let documents: ProjectDocuments?
     @State private var confirmingCleanup = false
     @AppStorage("jaras.timeline.continuousScroll") private var continuousScroll = false
+    @AppStorage("jaras.timeline.invertWaveformColors") private var invertWaveformColors = false
     @AppStorage("jaras.timeline.gridlines") private var gridlines = GlobalProjectTiming.load()?.settings.divisions != 0
     var body: some View {
         VStack(spacing: 18) {
@@ -237,6 +238,14 @@ private struct AdvancedTimelineSettings: View {
                 Picker("Continuous scroll", selection: $continuousScroll) {
                     Text(verbatim: "true").tag(true)
                     Text(verbatim: "none").tag(false)
+                }.labelsHidden()
+            }
+            HStack {
+                Text("Invert colors of waveform items")
+                Spacer()
+                Picker("Invert colors of waveform items", selection: $invertWaveformColors) {
+                    Text(verbatim: "Default").tag(false)
+                    Text("Inverted").tag(true)
                 }.labelsHidden()
             }
             SetlistTextColorRow(title: "Timeline background", key: "jaras.timeline.background", defaultColor: TimelineAppearanceDefaults.background, showsReset: true)

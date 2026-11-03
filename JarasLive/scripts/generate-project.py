@@ -39,7 +39,11 @@ for platform,label,bundle in [('macosx','macOS','com.hookdeveloper.jaraslive.mac
  product=add('product:'+label,f'isa = PBXFileReference; explicitFileType = wrapper.application; path = "CatLive.app"; sourceTree = BUILT_PRODUCTS_DIR;');products.append(product)
  builds=[]
  for rel,ref in refs.items():
-  if Path(rel).suffix in ['.swift','.cpp','.mm','.c']: builds.append(add('build:'+label+rel,f'isa = PBXBuildFile; fileRef = {ref};'))
+  if Path(rel).suffix in ['.swift','.cpp','.mm','.c']:
+   # The realtime DSP/FFT must keep its production performance in Debug too.
+   # Application code remains debuggable; this does not enable fast-math.
+   dspFlags=' settings = {COMPILER_FLAGS = "-O3";};' if rel=='Apple/Bridge/JarasEffects.mm' else ''
+   builds.append(add('build:'+label+rel,f'isa = PBXBuildFile; fileRef = {ref};'+dspFlags))
  if platform=='iphoneos':
   builds.append(add('stemCoreMLBuild:'+label, f'isa = PBXBuildFile; fileRef = {stemModel};'))
   builds.extend(add('stemOfflineCoreMLBuild:'+label+('' if index==1 else str(index)), f'isa = PBXBuildFile; fileRef = {ref};') for index,ref in enumerate(stemOfflineModels,1))

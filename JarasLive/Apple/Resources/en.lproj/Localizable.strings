@@ -986,10 +986,10 @@
 "Sub Play cursor color" = "Sub Play cursor color";
 
 // Local-network Remote
-"Open Remote on the iPad and choose this computer." = "Open Remote on the iPad and choose this computer.";
+"Open Remote on your device and choose this computer." = "Open Remote on your device and choose this computer.";
 "Audio continues on the computer. Both devices must be on the same local network." = "Audio continues on the computer. Both devices must be on the same local network.";
 "Disable Remote" = "Disable Remote";
-"Waiting for iPad" = "Waiting for iPad";
+"Waiting for connection" = "Waiting for connection";
 "Connected" = "Connected";
 "Searching for computers…" = "Searching for computers…";
 "Connecting…" = "Connecting…";
@@ -2180,3 +2180,10 @@
 "A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta." = "The selected folder is on a disk with less than 5 GB available. Free up space before exporting or choose another folder.";
 "Unlearn CC" = "Unlearn CC";
 "Unlearn MIDI" = "Unlearn MIDI";
+
+"Choose the folder containing the selected project and its media." = "Choose the folder containing the selected project and its media.";
+
+"Choose a .jl, .bkjl or .ziplive project." = "Choose a .jl, .bkjl or .ziplive project.";
+
+"Invert colors of waveform items" = "Invert colors of waveform items";
+"Inverted" = "Inverted";

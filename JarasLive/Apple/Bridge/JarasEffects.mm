@@ -17,8 +17,34 @@
 #include <vector>
 #include <mach/mach_time.h>
 #include "JarasMobileAudioIO.inc"
+#include "JarasPreparedClip.inc"
 
 @implementation JarasAudioOutputConnection
++ (BOOL)startPlayer:(AVAudioPlayerNode *)player error:(NSError **)error {
+    @try { [player play]; return YES; }
+    @catch (NSException *exception) {
+        if (error) *error = [NSError errorWithDomain:@"CatLive.AudioPlayer" code:1
+            userInfo:@{NSLocalizedDescriptionKey: exception.reason ?: @"Unable to start audio playback"}];
+        return NO;
+    }
+}
+// AVAudioPlayerNode's immediate start can wait for an I/O cycle. Start the
+// already prepared independent players together rather than one cycle per stem.
++ (BOOL)startPlayers:(NSArray<AVAudioPlayerNode *> *)players error:(NSError **)error {
+    if (players.count == 1) return [self startPlayer:players.firstObject error:error];
+    NSLock *lock = [[NSLock alloc] init];
+    __block NSError *failure = nil;
+    dispatch_apply(players.count, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t index) {
+        NSError *current = nil;
+        if (![self startPlayer:players[index] error:&current]) {
+            [lock lock];
+            if (!failure) failure = current;
+            [lock unlock];
+        }
+    });
+    if (failure && error) *error = failure;
+    return failure == nil;
+}
 + (AVAudioFormat *)connectEngine:(AVAudioEngine *)engine error:(NSError **)error {
     // A HAL route change can report 0 Hz / 0 channels while the selected
     // device is still settling. Do not manufacture a rate or borrow another
@@ -182,6 +208,8 @@ struct EffectAnalysis {
 @end
 
 struct VoiceGainKernel {
+    std::atomic<uint64_t> startHost{0};
+    double sampleRate=48000;
     std::atomic<bool> enabled{true};
     std::atomic<float> gain{1};
     float current=1;
@@ -210,6 +238,7 @@ struct VoiceGainKernel {
 - (AUAudioUnitBusArray *)outputBusses { return _outputs; }
 - (BOOL)allocateRenderResourcesAndReturnError:(NSError **)error {
     if(![super allocateRenderResourcesAndReturnError:error]) return NO;
+    gain.sampleRate=_output.format.sampleRate;
     gain.capacity=self.maximumFramesToRender; gain.channels=_output.format.channelCount;
     gain.silence.assign(gain.capacity*gain.channels,0);
     gain.resetRequested.store(true,std::memory_order_release);
@@ -254,11 +283,29 @@ struct VoiceGainKernel {
             const auto& buffer=output->mBuffers[ch]; auto data=static_cast<float*>(buffer.mData);
             if(data) scaleAudioBlock(data+frame*buffer.mNumberChannels,(frames-frame)*buffer.mNumberChannels,state->current);
         }
+        // Prepared sources drain their converters while silent. Enforce the
+        // audible deadline after conversion/insert FX so cached samples cannot
+        // escape before a newly scheduled onset, even on an immediate replay.
+        const auto physicalTime = jaras::physicalRenderTime(*time, state->sampleRate);
+        time = &physicalTime;
+        const auto start = state->startHost.load(std::memory_order_acquire);
+        if (start && ((time->mFlags & kAudioTimeStampHostTimeValid) || start == UINT64_MAX)) {
+            const double before = start == UINT64_MAX ? double(frames) :
+                (double(start) - double(time->mHostTime)) * [AVAudioTime secondsForHostTime:1] * state->sampleRate;
+            const auto silent = unsigned(std::clamp(std::ceil(before), 0., double(frames)));
+            if (silent) for (unsigned ch=0; ch<output->mNumberBuffers; ++ch) {
+                auto &buffer=output->mBuffers[ch];
+                if (buffer.mData) memset(buffer.mData, 0, silent * sizeof(float) * buffer.mNumberChannels);
+            }
+        }
         return noErr;
     };
 }
 @end
 @implementation JarasVoiceGain
++ (void)setStartHostTime:(AVAudioUnitEffect *)node hostTime:(uint64_t)hostTime {
+    ((JarasVoiceGainUnit *)node.AUAudioUnit)->gain.startHost.store(hostTime, std::memory_order_release);
+}
 + (AVAudioUnitEffect *)makeNode {
     static dispatch_once_t once;
     AudioComponentDescription d={kAudioUnitType_Effect,'JLvg','Jara',0,0};
@@ -366,11 +413,18 @@ struct EQKernel {
     double channelMatrix[4] = {1,0,0,1};
     double currentInputGain=1;
     double currentInputPan=0;
+    double inputGainTarget=1;
+    double inputPanTarget=0;
+    double inputGainStep=0;
+    double inputPanStep=0;
+    double sampleRate=48000;
+    unsigned inputRampFrames=240;
+    unsigned inputRampRemaining=0;
     bool inputGainInitialized=false;
     double mix=0;
     EQKernel() { for(unsigned n=0;n<kSections;n++) for(unsigned j=0;j<5;j++) { pending[n][j].store(j==0?1:0); coefficients[n][j]=j==0?1:0; desired[n][j]=j==0?1:0; } }
     void process(AudioBufferList *buffers, unsigned frames) {
-        if (padReleaseRequested.exchange(false, std::memory_order_acq_rel)) padRelease.begin(fade.rate);
+        if (padReleaseRequested.exchange(false, std::memory_order_acq_rel)) padRelease.begin(sampleRate);
         if (padRelease.started) {
             for (unsigned frame=0; frame<frames; ++frame) {
                 const float gain=padRelease.next();
@@ -385,6 +439,7 @@ struct EQKernel {
         if (resetRequested.exchange(false, std::memory_order_acq_rel)) {
             for (unsigned ch=0; ch<2; ++ch) for (unsigned n=0; n<kSections; ++n) z1[ch][n]=z2[ch][n]=0;
             inputGainInitialized=false;
+            inputRampRemaining=0;
         }
         const int mode=channelMode.load(std::memory_order_relaxed);
         const double matrices[5][4]={{1,0,0,1},{1,0,1,0},{0,1,0,1},{0.5,0.5,0.5,0.5},{0,1,1,0}};
@@ -402,17 +457,28 @@ struct EQKernel {
         }
         const double gain=inputGain.load(std::memory_order_relaxed)*(inverted.load(std::memory_order_relaxed)?-1:1);
         const double pan=inputPan.load(std::memory_order_relaxed);
-        if(!inputGainInitialized) { currentInputGain=gain; currentInputPan=pan; inputGainInitialized=true; }
-        if(gain!=1 || currentInputGain!=1 || pan!=0 || currentInputPan!=0) {
+        if(!inputGainInitialized) {
+            currentInputGain=inputGainTarget=gain;
+            currentInputPan=inputPanTarget=pan;
+            inputGainInitialized=true;
+        } else if(gain!=inputGainTarget || pan!=inputPanTarget) {
+            inputGainTarget=gain; inputPanTarget=pan;
+            inputRampRemaining=inputRampFrames;
+            inputGainStep=(gain-currentInputGain)/inputRampRemaining;
+            inputPanStep=(pan-currentInputPan)/inputRampRemaining;
+        }
+        if(inputRampRemaining || currentInputGain!=1 || currentInputPan!=0) {
             unsigned frame=0;
-            // Smooth only parameter changes. Once settled, use a contiguous
-            // channel pass that the compiler can vectorize instead of doing
-            // control interpolation and channel lookup for every sample.
-            for(;frame<frames && (currentInputGain!=gain || currentInputPan!=pan);frame++) {
-                currentInputGain += (gain-currentInputGain)*0.02;
-                if(std::abs(gain-currentInputGain)<1e-9) currentInputGain=gain;
-                currentInputPan += (pan-currentInputPan)*0.02;
-                if(std::abs(pan-currentInputPan)<1e-9) currentInputPan=pan;
+            // Use the same short, fixed-duration ramp for every track. Solo
+            // changes then open all affected buses together instead of making
+            // louder targets appear to return before quieter ones.
+            for(;frame<frames && inputRampRemaining;frame++) {
+                currentInputGain += inputGainStep;
+                currentInputPan += inputPanStep;
+                if(--inputRampRemaining==0) {
+                    currentInputGain=inputGainTarget;
+                    currentInputPan=inputPanTarget;
+                }
                 for(unsigned ch=0;ch<std::min(2u,buffers->mNumberBuffers);ch++) {
                     auto data=static_cast<float*>(buffers->mBuffers[ch].mData);
                     // Stereo balance matches the existing mixer: center is
@@ -505,6 +571,8 @@ struct EQKernel {
 - (BOOL)allocateRenderResourcesAndReturnError:(NSError **)error {
     if(![super allocateRenderResourcesAndReturnError:error]) return NO;
     kernel.fade.rate=_output.format.sampleRate;
+    kernel.sampleRate=_output.format.sampleRate;
+    kernel.inputRampFrames=std::max(1u,(unsigned)std::lround(kernel.sampleRate*0.005));
     return YES;
 }
 - (void)reset { [super reset]; kernel.resetRequested.store(true, std::memory_order_release); }
@@ -1186,12 +1254,15 @@ struct ChannelRouteKernel {
     [self configurePatches:node firsts:@[@(first)] counts:@[@(count)]];
 }
 + (void)configurePatches:(AVAudioUnitEffect *)node firsts:(NSArray<NSNumber *> *)firsts counts:(NSArray<NSNumber *> *)counts {
+    [self configurePatches:node firsts:firsts counts:counts outputChannels:node.AUAudioUnit.outputBusses[0].format.channelCount];
+}
++ (void)configurePatches:(AVAudioUnitEffect *)node firsts:(NSArray<NSNumber *> *)firsts counts:(NSArray<NSNumber *> *)counts outputChannels:(NSUInteger)outputChannels {
     // Build the hardware matrix on the control thread. Changing route count
     // needs no new audio units, graph rebuilds or render-time allocations.
     auto *unit=(JarasChannelRouteUnit*)node.AUAudioUnit;
     std::array<uint32_t,1024> gains{};
     std::set<std::pair<unsigned,unsigned>> seen;
-    const unsigned channels=unit.outputBusses[0].format.channelCount;
+    const unsigned channels=static_cast<unsigned>(std::min<NSUInteger>(1024,outputChannels));
     for (NSUInteger i=0; i<MIN(firsts.count, counts.count); ++i) {
         const NSInteger first=firsts[i].integerValue, count=counts[i].integerValue;
         if (first<1 || first>1024 || count<1 || count>2 || first+count-1>channels || !seen.insert({unsigned(first),unsigned(count)}).second) continue;

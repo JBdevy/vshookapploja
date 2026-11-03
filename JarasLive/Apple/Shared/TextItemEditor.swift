@@ -415,16 +415,16 @@ private final class IpadColoredTextView: UITextView {
         let controller = UIHostingController(rootView: ItemTextColorPalette(pick: { [weak self] color in
             guard let self else { return }
             self.applyColor(color, range: range)
-            self.palette?.dismiss(animated: true) { [weak self] in self?.becomeFirstResponder() }
+            self.palette?.dismiss(animated: false) { [weak self] in self?.becomeFirstResponder() }
         }, cancel: { [weak self] in
-            self?.palette?.dismiss(animated: true) { [weak self] in self?.becomeFirstResponder() }
+            self?.palette?.dismiss(animated: false) { [weak self] in self?.becomeFirstResponder() }
         }))
         controller.modalPresentationStyle = .popover
         controller.preferredContentSize = CGSize(width: 360, height: 180)
         controller.popoverPresentationController?.sourceView = self
         controller.popoverPresentationController?.sourceRect = selectedTextRange.map { firstRect(for: $0) } ?? bounds
         palette = controller
-        presenter.present(controller, animated: true)
+        presenter.present(controller, animated: false)
     }
 }
 #endif

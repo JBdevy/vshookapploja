@@ -18,7 +18,7 @@ struct DAWRemoteHostView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(verbatim: "Remote").font(.jarasHeadline)
             #if os(macOS)
-            Text("Open Remote on the iPad and choose this computer.").font(.jarasCallout)
+            Text("Open Remote on your device and choose this computer.").font(.jarasCallout)
             #else
             Text("Open Remote on another device and choose this iPad.").font(.jarasCallout)
             #endif
@@ -1191,7 +1191,7 @@ private struct RemoteSidebarRail<Content: View>: View {
     private var drawerExpanded: Bool { drawerRegion.map { expandedRegions.contains($0.id) } ?? false }
     private func toggleDrawer(_ id: UUID) {
         guard DAWRemoteSetlistPresentation.canToggleDrawer(id, in: state) else { return }
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(local ? nil : .easeOut(duration: 0.16)) {
             if !expandedRegions.insert(id).inserted { expandedRegions.remove(id) }
         }
     }
@@ -1655,10 +1655,10 @@ private struct RemoteSidebarRail<Content: View>: View {
         searchFocused = false; navigationOpen = false; playlistPickerOpen = false
         noticesOpen = false; timerOpen = false; settingsOpen = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        withAnimation(.easeOut(duration: 0.16)) { sidebarHidden = true }
+        withAnimation(local ? nil : .easeOut(duration: 0.16)) { sidebarHidden = true }
     }
     private func revealSidebar() {
-        withAnimation(.easeOut(duration: 0.16)) { sidebarHidden = false }
+        withAnimation(local ? nil : .easeOut(duration: 0.16)) { sidebarHidden = false }
     }
     private func hideSidebarButton(width: CGFloat) -> some View {
         Button(action: hideSidebar) {
@@ -2039,11 +2039,11 @@ private struct RemoteSidebarRail<Content: View>: View {
             let parts = nativeParts.right
             HStack(spacing: sidebarCollapsed ? 0 : 1) {
                 RemoteSidebarRail(hidden: sidebarCollapsed, width: railWidth) {
-                    Button { withAnimation(.easeOut(duration: 0.16)) { navigationOpen.toggle() } } label: {
+                    Button { withAnimation(local ? nil : .easeOut(duration: 0.16)) { navigationOpen.toggle() } } label: {
                         Image(systemName: "line.3.horizontal").font(.jarasSystem(size: 17, weight: .semibold))
                             .frame(width: railButton, height: 44).contentShape(Rectangle())
                     }.buttonStyle(RemoteFullAreaButtonStyle(surface: true)).accessibilityLabel("Abrir barra lateral")
-                    Button { withAnimation(.easeOut(duration: 0.16)) {
+                    Button { withAnimation(local ? nil : .easeOut(duration: 0.16)) {
                         toggleMainTrackMixer()
                     } } label: {
                         Image(systemName: "slider.horizontal.3")
@@ -2353,7 +2353,7 @@ private struct RemoteSidebarRail<Content: View>: View {
         let seconds = Int(min(Double(Int.max / 2), max(0, total)))
         return HStack(spacing: 10) {
             if sidebarHidden { restoreSidebarButton() }
-            ResourceUsageView(memoryScope: .device)
+            ResourceUsageView(memoryScope: .application, showsTotalMemory: local)
                 .font(.jarasSystem(size: 9, weight: .medium, design: .monospaced))
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityElement(children: .combine)
@@ -3576,6 +3576,7 @@ private enum RemoteNativeGridMetrics {
     }
 }
 private struct RemoteNativeTimeline: View {
+    @AppStorage("jaras.timeline.invertWaveformColors") private var invertWaveformColors = false
     @Environment(\.displayScale) private var displayScale
     let state: DAWRemoteState
     let tracks: [DAWRemoteState.Track]
@@ -3601,7 +3602,8 @@ private struct RemoteNativeTimeline: View {
     @State private var rulerSelectionEnd: Double?
     @State private var selectionResizeFixedEdge: Double?
     @State private var gestureControl = IpadTimelineGestureControl()
-    @State private var followsPlayback = true
+    // Use the desktop controller's navigation pause, not an independent UI flag.
+    private var followsPlayback: Bool { localShow?.timelineFollowPaused != true }
     @State private var pointerStart: (project: UUID, song: Song, item: UUID?, time: Double, point: CGPoint, selection: TimelinePointerSelection)?
     @State private var pointerDragged = false
     @State private var drawingMIDI = false
@@ -3615,13 +3617,9 @@ private struct RemoteNativeTimeline: View {
     private var end: Double { local ? viewport.end : region?.end ?? start }
     private var span: Double { local ? viewport.span : max(0.001, end - start) }
     private var zoomCursor: Double {
-        if let transport = localShow?.snapshot.transport {
-            if followsPlayback && transport.subPlay.playing { return transport.subPlay.position }
-            if followsPlayback && transport.playing { return transport.position }
-            return transport.editPosition ?? transport.position
-        }
-        if followsPlayback && state.subPlaying { return state.subPlayPosition ?? position }
-        if followsPlayback && state.playing { return position }
+        if let show = localShow { return show.timelineZoomPosition }
+        if state.subPlaying { return state.subPlayPosition ?? position }
+        if state.playing { return position }
         return state.editPosition ?? position
     }
     private var presentationSong: Song? {
@@ -3664,7 +3662,7 @@ private struct RemoteNativeTimeline: View {
         if state.loop, let start = state.loopStart, let end = state.loopEnd, end > start { return start...end }
         return nil
     }
-    private func pauseFollowing() { gestureControl.cancelMotion(); followsPlayback = false }
+    private func pauseFollowing() { gestureControl.cancelMotion(); localShow?.pauseTimelineFollow() }
     var body: some View {
         GeometryReader { geometry in
             let width = max(1, geometry.size.width)
@@ -3820,7 +3818,7 @@ private struct RemoteNativeTimeline: View {
             .background {
                 if local {
                     IpadTimelineGestureProbe(control: gestureControl, pan: { translation, width in
-                        followsPlayback = false; viewport.pan(pixels: translation, width: width)
+                        localShow?.pauseTimelineFollow(); viewport.pan(pixels: translation, width: width)
                     }, zoom: { scale, anchor in
                         viewport.zoom(factor: scale, centeredOn: zoomCursor)
                     })
@@ -3835,21 +3833,21 @@ private struct RemoteNativeTimeline: View {
             .onChange(of: state.project) { _ in cancelPointer(); cancelItemMix() }
             .onChange(of: localShow?.timelineMovementLocked) { locked in if locked == true { cancelPointer() } }
             .onChange(of: timelineFocus) { request in
-                if local, let request { gestureControl.cancelMotion(); followsPlayback = true; viewport.center(on: request.position) }
+                if local, let request { gestureControl.cancelMotion(); viewport.center(on: request.position) }
             }
             .onChange(of: state.song) { _ in
                 cancelPointer(); cancelItemMix(); scrolling.pointerReset = UUID()
-                if local { gestureControl.cancelMotion(); viewport.reset(duration: state.duration); followsPlayback = true; viewport.center(on: timelineFocus?.position ?? zoomCursor) }
+                if local { gestureControl.cancelMotion(); viewport.reset(duration: state.duration); viewport.center(on: timelineFocus?.position ?? zoomCursor) }
             }
             .onChange(of: region?.id) { _ in
                 // Stopped selection is driven by the explicit focus request, not
                 // by a region/state refresh that may still contain the old cursor.
-                if local && (state.playing || state.subPlaying) {
-                    followsPlayback = true; viewport.center(on: state.subPlaying ? state.subPlayPosition ?? position : position)
+                if local && followsPlayback && (state.playing || state.subPlaying) {
+                    viewport.center(on: state.subPlaying ? state.subPlayPosition ?? position : position)
                 }
             }
             .onChange(of: state.playing) { playing in
-                if local && playing { followsPlayback = true; viewport.follow(position) }
+                if local && playing { viewport.follow(position) }
             }
             .onChange(of: position) { time in
                 if local && followsPlayback && state.playing && !state.subPlaying { viewport.follow(time) }
@@ -3857,8 +3855,8 @@ private struct RemoteNativeTimeline: View {
             .onChange(of: state.subPlayPosition) { time in
                 if local && followsPlayback && state.subPlaying, let time { viewport.follow(time) }
             }
-            .accessibilityAction(named: Text("Zoom in")) { if local { viewport.zoom(factor: 1.5, anchor: 0.5) } }
-            .accessibilityAction(named: Text("Zoom out")) { if local { viewport.zoom(factor: 1 / 1.5, anchor: 0.5) } }
+            .accessibilityAction(named: Text("Zoom in")) { if local { viewport.zoom(factor: 1.5, centeredOn: zoomCursor) } }
+            .accessibilityAction(named: Text("Zoom out")) { if local { viewport.zoom(factor: 1 / 1.5, centeredOn: zoomCursor) } }
     }
     private func pointerItems(width: CGFloat) -> [(id: UUID, track: UUID, rect: CGRect)] {
         var rows: [(UUID, UUID, CGRect)] = []
@@ -4042,7 +4040,7 @@ private struct RemoteNativeTimeline: View {
                     }
                     rulerPointer(.init(phase: cancelled ? .cancelled : ended ? .ended : .moved,
                         position: point, origin: first, secondary: true, modifiers: []), width: width)
-                }, tap: { x in seek(start + min(1, max(0, x / width)) * span) }))
+                }, tap: { x in if local { pauseFollowing() }; seek(start + min(1, max(0, x / width)) * span) }))
             .background {
                 if local {
                     IpadTimelinePointerProbe(enabled: editorEnabled, capturesPointer: true,
@@ -4368,7 +4366,7 @@ private struct RemoteNativeTimeline: View {
             primaryColor: state.gridPrimaryColor ?? UInt32(TimelineAppearanceDefaults.primaryGrid),
             secondaryColor: state.gridSecondaryColor ?? UInt32(TimelineAppearanceDefaults.secondaryGrid),
             gridLines: state.gridLines != false, project: state.project, song: state.song,
-            scrolling: scrolling, local: local, nativeTrack: nativeSong?.tracks.first(where: { $0.id == track.id }), nativeSong: nativeSong,
+            scrolling: scrolling, local: local, invertWaveformColors: local && invertWaveformColors, nativeTrack: nativeSong?.tracks.first(where: { $0.id == track.id }), nativeSong: nativeSong,
             nativeDirectory: local ? DAWRemoteHostBridge.documents?.currentURL?.deletingLastPathComponent() : nil,
             nativeRevision: localShow?.projectRevision ?? 0, mixPreview: scrolling.itemMix, selectedItem: scrolling.selectedItem,
             selectedItems: scrolling.itemSelection.items, movementLocked: localShow?.timelineMovementLocked ?? false,
@@ -4458,6 +4456,7 @@ private struct RemoteTimelineTrackRow: View, Equatable {
     let song: UUID?
     let scrolling: RemoteTrackScrollController
     var local = false
+    var invertWaveformColors = false
     var nativeTrack: Track? = nil
     var nativeSong: Song? = nil
     var nativeDirectory: URL? = nil
@@ -4488,7 +4487,7 @@ private struct RemoteTimelineTrackRow: View, Equatable {
             lhs.track.laneCount == rhs.track.laneCount && lhs.track.heightScale == rhs.track.heightScale && lhs.track.emphasized == rhs.track.emphasized &&
             lhs.width == rhs.width && lhs.displayScale == rhs.displayScale && lhs.heightScale == rhs.heightScale &&
             lhs.selectedItem == rhs.selectedItem && lhs.selectedItems == rhs.selectedItems && lhs.movementLocked == rhs.movementLocked && lhs.resizeEnabled == rhs.resizeEnabled && lhs.interactionID == rhs.interactionID && lhs.start == rhs.start && lhs.end == rhs.end && lhs.span == rhs.span && lhs.nativeRevision == rhs.nativeRevision && lhs.mixPreview == rhs.mixPreview && lhs.nativeDirectory == rhs.nativeDirectory && lhs.hasRegion == rhs.hasRegion && lhs.local == rhs.local &&
-            lhs.backgroundColor == rhs.backgroundColor && lhs.primaryColor == rhs.primaryColor &&
+            lhs.invertWaveformColors == rhs.invertWaveformColors && lhs.backgroundColor == rhs.backgroundColor && lhs.primaryColor == rhs.primaryColor &&
             lhs.secondaryColor == rhs.secondaryColor && lhs.gridLines == rhs.gridLines &&
             lhs.marks.elementsEqual(rhs.marks) { $0.time == $1.time && $0.primary == $1.primary }
     }
@@ -4553,6 +4552,9 @@ private struct RemoteTimelineTrackRow: View, Equatable {
                     mute: { control(.clipMute, clip.id, 0) },
                     setGain: { control(.clipGain, clip.id, $0) }, local: local, trackSilenced: track.silenced == true,
                     nativeClip: previewTrack?.clips.first(where: { $0.id == clip.id }), nativeKind: nativeTrack?.kind,
+                    invertedWaveformColors: local && invertWaveformColors && previewTrack.map { track in
+                        track.clips.first(where: { $0.id == clip.id }).map { TimelineItemWaveformColors.hasWaveform($0, track: track) } ?? false
+                    } == true,
                     clickBeats: nativeClickBeats(clip, left: left, right: right, width: itemWidth),
                     itemMix: { parameter, value, finished, cancelled in itemMix?(clip.id, parameter, value, finished, cancelled) },
                     itemPhase: { itemPhase?(clip.id) },
@@ -4595,7 +4597,7 @@ private struct RemoteTimelineTrackRow: View, Equatable {
             }
             if local, let nativeTrack = previewTrack, let nativeSong, let nativeDirectory {
                 IpadNativeWaveformRow(track: nativeTrack, song: nativeSong, remoteTrack: track, directory: nativeDirectory,
-                    start: start, end: end, span: span, width: width, heightScale: heightScale, revision: nativeRevision)
+                    start: start, end: end, span: span, width: width, heightScale: heightScale, revision: nativeRevision, invertWaveformColors: invertWaveformColors)
                     .allowsHitTesting(false)
             }
             if local, let nativeTrack {
@@ -4664,6 +4666,8 @@ private struct IpadNativeWaveformRow: View {
     let width: CGFloat
     let heightScale: Double
     let revision: UInt64
+    var invertWaveformColors = false
+    @Environment(\.displayScale) private var displayScale
     @ObservedObject private var cache = TimelineAudioWaveform.shared
     @State private var owner = TimelineWaveformVertexOwner()
     @State private var sources = IpadWaveformRowSources()
@@ -4681,10 +4685,13 @@ private struct IpadNativeWaveformRow: View {
                 TimelineWaveformItem(clip: source.clip, fragments: source.fragments, url: source.url,
                     rect: CGRect(x: source.clip.startTime * scale, y: itemGeometry.offset(source.clip.id, fallbackLane: lanes[source.clip.id] ?? 0),
                                  width: source.clip.duration * scale, height: itemGeometry.height(source.clip.id)),
-                    gray: remoteTrack.silenced == true || source.clip.muted == true ? 0.78 : gray, sourcePath: source.path)
+                    gray: remoteTrack.silenced == true || source.clip.muted == true ? 0.78 : gray, sourcePath: source.path,
+                    tint: invertWaveformColors && TimelineItemWaveformColors.hasWaveform(source.clip, track: track)
+                        ? TimelineItemWaveformColors.ink(rgb: SIMD4(Float(rgb.red), Float(rgb.green), Float(rgb.blue), 1),
+                            silenced: remoteTrack.silenced == true || source.clip.muted == true) : nil)
             }
         MetalWaveformView(frame: TimelineMetalWaveformFrameBuilder.make(items: items, viewport: viewport,
-            scale: scale, cache: cache, owner: owner, contentRevision: Int(truncatingIfNeeded: revision)))
+            scale: scale, cache: cache, owner: owner, contentRevision: Int(truncatingIfNeeded: revision), pixelDensity: displayScale))
             .frame(width: width, height: viewport.height).clipped()
             .allowsHitTesting(false)
     }
@@ -4724,6 +4731,7 @@ private struct RemoteNativeGridItem: View, Equatable {
     var trackSilenced = false
     var nativeClip: AudioClip? = nil
     var nativeKind: TrackKind? = nil
+    var invertedWaveformColors = false
     var clickBeats: [Double] = []
     var itemMix: ((IpadItemMixParameter, Double, Bool, Bool) -> Void)? = nil
     var itemPhase: (() -> Void)? = nil
@@ -4737,13 +4745,14 @@ private struct RemoteNativeGridItem: View, Equatable {
         lhs.clip == rhs.clip && lhs.width == rhs.width && lhs.height == rhs.height && lhs.color == rhs.color &&
             lhs.nameColor == rhs.nameColor && lhs.scrolling === rhs.scrolling &&
             lhs.sourceFraction == rhs.sourceFraction && lhs.visibleFraction == rhs.visibleFraction &&
-            lhs.local == rhs.local && lhs.trackSilenced == rhs.trackSilenced && lhs.nativeClip == rhs.nativeClip && lhs.nativeKind == rhs.nativeKind && lhs.clickBeats == rhs.clickBeats && lhs.nativeWaveform == rhs.nativeWaveform && (lhs.openMenu != nil) == (rhs.openMenu != nil) &&
+            lhs.invertedWaveformColors == rhs.invertedWaveformColors && lhs.local == rhs.local && lhs.trackSilenced == rhs.trackSilenced && lhs.nativeClip == rhs.nativeClip && lhs.nativeKind == rhs.nativeKind && lhs.clickBeats == rhs.clickBeats && lhs.nativeWaveform == rhs.nativeWaveform && (lhs.openMenu != nil) == (rhs.openMenu != nil) &&
             (lhs.openFX != nil) == (rhs.openFX != nil)
     }
     var body: some View {
         let headerHeight = min(local ? GridSelectionItem.headerHeight : 28 * GridSelectionItem.headerScale, height)
         let silenced = trackSilenced || clip.muted == true
         let itemColor = silenced ? Color(white: 0.55) : remoteColor(color)
+        let waveformColor = invertedWaveformColors ? remoteColor(color).opacity(silenced ? 0.55 : 1) : nil
         VStack(spacing: 0) {
             if local, let nativeClip {
                 IpadItemHeader(clip: nativeClip, editable: nativeKind == .standard || nativeClip.isProjectionMedia,
@@ -4777,7 +4786,7 @@ private struct RemoteNativeGridItem: View, Equatable {
                         wave.addLine(to: CGPoint(x: x + 2, y: middle))
                         wave.addLine(to: CGPoint(x: x, y: middle + amplitude)); wave.closeSubpath()
                     }
-                    context.fill(wave, with: .color(silenced ? .gray : Color(white: 0.8)))
+                    context.fill(wave, with: .color(waveformColor ?? (silenced ? .gray : Color(white: 0.8))))
                     return
                 }
                 let seed = local ? 0 : clip.id.uuidString.utf8.reduce(0) { ($0 + Int($1)) % 997 }
@@ -4804,10 +4813,13 @@ private struct RemoteNativeGridItem: View, Equatable {
                     let height = size.height * amplitude
                     wave.addRect(CGRect(x: CGFloat(index) * 3, y: (size.height - height) / 2, width: 1.5, height: height))
                 }
-                context.fill(wave, with: .color(silenced ? .gray : remoteColor(nameColor).opacity(0.75)))
+                context.fill(wave, with: .color(waveformColor ?? (silenced ? .gray : remoteColor(nameColor).opacity(0.75))))
             }.frame(height: max(0, height - headerHeight)).allowsHitTesting(false)
         }.frame(width: width, height: height, alignment: .topLeading).clipped()
-            .background(LinearGradient(colors: [itemColor.opacity(silenced ? 0.55 : 1), itemColor.opacity(silenced ? 0.25 : 0.78)], startPoint: .top, endPoint: .bottom))
+            .background {
+                if invertedWaveformColors { Color(uiColor: IpadItemHeaderControl.itemBackgroundColor) }
+                else { LinearGradient(colors: [itemColor.opacity(silenced ? 0.55 : 1), itemColor.opacity(silenced ? 0.25 : 0.78)], startPoint: .top, endPoint: .bottom) }
+            }
             .clipShape(RoundedRectangle(cornerRadius: 3))
             .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(itemColor.opacity(0.75), lineWidth: 0.6).allowsHitTesting(false))
             .modifier(RemoteItemMenuGesture(local: local, item: clip.id, selection: scrolling.itemSelection.items,
@@ -5419,9 +5431,7 @@ private struct IpadTrackAudioContextMenu: ViewModifier {
     @State private var menuLifted = false
     @ViewBuilder func body(content: Content) -> some View {
         if enabled {
-            content.scaleEffect(menuLifted ? 1.025 : 1)
-                .animation(.easeOut(duration: 0.16), value: menuLifted)
-                .zIndex(menuLifted ? 1 : 0)
+            content.zIndex(menuLifted ? 1 : 0)
                 .overlayPreferenceValue(IpadTrackControlsBoundsKey.self) { anchors in
                 GeometryReader { proxy in
                     let areas = IpadTrackMenuSurface.areas(in: CGRect(origin: .zero, size: proxy.size),
@@ -5758,7 +5768,7 @@ private final class IpadStereoMeterLayers {
             wells[index].backgroundColor = CGColor(gray: 0, alpha: 0.55)
             bars[index].colors = [CGColor(red: 1, green: 0, blue: 0, alpha: 1),
                                   CGColor(red: 1, green: 1, blue: 0, alpha: 1),
-                                  CGColor(red: 0, green: 1, blue: 0, alpha: 1)]
+                                  CGColor(red: 10.0 / 255, green: 132.0 / 255, blue: 1, alpha: 1)]
             bars[index].locations = [0, 0.5, 1]
             masks[index].backgroundColor = CGColor(gray: 1, alpha: 1)
             bars[index].mask = masks[index]
@@ -6146,7 +6156,7 @@ private final class IpadMixerMeterView: UIView {
     func step(_ direction: Int) {
         momentum?.cancel(); momentum = nil
         guard let scrollView else { return }
-        move(to: scrollView.contentOffset.y + CGFloat(direction) * max(86, scrollView.bounds.height * 0.5), animated: true)
+        move(to: scrollView.contentOffset.y + CGFloat(direction) * max(86, scrollView.bounds.height * 0.5), animated: !pointerEditing)
     }
     private func move(to offset: CGFloat, animated: Bool) {
         guard let scrollView else { return }
