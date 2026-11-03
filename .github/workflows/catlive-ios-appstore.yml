@@ -90,7 +90,7 @@ jobs:
       - name: Verificar alterações no motor de áudio
         id: audio-changes
         run: |
-          if git diff --quiet HEAD^ HEAD -- JarasLive/Apple/Bridge JarasLive/Apple/Shared/StemAudioPlayback.swift JarasLive/Core/Audio JarasLive/Core/Transport JarasLive/Tests/Apple/MobilePreparedSyncTests.swift JarasLive/Tests/Apple/MobileQueueSyncTests.swift; then
+          if git diff --quiet HEAD^ HEAD -- JarasLive/Apple/Bridge JarasLive/Apple/Shared/StemAudioPlayback.swift JarasLive/Apple/Shared/AudioDeviceSettings.swift JarasLive/Core/Audio JarasLive/Core/Transport JarasLive/Tests/Apple/MobilePreparedSyncTests.swift JarasLive/Tests/Apple/MobileQueueSyncTests.swift; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
           else
             echo 'changed=true' >> "$GITHUB_OUTPUT"

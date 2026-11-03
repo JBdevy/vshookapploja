@@ -118,6 +118,15 @@ private let outputDevicePropertyListener: AudioUnitPropertyListenerProc = { cont
     private var deviceListener: AudioObjectPropertyListenerBlock?
     private var listeningAddresses: [AudioObjectPropertyAddress] = []
     private var observedOutputUnit: AudioUnit?
+    var currentOutputSampleRate: Double? {
+        guard let device = devices.first(where: { $0.id == selectedUID }) else { return nil }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var rate = 0.0, bytes = UInt32(MemoryLayout<Double>.size)
+        guard AudioObjectGetPropertyData(device.hardwareID, &address, 0, nil, &bytes, &rate) == noErr,
+              rate.isFinite, rate > 0 else { return nil }
+        return rate
+    }
     #endif
     var deviceName: String { devices.first { $0.id == selectedUID }?.name ?? JarasLocalization.string("No output device") }
     private init() {
