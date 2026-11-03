@@ -6,11 +6,11 @@ on:
       version_name:
         description: 'Versão dos apps, exemplo: 1.0.0'
         required: true
-        default: '1.0.0'
+        default: '1.0.5'
       build_number:
         description: 'Build único para Play Store e App Store'
         required: true
-        default: '20'
+        default: '69'
   push:
     tags:
       - 'mobile-v*'

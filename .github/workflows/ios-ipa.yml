@@ -14,11 +14,11 @@ on:
       version_name:
         description: 'Version name, exemplo: 1.0.0'
         required: true
-        default: '1.0.0'
+        default: '1.0.5'
       build_number:
         description: 'Build number inteiro, aumente a cada envio para App Store'
         required: true
-        default: '20'
+        default: '69'
 
 jobs:
   ios-ipa:
