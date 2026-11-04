@@ -4,6 +4,7 @@ struct AdvancedView: View {
     @ObservedObject var show: ShowController
     let documents: ProjectDocuments?
     var close: (() -> Void)? = nil
+    var presentationID: Int = 0
     @Environment(\.dismiss) private var dismiss
     private enum Tab: String, CaseIterable {
         case transport = "Transport", timeProject = "TimeProject", timeline = "Timeline", record = "Record", reRender = "Re-render", video = "Video", setlist = "Setlist", keyboard = "Keyboard"
@@ -30,8 +31,8 @@ struct AdvancedView: View {
     @State private var shake = 0.0
     @FocusState private var focus: Int?
 
-    init(show: ShowController, documents: ProjectDocuments? = nil, close: (() -> Void)? = nil) {
-        self.show = show; self.documents = documents; self.close = close
+    init(show: ShowController, documents: ProjectDocuments? = nil, close: (() -> Void)? = nil, presentationID: Int = 0) {
+        self.show = show; self.documents = documents; self.close = close; self.presentationID = presentationID
         let timing = show.current.map { GlobalProjectTiming(song: $0) } ?? GlobalProjectTiming.load() ?? GlobalProjectTiming()
         _bpm = State(initialValue: String(format: "%g", timing.bpm))
         _beats = State(initialValue: String(timing.beats))
@@ -95,6 +96,11 @@ struct AdvancedView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #endif
         .foregroundStyle(JarasTheme.text).background(JarasTheme.background)
+        .onChange(of: presentationID) { _ in
+            let timing = show.current.map { GlobalProjectTiming(song: $0) } ?? GlobalProjectTiming.load() ?? GlobalProjectTiming()
+            bpm = String(format: "%g", timing.bpm); beats = String(timing.beats); unit = String(timing.unit)
+            settings = timing.settings; invalidField = nil; applyError = ""; focus = nil
+        }
         .onChange(of: show.current?.projectTime.timebase) { value in
             if let value { settings.timebase = value }
         }
@@ -378,7 +384,7 @@ private struct TimelineMediaCleanupConfirmation: View {
         VStack(alignment: .leading, spacing: 16) {
             Label("Clean up files deleted from the timeline", systemImage: "trash")
                 .font(.jarasHeadline).foregroundStyle(.red)
-            Text("This saves the project and permanently removes audio and video files deleted from the timeline from its Stems and Videos folders. Files still in use are kept. Recovery backups retain their media. The editing undo history will be cleared. This cleanup cannot be undone.")
+            Text("This saves the project and permanently removes audio and video files deleted from the timeline from its Stems and Videos folders. Files still in use are kept. Old recovery backups of this project will also be deleted. The editing undo history will be cleared. This cleanup cannot be undone.")
             if let url = documents.currentURL {
                 Text(verbatim: url.deletingLastPathComponent().path).font(.jarasCaption)
                     .textSelection(.disabled).foregroundStyle(JarasTheme.secondary)

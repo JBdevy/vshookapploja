@@ -51,19 +51,19 @@ final class RemoteParts extends LinearLayout {
         markers.sort(Comparator.comparingDouble((JSONObject m)->m.optDouble("position")).thenComparing(m->RemoteModel.id(m,"id"),String.CASE_INSENSITIVE_ORDER));
         StringBuilder next=new StringBuilder(secondary+"|"+RemoteModel.id(region,"id"));
         if(region!=null)next.append('|').append(region.optDouble("start"));
-        for(JSONObject marker:markers)next.append('|').append(RemoteModel.id(marker,"id")).append('|').append(marker.optString("name")).append('|').append(marker.optDouble("position"));
+        for(JSONObject marker:markers)next.append('|').append(RemoteModel.id(marker,"id")).append('|').append(marker.optString("name")).append('|').append(marker.optDouble("position")).append('|').append(marker.optInt("color")).append('|').append(marker.optBoolean("loopSection"));
         if(!signature.equals(next.toString())){
             signature=next.toString();list.removeAllViews();sections.clear();
-            if(region!=null)addSection(RemoteModel.id(region,"id"),RemoteText.ui("Section start"),region.optDouble("start"),true);
-            for(JSONObject marker:markers)addSection(RemoteModel.id(marker,"id"),marker.optString("name").toUpperCase(Locale.ROOT),marker.optDouble("position"),false);
+            if(region!=null)addSection(RemoteModel.id(region,"id"),RemoteText.ui("Section start"),region.optDouble("start"),true,0xff409cff,false);
+            for(JSONObject marker:markers)addSection(RemoteModel.id(marker,"id"),marker.optString("name").toUpperCase(Locale.ROOT),marker.optDouble("position"),false,0xff000000|marker.optInt("color"),marker.optBoolean("loopSection"));
         }
         trigger=playback==null?Double.NaN:playback.optDouble("nextTrigger",Double.NaN);
         String key=queued+"|"+trigger;if(!key.equals(queueKey)){queueKey=key;queueStart=app.state.optDouble("position");}
         if(playback!=null)queueStart=playback.optDouble("queueStartedAt",queueStart);
         tick();
     }
-    void addSection(String id,String name,double start,boolean first){
-        SectionRow section=new SectionRow(id,name,start,first);sections.add(section);LayoutParams lp=new LayoutParams(-1,dp(38));lp.bottomMargin=dp(5);list.addView(section,lp);
+    void addSection(String id,String name,double start,boolean first,int color,boolean loop){
+        SectionRow section=new SectionRow(id,name,start,first,color,loop);sections.add(section);LayoutParams lp=new LayoutParams(-1,dp(38));lp.bottomMargin=dp(5);list.addView(section,lp);
     }
     void tick(){
         if(app.state==null)return;
@@ -87,19 +87,24 @@ final class RemoteParts extends LinearLayout {
             title.setTextColor(selected?TEXT:SECONDARY);name.setTextColor(selected?TEXT:SECONDARY);setBackground(selected?surface(blend(0xff171717,second?0xffff9500:GREEN,.55f),blend(0xff171717,second?0xffff9500:GREEN,.48f),0x2affffff,5):display(5));setSelected(selected);setContentDescription(title.getText());}
     }
     final class SectionRow extends FrameLayout {
-        final String id,name;final double start;final boolean first;final TextView title;final Paint paint=new Paint(3);boolean armed,playing;
-        SectionRow(String id,String name,double start,boolean first){super(app);this.id=id;this.name=name;this.start=start;this.first=first;setWillNotDraw(false);setClickable(true);setFocusable(true);setContentDescription(name);
-            title=label(app,name,first?16:12,TEXT);title.setTypeface(bold);title.setGravity(Gravity.CENTER);title.setMaxLines(2);title.setAutoSizeTextTypeUniformWithConfiguration(first?9:6,first?16:12,1,android.util.TypedValue.COMPLEX_UNIT_SP);pad(title,3,0);addView(title,new FrameLayout.LayoutParams(-1,-1));setOnClickListener(v->select.accept(id));}
+        final String id,name;final double start;final boolean first,loop;final int color;final TextView title;final Paint paint=new Paint(3);boolean armed,playing;Shader loopBorder;
+        SectionRow(String id,String name,double start,boolean first,int color,boolean loop){super(app);this.id=id;this.name=name;this.start=start;this.first=first;this.color=color;this.loop=loop;setWillNotDraw(false);setClickable(true);setFocusable(true);setContentDescription(name);
+            double luminance=.2126*linear(Color.red(color))+.7152*linear(Color.green(color))+.0722*linear(Color.blue(color));
+            int text=(luminance+.05)/.05>=1.05/(luminance+.05)?Color.BLACK:Color.WHITE;
+            title=label(app,name,first?16:12,text);title.setTypeface(bold);title.setGravity(Gravity.CENTER);title.setMaxLines(2);title.setAutoSizeTextTypeUniformWithConfiguration(first?9:6,first?16:12,1,android.util.TypedValue.COMPLEX_UNIT_SP);pad(title,5,0);addView(title,new FrameLayout.LayoutParams(-1,-1));setOnClickListener(v->select.accept(id));}
+        double linear(int channel){double value=channel/255.0;return value<=.04045?value/12.92:Math.pow((value+.055)/1.055,2.4);}
+        @Override protected void onSizeChanged(int w,int h,int oldw,int oldh){super.onSizeChanged(w,h,oldw,oldh);loopBorder=loop&&w>0&&h>0?new LinearGradient(0,0,w,h,new int[]{0xffff5050,0xff51ef93,0xff409cff},null,Shader.TileMode.CLAMP):null;}
         void update(){armed=RemoteModel.same(id,queued);playing=RemoteModel.same(id,active);title.setText((armed?"↰ ":"")+name);setSelected(armed||(queued.isEmpty()&&playing));}
         double fraction(){
             if(armed&&Double.isFinite(trigger))return Math.max(0,Math.min(1,(trigger-playbackPosition)/Math.max(.001,trigger-queueStart)));
             if(playing&&running){double finish=end;for(SectionRow next:sections)if(next.start>start){finish=Math.min(finish,next.start);break;}return Math.max(0,Math.min(1,(position-start)/Math.max(.001,finish-start)));}
             return -1;
         }
-        @Override protected void onDraw(Canvas canvas){float w=getWidth(),h=getHeight();boolean selected=isSelected();int color=selected?blend(0xff171717,GREEN,.35f):first?blend(0xff171717,0xff007aff,.4f):0xff171717;
+        @Override protected void onDraw(Canvas canvas){float w=getWidth(),h=getHeight();boolean selected=isSelected();
             paint.setStyle(Paint.Style.FILL);paint.setColor(color);canvas.drawRoundRect(0,0,w,h,dp(5),dp(5),paint);
             double fraction=fraction();if(fraction>=0){paint.setColor(armed?YELLOW:GREEN);canvas.save();Path clip=new Path();clip.addRoundRect(new RectF(0,0,w,h),dp(5),dp(5),Path.Direction.CW);canvas.clipPath(clip);canvas.drawRect(0,h-dp(5),(float)(w*fraction),h,paint);canvas.restore();}
-            paint.setStyle(Paint.Style.STROKE);float stroke=dp(selected||first?1.5f:.5f);paint.setStrokeWidth(stroke);paint.setColor(selected?GREEN:first?BLUE:0x2affffff);canvas.drawRoundRect(stroke/2,stroke/2,w-stroke/2,h-stroke/2,dp(5),dp(5),paint);paint.setStyle(Paint.Style.FILL);
+            paint.setStyle(Paint.Style.STROKE);float stroke=loop?2*density:(selected?1.5f:.5f)*density;paint.setStrokeWidth(stroke);paint.setColor(selected?GREEN:0x2affffff);paint.setShader(loopBorder);canvas.drawRoundRect(stroke/2,stroke/2,w-stroke/2,h-stroke/2,dp(5),dp(5),paint);paint.setShader(null);
+            if(loop&&selected){float inset=3.75f*density;paint.setColor(GREEN);paint.setStrokeWidth(1.5f*density);canvas.drawRoundRect(inset,inset,w-inset,h-inset,dp(3),dp(3),paint);}paint.setStyle(Paint.Style.FILL);
         }
     }
 }

@@ -5,6 +5,7 @@ if CommandLine.arguments.count > 3 && CommandLine.arguments[1] == "--scan-vst3" 
     let count = (try? String(contentsOf: counter)).flatMap(Int.init) ?? 0
     try String(count + 1).write(to: counter, atomically: true, encoding: .utf8)
     if module.lastPathComponent == "Slow.vst3" { Thread.sleep(forTimeInterval: 31) }
+    if module.lastPathComponent == "Stuck.vst3", (try? String(contentsOf: module)) != "recovered" { Thread.sleep(forTimeInterval: 10) }
     let plugin = RecognizedPlugin(classID: "fixture", name: "Kontakt", path: module.path, vendor: "Native Instruments", category: "Instrument|Sampler")
     struct Response: Encodable { let plugins: [RecognizedPlugin]; let error: String }
     try JSONEncoder().encode(Response(plugins: [plugin], error: "")).write(to: URL(fileURLWithPath: CommandLine.arguments[3]))
@@ -27,6 +28,22 @@ Task { @MainActor in
             while catalog.scanning && Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
             precondition(!catalog.scanning, "Catalog did not finish")
         }
+        let favoritesSuite = suite + ".favorites"
+        let favoritesDefaults = UserDefaults(suiteName: favoritesSuite)!
+        defer { favoritesDefaults.removePersistentDomain(forName: favoritesSuite) }
+        let favoriteCatalog = PluginCatalog(defaults: favoritesDefaults, executable: nil)
+        let alpha = RecognizedPlugin(classID: "alpha", name: "Alpha", path: "/Alpha.vst3", vendor: "Acme", category: "Fx|EQ")
+        let zebra = RecognizedPlugin(classID: "zebra", name: "Zebra", path: "/Zebra.vst3", vendor: "Acme", category: "Instrument|Synth")
+        favoriteCatalog.acceptImportedPlugins([zebra, alpha])
+        favoriteCatalog.toggleFavorite(zebra)
+        precondition(favoriteCatalog.matchingPlugins(query: "", type: "", vendor: "", allowsInstruments: true).map(\.id) == [zebra.id, alpha.id])
+        let favoriteReload = PluginCatalog(defaults: favoritesDefaults, executable: nil)
+        precondition(favoriteReload.isFavorite(zebra), "Favorite did not survive reopening")
+        precondition(favoriteReload.matchingPlugins(query: "", type: PluginCatalog.favoritesType, vendor: "", allowsInstruments: true).map(\.id) == [zebra.id])
+        precondition(favoriteReload.matchingPlugins(query: "alpha", type: PluginCatalog.favoritesType, vendor: "", allowsInstruments: true).isEmpty)
+        precondition(favoriteReload.matchingPlugins(query: "", type: PluginCatalog.favoritesType, vendor: "", allowsInstruments: false).isEmpty)
+        favoriteReload.toggleFavorite(zebra)
+        precondition(PluginCatalog(defaults: favoritesDefaults, executable: nil).favorites.isEmpty)
         let catalog = PluginCatalog(defaults: defaults, executable: executable)
         catalog.scan(); catalog.scan()
         precondition(catalog.scanning)
@@ -66,6 +83,24 @@ Task { @MainActor in
         precondition(plugin.matches(query: "kontakt", type: "Fx", vendor: "Other", allowsInstruments: true), "Search must ignore categories")
         precondition(plugin.matches(query: "native", type: "Fx", vendor: "Other", allowsInstruments: true))
         precondition(!plugin.matches(query: "kontakt", type: "", vendor: "", allowsInstruments: false), "Search cannot enable unsupported instruments in item FX")
+        precondition(PluginCatalog.pluginTimeout == 120, "Production timeout must be two minutes")
+        let stuck = root.appendingPathComponent("Stuck.vst3")
+        let healthy = root.appendingPathComponent("Healthy.vst3")
+        try "stuck".write(to: stuck, atomically: true, encoding: .utf8)
+        try "healthy".write(to: healthy, atomically: true, encoding: .utf8)
+        defaults.set([stuck.path, healthy.path], forKey: "jaras.plugins.paths")
+        let bounded = PluginCatalog(defaults: defaults, executable: executable, timeout: 0.3)
+        bounded.scan(); try await wait(bounded, limit: 4)
+        precondition(bounded.completedPlugins == 2 && bounded.plugins.count == 1 && bounded.hasFailedPlugins)
+        precondition(bounded.status.contains("2 minutes"), "Timeout must be reported")
+        let cachedFailure = PluginCatalog(defaults: defaults, executable: executable, timeout: 0.3)
+        cachedFailure.scan(); try await wait(cachedFailure, limit: 3)
+        precondition((try? String(contentsOf: stuck.appendingPathExtension("scans"))) == "1", "Failed plugin was loaded after reopening")
+        cachedFailure.scan(retryFailed: true); try await wait(cachedFailure, limit: 3)
+        precondition((try? String(contentsOf: stuck.appendingPathExtension("scans"))) == "2", "Manual retry was ignored")
+        try "recovered".write(to: stuck, atomically: true, encoding: .utf8)
+        cachedFailure.scan(); try await wait(cachedFailure, limit: 3)
+        precondition(cachedFailure.plugins.count == 2 && !cachedFailure.hasFailedPlugins, "Changed plugin did not recover")
         print("Plugin catalog: slow scan, persistent cache, changed/missing bundles, cancellation, filters and global search passed")
     } catch { fatalError("Catalog test failed: \(error)") }
     exit(0)

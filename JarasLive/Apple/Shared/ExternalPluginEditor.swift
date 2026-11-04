@@ -20,9 +20,14 @@ import AVFoundation
         guard project == nil || project == show.snapshot.project.id else { return }
         if let clip, FXModelLookup.clip(clip, in: show.snapshot.project) == nil { return }
         let node = suppliedNode ?? DesktopProjectTabs.shared.audio(for: show).effects(for: clip ?? track)?.externalNode(identifier)
-        guard let node else { return }
+        // A wrapper may exist even when its module failed to load. It has no
+        // live edits to capture; keep the document's blobs for Save and Undo.
+        guard let node, JarasVST3.isPluginLoaded(node, identifier: identifier) else { return }
         guard let state = JarasVST3.state(node, identifier: identifier) else {
-            if saving { throw ProjectError.invalid("Não foi possível capturar o estado atual do plugin. A operação foi cancelada.") }
+            if saving {
+                let name = settings(show: show, track: track, clip: clip).externalPlugins?.first { $0.id == identifier }?.name ?? identifier
+                throw ProjectError.invalid(String(format: JarasLocalization.string("Could not capture the current state of plugin %@. The operation was cancelled to preserve its settings."), name))
+            }
             return
         }
         var settings = settings(show: show, track: track, clip: clip)
@@ -31,17 +36,14 @@ import AVFoundation
         settings.externalPlugins?[index].componentState = state["componentState"] as? String
         settings.externalPlugins?[index].controllerState = state["controllerState"] as? String
         guard settings != before else { return }
-        if saving {
-            guard try show.storeCapturedPluginState(track, clip: clip, identifier: identifier,
-                componentState: settings.externalPlugins?[index].componentState,
-                controllerState: settings.externalPlugins?[index].controllerState),
-                let plugin = settings.externalPlugins?[index] else { return }
-            DesktopProjectTabs.shared.audio(for: show).rememberCapturedPluginState(track: track, clip: clip, plugin: plugin, source: node)
-            return
-        }
-        if let clip { show.previewClipFX(clip, settings: settings) }
-        else { show.previewFX(track, settings: settings) }
-        show.commitFX()
+        // A capture acknowledges the live processor, including when its editor
+        // closes. Reapplying this snapshot can recreate the instrument and send
+        // controller defaults back into it; only a real preset edit needs that.
+        guard try show.storeCapturedPluginState(track, clip: clip, identifier: identifier,
+            componentState: settings.externalPlugins?[index].componentState,
+            controllerState: settings.externalPlugins?[index].controllerState),
+            let plugin = settings.externalPlugins?[index] else { return }
+        DesktopProjectTabs.shared.audio(for: show).rememberCapturedPluginState(track: track, clip: clip, plugin: plugin, source: node)
     }
     static func captureAll(show: ShowController) {
         do { try captureAllForSaving(show: show) }
@@ -187,6 +189,7 @@ struct ExternalPluginEditor: View {
         StemAudioPlayback.shared.observeEffect(clip, effect: effect, active: true); observing = true
         node = StemAudioPlayback.shared.effects(for: clip)?.externalNode(plugin.id); pluginIdentifier = plugin.id
         if let native = ExternalPluginEditor.nativeEditor(show: show, track: nil, clip: clip, effect: effect) {
+            native.identifier = NSUserInterfaceItemIdentifier("catlive.managedPluginEditor")
             scroll.documentView = native
         } else {
             usesParameterEditor = true
@@ -267,6 +270,8 @@ import Combine
     init(show: ShowController, track: UUID?, clip: UUID? = nil, effect: String, panel: NSPanel) {
         self.show = show; self.track = track; self.clip = clip; self.panel = panel; project = show.snapshot.project.id
         super.init(frame: NSRect(origin: .zero, size: preferredContentSize))
+        NotificationCenter.default.addObserver(self, selector: #selector(pluginEditorSizeChanged(_:)),
+            name: NSNotification.Name("CatLivePluginEditorSizeChanged"), object: nil)
         wantsLayer = true; layer?.backgroundColor = NSColor(calibratedWhite: 0.085, alpha: 1).cgColor
         let enabled = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("enabled")); enabled.width = 30; enabled.minWidth = 30; enabled.maxWidth = 30
         let name = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")); name.width = 148
@@ -365,7 +370,12 @@ import Combine
             size = NSSize(width: 740, height: 560)
             panel?.contentMinSize = NSSize(width: sidebarWidth + 400, height: 320)
         } else if effect.hasPrefix("External:"), let native = ExternalPluginEditor.nativeEditor(show: show, track: track, effect: effect) {
-            content = native; size = native.frame.size
+            let viewport = NSScrollView()
+            viewport.hasVerticalScroller = true; viewport.hasHorizontalScroller = true
+            viewport.autohidesScrollers = true; viewport.drawsBackground = false
+            native.identifier = NSUserInterfaceItemIdentifier("catlive.managedPluginEditor")
+            viewport.documentView = native
+            content = viewport; size = native.frame.size
             panel?.contentMinSize = NSSize(width: sidebarWidth + 400, height: 64)
         } else {
             let language = UserDefaults.standard.string(forKey: "jaras.language") ?? "en"
@@ -386,12 +396,33 @@ import Combine
             panel?.contentMinSize = NSSize(width: sidebarWidth + 640, height: compactControls ? 340 : 540)
         }
         editor = content; editorArea.addSubview(content)
-        preferredContentSize = NSSize(width: size.width + sidebarWidth, height: size.height + 36)
         if let panel { panel.contentMinSize.height += 36 }
-        panel?.setContentSize(preferredContentSize); needsLayout = true
+        fitEditor(size)
         if let index = rows.firstIndex(where: { $0.effect == effect }) {
             refreshing = true; list.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false); refreshing = false
         }
+    }
+    @objc private func pluginEditorSizeChanged(_ notification: Notification) {
+        guard let native = notification.object as? NSView, let editor,
+              native.isDescendant(of: editor) else { return }
+        fitEditor(native.frame.size)
+    }
+    private func fitEditor(_ size: NSSize) {
+        guard size.width > 0, size.height > 0, let panel else { return }
+        preferredContentSize = NSSize(width: max(panel.contentMinSize.width, size.width + sidebarWidth),
+                                      height: max(panel.contentMinSize.height, size.height + 36))
+        var frame = panel.frameRect(forContentRect: NSRect(origin: .zero, size: preferredContentSize))
+        frame.origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - frame.height)
+        if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
+            frame.size.width = min(frame.width, visible.width); frame.size.height = min(frame.height, visible.height)
+            frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+            frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+        }
+        // Keep the titlebar reachable. Oversized editors remain at their native
+        // dimensions inside the scroll view rather than being cropped or scaled.
+        panel.setFrame(frame, display: true)
+        preferredContentSize = panel.contentRect(forFrameRect: frame).size
+        needsLayout = true
     }
     private func removeEditor() {
         // Direct AppKit containment does not invoke NSViewRepresentable's

@@ -23,6 +23,7 @@ struct RecognizedPlugin: Codable, Identifiable, Sendable {
 struct PluginScanRecord: Codable, Sendable {
     let fingerprint: String
     let plugins: [RecognizedPlugin]
+    var error: String? = nil
     static func fingerprint(_ module: URL) -> String? {
         let fm = FileManager.default
         var directory: ObjCBool = false
@@ -45,6 +46,8 @@ struct PluginScanRecord: Codable, Sendable {
     static let shared = PluginCatalog()
     @Published private(set) var paths: [String]
     @Published private(set) var plugins: [RecognizedPlugin]
+    @Published private(set) var favorites: Set<String>
+    static let favoritesType = "__favorites__"
     @Published private(set) var scanning = false
     @Published private(set) var status = ""
     @Published private(set) var scanProgress: Double? = nil
@@ -54,12 +57,32 @@ struct PluginScanRecord: Codable, Sendable {
     private var scanCache: [String: PluginScanRecord] = [:]
     private var scanTask: Task<([RecognizedPlugin], [String], Bool), Never>?
     private let defaults: UserDefaults
+    nonisolated static let pluginTimeout: TimeInterval = 120
     private let scannerExecutable: URL?
-    init(defaults: UserDefaults = .standard, executable: URL? = Bundle.main.executableURL) {
-        self.defaults = defaults; scannerExecutable = executable
+    private let scanTimeout: TimeInterval
+    var hasFailedPlugins: Bool { scanCache.values.contains { !($0.error ?? "").isEmpty } }
+    init(defaults: UserDefaults = .standard, executable: URL? = Bundle.main.executableURL,
+         timeout: TimeInterval = PluginCatalog.pluginTimeout) {
+        favorites = Set(defaults.stringArray(forKey: "jaras.plugins.favorites") ?? [])
+        self.defaults = defaults; scannerExecutable = executable; scanTimeout = max(0.05, timeout)
         scanCache = defaults.data(forKey: "jaras.plugins.scanCache").flatMap { try? JSONDecoder().decode([String: PluginScanRecord].self, from: $0) } ?? [:]
         paths = defaults.stringArray(forKey: "jaras.plugins.paths") ?? ["/Library/Audio/Plug-Ins/VST3", NSHomeDirectory() + "/Library/Audio/Plug-Ins/VST3"]
         plugins = defaults.data(forKey: "jaras.plugins.catalog").flatMap { try? JSONDecoder().decode([RecognizedPlugin].self, from: $0) } ?? []
+    }
+    func isFavorite(_ plugin: RecognizedPlugin) -> Bool { favorites.contains(plugin.id) }
+    func toggleFavorite(_ plugin: RecognizedPlugin) {
+        if !favorites.insert(plugin.id).inserted { favorites.remove(plugin.id) }
+        defaults.set(favorites.sorted(), forKey: "jaras.plugins.favorites")
+    }
+    func matchingPlugins(query: String, type: String, vendor: String, allowsInstruments: Bool) -> [RecognizedPlugin] {
+        plugins.filter {
+            (type != Self.favoritesType || isFavorite($0)) &&
+            $0.matches(query: query, type: type == Self.favoritesType ? "" : type, vendor: vendor, allowsInstruments: allowsInstruments)
+        }.sorted {
+            if isFavorite($0) != isFavorite($1) { return isFavorite($0) }
+            let order = $0.name.localizedStandardCompare($1.name)
+            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+        }
     }
     private func saveScanCache() { defaults.set(try? JSONEncoder().encode(scanCache), forKey: "jaras.plugins.scanCache") }
     func cancelScan() { scanTask?.cancel() }
@@ -79,11 +102,11 @@ struct PluginScanRecord: Codable, Sendable {
         plugins = indexed.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         saveCatalog()
     }
-    func scan() {
+    func scan(retryFailed: Bool = false) {
         guard !scanning, let executable = scannerExecutable else { return }
         scanning = true; status = "Scanning plugins…"
         scanProgress = nil; currentPlugin = ""; completedPlugins = 0; totalPlugins = 0
-        let paths = self.paths, cache = scanCache, previousPlugins = plugins
+        let paths = self.paths, cache = scanCache, previousPlugins = plugins, timeout = scanTimeout
         let worker = Task.detached(priority: .utility) { () -> ([RecognizedPlugin], [String], Bool) in
                 var files = Set<URL>(), found: [RecognizedPlugin] = [], errors: [String] = []
                 let fm = FileManager.default
@@ -105,9 +128,13 @@ struct PluginScanRecord: Codable, Sendable {
                     await MainActor.run { self.currentPlugin = file.deletingPathExtension().lastPathComponent }
                     let stamp = PluginScanRecord.fingerprint(file)
                     if let stamp, let record = cache[file.path], record.fingerprint == stamp {
-                        found += record.plugins
-                        await MainActor.run { self.completedPlugins = index + 1; self.scanProgress = Double(index + 1) / Double(candidates.count) }
-                        continue
+                        let error = record.error ?? ""
+                        if error.isEmpty || !retryFailed {
+                            if error.isEmpty { found += record.plugins }
+                            else { errors.append(file.lastPathComponent + ": " + error) }
+                            await MainActor.run { self.completedPlugins = index + 1; self.scanProgress = Double(index + 1) / Double(candidates.count) }
+                            continue
+                        }
                     }
                     // Adopt the already verified catalog when upgrading to fingerprint caching.
                     // No third-party code is rerun just to establish its initial file baseline.
@@ -126,23 +153,41 @@ struct PluginScanRecord: Codable, Sendable {
                     let output = fm.temporaryDirectory.appendingPathComponent("jaras-plugin-scan-" + UUID().uuidString + ".json")
                     let process = Process(); process.executableURL = executable; process.arguments = ["--scan-vst3", file.path, output.path]
                     process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+                    var failure: String?
                     do {
                         try process.run()
-                        while process.isRunning { try await Task.sleep(nanoseconds: 50_000_000) }
+                        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+                        while process.isRunning {
+                            try Task.checkCancellation()
+                            if ProcessInfo.processInfo.systemUptime >= deadline {
+                                Darwin.kill(process.processIdentifier, SIGKILL)
+                                failure = JarasLocalization.string("Plugin did not respond within 2 minutes; skipped.")
+                                break
+                            }
+                            try await Task.sleep(nanoseconds: 50_000_000)
+                        }
                         try Task.checkCancellation()
-                        if process.terminationStatus == 0, let data = try? Data(contentsOf: output), let scan = try? JSONDecoder().decode(Scan.self, from: data) {
+                        if failure != nil { /* The helper was killed; never inspect its incomplete output. */ }
+                        else if process.terminationStatus == 0, let data = try? Data(contentsOf: output), let scan = try? JSONDecoder().decode(Scan.self, from: data) {
                             found += scan.plugins
-                            if !scan.error.isEmpty { errors.append(file.lastPathComponent + ": " + scan.error) }
+                            if !scan.error.isEmpty { failure = scan.error }
                             else if let stamp, PluginScanRecord.fingerprint(file) == stamp {
                                 let record = PluginScanRecord(fingerprint: stamp, plugins: scan.plugins)
                                 await MainActor.run { self.scanCache[file.path] = record; self.saveScanCache() }
                             }
-                        } else { errors.append(file.lastPathComponent + ": " + JarasLocalization.string("Plugin scan failed.")) }
+                        } else { failure = JarasLocalization.string("Plugin scan failed.") }
                     } catch is CancellationError {
                         if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
                         try? fm.removeItem(at: output)
                         break
-                    } catch { errors.append(file.lastPathComponent + ": " + error.localizedDescription) }
+                    } catch { failure = error.localizedDescription }
+                    if let failure, !Task.isCancelled {
+                        errors.append(file.lastPathComponent + ": " + failure)
+                        if let stamp, PluginScanRecord.fingerprint(file) == stamp {
+                            let record = PluginScanRecord(fingerprint: stamp, plugins: [], error: failure)
+                            await MainActor.run { self.scanCache[file.path] = record; self.saveScanCache() }
+                        }
+                    }
                     try? fm.removeItem(at: output)
                     await MainActor.run {
                         self.completedPlugins = index + 1
@@ -282,9 +327,7 @@ struct ExternalPluginBrowser: View {
     @FocusState private var searching: Bool
     private var matches: [RecognizedPlugin] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return catalog.plugins.filter {
-            $0.matches(query: query, type: selectedType, vendor: selectedVendor, allowsInstruments: allowsInstruments)
-        }
+        return catalog.matchingPlugins(query: query, type: selectedType, vendor: selectedVendor, allowsInstruments: allowsInstruments)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -303,6 +346,7 @@ struct ExternalPluginBrowser: View {
             HStack(spacing: 16) {
                 Picker("Type", selection: $selectedType) {
                     Text(verbatim: "All").tag("")
+                    Text("Favorites").tag(PluginCatalog.favoritesType)
                     ForEach(types, id: \.self) { Text(verbatim: $0).tag($0) }
                 }
                 Picker("Company", selection: $selectedVendor) {
@@ -318,11 +362,20 @@ struct ExternalPluginBrowser: View {
                                 Text(verbatim: plugin.name).font(.jarasSystem(size: 12, weight: .semibold)).lineLimit(2)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 Text(verbatim: plugin.vendor).font(.jarasSystem(size: 10)).foregroundStyle(JarasTheme.secondary).lineLimit(1)
-                            }.padding(6).frame(maxWidth: .infinity).frame(height: 56)
+                            }.padding(.trailing, 24).padding(6).frame(maxWidth: .infinity).frame(height: 56)
                                 .background(selected == plugin.id ? JarasTheme.green.opacity(0.16) : JarasTheme.display, in: RoundedRectangle(cornerRadius: 6))
                                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected == plugin.id ? JarasTheme.green : JarasTheme.line))
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain).jarasHelp(plugin.name + " · " + plugin.vendor)
+                            .overlay(alignment: .topTrailing) {
+                                Button { catalog.toggleFavorite(plugin) } label: {
+                                    Image(systemName: catalog.isFavorite(plugin) ? "star.fill" : "star")
+                                        .font(.jarasSystem(size: 14))
+                                        .foregroundStyle(catalog.isFavorite(plugin) ? Color.yellow : JarasTheme.secondary)
+                                        .frame(width: 26, height: 26).contentShape(Rectangle())
+                                }.buttonStyle(.plain).padding(3)
+                                    .accessibilityLabel(Text(catalog.isFavorite(plugin) ? "Remove from favorites" : "Add to favorites"))
+                            }
                     }
                 }
             }.frame(height: 248)
@@ -331,12 +384,13 @@ struct ExternalPluginBrowser: View {
             HStack {
                 Button(catalog.scanning ? "Cancel scan" : "Scan plugins") { if catalog.scanning { catalog.cancelScan() } else { catalog.scan() } }
                 if catalog.scanning { ProgressView().controlSize(.small) }
+                else if catalog.hasFailedPlugins { Button("Retry failed plugins") { catalog.scan(retryFailed: true) } }
                 Spacer()
                 Button("Cancel", action: close).keyboardShortcut(.cancelAction)
             }
         }.padding(20).frame(width: 680).background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
             .onAppear { searching = true }
-            .onChange(of: types) { values in if !selectedType.isEmpty && !values.contains(selectedType) { selectedType = "" } }
+            .onChange(of: types) { values in if !selectedType.isEmpty && selectedType != PluginCatalog.favoritesType && !values.contains(selectedType) { selectedType = "" } }
             .onChange(of: vendors) { values in if !selectedVendor.isEmpty && !values.contains(selectedVendor) { selectedVendor = "" } }
     }
 }
@@ -351,8 +405,8 @@ struct PluginScanProgress: View {
                 Spacer()
                 Text(verbatim: "\(catalog.completedPlugins) / \(catalog.totalPlugins)").monospacedDigit()
             }.font(.jarasCaption)
-            if let progress = catalog.scanProgress { ProgressView(value: progress).progressViewStyle(.linear) }
-            else { ProgressView().progressViewStyle(.linear) }
+            if let progress = catalog.scanProgress { ProgressView(value: progress).progressViewStyle(JarasProgressBarStyle()) }
+            else { ProgressView().progressViewStyle(JarasProgressBarStyle()) }
         }.frame(maxWidth: .infinity)
     }
 }
@@ -366,6 +420,7 @@ struct PluginSettings: View {
                 HStack { Text(verbatim: path).lineLimit(2).font(.jarasCaption); Spacer(); Button { catalog.removePath(path) } label: { Image(systemName: "minus.circle") }.disabled(catalog.scanning) }
             }
             HStack { Button("Add path") { catalog.addPath() }.disabled(catalog.scanning); Button(catalog.scanning ? "Cancel scan" : "Scan plugins") { if catalog.scanning { catalog.cancelScan() } else { catalog.scan() } }; if catalog.scanning { ProgressView().controlSize(.small) } }
+            if !catalog.scanning && catalog.hasFailedPlugins { Button("Retry failed plugins") { catalog.scan(retryFailed: true) } }
             if catalog.scanning { PluginScanProgress(catalog: catalog) }
             if !catalog.status.isEmpty { Text(verbatim: JarasLocalization.string(catalog.status)).font(.jarasCaption).foregroundStyle(JarasTheme.secondary) }
         }

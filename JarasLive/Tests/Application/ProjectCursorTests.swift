@@ -616,6 +616,10 @@ final class ProjectCursorTests: XCTestCase {
         let executor = CursorExecutor()
         let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: .empty(name: "Window actions"))
         show.performAction(.normalizeItems); XCTAssertEqual(show.normalizeItemsRequest, 1)
+        show.performAction(.reRenderItems); XCTAssertEqual(show.itemProcessingRequest?.action, .reRenderItems)
+        let firstRequest = show.itemProcessingRequest?.id
+        show.performAction(.reRenderItems); XCTAssertNotEqual(show.itemProcessingRequest?.id, firstRequest)
+        show.performAction(.unifyAudioItems); XCTAssertEqual(show.itemProcessingRequest?.action, .unifyAudioItems)
         show.performAction(.createTempoMarker); XCTAssertEqual(show.tempoMarkerRequest, 1)
         var videoVisible = false, teleprompterVisible = false, tracksVisible = true, setlistVisible = true, barVisible = false, audioUpdates = 0
         show.toggleVideoWindow = { videoVisible.toggle() }
@@ -641,6 +645,8 @@ final class ProjectCursorTests: XCTestCase {
         let child = Part(id: UUID(), name: "Child", startTime: 80, endTime: 90, parentRegionID: special.id)
         project.songs[0].parts = [special, child, first]
         project.songs[0].markers = [TimelineMarker(id: UUID(), name: "Child", position: 80, color: 0x54ff93, unifiedRegionID: special.id, sourceRegionID: child.id),
+                                    TimelineMarker(id: UUID(), name: "Tempo", position: 40, color: 0x999999, tempoBPM: 120),
+                                    TimelineMarker(id: UUID(), name: "Tempo after last marker", position: 200, color: 0x999999, tempoBPM: 130),
                                     TimelineMarker(id: UUID(), name: "Same point", position: 50, color: 0x54ff93),
                                     TimelineMarker(id: UUID(), name: "Last", position: 140, color: 0x54ff93)]
         project.songs[0].duration = 400

@@ -223,6 +223,7 @@ struct DAWRemoteState: Codable, Equatable {
     struct Marker: Codable, Identifiable, Equatable {
         var id: UUID; var name: String; var position: Double; var color: UInt32
         var section: Bool? = nil
+        var loopSection: Bool? = nil
         var unifiedRegionID: UUID? = nil
         var sourceRegionID: UUID? = nil
         var tempoBPM: Double? = nil
@@ -308,7 +309,7 @@ struct DAWRemoteState: Codable, Equatable {
         var commandID: UUID? = nil
         var commandState: String? = nil
         var valid: Bool {
-            (commandState?.utf8.count ?? 0) <= 32 &&
+            (commandState.map { ["opening", "completed", "failed", "cancelled", "waiting"].contains($0) } ?? true) &&
             recent.count <= 20 && Set(recent.map(\.id)).count == recent.count &&
             recent.filter(\.current).count <= 1 && recent.allSatisfy { !$0.name.isEmpty && $0.name.utf8.count <= 1024 } &&
             status.utf8.count <= 2048 && error.utf8.count <= 2048
@@ -661,6 +662,7 @@ final class DAWRemoteSetlistRowsCache {
     private var timeline: [DAWRemoteState.Region] = []
     private var expanded: Set<UUID> = []
     private var query = ""
+    private var order: Int?
     private var cached: [DAWRemoteSetlistPresentation.Row] = []
     private var blocks: [DAWRemoteState.SetlistBlock] = []
     private var cachedEntries: [DAWRemoteSetlistPresentation.Entry] = []
@@ -670,15 +672,27 @@ final class DAWRemoteSetlistRowsCache {
         update(in: state, expanded: expanded, query: query)
         return cached
     }
-    func entries(in state: DAWRemoteState, expanded: Set<UUID>, query: String) -> [DAWRemoteSetlistPresentation.Entry] {
-        update(in: state, expanded: expanded, query: query)
+    func entries(in state: DAWRemoteState, expanded: Set<UUID>, query: String, order: Int? = nil) -> [DAWRemoteSetlistPresentation.Entry] {
+        update(in: state, expanded: expanded, query: query, order: state.selectedPlaylist == nil ? order : nil)
         return cachedEntries
     }
-    private func update(in state: DAWRemoteState, expanded: Set<UUID>, query: String) {
-        if initialized && regions == state.regions && timeline == state.timelineRegions && blocks == (state.setlistBlocks ?? []) && self.expanded == expanded && self.query == query { return }
+    private func update(in state: DAWRemoteState, expanded: Set<UUID>, query: String, order: Int? = nil) {
+        if initialized && regions == state.regions && timeline == state.timelineRegions && blocks == (state.setlistBlocks ?? []) && self.expanded == expanded && self.query == query && self.order == order { return }
         initialized = true; regions = state.regions; timeline = state.timelineRegions
         self.expanded = expanded; self.query = query; blocks = state.setlistBlocks ?? []
-        let allRows = DAWRemoteSetlistPresentation.rows(in: state, expanded: expanded, query: "")
+        self.order = order
+        var presentation = state
+        if let order {
+            presentation.regions = state.regions.enumerated().sorted { a, b in
+                if order != 0 {
+                    let result = a.element.name.compare(b.element.name, options: [.numeric, .caseInsensitive, .diacriticInsensitive], locale: .current)
+                    if result != .orderedSame { return order == 1 ? result == .orderedAscending : result == .orderedDescending }
+                }
+                if a.element.start != b.element.start { return a.element.start < b.element.start }
+                return a.offset < b.offset
+            }.map(\.element)
+        }
+        let allRows = DAWRemoteSetlistPresentation.rows(in: presentation, expanded: expanded, query: "")
         cached = allRows.filter { query.isEmpty || $0.region.name.localizedStandardContains(query) }
         cachedEntries = DAWRemoteSetlistPresentation.entries(rows: allRows, blocks: blocks, query: query)
         rebuildCount += 1

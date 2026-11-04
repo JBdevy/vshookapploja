@@ -55,6 +55,18 @@ for rate in [44100.0, 48000.0] {
     _ = try capture(seconds: 0.02)
     let stopped = try capture(seconds: 0.6)
     precondition(stopped.allSatisfy { $0 == 0 })
+    // Short probe pulses measure beat spacing without overlapping sample tails.
+    let pulse = [Float](repeating: 0.5, count: 64).withUnsafeBytes { Data($0) }
+    generators[0].setClickSections([
+        ["start": 0, "end": 1, "origin": 0, "bpm": 240, "beats": 8, "unit": 4],
+        ["start": 1, "end": 2, "origin": 0, "bpm": 120, "beats": 4, "unit": 4]
+    ], sound: pulse)
+    start(generators[0])
+    let divided = try capture(seconds: 2)
+    func energy(_ at: Double) -> Float { divided[Int(at * rate)..<Int(at * rate) + 128].reduce(0) { $0 + abs($1) } }
+    precondition(energy(0.25) > 1 && energy(0.75) > 1, "2x must play the subdivisions")
+    precondition(energy(1.25) == 0 && energy(1.5) > 1, "The next 1x item must retain its own spacing")
+    stop(generators[0])
     // The synthesized click uses the same per-item Subplay selection as audio.
     var clickSong = Project.empty(name: "Click membership").songs[0]
     clickSong.bpm = 120; clickSong.duration = 6; clickSong.regionOwnershipInitialized = true

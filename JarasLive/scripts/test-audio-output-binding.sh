@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 source = Path('Apple/Shared/AudioDeviceSettings.swift').read_text()
-names = ['permitConfigurationChange', 'selectInput', 'select', 'bindOutput',
+names = ['observeOutputRate', 'permitConfigurationChange', 'selectInput', 'bindInput', 'select', 'bindOutput', 'systemDefaultDevice', 'refreshSystemDefaults',
          'suspendOutput', 'outputDeviceDidChange', 'validateOutputBinding',
          'outputIsBound', 'requireSelectedOutput', 'applyBuffer']
 methods = []
@@ -37,6 +37,9 @@ for name in ['setSampleRate', 'setBuffer']:
         cursor += 1
     methods.append(source[match.start():cursor])
 fixture = Path('Tests/Apple/AudioOutputBindingTests.swift').read_text()
+rate_start = source.index('    var currentOutputSampleRate: Double? {')
+rate_end = source.index('\n    }', rate_start) + 6
+fixture = fixture.replace('    /* OUTPUT_RATE_PROPERTY */', source[rate_start:rate_end])
 property_start = source.index('    var outputDeviceIsBound: Bool {')
 property_end = source.index('    func requireSelectedOutput(', property_start)
 fixture = fixture.replace('    /* OUTPUT_BINDING_PROPERTY */', source[property_start:property_end])
@@ -44,6 +47,9 @@ startup_source = Path('Apple/Shared/StemAudioPlayback.swift').read_text()
 startup_start = startup_source.index('    private func startEngineIfNeeded()')
 startup_end = startup_source.index('    private func prepareDevice()', startup_start)
 startup = startup_source[startup_start:startup_end].replace('private func ', 'func ')
+route_start = startup_source.index('    private func requireSelectedOutput()')
+route_end = startup_source.index('    #endif', route_start)
+startup += startup_source[route_start:route_end].replace('private func ', 'func ')
 license_start = startup_source.index('    func setLicenseAllowed(')
 license_end = startup_source.index('    // An independent silent source', license_start)
 startup += startup_source[license_start:license_end]

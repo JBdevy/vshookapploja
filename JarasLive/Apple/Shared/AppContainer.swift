@@ -13,6 +13,7 @@ enum AppStartupPresentation {
     #if os(macOS)
     @MainActor private static var startupSound: NSSound?
     @MainActor private static var soundPlayed = false
+    @MainActor private static var soundDeadline: TimeInterval = 0
     @MainActor static func playSoundOnce() {
         guard !soundPlayed else { return }
         soundPlayed = true
@@ -20,7 +21,25 @@ enum AppStartupPresentation {
         guard defaults.object(forKey: "jaras.startup.sound") == nil || defaults.bool(forKey: "jaras.startup.sound"),
               let url = Bundle.main.url(forResource: "StartupSound", withExtension: "wav") else { return }
         startupSound = NSSound(contentsOf: url, byReference: false)
-        startupSound?.play()
+        if let sound = startupSound, sound.play() {
+            soundDeadline = ProcessInfo.processInfo.systemUptime + sound.duration + 1
+        } else { startupSound = nil }
+    }
+    @MainActor static func waitForSound() async throws {
+        try Task.checkCancellation()
+        // Finder can deliver a document before the splash's queued play call.
+        // Finish the introduction before replacing/restarting the project graph:
+        // CoreAudio shares the output with NSSound, and a graph rebuild here
+        // was dropping output cycles in the last second of the introduction.
+        playSoundOnce()
+        while let sound = startupSound, sound.isPlaying,
+              ProcessInfo.processInfo.systemUptime < soundDeadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try Task.checkCancellation()
+        // A lost output route must not hold project opening indefinitely.
+        startupSound?.stop()
+        startupSound = nil
     }
     #endif
     static let minimumDuration = 3.0
@@ -30,6 +49,9 @@ enum AppStartupPresentation {
         if remaining > 0 {
             try await Task.sleep(nanoseconds: UInt64((remaining * 1_000_000_000).rounded(.up)))
         }
+        #if os(macOS)
+        try await waitForSound()
+        #endif
     }
 }
 @MainActor final class AppContainer: ObservableObject {
@@ -121,6 +143,7 @@ enum AppStartupPresentation {
         #endif
         #if os(macOS)
         show.toggleVideoWindow = { VideoPlayback.shared.toggle() }
+        show.toggleWorkspaceFullscreen = { ProjectWindowAnchor.toggleFullscreen() }
         show.toggleTeleprompterWindow = { [weak show] in
             if let show { TeleprompterWindow.shared.toggle(show: show) }
         }
@@ -510,6 +533,11 @@ enum AppStartupPresentation {
     private var closingTab = false
     var active: AppContainer? { projects.indices.contains(selected) ? projects[selected] : nil }
     var anyPlaying: Bool { projects.contains { $0.show.isPlaying } }
+    var needsSaveOnClose: Bool {
+        projects.contains { $0.show.hasUnsavedChanges || $0.show.saving ||
+            $0.documents.busy || $0.documents.importingAudio ||
+            $0.projectRecorder.recording || $0.projectRecorder.busy }
+    }
     func isForeground(_ show: ShowController?) -> Bool {
         projects.isEmpty || (show != nil && active?.show === show)
     }
@@ -688,26 +716,23 @@ enum AppStartupPresentation {
             project.projectAudio.receiveMIDI(device: device, status: status, number: number, value: value)
         }
     }
-    func confirmAndSaveBackgroundProjects(excluding documents: ProjectDocuments) async throws -> Bool {
-        for project in projects where project.documents !== documents {
-            guard !project.documents.busy, !project.projectRecorder.recording, !project.projectRecorder.busy else {
+    func prepareBackgroundProjectsForClosing(excluding documents: ProjectDocuments, save: Bool) async throws {
+        let background = projects.filter { $0.documents !== documents }
+        // The main window owns a single Save all / Discard / Cancel decision.
+        // Validate every tab before writing any of them, and never close a tab
+        // here: a failed write must leave all of the projects available.
+        for project in background {
+            guard !project.documents.busy, !project.documents.importingAudio,
+                  !project.projectRecorder.recording, !project.projectRecorder.busy else {
                 throw ProjectError.invalid("Finish the current operation before closing.")
             }
-            while project.show.saving { try await Task.sleep(nanoseconds: 20_000_000) }
-            if project.show.hasUnsavedChanges {
-                let alert = NSAlert()
-                alert.messageText = JarasLocalization.string("Do you want to save this project?")
-                alert.informativeText = project.show.snapshot.project.name
-                alert.addButton(withTitle: JarasLocalization.string("Save"))
-                alert.addButton(withTitle: JarasLocalization.string("Close without saving"))
-                alert.addButton(withTitle: JarasLocalization.string("Cancel"))
-                let response = alert.runModal()
-                if response == .alertThirdButtonReturn { return false }
-                if response == .alertFirstButtonReturn { try await project.show.saveForClosing() }
-            }
-            try await project.documents.rememberProjectMedia()
         }
-        return true
+        for project in background {
+            while project.show.saving { try await Task.sleep(nanoseconds: 20_000_000) }
+            if save { try await project.show.saveForClosing() }
+            do { try await project.documents.rememberProjectMedia() }
+            catch { NSLog("CatLive: could not update background media inventory while closing: %@", error.localizedDescription) }
+        }
     }
     func close(_ index: Int) {
         guard !ProjectSyncControl.following else { return }
@@ -778,7 +803,7 @@ struct DesktopProjectTabBar: View {
             ForEach(Array(tabs.projects.enumerated()), id: \.offset) { index, project in
                 HStack(spacing: 0) {
                     Button { tabs.select(index) } label: {
-                        Text(project.documents.currentURL?.deletingPathExtension().lastPathComponent ?? project.show.snapshot.project.name)
+                        DesktopProjectTabName(documents: project.documents)
                             .font(.jarasSystem(size: 11, weight: .semibold))
                             .lineLimit(1).truncationMode(.middle)
                             .frame(maxWidth: .infinity).frame(height: 23)
@@ -798,6 +823,14 @@ struct DesktopProjectTabBar: View {
                 }
             }
         }.padding(.horizontal, 6).background(Color.black.opacity(0.2))
+    }
+}
+/// A tab's document finishes loading independently of the tab selection.
+/// Observe its URL directly so the title never waits for another tab click.
+private struct DesktopProjectTabName: View {
+    @ObservedObject var documents: ProjectDocuments
+    var body: some View {
+        Text(documents.currentURL?.deletingPathExtension().lastPathComponent ?? documents.show.snapshot.project.name)
     }
 }
 struct DesktopProjectRoot: View {

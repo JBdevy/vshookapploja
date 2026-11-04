@@ -1,7 +1,7 @@
 import Foundation
 
 public enum DAWAction: String, Codable, CaseIterable, Sendable {
-    case saveProject
+    case saveProject, toggleFullscreen
     case previousProjectTab, nextProjectTab
     case transportFadeout
     case selectTrack, muteTrack, soloTrack, volumeTrack, panTrack
@@ -10,18 +10,25 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
     case tunerDown, tunerUp, partsUp, partsDown, toggleParts, cancelSection
     case setlistUp, setlistDown, toggleAuto, splitItems, ignoreNext
     case projectStart, projectEnd, nextRegion, previousRegion, nextTimelinePoint, previousTimelinePoint
-    case toggleVideo, toggleTeleprompter, normalizeItems, createTempoMarker
+    case toggleVideo, toggleTeleprompter, normalizeItems, reRenderItems, unifyAudioItems, createTempoMarker
     case toggleTracks, toggleBarMixer, toggleSetlist, toggleMultiLoopBypass
 
-    public static let visible = allCases
+    public static var visible: [Self] {
+        #if os(iOS)
+        return allCases.filter { $0 != .toggleFullscreen }
+        #else
+        return allCases
+        #endif
+    }
     public var needsTrack: Bool { [.selectTrack, .muteTrack, .soloTrack, .volumeTrack, .panTrack].contains(self) }
     public var continuous: Bool { self == .volumeTrack || self == .panTrack || self == .volumeMaster }
-    public var supportsMIDI: Bool { self != .normalizeItems && self != .createTempoMarker }
+    public var supportsMIDI: Bool { ![.normalizeItems, .reRenderItems, .unifyAudioItems, .createTempoMarker, .toggleFullscreen].contains(self) }
     public var fixedKeyboard: Bool { self == .setlistUp || self == .setlistDown }
     public var repeats: Bool { [.tempoDown, .tempoUp, .nextRegion, .previousRegion, .nextTimelinePoint, .previousTimelinePoint].contains(self) }
     public var title: String {
         switch self {
         case .saveProject: return "Salvar projeto"
+        case .toggleFullscreen: return "Toggle fullscreen"
         case .previousProjectTab: return "Previous project tab"
         case .nextProjectTab: return "Next project tab"
         case .transportFadeout: return "Fadeout"
@@ -56,6 +63,8 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
         case .ignoreNext: return "Ignore Next"
         case .splitItems: return "Split stems"
         case .normalizeItems: return "Normalize selected items"
+        case .reRenderItems: return "Re-render selected items"
+        case .unifyAudioItems: return "Unify selected audio items"
         case .createTempoMarker: return "Create tempo marker"
         case .projectStart: return "Go to project start"
         case .projectEnd: return "Go to project end"
@@ -75,8 +84,9 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
         let command: UInt = 1 << 20, shift: UInt = 1 << 17, option: UInt = 1 << 19
         let key: UInt16, modifiers: UInt, label: String
         switch self {
-        case .previousProjectTab, .nextProjectTab, .transportFadeout, .selectTrack, .toggleMultiLoopBypass, .play, .stop, .subPlay, .tunerDown, .tunerUp, .partsUp, .partsDown, .toggleParts, .cancelSection: return nil
+        case .previousProjectTab, .nextProjectTab, .transportFadeout, .selectTrack, .toggleMultiLoopBypass, .play, .stop, .subPlay, .tunerDown, .tunerUp, .partsUp, .partsDown, .toggleParts, .cancelSection, .reRenderItems, .unifyAudioItems: return nil
         case .saveProject: (key, modifiers, label) = (1, command, "⌘S")
+        case .toggleFullscreen: (key, modifiers, label) = (103, command, "⌘F11")
         case .muteTrack: (key, modifiers, label) = (46, 0, "M")
         case .soloTrack: (key, modifiers, label) = (1, shift, "⇧S")
         case .tempoDown: (key, modifiers, label) = (27, 0, "−")

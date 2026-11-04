@@ -215,7 +215,12 @@ import Combine
                         trackEdit = .init(project: show.snapshot.project.id, tracks: [], name: "Master",
                             color: show.snapshot.project.masterColor ?? 0x414141, nameEditable: false)
                     },
-                    openItemMenu: { presentItemMenu($0, targets: [$0]) }, openSelectedItemMenu: { presentItemMenu($0, targets: $1) }, openItemFX: { fx = .init(clip: $0) }, addTrack: { addingTrack = true }, addTrackAudio: { documents.chooseNativeTrackAudio($0) },
+                    openItemMenu: { presentItemMenu($0, targets: [$0]) }, openSelectedItemMenu: { presentItemMenu($0, targets: $1) },
+                    processSelectedItems: { ids, action in
+                        guard let id = show.current?.tracks.filter({ $0.kind == .standard }).flatMap(\.clips).first(where: { ids.contains($0.id) })?.id else { return }
+                        itemMenuTargets = ids; itemMenuAction = action == .reRenderItems ? "render" : "glue"; itemMenu = .init(clip: id)
+                    },
+                    openItemFX: { fx = .init(clip: $0) }, addTrack: { addingTrack = true }, addTrackAudio: { documents.chooseNativeTrackAudio($0) },
                     addTrackText: { editingTextItem = show.addTextItem(track: $0) }, addTrackMedia: { documents.chooseNativeTrackMedia($0) },
                     createPlaylist: { show.createRegionPlaylist(name: $0, selected: $1) },
                     addBlock: { show.addSetlistBlock(namePrefix: JarasLocalization.string("Bloco")) },
@@ -354,7 +359,7 @@ import Combine
             IpadCompactModal(preferredSize: CGSize(width: 620, height: 520), onDismiss: { metronomeOpen = false }) {
                 VStack(spacing: 0) {
                     IpadModalHeader(title: "Metronome", close: { metronomeOpen = false })
-                    ScrollView { MetronomeEditor() }
+                    ScrollView { MetronomeEditor().environment(\.workspaceEditorDismiss, { metronomeOpen = false }) }
                 }
             }
         } else if let id = regionActions {
@@ -1468,8 +1473,13 @@ struct IpadDialogButtonStyle: ButtonStyle {
             if only == nil || only == .metronome {
             Button { metronome.enabled.toggle() } label: { Image(systemName: "metronome") }
                 .buttonStyle(TransportButtonStyle(color: metronome.enabled ? JarasTheme.yellow : Color(hex: 0x454545), active: metronome.enabled, inactiveOpacity: 1, fontSize: 12, width: controlWidth ?? 30, height: 28, bordered: false))
+                .overlay {
+                    if let configureMetronome {
+                        IpadTapHoldTouchSurface(tap: { metronome.enabled.toggle() }, hold: configureMetronome)
+                    }
+                }
                 .accessibilityLabel("Metronome").accessibilityValue(metronome.enabled ? "On" : "Off")
-                .contextMenu { Button("Settings") { configureMetronome?() } }
+                .accessibilityAction(named: Text("Settings")) { configureMetronome?() }
             }
         }
     }

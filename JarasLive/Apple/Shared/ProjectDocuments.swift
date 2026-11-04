@@ -490,6 +490,36 @@ enum PortableProjectImportPrompt: String, Identifiable {
         return message
     }
     #if os(macOS)
+    func pasteGridItems(selectedTracks: Set<UUID>, completion: @escaping (Set<UUID>) -> Void) {
+        let board = GridMediaClipboard.shared
+        guard board.source() == .items, let payload = board.items else { return }
+        if board.session == show.projectSessionID {
+            completion(show.pasteItems(selectedTracks: selectedTracks)); return
+        }
+        guard !payload.moving, ready, !busy, show.canControl(), let song = show.current else { return }
+        let session = show.projectSessionID
+        let position = show.snapshot.transport.editPosition ?? show.snapshot.transport.position
+        do {
+            let plan = try payload.copyPlan(in: song, at: position, selectedTracks: selectedTracks)
+            let entries = plan.entries
+            var validation = show.snapshot.project
+            try validation.pasteItems(entries, song: song.id, moving: false, addingTracks: plan.newTracks)
+            let source = board.directory, destination = currentURL?.deletingLastPathComponent() ?? projectAudio.mediaDirectory
+            busy = true; status = "Copying media…"
+            Task {
+                defer { busy = false; status = "" }
+                do {
+                    let transfer = try await Task.detached(priority: .userInitiated) {
+                        try GridItemMediaTransfer.stage(entries, from: source, to: destination)
+                    }.value
+                    do {
+                        guard show.projectSessionID == session else { throw CancellationError() }
+                        completion(try show.pasteTransferredItems(transfer.entries, song: song.id, addingTracks: plan.newTracks))
+                    } catch { transfer.discard(); throw error }
+                } catch { show.modalNotice = error.localizedDescription }
+            }
+        } catch { show.modalNotice = error.localizedDescription }
+    }
     func pasteMedia(_ urls: [URL], track: UUID?) {
         guard show.canControl(), ready, !busy, !urls.isEmpty,
               let song = show.current, pendingAudioDrop == nil else { return }
@@ -834,6 +864,11 @@ enum PortableProjectImportPrompt: String, Identifiable {
         else if let song = project.songs.first { GlobalProjectTiming(song: song).save() }
         try project.validate()
         await preloadTimelineWaveforms(project, at: url)
+        #if os(macOS)
+        // File reading and waveform preparation can overlap the startup sound;
+        // resetting the hardware graph must wait until that sound has finished.
+        try await AppStartupPresentation.waitForSound()
+        #endif
         try Task.checkCancellation()
         canCancelOpening = false
         let canExecute = show.canExecute
@@ -1013,7 +1048,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
             error = "Save the CatLive project outside the Logic package."; return
         }
         do { try ProjectDirectoryPolicy.validate(destination) }
-        catch { self.error = error.localizedDescription; return }
+        catch { self.error = ProjectMigration.errorDescription(error, localize: { JarasLocalization.string($0) }); return }
         busy = true; error = ""; warnings = []; migrationNotice = ""
         status = isReaper ? "Importing REAPER project…" : "Importing Logic project…"
         let pluginImport = isReaper ? Bundle.main.executableURL.map {
@@ -1024,7 +1059,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
             defer { busy = false }
             do {
                 let (result, teleprompter) = try await Task.detached(priority: .userInitiated) {
-                    let result = try isReaper ? ReaperProjectImporter.read(source, resolveVST3: pluginImport.map { session in { try session.resolve($0) } }, localizeWarning: { warningBundle.localizedString(forKey: $0, value: $0, table: nil) }) : LogicProjectImporter.read(source)
+                    let result = try isReaper ? ReaperProjectImporter.read(source, resolveVST3: pluginImport.map { session in { try session.resolve($0) } }, localizeWarning: { warningBundle.localizedString(forKey: $0, value: $0, table: nil) }) : LogicProjectImporter.read(source, localizeWarning: { warningBundle.localizedString(forKey: $0, value: $0, table: nil) })
                     try ProjectMigration.save(result, to: destination)
                     return (result, isReaper ? VSHookTeleprompterMigration.read(for: source) : nil)
                 }.value
@@ -1041,7 +1076,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
                     try await finishOpening(result.project, at: destination)
                     migrationNotice = warnings.joined(separator: "\n\n")
                 }
-            } catch { self.error = error.localizedDescription }
+            } catch { self.error = ProjectMigration.errorDescription(error, localize: { JarasLocalization.string($0) }) }
         }
     }
     #endif
@@ -1896,6 +1931,12 @@ extension NSHostingView: ProjectFrameSizedHosting {
     }
 }
 final class ProjectWindowAnchor: NSView {
+    private static weak var editorWindow: NSWindow?
+    static func toggleFullscreen() {
+        guard let window = editorWindow, window.isVisible, window.attachedSheet == nil else { return }
+        window.collectionBehavior.insert(.fullScreenPrimary)
+        window.toggleFullScreen(nil)
+    }
     static let editorFrameSize = NSSize(width: 1440, height: 791)
     static func configureChrome(of window: NSWindow) {
         // The interface already stays below the native titlebar. Extending its
@@ -1989,6 +2030,8 @@ final class ProjectWindowAnchor: NSView {
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); update() }
     func update() {
         guard let window else { return }
+        if editor { Self.editorWindow = window }
+        else if Self.editorWindow === window { Self.editorWindow = nil }
         if let documents, configuredWindow !== window || configuredDocuments !== documents {
             ProjectCloseGuard.shared.attach(window: window, documents: documents)
             configuredDocuments = documents
@@ -2049,22 +2092,34 @@ private final class ProjectSourcePanelValidator: NSObject, NSOpenSavePanelDelega
 #endif
 
 #if os(macOS)
-/// Own only a token; actual copied items remain in ShowController. A new Finder
-/// copy replaces this token so a stale internal selection cannot win Cmd+V.
+/// A process-wide snapshot lets other project tabs paste the same selection.
+/// A new Finder copy replaces the token so stale internal items cannot win Cmd+V.
 @MainActor final class GridMediaClipboard {
     static let shared = GridMediaClipboard()
-    enum Source: Equatable { case items, files([URL]), none }
+    enum Source: Equatable { case items, tracks, files([URL]), none }
     private let pasteboard: NSPasteboard
     private let itemType = NSPasteboard.PasteboardType("com.catlive.grid-items")
     private var token: String?
+    private var tracksCopied = false
+    var items: GridItemClipboard?
+    var directory: URL?
+    var session: UUID?
     init(pasteboard: NSPasteboard = .general) { self.pasteboard = pasteboard }
     func didCopyItems() {
+        tracksCopied = false
+        claimClipboard()
+    }
+    func didCopyTracks(session: UUID) {
+        tracksCopied = true; items = nil; directory = nil; self.session = session
+        claimClipboard()
+    }
+    private func claimClipboard() {
         let value = UUID().uuidString
         pasteboard.clearContents()
         token = pasteboard.setString(value, forType: itemType) ? value : nil
     }
     func source() -> Source {
-        if let token, pasteboard.string(forType: itemType) == token { return .items }
+        if let token, pasteboard.string(forType: itemType) == token { return tracksCopied ? .tracks : .items }
         let urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
         return urls.isEmpty ? .none : .files(urls)
     }

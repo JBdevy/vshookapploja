@@ -32,6 +32,13 @@ public class RemotePartsTest {
   app.railButtons.get("parts").performClick();assertNotNull(app.parts);assertNotNull(app.parts.cancel);assertNotNull(app.parts.currentTab);assertNotNull(app.parts.queuedTab);
   app.choose("setlist");View partsButton=findText(app.setlistColumn,"Parts");assertNotNull(partsButton);partsButton.performClick();assertNotNull(app.parts);assertEquals(2,app.parts.sections.size());
  }
+ @Test public void markerAppearanceFollowsColorAndLoopEditsWithoutChangingActions()throws Exception{
+  JSONObject marker=app.state.getJSONArray("markers").getJSONObject(0);marker.put("color",0xffff00).put("loopSection",true);
+  List<String> sent=new ArrayList<>();RemoteParts parts=new RemoteParts(app,sent::add,()->{});RemoteParts.SectionRow row=parts.sections.get(1);
+  assertEquals(0xffffff00,row.color);assertTrue(row.loop);assertEquals(android.graphics.Color.BLACK,row.title.getCurrentTextColor());row.performClick();assertEquals(marker.getString("id"),sent.get(0));
+  marker.put("color",0x201030).put("loopSection",false);parts.refresh();row=parts.sections.get(1);
+  assertEquals(0xff201030,row.color);assertFalse(row.loop);assertEquals(android.graphics.Color.WHITE,row.title.getCurrentTextColor());
+ }
  @Test public void phonePartsKeepsFooterFromBothEntryPointsAndFooterReturnsToSetlist(){
   for(boolean sidebar:new boolean[]{true,false}){
    if(!app.panel.equals("setlist"))app.choose("setlist");

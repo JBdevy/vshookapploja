@@ -229,7 +229,7 @@ struct MainView: View {
             toggleMixer: toggleMixer, toggleSetlist: toggleSetlist,
             setlistPlacement: setlistPlacement, placeSetlist: placeSetlist)
         #if os(macOS)
-        let tools = leftToolRail
+        let tools = desktopToolBar
         #else
         let tools = EmptyView()
         #endif
@@ -238,13 +238,17 @@ struct MainView: View {
                 #if os(macOS)
                 if desktopExtras && documents.projectTabCount > 1 { DesktopProjectTabBar().frame(height: 24) }
                 #endif
+                #if os(macOS)
+                workspace(height: max(0, geometry.size.height - 28 - (desktopExtras && documents.projectTabCount > 1 ? 24 : 0)), transport: transport, tools: tools)
+                #else
                 workspace(height: max(0, geometry.size.height - (desktopExtras && documents.projectTabCount > 1 ? 24 : 0)), transport: transport, tools: tools)
+                #endif
             }
         })
     }
     private func workspace<Transport: View, Tools: View>(height workspaceHeight: CGFloat,
                                                        transport: Transport, tools: Tools) -> some View {
-        HStack(spacing: 0) {
+        VStack(spacing: 0) {
             #if os(macOS)
             tools
             #endif
@@ -297,8 +301,10 @@ struct MainView: View {
                     resizeCoordinator: footerResizeCoordinator)
                 if keyboardOpen { FooterPianoKeyboard().frame(height: 108) }
                 #if os(macOS)
-                if vinhetasOpen && !vinhetasWindow.detached {
-                    VinhetasPanel(createTrack: { _ = show.createVinhetasTrack() }).frame(height: 240)
+                FooterNativeHeightHost(storedHeight: 240, minimum: 240, maximum: 240,
+                    active: vinhetasOpen && !vinhetasWindow.detached,
+                    identity: AnyHashable(ObjectIdentifier(show)), role: .auxiliary) {
+                    VinhetasPanel(createTrack: { _ = show.createVinhetasTrack() })
                         .onAppear { VinhetasController.shared.bind(show: show) }
                 }
                 #endif
@@ -315,7 +321,6 @@ struct MainView: View {
                             FooterPlaylistDisplay(show: show, scalesToAvailableHeight: true).frame(maxWidth: .infinity)
                                 .overlay(FooterDisplayResizeInput(height: geometry.size.height, maximum: maximumFooterHeight(workspaceHeight: workspaceHeight),
                                     changed: { _ in }, ended: { storedFooterHeight = $0 }))
-                            AudioStatusView { openSettings(.audio) }.fixedSize(horizontal: true, vertical: false)
                         }.buttonStyle(.plain).frame(height: geometry.size.height)
                     }.font(.jarasSystem(size: 9, weight: .medium, design: .monospaced)).padding(.horizontal, 14).background(JarasTheme.panel)
                 }
@@ -370,7 +375,7 @@ struct MainView: View {
                     VStack(spacing: 14) {
                         Text(LocalizedStringKey(documents.status))
                             .font(.jarasCallout).multilineTextAlignment(.center).lineLimit(3)
-                        ProgressView(value: documents.audioImportProgress).progressViewStyle(.linear).tint(JarasTheme.green)
+                        ProgressView(value: documents.audioImportProgress).progressViewStyle(JarasProgressBarStyle()).tint(JarasTheme.green)
                     }
                     .padding(24).frame(width: 360)
                     .background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 10))
@@ -536,7 +541,7 @@ struct MainView: View {
                 #else
                 let settingsOpen = false
                 #endif
-                if mappings.editing != nil && mappings.editing?.fxParameter == nil && panel == nil && !settingsOpen {
+                if mappings.editing != nil && mappings.editing?.presentedInline != true && mappings.editing?.fxParameter == nil && panel == nil && !settingsOpen {
                     ZStack { Color.black.opacity(0.25).contentShape(Rectangle()).onTapGesture { mappings.editing = nil }; ControlMappingEditor() }
                 }
             }
@@ -585,39 +590,36 @@ struct MainView: View {
             }
     }
     #if os(macOS)
-    private var leftToolRail: some View {
-        VStack(spacing: 8) {
+    private var desktopToolBar: some View {
+        HStack(spacing: 6) {
             Button {
                 withAnimation(.easeOut(duration: 0.16)) { navigationOpen.toggle() }
             } label: {
                 Image(systemName: "line.3.horizontal")
                     .font(.jarasSystem(size: 16))
-                    .frame(width: 30, height: 32)
+                    .frame(width: 26, height: 24)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Menu")
-            .jarasHelp("Menu")
             Button(action: toggleMixer) {
                 Image(systemName: "slider.horizontal.3")
                     .font(.jarasSystem(size: 15, weight: .semibold))
                     .foregroundStyle(mixerWidth <= 0 ? Color(hex: 0xc44545) : JarasTheme.green)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 26, height: 24)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel(mixerWidth <= 0 ? "Expandir Track-Mixer" : "Recolher Track-Mixer")
-            .jarasHelp(mixerWidth <= 0 ? "Restaurar largura anterior do Track-Mixer" : "Ocultar Track-Mixer")
-            MacProjectionRail(show: show)
-            Spacer(minLength: 0)
+            .desktopIconTooltip("Track-Mixer")
             if desktopExtras {
             Button(action: toggleBarMixer) {
                 Image(systemName: "slider.vertical.3")
                     .font(.jarasSystem(size: 16, weight: .semibold))
-                    .frame(width: 30, height: 32)
+                    .frame(width: 26, height: 24)
                     .contentShape(Rectangle())
             }
             .foregroundStyle((footerMixerOpen || detachedMixer.isVisible) ? JarasTheme.green : JarasTheme.text)
             .accessibilityLabel("Hoz-Mixer")
-            .jarasHelp("Hoz-Mixer")
+            .desktopIconTooltip("Hoz-Mixer")
             .contextMenu {
                 Button(LocalizedStringKey(detachedMixer.isDetached ? "Dock mixer" : "Undock mixer")) {
                     if detachedMixer.isDetached {
@@ -625,15 +627,43 @@ struct MainView: View {
                     } else { showDetachedMixer() }
                 }
             }
+            Button { toolWindows.openMatrixPatch(show: show) } label: {
+                Image(systemName: "square.grid.3x3")
+                    .font(.jarasSystem(size: 16, weight: .semibold))
+                    .frame(width: 26, height: 24).contentShape(Rectangle())
+            }
+            .foregroundStyle(toolWindows.matrixPatchOpen ? JarasTheme.green : JarasTheme.text)
+            .accessibilityLabel("Matrix Patch").desktopIconTooltip("Matrix Patch")
+            Button {
+                if detachedParts.isDetached {
+                    if detachedParts.isVisible { detachedParts.hide() }
+                    else { detachedParts.open(show: show) }
+                } else { partsLeftOpen.toggle() }
+            } label: {
+                PartsListIcon()
+                    .font(.jarasSystem(size: 16, weight: .semibold)).frame(width: 26, height: 24)
+                    .contentShape(Rectangle())
+            }.foregroundStyle((partsLeftOpen || detachedParts.isVisible) ? JarasTheme.green : JarasTheme.text)
+                .accessibilityLabel("Parts à esquerda").desktopIconTooltip("Parts")
+                .contextMenu {
+                    Button(LocalizedStringKey(detachedParts.isDetached ? "Dock Parts" : "Undock Parts")) {
+                        if detachedParts.isDetached { detachedParts.close(); partsLeftOpen = true }
+                        else { partsLeftOpen = false; detachedParts.open(show: show) }
+                    }
+                }
+            }
+            MacProjectionRail(show: show)
+            TeleprompterTimerToolbarButton()
+            if desktopExtras {
             Button { keyboardOpen.toggle() } label: {
                 Image(systemName: "pianokeys")
                     .font(.jarasSystem(size: 16, weight: .semibold))
-                    .frame(width: 30, height: 32)
+                    .frame(width: 26, height: 24)
                     .contentShape(Rectangle())
             }
             .foregroundStyle(keyboardOpen ? JarasTheme.green : JarasTheme.text)
             .accessibilityLabel("Keyboard")
-            .jarasHelp("Keyboard")
+            .desktopIconTooltip("Keyboard")
             .immediateRightClick { keyboardSettings = true }
             .sheet(isPresented: $keyboardSettings) { KeyboardSettingsView() }
             Button {
@@ -643,41 +673,35 @@ struct MainView: View {
             } label: {
                 Image(systemName: "square.grid.4x3.fill")
                     .font(.jarasSystem(size: 16, weight: .semibold))
-                    .frame(width: 30, height: 32)
+                    .frame(width: 26, height: 24)
                     .contentShape(Rectangle())
             }.foregroundStyle((vinhetasOpen || vinhetasWindow.visible) ? JarasTheme.green : JarasTheme.text)
-                .accessibilityLabel("Vinhetas").contextMenu {
+                .accessibilityLabel("Pads").desktopIconTooltip("Pads").contextMenu {
                     Button(vinhetasWindow.detached ? "Indexar" : "Desindexar") {
                         if vinhetasWindow.detached { vinhetasWindow.dock(); vinhetasOpen = true }
                         else { vinhetasOpen = false; vinhetasWindow.open(show: show) }
                     }
                 }
 
-            Button {
-                if detachedParts.isDetached {
-                    if detachedParts.isVisible { detachedParts.hide() }
-                    else { detachedParts.open(show: show) }
-                } else { partsLeftOpen.toggle() }
-            } label: {
-                PartsListIcon()
-                    .font(.jarasSystem(size: 16, weight: .semibold)).frame(width: 30, height: 32)
-                    .contentShape(Rectangle())
-            }.foregroundStyle((partsLeftOpen || detachedParts.isVisible) ? JarasTheme.green : JarasTheme.text)
-                .accessibilityLabel("Parts à esquerda").jarasHelp("Parts à esquerda")
-                .contextMenu {
-                    Button(LocalizedStringKey(detachedParts.isDetached ? "Dock Parts" : "Undock Parts")) {
-                        if detachedParts.isDetached { detachedParts.close(); partsLeftOpen = true }
-                        else { partsLeftOpen = false; detachedParts.open(show: show) }
-                    }
-                }
+
             }
+            Spacer(minLength: 0)
+            AudioStatusView { openSettings(.audio) }
+                .font(.jarasSystem(size: 9, weight: .medium, design: .monospaced))
+                .fixedSize(horizontal: true, vertical: false)
+            Button { openSettings() } label: {
+                Image(systemName: "gearshape")
+                    .font(.jarasSystem(size: 16))
+                    .frame(width: 26, height: 24).contentShape(Rectangle())
+            }.accessibilityLabel("Configurações").desktopIconTooltip("Configurações")
+
         }
         .buttonStyle(.plain)
-        .padding(.vertical, 7)
-        .frame(width: 32)
-        .frame(maxHeight: .infinity)
+        .padding(.horizontal, 4)
+        .frame(height: 28)
         .background(JarasTheme.panel)
-        .overlay(alignment: .trailing) { Rectangle().fill(JarasTheme.secondary.opacity(0.2)).frame(width: 1) }
+        .overlay { TeleprompterTimerToolbarReadout().allowsHitTesting(false) }
+        .overlay(alignment: .bottom) { Rectangle().fill(JarasTheme.secondary.opacity(0.2)).frame(height: 1) }
     }
     #endif
     private var navigationLayer: some View {
@@ -1105,7 +1129,7 @@ private struct FooterProjectNameDisplay: View {
 }
 
 #if os(macOS)
-enum FooterHeightRole { case display, mixer }
+enum FooterHeightRole { case display, mixer, auxiliary }
 
 /// Shares only native geometry. No publications, project edits or preferences
 /// are emitted while a divider is moving.
@@ -1174,7 +1198,7 @@ struct FooterNativeHeightHost<Content: View>: NSViewRepresentable {
             // Copying the entire environment hides this nested host's accessible
             // descendants. Forward presentation and actions explicitly instead.
             AnyView(content().environment(\.locale, environment.locale)
-                .environment(\.colorScheme, environment.colorScheme)
+                    .environment(\.colorScheme, environment.colorScheme)
                 .environment(\.font, environment.font)
                 .environment(\.controlSize, environment.controlSize).environment(\.isEnabled, environment.isEnabled)
                 .environment(\.layoutDirection, environment.layoutDirection).environment(\.dynamicTypeSize, environment.dynamicTypeSize)
@@ -1209,7 +1233,9 @@ final class FooterHeightContainerView: NSView {
         super.init(frame: frameRect)
         if #available(macOS 13, *) { host.sizingOptions = [] }
         if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
-        host.autoresizingMask = [.width, .height]; addSubview(host)
+        // Keep the retained content at its last real size while this container is hidden.
+        // Autoresizing it to height zero reflows every mixer control on close and again on open.
+        host.autoresizingMask = []; addSubview(host)
         setContentHuggingPriority(.required, for: .vertical)
         setContentCompressionResistancePriority(.required, for: .vertical)
     }
@@ -1319,6 +1345,7 @@ class FooterVerticalResizeView: NSView, NativeTimelineInputObserver {
         dragBoundary = boundary
         origin = (event.locationInWindow.y, boundary?.effectiveHeight ?? height)
         lastHeight = origin?.height
+        NotificationCenter.default.post(name: Notification.Name("CatLiveFooterResizeBegan"), object: window)
         NSCursor.resizeUpDown.push(); cursorPushed = true
         if let window, !(window.firstResponder is TimelineGridKeyboardTarget) { window.makeFirstResponder(self) }
     }
@@ -1355,6 +1382,7 @@ class FooterVerticalResizeView: NSView, NativeTimelineInputObserver {
         CATransaction.commit(); finishCursor()
     }
     private func finishCursor() {
+        NotificationCenter.default.post(name: Notification.Name("CatLiveFooterResizeEnded"), object: window)
         if cursorPushed { NSCursor.pop(); cursorPushed = false }
         window?.invalidateCursorRects(for: self)
     }

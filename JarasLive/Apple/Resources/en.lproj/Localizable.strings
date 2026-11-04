@@ -55,6 +55,7 @@
 "DEMO · SEM ÁUDIO" = "DEMO · NO AUDIO";
 "Autorização pendente ao parar" = "Authorization pending after playback";
 "Salvar projeto" = "Save project";
+"Toggle fullscreen" = "Toggle fullscreen";
 "Abrir grid" = "Open grid";
 "REPRODUZINDO" = "PLAYING";
 "PARADO" = "STOPPED";
@@ -171,6 +172,8 @@
 "Smaller buffers reduce latency and use more CPU." = "Smaller buffers reduce latency and use more CPU.";
 
 "Do you want to save this project?" = "Do you want to save this project?";
+"Do you want to save all projects?" = "Do you want to save all projects?";
+"Save all" = "Save all";
 
 "Mappings" = "Mappings";
 "Enabled" = "Enabled";
@@ -211,7 +214,6 @@
 
 "Apply" = "Apply";
 
-"Cancel" = "Cancel";
 
 "Effect" = "Effect";
 
@@ -550,7 +552,6 @@
 "Start" = "Start";
 "INIT AUTO" = "INIT AUTO";
 "Start timer automatically when a song starts" = "Start timer automatically when a song starts";
-"Stop timer?" = "Stop timer?";
 "Stop timer" = "Stop timer";
 "The timer will be reset." = "The timer will be reset.";
 "Timer settings" = "Timer settings";
@@ -836,7 +837,6 @@
 "Show on TP-1" = "Show on TP-1";
 "Show on TP-2" = "Show on TP-2";
 "Text scale: %lld%%" = "Text scale: %lld%%";
-"Text color" = "Text color";
 "Background color" = "Background color";
 "Flash color" = "Flash color";
 "Show emoji" = "Show emoji";
@@ -1209,7 +1209,6 @@
 
 "The iPad follows this setting. On iPhone, sections are always vertical." = "The iPad follows this setting. On iPhone, sections are always vertical.";
 
-"Cancel queued section" = "Cancel queued section";
 
 "Choose a project to open on the PC." = "Choose a project to open on the PC.";
 "No recent projects on this PC." = "No recent projects on this PC.";
@@ -2180,6 +2179,44 @@
 "A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta." = "The selected folder is on a disk with less than 5 GB available. Free up space before exporting or choose another folder.";
 "Unlearn CC" = "Unlearn CC";
 "Unlearn MIDI" = "Unlearn MIDI";
+/* Timeline appearance and grandMA2 Integration */
+"Select songs and create the grandMA2 macros on the Integration computer. Timecode: 30 FPS." = "Select songs and create the grandMA2 macros on the Integration computer. Timecode: 30 FPS.";
+"Advanced configuration" = "Advanced configuration";
+"First sequence" = "First sequence";
+"Page" = "Page";
+"First executor" = "First executor";
+"First timecode" = "First timecode";
+"MTC Slot" = "MTC Slot";
+"Cues" = "Cues";
+"MTC start" = "MTC start";
+"In grandMA2, import the “Import all” macro from the generated folder and run it once." = "In grandMA2, import the “Import all” macro from the generated folder and run it once.";
+"Save map to project" = "Save map to project";
+"Create grandMA2 macros" = "Create grandMA2 macros";
+"Lighting map saved. Save the CatLive project to keep these changes." = "Lighting map saved. Save the CatLive project to keep these changes.";
+"Stop playback before creating files" = "Stop playback before creating files";
+"Creating grandMA2 macros on CatLive Integration…" = "Creating grandMA2 macros on CatLive Integration…";
+"Macros saved on the Integration computer:" = "Macros saved on the Integration computer:";
+"Select at least one song for grandMA2" = "Select at least one song for grandMA2";
+"Update CatLive Integration to create grandMA2 macros." = "Update CatLive Integration to create grandMA2 macros.";
+"Integration did not confirm saving the files" = "Integration did not confirm saving the files";
+"Sequence, page, executor and timecode must be 1–9999; MTC slot must be 1–8." = "Sequence, page, executor and timecode must be 1–9999; MTC slot must be 1–8.";
+"The song exceeds its reserved MTC space. Review the lighting map before extending it." = "The song exceeds its reserved MTC space. Review the lighting map before extending it.";
+"Starting numbers leave insufficient space for all songs." = "Starting numbers leave insufficient space for all songs.";
+"The lighting map exceeds the 24-hour MTC limit." = "The lighting map exceeds the 24-hour MTC limit.";
+"Clear selection" = "Clear selection";
+"File creation is still running" = "File creation is still running";
+"File creation already running" = "File creation already running";
+"Invalid grandMA2 numbering" = "Invalid grandMA2 numbering";
+"Invalid grandMA2 timecode position" = "Invalid grandMA2 timecode position";
+"Could not save grandMA2 files" = "Could not save grandMA2 files";
+"Invalid grandMA2 region ID" = "Invalid grandMA2 region ID";
+"Duplicate grandMA2 destinations" = "Duplicate grandMA2 destinations";
+"grandMA2 destination exceeds 9999" = "grandMA2 destination exceeds 9999";
+"Invalid grandMA2 region duration" = "Invalid grandMA2 region duration";
+"Invalid grandMA2 cues" = "Invalid grandMA2 cues";
+"grandMA2 cue outside its song" = "grandMA2 cue outside its song";
+"Select fewer songs for this grandMA2 export" = "Select fewer songs for this grandMA2 export";
+"grandMA2 destination already exists" = "grandMA2 destination already exists";
 
 "Choose the folder containing the selected project and its media." = "Choose the folder containing the selected project and its media.";
 
@@ -2187,3 +2224,27 @@
 
 "Invert colors of waveform items" = "Invert colors of waveform items";
 "Inverted" = "Inverted";
+"Select a destination track before pasting." = "Select a destination track before pasting.";
+
+"Not enough destination tracks to paste these items." = "Not enough destination tracks to paste these items.";
+
+"The destination project is no longer active." = "The destination project is no longer active.";
+
+"Could not access the clipboard. Try copying again." = "Could not access the clipboard. Try copying again.";
+
+"Could not copy media for the pasted items." = "Could not copy media for the pasted items.";
+
+"No project media directory" = "No project media directory";
+
+"Copying media…" = "Copying media…";
+"The copied tracks no longer exist." = "The copied tracks no longer exist.";
+
+"Matrix Patch" = "Matrix Patch";
+
+"Search tracks" = "Search tracks";
+
+"Sources" = "Sources";
+
+"Destinations →" = "Destinations →";
+
+"Click a cell to connect or disconnect" = "Click a cell to connect or disconnect";

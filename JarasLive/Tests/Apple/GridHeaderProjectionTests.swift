@@ -25,6 +25,15 @@ func pixels(scale: Int = 1) -> Data {
     grid.needsDisplay = false
     return Data(bytes: bitmap.bitmapData!, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
 }
+let deselectedPixels = pixels()
+let selectionInvalidations = HeaderProjectionProbe.invalidations
+grid.updateSelection([id])
+precondition(HeaderProjectionProbe.invalidations > selectionInvalidations, "Selecting an item must invalidate its native header immediately")
+let selectedPixels = pixels()
+precondition(deselectedPixels != selectedPixels, "Selected item title must visibly change color")
+grid.updateSelection([])
+precondition(pixels() == deselectedPixels, "Clearing selection must restore the original header")
+print("GRID_HEADER_SELECTION_INVALIDATION_AND_RESTORE_OK")
 for scale in [1, 2] {
     grid.timelineOrigin = CGPoint(x: 900, y: 0)
     let reference = pixels(scale: scale)
@@ -85,3 +94,26 @@ _ = pixels()
 grid.timelineOrigin.x += 100
 precondition(!grid.invalidateHeaderProjectionIfNeeded(), "empty grid scroll needs no header painting")
 print("GRID_HEADER_800_STABLE_SCROLL_FRAMES_IDENTICAL_PIXELS_1X_2X_FADES_CONTROLS_AND_DELETION_OK")
+
+// A growing recording must keep its name at the visible left edge even inside
+// a 512-point hosted-canvas bucket, and when crossing several bucket edges.
+grid.items = []
+grid.timelineOrigin = CGPoint(x: 900, y: 0)
+var take = GridSelectionItem(id: UUID(), rect: CGRect(x: 0, y: 100, width: 1250, height: 70),
+    editable: false, resizable: false, movable: false, contextActions: false, name: "Voz gravando")
+for scale in [1, 2] {
+    grid.timelineOrigin.x = 900
+    take.rect.size.width = 1250
+    grid.recordingHeaders = [take]
+    let reference = pixels(scale: scale)
+    for frame in 1...1000 {
+        grid.timelineOrigin.x = 900 + CGFloat(frame) * 1.25
+        take.rect.size.width = grid.timelineOrigin.x + 350
+        grid.recordingHeaders = [take]
+        precondition(pixels(scale: scale) == reference, "recording title must stay fixed during continuous scroll and growth")
+    }
+}
+let recordingPixels = pixels()
+grid.recordingHeaders = []
+precondition(pixels() != recordingPixels, "finishing a take clears its temporary title")
+print("RECORDING_HEADER_2000_GROWING_SCROLL_FRAMES_STABLE")

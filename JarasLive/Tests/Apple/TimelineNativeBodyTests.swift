@@ -33,7 +33,7 @@
     textTrack.clips = [AudioClip(id: UUID(), name: "Text", startTime: 0, duration: 12, text: "Verso 1\nC Am F G")]
     var song = Song(id: UUID(), name: "Mixed", duration: 12, bpm: 120, tracks: [audioTrack, clickTrack, textTrack], parts: [])
     func configuration(_ source: Song, selected: Set<UUID> = [], height: CGFloat = 64) -> NativeTimelineAudioBodyConfiguration? {
-        NativeTimelineAudioBodyConfiguration.make(song: source, rows: TrackRowLayout(tracks: source.tracks, baseHeight: height),
+        NativeTimelineAudioBodyConfiguration.make(song: source, key: TimelineRenderKey(revision: 1, songID: source.id, movingClip: nil, movingStart: 0, movingTrack: nil, movingRegion: nil, regionDelta: 0, resizingRegion: nil, resizedStart: 0, resizedEnd: 0), rows: TrackRowLayout(tracks: source.tracks, baseHeight: height),
             metadata: TimelineRenderMetadata(song: source), rulerHeight: 55, selectedClips: selected,
             mediaDirectory: directory, missingAudioPaths: ["missing.wav"])
     }
@@ -72,7 +72,7 @@
                 }
             }
         }
-        let config = bodyConfigurationCache.configuration(song: source,
+        let config = bodyConfigurationCache.configuration(song: source, renderKey: unchangedKey,
             rows: rows, metadata: metadata,
             rulerHeight: 55, selectedClips: [], mediaDirectory: snapshotDirectory, missingAudioPaths: [])
         snapshotBody.configure(config)
@@ -108,12 +108,12 @@
             "An unchanged snapshot must retain all cached metadata across zoom frames")
     }
     let retainedRows = TrackRowLayout(tracks: snapshotSong.tracks, baseHeight: 64)
-    let retainedConfig = bodyConfigurationCache.configuration(song: snapshotSong, rows: retainedRows,
+    let retainedConfig = bodyConfigurationCache.configuration(song: snapshotSong, renderKey: unchangedKey, rows: retainedRows,
         metadata: unchangedMetadata, rulerHeight: 55, selectedClips: [], mediaDirectory: snapshotDirectory, missingAudioPaths: [])!
     let fillsBeforeConfigure = snapshotBody.fillSubmissionsForTest
     let inkBeforeConfigure = snapshotBody.inkUpdatesForTest
     for _ in 0..<80 {
-        let unchanged = bodyConfigurationCache.configuration(song: snapshotSong, rows: retainedRows,
+        let unchanged = bodyConfigurationCache.configuration(song: snapshotSong, renderKey: unchangedKey, rows: retainedRows,
             metadata: unchangedMetadata, rulerHeight: 55, selectedClips: [], mediaDirectory: snapshotDirectory, missingAudioPaths: [])!
         precondition(unchanged.fallbackIdentity == retainedConfig.fallbackIdentity && unchanged.metadata === retainedConfig.metadata,
             "Window layout keeps clip classification and hosted-coverage identity independent of viewport dimensions")
@@ -123,15 +123,15 @@
     }
     precondition(snapshotBody.fillSubmissionsForTest == fillsBeforeConfigure && snapshotBody.inkUpdatesForTest == inkBeforeConfigure,
         "No-op host updates cannot clear text/media or resubmit identical GPU item fills")
-    let selectedConfig = bodyConfigurationCache.configuration(song: snapshotSong, rows: retainedRows,
+    let selectedConfig = bodyConfigurationCache.configuration(song: snapshotSong, renderKey: unchangedKey, rows: retainedRows,
         metadata: unchangedMetadata, rulerHeight: 55, selectedClips: [otherClip.id], mediaDirectory: snapshotDirectory, missingAudioPaths: [])!
     precondition(selectedConfig.fallbackIdentity != retainedConfig.fallbackIdentity && snapshotBody.configure(selectedConfig),
         "Selection still invalidates retained visual contents")
-    let missingConfig = bodyConfigurationCache.configuration(song: snapshotSong, rows: retainedRows,
+    let missingConfig = bodyConfigurationCache.configuration(song: snapshotSong, renderKey: unchangedKey, rows: retainedRows,
         metadata: unchangedMetadata, rulerHeight: 55, selectedClips: [], mediaDirectory: snapshotDirectory, missingAudioPaths: ["audio.wav"])!
     precondition(missingConfig.fallbackIdentity != selectedConfig.fallbackIdentity && snapshotBody.configure(missingConfig),
         "Relink/missing-media status invalidates actual clip presentation without a new song revision")
-    precondition(bodyConfigurationCache.configuration(song: snapshotSong, rows: retainedRows, metadata: unchangedMetadata,
+    precondition(bodyConfigurationCache.configuration(song: snapshotSong, renderKey: unchangedKey, rows: retainedRows, metadata: unchangedMetadata,
         rulerHeight: 55, selectedClips: [], mediaDirectory: nil, missingAudioPaths: []) == nil,
         "Closing the media directory cannot reuse a previous project's GPU configuration")
     print("NATIVE_BODY_CONFIGURE_AND_CLASSIFICATION_REUSE_REAL_CONTENT_SELECTION_MISSING_MEDIA_OK")
@@ -184,6 +184,39 @@
         "PCM readiness must leave retained text/media ink untouched")
     print("NATIVE_BODY_FILL_AND_TEXT_BEFORE_PCM_READINESS_WITHOUT_FILL_OR_INK_REDRAW_OK")
 
+    // A preference-only change must replace cached GPU colors without changing
+    // the document, its selection, its source data or text/media appearances.
+    let appearanceCache = NativeTimelineAudioBodyCache()
+    func appearance(_ inverted: Bool) -> NativeTimelineAudioBodyConfiguration {
+        appearanceCache.configuration(song: song, renderKey: mixed.presentationKey, rows: mixed.rows,
+            metadata: mixed.metadata, rulerHeight: 55, selectedClips: [], mediaDirectory: directory,
+            missingAudioPaths: ["missing.wav"], invertWaveformColors: inverted)!
+    }
+    let normal = appearance(false), inverted = appearance(true)
+    precondition(normal.contentKey != inverted.contentKey && normal.fallbackIdentity != inverted.fallbackIdentity)
+    body.configure(inverted)
+    for scale in [20.0, 300, 2400] {
+        body.project(viewport: viewport, documentSize: CGSize(width: 12 * scale, height: 400), scale: scale)
+        let frame = body.fillsForTest!, origin = frame.coordinateSpace!.documentOrigin
+        let item = frame.items.first { abs($0.rect.minX + origin.x - 1) < 0.001 && abs($0.rect.minY + origin.y - 58) < 0.001 }!
+        precondition(item.topColor == item.headerColor && item.bottomColor == item.headerColor,
+            "Inverted item body must use its header gray at every zoom")
+        awaitValue({ body.waveformsForTest?.strokes.contains { $0.block.key != "timeline-centerline-unit" } == true },
+            "Overview/detail readiness must update the inverted waveform without another zoom event")
+        let waves = body.waveformsForTest!.strokes.filter { $0.block.key != "timeline-centerline-unit" }
+        precondition(waves.allSatisfy { $0.color.x == inverted.palettes[0].normal.x &&
+            $0.color.y == inverted.palettes[0].normal.y && $0.color.z == inverted.palettes[0].normal.z },
+            "Every waveform primitive must use the track's ink, including cached overviews")
+        let text = frame.items.first { abs($0.rect.minY + origin.y - 186) < 0.001 }!
+        precondition(text.topColor == mixed.palettes[2].normal,
+            "Inverting waveform colors must not recolor teleprompter items")
+    }
+    body.configure(appearance(false))
+    body.project(viewport: viewport, documentSize: CGSize(width: 4000, height: 400), scale: 300)
+    precondition(body.fillsForTest!.items.map(\.topColor) == cold.items.map(\.topColor),
+        "Switching back restores the original cached body colors immediately")
+    print("NATIVE_BODY_INVERTED_COLORS_CACHE_ZOOM_TEXT_ISOLATION_AND_RESTORE_OK")
+
     body.project(viewport: CGRect(x: 700, y: 0, width: 600, height: 260), documentSize: CGSize(width: 8000, height: 400), scale: 600)
     let zoomed = body.fillsForTest!
     precondition(zoomed.coordinateSpace?.pixelsPerSecond == 600)
@@ -235,7 +268,7 @@
     body.configure(configuration(song, selected: [first.id]))
     body.project(viewport: viewport, documentSize: CGSize(width: 4000, height: 400), scale: 300)
     let edited = body.fillsForTest!
-    precondition(abs(edited.items[0].rect.minX - 301) < 0.001 && edited.items[0].borderWidth == 3 && edited.items[0].borderBackdropWidth == 5)
+    precondition(abs(edited.items[0].rect.minX - 301) < 0.001 && edited.items[0].borderWidth == 1.25 && edited.items[0].borderBackdropWidth == 2)
     precondition(edited.coordinateSpace?.contentRevision != cold.coordinateSpace?.contentRevision)
     body.configure(configuration(song, selected: [first.id], height: 24))
     body.project(viewport: viewport, documentSize: CGSize(width: 4000, height: 400), scale: 300)

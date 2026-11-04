@@ -103,6 +103,7 @@ private func setlistQueuedRegionID(_ region: UUID?, occurrence: UUID?, parent: U
         let song: UUID?
         let playlist: UUID?
         let expanded: Set<UUID>
+        var order: Int = 0
     }
     struct Content {
         let entries: [SetlistEntry]
@@ -142,17 +143,12 @@ struct SongListView: View {
     // not rebuild every row in a large playlist.
     private final class EntryEditorState: ObservableObject {
         @Published var entry: EntryEdit?
-        @Published var blockSymbol = true
         @Published var uppercaseName = true
     }
     @State private var entryEditor = EntryEditorState()
     private var editingEntry: EntryEdit? {
         get { entryEditor.entry }
         nonmutating set { entryEditor.entry = newValue }
-    }
-    private var editingBlockSymbol: Bool {
-        get { entryEditor.blockSymbol }
-        nonmutating set { entryEditor.blockSymbol = newValue }
     }
     private var editingUppercaseName: Bool {
         get { entryEditor.uppercaseName }
@@ -179,9 +175,6 @@ struct SongListView: View {
     @ObservedObject private var unifiedTextColor = AppearanceColor.shared("jaras.setlist.unifiedTextColor", default: 0xffeb3b)
     @ObservedObject private var blockTextColor = AppearanceColor.shared("jaras.setlist.blockTextColor", default: 0x69ed91)
     @AppStorage("jaras.blocks.symbol") private var defaultBlockSymbol = true
-    @State private var blockSymbolTargets = Set<UUID>()
-    @State private var editingMultipleSymbols = false
-    @State private var multipleSymbolDraft = true
     @State private var showingBlockDefaults = false
     @State private var blockSymbolDraft = true
     @State private var createdBlock: UUID?
@@ -191,6 +184,7 @@ struct SongListView: View {
     @State private var choosingPlaylist = false
     @State private var showingPlaylistCopyResult = false
     @State private var playlistCopySucceeded = false
+    @AppStorage("jaras.setlist.allRegionsOrder") private var allRegionsOrder = 0
     @State private var creatingPlaylist = false
     @State private var addingToPlaylist: UUID?
     private var playlistCandidates: [Part] {
@@ -199,12 +193,19 @@ struct SongListView: View {
         return show.allRegions.filter { !existing.contains($0.id) }
     }
     @State private var showingAutoOptions = false
+    @State private var choosingSubplayTracks = false
+    @State private var subplayTrackDraft = Set<UUID>()
     @State private var configInitRegion: Part?
     @State private var configInitSelection = 1
     @State private var searching = false
     @State private var highlightedSearchID: UUID?
     @State private var query = ""
     @State private var playlistName = ""
+    @State private var playlistQuery = ""
+    private var filteredPlaylistCandidates: [Part] {
+        let term = playlistQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return playlistCandidates.filter { term.isEmpty || $0.displayName.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+    }
     @State private var missingPlaylistName = false
     @State private var nameShake = 0.0
     @FocusState private var playlistNameFocused: Bool
@@ -260,9 +261,10 @@ struct SongListView: View {
         let song = show.current
         let playlist = show.selectedRegionPlaylist
         let setlist = show.regionSetlist
-        let content = entryCache.content(for: SetlistEntryCache.Key(controller: ObjectIdentifier(show), project: show.snapshot.project.id, projectRevision: show.projectRevision, setlistRevision: show.setlistRevision, song: song?.id, playlist: setlist.selectedId, expanded: expandedRegions)) {
+        let content = entryCache.content(for: SetlistEntryCache.Key(controller: ObjectIdentifier(show), project: show.snapshot.project.id, projectRevision: show.projectRevision, setlistRevision: show.setlistRevision, song: song?.id, playlist: setlist.selectedId, expanded: expandedRegions, order: playlist == nil ? allRegionsOrder : 0)) {
             let children = Dictionary(grouping: (song?.parts ?? []).filter { $0.parentRegionID != nil }, by: { $0.parentRegionID! })
-            let entries = show.setlistEntries.flatMap { entry -> [SetlistEntry] in
+            let roots = playlist == nil ? SetlistDisplayOrder.entries(show.setlistEntries, mode: allRegionsOrder) : show.setlistEntries
+            let entries = roots.flatMap { entry -> [SetlistEntry] in
                 guard expandedRegions.contains(entry.id) else { return [entry] }
                 let nested = (children[entry.id] ?? []).sorted { $0.startTime == $1.startTime ? $0.endTime < $1.endTime : $0.startTime < $1.startTime }
                 return [entry] + nested.enumerated().map { .region($0.element, number: $0.offset + 1) }
@@ -324,19 +326,27 @@ struct SongListView: View {
                                         }
                                         Text(verbatim: "Next").tag(11)
                                     }.disabled(show.regionSetlist.automaticSubplay != true)
+                                    Button("Choose tracks") {
+                                        subplayTrackDraft = Set(show.regionSetlist.subplayExclusiveTrackIDs ?? [])
+                                        showingAutoOptions = false
+                                        DispatchQueue.main.async { choosingSubplayTracks = true }
+                                    }
+
                                 }
                             }.toggleStyle(.automatic).padding(18).frame(width: 320)
                         }
-                    Button { createdBlock = show.addSetlistBlock(symbol: defaultBlockSymbol, namePrefix: JarasLocalization.string("Bloco")) } label: {
-                        Text(verbatim: JarasLocalization.string("Blocks").uppercased()).font(.jarasSystem(size: 9, weight: .bold)).frame(width: max(0, (geometry.size.width - 6) / 3), height: 26)
+                    Button {
+                        if playlist == nil { allRegionsOrder = (allRegionsOrder + 1) % 3 }
+                        else { createdBlock = show.addSetlistBlock(namePrefix: JarasLocalization.string("Bloco")) }
+                    } label: {
+                        Text(verbatim: playlist == nil ? ["Timeline", "A-Z", "Z-A"][min(2,max(0,allRegionsOrder))] : JarasLocalization.string("Blocks").uppercased()).font(.jarasSystem(size: 9, weight: .bold)).frame(width: max(0, (geometry.size.width - 6) / 3), height: 26)
                             .background(JarasTheme.panel).clipShape(RoundedRectangle(cornerRadius: 4)).contentShape(Rectangle())
                     }.buttonStyle(.plain).jarasHelp("Add a setlist block").accessibilityLabel("Blocks")
                         .immediateRightClick {
                             guard show.selectedRegionPlaylist != nil else { return }
                             blockSymbolDraft = defaultBlockSymbol; showingBlockDefaults = true
                         }
-                        .disabled(playlist == nil)
-                        .opacity(playlist == nil ? 0.4 : 1)
+
                     RegionStopButton(active: setlist.stopsAtRegionEnd, width: max(0, (geometry.size.width - 6) / 3)) { show.toggleRegionStop() }
                 }
             }.frame(height: 26).padding(.horizontal, 8).padding(.bottom, 6)
@@ -365,12 +375,12 @@ struct SongListView: View {
                             addingToPlaylist = id
                             playlistName = show.regionSetlist.playlists.first { $0.id == id }?.name ?? ""
                             missingPlaylistName = false; selection = []; selectionAnchor = nil
-                            choosingPlaylist = false; creatingPlaylist = true
+                            playlistQuery = ""; choosingPlaylist = false; creatingPlaylist = true
                         }, copyPlaylist: copyPlaylist) { query = "" }
                     }
                 Button {
                     addingToPlaylist = nil; playlistName = ""; missingPlaylistName = false; nameShake = 0; selection = []; selectionAnchor = nil
-                    choosingPlaylist = false; creatingPlaylist = true
+                    playlistQuery = ""; choosingPlaylist = false; creatingPlaylist = true
                 } label: { Image(systemName: "plus").frame(width: 27, height: 30).contentShape(Rectangle()) }
                     .buttonStyle(.plain).jarasHelp("Create playlist").accessibilityLabel("Create playlist")
                 Button { searching.toggle() } label: {
@@ -385,17 +395,12 @@ struct SongListView: View {
                         ForEach(visible) { entry in
                             switch entry {
                             case .block(let block):
-                                SetlistBlockRow(block: block, nameColor: UInt32(blockTextColor.value), showSymbols: defaultBlockSymbol, fontStyle: fontStyle, selected: selectedEntries.contains(block.id))
+                                SetlistBlockRow(block: block, nameColor: UInt32(blockTextColor.value), showSymbols: showingBlockDefaults ? blockSymbolDraft : defaultBlockSymbol, fontStyle: fontStyle, selected: selectedEntries.contains(block.id))
                                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(selectedEntries.contains(block.id) ? JarasTheme.green : .clear, lineWidth: 1))
                                     .onTapGesture { selectEntry(block.id, visible: visible) }
                                     .contextMenu {
                                         Button("Edit block") {
-                                            let blocks = show.listedBlocks.filter { selectedEntries.contains($0.id) }
-                                            if selectedEntries.contains(block.id), blocks.count > 1, blocks.count == selectedEntries.count {
-                                                blockSymbolTargets = Set(blocks.map(\.id))
-                                                multipleSymbolDraft = blocks.allSatisfy(\.showsSymbol)
-                                                editingMultipleSymbols = true
-                                            } else { editingBlockSymbol = block.showsSymbol; editingEntry = EntryEdit(id: block.id, name: block.name, color: block.color, block: true) }
+                                            editingEntry = EntryEdit(id: block.id, name: block.name, color: block.color, block: true)
                                         }
                                         Button("Learn MIDI") {
                                             if let number = show.setlistBlockNumber(block.id) {
@@ -582,8 +587,30 @@ struct SongListView: View {
             if removal?.blocksOnly == true {
                 Text("Only the selected block headers will be removed. Songs and timeline items will be kept.")
             } else if removal?.playlist == nil {
-                Text("The selected regions, their items and markers will be removed from the timeline. Media files will remain in the project folder.")
+                Text("Only the selected regions will be removed. Timeline items and their audio will be kept.")
             }
+        }
+        .sheet(isPresented: $choosingSubplayTracks) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Choose tracks").font(.jarasHeadline)
+                Text("On these tracks, automatic Subplay stops items from the previous song and keeps only the incoming song's items.")
+                    .font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(show.current?.tracks.filter { $0.kind == .standard || $0.kind == .click } ?? []) { track in
+                            Toggle(isOn: Binding(get: { subplayTrackDraft.contains(track.id) }, set: { enabled in
+                                if enabled { subplayTrackDraft.insert(track.id) } else { subplayTrackDraft.remove(track.id) }
+                            })) { Text(verbatim: track.name) }
+                        }
+                    }.padding(8)
+                }
+                HStack {
+                    Button("Cancel") { choosingSubplayTracks = false }
+                    Spacer()
+                    Button("Apply") { show.setSubplayExclusiveTracks(subplayTrackDraft); choosingSubplayTracks = false }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }.padding(22).frame(width: 460, height: 440).background(JarasTheme.background)
         }
         .sheet(item: $regionExport) { request in
             AudioExportView(project: request.project, song: request.song, mediaDirectory: request.mediaDirectory,
@@ -608,13 +635,6 @@ struct SongListView: View {
         }
         .sheet(item: $multiLoopRegion) { region in MultiLoopsEditor(show: show, regionID: region.id) }
         .background(EntryEditorHost(show: show, state: entryEditor))
-        .sheet(isPresented: $editingMultipleSymbols) {
-            VStack(alignment: .leading, spacing: 16) {
-                Toggle("SIMBOL", isOn: $multipleSymbolDraft)
-                    .onChange(of: multipleSymbolDraft) { enabled in show.setBlockSymbols(blockSymbolTargets, enabled: enabled) }
-                HStack { Spacer(); Button("Close") { editingMultipleSymbols = false }.keyboardShortcut(.cancelAction) }
-            }.padding(18).frame(width: 240).background(JarasTheme.panel)
-        }
         .sheet(isPresented: $showingBlockDefaults) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Blocks").font(.jarasHeadline)
@@ -639,10 +659,10 @@ struct SongListView: View {
                 }.background(JarasTheme.panel)
             } else {
             NameColorEditor(title: edit.block ? "Edit block" : "Edit song", initialName: edit.name, initialColor: edit.color, save: { name, color in
-                if edit.block { show.editSetlistBlock(edit.id, name: name, color: color, symbol: state.blockSymbol) }
+                if edit.block { show.editSetlistBlock(edit.id, name: name, color: color) }
                 else if edit.regionTargets.count > 1 { show.editRegionColors(edit.regionTargets, color: color) }
                 else { show.editRegion(edit.id, name: name, color: color, uppercaseName: state.uppercaseName) }
-            }, symbol: edit.block ? $state.blockSymbol : nil, uppercaseName: edit.block || edit.regionTargets.count > 1 ? nil : $state.uppercaseName, nameEditable: edit.regionTargets.count <= 1, showsName: edit.regionTargets.count <= 1).background(JarasTheme.panel)
+            }, uppercaseName: edit.block || edit.regionTargets.count > 1 ? nil : $state.uppercaseName, nameEditable: edit.regionTargets.count <= 1, showsName: edit.regionTargets.count <= 1).background(JarasTheme.panel)
             }
         }
         }
@@ -673,7 +693,7 @@ struct SongListView: View {
         guard show.selectRegionSearchResult(id) else { return }
         // Search is an explicit request to reveal this child, unlike playback focus.
         if let parent = show.current?.parts.first(where: { $0.id == id })?.parentRegionID { expandedRegions.insert(parent) }
-        searching = false; query = ""; choosingPlaylist = false
+        searchFocused = false; searching = false; query = ""; choosingPlaylist = false
     }
     private func moveSearchHighlight(_ delta: Int) {
         let results = show.searchRegions(query, byRegionID: idMode == "region")
@@ -757,16 +777,24 @@ struct SongListView: View {
                 }
             HStack(spacing: 6) {
                 Button("All") {
-                    selection = playlistCandidates.map(\.id)
-                    selectionAnchor = playlistCandidates.first?.id
+                    let visible = filteredPlaylistCandidates.map(\.id)
+                    selection += visible.filter { !selection.contains($0) }
+                    selectionAnchor = visible.first
                 }
                 Button("Clear") { selection.removeAll(); selectionAnchor = nil }
                 Spacer(minLength: 0)
             }.buttonStyle(StageButtonStyle()).controlSize(.small)
-            Text("⌘ / Ctrl: multiple · Shift: range").font(.jarasSystem(size: 9)).foregroundStyle(JarasTheme.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(JarasTheme.secondary)
+                TextField("Search songs", text: $playlistQuery).textFieldStyle(.roundedBorder)
+                if !playlistQuery.isEmpty {
+                    Button { playlistQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel("Clear")
+                }
+            }
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 3) {
-                    ForEach(playlistCandidates) { region in
+                    ForEach(filteredPlaylistCandidates) { region in
                         Button { selectForPlaylist(region.id) } label: {
                             HStack(spacing: 5) {
                                 if let order = selection.firstIndex(of: region.id) {
@@ -815,22 +843,17 @@ struct SongListView: View {
         }
     }
     private func selectForPlaylist(_ id: UUID) {
-        let ids = playlistCandidates.map(\.id)
+        let ids = filteredPlaylistCandidates.map(\.id)
         #if os(macOS)
         let flags = NSEvent.modifierFlags
         if flags.contains(.shift), let anchor = selectionAnchor,
            let a = ids.firstIndex(of: anchor), let b = ids.firstIndex(of: id) {
             let range = a <= b ? Array(ids[a...b]) : Array(ids[b...a].reversed())
-            selection = flags.contains(.command) || flags.contains(.control)
-                ? selection + range.filter { !selection.contains($0) } : range
+            selection += range.filter { !selection.contains($0) }
             return
         }
-        if flags.contains(.command) || flags.contains(.control) {
-            if selection.contains(id) { selection.removeAll { $0 == id } } else { selection.append(id) }
-        } else { selection = [id] }
-        #else
-        if selection.contains(id) { selection.removeAll { $0 == id } } else { selection.append(id) }
         #endif
+        if selection.contains(id) { selection.removeAll { $0 == id } } else { selection.append(id) }
         selectionAnchor = id
     }
 }
@@ -1496,7 +1519,26 @@ private struct SetlistArrowKeys: NSViewRepresentable {
     func updateNSView(_ view: SetlistKeyView, context: Context) { view.searching = searching; view.searchMove = searchMove; view.searchChoose = searchChoose; view.move = move; view.playlist = playlist; view.search = search; view.released = released; view.activate = activate; view.delete = delete }
 }
 final class SetlistKeyView: NSView {
-    var searching = false
+    var searching = false {
+        didSet {
+            guard oldValue && !searching else { return }
+            restoreSearchFocus = true
+            DispatchQueue.main.async { [weak self] in self?.restoreFocusAfterSearch() }
+        }
+    }
+    override var acceptsFirstResponder: Bool { true }
+    private var restoreSearchFocus = false
+    private var searchFocusObserver: NSObjectProtocol?
+    private func restoreFocusAfterSearch() {
+        guard restoreSearchFocus, !searching, let window, window.isKeyWindow,
+              window.attachedSheet == nil, !isHiddenOrHasHiddenAncestor else { return }
+        // Dismissing an NSPopover can select the first TextField in the document
+        // (the toolbar timer). Keep keyboard navigation in the Setlist instead.
+        restoreSearchFocus = false
+        window.makeFirstResponder(self)
+        Self.deleteOwner = self
+        EditorSelectionRouter.shared.activate(.setlist, in: window)
+    }
     var search: (() -> Bool)?
     var searchMove: ((Int) -> Void)?
     var searchChoose: (() -> Void)?
@@ -1527,6 +1569,7 @@ final class SetlistKeyView: NSView {
     }
     func notePointerEvent(_ event: NSEvent) {
         guard event.window === window else { return }
+        restoreSearchFocus = false
         let point = convert(event.locationInWindow, from: nil)
         if bounds.contains(point) && visibleRect.contains(point) {
             if window?.firstResponder is any TimelineGridKeyboardTarget { window?.makeFirstResponder(nil) }
@@ -1556,8 +1599,12 @@ final class SetlistKeyView: NSView {
         if Self.deleteOwner === self { Self.deleteOwner = nil }
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver); self.focusObserver = nil }
+        if let searchFocusObserver { NotificationCenter.default.removeObserver(searchFocusObserver); self.searchFocusObserver = nil }
         guard let window else { return }
         focusObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,object: window,queue: .main) { [weak self] _ in self?.stopRepeating(commit: false) }
+        searchFocusObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,object: window,queue: .main) { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in self?.restoreFocusAfterSearch() }
+        }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown,.keyUp,.flagsChanged,.leftMouseDown,.rightMouseDown]) { [weak self] event in
             guard let self else { return event }
             if RegionShortcutView.envelopeOwnsEditingKey(event) {
@@ -1640,6 +1687,7 @@ final class SetlistKeyView: NSView {
         repeatTimer?.invalidate()
         if let monitor { NSEvent.removeMonitor(monitor) }
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
+        if let searchFocusObserver { NotificationCenter.default.removeObserver(searchFocusObserver) }
     }
 }
 #endif
@@ -1680,7 +1728,8 @@ private struct SetlistBlockRow: View {
     var selected = false
     var body: some View {
         HStack(spacing: 8) {
-            if showSymbols && block.showsSymbol {
+            // Visibility is global, including blocks saved with the former per-block flag.
+            if showSymbols {
                 Path { path in
                     path.move(to: CGPoint(x: 0, y: 6)); path.addLine(to: CGPoint(x: 62, y: 6))
                     path.move(to: CGPoint(x: 56, y: 0)); path.addLine(to: CGPoint(x: 62, y: 6)); path.addLine(to: CGPoint(x: 56, y: 12))

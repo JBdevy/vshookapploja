@@ -120,6 +120,17 @@ final class SectionBoundaryTests: XCTestCase {
     func finishCurrentSong(_ enabled: Bool) {}
 }
 final class SmoothSeekTests: XCTestCase {
+    func testAutomaticSectionDestinationPersistsAndCanBeCleared() throws {
+        let source = TimelineMarker(id: UUID(), name: "Verse", position: 10, color: 0, section: true,
+                                    automaticSectionTargetID: UUID())
+        let restored = try JSONDecoder().decode(TimelineMarker.self, from: JSONEncoder().encode(source))
+        XCTAssertEqual(restored.automaticSectionTargetID, source.automaticSectionTargetID)
+        var cleared = restored; cleared.automaticSectionTargetID = nil
+        XCTAssertNil(try JSONDecoder().decode(TimelineMarker.self, from: JSONEncoder().encode(cleared)).automaticSectionTargetID)
+        let legacy = "{\"id\":\"\(UUID().uuidString)\",\"name\":\"Old section\",\"position\":10,\"color\":0,\"section\":true}"
+        XCTAssertNil(try JSONDecoder().decode(TimelineMarker.self, from: Data(legacy.utf8)).automaticSectionTargetID)
+    }
+
     func testPlayingSectionProgressUsesItsOwnBoundsAndResetsAfterSeek() {
         XCTAssertEqual(SectionPlaybackProgress.fraction(position: 15, start: 10, end: 30), 0.25)
         XCTAssertEqual(SectionPlaybackProgress.fraction(position: 29.9, start: 10, end: 30), 0.995, accuracy: 0.00001)

@@ -314,6 +314,20 @@ private final class CaptureWriter: @unchecked Sendable {
             self.reconcileArming()
         }
     }
+    var recordingDisplayPosition: Double? {
+        guard recording, let show else { return nil }
+        let transport = show.timelinePlaybackTransport
+        let song = show.current
+        let region = song?.parts.first { $0.id == transport.regionId }
+        let boundary = region?.parentRegionID.flatMap { id in song?.parts.first { $0.id == id } }?.endTime ?? region?.endTime
+        #if os(macOS)
+        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - show.timelinePlaybackSampleTime)
+        #else
+        let elapsed = 0.0
+        #endif
+        return TimelinePlaybackPresentation(transport: transport, elapsed: elapsed,
+            songDuration: song?.duration ?? 0, mainBoundary: boundary).mainPosition
+    }
     @Published private(set) var recording = false
     @Published private(set) var busy = false
     @Published var error = ""
@@ -322,7 +336,11 @@ private final class CaptureWriter: @unchecked Sendable {
     private var inputEngineRunning: Bool { mobileInput.running }
     #else
     private let captureEngine = AVAudioEngine()
-    private var inputEngineRunning: Bool { captureEngine.isRunning }
+    private var systemCapture: AnyObject?
+    private var inputEngineRunning: Bool {
+        if #available(macOS 14.2, *), let capture = systemCapture as? MacSystemLoopback { return capture.running }
+        return captureEngine.isRunning
+    }
     #endif
     private func captureFormat() throws -> AVAudioFormat {
         #if os(iOS)
@@ -331,6 +349,7 @@ private final class CaptureWriter: @unchecked Sendable {
         }
         return format
         #else
+        if #available(macOS 14.2, *), let capture = systemCapture as? MacSystemLoopback, let format = capture.format { return format }
         return captureEngine.inputNode.outputFormat(forBus: 0)
         #endif
     }
@@ -355,8 +374,8 @@ private final class CaptureWriter: @unchecked Sendable {
             armed.contains(track.id) && (track.fx?.instrumentKeys.isEmpty == false ||
                 (track.fx?.externalPlugins?.contains { $0.category.contains("Instrument") } ?? false))
         }.map(\.id)))
-        let desired = inputChannels > 0 && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? tracks.filter {
-            armed.contains($0.id) && $0.role.rawValue != "vinhetas" && $0.recordingMode != .midi && $0.kind == .standard
+        let desired = inputChannels > 0 && (AudioDeviceSettings.shared.usesSystemLoopback || AVCaptureDevice.authorizationStatus(for: .audio) == .authorized) ? tracks.filter {
+            armed.contains($0.id) && $0.role.rawValue != "vinhetas" && $0.recordingMode != .midi && $0.kind == .standard && $0.inputPatch != OutputPatch.none
         }.map { MonitorConfig(track: $0.id, patch: $0.inputPatch ?? defaultInputPatch, channels: $0.recordingChannels ?? 2) } : []
         guard desired != monitorConfig || desired.contains(where: { !playback.hasInputMonitor($0.track) }) else { return }
         for config in monitorConfig { playback.setInputMonitor(config.track, source: nil) }
@@ -399,6 +418,14 @@ private final class CaptureWriter: @unchecked Sendable {
             do { try mobileInput.start() } catch { self.error = error.localizedDescription }
         }
         #else
+        if #available(macOS 14.2, *), let capture = systemCapture as? MacSystemLoopback {
+            let ring = captureRing, rings = monitorRings
+            do { try capture.setCapture { buffer in
+                ring?.push(buffer)
+                for monitor in rings { monitor.push(buffer) }
+            } } catch { self.error = error.localizedDescription }
+            return
+        }
         let input = captureEngine.inputNode
         if tapInstalled { input.removeTap(onBus: 0); tapInstalled = false }
         guard let ring = captureRing else { return }
@@ -431,9 +458,15 @@ private final class CaptureWriter: @unchecked Sendable {
     private func configureInput(allowCaptureSetup: Bool = false) throws {
         #if os(macOS)
         let audio = AudioDeviceSettings.shared
-        guard let device = audio.inputDevice, device.hardwareID != 0 else {
+        guard let device = try audio.resolveInputDevice(), device.hardwareID != 0 else {
             releaseInput(); configuredInput = 0
             throw ProjectError.invalid(JarasLocalization.string("Choose an audio input device in Settings."))
+        }
+        if #available(macOS 14.2, *), audio.usesSystemLoopback, let capture = audio.loopback as? MacSystemLoopback {
+            if configuredInput != device.hardwareID || systemCapture !== capture {
+                releaseInput(); systemCapture = capture; configuredInput = device.hardwareID
+            }
+            return
         }
         var selected = device.hardwareID
         let canConfigure = (!recording && !busy) || (allowCaptureSetup && writer == nil)
@@ -492,6 +525,8 @@ private final class CaptureWriter: @unchecked Sendable {
               expectedDevice == nil || expectedDevice == device.hardwareID else {
             throw ProjectError.invalid(JarasLocalization.string("The audio input changed while preparing the recording. Start recording again."))
         }
+        if #available(macOS 14.2, *), let capture = systemCapture as? MacSystemLoopback,
+           audio.usesSystemLoopback, capture.device == device.hardwareID { return }
         guard let unit = captureEngine.inputNode.audioUnit,
               try actualInputDevice(unit) == device.hardwareID else {
             throw ProjectError.invalid(JarasLocalization.string("The audio input changed while preparing the recording. Start recording again."))
@@ -508,6 +543,7 @@ private final class CaptureWriter: @unchecked Sendable {
         #if os(iOS)
         try mobileInput.start()
         #else
+        if #available(macOS 14.2, *), let capture = systemCapture as? MacSystemLoopback { try capture.start(); return }
         if !captureEngine.isRunning { captureEngine.prepare(); try captureEngine.start() }
         #endif
     }
@@ -543,11 +579,11 @@ private final class CaptureWriter: @unchecked Sendable {
         let wanted = armState.armed
         if let show {
             microphoneTracks = wanted.intersection(Set(show.snapshot.project.songs.flatMap(\.tracks).filter {
-                !$0.recordsOutput && $0.recordingMode != .midi && $0.fx?.instrumentKeys.isEmpty != false &&
+                !$0.recordsOutput && $0.inputPatch != OutputPatch.none && $0.recordingMode != .midi && $0.fx?.instrumentKeys.isEmpty != false &&
                     !($0.fx?.externalPlugins?.contains { $0.category.contains("Instrument") } ?? false)
             }.map(\.id)))
         }
-        let authorization = AVCaptureDevice.authorizationStatus(for: .audio)
+        let authorization: AVAuthorizationStatus = AudioDeviceSettings.shared.usesSystemLoopback ? .authorized : AVCaptureDevice.authorizationStatus(for: .audio)
         let effective = authorization == .authorized || inputChannels == 0 ? wanted : wanted.subtracting(microphoneTracks)
         if armed != effective { armed = effective; updateArmedTargets() }
         refreshMonitoring()
@@ -765,7 +801,7 @@ private final class CaptureWriter: @unchecked Sendable {
     private func startInputAudioCapture(tracks: [Track]) async throws {
         guard let show, let directory, !tracks.isEmpty else { return }
         let requestedProject = project, wasRecording = recording
-        let permission = AVCaptureDevice.authorizationStatus(for: .audio)
+        let permission: AVAuthorizationStatus = AudioDeviceSettings.shared.usesSystemLoopback ? .authorized : AVCaptureDevice.authorizationStatus(for: .audio)
         let allowed = permission == .authorized ? true : permission == .notDetermined ? await AVCaptureDevice.requestAccess(for: .audio) : false
         guard allowed else { throw ProjectError.invalid("Allow microphone access in System Settings to record audio.") }
         guard inputChannels > 0 else { throw ProjectError.invalid("Choose an audio input device in Settings.") }
@@ -910,6 +946,7 @@ private final class CaptureWriter: @unchecked Sendable {
     }
     private var pendingWriterFinishes = 0
     private func finishCleanup() {
+        (projectAudio ?? StemAudioPlayback.shared).recordingDidFinish()
         activeTargets = [:]; pendingTakes = []
         previewSession = UUID(); LiveRecordingPreview.shared.takes = [:]; RecordingLaneLayout.shared.clear()
         busy = false; reconcileArming(); releaseInputIfIdle()
@@ -935,6 +972,10 @@ private final class CaptureWriter: @unchecked Sendable {
         #if os(iOS)
         mobileInput.stop()
         #else
+        if #available(macOS 14.2, *), let capture = systemCapture as? MacSystemLoopback {
+            capture.stop(); try? capture.setCapture(nil)
+        }
+        systemCapture = nil
         captureEngine.stop()
         #endif
         finishInputRelease()
@@ -1002,47 +1043,51 @@ struct TrackRecordingSettings: View {
                     Text("Stereo").tag(2)
                     if track.role.rawValue != "vinhetas" { Text("MIDI").tag(0) }
                 }.pickerStyle(.segmented).labelsHidden().disabled(recorder.recording || recorder.busy)
-                if track.role.rawValue != "vinhetas" {
-                    Picker("MIDI channel", selection: Binding(get: { track.midiChannel ?? 0 }, set: {
-                        show.setMIDIChannel(track.id, channel: $0)
-                    })) {
-                        Text("All channels").tag(0)
-                        ForEach(1...16, id: \.self) { Text(String($0)).tag($0) }
-                    }.disabled(recorder.recording || recorder.busy)
-                }
-                if track.recordingMode != .midi {
-                    Picker("Recording signal", selection: Binding(get: { track.recordsOutput }, set: { show.setRecordingStage(track.id, output: $0) })) {
-                        Text("Input").tag(false); Text("Output").tag(true)
-                    }.pickerStyle(.segmented).disabled(track.role.rawValue == "vinhetas" || recorder.recording || recorder.busy)
-                    Picker("Format", selection: Binding(get: { track.recordingFormat ?? "" }, set: {
-                        show.setRecordingFormat(track.id, format: $0.isEmpty ? nil : $0)
-                    })) {
-                        Text(verbatim: "Default - " + MediaProcessingFormat.load("record").recordingDisplayName).tag("")
-                        Text(verbatim: "WAV · 24-bit PCM").tag("wav")
-                        Text(verbatim: "WAV · 32-bit float").tag("wav32")
-                        Text(verbatim: "MP3 · \(MediaProcessingFormat.load("record").bitrate) kbps").tag("mp3")
-                    }.disabled(recorder.recording || recorder.busy)
-                    Picker("Recording level", selection: Binding(get: { track.recordsOutput && track.recordingPostFader != false }, set: { show.setRecordingStage(track.id, postFader: $0) })) {
-                        Text("Pre-fader").tag(false)
-                        Text("Post-fader").tag(true)
-                    }.pickerStyle(.segmented).disabled(!track.recordsOutput || recorder.recording || recorder.busy)
-                    Picker("Recording effects", selection: Binding(get: { track.recordsOutput && track.recordingPostFX != false }, set: { show.setRecordingStage(track.id, postFX: $0) })) {
-                        Text("Pre-FX").tag(false)
-                        Text("Post-FX").tag(true)
-                    }.pickerStyle(.segmented).disabled(!track.recordsOutput || recorder.recording || recorder.busy)
-                    if track.role.rawValue != "vinhetas" {
-                    Picker("Input monitoring", selection: Binding(get: { track.inputMonitoring != false }, set: { show.setInputMonitoring(track.id, enabled: $0) })) {
-                        Text(verbatim: "Monitor On").tag(true)
-                        Text(verbatim: "Monitor Off").tag(false)
-                    }.pickerStyle(.segmented).labelsHidden()
-                    }
+                #if os(macOS)
+                // Keep the popover's size and anchor stable when switching to
+                // MIDI. Audio settings remain visible but unavailable there.
+                let showsAudioSettings = true
+                #else
+                let showsAudioSettings = track.recordingMode != .midi
+                #endif
+                if showsAudioSettings {
+                    Group {
+                        Picker("Recording signal", selection: Binding(get: { track.recordsOutput }, set: { show.setRecordingStage(track.id, output: $0) })) {
+                            Text("Input").tag(false); Text("Output").tag(true)
+                        }.pickerStyle(.segmented).disabled(track.role.rawValue == "vinhetas" || recorder.recording || recorder.busy)
+                        Picker("Format", selection: Binding(get: { track.recordingFormat ?? "" }, set: {
+                            show.setRecordingFormat(track.id, format: $0.isEmpty ? nil : $0)
+                        })) {
+                            Text(verbatim: "Default - " + MediaProcessingFormat.load("record").recordingDisplayName).tag("")
+                            Text(verbatim: "WAV · 24-bit PCM").tag("wav")
+                            Text(verbatim: "WAV · 32-bit float").tag("wav32")
+                            Text(verbatim: "MP3 · \(MediaProcessingFormat.load("record").bitrate) kbps").tag("mp3")
+                        }.disabled(recorder.recording || recorder.busy)
+                        Picker("Recording level", selection: Binding(get: { track.recordsOutput && track.recordingPostFader != false }, set: { show.setRecordingStage(track.id, postFader: $0) })) {
+                            Text("Pre-fader").tag(false)
+                            Text("Post-fader").tag(true)
+                        }.pickerStyle(.segmented).disabled(!track.recordsOutput || recorder.recording || recorder.busy)
+                        Picker("Recording effects", selection: Binding(get: { track.recordsOutput && track.recordingPostFX != false }, set: { show.setRecordingStage(track.id, postFX: $0) })) {
+                            Text("Pre-FX").tag(false)
+                            Text("Post-FX").tag(true)
+                        }.pickerStyle(.segmented).disabled(!track.recordsOutput || recorder.recording || recorder.busy)
+                        if track.role.rawValue != "vinhetas" {
+                            Picker("Input monitoring", selection: Binding(get: { track.inputMonitoring != false }, set: { show.setInputMonitoring(track.id, enabled: $0) })) {
+                                Text(verbatim: "Monitor On").tag(true)
+                                Text(verbatim: "Monitor Off").tag(false)
+                            }.pickerStyle(.segmented).labelsHidden()
+                        }
+                    }.disabled(track.recordingMode == .midi)
                 }
             }.padding(16)
+            #if os(macOS)
+            .frame(minWidth: 360)
+            #endif
 
         }
     }
 }
-/// Armed and recording controls remain solid red throughout recording.
+/// Track arming stays solid; the transport pulses only its background while recording.
 struct RecordingButtonStyle: ButtonStyle {
     let active: Bool
     var width: CGFloat = 22

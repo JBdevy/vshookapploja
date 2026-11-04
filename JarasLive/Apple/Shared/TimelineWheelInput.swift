@@ -474,13 +474,32 @@ struct TimelineWheelInput: NSViewRepresentable {
         view.focus(request: focusRequest, x: focusX)
     }
 }
-/// Zoom remains continuous; velocity only scales each native signed delta.
+/// Normalize AppKit's pixel-based trackpad deltas and wheel units before the
+/// same response curve. Native input already includes device acceleration.
 struct TimelineZoomResponse {
-    private var velocity = TimelineInputVelocityResponse()
-    mutating func reset() { velocity.reset() }
+    mutating func reset() {}
     mutating func change(delta: Double, timestamp: Double, begins: Bool, precise: Bool = true) -> Double {
-        velocity.change(amount: delta * (precise ? TimelineZoomLimits.preciseSensitivity : TimelineZoomLimits.wheelSensitivity),
-            timestamp: timestamp, begins: begins, precise: precise)
+        guard delta.isFinite else { return 0 }
+        return delta * (precise ? TimelineZoomLimits.preciseSensitivity : TimelineZoomLimits.wheelSensitivity)
+    }
+}
+
+/// Cubic ease-out with an immediate first response. Finger-up can lengthen
+/// the remaining finish without adding native momentum or moving the target.
+/// Reversing cancels the unseen remainder.
+private struct TimelineZoomFinish {
+    let from: Double, to: Double, began: Double
+    let duration: Double
+    let immediateFraction: Double
+    init(from: Double, to: Double, began: Double, duration: Double = 0.100, immediateFraction: Double = 0.35) {
+        self.from = from; self.to = to; self.began = began
+        self.duration = duration; self.immediateFraction = immediateFraction
+    }
+    func value(at time: Double) -> Double {
+        let t = min(1, max(0, (time - began) / duration))
+        if t >= 1 { return to }
+        let fraction = 1 - (1 - immediateFraction) * pow(1 - t, 3)
+        return exp(log(from) + (log(to) - log(from)) * fraction)
     }
 }
 
@@ -571,6 +590,8 @@ final class TimelineWheelView: NSView, NativeTimelineInputObserver {
     }
     private var gestureAnchor: Double?
     private var pendingZoom: Double?
+    private var zoomFinish: TimelineZoomFinish?
+    private var zoomDirection = 0.0
     private var zoomTimer: Timer?
     private var cancelDisplayLink: (() -> Void)?
     private var zoomRunning: Bool { zoomTimer != nil || cancelDisplayLink != nil }
@@ -747,21 +768,37 @@ final class TimelineWheelView: NSView, NativeTimelineInputObserver {
     private func applyWheelZoom(_ event: NSEvent, delta: CGFloat, horizontal: NSScrollView) {
         // Both devices retain signed native travel and display-frame batching.
         if event.phase.contains(.cancelled) { stopZoomUpdates(); return }
+        defer {
+            if event.hasPreciseScrollingDeltas, event.phase.contains(.ended), event.momentumPhase.isEmpty,
+               zoomRunning, let target = pendingZoom, abs(log(target / zoom)) > 0.005 {
+                // Keep the drag as responsive as the mouse; only finger-up gets
+                // a softer finish. Start at the visible scale, with no jump.
+                lastZoomInput = ProcessInfo.processInfo.systemUptime
+                zoomFinish = TimelineZoomFinish(from: zoom, to: target, began: lastZoomInput,
+                                               duration: 0.600, immediateFraction: 0)
+            }
+        }
         if event.phase.contains(.began), event.momentumPhase.isEmpty, zoomRunning {
-            // Commit the last coalesced input before a new gesture takes over.
-            if let zoomGrid { advanceZoom(zoomGrid) }
+            // Finger-down interrupts the previous release at its visible
+            // scale. Completing its unseen remainder here makes every item
+            // jump, then rebound when the new gesture reverses direction.
             stopZoomUpdates()
         }
-        if event.momentumPhase.contains(.ended) {
-            if let zoomGrid { advanceZoom(zoomGrid) }
-            stopZoomUpdates()
-            return
-        }
+        // The bounded finger-up finish owns the release. Do not accumulate
+        // AppKit's additional inertia after it has reached the chosen scale.
+        if !event.momentumPhase.isEmpty { return }
         let amount = zoomResponse.change(delta: Double(delta), timestamp: event.timestamp,
             begins: event.phase.contains(.began), precise: event.hasPreciseScrollingDeltas)
         guard delta.isFinite, delta != 0, let grid = horizontal as? GridNativeScrollView,
               horizontal.documentView != nil else { return }
         grid.prioritizeZoom()
+        let direction = amount > 0 ? 1.0 : -1.0
+        if zoomFinish != nil, zoomDirection != 0, direction != zoomDirection {
+            // Reverse from the visible scale rather than completing a stale tail.
+            pendingZoom = zoom
+            zoomFinish = nil
+        }
+        zoomDirection = direction
         // A new movement postpones persistence until this burst is quiet.
         zoomPersistenceTimer?.invalidate(); zoomPersistenceTimer = nil
         // Keep the input burst alive even at a zoom limit.
@@ -795,9 +832,10 @@ final class TimelineWheelView: NSView, NativeTimelineInputObserver {
             return
         }
         pendingZoom = next
-        // Apply the first delta immediately on both devices. Subsequent events
-        // coalesce only until the next display frame; there is no easing target
-        // or animation continuing after the actual scroll input stops.
+        zoomFinish = abs(log(next / zoom)) > 0.005
+            ? TimelineZoomFinish(from: zoom, to: next, began: lastZoomInput) : nil
+        // First response remains immediate. Both devices use the same short
+        // finish, with no added distance beyond their actual signed input.
         if zoomRunning { return }
         zoomGrid = grid
         if #available(macOS 14.0, *), window?.isVisible == true {
@@ -830,6 +868,8 @@ final class TimelineWheelView: NSView, NativeTimelineInputObserver {
         zoomTimer?.invalidate()
         zoomTimer = nil
         pendingZoom = nil
+        zoomFinish = nil
+        zoomDirection = 0
         gestureAnchor = nil
         if !preservingVelocity { zoomResponse.reset() }
         awaitingRenderedZoom = nil
@@ -842,7 +882,8 @@ final class TimelineWheelView: NSView, NativeTimelineInputObserver {
             return
         }
         grid.prioritizeZoom()
-        let next = target
+        let next = zoomFinish?.value(at: ProcessInfo.processInfo.systemUptime) ?? target
+        if next == target { zoomFinish = nil }
         guard next != zoom else { return }
         let fraction = gestureAnchor ?? zoomPosition
         let width = documentUnitWidth * next

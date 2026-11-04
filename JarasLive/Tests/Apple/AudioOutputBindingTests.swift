@@ -10,6 +10,31 @@ typealias AudioUnit = Int
 typealias OSStatus = Int32
 let noErr: OSStatus = 0
 let kAudioObjectUnknown: UInt32 = 0
+let kAudioObjectSystemObject: UInt32 = 1
+let kAudioHardwarePropertyDefaultInputDevice: UInt32 = 4
+let kAudioHardwarePropertyDefaultOutputDevice: UInt32 = 5
+@MainActor var defaultInput: UInt32 = 30
+@MainActor var defaultOutput: UInt32 = 10
+@MainActor func AudioObjectGetPropertyData(_ object: UInt32, _ address: inout AudioObjectPropertyAddress, _ qualifierSize: UInt32, _ qualifier: UnsafeRawPointer?, _ bytes: inout UInt32, _ value: inout UInt32) -> OSStatus {
+    value = address.mSelector == kAudioHardwarePropertyDefaultInputDevice ? defaultInput : defaultOutput
+    return noErr
+}
+typealias AudioObjectPropertyListenerBlock = @Sendable (UInt32, UnsafePointer<AudioObjectPropertyAddress>) -> Void
+@MainActor var rateListeners: [UInt32: AudioObjectPropertyListenerBlock] = [:]
+@MainActor var hardwareRates: [UInt32: Double] = [10: 44100, 20: 48000]
+@MainActor func AudioObjectGetPropertyData(_ object: UInt32, _ address: inout AudioObjectPropertyAddress, _ qualifierSize: UInt32, _ qualifier: UnsafeRawPointer?, _ bytes: inout UInt32, _ value: inout Double) -> OSStatus {
+    value = hardwareRates[object] ?? 0
+    return noErr
+}
+@MainActor func AudioObjectAddPropertyListenerBlock(_ object: UInt32, _ address: inout AudioObjectPropertyAddress, _ queue: DispatchQueue, _ listener: @escaping AudioObjectPropertyListenerBlock) -> OSStatus {
+    precondition(address.mSelector == kAudioDevicePropertyNominalSampleRate)
+    rateListeners[object] = listener
+    return noErr
+}
+@MainActor func AudioObjectRemovePropertyListenerBlock(_ object: UInt32, _ address: inout AudioObjectPropertyAddress, _ queue: DispatchQueue, _ listener: AudioObjectPropertyListenerBlock) -> OSStatus {
+    rateListeners[object] = nil
+    return noErr
+}
 let kAudioOutputUnitProperty_CurrentDevice: UInt32 = 1
 let kAudioUnitScope_Global: UInt32 = 0
 let kAudioObjectPropertyScopeGlobal: UInt32 = 0
@@ -81,6 +106,12 @@ struct OutputDevice: Identifiable, Equatable {
 }
 @MainActor final class AudioOutputBindingHarness {
     static var shared = AudioOutputBindingHarness()
+    static let systemDefaultUID = "catlive.system-default"
+    var followsSystemInput = false, followsSystemOutput = false
+    var defaultRefreshPending = false
+    var usesSystemLoopback = false
+    var loopback: AnyObject?
+    func refresh() { refreshSystemDefaults() }
     let engine = OutputEngine()
     var devices = [OutputDevice(id: "speakers", name: "Speakers", channels: 2, hardwareID: 10),
                    OutputDevice(id: "interface", name: "Interface", channels: 4, hardwareID: 20)]
@@ -105,7 +136,10 @@ struct OutputDevice: Identifiable, Equatable {
     func observeOutputDevice(_ unit: AudioUnit) throws {
         if observerFailure { throw ProjectError.invalid("Unable to observe output route") }
     }
-    func refreshSampleRate() {}
+    var observedRateDevice: AudioDeviceID?
+    var outputRateListener: AudioObjectPropertyListenerBlock?
+    /* OUTPUT_RATE_PROPERTY */
+    func refreshSampleRate() { if let rate = currentOutputSampleRate { sampleRate = rate } }
     func refreshBuffer() {}
     // The runner inserts the actual output selection/recovery implementation.
     /* OUTPUT_BINDING_METHODS */
@@ -114,12 +148,15 @@ typealias AudioDeviceSettings = AudioOutputBindingHarness
 @MainActor final class OutputStartupHarness {
     let engine = AudioDeviceSettings.shared.engine
     var usesSelectedHardware = true
+    var auxiliarySelectedHardware = false
+    var mobileOutput: OutputEngine?
     var outputAllowed = true
     var licenseAllowed = true
     /* OUTPUT_STARTUP_METHODS */
 }
 
 @MainActor func resetHAL() {
+    defaultInput = 30; defaultOutput = 10
     actualDevice = 10; deviceSetResult = 0; deviceReadResult = 0
     deviceReadSize = UInt32(MemoryLayout<AudioDeviceID>.size)
     acceptsDeviceChanges = true; deviceSetCalls = 0; hardwareSetCalls = 0
@@ -130,6 +167,26 @@ typealias AudioDeviceSettings = AudioOutputBindingHarness
     catch {}
 }
 @MainActor func runAudioOutputBindingTests() throws {
+    resetHAL()
+    let followed = AudioOutputBindingHarness()
+    followed.select(AudioOutputBindingHarness.systemDefaultUID)
+    followed.selectInput(AudioOutputBindingHarness.systemDefaultUID)
+    precondition(followed.followsSystemInput && followed.followsSystemOutput && followed.inputUID == "microphone")
+    defaultOutput = 20; followed.refresh()
+    precondition(followed.selectedUID == "interface" && actualDevice == 20 && followed.channels == 4)
+    let changes = deviceSetCalls; followed.refresh()
+    precondition(deviceSetCalls == changes, "Unchanged default must not restart audio")
+    followed.select("speakers"); defaultOutput = 20; followed.refresh()
+    precondition(!followed.followsSystemOutput && followed.selectedUID == "speakers" && actualDevice == 10)
+    followed.select(AudioOutputBindingHarness.systemDefaultUID); followed.canChangeConfiguration = { false }
+    defaultOutput = 10; followed.refresh()
+    precondition(followed.selectedUID == "interface", "Recording route changed before it was allowed")
+    followed.canChangeConfiguration = { true }; followed.refresh()
+    precondition(followed.selectedUID == "speakers")
+    followed.selectInput(""); defaultInput = 30; followed.refresh()
+    precondition(!followed.followsSystemInput && followed.inputUID.isEmpty)
+    precondition(UserDefaults.standard.values["catlive.followSystemOutput"] as? Bool == true)
+    print("SYSTEM_DEFAULTS_FOLLOW_HAL_AND_PRESERVE_EXPLICIT_SELECTION_RECORDING_AND_PERSISTENCE_OK")
     resetHAL()
     let locked = AudioOutputBindingHarness()
     locked.canChangeConfiguration = { false }
@@ -251,24 +308,23 @@ typealias AudioDeviceSettings = AudioOutputBindingHarness
     AudioDeviceSettings.shared = AudioOutputBindingHarness()
     let runningDrift = OutputStartupHarness()
     actualDevice = 20
-    rejected { try runningDrift.startEngineIfNeeded() }
-    precondition(!runningDrift.engine.isRunning && runningDrift.engine.starts == 0)
-    precondition(runningDrift.engine.mainMixerNode.outputVolume == 0, "A running engine must not bypass actual-route validation")
+    try runningDrift.startEngineIfNeeded()
+    precondition(actualDevice == 10, "A running engine must restore its selected output")
 
     resetHAL()
     AudioDeviceSettings.shared = AudioOutputBindingHarness()
     let prepareDrift = OutputStartupHarness()
     prepareDrift.engine.isRunning = false; prepareDrift.engine.deviceAfterPrepare = 20
-    rejected { try prepareDrift.startEngineIfNeeded() }
-    precondition(prepareDrift.engine.starts == 0 && !prepareDrift.engine.isRunning && prepareDrift.engine.mainMixerNode.outputVolume == 0)
+    try prepareDrift.startEngineIfNeeded()
+    precondition(actualDevice == 10 && prepareDrift.engine.starts == 1 && prepareDrift.engine.isRunning)
 
     resetHAL()
     AudioDeviceSettings.shared = AudioOutputBindingHarness()
     let startDrift = OutputStartupHarness()
     startDrift.engine.isRunning = false; startDrift.engine.deviceAfterStart = 20
-    rejected { try startDrift.startEngineIfNeeded() }
+    try startDrift.startEngineIfNeeded()
     precondition(startDrift.engine.starts == 1 && startDrift.engine.volumeWhenStarted == 0)
-    precondition(!startDrift.engine.isRunning && startDrift.engine.mainMixerNode.outputVolume == 0)
+    precondition(actualDevice == 10, "Start must recover the selected hardware before unmuting")
 
     resetHAL()
     AudioDeviceSettings.shared = AudioOutputBindingHarness()
@@ -292,5 +348,31 @@ typealias AudioDeviceSettings = AudioOutputBindingHarness
     print("ENGINE_PREPARE_AND_START_VALIDATE_HARDWARE_BEFORE_UNMUTING_OK")
 }
 @main struct AudioOutputBindingTests {
-    @MainActor static func main() throws { try runAudioOutputBindingTests() }
+    @MainActor static func main() async throws {
+        try runAudioOutputBindingTests()
+        rateListeners = [:]
+        let output = AudioOutputBindingHarness()
+        output.select("speakers")
+        precondition(rateListeners.count == 1 && output.currentOutputSampleRate == 44100)
+        var recoveries = 0
+        output.deviceChanged = { recoveries += 1 }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate, mScope: 0, mElement: 0)
+        let oldListener = rateListeners[10]!
+        for rate in [48000.0, 44100.0] {
+            hardwareRates[10] = rate
+            oldListener(1, &address)
+            try await Task.sleep(nanoseconds: 5_000_000)
+            precondition(output.sampleRate == rate && output.currentOutputSampleRate == rate)
+        }
+        precondition(recoveries == 2, "External rate changes must request graph recovery in both directions")
+        output.select("interface")
+        let before = recoveries
+        oldListener(1, &address)
+        try await Task.sleep(nanoseconds: 5_000_000)
+        precondition(recoveries == before && rateListeners[10] == nil && rateListeners[20] != nil,
+                     "Old-device notifications must not recover the newly selected graph")
+        output.select("none")
+        precondition(rateListeners.isEmpty && output.currentOutputSampleRate == nil)
+        print("EXTERNAL_HAL_RATE_UP_DOWN_RECOVERY_AND_LISTENER_LIFETIME_OK")
+    }
 }

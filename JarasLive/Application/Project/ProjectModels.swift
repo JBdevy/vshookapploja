@@ -492,6 +492,14 @@ public struct ResolumeSettings: Codable, Equatable, Sendable {
     public var includeMarkers = true
     public var withMarkers: [String: String] = [:]
     public var regionsOnly: [String: String] = [:]
+    /// Optional for backward-compatible documents. Receiver paths and MIDI
+    /// identifiers belong to CatLive Integration, never to this computer.
+    public var integrationEnabled: Bool?
+    public var integrationHost: String?
+    public var integrationPort: Int?
+    public var integrationMTCEnabled: Bool?
+    public var integrationMIDIOutput: String?
+    public var usesIntegration: Bool { integrationEnabled == true }
     public init() {}
     public static func assignment(_ text: String) -> (deck: Int, column: Int)? {
         let pair = text.split(separator: ":", omittingEmptySubsequences: false)
@@ -505,6 +513,14 @@ public struct ResolumeSettings: Codable, Equatable, Sendable {
               (1...65535).contains(oscPort), (1...65535).contains(webPort),
               withMarkers.count <= 100_000, regionsOnly.count <= 100_000 else {
             throw ProjectError.invalid("Invalid Resolume settings")
+        }
+        if usesIntegration {
+            let address = integrationHost ?? ""
+            guard !address.isEmpty, address.count <= 253,
+                  !address.contains(where: { $0.isWhitespace || "/\\?#@".contains($0) }),
+                  (1...65535).contains(integrationPort ?? 48726), (integrationMIDIOutput?.count ?? 0) <= 512 else {
+                throw ProjectError.invalid("Invalid CatLive Integration settings")
+            }
         }
     }
 }
@@ -548,6 +564,8 @@ public indirect enum PortableProjectJSON: Codable, Equatable, Sendable {
 }
 
 public struct Project: Codable, Identifiable, Equatable, Sendable {
+    /// Unfinished Reduce Project choices travel with the saved document.
+    public var reductionDraft: PortableProjectJSON? = nil
     /// Permanent identity shared by copies used for redundant playback. Assigned by Save.
     public var projectSyncID: UUID? = nil
     /// Protect timeline positions and boundaries; nil keeps older projects unlocked.
@@ -627,8 +645,9 @@ public struct Project: Codable, Identifiable, Equatable, Sendable {
                           !song.tracks.contains(where: { $0.parentTrackID == track.id }),
                           track.volume == other.volume, track.pan == -other.pan,
                           let input = track.inputPatch, let otherInput = other.inputPatch,
-                          input.channelCount == 1, otherInput.channelCount == 1,
-                          otherInput.firstChannel == input.firstChannel + (link.left ? 1 : -1) else { throw ProjectError.invalid("Invalid linked tracks") }
+                          (input == .none && otherInput == .none) ||
+                            (input.channelCount == 1 && otherInput.channelCount == 1 &&
+                             otherInput.firstChannel == input.firstChannel + (link.left ? 1 : -1)) else { throw ProjectError.invalid("Invalid linked tracks") }
                 }
                 if track.kind == .programChange {
                     guard track.clips.isEmpty, track.audioFile == nil, track.fx == nil, track.parentTrackID == nil,
@@ -658,7 +677,7 @@ public struct Project: Codable, Identifiable, Equatable, Sendable {
                 }
                 guard track.midiChannel == nil || (1...16).contains(track.midiChannel!) else { throw ProjectError.invalid("Invalid MIDI channel") }
                 guard track.midiInput == nil || (1...6).contains(track.midiInput!) || (track.kind == .programChange && track.midiInput == -1) else { throw ProjectError.invalid("Invalid MIDI input") }
-                try track.inputPatch?.validate(allowMaster: false)
+                try track.inputPatch?.validate(allowMaster: false, allowNone: true)
                 guard track.recordingChannels == nil || TrackRecordingMode(rawValue: track.recordingChannels!) != nil else { throw ProjectError.invalid("Invalid recording channel mode") }
                 guard track.recordingFormat == nil || ["wav", "wav32", "mp3"].contains(track.recordingFormat!) else { throw ProjectError.invalid("Invalid recording format") }
                 try track.patch?.validate(allowMaster: true, allowGroup: track.parentTrackID != nil, allowNone: true)

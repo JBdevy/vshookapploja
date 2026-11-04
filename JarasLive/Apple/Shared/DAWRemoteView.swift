@@ -379,6 +379,7 @@ struct DAWRemoteClientView: View {
         var playlist: UUID?
         var regionColor: UInt32
         var unifiedColor: UInt32
+        var blockSymbols: Bool
     }
     private static var cachedPresentationKey: PresentationKey?
     private static var cachedRegions: [DAWRemoteState.Region] = []
@@ -436,7 +437,8 @@ struct DAWRemoteClientView: View {
             }
             let presentationKey = PresentationKey(project: snapshot.project.id, song: song?.id,
                 revision: show.projectRevision, setlistRevision: show.setlistRevision, playlist: selectedPlaylist?.id,
-                regionColor: regionTextColor, unifiedColor: unifiedTextColor)
+                regionColor: regionTextColor, unifiedColor: unifiedTextColor,
+                blockSymbols: UserDefaults.standard.object(forKey: "jaras.blocks.symbol") as? Bool ?? true)
             let presentationChanged = cachedPresentationKey != presentationKey
             if presentationChanged {
                 cachedPresentationKey = presentationKey
@@ -444,10 +446,11 @@ struct DAWRemoteClientView: View {
                 cachedTimelineRegions = (song?.parts ?? []).map(region)
                 cachedMarkers = (song?.markers ?? []).filter { !$0.isTempo }.map {
                     .init(id: $0.id, name: song?.markerLabel($0) ?? $0.name, position: $0.position,
-                        color: $0.color, section: $0.isSection, unifiedRegionID: $0.unifiedRegionID, sourceRegionID: $0.sourceRegionID)
+                        color: $0.color, section: $0.isSection, loopSection: $0.isLoopSection,
+                        unifiedRegionID: $0.unifiedRegionID, sourceRegionID: $0.sourceRegionID)
                 }
                 cachedBlocks = show.listedBlocks.map {
-                    .init(id: $0.id, name: $0.name, color: $0.color, beforeRegion: $0.beforeRegionId, symbol: $0.showsSymbol)
+                    .init(id: $0.id, name: $0.name, color: $0.color, beforeRegion: $0.beforeRegionId, symbol: presentationKey.blockSymbols)
                 }
                 cachedPlaylistSeconds = cachedRegions.reduce(0) { $0 + max(0, $1.end - $1.start) }
                 cachedDuration = song?.duration ?? 0
@@ -587,6 +590,10 @@ struct DAWRemoteClientView: View {
             }
             if command.action == .selectProjectTab {
                 if let target = command.target { Self.selectProjectTabHandler?(target) }
+                return
+            }
+            if command.action == .closeProjectTab {
+                if let target = command.target { Self.closeProjectTabHandler?(target) }
                 return
             }
             if command.action == .openRecentProject || command.action == .openRecentProjectInNewTab {
@@ -949,6 +956,7 @@ private struct RemoteSidebarRail<Content: View>: View {
     var openMasterDetails: (() -> Void)? = nil
     var openItemMenu: ((UUID) -> Void)? = nil
     var openSelectedItemMenu: ((UUID, Set<UUID>) -> Void)? = nil
+    var processSelectedItems: ((Set<UUID>, DAWAction) -> Void)? = nil
     var openItemFX: ((UUID) -> Void)? = nil
     var addTrack: (() -> Void)? = nil
     var addTrackAudio: ((UUID) -> Void)? = nil
@@ -1044,6 +1052,7 @@ private struct RemoteSidebarRail<Content: View>: View {
     @State private var search = ""
     @FocusState private var searchFocused: Bool
     @State private var keyboardVisible = false
+    @AppStorage("jaras.setlist.allRegionsOrder") private var allRegionsOrder = 0
     @State private var expandedRegions: Set<UUID> = []
     @State private var itemLayoutCache = DAWRemoteItemLayoutCache()
     @State private var setlistRowsCache = DAWRemoteSetlistRowsCache()
@@ -1307,7 +1316,7 @@ private struct RemoteSidebarRail<Content: View>: View {
             if nativeSetlistRemoval?.blocksOnly == true {
                 Text("Delete selected blocks?") + Text("\n\n") + Text("Only the selected block headers will be removed. Songs and timeline items will be kept.")
             } else {
-                Text(removal?.action == .deletePlaylist ? "Delete playlist?" : (nativeSetlistRemoval?.playlist ?? removal?.playlist) == nil ? "Delete region and its contents?" : "Remove from playlist?")
+                Text(removal?.action == .deletePlaylist ? "Delete playlist?" : (nativeSetlistRemoval?.playlist ?? removal?.playlist) == nil ? "Only the selected regions will be removed. Timeline items and their audio will be kept." : "Remove from playlist?")
             }
         }
         .onChange(of: state.project) { _ in editingEntry = nil; removal = nil; nativeSetlistRemoval = nil; confirmingRemoval = false }
@@ -1374,7 +1383,7 @@ private struct RemoteSidebarRail<Content: View>: View {
         .onReceive(localShow?.$setlistNavigationRequest.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { request in
             guard local, let request, let localShow, let song = localShow.current else { return }
             let parts = Dictionary(uniqueKeysWithValues: song.parts.map { ($0.id, $0) })
-            let entries: [SetlistEntry] = setlistRowsCache.entries(in: state, expanded: expandedRegions, query: search).compactMap { entry in
+            let entries: [SetlistEntry] = setlistRowsCache.entries(in: state, expanded: expandedRegions, query: search, order: local && state.selectedPlaylist == nil ? allRegionsOrder : nil).compactMap { entry in
                 guard case .region(let row) = entry, let part = localShow.playlistRegion(row.region.id) ?? parts[row.region.id] else { return nil }
                 return .region(part, number: row.number ?? 0)
             }
@@ -1452,8 +1461,15 @@ private struct RemoteSidebarRail<Content: View>: View {
             if nativeInputEnabled { addTrack?() }
         }
         .onReceive(localShow?.$splitItemsRequest.dropFirst().eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { _ in beginNativeSplit() }
+        .onReceive(localShow?.splitItemSelection.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { ids in
+            if local { trackScrolling.itemSelection.replace(ids); trackScrolling.selectionScope = .grid }
+        }
         .onReceive(localShow?.$normalizeItemsRequest.dropFirst().eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { _ in
             if nativeInputEnabled, !trackScrolling.itemSelection.items.isEmpty { nativeNormalization = true }
+        }
+        .onReceive(localShow?.$itemProcessingRequest.dropFirst().eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { request in
+            guard nativeInputEnabled, let request, !trackScrolling.itemSelection.items.isEmpty else { return }
+            processSelectedItems?(trackScrolling.itemSelection.items, request.action)
         }
         .onReceive(localShow?.$tempoMarkerRequest.dropFirst().eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { _ in beginNativeMarker(tempo: true) }
     }
@@ -1521,6 +1537,10 @@ private struct RemoteSidebarRail<Content: View>: View {
                 }
                 return true
             case 8 where command, 7 where command:
+                if trackScrolling.selectionScope == .tracks {
+                    if !event.isRepeat && event.keyCode == 8 { _ = show.copyTracks(selectedTracks) }
+                    return true
+                }
                 if show.selectedProgramChange != nil {
                     if !event.isRepeat { show.copyProgramChange() }
                     return true
@@ -1529,12 +1549,19 @@ private struct RemoteSidebarRail<Content: View>: View {
                 if !event.isRepeat { _ = show.copyItems(trackScrolling.itemSelection.items, moving: event.keyCode == 7) }
                 return true
             case 9 where command:
+                if show.hasTrackClipboard {
+                    if !event.isRepeat {
+                        let ids = show.pasteTracks()
+                        if !ids.isEmpty { selectedTracks = ids; trackScrolling.selectionScope = .tracks }
+                    }
+                    return true
+                }
                 if show.hasProgramChangeClipboard {
                     if !event.isRepeat { show.pasteProgramChange() }
                     return true
                 }
                 if !event.isRepeat {
-                    let pasted = show.pasteItems()
+                    let pasted = show.pasteItems(selectedTracks: selectedTracks)
                     if !pasted.isEmpty { trackScrolling.itemSelection.replace(pasted); trackScrolling.selectionScope = .grid }
                 }
                 return true
@@ -1636,8 +1663,9 @@ private struct RemoteSidebarRail<Content: View>: View {
     private func beginNativeSplit() {
         guard nativeInputEnabled, let show = localShow, let song = show.current else { return }
         let time = show.snapshot.transport.editPosition ?? show.snapshot.transport.position
-        let ids = Set(song.tracks.flatMap(\.clips).filter {
-            trackScrolling.itemSelection.items.contains($0.id) && $0.startTime < time && $0.startTime + $0.duration > time
+        let selection = trackScrolling.itemSelection.items
+        let ids = Set(song.tracks.filter { $0.kind != .timecode }.flatMap(\.clips).filter {
+            (selection.isEmpty || selection.contains($0.id)) && $0.startTime < time && $0.startTime + $0.duration > time
         }.map(\.id))
         if !ids.isEmpty { splittingItems = (state.project, song.id, ids, time) }
     }
@@ -2336,7 +2364,8 @@ private struct RemoteSidebarRail<Content: View>: View {
         let markers: [TimelineMarker] = (state.markers ?? []).filter { marker in
             marker.section == true && region.map { marker.position >= $0.start && marker.position <= $0.end } == true
         }.sorted { $0.position == $1.position ? $0.id.uuidString < $1.id.uuidString : $0.position < $1.position }
-            .map { TimelineMarker(id: $0.id, name: $0.name.uppercased(), position: $0.position, color: $0.color, section: true) }
+            .map { TimelineMarker(id: $0.id, name: $0.name.uppercased(), position: $0.position, color: $0.color,
+                                  section: true, loopSection: $0.loopSection) }
         let end = secondary ? region?.end ?? 0 : playback?.currentEnd ?? region?.end ?? 0
         return SmoothSeekBankView(title: secondary ? (state.subPlaying ? "Sub Play" : "Queued") : "Playing / Selected",
             name: region?.name ?? "—", markers: markers, end: end,
@@ -2823,7 +2852,7 @@ private struct RemoteSidebarRail<Content: View>: View {
             remoteMIDIPlaylistID = ids[next]; remoteMIDISetlistID = nil
             action(.selectPlaylist, target: ids[next])
         case .setlistUp, .setlistDown:
-            let ids = setlistRowsCache.entries(in: state, expanded: [], query: "").compactMap { entry -> UUID? in
+            let ids = setlistRowsCache.entries(in: state, expanded: [], query: "", order: local && state.selectedPlaylist == nil ? allRegionsOrder : nil).compactMap { entry -> UUID? in
                 if case .region(let row) = entry, !row.child { return row.region.id }; return nil
             }
             guard !ids.isEmpty else { return }
@@ -2882,7 +2911,7 @@ private struct RemoteSidebarRail<Content: View>: View {
         trackScrolling.selectionScope = .setlist
         let isBlock = local && (state.setlistBlocks?.contains { $0.id == id } == true)
         if local, hardwareModifiers.contains(.shift), let anchor = setlistSelectionAnchor {
-            let ids = setlistRowsCache.entries(in: state, expanded: expandedRegions, query: search).map { entry -> UUID in
+            let ids = setlistRowsCache.entries(in: state, expanded: expandedRegions, query: search, order: local && state.selectedPlaylist == nil ? allRegionsOrder : nil).map { entry -> UUID in
                 switch entry { case .region(let row): return row.region.id; case .block(let block): return block.id }
             }
             if let first = ids.firstIndex(of: anchor), let last = ids.firstIndex(of: id) {
@@ -2956,14 +2985,16 @@ private struct RemoteSidebarRail<Content: View>: View {
                 }.buttonStyle(RemoteFullAreaButtonStyle()).accessibilityLabel("AUTO").accessibilityValue(state.regionAuto == true ? "On" : "Off")
                     .contextMenu { if local { Button("Settings") { autoSettings = true } } }
                 if let addBlock {
-                    Button(action: addBlock) {
-                        Text(verbatim: JarasLocalization.string("Blocks").uppercased()).font(.jarasSystem(size: 9, weight: .bold))
-                            .foregroundStyle(JarasTheme.text).frame(width: 40, height: 30)
+                    Button {
+                        if state.selectedPlaylist == nil { allRegionsOrder = (allRegionsOrder + 1) % 3 }
+                        else { addBlock() }
+                    } label: {
+                        Text(verbatim: state.selectedPlaylist == nil ? ["Timeline", "A-Z", "Z-A"][min(2,max(0,allRegionsOrder))] : JarasLocalization.string("Blocks").uppercased()).font(.jarasSystem(size: 9, weight: .bold))
+                            .foregroundStyle(JarasTheme.text).frame(width: state.selectedPlaylist == nil ? 52 : 40, height: 30)
                             .modifier(RemoteControlSurface(color: nil, radius: 4))
                             .contentShape(Rectangle())
                     }.buttonStyle(RemoteFullAreaButtonStyle())
-                        .disabled(state.selectedPlaylist == nil)
-                        .opacity(state.selectedPlaylist == nil ? 0.35 : 1)
+
                 }
                 if let toggleRegionStop {
                     Button(action: toggleRegionStop) {
@@ -2988,7 +3019,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                                 }.buttonStyle(RemoteFullAreaButtonStyle())
                             }
                         } else {
-                            ForEach(setlistRowsCache.entries(in: state, expanded: expandedRegions, query: search)) { entry in
+                            ForEach(setlistRowsCache.entries(in: state, expanded: expandedRegions, query: search, order: local && state.selectedPlaylist == nil ? allRegionsOrder : nil)) { entry in
                                 switch entry {
                                 case .block(let block): setlistBlockRow(block)
                                 case .region(let row):
@@ -3649,7 +3680,7 @@ private struct RemoteNativeTimeline: View {
         }
         let markers = song?.markers ?? remoteMarkers.map {
             TimelineMarker(id: $0.id, name: $0.name, position: $0.position, color: $0.color,
-                unifiedRegionID: $0.unifiedRegionID, sourceRegionID: $0.sourceRegionID, section: $0.section)
+                unifiedRegionID: $0.unifiedRegionID, sourceRegionID: $0.sourceRegionID, section: $0.section, loopSection: $0.loopSection)
         }
         return markers.filter { !$0.isTempo && $0.position >= start && $0.position <= end }.sorted { $0.position < $1.position }
     }
@@ -3716,7 +3747,7 @@ private struct RemoteNativeTimeline: View {
                         if local, let song {
                             seek(TimelineTempo.snap(time, song: song, pixelsPerSecond: width / span,
                                 enabled: TimelineSnapPreference.enabled && !scrolling.modifiers.contains(.shift),
-                                includeHiddenDivisions: true, includeItemEdges: true))
+                                includeItemEdges: true))
                         } else { seek(time) }
                     }))
                     #endif
@@ -3729,8 +3760,8 @@ private struct RemoteNativeTimeline: View {
                                 var line = Path(); line.move(to: CGPoint(x: x, y: 0)); line.addLine(to: CGPoint(x: x, y: size.height))
                                 if mark.primary { primary.addPath(line) } else { secondary.addPath(line) }
                             }
-                            context.stroke(primary, with: .color(remoteColor(state.gridPrimaryColor ?? UInt32(TimelineAppearanceDefaults.primaryGrid))), style: StrokeStyle(lineWidth: 0.75 / displayScale, dash: [1, 3]))
-                            context.stroke(secondary, with: .color(remoteColor(state.gridSecondaryColor ?? UInt32(TimelineAppearanceDefaults.secondaryGrid))), style: StrokeStyle(lineWidth: 0.75 / displayScale, dash: [1, 3]))
+                            context.stroke(primary, with: .color(remoteColor(state.gridPrimaryColor ?? UInt32(TimelineAppearanceDefaults.primaryGrid))), style: StrokeStyle(lineWidth: 0.5 / displayScale))
+                            context.stroke(secondary, with: .color(remoteColor(state.gridSecondaryColor ?? UInt32(TimelineAppearanceDefaults.secondaryGrid))), style: StrokeStyle(lineWidth: 0.5 / displayScale))
                         }.allowsHitTesting(false)
                     }
                 }
@@ -3951,9 +3982,9 @@ private struct RemoteNativeTimeline: View {
                 if drawingMIDI, pointerDragged, !show.timelineMovementLocked, let track = pointerTrack(at: initial.point.y) {
                     let enabled = TimelineSnapPreference.enabled && !event.modifiers.contains(.shift)
                     let from = TimelineTempo.snap(min(initial.time, time), song: song, pixelsPerSecond: width / span,
-                        enabled: enabled, includeHiddenDivisions: true, includeItemEdges: true)
+                        enabled: enabled, includeItemEdges: true)
                     let to = TimelineTempo.snap(max(initial.time, time), song: song, pixelsPerSecond: width / span,
-                        enabled: enabled, includeHiddenDivisions: true, includeItemEdges: true)
+                        enabled: enabled, includeItemEdges: true)
                     if to > from, let created = show.addMIDIItem(track: track, start: from, duration: to - from) {
                         scrolling.itemSelection.replace([created])
                     }
@@ -3964,7 +3995,7 @@ private struct RemoteNativeTimeline: View {
                     }
                     let snapped = TimelineTempo.snap(time, song: song, pixelsPerSecond: width / span,
                         enabled: TimelineSnapPreference.enabled && !event.modifiers.contains(.shift),
-                        includeHiddenDivisions: true, includeItemEdges: true)
+                        includeItemEdges: true)
                     seek(snapped)
                 }
             }
@@ -4010,12 +4041,14 @@ private struct RemoteNativeTimeline: View {
                 for mark in marks {
                     let x = gridX(mark.time, width: size.width)
                     var tick = Path()
-                    tick.move(to: CGPoint(x: x, y: 1))
-                    tick.addLine(to: CGPoint(x: x, y: mark.primary ? 7 : 4))
+                    let bottom = size.height - 1 / displayScale
+                    let height: CGFloat = local ? (mark.primary ? 5 : 3) : (mark.primary ? 8 : 4)
+                    tick.move(to: CGPoint(x: x, y: bottom - height))
+                    tick.addLine(to: CGPoint(x: x, y: bottom))
                     context.stroke(tick, with: .color(TimelineStaticText.rulerColor), lineWidth: 1 / displayScale)
                     if !mark.label.isEmpty {
                         TimelineStaticText.label(mark.label, style: .barNumber, displayScale: displayScale)?
-                            .draw(at: CGPoint(x: x + 3, y: 2), context: &context)
+                            .draw(at: CGPoint(x: x + 3, y: local ? 0 : 5), context: &context)
                     }
                 }
 
@@ -4578,8 +4611,8 @@ private struct RemoteTimelineTrackRow: View, Equatable {
                         line.move(to: CGPoint(x: x, y: 0)); line.addLine(to: CGPoint(x: x, y: size.height))
                         if mark.primary { primary.addPath(line) } else { secondary.addPath(line) }
                     }
-                    context.stroke(primary, with: .color(remoteColor(primaryColor)), style: StrokeStyle(lineWidth: 0.75 / displayScale, dash: [1, 3]))
-                    context.stroke(secondary, with: .color(remoteColor(secondaryColor).opacity(0.85)), style: StrokeStyle(lineWidth: 0.75 / displayScale, dash: [1, 3]))
+                    context.stroke(primary, with: .color(remoteColor(primaryColor)), style: StrokeStyle(lineWidth: 0.5 / displayScale))
+                    context.stroke(secondary, with: .color(remoteColor(secondaryColor).opacity(0.85)), style: StrokeStyle(lineWidth: 0.5 / displayScale))
                 }
             }.allowsHitTesting(false)
             ForEach(previewClips.filter { hasRegion && $0.start < end && $0.start + $0.duration > start && (!local || RecordingLaneLayout.shared.items[$0.id] == nil) }) { clip in

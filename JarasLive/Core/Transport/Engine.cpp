@@ -723,6 +723,17 @@ void Engine::setClipFXBypass(const ID& id, bool bypassed) {
     }
     throw std::invalid_argument("Unknown FX item");
 }
+void Engine::setClipPitchState(const ID& id, std::optional<double> semitones) {
+    projectSync::requireWritable();
+    if (semitones && (!std::isfinite(*semitones) || *semitones < -12 || *semitones > 12))
+        throw std::invalid_argument("Invalid item pitch");
+    for (auto& song : project_.songs) for (auto& track : song.tracks) for (auto& clip : track.clips) if (clip.id == id) {
+        if (!fixedTrackName(track.role).empty() || clip.midi || (!clip.audioFile && !track.audioFile))
+            throw std::invalid_argument("Item pitch requires an audio item");
+        clip.pitchSemitones = semitones; return;
+    }
+    throw std::invalid_argument("Unknown item");
+}
 void Engine::setClipName(const ID& id, std::string name) {
     projectSync::requireWritable();
     if (name.empty()) throw std::invalid_argument("Item name cannot be empty");
@@ -800,9 +811,14 @@ void Engine::pasteItems(const ID& songID, std::vector<Track> tracks, bool moving
             if (target->role.id == "generatedClick" && (!clip.audioFile || clip.audioFile->path.rfind("Videos/", 0) != 0)) throw std::invalid_argument("Invalid destination track");
             if (!identifiers.insert(clip.id).second) throw std::invalid_argument("Duplicate pasted item");
             if (moving) {
-                auto item = std::find_if(target->clips.begin(), target->clips.end(), [&](const auto& value) { return value.id == clip.id; });
-                if (item == target->clips.end()) throw std::invalid_argument("An item to move no longer exists");
-                target->clips.erase(item);
+                auto origin = std::find_if(song->tracks.begin(), song->tracks.end(), [&](const auto& track) {
+                    return std::any_of(track.clips.begin(), track.clips.end(), [&](const auto& value) { return value.id == clip.id; });
+                });
+                if (origin == song->tracks.end()) throw std::invalid_argument("An item to move no longer exists");
+                auto item = std::find_if(origin->clips.begin(), origin->clips.end(), [&](const auto& value) { return value.id == clip.id; });
+                if ((origin->role.id == "timecode" || origin->role.id == "generatedClick") &&
+                    (!item->audioFile || item->audioFile->path.rfind("Videos/", 0) != 0)) throw std::invalid_argument("Invalid source track");
+                origin->clips.erase(item);
             }
         }
     }

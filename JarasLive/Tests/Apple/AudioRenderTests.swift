@@ -2,17 +2,43 @@ import Foundation
 import AVFoundation
 import Darwin
 setbuf(stdout, nil)
+// Exercise the Monterey routing transaction on every CI host. A regression
+// must fail before a live mixer reconnect can hang the render thread.
+private final class PatchTestEngine: AVAudioEngine {
+    var requirePausedRouting = false
+    var routingPauses = 0
+    override func pause() {
+        if requirePausedRouting { routingPauses += 1 }
+        super.pause()
+    }
+    override func disconnectNodeOutput(_ node: AVAudioNode) {
+        precondition(!requirePausedRouting || !isRunning, "Patch disconnected a live mixer")
+        super.disconnectNodeOutput(node)
+    }
+    override func connect(_ node1: AVAudioNode, to node2: AVAudioNode, fromBus bus1: AVAudioNodeBus, toBus bus2: AVAudioNodeBus, format: AVAudioFormat?) {
+        precondition(!requirePausedRouting || !isRunning, "Patch connected a live mixer")
+        super.connect(node1, to: node2, fromBus: bus1, toBus: bus2, format: format)
+    }
+    override func connect(_ sourceNode: AVAudioNode, to destNodes: [AVAudioConnectionPoint], fromBus sourceBus: AVAudioNodeBus, format: AVAudioFormat?) {
+        precondition(!requirePausedRouting || !isRunning, "Patch changed live mixer fanout")
+        super.connect(sourceNode, to: destNodes, fromBus: sourceBus, format: format)
+    }
+}
 @MainActor func audioAutoreleasepool(_ body: @MainActor () throws -> Void) rethrows {
     try autoreleasepool { try MainActor.assumeIsolated { try body() } }
 }
 // These assertions compare settled PCM levels, not the stretcher's startup
 // transient. Prime its reported latency and four maximum input slices before
 // sampling; the resulting window stays before the fixtures' future onset.
-@MainActor func settledPCMPeak(_ engine: AVAudioEngine, _ buffer: AVAudioPCMBuffer) throws -> Float {
+@MainActor func settlingBlocks(_ engine: AVAudioEngine, _ buffer: AVAudioPCMBuffer) -> Int {
     let rate = buffer.format.sampleRate
     let latency = engine.attachedNodes.map { max($0.auAudioUnit.latency, $0.outputPresentationLatency) }.max() ?? 0
     let slice = engine.attachedNodes.map { Int($0.auAudioUnit.maximumFramesToRender) }.max() ?? 8192
-    let warmup = (max(32768, Int(ceil(latency * rate)) + 4 * slice) + 511) / 512
+    return (max(32768, Int(ceil(latency * rate)) + 4 * slice) + 511) / 512
+}
+@MainActor func settledPCMPeak(_ engine: AVAudioEngine, _ buffer: AVAudioPCMBuffer) throws -> Float {
+    let rate = buffer.format.sampleRate
+    let warmup = settlingBlocks(engine, buffer)
     precondition(Double((warmup + 6) * 512) / rate < 2, "measurement must precede the future item's two-second onset")
     var peak: Float = 0
     for block in 0..<(warmup + 6) {
@@ -94,10 +120,10 @@ try audioAutoreleasepool {
     project.songs[0].tracks = [parent, receiver, child]
     var state = ShowSnapshot(project: project, transport: TransportState(playing: true, songId: project.songs[0].id,
         position: 0, queue: QueueState(), loop: LoopState(enabled: false), subPlay: SubPlayState(playing: false, position: 0)))
-    @MainActor func makeRenderer() throws -> (AVAudioEngine, StemAudioPlayback) {
-        let engine = AVAudioEngine()
+    @MainActor func makeRenderer(legacyRouting: Bool = false) throws -> (PatchTestEngine, StemAudioPlayback) {
+        let engine = PatchTestEngine()
         try engine.enableManualRenderingMode(.offline, format: routeFormat, maximumFrameCount: 512)
-        let audio = StemAudioPlayback(engine: engine, realtime: false)
+        let audio = StemAudioPlayback(engine: engine, realtime: false, pauseForRoutingChanges: legacyRouting)
         audio.open(directory: directory)
         try audio.update(state, revision: 1)
         let monitor = AVAudioSourceNode(format: routeFormat) { silent, _, frames, buffers in
@@ -111,11 +137,18 @@ try audioAutoreleasepool {
         return (engine, audio)
     }
     let (referenceEngine, referenceAudio) = try makeRenderer()
-    let (changingEngine, changingAudio) = try makeRenderer()
+    let (changingEngine, changingAudio) = try makeRenderer(legacyRouting: true)
     defer { referenceAudio.prepareForClosing(); changingAudio.prepareForClosing() }
     let referencePCM = AVAudioPCMBuffer(pcmFormat: routeFormat, frameCapacity: 512)!
     let changingPCM = AVAudioPCMBuffer(pcmFormat: routeFormat, frameCapacity: 512)!
     let originalNodes = changingEngine.attachedNodes
+    changingEngine.requirePausedRouting = true
+    defer { changingEngine.requirePausedRouting = false }
+    for index in 0..<32 {
+        changingAudio.previewPatches(child.id, patches: [index.isMultiple(of: 2) ? .stereo : .master])
+    }
+    precondition(changingEngine.routingPauses == 0 && changingEngine.attachedNodes == originalNodes,
+                 "Physical channel changes must not pause or reconnect the prepared graph")
     var capturedMIDI: [UInt8] = []
     changingAudio.armedMIDIRecordingTracks = [child.id]
     changingAudio.onLiveKeyboardMIDI = { _, status, _, _ in capturedMIDI.append(status) }
@@ -153,6 +186,8 @@ try audioAutoreleasepool {
     precondition(tailPeak > 0.00001, "item effect tails remain audible across routing changes after the file ends")
     precondition(changingAudio.hasInputMonitor(child.id) && capturedMIDI == Array(repeating: [UInt8(0x90), 0x80], count: 8).flatMap { $0 },
                  "live monitoring and MIDI capture stay attached through all routing changes")
+    precondition(changingEngine.routingPauses > 0, "The legacy mixer transaction must be exercised on modern CI hosts")
+    print("LEGACY_MAC_PATCH_PAUSES_ONLY_TOPOLOGY_AND_PRESERVES_PHASE_FX_INPUT_OK rate=\(rate)")
     print("DORMANT_SEND_LIVE_MASTER_GROUP_INTERNAL_CYCLE_PHASE_TAIL_MONITOR_MIDI_OK rate=\(rate)")
 }
 // Compare each rendered sample with the established manual-fader path. This
@@ -513,12 +548,33 @@ var snapshot = ShowSnapshot(project: project, transport: TransportState(playing:
 let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 512)!
 @MainActor func peak() throws -> Float {
     var value: Float = 0
-    for iteration in 0..<24 {
+    var rendered = 0, retries = 0
+    // Route/bypass changes can flush a full converter slice, particularly
+    // for 44.1 kHz sources rendered at 48 kHz. Measure settled routing gain
+    // using the same DSP warmup as the project-swap checks. Startup latency
+    // and sample continuity are tested separately above and below.
+    let warmup = settlingBlocks(engine, output)
+    let deadline = ProcessInfo.processInfo.systemUptime + 5
+    // Count PCM buffers, not attempts: AVAudioEngine may temporarily reject an
+    // offline call while its graph changes. Apple requires retrying that status:
+    // https://developer.apple.com/documentation/avfaudio/performing-offline-audio-processing
+    while rendered < warmup + 8 {
         let status = try engine.renderOffline(512, to: output)
-        if status == .success, iteration > 15 {
+        if status == .cannotDoInCurrentContext {
+            retries += 1
+            precondition(ProcessInfo.processInfo.systemUptime < deadline,
+                         "offline graph did not become ready after \(retries) retries")
+            Thread.sleep(forTimeInterval: 0.001)
+            continue
+        }
+        precondition(status == .success && output.frameLength == 512,
+                     "peak measurement requires a complete PCM buffer: status=\(status.rawValue) frames=\(output.frameLength)")
+        if rendered >= warmup {
             for i in 0..<Int(output.frameLength) { value = max(value, abs(output.floatChannelData![0][i])) }
         }
+        rendered += 1
     }
+    if retries > 0 { print("OFFLINE_PEAK_RENDER_RETRIES count=\(retries)") }
     return value
 }
 // A seek into existing audio still needs an anti-click ramp. Natural file
@@ -827,11 +883,12 @@ snapshot.project.masterVolume = 0.1
 snapshot.project.masterMute = false
 try renderer.update(snapshot, revision: 7)
 let directLowMaster = try peak()
-precondition(directLowMaster > 0.09 && directLowMaster < 0.11, "direct output bypasses master fader")
+precondition(directLowMaster > 0.09 && directLowMaster < 0.11, "direct output bypasses master fader: \(directLowMaster), direct before update=\(directPeak), sample=\(engine.manualRenderingSampleTime), rate=\(outputFormat.sampleRate)")
 snapshot.project.songs[0].tracks[0].patch = .master
 try renderer.update(snapshot, revision: 8)
 let throughMaster = try peak()
-precondition(throughMaster > 0.009 && throughMaster < 0.011, "master fader affects only tracks routed into master")
+print("MASTER_ROUTING_MEASUREMENT rate=\(outputFormat.sampleRate) direct=\(directLowMaster) master=\(throughMaster) sample=\(engine.manualRenderingSampleTime)")
+precondition(throughMaster > 0.009 && throughMaster < 0.011, "master fader affects only tracks routed into master: \(throughMaster)")
 print("MASTER_BUS_ROUTING_OK")
 renderer.stop()
 // Reverb and delay keep processing with the device warm: Stop must clear their
@@ -1126,15 +1183,10 @@ itemFXProject.songs[0].tracks = [itemFXTrack]; itemFXProject.masterVolume = 0.5
 var itemFXState = ShowSnapshot(project: itemFXProject, transport: TransportState(playing: true, songId: itemFXProject.songs[0].id, position: 0, queue: QueueState(), loop: LoopState(enabled: false), subPlay: SubPlayState(playing: true, position: 0)))
 let itemFXBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 512)!
 @MainActor func itemFXPeak() throws -> Float {
-    var maximum: Float = 0
-    for block in 0..<24 {
-        let status = try itemFXEngine.renderOffline(512, to: itemFXBuffer)
-        precondition(status == .success)
-        if block > 15 {
-            for sample in 0..<Int(itemFXBuffer.frameLength) { maximum = max(maximum, abs(itemFXBuffer.floatChannelData![0][sample])) }
-        }
-    }
-    return maximum
+    // These assertions measure steady gain, not time-stretcher startup. Use
+    // the same latency-aware priming as the other independent-chain tests.
+    // A fixed 16-block warmup can still contain only preroll on the CI graph.
+    return try settledPCMPeak(itemFXEngine, itemFXBuffer)
 }
 try itemFXAudio.update(itemFXState, revision: 1)
 let itemFXInitial = try itemFXPeak()
@@ -1995,9 +2047,20 @@ try pitchAudio.update(pitchState, revision: 1)
 let pitchBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 512)!
 @MainActor func frequency() throws -> Double {
     var crossings = 0, samples = 0; var previous: Float = 0
-    for iteration in 0..<96 {
-        guard try pitchEngine.renderOffline(512, to: pitchBuffer) == .success else { continue }
-        if iteration < 32 { continue }
+    let warmup = settlingBlocks(pitchEngine, pitchBuffer)
+    var rendered = 0
+    let deadline = ProcessInfo.processInfo.systemUptime + 5
+    while rendered < warmup + 64 {
+        let status = try pitchEngine.renderOffline(512, to: pitchBuffer)
+        if status == .cannotDoInCurrentContext {
+            precondition(ProcessInfo.processInfo.systemUptime < deadline, "pitch graph did not become ready")
+            Thread.sleep(forTimeInterval: 0.001)
+            continue
+        }
+        precondition(status == .success && pitchBuffer.frameLength == 512,
+                     "frequency measurement requires a complete PCM buffer")
+        rendered += 1
+        if rendered <= warmup { continue }
         for i in 0..<Int(pitchBuffer.frameLength) {
             let sample = pitchBuffer.floatChannelData![0][i]
             if previous < 0 && sample >= 0 { crossings += 1 }; previous = sample; samples += 1
@@ -2005,9 +2068,10 @@ let pitchBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 512)!
     }
     return Double(crossings) * outputFormat.sampleRate / Double(samples)
 }
-@MainActor func expectFrequency(_ value: Double) throws {
+@MainActor func expectFrequency(_ value: Double, line: UInt = #line) throws {
     let measured = try frequency()
-    precondition(abs(measured - value) < 5, "pitch PCM frequency \(measured), expected \(value)")
+    print("PITCH_PCM_MEASUREMENT line=\(line) rate=\(outputFormat.sampleRate) measured=\(measured) expected=\(value)")
+    precondition(abs(measured - value) < 5, "pitch PCM frequency \(measured), expected \(value), rate \(outputFormat.sampleRate), test line \(line)")
 }
 try expectFrequency(440)
 let noPitchNodes = pitchEngine.attachedNodes.count

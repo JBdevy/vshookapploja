@@ -65,7 +65,11 @@ struct RecordingGridOverlay: View {
                 guard let reservation = RecordingLaneLayout.shared.items[id], let index = tracks.firstIndex(where: { $0.id == reservation.track }) else { continue }
                 let count = RecordingLaneLayout.shared.count(for: reservation.track, existing: TrackLanes(track: tracks[index]).count)
                 let laneHeight = heights[index] / CGFloat(count)
-                let rect = CGRect(x: take.start*scale,y: rulerHeight+offsets[index]+CGFloat(reservation.clip.recordingLane ?? 0)*laneHeight+3,width: max(3,take.duration*scale),height: laneHeight-6)
+                // Capture buffers can lead the audible transport. Only the drawing
+                // is bounded by the same presentation clock as the playhead.
+                let duration = min(take.duration, TrackRecording.shared.recordingDisplayPosition.map { max(0, $0 - take.start) } ?? take.duration)
+                guard duration > 0 else { continue }
+                let rect = CGRect(x: take.start*scale,y: rulerHeight+offsets[index]+CGFloat(reservation.clip.recordingLane ?? 0)*laneHeight+3,width: duration*scale,height: laneHeight-6)
                 guard rect.intersects(visibleRect) else { continue }
                 let shape = Path(roundedRect: rect, cornerRadius: 3)
                 let color = JarasTheme.track(tracks[index], emphasized: false)
@@ -75,10 +79,12 @@ struct RecordingGridOverlay: View {
                 ink.clip(to: shape)
                 let headerHeight: CGFloat = rect.height <= 26 ? rect.height : GridSelectionItem.headerHeight
                 ink.fill(Path(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: headerHeight)), with: .color(.black.opacity(0.16)))
+                #if !os(macOS)
                 if rect.width > 8 {
                     let title = Text(verbatim: reservation.clip.name).font(.jarasSystem(size: 9, weight: .bold)).foregroundColor(.white)
                     ink.draw(title, in: CGRect(x: max(rect.minX, visibleRect.minX) + 4, y: rect.minY + 1, width: max(0, min(rect.maxX, visibleRect.maxX) - max(rect.minX, visibleRect.minX) - 8), height: headerHeight))
                 }
+                #endif
                 guard rect.height > 26 else { continue }
                 guard let waveform = take.waveform else { continue }
                 let bodyTop = rect.minY + GridSelectionItem.bodyInset

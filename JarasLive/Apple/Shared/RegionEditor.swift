@@ -31,6 +31,7 @@ struct NameColorEditor: View {
     var showsName = true
     var previewColor: ((UInt32) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.workspaceEditorDismiss) private var closeEditor
     @FocusState private var nameFocused: Bool
     @State private var name = ""
     @State private var red = 0.0
@@ -122,7 +123,7 @@ struct NameColorEditor: View {
         nameFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         #endif
-        if let close { close() } else { dismiss() }
+        if let close { close() } else { (closeEditor ?? { dismiss() })() }
     }
     private func channel(_ title: String, value: Binding<Double>, color: Color) -> some View {
         HStack {
@@ -371,6 +372,7 @@ private final class NativeEditorColorSwatch: NSButton {
 struct UnifyRegionEditor: View {
     let create: (String) -> Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.workspaceEditorDismiss) private var closeEditor
     @FocusState private var focused: Bool
     @State private var name = ""
     @State private var invalid = false
@@ -384,7 +386,7 @@ struct UnifyRegionEditor: View {
                 .onSubmit(confirm).onChange(of: name) { _ in invalid = false }
             if invalid { Text("Choose a name").font(.jarasCaption).foregroundStyle(.red) }
             HStack {
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { (closeEditor ?? { dismiss() })() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Unify", action: confirm).keyboardShortcut(.defaultAction)
             }
@@ -397,7 +399,7 @@ struct UnifyRegionEditor: View {
             withAnimation(.linear(duration: 0.3)) { shake += 1 }
             return
         }
-        if create(name) { dismiss() }
+        if create(name) { (closeEditor ?? { dismiss() })() }
     }
 }
 #if os(macOS)
@@ -716,6 +718,10 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
         withExtendedLifetime(actions) { NSMenu.popUpContextMenu(menu, with: event, for: self) }
     }
 
+    // Retained native commands read the live zoom on mouse-down, then keep
+    // that origin for the whole gesture even if a preview reprojects the grid.
+    var projectedPixelsPerSecond: CGFloat = 1
+    private(set) var gesturePixelsPerSecond: CGFloat = 1
     var normalCursor = false { didSet { if normalCursor != oldValue { window?.invalidateCursorRects(for: self) } } }
     private var moveCursor: NSCursor { normalCursor ? .arrow : .resizeLeftRight }
     private var nativeInputBounds: CGRect?
@@ -805,6 +811,7 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
         // display during preview must never change the gesture's origin.
         startX = event.locationInWindow.x
         startY = event.locationInWindow.y
+        gesturePixelsPerSecond = projectedPixelsPerSecond
         activeDrag = drag; activeSeek = seek; didDrag = false
     }
     override func mouseDragged(with event: NSEvent) {

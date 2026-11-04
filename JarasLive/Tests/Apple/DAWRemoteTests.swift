@@ -299,6 +299,20 @@ projectsFixture.projects = .init(recent: reordered, busy: true, canOpen: false, 
 if case .state(let decoded) = try DAWRemoteWire.decode(DAWRemoteWire.state(projectsFixture)) {
     require(decoded.projects?.busy == true && decoded.projects?.canOpen == false, "host owns opening progress and transition availability")
 } else { fatalError("project progress state packet") }
+let openingRequest = UUID()
+for phase in ["opening", "completed", "failed", "cancelled", "waiting"] {
+    projectsFixture.projects?.commandID = openingRequest
+    projectsFixture.projects?.commandState = phase
+    if case .state(let decoded) = try DAWRemoteWire.decode(DAWRemoteWire.state(projectsFixture)) {
+        require(decoded.projects?.commandID == openingRequest && decoded.projects?.commandState == phase,
+                "Project opening result survives snapshots and is correlated with its initiating command")
+    } else { fatalError("project opening acknowledgment") }
+}
+projectsFixture.projects?.commandState = "invented"
+require(!projectsFixture.valid, "Unknown project operation states cannot enter the client")
+projectsFixture.projects?.commandID = nil; projectsFixture.projects?.commandState = nil
+require(projectsFixture.valid, "Older hosts remain compatible without opening acknowledgments")
+print("REMOTE_PROJECT_OPENING_ACKNOWLEDGMENT_AND_LEGACY_OK")
 print("REMOTE_RECENT_PROJECTS_OPAQUE_IDS_AND_OPEN_COMMAND_OK")
 print("REMOTE_NATIVE_STATE_TYPED_ACTIONS_AND_VERSION_VALIDATION_OK")
 
@@ -911,11 +925,12 @@ var markerKinds = fixture
 markerKinds.markers = [
     .init(id: UUID(), name: "Normal", position: 1, color: 0x123456),
     .init(id: UUID(), name: "TRECHO", position: 2, color: 0xabcdef, section: true),
+    .init(id: UUID(), name: "LOOP", position: 2.5, color: 0xff5050, section: true, loopSection: true),
     .init(id: UUID(), name: "0st Música unificada", position: 3, color: 0xffcc00,
           unifiedRegionID: UUID(), sourceRegionID: UUID())
 ]
 if case .state(let decoded) = try DAWRemoteWire.decode(DAWRemoteWire.state(markerKinds)) {
-    require(decoded.markers == markerKinds.markers, "normal, section and unified marker styles survive Remote transport")
+    require(decoded.markers == markerKinds.markers, "normal, section, loop and unified marker styles survive Remote transport")
 } else { fatalError("Missing marker style state") }
 print("REMOTE_MAC_MARKER_STYLES_OK")
 
@@ -1289,6 +1304,13 @@ require(selectTab.valid && DAWRemoteAccessRules.allows(selectTab, mode: .directo
 require(!DAWRemoteAccessRules.allows(selectTab, mode: .observer) && !DAWRemoteAccessRules.allows(selectTab, mode: .notices), "Observers and notices cannot switch project tabs")
 require(!DAWRemoteCommand(project: project, action: .selectProjectTab).valid, "Tab selection needs a target")
 require(!DAWRemoteCommand(project: project, action: .selectProjectTab, target: remoteTabIDs[0], value: 1).valid, "Tab selection does not accept an index or transport value")
+let closeTab = DAWRemoteCommand(project: project, action: .closeProjectTab, target: remoteTabIDs[0])
+require(closeTab.valid && DAWRemoteAccessRules.allows(closeTab, mode: .director), "Director can request closing an issued project tab")
+require(!DAWRemoteAccessRules.allows(closeTab, mode: .observer) && !DAWRemoteAccessRules.allows(closeTab, mode: .notices), "Observer cannot close project tabs")
+require(!DAWRemoteCommand(project: project, action: .closeProjectTab).valid, "Closing requires a tab identity")
+if case .command(let decoded) = try DAWRemoteWire.decode(DAWRemoteWire.command(closeTab)) {
+    require(decoded.action == .closeProjectTab && decoded.target == remoteTabIDs[0], "Tab close command roundtrips")
+} else { fatalError("close project tab packet") }
 print("REMOTE_PROJECT_TABS_PROTOCOL_AND_ACCESS_OK")
 
 // Six banks are presentation data; no host paths or MIDI mapping crosses the wire.

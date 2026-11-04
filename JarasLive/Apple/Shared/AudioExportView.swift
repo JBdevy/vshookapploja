@@ -29,7 +29,7 @@ final class AudioExportURLAccess: @unchecked Sendable {
     func cancelReplacement() { pendingExport = nil; replacementFiles = []; confirmingReplacement = false }
     func confirmReplacement() { let action = pendingExport; cancelReplacement(); action?() }
     func cancel() { cancellation.cancel(); cancelReplacement() }
-    func start(project: Project, song: Song, plan: AudioExportPlan, media: URL, output: URL, rate: Double, encoding: AudioExportEncoding, secondaryEncoding: AudioExportEncoding?, includeHardwareOutputs: Bool = false, mediaAccessURL: URL? = nil, replacingFiles: Set<String> = []) {
+    func start(project: Project, song: Song, plan: AudioExportPlan, media: URL, output: URL, rate: Double, encoding: AudioExportEncoding, secondaryEncoding: AudioExportEncoding?, includeHardwareOutputs: Bool = false, printTrackPolarity: Bool = false, mediaAccessURL: URL? = nil, replacingFiles: Set<String> = []) {
         guard !running else { return }
         let collisions = plan.jobs.map(\.fileName).filter {
             FileManager.default.fileExists(atPath: output.appendingPathComponent($0).path) && !replacingFiles.contains($0)
@@ -39,7 +39,7 @@ final class AudioExportURLAccess: @unchecked Sendable {
             let approved = replacingFiles.union(collisions)
             pendingExport = { [weak self] in self?.start(project: project, song: song, plan: plan, media: media, output: output,
                 rate: rate, encoding: encoding, secondaryEncoding: secondaryEncoding,
-                includeHardwareOutputs: includeHardwareOutputs, mediaAccessURL: mediaAccessURL, replacingFiles: approved) }
+                includeHardwareOutputs: includeHardwareOutputs, printTrackPolarity: printTrackPolarity, mediaAccessURL: mediaAccessURL, replacingFiles: approved) }
             confirmingReplacement = true
             return
         }
@@ -53,7 +53,7 @@ final class AudioExportURLAccess: @unchecked Sendable {
             defer { withExtendedLifetime((mediaAccess, outputAccess)) {} }
             do {
                 try OfflineAudioExport.run(project: project,song: song,plan: plan,mediaDirectory: media,outputDirectory: output,sampleRate: rate,encoding: encoding,secondaryEncoding: secondaryEncoding,cancellation: token,
-                    includeHardwareOutputs: includeHardwareOutputs, midiInstrumentsByTrack: instruments, replacingFiles: replacingFiles) { update in
+                    includeHardwareOutputs: includeHardwareOutputs, printTrackPolarity: printTrackPolarity, midiInstrumentsByTrack: instruments, replacingFiles: replacingFiles) { update in
                     Task { @MainActor in self.progress = update }
                 }
                 Task { @MainActor in self.running = false; self.finished = true }
@@ -75,6 +75,7 @@ struct AudioExportView: View {
     @ObservedObject private var area = TimelineAreaSelection.shared
     @StateObject private var session = AudioExportSession()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.workspaceEditorDismiss) private var closeEditor
     @AppStorage("jaras.export.source") private var source = AudioExportSource.master
     @AppStorage("jaras.export.bounds") private var bounds = AudioExportBounds.project
     @State private var tracks: Set<UUID> = []
@@ -373,7 +374,7 @@ struct AudioExportView: View {
                         context.stroke(line,with: .color(progress.clipped[index] ? .red : JarasTheme.green),lineWidth: max(1,width))
                     }
                 }.frame(height: 180).background(JarasTheme.display).clipShape(RoundedRectangle(cornerRadius: 6))
-                ProgressView(value: progress.fraction).tint(JarasTheme.green)
+                ProgressView(value: progress.fraction).progressViewStyle(JarasProgressBarStyle()).tint(JarasTheme.green)
                 HStack {
                     Text("\(progress.completed) / \(progress.total) files")
                     Spacer()
@@ -413,6 +414,7 @@ struct ItemAudioExportView: View {
     let request: ItemAudioExportRequest
     @StateObject private var session = AudioExportSession()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.workspaceEditorDismiss) private var closeEditor
     @AppStorage("jaras.export.format") private var format = AudioExportFormat.wav
     @AppStorage("jaras.export.bits") private var bits = 24
     @AppStorage("jaras.export.bitrate") private var bitrate = 320
@@ -421,11 +423,25 @@ struct ItemAudioExportView: View {
     @AppStorage("jaras.export.directory") private var directory = ""
     @AppStorage("jaras.export.directoryBookmark") private var directoryBookmark = Data()
     @State private var choosingDirectory = false
+    @State private var processing: AudioItemExportProcessing?
     private var plan: AudioExportPlan {
         AudioExportPlan(project: request.project, song: request.song, source: .stems, bounds: .project,
                         template: "%stem", tracks: [], clips: request.items, regions: [], format: format)
     }
     var body: some View {
+        Group {
+            if processing == nil {
+                VStack(spacing: 14) {
+                    Text("Export audio items").font(.jarasHeadline)
+                    Button { processing = .pre } label: { Text(verbatim: AudioItemExportProcessing.pre.rawValue).frame(maxWidth: .infinity) }
+                    Button { processing = .post } label: { Text(verbatim: AudioItemExportProcessing.post.rawValue).frame(maxWidth: .infinity) }
+                    Button("Cancel") { (closeEditor ?? { dismiss() })() }.keyboardShortcut(.cancelAction)
+                }.buttonStyle(.bordered).controlSize(.large)
+                    .padding(24).frame(width: 420).background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
+            } else { exportForm }
+        }
+    }
+    private var exportForm: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Export audio items").font(.jarasHeadline)
@@ -466,13 +482,13 @@ struct ItemAudioExportView: View {
             }.frame(height: min(110, CGFloat(max(1, plan.jobs.count)) * 22 + 16))
                 .background(JarasTheme.display).clipShape(RoundedRectangle(cornerRadius: 6))
             if session.running {
-                ProgressView(value: session.progress.map { (Double($0.completed) + $0.fraction) / Double(max(1, $0.total)) } ?? 0)
+                ProgressView(value: session.progress.map { (Double($0.completed) + $0.fraction) / Double(max(1, $0.total)) } ?? 0).progressViewStyle(JarasProgressBarStyle())
             }
             if !session.error.isEmpty { Text(verbatim: session.error).font(.jarasCaption).foregroundStyle(.red).textSelection(.disabled) }
             if session.finished { Text("Render complete.").foregroundStyle(JarasTheme.green) }
             HStack {
                 Button(session.running ? "Cancel" : "Close") {
-                    if session.running { session.cancel() } else { dismiss() }
+                    if session.running { session.cancel() } else { (closeEditor ?? { dismiss() })() }
                 }.keyboardShortcut(.cancelAction)
                 Spacer()
                 if !session.finished {
@@ -502,8 +518,8 @@ struct ItemAudioExportView: View {
         guard let media = request.mediaDirectory else { return }
         let output = URL(fileURLWithPath: (directory as NSString).expandingTildeInPath)
         guard AudioDestinationSpace.confirm(at: output) else { return }
-        session.start(project: request.project, song: request.song, plan: plan, media: media, output: output, rate: rate,
-                      encoding: AudioExportEncoding(format: format, bitDepth: bits, channels: channels, bitrate: bitrate, sampleRate: rate), secondaryEncoding: nil)
+        session.start(project: request.project, song: (processing ?? .post).song(request.song), plan: plan, media: media, output: output, rate: rate,
+                      encoding: AudioExportEncoding(format: format, bitDepth: bits, channels: channels, bitrate: bitrate, sampleRate: rate), secondaryEncoding: nil, printTrackPolarity: true)
     }
 }
 
