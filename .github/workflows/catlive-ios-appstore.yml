@@ -89,12 +89,44 @@ jobs:
 
       - name: Verificar alterações no motor de áudio
         id: audio-changes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if git diff --quiet HEAD^ HEAD -- JarasLive/Apple/Bridge JarasLive/Apple/Shared/StemAudioPlayback.swift JarasLive/Apple/Shared/AudioDeviceSettings.swift JarasLive/Core/Audio JarasLive/Core/Transport JarasLive/Tests/Apple/MobilePreparedSyncTests.swift JarasLive/Tests/Apple/MobileQueueSyncTests.swift; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-          fi
+          python3 - <<'PY'
+          import base64, json, os, re, subprocess, urllib.parse
+          def api(path, *options):
+              return json.loads(subprocess.check_output(['gh', 'api', path, *options], text=True))
+          changed = True
+          try:
+              repo = os.environ['GITHUB_REPOSITORY']
+              pages = api(f'repos/{repo}/releases?per_page=100', '--paginate', '--slurp')
+              previous = []
+              for release in (item for page in pages for item in page):
+                  match = re.fullmatch(r'catlive-app-v[0-9]+\.[0-9]{2}-build([0-9]+)', release['tag_name'])
+                  if match and not release['draft'] and not release['prerelease'] and int(match[1]) < int(os.environ['BUILD_NUMBER']):
+                      previous.append((int(match[1]), release['tag_name']))
+              if previous:
+                  tag = max(previous)[1]
+                  manifest = api(f'repos/{repo}/contents/.github/catlive-app-release.json?ref={urllib.parse.quote(tag)}')
+                  base = json.loads(base64.b64decode(manifest['content']))['source_ref']
+                  assert re.fullmatch(r'[0-9a-f]{40}', base)
+                  current = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+                  comparison = api(f'repos/{repo}/compare/{base}...{current}')
+                  files = comparison['files']
+                  prefixes = ('JarasLive/Apple/Bridge/', 'JarasLive/Core/Audio/', 'JarasLive/Core/Transport/')
+                  exact = {'JarasLive/Apple/Shared/StemAudioPlayback.swift', 'JarasLive/Apple/Shared/AudioDeviceSettings.swift',
+                      'JarasLive/Tests/Apple/MobilePreparedSyncTests.swift', 'JarasLive/Tests/Apple/MobileQueueSyncTests.swift',
+                      'JarasLive/Tests/Apple/MobileRenderClockTests.cpp', 'JarasLive/scripts/test-mobile-queue-sync.sh'}
+                  paths = [f[key] for f in files for key in ('filename', 'previous_filename') if key in f]
+                  # GitHub caps comparison files at 300. Missing/ambiguous history
+                  # must run the tests, including retries after a failed release.
+                  changed = len(files) >= 300 or comparison['status'] not in ('ahead', 'identical') or any(p.startswith(prefixes) or p in exact for p in paths)
+                  print(f'Audio comparison baseline: {tag}')
+          except Exception as error:
+              print(f'::warning::Audio baseline unavailable; running synchronization tests ({type(error).__name__}).')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'changed={str(changed).lower()}\n')
+          PY
 
       - name: Testar sincronização do áudio quando alterada
         if: steps.audio-changes.outputs.changed == 'true'

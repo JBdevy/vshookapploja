@@ -247,10 +247,6 @@ import UniformTypeIdentifiers
                 ItemNameEditor(name: clip.name, apply: { show.renameItem(item, name: $0) }, close: { editingName = false })
             }
         } else if editingText {
-            IpadCompactModal {
-                ItemNameEditor(name: clip.name, apply: { show.renameItem(item, name: $0) }, close: { editingName = false })
-            }
-        } else if editingText {
             IpadCompactModal(onDismiss: { editingText = false }) {
                 TextItemEditor(text: context?.1.text ?? "", apply: { show.updateTextItem(item, text: $0) }, close: { editingText = false })
             }
