@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import Combine
 
-// The production views and analyzers run unchanged. Only their audio source is
-// replaced so timer ticks remain measurable without an attached audio device.
+// The production views and analyzers run unchanged. Their audio source and
+// app-only theme/font registration are replaced for this standalone fixture.
 @MainActor final class StemAudioPlayback {
     static let shared = StemAudioPlayback()
     var rta = 0, meters = 0, spectrogram = 0
@@ -14,6 +14,16 @@ import Combine
 struct EQAnalysisFrame: Sendable { let input: Data?, output: Data?, sampleRate: Double }
 final class AudioDeviceSettings { static let shared = AudioDeviceSettings(); let sampleRate = 48000.0 }
 enum JarasTheme { static let green = Color.green, secondary = Color.gray, display = Color.black, line = Color.gray }
+extension Color {
+    init(hex: UInt32) {
+        self.init(red: Double(hex >> 16 & 255) / 255, green: Double(hex >> 8 & 255) / 255, blue: Double(hex & 255) / 255)
+    }
+}
+extension Font {
+    static func jarasSystem(size: CGFloat, weight: Font.Weight? = nil, design: Font.Design? = nil) -> Font {
+        .system(size: size, weight: weight ?? .regular, design: design ?? .default)
+    }
+}
 @MainActor final class EditingActivity: ObservableObject { @Published var revision = 0 }
 @MainActor struct EditingHost: View {
     @ObservedObject var activity: EditingActivity

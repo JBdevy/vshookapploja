@@ -18,7 +18,7 @@ clang++ ${cxx_options[@]+"${cxx_options[@]}"} -std=c++17 -fobjc-arc -c Apple/Bri
 clang++ ${cxx_options[@]+"${cxx_options[@]}"} -std=c++17 -c Core/Project/Models.cpp -o "$build_dir/models.o"
 clang++ ${cxx_options[@]+"${cxx_options[@]}"} -std=c++17 -c Core/Transport/Engine.cpp -o "$build_dir/engine.o"
 clang++ ${cxx_options[@]+"${cxx_options[@]}"} -std=c++17 -c Core/Import/TrackTaxonomy.cpp -o "$build_dir/taxonomy.o"
-clang++ ${cxx_options[@]+"${cxx_options[@]}"} -std=c++17 -fobjc-arc -c Apple/Bridge/JarasEffects.mm -o "$build_dir/effects.o"
+clang++ ${cxx_options[@]+"${cxx_options[@]}"} -O3 -std=c++17 -fobjc-arc -c Apple/Bridge/JarasEffects.mm -o "$build_dir/effects.o"
 clang++ ${cxx_options[@]+"${cxx_options[@]}"} -std=c++17 -fobjc-arc -c Apple/Bridge/JarasStemSeparator.mm -o "$build_dir/stemseparator.o"
 bash scripts/compile-vst3.sh "$build_dir"
 clang++ ${cxx_options[@]+"${cxx_options[@]}"} -std=c++17 -fobjc-arc -c Apple/Bridge/JarasSoundFont.mm -o "$build_dir/soundfont.o"

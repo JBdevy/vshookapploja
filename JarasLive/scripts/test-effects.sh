@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 export MACOSX_DEPLOYMENT_TARGET=12.0
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/jaras-effects.XXXXXX")"
 trap 'rm -rf "$build_dir"' EXIT
-clang++ -std=c++17 -fobjc-arc -c Apple/Bridge/JarasEffects.mm -o "$build_dir/effects.o"
+clang++ -O3 -std=c++17 -fobjc-arc -c Apple/Bridge/JarasEffects.mm -o "$build_dir/effects.o"
 clang++ -std=c++17 -fobjc-arc -c Apple/Bridge/JarasStemSeparator.mm -o "$build_dir/stemseparator.o"
 bash scripts/compile-vst3.sh "$build_dir"
 cp Tests/Apple/EffectsTests.swift "$build_dir/main.swift"

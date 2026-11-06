@@ -95,6 +95,23 @@ static void scaleAudioBlock(float* data,unsigned count,float gain) {
     if(count>=64) vDSP_vsmul(data,1,&gain,data,1,count);
     else for(unsigned i=0;i<count;++i) data[i]*=gain;
 }
+// Upstream silence describes the input, not a filter/reverb/trigger tail.
+// Correct only a stale hint: audible input takes no extra scan, while truly
+// silent output keeps the host's idle optimization. No threshold may discard
+// quiet tails, and stop/item gates remain downstream of these processors.
+static void updateEffectSilenceFlag(AudioUnitRenderActionFlags* flags,
+                                    const AudioBufferList* buffers,unsigned frames) {
+    if(!frames || !(*flags & kAudioUnitRenderAction_OutputIsSilence)) return;
+    for(unsigned ch=0;ch<buffers->mNumberBuffers;++ch) {
+        const auto& buffer=buffers->mBuffers[ch];
+        const auto* data=static_cast<const float*>(buffer.mData);
+        const auto samples=vDSP_Length(frames)*buffer.mNumberChannels;
+        if(!data || !samples) continue;
+        float peak=0;
+        vDSP_maxmgv(data,1,&peak,samples);
+        if(peak!=0) { *flags &= ~kAudioUnitRenderAction_OutputIsSilence; return; }
+    }
+}
 // Level meters read the same maximum absolute sample as the former node taps.
 // Capture the existing render buffer directly; the UI consumes only atomics.
 struct StereoLevelPeaks {
@@ -582,6 +599,7 @@ struct EQKernel {
             state->fade.gate(output,frames,time);
             if(auto analysis=state->inputAnalysis.load(std::memory_order_acquire)) analysis->capture(output,frames);
             state->process(output,frames);
+            updateEffectSilenceFlag(flags,output,frames);
             if(auto analysis=state->outputAnalysis.load(std::memory_order_acquire)) analysis->capture(output,frames);
             state->outputPeaks.capture(output,frames);
         }
@@ -941,7 +959,7 @@ struct DynamicsKernel {
         if(!pull) return kAudioUnitErr_NoConnection;
         auto status=pull(flags,time,frames,0,output);
         if(status==noErr) { state->inputAnalysis.capture(output,frames); state->process(output,frames); state->outputAnalysis.capture(output,frames);
-            if(state->catDynamics && state->catDynamics->trigger) *flags &= ~kAudioUnitRenderAction_OutputIsSilence; }
+            updateEffectSilenceFlag(flags,output,frames); }
         return status;
     };
 }
@@ -974,6 +992,7 @@ struct DynamicsKernel {
             if(auto analysis=eq->outputAnalysis.load(std::memory_order_acquire)) analysis->capture(output,frames);
             compressor->inputAnalysis.capture(output,frames);
             compressor->process(output,frames);
+            updateEffectSilenceFlag(flags,output,frames);
             compressor->outputAnalysis.capture(output,frames);
             eq->outputPeaks.capture(output,frames);
         }
