@@ -25,6 +25,21 @@ public class RemoteTeleprompterTest {
   tp.put("textStyled","\u001eCatLiveColumns/1\n"+new JSONArray().put("Primeira").put(""));view.render(new RecordingCanvas());assertArrayEquals(new String[]{"Primeira",""},RemoteTeleprompter.lyricColumns(tp));
  }
  @After public void close(){controller.pause().stop().destroy();}
+ @Test public void loopFooterReplacesProgressRegardlessOfPositionAndRestoresAfterRelease()throws Exception{
+  app.state.put("loop",true);tp.put("loopActive",true);
+  for(boolean enabled:new boolean[]{false,true})for(String edge:new String[]{"top","bottom"}){
+   settings.put("progressEnabled",enabled).put("progressPosition",edge);view.render(new RecordingCanvas());
+   Text loop=view.find(RemoteText.ui("Loop ativo"));assertNotNull(loop);assertEquals(Color.BLACK,loop.color);
+   assertTrue(loop.area.centerY()>view.getHeight()*.8);assertEquals(view.getWidth()/2f,loop.area.centerX(),1);
+   for(boolean top:new boolean[]{false,true})for(RemoteTeleprompter.Decoration d:view.decorations(tp,top))assertNotEquals("progress",d.kind);
+  }
+  tp.put("loopActive",false);app.state.put("loop",false);view.render(new RecordingCanvas());assertNull(view.find(RemoteText.ui("Loop ativo")));
+  assertTrue(view.decorations(tp,false).stream().anyMatch(d->d.kind.equals("progress")));
+ }
+ @Test public void loopFooterSupportsLegacyHostsClearModeAndBothPanels()throws Exception{
+  app.state.put("loop",true);tp.remove("loopActive");settings.put("clearMode",true);
+  for(int index:new int[]{1,2}){tp.put("index",index);view=new Probe(index);view.layout(0,0,393,700);view.render(new RecordingCanvas());assertNotNull(view.find(RemoteText.ui("Loop ativo")));}
+ }
  static class Text {CharSequence styled;String value;RectF area;float font;int color;boolean strike;Text(String v,RectF a,float f,int c,boolean s){value=v;area=new RectF(a);font=f;color=c;strike=s;}}
  class Probe extends RemoteTeleprompter {List<RectF> clockBoxes=new ArrayList<>();List<Float> clockWidths=new ArrayList<>();void clockText(Canvas c,String value,RectF area,float font,int color,boolean border,int borderColor,float width,boolean timer){clockBoxes.add(new RectF(area));clockWidths.add(width);super.clockText(c,value,area,font,color,border,borderColor,width,timer);}List<Text> drawn=new ArrayList<>();List<Integer> borders=new ArrayList<>();Probe(int index){super(RemoteTeleprompterTest.this.app,RemoteTeleprompterTest.this.app,index);}void drawText(Canvas c,CharSequence value,RectF a,float size,int color,boolean strong,Layout.Alignment align,int max){Text entry=new Text(value.toString(),a,size,color,text.isStrikeThruText());entry.styled=value;drawn.add(entry);}void stroke(Canvas c,RectF r,int color,float size){borders.add(color);}void render(Canvas canvas){drawn.clear();borders.clear();onDraw(canvas);}Text find(String value){for(Text t:drawn)if(t.value.contains(value))return t;return null;}}
  static class RecordingCanvas extends Canvas {int images;List<String> struck=new ArrayList<>();@Override public void drawBitmap(Bitmap b,Rect src,RectF dst,Paint p){images++;}@Override public void drawText(String value,float x,float y,Paint p){if(p.isStrikeThruText())struck.add(value);}}

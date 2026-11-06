@@ -67,6 +67,11 @@ final class RemoteGrid extends View {
             paint.setColor(0xff54ff93);canvas.drawLine(at,dp(HEADER_HEIGHT)-1-dp(tick.primary?5:3),at,dp(HEADER_HEIGHT)-1,paint);
             if(!tick.label.isEmpty()){paint.setTextSize(9*density);paint.setTypeface(Typeface.MONOSPACE);canvas.save();canvas.clipRect(0,dp(RULER_TOP),width,dp(HEADER_HEIGHT));canvas.drawText(tick.label,at+dp(3),dp(RULER_TOP)-paint.ascent(),paint);canvas.restore();}
         }
+        if(s.optBoolean("gridLines",true)){
+            paint.setStrokeWidth(.5f);paint.setPathEffect(null);
+            for(Tick tick:gridTicks){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x535250:0x333235)));float at=x(tick.time);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);}
+            paint.setStrokeWidth(1);
+        }
         float y=dp(HEADER_HEIGHT)-vertical;
         for(RemoteModel.TrackLayout layout:app.layout.ordered){
             JSONObject track=layout.track;List<JSONObject> clips=layout.clips;Map<String,Integer> lanes=layout.lanes;
@@ -81,11 +86,6 @@ final class RemoteGrid extends View {
                 hits.add(new Hit(box,itemHeadersHidden?new RectF():items.muteRect(box),clip));
             }
             canvas.restore();y+=row;
-        }
-        if(s.optBoolean("gridLines",true)){
-            paint.setStrokeWidth(.5f);paint.setPathEffect(null);
-            for(Tick tick:gridTicks){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x535250:0x333235)));float at=x(tick.time);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);}
-            paint.setStrokeWidth(1);
         }
         markers(canvas,s,width,height);
         paint.setColor(0xff444444);paint.setStrokeWidth(dp(1));for(int edge:new int[]{0,REGION_HEIGHT,RULER_TOP,HEADER_HEIGHT})canvas.drawLine(0,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,width,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,paint);
