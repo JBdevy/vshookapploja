@@ -29,6 +29,11 @@ enum JarasTheme { static let green = Color.green, secondary = Color.gray, displa
 @main struct FXRefreshDuringEditingTests {
     @MainActor static func main() {
         _ = NSApplication.shared
+        let analyzer = EQSpectrumDisplay()
+        var captures = 0
+        analyzer.update { captures += 1; return [] }
+        analyzer.update { captures += 1; return [] }
+        precondition(captures == 1, "A busy analyzer must not copy audio frames that it cannot consume")
         NSApp.setActivationPolicy(.accessory)
         let activity = EditingActivity()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 460), styleMask: [.titled], backing: .buffered, defer: false)

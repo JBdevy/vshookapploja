@@ -191,6 +191,24 @@ func testRoundedSpectrum() {
 }
 func testSpectrumWorker(rate: Double) {
     testRoundedSpectrum()
+    // The plot must match the actual filter response after eliminating
+    // per-pixel coefficient construction and per-stage logarithms.
+    for slope in [6, 12, 24, 48, 96, 192] {
+        var low = EQBand(frequency: 240, type: "lowCut"); low.slope = slope
+        var high = EQBand(frequency: 5700, type: "highCut"); high.slope = slope
+        var bell = EQBand(frequency: 1200); bell.gain = 17; bell.q = 12
+        var shelf = EQBand(frequency: 3500, type: "highShelf"); shelf.gain = -11
+        let bands = [low, high, bell, shelf]
+        let curve = EQResponseCurve(coefficients: bands.flatMap { $0.coefficients(rate: rate) }, rate: rate)
+        for index in 0..<EQSpectrum.binCount {
+            let frequency = EQSpectrum.frequency(at: index)
+            let expected = bands.reduce(0) { $0 + $1.response(frequency: frequency, rate: rate) }
+            let actual = curve.response(frequency: frequency)
+            precondition(actual.isFinite && abs(actual - expected) < 1e-7,
+                         "Prepared display response changed: slope=\(slope) Hz=\(frequency) rate=\(rate)")
+        }
+    }
+    print("EQ_PREPARED_RESPONSE_MATCHES_STEEP_CUTS_AND_BANDS_OK", rate)
     let tone = rate * 46 / 2048
     let input = stereoFrame(rate: rate, frequency: tone, gain: 0.5)
     let output = stereoFrame(rate: rate, frequency: tone, gain: 0.125)
@@ -205,6 +223,13 @@ func testSpectrumWorker(rate: Double) {
     precondition(abs(decayed.input[peak] - spectrum.input[peak] + 7.2) < 0.001, "inactive PCM decays smoothly instead of freezing")
     let malformed = EQSpectrumAnalyzer().analyze([EQAnalysisFrame(input: Data([1,2]), output: input, sampleRate: .nan)])
     precondition(malformed.input.allSatisfy { $0 == EQSpectrum.minimumDB } && malformed.output.allSatisfy { $0 == EQSpectrum.minimumDB }, "invalid frames cannot corrupt the display")
+    for _ in 0..<32 { _ = analyzer.analyze([], elapsed: 0.25) }
+    let alternateRate = rate == 44100 ? 48000.0 : 44100.0
+    let alternateInput = stereoFrame(rate: alternateRate, frequency: 1800, gain: 0.25)
+    let frame = EQAnalysisFrame(input: alternateInput, output: alternateInput, sampleRate: alternateRate)
+    let changedRate = analyzer.analyze([frame])
+    precondition(changedRate == EQSpectrumAnalyzer().analyze([frame]),
+                 "Cached frequency bins must follow the source rate after a device/source change")
 }
 @MainActor func testEQCapture(rate: Double, channels: AVAudioChannelCount = 2) throws {
     let engine = AVAudioEngine()

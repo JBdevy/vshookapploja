@@ -35,6 +35,11 @@ repeats="${JARAS_AUDIO_TEST_REPEATS:-1}"
 [[ "$repeats" =~ ^[1-9][0-9]*$ ]] || { echo 'JARAS_AUDIO_TEST_REPEATS must be a positive integer.' >&2; exit 1; }
 for ((pass=1; pass<=repeats; ++pass)); do
     "$build_dir/test"
-    JARAS_TEST_SAMPLE_RATE=48000 "$build_dir/test"
+    # These fixtures own a 44.1/48/96 kHz matrix internally. Repeating the
+    # executable with a different environment would duplicate that whole matrix.
+    case "$fixture" in
+        */EQIntelStabilityTests.swift|*/DynamicsStabilityTests.swift) ;;
+        *) JARAS_TEST_SAMPLE_RATE=48000 "$build_dir/test" ;;
+    esac
 done
 done

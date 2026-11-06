@@ -74,8 +74,8 @@ UserDefaults.standard.setVolatileDomain(["jaras.metronome.enabled": false], forN
                 if warm {
                     state.transport.playing = false
                     try audio.update(state, revision: 1)
-                    for _ in 0..<30 { await Task.yield() }
-                    try await Task.sleep(nanoseconds: 100_000_000)
+                    let deadline = Date().addingTimeInterval(5)
+                    while reported.isEmpty && Date() < deadline { try await Task.sleep(nanoseconds: 1_000_000) }
                     precondition(reported.count == 1, "Idle preparation must report the source failure once")
                     for _ in 0..<8 {
                         try audio.update(state, revision: 1)

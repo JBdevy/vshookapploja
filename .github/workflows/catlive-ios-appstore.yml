@@ -115,6 +115,10 @@ jobs:
                   files = comparison['files']
                   prefixes = ('JarasLive/Apple/Bridge/', 'JarasLive/Core/Audio/', 'JarasLive/Core/Transport/')
                   exact = {'JarasLive/Apple/Shared/StemAudioPlayback.swift', 'JarasLive/Apple/Shared/AudioDeviceSettings.swift',
+                      'JarasLive/Apple/Shared/NativeEffectsChain.swift', 'JarasLive/Application/Project/AudioFileRead.swift',
+                      'JarasLive/Application/Project/NativeFXSettings.swift', 'JarasLive/Apple/Shared/EQRealTimeAnalysis.swift',
+                      'JarasLive/Tests/Apple/AudioMediaPreparationTests.swift', 'JarasLive/Tests/Apple/EQIntelStabilityTests.swift',
+                      'JarasLive/Tests/Apple/DynamicsStabilityTests.swift', 'JarasLive/Tests/Apple/PlaybackMediaIsolationTests.swift',
                       'JarasLive/Tests/Apple/MobilePreparedSyncTests.swift', 'JarasLive/Tests/Apple/MobileQueueSyncTests.swift',
                       'JarasLive/Tests/Apple/MobileRenderClockTests.cpp', 'JarasLive/scripts/test-mobile-queue-sync.sh'}
                   paths = [f[key] for f in files for key in ('filename', 'previous_filename') if key in f]
@@ -131,7 +135,14 @@ jobs:
       - name: Testar sincronização do áudio quando alterada
         if: steps.audio-changes.outputs.changed == 'true'
         run: |
+          export JARAS_TEST_SF2="$RUNNER_TEMP/catlive-native-test.sf2"
+          python3 JarasLive/scripts/generate-test-sf2.py "$JARAS_TEST_SF2"
           bash JarasLive/scripts/test-mobile-queue-sync.sh
+          bash JarasLive/scripts/test-audio.sh Tests/Apple/AudioMediaPreparationTests.swift Tests/Apple/AutomationAudioTests.swift Tests/Apple/EQIntelStabilityTests.swift Tests/Apple/DynamicsStabilityTests.swift
+          bash JarasLive/scripts/test-effects.sh
+          bash JarasLive/scripts/test-fx-refresh-during-editing.sh
+          bash JarasLive/scripts/test-instruments.sh
+          bash JarasLive/scripts/test-instrument-behavior.sh
           CATLIVE_EXPORT_TEST_SOURCE=Tests/Apple/PlaybackMediaIsolationTests.swift bash JarasLive/scripts/test-offline-export.sh
           bash JarasLive/scripts/test-metronome.sh
           bash JarasLive/scripts/test-midi-sequence.sh
