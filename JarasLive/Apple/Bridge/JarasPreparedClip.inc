@@ -186,6 +186,7 @@ struct PreparedClipKernel {
         return true;
     }
     OSStatus render(const AudioTimeStamp *time, AVAudioFrameCount frames, AudioBufferList *buffers) {
+        jaras::ScopedAudioDenormals denormals;
         for (UInt32 ch = 0; ch < buffers->mNumberBuffers; ++ch)
             if (buffers->mBuffers[ch].mData) memset(buffers->mBuffers[ch].mData, 0, buffers->mBuffers[ch].mDataByteSize);
         if (!playback.enter()) return noErr;

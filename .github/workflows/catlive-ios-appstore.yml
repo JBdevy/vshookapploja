@@ -130,7 +130,11 @@ jobs:
 
       - name: Testar sincronização do áudio quando alterada
         if: steps.audio-changes.outputs.changed == 'true'
-        run: bash JarasLive/scripts/test-mobile-queue-sync.sh
+        run: |
+          bash JarasLive/scripts/test-mobile-queue-sync.sh
+          CATLIVE_EXPORT_TEST_SOURCE=Tests/Apple/PlaybackMediaIsolationTests.swift bash JarasLive/scripts/test-offline-export.sh
+          bash JarasLive/scripts/test-metronome.sh
+          bash JarasLive/scripts/test-midi-sequence.sh
 
       - name: Preparar assinatura e chave de envio
         env:

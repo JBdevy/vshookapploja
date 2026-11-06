@@ -870,6 +870,9 @@ struct TimecodePlaybackSpan {
     private var timecodePreviewGain: (value: Double, original: Double)?
     private var lastVideoNoAudio: Bool?
     private var silentVideoFiles = Set<String>()
+    // A damaged/disconnected stem must not abort the other players or be
+    // reopened on every UI tick. Stop or a project edit permits a fresh retry.
+    private var failedPlaybackFiles = Set<String>()
     private var tempo: Double?
     private var preparedSourcesByPlayer: [ObjectIdentifier: JarasPreparedClip] = [:]
     private var preparedSourcesByStretch: [ObjectIdentifier: JarasPreparedClip] = [:]
@@ -1547,16 +1550,16 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
     }
     private func startEngineIfNeeded() throws {
         guard outputAllowed else { return }
-        if engine.isRunning {
-            try mobileOutput?.start()
-            #if os(macOS)
-            if usesSelectedHardware { try requireSelectedOutput() }
-            #endif
-            return
-        }
         #if os(macOS)
+        // Rebinding a HAL device may stop an engine that was running on entry.
+        // Validate first; never return from the running fast path with a newly
+        // stopped graph and wait for the one-second health timer to notice.
         if usesSelectedHardware { try requireSelectedOutput() }
         #endif
+        if engine.isRunning {
+            try mobileOutput?.start()
+            return
+        }
         // prepare/start can resolve the system's default route again. Keep
         // output silent until its physical device is confirmed after both.
         engine.mainMixerNode.outputVolume = 0
@@ -1570,6 +1573,9 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
             #if os(macOS)
             if usesSelectedHardware { try requireSelectedOutput() }
             #endif
+            guard engine.isRunning else {
+                throw ProjectError.invalid(JarasLocalization.string("Audio output is unavailable"))
+            }
             engine.mainMixerNode.outputVolume = licenseAllowed && outputAllowed ? 1 : 0
         } catch {
             engine.mainMixerNode.outputVolume = 0; engine.stop()
@@ -1720,6 +1726,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         let meter = TrackMeterLevel(); meters[id] = meter; return meter
     }
     func stop() {
+        failedPlaybackFiles.removeAll(keepingCapacity: true)
         programChangeSender?.stop()
         clockedIdlePlayers.removeAll(keepingCapacity: true)
         resettingStoppedConverters = true
@@ -1852,6 +1859,17 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         files[audio.path] = file
         return file
     }
+    private func handlePlaybackMediaFailure(_ error: Error, audio: AudioFile) throws {
+        // Exports must fail explicitly rather than silently deliver incomplete
+        // audio. Cancellation also must not become a missing-media warning.
+        guard realtime, !(error is CancellationError) else { throw error }
+        guard failedPlaybackFiles.insert(audio.path).inserted else { return }
+        let previousURL = files.removeValue(forKey: audio.path)?.url
+        if let previousURL {
+            for key in Array(preparedOnsets.keys) where key.path == previousURL.path { preparedOnsets[key] = nil }
+        }
+        onError(error)
+    }
     private func makeVoice(track: UUID, clip: AudioClip, file: AVAudioFile) throws -> Voice {
         // Each player owns its reader; scheduling overlapping copies must not share a mutable file cursor.
         let playbackFile = try AVAudioFile(forReading: file.url)
@@ -1978,6 +1996,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                       self.latestPlayback?.snapshot.transport.subPlay.playing != true else { return }
                 do {
                     let source = clip.audioFile!
+                    if self.failedPlaybackFiles.contains(source.path) { continue }
                     if clip.isProjectionMedia && self.silentVideoFiles.contains(source.path) { continue }
                     let file: AVAudioFile
                     do { file = try self.audioFile(source) }
@@ -2022,7 +2041,8 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                         JarasVoiceGain.setRenderEnabled(voice.gain, enabled: false)
                         self.idleVoices[track, default: []].append(voice)
                         #if os(iOS)
-                        try self.warmIdleVoice(voice)
+                        do { try self.warmIdleVoice(voice) }
+                        catch { self.onError(error); return }
                         #endif
                     }
                     if var voice = self.idleVoices[track, default: []].filter({
@@ -2044,7 +2064,14 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                         }
                     }
                     #endif
-                } catch { self.onError(error); return }
+                } catch {
+                    if error is CancellationError { return }
+                    if self.realtime {
+                        try? self.handlePlaybackMediaFailure(error, audio: clip.audioFile!)
+                    } else { self.onError(error) }
+                    // Keep warming valid stems after an inaccessible source.
+                    continue
+                }
             }
             #if os(macOS)
             guard !Task.isCancelled, let self, !self.transportWasRunning else { return }
@@ -3569,6 +3596,7 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
             for (head, position) in previousSourcePositions { advanceContiguousVoices(head: head, position: position) }
         }
         if self.revision != revision || songID != song.id || lastVideoNoAudio != VideoMediaSettings.shared.noAudio {
+            failedPlaybackFiles.removeAll(keepingCapacity: true)
             lastVideoNoAudio = VideoMediaSettings.shared.noAudio
             if songID != song.id { stop() }
             if song.tracks.contains(where: { tracks[$0.id]?.midiInput != $0.midiInput || tracks[$0.id]?.midiChannel != $0.midiChannel }) { releaseMIDINotes() }
@@ -4034,6 +4062,17 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
             // After the deadline the audible clock advances normally.
             let schedulingPosition = max(audiblePosition, headAudioClock[head]?.position ?? position)
             var scheduled: [(VoiceKey, Voice, AVAudioFramePosition, AVAudioFrameCount, Double)] = []
+            var batchCommitted = false
+            defer {
+                if !batchCommitted {
+                    // Any device/decoder error before enqueue must release the
+                    // reservations. Otherwise the next update sees a voice as
+                    // active even though it never received a start command.
+                    for (key, _, _, _, _) in scheduled {
+                        if let voice = voices[key] { setVoice(nil, for: key); recycle(voice) }
+                    }
+                }
+            }
             let lookahead = 2 + max(0, position - schedulingPosition)
             let candidates = playbackClipIndex.candidates(at: schedulingPosition, lookahead: lookahead)
             let pending = head == 2 ? candidates.filter {
@@ -4060,6 +4099,7 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                     continue
                 }
                 guard voices[key] == nil, !hasContinuousPredecessor(clip.id, head: head), let audio = clip.audioFile else { continue }
+                if failedPlaybackFiles.contains(audio.path) { continue }
                 if scheduled.count >= preparationBudget { break }
                 // While the tempo is being dragged, distant onsets have no
                 // stable deadline. Reserve only the imminent audio horizon;
@@ -4069,8 +4109,8 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                 let file: AVAudioFile
                 do { file = try audioFile(audio) }
                 catch {
-                    guard clip.isProjectionMedia, AudioFileRead.isVideoWithoutAudio(error) else { throw error }
-                    silentVideoFiles.insert(audio.path)
+                    if clip.isProjectionMedia, AudioFileRead.isVideoWithoutAudio(error) { silentVideoFiles.insert(audio.path) }
+                    else { try handlePlaybackMediaFailure(error, audio: audio) }
                     continue
                 }
                 let offset = clip.sourceOffset + max(0, schedulingPosition - clip.startTime) * clip.audioRate
@@ -4078,7 +4118,9 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                 let sourceEnd = contiguousSourceEnd[clip.id] ?? (clip.sourceOffset + clip.duration * clip.audioRate)
                 let count = min(file.length - first, AVAudioFramePosition(sourceEnd * file.processingFormat.sampleRate) - first)
                 guard clip.loopLength != nil || (first >= 0 && count > 0 && count <= Int64(UInt32.max)) else { continue }
-                var voice = try takeVoice(track: track, clip: clip, file: file)
+                var voice: Voice
+                do { voice = try takeVoice(track: track, clip: clip, file: file) }
+                catch { try handlePlaybackMediaFailure(error, audio: audio); continue }
                 voice.continuousSource = contiguousSourceEnd[clip.id] != nil
                 let player = voice.player
                 // Recycled processors are reset before warming. Do not reset a
@@ -4086,7 +4128,10 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                 voice.pitch = clipPitches[clip.id] ?? 0
                 configureStretch(voice.stretch, clock: voice.rateClock, rate: clip.audioRate, pitch: voice.pitch)
                 #if !os(macOS)
-                if realtime && !player.isPlaying { try warmPlayer(voice) }
+                if realtime && !player.isPlaying {
+                    do { try warmPlayer(voice) }
+                    catch { recycle(voice); throw error }
+                }
                 #endif
                 // Set only this new item's levels before its scheduled start.
                 // Reapplying every track/FX after scheduling could consume the
@@ -4144,9 +4189,9 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                     fresh.player.pan = old.player.pan
                     let gain = old.clip.gain ?? 1
                     JarasVoiceGain.setDecibels(fresh.gain, decibels: old.clip.muted == true || gain <= 0 ? -96 : min(24, max(-96, 20 * log10(max(0.0000001, gain)))))
-                    try warmPlayer(fresh)
                     setVoice(fresh, for: key)
                     scheduled[index] = (key, fresh, first, count, delay)
+                    try warmPlayer(fresh)
                     playerLatencies.removeAll(keepingCapacity: true)
                     #if os(macOS)
                     graphLatencies = AudioGraphLatencySnapshot(engine: engine)
@@ -4165,29 +4210,37 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                 guard realtime else { return 0 }
                 return max(0, (entry.1.effects.map { presentationLatency($0.equalizer) } ?? referenceLatency) - referenceLatency)
             }
-            let commands = try scheduled.map { entry -> (end: Double, command: @Sendable (AVAudioTime?) -> Void) in
+            let commands = try scheduled.map { entry -> (end: Double, command: @Sendable (AVAudioTime?) -> Void)? in
                 let voice = entry.1, clip = voice.clip
-                if let source = voice.prepared {
-                    try prepareSource(voice, position: schedulingPosition)
-                    let ramp = (startingFromStop && head < 2 && entry.4 < 0.000001) || entry.2 > 0
-                    return (clip.startTime + clip.duration, { time in
-                        source.start(atHostTime: time?.hostTime ?? mach_absolute_time(), ramp: ramp)
-                    })
-                }
-                if let length = clip.loopLength {
-                    let sampleRate = voice.file.processingFormat.sampleRate
-                    let loopFirst = AVAudioFramePosition((clip.loopStart ?? 0) * sampleRate)
-                    let loopEnd = min(voice.file.length, loopFirst + AVAudioFramePosition(length * sampleRate))
-                    // REAPER enables looping by default even on ordinary stems.
-                    // A contiguous source span needs one decoder queue, exactly
-                    // like a non-looped file, not periodic five-second appends.
-                    if entry.2 < loopFirst || entry.2 + Int64(entry.3) > loopEnd ||
-                        (clip.sourceOffset + clip.duration * clip.audioRate) * sampleRate > Double(loopEnd) + 0.5 {
-                        let start = max(clip.startTime, schedulingPosition)
-                        return try prepareLoop(file: voice.file, player: voice.player, clip: clip, from: start, until: start + 5, onset: true, transportStart: startingFromStop && head < 2 && entry.4 < 0.000001)
+                do {
+                    if let source = voice.prepared {
+                        try prepareSource(voice, position: schedulingPosition)
+                        let ramp = (startingFromStop && head < 2 && entry.4 < 0.000001) || entry.2 > 0
+                        return (clip.startTime + clip.duration, { time in
+                            source.start(atHostTime: time?.hostTime ?? mach_absolute_time(), ramp: ramp)
+                        })
                     }
+                    if let length = clip.loopLength {
+                        let sampleRate = voice.file.processingFormat.sampleRate
+                        let loopFirst = AVAudioFramePosition((clip.loopStart ?? 0) * sampleRate)
+                        let loopEnd = min(voice.file.length, loopFirst + AVAudioFramePosition(length * sampleRate))
+                        // REAPER enables looping by default even on ordinary stems.
+                        // A contiguous source span needs one decoder queue, exactly
+                        // like a non-looped file, not periodic five-second appends.
+                        if entry.2 < loopFirst || entry.2 + Int64(entry.3) > loopEnd ||
+                            (clip.sourceOffset + clip.duration * clip.audioRate) * sampleRate > Double(loopEnd) + 0.5 {
+                            let start = max(clip.startTime, schedulingPosition)
+                            return try prepareLoop(file: voice.file, player: voice.player, clip: clip, from: start, until: start + 5, onset: true, transportStart: startingFromStop && head < 2 && entry.4 < 0.000001)
+                        }
+                    }
+                    return (clip.startTime + clip.duration, try startCommand(file: voice.file, player: voice.player, first: entry.2, count: entry.3, transportStart: startingFromStop && head < 2 && entry.4 < 0.000001))
+                } catch {
+                    setVoice(nil, for: entry.0)
+                    recycle(voice)
+                    guard let audio = clip.audioFile else { throw error }
+                    try handlePlaybackMediaFailure(error, audio: audio)
+                    return nil
                 }
-                return (clip.startTime + clip.duration, try startCommand(file: voice.file, player: voice.player, first: entry.2, count: entry.3, transportStart: startingFromStop && head < 2 && entry.4 < 0.000001))
             }
             if realtime && headAudioClock[head] == nil {
                 let preroll = preparedDelays.max() ?? 0
@@ -4210,6 +4263,7 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
             if head < 2 { updateClickPosition(transport, only: head) }
             var startCommands: [@Sendable () -> Void] = []
             for (index, entry) in scheduled.enumerated() {
+                guard let preparedCommand = commands[index] else { continue }
                 let (key, prepared, first, count, delay) = entry
                 var voice = prepared
                 let clip = voice.clip
@@ -4244,10 +4298,10 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                 let fadeHost = realtime ? (audioHostTime(position: schedulingPosition + delay - fadeLatency, head: head) ?? 0) : 0
                 let fadeSample = realtime ? 0 : (Double(engine.manualRenderingSampleTime) / engine.manualRenderingFormat.sampleRate + delay) * voice.file.processingFormat.sampleRate
                 voice.effects?.configureItemFade(clip, position: max(clip.startTime, schedulingPosition), hostTime: fadeHost, sampleTime: fadeSample)
-                let command = commands[index].command
+                let command = preparedCommand.command
                 let time = playbackTime
                 startCommands.append { command(time) }
-                voice.scheduledUntil = commands[index].end
+                voice.scheduledUntil = preparedCommand.end
                 if voice.continuousSource || clip.loopLength == nil { voice.scheduledSourceEnd = first + AVAudioFramePosition(count) }
                 setVoice(voice, for: key)
             }
@@ -4258,6 +4312,7 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
                 DispatchQueue.concurrentPerform(iterations: commands.count) { commands[$0]() }
             } else { for command in startCommands { command() } }
             if !realtime { for (_, voice, _, _, _) in scheduled { voice.player.play() } }
+            batchCommitted = true
             if syncDiagnosticsEnabled && !scheduled.isEmpty {
                 let keys = scheduled.map { $0.0 }, generation = headAudioClock[head]?.host
                 recordSyncDiagnostics(keys, phase: "scheduled")

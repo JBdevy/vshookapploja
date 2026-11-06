@@ -5,9 +5,6 @@
 #include "../../Core/Audio/PadGateRelease.hpp"
 #include <TargetConditionals.h>
 #import <Accelerate/Accelerate.h>
-#if defined(__x86_64__)
-#include <xmmintrin.h>
-#endif
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -92,25 +89,7 @@
     }
 }
 @end
-// A callback may pull several nested units. Only the outermost unit changes
-// the floating-point mode; restoring it preserves the caller's environment.
-struct ScopedAudioDenormals {
-#if defined(__aarch64__)
-    uint64_t previous=0;
-    bool changed=false;
-    ScopedAudioDenormals() {
-        asm volatile("mrs %0, fpcr" : "=r"(previous));
-        const auto next=previous | (uint64_t(1)<<24);
-        changed=next!=previous;
-        if(changed) asm volatile("msr fpcr, %0" :: "r"(next));
-    }
-    ~ScopedAudioDenormals() { if(changed) asm volatile("msr fpcr, %0" :: "r"(previous)); }
-#elif defined(__x86_64__)
-    unsigned previous=_mm_getcsr();
-    ScopedAudioDenormals() { _mm_setcsr(previous | 0x8040); }
-    ~ScopedAudioDenormals() { _mm_setcsr(previous); }
-#endif
-};
+using jaras::ScopedAudioDenormals;
 static void scaleAudioBlock(float* data,unsigned count,float gain) {
     if(!count || gain==1) return;
     if(count>=64) vDSP_vsmul(data,1,&gain,data,1,count);
