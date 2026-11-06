@@ -89,9 +89,9 @@ final class RemoteModel {
     }
     static final class LayoutCache {
         double heightScale=1;
-        static double boundedScale(double value){return Double.isFinite(value)?Math.max(.35,Math.min(3,value)):1;}
+        static double boundedScale(double value){return Double.isFinite(value)?Math.max(.1,Math.min(3,value)):1;}
         void resize(double value){heightScale=boundedScale(value);for(TrackLayout entry:ordered)updateHeight(entry);}
-        void updateHeight(TrackLayout entry){entry.height=Math.max(28,86*(entry.count>1?.7:1)*heightScale*entry.track.optDouble("heightScale",1))*entry.count;}
+        void updateHeight(TrackLayout entry){entry.height=Math.max(entry.count>1?26:24,86*(entry.count>1?.7:1)*heightScale*entry.track.optDouble("heightScale",1))*entry.count;}
         String regionKey="";final Map<String,TrackLayout> entries=new HashMap<>();final List<TrackLayout> ordered=new ArrayList<>();
         void update(JSONObject state,JSONObject region){
             String key=region==null?"none":id(region,"id")+":"+region.optDouble("start")+":"+region.optDouble("end");if(!key.equals(regionKey)){entries.clear();regionKey=key;}

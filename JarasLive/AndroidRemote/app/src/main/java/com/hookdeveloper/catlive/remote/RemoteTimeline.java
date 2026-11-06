@@ -46,20 +46,19 @@ final class RemoteTimeline {
         if(divisions<=0)divisions=4;
         for(int si=0;si<sections.size();si++){
             Section s=sections.get(si);if(s.end<=densityStart)continue;if(s.start>densityEnd)break;
-            double bar=s.bar();int stride=(int)powerStride(bar*scale);
+            double bar=s.bar();int stride=(int)powerStride(bar*scale*2);
             int first=Math.max(0,(int)Math.floor((densityStart-s.start)/bar)/stride*stride);
             int last=Math.max(first,(int)Math.ceil((Math.min(s.end,densityEnd)-s.start)/bar));
-            boolean distant=bar*scale<64;
-            double base=bar/s.beats*s.unit/divisions;
-            double minor=distant?bar*stride/2:base*powerStride(base*scale);
+            double beat=bar/s.beats;boolean showBeats=beat*scale>=16;
+            double base=Math.min(beat,beat*s.unit/divisions);
+            double minor=showBeats?base*powerStride(base*scale):bar*stride;
             double boundaryEnd=si+1<sections.size()?s.end:Double.POSITIVE_INFINITY;
             double boundaryClearance=Double.POSITIVE_INFINITY;
             if(si>0){int step=hierarchy(si);double right=si+step<sections.size()?sections.get(si+step).start:Double.POSITIVE_INFINITY;boundaryClearance=Math.min(s.start-sections.get(si-step).start,right-s.start);}
             for(int index=first;index<=last;index+=stride){
                 double time=s.start+index*bar;if(time>=s.end)continue;
                 append(result,time,true,index==0?boundaryClearance:Math.min(hierarchy(index)*bar,boundaryEnd-time),s,densityStart,densityEnd,columnSeconds,labelSeconds);
-                if(distant)append(result,time+minor,false,0,s,densityStart,densityEnd,columnSeconds,labelSeconds);
-                else for(double offset=minor;offset<Math.min(bar,s.end-time)-1e-9;offset+=minor){
+                if(showBeats)for(double offset=minor;offset<Math.min(bar,s.end-time)-1e-9;offset+=minor){
                     int subdivision=Math.max(1,(int)Math.round(offset/base));
                     double clearance=Math.min(hierarchy(subdivision)*base,Math.min(bar-offset,boundaryEnd-time-offset));
                     append(result,time+offset,false,clearance,s,densityStart,densityEnd,columnSeconds,labelSeconds);

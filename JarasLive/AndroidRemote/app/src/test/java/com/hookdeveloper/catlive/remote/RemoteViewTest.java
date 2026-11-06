@@ -54,7 +54,7 @@ public class RemoteViewTest {
   app.fullscreen=true;app.buildWorkspace();assertNull(((View)app.rail.getParent()).getParent());assertNull(app.tabScroll.getParent());assertFalse(app.sidebarHidden);
   app.fullscreen=false;app.buildWorkspace();assertSame(app.work,app.rail.getParent().getParent());assertNotNull(app.tabScroll.getParent());
  }
- @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletHasParallelMixerGridSetlistAndPreview()throws Exception{connect("director");assertTrue(RemoteWidgets.tablet);assertNotNull(app.grid);assertNotNull(app.trackColumn);assertNotNull(app.setlistScroll);assertTrue(app.railButtons.containsKey("preview"));assertEquals(44,((LinearLayout.LayoutParams)app.railButtons.get("mixer").getLayoutParams()).height/RemoteWidgets.density,1);}
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletHasParallelMixerGridSetlistAndPreview()throws Exception{connect("director");assertTrue(RemoteWidgets.tablet);assertNotNull(app.grid);assertNotNull(app.trackColumn);assertNotNull(app.setlistScroll);assertTrue(app.railButtons.containsKey("preview"));assertEquals(32,((LinearLayout.LayoutParams)app.railButtons.get("mixer").getLayoutParams()).height/RemoteWidgets.density,1);}
  @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletObserverRotatesPrompterAndSetlistWithoutReplacingThem()throws Exception{
   connect("observer");assertEquals("setlist",app.panel);assertNull(app.grid);assertNotNull(app.setlistScroll);assertEquals(View.GONE,app.tabs.getVisibility());
   app.choose("tp2");assertNotNull(app.tp);assertNotNull(app.setlistScroll);assertNull(app.play);assertNull(app.trackColumn);
@@ -74,6 +74,24 @@ public class RemoteViewTest {
   app.choose("tp2");assertEquals("setlist",app.panel);assertNull(app.tp);assertNotNull(app.setlistScroll);assertNull(app.grid);
  }
 
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletToolbarIsAboveTransportWithPartsNextToMixer()throws Exception{
+  connect("director");assertEquals(LinearLayout.HORIZONTAL,app.rail.getOrientation());
+  assertEquals(app.rail.indexOfChild(app.railButtons.get("mixer"))+1,app.rail.indexOfChild(app.railButtons.get("parts")));
+  View toolbar=(View)app.rail.getParent().getParent();assertSame(app.column,toolbar.getParent());
+  assertEquals(app.column.indexOfChild(toolbar)+1,app.column.indexOfChild(app.transport));
+  assertSame(toolbar,app.railButtons.get("settings").getParent());assertEquals("PREVIEW",app.railButtons.get("preview").getText().toString());
+  app.choose("tp1");app.railButtons.get("mixer").performClick();assertEquals("grid",app.panel);assertTrue(app.mixerShown);
+ }
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void manualGridScrollRevealsHeadersAndExtendsFollowPause()throws Exception{
+  connect("director");RemoteGrid grid=app.grid;grid.layout(0,0,800,600);
+  android.graphics.Canvas canvas=new android.graphics.Canvas(android.graphics.Bitmap.createBitmap(800,600,android.graphics.Bitmap.Config.ARGB_8888));
+  grid.draw(canvas);grid.zoom=4;app.state.put("playing",true);app.anchorPosition=10;app.stateAt=android.os.SystemClock.elapsedRealtime();
+  grid.draw(canvas);assertTrue(grid.itemHeadersHidden);assertFalse(grid.hits.isEmpty());assertTrue(grid.hits.get(0).mute.isEmpty());
+  grid.pauseFollow();double offset=grid.offset;app.anchorPosition=11;grid.draw(canvas);assertFalse(grid.itemHeadersHidden);assertFalse(grid.hits.get(0).mute.isEmpty());assertEquals(offset,grid.offset,0);
+  Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1000));grid.pauseFollow();
+  Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1000));grid.draw(canvas);assertFalse(grid.itemHeadersHidden);assertEquals(offset,grid.offset,0);
+  Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(501));grid.draw(canvas);assertTrue(grid.itemHeadersHidden);assertTrue(grid.offset>offset);
+ }
  void railTouch(RemoteTrackRail rail,long down,long elapsed,int action,float firstY,Float secondY){
   int count=secondY==null?1:2;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[count];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[count];
   for(int i=0;i<count;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=MotionEvent.TOOL_TYPE_FINGER;coords[i]=new MotionEvent.PointerCoords();coords[i].x=RemoteWidgets.dp(14);coords[i].y=RemoteWidgets.dp(i==0?firstY:secondY);coords[i].pressure=1;coords[i].size=1;}
@@ -92,7 +110,7 @@ public class RemoteViewTest {
   assertEquals(RemoteWidgets.dp((float)app.layout.height(id)),app.trackRows.get(id).getLayoutParams().height);
   double resized=app.layout.height(id);app.onChanged();assertEquals(resized,app.layout.height(id),.001);
   assertEquals(app.layout.heightScale,app.getPreferences(0).getFloat("trackHeightScale",0),.001);
-  app.resizeTrackHeight(.01);assertEquals(.35,app.layout.heightScale,0);assertEquals(View.GONE,app.trackRows.get(id).controls.getVisibility());assertEquals(View.GONE,app.trackRows.get(id).line.getVisibility());assertEquals(View.VISIBLE,app.trackRows.get(id).title.getVisibility());
+  app.resizeTrackHeight(.01);assertEquals(.1,app.layout.heightScale,0);assertEquals(View.GONE,app.trackRows.get(id).controls.getVisibility());assertEquals(View.GONE,app.trackRows.get(id).line.getVisibility());assertEquals(View.VISIBLE,app.trackRows.get(id).title.getVisibility());
   app.resizeTrackHeight(100);assertEquals(3,app.layout.heightScale,0);assertEquals(View.VISIBLE,app.trackRows.get(id).controls.getVisibility());
   app.choose("mixer");assertNotNull(app.trackRail);assertEquals(3,app.layout.heightScale,0);
  }

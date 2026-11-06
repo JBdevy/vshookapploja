@@ -34,6 +34,15 @@ public class RemoteTimelineTest {
         List<RemoteTimeline.Section> sections=RemoteTimeline.sections(new JSONObject().put("bpm",120),120);
         assertFalse(RemoteTimeline.ticks(sections,20,60,10,4).isEmpty());
     }
+    @Test public void distantZoomShowsFourThenTwoThenEveryBarBeforeBeats(){
+        List<RemoteTimeline.Section> sections=Arrays.asList(new RemoteTimeline.Section(0,120,120,4,4));
+        for(double scale:new double[]{1,2,4}){
+            List<RemoteTimeline.Tick> ticks=RemoteTimeline.ticks(sections,0,60,scale,4);
+            assertEquals(8/scale,ticks.get(1).time-ticks.get(0).time,1e-9);
+            assertTrue(ticks.stream().allMatch(t->t.primary));
+        }
+        assertTrue(RemoteTimeline.ticks(sections,0,60,32,4).stream().anyMatch(t->!t.primary));
+    }
     @Test public void markerFlagsStopBeforeNextSongAndRegionEnd(){
         assertEquals(27,RemoteTimeline.flagWidth(100,10,13,60,10),0);
         assertEquals(20,RemoteTimeline.flagWidth(100,10,30,12,10),0);

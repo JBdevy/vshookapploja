@@ -13,17 +13,19 @@ import static com.hookdeveloper.catlive.remote.RemoteWidgets.*;
 import static com.hookdeveloper.catlive.remote.RemoteTimeline.*;
 
 final class RemoteGrid extends View {
-    final MainActivity app;final Paint paint=new Paint(3);final DashPathEffect gridDots;final GestureDetector gesture;final ScaleGestureDetector scale;
+    final MainActivity app;final Paint paint=new Paint(3);final GestureDetector gesture;final ScaleGestureDetector scale;
     float vertical=0;double zoom=1,offset=0;String regionID="";JSONObject region;float left=0;boolean dragging=false;
+    long followResumeAt=0;boolean itemHeadersHidden=false;
+    void pauseFollow(){followResumeAt=android.os.SystemClock.uptimeMillis()+1500;itemHeadersHidden=false;}
     boolean needleDragging=false;double needleCandidate=Double.NaN,needlePreview=Double.NaN;long needlePreviewUntil=0;String needleRegion="";
     final List<Hit> hits=new ArrayList<>();final RemoteItemDrawing items=new RemoteItemDrawing();String pressedMute="";
     String editingClip="";TextView itemName,itemDecibels;Fader itemFader;Button itemMute;
     static final class Hit {final RectF rect,mute;final JSONObject clip;Hit(RectF r,RectF m,JSONObject c){rect=r;mute=m;clip=c;}}
-    RemoteGrid(Context c,MainActivity app){super(c);this.app=app;gridDots=new DashPathEffect(new float[]{density,3*density},0);setContentDescription("Grid de itens");setFocusable(true);
-        scale=new ScaleGestureDetector(c,new ScaleGestureDetector.SimpleOnScaleGestureListener(){public boolean onScale(ScaleGestureDetector detector){double before=seconds(detector.getFocusX());zoom=Math.max(1,Math.min(128,zoom*detector.getScaleFactor()));offset=before-start()-detector.getFocusX()/pixelsPerSecond();clamp();invalidate();return true;}});
+    RemoteGrid(Context c,MainActivity app){super(c);this.app=app;setContentDescription("Grid de itens");setFocusable(true);
+        scale=new ScaleGestureDetector(c,new ScaleGestureDetector.SimpleOnScaleGestureListener(){public boolean onScale(ScaleGestureDetector detector){pauseFollow();double before=seconds(detector.getFocusX());zoom=Math.max(1,Math.min(128,zoom*detector.getScaleFactor()));offset=before-start()-detector.getFocusX()/pixelsPerSecond();clamp();invalidate();return true;}});
         gesture=new GestureDetector(c,new GestureDetector.SimpleOnGestureListener(){
             public boolean onDown(MotionEvent e){pressedMute="";for(Hit h:hits)if(h.mute.contains(e.getX(),e.getY())&&e.getY()>=dp(HEADER_HEIGHT)){pressedMute=RemoteModel.id(h.clip,"id");break;}return true;}
-            public boolean onScroll(MotionEvent a,MotionEvent b,float dx,float dy){pressedMute="";if(scale.isInProgress())return true;offset+=dx/pixelsPerSecond();vertical=Math.max(0,vertical+dy);if(app.mixerScroll!=null&&tablet)app.mixerScroll.scrollTo(0,(int)vertical);clamp();invalidate();return true;}
+            public boolean onScroll(MotionEvent a,MotionEvent b,float dx,float dy){pauseFollow();pressedMute="";if(scale.isInProgress())return true;offset+=dx/pixelsPerSecond();vertical=Math.max(0,vertical+dy);if(app.mixerScroll!=null&&tablet)app.mixerScroll.scrollTo(0,(int)vertical);clamp();invalidate();return true;}
             public boolean onSingleTapUp(MotionEvent e){if(toggleItemMute(e))return true;if(canMoveNeedle()){needleRegion=seekTarget();needlePreview=seekSeconds(e.getX());needlePreviewUntil=android.os.SystemClock.uptimeMillis()+2000;app.remote.action("seek",needleRegion,needlePreview);invalidate();performClick();}return true;}
             public void onLongPress(MotionEvent e){if(!app.remote.mode.equals("director"))return;for(Hit h:hits)if(h.rect.contains(e.getX(),e.getY())){item(h.clip);return;}}
             public boolean onDoubleTap(MotionEvent e){if(toggleItemMute(e))return true;if(e.getY()<dp(HEADER_HEIGHT)){zoom=1;offset=0;invalidate();}return true;}
@@ -51,11 +53,19 @@ final class RemoteGrid extends View {
         paint.setColor(region==null?0xff282828:rgb(region.optLong("color",0x705264)));canvas.drawRect(0,0,width,dp(REGION_HEIGHT),paint);
         paint.setTypeface(bold);paint.setTextSize(9*density);paint.setColor(region==null?SECONDARY:rgb(region.optLong("nameColor",0xffffff)));
         String name=region==null?"":region.optString("name");canvas.save();canvas.clipRect(dp(4),0,width-dp(4),dp(REGION_HEIGHT));canvas.drawText(name,dp(4),dp(REGION_HEIGHT)/2f-(paint.ascent()+paint.descent())/2,paint);canvas.restore();
-        for(Tick tick:ticks(sections(s,start()+duration()),start()+offset,start()+offset+duration()/zoom,pixelsPerSecond()/density,s.optInt("gridDivisions",4))){
+        double pos=app.displayPosition();
+        if((s.optBoolean("playing")||s.optBoolean("subPlaying"))&&zoom>1&&android.os.SystemClock.uptimeMillis()>=followResumeAt){
+            double follow=s.optBoolean("subPlaying")?s.optDouble("subPlayPosition",pos):pos;
+            float cursor=x(follow);double previousOffset=offset;
+            if(cursor>width/2||cursor<0){offset=follow-start()-duration()/zoom/2;clamp();}
+            if(offset!=previousOffset)itemHeadersHidden=offset>0&&offset<duration()-duration()/zoom;
+            if(offset>=duration()-duration()/zoom)itemHeadersHidden=false;
+        }else itemHeadersHidden=false;
+        List<Tick> gridTicks=ticks(sections(s,start()+duration()),start()+offset,start()+offset+duration()/zoom,pixelsPerSecond()/density,s.optInt("gridDivisions",4));
+        for(Tick tick:gridTicks){
             float at=x(tick.time);paint.setStrokeWidth(1);
-            if(s.optBoolean("gridLines",true)){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x3c3c3c:0x282828)));paint.setStrokeWidth(.75f);paint.setPathEffect(gridDots);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);paint.setPathEffect(null);paint.setStrokeWidth(1);}
-            paint.setColor(0xff54ff93);canvas.drawLine(at,dp(RULER_TOP+1),at,dp(RULER_TOP+(tick.primary?7:4)),paint);
-            if(!tick.label.isEmpty()){paint.setTextSize(9*density);paint.setTypeface(Typeface.MONOSPACE);canvas.save();canvas.clipRect(0,dp(RULER_TOP),width,dp(HEADER_HEIGHT));canvas.drawText(tick.label,at+dp(3),dp(RULER_TOP+2)-paint.ascent(),paint);canvas.restore();}
+            paint.setColor(0xff54ff93);canvas.drawLine(at,dp(HEADER_HEIGHT)-1-dp(tick.primary?5:3),at,dp(HEADER_HEIGHT)-1,paint);
+            if(!tick.label.isEmpty()){paint.setTextSize(9*density);paint.setTypeface(Typeface.MONOSPACE);canvas.save();canvas.clipRect(0,dp(RULER_TOP),width,dp(HEADER_HEIGHT));canvas.drawText(tick.label,at+dp(3),dp(RULER_TOP)-paint.ascent(),paint);canvas.restore();}
         }
         float y=dp(HEADER_HEIGHT)-vertical;
         for(RemoteModel.TrackLayout layout:app.layout.ordered){
@@ -66,15 +76,19 @@ final class RemoteGrid extends View {
                 double clipStart=clip.optDouble("start"),clipDuration=clip.optDouble("duration"),visibleStart=Math.max(start()+offset,clipStart),visibleEnd=Math.min(start()+offset+duration()/zoom,clipStart+clipDuration);
                 if(clipDuration<=0||visibleEnd<=visibleStart)continue;
                 int lane=lanes.get(RemoteModel.id(clip,"id"));float top=y+lane*laneH+dp(3);
-                RectF box=new RectF(x(visibleStart)+dp(1),top,x(visibleEnd)-dp(1),top+laneH-dp(5));if(box.width()<=0)continue;
-                items.draw(canvas,box,track,clip,(visibleStart-clipStart)/clipDuration,(visibleEnd-visibleStart)/clipDuration);
-                hits.add(new Hit(box,items.muteRect(box),clip));
+                RectF box=new RectF(x(visibleStart)+dp(1),top,x(visibleEnd)-dp(1),top+laneH-dp(6));if(box.width()<=0)continue;
+                items.draw(canvas,box,track,clip,(visibleStart-clipStart)/clipDuration,(visibleEnd-visibleStart)/clipDuration,!itemHeadersHidden);
+                hits.add(new Hit(box,itemHeadersHidden?new RectF():items.muteRect(box),clip));
             }
             canvas.restore();y+=row;
         }
+        if(s.optBoolean("gridLines",true)){
+            paint.setStrokeWidth(.5f);paint.setPathEffect(null);
+            for(Tick tick:gridTicks){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x535250:0x333235)));float at=x(tick.time);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);}
+            paint.setStrokeWidth(1);
+        }
         markers(canvas,s,width,height);
         paint.setColor(0xff444444);paint.setStrokeWidth(dp(1));for(int edge:new int[]{0,REGION_HEIGHT,RULER_TOP,HEADER_HEIGHT})canvas.drawLine(0,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,width,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,paint);
-        double pos=app.displayPosition();if(s.optBoolean("playing")&&zoom>1){float cursor=x(pos);if(cursor>width*.9f||cursor<0){offset=pos-start()-duration()/zoom*.2;clamp();}}
         if(s.optBoolean("loop")&&!s.isNull("loopStart")&&!s.isNull("loopEnd"))loopArea(canvas,x(s.optDouble("loopStart")),x(s.optDouble("loopEnd")),height);
         cursor(canvas,Double.isFinite(needlePreview)?needlePreview:s.optDouble("editPosition",pos),rgb(s.optLong("editCursorColor",0x69ed91)),height,RULER_TOP);
         if(s.optBoolean("playing"))cursor(canvas,pos,rgb(s.optLong("playCursorColor",0x69ed91)),height,HEADER_HEIGHT);

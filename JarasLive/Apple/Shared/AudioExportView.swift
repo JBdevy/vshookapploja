@@ -72,6 +72,7 @@ struct AudioExportView: View {
     var regionSelection: Set<UUID>? = nil
     var close: (() -> Void)? = nil
     var closeRequested = false
+    @ObservedObject private var mixerSelection = AudioExportSelection.shared
     @ObservedObject private var area = TimelineAreaSelection.shared
     @StateObject private var session = AudioExportSession()
     @Environment(\.dismiss) private var dismiss
@@ -109,6 +110,14 @@ struct AudioExportView: View {
         if destinationAccess?.url.path == directory { return destinationAccess?.url }
         return directory.isEmpty ? nil : URL(fileURLWithPath: directory)
         #endif
+    }
+    private var selectedMixerTracks: Set<UUID> {
+        guard let song else { return [] }
+        return mixerSelection.tracks(song.id).intersection(song.tracks.filter { $0.kind == .standard }.map(\.id))
+    }
+    private func synchronizeMixerTracks() {
+        guard !regionMode, !renderScreen, !session.running else { return }
+        tracks = selectedMixerTracks
     }
     private var regionMode: Bool { regionSelection != nil }
     private var effectiveSource: AudioExportSource { regionMode ? .master : source }
@@ -156,10 +165,12 @@ struct AudioExportView: View {
                 Button("Replace", role: .destructive) { session.confirmReplacement() }
             } message: { Text(verbatim: session.replacementFiles.joined(separator: "\n")) }
 
+            .onChange(of: selectedMixerTracks) { _ in synchronizeMixerTracks() }
+            .onChange(of: renderScreen) { rendering in if !rendering { synchronizeMixerTracks() } }
             .onAppear {
                 guard !initialized, let song else { return }
                 initialized = true
-                tracks = AudioExportSelection.shared.tracks(song.id)
+                tracks = selectedMixerTracks
                 clips = AudioExportSelection.shared.clips(song.id)
                 regions = regionSelection ?? AudioExportSelection.shared.regions(song.id)
                 if UserDefaults.standard.object(forKey: "jaras.export.sampleRate") == nil {
@@ -319,7 +330,8 @@ struct AudioExportView: View {
                             Toggle(isOn: selected(clip.id,in: $clips)) { Text(verbatim: track.name + " · " + clip.name).lineLimit(1) }
                         }
                     }
-                } }.frame(height: 90)
+                } }.frame(height: 90).padding(10)
+                    .background(JarasTheme.display).clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
                 HStack(alignment: .top, spacing: 20) {
                 if effectiveSource != .master {
@@ -330,7 +342,8 @@ struct AudioExportView: View {
                             Toggle(isOn: selected(track.id,in: $tracks)) { Text(verbatim: track.name).lineLimit(1) }
                         }
                     } }.frame(height: 115)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(JarasTheme.display).clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 if effectiveBounds == .regions {
                     VStack(alignment: .leading, spacing: 4) {
@@ -342,7 +355,8 @@ struct AudioExportView: View {
                             }.padding(.leading, region.parentRegionID == nil ? 0 : 16)
                         }
                     } }.frame(height: 115)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(JarasTheme.display).clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 }
             }
