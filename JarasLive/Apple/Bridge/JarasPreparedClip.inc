@@ -195,7 +195,7 @@ struct PreparedClipKernel {
     double mobileClockOffset = 0;
     int rampFrame = 0;
     PreparedClipKernel(double sr, int ch) : sampleRate(sr), channels(ch) {
-        pitch.presetDefault(2, float(sr));
+        pitch.presetDefault(2, float(sr), true); // Spread spectral work across small hardware callbacks.
         const int capacity = std::max(8192, pitch.outputSeekLength(1.f));
         for (auto &buffer : input) buffer.resize(capacity);
         for (auto &buffer : output) buffer.resize(512);

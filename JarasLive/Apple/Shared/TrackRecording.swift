@@ -386,7 +386,7 @@ private final class CaptureWriter: @unchecked Sendable {
         guard let format = try? captureFormat() else { releaseInput(); return }
         guard format.channelCount > 0, format.sampleRate > 0 else { releaseInput(); return }
         for config in desired where config.patch.firstChannel >= 1 && config.patch.firstChannel + config.patch.channelCount - 1 <= Int(format.channelCount) {
-            let ring = JarasCaptureRing(channels: UInt(format.channelCount), capacity: UInt(max(8192, format.sampleRate / 4)))
+            let ring = JarasCaptureRing(channels: UInt(format.channelCount), capacity: UInt(max(16384, format.sampleRate / 2)))
             let count = min(config.channels, config.patch.channelCount)
             let source = ring.monitorSource(withSampleRate: format.sampleRate, firstChannel: UInt(config.patch.firstChannel - 1), channelCount: UInt(count))
             playback.setInputMonitor(config.track, source: source, format: AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: AVAudioChannelCount(count)), input: ring, firstChannel: config.patch.firstChannel - 1, channels: count)
@@ -719,7 +719,6 @@ private final class CaptureWriter: @unchecked Sendable {
     func toggle(show: ShowController) {
         if recording {
             finish()
-            show.send(.stop)
             return
         }
         guard !busy, show.canControl(), let directory, project == show.snapshot.project.id else { return }
