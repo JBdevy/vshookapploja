@@ -47,6 +47,15 @@ public class RemoteViewTest {
   assertFalse(app.trackRows.containsKey("master"));app.railButtons.get("mixer").performClick();
   assertEquals("mixer",app.panel);assertNotNull(app.trackRows.get("master"));
   MainActivity.TrackRow master=app.trackRows.get("master");master.mute.performClick();assertTrue(app.state.optBoolean("masterMute"));master.mute.performClick();assertFalse(app.state.optBoolean("masterMute"));
+  assertSame(app.trackColumn,master.getParent());assertSame(master,app.trackColumn.getChildAt(0));
+  int masterHeight=master.getLayoutParams().height;assertEquals(RemoteWidgets.dp(80),masterHeight);
+  String track=app.state.getJSONArray("tracks").getJSONObject(0).getString("id");double original=app.layout.height(track);
+  app.resizeTrackHeight(2);assertTrue(app.layout.height(track)>original);assertEquals(masterHeight,master.getLayoutParams().height);
+  app.resizeTrackHeight(.1);assertEquals(masterHeight,master.getLayoutParams().height);
+  app.mixerStructure="";app.refreshStructure();assertSame(master,app.trackColumn.getChildAt(0));
+  app.resizeTrackHeight(3);
+  app.mixerScroll.measure(View.MeasureSpec.makeMeasureSpec(600,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(100,View.MeasureSpec.EXACTLY));app.mixerScroll.layout(0,0,600,100);
+  app.mixerScroll.scrollTo(0,40);assertEquals(40,app.mixerScroll.getScrollY());assertEquals(-40,master.getTop()-app.mixerScroll.getScrollY());
   app.railButtons.get("parts").performClick();assertEquals("parts",app.panel);assertNotNull(app.parts);
  }
  @Test public void fullscreenTeleprompterHidesRailAndRestoresItWithoutChangingPreference()throws Exception{

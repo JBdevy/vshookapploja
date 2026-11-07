@@ -156,3 +156,14 @@ precondition(shrunkAnchor.offset(heights: heightRows) == 175, "A reverse zoom mu
 precondition(TrackHeightGeometry.ScrollAnchor(heights: heightRows, offset: 175, selected: 1)!.row == 2)
 precondition(TrackHeightGeometry.ScrollAnchor(heights: [], offset: 0, selected: nil) == nil)
 print("TRACK_HEIGHT_SCROLL_ANCHOR_SELECTED_VISIBLE_HIDDEN_AND_REVERSE_OK")
+
+// The portrait Master scrolls with the tracks, but never scales with them.
+let portraitRows = [71.0, 101, 151, 81]
+let enlargedPortraitRows = [71.0, 201, 301, 161]
+let masterVisibleAnchor = TrackHeightGeometry.ScrollAnchor(heights: portraitRows, offset: 30, selected: nil)!
+precondition(masterVisibleAnchor.offset(heights: enlargedPortraitRows) == 30)
+let portraitSelectedAnchor = TrackHeightGeometry.ScrollAnchor(heights: portraitRows, offset: 120, selected: 2)!
+precondition(portraitSelectedAnchor.screenY == 52 && portraitSelectedAnchor.offset(heights: enlargedPortraitRows) == 220)
+let portraitReverseAnchor = TrackHeightGeometry.ScrollAnchor(heights: enlargedPortraitRows, offset: 220, selected: 2)!
+precondition(portraitReverseAnchor.offset(heights: portraitRows) == 120)
+print("PORTRAIT_FIXED_MASTER_SCROLL_AND_SELECTED_TRACK_HEIGHT_ANCHOR_OK")

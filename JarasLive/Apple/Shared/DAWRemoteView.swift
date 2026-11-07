@@ -2248,7 +2248,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                                 let widths = start.resizingTrack(by: translation / panelSpace)
                                 if panelWidths != widths { livePanelWidths = widths }
                             }, ended: finishPanelResize)
-                        RemoteNativeTimeline(state: state, tracks: visibleTracks, scrolling: trackScrolling, region: gridRegion, position: displayedPosition, local: local, localShow: localShow, timelineFocus: timelineFocus, editorEnabled: nativeInputEnabled, regionDrag: $regionMovePreview, openRegionActions: openRegionActions, openItemMenu: openItemMenu, openSelectedItemMenu: openSelectedItemMenu, openItemFX: openItemFX, openMarkerEditor: { nativeMarker = $0 }, regionCommand: { id, command in
+                        RemoteNativeTimeline(state: state, tracks: visibleTracks, scrolling: trackScrolling, region: gridRegion, position: displayedPosition, local: local, masterFirst: masterInMixer, localShow: localShow, timelineFocus: timelineFocus, editorEnabled: nativeInputEnabled, regionDrag: $regionMovePreview, openRegionActions: openRegionActions, openItemMenu: openItemMenu, openSelectedItemMenu: openSelectedItemMenu, openItemFX: openItemFX, openMarkerEditor: { nativeMarker = $0 }, regionCommand: { id, command in
                             if command == "bpm" { detectRegionBPM?(id) }
                             else if command == "loops" { openRegionLoops?(id) }
                             else if command == "unify" { unifyName = ""; unifyingRegion = id }
@@ -2262,7 +2262,6 @@ private struct RemoteSidebarRail<Content: View>: View {
                                 pendingSeek = position; seekSentAt = Date()
                                 action(.seek, target: region.id, value: position)
                             })
-                            .padding(.top, masterInMixer ? 70 : 0)
                             .frame(width: max(0, panelSpace * panelWidths.grid - parts.total - leftParts.total - iconExtension)).clipped()
                                 .allowsHitTesting(panelWidths.grid > 0).accessibilityHidden(panelWidths.grid == 0)
                         resizeHandle(label: "Ajustar largura do Setlist", changed: { translation in
@@ -2439,7 +2438,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                 changed(direction == .increment ? 36 : -36); ended()
             }
     }
-    private var masterStrip: some View {
+    private func masterStrip(compact: Bool = false) -> some View {
         VStack(spacing: 1) {
             HStack(spacing: local ? 3 : 4) {
                 Button { action(.masterMono) } label: {
@@ -2449,7 +2448,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                             Circle().stroke(lineWidth: 1.3).frame(width: 11, height: 11).offset(x: -3.5)
                             Circle().stroke(lineWidth: 1.3).frame(width: 11, height: 11).offset(x: 3.5)
                         }
-                    }.font(.jarasSystem(size: 10, weight: .semibold)).frame(width: 58, height: 28)
+                    }.font(.jarasSystem(size: 10, weight: .semibold)).frame(width: compact ? 44 : 58, height: 28)
                         .foregroundStyle(state.masterMono ? JarasTheme.green : JarasTheme.text)
                         .modifier(RemoteControlSurface(radius: 3))
                 }.buttonStyle(RemoteFullAreaButtonStyle()).accessibilityLabel("Master Stereo/Mono")
@@ -2458,10 +2457,10 @@ private struct RemoteSidebarRail<Content: View>: View {
                     Button("FX") { openTrackFX(nil) }.buttonStyle(RemoteNativeTrackButtonStyle(width: 28, touchPadding: 0, height: 28))
                 }
                 if local, let localShow {
-                    IpadMasterPanFader(show: localShow).frame(width: 80, height: 28)
+                    IpadMasterPanFader(show: localShow).frame(minWidth: compact ? 20 : 80, maxWidth: 80).frame(height: 28)
                 } else {
                     RemotePanFader(value: state.masterPan ?? 0) { action(.pan, value: $0) }
-                        .frame(width: UIDevice.current.userInterfaceIdiom == .phone ? 104 : 80, height: 28).accessibilityLabel("Master pan")
+                        .frame(minWidth: compact ? 20 : (phoneLayout ? 104 : 80), maxWidth: phoneLayout ? 104 : 80).frame(height: 28).accessibilityLabel("Master pan")
                         .disabled(state.masterPan == nil)
                 }
                 Button { action(.mute) } label: { Text(verbatim: "M") }
@@ -2483,7 +2482,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                     .accessibilityLabel("Master volume")
             }
         }.padding(.leading, local ? 19 : 6).padding(.trailing, 6).padding(.vertical, 3)
-            .frame(maxWidth: .infinity).frame(height: 70, alignment: .top)
+            .frame(maxWidth: .infinity).frame(height: RemoteNativeGridMetrics.masterHeight, alignment: .top)
             .background(remoteColor(state.masterColor ?? 0x414141).opacity(0.5)).cornerRadius(6)
             .overlay(alignment: .leading) {
                 if local { IpadMixerMeter(meter: StemAudioPlayback.shared.masterMeter).frame(width: 10).padding(.vertical, 5).padding(.leading, 2) }
@@ -2495,7 +2494,7 @@ private struct RemoteSidebarRail<Content: View>: View {
     }
     private func transportBar(masterInMixer: Bool) -> some View {
         HStack(alignment: .top, spacing: local ? 5 : 8) {
-            if !masterInMixer { masterStrip.frame(width: local ? 260 : 220) }
+            if !masterInMixer { masterStrip().frame(width: local ? 260 : 220) }
             VStack(spacing: 5) {
                 HStack(spacing: local ? 4 : 6) {
                     GeometryReader { geometry in
@@ -2768,10 +2767,11 @@ private struct RemoteSidebarRail<Content: View>: View {
         let ancestors = Dictionary(uniqueKeysWithValues: visibleTracks.map { ($0.id, hierarchy.ancestors(of: $0.id)) })
         let folders = hierarchy.folders
         let phaseInvertedTracks = Set(localShow?.current?.tracks.filter { $0.phaseInverted == true }.map(\.id) ?? [])
+        let leadingRowHeight = masterFirst ? Double(RemoteNativeGridMetrics.masterHeight + 1) : 0
+        let rowsHeight = max(0, leadingRowHeight + visibleTracks.reduce(0.0) {
+            $0 + DAWRemoteItemLayout.rowHeight($1, scale: trackScrolling.heightScale) + 1
+        } - (visibleTracks.isEmpty && !masterFirst ? 0 : 1))
         return VStack(spacing: 0) {
-            // Portrait tablets keep Master first in the mixer. The grid reserves
-            // the same height so track rows and linked scrolling stay aligned.
-            if masterFirst { masterStrip.frame(height: 70).background(RemoteSurface.panel) }
             // Match the grid's region, marker, tempo and time lanes so both lists
             // start at the same screen Y and have identical scroll limits.
             if local {
@@ -2785,12 +2785,13 @@ private struct RemoteSidebarRail<Content: View>: View {
                 }
             } else if UIDevice.current.userInterfaceIdiom == .pad && !phoneLayout {
                 RemoteSurface.panel.frame(height: RemoteNativeGridMetrics.rulerAreaHeight)
-            } else { masterStrip.padding(.trailing, trackIconWidth).background(RemoteSurface.panel) }
+            } else { masterStrip().padding(.trailing, trackIconWidth).background(RemoteSurface.panel) }
             HStack(spacing: 1) {
                 RemoteTrackScrollRail(controller: trackScrolling).frame(width: 28)
                 GeometryReader { viewport in
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 1) {
+                        if masterFirst { masterStrip(compact: true).id("portrait-master") }
                         ForEach(Array(visibleTracks.enumerated()), id: \.element.id) { number, track in
                             let nextAncestors = number + 1 < visibleTracks.count ? ancestors[visibleTracks[number + 1].id] ?? [] : []
                             let guides = (ancestors[track.id] ?? []).map { nextAncestors.contains($0) }
@@ -2824,19 +2825,14 @@ private struct RemoteSidebarRail<Content: View>: View {
                     #if os(iOS)
                     .background(RemoteTrackScrollProbe(controller: trackScrolling, tracks: visibleTracks,
                         selectedTrack: localShow?.selectedTrackForActions.flatMap { selectedTracks.contains($0) ? $0 : nil }
-                            ?? visibleTracks.first(where: { selectedTracks.contains($0.id) })?.id))
+                            ?? visibleTracks.first(where: { selectedTracks.contains($0.id) })?.id, leadingRowHeight: leadingRowHeight))
                     #endif
-                    .frame(height: max(local ? viewport.size.height : 0, CGFloat(max(0,
-                        visibleTracks.reduce(0.0) { $0 + DAWRemoteItemLayout.rowHeight($1, scale: trackScrolling.heightScale) + 1 }
-                            - (visibleTracks.isEmpty ? 0 : 1)))), alignment: .top)
+                    .frame(height: max(local ? viewport.size.height : 0, CGFloat(rowsHeight)), alignment: .top)
                     .overlay(alignment: .bottom) {
                         if local {
                             // The hit target starts after the final visible row;
                             // taps on row backgrounds and controls keep selecting
                             // or editing that row instead of clearing selection.
-                            let rowsHeight = visibleTracks.reduce(0.0) {
-                                $0 + DAWRemoteItemLayout.rowHeight($1, scale: trackScrolling.heightScale) + 1
-                            } - (visibleTracks.isEmpty ? 0 : 1)
                             Color.clear.frame(height: max(0, viewport.size.height - CGFloat(rowsHeight)))
                                 .contentShape(Rectangle())
                                 .onTapGesture { clearTrackSelection() }
@@ -3715,6 +3711,7 @@ private final class IpadTimelineTrackContent {
 
 /// The center grid renders native clip geometry from the Mac state.
 private enum RemoteNativeGridMetrics {
+    static let masterHeight: CGFloat = 70
     static let regionHeight: CGFloat = 16
     static let markerHeight: CGFloat = 16
     static let timeHeight: CGFloat = 16
@@ -3744,6 +3741,7 @@ private struct RemoteNativeTimeline: View {
     let region: DAWRemoteState.Region?
     let position: Double
     var local = false
+    var masterFirst = false
     var localShow: ShowController? = nil
     var timelineFocus: IpadTimelineFocus? = nil
     var editorEnabled = true
@@ -3814,6 +3812,7 @@ private struct RemoteNativeTimeline: View {
     private var regionAreaHeight: CGFloat { RemoteNativeGridMetrics.regionAreaHeight(local: local, regionCount: regionLaneCount) }
     private var rulerHeight: CGFloat { RemoteNativeGridMetrics.rulerAreaHeight(local: local, regionCount: regionLaneCount) }
     private var gridTop: CGFloat { rulerHeight }
+    private var leadingRowHeight: CGFloat { masterFirst ? RemoteNativeGridMetrics.masterHeight + 1 : 0 }
     private func visibleMarkers(song: Song?) -> [TimelineMarker] {
         let remoteMarkers = (state.markers ?? []).filter { marker in
             if marker.tempoBPM != nil || marker.isTempo == true { return false }
@@ -3915,6 +3914,10 @@ private struct RemoteNativeTimeline: View {
                 ruler(width: width, marks: marks, song: song)
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 1) {
+                        if masterFirst {
+                            remoteColor(state.gridBackgroundColor ?? UInt32(TimelineAppearanceDefaults.background))
+                                .frame(height: RemoteNativeGridMetrics.masterHeight)
+                        }
                         ForEach(tracks) { track in
                             timelineRow(track, width: width, marks: marks, nativeSong: song).frame(height: DAWRemoteItemLayout.rowHeight(track, scale: scrolling.heightScale))
                         }
@@ -3923,8 +3926,8 @@ private struct RemoteNativeTimeline: View {
                         Rectangle().fill(Color.white.opacity(0.22)).frame(height: 1 / displayScale).allowsHitTesting(false)
                     }
                     .frame(height: max(max(0, height - gridTop),
-                        tracks.reduce(0.0) { $0 + DAWRemoteItemLayout.rowHeight($1, scale: scrolling.heightScale) + 1 }
-                            - (tracks.isEmpty ? 0 : 1)), alignment: .top)
+                        Double(leadingRowHeight) + tracks.reduce(0.0) { $0 + DAWRemoteItemLayout.rowHeight($1, scale: scrolling.heightScale) + 1 }
+                            - (tracks.isEmpty && !masterFirst ? 0 : 1)), alignment: .top)
                     .overlay(alignment: .topLeading) {
                         if let rectangle = selectionRectangle {
                             Rectangle().fill(JarasTheme.green.opacity(0.16))
@@ -3952,7 +3955,7 @@ private struct RemoteNativeTimeline: View {
                     }
                     #if os(iOS)
                     .background(RemoteTrackScrollProbe(controller: scrolling, tracks: tracks,
-                        selectedTrack: localShow?.selectedTrackForActions ?? scrolling.heightSelectedTrack, isGrid: true, gridTap: { fraction in
+                        selectedTrack: localShow?.selectedTrackForActions ?? scrolling.heightSelectedTrack, leadingRowHeight: Double(leadingRowHeight), isGrid: true, gridTap: { fraction in
                         guard local || (!state.playing && region != nil) else { return }
                         if local { localShow?.selectProgramChange(nil) }
                         let time = start + fraction * span
@@ -4059,7 +4062,7 @@ private struct RemoteNativeTimeline: View {
     }
     private func pointerItems(width: CGFloat) -> [(id: UUID, track: UUID, rect: CGRect)] {
         var rows: [(UUID, UUID, CGRect)] = []
-        var y: CGFloat = 0
+        var y: CGFloat = leadingRowHeight
         let song = presentationSong
         for track in tracks {
             let geometry = IpadNativeItemGeometry(track: local ? song?.tracks.first(where: { $0.id == track.id }) : nil,
@@ -4074,7 +4077,7 @@ private struct RemoteNativeTimeline: View {
         return rows
     }
     private func pointerTrack(at y: CGFloat) -> UUID? {
-        var top: CGFloat = 0
+        var top: CGFloat = leadingRowHeight
         for track in tracks {
             let height = DAWRemoteItemLayout.rowHeight(track, scale: scrolling.heightScale)
             if y >= top && y <= top + height { return track.id }
@@ -6200,6 +6203,7 @@ private final class IpadMixerMeterView: UIView {
     private var pinchStartScale: Double?
     var heightTracks: [DAWRemoteState.Track] = []
     var heightSelectedTrack: UUID?
+    var heightLeadingRow: Double = 0
     #if os(iOS)
     private var pendingHeightOffset: CGFloat?
     private var pendingHeightContent: CGFloat = 0
@@ -6231,12 +6235,13 @@ private final class IpadMixerMeterView: UIView {
         let next = DAWRemoteItemLayout.heightScale((pinchStartScale ?? heightScale) * Double(scale))
         if abs(next - heightScale) > 0.0001 {
             #if os(iOS)
-            let heights = heightTracks.map { DAWRemoteItemLayout.rowHeight($0, scale: heightScale) + 1 }
-            let nextHeights = heightTracks.map { DAWRemoteItemLayout.rowHeight($0, scale: next) + 1 }
+            let fixedRows = heightLeadingRow > 0 ? [heightLeadingRow] : []
+            let heights = fixedRows + heightTracks.map { DAWRemoteItemLayout.rowHeight($0, scale: heightScale) + 1 }
+            let nextHeights = fixedRows + heightTracks.map { DAWRemoteItemLayout.rowHeight($0, scale: next) + 1 }
             if let scroll = scrollView ?? gridScrollView,
                let anchor = TrackHeightGeometry.ScrollAnchor(heights: heights,
                    offset: Double(pendingHeightOffset ?? scroll.contentOffset.y),
-                   selected: heightTracks.firstIndex { $0.id == heightSelectedTrack }),
+                   selected: heightTracks.firstIndex { $0.id == heightSelectedTrack }.map { $0 + fixedRows.count }),
                let offset = anchor.offset(heights: nextHeights) {
                 pendingHeightOffset = CGFloat(offset)
                 pendingHeightContent = CGFloat(max(0, nextHeights.reduce(0, +) - 1))
@@ -6525,6 +6530,7 @@ private struct RemoteTrackScrollProbe: UIViewRepresentable {
     let controller: RemoteTrackScrollController
     var tracks: [DAWRemoteState.Track]? = nil
     var selectedTrack: UUID? = nil
+    var leadingRowHeight: Double = 0
     var isGrid = false
     var gridTap: ((Double) -> Void)? = nil
     func makeUIView(context: Context) -> RemoteTrackScrollProbeView {
@@ -6535,7 +6541,7 @@ private struct RemoteTrackScrollProbe: UIViewRepresentable {
     }
     func updateUIView(_ view: RemoteTrackScrollProbeView, context: Context) {
         view.controller = controller; view.isGrid = isGrid
-        if let tracks { controller.heightTracks = tracks; controller.heightSelectedTrack = selectedTrack }
+        if let tracks { controller.heightTracks = tracks; controller.heightSelectedTrack = selectedTrack; controller.heightLeadingRow = leadingRowHeight }
         if isGrid { controller.gridTap = gridTap }
         view.resolve()
         DispatchQueue.main.async { controller.applyHeightOffset() }

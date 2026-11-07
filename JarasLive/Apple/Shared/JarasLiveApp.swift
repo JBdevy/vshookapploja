@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 @MainActor final class JarasMobileApplicationDelegate: NSObject, UIApplicationDelegate {
-    private static var iPadOrientations: UIInterfaceOrientationMask = .landscape
+    private static let iPadOrientations: UIInterfaceOrientationMask = .all
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         UIDevice.current.userInterfaceIdiom == .pad ? Self.iPadOrientations : .portrait
@@ -11,7 +11,6 @@ import UIKit
 
     static func setRemoteOrientation(_ remote: Bool) {
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
-        iPadOrientations = remote ? .all : .landscape
         updateOrientations()
     }
 
