@@ -876,13 +876,15 @@ struct TransportButtonStyle: ButtonStyle {
     var width: CGFloat? = nil
     var height: CGFloat = 32
     var bordered = true
+    var expandWidth = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.jarasSystem(size: fontSize, weight: .semibold, design: .rounded))
             .lineLimit(1).minimumScaleFactor(0.75)
-            .fixedSize(horizontal: width == nil, vertical: false)
+            .fixedSize(horizontal: width == nil && !expandWidth, vertical: false)
             .padding(.horizontal, width == nil ? horizontalPadding : 0)
             .frame(width: width, height: height)
+            .frame(maxWidth: expandWidth ? .infinity : nil)
             .foregroundStyle(active ? activeForeground : JarasTheme.text)
             #if os(iOS)
             .background {

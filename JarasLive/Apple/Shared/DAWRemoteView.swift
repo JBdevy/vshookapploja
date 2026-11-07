@@ -1883,7 +1883,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                 Image(systemName: icon).font(.jarasSystem(size: 14, weight: .semibold))
                 if icon != "repeat" { Text(LocalizedStringKey(title)).font(.jarasSystem(size: 9, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7) }
             }.frame(maxWidth: .infinity, minHeight: 44)
-        }.buttonStyle(TransportButtonStyle(color: color, active: active, inactiveOpacity: inactiveOpacity, horizontalPadding: 0, height: 44, bordered: false)).accessibilityLabel(LocalizedStringKey(title))
+        }.buttonStyle(TransportButtonStyle(color: color, active: active, inactiveOpacity: inactiveOpacity, horizontalPadding: 0, height: 44, bordered: false, expandWidth: true)).accessibilityLabel(LocalizedStringKey(title))
     }
     private var phoneTransport: some View {
         VStack(spacing: 6) {
