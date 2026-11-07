@@ -28,21 +28,17 @@ struct IpadTimelineToolbar: View {
     private var relativeTimebase: Bool { show.current?.projectTime.timebase == .relative }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
+        GeometryReader { geometry in
+            // Keep the original order in one row. Only mount controls whose
+            // complete width fits, so hidden buttons cannot intercept touches.
             HStack(spacing: 4) {
-                editButton
-                timelineButtons
-                addButton
+                if geometry.size.width >= 36 { editButton }
+                timelineButtons(availableWidth: geometry.size.width)
+                if geometry.size.width >= 220 { addButton }
             }.fixedSize(horizontal: true, vertical: false)
-            VStack(spacing: 4) {
-                HStack(spacing: 4) {
-                    editButton
-                    Spacer(minLength: 0)
-                    addButton
-                }
-                HStack(spacing: 4) { timelineButtons }
-            }
-        }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .clipped()
+        }.frame(height: 32)
         .padding(.horizontal, 4)
         .font(.jarasSystem(size: 11, weight: .semibold))
         .foregroundStyle(JarasTheme.text)
@@ -92,38 +88,46 @@ struct IpadTimelineToolbar: View {
             .accessibilityIdentifier("native-add-track")
     }
 
-    @ViewBuilder private var timelineButtons: some View {
-        Button { snapEnabled.toggle() } label: {
-            TimelineMagnetIcon().stroke(lineWidth: 1.5).frame(width: 17, height: 17)
-                .frame(width: 32, height: 32).contentShape(Rectangle())
-        }.buttonStyle(IpadTimelineToolbarButtonStyle(color: snapEnabled ? JarasTheme.accent : JarasTheme.secondary))
-            .accessibilityLabel("Timeline snapping")
-            .accessibilityIdentifier("timeline-snap")
-            .accessibilityValue(snapEnabled ? "On" : "Off")
-        Button { showingVisibility = true } label: {
-            Image(systemName: "eye").frame(width: 32, height: 32).contentShape(Rectangle())
-        }.buttonStyle(IpadTimelineToolbarButtonStyle(color: JarasTheme.text))
-            .accessibilityLabel("Visibilidade das pistas")
-            .accessibilityIdentifier("native-track-visibility")
-        Button {
-            guard show.canControl(), let song = show.current else { return }
-            pendingTimebase = TimebaseRequest(project: show.snapshot.project.id, song: song.id,
-                                              relative: song.projectTime.timebase != .relative)
-        } label: {
-            Image(systemName: "arrow.left.and.right").frame(width: 32, height: 32).contentShape(Rectangle())
-        }.buttonStyle(IpadTimelineToolbarButtonStyle(color: relativeTimebase ? JarasTheme.green : .yellow))
-            .accessibilityLabel("Relative timebase")
-            .accessibilityIdentifier("timeline-timebase")
-            .accessibilityValue(relativeTimebase ? "Enabled" : "Disabled")
-            .disabled(show.current == nil)
-        Button { show.setTimelineMovementLocked(!show.timelineMovementLocked) } label: {
-            Image(systemName: show.timelineMovementLocked ? "lock.fill" : "lock.open")
-                .frame(width: 32, height: 32).contentShape(Rectangle())
-        }.buttonStyle(IpadTimelineToolbarButtonStyle(color: show.timelineMovementLocked ? .black : JarasTheme.text,
-                                                    background: show.timelineMovementLocked ? JarasTheme.yellow : nil))
-            .accessibilityLabel("Lock timeline movement")
-            .accessibilityIdentifier("timeline-movement-lock")
-            .accessibilityValue(show.timelineMovementLocked ? "Locked" : "Unlocked")
+    @ViewBuilder private func timelineButtons(availableWidth: CGFloat) -> some View {
+        if availableWidth >= 72 {
+            Button { snapEnabled.toggle() } label: {
+                TimelineMagnetIcon().stroke(lineWidth: 1.5).frame(width: 17, height: 17)
+                    .frame(width: 32, height: 32).contentShape(Rectangle())
+            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: snapEnabled ? JarasTheme.accent : JarasTheme.secondary))
+                .accessibilityLabel("Timeline snapping")
+                .accessibilityIdentifier("timeline-snap")
+                .accessibilityValue(snapEnabled ? "On" : "Off")
+        }
+        if availableWidth >= 108 {
+            Button { showingVisibility = true } label: {
+                Image(systemName: "eye").frame(width: 32, height: 32).contentShape(Rectangle())
+            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: JarasTheme.text))
+                .accessibilityLabel("Visibilidade das pistas")
+                .accessibilityIdentifier("native-track-visibility")
+        }
+        if availableWidth >= 144 {
+            Button {
+                guard show.canControl(), let song = show.current else { return }
+                pendingTimebase = TimebaseRequest(project: show.snapshot.project.id, song: song.id,
+                                                  relative: song.projectTime.timebase != .relative)
+            } label: {
+                Image(systemName: "arrow.left.and.right").frame(width: 32, height: 32).contentShape(Rectangle())
+            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: relativeTimebase ? JarasTheme.green : .yellow))
+                .accessibilityLabel("Relative timebase")
+                .accessibilityIdentifier("timeline-timebase")
+                .accessibilityValue(relativeTimebase ? "Enabled" : "Disabled")
+                .disabled(show.current == nil)
+        }
+        if availableWidth >= 180 {
+            Button { show.setTimelineMovementLocked(!show.timelineMovementLocked) } label: {
+                Image(systemName: show.timelineMovementLocked ? "lock.fill" : "lock.open")
+                    .frame(width: 32, height: 32).contentShape(Rectangle())
+            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: show.timelineMovementLocked ? .black : JarasTheme.text,
+                                                        background: show.timelineMovementLocked ? JarasTheme.yellow : nil))
+                .accessibilityLabel("Lock timeline movement")
+                .accessibilityIdentifier("timeline-movement-lock")
+                .accessibilityValue(show.timelineMovementLocked ? "Locked" : "Unlocked")
+        }
     }
 }
 
