@@ -79,6 +79,7 @@ jobs:
         run: |
           swift test --package-path JarasLive --jobs 2
           bash JarasLive/scripts/test-ipad-transport-layout.sh
+          bash JarasLive/scripts/test-ipad-standalone-viewport.sh
           bash JarasLive/scripts/test-native-project-tabs.sh
           bash JarasLive/scripts/test-native-picker-handoff.sh
           bash JarasLive/scripts/test-control-mappings.sh
@@ -139,7 +140,8 @@ jobs:
           python3 JarasLive/scripts/generate-test-sf2.py "$JARAS_TEST_SF2"
           bash JarasLive/scripts/test-mobile-queue-sync.sh
           bash JarasLive/scripts/test-prepared-clip-audio.sh
-          bash JarasLive/scripts/test-audio.sh Tests/Apple/AudioMediaPreparationTests.swift Tests/Apple/AutomationAudioTests.swift Tests/Apple/EQIntelStabilityTests.swift Tests/Apple/DynamicsStabilityTests.swift
+          bash JarasLive/scripts/test-audio.sh Tests/Apple/AudioMediaPreparationTests.swift Tests/Apple/AutomationAudioTests.swift Tests/Apple/EQIntelStabilityTests.swift Tests/Apple/DynamicsStabilityTests.swift Tests/Apple/ItemGainOrderTests.swift Tests/Apple/ItemFXContinuityTests.swift
+          CATLIVE_EXPORT_TEST_SOURCE=Tests/Apple/ItemPluginRenderTests.swift bash JarasLive/scripts/test-offline-plugin-latency.sh
           bash JarasLive/scripts/test-effects.sh
           bash JarasLive/scripts/test-fx-refresh-during-editing.sh
           bash JarasLive/scripts/test-instruments.sh

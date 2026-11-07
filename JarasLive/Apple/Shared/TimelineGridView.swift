@@ -1169,8 +1169,8 @@ private struct TimelineGridContent: View, Equatable {
             do { midiDocument = try MIDIItemDocument(clip: clip); midiExportName = clip.name; exportingMIDI = true }
             catch { show.message = error.localizedDescription }
         }
-        input.marqueeBegan = { show.pauseTimelineFollow() }
-        input.itemMoveBegan = { show.pauseTimelineFollow() }
+        input.marqueeBegan = { show.pauseTimelineFollow(resumingAfter: 1.5) }
+        input.itemMoveBegan = { show.pauseTimelineFollow(resumingAfter: 1.5) }
         input.separateAudio = { id in
             showingSeparation = true; separation.start(item: id, show: show, documents: documents)
         }
@@ -1400,8 +1400,11 @@ private struct TimelineGridContent: View, Equatable {
     }
 
     private func glueItems(_ ids: Set<UUID>) {
-        guard show.canControl(), reRenderWorker == nil, !documents.busy, let song = show.current,
+        guard show.canControl(), reRenderWorker == nil, !documents.busy,
               let directory = documents.currentURL?.deletingLastPathComponent() else { return }
+        do { try show.prepareItemsForRendering(ids, includeMIDITrackFX: true) }
+        catch { show.message = error.localizedDescription; return }
+        guard let song = show.current else { return }
         let groups = song.tracks.filter { $0.kind == .standard }.compactMap { track -> (Track, [AudioClip])? in
             let clips = track.clips.filter { ids.contains($0.id) }
             return clips.isEmpty ? nil : (track, clips)
@@ -1445,19 +1448,11 @@ private struct TimelineGridContent: View, Equatable {
     }
 
     private func reRenderItems(_ ids: Set<UUID>, midiChannels: Int? = nil) {
-        guard show.canControl(), reRenderWorker == nil, !documents.busy, let initialSong = show.current,
+        guard show.canControl(), reRenderWorker == nil, !documents.busy,
               let directory = documents.currentURL?.deletingLastPathComponent() else { return }
-        #if os(macOS)
-        if midiChannels != nil {
-            // An open VST editor can hold a newer preset than the project snapshot.
-            for track in initialSong.tracks where track.kind == .standard && track.clips.contains(where: { ids.contains($0.id) && $0.midi != nil }) {
-                for plugin in track.fx?.externalPlugins ?? [] {
-                    ExternalPluginState.capture(show: show, track: track.id, identifier: plugin.id)
-                }
-            }
-        }
-        #endif
-        guard let song = show.current, song.id == initialSong.id else { return }
+        do { try show.prepareItemsForRendering(ids, includeMIDITrackFX: midiChannels != nil) }
+        catch { show.message = error.localizedDescription; return }
+        guard let song = show.current else { return }
         let entries = song.tracks.flatMap { track in
             track.clips.filter { clip in
                 ids.contains(clip.id) && !clip.isImage && (track.kind == .standard || clip.isProjectionMedia) && (midiChannels != nil ? clip.midi != nil : clip.midi == nil && (clip.audioFile ?? track.audioFile) != nil)
