@@ -1777,7 +1777,7 @@ private struct RemoteSidebarRail<Content: View>: View {
     private var phoneDirectorPanel: AnyView {
                     switch phonePanel {
                     case .vinhetas: return AnyView(remoteVinhetasScreen)
-                    case .mixer: return AnyView(trackMixer)
+                    case .mixer: return AnyView(trackMixer())
                     case .setlist: return AnyView(setlist)
                     case .grid:
                         return AnyView(RemoteNativeTimeline(state: state, tracks: visibleTracks, scrolling: trackScrolling, region: gridRegion, position: displayedPosition, local: local, localShow: localShow, timelineFocus: timelineFocus, editorEnabled: nativeInputEnabled, regionDrag: $regionMovePreview, openRegionActions: openRegionActions, openItemMenu: openItemMenu, openSelectedItemMenu: openSelectedItemMenu, openItemFX: openItemFX, openMarkerEditor: { nativeMarker = $0 }, regionCommand: { id, command in
@@ -2088,6 +2088,7 @@ private struct RemoteSidebarRail<Content: View>: View {
     private var directorWorkspace: some View {
         GeometryReader { geometry in
             let railButton: CGFloat = 34
+            let masterInMixer = geometry.size.height > geometry.size.width
             let contentWidth = max(0, geometry.size.width)
             let panelSpace = max(1, contentWidth - (local ? 44 : 20))
             let iconExtension = panelWidths.track > 0 ? min(trackIconWidth, panelSpace * panelWidths.grid) : 0
@@ -2206,7 +2207,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                         .popover(isPresented: $settingsOpen) { NativeRemoteSettingsView().preferredColorScheme(.dark) }
                 }.padding(.horizontal, 4).frame(height: 36).background(RemoteSurface.panel)
                 VStack(spacing: 1) {
-                    if !prompterFullscreen { transportBar }
+                    if !prompterFullscreen { transportBar(masterInMixer: masterInMixer) }
                     HStack(spacing: 0) {
                         if let panel = prompterPanel {
                             let space = max(1, contentWidth - (local ? 22 : 10))
@@ -2239,7 +2240,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                                     finishNativePartsResize(available: freeSpace, leftVisible: true, rightVisible: rightPartsVisible)
                                 }).frame(width: leftParts.handle).clipped()
                             }
-                            trackMixer.frame(width: panelSpace * panelWidths.track + iconExtension).clipped()
+                            trackMixer(masterFirst: masterInMixer).frame(width: panelSpace * panelWidths.track + iconExtension).clipped()
                                 .allowsHitTesting(!mixerCollapsed).accessibilityHidden(mixerCollapsed)
                             resizeHandle(label: "Ajustar largura do Track-Mixer", changed: { translation in
                                 let start = trackResizeStart ?? panelWidths
@@ -2260,7 +2261,9 @@ private struct RemoteSidebarRail<Content: View>: View {
                                 guard !state.playing, let region = selectedTimelineRegion else { return }
                                 pendingSeek = position; seekSentAt = Date()
                                 action(.seek, target: region.id, value: position)
-                            }).frame(width: max(0, panelSpace * panelWidths.grid - parts.total - leftParts.total - iconExtension)).clipped()
+                            })
+                            .padding(.top, masterInMixer ? 70 : 0)
+                            .frame(width: max(0, panelSpace * panelWidths.grid - parts.total - leftParts.total - iconExtension)).clipped()
                                 .allowsHitTesting(panelWidths.grid > 0).accessibilityHidden(panelWidths.grid == 0)
                         resizeHandle(label: "Ajustar largura do Setlist", changed: { translation in
                             let start = setlistResizeStart ?? panelWidths
@@ -2490,9 +2493,9 @@ private struct RemoteSidebarRail<Content: View>: View {
                 if local, let openPatch { Button("Patch") { openPatch(nil) } }
             }
     }
-    private var transportBar: some View {
+    private func transportBar(masterInMixer: Bool) -> some View {
         HStack(alignment: .top, spacing: local ? 5 : 8) {
-            masterStrip.frame(width: local ? 260 : 220)
+            if !masterInMixer { masterStrip.frame(width: local ? 260 : 220) }
             VStack(spacing: 5) {
                 HStack(spacing: local ? 4 : 6) {
                     GeometryReader { geometry in
@@ -2760,12 +2763,15 @@ private struct RemoteSidebarRail<Content: View>: View {
     private var trackIconWidth: CGFloat {
         state.tracks.contains { $0.instrumentIcon.flatMap(TrackInstrumentIcon.init(rawValue:)) != nil } ? 40 : 0
     }
-    private var trackMixer: some View {
+    private func trackMixer(masterFirst: Bool = false) -> some View {
         let hierarchy = DAWRemoteTrackHierarchy(state.tracks)
         let ancestors = Dictionary(uniqueKeysWithValues: visibleTracks.map { ($0.id, hierarchy.ancestors(of: $0.id)) })
         let folders = hierarchy.folders
         let phaseInvertedTracks = Set(localShow?.current?.tracks.filter { $0.phaseInverted == true }.map(\.id) ?? [])
         return VStack(spacing: 0) {
+            // Portrait tablets keep Master first in the mixer. The grid reserves
+            // the same height so track rows and linked scrolling stay aligned.
+            if masterFirst { masterStrip.frame(height: 70).background(RemoteSurface.panel) }
             // Match the grid's region, marker, tempo and time lanes so both lists
             // start at the same screen Y and have identical scroll limits.
             if local {
