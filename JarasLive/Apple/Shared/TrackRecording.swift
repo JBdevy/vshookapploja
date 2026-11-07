@@ -638,6 +638,9 @@ private final class CaptureWriter: @unchecked Sendable {
             let output = outputWriters.removeValue(forKey: id)!, recordedProject = project
             output.finish(start: startPosition) { [weak self] items, message in Task { @MainActor in self?.accept(items, message: message, project: recordedProject) } }
         }
+        // Input target changes drain on the writer queue. Keep removed input
+        // tracks silent until that queue has retired their takes.
+        (projectAudio ?? StemAudioPlayback.shared).setRecordingItemTracks(Set(allTracks.map(\.id)).union(activeTargets.keys))
         let newOutputs = allTracks.filter { $0.recordsOutput && outputWriters[$0.id] == nil }
         if !newOutputs.isEmpty && !busy {
             busy = true
@@ -662,6 +665,9 @@ private final class CaptureWriter: @unchecked Sendable {
         writer.changeTargets(Array(activeTargets.values), position: position) { [weak self] items, message in
             Task { @MainActor [weak self] in
                 self?.accept(items, message: message, project: recordedProject)
+                if let self, self.recording, self.project == recordedProject {
+                    (self.projectAudio ?? StemAudioPlayback.shared).setRecordingItemTracks(self.armed)
+                }
                 for id in removedIDs { RecordingLaneLayout.shared.remove(id); LiveRecordingPreview.shared.takes[id] = nil; self?.pendingTakes.remove(id) }
             }
         }
@@ -726,6 +732,7 @@ private final class CaptureWriter: @unchecked Sendable {
         let audioTracks = tracks.filter { $0.recordingMode != .midi }
         if !audioTracks.isEmpty, !AudioDestinationSpace.confirm(at: directory.appendingPathComponent("Stems", isDirectory: true)) { return }
         busy = true; self.show = show; error = ""; previewSession = UUID()
+        (projectAudio ?? StemAudioPlayback.shared).setRecordingItemTracks(Set(tracks.map(\.id)))
         Task {
             do {
                 if !audioTracks.isEmpty { try await startAudioCapture(tracks: audioTracks) }
@@ -755,6 +762,7 @@ private final class CaptureWriter: @unchecked Sendable {
         outputWriters.removeAll()
         if let writer { writer.ring.endCapture(); writer.finish(start: startPosition) { _, _ in } }
         writer = nil
+        audio.setRecordingItemTracks([])
         previewSession = UUID()
     }
     private func startAudioCapture(tracks: [Track]) async throws {
@@ -928,6 +936,8 @@ private final class CaptureWriter: @unchecked Sendable {
         for id in outputWriters.keys { (projectAudio ?? StemAudioPlayback.shared).detachOutputCapture(id) }
         outputWriters.removeAll()
         if let writer { writers.append(writer) }; self.writer = nil
+        for writer in writers { writer.ring.endCapture() }
+        (projectAudio ?? StemAudioPlayback.shared).setRecordingItemTracks([])
         guard !writers.isEmpty else { finishCleanup(); return }
         let recordedProject = project
         pendingWriterFinishes = writers.count
@@ -1119,7 +1129,7 @@ struct RecordingButtonStyle: ButtonStyle {
             #endif
             .background {
                 ZStack {
-                    transport ? JarasTheme.liveOffRed.opacity(configuration.isPressed ? 0.85 : 1) :
+                    transport ? (active ? JarasTheme.liveOffRed : JarasTheme.yellow).opacity(configuration.isPressed ? 0.85 : 1) :
                         active ? red.opacity(configuration.isPressed ? 0.75 : 1) :
                         (configuration.isPressed ? Color(hex: 0x565656) : JarasTheme.trackButton)
                     Color(hex: 0x454545).opacity(grey)
