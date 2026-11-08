@@ -90,6 +90,7 @@ jobs:
           bash JarasLive/scripts/test-ipad-setlist-blocks.sh
           bash JarasLive/scripts/test-empty-track-mixer-selection.sh
           bash JarasLive/scripts/test-daw-remote.sh
+          bash JarasLive/scripts/test-remote-item-volume.sh
 
       - name: Verificar alterações no motor de áudio
         id: audio-changes
