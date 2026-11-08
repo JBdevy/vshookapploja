@@ -36,10 +36,18 @@ struct FixtureView: View {
     }
 }
 @main final class App: UIResponder, UIApplicationDelegate {
+    func application(_ application: UIApplication, configurationForConnecting session: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: "Fixture", sessionRole: session.role)
+        configuration.delegateClass = FixtureScene.self
+        return configuration
+    }
+}
+final class FixtureScene: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
-    func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
+        guard let scene = scene as? UIWindowScene else { return }
         let fixture = VolumeFixture(), host = UIHostingController(rootView: FixtureView(fixture: fixture))
-        let window = UIWindow(frame: UIScreen.main.bounds)
+        let window = UIWindow(windowScene: scene)
         window.rootViewController = host; window.makeKeyAndVisible(); self.window = window
         Task { @MainActor in
             func settle() async { try? await Task.sleep(nanoseconds: 250_000_000) }
@@ -76,6 +84,5 @@ struct FixtureView: View {
             let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("result.txt")
             try! result.write(to: url, atomically: true, encoding: .utf8)
         }
-        return true
     }
 }

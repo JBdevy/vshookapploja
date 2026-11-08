@@ -21,7 +21,7 @@ try:
         'CFBundleIdentifier':bundle, 'CFBundleName':'VolumeProbe', 'CFBundleExecutable':'VolumeProbe',
         'CFBundleVersion':'1', 'CFBundleShortVersionString':'1.0', 'CFBundlePackageType':'APPL',
         'LSRequiresIPhoneOS':True, 'MinimumOSVersion':'16.0', 'UIDeviceFamily':[1,2],
-        'UILaunchScreen':{}}))
+        'UIApplicationSceneManifest':{'UIApplicationSupportsMultipleScenes':False}, 'UILaunchScreen':{}}))
     subprocess.run(['swiftc','-swift-version','5','-target',os.uname().machine+'-apple-ios16.0-simulator',
         '-sdk',command('xcrun','--sdk','iphonesimulator','--show-sdk-path'),'-parse-as-library',
         str(folder/'Fixture.swift'),'-o',str(app/'VolumeProbe')], check=True)
