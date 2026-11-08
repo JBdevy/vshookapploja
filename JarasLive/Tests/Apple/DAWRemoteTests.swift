@@ -12,6 +12,19 @@ func require(_ value: @autoclosure () -> Bool, _ message: String) {
     if !value() { fatalError(message) }
 }
 let project = UUID(), song = UUID(), trackID = UUID(), regionID = UUID()
+for fraction in [0.0, 0.25, 0.75] {
+    let unity = DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: nil)
+    require(abs(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: 0.5) - unity / 2) < 1e-12,
+            "Remote waveform follows item attenuation")
+    require(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: 2) == min(1, unity * 2),
+            "Remote waveform grows and clips inside the item")
+    require(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: 0) == 0,
+            "Silent item has no illustrative peaks")
+    require(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: .nan) == unity,
+            "Invalid gain never produces invalid drawing coordinates")
+}
+require(abs(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: 0.25, gain: 1) - 0.35763816297597795) < 1e-12,
+        "Apple and Android use identical illustrative peaks")
 var fixture = DAWRemoteState(project: project, projectName: "Remote native test", song: song, songName: "Test",
     songs: [.init(id: song, name: "Test")],
     tracks: [.init(id: trackID, name: "Track", color: 0x828282, volume: 1, pan: 0, mute: false, solo: false,

@@ -26,4 +26,21 @@ public class RemoteItemDrawingTest {
   CanvasProbe canvas=new CanvasProbe();drawing.draw(canvas,new RectF(0,0,100,20),new JSONObject(),new JSONObject().put("id","A"),0,1);assertEquals(0,canvas.paths);assertEquals(0,drawing.builds);
  }
  @Test public void zoomCacheIsBounded(){for(int i=0;i<300;i++)drawing.waveform("A",100+i,60,0,1);assertEquals(96,drawing.waves.size());}
+ int visibleWavePixels(JSONObject clip)throws Exception{
+  Bitmap bitmap=Bitmap.createBitmap(320,140,Bitmap.Config.ARGB_8888);
+  drawing.draw(new Canvas(bitmap),new RectF(0,0,320,140),new JSONObject().put("color",0).put("nameColor",0xffffff),clip,0,1,false);
+  int pixels=0,top=(int)Math.ceil(drawing.headerHeight(new RectF(0,0,320,140)))+1;
+  for(int y=top;y<139;y++)for(int x=2;x<318;x++)if(Color.red(bitmap.getPixel(x,y))>100)pixels++;
+  bitmap.recycle();return pixels;
+ }
+ @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+ public void gainChangesRenderedAmplitudeWithoutRebuildingWaveform()throws Exception{
+  JSONObject clip=new JSONObject().put("id","A").put("name","Audio");
+  int unity=visibleWavePixels(clip);assertTrue(unity>1000);
+  int quiet=visibleWavePixels(clip.put("gain",.5));assertTrue(quiet>unity*.4&&quiet<unity*.6);
+  int loud=visibleWavePixels(clip.put("gain",2));assertTrue(loud>unity*1.5);
+  assertEquals(0,visibleWavePixels(clip.put("gain",0)));
+  assertEquals(unity,visibleWavePixels(clip.put("gain",1)));
+  assertEquals(1,drawing.builds);
+ }
 }

@@ -43,7 +43,13 @@ final class RemoteItemDrawing {
   if(available>0){String title=TextUtils.ellipsize(clip.optString("name"),new TextPaint(paint),available,TextUtils.TruncateAt.END).toString();canvas.drawText(title,titleX,box.top+header/2-(paint.ascent()+paint.descent())/2,paint);}
   }
   float waveHeight=box.height()-header;
-  if(waveHeight>0){paint.setColor(silenced?0xff808080:alpha(name,.75f));canvas.save();canvas.translate(box.left,box.top+header);canvas.clipRect(0,0,box.width(),waveHeight);canvas.drawPath(waveform(RemoteModel.id(clip,"id"),box.width(),waveHeight,sourceFraction,visibleFraction),paint);canvas.restore();}
+  if(waveHeight>0){
+   double gain=clip.optDouble("gain",1);if(!Double.isFinite(gain))gain=1;gain=Math.max(0,gain);
+   paint.setColor(silenced?0xff808080:alpha(name,.75f));canvas.save();canvas.translate(box.left,box.top+header);canvas.clipRect(0,0,box.width(),waveHeight);
+   // Scale the cached geometry around its center; fader updates reuse the path.
+   if(gain>0){canvas.scale(1,(float)gain,0,waveHeight/2);canvas.drawPath(waveform(RemoteModel.id(clip,"id"),box.width(),waveHeight,sourceFraction,visibleFraction),paint);}
+   canvas.restore();
+  }
   canvas.restore();paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(.6f*density);paint.setColor(alpha(color,.75f));RectF border=new RectF(box);border.inset(.3f*density,.3f*density);canvas.drawRoundRect(border,radius,radius,paint);paint.setStyle(Paint.Style.FILL);
  }
 }

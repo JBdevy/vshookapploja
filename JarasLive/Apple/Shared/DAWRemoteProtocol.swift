@@ -771,6 +771,15 @@ struct DAWRemotePanelWidths: Equatable {
     }
 }
 
+/// Illustrative Remote peaks retain their shape as item gain changes.
+enum DAWRemoteItemWaveform {
+    static func amplitude(seed: Int, fraction: Double, gain: Double?) -> Double {
+        let phase = fraction * 300 + Double(seed)
+        let scale = gain.flatMap { $0.isFinite ? max(0, $0) : nil } ?? 1
+        return min(1, (0.12 + 0.78 * abs(sin(phase * 0.37) * cos(phase * 0.13))) * scale)
+    }
+}
+
 /// Match desktop lane heights while retaining alignment between mixer and grid.
 enum DAWRemoteItemLayout {
     static func heightScale(_ value: Double) -> Double { value.isFinite ? min(3, max(0.1, value)) : 1 }
