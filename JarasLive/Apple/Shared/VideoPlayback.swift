@@ -41,6 +41,8 @@ typealias ProjectionImage = UIImage
     private var stretchKey: String { trackKind == .teleprompt ? "jaras.teleprompter.video.stretch" : trackKind == .teleprompt2 ? "jaras.teleprompter2.video.stretch" : "jaras.video.stretch" }
     private var projectionEnabled = false
     private var active: Bool { visible || projectionEnabled }
+    var isActive: Bool { active }
+    private(set) var synchronizationSeekCount = 0
     private var playbackRate: Float = 0
     private var lastSourcePosition: Double?
     private var lastPosition: Double?
@@ -96,6 +98,9 @@ typealias ProjectionImage = UIImage
         window?.close()
         #endif
         visible = false; projectionEnabled = false
+        #if os(iOS)
+        if trackKind == .video { IpadVideoPresentation.shared.setVisible(false) }
+        #endif
         reset(); directory = nil; snapshot = nil; message = ""
     }
     #if os(macOS)
@@ -121,7 +126,9 @@ typealias ProjectionImage = UIImage
     #else
     func toggle() { setVisible(!visible) }
     func setVisible(_ value: Bool) {
+        guard visible != value else { return }
         visible = value
+        IpadVideoPresentation.shared.setVisible(value)
         if !active { reset() }
         else if let snapshot { update(snapshot) }
     }
@@ -177,16 +184,21 @@ typealias ProjectionImage = UIImage
         if !message.isEmpty { message = "" }
         if image != nil { image = nil }
     }
-    func update(_ snapshot: ShowSnapshot) {
+    func update(_ snapshot: ShowSnapshot, sampleHostTime: Double? = nil) {
         self.snapshot = snapshot
         guard active, let directory else { return }
         guard let originalSong = snapshot.project.songs.first(where: { $0.id == snapshot.transport.songId }) else { reset(); return }
         let song = snapshot.transport.multiLoop?.projectionSong(originalSong) ?? originalSong
         let transport = snapshot.transport
-        let position = transport.playing || transport.paused == true ? transport.position : transport.editPosition ?? transport.position
+        let now = ProcessInfo.processInfo.systemUptime
+        // A UI refresh can arrive later than its transport sample. Account for
+        // that delay instead of repeatedly pausing/seeking a smooth AVPlayer.
+        let sampleAge = transport.playing ? min(0.25, max(0, now - (sampleHostTime ?? now))) : 0
+        let position = (transport.playing || transport.paused == true ? transport.position : transport.editPosition ?? transport.position) + sampleAge
         guard let clip = song.firstProjectionItem(at: position, trackKind: trackKind == .video ? nil : trackKind), let file = clip.audioFile else {
             if clipID != nil { reset() }
-            message = ""; return
+            if !message.isEmpty { message = "" }
+            return
         }
         let fade = clip.fadeGain(at: position)
         if opacity != fade { opacity = fade }
@@ -213,7 +225,6 @@ typealias ProjectionImage = UIImage
             }
             return
         }
-        let now = ProcessInfo.processInfo.systemUptime
         var source = clip.sourceOffset + (position - clip.startTime) * clip.audioRate
         if let length = clip.loopLength, length > 0 {
             let start = clip.loopStart ?? clip.sourceOffset
@@ -295,6 +306,7 @@ typealias ProjectionImage = UIImage
     }
     private func seek(_ seconds: Double, rate: Float) {
         if seeking { pendingSeek = (seconds,rate); return }
+        synchronizationSeekCount += 1
         seeking = true; let generation = generation
         let requestedAt = ProcessInfo.processInfo.systemUptime
         player.pause()
@@ -332,16 +344,18 @@ struct ProjectionMediaSurface: View {
     var body: some View {
         GeometryReader { geometry in
             if let image = controller.image {
-                if controller.stretch {
-                    projectionImage(image).resizable().frame(width: geometry.size.width, height: geometry.size.height).clipped()
-                } else {
-                    projectionImage(image).resizable().aspectRatio(contentMode: .fit)
-                        .frame(width: geometry.size.width, height: geometry.size.height).clipped()
-                }
+                Group {
+                    if controller.stretch {
+                        projectionImage(image).resizable().frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                    } else {
+                        projectionImage(image).resizable().aspectRatio(contentMode: .fit)
+                            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                    }
+                }.saturation(controller.usesVideoSettings && settings.blackAndWhite ? 0 : 1)
             } else {
                 NativeVideoLayer(player: controller.player, stretch: controller.stretch)
             }
-        }.opacity(controller.opacity).saturation(controller.usesVideoSettings && settings.blackAndWhite ? 0 : 1).allowsHitTesting(false)
+        }.opacity(controller.opacity).allowsHitTesting(false)
     }
     private func projectionImage(_ image: ProjectionImage) -> Image {
         #if os(macOS)
@@ -371,64 +385,164 @@ private struct NativeVideoLayer: UIViewRepresentable {
 typealias ProjectionPlatformView = UIView
 #endif
 
-#if os(iOS)
-struct IpadNativeVideoButton: View {
-    @ObservedObject private var video = VideoPlayback.shared
-    var body: some View {
-        Button { video.toggle() } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "video")
-                Text("Video")
-            }.font(.system(size: 10, weight: .semibold)).lineLimit(1)
-                .frame(width: 62, height: 32).foregroundStyle(Color.black)
-                .background(video.visible ? JarasTheme.green : JarasTheme.liveOffRed, in: RoundedRectangle(cornerRadius: 5))
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel("Video")
-            .accessibilityValue(video.visible ? "On" : "Off")
-            .contextMenu { Toggle("Stretch", isOn: Binding(get: { video.stretch }, set: { video.setStretch($0) })) }
+/// Extended, interactive displays require an M-series iPad, not just support
+/// for multiple windows on the built-in display. Unknown models stay embedded.
+enum IpadVideoWindowCapability {
+    static func supportsExtendedDisplay(model: String) -> Bool {
+        let parts = model.dropFirst(4).split(separator: ",").compactMap { Int($0) }
+        guard model.hasPrefix("iPad"), parts.count == 2 else { return false }
+        switch parts[0] {
+        case 13: return (4...11).contains(parts[1]) || (16...17).contains(parts[1])
+        case 14: return (3...6).contains(parts[1]) || (8...11).contains(parts[1])
+        case 15: return (3...6).contains(parts[1])
+        case 16: return (3...6).contains(parts[1]) || (8...11).contains(parts[1])
+        case 17: return (1...4).contains(parts[1])
+        default: return false
+        }
     }
 }
 
-/// A floating surface leaves the timeline and transport available while watching.
-struct IpadNativeVideoPanel: View {
-    @ObservedObject private var video = VideoPlayback.shared
-    @State private var origin: CGPoint?
-    @State private var fullscreen = false
-    @GestureState private var drag = CGSize.zero
-    var body: some View {
-        GeometryReader { geometry in
-            if video.visible {
-                let width = fullscreen ? geometry.size.width : min(480, max(240, geometry.size.width * 0.55), geometry.size.width)
-                let height = fullscreen ? geometry.size.height : min(geometry.size.height, width * 9 / 16 + 36)
-                let initial = origin ?? CGPoint(x: geometry.size.width - width - 12, y: geometry.size.height - height - 12)
-                let x = fullscreen ? 0 : min(max(0, initial.x + drag.width), max(0, geometry.size.width - width))
-                let y = fullscreen ? 0 : min(max(0, initial.y + drag.height), max(0, geometry.size.height - height))
-                VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        HStack { Image(systemName: "video"); Text("Video"); Spacer(minLength: 0) }
-                            .contentShape(Rectangle())
-                            .gesture(DragGesture().updating($drag) { value, current, _ in
-                                if !fullscreen { current = value.translation }
-                            }.onEnded { value in
-                                if !fullscreen { origin = CGPoint(x: min(max(0, initial.x + value.translation.width), max(0, geometry.size.width - width)),
-                                    y: min(max(0, initial.y + value.translation.height), max(0, geometry.size.height - height))) }
-                            })
-                        Button { fullscreen.toggle() } label: {
-                            Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").frame(width: 36, height: 36)
-                        }.accessibilityLabel(fullscreen ? "Sair da tela cheia" : "Tela cheia")
-                        Button { video.setVisible(false) } label: { Image(systemName: "xmark").frame(width: 36, height: 36) }
-                            .accessibilityLabel("Fechar vídeo")
-                    }.padding(.leading, 12).font(.system(size: 13, weight: .semibold))
-                        .frame(height: 36).background(JarasTheme.panel).foregroundStyle(Color.white).buttonStyle(.plain)
-                    VideoSurface(controller: video).clipped().contentShape(Rectangle())
-                        .onTapGesture(count: 2) { fullscreen.toggle() }
-                }.frame(width: width, height: height).background(Color.black)
-                    .clipShape(RoundedRectangle(cornerRadius: fullscreen ? 0 : 8))
-                    .overlay(RoundedRectangle(cornerRadius: fullscreen ? 0 : 8).stroke(Color.white.opacity(0.2), lineWidth: 1))
-                    .shadow(radius: fullscreen ? 0 : 10).offset(x: x, y: y)
-            }
-        }.onChange(of: video.visible) { visible in if !visible { fullscreen = false } }
+#if os(iOS)
+/// Only presentation changes reach the workspace. Decoder/frame updates must
+/// not rebuild the timeline or feed a SwiftUI layout/publication loop.
+@MainActor final class IpadVideoPresentation: ObservableObject {
+    static let shared = IpadVideoPresentation()
+    static let windowID = "catlive-video"
+    @Published private(set) var visible = false
+    @Published private(set) var detached = false
+    private var requestedWindow = false
+    private var session: UISceneSession?
+    var embedded: Bool { visible && !detached }
+    var canDetach: Bool {
+        guard #available(iOS 16.2, *), UIDevice.current.userInterfaceIdiom == .pad,
+              UIApplication.shared.supportsMultipleScenes else { return false }
+        var info = utsname(); uname(&info)
+        let capacity = MemoryLayout.size(ofValue: info.machine)
+        let model = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? withUnsafePointer(to: &info.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: capacity) { String(cString: $0) }
+        }
+        return IpadVideoWindowCapability.supportsExtendedDisplay(model: model)
     }
+    func setVisible(_ value: Bool) {
+        guard visible != value else { return }
+        visible = value
+        if !value { dock() }
+    }
+    func detach(open: () -> Void) {
+        guard visible, canDetach, !requestedWindow else { return }
+        requestedWindow = true
+        open()
+    }
+    func attach(_ scene: UIWindowScene) {
+        // A restored auxiliary scene must never replace the embedded default.
+        guard requestedWindow, visible, canDetach else {
+            UIApplication.shared.requestSceneSessionDestruction(scene.session, options: nil)
+            return
+        }
+        session = scene.session
+        scene.title = "CatLive Video"
+        scene.sizeRestrictions?.minimumSize = CGSize(width: 320, height: 216)
+        if !detached { detached = true }
+    }
+    func dock() {
+        requestedWindow = false
+        if detached { detached = false }
+        let previous = session; session = nil
+        if let previous { UIApplication.shared.requestSceneSessionDestruction(previous, options: nil) }
+    }
+    func discarded(_ sessions: Set<UISceneSession>) {
+        guard let session, sessions.contains(where: { $0.persistentIdentifier == session.persistentIdentifier }) else { return }
+        self.session = nil; requestedWindow = false
+        if detached { detached = false }
+    }
+}
+
+struct IpadNativeVideoButton: View {
+    @ObservedObject private var presentation = IpadVideoPresentation.shared
+    var body: some View {
+        Button { VideoPlayback.shared.toggle() } label: {
+            HStack(spacing: 3) { Image(systemName: "video"); Text("Video") }
+                .font(.system(size: 10, weight: .semibold)).lineLimit(1)
+                .frame(width: 62, height: 32).foregroundStyle(Color.black)
+                .background(presentation.visible ? JarasTheme.green : JarasTheme.liveOffRed, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel("Video")
+            .accessibilityValue(presentation.visible ? "On" : "Off")
+            .contextMenu { Toggle("Stretch", isOn: Binding(get: { VideoPlayback.shared.stretch }, set: { VideoPlayback.shared.setStretch($0) })) }
+    }
+}
+
+struct IpadEmbeddedVideoPanel: View {
+    @ObservedObject private var presentation = IpadVideoPresentation.shared
+    @Environment(\.openWindow) private var openWindow
+    var fullscreen = false
+    var toggleFullscreen: (() -> Void)? = nil
+    var toggleSetlist: (() -> Void)? = nil
+    var setlistVisible = true
+    var body: some View {
+        VStack(spacing: 0) {
+            if !fullscreen {
+            HStack(spacing: 8) {
+                Label("Video", systemImage: "video").font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 0)
+                if !fullscreen, let toggleSetlist {
+                    Button(action: toggleSetlist) { Image(systemName: "sidebar.right").frame(width: 36, height: 36) }
+                        .foregroundStyle(setlistVisible ? JarasTheme.green : JarasTheme.secondary)
+                        .accessibilityLabel(setlistVisible ? "Recolher Setlist" : "Expandir Setlist")
+                }
+                if presentation.canDetach {
+                    Button {
+                        if presentation.detached { presentation.dock() }
+                        else { presentation.detach { openWindow(id: IpadVideoPresentation.windowID) } }
+                    } label: {
+                        Image(systemName: presentation.detached ? "arrow.down.right.and.arrow.up.left" : "rectangle.on.rectangle")
+                            .frame(width: 36, height: 36)
+                    }.accessibilityLabel(presentation.detached ? "Embutir vídeo" : "Destacar janela de vídeo")
+                }
+                if let toggleFullscreen {
+                    Button(action: toggleFullscreen) {
+                        Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                            .frame(width: 36, height: 36)
+                    }.accessibilityLabel(fullscreen ? "Sair da tela cheia" : "Tela cheia")
+                }
+                Button { VideoPlayback.shared.setVisible(false) } label: {
+                    Image(systemName: "xmark").frame(width: 36, height: 36)
+                }.accessibilityLabel("Fechar vídeo")
+            }.padding(.leading, 12).frame(height: 36).background(JarasTheme.panel)
+                .foregroundStyle(Color.white).buttonStyle(.plain)
+            }
+            // Keep safe areas and hit testing scoped to this panel, not the workspace.
+            ZStack {
+                Color.black
+                ProjectionMediaSurface(controller: .shared)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { toggleFullscreen?() }
+        }.background(Color.black).clipped()
+    }
+}
+
+struct IpadDetachedVideoScene: View {
+    var body: some View {
+        IpadEmbeddedVideoPanel()
+            .background(IpadVideoSceneConnection())
+            .preferredColorScheme(.dark)
+    }
+}
+private struct IpadVideoSceneConnection: UIViewRepresentable {
+    final class ConnectionView: UIView {
+        private weak var connectedScene: UIWindowScene?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let scene = window?.windowScene, scene !== connectedScene else { return }
+            connectedScene = scene
+            DispatchQueue.main.async { IpadVideoPresentation.shared.attach(scene) }
+        }
+    }
+    func makeUIView(context: Context) -> ConnectionView {
+        let view = ConnectionView(); view.isUserInteractionEnabled = false; return view
+    }
+    func updateUIView(_ view: ConnectionView, context: Context) {}
 }
 #endif
 

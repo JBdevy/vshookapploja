@@ -15,7 +15,11 @@ final class VideoMediaSettings: ObservableObject {
     init() {
         stretch = UserDefaults.standard.bool(forKey: "jaras.video.stretch")
         blackAndWhite = UserDefaults.standard.bool(forKey: "jaras.video.grayscale")
+        #if os(iOS)
+        noAudio = UserDefaults.standard.object(forKey: "jaras.video.noAudio") as? Bool ?? false
+        #else
         noAudio = UserDefaults.standard.object(forKey: "jaras.video.noAudio") as? Bool ?? true
+        #endif
         let saved = UserDefaults.standard.integer(forKey: "jaras.video.resolution")
         resolution = Self.resolutions.contains { $0.height == saved } ? saved : 1080
     }

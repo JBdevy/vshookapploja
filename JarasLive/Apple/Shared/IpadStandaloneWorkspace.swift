@@ -16,6 +16,8 @@ import Combine
     @Published private(set) var timelineFocus: IpadTimelineFocus?
     private var subscriptions = Set<AnyCancellable>()
     private var refreshPending = false
+    private var projectionRefresh: Task<Void, Never>?
+    private var lastRefreshTime = 0.0
     private var running = false
     private let mappingSession = UUID()
     private weak var show: ShowController?
@@ -40,8 +42,10 @@ import Combine
                 self?.refreshTeleprompterRemote(index)
             }
         }
-        for publisher in [show.objectWillChange.eraseToAnyPublisher(),
-                          documents.objectWillChange.eraseToAnyPublisher(),
+        show.objectWillChange.sink { [weak self, weak show] _ in
+            self?.scheduleRefresh(playbackTick: show?.timelinePlaybackIsPublishingTick == true)
+        }.store(in: &subscriptions)
+        for publisher in [documents.objectWillChange.eraseToAnyPublisher(),
                           TeleprompterTimerController.shared.objectWillChange.eraseToAnyPublisher(),
                           TPNoticeController.shared.objectWillChange.eraseToAnyPublisher(),
                           TeleprompterWindow.shared.objectWillChange.eraseToAnyPublisher(),
@@ -53,8 +57,25 @@ import Combine
         refresh()
         UIApplication.shared.isIdleTimerDisabled = true
     }
-    private func scheduleRefresh() {
+    private func scheduleRefresh(playbackTick: Bool = false) {
         guard running, !refreshPending else { return }
+        // AVPlayer presents frames on its own clock. Rebuilding the setlist and
+        // every SwiftUI control at the audio clock rate competes with decoding
+        // on older iPads. Commands still publish immediately.
+        let projecting = VideoPlayback.shared.isActive || VideoPlayback.teleprompter.isActive || VideoPlayback.teleprompter2.isActive
+        let delay = 1.0 / 15.0 - (ProcessInfo.processInfo.systemUptime - lastRefreshTime)
+        if playbackTick, projecting, delay > 0 {
+            if projectionRefresh == nil {
+                projectionRefresh = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    guard !Task.isCancelled, let self else { return }
+                    self.projectionRefresh = nil
+                    self.scheduleRefresh()
+                }
+            }
+            return
+        }
+        projectionRefresh?.cancel(); projectionRefresh = nil
         refreshPending = true
         // Publish a completed snapshot outside UIKit's touch-tracking mode.
         // Playback keeps its own common-mode clock; scrolling must not rebuild
@@ -68,11 +89,8 @@ import Combine
         }
     }
     func refresh() {
-        if let show {
-            VideoPlayback.shared.update(show.snapshot)
-            VideoPlayback.teleprompter.update(show.snapshot)
-            VideoPlayback.teleprompter2.update(show.snapshot)
-        }
+        projectionRefresh?.cancel(); projectionRefresh = nil
+        lastRefreshTime = ProcessInfo.processInfo.systemUptime
         session.refreshLocalWorkspace()
         if var next = session.remoteState {
             for (id, take) in LiveRecordingPreview.shared.takes {
@@ -121,6 +139,7 @@ import Combine
     func stop() {
         guard running else { return }
         running = false; subscriptions.removeAll()
+        projectionRefresh?.cancel(); projectionRefresh = nil
         let foreground = NativeProjectTabs.shared.isForeground(show)
         if foreground { VinhetasController.shared.unbind() }
         if ControlMappings.shared.endNativeSession(mappingSession) {
@@ -244,7 +263,6 @@ import Combine
         .onChange(of: local.projectRevision) { _ in inspectOutputRoutes() }
         .onChange(of: local.state?.project) { _ in inspectOutputRoutes() }
         .onChange(of: audio.channels) { _ in inspectOutputRoutes() }
-        .overlay { IpadNativeVideoPanel() }
         .disabled(dialogOpen || audio.localSessionReconfiguring).accessibilityHidden(dialogOpen)
         .overlay { workspaceDialogs }
         .overlay(alignment: .bottom) {

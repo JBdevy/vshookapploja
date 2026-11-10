@@ -4,9 +4,24 @@ import UIKit
 
 @MainActor final class JarasMobileApplicationDelegate: NSObject, UIApplicationDelegate {
     private static let iPadOrientations: UIInterfaceOrientationMask = .all
+    private static weak var workspaceScene: UIWindowScene?
+
+    static func claimWorkspace(_ scene: UIWindowScene) -> Bool {
+        if let existing = workspaceScene, existing !== scene {
+            UIApplication.shared.requestSceneSessionActivation(existing.session, userActivity: nil, options: nil)
+            UIApplication.shared.requestSceneSessionDestruction(scene.session, options: nil)
+            return false
+        }
+        workspaceScene = scene
+        return true
+    }
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         UIDevice.current.userInterfaceIdiom == .pad ? Self.iPadOrientations : .portrait
+    }
+
+    func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
+        IpadVideoPresentation.shared.discarded(sceneSessions)
     }
 
     static func setRemoteOrientation(_ remote: Bool) {
@@ -29,6 +44,39 @@ import UIKit
                 NSLog("CatLive: unable to update iPad orientation: %@", error.localizedDescription)
             }
         }
+    }
+}
+
+/// Multiple scenes are for video projection. Keep one workspace/audio engine
+/// even if the system's New Window command requests another main scene.
+private struct IpadMainWindowRoot<Content: View>: View {
+    let content: Content
+    @State private var ownsWorkspace = false
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    var body: some View {
+        Group {
+            if ownsWorkspace { content }
+            else { Color.black }
+        }.background(WorkspaceConnection { ownsWorkspace = $0 })
+    }
+    private struct WorkspaceConnection: UIViewRepresentable {
+        let connected: (Bool) -> Void
+        final class ConnectionView: UIView {
+            var connected: (Bool) -> Void = { _ in }
+            private weak var connectedScene: UIWindowScene?
+            override func didMoveToWindow() {
+                super.didMoveToWindow()
+                guard let scene = window?.windowScene, scene !== connectedScene else { return }
+                connectedScene = scene
+                DispatchQueue.main.async { [weak self] in
+                    self?.connected(JarasMobileApplicationDelegate.claimWorkspace(scene))
+                }
+            }
+        }
+        func makeUIView(context: Context) -> ConnectionView {
+            let view = ConnectionView(); view.connected = connected; view.isUserInteractionEnabled = false; return view
+        }
+        func updateUIView(_ view: ConnectionView, context: Context) { view.connected = connected }
     }
 }
 #endif
@@ -95,13 +143,18 @@ import UIKit
         }
         #else
         WindowGroup("CatLive") {
+            IpadMainWindowRoot {
             appContent.statusBarHidden(true).persistentSystemOverlays(.hidden)
                 .background(IpadTextKeyboardScope())
                 .onAppear { UIApplication.shared.isIdleTimerDisabled = scenePhase == .active }
+            }
         }
         .onChange(of: scenePhase) { phase in
             UIApplication.shared.isIdleTimerDisabled = phase == .active
             if phase == .active { JarasMobileApplicationDelegate.updateOrientations() }
+        }
+        WindowGroup("CatLive Video", id: IpadVideoPresentation.windowID) {
+            IpadDetachedVideoScene()
         }
         #endif
     }

@@ -227,8 +227,23 @@ enum AppStartupPresentation {
                 if foreground && repeatWasEnabled && !repeatEnabled { TimelineAreaSelection.shared.clear() }
                 repeatWasEnabled = repeatEnabled
                 do {
-                    try audio.update(snapshot, revision: revision, sampledAt: show?.timelinePlaybackSampleTime ?? ProcessInfo.processInfo.systemUptime)
-                    if foreground { TrackRecording.shared.observe(snapshot); VideoPlayback.shared.update(snapshot) }
+                    let sampleTime = show?.timelinePlaybackSampleTime ?? ProcessInfo.processInfo.systemUptime
+                    try audio.update(snapshot, revision: revision, sampledAt: sampleTime)
+                    if foreground {
+                        TrackRecording.shared.observe(snapshot)
+                        #if os(iOS)
+                        // One owner feeds all projection players. The workspace's
+                        // delayed UI refresh must not send a second, newer time
+                        // between audio ticks and then make this tick seek back.
+                        var projection = snapshot
+                        projection.transport = show?.timelinePlaybackTransport ?? snapshot.transport
+                        for player in [VideoPlayback.shared, .teleprompter, .teleprompter2] {
+                            player.update(projection, sampleHostTime: sampleTime)
+                        }
+                        #else
+                        VideoPlayback.shared.update(snapshot)
+                        #endif
+                    }
                     if foreground, repeatEnabled, let start = snapshot.transport.loop.start, let end = snapshot.transport.loop.end, let song = snapshot.transport.songId {
                         TimelineAreaSelection.shared.update(song: song, from: start, to: end)
                     }

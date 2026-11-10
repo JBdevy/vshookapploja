@@ -2,13 +2,14 @@
   "app_reference_commit": "e94e46e0be30e56fe604aa6371959e902c8416e9",
   "desktop_reference_commit": "66dfc561ed79b27d496d80aaba6db08f9e4d1938",
   "files": {
-    "Apple/Shared/DAWRemoteProtocol.swift": "336af44e74ae314bbfbc0d743d2c9f31c1db3e70144c4eaef3ecd4896b71efca",
-    "Apple/Shared/DAWRemoteSession.swift": "3b8a32d125e414936fee28abb9cb038fa76548c1ab0d336f2bc8bd4c020fe784",
-    "Apple/Shared/DAWRemoteView.swift": "555179a0d9c26981b9dff9f11d5be2c82daa27a51e8db39f944835828aa49b44",
-    "Apple/Shared/Theme.swift": "4b7e675b9dc943b2556ab51ed6c31d12e46e38ca9fd68e7f1fb95717bbb7c700",
+    "Apple/Shared/DAWRemoteProtocol.swift": "32f4513bd8cb67d16796835f44c2ba000c86c40f2d2b9041542e045bb4cc5c88",
+    "Apple/Shared/DAWRemoteSession.swift": "1e3cd4c5bb62ec82fb78929233b88e7118e8cec17051b995216819cd215c3157",
+    "Apple/Shared/DAWRemoteView.swift": "a7826be201475029d26796aa76632a75e50b50a4c91b8012dbbfc63260041207",
+    "Apple/Shared/Theme.swift": "407b7ff90572d65aa896b9ae96d5fbb6d4d4134916f392487fa172b94a6c04ab",
     "Apple/Shared/TrackInstrumentIcons.swift": "7dbcdbdbd276a0c29c0063eaf7eb9847241308a222c85886dd9fa03966eb45bf",
-    "Apple/Resources/en.lproj/Localizable.strings": "5871028506eb7081085e99c025568d45d5ffbac72aad3f2b2f9c924062ac5253",
-    "Apple/Resources/pt-BR.lproj/Localizable.strings": "819487a902d46bf3001cc790973c7d5157d3611e96b6ac01b63d9f4d86e05a8a",
+    "Apple/Resources/en.lproj/Localizable.strings": "7b5cccd683c0229414e26383d6401ff88134929c4cf3b3ada7940345e75cf847",
+    "Apple/Resources/pt-BR.lproj/Localizable.strings": "db2e180b91f16b1113df22d878b9d0aa6d4757877f8c551ee34617780faedc20",
     "Apple/Shared/SmoothSeekPanel.swift": "61e2aefe4a6d0b5192886f36bf3f1b150ab447e055569a75b25f23cc99132dee"
-  }
+  },
+  "review_notes": "1.32 build 1115: Master mute blinking reviewed in Apple Remote and mirrored in Android TrackRow. iOS native embedded/detached video and projection toolbar use existing actions; Remote wire protocol unchanged."
 }

@@ -1,8 +1,15 @@
 import AppKit
 import AVFoundation
+import Combine
 
 @MainActor func run() async throws {
     _ = NSApplication.shared
+    for model in ["iPad13,5", "iPad13,17", "iPad14,3", "iPad14,9", "iPad15,5", "iPad16,4", "iPad16,9", "iPad17,2"] {
+        precondition(IpadVideoWindowCapability.supportsExtendedDisplay(model: model), "M-series iPads support the detached video window")
+    }
+    for model in ["iPad6,12", "iPad8,9", "iPad13,2", "iPad13,18", "iPad14,1", "iPad15,7", "iPad16,2", "iPhone13,4", "iPad99,1", ""] {
+        precondition(!IpadVideoWindowCapability.supportsExtendedDisplay(model: model), "Mirroring or built-in multitasking alone must not enable detaching")
+    }
     let source = URL(fileURLWithPath: ProcessInfo.processInfo.environment["JARAS_TEST_VIDEO"]!)
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory,withIntermediateDirectories: true)
@@ -68,6 +75,18 @@ import AVFoundation
     }
     precondition(controller.player.currentItem === item, "continuous playback keeps the same decoder")
     precondition(controller.player.currentTime().seconds > 0.2, "video advances with transport")
+    let baselineSeeks = controller.synchronizationSeekCount
+    let baselineHost = ProcessInfo.processInfo.systemUptime
+    let baselinePosition = snapshot.transport.position
+    for delay in [0.02, 0.18, 0.0, 0.20, 0.01, 0.17] {
+        try await Task.sleep(nanoseconds: 180_000_000)
+        let sampleHost = ProcessInfo.processInfo.systemUptime - delay
+        snapshot.transport.position = baselinePosition + sampleHost - baselineHost
+        controller.update(snapshot, sampleHostTime: sampleHost)
+    }
+    precondition(controller.synchronizationSeekCount == baselineSeeks,
+                 "Delayed UI samples must not pause/seek continuous video playback")
+    print("VIDEO_DELAYED_TRANSPORT_REFRESH_PRESERVES_CONTINUOUS_PLAYBACK_OK")
     snapshot.transport.playing = false; snapshot.transport.editPosition = 31
     controller.update(snapshot)
     try await Task.sleep(nanoseconds: 250_000_000)
@@ -109,6 +128,12 @@ import AVFoundation
     controller.update(snapshot)
     try await Task.sleep(nanoseconds: 100_000_000)
     precondition(controller.image == nil && controller.player.currentItem == nil, "a stale image decode cannot appear outside its item")
+    var emptyNotifications = 0
+    let observation = controller.objectWillChange.sink { emptyNotifications += 1 }
+    for _ in 0..<120 { controller.update(snapshot) }
+    precondition(emptyNotifications == 0, "An empty video panel must not publish unchanged state on every transport refresh")
+    observation.cancel()
+    print("VIDEO_EMPTY_PANEL_REFRESH_DOES_NOT_INVALIDATE_LAYOUT_OK")
     controller.setProjectionEnabled(false)
     snapshot.project.songs[0].tracks[0].clips = originalVideoClips
     let teleprompterID = UUID()

@@ -1057,7 +1057,12 @@ private struct RemoteSidebarRail<Content: View>: View {
         var id: Int { rawValue }
     }
     @State private var prompterPanel: PrompterPanel?
+    @ObservedObject private var nativeVideo = IpadVideoPresentation.shared
+    private var videoEmbedded: Bool { local && nativeVideo.embedded }
+    private var projectionPanelVisible: Bool { prompterPanel != nil || videoEmbedded }
     @State private var prompterFullscreen = false
+    @State private var projectionPartsOpen = false
+    @State private var projectionPadsOpen = false
     @State private var noticesOpen = false
     @State private var timerOpen = false
     @State private var sectionsOpen = false
@@ -1136,10 +1141,11 @@ private struct RemoteSidebarRail<Content: View>: View {
     private func showPrompter(_ panel: PrompterPanel?) {
         finishPanelResize(); finishPrompterResize()
         if panel == nil { prompterFullscreen = false }
+        if panel != nil && videoEmbedded { VideoPlayback.shared.setVisible(false) }
         prompterPanel = panel
     }
     private func togglePrompterFullscreen() {
-        guard prompterPanel != nil else { return }
+        guard projectionPanelVisible else { return }
         searchFocused = false
         finishPrompterResize()
         prompterFullscreen.toggle()
@@ -1153,13 +1159,14 @@ private struct RemoteSidebarRail<Content: View>: View {
         if mixerHidden != (widths.track == 0) { mixerHidden = widths.track == 0 }
     }
     private var mainSetlistVisible: Bool {
-        !prompterFullscreen && (prompterPanel == nil ? panelWidths.setlist > 0 : prompterSetlistFraction > 0)
+        !prompterFullscreen && (!projectionPanelVisible ? panelWidths.setlist > 0 : prompterSetlistFraction > 0)
     }
     private func toggleMainTrackMixer() {
         finishPanelResize()
         let current = panelWidths
         let restored = savedTrackFraction.isFinite && savedTrackFraction > 0 ? savedTrackFraction : 0.30
-        let expand = prompterPanel != nil || mixerCollapsed
+        let expand = projectionPanelVisible || mixerCollapsed
+        if videoEmbedded { VideoPlayback.shared.setVisible(false) }
         showPrompter(nil)
         persistPanelWidths(.init(track: expand ? min(restored, 1 - current.setlist) : 0, setlist: current.setlist))
     }
@@ -2088,25 +2095,88 @@ private struct RemoteSidebarRail<Content: View>: View {
         guard let id else { return false }
         return id == region || state.timelineRegions.first { $0.id == id }?.parentRegion == region
     }
-    private var directorWorkspace: some View {
-        GeometryReader { geometry in
-            let railButton: CGFloat = 34
-            let masterInMixer = geometry.size.height > geometry.size.width
-            let contentWidth = max(0, geometry.size.width)
-            let panelSpace = max(1, contentWidth - (local ? 44 : 20))
-            let iconExtension = panelWidths.track > 0 ? min(trackIconWidth, panelSpace * panelWidths.grid) : 0
-            let baseSetlist = prompterFullscreen ? 0 : prompterPanel == nil ? panelSpace * panelWidths.setlist : max(1, contentWidth - (local ? 22 : 10)) * prompterSetlistFraction
-            let freeSpace = prompterPanel == nil ? panelSpace * panelWidths.grid - iconExtension : max(0, contentWidth - (local ? 22 : 10) - baseSetlist)
-            let rightPartsVisible = sectionsOpen && verticalSections && baseSetlist > 0 && !prompterFullscreen
-            let nativeParts = RemoteNativePartsLayout(available: freeSpace,
-                leftRequested: liveNativeLeftPartsWidth ?? nativeLeftPartsWidth,
-                rightRequested: livePartsWidth ?? preferredPartsWidth,
-                leftVisible: nativeLeftPartsOpen && prompterPanel == nil && !prompterFullscreen,
-                rightVisible: rightPartsVisible)
-            let leftParts = nativeParts.left
-            let parts = nativeParts.right
-            VStack(spacing: 1) {
+    /// The projection keeps its own compact toolbar; transport controls stay
+    /// reachable while the navigation group can scroll on narrow iPad windows.
+    private var projectionFullscreenBar: some View {
+        HStack(spacing: 4) {
+            ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
+                    Button(action: toggleMainTrackMixer) {
+                        Image(systemName: "slider.horizontal.3").frame(width: 32, height: 32)
+                    }.accessibilityLabel("Track Mixer")
+                    Button { projectionPartsOpen.toggle() } label: {
+                        PartsListIcon().frame(width: 32, height: 32)
+                    }.accessibilityLabel("Parts")
+                        .foregroundStyle(projectionPartsOpen ? JarasTheme.green : JarasTheme.secondary)
+                        .popover(isPresented: $projectionPartsOpen, arrowEdge: .top) {
+                            remoteSections.frame(width: 300, height: 420).preferredColorScheme(.dark)
+                        }
+                    Button { projectionPadsOpen.toggle() } label: {
+                        Image(systemName: "square.grid.4x3.fill").frame(width: 32, height: 32)
+                    }.accessibilityLabel("Pads")
+                        .foregroundStyle(projectionPadsOpen ? JarasTheme.green : JarasTheme.secondary)
+                        .popover(isPresented: $projectionPadsOpen, arrowEdge: .top) {
+                            Group {
+                                if local, let localShow {
+                                    IpadVinhetasPanel(touchMenusEnabled: editingTracks, createTrack: { _ = localShow.createVinhetasTrack() })
+                                } else { remoteVinhetasScreen }
+                            }.frame(width: 620, height: 300).preferredColorScheme(.dark)
+                        }
+                    ForEach([PrompterPanel.first, .second]) { panel in
+                        Button { showPrompter(prompterPanel == panel ? nil : panel) } label: {
+                            Text(verbatim: "TP\(panel.rawValue)").font(.jarasSystem(size: 10, weight: .bold))
+                                .frame(width: 32, height: 32).foregroundStyle(Color.black)
+                                .modifier(RemoteControlSurface(color: prompterPanel == panel ? JarasTheme.green : JarasTheme.liveOffRed, radius: 5, bordered: false))
+                        }.accessibilityLabel("Teleprompter \(panel.rawValue)")
+                    }
+                    if local {
+                        IpadNativePreviewButton(width: 54, horizontal: true)
+                        IpadNativeVideoButton()
+                    } else {
+                        IpadPreviewButton(width: 54, horizontal: true, active: state.previewActive == true,
+                            page: state.previewPage ?? 0, toggle: { action(.togglePreview) },
+                            selectPage: { action(.selectPreviewPage, value: Double($0)) })
+                            .disabled(state.previewActive == nil)
+                    }
+                    fadeoutButton
+                }.fixedSize().buttonStyle(RemoteFullAreaButtonStyle(surface: true))
+            }.frame(maxWidth: local ? 368 : 302)
+            Spacer(minLength: 0)
+            projectionTransportControls
+            Button(action: togglePrompterFullscreen) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left").frame(width: 32, height: 32)
+            }.buttonStyle(RemoteFullAreaButtonStyle(surface: true)).accessibilityLabel("Sair da tela cheia")
+        }.foregroundStyle(JarasTheme.secondary)
+            .padding(.horizontal, 4).frame(height: 40).background(RemoteSurface.panel)
+            .accessibilityIdentifier("projection-fullscreen-toolbar")
+            .disabled(state.projects?.busy == true)
+    }
+    private var projectionTransportControls: some View {
+        HStack(spacing: 4) {
+            Button { action(state.playing || state.paused ? .stop : .play) } label: {
+                Image(systemName: state.playing || state.paused ? "stop.fill" : "play.fill")
+            }.buttonStyle(TransportButtonStyle(color: JarasTheme.transportPlay, active: state.playing,
+                fontSize: 13, width: 32, height: 32, bordered: false))
+                .accessibilityLabel(state.playing || state.paused ? "Stop" : "Play")
+            Button { action(state.paused ? .play : .pause) } label: {
+                Image(systemName: state.paused ? "play.fill" : "pause.fill")
+            }.buttonStyle(TransportButtonStyle(color: Color(hex: 0x454545), inactiveOpacity: 1,
+                fontSize: 13, width: 32, height: 32, bordered: false))
+                .accessibilityLabel(state.paused ? "Play" : "Pause").disabled(!state.playing && !state.paused)
+            Button { action(.toggleLoop) } label: { Image(systemName: "repeat") }
+                .buttonStyle(TransportButtonStyle(color: state.loop ? JarasTheme.yellow : JarasTheme.liveOffRed,
+                    active: state.loop, inactiveOpacity: 1, fontSize: 13, width: 32, height: 32, bordered: false))
+                .accessibilityLabel("Repeat").modifier(JarasBlink(active: state.loop, interval: 0.55, lowOpacity: 0.45))
+            nativeTransportStepper(width: 76, pitch: false)
+            nativeTransportStepper(width: 76, pitch: true)
+            Text(verbatim: timeText).font(.jarasSystem(size: 12, weight: .semibold)).monospacedDigit()
+                .foregroundStyle(JarasTheme.text).frame(width: 86, height: 32)
+                .background(RemoteSurface.display).cornerRadius(5).accessibilityLabel("Tempo do transporte")
+        }.fixedSize()
+    }
+    private var directorControlBar: some View {
+        let railButton: CGFloat = 34
+        return HStack(spacing: 4) {
                 ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     Button { withAnimation(nil) { navigationOpen.toggle() } } label: {
@@ -2118,11 +2188,11 @@ private struct RemoteSidebarRail<Content: View>: View {
                     } } label: {
                         Image(systemName: "slider.horizontal.3")
                             .font(.jarasSystem(size: 15, weight: .semibold))
-                            .foregroundStyle(prompterPanel != nil || mixerCollapsed ? Color(hex: 0xc44545) : JarasTheme.green)
+                            .foregroundStyle(projectionPanelVisible || mixerCollapsed ? Color(hex: 0xc44545) : JarasTheme.green)
                             .frame(width: railButton, height: 32).contentShape(Rectangle())
                     }.buttonStyle(RemoteFullAreaButtonStyle(surface: true))
-                        .accessibilityLabel(prompterPanel != nil || mixerCollapsed ? "Expandir Track-Mixer" : "Recolher Track-Mixer")
-                        .accessibilityValue(prompterPanel != nil || mixerCollapsed ? "Hidden" : "Shown")
+                        .accessibilityLabel(projectionPanelVisible || mixerCollapsed ? "Expandir Track-Mixer" : "Recolher Track-Mixer")
+                        .accessibilityValue(projectionPanelVisible || mixerCollapsed ? "Hidden" : "Shown")
                     Button {
                         nativeLeftPartsOpen.toggle(); liveNativeLeftPartsWidth = nil; nativeLeftPartsDragStart = nil
                     } label: {
@@ -2210,14 +2280,41 @@ private struct RemoteSidebarRail<Content: View>: View {
                         .accessibilityLabel("Configurações")
                         .popover(isPresented: $settingsOpen) { NativeRemoteSettingsView().preferredColorScheme(.dark) }
                 }.padding(.horizontal, 4).frame(height: 36).background(RemoteSurface.panel)
+    }
+    private var directorWorkspace: some View {
+        GeometryReader { geometry in
+            let masterInMixer = geometry.size.height > geometry.size.width
+            let contentWidth = max(0, geometry.size.width)
+            let panelSpace = max(1, contentWidth - (local ? 44 : 20))
+            let iconExtension = panelWidths.track > 0 ? min(trackIconWidth, panelSpace * panelWidths.grid) : 0
+            let baseSetlist = prompterFullscreen ? 0 : !projectionPanelVisible ? panelSpace * panelWidths.setlist : max(1, contentWidth - (local ? 22 : 10)) * prompterSetlistFraction
+            let freeSpace = !projectionPanelVisible ? panelSpace * panelWidths.grid - iconExtension : max(0, contentWidth - (local ? 22 : 10) - baseSetlist)
+            let rightPartsVisible = sectionsOpen && verticalSections && baseSetlist > 0 && !prompterFullscreen
+            let nativeParts = RemoteNativePartsLayout(available: freeSpace,
+                leftRequested: liveNativeLeftPartsWidth ?? nativeLeftPartsWidth,
+                rightRequested: livePartsWidth ?? preferredPartsWidth,
+                leftVisible: nativeLeftPartsOpen && !projectionPanelVisible && !prompterFullscreen,
+                rightVisible: rightPartsVisible)
+            let leftParts = nativeParts.left
+            let parts = nativeParts.right
+            VStack(spacing: 1) {
+                if prompterFullscreen { projectionFullscreenBar }
+                else { directorControlBar }
                 VStack(spacing: 1) {
                     if !prompterFullscreen { transportBar(masterInMixer: masterInMixer) }
                     HStack(spacing: 0) {
-                        if let panel = prompterPanel {
+                        if projectionPanelVisible {
                             let space = max(1, contentWidth - (local ? 22 : 10))
-                            RemoteNativeTeleprompterPanel(index: panel.rawValue, timer: timer,
-                                fullscreen: prompterFullscreen, toggleFullscreen: togglePrompterFullscreen,
-                                toggleSetlist: togglePrompterSetlist, setlistVisible: prompterSetlistFraction > 0, managesSubscription: false, remote: remote)
+                            Group {
+                                if videoEmbedded {
+                                    IpadEmbeddedVideoPanel(fullscreen: prompterFullscreen, toggleFullscreen: togglePrompterFullscreen,
+                                        toggleSetlist: togglePrompterSetlist, setlistVisible: prompterSetlistFraction > 0)
+                                } else if let panel = prompterPanel {
+                                    RemoteNativeTeleprompterPanel(index: panel.rawValue, timer: timer,
+                                        fullscreen: prompterFullscreen, toggleFullscreen: togglePrompterFullscreen,
+                                        toggleSetlist: togglePrompterSetlist, setlistVisible: prompterSetlistFraction > 0, managesSubscription: false, remote: remote)
+                                }
+                            }
                                 .frame(width: prompterFullscreen ? contentWidth : max(0, space * (1 - prompterSetlistFraction) - parts.total)).clipped()
                                 .allowsHitTesting(prompterFullscreen || prompterSetlistFraction < 1)
                                 .accessibilityHidden(!prompterFullscreen && prompterSetlistFraction == 1)
@@ -2275,7 +2372,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                             if panelWidths != widths { livePanelWidths = widths }
                         }, ended: finishPanelResize)
                         }
-                        let setlistWidth = prompterFullscreen ? 0 : prompterPanel == nil ? panelSpace * panelWidths.setlist : max(1, contentWidth - (local ? 22 : 10)) * prompterSetlistFraction
+                        let setlistWidth = prompterFullscreen ? 0 : !projectionPanelVisible ? panelSpace * panelWidths.setlist : max(1, contentWidth - (local ? 22 : 10)) * prompterSetlistFraction
                         // Clipping only hides drawing; constrain touches too so a narrow
                         // setlist cannot cover the teleprompter's toggle or the divider.
                         setlist.frame(width: setlistWidth).contentShape(Rectangle()).clipped()
@@ -2346,6 +2443,14 @@ private struct RemoteSidebarRail<Content: View>: View {
             .onAppear(perform: updatePanelSubscription)
             .onDisappear { if state.timer != nil { action(.remotePanel, value: 0) } }
             .onChange(of: prompterPanel) { _ in updatePanelSubscription() }
+            .onChange(of: videoEmbedded) { embedded in
+                guard local else { return }
+                if embedded { prompterPanel = nil; updatePanelSubscription() }
+                else if prompterPanel == nil { prompterFullscreen = false }
+            }
+            .onChange(of: prompterFullscreen) { fullscreen in
+                if !fullscreen { projectionPartsOpen = false; projectionPadsOpen = false }
+            }
             .onChange(of: noticesOpen) { _ in updatePanelSubscription() }
             .onChange(of: state.project) { _ in expandedRegions.removeAll(); playlistPickerOpen = false; updatePanelSubscription() }
             .onChange(of: state.song) { _ in expandedRegions.removeAll(); scrubPosition = nil; pendingSeek = nil }
@@ -2488,6 +2593,7 @@ private struct RemoteSidebarRail<Content: View>: View {
         }.padding(.leading, local ? 19 : 6).padding(.trailing, 6).padding(.vertical, 3)
             .frame(maxWidth: .infinity).frame(height: RemoteNativeGridMetrics.masterHeight, alignment: .top)
             .background(remoteColor(state.masterColor ?? 0x414141).opacity(0.5)).cornerRadius(6)
+            .modifier(MasterMuteIndicator(muted: state.masterMute))
             .overlay(alignment: .leading) {
                 if local { IpadMixerMeter(meter: StemAudioPlayback.shared.masterMeter).frame(width: 10).padding(.vertical, 5).padding(.leading, 2) }
             }
@@ -2585,7 +2691,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                     .accessibilityLabel(drawerExpanded ? "Fechar gaveta da região selecionada" : "Abrir gaveta da região selecionada")
                     .accessibilityValue(drawerExpanded ? "Expanded" : "Collapsed")
                     Button("Setlist") {
-                        if prompterPanel == nil { toggleMainSetlist() } else { togglePrompterSetlist() }
+                        if !projectionPanelVisible { toggleMainSetlist() } else { togglePrompterSetlist() }
                     }
                         .buttonStyle(TransportButtonStyle(color: mainSetlistVisible ? JarasTheme.green : Color(hex: 0xc44545), active: true, fontSize: 11, width: 62, height: 28, bordered: false))
                         .accessibilityValue(mainSetlistVisible ? "Shown" : "Hidden")
