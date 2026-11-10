@@ -9,12 +9,22 @@ import java.util.*;
 import java.util.function.Consumer;
 
 final class RemoteMidi {
-    static final String[] ACTIONS={"setlistUp","setlistDown","partsUp","partsDown","toggleParts","cancelSection","play","stop","playStop","repeatPlayback","bypass","playlistUp","playlistDown"};
-    static String title(String key){String[] titles={"Setlist ↑","Setlist ↓","Parts ↑","Parts ↓","Parts","Cancel queued section","Play","Stop","Play / Stop","Repeat","Bypass Multiloops","Playlist anterior","Próxima playlist"};for(int i=0;i<ACTIONS.length;i++)if(key.equals(ACTIONS[i]))return titles[i];return key;}
+    static final String[] ACTIONS={"setlistUp","setlistDown","partsUp","partsDown","toggleParts","cancelSection","playStop","subPlayStop","togglePreview","repeatPlayback","bypass","playlistUp","playlistDown"};
+    static String title(String key){String[] titles={"Setlist ↑","Setlist ↓","Parts ↑","Parts ↓","Parts","Cancel queued section","Play / Stop","SubPlay/Stop","Preview on/off","Repeat","Bypass Multiloops","Playlist anterior","Próxima playlist"};for(int i=0;i<ACTIONS.length;i++)if(key.equals(ACTIONS[i]))return titles[i];return key;}
     private final MidiManager manager;private final Handler main=new Handler(Looper.getMainLooper());private final SharedPreferences prefs;private final Consumer<String> action;
     private final Map<Integer,MidiDevice> devices=new HashMap<>();private final Set<String> held=new HashSet<>();private final List<MidiOutputPort> ports=new ArrayList<>();private JSONObject bindings;boolean started;int generation;String learning;
     private final MidiManager.DeviceCallback callback=new MidiManager.DeviceCallback(){public void onDeviceAdded(MidiDeviceInfo info){open(info);}public void onDeviceRemoved(MidiDeviceInfo info){MidiDevice d=devices.remove(info.getId());if(d!=null)try{d.close();}catch(IOException ignored){}}};
-    RemoteMidi(Context c,Consumer<String> action){this.action=action;manager=(MidiManager)c.getSystemService(Context.MIDI_SERVICE);prefs=c.getSharedPreferences("catlive.remote.midi",0);try{bindings=new JSONObject(prefs.getString("bindings","{}"));}catch(Exception e){bindings=new JSONObject();}}
+    RemoteMidi(Context c,Consumer<String> action){this.action=action;manager=(MidiManager)c.getSystemService(Context.MIDI_SERVICE);prefs=c.getSharedPreferences("catlive.remote.midi",0);try{bindings=new JSONObject(prefs.getString("bindings","{}"));}catch(Exception e){bindings=new JSONObject();}migrateTransportBindings();}
+    void migrateTransportBindings(){
+        boolean changed=false;
+        for(String old:new String[]{"play","stop","subPlay"}){
+            JSONObject value=bindings.optJSONObject(old);if(value==null)continue;
+            String target=old.equals("subPlay")?"subPlayStop":"playStop";
+            try{if(!bindings.has(target))bindings.put(target,value);}catch(JSONException ignored){}
+            bindings.remove(old);changed=true;
+        }
+        if(changed)persist();
+    }
     void start(){if(started||manager==null)return;started=true;manager.registerDeviceCallback(callback,main);for(MidiDeviceInfo d:manager.getDevices())open(d);}
     void stop(){started=false;generation++;if(manager!=null)manager.unregisterDeviceCallback(callback);for(MidiOutputPort p:ports)try{p.close();}catch(IOException ignored){}ports.clear();for(MidiDevice d:devices.values())try{d.close();}catch(IOException ignored){}devices.clear();held.clear();learning=null;}
     void open(MidiDeviceInfo info){if(devices.containsKey(info.getId()))return;int token=generation;manager.openDevice(info,d->{if(d==null)return;if(!started||token!=generation){try{d.close();}catch(IOException ignored){}return;}devices.put(info.getId(),d);String identity=info.getProperties().getString(MidiDeviceInfo.PROPERTY_MANUFACTURER,"")+"/"+info.getProperties().getString(MidiDeviceInfo.PROPERTY_PRODUCT,"")+"/"+info.getProperties().getString(MidiDeviceInfo.PROPERTY_NAME,"MIDI");for(int n=0;n<info.getOutputPortCount();n++){MidiOutputPort port=d.openOutputPort(n);if(port!=null){ports.add(port);port.connect(new Parser(identity+":"+n));}}},main);}

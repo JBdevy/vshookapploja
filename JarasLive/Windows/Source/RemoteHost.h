@@ -5,9 +5,11 @@
 #include "Appearance.h"
 #include "ProjectSync.h"
 namespace catlive::remote {
-class Host final : private Timer {
+class Host final : private Timer, private AsyncUpdater {
   public:
-    explicit Host(Appearance &value) : sync(value), preferences(value) {}
+    explicit Host(Appearance &value) : sync(value), preferences(value) {
+        transport.eventsReady = [this] { triggerAsyncUpdate(); };
+    }
     ProjectSync sync;
     ~Host() override { stop(); }
     std::function<var(int)> presentation;
@@ -45,6 +47,7 @@ class Host final : private Timer {
         stopTimer();
         discovery.stop();
         transport.stop();
+        cancelPendingUpdate();
         clients.clear();
         port = 0;
         advertising = false;
@@ -92,6 +95,11 @@ class Host final : private Timer {
     }
     // Also called explicitly by the loopback test; all state stays on the UI thread.
     void update() {
+        receiveCommands();
+        publishState();
+    }
+  private:
+    void receiveCommands() {
         for (const auto &event : transport.events()) {
             if (event.type == Transport::Event::disconnected) {
                 clients.erase(event.client);
@@ -170,6 +178,8 @@ class Host final : private Timer {
                 transport.disconnect(event.client);
             }
         }
+    }
+    void publishState() {
         const auto now = Time::getMillisecondCounterHiRes();
         if (now - lastPublish < 100 || !presentation)
             return;
@@ -225,6 +235,7 @@ class Host final : private Timer {
     double lastPublish = 0;
     uint64 sequence = 0;
     void timerCallback() override { update(); }
+    void handleAsyncUpdate() override { receiveCommands(); }
     void accessStatus(const ID &id, const Client &client, const String &message = {}) {
         auto status = object();
         if (client.mode.isNotEmpty())

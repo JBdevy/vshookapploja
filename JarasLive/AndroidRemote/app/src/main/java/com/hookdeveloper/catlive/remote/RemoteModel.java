@@ -45,6 +45,13 @@ final class RemoteModel {
         JSONObject selected=region(s,id(s,"focusedRegion"));if(selected==null)selected=region(s,id(s,"currentRegion"));
         return selected==null?s.optString("songName"):selected.optString("name");
     }
+    static String observerFocusedEntry(JSONObject s,Set<String> expanded){
+        String focus=id(s,"focusedRegion");
+        if(find(array(s,"regions"),focus)!=null)return focus;
+        String parent=id(region(s,focus),"parentRegion");
+        if(find(array(s,"regions"),parent)==null)return "";
+        return expanded.contains(parent)?focus:parent;
+    }
     static boolean showsSetlistSelection(JSONObject s){return !s.optBoolean("playing")&&!s.optBoolean("subPlaying");}
     static String queuedSongName(JSONObject s){
         JSONObject displays=s.optJSONObject("songDisplays");

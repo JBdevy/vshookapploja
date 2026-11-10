@@ -1047,7 +1047,8 @@ private struct RemoteSidebarRail<Content: View>: View {
     @State private var confirmingRemoval = false
     @State private var duplicateQueueWarning = false
     @State private var selectedSetlistEntries: Set<UUID> = []
-    @State private var nativeKeyboardBrowsing = false
+    @State private var setlistBrowsing = false
+    @State private var remoteNavigationTask: Task<Void, Never>?
     @State private var setlistSelectionAnchor: UUID?
     @State private var draggingSetlistEntries: Set<UUID> = []
     @State private var setlistRowHeights: [UUID: CGFloat] = [:]
@@ -1368,7 +1369,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                 Button("Patch") { openSelectedPatch(state.tracks.filter { selectedTracks.contains($0.id) }.map(\.id)) }
             }
             if selectedTracks.count == 1, let id = selectedTracks.first, groupableTracks.contains(id), let addTrackAudio {
-                Button("Add Stems") { addTrackAudio(id) }
+                Button("Insert media") { addTrackAudio(id) }
             }
             Button("Create group") { groupTracks?(selectedTracks) }
                 .disabled(selectedTracks.count < 2 || !selectedTracks.isSubset(of: groupableTracks))
@@ -1387,13 +1388,13 @@ private struct RemoteSidebarRail<Content: View>: View {
         AnyView(workspaceContent)
         .onChange(of: state.vinhetas) { next in if let next { remoteVinhetasFeedback.receive(next) } }
         .onChange(of: state.focusedRegion) { id in
-            if local && nativeKeyboardBrowsing { selectedSetlistEntries = id.map { [$0] } ?? []; setlistSelectionAnchor = id }
+            if local && setlistBrowsing { selectedSetlistEntries = id.map { [$0] } ?? []; setlistSelectionAnchor = id }
         }
         .onChange(of: state.showsSetlistSelection) { visible in
-            if !visible { selectedSetlistEntries = []; setlistSelectionAnchor = nil }
+            if !visible && !setlistBrowsing { selectedSetlistEntries = []; setlistSelectionAnchor = nil }
         }
-        .onChange(of: state.selectedPlaylist) { _ in selectedSetlistEntries = []; draggingSetlistEntries = []; setlistSelectionAnchor = nil; nativeSetlistRemoval = nil; confirmingRemoval = false; localShow?.selectSetlistBlock(nil) }
-        .onChange(of: state.project) { _ in remoteVinhetasFeedback.reset(); selectedSetlistEntries = []; draggingSetlistEntries = []; setlistSelectionAnchor = nil; editingTracks = false; selectedTracks.removeAll(); regionMovePreview = nil; trackReordering.cancel(); trackScrolling.selectedItem = nil; trackScrolling.pointerReset = UUID(); deletingTracks = nil; splittingItems = nil; nativeMarker = nil; nativeNormalization = false; tempoStepPending = false; pitchStepPending = false }
+        .onChange(of: state.selectedPlaylist) { _ in resetSetlistBrowsing(); selectedSetlistEntries = []; draggingSetlistEntries = []; setlistSelectionAnchor = nil; nativeSetlistRemoval = nil; confirmingRemoval = false; localShow?.selectSetlistBlock(nil) }
+        .onChange(of: state.project) { _ in resetSetlistBrowsing(); remoteVinhetasFeedback.reset(); selectedSetlistEntries = []; draggingSetlistEntries = []; setlistSelectionAnchor = nil; editingTracks = false; selectedTracks.removeAll(); regionMovePreview = nil; trackReordering.cancel(); trackScrolling.selectedItem = nil; trackScrolling.pointerReset = UUID(); deletingTracks = nil; splittingItems = nil; nativeMarker = nil; nativeNormalization = false; tempoStepPending = false; pitchStepPending = false }
         .onAppear {
             if !local && !observer { RemoteMIDIActions.shared.start() }
             if local, let localShow {
@@ -1403,27 +1404,17 @@ private struct RemoteSidebarRail<Content: View>: View {
                 localShow.toggleTeleprompterWindow = { showPrompter(prompterPanel == .first ? nil : .first) }
             }
         }
-        .onDisappear { if !local { RemoteMIDIActions.shared.stop() } }
+        .onDisappear { remoteNavigationTask?.cancel(); if !local { RemoteMIDIActions.shared.stop() } }
+        .onChange(of: state.song) { _ in resetSetlistBrowsing() }
+        .onChange(of: remote.connected) { connected in if !local && !connected { resetSetlistBrowsing() } }
         .onReceive(RemoteMIDIActions.shared.$event.dropFirst().compactMap { $0 }) { event in
             if !local && !observer {
                 if let number = event.blockNumber { performRemoteBlockMIDI(number) }
                 else if let action = event.action { performRemoteMIDI(action) }
             }
         }
-        .onReceive(localShow?.$setlistNavigationRequest.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { request in
-            guard local, let request, let localShow, let song = localShow.current else { return }
-            let parts = Dictionary(uniqueKeysWithValues: song.parts.map { ($0.id, $0) })
-            let entries: [SetlistEntry] = setlistRowsCache.entries(in: state, expanded: expandedRegions, query: search, order: local && state.selectedPlaylist == nil ? allRegionsOrder : nil).compactMap { entry in
-                guard case .region(let row) = entry, let part = localShow.playlistRegion(row.region.id) ?? parts[row.region.id] else { return nil }
-                return .region(part, number: row.number ?? 0)
-            }
-            if !entries.isEmpty {
-                trackScrolling.selectionScope = .setlist
-                nativeKeyboardBrowsing = true
-                localShow.stepRegion(request.direction, entries: entries)
-                selectedSetlistEntries = localShow.focusedRegion.map { [$0] } ?? []
-                setlistSelectionAnchor = localShow.focusedRegion
-            }
+        .onReceive(localShow?.setlistNavigationEvents.map(Optional.some).eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { request in
+            handleNativeNavigationRequest(request)
         }
         .onReceive(localShow?.$selectedProgramChangeID.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { id in
             guard local, id != nil else { return }
@@ -1445,10 +1436,9 @@ private struct RemoteSidebarRail<Content: View>: View {
     private var nativeEditingWorkspace: some View {
         workspaceState
         .background {
-            if local {
-                IpadHardwareKeyboard(enabled: nativeInputEnabled,
-                    onKey: handleNativeKey, onModifiersChanged: { hardwareModifiers = $0; trackScrolling.modifiers = $0 })
-            }
+            IpadHardwareKeyboard(enabled: nativeInputEnabled,
+                onKey: local ? handleNativeKey : handleRemoteKey,
+                onModifiersChanged: { hardwareModifiers = $0; trackScrolling.modifiers = $0 })
         }
         .background(IpadPresentedOutsideDismissal(active: local && deletingTracks != nil, alert: true) { deletingTracks = nil })
         .alert("Delete selected tracks and their items?", isPresented: Binding(
@@ -1551,15 +1541,21 @@ private struct RemoteSidebarRail<Content: View>: View {
     }
     private var visibleItemIDs: Set<UUID> { Set(visibleTracks.flatMap(\.clips).map(\.id)) }
     private var nativeInputEnabled: Bool {
-        local && !observer && controlsEnabled && state.projects?.busy != true && !creatingPlaylist &&
+        (local || remote.connected) && !observer && controlsEnabled && state.projects?.busy != true && !creatingPlaylist &&
         editingEntry == nil && !trackActionsOpen && !confirmingRemoval && !duplicateQueueWarning &&
         !settingsOpen && !projectsOpen && !playlistPickerOpen && !timerOpen && !noticesOpen &&
         deletingTracks == nil && splittingItems == nil && !nativeNormalization &&
         nativeMarker == nil && configInitRegion == nil && unifyingRegion == nil && !autoSettings && !searchFocused
     }
     private func handleNativeKey(_ event: HardwareKeyboardEvent) -> Bool {
-        guard event.phase == .down, let show = localShow else { return false }
+        guard let show = localShow else { return false }
         if ControlMappings.shared.editing != nil { return ControlMappings.shared.handleHardwareKey(event) }
+        if event.modifiers.isEmpty, [125,126].contains(event.keyCode) {
+            if event.phase == .down { stepNativeSetlist(event.keyCode == 125 ? 1 : -1, commitAfterDelay: false) }
+            else { show.finishRegionNavigation() }
+            return true
+        }
+        guard event.phase == .down else { return false }
         let flags = event.modifiers
         let command = flags == .command || flags == .control
         let shiftCommand = flags == [.command, .shift] || flags == [.control, .shift]
@@ -2054,14 +2050,16 @@ private struct RemoteSidebarRail<Content: View>: View {
     }
     private var observerSetlist: some View {
         let played = Set(state.playedLiveRegionIDs ?? [])
-        return ScrollView(.vertical) {
+        let focus = DAWRemoteSetlistPresentation.observerFocus(in: state, expanded: expandedRegions)
+        return ScrollViewReader { scroll in
+        ScrollView(.vertical) {
             LazyVStack(spacing: 5) {
                 ForEach(setlistRowsCache.entries(in: state, expanded: expandedRegions, query: "")) { entry in
                     switch entry {
                     case .block(let block): RemoteSetlistBlockLabel(block: block, fontStyle: state.setlistFontStyle ?? 0, scale: min(2.5, max(1, observerSetlistScale))).equatable()
                     case .region(let row):
                     let region = row.region
-                    setlistLabel(region.name, number: row.number, played: played.contains(region.sourceRegionId ?? region.id), selected: state.showsSetlistSelection && observerRegion(region.id, contains: state.focusedRegion),
+                    setlistLabel(region.name, number: row.number, played: played.contains(region.sourceRegionId ?? region.id), selected: region.id == focus,
                         active: state.playing && observerRegion(region.id, contains: state.setlistCurrentEntryId), queued: observerRegion(region.id, contains: state.setlistQueuedEntryId),
                         color: remoteColor(region.color), nameColor: remoteColor(region.nameColor ?? 0xffffff),
                         duration: max(0, Int(ceil(region.end - (state.playing && region.id == state.setlistCurrentEntryId ? state.position : region.start)))),
@@ -2079,6 +2077,11 @@ private struct RemoteSidebarRail<Content: View>: View {
                     ForEach(state.songs) { song in Text(verbatim: song.name).padding(12).frame(maxWidth: .infinity, alignment: .leading).background(RemoteSurface.panel).cornerRadius(5) }
                 }
             }.padding(8)
+        }
+        .onAppear { if let focus { scroll.scrollTo(DAWRemoteSetlistPresentation.Entry.ID.region(focus)) } }
+        .onChange(of: focus) { id in
+            if let id { scroll.scrollTo(DAWRemoteSetlistPresentation.Entry.ID.region(id)) }
+        }
         }
     }
     private func observerRegion(_ region: UUID, contains id: UUID?) -> Bool {
@@ -2182,6 +2185,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                     if local, let openRemoteSettings {
                         IpadNativeRemoteToggle(openSettings: openRemoteSettings, width: 54, horizontal: true)
                         IpadNativePreviewButton(width: 54, horizontal: true)
+                        IpadNativeVideoButton()
                     } else if !local {
                         IpadPreviewButton(width: 54, horizontal: true, active: state.previewActive == true,
                             page: state.previewPage ?? 0,
@@ -2193,7 +2197,7 @@ private struct RemoteSidebarRail<Content: View>: View {
 
 
                 }
-                }.frame(maxWidth: local ? 500 : .infinity).fixedSize(horizontal: false, vertical: true)
+                }.frame(maxWidth: local ? 566 : .infinity).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     if local {
                         IpadNativeAudioStatus { openAudioSettings?() }
@@ -2901,13 +2905,102 @@ private struct RemoteSidebarRail<Content: View>: View {
         } else { selectedTracks = [id] }
         localShow?.setMixerTrackSelection(selectedTracks, anchor: id)
     }
+    private func handleNativeNavigationRequest(_ request: ShowController.SetlistNavigationRequest?) {
+        guard local, let request else { return }
+        stepNativeSetlist(request.direction)
+    }
+    private func stepNativeSetlist(_ direction: Int, commitAfterDelay: Bool = true) {
+        guard let show = localShow else { return }
+        let entries: [SetlistEntry] = setlistRowsCache.entries(in: state, expanded: expandedRegions,
+            query: search, order: state.selectedPlaylist == nil ? allRegionsOrder : nil).compactMap { entry in
+                guard case .region(let row) = entry, let part = show.playlistRegion(row.region.id) else { return nil }
+                return .region(part, number: row.number ?? 0)
+            }
+        guard !entries.isEmpty else { return }
+        trackScrolling.selectionScope = .setlist; setlistBrowsing = true
+        show.stepRegion(direction, entries: entries, commitAfterDelay: commitAfterDelay)
+        selectedSetlistEntries = show.focusedRegion.map { [$0] } ?? []
+        setlistSelectionAnchor = show.focusedRegion
+    }
+    private func resetSetlistBrowsing(clearSelection: Bool = true) {
+        remoteNavigationTask?.cancel(); remoteNavigationTask = nil
+        setlistBrowsing = false; remoteMIDISetlistID = nil
+        if clearSelection { selectedSetlistEntries = []; setlistSelectionAnchor = nil }
+    }
+    private func stepRemoteSetlist(_ direction: Int, commitAfterDelay: Bool = true) {
+        remoteNavigationTask?.cancel(); remoteNavigationTask = nil
+        let rows = setlistRowsCache.entries(in: state, expanded: expandedRegions, query: search).compactMap { entry -> DAWRemoteSetlistPresentation.Row? in
+            if case .region(let row) = entry { return row }; return nil
+        }
+        let ids = rows.map(\.id)
+        guard !ids.isEmpty else { return }
+        let current = remoteMIDISetlistID ?? setlistSelectionAnchor ?? state.focusedRegion
+        let parent = state.timelineRegions.first { $0.id == current }?.parentRegion
+        let index = current.flatMap { ids.firstIndex(of: $0) } ?? parent.flatMap { ids.firstIndex(of: $0) }
+        let next = index.map { min(ids.count - 1, max(0, $0 + direction)) } ?? (direction > 0 ? 0 : ids.count - 1)
+        let id = ids[next]
+        remoteMIDISetlistID = id; selectedSetlistEntries = [id]; setlistSelectionAnchor = id
+        trackScrolling.selectionScope = .setlist; setlistBrowsing = true
+        if commitAfterDelay { finishRemoteSetlistNavigation() }
+    }
+    private func finishRemoteSetlistNavigation() {
+        remoteNavigationTask?.cancel()
+        guard !state.playing, let id = remoteMIDISetlistID else { return }
+        let project = state.project, song = state.song, playlist = state.selectedPlaylist
+        remoteNavigationTask = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
+            guard remote.connected, !observer, let latest = remote.remoteState,
+                  latest.project == project, latest.song == song, latest.selectedPlaylist == playlist,
+                  !latest.playing, remoteMIDISetlistID == id else { return }
+            action(.selectRegion, target: id)
+        }
+    }
+    private func handleRemoteKey(_ event: HardwareKeyboardEvent) -> Bool {
+        guard !observer, remote.connected, !RemoteMIDIActions.shared.isLearning else { return false }
+        let flags = event.modifiers
+        if [125,126].contains(event.keyCode) {
+            let direction = event.keyCode == 125 ? 1 : -1
+            if flags.isEmpty {
+                if event.phase == .down { stepRemoteSetlist(direction, commitAfterDelay: false) }
+                else { finishRemoteSetlistNavigation() }
+                return true
+            }
+            if flags == .command || flags == .control {
+                if event.phase == .down && !event.isRepeat { performRemoteMIDI(direction > 0 ? .playlistDown : .playlistUp) }
+                return true
+            }
+        }
+        if event.keyCode == 49, flags == .shift {
+            if event.phase == .down && !event.isRepeat && state.playing { action(state.subPlaying ? .subStop : .subPlay) }
+            return true
+        }
+        guard event.phase == .down, flags.isEmpty else { return false }
+        switch event.keyCode {
+        case 36,76:
+            if !event.isRepeat, let id = remoteMIDISetlistID ?? state.focusedRegion {
+                remoteNavigationTask?.cancel(); action(.selectRegion, target: id)
+            }
+            return true
+        case 49:
+            if !event.isRepeat { action(state.playing || state.paused ? .stop : .play) }
+            return true
+        case 53:
+            if !event.isRepeat { resetSetlistBrowsing() }
+            return true
+        case 48:
+            if !event.isRepeat { phonePanel = .setlist; searchFocused = true }
+            return true
+        default: return false
+        }
+    }
     private func performRemoteMIDI(_ command: RemoteMIDIAction) {
-        guard !local, !observer, !RemoteMIDIActions.shared.isLearning else { return }
+        guard !local, !observer, controlsEnabled, remote.connected, state.projects?.busy != true,
+              !RemoteMIDIActions.shared.isLearning else { return }
         switch command {
-        case .play: action(.play)
-        case .stop: action(.stop)
         case .playStop: action(state.playing || state.paused ? .stop : .play)
+        case .subPlayStop: if state.playing { action(state.subPlaying ? .subStop : .subPlay) }
         case .repeatPlayback: action(.toggleLoop)
+        case .togglePreview: if state.previewActive != nil { action(.togglePreview) }
         case .bypass: action(.toggleMultiLoopBypass)
         case .cancelSection: action(.cancelSection)
         case .toggleParts:
@@ -2919,18 +3012,11 @@ private struct RemoteSidebarRail<Content: View>: View {
             let direction = command == .playlistDown ? 1 : -1
             let index = (remoteMIDIPlaylistID ?? state.selectedPlaylist).flatMap { ids.firstIndex(of: $0) }
             let next = index.map { ($0 + direction + ids.count) % ids.count } ?? (direction > 0 ? 0 : ids.count - 1)
-            remoteMIDIPlaylistID = ids[next]; remoteMIDISetlistID = nil
+            resetSetlistBrowsing()
+            remoteMIDIPlaylistID = ids[next]
             action(.selectPlaylist, target: ids[next])
         case .setlistUp, .setlistDown:
-            let ids = setlistRowsCache.entries(in: state, expanded: [], query: "", order: local && state.selectedPlaylist == nil ? allRegionsOrder : nil).compactMap { entry -> UUID? in
-                if case .region(let row) = entry, !row.child { return row.region.id }; return nil
-            }
-            guard !ids.isEmpty else { return }
-            let direction = command == .setlistDown ? 1 : -1
-            let current = remoteMIDISetlistID ?? selectedSetlistEntries.first ?? state.focusedRegion
-            let next = current.flatMap { ids.firstIndex(of: $0) }.map { min(ids.count - 1, max(0, $0 + direction)) } ?? (direction > 0 ? 0 : ids.count - 1)
-            remoteMIDISetlistID = ids[next]; selectedSetlistEntries = [ids[next]]
-            action(.selectRegion, target: ids[next])
+            stepRemoteSetlist(command == .setlistDown ? 1 : -1)
         case .partsUp, .partsDown:
             guard let region = state.timelineRegions.first(where: { $0.id == state.sectionPlayback?.currentRegion }) else { return }
             let markers = (state.markers ?? []).filter { $0.section == true && $0.position >= region.start && $0.position <= region.end }.sorted { $0.position < $1.position }
@@ -2977,7 +3063,7 @@ private struct RemoteSidebarRail<Content: View>: View {
         return state.tracks.filter { ids.contains($0.id) }.map(\.id)
     }
     private func selectSetlistEntry(_ id: UUID) {
-        nativeKeyboardBrowsing = false
+        resetSetlistBrowsing(clearSelection: false)
         trackScrolling.selectionScope = .setlist
         let isBlock = local && (state.setlistBlocks?.contains { $0.id == id } == true)
         if local, hardwareModifiers.contains(.shift), let anchor = setlistSelectionAnchor {
@@ -3095,7 +3181,7 @@ private struct RemoteSidebarRail<Content: View>: View {
                                 case .region(let row):
                                 let region = row.region
                                 Button { selectSetlistEntry(region.id) } label: {
-                                    setlistLabel(region.name, number: row.number, played: played.contains(region.sourceRegionId ?? region.id), selected: (state.showsSetlistSelection || (local && nativeKeyboardBrowsing)) && (selectedSetlistEntries.contains(region.id) || (selectedSetlistEntries.isEmpty && region.id == state.focusedRegion)),
+                                    setlistLabel(region.name, number: row.number, played: played.contains(region.sourceRegionId ?? region.id), selected: (state.showsSetlistSelection || setlistBrowsing) && (selectedSetlistEntries.contains(region.id) || (selectedSetlistEntries.isEmpty && region.id == state.focusedRegion)),
                                         active: state.playing && region.id == state.setlistCurrentEntryId, queued: state.playing && region.id == (state.setlistQueuedEntryId),
                                         color: remoteColor(region.color), nameColor: remoteColor(region.nameColor ?? (row.child ? 0xffeb3b : 0xffffff)),
                                         duration: max(0, Int(ceil(region.end - (state.playing && region.id == state.setlistCurrentEntryId ? state.position : region.start)))),
@@ -3140,8 +3226,10 @@ private struct RemoteSidebarRail<Content: View>: View {
                             }
                         }
                     }
+                }.onChange(of: setlistSelectionAnchor) { id in
+                    if setlistBrowsing, let id { scroll.scrollTo(id, anchor: .center) }
                 }.onChange(of: state.focusedRegion) { id in
-                    if let id { scroll.scrollTo(id, anchor: .center) }
+                    if !setlistBrowsing, let id { scroll.scrollTo(id, anchor: .center) }
                 }
             }
             if UIDevice.current.userInterfaceIdiom != .phone { setlistControls }
@@ -3347,7 +3435,7 @@ private struct RemoteSetlistRowLabel: View, Equatable {
     }
 }
 private enum RemoteMIDIAction: String, CaseIterable, Identifiable, Codable {
-    case setlistUp, setlistDown, partsUp, partsDown, toggleParts, cancelSection, play, stop, playStop, repeatPlayback, bypass, playlistUp, playlistDown
+    case setlistUp, setlistDown, partsUp, partsDown, toggleParts, cancelSection, playStop, subPlayStop, togglePreview, repeatPlayback, bypass, playlistUp, playlistDown
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -3357,9 +3445,9 @@ private enum RemoteMIDIAction: String, CaseIterable, Identifiable, Codable {
         case .partsDown: return "Parts Down"
         case .toggleParts: return "Parts"
         case .cancelSection: return "Cancel queued section"
-        case .play: return "Play"
-        case .stop: return "Stop"
         case .playStop: return "Play / Stop"
+        case .subPlayStop: return "SubPlay/Stop"
+        case .togglePreview: return "Preview on/off"
         case .repeatPlayback: return "Repeat"
         case .bypass: return "Bypass Multiloops"
         case .playlistUp: return "Previous playlist"
@@ -3398,6 +3486,12 @@ private struct RemoteMIDIBinding: Codable, Equatable {
     private init() {
         if let data = UserDefaults.standard.data(forKey: "catlive.remote.midiActions"),
            let value = try? JSONDecoder().decode([String: RemoteMIDIBinding].self, from: data) { bindings = value }
+        if bindings["playStop"] == nil { bindings["playStop"] = bindings["play"] ?? bindings["stop"] }
+        if bindings["subPlayStop"] == nil { bindings["subPlayStop"] = bindings["subPlay"] }
+        let legacy = ["play", "stop", "subPlay"]
+        if legacy.contains(where: { bindings[$0] != nil }) {
+            legacy.forEach { bindings.removeValue(forKey: $0) }; persist()
+        }
     }
     func clear(_ action: RemoteMIDIAction) { bindings.removeValue(forKey: action.rawValue); persist() }
     var isLearning: Bool { learning != nil || learningBlock != nil || transfer != nil }
@@ -5698,7 +5792,7 @@ private struct IpadTrackAudioContextMenu: ViewModifier {
             if let action { actions.append(IpadTrackMenuAction(title: JarasLocalization.string(title), destructive: destructive, action: action)) }
         }
         append("Patch", openPatch); append("Sound Designer", soundDesigner); append("FX", fx)
-        append("Add Stems", addAudio); append("Create group", group); append("Ungroup", ungroup)
+        append("Insert media", addAudio); append("Create group", group); append("Ungroup", ungroup)
         append("Remove from group", removeFromGroup); append("Link tracks", link); append("Unlink tracks", unlink)
         append("Editar pista", edit); append("Ícone da pista", icon)
         append(count > 1 ? "Duplicate tracks" : "Duplicate track", duplicate)
