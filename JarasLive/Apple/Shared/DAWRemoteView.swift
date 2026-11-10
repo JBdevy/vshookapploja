@@ -3051,8 +3051,8 @@ private struct RemoteSidebarRail<Content: View>: View {
             case .block: ordinal += 1
             case .region(let row):
                 if ordinal >= number {
-                    remoteMIDISetlistID = row.region.id
                     selectSetlistEntry(row.region.id)
+                    remoteMIDISetlistID = row.region.id
                     return
                 }
             }

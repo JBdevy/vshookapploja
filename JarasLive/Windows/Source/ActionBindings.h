@@ -507,7 +507,11 @@ class ActionBindings final : public ChangeBroadcaster,
                 if (midi.isObject() && (int)num(midi, "status") == input.status &&
                     (int)num(midi, "number") == input.number &&
                     (int)num(midi, "channel") == input.channel) {
-                    if (invoke && (definition.continuous || input.value > 0))
+                    const String action(definition.id);
+                    const bool oncePerPress = action == "cancelSection" || action == "togglePreview" ||
+                                              action == "playStop" || action == "subPlayStop";
+                    if (invoke && (definition.continuous || input.value > 0) &&
+                        (!oncePerPress || !wasHeld))
                         invoke(definition.id, input.value / 127.f, (int)num(b, "track"));
                     break;
                 }
