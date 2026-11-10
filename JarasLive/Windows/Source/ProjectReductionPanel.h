@@ -20,7 +20,14 @@ class ProjectReductionPanel final : public Component, private Timer {
             }
             g.setColour(available?Colours::white:theme::secondary);g.setFont(theme::font(13));
             String label=source?text(owner.sources[(size_t)row].name):owner.groups[(size_t)row].name;
-            const int inset=source?32:8;g.drawText(label,inset,0,width-inset-8,height,Justification::centredLeft);
+            int inset=32;
+            if(!source){
+                const int numberWidth=std::max(24,String(getNumRows()).length()*9);
+                g.setColour(theme::secondary);
+                g.drawText(String(row+1),8,0,numberWidth,height,Justification::centredRight);
+                g.setColour(Colours::white);inset=8+numberWidth+8;
+            }
+            g.drawText(label,inset,0,std::max(0,width-inset-8),height,Justification::centredLeft);
         }
         void backgroundClicked(const MouseEvent &) override {owner.finishEditing();}
         void selectedRowsChanged(int) override {if(!owner.refreshing)owner.selectionChanged(source);}

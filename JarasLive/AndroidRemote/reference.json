@@ -4,12 +4,12 @@
   "files": {
     "Apple/Shared/DAWRemoteProtocol.swift": "32f4513bd8cb67d16796835f44c2ba000c86c40f2d2b9041542e045bb4cc5c88",
     "Apple/Shared/DAWRemoteSession.swift": "1e3cd4c5bb62ec82fb78929233b88e7118e8cec17051b995216819cd215c3157",
-    "Apple/Shared/DAWRemoteView.swift": "a7826be201475029d26796aa76632a75e50b50a4c91b8012dbbfc63260041207",
+    "Apple/Shared/DAWRemoteView.swift": "f359825ec549df45e0682b720632a7fd7dd6cd6565268c6fe17f127a2bdd1cf8",
     "Apple/Shared/Theme.swift": "407b7ff90572d65aa896b9ae96d5fbb6d4d4134916f392487fa172b94a6c04ab",
     "Apple/Shared/TrackInstrumentIcons.swift": "7dbcdbdbd276a0c29c0063eaf7eb9847241308a222c85886dd9fa03966eb45bf",
     "Apple/Resources/en.lproj/Localizable.strings": "7b5cccd683c0229414e26383d6401ff88134929c4cf3b3ada7940345e75cf847",
     "Apple/Resources/pt-BR.lproj/Localizable.strings": "db2e180b91f16b1113df22d878b9d0aa6d4757877f8c551ee34617780faedc20",
-    "Apple/Shared/SmoothSeekPanel.swift": "61e2aefe4a6d0b5192886f36bf3f1b150ab447e055569a75b25f23cc99132dee"
+    "Apple/Shared/SmoothSeekPanel.swift": "0f6b092c7ecb6adaa6455f064ec68f45f9a373da9a7138fea7115ce12d7d859f"
   },
-  "review_notes": "1.32 build 1115: Master mute blinking reviewed in Apple Remote and mirrored in Android TrackRow. iOS native embedded/detached video and projection toolbar use existing actions; Remote wire protocol unchanged."
+  "review_notes": "1.33 source review: Parts 1/Parts 2 mapping actions select the current/queued Parts tab and reveal the panel on iOS Remote and Android. Repeated commands keep the panel open; transport and queue commands are unchanged. No builds generated. Native-only partial transfer actions were added to the Save menu; no Remote protocol or Android transport changes."
 }

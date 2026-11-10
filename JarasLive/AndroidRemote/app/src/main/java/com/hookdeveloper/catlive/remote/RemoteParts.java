@@ -27,13 +27,14 @@ final class RemoteParts extends LinearLayout {
 
     RemoteParts(MainActivity app){this(app,id->app.remote.action("queueSection",id,0),()->app.remote.action("cancelSection"));}
     RemoteParts(MainActivity app,Consumer<String> select,Runnable cancelAction){
-        super(app);this.app=app;this.select=select;setOrientation(VERTICAL);setBackground(RemoteWidgets.panel(0));
+        super(app);this.app=app;this.select=select;secondary=app.partsSecondary;setOrientation(VERTICAL);setBackground(RemoteWidgets.panel(0));
         cancel=new Button(app,"Cancel",cancelAction);cancel.setTextSize(12);cancel.solid(0xffffd600);
         cancel.setContentDescription("Cancelar trecho engatilhado");LayoutParams lp=new LayoutParams(-1,dp(28));lp.setMargins(dp(4),dp(4),dp(4),dp(4));addView(cancel,lp);
         LinearLayout tabs=row(app);pad(tabs,4,4);currentTab=new Tab(false);queuedTab=new Tab(true);
         tabs.addView(currentTab,new LayoutParams(0,dp(42),1));lp=new LayoutParams(0,dp(42),1);lp.leftMargin=dp(3);tabs.addView(queuedTab,lp);addView(tabs);
         ScrollView scroll=new ScrollView(app);scroll.setVerticalScrollBarEnabled(false);list=column(app);pad(list,5,5);scroll.addView(list);addView(scroll,new LayoutParams(-1,0,1));refresh();
     }
+    void selectTab(boolean second){secondary=second;app.partsSecondary=second;refresh();}
     JSONObject bank(boolean second){
         String id=RemoteModel.id(playback,second?"secondaryRegion":"currentRegion");
         if(playback==null)id=RemoteModel.id(app.state,second?"queuedRegion":"currentRegion");
@@ -81,7 +82,7 @@ final class RemoteParts extends LinearLayout {
         Tab(boolean second){super(app);this.second=second;setOrientation(VERTICAL);pad(this,4,4);setClickable(true);setFocusable(true);
             title=label(app,"",13,SECONDARY);title.setTypeface(bold);title.setGravity(Gravity.CENTER);title.setSingleLine();addView(title,new LayoutParams(-1,-1));
             name=label(app,"—",12,TEXT);name.setTypeface(bold);name.setGravity(Gravity.CENTER);name.setMaxLines(3);name.setAutoSizeTextTypeUniformWithConfiguration(6,12,1,android.util.TypedValue.COMPLEX_UNIT_SP);LayoutParams lp=new LayoutParams(-1,0,1);lp.topMargin=dp(3);name.setVisibility(GONE);addView(name,lp);
-            setOnClickListener(v->{secondary=second;refresh();});
+            setOnClickListener(v->selectTab(second));
         }
         void update(JSONObject region){boolean selected=secondary==second;title.setText(RemoteText.ui(second?"Queued":app.state.optBoolean("playing")?"Now playing":"Selected song"));name.setText(region==null?"—":region.optString("name"));
             title.setTextColor(selected?TEXT:SECONDARY);name.setTextColor(selected?TEXT:SECONDARY);setBackground(selected?surface(blend(0xff171717,second?0xffff9500:GREEN,.55f),blend(0xff171717,second?0xffff9500:GREEN,.48f),0x2affffff,5):display(5));setSelected(selected);setContentDescription(title.getText());}

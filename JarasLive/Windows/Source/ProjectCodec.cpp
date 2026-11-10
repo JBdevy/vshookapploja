@@ -375,6 +375,7 @@ void canonicalMapKeys(var &map, bool prefixed) {
 var ProjectCodec::canonicalIDs(const var &input) {
     auto root = input.clone();
     canonicalIDFields(root, {"id", "projectSyncID"});
+    canonicalIDArray(root, "partialImportIDs");
     identityField(root, "savedCursor", [](var &cursor) { canonicalIDFields(cursor, {"songID"}); });
     identityField(root, "masterFX", canonicalFX);
     identityField(root, "masterAutomation", canonicalAutomation);
@@ -484,6 +485,7 @@ jaras::Project ProjectCodec::decode(const var &input) {
     p.id = s(root, "id");
     p.name = s(root, "name");
     if (get(root, "projectSyncID").isString()) p.projectSyncID = s(root, "projectSyncID");
+    if (get(root, "partialImportIDs").isArray()) { p.partialImportIDs.emplace(); for (auto id : list(get(root, "partialImportIDs"))) p.partialImportIDs->push_back(utf8(id.toString())); }
     if (get(root, "timelineMovementLocked").isBool())
         p.timelineMovementLocked = flag(root, "timelineMovementLocked");
     p.projectFormatVersion = (int)num(root, "projectFormatVersion", 1);
@@ -774,6 +776,8 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
     emit(root, "timelineMovementLocked", p.timelineMovementLocked);
     if (p.projectSyncID) put(root, "projectSyncID", text(*p.projectSyncID));
     else root.getDynamicObject()->removeProperty("projectSyncID");
+    if (p.partialImportIDs) { Array<var> ids; for (auto &id : *p.partialImportIDs) ids.add(text(id)); put(root, "partialImportIDs", ids); }
+    else root.getDynamicObject()->removeProperty("partialImportIDs");
     put(root, "projectFormatVersion", p.projectFormatVersion);
     put(root, "minimumJarasVersion", "1.0.0");
     put(root, "createdAt", text(p.createdAt));
