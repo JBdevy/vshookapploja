@@ -69,7 +69,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         String host=getIntent().getStringExtra("host");int port=getIntent().getIntExtra("port",0);if(BuildConfig.DEBUG&&host!=null&&port>0){entering=true;handler.postDelayed(()->remote.connect(new RemoteSession.Peer(host,host,port)),600);}
     }
     @Override protected void onResume(){super.onResume();if(remote!=null&&entering)remote.resume();if(midi!=null)midi.start();}
-    @Override protected void onStop(){cancelSetlistCommit();if(vinhetas!=null)vinhetas.releaseAll();if(remote!=null)remote.suspend();if(midi!=null)midi.stop();super.onStop();}
+    @Override protected void onStop(){cancelSetlistCommit();if(vinhetas!=null)vinhetas.releaseAll();if(midi!=null)midi.stop();if(remote!=null)remote.suspend();super.onStop();}
     @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);if(remote!=null)remote.close();if(midi!=null)midi.stop();super.onDestroy();}
     @Override public void onConfigurationChanged(Configuration c){super.onConfigurationChanged(c);init(this);if(screen.equals("startup"))return;if(tabletLayout()&&screen.equals("workspace")&&observerPanes!=null){layoutTabletObserver();return;}structure="";if(screen.equals("workspace")&&remote.state!=null&&(!remote.connected||remote.mode.isEmpty())){removeConnectionOverlay();showConnectionOverlay();return;}if(remote.connected&&!remote.mode.isEmpty()&&remote.state!=null)buildWorkspace();else if(entering)showHome();else showWelcome();}
     void handleBack(){if(root.findViewWithTag("connection")!=null||root.findViewWithTag("project-loading")!=null)return;if(!screen.equals("workspace")){if(entering){entering=false;remote.exit();showWelcome();}else finish();return;}if(fullscreen){fullscreen=false;buildWorkspace();return;}if(!panel.equals("grid")&&!panel.equals("setlist")){choose("grid");return;}if(remote.connected){confirm("Sair do Remote?","A reprodução continua no computador.","Sair",()->remote.exit());}else if(entering){entering=false;showWelcome();}else finish();}
@@ -549,14 +549,14 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     }
     void midiAction(String action){if(!remote.mode.equals("director"))return;if(action.startsWith("learn:")){onMessage("Mapeamento MIDI salvo");return;}switch(action){case "setlistUp":case "setlistDown":navigateSong(action.endsWith("Up")?-1:1);break;case "partsUp":case "partsDown":navigatePart(action.endsWith("Up")?-1:1);break;case "parts1":case "parts2":showMappedParts(action.equals("parts2"));break;case "toggleParts":choose("parts");break;case "playStop":remote.action(state.optBoolean("playing")||state.optBoolean("paused")?"stop":"play");break;case "subPlayStop":if(state.optBoolean("playing"))remote.action(state.optBoolean("subPlaying")?"subStop":"subPlay");break;case "togglePreview":if(state.has("previewActive")&&!state.isNull("previewActive"))remote.action("togglePreview");break;case "repeatPlayback":remote.action("toggleLoop");break;case "bypass":remote.action("toggleMultiLoopBypass");break;case "playlistUp":case "playlistDown":resetSetlistBrowsing();List<JSONObject> lists=RemoteModel.list(RemoteModel.array(state,"playlists"));int at=-1;for(int i=0;i<lists.size();i++)if(RemoteModel.same(RemoteModel.id(lists.get(i),"id"),RemoteModel.id(state,"selectedPlaylist")))at=i;at=Math.max(-1,Math.min(lists.size()-1,at+(action.endsWith("Up")?-1:1)));remote.action("selectPlaylist",at<0?null:RemoteModel.id(lists.get(at),"id"),0);break;default:remote.action(action);}}
     void cancelSetlistCommit(){if(pendingSetlistCommit!=null)handler.removeCallbacks(pendingSetlistCommit);pendingSetlistCommit=null;}
-    void resetSetlistBrowsing(){cancelSetlistCommit();setlistBrowseID="";setlistArrowHeld=false;}
+    void resetSetlistBrowsing(){if(midi!=null)midi.smk.part="";cancelSetlistCommit();setlistBrowseID="";setlistArrowHeld=false;}
     void syncSetlistBrowseContext(){
         String context=RemoteModel.id(state,"project")+"/"+RemoteModel.id(state,"song")+"/"+RemoteModel.id(state,"selectedPlaylist");
         if(!context.equals(setlistBrowseContext)){resetSetlistBrowsing();setlistBrowseContext=context;}
     }
     boolean canNavigateSetlist(){return state!=null&&remote.connected&&remote.mode.equals("director")&&
         !(activeDialog!=null&&activeDialog.isShowing())&&!(state.optJSONObject("projects")!=null&&state.optJSONObject("projects").optBoolean("busy"));}
-    boolean isSetlistSelected(String id){if(remote.mode.equals("observer"))return RemoteModel.same(RemoteModel.observerFocusedEntry(state,expanded),id);return setlistBrowseID.isEmpty()?RemoteModel.showsSetlistSelection(state)&&RemoteModel.same(RemoteModel.id(state,"focusedRegion"),id):RemoteModel.same(setlistBrowseID,id);}
+    boolean isSetlistSelected(String id){if(remote.mode.equals("observer"))return RemoteModel.same(RemoteModel.observerFocusedEntry(state,expanded),id);if(midi!=null&&!midi.smk.part.isEmpty())return false;return setlistBrowseID.isEmpty()?RemoteModel.showsSetlistSelection(state)&&RemoteModel.same(RemoteModel.id(state,"focusedRegion"),id):RemoteModel.same(setlistBrowseID,id);}
     void followObserverSelection(){
         if(!remote.mode.equals("observer")||setlistScroll==null)return;
         String focus=RemoteModel.observerFocusedEntry(state,expanded);
@@ -583,7 +583,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     }
     void navigateSong(int delta){navigateSong(delta,true);}
     void navigateSong(int delta,boolean commitAfterDelay){
-        if(!canNavigateSetlist())return;syncSetlistBrowseContext();cancelSetlistCommit();
+        if(!canNavigateSetlist())return;if(midi!=null)midi.smk.part="";if(parts!=null)parts.tick();syncSetlistBrowseContext();cancelSetlistCommit();
         List<JSONObject> songs=visibleSetlistRegions();if(songs.isEmpty())return;
         String id=setlistBrowseID.isEmpty()?RemoteModel.id(state,"focusedRegion"):setlistBrowseID;
         int at=-1;for(int i=0;i<songs.size();i++)if(RemoteModel.same(RemoteModel.id(songs.get(i),"id"),id))at=i;

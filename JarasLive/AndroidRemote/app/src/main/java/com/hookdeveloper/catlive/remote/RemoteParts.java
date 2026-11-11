@@ -92,7 +92,7 @@ final class RemoteParts extends LinearLayout {
         SectionRow(String id,String name,double start,boolean first,int color,boolean loop){super(app);this.id=id;this.name=name;this.start=start;this.first=first;this.color=color;this.loop=loop;setWillNotDraw(false);setClickable(true);setFocusable(true);setContentDescription(name);
             double luminance=.2126*linear(Color.red(color))+.7152*linear(Color.green(color))+.0722*linear(Color.blue(color));
             int text=(luminance+.05)/.05>=1.05/(luminance+.05)?Color.BLACK:Color.WHITE;
-            title=label(app,name,first?16:12,text);title.setTypeface(bold);title.setGravity(Gravity.CENTER);title.setMaxLines(2);title.setAutoSizeTextTypeUniformWithConfiguration(first?9:6,first?16:12,1,android.util.TypedValue.COMPLEX_UNIT_SP);pad(title,5,0);addView(title,new FrameLayout.LayoutParams(-1,-1));setOnClickListener(v->select.accept(id));}
+            title=label(app,name,first?16:12,text);title.setTypeface(bold);title.setGravity(Gravity.CENTER);title.setMaxLines(2);title.setAutoSizeTextTypeUniformWithConfiguration(first?9:6,first?16:12,1,android.util.TypedValue.COMPLEX_UNIT_SP);pad(title,5,0);addView(title,new FrameLayout.LayoutParams(-1,-1));setOnClickListener(v->{if(app.midi!=null)app.midi.smk.selectPart(id,secondary);select.accept(id);});}
         double linear(int channel){double value=channel/255.0;return value<=.04045?value/12.92:Math.pow((value+.055)/1.055,2.4);}
         @Override protected void onSizeChanged(int w,int h,int oldw,int oldh){super.onSizeChanged(w,h,oldw,oldh);loopBorder=loop&&w>0&&h>0?new LinearGradient(0,0,w,h,new int[]{0xffff5050,0xff51ef93,0xff409cff},null,Shader.TileMode.CLAMP):null;}
         void update(){armed=RemoteModel.same(id,queued);playing=RemoteModel.same(id,active);title.setText((armed?"↰ ":"")+name);setSelected(armed||(queued.isEmpty()&&playing));}
@@ -105,7 +105,7 @@ final class RemoteParts extends LinearLayout {
             paint.setStyle(Paint.Style.FILL);paint.setColor(color);canvas.drawRoundRect(0,0,w,h,dp(5),dp(5),paint);
             double fraction=fraction();if(fraction>=0){paint.setColor(armed?YELLOW:GREEN);canvas.save();Path clip=new Path();clip.addRoundRect(new RectF(0,0,w,h),dp(5),dp(5),Path.Direction.CW);canvas.clipPath(clip);canvas.drawRect(0,h-dp(5),(float)(w*fraction),h,paint);canvas.restore();}
             paint.setStyle(Paint.Style.STROKE);float stroke=loop?2*density:(selected?1.5f:.5f)*density;paint.setStrokeWidth(stroke);paint.setColor(selected?GREEN:0x2affffff);paint.setShader(loopBorder);canvas.drawRoundRect(stroke/2,stroke/2,w-stroke/2,h-stroke/2,dp(5),dp(5),paint);paint.setShader(null);
-            if(loop&&selected){float inset=3.75f*density;paint.setColor(GREEN);paint.setStrokeWidth(1.5f*density);canvas.drawRoundRect(inset,inset,w-inset,h-inset,dp(3),dp(3),paint);}paint.setStyle(Paint.Style.FILL);
+            if(loop&&selected){float inset=3.75f*density;paint.setColor(GREEN);paint.setStrokeWidth(1.5f*density);canvas.drawRoundRect(inset,inset,w-inset,h-inset,dp(3),dp(3),paint);}if(app.midi!=null&&app.remote.mode.equals("director")&&app.midi.smk.partSecondary==secondary&&RemoteModel.same(app.midi.smk.part,id)){paint.setShader(null);paint.setColor(BLUE);paint.setStrokeWidth(2*density);canvas.drawRoundRect(density,density,w-density,h-density,dp(4),dp(4),paint);}paint.setStyle(Paint.Style.FILL);
         }
     }
 }

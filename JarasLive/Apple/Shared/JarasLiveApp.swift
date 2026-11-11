@@ -735,7 +735,7 @@ private struct ClosingLogoView: View {
     var attached: Bool { documents != nil }
     var needsConfirmation: Bool {
         DesktopProjectTabs.shared.needsSaveOnClose ||
-        documents?.show.hasUnsavedChanges == true || documents?.show.saving == true ||
+        (documents?.show.hasUnsavedChanges == true && documents?.isTemporary != true) || documents?.show.saving == true ||
         documents?.busy == true || TrackRecording.shared.recording || TrackRecording.shared.busy
     }
     func attach(window: NSWindow, documents: ProjectDocuments) {
@@ -874,6 +874,8 @@ private struct ClosingLogoView: View {
                 // Keep explicit cleanup strict when the inventory is unreadable.
                 do { try await documents.rememberProjectMedia() }
                 catch { NSLog("CatLive: could not update media inventory while closing: %@", error.localizedDescription) }
+                for project in DesktopProjectTabs.shared.projects { try project.documents.discardTemporarySession() }
+                try documents.discardTemporarySession()
                 closingLogo.advance(1)
                 await Task.yield()
                 closingLogo.finish(restore: false)
