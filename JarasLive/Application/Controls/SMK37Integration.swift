@@ -79,8 +79,13 @@ public enum SMK37Protocol {
         // 200 steps match the physical display and avoid needless full-page redraws.
         let progress = Int((elapsed / duration * 200).rounded())
         let seconds = Int(min(2097151, elapsed)), total = Int(min(2097151, duration))
-        return encode(0x18, [UInt8(progress & 127), UInt8(progress >> 7)] +
-            [seconds, total].flatMap { n in [UInt8(n & 127), UInt8((n >> 7) & 127), UInt8((n >> 14) & 127)] })
+        var payload: [UInt8] = [UInt8(progress & 127), UInt8(progress >> 7)]
+        for value in [seconds, total] {
+            payload.append(UInt8(value & 127))
+            payload.append(UInt8((value >> 7) & 127))
+            payload.append(UInt8((value >> 14) & 127))
+        }
+        return encode(0x18, payload)
     }
     public static func padBusLabel(gain: Double) -> String {
         guard gain.isFinite, gain > 0 else { return "VINHETAS FX -INF dB" }
