@@ -142,8 +142,8 @@ class PreparedPCMWorkers {
     bool closing = false;
     uint64_t wakeGeneration = 0;
     std::vector<std::weak_ptr<PreparedPCMCache>> caches;
-    std::thread thread;
-    PreparedPCMWorkers() : thread([this] {
+    std::array<std::thread, 2> threads;
+    void run() {
         std::unique_lock<std::mutex> lock(mutex);
         while (!closing) {
             std::vector<std::shared_ptr<PreparedPCMCache>> work;
@@ -167,13 +167,19 @@ class PreparedPCMWorkers {
                 });
             }
         }
-    }) {}
+    }
+    PreparedPCMWorkers() {
+        // A blocked file decoder must not prevent healthy stems from refilling.
+        // The per-cache try-lock serializes each decoder without blocking the
+        // other worker; neither worker runs on the audio callback.
+        for (auto &thread : threads) thread = std::thread([this] { run(); });
+    }
 public:
     static PreparedPCMWorkers &shared() { static PreparedPCMWorkers workers; return workers; }
-    void add(const std::shared_ptr<PreparedPCMCache> &cache) { std::lock_guard<std::mutex> lock(mutex); caches.push_back(cache); ++wakeGeneration; wake.notify_one(); }
+    void add(const std::shared_ptr<PreparedPCMCache> &cache) { std::lock_guard<std::mutex> lock(mutex); caches.push_back(cache); ++wakeGeneration; wake.notify_all(); }
     // Control/preparation threads only; the audio callback never signals locks.
-    void requestWake() { std::lock_guard<std::mutex> lock(mutex); ++wakeGeneration; wake.notify_one(); }
-    ~PreparedPCMWorkers() { { std::lock_guard<std::mutex> lock(mutex); closing = true; } wake.notify_one(); thread.join(); }
+    void requestWake() { std::lock_guard<std::mutex> lock(mutex); ++wakeGeneration; wake.notify_all(); }
+    ~PreparedPCMWorkers() { { std::lock_guard<std::mutex> lock(mutex); closing = true; } wake.notify_all(); for (auto &thread : threads) thread.join(); }
 };
 
 struct PreparedClipKernel {
@@ -195,7 +201,11 @@ struct PreparedClipKernel {
     double mobileClockOffset = 0;
     int rampFrame = 0;
     PreparedClipKernel(double sr, int ch) : sampleRate(sr), channels(ch) {
-        pitch.presetDefault(2, float(sr), true); // Spread spectral work across small hardware callbacks.
+        // Distribute FFT/spectral work across callbacks. At 128 frames, doing
+        // every stem's full analysis on the same callback exceeds the device
+        // deadline even when average CPU use is low. outputSeek below primes
+        // the extra lookahead before Play, preserving the audible start frame.
+        pitch.presetDefault(2, float(sr), true);
         const int capacity = std::max(8192, pitch.outputSeekLength(1.f));
         for (auto &buffer : input) buffer.resize(capacity);
         for (auto &buffer : output) buffer.resize(512);

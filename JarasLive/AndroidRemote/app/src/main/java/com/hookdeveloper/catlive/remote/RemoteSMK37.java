@@ -77,6 +77,12 @@ final class RemoteSMK37 {
         int[] bytes=new int[data.size()];for(int i=0;i<bytes.length;i++)bytes[i]=data.get(i);return frame(23,bytes);
     }
     void navigation(int kind,List<String> names,int selected){byte[] bytes=navigationFrame(kind,names,selected);if(bytes.length==0)return;pending.remove("action");queue("navigation",bytes,true);}
+    static byte[] playlistFrame(String name){
+        String value=Normalizer.normalize(name,Normalizer.Form.NFD).replaceAll("\\p{M}","").replaceAll("[^ -~]"," ");
+        if(value.length()>36)value=value.substring(0,33)+"...";
+        int[] bytes=new int[value.length()];for(int i=0;i<bytes.length;i++)bytes[i]=value.charAt(i);
+        return frame(25,bytes);
+    }
     static byte[] playbackFrame(double position,double start,double end){
         if(!Double.isFinite(position)||!Double.isFinite(start)||!Double.isFinite(end)||end<=start)return frame(24,0,0,0,0,0,0,0,0);
         double duration=end-start,elapsed=Math.max(0,Math.min(duration,position-start));int progress=(int)Math.round(elapsed/duration*200),seconds=(int)Math.min(2097151,elapsed),total=(int)Math.min(2097151,duration);
@@ -86,6 +92,8 @@ final class RemoteSMK37 {
     void queue(String key,byte[] bytes,boolean force){if(!connected)return;if(force||!Arrays.equals(sent.get(key),bytes))pending.put(key,bytes);else pending.remove(key);}
     void send(byte[] bytes){if(output!=null)try{output.send(bytes,0,bytes.length);}catch(IOException ignored){}}
     void update(){JSONObject s=app.state;if(s==null||!app.remote.connected){release();queue("transport",frame(20,0),false);return;}String nextProject=RemoteModel.id(s,"project");if(!nextProject.equals(project)){release();part="";playlist="";project=nextProject;awaiting="";}
+        JSONObject activePlaylist=RemoteModel.find(RemoteModel.array(s,"playlists"),RemoteModel.id(s,"selectedPlaylist"));
+        queue("playlist",playlistFrame(activePlaylist==null?"All regions":activePlaylist.optString("name","All regions")),false);
         int flags=(s.optBoolean("paused")?1:0)|(s.optBoolean("recording")?2:0)|(s.optBoolean("loop")?4:0)|(s.optBoolean("regionAuto")?8:0)|(s.optBoolean("previewActive")?16:0)|(s.optBoolean("playing")?32:0)|(!RemoteModel.id(s,"queuedRegion").isEmpty()?64:0);
         queue("transport",frame(20,flags),false);queue("loop",named(21,new int[0],s.optString("smkLoopName",""),s.optInt("smkLoopColor",0xffb347)),false);
         JSONObject pads=s.optJSONObject("vinhetas");JSONArray banks=RemoteModel.array(pads,"presets");if(banks.length()==6){int selected=pads.optInt("selectedPreset");if(selected>=0&&selected<6){if(preset!=selected){preset=selected;lastPad=127;}int active=0;for(int p=0;p<6;p++){JSONObject bank=banks.optJSONObject(p);queue("bank"+p,named(16,new int[]{p},bank.optString("name"),bank.optInt("color")),false);if(p!=preset)continue;JSONArray values=RemoteModel.array(bank,"pads");for(int i=0;i<Math.min(16,values.length());i++){JSONObject value=values.optJSONObject(i);queue("pad"+p+":"+i,named(17,new int[]{p,i},value.optString("name"),value.optInt("color")),false);if(value.optBoolean("active"))active|=1<<i;}}queue("selection",frame(18,preset,lastPad,serial,active&127,(active>>7)&127,(active>>14)&3),false);}}

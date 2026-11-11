@@ -3,6 +3,14 @@ import org.junit.Test;
 import org.json.JSONObject;
 import static org.junit.Assert.*;
 public class RemoteSMK37ProtocolTest {
+ @Test public void playlistHeaderHasBoundedTextAndChecksum(){
+  byte[] all=RemoteSMK37.playlistFrame("All regions");
+  assertTrue(RemoteSMK37.valid(all));assertEquals(25,all[6]);
+  byte[] longName=RemoteSMK37.playlistFrame("A".repeat(70));
+  assertTrue(RemoteSMK37.valid(longName));assertEquals(45,longName.length);
+  assertEquals('.',longName[40]);assertEquals('.',longName[41]);assertEquals('.',longName[42]);
+ }
+
  @Test public void navigationKeepsEdgesAndRepeatedNames(){
   byte[] wire=RemoteSMK37.navigationFrame(1,java.util.Arrays.asList("A","B","B","C"),2);
   assertTrue(RemoteSMK37.valid(wire));assertArrayEquals(RemoteSMK37.frame(23,1,1,'A',1,'B',1,'B',1,'C',0),wire);

@@ -9,6 +9,7 @@ import sys
 mixer=Path('Apple/Shared/TrackMixerRow.swift').read_text()
 start=mixer.index('struct TrackMixerHeightGeometry {')
 mixer=mixer[start:mixer.index('\n#endif',start)]
+mixer=mixer.replace('inputRegistration.update(active: active)', 'TrackMixerRegistrationProbe.calls += 1; inputRegistration.update(active: active)')
 grid=Path('Apple/Shared/TimelineGridView.swift').read_text()
 start=grid.index('@available(macOS 13, *)\nprivate struct TimelineColumnsLayout:')
 grid=grid[start:grid.index('private struct TimelineMixerIdentity:',start)]

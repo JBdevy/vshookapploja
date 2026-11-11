@@ -676,7 +676,24 @@ struct IpadVinhetasFloatingPanel: View {
 }
 #endif
 
+#if os(macOS)
+private final class PadsPickerWindowReference { weak var window: NSWindow? }
+private struct PadsPickerWindowCapture: NSViewRepresentable {
+    let reference: PadsPickerWindowReference
+    final class CaptureView: NSView {
+        var reference: PadsPickerWindowReference?
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); reference?.window = window }
+    }
+    func makeNSView(context: Context) -> CaptureView { let view = CaptureView(); view.reference = reference; return view }
+    func updateNSView(_ view: CaptureView, context: Context) { view.reference = reference; reference.window = view.window }
+}
+#endif
+
 struct AdvancedPadsSettings: View {
+    #if os(macOS)
+    @State private var pickerWindow = PadsPickerWindowReference()
+    @State private var choosingFile = false
+    #endif
     @ObservedObject private var model = VinhetasController.shared
     @State private var progress = 0.0
     @State private var message = ""
@@ -698,7 +715,10 @@ struct AdvancedPadsSettings: View {
             if model.transferring { ProgressView(value: progress); Text("Transferindo…").font(.jarasCaption) }
             if !message.isEmpty { Text(verbatim: message).font(.jarasCaption).foregroundStyle(failed ? .red : JarasTheme.green) }
         }
-        #if os(iOS)
+        #if os(macOS)
+        .background(PadsPickerWindowCapture(reference: pickerWindow).frame(width: 0, height: 0))
+        .disabled(choosingFile)
+        #else
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "zipfx") ?? .data]) { result in
             switch result { case .success(let url): run(url, importing: true); case .failure(let error): finish(error) }
         }
@@ -712,8 +732,11 @@ struct AdvancedPadsSettings: View {
     private func export() {
         guard !model.transferring else { return }
         #if os(macOS)
+        guard !choosingFile, let owner = pickerWindow.window else { return }
         let picker = NSSavePanel(); picker.allowedFileTypes = ["zipfx"]; picker.nameFieldStringValue = "CatLive-Pads.zipfx"
-        picker.begin { response in
+        choosingFile = true
+        picker.beginSheetModal(for: owner) { response in
+            choosingFile = false
             if response == .OK, let url = picker.url { run(url, importing: false) }
         }
         #else
@@ -727,8 +750,11 @@ struct AdvancedPadsSettings: View {
     private func chooseImport() {
         guard !model.transferring else { return }
         #if os(macOS)
+        guard !choosingFile, let owner = pickerWindow.window else { return }
         let picker = NSOpenPanel(); picker.allowedFileTypes = ["zipfx"]; picker.canChooseDirectories = false; picker.allowsMultipleSelection = false
-        picker.begin { response in
+        choosingFile = true
+        picker.beginSheetModal(for: owner) { response in
+            choosingFile = false
             if response == .OK, let url = picker.url { run(url, importing: true) }
         }
         #else
