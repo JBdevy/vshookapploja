@@ -3,6 +3,13 @@ import org.junit.Test;
 import org.json.JSONObject;
 import static org.junit.Assert.*;
 public class RemoteSMK37ProtocolTest {
+ @Test public void playingAndQueuedTitlesHaveMatchingBoundedWireFormat(){
+  assertArrayEquals(RemoteSMK37.frame(26,4,'S','o','n','g',4,'N','e','x','t'),RemoteSMK37.songTitlesFrame("Song","Next"));
+  assertArrayEquals(RemoteSMK37.frame(26,0,0),RemoteSMK37.songTitlesFrame("",""));
+  byte[] bounded=RemoteSMK37.songTitlesFrame("A".repeat(100),"B".repeat(100));
+  assertTrue(RemoteSMK37.valid(bounded));assertEquals(83,bounded.length);
+ }
+
  @Test public void playlistHeaderHasBoundedTextAndChecksum(){
   byte[] all=RemoteSMK37.playlistFrame("All regions");
   assertTrue(RemoteSMK37.valid(all));assertEquals(25,all[6]);

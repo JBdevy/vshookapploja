@@ -83,6 +83,16 @@ final class RemoteSMK37 {
         int[] bytes=new int[value.length()];for(int i=0;i<bytes.length;i++)bytes[i]=value.charAt(i);
         return frame(25,bytes);
     }
+    static byte[] songTitlesFrame(String playing,String queued){
+        List<Integer> payload=new ArrayList<>();
+        for(String name:new String[]{playing,queued}){
+            String value=Normalizer.normalize(name,Normalizer.Form.NFD).replaceAll("\\p{M}","").replaceAll("[^ -~]"," ");
+            if(value.length()>36)value=value.substring(0,33)+"...";
+            payload.add(value.length());for(int i=0;i<value.length();i++)payload.add((int)value.charAt(i));
+        }
+        int[] bytes=new int[payload.size()];for(int i=0;i<bytes.length;i++)bytes[i]=payload.get(i);
+        return frame(26,bytes);
+    }
     static byte[] playbackFrame(double position,double start,double end){
         if(!Double.isFinite(position)||!Double.isFinite(start)||!Double.isFinite(end)||end<=start)return frame(24,0,0,0,0,0,0,0,0);
         double duration=end-start,elapsed=Math.max(0,Math.min(duration,position-start));int progress=(int)Math.round(elapsed/duration*200),seconds=(int)Math.min(2097151,elapsed),total=(int)Math.min(2097151,duration);
@@ -98,6 +108,8 @@ final class RemoteSMK37 {
         queue("transport",frame(20,flags),false);queue("loop",named(21,new int[0],s.optString("smkLoopName",""),s.optInt("smkLoopColor",0xffb347)),false);
         JSONObject pads=s.optJSONObject("vinhetas");JSONArray banks=RemoteModel.array(pads,"presets");if(banks.length()==6){int selected=pads.optInt("selectedPreset");if(selected>=0&&selected<6){if(preset!=selected){preset=selected;lastPad=127;}int active=0;for(int p=0;p<6;p++){JSONObject bank=banks.optJSONObject(p);queue("bank"+p,named(16,new int[]{p},bank.optString("name"),bank.optInt("color")),false);if(p!=preset)continue;JSONArray values=RemoteModel.array(bank,"pads");for(int i=0;i<Math.min(16,values.length());i++){JSONObject value=values.optJSONObject(i);queue("pad"+p+":"+i,named(17,new int[]{p,i},value.optString("name"),value.optInt("color")),false);if(value.optBoolean("active"))active|=1<<i;}}queue("selection",frame(18,preset,lastPad,serial,active&127,(active>>7)&127,(active>>14)&3),false);}}
         JSONObject region=RemoteModel.find(RemoteModel.array(s,"timelineRegions"),RemoteModel.id(s,"currentRegion"));
+        JSONObject waiting=RemoteModel.find(RemoteModel.array(s,"timelineRegions"),RemoteModel.id(s,"queuedRegion"));
+        queue("songs",songTitlesFrame(region==null?"":region.optString("name"),waiting==null?"":waiting.optString("name")),false);
         queue("playback",playbackFrame(s.optDouble("position"),region==null?0:region.optDouble("start"),region==null?s.optDouble("duration"):region.optDouble("end")),false);
         queue("fadeout",fadeProgress(s.optJSONObject("fadeout")),false);
         finishFeedback(s);
@@ -116,5 +128,5 @@ final class RemoteSMK37 {
         else {boolean actual=awaiting.equals("play")?(s.optBoolean("playing")||s.optBoolean("paused")):awaiting.equals("fadeout")?fadeActive(s.optJSONObject("fadeout")):s.optBoolean(awaiting);if(actual!=expected)return;switch(awaiting){case "play":text=actual?"PLAY":"STOP";break;case "paused":if(!actual)text=s.optBoolean("playing")?"PLAY":"STOP";break;case "recording":if(!actual)text="REC DESATIVADO";break;case "loop":if(!actual)text="LOOP DESATIVADO";break;case "regionAuto":text=actual?"AUTO ATIVO":"AUTO DESATIVADO";break;case "previewActive":text=actual?"PREVIEW ATIVADO":"PREVIEW DESATIVADO";break;case "fadeout":text=actual?null:"FADE OUT CANCELADO";break;}}
         awaiting="";if(text!=null)feedback(text,0xeeeeee);
     }
-    final Runnable pulse=new Runnable(){public void run(){if(output==null)return;long now=SystemClock.elapsedRealtime();if(connected&&now-response>=3000){release();connected=false;sent.clear();pending.clear();}if(now-hello>=1000){send(frame(1));hello=now;}if(connected){update();int count=0;for(String key:new String[]{"action","navigation","transport","fadeout","playback","loop","selection"}){byte[] b=pending.remove(key);if(b!=null){send(b);sent.put(key,b);count++;}}while(count++<4&&!pending.isEmpty()){String key=pending.keySet().iterator().next();byte[] b=pending.remove(key);send(b);sent.put(key,b);}}main.postDelayed(this,50);}};
+    final Runnable pulse=new Runnable(){public void run(){if(output==null)return;long now=SystemClock.elapsedRealtime();if(connected&&now-response>=3000){release();connected=false;sent.clear();pending.clear();}if(now-hello>=1000){send(frame(1));hello=now;}if(connected){update();int count=0;for(String key:new String[]{"action","navigation","transport","fadeout","songs","playback","loop","selection"}){byte[] b=pending.remove(key);if(b!=null){send(b);sent.put(key,b);count++;}}while(count++<4&&!pending.isEmpty()){String key=pending.keySet().iterator().next();byte[] b=pending.remove(key);send(b);sent.put(key,b);}}main.postDelayed(this,50);}};
 }
