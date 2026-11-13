@@ -4,6 +4,7 @@
 #include <cmath>
 #include <unordered_map>
 #include "../Audio/PiecewiseTimeMap.hpp"
+#include "../Tracks/AutomationTiming.hpp"
 namespace jaras {
 // Keep in step with TimelineTempo.swift. Detection batches intentionally bypass
 // this edit map: inserting a measured tempo must not move the source material.
@@ -131,8 +132,8 @@ public:
         }
         std::vector<std::pair<double,double>> occupied;
         for(const auto& part:before.parts) if(!folder(before,part)) occupied.emplace_back(part.startTime,part.endTime);
-        for(const auto& track:before.tracks) if(fixedTrackName(track.role).empty())
-            for(const auto& clip:track.clips) if((clip.audioFile || track.audioFile) && !owner(before,clip)) occupied.emplace_back(clip.startTime,clip.startTime+clip.duration);
+        for(const auto& track:before.tracks)
+            for(const auto& clip:track.clips) if((clip.midi || clip.audioFile || track.audioFile || track.role.id=="timecode" || track.role.id=="generatedClick") && !owner(before,clip)) occupied.emplace_back(clip.startTime,clip.startTime+clip.duration);
         std::sort(occupied.begin(),occupied.end());
         std::vector<std::pair<double,double>> merged;
         for(const auto& interval:occupied) if(interval.second>interval.first) {
@@ -183,7 +184,7 @@ public:
                 markerStarts[marker.id]=position(owner->startTime)+resizedDuration(owner->startTime,marker.position,*owner);
         }
         for(const auto& part:before.parts) if(!folder(before,part)) regionDurations[part.id]=resizedDuration(part.startTime,part.endTime,part);
-        for(const auto& track:before.tracks) if(fixedTrackName(track.role).empty()) for(const auto& clip:track.clips)
+        for(const auto& track:before.tracks) for(const auto& clip:track.clips)
             if(const auto* part=owner(before,clip)) {
                 clipStarts[clip.id]=position(part->startTime)+resizedDuration(part->startTime,clip.startTime,*part);
                 clipDurations[clip.id]=resizedDuration(clip.startTime,clip.startTime+clip.duration,*part);
@@ -207,6 +208,12 @@ public:
     }
     void apply(Song& song) const {
         if(!changesTime()) return;
+        for(auto& track:song.tracks) {
+            // Automation always follows timing changes, including projects
+            // saved with the old optional preference disabled.
+            automationTiming::map(track.automationJSON, [&](double time){return position(time);});
+            for(auto& marker:track.programChanges) marker.position=position(marker.position);
+        }
         for(auto& track:song.tracks) for(auto& clip:track.clips) {
             const double previousDuration=clip.duration;
             const double start=position(clip.startTime),end=position(clip.startTime+clip.duration);
@@ -231,6 +238,12 @@ public:
             for(const auto& child:song.parts) if(child.parentRegionID==part.id) end=std::max(end,child.endTime);
             part.endTime=end;
         }
+        for(auto& track:song.tracks)if(track.role.id=="timecode" && !track.importedTimecodeItems)for(auto& clip:track.clips)if(!clip.audioFile)
+            for(const auto& part:song.parts) {
+                auto id=part.id;
+                if(id.size()==36){const auto digit=std::stoi(id.substr(0,1),nullptr,16)^8;id[0]="0123456789ABCDEF"[digit];}else id+="-timecode";
+                if(id==clip.id){clip.timecodeStartOffset=clip.startTime-part.startTime;clip.timecodeEndOffset=clip.startTime+clip.duration-part.endTime;break;}
+            }
         if(song.markers) for(auto& marker:*song.markers) {
             const auto anchor=tempoEndRegions.find(marker.id);
             const auto region=anchor==tempoEndRegions.end()?song.parts.end():std::find_if(song.parts.begin(),song.parts.end(),[&](const auto& part){return part.id==anchor->second;});

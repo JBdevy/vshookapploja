@@ -351,6 +351,7 @@ static NSDictionary* projectJSON(const Project& p, bool includeWaveforms = true)
     NSMutableDictionary* result=[@{@"id":text(p.id),@"name":text(p.name),@"projectFormatVersion":@(p.projectFormatVersion),@"minimumJarasVersion":text(p.minimumJarasVersion),@"createdAt":text(p.createdAt),@"updatedAt":text(p.updatedAt),@"songs":songs,@"setlists":setlists} mutableCopy];
     if(p.importedTimeline) result[@"importedTimeline"]=@(*p.importedTimeline);
     if(p.timelineMovementLocked) result[@"timelineMovementLocked"]=@(*p.timelineMovementLocked);
+    if(p.timelineLockOptions) result[@"timelineLockOptions"]=@(*p.timelineLockOptions);
     if(p.savedCursor) result[@"savedCursor"]=@{@"songID":text(p.savedCursor->songID), @"position":@(p.savedCursor->position)};
     if(p.projectSyncID) result[@"projectSyncID"]=text(*p.projectSyncID);
     if(p.partialImportIDs) { NSMutableArray* ids = [NSMutableArray new]; for(const auto& id : *p.partialImportIDs) [ids addObject:text(id)]; result[@"partialImportIDs"] = ids; }
@@ -411,6 +412,7 @@ static Project readProject(NSDictionary* d) {
     if(d[@"partialImportIDs"] && d[@"partialImportIDs"] != NSNull.null) { p.partialImportIDs.emplace(); for(id value in array(d[@"partialImportIDs"])) p.partialImportIDs->push_back(str(value)); }
     if(d[@"importedTimeline"] && d[@"importedTimeline"] != NSNull.null) p.importedTimeline=number(d[@"importedTimeline"])!=0;
     if(d[@"timelineMovementLocked"] && d[@"timelineMovementLocked"] != NSNull.null) p.timelineMovementLocked=number(d[@"timelineMovementLocked"])!=0;
+    if(d[@"timelineLockOptions"] && d[@"timelineLockOptions"] != NSNull.null) p.timelineLockOptions=(int)number(d[@"timelineLockOptions"]) & 7;
     if(d[@"savedCursor"] && d[@"savedCursor"] != NSNull.null) {
         NSDictionary* cursor=object(d[@"savedCursor"]);
         p.savedCursor=SavedProjectCursor{str(cursor[@"songID"]), number(cursor[@"position"])};
@@ -469,7 +471,11 @@ static Project readProject(NSDictionary* d) {
     return p;
 }
 static void report(NSError** error, const std::exception& e) { if (error) *error = [NSError errorWithDomain:@"JarasLiveCore" code:1 userInfo:@{NSLocalizedDescriptionKey:text(e.what())}]; }
-@implementation JarasCoreBridge { std::unique_ptr<Engine> _engine; TrackTaxonomy _taxonomy; }
+@implementation JarasCoreBridge {
+    std::unique_ptr<Engine> _engine; TrackTaxonomy _taxonomy;
+    NSDictionary<NSString*,NSDictionary<NSString*,NSDictionary*>*>* _snapshotTracks;
+    uint64_t _snapshotRevision;
+}
 - (instancetype)init { if ((self=[super init])) _engine=std::make_unique<Engine>(); return self; }
 - (BOOL)applyProjectEditData:(NSData*)data error:(NSError**)error {
     id decoded=[NSJSONSerialization JSONObjectWithData:data options:0 error:error]; if (!decoded) return NO;
@@ -491,6 +497,55 @@ static void report(NSError** error, const std::exception& e) { if (error) *error
             if(!clip.waveform.empty() || !clip.waveformChannels.empty()) throw std::invalid_argument("Preserved waveform data must be omitted");
             const auto previous=existing.at(clip.id);
             clip.waveform=previous->waveform; clip.waveformChannels=previous->waveformChannels;
+        }
+        if(!pending.empty()) throw std::invalid_argument("Preserved waveform item is missing from the edit");
+        _engine->applyProjectEdit(std::move(project)); return YES;
+    } catch(const std::exception& e) { report(error,e); return NO; }
+}
+- (BOOL)applyTrackStructureEditData:(NSData*)data trackOrders:(NSDictionary<NSString*,NSArray<NSString*>*>*)orders preservingWaveforms:(NSDictionary<NSString*,NSString*>*)identifiers error:(NSError**)error {
+    id decoded=[NSJSONSerialization JSONObjectWithData:data options:0 error:error]; if(!decoded) return NO;
+    try {
+        Project project=readProject(object(decoded));
+        if(orders.count!=project.songs.size()) throw std::invalid_argument("Incomplete track order");
+        for(auto& song:project.songs) {
+            NSArray* order=orders[text(song.id)];
+            if(![order isKindOfClass:NSArray.class]) throw std::invalid_argument("Missing track order");
+            const auto& songs=_engine->project().songs;
+            const auto previous=std::find_if(songs.begin(),songs.end(),[&](const Song& old){ return old.id==song.id; });
+            std::map<ID,const Track*> unchanged;
+            if(previous!=songs.end()) for(const auto& track:previous->tracks) unchanged.emplace(track.id,&track);
+            std::map<ID,Track> changed;
+            for(auto& track:song.tracks) if(!changed.emplace(track.id,std::move(track)).second) throw std::invalid_argument("Duplicate changed track");
+            std::vector<Track> tracks; tracks.reserve(order.count);
+            std::set<ID> seen;
+            for(id identifier:order) {
+                const auto key=str(identifier);
+                if(!seen.insert(key).second) throw std::invalid_argument("Duplicate track order ID");
+                const auto edited=changed.find(key);
+                if(edited!=changed.end()) { tracks.push_back(std::move(edited->second)); changed.erase(edited); }
+                else {
+                    const auto kept=unchanged.find(key);
+                    if(kept==unchanged.end()) throw std::invalid_argument("Unknown retained track");
+                    tracks.push_back(*kept->second);
+                }
+            }
+            if(!changed.empty()) throw std::invalid_argument("Changed track missing from order");
+            song.tracks=std::move(tracks);
+        }
+        std::map<ID,const AudioClip*> existing;
+        for(const auto& song:_engine->project().songs) for(const auto& track:song.tracks) for(const auto& clip:track.clips) existing.emplace(clip.id,&clip);
+        std::map<ID,ID> pending;
+        for(id identifier in identifiers) {
+            const auto key=str(identifier), source=str(identifiers[identifier]);
+            if(!pending.emplace(key,source).second || existing.find(source)==existing.end()) throw std::invalid_argument("Unknown or duplicate preserved waveform ID");
+        }
+        for(auto& song:project.songs) for(auto& track:song.tracks) for(auto& clip:track.clips) {
+            const auto found=pending.find(clip.id);
+            if(found==pending.end()) continue;
+            if(!clip.waveform.empty() || !clip.waveformChannels.empty()) throw std::invalid_argument("Preserved waveform data must be omitted");
+            const auto previous=existing.at(found->second);
+            clip.waveform=previous->waveform; clip.waveformChannels=previous->waveformChannels;
+            pending.erase(found);
         }
         if(!pending.empty()) throw std::invalid_argument("Preserved waveform item is missing from the edit");
         _engine->applyProjectEdit(std::move(project)); return YES;
@@ -541,6 +596,39 @@ static void report(NSError** error, const std::exception& e) { if (error) *error
     NSMutableDictionary* data=[[NSJSONSerialization JSONObjectWithData:playback options:0 error:error] mutableCopy];
     data[@"project"]=projectJSON(_engine->project(),false);
     return [NSJSONSerialization dataWithJSONObject:data options:0 error:error];
+}
+- (NSData*)trackMetadataSnapshotWithRevision:(uint64_t)revision error:(NSError**)error {
+    NSData* playback=[self playbackSnapshotWithError:error]; if(!playback) return nil;
+    NSMutableDictionary* data=[[NSJSONSerialization JSONObjectWithData:playback options:0 error:error] mutableCopy];
+    NSMutableDictionary* project=[projectJSON(_engine->project(),false) mutableCopy];
+    NSMutableArray* songs=[NSMutableArray new];
+    NSMutableDictionary* orders=[NSMutableDictionary new];
+    NSMutableDictionary* next=[NSMutableDictionary new];
+    const bool reuse=revision!=0 && revision==_snapshotRevision;
+    for(NSDictionary* original in project[@"songs"]) {
+        NSMutableDictionary* song=[original mutableCopy];
+        NSString* songID=song[@"id"];
+        NSDictionary* previous=reuse ? _snapshotTracks[songID] : nil;
+        NSMutableDictionary* retained=[NSMutableDictionary new];
+        NSMutableArray* changed=[NSMutableArray new];
+        NSMutableArray* order=[NSMutableArray new];
+        for(NSDictionary* track in song[@"tracks"]) {
+            NSString* trackID=track[@"id"];
+            [order addObject:trackID]; retained[trackID]=track;
+            // Compare the complete canonical metadata, including changes made
+            // by native normalization. Never infer sameness from UI revisions.
+            if(![track isEqualToDictionary:previous[trackID]]) [changed addObject:track];
+        }
+        song[@"tracks"]=changed; [songs addObject:song];
+        orders[songID]=order; next[songID]=retained;
+    }
+    project[@"songs"]=songs; data[@"project"]=project;
+    const uint64_t nextRevision=_snapshotRevision==UINT64_MAX ? 1 : _snapshotRevision+1;
+    NSData* result=[NSJSONSerialization dataWithJSONObject:@{@"snapshot":data,@"trackOrders":orders,@"revision":@(nextRevision)} options:0 error:error];
+    // A stale caller token falls back to a full read. A failed serialization
+    // does not advance either cache, so retries cannot omit unseen tracks.
+    if(result) { _snapshotTracks=next; _snapshotRevision=nextRevision; }
+    return result;
 }
 - (NSData*)playbackSnapshotWithError:(NSError**)error {
     const auto& t=_engine->transport();

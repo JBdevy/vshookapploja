@@ -249,6 +249,13 @@ protocol SidebarResizeLayoutBoundary: AnyObject {
 
 private final class WorkspaceHostingView<Content: View>: NSHostingView<Content>, SidebarResizeLayoutBoundary {
     var layoutProfile: TimelineLayoutDiagnostics.Profile?
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // NSHostingView on Ventura updates its SwiftUI graph before rejecting
+        // an outside point. Reject other rows/panes before entering that graph.
+        let local = convert(point, from: superview)
+        guard !isHiddenOrHasHiddenAncestor, bounds.contains(local), visibleRect.contains(local) else { return nil }
+        return super.hitTest(point)
+    }
     override func layout() {
         guard let profile = layoutProfile else { super.layout(); return }
         let start = profile.beginLayout(self)
@@ -258,6 +265,76 @@ private final class WorkspaceHostingView<Content: View>: NSHostingView<Content>,
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
     override var fittingSize: NSSize { frame.size }
     func commitSidebarResizeLayout() { layoutSubtreeIfNeeded() }
+}
+
+struct NativeTimelineMixerRowSpec<Version: Equatable> {
+    let id: Int
+    let frame: CGRect
+    let version: Version
+}
+
+/// Independently retained row roots prevent selection/layout changes in one
+/// track from walking the SwiftUI controls in every other warm row.
+struct NativeTimelineMixerRows<Version: Equatable, Content: View>: NSViewRepresentable {
+    let size: CGSize
+    let rows: [NativeTimelineMixerRowSpec<Version>]
+    @ViewBuilder let content: (Int) -> Content
+    @Environment(\.openFX) private var openFX
+    @Environment(\.openClipFXChain) private var openClipFX
+    @Environment(\.editTextItem) private var editText
+    @Environment(\.editTrackDetails) private var editTrack
+    @Environment(\.gridInteractionBlocked) private var blocked
+    @Environment(\.locale) private var locale
+    @Environment(\.colorScheme) private var colorScheme
+    func makeNSView(context: Context) -> NSView { TimelineMixerRowsNativeView<Version>() }
+    func updateNSView(_ native: NSView, context: Context) {
+        guard let view = native as? TimelineMixerRowsNativeView<Version> else { return }
+        let actions = view.actions
+        actions.fx = openFX; actions.clipFX = openClipFX; actions.text = editText; actions.trackDetails = editTrack
+        let environment = AnyHashable(WorkspaceHostingIdentity(content: 0, locale: locale.identifier,
+            colorScheme: colorScheme, interactionBlocked: blocked))
+        view.update(rows: rows, environment: environment) { index in
+            AnyView(GridHostedContent(content: content(index), gridInteractionBlocked: blocked,
+                locale: locale, colorScheme: colorScheme, openFX: actions.openFX,
+                openClipFXChain: actions.openClipFX, editTextItem: actions.editText, editTrackDetails: actions.editTrack))
+        }
+    }
+    @available(macOS 13, *)
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? { size }
+}
+private final class TimelineMixerRowsNativeView<Version: Equatable>: NSView {
+    let actions = GridHostedActions()
+    private struct Row {
+        let host: WorkspaceHostingView<AnyView>
+        var version: Version
+        var environment: AnyHashable
+    }
+    private var mounted: [Int: Row] = [:]
+    override var isFlipped: Bool { true }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
+    override var fittingSize: NSSize { frame.size }
+    override init(frame: NSRect) { super.init(frame: frame); autoresizesSubviews = false }
+    convenience init() { self.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func update(rows: [NativeTimelineMixerRowSpec<Version>], environment: AnyHashable, content: (Int) -> AnyView) {
+        let wanted = Set(rows.map(\.id))
+        for id in Array(mounted.keys) where !wanted.contains(id) { mounted.removeValue(forKey: id)?.host.removeFromSuperview() }
+        for (index, spec) in rows.enumerated() {
+            if var row = mounted[spec.id] {
+                if row.version != spec.version || row.environment != environment {
+                    row.host.rootView = content(index); row.version = spec.version; row.environment = environment
+                    mounted[spec.id] = row
+                }
+                if row.host.frame != spec.frame { row.host.frame = spec.frame }
+            } else {
+                let host = WorkspaceHostingView(rootView: content(index))
+                if #available(macOS 13, *) { host.sizingOptions = [] }
+                if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
+                host.frame = spec.frame; addSubview(host)
+                mounted[spec.id] = Row(host: host, version: spec.version, environment: environment)
+            }
+        }
+    }
 }
 
 private struct WorkspaceHostingIdentity: Hashable {
@@ -378,7 +455,6 @@ private final class WorkspaceSplitView<Leading: View, Trailing: View>: NSView, N
         wantsLayer = true; layer?.masksToBounds = true
         autoresizesSubviews = false
         if #available(macOS 13, *) { self.leading.sizingOptions = []; self.trailing.sizingOptions = [] }
-        // The outer window has already resolved the workspace content rect.
         if #available(macOS 13.3, *) { self.leading.safeAreaRegions = []; self.trailing.safeAreaRegions = [] }
         self.leading.layoutProfile = TimelineLayoutDiagnostics.make("workspace-timeline")
         self.trailing.layoutProfile = TimelineLayoutDiagnostics.make("workspace-setlist")
@@ -392,6 +468,7 @@ private final class WorkspaceSplitView<Leading: View, Trailing: View>: NSView, N
         divider.setAccessibilityElement(true)
         divider.setAccessibilityRole(.splitter)
         divider.setAccessibilityLabel("Resize setlist")
+        divider.maximumResizeFrequency = 60
         divider.onStart = { [weak self] in self?.resizing = true }
         divider.onResize = { [weak self] width in
             guard let self else { return }
@@ -444,7 +521,8 @@ private final class WorkspaceSplitView<Leading: View, Trailing: View>: NSView, N
         super.layout()
         // AppKit lays out dirty descendants after applying these frames. A
         // timeline-only update must not explicitly walk the setlist host too.
-        // Divider tracking keeps its synchronous commit through resizeLayout.
+        // Divider tracking shares the normal display pass; release commits
+        // the final geometry through resizeLayout.
         applyFrames(layoutHosts: false)
     }
     override func viewDidMoveToWindow() {
@@ -463,13 +541,16 @@ private final class WorkspaceSplitView<Leading: View, Trailing: View>: NSView, N
             NotificationCenter.default.addObserver(self, selector: #selector(workspaceWindowBecameKey(_:)),
                 name: NSWindow.didBecomeKeyNotification, object: window)
         }
-        if window == nil { resizing = false; liveWidth = nil; pendingSavedWidth = nil }
+        if window == nil {
+            resizing = false; liveWidth = nil; pendingSavedWidth = nil
+        }
     }
     private func applyFrames(layoutHosts: Bool) {
         guard !applyingFrames else { return }
         applyingFrames = true
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        defer { CATransaction.commit(); applyingFrames = false }
+        let disabled = CATransaction.disableActions()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.setDisableActions(disabled); applyingFrames = false }
         let available = bounds.size
         // Growing the footer only crops this workspace. Keep its timeline and
         // Setlist layout stable until release rather than rebuilding all rows
@@ -645,8 +726,9 @@ private final class TimelineColumnsNativeView<Mixer: View, Divider: View, Timeli
         applyFrames()
     }
     private func applyFrames() {
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        defer { CATransaction.commit() }
+        let disabled = CATransaction.disableActions()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.setDisableActions(disabled) }
         func update<Content: View>(_ host: WorkspaceHostingView<Content>, frame: CGRect) {
             guard host.frame != frame else { return }
             host.layoutProfile?.sizeChanged(host, from: host.frame.size, to: frame.size)
@@ -1079,6 +1161,11 @@ final class GridNativeScrollView: NSScrollView, NativeTimelineBodyInputHost, Nat
     private var fileDropPasteboardChange: Int?
     private var lastFileDropPreview: CGPoint?
     private var lastFileDropModifierFlags: NSEvent.ModifierFlags = []
+    private var acceptedFileDrop = false
+    private func restoreFileDropFocus() {
+        guard acceptedFileDrop else { return }
+        NativeTimelineKeyboardFocus.activate(window: window, responder: nil)
+    }
     private func updateFileDropPreview(_ point: CGPoint?) {
         // Shift changes magnetic snapping even when the dragged file has not moved.
         let modifiers: NSEvent.ModifierFlags = point == nil ? [] : fileDropModifierFlags()
@@ -1105,14 +1192,25 @@ final class GridNativeScrollView: NSScrollView, NativeTimelineBodyInputHost, Nat
     }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
     override func draggingExited(_ sender: NSDraggingInfo?) { updateFileDropPreview(nil) }
-    override func draggingEnded(_ sender: NSDraggingInfo) { updateFileDropPreview(nil) }
-    override func concludeDragOperation(_ sender: NSDraggingInfo?) { updateFileDropPreview(nil) }
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        updateFileDropPreview(nil); restoreFileDropFocus()
+    }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        updateFileDropPreview(nil)
+        // AppKit finishes the cross-application drag after performDragOperation.
+        // Reassert the destination here as well, without waiting for the async
+        // audio import (which must never steal focus from a later user action).
+        restoreFileDropFocus(); acceptedFileDrop = false
+    }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        acceptedFileDrop = false
         defer { updateFileDropPreview(nil) }
         guard let documentView, let fileDrop,
               sender.draggingSourceOperationMask.contains(.copy),
               let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty else { return false }
-        return fileDrop(urls, documentView.convert(sender.draggingLocation, from: nil))
+        acceptedFileDrop = fileDrop(urls, documentView.convert(sender.draggingLocation, from: nil))
+        restoreFileDropFocus()
+        return acceptedFileDrop
     }
 
     // A committed layout clears zoomAnchor between frames, but the gesture
@@ -1347,6 +1445,9 @@ struct SidebarScrollMetrics: Equatable {
     var canScroll: Bool { maximumOffset > 0.5 && viewportHeight > 0 }
 }
 @MainActor final class SidebarScrollController {
+    private let limitsScrollVelocity: Bool
+    private var wheelVelocity = NativeMixerScrollVelocity()
+    init(limitsScrollVelocity: Bool = false) { self.limitsScrollVelocity = limitsScrollVelocity }
     private static let timelineWheelClips = NSHashTable<NSClipView>.weakObjects()
     static func registerTimelineWheelClip(_ clip: NSClipView) { timelineWheelClips.add(clip) }
     /// Returns true only when a different destination tile/row bucket needs
@@ -1360,16 +1461,51 @@ struct SidebarScrollMetrics: Equatable {
     private var listeners: [UUID: () -> Void] = [:]
     private(set) var metrics = SidebarScrollMetrics()
 
+    private weak var wheelTarget: NSScrollView?
+    private weak var wheelRoot: NSView?
+    private var wheelPoint: NSPoint?
+    private var wheelTime: TimeInterval = -.infinity
+    private var wheelRootFrame: NSRect = .zero
+    private var wheelClipSize: NSSize = .zero
+    func invalidateWheelTarget() {
+        wheelTarget = nil; wheelRoot = nil; wheelPoint = nil; wheelTime = -.infinity
+        wheelVelocity.reset()
+    }
+    private func wheelDestination(_ event: NSEvent, root: NSView) -> NSScrollView? {
+        let point = event.locationInWindow
+        // A wheel gesture owns its destination while the pointer stays put.
+        // Ventura's SwiftUI hit test walks the entire window; repeating it for
+        // every trackpad/mouse delta consumed most of the measured input time.
+        if let target = wheelTarget, wheelRoot === root, let previous = wheelPoint,
+           target.window === event.window, !target.isHiddenOrHasHiddenAncestor,
+           root.frame == wheelRootFrame, target.contentView.bounds.size == wheelClipSize,
+           abs(point.x - previous.x) < 0.5, abs(point.y - previous.y) < 0.5,
+           event.timestamp.isFinite, event.timestamp >= wheelTime, event.timestamp - wheelTime <= 0.16 {
+            wheelTime = event.timestamp
+            return target
+        }
+        let local = root.superview?.convert(point, from: nil) ?? point
+        var hit = root.hitTest(local)
+        var nearest: NSScrollView?
+        while let current = hit {
+            if let candidate = current as? NSScrollView { nearest = candidate; break }
+            hit = current.superview
+        }
+        wheelTarget = nearest; wheelRoot = root; wheelPoint = point; wheelTime = event.timestamp
+        wheelRootFrame = root.frame; wheelClipSize = nearest?.contentView.bounds.size ?? .zero
+        return nearest
+    }
     private var wheelMonitor: Any?
     @discardableResult func handleWheel(_ event: NSEvent) -> Bool {
         guard let scroll = scrollView, event.window === scroll.window, scroll.window?.attachedSheet == nil,
               !scroll.isHiddenOrHasHiddenAncestor,
               scroll.contentView.visibleRect.contains(scroll.contentView.convert(event.locationInWindow, from: nil)) else { return false }
+        if !event.phase.intersection([.began, .ended, .cancelled]).isEmpty { invalidateWheelTarget() }
         // Visible native scrollers keep AppKit momentum. When indicators are
         // removed, route precise deltas here too: older AppKit can decline
         // scrolling on that axis. Modifier gestures remain with the timeline.
         // Reject them before traversing the entire SwiftUI document for hit testing.
-        guard (!event.hasPreciseScrollingDeltas || !scroll.hasVerticalScroller),
+        guard (!event.hasPreciseScrollingDeltas || !scroll.hasVerticalScroller || limitsScrollVelocity),
               event.modifierFlags.intersection([.shift, .command, .control, .option]).isEmpty else { return false }
         // The outer vertical document also contains the horizontal timeline.
         // Its wheel input owns this viewport; decline before hit-testing the
@@ -1384,16 +1520,17 @@ struct SidebarScrollMetrics: Equatable {
         // and Add regions are sibling overlays above the ordinary Setlist.
         // Hit-testing only our own clip would steal their physical-wheel events.
         guard let root = scroll.window?.contentView else { return false }
-        let point = root.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
-        var hit = root.hitTest(point)
-        var nearest: NSScrollView?
-        while let current = hit {
-            if let candidate = current as? NSScrollView { nearest = candidate; break }
-            hit = current.superview
-        }
-        guard nearest === scroll else { return false }
-        let movement = -event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 16)
-        guard movement != 0 else { return false }
+        guard wheelDestination(event, root: root) === scroll else { return false }
+        // Peeking through nextEvent runs AppKit's display observers on Ventura.
+        // During fast scrolling that nested layout/cursor pass costs more than
+        // handling the wheel itself. Let the normal event loop coalesce display.
+        let rawMovement = -event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 16)
+        let movement = limitsScrollVelocity ? wheelVelocity.limit(rawMovement, timestamp: event.timestamp,
+            viewport: scroll.contentView.bounds.height, precise: event.hasPreciseScrollingDeltas) : rawMovement
+        guard rawMovement != 0 else { return false }
+        // A duplicate timestamp has no remaining time budget. Consume it so
+        // AppKit cannot apply the original unlimited delta as a fallback.
+        if movement == 0 { return limitsScrollVelocity }
         refresh()
         // Apply each native delta once, including trackpad momentum events.
         // No additional inertia or deferred movement is introduced here.
@@ -1403,11 +1540,12 @@ struct SidebarScrollMetrics: Equatable {
     func attach(_ scroll: NSScrollView?, owner: NSView? = nil) {
         attachmentOwner = owner
         guard scrollView !== scroll else { refresh(); return }
+        invalidateWheelTarget()
         if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor); self.wheelMonitor = nil }
         if scroll != nil {
-            wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .rightMouseDown]) { [weak self] event in
+            wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .rightMouseDown, .keyDown, .flagsChanged]) { [weak self] event in
                 guard let self else { return event }
-                if event.type != .scrollWheel { return event }
+                if event.type != .scrollWheel { self.invalidateWheelTarget(); return event }
                 return self.handleWheel(event) ? nil : event
             }
         }
@@ -1460,6 +1598,33 @@ struct SidebarScrollMetrics: Equatable {
         metrics = next
         for changed in Array(listeners.values) { changed() }
     }
+    /// Both panes share this vertical clip. Horizontal navigation targets only
+    /// the timeline document and uses the same preparation/follow rules as wheel input.
+    @discardableResult func scrollTimelineByArrow(_ keyCode: UInt16) -> Bool {
+        guard let scroll = scrollView else { return false }
+        if keyCode == 125 || keyCode == 126 {
+            refresh()
+            applyScroll(to: metrics.offset + (keyCode == 125 ? 72 : -72))
+            return true
+        }
+        guard keyCode == 123 || keyCode == 124, let document = scroll.documentView else { return false }
+        func horizontal(in view: NSView) -> GridNativeScrollView? {
+            guard !view.isHiddenOrHasHiddenAncestor else { return nil }
+            if let grid = view as? GridNativeScrollView,
+               grid.logicalDocumentWidth != nil || grid.prepareHorizontalScroll != nil { return grid }
+            for child in view.subviews { if let grid = horizontal(in: child) { return grid } }
+            return nil
+        }
+        guard let grid = horizontal(in: document) else { return false }
+        let clip = grid.contentView
+        var point = clip.bounds.origin
+        point.x += keyCode == 124 ? 72 : -72
+        point = clip.constrainBoundsRect(CGRect(origin: point, size: clip.bounds.size)).origin
+        grid.pauseManualPlaybackFollow()
+        grid.prepareHorizontalViewport(at: point.x)
+        clip.scroll(to: point); grid.reflectScrolledClipView(clip)
+        return true
+    }
     func scroll(to offset: CGFloat) { applyScroll(to: offset) }
     private func applyScroll(to offset: CGFloat) {
         guard offset.isFinite, let scroll = scrollView, let document = scroll.documentView else { return }
@@ -1470,12 +1635,14 @@ struct SidebarScrollMetrics: Equatable {
         origin.y = clip.documentRect.minY + (document.isFlipped ? bounded : maximum - bounded)
         guard abs(origin.y - clip.bounds.minY) > 0.001 else { return }
         let largeUnpreparedJump = prepareScroll == nil && abs(origin.y - clip.bounds.minY) > clip.bounds.height / 2
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        defer { CATransaction.commit() }
-        // A thumb can jump farther than the existing tile overscan in one
-        // event. Mount its actual destination before revealing that viewport.
-        if prepareScroll?(bounded) == true { document.layoutSubtreeIfNeeded() }
+        // Only a new tile or a thumb jump needs an atomic layout commit.
+        // Committing a transaction for every in-bucket wheel delta forces an
+        // entire AppKit display/layout cycle on Ventura instead of coalescing it.
+        let prepared = prepareScroll?(bounded) == true
+        let synchronous = prepared || largeUnpreparedJump
+        if synchronous { CATransaction.begin(); CATransaction.setDisableActions(true) }
+        defer { if synchronous { CATransaction.commit() } }
+        if prepared { document.layoutSubtreeIfNeeded() }
         clip.scroll(to: origin)
         scroll.reflectScrolledClipView(clip)
         // Native SwiftUI ScrollView supplies its own lazy-content state after
@@ -1566,7 +1733,7 @@ final class SidebarScrollProbeView: NSView {
         var origin = clip.bounds.origin
         origin.y = min(max(document.bounds.minY, origin.y + velocity * elapsed), max(document.bounds.minY, document.bounds.maxY - clip.bounds.height))
         guard origin != clip.bounds.origin else { return }
-        (scroll as? GridNativeScrollView)?.prepareSelectionScroll(to: origin, horizontal: false)
+        (scroll as? NativeTimelineSelectionScrollHost)?.prepareSelectionScroll(to: origin, horizontal: false)
         clip.scroll(to: origin); scroll.reflectScrolledClipView(clip)
     }
     func stop() { timer?.invalidate(); timer = nil; scroll = nil }

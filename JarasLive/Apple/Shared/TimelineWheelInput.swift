@@ -287,9 +287,16 @@ final class TimelineTrackHeightResizeView: NSView, NativeTimelineInputObserver, 
     }
     /// Consulted before the mixer's global click/reorder monitor handles a border.
     static func handlesPointer(_ event: NSEvent) -> Bool {
-        guard event.type == .leftMouseDown, let root = event.window?.contentView else { return false }
-        let point = root.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
-        return root.hitTest(point) is TimelineTrackHeightResizeView
+        guard event.type == .leftMouseDown, let window = event.window,
+              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
+        // The overlay already owns its live row geometry. Asking the complete
+        // SwiftUI window to hit-test every track click repeats the same routing
+        // that NSWindow will perform after this monitor returns.
+        return owners.allObjects.contains { view in
+            guard view.window === window else { return false }
+            let point = view.convert(event.locationInWindow, from: nil)
+            return view.visibleRect.contains(point) && view.edge(at: point) != nil
+        }
     }
     @discardableResult static func cancelActiveDrag(in window: NSWindow?) -> Bool {
         guard let owner = owners.allObjects.first(where: { $0.window === window && $0.drag != nil }) else { return false }

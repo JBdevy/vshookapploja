@@ -336,7 +336,7 @@ for right in [false, true] {
     let trackBefore = scroll.contentView.bounds.minX
     let fxBefore = slotScroll.contentView.bounds.origin
     precondition(view.routeWheel(wheel))
-    precondition(scroll.contentView.bounds.minX == trackBefore + 30 && slotScroll.contentView.bounds.origin == fxBefore,
+    precondition(scroll.contentView.bounds.minX > trackBefore && scroll.contentView.bounds.minX <= trackBefore + 30 && slotScroll.contentView.bounds.origin == fxBefore,
                  "Horizontal gestures over FX move whole channels, never the slot document")
     wheel.dx = -2; wheel.dy = 30
     let verticalBefore = scroll.contentView.bounds.minX
@@ -348,7 +348,7 @@ for right in [false, true] {
     wheel.dx = 0; wheel.dy = -24
     let slotOffset = slotScroll.contentView.bounds.origin
     precondition(view.routeWheel(wheel))
-    precondition(scroll.contentView.bounds.minX == verticalBefore + 24 && slotScroll.contentView.bounds.origin == slotOffset,
+    precondition(scroll.contentView.bounds.minX > verticalBefore && scroll.contentView.bounds.minX <= verticalBefore + 24 && slotScroll.contentView.bounds.origin == slotOffset,
                  "Empty space outside the FX viewport scrolls channels without moving slots")
     wheel.point = slotScroll.contentView.convert(NSPoint(x: 30, y: 30), to: nil)
     wheel.flags = .shift
@@ -359,6 +359,27 @@ for right in [false, true] {
     wheel.flags = []
 }
 print("MIXER_WHEEL_FX_VERTICAL_ONLY_INSIDE_VISIBLE_VIEWPORT_HORIZONTAL_AND_EMPTY_SPACE_ROUTE_TO_TRACKS_OK")
+
+// Long precise gestures remain bounded, immediately reversible, and queue no tail.
+bar.doubleValue = 0.25; bar.sendAction(bar.action, to: bar.target)
+wheel.point = master.convert(NSPoint(x: 30, y: 150), to: nil)
+wheel.flags = []; wheel.precise = true; wheel.dx = 0; wheel.dy = 0; wheel.time = 5
+precondition(view.routeWheel(wheel))
+let capStart = scroll.contentView.bounds.minX
+wheel.dy = -10000
+for index in 1...120 { wheel.time = 5 + Double(index)/120; precondition(view.routeWheel(wheel)) }
+let capTravel = scroll.contentView.bounds.minX - capStart
+precondition(capTravel > 0 && capTravel <= NativeMixerScrollVelocity.maximum(viewport: scroll.contentSize.width) + 1,
+             "A long horizontal flick must obey the time-based viewport speed limit")
+wheel.dy = 1; wheel.time = 6.02
+let capEnd = scroll.contentView.bounds.minX
+precondition(view.routeWheel(wheel) && abs(scroll.contentView.bounds.minX - (capEnd-1)) < 0.01,
+             "Precise correction after a long flick cannot wait behind excess travel")
+let capRest = scroll.contentView.bounds.minX
+RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+precondition(abs(scroll.contentView.bounds.minX-capRest) <= 1/window.backingScaleFactor,
+             "Precise capped gestures must not replay dropped movement later")
+print("HOZ_LONG_FLICK_VELOCITY_CAP_IMMEDIATE_REVERSE_AND_NO_QUEUED_MOVEMENT_OK")
 
 // Native routing is shared by docked and detached mixers, including master.
 // Deliberate Shift input belongs to the panel before any child slider sees it.
@@ -444,13 +465,26 @@ for height: CGFloat in [80, 160, 242, 255, 350, 600] {
     let icons = FooterMixerStripLayout(height: height, slotsOnly: true, iconHeight: 30)
     precondition(icons.controlsHeight == 0 && icons.slotsHeight == max(0, height - 64),
                  "The icon stays below the name when only slots are shown")
-    precondition(normal.controlsHeight == min(187, max(100, height - 34)))
+    precondition(normal.controlsHeight == min(205, max(100, height - 34)))
     precondition(normal.slotsHeight == max(0, height - 34 - normal.controlsHeight),
                  "Normal fader/pan/meter geometry is unchanged")
     precondition(compact.controlsHeight == 0 && compact.slotsHeight == max(0, height - 34),
                  "Slots-only mode reserves only the fixed lower name and the existing outer padding")
 }
 print("MIXER_SLOTS_ONLY_FULL_AVAILABLE_HEIGHT_NORMAL_GEOMETRY_UNCHANGED_OK")
+
+precondition(FooterMixerStripLayout(height: 239, slotsOnly: false).slotsHeight == 0,
+             "The minimum docked height must hide all slots")
+for count in [0, 1, 2, 8] {
+    for height in stride(from: CGFloat(0), through: 500, by: 1) {
+        let sections = FooterSlotSectionsLayout(height: height, outputCount: count)
+        precondition(sections.pluginsHeight + sections.outputsHeight + sections.dividerHeight == height)
+        precondition(sections.outputsHeight == 0 || sections.pluginsHeight >= 63)
+    }
+}
+private let tallSections = FooterSlotSectionsLayout(height: 500, outputCount: 8)
+precondition(tallSections.pluginsHeight > 3 * 21 && tallSections.outputsHeight == 40)
+print("MIXER_MINIMUM_HIDES_SLOTS_PLUGINS_GROW_UNBOUNDED_OUTPUTS_RESERVE_SCROLL_VIEWPORT_OK")
 
 slotScroll.removeFromSuperview()
 private final class FooterWindowLifecycleProbe: NSView {
@@ -502,6 +536,10 @@ updateCacheFixture()
 cacheMove(0)
 precondition(initialFirst.superview === scroll.documentView && cacheMakes[0] == initialBuilds + 1,
              "Cached roots validate the latest identity/FX version on normal scroll after offscreen edits")
+FooterScrollLayoutProbe.forced = 0
+cacheMove(20); cacheMove(0)
+precondition(FooterScrollLayoutProbe.forced == 0,
+             "scrolling back to ready cached channels must not synchronously relayout their hosting trees")
 for index in stride(from: 0, to: 900, by: 20) { cacheMove(index) }
 precondition(view.cachedStrips.count <= 64 && view.cachedStrips.values.allSatisfy { $0.view.window === window && $0.view.visibleRect.isEmpty && $0.view.isHidden },
              "1000-track browsing retains at most 64 clipped cache entries")
@@ -509,6 +547,39 @@ updateCacheFixture(count: 0)
 precondition(view.cachedStrips.isEmpty, "Deleting the track list releases detached roots")
 window.orderOut(nil)
 print("MIXER_WARM_REVERSAL_REUSES_ATTACHED_BOUNDED_HOSTS_AND_INVALIDATES_OFFSCREEN_VERSIONS_OK")
+
+// The expensive case is inserting a copied track ahead of existing channels.
+// Their controls must move with their tracks instead of being recreated by index.
+var insertionIDs = (0..<32).map { _ in UUID() }
+var insertionVersions = (0..<32).map { UInt64($0 + 1) }
+var insertionBuilds: [UUID: Int] = [:]
+func updateInsertionFixture() {
+    view.update(width: CGFloat(insertionIDs.count) * 86 + 7, stride: 86, count: insertionIDs.count,
+                versions: insertionVersions, identifiers: insertionIDs) { range in
+        let id = insertionIDs[range.lowerBound]
+        insertionBuilds[id, default: 0] += 1
+        return AnyView(Text(id.uuidString).frame(width: 83).padding(5).background(FooterWindowLifecycleFixture()))
+    }
+}
+window.orderFront(nil)
+updateInsertionFixture(); cacheMove(0); view.layoutSubtreeIfNeeded()
+private let movedID = insertionIDs[3]
+private let movedHost = scroll.documentView!.subviews.compactMap { $0 as? FooterMixerHostingView }.first { !$0.isHidden && $0.frame.minX == 3 * 86 }!
+let movedBuilds = insertionBuilds[movedID]!
+let originalIDs = insertionIDs
+insertionIDs.insert(UUID(), at: 1); insertionVersions.insert(10000, at: 1)
+updateInsertionFixture(); view.layoutSubtreeIfNeeded()
+precondition(movedHost.superview === scroll.documentView && !movedHost.isHidden && insertionBuilds[movedID] == movedBuilds,
+             "Inserting a track repositions the existing channel without rebuilding its controls")
+precondition(movedHost.frame.minX == 4 * 86 && movedHost.window === window,
+             "Retained channels immediately occupy their new visible positions")
+insertionIDs = originalIDs; insertionVersions.remove(at: 1)
+updateInsertionFixture(); view.layoutSubtreeIfNeeded()
+precondition(movedHost.superview === scroll.documentView && movedHost.frame.minX == 3 * 86 && insertionBuilds[movedID] == movedBuilds,
+             "Undoing insertion restores the same existing channel and its local state")
+view.update(width: 7, stride: 86, count: 0, identifiers: []) { _ in AnyView(EmptyView()) }
+window.orderOut(nil)
+print("MIXER_TRACK_INSERTION_AND_UNDO_PRESERVE_EXISTING_HOSTS_CONTROL_ROOTS_AND_REAL_GEOMETRY_OK")
 
 // Enlarging the docked mixer adds FX space without proposing a new size to
 // the lower controls. This is the path that used to reflow every fader per pixel.
@@ -574,3 +645,143 @@ for height in 241...500 {
 }
 stableChannelHost.removeFromSuperview()
 print("FOOTER_CHANNEL_FIXED_HOST_PROPOSAL_AND_EXACT_NATIVE_VISIBLE_GEOMETRY_OK")
+
+// Exercise the actual nested native channel structure on its first reveal.
+// No later run-loop tick or parent layout is allowed to repair blank controls.
+private struct RevealControl: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSButton { NSButton(title: "Reveal control", target: nil, action: nil) }
+    func updateNSView(_ view: NSButton, context: Context) {}
+}
+private func revealButtons(_ view: NSView) -> [NSButton] {
+    (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(revealButtons)
+}
+view.update(width: 300 * 86 + 7, stride: 86, count: 300) { _ in
+    AnyView(FooterMixerStripGeometry(slotsOnly: false, iconHeight: 0, selected: false,
+        slots: AnyView(Color.gray), footer: { height in
+            AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }.frame(height: height + 26))
+        }).frame(width: 83).padding(5))
+}
+view.layoutSubtreeIfNeeded()
+for fraction in [0.75, 0.1, 0.95, 0.0, 0.6] {
+    bar.doubleValue = fraction; bar.sendAction(bar.action, to: bar.target)
+    let viewport = scroll.contentView.bounds
+    let visible = scroll.documentView!.subviews.compactMap { $0 as? FooterMixerHostingView }
+        .filter { !$0.isHidden && $0.frame.intersects(viewport) }
+    precondition(!visible.isEmpty)
+    for channel in visible {
+        precondition(channel.frame.height >= 724, "first reveal must apply the native channel viewport before scrolling")
+        let buttons = revealButtons(channel)
+        precondition(buttons.count == 1 && buttons[0].frame.height > 0 && buttons[0].frame.width > 0,
+                     "the nested footer controls must already exist with nonzero geometry")
+    }
+}
+print("FOOTER_FIRST_REVEAL_COMMITS_NESTED_CONTROLS_BEFORE_CLIP_MOVES_OK")
+
+private let opening = FooterMixerScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 273))
+func openingContent(_ range: Range<Int>) -> AnyView {
+    AnyView(FooterMixerStripGeometry(slotsOnly: false, iconHeight: 0, selected: false,
+        slots: AnyView(Color.gray), footer: { height in
+            AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }.frame(height: height + 26))
+        }).frame(width: 83).padding(5))
+}
+opening.update(width: 100 * 86 + 7, stride: 86, count: 100, makeContent: openingContent)
+opening.layoutSubtreeIfNeeded()
+precondition(!opening.pendingStripLayout.isEmpty, "off-window roots must retain pending preparation")
+let openingWindow = NSWindow(contentRect: opening.frame, styleMask: [.titled], backing: .buffered, defer: false)
+openingWindow.isReleasedWhenClosed = false
+for _ in 0..<3 {
+    openingWindow.contentView = opening
+    opening.layoutSubtreeIfNeeded()
+    let clip = opening.subviews.compactMap { $0 as? NSScrollView }.first!.contentView
+    let visible = clip.documentView!.subviews.compactMap { $0 as? FooterMixerHostingView }
+        .filter { !$0.isHidden && $0.frame.intersects(clip.bounds) }
+    precondition(!visible.isEmpty && visible.allSatisfy { $0.frame.height >= 724 && revealButtons($0).count == 1 },
+                 "opening/reopening the mixer must reveal controls without scrolling or waiting for a timer")
+    openingWindow.contentView = NSView()
+    opening.update(width: 100 * 86 + 7, stride: 86, count: 100, makeContent: openingContent)
+}
+openingWindow.close()
+print("FOOTER_OPEN_REOPEN_RETRIES_OFFWINDOW_CONTROLS_WITHOUT_WHEEL_OK")
+
+let hiddenPanel = NSView(frame: CGRect(x: 0, y: 0, width: 900, height: 300))
+let hiddenWindow = NSWindow(contentRect: hiddenPanel.frame, styleMask: [.titled], backing: .buffered, defer: false)
+hiddenWindow.isReleasedWhenClosed = false
+hiddenWindow.contentView = hiddenPanel
+opening.frame = hiddenPanel.bounds; hiddenPanel.addSubview(opening)
+opening.layoutSubtreeIfNeeded()
+hiddenPanel.isHidden = true
+opening.update(width: 100 * 86 + 7, stride: 86, count: 100, versions: Array(repeating: 2, count: 100), makeContent: openingContent)
+precondition(!opening.pendingStripLayout.isEmpty, "Updates while the retained panel is closed must defer control preparation")
+hiddenPanel.isHidden = false
+opening.layoutSubtreeIfNeeded()
+let reopenedClip = opening.subviews.compactMap { $0 as? NSScrollView }.first!.contentView
+private let reopenedControls = reopenedClip.documentView!.subviews.compactMap { $0 as? FooterMixerHostingView }
+    .filter { !$0.isHidden && $0.frame.intersects(reopenedClip.bounds) }
+precondition(!reopenedControls.isEmpty && reopenedControls.allSatisfy { revealButtons($0).count == 1 },
+             "Changes made while closed must show prepared controls immediately on reopen")
+hiddenWindow.close()
+print("FOOTER_RETAINED_HIDDEN_UPDATES_DEFER_PREPARATION_UNTIL_REOPEN_WITHOUT_BLANK_CONTROLS_OK")
+
+// A reordered/replaced track has a new SwiftUI identity inside the same native
+// channel. Nonzero control frames alone are insufficient: they must intersect
+// the clipped viewport, rather than remain below it in the fixed 724pt host.
+private let replacement = FooterMixerScrollView(frame: CGRect(x: 0, y: 0, width: 600, height: 300))
+let replacementWindow = NSWindow(contentRect: replacement.frame, styleMask: [.titled], backing: .buffered, defer: false)
+replacementWindow.isReleasedWhenClosed = false
+replacementWindow.contentView = replacement
+replacementWindow.orderFront(nil)
+let replacementScroll = replacement.subviews.compactMap { $0 as? NSScrollView }.first!
+let replacementBar = replacement.subviews.compactMap { $0 as? NSScroller }.first!
+var replacementRevision = 0
+func replaceChannelIdentities() {
+    replacementRevision += 1
+    let identity = replacementRevision
+    replacement.update(width: 100 * 86 + 7, stride: 86, count: 100,
+                       versions: Array(repeating: UInt64(identity), count: 100)) { range in
+        AnyView(HStack(spacing: 0) {
+            HStack(spacing: 3) {
+                ForEach(Array(range), id: \.self) { index in
+                    FooterMixerStripGeometry(slotsOnly: false, iconHeight: 0, selected: false,
+                        slots: AnyView(Color.gray), footer: { height in
+                            AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }
+                                .frame(height: height + 26))
+                        }).frame(width: 83).frame(maxHeight: .infinity).id("\(identity)-\(index)")
+                }
+            }
+        }.padding(5))
+    }
+}
+func checkReplacementControls(_ stage: String) {
+    let clip = replacementScroll.contentView
+    let channels = clip.documentView!.subviews.compactMap { $0 as? FooterMixerHostingView }
+        .filter { !$0.isHidden && $0.frame.intersects(clip.bounds) }
+    precondition(!channels.isEmpty)
+    for channel in channels {
+        let controls = revealButtons(channel)
+        let visible = controls.filter { !$0.isHiddenOrHasHiddenAncestor &&
+            clip.bounds.intersects(clip.convert($0.bounds, from: $0)) }
+        if controls.count != 1 || visible.count != 1 {
+            fputs("REPLACEMENT_CONTROL \(stage) channel=\(channel.frame) clip=\(clip.bounds) controls=\(controls.map { clip.convert($0.bounds, from: $0) })\n", stderr)
+        }
+        precondition(controls.count == 1 && visible.count == 1,
+                     "Replaced/revealed controls must be inside the visible channel: \(stage)")
+    }
+}
+replaceChannelIdentities(); replacement.layoutSubtreeIfNeeded()
+for pass in 0..<3 {
+    for fraction in [0.0, 0.4, 0.0, 0.9, 0.2] {
+        replacementBar.doubleValue = fraction
+        replacementBar.sendAction(replacementBar.action, to: replacementBar.target)
+        checkReplacementControls("scroll \(pass)/\(fraction)")
+        replaceChannelIdentities()
+        replacement.layoutSubtreeIfNeeded()
+        checkReplacementControls("identity \(pass)/\(fraction)")
+    }
+    replacement.isHidden = true
+    replaceChannelIdentities()
+    replacement.isHidden = false
+    replacement.layoutSubtreeIfNeeded()
+    checkReplacementControls("reopen \(pass)")
+}
+replacementWindow.close()
+print("FOOTER_REPLACED_TRACK_IDENTITIES_AND_REOPEN_KEEP_CONTROLS_INSIDE_VISIBLE_VIEWPORT_OK")

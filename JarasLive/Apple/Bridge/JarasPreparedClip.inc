@@ -91,28 +91,43 @@ struct PreparedPCMCache {
             if (producerPageAt(first)) continue;
             if (background) {
                 if (!active.load()) return Prefetch::ready;
-                // One physical read per stem per pass. Continue the next pass
-                // immediately, so a large session gets fair rolling lookahead.
+                // One bounded read per stem per pass keeps refills fair.
                 if (decoded != 0) return Prefetch::pending;
             }
-            size_t slot = 0;
-            for (; slot < pageCount; ++slot) {
-                const auto* page = pages.producerView(slot);
-                if (!page || !contains(page->first)) break;
+            // Amortize storage/decoder latency over a contiguous read. Also
+            // keep a small forward reserve beyond the requested window: if we
+            // only fill its single missing page, every stem incurs another
+            // physical read as soon as playback crosses the next page edge.
+            // Never evict a wanted page, cross a loop seam, or exceed the fixed
+            // cache capacity. The callback still only leases immutable PCM.
+            std::array<size_t, 4> slots{};
+            int batchPages = 0;
+            for (int pageIndex = 0; pageIndex < int(slots.size()); ++pageIndex) {
+                const int64_t pageFirst = first + int64_t(pageIndex) * pageSize;
+                if (pageFirst >= length || producerPageAt(pageFirst) ||
+                    (pageIndex > 0 && end > start && pageFirst >= end)) break;
+                size_t slot = 0;
+                for (; slot < pageCount; ++slot) {
+                    if (std::find(slots.begin(), slots.begin() + batchPages, slot) != slots.begin() + batchPages) continue;
+                    const auto* page = pages.producerView(slot);
+                    if (!page || !contains(page->first)) break;
+                }
+                if (slot == pageCount) break;
+                slots[batchPages++] = slot;
             }
-            if (slot == pageCount) return Prefetch::failed;
-            auto page = std::make_unique<PreparedPCMPage>();
-            page->first = first;
-            AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:file.processingFormat frameCapacity:pageSize];
-            file.framePosition = first;
-            if (!buffer || ![file readIntoBuffer:buffer frameCount:pageSize error:error]) {
+            if (batchPages == 0) return Prefetch::failed;
+            const auto readFrames = AVAudioFrameCount(batchPages * pageSize);
+            AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:file.processingFormat frameCapacity:readFrames];
+            // A sequential refill must not reset a compressed decoder's seek
+            // state when it is already positioned at the next source frame.
+            if (file.framePosition != first) file.framePosition = first;
+            if (!buffer || ![file readIntoBuffer:buffer frameCount:readFrames error:error]) {
                 // An unavailable/cloud-backed file cannot consume every pass
                 // with repeated failing reads while healthy tracks need PCM.
                 retryAfter = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
                 return Prefetch::failed;
             }
-            page->count = int(buffer.frameLength);
-            if (page->count == 0 || buffer.format.channelCount == 0 || !buffer.floatChannelData) {
+            if (buffer.frameLength == 0 || buffer.format.channelCount == 0 || !buffer.floatChannelData) {
                 // Do not publish an empty/unsupported page as permanently ready.
                 // A transient failed decode must remain retryable by the worker.
                 if (error) {
@@ -122,12 +137,19 @@ struct PreparedPCMCache {
                 retryAfter = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
                 return Prefetch::failed;
             }
-            for (int channel = 0; channel < 2; ++channel) {
-                const float *data = buffer.floatChannelData[std::min(channel, int(buffer.format.channelCount) - 1)];
-                page->samples[channel].resize(page->count);
-                for (int n = 0; n < page->count; ++n) page->samples[channel][n] = data[n * buffer.stride];
+            for (int pageIndex = 0; pageIndex < batchPages; ++pageIndex) {
+                const int offset = pageIndex * pageSize;
+                if (offset >= int(buffer.frameLength)) break;
+                auto page = std::make_unique<PreparedPCMPage>();
+                page->first = first + offset;
+                page->count = std::min(pageSize, int(buffer.frameLength) - offset);
+                for (int channel = 0; channel < 2; ++channel) {
+                    const float *data = buffer.floatChannelData[std::min(channel, int(buffer.format.channelCount) - 1)];
+                    page->samples[channel].resize(page->count);
+                    for (int n = 0; n < page->count; ++n) page->samples[channel][n] = data[(offset + n) * buffer.stride];
+                }
+                pages.publish(slots[pageIndex], std::move(page));
             }
-            pages.publish(slot, std::move(page));
             ++decoded;
         }
         pages.collectRetired();

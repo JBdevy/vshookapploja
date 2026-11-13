@@ -275,6 +275,14 @@ enum AppStartupPresentation {
             show.audioItemPhase = { audio.previewItemPhase($0, inverted: $1) }
             show.audioItemPan = { audio.previewItemPan($0, pan: $1) }
             show.audioItemGain = { audio.previewItemGain($0, gain: $1) }
+            show.itemSourceInfo = { [weak audio] file in
+                let url: URL
+                if file.path.hasPrefix("/") { url = URL(fileURLWithPath: file.path) }
+                else if let directory = audio?.mediaDirectory { url = directory.appendingPathComponent(file.path) }
+                else { return nil }
+                let header = TimelineAudioWaveform.shared.header(url)
+                return (url, header.flatMap { $0.rate > 0 ? Double($0.frames) / $0.rate : nil })
+            }
             show.audioItemChannelMode = { audio.previewItemChannelMode($0, mode: $1) }
             show.audioItemNormalization = { audio.previewItemNormalization($0, gain: $1) }
             show.audioVolume = { audio.previewVolume($0, gain: $1) }

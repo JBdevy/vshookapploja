@@ -60,6 +60,7 @@
     fixture.change(80)
     verifyGeometryKeepsNativeContent(fixture)
     verifyPeakResetInput(fixture)
+    verifyClippedControlsSkipWork(fixture)
     let title = descendants(fixture.host, of: TrackDragTitleView.self).first!
     let faders = descendants(fixture.host, of: DirectVolumeSliderView.self)
     let original = faders.map(ObjectIdentifier.init)
@@ -121,6 +122,31 @@
     baseline.window.close()
     print("NATIVE_ROW_BEHAVIOR_OK actions rebind state focus locale disabled hit-area")
     fixture.window.close()
+}
+@MainActor private func verifyClippedControlsSkipWork(_ fixture: FixtureWindow) {
+    let row = descendants(fixture.host, of: TrackMixerNativeControlView.self).first!
+    let controls = row.controls
+    let title = descendants(controls, of: TrackDragTitleView.self).first!
+    let snapshot = row.snapshot
+    let outside = NSPoint(x: controls.frame.maxX + 10, y: controls.frame.midY)
+    controls.needsLayout = true
+    Counts.reset()
+    expect(controls.hitTest(outside) == nil && Counts.slotLayouts == 0,
+           "Input outside a control host must not enter SwiftUI layout")
+    row.isHidden = true
+    controls.layout()
+    expect(Counts.slotLayouts == 0, "Hidden row controls must defer SwiftUI layout")
+    expect(controls.hitTest(NSPoint(x: controls.frame.midX, y: controls.frame.midY)) == nil,
+           "Hidden controls must not claim input")
+    row.isHidden = false
+    fixture.settle()
+    expect(Counts.slotLayouts > 0 && row.snapshot === snapshot,
+           "Returning rows must lay out their retained controls")
+    expect(descendants(controls, of: TrackDragTitleView.self).contains { $0 === title },
+           "Returning rows must preserve control identity")
+    expect(controls.hitTest(controls.convert(NSPoint(x: 113, y: 13), to: controls.superview)) != nil,
+           "Returning rows must expose their controls without an extra scroll")
+    print("NATIVE_ROW_CLIPPED_INPUT_AND_HIDDEN_LAYOUT_SKIPPED_VISIBLE_CONTROLS_RESTORED_OK")
 }
 @MainActor private func verifyGeometryKeepsNativeContent(_ fixture: FixtureWindow) {
     let row = descendants(fixture.host, of: TrackMixerNativeControlView.self).first!

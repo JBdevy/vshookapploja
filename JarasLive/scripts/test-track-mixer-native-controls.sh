@@ -13,7 +13,7 @@ parts.append(theme[theme.index('extension Color {'):theme.index('struct StageBut
 # Exercise the real row equality gate, including the height-mode inputs supplied
 # by TimelineGridView. Omitting them from the fixture concealed boundary rebuilds.
 a=s.index('        #if os(macOS)', s.index('    static func ==', s.index('struct TrackMixerRow:')))
-b=s.index('        return lhs.show', a)
+b=s.index('        let sameSelection', a)
 parts.append('private struct FixtureHeightMode { let compactHeight: Bool; let minimalHeight: Bool }\n'
              'private func productionHeightModesEqual(_ lhs: FixtureHeightMode, _ rhs: FixtureHeightMode) -> Bool {\n'
              +s[a:b]+'return sameHeightMode\n}')
@@ -46,7 +46,10 @@ for i,p in enumerate(parts):
     override func setFrameSize(_ size: NSSize) { if frame.size != size { Counts.size += 1 }; super.setFrameSize(size) }
 ''')
  p=p.replace('if view.snapshot !== snapshot {', 'if view.snapshot !== snapshot { Counts.update += 1')
- p=p.replace('private final class TrackMixerControlHost: NSHostingView<AnyView> {', 'private final class TrackMixerControlHost: NSHostingView<AnyView> {\n override func layout() { Counts.slotLayouts += 1; super.layout() }')
+ a=p.find('private final class TrackMixerControlHost: NSHostingView<AnyView> {')
+ if a >= 0:
+  b=p.index('/// Warm row slots', a)
+  p=p[:a]+p[a:b].replace('        super.layout()', '        Counts.slotLayouts += 1; super.layout()')+p[b:]
  parts[i]=p
 parts.append(Path('Tests/Apple/TrackMixerNativeControlsTests.swift').read_text())
 root.joinpath('main.swift').write_text('\n'.join(parts))

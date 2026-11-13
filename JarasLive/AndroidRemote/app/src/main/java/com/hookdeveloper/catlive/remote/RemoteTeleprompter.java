@@ -132,7 +132,7 @@ class RemoteTeleprompter extends View {
     float localFontSize(){return (float)Math.max(dp(10),Math.min(dp(24),getHeight()/28f)*number("localClockScale",100)/100);}
     float clockHeight(boolean clock,boolean local,String position){return !clock?localFontSize()+dp(10):Math.max(dp(28),timerFontSize()+dp(local&&!position.startsWith("center")?10:18));}
     void clockText(Canvas c,String value,RectF area,float font,int color,boolean border,int borderColor,float borderWidth,boolean timer){
-        if(timer&&app.timerRunning&&app.timerValue()<=0&&android.os.SystemClock.elapsedRealtime()%1000>=500)color=(color&0x00ffffff)|0x40000000;
+        if(timer&&app.localTimer.expired(android.os.SystemClock.elapsedRealtime())&&android.os.SystemClock.elapsedRealtime()%1000>=500)color=(color&0x00ffffff)|0x40000000;
         RectF inside=new RectF(area);inside.inset(dp(timer?10:5),dp(5));
         drawText(c,value,inside,fitClock(value,inside.width(),inside.height(),font),color,true,Layout.Alignment.ALIGN_CENTER,1);
         if(border)stroke(c,area,borderColor,borderWidth);
@@ -143,9 +143,9 @@ class RemoteTeleprompter extends View {
     }
     float localFontForPosition(String position,boolean timer){return timer&&!position.startsWith("center")?timerFontSize():localFontSize();}
     void clocks(Canvas c,RectF area,boolean clock,boolean local,String position){
-        fontFace=Typeface.create("sans-serif",Typeface.BOLD);double seconds=Math.ceil(app.timerValue());String timer=(seconds<0?"−":"")+RemoteModel.time(Math.abs(seconds)).replace(":"," : "),now=new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date());
+        fontFace=Typeface.create("sans-serif",Typeface.BOLD);String timer=app.localTimer.display(android.os.SystemClock.elapsedRealtime()).replace(":"," : "),now=new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date());
         boolean side=!position.startsWith("center"),localRight=string("localClockPosition","","right").equals("right");
-        int timerColor=app.timerRunning&&app.timerValue()<=0?color("clockExpiredColor","",0xff3131):color("clockColor","clockColor",0x00ff55),localColor=color("localClockColor","localClockColor",0x00ff55);
+        int timerColor=app.localTimer.expired(android.os.SystemClock.elapsedRealtime())?color("clockExpiredColor","",0xff3131):color("clockColor","clockColor",0x00ff55),localColor=color("localClockColor","localClockColor",0x00ff55);
         boolean timerBorder=flag("clockBorderEnabled","",true),localBorder=flag("localClockBorderEnabled","",true);
         int timerEdge=border("clockBorderColor","clockColor",0x00ff55,"rgbClockBorderEnabled"),localEdge=border("localClockBorderColor","localClockColor",0x00ff55,"rgbClockBorderEnabled");
         float font=timerFontSize();

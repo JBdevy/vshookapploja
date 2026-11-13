@@ -349,7 +349,7 @@ struct RootView: View {
            let cached = container.desktopWorkspaceHost { host = cached }
         else {
             container.desktopWorkspaceHost?.removeFromSuperview()
-            host = NSHostingView(rootView: content())
+            host = NativeWorkspaceHostingView(rootView: content())
             if #available(macOS 13, *) { host.sizingOptions = [] }
             if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
             host.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -572,7 +572,9 @@ private final class FloatingStartupAnchor: NSView {
 @MainActor final class JarasApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
+        MacShowMode.shared.refresh()
     }
+    func applicationWillTerminate(_ notification: Notification) { MacShowLidBrightness.shared.stop() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if ProjectSyncControl.following {
             DesktopProjectTabs.shared.active?.documents.closeNotice = "Project Sync: o PC B está seguindo o PC A. Desative a sincronização antes de encerrar."

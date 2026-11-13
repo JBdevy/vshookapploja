@@ -178,8 +178,12 @@ for modifiers: NSEvent.ModifierFlags in [[], .shift] {
     precondition(grid.handlePointerEvent(event(.leftMouseDown, CGPoint(x: 130,y: 122), modifiers: modifiers)))
     precondition(seeks.count == before, "item presses must leave the cursor unchanged until release")
     precondition(grid.handlePointerEvent(event(.leftMouseUp, CGPoint(x: 130,y: 122), modifiers: modifiers)))
-    precondition(seeks.count == before + 1 && seeks.last == 130, "item body clicks seek exactly once at the clicked position")
-    precondition(freeSeeks.last == modifiers.contains(.shift), "item clicks preserve Shift free positioning")
+    if modifiers.contains(.shift) {
+        precondition(seeks.count == before, "Shift item clicks extend selection without moving the edit cursor")
+    } else {
+        precondition(seeks.count == before + 1 && seeks.last == 130, "plain item body clicks seek exactly once at the clicked position")
+        precondition(freeSeeks.last == false)
+    }
     precondition(grid.selected == [first], "seeking from an item keeps item selection")
 }
 let seeksBeforeCancelledGestures = seeks.count
@@ -888,6 +892,21 @@ menuGrid.updateSelection([contextVideoID])
 precondition(!menuGrid.itemContextMenu(for: contextVideoID).items.contains { $0.action == NSSelectorFromString("separateContextAudio") })
 print("SEPARATION_SINGLE_AUDIO_ONLY_CONTEXT_AND_EXPORT_REMAINS_LAST_OK")
 
+menuGrid.fileLocation = { $0 == contextAudibleID ? URL(fileURLWithPath: "/tmp/Source.wav") : nil }
+var durationRequest: Set<UUID> = []
+menuGrid.resetDuration = { durationRequest = $0 }
+menuGrid.updateSelection([contextAudibleID, contextMutedID])
+let durationMenu = menuGrid.itemContextMenu(for: contextAudibleID)
+precondition(durationRequest.isEmpty, "Building the menu must not reset an item")
+invoke(durationMenu, "resetDurationSelection")
+precondition(durationRequest == [contextAudibleID,contextMutedID], "The menu requests confirmation for the captured selection")
+var rateRequest: Set<UUID> = []
+menuGrid.configureRate = { rateRequest = $0 }
+invoke(durationMenu, "configureRateSelection")
+precondition(rateRequest == [contextAudibleID,contextMutedID], "Config rate must open the modal for the current selection")
+menuGrid.fileLocation = { _ in nil }
+print("ITEM_RESET_DURATION_MENU_REQUESTS_SELECTED_FILES_WITHOUT_IMMEDIATE_MUTATION_OK")
+
 let contextMIDI = UUID(), contextMIDIMuted = UUID()
 menuGrid.items += [
     GridSelectionItem(id: contextMIDI, rect: CGRect(x: 0, y: 160, width: 100, height: 30), audioExportable: false, midiEditable: true),
@@ -895,8 +914,16 @@ menuGrid.items += [
 ]
 menuGrid.updateSelection([contextMIDI, contextMIDIMuted, contextAudibleID])
 let midiContext = menuGrid.itemContextMenu(for: contextMIDI)
-precondition(midiContext.items.count == 4)
-precondition(midiContext.items.map(\.title) == ["Mute items", "Convert Mono", "Convert Stereo", "Unify items"])
+precondition(midiContext.items.count == 5)
+precondition(midiContext.items.map(\.title) == ["Config rate", "Mute items", "Convert Mono", "Convert Stereo", "Unify items"])
+invoke(midiContext, "configureRateSelection")
+precondition(rateRequest == [contextMIDI, contextMIDIMuted, contextAudibleID], "MIDI Config rate must include the selected media")
+let timecodeContext = UUID()
+menuGrid.items.append(GridSelectionItem(id: timecodeContext, rect: CGRect(x: 0, y: 240, width: 100, height: 30), editable: false, rateEditable: true))
+menuGrid.updateSelection([timecodeContext])
+invoke(menuGrid.itemContextMenu(for: timecodeContext), "configureRateSelection")
+precondition(rateRequest == [timecodeContext], "Generated timecode needs Config rate without an audio source file")
+menuGrid.updateSelection([contextMIDI, contextMIDIMuted, contextAudibleID])
 toggled = []; invoke(midiContext, "muteMIDISelection")
 precondition(toggled == [contextMIDI], "MIDI context actions must preserve selected audio items")
 var frozen = Set<UUID>(), frozenChannels = 0
@@ -959,6 +986,30 @@ _ = grid.handlePointerEvent(event(.leftMouseUp, CGPoint(x: panRect.midX, y: panR
 precondition(!panEdits.isEmpty && panEdits.last!.2 && seeks.count == beforeMixSeeks,
              "pan edits commit without seeking or dragging the item")
 print("ITEM_COMPACT_CONTROLS_AND_PAN_GESTURE_OK")
+
+// Locking starts at the native pointer boundary: no callback and no local
+// needle preview may run before the controller rejects a value.
+grid.itemMixLocked = true
+let lockedGainCount = gainMotions.count, lockedPanCount = panEdits.count
+func headerBitmap(_ rect: CGRect) -> Data {
+    let bitmap = grid.bitmapImageRepForCachingDisplay(in: rect)!
+    grid.cacheDisplay(in: rect, to: bitmap)
+    return Data(bytes: bitmap.bitmapData!, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+}
+for knob in [compactHeader.gainKnobRect!, compactHeader.panKnobRect!] {
+    let point = CGPoint(x: knob.midX, y: knob.midY)
+    let before = headerBitmap(knob)
+    _ = grid.handlePointerEvent(event(.leftMouseDown, point))
+    _ = grid.handlePointerEvent(event(.leftMouseDragged, CGPoint(x: point.x, y: point.y - 60)))
+    precondition(headerBitmap(knob) == before, "a locked knob must not move visually during drag")
+    _ = grid.handlePointerEvent(event(.leftMouseUp, CGPoint(x: point.x, y: point.y - 60)))
+    _ = grid.handlePointerEvent(event(.leftMouseDown, point, clicks: 2))
+    _ = grid.handlePointerEvent(event(.leftMouseUp, point, clicks: 2))
+}
+precondition(gainMotions.count == lockedGainCount && panEdits.count == lockedPanCount,
+    "locked gain and pan neither preview, commit nor reset")
+grid.itemMixLocked = false
+print("ITEM_MIX_LOCK_BLOCKS_NATIVE_GESTURES_AND_NEEDLE_PREVIEWS_OK")
 
 // Growing the title strip only consumes body space; track/item bounds and time
 // coordinates remain identical, including the collapsed representation.
@@ -1112,4 +1163,40 @@ focusRouter.handlePointer(focusClick(.leftMouseDown, CGPoint(x: 100, y: 200)))
 precondition(focusRouter.selectAll(focusKey) && focusTracksAll == 2 && focusGridAll == 2)
 withExtendedLifetime([focusGridArea, focusTrackArea, focusListArea, focusWindow]) {}
 print("CONSUMED_ITEM_CLICK_OWNS_SELECT_ALL_DESPITE_TRACK_SELECTION_OK")
+}
+
+// The interval follows visual row/time order, including offscreen items and
+// repeated/reversed Shift clicks. Command remains an individual toggle.
+MainActor.assumeIsolated {
+    let rangeWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: .borderless, backing: .buffered, defer: false)
+    rangeWindow.isReleasedWhenClosed = false
+    let rangeGrid = GridSelectionView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+    rangeWindow.contentView = rangeGrid
+    let rangeIDs = (0..<5).map { _ in UUID() }
+    let rangeItems = rangeIDs.enumerated().map { index, id in
+        GridSelectionItem(id: id, rect: CGRect(x: 20 + index * 140, y: 80, width: 110, height: 120), duration: 110)
+    }
+    rangeGrid.items = rangeItems.reversed()
+    func rangeClick(_ index: Int, _ flags: NSEvent.ModifierFlags = []) {
+        let point = rangeGrid.convert(CGPoint(x: 75 + index * 140, y: 160), to: nil)
+        for type: NSEvent.EventType in [.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: rangeWindow.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+            if type == .leftMouseDown { rangeGrid.mouseDown(with: event) } else { rangeGrid.mouseUp(with: event) }
+        }
+    }
+    rangeClick(1)
+    rangeClick(4, .shift)
+    precondition(rangeGrid.selected == Set(rangeIDs[1...4]))
+    rangeClick(2, .shift)
+    precondition(rangeGrid.selected == Set(rangeIDs[1...2]), "Shift retains its first anchor when narrowing")
+    rangeClick(0, .shift)
+    precondition(rangeGrid.selected == Set(rangeIDs[0...1]), "Shift selects in reverse")
+    rangeClick(4, .command)
+    precondition(rangeGrid.selected == Set([rangeIDs[0], rangeIDs[1], rangeIDs[4]]))
+    rangeClick(1, .command)
+    precondition(rangeGrid.selected == Set([rangeIDs[0], rangeIDs[4]]))
+    rangeClick(3)
+    precondition(rangeGrid.selected == [rangeIDs[3]])
+    rangeWindow.close()
+    print("GRID_ITEM_SHIFT_INTERVAL_REVERSE_STABLE_ANCHOR_AND_COMMAND_TOGGLE_OK")
 }

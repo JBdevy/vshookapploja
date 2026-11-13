@@ -599,6 +599,10 @@ public struct Project: Codable, Identifiable, Equatable, Sendable {
     public var projectSyncID: UUID? = nil
     /// Protect timeline positions and boundaries; nil keeps older projects unlocked.
     public var timelineMovementLocked: Bool? = nil
+    /// Independent edit locks: regions/markers=1, item geometry=2, item gain/pan=4.
+    public var timelineLockOptions: Int? = nil
+    public var configuredTimelineLocks: Int { (timelineLockOptions ?? 7) & 7 }
+    public var effectiveTimelineLocks: Int { timelineMovementLocked == true ? configuredTimelineLocks : 0 }
     /// Windows grandMA2 assignments and reserved destinations must survive a Mac save.
     public var windowsLighting: PortableProjectJSON? = nil
     public var resolume: ResolumeSettings? = nil
@@ -1165,6 +1169,31 @@ public extension Song {
     func markerBelongs(_ marker: TimelineMarker, to root: UUID) -> Bool {
         marker.unifiedRegionID == root || regionOwns(root, owner: regionOwnershipInitialized == true ? marker.regionOwnerID : marker.sourceRegionID ?? regionOwner(at: marker.position))
     }
+    /// Drag membership follows the largest portion of an item currently
+    /// covered by a root region. Existing attachment only resolves equal spans.
+    func regionMovementOwner(at start: Double, end: Double? = nil, preferred: UUID? = nil) -> UUID? {
+        var selected: Part?
+        var largest = 0.0
+        for part in parts where part.parentRegionID == nil {
+            let overlap = end.map { max(0, min($0, part.endTime) - max(start, part.startTime)) }
+                ?? (start >= part.startTime - 1e-6 && start < part.endTime - 1e-6 ? 1 : 0)
+            guard overlap > 0 else { continue }
+            let same = selected != nil && abs(overlap - largest) <= 1e-9
+            let preferredHere = regionOwns(part.id, owner: preferred)
+            let preferredBefore = selected.map { regionOwns($0.id, owner: preferred) } ?? false
+            let tie = selected.map { previous in
+                preferredHere != preferredBefore ? preferredHere :
+                    part.endTime - part.startTime != previous.endTime - previous.startTime
+                    ? part.endTime - part.startTime < previous.endTime - previous.startTime
+                    : part.id.uuidString < previous.id.uuidString
+            } ?? false
+            if selected == nil || overlap > largest + 1e-9 || same && tie { selected = part; largest = overlap }
+        }
+        return selected?.id
+    }
+    func markerMoves(_ marker: TimelineMarker, with root: UUID) -> Bool {
+        marker.unifiedRegionID == root || regionMovementOwner(at: marker.position, preferred: marker.regionOwnerID ?? marker.sourceRegionID) == root
+    }
 }
 
 public extension Song {
@@ -1176,6 +1205,28 @@ public extension Song {
         let delta = start - region.startTime
         var result = self
         for track in result.tracks.indices {
+            if var automation = result.tracks[track].automation {
+                for envelope in automation.envelopes.indices {
+                    var points = automation.envelopes[envelope].points
+                    for point in points.indices where regionMovementOwner(at: points[point].time) == id {
+                        points[point].time = max(0, points[point].time + delta)
+                    }
+                    points.sort { $0.time < $1.time }
+                    if points.count > 1 {
+                        for point in 1..<points.count where points[point].time <= points[point - 1].time {
+                            points[point].time = points[point - 1].time.nextUp
+                        }
+                    }
+                    automation.envelopes[envelope].points = points
+                }
+                result.tracks[track].automation = automation
+            }
+            if var changes = result.tracks[track].programChanges {
+                for marker in changes.indices where regionMovementOwner(at: changes[marker].position) == id {
+                    changes[marker].position = max(0, changes[marker].position + delta)
+                }
+                result.tracks[track].programChanges = changes.sorted { $0.position < $1.position }
+            }
             for index in result.tracks[track].clips.indices {
                 let clip = result.tracks[track].clips[index]
                 if result.tracks[track].kind == .timecode && result.tracks[track].importedTimecodeItems != true {
@@ -1186,7 +1237,7 @@ public extension Song {
                     result.tracks[track].clips[index].startTime = newStart
                     result.tracks[track].clips[index].duration = newEnd - newStart
                     result.duration = max(result.duration, newEnd)
-                } else if itemBelongs(clip, to: id) {
+                } else if regionMovementOwner(at: clip.startTime, end: clip.startTime + clip.duration, preferred: clip.regionOwnerID) == id {
                     result.tracks[track].clips[index].startTime = max(0, clip.startTime + delta)
                     result.duration = max(result.duration, result.tracks[track].clips[index].startTime + clip.duration)
                 }
@@ -1200,7 +1251,7 @@ public extension Song {
         if var markers = result.markers {
             for index in markers.indices {
                 let marker = markers[index]
-                if markerBelongs(marker, to: id) {
+                if markerMoves(marker, with: id) {
                     markers[index].position = max(0, marker.position + delta)
                     result.duration = max(result.duration, markers[index].position)
                 }
@@ -1222,7 +1273,7 @@ public struct RegionMarkerRepulsion {
         let gap = minimumGap.isFinite ? max(0.01, minimumGap) : 0.01
         var offsets: [Double] = [], stationary: [Double] = []
         for marker in song.markers ?? [] {
-            if song.markerBelongs(marker, to: region.id) { offsets.append(marker.position - region.startTime) }
+            if song.markerMoves(marker, with: region.id) { offsets.append(marker.position - region.startTime) }
             else { stationary.append(marker.position) }
         }
         minimumStart = max(0, -(offsets.min() ?? 0))

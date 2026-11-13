@@ -82,6 +82,19 @@ public struct ProjectFolderDeletion: Identifiable, Sendable {
             standard == standard.resolvingSymlinksInPath().standardizedFileURL &&
             (try? standard.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
     }
+    private static func isDedicatedDirectory(_ document: URL) throws -> Bool {
+        let fm = FileManager.default, root = document.deletingLastPathComponent().standardizedFileURL
+        var protected = [URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true), fm.temporaryDirectory, URL(fileURLWithPath: "/")]
+        for type in [FileManager.SearchPathDirectory.documentDirectory, .desktopDirectory, .downloadsDirectory,
+                     .musicDirectory, .moviesDirectory, .picturesDirectory, .applicationSupportDirectory,
+                     .libraryDirectory, .cachesDirectory, .applicationDirectory] {
+            protected += fm.urls(for: type, in: .allDomainsMask)
+        }
+        if let volume = try root.resourceValues(forKeys: [.volumeURLKey]).volume { protected.append(volume) }
+        if protected.contains(where: { $0.resolvingSymlinksInPath().standardizedFileURL == root }) { return false }
+        return try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension.lowercased() == "jl" }.allSatisfy { $0.standardizedFileURL == document }
+    }
     private static func inventory(_ document: URL) throws -> [URL: String] {
         let fm = FileManager.default, root = document.deletingLastPathComponent()
         let project = try ProjectDocumentCodec.decode(Data(contentsOf: document))

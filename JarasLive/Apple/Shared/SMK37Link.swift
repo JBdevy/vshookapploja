@@ -28,6 +28,13 @@ import CoreMIDI
     private var lastPad: Int?
     private var lastPadPreset: Int?
     private var lastLibrary: VinhetasLibrary?
+    private var firmwareMaintenance = false
+    private var bluetooth = false
+    private var feedbackBudget = SMK37FeedbackBudget()
+    func setFirmwareMaintenance(_ active: Bool) {
+        firmwareMaintenance = active
+        if active { disconnect() } else { refresh() }
+    }
     var selectedSMKAvailable: Bool {
         let audio = AudioDeviceSettings.shared
         return audio.midiDevices.contains { audio.midiSlots.contains($0.id) && SMK37Protocol.isDeviceName($0.name) }
@@ -133,6 +140,12 @@ import CoreMIDI
         guard candidate != 0, target != 0 else { disconnect(); return }
         if source != candidate || destination != target {
             disconnect(); source = candidate; sourceID = candidateID; destination = target
+            var device: MIDIDeviceRef = 0
+            MIDIEntityGetDevice(entity, &device)
+            var owner: Unmanaged<CFString>?
+            MIDIObjectGetStringProperty(device, kMIDIPropertyDriverOwner, &owner)
+            let driver = owner?.takeRetainedValue() as String? ?? ""
+            bluetooth = driver.localizedCaseInsensitiveContains("bluetooth")
             if MIDIPortConnectSource(input, source, UnsafeMutableRawPointer(bitPattern: Int(source))) != noErr { disconnect() }
         }
     }
@@ -141,6 +154,7 @@ import CoreMIDI
         dispatch(session.close())
         if source != 0, input != 0 { MIDIPortDisconnectSource(input, source) }
         source = 0; sourceID = 0; destination = 0; stream = SMK37Stream()
+        bluetooth = false; feedbackBudget = SMK37FeedbackBudget()
         pending.removeAll(); sent.removeAll(); lastLibrary = nil; lastPad = nil; lastHello = -.infinity
         if connected { connected = false }
     }
@@ -285,8 +299,10 @@ import CoreMIDI
         guard session.connected else { return }
         let priority = ["action", "navigation", "transport", "fadeout", "songs", "playback", "loop", "selection"]
         let keys = priority.filter { pending[$0] != nil } + pending.keys.filter { !priority.contains($0) }.sorted()
-        for key in keys.prefix(4) {
-            guard let bytes = pending[key], write(bytes) else { return }
+        for key in keys.prefix(bluetooth ? 1 : 4) {
+            guard let bytes = pending[key] else { continue }
+            if bluetooth && !feedbackBudget.allow(bytes: bytes.count, at: ProcessInfo.processInfo.systemUptime) { return }
+            guard write(bytes) else { return }
             sent[key] = bytes; pending[key] = nil
         }
     }

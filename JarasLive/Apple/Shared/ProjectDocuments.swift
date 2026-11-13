@@ -459,6 +459,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
         let url: URL
         var paths: [String]
         var errors: [String] = []
+        var isDAWImport = false
     }
     @Published var missingAudioPrompt: MissingAudioPrompt?
     @Published var importingAudio = false
@@ -1073,6 +1074,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
                 if result.remaining.isEmpty {
                     try await finishOpening(prompt.project, at: prompt.url)
                     missingAudioPrompt = nil
+                    if prompt.isDAWImport { migrationNotice = warnings.joined(separator: "\n\n") }
                 } else {
                     missingAudioPrompt?.paths = result.remaining
                     missingAudioPrompt?.errors = result.errors
@@ -1088,6 +1090,10 @@ enum PortableProjectImportPrompt: String, Identifiable {
         beginOpening {
             try await self.finishOpening(prompt.project, at: prompt.url)
             self.missingAudioPrompt = nil
+            if prompt.isDAWImport {
+                self.warnings += prompt.paths.map { $0 + "\n" + JarasLocalization.string("Media file was not found.") }
+                self.migrationNotice = self.warnings.joined(separator: "\n\n")
+            }
         }
     }
     func cancelMissingAudioOpen() {
@@ -1153,7 +1159,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
                 warnings = result.warnings.map { JarasLocalization.string($0) }
                 let missing = ProjectAudioRecovery.missingPaths(in: result.project, directory: destination.deletingLastPathComponent())
                 if !missing.isEmpty {
-                    missingAudioPrompt = MissingAudioPrompt(project: result.project, url: destination, paths: missing)
+                    missingAudioPrompt = MissingAudioPrompt(project: result.project, url: destination, paths: missing, isDAWImport: true)
                 } else {
                     try await finishOpening(result.project, at: destination)
                     migrationNotice = warnings.joined(separator: "\n\n")
@@ -1783,6 +1789,11 @@ struct ProjectBrowserView: View {
                                     .padding(10).frame(maxWidth: .infinity, alignment: .leading).background(JarasTheme.panel).contentShape(Rectangle())
                             }.buttonStyle(.plain)
                                 .contextMenu {
+                                    #if os(macOS)
+                                    Button("Open project location") {
+                                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                                    }.disabled(RecentProjectEntry.isMissing(url))
+                                    #endif
                                     if documents.ready, !RecentProjectEntry.isMissing(url), documents.openInNewProjectTab != nil {
                                         Button("Open in new tab") { documents.openInNewProjectTab?(url); completed() }
                                     }

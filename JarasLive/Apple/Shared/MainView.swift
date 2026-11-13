@@ -1238,6 +1238,13 @@ struct FooterNativeHeightHost<Content: View>: NSViewRepresentable {
     }
 }
 
+private final class RetainedFooterHostingView: NSHostingView<AnyView> {
+    override func layout() {
+        guard !isHiddenOrHasHiddenAncestor else { return }
+        super.layout()
+    }
+    override func viewDidUnhide() { super.viewDidUnhide(); needsLayout = true }
+}
 final class FooterHeightContainerView: NSView {
     private var storedHeight: CGFloat = 27
     private var minimum: CGFloat = 27
@@ -1253,7 +1260,7 @@ final class FooterHeightContainerView: NSView {
     var editTrackDetails: (TrackDetailsEditRequest) -> Void = { _ in }
     private(set) var contentAssignments = 0
     private(set) var effectiveHeight: CGFloat = 27
-    private let host = NSHostingView(rootView: AnyView(EmptyView()))
+    private let host = RetainedFooterHostingView(rootView: AnyView(EmptyView()))
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         if #available(macOS 13, *) { host.sizingOptions = [] }
@@ -1274,15 +1281,15 @@ final class FooterHeightContainerView: NSView {
         if let pendingCommit, storedHeight != pendingCommit.previous || !active { self.pendingCommit = nil }
         self.storedHeight = storedHeight; self.minimum = minimum; self.maximum = maximum
         self.active = active; self.role = role; self.coordinator = coordinator
-        // Hiding a zero-height panel still leaves its entire hosting tree in
-        // AppKit's window layout/environment walks when another panel opens.
-        // Keep the root and its last geometry, but detach it while closed.
+        // Once opened, keep the controls in their original window. Detaching
+        // this hosting root tears down nested SwiftUI window environments on
+        // close and forces cold preparation again on every reopen.
         host.isHidden = !active
         if active {
             if host.superview !== self { addSubview(host) }
         } else {
             FooterVerticalResizeView.cancelDrags(in: self); preview = nil
-            if host.superview === self { host.removeFromSuperview() }
+            if contentAssignments == 0, host.superview === self { host.removeFromSuperview() }
         }
         refreshHeight(); coordinator?.register(self, role: role)
     }
@@ -1383,13 +1390,14 @@ class FooterVerticalResizeView: NSView, NativeTimelineInputObserver {
     private func apply(_ value: CGFloat) {
         guard lastHeight != value else { return }
         lastHeight = value
-        CATransaction.begin(); CATransaction.setDisableActions(true)
+        let disabled = CATransaction.disableActions()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.setDisableActions(disabled) }
         boundary?.previewHeight(value); changed?(value)
         window?.contentView?.layoutSubtreeIfNeeded()
-        CATransaction.commit()
     }
     override func mouseDragged(with event: NSEvent) {
-        guard let value = resizedHeight(event) else { return }
+        guard let value = resizedHeight(NativeTimelineEventQueue.latestDrag(event)) else { return }
         apply(value)
     }
     override func mouseUp(with event: NSEvent) {

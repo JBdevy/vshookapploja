@@ -23,6 +23,7 @@ struct IpadItemHeader: UIViewRepresentable {
     let interactionID: UUID
     var pinsToViewport = true
     var sourceStartOffset: CGFloat = 0
+    var mixLocked = false
     let mix: (IpadItemMixParameter, Double, Bool, Bool) -> Void
     let mute: () -> Void
     let phase: () -> Void
@@ -34,6 +35,7 @@ struct IpadItemHeader: UIViewRepresentable {
         view.interactionID = interactionID
         view.clip = clip; view.editable = editable; view.textEditable = textEditable
         view.pinsToViewport = pinsToViewport; view.sourceStartOffset = sourceStartOffset
+        view.mixLocked = mixLocked
         view.mix = mix; view.mute = mute; view.phase = phase; view.fx = fx; view.menu = menu
         view.isEnabled = enabled; view.setNeedsDisplay()
     }
@@ -55,6 +57,13 @@ final class IpadItemHeaderControl: UIControl {
         didSet { if !editable && oldValue { cancelTracking(with: nil) } }
     }
     var textEditable = false
+    var mixLocked = false {
+        didSet {
+            if mixLocked && !oldValue, let hit = activeGesture?.hit, hit == .gain || hit == .pan {
+                cancelTracking(with: nil); setNeedsDisplay()
+            }
+        }
+    }
     var pinsToViewport = true
     var sourceStartOffset: CGFloat = 0
     var mix: (IpadItemMixParameter, Double, Bool, Bool) -> Void = { _, _, _, _ in }
@@ -149,6 +158,7 @@ final class IpadItemHeaderControl: UIControl {
     override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
         guard isEnabled, let hit = hit(touch.location(in: self)) else { return false }
         if event?.buttonMask.contains(.secondary) == true { menu(); return false }
+        if mixLocked && (hit == .gain || hit == .pan) { return false }
         if touch.tapCount == 2, hit == .gain || hit == .pan {
             mix(hit == .gain ? .gain : .pan, hit == .gain ? 1 : 0, true, false)
             return false

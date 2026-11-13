@@ -189,19 +189,20 @@ MainActor.assumeIsolated {
     func event(_ type: NSEvent.EventType, delta: CGFloat, clicks: Int = 1) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: CGPoint(x: initialX + delta, y: eventY), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
     }
-    let evaluations = state.rootEvaluations, rootLayouts = root.layouts
+    let evaluations = state.rootEvaluations
     divider.mouseDown(with: event(.leftMouseDown, delta: 0))
     var timings: [Double] = []
     for delta: CGFloat in [-4, -18, -80, -130, -30, 15, -90] {
         let start = CFAbsoluteTimeGetCurrent()
         divider.mouseDragged(with: event(.leftMouseDragged, delta: delta))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.025))
         timings.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
         let width = min(486.5, max(277, 320 - delta))
-        precondition(abs(rightHost.frame.width - width) < 0.01 && abs(leftHost.frame.width - (1200 - width - 14)) < 0.01)
+        precondition(abs(rightHost.frame.width - width) < 0.01 && abs(leftHost.frame.width - (1200 - width - divider.frame.width)) < 0.01)
         precondition(abs(divider.convert(CGPoint(x: 7, y: 50), to: nil).x - (initialX + 320 - width)) < 0.01,
                      "native sibling frames follow the pointer exactly before mouseDragged returns")
-        precondition(state.rootEvaluations == evaluations && root.layouts == rootLayouts,
-                     "horizontal drag never evaluates or lays out the transport/footer host")
+        precondition(state.rootEvaluations == evaluations,
+                     "horizontal drag never reevaluates the transport/footer content")
         precondition(state.width == 320 && state.commits.isEmpty)
         precondition(window.firstResponder === focused && controls.allSatisfy { $0.count == 1 })
         precondition(abs(grids[0].contentView.bounds.minY - 160) < 0.01 && abs(grids[1].contentView.bounds.minX - 500) < 0.01)
@@ -222,7 +223,7 @@ MainActor.assumeIsolated {
     precondition(descendants(WorkspaceControl.self, in: root).contains { $0 === rightControl })
 
     state.width = 0; settle(root)
-    precondition(rightHost.isHidden && leftHost.frame.width == 1186)
+    precondition(rightHost.isHidden && leftHost.frame.width == 1200 - divider.frame.width)
     state.toggle(); settle(root)
     precondition(!rightHost.isHidden && rightHost.frame.width == 365 && rightControl.count == 1)
     divider.mouseDown(with: event(.leftMouseDown, delta: 0, clicks: 2)); settle(root)
@@ -232,11 +233,34 @@ MainActor.assumeIsolated {
     precondition(!rightHost.isHidden && state.width == 365 && rightControl.count == 1,
                  "clicking the collapsed divider restores the same mounted content")
     window.setContentSize(CGSize(width: 620, height: 760)); settle(root)
-    precondition(rightHost.frame.width == 200 && leftHost.frame.width == 406 && divider.frame.height == 670)
+    precondition(rightHost.frame.width == 200 && leftHost.frame.width == 420 - divider.frame.width && divider.frame.height == 670)
     window.setContentSize(CGSize(width: 1200, height: 700)); settle(root)
     precondition(rightHost.frame.width == 365 && state.width == 365)
 
+    // Keyboard scroll uses the same paired vertical clip, independently of the
+    // mouse location. Horizontal arrows affect only the nested timeline clip.
+    let keyboardScroll = SidebarScrollController()
+    keyboardScroll.attach(grids[0], owner: leftHost)
+    grids[1].logicalDocumentWidth = 4000
+    let beforeY = grids[0].contentView.bounds.minY
+    let beforeX = grids[1].contentView.bounds.minX
+    precondition(keyboardScroll.scrollTimelineByArrow(125))
+    precondition(grids[0].contentView.bounds.minY == beforeY + 72 && grids[1].contentView.bounds.minX == beforeX)
+    precondition(keyboardScroll.scrollTimelineByArrow(126))
+    precondition(grids[0].contentView.bounds.minY == beforeY)
+    precondition(keyboardScroll.scrollTimelineByArrow(124))
+    precondition(grids[1].contentView.bounds.minX == beforeX + 72 && grids[0].contentView.bounds.minY == beforeY)
+    precondition(keyboardScroll.scrollTimelineByArrow(123))
+    precondition(grids[1].contentView.bounds.minX == beforeX && !grids[1].permitsPlaybackFollow)
+    grids[0].contentView.scroll(to: .zero); grids[1].contentView.scroll(to: .zero)
+    precondition(keyboardScroll.scrollTimelineByArrow(126) && keyboardScroll.scrollTimelineByArrow(123))
+    precondition(grids[0].contentView.bounds.minY == 0 && grids[1].contentView.bounds.minX == 0)
+    precondition(!keyboardScroll.scrollTimelineByArrow(0))
+    keyboardScroll.detach(owner: leftHost)
+    print("DESKTOP_KEYBOARD_SCROLL_PAIRED_VERTICAL_GRID_HORIZONTAL_BOUNDS_AND_PLAYBACK_FOLLOW_OK")
+
     // The original native vertical scrollbar still targets the setlist scroll.
+    divider.showsScrollRail = true
     precondition(state.scroll.metrics.canScroll)
     let oldOffset = state.scroll.metrics.offset
     let down = divider.convert(CGPoint(x: 7, y: 50), to: nil)
@@ -247,24 +271,25 @@ MainActor.assumeIsolated {
     divider.mouseDragged(with: vertical(.leftMouseDragged, y: 50))
     divider.mouseUp(with: vertical(.leftMouseUp, y: 50))
     precondition(state.scroll.metrics.offset > oldOffset && state.commits == [365])
+    divider.showsScrollRail = false
 
     // A child mixer divider commits only its nearest workspace host.
     let embedded = MixerDividerView(frame: CGRect(x: 20, y: 50, width: 20, height: 200))
     leftHost.addSubview(embedded)
     embedded.columnWidth = 300; embedded.minimum = 277; embedded.maximum = 486.5
-    let layoutCount = root.layouts
+    let contentEvaluations = state.rootEvaluations
     embedded.onResize = { _ in leftHost.needsLayout = true }
     let point = embedded.convert(CGPoint(x: 10, y: 50), to: nil)
     func inner(_ type: NSEvent.EventType, x: CGFloat) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: CGPoint(x: point.x + x, y: point.y), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
     }
     embedded.mouseDown(with: inner(.leftMouseDown, x: 0)); embedded.mouseDragged(with: inner(.leftMouseDragged, x: 20)); embedded.mouseUp(with: inner(.leftMouseUp, x: 20))
-    precondition(root.layouts == layoutCount, "mixer commits stop at the workspace boundary rather than the app root")
+    precondition(state.rootEvaluations == contentEvaluations, "mixer commits preserve unrelated transport/footer content")
     embedded.removeFromSuperview()
 
     // Moving Setlist to the left preserves its host/state and mirrors resize direction.
     state.sidebarLeading = true; settle(root)
-    precondition(rightHost.frame.minX == 0 && rightHost.frame.width == 365 && leftHost.frame.minX == 379)
+    precondition(rightHost.frame.minX == 0 && rightHost.frame.width == 365 && leftHost.frame.minX == 365 + divider.frame.width)
     precondition(divider.frame.minX == 365 && divider.direction == 1)
     precondition(descendants(WorkspaceControl.self, in: root).contains { $0 === rightControl } && rightControl.count == 1)
     let leftDown = divider.convert(CGPoint(x: 7, y: 50), to: nil)
@@ -273,7 +298,8 @@ MainActor.assumeIsolated {
     }
     divider.mouseDown(with: leftSide(.leftMouseDown, delta: 0))
     divider.mouseDragged(with: leftSide(.leftMouseDragged, delta: 35))
-    precondition(rightHost.frame.width == 400 && leftHost.frame.minX == 414 && state.width == 365,
+    RunLoop.main.run(until: Date().addingTimeInterval(0.025))
+    precondition(rightHost.frame.width == 400 && leftHost.frame.minX == 400 + divider.frame.width && state.width == 365,
                  "left Setlist grows when the divider moves right without publishing during drag")
     divider.mouseUp(with: leftSide(.leftMouseUp, delta: 35)); settle(root)
     precondition(state.width == 400 && state.commits.last == 400)
@@ -298,5 +324,138 @@ MainActor.assumeIsolated {
     RunLoop.main.run(until: Date().addingTimeInterval(0.02))
     precondition(state.commits == beforeDetach, "detaching the workspace never saves or replays an abandoned drag")
     print("WORKSPACE_NATIVE_SPLIT_GEOMETRY_ENVIRONMENT_STATE_FOCUS_SCROLL_COLLAPSE_AND_LAYOUT_BOUNDARY_OK mean_ms=\(timings.reduce(0,+)/Double(timings.count))")
+    window.close()
+}
+
+@MainActor private final class RowRootsState: ObservableObject {
+    @Published var selection: Set<Int> = [0]
+    @Published var order = Array(0..<20)
+    @Published var width: CGFloat = 300
+    let project = UUID(), song = UUID()
+    let tracks = (0..<20).map { _ in UUID() }
+    var builds: [Int] = []
+}
+private struct RowRootsFixture: View {
+    @ObservedObject var state: RowRootsState
+    var body: some View {
+        NativeTimelineMixerRows(size: CGSize(width: state.width, height: 1200), rows: state.order.enumerated().map { slot, track in
+            NativeTimelineMixerRowSpec(id: slot, frame: CGRect(x: 0, y: CGFloat(slot * 60), width: state.width, height: 60),
+                version: TimelineMixerRowVersion(project: state.project, song: state.song, track: state.tracks[track],
+                    revision: 1, mixerRevision: 1, index: track, showsFader: state.width >= 180,
+                    height: 60, audioHeight: 60, envelopeHeight: 0,
+                    selection: state.selection.contains(track) ? [state.tracks[track]] : [],
+                    silenced: false, showsIcons: false, nextTrack: nil, groupDepth: 0, lastChild: false, directory: nil))
+        }) { slot in
+            let track = state.order[slot]
+            let _ = { state.builds.append(track) }()
+            StatefulControl(role: "row\(track)", revision: state.selection.contains(track) ? 1 : 0)
+                .frame(maxWidth: .infinity).frame(height: 60)
+        }
+    }
+}
+MainActor.assumeIsolated {
+    let state = RowRootsState()
+    let root = NSHostingView(rootView: RowRootsFixture(state: state))
+    let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 300, height: 1200), styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false; window.contentView = root; settle(root)
+    let controls = descendants(WorkspaceControl.self, in: root)
+    precondition(controls.count == 20)
+    let retained = controls.first { $0.role == "row0" }!
+    retained.increment(); settle(root); precondition(retained.count == 1)
+    state.builds.removeAll(); state.selection = [8]; settle(root)
+    precondition(state.builds.sorted() == [0, 8], "selection only assigns the roots of the two affected tracks")
+    precondition(retained.count == 1 && retained.revision == 0)
+    precondition(controls.first { $0.role == "row8" }!.revision == 1)
+    precondition(descendants(WorkspaceControl.self, in: root).allSatisfy { current in controls.contains { $0 === current } }, "selection retains every native control")
+    state.builds.removeAll(); state.order.swapAt(1, 19); settle(root)
+    precondition(state.builds.sorted() == [1, 19], "recycling changes only the two rebound row roots")
+    precondition(descendants(WorkspaceControl.self, in: root).count == 20)
+    print("TRACK_MIXER_ROW_ROOTS_SELECTION_UPDATES_ONLY_CHANGED_TRACKS_AND_RECYCLING_RETAINS_CONTROLS_OK")
+    state.builds.removeAll()
+    for width: CGFloat in [315, 410, 230, 185, 300] {
+        state.width = width; settle(root)
+        precondition(state.builds.isEmpty, "changing pixel width must not replace the mixer rows or their control content")
+        precondition(controls.allSatisfy { abs($0.frame.width - width) < 0.01 },
+                     "retained row controls must still reflow to the exact proposed width")
+        precondition(retained.count == 1, "resizing preserves local control state")
+    }
+    state.width = 179; settle(root)
+    precondition(state.builds.count == 20, "crossing the fader-visibility boundary updates the row content")
+    state.builds.removeAll(); state.width = 170; settle(root)
+    precondition(state.builds.isEmpty && controls.allSatisfy { abs($0.frame.width - 170) < 0.01 })
+    state.width = 180; settle(root)
+    precondition(state.builds.count == 20 && retained.count == 1, "restoring faders preserves the existing row state")
+    print("TRACK_MIXER_WIDTH_REFLOWS_RETAINED_CONTROLS_WITHOUT_REBUILDING_CONTENT_EXCEPT_VISIBILITY_BOUNDARY_OK")
+    window.close()
+}
+
+@MainActor private final class MixerWidthState: ObservableObject {
+    @Published var width: CGFloat = 300
+    var publications = 0
+    var commits: [CGFloat] = []
+}
+private struct MixerWidthFixture: View {
+    @ObservedObject var state: MixerWidthState
+    let project = UUID()
+    var body: some View {
+        NativeTimelineColumns(mixerWidth: state.width, viewportWidth: 1200, height: 600, dividerWidth: 6,
+                              project: project, mixerIdentity: 0) {
+            Color.blue
+        } divider: { Color.gray } timeline: {
+            GridScrollView(axis: .horizontal, contentWidth: 4000, contentHeight: 600) {
+                Color.green.frame(width: 4000, height: 600)
+            }
+        }
+        .frame(width: 1200, height: 600)
+        .overlay(alignment: .topLeading) {
+            MixerResizeHandle(width: state.width, maximum: 480, minimum: 180, showsScrollRail: false,
+                              maximumResizeFrequency: 60, onEnd: { width in state.width = width; state.commits.append(width) }) { width in
+                state.width = width; state.publications += 1
+            }.frame(width: 6, height: 600).offset(x: state.width)
+        }
+    }
+}
+MainActor.assumeIsolated {
+    let state = MixerWidthState()
+    let root = NSHostingView(rootView: MixerWidthFixture(state: state))
+    let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1200, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false; window.contentView = root; settle(root)
+    let divider = descendants(MixerDividerView.self, in: root).first!
+    let mixer = descendants(NSView.self, in: root).first { $0.identifier?.rawValue == "columns-mixer" }!
+    let timeline = descendants(NSView.self, in: root).first { $0.identifier?.rawValue == "columns-timeline" }!
+    let scroll = descendants(GridNativeScrollView.self, in: timeline).first!
+    let initial = divider.convert(CGPoint(x: 3, y: 40), to: nil)
+    func event(_ type: NSEvent.EventType, _ delta: CGFloat) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: CGPoint(x: initial.x + delta, y: initial.y), modifierFlags: [],
+                           timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+    }
+    divider.mouseDown(with: event(.leftMouseDown, 0))
+    for delta: CGFloat in [10, 80, 40, -50, 20] {
+        divider.mouseDragged(with: event(.leftMouseDragged, delta)); settle(root)
+        precondition(mixer.frame.width == 300 + delta && timeline.frame.minX == 306 + delta)
+        precondition(abs(divider.convert(CGPoint(x: 3, y: 40), to: nil).x - initial.x - delta) < 0.01,
+                     "divider and actual column boundary stay together")
+        precondition(abs(scroll.contentView.frame.width - (894 - delta)) < 0.01,
+                     "the real timeline viewport reflows to the new available width")
+        for view in descendants(NSView.self, in: root) {
+            precondition(view.layer?.affineTransform().isIdentity != false,
+                         "resizing must never stretch the grid, text, controls or cursor geometry")
+        }
+        let unit = scroll.documentView!.convert(NSSize(width: 100, height: 1), to: nil)
+        precondition(abs(unit.width - 100) < 0.01, "100 timeline pixels stay 100 screen pixels during resize")
+    }
+    divider.mouseUp(with: event(.leftMouseUp, 30)); settle(root)
+    precondition(state.width == 330 && state.commits == [330] && mixer.frame.width == 330)
+    let before = state.publications
+    divider.mouseDown(with: event(.leftMouseDown, 30))
+    for n in 0..<200 { divider.mouseDragged(with: event(.leftMouseDragged, 30 + CGFloat(n % 50))) }
+    precondition(state.publications - before < 10, "a burst keeps the latest width instead of publishing every queued movement")
+    divider.mouseUp(with: event(.leftMouseUp, 65)); settle(root)
+    precondition(state.width == 365 && state.commits == [330, 365] && mixer.frame.width == 365)
+    let stopped = state.publications
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    precondition(state.publications == stopped, "no pending width is applied after release")
+    print("TRACK_MIXER_REAL_VIEWPORT_NO_STRETCH_DIVIDER_ALIGNED_DISPLAY_CADENCE_AND_FINAL_POINTER_COMMIT_OK")
     window.close()
 }

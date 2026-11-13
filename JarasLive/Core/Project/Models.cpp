@@ -32,6 +32,31 @@ bool regionOwns(const Song& song, const ID& root, const std::optional<ID>& owner
     for (const auto& part : song.parts) if (part.id == *owner) return part.parentRegionID == root;
     return false;
 }
+std::optional<ID> regionMovementOwner(const Song& song, double start, std::optional<double> end,
+                                    const std::optional<ID>& preferred) {
+    const Part* selected = nullptr;
+    double largest = 0;
+    for (const auto& part : song.parts) {
+        if (part.parentRegionID) continue;
+        const double overlap = end ? std::max(0.0, std::min(*end, part.endTime) - std::max(start, part.startTime))
+            : start >= part.startTime - regionPlacementTolerance && start < part.endTime - regionPlacementTolerance ? 1.0 : 0.0;
+        if (overlap <= 0) continue;
+        const bool same = selected && std::abs(overlap - largest) <= 1e-9;
+        const bool preferredHere = regionOwns(song, part.id, preferred);
+        const bool preferredBefore = selected && regionOwns(song, selected->id, preferred);
+        if (!selected || overlap > largest + 1e-9 || (same &&
+            (preferredHere != preferredBefore ? preferredHere :
+             part.endTime - part.startTime != selected->endTime - selected->startTime
+                ? part.endTime - part.startTime < selected->endTime - selected->startTime : part.id < selected->id))) {
+            selected = &part; largest = overlap;
+        }
+    }
+    return selected ? std::optional<ID>(selected->id) : std::nullopt;
+}
+bool markerMovesWithRegion(const Song& song, const TimelineMarker& marker, const ID& root) {
+    return marker.unifiedRegionID == root ||
+        regionMovementOwner(song, marker.position, {}, marker.regionOwnerID ? marker.regionOwnerID : marker.sourceRegionID) == root;
+}
 void synchronizeRegionOwnership(Project& project, const Project* previous) {
     for (auto& song : project.songs) {
         const Song* old = nullptr;

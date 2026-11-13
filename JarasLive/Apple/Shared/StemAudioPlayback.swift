@@ -238,6 +238,7 @@ struct TimecodePlaybackSpan {
     let time: Double
     let end: Double
     let delay: Double
+    let speed: Double
     init?(song: Song, track: Track, position: Double, settings: TimecodeSettings, preferredRegion: UUID?) {
         let preferred = preferredRegion.map(Project.timecodeItemID)
         var current: AudioClip?, upcoming: AudioClip?
@@ -255,8 +256,12 @@ struct TimecodePlaybackSpan {
         let region = song.parts.first { $0.id == regionID }
         let origin = settings.regionRelative ? region?.startTime ?? clip.startTime : 0
         delay = max(0, clip.startTime - position)
-        time = max(position, clip.startTime) - origin + settings.offset
-        end = clip.startTime + clip.duration - origin + settings.offset
+        let at = max(position, clip.startTime)
+        let fragments = song.timecodePlaybackSegments(clip, origin: origin)
+        guard let fragment = fragments.first(where: { at >= $0.startTime && at < $0.startTime + $0.duration }) else { return nil }
+        speed = fragment.audioRate
+        time = fragment.sourceOffset + (at - fragment.startTime) * speed + settings.offset
+        end = fragment.sourceOffset + fragment.duration * speed + settings.offset
     }
 }
 
@@ -1313,6 +1318,12 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
     }
     private func trackBus(for id: UUID) -> TrackBus {
         if let bus = trackBuses[id] { return bus }
+        let parent = tracks[id].flatMap { track -> UUID? in
+            guard track.outputPatches.contains(.masterGroup), let parent = track.parentTrackID,
+                  parent != id, tracks[parent] != nil else { return nil }
+            return parent
+        }
+        let parentBus = parent.map { trackBus(for: $0) }
         #if os(iOS)
         // RemoteIO can keep pulling the old manual render graph after tracks
         // are attached to a running iOS engine. Its output clock advances, but
@@ -1332,6 +1343,14 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         // and internal sends acquire an output in connectTrackRouting
         // when first routed, so unused branches need no silent mixer render.
         for send in [bus.groupSend, bus.internalSend] {
+            if send === bus.groupSend, let parentBus {
+                // A newly attached fanout needs its group destination before
+                // the controls are connected below. Adding that output only
+                // afterwards can leave the new branch silent on a live graph.
+                engine.connect(send, to: parentBus.mix, fromBus: 0,
+                               toBus: parentBus.mix.nextAvailableInputBus, format: format)
+                continue
+            }
             do {
                 // An unconnected mixer defaults to 44.1 kHz. Prepare its output
                 // now so first use at another rate preserves the live input.
@@ -1367,6 +1386,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         bus.masterSend.outputVolume = 0; bus.groupSend.outputVolume = 0
         JarasEqualizer.setOutputMeteringEnabled(bus.controls, enabled: trackPeaks[id] != nil)
         trackBuses[id] = bus
+        if let parent { groupConnections[id] = parent }
         return bus
     }
     private var hardwareFormat: AVAudioFormat {
@@ -3448,11 +3468,12 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
         let delay = span?.delay ?? 0
         let time = span?.time ?? position + settings.offset
         let end = span?.end ?? time
+        let speed = span?.speed ?? 1
         let active = transport.playing && span != nil && !track.mute && span?.clip.muted != true
         let mode = track.mute || span == nil || span?.clip.muted == true ? "" : settings.mode
         let destination = AudioDeviceSettings.shared.resolvedMIDIDestination(settings.midiDestination)
-        let key = "\(span?.clip.id.uuidString ?? "")-\(span?.clip.startTime ?? 0)-\(active)-\(mode)-\(settings.frameRate)-\(destination)-\(settings.regionRelative)-\(settings.offset)-\(end)"
-        let changed = timecodeAnchor.map { $0.key != key || (!mode.isEmpty && abs(time - ($0.position + (active ? now + delay - $0.host : 0))) > (active ? 0.08 : 0.000001)) } ?? true
+        let key = "\(span?.clip.id.uuidString ?? "")-\(span?.clip.startTime ?? 0)-\(active)-\(mode)-\(settings.frameRate)-\(destination)-\(settings.regionRelative)-\(settings.offset)-\(end)-\(speed)"
+        let changed = timecodeAnchor.map { $0.key != key || (!mode.isEmpty && abs(time - ($0.position + (active ? (now + delay - $0.host) * speed : 0))) > (active ? 0.08 : 0.000001)) } ?? true
         // Re-anchoring clears the generator's native peak. Consume the audio
         // already rendered before a seek or delayed transport update resets it.
         // Inactive/MTC states discard pending readings immediately instead.
@@ -3466,7 +3487,7 @@ for (key, sampler) in samplers where key.track == id { sampler.sendStatus(status
             }
         }
         if changed {
-            timecodeGenerator?.configurePosition(time, end: end, hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: delay), rate: settings.frameRate, mode: mode, running: active, destination: destination)
+            timecodeGenerator?.configurePosition(time, end: end, hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: delay), rate: settings.frameRate, speed: speed, mode: mode, running: active, destination: destination)
             timecodeAnchor = (key,time,now + delay)
         }
         if timecodePreviewGain?.original != track.volume { timecodePreviewGain = nil }

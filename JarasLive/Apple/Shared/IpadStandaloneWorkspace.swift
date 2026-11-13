@@ -302,7 +302,7 @@ import Combine
             IpadItemMenuCommand(title: JarasLocalization.string(title), action: action)
         }
         if track.kind == .click, clip.audioFile == nil {
-            var actions = [command(clip.clickDouble == true ? "1x" : "2x", { show.toggleClickDouble(id) })]
+            var actions = [command("Config rate", { open("configRate") }), command(clip.clickDouble == true ? "1x" : "2x", { show.toggleClickDouble(id) })]
             let position = show.snapshot.transport.editPosition ?? show.snapshot.transport.position
             if position > clip.startTime, position < clip.startTime + clip.duration {
                 actions.append(command("Split", { show.splitItems(ids, at: position) }))
@@ -311,17 +311,23 @@ import Combine
             return actions
         }
         var actions: [IpadItemMenuCommand] = []
+        if clip.supportsRate(on: track) { actions.append(command("Config rate", { open("configRate") })) }
         if ids.count == 1, clip.midi != nil || (clip.audioFile ?? track.audioFile) != nil {
             actions.append(command("Editar nome", { open("name") }))
         }
         if track.kind.isText { actions.append(command("Edit", { open("text") })) }
         actions.append(command("FX", { open("fx") }))
+        if track.kind == .standard || clip.isProjectionMedia {
+            actions.insert(command("Adjust volume", { open("volume") }), at: 1)
+            actions.insert(command("Adjust pan", { open("pan") }), at: 2)
+        }
         actions.append(command(clip.muted == true ? "Unmute items" : "Mute items", { show.setItemsMix(ids, muted: clip.muted != true) }))
         actions.append(command("Phase invert", { for item in ids { show.toggleItemPhase(item) } }))
         actions.append(command("Criar região do item", { show.regionsFromSelection(ids) }))
         if clip.midi == nil && (clip.audioFile ?? track.audioFile) != nil {
             actions.append(command("Open file location", { open("file") }))
             actions.append(command("Reset rate", { open("resetRate") }))
+            if !clip.isImage { actions.append(command("Reset duration", { open("resetDuration") })) }
             actions.append(command("Normalize…", { open("normalize") }))
             actions.append(command("Re-render", { open("render") }))
             if ids.count == 1, AudioSeparation.accepts(clip, on: track) {
@@ -1409,6 +1415,7 @@ struct IpadCompactModal<Content: View>: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardFrame = .zero }
         .accessibilityAddTraits(.isModal)
+        .onDisappear { onDismiss?() }
     }
     private func dismiss() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)

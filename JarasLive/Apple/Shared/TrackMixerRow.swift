@@ -399,9 +399,20 @@ private final class TrackMixerControlHost: NSHostingView<AnyView> {
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
     override var fittingSize: NSSize { frame.size }
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !passThrough else { return nil }
+        let local = convert(point, from: superview)
+        guard !passThrough, !isHiddenOrHasHiddenAncestor, bounds.contains(local), visibleRect.contains(local) else { return nil }
         let hit = super.hitTest(point)
         return peakOnly && !(hit is NativeVerticalTrackMeterView) ? nil : hit
+    }
+    override func layout() {
+        // Keep retained controls out of Ventura's layout passes while their
+        // row is hidden. The same controls are laid out when it returns.
+        guard !isHiddenOrHasHiddenAncestor else { return }
+        super.layout()
+    }
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        needsLayout = true
     }
 }
 /// Warm row slots retain their controls, but only nearby rows attach those
@@ -630,8 +641,9 @@ private final class TrackMixerNativeControlView: NSView, NativeTimelineControlIn
         let height = logicalSize.flatMap { abs($0.height - bounds.height) <= 1 ? $0.height : nil } ?? bounds.height
         let expanded = height >= 64
         let frames = TrackMixerHeightGeometry.frames(width: bounds.width, height: height, meterWidth: meterWidth, standard: standard, lowerTitle: true, controlsWidth: 145)
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        defer { CATransaction.commit() }
+        let disabled = CATransaction.disableActions()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.setDisableActions(disabled) }
         func update(_ host: NSView, _ frame: CGRect) {
             host.isHidden = frame.width <= 0 || frame.height <= 0
             if host.frame != frame {
@@ -650,8 +662,8 @@ private final class TrackMixerNativeControlView: NSView, NativeTimelineControlIn
     }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
-        if !isHiddenOrHasHiddenAncestor, bounds.contains(local), visibleRect.contains(local),
-           let peak = hitTestMeterPeak(local) { return peak }
+        guard !isHiddenOrHasHiddenAncestor, bounds.contains(local), visibleRect.contains(local) else { return nil }
+        if let peak = hitTestMeterPeak(local) { return peak }
         let hit = super.hitTest(point)
         return hit === self ? nil : hit
     }
@@ -688,7 +700,9 @@ struct TrackMixerRow: View, Equatable {
         #else
         let sameHeightMode = lhs.compactHeight == rhs.compactHeight && lhs.minimalHeight == rhs.minimalHeight
         #endif
-        return lhs.show === rhs.show && lhs.projectID == rhs.projectID && lhs.trackSelection == rhs.trackSelection && lhs.track == rhs.track && lhs.nextTrack == rhs.nextTrack && lhs.number == rhs.number && lhs.selected == rhs.selected && lhs.silenced == rhs.silenced && lhs.showsMeterScale == rhs.showsMeterScale && lhs.showsFader == rhs.showsFader && lhs.showsInstrumentIcons == rhs.showsInstrumentIcons && lhs.projectDirectory == rhs.projectDirectory && sameHeightMode && lhs.isFolder == rhs.isFolder && lhs.groupDepth == rhs.groupDepth && lhs.lastChild == rhs.lastChild && (lhs.groupSelection != nil) == (rhs.groupSelection != nil) && (lhs.deleteTracks != nil) == (rhs.deleteTracks != nil)
+        let sameSelection = lhs.trackSelection == rhs.trackSelection ||
+            (!lhs.trackSelection.contains(lhs.track.id) && !rhs.trackSelection.contains(rhs.track.id))
+        return lhs.show === rhs.show && lhs.projectID == rhs.projectID && sameSelection && lhs.track == rhs.track && lhs.nextTrack == rhs.nextTrack && lhs.number == rhs.number && lhs.selected == rhs.selected && lhs.silenced == rhs.silenced && lhs.showsMeterScale == rhs.showsMeterScale && lhs.showsFader == rhs.showsFader && lhs.showsInstrumentIcons == rhs.showsInstrumentIcons && lhs.projectDirectory == rhs.projectDirectory && sameHeightMode && lhs.isFolder == rhs.isFolder && lhs.groupDepth == rhs.groupDepth && lhs.lastChild == rhs.lastChild && (lhs.groupSelection != nil) == (rhs.groupSelection != nil) && (lhs.deleteTracks != nil) == (rhs.deleteTracks != nil)
     }
     @Environment(\.openFX) private var openFX
     @Environment(\.editTextItem) private var editTextItem
@@ -2297,16 +2311,22 @@ final class TrackControlSelectionExclusionView: NSView, NativeTimelineInputObser
         // The title already owns its native drag source. All other unoccupied
         // space uses this row, while registered controls retain their gestures.
         if let root = window.contentView {
-            var hit = root.hitTest(root.convert(event.locationInWindow, from: nil))
-            var isTitle = false
-            while let view = hit {
-                // Native meters only hit-test their peak readout. Resetting it
-                // is a control action, not a track selection or drag gesture.
-                if view is NativeVerticalTrackMeterView { return }
-                if view is TrackDragTitleView { isTitle = true; break }
-                hit = view.superview
+            // Inspect native geometry only. SwiftUI's root hit test also runs
+            // layout/graph resolution and delayed selection on Ventura.
+            func nativeTarget(in view: NSView) -> NSView? {
+                guard view.window === window, !view.isHiddenOrHasHiddenAncestor else { return nil }
+                let local = view.convert(event.locationInWindow, from: nil)
+                guard view.bounds.contains(local), view.visibleRect.contains(local) else { return nil }
+                if view is TrackDragTitleView { return view }
+                if view is NativeVerticalTrackMeterView {
+                    return view.hitTest(view.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
+                }
+                for child in view.subviews.reversed() { if let target = nativeTarget(in: child) { return target } }
+                return nil
             }
-            if !isTitle && row.kind == .standard { dragRow = row; dragStart = event.locationInWindow; dragProject = row.project }
+            let hit = nativeTarget(in: root)
+            if hit is NativeVerticalTrackMeterView { return }
+            if !(hit is TrackDragTitleView) && row.kind == .standard { dragRow = row; dragStart = event.locationInWindow; dragProject = row.project }
         }
 
         // A recycled slot may target another row before this callback runs.
@@ -2359,7 +2379,7 @@ final class TrackControlSelectionExclusionView: NSView, NativeTimelineInputObser
         // Track selection owns editing keys immediately, even if a field or an
         // envelope editor was the previous AppKit first responder.
         if let window = event.window {
-            window.makeFirstResponder(nil)
+            NativeTimelineKeyboardFocus.activate(window: window, responder: nil)
             EditorSelectionRouter.shared.activate(.tracks, in: window)
         }
         defer { selectionModifiers = nil }
@@ -2485,6 +2505,10 @@ private final class TrackDragTitleView: NSView {
         let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
         return [.font: NSFont.jarasSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph.copy() as! NSParagraphStyle]
     }()
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { NativeTimelineOverlayInputRegistration.add(self) }
+    }
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 28) }
     private func label() -> NSAttributedString {
@@ -2606,8 +2630,21 @@ private struct FooterMixerStripLayout {
         let innerHeight = max(0, height - 8 - iconHeight)
         // Keep the normal mixer unchanged. The compact mode gives everything
         // above the fixed lower name row to the existing FX/instrument slots.
-        controlsHeight = slotsOnly ? 0 : min(187, max(100, innerHeight - 26))
+        controlsHeight = slotsOnly ? 0 : min(205, max(100, innerHeight - 26))
         slotsHeight = max(0, innerHeight - controlsHeight - 26)
+    }
+}
+
+private struct FooterSlotSectionsLayout {
+    let pluginsHeight: CGFloat
+    let outputsHeight: CGFloat
+    let dividerHeight: CGFloat
+    init(height: CGFloat, outputCount: Int) {
+        let available = max(0, height)
+        // Keep room for three FX rows before revealing the first routing row.
+        outputsHeight = outputCount > 0 && available >= 87 ? min(CGFloat(min(2, outputCount)) * 21 - 2, available - 68) : 0
+        dividerHeight = outputsHeight > 0 ? 5 : 0
+        pluginsHeight = max(0, available - outputsHeight - dividerHeight)
     }
 }
 
@@ -2622,6 +2659,7 @@ private struct FooterMixerRenderState: Equatable {
     let masterMono: Bool
     let masterColor: UInt32?
     let selection: Set<UUID>
+    var masterOutputs: [OutputPatch] = []
     var masterRight = false
     var slotsOnly = false
     var showsInstrumentIcons: Bool { tracks.contains { $0.instrumentIcon.flatMap(TrackInstrumentIcon.init(rawValue:)) != nil } }
@@ -2645,7 +2683,7 @@ struct FooterHorizontalMixer: View {
         }
         FooterMixerContent(show: show, active: active, state: FooterMixerRenderState(project: project.id, tracks: tracks,
             masterFX: project.masterFX, masterVolume: project.masterVolume ?? 1, masterPan: project.masterPan ?? 0,
-            masterMute: project.masterMute == true, masterSolo: project.masterSolo == true, masterMono: project.masterMono == true, masterColor: project.masterColor, selection: show.mixerTrackSelection.intersection(tracks.map(\.id)), masterRight: masterRight, slotsOnly: slotsOnly)).equatable()
+            masterMute: project.masterMute == true, masterSolo: project.masterSolo == true, masterMono: project.masterMono == true, masterColor: project.masterColor, selection: show.mixerTrackSelection.intersection(tracks.map(\.id)), masterOutputs: project.masterOutputPatches, masterRight: masterRight, slotsOnly: slotsOnly)).equatable()
             #if os(macOS)
             .background(EditorSelectionArea(scope: .tracks) {
                 let selectable = tracks.filter { $0.kind == .standard }
@@ -2665,17 +2703,19 @@ private final class FooterMixerStripVersions {
     private var counter: UInt64 = 0
     private(set) var masterVersion: UInt64 = 0
     func update(_ state: FooterMixerRenderState, active: Bool, locale: String) -> [UInt64] {
-        let commonChanged = previous?.project != state.project || previous?.selection != state.selection || previous?.slotsOnly != state.slotsOnly || previous?.showsInstrumentIcons != state.showsInstrumentIcons || previousActive != active || previousLocale != locale
+        let commonChanged = previous?.project != state.project || previous?.slotsOnly != state.slotsOnly || previous?.showsInstrumentIcons != state.showsInstrumentIcons || previousActive != active || previousLocale != locale
         if previous?.project != state.project || previousActive != active || previousLocale != locale ||
             previous?.masterFX != state.masterFX || previous?.masterVolume != state.masterVolume ||
             previous?.masterPan != state.masterPan || previous?.masterMute != state.masterMute ||
             previous?.masterSolo != state.masterSolo || previous?.masterMono != state.masterMono ||
-            previous?.masterColor != state.masterColor || previous?.masterRight != state.masterRight || previous?.slotsOnly != state.slotsOnly || previous?.showsInstrumentIcons != state.showsInstrumentIcons {
+            previous?.masterColor != state.masterColor || previous?.masterOutputs != state.masterOutputs || previous?.masterRight != state.masterRight || previous?.slotsOnly != state.slotsOnly || previous?.showsInstrumentIcons != state.showsInstrumentIcons {
             counter &+= 1; masterVersion = counter
         }
-        let next = state.tracks.enumerated().map { index, track -> UInt64 in
-            if !commonChanged, let previous, index < previous.tracks.count,
-               index < versions.count, previous.tracks[index] == track { return versions[index] }
+        let previousIndices = Dictionary(uniqueKeysWithValues: (previous?.tracks ?? []).enumerated().map { ($0.element.id, $0.offset) })
+        let next = state.tracks.map { track -> UInt64 in
+            if !commonChanged, let previous, let index = previousIndices[track.id],
+               index < versions.count, previous.tracks[index] == track,
+               (previous.selection == state.selection || (!previous.selection.contains(track.id) && !state.selection.contains(track.id))) { return versions[index] }
             counter &+= 1; return counter
         }
         previous = state; previousActive = active; previousLocale = locale; versions = next
@@ -2695,9 +2735,8 @@ private struct FooterMixerContent: View, Equatable {
     private func strips(_ range: Range<Int>) -> some View {
         HStack(spacing: 0) {
             HStack(spacing: 3) {
-                ForEach(Array(range), id: \.self) { index in
-                    FooterMixerStrip(show: show, track: state.tracks[index], selection: state.selection, active: active, slotsOnly: state.slotsOnly, showsInstrumentIcons: state.showsInstrumentIcons).equatable()
-                        .id(state.tracks[index].id)
+                ForEach(range.map { state.tracks[$0] }) { track in
+                    FooterMixerStrip(show: show, track: track, selection: state.selection, active: active, slotsOnly: state.slotsOnly, showsInstrumentIcons: state.showsInstrumentIcons).equatable()
                 }
             }
         }.padding(5)
@@ -2711,7 +2750,7 @@ private struct FooterMixerContent: View, Equatable {
                 masterWidth: FooterMixerMetrics.masterWidth, masterRight: state.masterRight, masterVersion: stripVersions.masterVersion,
                 masterContent: AnyView(FooterMixerStrip(masterState: state, show: show, track: nil, selection: [], active: active, slotsOnly: state.slotsOnly, showsInstrumentIcons: state.showsInstrumentIcons).equatable().padding(5)
                     .environment(\.openFX, openFX).environment(\.locale, locale).environment(\.editTrackDetails, editTrackDetails)),
-                versions: versions, retainStrip: { index in
+                versions: versions, identifiers: state.tracks.map(\.id), retainStrip: { index in
                     state.tracks.indices.contains(index) && TrackSelectionRouter.shared.pinnedTracks.contains(state.tracks[index].id)
                 }) { range in AnyView(strips(range)) }
             #else
@@ -2736,6 +2775,7 @@ private struct FooterMixerScroll: NSViewRepresentable {
     let masterVersion: UInt64
     let masterContent: AnyView
     var versions: [UInt64]? = nil
+    var identifiers: [UUID]? = nil
     var retainStrip: (Int) -> Bool = { _ in false }
     let makeContent: (Range<Int>) -> AnyView
     @available(macOS 13, *)
@@ -2747,7 +2787,7 @@ private struct FooterMixerScroll: NSViewRepresentable {
         view.isHidden = !active
         view.setSlotsOnly = { UserDefaults.standard.set($0, forKey: "catlive.hozMixer.slotsOnly") }
         view.updateMaster(content: masterContent, width: masterWidth, version: masterVersion, right: masterRight)
-        view.update(width: contentWidth, stride: stride, count: count, versions: versions, retainStrip: retainStrip, makeContent: makeContent)
+        view.update(width: contentWidth, stride: stride, count: count, versions: versions, identifiers: identifiers, retainStrip: retainStrip, makeContent: makeContent)
     }
 }
 private final class FooterMixerGreenScroller: NSScroller {
@@ -2791,7 +2831,24 @@ private final class FooterMixerHostingView: NSHostingView<AnyView> {
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
     override var fittingSize: NSSize { frame.size }
     private weak var channelGeometry: FooterMixerStripGeometryView?
-    func setChannelFrame(_ viewport: NSRect) {
+    private var channelViewport: NSRect?
+    private(set) var channelPrepared = false
+    func setChannelContent(_ content: AnyView) {
+        channelGeometry = nil
+        rootView = content; channelPrepared = false
+    }
+    func registerChannelGeometry(_ geometry: FooterMixerStripGeometryView) {
+        channelGeometry = geometry
+        if let channelViewport { geometry.setViewportHeight(max(0, channelViewport.height - 10)) }
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { channelPrepared = false }
+    }
+    @discardableResult func setChannelFrame(_ viewport: NSRect) -> Bool {
+        let changedSize = channelViewport?.size != viewport.size
+        if changedSize { channelPrepared = false }
+        channelViewport = viewport
         if channelGeometry == nil {
             func find(_ view: NSView) -> FooterMixerStripGeometryView? {
                 if let geometry = view as? FooterMixerStripGeometryView { return geometry }
@@ -2809,6 +2866,39 @@ private final class FooterMixerHostingView: NSHostingView<AnyView> {
             channelGeometry.setViewportHeight(max(0, viewport.height - 10))
         }
         if frame != hosted { frame = hosted }
+        return changedSize
+    }
+    override func layout() {
+        // Cached channels retain their window and controls. Ventura still
+        // requests layout for hidden roots as the surrounding clip moves;
+        // defer their SwiftUI work until this channel is visible again.
+        guard !isHiddenOrHasHiddenAncestor else { return }
+        super.layout()
+        // A hosting view can first materialize its representable only after
+        // joining a window. Reconcile that first geometry without a wheel event.
+        if let channelViewport { setChannelFrame(channelViewport) }
+    }
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        needsLayout = true
+    }
+    @discardableResult func prepareChannelContent() -> Bool {
+        guard window != nil, !isHiddenOrHasHiddenAncestor, let channelViewport,
+              channelViewport.width > 0, channelViewport.height > 0 else { return false }
+        layoutSubtreeIfNeeded()
+        // The first SwiftUI pass creates the native channel geometry. Apply
+        // its real viewport now, then commit the nested control/slot hosts
+        // before exposing this channel. Ventura otherwise leaves those hosts
+        // empty until a later display cycle while the clip is already moving.
+        setChannelFrame(channelViewport)
+        if let channelGeometry {
+            // Its own viewport drives the controls. Re-running the entire outer
+            // SwiftUI tree after setting that viewport duplicates the cold
+            // channel layout work during wheel input on Ventura.
+            channelGeometry.prepareForDisplay()
+        }
+        channelPrepared = true
+        return true
     }
 }
 /// Only the FX viewport changes size during a mixer height drag. The lower
@@ -2857,11 +2947,34 @@ private final class FooterMixerStripGeometryView: NSView {
         }
     }
     required init?(coder: NSCoder) { fatalError() }
+    private func registerWithChannelHost() {
+        var ancestor = superview
+        while let view = ancestor {
+            if let channel = view as? FooterMixerHostingView {
+                channel.registerChannelGeometry(self)
+                return
+            }
+            ancestor = view.superview
+        }
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerWithChannelHost()
+    }
     func update(slotsOnly: Bool, iconHeight: CGFloat, slots: AnyView, selected: Bool = false, footer: @escaping (CGFloat) -> AnyView) {
         self.slotsOnly = slotsOnly; self.iconHeight = iconHeight; self.selected = selected; makeFooter = footer
         self.slots.rootView = slots; controlsHeight = nil; needsLayout = true
     }
+    func prepareForDisplay() {
+        layoutSubtreeIfNeeded()
+        slots.layoutSubtreeIfNeeded()
+        footer.layoutSubtreeIfNeeded()
+    }
     override func layout() {
+        // A track reorder or project change can replace this representable
+        // while retaining the outer hosting view. The new geometry must adopt
+        // that host's real viewport before placing its lower controls.
+        registerWithChannelHost()
         super.layout()
         let layout = FooterMixerStripLayout(height: viewportHeight ?? bounds.height, slotsOnly: slotsOnly, iconHeight: iconHeight)
         if controlsHeight != layout.controlsHeight {
@@ -2931,6 +3044,7 @@ private final class FooterEffectSlotsViewport: NSView {
     }
 }
 private final class FooterMixerScrollView: NSView {
+    private var wheelVelocity = NativeMixerScrollVelocity()
     private let scroll = NSScrollView()
     private let bar = FooterMixerGreenScroller(frame: NSRect(x: 0, y: 0, width: 200, height: 14))
     private let host = FooterMixerDocumentView()
@@ -2939,6 +3053,7 @@ private final class FooterMixerScrollView: NSView {
     private var masterRight = false
     private var masterVersion: UInt64?
     private var strips: [Int: FooterMixerHostingView] = [:]
+    private var identifiers: [UUID]?
     private var versions: [UInt64]?
     private var mountedVersions: [Int: UInt64] = [:]
     private var cachedStrips: [Int: (view: FooterMixerHostingView, version: UInt64?)] = [:]
@@ -2987,9 +3102,19 @@ private final class FooterMixerScrollView: NSView {
         coastTimer?.invalidate(); layoutWarmup?.cancel()
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
     }
+    override func viewDidHide() {
+        super.viewDidHide()
+        stopCoast(); modeGesture.reset()
+        layoutWarmup?.cancel(); layoutWarmup = nil
+    }
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        needsLayout = true
+        scheduleStripWarmup()
+    }
     func updateMaster(content: AnyView, width: CGFloat, version: UInt64, right: Bool = false) {
         if let master {
-            if masterVersion != version { master.rootView = content }
+            if masterVersion != version { master.setChannelContent(content) }
         } else {
             let view = FooterMixerHostingView(rootView: content)
             if #available(macOS 13, *) { view.sizingOptions = [] }
@@ -3004,8 +3129,28 @@ private final class FooterMixerScrollView: NSView {
     func update(content: AnyView, width: CGFloat) {
         update(width: width, stride: width, count: 1, makeContent: { _ in content })
     }
-    func update(width: CGFloat, stride: CGFloat, count: Int, versions: [UInt64]? = nil,
+    func update(width: CGFloat, stride: CGFloat, count: Int, versions: [UInt64]? = nil, identifiers: [UUID]? = nil,
                 retainStrip: @escaping (Int) -> Bool = { _ in false }, makeContent: @escaping (Range<Int>) -> AnyView) {
+        if let old = self.identifiers, let identifiers, old != identifiers {
+            // Inserting a copied track shifts indices, not the identity of all
+            // following channels. Move their retained hosts to the new slots.
+            let positions = Dictionary(uniqueKeysWithValues: identifiers.enumerated().map { ($0.element, $0.offset) })
+            func destination(_ index: Int) -> Int? { old.indices.contains(index) ? positions[old[index]] : nil }
+            var next: [Int: FooterMixerHostingView] = [:]
+            for (index, view) in strips {
+                if let target = destination(index) { next[target] = view } else { view.removeFromSuperview() }
+            }
+            strips = next
+            mountedVersions = Dictionary(uniqueKeysWithValues: mountedVersions.compactMap { index, value in destination(index).map { ($0, value) } })
+            var cached: [Int: (view: FooterMixerHostingView, version: UInt64?)] = [:]
+            for (index, entry) in cachedStrips {
+                if let target = destination(index) { cached[target] = entry } else { entry.view.removeFromSuperview() }
+            }
+            cachedStrips = cached
+            cachedStripOrder = cachedStripOrder.compactMap(destination)
+            pendingStripLayout = Set(pendingStripLayout.compactMap(destination))
+        }
+        self.identifiers = identifiers
         let geometryChanged = contentWidth != width || trackStride != stride || trackCount != count
         contentWidth = width; trackStride = stride; trackCount = count; self.versions = versions; self.makeContent = makeContent
         self.retainStrip = retainStrip
@@ -3027,10 +3172,8 @@ private final class FooterMixerScrollView: NSView {
             pendingStripLayout.remove(index)
             if index < trackCount {
                 // Keep recently visited channels in their existing hierarchy.
-                // Detaching/re-attaching NSHostingView invalidates its SwiftUI
-                // environment and triggers window-wide layout on every reversal.
-                // These frames remain outside the clip; meters already skip
-                // drawing when visibleRect is empty. Bound retention for large projects.
+                // Reparenting NSHostingView can detach its nested controls even
+                // when the new parent belongs to the same window.
                 strip.isHidden = true
                 cachedStrips[index] = (strip, version)
                 cachedStripOrder.removeAll { $0 == index }; cachedStripOrder.append(index)
@@ -3054,7 +3197,7 @@ private final class FooterMixerScrollView: NSView {
         // Retain the usual scroll reserve, but never keep an arbitrarily larger
         // set of SwiftUI roots in every later window layout pass.
         if !force && preparedRange.lowerBound <= first && preparedRange.upperBound >= last,
-           preparedRange.count <= last - first + margin * 2 {
+           preparedRange.count <= last - first + margin * 2 + 1 {
             // A menu or fader may have finished since the preceding scroll.
             releaseUnusedStrips()
             layoutVisibleStrips(in: first..<last)
@@ -3075,7 +3218,7 @@ private final class FooterMixerScrollView: NSView {
                 if force && (version == nil || mountedVersions[index] != version) {
                     // Scalar edits keep this channel's bounds. Let AppKit coalesce
                     // its normal layout pass instead of forcing one per autofader tick.
-                    strip.rootView = makeContent(index..<(index + 1))
+                    strip.setChannelContent(makeContent(index..<(index + 1)))
                 }
             } else if let cached = cachedStrips.removeValue(forKey: index) {
                 cachedStripOrder.removeAll { $0 == index }
@@ -3083,12 +3226,12 @@ private final class FooterMixerScrollView: NSView {
                 // Edits/reorders/visibility changes can happen while detached.
                 // Always validate the version here, including normal scrolling.
                 if version == nil || cached.version != version {
-                    strip.rootView = makeContent(index..<(index + 1))
+                    strip.setChannelContent(makeContent(index..<(index + 1)))
                 }
                 strips[index] = strip
                 if strip.superview !== host { host.addSubview(strip) }
                 strip.isHidden = false
-                changed = true
+                changed = !strip.channelPrepared
             } else {
                 strip = FooterMixerHostingView(rootView: makeContent(index..<(index + 1)))
                 if #available(macOS 13, *) { strip.sizingOptions = [] }; strip.wantsLayer = true
@@ -3101,9 +3244,8 @@ private final class FooterMixerScrollView: NSView {
             mountedVersions[index] = version
             let frame = NSRect(x: CGFloat(index) * trackStride, y: 0,
                                width: trackStride + 7, height: scroll.contentSize.height)
-            if strip.frame.size.width != frame.width { changed = true }
-            strip.setChannelFrame(frame)
-            if changed { pendingStripLayout.insert(index) }
+            if strip.setChannelFrame(frame) { changed = true }
+            if changed || (!strip.channelPrepared && (strip.window == nil || strip.isHiddenOrHasHiddenAncestor)) { pendingStripLayout.insert(index) }
         }
         preparing = false
         // Only the actual destination must be ready before the clip moves.
@@ -3112,8 +3254,8 @@ private final class FooterMixerScrollView: NSView {
         scheduleStripWarmup()
     }
     private func layoutVisibleStrips(in range: Range<Int>) {
-        for index in range where pendingStripLayout.remove(index) != nil {
-            strips[index]?.layoutSubtreeIfNeeded()
+        for index in range where pendingStripLayout.contains(index) {
+            if strips[index]?.prepareChannelContent() == true { pendingStripLayout.remove(index) }
         }
     }
     private func scheduleStripWarmup() {
@@ -3123,9 +3265,10 @@ private final class FooterMixerScrollView: NSView {
             self.layoutWarmup = nil
             guard self.window != nil, !self.isHiddenOrHasHiddenAncestor,
                   let index = self.pendingStripLayout.min() else { return }
-            self.pendingStripLayout.remove(index)
-            self.strips[index]?.layoutSubtreeIfNeeded()
-            self.scheduleStripWarmup()
+            if self.strips[index]?.prepareChannelContent() == true {
+                self.pendingStripLayout.remove(index)
+                self.scheduleStripWarmup()
+            }
         }
         layoutWarmup = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60, execute: work)
@@ -3227,6 +3370,7 @@ private final class FooterMixerScrollView: NSView {
         stopCoast(); modeGesture.reset()
         layoutWarmup?.cancel(); layoutWarmup = nil
         guard window != nil else { return }
+        needsLayout = true // Retry roots first encountered before attachment.
         scheduleStripWarmup()
         wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .flagsChanged]) { [weak self] event in
             if event.type == .flagsChanged {
@@ -3257,10 +3401,10 @@ private final class FooterMixerScrollView: NSView {
               !isHiddenOrHasHiddenAncestor,
               visibleRect.contains(convert(event.locationInWindow, from: nil)),
               event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
-            modeGesture.reset(); return false
+            modeGesture.reset(); wheelVelocity.reset(); stopCoast(); return false
         }
         if event.modifierFlags.contains(.shift) {
-            stopCoast()
+            stopCoast(); wheelVelocity.reset()
             if event.phase.contains(.began) { modeGesture.reset() }
             // AppKit may map a shifted physical wheel onto the horizontal axis.
             let delta = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.scrollingDeltaX
@@ -3274,19 +3418,27 @@ private final class FooterMixerScrollView: NSView {
             return true
         }
         modeGesture.reset()
+        if event.phase.contains(.began) { wheelVelocity.reset() }
+        // nextEvent inside a monitor pumps nested layout/tracking on Ventura.
+        // Native input remains ordered; drawing coalesces in the normal loop.
         let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
-        let delta = horizontal && abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
-            ? event.scrollingDeltaX : event.scrollingDeltaY
+        let delta = horizontal ? event.scrollingDeltaX : event.scrollingDeltaY
         if !horizontal, let target = effectScroll(at: event.locationInWindow) {
             // A slot list only owns vertical scrolling inside its clipped viewport.
             // Consume the event here so AppKit never pans its document sideways.
+            wheelVelocity.reset()
             target.horizontalScrollElasticity = .none
             if event.hasPreciseScrollingDeltas {
                 stopCoast(); scrollBy(delta, target: target, horizontal: false)
             } else { smoothWheel(delta * 16, target: target, horizontal: false) }
         } else if event.hasPreciseScrollingDeltas {
-            stopCoast(); move(to: scroll.contentView.bounds.minX - delta)
-        } else { smoothWheel(delta * 16, target: scroll, horizontal: true) }
+            stopCoast()
+            let movement = wheelVelocity.limit(delta, timestamp: event.timestamp, viewport: scroll.contentSize.width, precise: true)
+            move(to: scroll.contentView.bounds.minX - movement)
+        } else {
+            let movement = wheelVelocity.limit(delta * 16, timestamp: event.timestamp, viewport: scroll.contentSize.width, precise: false)
+            smoothWheel(movement, target: scroll, horizontal: true)
+        }
         return true
     }
 
@@ -3297,7 +3449,10 @@ private final class FooterMixerScrollView: NSView {
 private struct FooterMixerStrip: View, Equatable {
     var masterState: FooterMixerRenderState? = nil
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.show === rhs.show && lhs.track == rhs.track && lhs.selection == rhs.selection && lhs.active == rhs.active && lhs.masterState == rhs.masterState && lhs.slotsOnly == rhs.slotsOnly && lhs.showsInstrumentIcons == rhs.showsInstrumentIcons
+        let sameSelection = lhs.selection == rhs.selection ||
+            (lhs.track.map { !lhs.selection.contains($0.id) } ?? true) &&
+            (rhs.track.map { !rhs.selection.contains($0.id) } ?? true)
+        return lhs.show === rhs.show && lhs.track == rhs.track && sameSelection && lhs.active == rhs.active && lhs.masterState == rhs.masterState && lhs.slotsOnly == rhs.slotsOnly && lhs.showsInstrumentIcons == rhs.showsInstrumentIcons
     }
     let show: ShowController
     let track: Track?
@@ -3322,7 +3477,9 @@ private struct FooterMixerStrip: View, Equatable {
     private var canGroup: Bool { id.map { show.current?.canCreateTrackGroup($0) == true } == true }
     private func select() {
         guard let track, track.kind == .standard, let song = show.current else { return }
-        var ids = selection
+        // Unselected channels retain their controls across other selections.
+        // Read current targets when the click arrives, including a rapid Cmd-click.
+        var ids = show.mixerTrackSelection
         #if os(macOS)
         let flags = TrackSelectionRouter.shared.selectionModifiers ?? NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
         if flags.contains(.shift), let anchor = show.selectedTrackForActions,
@@ -3420,6 +3577,30 @@ private struct FooterMixerStrip: View, Equatable {
         }.frame(width: 22).buttonStyle(CompactTrackButtonStyle()).font(.jarasSystem(size: 10, weight: .bold))
     }
     private var slots: some View {
+        GeometryReader { geometry in
+            let outputs = track?.outputPatches ?? masterState?.masterOutputs ?? show.snapshot.project.masterOutputPatches
+            let sections = FooterSlotSectionsLayout(height: geometry.size.height, outputCount: outputs.count)
+            VStack(spacing: 0) {
+                pluginSlots.frame(height: sections.pluginsHeight).clipped()
+                if sections.outputsHeight > 0 {
+                    Divider().overlay(JarasTheme.line).frame(height: sections.dividerHeight)
+                    FooterEffectSlotsScroll(contentHeight: CGFloat(outputs.count) * 21 - 2) {
+                        VStack(spacing: 2) {
+                            ForEach(Array(outputs.enumerated()), id: \.offset) { _, output in
+                                Button { patchPresented = true } label: {
+                                    Text(verbatim: output.firstChannel == -2 ? "M-group" : output.title)
+                                        .font(.jarasSystem(size: 10, weight: .medium)).foregroundStyle(JarasTheme.green)
+                                        .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
+                                        .frame(height: 19).background(Color.black.opacity(0.25))
+                                }.buttonStyle(.plain).accessibilityLabel("Output: " + output.title)
+                            }
+                        }
+                    }.frame(height: sections.outputsHeight).clipped()
+                }
+            }
+        }
+    }
+    private var pluginSlots: some View {
         FooterEffectSlotsScroll(contentHeight: CGFloat(max(3, settings.effectKeys.count + 1)) * 21 - 2) {
             VStack(spacing: 2) {
                 ForEach(settings.effectKeys, id: \.self) { effect in

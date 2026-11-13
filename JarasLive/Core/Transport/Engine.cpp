@@ -361,7 +361,7 @@ static double repelRegionMarkers(const Song& song, const Part& region, double pr
     std::vector<double> offsets, stationary;
     double minimumStart = 0;
     if (song.markers) for (const auto& marker : *song.markers) {
-        const bool owned = regionOwns(song, region.id, marker.regionOwnerID) || marker.unifiedRegionID == region.id;
+        const bool owned = markerMovesWithRegion(song, marker, region.id);
         if (owned) { offsets.push_back(marker.position - region.startTime); minimumStart = std::max(minimumStart, region.startTime - marker.position); }
         else stationary.push_back(marker.position);
     }
@@ -393,16 +393,29 @@ void Engine::moveRegion(const ID& id, double start) {
             if (region.parentRegionID) throw std::invalid_argument("Unified songs cannot be moved independently");
             start = repelRegionMarkers(song, region, start);
             const double oldStart = region.startTime, oldEnd = region.endTime, delta = start - oldStart;
+            automationTiming::map(next.masterAutomationJSON, [&](double time) {
+                return regionMovementOwner(song, time, {}, {}) == id ? std::max(0.0, time + delta) : time;
+            });
+            for (auto& track : song.tracks) {
+                automationTiming::map(track.automationJSON, [&](double time) {
+                    return regionMovementOwner(song, time, {}, {}) == id ? std::max(0.0, time + delta) : time;
+                });
+                for (auto& marker : track.programChanges)
+                    if (regionMovementOwner(song, marker.position, {}, {}) == id) marker.position = std::max(0.0, marker.position + delta);
+                std::stable_sort(track.programChanges.begin(), track.programChanges.end(), [](const auto& a, const auto& b){return a.position < b.position;});
+            }
             for (auto& track : song.tracks) for (auto& clip : track.clips)
-                if (regionOwns(song, id, clip.regionOwnerID)) {
+                if (regionMovementOwner(song, clip.startTime, clip.startTime + clip.duration, clip.regionOwnerID) == id) {
+                    if (!regionOwns(song, id, clip.regionOwnerID)) clip.regionOwnerID = id;
                     clip.startTime = std::max(0.0, clip.startTime + delta);
                     song.duration = std::max(song.duration, clip.startTime + clip.duration);
                 }
             for (auto& child : song.parts) if (child.parentRegionID == id) { child.startTime += delta; child.endTime += delta; }
-            // Follow persisted membership, including a special region's children.
+            // Resolve marker membership against the original region positions.
             if (song.markers) for (auto& marker : *song.markers) {
-                const bool owned = regionOwns(song, id, marker.regionOwnerID) || marker.unifiedRegionID == id;
+                const bool owned = markerMovesWithRegion(song, marker, id);
                 if (owned) {
+                    if (!regionOwns(song, id, marker.regionOwnerID)) marker.regionOwnerID = id;
                     marker.position = std::max(0.0, marker.position + delta);
                     song.duration = std::max(song.duration, marker.position);
                 }
@@ -509,6 +522,11 @@ void Engine::setProjectTiming(double bpm, int beats, int unit, std::optional<Pro
             if (clip.playbackRate * speed < 1.0/32 || clip.playbackRate * speed > 32)
                 throw std::invalid_argument("Audio stretch range exceeded");
         song->duration *= scale;
+        automationTiming::map(project_.masterAutomationJSON, [&](double time){return time * scale;});
+        for (auto& track : song->tracks) {
+            automationTiming::map(track.automationJSON, [&](double time){return time * scale;});
+            for (auto& marker : track.programChanges) marker.position *= scale;
+        }
         for (auto& track : song->tracks) for (auto& clip : track.clips) {
             const double end = (clip.startTime + clip.duration) * scale;
             if (!clip.tempoBasePlaybackRate) clip.tempoBasePlaybackRate = clip.playbackRate;
@@ -557,7 +575,7 @@ void Engine::setMarker(ID id, std::string name, double position, unsigned color,
     }
     if (found == song->markers->end()) song->markers->push_back(std::move(marker)); else *found = std::move(marker);
     const TempoEditMap map(beforeTempoEdit,*song);
-    if(retime) map.apply(*song);
+    if(retime) { map.apply(*song); automationTiming::map(next.masterAutomationJSON, [&](double time){return map.position(time);}); }
     orderSpecialTracks(next); synchronizeTimecode(next); validate(next); project_ = std::move(next);
     if(retime && map.changesTime()) {
         transport_.position=map.position(transport_.position); transport_.editPosition=map.position(transport_.editPosition);
@@ -651,7 +669,7 @@ void Engine::setMarkers(const std::vector<TimelineMarker>& markers, const std::v
     }
     song->timeSettings = originalTiming;
     std::optional<TempoEditMap> map;
-    if (retime) { map.emplace(beforeTempoEdit, *song); map->apply(*song); }
+    if (retime) { map.emplace(beforeTempoEdit, *song); map->apply(*song); automationTiming::map(next.masterAutomationJSON, [&](double time){return map->position(time);}); }
     orderSpecialTracks(next); synchronizeTimecode(next); validate(next); waveforms.transfer(next); project_ = std::move(next);
     if(map && map->changesTime()) {
         transport_.position=map->position(transport_.position); transport_.editPosition=map->position(transport_.editPosition);

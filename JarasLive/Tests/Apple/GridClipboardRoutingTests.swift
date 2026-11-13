@@ -92,3 +92,23 @@ keys(); RegionShortcutView.performClipboard("v")
 precondition(oldCommands == 0 && newCommands == 9, "Clipboard commands must reach only the foreground project")
 print("CACHED_PROJECT_TABS_CLIPBOARD_SHORTCUTS_ONLY_EDIT_FOREGROUND_PROJECT_OK")
 print("GRID_CLIPBOARD_MENU_FOCUS_WINDOW_AND_MODAL_ROUTING_OK")
+
+var scrolling: [UInt16] = []
+newOwner.scrollTimeline = { scrolling.append($0); return true }
+func arrow(_ code: UInt16, flags: NSEvent.ModifierFlags = .shift, repeatKey: Bool = false) {
+    let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+        timestamp: 1, windowNumber: first.windowNumber, context: nil, characters: "",
+        charactersIgnoringModifiers: "", isARepeat: repeatKey, keyCode: code)!
+    FixtureKeyMonitors.send(event)
+}
+for code: UInt16 in [123,124,125,126] { arrow(code) }
+arrow(125, repeatKey: true)
+precondition(scrolling == [123,124,125,126,125], "Shift plus all four arrows scrolls and supports held keys")
+for flags: NSEvent.ModifierFlags in [[], .command, .control, .option, [.shift,.command], [.shift,.option]] { arrow(124, flags: flags) }
+precondition(scrolling.count == 5, "other arrow combinations keep their editing/navigation behavior")
+NativeTimelineInputGate.shared.blocked = true; arrow(125); NativeTimelineInputGate.shared.blocked = false
+ControlMappings.shared.editing = "capture"; arrow(125); ControlMappings.shared.editing = nil
+first.makeFirstResponder(text); arrow(125); first.makeFirstResponder(nil)
+newOwner.isCurrentProject = { false }; arrow(125); newOwner.isCurrentProject = { true }
+precondition(scrolling.count == 5, "modal, text editing, MIDI mapping capture and inactive tabs retain their arrow keys")
+print("DESKTOP_SHIFT_FOUR_ARROWS_REPEAT_TEXT_MODAL_MAPPING_AND_PROJECT_SCOPE_ROUTING_OK")

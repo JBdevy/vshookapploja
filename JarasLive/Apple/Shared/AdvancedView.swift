@@ -1,5 +1,79 @@
 import SwiftUI
 
+struct ItemRateEditor: View {
+    @ObservedObject var show: ShowController
+    let items: Set<UUID>
+    var close: (() -> Void)?
+    private let project: UUID
+    private let song: UUID?
+    @Environment(\.dismiss) private var dismiss
+    @State private var settings: ItemRateSettings
+    @State private var rateText: String
+    @State private var bpmText: String
+    @State private var validInput = true
+    init(show: ShowController, items: Set<UUID>, close: (() -> Void)? = nil) {
+        self.show = show; self.items = items; self.close = close
+        project = show.snapshot.project.id; song = show.current?.id
+        let entry = show.current?.tracks.flatMap { track in track.clips.filter { items.contains($0.id) && $0.supportsRate(on: track) }.map { (track, $0) } }.first
+        let clip = entry?.1
+        let initial = entry?.0.kind == .click && clip?.audioFile == nil ? clip?.clickRate : clip?.audioRate
+        let value = ItemRateSettings(baseBPM: show.current?.tempoSection(at: clip?.startTime ?? 0).bpm ?? 120, rate: initial ?? 1)
+        _settings = State(initialValue: value)
+        _rateText = State(initialValue: value.rateText)
+        _bpmText = State(initialValue: Self.bpmLabel(value.bpmOffset))
+    }
+    private static func bpmLabel(_ value: Double) -> String {
+        guard abs(value) > 0.000001 else { return "0" }
+        var text = String(format: "%+.2f", value)
+        while text.last == "0" { text.removeLast() }
+        if text.last == "." { text.removeLast() }
+        return text
+    }
+    private func number(_ text: String) -> Double? { Double(text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")) }
+    private func finish() { if let close { close() } else { dismiss() } }
+    private func refresh() { rateText = settings.rateText; bpmText = Self.bpmLabel(settings.bpmOffset); validInput = true }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Config rate").font(.jarasTitle3.bold())
+                Spacer()
+                Button("Reset") { settings.reset(); refresh() }
+            }
+            HStack {
+                Text(verbatim: "Rate").frame(width: 78, alignment: .leading)
+                Button("−") { settings.stepRate(-1); refresh() }.disabled(settings.rate - 0.01 < 1.0 / 32)
+                TextField("Rate", text: Binding(get: { rateText }, set: {
+                    rateText = $0
+                    if let value = number($0), value.isFinite { settings.rate = value; bpmText = Self.bpmLabel(settings.bpmOffset); validInput = true }
+                    else { validInput = false }
+                })).textFieldStyle(.roundedBorder).multilineTextAlignment(.center).accessibilityLabel("Playback rate")
+                Button("+") { settings.stepRate(1); refresh() }.disabled(settings.rate + 0.01 > 32)
+            }
+            HStack {
+                Text("BPM offset").frame(width: 78, alignment: .leading)
+                Button("−") { settings.stepBPM(-1); refresh() }.disabled((settings.baseBPM + settings.bpmOffset - 1) / settings.baseBPM < 1.0 / 32)
+                TextField("BPM", text: Binding(get: { bpmText }, set: {
+                    bpmText = $0
+                    if let value = number($0), value.isFinite { settings.bpmOffset = value; rateText = settings.rateText; validInput = true }
+                    else { validInput = false }
+                })).textFieldStyle(.roundedBorder).multilineTextAlignment(.center).accessibilityLabel("BPM offset")
+                Button("+") { settings.stepBPM(1); refresh() }.disabled((settings.baseBPM + settings.bpmOffset + 1) / settings.baseBPM > 32)
+            }
+            Text(verbatim: String(format: "Base: %.2f BPM", settings.baseBPM)).font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
+            HStack {
+                Button("Cancel", action: finish).keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") {
+                    guard show.snapshot.project.id == project, show.current?.id == song else { finish(); return }
+                    if show.configureItemsRate(items, rate: settings.rate) { finish() }
+                }.disabled(!validInput || !settings.isValid).keyboardShortcut(.defaultAction)
+            }
+        }.padding(20).frame(width: 360)
+            .onChange(of: show.snapshot.project.id) { if $0 != project { finish() } }
+            .onChange(of: show.current?.id) { if $0 != song { finish() } }
+    }
+}
+
 struct AdvancedView: View {
     @ObservedObject var show: ShowController
     let documents: ProjectDocuments?
@@ -126,8 +200,6 @@ struct AdvancedView: View {
                     ForEach(ProjectTimebase.allCases, id: \.self) { Text(LocalizedStringKey($0.title)).tag($0) }
                 }.labelsHidden().frame(maxWidth: .infinity).accessibilityLabel("Project timebase")
             }
-            Toggle("Timebase affects automation item length", isOn: $settings.affectsAutomationLength)
-                .toggleStyle(.automatic)
         }
     }
     private func timingField(_ text: Binding<String>, index: Int, width: CGFloat, label: String) -> some View {
@@ -149,6 +221,7 @@ struct AdvancedView: View {
         guard let denominator = Int(unit), TimelineTempo.beatUnits.contains(denominator) else { reject(2); return }
         invalidField = nil
         applyError = ""
+        settings.affectsAutomationLength = true
         if show.configureProjectTime(bpm: tempo, beats: numerator, unit: denominator, settings: settings) {
             GlobalProjectTiming(bpm: tempo, beats: numerator, unit: denominator, settings: settings).save()
             finish()

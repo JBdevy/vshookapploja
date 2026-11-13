@@ -26,7 +26,8 @@ final class RemoteTimerPanel extends LinearLayout {
     final Dialog dialog;
     final TextView readout;
     final EditText[] fields = new EditText[3];
-    final Button toggle;
+    final Button toggle, progressive, countdown;
+    final LinearLayout duration;
     Dialog confirmation;
     private final String project;
     private int lastTarget = -1;
@@ -72,7 +73,7 @@ final class RemoteTimerPanel extends LinearLayout {
                     WindowManager.LayoutParams parameters = window.getAttributes();
                     parameters.gravity = Gravity.TOP | Gravity.LEFT;
                     parameters.x = Math.min(position[0] + anchor.getWidth() + dp(8), app.getResources().getDisplayMetrics().widthPixels - dp(308));
-                    parameters.y = Math.max(dp(16), Math.min(position[1] + anchor.getHeight()/2 - dp(115), app.getResources().getDisplayMetrics().heightPixels - dp(246)));
+                    parameters.y = Math.max(dp(16), Math.min(position[1] + anchor.getHeight()/2 - dp(137), app.getResources().getDisplayMetrics().heightPixels - dp(290)));
                     window.setAttributes(parameters);
                 }
             } else {
@@ -96,10 +97,16 @@ final class RemoteTimerPanel extends LinearLayout {
         close.setTextSize(23); close.setTextColor(SECONDARY); close.setPadding(0,0,0,0);
         close.setMinHeight(0); close.setBackgroundColor(Color.TRANSPARENT); close.setContentDescription(RemoteText.ui("Close"));
         header.addView(close,new LinearLayout.LayoutParams(dp(30),dp(30))); addView(header); gap(12);
+        LinearLayout modes = row(app);
+        progressive = new Button(app,"Progressive",()->selectMode(true)); progressive.setTag("timer-progressive");
+        countdown = new Button(app,"Countdown",()->selectMode(false)); countdown.setTag("timer-countdown");
+        modes.addView(progressive,new LinearLayout.LayoutParams(0,dp(32),1));
+        View modeGap = new View(app); modes.addView(modeGap,new LinearLayout.LayoutParams(dp(6),1));
+        modes.addView(countdown,new LinearLayout.LayoutParams(0,dp(32),1)); addView(modes); gap(12);
         readout = label(app,"00:00:00",26,GREEN); readout.setTypeface(Typeface.create("monospace",Typeface.BOLD));
         readout.setGravity(Gravity.CENTER); readout.setBackground(display(5)); readout.setTag("timer-readout");
         addView(readout,new LinearLayout.LayoutParams(-1,dp(42))); gap(12);
-        LinearLayout duration = row(app); String[] labels = {"Hours","Minutes","Seconds"};
+        duration = row(app); String[] labels = {"Hours","Minutes","Seconds"};
         for (int index=0;index<3;index++) {
             if (index>0) { View gap = new View(app); duration.addView(gap,new LinearLayout.LayoutParams(dp(8),1)); }
             LinearLayout column = column(app);
@@ -147,20 +154,31 @@ final class RemoteTimerPanel extends LinearLayout {
         if (timer.targetSeconds != lastTarget) synchronizeFields();
         if (timer.runID != lastRun) { lastRun=timer.runID; dismissConfirmation(); }
         double seconds = timer.value(SystemClock.elapsedRealtime());
-        boolean expired = timer.running && seconds<=0;
-        readout.setText(RemoteTimer.formatted(seconds)); readout.setTextColor(expired?RED:GREEN);
+        boolean expired = timer.expired(SystemClock.elapsedRealtime());
+        readout.setText(RemoteTimer.formatted(seconds,timer.progressive)); readout.setTextColor(expired?RED:GREEN);
         readout.setAlpha(expired && SystemClock.elapsedRealtime()%1000>=500?.25f:1);
         for (EditText field:fields) { field.setEnabled(!timer.running); field.setAlpha(timer.running?.35f:1); }
+        duration.setVisibility(timer.progressive?GONE:VISIBLE);
+        progressive.style(GREEN,timer.progressive); countdown.style(GREEN,!timer.progressive);
+        boolean canSelectMode = canControl() && !timer.running && !app.state.optJSONObject("timer").isNull("mode");
+        progressive.setEnabled(canSelectMode); countdown.setEnabled(canSelectMode);
         toggle.setText(RemoteText.ui(timer.running?"Stop":"Start"));
         toggle.setTextColor(timer.running?TEXT:GREEN);
         toggle.setBackground(timer.running?surface(0xffa62525,0xffa62525,RED,5):panel(5));
-        toggle.setEnabled(app.remote.connected && app.remote.mode.equals("director") && app.state != null && app.state.optJSONObject("timer")!=null);
+        toggle.setEnabled(canControl());
+    }
+    private boolean canControl() { return app.remote.connected && app.remote.mode.equals("director") && app.state != null && app.state.optJSONObject("timer")!=null; }
+    private void selectMode(boolean value) {
+        if (!canControl() || app.localTimer.running || app.localTimer.progressive==value || app.state.optJSONObject("timer").isNull("mode")) return;
+        for (EditText field:fields) if (field.hasFocus()) app.hideKeyboard(field);
+        requestFocus(); app.remote.action("timerSetMode",null,value?0:1); refresh();
     }
     void toggle() {
         for (EditText field:fields) if (field.hasFocus()) app.hideKeyboard(field);
         requestFocus();
         if (app.localTimer.running) { confirmStop(); return; }
-        app.remote.action("timerStart",null,targetSeconds(fields[0].getText().toString(),fields[1].getText().toString(),fields[2].getText().toString()));
+        app.remote.action(app.localTimer.progressive?"timerStartProgressive":"timerStart",null,
+            app.localTimer.progressive?0:targetSeconds(fields[0].getText().toString(),fields[1].getText().toString(),fields[2].getText().toString()));
         synchronizeFields(); refresh();
     }
     static int targetSeconds(String hours,String minutes,String seconds) {

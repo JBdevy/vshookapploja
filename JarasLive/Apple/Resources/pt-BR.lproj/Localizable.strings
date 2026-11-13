@@ -2389,4 +2389,41 @@
 "Cannot prepare the firmware backup." = "Não foi possível preparar o backup da firmware.";
 
 "Reset rate" = "Redefinir rate";
+"Reset duration" = "Redefinir duração";
+"Restore the full original file duration for the selected items?" = "Restaurar a duração original completa do arquivo nos itens selecionados?";
+"Set region end to longest item" = "Definir fim da região pelo item mais longo";
+"Space regions by 30 s" = "Afastar regiões em 30 s";
 "Reset selected items to 1x without changing tempo markers?" = "Redefinir os itens selecionados para 1× sem alterar os marcadores de tempo?";
+
+"Adjust volume" = "Ajustar volume";
+"Adjust pan" = "Ajustar Pan";
+
+"Duplicate" = "Duplicar";
+
+"Config rate" = "Config rate";
+
+"BPM offset" = "Variação BPM";
+
+"Playback rate" = "Rate de reprodução";
+
+"Item starts before the project timeline." = "O item começa antes do início do projeto.";
+
+"REAPER source has no file reference." = "A fonte do REAPER não contém uma referência de arquivo.";
+
+"Unsupported REAPER source type: " = "Tipo de fonte do REAPER não compatível: ";
+
+"Audio file reference: " = "Referência de arquivo de áudio: ";
+
+"Media file was not found." = "O arquivo de mídia não foi encontrado.";
+
+"No audio decoder could open this file." = "Nenhum decodificador de áudio conseguiu abrir este arquivo.";
+
+"Audio data could not be read completely or has invalid sample information." = "Os dados de áudio não puderam ser lidos completamente ou contêm informações de amostras inválidas.";
+
+"Bloqueios da grade" = "Bloqueios da grade";
+"Bloquear tudo" = "Bloquear tudo";
+"Regiões e marcadores" = "Regiões e marcadores";
+"Itens" = "Itens";
+"Volume e pan dos itens" = "Volume e pan dos itens";
+
+"Open project location" = "Abrir local do projeto";

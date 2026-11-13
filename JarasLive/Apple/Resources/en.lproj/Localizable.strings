@@ -2306,4 +2306,41 @@
 "Cannot prepare the firmware backup." = "Cannot prepare the firmware backup.";
 
 "Reset rate" = "Reset rate";
+"Reset duration" = "Reset duration";
+"Restore the full original file duration for the selected items?" = "Restore the full original file duration for the selected items?";
+"Set region end to longest item" = "Set region end to longest item";
+"Space regions by 30 s" = "Space regions by 30 s";
 "Reset selected items to 1x without changing tempo markers?" = "Reset selected items to 1x without changing tempo markers?";
+
+"Adjust volume" = "Adjust volume";
+"Adjust pan" = "Adjust pan";
+
+"Duplicate" = "Duplicate";
+
+"Config rate" = "Config rate";
+
+"BPM offset" = "BPM offset";
+
+"Playback rate" = "Playback rate";
+
+"Item starts before the project timeline." = "Item starts before the project timeline.";
+
+"REAPER source has no file reference." = "REAPER source has no file reference.";
+
+"Unsupported REAPER source type: " = "Unsupported REAPER source type: ";
+
+"Audio file reference: " = "Audio file reference: ";
+
+"Media file was not found." = "Media file was not found.";
+
+"No audio decoder could open this file." = "No audio decoder could open this file.";
+
+"Audio data could not be read completely or has invalid sample information." = "Audio data could not be read completely or has invalid sample information.";
+
+"Bloqueios da grade" = "Grid locks";
+"Bloquear tudo" = "Lock all";
+"Regiões e marcadores" = "Regions and markers";
+"Itens" = "Items";
+"Volume e pan dos itens" = "Item volume and pan";
+
+"Open project location" = "Open project location";
