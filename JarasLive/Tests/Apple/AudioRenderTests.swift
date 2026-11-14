@@ -54,8 +54,11 @@ private final class PatchTestEngine: AVAudioEngine {
 // Captured during the real "Pense em Jesus" failure: the Click and Voz
 // Guia had current sample counters, but the latter retained a host epoch
 // 1.869 seconds behind. A sample-valid timestamp alone is not safe to reuse.
-let clickClock = AVAudioTime(hostTime: 1174177059980, sampleTime: 29201918, atRate: 44100)
-let voiceClock = AVAudioTime(hostTime: 1174132199066, sampleTime: 29201920, atRate: 44100)
+// The capture used Apple Silicon's 24 MHz host ticks. Convert through seconds
+// so Intel's different host timebase reproduces the same stale-clock interval.
+let captureTicksPerSecond = 24_000_000.0
+let clickClock = AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 1174177059980.0 / captureTicksPerSecond), sampleTime: 29201918, atRate: 44100)
+let voiceClock = AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 1174132199066.0 / captureTicksPerSecond), sampleTime: 29201920, atRate: 44100)
 precondition(StemAudioPlayback.requiresSourceClockRenewal(source: voiceClock, reference: clickClock, latency: 0.09396825396825396), "Obsolete source epoch would delay a current stem")
 precondition(!StemAudioPlayback.requiresSourceClockRenewal(source: clickClock, reference: clickClock, latency: 0.09396825396825396), "Healthy source clocks must remain reusable")
 let shortPrefetch = AVAudioTime(hostTime: clickClock.hostTime - AVAudioTime.hostTime(forSeconds: 0.04), sampleTime: 29201918, atRate: 48000)
@@ -940,9 +943,15 @@ try audioAutoreleasepool {
     let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 176400)!
     buffer.frameLength = 176400
     for channel in 0..<2 {
+        let frequency: Double = channel == 0 ? 440 : 880
+        let samples = buffer.floatChannelData![channel]
         for frame in 0..<176400 {
-            let ramp = min(1, min(Double(frame) / 441, Double(132300-frame) / 441))
-            buffer.floatChannelData![channel][frame] = frame < 132300 ? Float(0.1 * max(0,ramp) * sin(2 * .pi * Double(channel == 0 ? 440 : 880) * Double(frame) / 44100)) : 0
+            let fadeIn = Double(frame) / 441.0
+            let fadeOut = Double(132300 - frame) / 441.0
+            let ramp = min(1.0, min(fadeIn, fadeOut))
+            let phase = 2.0 * Double.pi * frequency * Double(frame) / 44100.0
+            let sample = 0.1 * max(0.0, ramp) * sin(phase)
+            samples[frame] = frame < 132300 ? Float(sample) : 0
         }
     }
     try file.write(from: buffer)
@@ -1979,6 +1988,9 @@ let orderedBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 512
     let sample = orderedBuffer.floatChannelData![0][128]
     precondition(abs(sample - 0.2) < 0.003, "reordering track/master processors must preserve both scheduled PCM streams: \(sample), \(orderedFX.inserted)")
 }
+// Prepare both chains before measuring reorder stability. The first Master
+// insertion legitimately attaches its processors; subsequent orders reuse them.
+orderedAudio.previewFX(nil, settings: orderedFX)
 try checkOrderedPlayers()
 let orderedNodes = orderedEngine.attachedNodes.count
 for keys in [["Reverb", "Delay", "EQ", "Compressor"], ["Compressor", "EQ", "Reverb", "Delay"], ["EQ", "Compressor", "Delay", "Reverb"]] {
