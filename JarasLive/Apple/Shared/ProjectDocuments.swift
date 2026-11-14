@@ -339,68 +339,13 @@ enum PortableProjectImportPrompt: String, Identifiable {
             }
         }
     }
-    func partialInstruments(_ project: Project, directory: URL, requireAll: Bool = true) throws -> [String: URL] {
-        var result: [String: URL] = [:]
-        for id in PortableProjectPackage.instrumentIDs(in: project) {
-            guard let file = InstrumentLibrary.shared.resolvedFile(id, projectDirectory: directory) else {
-                if !requireAll { continue }
-                throw ProjectError.invalid("Instrumento nativo não encontrado: " + id)
-            }
-            result[id] = file
-        }
-        return result
-    }
-    func importPartialPackage(_ archive: URL, progress: @escaping @MainActor (Double) -> Void) async throws {
-        guard ready, let document = currentURL, !busy, !show.saving,
-              !TrackRecording.shared.recording, !TrackRecording.shared.busy else { throw ProjectError.invalid("Aguarde a operação atual antes de importar o parcial.") }
-        guard !show.isPlaying else { throw ProjectError.invalid("Pare a reprodução para importar o parcial.") }
-        let scoped = archive.startAccessingSecurityScopedResource()
-        let previousControl = show.canExecute
-        show.canExecute = { false }; busy = true; presentsOwnProgress = true
-        defer { show.canExecute = previousControl; busy = false; presentsOwnProgress = false; if scoped { archive.stopAccessingSecurityScopedResource() } }
-        try await show.flushProject()
-        let original = show.snapshot.project, session = show.projectSessionID, revision = show.projectRevision
-        let directory = document.deletingLastPathComponent()
-        let instruments = try partialInstruments(original, directory: directory, requireAll: false)
-        let job = Task.detached(priority: .userInitiated) {
-            try PartialProjectPackage.prepareImport(archive, project: original, directory: directory, instruments: instruments) { value in
-                Task { @MainActor in progress(value) }
-            }
-        }
-        let prepared = try await withTaskCancellationHandler(operation: { try await job.value }, onCancel: { job.cancel() })
-        try Task.checkCancellation()
-        guard currentURL == document, show.projectSessionID == session, show.projectRevision == revision else { throw ProjectError.invalid("O projeto mudou durante a leitura do parcial. Tente novamente.") }
-        var applied = false
-        do {
-            try prepared.install()
-            await preloadTimelineWaveforms(prepared.project, at: document)
-            try Task.checkCancellation()
-            try show.applyImportedProject(prepared.project); applied = true
-            try await show.flushProject()
-            missingAudioPaths = Set(ProjectAudioRecovery.missingPaths(in: prepared.project, directory: directory))
-            projectAudio.setMissingAudioPaths(missingAudioPaths)
-            show.preparePlayback()
-        } catch {
-            if applied {
-                // A backup cleanup can fail after the document was committed.
-                // Keep all media if the committed document references this import,
-                // or if the saved file cannot be inspected safely.
-                guard let saved = try? await ProjectStore(url: document).load(),
-                      saved.partialImportIDs != prepared.project.partialImportIDs else {
-                    throw ProjectError.invalid("O parcial foi aplicado, mas houve uma falha ao finalizar o salvamento. As mídias foram mantidas; confira o projeto e salve novamente.")
-                }
-                do { try show.applyImportedProject(original) }
-                catch { throw ProjectError.invalid("Não foi possível finalizar a importação. As mídias foram mantidas para preservar o projeto aberto.") }
-            }
-            prepared.rollback()
-            throw error
-        }
-    }
     @Published var ready = false
     @Published var opened = UUID()
     @Published var currentURL: URL?
     @Published var recent: [URL] = []
     @Published var canCancelOpening = false
+    @Published private(set) var backupOpeningProgress: Double?
+    @Published private(set) var backupOpeningFile = ""
     private var openingTask: Task<Void, Never>?
     private var openingCancellation: ProjectOpeningCancellation?
     func cancelOpening() {
@@ -425,6 +370,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
         openingTask = Task {
             defer {
                 busy = false; canCancelOpening = false; openingTask = nil; openingCancellation = nil; status = ""
+                backupOpeningProgress = nil; backupOpeningFile = ""
                 #if os(macOS)
                 finishRemoteOpening()
                 #endif
@@ -464,6 +410,8 @@ enum PortableProjectImportPrompt: String, Identifiable {
     @Published var missingAudioPrompt: MissingAudioPrompt?
     @Published var importingAudio = false
     @Published var audioImportProgress: Double? = nil
+    @Published private(set) var temporarySaveProgress: TemporaryProjectSession.SaveProgress?
+    private var temporarySaveOperation: UUID?
     @Published var audioImportError = ""
     @Published var migrationNotice = ""
     struct PendingAudioDrop: Identifiable {
@@ -867,6 +815,9 @@ enum PortableProjectImportPrompt: String, Identifiable {
         await TimelineAudioWaveform.shared.preload(files, cachedOnly: false, cancelled: { cancellation?.cancelled == true }) { done, total in
             guard cancellation?.cancelled != true else { return }
             self.status = "Preparing waveforms… \(done)/\(total)"
+            if self.backupOpeningProgress != nil {
+                self.backupOpeningProgress = max(self.backupOpeningProgress ?? 0, 0.8 + 0.15 * Double(done) / Double(max(1, total)))
+            }
         }
     }
     private func closeProjectEditors() {
@@ -942,6 +893,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
         #endif
         try Task.checkCancellation()
         canCancelOpening = false
+        if backupOpeningProgress != nil { backupOpeningProgress = 0.95; status = "Opening project…" }
         let canExecute = show.canExecute
         show.canExecute = { false }
         defer { show.canExecute = canExecute }
@@ -970,6 +922,7 @@ enum PortableProjectImportPrompt: String, Identifiable {
         show.preparePlayback()
         missingAudioPaths = missing
         currentURL = url; remember(url); ready = true; opened = UUID()
+        if backupOpeningProgress != nil { backupOpeningProgress = 1 }
         if let temporarySession, !temporarySession.contains(url) {
             // Playback/readers now point at the new directory. Cleanup failure
             // must not invalidate an already committed/opened normal project.
@@ -1036,9 +989,24 @@ enum PortableProjectImportPrompt: String, Identifiable {
         #endif
         beginOpening {
             guard ["jl", "bkjl"].contains(url.pathExtension.lowercased()) else { throw ProjectError.invalid("Select a .jl or .bkjl project") }
-            let url = try await ProjectOpeningWork.run {
-                try url.pathExtension.lowercased() == "bkjl" ? ProjectBackups.restore(url) : url
+            let isBackup = url.pathExtension.lowercased() == "bkjl"
+            let opening = self.openingCancellation
+            if isBackup {
+                self.backupOpeningProgress = 0; self.backupOpeningFile = url.lastPathComponent
+                self.status = "Restoring backup…"
             }
+            let url = try await ProjectOpeningWork.run {
+                guard isBackup else { return url }
+                return try ProjectBackups.restore(url) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.openingCancellation === opening, opening?.cancelled != true,
+                              let current = self.backupOpeningProgress, current <= progress.fraction * 0.7 else { return }
+                        self.backupOpeningProgress = progress.fraction * 0.7
+                        self.backupOpeningFile = progress.fileName
+                    }
+                }
+            }
+            if isBackup { self.backupOpeningProgress = 0.75; self.backupOpeningFile = ""; self.status = "Opening project…" }
             #if os(macOS)
             self.updateRemoteOpeningDestination(remoteCommandID, to: url)
             #endif
@@ -1338,14 +1306,25 @@ enum PortableProjectImportPrompt: String, Identifiable {
         guard isTemporary, let lease = temporarySession, !busy, !importingAudio,
               !TrackRecording.shared.recording, !TrackRecording.shared.busy else { return }
         busy = true; error = ""; status = "Copying audio and saving project…"
+        let operation = UUID()
+        temporarySaveOperation = operation; temporarySaveProgress = .preparing
         let canExecute = show.canExecute; show.canExecute = { false }
-        defer { busy = false; status = ""; show.canExecute = canExecute }
+        defer {
+            temporarySaveOperation = nil; temporarySaveProgress = nil
+            busy = false; status = ""; show.canExecute = canExecute
+        }
         do {
             closeProjectEditors()
             try await show.flushProject()
             guard let saved = try await store.load() else { throw ProjectError.invalid("Project not found") }
             let result = try await Task.detached(priority: .userInitiated) {
-                try lease.export(saved, to: destination)
+                try lease.export(saved, to: destination) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.temporarySaveOperation == operation,
+                              progress.sequence >= (self.temporarySaveProgress?.sequence ?? 0) else { return }
+                        self.temporarySaveProgress = progress
+                    }
+                }
             }.value
             try await activate(result, at: destination)
             show.message = "Projeto salvo."
@@ -1966,6 +1945,9 @@ private final class ProjectTitlebarAccessory: NSTitlebarAccessoryViewController 
         window.titlebarAccessoryViewControllers.contains { controller in
             guard let accessory = controller as? ProjectTitlebarAccessory, accessory.interactive,
                   !accessory.view.isHiddenOrHasHiddenAncestor else { return false }
+            if let version = accessory.view as? ProjectTitlebarVersionView {
+                return version.containsUpdateButton(at: version.convert(point, from: nil))
+            }
             return accessory.view.bounds.insetBy(dx: 8, dy: 0).contains(accessory.view.convert(point, from: nil))
         }
     }
@@ -1999,7 +1981,7 @@ private final class ProjectTitlebarHostingView<Content: View>: NSHostingView<Con
     }
 }
 
-private final class ProjectTitlebarVersionView: NSView {
+private final class ProjectTitlebarVersionView: NSView, DesktopUpdateNoticeObserver {
     static let text = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
         .map { text(for: $0) } ?? "CatLive"
     static func text(for version: String) -> String {
@@ -2010,26 +1992,57 @@ private final class ProjectTitlebarVersionView: NSView {
         return "CatLive Version " + String(major) + "." + String(format: "%02d", minor)
     }
     private let label = NSTextField(labelWithString: text)
-    var preferredWidth: CGFloat { ceil(label.intrinsicContentSize.width) + 20 }
-    init() {
+    private let updateButton = NSButton(title: "Update", target: nil, action: nil)
+    private var updateURL: URL?
+    private let openURL: (URL) -> Void
+    var widthChanged: (() -> Void)?
+    var preferredWidth: CGFloat { ceil(label.intrinsicContentSize.width) + 20 + (updateURL == nil ? 0 : 68) }
+    init(service: DesktopUpdateNoticeService? = nil, startsService: Bool = true,
+         openURL: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) }) {
+        self.openURL = openURL
         super.init(frame: NSRect(x: 0, y: 0, width: 160, height: 22))
         label.font = .jarasSystemFont(ofSize: 11, weight: .medium)
         label.textColor = .white
         label.alignment = .right
         label.lineBreakMode = .byClipping
         addSubview(label)
-        setAccessibilityElement(true)
-        setAccessibilityRole(.staticText)
-        setAccessibilityLabel(Self.text)
+        updateButton.font = .jarasSystemFont(ofSize: 11, weight: .semibold)
+        updateButton.isBordered = false
+        updateButton.contentTintColor = .black
+        updateButton.wantsLayer = true
+        updateButton.layer?.backgroundColor = NSColor.systemYellow.cgColor
+        updateButton.layer?.cornerRadius = 4
+        updateButton.target = self; updateButton.action = #selector(openUpdate)
+        updateButton.setAccessibilityLabel("Update")
+        updateButton.isHidden = true
+        addSubview(updateButton)
+        let service = service ?? DesktopUpdateNoticeService.shared
+        service.observe(self)
+        if startsService { service.start() }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func layout() {
         super.layout()
         let height = min(bounds.height, ceil(label.intrinsicContentSize.height))
-        label.frame = NSRect(x: 6, y: floor((bounds.height - height) / 2), width: max(0, bounds.width - 16), height: height)
+        let offset: CGFloat = updateURL == nil ? 0 : 68
+        label.frame = NSRect(x: 6 + offset, y: floor((bounds.height - height) / 2), width: max(0, bounds.width - 16 - offset), height: height)
+        updateButton.frame = NSRect(x: 6, y: floor((bounds.height - 18) / 2), width: 60, height: 18)
     }
+    func desktopUpdateNoticeChanged(_ notice: DesktopUpdateNotice?) {
+        let wasVisible = updateURL != nil
+        updateURL = notice?.url
+        updateButton.isHidden = notice == nil
+        updateButton.toolTip = notice.map { "CatLive " + $0.version }
+        if wasVisible != (notice != nil) { needsLayout = true; widthChanged?() }
+    }
+    @objc private func openUpdate() { if let updateURL { openURL(updateURL) } }
+    func containsUpdateButton(at point: NSPoint) -> Bool { !updateButton.isHidden && updateButton.frame.contains(point) }
     override var mouseDownCanMoveWindow: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        guard containsUpdateButton(at: local) else { return nil }
+        return updateButton
+    }
 }
 
 final class ProjectTitlebarAnchor<Content: View>: NSView {
@@ -2046,8 +2059,9 @@ final class ProjectTitlebarAnchor<Content: View>: NSView {
         if #available(macOS 13, *) { host.sizingOptions = [.intrinsicContentSize] }
         host.frame = NSRect(x: 0, y: 0, width: preferredWidth, height: 22)
         host.widthChanged = { [weak self] width in self?.preferredWidth = width; self?.updateWidths() }
+        version.widthChanged = { [weak self] in self?.updateWidths() }
         leading.layoutAttribute = .left; leading.view = host; leading.interactive = true
-        trailing.layoutAttribute = .right; trailing.view = version
+        trailing.layoutAttribute = .right; trailing.view = version; trailing.interactive = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }

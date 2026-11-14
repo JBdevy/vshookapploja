@@ -24,18 +24,21 @@ struct TimelineLockOptionsView: View {
     }
 }
 enum TimelineZoomLimits {
-    // Lowest overview scale approved on the Mac with the dense project.
-    // Every zoom path and restored viewport must respect this same boundary.
-    static let minimum = 0.01014480497215081
+    static let maximumVisibleDuration = 45.0 * 60 * 60
+    // Persistence has no window size. Input uses the current drawable width
+    // so the farthest overview is 45 hours on any display or mixer width.
+    static let minimum = 1 / (10 * maximumVisibleDuration)
+    static func minimumZoom(viewportWidth: CGFloat) -> Double {
+        max(1, Double(viewportWidth)) / (10 * maximumVisibleDuration)
+    }
     static let maximum = 8192.0
     static let preciseSensitivity = 0.0084
     static let maximumPreciseSensitivity = 0.035
     static let wheelSensitivity = 0.10
-    // Reserve minimum-zoom blank space in screen-width buckets. Resizing a
-    // window must not change the whole timeline's extent for every pixel.
+    // Keep the overview available beyond existing media without rebuilding
+    // the timeline's coordinate plane for each pixel of a window resize.
     static func minimumExtent(viewportWidth: CGFloat) -> Double {
-        let capacity = ceil(max(0, Double(viewportWidth)) / 512) * 512
-        return capacity / (10 * minimum) + 120
+        maximumVisibleDuration + 120
     }
 }
 enum TimelineTrackHeightLimits {
@@ -129,21 +132,37 @@ struct TimelineGridView: View {
         TimelineGridContent(show: show, documents: documents, presentation: updates.state, revision: show.projectRevision, mixerRevision: show.mixerPlaybackRevision, songID: show.current?.id, focusRequest: show.regionFocusRequest, selectedRegion: show.selectedTimelineRegion, editPosition: show.snapshot.transport.editPosition ?? show.snapshot.transport.position, remotePresentation: remotePresentation, toggleMixer: toggleMixer, visibility: remotePresentation ? TrackVisibilityState() : trackVisibility.state(for: show.snapshot.project.id)).equatable()
     }
 }
+/// A project notification reaches every warm row, but only changed control
+/// metadata publishes into that row's SwiftUI graph. Media arrays stay outside.
+@MainActor private final class TimelineMixerRowUpdates<Value: Equatable>: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
+    private(set) var value: Value
+    private var subscription: AnyCancellable?
+    init(value: Value, publisher: ObservableObjectPublisher, read: @escaping () -> Value?) {
+        self.value = value
+        subscription = publisher.sink { [weak self] _ in
+            guard let self, let next = read(), self.value != next else { return }
+            #if os(macOS)
+            NativeSidebarResizeActivity.shared.contentDidChange()
+            #endif
+            self.objectWillChange.send(); self.value = next
+        }
+    }
+}
 private struct TimelineLiveMixerRow<Content: View>: View {
-    let show: ShowController
-    @ObservedObject private var updates: ShowProjectPresentation
-    let track: Track
-    let index: Int
+    @ObservedObject private var updates: TimelineMixerRowUpdates<Track>
     @ViewBuilder let content: (Track) -> Content
     init(show: ShowController, track: Track, index: Int, @ViewBuilder content: @escaping (Track) -> Content) {
-        self.show = show; self.track = track; self.index = index; self.content = content
-        _updates = ObservedObject(wrappedValue: show.projectPresentation)
+        self.content = content
+        let project = show.snapshot.project.id, id = track.id
+        _updates = ObservedObject(wrappedValue: TimelineMixerRowUpdates(value: mixerMetadata(track), publisher: show.projectPresentation.objectWillChange) { [weak show] in
+            guard let show, show.snapshot.project.id == project else { return nil }
+            let tracks = show.current?.tracks ?? []
+            let current = tracks.indices.contains(index) && tracks[index].id == id ? tracks[index] : tracks.first { $0.id == id }
+            return current.map(mixerMetadata)
+        })
     }
-    var body: some View {
-        let tracks = show.current?.tracks ?? []
-        let current = tracks.indices.contains(index) && tracks[index].id == track.id ? tracks[index] : tracks.first { $0.id == track.id } ?? track
-        content(current)
-    }
+    var body: some View { content(updates.value) }
 }
 
 private struct TimelineGridContent: View, Equatable {
@@ -175,11 +194,15 @@ private struct TimelineGridContent: View, Equatable {
     @State private var zoomState = TimelineZoomState()
     @State private var hostedItemsGate = TimelineHostedItemsGate()
     @State private var rowLayoutCache = TrackLayoutCache()
+    @State private var mixerContentRevision = TimelineMixerContentRevision()
     @State private var renderMetadataCache = TimelineRenderMetadataCache()
     @State private var selectionLayoutCache = TimelineSelectionLayoutCache()
     #if os(macOS)
     @State private var itemSourceCache = TimelineItemSourceCache()
-    @State private var nativeBase = NativeTimelineBaseController()
+    // StateObject evaluates the native controller factory only for the mounted
+    // timeline. A State initializer creates throwaway Metal/AppKit view trees
+    // whenever its parent is reevaluated, including a Setlist width change.
+    @StateObject private var nativeBase = NativeTimelineBaseController()
     @State private var nativeBodyCache = NativeTimelineAudioBodyCache()
     @ObservedObject private var metalRenderer = MetalWaveformRenderer.shared
     @State private var trackHeightMotion = TimelineTrackHeightMotion()
@@ -223,6 +246,7 @@ private struct TimelineGridContent: View, Equatable {
     @State private var resizingItem: UUID?
     @State private var resizedItemStart = 0.0
     @State private var resizedItemEnd = 0.0
+    @State private var sharedBoundaryPreview: SharedItemBoundaryEdit?
     @State private var itemWaveformPreview = ItemWaveformPreview()
     @State private var insertionPreview = GridInsertionPreview()
     @State private var itemExport: ItemAudioExportRequest?
@@ -249,14 +273,23 @@ private struct TimelineGridContent: View, Equatable {
     @State private var movingStart = 0.0
     @State private var movingTrack: UUID?
     @State private var provisionalTrack: Track?
-    @State private var selectedTrack: UUID?
-    @State private var selectedTracks = Set<UUID>()
+    // Both mixers and keyboard commands use the same selection immediately.
+    // A local State mirrored through onChange can write the previous selection
+    // back after repeated Paste has already selected a newer track.
+    private var selectedTrack: UUID? {
+        get { show.selectedTrackForActions }
+        nonmutating set { show.reportTrackSelection(newValue) }
+    }
+    private var selectedTracks: Set<UUID> {
+        get { show.mixerTrackSelection }
+        nonmutating set { show.setMixerTrackSelection(newValue, anchor: selectedTrack) }
+    }
     @State private var addingTrack = false
     @State private var showingTrackVisibility = false
     @State private var draggingMain = false
     @State private var draggingSub = false
-    @AppStorage("jaras.trackColumnWidth") private var savedLabelWidth = Double(SidebarWidthLimits.trackMixer)
-    @AppStorage("jaras.trackColumnRestoreWidth") private var restoreLabelWidth = 248.0
+    @AppStorage("jaras.trackColumnWidth", store: WorkspaceLayoutPreferences.storage) private var savedLabelWidth = Double(SidebarWidthLimits.trackMixer)
+    @AppStorage("jaras.trackColumnRestoreWidth", store: WorkspaceLayoutPreferences.storage) private var restoreLabelWidth = 248.0
     @State private var resizeStart: CGFloat?
     @State private var mixerResizeState = SidebarResizeState()
     @State private var trackHeight: CGFloat = TimelineTrackHeightLimits.defaultHeight
@@ -270,8 +303,8 @@ private struct TimelineGridContent: View, Equatable {
         self.focusRequest = focusRequest; self.selectedRegion = selectedRegion; self.editPosition = editPosition
         self.remotePresentation = remotePresentation; self.toggleMixer = toggleMixer
         let prefix = remotePresentation ? "jaras.remote." : "jaras."
-        _savedLabelWidth = AppStorage(wrappedValue: remotePresentation ? 280 : Double(SidebarWidthLimits.trackMixer), prefix + "trackColumnWidth")
-        _restoreLabelWidth = AppStorage(wrappedValue: remotePresentation ? 280 : 248, prefix + "trackColumnRestoreWidth")
+        _savedLabelWidth = AppStorage(wrappedValue: remotePresentation ? 280 : Double(SidebarWidthLimits.trackMixer), prefix + "trackColumnWidth", store: WorkspaceLayoutPreferences.storage)
+        _restoreLabelWidth = AppStorage(wrappedValue: remotePresentation ? 280 : 248, prefix + "trackColumnRestoreWidth", store: WorkspaceLayoutPreferences.storage)
     }
     private var visibleSong: Song? {
         guard var song = show.current else { return nil }
@@ -295,11 +328,13 @@ private struct TimelineGridContent: View, Equatable {
     }
     var body: some View {
         VStack(spacing: 0) {
-            GeometryReader { geometry in
+            TimelineGeometryReader { geometry in
                 if let originalSong = visibleSong {
                     let projectID = show.snapshot.project.id
-                    let renderKey = TimelineRenderKey(revision: revision, songID: songID, movingClip: movingClip, movingStart: movingStart, movingTrack: movingTrack, movingRegion: movingRegion, regionDelta: regionDelta, resizingRegion: resizingRegion, resizedStart: resizedStart, resizedEnd: resizedEnd, recordingRevision: recordingLayout.revision, resizingItem: resizingItem, itemStart: resizedItemStart, itemEnd: resizedItemEnd, projectID: projectID, hiddenTracks: visibility.trackMixer)
+                    let renderKey = TimelineRenderKey(revision: revision, songID: songID, movingClip: movingClip, movingStart: movingStart, movingTrack: movingTrack, movingRegion: movingRegion, regionDelta: regionDelta, resizingRegion: resizingRegion, resizedStart: resizedStart, resizedEnd: resizedEnd, recordingRevision: recordingLayout.revision, resizingItem: resizingItem, itemStart: resizedItemStart, itemEnd: resizedItemEnd, projectID: projectID, hiddenTracks: visibility.trackMixer, sharedResizeRight: sharedBoundaryPreview?.right.id)
                     let song = previewTrackHeights(previewItemEdit(previewClipMove(previewRegionResize(previewRegionMove(originalSong)))))
+                    let controlsRevision = mixerContentRevision.update(tracks: song.tracks, project: projectID,
+                        song: song.id, directory: documents.currentURL?.deletingLastPathComponent())
                     let renderMetadata = renderMetadataCache.metadata(song: song, key: renderKey,
                         audibilityTracks: show.current?.tracks)
                     let regionLanes = rowLayoutCache.regionLanes(song.parts, key: renderKey)
@@ -341,13 +376,19 @@ private struct TimelineGridContent: View, Equatable {
                     #endif
                         GridScrollView(axis: .vertical, contentWidth: geometry.size.width, contentHeight: contentHeight,
                             trackHeight: rows.baseHeight, rowHeights: rows.heights,
-                            selectedRow: song.tracks.firstIndex { $0.id == selectedTrack && selectedTracks.contains($0.id) }) {
+                            selectedRow: song.tracks.firstIndex { $0.id == selectedTrack && selectedTracks.contains($0.id) },
+                            rowReveal: show.trackSelectionRequest.flatMap { request in
+                                song.tracks.firstIndex { $0.id == request.track }.map { index in
+                                    GridRowReveal(id: request.id, offset: rows.offsets[index],
+                                                  height: rows.heights[index], headerHeight: rulerHeight)
+                                }
+                            }) {
                             TimelineColumnsContainer(mixerWidth: labelWidth, viewportWidth: geometry.size.width, height: contentHeight, dividerWidth: dividerWidth,
                                 project: show.snapshot.project.id,
-                                mixerIdentity: TimelineMixerIdentity(revision: revision, mixerRevision: mixerRevision, song: songID, width: mountedLabelWidth,
+                                mixerIdentity: TimelineMixerIdentity(revision: controlsRevision, mixerRevision: mixerRevision, song: songID, width: mountedLabelWidth,
                                     viewportHeight: ceil(geometry.size.height / 512) * 512, heights: rows.heights, selection: selectedTracks,
-                                    documentHeight: contentHeight, rulerHeight: rulerHeight, widthViewport: resizeViewport, hiddenTracks: visibility.trackMixer)) {
-                                TimelineMixerLayer(position: verticalScroll.tiles, identity: TimelineMixerIdentity(revision: revision, mixerRevision: mixerRevision, song: songID, width: mountedLabelWidth, viewportHeight: ceil(geometry.size.height / 512) * 512, heights: rows.heights, selection: selectedTracks, documentHeight: contentHeight, rulerHeight: rulerHeight, widthViewport: resizeViewport, hiddenTracks: visibility.trackMixer)) { visibleY in
+                                    documentHeight: contentHeight, rulerHeight: rulerHeight, widthViewport: resizeViewport, hiddenTracks: visibility.trackMixer), resizeState: mixerResizeState) {
+                                TimelineMixerLayer(position: verticalScroll.tiles, identity: TimelineMixerIdentity(revision: controlsRevision, mixerRevision: mixerRevision, song: songID, width: mountedLabelWidth, viewportHeight: ceil(geometry.size.height / 512) * 512, heights: rows.heights, selection: selectedTracks, documentHeight: contentHeight, rulerHeight: rulerHeight, widthViewport: resizeViewport, hiddenTracks: visibility.trackMixer)) { visibleY in
                                 Group {
                                 #if os(macOS)
                                 let slots = mixerRowPool.slots(ids: song.tracks.map(\.id), offsets: rows.offsets, heights: rows.heights,
@@ -360,16 +401,19 @@ private struct TimelineGridContent: View, Equatable {
                                         frame: CGRect(x: 0, y: rulerHeight + rows.offsets[slot.index],
                                                       width: slot.width ?? mountedLabelWidth, height: slot.height),
                                         version: TimelineMixerRowVersion(project: projectID, song: song.id, track: track.id,
-                                            revision: revision, mixerRevision: mixerRevision, index: slot.index,
+                                            metadata: mixerMetadata(track), index: slot.index,
                                             showsFader: (slot.width ?? mountedLabelWidth) >= 180, height: slot.height,
-                                            audioHeight: rows.audioHeights[slot.index], envelopeHeight: rows.envelopeHeights[slot.index],
+                                            audioHeight: rows.audioHeights[slot.index] * slot.height / max(1, rows.heights[slot.index]),
+                                            envelopeHeight: rows.envelopeHeights[slot.index] * slot.height / max(1, rows.heights[slot.index]),
                                             selection: selectedTracks.contains(track.id) ? selectedTracks : [],
                                             silenced: show.current?.isSilenced(track) ?? song.isSilenced(track), showsIcons: showsInstrumentIcons,
                                             nextTrack: slot.index + 1 < song.tracks.count ? song.tracks[slot.index + 1].id : nil,
                                             groupDepth: groupDepths[track.id] ?? 0,
                                             lastChild: slot.index + 1 == song.tracks.count || song.tracks[slot.index + 1].parentTrackID != track.parentTrackID,
-                                            directory: documents.currentURL?.deletingLastPathComponent()))
-                                }) { slotIndex in
+                                            directory: documents.currentURL?.deletingLastPathComponent()),
+                                        retained: TrackSelectionRouter.shared.pinnedTracks.contains(track.id))
+                                }, followsContainerWidth: true, limitsWidthToViewport: resizeViewport != nil,
+                                   limitsVisibilityToViewport: true) { slotIndex in
                                     let slot = slots[slotIndex]
                                         let index = slot.index
                                         let track = song.tracks[index]
@@ -380,13 +424,21 @@ private struct TimelineGridContent: View, Equatable {
                                         let audioHeight = rows.audioHeights[index] * heightRatio
                                         let envelopeHeight = rows.envelopeHeights[index] * heightRatio
                                             let silenced = show.current?.isSilenced(track) ?? song.isSilenced(track)
-                                            VStack(spacing: 0) {
-                                            TimelineLiveMixerRow(show: show, track: track, index: index) { liveTrack in
+                                            let controls = TimelineLiveMixerRow(show: show, track: track, index: index) { liveTrack in
                                             TrackMixerRow(show: show, projectID: show.snapshot.project.id, track: mixerMetadata(liveTrack), trackSelection: selectedTracks, nextTrack: index + 1 < song.tracks.count ? song.tracks[index + 1].id : nil, number: index + 1, selected: selectedTracks.contains(track.id), silenced: silenced, showsMeterScale: true, showsFader: (slot.width ?? mountedLabelWidth) >= 180, showsInstrumentIcons: showsInstrumentIcons, compactHeight: audioHeight < 64, minimalHeight: audioHeight < 56, isFolder: index + 1 < song.tracks.count && song.tracks[index + 1].parentTrackID == track.id, groupDepth: groupDepths[track.id] ?? 0, lastChild: index + 1 == song.tracks.count || song.tracks[index + 1].parentTrackID != track.parentTrackID, groupSelection: selectedTracks.contains(track.id) && selectedTracks.count > 1 ? { show.groupTracks(selectedTracks) } : nil, select: { selectTrack(track.id, in: song) }, importVideo: { documents.chooseVideo(track: track.id) }, projectDirectory: documents.currentURL?.deletingLastPathComponent(), deleteTracks: { requestTrackDeletion($0) }).equatable()
-                                            }.frame(height: audioHeight).clipped()
-                                            TrackAutomationLaneHeaders(show: show, track: track, height: envelopeHeight)
-                                                .padding(.trailing, showsInstrumentIcons ? 40 : 0)
-                                            }.frame(maxWidth: .infinity).frame(height: slot.height).clipped()
+                                            }
+                                            if envelopeHeight > 0 {
+                                                VStack(spacing: 0) {
+                                                    controls.frame(height: audioHeight).clipped()
+                                                    TrackAutomationLaneHeaders(show: show, track: track, height: envelopeHeight)
+                                                        .padding(.trailing, showsInstrumentIcons ? 40 : 0)
+                                                }.frame(maxWidth: .infinity).frame(height: slot.height).clipped()
+                                            } else {
+                                                // The native row already receives its exact new frame.
+                                                // Let the same controls fill that proposal instead of
+                                                // replacing their hosting root for every height pixel.
+                                                controls.frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
+                                            }
                                 }
                                 #else
                                 TimelineTrackRowsContainer(width: mountedLabelWidth, height: contentHeight,
@@ -405,11 +457,17 @@ private struct TimelineGridContent: View, Equatable {
                                     }
                                 }
                                 #endif
-                                }.frame(width: mountedLabelWidth, height: contentHeight).clipped().background(JarasTheme.mixer)
+                                }
+                                #if os(macOS)
+                                .frame(maxWidth: .infinity).frame(height: contentHeight)
+                                #else
+                                .frame(width: mountedLabelWidth, height: contentHeight)
+                                #endif
+                                .clipped().background(JarasTheme.mixer)
                                     .overlay(alignment: .bottomLeading) {
                                         #if os(macOS)
                                         TimelineEmptyMixerInput(clearSelection: clearTrackSelection, addTrack: addStandardTrackAtEnd)
-                                            .frame(width: mountedLabelWidth, height: max(0, contentHeight - rulerHeight - rows.totalHeight))
+                                            .frame(maxWidth: .infinity).frame(height: max(0, contentHeight - rulerHeight - rows.totalHeight))
                                         #else
                                         Color.clear
                                             .frame(width: mountedLabelWidth, height: max(0, contentHeight - rulerHeight - rows.totalHeight))
@@ -418,7 +476,13 @@ private struct TimelineGridContent: View, Equatable {
                                             .onTapGesture { clearTrackSelection() }
                                         #endif
                                     }
-                                }.equatable().frame(width: labelWidth, alignment: .leading).clipped().allowsHitTesting(labelWidth > 0)
+                                }.equatable()
+                                #if os(macOS)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                #else
+                                .frame(width: labelWidth, alignment: .leading)
+                                #endif
+                                .clipped().allowsHitTesting(labelWidth > 0)
                                     #if os(macOS)
                                     .background(EditorSelectionArea(scope: .tracks) {
                                         let tracks = song.tracks.filter { $0.kind == .standard }
@@ -656,8 +720,18 @@ private struct TimelineGridContent: View, Equatable {
                                     .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: importDrop)
                                     #endif
                                 }
-                                }.frame(width: documentViewportWidth, height: contentHeight)
-                            }.frame(width: geometry.size.width, height: contentHeight, alignment: .topLeading)
+                                }
+                                #if os(macOS)
+                                .frame(maxWidth: .infinity).frame(height: contentHeight)
+                                #else
+                                .frame(width: documentViewportWidth, height: contentHeight)
+                                #endif
+                            }
+                            #if os(macOS)
+                            .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: contentHeight)
+                            #else
+                            .frame(width: geometry.size.width, height: contentHeight, alignment: .topLeading)
+                            #endif
                             #if os(macOS)
                             .background(SidebarScrollProbe(controller: mixerScrollController, prepareScroll: { offset in
                                 let previous = verticalScroll.tiles.offset
@@ -675,9 +749,14 @@ private struct TimelineGridContent: View, Equatable {
                                 return offset < previous - leading || offset > previous + trailing || restoreWidths
                             }))
                             #endif
-                        }.frame(width: geometry.size.width, height: geometry.size.height)
+                        }
+                        #if os(macOS)
+                        .frame(maxWidth: .infinity).frame(height: geometry.size.height)
+                        #else
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        #endif
                         .overlay(alignment: .topLeading) {
-                            if labelWidth > 0 {
+                            mixerHeader(columns: mixerColumns, maximum: maximumLabelWidth, rulerHeight: rulerHeight) {
                                 HStack(spacing: 4) {
                                     Text("Track-Mixer").lineLimit(1)
                                     Spacer(minLength: 0)
@@ -735,8 +814,8 @@ private struct TimelineGridContent: View, Equatable {
                                 }
                                 .font(.jarasSystem(size: 9, weight: .bold, design: .monospaced))
                                 .foregroundStyle(JarasTheme.secondary)
-                                .frame(width: mixerColumns.bodyWidth, height: rulerHeight).clipped()
-                                .frame(width: labelWidth, alignment: .leading).background(JarasTheme.mixer)
+                                .frame(maxWidth: .infinity).frame(height: rulerHeight).clipped()
+                                .padding(.trailing, mixerColumns.iconExtension).background(JarasTheme.mixer)
                                 .overlay(alignment: .bottom) {
                                     Rectangle().fill(JarasTheme.line).frame(height: 1).allowsHitTesting(false)
                                 }
@@ -761,16 +840,13 @@ private struct TimelineGridContent: View, Equatable {
                                 }, cancel: { trackHeightPreview.removeAll() })
                             #endif
                         }
+                        #if !os(macOS)
                         .overlay(alignment: .topLeading) {
                             mixerDivider(columns: mixerColumns, maximum: maximumLabelWidth)
-                                #if os(macOS)
-                                .frame(width: dividerWidth, height: geometry.size.height)
-                                .offset(x: labelWidth)
-                                #else
                                 .frame(width: 20, height: geometry.size.height)
                                 .offset(x: labelWidth + dividerWidth / 2 - 10)
-                                #endif
                         }
+                        #endif
                     }
                 }
             }
@@ -837,9 +913,9 @@ private struct TimelineGridContent: View, Equatable {
             clearClipDrag(); resizingItem = nil; trackHeightPreview.removeAll()
             let tracks = visibleSong?.tracks ?? []
             selectedTracks.formIntersection(tracks.map(\.id))
-            selectedTrack = selectedTrack.flatMap { selectedTracks.contains($0) ? $0 : nil } ?? selectedTracks.first
+            if let id = selectedTrack, selectedTracks.contains(id) {} else { selectedTrack = selectedTracks.first }
             selectedClips.formIntersection(tracks.flatMap(\.clips).map(\.id))
-            selectedClip = selectedClip.flatMap { selectedClips.contains($0) ? $0 : nil } ?? selectedClips.first
+            if let id = selectedClip, selectedClips.contains(id) {} else { selectedClip = selectedClips.first }
         }
         .sheet(isPresented: $showingSeparation, onDismiss: {
             #if os(macOS)
@@ -934,10 +1010,6 @@ private struct TimelineGridContent: View, Equatable {
             }, maximumNameLength: marker.unifiedRegionID == nil ? (marker.isSection ? TimelineMarker.maximumSectionNameLength : TimelineMarker.maximumNameLength) : nil).environment(\.locale, locale)
             }
         }
-        .onChange(of: selectedTrack) { show.reportTrackSelection($0) }
-        .onChange(of: show.trackSelectionRequest) { request in
-            if let request { selectedTrack = request.track; selectedTracks = [request.track] }
-        }
         .onReceive(show.$cutGridItems.removeDuplicates()) { cutGridItems = $0 }
         .onReceive(show.$detectBPMRegion) { id in
             guard let id, bpmWorker == nil else { return }; bpmRegions = [id]; confirmingBPMDetection = true; show.detectBPMRegion = nil
@@ -954,7 +1026,14 @@ private struct TimelineGridContent: View, Equatable {
         .sheet(item: $editingTempoMarker) { marker in TempoMarkerEditor(marker: marker, save: { show.setMarker($0) }).environment(\.locale, locale) }
         .onReceive(show.$normalizeItemsRequest.dropFirst()) { request in if request > 0 { beginNormalize(selectedClips) } }
         .onReceive(show.$itemProcessingRequest.dropFirst()) { request in
-            guard let request, !selectedClips.isEmpty else { return }
+            guard let request else { return }
+            if request.action == .createRegionsFromItems {
+                if let range = TimelineAreaSelection.shared.range, range.song == show.current?.id {
+                    show.regionFromTimeSelection(song: range.song, start: range.start, end: range.end)
+                } else { show.regionsFromSelection(selectedClips) }
+                return
+            }
+            guard !selectedClips.isEmpty else { return }
             if request.action == .reRenderItems { reRenderItems(selectedClips) }
             else if request.action == .unifyAudioItems { glueItems(selectedClips) }
         }
@@ -972,11 +1051,6 @@ private struct TimelineGridContent: View, Equatable {
         }
         .onChange(of: selectedTracks) {
             AudioExportSelection.shared.setTracks($0, song: show.current?.id)
-            show.setMixerTrackSelection($0, anchor: selectedTrack)
-        }
-        .onChange(of: show.mixerTrackSelection) { ids in
-            guard selectedTracks != ids else { return }
-            selectedTrack = show.selectedTrackForActions; selectedTracks = ids
         }
         .onChange(of: show.selectedProgramChangeID) { id in
             guard id != nil else { return }
@@ -995,7 +1069,7 @@ private struct TimelineGridContent: View, Equatable {
         .background(JarasTheme.background).sheet(isPresented: $addingTrack) {
             CreateTrackEditor(show: show, afterTrack: selectedTrack, close: { addingTrack = false }, created: { ids in
                 let selectable = show.current?.tracks.filter { $0.kind == .standard && ids.contains($0.id) }.map(\.id) ?? []
-                selectedTrack = selectable.first; selectedTracks = Set(selectable)
+                selectedTrack = selectable.last; selectedTracks = Set(selectable.suffix(1))
             }).environment(\.locale, locale)
         }
     }
@@ -1158,6 +1232,7 @@ private struct TimelineGridContent: View, Equatable {
             show.send(.editSeek, value: gridPosition(x / pixelsPerSecond, song: song, pixelsPerSecond: pixelsPerSecond, freePositioning: freePositioning)) }, createRegion: { show.regionsFromSelection(selectedClips.contains($0) ? selectedClips : [$0]) }, indexedLayout: selectionLayout, pixelsPerSecond: 1, projection: projection, interactionBlocked: gridInteractionBlocked, itemMixLocked: show.timelineItemMixLocked, resize: { id, left, delta, ended in
             guard !show.timelineItemsLocked else { resizingItem = nil; return }
             let pixelsPerSecond = projection.pixelsPerSecond
+            sharedBoundaryPreview = nil
 
             guard let source = sourceItem(id) else { resizingItem = nil; return }
             let clip = source.clip
@@ -1173,6 +1248,21 @@ private struct TimelineGridContent: View, Equatable {
             }
             timelineExtent = max(extent, resizedItemEnd + 120)
             if ended { show.resizeItem(id, start: resizedItemStart, end: resizedItemEnd); resizingItem = nil }
+        }, resizeShared: { left, right, delta, ended in
+            guard !show.timelineItemsLocked, let source = sourceItem(left), let other = sourceItem(right), source.track.id == other.track.id else {
+                resizingItem = nil; sharedBoundaryPreview = nil; return
+            }
+            let scale = projection.pixelsPerSecond
+            let position = itemPosition(other.clip.startTime + delta / scale, song: originalSong, pixelsPerSecond: scale, excludingItems: [left, right])
+            var durations: [UUID: Double] = [:]
+            for clip in [source.clip, other.clip] { if let duration = show.sourceDuration(for: clip, on: source.track) { durations[clip.id] = duration } }
+            guard let edit = SharedItemBoundaryEdit(song: originalSong, track: source.track, left: source.clip, right: other.clip,
+                position: position, minimumDuration: 16 / scale, sourceDurations: durations) else { return }
+            resizingItem = left; resizedItemStart = edit.left.startTime; resizedItemEnd = edit.position; sharedBoundaryPreview = edit
+            if ended {
+                show.resizeSharedItemBoundary(left: left, right: right, position: edit.position)
+                resizingItem = nil; sharedBoundaryPreview = nil
+            }
         }, fadeShape: { id, left, sCurve, value, ended in
             show.changeItemFadeShape(id, fadeIn: left, sCurve: sCurve, value: value, ended: ended)
             if ended { itemWaveformPreview.clear() }
@@ -1356,6 +1446,7 @@ private struct TimelineGridContent: View, Equatable {
                 if !selectedClips.contains(clip.id) { selectedClips = [clip.id] }
             }
         }, resize: { left, delta, ended in
+            sharedBoundaryPreview = nil
             guard !show.timelineItemsLocked else { resizingItem = nil; return }
             resizingItem = clip.id
             let position = itemPosition((left ? clip.startTime : clip.startTime + clip.duration) + delta / pixelsPerSecond,
@@ -1653,6 +1744,12 @@ private struct TimelineGridContent: View, Equatable {
         var result = song
         for track in result.tracks.indices {
             for clip in result.tracks[track].clips.indices {
+                if let shared = sharedBoundaryPreview {
+                    let id = result.tracks[track].clips[clip].id
+                    if id == shared.left.id { result.tracks[track].clips[clip] = shared.left }
+                    else if id == shared.right.id { result.tracks[track].clips[clip] = shared.right }
+                    continue
+                }
                 if result.tracks[track].clips[clip].id == resizingItem {
                     if result.tracks[track].kind == .standard || result.tracks[track].kind.isText || result.tracks[track].clips[clip].isProjectionMedia {
                         let source = result.tracks[track].clips[clip]
@@ -1912,6 +2009,26 @@ private struct TimelineGridContent: View, Equatable {
         return TimelineTempo.snap(time, song: song, pixelsPerSecond: pixelsPerSecond, enabled: !free, includeItemEdges: true)
     }
 
+    @ViewBuilder
+    private func mixerHeader<Header: View>(columns: TrackMixerColumnGeometry, maximum: CGFloat,
+                                          rulerHeight: CGFloat, @ViewBuilder content: @escaping () -> Header) -> some View {
+        #if os(macOS)
+        NativeTimelineMixerOverlay(width: columns.totalWidth, maximum: maximum + columns.iconExtension,
+            minimum: SidebarWidthLimits.trackMixer + columns.iconExtension, dividerWidth: dividerWidth,
+            headerHeight: rulerHeight, liveWidth: mixerResizeState.nativeWidth,
+            onStart: { mixerResizeState.update(columns.bodyWidth) },
+            onWidthModeChanged: { mixerResizeState.update(columns.storedWidth(for: $0)) },
+            onToggle: toggleMixer, onCancel: { mixerResizeState.update(nil) }, onEnd: { totalWidth in
+                let finalWidth = columns.storedWidth(for: totalWidth)
+                if finalWidth > 0 { restoreLabelWidth = Double(finalWidth) }
+                savedLabelWidth = Double(finalWidth)
+                mixerResizeState.update(nil)
+            }, header: content)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #else
+        if columns.totalWidth > 0 { content().frame(width: columns.totalWidth) }
+        #endif
+    }
     @ViewBuilder
     private func mixerDivider(columns: TrackMixerColumnGeometry, maximum: CGFloat) -> some View {
         #if os(macOS)
@@ -3612,7 +3729,7 @@ private final class NativeTimelineBaseMountView: NSView {
     deinit { if let headerClickMonitor { NSEvent.removeMonitor(headerClickMonitor) } }
 }
 
-@MainActor private final class NativeTimelineBaseController {
+@MainActor private final class NativeTimelineBaseController: ObservableObject {
     private let backdrop = TimelineNativeGridView()
     private let audioBody = NativeTimelineAudioBodyView()
     private let ruler = TimelineNativeRulerView()
@@ -3920,7 +4037,9 @@ private final class NativeTimelineBaseMountView: NSView {
         if wheel.frame != fullFrame { wheel.frame = fullFrame }
         if selectionPin.frame != fullFrame { selectionPin.frame = fullFrame }
         if needlePin.frame != fullFrame { needlePin.frame = fullFrame }
-        let selectionSize = value.viewportSize
+        // Native sidebar resizing changes the clip before SwiftUI publishes
+        // its saved width. Keep the input surface aligned with those live pixels.
+        let selectionSize = CGSize(width: nativeBounds.width, height: value.viewportSize.height)
         if selection.frame.size != selectionSize { selection.setFrameSize(selectionSize) }
         value.input.applyProjection(to: selection, pixelsPerSecond: pixelsPerSecond, itemGuide: value.itemGuide(pixelsPerSecond))
         let needleSize = CGSize(width: width, height: value.contentHeight)
@@ -4179,7 +4298,9 @@ private final class NativeTimelineNeedlesView: NSView {
         guard let transport, size.width > 0, size.height > 0 else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let playback = TimelinePlaybackPresentation(transport: transport, elapsed: max(0, now - sampledAt),
-            songDuration: duration, mainBoundary: boundary)
+            songDuration: duration, mainBoundary: boundary,
+            audibleMainPosition: transport.playing ? show?.audioPresentationPosition(0, now) : nil,
+            audibleSubPosition: transport.subPlay.playing ? show?.audioPresentationPosition(1, now) : nil)
         editX = x(transport.editPosition ?? transport.position); subX = x(playback.subPosition)
         let merged = subVisible && abs(editX - subX) < 0.5
         let blended = [0, 8, 16].reduce(0) { $0 | (((((colors[1] >> $1) & 255) + ((colors[2] >> $1) & 255)) / 2) << $1) }
@@ -4289,8 +4410,11 @@ private struct TimelinePlaybackLayer<Content: View>: View {
         // Only the small needle layer runs at display cadence. Track layout,
         // waveform data and the audio engine retain their existing update rates.
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !show.isPlaying)) { _ in
-            content(TimelinePlaybackPresentation(transport: transport, elapsed: max(0, ProcessInfo.processInfo.systemUptime - sampledAt),
-                songDuration: song?.duration ?? 0, mainBoundary: boundary))
+            let now = ProcessInfo.processInfo.systemUptime
+            content(TimelinePlaybackPresentation(transport: transport, elapsed: max(0, now - sampledAt),
+                songDuration: song?.duration ?? 0, mainBoundary: boundary,
+                audibleMainPosition: transport.playing ? show.audioPresentationPosition(0, now) : nil,
+                audibleSubPosition: transport.subPlay.playing ? show.audioPresentationPosition(1, now) : nil))
         }
         .transaction { $0.animation = nil; $0.disablesAnimations = true }
         #else
@@ -4359,15 +4483,17 @@ private struct TimelineColumnsContainer<Mixer: View, Separator: View, Timeline: 
     var dividerWidth: CGFloat = 4
     let project: UUID
     let mixerIdentity: TimelineMixerIdentity
+    var resizeState: SidebarResizeState? = nil
     @ViewBuilder let mixer: () -> Mixer
     @ViewBuilder let divider: () -> Separator
     @ViewBuilder let timeline: () -> Timeline
     var body: some View {
         #if os(macOS)
         NativeTimelineColumns(mixerWidth: mixerWidth, viewportWidth: viewportWidth, height: height,
-            dividerWidth: dividerWidth, project: project, mixerIdentity: mixerIdentity,
+            dividerWidth: dividerWidth, project: project, mixerIdentity: mixerIdentity.nativeSizingIdentity,
+            liveWidth: resizeState?.nativeWidth,
             mixer: mixer, divider: divider, timeline: timeline)
-            .frame(width: viewportWidth, height: height)
+            .frame(maxWidth: .infinity).frame(height: height)
         #else
         TimelineColumnsLayout(mixerWidth: mixerWidth, viewportWidth: viewportWidth, height: height, dividerWidth: dividerWidth) {
             mixer()
@@ -4457,7 +4583,7 @@ private struct TimelineMixerIdentity: Equatable {
     let revision: UInt64
     let mixerRevision: UInt64
     let song: UUID?
-    let width: CGFloat
+    var width: CGFloat
     let viewportHeight: CGFloat
     let heights: [CGFloat]
     let selection: Set<UUID>
@@ -4465,6 +4591,13 @@ private struct TimelineMixerIdentity: Equatable {
     var rulerHeight: CGFloat = 0
     var widthViewport: CGRect? = nil
     var hiddenTracks: Set<UUID> = []
+    var nativeSizingIdentity: Self {
+        var value = self
+        // Native sibling frames and row proposals own pixel widths. The
+        // retained mixer root changes only at a control-visibility boundary.
+        value.width = width >= 180 ? 180 : 0
+        return value
+    }
 }
 
 private struct TimelineMixerLayer<Content: View>: View, Equatable {
@@ -4484,12 +4617,14 @@ private struct TimelineMixerLayer<Content: View>: View, Equatable {
 /// move through the document. Stable slot IDs avoid rebuilding every slider,
 /// button and meter when a scrollbar jump enters a distant group of tracks.
 #if os(macOS)
-private struct TimelineMixerRowVersion: Equatable {
+private struct TimelineMixerRowVersion<Metadata: Equatable>: Equatable {
     let project: UUID
     let song: UUID
     let track: UUID
-    let revision: UInt64
-    let mixerRevision: UInt64
+    // Editing one track must not replace every retained row root. This is a
+    // presentation-only Track without clips/waveforms, including its envelope
+    // settings. Geometry, selection and routing-derived audibility stay below.
+    let metadata: Metadata
     let index: Int
     // The native host proposes the live width. Replacing a row's content for
     // every pixel also recreates all of its control snapshots on Ventura.
@@ -4505,6 +4640,23 @@ private struct TimelineMixerRowVersion: Equatable {
     let groupDepth: Int
     let lastChild: Bool
     let directory: URL?
+    private func hasSameHeightLayout(as other: Self) -> Bool {
+        // Rows with envelopes still need their explicit audio/envelope split.
+        // Plain rows fill their native frame and only change content when the
+        // compact/minimal control arrangement crosses a real boundary.
+        if envelopeHeight == 0 && other.envelopeHeight == 0 {
+            return (audioHeight < 56) == (other.audioHeight < 56) &&
+                   (audioHeight < 64) == (other.audioHeight < 64)
+        }
+        return height == other.height && audioHeight == other.audioHeight && envelopeHeight == other.envelopeHeight
+    }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.project == rhs.project && lhs.song == rhs.song && lhs.track == rhs.track &&
+        lhs.metadata == rhs.metadata && lhs.index == rhs.index && lhs.showsFader == rhs.showsFader &&
+        lhs.hasSameHeightLayout(as: rhs) && lhs.selection == rhs.selection && lhs.silenced == rhs.silenced &&
+        lhs.showsIcons == rhs.showsIcons && lhs.nextTrack == rhs.nextTrack && lhs.groupDepth == rhs.groupDepth &&
+        lhs.lastChild == rhs.lastChild && lhs.directory == rhs.directory
+    }
 }
 #endif
 private struct TimelineMixerSlot: Identifiable {
@@ -5434,8 +5586,7 @@ private final class TimelineRenderMetadata {
         // not cloned playback fragments or source offsets for offscreen items.
         return program.compactMap { section in
             guard section.end > clip.startTime, section.start < end else { return nil }
-            return section.timebase == .relative
-                ? clip.audioRate * section.bpm / (section.referenceBPM ?? song.bpm) : clip.audioRate
+            return clip.audioRate * section.audioRate(baseBPM: song.bpm) / song.itemTempoReference(clip, at: section.start, program: program)
         }
     }
 }
@@ -5965,6 +6116,7 @@ struct MixerResizeHandle: NSViewRepresentable {
     }
 }
 final class MixerDividerView: NSView {
+    private let layoutProfile = TimelineLayoutDiagnostics.make("divider-input")
     var maximumResizeFrequency: Double = 0
     private var resizeTimer: Timer?
     private var pendingResizeWidth: CGFloat?
@@ -5976,6 +6128,7 @@ final class MixerDividerView: NSView {
         resizeTimer?.invalidate(); resizeTimer = nil
         guard let width = pendingResizeWidth else { return }
         pendingResizeWidth = nil; lastResizeTime = ProcessInfo.processInfo.systemUptime
+        layoutProfile?.event("resize-commit", view: self, value: Double(width))
         onResize?(width)
     }
     private func scheduleResize(_ width: CGFloat) {
@@ -5996,6 +6149,9 @@ final class MixerDividerView: NSView {
     var onStart: (() -> Void)?
     var onToggle: (() -> Void)?
     var onEnd: ((CGFloat) -> Void)?
+    var onCancel: (() -> Void)?
+    var retainsTimelineCoverage = false
+    private var trackingCancellationObservers: [NSObjectProtocol] = []
     var scrollController: SidebarScrollController? {
         didSet {
             guard oldValue !== scrollController else { return }
@@ -6066,13 +6222,18 @@ final class MixerDividerView: NSView {
     override func mouseMoved(with event: NSEvent) { if !mouseIsDown { updatePointerCursor(event: event) } }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        trackingCancellationObservers.forEach(NotificationCenter.default.removeObserver)
+        trackingCancellationObservers.removeAll()
         if window != nil { NativeTimelineOverlayInputRegistration.add(self) }
         if let pointerCursorMonitor { NSEvent.removeMonitor(pointerCursorMonitor); self.pointerCursorMonitor = nil }
         if window == nil {
-            mouseIsDown = false
-            cancelPendingResize()
-            releasePointerCursor()
+            cancelTracking()
         } else {
+            for name in [NSWindow.didResignKeyNotification, NSWindow.didMiniaturizeNotification] {
+                trackingCancellationObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    self?.cancelTracking()
+                })
+            }
             // Tracking exits can be lost when a drag changes hosting/clip bounds.
             // Recheck the actual pointer instead of retaining the resize cursor.
             pointerCursorMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
@@ -6081,6 +6242,13 @@ final class MixerDividerView: NSView {
                 return event
             }
         }
+    }
+    func cancelTracking() {
+        let resizing = mouseIsDown && dragAxis == .resize
+        mouseIsDown = false; dragAxis = .pending; cancelPendingResize()
+        NativeSidebarResizeActivity.shared.end(owner: self)
+        if resizing { onCancel?() }
+        releasePointerCursor()
     }
     private func refreshIndicator() { needsDisplay = true }
     private func commitResizeLayout() {
@@ -6165,7 +6333,11 @@ final class MixerDividerView: NSView {
         if dragAxis == .pending {
             guard max(abs(dx), abs(dy)) >= 3 else { return }
             if showsScrollRail, abs(dy) > abs(dx), scrollPerPoint > 0 { dragAxis = .scroll }
-            else if abs(dx) >= abs(dy) { dragAxis = .resize; onStart?() }
+            else if abs(dx) >= abs(dy) {
+                dragAxis = .resize
+                NativeSidebarResizeActivity.shared.begin(owner: self, retainsTimelineCoverage: retainsTimelineCoverage)
+                onStart?()
+            }
             else { return }
         }
         if dragAxis == .scroll {
@@ -6191,6 +6363,7 @@ final class MixerDividerView: NSView {
         Self.resizeCursor.set()
         let width = min(maximum, max(minimum, startingWidth + direction * dx))
         latestWidth = width
+        layoutProfile?.event("resize-input", view: self, input: event, value: Double(width))
         // Native split frames update immediately; SwiftUI consumes its latest
         // width in the normal display pass. Walking the hosted subtree here
         // repeats that expensive layout for every queued pointer event and
@@ -6201,12 +6374,14 @@ final class MixerDividerView: NSView {
     }
     override func mouseUp(with event: NSEvent) {
         guard mouseIsDown else { return }
+        layoutProfile?.event("resize-release", view: self, input: event)
         updateDrag(with: event)
         let finishedAxis = dragAxis
         mouseIsDown = false
         dragAxis = .pending
         if finishedAxis == .resize {
             commitPendingResize()
+            NativeSidebarResizeActivity.shared.end(owner: self)
             onEnd?(latestWidth)
             // Persist and clear transient state before the single final layout.
             commitResizeLayout()
@@ -6218,6 +6393,7 @@ final class MixerDividerView: NSView {
     }
     deinit {
         resizeTimer?.invalidate()
+        trackingCancellationObservers.forEach(NotificationCenter.default.removeObserver)
         if let pointerCursorMonitor { NSEvent.removeMonitor(pointerCursorMonitor) }
         if let controller = scrollController, let id = scrollObserver {
             Task { @MainActor in controller.removeObserver(id) }
@@ -6335,7 +6511,7 @@ final class RegionShortcutView: NSView {
                 switch event.charactersIgnoringModifiers?.lowercased() {
                 case "c": if event.isARepeat || self.copyItems?() == true { return nil }
                 case "x": if event.isARepeat || self.moveItems?() == true { return nil }
-                case "v": if !event.isARepeat { self.pasteItems?() }; return nil
+                case "v": self.pasteItems?(); return nil
                 case "d": if !event.isARepeat { self.duplicateItems?() }; return nil
                 default: break
                 }
@@ -6353,10 +6529,8 @@ final class RegionShortcutView: NSView {
             if event.keyCode == 46, flags == .option {
                 if !event.isARepeat { self.createSectionMarker?() }; return nil
             }
-            guard ["r", "m"].contains(event.charactersIgnoringModifiers?.lowercased() ?? ""), flags == .shift else { return event }
-            if !event.isARepeat {
-                if event.charactersIgnoringModifiers?.lowercased() == "m" { self.createMarker?() } else { self.create?() }
-            }
+            guard event.charactersIgnoringModifiers?.lowercased() == "m", flags == .shift else { return event }
+            if !event.isARepeat { self.createMarker?() }
             return nil
         }
     }
@@ -7218,6 +7392,7 @@ struct TimelineRenderKey: Equatable, Hashable {
     var itemStart = 0.0, itemEnd = 0.0
     var projectID: UUID? = nil
     var hiddenTracks: Set<UUID> = []
+    var sharedResizeRight: UUID? = nil
 }
 /// Controls do not need sample arrays, so SwiftUI never diffs them for each fader.
 private func mixerMetadata(_ source: Track) -> Track {
@@ -7225,6 +7400,24 @@ private func mixerMetadata(_ source: Track) -> Track {
     track.clips = []
     track.heightScale = nil
     return track
+}
+
+/// Tempo and item edits change timeline geometry, not the mixer controls.
+/// Retain their hosting root until an input used by those controls changes.
+private final class TimelineMixerContentRevision {
+    private var tracks: [Track] = []
+    private var project: UUID?
+    private var song: UUID?
+    private var directory: URL?
+    private var revision: UInt64 = 0
+    func update(tracks: [Track], project: UUID, song: UUID, directory: URL?) -> UInt64 {
+        let metadata = tracks.map(mixerMetadata)
+        if self.project != project || self.song != song || self.directory != directory || self.tracks != metadata {
+            self.project = project; self.song = song; self.directory = directory; self.tracks = metadata
+            revision &+= 1
+        }
+        return revision
+    }
 }
 
 #if os(macOS)

@@ -1200,3 +1200,32 @@ MainActor.assumeIsolated {
     rangeWindow.close()
     print("GRID_ITEM_SHIFT_INTERVAL_REVERSE_STABLE_ANCHOR_AND_COMMAND_TOGGLE_OK")
 }
+
+// The shared edge owns a distinct cursor and one atomic drag callback.
+do {
+    let view = GridSelectionView(frame: NSRect(x: 0,y: 0,width: 400,height: 160))
+    let host = NSWindow(contentRect: view.frame,styleMask: [.borderless],backing: .buffered,defer: false)
+    host.contentView = view
+    let left = UUID(), right = UUID()
+    view.items = [GridSelectionItem(id: left,rect: CGRect(x: 20,y: 20,width: 160,height: 100),duration: 10,trackIndex: 0),
+                  GridSelectionItem(id: right,rect: CGRect(x: 180,y: 20,width: 160,height: 100),duration: 10,trackIndex: 0)]
+    precondition(view.sharedBoundary(at: CGPoint(x: 180,y: 75))?.left == left)
+    precondition(view.pointerCursor(at: CGPoint(x: 180,y: 75)) !== NSCursor.resizeLeftRight)
+    precondition(view.sharedBoundary(at: CGPoint(x: 180,y: 25)) == nil,"Keep header controls separate")
+    var previews = 0, commits = 0, ordinary = 0
+    view.resizeShared = { a,b,delta,ended in
+        precondition(a == left && b == right && delta == 25)
+        if ended { commits += 1 } else { previews += 1 }
+    }
+    view.resize = { _,_,_,_ in ordinary += 1 }
+    for (type,x) in [(NSEvent.EventType.leftMouseDown,180.0),(.leftMouseDragged,205.0),(.leftMouseUp,205.0)] {
+        let event=NSEvent.mouseEvent(with:type,location:view.convert(CGPoint(x:x,y:75),to:nil),modifierFlags:[],timestamp:0,windowNumber:host.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1)!
+        if type == .leftMouseDown { view.mouseDown(with:event) } else if type == .leftMouseDragged { view.mouseDragged(with:event) } else { view.mouseUp(with:event) }
+    }
+    precondition(previews == 1 && commits == 1 && ordinary == 0)
+    var locked = view.items; locked[1].resizable = false; view.items = locked
+    precondition(view.sharedBoundary(at:CGPoint(x:180,y:75)) == nil)
+    locked[1].resizable = true; locked[1].laneIndex = 1; view.items = locked
+    precondition(view.sharedBoundary(at:CGPoint(x:180,y:75)) == nil)
+    print("SHARED_ITEM_BOUNDARY_DISTINCT_CURSOR_SINGLE_COMMIT_LOCK_AND_LANE_OK")
+}

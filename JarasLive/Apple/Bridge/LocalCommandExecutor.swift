@@ -40,6 +40,7 @@ import Foundation
     // These immutable arrays share Swift's existing storage. Scalar edits never
     // box, serialize, decode or read the media waveform again.
     private var waveforms: [UUID: ClipWaveform] = [:]
+    private let projectValidation = ProjectValidationCache()
     private struct TrackMetadataSnapshot: Decodable {
         var snapshot: ShowSnapshot
         let trackOrders: [String: [UUID]]
@@ -152,7 +153,7 @@ import Foundation
         }
         // Retained storage was validated when it entered the cache. Validate
         // changed/new arrays and every edited metadata field before committing.
-        try metadata.validate()
+        try projectValidation.validate(metadata)
         if let previousTracks {
             let previousSongs = Dictionary(uniqueKeysWithValues: previousTracks.songs.map { ($0.id, $0) })
             var orders: [String: [String]] = [:]
@@ -174,7 +175,36 @@ import Foundation
         }
         cacheWaveforms(project)
     }
-    func load(_ project: Project) throws { try project.validate(); try core.load(projectData: JSONEncoder().encode(project)); cacheWaveforms(project) }
+    func load(_ project: Project) throws {
+        try projectValidation.validate(project)
+        var metadata = project
+        var buffers: [String: [Data]] = [:]
+        var shared: [ClipWaveform.Storage: [Data]] = [:]
+        for song in metadata.songs.indices {
+            for track in metadata.songs[song].tracks.indices {
+                for item in metadata.songs[song].tracks[track].clips.indices {
+                    let clip = metadata.songs[song].tracks[track].clips[item]
+                    let waveform = ClipWaveform(clip), storage = waveform.storage
+                    let data: [Data]
+                    if let cached = shared[storage] { data = cached }
+                    else {
+                        data = ([waveform.values] + (waveform.channels ?? [])).map { values in
+                            values.withUnsafeBytes { Data($0) }
+                        }
+                        shared[storage] = data
+                    }
+                    buffers[clip.id.uuidString] = data
+                    metadata.songs[song].tracks[track].clips[item].waveform = []
+                    metadata.songs[song].tracks[track].clips[item].waveformChannels = nil
+                }
+            }
+        }
+        // Large projects can have millions of sample peaks. Transfer their
+        // native Double bytes once; JSON carries only editable metadata. The
+        // core still owns the exact peaks for split, copy and synchronization.
+        try core.load(projectData: JSONEncoder().encode(metadata), waveforms: buffers)
+        cacheWaveforms(project)
+    }
     func execute(_ command: ShowCommand, target: UUID?, value: Double) throws { try core.execute(command: command.rawValue, target: target?.uuidString, value: value) }
     func snapshot() throws -> ShowSnapshot {
         do {

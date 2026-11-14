@@ -2,6 +2,75 @@
 import AppKit
 import SwiftUI
 
+@MainActor protocol NativeSidebarResizeViewportObserver: AnyObject {
+    func sidebarResizeActivityChanged()
+}
+
+/// A divider moves fixed-size button groups through native parent frames.
+/// Their SwiftUI roots need no second layout for that translation. Content or
+/// local-size changes still lay out immediately; release flushes deferred work.
+@MainActor final class NativeSidebarResizeActivity {
+    static let shared = NativeSidebarResizeActivity()
+    private weak var owner: NSView?
+    private var retainsTimelineCoverage = false
+    private let pending = NSHashTable<NSView>.weakObjects()
+    private var observers: [NSObjectProtocol] = []
+    private let viewportObservers = NSHashTable<NSView>.weakObjects()
+    private(set) var contentRevision: UInt64 = 0
+    private static let diagnose = ProcessInfo.processInfo.environment["CATLIVE_PROFILE_LAYOUT"] == "1"
+    private var layoutReasons: [String: Int] = [:]
+    private var reasonFlush: DispatchWorkItem?
+    func recordLayout(_ role: String, view: NSView, sameBounds: Bool, sameContent: Bool) {
+        guard Self.diagnose else { return }
+        let active = owner?.window != nil && owner?.window === view.window
+        let key = "\(role):active=\(active):bounds=\(sameBounds):content=\(sameContent)"
+        layoutReasons[key, default: 0] += 1
+        guard reasonFlush == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.reasonFlush = nil
+            let reasons = self.layoutReasons; self.layoutReasons.removeAll(keepingCapacity: true)
+            if let data = try? JSONSerialization.data(withJSONObject: reasons, options: [.sortedKeys]),
+               let line = String(data: data, encoding: .utf8) { NSLog("CATLIVE_RESIZE_LAYOUT %@", line) }
+        }
+        reasonFlush = work; DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+    func contentDidChange() { contentRevision &+= 1 }
+    func canRetainTimelineCoverage(in window: NSWindow?) -> Bool {
+        retainsTimelineCoverage && window != nil && owner?.window === window
+    }
+    func observeViewport(_ view: NSView & NativeSidebarResizeViewportObserver) { viewportObservers.add(view) }
+    private func updateViewports() {
+        for view in viewportObservers.allObjects { (view as? NativeSidebarResizeViewportObserver)?.sidebarResizeActivityChanged() }
+    }
+    func begin(owner: NSView, retainsTimelineCoverage: Bool = false) {
+        finish()
+        self.owner = owner
+        self.retainsTimelineCoverage = retainsTimelineCoverage
+        updateViewports()
+        guard let window = owner.window else { return }
+        for name in [NSWindow.didResignKeyNotification, NSWindow.didMiniaturizeNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.finish() }
+            })
+        }
+    }
+    func end(owner: NSView) { if self.owner === owner { finish() } }
+    func deferUnchangedLayout(_ view: NSView) -> Bool {
+        guard let window = owner?.window, view.window === window else { return false }
+        pending.add(view)
+        return true
+    }
+    private func finish() {
+        owner = nil
+        retainsTimelineCoverage = false
+        observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()
+        for view in pending.allObjects { view.needsLayout = true }
+        pending.removeAllObjects()
+        updateViewports()
+    }
+}
+
 protocol TimelineGridKeyboardTarget: AnyObject {}
 
 /// Native pointer monitors consume clicks before NSApplication/NSWindow can
@@ -85,14 +154,20 @@ protocol NativeTimelineFollowPresentation: AnyObject {
 struct NativeMixerScrollVelocity {
     private var lastTimestamp: TimeInterval?
     mutating func reset() { lastTimestamp = nil }
-    static func maximum(viewport: CGFloat) -> CGFloat { min(1800, max(480, viewport * 2)) }
+    // A smaller window must not require more gestures to reach the same track.
+    // Native deltas are already expressed in points on both Retina and 1x Macs.
+    static func maximum(viewport: CGFloat) -> CGFloat { 1800 }
     mutating func limit(_ delta: CGFloat, timestamp: TimeInterval, viewport: CGFloat, precise: Bool) -> CGFloat {
         guard delta.isFinite else { return 0 }
         guard timestamp.isFinite, timestamp > 0 else { reset(); return delta }
         let initial: TimeInterval = precise ? 1.0 / 60 : 1.0 / 30
         let elapsed: TimeInterval
         if let previous = lastTimestamp, timestamp >= previous, timestamp - previous <= 0.12 {
-            elapsed = min(1.0 / 30, timestamp - previous)
+            // AppKit can deliver/coalesce input below 30 Hz while laying out a
+            // busy window. Truncating that interval discards more travel on the
+            // slower Mac. Use the event's full elapsed time, never processing
+            // time, and retain the gesture-gap reset below.
+            elapsed = timestamp - previous
         } else { elapsed = initial }
         lastTimestamp = timestamp
         let distance = Self.maximum(viewport: viewport) * elapsed
@@ -129,10 +204,27 @@ protocol NativeTimelineBodyInputHost: AnyObject {
 /// grid's selection monitor and fast native hit test claim the same point.
 enum NativeTimelineOverlayInputRegistration {
     private static let views = NSHashTable<NSView>.weakObjects()
+    private static let pinnedControls = NSHashTable<NSView>.weakObjects()
     static func add(_ view: NSView) { views.add(view) }
+    static func addPinnedControls(_ view: NSView) { pinnedControls.add(view) }
+    static func pinnedRoot(in host: NSView, point: NSPoint) -> NSView? {
+        guard let window = host.window, window.attachedSheet == nil,
+              !NativeTimelineInputGate.shared.isBlocked(window) else { return nil }
+        return pinnedControls.allObjects.first { view in
+            guard view.window === window, !view.isHiddenOrHasHiddenAncestor, view.isDescendant(of: host) else { return false }
+            let local = view.convert(point, from: nil)
+            return view.bounds.contains(local) && view.visibleRect.contains(local)
+        }
+    }
     static func hit(in host: NSView, point: NSPoint) -> NSView? {
         guard let window = host.window, window.attachedSheet == nil,
               !NativeTimelineInputGate.shared.isBlocked(window) else { return nil }
+        // A vertically scrolled row remains geometrically underneath the
+        // fixed mixer header. Its registered buttons/titles must not bypass
+        // that visible header through the native fast path.
+        if let pinned = pinnedRoot(in: host, point: point) {
+            return pinned.hitTest(pinned.superview?.convert(point, from: nil) ?? point) ?? pinned
+        }
         return views.allObjects.first { view in
             guard view.window === window, !view.isHiddenOrHasHiddenAncestor, view.isDescendant(of: host) else { return false }
             let local = view.convert(point, from: nil)
@@ -188,7 +280,8 @@ protocol NativeTimelineControlInput: AnyObject {
 
     static func hit(at point: NSPoint, in host: NSView,
                     mouseButtons: Int = NSEvent.pressedMouseButtons,
-                    modifiers: NSEvent.ModifierFlags = NSEvent.modifierFlags) -> NSView? {
+                    modifiers: NSEvent.ModifierFlags = NSEvent.modifierFlags,
+                    eventType: NSEvent.EventType? = nil) -> NSView? {
         guard let window = host.window, !host.isHiddenOrHasHiddenAncestor,
               host.bounds.contains(point), host.visibleRect.contains(point),
               window.attachedSheet == nil, !NativeTimelineInputGate.shared.isBlocked(window),
@@ -206,6 +299,11 @@ protocol NativeTimelineControlInput: AnyObject {
             guard target == nil else { return nil }
             target = input
         }
+        // Wheel input belongs to the enclosing scroll view (or the shared
+        // row-height monitor), even over empty pixels. Ventura asks for its destination
+        // again during each layout; walking nested SwiftUI hosts here spends
+        // gesture on hover routing. Clicks keep their normal target.
+        if (eventType ?? NSApp.currentEvent?.type) == .scrollWheel { return target }
         return target?.hitTestTimelineControl(atWindowPoint: location)
     }
 }

@@ -640,6 +640,7 @@ struct GridSelectionInput: NSViewRepresentable {
     var interactionBlocked = false
     var itemMixLocked = false
     var resize: (UUID, Bool, CGFloat, Bool) -> Void = { _,_,_,_ in }
+    var resizeShared: (UUID, UUID, CGFloat, Bool) -> Void = { _,_,_,_ in }
     var fadeShape: (UUID, Bool, Bool, Double, Bool) -> Void = { _, _, _, _, _ in }
     var fade: (UUID, Bool, Double, Bool) -> Void = { _, _, _, _ in }
     var gain: (UUID, Double, Bool) -> Void = { _,_,_ in }
@@ -699,7 +700,7 @@ struct GridSelectionInput: NSViewRepresentable {
         view.marqueeBegan = marqueeBegan
         view.itemMoveBegan = itemMoveBegan
         view.renameItem = renameItem; view.exportMIDI = exportMIDI
-        view.mute = mute; view.move = move; view.seek = seek; view.selectRow = selectRow; view.selectionChanged = selectionChanged; view.createRegion = createRegion; view.reRender = reRender; view.normalize = normalize; view.resetRate = resetRate; view.resetDuration = resetDuration; view.convert = convert; view.freezeMIDI = freezeMIDI; view.glue = glue; view.tuner = tuner; view.export = export; view.resize = resize; view.fade = fade; view.fadeShape = fadeShape; view.gain = gain; view.phase = phase; view.pan = pan; view.fx = fx; view.editText = editText; view.editMIDI = editMIDI; view.createMIDI = createMIDI
+        view.mute = mute; view.move = move; view.seek = seek; view.selectRow = selectRow; view.selectionChanged = selectionChanged; view.createRegion = createRegion; view.reRender = reRender; view.normalize = normalize; view.resetRate = resetRate; view.resetDuration = resetDuration; view.convert = convert; view.freezeMIDI = freezeMIDI; view.glue = glue; view.tuner = tuner; view.export = export; view.resize = resize; view.resizeShared = resizeShared; view.fade = fade; view.fadeShape = fadeShape; view.gain = gain; view.phase = phase; view.pan = pan; view.fx = fx; view.editText = editText; view.editMIDI = editMIDI; view.createMIDI = createMIDI
         view.observeHeaderScroll()
     }
 }
@@ -844,6 +845,8 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
     var itemMoveBegan: (() -> Void)?
     var createRegion: ((UUID) -> Void)?
     var resize: ((UUID, Bool, CGFloat, Bool) -> Void)?
+    var resizeShared: ((UUID, UUID, CGFloat, Bool) -> Void)?
+    private var sharedResize: (left: UUID, right: UUID)?
     var fadeShape: ((UUID, Bool, Bool, Double, Bool) -> Void)?
     var fade: ((UUID, Bool, Double, Bool) -> Void)?
     private var fadeItem: (item: GridSelectionItem, left: Bool, sCurve: Bool?)?
@@ -1077,6 +1080,20 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
             min(abs(point.x - $1.rect.minX), abs(point.x - $1.rect.maxX))
         }.map(positionedHeader)
     }
+    func sharedBoundary(at point: CGPoint) -> (left: UUID, right: UUID)? {
+        let nearby = candidates(in: CGRect(x: point.x - 7, y: point.y, width: 14, height: 0))
+        for left in nearby where left.resizable && abs(left.rect.maxX - point.x) <= 6 {
+            for right in nearby where right.id != left.id && right.resizable && right.trackIndex == left.trackIndex && right.laneIndex == left.laneIndex {
+                guard abs(left.rect.maxX - right.rect.minX) < 1e-5,
+                      abs(left.rect.minY - right.rect.minY) < 0.01,
+                      point.y > max(left.rect.minY, right.rect.minY) + min(Self.sharedBoundaryHeaderInset, min(left.rect.height, right.rect.height) / 2),
+                      point.y < min(left.rect.maxY, right.rect.maxY) else { continue }
+                return (left.id, right.id)
+            }
+        }
+        return nil
+    }
+    private static let sharedBoundaryHeaderInset: CGFloat = GridSelectionItem.bodyInset + 2
     @discardableResult func handlePointerEvent(_ event: NSEvent) -> Bool {
         if activeButton == nil, extraBodyHit?(event.locationInWindow) != nil { return false }
         guard !interactionBlocked, !NativeTimelineInputGate.shared.isBlocked(window), event.window === window, window != nil, window?.attachedSheet == nil,
@@ -1147,6 +1164,7 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
         pendingSeek = nil
         dragStart = event.locationInWindow
         let timeline = timelinePoint(event)
+        sharedResize = nil
         draggedItem = nil; hasDragged = false; movingAllowed = false; resizingLeft = nil; gainItem = nil; panItem = nil; liveHeaderPan = nil; fadeItem = nil; liveFade = nil
         pressedHeader = nil; headerPressCancelled = false
         guard let item = hitItem(at: timeline) else {
@@ -1159,6 +1177,11 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
             selected = event.modifierFlags.contains(.command) ? selected.union(range) : range
             selectionAnchor = anchor
             selectionChanged?(selected)
+            return
+        }
+        if let pair = sharedBoundary(at: timeline) {
+            sharedResize = pair; draggedItem = pair.left; dragOrigin = timeline
+            resizingLeft = false; heldItemGuide = item.rect
             return
         }
         if let shape = item.fadeShape(at: timeline) {
@@ -1236,6 +1259,7 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
             }
             needsDisplay = true
         }
+        else if let pair = sharedResize { resizeShared?(pair.left, pair.right, translation.width, false) }
         else if let resizingLeft { resize?(id, resizingLeft, translation.width, false) }
         else if let panItem {
             let value = panItem.draggingPan(by: translation.height)
@@ -1315,6 +1339,7 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
                 if let sCurve = fadeItem.sCurve { fadeShape?(id, fadeItem.left, sCurve, fadeItem.item.draggingFadeShape(left: fadeItem.left, sCurve: sCurve, delta: translation.width), true) }
                 else { fade?(id, fadeItem.left, fadeItem.item.draggingFade(left: fadeItem.left, delta: translation.width), true) }
             }
+            else if let pair = sharedResize { resizeShared?(pair.left, pair.right, translation.width, true) }
             else if let resizingLeft { resize?(id, resizingLeft, translation.width, true) }
             else if let panItem { pan?(id, panItem.draggingPan(by: translation.height), true) }
             else if let gainItem { gain?(id, gainItem.draggingGain(by: translation.height), true) }
@@ -1324,6 +1349,7 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
             }
         }
         draggedItem = nil; hasDragged = false; movingAllowed = false; gainItem = nil; panItem = nil; liveHeaderPan = nil; liveHeaderGain = nil; valueTooltipPoint = nil; fadeItem = nil; liveFade = nil; needsDisplay = true
+        sharedResize = nil
         refreshValueTooltip(event)
     }
     override func updateTrackingAreas() {
@@ -1376,6 +1402,7 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
         return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
     }
     func pointerCursor(at point: CGPoint) -> NSCursor {
+        if sharedBoundary(at: point) != nil { return Self.sharedBoundaryCursor }
         guard let item = hitItem(at: point) else { return .arrow }
         if let left = item.fadeSide(at: point) { return left ? Self.fadeInCursor : Self.fadeOutCursor }
         if item.fadeShape(at: point) != nil { return .crosshair }
@@ -1384,6 +1411,20 @@ final class GridSelectionView: NSView, NativeTimelineInputObserver, NativeTimeli
         if item.fxRect?.contains(point) == true || item.muteRect?.contains(point) == true || item.editRect?.contains(point) == true { return .pointingHand }
         return item.resizeSide(at: point) != nil ? .resizeLeftRight : .arrow
     }
+    private static let sharedBoundaryCursor: NSCursor = {
+        let image = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: 12, y: 3)); path.line(to: NSPoint(x: 12, y: 21))
+            path.move(to: NSPoint(x: 2, y: 12)); path.line(to: NSPoint(x: 22, y: 12))
+            for (tip, base) in [(2.0, 6.0), (22.0, 18.0)] {
+                path.move(to: NSPoint(x: base, y: 8)); path.line(to: NSPoint(x: tip, y: 12)); path.line(to: NSPoint(x: base, y: 16))
+            }
+            NSColor.black.setStroke(); path.lineWidth = 4; path.stroke()
+            NSColor.white.setStroke(); path.lineWidth = 2; path.stroke()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: 12, y: 12))
+    }()
     private func refreshPointerCursor(_ event: NSEvent? = nil) {
         guard let window, window.attachedSheet == nil,
               !interactionBlocked, !NativeTimelineInputGate.shared.isBlocked(window),

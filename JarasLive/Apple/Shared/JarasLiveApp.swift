@@ -263,10 +263,39 @@ struct RootView: View {
             if ["ziplive", "zip"].contains(url.pathExtension.lowercased()) { documents.importPortablePackage(url) }
             #endif
         }
+        .overlay {
+            if let progress = documents.temporarySaveProgress {
+                ZStack {
+                    Color.black.opacity(0.45).ignoresSafeArea()
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Saving project…").font(.jarasHeadline)
+                        ProgressView(value: progress.fraction)
+                            .progressViewStyle(JarasProgressBarStyle()).tint(JarasTheme.green)
+                        HStack {
+                            if progress.stage == .copying {
+                                Text("Copying files: \(progress.completedFiles)/\(progress.totalFiles)")
+                            } else if progress.stage == .writing {
+                                Text("Writing project…")
+                            } else {
+                                Text(LocalizedStringKey(documents.status))
+                            }
+                            Spacer()
+                            Text(verbatim: "\(Int(progress.fraction * 100))%")
+                                .monospacedDigit()
+                        }.font(.jarasCaption)
+                        if !progress.fileName.isEmpty {
+                            Text(verbatim: progress.fileName).font(.jarasCaption)
+                                .foregroundStyle(JarasTheme.secondary).lineLimit(1).truncationMode(.middle)
+                        }
+                    }.padding(24).frame(width: 400).background(JarasTheme.panel)
+                        .foregroundStyle(JarasTheme.text).clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
+        }
         #if os(iOS)
         .disabled(documents.showsBlockingProgress)
         .overlay {
-            if documents.showsBlockingProgress {
+            if documents.showsBlockingProgress && documents.temporarySaveProgress == nil && documents.backupOpeningProgress == nil {
                 ZStack {
                     Color.black.opacity(0.45).ignoresSafeArea()
                     VStack(spacing: 16) {
@@ -281,6 +310,24 @@ struct RootView: View {
         .modifier(NativeProjectPresentation(documents: documents))
         .onChange(of: documents.folderReview != nil || documents.scan != nil) { reviewing in if reviewing { browsingNative = true } }
         #endif
+        .overlay {
+            if let amount = documents.backupOpeningProgress {
+                ZStack {
+                    Color.black.opacity(0.45).ignoresSafeArea()
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Opening backup…").font(.jarasHeadline)
+                        ProgressView(value: amount).progressViewStyle(JarasProgressBarStyle()).tint(JarasTheme.green)
+                        Text(LocalizedStringKey(documents.status)).font(.jarasCallout)
+                        if !documents.backupOpeningFile.isEmpty {
+                            Text(verbatim: documents.backupOpeningFile).font(.jarasCaption)
+                                .foregroundStyle(JarasTheme.secondary).lineLimit(1).truncationMode(.middle)
+                        }
+                        if documents.canCancelOpening { Button("Cancel") { documents.cancelOpening() } }
+                    }.padding(24).frame(width: 400).background(JarasTheme.panel)
+                        .foregroundStyle(JarasTheme.text).clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
+        }
         .sheet(item: $documents.missingAudioPrompt) { _ in
             MissingAudioRecoveryView(documents: documents)
                 #if os(iOS)
@@ -326,6 +373,7 @@ struct RootView: View {
     private func content() -> AnyView {
         AnyView(MainView(show: container.show, auth: container.auth, backend: container.backend, documents: container.documents)
             .environment(\.locale,locale).environment(\.colorScheme,.dark)
+            .environment(\.controlActiveState, .active)
             .environment(\.displayScale,displayScale).font(.jarasBody))
     }
     final class Deck: NSView {

@@ -82,6 +82,25 @@ MainActor.assumeIsolated {
                  "A duplicate timestamp must be consumed rather than falling back to unlimited native movement")
     limited.attach(nil)
     print("TRACK_MIXER_VELOCITY_CAP_IMMEDIATE_REVERSE_AND_NO_DELAYED_TRAVEL_OK")
+    controller.attach(scroll)
+    let header: CGFloat = 80, row: CGFloat = 64
+    scroll.documentView?.setFrameSize(CGSize(width: 300, height: header + row * 902))
+    controller.scroll(to: 0)
+    for count in 896...900 {
+        let top = CGFloat(count - 1) * row
+        controller.revealRow(offset: top, height: row, pinnedHeaderHeight: header)
+        precondition(top >= controller.metrics.offset &&
+                     top + header + row <= controller.metrics.offset + controller.metrics.viewportHeight,
+                     "The newest copy must be fully visible below the fixed toolbar")
+    }
+    controller.revealRow(offset: row * 5, height: row, pinnedHeaderHeight: header)
+    precondition(controller.metrics.offset == row * 5, "An earlier copy must scroll back to its header")
+    controller.revealRow(offset: row * 12, height: 600, pinnedHeaderHeight: header)
+    precondition(controller.metrics.offset == row * 12, "A tall row must reveal its name and controls")
+    controller.revealRow(offset: 0, height: row, pinnedHeaderHeight: header)
+    precondition(controller.metrics.offset == 0, "The first row must remain reachable")
+    controller.attach(nil)
+    print("TRACK_MIXER_COPY_FOLLOW_900_ROWS_AND_FIXED_HEADER_OK")
     window.close()
     print("SIDEBAR_WHEEL_ROUTING_REUSES_GESTURE_PRESERVES_DELTAS_POINTER_GAPS_OVERLAYS_OK")
 }

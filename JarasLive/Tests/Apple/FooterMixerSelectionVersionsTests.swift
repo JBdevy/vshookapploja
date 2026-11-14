@@ -40,3 +40,18 @@ for (index, track) in tracks.enumerated() {
 let reordered = versions.update(state([tracks[5].id, tracks[9].id], items: Array(inserted.reversed())), active: true, locale: "en")
 precondition(reordered == afterInsertion.reversed(), "Reordering preserves versions by track identity")
 print("FOOTER_INSERTION_AND_REORDER_RETAIN_UNCHANGED_TRACK_VERSIONS_OK")
+private let numberedVersions = FooterMixerStripVersions()
+private var numbered = state([])
+numbered.trackNumbers = Dictionary(uniqueKeysWithValues: tracks.enumerated().map { ($0.element.id, $0.offset + 1) })
+let initialNumbers = numberedVersions.update(numbered, active: true, locale: "pt_BR")
+// Hiding a channel preserves project numbering. Inserting/reordering tracks
+// must refresh just the numbers that changed, even when metadata is identical.
+let projectNumbers = numbered.trackNumbers
+numbered = state([], items: Array(tracks.dropFirst()))
+numbered.trackNumbers = projectNumbers
+let hiddenFirst = numberedVersions.update(numbered, active: true, locale: "pt_BR")
+precondition(hiddenFirst == Array(initialNumbers.dropFirst()))
+numbered.trackNumbers[tracks[2].id] = 4
+let renumbered = numberedVersions.update(numbered, active: true, locale: "pt_BR")
+precondition(hiddenFirst.indices.filter { hiddenFirst[$0] != renumbered[$0] } == [1])
+print("FOOTER_NUMBERING_PRESERVES_HIDDEN_TRACK_POSITIONS_AND_REFRESHES_CHANGED_NUMBERS_OK")

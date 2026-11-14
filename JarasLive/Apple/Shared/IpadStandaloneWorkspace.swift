@@ -45,7 +45,8 @@ import Combine
         show.objectWillChange.sink { [weak self, weak show] _ in
             self?.scheduleRefresh(playbackTick: show?.timelinePlaybackIsPublishingTick == true)
         }.store(in: &subscriptions)
-        for publisher in [documents.objectWillChange.eraseToAnyPublisher(),
+        for publisher in [show.multiLoopFaders.objectWillChange.eraseToAnyPublisher(),
+                          documents.objectWillChange.eraseToAnyPublisher(),
                           TeleprompterTimerController.shared.objectWillChange.eraseToAnyPublisher(),
                           TPNoticeController.shared.objectWillChange.eraseToAnyPublisher(),
                           TeleprompterWindow.shared.objectWillChange.eraseToAnyPublisher(),
@@ -189,7 +190,6 @@ import Combine
     @State private var advancedOpen = false
     @State private var exportingProject = false
     @State private var saveOptions = false
-    @State private var partialTransfer: PartialProjectTransferView.Mode?
     private struct AudioExportTarget {
         let project: Project
         let song: Song?
@@ -202,6 +202,7 @@ import Combine
     @State private var itemMenuAction: String?
     @State private var itemMenuTargets: Set<UUID> = []
     @State private var editingTextItem: UUID?
+    @State private var fullLyricsTarget: FullLyricsTarget?
     @State private var clickSoundTrack: UUID?
     @State private var trackEdit: TrackDetailsEditRequest?
     @State private var fx: FXTarget?
@@ -215,7 +216,7 @@ import Combine
         _local = StateObject(wrappedValue: IpadStandalonePresentation(show: show, documents: documents))
     }
     private var dialogOpen: Bool {
-        clickSoundTrack != nil || remoteSettingsOpen || remoteTeleprompter != nil || patch != nil || settingsOpen || metronomeOpen || regionActions != nil || detectingRegion != nil || exportingProject || saveOptions || partialTransfer != nil || advancedOpen || addingTrack || regionLoops != nil || itemMenu != nil || editingTextItem != nil || trackEdit != nil || fx != nil || automationTrack != nil
+        clickSoundTrack != nil || remoteSettingsOpen || remoteTeleprompter != nil || patch != nil || settingsOpen || metronomeOpen || regionActions != nil || detectingRegion != nil || exportingProject || saveOptions || advancedOpen || addingTrack || regionLoops != nil || itemMenu != nil || editingTextItem != nil || fullLyricsTarget != nil || trackEdit != nil || fx != nil || automationTrack != nil
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -248,12 +249,15 @@ import Combine
                         itemMenuTargets = ids; itemMenuAction = action == .reRenderItems ? "render" : "glue"; itemMenu = .init(clip: id)
                     },
                     openItemFX: { fx = .init(clip: $0) }, addTrack: { addingTrack = true }, addTrackAudio: { documents.chooseNativeTrackAudio($0) },
-                    addTrackText: { editingTextItem = show.addTextItem(track: $0) }, addTrackMedia: { documents.chooseNativeTrackMedia($0) },
+                    addTrackText: { editingTextItem = show.addTextItem(track: $0) }, addTrackLyrics: { track in
+                        do { fullLyricsTarget = try FullLyricsTarget(show: show, track: track) }
+                        catch { show.message = error.localizedDescription }
+                    }, addTrackMedia: { documents.chooseNativeTrackMedia($0) },
                     createPlaylist: { show.createRegionPlaylist(name: $0, selected: $1) },
                     addBlock: { show.addSetlistBlock(namePrefix: JarasLocalization.string("Bloco")) },
                     toggleRegionStop: { show.toggleRegionStop() }, stopsAtRegionEnd: local.stopsAtRegionEnd,
                     exportProject: { saveOptions = true },
-                    exportPartial: { partialTransfer = .inventory }, importPartial: { partialTransfer = .importPackage }, exportAudio: {
+                    exportAudio: {
                         audioExportCloseRequested = false
                         exportingAudio = .init(project: show.snapshot.project, song: show.current, document: documents.currentURL)
                     },
@@ -385,6 +389,10 @@ import Combine
                 }, close: { trackEdit = nil }, nameEditable: edit.nameEditable, showsName: edit.nameEditable)
                 .id(edit.id)
             } }
+        } else if let target = fullLyricsTarget {
+            IpadCompactModal(preferredSize: CGSize(width: 620, height: 460)) {
+                FullLyricsEditor(show: show, target: target, close: { fullLyricsTarget = nil })
+            }
         } else if let item = editingTextItem {
             IpadCompactModal(preferredSize: CGSize(width: 736, height: 390), onDismiss: { editingTextItem = nil }) {
                 TextItemEditor(text: show.current?.tracks.flatMap(\.clips).first(where: { $0.id == item })?.text ?? "",
@@ -431,18 +439,12 @@ import Combine
                     close: { exportingAudio = nil }, closeRequested: audioExportCloseRequested)
             }
         } else if saveOptions {
-            IpadCompactModal(preferredSize: CGSize(width: 440, height: 280), onDismiss: { saveOptions = false }) {
+            IpadCompactModal(preferredSize: CGSize(width: 440, height: 192), onDismiss: { saveOptions = false }) {
                 VStack(alignment: .leading, spacing: 20) {
                     Text("Salvar / Exportar").font(.jarasTitle2.bold())
                     Button("Exportar projeto completo") { saveOptions = false; exportingProject = true }
-                    Button("Export Partial") { saveOptions = false; partialTransfer = .inventory }
-                    Button("Import Partial") { saveOptions = false; partialTransfer = .importPackage }
                     Button("Fechar") { saveOptions = false }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
-            }
-        } else if let mode = partialTransfer {
-            IpadCompactModal(preferredSize: CGSize(width: 580, height: 440)) {
-                ScrollView { PartialProjectTransferView(documents: documents, mode: mode, close: { partialTransfer = nil }) }
             }
         } else if exportingProject {
             IpadCompactModal(preferredSize: CGSize(width: 580, height: 400), onDismiss: { exportingProject = false }) {

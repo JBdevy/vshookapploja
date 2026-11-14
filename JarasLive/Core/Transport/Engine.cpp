@@ -544,6 +544,7 @@ void Engine::setProjectTiming(double bpm, int beats, int unit, std::optional<Pro
         if (transport_.ignoreNextAfter) *transport_.ignoreNextAfter *= scale;
         if (transport_.ignoreNextEnd) *transport_.ignoreNextEnd *= scale;
     }
+    tempoPlayback::retainRates(*song);
     song->bpm = bpm; song->beatsPerBar = beats; song->beatUnit = unit; song->timeSettings = settings;
 }
 void Engine::setMarker(ID id, std::string name, double position, unsigned color, std::optional<double> bpm, std::optional<int> beats, std::optional<int> unit, std::optional<std::string> timebase, std::optional<bool> section, std::optional<bool> loopSection) {
@@ -569,6 +570,7 @@ void Engine::setMarker(ID id, std::string name, double position, unsigned color,
     if (marker.section.value_or(false) && !std::any_of(song->parts.begin(), song->parts.end(), [&](const auto& part) { return position >= part.startTime && position <= part.endTime; })) throw std::invalid_argument("Section markers can only be created inside a song.");
     marker.tempoBPM = bpm; marker.tempoBeats = beats; marker.tempoUnit = unit;
     marker.tempoTimebase = std::move(timebase);
+    tempoPlayback::edited(beforeTempoEdit,found==song->markers->end()?nullptr:&*found,marker);
     if (std::isfinite(position)) song->duration = std::max(song->duration, position);
     if (marker.sourceRegionID) for (auto& part : song->parts) if (part.id == *marker.sourceRegionID) {
         part.name = marker.name; part.color = marker.color;
@@ -660,6 +662,7 @@ void Engine::setMarkers(const std::vector<TimelineMarker>& markers, const std::v
     }), song->markers->end());
     for (auto marker : markers) {
         auto found = std::find_if(song->markers->begin(), song->markers->end(), [&](const auto& item) { return item.id == marker.id; });
+        if(retime)tempoPlayback::edited(beforeTempoEdit,found==song->markers->end()?nullptr:&*found,marker);
         // Match single-marker placement before retiming. In-place edits retain
         // explicit nil ownership, even when a region has moved over the marker.
         marker.regionOwnerID = found != song->markers->end() && found->position == marker.position
@@ -1940,11 +1943,8 @@ void Engine::refreshMultiLoop() {
     }
     auto& state = *transport_.multiLoop;
     state.start = begin; state.end = end; state.config = *candidate;
-    // The saved presets remain editable while M/S is bypassed. Auto Fader is
-    // independent of the M/S switch, matching VS Hook's four loop slots.
-    if (!state.config.mixerEnabled.value_or(true)) {
-        for (auto& track : state.config.tracks) { track.mute = false; track.solo = false; }
-    }
+    // Per-track M/S always applies. Ignore the retired global mixerEnabled
+    // field so older documents cannot invisibly disable their saved rules.
     if (state.released) state.amount = std::clamp((end - position) / std::max(0.000001, end - state.releasePosition), 0.0, 1.0);
     else {
         state.amount = std::clamp((position - begin + candidate->fadeSeconds) / candidate->fadeSeconds, 0.0, 1.0);

@@ -93,6 +93,27 @@ precondition(oldCommands == 0 && newCommands == 9, "Clipboard commands must reac
 print("CACHED_PROJECT_TABS_CLIPBOARD_SHORTCUTS_ONLY_EDIT_FOREGROUND_PROJECT_OK")
 print("GRID_CLIPBOARD_MENU_FOCUS_WINDOW_AND_MODAL_ROUTING_OK")
 
+let beforeHeldPaste = newCommands
+for flags: NSEvent.ModifierFlags in [.command, .control] {
+    for repeated in [false, true, true, true] {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+            timestamp: 1, windowNumber: first.windowNumber, context: nil, characters: "v",
+            charactersIgnoringModifiers: "v", isARepeat: repeated, keyCode: 9)!
+        FixtureKeyMonitors.send(event)
+    }
+}
+precondition(newCommands == beforeHeldPaste + 8 && oldCommands == 0,
+             "Held Command/Ctrl V pastes once per key event into only the active project")
+let repeatedPaste = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+    timestamp: 2, windowNumber: first.windowNumber, context: nil, characters: "v",
+    charactersIgnoringModifiers: "v", isARepeat: true, keyCode: 9)!
+NativeTimelineInputGate.shared.blocked = true; FixtureKeyMonitors.send(repeatedPaste)
+NativeTimelineInputGate.shared.blocked = false
+first.makeFirstResponder(text); FixtureKeyMonitors.send(repeatedPaste); first.makeFirstResponder(nil)
+newOwner.isCurrentProject = { false }; FixtureKeyMonitors.send(repeatedPaste); newOwner.isCurrentProject = { true }
+precondition(newCommands == beforeHeldPaste + 8, "Held paste respects modal, text and project gates")
+print("HELD_PASTE_REPEATS_WITHOUT_CROSSING_TEXT_MODAL_OR_PROJECT_BOUNDARIES_OK")
+
 var scrolling: [UInt16] = []
 newOwner.scrollTimeline = { scrolling.append($0); return true }
 func arrow(_ code: UInt16, flags: NSEvent.ModifierFlags = .shift, repeatKey: Bool = false) {

@@ -625,7 +625,7 @@ private struct MappingClickAnchor: NSViewRepresentable {
     func makeNSView(context: Context) -> MappingClickView { MappingClickView() }
     func updateNSView(_ view: MappingClickView, context: Context) { view.action = action; view.hitHeight = hitHeight }
 }
-private final class MappingClickView: RightClickTargetView {
+final class MappingClickView: RightClickTargetView {
     var hitHeight: CGFloat?
     override var clickBounds: NSRect {
         guard let hitHeight else { return bounds }

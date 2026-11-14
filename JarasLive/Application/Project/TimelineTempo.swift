@@ -260,21 +260,25 @@ public extension Song {
         if parts.contains(where: { $0.parentRegionID == region.id }) { return region.endTime }
         return min(region.endTime, tempoOwnerLimit(region))
     }
-    func regionTempoChange(_ requestedDelta: Double, region: Part) -> [TimelineMarker] {
+    func regionTempoChange(_ requestedDelta: Double, region: Part, referenceBPM: Double? = nil) -> [TimelineMarker] {
         let end = tempoEditEnd(for: region)
         var targets = (markers ?? []).filter { $0.isTempo && $0.position >= region.startTime && $0.position < end }
         func boundary(_ position: Double) -> TimelineMarker {
             let section = tempoSection(at: position), active = activeTempoMarker(at: position)
             return TimelineMarker(id: UUID(), name: "TEMPO", position: position, color: 0x999999,
                 tempoBPM: section.bpm, tempoBeats: section.beats, tempoUnit: section.unit,
-                tempoTimebase: active?.tempoTimebase ?? .global, tempoReferenceBPM: active?.tempoReferenceBPM)
+                tempoTimebase: active?.tempoTimebase ?? .global, tempoReferenceBPM: active?.tempoReferenceBPM,
+                tempoPlaybackRate: active.map { tempoPlaybackRate(for: $0) } ?? 1)
         }
         if !targets.contains(where: { abs($0.position - region.startTime) < 0.000001 }) { targets.append(boundary(region.startTime)) }
         let bpms = targets.compactMap(\.tempoBPM)
-        let delta = min(300 - (bpms.max() ?? 120), max(60 - (bpms.min() ?? 120), requestedDelta))
-        guard abs(delta) > 0.0000001 else { return [] }
+        let reference = referenceBPM ?? tempoSection(at: region.startTime).bpm
+        let factor = min(300 / (bpms.max() ?? 120), max(60 / (bpms.min() ?? 120), (reference + requestedDelta) / reference))
+        guard abs(factor - 1) > 0.000000001 else { return [] }
         for i in targets.indices {
-            targets[i].tempoBPM! += delta
+            let previous = targets[i]
+            targets[i].tempoBPM! *= factor
+            targets[i] = retainingTempoRate(targets[i], previous: previous)
             targets[i].tempoBeats = targets[i].tempoBeats ?? meterBeats
             targets[i].tempoUnit = targets[i].tempoUnit ?? meterUnit
         }
@@ -327,6 +331,7 @@ public extension Song {
         bpm = value
     }
     mutating func configureTiming(bpm value: Double, beats: Int, unit: Int, settings: ProjectTimeSettings) {
+        retainTempoPlaybackRates()
         timeSettings = settings
         if settings.timebase == .relative {
             followTempo(value)
@@ -346,6 +351,9 @@ public struct TimelineTempoSection: Equatable, Sendable {
     public let timebase: ProjectTimebase
     public var referenceBPM: Double? = nil
     public var regionOwnerID: UUID? = nil
+    public var playbackRate: Double? = nil
+    public var markerID: UUID? = nil
+    public func audioRate(baseBPM: Double) -> Double { playbackRate ?? (timebase == .relative ? bpm / (referenceBPM ?? baseBPM) : 1) }
     public var barSeconds: Double { 60 / bpm * Double(beats) * 4 / Double(unit) }
 }
 public extension Song {
@@ -375,24 +383,49 @@ public extension Song {
             $0.position == $1.position ? $0.id.uuidString < $1.id.uuidString : $0.position < $1.position
         }
     }
+    func tempoPlaybackRate(for marker: TimelineMarker) -> Double {
+        marker.tempoPlaybackRate ?? ((marker.tempoTimebase ?? .global).resolved(project: projectTime.timebase) == .relative ? (marker.tempoBPM ?? bpm) / (marker.tempoReferenceBPM ?? bpm) : 1)
+    }
+    func retainingTempoRate(_ marker: TimelineMarker, previous: TimelineMarker?) -> TimelineMarker {
+        var result = marker
+        guard let newBPM = marker.tempoBPM else { result.tempoPlaybackRate = nil; return result }
+        if let previous, let oldBPM = previous.tempoBPM {
+            let factor = (marker.tempoTimebase ?? .global).resolved(project: projectTime.timebase) == .relative ? newBPM / oldBPM : 1
+            result.tempoPlaybackRate = tempoPlaybackRate(for: previous) * factor
+        } else if result.tempoPlaybackRate == nil {
+            let active = activeTempoMarker(at: marker.position)
+            let oldBPM = active?.tempoBPM ?? bpm
+            let factor = (marker.tempoTimebase ?? .global).resolved(project: projectTime.timebase) == .relative ? newBPM / oldBPM : 1
+            result.tempoPlaybackRate = (active.map { tempoPlaybackRate(for: $0) } ?? 1) * factor
+        }
+        return result
+    }
+    mutating func retainTempoPlaybackRates() {
+        guard let original = markers else { return }
+        for i in original.indices where original[i].isTempo { markers![i].tempoPlaybackRate = tempoPlaybackRate(for: original[i]) }
+    }
     var tempoMarkersAffectAudio: Bool {
-        (markers ?? []).contains { $0.isTempo && ($0.tempoTimebase ?? .global).resolved(project: projectTime.timebase) == .relative }
+        (markers ?? []).contains { $0.isTempo && (($0.tempoTimebase ?? .global).resolved(project: projectTime.timebase) == .relative || $0.tempoPlaybackRate != nil) }
     }
     func tempoSections(until end: Double) -> [TimelineTempoSection] {
         var result: [TimelineTempoSection] = []
         var start = 0.0, tempo = bpm, beats = meterBeats, unit = meterUnit
         var timebase = projectTime.timebase
         var referenceBPM: Double? = nil
+        var playbackRate: Double? = nil
+        var markerID: UUID? = nil
         var regionOwnerID: UUID? = nil
         for marker in (markers ?? []).filter(\.isTempo).sorted(by: { $0.position == $1.position ? $0.id.uuidString < $1.id.uuidString : $0.position < $1.position }) {
             guard marker.position <= end else { break }
-            if marker.position > start { result.append(TimelineTempoSection(start: start, end: marker.position, bpm: tempo, beats: beats, unit: unit, timebase: timebase, referenceBPM: referenceBPM, regionOwnerID: regionOwnerID)) }
+            if marker.position > start { result.append(TimelineTempoSection(start: start, end: marker.position, bpm: tempo, beats: beats, unit: unit, timebase: timebase, referenceBPM: referenceBPM, regionOwnerID: regionOwnerID, playbackRate: playbackRate, markerID: markerID)) }
             start = marker.position; tempo = marker.tempoBPM!; beats = marker.tempoBeats ?? 4; unit = marker.tempoUnit ?? 4
             timebase = (marker.tempoTimebase ?? .global).resolved(project: projectTime.timebase)
             referenceBPM = marker.tempoReferenceBPM
+            playbackRate = marker.tempoPlaybackRate
+            markerID = marker.id
             regionOwnerID = marker.regionOwnerID
         }
-        if end > start { result.append(TimelineTempoSection(start: start, end: end, bpm: tempo, beats: beats, unit: unit, timebase: timebase, referenceBPM: referenceBPM, regionOwnerID: regionOwnerID)) }
+        if end > start { result.append(TimelineTempoSection(start: start, end: end, bpm: tempo, beats: beats, unit: unit, timebase: timebase, referenceBPM: referenceBPM, regionOwnerID: regionOwnerID, playbackRate: playbackRate, markerID: markerID)) }
         return result
     }
     func tempoSection(at position: Double) -> TimelineTempoSection {
@@ -418,7 +451,7 @@ public extension Song {
         }
         return TimelineTempoSection(start: active.position, end: end, bpm: active.tempoBPM!,
             beats: active.tempoBeats ?? 4, unit: active.tempoUnit ?? 4,
-            timebase: (active.tempoTimebase ?? .global).resolved(project: projectTime.timebase), referenceBPM: active.tempoReferenceBPM, regionOwnerID: active.regionOwnerID)
+            timebase: (active.tempoTimebase ?? .global).resolved(project: projectTime.timebase), referenceBPM: active.tempoReferenceBPM, regionOwnerID: active.regionOwnerID, playbackRate: active.tempoPlaybackRate, markerID: active.id)
     }
     /// Persisted attachment wins over overlap or a trimmed start inside the next
     /// song. A unified-container attachment resolves only among its own songs.
@@ -465,11 +498,11 @@ public extension Song {
         var current = TimelineTempoSection(start: 0, end: end, bpm: bpm, beats: meterBeats, unit: meterUnit, timebase: .free)
         for section in owned where section.start < end {
             if section.start > start {
-                result.append(TimelineTempoSection(start: start, end: section.start, bpm: current.bpm, beats: current.beats, unit: current.unit, timebase: current.timebase, referenceBPM: current.referenceBPM))
+                result.append(TimelineTempoSection(start: start, end: section.start, bpm: current.bpm, beats: current.beats, unit: current.unit, timebase: current.timebase, referenceBPM: current.referenceBPM, playbackRate: current.playbackRate, markerID: current.markerID))
             }
             start = section.start; current = section
         }
-        if start < end { result.append(TimelineTempoSection(start: start, end: end, bpm: current.bpm, beats: current.beats, unit: current.unit, timebase: current.timebase, referenceBPM: current.referenceBPM)) }
+        if start < end { result.append(TimelineTempoSection(start: start, end: end, bpm: current.bpm, beats: current.beats, unit: current.unit, timebase: current.timebase, referenceBPM: current.referenceBPM, playbackRate: current.playbackRate, markerID: current.markerID)) }
         return result
     }
     /// Timecode advances in the same source clock as audio and MIDI, while its
@@ -492,6 +525,21 @@ public extension Song {
         guard tempoMarkersAffectAudio else { return [clip] }
         return tempoAudioSegments(clip, program: audioTempoSections(owner: tempoOwner(for: clip), until: clip.startTime + clip.duration, sections: sections))
     }
+    func resettingItemRate(_ clip: AudioClip) -> AudioClip {
+        var result = clip; result.playbackRate = 1; result.tempoBasePlaybackRate = nil
+        let references = (markers ?? []).filter(\.isTempo).map { ItemTempoReference(markerID: $0.id, rate: tempoPlaybackRate(for: $0)) }
+        result.tempoRateReferences = references.isEmpty ? nil : references
+        return result
+    }
+    func itemTempoReference(_ clip: AudioClip, at time: Double, program: [TimelineTempoSection]) -> Double {
+        guard let references = clip.tempoRateReferences, !references.isEmpty else { return 1 }
+        var result = 1.0
+        for section in program {
+            if section.start > time { break }
+            if let id = section.markerID, let reference = references.first(where: { $0.markerID == id }) { result = reference.rate }
+        }
+        return result
+    }
     func tempoAudioSegments(_ clip: AudioClip, program: [TimelineTempoSection]) -> [AudioClip] {
         let end = clip.startTime + clip.duration
         var source = clip.sourceOffset, result: [AudioClip] = []
@@ -510,7 +558,7 @@ public extension Song {
             }
             segment.fadeTimelineStart = clip.startTime; segment.fadeTimelineDuration = clip.duration
             segment.startTime = start; segment.duration = finish - start
-            segment.playbackRate = section.timebase == .relative ? clip.audioRate * section.bpm / (section.referenceBPM ?? bpm) : clip.audioRate
+            segment.playbackRate = clip.audioRate * section.audioRate(baseBPM: bpm) / itemTempoReference(clip, at: section.start, program: program)
             segment.sourceOffset = source
             segment.automationSourceOffset = clip.automation == nil ? nil : source
             if let length = clip.loopLength, length > 0 {
@@ -648,9 +696,7 @@ private struct TempoRateLookup {
     private var points: [(time: Double, rate: Double)] = []
     init(song: Song) {
         for marker in (song.markers ?? []).filter(\.isTempo).sorted(by: { $0.position == $1.position ? $0.id.uuidString < $1.id.uuidString : $0.position < $1.position }) {
-            let bpm = marker.tempoBPM!
-            let rate = (marker.tempoTimebase ?? .global).resolved(project: song.projectTime.timebase) == .relative && bpm.isFinite && bpm > 0
-                ? bpm / (marker.tempoReferenceBPM ?? song.bpm) : 1
+            let rate = song.tempoPlaybackRate(for: marker)
             points.append((marker.position, rate))
         }
     }
@@ -723,8 +769,8 @@ struct TempoEditMap {
                 let new = after.audioTempoSections(owner: nextOwners[owner.id] ?? owner, until: timelineEnd, sections: newSections)
                 let edges = Array(Set([0, timelineEnd] + (old + new).flatMap { [$0.start, $0.end] })).sorted()
                 func speed(_ sections: [TimelineTempoSection], _ time: Double, _ song: Song) -> Double {
-                    guard let section = sections.last(where: { $0.start <= time }), section.timebase == .relative else { return 1 }
-                    return section.bpm / (section.referenceBPM ?? song.bpm)
+                    guard let section = sections.last(where: { $0.start <= time }) else { return 1 }
+                    return section.audioRate(baseBPM: song.bpm)
                 }
                 var program: [Span] = [], output = 0.0
                 for (first, last) in zip(edges, edges.dropFirst()) {

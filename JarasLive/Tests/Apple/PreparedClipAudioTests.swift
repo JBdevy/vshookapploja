@@ -141,6 +141,23 @@ for sampleRate in [44100.0, 48000.0] {
         _ = render()
         require(abs(source.sourcePosition - before - Double(block) * 1.25 / sampleRate) < 0.0000001,
                 "Live BPM change lost the source position")
+        // Neutral warming keeps FFT/history available without running phase
+        // prediction for dry PCM. Both the first real stretch and its return
+        // to unity must remain audible, stereo aligned and pitch preserving.
+        for speed in [1.25, 1.0] {
+            source.setRate(speed, pitch: 0)
+            var transition: [Float] = []
+            while transition.count < Int(sampleRate * 0.6) {
+                let block = render()
+                require(block.map(abs).max()! > 0.02, "Neutral-to-stretched transition introduced a silent block")
+                transition += block
+            }
+            let settled = Array(transition.dropFirst(Int(sampleRate * 0.4)))
+            let crossings = zip(settled, settled.dropFirst()).filter { $0 < 0 && $1 >= 0 }.count
+            let frequency = Double(crossings) * sampleRate / Double(settled.count)
+            print("PREPARED_LIVE_TRANSITION", sampleRate, block, speed, frequency)
+            require(abs(frequency - 440) < 10, "Live rate transition changed the musical pitch")
+        }
         source.stop(); engine.stop()
     }
 }

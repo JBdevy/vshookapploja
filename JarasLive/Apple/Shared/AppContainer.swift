@@ -211,6 +211,12 @@ enum AppStartupPresentation {
                 return area.start...area.end
             }
             show.audioPresentationPosition = { [weak audio] head, time in audio?.presentationPosition(head: head, sampledAt: time) }
+            show.pendingAudioPreparation = { [weak self, weak audio] snapshot, revision in
+                #if os(iOS)
+                guard self?.localPlaybackEnabled == true else { return nil }
+                #endif
+                return try audio?.pendingPlaybackPreparation(snapshot, revision: revision)
+            }
             var repeatWasEnabled = show.snapshot.transport.loop.enabled
             show.audioUpdate = { [weak self, weak show] snapshot, revision in
                 #if os(iOS)

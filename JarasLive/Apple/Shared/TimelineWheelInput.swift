@@ -73,6 +73,7 @@ final class TimelineTrackHeightMotion {
     private var timer: Timer?
     private var cancelDisplayLink: (() -> Void)?
     private weak var window: NSWindow?
+    private weak var retainedLayoutOwner: NSView?
     private var running: Bool { timer != nil || cancelDisplayLink != nil }
     private var limits = TimelineTrackHeightLimits.minimum...TimelineTrackHeightLimits.maximum
 
@@ -111,9 +112,13 @@ final class TimelineTrackHeightMotion {
         // remains key. Follow the input's window for display and modal checks.
         window = NSApp?.currentEvent?.window ?? NSApp?.keyWindow
         applied = current
+        if let owner = window?.contentView {
+            retainedLayoutOwner = owner
+            MainActor.assumeIsolated { NativeSidebarResizeActivity.shared.begin(owner: owner) }
+        }
         commit()
         // Fractional input accumulates without scheduling idle layout work.
-        guard requested?.rounded() != current else { return }
+        guard requested?.rounded() != current else { releaseRetainedLayouts(); return }
         if #available(macOS 14.0, *), let host = window?.contentView, window?.isVisible == true {
             let target = TimelineDisplayLinkTarget { [weak self] in self?.tick() }
             let link = host.displayLink(target: target, selector: #selector(TimelineDisplayLinkTarget.tick))
@@ -151,10 +156,21 @@ final class TimelineTrackHeightMotion {
         timer?.invalidate(); timer = nil
         apply = nil
         wheelTransition = nil
+        releaseRetainedLayouts()
         if !preservingRemainder { requested = nil; applied = nil; wheelDirection = 0 }
     }
+    private func releaseRetainedLayouts() {
+        if let owner = retainedLayoutOwner {
+            MainActor.assumeIsolated { NativeSidebarResizeActivity.shared.end(owner: owner) }
+        }
+        retainedLayoutOwner = nil
+    }
     func cancel() { stop(preservingRemainder: false) }
-    deinit { timer?.invalidate(); cancelDisplayLink?() }
+    deinit {
+        timer?.invalidate(); cancelDisplayLink?()
+        let owner = retainedLayoutOwner
+        DispatchQueue.main.async { if let owner { NativeSidebarResizeActivity.shared.end(owner: owner) } }
+    }
 }
 
 struct TimelineTrackHeightResponse {

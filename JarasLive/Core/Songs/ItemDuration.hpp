@@ -94,6 +94,15 @@ inline AudioClip itemWithRate(const Song& song,const AudioClip& clip,double rate
     if(result.fadeOut)result.fadeOut=std::min(*result.fadeOut,result.duration);
     return result;
 }
+// Reset is local to the selected item. Tempo markers and other items keep
+// their applied rates; subsequent BPM edits still multiply the new baseline.
+inline AudioClip resettingItemRate(const Song& song,const AudioClip& clip) {
+    auto result=clip;result.playbackRate=1;result.tempoBasePlaybackRate.reset();
+    result.tempoRateReferences.clear();
+    if(song.markers)for(const auto& marker:*song.markers)if(marker.tempoBPM)
+        result.tempoRateReferences.push_back({marker.id,tempoPlayback::rate(song,marker)});
+    return result;
+}
 inline AudioClip restoringItemDuration(const Song& song,const AudioClip& clip,double sourceDuration) {
     if(!std::isfinite(sourceDuration) || sourceDuration<=0) return clip;
     AudioClip result=clip;

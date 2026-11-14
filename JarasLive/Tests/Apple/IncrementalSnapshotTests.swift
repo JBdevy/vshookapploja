@@ -28,6 +28,8 @@ private func matchesNativeProject(_ value: Project, _ full: Project) -> Bool {
 }
 
 final class MeasuringSnapshotCore: JarasCoreBridge {
+    var loadMetadata = Data()
+    var loadWaveforms: [String: [Data]] = [:]
     var editData = Data()
     var retainedIDs: [String] = []
     var pastedData: Data?
@@ -35,6 +37,10 @@ final class MeasuringSnapshotCore: JarasCoreBridge {
     var trackWaveformSources: [String: String] = [:]
     var trackSnapshotData = Data()
     var failNextTrackSnapshot = false
+    override func load(projectData: Data, waveforms: [String: [Data]]) throws {
+        try super.load(projectData: projectData, waveforms: waveforms)
+        loadMetadata = projectData; loadWaveforms = waveforms
+    }
     override func trackMetadataSnapshot(previousRevision: UInt64) throws -> Data {
         let result = try super.trackMetadataSnapshot(previousRevision: previousRevision)
         trackSnapshotData = result
@@ -92,6 +98,11 @@ final class MeasuringSnapshotCore: JarasCoreBridge {
     precondition(loaded.project.songs[0].tracks[0].clips[0].waveform.withUnsafeBufferPointer { $0.baseAddress } == originalStorage, "hydration shares existing immutable waveform storage instead of allocating or decoding it")
     let fullSize = try core.snapshot().count, metadataSize = try core.metadataSnapshot().count
     precondition(metadataSize * 20 < fullSize, "metadata transfer is independent of the large waveform payload")
+    precondition(core.loadMetadata.count * 20 < fullSize,
+                 "opening a project must not encode its waveform samples into JSON")
+    let rawPeaks = source.withUnsafeBytes { Data($0) }
+    precondition(core.loadWaveforms[clip.id.uuidString] == [rawPeaks, rawPeaks, Array(source.reversed()).withUnsafeBytes { Data($0) }],
+                 "the core receives the exact native bytes of every mono and channel waveform")
     var unchangedWaves = loaded.project
     unchangedWaves.songs[0].tracks[0].name = "Renamed track"
     try executor.applyProjectEdit(unchangedWaves)
@@ -156,6 +167,18 @@ final class MeasuringSnapshotCore: JarasCoreBridge {
     var invalid = project; invalid.songs[0].duration = -1
     do { try executor.load(invalid); preconditionFailure("invalid load accepted") } catch {}
     _ = try matchesFull()
+    let previousProject = try matchesFull().project
+    let invalidBuffers: [[String: [Data]]] = [
+        [:], [clip.id.uuidString: []], [clip.id.uuidString: [Data([0])]],
+        [clip.id.uuidString: [[Double.nan].withUnsafeBytes { Data($0) }]],
+        [clip.id.uuidString: [rawPeaks], UUID().uuidString: [Data()]]
+    ]
+    for buffers in invalidBuffers {
+        do { try core.load(projectData: core.loadMetadata, waveforms: buffers); preconditionFailure("invalid binary waveform load accepted") } catch {}
+        let current = try matchesFull()
+        precondition(current.project == previousProject, "a failed binary load must preserve the complete previous project")
+    }
+    print("BINARY_WAVEFORM_LOAD_EXACT_CHANNELS_SPLIT_AND_FAILURE_ATOMICITY_OK")
     var invalidTrack = imported; invalidTrack.id = UUID(); invalidTrack.clips[0].id = clip.id; invalidTrack.clips[0].waveform = [0.99]
     do { try executor.insertAudioTracks([invalidTrack], song: project.songs[0].id); preconditionFailure("duplicate clip accepted") } catch {}
     _ = try matchesFull()

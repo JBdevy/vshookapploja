@@ -8,8 +8,8 @@ import Combine
     @Published private(set) var isDetached = false
     @Published private(set) var isVisible = false
     private func remember(detached: Bool, visible: Bool) {
-        UserDefaults.standard.set(detached, forKey: "jaras.layout.setlist.detached")
-        UserDefaults.standard.set(visible, forKey: "jaras.layout.setlist.visible")
+        WorkspaceLayoutPreferences.storage.set(detached, forKey: "jaras.layout.setlist.detached")
+        WorkspaceLayoutPreferences.storage.set(visible, forKey: "jaras.layout.setlist.visible")
     }
     private(set) var window: NSWindow?
     private var host: NSHostingView<AnyView>?

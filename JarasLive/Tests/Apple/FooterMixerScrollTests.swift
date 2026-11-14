@@ -463,13 +463,13 @@ for height: CGFloat in [80, 160, 242, 255, 350, 600] {
     let normal = FooterMixerStripLayout(height: height, slotsOnly: false)
     let compact = FooterMixerStripLayout(height: height, slotsOnly: true)
     let icons = FooterMixerStripLayout(height: height, slotsOnly: true, iconHeight: 30)
-    precondition(icons.controlsHeight == 0 && icons.slotsHeight == max(0, height - 64),
+    precondition(icons.controlsHeight == 0 && icons.slotsHeight == max(0, height - 78),
                  "The icon stays below the name when only slots are shown")
-    precondition(normal.controlsHeight == min(205, max(100, height - 34)))
-    precondition(normal.slotsHeight == max(0, height - 34 - normal.controlsHeight),
-                 "Normal fader/pan/meter geometry is unchanged")
-    precondition(compact.controlsHeight == 0 && compact.slotsHeight == max(0, height - 34),
-                 "Slots-only mode reserves only the fixed lower name and the existing outer padding")
+    precondition(normal.controlsHeight == min(205, max(100, height - 48)))
+    precondition(normal.slotsHeight == max(0, height - 48 - normal.controlsHeight),
+                 "Controls and slots reserve the full name and number band")
+    precondition(compact.controlsHeight == 0 && compact.slotsHeight == max(0, height - 48),
+                 "Slots-only mode reserves only the fixed name/number band and the existing outer padding")
 }
 print("MIXER_SLOTS_ONLY_FULL_AVAILABLE_HEIGHT_NORMAL_GEOMETRY_UNCHANGED_OK")
 
@@ -583,16 +583,16 @@ print("MIXER_TRACK_INSERTION_AND_UNDO_PRESERVE_EXISTING_HOSTS_CONTROL_ROOTS_AND_
 
 // Enlarging the docked mixer adds FX space without proposing a new size to
 // the lower controls. This is the path that used to reflow every fader per pixel.
-private let heightStrip = FooterMixerStripGeometryView(frame: NSRect(x: 0, y: 0, width: 83, height: 240))
+private let heightStrip = FooterMixerStripGeometryView(frame: NSRect(x: 0, y: 0, width: 83, height: 254))
 var lowerRootBuilds = 0
 heightStrip.update(slotsOnly: false, iconHeight: 0, slots: AnyView(Color.clear), footer: { height in
     lowerRootBuilds += 1
-    return AnyView(VStack(spacing: 0) { Color.red.frame(height: height); Text("Track").frame(height: 26) })
+    return AnyView(VStack(spacing: 0) { Color.red.frame(height: height); Text("Track").frame(height: FooterMixerStripLayout.labelHeight) })
 })
 heightStrip.layoutSubtreeIfNeeded()
 let lowerHost = heightStrip.subviews[1]
 let lowerSize = lowerHost.frame.size
-for height in 241...640 {
+for height in 255...640 {
     heightStrip.setFrameSize(NSSize(width: 83, height: height)); heightStrip.layoutSubtreeIfNeeded()
     precondition(lowerHost.frame.size == lowerSize, "Mixer height drag remeasured the fixed controls")
     precondition(abs(lowerHost.frame.maxY - CGFloat(height - 4)) < 0.01, "Track name must remain at the bottom of the channel")
@@ -601,10 +601,10 @@ for height in 241...640 {
 precondition(lowerRootBuilds == 1, "Increasing mixer height rebuilt the control hierarchy")
 heightStrip.update(slotsOnly: true, iconHeight: 30, slots: AnyView(Color.clear), footer: { height in
     precondition(height == 0, "Slots-only must hide the control area")
-    return AnyView(Text("Track icon").frame(height: 56))
+    return AnyView(Text("Track icon").frame(height: FooterMixerStripLayout.labelHeight + 30))
 })
 heightStrip.layoutSubtreeIfNeeded()
-precondition(lowerHost.frame.height == 56 && lowerHost.frame.maxY == heightStrip.bounds.height - 4,
+precondition(lowerHost.frame.height == FooterMixerStripLayout.labelHeight + 30 && lowerHost.frame.maxY == heightStrip.bounds.height - 4,
              "Slots-only must preserve the lower name/icon row")
 print("FOOTER_MIXER_HEIGHT_DRAG_FIXED_CONTROLS_400_STEPS_AND_SLOTS_ONLY_OK")
 
@@ -626,9 +626,106 @@ fxScroll.contentView.scroll(to: NSPoint(x: 0, y: 80)); fxScroll.reflectScrolledC
 precondition(fxScroll.contentView.bounds.minY == 80, "Native FX viewport must retain vertical scrolling")
 print("FOOTER_FX_VIEWPORT_RESIZE_PRESERVES_FIXED_SLOT_DOCUMENT_AND_SCROLLING_OK")
 
+// The production FX/output divider changes native viewport frames without
+// reevaluating every slot button per pixel, including a floating window.
+private enum SlotSectionJournal { static var bodies = 0; static var clicks: [String] = [] }
+private final class SlotSectionButton: NSButton {
+    var role = "", language = ""
+    var dark = false
+    var testAction: () -> Void = {}
+}
+private struct SlotSectionButtonProbe: NSViewRepresentable {
+    let role: String, revision: Int
+    @Environment(\.locale) private var locale
+    @Environment(\.colorScheme) private var colorScheme
+    func makeNSView(context: Context) -> SlotSectionButton { SlotSectionButton() }
+    func updateNSView(_ view: SlotSectionButton, context: Context) {
+        view.role = role; view.title = role; view.language = locale.identifier; view.dark = colorScheme == .dark
+        view.testAction = { SlotSectionJournal.clicks.append("\(role)-\(revision)") }
+    }
+}
+private struct SlotSectionContent: View {
+    let role: String, count: Int, revision: Int
+    var body: some View {
+        let _ = { SlotSectionJournal.bodies += 1 }()
+        VStack(spacing: 2) {
+            ForEach(0..<count, id: \.self) { index in
+                SlotSectionButtonProbe(role: "\(role)\(index)", revision: revision).frame(height: 19)
+            }
+        }
+    }
+}
+private func slotSectionButtons(_ view: NSView) -> [SlotSectionButton] {
+    (view as? SlotSectionButton).map { [$0] } ?? view.subviews.flatMap(slotSectionButtons)
+}
+for detached in [false, true] {
+    let sections = FooterSlotSectionsView(frame: CGRect(x: 0, y: 0, width: 75, height: 120))
+    let sectionWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 75, height: 120),
+        styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+    sectionWindow.isReleasedWhenClosed = false
+    let container = NSView(frame: sections.frame)
+    if detached { sectionWindow.contentView = sections } else { container.addSubview(sections); sectionWindow.contentView = container }
+    func update(_ revision: Int, outputs: Int = 4) {
+        let locale = Locale(identifier: revision == 0 ? "en" : "pt_BR")
+        sections.update(plugins: AnyView(SlotSectionContent(role: "FX", count: 8, revision: revision)
+            .environment(\.locale, locale).environment(\.colorScheme, revision == 0 ? .dark : .light)),
+            pluginsHeight: 166, outputs: AnyView(SlotSectionContent(role: "OUT", count: outputs, revision: revision)
+                .environment(\.locale, locale).environment(\.colorScheme, revision == 0 ? .dark : .light)), outputCount: outputs)
+        sections.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.03)); sections.layoutSubtreeIfNeeded()
+    }
+    update(0)
+    let slots = sections.subviews.compactMap { $0 as? FooterEffectSlotsViewport }
+    let pluginScroll = slots[0].subviews.compactMap { $0 as? NSScrollView }.first!
+    let outputScroll = slots[1].subviews.compactMap { $0 as? NSScrollView }.first!
+    let pluginDocument = pluginScroll.documentView!, outputDocument = outputScroll.documentView!
+    let pluginFrame = pluginDocument.frame, outputFrame = outputDocument.frame
+    let initialBodies = SlotSectionJournal.bodies
+    let buttons = slotSectionButtons(sections)
+    precondition(buttons.count == 12, "All eight plugins and four outputs must exist")
+    for height in stride(from: 70, through: 360, by: 1) {
+        if detached { sectionWindow.setContentSize(NSSize(width: 75, height: height)) }
+        else { sections.setFrameSize(NSSize(width: 75, height: height)) }
+        sections.layoutSubtreeIfNeeded()
+        let expected = FooterSlotSectionsLayout(height: CGFloat(height), outputCount: 4)
+        precondition(slots[0].frame.height == expected.pluginsHeight && slots[1].frame.height == expected.outputsHeight)
+        precondition(slots[1].frame.minY == expected.pluginsHeight + expected.dividerHeight && slots[1].isHidden == (expected.outputsHeight == 0))
+        precondition(pluginDocument.frame == pluginFrame && outputDocument.frame == outputFrame,
+                     "FX and output documents must remain fixed while their viewports change")
+    }
+    precondition(SlotSectionJournal.bodies == initialBodies,
+                 "Native height changes must not rebuild plugin/output button roots")
+    sections.setFrameSize(NSSize(width: 75, height: 120)); sections.layoutSubtreeIfNeeded()
+    pluginScroll.contentView.scroll(to: CGPoint(x: 0, y: 50))
+    outputScroll.contentView.scroll(to: CGPoint(x: 0, y: 20))
+    sections.layoutSubtreeIfNeeded()
+    precondition(pluginScroll.contentView.bounds.minY == 50 && outputScroll.contentView.bounds.minY == 20,
+                 "The FX and output lists keep independent scroll positions")
+    sections.setFrameSize(NSSize(width: 75, height: 70)); sections.layoutSubtreeIfNeeded()
+    precondition(slots[1].isHidden && slots[1].visibleRect.isEmpty,
+                 "Below the output threshold no hidden routing button has a visible hit area")
+    sections.setFrameSize(NSSize(width: 75, height: 120)); sections.layoutSubtreeIfNeeded()
+    precondition(!slots[1].isHidden && outputScroll.contentView.bounds.minY == 20,
+                 "Hiding and restoring the routing viewport retains its document and scroll position")
+    update(1)
+    let current = slotSectionButtons(sections)
+    precondition(Set(current.map(ObjectIdentifier.init)) == Set(buttons.map(ObjectIdentifier.init)))
+    precondition(current.allSatisfy { $0.language == "pt_BR" && !$0.dark })
+    current.first!.testAction()
+    precondition(SlotSectionJournal.clicks.last!.hasSuffix("-1"), "An update at the same height must refresh the action")
+    update(2, outputs: 0)
+    precondition(slots[1].isHidden && slots[0].frame.height == sections.bounds.height,
+                 "No outputs gives the full available space to plugins")
+    update(3, outputs: 4)
+    precondition(!slots[1].isHidden && slotSectionButtons(sections).count == 12,
+                 "Adding outputs while the panel is open restores the live routing controls")
+    sectionWindow.close()
+}
+print("FOOTER_NATIVE_FX_OUTPUT_DIVIDER_DOCKED_FLOATING_HEIGHTS_FIXED_DOCUMENTS_SCROLL_ACTIONS_ENVIRONMENT_WITHOUT_ROOT_REBUILDS_OK")
+
 private let stableChannelHost = FooterMixerHostingView(rootView: AnyView(
     FooterMixerStripGeometry(slotsOnly: false, iconHeight: 0, selected: true, slots: AnyView(Color.clear),
-        footer: { AnyView(Color.clear.frame(height: $0 + 26)) }).padding(5)))
+        footer: { AnyView(Color.clear.frame(height: $0 + FooterMixerStripLayout.labelHeight)) }).padding(5)))
 stableChannelHost.frame = NSRect(x: 0, y: 0, width: 93, height: 240)
 window.contentView!.addSubview(stableChannelHost); stableChannelHost.layoutSubtreeIfNeeded()
 private func findChannelGeometry(_ root: NSView) -> FooterMixerStripGeometryView? {
@@ -658,7 +755,7 @@ private func revealButtons(_ view: NSView) -> [NSButton] {
 view.update(width: 300 * 86 + 7, stride: 86, count: 300) { _ in
     AnyView(FooterMixerStripGeometry(slotsOnly: false, iconHeight: 0, selected: false,
         slots: AnyView(Color.gray), footer: { height in
-            AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }.frame(height: height + 26))
+            AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }.frame(height: height + FooterMixerStripLayout.labelHeight))
         }).frame(width: 83).padding(5))
 }
 view.layoutSubtreeIfNeeded()
@@ -681,7 +778,7 @@ private let opening = FooterMixerScrollView(frame: NSRect(x: 0, y: 0, width: 500
 func openingContent(_ range: Range<Int>) -> AnyView {
     AnyView(FooterMixerStripGeometry(slotsOnly: false, iconHeight: 0, selected: false,
         slots: AnyView(Color.gray), footer: { height in
-            AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }.frame(height: height + 26))
+            AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }.frame(height: height + FooterMixerStripLayout.labelHeight))
         }).frame(width: 83).padding(5))
 }
 opening.update(width: 100 * 86 + 7, stride: 86, count: 100, makeContent: openingContent)
@@ -744,7 +841,7 @@ func replaceChannelIdentities() {
                     FooterMixerStripGeometry(slotsOnly: false, iconHeight: 0, selected: false,
                         slots: AnyView(Color.gray), footer: { height in
                             AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }
-                                .frame(height: height + 26))
+                                .frame(height: height + FooterMixerStripLayout.labelHeight))
                         }).frame(width: 83).frame(maxHeight: .infinity).id("\(identity)-\(index)")
                 }
             }
@@ -785,3 +882,25 @@ for pass in 0..<3 {
 }
 replacementWindow.close()
 print("FOOTER_REPLACED_TRACK_IDENTITIES_AND_REOPEN_KEEP_CONTROLS_INSIDE_VISIBLE_VIEWPORT_OK")
+
+private let followWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 242), styleMask: [.borderless], backing: .buffered, defer: false)
+private let follow = FooterMixerScrollView(frame: followWindow.contentView!.bounds)
+followWindow.contentView = follow
+var followIDs = (0..<900).map { _ in UUID() }
+for _ in 0..<4 {
+    let created = UUID(); followIDs.append(created)
+    follow.update(width: CGFloat(followIDs.count) * 153, stride: 153, count: followIDs.count,
+                  identifiers: followIDs, makeContent: { _ in AnyView(Color.black) })
+    let request = UUID()
+    follow.revealTrack(created, request: request)
+    let clip = follow.subviews.compactMap { $0 as? NSScrollView }.first!
+    let right = CGFloat(followIDs.count) * 153
+    precondition(clip.contentView.bounds.maxX >= right - 1 && clip.contentView.bounds.minX <= right - 153,
+                 "Each new copy stays completely visible in the horizontal mixer")
+    let scrollbar = follow.subviews.compactMap { $0 as? NSScroller }.first!
+    scrollbar.doubleValue = 0; scrollbar.sendAction(scrollbar.action, to: scrollbar.target)
+    follow.revealTrack(created, request: request)
+    precondition(clip.contentView.bounds.minX == 0, "An ordinary refresh cannot override later manual scrolling")
+}
+followWindow.close()
+print("FOOTER_DUPLICATED_TRACK_FOLLOW_900_CHANNELS_OK")

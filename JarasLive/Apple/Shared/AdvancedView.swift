@@ -11,6 +11,7 @@ struct ItemRateEditor: View {
     @State private var rateText: String
     @State private var bpmText: String
     @State private var validInput = true
+    @State private var resetTempo = false
     init(show: ShowController, items: Set<UUID>, close: (() -> Void)? = nil) {
         self.show = show; self.items = items; self.close = close
         project = show.snapshot.project.id; song = show.current?.id
@@ -37,7 +38,7 @@ struct ItemRateEditor: View {
             HStack {
                 Text("Config rate").font(.jarasTitle3.bold())
                 Spacer()
-                Button("Reset") { settings.reset(); refresh() }
+                Button("Reset") { settings.reset(); resetTempo = true; refresh() }
             }
             HStack {
                 Text(verbatim: "Rate").frame(width: 78, alignment: .leading)
@@ -65,7 +66,7 @@ struct ItemRateEditor: View {
                 Spacer()
                 Button("Save") {
                     guard show.snapshot.project.id == project, show.current?.id == song else { finish(); return }
-                    if show.configureItemsRate(items, rate: settings.rate) { finish() }
+                    if show.configureItemsRate(items, rate: settings.rate, resetTempo: resetTempo) { finish() }
                 }.disabled(!validInput || !settings.isValid).keyboardShortcut(.defaultAction)
             }
         }.padding(20).frame(width: 360)
@@ -75,7 +76,13 @@ struct ItemRateEditor: View {
 }
 
 struct AdvancedView: View {
-    @ObservedObject var show: ShowController
+    #if os(macOS)
+    // Includes all eight sidebar tabs, the heading and the action row. Keep
+    // the window's canvas and the view's minimum proposal in agreement.
+    static let desktopSize = CGSize(width: 760, height: 460)
+    #endif
+    let show: ShowController
+    @StateObject private var updates: ShowPresentationObserver
     let documents: ProjectDocuments?
     var close: (() -> Void)? = nil
     var presentationID: Int = 0
@@ -107,6 +114,9 @@ struct AdvancedView: View {
 
     init(show: ShowController, documents: ProjectDocuments? = nil, close: (() -> Void)? = nil, presentationID: Int = 0) {
         self.show = show; self.documents = documents; self.close = close; self.presentationID = presentationID
+        // Closing the desktop panel retains its drafts and hosting tree. Its
+        // controls need project/command changes, never every playback sample.
+        _updates = StateObject(wrappedValue: show.presentationObserver)
         let timing = show.current.map { GlobalProjectTiming(song: $0) } ?? GlobalProjectTiming.load() ?? GlobalProjectTiming()
         _bpm = State(initialValue: String(format: "%g", timing.bpm))
         _beats = State(initialValue: String(timing.beats))
@@ -166,7 +176,7 @@ struct AdvancedView: View {
             }.padding(14).fixedSize(horizontal: false, vertical: true)
         }
         #if os(macOS)
-        .frame(minWidth: 760, minHeight: 420)
+        .frame(minWidth: Self.desktopSize.width, minHeight: Self.desktopSize.height)
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #endif
@@ -289,7 +299,8 @@ struct TempoMarkerEditor: View {
 }
 
 private struct AdvancedTimelineSettings: View {
-    @ObservedObject var show: ShowController
+    let show: ShowController
+    @StateObject private var updates: ShowPresentationObserver
     @State private var conversionReport: String?
     @State private var deletion: TimelineBulkDeletion?
     @State private var deletionProject: UUID?
@@ -302,6 +313,10 @@ private struct AdvancedTimelineSettings: View {
     @AppStorage("jaras.timeline.continuousScroll") private var continuousScroll = false
     @AppStorage("jaras.timeline.invertWaveformColors") private var invertWaveformColors = false
     @AppStorage("jaras.timeline.gridlines") private var gridlines = GlobalProjectTiming.load()?.settings.divisions != 0
+    init(show: ShowController, documents: ProjectDocuments?) {
+        self.show = show; self.documents = documents
+        _updates = StateObject(wrappedValue: show.presentationObserver)
+    }
     var body: some View {
         VStack(spacing: 18) {
             HStack {

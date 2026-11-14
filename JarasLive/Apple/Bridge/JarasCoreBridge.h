@@ -9,6 +9,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)applyProjectMetadataEditData:(NSData *)data preservingWaveforms:(NSArray<NSString *> *)identifiers error:(NSError **)error NS_SWIFT_NAME(applyProjectMetadataEdit(_:preservingWaveforms:));
 - (BOOL)applyTrackStructureEditData:(NSData *)data trackOrders:(NSDictionary<NSString *, NSArray<NSString *> *> *)orders preservingWaveforms:(NSDictionary<NSString *, NSString *> *)identifiers error:(NSError **)error NS_SWIFT_NAME(applyTrackStructureEdit(_:trackOrders:preservingWaveforms:));
 - (BOOL)loadProjectData:(NSData *)data error:(NSError **)error NS_SWIFT_NAME(load(projectData:));
+- (BOOL)loadProjectData:(NSData *)data waveforms:(NSDictionary<NSString *, NSArray<NSData *> *> *)waveforms error:(NSError **)error NS_SWIFT_NAME(load(projectData:waveforms:));
 - (BOOL)executeAutomation:(NSString *)command target:(nullable NSString *)target value:(double)value error:(NSError **)error NS_SWIFT_NAME(executeAutomation(command:target:value:));
 - (BOOL)executeCommand:(NSString *)command target:(nullable NSString *)target value:(double)value error:(NSError **)error NS_SWIFT_NAME(execute(command:target:value:));
 - (nullable NSData *)snapshotWithError:(NSError **)error NS_SWIFT_NAME(snapshot());

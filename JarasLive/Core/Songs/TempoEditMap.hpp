@@ -1,5 +1,6 @@
 #pragma once
 #include "Song.hpp"
+#include "TempoPlaybackRate.hpp"
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -54,12 +55,9 @@ class TempoEditMap {
                 (!marker.regionOwnerID || marker.regionOwnerID==part->id || marker.regionOwnerID==part->parentRegionID))) &&
                 marker.position<=time && (!active || marker.position>active->position || (marker.position==active->position && marker.id>active->id))) active=&marker;
         if(!active) return 1;
-        const auto mode=active->tempoTimebase.value_or("global");
-        const bool relative=mode=="relative" || (mode=="global" && song.timeSettings.value_or(ProjectTimeSettings{}).timebase==ProjectTimebase::relative);
-        if(!relative || !std::isfinite(*active->tempoBPM) || *active->tempoBPM<=0) return 1;
-        return *active->tempoBPM / active->tempoReferenceBPM.value_or(song.bpm);
+        return tempoPlayback::rate(song,*active);
     }
-    struct RatePoint { double time, speed; };
+    struct RatePoint { double time, speed; ID markerID; };
     using Program = std::vector<RatePoint>;
     static Program program(const Song& song, const Part* part=nullptr) {
         const double limit=part?ownerLimit(song,*part):0;
@@ -70,11 +68,20 @@ class TempoEditMap {
         std::sort(markers.begin(),markers.end(),[](auto a,auto b){return a->position==b->position?a->id<b->id:a->position<b->position;});
         Program result;
         for(auto marker:markers) {
-            const auto mode=marker->tempoTimebase.value_or("global");
-            const bool relative=mode=="relative" || (mode=="global" && song.timeSettings.value_or(ProjectTimeSettings{}).timebase==ProjectTimebase::relative);
-            const double speed=relative && std::isfinite(*marker->tempoBPM) && *marker->tempoBPM>0 ? *marker->tempoBPM/marker->tempoReferenceBPM.value_or(song.bpm):1;
-            if(!result.empty() && result.back().time==marker->position) result.back().speed=speed;
-            else result.push_back({marker->position,speed});
+            const double speed=tempoPlayback::rate(song,*marker);
+            if(!result.empty() && result.back().time==marker->position) result.back()={marker->position,speed,marker->id};
+            else result.push_back({marker->position,speed,marker->id});
+        }
+        return result;
+    }
+    static double itemReference(const AudioClip& clip,const Program& program,double time) {
+        if(clip.tempoRateReferences.empty())return 1.;
+        // New markers inherit the preceding known reference. A reset remains
+        // valid when tempo sections are inserted or removed later.
+        double result=1.;
+        for(const auto& point:program) {
+            if(point.time>time)break;
+            for(const auto& reference:clip.tempoRateReferences)if(reference.markerID==point.markerID){result=reference.rate;break;}
         }
         return result;
     }
@@ -107,7 +114,8 @@ public:
         }
         double playbackRate(const AudioClip& clip,double time) {
             if(clip.frozenMIDI.value_or(false)||clip.renderedTiming.value_or(false)||clip.renderedTempo.value_or(false))return clip.playbackRate;
-            return clip.playbackRate*speedAt(points(clip),time);
+            const auto& program=points(clip);
+            return clip.playbackRate*speedAt(program,time)/itemReference(clip,program,time);
         }
     };
     static const Part* tempoOwner(const Song& song, const AudioClip& clip) { return owner(song, clip); }
@@ -119,7 +127,8 @@ public:
     static double playbackRate(const Song& song, const AudioClip& clip, double time) {
         if (clip.frozenMIDI.value_or(false) || clip.renderedTiming.value_or(false) ||
             clip.renderedTempo.value_or(false)) return clip.playbackRate;
-        return clip.playbackRate * rate(song, time, owner(song, clip));
+        const auto points=program(song,owner(song,clip));
+        return clip.playbackRate * speedAt(points,time)/itemReference(clip,points,time);
     }
     TempoEditMap(const Song& before,const Song& after) {
         // Match the Swift map: a unified region's restoring tempo follows its

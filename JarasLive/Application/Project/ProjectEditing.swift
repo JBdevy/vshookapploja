@@ -205,12 +205,13 @@ public extension Project {
     }
     /// The command executor validates this draft before committing it. Keeping
     /// construction separate avoids scanning every waveform twice per paste.
-    internal func trackDuplicationDraft(_ ids: Set<UUID>, song songID: UUID, copiedSong: Song? = nil) throws -> (project: Project, ids: Set<UUID>) {
-        guard let index = songs.firstIndex(where: { $0.id == songID }) else { return (self, []) }
+    internal func trackDuplicationDraft(_ ids: Set<UUID>, song songID: UUID, copiedSong: Song? = nil,
+                                       insertingAfter: [UUID: UUID] = [:]) throws -> (project: Project, ids: Set<UUID>, mapping: [UUID: UUID]) {
+        guard let index = songs.firstIndex(where: { $0.id == songID }) else { return (self, [], [:]) }
         let destination = songs[index], source = copiedSong ?? destination
-        guard source.id == songID else { return (self, []) }
+        guard source.id == songID else { return (self, [], [:]) }
         let selected = source.trackDuplicationTargets(ids)
-        guard !selected.isEmpty else { return (self, []) }
+        guard !selected.isEmpty else { return (self, [], [:]) }
         guard selected.isSubset(of: Set(destination.tracks.map(\.id))) else {
             throw ProjectError.invalid("The copied tracks no longer exist.")
         }
@@ -280,7 +281,17 @@ public extension Project {
             let copiedBlock = source.tracks.filter { block.contains($0.id) }.compactMap { copies[$0.id] }
             // The source may have moved since Copy. Anchor to its current row,
             // while retaining the captured item, plugin and control values.
-            block.formUnion(destinationHierarchy.descendants(of: root.id))
+            if let previous = insertingAfter[root.id],
+               let previousTrack = destination.tracks.first(where: { $0.id == previous }),
+               let originalTrack = destination.tracks.first(where: { $0.id == root.id }),
+               previousTrack.parentTrackID == originalTrack.parentTrackID {
+                // Repeated Paste follows the previous copies, while the
+                // clipboard still supplies the original captured sound.
+                block = Set(block.compactMap { insertingAfter[$0] })
+                for anchor in Array(block) { block.formUnion(destinationHierarchy.descendants(of: anchor)) }
+            } else {
+                block.formUnion(destinationHierarchy.descendants(of: root.id))
+            }
             let positions = destination.tracks.indices.filter { block.contains(destination.tracks[$0].id) }
             if let last = positions.last { insertions[last, default: []] += copiedBlock }
         }
@@ -301,7 +312,7 @@ public extension Project {
                 candidate.songs[index].parts[part].multiLoops = loops
             }
         }
-        return (candidate, Set(mapping.values))
+        return (candidate, Set(mapping.values), mapping)
     }
     /// Track IDs may appear in more than one song; deletion removes them all.
     func tracksContainItems(_ ids: Set<UUID>) -> Bool {

@@ -210,12 +210,12 @@ MainActor.assumeIsolated {
     print("WORKSPACE_NATIVE_DIVIDER_ROUTE_AND_BLOCKED_MODAL_FALLBACK_OK")
 }
 
-for rate in [30.0, 60, 120, 240] {
+for rate in [15.0, 20, 30, 60, 120, 240] {
     var velocity = NativeMixerScrollVelocity()
     _ = velocity.limit(0, timestamp: 100, viewport: 600, precise: true)
     var distance: CGFloat = 0
     for index in 1...Int(rate) { distance += velocity.limit(1000, timestamp: 100+Double(index)/rate, viewport: 600, precise: true) }
-    precondition(abs(distance-1200) < 0.001, "Equal-duration flicks must have the same speed cap at different input frequencies")
+    precondition(abs(distance-NativeMixerScrollVelocity.maximum(viewport: 600)) < 0.001, "Equal-duration flicks must have the same speed cap at different input frequencies")
     precondition(velocity.limit(-1, timestamp: 101.02, viewport: 600, precise: true) == -1, "Reversal is immediate and precise")
 }
 print("MIXER_MAXIMUM_VELOCITY_IS_TIME_BASED_AND_PRESERVES_SMALL_MOVEMENTS_OK")
