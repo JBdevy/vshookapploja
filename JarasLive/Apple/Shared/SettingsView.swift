@@ -12,8 +12,8 @@ struct SettingsView: View {
     @ObservedObject private var audio = AudioDeviceSettings.shared
     @ObservedObject private var recorder = TrackRecording.shared
     private var audioConfigurationLocked: Bool { recorder.recording || recorder.busy || show.isPlaying }
-    enum Section: String, CaseIterable { case tp1 = "Config TP 1", tp2 = "Config TP 2", notices = "Config Recados", general = "General", audio = "Audio", midi = "MIDI", actions = "Actions", mappings = "Mappings", plugins = "Plugins", account = "Account"
-        var icon: String { switch self { case .tp1, .tp2: return "text.alignleft"; case .notices: return "message"; case .general: return "slider.horizontal.3"; case .audio: return "speaker.wave.2"; case .midi: return "pianokeys"; case .actions: return "keyboard"; case .mappings: return "switch.2"; case .plugins: return "puzzlepiece.extension"; case .account: return "person.crop.circle" } }
+    enum Section: String, CaseIterable { case tp1 = "Config TP 1", tp2 = "Config TP 2", notices = "Config Recados", general = "General", audio = "Audio", midi = "MIDI", smk37 = "SMK37PRO", actions = "Actions", mappings = "Mappings", plugins = "Plugins", account = "Account"
+        var icon: String { switch self { case .tp1, .tp2: return "text.alignleft"; case .notices: return "message"; case .general: return "slider.horizontal.3"; case .audio: return "speaker.wave.2"; case .midi, .smk37: return "pianokeys"; case .actions: return "keyboard"; case .mappings: return "switch.2"; case .plugins: return "puzzlepiece.extension"; case .account: return "person.crop.circle" } }
     }
     private var availableSections: [Section] {
         #if os(iOS)
@@ -157,6 +157,12 @@ struct SettingsView: View {
                         }
                         if audio.midiOutputs.isEmpty { Text("No MIDI outputs").foregroundStyle(JarasTheme.secondary) }
                         Button("Refresh devices") { audio.refreshMIDI() }
+                    case .smk37:
+                        #if os(macOS)
+                        SMK37FirmwareView(isLocked: { show.isPlaying || recorder.recording || recorder.busy })
+                        #else
+                        EmptyView()
+                        #endif
                     case .actions:
                         DAWActionsList(show: show)
                     case .mappings:
@@ -187,9 +193,6 @@ struct SettingsView: View {
         }.foregroundStyle(JarasTheme.text)
         .sheet(isPresented: $signingIn) {
             LoginView(auth: auth, backend: backend, offersTrial: false, onAuthorized: { signingIn = false }).frame(width: 550, height: 620)
-                #if os(iOS)
-                .background(IpadPresentedOutsideDismissal { signingIn = false })
-                #endif
         }
         .onDisappear { mappings.editing = nil }
         .task(id: section) { if section == .account { await auth.refreshDevices() } }
@@ -199,9 +202,6 @@ struct SettingsView: View {
         } message: { device in
             Text(device.id == auth.installation.id ? "Você sairá da conta neste computador. O áudio será interrompido e a licença ficará disponível." : "Remover \(device.deviceName) e liberar sua licença para outro computador?")
         }
-        #if os(iOS)
-        .background(IpadPresentedOutsideDismissal(active: pendingDevice != nil, alert: true) { pendingDevice = nil })
-        #endif
         .overlay {
             if mappings.editing != nil && mappings.editing?.presentedInline != true {
                 ZStack { Color.black.opacity(0.25).contentShape(Rectangle()).onTapGesture { mappings.editing = nil }; ControlMappingEditor() }
@@ -397,7 +397,7 @@ import Darwin
         window.identifier = NSUserInterfaceItemIdentifier("catlive.tool.bluetoothMIDI")
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
-        window.hidesOnDeactivate = true
+        window.hidesOnDeactivate = false
         window.styleMask.remove([.resizable, .miniaturizable])
         window.collectionBehavior.remove(.fullScreenPrimary)
         window.collectionBehavior.insert(.fullScreenAuxiliary)

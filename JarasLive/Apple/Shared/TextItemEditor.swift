@@ -77,7 +77,7 @@ struct TextItemEditor: View {
             .frame(height: 180)
             .overlay(RoundedRectangle(cornerRadius: 5).stroke(JarasTheme.line, lineWidth: 1))
         #else
-        IpadTextItemNotepad(text: text).frame(height: 180)
+        TextEditor(text: text).frame(height: 180)
         #endif
     }
 }
@@ -85,10 +85,11 @@ struct TextItemEditor: View {
 #if os(macOS)
 import AppKit
 
-private struct TextItemNotepad: NSViewRepresentable {
+struct TextItemNotepad: NSViewRepresentable {
     @Binding var text: String
     let apply: () -> Void
     let cancel: () -> Void
+    var outlineStanzas = false
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -107,6 +108,7 @@ private struct TextItemNotepad: NSViewRepresentable {
         editor.textContainer?.widthTracksTextView = true
         editor.minSize = NSSize(width: 0, height: 180)
         editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        editor.outlineStanzas = outlineStanzas
         editor.loadColoredText(text); editor.delegate = context.coordinator
         editor.apply = apply; editor.cancel = cancel
         scroll.documentView = editor
@@ -116,6 +118,7 @@ private struct TextItemNotepad: NSViewRepresentable {
         context.coordinator.parent = self
         guard let editor = scroll.documentView as? TextItemNotepadView else { return }
         editor.apply = apply; editor.cancel = cancel
+        editor.outlineStanzas = outlineStanzas
         if ItemTextColors.runs(editor.encodedText) != ItemTextColors.runs(text) { editor.loadColoredText(text) }
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -131,6 +134,26 @@ private struct TextItemNotepad: NSViewRepresentable {
 private final class TextItemNotepadView: NSTextView {
     var apply: () -> Void = {}
     var cancel: () -> Void = {}
+    var outlineStanzas = false
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard outlineStanzas, let layoutManager, let textContainer else { return }
+        layoutManager.ensureLayout(for: textContainer)
+        NSColor(JarasTheme.secondary.opacity(0.4)).setStroke()
+        for range in FullLyrics.stanzaRanges(string) {
+            let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var box = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            box.origin.y += textContainerOrigin.y
+            box.origin.x = 4
+            box.size.width = bounds.width - 8
+            box = box.insetBy(dx: 0, dy: -2)
+            if rect.intersects(box) { NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4).stroke() }
+        }
+    }
+    override func didChangeText() {
+        super.didChangeText()
+        if outlineStanzas { needsDisplay = true }
+    }
     private static let colorKey = NSAttributedString.Key("CatLiveItemColor")
     private var paletteWindow: NSPanel?
     var encodedText: String {
@@ -267,164 +290,3 @@ extension ItemTextColors {
     }
     #endif
 }
-
-#if os(iOS)
-import UIKit
-
-/// Keep the stored runs separate from UIKit's display attributes, so ordinary
-/// typing, selections and remote projection preserve the same document format.
-private struct IpadTextItemNotepad: UIViewRepresentable {
-    @Binding var text: String
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeUIView(context: Context) -> IpadColoredTextView {
-        let view = IpadColoredTextView()
-        view.isEditable = true
-        view.isSelectable = true
-        view.font = .systemFont(ofSize: 16)
-        view.backgroundColor = UIColor(JarasTheme.background)
-        view.tintColor = UIColor(JarasTheme.green)
-        view.textContainerInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
-        view.autocorrectionType = .no
-        view.smartQuotesType = .no
-        view.smartDashesType = .no
-        view.load(text)
-        view.delegate = context.coordinator
-        let rightClick = UITapGestureRecognizer(target: view, action: #selector(IpadColoredTextView.chooseColor))
-        rightClick.buttonMaskRequired = .secondary
-        rightClick.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
-        rightClick.cancelsTouchesInView = false
-        view.addGestureRecognizer(rightClick)
-        return view
-    }
-    func updateUIView(_ view: IpadColoredTextView, context: Context) {
-        context.coordinator.parent = self
-        if view.markedTextRange == nil, ItemTextColors.runs(view.encodedText) != ItemTextColors.runs(text) {
-            let selection = view.selectedRange
-            view.load(text)
-            view.selectedRange = NSRange(location: min(selection.location, view.textStorage.length), length: 0)
-        }
-    }
-    final class Coordinator: NSObject, UITextViewDelegate {
-        var parent: IpadTextItemNotepad
-        init(_ parent: IpadTextItemNotepad) { self.parent = parent }
-        func textViewDidChange(_ textView: UITextView) {
-            guard let view = textView as? IpadColoredTextView else { return }
-            parent.text = view.encodedText
-        }
-        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
-            guard let view = textView as? IpadColoredTextView else { return UIMenu(children: suggestedActions) }
-            return view.selectionMenu(for: range, suggestedActions: suggestedActions)
-        }
-    }
-}
-
-private final class IpadColoredTextView: UITextView {
-    private var requestedInitialFocus = false
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        guard window != nil, !requestedInitialFocus else { return }
-        requestedInitialFocus = true
-        // The compact editor is inserted as an overlay. Wait for it to join
-        // the window before requesting its keyboard, and only focus once.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            guard self.window != nil else { self.requestedInitialFocus = false; return }
-            self.becomeFirstResponder()
-        }
-    }
-    override func becomeFirstResponder() -> Bool {
-        // Do not depend on the order in which SwiftUI attaches the background
-        // keyboard scope and this UIKit editor, including re-entry after colors.
-        if let window {
-            IpadTextKeyboard.install(in: window)
-            IpadTextKeyboard.prepare(self)
-        }
-        return super.becomeFirstResponder()
-    }
-    private static let colorKey = NSAttributedString.Key("CatLiveItemColor")
-    private weak var palette: UIViewController?
-    private var palettePending = false
-    var encodedText: String {
-        var runs: [ItemTextColors.Run] = []
-        textStorage.enumerateAttribute(Self.colorKey, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
-            runs.append(.init(text: (textStorage.string as NSString).substring(with: range), color: (value as? NSNumber)?.uint32Value))
-        }
-        return ItemTextColors.encode(runs)
-    }
-    func load(_ value: String) {
-        let result = NSMutableAttributedString(string: "")
-        for run in ItemTextColors.runs(value) {
-            var attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 16), .foregroundColor: UIColor(JarasTheme.text)]
-            if let color = run.color {
-                attributes[.foregroundColor] = UIColor(Color(hex: color))
-                attributes[Self.colorKey] = NSNumber(value: color)
-            }
-            result.append(NSAttributedString(string: run.text, attributes: attributes))
-        }
-        attributedText = result
-        typingAttributes = [.font: UIFont.systemFont(ofSize: 16), .foregroundColor: UIColor(JarasTheme.text)]
-    }
-    private func restore(_ snapshot: NSAttributedString, selection: NSRange) {
-        let previous = NSAttributedString(attributedString: textStorage)
-        undoManager?.registerUndo(withTarget: self) { $0.restore(previous, selection: selection) }
-        textStorage.setAttributedString(snapshot)
-        selectedRange = selection
-        delegate?.textViewDidChange?(self)
-    }
-    override func insertText(_ text: String) {
-        var attributes = typingAttributes
-        attributes.removeValue(forKey: Self.colorKey)
-        attributes[.foregroundColor] = UIColor(JarasTheme.text)
-        typingAttributes = attributes
-        super.insertText(text)
-    }
-    func applyColor(_ color: UInt32, range: NSRange) {
-        guard range.length > 0, NSMaxRange(range) <= textStorage.length else { return }
-        let before = NSAttributedString(attributedString: textStorage)
-        undoManager?.registerUndo(withTarget: self) { $0.restore(before, selection: range) }
-        textStorage.addAttributes([.foregroundColor: UIColor(Color(hex: color)), Self.colorKey: NSNumber(value: color)], range: range)
-        selectedRange = range
-        delegate?.textViewDidChange?(self)
-    }
-    func selectionMenu(for range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu {
-        guard range.length > 0, range.location != NSNotFound,
-              NSMaxRange(range) <= textStorage.length else { return UIMenu(children: suggestedActions) }
-        // UIKit requests this menu for both a selection long press and pointer
-        // context clicks. Replace its lookup/translation actions with our palette.
-        // Present on the next turn, after UIKit finishes building its edit menu.
-        if !palettePending && palette == nil {
-            palettePending = true
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.palettePending = false
-                self.chooseColor(in: range)
-            }
-        }
-        return UIMenu(children: [])
-    }
-    @objc func chooseColor() { chooseColor(in: selectedRange) }
-    private func chooseColor(in range: NSRange) {
-        guard range.length > 0, range.location != NSNotFound,
-              NSMaxRange(range) <= textStorage.length, palette == nil,
-              var presenter = window?.rootViewController else { return }
-        // The editor can itself be inside a SwiftUI sheet. Present from that
-        // sheet rather than its underlying hosting controller.
-        while let presented = presenter.presentedViewController { presenter = presented }
-        guard !presenter.isBeingDismissed else { return }
-        selectedRange = range
-        let controller = UIHostingController(rootView: ItemTextColorPalette(pick: { [weak self] color in
-            guard let self else { return }
-            self.applyColor(color, range: range)
-            self.palette?.dismiss(animated: false) { [weak self] in self?.becomeFirstResponder() }
-        }, cancel: { [weak self] in
-            self?.palette?.dismiss(animated: false) { [weak self] in self?.becomeFirstResponder() }
-        }))
-        controller.modalPresentationStyle = .popover
-        controller.preferredContentSize = CGSize(width: 360, height: 180)
-        controller.popoverPresentationController?.sourceView = self
-        controller.popoverPresentationController?.sourceRect = selectedTextRange.map { firstRect(for: $0) } ?? bounds
-        palette = controller
-        presenter.present(controller, animated: false)
-    }
-}
-#endif

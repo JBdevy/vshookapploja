@@ -8,6 +8,7 @@ import AppKit
 typealias ProjectionImage = NSImage
 #else
 import UIKit
+import Metal
 typealias ProjectionImage = UIImage
 #endif
 
@@ -31,18 +32,19 @@ typealias ProjectionImage = UIImage
     private var preparedID: UUID?
     private var preparedURL: URL?
     private var preparation: Task<Void, Never>?
+    private var colorPreparation: Task<Void, Never>?
     #if os(macOS)
     private var window: NSWindow?
     #endif
     private var directory: URL?
     private var snapshot: ShowSnapshot?
+    private var snapshotRevision: UInt64?
+    private var mediaProjection: (project: UUID, song: UUID, revision: UInt64, media: Song)?
     private var clipID: UUID?
     private let trackKind: TrackKind
     private var stretchKey: String { trackKind == .teleprompt ? "jaras.teleprompter.video.stretch" : trackKind == .teleprompt2 ? "jaras.teleprompter2.video.stretch" : "jaras.video.stretch" }
     private var projectionEnabled = false
     private var active: Bool { visible || projectionEnabled }
-    var isActive: Bool { active }
-    private(set) var synchronizationSeekCount = 0
     private var playbackRate: Float = 0
     private var lastSourcePosition: Double?
     private var lastPosition: Double?
@@ -88,20 +90,17 @@ typealias ProjectionImage = UIImage
         guard projectionEnabled != enabled else { return }
         projectionEnabled = enabled
         if !active { reset() }
-        else if let snapshot { update(snapshot) }
+        else if let snapshot { update(snapshot, revision: snapshotRevision) }
     }
     func open(directory: URL) {
-        reset(); self.directory = directory; snapshot = nil
+        reset(); self.directory = directory; snapshot = nil; mediaProjection = nil
     }
     func closeProject() {
         #if os(macOS)
         window?.close()
         #endif
         visible = false; projectionEnabled = false
-        #if os(iOS)
-        if trackKind == .video { IpadVideoPresentation.shared.setVisible(false) }
-        #endif
-        reset(); directory = nil; snapshot = nil; message = ""
+        reset(); directory = nil; snapshot = nil; mediaProjection = nil; message = ""
     }
     #if os(macOS)
     func toggle() {
@@ -114,9 +113,9 @@ typealias ProjectionImage = UIImage
         let host = NSHostingView(rootView: VideoSurface(controller: self))
         if #available(macOS 13, *) { host.sizingOptions = [] }
         window.contentView = host
-        window.restorePlacement(key: "jaras.videoWindow"); window.makeKeyAndOrderFront(nil)
+        window.restorePlacement(key: "jaras.videoWindow"); ProjectionWindow.presentWorkspaceWindow(window)
         self.window = window; visible = true
-        if let snapshot { update(snapshot) }
+        if let snapshot { update(snapshot, revision: snapshotRevision) }
     }
     func windowWillClose(_ notification: Notification) {
         visible = false
@@ -128,9 +127,13 @@ typealias ProjectionImage = UIImage
     func setVisible(_ value: Bool) {
         guard visible != value else { return }
         visible = value
-        IpadVideoPresentation.shared.setVisible(value)
         if !active { reset() }
-        else if let snapshot { update(snapshot) }
+        else {
+            Task { @MainActor [weak self] in
+                guard let self, self.visible, let snapshot = self.snapshot else { return }
+                self.update(snapshot, revision: self.snapshotRevision)
+            }
+        }
     }
     #endif
     private func clearPreparation() {
@@ -165,7 +168,13 @@ typealias ProjectionImage = UIImage
                 try? await Task.sleep(nanoseconds: 20_000_000)
             }
             guard !Task.isCancelled, item.status == .readyToPlay else { return }
-            self?.applyVideoColor(to: item)
+            if self?.trackKind == .video {
+                let settings = VideoMediaSettings.shared
+                let composition = try? await Self.makeVideoComposition(asset: item.asset,
+                    limit: settings.size, grayscale: settings.blackAndWhite)
+                guard !Task.isCancelled else { return }
+                item.videoComposition = composition
+            }
             let sought = await candidate.seek(to: CMTime(seconds: max(0, source), preferredTimescale: 60000), toleranceBefore: .zero, toleranceAfter: .zero)
             guard sought, !Task.isCancelled else { return }
             let ready = await candidate.preroll(atRate: Float(next.audioRate))
@@ -175,6 +184,7 @@ typealias ProjectionImage = UIImage
     }
     private func reset(preserveDisplayedFrame: Bool = false) {
         clearPreparation()
+        colorPreparation?.cancel(); colorPreparation = nil
         activeURL = nil
         generation = UUID(); pendingSeek = nil; seeking = false
         player.pause()
@@ -184,17 +194,31 @@ typealias ProjectionImage = UIImage
         if !message.isEmpty { message = "" }
         if image != nil { image = nil }
     }
-    func update(_ snapshot: ShowSnapshot, sampleHostTime: Double? = nil) {
+    func update(_ snapshot: ShowSnapshot, revision: UInt64? = nil) {
         self.snapshot = snapshot
+        snapshotRevision = revision
         guard active, let directory else { return }
         guard let originalSong = snapshot.project.songs.first(where: { $0.id == snapshot.transport.songId }) else { reset(); return }
-        let song = snapshot.transport.multiLoop?.projectionSong(originalSong) ?? originalSong
+        let media: Song
+        if let revision, let cached = mediaProjection, cached.project == snapshot.project.id,
+           cached.song == originalSong.id, cached.revision == revision {
+            media = cached.media
+        } else {
+            var projection = originalSong
+            projection.tracks = originalSong.tracks.compactMap { source in
+                guard trackKind == .video ? !source.kind.isTeleprompter : trackKind == source.kind else { return nil }
+                let clips = source.clips.filter(\.isProjectionMedia)
+                guard !clips.isEmpty else { return nil }
+                var track = source
+                track.clips = clips
+                return track
+            }
+            media = projection
+            mediaProjection = revision.map { (snapshot.project.id, originalSong.id, $0, projection) }
+        }
+        let song = snapshot.transport.multiLoop?.projectionSong(media) ?? media
         let transport = snapshot.transport
-        let now = ProcessInfo.processInfo.systemUptime
-        // A UI refresh can arrive later than its transport sample. Account for
-        // that delay instead of repeatedly pausing/seeking a smooth AVPlayer.
-        let sampleAge = transport.playing ? min(0.25, max(0, now - (sampleHostTime ?? now))) : 0
-        let position = (transport.playing || transport.paused == true ? transport.position : transport.editPosition ?? transport.position) + sampleAge
+        let position = transport.playing || transport.paused == true ? transport.position : transport.editPosition ?? transport.position
         guard let clip = song.firstProjectionItem(at: position, trackKind: trackKind == .video ? nil : trackKind), let file = clip.audioFile else {
             if clipID != nil { reset() }
             if !message.isEmpty { message = "" }
@@ -225,6 +249,7 @@ typealias ProjectionImage = UIImage
             }
             return
         }
+        let now = ProcessInfo.processInfo.systemUptime
         var source = clip.sourceOffset + (position - clip.startTime) * clip.audioRate
         if let length = clip.loopLength, length > 0 {
             let start = clip.loopStart ?? clip.sourceOffset
@@ -279,34 +304,46 @@ typealias ProjectionImage = UIImage
         lastSectionJumpSerial = transport.sectionJumpSerial
         prepareNextVideo(song: song, clip: clip, position: position, playing: transport.playing, directory: directory)
     }
-    private func applyVideoColor(to preparedItem: AVPlayerItem? = nil) {
-        guard trackKind == .video, let item = preparedItem ?? player.currentItem else { return }
+    private func applyVideoColor() {
+        guard trackKind == .video, let item = player.currentItem else { return }
+        colorPreparation?.cancel()
         let settings = VideoMediaSettings.shared
-        let source = item.asset.tracks(withMediaType: .video).first
-        let natural = source?.naturalSize ?? .zero
-        let transform = source?.preferredTransform ?? .identity
-        let rotated = natural.applying(transform)
+        let limit = settings.size, grayscale = settings.blackAndWhite
+        colorPreparation = Task { [weak self, weak item] in
+            guard let item else { return }
+            do {
+                let composition = try await Self.makeVideoComposition(asset: item.asset, limit: limit, grayscale: grayscale)
+                guard !Task.isCancelled, self?.player.currentItem === item else { return }
+                item.videoComposition = composition
+            } catch { }
+        }
+    }
+    nonisolated private static func makeVideoComposition(asset: AVAsset, limit: CGSize, grayscale: Bool) async throws -> AVVideoComposition? {
+        guard let source = try await asset.loadTracks(withMediaType: .video).first else { return nil }
+        async let natural = source.load(.naturalSize)
+        async let transform = source.load(.preferredTransform)
+        let rotated = try await natural.applying(transform)
         let width = max(1, abs(rotated.width)), height = max(1, abs(rotated.height))
-        let limit = settings.size
         let renderScale = min(1, limit.width / width, limit.height / height)
-        guard settings.blackAndWhite || renderScale < 0.999 else { item.videoComposition = nil; return }
-        let grayscale = settings.blackAndWhite
-        let composition = AVVideoComposition(asset: item.asset, applyingCIFiltersWithHandler: { request in
-            if grayscale {
-                let filter = CIFilter(name: "CIColorControls")!
+        guard grayscale || renderScale < 0.999 else { return nil }
+        try Task.checkCancellation()
+        let composition = AVVideoComposition(asset: asset, applyingCIFiltersWithHandler: { request in
+            if grayscale, let filter = CIFilter(name: "CIColorControls") {
                 filter.setValue(request.sourceImage.clampedToExtent(), forKey: kCIInputImageKey)
                 filter.setValue(0, forKey: kCIInputSaturationKey)
-                request.finish(with: filter.outputImage!.cropped(to: request.sourceImage.extent), context: nil)
-            } else { request.finish(with: request.sourceImage, context: nil) }
+                if let output = filter.outputImage {
+                    request.finish(with: output.cropped(to: request.sourceImage.extent), context: nil)
+                    return
+                }
+            }
+            request.finish(with: request.sourceImage, context: nil)
         })
-        if let scaled = composition.mutableCopy() as? AVMutableVideoComposition {
-            scaled.renderScale = Float(renderScale)
-            item.videoComposition = scaled
-        } else { item.videoComposition = composition }
+        guard let scaled = composition.mutableCopy() as? AVMutableVideoComposition else { return composition }
+        scaled.renderScale = Float(renderScale)
+        return scaled
     }
     private func seek(_ seconds: Double, rate: Float) {
         if seeking { pendingSeek = (seconds,rate); return }
-        synchronizationSeekCount += 1
         seeking = true; let generation = generation
         let requestedAt = ProcessInfo.processInfo.systemUptime
         player.pause()
@@ -344,18 +381,16 @@ struct ProjectionMediaSurface: View {
     var body: some View {
         GeometryReader { geometry in
             if let image = controller.image {
-                Group {
-                    if controller.stretch {
-                        projectionImage(image).resizable().frame(width: geometry.size.width, height: geometry.size.height).clipped()
-                    } else {
-                        projectionImage(image).resizable().aspectRatio(contentMode: .fit)
-                            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
-                    }
-                }.saturation(controller.usesVideoSettings && settings.blackAndWhite ? 0 : 1)
+                if controller.stretch {
+                    projectionImage(image).resizable().frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                } else {
+                    projectionImage(image).resizable().aspectRatio(contentMode: .fit)
+                        .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                }
             } else {
                 NativeVideoLayer(player: controller.player, stretch: controller.stretch)
             }
-        }.opacity(controller.opacity).allowsHitTesting(false)
+        }.opacity(controller.opacity).saturation(controller.usesVideoSettings && settings.blackAndWhite ? 0 : 1).allowsHitTesting(false)
     }
     private func projectionImage(_ image: ProjectionImage) -> Image {
         #if os(macOS)
@@ -384,165 +419,90 @@ private struct NativeVideoLayer: UIViewRepresentable {
 }
 typealias ProjectionPlatformView = UIView
 #endif
-
-/// Extended, interactive displays require an M-series iPad, not just support
-/// for multiple windows on the built-in display. Unknown models stay embedded.
-enum IpadVideoWindowCapability {
-    static func supportsExtendedDisplay(model: String) -> Bool {
-        let parts = model.dropFirst(4).split(separator: ",").compactMap { Int($0) }
-        guard model.hasPrefix("iPad"), parts.count == 2 else { return false }
-        switch parts[0] {
-        case 13: return (4...11).contains(parts[1]) || (16...17).contains(parts[1])
-        case 14: return (3...6).contains(parts[1]) || (8...11).contains(parts[1])
-        case 15: return (3...6).contains(parts[1])
-        case 16: return (3...6).contains(parts[1]) || (8...11).contains(parts[1])
-        case 17: return (1...4).contains(parts[1])
-        default: return false
-        }
-    }
-}
-
 #if os(iOS)
-/// Only presentation changes reach the workspace. Decoder/frame updates must
-/// not rebuild the timeline or feed a SwiftUI layout/publication loop.
-@MainActor final class IpadVideoPresentation: ObservableObject {
-    static let shared = IpadVideoPresentation()
-    static let windowID = "catlive-video"
-    @Published private(set) var visible = false
-    @Published private(set) var detached = false
-    private var requestedWindow = false
-    private var session: UISceneSession?
-    var embedded: Bool { visible && !detached }
-    var canDetach: Bool {
-        guard #available(iOS 16.2, *), UIDevice.current.userInterfaceIdiom == .pad,
-              UIApplication.shared.supportsMultipleScenes else { return false }
-        var info = utsname(); uname(&info)
-        let capacity = MemoryLayout.size(ofValue: info.machine)
-        let model = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? withUnsafePointer(to: &info.machine) {
-            $0.withMemoryRebound(to: CChar.self, capacity: capacity) { String(cString: $0) }
-        }
-        return IpadVideoWindowCapability.supportsExtendedDisplay(model: model)
-    }
-    func setVisible(_ value: Bool) {
-        guard visible != value else { return }
-        visible = value
-        if !value { dock() }
-    }
-    func detach(open: () -> Void) {
-        guard visible, canDetach, !requestedWindow else { return }
-        requestedWindow = true
-        open()
-    }
-    func attach(_ scene: UIWindowScene) {
-        // A restored auxiliary scene must never replace the embedded default.
-        guard requestedWindow, visible, canDetach else {
-            UIApplication.shared.requestSceneSessionDestruction(scene.session, options: nil)
-            return
-        }
-        session = scene.session
-        scene.title = "CatLive Video"
-        scene.sizeRestrictions?.minimumSize = CGSize(width: 320, height: 216)
-        if !detached { detached = true }
-    }
-    func dock() {
-        requestedWindow = false
-        if detached { detached = false }
-        let previous = session; session = nil
-        if let previous { UIApplication.shared.requestSceneSessionDestruction(previous, options: nil) }
-    }
-    func discarded(_ sessions: Set<UISceneSession>) {
-        guard let session, sessions.contains(where: { $0.persistentIdentifier == session.persistentIdentifier }) else { return }
-        self.session = nil; requestedWindow = false
-        if detached { detached = false }
-    }
-}
-
 struct IpadNativeVideoButton: View {
-    @ObservedObject private var presentation = IpadVideoPresentation.shared
+    private let video = VideoPlayback.shared
+    @State private var visible = false
+    @State private var stretch = false
     var body: some View {
-        Button { VideoPlayback.shared.toggle() } label: {
-            HStack(spacing: 3) { Image(systemName: "video"); Text("Video") }
-                .font(.system(size: 10, weight: .semibold)).lineLimit(1)
+        Button { video.toggle() } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "video")
+                Text("Video").textCase(.uppercase).font(.jarasSystem(size: 10, weight: .heavy))
+            }.lineLimit(1)
                 .frame(width: 62, height: 32).foregroundStyle(Color.black)
-                .background(presentation.visible ? JarasTheme.green : JarasTheme.liveOffRed, in: RoundedRectangle(cornerRadius: 5))
+                .background(visible ? JarasTheme.green : JarasTheme.liveOffRed, in: RoundedRectangle(cornerRadius: 5))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel("Video")
-            .accessibilityValue(presentation.visible ? "On" : "Off")
-            .contextMenu { Toggle("Stretch", isOn: Binding(get: { VideoPlayback.shared.stretch }, set: { VideoPlayback.shared.setStretch($0) })) }
+            .accessibilityValue(visible ? "On" : "Off")
+            .contextMenu { Toggle("Stretch", isOn: Binding(get: { stretch }, set: { video.setStretch($0) })) }
+            .onReceive(video.$visible.removeDuplicates()) { visible = $0 }
+            .onReceive(video.$stretch.removeDuplicates()) { stretch = $0 }
     }
 }
 
-struct IpadEmbeddedVideoPanel: View {
-    @ObservedObject private var presentation = IpadVideoPresentation.shared
-    @Environment(\.openWindow) private var openWindow
-    var fullscreen = false
-    var toggleFullscreen: (() -> Void)? = nil
-    var toggleSetlist: (() -> Void)? = nil
-    var setlistVisible = true
+@MainActor private enum IpadVideoWindowCapability {
+    static let supportsExtendedDisplay: Bool = {
+        #if targetEnvironment(simulator)
+        false
+        #else
+        // The iPad Air and Pro models with an Apple M-series GPU support a
+        // separate extended desktop. Lightning and A-series models are docked.
+        MTLCreateSystemDefaultDevice()?.name.hasPrefix("Apple M") == true
+        #endif
+    }()
+}
+
+struct IpadNativeVideoPanel: View {
+    let leading: CGFloat
+    let trailing: CGFloat
+    private let video = VideoPlayback.shared
+    @State private var visible = false
+    @State private var origin: CGPoint?
+    @State private var fullscreen = false
+    @GestureState private var drag = CGSize.zero
     var body: some View {
-        VStack(spacing: 0) {
-            if !fullscreen {
-            HStack(spacing: 8) {
-                Label("Video", systemImage: "video").font(.system(size: 13, weight: .semibold))
-                Spacer(minLength: 0)
-                if !fullscreen, let toggleSetlist {
-                    Button(action: toggleSetlist) { Image(systemName: "sidebar.right").frame(width: 36, height: 36) }
-                        .foregroundStyle(setlistVisible ? JarasTheme.green : JarasTheme.secondary)
-                        .accessibilityLabel(setlistVisible ? "Recolher Setlist" : "Expandir Setlist")
-                }
-                if presentation.canDetach {
-                    Button {
-                        if presentation.detached { presentation.dock() }
-                        else { presentation.detach { openWindow(id: IpadVideoPresentation.windowID) } }
-                    } label: {
-                        Image(systemName: presentation.detached ? "arrow.down.right.and.arrow.up.left" : "rectangle.on.rectangle")
-                            .frame(width: 36, height: 36)
-                    }.accessibilityLabel(presentation.detached ? "Embutir vídeo" : "Destacar janela de vídeo")
-                }
-                if let toggleFullscreen {
-                    Button(action: toggleFullscreen) {
-                        Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                            .frame(width: 36, height: 36)
-                    }.accessibilityLabel(fullscreen ? "Sair da tela cheia" : "Tela cheia")
-                }
-                Button { VideoPlayback.shared.setVisible(false) } label: {
-                    Image(systemName: "xmark").frame(width: 36, height: 36)
-                }.accessibilityLabel("Fechar vídeo")
-            }.padding(.leading, 12).frame(height: 36).background(JarasTheme.panel)
-                .foregroundStyle(Color.white).buttonStyle(.plain)
+        GeometryReader { geometry in
+            if visible {
+                let floating = IpadVideoWindowCapability.supportsExtendedDisplay && !fullscreen
+                let insetLeading = min(leading, geometry.size.width * 0.40)
+                let insetTrailing = min(trailing, geometry.size.width * 0.40)
+                let width = fullscreen ? geometry.size.width : floating
+                    ? min(480, max(240, geometry.size.width * 0.55), geometry.size.width)
+                    : max(0, geometry.size.width - insetLeading - insetTrailing)
+                let height = floating ? min(geometry.size.height, width * 9 / 16 + 36) : geometry.size.height
+                let initial = origin ?? CGPoint(x: geometry.size.width - width - 12, y: geometry.size.height - height - 12)
+                let x = floating ? min(max(0, initial.x + drag.width), max(0, geometry.size.width - width)) : fullscreen ? 0 : insetLeading
+                let y = floating ? min(max(0, initial.y + drag.height), max(0, geometry.size.height - height)) : 0
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        HStack { Image(systemName: "video"); Text("Video"); Spacer(minLength: 0) }
+                            .contentShape(Rectangle())
+                            .gesture(DragGesture().updating($drag) { value, current, _ in
+                                if floating { current = value.translation }
+                            }.onEnded { value in
+                                if floating { origin = CGPoint(x: min(max(0, initial.x + value.translation.width), max(0, geometry.size.width - width)),
+                                    y: min(max(0, initial.y + value.translation.height), max(0, geometry.size.height - height))) }
+                            }, including: floating ? .gesture : .none)
+                        Button { fullscreen.toggle() } label: {
+                            Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").frame(width: 36, height: 36)
+                        }.accessibilityLabel(fullscreen ? "Sair da tela cheia" : "Tela cheia")
+                        Button { video.setVisible(false) } label: { Image(systemName: "xmark").frame(width: 36, height: 36) }
+                            .accessibilityLabel("Fechar vídeo")
+                    }.padding(.leading, 12).font(.system(size: 13, weight: .semibold))
+                        .frame(height: 36).background(JarasTheme.panel).foregroundStyle(Color.white).buttonStyle(.plain)
+                    VideoSurface(controller: video).clipped().contentShape(Rectangle())
+                        .onTapGesture(count: 2) { fullscreen.toggle() }
+                }.frame(width: width, height: height).background(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: floating ? 8 : 0))
+                    .shadow(radius: floating ? 10 : 0).offset(x: x, y: y)
             }
-            // Keep safe areas and hit testing scoped to this panel, not the workspace.
-            ZStack {
-                Color.black
-                ProjectionMediaSurface(controller: .shared)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { toggleFullscreen?() }
-        }.background(Color.black).clipped()
+        }.clipped().allowsHitTesting(visible)
+            .onReceive(video.$visible.removeDuplicates()) { value in
+                visible = value
+                if !value { fullscreen = false }
+            }
     }
-}
-
-struct IpadDetachedVideoScene: View {
-    var body: some View {
-        IpadEmbeddedVideoPanel()
-            .background(IpadVideoSceneConnection())
-            .preferredColorScheme(.dark)
-    }
-}
-private struct IpadVideoSceneConnection: UIViewRepresentable {
-    final class ConnectionView: UIView {
-        private weak var connectedScene: UIWindowScene?
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard let scene = window?.windowScene, scene !== connectedScene else { return }
-            connectedScene = scene
-            DispatchQueue.main.async { IpadVideoPresentation.shared.attach(scene) }
-        }
-    }
-    func makeUIView(context: Context) -> ConnectionView {
-        let view = ConnectionView(); view.isUserInteractionEnabled = false; return view
-    }
-    func updateUIView(_ view: ConnectionView, context: Context) {}
 }
 #endif
 

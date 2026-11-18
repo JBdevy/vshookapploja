@@ -19,7 +19,6 @@
 
 #if TARGET_OS_IOS
 #import <CoreML/CoreML.h>
-#include <os/proc.h>
 #include "CatStemSpectrogram.hpp"
 #endif
 

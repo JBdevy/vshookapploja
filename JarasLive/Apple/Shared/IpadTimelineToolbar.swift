@@ -29,23 +29,26 @@ struct IpadTimelineToolbar: View {
     private var relativeTimebase: Bool { show.current?.projectTime.timebase == .relative }
 
     var body: some View {
-        GeometryReader { geometry in
-            // Keep the original order in one row. Only mount controls whose
-            // complete width fits, so hidden buttons cannot intercept touches.
+        ViewThatFits(in: .horizontal) {
             HStack(spacing: 4) {
-                if geometry.size.width >= 36 { editButton }
-                timelineButtons(availableWidth: geometry.size.width)
-                if geometry.size.width >= 220 { addButton }
+                editButton
+                timelineButtons
+                addButton
             }.fixedSize(horizontal: true, vertical: false)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .clipped()
-        }.frame(height: 32)
+            VStack(spacing: 4) {
+                HStack(spacing: 4) {
+                    editButton
+                    Spacer(minLength: 0)
+                    addButton
+                }
+                HStack(spacing: 4) { timelineButtons }
+            }
+        }
         .padding(.horizontal, 4)
         .font(.jarasSystem(size: 11, weight: .semibold))
         .foregroundStyle(JarasTheme.text)
         .sheet(isPresented: $showingVisibility) {
             TrackVisibilityEditor(show: show, close: { showingVisibility = false })
-                .background(IpadPresentedOutsideDismissal { showingVisibility = false })
         }
         .alert(Text(verbatim: JarasLocalization.string(pendingTimebase?.relative == true ? "Enable relative timebase?" : "Disable relative timebase?")),
                isPresented: Binding(get: { pendingTimebase != nil }, set: { if !$0 { pendingTimebase = nil } }),
@@ -65,7 +68,6 @@ struct IpadTimelineToolbar: View {
                 ? "Relative timebase: changing the project BPM adjusts item duration and playback speed to follow the tempo. With Free timebase, changing the project BPM preserves item duration and playback speed. Tempo markers with their own timebase keep their individual settings."
                 : "Free timebase: changing the project BPM changes the grid without stretching or shortening items. Item duration and playback speed are preserved. Tempo markers with their own timebase keep their individual settings."))
         }
-        .background(IpadPresentedOutsideDismissal(active: pendingTimebase != nil, alert: true) { pendingTimebase = nil })
         .onChange(of: show.snapshot.project.id) { _ in
             showingVisibility = false
             pendingTimebase = nil
@@ -89,48 +91,40 @@ struct IpadTimelineToolbar: View {
             .accessibilityIdentifier("native-add-track")
     }
 
-    @ViewBuilder private func timelineButtons(availableWidth: CGFloat) -> some View {
-        if availableWidth >= 72 {
-            Button { snapEnabled.toggle() } label: {
-                TimelineMagnetIcon().stroke(lineWidth: 1.5).frame(width: 17, height: 17)
-                    .frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: snapEnabled ? JarasTheme.accent : JarasTheme.secondary))
-                .accessibilityLabel("Timeline snapping")
-                .accessibilityIdentifier("timeline-snap")
-                .accessibilityValue(snapEnabled ? "On" : "Off")
-        }
-        if availableWidth >= 108 {
-            Button { showingVisibility = true } label: {
-                Image(systemName: "eye").frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: JarasTheme.text))
-                .accessibilityLabel("Visibilidade das pistas")
-                .accessibilityIdentifier("native-track-visibility")
-        }
-        if availableWidth >= 144 {
-            Button {
-                guard show.canControl(), let song = show.current else { return }
-                pendingTimebase = TimebaseRequest(project: show.snapshot.project.id, song: song.id,
-                                                  relative: song.projectTime.timebase != .relative)
-            } label: {
-                Image(systemName: "arrow.left.and.right").frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: relativeTimebase ? JarasTheme.green : .yellow))
-                .accessibilityLabel("Relative timebase")
-                .accessibilityIdentifier("timeline-timebase")
-                .accessibilityValue(relativeTimebase ? "Enabled" : "Disabled")
-                .disabled(show.current == nil)
-        }
-        if availableWidth >= 180 {
-            Button { show.setTimelineMovementLocked(!show.timelineMovementLocked) } label: {
-                Image(systemName: show.timelineMovementLocked ? "lock.fill" : "lock.open")
-                    .frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: show.timelineMovementLocked ? .black : JarasTheme.text,
-                                                        background: show.timelineMovementLocked ? JarasTheme.yellow : nil))
-                .accessibilityLabel("Lock timeline movement")
-                .accessibilityIdentifier("timeline-movement-lock")
-                .onLongPressGesture { showingLocks = true }
-                .popover(isPresented: $showingLocks) { TimelineLockOptionsView(show: show) }
-                .accessibilityValue(show.timelineMovementLocked ? "Locked" : "Unlocked")
-        }
+    @ViewBuilder private var timelineButtons: some View {
+        Button { snapEnabled.toggle() } label: {
+            TimelineMagnetIcon().stroke(lineWidth: 1.5).frame(width: 17, height: 17)
+                .frame(width: 32, height: 32).contentShape(Rectangle())
+        }.buttonStyle(IpadTimelineToolbarButtonStyle(color: snapEnabled ? JarasTheme.accent : JarasTheme.secondary))
+            .accessibilityLabel("Timeline snapping")
+            .accessibilityIdentifier("timeline-snap")
+            .accessibilityValue(snapEnabled ? "On" : "Off")
+        Button { showingVisibility = true } label: {
+            Image(systemName: "eye").frame(width: 32, height: 32).contentShape(Rectangle())
+        }.buttonStyle(IpadTimelineToolbarButtonStyle(color: JarasTheme.text))
+            .accessibilityLabel("Visibilidade das pistas")
+            .accessibilityIdentifier("native-track-visibility")
+        Button {
+            guard show.canControl(), let song = show.current else { return }
+            pendingTimebase = TimebaseRequest(project: show.snapshot.project.id, song: song.id,
+                                              relative: song.projectTime.timebase != .relative)
+        } label: {
+            Image(systemName: "arrow.left.and.right").frame(width: 32, height: 32).contentShape(Rectangle())
+        }.buttonStyle(IpadTimelineToolbarButtonStyle(color: relativeTimebase ? JarasTheme.green : .yellow))
+            .accessibilityLabel("Relative timebase")
+            .accessibilityIdentifier("timeline-timebase")
+            .accessibilityValue(relativeTimebase ? "Enabled" : "Disabled")
+            .disabled(show.current == nil)
+        Button { show.setTimelineMovementLocked(!show.timelineMovementLocked) } label: {
+            Image(systemName: show.timelineMovementLocked ? "lock.fill" : "lock.open")
+                .frame(width: 32, height: 32).contentShape(Rectangle())
+        }.buttonStyle(IpadTimelineToolbarButtonStyle(color: show.timelineMovementLocked ? .black : JarasTheme.text,
+                                                    background: show.timelineMovementLocked ? JarasTheme.yellow : nil))
+            .accessibilityLabel("Lock timeline movement")
+            .accessibilityIdentifier("timeline-movement-lock")
+            .onLongPressGesture { showingLocks = true }
+            .popover(isPresented: $showingLocks) { TimelineLockOptionsView(show: show) }
+            .accessibilityValue(show.timelineMovementLocked ? "Locked" : "Unlocked")
     }
 }
 

@@ -24,9 +24,9 @@ import UniformTypeIdentifiers
     #endif
     private var exportTitle: LocalizedStringKey {
         #if os(macOS)
-        "Export to CatLive iPadOS"
+        "Export ziplive"
         #else
-        "Export CatLive project"
+        "Export ziplive"
         #endif
     }
     @State private var worker: Task<Void, Never>?
@@ -80,7 +80,6 @@ import UniformTypeIdentifiers
             #if os(iOS)
             .sheet(item: $exportFile) { file in
                 NativePackageExporter(url: file.url, finished: { exportFile = nil })
-                    .background(IpadPresentedOutsideDismissal { exportFile = nil })
             }
             .onDisappear {
                 worker?.cancel()
@@ -94,7 +93,7 @@ import UniformTypeIdentifiers
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "ziplive") ?? .zip]
         panel.nameFieldStringValue = document.deletingPathExtension().lastPathComponent + ".ziplive"
-        panel.title = JarasLocalization.string("Export to CatLive iPadOS")
+        panel.title = JarasLocalization.string("Export ziplive")
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let selected = panel.url else { return }
         let destination = selected.pathExtension.lowercased() == "ziplive" ? selected : selected.appendingPathExtension("ziplive")

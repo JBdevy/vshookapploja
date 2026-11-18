@@ -1,6 +1,7 @@
 package com.hookdeveloper.catlive.remote;
 
 import android.graphics.*;
+import android.graphics.drawable.GradientDrawable;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.LruCache;
@@ -12,6 +13,8 @@ import static com.hookdeveloper.catlive.remote.RemoteWidgets.*;
 /** Matches RemoteNativeGridItem's illustrative LAN waveform, not audio peaks. */
 final class RemoteItemDrawing {
  final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+ final GradientDrawable muteButton=trackButtonSurface(0xffff3b30,false);
+ final GradientDrawable mutedButton=trackButtonSurface(0xffff3b30,true);
  final LruCache<String,Path> waves=new LruCache<>(96);
  int builds;
  static int seed(String id){int seed=0;for(byte c:id.toUpperCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8))seed=(seed+(c&255))%997;return seed;}
@@ -33,13 +36,15 @@ final class RemoteItemDrawing {
   int color=silenced?0xff8c8c8c:rgb(track.optLong("color",0x705264)),name=rgb(track.optLong("nameColor",0xffffff));
   float radius=3*density,header=headerHeight(box);Path outline=new Path();outline.addRoundRect(box,radius,radius,Path.Direction.CW);
   canvas.save();canvas.clipPath(outline);
-  paint.setStyle(Paint.Style.FILL);paint.setColor(Color.WHITE);paint.setShader(new LinearGradient(0,box.top,0,box.bottom,alpha(color,silenced?.55f:1),alpha(color,silenced?.25f:.78f),Shader.TileMode.CLAMP));canvas.drawRect(box,paint);paint.setShader(null);
-  paint.setColor(0x29000000);canvas.drawRect(box.left,box.top,box.right,box.top+header,paint);
+  paint.setStyle(Paint.Style.FILL);paint.setColor(color);canvas.drawRect(box,paint);
   if(showHeader){
-  RectF mute=muteRect(box);paint.setColor(muted?0xffff3b30:0x47000000);canvas.drawRoundRect(mute,2*density,2*density,paint);
-  paint.setColor(muted?Color.BLACK:Color.WHITE);paint.setTypeface(bold);paint.setTextSize(14.3f*density);paint.setTextAlign(Paint.Align.CENTER);
+  int ink=Color.luminance(color)>=.17913f?Color.BLACK:Color.WHITE;
+  RectF mute=muteRect(box);GradientDrawable face=muted?mutedButton:muteButton;
+  face.setBounds(Math.round(mute.left),Math.round(mute.top),Math.round(mute.right),Math.round(mute.bottom));
+  face.draw(canvas);
+  paint.setColor(Color.WHITE);paint.setTypeface(bold);paint.setTextSize(14.3f*density);paint.setTextAlign(Paint.Align.CENTER);
   canvas.save();canvas.clipRect(mute);canvas.drawText("M",mute.centerX(),mute.centerY()-(paint.ascent()+paint.descent())/2,paint);canvas.restore();
-  paint.setTextAlign(Paint.Align.LEFT);paint.setTextSize(13*density);paint.setColor(name);float titleX=mute.right+4*density,available=Math.max(0,box.right-titleX-3*density);
+  paint.setTextAlign(Paint.Align.LEFT);paint.setTextSize(13*density);paint.setColor(ink);float titleX=mute.right+4*density,available=Math.max(0,box.right-titleX-3*density);
   if(available>0){String title=TextUtils.ellipsize(clip.optString("name"),new TextPaint(paint),available,TextUtils.TruncateAt.END).toString();canvas.drawText(title,titleX,box.top+header/2-(paint.ascent()+paint.descent())/2,paint);}
   }
   float waveHeight=box.height()-header;

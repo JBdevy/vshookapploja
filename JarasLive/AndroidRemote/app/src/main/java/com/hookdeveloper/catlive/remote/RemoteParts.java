@@ -17,6 +17,7 @@ final class RemoteParts extends LinearLayout {
     final Button cancel;
     final Tab currentTab,queuedTab;
     final LinearLayout list;
+    final boolean horizontal;
     final List<SectionRow> sections=new ArrayList<>();
     boolean secondary;
     JSONObject region,playback;
@@ -27,12 +28,25 @@ final class RemoteParts extends LinearLayout {
 
     RemoteParts(MainActivity app){this(app,id->app.remote.action("queueSection",id,0),()->app.remote.action("cancelSection"));}
     RemoteParts(MainActivity app,Consumer<String> select,Runnable cancelAction){
-        super(app);this.app=app;this.select=select;secondary=app.partsSecondary;setOrientation(VERTICAL);setBackground(RemoteWidgets.panel(0));
+        this(app,select,cancelAction,null);
+    }
+    RemoteParts(MainActivity app,Consumer<String> select,Runnable cancelAction,Boolean fixedBank){
+        super(app);this.app=app;this.select=select;horizontal=fixedBank!=null;setOrientation(VERTICAL);setBackground(RemoteWidgets.panel(0));
         cancel=new Button(app,"Cancel",cancelAction);cancel.setTextSize(12);cancel.solid(0xffffd600);
-        cancel.setContentDescription("Cancelar trecho engatilhado");LayoutParams lp=new LayoutParams(-1,dp(28));lp.setMargins(dp(4),dp(4),dp(4),dp(4));addView(cancel,lp);
+        cancel.setContentDescription("Cancelar trecho engatilhado");LayoutParams lp=new LayoutParams(-1,dp(28));lp.setMargins(dp(4),dp(4),dp(4),dp(4));
+        secondary = fixedBank == null ? app.partsSecondary : fixedBank;
+        if(fixedBank==null)addView(cancel,lp);
         LinearLayout tabs=row(app);pad(tabs,4,4);currentTab=new Tab(false);queuedTab=new Tab(true);
-        tabs.addView(currentTab,new LayoutParams(0,dp(42),1));lp=new LayoutParams(0,dp(42),1);lp.leftMargin=dp(3);tabs.addView(queuedTab,lp);addView(tabs);
-        ScrollView scroll=new ScrollView(app);scroll.setVerticalScrollBarEnabled(false);list=column(app);pad(list,5,5);scroll.addView(list);addView(scroll,new LayoutParams(-1,0,1));refresh();
+        if(fixedBank==null){
+            tabs.addView(currentTab,new LayoutParams(0,dp(42),1));lp=new LayoutParams(0,dp(42),1);lp.leftMargin=dp(3);tabs.addView(queuedTab,lp);addView(tabs);
+        }else{
+            Tab tab=secondary?queuedTab:currentTab;
+            tab.removeView(tab.title);
+            if(android.os.Build.VERSION.SDK_INT>=28)tab.title.setAccessibilityHeading(true);
+            tab.title.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+            addView(tab.title,new LayoutParams(-1,dp(17)));
+        }
+        ScrollView scroll=new ScrollView(app);scroll.setVerticalScrollBarEnabled(fixedBank!=null);list=column(app);pad(list,5,5);scroll.addView(list);addView(scroll,new LayoutParams(-1,0,1));refresh();
     }
     void selectTab(boolean second){secondary=second;app.partsSecondary=second;refresh();}
     JSONObject bank(boolean second){
@@ -64,7 +78,22 @@ final class RemoteParts extends LinearLayout {
         tick();
     }
     void addSection(String id,String name,double start,boolean first,int color,boolean loop){
-        SectionRow section=new SectionRow(id,name,start,first,color,loop);sections.add(section);LayoutParams lp=new LayoutParams(-1,dp(38));lp.bottomMargin=dp(5);list.addView(section,lp);
+        SectionRow section=new SectionRow(id,name,start,first,color,loop);
+        int column=sections.size()%4;
+        sections.add(section);
+        if(!horizontal){
+            LayoutParams lp=new LayoutParams(-1,dp(38));lp.bottomMargin=dp(5);list.addView(section,lp);
+            return;
+        }
+        LinearLayout row;
+        if(column==0){
+            row=row(app);
+            for(int i=0;i<4;i++)row.addView(new View(app),new LayoutParams(0,-1,1));
+            LayoutParams lp=new LayoutParams(-1,dp(48));lp.bottomMargin=dp(4);list.addView(row,lp);
+        }else row=(LinearLayout)list.getChildAt(list.getChildCount()-1);
+        row.removeViewAt(column);
+        LayoutParams lp=new LayoutParams(0,-1,1);lp.rightMargin=column==3?0:dp(4);
+        row.addView(section,column,lp);
     }
     void tick(){
         if(app.state==null)return;
@@ -88,13 +117,12 @@ final class RemoteParts extends LinearLayout {
             title.setTextColor(selected?TEXT:SECONDARY);name.setTextColor(selected?TEXT:SECONDARY);setBackground(selected?surface(blend(0xff171717,second?0xffff9500:GREEN,.55f),blend(0xff171717,second?0xffff9500:GREEN,.48f),0x2affffff,5):display(5));setSelected(selected);setContentDescription(title.getText());}
     }
     final class SectionRow extends FrameLayout {
-        final String id,name;final double start;final boolean first,loop;final int color;final TextView title;final Paint paint=new Paint(3);boolean armed,playing;Shader loopBorder;
+        final String id,name;final double start;final boolean first,loop;final int color;final TextView title;final Paint paint=new Paint(3);boolean armed,playing;
         SectionRow(String id,String name,double start,boolean first,int color,boolean loop){super(app);this.id=id;this.name=name;this.start=start;this.first=first;this.color=color;this.loop=loop;setWillNotDraw(false);setClickable(true);setFocusable(true);setContentDescription(name);
             double luminance=.2126*linear(Color.red(color))+.7152*linear(Color.green(color))+.0722*linear(Color.blue(color));
             int text=(luminance+.05)/.05>=1.05/(luminance+.05)?Color.BLACK:Color.WHITE;
             title=label(app,name,first?16:12,text);title.setTypeface(bold);title.setGravity(Gravity.CENTER);title.setMaxLines(2);title.setAutoSizeTextTypeUniformWithConfiguration(first?9:6,first?16:12,1,android.util.TypedValue.COMPLEX_UNIT_SP);pad(title,5,0);addView(title,new FrameLayout.LayoutParams(-1,-1));setOnClickListener(v->{if(app.midi!=null)app.midi.smk.selectPart(id,secondary);select.accept(id);});}
         double linear(int channel){double value=channel/255.0;return value<=.04045?value/12.92:Math.pow((value+.055)/1.055,2.4);}
-        @Override protected void onSizeChanged(int w,int h,int oldw,int oldh){super.onSizeChanged(w,h,oldw,oldh);loopBorder=loop&&w>0&&h>0?new LinearGradient(0,0,w,h,new int[]{0xffff5050,0xff51ef93,0xff409cff},null,Shader.TileMode.CLAMP):null;}
         void update(){armed=RemoteModel.same(id,queued);playing=RemoteModel.same(id,active);title.setText((armed?"↰ ":"")+name);setSelected(armed||(queued.isEmpty()&&playing));}
         double fraction(){
             if(armed&&Double.isFinite(trigger))return Math.max(0,Math.min(1,(trigger-playbackPosition)/Math.max(.001,trigger-queueStart)));
@@ -103,9 +131,17 @@ final class RemoteParts extends LinearLayout {
         }
         @Override protected void onDraw(Canvas canvas){float w=getWidth(),h=getHeight();boolean selected=isSelected();
             paint.setStyle(Paint.Style.FILL);paint.setColor(color);canvas.drawRoundRect(0,0,w,h,dp(5),dp(5),paint);
-            double fraction=fraction();if(fraction>=0){paint.setColor(armed?YELLOW:GREEN);canvas.save();Path clip=new Path();clip.addRoundRect(new RectF(0,0,w,h),dp(5),dp(5),Path.Direction.CW);canvas.clipPath(clip);canvas.drawRect(0,h-dp(5),(float)(w*fraction),h,paint);canvas.restore();}
-            paint.setStyle(Paint.Style.STROKE);float stroke=loop?2*density:(selected?1.5f:.5f)*density;paint.setStrokeWidth(stroke);paint.setColor(selected?GREEN:0x2affffff);paint.setShader(loopBorder);canvas.drawRoundRect(stroke/2,stroke/2,w-stroke/2,h-stroke/2,dp(5),dp(5),paint);paint.setShader(null);
-            if(loop&&selected){float inset=3.75f*density;paint.setColor(GREEN);paint.setStrokeWidth(1.5f*density);canvas.drawRoundRect(inset,inset,w-inset,h-inset,dp(3),dp(3),paint);}if(app.midi!=null&&app.remote.mode.equals("director")&&app.midi.smk.partSecondary==secondary&&RemoteModel.same(app.midi.smk.part,id)){paint.setShader(null);paint.setColor(BLUE);paint.setStrokeWidth(2*density);canvas.drawRoundRect(density,density,w-density,h-density,dp(4),dp(4),paint);}paint.setStyle(Paint.Style.FILL);
+            double fraction=fraction();if(fraction>=0){canvas.save();Path clip=new Path();clip.addRoundRect(new RectF(0,0,w,h),dp(5),dp(5),Path.Direction.CW);canvas.clipPath(clip);paint.setColor(Color.BLACK);canvas.drawRect(0,h-dp(5),w,h,paint);paint.setColor(armed?YELLOW:GREEN);canvas.drawRect(0,h-dp(5),(float)(w*fraction),h,paint);canvas.restore();}
+            paint.setStyle(Paint.Style.STROKE);float stroke=dp(selected||first?1.5f:.5f);paint.setStrokeWidth(stroke);paint.setColor(selected?GREEN:first?BLUE:0x2affffff);canvas.drawRoundRect(stroke/2,stroke/2,w-stroke/2,h-stroke/2,dp(5),dp(5),paint);if(app.midi!=null&&app.remote.mode.equals("director")&&app.midi.smk.partSecondary==secondary&&RemoteModel.same(app.midi.smk.part,id)){paint.setColor(BLUE);paint.setStrokeWidth(2*density);canvas.drawRoundRect(density,density,w-density,h-density,dp(4),dp(4),paint);}paint.setStyle(Paint.Style.FILL);
+            if (loop) {
+                paint.setColor(0xff313131);
+                canvas.drawRoundRect(w - dp(30), dp(3), w - dp(3), dp(14), dp(3), dp(3), paint);
+                paint.setColor(Color.WHITE);
+                paint.setTypeface(bold);
+                paint.setTextSize(8 * density);
+                paint.setTextAlign(Paint.Align.CENTER);
+                canvas.drawText("LOOP", w - dp(16.5f), dp(11), paint);
+            }
         }
     }
 }

@@ -5,9 +5,6 @@ p=Path(sys.argv[1]);p.mkdir(parents=True,exist_ok=True)
 root=Path(__file__).resolve().parent.parent
 home=(root/'Apple/Shared/IpadNativeHome.swift').read_text()
 source=home[home.index('/// Hold security-scoped folder access'):home.rindex('#endif')]
-workspace=(root/'Apple/Shared/IpadStandaloneWorkspace.swift').read_text()
-if 'IpadPresentedOutsideDismissal' in source:
- source=workspace[workspace.index('struct IpadPresentedOutsideDismissal:'):workspace.index('struct IpadModalHeader:')]+source
 fixture=(root/'Tests/Apple/NativePackagePickerFixture.swift').read_text()
 (p/'Fixture.swift').write_text(fixture.replace('// PRODUCTION_PICKER_PRESENTATION', source))
 (p/'tests.swift').write_text((root/'Tests/Apple/NativePackagePickerUITests.swift').read_text())

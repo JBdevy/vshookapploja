@@ -12,19 +12,6 @@ func require(_ value: @autoclosure () -> Bool, _ message: String) {
     if !value() { fatalError(message) }
 }
 let project = UUID(), song = UUID(), trackID = UUID(), regionID = UUID()
-for fraction in [0.0, 0.25, 0.75] {
-    let unity = DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: nil)
-    require(abs(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: 0.5) - unity / 2) < 1e-12,
-            "Remote waveform follows item attenuation")
-    require(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: 2) == min(1, unity * 2),
-            "Remote waveform grows and clips inside the item")
-    require(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: 0) == 0,
-            "Silent item has no illustrative peaks")
-    require(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: fraction, gain: .nan) == unity,
-            "Invalid gain never produces invalid drawing coordinates")
-}
-require(abs(DAWRemoteItemWaveform.amplitude(seed: 738, fraction: 0.25, gain: 1) - 0.35763816297597795) < 1e-12,
-        "Apple and Android use identical illustrative peaks")
 var fixture = DAWRemoteState(project: project, projectName: "Remote native test", song: song, songName: "Test",
     songs: [.init(id: song, name: "Test")],
     tracks: [.init(id: trackID, name: "Track", color: 0x828282, volume: 1, pan: 0, mute: false, solo: false,
@@ -1481,36 +1468,6 @@ require(!localGateFeedback.gate(preset: 1, pad: 0, confirmed: false, now: 20.1),
 localGateFeedback.expireGates(now: 23)
 require(!localGateFeedback.gate(preset: 0, pad: 0, confirmed: false, now: 23), "Unconfirmed Gate changes return to authoritative state after timeout")
 print("REMOTE_GATE_LOCAL_IMMEDIATE_RAPID_TAPS_STALE_STATE_AND_PRESET_ISOLATION_OK")
-
-var openingFixture = fixture
-let recentID = UUID(), openingID = UUID()
-openingFixture.projects = .init(recent: [.init(id: recentID, name: "Projeto recente", current: false)], busy: false, canOpen: true, status: "", error: "")
-let openingCommand = DAWRemoteCommand(id: openingID, project: project, action: .openRecentProjectInNewTab, target: recentID)
-var opening = DAWRemoteProjectOpening(command: openingCommand, state: openingFixture, now: Date(timeIntervalSince1970: 100))
-require(opening.name == "Projeto recente", "loading identifies requested project")
-require(!opening.receive(openingFixture), "previous idle snapshot is not completion")
-openingFixture.projects?.commandID = UUID(); openingFixture.projects?.commandState = "completed"
-require(!opening.receive(openingFixture), "another client's receipt does not complete local request")
-openingFixture.projects?.commandID = openingID; openingFixture.projects?.commandState = "completed"
-require(opening.receive(openingFixture), "fast correlated completion works even if busy snapshot coalesced")
-openingFixture.projects?.commandState = "opening"; openingFixture.project = UUID()
-require(!opening.receive(openingFixture), "new tab's initial snapshot does not end loading")
-openingFixture.projects?.commandState = "waiting"
-require(!opening.receive(openingFixture) && opening.canDismiss(at: Date(timeIntervalSince1970: 101)), "desktop confirmation can be acknowledged without claiming completion")
-openingFixture.projects?.commandState = "failed"; openingFixture.projects?.error = "Arquivo ausente"
-require(!opening.receive(openingFixture) && opening.error == "Arquivo ausente", "failed request remains visible with recoverable error")
-openingFixture.projects?.commandState = "cancelled"
-require(opening.receive(openingFixture), "desktop cancellation ends loading")
-openingFixture = fixture; openingFixture.projects = .init(recent: [], busy: false, canOpen: true, status: "", error: "")
-opening = DAWRemoteProjectOpening(command: openingCommand, state: openingFixture, now: Date(timeIntervalSince1970: 100))
-require(opening.canDismiss(at: Date(timeIntervalSince1970: 121)) && !opening.receive(openingFixture), "time never fabricates successful completion")
-openingFixture.projects?.busy = true; require(!opening.receive(openingFixture), "legacy busy remains pending")
-openingFixture.projects?.busy = false; require(!opening.receive(openingFixture), "unrelated legacy busy cycle without new project remains pending")
-openingFixture.project = UUID(); require(opening.receive(openingFixture), "legacy changed project after busy cycle completes")
-let closeTabCommand = DAWRemoteCommand(project: project, action: .closeProjectTab, target: UUID())
-require(closeTabCommand.valid && !DAWRemoteCommand(project: project, action: .closeProjectTab).valid, "close tab requires an explicit target")
-require(!DAWRemoteAccessRules.allows(closeTabCommand, mode: .observer), "observer cannot close project tabs")
-print("REMOTE_PROJECT_OPEN_CORRELATION_COALESCING_WAITING_ERRORS_LEGACY_AND_TAB_CLOSE_OK")
 
 var advancingTitle = drawerFixture
 advancingTitle.playing = true; advancingTitle.position = 2; advancingTitle.currentRegion = regionID

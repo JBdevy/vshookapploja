@@ -8,14 +8,16 @@ from pathlib import Path
 import sys
 out = Path(sys.argv[1])
 s = Path('Apple/Shared/StemAudioPlayback.swift').read_text()
-a = s.index('@MainActor final class TrackMIDIActivity'); b = s.index('@MainActor final class TrackMeterLevel')
+a = s.index('@MainActor final class TrackMIDIActivity'); b = s.index('// Prepared sources own their PCM cursor.')
 (out / 'midi.swift').write_text('import SwiftUI\n' + s[a:b] + Path('Tests/Apple/MIDIKeyboardTests.swift').read_text())
 s = Path('Apple/Shared/TrackMixerRow.swift').read_text()
 posted = sys.argv[2] == '--posted-wheel'
-a = s.index('private struct FooterMixerScroll:') if posted else s.index('private final class FooterMixerGreenScroller:')
+a = s.index('private struct FooterMixerScroll:') if posted else s.index('/// Deliberate Shift-wheel')
 b = s.index('\n#endif', a)
 layout = s[s.index('private struct FooterMixerStripLayout {'):s.index('private struct FooterMixerRenderState:')]
-body = (layout + s[a:b]).replace('private func smoothWheel(', 'fileprivate func smoothWheel(')
+grid = Path('Apple/Shared/GridScrollView.swift').read_text()
+scroller = grid[grid.index('    final class GreenScroller:'):grid.index('    private var timelineVerticalBar:')]
+body = ('final class GridNativeScrollView {\n' + scroller + '}\n' + layout + s[a:b]).replace('private func smoothWheel(', 'fileprivate func smoothWheel(')
 body = body.replace('private func routeWheel(', 'fileprivate func routeWheel(')
 body = body.replace('private var cachedStrips:', 'fileprivate var cachedStrips:')
 body = body.replace('private var pendingStripLayout:', 'fileprivate var pendingStripLayout:')
@@ -30,7 +32,7 @@ model = meter[meter.index('@MainActor final class TrackMeterLevel'):meter.index(
 native = meter[meter.index('/// Uses the existing stereo readings'):meter.index('private final class PreparedSoundFont')]
 # The isolated meter/scroll fixture exercises geometry and levels, not bundled font registration.
 native = native.replace('NSFont.jarasMonospacedSystemFont', 'NSFont.monospacedSystemFont')
-(out / 'scroll.swift').write_text('import SwiftUI\nimport AppKit\nimport Combine\n' + model + '\n' + native + '\n' + body + '\n' + Path('Tests/Apple/' + ('FooterMixerPostedWheelTests.swift' if posted else 'FooterMixerScrollTests.swift')).read_text())
+(out / 'scroll.swift').write_text('import SwiftUI\nimport AppKit\nimport Combine\n' + 'extension Color { init(hex: UInt32) { self.init(red: Double((hex >> 16) & 255)/255, green: Double((hex >> 8) & 255)/255, blue: Double(hex & 255)/255) } }\n' + model + '\n' + native + '\n' + body + '\n' + Path('Tests/Apple/' + ('FooterMixerPostedWheelTests.swift' if posted else 'FooterMixerScrollTests.swift')).read_text())
 PYTHON
 swiftc -parse-as-library "$build_dir/midi.swift" -o "$build_dir/midi"
 "$build_dir/midi"

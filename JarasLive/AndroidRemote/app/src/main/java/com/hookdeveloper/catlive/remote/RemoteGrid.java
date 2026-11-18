@@ -87,6 +87,11 @@ final class RemoteGrid extends View {
             }
             canvas.restore();y+=row;
         }
+        if(s.optBoolean("gridLines",true)){
+            paint.setStrokeWidth(.5f);paint.setPathEffect(null);
+            for(Tick tick:gridTicks){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x535250:0x333235)));float at=x(tick.time);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);}
+            paint.setStrokeWidth(1);
+        }
         markers(canvas,s,width,height);
         paint.setColor(0xff444444);paint.setStrokeWidth(dp(1));for(int edge:new int[]{0,REGION_HEIGHT,RULER_TOP,HEADER_HEIGHT})canvas.drawLine(0,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,width,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,paint);
         if(s.optBoolean("loop")&&!s.isNull("loopStart")&&!s.isNull("loopEnd"))loopArea(canvas,x(s.optDouble("loopStart")),x(s.optDouble("loopEnd")),height);

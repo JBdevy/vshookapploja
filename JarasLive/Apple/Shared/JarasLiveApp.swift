@@ -3,35 +3,25 @@ import SwiftUI
 import UIKit
 
 @MainActor final class JarasMobileApplicationDelegate: NSObject, UIApplicationDelegate {
-    private static let iPadOrientations: UIInterfaceOrientationMask = .all
-    private static weak var workspaceScene: UIWindowScene?
+    private static var landscapeOnly = false
 
-    static func claimWorkspace(_ scene: UIWindowScene) -> Bool {
-        if let existing = workspaceScene, existing !== scene {
-            UIApplication.shared.requestSceneSessionActivation(existing.session, userActivity: nil, options: nil)
-            UIApplication.shared.requestSceneSessionDestruction(scene.session, options: nil)
-            return false
-        }
-        workspaceScene = scene
-        return true
+    private static var orientations: UIInterfaceOrientationMask {
+        if landscapeOnly { return .landscape }
+        return UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
     }
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        UIDevice.current.userInterfaceIdiom == .pad ? Self.iPadOrientations : .portrait
+        Self.orientations
     }
 
-    func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
-        IpadVideoPresentation.shared.discarded(sceneSessions)
-    }
-
-    static func setRemoteOrientation(_ remote: Bool) {
-        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+    static func setLandscapeOnly(_ locked: Bool) {
+        guard landscapeOnly != locked else { return }
+        landscapeOnly = locked
         updateOrientations()
     }
 
     static func updateOrientations() {
-        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
-        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes
             where scene.activationState == .foregroundActive {
             for window in scene.windows {
                 var controller = window.rootViewController
@@ -40,43 +30,10 @@ import UIKit
                     controller = current.presentedViewController
                 }
             }
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: iPadOrientations)) { error in
-                NSLog("CatLive: unable to update iPad orientation: %@", error.localizedDescription)
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { error in
+                NSLog("CatLive: unable to update orientation: %@", error.localizedDescription)
             }
         }
-    }
-}
-
-/// Multiple scenes are for video projection. Keep one workspace/audio engine
-/// even if the system's New Window command requests another main scene.
-private struct IpadMainWindowRoot<Content: View>: View {
-    let content: Content
-    @State private var ownsWorkspace = false
-    init(@ViewBuilder content: () -> Content) { self.content = content() }
-    var body: some View {
-        Group {
-            if ownsWorkspace { content }
-            else { Color.black }
-        }.background(WorkspaceConnection { ownsWorkspace = $0 })
-    }
-    private struct WorkspaceConnection: UIViewRepresentable {
-        let connected: (Bool) -> Void
-        final class ConnectionView: UIView {
-            var connected: (Bool) -> Void = { _ in }
-            private weak var connectedScene: UIWindowScene?
-            override func didMoveToWindow() {
-                super.didMoveToWindow()
-                guard let scene = window?.windowScene, scene !== connectedScene else { return }
-                connectedScene = scene
-                DispatchQueue.main.async { [weak self] in
-                    self?.connected(JarasMobileApplicationDelegate.claimWorkspace(scene))
-                }
-            }
-        }
-        func makeUIView(context: Context) -> ConnectionView {
-            let view = ConnectionView(); view.connected = connected; view.isUserInteractionEnabled = false; return view
-        }
-        func updateUIView(_ view: ConnectionView, context: Context) { view.connected = connected }
     }
 }
 #endif
@@ -143,18 +100,13 @@ private struct IpadMainWindowRoot<Content: View>: View {
         }
         #else
         WindowGroup("CatLive") {
-            IpadMainWindowRoot {
             appContent.statusBarHidden(true).persistentSystemOverlays(.hidden)
                 .background(IpadTextKeyboardScope())
                 .onAppear { UIApplication.shared.isIdleTimerDisabled = scenePhase == .active }
-            }
         }
         .onChange(of: scenePhase) { phase in
             UIApplication.shared.isIdleTimerDisabled = phase == .active
             if phase == .active { JarasMobileApplicationDelegate.updateOrientations() }
-        }
-        WindowGroup("CatLive Video", id: IpadVideoPresentation.windowID) {
-            IpadDetachedVideoScene()
         }
         #endif
     }
@@ -204,8 +156,7 @@ struct RootView: View {
                     ZStack {
                         DesktopWorkspaceView(container: container)
                         if !documents.ready {
-                            Color.black.opacity(0.45).ignoresSafeArea().contentShape(Rectangle())
-                        .onTapGesture { if documents.canCancelOpening { documents.cancelOpening() } }
+                            Color.black.opacity(0.45).ignoresSafeArea()
                             VStack(spacing: 0) {
                                 HStack {
                                     Text("Projects").font(.jarasHeadline)
@@ -235,6 +186,7 @@ struct RootView: View {
                           showsCloseButton: false)
             }
         }
+        .overlay { MultipleProjectOpeningOverlay() }
         #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(InterfaceScaleAnchor(preserveFrame: true))
@@ -330,17 +282,11 @@ struct RootView: View {
         }
         .sheet(item: $documents.missingAudioPrompt) { _ in
             MissingAudioRecoveryView(documents: documents)
-                #if os(iOS)
-                .background(IpadPresentedOutsideDismissal(active: !documents.busy || documents.canCancelOpening) { documents.cancelMissingAudioOpen() })
-                #endif
         }
         .sheet(isPresented: Binding(get: { !documents.migrationNotice.isEmpty }, set: { if !$0 { documents.migrationNotice = "" } })) {
             ProjectMigrationNotice(notice: documents.migrationNotice, language: language) {
                 documents.migrationNotice = ""
             }
-            #if os(iOS)
-            .background(IpadPresentedOutsideDismissal { documents.migrationNotice = "" })
-            #endif
         }
         .overlay(alignment: .top) {
             if !documents.closeNotice.isEmpty {
@@ -379,7 +325,7 @@ struct RootView: View {
     final class Deck: NSView {
         override func layout() {
             super.layout()
-            for view in subviews where !view.isHidden { view.frame = bounds }
+            for view in subviews where !view.isHidden && view.frame != bounds { view.frame = bounds }
         }
         override var isFlipped: Bool { true }
     }
@@ -389,7 +335,7 @@ struct RootView: View {
         // Observe that completion here: the container reference itself never
         // changes, so SwiftUI can otherwise retain the previous tab's host.
         guard documents.ready else {
-            for view in deck.subviews { view.isHidden = true }
+            for view in deck.subviews where !view.isHidden { view.isHidden = true }
             return
         }
         let host: NSHostingView<AnyView>
@@ -416,10 +362,9 @@ struct RootView: View {
         let live = DesktopProjectTabs.shared.projects.compactMap { $0.desktopWorkspaceHost }
         for view in deck.subviews {
             if !live.contains(where: { $0 === view }) && view !== host { view.removeFromSuperview() }
-            else { view.isHidden = view !== host }
+            else if view.isHidden != (view !== host) { view.isHidden = view !== host }
         }
-        host.frame = deck.bounds
-        deck.needsLayout = true
+        if host.frame != deck.bounds { host.frame = deck.bounds }
     }
     @available(macOS 13, *)
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: Deck, context: Context) -> CGSize? {
@@ -535,23 +480,7 @@ struct StartupView: View {
             .background(JarasTheme.panel)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-            .modifier(MobileStartupPanelFit())
         }
-    }
-}
-
-private struct MobileStartupPanelFit: ViewModifier {
-    func body(content: Content) -> some View {
-        #if os(iOS)
-        GeometryReader { geometry in
-            let scale = min(1, max(0, geometry.size.width - 32) / StartupView.panelWidth,
-                            max(0, geometry.size.height - 32) / StartupView.panelHeight)
-            content.scaleEffect(scale)
-                .frame(width: geometry.size.width, height: geometry.size.height)
-        }
-        #else
-        content
-        #endif
     }
 }
 
@@ -618,12 +547,15 @@ private final class FloatingStartupAnchor: NSView {
 
 #if os(macOS)
 @MainActor final class JarasApplicationDelegate: NSObject, NSApplicationDelegate {
+    private var closeApproved = false
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
         MacShowMode.shared.refresh()
     }
     func applicationWillTerminate(_ notification: Notification) { MacShowLidBrightness.shared.stop() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if SMK37FirmwareTask.shared.busy { NSApp.activate(ignoringOtherApps: true); return .terminateCancel }
+        if closeApproved { return .terminateNow }
         if ProjectSyncControl.following {
             DesktopProjectTabs.shared.active?.documents.closeNotice = "Project Sync: o PC B está seguindo o PC A. Desative a sincronização antes de encerrar."
             return .terminateCancel
@@ -631,10 +563,17 @@ private final class FloatingStartupAnchor: NSView {
         let guardClose = ProjectCloseGuard.shared
         guard !guardClose.pending else { guardClose.focusCurrentDialog(); return .terminateCancel }
         guard guardClose.attached else { return .terminateNow }
-        Task { @MainActor in
-            guardClose.request { allowed in sender.reply(toApplicationShouldTerminate: allowed) }
+        Task { @MainActor [weak self] in
+            guardClose.request { [weak self] allowed in
+                guard allowed, let self else { return }
+                self.closeApproved = true
+                sender.terminate(nil)
+            }
         }
-        return .terminateLater
+        // terminateLater enters AppKit's termination run loop. Playback timers
+        // and main-queue audio scheduling must keep advancing while a save
+        // sheet waits for the user; request termination again after approval.
+        return .terminateCancel
     }
 }
 
@@ -761,10 +700,13 @@ private struct ClosingLogoView: View {
     }
     func beginSheetModal(for parent: NSWindow, completionHandler: @escaping (NSApplication.ModalResponse) -> Void) {
         prepare()
+        parent.makeKeyAndOrderFront(nil)
         parent.beginSheet(panel) { [self] response in
             panel.orderOut(nil)
+            ProjectionWindow.dismissWorkspaceConfirmation(panel)
             completionHandler(response)
         }
+        ProjectionWindow.presentWorkspaceConfirmation(panel)
     }
     func runModal() -> NSApplication.ModalResponse {
         prepare(); panel.center()
@@ -872,8 +814,7 @@ private struct ClosingLogoView: View {
                 // Cancelling a later save dialog must not interrupt the music.
                 DispatchQueue.main.async { self.request(confirmPlayback: false, completion: completion) }
             }
-            if let window { window.makeKeyAndOrderFront(nil); alert.beginSheetModal(for: window, completionHandler: answer) }
-            else { answer(alert.runModal()) }
+            presentCloseAlert(alert, completion: answer)
             return
         }
         if !needsConfirmation {
@@ -897,8 +838,22 @@ private struct ClosingLogoView: View {
                 self.pending = false; completion(false)
             }
         }
-        if let window { window.makeKeyAndOrderFront(nil); alert.beginSheetModal(for: window, completionHandler: answer) }
+        if let window { alert.beginSheetModal(for: window, completionHandler: answer) }
         else { answer(alert.runModal()) }
+    }
+    private func presentCloseAlert(_ alert: NSAlert, completion: ((NSApplication.ModalResponse) -> Void)? = nil) {
+        guard let window else {
+            let response = alert.runModal()
+            completion?(response)
+            return
+        }
+        window.makeKeyAndOrderFront(nil)
+        let sheet = alert.window
+        alert.beginSheetModal(for: window) { response in
+            ProjectionWindow.dismissWorkspaceConfirmation(sheet)
+            completion?(response)
+        }
+        ProjectionWindow.presentWorkspaceConfirmation(sheet)
     }
     private func finishClosing(documents: ProjectDocuments, save: Bool, completion: @escaping (Bool) -> Void) {
         Task { @MainActor in
@@ -918,7 +873,7 @@ private struct ClosingLogoView: View {
                 closingLogo.advance(0.25)
                 FXWindows.shared.closeAll()
                 capture.closeProject()
-                DesktopProjectTabs.shared.stopAll()
+                DesktopProjectTabs.shared.stopAll(forApplicationTermination: true)
                 // The ownership inventory supports optional media cleanup; it
                 // must not block closing a project whose save already succeeded.
                 // Keep explicit cleanup strict when the inventory is unreadable.
@@ -941,8 +896,7 @@ private struct ClosingLogoView: View {
                 failure.messageText = localized("Could not close the project.")
                 failure.informativeText = localized(error.localizedDescription)
                 failure.addButton(withTitle: "OK")
-                if let window { window.makeKeyAndOrderFront(nil); failure.beginSheetModal(for: window, completionHandler: nil) }
-                else { failure.runModal() }
+                presentCloseAlert(failure)
             }
         }
     }

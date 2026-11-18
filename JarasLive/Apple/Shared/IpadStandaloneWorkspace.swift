@@ -16,8 +16,6 @@ import Combine
     @Published private(set) var timelineFocus: IpadTimelineFocus?
     private var subscriptions = Set<AnyCancellable>()
     private var refreshPending = false
-    private var projectionRefresh: Task<Void, Never>?
-    private var lastRefreshTime = 0.0
     private var running = false
     private let mappingSession = UUID()
     private weak var show: ShowController?
@@ -42,10 +40,8 @@ import Combine
                 self?.refreshTeleprompterRemote(index)
             }
         }
-        show.objectWillChange.sink { [weak self, weak show] _ in
-            self?.scheduleRefresh(playbackTick: show?.timelinePlaybackIsPublishingTick == true)
-        }.store(in: &subscriptions)
-        for publisher in [show.multiLoopFaders.objectWillChange.eraseToAnyPublisher(),
+        for publisher in [show.objectWillChange.eraseToAnyPublisher(),
+                          show.multiLoopFaders.objectWillChange.eraseToAnyPublisher(),
                           documents.objectWillChange.eraseToAnyPublisher(),
                           TeleprompterTimerController.shared.objectWillChange.eraseToAnyPublisher(),
                           TPNoticeController.shared.objectWillChange.eraseToAnyPublisher(),
@@ -58,25 +54,8 @@ import Combine
         refresh()
         UIApplication.shared.isIdleTimerDisabled = true
     }
-    private func scheduleRefresh(playbackTick: Bool = false) {
+    private func scheduleRefresh() {
         guard running, !refreshPending else { return }
-        // AVPlayer presents frames on its own clock. Rebuilding the setlist and
-        // every SwiftUI control at the audio clock rate competes with decoding
-        // on older iPads. Commands still publish immediately.
-        let projecting = VideoPlayback.shared.isActive || VideoPlayback.teleprompter.isActive || VideoPlayback.teleprompter2.isActive
-        let delay = 1.0 / 15.0 - (ProcessInfo.processInfo.systemUptime - lastRefreshTime)
-        if playbackTick, projecting, delay > 0 {
-            if projectionRefresh == nil {
-                projectionRefresh = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    guard !Task.isCancelled, let self else { return }
-                    self.projectionRefresh = nil
-                    self.scheduleRefresh()
-                }
-            }
-            return
-        }
-        projectionRefresh?.cancel(); projectionRefresh = nil
         refreshPending = true
         // Publish a completed snapshot outside UIKit's touch-tracking mode.
         // Playback keeps its own common-mode clock; scrolling must not rebuild
@@ -90,8 +69,11 @@ import Combine
         }
     }
     func refresh() {
-        projectionRefresh?.cancel(); projectionRefresh = nil
-        lastRefreshTime = ProcessInfo.processInfo.systemUptime
+        if let show {
+            VideoPlayback.shared.update(show.snapshot, revision: show.projectRevision)
+            VideoPlayback.teleprompter.update(show.snapshot, revision: show.projectRevision)
+            VideoPlayback.teleprompter2.update(show.snapshot, revision: show.projectRevision)
+        }
         session.refreshLocalWorkspace()
         if var next = session.remoteState {
             for (id, take) in LiveRecordingPreview.shared.takes {
@@ -140,7 +122,6 @@ import Combine
     func stop() {
         guard running else { return }
         running = false; subscriptions.removeAll()
-        projectionRefresh?.cancel(); projectionRefresh = nil
         let foreground = NativeProjectTabs.shared.isForeground(show)
         if foreground { VinhetasController.shared.unbind() }
         if ControlMappings.shared.endNativeSession(mappingSession) {
@@ -155,7 +136,7 @@ import Combine
         VideoPlayback.teleprompter2.setProjectionEnabled(false)
         }
         session.endLocalWorkspace(); state = nil
-        if foreground { UIApplication.shared.isIdleTimerDisabled = false }
+        if foreground { UIApplication.shared.isIdleTimerDisabled = UIApplication.shared.applicationState == .active }
     }
 }
 
@@ -188,15 +169,9 @@ import Combine
     @State private var detectingRegion: UUID?
     @State private var addingTrack = false
     @State private var advancedOpen = false
+    @AppStorage("jaras.native.hozMixer.open") private var hozMixerOpen = false
     @State private var exportingProject = false
     @State private var saveOptions = false
-    private struct AudioExportTarget {
-        let project: Project
-        let song: Song?
-        let document: URL?
-    }
-    @State private var exportingAudio: AudioExportTarget?
-    @State private var audioExportCloseRequested = false
     @State private var regionLoops: FXTarget?
     @State private var itemMenu: FXTarget?
     @State private var itemMenuAction: String?
@@ -257,12 +232,13 @@ import Combine
                     addBlock: { show.addSetlistBlock(namePrefix: JarasLocalization.string("Bloco")) },
                     toggleRegionStop: { show.toggleRegionStop() }, stopsAtRegionEnd: local.stopsAtRegionEnd,
                     exportProject: { saveOptions = true },
-                    exportAudio: {
-                        audioExportCloseRequested = false
-                        exportingAudio = .init(project: show.snapshot.project, song: show.current, document: documents.currentURL)
-                    },
-                    groupTracks: { show.groupTracks($0) }, groupableTracks: Set((show.current?.tracks ?? []).filter { $0.kind == .standard && $0.stereoLink == nil }.map(\.id)), openRegionLoops: { regionLoops = .init(clip: $0) }, openAdvanced: { advancedOpen = true }, openSettings: { settingsSection = .general; settingsOpen = true }, openAudioSettings: { settingsSection = .audio; settingsOpen = true }, openRemoteSettings: { remoteSettingsOpen = true }, openTeleprompterRemote: { remoteTeleprompter = $0 }, remote: local.session)
+                    groupTracks: { show.groupTracks($0) }, groupableTracks: Set((show.current?.tracks ?? []).filter { $0.kind == .standard && $0.stereoLink == nil }.map(\.id)), openRegionLoops: { regionLoops = .init(clip: $0) }, openAdvanced: { advancedOpen = true }, toggleHozMixer: { hozMixerOpen.toggle() }, hozMixerOpen: hozMixerOpen, openSettings: { settingsSection = .general; settingsOpen = true }, openAudioSettings: { settingsSection = .audio; settingsOpen = true }, openRemoteSettings: { remoteSettingsOpen = true }, openTeleprompterRemote: { remoteTeleprompter = $0 }, remote: local.session)
             } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if hozMixerOpen {
+                FooterHorizontalMixer(show: show)
+                    .environment(\.openFX, { track, _ in fx = .init(track: track) })
+                    .frame(height: 273)
+            }
         }
         .background(RemoteSurface.background).preferredColorScheme(.dark)
         .onAppear { local.start(); inspectOutputRoutes(); IpadItemContextMenu.commands = itemMenuCommands; IpadTimelinePointerContextMenu.contains = IpadItemMenuAnchorView.contains }
@@ -283,8 +259,10 @@ import Combine
         .alert("Recording", isPresented: Binding(get: { !recorder.error.isEmpty }, set: { if !$0 { recorder.error = "" } })) {
             Button("OK") { recorder.error = "" }
         } message: { Text(LocalizedStringKey(recorder.error)) }
-        .background(IpadPresentedOutsideDismissal(active: !recorder.error.isEmpty, alert: true) { recorder.error = "" })
         .environment(\.jarasNativePalette, true)
+        .environment(\.multitrackAction, documents.openMultitrackExport)
+        .environment(\.nativeGridFileDrop, documents.dropAtNativeGrid)
+        .modifier(MultitrackSheet(presentation: documents.multitrack))
     }
     private func presentTrackDetails(_ ids: Set<UUID>, iconOnly: Bool = false) {
         let tracks = (show.current?.tracks ?? []).filter { ids.contains($0.id) }
@@ -354,29 +332,29 @@ import Combine
 
     @ViewBuilder private var workspaceDialogs: some View {
         if remoteSettingsOpen {
-            IpadCompactModal(preferredSize: CGSize(width: 440, height: 600), onDismiss: { remoteSettingsOpen = false }) {
+            IpadCompactModal(preferredSize: CGSize(width: 440, height: 600)) {
                 VStack(spacing: 0) {
                     IpadModalHeader(title: "Remote", close: { remoteSettingsOpen = false })
                     ScrollView { DAWRemoteHostView(remote: .nativeHost) }.frame(maxWidth: .infinity)
                 }
             }
         } else if let index = remoteTeleprompter {
-            IpadCompactModal(preferredSize: CGSize(width: 440, height: 480), onDismiss: { remoteTeleprompter = nil }) {
+            IpadCompactModal(preferredSize: CGSize(width: 440, height: 480)) {
                 ScrollView {
                     TeleprompterRemoteView(close: { remoteTeleprompter = nil }, remote: TeleprompterRemote.panel(index))
                 }
             }
         } else if let track = clickSoundTrack {
-            IpadCompactModal(preferredSize: CGSize(width: 420, height: 300), onDismiss: { clickSoundTrack = nil }) {
+            IpadCompactModal(preferredSize: CGSize(width: 420, height: 300)) {
                 IpadClickSoundDesigner(show: show, track: track, directory: documents.currentURL?.deletingLastPathComponent(),
                     close: { clickSoundTrack = nil })
             }
         } else if let edit = trackEdit {
             if edit.iconOnly {
-                IpadCompactModal(preferredSize: CGSize(width: 530, height: 500), onDismiss: { trackEdit = nil }) {
+                IpadCompactModal(preferredSize: CGSize(width: 530, height: 500)) {
                     TrackInstrumentPickerModal(show: show, request: edit, close: { trackEdit = nil }).id(edit.id)
                 }
-            } else { IpadCompactModal(onDismiss: { trackEdit = nil }) {
+            } else { IpadCompactModal {
                 NameColorEditor(title: "Editar pista", initialName: edit.name, initialColor: edit.color, save: { name, color in
                     guard edit.project == show.snapshot.project.id else { return }
                     if edit.tracks.isEmpty {
@@ -394,27 +372,27 @@ import Combine
                 FullLyricsEditor(show: show, target: target, close: { fullLyricsTarget = nil })
             }
         } else if let item = editingTextItem {
-            IpadCompactModal(preferredSize: CGSize(width: 736, height: 390), onDismiss: { editingTextItem = nil }) {
+            IpadCompactModal(preferredSize: CGSize(width: 560, height: 360)) {
                 TextItemEditor(text: show.current?.tracks.flatMap(\.clips).first(where: { $0.id == item })?.text ?? "",
                     apply: { show.updateTextItem(item, text: $0) }, close: { editingTextItem = nil })
             }
         } else if metronomeOpen {
-            IpadCompactModal(preferredSize: CGSize(width: 620, height: 520), onDismiss: { metronomeOpen = false }) {
+            IpadCompactModal(preferredSize: CGSize(width: 620, height: 520)) {
                 VStack(spacing: 0) {
                     IpadModalHeader(title: "Metronome", close: { metronomeOpen = false })
                     ScrollView { MetronomeEditor().environment(\.workspaceEditorDismiss, { metronomeOpen = false }) }
                 }
             }
         } else if let id = regionActions {
-            IpadCompactModal(onDismiss: { regionActions = nil }) {
+            IpadCompactModal {
                 IpadRegionActions(show: show, id: id, close: { regionActions = nil })
             }
         } else if let id = detectingRegion {
-            IpadCompactModal(preferredSize: CGSize(width: 500, height: 270), onDismiss: { detectingRegion = nil }) {
+            IpadCompactModal(preferredSize: CGSize(width: 500, height: 270)) {
                 IpadRegionBPMDetection(show: show, documents: documents, region: id, close: { detectingRegion = nil })
             }
         } else if let target = patch {
-            IpadCompactModal(preferredSize: CGSize(width: 620, height: 540), onDismiss: { patch = nil }) {
+            IpadCompactModal(preferredSize: CGSize(width: 620, height: 540)) {
                 VStack(spacing: 0) {
                     IpadModalHeader(title: "Patch", subtitle: target.track.flatMap { FXModelLookup.track($0, in: show.snapshot.project)?.name } ?? "Master", close: { patch = nil })
                     PatchEditor(show: show, track: target.track, targets: target.targets.isEmpty ? [target.track] : target.targets)
@@ -426,17 +404,11 @@ import Combine
                 IpadAutomationEditor(show: show, track: automationTrack, close: { self.automationTrack = nil })
             }
         } else if settingsOpen {
-            IpadCompactModal(preferredSize: CGSize(width: 760, height: 540), onDismiss: { settingsOpen = false }) {
+            IpadCompactModal(preferredSize: CGSize(width: 760, height: 540)) {
                 VStack(spacing: 0) {
                     IpadModalHeader(title: "Settings", close: { settingsOpen = false })
                     SettingsView(auth: auth, show: show, backend: backend, selection: $settingsSection)
                 }
-            }
-        } else if let export = exportingAudio {
-            IpadFloatingExportPanel {
-                AudioExportView(project: export.project, song: export.song,
-                    mediaDirectory: export.document?.deletingLastPathComponent(), mediaAccessURL: export.document,
-                    close: { exportingAudio = nil }, closeRequested: audioExportCloseRequested)
             }
         } else if saveOptions {
             IpadCompactModal(preferredSize: CGSize(width: 440, height: 192), onDismiss: { saveOptions = false }) {
@@ -447,29 +419,29 @@ import Combine
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
             }
         } else if exportingProject {
-            IpadCompactModal(preferredSize: CGSize(width: 580, height: 400), onDismiss: { exportingProject = false }) {
+            IpadCompactModal(preferredSize: CGSize(width: 580, height: 400)) {
                 ScrollView { PortableProjectExportView(documents: documents, close: { exportingProject = false }) }
             }
         } else if advancedOpen {
-            IpadCompactModal(preferredSize: CGSize(width: 760, height: 500), onDismiss: { advancedOpen = false }) {
+            IpadCompactModal(preferredSize: CGSize(width: 760, height: 500)) {
                 AdvancedView(show: show, documents: documents, close: { advancedOpen = false })
             }
         } else if addingTrack {
-            IpadCompactModal(onDismiss: { addingTrack = false }) { CreateTrackEditor(show: show, close: { addingTrack = false }) }
+            IpadCompactModal { CreateTrackEditor(show: show, close: { addingTrack = false }) }
         } else if let region = regionLoops?.clip {
-            IpadCompactModal(preferredSize: CGSize(width: 680, height: 510), onDismiss: { regionLoops = nil }) {
+            IpadCompactModal(preferredSize: CGSize(width: 680, height: 510)) {
                 MultiLoopsEditor(show: show, regionID: region, close: { regionLoops = nil })
             }
         } else if let clip = itemMenu?.clip {
             if itemMenuAction == nil {
-                IpadCompactModal(preferredSize: CGSize(width: 720, height: 600), onDismiss: { itemMenu = nil }) {
+                IpadCompactModal(preferredSize: CGSize(width: 720, height: 600)) {
                     IpadItemActions(show: show, documents: documents, item: clip, targets: itemMenuTargets, close: { itemMenu = nil })
                 }
             } else {
                 IpadItemActions(show: show, documents: documents, item: clip, targets: itemMenuTargets, initialAction: itemMenuAction, close: { itemMenu = nil })
             }
         } else if let target = fx {
-            IpadCompactModal(preferredSize: CGSize(width: 980, height: 640), onDismiss: { fx = nil }) {
+            IpadCompactModal(preferredSize: CGSize(width: 980, height: 640)) {
                 IpadStandaloneFXManager(show: show, track: target.track, clip: target.clip, targets: target.targets, close: { fx = nil })
             }
         }
@@ -522,15 +494,32 @@ import Combine
                                         Text(LocalizedStringKey(settings.kind(of: effect)))
                                             .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading).contentShape(Rectangle())
                                     }
+                                    if let clip {
+                                        Image(systemName: "line.3.horizontal")
+                                            .foregroundStyle(JarasTheme.secondary)
+                                            .frame(width: 28, height: 38).contentShape(Rectangle())
+                                            .onDrag { ClipFXReorderPayload(project: show.snapshot.project.id, clip: clip, effect: effect).provider() }
+                                            .accessibilityLabel("Reorder effect")
+                                    }
                                 }.font(.jarasSystem(size: 12, weight: .semibold)).buttonStyle(.plain)
                                     .background(selected == effect ? JarasTheme.green.opacity(0.3) : Color.clear).cornerRadius(4)
+                                    .onDrop(of: [ClipFXReorderPayload.type], delegate: ClipFXReorderDrop(
+                                        show: show, project: show.snapshot.project.id, clip: clip,
+                                        target: effect, next: effects.drop(while: { $0 != effect }).dropFirst().first,
+                                        rowHeight: 38, selected: $selected))
+                            }
+                            if let clip {
+                                Color.clear.frame(height: 24).contentShape(Rectangle())
+                                    .onDrop(of: [ClipFXReorderPayload.type], delegate: ClipFXReorderDrop(
+                                        show: show, project: show.snapshot.project.id, clip: clip,
+                                        target: nil, next: nil, selected: $selected))
                             }
                         }
                     }
                     HStack(spacing: 6) {
                         Button { adding = true } label: {
                             Text("Add").frame(maxWidth: .infinity, minHeight: 38).contentShape(Rectangle())
-                        }.buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black)
+                        }.buttonStyle(.borderedProminent).tint(JarasTheme.green)
                         Button {
                             guard let selected else { return }
                             if let clip { show.removeClipFX(clip, effect: selected) }
@@ -551,7 +540,7 @@ import Combine
             .onAppear { selected = effects.first }
             .onChange(of: effects) { values in if !values.contains(selected ?? "") { selected = values.first } }
             .overlay {
-                if adding { IpadCompactModal(onDismiss: { adding = false }) {
+                if adding { IpadCompactModal {
                 FXInsertEditor(show: show, track: track, targets: targets.isEmpty ? [track] : targets, clip: clip,
                     inserted: { selected = $0 }, isActive: { adding }, dismiss: { adding = false })
                 } }
@@ -667,9 +656,16 @@ struct IpadTimelineViewport: Equatable {
     static let maximumSpan = 10.0 * 60 * 60
     var start = 0.0
     var span = 60.0
+    var leadingFraction = 0.0
+    var minimumStart: Double { -span * leadingFraction }
     var end: Double { start + span }
     mutating func reset(duration: Double) {
-        start = 0; span = min(300, max(30, duration.isFinite ? duration : 30))
+        span = min(300, max(30, duration.isFinite ? duration : 30)); start = minimumStart
+    }
+    mutating func resizeLeadingSpace(_ margin: Double, width: Double) {
+        let atBeginning = start <= minimumStart
+        leadingFraction = min(0.25, margin / max(1, width))
+        start = atBeginning ? minimumStart : max(minimumStart, start)
     }
     mutating func follow(_ time: Double) {
         guard time.isFinite, time >= 0 else { return }
@@ -677,11 +673,11 @@ struct IpadTimelineViewport: Equatable {
     }
     mutating func reveal(_ time: Double) {
         guard time.isFinite, time >= 0, time < start || time > end else { return }
-        start = min(604800 - span, max(0, time - span * 0.25))
+        start = min(604800 - span, max(minimumStart, time - span * 0.25))
     }
     mutating func center(on time: Double) {
         guard time.isFinite else { return }
-        start = min(604800 - span, max(0, time - span / 2))
+        start = min(604800 - span, max(minimumStart, time - span / 2))
     }
     mutating func zoom(factor: Double, centeredOn time: Double) {
         guard factor.isFinite, factor > 0, time.isFinite else { return }
@@ -690,13 +686,13 @@ struct IpadTimelineViewport: Equatable {
     }
     mutating func pan(pixels: Double, width: Double) {
         guard pixels.isFinite, width.isFinite, width > 0 else { return }
-        start = min(604800 - span, max(0, start - pixels / width * span))
+        start = min(604800 - span, max(minimumStart, start - pixels / width * span))
     }
     mutating func zoom(factor: Double, anchor: Double) {
         guard factor.isFinite, factor > 0, anchor.isFinite else { return }
         let fraction = min(1, max(0, anchor)), position = start + fraction * span
         span = min(Self.maximumSpan, max(0.25, span / factor))
-        start = min(604800 - span, max(0, position - fraction * span))
+        start = min(604800 - span, max(minimumStart, position - fraction * span))
     }
 }
 
@@ -707,12 +703,12 @@ struct IpadTimelineRenderWindow: Equatable {
     let span: Double
     init(_ viewport: IpadTimelineViewport) {
         span = viewport.span * 2
-        start = max(0, viewport.start - viewport.span / 2)
+        start = max(viewport.minimumStart, viewport.start - viewport.span / 2)
     }
     func needsRebase(_ viewport: IpadTimelineViewport) -> Bool {
         let margin = viewport.span / 4
         return span != viewport.span * 2 || viewport.start < start ||
-            (start > 0 && viewport.start < start + margin) ||
+            (start > viewport.minimumStart && viewport.start < start + margin) ||
             viewport.end > start + span - margin
     }
     func offset(for viewport: IpadTimelineViewport, width: Double) -> Double {
@@ -746,18 +742,25 @@ struct IpadTimelineRulerDrag {
 struct IpadTimelineGestureProbe: UIViewRepresentable {
     let control: IpadTimelineGestureControl
     @Environment(\.isEnabled) private var enabled
+    let verticalScroll: () -> UIScrollView?
     let pan: (Double, Double) -> Void
     let zoom: (Double, Double) -> Void
     func makeUIView(context: Context) -> IpadTimelineGestureView {
         let view = IpadTimelineGestureView(); control.view = view; return view
     }
-    func updateUIView(_ view: IpadTimelineGestureView, context: Context) { view.panAction = pan; view.zoomAction = zoom; view.inputEnabled = enabled }
+    func updateUIView(_ view: IpadTimelineGestureView, context: Context) { view.panAction = pan; view.zoomAction = zoom; view.verticalScroll = verticalScroll; view.inputEnabled = enabled }
     static func dismantleUIView(_ view: IpadTimelineGestureView, coordinator: ()) { view.detach() }
 }
 final class IpadTimelineGestureView: UIView, UIGestureRecognizerDelegate {
     var inputEnabled = true { didSet { if !inputEnabled { stopInertia() } } }
     var panAction: ((Double, Double) -> Void)?
     var zoomAction: ((Double, Double) -> Void)?
+    var verticalScroll: (() -> UIScrollView?)?
+    private weak var pausedVerticalPan: UIPanGestureRecognizer?
+    private func restoreVerticalPan() {
+        pausedVerticalPan?.isEnabled = true
+        pausedVerticalPan = nil
+    }
     private weak var attached: UIView?
     private var inertia: CADisplayLink?
     private var zoomLink: CADisplayLink?
@@ -813,12 +816,14 @@ final class IpadTimelineGestureView: UIView, UIGestureRecognizerDelegate {
         window.addGestureRecognizer(panRecognizer); window.addGestureRecognizer(pinchRecognizer)
     }
     func cancelMotion() {
+        restoreVerticalPan()
         stopInertia()
         zoomLink?.invalidate(); zoomLink = nil; pendingZoom = 1
         panRecognizer.isEnabled = false; pinchRecognizer.isEnabled = false
         panRecognizer.isEnabled = true; pinchRecognizer.isEnabled = true
     }
     func detach() {
+        restoreVerticalPan()
         zoomLink?.invalidate(); zoomLink = nil; pendingZoom = 1
         stopInertia()
         attached?.removeGestureRecognizer(panRecognizer); attached?.removeGestureRecognizer(pinchRecognizer); attached = nil
@@ -843,7 +848,7 @@ final class IpadTimelineGestureView: UIView, UIGestureRecognizerDelegate {
             let velocity = panRecognizer.velocity(in: self)
             return abs(velocity.x) > abs(velocity.y) * 1.2
         }
-        return true
+        return verticalScroll?()?.isDragging != true
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     @objc private func panChanged(_ recognizer: UIPanGestureRecognizer) {
@@ -865,6 +870,10 @@ final class IpadTimelineGestureView: UIView, UIGestureRecognizerDelegate {
     }
     @objc private func pinchChanged(_ recognizer: UIPinchGestureRecognizer) {
         if recognizer.state == .began {
+            if let pan = verticalScroll?()?.panGestureRecognizer, pan.isEnabled {
+                pausedVerticalPan = pan
+                pan.isEnabled = false
+            }
             stopInertia(); pendingZoom = 1
             zoomLink?.invalidate()
             let link = CADisplayLink(target: ZoomTarget(self), selector: #selector(ZoomTarget.tick(_:)))
@@ -878,6 +887,7 @@ final class IpadTimelineGestureView: UIView, UIGestureRecognizerDelegate {
         }
         if [.ended, .cancelled, .failed].contains(recognizer.state) {
             flushZoom(); zoomLink?.invalidate(); zoomLink = nil
+            restoreVerticalPan()
         }
     }
 }
@@ -893,6 +903,29 @@ struct IpadTrackControlsBoundsKey: PreferenceKey {
 /// Dragging the grip is a direct gesture, not a system drag-and-drop session.
 /// The scroll view yields only touches starting on the grip. All destination
 /// validation and the single undoable subtree move use the desktop controller.
+struct IpadSetlistDropTarget: ViewModifier {
+    let show: ShowController?
+    let target: UUID
+    let project: UUID
+    let playlist: UUID?
+    @Binding var moving: Set<UUID>
+    let enabled: Bool
+    @State private var height: CGFloat = 38
+
+    func body(content: Content) -> some View {
+        if enabled, let playlist {
+            content.background {
+                GeometryReader { geometry in
+                    Color.clear.onAppear { height = geometry.size.height }
+                        .onChange(of: geometry.size.height) { height = $0 }
+                }
+            }
+            .onDrop(of: [UTType.text], delegate: IpadSetlistDrop(show: show, target: target,
+                project: project, playlist: playlist, height: height, moving: $moving))
+        } else { content }
+    }
+}
+
 struct IpadSetlistDrop: DropDelegate {
     let show: ShowController?
     let target: UUID
@@ -900,8 +933,9 @@ struct IpadSetlistDrop: DropDelegate {
     let playlist: UUID?
     let height: CGFloat
     @Binding var moving: Set<UUID>
+    var enabled = true
     func validateDrop(info: DropInfo) -> Bool {
-        guard let show, let playlist else { return false }
+        guard enabled, let show, let playlist else { return false }
         return !moving.isEmpty && !moving.contains(target) && show.snapshot.project.id == project && show.selectedRegionPlaylist?.id == playlist
     }
     func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: validateDrop(info: info) ? .move : .forbidden) }
@@ -939,6 +973,7 @@ struct IpadTrackReorderModifier: ViewModifier {
     }
     private var rows: [ObjectIdentifier: Row] = [:]
     private weak var source: IpadTrackReorderView?
+    var retainedTrack: UUID? { source?.track }
     private weak var destination: IpadTrackReorderView?
     private weak var scroll: UIScrollView?
     private var point = CGPoint.zero
@@ -1331,48 +1366,10 @@ final class IpadRegionHeaderTouchView: UIView {
     }
 }
 
-/// Export stays on the workspace so both mixers remain available. Only the
-/// visible card receives touches; dragging the handle reveals covered tracks.
-private struct IpadFloatingExportPanel<Content: View>: View {
-    @ViewBuilder var content: () -> Content
-    @State private var origin = CGSize.zero
-    @GestureState private var drag = CGSize.zero
-    var body: some View {
-        GeometryReader { geometry in
-            let width = min(740, max(1, geometry.size.width - 220))
-            let height = min(560, max(1, geometry.size.height - 120))
-            let left = max(0, geometry.size.width - width - 24)
-            let bottom = max(0, geometry.size.height - height - 24)
-            VStack(spacing: 0) {
-                Capsule().fill(JarasTheme.secondary).frame(width: 44, height: 4)
-                    .frame(maxWidth: .infinity).frame(height: 28).contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0)
-                        .updating($drag) { value, state, _ in state = value.translation }
-                        .onEnded { value in
-                            origin.width = min(0, max(-left, origin.width + value.translation.width))
-                            origin.height = min(bottom, max(0, origin.height + value.translation.height))
-                        })
-                content()
-            }
-            .frame(width: width, height: height)
-            .font(.jarasSystem(size: 13)).tint(JarasTheme.green)
-            .buttonStyle(IpadDialogButtonStyle()).foregroundStyle(JarasTheme.text)
-            .background(RemoteSurface.panel).clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.24)))
-            .shadow(color: .black.opacity(0.65), radius: 18, y: 8)
-            .offset(x: min(0, max(-left, origin.width + drag.width)),
-                    y: min(bottom, max(0, origin.height + drag.height)))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(12)
-        }
-    }
-}
-
 /// One desktop-style panel directly on the workspace. No UIKit sheet behind it.
 struct IpadCompactModal<Content: View>: View {
     var preferredSize: CGSize? = nil
     var onDismiss: (() -> Void)? = nil
-    @State private var cardID = UUID()
     @ViewBuilder var content: () -> Content
     @State private var keyboardFrame = CGRect.zero
     var body: some View {
@@ -1380,33 +1377,17 @@ struct IpadCompactModal<Content: View>: View {
             let keyboardTop = keyboardFrame.isEmpty ? geometry.frame(in: .global).maxY : keyboardFrame.minY
             let availableHeight = max(1, min(geometry.size.height, keyboardTop - geometry.frame(in: .global).minY))
             ZStack {
-                Color.black.opacity(0.58).ignoresSafeArea().contentShape(Rectangle()).onTapGesture(perform: dismiss)
+                Color.black.opacity(0.58).ignoresSafeArea().contentShape(Rectangle()).onTapGesture { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
                 if let preferredSize {
                     card.frame(width: min(preferredSize.width, max(1, geometry.size.width - 32)),
                                height: min(preferredSize.height, max(1, availableHeight - 32)))
-                        .anchorPreference(key: IpadModalCardAnchor.self, value: .bounds) { [cardID: $0] }
                 } else {
                     ScrollView {
-                        card.anchorPreference(key: IpadModalCardAnchor.self, value: .bounds) { [cardID: $0] }
-                            .padding(16).frame(maxWidth: .infinity)
+                        card.padding(16).frame(maxWidth: .infinity)
                     }.fixedSize(horizontal: false, vertical: true)
                         .frame(maxHeight: max(1, availableHeight - 16))
                 }
             }.frame(width: geometry.size.width, height: availableHeight)
-                .overlayPreferenceValue(IpadModalCardAnchor.self) { anchors in
-                    GeometryReader { backdrop in
-                        if let anchor = anchors[cardID] {
-                            let rects = IpadModalBackdrop.regions(around: backdrop[anchor], in: CGRect(origin: .zero, size: backdrop.size))
-                            ForEach(Array(rects.enumerated()), id: \.offset) { _, rect in
-                                Color.clear.contentShape(Rectangle())
-                                    .frame(width: rect.width, height: rect.height)
-                                    .position(x: rect.midX, y: rect.midY)
-                                    .onTapGesture(perform: dismiss)
-                                    .accessibilityHidden(true)
-                            }
-                        }
-                    }
-                }
                 .frame(maxHeight: .infinity, alignment: .top)
         }
         // Reserve the input view exactly once. SwiftUI's automatic keyboard
@@ -1419,10 +1400,6 @@ struct IpadCompactModal<Content: View>: View {
         .accessibilityAddTraits(.isModal)
         .onDisappear { onDismiss?() }
     }
-    private func dismiss() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        onDismiss?()
-    }
     private var card: some View {
         content()
             .font(.jarasSystem(size: 13)).tint(JarasTheme.green)
@@ -1434,100 +1411,6 @@ struct IpadCompactModal<Content: View>: View {
             .shadow(color: .black.opacity(0.65), radius: 24, y: 12)
     }
 }
-/// Only the dimmed area is interactive: controls and empty space *inside* the
-/// card remain inside. Four separate rectangles also cover ScrollView margins.
-private struct IpadModalCardAnchor: PreferenceKey {
-    static var defaultValue: [UUID: Anchor<CGRect>] = [:]
-    static func reduce(value: inout [UUID: Anchor<CGRect>], nextValue: () -> [UUID: Anchor<CGRect>]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
-}
-enum IpadModalBackdrop {
-    static func regions(around card: CGRect, in bounds: CGRect) -> [CGRect] {
-        let card = card.intersection(bounds)
-        guard !card.isNull else { return [bounds] }
-        return [CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: card.minY - bounds.minY),
-                CGRect(x: bounds.minX, y: card.maxY, width: bounds.width, height: bounds.maxY - card.maxY),
-                CGRect(x: bounds.minX, y: card.minY, width: card.minX - bounds.minX, height: card.height),
-                CGRect(x: card.maxX, y: card.minY, width: bounds.maxX - card.maxX, height: card.height)]
-            .filter { $0.width > 0 && $0.height > 0 }
-    }
-}
-/// UIKit sheets and alerts use the same explicit cancel path as their buttons.
-/// Never dismiss a controller behind SwiftUI's back: that would leave its binding
-/// true, or skip a file-picker/processing cancellation handler.
-struct IpadPresentedOutsideDismissal: UIViewRepresentable {
-    var active = true
-    var alert = false
-    let onDismiss: () -> Void
-    func makeUIView(context: Context) -> IpadPresentedOutsideDismissalView { IpadPresentedOutsideDismissalView() }
-    func updateUIView(_ view: IpadPresentedOutsideDismissalView, context: Context) {
-        view.active = active; view.alert = alert; view.onDismiss = onDismiss
-    }
-    static func dismantleUIView(_ view: IpadPresentedOutsideDismissalView, coordinator: ()) { view.detach() }
-}
-final class IpadPresentedOutsideDismissalView: UIView, UIGestureRecognizerDelegate {
-    var active = true
-    var alert = false
-    var onDismiss: (() -> Void)?
-    private lazy var tap = UITapGestureRecognizer(target: self, action: #selector(dismiss))
-    private var outsideAction: (() -> Void)?
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        tap.delegate = self
-        // The outside tap dismisses just the top modal, never a control behind it.
-        tap.cancelsTouchesInView = true
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if tap.view !== window { detach(); window?.addGestureRecognizer(tap) }
-    }
-    func detach() { tap.view?.removeGestureRecognizer(tap) }
-    private func controller() -> UIViewController? {
-        guard active, let root = window?.rootViewController else { return nil }
-        var top = root
-        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
-        if alert { return top is UIAlertController ? top : nil }
-        var responder: UIResponder? = self
-        while let next = responder?.next {
-            responder = next
-            guard let content = next as? UIViewController else { continue }
-            var ancestor: UIViewController? = content
-            while let current = ancestor {
-                if current === top, current.presentingViewController != nil { return current }
-                ancestor = current.parent
-            }
-        }
-        return nil
-    }
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        guard let controller = controller(), let panel = controller.presentationController?.presentedView ?? controller.view,
-              !controller.isBeingPresented, !controller.isBeingDismissed else { return false }
-        var ancestor = touch.view
-        while let view = ancestor {
-            if view is UIInputView { return false }
-            ancestor = view.superview
-        }
-        let outside = !panel.bounds.contains(touch.location(in: panel))
-        outsideAction = outside ? onDismiss : nil
-        return outside
-    }
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        // UIKit also recognizes the dimming-view tap, even when interactive
-        // dismissal is disabled. Let our explicit cancellation run with it.
-        true
-    }
-    @objc private func dismiss() {
-        guard let action = outsideAction else { return }
-        outsideAction = nil
-        window?.endEditing(true)
-        action()
-    }
-}
-
 struct IpadModalHeader: View {
     let title: String
     var subtitle: String? = nil
@@ -1585,7 +1468,7 @@ struct IpadDialogButtonStyle: ButtonStyle {
             }
             if only == nil || only == .metronome {
             Button { metronome.enabled.toggle() } label: { Image(systemName: "metronome") }
-                .buttonStyle(TransportButtonStyle(color: metronome.enabled ? JarasTheme.yellow : Color(hex: 0x454545), active: metronome.enabled, inactiveOpacity: 1, fontSize: 12, width: controlWidth ?? 30, height: 28, bordered: false))
+                .buttonStyle(TransportButtonStyle(color: metronome.enabled ? JarasTheme.yellow : JarasTheme.panel, active: metronome.enabled, fontSize: 12, width: controlWidth ?? 30, height: 28))
                 .overlay {
                     if let configureMetronome {
                         IpadTapHoldTouchSurface(tap: { metronome.enabled.toggle() }, hold: configureMetronome)
@@ -1678,7 +1561,7 @@ struct IpadLeadOptions: View {
         VStack(alignment: .leading, spacing: 16) {
             if choosingTracks {
                 Text("Choose tracks").font(.jarasHeadline)
-                Text("On these tracks, automatic Subplay stops items from the previous song and keeps only the incoming song's items.")
+                Text("On these tracks, Subplay stops items from the previous song and keeps only the incoming song's items.")
                     .font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -1722,7 +1605,6 @@ struct IpadLeadOptions: View {
     let region: UUID
     let close: () -> Void
     @State private var working = false
-    @State private var worker: Task<Void, Never>?
     @State private var error = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1734,15 +1616,14 @@ struct IpadLeadOptions: View {
                     .buttonStyle(.bordered)
             }
         }.padding(24)
-            .onDisappear { worker?.cancel(); worker = nil }
     }
     private func detect() {
         guard !working, let song = show.current, let part = song.parts.first(where: { $0.id == region }),
               let directory = documents.currentURL?.deletingLastPathComponent() else { return }
         let project = show.snapshot.project.id, revision = show.projectRevision
         working = true
-        worker = Task {
-            defer { working = false; worker = nil }
+        Task {
+            defer { working = false }
             do {
                 let detection = try await Task.detached(priority: .utility) {
                     try ClickTempoDetector.markersWithMeter(song: song, region: part) { file in
@@ -1751,7 +1632,6 @@ struct IpadLeadOptions: View {
                         }
                     }
                 }.value
-                guard !Task.isCancelled else { return }
                 guard show.snapshot.project.id == project, show.current?.id == song.id, show.projectRevision == revision else { close(); return }
                 guard !detection.markers.isEmpty else { error = JarasLocalization.string("No stable click tempo was found."); return }
                 if show.applyDetectedTempo(detection.markers, project: project, song: song.id, region: region) { close() }
@@ -1824,6 +1704,163 @@ private struct IpadClickSoundDesigner: View {
                 }
             } catch { self.error = error.localizedDescription }
         }
+    }
+}
+
+/// UIKit moves the document continuously. Changing its offset only rebinds the
+/// rows entering the prepared range, without publishing a SwiftUI scroll state.
+struct IpadRecycledTrackRows<Row: View>: UIViewControllerRepresentable {
+    let ids: [UUID]
+    let heights: [CGFloat]
+    var retained: () -> UUID? = { nil }
+    @ViewBuilder let row: (Int) -> Row
+
+    func makeUIViewController(context: Context) -> IpadRecycledTrackRowsController {
+        IpadRecycledTrackRowsController()
+    }
+    func updateUIViewController(_ controller: IpadRecycledTrackRowsController, context: Context) {
+        let environment = context.environment
+        controller.configure(ids: ids, heights: heights, retained: retained) {
+            AnyView(row($0).environment(\.self, environment).ignoresSafeArea())
+        }
+    }
+    static func dismantleUIViewController(_ controller: IpadRecycledTrackRowsController, coordinator: ()) {
+        controller.stop()
+    }
+}
+
+@MainActor final class IpadRecycledTrackRowsController: UIViewController {
+    private final class Surface: UIView {
+        weak var owner: IpadRecycledTrackRowsController?
+        override func didMoveToWindow() { super.didMoveToWindow(); owner?.observeScroll() }
+        override func layoutSubviews() { super.layoutSubviews(); owner?.refresh() }
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            let target = super.hitTest(point, with: event)
+            return target === self ? nil : target
+        }
+    }
+    private var ids: [UUID] = []
+    private var heights: [CGFloat] = []
+    private var offsets: [CGFloat] = []
+    private var positions: [UUID: Int] = [:]
+    private var mounted: [UUID: UIHostingController<AnyView>] = [:]
+    private var available: [UIHostingController<AnyView>] = []
+    private var prepared = 0..<0
+    private var lastWidth: CGFloat = 0
+    private var rendering = false
+    private var needsReload = true
+    private var row: ((Int) -> AnyView)?
+    private var retained: () -> UUID? = { nil }
+    private weak var scroll: UIScrollView?
+    private var observation: NSKeyValueObservation?
+
+    override func loadView() {
+        let surface = Surface()
+        surface.owner = self
+        surface.backgroundColor = .clear
+        view = surface
+    }
+
+    func configure(ids: [UUID], heights: [CGFloat], retained: @escaping () -> UUID?, row: @escaping (Int) -> AnyView) {
+        if self.ids != ids {
+            self.ids = ids
+            positions = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
+        }
+        if self.heights != heights {
+            self.heights = heights
+            var y: CGFloat = 0
+            offsets = heights.map { height in
+                defer { y += height + 1 }
+                return y
+            }
+        }
+        self.retained = retained
+        self.row = row
+        needsReload = true
+        refresh()
+    }
+
+    private func observeScroll() {
+        var ancestor = view.window == nil ? nil : view.superview
+        while let candidate = ancestor, !(candidate is UIScrollView) { ancestor = candidate.superview }
+        let enclosing = ancestor as? UIScrollView
+        if scroll !== enclosing {
+            scroll = enclosing
+            observation = enclosing?.observe(\.bounds, options: [.new]) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.refresh() }
+            }
+        }
+        refresh()
+    }
+
+    private func refresh() {
+        guard !rendering, isViewLoaded, let scroll, let row, view.bounds.width > 0, !scroll.bounds.isEmpty else { return }
+        let viewport = view.convert(scroll.bounds, from: scroll)
+        let required = timelineRowsIntersecting((viewport.minY - 80)...(viewport.maxY + 80),
+                                                offsets: offsets, heights: heights, top: 0)
+        let width = view.bounds.width
+        let reload = needsReload
+        guard reload || lastWidth != width || required.lowerBound < prepared.lowerBound ||
+            required.upperBound > prepared.upperBound else { return }
+        rendering = true
+        defer { rendering = false }
+        needsReload = false
+        lastWidth = width
+        prepared = timelineRowsIntersecting((viewport.minY - 220)...(viewport.maxY + 220),
+                                            offsets: offsets, heights: heights, top: 0)
+        let pinned = retained().flatMap { positions[$0] }
+        let retainedID = pinned.map { ids[$0] }
+        let neededIDs = Set(prepared.map { ids[$0] })
+        for id in Array(mounted.keys) where !neededIDs.contains(id) && id != retainedID {
+            guard let host = mounted.removeValue(forKey: id) else { continue }
+            host.view.removeFromSuperview()
+            available.append(host)
+        }
+        for index in prepared { place(index, width: width, reload: reload, row: row) }
+        if let pinned, !prepared.contains(pinned) { place(pinned, width: width, reload: reload, row: row) }
+        // Keep a small spare pool when the viewport shrinks or rows grow.
+        while available.count > 4 {
+            let host = available.removeLast()
+            host.willMove(toParent: nil)
+            host.removeFromParent()
+        }
+    }
+
+    private func place(_ index: Int, width: CGFloat, reload: Bool, row: (Int) -> AnyView) {
+        let id = ids[index]
+        let host: UIHostingController<AnyView>
+        if let current = mounted[id] {
+            host = current
+            if reload { host.rootView = row(index) }
+        } else {
+            if let reused = available.popLast() {
+                host = reused
+                host.rootView = row(index)
+            } else {
+                host = UIHostingController(rootView: row(index))
+                if #available(iOS 16.4, *) { host.safeAreaRegions = [] }
+                host.view.backgroundColor = .clear
+                addChild(host)
+                host.didMove(toParent: self)
+            }
+            mounted[id] = host
+        }
+        let frame = CGRect(x: 0, y: offsets[index], width: width, height: heights[index])
+        if host.view.frame != frame { host.view.frame = frame }
+        if host.view.superview !== view { view.addSubview(host.view) }
+    }
+
+    func stop() {
+        observation = nil
+        row = nil
+        retained = { nil }
+        for host in Array(mounted.values) + available {
+            host.willMove(toParent: nil)
+            host.view.removeFromSuperview()
+            host.removeFromParent()
+        }
+        mounted.removeAll()
+        available.removeAll()
     }
 }
 
@@ -1911,7 +1948,7 @@ struct IpadTimelinePlaybackSurface<Content: View>: UIViewControllerRepresentable
         let geometryChanged = changedDocument || configuredViewport != viewport || renderWindow != window ||
             viewportSize != size || self.gridTop != gridTop || self.timeHeight != timeHeight || self.colors != colors
         if configuredViewport != viewport || changedDocument { visibleStart = viewport.start }
-        if renderWindow != window { rebasePending = false }
+        if configuredViewport != viewport || changedDocument || renderWindow != window { rebasePending = false }
         configuredViewport = viewport; renderWindow = window
         project = show.snapshot.project.id; song = show.current?.id
         viewportSize = size; self.gridTop = gridTop; self.timeHeight = timeHeight
@@ -1989,7 +2026,8 @@ struct IpadTimelinePlaybackSurface<Content: View>: UIViewControllerRepresentable
               viewportSize.width > 0, viewportSize.height > 0, colors.count == 3 else { return }
         let frame = TimelinePlaybackPresentation(transport: transport,
             elapsed: ProcessInfo.processInfo.systemUptime - sampledAt, songDuration: duration, mainBoundary: boundary)
-        var visible = IpadTimelineViewport(start: visibleStart, span: viewport.span)
+        var visible = viewport
+        visible.start = visibleStart
         if follow, show?.timelineFollowPaused != true, let position = frame.followPosition {
             if let previous = followSource, previous != frame.followSource { visible.center(on: position) }
             else { visible.follow(position) }
@@ -2004,7 +2042,13 @@ struct IpadTimelinePlaybackSurface<Content: View>: UIViewControllerRepresentable
         }
         if window.needsRebase(visible), !rebasePending {
             rebasePending = true
-            DispatchQueue.main.async { [weak self] in self?.rebase(visible) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.rebasePending, self.configuredViewport == viewport, self.renderWindow == window else { return }
+                var current = viewport
+                current.start = self.visibleStart
+                if window.needsRebase(current) { self.rebase(current) }
+                else { self.rebasePending = false }
+            }
         }
         visibleStart = visible.start
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -2072,4 +2116,16 @@ private final class IpadPlaybackNeedle {
     }
 }
 
+
+
+
+private struct NativeGridFileDropKey: EnvironmentKey {
+    static let defaultValue: (([NSItemProvider], Double) -> Bool)? = nil
+}
+extension EnvironmentValues {
+    var nativeGridFileDrop: (([NSItemProvider], Double) -> Bool)? {
+        get { self[NativeGridFileDropKey.self] }
+        set { self[NativeGridFileDropKey.self] = newValue }
+    }
+}
 #endif

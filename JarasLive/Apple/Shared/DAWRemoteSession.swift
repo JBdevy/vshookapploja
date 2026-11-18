@@ -395,7 +395,6 @@ final class DAWRemoteSession: NSObject, ObservableObject {
     @Published private(set) var peers: [DAWRemotePeer] = []
     @Published private(set) var peerName = ""
     @Published private(set) var status = ""
-    @Published private(set) var projectOpening: DAWRemoteProjectOpening?
     @Published private(set) var remoteState: DAWRemoteState?
     private var blockFeedback = DAWRemoteBlockFeedback()
     private var blockTimer: Timer?
@@ -675,13 +674,12 @@ final class DAWRemoteSession: NSObject, ObservableObject {
         handledCommands.removeAll(); noticeReceipts.removeAll()
         listener?.cancel(); listener = nil; stopDiscovery()
         channel?.close(); channel = nil; endpoints = [:]
-        projectOpening = nil
         cancelBlockFeedback()
         enabled = false; connected = false; connecting = false; remoteState = nil; receivedStateSequence = 0
         peers = []; peerName = ""; status = ""
         setImageProject(nil)
         #if os(iOS)
-        if role == .client && !isLocalWorkspace { UIApplication.shared.isIdleTimerDisabled = false }
+        if role == .client && !isLocalWorkspace { UIApplication.shared.isIdleTimerDisabled = UIApplication.shared.applicationState == .active }
         #endif
     }
     #if os(iOS)
@@ -715,7 +713,7 @@ final class DAWRemoteSession: NSObject, ObservableObject {
         previous?.close()
         failPendingNotices(.disconnected)
         #if os(iOS)
-        if role == .client && !isLocalWorkspace { UIApplication.shared.isIdleTimerDisabled = false }
+        if role == .client && !isLocalWorkspace { UIApplication.shared.isIdleTimerDisabled = UIApplication.shared.applicationState == .active }
         #endif
     }
     func resumeAfterBackground() {
@@ -955,7 +953,7 @@ final class DAWRemoteSession: NSObject, ObservableObject {
             self.status = wasConnected ? "Disconnected" : "Connection failed. Keep the devices nearby and enable Remote on the PC."
             if self.role == .host { self.refreshHostPresence(); self.parentHost?.refreshHostPresence() }
             #if os(iOS)
-            if role == .client && !isLocalWorkspace { UIApplication.shared.isIdleTimerDisabled = false }
+            if role == .client && !isLocalWorkspace { UIApplication.shared.isIdleTimerDisabled = UIApplication.shared.applicationState == .active }
             #endif
         }
         channel.start()
@@ -976,14 +974,9 @@ final class DAWRemoteSession: NSObject, ObservableObject {
                 remoteState = prepared; scheduleBlockFeedback(now: now)
             }
         }
-        if command.action == .openRecentProject || command.action == .openRecentProjectInNewTab {
-            guard projectOpening == nil, let state = remoteState else { return }
-            projectOpening = DAWRemoteProjectOpening(command: command, state: state)
-        }
         if command.action == .remotePanel { requestedPanel = Int(command.value) }
         channel?.send(data)
     }
-    func dismissProjectOpening() { projectOpening = nil }
     /// Explicitly closing the Notices-only screen also closes its connection.
     /// Let the queued withdrawal finish writing first; never queue a withdrawal
     /// for reconnection or claim that a socket write is an application receipt.
@@ -1075,11 +1068,6 @@ final class DAWRemoteSession: NSObject, ObservableObject {
             guard role == .client, accessMode != nil else { return }
             if state.sequence > receivedStateSequence {
                 receivedStateSequence = state.sequence
-                if var opening = projectOpening {
-                    let finished = opening.receive(state)
-                    if finished { projectOpening = nil }
-                    else if opening != projectOpening { projectOpening = opening }
-                }
                 setImageProject(state.project)
                 let displayed = receiveBlockFeedback(state)
                 var comparable = displayed

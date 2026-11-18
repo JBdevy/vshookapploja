@@ -116,6 +116,7 @@ import CoreMIDI
         return text?.takeRetainedValue() as String? ?? ""
     }
     private func refresh() {
+        guard !firmwareMaintenance else { return }
         guard input != 0, show != nil || remoteEvent != nil else { disconnect(); return }
         let selected: Set<Int32> = remoteSources ?? Set<Int32>(AudioDeviceSettings.shared.midiSlots.filter { $0 != 0 })
         var candidate: MIDIEndpointRef = 0, candidateID: Int32 = 0
@@ -234,6 +235,7 @@ import CoreMIDI
         queue("fadeout", SMK37Protocol.fadeout(active: active, remaining: remaining, duration: duration))
     }
     private func poll() {
+        guard !firmwareMaintenance else { return }
         guard source != 0 else { return }
         let now = ProcessInfo.processInfo.systemUptime
         dispatch(session.expire(at: now))

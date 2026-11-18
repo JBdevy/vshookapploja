@@ -3,6 +3,7 @@ package com.hookdeveloper.catlive.remote;
 import android.app.*;
 import android.os.*;
 import android.content.*;
+import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.*;
 import android.graphics.drawable.*;
@@ -23,7 +24,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     final LiveTempoEditGate tempoGate = new LiveTempoEditGate();
     JSONObject state;JSONObject visibleRegion;final RemoteModel.LayoutCache layout=new RemoteModel.LayoutCache();
     String renderedMode="";String panel="setlist",screen="",structure="",mixerStructure="",project="";
-    boolean entering=false;boolean sidebarHidden=false,fullscreen=false,mixerShown=true,setlistShown=true,partsShown=false,vinhetasOpen=false;
+    boolean entering=false;boolean sidebarHidden=false,fullscreen=false,mixerShown=true,setlistShown=true,partsShown=false,horizontalPartsShown=false,vinhetasOpen=false;
     float tabletMixer=.28f,tabletSetlist=.30f;
     FrameLayout root,content;
     final RemoteFadeout fadeout=new RemoteFadeout();
@@ -51,6 +52,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     RemoteVinhetas vinhetas;
     RemoteParts parts;
     boolean partsSecondary;
+    RemoteHorizontalParts horizontalParts;
     final Map<Integer,RemoteVinhetas.PadFeedback> vinhetasFeedback=new HashMap<>();
     Dialog activeDialog;
     String projectLoadingSignature="";
@@ -72,7 +74,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     @Override protected void onResume(){super.onResume();if(remote!=null&&entering)remote.resume();if(midi!=null)midi.start();}
     @Override protected void onStop(){cancelSetlistCommit();if(vinhetas!=null)vinhetas.releaseAll();if(midi!=null)midi.stop();if(remote!=null)remote.suspend();super.onStop();}
     @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);if(remote!=null)remote.close();if(midi!=null)midi.stop();super.onDestroy();}
-    @Override public void onConfigurationChanged(Configuration c){super.onConfigurationChanged(c);init(this);if(screen.equals("startup"))return;if(tabletLayout()&&screen.equals("workspace")&&observerPanes!=null){layoutTabletObserver();return;}structure="";if(screen.equals("workspace")&&remote.state!=null&&(!remote.connected||remote.mode.isEmpty())){removeConnectionOverlay();showConnectionOverlay();return;}if(remote.connected&&!remote.mode.isEmpty()&&remote.state!=null)buildWorkspace();else if(entering)showHome();else showWelcome();}
+    @Override public void onConfigurationChanged(Configuration c){super.onConfigurationChanged(c);init(this);if(screen.equals("startup"))return;if(c.orientation!=Configuration.ORIENTATION_LANDSCAPE)horizontalPartsShown=false;if(tabletLayout()&&screen.equals("workspace")&&observerPanes!=null){layoutTabletObserver();return;}structure="";if(screen.equals("workspace")&&remote.state!=null&&(!remote.connected||remote.mode.isEmpty())){removeConnectionOverlay();showConnectionOverlay();return;}if(remote.connected&&!remote.mode.isEmpty()&&remote.state!=null)buildWorkspace();else if(entering)showHome();else showWelcome();}
     void handleBack(){if(root.findViewWithTag("connection")!=null||root.findViewWithTag("project-loading")!=null)return;if(!screen.equals("workspace")){if(entering){entering=false;remote.exit();showWelcome();}else finish();return;}if(fullscreen){fullscreen=false;buildWorkspace();return;}if(!panel.equals("grid")&&!panel.equals("setlist")){choose("grid");return;}if(remote.connected){confirm("Sair do Remote?","A reprodução continua no computador.","Sair",()->remote.exit());}else if(entering){entering=false;showWelcome();}else finish();}
     @Override public boolean dispatchTouchEvent(MotionEvent event){keyboard.before(getWindow(),event);boolean result=super.dispatchTouchEvent(event);keyboard.after(getWindow(),event);return result;}
     @Override public void onLocalChanged(){if(remote.state==null||!screen.equals("workspace"))return;state=remote.state;syncSetlistBrowseContext();visibleRegion=RemoteModel.gridRegion(state);layout.update(state,visibleRegion);if(!state.optBoolean("playing")){anchorPosition=state.optDouble("position");stateAt=SystemClock.elapsedRealtime();}refresh();}
@@ -87,13 +89,14 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     @Override public void onChanged(){
         if(screen.equals("workspace")&&remote.state!=null&&(!remote.connected||(remote.mode.isEmpty()&&remote.lastError.isEmpty()))){showConnectionOverlay();return;}
         if(!remote.connected){if(screen.equals("workspace")&&remote.state!=null){showConnectionOverlay();}else if(entering)showHome();return;}
+        updateOrientation(remote.mode);
         if(remote.mode.isEmpty()){if(!screen.equals("access"))showAccess();else if(statusText!=null)statusText.setText(remote.lastError);return;}
         if(remote.state==null){if(statusText!=null)statusText.setText("Carregando projeto…");return;}
         JSONObject old=state;state=remote.state;syncSetlistBrowseContext();if(old!=null&&!RemoteModel.same(RemoteModel.id(old,"project"),RemoteModel.id(state,"project"))){if(vinhetas!=null)vinhetas.releaseAll();for(RemoteVinhetas.PadFeedback feedback:vinhetasFeedback.values()){feedback.pending.clear();feedback.litBanks.clear();feedback.confirmed.clear();feedback.held.clear();feedback.gates.clear();feedback.gains.clear();}}visibleRegion=RemoteModel.gridRegion(state);layout.update(state,visibleRegion);
         anchorPosition=state.optDouble("position");stateAt=SystemClock.elapsedRealtime();
         localTimer.scope(RemoteModel.id(state,"project"));syncTimer();fadeout.receive(state,SystemClock.elapsedRealtime());
         if(!project.equals(RemoteModel.id(state,"project"))){project=RemoteModel.id(state,"project");expanded.clear();query="";cue.clear();structure="";}
-        if(!screen.equals("workspace")||!remote.mode.equals(renderedMode)){panel=remote.mode.equals("notices")?"notices":(tabletLayout()&&remote.mode.equals("director")?"grid":"setlist");buildWorkspace();}
+        if(!screen.equals("workspace")||!remote.mode.equals(renderedMode)){panel=remote.mode.equals("notices")?"notices":(RemoteWidgets.tablet&&remote.mode.equals("director")?"grid":"setlist");buildWorkspace();}
         else {removeConnectionOverlay();refresh();}
     }
     @Override public void onMessage(String text){runOnUiThread(()->Toast.makeText(this,text,Toast.LENGTH_LONG).show());}
@@ -108,12 +111,14 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         handler.postDelayed(()->{if(screen.equals("startup")&&!isFinishing())showWelcome();},3000);
     }
     void showWelcome(){
+        updateOrientation("");
         screen="welcome";LinearLayout page=scrollingPage(28,420);((FrameLayout.LayoutParams)page.getLayoutParams()).gravity=Gravity.CENTER;page.setGravity(Gravity.CENTER);
         ImageView logo=new ImageView(this);logo.setTag("welcome-logo");logo.setScaleType(ImageView.ScaleType.FIT_CENTER);logo.setAdjustViewBounds(true);logo.setImageResource(R.drawable.catlive_logo);page.addView(logo,new LinearLayout.LayoutParams(dp(180),dp(180)));space(page,24);
         page.addView(centered("Remote",22,GREEN,true));space(page,24);page.addView(centered("Controle ou acompanhe a sessão do seu PC.",17,SECONDARY,false));space(page,24);
         Button connect=new Button(this,"Conectar ao PC",()->{entering=true;showHome();remote.resume();});connect.setTextSize(17);connect.solid(GREEN);connect.setBackground(surface(blend(GREEN,Color.WHITE,.1f),blend(GREEN,Color.BLACK,.12f),0x2affffff,10));page.addView(connect,new LinearLayout.LayoutParams(-1,dp(48)));space(page,24);page.addView(languageSelector());
     }
     void showHome(){
+        updateOrientation("");
         screen="home";LinearLayout page=scrollingPage(24,568);
         Button back=new Button(this,"‹  Voltar · Back",()->{entering=false;remote.exit();showWelcome();});back.setTextColor(SECONDARY);back.setTextSize(14);back.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);back.setPadding(0,0,0,0);back.setBackgroundColor(Color.TRANSPARENT);page.addView(back,new LinearLayout.LayoutParams(-1,dp(44)));space(page,22);
         LinearLayout card=column(this);pad(card,28,28);card.setGravity(Gravity.CENTER_HORIZONTAL);card.setBackground(RemoteWidgets.panel(18));page.addView(card,new LinearLayout.LayoutParams(-1,-2));
@@ -139,11 +144,31 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     }
     void authorize(String mode){if((mode.equals("director")&&remote.requiresPin)||(mode.equals("notices")&&remote.noticesPin)){input("Senha de quatro dígitos","",true,pin->{if(!pin.matches("[0-9]{4}")){onMessage("Digite os quatro dígitos da senha");return;}remote.requestAccess(mode,pin);});}else remote.requestAccess(mode,"");}
 
+    private void updateOrientation(String mode){
+        int desired=RemoteWidgets.tablet&&mode.equals("director")
+            ?ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+        if(getRequestedOrientation()!=desired)setRequestedOrientation(desired);
+        if(!mode.equals("director"))horizontalPartsShown=false;
+    }
+    private void toggleParts(){
+        if(horizontalPartsShown){horizontalPartsShown=false;buildWorkspace();}
+        else if(tabletLayout()){partsShown=!partsShown;buildWorkspace();}
+        else choose("parts");
+    }
+    private boolean openHorizontalParts(){
+        if(!tabletLayout()||getResources().getConfiguration().orientation!=Configuration.ORIENTATION_LANDSCAPE)return false;
+        partsShown=false;
+        horizontalPartsShown=true;
+        fullscreen=false;
+        panel="grid";
+        buildWorkspace();
+        return true;
+    }
     boolean horizontalToolbar(){return RemoteWidgets.tablet&&remote.mode.equals("director");}
     Button rail(String key,String title,int color,Runnable run){Button b=new Button(this,"",run);if(key.startsWith("TP"))b.setText(key);else b.icon(key,title);b.style(color,false);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(tabletLayout()&&remote.mode.equals("director")?34:44),dp(44));if(horizontalToolbar()){lp.width=dp(34);lp.height=dp(32);lp.setMargins(dp(2),0,dp(2),0);}else lp.setMargins(dp(4),dp(4),dp(4),dp(4));rail.addView(b,lp);railButtons.put(key,b);return b;}
     boolean tabletLayout(){return RemoteWidgets.tablet&&(remote.mode.equals("observer")||getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE);}
     void buildWorkspace(){
-        if(state==null)return;if(vinhetas!=null){vinhetas.releaseAll();vinhetas=null;}observerPanes=null;observerHeaderDisplays=null;observerHeaderButtons=null;observerPrompterPane=null;observerListPane=null;current=null;time=null;observerQueue=null;tabletInformation=null;nextDisplay=null;queuedDisplay=null;noticeEditor=null;noticeSend=null;noticeRemaining=null;grid=null;tp=null;parts=null;selectionTitle=null;playCaption=null;pauseCaption=null;trackColumn=null;trackRail=null;setlistScroll=null;mixerScroll=null;playlistButton=null;auto=null;bypass=null;live=null;save=null;play=null;pause=null;sub=null;repeat=null;bpm=null;pitch=null;next=null;queued=null;information=null;screen="workspace";fadeoutCard=null;renderedMode=remote.mode;structure="";mixerStructure="";trackRows.clear();songRows.clear();railButtons.clear();root.removeAllViews();
+        if(state==null)return;if(vinhetas!=null){vinhetas.releaseAll();vinhetas=null;}observerPanes=null;observerHeaderDisplays=null;observerHeaderButtons=null;observerPrompterPane=null;observerListPane=null;current=null;time=null;observerQueue=null;tabletInformation=null;nextDisplay=null;queuedDisplay=null;noticeEditor=null;noticeSend=null;noticeRemaining=null;grid=null;tp=null;parts=null;horizontalParts=null;selectionTitle=null;playCaption=null;pauseCaption=null;trackColumn=null;trackRail=null;setlistScroll=null;mixerScroll=null;playlistButton=null;auto=null;bypass=null;live=null;save=null;play=null;pause=null;sub=null;repeat=null;bpm=null;pitch=null;next=null;queued=null;information=null;screen="workspace";fadeoutCard=null;renderedMode=remote.mode;structure="";mixerStructure="";trackRows.clear();songRows.clear();railButtons.clear();root.removeAllViews();
         work=row(this);work.setGravity(Gravity.TOP);root.addView(work,new FrameLayout.LayoutParams(-1,-1));
         rail=horizontalToolbar()?row(this):column(this);rail.setBackground(RemoteWidgets.panel(0));rail.setPadding(0,dp(4),0,0);ScrollView sidebar=new ScrollView(this);sidebar.setFillViewport(true);sidebar.setVerticalScrollBarEnabled(false);if(!horizontalToolbar())sidebar.addView(rail);if(!horizontalToolbar()&&!sidebarHidden&&!fullscreen&&!panel.equals("notices"))work.addView(sidebar,new LinearLayout.LayoutParams(dp(tabletLayout()&&remote.mode.equals("director")?42:52),-1));
         rail("menu","Menu",SECONDARY,()->menu(railButtons.get("menu"),new String[]{"Projetos","Sair do Remote"},i->{if(i==0)projects();else remote.exit();}));
@@ -151,11 +176,18 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         if(director)rail("mixer","Track Mixer",SECONDARY,()->{if(tabletLayout()){if(!panel.equals("grid")){panel="grid";mixerShown=true;}else mixerShown=!mixerShown;buildWorkspace();}else choose("mixer");});
         if(!notices)rail("setlist","Setlist",SECONDARY,()->{if(tabletLayout()&&(director||panel.startsWith("tp"))){setlistShown=!setlistShown;buildWorkspace();}else choose("setlist");});
         if(director)rail("grid","Grid",SECONDARY,()->choose("grid"));
-        if(director)rail("parts","Parts",SECONDARY,()->{if(tabletLayout()){partsShown=!partsShown;buildWorkspace();}else choose("parts");});
+        if(director){
+            Button partsButton=rail("parts","Parts",SECONDARY,this::toggleParts);
+            if(RemoteWidgets.tablet){
+                partsButton.setOnLongClickListener(v->openHorizontalParts());
+                partsButton.setOnContextClickListener(v->openHorizontalParts());
+            }
+        }
         if(director)rail("vinhetas","Pads",SECONDARY,()->{if(tabletLayout()){vinhetasOpen=!vinhetasOpen;buildWorkspace();}else choose("vinhetas");});
         if(!notices){rail("TP1","Teleprompter 1",RED,()->choose("tp1"));rail("TP2","Teleprompter 2",RED,()->choose("tp2"));}
         if(director||notices)rail("notices","Recados",YELLOW,()->choose("notices"));
-        if(director){rail("clock","Cronômetro",BLUE,this::timer);save=rail("save","Salvar",GREEN,()->remote.action("save"));}
+        if(director)rail("clock","Cronômetro",BLUE,this::timer);
+        if(director&&!horizontalToolbar()){save=rail("save","Salvar",GREEN,()->confirm("Deseja salvar este projeto?","","Salvar",()->remote.action("save")));}
         if(director){Button preview=rail("preview","Preview",GREEN,()->remote.action("togglePreview"));preview.icon="";preview.setText("P\nR\nE\nV\nI\nE\nW");preview.setTextSize(10);preview.getLayoutParams().height=dp(108);preview.setOnLongClickListener(v->{menu(v,new String[]{"Preview 1","Preview 2","Preview 3","Preview 4","Preview 5","Preview 6"},i->remote.action("selectPreviewPage",null,i));return true;});}
         if(director){Button fade=rail("fadeout","Fadeout",TEXT,()->{
             long now=SystemClock.elapsedRealtime();
@@ -166,7 +198,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         column=column(this);work.addView(column,new LinearLayout.LayoutParams(0,-1,1));tabs=row(this);tabScroll=new HorizontalScrollView(this);tabScroll.setFillViewport(true);tabScroll.setHorizontalScrollBarEnabled(true);tabScroll.addView(tabs,new HorizontalScrollView.LayoutParams(-2,-1));tabScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(r-l!=or-ol)layoutProjectTabs(r-l);});if(!fullscreen&&!panel.equals("vinhetas"))column.addView(tabScroll,new LinearLayout.LayoutParams(-1,dp(tabletLayout()?28:30)));
         if(horizontalToolbar()&&!fullscreen&&!panel.equals("notices")){
             rail.removeAllViews();rail.setPadding(0,0,0,0);
-            for(String key:new String[]{"menu","mixer","parts","vinhetas","TP1","TP2","notices","clock","preview","fadeout","setlist","grid","save"}){
+            for(String key:new String[]{"menu","mixer","parts","vinhetas","TP1","TP2","notices","clock","preview","setlist","grid"}){
                 Button button=railButtons.get(key);if(button==null)continue;
                 if(key.equals("fadeout")){button.getLayoutParams().width=dp(62);button.getLayoutParams().height=dp(28);}
                 if(key.equals("preview")){button.setText("PREVIEW");button.getLayoutParams().width=dp(58);button.getLayoutParams().height=dp(28);}
@@ -175,6 +207,16 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             LinearLayout toolbar=row(this);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setBackground(RemoteWidgets.panel(0));
             HorizontalScrollView actions=new HorizontalScrollView(this);actions.setHorizontalScrollBarEnabled(false);actions.addView(rail,new HorizontalScrollView.LayoutParams(-2,-1));
             toolbar.addView(actions,new LinearLayout.LayoutParams(0,-1,1));
+            Button fadeoutButton=railButtons.get("fadeout");
+            if(fadeoutButton!=null) {
+                toolbar.addView(fadeoutButton,new LinearLayout.LayoutParams(dp(62),dp(28)));
+                TextView remoteMode=label(this,"Mode Remote Controller Desktop",11,GREEN);
+                remoteMode.setTypeface(bold);
+                remoteMode.setGravity(Gravity.CENTER_VERTICAL);
+                remoteMode.setSingleLine(true);
+                pad(remoteMode,8,0);
+                toolbar.addView(remoteMode,new LinearLayout.LayoutParams(-2,dp(28)));
+            }
             toolbar.addView(railButtons.get("settings"),new LinearLayout.LayoutParams(dp(38),dp(32)));
             column.addView(toolbar,new LinearLayout.LayoutParams(-1,dp(36)));
         }
@@ -195,6 +237,11 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         else if(panel.startsWith("tp")){tp=new RemoteTeleprompter(this,this,panel.equals("tp1")?1:2);content.addView(tp);}
         else if(panel.equals("notices")){content.addView(buildNotices());}
         else {grid=new RemoteGrid(this,this);content.addView(grid);}
+        if(tabletLayout()&&director&&horizontalPartsShown&&!fullscreen&&panel.equals("grid")){
+            int base=Math.min(192,Math.round(getResources().getConfiguration().screenHeightDp*.42f));
+            horizontalParts=new RemoteHorizontalParts(this,Math.max(1,base));
+            column.addView(horizontalParts,new LinearLayout.LayoutParams(-1,horizontalParts.preferredHeight()));
+        }
         if(tabletLayout()&&director&&vinhetasOpen){
             vinhetas=new RemoteVinhetas(this);column.addView(vinhetas,new LinearLayout.LayoutParams(-1,dp(Math.min(260,getResources().getConfiguration().screenHeightDp*.42f))));
         }
@@ -210,7 +257,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         remote.subscribe(panel.equals("tp1")?1:panel.equals("tp2")?2:panel.equals("notices")?3:0);refresh();
     }
     void addResize(LinearLayout panes,boolean left){View handle=new View(this);handle.setBackgroundColor(0xff444444);panes.addView(handle,new LinearLayout.LayoutParams(dp(4),-1));handle.setOnTouchListener(new View.OnTouchListener(){float x,start;public boolean onTouch(View v,MotionEvent e){if(e.getAction()==0){x=e.getRawX();start=left?tabletMixer:tabletSetlist;return true;}if(e.getAction()==1){float f=(e.getRawX()-x)/Math.max(1,panes.getWidth());if(left)tabletMixer=Math.max(.15f,Math.min(.50f,start+f));else tabletSetlist=Math.max(.18f,Math.min(.50f,start-f));buildWorkspace();return true;}return true;}});}
-    void choose(String target){fullscreen=false;panel=target.equals(panel)&&!target.equals("grid")?"grid":target;if(remote.mode.equals("observer")&&panel.equals("grid"))panel="setlist";grid=null;tp=null;buildWorkspace();}
+    void choose(String target){fullscreen=false;horizontalPartsShown=false;panel=target.equals(panel)&&!target.equals("grid")?"grid":target;if(remote.mode.equals("observer")&&panel.equals("grid"))panel="setlist";grid=null;tp=null;buildWorkspace();}
     void divider(LinearLayout parent){View line=new View(this);line.setBackgroundColor(0x38ffffff);parent.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));}
     void buildTransport(){
         if(state==null)return;if(tabletLayout()&&remote.mode.equals("observer")){buildTabletObserverHeader();return;}if(tabletLayout()&&remote.mode.equals("director")){buildTabletTransport();return;}boolean director=remote.mode.equals("director");pad(transport,6,6);
@@ -275,12 +322,11 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         if(grid!=null){double total=0;for(RemoteModel.TrackLayout row:layout.ordered)total+=row.height;grid.vertical=Math.min(grid.vertical,Math.max(0,dp((float)total)+dp(RemoteTimeline.HEADER_HEIGHT)-grid.getHeight()));grid.invalidate();}
     }
     void finishTrackHeightResize(){getPreferences(0).edit().putFloat("trackHeightScale",(float)layout.heightScale).apply();}
-    boolean portraitTabletMixer(){return RemoteWidgets.tablet&&getResources().getConfiguration().orientation==Configuration.ORIENTATION_PORTRAIT&&remote.mode.equals("director");}
-    View buildMixer(){LinearLayout all=column(this);if(tabletLayout()&&remote.mode.equals("director")){View blank=new View(this);blank.setBackground(RemoteWidgets.panel(0));all.addView(blank,new LinearLayout.LayoutParams(-1,dp(RemoteTimeline.HEADER_HEIGHT)));}else if(!portraitTabletMixer()){TrackRow master=new TrackRow(null,0);trackRows.put("master",master);all.addView(master,new LinearLayout.LayoutParams(-1,dp(80)));}LinearLayout lower=row(this);all.addView(lower,new LinearLayout.LayoutParams(-1,0,1));RemoteTrackRail scrollRail=new RemoteTrackRail(this,this);trackRail=scrollRail;scrollRail.setBackgroundColor(0xff161616);Button up=new Button(this,"⌃",()->mixerScroll.smoothScrollBy(0,-dp(140)));up.style(GREEN,false);up.setBackgroundColor(Color.TRANSPARENT);scrollRail.addView(up,new LinearLayout.LayoutParams(dp(28),dp(36)));View drag=new View(this);scrollRail.addView(drag,new LinearLayout.LayoutParams(dp(28),0,1));drag.setOnTouchListener(new View.OnTouchListener(){float y;int initial;public boolean onTouch(View v,MotionEvent e){if(e.getAction()==0){y=e.getY();initial=mixerScroll.getScrollY();return true;}if(e.getAction()==MotionEvent.ACTION_MOVE){int range=Math.max(0,trackColumn.getHeight()-mixerScroll.getHeight());mixerScroll.scrollTo(0,initial+(int)((e.getY()-y)*range/Math.max(1,v.getHeight())));return true;}return true;}});Button down=new Button(this,"⌄",()->mixerScroll.smoothScrollBy(0,dp(140)));down.style(GREEN,false);down.setBackgroundColor(Color.TRANSPARENT);scrollRail.addView(down,new LinearLayout.LayoutParams(dp(28),dp(36)));lower.addView(scrollRail,new LinearLayout.LayoutParams(dp(28),-1));mixerScroll=new ScrollView(this);mixerScroll.setVerticalScrollBarEnabled(false);trackColumn=column(this);if(portraitTabletMixer()){TrackRow master=new TrackRow(null,0);trackRows.put("master",master);trackColumn.addView(master,new LinearLayout.LayoutParams(-1,dp(80)));}mixerScroll.addView(trackColumn);lower.addView(mixerScroll,new LinearLayout.LayoutParams(0,-1,1));mixerScroll.setOnScrollChangeListener((v,x,y,oldx,oldy)->{if(grid!=null){grid.pauseFollow();grid.vertical=y;grid.invalidate();}});return all;}
+    View buildMixer(){LinearLayout all=column(this);if(tabletLayout()&&remote.mode.equals("director")){View blank=new View(this);blank.setBackground(RemoteWidgets.panel(0));all.addView(blank,new LinearLayout.LayoutParams(-1,dp(RemoteTimeline.HEADER_HEIGHT)));}else{TrackRow master=new TrackRow(null,0);trackRows.put("master",master);all.addView(master,new LinearLayout.LayoutParams(-1,dp(80)));}LinearLayout lower=row(this);all.addView(lower,new LinearLayout.LayoutParams(-1,0,1));RemoteTrackRail scrollRail=new RemoteTrackRail(this,this);trackRail=scrollRail;scrollRail.setBackgroundColor(0xff161616);Button up=new Button(this,"⌃",()->mixerScroll.smoothScrollBy(0,-dp(140)));up.style(GREEN,false);up.setBackgroundColor(Color.TRANSPARENT);scrollRail.addView(up,new LinearLayout.LayoutParams(dp(28),dp(36)));View drag=new View(this);scrollRail.addView(drag,new LinearLayout.LayoutParams(dp(28),0,1));drag.setOnTouchListener(new View.OnTouchListener(){float y;int initial;public boolean onTouch(View v,MotionEvent e){if(e.getAction()==0){y=e.getY();initial=mixerScroll.getScrollY();return true;}if(e.getAction()==MotionEvent.ACTION_MOVE){int range=Math.max(0,trackColumn.getHeight()-mixerScroll.getHeight());mixerScroll.scrollTo(0,initial+(int)((e.getY()-y)*range/Math.max(1,v.getHeight())));return true;}return true;}});Button down=new Button(this,"⌄",()->mixerScroll.smoothScrollBy(0,dp(140)));down.style(GREEN,false);down.setBackgroundColor(Color.TRANSPARENT);scrollRail.addView(down,new LinearLayout.LayoutParams(dp(28),dp(36)));lower.addView(scrollRail,new LinearLayout.LayoutParams(dp(28),-1));mixerScroll=new ScrollView(this);mixerScroll.setVerticalScrollBarEnabled(false);trackColumn=column(this);mixerScroll.addView(trackColumn);lower.addView(mixerScroll,new LinearLayout.LayoutParams(0,-1,1));mixerScroll.setOnScrollChangeListener((v,x,y,oldx,oldy)->{if(grid!=null){grid.pauseFollow();grid.vertical=y;grid.invalidate();}});return all;}
     View buildSetlist(){setlistColumn=column(this);pad(setlistColumn,10,8);playlistButton=new Button(this,"",this::playlists);playlistButton.setOnLongClickListener(v->{playlistContext(v);return true;});playlistButton.setTextSize(12);playlistButton.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);playlistButton.trailingIcon("chevron.down");playlistButton.setContentDescription("Selecionar playlist");GradientDrawable playlistSurface=RemoteWidgets.panel(4);playlistSurface.setStroke(dp(.5f),0x73ffffff);playlistButton.setBackground(playlistSurface);setlistColumn.addView(playlistButton,new LinearLayout.LayoutParams(-1,dp(30)));space(setlistColumn,8);
         LinearLayout searchLine=row(this);search=new EditText(this);search.setTextColor(TEXT);search.setSingleLine();search.setTextSize(16);search.setTypeface(regular);search.setHintTextColor(0xff666666);search.setHint("Pesquisar músicas");search.setBackground(surface(Color.BLACK,Color.BLACK,Color.TRANSPARENT,5));pad(search,8,6);search.setText(query);search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){query=s.toString();structure="";refreshStructure();}public void afterTextChanged(Editable e){}});searchLine.addView(search,new LinearLayout.LayoutParams(0,dp(36),1));auto=new Button(this,"AUTO",()->remote.action("toggleRegionAuto"));auto.setTextSize(9);auto.setSingleLine();pad(auto,2,0);LinearLayout.LayoutParams autoLp=new LinearLayout.LayoutParams(dp(40),dp(28));autoLp.setMargins(dp(6),0,0,0);if(remote.mode.equals("director"))searchLine.addView(auto,autoLp);setlistColumn.addView(searchLine);space(setlistColumn,8);if(remote.mode.equals("observer")){setlistColumn.removeAllViews();playlistButton=null;auto=null;search=null;}
         observerFollowID="";setlistScroll=new ScrollView(this);setlistScroll.setVerticalScrollBarEnabled(false);LinearLayout list=column(this);list.setTag("songs");setlistScroll.addView(list);setlistColumn.addView(setlistScroll,new LinearLayout.LayoutParams(-1,0,1));if(remote.mode.equals("director"))setlistColumn.addView(setlistControls());return setlistColumn;}
-    View setlistControls(){LinearLayout row=row(this);pad(row,0,3);bypass=new Button(this,"ByPass",()->remote.action("toggleMultiLoopBypass"));live=new Button(this,"Live",()->remote.action("toggleSetlistLive"));Button parts=new Button(this,"Parts",()->{if(tabletLayout()){partsShown=!partsShown;buildWorkspace();}else choose(panel.equals("parts")?"setlist":"parts");});parts.style(GREEN,tabletLayout()?partsShown:panel.equals("parts"));for(Button b:new Button[]{bypass,live,parts}){b.setTextSize(11);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(26),1);lp.setMargins(dp(2),0,dp(2),0);row.addView(b,lp);}Button drawer=new Button(this,"⌄",()->{JSONObject r=visibleRegion;if(r==null)return;String id=RemoteModel.id(r,"id");if(!expanded.add(id))expanded.remove(id);structure="";refreshStructure();});drawer.style(GREEN,false);row.addView(drawer,new LinearLayout.LayoutParams(dp(30),dp(28)));return row;}
+    View setlistControls(){LinearLayout row=row(this);pad(row,0,3);bypass=new Button(this,"ByPass",()->remote.action("toggleMultiLoopBypass"));live=new Button(this,"Live",()->remote.action("toggleSetlistLive"));Button parts=new Button(this,"Parts",()->{if(tabletLayout()){horizontalPartsShown=false;partsShown=!partsShown;buildWorkspace();}else choose(panel.equals("parts")?"setlist":"parts");});parts.style(GREEN,tabletLayout()?partsShown:panel.equals("parts"));for(Button b:new Button[]{bypass,live,parts}){b.setTextSize(11);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(26),1);lp.setMargins(dp(2),0,dp(2),0);row.addView(b,lp);}Button drawer=new Button(this,"⌄",()->{JSONObject r=visibleRegion;if(r==null)return;String id=RemoteModel.id(r,"id");if(!expanded.add(id))expanded.remove(id);structure="";refreshStructure();});drawer.style(GREEN,false);row.addView(drawer,new LinearLayout.LayoutParams(dp(30),dp(28)));return row;}
     View buildParts(){parts=new RemoteParts(this);return parts;}
     void showMappedParts(boolean secondary){
         partsSecondary=secondary;
@@ -309,7 +355,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         if(observerQueue!=null)observerQueue.setText(SongDisplay.songText(RemoteModel.queuedSongName(state),displayBPM(displays,"queuedBPM")));
         refreshFooterInformation();refreshNotices();
         if(playlistButton!=null){JSONObject selected=RemoteModel.find(RemoteModel.array(state,"playlists"),RemoteModel.id(state,"selectedPlaylist"));playlistButton.setText(selected==null?"All Regions":selected.optString("name"));}
-        if(parts!=null)parts.refresh();refreshStructure();for(TrackRow row:trackRows.values())row.refresh();for(SongRow row:songRows)row.invalidate();followObserverSelection();if(grid!=null){grid.refreshItemEditor();grid.invalidate();}if(tp!=null)tp.invalidate();
+        if(parts!=null)parts.refresh();if(horizontalParts!=null)horizontalParts.refresh();refreshStructure();for(TrackRow row:trackRows.values())row.refresh();for(SongRow row:songRows)row.invalidate();followObserverSelection();if(grid!=null){grid.refreshItemEditor();grid.invalidate();}if(tp!=null)tp.invalidate();
         updateTabs();for(Map.Entry<String,Button> entry:railButtons.entrySet()){String key=entry.getKey();boolean selected=key.equals("vinhetas")&&tabletLayout()&&vinhetasOpen||key.equals(panel)||key.equals("TP1")&&panel.equals("tp1")||key.equals("TP2")&&panel.equals("tp2");Button button=entry.getValue();if(key.equals("TP1")||key.equals("TP2"))button.transportStyle(selected?GREEN:RED,Color.BLACK);else if(key.equals("notices"))button.style(YELLOW,false);else if(selected)button.style(GREEN,true);else if(key.equals("setlist"))button.style(GREEN,false);}
         if(railButtons.containsKey("preview"))railButtons.get("preview").transportStyle(state.optBoolean("previewActive")?GREEN:RED,Color.BLACK);
         refreshFadeout();
@@ -352,7 +398,6 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         for(JSONObject t:RemoteModel.list(RemoteModel.array(state,"tracks")))mixerKey.append(t.optString("id")).append(t.optString("name")).append(t.optString("color")).append(t.optString("instrumentIcon")).append(layout.height(RemoteModel.id(t,"id")));
         if(!mixerStructure.equals(mixerKey.toString())&&trackColumn!=null&&trackColumn.isAttachedToWindow()){
             mixerStructure=mixerKey.toString();trackColumn.removeAllViews();trackRows.entrySet().removeIf(e->!e.getKey().equals("master"));int index=0;
-            if(portraitTabletMixer()){TrackRow master=trackRows.get("master");if(master!=null)trackColumn.addView(master,new LinearLayout.LayoutParams(-1,dp(80)));}
             for(JSONObject t:RemoteModel.list(RemoteModel.array(state,"tracks"))){TrackRow row=new TrackRow(RemoteModel.id(t,"id"),++index);trackRows.put(row.id,row);trackColumn.addView(row,new LinearLayout.LayoutParams(-1,dp((float)layout.height(row.id))));}
         }
         StringBuilder key=new StringBuilder(project+"|"+panel+"|"+query+expanded.toString()+"|"+RemoteModel.id(visibleRegion,"id"));
@@ -378,7 +423,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     float listScale(){return remote.mode.equals("observer")?getPreferences(0).getFloat("observerScale",1):1;}
     void updateTabs(){if(remote.mode.equals("observer")){tabs.setVisibility(View.GONE);tabScroll.setVisibility(View.GONE);return;}String signature=panel+RemoteModel.array(state,"projectTabs").toString();if(signature.equals(tabs.getTag()))return;tabs.setTag(signature);tabs.removeAllViews();for(JSONObject t:RemoteModel.list(RemoteModel.array(state,"projectTabs"))){Button b=new Button(this,t.optString("name"),()->remote.action("selectProjectTab",RemoteModel.id(t,"id"),0));b.setOnLongClickListener(v->{menu(v,new String[]{"Fechar aba"},i->remote.action("closeProjectTab",RemoteModel.id(t,"id"),0));return true;});b.setTextSize(13);b.setTextColor(t.optBoolean("selected")?TEXT:0xffa4a4a4);b.setBackgroundColor(t.optBoolean("selected")?0xff333333:0xff191919);if(t.optBoolean("selected")){GradientDrawable fill=new GradientDrawable();fill.setColor(0xff333333);GradientDrawable underline=new GradientDrawable();underline.setColor(GREEN);LayerDrawable layers=new LayerDrawable(new Drawable[]{fill,underline});layers.setLayerGravity(1,Gravity.BOTTOM);layers.setLayerHeight(1,dp(3));b.setBackground(layers);}tabs.addView(b,new LinearLayout.LayoutParams(dp(120),-1));}layoutProjectTabs(tabScroll.getWidth());tabScroll.setVisibility(tabs.getChildCount()>1&&!panel.equals("notices")?View.VISIBLE:View.GONE);}
     void layoutProjectTabs(int available){int count=tabs.getChildCount();if(count==0||available<=0)return;int width=Math.max(dp(120),available/count);for(int i=0;i<count;i++){View tab=tabs.getChildAt(i);LinearLayout.LayoutParams lp=(LinearLayout.LayoutParams)tab.getLayoutParams();int target=width+(width>=dp(120)&&count*dp(120)<=available&&i==count-1?available-width*count:0);if(lp.width!=target||lp.weight!=0){lp.width=target;lp.weight=0;tab.setLayoutParams(lp);}}}
-    void tick(){if(!screen.equals("workspace")||state==null)return;TrackRow master=trackRows.get("master");if(master!=null)master.tickMasterMute();refreshFadeout();refreshFooterInformation();updateProjectOpening();if(parts!=null)parts.tick();if(time!=null)time.setText(RemoteModel.time(displayPosition()));if(grid!=null&&panel.equals("grid"))grid.invalidate();if(tp!=null&&panel.startsWith("tp"))tp.invalidate();if(cueText!=null){String text=remote.connected&&remote.mode.equals("observer")?cue.update(state,SystemClock.elapsedRealtime()):"";cueText.setText(text.isEmpty()?"":(cue.armed?"Trecho engatilhado":"Próximo trecho")+"\n"+text+"    "+cue.seconds+" s");cueText.setVisibility(text.isEmpty()?View.GONE:View.VISIBLE);}}
+    void tick(){if(!screen.equals("workspace")||state==null)return;TrackRow master=trackRows.get("master");if(master!=null)master.tickMasterMute();refreshFadeout();refreshFooterInformation();updateProjectOpening();if(parts!=null)parts.tick();if(horizontalParts!=null)horizontalParts.tick();if(time!=null)time.setText(RemoteModel.time(displayPosition()));if(grid!=null&&panel.equals("grid"))grid.invalidate();if(tp!=null&&panel.startsWith("tp"))tp.invalidate();if(cueText!=null){String text=remote.connected&&remote.mode.equals("observer")?cue.update(state,SystemClock.elapsedRealtime()):"";cueText.setText(text.isEmpty()?"":(cue.armed?"Trecho engatilhado":"Próximo trecho")+"\n"+text+"    "+cue.seconds+" s");cueText.setVisibility(text.isEmpty()?View.GONE:View.VISIBLE);}}
     double displayPosition(){return anchorPosition+(remote.connected&&state!=null&&state.optBoolean("playing")&&!state.optBoolean("paused")?Math.min(.35,(SystemClock.elapsedRealtime()-stateAt)/1000.0):0);}
     double timerValue(){return localTimer.value(SystemClock.elapsedRealtime());}
     void updateProjectOpening(){
@@ -416,10 +461,10 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         LinearLayout horizontal=row(this);horizontal.setGravity(Gravity.TOP);pad(horizontal,6,6);transport.addView(horizontal,new LinearLayout.LayoutParams(-1,dp(82)));
         TrackRow master=new TrackRow(null,0);trackRows.put("master",master);horizontal.addView(master,new LinearLayout.LayoutParams(dp(220),dp(70)));
         LinearLayout middle=column(this);LinearLayout.LayoutParams middleLp=new LinearLayout.LayoutParams(0,-1,1);middleLp.setMargins(dp(8),0,0,0);horizontal.addView(middle,middleLp);
-        LinearLayout display=row(this),songAndInformation=row(this);songAndInformation.setBackground(RemoteWidgets.display(5));
-        current=label(this,"",12,TEXT);current.setSingleLine();pad(current,5,0);songAndInformation.addView(current,new LinearLayout.LayoutParams(0,dp(25),3));
+        LinearLayout display=row(this),songAndInformation=row(this);display.setGravity(Gravity.CENTER_VERTICAL);songAndInformation.setBackground(RemoteWidgets.display(5));
+        current=label(this,"",12,TEXT);current.setSingleLine();pad(current,5,0);songAndInformation.addView(current,new LinearLayout.LayoutParams(0,dp(25),.54f));
         View separator=new View(this);separator.setBackgroundColor(0xff444444);songAndInformation.addView(separator,new LinearLayout.LayoutParams(dp(1),dp(25)));
-        tabletInformation=centered("",10,GREEN,true);tabletInformation.setSingleLine();tabletInformation.setAutoSizeTextTypeUniformWithConfiguration(7,10,1,android.util.TypedValue.COMPLEX_UNIT_SP);songAndInformation.addView(tabletInformation,new LinearLayout.LayoutParams(0,dp(25),1));
+        tabletInformation=centered("",10,GREEN,true);tabletInformation.setSingleLine();tabletInformation.setAutoSizeTextTypeUniformWithConfiguration(7,10,1,android.util.TypedValue.COMPLEX_UNIT_SP);songAndInformation.addView(tabletInformation,new LinearLayout.LayoutParams(0,dp(25),.46f));
         display.addView(songAndInformation,new LinearLayout.LayoutParams(0,dp(25),1));time=label(this,"",12,TEXT);time.setGravity(Gravity.CENTER);time.setBackground(RemoteWidgets.display(5));LinearLayout.LayoutParams timeLp=new LinearLayout.LayoutParams(dp(82),dp(25));timeLp.leftMargin=dp(6);display.addView(time,timeLp);
         save=new Button(this,"Salvar",()->remote.action("save"));save.setTextSize(11);save.style(GREEN,false);LinearLayout.LayoutParams saveLp=new LinearLayout.LayoutParams(dp(72),dp(28));saveLp.leftMargin=dp(6);display.addView(save,saveLp);middle.addView(display);
 
@@ -437,8 +482,18 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         TrackRow(String id,int index){super(MainActivity.this);this.id=id;this.index=index;setOrientation(HORIZONTAL);if(id!=null){groupGuide=new RemoteGroupGuide(MainActivity.this);addView(groupGuide,new LinearLayout.LayoutParams(0,-1));}strip=column(MainActivity.this);strip.setGravity(Gravity.CENTER_VERTICAL);pad(strip,6,id==null?2:3);addView(strip,new LinearLayout.LayoutParams(0,-1,1));
             controls=row(MainActivity.this);controls.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
             if(id==null){mono=new Button(MainActivity.this,"Estéreo",()->remote.action("masterMono"));mono.setTextSize(10);controls.addView(mono,new LinearLayout.LayoutParams(dp(58),dp(28)));}
-            pan=new Fader(MainActivity.this,true,v->remote.action("pan",id,v));pan.setContentDescription("Pan "+trackName());controls.addView(pan,new LinearLayout.LayoutParams(dp(tabletLayout()?(id==null?80:53):104),dp(28)));
-            mute=new Button(MainActivity.this,"M",()->remote.action("mute",id,0));solo=new Button(MainActivity.this,"S",()->remote.action("solo",id,0));for(Button b:new Button[]{mute,solo}){b.setTextSize(10);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(id==null?28:32),dp(28));lp.setMargins(dp(3),0,0,0);controls.addView(b,lp);}strip.addView(controls,new LinearLayout.LayoutParams(-1,dp(28)));
+            pan=new PanKnob(MainActivity.this,v->remote.action("pan",id,v));
+            pan.setContentDescription("Pan "+trackName());
+            mute=new Button(MainActivity.this,"M",()->remote.action("mute",id,0));
+            solo=new Button(MainActivity.this,"S",()->remote.action("solo",id,0));
+            View[] order=id==null?new View[]{pan,mute,solo}:new View[]{mute,pan,solo};
+            for(View control:order) {
+                if(control instanceof Button)((Button)control).setTextSize(10);
+                LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(control==pan||id==null?28:32),dp(28));
+                lp.setMargins(dp(3),0,0,0);
+                controls.addView(control,lp);
+            }
+            strip.addView(controls,new LinearLayout.LayoutParams(-1,dp(28)));
             line=row(MainActivity.this);volumeReadout=label(MainActivity.this,"",10,TEXT);volumeReadout.setTypeface(bold);line.addView(volumeReadout,new LinearLayout.LayoutParams(dp(36),dp(23)));volume=new Fader(MainActivity.this,false,v->{volumeReadout.setText(v<=0?"−∞":String.format(Locale.US,"%+.1f",20*Math.log10(v)));remote.action("volume",id,v);});volume.readout=false;volume.setContentDescription("Volume "+trackName());line.addView(volume,new LinearLayout.LayoutParams(0,dp(23),1));strip.addView(line,new LinearLayout.LayoutParams(-1,dp(23)));
             title=label(MainActivity.this,"",11,TEXT);title.setTypeface(bold);title.setSingleLine();if(id!=null){LinearLayout nameRow=row(MainActivity.this);folderIcon=new Icon(MainActivity.this,"folder",GREEN,14);folderIcon.setClickable(false);folderIcon.setFocusable(false);nameRow.addView(folderIcon,new LinearLayout.LayoutParams(dp(18),dp(18)));nameRow.addView(title,new LinearLayout.LayoutParams(0,dp(18),1));strip.addView(nameRow,new LinearLayout.LayoutParams(-1,dp(18)));}else strip.addView(title,new LinearLayout.LayoutParams(-1,dp(18)));if(id==null){strip.removeView(title);title.setGravity(Gravity.CENTER);strip.addView(title,1,new LinearLayout.LayoutParams(-1,dp(14)));}
 

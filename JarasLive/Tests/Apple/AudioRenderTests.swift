@@ -422,6 +422,15 @@ try audioAutoreleasepool {
     project.masterVolume = 0; project.masterMute = true; project.masterMono = true
     let state = ShowSnapshot(project: project, transport: TransportState(playing: true, songId: project.songs[0].id, position: 0, queue: QueueState(), loop: LoopState(enabled: false), subPlay: SubPlayState(playing: false, position: 0)))
     try clickAudio.update(state, revision: 1)
+    @MainActor func soundIsReady() -> Bool {
+        let published = Mirror(reflecting: clickAudio).children.first { $0.label == "metronomeSoundRevision" }?.value
+        return (published as? UInt64) == settings.soundRevision
+    }
+    let deadline = Date(timeIntervalSinceNow: 5)
+    while !soundIsReady(), Date() < deadline {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
+    precondition(soundIsReady(), "Metronome preset must be published before manual rendering")
     let generator = Mirror(reflecting: clickAudio).children.first { $0.label == "metronome" }!.value as! JarasMetronomeGenerator?
     let buffer = AVAudioPCMBuffer(pcmFormat: clickFormat, frameCapacity: 512)!
     @MainActor func clickPeaks() throws -> [Float] {
@@ -1876,6 +1885,8 @@ try audioAutoreleasepool {
     var project = drawerProject
     project.songs[0].regionOwnershipInitialized = true
     project.songs[0].regionOwnershipVersion = 2
+    // The previous item has a playable tail in B, with most of its span in A.
+    project.songs[0].tracks[0].clips[0].duration = 3.75
     project.songs[0].tracks[0].clips[0].regionOwnerID = previousID
     project.songs[0].tracks[1].clips[0].regionOwnerID = incomingID
     project.songs[0].tracks[1].clips[0].startTime = 2 - 0.0000004
@@ -2058,7 +2069,7 @@ var pitchState = ShowSnapshot(project: pitchProject, transport: TransportState(p
 try pitchAudio.update(pitchState, revision: 1)
 let pitchBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 512)!
 @MainActor func frequency() throws -> Double {
-    var crossings = 0, samples = 0; var previous: Float = 0
+    var signal: [Float] = []
     let warmup = settlingBlocks(pitchEngine, pitchBuffer)
     var rendered = 0
     let deadline = ProcessInfo.processInfo.systemUptime + 5
@@ -2073,12 +2084,29 @@ let pitchBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 512)!
                      "frequency measurement requires a complete PCM buffer")
         rendered += 1
         if rendered <= warmup { continue }
-        for i in 0..<Int(pitchBuffer.frameLength) {
-            let sample = pitchBuffer.floatChannelData![0][i]
-            if previous < 0 && sample >= 0 { crossings += 1 }; previous = sample; samples += 1
-        }
+        signal.append(contentsOf: UnsafeBufferPointer(start: pitchBuffer.floatChannelData![0], count: 512))
     }
-    return Double(crossings) * outputFormat.sampleRate / Double(samples)
+    // Measure the first repeating period after the negative correlation lobe.
+    // A few extra zero crossings at source handoffs can bias a crossing count.
+    let rate = outputFormat.sampleRate
+    let maxLag = Int(rate / 180)
+    let sampleCount = signal.count - maxLag
+    let correlation = (0...maxLag).map { lag in
+        var sum = 0.0, aPower = 0.0, bPower = 0.0
+        for index in stride(from: 0, to: sampleCount, by: 4) {
+            let a = Double(signal[index]), b = Double(signal[index + lag])
+            sum += a * b; aPower += a * a; bPower += b * b
+        }
+        return sum / max(1e-12, sqrt(aPower * bPower))
+    }
+    guard let lobe = correlation.firstIndex(where: { $0 < 0 }),
+          let peak = ((lobe + 1)..<maxLag).first(where: {
+              correlation[$0] > 0.9 && correlation[$0] >= correlation[$0 - 1] && correlation[$0] >= correlation[$0 + 1]
+          }) else { preconditionFailure("Expected a sustained, periodic PCM tone") }
+    let a = correlation[peak - 1], b = correlation[peak], c = correlation[peak + 1]
+    let curvature = a - 2 * b + c
+    let offset = curvature < 0 ? 0.5 * (a - c) / curvature : 0
+    return rate / (Double(peak) + offset)
 }
 @MainActor func expectFrequency(_ value: Double, line: UInt = #line) throws {
     let measured = try frequency()

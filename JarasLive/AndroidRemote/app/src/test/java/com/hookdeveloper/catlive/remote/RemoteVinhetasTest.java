@@ -24,7 +24,9 @@ public class RemoteVinhetasTest {
   app.state.put("masterPan",-.5);app.state.getJSONArray("tracks").getJSONObject(0).put("instrumentIcon","piano");app.buildWorkspace();app.refresh();
   MainActivity.TrackRow master=app.trackRows.get("master");assertNotNull(master);assertTrue(isDescendant(master,app.transport));
   assertEquals(RemoteWidgets.dp(220),master.getLayoutParams().width);assertNotNull(master.pan);assertEquals(-.5,master.pan.value,0);
-  assertEquals(RemoteWidgets.dp(80),master.pan.getLayoutParams().width);assertEquals("",app.repeat.getText().toString());
+  assertTrue(master.pan instanceof RemoteWidgets.PanKnob);
+  assertEquals(master.controls.indexOfChild(master.mute)-1,master.controls.indexOfChild(master.pan));
+  assertEquals("",app.repeat.getText().toString());
   assertNull(master.iconView.getParent());assertEquals("repeat",app.repeat.icon);assertEquals(RemoteWidgets.dp(34),app.railButtons.get("parts").getLayoutParams().width);
  }
  static boolean isDescendant(View child,View ancestor){for(android.view.ViewParent p=child.getParent();p!=null;p=p.getParent())if(p==ancestor)return true;return false;}

@@ -54,5 +54,25 @@ public class RemotePartsTest {
   View button=findText(app.setlistColumn,"Parts");assertNotNull(button);button.performClick();assertFalse(app.partsShown);assertNull(app.parts);
   button=findText(app.setlistColumn,"Parts");button.performClick();assertTrue(app.partsShown);assertNotNull(app.parts);assertEquals(2,app.parts.sections.size());
  }
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void horizontalPartsUseBothBanksAndLimitHeight(){
+  assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,app.getRequestedOrientation());
+  app.railButtons.get("parts").performClick();assertTrue(app.partsShown);
+  assertTrue(app.railButtons.get("parts").performLongClick());assertFalse(app.partsShown);
+  RemoteHorizontalParts dock=app.horizontalParts;assertNotNull(dock);assertFalse(dock.current.secondary);assertTrue(dock.queued.secondary);
+  assertFalse(dock.current.currentTab.title.isClickable());assertFalse(dock.queued.queuedTab.title.isClickable());
+  int initial=dock.preferredHeight();
+  dock.layout(0,0,800,initial);
+  View handle=dock.getChildAt(0);
+  handle.dispatchTouchEvent(MotionEvent.obtain(0,0,MotionEvent.ACTION_DOWN,30,10,0));
+  handle.dispatchTouchEvent(MotionEvent.obtain(0,10,MotionEvent.ACTION_MOVE,30,-1000,0));
+  handle.dispatchTouchEvent(MotionEvent.obtain(0,20,MotionEvent.ACTION_UP,30,-1000,0));
+  assertEquals(Math.round(initial*1.5f),dock.getLayoutParams().height);
+  assertEquals(Math.round(initial*1.5f),dock.preferredHeight());
+  app.railButtons.get("parts").performClick();assertNull(app.horizontalParts);assertNull(app.parts);
+  app.remote.mode="observer";app.onChanged();
+  assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,app.getRequestedOrientation());
+  app.remote.mode="notices";app.onChanged();
+  assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,app.getRequestedOrientation());
+ }
  static View findText(View view,String text){if(view instanceof TextView&&((TextView)view).getText().toString().equals(text))return view;if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++){View child=findText(group.getChildAt(i),text);if(child!=null)return child;}}return null;}
 }

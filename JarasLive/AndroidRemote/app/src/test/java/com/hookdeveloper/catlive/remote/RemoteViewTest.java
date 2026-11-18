@@ -42,21 +42,19 @@ public class RemoteViewTest {
  @Test public void manyTabsKeepReadableWidthAndScrollHorizontally()throws Exception{connect("director");JSONArray tabs=new JSONArray();for(int i=0;i<8;i++)tabs.put(new JSONObject().put("id","TAB"+i).put("name","Projeto "+i).put("selected",i==0));app.state.put("projectTabs",tabs);app.updateTabs();app.layoutProjectTabs(RemoteWidgets.dp(341));int total=0;for(int i=0;i<8;i++){assertTrue(app.tabs.getChildAt(i).getLayoutParams().width>=RemoteWidgets.dp(120));assertTrue(app.tabs.getChildAt(i).isLongClickable());total+=app.tabs.getChildAt(i).getLayoutParams().width;}assertTrue(total>RemoteWidgets.dp(341));assertSame(app.tabScroll,app.tabs.getParent());}
  @Test public void projectOpeningOverlaySurvivesWorkspaceReplacementAndOnlyReceiptFinishes()throws Exception{connect("director");JSONObject command=new JSONObject().put("id","COMMAND").put("action","openRecentProjectInNewTab");app.remote.projectOpening.begin(command,app.state,0);app.onLocalCommand(command);assertNotNull(app.root.findViewWithTag("project-loading"));assertTrue(app.root.findViewWithTag("project-loading").isClickable());app.buildWorkspace();app.tick();assertNotNull(app.root.findViewWithTag("project-loading"));app.state.put("projects",new JSONObject().put("commandID","COMMAND").put("commandState","completed"));app.remote.projectOpening.receive(app.state);app.tick();assertNull(app.root.findViewWithTag("project-loading"));}
  @Test public void changingPanelDoesNotRetainOldMixerViews()throws Exception{connect("director");app.choose("mixer");assertNotNull(app.trackColumn);app.choose("setlist");assertNull(app.trackColumn);app.choose("tp2");assertNotNull(app.tp);assertNull(app.setlistScroll);}
- @Test @Config(qualifiers="sw800dp-w800dp-h1280dp-port") public void portraitTabletUsesPhoneControlsAndKeepsMasterInMixer()throws Exception{
-  connect("director");assertTrue(RemoteWidgets.tablet);assertFalse(app.tabletLayout());assertEquals("setlist",app.panel);
-  assertFalse(app.trackRows.containsKey("master"));app.railButtons.get("mixer").performClick();
-  assertEquals("mixer",app.panel);assertNotNull(app.trackRows.get("master"));
-  MainActivity.TrackRow master=app.trackRows.get("master");master.mute.performClick();assertTrue(app.state.optBoolean("masterMute"));master.mute.performClick();assertFalse(app.state.optBoolean("masterMute"));
-  assertSame(app.trackColumn,master.getParent());assertSame(master,app.trackColumn.getChildAt(0));
-  int masterHeight=master.getLayoutParams().height;assertEquals(RemoteWidgets.dp(80),masterHeight);
-  String track=app.state.getJSONArray("tracks").getJSONObject(0).getString("id");double original=app.layout.height(track);
-  app.resizeTrackHeight(2);assertTrue(app.layout.height(track)>original);assertEquals(masterHeight,master.getLayoutParams().height);
-  app.resizeTrackHeight(.1);assertEquals(masterHeight,master.getLayoutParams().height);
-  app.mixerStructure="";app.refreshStructure();assertSame(master,app.trackColumn.getChildAt(0));
-  app.resizeTrackHeight(3);
-  app.mixerScroll.measure(View.MeasureSpec.makeMeasureSpec(600,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(100,View.MeasureSpec.EXACTLY));app.mixerScroll.layout(0,0,600,100);
-  app.mixerScroll.scrollTo(0,40);assertEquals(40,app.mixerScroll.getScrollY());assertEquals(-40,master.getTop()-app.mixerScroll.getScrollY());
-  app.railButtons.get("parts").performClick();assertEquals("parts",app.panel);assertNotNull(app.parts);
+ @Test @Config(qualifiers="sw800dp-w800dp-h1280dp-port") public void tabletDirectorRequestsLandscapeAndKeepsTheMasterInTransport()throws Exception{
+  connect("director");assertTrue(RemoteWidgets.tablet);
+  assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,app.getRequestedOrientation());
+  Configuration landscape=new Configuration(app.getResources().getConfiguration());
+  landscape.orientation=Configuration.ORIENTATION_LANDSCAPE;landscape.screenWidthDp=1280;landscape.screenHeightDp=800;
+  controller.configurationChange(landscape);
+  assertTrue(app.tabletLayout());assertEquals("grid",app.panel);
+  assertNotNull(app.grid);assertNotNull(app.trackColumn);assertNotNull(app.trackRows.get("master"));
+  MainActivity.TrackRow master=app.trackRows.get("master");
+  master.mute.performClick();assertTrue(app.state.optBoolean("masterMute"));
+  master.mute.performClick();assertFalse(app.state.optBoolean("masterMute"));
+  assertSame(app.save,((LinearLayout)app.save.getParent()).getChildAt(2));
+  assertSame(app.time,((LinearLayout)app.save.getParent()).getChildAt(1));
  }
  @Test public void fullscreenTeleprompterHidesRailAndRestoresItWithoutChangingPreference()throws Exception{
   connect("director");app.choose("tp1");assertTrue(app.rail.getParent().getParent()==app.work);

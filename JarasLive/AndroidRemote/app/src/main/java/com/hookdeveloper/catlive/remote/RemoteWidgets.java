@@ -13,6 +13,10 @@ final class RemoteWidgets {
     static void init(Context c){RemoteText.init(c);density=c.getResources().getDisplayMetrics().density;tablet=c.getResources().getConfiguration().smallestScreenWidthDp>=600;regular=Typeface.createFromAsset(c.getAssets(),"fonts/Inter-Regular.ttf");bold=Typeface.createFromAsset(c.getAssets(),"fonts/Inter-SemiBold.ttf");}
     static int dp(float v){return Math.round(v*density);}
     static GradientDrawable surface(int top,int bottom,int edge,float radius){GradientDrawable d=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{top,bottom});d.setCornerRadius(dp(radius));d.setStroke(dp(0.5f),edge);return d;}
+    static GradientDrawable trackButtonSurface(int color, boolean on) {
+        return on?surface(blend(color,Color.WHITE,.08f),blend(color,Color.BLACK,.08f),0x2affffff,3)
+                 :surface(0xff414141,0xff353535,0x2affffff,3);
+    }
     static GradientDrawable panel(float radius){float b=tablet?.72f:1;return surface(gray(.16f*b),gray(.105f*b),0x2affffff,radius);}
     static GradientDrawable background(float radius){float b=tablet?.72f:1;return surface(gray(.12f*b),gray(.075f*b),Color.TRANSPARENT,radius);}
     static GradientDrawable display(float radius){float b=tablet?.72f:1;return surface(gray(.08f*b),gray(.05f*b),Color.TRANSPARENT,radius);}
@@ -38,7 +42,7 @@ final class RemoteWidgets {
         int tint=TEXT;boolean active=false;String icon="",caption="",leadingIcon="",trailingIcon="";
         Button(Context c,String text,Runnable run){super(c);setText(RemoteText.ui(text));setTextColor(TEXT);setTextSize(13);setTypeface(bold);setGravity(Gravity.CENTER);setIncludeFontPadding(false);setMinHeight(dp(32));setPadding(dp(8),dp(4),dp(8),dp(4));setFocusable(true);setClickable(true);setOnClickListener(v->run.run());setBackground(panel(5));}
         void style(int color,boolean on){tint=color;active=on;setTextColor(color);setBackground(on?surface(blend(0xff282828,color,.35f),blend(0xff1b1b1b,color,.35f),0x3affffff,5):panel(5));invalidate();}
-        void trackStyle(int color,boolean on){tint=color;active=on;setTextColor(on?Color.BLACK:Color.WHITE);setPadding(0,0,0,0);setBackground(new InsetDrawable(on?surface(blend(color,Color.WHITE,.08f),blend(color,Color.BLACK,.08f),0x2affffff,3):surface(0xff414141,0xff353535,0x2affffff,3),dp(3),dp(3),dp(3),dp(3)));invalidate();}
+        void trackStyle(int color,boolean on){tint=color;active=on;setTextColor(on?Color.BLACK:Color.WHITE);setPadding(0,0,0,0);setBackground(new InsetDrawable(trackButtonSurface(color,on),dp(3),dp(3),dp(3),dp(3)));invalidate();}
         void solid(int color){setTextColor(Color.BLACK);setBackground(surface(blend(color,Color.WHITE,.10f),blend(color,Color.BLACK,.12f),color,5));}
         void transportStyle(int background,int foreground){tint=foreground;setTextColor(foreground);setBackground(surface(background,background,Color.TRANSPARENT,6));invalidate();}
         void icon(String key,String accessible){icon=key;setContentDescription(accessible);setText("");invalidate();}
@@ -124,5 +128,40 @@ final class RemoteWidgets {
         }
         @Override public boolean onTouchEvent(MotionEvent event){return isEnabled()&&touch.touch(event);}
         @Override public boolean performClick(){super.performClick();return true;}
+    }
+    static final class PanKnob extends Fader {
+        private float downX;
+        private double startValue;
+        PanKnob(Context context, Changed changed) { super(context,true,changed); }
+        @Override public boolean onTouchEvent(MotionEvent event) {
+            if(event.getActionMasked()==MotionEvent.ACTION_DOWN) {
+                downX=event.getX();
+                startValue=value;
+            }
+            return super.onTouchEvent(event);
+        }
+        @Override void setFromX(float x, boolean end) {
+            if(x==downX&&!touch.dragged)return;
+            value=Math.max(-1,Math.min(1,startValue+(x-downX)/Math.max(1,dp(42))));
+            invalidate();
+            if(end||android.os.SystemClock.elapsedRealtime()-last>=25)commit(value);
+        }
+        @Override protected void onDraw(Canvas canvas) {
+            final float x=getWidth()/2f,y=getHeight()/2f,r=dp(8);
+            paint.setColor(0xff252525);
+            canvas.drawCircle(x,y,r,paint);
+            paint.setColor(isEnabled()?0xffb47aff:0xff69626e);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1));
+            canvas.drawCircle(x,y,r,paint);
+            paint.setStyle(Paint.Style.FILL);
+            final double angle=Math.toRadians(-90+135*value);
+            final float dx=(float)Math.cos(angle),dy=(float)Math.sin(angle);
+            paint.setColor(TEXT);
+            paint.setStrokeWidth(dp(2));
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            canvas.drawLine(x+dx*dp(2),y+dy*dp(2),x+dx*dp(5),y+dy*dp(5),paint);
+            paint.setStrokeCap(Paint.Cap.BUTT);
+        }
     }
 }

@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
+import GameController
 import UniformTypeIdentifiers
 
 @MainActor struct IpadItemMenuCommand: Identifiable {
@@ -84,7 +85,6 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
     @State private var editingName = false
     @State private var exportingMIDI = false
     @State private var midiDocument: MIDIItemDocument?
-    @State private var midiError = ""
     @State private var fx = false
     @State private var exporting = false
     @State private var locatingFile = false
@@ -143,7 +143,7 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
                     if fileURL != nil { action("Open file location", symbol: "folder") { locatingFile = true } }
                     if track.kind.isText && !clip.isProjectionMedia { action("Edit", symbol: "text.alignleft") { editingText = true } }
                     if track.kind == .standard || clip.isProjectionMedia {
-                        action("FX", symbol: "slider.horizontal.3") { fx = true }
+                        action("FX", symbol: "slider.horizontal.3") { show.reportItemSelection(targets); fx = true }
                     }
                     if !editableIDs.isEmpty {
                         let muted = standard.allSatisfy { $0.1.muted == true }
@@ -197,10 +197,7 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
         .disabled(childOpen).accessibilityHidden(childOpen)
         .overlay { childEditor }
         .sheet(isPresented: $locatingFile) {
-            if let fileURL {
-                IpadItemFileBrowser(directory: fileURL.deletingLastPathComponent(), finished: { locatingFile = false })
-                    .background(IpadPresentedOutsideDismissal { locatingFile = false })
-            }
+            if let fileURL { IpadItemFileBrowser(directory: fileURL.deletingLastPathComponent(), finished: { locatingFile = false }) }
         }
     }
     var body: some View {
@@ -262,15 +259,25 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
     private func channelTitle(_ mode: Int) -> String {
         switch mode { case 4: return "Swap - LR"; case 1: return "Convert Mono - L"; case 2: return "Convert Mono - R"; case 3: return "Convert Mono L-R"; default: return "Convert Stereo" }
     }
+    private func adjustPitch(_ id: UUID, by step: Double) {
+        let keyboard = GCKeyboard.coalesced?.keyboardInput
+        let together = keyboard?.button(forKeyCode: .leftShift)?.isPressed == true || keyboard?.button(forKeyCode: .rightShift)?.isPressed == true
+        show.adjustItemPitch(together ? Set(audio.map { $0.1.id }) : [id], by: step)
+    }
     private var tuner: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(verbatim: "Tuner").font(.jarasHeadline)
+            if audio.count > 1 {
+                Text("Hold Shift and click − or + to adjust all listed items by the same amount.")
+                    .font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(audio.map { $0.1 }) { clip in
                 HStack(spacing: 8) {
                     Text(verbatim: clip.name).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                    Button { show.setItemPitch(clip.id, semitones: max(-12, (clip.pitchSemitones ?? 0) - 1)) } label: { Image(systemName: "minus").frame(width: 34, height: 34) }
+                    Button { adjustPitch(clip.id, by: -1) } label: { Image(systemName: "minus").frame(width: 34, height: 34) }
                     Text(verbatim: String(format: "%+.2g st", clip.pitchSemitones ?? 0)).monospacedDigit().frame(width: 54)
-                    Button { show.setItemPitch(clip.id, semitones: min(12, (clip.pitchSemitones ?? 0) + 1)) } label: { Image(systemName: "plus").frame(width: 34, height: 34) }
+                    Button { adjustPitch(clip.id, by: 1) } label: { Image(systemName: "plus").frame(width: 34, height: 34) }
                 }
             }
         }.padding(10).background(JarasTheme.display, in: RoundedRectangle(cornerRadius: 7))
@@ -293,20 +300,20 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
                 })
             }
         } else if separating {
-            IpadCompactModal(onDismiss: { separation.cancel(); separating = false; if initialAction == "separate" { close() } }) {
+            IpadCompactModal {
                 CatStemProgressView(session: separation) {
                     separating = false
                     if initialAction == "separate" { close() }
                 }
             }
         } else if initialAction == "tuner" {
-            IpadCompactModal(onDismiss: close) { VStack { tuner; Button("Close", action: close) }.padding(18).frame(width: 320) }
+            IpadCompactModal { VStack { tuner; Button("Close", action: close) }.padding(18).frame(width: 320) }
         } else if !processing.error.isEmpty {
-            IpadCompactModal(onDismiss: close) {
+            IpadCompactModal {
                 VStack(spacing: 16) { Text(verbatim: processing.error); Button("Close", action: close) }.padding(18).frame(width: 320)
             }
         } else if processing.running {
-            IpadCompactModal(onDismiss: { processing.cancel(); close() }) {
+            IpadCompactModal {
                 VStack(spacing: 16) {
                     Text(LocalizedStringKey(processing.title)).font(.jarasHeadline)
                     Text(verbatim: processing.fileName).lineLimit(2)
@@ -319,17 +326,17 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
                 ItemNameEditor(name: clip.name, apply: { show.renameItem(item, name: $0) }, close: { editingName = false })
             }
         } else if editingText {
-            IpadCompactModal(onDismiss: { editingText = false }) {
+            IpadCompactModal {
                 TextItemEditor(text: context?.1.text ?? "", apply: { show.updateTextItem(item, text: $0) }, close: { editingText = false })
             }
         } else if normalize {
-            IpadCompactModal(onDismiss: { normalize = false }) { ItemNormalizationEditor(show: show, documents: documents, items: audioIDs, close: { normalize = false }) }
+            IpadCompactModal { ItemNormalizationEditor(show: show, documents: documents, items: audioIDs, close: { normalize = false }) }
         } else if fx {
-            IpadCompactModal(preferredSize: CGSize(width: 980, height: 640), onDismiss: { fx = false }) {
+            IpadCompactModal(preferredSize: CGSize(width: 980, height: 640)) {
                 IpadStandaloneFXManager(show: show, track: nil, clip: item, targets: [], close: { fx = false })
             }
         } else if exporting, let song = show.current {
-            IpadCompactModal(preferredSize: CGSize(width: 540, height: 480), onDismiss: { exporting = false }) {
+            IpadCompactModal(preferredSize: CGSize(width: 540, height: 480)) {
                 IpadItemExportEditor(request: .init(project: show.snapshot.project, song: song,
                     items: audioIDs.intersection(editableIDs), mediaDirectory: documents.currentURL?.deletingLastPathComponent()), close: { exporting = false })
             }
@@ -455,13 +462,12 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
                 Button("Export") {
                     session.start(request: request, encoding: AudioExportEncoding(format: format, bitDepth: bits,
                         channels: channels, bitrate: bitrate, sampleRate: rate), rate: rate)
-                }.buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black).disabled(session.running)
+                }.buttonStyle(.borderedProminent).tint(JarasTheme.green).disabled(session.running)
             }
         }.padding(22)
             .onChange(of: session.ready) { if $0 { choosingDestination = true } }
             .sheet(isPresented: $choosingDestination, onDismiss: { session.clearOutput() }) {
                 IpadItemFileExporter(urls: session.files, finished: { choosingDestination = false })
-                    .background(IpadPresentedOutsideDismissal { choosingDestination = false })
             }
             .onDisappear { session.cancel(); if !choosingDestination { session.clearOutput() } }
     }

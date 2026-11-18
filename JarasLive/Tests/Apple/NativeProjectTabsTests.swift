@@ -44,10 +44,16 @@ struct TestSnapshot { var project = TestProject() }
     var projectTabCount = 1, projectTabIndex = 0
     var recent: [URL] = []
     var openInNewProjectTab: ((URL) -> Void)?
+    var openProjectTabAndWait: ((URL) async throws -> Void)?
     var activateExistingProjectTab: ((URL) -> Bool)?
     var navigateProjectTab: ((Int) -> Void)?
     var additionalProtectedMediaURLs: () -> Set<URL> = { [] }
+    func waitUntilOpened(at url: URL) async throws {
+        while busy { try await Task.sleep(nanoseconds: 1_000_000) }
+        guard ready, currentURL == url else { throw ProjectError.invalid("open failed") }
+    }
     func rememberProjectMedia() async throws {}
+    func refreshNativeStorage() {}
     func open(_ url: URL) {
         busy = true
         if url.lastPathComponent == "bad.jl" { ready = false; error = "invalid project" }
@@ -77,7 +83,6 @@ struct TestSnapshot { var project = TestProject() }
     struct Tab { let id: UUID; let name: String; let selected: Bool }
     static var projectTabsProvider: () -> [Tab] = { [] }
     static var selectProjectTabHandler: ((UUID) -> Void)?
-    static var closeProjectTabHandler: ((UUID) -> Void)?
     static var documents: ProjectDocuments?
     struct Session { static let nativeHost = Session() }
     static func bind(_ show: ShowController, session: Session) {}
@@ -109,23 +114,13 @@ enum ProjectTabNavigation {
         let second = tabs.active!
         check(first.show.playing && first.show.dirty && first.documents.currentURL == a, "Opening a tab altered the previous project")
         check(first.projectAudio !== second.projectAudio && first.projectRecorder !== second.projectRecorder, "Tabs share project-owned audio/recording state")
-        check(second.documents.activateExistingProjectTab?(b) == true && tabs.active === second, "Recents must return to the already selected project")
-        check(second.documents.activateExistingProjectTab?(URL(fileURLWithPath: "/tmp/native-tabs/unused/../A.jl")) == true, "Recents must recognize the existing tab's canonical path")
-        check(tabs.active === first && tabs.projects.count == 2 && first.show.playing && first.show.dirty, "Returning from recents must preserve the live session and unsaved edits")
         tabs.select(0); check(tabs.active === first && StemAudioPlayback.shared === first.projectAudio, "Selecting must reuse the original session")
         check(VideoPlayback.shared.directory == a.deletingLastPathComponent(), "Selecting an existing tab must restore the video media directory")
         tabs.open(b); await settle(); check(tabs.projects.count == 2 && tabs.active === second, "Already-open projects must reuse their tab")
         check(VideoPlayback.shared.directory == b.deletingLastPathComponent() && VideoPlayback.teleprompter.directory == b.deletingLastPathComponent() && VideoPlayback.teleprompter2.directory == b.deletingLastPathComponent(), "All three video players must follow the active project directory")
         TrackRecording.shared.recording = true; tabs.select(0); tabs.open(URL(fileURLWithPath: "/tmp/native-tabs/C.jl")); await settle()
         check(tabs.active === second && tabs.projects.count == 2, "Switching interrupted recording")
-        check(second.documents.activateExistingProjectTab?(a) == false && tabs.active === second, "Recents must not claim to activate a tab when switching is blocked")
-        check(second.documents.activateExistingProjectTab?(b) == true, "Returning to the current project must remain possible while recording")
         TrackRecording.shared.recording = false
-        DAWRemoteHostBridge.closeProjectTabHandler?(UUID())
-        check(tabs.closing == nil, "Unknown remote tab must not open a close confirmation")
-        DAWRemoteHostBridge.closeProjectTabHandler?(second.remoteProjectTabID)
-        check(tabs.closing == second.remoteProjectTabID && tabs.projects.count == 2, "Remote close must request confirmation without discarding the project")
-        tabs.closing = nil
         second.show.failSave = true; await tabs.close(second.remoteProjectTabID)
         check(tabs.projects.count == 2 && tabs.active === second, "Failed save discarded a tab")
         second.show.failSave = false; await tabs.close(second.remoteProjectTabID)

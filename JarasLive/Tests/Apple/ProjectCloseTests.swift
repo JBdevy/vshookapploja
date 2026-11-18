@@ -1,5 +1,9 @@
 import AppKit
 
+@MainActor private enum ProjectionWindow {
+    static func presentWorkspaceConfirmation(_ window: NSWindow) {}
+    static func dismissWorkspaceConfirmation(_ window: NSWindow) {}
+}
 @MainActor final class CloseTestAlert {
     static var response: NSApplication.ModalResponse = .alertThirdButtonReturn
     static var buttons: [NSButton] = []
@@ -12,6 +16,7 @@ import AppKit
         let button = NSButton(title: title, target: nil, action: nil)
         Self.buttons.append(button); return button
     }
+    lazy var window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
     func beginSheetModal(for window: NSWindow, completionHandler: ((NSApplication.ModalResponse) -> Void)?) {
         if Self.deferred { Self.answer = completionHandler }
         else { completionHandler?(Self.response) }
@@ -33,6 +38,9 @@ enum CloseTestCommand { case stopAll }
     }
 }
 @MainActor final class ProjectDocuments {
+    var isTemporary = false
+    var documents: ProjectDocuments { self }
+    func discardTemporarySession() throws { isTemporary = false }
     struct RemoteOpening { var id = UUID() }
     var remoteOpening: RemoteOpening?
     static func finishRemoteProjectOpening(_ id: UUID, state: String) {}
@@ -247,5 +255,5 @@ RunLoop.main.run()
         }
     }
     var anyPlaying = false
-    func stopAll() { anyPlaying = false; StemAudioPlayback.shared.prepareForClosing() }
+    func stopAll(forApplicationTermination: Bool = false) { anyPlaying = false; StemAudioPlayback.shared.prepareForClosing() }
 }

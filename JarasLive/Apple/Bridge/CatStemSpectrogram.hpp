@@ -10,9 +10,9 @@
 // on the inference worker; the audio render callback only exchanges packets.
 // The layout matches torch.view_as_real(...).permute(0, 1, 4, 2, 3).
 namespace CatStemMobile {
-template<unsigned Context> class WindowSpectrogram {
+class Spectrogram {
 public:
-    static constexpr unsigned context = Context;
+    static constexpr unsigned context = 44100;
     static constexpr unsigned fftSize = 4096;
     static constexpr unsigned hop = 1024;
     static constexpr unsigned bins = fftSize / 2;
@@ -34,7 +34,7 @@ private:
         return unsigned(index);
     }
 public:
-    WindowSpectrogram(): overlap(synthesisLength), weight(synthesisLength) {
+    Spectrogram(): overlap(synthesisLength), weight(synthesisLength) {
         forwardSetup = vDSP_DFT_zop_CreateSetup(nullptr, fftSize, vDSP_DFT_FORWARD);
         inverseSetup = vDSP_DFT_zop_CreateSetup(nullptr, fftSize, vDSP_DFT_INVERSE);
         if (!forwardSetup || !inverseSetup) {
@@ -49,14 +49,14 @@ public:
             for (unsigned n = 0; n < fftSize; ++n)
                 weight[frame * hop + n] += window[n] * window[n];
     }
-    ~WindowSpectrogram() {
+    ~Spectrogram() {
         vDSP_DFT_DestroySetup(forwardSetup);
         vDSP_DFT_DestroySetup(inverseSetup);
     }
-    WindowSpectrogram(const WindowSpectrogram&) = delete;
-    WindowSpectrogram& operator=(const WindowSpectrogram&) = delete;
+    Spectrogram(const Spectrogram&) = delete;
+    Spectrogram& operator=(const Spectrogram&) = delete;
 
-    // Input is planar [2,context]. Output is [4,2048,frames], with real/imaginary
+    // Input is planar [2,44100]. Output is [4,2048,44], with real/imaginary
     // planes next to one another for each of the two input channels.
     void encode(const float *pcm, float *spectrum) {
         constexpr float scale = 1.0f / 64.0f; // normalized=True: sqrt(4096)
@@ -74,7 +74,7 @@ public:
         }
     }
 
-    // One predicted stem spectrum [4,2048,frames] becomes planar [2,context].
+    // One predicted stem spectrum [4,2048,44] becomes planar [2,44100].
     // The caller adds the separately predicted, already denormalized time
     // branch. No audio normalization, threshold or substitute model is used.
     void decode(const float *spectrum, float *pcm) {
@@ -99,6 +99,4 @@ public:
         }
     }
 };
-using Spectrogram = WindowSpectrogram<44100>;
-using OfflineSpectrogram = WindowSpectrogram<343980>;
 }

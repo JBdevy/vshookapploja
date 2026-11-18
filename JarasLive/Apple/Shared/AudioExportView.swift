@@ -4,19 +4,6 @@ import UniformTypeIdentifiers
 import AppKit
 #endif
 
-/// Keep the picker URL itself (including its sandbox extension), not only a
-/// reconstructed path. The render job retains a separate lease until it exits.
-final class AudioExportURLAccess: @unchecked Sendable {
-    let url: URL
-    private let release: () -> Void
-    init(_ url: URL, start: ((URL) -> Bool)? = nil, stop: ((URL) -> Void)? = nil) {
-        self.url = url
-        let acquired = start?(url) ?? url.startAccessingSecurityScopedResource()
-        release = { if acquired { if let stop { stop(url) } else { url.stopAccessingSecurityScopedResource() } } }
-    }
-    deinit { release() }
-}
-
 @MainActor private final class AudioExportSession: ObservableObject {
     @Published var running = false
     @Published var finished = false
@@ -29,7 +16,7 @@ final class AudioExportURLAccess: @unchecked Sendable {
     func cancelReplacement() { pendingExport = nil; replacementFiles = []; confirmingReplacement = false }
     func confirmReplacement() { let action = pendingExport; cancelReplacement(); action?() }
     func cancel() { cancellation.cancel(); cancelReplacement() }
-    func start(project: Project, song: Song, plan: AudioExportPlan, media: URL, output: URL, rate: Double, encoding: AudioExportEncoding, secondaryEncoding: AudioExportEncoding?, includeHardwareOutputs: Bool = false, printTrackPolarity: Bool = false, mediaAccessURL: URL? = nil, replacingFiles: Set<String> = []) {
+    func start(project: Project, song: Song, plan: AudioExportPlan, media: URL, output: URL, rate: Double, encoding: AudioExportEncoding, secondaryEncoding: AudioExportEncoding?, includeHardwareOutputs: Bool = false, printTrackPolarity: Bool = false, replacingFiles: Set<String> = []) {
         guard !running else { return }
         let collisions = plan.jobs.map(\.fileName).filter {
             FileManager.default.fileExists(atPath: output.appendingPathComponent($0).path) && !replacingFiles.contains($0)
@@ -39,18 +26,16 @@ final class AudioExportURLAccess: @unchecked Sendable {
             let approved = replacingFiles.union(collisions)
             pendingExport = { [weak self] in self?.start(project: project, song: song, plan: plan, media: media, output: output,
                 rate: rate, encoding: encoding, secondaryEncoding: secondaryEncoding,
-                includeHardwareOutputs: includeHardwareOutputs, printTrackPolarity: printTrackPolarity, mediaAccessURL: mediaAccessURL, replacingFiles: approved) }
+                includeHardwareOutputs: includeHardwareOutputs, printTrackPolarity: printTrackPolarity, replacingFiles: approved) }
             confirmingReplacement = true
             return
         }
         cancellation = AudioExportCancellation()
         let token = cancellation
-        let mediaAccess = AudioExportURLAccess(mediaAccessURL ?? media), outputAccess = AudioExportURLAccess(output)
         let instruments = Dictionary(uniqueKeysWithValues: song.tracks.filter { $0.clips.contains { $0.midi != nil } }
             .map { ($0.id, ItemReRender.midiInstruments(for: $0, projectDirectory: media)) })
         running = true; finished = false; error = ""; progress = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            defer { withExtendedLifetime((mediaAccess, outputAccess)) {} }
             do {
                 try OfflineAudioExport.run(project: project,song: song,plan: plan,mediaDirectory: media,outputDirectory: output,sampleRate: rate,encoding: encoding,secondaryEncoding: secondaryEncoding,cancellation: token,
                     includeHardwareOutputs: includeHardwareOutputs, printTrackPolarity: printTrackPolarity, midiInstrumentsByTrack: instruments, replacingFiles: replacingFiles) { update in
@@ -68,10 +53,7 @@ struct AudioExportView: View {
     let project: Project
     let song: Song?
     let mediaDirectory: URL?
-    var mediaAccessURL: URL? = nil
     var regionSelection: Set<UUID>? = nil
-    var close: (() -> Void)? = nil
-    var closeRequested = false
     @ObservedObject private var mixerSelection = AudioExportSelection.shared
     @ObservedObject private var area = TimelineAreaSelection.shared
     @StateObject private var session = AudioExportSession()
@@ -83,10 +65,6 @@ struct AudioExportView: View {
     @State private var clips: Set<UUID> = []
     @State private var regions: Set<UUID> = []
     @State private var choosingDirectory = false
-    @State private var destinationAccess: AudioExportURLAccess?
-    @State private var lowDiskWarning = false
-    @State private var closeAfterRender = false
-    @State private var initialized = false
     @State private var renderScreen = false
     @State private var renderedPlan: AudioExportPlan?
     @AppStorage("jaras.export.sampleRate") private var rate = 48000.0
@@ -100,17 +78,8 @@ struct AudioExportView: View {
     @AppStorage("jaras.export.secondaryBits") private var secondaryBits = 24
     @AppStorage("jaras.export.secondaryBitrate") private var secondaryBitrate = 320
     @AppStorage("jaras.export.directory") private var directory = ""
-    @AppStorage("jaras.export.directoryBookmark") private var directoryBookmark = Data()
     @AppStorage("jaras.export.fileName") private var fileName = "%project"
-    @AppStorage("catlive.export.regionFileName") private var regionFileName = "%region"
-    private var destinationURL: URL? {
-        #if os(iOS)
-        return destinationAccess?.url
-        #else
-        if destinationAccess?.url.path == directory { return destinationAccess?.url }
-        return directory.isEmpty ? nil : URL(fileURLWithPath: directory)
-        #endif
-    }
+    @State private var regionFileName = "%region"
     private var selectedMixerTracks: Set<UUID> {
         guard let song else { return [] }
         return mixerSelection.tracks(song.id).intersection(song.tracks.filter { $0.kind == .standard }.map(\.id))
@@ -141,24 +110,13 @@ struct AudioExportView: View {
                 Spacer()
                 Text("\(renderedPlan?.jobs.count ?? plan.jobs.count) files").font(.jarasCaption).foregroundStyle(JarasTheme.secondary)
                 if !session.running {
-                    Button(action: finish) { Image(systemName: "xmark").frame(width: 28,height: 28).contentShape(Rectangle()) }
+                    Button { (closeEditor ?? { dismiss() })() } label: { Image(systemName: "xmark").frame(width: 28,height: 28).contentShape(Rectangle()) }
                         .buttonStyle(.plain).accessibilityLabel("Close").keyboardShortcut(.cancelAction)
                 }
             }
-            #if os(iOS)
-            ScrollView {
-                if renderScreen { rendering } else { configuration }
-            }.jarasHideScrollIndicators()
-            #else
-            if renderScreen { rendering } else { configuration }
-            #endif
-        }.padding(20)
-            #if os(macOS)
-            .frame(width: 860)
-            #else
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            #endif
-            .background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
+            if renderScreen { rendering }
+            else { configuration }
+        }.padding(20).frame(width: 860).background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
             .interactiveDismissDisabled(session.running)
             .alert("Replace existing files?", isPresented: $session.confirmingReplacement) {
                 Button("Cancel", role: .cancel) { session.cancelReplacement(); renderScreen = false; renderedPlan = nil }
@@ -168,48 +126,17 @@ struct AudioExportView: View {
             .onChange(of: selectedMixerTracks) { _ in synchronizeMixerTracks() }
             .onChange(of: renderScreen) { rendering in if !rendering { synchronizeMixerTracks() } }
             .onAppear {
-                guard !initialized, let song else { return }
-                initialized = true
+                guard let song else { return }
                 tracks = selectedMixerTracks
                 clips = AudioExportSelection.shared.clips(song.id)
                 regions = regionSelection ?? AudioExportSelection.shared.regions(song.id)
                 if UserDefaults.standard.object(forKey: "jaras.export.sampleRate") == nil {
                     rate = [44100.0,48000.0].contains(AudioDeviceSettings.shared.sampleRate) ? AudioDeviceSettings.shared.sampleRate : 48000
                 }
-                #if os(iOS)
-                if !directoryBookmark.isEmpty {
-                    var stale = false
-                    if let url = try? URL(resolvingBookmarkData: directoryBookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) {
-                        destinationAccess = AudioExportURLAccess(url); directory = url.path
-                        if stale, let renewed = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) { directoryBookmark = renewed }
-                    }
-                }
-                #endif
-                #if os(macOS)
                 if directory.isEmpty { directory = FileManager.default.urls(for: .desktopDirectory,in: .userDomainMask).first?.path ?? "" }
-                #endif
                 if fileName == "$region" { fileName = "%region" }
             }
-            .fileImporter(isPresented: $choosingDirectory,allowedContentTypes: [.folder]) { result in
-                switch result {
-                case .success(let url):
-                    destinationAccess = AudioExportURLAccess(url); directory = url.path
-                    #if os(iOS)
-                    directoryBookmark = (try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)) ?? Data()
-                    #endif
-                case .failure(let error): session.error = error.localizedDescription
-                }
-            }
-            .onDisappear { session.cancel() }
-            .onChange(of: closeRequested) { requested in if requested { finish() } }
-            .onChange(of: session.running) { running in if !running, closeAfterRender { finish() } }
-            #if os(iOS)
-            .alert("Pouco espaço no disco de destino", isPresented: $lowDiskWarning) {
-                Button("Cancelar", role: .cancel) {}
-                Button("Continuar mesmo assim", action: beginRender)
-            } message: { Text("A pasta escolhida está em um disco com menos de 5 GB livres. Libere espaço antes de exportar ou escolha outra pasta.") }
-            .background(IpadPresentedOutsideDismissal(active: lowDiskWarning, alert: true) { lowDiskWarning = false })
-            #endif
+            .fileImporter(isPresented: $choosingDirectory,allowedContentTypes: [.folder]) { if case .success(let url) = $0 { directory = url.path } }
     }
     private var configuration: some View {
         VStack(alignment: .leading,spacing: 12) {
@@ -226,18 +153,8 @@ struct AudioExportView: View {
                                     GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 10) {
                     Text("Directory:")
                     HStack {
-                        #if os(iOS)
-                        Button { choosingDirectory = true } label: {
-                            HStack {
-                                Text(destinationAccess?.url.path ?? JarasLocalization.string("Choose folder"))
-                                    .lineLimit(1).truncationMode(.middle).frame(maxWidth: .infinity, alignment: .leading)
-                                Image(systemName: "folder")
-                            }.frame(minHeight: 30)
-                        }.accessibilityLabel("Choose folder")
-                        #else
                         TextField("Directory",text: $directory)
                         Button { choosingDirectory = true } label: { Image(systemName: "folder").frame(width: 24,height: 20) }.accessibilityLabel("Choose folder")
-                        #endif
                     }
                     Text("File name:")
                     TextField(regionMode ? "%region" : "%project",text: outputName)
@@ -268,38 +185,17 @@ struct AudioExportView: View {
 
                 Picker("Channels",selection: $channels) { Text("Stereo").tag(2); Text("Mono").tag(1) }.frame(width: 135)
                 Spacer()
-                Button("Render", action: requestRender)
-                    .buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black).keyboardShortcut(.defaultAction)
-                    .disabled(plan.jobs.isEmpty || destinationURL == nil || mediaDirectory == nil)
+                Button("Render") {
+                    guard let song, let mediaDirectory else { return }
+                    guard AudioDestinationSpace.confirm(at: URL(fileURLWithPath: directory)) else { return }
+                    let snapshot = plan
+                    renderedPlan = snapshot
+                    renderScreen = true
+                    session.start(project: project,song: song,plan: snapshot,media: mediaDirectory,output: URL(fileURLWithPath: directory),rate: rate,encoding: AudioExportEncoding(format: format,bitDepth: bits,channels: channels,bitrate: bitrate,sampleRate: rate),secondaryEncoding: secondaryEnabled ? AudioExportEncoding(format: secondaryFormat,bitDepth: secondaryBits,channels: channels,bitrate: secondaryBitrate,sampleRate: rate) : nil,
+                        includeHardwareOutputs: regionMode)
+                }.buttonStyle(.borderedProminent).tint(JarasTheme.green).keyboardShortcut(.defaultAction).disabled(plan.jobs.isEmpty || directory.isEmpty || mediaDirectory == nil)
             }
-            if !session.error.isEmpty { Text(verbatim: session.error).font(.jarasCaption).foregroundStyle(.red) }
         }
-    }
-    private func finish() {
-        if session.running {
-            closeAfterRender = true; session.cancel(); return
-        }
-        if let close { close() } else { dismiss() }
-    }
-    private func requestRender() {
-        guard let destination = destinationURL else { return }
-        #if os(iOS)
-        if let available = AudioDestinationSpace.availableBytes(at: destination), AudioDestinationSpace.needsWarning(availableBytes: available) {
-            lowDiskWarning = true; return
-        }
-        #else
-        guard AudioDestinationSpace.confirm(at: destination) else { return }
-        #endif
-        beginRender()
-    }
-    private func beginRender() {
-        guard let song, let mediaDirectory, let destination = destinationURL, !plan.jobs.isEmpty else { return }
-        let snapshot = plan
-        renderedPlan = snapshot; renderScreen = true
-        session.start(project: project, song: song, plan: snapshot, media: mediaDirectory, output: destination,
-            rate: rate, encoding: AudioExportEncoding(format: format, bitDepth: bits, channels: channels, bitrate: bitrate, sampleRate: rate),
-            secondaryEncoding: secondaryEnabled ? AudioExportEncoding(format: secondaryFormat, bitDepth: secondaryBits, channels: channels, bitrate: secondaryBitrate, sampleRate: rate) : nil,
-            includeHardwareOutputs: regionMode, mediaAccessURL: mediaAccessURL)
     }
     private var formatOptions: some View {
         let chosenFormat = outputTab == 0 ? $format : $secondaryFormat
@@ -402,7 +298,7 @@ struct AudioExportView: View {
                 else if session.finished { Text("Render complete.").foregroundStyle(JarasTheme.green) }
                 else { Button("Back") { renderScreen = false; renderedPlan = nil } }
                 Spacer()
-                if !session.running { Button("Close", action: finish).keyboardShortcut(.defaultAction) }
+                if !session.running { Button("Close") { (closeEditor ?? { dismiss() })() }.keyboardShortcut(.defaultAction) }
             }
         }
     }
@@ -435,7 +331,6 @@ struct ItemAudioExportView: View {
     @AppStorage("jaras.export.sampleRate") private var rate = 48000.0
     @AppStorage("jaras.export.itemChannels") private var channels = 0
     @AppStorage("jaras.export.directory") private var directory = ""
-    @AppStorage("jaras.export.directoryBookmark") private var directoryBookmark = Data()
     @State private var choosingDirectory = false
     @State private var processing: AudioItemExportProcessing?
     private var plan: AudioExportPlan {
@@ -501,12 +396,12 @@ struct ItemAudioExportView: View {
             if !session.error.isEmpty { Text(verbatim: session.error).font(.jarasCaption).foregroundStyle(.red).textSelection(.disabled) }
             if session.finished { Text("Render complete.").foregroundStyle(JarasTheme.green) }
             HStack {
-                Button(session.running ? "Cancel" : "Close") {
+                Button(LocalizedStringKey(session.running ? "Cancel" : "Close")) {
                     if session.running { session.cancel() } else { (closeEditor ?? { dismiss() })() }
                 }.keyboardShortcut(.cancelAction)
                 Spacer()
                 if !session.finished {
-                    Button("Export") { start() }.buttonStyle(.borderedProminent).tint(JarasTheme.green).foregroundStyle(Color.black)
+                    Button("Export") { start() }.buttonStyle(.borderedProminent).tint(JarasTheme.green)
                         .keyboardShortcut(.defaultAction)
                         .disabled(session.running || plan.jobs.isEmpty || directory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || request.mediaDirectory == nil)
                 }
@@ -573,5 +468,492 @@ enum AudioDestinationSpace {
         #else
         return true
         #endif
+    }
+}
+
+struct MultitrackExportProject: Identifiable, Sendable {
+    var id: UUID { tab }
+    let tab: UUID
+    let project: Project
+    let song: Song
+    let mediaDirectory: URL
+    var selection: Set<UUID>
+    var destination: URL?
+    var ignoreMutedTracks = false
+    var ignoreMutedItems = false
+
+    let regions: [Part]
+
+    init(tab: UUID, project: Project, song: Song, mediaDirectory: URL, selection: Set<UUID>) {
+        self.tab = tab
+        self.project = project
+        self.song = song
+        self.mediaDirectory = mediaDirectory
+        regions = song.parts.filter { $0.parentRegionID == nil }
+            .sorted { $0.startTime < $1.startTime }
+        self.selection = selection.intersection(regions.map(\.id))
+    }
+}
+
+struct MultitrackExportRequest: Identifiable {
+    let id = UUID()
+    let projects: [MultitrackExportProject]
+    let active: UUID
+}
+
+@MainActor final class MultitrackPresentation: ObservableObject {
+    @Published var request: MultitrackExportRequest?
+    var exporting = false
+}
+
+struct MultitrackSheet: ViewModifier {
+    let presentation: MultitrackPresentation
+    func body(content: Content) -> some View {
+        content.background { MultitrackPresentationAnchor(presentation: presentation) }
+    }
+}
+
+private struct MultitrackPresentationAnchor: View {
+    @ObservedObject var presentation: MultitrackPresentation
+    var body: some View {
+        #if os(macOS)
+        Color.clear
+            .workspaceEditor("Export Multitrack", item: $presentation.request, scrolls: false,
+                size: CGSize(width: 560, height: 460), canClose: { !presentation.exporting }) { request in
+                MultitrackExportView(request, onRunningChanged: { presentation.exporting = $0 })
+            }
+            .frame(width: 0, height: 0)
+        #else
+        Color.clear.sheet(item: $presentation.request) { MultitrackExportView($0) }
+            .frame(width: 0, height: 0)
+        #endif
+    }
+}
+
+@MainActor private final class MultitrackExportSession: ObservableObject {
+    @Published var running = false
+    @Published var progress = 0.0
+    @Published var status = ""
+    @Published var error = ""
+    private var cancellation = AudioExportCancellation()
+
+    func cancel() { cancellation.cancel() }
+    func start(_ projects: [MultitrackExportProject], onCompleted: @escaping () -> Void) {
+        guard !running else { return }
+        cancellation = AudioExportCancellation()
+        let token = cancellation
+        running = true; progress = 0; error = ""; status = ""
+        Task {
+            defer { if running { running = false } }
+            do {
+                try await Task.detached(priority: .utility) { [weak self] in
+                    try MultitrackRenderer.run(projects, cancellation: token) { fraction, status in
+                        Task { @MainActor [weak self] in
+                            self?.progress = fraction
+                            self?.status = status
+                        }
+                    }
+                }.value
+                running = false
+                onCompleted()
+            } catch is CancellationError { status = JarasLocalization.string("Export canceled.") }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+struct MultitrackExportView: View {
+    @State private var projects: [MultitrackExportProject]
+    @State private var selected: UUID
+    @State private var choosing = false
+    @StateObject private var session = MultitrackExportSession()
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.workspaceEditorDismiss) private var dismissEditor
+    private let onRunningChanged: (Bool) -> Void
+
+    init(_ request: MultitrackExportRequest, onRunningChanged: @escaping (Bool) -> Void = { _ in }) {
+        _projects = State(initialValue: request.projects)
+        _selected = State(initialValue: request.active)
+        self.onRunningChanged = onRunningChanged
+    }
+    private var activeProjects: [MultitrackExportProject] { projects.filter { !$0.selection.isEmpty } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Export Multitrack").font(.jarasHeadline)
+            if projects.count > 1 {
+                MultitrackProjectTabs(projects: projects, selection: $selected)
+            }
+            if let index = projects.firstIndex(where: { $0.id == selected }) {
+                configuration(index)
+                    .disabled(session.running)
+            }
+            if session.running {
+                ProgressView(value: session.progress).progressViewStyle(JarasProgressBarStyle())
+                Text(verbatim: session.status).font(.jarasCaption)
+            }
+            if !session.error.isEmpty { Text(verbatim: session.error).foregroundStyle(.red) }
+            HStack {
+                Button(session.running ? "Cancel" : "Close") {
+                    if session.running { session.cancel() }
+                    else { close() }
+                }
+                Spacer()
+                Button("Export") {
+                    session.start(activeProjects) {
+                        onRunningChanged(false)
+                        close()
+                    }
+                }
+                    .buttonStyle(.borderedProminent).tint(JarasTheme.green)
+                    .disabled(session.running || activeProjects.isEmpty || activeProjects.contains { $0.destination == nil })
+            }
+        }
+        .padding(20).frame(idealWidth: 560)
+        .background(JarasTheme.panel).foregroundStyle(JarasTheme.text)
+        .interactiveDismissDisabled(session.running)
+        .onChange(of: session.running, perform: onRunningChanged)
+        .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
+            guard let index = projects.firstIndex(where: { $0.id == selected }) else { return }
+            switch result {
+            case .success(let directory): projects[index].destination = directory
+            case .failure(let error): session.error = error.localizedDescription
+            }
+        }
+    }
+
+    private func close() {
+        if let dismissEditor { dismissEditor() }
+        else { dismiss() }
+    }
+
+    private func configuration(_ index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                TextField("Destination", text: Binding(
+                    get: { projects[index].destination?.path ?? "" },
+                    set: { value in projects[index].destination = value.hasPrefix("/") ? URL(fileURLWithPath: value, isDirectory: true) : nil }
+                ))
+                .textFieldStyle(.roundedBorder)
+                Button("Browse…") { choosing = true }
+            }
+            Toggle("Ignore muted tracks", isOn: $projects[index].ignoreMutedTracks)
+            Toggle("Ignore muted items", isOn: $projects[index].ignoreMutedItems)
+            HStack {
+                Text("Region folders").font(.jarasCaption)
+                Spacer()
+                Button("Check all") { projects[index].selection = Set(projects[index].regions.map(\.id)) }
+                    .disabled(projects[index].selection.count == projects[index].regions.count)
+                Button("Uncheck all") { projects[index].selection.removeAll() }
+                    .disabled(projects[index].selection.isEmpty)
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(projects[index].regions) { part in
+                        Toggle(isOn: Binding(
+                            get: { projects[index].selection.contains(part.id) },
+                            set: { value in
+                                if value { projects[index].selection.insert(part.id) }
+                                else { projects[index].selection.remove(part.id) }
+                            }
+                        )) {
+                            Text(verbatim: MultitrackRenderer.safeName(part.displayName))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .frame(minHeight: 100, idealHeight: 175, maxHeight: 230)
+        }
+    }
+}
+
+private struct MultitrackProjectTabs: View {
+    let projects: [MultitrackExportProject]
+    @Binding var selection: UUID
+    @State private var offset: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { geometry in
+            let scrolls = projects.count > 4
+            let gap: CGFloat = 4
+            let visible = CGFloat(min(4, projects.count))
+            let buttonWidth = max(1, (geometry.size.width - gap * (visible - 1)) / visible)
+            let total = CGFloat(projects.count) * (buttonWidth + gap) - gap
+            ScrollViewReader { proxy in
+                VStack(spacing: 5) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: gap) {
+                            ForEach(projects) { project in
+                                Button { selection = project.id } label: {
+                                    Text(verbatim: project.project.name).lineLimit(1).truncationMode(.tail)
+                                        .frame(width: buttonWidth, height: 26)
+                                        .foregroundStyle(selection == project.id ? Color.black : JarasTheme.text)
+                                        .background(selection == project.id ? JarasTheme.green : JarasTheme.line)
+                                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                                }.buttonStyle(.plain).id(project.id)
+                            }
+                        }.background(GeometryReader { tabs in
+                            Color.clear.preference(key: MultitrackTabOffset.self,
+                                value: -tabs.frame(in: .named("multitrack-tabs")).minX)
+                        })
+                    }.coordinateSpace(name: "multitrack-tabs")
+                        .onPreferenceChange(MultitrackTabOffset.self) { offset = $0 }
+                    if scrolls {
+                        let fraction = min(1, max(0, offset / max(1, total - geometry.size.width)))
+                        let thumb = geometry.size.width * geometry.size.width / total
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(JarasTheme.line)
+                            Capsule().fill(JarasTheme.green).frame(width: thumb)
+                                .offset(x: fraction * (geometry.size.width - thumb))
+                        }.frame(height: 4)
+                            .padding(.vertical, 3).contentShape(Rectangle())
+                            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                                let progress = min(1, max(0, (value.location.x - thumb / 2) / max(1, geometry.size.width - thumb)))
+                                let index = Int((progress * CGFloat(projects.count - 4)).rounded())
+                                proxy.scrollTo(projects[index].id, anchor: .leading)
+                            })
+                    }
+                }.onAppear { if scrolls { proxy.scrollTo(selection) } }
+            }
+        }.frame(height: projects.count > 4 ? 41 : 26)
+    }
+}
+
+private struct MultitrackTabOffset: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private enum MultitrackRenderer {
+    static func safeName(_ raw: String) -> String {
+        var name = raw.components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters))
+            .joined(separator: "_").trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+        while name.utf8.count > 165 { name.removeLast() }
+        if ["CON","PRN","AUX","NUL","COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9",
+            "LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9"].contains(name.components(separatedBy: ".")[0].uppercased()) {
+            name += "_"
+        }
+        return name.isEmpty ? "Export" : name
+    }
+    private static func createFolder(_ name: String, in directory: URL) throws -> URL {
+        let fm = FileManager.default
+        let name = safeName(name)
+        var version = 1
+        while true {
+            let path = directory.appendingPathComponent(version == 1 ? name : "\(name) - \(version)", isDirectory: true)
+            do {
+                try fm.createDirectory(at: path, withIntermediateDirectories: false)
+                return path
+            } catch {
+                guard (error as NSError).code == NSFileWriteFileExistsError || fm.fileExists(atPath: path.path) else { throw error }
+                version += 1
+            }
+        }
+    }
+    static func run(_ projects: [MultitrackExportProject], cancellation: AudioExportCancellation,
+                    progress: (Double, String) -> Void) throws {
+        let fm = FileManager.default
+        let count = projects.reduce(0) { total, config in
+            let children = Dictionary(grouping: config.song.parts.compactMap { $0.parentRegionID }, by: { $0 })
+            return total + config.regions.filter { config.selection.contains($0.id) }.reduce(0) {
+                $0 + max(1, children[$1.id]?.count ?? 0)
+            }
+        }
+        var completed = 0
+        var created: [URL] = []
+        let grants = Set(projects.flatMap { [$0.mediaDirectory, $0.destination].compactMap { $0 } })
+            .filter { $0.startAccessingSecurityScopedResource() }
+        var success = false
+        defer {
+            if !success { for path in created.reversed() { try? fm.removeItem(at: path) } }
+            grants.forEach { $0.stopAccessingSecurityScopedResource() }
+        }
+        for config in projects {
+            guard let destination = config.destination else { continue }
+            var song = config.song
+            for index in song.tracks.indices {
+                song.tracks[index].solo = false
+                if !config.ignoreMutedTracks { song.tracks[index].mute = false }
+                if !config.ignoreMutedItems {
+                    for item in song.tracks[index].clips.indices where song.tracks[index].clips[item].muted == true {
+                        song.tracks[index].clips[item].muted = false
+                    }
+                }
+            }
+            var project = config.project
+            project.masterMute = false; project.masterSolo = false
+            var audio = song
+            for index in audio.parts.indices { audio.parts[index].pitchSemitones = nil }
+            for row in audio.tracks.indices {
+                let track = audio.tracks[row]
+                audio.tracks[row].clips = track.clips.filter { AudioSeparation.accepts($0, on: track) }
+                if audio.tracks[row].clips.isEmpty { audio.tracks[row].audioFile = nil }
+            }
+            let childrenByParent = Dictionary(grouping: song.parts.filter { $0.parentRegionID != nil }) { $0.parentRegionID! }
+            for root in config.regions where config.selection.contains(root.id) {
+                if cancellation.cancelled { throw CancellationError() }
+                let rootFolder = try createFolder(root.displayName, in: destination)
+                created.append(rootFolder)
+                let children = (childrenByParent[root.id] ?? []).sorted { song.playbackRegionStart($0) < song.playbackRegionStart($1) }
+                let fullItems = !children.isEmpty
+                var owners: [UUID: UUID] = [:]
+                if fullItems {
+                    for clip in song.tracks.flatMap(\.clips) {
+                        owners[clip.id] = song.dominantUnifiedOwner(at: clip.startTime, end: clip.startTime + clip.duration,
+                            group: root.id, preferred: clip.regionOwnerID)
+                    }
+                }
+                var entries: [MultitrackDrawerData.Entry] = []
+                for part in fullItems ? children : [root] {
+                    if cancellation.cancelled { throw CancellationError() }
+                    let folder = fullItems ? try createFolder(part.displayName, in: rootFolder) : rootFolder
+                    let message = "\(completed + 1)/\(count) • \(config.project.name) • \(part.displayName)"
+                    progress(Double(completed) / Double(max(1, count)), message)
+                    var names = MediaFileNames(directory: folder)
+                    var jobs: [AudioExportFormat: [AudioExportJob]] = [:]
+                    var sourceItems: [AudioExportFormat: Set<UUID>] = [:]
+                    var mixedTracks = Set<UUID>()
+                    var unbakedItemPitch = Set<UUID>()
+                    var renderedStems: [MultitrackRegionData.RenderedStem] = []
+                    var lyricsFiles: [String] = []
+                    var savedTracks: [UUID: Track] = [:]
+                    var copiedAssets: [URL: String] = [:]
+                    for (index, track) in song.tracks.enumerated() where !track.mute {
+                        let clips = track.clips.filter { clip in
+                            guard clip.muted != true else { return false }
+                            let end = clip.startTime + clip.duration
+                            return fullItems
+                                ? owners[clip.id] == part.id
+                                : clip.startTime < part.endTime && end > part.startTime
+                        }
+                        var stored = config.song.tracks[index]
+                        let originals = Dictionary(uniqueKeysWithValues: stored.clips.map { ($0.id, $0) })
+                        stored.clips = []
+                        let audioItems = clips.filter { AudioSeparation.accepts($0, on: track) }
+                        if track.kind == .standard, !audioItems.isEmpty {
+                            let items = audioItems.sorted { $0.startTime == $1.startTime ? $0.id.uuidString < $1.id.uuidString : $0.startTime < $1.startTime }
+                            func format(for clip: AudioClip) -> AudioExportFormat {
+                                let path = clip.audioFile?.path ?? track.audioFile?.path ?? ""
+                                switch (path as NSString).pathExtension.lowercased() {
+                                case "wav", "wave": return .wav
+                                case "aif", "aiff", "aifc": return .aiff
+                                default: return .mp3
+                                }
+                            }
+                            func stemItem(_ clip: AudioClip) -> MultitrackRegionData.RenderedStem.Item {
+                                .init(offset: clip.startTime - part.startTime, duration: clip.duration,
+                                    rate: song.tempoAudioSegments(clip).first?.audioRate ?? clip.audioRate,
+                                    pitchSemitones: clip.pitchSemitones)
+                            }
+                            let label = safeName(track.name + " – " + part.displayName)
+                            if fullItems {
+                                for (index, clip) in items.enumerated() {
+                                    let encoding = format(for: clip)
+                                    let filename = names.allocate(label + String(format: " %03d.", index + 1) + encoding.fileExtension)
+                                    jobs[encoding, default: []].append(AudioExportJob(id: clip.id.uuidString, fileName: filename,
+                                        start: clip.startTime, end: clip.startTime + clip.duration, track: track.id, clip: clip.id))
+                                    renderedStems.append(.init(file: filename, track: track.id, items: [stemItem(clip)]))
+                                    unbakedItemPitch.insert(clip.id)
+                                }
+                            } else {
+                                let grouped = Dictionary(grouping: items, by: format(for:))
+                                if grouped.count > 1 { mixedTracks.insert(track.id) }
+                                for encoding in AudioExportFormat.allCases {
+                                    guard let matching = grouped[encoding] else { continue }
+                                    sourceItems[encoding, default: []].formUnion(matching.map(\.id))
+                                    if matching.count == 1 { unbakedItemPitch.insert(matching[0].id) }
+                                    let filename = names.allocate(label + "." + encoding.fileExtension)
+                                    jobs[encoding, default: []].append(AudioExportJob(id: track.id.uuidString, fileName: filename,
+                                        start: part.startTime, end: part.endTime, track: track.id, clip: nil))
+                                    renderedStems.append(.init(file: filename, track: track.id, items: matching.map(stemItem)))
+                                }
+                            }
+                        }
+                        for clip in clips where clip.isProjectionMedia {
+                            if cancellation.cancelled { throw CancellationError() }
+                            guard let path = clip.audioFile?.path else { continue }
+                            let source = path.hasPrefix("/") ? URL(fileURLWithPath: path) : config.mediaDirectory.appendingPathComponent(path)
+                            let filename: String
+                            if let copied = copiedAssets[source] { filename = copied }
+                            else {
+                                filename = names.allocate(safeName(source.deletingPathExtension().lastPathComponent) + "." + source.pathExtension)
+                                try fm.copyItem(at: source, to: folder.appendingPathComponent(filename))
+                                copiedAssets[source] = filename
+                            }
+                            var item = originals[clip.id] ?? clip
+                            item.audioFile = AudioFile(path: "Videos/" + filename)
+                            item.waveform = []; item.waveformChannels = nil
+                            stored.clips.append(item)
+                        }
+                        if track.kind.isTeleprompter {
+                            let number = track.kind == .teleprompt ? 1 : 2
+                            let textClips = clips.filter { $0.text != nil && !$0.isProjectionMedia }
+                            stored.clips += textClips.map { originals[$0.id] ?? $0 }
+                            let lyrics = JLLyricsDocument(teleprompter: number, clips: textClips, origin: part.startTime)
+                            if !lyrics.items.isEmpty {
+                                let filename = names.allocate(safeName(part.displayName) + ".jllyrics")
+                                try JSONEncoder().encode(lyrics).write(to: folder.appendingPathComponent(filename), options: .atomic)
+                                lyricsFiles.append(filename)
+                            }
+                        }
+                        let hasProgramChanges = track.programChanges?.contains {
+                            $0.position >= part.startTime && $0.position < part.endTime
+                        } == true
+                        if !stored.clips.isEmpty || hasProgramChanges || (track.kind == .standard && !audioItems.isEmpty) {
+                            savedTracks[track.id] = stored
+                        }
+                    }
+                    let ordered = config.song.tracks.compactMap { savedTracks[$0.id] }
+                    let manifest = try MultitrackRegionData.snapshot(song: config.song, region: part, tracks: ordered,
+                        renderedStems: renderedStems, lyricsFiles: lyricsFiles, fullItems: fullItems, tunerUnbaked: true)
+                    if fullItems {
+                        let flag = song.markers?.first { $0.sourceRegionID == part.id && $0.unifiedRegionID == root.id }
+                        entries.append(.init(folder: folder.lastPathComponent, offset: part.startTime - root.startTime,
+                            cue: song.playbackRegionStart(part) - root.startTime, data: manifest,
+                            cueID: flag?.id, cueName: flag?.name, cueColor: flag?.color))
+                    } else {
+                        let manifestURL = folder.appendingPathComponent(MultitrackRegionData.prefix + safeName(part.name))
+                        try JSONEncoder().encode(manifest).write(to: manifestURL, options: .atomic)
+                    }
+                    var finishedJobs = 0
+                    let jobCount = jobs.values.reduce(0) { $0 + $1.count }
+                    for format in AudioExportFormat.allCases {
+                        guard let batch = jobs[format] else { continue }
+                        var renderingSong = audio
+                        let regionItems = sourceItems[format] ?? []
+                        let splitTracks = Set(batch.compactMap(\.track)).intersection(mixedTracks)
+                        for row in renderingSong.tracks.indices {
+                            if splitTracks.contains(renderingSong.tracks[row].id) {
+                                renderingSong.tracks[row].clips.removeAll { !regionItems.contains($0.id) }
+                                if renderingSong.tracks[row].clips.isEmpty { renderingSong.tracks[row].audioFile = nil }
+                            }
+                            for index in renderingSong.tracks[row].clips.indices
+                            where unbakedItemPitch.contains(renderingSong.tracks[row].clips[index].id) {
+                                renderingSong.tracks[row].clips[index].pitchSemitones = nil
+                            }
+                        }
+                        try OfflineAudioExport.run(project: project, song: renderingSong, plan: AudioExportPlan(jobs: batch),
+                            mediaDirectory: config.mediaDirectory, outputDirectory: folder, sampleRate: 48000,
+                            encoding: AudioExportEncoding(format: format, bitrate: 320), cancellation: cancellation) {
+                            let rendered = (Double(finishedJobs) + $0.fraction * Double(batch.count)) / Double(jobCount)
+                            progress((Double(completed) + rendered) / Double(max(1, count)), message)
+                        }
+                        finishedJobs += batch.count
+                    }
+                    completed += 1
+                }
+                if fullItems {
+                    let drawer = MultitrackDrawerData(version: 2, name: root.name, duration: root.endTime - root.startTime,
+                        color: root.color, uppercaseName: root.uppercaseName, entries: entries, pitchSemitones: root.pitchSemitones)
+                    try drawer.validate()
+                    let manifestURL = rootFolder.appendingPathComponent(MultitrackRegionData.prefix + safeName(root.name))
+                    try JSONEncoder().encode(drawer).write(to: manifestURL, options: .atomic)
+                }
+            }
+        }
+        if cancellation.cancelled { throw CancellationError() }
+        success = true
+        progress(1, "")
     }
 }

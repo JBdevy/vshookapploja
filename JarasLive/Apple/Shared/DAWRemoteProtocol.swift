@@ -133,6 +133,7 @@ struct DAWRemoteCommand: Codable {
         case togglePreview, selectPreviewPage, toggleRecord, browseRegion
         case vinhetasDown, vinhetasUp, vinhetasPreset, vinhetasVolume, vinhetasGate, vinhetasPanic
         case editRegion, deleteRegion, duplicateRegion, renamePlaylist, duplicatePlaylist, deletePlaylist
+        case setOutputRoutes
     }
     var id = UUID()
     var project: UUID
@@ -147,6 +148,7 @@ struct DAWRemoteCommand: Codable {
     var playlist: UUID? = nil
     var pad: Int? = nil
     var preset: Int? = nil
+    var outputRoutes: [OutputPatch]? = nil
     var valid: Bool {
         guard value.isFinite else { return false }
         if let text {
@@ -159,7 +161,13 @@ struct DAWRemoteCommand: Codable {
         } else if pad != nil || preset != nil { return false }
         if enabled != nil && action != .noticeDestination && action != .noticePinStopped && action != .vinhetasGate && action != .transportFadeout { return false }
         if noticeReceiptRequested != nil && action != .noticeSend { return false }
+        if outputRoutes != nil && action != .setOutputRoutes { return false }
         switch action {
+        case .setOutputRoutes:
+            guard let outputRoutes, outputRoutes.count <= 64, value == 0 else { return false }
+            return outputRoutes.allSatisfy {
+                (try? $0.validate(allowMaster: target != nil, allowGroup: target != nil, allowNone: true)) != nil
+            }
         case .vinhetasDown: return target != nil && value == 0 && enabled == nil
         case .vinhetasUp: return target != nil && value == 0
         case .vinhetasPreset: return target == nil && (0..<6).contains(value) && value.rounded() == value
@@ -229,8 +237,6 @@ struct DAWRemoteState: Codable, Equatable {
         var loopSection: Bool? = nil
         var unifiedRegionID: UUID? = nil
         var sourceRegionID: UUID? = nil
-        var tempoBPM: Double? = nil
-        var isTempo: Bool? = nil
     }
     struct SectionPlayback: Codable, Equatable {
         var currentRegion: UUID?
@@ -275,6 +281,7 @@ struct DAWRemoteState: Codable, Equatable {
         /// Presentation metadata owned by the host project, never a Remote edit.
         var instrumentIcon: String? = nil
         var role: String? = nil
+        var outputRoutes: [OutputPatch]? = nil
         /// Clip geometry belongs to the grid. Position packets or changes to
         /// clips must not rebuild the mixer's faders and native touch views.
         func hasSameMixerControls(as other: Self) -> Bool {
@@ -355,6 +362,8 @@ struct DAWRemoteState: Codable, Equatable {
     var playedLiveRegionIDs: [UUID]? = nil
     var masterPeakDB: Double? = nil
     var masterPan: Double? = nil
+    var patchOutputChannels: Int? = nil
+    var masterOutputRoutes: [OutputPatch]? = nil
     var pitchRegion: UUID? = nil
     var pitchSemitones: Int? = nil
     var setlistFontStyle: Int? = nil
@@ -584,7 +593,6 @@ enum DAWRemoteSetlistPresentation {
         var number: Int?
         var child: Bool
         var hasDrawer: Bool = false
-        var drawerContinues: Bool = false
         var id: UUID { region.id }
     }
     /// Observer browsing is independent of both playback heads. A hidden child
@@ -660,15 +668,6 @@ enum DAWRemoteSetlistPresentation {
         }
         appendSection()
         result += (headers[nil] ?? []).filter { query.isEmpty || $0.name.localizedStandardContains(query) }.map(Entry.block)
-        // The connector follows visible adjacency, including filtered drawers.
-        // A playlist copy is a top-level entry, never a child merely by source ID.
-        for index in result.indices {
-            guard case .region(var row) = result[index], row.child else { continue }
-            if index + 1 < result.count, case .region(let next) = result[index + 1] {
-                row.drawerContinues = next.child && row.region.parentRegion != nil && next.region.parentRegion == row.region.parentRegion
-            }
-            result[index] = .region(row)
-        }
         return result
     }
 }
@@ -784,15 +783,6 @@ struct DAWRemotePanelWidths: Equatable {
         guard translation.isFinite else { return self }
         let width = min(1, max(0, setlist - translation))
         return Self(track: min(track, 1 - width), setlist: width)
-    }
-}
-
-/// Illustrative Remote peaks retain their shape as item gain changes.
-enum DAWRemoteItemWaveform {
-    static func amplitude(seed: Int, fraction: Double, gain: Double?) -> Double {
-        let phase = fraction * 300 + Double(seed)
-        let scale = gain.flatMap { $0.isFinite ? max(0, $0) : nil } ?? 1
-        return min(1, (0.12 + 0.78 * abs(sin(phase * 0.37) * cos(phase * 0.13))) * scale)
     }
 }
 
@@ -927,7 +917,7 @@ struct DAWRemoteTeleprompter: Codable, Equatable {
     }
     var valid: Bool {
         (1...2).contains(index) && progress.isFinite && (0...1).contains(progress) && style.valid &&
-        text.utf8.count <= 65536 && chords.utf8.count <= 65536 && (textStyled?.utf8.count ?? 0) <= 262144 && (chordsStyled?.utf8.count ?? 0) <= 262144 && song.utf8.count <= 4096 && queued.utf8.count <= 4096 &&
+        text.utf8.count <= 65536 && chords.utf8.count <= 65536 && song.utf8.count <= 4096 && queued.utf8.count <= 4096 &&
         blocks.count <= 4 && blocks.allSatisfy { block in
             block.rows.count <= 8192 && block.rows.allSatisfy { $0.duration.isFinite && $0.duration >= 0 &&
                 ($0.playbackProgress.map { $0.isFinite && (0...1).contains($0) } ?? true) }
@@ -1122,50 +1112,6 @@ struct DAWRemoteVinhetasFeedback {
     }
 }
 
-/// Tracks a remote request across project/tab replacement. Receiving an older
-/// idle snapshot is not an acknowledgement that opening has finished.
-struct DAWRemoteProjectOpening: Equatable {
-    let id: UUID
-    let initialProject: UUID
-    let initialTab: UUID?
-    let initialError: String
-    let name: String
-    let startedAt: Date
-    var sawBusy = false
-    var phase = "opening"
-    var status = "Carregando projeto…"
-    var error = ""
-    init(command: DAWRemoteCommand, state: DAWRemoteState, now: Date = Date()) {
-        id = command.id; initialProject = state.project
-        initialTab = state.projectTabs?.first(where: { $0.selected })?.id
-        initialError = state.projects?.error ?? ""
-        name = state.projects?.recent.first(where: { $0.id == command.target })?.name ?? ""
-        startedAt = now
-    }
-    mutating func receive(_ state: DAWRemoteState) -> Bool {
-        guard let browser = state.projects else { return false }
-        if browser.commandID == id {
-            phase = browser.commandState ?? "opening"
-            status = browser.status.isEmpty ? "Carregando projeto…" : browser.status
-            error = browser.error
-            return phase == "completed" || phase == "cancelled"
-        }
-        // Legacy hosts have no receipts. Require evidence of a real busy cycle
-        // and the newly selected project/tab before accepting an idle state.
-        if browser.commandID == nil {
-            sawBusy = sawBusy || browser.busy
-            if browser.busy, !browser.status.isEmpty { status = browser.status }
-            if !browser.busy, !browser.error.isEmpty, browser.error != initialError {
-                phase = "failed"; error = browser.error
-            }
-            let changed = state.project != initialProject || state.projectTabs?.first(where: { $0.selected })?.id != initialTab
-            return sawBusy && !browser.busy && changed && browser.error.isEmpty
-        }
-        return false
-    }
-    func canDismiss(at now: Date) -> Bool { phase == "waiting" || phase == "failed" || now.timeIntervalSince(startedAt) >= 20 }
-}
-
 /// The audible transport owns the title, independently of list browsing or a
 /// cached display string from the previous song.
 extension DAWRemoteState {
@@ -1192,4 +1138,12 @@ struct DAWRemoteFadeoutState: Codable, Equatable {
     var lastCommandID: UUID? = nil
     var active: Bool { runID != nil }
     var valid: Bool { duration.isFinite && (1...5).contains(duration) && remaining.isFinite && (0...duration).contains(remaining) && (active || remaining == 0) }
+}
+
+enum DAWRemoteItemWaveform {
+    static func amplitude(seed: Int, fraction: Double, gain: Double?) -> Double {
+        let phase = fraction * 300 + Double(seed)
+        let scale = gain.flatMap { $0.isFinite ? max(0, $0) : nil } ?? 1
+        return min(1, (0.12 + 0.78 * abs(sin(phase * 0.37) * cos(phase * 0.13))) * scale)
+    }
 }
