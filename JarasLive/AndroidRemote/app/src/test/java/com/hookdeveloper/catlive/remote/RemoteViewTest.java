@@ -29,6 +29,49 @@ public class RemoteViewTest {
  }
  @Test public void phoneStartsAtSameRemoteHome(){assertEquals("startup",app.screen);assertTrue(app.root.getChildAt(0) instanceof RemoteStartup);Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(3));assertEquals("welcome",app.screen);assertFalse(app.entering);assertNull(app.state);}
  @Test public void startupCompletionDoesNotReplaceConnectedWorkspace()throws Exception{connect("director");Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(3));assertEquals("workspace",app.screen);}
+ @Test public void phoneTransportFitsAllButtonsAboveBpmAndTuner()throws Exception{
+  connect("director");
+  ViewGroup buttons=(ViewGroup)app.play.getParent();
+  for(View button:new View[]{app.play,app.fadeoutControl,app.pause,app.repeat}){
+   assertSame(buttons,button.getParent());
+   assertEquals(RemoteWidgets.dp(44),button.getHeight());
+   assertTrue(button.getTop()>=0&&button.getBottom()<=buttons.getHeight());
+  }
+  View tempoRow=(View)((View)app.bpm.getParent()).getParent();
+  assertSame(tempoRow,((View)app.pitch.getParent()).getParent());
+  assertTrue(tempoRow.getTop()>=buttons.getBottom()+RemoteWidgets.dp(6));
+  assertTrue(tempoRow.getBottom()<=app.transport.getHeight());
+ }
+ @Test public void mixerFaderRequiresSelectionThenDragAndClearsOnOutsideTouch()throws Exception {
+  connect("director");app.choose("mixer");
+  RemoteWidgets.Fader fader=app.trackRows.get("master").volume;
+  fader.layout(0,0,200,24);
+  double original=fader.value;
+  faderGesture(fader,100,55);
+  assertEquals(original,fader.value,0);
+  assertFalse(fader.isSelected());
+  faderGesture(fader,60,60);
+  assertTrue(fader.isSelected());
+  assertEquals(original,fader.value,0);
+  faderGesture(fader,100,60);
+  assertTrue(fader.value<original);
+  double adjusted=fader.value;
+  long now=android.os.SystemClock.uptimeMillis();
+  MotionEvent outside=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,0,0,0);
+  app.dispatchTouchEvent(outside);outside.recycle();
+  assertFalse(fader.isSelected());
+  faderGesture(fader,100,60);
+  assertEquals(adjusted,fader.value,0);
+ }
+ private void faderGesture(RemoteWidgets.Fader fader,int start,int end) {
+  long time=android.os.SystemClock.uptimeMillis();
+  int[] actions=start==end?new int[]{MotionEvent.ACTION_DOWN,MotionEvent.ACTION_UP}:
+   new int[]{MotionEvent.ACTION_DOWN,MotionEvent.ACTION_MOVE,MotionEvent.ACTION_UP};
+  for(int action:actions){
+   MotionEvent event=MotionEvent.obtain(time,time+20,action,action==MotionEvent.ACTION_DOWN?start:end,10,0);
+   fader.onTouchEvent(event);event.recycle();
+  }
+ }
  @Test public void itemVolumeInspectorFollowsHostGainAndClosesWhenItemDisappears()throws Exception{connect("director");app.choose("grid");JSONObject track=app.state.getJSONArray("tracks").getJSONObject(0),clip=track.getJSONArray("clips").getJSONObject(0);app.grid.item(clip);assertTrue(app.activeDialog.isShowing());assertEquals("+0.0 dB",app.grid.itemDecibels.getText().toString());clip.put("gain",0.5);app.refresh();assertEquals("-6.0 dB",app.grid.itemDecibels.getText().toString());clip.put("gain",0);app.refresh();assertEquals("−∞ dB",app.grid.itemDecibels.getText().toString());track.put("clips",new JSONArray());app.refresh();assertNull(app.activeDialog);}
  @Test public void discoveryShowsEveryPeerAndBilingualInstructions(){app.entering=true;app.remote.peers.add(new RemoteSession.Peer("PC palco","192.168.1.2",1234));app.remote.peers.add(new RemoteSession.Peer("PC reserva","192.168.1.3",1234));app.showHome();String text=allText(app.root);assertTrue(text.contains("PC palco"));assertTrue(text.contains("PC reserva"));assertTrue(text.contains("Conecte os aparelhos à mesma rede"));assertTrue(text.contains("Connect both devices to the same network"));assertFalse(text.contains("Conectar por endereço"));}
  String allText(View view){StringBuilder text=new StringBuilder(view instanceof TextView?((TextView)view).getText():"");if(view instanceof android.view.ViewGroup){android.view.ViewGroup group=(android.view.ViewGroup)view;for(int i=0;i<group.getChildCount();i++)text.append('\n').append(allText(group.getChildAt(i)));}return text.toString();}
@@ -53,8 +96,19 @@ public class RemoteViewTest {
   MainActivity.TrackRow master=app.trackRows.get("master");
   master.mute.performClick();assertTrue(app.state.optBoolean("masterMute"));
   master.mute.performClick();assertFalse(app.state.optBoolean("masterMute"));
-  assertSame(app.save,((LinearLayout)app.save.getParent()).getChildAt(2));
-  assertSame(app.time,((LinearLayout)app.save.getParent()).getChildAt(1));
+  LinearLayout display=(LinearLayout)((View)app.save.getParent()).getParent();
+  assertSame(app.current,display.getChildAt(1));
+  assertEquals("Abertura",app.current.getText().toString());
+  assertEquals(3,display.getChildCount());
+  assertSame(app.fadeoutControl,((LinearLayout)app.play.getParent()).getChildAt(1));
+  assertFalse(app.fadeoutControl.isEnabled());
+  assertEquals(1,app.fadeoutControl.getAlpha(),0);
+  assertEquals(android.graphics.Color.BLACK,app.fadeoutControl.getCurrentTextColor());
+  assertEquals("",app.pause.getText().toString());
+  master.mono.performClick();
+  assertTrue(app.activeDialog.isShowing());
+  assertFalse(app.state.optBoolean("masterMono"));
+  app.activeDialog.dismiss();
  }
  @Test public void fullscreenTeleprompterHidesRailAndRestoresItWithoutChangingPreference()throws Exception{
   connect("director");app.choose("tp1");assertTrue(app.rail.getParent().getParent()==app.work);
@@ -99,27 +153,29 @@ public class RemoteViewTest {
   Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1000));grid.draw(canvas);assertFalse(grid.itemHeadersHidden);assertEquals(offset,grid.offset,0);
   Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(501));grid.draw(canvas);assertTrue(grid.itemHeadersHidden);assertTrue(grid.offset>offset);
  }
- void railTouch(RemoteTrackRail rail,long down,long elapsed,int action,float firstY,Float secondY){
+ void mixerTouch(RemoteTrackScrollView mixer,long down,long elapsed,int action,float firstY,Float secondY){
   int count=secondY==null?1:2;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[count];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[count];
   for(int i=0;i<count;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=MotionEvent.TOOL_TYPE_FINGER;coords[i]=new MotionEvent.PointerCoords();coords[i].x=RemoteWidgets.dp(14);coords[i].y=RemoteWidgets.dp(i==0?firstY:secondY);coords[i].pressure=1;coords[i].size=1;}
-  MotionEvent event=MotionEvent.obtain(down,down+elapsed,action,count,properties,coords,0,0,1,1,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0);rail.dispatchTouchEvent(event);event.recycle();
+  MotionEvent event=MotionEvent.obtain(down,down+elapsed,action,count,properties,coords,0,0,1,1,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0);mixer.dispatchTouchEvent(event);event.recycle();
  }
- @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void leftRailPinchResizesMixerAndGridWithoutChangingTimeZoom()throws Exception{
-  connect("director");RemoteTrackRail rail=app.trackRail;assertNotNull(rail);rail.layout(0,0,RemoteWidgets.dp(28),RemoteWidgets.dp(600));
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void trackNumberPinchResizesMixerAndGridWithoutChangingTimeZoom()throws Exception{
+  connect("director");RemoteTrackScrollView mixer=(RemoteTrackScrollView)app.mixerScroll;assertNotNull(mixer);
   String id=app.state.getJSONArray("tracks").getJSONObject(0).getString("id");double original=app.layout.height(id),zoom=app.grid.zoom;long down=android.os.SystemClock.uptimeMillis();
-  railTouch(rail,down,0,MotionEvent.ACTION_DOWN,120,null);
-  railTouch(rail,down,20,MotionEvent.ACTION_POINTER_DOWN|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),120,360f);
-  railTouch(rail,down,40,MotionEvent.ACTION_MOVE,80,400f);
-  railTouch(rail,down,60,MotionEvent.ACTION_MOVE,20,460f);
-  railTouch(rail,down,80,MotionEvent.ACTION_POINTER_UP|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),20,460f);
-  railTouch(rail,down,100,MotionEvent.ACTION_UP,20,null);
-  assertTrue(app.layout.height(id)>original);assertEquals(zoom,app.grid.zoom,0);assertFalse(rail.twoFingers);
+  mixerTouch(mixer,down,0,MotionEvent.ACTION_DOWN,40,null);
+  mixerTouch(mixer,down,20,MotionEvent.ACTION_POINTER_DOWN|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),40,240f);
+  mixerTouch(mixer,down,40,MotionEvent.ACTION_MOVE,25,280f);
+  mixerTouch(mixer,down,60,MotionEvent.ACTION_MOVE,10,320f);
+  mixerTouch(mixer,down,80,MotionEvent.ACTION_POINTER_UP|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),10,320f);
+  mixerTouch(mixer,down,100,MotionEvent.ACTION_UP,10,null);
+  assertTrue(app.layout.height(id)>original);assertEquals(zoom,app.grid.zoom,0);assertFalse(mixer.twoFingers);
   assertEquals(RemoteWidgets.dp((float)app.layout.height(id)),app.trackRows.get(id).getLayoutParams().height);
   double resized=app.layout.height(id);app.onChanged();assertEquals(resized,app.layout.height(id),.001);
   assertEquals(app.layout.heightScale,app.getPreferences(0).getFloat("trackHeightScale",0),.001);
-  app.resizeTrackHeight(.01);assertEquals(.1,app.layout.heightScale,0);assertEquals(View.GONE,app.trackRows.get(id).controls.getVisibility());assertEquals(View.GONE,app.trackRows.get(id).line.getVisibility());assertEquals(View.VISIBLE,app.trackRows.get(id).title.getVisibility());
+  app.resizeTrackHeight(.01);assertEquals(76,app.layout.height(id),0);assertEquals(View.VISIBLE,app.trackRows.get(id).controls.getVisibility());assertEquals(View.VISIBLE,app.trackRows.get(id).line.getVisibility());assertEquals(View.VISIBLE,app.trackRows.get(id).title.getVisibility());
+  assertSame(app.trackRows.get(id).pan,app.trackRows.get(id).controls.getChildAt(0));
+  assertSame(app.trackRows.get(id).mute,app.trackRows.get(id).controls.getChildAt(1));
   app.resizeTrackHeight(100);assertEquals(3,app.layout.heightScale,0);assertEquals(View.VISIBLE,app.trackRows.get(id).controls.getVisibility());
-  app.choose("mixer");assertNotNull(app.trackRail);assertEquals(3,app.layout.heightScale,0);
+  app.choose("mixer");assertTrue(app.mixerScroll instanceof RemoteTrackScrollView);assertEquals(3,app.layout.heightScale,0);
  }
 
 }

@@ -1,3 +1,5 @@
+#include "ConfirmationPanel.h"
+#include "Localization.h"
 #include "AdvancedPanel.h"
 #include "MediaCleanupPanel.h"
 #include "ModalSheet.h"
@@ -6,23 +8,143 @@
 #include "MarkerRegionConversion.h"
 #include "ConversionReportPanel.h"
 #include "PlaylistEditor.h"
+#include "MP3Writer.h"
+#include "MediaCleanup.h"
 namespace catlive {
 namespace {
 const char *colourKeys[]{"jaras.setlist.allRegionsTextColor", "jaras.setlist.playlistTextColor",
                          "jaras.setlist.unifiedTextColor", "jaras.setlist.blockTextColor"};
 constexpr uint32 colourDefaults[]{0xffffff, 0x00ff9a, 0xffeb3b, 0x69ed91};
 } // namespace
+void AdvancedPanel::updateMP3ConversionControl() {
+    if (!mp3Button) return;
+    mp3Button->setEnabled(!mp3Conversion && !session.busy && !session.isSaving() &&
+        session.document.existsAsFile() && !session.audio.isRecording() && session.tempoInputAllowed());
+    mp3Button->setButtonText(mp3Conversion
+        ? String(mp3Conversion->completed.load())+"/"+String(mp3Conversion->total)
+        : String::fromUTF8("MP3 - 320 kbps"));
+}
+void AdvancedPanel::convertTimelineAudio() {
+    if (mp3Conversion || session.busy || session.isSaving() || !session.tempoInputAllowed() ||
+        !session.document.existsAsFile() || session.audio.isRecording() || jaras::projectSync::readOnly()) return;
+    const auto document = session.document;
+    const auto projectID = session.project().id;
+    const auto revision = session.revision;
+    std::set<std::string> paths;
+    auto collect = [&](const auto &file) {
+        if (!file || text(file->path).startsWith("Videos/")) return;
+        if (File(text(file->path)).hasFileExtension("wav;wave;aif;aiff;aifc;m4a;aac;flac;ogg;oga;opus;caf;alac;wma"))
+            paths.insert(file->path);
+    };
+    for (const auto &song : session.project().songs) for (const auto &track : song.tracks) {
+        collect(track.audioFile);
+        for (const auto &clip : track.clips) collect(clip.audioFile);
+    }
+    if (paths.empty()) {
+        AlertWindow::showMessageBoxAsync(MessageBoxIconType::InfoIcon, "MP3", String::fromUTF8("Nenhum áudio para converter."));
+        return;
+    }
+    auto state = std::make_shared<MP3Conversion>();
+    state->total = (int)paths.size();
+    mp3Conversion = state;
+    updateMP3ConversionControl();
+    auto safe = SafePointer<AdvancedPanel>(this);
+    Thread::launch([safe, state, paths = std::move(paths), document, projectID, revision] {
+        File folder;
+        bool created = false;
+        String failure;
+        std::map<std::string,jaras::AudioFile> replacements;
+        try {
+            const auto root = document.getParentDirectory();
+            const auto stems = root.getChildFile("Stems");
+            if (!mediaCleanup::plainPath(root, stems, true) || stems.createDirectory().failed())
+                throw std::runtime_error("Não foi possível preparar a pasta Stems.");
+            folder = stems.getChildFile("MP3 Max - "+Uuid().toString().substring(0,8));
+            if (folder.exists() || folder.createDirectory().failed())
+                throw std::runtime_error("Não foi possível criar a pasta de conversão.");
+            created = true;
+            AudioFormatManager formats;
+            registerAudioFormats(formats);
+            for (const auto &path : paths) {
+                const auto source = ProjectCodec::resolveMedia(root,path);
+                try {
+                    std::unique_ptr<AudioFormatReader> reader(formats.createReaderFor(source));
+                    if (!reader || reader->numChannels<1 || reader->numChannels>2 || reader->lengthInSamples<=0)
+                        throw std::runtime_error("É necessário um arquivo de áudio mono ou estéreo.");
+                    const int channels = (int)reader->numChannels;
+                    const int inputRate = roundToInt(reader->sampleRate);
+                    const int outputRate = inputRate==32000 || inputRate==44100 ? inputRate : 48000;
+                    const auto output = folder.getNonexistentChildFile(source.getFileNameWithoutExtension(), ".mp3");
+                    {
+                        MP3Writer writer(output,outputRate,channels,320,inputRate);
+                        AudioBuffer<float> pcm(channels,4096);
+                        for (int64 start=0; start<reader->lengthInSamples;) {
+                            const int count=(int)std::min<int64>(4096,reader->lengthInSamples-start);
+                            if (!reader->read(&pcm,0,count,start,true,true)) throw std::runtime_error("Falha ao ler o áudio de origem.");
+                            writer.write(pcm,count);
+                            start+=count;
+                        }
+                        writer.finish();
+                    }
+                    std::unique_ptr<AudioFormatReader> check(formats.createReaderFor(output));
+                    if (!check || check->lengthInSamples<=0) throw std::runtime_error("Não foi possível ler o MP3 convertido.");
+                    replacements.insert({path,jaras::AudioFile{utf8("Stems/"+folder.getFileName()+"/"+output.getFileName())}});
+                    ++state->completed;
+                } catch (const std::exception &e) {
+                    throw std::runtime_error(utf8(source.getFileName()+": "+String::fromUTF8(e.what())));
+                }
+            }
+        } catch (const std::exception &e) { failure=String::fromUTF8(e.what()); }
+        MessageManager::callAsync([safe, document, projectID, revision, folder, created,
+                                  replacements = std::move(replacements), failure = std::move(failure)]() mutable {
+            bool applied = false;
+            if (safe) {
+                auto &session = safe->session;
+                try {
+                    if (failure.isNotEmpty()) throw std::runtime_error(utf8(failure));
+                    if (session.project().id!=projectID || session.document!=document || session.revision!=revision || session.busy ||
+                            session.isSaving() || !session.tempoInputAllowed() || session.audio.isRecording() || jaras::projectSync::readOnly())
+                        throw std::runtime_error("O projeto mudou durante a conversão. Tente novamente.");
+                    session.edit([&](jaras::Project &project) {
+                        const auto replace = [&](std::optional<jaras::AudioFile> &file) {
+                            if (!file) return false;
+                            const auto converted=replacements.find(file->path);
+                            if (converted==replacements.end()) return false;
+                            file=converted->second;
+                            return true;
+                        };
+                        for (auto &song:project.songs) for (auto &track:song.tracks) {
+                            const bool trackConverted=replace(track.audioFile);
+                            for (auto &clip:track.clips) {
+                                if (clip.audioFile ? replace(clip.audioFile) : trackConverted) {
+                                    clip.waveform.clear();
+                                    clip.waveformChannels.clear();
+                                }
+                            }
+                        }
+                    });
+                    applied = true;
+                    session.saveAsync(document,[safe](String message) {
+                        if (!safe) return;
+                        if (message.isNotEmpty()) { if (safe->error) safe->error(message); }
+                        else AlertWindow::showMessageBoxAsync(MessageBoxIconType::InfoIcon, "MP3", String::fromUTF8("Áudio da timeline convertido para MP3."));
+                    });
+                } catch (const std::exception &e) { if (safe->error) safe->error(String::fromUTF8(e.what())); }
+                safe->mp3Conversion.reset();
+                safe->updateMP3ConversionControl();
+            }
+            if (!applied && created) Thread::launch([folder]{folder.deleteRecursively();});
+        });
+    });
+}
+
 AdvancedPanel::AdvancedPanel(Appearance &settings, Session &value, std::function<void(String)> fail)
     : appearance(settings), session(value), error(std::move(fail)) {
     setName("Advanced");
     timerCallback();startTimerHz(4);
     setWantsKeyboardFocus(true);
-    const StringArray names{String::fromUTF8("Tempo do projeto"),
-                            "Timeline",
-                            "Gravar",
-                            String::fromUTF8("Re-renderizar"),
-                            String::fromUTF8("Vídeo"),
-                            "Setlist", "Keyboard"};
+    const StringArray names{"TimeProject", "Timeline", "Record", "Re-render", "Video", "Setlist",
+                            "Keyboard", "Pads", "Track Mixer", "Hoz Mixer"};
     for (int i = 0; i < names.size(); ++i) {
         auto *tab = tabs.add(new TextButton(names[i]));
         addAndMakeVisible(tab);
@@ -33,7 +155,7 @@ AdvancedPanel::AdvancedPanel(Appearance &settings, Session &value, std::function
         tab->getProperties().set("fontSize", 13);
         tab->setColour(TextButton::buttonOnColourId, theme::green.withAlpha(.15f));
         tab->setColour(TextButton::textColourOnId, Colours::white);
-        const char *icons[]{"metronome", "grid", "record.circle", "waveform", "video", "setlist", "piano"};
+        const char *icons[]{"metronome", "grid", "record.circle", "waveform", "video", "setlist", "piano", "grid", "mixer", "railMixer"};
         tab->getProperties().set("leadingIcon", icons[i]);
         tab->onClick = [this, i] { select(i); };
     }
@@ -41,14 +163,10 @@ AdvancedPanel::AdvancedPanel(Appearance &settings, Session &value, std::function
     viewport.setViewedComponent(&page, false);
     viewport.setScrollBarsShown(true, true);
     viewport.setScrollBarThickness(8);
-    for (auto *button : {&close, &apply}) {
-        addAndMakeVisible(button);
-        button->getProperties().set("flat", true);
-        button->getProperties().set("fontSize", 13.f);
-    }
+    addAndMakeVisible(apply);
+    apply.getProperties().set("flat", true);
+    apply.getProperties().set("fontSize", 13.f);
     apply.setColour(TextButton::buttonColourId, Colour(0xff60b746));
-    close.setColour(TextButton::buttonColourId, Colour(0xff505050));
-    close.onClick = [this] { ModalSheet::dismiss(*this); };
     apply.onClick = [this] { applyTiming(); };
     select(0);
 }
@@ -56,6 +174,8 @@ void AdvancedPanel::save(const String &key, var value) {
     auto result = appearance.set(key, std::move(value));
     if (result.failed())
         error(result.getErrorMessage());
+    else if (key == "jaras.video.noAudio")
+        session.refreshProjectionAudio();
 }
 Label &AdvancedPanel::label(const String &name, int x, int y, int width, int height, bool bold) {
     auto *field = new Label();
@@ -113,7 +233,11 @@ void AdvancedPanel::colourRow(const String &name, const String &key, uint32 init
         editor->previewColour=[safe,button,key](unsigned colour){
             if(safe&&button){safe->appearance.preview(key,(int)colour);button->setColour(TextButton::buttonColourId,Colour(0xff000000u|colour));}
         };
-        editor->finishPreview=[safe,key]{if(safe)safe->appearance.clearPreview(key);};
+        editor->finishPreview = [safe,button,key,initial] {
+            if (!safe) return;
+            safe->appearance.clearPreview(key);
+            if (button) button->setColour(TextButton::buttonColourId, safe->appearance.colour(key, initial));
+        };
         localization::panel(*editor);
         CallOutBox::launchAsynchronously(std::move(editor),button->getScreenBounds(),nullptr);
     };
@@ -125,8 +249,8 @@ void AdvancedPanel::colourRow(const String &name, const String &key, uint32 init
         resetButton->onClick = [safe, button, key, initial] {
             if (!safe || !button)
                 return;
-            safe->save(key, (int)initial);
-            button->setColour(TextButton::buttonColourId, Colour(0xff000000u | initial));
+            safe->save(key, theme::isTimelineThemeColour(key) ? -1 : (int)initial);
+            button->setColour(TextButton::buttonColourId, safe->appearance.colour(key, initial));
         };
     }
 }
@@ -135,14 +259,13 @@ void AdvancedPanel::select(int index) {
     fields.clear();
     bpm = beats = unit = nullptr;
     timebase = nullptr;
-    automation = nullptr;
     for (int i = 0; i < tabs.size(); ++i)
         tabs[i]->setToggleState(i == index, dontSendNotification);
     label(tabs[index]->getButtonText(), 18, 16, 560, 28, true);
     contentHeight = 300;
     if (index == 0) {
         label("BPM:", 18, 58, 42);
-        label("Compasso", 136, 58, 78);
+        label(localization::translate("Compasso"), 136, 58, 78);
         label("/", 246, 58, 14);
         auto edit = [this](String name, String initial, int x, int width) {
             auto *e = new TextEditor();
@@ -164,41 +287,39 @@ void AdvancedPanel::select(int index) {
         unit = edit("Unidade", String(song ? song->beatUnit : 4), 260, 34);
         const auto settings = song ? song->timeSettings.value_or(jaras::ProjectTimeSettings{})
                                    : jaras::ProjectTimeSettings{};
-        label("Projeto timebase", 18, 104, 230);
+        label(localization::translate("Projeto timebase"), 18, 104, 230);
         timebase = &choice("Projeto timebase", {"Grid Livre", "Grid Relativo"},
                            settings.timebase == jaras::ProjectTimebase::relative ? 2 : 1, 306, 105,
                            160, [](int) {});
-        automation =
-            new ToggleButton(String::fromUTF8("Timebase afeta a duração dos itens de automação"));
-        fields.add(automation);
-        page.addAndMakeVisible(automation);
-        automation->setBounds(18, 146, 570, 30);
-        automation->setToggleState(settings.affectsAutomationLength, dontSendNotification);
     } else if (index == 1) {
         label("Gridline", 18, 58, 300);
         choice("Gridline", {"Ativado", "Desativado"}, appearance.gridlines() ? 1 : 2, 436, 59, 148,
                [this](int id) { save("jaras.timeline.gridlines", id == 1); });
         label(String::fromUTF8("Scroll contínuo"), 18, 98, 300);
-        choice(String::fromUTF8("Scroll contínuo"), {"true", "none"}, appearance.continuousScroll() ? 1 : 2, 436, 99, 148,
+        choice(String::fromUTF8("Scroll contínuo"), {localization::translate("Enabled"), localization::translate("Disabled")}, appearance.continuousScroll() ? 1 : 2, 436, 99, 148,
                [this](int id) { save("jaras.timeline.continuousScroll", id == 1); });
+        label(String::fromUTF8("Inverter cores dos itens com waveform"),18,138,410);
+        auto &waveformColors = choice(String::fromUTF8("Inverter cores dos itens com waveform"), {"Default", localization::translate("Invertido")},
+            appearance.invertWaveformColors()?2:1,436,139,148,
+            [this](int id){save("jaras.timeline.invertWaveformColors",id==2);});
+        waveformColors.getProperties().set("preserveNames", true);
         const StringArray names{String::fromUTF8("Fundo da timeline"),
-                                String::fromUTF8("Cor do grid primário"),
-                                String::fromUTF8("Cor do grid secundário"),
+                                "Vertical grid color", "Horizontal grid color",
                                 String::fromUTF8("Cor do cursor de reprodução"),
-                                String::fromUTF8("Cor do cursor de edição"),
-                                "Cor do cursor Sub Play"};
-        const char *keys[]{"background", "primaryGrid", "secondaryGrid",
-                           "playCursor", "editCursor",  "subPlayCursor"};
-        const uint32 defaults[]{0x161616, 0x535250, 0x333235, 0x7548dd, 0xb9e229, 0xff6f00};
-        for (int i = 0; i < 6; ++i)
-            colourRow(names[i], String("jaras.timeline.") + keys[i], defaults[i], 142 + i * 40,
-                      true);
-        label({}, 18, 384, 566, 1).setColour(Label::backgroundColourId, theme::line);
-        label(String::fromUTF8("Limpeza de arquivos deletados da timeline"), 18, 574, 470);
+                                String::fromUTF8("Cor do cursor de edição")};
+        const char *keys[]{theme::timelineBackgroundKey, theme::timelineVerticalGridKey, theme::timelineHorizontalGridKey,
+                           "jaras.timeline.playCursor", "jaras.timeline.editCursor"};
+        const uint32 defaults[]{theme::timelineBackgroundRGB, theme::timelinePrimaryGridRGB, theme::timelineHorizontalGridRGB,
+                                theme::timelinePlayCursorRGB, theme::timelineEditCursorRGB};
+        for (int i = 0; i < names.size(); ++i)
+            colourRow(names[i], keys[i], defaults[i], 178 + i * 40, true);
+        label({}, 18, 370, 566, 1).setColour(Label::backgroundColourId, theme::line);
+        label({}, 18, 545, 566, 1).setColour(Label::backgroundColourId, theme::line);
+        label(String::fromUTF8("Limpeza de arquivos deletados da timeline"), 18, 570, 470);
         auto *cleanup = new TextButton("Excluir");
         fields.add(cleanup);
         page.addAndMakeVisible(cleanup);
-        cleanup->setBounds(504, 574, 80, 26);
+        cleanup->setBounds(504, 570, 80, 26);
         cleanup->getProperties().set("flat", true);
         cleanup->onClick = [this] {
             Component *host = this;
@@ -208,9 +329,9 @@ void AdvancedPanel::select(int index) {
             ModalSheet::open(*host, String::fromUTF8("Limpar arquivos removidos da timeline"),
                              std::make_unique<MediaCleanupPanel>(session), 480, 300);
         };
-        label(String::fromUTF8("Converter marcadores em regiões"),18,400,470);
+        label(String::fromUTF8("Converter marcadores em regiões"),18,385,470);
         auto *convert = new QuietButton("Converter");fields.add(convert);page.addAndMakeVisible(convert);
-        convert->setBounds(494,400,90,26);convert->setComponentID("timelineConvertMarkers");
+        convert->setBounds(494,385,90,26);convert->setComponentID("timelineConvertMarkers");
         convert->onClick=[this]{
             if(!session.song())return;
             try {
@@ -226,9 +347,9 @@ void AdvancedPanel::select(int index) {
         const StringArray deletionTitles{String::fromUTF8("Deletar todos os marcadores de tempo"),String::fromUTF8("Deletar todas as regiões"),String::fromUTF8("Deletar todos os marcadores")};
         for(int i=0;i<3;++i) {
             const auto kind=static_cast<timelineBulk::Kind>(i);
-            label(deletionTitles[i],18,450+i*40,470);
+            label(deletionTitles[i],18,423+i*40,470);
             auto *button=new QuietButton("Deletar");fields.add(button);page.addAndMakeVisible(button);
-            button->setBounds(504,450+i*40,80,26);button->setComponentID("timelineDelete"+String(i));
+            button->setBounds(504,423+i*40,80,26);button->setComponentID("timelineDelete"+String(i));
             button->setEnabled(session.song()!=nullptr && !session.busy && !session.audio.isRecording());
             button->onClick=[this,kind,title=deletionTitles[i]] {
                 if(!session.song())return;
@@ -238,21 +359,35 @@ void AdvancedPanel::select(int index) {
                     : kind==timelineBulk::Kind::tempo ? String::fromUTF8("Deletar todos os marcadores de tempo desta timeline? Você pode desfazer com Ctrl+Z.")
                     : String::fromUTF8("Deletar todos os marcadores comuns desta timeline? Os marcadores de tempo e das regiões unificadas serão mantidos. Você pode desfazer com Ctrl+Z.");
                 const SafePointer<AdvancedPanel> safe(this);
-                AlertWindow::showOkCancelBox(MessageBoxIconType::QuestionIcon,title,message,"Deletar","Cancelar",this,
+                ConfirmationPanel::show(MessageBoxIconType::QuestionIcon,title,message,"Deletar","Cancelar",this,
                     ModalCallbackFunction::create([safe,kind,projectID,songID](int result) {
                         if(safe)safe->grabKeyboardFocus();
                         if(!safe || result!=1 || safe->session.project().id!=projectID || !safe->session.song() || safe->session.song()->id!=songID)return;
-                        try {safe->session.edit([&](auto &project){timelineBulk::erase(project,songID,kind);},true,kind==timelineBulk::Kind::tempo);}
+                        try {safe->session.editTimeline([&](auto &project){timelineBulk::erase(project,songID,kind);},kind==timelineBulk::Kind::tempo);}
                         catch(const std::exception &e){if(safe->error)safe->error(String::fromUTF8(e.what()));}
                     }));
             };
         }
-        contentHeight = 630;
+        auto *mp3 = new QuietButton(String::fromUTF8("MP3 - 320 kbps"));
+        fields.add(mp3);page.addAndMakeVisible(mp3);
+        mp3->setBounds(314,618,270,28);
+        mp3->setComponentID("timelineConvertAudioMP3Max");
+        mp3Button=mp3;
+        contentHeight=670;
+        mp3->onClick=[this] {
+            const auto safe=SafePointer<AdvancedPanel>(this);
+            ConfirmationPanel::show(MessageBoxIconType::QuestionIcon,String::fromUTF8("MP3 - 320 kbps"),
+                String::fromUTF8("Converter o áudio da timeline para MP3 a 320 kbps. Os arquivos originais e os MP3 existentes serão preservados."),
+                "Converter","Cancelar",this,ModalCallbackFunction::create([safe](int answer) {
+                    if (safe && answer==1) safe->convertTimelineAudio();
+                }));
+        };
+        updateMP3ConversionControl();
     } else if (index == 2 || index == 3) {
         const String prefix = String("jaras.media.") + (index == 2 ? "record." : "rerender.");
         const auto format = appearance.value(prefix + "format", "WAV").toString();
         const bool mp3 = index == 2 && format == "MP3";
-        label("Formato", 18, 58, 88);
+        label(localization::translate("Formato"), 18, 58, 88);
         choice("Formato", index == 2 ? StringArray{"WAV", "AIFF", "MP3"} : StringArray{"WAV", "AIFF"},
                mp3 ? 3 : format == "AIFF" ? 2 : 1, 114, 59, 110,
                [this, prefix, index](int id) {
@@ -299,13 +434,14 @@ void AdvancedPanel::select(int index) {
         toggle("Preto e branco", "jaras.video.grayscale", false, 136);
         toggle(String::fromUTF8("Sem áudio"), "jaras.video.noAudio", true, 172);
     } else if (index == 5) {
-        label("Modo ID do Setlist", 174, 58, 130);
+        label(localization::translate("Modo ID do Setlist"), 174, 58, 130);
         choice("Setlist ID mode", {"ID da playlist", String::fromUTF8("ID da região")},
                appearance.regionIDs() ? 2 : 1, 308, 59, 126,
                [this](int id) { save("jaras.setlist.idMode", id == 2 ? "region" : "playlist"); });
-        label("Fonte do Setlist", 180, 100, 120);
+        label(localization::translate("Fonte do Setlist"), 180, 100, 120);
         choice("Setlist font",
-               {String::fromUTF8("Padrão"), "Negrito", String::fromUTF8("Negrito itálico")},
+               {String::fromUTF8("Padrão"), "Negrito", String::fromUTF8("Negrito itálico"),
+                "Inter ExtraBold", "Inter Black", "Archivo Black", "Bungee"},
                appearance.fontStyle() + 1, 300, 101, 134,
                [this](int id) { save("jaras.setlist.fontStyle", id - 1); });
         const StringArray names{String::fromUTF8("Letras das músicas em All Regions"),
@@ -324,6 +460,20 @@ void AdvancedPanel::select(int index) {
         StringArray channels{"Omni"}; for (int i=1;i<=16;++i) channels.add(String(i));
         choice("MIDI channel", channels, jlimit(0,16,(int)appearance.value("jaras.keyboard.channel",0))+1,
             330, 105, 190, [this](int id) { save("jaras.keyboard.channel", id-1); });
+    }
+    if (index == 8 || index == 9) {
+        const String key = index == 8 ? theme::trackMixerStyleKey : theme::hozMixerStyleKey;
+        label("Track style", 18, 58, 280);
+        auto &style = choice("Track style", {"Default", localization::translate("Stripe only")},
+            appearance.mixerStripeOnly(key) ? 2 : 1, 330, 59, 190,
+            [this,key](int id) { save(key, id == 2 ? "stripeOnly" : "default"); });
+        style.getProperties().set("preserveNames", true);
+    }
+    if(index==7){
+        label(String::fromUTF8("Exporte os 6 presets, cores, volumes, Gate, MIDI e áudios em .zipfx."),18,58,560);
+        label(String::fromUTF8("Importar substitui os presets atuais e guarda a configuração anterior."),18,90,560);
+        for(int n=0;n<2;++n){auto *button=new TextButton(n?"Import Presets":"Export Preset");fields.add(button);page.addAndMakeVisible(button);
+            button->setBounds(18+n*185,140,170,32);button->onClick=[this,n]{if(transferPads)transferPads(n==1);};}
     }
     apply.setVisible(selected == 0);
     localization::panel(*this);
@@ -352,7 +502,7 @@ void AdvancedPanel::applyTiming() {
                         : jaras::ProjectTimeSettings{};
     settings.timebase = timebase->getSelectedId() == 2 ? jaras::ProjectTimebase::relative
                                                        : jaras::ProjectTimebase::free;
-    settings.affectsAutomationLength = automation->getToggleState();
+    settings.affectsAutomationLength = true;
     try {
         session.configureTiming(value, numerator, denominator, settings);
         ModalSheet::dismiss(*this);
@@ -375,7 +525,6 @@ void AdvancedPanel::resized() {
         tabs[i]->setBounds(10, 10 + i * tabStep, 116, tabStep - 6);
     viewport.setBounds(137, 0, getWidth() - 137, getHeight() - 52);
     page.setSize(std::max(610, viewport.getWidth() - 8), contentHeight);
-    close.setBounds(getWidth() - (selected == 0 ? 166 : 92), getHeight() - 38, 78, 24);
     apply.setBounds(getWidth() - 82, getHeight() - 38, 66, 24);
 }
 } // namespace catlive

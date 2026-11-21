@@ -28,29 +28,32 @@ final class RemoteModel {
         JSONObject r=region(s,id(s,"gridRegion"));if(r!=null)return root(s,r);
         r=region(s,id(s,s.optBoolean("playing")?"currentRegion":"focusedRegion"));return root(s,r==null?region(s,id(s,"currentRegion")):r);
     }
+    static JSONObject transportDisplayRegion(JSONObject state) {
+        if (state == null || !(state.optBoolean("playing") || state.optBoolean("paused"))) return null;
+        double position = state.optDouble("position");
+        JSONObject section = state.optJSONObject("sectionPlayback");
+        JSONObject current = region(state, id(section, "currentRegion"));
+        if (section != null && current != null && position >= current.optDouble("start") &&
+                position < section.optDouble("currentEnd", current.optDouble("end"))) return current;
+        JSONArray parts = array(state, "timelineRegions");
+        if (parts.length() == 0) parts = array(state, "regions");
+        JSONObject active = null;
+        for (int i = 0; i < parts.length(); ++i) {
+            JSONObject part = parts.optJSONObject(i);
+            if (part == null || position < part.optDouble("start") || position >= part.optDouble("end")) continue;
+            if (active == null || part.optDouble("end") - part.optDouble("start") < active.optDouble("end") - active.optDouble("start"))
+                active = part;
+        }
+        return active != null ? active : region(state, id(state, "currentRegion"));
+    }
     static String currentSongName(JSONObject s) {
         if(s==null)return "";
-        if(s.optBoolean("playing")) {
-            double position=s.optDouble("position");JSONObject section=s.optJSONObject("sectionPlayback");
-            JSONObject current=region(s,id(section,"currentRegion"));
-            if(current!=null&&position>=current.optDouble("start")&&position<(section==null?current.optDouble("end"):section.optDouble("currentEnd",current.optDouble("end"))))return current.optString("name");
-            JSONArray regions=array(s,"timelineRegions");if(regions.length()==0)regions=array(s,"regions");
-            JSONObject active=null;
-            for(JSONObject part:list(regions))if(position>=part.optDouble("start")&&position<part.optDouble("end")&&(active==null||part.optDouble("end")-part.optDouble("start")<active.optDouble("end")-active.optDouble("start")))active=part;
-            if(active!=null)return active.optString("name");
-            current=region(s,id(s,"currentRegion"));if(current!=null)return current.optString("name");
-        }
+        JSONObject playing = transportDisplayRegion(s);
+        if (playing != null) return playing.optString("name");
         JSONObject displays=s.optJSONObject("songDisplays");
         if(displays!=null&&!displays.isNull("current"))return displays.optString("current");
         JSONObject selected=region(s,id(s,"focusedRegion"));if(selected==null)selected=region(s,id(s,"currentRegion"));
         return selected==null?s.optString("songName"):selected.optString("name");
-    }
-    static String observerFocusedEntry(JSONObject s,Set<String> expanded){
-        String focus=id(s,"focusedRegion");
-        if(find(array(s,"regions"),focus)!=null)return focus;
-        String parent=id(region(s,focus),"parentRegion");
-        if(find(array(s,"regions"),parent)==null)return "";
-        return expanded.contains(parent)?focus:parent;
     }
     static boolean showsSetlistSelection(JSONObject s){return !s.optBoolean("playing")&&!s.optBoolean("subPlaying");}
     static String queuedSongName(JSONObject s){
@@ -96,9 +99,13 @@ final class RemoteModel {
     }
     static final class LayoutCache {
         double heightScale=1;
-        static double boundedScale(double value){return Double.isFinite(value)?Math.max(.1,Math.min(3,value)):1;}
+        private static final double DEFAULT_LANE_HEIGHT=86,MINIMUM_ROW_HEIGHT=76;
+        static double boundedScale(double value){return Double.isFinite(value)?Math.max(MINIMUM_ROW_HEIGHT/DEFAULT_LANE_HEIGHT,Math.min(3,value)):1;}
         void resize(double value){heightScale=boundedScale(value);for(TrackLayout entry:ordered)updateHeight(entry);}
-        void updateHeight(TrackLayout entry){entry.height=Math.max(entry.count>1?26:24,86*(entry.count>1?.7:1)*heightScale*entry.track.optDouble("heightScale",1))*entry.count;}
+        void updateHeight(TrackLayout entry){
+            double laneHeight=Math.max(entry.count>1?26:24,DEFAULT_LANE_HEIGHT*(entry.count>1?.7:1)*heightScale*entry.track.optDouble("heightScale",1));
+            entry.height=Math.max(MINIMUM_ROW_HEIGHT,laneHeight*entry.count);
+        }
         String regionKey="";final Map<String,TrackLayout> entries=new HashMap<>();final List<TrackLayout> ordered=new ArrayList<>();
         void update(JSONObject state,JSONObject region){
             String key=region==null?"none":id(region,"id")+":"+region.optDouble("start")+":"+region.optDouble("end");if(!key.equals(regionKey)){entries.clear();regionKey=key;}

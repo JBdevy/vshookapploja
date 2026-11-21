@@ -281,6 +281,7 @@ jaras::Project ProjectCodec::decode(const json &input) {
         p.masterFXJSON = get(root, "masterFX").dump();
     p.masterMono = flag(root, "masterMono");
     optionalNum(root, "timelineMovementLocked", p.timelineMovementLocked);
+    optionalNum(root, "timelineLockOptions", p.timelineLockOptions);
     optionalNum(root, "masterColor", p.masterColor);
     optionalNum(root, "masterPhaseInverted", p.masterPhaseInverted);
     if (get(root, "masterPatch").is_object())
@@ -331,12 +332,17 @@ jaras::Project ProjectCodec::decode(const json &input) {
             t.output = (int)num(rt, "output", 1);
             optionalNum(rt, "color", t.color);
             optionalNum(rt, "phaseInverted", t.phaseInverted);
+            optionalNum(rt, "hiddenMixerComponents", t.hiddenMixerComponents);
             optionalNum(rt, "heightScale", t.heightScale);
+            t.instrumentIcon.reset(); // A saved track without artwork stays unassigned.
+            optionalText(rt, "instrumentIcon", t.instrumentIcon);
             optionalText(rt, "parentTrackID", t.parentTrackID);
             optionalJSON(rt, "automation", t.automationJSON);
             optionalNum(rt, "midiInput", t.midiInput);
             optionalNum(rt, "midiChannel", t.midiChannel);
             optionalNum(rt, "midiOutput", t.midiOutput);
+            for (const auto &cue : list(get(rt, "chordMarkers")))
+                t.chordMarkers.push_back({str(cue,"id"),str(cue,"regionID"),num(cue,"offset"),str(cue,"name")});
             for (const auto &cue : list(get(rt, "programChanges")))
                 t.programChanges.push_back({str(cue,"id"),num(cue,"position"),(int)num(cue,"program"),(int)num(cue,"channel",1),str(cue,"name"), !get(cue,"output").is_null() ? std::optional<int>((int)num(cue,"output")) : std::nullopt});
             optionalNum(rt, "inputMonitoring", t.inputMonitoring);
@@ -358,6 +364,10 @@ jaras::Project ProjectCodec::decode(const json &input) {
                 routing.receives.clear();
                 routing.transmitters.clear();
                 auto rawRouting = get(rt, "routing");
+                if (get(rawRouting, "mainReceiveSlot").is_number_integer())
+                    routing.mainReceiveSlot = (int)num(rawRouting, "mainReceiveSlot");
+                if (get(rawRouting, "mainSendOrder").is_number_integer())
+                    routing.mainSendOrder = (int)num(rawRouting, "mainSendOrder");
                 for (auto id : list(get(rawRouting, "receives")))
                     routing.receives.push_back(
                         id.is_string() ? std::optional<ID>(jsonString(id)) : std::nullopt);
@@ -549,6 +559,8 @@ json ProjectCodec::encode(const jaras::Project &p, json input) {
     putDefault(root, "masterMono", p.masterMono, false);
     if (p.timelineMovementLocked) put(root, "timelineMovementLocked", *p.timelineMovementLocked);
     else root.erase("timelineMovementLocked");
+    if (p.timelineLockOptions) put(root, "timelineLockOptions", *p.timelineLockOptions);
+    else root.erase("timelineLockOptions");
     emitJSON(root, "masterAutomation", p.masterAutomationJSON);
     emit(root, "masterPatch", p.masterPatch);
     emit(root, "masterSecondaryPatch", p.masterSecondaryPatch);
@@ -614,6 +626,12 @@ json ProjectCodec::encode(const jaras::Project &p, json input) {
                 put(value,"program",cue.program);put(value,"channel",cue.channel);put(value,"name",cue.name);if(cue.output)put(value,"output",*cue.output);programChanges.push_back(value);
             }
             if(!programChanges.empty())put(rt,"programChanges",programChanges);else rt.erase("programChanges");
+            json chordMarkers = json::array();
+            for (const auto &cue : t.chordMarkers) {
+                auto value = object(); put(value,"id",cue.id); put(value,"regionID",cue.regionID);
+                put(value,"offset",cue.offset); put(value,"name",cue.name); chordMarkers.push_back(value);
+            }
+            if (!chordMarkers.empty()) put(rt,"chordMarkers",chordMarkers); else rt.erase("chordMarkers");
             emit(rt, "inputMonitoring", t.inputMonitoring);
             emit(rt, "recordingChannels", t.recordingChannels);
             emit(rt, "recordingFormat", t.recordingFormat);
@@ -640,6 +658,8 @@ json ProjectCodec::encode(const jaras::Project &p, json input) {
                     transmitters.push_back(id ? json(*id) : json());
                 put(value, "receives", receives);
                 put(value, "transmitters", transmitters);
+                if (t.routing->mainReceiveSlot) put(value, "mainReceiveSlot", *t.routing->mainReceiveSlot);
+                if (t.routing->mainSendOrder) put(value, "mainSendOrder", *t.routing->mainSendOrder);
                 put(rt, "routing", value);
             } else
                 remove(rt, "routing");
@@ -659,7 +679,9 @@ json ProjectCodec::encode(const jaras::Project &p, json input) {
             }
             if (t.parentTrackID)
                 put(rt, "parentTrackID", *t.parentTrackID);
+            emit(rt, "hiddenMixerComponents", t.hiddenMixerComponents);
             emit(rt, "heightScale", t.heightScale);
+            emit(rt, "instrumentIcon", t.instrumentIcon);
             emit(rt, "phaseInverted", t.phaseInverted);
             if (t.audioFile)
                 put(rt, "audioFile", audioJSON(*t.audioFile));

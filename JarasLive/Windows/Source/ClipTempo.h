@@ -8,19 +8,27 @@ class ClipTempo {
   public:
     struct Span { double start, end, source, rate; };
     std::vector<Span> spans;
-    ClipTempo(const jaras::AudioClip &clip, const jaras::Song *song = nullptr) {
+    ClipTempo(const jaras::AudioClip &clip, const jaras::Song *song = nullptr,
+              jaras::TempoEditMap::PlaybackRates* compiled = nullptr) {
         const double end = clip.startTime + clip.duration;
         std::vector<double> edges{clip.startTime, end};
-        if (song && song->markers)
-            for (const auto &marker : *song->markers)
-                if (marker.tempoBPM && marker.position > clip.startTime && marker.position < end)
-                    edges.push_back(marker.position);
+        if (compiled) {
+            for (const auto& point:compiled->points(clip))
+                if(point.time>clip.startTime && point.time<end)edges.push_back(point.time);
+        } else if (song && song->markers) {
+            const bool global = jaras::TempoEditMap::tempoOwner(*song,clip) == nullptr;
+            for (const auto &marker : *song->markers) if (marker.tempoBPM) {
+                if (marker.position > clip.startTime && marker.position < end) edges.push_back(marker.position);
+                const double limit = jaras::tempoPlayback::markerEnd(*song,marker);
+                if (global && limit > clip.startTime && limit < end) edges.push_back(limit);
+            }
+        }
         std::sort(edges.begin(), edges.end());
         edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
         double source = clip.sourceOffset;
         for (size_t i = 1; i < edges.size(); ++i) {
-            const double rate = song ? jaras::TempoEditMap::playbackRate(*song, clip, edges[i-1])
-                                     : clip.playbackRate;
+            const double rate = compiled ? compiled->playbackRate(clip,edges[i-1])
+                : song ? jaras::TempoEditMap::playbackRate(*song, clip, edges[i-1]) : clip.playbackRate;
             if (!spans.empty() && std::abs(spans.back().rate - rate) < 1e-9)
                 spans.back().end = edges[i];
             else spans.push_back({edges[i-1], edges[i], source, rate});
@@ -30,14 +38,14 @@ class ClipTempo {
     String itemTitle(const jaras::AudioClip &clip) const {
         double low=std::numeric_limits<double>::infinity(), high=0;
         bool changed=false;
-        const double reference=clip.tempoBasePlaybackRate.value_or(clip.playbackRate);
+        const double reference=1.0;
         for(const auto &span:spans)if(std::isfinite(span.rate) && span.rate>0) {
             low=std::min(low,span.rate);high=std::max(high,span.rate);
             changed=changed || std::abs(span.rate-reference)>.0000005;
         }
         if(!changed || !std::isfinite(low))return text(clip.name);
         const auto format=[](double rate) {
-            auto value=String(rate,2);
+            auto value=String(rate,3);
             while(value.endsWithChar('0'))value=value.dropLastCharacters(1);
             if(value.endsWithChar('.'))value=value.dropLastCharacters(1);
             return value;

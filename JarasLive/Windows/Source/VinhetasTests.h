@@ -6,6 +6,30 @@
 #include "ActionBindings.h"
 namespace catlive {
 struct VinhetasPanelProbe {
+    static void packages(const File &directory) {
+        using recordingCaptureTests::require;
+        const ScopedValueSetter<var> restore(VinhetasPanel::globalState,var{});
+        Appearance preferences(directory.getNonexistentChildFile("zipfx-preferences",".json"));
+        VinhetasAudio audio;VinhetasPanel panel(audio,preferences);
+        auto library=VinhetasPanel::globalState.clone();
+        auto archive=directory.getNonexistentChildFile("empty-pads",".zipfx");
+        auto stage=directory.getNonexistentChildFile("pads-stage",{});
+        vinhetasPackage::exportFile(library,directory,archive);
+        auto empty=vinhetasPackage::prepareImport(archive,stage);
+        require(JSON::toString(vinhetasPackage::portable(empty))==JSON::toString(vinhetasPackage::portable(library)),"Empty preset round trip changed configuration");
+        stage.deleteRecursively();
+        const auto exchange=SystemStats::getEnvironmentVariable("CATLIVE_ZIPFX_EXCHANGE",{});
+        if(exchange.isNotEmpty()) {
+            const File folder(exchange);
+            auto imported=vinhetasPackage::prepareImport(folder.getChildFile("swift.zipfx"),stage);
+            auto banks=list(get(imported,"presets"));auto first=list(get(banks[0],"pads"));auto last=list(get(banks[5],"pads"));
+            require(str(banks[0],"name")=="Metais e efeitos" && num(last[15],"volume")==.25,"Swift archive lost pad settings");
+            require(str(first[0],"audioFile")==str(last[15],"audioFile"),"Shared media was duplicated");
+            require(num(list(get(imported,"padMappings"))[0],"channel")==16,"MIDI channel conversion changed");
+            vinhetasPackage::exportFile(imported,stage,folder.getChildFile("windows.zipfx"));
+            stage.deleteRecursively();
+        }
+    }
     static void blockMIDI(const File &directory) {
         using recordingCaptureTests::require;
         const ScopedValueSetter<var> restore(VinhetasPanel::globalState,var{});
@@ -43,7 +67,7 @@ struct VinhetasPanelProbe {
         auto *pcm=audio.retain(sample);VinhetasPanel panel(audio,preferences);
         for(auto &preset:panel.presets)preset.pads[0].sample=pcm;
         AudioBuffer<float> output(2,512);
-        auto level=[&](float expected) { output.clear();audio.render(output,512,44100);recordingCaptureTests::require(std::abs(output.getSample(0,256)-expected)<.00001f,"MIDI pad playback or release used the wrong preset"); };
+        auto level=[&](float expected) { output.clear();audio.render(output,512,44100);recordingCaptureTests::require(std::abs(output.getSample(0,511)-expected)<.00001f,"MIDI pad playback or release used the wrong preset"); };
         panel.learning=0;panel.learningPreset=false;panel.midi(0xb0,20,127,1);
         panel.midi(0xb0,20,0,1);panel.midi(0xb0,20,127,1);level(.025f);
         panel.select(1);panel.midi(0xb0,20,0,1);panel.midi(0xb0,20,127,1);level(.05f);
@@ -79,13 +103,67 @@ struct VinhetasPanelProbe {
         recordingCaptureTests::require(!pad.isLit(),"Pad remained highlighted after its sample ended");
         pad.mouseDown(down);pad.mouseUp(up);level(.025f);panel.panic.onClick();level(0);
         recordingCaptureTests::require(!pad.isLit(),"Panic did not clear the sounding highlight");
+        panel.select(0);panel.remoteGate(0,0,true);
+        const auto remoteA=uuid();recordingCaptureTests::require(panel.remoteDown(remoteA,0,0),"Remote Gate press rejected");level(.025f);
+        panel.remoteUp(uuid());level(.025f);
+        panel.select(1);panel.remoteUp(remoteA);level(0);
+        recordingCaptureTests::require(!panel.remoteDown(uuid(),0,0),"Stale Remote bank fired a different preset");
+        panel.select(0);panel.remoteGate(0,0,false);panel.remoteVolume(0,0,.5);
+        const auto remoteB=uuid(),remoteC=uuid();panel.remoteDown(remoteB,0,0);panel.remoteDown(remoteC,0,0);level(.025f);
+        panel.remoteUp(remoteB);panel.remoteUp(remoteC);level(.025f);
+        panel.remoteGate(0,0,true);level(0);
+        panel.remoteDown(uuid(),0,0);level(.0125f);panel.remotePanic();level(0);
+        const auto remoteState=panel.remoteSnapshot(true);
+        recordingCaptureTests::require(list(get(remoteState,"presets")).size()==6 && list(get(get(remoteState,"presets")[0],"pads")).size()==16,
+            "Remote lost bank or pad presentation data");
+        recordingCaptureTests::require(!JSON::toString(remoteState).contains("audioFile") && !JSON::toString(remoteState).contains("Mappings"),
+            "Remote leaked sample paths or MIDI mappings");
         const auto stored=preferences.value("jaras.vinhetas");const auto mappings=get(stored,"padMappings");
         recordingCaptureTests::require(mappings.isArray()&&mappings.size()==16,"Pad mappings were duplicated per preset");
+        using recordingCaptureTests::require;
+        panel.learning=1;panel.learningPreset=false;panel.midi(0xb0,20,127,1);
+        require(panel.padMappingLabel(1)=="CC 20" && panel.padMappingLabel(0)=="Note 60" && panel.padMappingLabel(2).isEmpty(),
+            "Pad footer must show the mapped number and distinguish CC from notes");
+        require(audio.handlesMIDI(MidiMessage::controllerEvent(1,20,127)),"Learned CC was not reserved");
+        const auto contentBefore=JSON::toString(get(preferences.value("jaras.vinhetas"),"presets"));
+        panel.unlearnPad(1);
+        require(panel.padMappingLabel(1).isEmpty() && !panel.midi(0xb0,20,127,1) &&
+            !audio.handlesMIDI(MidiMessage::controllerEvent(1,20,127)),"Unlearn kept consuming the pad CC");
+        require(audio.handlesMIDI(MidiMessage::noteOn(1,60,(uint8)100)) &&
+            audio.handlesMIDI(MidiMessage::controllerEvent(1,32,127)),"Unlearn removed an unrelated pad or preset mapping");
+        const auto after=preferences.value("jaras.vinhetas");
+        require(!get(after,"padMappings")[1].isObject() && JSON::toString(get(after,"presets"))==contentBefore,
+            "Unlearn failed to persist or changed the pad content");
+        panel.loadState(after);
+        require(panel.padMappingLabel(1).isEmpty() && panel.padMappingLabel(0)=="Note 60","Unlearn did not survive reload");
     }
 };
 }
 namespace catlive::vinhetasTests {
 template<class Test> void run(const File &directory, Test &&test) {
+    test("Pads package preserves presets and exchanges Swift archives",[&]{VinhetasPanelProbe::packages(directory);});
+    test("Pads accept exactly 60 seconds and reject longer media before decoding", [&] {
+        using recordingCaptureTests::require;
+        for (double rate : {8000., 44100., 48000., 96000., 192000.}) {
+            require(VinhetasAudio::acceptsDuration(int64(rate * 60), rate), "60 second pad rejected");
+            require(!VinhetasAudio::acceptsDuration(int64(rate * 60) + 1, rate), "Pad exceeded 60 seconds");
+        }
+        require(!VinhetasAudio::acceptsDuration(0, 48000) && !VinhetasAudio::acceptsDuration(1, 0), "Invalid pad duration accepted");
+        for (int extra : {0, 1}) {
+            const auto file = directory.getNonexistentChildFile("pad-duration-" + String(extra), ".wav");
+            {
+                auto stream = file.createOutputStream(); WavAudioFormat format;
+                require(stream != nullptr, "Cannot create pad fixture");
+                std::unique_ptr<AudioFormatWriter> writer(format.createWriterFor(stream.get(), 8000, 1, 16, {}, 0));
+                require(writer != nullptr, "Cannot create pad writer"); stream.release();
+                AudioBuffer<float> block(1, 1000); block.clear();
+                int remaining = 480000 + extra;
+                while (remaining > 0) { const int count = std::min(remaining, 1000); require(writer->writeFromAudioSampleBuffer(block, 0, count), "Cannot write pad fixture"); remaining -= count; }
+            }
+            require(VinhetasAudio::importError(file).isEmpty() == (extra == 0), "Pad import duration check disagrees with source frames");
+            require(bool(VinhetasAudio::decode(file)) == (extra == 0), "Stored pads bypassed the maximum duration");
+        }
+    });
     test("Vinhetas keeps continuous PCM across rapid small-buffer triggers and voice exhaustion", [] { vinhetasContinuityTests::run(); });
     test("Setlist block MIDI explicitly transfers conflicting Vinhetas pad and preset mappings",[&]{VinhetasPanelProbe::blockMIDI(directory);});
     test("Vinhetas has sixteen shared MIDI mappings, preset learn and note release after preset change",[&]{VinhetasPanelProbe::run(directory);});
@@ -116,13 +194,39 @@ template<class Test> void run(const File &directory, Test &&test) {
         sample->pcm.setSize(2,44100);
         for(int ch=0;ch<2;ch++)FloatVectorOperations::fill(sample->pcm.getWritePointer(ch),.025f,44100);
         const auto *pcm=audio.retain(sample);AudioBuffer<float> output(2,512);
-        auto level=[&](float wanted) {output.clear();audio.render(output,512,48000);recordingCaptureTests::require(std::abs(output.getSample(0,256)-wanted)<.00001f,"Vinhetas voice PCM changed");};
+        auto level=[&](float wanted) {output.clear();audio.render(output,512,48000);recordingCaptureTests::require(std::abs(output.getSample(0,511)-wanted)<.00001f,"Vinhetas voice PCM changed");};
         audio.enqueue({VinhetasAudio::Kind::start,1,0,0,1,pcm});level(.025f);
         audio.enqueue({VinhetasAudio::Kind::start,2,0,0,1,pcm});level(.05f);
         audio.enqueue({VinhetasAudio::Kind::stop,2});level(.025f);
         audio.enqueue({VinhetasAudio::Kind::volume,0,0,0,.5f});level(.0125f);
         audio.enqueue({VinhetasAudio::Kind::stop,1});level(0);
         recordingCaptureTests::require(!audio.active(0,0),"Pad remains highlighted after Gate release");
+    });
+    test("Vinhetas Gate releases over 10 ms across buffer sizes and leaves other voices untouched", [] {
+        using recordingCaptureTests::require;
+        for (const double rate : {44100.,48000.,96000.}) {
+            VinhetasAudio audio;audio.setOutputAvailable(true);
+            auto sample=std::make_shared<VinhetasAudio::Sample>();sample->rate=44100;sample->pcm.setSize(2,44100);
+            for(int ch=0;ch<2;++ch)FloatVectorOperations::fill(sample->pcm.getWritePointer(ch),.025f,44100);
+            const auto *pcm=audio.retain(sample);AudioBuffer<float> output(2,2048);
+            audio.enqueue({VinhetasAudio::Kind::start,1,0,0,1,pcm});
+            audio.enqueue({VinhetasAudio::Kind::start,2,0,1,1,pcm});
+            output.clear();audio.render(output,512,rate);
+            audio.enqueue({VinhetasAudio::Kind::stop,1});
+            const int releaseFrames=int(std::lround(rate*.010));int rendered=0;
+            for(int frames:{37,113,79,251,17,128,512,1024}) {
+                output.clear();audio.render(output,frames,rate);
+                for(int frame=0;frame<frames;++frame)for(int ch=0;ch<2;++ch) {
+                    const float expected=.025f*float(1+std::max(0.,1-double(rendered+frame)/releaseFrames));
+                    require(std::abs(output.getSample(ch,frame)-expected)<.00001f,"Gate release clicked, changed duration or cut another voice");
+                }
+                rendered+=frames;
+                audio.enqueue({VinhetasAudio::Kind::stop,1});
+            }
+            require(!audio.active(0,0)&&audio.active(0,1),"Gate completion left wrong pads active");
+            audio.enqueue({VinhetasAudio::Kind::panic});output.clear();audio.render(output,512,rate);
+            require(output.getMagnitude(0,512)==0&&!audio.active(0,1),"Panic must remain immediate");
+        }
     });
     test("Track output recording picks one stage without duplicating samples or gain", [&] {
         std::vector<TrackCapture::Target> targets;

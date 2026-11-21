@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <future>
 
 namespace {
 using namespace catlive::native;
@@ -322,6 +323,91 @@ int main(int argc, char** argv) {
                 "A valid prefix could not be read after a rejected block.");
         compare(output.data(), fixture.expected.data(), 32 * fixture.channels);
     });
+    test("short MP3 with zero padding retains its actual frames and exact seeking", [&] {
+        // Two complete 128 kb/s, 48 kHz MPEG-1 Layer III silent frames.
+        // The exporter padding must not become invented song-length PCM.
+        Bytes prefix(768, 0);
+        for (size_t at : {size_t(0), size_t(384)}) {
+            prefix[at] = 0xff; prefix[at+1] = 0xfb; prefix[at+2] = 0x94; prefix[at+3] = 0x64;
+        }
+        AudioFile reference(temporary.write("short-prefix.mp3", prefix));
+        require(reference.info().frameCount == 2304, "Two MP3 frames lost their true length.");
+        std::vector<float> baseline(2304 * 2);
+        reference.readInterleaved(0, baseline.data(), 2304);
+        for (bool id3 : {false, true}) {
+            Bytes padded;
+            if (id3) padded = {'I','D','3',4,0,0,0,0,0,0};
+            padded.insert(padded.end(), prefix.begin(), prefix.end());
+            padded.resize(padded.size() + 3 * 1024 * 1024, 0);
+            const auto file = temporary.write(id3 ? "padded-tagged.mp3" : "padded.mp3", padded);
+            const auto metadata = AudioFile::inspect(file);
+            AudioFile reader(file);
+            require(metadata.frameCount == 2304 && reader.info().frameCount == 2304 && metadata.sampleRate == 48000,
+                    "Padded MP3 must report decoded audio length, not padded file size.");
+            std::vector<float> output(2304 * 2);
+            require(reader.readInterleaved(0, output.data(), 2304) == 2304, "Padded MP3 lost complete frames.");
+            compare(output.data(), baseline.data(), baseline.size(), 0.f);
+            seekChecks(reader, baseline, 0.f);
+            std::vector<float> left(65536), right(65536); float* planes[]{left.data(), right.data()};
+            require(reader.readFrames(0, planes, 2, 65536) == 2304, "Stem import block must read a short padded MP3.");
+            require(std::all_of(left.begin() + 2304, left.end(), [](float value){return value == 0.f;}),
+                    "Only requests beyond the actual EOF may be filled with silence.");
+            require(std::filesystem::file_size(file) == padded.size(), "Decoder must never rewrite the original file.");
+            padded.back() = 1;
+            bool rejected = false;
+            try { AudioFile invalid(temporary.write("nonzero-trailer.mp3", padded)); }
+            catch (const std::runtime_error&) { rejected = true; }
+            require(rejected, "Nonzero malformed data must not be mistaken for exporter padding.");
+        }
+    });
+    if (argc > 1) test("MP3 APE footer and optional header preserve complete PCM with or without ID3v1", [&] {
+        const auto source = std::filesystem::u8path(argv[1]);
+        std::ifstream stream(source, std::ios::binary);
+        const Bytes original((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+        AudioFile reference(source);
+        const auto frames = reference.info().frameCount;
+        const auto channels = reference.info().channels;
+        require(frames <= 64000000/channels, "MP3 metadata fixture exceeds bounded memory.");
+        std::vector<float> baseline(static_cast<size_t>(frames)*channels);
+        reference.readInterleaved(0, baseline.data(), static_cast<size_t>(frames));
+        for (bool header : {false, true}) for (bool id3 : {false, true}) {
+            Bytes payload;
+            word(payload, 300, 4);word(payload, 0, 4);
+            const std::string key="Comment";payload.insert(payload.end(),key.begin(),key.end());payload.push_back(0);
+            payload.insert(payload.end(),300,'x');
+            const auto tagBlock=[&](bool isHeader) {
+                Bytes block;const std::string magic="APETAGEX";block.insert(block.end(),magic.begin(),magic.end());
+                word(block,2000,4);word(block,payload.size()+32,4);word(block,1,4);
+                word(block,(header?0x80000000U:0U)|(isHeader?0x20000000U:0U),4);word(block,0,8);
+                return block;
+            };
+            auto bytes=original;
+            if(header){const auto block=tagBlock(true);bytes.insert(bytes.end(),block.begin(),block.end());}
+            bytes.insert(bytes.end(),payload.begin(),payload.end());
+            const auto footer=tagBlock(false);bytes.insert(bytes.end(),footer.begin(),footer.end());
+            if(id3){bytes.insert(bytes.end(),{'T','A','G'});bytes.insert(bytes.end(),125,0);}
+            const auto file=temporary.write("ape-"+std::to_string(header)+"-"+std::to_string(id3)+".mp3",bytes);
+            AudioFile tagged(file);
+            drmp3 direct{};
+#if defined(_WIN32)
+            const bool opened=drmp3_init_file_w(&direct,file.c_str(),nullptr)!=0;
+#else
+            const bool opened=drmp3_init_file(&direct,file.c_str(),nullptr)!=0;
+#endif
+            require(opened,"Cannot open tagged MP3 without seeking.");
+            const std::unique_ptr<drmp3, void(*)(drmp3*)> directOwner(&direct,drmp3_uninit);
+            require(tagged.info().frameCount==frames,"APE tag changed MP3 timeline duration.");
+            std::vector<float> block(16384*channels);
+            for(uint64_t at=0;at<frames;at+=16384) {
+                const auto count=static_cast<size_t>(std::min<uint64_t>(16384,frames-at));
+                require(tagged.readInterleaved(at,block.data(),count)==count,"APE tag hid final audio frames.");
+                compare(block.data(),baseline.data()+at*channels,count*channels,0.f);
+                require(drmp3_read_pcm_frames_f32(&direct,count,block.data())==count,"APE tag hid audio on initial decode.");
+                compare(block.data(),baseline.data()+at*channels,count*channels,0.f);
+            }
+            seekChecks(tagged,baseline,0.f);
+        }
+    });
     for (int argument = 1; argument < argc; ++argument) test("real MP3 random seeking equals continuous decode including priming and EOF", [&] {
         const auto file = std::filesystem::u8path(argv[argument]);
         const auto started = std::chrono::steady_clock::now();
@@ -364,6 +450,20 @@ int main(int argc, char** argv) {
                 "MP3 indexed length discarded audible frames.");
         require(std::any_of(baseline.begin(), baseline.end(), [](float value) { return std::abs(value) > .001f; }),
                 "MP3 fixture is not audible.");
+        // A newly opened seek decoder reuses the live reader's index while
+        // retaining an independent stream position and synthesis state.
+        std::vector<std::future<void>> readers;
+        for (int worker=0; worker<4; ++worker) readers.push_back(std::async(std::launch::async, [&, worker] {
+            AudioFile next(file);
+            std::vector<float> block(997 * channels);
+            for (int step=0; step<8; ++step) {
+                const auto at = (frames > 997 ? frames-997 : 0) * ((step*5+worker*3)%17) / 17;
+                const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(997,frames-at));
+                require(next.readInterleaved(at,block.data(),count)==count,"Shared seek index lost frames.");
+                compare(block.data(),baseline.data()+at*channels,count*channels,0.f);
+            }
+        }));
+        for (auto &reader:readers) reader.get();
         seekChecks(random, baseline, 0.f);
         const auto tailFrames = static_cast<std::size_t>(std::min<std::uint64_t>(31, frames));
         std::vector<float> tail(1024 * channels, 1.f);

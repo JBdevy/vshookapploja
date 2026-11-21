@@ -12,12 +12,23 @@ class ExternalEffectEditor final : public Component, private AsyncUpdater, priva
     ScrollBar horizontal{false}, vertical{true};
     std::function<bool(const KeyPress &)> key;
     std::function<void(bool)> keyState;
+    std::function<void(int,int)> preferredSizeChanged;
+    Point<int> lastPreferredSize;
     String failure;
     int width = 740, height = 560;
     bool attempted = false;
     void handleAsyncUpdate() override {
-        if (attempted || !isShowing() || !getPeer()) return;
+        if (!isShowing() || !getPeer()) return;
+        if (attempted) { reportPreferredSize(); return; }
         attempted = true;
+        // The external plug-in renders its own HWND. The surrounding manager
+        // needs no GPU swap chain competing with that child window.
+        if(auto *peer=getPeer()) {
+            const auto engines=peer->getAvailableRenderingEngines();
+            for(int i=0;i<engines.size();++i)if(engines[i].containsIgnoreCase("Software")) {
+                peer->setCurrentRenderingEngine(i);break;
+            }
+        }
         try {
             auto parent = static_cast<HWND>(getPeer()->getNativeHandle());
             auto hwnd = CreateWindowExW(0,L"STATIC",L"CatLive FX editor",WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
@@ -30,9 +41,20 @@ class ExternalEffectEditor final : public Component, private AsyncUpdater, priva
             shortcuts = std::make_unique<NativePluginShortcuts>(canvas,key,keyState);
             editor = processor->openEditor(canvas,[this](int w,int h){width=w;height=h;resized();});
             width=editor->width();height=editor->height();resized();
+            reportPreferredSize();
         } catch (const std::exception &e) {
             failure=String::fromUTF8(e.what());shortcuts.reset();editor.reset();host.setHWND(nullptr);canvas=nullptr;repaint();
         }
+    }
+    void reportPreferredSize() {
+        if (!editor || !preferredSizeChanged || getWidth() <= 0) return;
+        const auto *peer=getPeer();
+        const auto pixels=peer->getAreaCoveredBy(*this).toFloat()*peer->getPlatformScaleFactor();
+        const double scale=pixels.getWidth()/getWidth();
+        if(scale<=0)return;
+        const Point<int> size((int)std::ceil(width/scale),(int)std::ceil(height/scale));
+        if(size==lastPreferredSize)return;
+        lastPreferredSize=size;preferredSizeChanged(size.x,size.y);
     }
     void scrollBarMoved(ScrollBar *,double) override { positionEditor(); }
     void positionEditor() {
@@ -41,8 +63,9 @@ class ExternalEffectEditor final : public Component, private AsyncUpdater, priva
     }
 public:
     ExternalEffectEditor(std::shared_ptr<native::vst3::Processor> plugin,
-                         std::function<bool(const KeyPress &)> shortcut,std::function<void(bool)> changed)
-        :processor(std::move(plugin)),key(std::move(shortcut)),keyState(std::move(changed)) {
+                         std::function<bool(const KeyPress &)> shortcut,std::function<void(bool)> changed,
+                         std::function<void(int,int)> preferredSize = {})
+        :processor(std::move(plugin)),key(std::move(shortcut)),keyState(std::move(changed)),preferredSizeChanged(std::move(preferredSize)) {
         setComponentID("embeddedExternalEditor");
         addAndMakeVisible(host);addChildComponent(horizontal);addChildComponent(vertical);
         horizontal.addListener(this);vertical.addListener(this);
@@ -50,9 +73,10 @@ public:
     ~ExternalEffectEditor() override {
         cancelPendingUpdate();shortcuts.reset();editor.reset();host.setHWND(nullptr);
     }
+    void syncVisibility(){if(editor)editor->setVisible(isShowing());}
     bool uses(const std::shared_ptr<native::vst3::Processor> &plugin)const{return processor==plugin;}
     void parentHierarchyChanged() override {triggerAsyncUpdate();}
-    void visibilityChanged() override {triggerAsyncUpdate();}
+    void visibilityChanged() override {syncVisibility();triggerAsyncUpdate();}
     void paint(Graphics &g) override {
         g.fillAll(theme::panel);
         if(failure.isNotEmpty()){g.setColour(theme::secondary);g.setFont(theme::font(12));g.drawFittedText(failure,getLocalBounds().reduced(20),Justification::centred,4);}

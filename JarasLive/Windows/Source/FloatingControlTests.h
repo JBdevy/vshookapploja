@@ -2,6 +2,8 @@
 #include "FloatingShortcuts.h"
 #include "UIFeatureTests.h"
 #include "PlaylistEditor.h"
+#include "ItemTunerPanel.h"
+#include "TrackEditing.h"
 namespace catlive::floatingControlTests {
 inline void require(bool okay, const char *message) { if (!okay) throw std::runtime_error(message); }
 inline void pump() {
@@ -15,6 +17,25 @@ inline jaras::Project fixture() {
     p.songs={s};p.savedCursor=jaras::SavedProjectCursor{s.id,0};return p;
 }
 template <typename Test> void registerTests(const File &directory, Test &test) {
+    test("Linked track pan follows each mixer change from either side", [&] {
+        auto project = fixture();
+        const auto& song = project.songs.front();
+        const ID left = song.tracks[0].id, right = song.tracks[1].id;
+        const std::set<ID> linked{left, right};
+        trackEditing::link(project, song.id, linked, 1, 0x5685ca);
+        Session session; session.inspection = true; session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project));
+        session.beginMixerGesture(jaras::CommandKind::pan, left);
+        session.mixerCommand(jaras::CommandKind::pan, left, linked, -.38);
+        require(std::abs(session.song()->tracks[0].pan + .38) < 1e-8 &&
+                std::abs(session.song()->tracks[1].pan - .38) < 1e-8, "The right pan must mirror before release");
+        session.endMixerGesture();
+        session.beginMixerGesture(jaras::CommandKind::pan, right);
+        session.mixerCommand(jaras::CommandKind::pan, right, {right}, -.21);
+        require(std::abs(session.song()->tracks[0].pan - .21) < 1e-8 &&
+                std::abs(session.song()->tracks[1].pan + .21) < 1e-8, "The left pan must mirror before release");
+        session.endMixerGesture();
+    });
     test("Marker shortcut modal focuses the name before the first typed character", [&] {
         Component host; host.setWantsKeyboardFocus(true); host.setSize(900,650);
         host.addToDesktop(ComponentPeer::windowIsTemporary);host.setVisible(true);host.grabKeyboardFocus();pump();
@@ -119,6 +140,11 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         for(int i=0;i<desktop.getNumComponents();++i)if(auto *candidate=dynamic_cast<DocumentWindow *>(desktop.getComponent(i)))
             if(candidate->getContentComponent() && candidate->getContentComponent()->getComponentID()=="effectsPanel")window=candidate;
         require(window && window->getPeer(),"FX window has no native peer");
+        auto *limits = window->getConstrainer();
+        require(limits && limits->getMinimumWidth() >= 840 && limits->getMinimumHeight() >= 632,
+                "FX manager allows shrinking below the complete instrument controls");
+        require(window->getContentComponent()->getHeight() >= 600, "FX manager initially clips its controls");
+
         auto *button=uiFeatureTests::find(*window,"saveFXPreset");require(button,"FX button missing");
         button->setEnabled(true);button->grabKeyboardFocus();pump();
         auto *peer=window->getPeer();
@@ -246,6 +272,29 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         require(!Component::getCurrentlyModalComponent()&&windows("settingsTab0").empty()&&windows("advancedTab0").empty(),
                 "Closing preferences left a modal mask or visible window");
     });
+    test("Transport meter follows the cursor and preserves earlier tempo markers", [&] {
+        auto project = fixture();
+        auto &song = project.songs.front();
+        jaras::TimelineMarker first{uuid(), "TEMPO", 0, 0};
+        first.tempoBPM = 120; first.tempoBeats = 4; first.tempoUnit = 4;
+        jaras::TimelineMarker last{uuid(), "TEMPO", 4, 0};
+        last.tempoBPM = 90; last.tempoBeats = 6; last.tempoUnit = 8;
+        song.markers = std::vector<jaras::TimelineMarker>{last, first};
+        Session session;
+        session.inspection = true;
+        session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project));
+        session.command(jaras::CommandKind::editSeek, {}, 2);
+        require(session.transportMeter() == std::make_pair(4, 4) && !session.meterInputAllowed(), "Meter before the last marker was editable");
+        session.command(jaras::CommandKind::editSeek, {}, 4);
+        require(session.transportMeter() == std::make_pair(6, 8) && !session.meterInputAllowed(), "Meter did not follow the last marker");
+        session.command(jaras::CommandKind::editSeek, {}, 6);
+        require(session.meterInputAllowed(), "Meter after the last marker was locked");
+        session.setMeter(7, 8);
+        require(session.transportMeter() == std::make_pair(7, 8), "Meter edit did not create a new section");
+        session.command(jaras::CommandKind::editSeek, {}, 5);
+        require(session.transportMeter() == std::make_pair(6, 8), "Meter edit rewrote the previous section");
+    });
     test("Live tuner changes audible pitch without moving transport and restores with Undo", [&] {
         const auto folder=directory.getNonexistentChildFile("live-tuner","");folder.createDirectory();
         WavAudioFormat format;auto stream=folder.getChildFile("tone.wav").createOutputStream();
@@ -270,6 +319,40 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         session.command(jaras::CommandKind::stopAll);session.undo();
         require(session.song()->parts[0].pitchSemitones.value_or(0)==0,"Tuner Undo did not restore pitch");
         session.undo();require(session.song()->beatsPerBar==4 && session.song()->beatUnit==4,"Meter Undo did not restore 4/4");
+    });
+    test("Item tuner edits during playback without rebuilding and restores exact state with Undo", [&] {
+        const auto folder=directory.getNonexistentChildFile("item-tuner",""); folder.createDirectory();
+        WavAudioFormat format; auto stream=folder.getChildFile("tone.wav").createOutputStream();
+        std::unique_ptr<AudioFormatWriter> writer(format.createWriterFor(stream.get(),48000,2,24,{},0));
+        require(bool(writer),"Cannot create item tuner fixture"); stream.release();
+        AudioBuffer<float> tone(2,48000*4);
+        for(int i=0;i<tone.getNumSamples();++i)for(int ch=0;ch<2;++ch)tone.setSample(ch,i,.2f*std::sin(float(i)*2*MathConstants<float>::pi*440/48000));
+        require(writer->writeFromAudioSampleBuffer(tone,0,tone.getNumSamples()),"Cannot write item tuner fixture"); writer.reset();
+        auto p=fixture();p.songs[0].tracks.resize(1);
+        jaras::AudioClip clip;clip.id=uuid();clip.name="Tuner test";clip.duration=4;clip.audioFile=jaras::AudioFile{"tone.wav",{}};
+        p.songs[0].tracks[0].clips={clip};
+        Session session; session.inspection=true; session.mediaDirectory=folder; session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(p)); session.audio.setOffline(true);
+        int rebuilds=0; session.changed=[&]{++rebuilds;}; session.timingChanged=[](bool){};
+        session.command(jaras::CommandKind::play);
+        AudioBuffer<float> block(2,480);session.audio.render(block.getArrayOfWritePointers(),2,480);
+        const auto cursor=session.audio.state().position; rebuilds=0;
+        ItemTunerPanel panel(session,clip.id,[](String error){throw std::runtime_error(utf8(error));});
+        auto *up=dynamic_cast<Button*>(uiFeatureTests::find(panel,"itemTunerUp"));
+        require(up && up->isEnabled(),"Item tuner disabled during playback");
+        up->onClick(); require(session.song()->tracks[0].clips[0].pitchSemitones==1,"Tuner did not update immediately");
+        session.setItemPitch(clip.id,12);
+        require(session.audio.state().playing && session.audio.state().position==cursor,"Item tuner stopped or sought playback");
+        int crossings=0;float previous=0;
+        for(int n=0;n<30;++n){session.audio.render(block.getArrayOfWritePointers(),2,480);for(int i=0;i<480;++i){auto v=block.getSample(0,i);if(n>=10 && previous<=0 && v>0)++crossings;previous=v;}}
+        require(std::abs(crossings-176)<5,"Item pitch did not audibly transpose to 880 Hz");
+        const auto after=session.audio.state().position;
+        session.undo(); session.undo();
+        require(!session.song()->tracks[0].clips[0].pitchSemitones,"Undo did not restore inherited item pitch");
+        session.redo(); session.redo();
+        require(session.song()->tracks[0].clips[0].pitchSemitones==12,"Redo lost item pitch");
+        require(session.audio.state().playing && session.audio.state().position==after,"Item pitch history sought or stopped playback");
+        require(rebuilds==0 && !session.preparingLiveAudio(),"Item pitch rebuilt the project/graph");
     });
 }
 }

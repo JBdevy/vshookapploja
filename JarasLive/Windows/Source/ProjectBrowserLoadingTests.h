@@ -4,9 +4,26 @@
 
 namespace catlive::projectBrowserLoadingTests {
 template <typename Test> void registerTests(const File &directory, Test &test) {
+    test("Project browser English follows Mac captions and translates loading without renaming projects", [&] {
+        using floatingControlTests::require;
+        const ScopedValueSetter<bool> language(localization::english, true);
+        ProjectBrowser browser;browser.setSize(560,424);
+        auto *create=dynamic_cast<Button *>(browser.findChildWithID("Criar projeto"));
+        require(create && create->getButtonText()=="Create Project","Home action ignored English");
+        browser.beginLoading(directory.getChildFile("Minha música.jl"));
+        require(browser.loadingMessage()=="Loading project…","Loading ignored English");
+        browser.updateLoading(localization::translate(String::fromUTF8("Preparing waveforms…"))+" 2/5");
+        require(browser.loadingMessage()=="Preparing waveforms… 2/5",("Waveform progress differs from Mac: "+browser.loadingMessage()).toRawUTF8());
+        browser.finishLoading();
+        localization::english=false;browser.refresh();
+        require(create->getButtonText()==String::fromUTF8("Criar projeto"),"Language switching retained English");
+    });
+
     test("Project browser keeps project actions enabled while playback runs", [&] {
         using floatingControlTests::require;
-        ProjectBrowser browser;browser.setSize(560,424);browser.setProjectOpen(true);browser.setPlaybackRunning(true);
+        ProjectBrowser browser;
+        browser.openMultiple = [](std::vector<File>) {};
+        browser.setSize(560,424);browser.setProjectOpen(true);browser.setPlaybackRunning(true);
         for(auto *child:browser.getChildren())if(dynamic_cast<Button*>(child)&&child->getComponentID()!="cancelProjectLoading")
             require(child->isEnabled(),"Playback disabled a project browser action");
         browser.beginLoading(directory.getChildFile("Another.jl"));
@@ -50,6 +67,7 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
     test("Project browser keeps progress inline, locks navigation and recovers after an open error", [&] {
         using floatingControlTests::require;
         ProjectBrowser browser;
+        browser.openMultiple = [](std::vector<File>) {};
         browser.setSize(560, 424);
         auto *recents = static_cast<ListBox *>(nullptr);
         for (auto *child : browser.getChildren())

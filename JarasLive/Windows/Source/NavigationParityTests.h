@@ -2,12 +2,95 @@
 #include "FloatingControlTests.h"
 #include "EffectInsertPanel.h"
 #include "TimelinePlaybackFollow.h"
+#include "RecentBackupsPanel.h"
 
 namespace catlive::navigationParityTests {
 using floatingControlTests::require;
 using floatingControlTests::pump;
 
 template <typename Test> void registerTests(const File &directory, Test &test) {
+    test("Timeline navigation ignores tempo markers and keeps ordinary sections and region edges", [&] {
+        auto project = floatingControlTests::fixture();
+        auto &song = project.songs.front();
+        song.parts.clear();
+        jaras::Part region; region.id = uuid(); region.name = "Region"; region.startTime = 2; region.endTime = 10;
+        song.parts = {region}; song.duration = 20;
+        jaras::TimelineMarker tempo{uuid(), "Tempo", 3, 0x999999}; tempo.tempoBPM = 120;
+        jaras::TimelineMarker normal{uuid(), "Normal", 4, 0x51ef93};
+        auto section = normal; section.id = uuid(); section.position = 6; section.section = true;
+        auto unified = normal; unified.id = uuid(); unified.position = 8; unified.unifiedRegionID = region.id;
+        song.markers = std::vector<jaras::TimelineMarker>{tempo, normal, section, unified};
+        Session session; session.inspection = true; session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project)); session.audio.setOffline(true);
+        Auth auth; Lighting lighting(session);
+        Workspace workspace(session, auth, lighting, false, directory.getNonexistentChildFile("marker-navigation", ".json"));
+        workspace.setSize(1366, 768);
+        session.command(jaras::CommandKind::editSeek, {}, 0);
+        for (double expected : {2., 4., 6., 8., 10.}) {
+            require(workspace.keyPressed(KeyPress('W')), "Next marker shortcut not handled"); workspace.keyStateChanged(false);
+            require(session.transport().editPosition == expected, "Forward navigation stopped at a tempo marker or lost a region edge");
+        }
+        for (double expected : {8., 6., 4., 2.}) {
+            require(workspace.keyPressed(KeyPress('E')), "Previous marker shortcut not handled"); workspace.keyStateChanged(false);
+            require(session.transport().editPosition == expected, "Backward navigation stopped at a tempo marker");
+        }
+    });
+    test("Recent backups panel lists saved copies and opens the selected backup", [&] {
+        const auto root = directory.getNonexistentChildFile("recent-backups", "", false); root.createDirectory();
+        const auto document = root.getChildFile("Project.jl");
+        auto project = floatingControlTests::fixture();
+        ProjectCodec::saveWithBackup(document, ProjectCodec::encode(project), false);
+        for (int i = 0; i < 3; ++i) {
+            project.name = "Saved " + std::to_string(i);
+            ProjectCodec::saveWithBackup(document, ProjectCodec::encode(project), true);
+        }
+        File opened;
+        RecentBackupsPanel panel(document, [&](File file) { opened = file; });
+        Viewport *viewport = nullptr;
+        for (auto *child : panel.getChildren()) if (auto *view = dynamic_cast<Viewport *>(child)) viewport = view;
+        require(viewport != nullptr, "Backup list is missing");
+        const auto limit = Time::getMillisecondCounter() + 5000;
+        while (viewport->getViewedComponent()->getNumChildComponents() != 4 && Time::getMillisecondCounter() < limit) pump();
+        auto *list = viewport->getViewedComponent();
+        require(list->getNumChildComponents() == 4, "Recent saved backups were not loaded");
+        auto *first = dynamic_cast<Button *>(list->getChildComponent(0));
+        require(first != nullptr, "Backup entry is not clickable");
+        const auto expected = projectBackups::files(document).back();
+        require(first->getButtonText() == expected.getFileName(), "Recent backups are not newest first");
+        first->triggerClick(); pump();
+        require(opened == expected, "Backup entry opened the wrong file");
+        require(projectBackups::files(document).size() == 4, "Opening list changed backups");
+    });
+    test("Preserved combo names retain Default in both menu and selected label", [] {
+        const ScopedValueSetter<bool> language(localization::english, false);
+        ComboBox box; box.addItem("Default",1); box.addItem("Invertido",2);
+        box.getProperties().set("preserveNames",true);
+        for(int id:{1,2,1}) {
+            box.setSelectedId(id,dontSendNotification); localization::panel(box);
+            require(box.getText()==(id==1?"Default":"Invertido"),"Selected combo label was translated despite preserveNames");
+            require(box.getItemText(0)=="Default","Default menu entry changed");
+        }
+    });
+    test("UTF8 interface literals preserve accents and punctuation before translation", [] {
+        const ScopedValueSetter<bool> language(localization::english, false);
+        const auto pt = JSON::parse(String::fromUTF8(BinaryData::Portuguese_json, BinaryData::Portuguese_jsonSize));
+        const auto en = JSON::parse(String::fromUTF8(BinaryData::English_json, BinaryData::English_jsonSize));
+        for (bool english : {false, true}) {
+            localization::english = english;
+            require(localization::translate("Salvando…") == String::fromUTF8(english ? "Saving…" : "Salvando…"),
+                    "Saving label contains broken ellipsis or failed to translate");
+            require(localization::translate("Ação inédita: São João — 🎹") == String::fromUTF8("Ação inédita: São João — 🎹"),
+                    "Uncatalogued UTF8 text was corrupted");
+            for (const auto &catalog : {pt, en}) {
+                require(catalog.getDynamicObject() != nullptr, "Missing translation catalog");
+                for (const auto &entry : catalog.getDynamicObject()->getProperties()) {
+                    for (const auto &value : {entry.name.toString(), entry.value.toString()})
+                        require(localization::translate(value.toRawUTF8()) == localization::translate(value),
+                                "Narrow UTF8 catalog text differs from decoded Unicode");
+                }
+            }
+        }
+    });
     test("REC can run with no armed tracks and missing media or effects remain nonblocking", [&] {
         Session session; session.inspection=true; session.audio.prepareOffline(48000);
         session.restoreSnapshot(ProjectCodec::encode(floatingControlTests::fixture())); session.audio.setOffline(true);
@@ -170,6 +253,12 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         centered(24);
         state.playing = true; centered(60);
         state.subPlay.playing = true; centered(90);
+        TimelinePlaybackFollowPolicy follow;
+        follow.pause(state);
+        require(timelineZoomPosition(state, follow.isPaused(state)) == 24, "Manual browsing did not anchor zoom at edit cursor");
+        state.editPosition = 42;
+        require(timelineZoomPosition(state, follow.isPaused(state)) == 42, "Paused follow ignored the new edit cursor");
+        state.editPosition = 24;
         state.playing = false; centered(90);
         state.subPlay.playing = false; centered(24);
         require(timelineCenteredZoomOffset(1, 100, 20000, 800) == 0,
@@ -178,6 +267,23 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
                 "Zoom near the end scrolled beyond the document");
         require(timelineCenteredZoomOffset(2, 100, 400, 800) == 0,
                 "Zoom created a scroll offset for content narrower than its viewport");
+    });
+
+    test("Zoom from a far-out view moves scale and cursor focus together instead of panning at the old scale", [] {
+        constexpr double position=800,viewport=1000,initialScale=1,origin=0,finalScale=1.3;
+        const double anchor=position*initialScale-origin;
+        double previousScale=initialScale,previousOffset=origin;
+        for(int step=0;step<=100;++step) {
+            const double progress=step/100.,eased=1-std::pow(1-progress,3.);
+            const double scale=std::exp(std::log(initialScale)+(std::log(finalScale)-std::log(initialScale))*eased);
+            const double focus=anchor+(viewport/2-anchor)*eased;
+            const double offset=timelineAnchoredZoomOffset(position,scale,2000*scale,viewport,focus);
+            require(std::abs(position*scale-offset-focus)<.000001,"Cursor focus detached from the zoom transform");
+            if(step==0)require(offset==origin,"First wheel frame panned before increasing the zoom");
+            require(scale>=previousScale && offset>=previousOffset,"Zoom reversed toward the project beginning");
+            previousScale=scale;previousOffset=offset;
+        }
+        require(std::abs(position*finalScale-previousOffset-viewport/2)<.000001,"Zoom did not finish centered on its cursor");
     });
 
     test("Master FX chooser keeps audio effects but hides instruments and CatStem, including external instruments", [&] {

@@ -1,4 +1,5 @@
 #pragma once
+#include "Localization.h"
 #include "Session.h"
 #include "ModalSheet.h"
 #include "PortablePackage.h"
@@ -10,8 +11,8 @@ class PortableExportPanel final : public Component, private Timer {
     };
     Session &session;
     std::function<void(std::function<void()>)> save;
-    TextButton close{"Fechar"}, saveButton{"Salvar"}, exportButton{"Exportar para CatLive iPadOS"},
-        reveal{"Mostrar na pasta"};
+    TextButton close{localization::translate("Fechar")}, saveButton{localization::translate("Salvar")}, exportButton{"Share"},
+        reveal{localization::translate("Mostrar na pasta")};
     std::unique_ptr<FileChooser> chooser;
     std::shared_ptr<Work> work;
     String error, excluded;
@@ -20,7 +21,7 @@ class PortableExportPanel final : public Component, private Timer {
     void start(const File &destination, const File &document, const ID &identity) {
         if (session.document != document || session.project().id != identity || requiresSave() ||
             session.busy || session.audio.isRecording()) {
-            error = String::fromUTF8("Salve o projeto antes de exportar.");
+            error = localization::translate("Save the project before sharing.");
             repaint();
             return;
         }
@@ -34,21 +35,20 @@ class PortableExportPanel final : public Component, private Timer {
         }
         work = std::make_shared<Work>();
         error = {};
-        exported = {};
+        exported = File{};
         ModalSheet::blockDismiss(*this, true);
-        close.setButtonText("Cancelar");
+        close.setButtonText(localization::translate("Cancelar"));
         timerCallback();
         const auto safe = SafePointer<PortableExportPanel>(this);
         auto state = work;
         Thread::launch([safe, state, committed, document, destination] {
             String failure;
             try {
-                portablePackage::exportPackage(committed, document.getParentDirectory(), destination,
-                                               [state](double value) {
-                                                   if (state->cancel)
-                                                       throw std::runtime_error("Export canceled.");
-                                                   state->progress = value;
-                                               });
+                auto progress = [state](double value) {
+                    if (state->cancel) throw std::runtime_error("Sharing canceled.");
+                    state->progress = value;
+                };
+                portablePackage::exportPackage(committed, document.getParentDirectory(), destination, progress);
             } catch (const std::exception &e) {
                 failure = String::fromUTF8(e.what());
             }
@@ -56,11 +56,11 @@ class PortableExportPanel final : public Component, private Timer {
                 if (!safe)
                     return;
                 safe->work.reset();
-                safe->error = failure;
+                safe->error = localization::translate(failure);
                 if (failure.isEmpty())
                     safe->exported = destination;
                 ModalSheet::blockDismiss(*safe, false);
-                safe->close.setButtonText("Fechar");
+                safe->close.setButtonText(localization::translate("Fechar"));
                 safe->timerCallback();
             });
         });
@@ -95,23 +95,22 @@ class PortableExportPanel final : public Component, private Timer {
                 });
         };
         reveal.onClick = [this] { exported.revealToUser(); };
-        exportButton.onClick = [this, owner] {
-            if (requiresSave() || work || session.busy || session.audio.isRecording())
-                return;
-            const auto document = session.document;
-            const auto identity = session.project().id;
-            chooser = std::make_unique<FileChooser>(
-                "Exportar para CatLive iPadOS", document.withFileExtension("ziplive"), "*.ziplive", true);
-            chooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles |
-                                     FileBrowserComponent::warnAboutOverwriting,
-                                 [safe = owner, document, identity](const FileChooser &fc) {
-                                     if (safe && fc.getResult() != File{})
-                                         safe->start(fc.getResult().withFileExtension("ziplive"),
-                                                     document, identity);
-                                 });
+        exportButton.onClick = [this] {
+            if (requiresSave() || work || session.busy || session.audio.isRecording()) return;
+            chooseDestination();
         };
         startTimerHz(10);
         timerCallback();
+    }
+    void chooseDestination() {
+        const auto document = session.document; const auto identity = session.project().id;
+        const String ext = "ziplive";
+        const auto destination = document.withFileExtension(ext);
+        chooser = std::make_unique<FileChooser>("Share", destination, "*." + ext, true);
+        chooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
+            [owner = SafePointer<PortableExportPanel>(this), document, identity, ext](const FileChooser &fc) {
+                if (owner && fc.getResult() != File{}) owner->start(fc.getResult().withFileExtension(ext), document, identity);
+            });
     }
     ~PortableExportPanel() override {
         if (work)
@@ -121,17 +120,15 @@ class PortableExportPanel final : public Component, private Timer {
         g.fillAll(theme::panel);
         g.setColour(Colours::white);
         g.setFont(theme::font(18, true));
-        g.drawText("Exportar para CatLive iPadOS", 24, 22, getWidth() - 48, 24, Justification::centredLeft);
+        g.drawText("Share", 24, 22, getWidth() - 48, 24, Justification::centredLeft);
         g.setColour(theme::secondary);
         g.setFont(theme::font(13));
         g.drawFittedText(
-            String::fromUTF8(
-                "Crie um pacote .ziplive com este projeto, suas mídias e instrumentos nativos."),
+            localization::translate("Create a .ziplive package with this project, its media and native instruments."),
             24, 62, getWidth() - 48, 42, Justification::topLeft, 2, 1);
         g.setColour(theme::yellow);
         g.drawFittedText(
-            String::fromUTF8(
-                "Plugins VST3 externos não serão incluídos. Os efeitos nativos serão preservados."),
+            localization::translate("External VST3 plug-ins will not be included. Native effects will be preserved."),
             24, 116, getWidth() - 48, 42, Justification::topLeft, 2, 1);
         g.setColour(theme::secondary);
         g.setFont(theme::font(11));
@@ -141,17 +138,13 @@ class PortableExportPanel final : public Component, private Timer {
                                        : theme::green);
         const auto status =
             error.isNotEmpty() ? error
-            : work ? String::fromUTF8("Exportando projeto… ") + String((int)(work->progress * 100)) + "%"
-            : exported.existsAsFile() ? "Projeto exportado com sucesso."
-            : requiresSave()          ? "Salve o projeto antes de exportar."
-                                      : String{};
+            : work ? localization::translate("Preparing project package…")
+            : exported.existsAsFile() ? localization::translate("Project package ready.")
+            : requiresSave() ? localization::translate("Save the project before sharing.")
+            : String{};
         g.drawFittedText(status, 24, 250, getWidth() - 48, 42, Justification::topLeft, 3, 1);
         if (work) {
-            const juce::Rectangle<float> bar(24.f, 298.f, (float)getWidth() - 48.f, 5.f);
-            g.setColour(theme::secondary.withAlpha(.2f));
-            g.fillRoundedRectangle(bar, 2.5f);
-            g.setColour(theme::green);
-            g.fillRoundedRectangle(bar.withWidth(bar.getWidth() * (float)jlimit(0., 1., work->progress.load())), 2.5f);
+            theme::progressBar(g, {24.f, 298.f, (float)getWidth() - 48.f, 6.f}, work->progress.load());
         }
     }
     void resized() override {

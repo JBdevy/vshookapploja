@@ -1,4 +1,6 @@
 #include "VST3Host.h"
+#include "VST3ParameterSlots.h"
+#include "../../Core/Audio/VST3ParameterRestore.hpp"
 #include <windows.h>
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/base/ibstream.h"
@@ -10,6 +12,7 @@
 #include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstattributes.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
+#include "../../Core/Audio/VST3GainReduction.hpp"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "pluginterfaces/vst/vstspeaker.h"
@@ -115,7 +118,9 @@ public:
         const auto size=std::min<int64>(n,available);
         if(size)memcpy(data,bytes.data()+position,size);
         position+=size;if(count)*count=int32(size);
-        return size==n?kResultOk:kResultFalse;
+        // Match VST3 MemoryStream: valid short/EOF reads succeed and report
+        // their actual byte count; preset readers may probe past the last chunk.
+        return kResultOk;
     }
     tresult PLUGIN_API write(void *data,int32 n,int32 *count) override {
         if(count)*count=0;
@@ -203,7 +208,11 @@ std::shared_ptr<Module> loadModule(const std::filesystem::path &path) {
     });
     slot->owner=loaded;slot->loaded=true;return loaded;
 }
-struct Param { ParamID id=0; std::atomic<double> pending{0}; std::atomic<bool> dirty{false}; };
+struct Param {
+    ParamID id=0;
+    bool resyncFromController=false;
+    std::atomic<double> pending{0}; std::atomic<bool> dirty{false};
+};
 struct ParameterPoint {int32 offset=0,next=-1;double value=0;};
 struct ParameterPointPool {
     std::unique_ptr<ParameterPoint[]> points;
@@ -235,19 +244,23 @@ public:
 class Changes final: public IParameterChanges {
 public:
     std::unique_ptr<Queue[]> queues;ParameterPointPool pool;int32 capacity=0,count=0;FIXED_REF
-    void prepare(int parameterCount){
-        capacity=parameterCount+2048;queues=std::make_unique<Queue[]>(capacity);
+    ParameterSlots slots;
+    void prepare(int parameterCount,std::vector<std::pair<std::uint32_t,int>> identifiers){
+        slots.prepare(std::move(identifiers));
+        capacity=slots.capacity();queues=std::make_unique<Queue[]>(capacity);
         pool.capacity=parameterCount+18432;pool.points=std::make_unique<ParameterPoint[]>(pool.capacity);
         for(int i=0;i<capacity;++i)queues[i].pool=&pool;
     }
-    void clear(){count=0;pool.used=0;}
+    void clear(){count=0;pool.used=0;slots.beginBlock();}
     tresult PLUGIN_API queryInterface(const TUID id,void **out) override {*out=nullptr;if(iidIs<FUnknown>(id)||iidIs<IParameterChanges>(id)){*out=this;return kResultOk;}return kNoInterface;}
     int32 PLUGIN_API getParameterCount() override {return count;}
     IParamValueQueue *PLUGIN_API getParameterData(int32 index) override {return index>=0&&index<count?&queues[index]:nullptr;}
     IParamValueQueue *PLUGIN_API addParameterData(const ParamID &id,int32 &index) override {
-        for(int i=0;i<count;++i)if(queues[i].id==id){index=i;return &queues[i];}
-        if(count==capacity){index=-1;return nullptr;}
-        index=count++;queues[index].id=id;queues[index].clear();return &queues[index];
+        int slot=-1;bool inserted=false;
+        if(!slots.queue(id,slot,inserted)){index=-1;return nullptr;}
+        index=slot;
+        if(inserted){count=slots.count();queues[index].id=id;queues[index].clear();}
+        return &queues[index];
     }
 };
 class EventList final: public IEventList {
@@ -272,6 +285,7 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
     int paramCount=0, mainIn=-1, mainOut=-1, maximumFrames=4096;
     double rate=48000;
     Changes changes;
+    catlive::audio::VST3GainReduction reduction;
     EventList events;
     ParamID midiParameters[16][130];
     bool heldNotes[16][128]{};
@@ -279,6 +293,9 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
     std::vector<std::vector<float>> storage;
     std::vector<std::vector<float *>> pointers;
     std::atomic<bool> edited{false},parametersChanged{false};
+    std::atomic<unsigned> visibleEditors{0};
+    bool renderedSinceEditorIdle = false, editorIdle = false; // Audio-thread owned.
+    std::vector<float> idleLeft, idleRight;
     std::atomic<unsigned> latencySamples{0};
     std::atomic<int32> restartFlags{0};
     FIXED_REF
@@ -296,7 +313,8 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
     tresult PLUGIN_API beginEdit(ParamID) override {return kResultOk;}
     tresult PLUGIN_API performEdit(ParamID id,ParamValue value) override {
         if(!std::isfinite(value))return kInvalidArgument;
-        for(int i=0;i<paramCount;++i)if(params[i].id==id){
+        const auto i=changes.slots.parameterIndex(id);
+        if(i>=0){
             params[i].pending=std::clamp(value,0.,1.);
             params[i].dirty.store(true,std::memory_order_release);
             parametersChanged.store(true,std::memory_order_release);
@@ -316,6 +334,7 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
         : maximumFrames(maxFrames),rate(sampleRate) {try {
         if(!std::isfinite(rate)||rate<8000||rate>384000||maxFrames<1||maxFrames>32768)
             throw std::runtime_error("Invalid VST3 audio format.");
+        idleLeft.resize(maxFrames); idleRight.resize(maxFrames);
         instrument=description.category.find("Instrument")!=std::string::npos;
         module=loadModule(description.path);
         FUID uid;
@@ -339,6 +358,13 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
             source=query<IConnectionPoint>(component);destination=query<IConnectionPoint>(controller);
             if(source&&destination){source->connect(destination);destination->connect(source);}
         }
+        // Complete the controller's initial synchronization before applying a
+        // saved preset. Roland processors use this handshake to connect their
+        // parameter engine; restoring first dereferences an uninitialized peer.
+        if(controller && !state.component.empty()){
+            Stream initial;
+            if(component->getState(&initial)==kResultOk){initial.position=0;controller->setComponentState(&initial);}
+        }
         if(!state.component.empty()){
             Stream stream(state.component);
             if(component->setState(&stream)!=kResultOk)throw std::runtime_error("The VST3 processor rejected its saved state.");
@@ -353,23 +379,35 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
         }
         for(int b=0;b<component->getBusCount(kEvent,kInput);++b)component->activateBus(kEvent,kInput,b,b==0);
         for(auto &channel:midiParameters)std::fill(std::begin(channel),std::end(channel),kNoParamId);
+        std::unordered_set<ParamID> midiParameterIDs;
         if(auto mapping=query<IMidiMapping>(controller)){
-            for(int c=0;c<16;++c)for(int cc=0;cc<130;++cc)mapping->getMidiControllerAssignment(0,c,cc,midiParameters[c][cc]);
+            for(int c=0;c<16;++c)for(int cc=0;cc<130;++cc){
+                ParamID id=kNoParamId;
+                if(mapping->getMidiControllerAssignment(0,c,cc,id)==kResultOk && id!=kNoParamId){
+                    midiParameters[c][cc]=id;midiParameterIDs.insert(id);
+                }
+            }
             mapping->release();
         }
         const int inCount=component->getBusCount(kAudio,kInput),outCount=component->getBusCount(kAudio,kOutput);
         if(inCount<0||inCount>64||outCount<1||outCount>64)throw std::runtime_error("Unsupported VST3 audio bus layout.");
-        std::vector<SpeakerArrangement> in(inCount),out(outCount);
+        std::vector<SpeakerArrangement> in(inCount),out(outCount),nativeIn(inCount),nativeOut(outCount);
         for(int dir=0;dir<2;++dir){
             auto &arr=dir?out:in;
             for(int i=0;i<int(arr.size());++i){
                 BusInfo info{};component->getBusInfo(kAudio,dir?kOutput:kInput,i,info);
                 processor->getBusArrangement(dir?kOutput:kInput,i,arr[i]);
+                (dir?nativeOut:nativeIn)[i]=arr[i];
                 if(info.busType==kMain&&(dir?mainOut:mainIn)==-1){(dir?mainOut:mainIn)=i;arr[i]=SpeakerArr::kStereo;}
             }
         }
-        if(mainOut<0||processor->setBusArrangements(in.data(),inCount,out.data(),outCount)!=kResultOk)
-            throw std::runtime_error("This VST3 processor does not support a stereo output.");
+        if(mainOut<0)throw std::runtime_error("This VST3 processor has no main audio output.");
+        if(processor->setBusArrangements(in.data(),inCount,out.data(),outCount)!=kResultOk){
+            const auto supported=[](SpeakerArrangement bus){const auto channels=SpeakerArr::getChannelCount(bus);return channels==1||channels==2;};
+            if(!supported(nativeOut[mainOut])||(mainIn>=0&&!supported(nativeIn[mainIn]))||
+               processor->setBusArrangements(nativeIn.data(),inCount,nativeOut.data(),outCount)!=kResultOk)
+                throw std::runtime_error("This VST3 processor requires an unsupported channel layout (CatLive supports mono and stereo).");
+        }
         inputs.resize(inCount);outputs.resize(outCount);pointers.resize(inCount+outCount);
         for(int dir=0;dir<2;++dir){
             auto &buses=dir?outputs:inputs;
@@ -383,14 +421,25 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
             }
         }
         if(controller){
+            if (!instrument) reduction.configure(controller);
             paramCount=std::clamp(controller->getParameterCount(),0,65536);
-            params=std::make_unique<Param[]>(paramCount);changes.prepare(paramCount);
+            params=std::make_unique<Param[]>(paramCount);
             for(int i=0;i<paramCount;++i){
                 ParameterInfo p{};controller->getParameterInfo(i,p);params[i].id=p.id;
-                params[i].pending=controller->getParamNormalized(p.id);params[i].dirty=true;
+                params[i].pending=controller->getParamNormalized(p.id);
+                params[i].resyncFromController=jaras::restoreControllerParameter(p,true,midiParameterIDs);
+                if(params[i].resyncFromController&&!state.controller.empty()){
+                    params[i].dirty=true;parametersChanged=true;
+                }
             }
-            parametersChanged=paramCount>0;
         }
+        // Include hidden MIDI mappings too: they need queues even when the
+        // controller omits them from its ordinary parameter enumeration.
+        std::vector<std::pair<std::uint32_t,int>> parameterIDs;
+        parameterIDs.reserve(size_t(paramCount)+midiParameterIDs.size());
+        for(int i=0;i<paramCount;++i)parameterIDs.emplace_back(params[i].id,i);
+        for(const auto id:midiParameterIDs)parameterIDs.emplace_back(id,-1);
+        changes.prepare(paramCount,std::move(parameterIDs));
         ProcessSetup setup{kRealtime,kSample32,maxFrames,rate};
         if(processor->setupProcessing(setup)!=kResultOk)throw std::runtime_error("VST3 audio setup failed.");
         if(component->setActive(true)!=kResultOk)throw std::runtime_error("Could not activate this VST3 processor.");active=true;
@@ -417,7 +466,11 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
                 auto destination=input.channelBuffers32[c];
                 const float *original=int(index)==mainIn&&c<2?(c?right:left):nullptr;
                 bool silent=true;
-                if(original){std::copy_n(original,count,destination);for(int f=0;f<count;++f)if(original[f]!=0){silent=false;break;}}
+                if(original){
+                    if(input.numChannels==1){for(int f=0;f<count;++f)destination[f]=.5f*(left[f]+right[f]);}
+                    else std::copy_n(original,count,destination);
+                    for(int f=0;f<count;++f)if(destination[f]!=0){silent=false;break;}
+                }
                 else std::fill_n(destination,count,0.f);
                 if(silent)input.silenceFlags|=uint64(1)<<c;
             }
@@ -458,13 +511,16 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
         }
         ProcessContext context{};
         context.sampleRate=rate;context.projectTimeSamples=int64(std::llround(transport.seconds*rate));
+        context.barPositionMusic=transport.barStartQuarterNotes;
         context.projectTimeMusic=transport.quarterNotes;context.tempo=transport.tempo;
         context.timeSigNumerator=transport.numerator;context.timeSigDenominator=transport.denominator;
-        context.state=ProcessContext::kTempoValid|ProcessContext::kTimeSigValid|ProcessContext::kProjectTimeMusicValid|(transport.playing?ProcessContext::kPlaying:0);
+        context.state=ProcessContext::kBarPositionValid|ProcessContext::kTempoValid|ProcessContext::kTimeSigValid|ProcessContext::kProjectTimeMusicValid|(transport.playing?ProcessContext::kPlaying:0);
         ProcessData data{};data.processMode=kRealtime;data.symbolicSampleSize=kSample32;data.numSamples=count;
         data.numInputs=int(inputs.size());data.numOutputs=int(outputs.size());data.inputs=inputs.data();data.outputs=outputs.data();
         data.inputParameterChanges=&changes;data.inputEvents=&events;data.processContext=&context;
+        if (reduction.supported()) { reduction.begin(); data.outputParameterChanges = &reduction; }
         if(processor->process(data)!=kResultOk)return false;
+        reduction.end();
         auto &output=outputs[mainOut];
         for(int c=0;c<2;++c){
             float *destination=c?right:left;int channel=std::min(c,output.numChannels-1);
@@ -478,7 +534,20 @@ struct Processor::Impl final: IComponentHandler, IComponentHandler2 {
 Processor::Processor(const Description &d,const State &s,double rate,int frames):impl(std::make_unique<Impl>(d,s,rate,frames)){}
 Processor::~Processor()=default;
 bool Processor::process(float *l,float *r,int n,const Transport &t,const MIDIEvent *events,int count)noexcept {
+    impl->renderedSinceEditorIdle=true; impl->editorIdle=false;
     try{return impl->render(l,r,n,t,events,count);}catch(...){return false;}
+}
+bool Processor::processEditorSilence(int frames,const Transport &transport)noexcept {
+    const bool rendered=impl->renderedSinceEditorIdle;impl->renderedSinceEditorIdle=false;
+    if(rendered || !impl->visibleEditors.load(std::memory_order_relaxed) || frames<1 || frames>impl->maximumFrames)return false;
+    std::fill_n(impl->idleLeft.data(),frames,0.f);std::fill_n(impl->idleRight.data(),frames,0.f);
+    MIDIEvent stopNotes[16];
+    for(int channel=0;channel<16;++channel)stopNotes[channel]={0,std::uint8_t(0xb0|channel),123,0};
+    const int count=impl->editorIdle?0:16;impl->editorIdle=true;
+    try{return impl->render(impl->idleLeft.data(),impl->idleRight.data(),frames,transport,stopNotes,count);}catch(...){return false;}
+}
+float Processor::gainReduction() const noexcept {
+    return impl->reduction.supported() ? impl->reduction.read() : -1.f;
 }
 bool Processor::automate(std::uint32_t parameter, double value) noexcept {
     return impl->performEdit(parameter,value)==kResultOk;
@@ -504,7 +573,11 @@ bool Processor::consumeEdited()noexcept {
     const auto flags=impl->restartFlags.exchange(0);
     if(flags&kLatencyChanged)impl->latencySamples=impl->processor->getLatencySamples();
     if(flags&kParamValuesChanged)if(impl->controller)for(int i=0;i<impl->paramCount;++i)
-        impl->performEdit(impl->params[i].id,impl->controller->getParamNormalized(impl->params[i].id));
+        // MIDI proxy and program getters are not the current instrument state.
+        // A controller refresh (including editor teardown) must not turn them
+        // into CC7=0, CC10=0 or a spurious program change.
+        if(impl->params[i].resyncFromController)
+            impl->performEdit(impl->params[i].id,impl->controller->getParamNormalized(impl->params[i].id));
     return impl->edited.exchange(false);
 }
 unsigned Processor::latency()const noexcept{return impl->latencySamples.load();}
@@ -513,7 +586,14 @@ bool Processor::isInstrument()const noexcept{return impl->instrument;}
 struct Editor::Impl final: IPlugFrame {
     IPlugView *view=nullptr;
     std::function<void(int,int)> resizeOwner;
-    int w=0,h=0;bool attached=false,resizing=false;
+    int w=0,h=0;bool attached=false,resizing=false,visible=false;
+    std::atomic<unsigned> *visibleEditors=nullptr;
+    void setVisible(bool value){
+        if(visible==value||!visibleEditors)return;
+        visible=value;
+        if(value)visibleEditors->fetch_add(1,std::memory_order_relaxed);
+        else visibleEditors->fetch_sub(1,std::memory_order_relaxed);
+    }
     FIXED_REF
     tresult PLUGIN_API queryInterface(const TUID id,void **out)override{
         if(!out)return kInvalidArgument;*out=nullptr;
@@ -523,12 +603,13 @@ struct Editor::Impl final: IPlugFrame {
         if(request!=view||!rect||rect->getWidth()<=0||rect->getHeight()<=0||resizing)return kResultFalse;
         resizing=true;w=rect->getWidth();h=rect->getHeight();resizeOwner(w,h);view->onSize(rect);resizing=false;return kResultOk;
     }
-    ~Impl(){if(view){if(attached)view->removed();view->setFrame(nullptr);view->release();}}
+    ~Impl(){setVisible(false);if(view){if(attached)view->removed();view->setFrame(nullptr);view->release();}}
 };
 Editor::Editor(std::unique_ptr<Impl> value):impl(std::move(value)){}
 Editor::~Editor()=default;
 int Editor::width()const noexcept{return impl->w;}
 int Editor::height()const noexcept{return impl->h;}
+void Editor::setVisible(bool value){impl->setVisible(value);}
 void Editor::resize(int w,int h){
     if(w<=0||h<=0||impl->resizing)return;
     ViewRect bounds{0,0,w,h};impl->view->checkSizeConstraint(&bounds);
@@ -550,8 +631,10 @@ std::unique_ptr<Editor> Processor::openEditor(void *parent,std::function<void(in
     editor->attached=true;
     if(editor->view->getSize(&rect)==kResultOk&&rect.getWidth()>0&&rect.getHeight()>0){editor->w=rect.getWidth();editor->h=rect.getHeight();}
     editor->resizeOwner(editor->w,editor->h);
+    editor->visibleEditors=&impl->visibleEditors;editor->setVisible(true);
     return std::unique_ptr<Editor>(new Editor(std::move(editor)));
 }
+std::shared_ptr<void> retainModule(const std::filesystem::path &path){ return loadModule(path); }
 std::vector<Description> scan(const std::filesystem::path &path){
     auto module=loadModule(path);
     auto *f2=query<IPluginFactory2>(module->factory);auto *f3=query<IPluginFactory3>(module->factory);

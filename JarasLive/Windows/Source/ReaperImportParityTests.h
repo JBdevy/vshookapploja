@@ -1,6 +1,7 @@
 #pragma once
 #include "ProjectMigration.h"
 #include "Automation.h"
+#include "../../Core/Timecode/TimecodePlayback.hpp"
 
 namespace catlive::reaperImportParityTests {
 inline void require(bool condition, const String &message) {
@@ -47,11 +48,46 @@ inline var restored(const var &plugin, const std::set<int> &indices) {
     return result;
 }
 template <typename Test> void registerTests(const File &directory, Test &test) {
+    test("REAPER ignored items identify each source and reason while retaining valid media", [&] {
+        const auto result = read(directory, "<TRACK\nNAME Keys\n"
+            "<ITEM\nPOSITION nan\nLENGTH 2\n<SOURCE WAVE\nFILE First.wav\n>\n>\n"
+            "<ITEM\nPOSITION 4\nLENGTH 2\nPLAYRATE invalid\n<SOURCE SECTION\n<SOURCE WAVE\nFILE Second.wav\n>\n>\n>\n"
+            "<ITEM\nPOSITION 8\nLENGTH 2\n<SOURCE UNKNOWN\nFILE Third.xyz\n>\n>\n"
+            "<ITEM\nPOSITION 12\nLENGTH 2\n<SOURCE WAVE\nFILE Valid.wav\n>\n>\n>");
+        require(result.project.songs.front().tracks.front().clips.size() == 1, "A bad item blocked valid media");
+        for (const auto *file : {"First.wav", "Second.wav", "Third.xyz"}) {
+            const auto found = std::find_if(result.warnings.begin(), result.warnings.end(), [&](const auto &notice) {
+                return notice.contains(file) && notice.contains("Keys") && notice.contains("\n");
+            });
+            require(found != result.warnings.end(), "An ignored file lost its identity or reason");
+        }
+    });
+    test("REAPER take rate preserves full double precision through project save", [&] {
+        const auto result=read(directory,"<TRACK\nNAME Precision\n<ITEM\nPOSITION 0.667123456789\nLENGTH 184.66123456789\nSOFFS 0.123456789012345\nPLAYRATE 1.1234567890123456 1 0\n<SOURCE WAVE\nFILE missing-reference.wav\n>\n>\n>");
+        const double expected=1.1234567890123456;
+        require(result.project.songs.front().tracks.front().clips.front().playbackRate==expected,"REAPER rate was rounded while importing");
+        const auto saved=directory.getNonexistentChildFile("rate-precision-project",{}).getChildFile("rate-precision.jl");
+        saved.getParentDirectory().createDirectory();
+        struct Cleanup {File file;~Cleanup(){file.getParentDirectory().deleteRecursively();}} cleanup{saved};
+        ProjectCodec::write(saved,ProjectCodec::encode(result.project));
+        const auto reopened=ProjectCodec::decode(ProjectCodec::read(saved));
+        const auto& clip=reopened.songs.front().tracks.front().clips.front();
+        require(clip.playbackRate==expected && clip.duration==184.66123456789,"Project save changed imported rate or item duration");
+    });
     test("REAPER region-free items stay region-free", [&] {
         const auto result = read(directory, "<TRACK\nNAME Piano\n<ITEM\nPOSITION 3\nLENGTH 10\nNAME Piano.wav\n<SOURCE WAVE\nFILE missing.wav\n>\n>\n>");
         const auto &song = result.project.songs.front();
         require(song.parts.empty() && (!song.markers || song.markers->empty()), "Importer invented regions or markers");
         require(song.duration == 13 && song.tracks.front().clips.size() == 1, "Region-free item timing changed");
+        require(result.project.importedTimeline == true, "Importer lost the imported timing flag");
+        auto project = result.project;
+        project.songs.front().bpm = 140;
+        for (int pass = 0; pass < 3; ++pass) {
+            project = ProjectCodec::decode(ProjectCodec::encode(project, object()));
+            require(project.importedTimeline == true, "Saving/reopening lost imported timing protection");
+            require(project.songs.front().bpm == 140 && project.songs.front().tracks.front().clips.front().playbackRate == 1,
+                    "Saving/reopening changed the imported BPM or item rate");
+        }
     });
     test("REAPER special overlaps recover compatible items and independent projection layers", [&] {
         const auto item = [](double start, double duration, const String &content = {}) {
@@ -70,12 +106,19 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         const auto result = read(directory, body);
         require(result.project.songs[0].tracks.size() == 5, "Overlap discarded a track or project");
         for (const auto &track : result.project.songs[0].tracks) {
-            if (track.name == "Audio") { require(track.clips.size() == 2, "Audio overlaps must remain supported"); continue; }
+            if (track.name == "Audio") { require(track.clips.empty(), "Empty audio placeholders must be ignored"); continue; }
             const bool media = std::any_of(track.clips.begin(), track.clips.end(), [](const auto &clip) { return clip.audioFile.has_value(); });
             if (media) {
                 require(track.clips.size() == 3, "Text/media layers were merged or conflicting media retained");
                 require(track.clips[0].startTime == 0 && track.clips[1].startTime == 0 && track.clips[2].startTime == 4,
                         "Projection timing differs from Mac");
+            } else if(jaras::isTeleprompterRole(track.role)) {
+                require(track.clips.size()==7, "Overlapping lyrics must all survive import");
+                require(track.clips[0].text=="First" && track.clips[1].text=="Duplicate" && track.clips[2].text=="Conflicting", "Lyrics source order/timing changed");
+                require(ItemLanes(track).count==2, "Simultaneous lyrics must occupy separate grid lanes");
+                auto copy=track;copy.clips[1].startTime=1;
+                clipEditing::requireSpace(copy,copy.clips[1],1,2);
+                require(clipEditing::constrainedStart(copy,copy.clips[1],2)==2, "Lyrics drag still rejects overlap");
             } else {
                 require(track.clips.size() == 4, "Wrong special items were recovered");
                 require(track.clips[0].startTime == 0 && track.clips[0].duration == 4 && track.clips[0].text == "First" &&
@@ -96,7 +139,7 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
             "<TRACK\n<ITEM\nPOSITION 10\nLENGTH 2\nLOOP 1\nSOFFS 0.25 0.5\nPLAYRATE 2 1 0\n"
             "<SOURCE MIDI\nHASDATA 1 960 QN\nE 0 90 3c 7f\nE 960 80 3c 00\nE 960 b0 7b 00\n>\n>\n>\n");
         const auto &notes = loop.project.songs[0].tracks[0].clips[0].midi->notes;
-        const double starts[] = {0, .75, 1.75, 2.75, 3.75}, lengths[] = {.25, .5, .5, .5, .25};
+        const double starts[] = {0, 1.5, 3.5, 5.5, 7.5}, lengths[] = {.5, 1, 1, 1, .5};
         require(notes.size() == 5, "Trimmed MIDI loop repetition count differs from Mac");
         for(size_t i=0;i<notes.size();++i)
             require(std::abs(notes[i].start-starts[i])<1e-8 && std::abs(notes[i].length-lengths[i])<1e-8,
@@ -182,7 +225,7 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
              StringArray{"", ":", "0:", "::", "0:invalid", "0:1:2", "-1", "invalid", "0:4294967296"}) {
             const auto result =
                 read(directory,
-                     "<TRACK\n<FXCHAIN\n" + effect(identity) + ">\n<ITEM\nPOSITION 0\nLENGTH 2\n>\n>\n",
+                     "<TRACK\n<FXCHAIN\n" + effect(identity) + ">\n<ITEM\nPOSITION 0\nLENGTH 2\n<SOURCE WAVE\nFILE neighbor.wav\n>\n>\n>\n",
                      restored);
             const auto &track = result.project.songs.front().tracks.front();
             require(track.clips.size() == 1 && !track.fxJSON && !result.warnings.isEmpty(),
@@ -224,6 +267,21 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         bezier.prepare(settings(result.project.songs.front().tracks[1].automationJSON));
         require(std::abs(bezier.curves[0].value(2) - .5) < 2e-5, "Symmetric Bezier midpoint changed");
     });
+    test("REAPER MIDI retains exact imported rate without changing audible note times", [&] {
+        const double rate=1.1234567890123456;
+        const auto result=read(directory,"<TRACK\nNAME MIDI\n<ITEM\nPOSITION 2\nLENGTH 4\nPLAYRATE 1.1234567890123456 1 0\n<SOURCE MIDI\nHASDATA 1 960 QN\nE 960 90 3c 64\nE 960 80 3c 00\n>\n>\n>\n");
+        const auto& clip=result.project.songs.front().tracks.front().clips.front();
+        require(clip.playbackRate==rate && clip.midi && clip.midi->notes.size()==1,"Imported MIDI lost its editable rate");
+        const auto& note=clip.midi->notes.front();
+        require(std::abs(note.start*.5/rate-.5/rate)<1e-12 && std::abs(note.length*.5/rate-.5/rate)<1e-12,"Imported MIDI changed audible note timing");
+    });
+    test("REAPER timecode retains rate with its source offset and configured FPS", [&] {
+        const auto result=read(directory,"<TRACK\nNAME TIMECODE\n<ITEM\nPOSITION 5\nLENGTH 7\nSOFFS 2\nPLAYRATE 1.159123456789 1 0\n<SOURCE LTC\nSTARTTIME 3600\nFRAMERATE 25 0\nSEND 2\nUSERDATA 0 0 0 0\n>\n>\n>\n");
+        const auto& song=result.project.songs.front();const auto& track=song.tracks.front();const auto& clip=track.clips.front();
+        require(clip.playbackRate==1.159123456789 && clip.timecode && clip.timecode->frameRate==25 && clip.timecode->offset==3602,"Imported timecode lost rate, offset or FPS");
+        const jaras::TimecodeProgram program(song,track);
+        require(std::abs(program.at(6)->time(6)-(3602+clip.playbackRate))<1e-10,"Imported timecode counter did not follow its take rate");
+    });
     test("REAPER pooled MIDI accounts for SysEx time, take rate, source offsets and muted notes", [&] {
         const auto result =
             read(directory,
@@ -237,14 +295,27 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
         require(clips[0].midi->notes.size() == 1 && clips[1].midi->notes.size() == 1,
                 "Muted notes were imported or notes lost");
         const auto &a = clips[0].midi->notes[0], &b = clips[1].midi->notes[0];
-        require(a.start == .5 && a.length == 1 && b.start == .25 && b.length == .5 &&
-                    clips[1].playbackRate == 1,
+        require(a.start == .5 && a.length == 1 && b.start == .5 && b.length == 1 &&
+                    clips[1].playbackRate == 2,
                 "MIDI event clock or rate was applied incorrectly");
         const auto env = list(get(settings(clips[1].automationJSON), "envelopes"));
-        require(num(list(get(env[0], "points"))[1], "time") == 2,
-                "MIDI take envelope clock was not flattened");
+        require(num(list(get(env[0], "points"))[1], "time") == 4,
+                "MIDI take envelope must retain its editable source-rate clock");
         require(result.warnings.joinIntoString(" ").contains("SysEx"),
                 "Unsupported MIDI content must be reported");
+    });
+    test("REAPER ordinary video preserves source sections and projection routing", [&] {
+        const auto result=read(directory,
+            "<TRACK\nNAME \"Teleprompt 1\"\n<ITEM\nPOSITION 0\nLENGTH 30\n<SOURCE VIDEO\nFILE lyrics.mov\n>\n>\n>\n"
+            "<TRACK\nNAME Opening\n<ITEM\nPOSITION 10\nLENGTH 3\nSOFFS 1\nPLAYRATE 2 1 0\nVOLPAN 0.5 -0.25 1\nLOOP 1\n"
+            "<SOURCE SECTION\nSTARTPOS 5\nLENGTH 8\n<SOURCE VIDEO\nFILE intro.mp4\n>\n>\n>\n>\n"
+            "<TRACK\nNAME Background\n<ITEM\nPOSITION 10\nLENGTH 20\n<SOURCE WAVE\nFILE backdrop.MOV\n>\n>\n>\n");
+        const auto &song=result.project.songs[0];const auto &clip=song.tracks[1].clips[0];
+        require(clip.audioFile && clip.audioFile->path=="Videos/intro.mp4" && clip.startTime==10 && clip.duration==3 && clip.sourceOffset==6 && clip.playbackRate==2 && clip.loopStart==5 && clip.loopLength==8 && clip.gain==.5 && clip.pan==-.25, "Video timing, trim or mixer state changed");
+        require(firstProjectionItem(song,10,"video")==&clip, "Top ordinary video is not selected");
+        require(firstProjectionItem(song,13,"video")==&song.tracks[2].clips[0], "Lower video does not take over at the cut");
+        require(firstProjectionItem(song,0,"video")==nullptr, "Teleprompter media leaked into video window");
+        jaras::validate(result.project);
     });
     test("REAPER partial recovery retains supported audio and clips regions at timeline zero", [&] {
         const auto result = read(
@@ -254,10 +325,8 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
                        "<ITEM\nPOSITION 0\nLENGTH 2\n<SOURCE VIDEO\nFILE source.mp4\n>\n>\n"
                        "<ITEM\nPOSITION 2\nLENGTH 3\n<SOURCE WAVE\nFILE offline.wav\n>\n>\n>\n");
         const auto &song = result.project.songs.front();
-        require(song.tracks[0].clips.size() == 2 && !song.tracks[0].clips[0].audioFile &&
-                    song.tracks[0].clips[0].name.rfind("[VIDEO]", 0) == 0 &&
-                    song.tracks[0].clips[1].audioFile,
-                "Unsupported source recovery differs from Mac");
+        require(song.tracks[0].clips.size() == 2 && song.tracks[0].clips[0].audioFile && song.tracks[0].clips[0].audioFile->path=="Videos/source.mp4",
+                "Video on an ordinary track was discarded");
         require(song.parts.front().startTime == 0 && song.parts.front().endTime == 10 &&
                     !result.warnings.isEmpty(),
                 "Negative region boundary or partial recovery failed");

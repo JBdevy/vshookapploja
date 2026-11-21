@@ -1,5 +1,5 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "1.14"
+  #define AppVersion "1.32"
 #endif
 #ifndef PackageDirectory
   #error PackageDirectory must point to the tested CatLive package.
@@ -34,6 +34,10 @@
 #endif
 #if !FileExists(PackageDirectory + "\StemSeparationRuntime\offline_openvino.py") || !FileExists(PackageDirectory + "\StemSeparationRuntime\htdemucs6-offline.xml") || !FileExists(PackageDirectory + "\StemSeparationRuntime\htdemucs6-offline.bin") || !FileExists(PackageDirectory + "\StemSeparationRuntime\htdemucs6-offline.json")
   #error The verified full-context CatStem offline inference graph is required.
+#endif
+
+#if !FileExists(PackageDirectory + "\StemSeparationRuntime\python\vcomp140.dll") || !FileExists(PackageDirectory + "\StemSeparationRuntime\python\msvcp140.dll") || !FileExists(PackageDirectory + "\StemSeparationRuntime\python\vcruntime140.dll") || !FileExists(PackageDirectory + "\StemSeparationRuntime\python\vcruntime140_1.dll")
+  #error The app-local x64 Microsoft CRT and OpenMP runtime DLLs are required for audio separation.
 #endif
 
 [Setup]

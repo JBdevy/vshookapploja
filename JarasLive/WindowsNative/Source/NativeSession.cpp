@@ -35,7 +35,7 @@ struct MemoryEstimate {
     template<class... T> void fields(const T&... values) noexcept { (dynamic(values), ...); }
     void dynamic(const jaras::AudioFile& v) noexcept { fields(v.path, v.sha256); }
     void dynamic(const jaras::TimecodeSettings& v) noexcept { dynamic(v.mode); }
-    void dynamic(const jaras::TrackRouting& v) noexcept { fields(v.receives, v.transmitters); }
+    void dynamic(const jaras::TrackRouting& v) noexcept { fields(v.receives, v.transmitters, v.mainReceiveSlot); }
     void dynamic(const jaras::MIDINote& v) noexcept { dynamic(v.id); }
     void dynamic(const jaras::MIDIItem& v) noexcept { fields(v.notes, v.mode); }
     void dynamic(const jaras::AudioClip& v) noexcept {
@@ -301,6 +301,7 @@ json NativeSession::state() const {
     const auto& t = transport();
     return {{"revision", revision_}, {"dirty", dirty_}, {"path", path_.u8string()},
         {"timelineMovementLocked", project().timelineMovementLocked.value_or(false)},
+        {"timelineLockOptions", project().configuredTimelineLocks()},
         {"canUndo", !past_.empty()}, {"canRedo", !future_.empty()},
         {"transport", {{"playing", t.playing}, {"paused", t.paused},
             {"position", t.position}, {"editPosition", t.editPosition},

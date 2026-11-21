@@ -1,8 +1,13 @@
+#include "../../Core/Audio/SmoothBiquad.hpp"
+#include "../../Core/Audio/CreativeEffects.hpp"
 #include "NativeFX.h"
+#include <cassert>
 #include "Automation.h"
 #include "CatDynamicsAssets.h"
 #include "Include/CatDynamicsDSP.hpp"
-#include "../ThirdParty/Signalsmith/signalsmith-stretch.h"
+#include "SharedClipAudio.h"
+#include "FXPresets.h"
+#include "DrummerPadAssets.h"
 namespace catlive {
 namespace {
 catlive::dsp::TriggerParameters readTriggerParameters(const var &settings) {
@@ -23,11 +28,20 @@ catlive::dsp::GateParameters readGateParameters(const var &settings) {
 }
 }
 struct NativeFX::Effect {
+    std::shared_ptr<jaras::audio::DrummerPad> drums;
+    StringArray drumFiles;
+    std::unique_ptr<jaras::audio::CreativeEffectDSP> creative;
     catlive::dsp::Trigger trigger;
     catlive::dsp::Gate gate;
     catlive::dsp::TriggerParameters triggerParameters;
     catlive::dsp::GateParameters gateParameters;
     String sampleIdentity;
+    std::array<std::atomic<float>, 3> dynamicsPeaks{};
+    void recordPeak(size_t index, float value) noexcept {
+        auto &peak = dynamicsPeaks[index];
+        float previous = peak.load(std::memory_order_relaxed);
+        while (previous < value && !peak.compare_exchange_weak(previous, value, std::memory_order_relaxed)) {}
+    }
     ParameterPreview parameters;
     unsigned eqActive = 0;
     std::shared_ptr<analysis::Capture> eqAnalysis;
@@ -39,7 +53,7 @@ struct NativeFX::Effect {
     std::shared_ptr<native::stem::Processor> stem;
     native::stem::Mix stemMix;
     std::array<native::vst3::MIDIEvent,4096> midi{};
-    std::vector<std::unique_ptr<juce::dsp::IIR::Filter<float>>> eq[2];
+    std::vector<jaras::audio::SmoothBiquad> eq[2];
     juce::dsp::Compressor<float> compressor;
     float limiterCeiling = 1, limiterRelease = 0, limiterGain = 1;
     Reverb reverb;
@@ -55,6 +69,8 @@ NativeFX::NativeFX() = default;
 NativeFX::~NativeFX() = default;
 void NativeFX::swap(NativeFX &other)noexcept {
     effects.swap(other.effects);
+    std::swap(hasDynamicsMeter, other.hasDynamicsMeter);
+    std::swap(reductionDB, other.reductionDB);
     unsupported.swapWith(other.unsupported);
 }
 NativeFX::DynamicsPreview NativeFX::dynamicsPreview(const var &settings) {
@@ -79,7 +95,7 @@ NativeFX::ParameterPreview NativeFX::parameterPreview(const String &kind, const 
     using C = juce::dsp::IIR::Coefficients<float>;
     auto coefficients = [](const C::Ptr &source, auto &target) { std::copy_n(source->getRawCoefficients(), 5, target.begin()); };
     if (kind == "EQ") {
-        result.kind = ParameterPreview::equalizer;
+        result.kind = ParameterPreview::equalizer; result.channels = fxpresets::channels(value, kind);
         for (const auto &band : list(get(value, "bands"))) {
             if (!flag(band, "enabled", true)) continue;
             const float frequency = (float)jlimit(20., std::min(20000., sampleRate * .45), num(band, "frequency", 1000));
@@ -104,16 +120,16 @@ NativeFX::ParameterPreview NativeFX::parameterPreview(const String &kind, const 
             }
         }
     } else if (kind == "Compressor") {
-        result.kind = ParameterPreview::compressor;
+        result.kind = ParameterPreview::compressor; result.channels = fxpresets::channels(value, kind);
         v[0]=(float)jlimit(-60.,0.,num(value,"threshold",-20)); v[1]=(float)jlimit(1.,20.,num(value,"ratio",4));
         v[2]=(float)jlimit(.1,200.,num(value,"attack",.005)*1000); v[3]=(float)jlimit(10.,3000.,num(value,"release",.1)*1000);
         v[4]=Decibels::decibelsToGain((float)jlimit(-12.,24.,num(value,"makeup")));
     } else if (kind == "Delay") {
-        result.kind = ParameterPreview::delay;
+        result.kind = ParameterPreview::delay; result.channels = fxpresets::channels(value, kind);
         v[0]=(float)std::round(jlimit(.01,2.,num(value,"delayTime",.25))*sampleRate);
         v[1]=(float)jlimit(0.,.9,num(value,"feedback",25)/100); v[2]=(float)jlimit(0.,1.,num(value,"delayMix",20)/100);
     } else if (kind == "Reverb") {
-        result.kind = ParameterPreview::reverb;
+        result.kind = ParameterPreview::reverb; result.channels = fxpresets::channels(value, kind);
         v[0]=(float)jlimit(.05,.98,num(value,"reverbDecay",2)/25+.2+num(value,"reverbRoom",1)*.15);
         v[1]=(float)jlimit(0.,1.,num(value,"reverbMix",20)/100);
         coefficients(C::makeHighPass(sampleRate,(float)jlimit(20.,2000.,num(value,"reverbLowCut",80))),result.highPass);
@@ -123,7 +139,18 @@ NativeFX::ParameterPreview NativeFX::parameterPreview(const String &kind, const 
         v[0]=Decibels::decibelsToGain((float)jlimit(-24.,0.,num(p,"ceiling",-.1)));
         v[1]=(float)std::exp(-1/(sampleRate*jlimit(.01,3.,num(p,"release",.1))));
         v[2]=Decibels::decibelsToGain((float)jlimit(-24.,24.,num(p,"inputGain")));
-    } else if (kind == "Pitch") { result.kind=ParameterPreview::pitch;v[0]=(float)jlimit(-12.,12.,num(value,"pitchSemitones")); }
+    } else if (kind == "Pitch") {
+        result.kind = ParameterPreview::pitch;
+        v[0] = (float)jlimit(-12., 12., num(value, "pitchSemitones"));
+        v[1] = (float)jlimit(-12., 12., num(value, "pitchFormant"));
+    } else if (const auto *spec = jaras::audio::creativeEffect(utf8(kind))) {
+        result.kind = ParameterPreview::creative;
+        const auto group = get(value, Identifier(spec->field));
+        for (size_t i = 0; i < spec->parameters.size() && spec->parameters[i].key; ++i) {
+            const auto &p = spec->parameters[i];
+            v[i] = (float)num(group, Identifier(p.key), p.initial);
+        }
+    }
     return result;
 }
 void NativeFX::previewParameters(const String &key, const ParameterPreview &parameters) noexcept {
@@ -132,8 +159,8 @@ void NativeFX::previewParameters(const String &key, const ParameterPreview &para
         switch(parameters.kind) {
         case ParameterPreview::equalizer:
             for (int ch=0;ch<2;++ch) for (unsigned i=0;i<parameters.eqCount && i<e.eq[ch].size();++i) {
-                if (i>=e.eqActive) e.eq[ch][i]->reset();
-                std::copy(parameters.eq[i].begin(),parameters.eq[i].end(),e.eq[ch][i]->coefficients->getRawCoefficients());
+                if (i>=e.eqActive) e.eq[ch][i].setImmediate(parameters.eq[i].data());
+                else e.eq[ch][i].setTarget(parameters.eq[i].data());
             }
             e.eqActive=parameters.eqCount;break;
         case ParameterPreview::compressor:
@@ -149,7 +176,13 @@ void NativeFX::previewParameters(const String &key, const ParameterPreview &para
             break;
         }
         case ParameterPreview::limiter:e.limiterCeiling=v[0];e.limiterRelease=v[1];e.makeup=v[2];break;
-        case ParameterPreview::pitch:if(e.pitch)e.pitch->setTransposeSemitones(v[0]);break;
+        case ParameterPreview::pitch:
+            if (e.pitch) {
+                e.pitch->setTransposeSemitones(v[0]);
+                e.pitch->setFormantSemitones(v[1]);
+            }
+            break;
+        case ParameterPreview::creative:
         case ParameterPreview::none:break;
         }
         e.parameters=parameters;
@@ -171,11 +204,66 @@ void NativeFX::adoptDynamicsState(NativeFX &previous) noexcept {
         }
     }
 }
+std::shared_ptr<jaras::audio::DrummerPad> NativeFX::drummerVoice(const String &key) const {
+    for (const auto &effect : effects) if (effect->key == key) return effect->drums;
+    return {};
+}
+static std::shared_ptr<const jaras::audio::DrumSample> loadDrumPCM(const File &file) {
+    static std::mutex mutex;
+    static std::map<String, std::weak_ptr<const jaras::audio::DrumSample>> cache;
+    const String identity = file.getFullPathName() + "|" + String(file.getLastModificationTime().toMilliseconds());
+    { std::lock_guard<std::mutex> guard(mutex); if (auto found = cache[identity].lock()) return found; }
+    AudioFormatManager formats; registerAudioFormats(formats);
+    auto reader = std::unique_ptr<AudioFormatReader>(formats.createReaderFor(file));
+    if (!reader || reader->sampleRate <= 0 || reader->sampleRate > 384000 || reader->lengthInSamples <= 0 ||
+        reader->lengthInSamples > 60.01 * reader->sampleRate || !reader->numChannels) return {};
+    const int frames = int(reader->lengthInSamples);
+    AudioBuffer<float> decoded(2, frames);
+    if (!reader->read(&decoded, 0, frames, 0, true, true)) return {};
+    auto pcm = std::make_shared<jaras::audio::DrumSample>();
+    pcm->rate = reader->sampleRate;
+    pcm->left.assign(decoded.getReadPointer(0), decoded.getReadPointer(0)+frames);
+    if (reader->numChannels > 1) pcm->right.assign(decoded.getReadPointer(1), decoded.getReadPointer(1)+frames);
+    { std::lock_guard<std::mutex> guard(mutex); cache[identity] = pcm; }
+    return pcm;
+}
 void NativeFX::prepare(const var &settings, double sampleRate, const NativeFX *previous,bool offline,bool prewarm,
                        const Dispatcher &pluginDispatcher, const File &mediaDirectory) {
     effects.clear();
     unsupported.clear();
+    hasDynamicsMeter = false;
+    reductionDB = -1.f;
     auto append = [&](String kind, const String &key, const var &value) {
+        if (const auto count = drummer::count(kind)) {
+            if (!flag(value, drummer::enabledField(count))) return;
+            const auto kit = drummer::kit(value, count);
+            auto e = std::make_unique<Effect>();
+            e->kind = kind; e->key = key; e->sampleRate = sampleRate;
+            for (const auto &pad : list(get(kit, "pads"))) e->drumFiles.add(str(pad,"sample"));
+            if (previous) for (const auto &old : previous->effects)
+                if (old->key == key && old->drums && old->sampleRate == sampleRate && old->drumFiles == e->drumFiles) e->drums = old->drums;
+            if (!e->drums) {
+                e->drums = std::make_shared<jaras::audio::DrummerPad>(unsigned(count), sampleRate);
+                for (int i=0; i<count; ++i) if (e->drumFiles[i].isNotEmpty()) {
+                    const auto sample = loadDrumPCM(drummer::resolve(e->drumFiles[i]));
+                    if (!sample) unsupported.addIfNotAlreadyThere(kind + ": " + e->drumFiles[i]);
+                    e->drums->setSample(unsigned(i), sample);
+                }
+            }
+            drummer::configure(*e->drums, kit);
+            effects.push_back(std::move(e)); return;
+        }
+        if (kind == "Compressor" || kind == "Limiter" || kind == "Soft Clipper") hasDynamicsMeter = true;
+        if (const auto *spec = jaras::audio::creativeEffect(utf8(kind))) {
+            if (!flag(value, Identifier(spec->enabledField))) return;
+            auto e = std::make_unique<Effect>();
+            e->kind = kind; e->key = key; e->sampleRate = sampleRate;
+            e->creative = std::make_unique<jaras::audio::CreativeEffectDSP>(spec->kind);
+            e->creative->prepare(sampleRate);
+            e->parameters = parameterPreview(kind, value, sampleRate);
+            effects.push_back(std::move(e));
+            return;
+        }
         if (kind == "CatLive Trigger" || kind == "Cat Gate") {
             if (!flag(value, kind == "CatLive Trigger" ? Identifier("triggerEnabled") : Identifier("gateEnabled"))) return;
             auto e = std::make_unique<Effect>(); e->kind = kind; e->key = key; e->sampleRate = sampleRate;
@@ -213,7 +301,7 @@ void NativeFX::prepare(const var &settings, double sampleRate, const NativeFX *p
             effects.push_back(std::move(e)); return;
         }
         // Read older projects without starting the removed realtime separator.
-        if(kind==native::stem::effectName) return;
+        if (kind == native::stem::effectName || kind == "Arpeggiator") return;
         String enabledKey = kind == "EQ"           ? "eqEnabled"
                             : kind == "Compressor" ? "compressorEnabled"
                             : kind == "Delay"      ? "delayEnabled"
@@ -239,7 +327,8 @@ void NativeFX::prepare(const var &settings, double sampleRate, const NativeFX *p
         if (kind == "Pitch") {
             e->pitch = std::make_unique<signalsmith::stretch::SignalsmithStretch<float>>(0);
             e->pitch->presetDefault(2, (float)sampleRate);
-            e->pitch->setTransposeSemitones(jlimit(-12., 12., num(value, "pitchSemitones")));
+            e->pitch->setTransposeSemitones(e->parameters.values[0]);
+            e->pitch->setFormantSemitones(e->parameters.values[1]);
             e->pitchInput.setSize(2, 4096);
         }
         if (kind == "EQ")
@@ -289,16 +378,13 @@ void NativeFX::prepare(const var &settings, double sampleRate, const NativeFX *p
                                                  : juce::dsp::IIR::Coefficients<float>::makeLowPass(
                                                        sampleRate, (float)frequency, butterworthQ);
                         }
-                        auto filter = std::make_unique<juce::dsp::IIR::Filter<float>>(stageCoefficients);
-                        filter->reset();
-                        e->eq[ch].push_back(std::move(filter));
+                        e->eq[ch].emplace_back(stageCoefficients->getRawCoefficients(),sampleRate);
                     }
             }
         if (kind == "EQ") {
             e->eqActive = (unsigned)e->eq[0].size();
             for (auto &channel : e->eq) while (channel.size() < ParameterPreview::maximumEQStages) {
-                auto filter=std::make_unique<juce::dsp::IIR::Filter<float>>(new juce::dsp::IIR::Coefficients<float>(1,0,0,1,0,0));
-                filter->reset(); channel.push_back(std::move(filter));
+                channel.emplace_back(); channel.back().setSampleRate(sampleRate);
             }
         }
         if (kind == "Compressor") {
@@ -355,6 +441,7 @@ void NativeFX::prepare(const var &settings, double sampleRate, const NativeFX *p
                 // Keep opaque states editable/undoable when a project arrives
                 // from a computer where this plug-in was installed elsewhere.
                 if(!File(str(plugin,"path")).exists()) {
+                    if(offline)throw std::runtime_error(utf8(str(plugin,"name",key)+": plugin VST3 ausente"));
                     unsupported.addIfNotAlreadyThere(str(plugin,"name",key)+": plugin VST3 ausente");
                     break;
                 }
@@ -400,7 +487,7 @@ void NativeFX::prepare(const var &settings, double sampleRate, const NativeFX *p
                 break;
             }
             }catch(const PreparationCancelled &){throw;}
-            catch(const std::exception &e){if(previous)throw;unsupported.addIfNotAlreadyThere(key+": "+String::fromUTF8(e.what()));}
+            catch(const std::exception &e){if(previous || offline)throw;unsupported.addIfNotAlreadyThere(key+": "+String::fromUTF8(e.what()));}
             continue;
         }
         auto value = settings;
@@ -455,6 +542,22 @@ void NativeFX::holdRemovedStems(const NativeFX &previous){
     }
 }
 void NativeFX::releaseRemovedStems(){effects.erase(std::remove_if(effects.begin(),effects.end(),[](const auto &e){return e->retiredStem;}),effects.end());}
+void NativeFX::prepareRetirement(NativeFX& destination) const {
+    destination.effects.reserve(destination.effects.size()+effects.size());
+}
+void NativeFX::retireRemovedStems(NativeFX& destination) noexcept {
+    assert(destination.effects.capacity()-destination.effects.size()>=effects.size());
+    size_t retained=0;
+    for(size_t index=0;index<effects.size();++index) {
+        if(effects[index]->retiredStem)destination.effects.push_back(std::move(effects[index]));
+        else {
+            if(retained!=index)effects[retained]=std::move(effects[index]);
+            ++retained;
+        }
+    }
+    // Every discarded tail slot is moved-from: shrinking deletes no effect.
+    effects.resize(retained);
+}
 void NativeFX::shareStems(const NativeFX &source){for(auto &e:effects)if(e->stem)for(const auto &other:source.effects)if(e->key==other->key&&other->stem)e->stem=other->stem;}
 bool NativeFX::hasActiveStem()const {for(const auto &e:effects)if(e->stem&&e->stem->availableLatency())return true;return false;}
 void NativeFX::resetStems(){for(auto &e:effects)if(e->stem)e->stem->reset();}
@@ -464,21 +567,62 @@ void NativeFX::waitForStems(){for(auto &e:effects)if(e->stem&&e->stemMix.enabled
 void NativeFX::checkStemErrors()const {for(const auto &e:effects)if(e->stem&&e->stemMix.enabled){const auto s=e->stem->status();if(s.state=="fault")throw std::runtime_error(s.error);}}
 bool NativeFX::hasExternal() const {for(const auto &effect:effects)if(effect->plugin)return true;return false;}
 void NativeFX::applyAutomation(const AutomationProgram &program, double time) {
+    if (effects.empty()) return;
     for (const auto &curve : program.curves) if (curve.target == AutomationCurve::externalFX)
         for (const auto &effect : effects) if (effect->plugin && !effect->bypassed &&
             effect->pluginID == curve.plugin)
             effect->plugin->automate(curve.parameter, curve.value(time));
 }
-void NativeFX::process(AudioBuffer<float> &buffer, int samples,double seconds,bool playing,const MidiBuffer *midi,double stemSeconds) {
+std::array<float, 3> NativeFX::takeDynamicsLevels(const String &key) const {
+    for (const auto &effect : effects) if (effect->key == key) {
+        auto &p = effect->dynamicsPeaks;
+        return {p[0].exchange(0), p[1].exchange(0), p[2].exchange(0)};
+    }
+    return {};
+}
+void NativeFX::processIdleEditors(int samples,double seconds,bool playing,const jaras::PluginTempoMap *tempoMap) {
+    if (effects.empty()) return;
+    const auto transport = tempoMap ? tempoMap->at(seconds,playing) : jaras::PluginTempoMap{}.at(seconds,playing);
+    for(auto &effect:effects)if(effect->plugin)effect->plugin->processEditorSilence(samples,transport);
+}
+void NativeFX::process(AudioBuffer<float> &buffer, int samples,double seconds,bool playing,const MidiBuffer *midi,double stemSeconds,const jaras::PluginTempoMap *tempoMap) {
+    reductionDB = hasDynamicsMeter ? 0.f : -1.f;
+    if (effects.empty()) return;
     ScopedNoDenormals noDenormals;
     for (auto &e : effects) {
+        if (e->drums) {
+            auto *left = buffer.getWritePointer(0);
+            auto *right = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr;
+            int cursor = 0;
+            if (midi) for (const auto event : *midi) {
+                const auto at = jlimit(cursor, samples, event.samplePosition);
+                if (at > cursor) e->drums->render(left+cursor, right ? right+cursor : nullptr, unsigned(at-cursor));
+                cursor = at;
+                if (event.numBytes >= 3 && (event.data[0] & 0xf0) == 0x90) e->drums->midi(event.data[1], event.data[2]);
+                if (event.numBytes >= 3 && (event.data[0] & 0xf0) == 0xb0 && (event.data[1] == 120 || event.data[1] == 123)) e->drums->silence();
+            }
+            if (samples > cursor) e->drums->render(left+cursor, right ? right+cursor : nullptr, unsigned(samples-cursor));
+            continue;
+        }
+        if (e->creative) {
+            const auto transport = tempoMap ? tempoMap->at(seconds, playing) : jaras::PluginTempoMap{}.at(seconds, playing);
+            const auto &v = e->parameters.values;
+            e->creative->process(buffer.getWritePointer(0), buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr,
+                unsigned(samples), {v[0], v[1], v[2], v[3]}, transport);
+            if (e->kind == "Soft Clipper") reductionDB = std::max(reductionDB, e->creative->gainReductionDB());
+            continue;
+        }
+        const auto channels = e->parameters.channels;
         if (e->kind == "CatLive Trigger")
             e->trigger.process(buffer.getWritePointer(0), buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr, samples, e->sampleRate);
-        if (e->kind == "Cat Gate")
+        if (e->kind == "Cat Gate") {
+            for (int ch = 0; ch < std::min(2, buffer.getNumChannels()); ++ch)
+                e->recordPeak(size_t(ch), buffer.getMagnitude(ch, 0, samples));
             e->gate.process(buffer.getWritePointer(0), buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr, samples, e->sampleRate);
+        }
         if(e->stem) { e->stem->process(buffer.getWritePointer(0),buffer.getWritePointer(1),unsigned(samples),std::isfinite(stemSeconds)?stemSeconds:seconds,playing); }
         if(e->plugin&&!e->bypassed) {
-            native::vst3::Transport transport;transport.seconds=seconds;transport.quarterNotes=seconds*2;transport.playing=playing;
+            const auto transport = tempoMap ? tempoMap->at(seconds,playing) : jaras::PluginTempoMap{}.at(seconds,playing);
             int count=0;
             if(midi)for(const auto metadata:*midi)if(metadata.numBytes<=3&&count<(int)e->midi.size()){
                 auto &event=e->midi[(size_t)count++];event.offset=metadata.samplePosition;event.status=metadata.data[0];
@@ -486,7 +630,11 @@ void NativeFX::process(AudioBuffer<float> &buffer, int samples,double seconds,bo
             }
             e->plugin->process(buffer.getWritePointer(0),buffer.getWritePointer(1),samples,transport,e->midi.data(),count);
         }
-        if (e->kind == "Pitch" && e->parameters.values[0] != 0) {
+        if (e->plugin) {
+            const auto reduction = e->plugin->gainReduction();
+            if (reduction >= 0) reductionDB = std::max(reductionDB, e->bypassed ? 0.f : reduction);
+        }
+        if (e->kind == "Pitch" && (e->parameters.values[0] != 0 || e->parameters.values[1] != 0)) {
             for (int ch = 0; ch < 2; ++ch)
                 e->pitchInput.copyFrom(ch, 0, buffer, ch, 0, samples);
             e->pitch->process(e->pitchInput.getArrayOfReadPointers(), samples,
@@ -495,39 +643,57 @@ void NativeFX::process(AudioBuffer<float> &buffer, int samples,double seconds,bo
         if (e->kind == "EQ") {
             const bool capturing = e->eqAnalysis && e->eqAnalysis->begin(buffer.getReadPointer(0), buffer.getReadPointer(1), samples);
             for (int ch = 0; ch < 2; ++ch) {
+                if (!(channels & (1u << ch))) continue;
                 auto *data = buffer.getWritePointer(ch);
                 for (unsigned index=0; index<e->eqActive; ++index)
                     for (int n = 0; n < samples; ++n)
-                        data[n] = e->eq[ch][index]->processSample(data[n]);
+                        data[n] = e->eq[ch][index].processSample(data[n]);
             }
             if (capturing) e->eqAnalysis->finish(buffer.getReadPointer(0), buffer.getReadPointer(1));
         }
         if (e->kind == "Compressor" || e->kind == "Limiter") {
-            juce::dsp::AudioBlock<float> block(buffer);
-            auto sub = block.getSubBlock(0, (size_t)samples);
-            juce::dsp::ProcessContextReplacing<float> context(sub);
             if (e->kind == "Compressor") {
-                e->compressor.process(context);
-                buffer.applyGain(0, samples, e->makeup);
+                float minimumGain = 1.f;
+                for (int ch = 0; ch < 2; ++ch) {
+                    e->recordPeak(size_t(ch), buffer.getMagnitude(ch, 0, samples));
+                    if (!(channels & (1u << ch))) continue;
+                    auto *data = buffer.getWritePointer(ch);
+                    for (int n = 0; n < samples; ++n) {
+                        const float dry = data[n];
+                        const float compressed = e->compressor.processSample(ch, dry);
+                        if (std::abs(dry) > 1.e-6f)
+                            minimumGain = std::min(minimumGain, std::abs(compressed / dry));
+                        data[n] = compressed * e->makeup;
+                    }
+                }
+                const float reduction = -Decibels::gainToDecibels(minimumGain, -120.f);
+                e->recordPeak(2, reduction);
+                reductionDB = std::max(reductionDB, reduction);
             } else {
                 // Match the Mac's linked, zero-lookahead sample-peak ceiling.
                 // JUCE's limiter normalizes to 0 dB after its threshold stage;
                 // using threshold as a ceiling therefore amplified quiet audio.
+                float minimumGain = e->makeup;
                 auto *left = buffer.getWritePointer(0), *right = buffer.getWritePointer(1);
                 for (int n = 0; n < samples; ++n) {
                     const float peak = std::max(std::abs(left[n]), std::abs(right[n])) * e->makeup;
                     const float target = e->makeup * std::min(1.f, e->limiterCeiling / std::max(1.e-20f, peak));
                     e->limiterGain = target < e->limiterGain ? target : target + (e->limiterGain - target) * e->limiterRelease;
+                    minimumGain = std::min(minimumGain, e->limiterGain);
                     left[n] *= e->limiterGain; right[n] *= e->limiterGain;
                 }
+                reductionDB = std::max(reductionDB, -Decibels::gainToDecibels(minimumGain / e->makeup, -120.f));
             }
         }
         if (e->kind == "Reverb") {
-            for (int ch = 0; ch < 2; ++ch)
-                e->wet->copyFrom(ch, 0, buffer, ch, 0, samples);
+            for (int ch = 0; ch < 2; ++ch) {
+                if (channels & (1u << ch)) e->wet->copyFrom(ch, 0, buffer, ch, 0, samples);
+                else e->wet->clear(ch, 0, samples);
+            }
             e->reverb.processStereo(e->wet->getWritePointer(0), e->wet->getWritePointer(1),
                                     samples);
             for (int ch = 0; ch < 2; ++ch) {
+                if (!(channels & (1u << ch))) continue;
                 auto *wet = e->wet->getWritePointer(ch);
                 auto *dry = buffer.getWritePointer(ch);
                 for (int n = 0; n < samples; ++n)
@@ -539,6 +705,10 @@ void NativeFX::process(AudioBuffer<float> &buffer, int samples,double seconds,bo
         if (e->kind == "Delay")
             for (int n = 0; n < samples; ++n) {
                 for (int ch = 0; ch < 2; ++ch) {
+                    if (!(channels & (1u << ch))) {
+                        e->delay.setSample(ch, e->delayPosition, 0);
+                        continue;
+                    }
                     auto input = buffer.getSample(ch, n),
                          delayed = e->delay.getSample(ch, (e->delayPosition + e->delay.getNumSamples() - e->delaySamples) % e->delay.getNumSamples());
                     e->delay.setSample(ch, e->delayPosition, input + delayed * e->feedback);

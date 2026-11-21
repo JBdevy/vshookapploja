@@ -52,6 +52,153 @@ inline void click(SetlistRows &rows,int row) {
         Time::getCurrentTime(),1,false));
 }
 template <typename Test> void registerTests(const File &directory,Test &test) {
+    test("Remote timer switches progressive and countdown atomically and preserves targets", [&] {
+        Session session;session.inspection=true;session.core.loadProject(fixture());
+        Appearance preferences(directory.getNonexistentChildFile("timer-modes", ".json"));
+        StageState stage(preferences);remote::Presentation presentation(session,stage);
+        auto apply=[&](const char *action,double value) {
+            auto wire=object();put(wire,"id",remote::wireID(uuid()));
+            put(wire,"project",remote::wireID(session.project().id));
+            put(wire,"action",action);put(wire,"value",value);
+            const auto command=remote::Command::decode(wire);
+            require(presentation.apply(command),"Timer command rejected");
+        };
+        apply("timerStart",90);
+        require(stage.running && !stage.progressive && stage.target==90,"Countdown start changed");
+        apply("timerSetMode",0);
+        require(!stage.progressive && stage.running,"Tab changed a running timer");
+        apply("timerStop",0);apply("timerSetMode",0);
+        require(stage.progressive && !stage.running && stage.target==90 && !stage.expired(),"Progressive tab lost duration");
+        require(str(get(presentation.snapshot(0),"timer"),"mode")=="progressive","Mode missing from Remote snapshot");
+        apply("timerStartProgressive",0);stage.started=StageState::now()-65.2;
+        require(stage.running && stage.timeText()=="00:01:05" && !stage.expired(),"Progressive count/rounding incorrect");
+        apply("timerStop",0);apply("timerSetMode",1);
+        require(!stage.progressive && stage.target==90,"Countdown target not restored");
+        StageState restored(preferences);
+        require(!restored.progressive && restored.target==90,"Mode preference not restored");
+    });
+    test("Setlist drawer preserves browsing position and metadata reorder avoids workspace rebuild",[&] {
+        const auto project=fixture(); const auto &parts=project.songs[0].parts;
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        Auth auth;Lighting lighting(session);
+        Workspace workspace(session,auth,lighting,false,directory.getNonexistentChildFile("setlist-browse",".json"));workspace.setSize(1366,768);
+        auto *rows=dynamic_cast<SetlistRows *>(uiFeatureTests::find(workspace,"setlistRows"));require(rows,"Setlist rows missing");
+        click(*rows,0); rows->getViewport()->setViewPosition(0,rows->rowTop(17));
+        const int before=rows->getViewport()->getViewPositionY();
+        auto *drawer=dynamic_cast<Button *>(uiFeatureTests::find(workspace,"setlist-drawer-"+text(parts[26].id)));
+        require(drawer && drawer->onClick,"Drawer missing");drawer->onClick();
+        require(rows->getViewport()->getViewPositionY()==before,"Opening another drawer revealed the selected row");
+        drawer->onClick(); require(rows->getViewport()->getViewPositionY()==before,"Closing drawer revealed selected row");
+        int rebuilds=0,updates=0;auto changed=session.changed, setlistChanged=session.setlistChanged;
+        session.changed=[&]{++rebuilds;if(changed)changed();};session.setlistChanged=[&]{++updates;if(setlistChanged)setlistChanged();};
+        auto state=*session.project().regionSetlist;auto original=state.playlists[0].regionIds;
+        state.playlists[0].regionIds.insert(state.playlists[0].regionIds.begin(),parts[0].id);
+        session.configureSetlist(state);require(rebuilds==0 && updates==1,"Playlist edit rebuilt the workspace");
+        session.undo();require(session.project().regionSetlist->playlists[0].regionIds==original,"Playlist undo lost original ordering");
+        session.redo();require(session.project().regionSetlist->playlists[0].regionIds==state.playlists[0].regionIds,"Playlist redo lost new ordering");
+        require(rebuilds==0 && updates==3,"Playlist undo/redo rebuilt the workspace");
+        for(double scale:{.05,.3,1.,3.,10.,20.}) {
+            const auto ticks=timelineGrid::ticks(*session.song(),0,100,scale);
+            for(const auto &tick:ticks) if(!tick.primary) require(std::abs(timelineGrid::snap(tick.time+.001,*session.song(),scale,false,false)-tick.time)<.00001,"Secondary grid line rejected snapping");
+        }
+    });
+    test("Remote hides special tracks while preserving ordinary tracks and groups", [&] {
+        auto project=fixture();auto &song=project.songs[0];song.tracks.clear();
+        std::vector<ID> visible;
+        for(const char *role:{"other","keys","drums","click","vinhetas","programChange","timecode","generatedClick","video","teleprompt","teleprompt2","chords"}) {
+            jaras::Track track;track.id=uuid();track.role.id=role;track.name=jaras::fixedTrackName(track.role).empty()?role:jaras::fixedTrackName(track.role);
+            if(visible.size()<5 && song.tracks.size()<5)visible.push_back(track.id);
+            if(String(role)=="keys" || String(role)=="drums")track.parentTrackID=visible.front();
+            song.tracks.push_back(track);
+        }
+        Session session;session.inspection=true;session.core.loadProject(project);
+        // Loading pins VINHETAS-FX before ordinary tracks in the desktop too.
+        // Remote must retain that host order and the original group links.
+        const std::vector<ID> ordered{visible[4],visible[0],visible[1],visible[2],visible[3]};
+        Appearance preferences(directory.getNonexistentChildFile("remote-special-tracks",".json"));
+        StageState stage(preferences);remote::Presentation presentation(session,stage);
+        for(int panel:{0,1,2}) {
+            const auto tracks=list(get(presentation.snapshot(panel),"tracks"));
+            require(tracks.size()==visible.size(),"Remote exposed a special track or hid an ordinary track");
+            for(size_t i=0;i<visible.size();++i)
+                require(str(tracks[(int)i],"id")==remote::wireID(ordered[i]),"Remote changed normal track order");
+            require(str(tracks[3],"parentTrack")==remote::wireID(visible.front()),"Remote lost group membership");
+        }
+    });
+    test("Remote section cues preserve Parts timing and armed destination for observers", [&] {
+        auto project=fixture();project.regionSetlist.reset();auto &song=project.songs[0];song.parts={{uuid(),"Playing",0,20}};
+        const auto region=song.parts[0].id,next=uuid(),target=uuid();
+        song.markers=std::vector<jaras::TimelineMarker>{{next,"Chorus",10,0},{target,"Bridge",2,0}};
+        for(auto &marker:*song.markers)marker.section=true;
+        Session session;session.inspection=true;session.core.loadProject(project);
+        Appearance preferences(directory.getNonexistentChildFile("remote-section-cues",".json"));
+        StageState stage(preferences);remote::Presentation presentation(session,stage);
+        session.core.execute({jaras::CommandKind::selectRegion,region});
+        session.core.execute({jaras::CommandKind::play});session.core.advance(5);
+        auto packet=presentation.snapshot(0),section=get(packet,"sectionPlayback");
+        require(str(section,"currentRegion")==remote::wireID(region)&&num(section,"position")==5,
+                "Observer needs the audible section region and position without subscribing to Parts");
+        require(list(get(packet,"markers")).size()==2,"Observer needs section names");
+        session.core.execute({jaras::CommandKind::queueSection,target});
+        section=get(presentation.snapshot(2),"sectionPlayback");
+        require(str(section,"queuedMarker")==remote::wireID(target)&&num(section,"nextTrigger")==10,
+                "Observer TP must announce the armed destination at the actual trigger, not its old timestamp");
+        session.core.execute({jaras::CommandKind::cancelSection});
+        require(get(get(presentation.snapshot(0),"sectionPlayback"),"queuedMarker").isVoid(),
+                "Cancelling must clear observer's armed warning");
+    });
+    test("Remote Tuner publishes its active region, preserves targets and uses pitch undo", [&] {
+        auto project=fixture();auto &song=project.songs[0];
+        const auto first=song.parts[0].id,second=song.parts[1].id;
+        song.parts[0].pitchTrackIDs=std::vector<ID>{};
+        song.parts[0].pitchGroupIDs=std::vector<ID>{song.tracks.front().id};
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        Appearance preferences(directory.getNonexistentChildFile("remote-tuner",".json"));
+        StageState stage(preferences);remote::Presentation presentation(session,stage);
+        require(presentation.apply(remote::Command::decode(request(session,first))),"Tuner region selection failed");
+        auto state=presentation.snapshot(0);
+        require(str(state,"pitchRegion")==remote::wireID(first) && num(state,"pitchSemitones")==0,
+                "Remote Tuner is disabled because the active region/pitch was not published");
+        auto pitch=request(session,first);put(pitch,"action","pitch");put(pitch,"value",3);
+        require(presentation.apply(remote::Command::decode(pitch)),"Remote pitch edit rejected");
+        require(num(presentation.snapshot(0),"pitchSemitones")==3,"Pitch confirmation never reached Remote");
+        const auto &part=session.song()->parts[0];
+        require(part.pitchTrackIDs==song.parts[0].pitchTrackIDs && part.pitchGroupIDs==song.parts[0].pitchGroupIDs,
+                "Remote Tuner discarded explicit track/group targets");
+        session.undo();require(num(presentation.snapshot(0),"pitchSemitones")==0,"Remote pitch is not undoable");
+        session.redo();require(num(presentation.snapshot(0),"pitchSemitones")==3,"Remote pitch redo lost adjustment");
+        require(presentation.apply(remote::Command::decode(request(session,second))),"Second region selection failed");
+        require(!presentation.apply(remote::Command::decode(pitch)),"Stale Remote pitch edited an inactive song");
+        require(session.song()->parts[0].pitchSemitones==3 && session.song()->parts[1].pitchSemitones.value_or(0)==0,
+                "Stale pitch packet changed a region");
+    });
+    test("Remote BPM edits the selected tempo section through the desktop path and supports repeated steps", [&] {
+        auto project=fixture();auto &song=project.songs[0];song.bpm=120;
+        song.timeSettings=jaras::ProjectTimeSettings{};song.timeSettings->timebase=jaras::ProjectTimebase::relative;
+        const auto selected=song.parts[1].id;
+        auto marker=tempoEditing::boundary(song,10);marker.tempoBPM=140;
+        song.markers=std::vector<jaras::TimelineMarker>{marker};
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        Appearance preferences(directory.getNonexistentChildFile("remote-bpm",".json"));
+        StageState stage(preferences);remote::Presentation presentation(session,stage);
+        require(presentation.apply(remote::Command::decode(request(session,selected))),"BPM region selection failed");
+        require(num(presentation.snapshot(0),"bpm")==140,"Wrong initial region BPM");
+        auto tempo=request(session,selected);put(tempo,"action","tempo");tempo.getDynamicObject()->removeProperty("target");
+        for(double value:{141.,142.,141.}) {
+            put(tempo,"id",remote::wireID(uuid()));put(tempo,"value",value);
+            require(presentation.apply(remote::Command::decode(tempo)),"Remote tempo rejected");
+            require(std::abs(num(presentation.snapshot(0),"bpm")-value)<.000001,
+                    "Remote BPM did not acknowledge the step and would leave its buttons locked");
+            require(session.song()->bpm==120,"Remote changed global BPM instead of the selected tempo section");
+        }
+        session.undo();require(num(presentation.snapshot(0),"bpm")==142,"Remote BPM undo lost preceding step");
+        session.redo();require(num(presentation.snapshot(0),"bpm")==141,"Remote BPM redo lost final step");
+        put(tempo,"song",remote::wireID(uuid()));
+        require(!presentation.apply(remote::Command::decode(tempo)),"Remote command from another song was accepted");
+    });
     test("Unified Remote tempo returns to white after repeated BPM round trips", [&] {
         auto project=fixture();auto &song=project.songs[0];song.timeSettings=jaras::ProjectTimeSettings{};
         song.timeSettings->timebase=jaras::ProjectTimebase::relative;
@@ -77,7 +224,10 @@ template <typename Test> void registerTests(const File &directory,Test &test) {
             session.setTempo(index%2?120:121);
             require(flag(presentation.snapshot(0),"tempoNeedsRender")==!(index%2),
                 ("Unified tempo indicator mismatch at step "+std::to_string(index)+", BPM "+std::to_string(session.tempoBPM())).c_str());
-            require(session.song()->markers->size()==3,"Unified tempo restoration generated extra boundary markers");
+            const auto& markers = *session.song()->markers;
+            require(markers.size() == 2 && std::any_of(markers.begin(), markers.end(), [&](const auto& m) { return m.id == a.id; }) &&
+                    std::any_of(markers.begin(), markers.end(), [&](const auto& m) { return m.id == b.id; }),
+                    "Unified tempo restoration must retain the original markers without adding an endpoint");
         }
     });
     test("Remote tempo indicator follows effective rates, region selection and completed renders", [&] {
@@ -107,33 +257,41 @@ template <typename Test> void registerTests(const File &directory,Test &test) {
         require(flag(presentation.snapshot(0),"tempoNeedsRender"),"A later rate change must invalidate the cached indicator");
     });
 
-    test("Setlist drag preview contains only draggable selected rows at display resolution",[&] {
+    test("Setlist drag preview is one compact title strip at display resolution",[&] {
         struct Model final : ListBoxModel {
+            int paints=0;
             int getNumRows() override {return 9;}
-            void paintListBoxItem(int row,Graphics &g,int,int,bool) override {
-                g.fillAll(row==0?Colours::red:row==2?Colours::blue:Colours::green);
+            void paintListBoxItem(int,Graphics &g,int,int,bool) override {
+                ++paints;g.fillAll(Colours::red);
             }
             var getDragSourceDescription(const SparseSet<int> &selection) override {
                 return selection.contains(1)?var{}:var("song");
             }
         } model;
-        SetlistRows rows;rows.setModel(&model);rows.setSize(300,100);rows.updateContent();
+        SetlistRows rows;rows.setModel(&model);rows.setSize(500,100);rows.updateContent();
+        int namedRow=-1;
+        rows.dragNameForRow=[&](int row){namedRow=row;return "Song "+String(row);};
         rows.selectRow(0,false,true);
         auto single=rows.createDragPreview(2).getImage();
-        const auto *firstRow=rows.getViewport()->getViewedComponent()->getChildComponent(0);
-        require(single.getHeight()==76 && single.getWidth()==firstRow->getWidth()*2 && single.getPixelAt(20,20)==Colours::red,
-                ("Single-song preview: "+String(single.getWidth())+"x"+String(single.getHeight())+" row="+String(firstRow->getWidth())+" color="+single.getPixelAt(20,20).toString()).toRawUTF8());
+        const auto background=single.getPixelAt(20,4);
+        require(single.getHeight()==68 && single.getWidth()==600 && namedRow==0 &&
+                    background.getRed()<32 && background.getAlpha()>200 && model.paints==0,
+                "Preview must be a dark 300x34 strip, rendered at display resolution without copying the row");
         rows.selectRow(1,false,false);rows.selectRow(2,false,false);
-        auto multiple=rows.createDragPreview(2).getImage();
-        require(multiple.getHeight()==152 && multiple.getPixelAt(20,20)==Colours::red && multiple.getPixelAt(20,100)==Colours::blue,
-                "Drag preview included an excluded row or gaps between selected songs");
+        auto multiple=rows.createDragPreview(2,2).getImage();
+        require(multiple.getHeight()==68 && multiple.getWidth()==600 && namedRow==2,
+                "A multi-song drag must show only the pressed song's title, not stack selected rows");
         rows.getViewport()->setViewPosition(0,200);
-        auto scrolled=rows.createDragPreview(2).getImage();
-        require(scrolled.getHeight()==152 && scrolled.getPixelAt(20,20)==Colours::red && scrolled.getPixelAt(20,100)==Colours::blue,
-                "Scrolling clipped selected rows in the drag preview");
+        auto scrolled=rows.createDragPreview(2,2).getImage();
+        require(scrolled.getHeight()==68 && namedRow==2,
+                "Scrolling must not clip or change the drag title strip");
         rows.selectRangeOfRows(0,8);
-        require(rows.createDragPreview(2).getImage().getHeight()==(5*38+24)*2,
-                "Large selections must use a compact preview and remaining-count footer");
+        require(rows.createDragPreview(2,5).getImage().getHeight()==68 && namedRow==5 &&
+                    rows.getSelectedRows().size()==9,
+                "Large selections must keep one title strip while preserving all selected entries");
+        rows.selectRow(1,false,true);
+        require(rows.createDragPreview().getImage().isNull(),
+                "Protected unified child rows must not acquire a drag preview");
         rows.setModel(nullptr);
     });
     test("Setlist group drag retains selected songs until release and a plain click collapses on mouse-up",[&] {
@@ -280,7 +438,11 @@ template <typename Test> void registerTests(const File &directory,Test &test) {
         const auto localQueue=session.transport().queuedRegionId;
         require(localQueue==parts.back().id,"Local click did not queue the destination");
         select(parts.back().id);require(!session.transport().queuedRegionId,"Remote reclick did not cancel the existing queue");
-        playbackUnchanged();selectedAndRevealed(workspace,*rows,parts.back().id);
+        playbackUnchanged();
+        const auto cancelledSelection=get(workspace.diagnostics(),"setlist");
+        require(!session.focusedRegion && strings(get(cancelledSelection,"selectedEntries")).empty() &&
+                strings(get(cancelledSelection,"visibleSelectedEntries")).empty(),
+                "Remote queue cancellation must clear the blue selection, unlike keyboard Enter");
         select(parts.back().id);require(session.transport().queuedRegionId==localQueue,"Remote queue differs from local selection");
         playbackUnchanged();selectedAndRevealed(workspace,*rows,parts.back().id);
         select(parts[0].id);

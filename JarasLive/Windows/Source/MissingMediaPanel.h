@@ -1,6 +1,8 @@
 #pragma once
+#include "Localization.h"
 #include "ModalSheet.h"
 #include "ProjectMediaRecovery.h"
+#include "ProjectBackups.h"
 namespace catlive {
 class MissingMediaPanel final : public Component {
   public:
@@ -50,7 +52,7 @@ class MissingMediaPanel final : public Component {
     StringArray paths, errors;
     std::function<void(bool)> completion;
     TextEditor details;
-    TextButton cancel{String::fromUTF8("Cancelar")}, open{String::fromUTF8("Abrir mesmo assim")},
+    TextButton cancel{localization::translate(String::fromUTF8("Cancelar"))}, open{String::fromUTF8("Abrir mesmo assim")},
                search{String::fromUTF8("Procurar")};
     std::unique_ptr<FileChooser> chooser;
     std::shared_ptr<std::atomic<bool>> cancelled = std::make_shared<std::atomic<bool>>(false);
@@ -66,13 +68,13 @@ class MissingMediaPanel final : public Component {
         if (done) MessageManager::callAsync([done, proceed] { done(proceed); });
     }
     void chooseFolder() {
-        chooser = std::make_unique<FileChooser>(String::fromUTF8("Localizar arquivos ausentes"),
+        chooser = std::make_unique<FileChooser>(localization::translate("Locate missing files"),
                                                 document.getParentDirectory(), "", true);
         chooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
             [safe = SafePointer<MissingMediaPanel>(this)](const FileChooser &fc) {
                 if (!safe || fc.getResult() == File()) return;
                 safe->busy = true; safe->refresh();
-                const auto folder = fc.getResult(), directory = safe->document.getParentDirectory();
+                const auto folder = fc.getResult(), directory = projectBackups::mediaDirectory(safe->document);
                 const auto missing = safe->paths; const auto token = safe->cancelled;
                 Thread::launch([safe, folder, directory, missing, token] {
                     projectMediaRecovery::Result result;

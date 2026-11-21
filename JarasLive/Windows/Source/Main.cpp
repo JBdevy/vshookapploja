@@ -1,13 +1,21 @@
+#include "ConfirmationPanel.h"
+#include "CloseProjectSheet.h"
 #include "Workspace.h"
 #include "RemoteProtocol.h"
 #include "RemoteHost.h"
 #include "StartupSplash.h"
 #include "ShowMode.h"
+#include "SMK37Firmware.h"
 #include "ProjectMigration.h"
 #include "DesktopLayout.h"
 #include "NativeWindowBounds.h"
 #if CATLIVE_NATIVE_FRONTEND
 #include "NativeFrontendHost.h"
+#endif
+#if CATLIVE_IMGUI_FRONTEND
+#include "ImGuiFrontendHost.h"
+#endif
+#if CATLIVE_NATIVE_FRONTEND || CATLIVE_IMGUI_FRONTEND
 #include "FrontendBridge.h"
 #endif
 #include <BinaryData.h>
@@ -38,6 +46,7 @@ class ProjectTabCloseButton final : public QuietButton {
 class ProjectTabsHost final : public Component, private Timer {
   public:
     Workspace *current = nullptr;
+    bool fullscreen = false;
     std::function<std::vector<String>()> titles;
     std::function<size_t()> selected;
     std::function<void(size_t)> choose, closeTab;
@@ -50,6 +59,7 @@ class ProjectTabsHost final : public Component, private Timer {
     }
     void show(Workspace *workspace) {
         detach(); current = workspace;
+        current->workspaceFullscreen = fullscreen;
         addAndMakeVisible(current); addAndMakeVisible(current->windowCaption());
         rebuild(); resized();
     }
@@ -64,8 +74,10 @@ class ProjectTabsHost final : public Component, private Timer {
         if (!current) return;
         const int height = current->isProjectOpen() && buttons.size()>1 ? 24 : 0;
         current->setBounds(0, height, getWidth(), getHeight() - height);
-        current->windowCaption().setBounds(0, 0, getWidth(), 32);
-        viewport.setBounds(0, 32, getWidth(), height);
+        const int title = current->workspaceFullscreen ? 0 : 32;
+        current->windowCaption().setBounds(0, 0, getWidth(), title);
+        current->windowCaption().setVisible(!current->workspaceFullscreen);
+        viewport.setBounds(0, title, getWidth(), height);
         viewport.setVisible(height > 0); viewport.toFront(false);
         strip.setSize(getWidth(), 24);
         const float cell = buttons.empty() ? 0.f : float(getWidth()-12+3)/float(buttons.size());
@@ -139,7 +151,7 @@ class CatLiveApplication final : public JUCEApplication {
                                               BinaryData::icon2561x_pngSize));
             if (content->isLoginShowing()) {
                 fitLoginWindow(*this);
-            } else if (content->isProjectBrowserShowing()) {
+            } else if (!content->isProjectOpen()) {
                 fitProjectBrowserWindow(*this);
             } else {
                 fitEditorWindow(*this);
@@ -148,8 +160,10 @@ class CatLiveApplication final : public JUCEApplication {
             if (auto *peer = getPeer()) {
                 workArea.attach((HWND)peer->getNativeHandle());
                 auto engines = peer->getAvailableRenderingEngines();
+                const auto renderer=SystemStats::getEnvironmentVariable("CATLIVE_RENDERER",
+                    Appearance{}.value("jaras.windows.renderer","Direct2D").toString());
                 for (int i = 0; i < engines.size(); ++i)
-                    if (engines[i].containsIgnoreCase("Direct2D"))
+                    if (engines[i].containsIgnoreCase(renderer))
                         peer->setCurrentRenderingEngine(i);
             }
         }
@@ -204,9 +218,13 @@ class CatLiveApplication final : public JUCEApplication {
             try {
                 if (i + 2 >= args.size())
                     throw std::runtime_error("Expected input and output project paths.");
-                auto original = ProjectCodec::read(File(args[i + 1]));
-                auto model = ProjectCodec::decode(original);
-                ProjectCodec::write(File(args[i + 2]), ProjectCodec::encode(model, original));
+                auto timings=object();auto started=Time::getMillisecondCounterHiRes();
+                const auto record=[&](const char *stage){const auto now=Time::getMillisecondCounterHiRes();put(timings,stage,now-started);started=now;};
+                auto original = ProjectCodec::read(File(args[i + 1]));record("readMilliseconds");
+                auto model = ProjectCodec::decode(original);record("decodeMilliseconds");
+                auto encoded=ProjectCodec::encode(model, original);record("encodeMilliseconds");
+                ProjectCodec::write(File(args[i + 2]),encoded);record("writeMilliseconds");
+                File(args[i+2]).withFileExtension("roundtrip-timing.json").replaceWithText(JSON::toString(timings));
             } catch (const std::exception &e) {
                 testResult = 1;
                 if (i+2<args.size()) File(args[i+2]).withFileExtension("roundtrip-error.txt").replaceWithText(String::fromUTF8(e.what()));
@@ -233,14 +251,15 @@ class CatLiveApplication final : public JUCEApplication {
             const int appearanceArgument = args.indexOf("--appearance-file");
             if ((visualTest || previewHome) && appearanceArgument >= 0 && appearanceArgument + 1 < args.size())
                 appearanceFile = File(args[appearanceArgument + 1]);
-            float scale = Appearance(appearanceFile).interfaceScale();
-            const int scaleArg = args.indexOf("--ui-scale");
-            if (scaleArg >= 0 && scaleArg + 1 < args.size()) {
-                const auto requested = args[scaleArg + 1].getFloatValue();
-                if (std::isfinite(requested) && requested > 0) scale = std::round(jlimit(.6f, 1.2f, requested) * 10) / 10;
+            auto &desktop = Desktop::getInstance();
+            if (const auto *screen = desktop.getDisplays().getPrimaryDisplay()) {
+                const auto area = screen->userArea;
+                if (!area.isEmpty()) {
+                    const auto scale = std::min(area.getWidth() / 1600.f, area.getHeight() / 850.f);
+                    desktop.setGlobalScaleFactor(jlimit(.8f, 1.f, scale));
+                }
             }
-            Desktop::getInstance().setGlobalScaleFactor(scale);
-            if (!visualTest)
+            if (!visualTest && !args.contains("--imgui-ui"))
                 splash = std::make_unique<StartupSplash>();
             session = std::make_unique<Session>();
             auth = std::make_unique<Auth>();
@@ -278,6 +297,12 @@ class CatLiveApplication final : public JUCEApplication {
                 auth->restore();
             }
             if (!visualTest && !previewHome) { showMode = ShowMode::shared(); showMode->start(); }
+#if CATLIVE_IMGUI_FRONTEND
+            if (args.contains("--imgui-ui")) {
+                startImGuiFrontend(args);
+                return;
+            }
+#endif
 #if CATLIVE_NATIVE_FRONTEND
             if (args.contains("--native-ui")) {
                 startNativeFrontend(args);
@@ -358,10 +383,16 @@ class CatLiveApplication final : public JUCEApplication {
         }
     }
     void shutdown() override {
+        multipleProjectWindow.reset();multipleProjectQueue.clear();
         if (showMode) { showMode->stop(); showMode.reset(); }
         splash.reset();
-#if CATLIVE_NATIVE_FRONTEND
+#if CATLIVE_NATIVE_FRONTEND || CATLIVE_IMGUI_FRONTEND
         nativeBridge.reset();
+#endif
+#if CATLIVE_IMGUI_FRONTEND
+        imguiFrontend.reset();
+#endif
+#if CATLIVE_NATIVE_FRONTEND
         nativeFrontend.reset();
 #endif
         window.reset();
@@ -374,7 +405,11 @@ class CatLiveApplication final : public JUCEApplication {
         setApplicationReturnValue(testResult);
     }
     void systemRequestedQuit() override {
-#if CATLIVE_NATIVE_FRONTEND
+        if (SMK37FirmwareTask::shared()->busy) {
+            if (tabHost && tabHost->current) tabHost->current->showError(String::fromUTF8("Aguarde a operação de firmware do SMK-37 Pro terminar."));
+            return;
+        }
+#if CATLIVE_NATIVE_FRONTEND || CATLIVE_IMGUI_FRONTEND
         if (nativeBridge && !closing) { nativeBridge->requestClose(); return; }
 #endif
         if(jaras::projectSync::readOnly()) {
@@ -385,14 +420,30 @@ class CatLiveApplication final : public JUCEApplication {
             if (splash) splash->toFront(false);
             return;
         }
+        if (closingProjects) {
+            ModalComponentManager::getInstance()->bringModalComponentsToFront();
+            return;
+        }
         if (window)
             if (auto *w = (tabHost ? tabHost->current : nullptr)) {
-                requestTabClosing(0);
+                requestAllProjectsClosing(*w);
                 return;
             }
         quit();
     }
     void anotherInstanceStarted(const String &arguments) override {
+#if CATLIVE_IMGUI_FRONTEND
+        if (!closing && imguiFrontend) {
+            imguiFrontend->show();
+            auto args = StringArray::fromTokens(arguments, true);
+            for (auto arg : args)
+                if (File::isAbsolutePath(arg.unquoted()) && File(arg.unquoted()).hasFileExtension("jl;bkjl;ziplive;zip")) {
+                    if (nativeBridge) nativeBridge->openProject(File(arg.unquoted()));
+                    break;
+                }
+            return;
+        }
+#endif
 #if CATLIVE_NATIVE_FRONTEND
         if (!closing && nativeFrontend) {
             nativeFrontend->show();
@@ -417,6 +468,65 @@ class CatLiveApplication final : public JUCEApplication {
     }
 
   private:
+#if CATLIVE_NATIVE_FRONTEND || CATLIVE_IMGUI_FRONTEND
+    std::unique_ptr<FrontendBridge> nativeBridge;
+#endif
+#if CATLIVE_IMGUI_FRONTEND
+    std::unique_ptr<ImGuiFrontendHost> imguiFrontend;
+    void startImGuiFrontend(const StringArray &args) {
+        tabSessions.push_back(session.get());
+        nativeBridge = std::make_unique<FrontendBridge>(*session, *auth, [this](const String &json) {
+            if (imguiFrontend) imguiFrontend->postJSON(utf8(json));
+        }, true);
+        nativeBridge->onCloseApproved = [this] {
+            if (closing) return;
+            closing = true;
+            session->command(jaras::CommandKind::stopAll);
+            session->audio.instrumentAllowed = false;
+            if (imguiFrontend) imguiFrontend->close();
+            quit();
+        };
+        ImGuiFrontendHost::Options options;
+        options.title = (String("CatLive Version ") + getApplicationVersion()).toWideCharPointer();
+        options.fontPath = File::getSpecialLocation(File::currentExecutableFile).getParentDirectory()
+            .getChildFile("fonts/Inter-Regular.ttf").getFullPathName().toWideCharPointer();
+        const auto diagnostics=args.indexOf("--ui-diagnostics");
+        if(diagnostics>=0&&diagnostics+1<args.size()&&File::isAbsolutePath(args[diagnostics+1]))
+            options.diagnosticsPath=args[diagnostics+1].toWideCharPointer();
+        ImGuiFrontendHost::Callbacks actions;
+        actions.message = [this](std::string json) {
+            if (nativeBridge && !closing) nativeBridge->receive(String::fromUTF8(json.data(), static_cast<int>(json.size())));
+        };
+        const auto initialOpen=std::make_shared<bool>(true);
+        actions.ready = [this, args, initialOpen] {
+            if (closing) return;
+            splash.reset();
+            if (imguiFrontend) imguiFrontend->show();
+            if (nativeBridge) nativeBridge->publishSnapshot();
+            if(!std::exchange(*initialOpen,false))return;
+            for (const auto &argument : args)
+                if (File::isAbsolutePath(argument) && File(argument).hasFileExtension("jl;bkjl;ziplive;zip")) {
+                    if (nativeBridge) nativeBridge->openProject(File(argument));
+                    break;
+                }
+        };
+        actions.closeRequested = [this] { systemRequestedQuit(); };
+        actions.error = [this](std::string error) {
+            MessageManager::callAsync([this, error = std::move(error)] {
+                if (closing) return;
+                splash.reset();
+                const auto message = String::fromUTF8(error.c_str());
+                if(nativeBridge)nativeBridge->recoverPresentation(message,[this] {
+                    if(!imguiFrontend)return;
+                    try {imguiFrontend->restart();nativeBridge->setOwnerWindow(imguiFrontend->handle());}
+                    catch(const std::exception &error){MessageBoxW(nullptr,String::fromUTF8(error.what()).toWideCharPointer(),L"CatLive",MB_OK|MB_ICONERROR);}
+                });
+            });
+        };
+        imguiFrontend = std::make_unique<ImGuiFrontendHost>(std::move(options), std::move(actions));
+        nativeBridge->setOwnerWindow(imguiFrontend->handle());
+    }
+#endif
 #if CATLIVE_NATIVE_FRONTEND
     void startNativeFrontend(const StringArray& args) {
         // Retain the shipping Session, authorization and audio device. Only the
@@ -440,7 +550,7 @@ class CatLiveApplication final : public JUCEApplication {
         NativeFrontendHost::Options options;
         options.assetDirectory = executable.getChildFile("native-ui").getFullPathName().toWideCharPointer();
         options.userDataDirectory = cache.getFullPathName().toWideCharPointer();
-        options.title = (String("CatLive Version ") + getApplicationVersion() + " — Interface Windows (avaliação)").toWideCharPointer();
+        options.title = (String("CatLive Version ") + getApplicationVersion() + String::fromUTF8(" — Interface Windows (avaliação)")).toWideCharPointer();
         NativeFrontendHost::Callbacks actions;
         actions.message = [this](std::string json) {
             if (nativeBridge && !closing) nativeBridge->receive(String::fromUTF8(json.data(), static_cast<int>(json.size())));
@@ -473,7 +583,6 @@ class CatLiveApplication final : public JUCEApplication {
         nativeBridge->setOwnerWindow(nativeFrontend->handle());
     }
     std::unique_ptr<NativeFrontendHost> nativeFrontend;
-    std::unique_ptr<FrontendBridge> nativeBridge;
 #endif
     void beginClosing() {
         if (closing) return;
@@ -533,7 +642,7 @@ class CatLiveApplication final : public JUCEApplication {
         sync.resetApplied=[this]{syncApplied.clear();};
         sync.confirm=[this](String message,std::function<void(bool)> reply) {
             auto *owner=tabHost?tabHost->current:nullptr;
-            AlertWindow::showOkCancelBox(MessageBoxIconType::QuestionIcon,"Project Sync",message,
+            ConfirmationPanel::show(MessageBoxIconType::QuestionIcon,"Project Sync",message,
                 "Aceitar","Cancelar",owner,ModalCallbackFunction::create([reply](int result){reply(result!=0);}));
         };
         sync.audioIdentity=[this] {
@@ -607,12 +716,42 @@ class CatLiveApplication final : public JUCEApplication {
             for (size_t index = 0; index < tabWorkspaces.size(); ++index)
                 if (remote::wireID(tabWorkspaces[index]->remoteProjectTabID) == id) { if (index != selectedTab) selectProjectTab(index); return; }
         };
+        workspace.closeRemoteProjectTab = [this](const String &id) {
+            for (size_t index = 0; index < tabWorkspaces.size(); ++index)
+                if (remote::wireID(tabWorkspaces[index]->remoteProjectTabID) == id) { closeProjectTab(index); return; }
+        };
         workspace.activateExistingProjectTab = [this](File file) {
             for (size_t index = 0; index < tabSessions.size(); ++index)
                 if (index != selectedTab && tabSessions[index]->document == file) { selectProjectTab(index); return true; }
             return false;
         };
         workspace.openInNewProjectTab = [this](File file) { openProjectTab(file); };
+        workspace.openMultipleProjectTabs = [this](std::vector<File> files){openMultipleProjects(std::move(files));};
+        workspace.multitrackTabs = [this] {
+            std::vector<std::pair<ID,Session *>> result;
+            for (size_t i = 0; i < tabWorkspaces.size(); ++i)
+                if (tabWorkspaces[i]->isProjectOpen()) result.emplace_back(tabWorkspaces[i]->remoteProjectTabID, tabSessions[i]);
+            return result;
+        };
+        workspace.toggleWorkspaceFullscreen = [this] {
+            if (!window) return;
+            const bool fullscreen = !window->workArea.isFullscreen();
+            for (auto *tab : tabWorkspaces) tab->workspaceFullscreen = fullscreen;
+            if (tabHost) tabHost->fullscreen = fullscreen;
+            // Native resizing dispatches layout synchronously. Publish the new
+            // caption state first so the first frame uses the final coordinates.
+            if (!window->workArea.setFullscreen(fullscreen)) {
+                for (auto *tab : tabWorkspaces) tab->workspaceFullscreen = !fullscreen;
+                if (tabHost) tabHost->fullscreen = !fullscreen;
+                return;
+            }
+            if (tabHost) {
+                tabHost->resized();
+                if (tabHost->current) { tabHost->current->resized(); tabHost->current->grabKeyboardFocus(); }
+            }
+            window->toFront(true);
+        };
+        workspace.openRemoteProjectInNewTab = [this](File file, ID request) { openProjectTab(file, request); };
         workspace.navigateProjectTab = [this](int direction) {
             if (tabWorkspaces.size() < 2 || selectedTab >= tabSessions.size() || tabSessions[selectedTab]->busy || tabSessions[selectedTab]->audio.isRecording()) return;
             if ((direction < 0 && selectedTab == 0) || (direction > 0 && selectedTab + 1 >= tabWorkspaces.size())) return;
@@ -623,10 +762,14 @@ class CatLiveApplication final : public JUCEApplication {
             return tabWorkspaces.size() > 1 && (direction < 0 ? selectedTab > 0 : selectedTab + 1 < tabWorkspaces.size());
         };
     }
-    void selectProjectTab(size_t index) {
-        if (!window || index >= tabWorkspaces.size()) return;
+    void selectProjectTab(size_t index, bool forClosing = false) {
+        if (!window || index >= tabWorkspaces.size() || (closingProjects && !forClosing)) return;
         if (selectedTab < tabSessions.size() && (tabSessions[selectedTab]->busy || tabSessions[selectedTab]->audio.isRecording())) return;
-        if (auto *old = (tabHost ? tabHost->current : nullptr)) { old->deactivateProjectTab(); old->setVisible(false); }
+        if (auto *old = (tabHost ? tabHost->current : nullptr)) {
+            if (tabWorkspaces[index]->isProjectOpen()) old->returnToWorkspace();
+            old->deactivateProjectTab();
+            old->setVisible(false);
+        }
         selectedTab = index;
         auto *content = tabWorkspaces[index];
         tabHost->show(content);
@@ -634,11 +777,67 @@ class CatLiveApplication final : public JUCEApplication {
         content->activateProjectTab();
         content->grabKeyboardFocus();
     }
-    void openProjectTab(const File &file) {
-        if (!file.existsAsFile()) return;
+    std::vector<File> multipleProjectQueue;
+    size_t multipleProjectIndex=0;
+    double multipleProjectProgress=0;
+    std::unique_ptr<AlertWindow> multipleProjectWindow;
+    void openMultipleProjects(std::vector<File> files){
+        if(multipleProjectWindow||closingProjects||files.empty())return;
+        multipleProjectQueue.clear();
+        for(const auto &file:files)if(std::find(multipleProjectQueue.begin(),multipleProjectQueue.end(),file)==multipleProjectQueue.end())multipleProjectQueue.push_back(file);
+        multipleProjectIndex=0;multipleProjectProgress=0;
+        multipleProjectWindow=std::make_unique<AlertWindow>(localization::translate("Opening projects…"),String(),MessageBoxIconType::NoIcon,window.get());
+        multipleProjectWindow->addProgressBarComponent(multipleProjectProgress);
+        multipleProjectWindow->enterModalState(false);
+        openNextMultipleProject();
+    }
+    void openNextMultipleProject(){
+        if(!multipleProjectWindow)return;
+        if(multipleProjectIndex>=multipleProjectQueue.size()){
+            multipleProjectWindow->exitModalState(0);multipleProjectWindow.reset();multipleProjectQueue.clear();return;
+        }
+        const auto file=multipleProjectQueue[multipleProjectIndex];
+        multipleProjectWindow->setMessage(String(int(multipleProjectIndex+1))+"/"+String(int(multipleProjectQueue.size()))+"  "+file.getFileNameWithoutExtension());
+        const auto finished=[this](String error){
+            if(!multipleProjectWindow)return;
+            if(error.isNotEmpty()){
+                multipleProjectWindow->exitModalState(0);multipleProjectWindow.reset();multipleProjectQueue.clear();return;
+            }
+            ++multipleProjectIndex;multipleProjectProgress=double(multipleProjectIndex)/multipleProjectQueue.size();
+            MessageManager::callAsync([this]{if(JUCEApplication::getInstance()==this)openNextMultipleProject();});
+        };
+        if(!tabWorkspaces[selectedTab]->isProjectOpen()){
+            auto *workspace=tabWorkspaces[selectedTab];
+            workspace->projectTabLoadFinished=[workspace,finished](String error){
+                MessageManager::callAsync([safe=Component::SafePointer<Workspace>(workspace),finished,error]{if(safe)safe->projectTabLoadFinished={};finished(error);});
+            };
+            workspace->openProject(file,{},true);
+        }else openProjectTab(file,{},finished);
+    }
+    void openProjectTab(const File &file, ID remoteRequest = {}, std::function<void(String)> completion = {}) {
+        const auto host = firstWorkspace->projectRemoteHost();
+        if (closingProjects) {
+            host->projectOpening.update(remoteRequest, remote::ProjectOpening::State::failed, {}, "Finish closing the current operation first.");
+            if(completion)completion("Could not open project.");
+            return;
+        }
+        if (!file.existsAsFile()) {
+            host->projectOpening.update(remoteRequest, remote::ProjectOpening::State::failed, {}, "This project is no longer available in the PC's recent projects.");
+            if(completion)completion("Could not open project.");
+            return;
+        }
         for (size_t index = 0; index < tabSessions.size(); ++index)
-            if (tabSessions[index]->document == file) { selectProjectTab(index); return; }
-        if (tabSessions[selectedTab]->busy || tabSessions[selectedTab]->audio.isRecording()) return;
+            if (tabSessions[index]->document == file) {
+                selectProjectTab(index);
+                host->projectOpening.update(remoteRequest, remote::ProjectOpening::State::completed);
+                if(completion)completion({});
+                return;
+            }
+        if (tabSessions[selectedTab]->busy || tabSessions[selectedTab]->audio.isRecording()) {
+            host->projectOpening.update(remoteRequest, remote::ProjectOpening::State::failed, {}, "Wait for the current operation or stop recording on the PC.");
+            if(completion)completion("Finish the current operation before opening another project.");
+            return;
+        }
         try {
             const size_t previousTab = selectedTab;
             auto tab = std::make_unique<ProjectTab>();
@@ -647,7 +846,7 @@ class CatLiveApplication final : public JUCEApplication {
             tab->session->canPlay = [this] { return auth->allowed() && !auth->pendingRevocation; };
             if (!tab->session->inspection) {
                 const auto error = tab->session->audio.openDevice();
-                if (error.isNotEmpty()) throw std::runtime_error(utf8(error));
+                if (error.isNotEmpty()) tab->session->message = error;
             }
             tab->lighting = std::make_unique<Lighting>(*tab->session);
             auto *lights = tab->lighting.get();
@@ -655,9 +854,10 @@ class CatLiveApplication final : public JUCEApplication {
             tab->workspace = std::make_unique<Workspace>(*tab->session, *auth, *tab->lighting, false, File{}, firstWorkspace->projectRemoteHost());
             auto *workspace = tab->workspace.get();
             installProjectTabHooks(*workspace);
-            workspace->projectTabLoadFinished = [this, previousTab, workspace](String error) {
-                MessageManager::callAsync([this, previousTab, workspace, error] {
+            workspace->projectTabLoadFinished = [this, previousTab, workspace, completion](String error) {
+                MessageManager::callAsync([this, previousTab, workspace, error, completion] {
                     workspace->projectTabLoadFinished = {};
+                    if (completion)completion(error);
                     if (error.isEmpty()) return;
                     auto at = std::find(tabWorkspaces.begin(), tabWorkspaces.end(), workspace);
                     if (at == tabWorkspaces.end()) return;
@@ -672,14 +872,16 @@ class CatLiveApplication final : public JUCEApplication {
             tabWorkspaces.push_back(workspace); tabSessions.push_back(tab->session.get());
             extraTabs.push_back(std::move(tab));
             selectProjectTab(tabWorkspaces.size() - 1);
-            workspace->openProject(file);
+            workspace->openProject(file, {}, false, false, remoteRequest);
         } catch (const std::exception &error) {
+            host->projectOpening.update(remoteRequest, remote::ProjectOpening::State::failed, {}, error.what());
             tabWorkspaces[selectedTab]->activateProjectTab();
+            if(completion)completion(String::fromUTF8(error.what()));
             tabWorkspaces[selectedTab]->showError(String::fromUTF8(error.what()));
         }
     }
     void closeProjectTab(size_t index) {
-        if (closing || index>=tabWorkspaces.size() || tabSessions[selectedTab]->busy || tabSessions[selectedTab]->audio.isRecording()) return;
+        if (closing || closingProjects || index>=tabWorkspaces.size() || tabSessions[selectedTab]->busy || tabSessions[selectedTab]->audio.isRecording()) return;
         selectProjectTab(index);
         auto *workspace=tabWorkspaces[index];
         workspace->requestClose([this,workspace] {
@@ -710,11 +912,38 @@ class CatLiveApplication final : public JUCEApplication {
             });
         },false);
     }
-    void requestTabClosing(size_t index) {
-        if (index >= tabWorkspaces.size()) { beginClosing(); return; }
-        selectProjectTab(index);
-        tabWorkspaces[index]->requestClose([this, index] { requestTabClosing(index + 1); });
+    void requestAllProjectsClosing(Workspace &workspace) {
+        if (workspace.isCurrentlyBlockedByAnotherModalComponent()) {
+            ModalComponentManager::getInstance()->bringModalComponentsToFront();
+            return;
+        }
+        if (std::any_of(tabSessions.begin(), tabSessions.end(), [](auto *tab) { return tab->busy; })) {
+            workspace.showError(localization::translate("Finish the current operation before closing."));
+            return;
+        }
+        closingProjects = true;
+        closingInitialTab = selectedTab;
+        const bool multiple = tabSessions.size() > 1;
+        const bool needsSave = std::any_of(tabSessions.begin(), tabSessions.end(), [](auto *tab) {
+            return (tab->dirty && !tab->isTemporary()) || tab->isSaving() || tab->audio.isRecording();
+        });
+        if (!multiple || !needsSave) { requestTabClosing(0); return; }
+        CloseProjectSheet::open(workspace, [this](int action) {
+            if (action != 1 && action != 2) { closingProjects = false; return; }
+            requestTabClosing(0, action == 1);
+        }, false, true, true);
     }
+    void requestTabClosing(size_t position, std::optional<bool> saveAll = {}) {
+        if (position >= tabWorkspaces.size()) { beginClosing(); return; }
+        // Finish the foreground recorder first; selecting another tab is
+        // intentionally blocked while that recorder is still running.
+        const auto index = position == 0 ? closingInitialTab : position <= closingInitialTab ? position - 1 : position;
+        selectProjectTab(index, true);
+        tabWorkspaces[index]->requestClose([this, position, saveAll] { requestTabClosing(position + 1, saveAll); },
+                                          true, saveAll, [this] { closingProjects = false; });
+    }
+    bool closingProjects = false;
+    size_t closingInitialTab = 0;
     bool closing = false;
     std::vector<Component::SafePointer<Component>> hiddenWindows;
     int testResult = 0;

@@ -1,5 +1,7 @@
 #pragma once
+#include "Localization.h"
 #include "Session.h"
+#include "RegionPitch.h"
 namespace catlive {
 class TunerControl final : public Component, private Timer {
   public:
@@ -9,6 +11,7 @@ class TunerControl final : public Component, private Timer {
             addAndMakeVisible(button);
             button->setWantsKeyboardFocus(false);
             button->getProperties().set("plain", true);
+            button->getProperties().set("fontSize", 15);
             button->setColour(TextButton::textColourOffId, theme::green);
         }
         down.onClick = [step] { step(-1); };
@@ -18,45 +21,27 @@ class TunerControl final : public Component, private Timer {
         startTimerHz(8);
     }
     void resized() override {
-        down.setBounds(48, 0, 20, getHeight());
-        up.setBounds(getWidth() - 24, 0, 20, getHeight());
+        constexpr int stepWidth = 28, stepHeight = 28;
+        const int y = (getHeight() - stepHeight) / 2;
+        down.setBounds(38, y, stepWidth, stepHeight);
+        up.setBounds(getWidth() - stepWidth - 3, y, stepWidth, stepHeight);
     }
     const jaras::Part *region() const {
         const auto *song = session.song();
-        if (!song)
-            return nullptr;
-        const auto &transport = session.transport();
-        if (transport.playing) {
-            for (const auto &part : song->parts) if (transport.ignoreNextRegionId == part.id) return &part;
-            if (const auto *part = regionPitch::at(*song, transport.position)) return part;
-        }
-        for (const auto &part : song->parts)
-            if (transport.regionId == part.id) {
-                if (transport.playing) return &part;
-                const jaras::Part *first = nullptr;
-                for (const auto &child : song->parts)
-                    if (child.parentRegionID == part.id && (!first || child.startTime < first->startTime)) first = &child;
-                return first ? first : &part;
-            }
-        return nullptr;
+        return song ? regionPitch::target(*song, session.transport()) : nullptr;
     }
     void paint(Graphics &g) override {
-        auto bounds = getLocalBounds().toFloat().reduced(.5f);
-        g.setColour(theme::display);
-        g.fillRoundedRectangle(bounds, 4);
-        g.setColour(theme::line);
-        g.drawRoundedRectangle(bounds, 4, 1);
         g.setColour(Colours::white);
         g.setFont(theme::semiboldFont(9));
-        g.drawText("Tuner", 5, 0, 42, getHeight(), Justification::centredLeft);
+        g.drawText("Tuner", 5, 0, down.getX() - 5, getHeight(), Justification::centredLeft);
         g.setColour(theme::green);
         g.setFont(theme::semiboldFont(11));
         auto *part = region();
-        g.drawText(String(part ? part->pitchSemitones.value_or(0) : 0) + "st", 68, 0,
-                   getWidth() - 92, getHeight(), Justification::centred);
+        g.drawText(String(part ? part->pitchSemitones.value_or(0) : 0) + "st", down.getRight(), 0,
+                   up.getX() - down.getRight(), getHeight(), Justification::centred);
     }
     void mouseDown(const MouseEvent &e) override {
-        if (e.mods.isPopupMenu() && e.x >= 68 && e.x < getWidth() - 24 && region())
+        if (e.mods.isPopupMenu() && e.x >= down.getRight() && e.x < up.getX() && region())
             configure();
     }
 
@@ -64,6 +49,7 @@ class TunerControl final : public Component, private Timer {
     Session &session;
     std::function<void()> configure;
     QuietButton down{String::fromUTF8("−")}, up{"+"};
+    std::optional<int> shownPitch;
     void timerCallback() override {
         if (!isShowing())
             return;
@@ -72,7 +58,8 @@ class TunerControl final : public Component, private Timer {
             part && !session.busy;
         down.setEnabled(allowed && part->pitchSemitones.value_or(0) > -12);
         up.setEnabled(allowed && part->pitchSemitones.value_or(0) < 12);
-        repaint();
+        const int pitch = part ? part->pitchSemitones.value_or(0) : 0;
+        if (!shownPitch || *shownPitch != pitch) { shownPitch = pitch; repaint(); }
     }
 };
 class PitchTargetsPanel final : public Component {
@@ -92,7 +79,7 @@ class PitchTargetsPanel final : public Component {
                         groups = asSet(*part.pitchGroupIDs);
                 }
         }
-        for (auto *button : {&tracksTab, &groupsTab, &all, &cancel, &apply}) {
+        for (auto *button : {&tracksTab, &groupsTab, &all, &apply}) {
             addAndMakeVisible(button);
             button->setWantsKeyboardFocus(false);
         }
@@ -104,7 +91,6 @@ class PitchTargetsPanel final : public Component {
             tab = 1;
             refresh();
         };
-        cancel.onClick = close;
         apply.onClick = [this] { commit(); };
         all.onClick = [this] {
             bool selected = false;
@@ -134,7 +120,6 @@ class PitchTargetsPanel final : public Component {
         content.setSize(view.getWidth() - 8, std::max(view.getHeight(), checks.size() * 31));
         for (int i = 0; i < checks.size(); ++i)
             checks[i]->setBounds(4, i * 31, content.getWidth() - 8, 28);
-        cancel.setBounds(getWidth() - 184, getHeight() - 43, 78, 28);
         apply.setBounds(getWidth() - 98, getHeight() - 43, 78, 28);
     }
     bool keyPressed(const KeyPress &key) override {
@@ -156,8 +141,8 @@ class PitchTargetsPanel final : public Component {
     Viewport view;
     Component content;
     OwnedArray<ToggleButton> checks;
-    TextButton tracksTab{"Pistas"}, groupsTab{"Grupos"}, all{"Selecionar todas"},
-        cancel{"Cancelar"}, apply{"Aplicar"};
+    TextButton tracksTab{localization::translate("Pistas")}, groupsTab{localization::translate("Grupos")}, all{"Selecionar todas"},
+        apply{"Aplicar"};
     static std::set<ID> asSet(const std::vector<ID> &values) {
         return {values.begin(), values.end()};
     }

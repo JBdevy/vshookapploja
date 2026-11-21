@@ -6,10 +6,23 @@ import android.graphics.drawable.*;
 import android.view.*;
 import android.widget.*;
 import java.util.Locale;
+import java.util.function.Consumer;
 
 final class RemoteWidgets {
-    static final int GREEN=0xff69ed91,YELLOW=0xffffdc52,RED=0xffff3030,SECONDARY=0xffb9b9b9,TEXT=Color.WHITE,BLUE=0xff409cff;
+    static final int GREEN=0xff69ed91,TOOLBAR_INACTIVE=0xffc8c8c8,YELLOW=0xffffdc52,RED=0xffff3030,SECONDARY=0xffb9b9b9,TEXT=Color.WHITE,BLUE=0xff409cff;
     static float density=1;static Typeface regular=Typeface.DEFAULT,bold=Typeface.DEFAULT_BOLD;static boolean tablet;
+    private static Typeface[] setlistFaces;
+    static Typeface setlistFace(Context context, int style) {
+        if (setlistFaces == null) {
+            String[] names = {"Inter-Regular", "Inter-Bold", "Inter-BoldItalic", "Inter-ExtraBold",
+                              "Inter-Black", "ArchivoBlack-Regular", "Bungee-Regular"};
+            Typeface[] faces = new Typeface[names.length];
+            for (int i = 0; i < names.length; i++)
+                faces[i] = Typeface.createFromAsset(context.getAssets(), "fonts/" + names[i] + ".ttf");
+            setlistFaces = faces;
+        }
+        return setlistFaces[style >= 0 && style < setlistFaces.length ? style : 0];
+    }
     static void init(Context c){RemoteText.init(c);density=c.getResources().getDisplayMetrics().density;tablet=c.getResources().getConfiguration().smallestScreenWidthDp>=600;regular=Typeface.createFromAsset(c.getAssets(),"fonts/Inter-Regular.ttf");bold=Typeface.createFromAsset(c.getAssets(),"fonts/Inter-SemiBold.ttf");}
     static int dp(float v){return Math.round(v*density);}
     static GradientDrawable surface(int top,int bottom,int edge,float radius){GradientDrawable d=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{top,bottom});d.setCornerRadius(dp(radius));d.setStroke(dp(0.5f),edge);return d;}
@@ -68,7 +81,16 @@ final class RemoteWidgets {
         case "folder":p.setStyle(Paint.Style.FILL);Path folder=new Path();folder.moveTo(2,5);folder.lineTo(10,5);folder.lineTo(12,8);folder.lineTo(22,8);folder.lineTo(22,20);folder.lineTo(2,20);folder.close();canvas.drawPath(folder,p);break;
         case "grid":for(int x=3;x<22;x+=7)for(int y=3;y<22;y+=7)canvas.drawRect(x,y,x+4,y+4,p);break;
         case "clock":canvas.drawCircle(12,12,9,p);canvas.drawLine(12,5,12,12,p);canvas.drawLine(12,12,17,15,p);break;
-        case "save":canvas.drawLine(12,2,12,15,p);canvas.drawLine(7,10,12,15,p);canvas.drawLine(17,10,12,15,p);canvas.drawLine(3,9,3,21,p);canvas.drawLine(3,21,21,21,p);canvas.drawLine(21,21,21,9,p);break;
+        case "save":
+            p.setStrokeWidth(2.2f);
+            p.setStrokeCap(Paint.Cap.ROUND);
+            p.setStrokeJoin(Paint.Join.ROUND);
+            Path save=new Path();
+            save.addRect(2,2,22,22,Path.Direction.CW);
+            save.moveTo(6,2);save.lineTo(6,10);save.lineTo(18,10);save.lineTo(18,2);
+            save.moveTo(6,22);save.lineTo(6,16);save.lineTo(18,16);save.lineTo(18,22);
+            canvas.drawPath(save,p);
+            break;
         case "parts":p.setStrokeWidth(2);canvas.drawLine(3,6,22,6,p);canvas.drawLine(3,12,16,12,p);canvas.drawLine(3,18,11,18,p);break;
         case "notices":canvas.drawRoundRect(2,3,22,17,3,3,p);canvas.drawLine(6,17,6,22,p);canvas.drawLine(6,22,12,17,p);for(int y=7;y<=13;y+=3)canvas.drawLine(6,y,18,y,p);break;
         case "settings":canvas.drawCircle(12,12,4,p);for(int i=0;i<8;i++){double a=i*Math.PI/4;canvas.drawLine(12+(float)Math.cos(a)*8,12+(float)Math.sin(a)*8,12+(float)Math.cos(a)*11,12+(float)Math.sin(a)*11,p);}canvas.drawCircle(12,12,8,p);break;
@@ -86,18 +108,19 @@ final class RemoteWidgets {
     /** Double-tap reset and horizontal drag share the same interaction in every fader. */
     static final class FaderTouch extends GestureDetector.SimpleOnGestureListener {
         interface Target {void change(float x,boolean end);void reset();void tracking(boolean active);}
-        final View view;final Target target;final GestureDetector detector;boolean dragged;
+        final View view;final Target target;final GestureDetector detector;boolean dragged, doubleTapping;
         FaderTouch(View view,Target target){this.view=view;this.target=target;detector=new GestureDetector(view.getContext(),this);}
         public boolean onDown(MotionEvent event){return true;}
         public boolean onSingleTapConfirmed(MotionEvent event){target.change(event.getX(),true);view.performClick();return true;}
-        public boolean onDoubleTap(MotionEvent event){target.reset();return true;}
-        public boolean onScroll(MotionEvent first,MotionEvent current,float dx,float dy){dragged=true;target.change(current.getX(),false);return true;}
+        public boolean onDoubleTap(MotionEvent event){doubleTapping=true;dragged=false;target.reset();return true;}
+        @Override public boolean onDoubleTapEvent(MotionEvent event){return true;}
+        public boolean onScroll(MotionEvent first,MotionEvent current,float dx,float dy){if(!doubleTapping){dragged=true;target.change(current.getX(),false);}return true;}
         boolean touch(MotionEvent event){
             int action=event.getActionMasked();
-            if(action==MotionEvent.ACTION_DOWN){dragged=false;target.tracking(true);if(view.getParent()!=null)view.getParent().requestDisallowInterceptTouchEvent(true);}
+            if(action==MotionEvent.ACTION_DOWN){doubleTapping=false;dragged=false;target.tracking(true);if(view.getParent()!=null)view.getParent().requestDisallowInterceptTouchEvent(true);}
             detector.onTouchEvent(event);
             if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL){
-                if(dragged&&action==MotionEvent.ACTION_UP)target.change(event.getX(),true);
+                if(dragged&&!doubleTapping&&action==MotionEvent.ACTION_UP)target.change(event.getX(),true);
                 target.tracking(false);if(view.getParent()!=null)view.getParent().requestDisallowInterceptTouchEvent(false);
             }
             return true;
@@ -106,28 +129,71 @@ final class RemoteWidgets {
     static class Fader extends View {
         interface Changed {void value(double v);}
         double value=1,maximumDB=12;boolean pan=false,dragging=false,readout=true;final Changed changed;final Paint paint=new Paint(3);String label="";long last,pendingUntil;Double confirmed;final FaderTouch touch;
+        Consumer<Fader> selectVolume;
+        private boolean selecting;
+        private float downX, downY, dragOrigin;
+        private final int touchSlop;
         Fader(Context c,boolean pan,Changed changed){super(c);this.pan=pan;this.changed=changed;setFocusable(true);setContentDescription(pan?"Pan":"Volume");
+            touchSlop=ViewConfiguration.get(c).getScaledTouchSlop();
             touch=new FaderTouch(this,new FaderTouch.Target(){public void change(float x,boolean end){setFromX(x,end);}public void reset(){commit(Fader.this.pan?0:1);}public void tracking(boolean active){dragging=active;}});
+        }
+        @Override protected void onMeasure(int widthSpec,int heightSpec) {
+            super.onMeasure(widthSpec,heightSpec);
+            if(selectVolume!=null)setMeasuredDimension(Math.min(getMeasuredWidth(),dp(186)),getMeasuredHeight());
+        }
+        void selectVolume(boolean selected) {
+            setSelected(selected);
+            invalidate();
+        }
+        @Override protected void onDetachedFromWindow(){
+            if(isSelected()&&selectVolume!=null)selectVolume.accept(null);
+            super.onDetachedFromWindow();
         }
         void update(double v){confirmed=v;if(!dragging&&android.os.SystemClock.elapsedRealtime()>=pendingUntil){value=v;invalidate();}}
         void commit(double v){value=v;pendingUntil=android.os.SystemClock.elapsedRealtime()+2000;last=android.os.SystemClock.elapsedRealtime();changed.value(value);invalidate();
             postDelayed(()->{if(!dragging&&android.os.SystemClock.elapsedRealtime()>=pendingUntil&&confirmed!=null){value=confirmed;invalidate();}},2100);
         }
-        void setFromX(float x,boolean end){float f=Math.max(0,Math.min(1,(x-dp(6))/Math.max(1,getWidth()-dp(12))));value=pan?f*2-1:RemoteModel.gain(f*(maximumDB+60)-60);invalidate();long now=android.os.SystemClock.elapsedRealtime();if(end||now-last>=25)commit(value);}
+        void setFromX(float x,boolean end){
+            if(selectVolume!=null){
+                if(!isSelected()||!touch.dragged)return;
+                x=dragOrigin+(x-downX);
+            }
+            float f=Math.max(0,Math.min(1,(x-dp(6))/Math.max(1,getWidth()-dp(12))));
+            value=pan?f*2-1:RemoteModel.gain(f*(maximumDB+60)-60);
+            invalidate();long now=android.os.SystemClock.elapsedRealtime();if(end||now-last>=25)commit(value);
+        }
+        private float thumbX() {
+            double f=pan?(value+1)/2:(Math.min(maximumDB,value>0?20*Math.log10(value):-60)+60)/(maximumDB+60);
+            return dp(6)+Math.max(1,getWidth()-dp(12))*(float)Math.max(0,Math.min(1,f));
+        }
         @Override protected void onDraw(Canvas canvas){
             float w=getWidth(),h=getHeight(),left=dp(6),right=w-dp(6),y=pan?dp(8):h*(readout?.4f:.5f);
             paint.setColor(0x38ffffff);canvas.drawRoundRect(left,y-dp(3),right,y+dp(3),dp(3),dp(3),paint);
-            double f=pan?(value+1)/2:(Math.min(maximumDB,value>0?20*Math.log10(value):-60)+60)/(maximumDB+60);
-            float x=left+(right-left)*(float)Math.max(0,Math.min(1,f));
-            paint.setColor(Color.WHITE);paint.setShader(new LinearGradient(0,y-dp(9),0,y+dp(9),new int[]{0xffe3e3e3,0xffe0e0e0,0xffc5c5c5},new float[]{0,.5f,1},Shader.TileMode.CLAMP));
+            float x=thumbX();
+            int[] colors=isSelected()?new int[]{0xffffec9c,YELLOW,0xffc99622}:new int[]{0xffe3e3e3,0xffe0e0e0,0xffc5c5c5};
+            paint.setColor(Color.WHITE);paint.setShader(new LinearGradient(0,y-dp(9),0,y+dp(9),colors,new float[]{0,.5f,1},Shader.TileMode.CLAMP));
             canvas.drawRoundRect(x-dp(6),y-dp(9),x+dp(6),y+dp(9),dp(2),dp(2),paint);paint.setShader(null);
-            paint.setColor(0xff555555);canvas.drawRect(x-dp(.5f),y-dp(6),x+dp(.5f),y+dp(6),paint);
+            paint.setColor(isSelected()?0xff42310b:0xff555555);canvas.drawRect(x-dp(.5f),y-dp(6),x+dp(.5f),y+dp(6),paint);
             paint.setTypeface(bold);paint.setColor(TEXT);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(dp(pan?7:10));
             String read=pan?(Math.abs(value)<.005?"Center":String.format(Locale.US,"%s-%d%%",value<0?"L":"R",Math.round(Math.abs(value)*100))):(value==0?"−∞ dB":String.format(Locale.US,"%+.1f dB",20*Math.log10(value)));
             if(readout)canvas.drawText(read,w/2,h-dp(2),paint);
         }
-        @Override public boolean onTouchEvent(MotionEvent event){return isEnabled()&&touch.touch(event);}
-        @Override public boolean performClick(){super.performClick();return true;}
+        @Override public boolean onTouchEvent(MotionEvent event){
+            if(!isEnabled())return false;
+            if(selectVolume==null)return touch.touch(event);
+            int action=event.getActionMasked();
+            if(action==MotionEvent.ACTION_DOWN){
+                downX=event.getX();downY=event.getY();dragOrigin=thumbX();selecting=!isSelected();
+            }
+            if(!isSelected()||selecting) {
+                if(action==MotionEvent.ACTION_MOVE&&Math.hypot(event.getX()-downX,event.getY()-downY)>touchSlop)selecting=false;
+                if(action==MotionEvent.ACTION_UP&&selecting)performClick();
+                if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL||action==MotionEvent.ACTION_POINTER_DOWN)selecting=false;
+                return true;
+            }
+            return touch.touch(event);
+        }
+        @Override public boolean performClick(){super.performClick();if(selectVolume!=null)selectVolume.accept(this);return true;}
     }
     static final class PanKnob extends Fader {
         private float downX;

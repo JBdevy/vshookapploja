@@ -46,6 +46,100 @@ inline MouseEvent mouse(Component &canvas, Point<float> at, Point<float> anchor,
 }
 
 template <typename Test> void registerTests(const File &directory, Test &test) {
+    test("Alt-click region header confirms deletion on release and preserves items with Undo", [&] {
+        auto project=fixture();
+        project.songs[0].parts[1].startTime=10; // Exercise the second overlapping header lane.
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        Auth auth;Lighting lighting(session);
+        Workspace workspace(session,auth,lighting,false,directory.getNonexistentChildFile("region-alt-delete",".json"));
+        workspace.setSize(1366,768);
+        auto *canvas=uiFeatureTests::find(workspace,"timelineCanvas");require(canvas,"Timeline canvas missing");
+        auto point=[&] {
+            const auto state=get(workspace.diagnostics(),"timeline");
+            const auto bounds=get(findEntry(get(state,"regions"),"second"),"bounds");
+            return Point<float>{(float)(double)get(bounds,"x")-(float)(double)get(state,"x")+2*(float)(double)get(state,"zoom"),
+                                (float)(double)get(bounds,"y")-(float)(double)get(state,"y")+8};
+        };
+        const int altClick=ModifierKeys::leftButtonModifier|ModifierKeys::altModifier;
+        const auto before=JSON::toString(session.snapshot());
+        const auto cursor=session.transport().editPosition;
+        auto request=[&] {
+            const auto at=point();
+            canvas->mouseDown(mouse(*canvas,at,at,altClick));
+            require(!Component::getCurrentlyModalComponent()&&JSON::toString(session.snapshot())==before,
+                    "Alt-click deleted or confirmed before mouse release");
+            // Releasing Alt before the mouse must retain the original intent.
+            canvas->mouseUp(mouse(*canvas,at,at,0));floatingControlTests::pump();
+            auto *sheet=dynamic_cast<ModalSheet *>(Component::getCurrentlyModalComponent());
+            require(sheet&&uiFeatureTests::find(*sheet,"confirmationPanel"),"Alt-click did not show the region confirmation");
+            require(JSON::toString(session.snapshot())==before&&session.transport().editPosition==cursor,
+                    "Alt-click changed the region or edit cursor before confirmation");
+            return sheet;
+        };
+        auto respond=[&](Component *sheet,bool accepted) {
+            auto *button=dynamic_cast<Button *>(uiFeatureTests::find(*sheet,accepted?"confirmationAccept":"confirmationCancel"));
+            require(button&&button->onClick,"Region confirmation choice is missing");
+            button->onClick();for(int i=0;i<4;++i)floatingControlTests::pump();
+        };
+        respond(request(),false);
+        require(JSON::toString(session.snapshot())==before,"Cancel deleted or modified the region");
+        respond(request(),true);
+        require(session.song()->parts.size()==1&&session.song()->parts[0].id=="first",
+                "Alt-click deleted the wrong overlapping region");
+        require(closeEnough(clip(*session.song(),"item-first").startTime,1)&&
+                closeEnough(clip(*session.song(),"item-second").startTime,16)&&
+                closeEnough(marker(*session.song(),"cue").position,17),
+                "Deleting a region removed or moved its items or markers");
+        session.undo();
+        require(JSON::toString(session.snapshot())==before,"One Undo did not restore the deleted region and its ownership");
+        // A drag that returns to its starting point is still not a click.
+        const auto at=point(),away=at+Point<float>{8,0};
+        canvas->mouseDown(mouse(*canvas,at,at,altClick));
+        canvas->mouseDrag(mouse(*canvas,away,at,altClick,true));
+        canvas->mouseUp(mouse(*canvas,at,at,0));floatingControlTests::pump();
+        require(!Component::getCurrentlyModalComponent()&&JSON::toString(session.snapshot())==before,
+                "Alt-drag moved the region or triggered deletion after returning to its origin");
+        // Never apply an old confirmation to a different project with copied IDs.
+        auto *pending=request();
+        project.id=uuid();session.restoreSnapshot(ProjectCodec::encode(project));
+        respond(pending,true);
+        require(session.song()->parts.size()==2,"A stale confirmation deleted a region in another project");
+    });
+    test("Program Change heads stay inside regions", [] {
+        auto song=fixture().songs.front();song.parts.clear();
+        jaras::Part root;root.id="root";root.startTime=10;root.endTime=20;song.parts.push_back(root);
+        auto child=root;child.id="child";child.startTime=12;child.endTime=15;child.parentRegionID=root.id;song.parts.push_back(child);
+        require(timelineRegionLabels::programChangeHeadWidth(song,19.5,120,100)==50,"PC head crossed its region end");
+        require(timelineRegionLabels::programChangeHeadWidth(song,19.5,120,20)==0,"Tiny PC head should hide like normal heads");
+        require(timelineRegionLabels::programChangeHeadWidth(song,14.5,120,100)==120,"PC head incorrectly used a child boundary");
+        require(timelineRegionLabels::programChangeHeadWidth(song,20,120,100)==120,"Unrelated region clipped an independent PC head");
+        auto overlap=root;overlap.id="overlap";overlap.startTime=18;overlap.endTime=19.75;song.parts.push_back(overlap);
+        require(timelineRegionLabels::programChangeHeadWidth(song,19.5,120,100)==25,"PC head crossed an overlapping region");
+    });
+    test("Marker heads stay inside regions and thin monotonically when zooming out", [&] {
+        auto song=fixture().songs.front();song.parts.clear();
+        jaras::Part root;root.id="root";root.startTime=10;root.endTime=20;song.parts.push_back(root);
+        auto child=root;child.id="child";child.startTime=12;child.endTime=15;child.parentRegionID=root.id;song.parts.push_back(child);
+        for(int kind=0;kind<4;++kind) {
+            jaras::TimelineMarker marker{"marker","A long marker name",19.5,0x54ff93};
+            if(kind==1)marker.tempoBPM=140;
+            if(kind==2)marker.section=true;
+            if(kind==3){marker.sourceRegionID=child.id;marker.unifiedRegionID=root.id;}
+            const auto end=timelineRegionLabels::markerRegionEnd(song,marker);
+            require(end==20,"Marker did not use its containing root region boundary");
+            bool hidden=false;
+            for(double scale=500;scale>=.1;scale*=.97) {
+                const auto width=timelineRegionLabels::markerHeadWidth(marker.position,30,end,180,scale);
+                require(width<=.5*scale+.0001,"Marker head crossed the region end at distant zoom");
+                require(!hidden||width==0,"Marker head reappeared while zooming out");
+                if(width==0)hidden=true;
+            }
+        }
+        jaras::TimelineMarker outside{"outside","Outside",21,0};
+        require(std::isinf(timelineRegionLabels::markerRegionEnd(song,outside)),"An outside marker was constrained to an unrelated region");
+        require(timelineRegionLabels::markerHeadWidth(19,19,20,80,100)==0,"Coincident marker heads overlap");
+    });
     test("Region movement preserves long audio tails, MIDI and explicit loose ownership across saves", [] {
         auto project=fixture();auto &song=project.songs[0];song.duration=31;
         auto &audio=song.tracks[1].clips[0];audio.startTime=15;audio.duration=15.153840445;
@@ -151,8 +245,8 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
                 RegionLanes(moved->parts).count==2,"Preview region bounds or lane count wrong");
         require(closeEnough(moved->tracks[1].clips[0].startTime,11) && closeEnough(marker(*moved,"cue").position,12),
                 "Owned audio item or marker did not move with region");
-        require(closeEnough(moved->tracks[0].clips[0].startTime,1) && closeEnough(moved->tracks[1].clips[1].startTime,16),
-                "Move captured another region's item or an explicitly unowned item");
+        require(closeEnough(moved->tracks[0].clips[0].startTime,1) && closeEnough(moved->tracks[1].clips[1].startTime,11),
+                "Move must preserve the other region and carry geometrically contained unowned items");
         require(closeEnough(part(song,"second").startTime,15) && closeEnough(song.tracks[1].clips[0].startTime,16),
                 "Preview changed the source project");
         const auto resized=previewRegionEdit(song,"second",10,30,true);
@@ -281,7 +375,7 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
                                   (float)(double)get(initialRegion,"y")-offsetY+8};
         const Point<float> destination{origin.x-5*zoom,origin.y};
         const int modifiers=ModifierKeys::leftButtonModifier|ModifierKeys::shiftModifier;
-        canvas->mouseDown(mouse(*canvas,origin,origin,modifiers));
+        canvas->mouseDown(mouse(*canvas,origin,origin,modifiers & ~ModifierKeys::shiftModifier));
         canvas->mouseDrag(mouse(*canvas,destination,origin,modifiers,true));
         const auto preview=checkGeometry(80,2);
         screenshot("region-overlap-preview.png");
@@ -320,7 +414,7 @@ template <typename Test> void registerTests(const File &directory, Test &test) {
                 "One Redo did not restore the complete overlapping move");
 
         auto click=[&](Point<float> at) {
-            canvas->mouseDown(mouse(*canvas,at,at,modifiers));
+            canvas->mouseDown(mouse(*canvas,at,at,modifiers & ~ModifierKeys::shiftModifier));
             canvas->mouseUp(mouse(*canvas,at,at,ModifierKeys::shiftModifier));
         };
         const auto after=state();

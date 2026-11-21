@@ -3,17 +3,62 @@
 #include "InterfaceIcons.h"
 #include "RecentProjectStorage.h"
 namespace catlive {
+namespace {
+class MultipleProjectPicker final : public Component {
+    std::vector<std::unique_ptr<ToggleButton>> checks;
+    std::vector<File> ordered;
+    Viewport viewport;
+    Component rows;
+    TextButton cancel{localization::translate("Cancel")}, apply{localization::translate("Open")};
+    std::vector<File> files;
+    std::function<void(std::vector<File>)> selected;
+    void refreshNames(){
+        for(size_t i=0;i<files.size();++i){
+            const auto at=std::find(ordered.begin(),ordered.end(),files[i]);
+            checks[i]->setButtonText((at==ordered.end()?String("—"):String(int(at-ordered.begin())+1))+"  "+files[i].getFileNameWithoutExtension());
+        }
+        apply.setEnabled(!ordered.empty());
+    }
+public:
+    MultipleProjectPicker(std::vector<File> values,std::function<void(std::vector<File>)> action):files(std::move(values)),selected(std::move(action)){
+        addAndMakeVisible(viewport);viewport.setViewedComponent(&rows,false);viewport.setScrollBarsShown(true,false);
+        for(const auto &file:files){
+            auto check=std::make_unique<ToggleButton>();auto *button=check.get();
+            button->setEnabled(file.existsAsFile());button->setTooltip(file.getFullPathName());
+            button->onClick=[this,file,button]{
+                if(button->getToggleState()){if(std::find(ordered.begin(),ordered.end(),file)==ordered.end())ordered.push_back(file);}
+                else ordered.erase(std::remove(ordered.begin(),ordered.end(),file),ordered.end());
+                refreshNames();
+            };
+            rows.addAndMakeVisible(*button);checks.push_back(std::move(check));
+        }
+        addAndMakeVisible(cancel);addAndMakeVisible(apply);refreshNames();
+        cancel.onClick=[this]{if(auto *window=findParentComponentOfClass<DialogWindow>())window->exitModalState(0);};
+        apply.onClick=[this]{auto action=selected;auto values=ordered;if(auto *window=findParentComponentOfClass<DialogWindow>())window->exitModalState(0);if(action)MessageManager::callAsync([action,values]{action(values);});};
+        setSize(520,450);
+    }
+    void resized() override {
+        auto area=getLocalBounds().reduced(20);auto buttons=area.removeFromBottom(28);
+        cancel.setBounds(buttons.removeFromLeft(90));apply.setBounds(buttons.removeFromRight(90));area.removeFromBottom(12);
+        viewport.setBounds(area);rows.setSize(std::max(1,area.getWidth()-18),int(checks.size())*38);
+        for(size_t i=0;i<checks.size();++i)checks[i]->setBounds(0,int(i)*38,rows.getWidth(),36);
+    }
+};
+}
 void ProjectBrowser::Action::paintButton(Graphics &g, bool over, bool down) {
     g.setColour(theme::panel.brighter(down ? .12f : over ? .06f : 0.f));
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 6);
     g.setColour(Colours::white.withAlpha(isEnabled() ? 1.f : .45f));
     auto font = theme::mediumFont(12);
     g.setFont(font);
-    const float textWidth = GlyphArrangement::getStringWidth(font, getName());
+    const auto title = localization::translate(getButtonText());
+    const float textWidth = GlyphArrangement::getStringWidth(font, title);
     float x = (getWidth() - textWidth - 24) * .5f, y = (getHeight() - 16) * .5f;
     Path path;
     if (icon == recording) {
         drawInterfaceIcon(g, "record", {x, y, 16, 16});
+    } else if (icon == clock) {
+        drawInterfaceIcon(g, "clock", {x, y, 16, 16});
     } else if (icon == piano) {
         drawInterfaceIcon(g, "piano", {x, y, 16, 16});
     } else if (icon == folder || icon == plusFolder) {
@@ -49,17 +94,21 @@ void ProjectBrowser::Action::paintButton(Graphics &g, bool over, bool down) {
         for (int i = 0; i < 4; ++i)
             path.addRectangle(x + 7, y + 3 + i * 2.5f, 2, 1);
     g.strokePath(path, PathStrokeType(1.2f, PathStrokeType::curved, PathStrokeType::rounded));
-    g.drawText(getName(), juce::Rectangle<float>(x + 24, 0, textWidth + 2, (float)getHeight()),
+    g.drawText(title, juce::Rectangle<float>(x + 24, 0, textWidth + 2, (float)getHeight()),
                Justification::centredLeft);
 }
 ProjectBrowser::ProjectBrowser() {
     setOpaque(true);
+    setWantsKeyboardFocus(true);
     for (auto *button :
-         {&create, &add, &recent, &empty, &stems, &reaper, &logic, &recording, &package, &back}) {
+         {&create, &add, &recent, &empty, &temporary, &stems, &reaper, &logic, &recording, &package, &back}) {
         addAndMakeVisible(*button);
         button->setComponentID(button->getName());
     }
     addAndMakeVisible(browseButton);
+    browseButton.setComponentID("openExistingProject");
+    addAndMakeVisible(multipleButton);
+    multipleButton.setComponentID("openMultipleProjects");
     addChildComponent(cancelLoading);
     cancelLoading.setComponentID("cancelProjectLoading");
     cancelLoading.onClick = [this] {
@@ -86,6 +135,7 @@ ProjectBrowser::ProjectBrowser() {
         if (createEmpty)
             createEmpty();
     };
+    temporary.onClick = [this] { if (createTemporary) createTemporary(); };
     empty.contextMenu = [this](const MouseEvent &event) {
         if (!projectOpen || loading || !createEmptyInNewTab) return;
         PopupMenu menu;
@@ -121,11 +171,23 @@ ProjectBrowser::ProjectBrowser() {
         if (browse)
             browse();
     };
+    multipleButton.onClick=[this]{
+        if(!openMultiple||loading)return;
+        std::vector<File> files;for(const auto &path:RecentProjects::read())files.emplace_back(path);
+        DialogWindow::LaunchOptions options;
+        options.dialogTitle=localization::translate("Open multiple projects");options.dialogBackgroundColour=theme::background;
+        options.useNativeTitleBar=true;options.resizable=false;
+        const SafePointer<ProjectBrowser> safe(this);
+        options.content.setOwned(new MultipleProjectPicker(std::move(files), [safe](std::vector<File> values) {
+            if (safe && safe->openMultiple) safe->openMultiple(std::move(values));
+        }));
+        options.componentToCentreAround=getTopLevelComponent();options.launchAsync();
+    };
     back.onClick = [this] {
         if (resume)
             resume();
     };
-    search.setTextToShowWhenEmpty("Buscar projetos recentes", theme::secondary);
+    search.setTextToShowWhenEmpty(localization::translate("Buscar projetos recentes"), theme::secondary);
     search.setFont(theme::font(12));
     search.setBorder(BorderSize<int>(9));
     search.setColour(TextEditor::outlineColourId, Colours::transparentBlack);
@@ -150,10 +212,11 @@ void ProjectBrowser::selectMode(Mode value) {
 void ProjectBrowser::beginLoading(const File &file) {
     if (loading) return;
     loading = true;
+    loadingProgress = -1;
     cancelLoadingAction = {};
     mode = opening;
     loadingError.setText({}, dontSendNotification);
-    loadingStatus.setText(String::fromUTF8("Carregando projeto…"), dontSendNotification);
+    loadingStatus.setText(localization::translate(String::fromUTF8("Carregando projeto…")), dontSendNotification);
     // Preserve the recent list and its selected row throughout preparation.
     // A file chosen through Browse can still show progress without being added
     // to Recents until it has opened successfully.
@@ -173,8 +236,11 @@ void ProjectBrowser::setLoadingCancellation(std::function<void()> action) {
     updateEnabled();
     resized();
 }
-void ProjectBrowser::updateLoading(const String &status) {
-    if (loading) loadingStatus.setText(status, dontSendNotification);
+void ProjectBrowser::updateLoading(const String &status, double progress) {
+    if (!loading) return;
+    loadingStatus.setText(localization::translate(status), dontSendNotification);
+    loadingProgress = progress < 0 ? -1 : jlimit(0.0, 1.0, progress);
+    repaint(loadingBarBounds.getUnion(spinnerBounds));
 }
 void ProjectBrowser::finishLoading(const String &error) {
     loading = false;
@@ -187,15 +253,21 @@ void ProjectBrowser::finishLoading(const String &error) {
     repaint();
 }
 void ProjectBrowser::updateEnabled() {
-    for (auto *button : {&create, &add, &recent, &empty, &stems, &reaper,
+    for (auto *button : {&create, &add, &recent, &empty, &temporary, &stems, &reaper,
                          &logic, &recording, &package, &back})
         button->setEnabled(!loading);
     browseButton.setEnabled(!loading);
+    multipleButton.setEnabled(!loading && bool(openMultiple));
     cancelLoading.setEnabled(!loading || (bool)cancelLoadingAction);
     search.setEnabled(!loading);
     recents.setEnabled(!loading);
 }
 void ProjectBrowser::refresh() {
+    for (auto *button : {&create, &add, &recent, &empty, &temporary, &stems, &reaper, &logic, &recording, &package, &back})
+        button->setButtonText(localization::translate(button->getName()));
+    browseButton.setButtonText(localization::english ? "Open existing" : "Abrir existente");
+    multipleButton.setButtonText(localization::translate("Open multiple projects"));
+    search.setTextToShowWhenEmpty(localization::translate("Search recent projects"), theme::secondary);
     filtered.clear();
     for (auto &path : RecentProjects::read())
         if (search.getText().trim().isEmpty() || path.containsIgnoreCase(search.getText().trim()))
@@ -231,19 +303,27 @@ void ProjectBrowser::refreshStorage() {
     });
 }
 void ProjectBrowser::paint(Graphics &g) {
-    g.fillAll(theme::background);
+    g.fillAll(theme::homeBackground);
+    if (projectOpen) {
+        g.setColour(theme::line);
+        g.drawRect(getLocalBounds());
+    }
     g.setColour(Colours::white);
     g.setFont(theme::font(18, true));
     g.drawText("CatLive", 24, 24, getWidth() - 48, 20, Justification::centredLeft);
     if (mode == opening) {
         g.setFont(theme::font(11));
         g.setColour(theme::secondary);
-        g.drawText("Projetos recentes", 24, 114, getWidth() - 150, 24, Justification::centredLeft);
+        g.drawText(localization::translate("Projetos recentes"), 24, 114, std::max(0,getWidth() - 320), 24, Justification::centredLeft);
         if (filtered.isEmpty())
-            g.drawText("Nenhum projeto recente encontrado.", 24, 202, getWidth() - 48, 24,
+            g.drawText(localization::translate("Nenhum projeto recente encontrado."), 24, 202, getWidth() - 48, 24,
                        Justification::centredLeft);
     }
-    if (loading)
+    if (loading && loadingProgress >= 0) {
+        const auto bar = loadingBarBounds.toFloat();
+        g.setColour(Colours::white.withAlpha(.12f)); g.fillRoundedRectangle(bar, 4);
+        g.setColour(theme::green); g.fillRoundedRectangle(bar.withWidth(bar.getWidth() * (float)loadingProgress), 4);
+    } else if (loading)
         getLookAndFeel().drawSpinningWaitAnimation(g, theme::secondary,
             spinnerBounds.getX(), spinnerBounds.getY(), spinnerBounds.getWidth(), spinnerBounds.getHeight());
 }
@@ -254,6 +334,7 @@ void ProjectBrowser::resized() {
     recent.setBounds(44 + 2 * cell, 60, width - 2 * cell - 20, 38);
     stems.setVisible(mode == creating || mode == adding);
     empty.setVisible(mode == creating);
+    temporary.setVisible(mode == creating);
     package.setVisible(mode == adding);
     reaper.setVisible(mode == creating);
     logic.setVisible(mode == creating);
@@ -265,28 +346,33 @@ void ProjectBrowser::resized() {
         stems.setBounds(24, 114, creationWidth, 38);
         empty.setBounds(32 + creationWidth, 114, creationWidth, 38);
         recording.setBounds(40 + 2 * creationWidth, 114, width - 2 * creationWidth - 16, 38);
+        temporary.setBounds(24, 160, width, 38);
         const int importWidth = (width - 8) / 2;
-        reaper.setBounds(24, 160, importWidth, 38);
-        logic.setBounds(32 + importWidth, 160, width - importWidth - 8, 38);
+        reaper.setBounds(24, 206, importWidth, 38);
+        logic.setBounds(32 + importWidth, 206, width - importWidth - 8, 38);
     } else if (mode == adding) {
         const int optionWidth = (width - 10) / 2;
         stems.setBounds(24, 114, optionWidth, 38);
         package.setBounds(34 + optionWidth, 114, width - optionWidth - 10, 38);
     }
     browseButton.setVisible(mode == opening);
+    multipleButton.setVisible(mode == opening);
     search.setVisible(mode == opening);
     recents.setVisible(mode == opening);
-    browseButton.setBounds(getWidth() - 100, 114, 76, 24);
+    browseButton.setBounds(getWidth() - 132, 114, 108, 24);
+    multipleButton.setBounds(getWidth() - 322, 114, 182, 24);
     search.setBounds(24, 148, width, 35);
     const bool hasError = loadingError.getText().isNotEmpty();
-    const int statusHeight = loading ? 32 : hasError ? 44 : 0;
+    const int statusHeight = loading ? 60 : hasError ? 44 : 0;
     const int contentBottom = projectOpen ? getHeight() - 64 : getHeight() - 24;
     const int listHeight = std::min(170, std::max(0, contentBottom - 193 - statusHeight));
     recents.setBounds(24, 193, width, listHeight);
     const int statusY = recents.getBottom() + 10;
     const bool canCancel = loading && (bool)cancelLoadingAction;
-    spinnerBounds = {24, statusY + 2, 16, 16};
-    loadingStatus.setBounds(48, statusY, std::max(0, width - 24 - (canCancel ? 88 : 0)), 20);
+    spinnerBounds = {getWidth() / 2 - 10, statusY, 20, 20};
+    loadingBarBounds = {24, statusY + 6, std::max(1, width - (canCancel ? 90 : 0)), 8};
+    loadingStatus.setJustificationType(Justification::centred);
+    loadingStatus.setBounds(24, statusY + 26, width, 22);
     cancelLoading.setBounds(getWidth() - 104, statusY - 2, 80, 24);
     cancelLoading.setVisible(canCancel);
     loadingError.setBounds(24, statusY, width, 34);
@@ -325,6 +411,11 @@ void ProjectBrowser::returnKeyPressed(int row) {
     if (isPositiveAndBelow(row, filtered.size()) && open)
         open(File(filtered[row]));
 }
+bool ProjectBrowser::keyPressed(const KeyPress &key) {
+    if (key != KeyPress::escapeKey || !projectOpen || loading || !resume) return false;
+    resume();
+    return true;
+}
 void ProjectBrowser::listBoxItemClicked(int row, const MouseEvent &event) {
     if (loading || !isPositiveAndBelow(row, filtered.size()))
         return;
@@ -335,6 +426,7 @@ void ProjectBrowser::listBoxItemClicked(int row, const MouseEvent &event) {
     File file(filtered[row]);
     PopupMenu menu;
     const bool missing=!file.existsAsFile();
+    menu.addItem(3,localization::translate("Open project location"),!missing);
     if (projectOpen && !missing && openInNewTab)
         menu.addItem(2,localization::translate("Open in new tab"));
     menu.addItem(1,localization::translate(missing?"Remove from recents":"Delete project"));
@@ -342,6 +434,7 @@ void ProjectBrowser::listBoxItemClicked(int row, const MouseEvent &event) {
     menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&recents)
                            .withTargetScreenArea({position.x, position.y, 1, 1}),[safe=Component::SafePointer<ProjectBrowser>(this),file,missing](int result){
         if(!safe || safe->loading)return;
+        if(result==3){if(file.existsAsFile())file.revealToUser();return;}
         if(result==2){if(safe->projectOpen && file.existsAsFile() && safe->openInNewTab)safe->openInNewTab(file);return;}
         if(result!=1)return;
         if(missing){RecentProjects::forget(file);safe->refresh();}

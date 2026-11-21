@@ -1,3 +1,22 @@
+#include "SMK37Connection.h"
+#include "SMK37FirmwareTests.h"
+#include "SystemAudioDefaultsTests.h"
+#include "NativeAudioDeviceHostTests.h"
+#include "ProjectTabTransportTests.h"
+#include "AudioThreadSchedulingTests.h"
+#include "ItemLayout.h"
+#include "TextItemPanel.h"
+#include "LibraryNoteEditor.h"
+#include "native_video_decoder.h"
+#include <array>
+#include <charconv>
+#include "SplitPlaybackTests.h"
+#include "MixerFeedbackTests.h"
+#include "MultiLoopPlaybackTests.h"
+#include "TempoProjectStressTests.h"
+#include "ParallelClipAudioTests.h"
+#include "AudioDSPKernelTests.h"
+#include "SaveAsyncTests.h"
 #include "ProjectionSelection.h"
 #include "AudioSeparationTests.h"
 #include "MediaSource.h"
@@ -5,18 +24,22 @@
 #include "Workspace.h"
 #include "StartupSplash.h"
 #include "TrackTree.h"
+#include "TrackGroupCreationTests.h"
 #include "ClipAudio.h"
 #include "ResolumeComposition.h"
 #include "LightingRegionTests.h"
 #include "ClipEditing.h"
 #include "Normalization.h"
+#include "AudioDeviceChannels.h"
 #include "MIDIEditing.h"
 #include "MediaCleanup.h"
 #include "RemoteCipher.h"
 #include "RemoteTransport.h"
 #include "RemoteHost.h"
 #include "RemotePresentation.h"
+#include "FinishedSetlistSelection.h"
 #include "RemoteProjectCatalog.h"
+#include "RemoteProjectOpeningTests.h"
 #include "LicenseProof.h"
 #include "TimelineGrid.h"
 #include "TimelineBulkEditing.h"
@@ -30,13 +53,15 @@
 #include "StageTimerSettings.h"
 #include "MixerPanel.h"
 #include "DesktopLayout.h"
+#include "NativeWindowBoundsTests.h"
 #include "ProjectOpenConfirmationPanel.h"
 #include "BPMInputPanel.h"
 #include "SettingsPanel.h"
+#include "ExportPanel.h"
 #include "EffectsPanel.h"
 #include "CatDynamicsTests.h"
 #include "NativeFXPreviewTests.h"
-#if CATLIVE_NATIVE_FRONTEND
+#if CATLIVE_NATIVE_FRONTEND || CATLIVE_IMGUI_FRONTEND
 #include "FrontendBridgeTests.h"
 #include "NativeFrontendWaveformsTests.h"
 #endif
@@ -52,6 +77,8 @@
 #include "TrackEditing.h"
 #include "TrackDuplicationTests.h"
 #include "RecordingCaptureTests.h"
+#include "BufferedAudioWriterTests.h"
+#include "VST3ParameterDispatchTests.h"
 #include "VinhetasTests.h"
 #include "ProjectReductionTests.h"
 #include "TransportFadeoutTests.h"
@@ -60,6 +87,7 @@
 #include "PartsPanelTests.h"
 #include "StemGraphTests.h"
 #include "MediaImportTests.h"
+#include "StemFolderImportTests.h"
 #include "GridMediaClipboardTests.h"
 #include "FloatingControlTests.h"
 #include "ProjectOpenTests.h"
@@ -88,6 +116,7 @@
 #include "HozMixerFocusTests.h"
 #include "CompactTextBaselineTests.h"
 #include "InstrumentRenderTests.h"
+#include "InstrumentEditorTests.h"
 namespace catlive {
 namespace {
 void expect(bool condition, const String &message) {
@@ -152,6 +181,56 @@ int runTests(const File &directory) {
             failed += name + ": " + String::fromUTF8(e.what()) + "\n";
         }
     };
+    smk37FirmwareTests::run(directory,test);
+    test("Temporary projects own independent folders and preserve other sessions", [&] {
+        const auto documents = directory.getNonexistentChildFile("temporary-session", "", false);
+        const auto root = documents.getChildFile("catlive-temp");
+        root.createDirectory();
+        const auto oldMedia = root.getChildFile("crashed.wav");
+        oldMedia.replaceWithText("old");
+        TemporaryProjectSession first(documents);
+        auto firstMedia = first.directory.getChildFile("playing.wav");
+        firstMedia.replaceWithText("live");
+        {
+            TemporaryProjectSession second(documents);
+            auto secondMedia = second.directory.getChildFile("other.wav");
+            secondMedia.replaceWithText("other");
+            expect(first.directory != second.directory && !second.contains(firstMedia), "Temporary folders are shared");
+            expect(second.insideTemporaryRoot(firstMedia), "Promotion must keep media outside all temporary folders");
+        }
+        expect(firstMedia.loadFileAsString() == "live" && oldMedia.loadFileAsString() == "old",
+               "Closing another session must preserve live and interrupted media");
+        first.clear();
+        expect(!first.directory.exists() && oldMedia.exists(), "Cleanup must remove only the owned folder");
+        documents.deleteRecursively();
+    });
+    test("SMK37 display navigation and playback", [&] {
+        auto wire=SMK37Connection::navigationFrame(1,{"A","B","B","C"},2);
+        expect(SMK37Connection::valid(wire),"Invalid list frame");
+        expect(wire==SMK37Connection::frame(23,{1,1,'A',1,'B',1,'B',1,'C',0}),"Centered rows or empty edge changed");
+        auto longest=SMK37Connection::navigationFrame(3,std::vector<String>(5,String::repeatedString("A",100)),2);
+        expect(SMK37Connection::valid(longest)&&longest.size()==95,"Long list exceeds firmware packet");
+        expect(SMK37Connection::navigationFrame(1,{},0).empty(),"Empty list accepted");
+        expect(SMK37Connection::playbackFrame(130,100,160)==SMK37Connection::frame(24,{100,0,30,0,0,60,0,0}),"Progress must be relative to playing region");
+        expect(SMK37Connection::playbackFrame(200,100,160)==SMK37Connection::frame(24,{72,1,60,0,0,60,0,0}),"Progress not clamped");
+        expect(SMK37Connection::playbackFrame(0,0,0)==SMK37Connection::frame(24,SMK37Connection::Bytes(8,0)),"Invalid duration must clear progress");
+    });
+    test("Multiple track drag preserves ordered roots, descendants and group routing", [&] {
+        jaras::Project p;jaras::Song song;song.id=uuid();
+        for(int i=0;i<7;++i){jaras::Track t;t.id=std::to_string(i);t.name=t.id;t.role.id="other";song.tracks.push_back(t);}
+        trackDrop::setParent(song.tracks[2],ID("1"));trackDrop::setParent(song.tracks[5],ID("4"));
+        const auto original=song.tracks;const std::set<ID> selected{"0","1","2"};
+        const auto drag=trackDrop::description(p,song,"1",selected);
+        const auto ids=trackDrop::sources(drag,p,song);
+        expect(ids==std::vector<ID>{"0","1"},"Selected child must travel once with its folder");
+        expect(!trackDrop::resolve(song,ids,"2",true,false),"Drop into own child accepted");
+        const auto destination=trackDrop::resolve(song,ids,"4",true,false);
+        expect(bool(destination),"Multiple-track destination missing");trackDrop::apply(song,*destination,ids);
+        std::vector<ID> order;for(const auto &t:song.tracks)order.push_back(t.id);
+        expect(order==std::vector<ID>{"3","4","0","1","2","5","6"},"Multiple drop changed relative order");
+        expect(song.tracks[2].parentTrackID==ID("4")&&song.tracks[3].parentTrackID==ID("4")&&song.tracks[4].parentTrackID==ID("1"),"Folder hierarchy lost");
+        expect(song.tracks[2].patch->firstChannel==-2&&song.tracks[3].patch->firstChannel==-2,"Group sends not updated");
+    });
     test("Automatic access checks preserve activation on token expiry and enforce quarantine",[&]{
         for(const String code:{String(),String("invalidSession"),String("unavailable"),String("quarantined")}) {
             const auto folder=directory.getNonexistentChildFile("access-policy-"+code,"");folder.createDirectory();
@@ -182,8 +261,13 @@ int runTests(const File &directory) {
         DocumentWindow window("Window placement", Colours::black, 0);
         window.setResizable(true, false);
         fitProjectBrowserWindow(window);
+        const auto home = window.getBounds();
+        window.setBoundsConstrained(home.expanded(100));
+        expect(window.getWidth() == home.getWidth() && window.getHeight() == home.getHeight() &&
+               home.getWidth() <= 600 && home.getHeight() <= 492, "Home must stay compact and fixed");
         showEditorWindow(window);
         const auto editor = window.getBounds();
+        expect(editor.getWidth() > home.getWidth(), "The first project must open at editor size");
         window.setBounds(editor.withPosition(editor.getX() + 17, editor.getY() + 23));
         const auto moved = window.getBounds();
         showEditorWindow(window); // New tab has no remembered editor bounds.
@@ -211,7 +295,7 @@ int runTests(const File &directory) {
         showEditorWindow(window);
         expect(window.isFullScreen(), "New project unmaximized the editor");
         window.setFullScreen(false);
-        fitProjectBrowserWindow(window);
+        showEditorWindow(window);
         checkScale();
         showEditorWindow(window);
         expect(window.getWidth() > 600, "Browser failed to expand for first project");
@@ -248,6 +332,68 @@ int runTests(const File &directory) {
         session.undo();expect(list(get(fxchain::settings(session,id),"inserted")).size()==2 && fxchain::enabled(fxchain::settings(session,id),"EQ"),"Removal undo failed");
         expect(opens==0 && error.isEmpty(),"Modified click opened FX manager or failed");
     });
+    trackGroupCreationTests::run(test);
+    test("Track hierarchy drops preserve audio readers and route nested groups through their parent",[&]{
+        const auto folder=directory.getNonexistentChildFile("hierarchy-tone","");expect(folder.createDirectory().wasOk(),"Create fixture folder");
+        auto stream=folder.getChildFile("tone.wav").createOutputStream();WavAudioFormat format;
+        std::unique_ptr<AudioFormatWriter> writer(format.createWriterFor(stream.get(),48000,2,24,{},0));expect(bool(writer),"Create fixture audio");stream.release();
+        AudioBuffer<float> tone(2,48000*8);for(int c=0;c<2;++c)for(int n=0;n<tone.getNumSamples();++n)tone.setSample(c,n,.2f);
+        expect(writer->writeFromAudioSampleBuffer(tone,0,tone.getNumSamples()),"Write fixture audio");writer.reset();
+        jaras::Project p;p.id=uuid();p.name="Hierarchy";jaras::Song song;song.id=uuid();song.name="Song";song.duration=8;
+        const ID group=uuid(),child=uuid(),nested=uuid(),leaf=uuid(),outside=uuid();
+        for(const auto &id:{group,child,nested,leaf,outside}){jaras::Track t;t.id=id;t.name=id;t.role.id="other";song.tracks.push_back(t);}
+        song.tracks[0].volume=.5;song.tracks[1].parentTrackID=group;song.tracks[1].patch=jaras::OutputPatch{-2,2};
+        song.tracks[2].volume=.5;song.tracks[3].parentTrackID=nested;song.tracks[3].patch=jaras::OutputPatch{-2,2};
+        jaras::AudioClip clip;clip.id=uuid();clip.duration=8;clip.audioFile=jaras::AudioFile{"tone.wav",{}};song.tracks[3].clips={clip};
+        song.parts={{uuid(),"Music",0,8}};p.songs={song};p.savedCursor=jaras::SavedProjectCursor{song.id,0};
+        Session session;session.inspection=true;session.mediaDirectory=folder;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(p));session.audio.setOffline(true);session.command(jaras::CommandKind::play);
+        auto peak=[&]{AudioBuffer<float> out(2,512);for(int n=0;n<8;++n)session.audio.render(out.getArrayOfWritePointers(),2,512);return out.getMagnitude(0,512);};
+        const auto initial=peak();expect(initial>.01f,"Initial output missing");
+        const auto commits=get(session.audio.streamDiagnostics(),"transportRepositions");
+        const auto preparation=JSON::toString(session.audio.preparationDiagnostics);
+        auto into=trackDrop::resolve(*session.song(),nested,child,true,false);expect(into&&into->parent==group,"Nested group destination wrong");
+        const auto started=Time::getMillisecondCounterHiRes();session.editTrackHierarchy(song.id,[&](jaras::Song &s){trackDrop::apply(s,*into);});
+        directory.getChildFile("hierarchy-timing.txt").replaceWithText(String(Time::getMillisecondCounterHiRes()-started,3)+" ms");
+        expect(!session.preparingLiveAudio(),"Drop recreated graph");expect(std::abs(peak()/initial-.5f)<.02f,"Nested group skipped parent master or duplicated its output");
+        expect(session.audio.trackPeak(group)>.01f,"Parent master meter did not receive nested audio");
+        session.undo();expect(std::abs(peak()/initial-1.f)<.02f,"Undo did not restore independent group output");
+        session.redo();expect(std::abs(peak()/initial-.5f)<.02f,"Redo did not restore parent output");
+        auto out=trackDrop::resolve(*session.song(),nested,outside,false,false);expect(out&&!out->parent,"Exit destination wrong");
+        session.editTrackHierarchy(song.id,[&](jaras::Song &s){trackDrop::apply(s,*out);});expect(std::abs(peak()/initial-1.f)<.02f,"Leaving parent did not restore master route");
+        auto leafIn=trackDrop::resolve(*session.song(),leaf,child,true,false);expect(bool(leafIn),"Leaf drop missing");
+        session.editTrackHierarchy(song.id,[&](jaras::Song &s){trackDrop::apply(s,*leafIn);});expect(std::abs(peak()/initial-1.f)<.02f,"Regular track did not route through parent master");
+        expect(get(session.audio.streamDiagnostics(),"transportRepositions")==commits,"Track drop/Undo repositioned playback");
+        expect(JSON::toString(session.audio.preparationDiagnostics)==preparation,"Track drop recreated readers or processors");
+        expect(session.audio.refreshItemPresence(*session.song()),"Reordering broke item-presence cache");
+    });
+    test("Reordered MIDI tracks keep their own prepared notes through item Delete Undo and Redo",[&]{
+        auto p=projectFixture();auto &song=p.songs.front();song.tracks.clear();song.parts.clear();song.markers.reset();song.duration=8;
+        jaras::Track a,b;a.id=uuid();a.name="MIDI A";a.role.id="keys";b.id=uuid();b.name="MIDI B";b.role.id="keys";
+        const auto item=[](int pitch){jaras::AudioClip c;c.id=uuid();c.name="Note";c.duration=4;c.midi.emplace();c.midi->sourceBPM=120;c.midi->notes={{uuid(),0,8,pitch,100,1}};return c;};
+        const auto first=item(60),retained=item(64),other=item(79);a.clips={first,retained};b.clips={other};song.tracks={a,b};
+        const auto songID=song.id;p.savedCursor=jaras::SavedProjectCursor{songID,0};
+        Session session;session.inspection=true;session.mediaDirectory=directory;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(p));session.audio.setOffline(true);
+        const auto *graph=session.audio.preparationDiagnostics.getDynamicObject();
+        const auto check=[&](const ID &id,const std::vector<int> &expected){
+            bool found=false;
+            for(const auto &entry:list(get(session.audio.streamDiagnostics(),"trackMIDI")))if(str(entry,"track")==text(id)){
+                found=true;std::vector<int> pitches;for(const auto &value:list(get(entry,"pitches")))pitches.push_back((int)value);
+                expect(num(entry,"noteCount")==double(expected.size())&&pitches==expected,"Prepared MIDI notes came from the neighbouring reordered track");
+            }
+            expect(found,"MIDI bus disappeared from the prepared graph");
+            expect(session.audio.preparationDiagnostics.getDynamicObject()==graph&&!session.preparingLiveAudio(),"MIDI edit rebuilt the graph and masked stale bus indices");
+        };
+        check(a.id,{60,64});check(b.id,{79});
+        session.editTrackHierarchy(songID,[](jaras::Song &s){std::swap(s.tracks[0],s.tracks[1]);});
+        expect(session.song()->tracks[0].id==b.id&&session.song()->tracks[1].id==a.id,"Fixture did not reorder the document");
+        check(a.id,{60,64});check(b.id,{79});
+        session.removeClips({first.id});check(a.id,{64});check(b.id,{79});
+        session.undo();check(a.id,{60,64});check(b.id,{79});
+        session.redo();check(a.id,{64});check(b.id,{79});
+        session.removeClips({retained.id});check(a.id,{});check(b.id,{79});
+        session.undo();check(a.id,{64});check(b.id,{79});
+        session.undo();check(a.id,{60,64});check(b.id,{79});
+    });
     test("Peak readouts retain maxima through silence, ignore invalid values and reset explicitly",[]{
         meterDisplay::PeakHold peak;
         peak.record(.01f);expect(peak.amplitude()==0,"Noise below -24 dB displayed a peak");
@@ -261,29 +407,214 @@ int runTests(const File &directory) {
         auto descriptions=native::vst3::scan(std::filesystem::u8path(utf8(editorFixture)));
         expect(!descriptions.empty(),"Editor fixture is empty");
         auto processor=std::make_shared<native::vst3::Processor>(descriptions.front(),native::vst3::State{},48000);
+        struct AudioLoop {
+            std::atomic<bool> stop{false},okay{true};std::atomic<unsigned> blocks{0};std::thread thread;
+            explicit AudioLoop(native::vst3::Processor &processor):thread([this,&processor]{
+                AudioBuffer<float> buffer(2,512);native::vst3::Transport transport;
+                while(!stop.load()){
+                    buffer.clear();if(!processor.process(buffer.getWritePointer(0),buffer.getWritePointer(1),512,transport))okay=false;
+                    ++blocks;transport.seconds+=512./48000;Thread::sleep(10);
+                }
+            }){}
+            ~AudioLoop(){stop=true;if(thread.joinable())thread.join();}
+        } audio(*processor);
         DocumentWindow manager("FX embedded regression",Colours::black,DocumentWindow::closeButton);
         manager.setUsingNativeTitleBar(true);
-        auto embedded=std::make_unique<ExternalEffectEditor>(processor,[](const KeyPress&){return false;},[](bool){});
+        Point<int> requestedSize;
+        auto embedded=std::make_unique<ExternalEffectEditor>(processor,[](const KeyPress&){return false;},[](bool){},
+            [&](int width,int height){requestedSize={width,height};});
         manager.setContentNonOwned(embedded.get(),false);manager.centreWithSize(740,560);manager.setVisible(true);
-        floatingControlTests::pump();
+        // Let asynchronous native editors finish startup before testing disposal.
+        // One short dispatch pass can close them before their workers are created.
+        const auto editorDeadline=Time::getMillisecondCounterHiRes()+1500;
+        while(Time::getMillisecondCounterHiRes()<editorDeadline)floatingControlTests::pump();
         auto *host=dynamic_cast<HWNDComponent*>(embedded->getChildComponent(0));
         expect(host&&host->getHWND(),"Native view was not attached to manager");
         const auto hwnd=static_cast<HWND>(host->getHWND());
         expect(GetAncestor(hwnd,GA_ROOT)==manager.getPeer()->getNativeHandle(),"Plugin opened in a separate window");
         expect(GetWindow(hwnd,GW_CHILD)!=nullptr,"Plugin canvas missing");
+        expect(requestedSize.x>0&&requestedSize.y>0,"Opening a plugin did not request a manager size");
+        RECT pluginRect{};GetClientRect(GetWindow(hwnd,GW_CHILD),&pluginRect);
+        const auto pixels=embedded->getPeer()->getAreaCoveredBy(*embedded).toFloat()*embedded->getPeer()->getPlatformScaleFactor();
+        const auto scale=pixels.getWidth()/embedded->getWidth();
+        expect(std::abs(requestedSize.x*scale-pluginRect.right)<=2&&std::abs(requestedSize.y*scale-pluginRect.bottom)<=2,
+               "Preferred manager size does not account for native editor pixels/DPI");
         manager.setContentComponentSize(120,80);floatingControlTests::pump();
         RECT client{};GetClientRect(hwnd,&client);
         expect(client.right>0&&client.bottom>0&&client.right<200,"Host did not follow manager bounds");
         manager.clearContentComponent();embedded.reset();expect(!IsWindow(hwnd),"Native editor survived disposal");
-        AudioBuffer<float> buffer(2,64);buffer.clear();native::vst3::Transport transport;
-        expect(processor->process(buffer.getWritePointer(0),buffer.getWritePointer(1),64,transport),"Closing editor interrupted processor");
+        const auto blocks=audio.blocks.load();floatingControlTests::pump();
+        expect(audio.okay.load()&&audio.blocks.load()>blocks,"Closing editor interrupted processor");
     });
     trackDuplicationTests::run(test);
     trackDuplicationTests::runSession<Session>(test);
     recordingCaptureTests::registerTests(directory, test);
+    nativeAudioDeviceHostTests::run(test);
+    bufferedAudioWriterTests::run(test);
+    vst3ParameterDispatchTests::run(test);
     vinhetasTests::run(directory,test);
     projectReductionTests::run(directory,test,projectFixture);
     audioSeparationTests::run(test,projectFixture);
+    test("Prepared native FX previews avoid the device lock and preserve commit ordering", [&] {
+        auto settings=object(); put(settings,"inserted",Array<var>{"Compressor"});
+        put(settings,"compressorEnabled",true);put(settings,"ratio",1.);put(settings,"threshold",0.);put(settings,"makeup",0.);
+        jaras::Project project;project.id=uuid();project.masterVolume=1;
+        jaras::Song song;song.id=uuid();song.duration=3;
+        jaras::Track track;track.id=uuid();track.role.id="other";track.volume=1;
+        track.inputPatch=jaras::OutputPatch{1,2};track.inputMonitoring=true;
+        track.outputs=std::vector<jaras::OutputPatch>{{0,2}};
+        track.fxJSON=utf8(JSON::toString(settings));song.tracks={track};
+        AudioEngine audio(48000,true);audio.prepareSong(song,directory,{},&project);
+        audio.armTrack(track.id,true);audio.instrumentAllowed=true;
+        auto preview=settings.clone();put(preview,"makeup",-6.020599913);
+        std::atomic<bool> held{false},release{false},timedOut{false};
+        std::thread device([&] {
+            const ScopedLock lock(audio.devices.getAudioCallbackLock());held.store(true);
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(!release.load() && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
+            timedOut.store(!release.load());
+        });
+        while(!held.load())std::this_thread::yield();
+        try {
+            audio.previewNativeParameters(track.id,"Compressor","Compressor",preview);
+            audio.previewDynamics(track.id,"Cat Gate",object());
+        } catch(...) {release.store(true);device.join();throw;}
+        release.store(true);device.join();
+        expect(!timedOut.load(),"Native FX preview waited for the device callback lock");
+        AudioBuffer<float> input(2,512),output(2,512);
+        for(int channel=0;channel<2;++channel)FloatVectorOperations::fill(input.getWritePointer(channel),.25f,512);
+        const auto render=[&]{audio.render(output.getArrayOfWritePointers(),2,512,input.getArrayOfReadPointers(),2);};
+        render();
+        expect(std::abs(output.getSample(0,511)-.125f)<.0001f,"Native FX preview was not audible on the next block");
+        put(preview,"makeup",-12.);
+        audio.previewNativeParameters(track.id,"Compressor","Compressor",preview);
+        audio.setEffects(track.id,settings);
+        render();
+        expect(std::abs(output.getSample(0,511)-.25f)<.0001f,"Queued preview overwrote a later committed FX change");
+    });
+    test("Prepared metronome edits avoid the device lock and survive project replacement", [&] {
+        jaras::Song song; song.id=uuid(); song.duration=3; song.bpm=120;
+        AudioEngine audio(48000,true); audio.prepareSong(song,directory);
+        auto settings=object(); put(settings,"preset","Wood"); put(settings,"mode",1);
+        put(settings,"gainA",0); put(settings,"gainB",0); put(settings,"enabled",true);
+        auto patch=object(); put(patch,"firstChannel",3); put(patch,"channelCount",2); put(settings,"output",patch);
+        std::atomic<bool> held{false},release{false},timedOut{false};
+        std::thread device([&] {
+            const ScopedLock lock(audio.devices.getAudioCallbackLock());
+            held.store(true);
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(!release.load() && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
+            timedOut.store(!release.load());
+        });
+        while(!held.load())std::this_thread::yield();
+        try {
+            bool ready=false;String failure;
+            audio.configureMetronome(settings,[&](String error){failure=error;ready=true;});
+            const auto until=Time::getMillisecondCounterHiRes()+4000;
+            while(!ready&&Time::getMillisecondCounterHiRes()<until)floatingControlTests::pump();
+            expect(ready&&failure.isEmpty(),"Metronome worker did not publish its prepared sound");
+            song.bpm=80; audio.refreshTiming(song);
+        } catch(...) {release.store(true);device.join();throw;}
+        release.store(true);device.join();
+        expect(!timedOut.load(),"Prepared sound/timing publication waited for the device lock");
+        AudioEngine::State state; state.playing=true; state.position=.75;
+        audio.transport(state);
+        AudioBuffer<float> output(4,512);
+        audio.render(output.getArrayOfWritePointers(),4,512);
+        const auto wood=ClickProgram::tone("Wood",true);
+        expect(output.getMagnitude(0,0,512)==0 && output.getMagnitude(2,0,512)>.1f,
+               "Prepared metronome tempo/output patch was not applied before Play");
+        expect(std::abs(output.getSample(2,128)-wood.data[128])<.0001f,
+               "Prepared metronome used the old sound or gain");
+        // Configuring before a new graph must retain user preferences, even if
+        // no callback has consumed the edit when project loading begins.
+        put(settings,"preset","Clave");
+        bool claveReady=false;
+        audio.configureMetronome(settings,[&](String error){expect(error.isEmpty(),"Clave preparation failed");claveReady=true;});
+        const auto claveDeadline=Time::getMillisecondCounterHiRes()+4000;
+        while(!claveReady&&Time::getMillisecondCounterHiRes()<claveDeadline)floatingControlTests::pump();
+        expect(claveReady,"Clave preparation did not complete");
+        audio.prepareSong(song,directory);
+        state.position=0; audio.transport(state);
+        audio.render(output.getArrayOfWritePointers(),4,512);
+        const auto clave=ClickProgram::tone("Clave",true);
+        expect(std::abs(output.getSample(2,128)-clave.data[128])<.0001f,
+               "Graph replacement lost an unconsumed metronome preference");
+    });
+    test("Audio command queue overflow keeps control off the callback lock and preserves offline mixer state", [&] {
+        for (bool offline : {false, true}) {
+            jaras::Project project; project.id=uuid();
+            jaras::Song song; song.id=uuid(); song.duration=60; song.bpm=120;
+            jaras::Track track; track.id=uuid(); track.role.id="other"; track.name="Queue input";
+            track.inputPatch=jaras::OutputPatch{1,2}; track.inputMonitoring=true;
+            track.outputs=std::vector<jaras::OutputPatch>{{0,2}};
+            song.tracks.push_back(track);
+            auto audio=std::make_unique<AudioEngine>(48000,offline);
+            audio->prepareSong(song,directory,{},&project); audio->armTrack(track.id,true);
+            audio->instrumentAllowed=true;
+            std::atomic<bool> held{false}, release{false}, timedOut{false};
+            std::thread device([&] {
+                const ScopedLock lock(audio->devices.getAudioCallbackLock());
+                held.store(true);
+                const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                while(!release.load() && std::chrono::steady_clock::now()<deadline) std::this_thread::yield();
+                timedOut.store(!release.load());
+            });
+            while(!held.load()) std::this_thread::yield();
+            try {
+                for(int i=0;i<2500;++i) {
+                    project.masterMute=(i%2)==0; project.masterVolume=.9;
+                    song.tracks[0].volume=.75; audio->setMixer(project,song);
+                    // Mixer snapshots coalesce. Routing remains ordered and
+                    // deliberately fills the command stream for this test.
+                    audio->updateTransportRouting({});audio->updateTransportRouting({});
+                }
+                project.masterMute=false; project.masterVolume=.25; song.tracks[0].volume=.5;
+                audio->setMixer(project,song);
+            } catch(...) { release.store(true); device.join(); throw; }
+            release.store(true); device.join();
+            expect(!timedOut.load(),"Command overflow waited for the device callback lock");
+            AudioEngine::State state; state.playing=true; state.position=2; audio->transport(state);
+            state.playing=false; state.position=4; audio->transport(state);
+            state.playing=true; state.position=7; audio->transport(state);
+            AudioBuffer<float> input(2,128),output(2,128);
+            for(int ch=0;ch<2;++ch) FloatVectorOperations::fill(input.getWritePointer(ch),.5f,128);
+            const auto render=[&] { audio->render(output.getArrayOfWritePointers(),2,128,input.getArrayOfReadPointers(),2); };
+            render();
+            expect(audio->state().playing==offline,"Realtime command budget or complete offline drain was lost");
+            for(int block=0;block<8;++block) render();
+            expect(audio->state().playing && audio->state().position>=7 && audio->state().position<7.1,
+                   "Overflow lost/reordered Stop, seek or Play");
+            expect(std::abs(output.getSample(0,127)-.0625f)<.0001f,
+                   "Overflow failed to apply the final master/track gain and mute before rendering");
+        }
+    });
+    test("Audio render advances while the message thread is occupied", [&] {
+        jaras::Project project; project.id=uuid(); project.masterVolume=1;
+        jaras::Song song; song.id=uuid(); song.duration=60;
+        jaras::Track track; track.id=uuid(); track.role.id="other"; track.volume=1;
+        track.inputPatch=jaras::OutputPatch{1,2}; track.inputMonitoring=true;
+        track.outputs=std::vector<jaras::OutputPatch>{{0,2}}; song.tracks={track};
+        AudioEngine audio(48000,true); audio.prepareSong(song,directory,{},&project);
+        audio.armTrack(track.id,true); audio.instrumentAllowed=true;
+        AudioEngine::State state; state.playing=true; audio.transport(state);
+        AudioBuffer<float> output(2,256), input(2,256);
+        for (int c=0;c<2;++c) for (int i=0;i<256;++i) input.setSample(c,i,.2f);
+        std::atomic<int> blocks{0}; std::atomic<bool> audible{true};
+        // Deliberately pump no messages. Render owns the clock and consumes
+        // prepared control state without requiring a UI timer/paint to finish.
+        std::thread callback([&] {
+            for (int i=0;i<128;++i) {
+                audio.render(output.getArrayOfWritePointers(),2,256,input.getArrayOfReadPointers(),2);
+                if (output.getMagnitude(0,256)<.1f) audible.store(false);
+                blocks.fetch_add(1);
+            }
+        });
+        callback.join();
+        expect(blocks.load()==128 && audible.load(),"Occupied UI interrupted the engine's live audio");
+        expect(std::abs(audio.state().position-128.*256/48000)<.00001,
+               "Audio clock depended on a message-thread transport tick");
+    });
     test("Armed input meters work before REC with monitoring off and no master leakage", [&] {
         jaras::Song song; song.id = uuid(); song.duration = 60; song.bpm = 120;
         jaras::Track track; track.id = uuid(); track.role.id = "other"; track.name = "Input 3/4";
@@ -301,12 +632,64 @@ int runTests(const File &directory) {
         expect(output.getMagnitude(0, 512) == 0 && audio.peak() == 0, "Input metering routed monitor-off audio to master");
         expect(!audio.state().playing && !audio.isRecording(), "Metering started playback or recording");
     });
+    test("Track meter handles survive graph adoption, deletion and engine destruction", [&] {
+        jaras::Song song; song.id = uuid(); song.duration = 60; song.bpm = 120;
+        jaras::Track track; track.id = uuid(); track.role.id = "other"; track.name = "Meter lifetime";
+        track.inputPatch = jaras::OutputPatch{1, 2}; track.inputMonitoring = false;
+        track.outputs = std::vector<jaras::OutputPatch>{{0, 2}};
+        song.tracks.push_back(track);
+        auto audio = std::make_unique<AudioEngine>(48000, true);
+        audio->prepareSong(song, directory); audio->armTrack(track.id, true);
+        AudioBuffer<float> input(2, 512), output(2, 512);
+        FloatVectorOperations::fill(input.getWritePointer(0), .25f, 512);
+        FloatVectorOperations::fill(input.getWritePointer(1), -.5f, 512);
+        auto render = [&] { audio->render(output.getArrayOfWritePointers(), 2, 512,
+                                         input.getArrayOfReadPointers(), 2); };
+        render();
+        const auto original = audio->trackMeterState(track.id);
+        expect(original && original->levels[0].load() > .24f && original->levels[1].load() > .49f,
+               "Retained meter does not reflect callback input");
+        expect(original->held.amplitude() == audio->heldPeak(track.id), "Held peak payload differs");
+        expect(!audio->trackMeterState("missing"), "Unknown track acquired a meter");
+        const auto before = audio->meterLevels(track.id);
+        {
+            auto prepared = std::make_unique<AudioEngine>(48000, true);
+            prepared->prepareSong(song, directory);
+            audio->adoptPreparedSong(*prepared, true);
+            const auto current = audio->trackMeterState(track.id);
+            expect(current && current != original, "Graph did not publish its own meter generation");
+            expect(audio->meterLevels(track.id) == before && current->held.amplitude() == original->held.amplitude(),
+                   "Live graph adoption lost meter history");
+        } // Retired bus and its DSP are destroyed, while the UI retains telemetry.
+        FloatVectorOperations::fill(input.getWritePointer(0), .75f, 512);
+        render();
+        const auto retained = audio->trackMeterState(track.id);
+        expect(retained->levels[0].load() > .74f && original->levels[0].load() == before[0],
+               "New graph writes leaked into the retired meter generation");
+        audio->clearPeak(track.id);
+        expect(retained->held.amplitude() == 0 && original->held.amplitude() > 0,
+               "Peak reset affected the retired graph");
+        song.tracks.clear(); audio->prepareSong(song, directory);
+        expect(!audio->trackMeterState(track.id) && audio->trackPeak(track.id) == 0 &&
+               audio->meterLevels(track.id) == std::array<float, 2>{}, "Deleted track remains in meter registry");
+        expect(audio->fxLevels(track.id) == std::pair<float, float>{}, "Deleted FX meter remains visible");
+        audio.reset();
+        expect(retained->levels[0].load() > .74f && original->levels[0].load() == before[0],
+               "Retained meter lifetime depended on the DSP engine");
+        auto other = std::make_unique<AudioEngine>(48000, true);
+        song.id = uuid(); song.tracks.push_back(track); other->prepareSong(song, directory);
+        expect(other->heldPeak(track.id) == 0 && other->trackPeak(track.id) == 0,
+               "Another project inherited the old meter state");
+    });
     transportFadeoutTests::registerTests(directory, test);
+    test("Multiloop audio applies grouped M/S, Auto Fader, release, bypass and fader feedback", [&] { multiLoopPlaybackTests::playback(directory); });
     addActionBindingsTests(directory, test);
+    nativeWindowBoundsTests::registerTests(test);
     addUIFeatureTests(directory, test);
     addPartsPanelTests(directory, test);
     stemGraphTests::registerTests(directory, test, skipped);
     mediaImportTests::registerTests(directory, test);
+    stemImportTests::registerTests(directory, test);
     liveItemResizeTests::registerTests(directory, test);
     liveSessionEditTests::registerTests(directory, test);
     streamingReaderTests::registerTests(directory, test);
@@ -318,9 +701,15 @@ int runTests(const File &directory) {
     itemLocalGeometryTests::registerTests(directory, test);
     hozMixerFocusTests::registerTests(directory, test);
     instrumentRenderTests::registerTests(test);
+    instrumentEditorTests::run(test, expect, directory);
     gridMediaClipboardTests::registerTests(test);
     floatingControlTests::registerTests(directory,test);
+    projectTabTransportTests::registerTests(directory,test);
+    audioThreadSchedulingTests::registerTests(directory,test);
     projectOpenTests::registerTests(directory,test);
+    saveAsyncTests::registerTests(directory,test);
+    test("Mixer changes update colours without rebuilding the arrangement", [&] { mixerFeedbackTests::controlsWithoutArrangementRebuild(); });
+    test("Split offsets follow relative tempo and preserve outer fades", [&] { splitPlaybackTests::splitAtRelativeTempo(); });
     navigationParityTests::registerTests(directory,test);
     projectBrowserLoadingTests::registerTests(directory,test);
     bpmDetectionTests::registerTests(directory,test);
@@ -330,6 +719,46 @@ int runTests(const File &directory) {
     midiTakePlaybackTests::registerTests(test);
     regionLaneTests::registerTests(directory,test);
     setlistSearchTests::registerTests(directory,test);
+    remoteProjectOpeningTests::registerStateTests(test);
+    test("Remote project opening survives an empty new tab and keeps terminal results for the client", [&] {
+        Appearance preferences(directory.getNonexistentChildFile("remote-project-opening", ".json"));
+        remote::Host host(preferences);
+        const auto request = uuid(), original = uuid(), incoming = uuid();
+        auto old = object(), projects = object();
+        put(old, "project", remote::wireID(original)); put(projects, "busy", false); put(projects, "canOpen", true);
+        put(old, "projects", projects);
+        expect(host.projectSnapshot(0, old)["projects"]["commandID"].isVoid(), "Idle snapshot invented a pending command");
+        host.projectOpening.begin(request);
+        auto first = host.projectSnapshot(0, old.clone());
+        expect(flag(first["projects"], "busy") && !flag(first["projects"], "canOpen") &&
+               str(first["projects"], "commandID") == remote::wireID(request), "Remote did not receive the opening before the tab changed");
+        // This is the new Workspace's presentation while projectReady is false,
+        // including a client viewing a panel that has not been cached yet.
+        auto pending = host.projectSnapshot(2, var());
+        expect(str(pending, "project") == remote::wireID(original) && str(pending["projects"], "commandState") == "opening",
+               "New tab stopped publishing Remote state during preparation");
+        host.projectOpening.update(request, remote::ProjectOpening::State::waiting, "Confirm on the PC");
+        pending = host.projectSnapshot(0, var());
+        expect(str(pending["projects"], "commandState") == "waiting" && str(pending["projects"], "status") == "Confirm on the PC", "Host confirmation lost its correlated waiting state");
+        auto next = old.clone(); put(next, "project", remote::wireID(incoming));
+        // A ready Workspace constructs a fresh idle ProjectBrowser. Do not
+        // reuse the outgoing var's busy fields (JUCE var objects are shared).
+        auto readyProjects = object(); put(readyProjects, "busy", false); put(readyProjects, "canOpen", true);
+        put(next, "projects", readyProjects);
+        host.projectOpening.update(request, remote::ProjectOpening::State::completed);
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            const auto completed = host.projectSnapshot(0, next.clone());
+            expect(str(completed, "project") == remote::wireID(incoming) && !flag(completed["projects"], "busy") &&
+                   str(completed["projects"], "commandState") == "completed" && str(completed["projects"], "commandID") == remote::wireID(request),
+                   "Completion disappeared before a coalesced client could receive it");
+        }
+        const auto retry = uuid(); host.projectOpening.begin(retry); host.projectSnapshot(0, next.clone());
+        pending = host.projectSnapshot(2, var());
+        expect(str(pending, "project") == remote::wireID(incoming), "Another load reused a stale panel from the previous project");
+        host.projectOpening.update(retry, remote::ProjectOpening::State::failed, {}, "Invalid project");
+        const auto failed = host.projectSnapshot(0, next.clone());
+        expect(str(failed["projects"], "error") == "Invalid project" && !flag(failed["projects"], "busy"), "Failed new tab did not restore a usable Remote with its error");
+    });
     test("Remote recent projects retain opaque IDs and support opening in a new tab", [&] {
         remote::ProjectCatalog catalog;
         const auto first = directory.getChildFile("one/Concert.jl"), second = directory.getChildFile("two/Concert.jl");
@@ -346,12 +775,128 @@ int runTests(const File &directory) {
         put(request, "value", 1); bool rejected = false;
         try { (void)remote::Command::decode(request); } catch (...) { rejected = true; }
         expect(rejected, "New-tab command accepted arbitrary payload");
+        put(request, "action", "closeProjectTab"); put(request, "value", 0);
+        const auto close = remote::Command::decode(request);
+        expect(close.target == firstID && close.allowed("director") && !close.allowed("observer") && !close.allowed("notices"),
+               "Closing a project tab lost its target or bypassed director authorization");
+        put(request, "value", 1); rejected = false;
+        try { (void)remote::Command::decode(request); } catch (...) { rejected = true; }
+        expect(rejected, "Close-tab command accepted an arbitrary value");
         catalog.update(StringArray{first.getFullPathName()}, first);
         expect(!catalog.file(secondID) && !catalog.file(uuid()), "Removed or unissued projects could be opened remotely");
+    });
+    test("Remote project commands complete same-project opens, report read failures and route tab closure", [&] {
+        const auto previousRecents = RecentProjects::read();
+        struct RestoreRecents { StringArray paths; ~RestoreRecents() { RecentProjects::write(paths); } } restore{previousRecents};
+        const auto folder = directory.getNonexistentChildFile("remote-project-commands", ""); folder.createDirectory();
+        const auto current = folder.getChildFile("Current.jl"), broken = folder.getChildFile("Broken.jl"), missing = folder.getChildFile("Missing.jl");
+        auto project = floatingControlTests::fixture();
+        expect(current.replaceWithText(JSON::toString(ProjectCodec::encode(project))) && broken.replaceWithText("{ invalid project"), "Cannot create opening fixtures");
+        RecentProjects::write({current.getFullPathName(), broken.getFullPathName(), missing.getFullPathName()});
+        Session session; session.inspection = true; session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project)); session.document = current; session.dirty = false;
+        Auth auth; Lighting lighting(session);
+        Workspace workspace(session, auth, lighting, false, folder.getChildFile("appearance.json")); workspace.setSize(1024, 768);
+        const auto host = workspace.projectRemoteHost();
+        const auto catalog = list(get(get(host->presentation(0), "projects"), "recent"));
+        auto sendOpen = [&](const char *name, bool accepted) {
+            const auto row = std::find_if(catalog.begin(), catalog.end(), [&](const auto &entry) { return str(entry, "name") == name; });
+            expect(row != catalog.end(), "Fixture missing from Remote catalog");
+            auto value = object(); put(value, "id", remote::wireID(uuid())); put(value, "project", remote::wireID(session.project().id));
+            put(value, "action", "openRecentProject"); put(value, "target", (*row)["id"]); put(value, "value", 0);
+            const auto command = remote::Command::decode(value);
+            expect(host->perform(command) == accepted, "Remote acceptance differs from the project operation");
+            return command.id;
+        };
+        const auto same = sendOpen("Current", true);
+        expect(str(get(host->presentation(0), "projects"), "commandID") == remote::wireID(same) &&
+               str(get(host->presentation(0), "projects"), "commandState") == "completed" && !session.busy,
+               "Opening the current project stranded the client's local loading modal");
+        const auto gone = sendOpen("Missing", false);
+        expect(host->projectOpening.id() == gone && std::string(host->projectOpening.stateName()) == "failed" && !host->projectOpening.error().empty(),
+               "Missing recent project returned no correlated error");
+        const auto failed = sendOpen("Broken", true);
+        expect(host->projectOpening.active(), "Accepted request did not enter loading before dispatch");
+        const auto until = Time::getMillisecondCounterHiRes() + 15000;
+        while (host->projectOpening.active() && Time::getMillisecondCounterHiRes() < until) floatingControlTests::pump();
+        expect(!session.busy && host->projectOpening.id() == failed && std::string(host->projectOpening.stateName()) == "failed" &&
+               session.document == current && session.project().id == project.id, "Failed read replaced the current document or left Remote loading");
+        // Restore the ordinary editor after the inline browser error and verify
+        // close is deferred through the normal Main tab hook, never direct deletion.
+        workspace.projectOpened(false);
+        String closed; workspace.closeRemoteProjectTab = [&](const String &id) { closed = id; };
+        auto close = object(); put(close, "id", remote::wireID(uuid())); put(close, "project", remote::wireID(session.project().id));
+        put(close, "action", "closeProjectTab"); put(close, "target", remote::wireID(workspace.remoteProjectTabID)); put(close, "value", 0);
+        expect(host->perform(remote::Command::decode(close)) && closed.isEmpty(), "Remote tab closure bypassed the deferred close/save path");
+        floatingControlTests::pump();
+        expect(closed == remote::wireID(workspace.remoteProjectTabID) && current.existsAsFile(), "Remote tab closure lost its stable tab ID or removed a project file");
     });
     remoteSetlistSelectionTests::registerTests(directory,test);
     addTrackVisibilityTests(directory,test);
     addWorkspaceSetlistPresentationTests(directory,test);
+    test("Setlist drawer queue highlights the child without changing playlist occurrence", [&] {
+        jaras::Song song; jaras::Part child{"child", "Song", 10, 20}; child.parentRegionID = "parent";
+        song.parts = {{"parent", "Unified", 0, 30}, child};
+        auto visible = [&](std::optional<ID> region, std::optional<ID> entry, std::set<ID> expanded) {
+            return playlistOccurrences::queuedVisibleEntry(&song, region, entry, expanded);
+        };
+        expect(visible("child", "parent", {}) == "parent", "Closed drawer lost queue indication");
+        expect(visible("child", "parent", {"parent"}) == "child", "Open drawer highlighted the parent");
+        expect(visible("child", {}, {"parent"}) == "child", "Child without occurrence was hidden");
+        expect(visible("child", {}, {}) == "parent", "Closed child without occurrence was hidden");
+        expect(visible("parent", "parent", {"parent"}) == "parent", "Queued parent highlighted a child");
+        expect(visible("parent", "copy", {"parent"}) == "copy", "Queued duplicate lost its occurrence");
+        expect(visible("child", "copy", {"parent"}) == "copy", "Duplicate inherited another drawer's highlight");
+        expect(!visible({}, {}, {"parent"}), "Empty queue highlighted a row");
+    });
+    test("Track icon metadata persists without entering undo and preserves redo", [&] {
+        auto p=projectFixture();for(auto &t:p.songs[0].tracks)t.clips.clear();
+        const auto id=p.songs[0].tracks[0].id;
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(p));session.audio.setOffline(true);
+        session.setTrackInstrumentIcon({id},"vocal");
+        Appearance iconPreferences(directory.getNonexistentChildFile("track-icon-remote", ".json"));
+        StageState iconStage(iconPreferences);remote::Presentation iconPresentation(session,iconStage);
+        expect(str(iconPresentation.snapshot(0)["tracks"][0],"instrumentIcon")=="vocal","Remote omitted the project's icon");
+        expect(!session.canUndo(),"Icon created an undo entry");
+        expect(session.song()->tracks[0].instrumentIcon=="vocal","Icon not applied");
+        session.edit([](auto &value){value.songs[0].tracks[0].name="Renamed";},false);
+        session.setTrackInstrumentIcon({id},"saxophone");
+        session.undo();
+        expect(session.song()->tracks[0].name==p.songs[0].tracks[0].name && session.song()->tracks[0].instrumentIcon=="saxophone","Undo reverted the icon or lost the name edit");
+        session.setTrackInstrumentIcon({id},"backs");
+        expect(session.canRedo(),"Icon cleared redo");session.redo();
+        expect(session.song()->tracks[0].name=="Renamed" && session.song()->tracks[0].instrumentIcon=="backs","Redo reverted the icon");
+        auto saved=session.snapshot();session.setTrackInstrumentIcon({id},{});
+        expect(!iconPresentation.snapshot(0)["tracks"][0].hasProperty("instrumentIcon"),"Remote retained a removed icon");
+        expect(!ProjectCodec::decode(session.snapshot()).songs[0].tracks[0].instrumentIcon,"Removed icon survived serialization");
+        expect(ProjectCodec::decode(saved).songs[0].tracks[0].instrumentIcon=="backs","Saved icon was changed by clear");
+        const auto markerName=session.song()->markers->front().name;
+        session.editTimeline([](auto &value){value.songs[0].markers->front().name="Timeline edit";});
+        session.setTrackInstrumentIcon({id},"cowbell");
+        session.undo();
+        expect(session.song()->markers->front().name==markerName && session.song()->tracks[0].instrumentIcon=="cowbell",
+               "Typed timeline Undo reverted project icon metadata");
+        session.setTrackInstrumentIcon({id},"flute"); session.redo();
+        expect(session.song()->markers->front().name=="Timeline edit" && session.song()->tracks[0].instrumentIcon=="flute",
+               "Typed timeline Redo reverted project icon metadata");
+        session.setTrackInstrumentIcon({id},{}); session.undo();
+        expect(session.song()->markers->front().name==markerName && !session.song()->tracks[0].instrumentIcon,
+               "Typed timeline Undo restored an icon that the user removed");
+    });
+    test("Track icon catalog renders all Mac identities at compact and expanded sizes", [&] {
+        expect(trackIcons::catalog().size()==37,"Catalog differs from Mac");
+        std::set<std::string> unique;
+        for(const auto &icon:trackIcons::catalog()) {
+            expect(unique.insert(icon.id).second,"Duplicate icon ID");
+            for(int size:{16,26,32,38}) {
+                Image image(Image::ARGB,size,size,true);
+                { Graphics g(image); trackIcons::draw(g,icon,image.getBounds().toFloat()); }
+                bool painted=false;for(int y=0;y<size;++y)for(int x=0;x<size;++x)painted|=image.getPixelAt(x,y).getAlpha()>0;
+                if(!painted) throw std::runtime_error(std::string("Blank icon: ")+icon.id+" at "+std::to_string(size));
+            }
+        }
+    });
     masterMixerTests::registerTests(directory,test);
     workspaceLayoutTests::registerTests(directory,test);
     test("Transport Fadeout waits for silence, cancels and blocks Subplay without changing saved faders", [&] {
@@ -378,7 +923,7 @@ int runTests(const File &directory) {
         String warning;
         session.transportFadeoutWarning = [&](String value) { warning = value; };
         session.toggleTransportFadeout(true, {id}, 1);
-        expect(!session.transportFadeoutActive() && warning.isNotEmpty(), "Stopped transport accepted Fadeout");
+        expect(!session.transportFadeoutActive() && warning.isEmpty(), "Stopped transport must ignore Fadeout without showing a warning");
         session.command(jaras::CommandKind::play);
         session.toggleTransportFadeout(false, {id}, 1);
         expect(!session.transportFadeoutActive(), "Disabled Fadeout started");
@@ -524,6 +1069,26 @@ int runTests(const File &directory) {
         expect(notes[0].velocity==4 && notes[3].velocity==50 && notes[7].velocity==100,"MIDI fade velocity differs from Mac");
         expect(clip.midi->notes[0].velocity==100,"Fade destroyed source MIDI velocities");
     });
+    test("Click tempo rejects weak secondary attacks without erasing quiet quarter notes", [&] {
+        std::vector<clickTempo::Transient> pulses;
+        for(int beat=0;beat<80;++beat) {
+            const double at=beat*.375+.0001;pulses.push_back({at,beat>=4&&beat<=11?1.:.7,{}});
+            if(beat!=4&&beat!=6&&beat!=8&&beat!=9&&beat!=10)pulses.push_back({beat==11?4.28893424:at+.18965,beat==11?.30176:.07,{}});
+        }
+        const auto primary=clickTempo::primaryTransients(pulses);expect(primary.size()==80,"Secondary attacks changed the beat count");
+        std::vector<double> onsets;for(size_t i=0;i<primary.size();++i){expect(std::abs(primary[i].position-(i*.375+.0001))<1e-9,"Filtering moved a measured click");onsets.push_back(primary[i].position);}
+        const auto sections=clickTempo::sections(onsets);expect(sections.size()==1&&std::abs(sections[0].bpm-160)<.001,"A 160 BPM click became a false 284 BPM section");
+        std::vector<clickTempo::Transient> quiet;for(int beat=0;beat<40;++beat)quiet.push_back({beat*.375,beat%4==0?1.:.07,{}});quiet[17].peak=.001;
+        expect(clickTempo::primaryTransients(quiet).size()==quiet.size(),"A bar accent erased quiet quarter notes");
+    });
+    test("Config Init zero seconds survives Windows project serialization", [&] {
+        auto p=projectFixture();p.regionSetlist=jaras::RegionSetlist{};
+        p.regionSetlist->automaticSubplay=true;p.regionSetlist->automaticSubplayNext=true;
+        p.songs[0].parts[1].subplayInitSeconds=0;
+        const auto restored=ProjectCodec::decode(ProjectCodec::encode(p,{}));
+        expect(restored.songs[0].parts[1].subplayInitSeconds==0 && !restored.songs[0].parts[1].subplayInitBars,
+               "Windows codec must retain an explicit 0s instead of the default one-second lead");
+    });
     test("Automatic Subplay seconds and bars survive Windows project serialization", [&] {
         auto p=projectFixture();p.regionSetlist=jaras::RegionSetlist{};p.regionSetlist->automaticSubplay=true;
         for(int count=1;count<=5;++count) {
@@ -588,10 +1153,36 @@ int runTests(const File &directory) {
         expect(restored.regionSetlist->playedLiveRegionIDs==std::optional<std::vector<ID>>{{song.parts[0].id}},"Windows Live history not persisted");
         Session session;session.inspection=true;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(restored));session.audio.setOffline(true);
         Appearance preferences(directory.getNonexistentChildFile("live-occurrences",".json"));
-        StageState stage(preferences);remote::Presentation remote(session,stage);
+        StageState stage(preferences);remote::Presentation remote(session,stage);stage.preview=true;
+        const auto previewRow=[&](int index,const ID &id){
+            for(const auto &block:list(get(StageContent::make(session,stage,index).payload,"blocks")))
+                for(const auto &row:list(get(block,"rows")))if(str(row,"id")==text(id))return row;
+            return var();
+        };
+        for(int panel:{1,2}){
+            expect(flag(previewRow(panel,song.parts[0].id),"liveExecuted"),"TP preview omitted Live marks");
+            expect(!flag(previewRow(panel,song.parts[1].id),"liveExecuted"),"TP preview marked an unplayed song");
+        }
+        session.command(jaras::CommandKind::selectRegion,song.parts[0].id);
+        session.command(jaras::CommandKind::play);
+        session.command(jaras::CommandKind::queueRegion,song.parts[1].id);
+        expect(flag(previewRow(1,song.parts[0].id),"playing"),"Preview misses playing highlight");
+        expect(flag(previewRow(1,song.parts[1].id),"queued") && num(previewRow(1,song.parts[1].id),"playbackProgress")>.99,
+               "Preview queue countdown must start full");
+        session.command(jaras::CommandKind::stopAll);
+        expect(!flag(previewRow(1,song.parts[0].id),"playing"),"Stopped preview still highlights playback");
         remote::Command command;command.id=uuid();command.project=p.id;command.song=song.id;command.action="toggleSetlistLive";
         expect(remote.apply(command),"Remote Live toggle failed");
         expect(!session.project().regionSetlist->liveEnabled.value_or(false) && session.project().regionSetlist->playedLiveRegionIDs->empty(),"Remote Live off retained played marks");
+        expect(!flag(previewRow(1,song.parts[0].id),"liveExecuted"),"Preview did not clear marks with Live off");
+        auto grouped=restored;auto parent=grouped.songs[0].parts[0];parent.id=uuid();parent.name="Hidden wrapper";parent.endTime=40;
+        for(auto &part:grouped.songs[0].parts)part.parentRegionID=parent.id;
+        grouped.songs[0].parts.push_back(parent);
+        session.restoreSnapshot(ProjectCodec::encode(grouped));session.audio.setOffline(true);
+        const auto expanded=list(get(list(get(StageContent::make(session,stage,1).payload,"blocks"))[0],"rows"));
+        expect(expanded.size()==2 && str(expanded[0],"id")==text(song.parts[0].id) && str(expanded[1],"id")==text(song.parts[1].id),
+               "Preview must contain drawer songs, never the special wrapper");
+        expect(!flag(expanded[0],"queued")&&!flag(expanded[1],"queued"),"No queued region must not highlight preview rows");
     });
     test("Edit cursor selects setlist songs without changing playback or queue", [&] {
         Session session; auto p=projectFixture(); auto &song=p.songs[0];
@@ -635,6 +1226,26 @@ int runTests(const File &directory) {
             expect(rejected && !s.transport().playing,"Missing output allowed Play or omitted the warning");
         }
     });
+    test("Waveform stretches through the final source frames at relative and changing tempos", [&] {
+        auto data=std::make_shared<WaveformCache::Data>();data->duration=1;data->sampleRate=48000;data->frames=48000;data->sourceChannels=data->storedChannels=1;
+        data->levels.push_back({256,0,188});data->owned.setSize(188*4,true);
+        auto *bytes=(uint8*)data->owned.getData();const auto high=(uint16)WaveformCache::encode(.5f),low=(uint16)WaveformCache::encode(-.5f);
+        for(int i=0;i<188;++i){bytes[i*4]=(uint8)high;bytes[i*4+1]=(uint8)(high>>8);bytes[i*4+2]=(uint8)low;bytes[i*4+3]=(uint8)(low>>8);}
+        jaras::Song song;song.bpm=120;song.duration=4;
+        jaras::TimelineMarker marker;marker.id=uuid();marker.position=0;marker.tempoBPM=60;marker.tempoReferenceBPM=120;marker.tempoTimebase="relative";
+        song.markers=std::vector<jaras::TimelineMarker>{marker};
+        jaras::AudioClip clip;clip.duration=2;WaveformCache cache;
+        const auto render=[&] {Image image(Image::ARGB,640,100,true);Graphics g(image);
+            WaveformRenderer::draw(g,cache,data,clip,{0,0,(float)(clip.duration*200),100},{0,0,640,100},200,Colours::white,true,{},&song);return image;};
+        const auto extent=[](const Image &image,int x){int count=0;for(int y=18;y<98;++y)if(image.getPixelAt(x,y).getAlpha()>100)++count;return count;};
+        expect(extent(render(),380)>30,"Slowed waveform ended before the stretched item's tail");
+        marker.id=uuid();marker.position=1;marker.tempoBPM=30;song.markers->push_back(marker);clip.duration=3;
+        expect(extent(render(),570)>30,"Waveform ignored a second tempo segment inside the item");
+        song.markers->pop_back();clip.sourceOffset=.2;clip.duration=1.6;
+        expect(extent(render(),300)>30,"Stretched source trim left an empty waveform tail");
+        clip.sourceOffset=0;clip.loopLength=.5;clip.duration=3;
+        expect(extent(render(),570)>30,"Slowed loop stopped drawing at the original source boundary");
+    });
     test("Waveform pixels follow fade curves without altering cached peaks", [&] {
         auto data=std::make_shared<WaveformCache::Data>();data->duration=1;data->sampleRate=48000;data->frames=48000;data->sourceChannels=data->storedChannels=1;
         data->levels.push_back({256,0,188});data->owned.setSize(188*4,true);
@@ -666,6 +1277,222 @@ int runTests(const File &directory) {
         expect(std::abs(extent(above,100)-extent(below,100))<=1,"Phase inversion collapsed the waveform envelope");
         expect(std::abs(data->range(0,0,1).second-.4f)<.001f,"Gain or polarity rewrote source peaks");
     });
+    test("Item text colors preserve selected Unicode words and legacy plain text", [&] {
+        const std::vector<ItemTextColors::Run> original={{String::fromUTF8("É 🎵 "),{}},{"Am7\nG",0xff4040},{" <script> literal",{}}};
+        const auto encoded=ItemTextColors::encode(original),plain=String::fromUTF8("É 🎵 Am7\nG <script> literal");
+        expect(ItemTextColors::plain(encoded)==plain,"Color metadata changed visible words");
+        const auto decoded=ItemTextColors::runs(encoded);
+        expect(decoded.size()==3 && decoded[1].color==0xff4040 && !decoded[0].color,"Selected word color did not survive serialization");
+        expect(ItemTextColors::encode({{"Am\nG",{}}})=="Am\nG","Legacy plain text must stay plain");
+        const auto malformed=ItemTextColors::prefix()+"[{\"text\":\"Am\",\"color\":16777216}]";
+        expect(ItemTextColors::plain(malformed)==malformed,"Malformed data must stay literal");
+        const auto columns=ItemTextColors::encodeColumns(encoded,"Second");
+        expect(ItemTextColors::columns(columns).size()==2 && ItemTextColors::columns(columns)[0]==encoded,"Two columns lost selected word colors");
+        expect(ItemTextColors::plain(columns)==plain+"\nSecond","Two-column plain fallback is invalid");
+        expect(ItemTextColors::columns(ItemTextColors::encodeColumns(encoded,{})).size()==2,"Empty second column lost layout");
+        auto project=projectFixture();jaras::Track track;track.id=uuid();track.name="Teleprompter";track.role.id="teleprompt";
+        jaras::AudioClip clip;clip.id=uuid();clip.name="Colored words";clip.duration=1;clip.text=utf8(encoded);track.clips.push_back(clip);
+        project.songs.front().tracks.push_back(track);
+        const auto restored=ProjectCodec::decode(ProjectCodec::encode(project,{}));
+        const auto &savedTracks=restored.songs.front().tracks;
+        const auto saved=std::find_if(savedTracks.begin(),savedTracks.end(),[&](const auto &value){return value.id==track.id;});
+        expect(saved!=savedTracks.end() && text(*saved->clips.front().text)==encoded,"Project save lost selected word colors");
+    });
+    test("Library annotations accept emoji from the Windows keyboard", [&] {
+        String saved;
+        TextItemPanel panel("Piano ", [&](String text) { saved = std::move(text); }, true, false, true);
+        TextEditor *editor = nullptr;
+        for (auto *child : panel.getChildren())
+            if (auto *field = dynamic_cast<TextEditor *>(child)) editor = field;
+        expect(editor != nullptr, "Annotation field is missing");
+        expect(editor->keyPressed(KeyPress(0xd83c, {}, 0xd83c)), "The emoji's first UTF-16 unit was not handled");
+        expect(editor->getText() == "Piano ", "An incomplete emoji appeared in the annotation");
+        expect(editor->keyPressed(KeyPress(0xdfb9, {}, 0xdfb9)), "The emoji's second UTF-16 unit was not handled");
+        floatingControlTests::pump();
+        const auto expected = "Piano " + String::charToString(0x1f3b9);
+        expect(editor->getText() == expected && ItemTextColors::plain(saved) == expected,
+               "The inserted emoji did not survive saving the annotation");
+    });
+    test("Library Notes render Unicode and edit at the displayed caret", [&] {
+        Component window;
+        window.setSize(560, 250);
+        window.addToDesktop(ComponentPeer::windowIsTemporary);
+        window.setVisible(true);
+        const auto piano = String::charToString(0x1f3b9);
+        String saved;
+        LibraryNoteEditor panel(ItemTextColors::encode({{"Piano ", {}}, {piano, 0xff4040}, {" final", {}}}),
+            [&](String text) { saved = std::move(text); });
+        window.addAndMakeVisible(panel);
+        panel.setBounds(5, 5, 520, 220);
+        floatingControlTests::pump();
+        const auto editor = panel.nativeEditor();
+        expect(editor != nullptr, "The Windows Notes field did not attach its native editor");
+
+        const auto pointAt = [&](LONG position) {
+            POINTL point{};
+            SendMessageW(editor, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&point), position);
+            return point;
+        };
+        CHARFORMAT2W noteFont{};
+        noteFont.cbSize = sizeof(noteFont);
+        SendMessageW(editor, EM_GETCHARFORMAT, SCF_DEFAULT, reinterpret_cast<LPARAM>(&noteFont));
+        expect(String(noteFont.szFaceName) == "Inter", "Stored notes must use the bundled Inter font");
+        const auto emojiStart = pointAt(6);
+        const auto emojiEnd = pointAt(8);
+        expect(emojiEnd.x > emojiStart.x && emojiEnd.y == emojiStart.y,
+               "The piano emoji did not occupy one inline glyph area");
+        const auto beforeWord = pointAt(9);
+        const auto click = MAKELPARAM(beforeWord.x, beforeWord.y + 3);
+        SendMessageW(editor, WM_LBUTTONDOWN, MK_LBUTTON, click);
+        SendMessageW(editor, WM_LBUTTONUP, 0, click);
+        CHARRANGE selection{};
+        SendMessageW(editor, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&selection));
+        expect(selection.cpMin == 9 && selection.cpMax == 9, "The click after the emoji placed the caret at a different character");
+        SendMessageW(editor, WM_CHAR, 'X', 1);
+        expect(ItemTextColors::plain(saved) == "Piano " + piano + " Xfinal", "Keyboard input did not land at the clicked caret");
+        const auto runs = ItemTextColors::runs(saved);
+        expect(runs.size() == 3 && runs[1].text == piano && runs[1].color == 0xff4040, "Editing lost the note's existing color run");
+        SendMessageW(editor, WM_CHAR, 0xd83c, 1);
+        SendMessageW(editor, WM_CHAR, 0xdfb9, 1);
+        expect(ItemTextColors::plain(saved) == "Piano " + piano + " X" + piano + "final", "The Notes field saved split Unicode characters");
+
+        // Inspect pixels from the actual editor. Glyph advance and text
+        // round trips also pass with the old monochrome RichEdit renderer.
+        const auto sample = String::fromUTF8("😃 ❤️ 👩🏽‍🎤");
+        SendMessageW(editor, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(sample.toWideCharPointer()));
+        RECT bounds{};
+        GetClientRect(editor, &bounds);
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = bounds.right;
+        info.bmiHeader.biHeight = -bounds.bottom;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        void *pixels = nullptr;
+        const auto dc = CreateCompatibleDC(nullptr);
+        const auto bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+        int yellowPixels = 0, redPixels = 0;
+        int keycapPixels = 0, caretPixels = 0;
+        if (dc && bitmap && pixels) {
+            const auto previous = SelectObject(dc, bitmap);
+            SendMessageW(editor, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+            const auto image = static_cast<const uint32 *>(pixels);
+            for (int i = 0; i < bounds.right * bounds.bottom; ++i) {
+                const auto color = image[i];
+                const int r = (color >> 16) & 255, g = (color >> 8) & 255, b = color & 255;
+                if (r > 165 && g > 120 && b < 85 && g > b + 70) ++yellowPixels;
+                if (r > 165 && g < 110 && b < 120 && r > g + 90) ++redPixels;
+            }
+            const auto numbers = String::fromUTF8("1️⃣ 2️⃣ #️⃣ *️⃣");
+            SendMessageW(editor, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(numbers.toWideCharPointer()));
+            SendMessageW(editor, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+            for (int i = 0; i < bounds.right * bounds.bottom; ++i)
+                if ((image[i] & 0xffffff) == 0x3b88c3) ++keycapPixels;
+            SendMessageW(editor, EM_SETSEL, -1, -1);
+            for (const auto letter : std::wstring(L"abc")) {
+                SendMessageW(editor, WM_CHAR, letter, 1);
+                SendMessageW(editor, WM_TIMER, NoteTextServices::caretTimer, 0);
+                SendMessageW(editor, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+                GdiFlush();
+                int visibleKeycaps = 0;
+                for (int i = 0; i < bounds.right * bounds.bottom; ++i)
+                    if ((image[i] & 0xffffff) == 0x3b88c3) ++visibleKeycaps;
+                expect(visibleKeycaps > 30 && ItemTextColors::plain(saved).startsWith(numbers),
+                       "Typing after a number must retain its emoji and colored pixels across caret repaints");
+            }
+            SendMessageW(editor, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L""));
+            SetFocus(editor);
+            SendMessageW(editor, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(25, 16));
+            SendMessageW(editor, WM_LBUTTONUP, 0, MAKELPARAM(25, 16));
+            SendMessageW(editor, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+            for (int i = 0; i < bounds.right * bounds.bottom; ++i)
+                if ((image[i] & 0xffffff) == (theme::green.getARGB() & 0xffffff)) ++caretPixels;
+            SelectObject(dc, previous);
+        }
+        if (bitmap) DeleteObject(bitmap);
+        if (dc) DeleteDC(dc);
+        expect(yellowPixels > 8 && redPixels > 8, "The Notes editor did not draw color emoji");
+        expect(keycapPixels > 30, "The Notes editor did not render the numbered Twemoji glyphs");
+        expect(caretPixels > 5, "New notes must paint the insertion caret in CatLive green");
+    });
+    test("Item text columns edit independently and confirm removal before returning to Default", [&] {
+        Component host;host.setBounds(0,0,800,500);
+        String committed;
+        TextItemPanel panel("First",[&](String value){committed=value;});
+        host.addAndMakeVisible(panel);panel.setBounds(50,50,700,336);
+        TextButton *mode=nullptr,*save=nullptr;TextEditor *first=nullptr,*secondEditor=nullptr;TextItemPanel *second=nullptr;
+        for(auto *child:panel.getChildren()) {
+            if(auto *button=dynamic_cast<TextButton*>(child)) {
+                if(button->getButtonText()=="Default")mode=button;
+                if(button->getButtonText()==localization::translate("Aplicar"))save=button;
+            }
+            if(auto *editor=dynamic_cast<TextEditor*>(child))first=editor;
+            if(auto *column=dynamic_cast<TextItemPanel*>(child))second=column;
+        }
+        expect(mode&&save&&first&&second,"Missing editor controls");
+        for(auto *child:second->getChildren())if(auto *editor=dynamic_cast<TextEditor*>(child))secondEditor=editor;
+        expect(secondEditor&&!second->isVisible(),"Default must show only the first column");
+        const auto savedClipboard=SystemClipboard::getTextFromClipboard();
+        SystemClipboard::copyTextToClipboard("Verse 1\nChorus\n");
+        first->clear();
+        const KeyPress normalPaste('V',ModifierKeys::ctrlModifier,0),controlPaste(22,ModifierKeys::ctrlModifier,0);
+        expect(first->keyPressed(normalPaste)&&first->keyPressed(controlPaste),"Editor must consume both paste representations");
+        expect(first->getText()=="Verse 1\nChorus\n","One Ctrl+V pasted the lyrics twice");
+        first->keyStateChanged(false);
+        first->keyPressed(controlPaste);first->keyPressed(normalPaste);
+        expect(first->getText()=="Verse 1\nChorus\nVerse 1\nChorus\n","A second released-and-pressed Ctrl+V must still paste");
+        first->keyStateChanged(false);
+        first->setText("First",false);
+        SystemClipboard::copyTextToClipboard(savedClipboard);
+        mode->onClick();expect(second->isVisible()&&first->getText()=="First"&&secondEditor->getText().isEmpty(),"Enabling columns moved or duplicated existing text");
+        secondEditor->setText("Second",false);save->onClick();
+        expect(ItemTextColors::columns(committed)==StringArray{"First","Second"},"Saving columns lost independent contents");
+        expect(first->getRight()<second->getX()&&second->getRight()<=panel.getWidth(),"Two editors overlap or extend outside the window");
+        auto output=directory.getChildFile("two-column-editor.png").createOutputStream();
+        if(output)PNGImageFormat().writeImageToStream(panel.createComponentSnapshot(panel.getLocalBounds()),*output);
+        std::function<Component*(Component&,const String&)> find=[&](Component &parent,const String &id)->Component*{
+            if(parent.getComponentID()==id)return &parent;
+            for(auto *child:parent.getChildren())if(auto *result=find(*child,id))return result;return nullptr;
+        };
+        mode->onClick();
+        auto *cancel=dynamic_cast<Button*>(find(host,"confirmationCancel"));expect(cancel,"Removing a non-empty column must request confirmation");
+        cancel->triggerClick();floatingControlTests::pump();floatingControlTests::pump();
+        expect(second->isVisible()&&secondEditor->getText()=="Second","Cancel discarded the second column");
+        mode->onClick();
+        auto *accept=dynamic_cast<Button*>(find(host,"confirmationAccept"));expect(accept,"Missing remove-column confirmation");
+        accept->triggerClick();floatingControlTests::pump();floatingControlTests::pump();floatingControlTests::pump();
+        expect(!second->isVisible(),"Confirmed removal did not restore Default");save->onClick();
+        expect(committed=="First","Default did not preserve the first column");
+    });
+    test("Waveform pan attenuates only the opposite channel, including uncommitted drags", [&] {
+        auto data=std::make_shared<WaveformCache::Data>();
+        data->duration=1;data->sampleRate=48000;data->frames=48000;data->sourceChannels=2;data->storedChannels=3;
+        data->levels.push_back({256,0,188});data->owned.setSize(188*3*4,true);
+        auto *bytes=(uint8*)data->owned.getData();
+        const auto high=(uint16)WaveformCache::encode(.8f),low=(uint16)WaveformCache::encode(-.8f);
+        for(int i=0;i<188*3;++i){bytes[i*4]=(uint8)high;bytes[i*4+1]=(uint8)(high>>8);bytes[i*4+2]=(uint8)low;bytes[i*4+3]=(uint8)(low>>8);}
+        WaveformCache cache;jaras::AudioClip clip;clip.duration=1;
+        const auto render=[&](std::optional<double> preview={}) {
+            Image image(Image::ARGB,200,120,true,SoftwareImageType());Graphics g(image);
+            WaveformRenderer::draw(g,cache,data,clip,{0,0,200,120},{0,0,200,120},200,Colours::white,true,{},nullptr,nullptr,preview);
+            return image;
+        };
+        const auto extent=[](const Image &image,int channel) {
+            int count=0;for(int y=18+channel*50;y<68+channel*50;++y)count+=image.getPixelAt(100,y).getAlpha()>100;return count;
+        };
+        const auto center=render();const auto original=data->owned;
+        expect(extent(center,0)>35 && extent(center,1)>35,"Stereo fixture is empty");
+        clip.pan=1;auto right=render();
+        expect(extent(right,0)<=2 && extent(right,1)==extent(center,1),"Full right did not flatten only left waveform");
+        clip.pan=-1;auto left=render();
+        expect(extent(left,1)<=2 && extent(left,0)==extent(center,0),"Full left did not flatten only right waveform");
+        clip.pan=0;auto half=render(.5);
+        expect(extent(half,0)>=18 && extent(half,0)<=21 && extent(half,1)==extent(center,1),"Pan drag is not reflected before commit");
+        expect(data->owned==original && clip.pan==0,"Pan changed source peaks or committed a drag");
+        clip.channelMode=1;auto mono=render(1);
+        expect(extent(mono,0)>25,"Panning a mono waveform must not erase its source lane");
+    });
     test("Waveform physical columns retain transients and scroll without repartitioning", [&] {
         auto data=std::make_shared<WaveformCache::Data>();
         data->duration=200;data->sampleRate=48000;data->frames=9600000;data->sourceChannels=data->storedChannels=1;
@@ -689,6 +1516,13 @@ int runTests(const File &directory) {
                 return image;
             };
             const auto original=draw(0),panned=draw(16);const int shift=roundToInt(16*density);
+            // Subpixel follow phases within one device column must not modulate
+            // the visible peaks (especially dense metronome/click waveforms).
+            const auto phaseA=draw(16.05f/density),phaseB=draw(16.40f/density);
+            for(int x=4;x<phaseA.getWidth()-4;++x)
+                for(int y=roundToInt(20*density);y<roundToInt(93*density);++y)
+                    expect(std::abs((int)phaseA.getPixelAt(x,y).getAlpha()-(int)phaseB.getPixelAt(x,y).getAlpha())<=2,
+                        "Fractional follow changed waveform brightness: density="+String(density));
             int tall=0;
             for(int x=4;x<original.getWidth()-shift-4;++x) {
                 int height=0;
@@ -709,6 +1543,17 @@ int runTests(const File &directory) {
             }
             expect(tall>0,"A short transient disappeared in the physical-pixel overview");
         }
+    });
+    test("Manual grid scroll resumes after five idle seconds", [&] {
+        TimelinePlaybackFollowPolicy policy;jaras::TransportState state;state.playing=true;
+        policy.pause(state,5,100);
+        expect(policy.isPaused(state,104.99),"Follow resumed before the idle deadline");
+        policy.pause(state,5,101);
+        expect(policy.isPaused(state,105.99),"More scrolling did not extend the pause");
+        expect(!policy.isPaused(state,106),"Follow failed to resume after five idle seconds");
+        jaras::Track track;jaras::AudioClip clip;clip.name="Title";clip.duration=60;
+        ItemHeader header({0,0,800,80},800,track,clip,"Title",true);
+        expect(header.gainRect.isEmpty() && header.muteRect.isEmpty() && header.fxRect.isEmpty(),"Hidden header still has clickable controls");
     });
     test("Marquee follow pause survives mouse release and cursor edits until playback changes", [&] {
         TimelinePlaybackFollowPolicy policy;jaras::TransportState state;
@@ -739,6 +1584,30 @@ int runTests(const File &directory) {
         Appearance prefs(directory.getNonexistentChildFile("scroll-none",".json"));
         expect(!prefs.continuousScroll(),"Continuous scroll must default to none");
         prefs.set("jaras.timeline.continuousScroll",true);expect(prefs.continuousScroll(),"true did not enable continuous scroll");
+    });
+    test("Continuous scroll paints a stationary needle when the audio clock advances before painting", [&] {
+        for(double zoom:{64.,160.,1024.,81920.}) {
+            Session session;session.inspection=true;session.audio.prepareOffline(48000);session.newProject();
+            const auto preferences=directory.getNonexistentChildFile("continuous-frame",".json");
+            Appearance appearance(preferences);appearance.set("jaras.timeline.zoom",zoom);appearance.set("jaras.timeline.continuousScroll",true);
+            Auth auth;Lighting lighting(session);Workspace workspace(session,auth,lighting,false,preferences);workspace.setSize(1280,720);workspace.setVisible(true);
+            session.command(jaras::CommandKind::editSeek,{},20);session.command(jaras::CommandKind::play);
+            AudioBuffer<float> pcm(2,1024);
+            for(int frame=0;frame<4;++frame) {
+                session.tick();
+                const auto before=get(workspace.diagnostics(),"timeline");const double sampled=num(before,"framePlaybackPosition");
+                // The device advances between the scroll update and the queued
+                // GUI repaint. A fresh position read in Heads::paint drifts far
+                // ahead of the viewport, although the audio clock is correct.
+                session.audio.render(pcm.getArrayOfWritePointers(),2,1024);session.projectSyncFrame();
+                expect(session.presentationTransport().position>sampled+.01,"Fixture did not advance the device clock before painting");
+                const auto image=workspace.createComponentSnapshot(workspace.getLocalBounds());expect(image.isValid(),"Cannot paint continuous scroll fixture");
+                const auto painted=get(workspace.diagnostics(),"timeline");
+                expect(std::abs(num(painted,"paintedMainPosition")-sampled)<1e-9,"Needle paint resampled the clock after scrolling");
+                expect(std::abs(num(painted,"paintedMainNeedleX")-num(painted,"width")*.5)<.01,"Continuous needle moved away from its fixed viewport center");
+            }
+            session.command(jaras::CommandKind::stopAll);
+        }
     });
     test("Master default and temporary SubPlay cursor match Mac", [&] {
         Session session;session.newProject();expect(session.project().masterColor==0x414141,"New Master colour differs");
@@ -809,8 +1678,48 @@ int runTests(const File &directory) {
         Timer::callPendingTimersSynchronously();
         expect(deleteButton && deleteButton->isEnabled() && deleteButton->getButtonText()==localization::translate("Delete project") && !invoked,"Confirmation must become available after three seconds without deleting anything automatically");
         saveConfirmation("project-deletion-ready.png");
-        plan.remove();expect(!document.exists() && !exclusive.exists() && shared.existsAsFile() && unrelated.existsAsFile() && root.isDirectory(),"Deletion removed shared or unrelated files, or retained exclusive media");
+        rejected=false;try{plan.remove();}catch(...){rejected=true;}
+        expect(rejected && document.existsAsFile() && exclusive.existsAsFile(),"A new sibling must cancel approval to delete the whole folder");
+        ProjectDeletion sharedPlan(document);expect(!sharedPlan.deletesDirectory,"A shared folder must clearly use file-only deletion");Thread::sleep(3100);
+        sharedPlan.remove();expect(!document.exists() && !exclusive.exists() && shared.existsAsFile() && unrelated.existsAsFile() && root.isDirectory(),"Deletion removed shared or unrelated files, or retained exclusive media");
         expect(!cache.exists() && sharedCache.existsAsFile() && !backupFile.exists() && !recovery.exists() && !recovery.getParentDirectory().exists() && foreign.existsAsFile(),"Deletion must remove owned waveform/recovery media and empty subfolders while preserving unrelated recovery files");
+    });
+    test("Dedicated project deletion removes the entire folder and unreferenced contents", [&] {
+        auto root=directory.getNonexistentChildFile("DeleteWholeProject",{});root.createDirectory();
+        auto document=root.getChildFile("Show.jl");ProjectCodec::write(document,ProjectCodec::encode(projectFixture(),{}));
+        for(const auto &path:{"Stems/unused.wav","Videos/unused.mp4","backups/old.bkjl","Stems/WF/unused.waveform","Presets/fx.json","notes.txt"}) {
+            auto file=root.getChildFile(path);file.getParentDirectory().createDirectory();expect(file.replaceWithText("inside project"),"Cannot create folder deletion fixture");
+        }
+        auto outside=directory.getChildFile("outside-project.wav");expect(outside.replaceWithText("keep"),"Cannot create external fixture");
+        ProjectDeletion plan(document);expect(plan.deletesDirectory && plan.target()==root,"Confirmation must target the entire project folder");
+        bool early=false;try{plan.remove();}catch(...){early=true;}expect(early && root.isDirectory(),"Whole-folder deletion bypassed countdown");
+        Thread::sleep(3100);
+        const auto locked=CreateFileW(root.getChildFile("notes.txt").getFullPathName().toWideCharPointer(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
+        expect(locked!=INVALID_HANDLE_VALUE,"Cannot lock deletion fixture");
+        bool busy=false;try{plan.remove();}catch(...){busy=true;}CloseHandle(locked);
+        expect(busy && document.existsAsFile(),"A locked file must report failure and retain the project document for retry");
+        plan.remove();expect(!root.exists() && outside.loadFileAsString()=="keep","Whole-folder deletion left residue or removed an external file");
+    });
+    test("Mixer session bypass preserves independent Main and strip overrides", [&] {
+        auto p = projectFixture();
+        auto track = p.songs[0].tracks.front();
+        track.id = uuid(); track.clips.clear(); p.songs[0].tracks.push_back(track);
+        const auto fx = fxschema::complete(JSON::parse(R"({"inserted":["EQ","Delay"],"eqEnabled":true,"delayEnabled":false})"));
+        for (auto &t : p.songs[0].tracks) t.fxJSON = utf8(JSON::toString(fx));
+        p.masterFXJSON = utf8(JSON::toString(fx));
+        Session s; s.inspection=true; s.restoreSnapshot(ProjectCodec::encode(p));
+        const auto id=p.songs[0].tracks.front().id;
+        fxchain::toggleStripBypass(s,{},true);
+        for (const auto &t : p.songs[0].tracks)
+            expect(fxchain::stripBypassed(fxchain::settings(s,t.id)), "Session missed a strip");
+        fxchain::toggleStripBypass(s,{},false); fxchain::toggleStripBypass(s,id,false);
+        expect(flag(fxchain::settings(s,{}),"sessionFXBypassed") && fxchain::enabled(fxchain::settings(s,{}),"EQ"),
+               "Main must be independently releasable while session is on");
+        expect(fxchain::enabled(fxchain::settings(s,id),"EQ") && fxchain::allBypassed(fxchain::settings(s,track.id)),
+               "Releasing a track affected other strips");
+        fxchain::toggleStripBypass(s,{},true);
+        expect(fxchain::enabled(fxchain::settings(s,track.id),"EQ") && !fxchain::enabled(fxchain::settings(s,track.id),"Delay"),
+               "Session restore destroyed individual plugin bypass state");
     });
     test("Batch FX bypass and deletion undo every selected chain with exact plugin state", [&] {
         auto p = projectFixture();
@@ -847,6 +1756,131 @@ int runTests(const File &directory) {
         for (size_t i = 0; i < ids.size(); ++i) expect(session.song()->tracks[i].fxJSON == restored.songs[0].tracks[i].fxJSON, "One undo did not restore both complete chains");
         session.redo();
         for (const auto &t : session.song()->tracks) expect(!t.fxJSON, "Redo did not delete chain");
+    });
+    const auto itemDeletionAudio = [&] {
+        const auto folder=directory.getChildFile("ItemDeletionAudio");folder.createDirectory();
+        const auto file=folder.getChildFile("signal.wav");file.deleteFile();
+        auto stream=file.createOutputStream();WavAudioFormat wav;
+        std::unique_ptr<AudioFormatWriter> writer(wav.createWriterFor(stream.release(),48000,2,24,{},0));
+        expect(writer!=nullptr,"Cannot create deletion audio fixture");
+        AudioBuffer<float> samples(2,48000);
+        for(int channel=0;channel<2;++channel)FloatVectorOperations::fill(samples.getWritePointer(channel),.1f,48000);
+        expect(writer->writeFromAudioSampleBuffer(samples,0,48000),"Cannot write deletion audio fixture");
+        return folder;
+    };
+    test("Selected item split is atomic and retains readers through Undo and Redo", [&] {
+        Session session;session.inspection=true;session.mediaDirectory=itemDeletionAudio();
+        auto project=projectFixture();auto &song=project.songs[0];song.duration=2;song.tracks.clear();song.parts.clear();song.markers.reset();
+        project.masterOutputs=std::vector<jaras::OutputPatch>{{1,2}};
+        std::set<ID> ids;
+        for(int i=0;i<3;++i){jaras::Track t;t.id=uuid();t.name="Track";jaras::AudioClip c;c.id=uuid();c.name="Audio";c.duration=1;c.fadeIn=.005;c.fadeOut=.005;c.audioFile=jaras::AudioFile{"signal.wav",{}};t.clips={c};song.tracks.push_back(t);if(i<2)ids.insert(c.id);}
+        project.savedCursor=jaras::SavedProjectCursor{song.id,0};session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        const auto* graph=session.audio.preparationDiagnostics.getDynamicObject();
+        session.command(jaras::CommandKind::play);
+        const auto rightItems=session.splitClips(ids,.5);
+        expect(rightItems.size()==2,"Split did not return both right halves for selection");
+        for(const auto &track:session.song()->tracks)for(const auto &clip:track.clips)if(rightItems.count(clip.id))
+            expect(clip.startTime==.5&&ids.count(clip.id)==0,"Split selection contains a left half or an original item");
+        expect(session.song()->tracks[0].clips.size()==2&&session.song()->tracks[1].clips.size()==2&&session.song()->tracks[2].clips.size()==1,"Split did not apply to exactly the selected items");
+        expect(!session.preparingLiveAudio()&&session.audio.preparationDiagnostics.getDynamicObject()==graph,"Split rebuilt the full audio graph");
+        AudioBuffer<float> output(2,480);
+        for(int i=0;i<75;++i){session.audio.render(output.getArrayOfWritePointers(),2,480);if(i>0)for(int n=0;n<480;++n)expect(std::abs(output.getSample(0,n)-.3f)<.004f,"Split introduced silence or overlapping halves");}
+        session.undo();expect(session.song()->tracks[0].clips.size()==1&&session.song()->tracks[1].clips.size()==1,"Undo did not restore the whole split transaction");
+        expect(session.song()->tracks[0].clips[0].duration==1,"Undo lost original duration");
+        session.redo();expect(session.song()->tracks[0].clips.size()==2&&session.song()->tracks[1].clips.size()==2,"Redo lost selected halves");
+        expect(!session.preparingLiveAudio()&&session.audio.preparationDiagnostics.getDynamicObject()==graph,"Split Undo/Redo rebuilt the graph");
+        session.command(jaras::CommandKind::stopAll);
+    });
+    test("Timeline deletion keeps readers and restores marker region and contents with Undo", [&] {
+        Session session;session.inspection=true;session.mediaDirectory=itemDeletionAudio();
+        auto project=projectFixture();auto &song=project.songs[0];song.duration=2;song.tracks.clear();song.parts.clear();song.markers.reset();
+        project.masterOutputs=std::vector<jaras::OutputPatch>{{1,2}};
+        jaras::Track track;track.id=uuid();track.name="Audio";jaras::AudioClip clip;clip.id=uuid();clip.name="Signal";clip.duration=1;clip.audioFile=jaras::AudioFile{"signal.wav",{}};track.clips={clip};song.tracks={track};
+        const ID region=uuid(),marker=uuid(),songID=song.id;song.parts={{region,"Music",0,1}};
+        jaras::TimelineMarker cue{marker,"Cue",.5,0x51ef93};song.markers=std::vector<jaras::TimelineMarker>{cue};
+        project.savedCursor=jaras::SavedProjectCursor{song.id,0};session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        const auto *graph=session.audio.preparationDiagnostics.getDynamicObject();
+        session.editTimeline([&](auto &p){auto core=session.core;core.deleteManualMarker(marker);p=core.project();});
+        expect(session.song()->markers->empty(),"Marker survived deletion");session.undo();expect(session.song()->markers->size()==1,"Marker Undo failed");
+        session.editTimeline([&](auto &p){regionEditing::erase(p,songID,{region},false);});
+        expect(session.song()->parts.empty()&&session.song()->tracks[0].clips.size()==1,"Region-only deletion removed audio");session.undo();
+        session.editTimeline([&](auto &p){regionEditing::erase(p,songID,{region},true);});
+        expect(session.song()->tracks[0].clips.empty(),"Region contents were not removed");session.undo();
+        expect(session.song()->parts.size()==1&&session.song()->tracks[0].clips.size()==1,"Region contents Undo failed");
+        expect(!session.preparingLiveAudio()&&session.audio.preparationDiagnostics.getDynamicObject()==graph,"Timeline deletion recreated readers or plugins");
+        session.command(jaras::CommandKind::play);AudioBuffer<float> output(2,480);session.audio.render(output.getArrayOfWritePointers(),2,480);
+        expect(std::abs(output.getSample(0,100)-.1f)<.004f,"Restored region has no audio");session.command(jaras::CommandKind::stopAll);
+    });
+    test("Continuous cut boundaries preserve realtime audio at original and stretched rates", [&] { splitPlaybackTests::continuousCutsRealtime(directory); });
+    test("Streaming split glue Undo preserves both halves", [&] { splitPlaybackTests::glueUndoRealtime(directory); });
+    test("Split glue Undo restores audible audio on both sides of the cut", [&] {
+        Session session;session.inspection=true;session.mediaDirectory=itemDeletionAudio();
+        session.document=session.mediaDirectory.getChildFile("cut-glue.jl");
+        auto project=projectFixture();auto &song=project.songs[0];song.duration=2;song.tracks.clear();song.parts.clear();song.markers.reset();
+        project.masterOutputs=std::vector<jaras::OutputPatch>{{1,2}};
+        jaras::Track track;track.id=uuid();track.name="Audio";jaras::AudioClip clip;clip.id=uuid();clip.name="Signal";clip.duration=1;clip.audioFile=jaras::AudioFile{"signal.wav",{}};track.clips={clip};song.tracks={track};
+        project.savedCursor=jaras::SavedProjectCursor{song.id,0};session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        session.splitClips({clip.id},.5);std::set<ID> halves;for(const auto &c:session.song()->tracks[0].clips)halves.insert(c.id);
+        session.renderItems(halves,true);
+        const double deadline=Time::getMillisecondCounterHiRes()+20000;
+        while(session.busy&&Time::getMillisecondCounterHiRes()<deadline)floatingControlTests::pump();
+        expect(!session.busy&&session.song()->tracks[0].clips.size()==1,"Glue did not finish");
+        session.undo();expect(session.song()->tracks[0].clips.size()==2,"Glue Undo did not restore both halves");
+        session.command(jaras::CommandKind::play);AudioBuffer<float> output(2,480);
+        for(int block=0;block<90;++block){session.audio.render(output.getArrayOfWritePointers(),2,480);for(int sample=0;sample<480;++sample)expect(std::abs(output.getSample(0,sample)-.1f)<.004f,"Glue Undo left a restored half silent");}
+        session.command(jaras::CommandKind::stopAll);
+    });
+    test("Item deletion and Undo preserve live readers, FX graph and playback clocks", [&] {
+        Session session; session.inspection=true; session.mediaDirectory=itemDeletionAudio();
+        auto project=projectFixture(); auto &song=project.songs[0];
+        song.duration=8; song.tracks.clear(); song.parts.clear(); song.markers.reset();
+        project.masterOutputs=std::vector<jaras::OutputPatch>{{1,2}};
+        jaras::Track track;track.id=uuid();track.name="Audio";
+        jaras::AudioClip first;first.id=uuid();first.name="First";first.duration=1;
+        first.audioFile=jaras::AudioFile{"signal.wav",{}};
+        auto second=first;second.id=uuid();second.name="Second";
+        track.clips={first,second};song.tracks={track};
+        project.savedCursor=jaras::SavedProjectCursor{song.id,0};
+        session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        const auto *graph=session.audio.preparationDiagnostics.getDynamicObject();
+        session.command(jaras::CommandKind::play);
+        AudioBuffer<float> output(2,480);session.audio.render(output.getArrayOfWritePointers(),2,480);
+        expect(std::abs(output.getSample(0,100)-.2f)<.003f,"Fixture did not mix both items");
+        const auto commits=num(session.audio.streamDiagnostics(),"transportCommits");
+        const auto cursor=session.audio.state().position;
+        session.removeClips({first.id});
+        expect(session.song()->tracks[0].clips.size()==1&&num(session.audio.streamDiagnostics(),"voiceCount")==1,"Delete did not remove only its voice");
+        expect(session.audio.preparationDiagnostics.getDynamicObject()==graph&&!session.preparingLiveAudio(),"Delete rebuilt the full audio graph");
+        expect(session.audio.state().playing&&session.audio.state().position==cursor&&num(session.audio.streamDiagnostics(),"transportCommits")==commits,"Delete rescheduled playback");
+        session.audio.render(output.getArrayOfWritePointers(),2,480);
+        expect(std::abs(output.getSample(0,100)-.1f)<.003f,"Deleted item remained audible");
+        session.undo();
+        expect(session.song()->tracks[0].clips.size()==2&&num(session.audio.streamDiagnostics(),"voiceCount")==2,"Undo did not restore the item");
+        expect(session.audio.preparationDiagnostics.getDynamicObject()==graph&&!session.preparingLiveAudio(),"Undo reopened readers or rebuilt plugins");
+        session.audio.render(output.getArrayOfWritePointers(),2,480);
+        expect(std::abs(output.getSample(0,100)-.2f)<.003f,"Undo did not restore the original audio");
+        session.redo();session.audio.render(output.getArrayOfWritePointers(),2,480);
+        expect(std::abs(output.getSample(0,100)-.1f)<.003f,"Redo did not remove the restored audio");
+        session.command(jaras::CommandKind::stopAll);
+        const auto before=session.snapshot();session.removeClips({"missing-item"});expect(session.snapshot()==before,"Missing ID changed the project");
+    });
+    test("Large item batches delete, Undo and Redo without complete project or graph preparation", [&] {
+        Session session;session.inspection=true;session.mediaDirectory=itemDeletionAudio();
+        auto project=projectFixture();auto &song=project.songs[0];song.tracks.clear();song.parts.clear();song.markers.reset();song.duration=1200;
+        jaras::Track audio;audio.id=uuid();audio.name="Large audio";
+        jaras::Track midi;midi.id=uuid();midi.name="MIDI";
+        std::set<ID> ids;
+        for(int i=0;i<600;++i){jaras::AudioClip clip;clip.id=uuid();clip.name="Item "+std::to_string(i);clip.startTime=i*2;clip.duration=1;clip.audioFile=jaras::AudioFile{"signal.wav",{}};clip.waveform.assign(512,.1);audio.clips.push_back(clip);if(i%3==0)ids.insert(clip.id);}
+        jaras::AudioClip note;note.id=uuid();note.name="MIDI";note.duration=1;jaras::MIDIItem data;data.sourceBPM=120;data.notes.push_back({uuid(),0,.5,60,100,1});note.midi=data;midi.clips={note};ids.insert(note.id);
+        song.tracks={audio,midi};session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        const auto *graph=session.audio.preparationDiagnostics.getDynamicObject();
+        const auto begin=Time::getMillisecondCounterHiRes();
+        session.removeClips(ids);session.undo();session.redo();session.undo();
+        const auto elapsed=Time::getMillisecondCounterHiRes()-begin;
+        expect(session.song()->tracks[0].clips.size()==600&&session.song()->tracks[1].clips.size()==1,"Batch history lost items or MIDI");
+        expect(num(session.audio.streamDiagnostics(),"voiceCount")==601,"Batch Undo did not restore all live voices");
+        expect(session.audio.preparationDiagnostics.getDynamicObject()==graph&&!session.preparingLiveAudio(),"Batch edit used complete graph preparation");
+        auto stats=object();put(stats,"items",601);put(stats,"fourEditsMilliseconds",elapsed);directory.getChildFile("item-delete-performance.json").replaceWithText(JSON::toString(stats,true));
     });
     test("Undoing item controls preserves the current song, region and editing cursor", [&] {
         auto p=projectFixture();Session session;session.inspection=true;session.restoreSnapshot(ProjectCodec::encode(p));
@@ -907,13 +1941,29 @@ int runTests(const File &directory) {
         clip.duration=1e9;clip.loopLength=.001;
         expect(itemLoopSeams(clip,{0,0,5e6f,60},800,.005).size()<82,"Minimum zoom iterates invisible repetitions");
     });
+    test("BPM stretching does not create repetition triangles until the source actually repeats", [&] {
+        jaras::Song song;song.bpm=120;
+        jaras::TimelineMarker marker;marker.position=0;marker.tempoBPM=60;marker.tempoReferenceBPM=120;marker.tempoTimebase="relative";
+        song.markers=std::vector<jaras::TimelineMarker>{marker};
+        jaras::AudioClip clip;clip.loopLength=4;clip.duration=8;
+        ClipTempo stretched(clip,&song);
+        expect(itemLoopSeams(clip,{0,0,800,60},1600,100,&stretched).empty(),"Changing BPM created a false expansion notch");
+        clip.duration=12;ClipTempo expanded(clip,&song);
+        const auto seams=itemLoopSeams(clip,{0,0,1200,60},1600,100,&expanded);
+        expect(seams.size()==1 && std::abs(seams.front()-800)<.001,"Expansion notch does not follow the stretched source boundary");
+        marker.position=4;marker.tempoBPM=120;song.markers->push_back(marker);clip.duration=6;ClipTempo segmented(clip,&song);
+        expect(itemLoopSeams(clip,{0,0,600,60},1600,100,&segmented).empty(),"An internal BPM boundary created a false source repeat");
+    });
     test("Item header controls remain disjoint and fades stay below the header", [&] {
         jaras::Track track; track.role.id="other";
         jaras::AudioClip clip;clip.id="clip";clip.duration=10;clip.fadeIn=2;clip.fadeOut=3;
         ItemHeader header({-80,100,400,60},600,track,clip);
-        expect(header.gainRect.getX()==2.6f && !header.gainLabel.isEmpty(),"Clipped item header loses its controls");
+        expect(std::abs(header.gainRect.getX() - 2 * ItemHeader::headerScale) < .001f &&
+               header.gainLabel.isEmpty() && header.panLabel.isEmpty(),
+               "Item value readouts should use transient tooltips, not permanent labels");
+        expect(header.phaseRect.isEmpty(),"Phase inversion should not be shown in the item strip");
         const std::vector<std::pair<ItemHeader::Control,juce::Rectangle<float>>> controls{
-            {ItemHeader::mute,header.muteRect},{ItemHeader::fx,header.fxRect},{ItemHeader::phase,header.phaseRect},
+            {ItemHeader::mute,header.muteRect},{ItemHeader::fx,header.fxRect},
             {ItemHeader::pan,header.panRect},{ItemHeader::gain,header.gainRect}};
         for(const auto &a:controls) {
             expect(header.hit(a.second.getCentre(),clip)==a.first,"Header hit selects wrong control");
@@ -969,6 +2019,81 @@ int runTests(const File &directory) {
         expect(activated == 0 && mapped == 1, "BPM mapping opens once and never changes tempo");
 
     });
+    test("Setlist keyboard browses during playback, Enter toggles queue and Auto, and prepares after natural stop", [&] {
+        auto p=projectFixture();auto &song=p.songs[0];song.tracks.clear();song.markers.reset();p.savedCursor.reset();
+        song.parts={{"first","First",0,2},{"second","Second",2,4},{"third","Third",4,6}};song.duration=6;
+        p.regionSetlist=jaras::RegionSetlist{};p.regionSetlist->stopAtRegionEnd=true;
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(p));session.audio.setOffline(true);
+        Auth auth;Lighting lighting(session);Workspace workspace(session,auth,lighting,false,directory.getNonexistentChildFile("keyboard-setlist",".json"));workspace.setSize(1366,768);
+        session.command(jaras::CommandKind::selectRegion,"first");session.command(jaras::CommandKind::play);
+        workspace.keyPressed(KeyPress(KeyPress::downKey));workspace.keyStateChanged(false);
+        expect(session.focusedRegion==ID("second") && !session.transport().queuedRegionId,"Down queued instead of browsing");
+        workspace.keyPressed(KeyPress(KeyPress::downKey));workspace.keyStateChanged(false);
+        expect(session.focusedRegion==ID("third") && session.transport().regionId==ID("first"),"Down did not advance from the browsed row");
+        workspace.keyPressed(KeyPress(KeyPress::upKey));workspace.keyStateChanged(false);
+        expect(session.focusedRegion==ID("second"),"Up did not browse backwards");
+        expect(workspace.keyPressed(KeyPress(KeyPress::returnKey)),"Enter was not handled");workspace.keyStateChanged(false);
+        expect(session.transport().queuedRegionId==ID("second"),"Enter did not queue selected song");
+        auto setlist=*session.project().regionSetlist;setlist.autoAdvance=true;session.configureSetlist(setlist);
+        expect(workspace.keyPressed(KeyPress(KeyPress::returnKey)),"Second Enter was not handled");workspace.keyStateChanged(false);
+        expect(!session.transport().queuedRegionId && !session.project().regionSetlist->autoAdvance && session.focusedRegion==ID("second"),"Enter cancellation must clear queue and Auto but retain blue selection");
+        workspace.keyPressed(KeyPress(KeyPress::downKey));workspace.keyStateChanged(false);workspace.keyPressed(KeyPress(KeyPress::upKey));workspace.keyStateChanged(false);
+        expect(session.focusedRegion==ID("second"),"Browsing after cancellation failed");
+        const auto before=session.transport();session.core.advance(2.1);session.reconcileSetlistSelectionAfterAdvance(before);
+        expect(!session.transport().playing && session.transport().regionId==ID("second") && std::abs(session.transport().position-2)<.001,"Finished playback did not prepare browsed song");
+        session.command(jaras::CommandKind::play);expect(session.transport().regionId==ID("second"),"Play ignored prepared song");session.command(jaras::CommandKind::stop);
+    });
+    test("Setlist arrows move the cursor only after navigation rests", [&] {
+        auto p=projectFixture();auto &song=p.songs[0];song.tracks.clear();song.markers.reset();p.savedCursor.reset();
+        song.parts={{"first","First",0,2},{"second","Second",2,4},{"third","Third",4,6}};song.duration=6;
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(p));session.audio.setOffline(true);
+        Auth auth;Lighting lighting(session);Workspace workspace(session,auth,lighting,false,directory.getNonexistentChildFile("rested-setlist",".json"));workspace.setSize(1366,768);
+        session.command(jaras::CommandKind::selectRegion,"first");
+        workspace.keyPressed(KeyPress(KeyPress::downKey));workspace.keyStateChanged(false);
+        expect(session.focusedRegion==ID("second")&&session.transport().position==0,"Arrow sought before navigation rested");
+        workspace.keyPressed(KeyPress(KeyPress::downKey));workspace.keyStateChanged(false);
+        expect(session.focusedRegion==ID("third")&&session.transport().position==0,"Rapid navigation sought an intermediate song");
+        const auto deadline=Time::getMillisecondCounterHiRes()+1000;
+        while(session.transport().position==0&&Time::getMillisecondCounterHiRes()<deadline)floatingControlTests::pump();
+        expect(std::abs(session.transport().position-4)<.001,"Rested navigation did not prepare the final song");
+    });
+    test("Finished song clears only its own setlist selection", [&] {
+        auto p=projectFixture();auto &song=p.songs[0];
+        const auto first=song.parts[0].id,second=song.parts[1].id;
+        jaras::TransportState before;before.songId=song.id;before.regionId=first;before.playing=true;before.position=song.parts[0].startTime;
+        auto after=before;after.regionId=second;after.position=song.parts[1].startTime;
+        expect(clearFinishedSetlistSelection(p,first,before,after),"Finished selected song stayed blue");
+        expect(!clearFinishedSetlistSelection(p,second,before,after),"Browsing another song was cleared");
+        expect(!clearFinishedSetlistSelection(p,first,before,before),"Ordinary playback cleared selection");
+        after=before;after.playing=false;
+        expect(clearFinishedSetlistSelection(p,first,before,after),"Automatic stop kept finished selection");
+        after.paused=true;
+        expect(!clearFinishedSetlistSelection(p,first,before,after),"Pause cleared selection");
+        Session session;session.inspection=true;session.restoreSnapshot(ProjectCodec::encode(p));session.focusedRegion.reset();
+        session.command(jaras::CommandKind::selectRegion,first);session.command(jaras::CommandKind::play);
+        session.command(jaras::CommandKind::queueRegion,second);
+        expect(session.focusedRegion==second,"Queue selection missing");
+        session.command(jaras::CommandKind::queueRegion,second);
+        expect(!session.transport().queuedRegionId && !session.focusedRegion,"Queue cancellation left a blue selection");
+        session.command(jaras::CommandKind::stop);
+        Appearance prefs(directory.getNonexistentChildFile("selection-remote",".json"));StageState stage(prefs);
+        remote::Presentation presentation(session,stage);
+        expect(get(presentation.snapshot(0),"focusedRegion").isVoid(),"Remote resurrected cleared selection from transport");
+    });
+    test("Empty peak readouts pass clicks to track selection", [&] {
+        float amplitude=0;
+        Component row;
+        row.setBounds(0,0,200,64);
+        row.setVisible(true);
+        meterDisplay::PeakReadout peak([&]{return amplitude;},[&]{amplitude=0;});
+        row.addAndMakeVisible(peak);peak.setBounds(21,31,43,12);
+        expect(row.getComponentAt(42,37)==&row,"Empty readout swallowed the fader-row click");
+        amplitude=1;
+        expect(row.getComponentAt(42,37)==&peak,"Visible peak must remain resettable");
+        expect(row.getComponentAt(21,37)==&row,"Readout margin swallowed track selection");
+        amplitude=0;
+        expect(row.getComponentAt(42,37)==&row,"Cleared peak still swallowed track selection");
+    });
     test("Parameter wheels forward scrolling without changing gain or pan", [&] {
         struct Parent : Component { int calls=0; void mouseWheelMove(const MouseEvent &, const MouseWheelDetails &) override { ++calls; } } parent;
         GainFader gain; ParameterSlider pan;
@@ -988,13 +2113,15 @@ int runTests(const File &directory) {
         }
         expect(parent.calls==4,"Wheel reaches parent exactly once");
     });
-    test("Meter bars use a short smooth fall without hold and keep instant attack", [&] {
+    test("Meter bars use a slow even fall without hold and keep instant attack", [&] {
         for(int block:{64,128,480,1024}) {
             float level=1;const double elapsed=double(block)/48000;const int count=(int)(.1/elapsed);
             for(int i=0;i<count;++i)level=meterDisplay::envelope(level,0,elapsed);
-            expect(std::abs(20*std::log10(level)+120*count*elapsed)<.001,"Fall must follow elapsed audio time, not callback count");
+            expect(std::abs(20*std::log10(level)+40*count*elapsed)<.001,"Fall must follow elapsed audio time, not callback count");
             for(int i=0;i<(int)(.5/elapsed);++i)level=meterDisplay::envelope(level,0,elapsed);
-            expect(level==0,"Silence clears short tail within 600 ms");
+            expect(level>0,"The meter should still be falling after 600 ms");
+            for(int i=0;i<(int)(.95/elapsed);++i)level=meterDisplay::envelope(level,0,elapsed);
+            expect(level==0,"The meter clears by 1.55 seconds");
         }
         expect(meterDisplay::envelope(0,.8f,.01)==.8f,"Immediate attack");
         expect(meterDisplay::envelope(.001f,0,.1)==0,"Silence threshold");
@@ -1048,6 +2175,45 @@ int runTests(const File &directory) {
         session.command(jaras::CommandKind::stopAll);session.undo();
         expect(tempoEditing::bpm(*session.song(),10)==120,"Undo restores tempo");
         expect(!tempoEditing::needsRender(*session.song(), &session.song()->parts[0]),"Restored reference tempo clears highlighting");
+    });
+    test("Song tempo uses one reference regardless of cursor and creates no end marker", [&] {
+        auto p=projectFixture();auto &song=p.songs[0];song.tracks.clear();song.parts={{"music","Music",10,40},{"next","Next",50,70}};song.duration=80;
+        song.timeSettings=jaras::ProjectTimeSettings{};song.timeSettings->timebase=jaras::ProjectTimebase::relative;
+        auto a=tempoEditing::boundary(song,10),b=tempoEditing::boundary(song,20);
+        a.tempoBPM=147;a.tempoReferenceBPM=147;a.regionOwnerID="music";
+        b.tempoBPM=140;b.tempoReferenceBPM=140;b.regionOwnerID="music";
+        song.markers=std::vector<jaras::TimelineMarker>{a,b};
+        for(const double cursor:{12.,25.}) {
+            Session session;session.inspection=true;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(p));session.audio.setOffline(true);
+            session.command(jaras::CommandKind::selectRegion,"music");session.command(jaras::CommandKind::editSeek,{},cursor);
+            expect(std::abs(session.tempoBPM()-147)<1e-9,"Cursor changed the music reference");
+            session.setTempo(148);
+            expect(session.song()->markers->size()==2,"BPM edit created a boundary marker");
+            const auto &markers=*session.song()->markers;
+            const auto first=std::find_if(markers.begin(),markers.end(),[&](const auto& m){return m.id==a.id;});
+            const auto second=std::find_if(markers.begin(),markers.end(),[&](const auto& m){return m.id==b.id;});
+            expect(first!=markers.end()&&second!=markers.end(),"BPM edit replaced original markers");
+            expect(std::abs(*first->tempoBPM-148)<1e-9&&std::abs(*second->tempoBPM-141)<1e-9,"BPM depended on cursor");
+            expect(std::abs(second->position-(10+10.*147/148))<1e-8,"Marker did not follow source speed");
+            expect(!tempoEditing::active(*session.song(),session.song()->parts[0].endTime+1),"Tempo leaked outside the music");
+        }
+    });
+    test("Unified stopped tempo changes only the child song under the edit cursor", [&] {
+        auto p=projectFixture();auto &song=p.songs[0];song.tracks.clear();song.timeSettings=jaras::ProjectTimeSettings{};
+        song.parts={{uuid(),"First",0,10},{uuid(),"Second",10,30},{uuid(),"Unified",0,30}};
+        const auto group=song.parts[2].id;song.parts[0].parentRegionID=group;song.parts[1].parentRegionID=group;
+        auto a=tempoEditing::boundary(song,0),b=tempoEditing::boundary(song,10);
+        a.tempoBPM=120;a.tempoReferenceBPM=120;a.regionOwnerID=song.parts[0].id;
+        b.tempoBPM=144;b.tempoReferenceBPM=144;b.regionOwnerID=song.parts[1].id;
+        const auto aid=a.id,bid=b.id;song.markers=std::vector<jaras::TimelineMarker>{a,b};
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(p));session.audio.setOffline(true);
+        session.command(jaras::CommandKind::selectRegion,group);session.command(jaras::CommandKind::editSeek,{},5);
+        session.setTempo(125);
+        auto bpm=[&](const ID &id){for(const auto &m:*session.song()->markers)if(m.id==id)return m.tempoBPM.value_or(0);return 0.;};
+        expect(std::abs(bpm(aid)-125)<1e-9&&std::abs(bpm(bid)-144)<1e-9,"Editing first child changed another song BPM");
+        session.command(jaras::CommandKind::editSeek,{},15);session.setTempo(150);
+        expect(std::abs(bpm(aid)-125)<1e-9&&std::abs(bpm(bid)-150)<1e-9,"Editing second child changed the first song BPM");
+        session.undo();expect(std::abs(bpm(aid)-125)<1e-9&&std::abs(bpm(bid)-144)<1e-9,"Tempo Undo changed another song");
     });
     test("Repeated tempo edits preserve overlapping next song without adding markers", [&] {
         auto p=projectFixture();auto &song=p.songs[0];song.timeSettings=jaras::ProjectTimeSettings{};
@@ -1133,6 +2299,28 @@ int runTests(const File &directory) {
         expect(timelineGrid::label(5.25) == "00:00:05.250", "Fractional ruler label");
         expect(timelineGrid::ticks(song, 0, 10, 0).empty(), "Invalid zoom rejected");
     });
+    test("Grid and ruler show four two one bars before beats and finer divisions", [&] {
+        jaras::Song song; song.duration=120; song.bpm=120;
+        song.beatsPerBar=4; song.beatUnit=4;
+        song.timeSettings=jaras::ProjectTimeSettings{};
+        const std::array<std::pair<double, double>, 5> cases{{{1.,8.}, {2.,4.}, {4.,2.}, {8.,2.}, {16.,1.}}};
+        for (const auto &sample : cases) {
+            const double scale = sample.first, interval = sample.second;
+            const auto ticks=timelineGrid::ticks(song,0,16,scale);
+            expect(ticks.size()==(size_t)(16/interval)+1,"Wrong visible whole-bar count");
+            for(size_t i=0;i<ticks.size();++i)
+                expect(ticks[i].primary==(std::fmod(i*interval,2.)==0) && ticks[i].time==i*interval,"Distant grid inserted an intermediate line");
+        }
+        for (const int beats : {3,4,7}) for (const int unit : {4,8}) {
+            song.beatsPerBar=beats; song.beatUnit=unit;
+            const double beat=60./song.bpm*4/unit,bar=beat*beats;
+            const auto distantTicks=timelineGrid::ticks(song,0,bar,15.9/beat);
+            expect(std::all_of(distantTicks.begin(),distantTicks.end(),[&](const auto &tick){return tick.primary || std::abs(tick.time/(2*beat)-std::round(tick.time/(2*beat)))<1e-9;}),"Intermediate lines must follow the visible two-beat division before every beat fits");
+            const auto closeTicks=timelineGrid::ticks(song,0,bar,16.1/beat);
+            expect(closeTicks.size()==(size_t)beats+1,"Each beat must enter together");
+            for(size_t i=0;i<closeTicks.size();++i)expect(closeTicks[i].time==i*beat,"Beat line shifted off its musical position");
+        }
+    });
     test("Ruler zoom adds intermediate labels without replacing existing references", [&] {
         for (const int beats : {3,4,7}) for (const int divisions : {4,8,16}) {
             jaras::Song song; song.duration=600; song.bpm=123;
@@ -1186,7 +2374,8 @@ int runTests(const File &directory) {
     test("Cursor and item snapping match Mac tempo divisions and timeline anchors", [&] {
         auto song=projectFixture().songs.front();song.bpm=120;song.beatsPerBar=4;song.beatUnit=4;song.duration=40;
         song.parts={jaras::Part{uuid(),"Region",3.13,7.17}};
-        song.tracks.clear();jaras::Track edgeTrack;jaras::AudioClip edgeClip;edgeClip.startTime=4.19;edgeClip.duration=1.68;edgeTrack.clips.push_back(edgeClip);song.tracks.push_back(edgeTrack);
+        song.tracks.clear();jaras::Track edgeTrack;jaras::AudioClip edgeClip;edgeClip.id="snap-edge-a";edgeClip.startTime=4.19;edgeClip.duration=1.68;edgeTrack.clips.push_back(edgeClip);
+        jaras::AudioClip secondEdge;secondEdge.id="snap-edge-b";secondEdge.startTime=20.37;secondEdge.duration=3.12;edgeTrack.clips.push_back(secondEdge);song.tracks.push_back(edgeTrack);
         jaras::TimelineMarker marker{uuid(),"Marker",9.23,0xffffff};
         jaras::TimelineMarker tempo{uuid(),"Tempo",10.25,0xffffff};tempo.tempoBPM=60;tempo.tempoBeats=3;tempo.tempoUnit=4;
         song.markers=std::vector<jaras::TimelineMarker>{marker,tempo};
@@ -1194,9 +2383,9 @@ int runTests(const File &directory) {
         auto checkPosition=[&](double actual,double wanted,const char *message){expect(std::abs(actual-wanted)<1e-7,message);};
         auto gridOnly=song;gridOnly.tracks.clear();
         for(double scale:{1.,20.,100.,1000.}) {
-            checkPosition(timelineGrid::snapCursor(2.21,gridOnly,scale,false),2.,"Cursor uses configured subdivisions at every zoom");
+            checkPosition(timelineGrid::snapCursor(2.21,gridOnly,scale,false),scale==1?3.13:2.,"Cursor uses visible grid or explicit region anchors");
             checkPosition(timelineGrid::snapCursor(2.21,song,scale,true),2.21,"Shift bypasses cursor grid");
-            checkPosition(timelineGrid::snapCursor(10.91,gridOnly,scale,false),11.25,"Cursor restarts snap phase at tempo change");
+            checkPosition(timelineGrid::snapCursor(10.91,gridOnly,scale,false),scale==1?10.25:11.25,"Cursor restarts visible grid phase at tempo change");
             for(double target:{3.13,7.17,9.23}) {
                 if(scale==1)continue;
                 checkPosition(timelineGrid::snapSelection(target+.001,song,scale,transport,false),target,"Items snap to region start/end and marker");
@@ -1207,6 +2396,22 @@ int runTests(const File &directory) {
             checkPosition(timelineGrid::snapCursor(target+.001,song,20,false),target,"Cursor snaps to item start and end");
             checkPosition(timelineGrid::snapCursor(target+.001,song,20,true),target+.001,"Shift bypasses item edge magnets");
         }
+        std::vector<std::pair<ID,double>> indexedEdges;
+        for(const auto &track:song.tracks)for(const auto &clip:track.clips) {
+            indexedEdges.emplace_back(clip.id,clip.startTime);
+            indexedEdges.emplace_back(clip.id,clip.startTime+clip.duration);
+        }
+        std::stable_sort(indexedEdges.begin(),indexedEdges.end(),[](const auto &a,const auto &b) {
+            return a.second==b.second?a.first<b.first:a.second<b.second;
+        });
+        for(const double position:{4.191,5.869,20.371,23.489,15.371})
+            checkPosition(timelineGrid::snapSelection(position,song,100,transport,false),
+                timelineGrid::snapSelection(position,song,100,transport,false,nullptr,&indexedEdges),
+                "Cached item-edge snapping differs from the full timeline scan");
+        const std::set<ID> excluded{"snap-edge-a"};
+        checkPosition(timelineGrid::snapSelection(4.191,song,100,transport,false,&excluded),
+            timelineGrid::snapSelection(4.191,song,100,transport,false,&excluded,&indexedEdges),
+            "Cached snapping ignores the same excluded items as a full scan");
         checkPosition(timelineGrid::snapSelection(15.371,song,100,transport,false),15.37,"Item snaps to edit cursor");
         checkPosition(timelineGrid::snapCursor(15.371,song,100,false),15.25,"Edit cursor must not snap back to its old position");
     });
@@ -1263,7 +2468,9 @@ int runTests(const File &directory) {
         for(float y:{60.f,110.f}) for(bool free:{false,true}) {
             Point<float> at{46,y};int mods=ModifierKeys::leftButtonModifier|(free?ModifierKeys::shiftModifier:0);
             canvas->mouseDown(event(at,at,mods,false));canvas->mouseUp(event(at,at,free?ModifierKeys::shiftModifier:0,false));
-            expect(std::abs(session.transport().editPosition-(free?2.3:2.5))<1e-6,"Ruler and empty grid both seek; Shift is free");
+            // At the default 20 px/s, beats are only 10 px apart: the visible
+            // grid contains whole bars, so 2.3 s snaps to the bar at 2 s.
+            expect(std::abs(session.transport().editPosition-(free?2.3:2.0))<1e-6,"Ruler and empty grid both snap to visible bars; Shift is free");
         }
         const double cursor=session.transport().editPosition;
         const double offset=num(get(workspace.diagnostics(),"timeline"),"horizontal");
@@ -1284,6 +2491,22 @@ int runTests(const File &directory) {
                 expect(image.getPixelAt(left+x,y)==image.getPixelAt(right+x,y),"Equal stereo levels must have identical pixels and hue");
         }
     });
+    test("Stereo fader rail stays yellow at zero and clips only above zero dB", [&] {
+        Image image(Image::ARGB, 200, 14, true, SoftwareImageType());
+        {
+            Graphics graphics(image);
+            meterDisplay::rail(graphics, image.getBounds().toFloat(), {1.f, std::pow(10.f, .1f / 20.f)}, false);
+        }
+        const auto yellow = image.getPixelAt(189, 3);
+        const auto red = image.getPixelAt(189, 10);
+        expect(yellow.getRed() > 200 && yellow.getGreen() > 150,
+               "Zero dBFS must stay yellow: " + yellow.toDisplayString(true));
+        expect(red.getRed() > 200 && red.getGreen() < 115,
+               "+0.1 dBFS must show a red tip for the matching channel: " + red.toDisplayString(true));
+        const auto earlyYellow = image.getPixelAt(144, 3);
+        expect(earlyYellow.getRed() > 200 && earlyYellow.getGreen() > 150,
+               "The meter must already be fully yellow by -17 dBFS");
+    });
     test("Special track rows expose role-specific controls without audio FX and recording", [&] {
         auto project=projectFixture();auto &song=project.songs.front();song.tracks.clear();
         for(const auto &role:{"generatedClick","timecode","video","teleprompt","teleprompt2","chords"}) {
@@ -1300,8 +2523,13 @@ int runTests(const File &directory) {
                 if(button->getButtonText()=="M"||button->getButtonText()=="S")expect(button->isVisible()==(track.role.id=="generatedClick"||track.role.id=="timecode"),"Mute/Solo only on audio-generating special tracks");
                 if(button->getButtonText()==String::fromUTF8("Ø"))expect(!button->isVisible(),"Special tracks have no phase inversion button");
             }
-            auto *pan=uiFeatureTests::find(*row,"trackPan");expect(pan&&!pan->isVisible(),"Standard pan hidden on special tracks");
-            if(track.role.id=="generatedClick")expect(uiFeatureTests::find(*controls,"insertClick")->isVisible(),"Click exposes Insert");
+            auto *pan=uiFeatureTests::find(*row,"trackPan");expect(!pan,"Track Mixer does not create a pan knob");
+            if(track.role.id=="generatedClick") {
+                auto *insert=uiFeatureTests::find(*controls,"insertClick"),*patch=uiFeatureTests::find(*controls,"specialPatch");
+                expect(insert->isVisible()&&patch&&patch->isVisible()&&patch->getRight()<insert->getX(),"Click must expose Patch immediately before Insert");
+                PatchPanel panel(session,track.id,[](String){});panel.setSize(360,250);
+                std::function<void(Component&)> inspect=[&](Component &part){if(auto *label=dynamic_cast<Label*>(&part))expect(!label->getText().containsIgnoreCase("MIDI")&&!label->getText().containsIgnoreCase("Entrada"),"Click Patch must only expose audio outputs");for(auto *child:part.getChildren())inspect(*child);};inspect(panel);
+            }
             expect(uiFeatureTests::find(*controls,"insertMedia")->isVisible()==(track.role.id=="video"),"Only legacy video tracks expose Add media");
             if(track.role.id=="chords"||jaras::isTeleprompterRole(track.role))expect(uiFeatureTests::find(*controls,"insertText")->isVisible(),"Text track exposes Add text");
         }
@@ -1326,6 +2554,42 @@ int runTests(const File &directory) {
         expect(reader->read(&afterSeek,0,2048,4096,true,true),"Seek backwards by timestamp");
         float difference=0;for(int c=0;c<2;++c)for(int i=256;i<2048;++i)difference=std::max(difference,std::abs(first.getSample(c,i)-afterSeek.getSample(c,i)));
         expect(difference<.002f,"Seeking preserves sample alignment instead of returning the earlier keyframe");
+    });
+    test("Projection runtime decodes video frames asynchronously from the shipped FFmpeg libraries", [&] {
+        const auto video=File(__FILE__).getParentDirectory().getSiblingFile("Tests").getChildFile("Fixtures/tone-video.mp4");
+        vshook_video::Decoder decoder;vshook_video::DecodedFrame frame;
+        const auto deadline=Time::getMillisecondCounterHiRes()+5000;
+        while(Time::getMillisecondCounterHiRes()<deadline) {
+            if(decoder.frameAt(utf8(video.getFullPathName()),"fixture",.3,false,1,64,64,frame) && frame.pixels)break;
+            Thread::sleep(10);
+        }
+        expect(frame.pixels && frame.width==64 && frame.height==64,"Video projection could not load its decoder runtime");
+        bool visible=false;if(frame.pixels)for(int y=0;y<frame.height;++y)for(int x=0;x<frame.width*4;x+=4)
+            visible=visible || frame.pixels[y*frame.stride+x]>10 || frame.pixels[y*frame.stride+x+1]>10 || frame.pixels[y*frame.stride+x+2]>10;
+        expect(visible,"Video projection decoded only black pixels");
+    });
+    test("Projection prepared decoder retains its first frame when playback begins", [&] {
+        const auto video=File(__FILE__).getParentDirectory().getSiblingFile("Tests").getChildFile("Fixtures/tone-video.mp4");
+        auto active=std::make_unique<vshook_video::Decoder>();
+        auto prepared=std::make_unique<vshook_video::Decoder>();
+        vshook_video::DecodedFrame frame;
+        const auto deadline=Time::getMillisecondCounterHiRes()+5000;
+        while(Time::getMillisecondCounterHiRes()<deadline) {
+            if(prepared->frameAt(utf8(video.getFullPathName()),"incoming",.3,false,1,64,64,frame))break;
+            Thread::sleep(10);
+        }
+        expect(frame.pixels!=nullptr,"Incoming video must be ready before the boundary");
+        active.swap(prepared); prepared->reset();
+        vshook_video::DecodedFrame incoming;
+        expect(active->frameAt(utf8(video.getFullPathName()),"incoming",.3,true,1,64,64,incoming) && incoming.pixels,
+               "Starting the prepared video must not clear its published frame");
+        const auto started=Time::getMillisecondCounterHiRes();
+        while(Time::getMillisecondCounterHiRes()-started<250) {
+            const double elapsed=(Time::getMillisecondCounterHiRes()-started)/1000.;
+            active->frameAt(utf8(video.getFullPathName()),"incoming",.3+elapsed,true,1,64,64,incoming);
+            Thread::sleep(10);
+        }
+        expect(incoming.pixels && incoming.timestamp>.4,"Prepared playback must advance immediately after the boundary");
     });
     test("Projection selects the first active media item in grid order on ordinary tracks", [&] {
         jaras::Song song;jaras::Track first,second;first.id=uuid();second.id=uuid();first.role.id=second.role.id="other";
@@ -1375,6 +2639,58 @@ int runTests(const File &directory) {
             session.undo();expect(JSON::toString(ProjectCodec::encode(session.project()))==before,"Single undo restores entire batch");
             session.redo();expect(session.song()->tracks.front().clips.size()==(same?2u:1u),"Redo restores batch and media references");
         }
+    });
+    test("Library samples dropped on the grid import on the target track", [&] {
+        const auto root = directory.getNonexistentChildFile("library-grid-drop", "");
+        expect(root.createDirectory().wasOk(), "Could not create the scratch project directory");
+        const auto sample = File::getSpecialLocation(File::currentExecutableFile)
+            .getSiblingFile("NativeSamples").getChildFile("FX Brazil").getChildFile("BUZINA.mp3");
+        expect(sample.existsAsFile(), "The native FX Brazil pack is missing");
+        auto project = floatingControlTests::fixture();
+        project.songs.front().parts.clear();
+        Session session; session.inspection = true; session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project)); session.audio.setOffline(true);
+        session.save(root.getChildFile("Sample Drop.jl"));
+        Auth auth; Lighting lighting(session);
+        Workspace workspace(session, auth, lighting, false, root.getChildFile("appearance.json"));
+        workspace.setSize(1366, 768); workspace.projectOpened(false);
+        auto *canvas = uiFeatureTests::find(workspace, "timelineCanvas");
+        auto *target = dynamic_cast<DragAndDropTarget *>(canvas);
+        expect(target != nullptr, "The grid has no Library sample drop target");
+        const auto timeline = get(workspace.diagnostics(), "timeline");
+        const int header = int(num(timeline, "headerHeight"));
+        const int rowHeight = int(num(timeline, "trackHeight"));
+        const Point<int> point{120, header + rowHeight + 12};
+        auto description = object();
+        put(description, "type", "catlive-library-sampler");
+        put(description, "file", sample.getFullPathName());
+        const DragAndDropTarget::SourceDetails drop(description, &workspace, point);
+        expect(target->isInterestedInDragSource(drop), "The grid rejected the native sample");
+        target->itemDropped(drop);
+        const auto deadline = Time::getMillisecondCounterHiRes() + 10000;
+        while (session.busy && Time::getMillisecondCounterHiRes() < deadline) floatingControlTests::pump();
+        const auto &tracks = session.song()->tracks;
+        expect(tracks.size() == 3 && tracks[0].clips.empty() && tracks[1].clips.size() == 1 && tracks[2].clips.empty(),
+               "The native sample must land on the second track");
+        const auto &clip = tracks[1].clips.front();
+        expect(clip.name == "BUZINA" && clip.startTime > 0 && clip.audioFile &&
+               root.getChildFile(text(clip.audioFile->path)).existsAsFile(), "The dropped grid item must keep its name, placement and media");
+    });
+    test("Generated Click Subplay filters item owners without muting the incoming click", [&] {
+        jaras::Song song; song.duration=8; song.bpm=120; song.regionOwnershipInitialized=true;
+        jaras::Part previous{uuid(),"Previous",0,4}, incoming{uuid(),"Incoming",2,8}; song.parts={previous,incoming};
+        jaras::Track track;track.id=uuid();track.role.id="generatedClick";track.name="Click";
+        jaras::AudioClip a;a.id=uuid();a.startTime=0;a.duration=4;a.regionOwnerID=previous.id;a.clickDouble=true;
+        auto b=a;b.id=uuid();b.startTime=2;b.duration=6;b.regionOwnerID=incoming.id;b.clickDouble=false;track.clips={a,b};
+        ClickProgram program;program.prepare(song,&track);program.a=ClickProgram::tone("Digital",true);program.b=program.a;
+        auto energy=[&](double at,const jaras::PlaybackScope &scope){double sum=0;for(int i=0;i<1680;++i){const auto value=program.sample(at+i/48000.,1,1,1,&scope);sum+=value*value;}return sum;};
+        jaras::PlaybackScope all, outgoing, next;outgoing.requiredOwner=std::numeric_limits<std::uint32_t>::max();next.requiredOwner=2;
+        expect(energy(2.25,all)>1,"Normal overlap lost the denser click item");
+        expect(energy(2.25,next)==0,"Outgoing doubled item leaked into the incoming song's normal click");
+        expect(energy(2.5,next)>1 && energy(2.5,outgoing)==0,"Subplay must stop old items while the incoming click stays audible");
+        expect(energy(4.5,next)>1,"Incoming click stopped after the previous region ended");
+        track.clips[0].regionOwnerID.reset();track.clips[1].regionOwnerID.reset();program.prepare(song,&track);
+        expect(energy(2.25,next)==0&&energy(2.5,next)>1&&energy(2.5,outgoing)==0,"Legacy click ownership did not follow original regions");
     });
     test("Generated Click overview follows tempo origins and bounds pixel density", [&] {
         auto song=projectFixture().songs.front();song.bpm=120;song.beatsPerBar=4;song.beatUnit=4;song.parts.clear();
@@ -1493,7 +2809,9 @@ int runTests(const File &directory) {
             const auto before=JSON::toString(ProjectCodec::encode(session.project()));button->onClick();floatingControlTests::pump();
             expect(JSON::toString(ProjectCodec::encode(session.project()))==before,"Folder changed before confirmation");
             auto *modal=Component::getCurrentlyModalComponent();expect(modal!=nullptr,"Folder action must ask before changing hierarchy");
-            modal->exitModalState(result);for(int i=0;i<4;++i)floatingControlTests::pump();
+            auto *choice=dynamic_cast<Button*>(uiFeatureTests::find(*modal,result?"confirmationAccept":"confirmationCancel"));
+            expect(choice && choice->onClick,"Folder confirmation choice missing");
+            choice->onClick();for(int i=0;i<4;++i)floatingControlTests::pump();
         };
         const auto baseline=JSON::toString(ProjectCodec::encode(session.project()));
         press(0,0);expect(JSON::toString(ProjectCodec::encode(session.project()))==baseline,"Cancel changed the group");
@@ -1553,7 +2871,58 @@ int runTests(const File &directory) {
             expect(selectedCount()==(additive?2:0),"Additive modifiers preserve; plain drag replaces");
         }
     });
-    test("Region edges show a compact cursor and green grip inside the fill like Mac", [&] {
+    test("Grid item drag scrolls four edges while held and commits the scrolled destination", [&] {
+        Session session; session.inspection=true;
+        auto project=projectFixture();auto &song=project.songs.front();song.tracks.clear();song.parts.clear();song.markers.reset();song.duration=300;
+        project.savedCursor=jaras::SavedProjectCursor{song.id,0};
+        for(int row=0;row<30;++row) {
+            jaras::Track track;track.id=uuid();track.role.id="other";track.name="Edge scroll "+std::to_string(row);
+            if(row==0) {jaras::AudioClip clip;clip.id=uuid();clip.startTime=10;clip.duration=6;track.clips.push_back(clip);}
+            song.tracks.push_back(track);
+        }
+        const auto clipID=song.tracks.front().clips.front().id;
+        session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        auto preferences=directory.getNonexistentChildFile("item-edge-scroll",".json");
+        Appearance appearance(preferences);appearance.set("jaras.timeline.zoom",20.);
+        Auth auth;Lighting lighting(session);Workspace workspace(session,auth,lighting,false,preferences);
+        workspace.setSize(1366,768);workspace.addToDesktop(ComponentPeer::windowIsTemporary);workspace.setVisible(true);
+        auto *canvas=uiFeatureTests::find(workspace,"timelineCanvas");expect(canvas!=nullptr,"Item edge scroll canvas missing");
+        const auto state=[&]{return get(workspace.diagnostics(),"timeline");};
+        const auto initial=state();const double zoom=num(initial,"zoom");
+        const auto item=timelineVisualParityTests::localRect(workspace,get(timelineVisualParityTests::itemState(workspace,clipID),"bounds"));
+        const Point<float> anchor{item.getCentreX(),item.getBottom()-12};
+        auto event=[&](Point<float> point,bool down,bool dragged) {
+            return MouseEvent(Desktop::getInstance().getMainMouseSource(),point,
+                ModifierKeys((dragged?ModifierKeys::shiftModifier:0)|(down?ModifierKeys::leftButtonModifier:0)),1,0,0,0,0,
+                canvas,canvas,Time::getCurrentTime(),anchor,Time::getCurrentTime(),1,dragged);
+        };
+        const Point<float> bottomRight{(float)canvas->getWidth()-1,(float)canvas->getHeight()-1};
+        canvas->mouseDown(event(anchor,true,false));canvas->mouseDrag(event(bottomRight,true,true));
+        for(int i=0;i<60 && (num(state(),"horizontal")<80 || num(state(),"vertical")<80);++i)floatingControlTests::pump();
+        const auto forward=state();
+        expect(num(forward,"horizontal")>60 && num(forward,"vertical")>60,"Stationary held item did not scroll right and down");
+        const Point<float> topLeft{1,(float)num(state(),"headerHeight")+1};
+        canvas->mouseDrag(event(topLeft,true,true));
+        for(int i=0;i<60 && (num(state(),"horizontal")>num(forward,"horizontal")-50 || num(state(),"vertical")>num(forward,"vertical")-50);++i)floatingControlTests::pump();
+        expect(num(state(),"horizontal")<num(forward,"horizontal")-40 && num(state(),"vertical")<num(forward,"vertical")-40,
+               "Stationary held item did not scroll left and up");
+        const Point<float> middle{canvas->getWidth()*.5f,canvas->getHeight()*.5f};
+        canvas->mouseDrag(event(middle,true,true));
+        const auto stopped=state();for(int i=0;i<8;++i)floatingControlTests::pump();
+        expect(num(state(),"horizontal")==num(stopped,"horizontal") && num(state(),"vertical")==num(stopped,"vertical"),
+               "Item scroll continued away from the edges");
+        canvas->mouseUp(event(middle,false,true));
+        const jaras::AudioClip *moved=nullptr;ID destination;
+        for(const auto &track:session.song()->tracks)for(const auto &clip:track.clips)if(clip.id==clipID){moved=&clip;destination=track.id;}
+        expect(moved!=nullptr,"Edge scroll lost the held item");
+        const double expected=10+(middle.x-anchor.x+num(stopped,"horizontal")-num(initial,"horizontal"))/zoom;
+        expect(std::abs(moved->startTime-expected)<.1 && destination!=song.tracks.front().id,
+               "Release ignored the horizontal offset or the revealed destination track");
+        const auto released=state();for(int i=0;i<8;++i)floatingControlTests::pump();
+        expect(num(state(),"horizontal")==num(released,"horizontal") && num(state(),"vertical")==num(released,"vertical"),
+               "Edge scrolling continued after release");
+    });
+    test("Region edges show a compact cursor and green grip on the boundary like Mac", [&] {
         auto project=projectFixture();auto &song=project.songs.front();song.parts.resize(1);song.markers.reset();
         project.savedCursor=jaras::SavedProjectCursor{song.id,0};
         Session session;session.inspection=true;session.audio.prepareOffline(48000);session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
@@ -1562,19 +2931,22 @@ int runTests(const File &directory) {
         auto *canvas=uiFeatureTests::find(workspace,"timelineCanvas");expect(canvas!=nullptr,"Canvas exists");
         auto event=[&](Point<float> at,Point<float> anchor,int mods,bool dragged){return MouseEvent(Desktop::getInstance().getMainMouseSource(),at,ModifierKeys(mods),1,0,0,0,0,canvas,canvas,Time::getCurrentTime(),anchor,Time::getCurrentTime(),1,dragged);};
         const auto geometry=get(workspace.diagnostics(),"timeline");const double zoom=num(geometry,"zoom"),scroll=num(geometry,"horizontal");
+        const float rulerHeight=(float)num(geometry,"rulerHeight");
+        const float rulerTop=(float)num(geometry,"rulerTop");
+        const float regionCenter=8;
         const int free=ModifierKeys::leftButtonModifier|ModifierKeys::shiftModifier;
         for(int edge:{1,-1}) {
             const auto region=session.song()->parts.front();
             const float x=(float)((edge>0?region.endTime:region.startTime)*zoom-scroll)+(edge>0?-2.f:2.f);
-            Point<float> anchor{x,8},end{x+(float)(edge*2*zoom),8};
+            Point<float> anchor{x,regionCenter},end{x+(float)(edge*2*zoom),regionCenter};
             canvas->mouseMove(event(anchor,anchor,0,false));
             expect(canvas->getMouseCursor()!=MouseCursor(MouseCursor::NormalCursor) &&
                    canvas->getMouseCursor()!=MouseCursor(MouseCursor::LeftRightResizeCursor),"Region edge did not use its compact resize cursor");
             const auto hover=canvas->createComponentSnapshot(canvas->getLocalBounds());
-            const int gripX=roundToInt((edge>0?region.endTime:region.startTime)*zoom-scroll+(edge>0?-10:10));
-            const auto grip=hover.getPixelAt(gripX,8);
+            const int gripX=roundToInt((edge>0?region.endTime:region.startTime)*zoom-scroll);
+            const auto grip=hover.getPixelAt(gripX,roundToInt(regionCenter));
             expect(grip.getGreen()>240 && grip.getRed()<110 && grip.getBlue()>120,"Green edge grip is missing");
-            canvas->mouseDown(event(anchor,anchor,free,false));canvas->mouseDrag(event(end,anchor,free,true));
+            canvas->mouseDown(event(anchor,anchor,ModifierKeys::leftButtonModifier,false));canvas->mouseDrag(event(end,anchor,free,true));
             expect(session.song()->parts.front().startTime==region.startTime && session.song()->parts.front().endTime==region.endTime,"Preview committed early");
             canvas->mouseUp(event(end,anchor,ModifierKeys::shiftModifier,true));
             const auto resized=session.song()->parts.front();
@@ -1582,7 +2954,7 @@ int runTests(const File &directory) {
             const auto clip=session.song()->tracks.front().clips.front();
             expect(clip.startTime==original.startTime && clip.duration==original.duration && clip.sourceOffset==original.sourceOffset,"Region resize moved or trimmed its audio");
         }
-        Point<float> ruler{200,(float)num(geometry,"headerHeight")-8};canvas->mouseMove(event(ruler,ruler,0,false));
+        Point<float> ruler{200,rulerTop+rulerHeight-8};canvas->mouseMove(event(ruler,ruler,0,false));
         expect(canvas->getMouseCursor()==MouseCursor(MouseCursor::PointingHandCursor),"Number ruler did not show hand cursor");
     });
     test("Dragging paints the actual item at the pointer and commits only on release", [&] {
@@ -1595,7 +2967,7 @@ int runTests(const File &directory) {
         auto event=[&](Point<float> at,Point<float> anchor,int mods,bool dragged){return MouseEvent(Desktop::getInstance().getMainMouseSource(),at,ModifierKeys(mods),1,0,0,0,0,canvas,canvas,Time::getCurrentTime(),anchor,Time::getCurrentTime(),1,dragged);};
         const int left=ModifierKeys::leftButtonModifier|ModifierKeys::shiftModifier;
         Point<float> anchor{70,90},end{270,90};
-        canvas->mouseDown(event(anchor,anchor,left,false));
+        canvas->mouseDown(event(anchor,anchor,ModifierKeys::leftButtonModifier,false));
         const auto before=JSON::toString(ProjectCodec::encode(session.project()));
         auto guide=canvas->createComponentSnapshot(canvas->getLocalBounds());
         auto yellowAt=[&](const Image &image,int x){for(int dx=-1;dx<=1;++dx){auto c=image.getPixelAt(x+dx,160);if(c.getRed()>180 && c.getGreen()>180 && c.getBlue()<80)return true;}return false;};
@@ -1633,7 +3005,7 @@ int runTests(const File &directory) {
         expect(session.transport().loop.enabled && session.transport().loop.start==range->first && session.transport().loop.end==range->second,"Loop uses selection rather than whole song");
         anchor={200,60};end={250,60};
         const int left=ModifierKeys::leftButtonModifier|ModifierKeys::shiftModifier;
-        canvas->mouseDown(event(anchor,anchor,left,false));canvas->mouseDrag(event(end,anchor,left,true));canvas->mouseUp(event(end,anchor,ModifierKeys::shiftModifier,true));
+        canvas->mouseDown(event(anchor,anchor,ModifierKeys::leftButtonModifier,false));canvas->mouseDrag(event(end,anchor,left,true));canvas->mouseUp(event(end,anchor,ModifierKeys::shiftModifier,true));
         expect(session.selectedTimeRange()->second>range->second && session.transport().loop.end==session.selectedTimeRange()->second,"Dragging edge updates active loop immediately");
         session.command(jaras::CommandKind::escape);expect(!session.transport().loop.enabled && !session.selectedTimeRange(),"Escape cancels loop and removes its selection exactly as on Mac");
         session.selectTimeRange(3,7);session.command(jaras::CommandKind::toggleLoop);
@@ -1722,7 +3094,15 @@ int runTests(const File &directory) {
         expect(count(playing)==0,"Audio controls remained visible during playback");
         session.command(jaras::CommandKind::stop);
         SettingsPanel stopped(session,auth,lighting,appearance,bindings,1,[](String){},[]{});stopped.setSize(780,580);
-        expect(count(stopped)>0,"Audio controls did not return when stopped");
+        const auto *driver = dynamic_cast<ComboBox*>(uiFeatureTests::find(stopped, "Driver"));
+        const auto *input = dynamic_cast<ComboBox*>(uiFeatureTests::find(stopped, "Entrada"));
+        const auto *output = dynamic_cast<ComboBox*>(uiFeatureTests::find(stopped, String::fromUTF8("Saída")));
+        expect(driver && driver->getNumItems() > 0, "Audio driver selector did not return when stopped");
+        expect(driver && input && output && driver->getBottom() < input->getY() && input->getBottom() < output->getY(),
+               "Driver must be the first audio selector, above Input and Output");
+        expect(input && output && input->isVisible() && output->isVisible() &&
+               input->getNumItems() > 0 && output->getNumItems() > 0,
+               "The first visit with an unopened audio device must expose input and output selectors");
     });
     test("Colour-only editor supports presets, preview, cancel and save", [&] {
         unsigned saved=0,preview=0;bool finished=false;
@@ -1741,22 +3121,14 @@ int runTests(const File &directory) {
         auto stream=directory.getChildFile("project-open-confirmation.png").createOutputStream();
         expect(stream&&PNGImageFormat().writeImageToStream(panel.createComponentSnapshot(panel.getLocalBounds()),*stream),"Could not capture confirmation");
     });
-    test("Interface scale defaults to 100 percent and persists separately from projects", [&] {
+    test("Interface scale stays at 100 percent with legacy preferences", [&] {
         auto file = directory.getNonexistentChildFile("interface-scale", ".json");
         Appearance preferences(file);
         expect(std::abs(preferences.interfaceScale() - 1.f) < 1e-6, "First-install default");
-        expect(preferences.set("jaras.interface.scale", 1.1).wasOk(), "Scale saved");
-        expect(std::abs(Appearance(file).interfaceScale() - 1.f) < 1e-6, "Scale restored");
-        for (int percent = 75; percent <= 125; percent += 25) {
-            expect(preferences.set("jaras.interface.scale", percent / 100.0).wasOk(), "Save scale option");
-            expect(std::abs(Appearance(file).interfaceScale() - percent / 100.f) < 1e-6, "Restore scale option");
+        for (double legacy : {.6, .7, .75, 1., 1.1, 1.25, 1.5}) {
+            expect(preferences.set("jaras.interface.scale", legacy).wasOk(), "Legacy scale saved");
+            expect(std::abs(Appearance(file).interfaceScale() - 1.f) < 1e-6, "Legacy scale must not affect layout or input");
         }
-        for (double legacy : {.6, .7}) {
-            expect(preferences.set("jaras.interface.scale", legacy).wasOk(), "Legacy small scale saved");
-            expect(std::abs(Appearance(file).interfaceScale() - .75f) < 1e-6, "Legacy scale upgrades to 75 percent");
-        }
-        expect(preferences.set("jaras.interface.scale", 1.5).wasOk(), "Legacy scale saved");
-        expect(std::abs(Appearance(file).interfaceScale() - 1.25f) < 1e-6, "Legacy scale is limited to 125 percent");
     });
     test("Waveforms analyse real stereo media asynchronously and map offsets, rates and loops", [&] {
         const auto file = directory.getNonexistentChildFile("waveform-source", ".wav");
@@ -1785,6 +3157,42 @@ int runTests(const File &directory) {
         clip.loopStart = .25; clip.loopLength = .5;
         expect(std::abs(WaveformCache::sourcePosition(clip, .3) - .6) < 1e-8, "Loop maps wrapped source time");
         expect(cache.request(file) == data, "Repeated paint reuses analysis");
+    });
+    test("Intermediate waveform zoom preserves isolated transients and silent detail", [&] {
+        const auto file = directory.getNonexistentChildFile("waveform-intermediate", ".wav");
+        AudioBuffer<float> samples(1,1024);samples.clear();samples.setSample(0,127,.9f);
+        WavAudioFormat wav;auto stream=file.createOutputStream();
+        std::unique_ptr<AudioFormatWriter> writer(wav.createWriterFor(stream.get(),48000,1,24,{},0));
+        expect(writer!=nullptr,"Intermediate waveform fixture writer");stream.release();
+        expect(writer->writeFromAudioSampleBuffer(samples,0,1024),"Intermediate waveform fixture");writer.reset();
+        WaveformCache cache;auto ready=cache.request(file);
+        const auto deadline=Time::getMillisecondCounterHiRes()+5000;
+        while(!ready&&Time::getMillisecondCounterHiRes()<deadline){Thread::sleep(10);ready=cache.request(file);}
+        expect(ready!=nullptr,"Intermediate source prepared asynchronously");
+        auto summary=cache.detail(ready,0,true);
+        while(!summary&&Time::getMillisecondCounterHiRes()<deadline){Thread::sleep(10);summary=cache.detail(ready,0,true);}
+        expect(summary&&summary->samples.getNumSamples()==0,"Intermediate pages retain summaries instead of PCM");
+        expect(summary->peaks.alignedRange(0,0,64).second==0&&summary->peaks.alignedRange(0,64,128).second>.899f&&
+               summary->peaks.alignedRange(0,128,192).second==0,"An impulse does not leak into neighbouring 64-frame columns");
+        jaras::AudioClip clip;clip.duration=1024./48000;
+        Image impulse(Image::ARGB,16,80,true);
+        {
+            Graphics impulseGraphics(impulse);
+            WaveformRenderer::draw(impulseGraphics,cache,ready,clip,{0,0,16,80},{0,0,16,80},750,Colours::white,false);
+        } // Complete Direct2D drawing before mapping its pixels for CPU readback.
+        expect(impulse.getPixelAt(0,25).getAlpha()==0&&impulse.getPixelAt(1,30).getAlpha()>0&&impulse.getPixelAt(3,25).getAlpha()==0,
+               "Rendered impulse remains narrow rather than filling its old 256-frame interval");
+        auto pcm=cache.detail(ready,0);
+        while(!pcm&&Time::getMillisecondCounterHiRes()<deadline){Thread::sleep(10);pcm=cache.detail(ready,0);}
+        expect(pcm!=nullptr,"Close zoom PCM page prepared asynchronously");
+        clip.sourceOffset=256./48000;clip.duration=256./48000;
+        Image silence(Image::ARGB,32,80,true);
+        {
+            Graphics silenceGraphics(silence);
+            WaveformRenderer::draw(silenceGraphics,cache,ready,clip,{0,0,32,80},{0,0,32,80},6000,Colours::white,false);
+        }
+        expect(silence.getPixelAt(10,48).getAlpha()>0&&silence.getPixelAt(10,45).getAlpha()==0,
+               "Zero PCM keeps a thin centre line at detailed zoom");
     });
     test("Waveform hierarchy preserves signed peaks, mono cancellation and Mac cache format", [&] {
         const auto file = directory.getNonexistentChildFile("waveform-detail", ".wav");
@@ -1871,6 +3279,17 @@ int runTests(const File &directory) {
         expect(project.regionSetlist->playlists[0].regionIds==std::vector<ID>{first,second,adjacent.id},"Unwrapped playlist expands chronologically");
         expect(song.tracks[0].clips[0].audioFile->path==media&&song.tracks[0].clips[0].startTime==10,"Region operations never move or replace audio");
         jaras::validate(project);
+    });
+    test("Automatic section destination survives project codec and clearing", [&] {
+        auto project=projectFixture();auto& song=project.songs.front();
+        jaras::TimelineMarker source{uuid(),"Source",10,0};source.section=true;source.automaticSectionTargetID=uuid();
+        song.markers=std::vector<jaras::TimelineMarker>{source};
+        auto encoded=ProjectCodec::encode(project);
+        auto decoded=ProjectCodec::decode(encoded);
+        expect(decoded.songs.front().markers->front().automaticSectionTargetID==source.automaticSectionTargetID,"Automatic destination lost on reload");
+        decoded.songs.front().markers->front().automaticSectionTargetID.reset();
+        auto cleared=ProjectCodec::decode(ProjectCodec::encode(decoded,encoded));
+        expect(!cleared.songs.front().markers->front().automaticSectionTargetID,"Cleared destination survived in saved metadata");
     });
     test("Disunifying an opened project survives save, reopen, undo and redo without stale parent IDs", [&] {
         auto project = projectFixture(); auto &song = project.songs.front();
@@ -2006,6 +3425,53 @@ int runTests(const File &directory) {
         const auto shortChange=clickTempo::markerSections({{0,140},{.5,160},{1,140}},4,4,20);
         expect(shortChange.size()==1 && shortChange[0].bpm==140,"Short fluctuation left a stale tempo");
     });
+    test("Detected tempo markers reject an isolated transition gap without delaying the next clock", [&] {
+        // Measured from the reported 170 -> 142 BPM medley. Only the interval
+        // between clocks suggests 114; it must not become a four-second tempo.
+        const std::vector<clickTempo::Section> raw{{.625850340136,170},
+            {179.214353741497,114.189539098914},{179.739795918367,142}};
+        const auto result=clickTempo::markerSections(raw,4,4,216.5);
+        expect(result.size()==2 && result[0].bpm==170 && result[1].bpm==142,
+            "A single transition interval fabricated a 114 BPM section");
+        expect(result[0].position==raw[0].position && result[1].position==raw[2].position,
+            "The real 142 BPM anchor was delayed by the rejected bridge");
+        const auto slow=clickTempo::markerSections({{0,170},{20,114},{20+4*60./114,142}},4,4,40);
+        expect(slow.size()==3 && slow[1].bpm==114 && slow[1].position==20,
+            "A genuine four-beat slow section was removed");
+        const auto intro=clickTempo::markerSections({{0,114},{60./114,170},{20,142}},4,4,40);
+        expect(intro.size()==3 && intro[0].bpm==114 && intro[0].position==0,
+            "A one-interval intro was removed without surrounding clock evidence");
+        const auto intermediate=clickTempo::markerSections({{0,170},{20,155},{20+60./155,142}},4,4,40);
+        expect(intermediate.size()==3 && intermediate[1].bpm==155 && intermediate[1].position==20,
+            "A genuine intermediate ramp tempo was removed");
+        const auto shortNeighbor=clickTempo::markerSections({{0,170},{20,114},
+            {20+60./114,142},{20+60./114+2*60./142,128}},4,4,40);
+        expect(shortNeighbor.size()>=2 && shortNeighbor[1].bpm==114,
+            "A bridge was removed without a stable following clock");
+        const auto returnsToClock=clickTempo::markerSections({{0,170},{20,114},
+            {20+60./114,142},{20+60./114+2*60./142,170}},4,4,40);
+        expect(returnsToClock.size()==1 && returnsToClock[0].bpm==170,
+            "A short contaminated burst persisted after the established clock returned");
+    });
+    test("Transition gap detection generalizes across tempos offsets and meters", [&] {
+        for(double rate:{44100.,48000.,96000.})
+        for(const auto &tempo:std::vector<std::array<double,3>>{{96,128,74},{156,112,236},{210,250,180},{135,92,68}})
+        for(const auto &placement:std::vector<std::pair<double,int>>{{0,4},{37.125,3},{750.9,7}}) {
+            const auto sample=[&](double time){return std::round(time*rate)/rate;};
+            std::vector<double> pulses;
+            for(int i=0;i<32;++i)pulses.push_back(sample(.123+i*60/tempo[0]));
+            const auto entry=pulses.back()+60/tempo[2];
+            const auto expected=placement.first+sample(entry);
+            for(int i=0;i<32;++i)pulses.push_back(sample(entry+i*60/tempo[1]));
+            for(auto &pulse:pulses)pulse+=placement.first;
+            const auto measured=clickTempo::sections(pulses,placement.second);
+            const auto markers=clickTempo::markerSections(measured,placement.second,4,pulses.back()+60/tempo[1]);
+            expect(markers.size()==2 && markers[0].bpm==tempo[0] && markers[1].bpm==tempo[1],
+                "An unrelated transition acquired a false tempo");
+            expect(std::abs(markers[1].position-expected)<=1/rate,
+                "The next real tempo moved away from its measured entry");
+        }
+    });
     test("Click BPM detection preserves Mac clock phase, meter, rests and tempo changes", [&] {
         for(double rate:{44100.,48000.})for(double bpm:{147.999,130.001,119.9995,155.998})for(int count:{8,64,600}){
             std::vector<double> pulses;for(int i=0;i<count;++i)pulses.push_back(std::round((.123+i*60/bpm)*rate)/rate);
@@ -2034,7 +3500,7 @@ int runTests(const File &directory) {
         auto original=song;original.bpm=87;original.beatsPerBar=7;original.markers=std::vector<jaras::TimelineMarker>{{uuid(),"Manual",15,0xff0000}};
         clickTempo::insert(original,region,detected);
         const auto initial=std::find_if(original.markers->begin(),original.markers->end(),[](const auto &m){return m.tempoBPM&&m.position==0;});
-        expect(initial!=original.markers->end() && initial->tempoBPM==120 && initial->tempoReferenceBPM==120 && initial->tempoBeats==4 && initial->tempoUnit==4,"Empty lead-in differs from current Mac initial tempo");
+        expect(initial==original.markers->end(),"Detection added a tempo marker to the empty lead-in");
         expect(std::any_of(original.markers->begin(),original.markers->end(),[](const auto &m){return m.name=="Manual";}),"Tempo detection removed manual marker");
         const auto count=original.markers->size();clickTempo::insert(original,region,detected);
         expect(original.markers->size()==count,"Repeated BPM application duplicates markers");
@@ -2084,6 +3550,13 @@ int runTests(const File &directory) {
         expect(request(first,"GET /media/current HTTP/1.1\r\nRange: bytes=99-\r\n\r\n").contains("416"),"Invalid range was accepted");
         expect(request(first,"GET /media/../anything HTTP/1.1\r\n\r\n").contains("404"),"Non-current media was exposed");
         expect(request(first,"POST /state HTTP/1.1\r\n\r\n").contains("405"),"TP accepted a write request");
+        auto notice=object();put(notice,"active",true);put(notice,"imageID","notice-1");put(one,"notice",notice);
+        Image noticeImage(Image::RGB,2,2,true);noticeImage.setPixelAt(0,0,Colours::red);first.publish(one,media,noticeImage);
+        const auto noticeHead=request(first,"HEAD /notice/notice-1 HTTP/1.1\r\n\r\n");
+        expect(noticeHead.contains("200 OK")&&noticeHead.contains("Content-Type: image/png")&&noticeHead.endsWith("\r\n\r\n"),"TP notice image not available as bounded PNG");
+        expect(request(second,"HEAD /notice/notice-1 HTTP/1.1\r\n\r\n").contains("404"),"TP notice image leaked into another profile");
+        put(one,"notice",object());first.publish(one,media);
+        expect(request(first,"HEAD /notice/notice-1 HTTP/1.1\r\n\r\n").contains("404"),"Withdrawn notice image remained available");
         first.stop();expect(!first.enabled()&&second.enabled(),"TP1 shutdown stopped TP2");
     });
     test("Resource metrics use process CPU normalized by cores and sample once per second", [&] {
@@ -2093,6 +3566,24 @@ int runTests(const File &directory) {
         expect(usage.sample() && usage.samples == 1, "Initial sample");
         expect(!usage.cpu && usage.ram && *usage.ram > 0 && *usage.ram < 100, "Initial CPU awaits an interval; RAM belongs to the process");
         expect(!usage.sample() && usage.samples == 1, "Paint/timer frequency cannot resample within a second");
+    });
+    test("Footer next song is limited to the current unified region", [&] {
+        jaras::Song song;
+        jaras::Part root; root.id="unified";root.startTime=0;root.endTime=30;
+        jaras::Part first;first.id="first";first.parentRegionID=root.id;first.startTime=0;first.endTime=10;
+        jaras::Part second=first;second.id="second";second.startTime=10;second.endTime=20;
+        jaras::Part third=first;third.id="third";third.startTime=20;third.endTime=30;
+        jaras::Part normal;normal.id="outside";normal.startTime=30;normal.endTime=50;
+        song.parts={normal,third,root,second,first};
+        jaras::TransportState state;state.playing=true;state.regionId=root.id;state.queuedRegionId=normal.id;
+        expect(nextUnifiedSong(song,state)->id==second.id,"Next followed playlist instead of internal chronology");
+        state.position=10;expect(nextUnifiedSong(song,state)->id==third.id,"Next did not advance at the child boundary");
+        state.regionId=second.id;expect(nextUnifiedSong(song,state)->id==third.id,"Playing a drawer child lost its parent");
+        state.position=20;expect(!nextUnifiedSong(song,state),"Last internal song leaked the following grid region");
+        state.regionId=normal.id;state.position=0;expect(!nextUnifiedSong(song,state),"Ordinary region showed unrelated songs");
+        state.regionId=root.id;state.playing=false;expect(!nextUnifiedSong(song,state),"Stopped transport still has an internal next song");
+        state.playing=true;state.ignoreNextAfter=5;expect(!nextUnifiedSong(song,state),"Ignore Next did not hide the display");
+        expect(state.queuedRegionId==normal.id,"Display changed the independently armed queue");
     });
     test("Song display tempo belongs to its own region", [&] {
         auto song = projectFixture().songs.front();
@@ -2125,6 +3616,25 @@ int runTests(const File &directory) {
         PNGImageFormat().writeImageToStream(output, stream);
     });
     compactTextBaselineTests::registerTests(test, skipped);
+    test("Metronome preferences do not broadcast appearance or rewrite workspace settings", [&] {
+        const auto file=directory.getNonexistentChildFile("metronome-isolated", ".json");
+        Appearance settings(file);
+        expect(settings.set("jaras.timeline.zoom",7).wasOk(),"Initial appearance save failed");
+        const auto original=file.loadFileAsString();
+        struct Listener final:ChangeListener {int calls=0;void changeListenerCallback(ChangeBroadcaster *)override{++calls;}} listener;
+        for(int i=0;i<3;++i)floatingControlTests::pump();
+        settings.addChangeListener(&listener);
+        auto done=std::make_shared<bool>(false);auto failure=std::make_shared<String>();
+        settings.setMetronome("jaras.metronome.enabled",true,[done,failure](String error){*failure=error;*done=true;});
+        expect((bool)settings.value("jaras.metronome.enabled"),"Toggle must update the in-memory preference immediately");
+        const auto deadline=Time::getMillisecondCounterHiRes()+4000;
+        while(!*done&&Time::getMillisecondCounterHiRes()<deadline)floatingControlTests::pump();
+        settings.removeChangeListener(&listener);
+        expect(*done&&failure->isEmpty(),"Background metronome save failed");
+        expect(listener.calls==0,"Metronome refreshed the entire appearance tree");
+        expect(file.loadFileAsString()==original,"Metronome rewrote workspace appearance settings");
+        expect((bool)Appearance(file).value("jaras.metronome.enabled"),"Isolated metronome preference did not persist");
+    });
     test("Embedded font faces and persisted setlist appearance", [&] {
         auto file = directory.getNonexistentChildFile("appearance", ".json");
         Appearance settings(file);
@@ -2145,6 +3655,17 @@ int runTests(const File &directory) {
         expect(regular.getTypefaceName() == "Inter", "Embedded Inter family loaded");
         expect(bold.getTypefaceStyle().containsIgnoreCase("Bold"), "Real embedded bold face");
         expect(italic.getTypefaceStyle().containsIgnoreCase("Italic"), "Real embedded italic face");
+        const StringArray families{"Inter", "Inter", "Archivo Black", "Bungee"};
+        for (int style = 3; style <= 6; ++style) {
+            expect(settings.set("jaras.setlist.fontStyle", style).wasOk(), "Persist heavy Setlist font");
+            Appearance reopened(file);
+            const auto face = reopened.setlistFont();
+            const auto fullName = (face.getTypefacePtr()->getName() + face.getTypefaceStyle()).removeCharacters(" -");
+            expect(reopened.fontStyle() == style && fullName.containsIgnoreCase(families[style - 3].removeCharacters(" -")),
+                   "Setlist style " + String(style) + " restored as " + String(reopened.fontStyle()) + ": " +
+                   face.getTypefaceName() + " / " + face.getTypefacePtr()->getName() + " / " + face.getTypefaceStyle());
+            expect(face.getTypefacePtr() != bold.getTypefacePtr(), "Heavy option fell back to the existing bold font");
+        }
         expect(std::abs(regular.getHeightInPoints() - 13.f * .9f) < .01f, "Compact Windows text remains independent of display DPI");
     });
     test("Timecode LTC physical route, Master bypass, spans and main-only playback", [&] {
@@ -2248,6 +3769,55 @@ int runTests(const File &directory) {
         directory.getChildFile("fixture.json").replaceWithText(JSON::toString(root));
         auto known = ProjectCodec::seal(JSON::toString(root, true));
         directory.getChildFile("fixture.jl").replaceWithData(known.getData(), known.getSize());
+    });
+    test("Project saves preserve numeric precision and escaped opaque metadata", [&] {
+        auto document=ProjectCodec::encode(projectFixture());
+        auto metadata=object();
+        const String label=String::fromUTF8("São João 🎵")+String("\n\t\"\\");
+        put(metadata,"label",label);
+        Array<var> numbers;
+        for(double value:{0.0,-0.0,0.10000000000000002,140.164,1.2345678901234567,
+                          1.0e-200,1.0e200,std::numeric_limits<double>::min(),
+                          std::numeric_limits<double>::max(),std::numeric_limits<double>::denorm_min()})
+            numbers.add(value);
+        numbers.add(var((int64)9223372036854775807LL));
+        numbers.add(var((int64)(-9223372036854775807LL-1)));
+        numbers.add(true);numbers.add(false);numbers.add(var());
+        put(metadata,"values",numbers);put(document,"futureSaveMetadata",metadata);
+        const auto file=directory.getChildFile("SavePrecision/Show.jl");
+        ProjectCodec::write(file,document);
+        MemoryBlock sealed;expect(file.loadFileAsData(sealed),"Saved document could not be read");
+        const auto plaintext=ProjectCodec::unseal(sealed);
+        const auto serializedValues=plaintext.fromFirstOccurrenceOf("\"futureSaveMetadata\":",false,false)
+            .fromFirstOccurrenceOf("\"values\":[",false,false);
+        const char *next=serializedValues.toRawUTF8(),*end=next+serializedValues.getNumBytesAsUTF8();
+        for(int i=0;i<10;++i) {
+            double value=0;const auto parsed=std::from_chars(next,end,value);
+            const auto wanted=(double)numbers[i];
+            expect(parsed.ec==std::errc{}&&value==wanted&&std::signbit(value)==std::signbit(wanted),
+                   "Serialized double lost precision at index "+String(i));
+            if(parsed.ec!=std::errc{})break;
+            next=parsed.ptr<end?parsed.ptr+1:end;
+        }
+        const auto saved=ProjectCodec::read(file);
+        const auto actualMetadata=get(saved,"futureSaveMetadata");
+        expect(str(actualMetadata,"label")==label,"UTF-8, quotes, backslashes and control characters changed");
+        const auto *actual=get(actualMetadata,"values").getArray();
+        expect(actual&&actual->size()==numbers.size(),"Opaque numeric metadata lost values");
+        if(actual&&actual->size()==numbers.size())for(int i=0;i<numbers.size();++i) {
+            if(numbers[i].isDouble()) {
+                const auto wanted=(double)numbers[i],found=(double)(*actual)[i];
+                // JUCE's existing reader clamps exponents below -308 to zero.
+                // Verify the saved token exactly above, while retaining that
+                // established read behavior for the smallest subnormal value.
+                const double readable=std::abs(wanted)>0&&std::abs(wanted)<std::numeric_limits<double>::min()?0.0:wanted;
+                expect((*actual)[i].isDouble()&&found==readable&&std::signbit(found)==std::signbit(wanted),
+                       "Double precision/type/sign changed at numeric index "+String(i));
+            } else if(numbers[i].isInt64())
+                expect((int64)(*actual)[i]==(int64)numbers[i],"64-bit integer lost precision");
+            else expect((*actual)[i]==numbers[i],"Boolean or null changed");
+        }
+        expect(get(get(document,"futureSaveMetadata"),"values")==var(numbers),"Saving mutated the caller's metadata");
     });
     test("Legacy Windows IDs migrate atomically to Swift UUID spelling", [&] {
         const auto p = projectFixture();
@@ -2372,7 +3942,9 @@ int runTests(const File &directory) {
         session.cycleRecordArm(first.id,selection);
         expect(session.recordArm(first.id)==1&&session.recordArm(second.id)==1&&session.recordArm(third.id)==0,"Arm every selected track");
         session.cycleRecordArm(first.id,selection);
-        expect(session.recordArm(first.id)==2&&session.recordArm(second.id)==2,"Same next REC mode");
+        expect(session.recordArm(first.id)==0&&session.recordArm(second.id)==0,"Plain REC toggles off");
+        session.cycleRecordArm(first.id,selection,true);
+        expect(session.recordArm(first.id)==2&&session.recordArm(second.id)==2,"Shift REC enables automatic mode for the selection");
         session.mixerCommand(jaras::CommandKind::mute,first.id,selection);
         expect(session.song()->tracks[0].mute&&session.song()->tracks[1].mute&&!session.song()->tracks[2].mute,"Mute mixed selection consistently");
         session.mixerCommand(jaras::CommandKind::solo,first.id,selection);
@@ -2397,10 +3969,14 @@ int runTests(const File &directory) {
         Session session;session.inspection=true;session.audio.prepareOffline(48000);
         const auto root=directory.getNonexistentChildFile("project-folder-policy",{},false);
         const auto first=root.getChildFile("One.jl"), second=root.getChildFile("Two.jl");
+        const auto sidecar=root.getChildFile("._One.jl");sidecar.getParentDirectory().createDirectory();
+        {FileOutputStream out(sidecar);out.writeIntBigEndian(0x00051607);out.writeIntBigEndian(0x00020000);}
         session.save(first); const auto before=first.loadFileAsString();
         bool rejected=false;try{session.save(second);}catch(const std::exception &e){rejected=String::fromUTF8(e.what()).contains("pasta separada");}
         expect(rejected&&!second.existsAsFile()&&first.loadFileAsString()==before&&session.document==first,"Reject second document before writing or changing active path");
         session.save(first);expect(first.existsAsFile(),"Ordinary Save still works");
+        const auto legacyCopy=root.getChildFile("Legacy copy.jl");expect(first.copyFileTo(legacyCopy),"Could not create legacy shared folder fixture");
+        session.save(first);expect(legacyCopy.loadFileAsString()==before,"Saving current project overwrote its neighbor");
         const auto separate=root.getChildFile("Separate/Two.jl");session.save(separate);expect(separate.existsAsFile(),"Save As in a separate folder works");
     });
     test("Native DSP delay timing, compressor gain and live piano rendering", [&] {
@@ -2443,12 +4019,80 @@ int runTests(const File &directory) {
         notes.addEvent(MidiMessage::noteOn(1, 69, .8f), 0);
         buffer.clear();
         piano.render(buffer, notes, 1024);
-        expect(buffer.getMagnitude(0, 1024) > .01f, "Live piano produced no audio");
+        expect(buffer.getMagnitude(0, 1024) == 0, "MIDI triggered an implicit instrument without a loaded bank");
         piano.stop();
         notes.clear();
         buffer.clear();
         piano.render(buffer, notes, 1024);
-        expect(buffer.getMagnitude(0, 1024) == 0, "Piano panic left stuck notes");
+        expect(buffer.getMagnitude(0, 1024) == 0, "Empty instrument panic emitted audio");
+    });
+    test("MIDI backend migration preserves assignments without guessing between identical controllers",[&] {
+        const Array<MidiDeviceInfo> legacy{MidiDeviceInfo{"Keyboard", "winmm-keyboard"}, MidiDeviceInfo{"Pedal", "winmm-pedal"}};
+        const Array<MidiDeviceInfo> current{MidiDeviceInfo{"Pedal", "winrt-pedal"}, MidiDeviceInfo{"Keyboard", "winrt-keyboard"}, MidiDeviceInfo{"Bluetooth", "ble-keyboard"}};
+        const auto resolve = [&](const String &saved) { return midiDeviceCompatibility::resolve(saved, current, legacy); };
+        expect(resolve("winmm-keyboard") == "winrt-keyboard", "Saved input moved to a different device after enumeration reordered");
+        expect(resolve("winmm-pedal") == "winrt-pedal", "Saved output did not migrate");
+        expect(resolve("ble-keyboard") == "ble-keyboard" && resolve("").isEmpty(), "Native BLE ID or unassigned slot changed");
+        expect(resolve("offline-controller") == "offline-controller", "Offline assignment was discarded");
+        auto duplicateLegacy = legacy; duplicateLegacy.add({"Keyboard", "winmm-other"});
+        expect(midiDeviceCompatibility::resolve("winmm-keyboard", current, duplicateLegacy) == "winmm-keyboard", "Ambiguous old controller was guessed");
+        auto duplicateCurrent = current; duplicateCurrent.add({"Keyboard", "winrt-other"});
+        expect(midiDeviceCompatibility::resolve("winmm-keyboard", duplicateCurrent, legacy) == "winmm-keyboard", "Ambiguous new controller was guessed");
+        expect(midiDeviceCompatibility::resolve("winrt-keyboard", duplicateCurrent, duplicateLegacy) == "winrt-keyboard", "Exact identifier lost priority");
+    });
+    test("Realtime MIDI ingress preserves short events without growing callback buffers",[&] {
+        auto input=std::make_unique<RealtimeMIDIInput>();
+        MidiBuffer output;output.ensureSize(32768);output.addEvent(MidiMessage::noteOn(1,60,uint8(100)),0);
+        const auto *storage=(*output.begin()).data;output.clear();input->reset(48000);
+        input->removeNextBlockOfMessages(output,512);output.clear();
+        for(int cycle=0;cycle<50;++cycle) {
+            for(int i=0;i<512;++i){auto message=MidiMessage::noteOn(1,i%128,uint8(100));message.setTimeStamp(Time::getMillisecondCounterHiRes()*.001);input->addMessageToQueue(message);}
+            input->removeNextBlockOfMessages(output,512);
+            expect(output.getNumEvents()==512,"MIDI queue lost events below capacity");
+            expect((*output.begin()).data==storage,"MIDI callback destination reallocated");
+            for(const auto event:output)expect(event.samplePosition>=0&&event.samplePosition<512,"MIDI timestamp escaped the audio block");
+            output.clear();
+        }
+        expect(input->droppedCount()==0,"MIDI ingress unexpectedly overflowed");
+        for(int i=0;i<3000;++i)input->addMessageToQueue(MidiMessage::noteOn(1,60,uint8(100)));
+        input->removeNextBlockOfMessages(output,512);
+        int release=0;for(const auto event:output)if(event.getMessage().isAllNotesOff())++release;
+        expect(input->droppedCount()>0&&release==16,"Overflow could leave notes held on a MIDI channel");
+        expect((*output.begin()).data==storage,"Overflow recovery reallocated the MIDI destination");
+        output.clear();
+        auto fresh=MidiMessage::noteOn(3,72,uint8(110));
+        fresh.setTimeStamp(Time::getMillisecondCounterHiRes()*.001);
+        input->addMessageToQueue(fresh);
+        input->removeNextBlockOfMessages(output,512);
+        expect(output.getNumEvents()==1&&(*output.begin()).getMessage().getNoteNumber()==72,
+               "Discarded overflow events delayed fresh MIDI input");
+        output.clear();
+        for(int i=0;i<2048;++i)input->addMessageToQueue(MidiMessage::noteOn(1,60,uint8(100)));
+        input->reset(48000);
+        input->addMessageToQueue(fresh);
+        input->removeNextBlockOfMessages(output,0);
+        expect(output.isEmpty(),"Zero-length callback consumed pending recovery or MIDI");
+        input->removeNextBlockOfMessages(output,512);
+        int notes=0;release=0;
+        for(const auto event:output){if(event.getMessage().isNoteOn()){++notes;expect(event.getMessage().getNoteNumber()==72,"Old notes replayed after device restart");}if(event.getMessage().isAllNotesOff())++release;}
+        expect(notes==1&&release==16,"Restart did not release old notes and deliver new input in its first block");
+        expect((*output.begin()).data==storage,"Restart recovery reallocated the MIDI destination");
+        output.clear();input->removeNextBlockOfMessages(output,512);
+        expect(output.isEmpty(),"Recovery was repeated on the following empty block");
+    });
+    test("Live MIDI stays silent without an explicitly inserted instrument",[&] {
+        AudioEngine engine;engine.prepareOffline(48000);engine.instrumentAllowed=true;
+        jaras::Project project;auto song=Session::makeEmptyProject("MIDI silence").songs.front();
+        engine.prepareSong(song,directory,{},&project);engine.setMixer(project,song);
+        AudioBuffer<float> output(2,512);
+        for(int channel:{1,6,16}) {
+            engine.keyboardState.noteOn(channel,60+channel,.8f);
+            for(int block=0;block<4;++block) {
+                static_cast<AudioIODeviceCallback&>(engine).audioDeviceIOCallbackWithContext(nullptr,0,output.getArrayOfWritePointers(),2,512,{});
+                expect(output.getMagnitude(0,512)==0,"Unrouted MIDI sounded through a hidden instrument");
+            }
+            engine.keyboardState.noteOff(channel,60+channel,0);
+        }
     });
     test("Project tab sessions share one audio host but preserve independent edits undo and transport", [&] {
         Session first;
@@ -2494,6 +4138,22 @@ int runTests(const File &directory) {
                 pedalReleased = event.getMessage().getControllerValue() == 0 && event.samplePosition == 20;
         }
         expect(pedalReleased, "Pedal release did not reach the previous track at its original sample");
+        input.clear(); current.clear();
+        for (int channel : {2, 3}) {
+            input.addEvent(MidiMessage::noteOn(channel, 60, (uint8)100), 10);
+            input.addEvent(MidiMessage::controllerEvent(channel, 64, 127), 20);
+            input.addEvent(MidiMessage::pitchWheel(channel, 9000), 30);
+            input.addEvent(MidiMessage::noteOff(channel, 60), 40);
+        }
+        // The same live buffer feeds MIDI capture and the track's VST3 chain,
+        // independently of the selected audio/MIDI recording mode.
+        appendLiveTrackMIDI(current, input, 128, true, 3);
+        expect(current.getNumEvents() == 4, "Input channel must filter notes, controllers and pitch bend before capture and instruments");
+        for (const auto event : current)
+            expect(event.getMessage().getChannel() == 3, "Another MIDI channel reached the track");
+        current.clear();
+        appendLiveTrackMIDI(current, input, 128, true, 0);
+        expect(current.getNumEvents() == 8, "All channels must restore Omni input");
     });
     test("MIDI clips preserve source offset, loops, rate, gain and frozen state", [&] {
         jaras::Track track;
@@ -2525,6 +4185,19 @@ int runTests(const File &directory) {
         track.clips[0].muted = false;
         track.clips[0].frozenMIDI = true;
         expect(playbackNotes(track).empty(), "Frozen MIDI was doubled with its audio render");
+    });
+    test("Instrument uninstall preserves project banks and rejects paths outside catalog", [&] {
+        const auto root=directory.getChildFile("UninstallInstruments");
+        const auto library=root.getChildFile("Library"), project=root.getChildFile("Project/Instruments");
+        library.createDirectory();project.createDirectory();
+        const auto installed=instrumentAssets::installedFile("astoria-grand",library);
+        const auto bundled=project.getChildFile("astoria-grand.sf2"),other=root.getChildFile("outside.sf2");
+        expect(installed.replaceWithText("RIFF0000sfbk")&&bundled.replaceWithText("RIFF0000sfbk")&&other.replaceWithText("keep"),"Fixture write");
+        instrumentAssets::uninstall("astoria-grand",library);
+        expect(!installed.existsAsFile()&&bundled.loadFileAsString()=="RIFF0000sfbk","Catalog removal touched project bank");
+        instrumentAssets::uninstall("astoria-grand",library);
+        bool rejected=false;try{instrumentAssets::uninstall("../outside",library);}catch(...){rejected=true;}
+        expect(rejected&&other.loadFileAsString()=="keep","Uninstall escaped catalog root");
     });
     const auto soundFontPath = SystemStats::getEnvironmentVariable("CATLIVE_TEST_SF2", {});
     if (soundFontPath.isNotEmpty())
@@ -2749,17 +4422,18 @@ int runTests(const File &directory) {
             expect(std::abs(measured-(gains[0]+gains[1]+gains[2]))<.01,
                    "Track/group/master faders must apply the displayed dB to rendered audio");
         }
-        {
+        for(int channelMode:{0,1,2,3,4}) {
+            const auto expected=std::array<std::array<double,2>,5>{{{.1,.2},{.1,.1},{.2,.2},{.15,.15},{.2,.1}}}[(size_t)channelMode];
             auto p=projectFixture();auto &song=p.songs[0];song.duration=1;song.parts.clear();song.markers.reset();p.masterOutputs=std::vector<jaras::OutputPatch>{{1,2}};
             auto &track=song.tracks[0];track.volume=1;track.pan=0;track.phaseInverted=false;track.fxJSON.reset();track.automationJSON.reset();track.patch=jaras::OutputPatch{1,2};track.outputs.reset();
-            jaras::AudioClip clip;clip.id=uuid();clip.duration=1;clip.audioFile=jaras::AudioFile{"signal.wav",{}};clip.channelMode=4;track.clips={clip};
-            jaras::validate(p);auto decoded=ProjectCodec::decode(ProjectCodec::encode(p));expect(decoded.songs[0].tracks[0].clips[0].channelMode==4,"Swap LR did not survive project roundtrip");
+            jaras::AudioClip clip;clip.id=uuid();clip.duration=1;clip.audioFile=jaras::AudioFile{"signal.wav",{}};clip.channelMode=channelMode;track.clips={clip};
+            jaras::validate(p);auto decoded=ProjectCodec::decode(ProjectCodec::encode(p));expect(decoded.songs[0].tracks[0].clips[0].channelMode==channelMode,"Channel mode did not survive project roundtrip");
             auto engine=std::make_unique<AudioEngine>();engine->prepareOffline(48000);engine->prepareSong(song,folder,{},&p);engine->setOffline(true);engine->setMixer(p,song);
             AudioBuffer<float> output(2,512);AudioEngine::State state;state.playing=true;state.position=.25;engine->transport(state);engine->render(output.getArrayOfWritePointers(),2,512);
-            expect(std::abs(output.getSample(0,100)-.2)<.0001&&std::abs(output.getSample(1,100)-.1)<.0001,"Swap LR did not exchange actual playback samples");
+            expect(std::abs(output.getSample(0,100)-expected[0])<.0001&&std::abs(output.getSample(1,100)-expected[1])<.0001,"L/R/Mix/Stereo conversion changed the wrong playback channel");
             std::atomic<bool> cancel{false};auto rendered=itemRender::render(p,song,folder,{clip.id},false,0,cancel,{});
             AudioFormatManager formats;registerAudioFormats(formats);std::unique_ptr<AudioFormatReader> reader(formats.createReaderFor(rendered[0].generated));expect(reader!=nullptr,"Cannot read swapped output");AudioBuffer<float> printed(2,512);reader->read(&printed,0,512,12000,true,true);
-            expect(std::abs(printed.getSample(0,100)-.2)<.0001&&std::abs(printed.getSample(1,100)-.1)<.0001,"Re-render/export did not bake LR swap");
+            expect(std::abs(printed.getSample(0,100)-expected[0])<.0001&&std::abs(printed.getSample(1,100)-expected[1])<.0001,"Re-render/export did not bake the channel conversion");
         }
     });
     test("WASAPI-independent stereo render, mixer, Sub Play, seek and sample loop", [&] {
@@ -2846,8 +4520,8 @@ int runTests(const File &directory) {
             engine.transport(state);
             render();
         }
-        expect(std::abs(output.getSample(0, 100) - .1f) < .002f, "Left channel incorrect");
-        expect(std::abs(output.getSample(1, 100) - .2f) < .002f, "Stereo channels collapsed");
+        expect(std::abs(output.getSample(0, 255) - .1f) < .002f, "Left channel incorrect");
+        expect(std::abs(output.getSample(1, 255) - .2f) < .002f, "Stereo channels collapsed");
         // Adding a generated track must retain unchanged readers and their audio.
         auto clickTrack = track;
         clickTrack.id = uuid(); clickTrack.role.id = "generatedClick";
@@ -2857,8 +4531,8 @@ int runTests(const File &directory) {
         expect((int)engine.preparationDiagnostics["reusedSources"] == 1,
                "Adding Click reopened unchanged source metadata");
         engine.setMixer(p, song); engine.transport(state); render();
-        expect(std::abs(output.getSample(0, 100) - .1f) < .002f &&
-                   std::abs(output.getSample(1, 100) - .2f) < .002f,
+        expect(std::abs(output.getSample(0, 255) - .1f) < .002f &&
+                   std::abs(output.getSample(1, 255) - .2f) < .002f,
                "Adding Click changed existing audio");
         song.tracks.pop_back();
         expect(file.setLastModificationTime(file.getLastModificationTime() + RelativeTime::seconds(2)),
@@ -2880,29 +4554,32 @@ int runTests(const File &directory) {
             engine.transport(state);
         }
         render();
-        expect(std::abs(output.getSample(0, 100) - .025f) < .002f &&
-                   std::abs(output.getSample(1, 100) - .05f) < .002f,
+        expect(std::abs(output.getSample(0, 255) - .025f) < .002f &&
+                   std::abs(output.getSample(1, 255) - .05f) < .002f,
                "Command backlog lost the final mute or mixer update");
         expect(std::abs(engine.state().position - .11) < .0001,
                "Command backlog lost the final seek");
         state.playing = false;
         engine.transport(state);
         render();
-        expect(output.getMagnitude(0, 480) == 0 && !engine.state().playing,
-               "Stop after a command backlog was lost");
+        const int stopFadeFrames = 96; // 2 ms at the fixture's 48 kHz rate.
+        expect(!engine.state().playing && output.getMagnitude(stopFadeFrames, 480 - stopFadeFrames) == 0,
+               "Stop after a command backlog did not become silent after its fade");
+        render();
+        expect(output.getMagnitude(0, 480) == 0, "Stop audio returned after the transition");
         state.playing = true;
         song.tracks[0].volume = 1;
         p.masterVolume = .5;
         engine.setMixer(p, song);
         engine.transport(state);
         render();
-        expect(std::abs(output.getSample(0, 100) - .05f) < .002f, "Master fader incorrect");
+        expect(std::abs(output.getSample(0, 255) - .05f) < .002f, "Master fader incorrect");
         trace("subplay");
         state.subPlaying = true;
         state.subPosition = .1;
         engine.transport(state);
         render();
-        expect(std::abs(output.getSample(0, 100) - .1f) < .002f, "Sub Play did not mix both heads");
+        expect(std::abs(output.getSample(0, 255) - .1f) < .002f, "Sub Play did not mix both heads");
         song.tracks[0].mute = true;
         engine.setMixer(p, song);
         render();
@@ -2923,7 +4600,8 @@ int runTests(const File &directory) {
         state.subPlaying = false;
         engine.transport(state);
         render();
-        expect(output.getMagnitude(0, 480) == 0, "Stopped transport emitted audio");
+        expect(output.getMagnitude(stopFadeFrames, 480 - stopFadeFrames) == 0,
+               "Stopped transport emitted audio after its fade");
         p.masterVolume = .5;
         trace("master output patch");
         p.masterOutputs = std::vector<jaras::OutputPatch>{{3, 2}};
@@ -3004,6 +4682,37 @@ int runTests(const File &directory) {
         expect(feedback, "Audio routing accepted a feedback cycle");
         trace("done");
     });
+    test("Prepared routing handles more than 513 destinations without duplicate parent sends", [&] {
+        constexpr int destinationCount=520;
+        auto project=projectFixture();auto &song=project.songs.front();
+        song.tracks.clear();song.parts.clear();song.markers.reset();song.duration=1;
+        project.masterVolume=1;project.masterPan=0;project.masterMute=false;project.masterSolo=false;
+        project.masterOutputs=std::vector<jaras::OutputPatch>{{1,2}};
+        jaras::Track source;source.id=uuid();source.name="Matrix source";
+        source.inputPatch=jaras::OutputPatch{1,2};source.inputMonitoring=true;
+        source.outputs=std::vector<jaras::OutputPatch>{{-2,2},{-2,2}};
+        source.routing=jaras::TrackRouting{};
+        for(int i=0;i<destinationCount;++i) {
+            jaras::Track destination;destination.id=uuid();destination.name="Matrix destination";
+            destination.volume=1./destinationCount;destination.outputs=std::vector<jaras::OutputPatch>{{0,2}};
+            if(i==0)source.parentTrackID=destination.id;
+            source.routing->transmitters.push_back(destination.id);
+            // Both sides may describe the same connection; it is still one route.
+            destination.routing=jaras::TrackRouting{{source.id},{}};
+            song.tracks.push_back(std::move(destination));
+        }
+        const auto sourceID=source.id;song.tracks.push_back(std::move(source));
+        auto engine=std::make_unique<AudioEngine>();engine->prepareOffline(48000);
+        engine->prepareSong(song,directory,{},&project);engine->setMixer(project,song);
+        engine->instrumentAllowed=true;engine->armTrack(sourceID,true);
+        AudioBuffer<float> input(2,64),output(2,64);
+        FloatVectorOperations::fill(input.getWritePointer(0),.1f,64);
+        FloatVectorOperations::fill(input.getWritePointer(1),.2f,64);
+        engine->render(output.getArrayOfWritePointers(),2,64,input.getArrayOfReadPointers(),2);
+        expect(std::abs(output.getSample(0,32)-.1f)<.00001f &&
+               std::abs(output.getSample(1,32)-.2f)<.00001f,
+               "Prepared routing dropped destinations or counted a send/receive/parent connection twice");
+    });
     test("Export plan tokens, collision naming and secondary outputs match desktop documents", [&] {
         auto p = projectFixture();
         const auto &song = p.songs[0];
@@ -3013,8 +4722,9 @@ int runTests(const File &directory) {
         expect(jobs.size() == 2 && jobs[0].start == 10 && jobs[0].end == 20,
                "Export region bounds were lost");
         auto secondary = audioExport::plan(p, song, 0, 3, "Same", {}, {}, {}, {}, encoding);
-        expect(secondary[1].name == "Same (2).wav", "Duplicate export names collided");
+        expect(secondary[0].name == "Same.wav" && secondary[1].name == "Same - 001.wav", "Duplicate export names lost their padded numbering");
         audioExport::appendSecondary(secondary, secondary);
+        expect(secondary[2].name == "Same - 002.wav" && secondary[3].name == "Same - 003.wav", "Secondary numbering restarted or nested its suffix");
         std::set<String> names;
         for (const auto &job : secondary)
             expect(names.insert(job.name.toLowerCase()).second,
@@ -3022,6 +4732,145 @@ int runTests(const File &directory) {
         auto safe = audioExport::plan(p, song, 0, 0, "../CON", {}, {}, {}, {}, encoding);
         expect(!safe[0].name.containsChar('/') && !safe[0].name.containsChar('\\'),
                "Export template escaped its folder");
+    });
+    test("Subplay promotion preserves callback position and samples despite a stale UI observation",[&] {
+        const auto folder=directory.getChildFile("promotion-continuity");folder.createDirectory();
+        WavAudioFormat wav;auto stream=folder.getChildFile("ramp.wav").createOutputStream();
+        std::unique_ptr<AudioFormatWriter> writer(wav.createWriterFor(stream.get(),48000,2,24,{},0));
+        expect(writer!=nullptr,"Cannot write promotion fixture");stream.release();
+        AudioBuffer<float> ramp(2,48000*6);
+        for(int ch=0;ch<2;++ch)for(int n=0;n<ramp.getNumSamples();++n)ramp.setSample(ch,n,float(n)/48000*.05f);
+        writer->writeFromAudioSampleBuffer(ramp,0,ramp.getNumSamples());writer.reset();
+        auto p=Session::makeEmptyProject("Promotion");auto &song=p.songs.front();song.duration=6;
+        jaras::Track track;track.id=uuid();track.name="Ramp";track.role.id="other";
+        jaras::AudioClip clip;clip.id=uuid();clip.duration=6;clip.audioFile=jaras::AudioFile{"ramp.wav"};track.clips={clip};song.tracks={track};
+        AudioEngine audio;audio.prepareOffline(48000);audio.prepareSong(song,folder,{},&p);audio.setOffline(true);
+        AudioBuffer<float> block(2,480);AudioEngine::State state;state.position=.2;state.playing=true;state.subPosition=2;state.subPlaying=true;
+        audio.transport(state);audio.render(block.getArrayOfWritePointers(),2,480);
+        const auto observed=audio.state();
+        // Device keeps moving while the model/UI handles the previous song ending.
+        for(int i=0;i<7;++i)audio.render(block.getArrayOfWritePointers(),2,480);
+        const auto actual=audio.state();state=observed;state.position=observed.subPosition;state.subPlaying=false;state.promotion=1;state.preserveLatency=true;
+        const auto commits=num(audio.streamDiagnostics(),"transportRepositions");audio.transport(state);
+        audio.render(block.getArrayOfWritePointers(),2,480);
+        expect(std::abs(audio.state().position-actual.subPosition-.01)<1e-9,"Promotion replayed the stale secondary position");
+        expect(std::abs(block.getSample(0,0)-float(actual.subPosition*.05))<.000002f,"Promotion repeated samples or switched to cold audio");
+        expect(num(audio.streamDiagnostics(),"transportRepositions")==commits,"Promotion must not reposition the playing reader");
+        expect(!audio.state().subPlaying && audio.state().playing,"Promotion retained two playing heads");
+    });
+    test("Program Change stacks six named cues with independent output slots and rejects a seventh",[&] {
+        auto project=Session::makeEmptyProject("Six outputs");jaras::Track pc;pc.id=uuid();pc.name="Program Change";pc.role.id="programChange";pc.midiOutput=1;pc.patch=jaras::OutputPatch{-1,2};
+        project.songs.front().tracks={pc};Session session;session.inspection=true;session.core.loadProject(project);
+        for(int slot=1;slot<=6;++slot) {
+            jaras::ProgramChangeMarker m{uuid(),8.5,slot*3,slot,"Timbre "+std::to_string(slot),slot};
+            expect(!session.insertProgramChange(pc.id,m).empty(),"A valid stacked cue was rejected");
+        }
+        session.command(jaras::CommandKind::mute,pc.id);session.command(jaras::CommandKind::solo,pc.id);
+        expect(session.song()->tracks.front().mute && session.song()->tracks.front().solo,"Program Change M/S controls did not apply");
+        const auto saved=ProjectCodec::decode(ProjectCodec::encode(session.project(),{}));
+        expect(saved.songs.front().tracks.front().mute && saved.songs.front().tracks.front().solo,"Program Change M/S did not survive save");
+        const auto &track=saved.songs.front().tracks.front();ProgramChangeLanes layout(track);
+        expect(layout.count==6,"Six simultaneous cues must have six heads");
+        for(int slot=1;slot<=6;++slot){expect(track.programChanges[size_t(slot-1)].output==slot,"Marker lost its MIDI output");expect(layout.lanes.at(track.programChanges[size_t(slot-1)].id)==slot-1,"Marker heads overlapped");}
+        bool rejected=false;try{session.insertProgramChange(pc.id,{uuid(),8.5,99,1,"Seventh",1});}catch(...){rejected=true;}
+        expect(rejected && session.song()->tracks.front().programChanges.size()==6,"Seventh marker changed the project");
+        session.selectProgramChange(track.programChanges.back().id);expect(session.copyProgramChange(),"Could not copy output 6");
+        session.command(jaras::CommandKind::editSeek,{},14);expect(session.pasteProgramChange(),"Could not paste output 6");
+        expect(session.song()->tracks.front().programChanges.back().output==6,"Paste used current Patch instead of saved output");
+        session.undo();expect(session.song()->tracks.front().programChanges.size()==6,"Undo lost stacked markers");
+        session.redo();expect(session.song()->tracks.front().programChanges.size()==7,"Redo failed to restore the copied marker");
+    });
+    test("Patch opens frameless and modeless inside the project tab host", [&] { WorkspaceLayoutTests::tabbedPatchWindow(directory); });
+    test("Program Change empty Apply cancels Scan and ignores commands received before a new scan",[&] {
+        auto project=Session::makeEmptyProject("Empty Scan");jaras::Track pc;pc.id=uuid();pc.name="Program Change";pc.role.id="programChange";pc.midiInput=1;pc.midiOutput=1;pc.patch=jaras::OutputPatch{-1,2};
+        project.songs.front().tracks={pc};Session session;session.inspection=true;session.core.loadProject(project);
+        expect(!session.scanProgramChange(pc.id) && session.scanningProgramChange(pc.id),"Scan did not start");
+        expect(!session.scanProgramChange(pc.id) && !session.scanningProgramChange(pc.id),"Empty Apply stayed stuck scanning");
+        session.audio.midiProgramChanges[0]=(1ull<<12)|42;
+        expect(!session.scanProgramChange(pc.id) && session.scanningProgramChange(pc.id),"Restart should begin a fresh scan");
+        expect(!session.scanProgramChange(pc.id) && !session.scanningProgramChange(pc.id),"Old MIDI message must not count as a new scan");
+        expect(session.song()->tracks.front().programChanges.empty(),"Empty Apply inserted a marker");
+        session.scanProgramChange(pc.id);
+        session.audio.midiProgramChanges[0]=(2ull<<12)|42;
+        auto pending=session.scanProgramChange(pc.id);
+        expect(pending && pending->program==42 && session.scanningProgramChange(pc.id),"A new identical PC should still reach the name editor");
+    });
+    test("Program Change All input scans the newest command from six configured slots",[&] {
+        auto project=Session::makeEmptyProject("All MIDI inputs");jaras::Track pc;pc.id=uuid();pc.name="Program Change";pc.role.id="programChange";pc.midiInput=-1;pc.midiOutput=1;pc.patch=jaras::OutputPatch{-1,2};
+        project.songs.front().tracks={pc};Session session;session.inspection=true;session.core.loadProject(project);
+        expect(!session.scanProgramChange(pc.id),"Starting Scan unexpectedly applied a marker");
+        session.audio.midiProgramChanges[0].store((uint64(1)<<12)|7);
+        auto first=session.scanProgramChange(pc.id);expect(first && first->program==7,"All did not read MIDI input 1");
+        session.audio.midiProgramChanges[5].store((uint64(2)<<12)|(15<<7)|93);
+        auto last=session.scanProgramChange(pc.id);expect(last && last->program==93 && last->channel==16,"All did not read the newest MIDI input 6 command");
+        expect(session.scannedProgramChangePacket(pc.id)==((uint64(2)<<12)|(15<<7)|93),"Scan display did not update to the latest PC and channel");
+        expect(session.song()->tracks.front().programChanges.empty(),"All input must keep scanning without applying");
+        const auto saved=ProjectCodec::decode(ProjectCodec::encode(session.project(),{}));
+        expect(saved.songs.front().tracks.front().midiInput==-1,"All input was lost in the saved project");
+    });
+    test("Program Change track saves six MIDI slots and Scan only applies the latest value at edit cursor",[&] {
+        auto project=Session::makeEmptyProject("PC");auto &song=project.songs.front();
+        jaras::Track pc;pc.id=uuid();pc.role.id="programChange";pc.name="Program Change";pc.midiInput=6;pc.midiOutput=6;pc.patch=jaras::OutputPatch{-1,2};
+        jaras::Track tc;tc.id=uuid();tc.role.id="timecode";tc.name="Timecode";tc.timecode.emplace();
+        song.tracks={tc,pc};Session session;session.inspection=true;session.core.loadProject(project);
+        expect(session.song()->tracks.front().id==pc.id,"Program Change is not first");
+        session.command(jaras::CommandKind::editSeek,{},7.25);
+        session.scanProgramChange(pc.id);expect(session.scanningProgramChange(pc.id),"Scan did not start");
+        session.audio.midiProgramChanges[5]=(1ull<<12)|(2<<7)|4;
+        session.audio.midiProgramChanges[5]=(2ull<<12)|(15<<7)|127;
+        expect(session.song()->tracks.front().programChanges.empty(),"Scan applied automatically");
+        auto pending=session.scanProgramChange(pc.id);expect(pending.has_value(),"Apply did not freeze the detected PC");
+        expect(session.song()->tracks.front().programChanges.empty(),"Apply inserted before the name was confirmed");
+        pending->name="Órgão 123456789";
+        session.insertProgramChange(pc.id,*pending);
+        const auto marker=session.song()->tracks.front().programChanges.front();
+        expect(text(marker.name).length()==12,"Marker name was not limited to 12 characters");
+        expect(marker.position==7.25 && marker.program==127 && marker.channel==16,"Apply lost cursor or latest PC");
+        auto saved=ProjectCodec::decode(ProjectCodec::encode(session.project(),{}));
+        expect(saved.songs.front().tracks.front().midiOutput==6 && saved.songs.front().tracks.front().programChanges.size()==1,"PC codec lost routing or markers");
+        session.undo();expect(session.song()->tracks.front().programChanges.empty(),"PC Undo failed");
+        session.redo();expect(session.song()->tracks.front().programChanges.size()==1,"PC Redo failed");
+        session.selectProgramChange(marker.id);expect(session.copyProgramChange() && session.programChangePasteReady,"Copy button did not become Paste");
+        session.command(jaras::CommandKind::editSeek,{},11.5);
+        expect(session.pasteProgramChange(),"Paste did not create a marker at the edit cursor");
+        const auto copied=session.song()->tracks.front().programChanges.back();
+        expect(copied.id!=marker.id && copied.position==11.5 && copied.name==marker.name && copied.program==marker.program && copied.channel==marker.channel,"Copy lost marker payload or identity");
+        expect(session.programChangePasteReady,"Paste should stay ready for another location");
+        session.selectProgramChange(copied.id);expect(!session.programChangePasteReady,"Selecting a head must switch back to Copy");
+        const auto roundTrip=ProjectCodec::decode(ProjectCodec::encode(session.project(),{}));
+        expect(roundTrip.songs.front().tracks.front().programChanges.back().name==copied.name,"Marker name did not survive project save");
+    });
+    test("Automatic Subplay keeps incoming items audible on chosen tracks through promotion", [&] {
+        const auto media=directory.getChildFile("subplay-track-ownership");media.createDirectory();
+        WavAudioFormat wav;auto stream=media.getChildFile("tone.wav").createOutputStream();
+        std::unique_ptr<AudioFormatWriter> writer(wav.createWriterFor(stream.get(),48000,2,24,{},0));
+        expect(writer!=nullptr,"Cannot create Subplay PCM fixture");stream.release();
+        AudioBuffer<float> tone(2,48000*25);for(int channel=0;channel<2;++channel)FloatVectorOperations::fill(tone.getWritePointer(channel),.1f,tone.getNumSamples());
+        expect(writer->writeFromAudioSampleBuffer(tone,0,tone.getNumSamples()),"Cannot write Subplay PCM fixture");writer.reset();
+        jaras::Project project;project.id=uuid();project.name="Selective Subplay";
+        jaras::Song song;song.id=uuid();song.name="Timeline";song.duration=40;song.bpm=120;
+        const auto old=uuid(),incoming=uuid();song.parts={{old,"Outgoing",0,10},{incoming,"Incoming",20,30}};
+        song.regionOwnershipInitialized=true;song.regionOwnershipVersion=3;
+        for(int i=0;i<2;++i) {
+            jaras::Track track;track.id=uuid();track.name=i?"Unselected":"Selected";track.role.id="other";
+            jaras::AudioClip clip;clip.id=uuid();clip.name="Outgoing tail";clip.duration=25;clip.audioFile=jaras::AudioFile{"tone.wav"};clip.regionOwnerID=old;
+            track.clips.push_back(clip);clip.id=uuid();clip.name="Incoming";clip.startTime=20;clip.duration=10;clip.gain=2;clip.regionOwnerID=incoming;track.clips.push_back(clip);
+            song.tracks.push_back(track);
+        }
+        project.songs={song};project.regionSetlist.emplace();project.regionSetlist->automaticSubplay=true;project.regionSetlist->automaticSubplaySeconds=1;
+        project.regionSetlist->subplayExclusiveTrackIDs=std::vector<ID>{song.tracks[0].id};
+        const auto restored=ProjectCodec::decode(ProjectCodec::encode(project,{}));
+        expect(restored.regionSetlist->subplayExclusiveTrackIDs==project.regionSetlist->subplayExclusiveTrackIDs,"Selected Subplay tracks were not saved");
+        jaras::Engine core;core.loadProject(restored);AudioEngine audio;audio.prepareOffline(48000);audio.prepareSong(*core.currentSong(),media,{},&core.project());audio.setOffline(true);
+        AudioBuffer<float> output(2,512);
+        const auto check=[&](float expected){
+            const auto& transport=core.transport();AudioEngine::State state;state.position=transport.position;state.playing=transport.playing;state.subPosition=transport.subPlay.position;state.subPlaying=transport.subPlay.playing;
+            for(int head=0;head<2;++head){state.scope[head]=jaras::playbackScope(*core.currentSong(),transport,head==1);state.exclusiveScope[head]=jaras::exclusiveSubplayScope(*core.currentSong(),transport,head==1);}
+            audio.transport(state);for(int block=0;block<8;++block)audio.render(output.getArrayOfWritePointers(),2,512);
+            expect(std::abs(output.getSample(0,256)-expected)<.002f,"Subplay item isolation changed incoming or unselected audio: "+String(output.getSample(0,256)));
+        };
+        core.execute({jaras::CommandKind::selectRegion,old});core.execute({jaras::CommandKind::play});core.execute({jaras::CommandKind::queueRegion,incoming});core.advance(9);
+        check(.6f);core.advance(1);check(.5f);
     });
     test("Unified playback renders only eligible stems for grid entry, continuous play and Ignore Next", [&] {
         const auto media = directory.getChildFile("playback-scope-fixture");
@@ -3077,6 +4926,160 @@ int runTests(const File &directory) {
         core.execute({jaras::CommandKind::stopAll}); core.execute({jaras::CommandKind::selectRegion, a}); core.execute({jaras::CommandKind::play}); core.advance(3.99);
         core.execute({jaras::CommandKind::ignoreNext}); render(0, "Ignore Next rendered past last owned audio");
     });
+    test("Unified region entry ignores long items attached to previous songs", [&] {
+        const auto media = directory.getChildFile("continuous-unified-audio");
+        media.createDirectory();
+        WavAudioFormat wav;
+        auto stream = media.getChildFile("tone.wav").createOutputStream();
+        std::unique_ptr<AudioFormatWriter> writer(wav.createWriterFor(stream.get(), 48000, 2, 24, {}, 0));
+        expect(bool(writer), "Cannot create continuous audio fixture"); stream.release();
+        AudioBuffer<float> tone(2, 48000 * 10);
+        for (int channel = 0; channel < 2; ++channel)
+            FloatVectorOperations::fill(tone.getWritePointer(channel), .1f, tone.getNumSamples());
+        expect(writer->writeFromAudioSampleBuffer(tone, 0, tone.getNumSamples()), "Cannot write audio fixture");
+        writer.reset();
+
+        auto project = Session::makeEmptyProject("Continuous audio");
+        auto &song = project.songs.front();
+        const auto intro = uuid(), group = uuid(), first = uuid(), next = uuid();
+        song.duration = 10;
+        song.parts = {{intro, "Intro", 0, 2}, {group, "Group", 3, 9}, {first, "First", 3, 7}, {next, "Next", 6, 9}};
+        song.parts[2].parentRegionID = group; song.parts[3].parentRegionID = group;
+        song.regionOwnershipInitialized = true; song.regionOwnershipVersion = 4;
+        jaras::Track track; track.id = uuid(); track.name = "Backing";
+        track.role.id = "other"; track.audioFile = jaras::AudioFile{"tone.wav"};
+        jaras::AudioClip backing; backing.id = uuid(); backing.name = "Whole show"; backing.duration = 10; backing.regionOwnerID = intro;
+        auto tail = backing; tail.id = uuid(); tail.name = "Previous song tail";
+        tail.startTime = 3; tail.duration = 4; tail.regionOwnerID = first; tail.gain = .5;
+        track.clips = {backing, tail}; song.tracks = {track};
+
+        const auto document = media.getChildFile("Show.jl");
+        ProjectCodec::write(document, ProjectCodec::encode(project));
+        jaras::Engine core; core.loadProject(ProjectCodec::decode(ProjectCodec::read(document)));
+        expect(core.currentSong()->tracks[0].clips[0].regionOwnerID == intro, "Playback must preserve saved placement");
+        AudioEngine audio; audio.prepareOffline(48000); audio.prepareSong(*core.currentSong(), media, {}, &core.project()); audio.setOffline(true);
+        AudioBuffer<float> output(2, 512);
+        const auto render = [&](float expected) {
+            const auto &transport = core.transport();
+            AudioEngine::State state; state.playing = transport.playing; state.position = transport.position;
+            state.scope[0] = jaras::playbackScope(*core.currentSong(), transport);
+            audio.transport(state);
+            for (int block = 0; block < 8; ++block) audio.render(output.getArrayOfWritePointers(), 2, 512);
+            expect(std::abs(output.getSample(0, 256) - expected) < .002f,
+                "Unexpected backing/tail mix at " + String(transport.position) + ": " + String(output.getSample(0, 256)));
+        };
+        core.execute({jaras::CommandKind::selectRegion, intro}); core.execute({jaras::CommandKind::play});
+        render(.1f);
+        core.execute({jaras::CommandKind::seek, {}, 3.25});
+        render(.05f);
+        core.execute({jaras::CommandKind::ignoreNext});
+        render(.05f);
+        core.execute({jaras::CommandKind::seek, {}, 6.25});
+        render(0);
+        core.execute({jaras::CommandKind::pause}); render(0);
+        core.execute({jaras::CommandKind::play}); render(0);
+    });
+    test("Legacy 1.36 unified songs render majority-owned pickups after save and reopen", [&] {
+        const auto media=directory.getChildFile("unified-legacy-pickup");media.createDirectory();
+        WavAudioFormat wav;auto stream=media.getChildFile("tone.wav").createOutputStream();
+        std::unique_ptr<AudioFormatWriter> writer(wav.createWriterFor(stream.get(),48000,2,24,{},0));
+        expect(bool(writer),"Cannot create legacy unified fixture");stream.release();
+        AudioBuffer<float> tone(2,48000*8);for(int ch=0;ch<2;++ch)FloatVectorOperations::fill(tone.getWritePointer(ch),.1f,tone.getNumSamples());
+        expect(writer->writeFromAudioSampleBuffer(tone,0,tone.getNumSamples()),"Cannot write legacy unified fixture");writer.reset();
+        for(bool parentOwner:{false,true}){
+            jaras::Project project;project.id=uuid();project.name="Legacy unified";
+            jaras::Song song;song.id=uuid();song.name="Timeline";song.duration=12;song.bpm=120;
+            const auto root=uuid(),outgoing=uuid(),incoming=uuid();
+            song.parts={{root,"Unified",0,12},{outgoing,"Outgoing",0,6},{incoming,"Incoming",4,12}};
+            song.parts[1].parentRegionID=root;song.parts[2].parentRegionID=root;
+            song.regionOwnershipInitialized=true;song.regionOwnershipVersion=3;
+            jaras::Track track;track.id=uuid();track.name="CLICK";track.role.id="other";
+            jaras::AudioClip clip;clip.id=uuid();clip.name="Incoming pickup";clip.startTime=3.5;clip.duration=8;clip.audioFile=jaras::AudioFile{"tone.wav"};clip.regionOwnerID=parentOwner?root:outgoing;
+            track.clips={clip};song.tracks={track};project.songs={song};
+            auto restored=ProjectCodec::decode(ProjectCodec::encode(project,{}));
+            jaras::Engine core;core.loadProject(restored);
+            expect(core.currentSong()->tracks[0].clips[0].regionOwnerID==incoming,"Legacy parent/outgoing attachment must migrate to the majority incoming song");
+            AudioEngine audio;audio.prepareOffline(48000);audio.prepareSong(*core.currentSong(),media,{},&core.project());audio.setOffline(true);
+            AudioBuffer<float> output(2,512);
+            const auto render=[&](float expected, const String& stage){
+                const auto &transport=core.transport();AudioEngine::State state;state.position=transport.position;state.playing=transport.playing;
+                state.scope[0]=jaras::playbackScope(*core.currentSong(),transport);
+                state.end=transport.ignoreNextEnd.value_or(std::numeric_limits<double>::infinity());
+                const auto& pickup=core.currentSong()->tracks[0].clips[0];
+                expect(state.scope[0].allows(jaras::playbackItemStart(*core.currentSong(), pickup)) == (expected > 0),
+                       stage + ": transport chose the wrong playback scope");
+                audio.transport(state);
+                for(int n=0;n<8;++n)audio.render(output.getArrayOfWritePointers(),2,512);
+                const auto sample=output.getSample(0,256);
+                expect(std::abs(sample-expected)<.002f,stage + ": PCM=" + String(sample) + ", expected=" + String(expected));
+            };
+            core.execute({jaras::CommandKind::editSeek,{},4.5});core.execute({jaras::CommandKind::play});render(.1f,"Incoming child plays its majority-owned pickup");
+            core.execute({jaras::CommandKind::stopAll});core.execute({jaras::CommandKind::selectRegion,outgoing});
+            core.execute({jaras::CommandKind::play});
+            core.execute({jaras::CommandKind::ignoreNext}); // Arm while still in the outgoing child.
+            core.advance(4.5);
+            expect(core.transport().ignoreNextRegionId==outgoing,"Ignore Next was not armed for the outgoing child");
+            render(0,"Ignore Next excludes the incoming pickup");
+        }
+    });
+    test("Constant audio item gain preserves PCM and channel modes", [&] { audioDSPKernelTests::gain(); });
+    test("Accelerated FFT preserves portable spectrum and round trip", [&] { audioDSPKernelTests::fft(); });
+    test("Parallel clip DSP preserves serial PCM across seeks loops and tempo changes", [&] { parallelClipAudioTests::run(directory); });
+    test("Realtime project tempo stress benchmark", [&] { tempoProjectStressTests::run(directory); });
+    test("Offline export project throughput benchmark", [&] {
+        const auto path = SystemStats::getEnvironmentVariable("CATLIVE_EXPORT_BENCH_PROJECT", {});
+        if (path.isEmpty()) return;
+        const File file(path);
+        auto project = ProjectCodec::decode(ProjectCodec::read(file));
+        expect(!project.songs.empty(),"Missing benchmark song");
+        const auto &song = project.songs.front();
+        ExportRequest request;request.directory=directory.getChildFile("offline-throughput");
+        ExportJob job;job.name="benchmark-"+text(uuid())+".wav";
+        for (const auto &region : song.parts) if (!region.parentRegionID) {job.start=region.startTime;break;}
+        job.end=job.start+30;request.jobs={job};
+        request.diagnostics=[&](const var &value){directory.getChildFile("offline-profile.json").replaceWithText(JSON::toString(value));};
+        const auto start=Time::getMillisecondCounterHiRes();double firstPCM=0,lastPCM=0;float peak=0;
+        std::atomic<bool> cancel{false};
+        audioExport::render(project,song,file.getParentDirectory(),request,cancel,{},[&](const AudioExportProgress &p){
+            if (p.fraction>0 && firstPCM==0) firstPCM=Time::getMillisecondCounterHiRes()-start;
+            if (p.fraction>=1) lastPCM=Time::getMillisecondCounterHiRes()-start;
+            peak=std::max(peak,p.peak);
+        });
+        const auto total=Time::getMillisecondCounterHiRes()-start;
+        auto report=object();put(report,"seconds",30);put(report,"totalMs",total);put(report,"firstPCMms",firstPCM);
+        put(report,"renderEndMs",lastPCM);put(report,"speed",30000/total);put(report,"peak",peak);
+        directory.getChildFile("offline-throughput.json").replaceWithText(JSON::toString(report));
+        request.directory.deleteRecursively();
+    });
+    test("Item Pre/Post export preserves trims and prints both item and track FX without changing the document", [&] {
+        const auto media=directory.getNonexistentChildFile("item-processing","");media.createDirectory();
+        WavAudioFormat wav;auto stream=media.getChildFile("source.wav").createOutputStream();
+        std::unique_ptr<AudioFormatWriter> writer(wav.createWriterFor(stream.get(),48000,2,24,{},0));
+        expect(bool(writer),"Cannot create item export source");stream.release();
+        AudioBuffer<float> signal(2,48000);for(int c=0;c<2;++c)FloatVectorOperations::fill(signal.getWritePointer(c),.05f,48000);
+        expect(writer->writeFromAudioSampleBuffer(signal,0,48000),"Cannot write item export source");writer.reset();
+        auto project=projectFixture();auto &song=project.songs[0];song.duration=2;song.parts.clear();song.markers.reset();song.tracks.resize(1);
+        auto &track=song.tracks[0];track.clips.clear();track.audioFile.reset();track.volume=.75;track.pan=0;track.mute=false;track.solo=false;
+        track.phaseInverted.reset();track.automationJSON.reset();track.role.id="other";
+        auto fx=object();put(fx,"inserted",Array<var>{"Compressor"});put(fx,"compressorEnabled",true);put(fx,"ratio",1);put(fx,"threshold",0);put(fx,"makeup",6);
+        track.fxJSON=utf8(JSON::toString(fx));project.masterFXJSON=track.fxJSON;
+        jaras::AudioClip clip;clip.id=uuid();clip.name="Trimmed";clip.startTime=.2;clip.duration=.6;clip.sourceOffset=.1;
+        clip.audioFile=jaras::AudioFile{"source.wav",{}};clip.gain=.5;clip.fxJSON=track.fxJSON;clip.fadeIn=.05;clip.fadeOut=.05;
+        track.clips={clip};const auto original=JSON::toString(ProjectCodec::encode(project));
+        for(bool pre:{true,false}) {
+            ExportRequest request;request.directory=media.getChildFile(pre?"pre":"post");request.preProcessingItems=pre;
+            ExportJob job;job.name="item.wav";job.track=track.id;job.clip=clip.id;job.start=.2;job.end=.8;request.jobs={job};
+            std::atomic<bool> cancel{false};audioExport::render(project,song,media,request,cancel,{});
+            AudioFormatManager formats;registerAudioFormats(formats);std::unique_ptr<AudioFormatReader> reader(formats.createReaderFor(request.directory.getChildFile(job.name)));
+            expect(reader && reader->lengthInSamples==28800,"Item export changed its trimmed duration");
+            AudioBuffer<float> output(2,28800);reader->read(&output,0,28800,0,true,true);
+            const auto expected=pre?.05:.05*.5*.75*std::pow(10.,12./20);
+            expect(std::abs(output.getSample(0,12000)-expected)<.001,"Item Pre/Post signal did not match item and track processing: "+String(output.getSample(0,12000)));
+            expect(JSON::toString(ProjectCodec::encode(project))==original,"Item export changed the live document");
+        }
+        const auto raw=audioExport::itemProcessingSong(song,true);
+        expect(raw.tracks[0].clips[0].sourceOffset==.1 && raw.tracks[0].clips[0].startTime==.2 && raw.tracks[0].clips[0].audioFile->path=="source.wav","Pre export changed its source or trim");
+    });
     test("WAV AIFF and native MP3 export preserve rate, bounds, channels and signal", [&] {
         const auto media = directory.getChildFile("export-fixture-" + text(uuid()));
         media.createDirectory();
@@ -3130,7 +5133,13 @@ int runTests(const File &directory) {
             job.track = track.id;
             request.jobs = {job};
             std::atomic<bool> cancel{false};
-            audioExport::render(p, song, media, request, cancel, {});
+            AudioExportProgress lastPreview; double previousProgress=0; int updates=0;
+            audioExport::render(p,song,media,request,cancel,{},[&](const auto &preview){
+                expect(preview.overall>=previousProgress,"Export progress moved backwards");
+                previousProgress=preview.overall;lastPreview=preview;++updates;
+            });
+            expect(updates>=2 && lastPreview.completed==1 && lastPreview.fraction==1,"Export preview never completed");
+            expect(lastPreview.peak>.15f && *std::max_element(lastPreview.waveform.begin(),lastPreview.waveform.end())>.15f,"Export preview did not use rendered PCM");
             AudioFormatManager formats;
             registerAudioFormats(formats);
             std::unique_ptr<AudioFormatReader> reader(
@@ -3152,6 +5161,17 @@ int runTests(const File &directory) {
                 rejected = true;
             }
             expect(rejected, "Export silently replaced an existing file");
+            reader.reset();
+            const auto output=request.directory.getChildFile(job.name);
+            MemoryBlock original;output.loadFileAsData(original);
+            request.replaceExistingFiles.insert(job.name);cancel=true;
+            try {audioExport::render(p,song,media,request,cancel,{});}catch(...){}
+            MemoryBlock afterCancel;output.loadFileAsData(afterCancel);
+            expect(original==afterCancel,"Cancelling a replacement damaged the existing export");
+            cancel=false;request.jobs[0].end=.4;
+            audioExport::render(p,song,media,request,cancel,{});
+            MemoryBlock replaced;output.loadFileAsData(replaced);
+            expect(replaced!=original,"Confirmed replacement did not publish the new audio");
         }
         {
             auto nonAudio = clip;
@@ -3188,6 +5208,66 @@ int runTests(const File &directory) {
                        tail.getMagnitude(0, 1024) > .1f,
                    "Audio after the nominal song duration was silenced");
         }
+    });
+    test("Export restores both encodings and every configuration after closing", [&] {
+        const auto settings=directory.getNonexistentChildFile("export-preferences", ".json");
+        Session session;
+        {
+            ExportPanel panel(session,{}, {}, {},false,false,settings);
+            std::vector<ComboBox*> boxes;std::vector<TextEditor*> fields;
+            for(auto *child:panel.getChildren()) {
+                if(auto *box=dynamic_cast<ComboBox*>(child))boxes.push_back(box);
+                if(auto *field=dynamic_cast<TextEditor*>(child))fields.push_back(field);
+            }
+            expect(boxes.size()==6 && fields.size()==2,"Export configuration controls missing");
+            boxes[0]->setSelectedId(3,sendNotificationSync);boxes[1]->setSelectedId(4,sendNotificationSync);
+            boxes[2]->setSelectedId(2,sendNotificationSync);boxes[3]->setSelectedId(32,sendNotificationSync);
+            boxes[4]->setSelectedId(44100,sendNotificationSync);boxes[5]->setSelectedId(1,sendNotificationSync);
+            fields[0]->setText(directory.getFullPathName());fields[1]->setText("%project - %track");
+        }
+        {
+            ExportPanel panel(session,{}, {}, {},false,false,settings);const auto saved=panel.diagnostics();
+            expect((int)get(saved,"source")==3 && (int)get(saved,"bounds")==4,"Export source/bounds were reset");
+            expect(str(saved,"primaryFormat")=="AIFF" && (int)get(saved,"primaryBits")==32,"Export encoding was reset");
+            expect((int)get(saved,"sampleRate")==44100 && (int)get(saved,"channels")==1,"Export rate/channels were reset");
+            expect(str(saved,"fileName")=="%project - %track" && str(saved,"directory")==directory.getFullPathName(),"Export filename/directory were reset");
+            expect(str(saved,"secondaryFormat")=="MP3","Secondary output default must match Mac");
+        }
+    });
+    test("Export context overrides stored source bounds and names but preserves output encodings", [&] {
+        const auto settings=directory.getNonexistentChildFile("export-context", ".json");
+        Appearance prefs(settings);auto saved=object();
+        put(saved,"source",3);put(saved,"bounds",4);put(saved,"fileName","old full project");
+        put(saved,"regionFileName","old region");put(saved,"itemFileName","old item");
+        put(saved,"primaryFormat","AIFF");put(saved,"primaryBits",32);put(saved,"secondaryFormat","MP3");
+        put(saved,"secondaryBitrate",192);put(saved,"secondary",true);put(saved,"sampleRate",44100);put(saved,"channels",1);
+        prefs.set("catlive.export.options",saved);prefs.set("jaras.export.directory",directory.getFullPathName());
+        Session session;
+        for(bool items:{false,true}) {
+            ExportPanel panel(session,{}, {}, {},false,false,settings);
+            if(items)panel.selectItems({});else panel.selectRegions({});
+            const auto state=panel.diagnostics();
+            expect((int)get(state,"source")== (items?4:1) && (int)get(state,"bounds")== (items?1:3),"Export ignored invocation context");
+            expect(str(state,"fileName")== (items?"%stem":"%region"),"Previous template replaced selected file names");
+            expect(str(state,"primaryFormat")=="AIFF" && (int)get(state,"primaryBits")==32 && str(state,"secondaryFormat")=="MP3" && (int)get(state,"secondaryBitrate")==192 && flag(state,"secondary"),"Context reset primary/secondary encodings");
+            expect(str(state,"directory")==directory.getFullPathName() && (int)get(state,"sampleRate")==44100,"Context reset destination or sample rate");
+            if(items)expect(!flag(state,"boundsEnabled"),"Item export bounds must remain locked");
+        }
+        ExportPanel general(session,{}, {}, {},false,false,settings);const auto restored=general.diagnostics();
+        expect((int)get(restored,"source")==3 && (int)get(restored,"bounds")==4 && str(restored,"fileName")=="old full project","Context polluted general export defaults");
+    });
+    test("New standard tracks inherit the selected position and group output", [&] {
+        auto project=projectFixture();auto &song=project.songs.front(); song.tracks.resize(3);
+        for(auto &track:song.tracks){track.id=uuid();track.role.id="other";track.parentTrackID.reset();}
+        const auto group=song.tracks[0].id, child=song.tracks[1].id, tail=song.tracks[2].id;
+        song.tracks[1].parentTrackID=group;
+        jaras::Track track;track.id=uuid();track.role.id="other";const auto inserted=track.id;
+        trackTree::insertAfter(song,track,child);
+        expect(song.tracks[2].id==inserted && song.tracks[3].id==tail,"New track ignored selection order");
+        expect(song.tracks[2].parentTrackID==group && song.tracks[2].outputPatches().front().firstChannel==-2,"New track bypassed the selected group master");
+        jaras::validate(project);
+        track.id=uuid();trackTree::insertAfter(song,track,{});
+        expect(!song.tracks.back().parentTrackID,"Unselected Add inherited an unrelated group");
     });
     test("Track folders preserve descendants, routing and undo across moves and removal", [&] {
         auto p = projectFixture();
@@ -3312,7 +5392,7 @@ int runTests(const File &directory) {
     });
     dynamicsTests::run(test, expect, directory);
     nativePreviewTests::run(test, expect, directory);
-#if CATLIVE_NATIVE_FRONTEND
+#if CATLIVE_NATIVE_FRONTEND || CATLIVE_IMGUI_FRONTEND
     frontendBridgeTests::run(test,expect,directory);
     frontendWaveformTests::run(test,expect,directory);
 #endif
@@ -3406,6 +5486,19 @@ int runTests(const File &directory) {
                 }
             }
         }
+    });
+    test("Offline processing refuses missing item plugins instead of publishing dry audio", [&] {
+        auto settings=fxschema::defaults(),plugin=object();
+        put(plugin,"id","missing-render-plugin");put(plugin,"name","Missing render plugin");
+        put(plugin,"path",directory.getChildFile("missing-render-plugin.vst3").getFullPathName());
+        put(plugin,"classID",String::repeatedString("A",32));
+        put(settings,"inserted",Array<var>{"External:missing-render-plugin"});
+        put(settings,"externalPlugins",Array<var>{plugin});
+        NativeFX live;live.prepare(settings,48000,nullptr,false);
+        NativeFX offline;bool failed=false;
+        try{offline.prepare(settings,48000,nullptr,true);}
+        catch(const std::exception &){failed=true;}
+        expect(failed,"Missing VST3 must abort offline item processing");
     });
     test("Failed batch FX restores live audio and preserves the existing redo transaction", [&] {
         // Reject malformed plugin state before a module is loaded.
@@ -3557,8 +5650,12 @@ int runTests(const File &directory) {
             put(plugin,"name",text(plugins[0].name));put(plugin,"path",pluginPath);put(plugin,"category",text(plugins[0].category));put(plugin,"bypassed",false);
             put(fx,"externalPlugins",Array<var>{plugin});put(fx,"inserted",Array<var>{"External:"+str(plugin,"id")});chains.push_back(fx);
         }
-        struct Running {std::atomic<bool> stop{false},finite{true};std::atomic<int> blocks{0};std::thread thread;
-            ~Running(){stop=true;if(thread.joinable())thread.join();}} running;
+        struct Running {
+            AudioEngine& audio;
+            explicit Running(AudioEngine& engine):audio(engine){audio.setExternalRenderDriven(true);}
+            std::atomic<bool> stop{false},finite{true};std::atomic<int> blocks{0};std::thread thread;
+            ~Running(){stop=true;if(thread.joinable())thread.join();audio.setExternalRenderDriven(false);}
+        } running(session.audio);
         running.thread=std::thread([&]{AudioBuffer<float> output(2,128);while(!running.stop.load()){
             {const ScopedLock lock(session.audio.devices.getAudioCallbackLock());session.audio.render(output.getArrayOfWritePointers(),2,128);}
             for(int ch=0;ch<2;++ch)for(int n=0;n<128;++n)if(!std::isfinite(output.getSample(ch,n)))running.finite=false;
@@ -3582,6 +5679,24 @@ int runTests(const File &directory) {
             session.configureEffects(target,var());session.undo();Thread::sleep(4);session.redo();
         }
         expect(running.blocks.load()>10&&running.finite.load()&&session.audio.state().playing,"Live FX stalled crashed or emitted nonfinite samples");
+    });
+    test("System defaults follow endpoint changes across project tabs and preserve explicit choices and recording", [&] { systemAudioDefaultsTests::run(); });
+    test("Audio device configuration enables all hardware channels without changing rate buffer or disabled inputs", [&] {
+        AudioDeviceManager::AudioDeviceSetup setup;
+        setup.outputDeviceName="Focusrite USB ASIO";setup.sampleRate=44100;setup.bufferSize=512;
+        setup.outputChannels.setRange(0,2,true);
+        audioDeviceChannels::enableAvailable(setup,18,8);
+        expect(setup.outputChannels.countNumberOfSetBits()==8 && setup.outputChannels[7],"Output stayed limited to the stereo startup mask");
+        expect(setup.inputChannels.isZero(),"Disabled inputs were enabled unexpectedly");
+        expect(!setup.useDefaultOutputChannels && !setup.useDefaultInputChannels,"DeviceManager can reset physical channels to stereo defaults");
+        expect(setup.sampleRate==44100 && setup.bufferSize==512,"Channel activation changed device timing");
+        setup.inputDeviceName="Focusrite USB ASIO";
+        audioDeviceChannels::enableAvailable(setup,18,8);
+        expect(setup.inputChannels.countNumberOfSetBits()==18 && setup.inputChannels[17],"Inputs stayed limited to a stereo pair");
+        audioDeviceChannels::enableAvailable(setup,2,2);
+        expect(setup.outputChannels.countNumberOfSetBits()==2 && !setup.outputChannels[7],"Switching to stereo retained unavailable channels");
+        setup.outputDeviceName.clear();audioDeviceChannels::enableAvailable(setup,2,8);
+        expect(setup.outputChannels.isZero(),"Disabled output was enabled unexpectedly");
     });
     test("Physical channel gaps preserve inputs nested groups and direct hardware outputs", [&] {
         AudioEngine engine;engine.prepareOffline(48000);engine.instrumentAllowed=true;
@@ -3642,6 +5757,13 @@ int runTests(const File &directory) {
         expect(beatEnergy(.5) > 1 && beatEnergy(.9) == 0, "Metronome did not follow quarter notes");
         expect(beatEnergy(1) > 1 && beatEnergy(1.5) == 0 && beatEnergy(2) > 1,
                "Tempo marker did not reset beat origin or change spacing");
+        ClickProgram::EnableGate enable;
+        enable.update(false, true);
+        enable.update(true, true);
+        expect(program.sample(.501, 0, 1, 1, nullptr, &enable) == 0 &&
+               program.sample(.51, 0, 1, 1, nullptr, &enable) == 0 &&
+               std::abs(program.sample(1.001, 0, 1, 1, nullptr, &enable)) > .01,
+               "Enabling the click mid-beat must wait for the next beat");
         jaras::Track track;
         track.id = uuid();
         track.name = "Click";
@@ -3652,6 +5774,21 @@ int runTests(const File &directory) {
         clip.startTime = .5;
         clip.duration = 1;
         track.clips = {clip};
+        program.prepare(song, &track);
+        expect(beatEnergy(.75) == 0, "Normal click unexpectedly subdivided the beat");
+        track.clips[0].clickDouble = true; program.prepare(song, &track);
+        expect(beatEnergy(.75) > 1, "Double click did not produce the intermediate beat");
+        expect(program.sections.front().beats == 8, "Double click moved the bar accent");
+        auto ratedTrack=track;ratedTrack.clips[0].clickDouble=false;ratedTrack.clips[0].playbackRate=1.25;
+        ClickProgram ratedProgram;ratedProgram.prepare(song,&ratedTrack);
+        expect(ratedProgram.sections.front().bpm==150,"Generated click ignored its independent item rate");
+        auto fasterSong=song;fasterSong.bpm=180;ratedTrack.clips[0].playbackRate=1.875;ratedTrack.clips[0].tempoBasePlaybackRate=1.25;
+        ratedProgram.prepare(fasterSong,&ratedTrack);
+        expect(ratedProgram.sections.front().bpm==225,"Global BPM was applied twice to the generated click");
+        auto normalPeaks = timelineGrid::clickBeats(song, clip, .5, 1.5, 100);
+        auto doublePeaks = timelineGrid::clickBeats(song, track.clips[0], .5, 1.5, 100);
+        expect(doublePeaks.size() > normalPeaks.size(), "Click waveform did not follow double speed");
+        track.clips[0].clickDouble = false;
         song.tracks = {track};
         AudioEngine engine;
         engine.prepareSong(song, directory);
@@ -3682,16 +5819,38 @@ int runTests(const File &directory) {
         put(patch, "firstChannel", 3);
         put(patch, "channelCount", 2);
         put(settings, "output", patch);
-        engine.configureMetronome(settings);
+        bool metronomeReady=false;
+        engine.configureMetronome(settings,[&](String error){expect(error.isEmpty(),"Metronome preparation failed");metronomeReady=true;});
+        const auto metronomeDeadline=Time::getMillisecondCounterHiRes()+4000;
+        while(!metronomeReady&&Time::getMillisecondCounterHiRes()<metronomeDeadline)floatingControlTests::pump();
+        expect(metronomeReady,"Metronome preparation did not complete");
         state.position = 0;
         engine.transport(state);
         engine.render(output.getArrayOfWritePointers(), 4, 4800);
+        expect(output.getMagnitude(2, 0, 4800) == 0, "Enabling a running metronome must not replay the current beat");
+        for (int block = 1; block < 6; ++block) engine.render(output.getArrayOfWritePointers(), 4, 4800);
         expect(output.getMagnitude(0, 0, 4800) == 0 && output.getMagnitude(2, 0, 4800) > .1f,
                "Metronome ignored its independent output");
         engine.metronomeEnabled = false;
         engine.transport(state);
         engine.render(output.getArrayOfWritePointers(), 4, 4800);
-        expect(output.getMagnitude(0, 4800) == 0, "Metronome toggle did not silence output");
+        expect(output.getMagnitude(2, 0, 4800) == 0, "Metronome toggle did not silence output");
+    });
+    test("Windows project writes automation defaults required by Mac", [&] {
+        auto project = projectFixture();
+        auto& track = project.songs.front().tracks.front();
+        automation::toggle(track);
+        expect(get(JSON::parse(text(*track.automationJSON)), "mode").isVoid(), "Fixture must reproduce a legacy track");
+        project.masterAutomationJSON = R"({"mode":"read","enabled":false})";
+        const auto saved = ProjectCodec::encode(project);
+        const auto root = list(get(saved, "songs"))[0];
+        const auto settings = get(list(get(root, "tracks"))[0], "automation");
+        expect(str(settings, "mode") == "trimRead" && flag(settings, "enabled") &&
+               list(get(settings, "envelopes")).size() == 1 && flag(settings, "lanesVisible"),
+               "Save changed playback or failed to serialize the default automation mode");
+        const auto master = get(saved, "masterAutomation");
+        expect(str(master, "mode") == "read" && !flag(master, "enabled", true) && get(master, "envelopes").isArray(),
+               "Explicit automation flags and modes must survive normalization");
     });
     test("Automation sample playback keeps main and Sub Play envelopes independent", [&] {
         auto envelope = automation::envelope("volume", AutomationCurve::normalized(1));
@@ -3851,6 +6010,15 @@ int runTests(const File &directory) {
                "Mac Shift+Space shortcut did not target Sub Play");
         expect(!bindings.assign("setlistUp", "keyboard", "F7"),
                "Fixed setlist keyboard navigation was reassigned");
+        int actionTrackNumber = -1;
+        bindings.invoke = [&](const String &id, float, int number) { invoked = id; actionTrackNumber = number; };
+        expect(bindings.assign("soloTrack:3", "keyboard", "F7"), "Numbered solo could not be mapped");
+        expect(bindings.inputLabel("soloTrack:4", "keyboard").isEmpty(), "Numbered track inherited another shortcut");
+        expect(!bindings.assign("soloTrack:4", "keyboard", "F7"), "Duplicate numbered action was accepted");
+        expect(bindings.key(KeyPress(KeyPress::F7Key)) && invoked == "soloTrack" && actionTrackNumber == 3,
+               "Numbered solo used the selected track");
+        expect(bindings.key(KeyPress('S', ModifierKeys::shiftModifier, 0)) && invoked == "soloTrack" && actionTrackNumber == 0,
+               "Numbered solo replaced the selected-track shortcut");
         auto midiInput = object();
         put(midiInput, "status", 0x90);
         put(midiInput, "number", 60);
@@ -3875,12 +6043,18 @@ int runTests(const File &directory) {
         bindings.begin("playStop", "keyboard");
         expect(bindings.captureKey(KeyPress(KeyPress::escapeKey)) && bindings.learning.isEmpty(),
                "Escape did not cancel learning");
+        expect(bindings.assign("reRenderItems", "keyboard", "F9") && bindings.assign("unifyAudioItems", "keyboard", "F10"),
+               "Audio processing shortcuts could not be mapped");
+        expect(!bindings.assign("reRenderItems", "midi", midiInput) && !bindings.assign("unifyAudioItems", "midi", midiInput),
+               "Keyboard-only audio processing accepted MIDI");
         Appearance reloaded(file);
         ActionBindings restored(reloaded, devices);
         restored.invoke = [&](const String &id, float, int) { invoked = id; };
         invoked.clear();
         expect(restored.key(KeyPress(KeyPress::F8Key)) && invoked == "muteTrack",
                "Mapping was lost on restart");
+        expect(restored.key(KeyPress(KeyPress::F9Key)) && invoked == "reRenderItems", "Re-render shortcut did not survive restart");
+        expect(restored.key(KeyPress(KeyPress::F10Key)) && invoked == "unifyAudioItems", "Unify audio shortcut did not survive restart");
         expect(restored.assign("muteTrack", "keyboard", {}), "Unbinding failed");
         invoked.clear();
         restored.key(KeyPress('M'));
@@ -3947,6 +6121,20 @@ int runTests(const File &directory) {
                        "Timer button context did not configure without stopping the timer");
             }
     });
+    test("Teleprompter publishes active and released loops for both projections without progress", [&] {
+        Session session; session.inspection = true; session.mediaDirectory = directory;
+        auto project = projectFixture(); project.songs.front().parts.front().startTime = 0;
+        session.restoreSnapshot(ProjectCodec::encode(project));
+        Appearance preferences(directory.getNonexistentChildFile("loop-projection", ".json"));
+        StageState stage(preferences);
+        session.command(jaras::CommandKind::toggleLoop);
+        expect(session.presentationTransport().loop.enabled, "Fixture loop was not activated");
+        for (int index : {1, 2})
+            expect(flag(StageContent::make(session, stage, index).payload, "loopActive"), "Loop status missing from projection payload");
+        session.command(jaras::CommandKind::toggleLoop);
+        for (int index : {1, 2})
+            expect(!flag(StageContent::make(session, stage, index).payload, "loopActive"), "Released loop remains visible");
+    });
     test("Stage clock, notices and independent teleprompter profiles", [&] {
         const auto file = directory.getChildFile("stage-preferences.json");
         file.replaceWithText("{}");
@@ -3990,6 +6178,26 @@ int runTests(const File &directory) {
         expect(state.noticeText(noticeStyle) == String::fromUTF8("! ATENÇÃO !"),
                "Notice case or configured emoji was ignored");
         state.clearNotice();
+        transport.playing = false; state.observe(transport);
+        state.setPinWhenStopped(true, "Stopped message");
+        expect(state.noticeActive() && state.pinned && state.stoppedNoticeActive, "Stopped notice was not pinned");
+        transport.playing = true; state.observe(transport);
+        expect(!state.noticeActive() && state.pinWhenStopped, "Play did not clear the automatic stopped notice");
+        transport.playing = false; state.observe(transport);
+        expect(state.notice == "Stopped message" && state.pinned, "Stop did not restore the captured notice");
+        const auto sent = state.noticeSent; state.observe(transport);
+        expect(state.noticeSent == sent, "Stopped ticks retriggered the notice");
+        state.sendNotice("Temporary");
+        expect(state.notice == "Temporary" && !state.pinned, "The stopped message prevented a timed notice");
+        state.clearNotice();
+        expect(state.notice == "Stopped message" && state.stoppedNoticeActive, "Cancel did not restore the stopped message");
+        state.sendNotice("Temporary");
+        state.noticeDeadline = StageState::now() - 1;
+        state.observe(transport);
+        expect(state.notice == "Stopped message" && state.stoppedNoticeActive, "Expiry did not restore the stopped message");
+        state.setPinWhenStopped(false); expect(!state.noticeActive(), "Disable did not clear the automatic notice");
+        state.sendNotice("Manual"); transport.playing = true; state.observe(transport);
+        expect(state.notice == "Manual", "Play cleared a manual notice"); state.clearNotice();
         state.set(1, "textScale", 140);
         state.set(2, "textScale", 65);
         state.selectPreset(1, "day");
@@ -4012,7 +6220,10 @@ int runTests(const File &directory) {
         TrackCapture::Target stereo{uuid(), folder.getChildFile("stereo.aiff"), 3, 2};
         TrackCapture::Target synth{uuid(), folder.getChildFile("synth.wav"), 1, 1, true};
         TrackCapture::Target midi{uuid(), {}, 1, 2, false, true};
-        TrackCapture capture({mono, stereo, synth, midi}, 48000, 24, 120);
+        TrackCapture::Target silent{uuid(), {}, 1, 2};
+        silent.silent = true;
+        silent.preview = std::make_shared<RecordingPreview>(48000, 2);
+        TrackCapture capture({mono, stereo, synth, midi, silent}, 48000, 24, 120);
         std::array<int, 128> mapping;
         mapping.fill(-1);
         mapping[2] = 0;
@@ -4045,7 +6256,11 @@ int runTests(const File &directory) {
             capture.advance(480);
         }
         auto takes = capture.finish();
-        expect(takes.size() == 4 && capture.overflows() == 0, "Capture count/overflows");
+        expect(takes.size() == 5 && capture.overflows() == 0, "Capture count/overflows");
+        silent.preview->drain();
+        expect(takes[4].track == silent.track && takes[4].file == File{} && !takes[4].midi &&
+                   std::abs(takes[4].duration - .1) < 1e-9 && silent.preview->frames.load() == 4800 &&
+                   silent.preview->history.empty(), "A recording without an input must grow without audio or waveform");
         AudioFormatManager formats;
         registerAudioFormats(formats);
         for (size_t i = 0; i < 3; ++i) {
@@ -4076,6 +6291,8 @@ int runTests(const File &directory) {
         session.cycleRecordArm(a);
         expect(session.recordingArmed(a), "Manual arm");
         session.cycleRecordArm(a);
+        expect(!session.recordingArmed(a), "Plain click disarms manual recording");
+        session.cycleRecordArm(a, {}, true);
         session.setRecordingSelection(b);
         expect(!session.recordingArmed(a), "Auto arm unselected");
         session.setRecordingSelection(a);
@@ -4463,6 +6680,39 @@ int runTests(const File &directory) {
         auto foreign=p;foreign.id=uuid();bool rejected=false;try{clipboard->items(foreign,0);}catch(...){rejected=true;}
         expect(rejected,"Clipboard crossed project media roots");
     });
+    test("Timeline clipboard pastes on the topmost selected track and cuts across tracks atomically", [&] {
+        auto p = projectFixture();
+        auto &song = p.songs[0];
+        const auto original = song.tracks[0].clips[0];
+        auto second = song.tracks[0]; second.id = "z-upper-destination"; second.clips.clear();
+        auto third = second; third.id = "a-lower-destination";
+        song.tracks.push_back(second); song.tracks.push_back(third);
+        for (bool moving : {false, true}) {
+            const auto clipboard = GridItemClipboard::copy(p, song.id, {original.id}, moving);
+            expect(bool(clipboard), "Could not copy/cut item");
+            const auto entries = clipboard->items(p, 73.125, {third.id, second.id});
+            expect(entries.size() == 1 && entries[0].id == second.id && entries[0].clips[0].startTime == 73.125,
+                   "Paste used ID order/source track instead of topmost selection and edit cursor");
+            jaras::Engine engine; engine.loadProject(p); engine.execute({jaras::CommandKind::play}); engine.advance(.5);
+            engine.pasteItems(song.id, entries, moving);
+            const auto &result = engine.project().songs[0];
+            expect(result.tracks[0].clips.size() == (moving ? 0 : 1) && result.tracks[1].clips.size() == 1 && result.tracks[2].clips.empty(),
+                   "Cross-track paste lost, duplicated or misplaced an item");
+            expect((result.tracks[1].clips[0].id == original.id) == moving, "Cut must preserve the item ID; copy must replace it");
+            expect(engine.transport().playing && engine.transport().position == .5, "Paste changed the running transport");
+            auto invalid = entries; invalid[0].clips.push_back(original); invalid[0].clips.back().id = "missing-cut-item";
+            const auto before = JSON::toString(ProjectCodec::encode(engine.project()));
+            bool rejected = false;
+            try { engine.pasteItems(song.id, invalid, true); } catch (...) { rejected = true; }
+            expect(rejected && JSON::toString(ProjectCodec::encode(engine.project())) == before, "Failed cut partially removed an item");
+        }
+        auto other = original; other.id = uuid(); other.startTime += 10;
+        song.tracks[1].clips = {other};
+        auto clipboard = GridItemClipboard::copy(p, song.id, {original.id, other.id}, true);
+        const auto entries = clipboard->items(p, 51.75, {second.id});
+        expect(entries[0].id == second.id && entries[1].id == third.id && entries[1].clips[0].startTime == 61.75,
+               "Multi-track paste lost its row/time offsets");
+    });
     test("MIDI timeline extension repeats notes and draws bottom triangular cuts", [&] {
         auto p=projectFixture();auto &track=p.songs[0].tracks[0];auto &clip=track.clips[0];
         clip.startTime=10;clip.duration=2;clip.sourceOffset=0;clip.audioFile.reset();clip.fadeIn.reset();clip.fadeOut.reset();
@@ -4475,6 +6725,64 @@ int runTests(const File &directory) {
         for(float x:{200.f,400.f}) expect(!outline.contains(x,59) && outline.contains(x,50),"Repeated MIDI item has no bottom cut");
         clip=clipEditing::resizedSource(original,6,12);const auto left=playbackNotes(track);
         expect(left.size()==6 && left.front().start==6 && left.back().start==11 && clip.midi->notes[1].start==2,"Left extension changed original MIDI notes");
+    });
+    test("Generated Click cannot leave its region through clipboard cut, paste or duplicate", [&] {
+        jaras::Project project;project.id=uuid();jaras::Song song;song.id=uuid();
+        jaras::Track click;click.id=uuid();click.role.id="generatedClick";click.name="Click";
+        jaras::AudioClip generated;generated.id=uuid();generated.startTime=10;generated.duration=20;click.clips={generated};
+        auto audio=click;audio.id=uuid();audio.role.id="other";audio.name="Audio";audio.clips[0].id=uuid();audio.clips[0].audioFile=jaras::AudioFile{"Stems/test.wav"};
+        song.tracks={click,audio};project.songs={song};
+        for(const bool moving:{false,true}) {
+            expect(!GridItemClipboard::copy(project,song.id,{generated.id},moving),"Copy/cut exposed a generated Click item");
+            const auto mixed=GridItemClipboard::copy(project,song.id,{generated.id,audio.clips[0].id},moving);
+            expect(mixed&&mixed->tracks.size()==1&&mixed->tracks[0].id==audio.id,"Mixed selection must preserve ordinary audio copying");
+            const GridItemClipboard stale{project.id,song.id,{click},moving};
+            bool rejected=false;try{stale.items(project,100);}catch(...){rejected=true;}
+            expect(rejected,"Stale clipboard pasted a generated Click into another region");
+            if(moving) {
+                auto staleAudio=stale;staleAudio.tracks[0].clips[0].audioFile=jaras::AudioFile{"Stems/old.wav"};
+                rejected=false;try{staleAudio.items(project,100);}catch(...){rejected=true;}
+                expect(rejected,"Paste ignored the current generated source when clipboard data was stale");
+            }
+        }
+    });
+    test("Generated Click splits and resizes inside its original region without moving", [&] {
+        jaras::Project project; jaras::Song song;
+        jaras::Part region{uuid(),"Original song",10,30}, other{uuid(),"Other song",30,60};
+        song.parts={region,other};
+        jaras::Track track; track.id=uuid(); track.role.id="generatedClick"; track.name="Click";
+        jaras::AudioClip clip; clip.id=clipEditing::generatedClickID(region.id); clip.startTime=10; clip.duration=20; clip.clickDouble=true;
+        track.clips={clip}; song.tracks={track}; project.songs={song};
+        auto &stored=project.songs[0].tracks[0];
+        const auto preview=clipEditing::resizedClick(project.songs[0],stored,stored.clips[0],5,45);
+        expect(preview.startTime==10 && preview.duration==20 && preview.regionOwnerID==region.id,
+               "Legacy click preview must clamp both edges to the original region");
+        clipEditing::resize(project,clip.id,12,24);
+        expect(stored.clips[0].startTime==12 && stored.clips[0].duration==12 && stored.clips[0].regionOwnerID==region.id,
+               "Click trim must store its owner and retain the trimmed duration");
+        clipEditing::resize(project,clip.id,0,100);
+        expect(stored.clips[0].startTime==10 && stored.clips[0].duration==20 && !stored.clips[0].loopLength,
+               "Click extension escaped its region or introduced repeated audio-source cuts");
+        std::map<ID,ID> sources; clipEditing::splitSelected(project.songs[0],{clip.id},18,&sources);
+        expect(stored.clips.size()==2 && stored.clips[0].duration==8 && stored.clips[1].startTime==18 && stored.clips[1].duration==12,
+               "Click must split exactly at the edit cursor");
+        for(const auto &part:stored.clips)
+            expect(part.regionOwnerID==region.id && part.clickDouble==true && !part.loopLength && part.sourceOffset==0,
+                   "Splitting changed the click multiplier, owner or beat phase");
+        expect(sources.size()==1 && sources.begin()->second==clip.id,"Split undo history lost its source");
+        for(const auto &part:stored.clips) {
+            bool rejected=false;
+            try {clipEditing::move(project,part.id,part.startTime+1);} catch(...) {rejected=true;}
+            expect(rejected,"A generated Click item can never be moved");
+        }
+        const auto rightID=stored.clips[1].id;
+        clipEditing::resize(project,rightID,18,50);
+        expect(stored.clips[1].startTime+stored.clips[1].duration==30,"Split fragment escaped into the next song");
+        auto unowned=stored.clips[1];unowned.regionOwnerID.reset();
+        expect(clipEditing::generatedClickRegion(project.songs[0],unowned)->id==region.id,
+               "Legacy split fragment did not recover its containing region");
+        unowned.regionOwnerID=uuid();
+        expect(!clipEditing::generatedClickRegion(project.songs[0],unowned),"Missing explicit owner silently changed songs");
     });
     test("Timeline trimming preserves Mac source loops, MIDI notes and track constraints", [&] {
         auto p = projectFixture();
@@ -4525,7 +6833,7 @@ int runTests(const File &directory) {
                    song.tracks[1].clips[0].startTime == 15,
                "Drag did not transfer the item to its target track");
         auto &textTrack = song.tracks[1];
-        textTrack.role.id = "teleprompt";
+        textTrack.role.id = "chords";
         textTrack.name = jaras::fixedTrackName(textTrack.role);
         textTrack.clips[0].text = "A";
         textTrack.clips[0].audioFile.reset();
@@ -4543,7 +6851,7 @@ int runTests(const File &directory) {
         } catch (...) {
             rejected = true;
         }
-        expect(rejected && textTrack.clips[0].duration == 12, "Text trim overlapped its neighbour");
+        expect(rejected && textTrack.clips[0].duration == 12, "Chord trim overlapped its neighbour");
         rejected = false;
         try {
             clipEditing::move(p, id, 0, song.tracks[0].id);
@@ -4551,6 +6859,14 @@ int runTests(const File &directory) {
             rejected = true;
         }
         expect(rejected && textTrack.clips.size() == 2, "Text item escaped its own track");
+        for (const auto *role : {"teleprompt", "teleprompt2"}) {
+            textTrack.role.id = role;
+            textTrack.name = jaras::fixedTrackName(textTrack.role);
+            textTrack.clips[0].duration = 12;
+            clipEditing::resize(p, id, 15, 30);
+            expect(textTrack.clips[0].duration == 15 && textTrack.clips[1].startTime == 28,
+                   "Teleprompter lyric trim must allow overlap without moving its neighbour");
+        }
         jaras::validate(p);
     });
     test("Remote cipher authenticates directions, counters and fragmented frames", [&] {
@@ -4852,6 +7168,78 @@ int runTests(const File &directory) {
         expect(rejected, "Remote accepted invalid project identity");
         host.stop();
     });
+    test("Remote stopped notice validates its draft and captures it through Preview and transport changes", [&] {
+        Session session;
+        session.inspection = true;
+        session.mediaDirectory = directory;
+        session.restoreSnapshot(ProjectCodec::encode(projectFixture()));
+        Appearance preferences(directory.getNonexistentChildFile("remote-stopped-notice", ".json"));
+        StageState stage(preferences);
+        remote::Presentation presentation(session, stage);
+        auto request = object();
+        put(request, "id", remote::wireID(uuid()));
+        put(request, "project", remote::wireID(session.project().id));
+        put(request, "action", "noticePinStopped");
+        put(request, "value", -1);
+        put(request, "text", "Captured global draft");
+        put(request, "enabled", true);
+        const auto command = remote::Command::decode(request);
+        expect(command.allowed("director") && command.allowed("notices") && !command.allowed("observer"),
+               "Stopped notices must use the same access roles as manual notices");
+        const auto rejects = [&](const char *key, const var &value) {
+            auto invalid = request.clone(); put(invalid, key, value);
+            try { remote::Command::decode(invalid); } catch (...) { return true; }
+            return false;
+        };
+        expect(rejects("enabled", var()) && rejects("enabled", 1) && rejects("text", var()) &&
+                   rejects("value", -2) && rejects("value", 3) && rejects("value", .5) &&
+                   rejects("target", remote::wireID(uuid())) && rejects("text", String::repeatedString("x", 501)),
+               "Stopped notice accepted a malformed enable, draft, slot or target");
+        expect(presentation.apply(command), "Remote could not enable a global stopped notice");
+        auto notice = get(presentation.snapshot(1), "notices");
+        expect(flag(notice, "pinWhenStopped") && flag(notice, "stoppedNoticeActive") &&
+                   flag(notice, "pinned") && flag(notice, "active") && str(notice, "message") == command.message,
+               "Remote stopped notice state was not published");
+        const auto browserNotice=get(StageContent::make(session,stage,1).payload,"notice");
+        expect(flag(browserNotice,"active")&&str(browserNotice,"message")==unicodeCase(command.message),
+               "Browser TP lost the stopped notice or its uppercase display text");
+        stage.preview = true;
+        auto snapshot = presentation.snapshot(1);
+        expect(flag(list(get(snapshot, "teleprompters"))[0], "preview") &&
+                   flag(get(snapshot, "notices"), "stoppedNoticeActive") && stage.noticeActive(),
+               "Preview must hide the stopped notice visually without discarding it");
+        expect(!flag(get(StageContent::make(session,stage,1).payload,"notice"),"active"),
+               "Browser TP notice overrode Preview");
+        stage.preview = false;
+        expect(stage.notice == command.message && stage.noticeActive(), "Leaving Preview lost the stopped notice");
+        session.command(jaras::CommandKind::play); stage.observe(session.presentationTransport());
+        expect(!stage.noticeActive() && stage.pinWhenStopped, "Play did not withdraw the automatic notice");
+        put(request, "text", "Selected template draft"); put(request, "value", 1);
+        Image source(Image::RGB, 2, 2, true); source.setPixelAt(0, 0, Colours::red);
+        MemoryOutputStream imageData; PNGImageFormat png;
+        expect(png.writeImageToStream(source, imageData), "Notice fixture encoding failed");
+        preferences.set("jaras.notices.image.1", imageData.getMemoryBlock().toBase64Encoding());
+        expect(presentation.apply(remote::Command::decode(request)) && !stage.noticeActive(),
+               "Arming a stopped notice while playing displayed it early");
+        preferences.set("jaras.notices.image.1", "");
+        preferences.set("jaras.notices.templates", Array<var>{"", "Changed later", ""});
+        session.command(jaras::CommandKind::stop); stage.observe(session.presentationTransport());
+        expect(stage.notice == "Selected template draft" && stage.noticeImage.getPixelAt(0, 0) == Colours::red,
+               "Stopped notice did not preserve the chosen draft and image at activation");
+        put(request, "enabled", false); put(request, "text", var());
+        expect(presentation.apply(remote::Command::decode(request)) && !stage.pinWhenStopped && !stage.noticeActive(),
+               "Remote disable must not require a draft and must withdraw the automatic notice");
+        stage.sendNotice("Manual notice");
+        expect(presentation.apply(remote::Command::decode(request)) && stage.notice == "Manual notice",
+               "Disabling stopped notices removed a manually sent notice");
+        put(request, "enabled", true); put(request, "text", ""); put(request, "value", -1);
+        expect(!presentation.apply(remote::Command::decode(request)) && !stage.pinWhenStopped,
+               "Empty global notice should not arm without an image");
+        preferences.set("jaras.notices.image.1", imageData.getMemoryBlock().toBase64Encoding());
+        put(request, "value", 1);
+        expect(presentation.apply(remote::Command::decode(request)) && stage.stoppedNoticeActive && stage.noticeImage.isValid(),
+               "An image-only stopped notice was rejected");
+    });
     test("Remote presentation keeps paths private and applies only current project commands", [&] {
         Session session;
         session.inspection = true;
@@ -4886,6 +7274,15 @@ int runTests(const File &directory) {
         expect(presentation.apply(remote::Command::decode(request)) &&
                    std::abs(session.song()->tracks[0].volume - .42) < .00001,
                "Remote track control failed");
+        put(request, "target", var());
+        put(request, "action", "pan");
+        put(request, "value", -.5);
+        expect(presentation.apply(remote::Command::decode(request)) &&
+                   std::abs(session.project().masterPan + .5) < .00001 &&
+                   std::abs((double)get(presentation.snapshot(0), "masterPan") + .5) < .00001,
+               "Remote master pan must apply and return its confirmed value");
+        put(request, "target", remote::wireID(session.song()->tracks[0].id));
+        put(request, "action", "volume");
         put(request, "project", text(uuid()));
         put(request, "value", .9);
         expect(!presentation.apply(remote::Command::decode(request)) &&
@@ -4902,6 +7299,21 @@ int runTests(const File &directory) {
         put(request, "value", 0);
         expect(presentation.apply(remote::Command::decode(request)) && !stage.running,
                "Remote timer stop failed");
+        stage.preview = false;
+        put(request, "action", "togglePreview");
+        auto previewCommand = remote::Command::decode(request);
+        expect(previewCommand.allowed("director") && !previewCommand.allowed("observer") &&
+                   !previewCommand.allowed("notices"), "Preview must remain a director control");
+        expect(presentation.apply(previewCommand) && stage.preview &&
+                   flag(presentation.snapshot(0), "previewActive"),
+               "Remote Preview controls the host and reports its state even outside TP panels");
+        expect(presentation.apply(previewCommand) && !stage.preview &&
+                   !flag(presentation.snapshot(0), "previewActive"), "Remote can turn host Preview off");
+        put(request, "action", "selectPreviewPage");
+        put(request, "value", 5);
+        expect(presentation.apply(remote::Command::decode(request)) && stage.previewPage == 5 &&
+                   num(presentation.snapshot(0), "previewPage") == 5,
+               "Remote block selection controls and reflects the host Preview page");
         directory.getChildFile("remote-state.json")
             .replaceWithText(JSON::toString(presentation.snapshot(1)));
     });
@@ -4947,7 +7359,7 @@ int runTests(const File &directory) {
             portablePackage::exportPackage(ProjectCodec::read(local),local.getParentDirectory(),root.getChildFile("Mac-Windows.ziplive"));
         }
     });
-    test("Media cleanup preserves ownership, sibling projects and encrypted recovery backups", [&] {
+    test("Media cleanup deletes own backups and preserves live shared and foreign media", [&] {
         const auto root = directory.getNonexistentChildFile("media-cleanup", {}, false);
         expect(root.getChildFile("Stems").createDirectory().wasOk() &&
                    root.getChildFile("backups").createDirectory().wasOk(),
@@ -4990,11 +7402,35 @@ int runTests(const File &directory) {
         expect(!root.getChildFile("Stems/deleted.wav").exists() &&
                    !root.getChildFile("Stems/recovery.wav").exists(),
                "Owned deleted media remained in Stems");
-        auto restored = ProjectCodec::decode(ProjectCodec::read(backupFile));
-        const auto path = text(restored.songs[0].tracks[0].clips[0].audioFile->path);
-        expect(path.startsWith("backups/Media/") &&
-                   root.getChildFile(path).loadFileAsString() == "fixture Stems/recovery.wav",
-               "Recovery backup lost its media");
+        expect(!backupFile.exists(), "Cleanup retained obsolete project backup");
+        // Cleanup also removes old backups when there are no unused grid sources.
+        // Archived media shared by another backup must remain intact.
+        make("backups/Media/old/take.wav");
+        backup.songs[0].tracks[0].clips[0].audioFile->path = "backups/Media/old/take.wav";
+        ProjectCodec::write(backupFile, ProjectCodec::encode(backup, {}));
+        auto foreign = backup; foreign.id = uuid();
+        const auto foreignFile = root.getChildFile("backups/Other.bkjl");
+        ProjectCodec::write(foreignFile, ProjectCodec::encode(foreign, {}));
+        expect(mediaCleanup::removeDeleted(current, currentRaw, doc, {}) == 0 &&
+               !backupFile.exists() && foreignFile.existsAsFile() &&
+               root.getChildFile("backups/Media/old/take.wav").existsAsFile(),
+               "Cleanup removed another project's backup or archived source");
+        foreignFile.deleteFile();
+        ProjectCodec::write(backupFile, ProjectCodec::encode(backup, {}));
+        expect(mediaCleanup::removeDeleted(current, currentRaw, doc, {}) == 1 &&
+               !backupFile.exists() && !root.getChildFile("backups/Media/old/take.wav").exists(),
+               "Cleanup left obsolete archived sources behind");
+        ProjectCodec::write(backupFile, ProjectCodec::encode(backup, {}));
+        const auto broken = root.getChildFile("backups/Broken.bkjl");
+        broken.replaceWithText("unreadable");
+        make("Stems/retained.wav");
+        bool invalidBackupRejected = false;
+        try { mediaCleanup::removeDeleted(current, currentRaw, doc, {"Stems/retained.wav"}); }
+        catch (...) { invalidBackupRejected = true; }
+        expect(invalidBackupRejected && backupFile.existsAsFile() &&
+               root.getChildFile("Stems/retained.wav").existsAsFile(),
+               "An unreadable backup must stop cleanup before any deletion");
+        broken.deleteFile();
         make("Stems/retained.wav");
         mediaCleanup::remember(current, doc, {"Stems/retained.wav"});
         expect(siblingFile.replaceWithText("unreadable"),
@@ -5070,7 +7506,7 @@ int runTests(const File &directory) {
         song.tracks[0].clips[0].loopStart = 1;
         song.tracks[0].clips[0].loopLength = 2;
         clipEditing::split(song, song.tracks[0].clips[0].id, 15);
-        expect(song.tracks[0].clips.size() == 2 && song.tracks[0].clips[1].sourceOffset == 6 &&
+        expect(song.tracks[0].clips.size() == 2 && song.tracks[0].clips[1].sourceOffset == 2 &&
                    song.tracks[0].clips[1].loopLength == 2,
                "Split reset the loop source");
         song.tracks[0].role.id = "timecode";
@@ -5102,6 +7538,9 @@ int runTests(const File &directory) {
         auto altered=clip;altered.playbackRate=1.25;altered.tempoBasePlaybackRate=1;
         expect(ClipTempo(altered).itemTitle(altered)=="[1.25] "+text(clip.name),
                "Item header omitted its changed source rate");
+        altered.playbackRate=1.159;altered.tempoBasePlaybackRate.reset();
+        expect(ClipTempo(altered).itemTitle(altered)=="[1.159] "+text(clip.name),
+               "Imported and configured rates need three decimal places in item headers");
         expect(timing.spans.size()==3 && timing.sourceAt(2)==2.5 && timing.sourceAt(4)==6.5 &&
                timing.sourceAt(6)==8.5, "Tempo change discarded source samples");
         for(double time : {0.,1.,2.,3.,4.,5.,6.})
@@ -5197,9 +7636,26 @@ int runTests(const File &directory) {
             expect(measure(clip, directory, truePeak) > measure(clip, directory, peak) + 2.5,
                    "True peak did not detect intersample peaks");
         }
-        expect(std::abs(gain(-80, 12) - std::pow(10., 24. / 20)) < 1e-9 && gain(-200, -1) == 1,
-               "Normalization gain limit or silence handling changed");
+        expect(std::abs(gain(-80, 12) - std::pow(10., 92. / 20)) < 1e-9 &&
+                   gain(-std::numeric_limits<double>::infinity(), -1) == 1,
+               "Normalization must reach the target above +24 dB and leave digital silence unchanged");
     });
+    if(const auto source=SystemStats::getEnvironmentVariable("CATLIVE_NORMALIZE_FILE",{});source.isNotEmpty())
+        test("External MP3 batch normalization reads complete source without audio devices",[&] {
+            AudioFormatManager formats;registerAudioFormats(formats);
+            const File file(source);std::unique_ptr<AudioFormatReader> reader(formats.createReaderFor(file));
+            expect(reader!=nullptr,"Cannot open normalization fixture");
+            jaras::AudioClip clip;clip.id=uuid();clip.name="Batch MP3";clip.duration=reader->lengthInSamples/reader->sampleRate;
+            clip.audioFile=jaras::AudioFile{utf8(file.getFileName()),{}};
+            Array<var> measurements;
+            for(auto mode:{normalization::peak,normalization::rms,normalization::lufs}) {
+                double progress=0;
+                const auto value=normalization::measure(clip,file.getParentDirectory(),mode,{},[&](double p){progress=p;});
+                expect(std::isfinite(value)&&progress>.999,"Batch normalization did not finish the entire MP3");
+                measurements.add(value);
+            }
+            directory.getChildFile("normalization-mp3.json").replaceWithText(JSON::toString(measurements,true));
+        });
     test("Large timeline streams first and last files, independent heads and loop seeks with a bounded cache", [&] {
         const auto media = directory.getChildFile("large-streams"); media.createDirectory();
         const auto source = media.getChildFile("source.wav");
@@ -5297,6 +7753,25 @@ int runTests(const File &directory) {
         expect(!audio.preparingTransport(),"Arming a queue re-prepared the running sources");
         render();
         expect(audio.state().position>beforeRouting,"Routing update rewound the active source clock");
+        // Automatic Subplay must not reopen the outgoing source at its current
+        // position. The queue already warmed the incoming head independently.
+        for(int i=0;i<240;++i)render(); // Move outside the original pinned onset.
+        AudioEngine::State subDestination;subDestination.subPlaying=true;subDestination.subPosition=20;
+        audio.prewarmTransportDestination(subDestination);
+        for(int i=0;i<30;++i)floatingControlTests::pump();
+        auto joining=audio.state();joining.subPlaying=true;joining.subPosition=20.037;joining.followMainClock=true;
+        for(int i=0;i<3;++i)render(); // Device advances after the UI sampled its clock.
+        const auto mainAtJoin=audio.state().position;
+        const auto subAtJoin=joining.subPosition+mainAtJoin-joining.position;
+        audio.transportAsync(joining);
+        expect(!audio.preparingTransport(),"Automatic Subplay re-prepared outgoing audio and delayed its musical entry");
+        render();
+        expect(std::abs(audio.state().position-(mainAtJoin+256./48000.))<1e-7,
+               "Automatic Subplay rewound the outgoing music");
+        expect(std::abs(audio.state().subPosition-(subAtJoin+256./48000.))<1e-7,
+               "Automatic Subplay lost its Config Init offset while joining the device clock");
+        expect(std::abs((audio.state().subPosition-audio.state().position)-(joining.subPosition-joining.position))<1e-7,
+               "The configured incoming bar no longer aligns with the outgoing end");
         state.playing=false;state.position=0;audio.transportAsync(state);render();
         for(int i=0;i<180;++i)floatingControlTests::pump(); // Beyond the old two-second eviction.
         state.playing=true;audio.transportAsync(state);
@@ -5354,6 +7829,8 @@ int runTests(const File &directory) {
             while(audio.preparingTransport() && Time::getMillisecondCounterHiRes()-started<5000)
                 floatingControlTests::pump();
             expect(!audio.preparingTransport(),"Middle Play never finished preparation");
+            expect((int64)audio.streamDiagnostics()["fallbackDecoderOpens"]==0,
+                   "Preparing a stopped cold destination opened competing fallback decoders");
             const auto elapsed=Time::getMillisecondCounterHiRes()-started;
             auto measurement=object();put(measurement,"position",at);put(measurement,"milliseconds",elapsed);measurements.add(measurement);
             expect(reference->read(&expected,0,256,(int64)std::llround(at*44100),true,true),"Reference MP3 read failed");
@@ -5414,6 +7891,58 @@ int runTests(const File &directory) {
             expect(std::abs(session.transport().position-expected)<1e-7,"Core drifted from the callback loop clock");
             expect(!session.audio.transportClockPending(),"An already executed loop scheduled another seek");
         }
+    });
+    test("Entering a Parts loop arms the callback before its first jump without replaying the onset", [&] {
+        auto project=floatingControlTests::fixture();auto &song=project.songs.front();
+        jaras::TimelineMarker first,last;first.id=uuid();last.id=uuid();
+        first.name="$First";first.position=.02;first.section=true;
+        last.name="$Last";last.position=.09;last.section=true;
+        song.markers=std::vector<jaras::TimelineMarker>{first,last};
+        jaras::MultiLoop loop;loop.id=uuid();loop.name="Parts loop";loop.marker1=first.id;loop.marker2=last.id;loop.fadeSeconds=1;
+        song.parts.front().multiLoops.push_back(loop);
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        session.command(jaras::CommandKind::play);
+        const auto repositions=(int64)session.audio.streamDiagnostics()["transportRepositions"];
+        AudioBuffer<float> output(2,256);
+        for(int i=0;i<100;++i) {
+            session.audio.render(output.getArrayOfWritePointers(),2,256);
+            session.projectSyncFrame();
+            const double elapsed=(i+1)*256./48000.;
+            const double expected=elapsed<.09?elapsed:.02+std::fmod(elapsed-.02,.07);
+            // An exact end-of-block boundary may be published as loop.end;
+            // its next sample is loop.start. Compare the same cyclic phase.
+            const auto distance=[&](double at){const auto delta=std::abs(at-expected);return std::min(delta,std::abs(delta-.07));};
+            expect(distance(session.audio.state().position)<1e-7,"First Parts jump was late or replayed an onset: block="+String(i)+
+                " actual="+String(session.audio.state().position,9)+" expected="+String(expected,9)+
+                " core="+String(session.transport().position,9)+" loop="+String((int)session.transport().loop.enabled)+
+                " from="+String(session.transport().loop.start.value_or(-1),9)+" to="+String(session.transport().loop.end.value_or(-1),9));
+            expect(distance(session.transport().position)<1e-7,"Parts model and sample clock disagree at the first lap");
+            expect((int64)session.audio.streamDiagnostics()["transportRepositions"]==repositions,
+                   "Parts loop scheduled a second seek after the callback jump");
+        }
+    });
+    test("Live tempo shares a 500 ms admission window and rejects typed changes while playing", [&] {
+        jaras::Project project;project.id=uuid();project.name="Tempo gate";
+        jaras::Song song;song.id=uuid();song.name="Song";song.duration=60;
+        song.timeSettings=jaras::ProjectTimeSettings{};song.timeSettings->timebase=jaras::ProjectTimebase::free;
+        project.songs={song};
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(project));session.audio.setOffline(true);
+        double now=100;session.tempoEditClock=[&]{return now;};
+        session.command(jaras::CommandKind::play);
+        session.setTempo(121);expect(session.tempoBPM()==121,"First live step was delayed");
+        session.setTempo(122);session.setTempo(120);
+        expect(session.tempoBPM()==121,"Live controls bypassed the shared admission window");
+        now+=.499;session.setTempo(120);expect(session.tempoBPM()==121,"Accepted before 500 ms");
+        now+=.001;session.setTempo(120);expect(session.tempoBPM()==120,"Rejected exact 500 ms boundary");
+        session.setTypedTempo(180);expect(session.tempoBPM()==120,"Typed tempo changed during playback");
+        now+=10;expect(session.tempoBPM()==120,"Rejected commands accumulated");
+        session.command(jaras::CommandKind::stopAll);
+        session.setTypedTempo(180);session.setTempo(181);session.setTempo(182);
+        expect(session.tempoBPM()==182,"Stopped edits were throttled");
+        session.command(jaras::CommandKind::play);session.setTempo(183);
+        expect(session.tempoBPM()==183,"New playback inherited the old admission deadline");
     });
     auto report = object();
     Array<var> names;

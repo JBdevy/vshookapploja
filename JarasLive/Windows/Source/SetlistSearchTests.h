@@ -1,5 +1,6 @@
 #pragma once
 #include "FloatingControlTests.h"
+#include "PlaylistEditor.h"
 
 namespace catlive::setlistSearchTests {
 inline void require(bool value,const char *message) { if (!value) throw std::runtime_error(message); }
@@ -29,6 +30,94 @@ inline void click(Workspace &workspace,int row) {
     floatingControlTests::pump();
 }
 template <typename Test> void registerTests(const File &directory,Test &test) {
+    test("Search Enter returns focus to workspace instead of the inline timer",[&] {
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(fixture()));session.audio.setOffline(true);
+        Auth auth;Lighting lighting(session);Workspace workspace(session,auth,lighting,false,directory.getNonexistentChildFile("search-enter-focus",".json"));
+        DocumentWindow host("Search focus",theme::background,0);
+        host.setContentNonOwned(&workspace,false);host.setBounds(50,50,1366,768);host.setVisible(true);
+        workspace.projectOpened(false);workspace.grabKeyboardFocus();floatingControlTests::pump();
+        for(int repeat=0;repeat<3;++repeat) {
+            workspace.keyStateChanged(false);
+            require(host.getPeer()->handleKeyPress(KeyPress(KeyPress::tabKey)),"Tab did not open search");floatingControlTests::pump();
+            auto *field=dynamic_cast<TextEditor*>(uiFeatureTests::find(host,"setlistSearchField"));
+            require(field&&field->hasKeyboardFocus(false),"Search did not receive keyboard focus");
+            field->setText("Final",false);field->onTextChange();
+            require(host.getPeer()->handleKeyPress(KeyPress(KeyPress::returnKey)),"Search did not consume Enter");
+            for(int i=0;i<4;++i)floatingControlTests::pump();
+            require(!flag(get(workspace.diagnostics(),"setlist"),"searching"),"Enter did not finish search");
+            require(workspace.hasKeyboardFocus(false),"Search focused a timer input after closing");
+            auto *hours=dynamic_cast<TextEditor*>(uiFeatureTests::find(workspace,"timerHours"));
+            require(hours==nullptr,"Toolbar still contains a timer Hours input");
+        }
+        host.clearContentComponent();
+    });
+    test("Playlist chooser toggles plain clicks and retains selections across searches",[&] {
+        const auto project=fixture();jaras::RegionPlaylist saved;bool committed=false;
+        PlaylistEditor editor(project.songs[0],nullptr,[&](auto result){saved=std::move(result);committed=true;},[]{});
+        editor.setSize(360,500);
+        auto *rows=dynamic_cast<ListBox*>(uiFeatureTests::find(editor,"playlistSongs"));
+        auto *query=dynamic_cast<TextEditor*>(uiFeatureTests::find(editor,"playlistSearch"));
+        auto *name=dynamic_cast<TextEditor*>(uiFeatureTests::find(editor,"playlistName"));
+        auto *save=dynamic_cast<TextButton*>(uiFeatureTests::find(editor,"playlistSave"));
+        require(rows&&query&&name&&save,"Playlist search controls missing");
+        const auto search=[&](const String &value){query->setText(value,false);query->onTextChange();};
+        const auto click=[&](int row){rows->selectRowsBasedOnModifierKeys(row,ModifierKeys{},false);};
+        require(rows->getModel()->getNumRows()==4,"Playlist chooser included drawer children");
+        click(0);click(1);
+        require(rows->isRowSelected(0)&&rows->isRowSelected(1),"Plain click cleared another selected song");
+        click(1);require(rows->isRowSelected(0)&&!rows->isRowSelected(1),"Clicking selected song did not toggle it off");
+        search("CANCAO");require(rows->getModel()->getNumRows()==2&&rows->isRowSelected(0),"Search lost accents or the selected song");
+        click(1);search("no matching song");require(rows->getModel()->getNumRows()==0,"Search did not filter songs");
+        name->setText("Test",false);name->onTextChange();require(save->isEnabled(),"Hidden selections cannot be saved");
+        search("");require(rows->isRowSelected(0)&&rows->isRowSelected(2)&&!rows->isRowSelected(1),"Clearing search changed selected songs");
+        search("Final");save->onClick();
+        require(committed&&saved.regionIds==std::vector<ID>{"early","outside"},"Playlist omitted hidden selected songs or added unselected results");
+    });
+    test("Playlist chooser saves songs in click order including reselected and filtered songs",[&] {
+        const auto project=fixture();jaras::RegionPlaylist saved;
+        PlaylistEditor editor(project.songs[0],nullptr,[&](auto result){saved=std::move(result);},[]{});
+        auto *rows=dynamic_cast<ListBox*>(uiFeatureTests::find(editor,"playlistSongs"));
+        auto *query=dynamic_cast<TextEditor*>(uiFeatureTests::find(editor,"playlistSearch"));
+        auto *name=dynamic_cast<TextEditor*>(uiFeatureTests::find(editor,"playlistName"));
+        auto *save=dynamic_cast<TextButton*>(uiFeatureTests::find(editor,"playlistSave"));
+        rows->selectRowsBasedOnModifierKeys(3,ModifierKeys{},false);
+        rows->selectRowsBasedOnModifierKeys(0,ModifierKeys{},false);
+        rows->selectRowsBasedOnModifierKeys(3,ModifierKeys{},false);
+        rows->selectRowsBasedOnModifierKeys(3,ModifierKeys{},false);
+        query->setText("CANCAO",false);query->onTextChange();
+        rows->selectRowsBasedOnModifierKeys(1,ModifierKeys{},false);
+        name->setText("Ordered",false);name->onTextChange();save->onClick();
+        require(saved.regionIds==std::vector<ID>{"early","late","outside"},"Playlist used timeline order instead of selection order");
+    });
+    test("Playlist chooser search adds songs without removing existing entries",[&] {
+        const auto project=fixture();jaras::RegionPlaylist saved;
+        PlaylistEditor editor(project.songs[0],&project.regionSetlist->playlists[0],[&](auto result){saved=std::move(result);},[]{},true);
+        auto *rows=dynamic_cast<ListBox*>(uiFeatureTests::find(editor,"playlistSongs"));
+        auto *query=dynamic_cast<TextEditor*>(uiFeatureTests::find(editor,"playlistSearch"));
+        auto *save=dynamic_cast<TextButton*>(uiFeatureTests::find(editor,"playlistSave"));
+        require(rows&&query&&save&&!save->isEnabled(),"Existing songs counted as new selections");
+        query->setText("CANCAO",false);query->onTextChange();
+        rows->selectRowsBasedOnModifierKeys(0,ModifierKeys{},false);
+        query->setText("Medley",false);query->onTextChange();save->onClick();
+        require(saved.regionIds==std::vector<ID>{"late","early"},"Filtered addition replaced existing songs");
+    });
+
+    test("Setlist search Tab reopens after every popup close without a workspace key-up",[&] {
+        Session session;session.inspection=true;session.audio.prepareOffline(48000);
+        session.restoreSnapshot(ProjectCodec::encode(fixture()));session.audio.setOffline(true);
+        Auth auth;Lighting lighting(session);Workspace workspace(session,auth,lighting,false,directory.getNonexistentChildFile("search-tab-repeat",".json"));
+        workspace.setSize(1366,768);workspace.addToDesktop(ComponentPeer::windowIsTemporary);workspace.setVisible(true);workspace.grabKeyboardFocus();
+        floatingControlTests::pump();const KeyPress tab(KeyPress::tabKey);
+        for(int i=0;i<6;++i) {
+            require(workspace.keyPressed(tab),"Tab did not reach the Setlist search command");floatingControlTests::pump();
+            require(flag(get(workspace.diagnostics(),"setlist"),"searching"),"Search failed to reopen after the previous Tab close");
+            auto *field=dynamic_cast<TextEditor*>(uiFeatureTests::find(workspace,"setlistSearchField"));
+            require(field && field->keyPressed(tab),"Tab did not close the search editor");floatingControlTests::pump();
+            require(!flag(get(workspace.diagnostics(),"setlist"),"searching"),"Tab left a search popup open");
+        }
+    });
+
     test("Tab toggles focused setlist search and Advanced changes both numbering modes persistently",[&] {
         auto project=fixture();project.regionSetlist->playlists[0].regionIds={"outside","early","late"};
         Session session;session.inspection=true;session.audio.prepareOffline(48000);

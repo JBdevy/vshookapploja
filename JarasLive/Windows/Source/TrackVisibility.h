@@ -1,6 +1,7 @@
 #pragma once
 #include "Appearance.h"
 #include "TrackTree.h"
+#include "Localization.h"
 
 namespace catlive {
 // Presentation preferences belong to this computer/project, never to the audio
@@ -17,8 +18,9 @@ class TrackVisibility {
         for(auto panel:{Panel::trackMixer,Panel::barMixer})
             for(const auto &value:list(appearance.value(key(project,panel))))
                 if(value.isString()&&value.toString().isNotEmpty())next[index(panel)].insert(utf8(value.toString()));
-        const bool changed=projectID!=project||hidden!=next;
-        projectID=project;hidden=std::move(next);return changed;
+        const bool changed = projectID != project || hidden != next;
+        projectID = project; hidden = std::move(next);
+        return changed;
     }
     bool ownVisible(Panel panel,const ID &id) const { return hidden[index(panel)].count(id)==0; }
     bool visible(const jaras::Song &song,Panel panel,const ID &id) const {

@@ -11,16 +11,17 @@ class RecordingOptionsPanel final : public Component, private Timer {
     static void show(Session &session, ID source, std::set<ID> selection,
                      Component &anchor, std::function<void(String)> error) {
         if (!selection.count(source)) selection = {source};
-        CallOutBox::launchAsynchronously(
+        auto &box = CallOutBox::launchAsynchronously(
             std::make_unique<RecordingOptionsPanel>(session, std::move(source), std::move(selection), std::move(error)),
             anchor.getScreenBounds(), nullptr);
+        box.setDismissalMouseClicksAreAlwaysConsumed(false);
     }
 
     RecordingOptionsPanel(Session &owner, ID track, std::set<ID> selected, std::function<void(String)> failure)
         : session(owner), source(std::move(track)), targets(std::move(selected)),
           project(owner.project().id), error(std::move(failure)),
           modes({"Mono", "Stereo", "MIDI"}), monitor({"Monitor On", "Monitor Off"}),
-          fader({"Pre-fader", "Post-fader"}), effects({"Pre-FX", "Post-FX"}), signal({"Entrada", "Saida"}) {
+          fader({"Pre-fader", "Post-fader"}), effects({"Pre-FX", "Post-FX"}), signal({"Entrada", String::fromUTF8("Saída")}) {
         setComponentID("trackRecordingOptions");
         addAndMakeVisible(modes);
         modes.setComponentID("recordingMode");
@@ -59,28 +60,29 @@ class RecordingOptionsPanel final : public Component, private Timer {
         fader.setComponentID("recordingFaderStage"); effects.setComponentID("recordingFXStage");
         fader.changed = [this](int choice) { change([choice](jaras::Track &track) { track.recordingPostFader = choice == 1; }); };
         effects.changed = [this](int choice) { change([choice](jaras::Track &track) { track.recordingPostFX = choice == 1; }); };
-        setSize(318, 300);
+        setSize(350, 256);
         refresh();
         startTimerHz(5);
     }
     ~RecordingOptionsPanel() override { stopTimer(); }
 
     void paint(Graphics &g) override {
-        g.setColour(Colours::white);
-        g.setFont(theme::font(13.f, true));
-        g.drawText(localization::translate("Recording mode"), 16, 12, getWidth() - 32, 24, Justification::centredLeft);
-        if (!midi) {
-            g.setFont(theme::font(12.f));
-            g.drawText(localization::translate("Format"), 16, 88, 66, 26, Justification::centredLeft);
-        }
+        g.setColour(Colours::white); g.setFont(theme::semiboldFont(13));
+        g.drawText(localization::translate("Recording mode"), 24, 6, getWidth()-48, 24, Justification::centredLeft);
+        g.setFont(theme::font(13));
+        g.setColour(Colours::white.withMultipliedAlpha(midi ? .35f : 1.f));
+        for (const auto &row : std::array<std::pair<String,int>,4>{{
+            {String::fromUTF8("Gravar sinal"),76}, {"Formato",112},
+            {String::fromUTF8("Nível da gravação"),148}, {String::fromUTF8("Efeitos na gravação"),184}}})
+            g.drawText(localization::translate(row.first), 24, row.second, row.second<148?78:128, 24, Justification::centredLeft);
     }
     void resized() override {
-        modes.setBounds(16, 48, getWidth() - 32, 28);
-        format.setBounds(84, 88, getWidth() - 100, 28);
-        fader.setBounds(16, 172, getWidth() - 32, 28);
-        effects.setBounds(16, 214, getWidth() - 32, 28);
-        monitor.setBounds(16, 256, getWidth() - 32, 28);
-        signal.setBounds(16, 130, getWidth() - 32, 28);
+        modes.setBounds(24,40,210,24);
+        signal.setBounds(103,76,142,24);
+        format.setBounds(82,112,168,24);
+        fader.setBounds(144,148,168,24);
+        effects.setBounds(154,184,138,24);
+        monitor.setBounds(24,220,188,24);
     }
 
   private:
@@ -99,16 +101,17 @@ class RecordingOptionsPanel final : public Component, private Timer {
                 buttons[index]->setToggleState(index == selected, dontSendNotification);
         }
         void allowLast(bool allow) { buttons.getLast()->setVisible(allow); visibleCount=buttons.size()-(allow?0:1); resized(); }
+        void setLabel(int index, String name) { buttons[index]->setButtonText(std::move(name)); }
         void resized() override {
             for (int index = 0; index < buttons.size(); ++index) {
                 const int left = index * getWidth() / (visibleCount?visibleCount:buttons.size());
                 const int right = (index + 1) * getWidth() / (visibleCount?visibleCount:buttons.size());
-                buttons[index]->setBounds(left + 2, 2, right - left - 4, getHeight() - 4);
+                buttons[index]->setBounds(left, 0, right - left, getHeight());
             }
         }
         void paint(Graphics &g) override {
-            g.setColour(Colour(0xff383838));
-            g.fillRoundedRectangle(getLocalBounds().toFloat(), 5.f);
+            g.setColour(Colour(0xff555653));
+            g.fillRoundedRectangle(getLocalBounds().toFloat(), 6.f);
         }
       private:
         class Segment final : public Button {
@@ -116,10 +119,10 @@ class RecordingOptionsPanel final : public Component, private Timer {
             explicit Segment(String title) : Button(std::move(title)) { setWantsKeyboardFocus(true); }
             void paintButton(Graphics &g, bool over, bool down) override {
                 if (getToggleState() || over || down) {
-                    g.setColour(Colour(getToggleState() ? 0xff666666 : 0xff494949).withMultipliedAlpha(isEnabled() ? 1.f : .4f));
-                    g.fillRoundedRectangle(getLocalBounds().toFloat(), 3.f);
+                    g.setColour(Colour(getToggleState() ? 0xff66bd43 : 0xff62635e).withMultipliedAlpha(isEnabled() ? 1.f : .4f));
+                    g.fillRoundedRectangle(getLocalBounds().toFloat(), 6.f);
                 }
-                g.setFont(theme::font(12.f));
+                g.setFont(theme::font(13.f));
                 g.setColour(Colours::white.withMultipliedAlpha(isEnabled() ? 1.f : .35f));
                 g.drawText(getName(), getLocalBounds().reduced(4, 0), Justification::centred, false);
             }
@@ -151,25 +154,28 @@ class RecordingOptionsPanel final : public Component, private Timer {
             return;
         }
         const bool vinhetas=current->role.id=="vinhetas";
-        const bool output=vinhetas||current->recordingOutput.value_or(false);
-        modes.allowLast(!vinhetas);
-        signal.select(output?1:0);signal.setEnabled(!vinhetas&&!session.busy&&!session.audio.isRecording());
-        const int channels = vinhetas?std::max(1,current->recordingChannels.value_or(2)):current->recordingChannels.value_or(2);
+        const bool main = current->receivesMain();
+        const bool output=main||vinhetas||current->recordingOutput.value_or(false);
+        modes.allowLast(!vinhetas && !main);
+        signal.setLabel(1, main ? String("Main") : localization::translate("Saída"));
+        signal.select(output?1:0);
+        const int channels = (vinhetas || main) && current->recordingChannels == 0 ? 2 : current->recordingChannels.value_or(2);
+        midi = channels == 0;
         modes.select(channels == 0 ? 2 : channels - 1);
         modes.setEnabled(!session.busy && !session.audio.isRecording());
-        format.setEnabled(!session.busy && !session.audio.isRecording());
-        monitor.setEnabled(!session.busy);
-        fader.setEnabled(output && !session.busy && !session.audio.isRecording());
-        effects.setEnabled(output && !session.busy && !session.audio.isRecording());
+        format.setEnabled(!midi && !session.busy && !session.audio.isRecording());
+        monitor.setEnabled(!main && !session.busy);
+        signal.setEnabled(!main && !midi && !vinhetas && !session.busy && !session.audio.isRecording());
+        fader.setEnabled(!main && !midi && output && !session.busy && !session.audio.isRecording());
+        effects.setEnabled(!main && !midi && output && !session.busy && !session.audio.isRecording());
         format.setSelectedId(!current->recordingFormat ? 1 : current->recordingFormat == "wav" ? 2 : current->recordingFormat == "wav32" ? 3 : 4, dontSendNotification);
-        monitor.select(current->inputMonitoring.value_or(true) ? 0 : 1);
-        fader.select(output && current->recordingPostFader.value_or(true) ? 1 : 0);
-        effects.select(output && current->recordingPostFX.value_or(true) ? 1 : 0);
-        midi = channels == 0;
-        format.setVisible(!midi);
-        monitor.setVisible(!midi&&!vinhetas);signal.setVisible(!midi);
-        fader.setVisible(!midi); effects.setVisible(!midi);
-        setSize(318, midi ? 92 : vinhetas ? 256 : 300);
+        monitor.select(!main && current->inputMonitoring.value_or(session.recordingArmed(source)) ? 0 : 1);
+        fader.select(main || (output && current->recordingPostFader.value_or(true)) ? 1 : 0);
+        effects.select(main || (output && current->recordingPostFX.value_or(true)) ? 1 : 0);
+        // Match the Mac: changing recording mode must not resize/reanchor the
+        // callout. Audio-only options stay visible and disabled in MIDI mode.
+        monitor.setVisible(!vinhetas);
+        setSize(350, (vinhetas ? 220 : 256));
         repaint();
     }
     void timerCallback() override { refresh(); }
@@ -182,16 +188,16 @@ class RecordingOptionsPanel final : public Component, private Timer {
                     auto after = track; edit(after);
                     changed = changed || after.recordingChannels != track.recordingChannels ||
                               after.recordingFormat != track.recordingFormat || after.inputMonitoring != track.inputMonitoring ||
-                              after.midiInput != track.midiInput || after.recordingPostFader != track.recordingPostFader ||
+                              after.midiInput != track.midiInput || after.midiChannel != track.midiChannel || after.recordingPostFader != track.recordingPostFader ||
                               after.recordingPostFX != track.recordingPostFX || after.recordingOutput != track.recordingOutput;
                 }
         if (!changed) return;
         try {
-            session.edit([&](jaras::Project &project) {
+            session.editTrackSettings([&](jaras::Project &project) {
                 for (auto &song : project.songs)
                     for (auto &track : song.tracks)
                         if (targets.count(track.id) && jaras::fixedTrackName(track.role).empty()) edit(track);
-            }, false);
+            });
         } catch (const std::exception &failure) {
             if (error) error(String::fromUTF8(failure.what()));
         }

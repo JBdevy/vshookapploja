@@ -11,7 +11,7 @@ class ModalSheet final : public Component {
         setName(heading);
         const bool selfContained = (bool)content->getProperties()["selfContainedSheet"];
         if (selfContained) content->setName(heading);
-        headerHeight = selfContained ? 0 : heading == String::fromUTF8("Configurações") || heading == "Projetos" ? 76
+        headerHeight = selfContained ? 0 : heading == String::fromUTF8("Configurações") || heading == "Projetos" || heading == String::fromUTF8("Início") ? 76
                        : heading == "Resolume"                                               ? 66
                                                                                              : 44;
         close.getProperties().set("textClose", heading == "Resolume");
@@ -30,7 +30,7 @@ class ModalSheet final : public Component {
     void paint(Graphics &g) override {
         g.fillAll(Colours::black.withAlpha(.48f));
         DropShadow(Colours::black.withAlpha(.3f), 20, {0, 8}).drawForRectangle(g, frame);
-        g.setColour(theme::background);
+        g.setColour((bool)content->getProperties()["homeSheet"] ? theme::homeBackground : theme::background);
         g.fillRoundedRectangle(frame.toFloat(), (float)(double)content->getProperties().getWithDefault("sheetCornerRadius",16.0));
         if (headerHeight == 0) return;
         g.setColour(theme::line);
@@ -66,14 +66,17 @@ class ModalSheet final : public Component {
         return false;
     }
     static void open(Component &parent, String name, std::unique_ptr<Component> panel, int width,
-                     int height) {
+                     int height, std::function<void()> didClose = {}) {
         const SafePointer<Component> previousFocus(Component::getCurrentlyFocusedComponent());
         auto *sheet = new ModalSheet(std::move(name), std::move(panel), width, height);
         parent.addAndMakeVisible(sheet);
         sheet->setBounds(parent.getLocalBounds());
         sheet->toFront(true);
         sheet->enterModalState(
-            true, ModalCallbackFunction::create([safe = SafePointer<Component>(&parent), previousFocus](int) {
+            true, ModalCallbackFunction::create([safe = SafePointer<Component>(&parent), previousFocus, didClose = std::move(didClose)](int) {
+                // Run after JUCE removes the modal component, so native child
+                // controls are restored against the unobscured workspace.
+                if (didClose) MessageManager::callAsync(didClose);
                 if (previousFocus && previousFocus->isShowing() && !previousFocus->isCurrentlyBlockedByAnotherModalComponent()) {
                     previousFocus->grabKeyboardFocus(); return;
                 }
@@ -146,7 +149,7 @@ class ModalSheet final : public Component {
                 g.fillRoundedRectangle(getLocalBounds().toFloat(), 5);
                 g.setColour(Colours::white);
                 g.setFont(theme::font(12));
-                g.drawText("Fechar", getLocalBounds(), Justification::centred);
+                g.drawText(localization::translate("Fechar"), getLocalBounds(), Justification::centred);
                 return;
             }
             g.setColour(over ? Colours::white : theme::secondary);

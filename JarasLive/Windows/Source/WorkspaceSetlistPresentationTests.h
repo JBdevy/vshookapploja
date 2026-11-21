@@ -50,7 +50,7 @@ struct WorkspaceSetlistPresentationTests {
             require(workspace.setlistPlacement==side && workspace.setlistDockSide==side &&
                     list->getParentComponent()==&workspace && right->getParentComponent()==&workspace,
                     "Docked Setlist or Parts retained the floating parent or wrong side");
-            require(workspace.setlistVisible && list->isVisible() && workspace.setlistDivider.isVisible() &&
+            require(workspace.setlistVisible && list->isVisible() && workspace.setlistDivider.isVisible() == (side == Placement::left) &&
                     (!workspace.setlistWindow || !workspace.setlistWindow->isVisible()),
                     "Docking left a duplicate Setlist window or hidden list");
             const auto grid=workspace.getLocalArea(canvas,canvas->getLocalBounds());
@@ -58,12 +58,17 @@ struct WorkspaceSetlistPresentationTests {
                     workspace.getLocalBounds().contains(list->getBounds()) && !list->getBounds().intersects(grid),
                     "Docked Setlist overlaps or clips the timeline");
             if (side==Placement::left) {
-                require(list->getX()==32 && list->getRight()==workspace.tracksViewport.getX() &&
-                        workspace.tracksViewport.getRight()==grid.getX() && !workspace.partsLeftVisible,
+                require(list->getX()==0 && list->getRight()==workspace.setlistDivider.getX() &&
+                        workspace.setlistDivider.getWidth()==6 &&
+                        workspace.setlistDivider.getRight()==workspace.tracksViewport.getX() &&
+                        workspace.tracksViewport.getRight()==workspace.mixerDivider.getX() &&
+                        workspace.mixerDivider.getWidth()==6 && workspace.mixerDivider.getRight()==grid.getX() &&
+                        !workspace.partsLeftVisible,
                         "Left Setlist is not before the track mixer or did not close left Parts");
             } else {
-                require(workspace.tracksViewport.getX()==32 && list->getX()==grid.getRight(),
-                        "Right Setlist changed the track mixer origin or left a gap after the grid");
+                require(workspace.tracksViewport.getX()==0 && grid.getRight()+timelineGrid::verticalScrollbarWidth==list->getX() &&
+                        workspace.setlistDivider.getWidth()==0,
+                        "Right Setlist changed the mixer origin or no longer meets the grid scrollbar");
             }
             if (workspace.partsRightVisible)
                 require(right->isVisible() && right->getRight()==workspace.getWidth() &&
@@ -105,7 +110,7 @@ struct WorkspaceSetlistPresentationTests {
                     panel->getLocalBounds().contains(list->getBounds()) && panel->getLocalBounds().contains(right->getBounds()) &&
                     window->getWidth()>=620 && (bool)get(right->diagnostics(),"secondaryTab"),
                     "Detached Parts is clipped, lost its bank or overlaps the Setlist");
-            require(workspace.tracksViewport.getX()==32 && workspace.setlistWidth==savedWidth &&
+            require(workspace.tracksViewport.getX()==0 && workspace.setlistWidth==savedWidth &&
                     workspace.setlistDockSide==side,
                     "Detaching changed the remembered dock width, origin or side");
             workspace.setSetlistPlacement(Placement::detached);
@@ -124,7 +129,11 @@ struct WorkspaceSetlistPresentationTests {
             require(right->isVisible() && (bool)get(right->diagnostics(),"secondaryTab"),
                     "Reopening detached Parts lost its selected tab");
             workspace.browserVisible=true;workspace.resized();
-            require(!window->isVisible(),"Detached Setlist stayed above the project browser");
+            require(window->isVisible() && list->getParentComponent()==panel,
+                    "Session closed the editor's detached Setlist");
+            workspace.projectReady=false;workspace.resized();
+            require(!window->isVisible(),"Detached Setlist stayed open at startup without a project");
+            workspace.projectReady=true;
             workspace.browserVisible=false;workspace.resized();
             require(window->isVisible(),"Returning to the editor did not restore detached Setlist");
             workspace.loginPanel=std::make_unique<Component>();workspace.resized();

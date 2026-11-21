@@ -58,7 +58,7 @@ public class RemoteNetworkTest {
   touch(grid,down,android.view.MotionEvent.ACTION_DOWN,100,ruler);touch(grid,down,android.view.MotionEvent.ACTION_MOVE,300,ruler);
   assertTrue(grid.needleDragging);assertEquals(12,grid.needleCandidate,.001);assertTrue(Double.isNaN(grid.needlePreview));assertEquals(0,app.state.optDouble("editPosition"),.001);
   touch(grid,down,android.view.MotionEvent.ACTION_UP,500,ruler);await(()->Math.abs(app.state.optDouble("editPosition")-20)<.001);assertFalse(grid.needleDragging);
-  down=android.os.SystemClock.uptimeMillis();float head=RemoteWidgets.dp(RemoteTimeline.RULER_TOP-2);
+  down=android.os.SystemClock.uptimeMillis();float head=RemoteWidgets.dp(RemoteTimeline.HEADER_HEIGHT-RemoteTimeline.TICK_HEIGHT/2);
   touch(grid,down,android.view.MotionEvent.ACTION_DOWN,grid.x(20),head);assertTrue(grid.needleDragging);touch(grid,down,android.view.MotionEvent.ACTION_MOVE,grid.x(10),head);assertEquals(10,grid.needleCandidate,.001);assertTrue(Double.isNaN(grid.needlePreview)||Math.abs(grid.needlePreview-20)<.001);assertEquals(20,app.state.optDouble("editPosition"),.001);
   touch(grid,down,android.view.MotionEvent.ACTION_CANCEL,250,head);assertFalse(grid.needleDragging);assertTrue(Double.isNaN(grid.needlePreview));assertEquals(20,app.state.optDouble("editPosition"),.001);
   app.remote.action("play");await(()->app.state.optBoolean("playing"));

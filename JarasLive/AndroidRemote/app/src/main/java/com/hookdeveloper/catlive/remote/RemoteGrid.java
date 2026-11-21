@@ -62,15 +62,23 @@ final class RemoteGrid extends View {
             if(offset>=duration()-duration()/zoom)itemHeadersHidden=false;
         }else itemHeadersHidden=false;
         List<Tick> gridTicks=ticks(sections(s,start()+duration()),start()+offset,start()+offset+duration()/zoom,pixelsPerSecond()/density,s.optInt("gridDivisions",4));
+        boolean showsGrid=s.optBoolean("gridLines",true);
         for(Tick tick:gridTicks){
             float at=x(tick.time);paint.setStrokeWidth(1);
-            paint.setColor(0xff54ff93);canvas.drawLine(at,dp(HEADER_HEIGHT)-1-dp(tick.primary?5:3),at,dp(HEADER_HEIGHT)-1,paint);
-            if(!tick.label.isEmpty()){paint.setTextSize(9*density);paint.setTypeface(Typeface.MONOSPACE);canvas.save();canvas.clipRect(0,dp(RULER_TOP),width,dp(HEADER_HEIGHT));canvas.drawText(tick.label,at+dp(3),dp(RULER_TOP)-paint.ascent(),paint);canvas.restore();}
-        }
-        if(s.optBoolean("gridLines",true)){
-            paint.setStrokeWidth(.5f);paint.setPathEffect(null);
-            for(Tick tick:gridTicks){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x535250:0x333235)));float at=x(tick.time);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);}
-            paint.setStrokeWidth(1);
+            float end=dp(HEADER_HEIGHT)-1;
+            if(showsGrid&&tick.drawsInGrid){
+                paint.setColor(rgb(s.optLong("gridPrimaryColor",0x535250)));
+                canvas.drawLine(at,dp(RULER_TOP+(tick.label.isEmpty()?NUMBER_HEIGHT:0)),at,end,paint);
+            }else{
+                paint.setColor(Color.WHITE);
+                canvas.drawLine(at,end-dp(tick.drawsInGrid?12:8),at,end,paint);
+            }
+            if(!tick.label.isEmpty()){
+                paint.setColor(Color.WHITE);paint.setTextSize(dp(12));paint.setTypeface(bold);
+                canvas.save();canvas.clipRect(0,dp(RULER_TOP),width,dp(RULER_TOP+NUMBER_HEIGHT));
+                canvas.drawText(tick.label,at+dp(3),dp(RULER_TOP+NUMBER_HEIGHT/2)-(paint.ascent()+paint.descent())/2,paint);
+                canvas.restore();
+            }
         }
         float y=dp(HEADER_HEIGHT)-vertical;
         for(RemoteModel.TrackLayout layout:app.layout.ordered){
@@ -87,17 +95,17 @@ final class RemoteGrid extends View {
             }
             canvas.restore();y+=row;
         }
-        if(s.optBoolean("gridLines",true)){
-            paint.setStrokeWidth(.5f);paint.setPathEffect(null);
-            for(Tick tick:gridTicks){paint.setColor(rgb(s.optLong(tick.primary?"gridPrimaryColor":"gridSecondaryColor",tick.primary?0x535250:0x333235)));float at=x(tick.time);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);}
+        if(showsGrid){
+            paint.setStrokeWidth(.5f);paint.setPathEffect(null);paint.setColor(rgb(s.optLong("gridPrimaryColor",0x535250)));
+            for(Tick tick:gridTicks)if(tick.drawsInGrid){float at=x(tick.time);canvas.drawLine(at,dp(HEADER_HEIGHT),at,height,paint);}
             paint.setStrokeWidth(1);
         }
         markers(canvas,s,width,height);
-        paint.setColor(0xff444444);paint.setStrokeWidth(dp(1));for(int edge:new int[]{0,REGION_HEIGHT,RULER_TOP,HEADER_HEIGHT})canvas.drawLine(0,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,width,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,paint);
+        paint.setColor(0xff444444);paint.setStrokeWidth(dp(1));for(int edge:new int[]{0,REGION_HEIGHT,RULER_TOP,RULER_TOP+NUMBER_HEIGHT,HEADER_HEIGHT})canvas.drawLine(0,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,width,dp(edge)+(edge==HEADER_HEIGHT?-.5f:.5f)*density,paint);
         if(s.optBoolean("loop")&&!s.isNull("loopStart")&&!s.isNull("loopEnd"))loopArea(canvas,x(s.optDouble("loopStart")),x(s.optDouble("loopEnd")),height);
-        cursor(canvas,Double.isFinite(needlePreview)?needlePreview:s.optDouble("editPosition",pos),rgb(s.optLong("editCursorColor",0x69ed91)),height,RULER_TOP);
-        if(s.optBoolean("playing"))cursor(canvas,pos,rgb(s.optLong("playCursorColor",0x69ed91)),height,HEADER_HEIGHT);
-        if(s.optBoolean("subPlaying"))cursor(canvas,s.optDouble("subPlayPosition"),rgb(s.optLong("subPlayCursorColor",0xffdc52)),height,HEADER_HEIGHT);
+        cursor(canvas,Double.isFinite(needlePreview)?needlePreview:s.optDouble("editPosition",pos),rgb(s.optLong("editCursorColor",0x69ed91)),height,false);
+        if(s.optBoolean("playing"))cursor(canvas,pos,rgb(s.optLong("playCursorColor",0x69ed91)),height,true);
+        if(s.optBoolean("subPlaying"))cursor(canvas,s.optDouble("subPlayPosition"),rgb(s.optLong("subPlayCursorColor",0xffdc52)),height,true);
     }
     void markers(Canvas canvas,JSONObject s,float width,float height){
         List<JSONObject> markers=new ArrayList<>();for(JSONObject marker:RemoteModel.list(RemoteModel.array(s,"markers")))if(!RemoteModel.gridTempoMarker(s,marker)&&marker.optDouble("position")>=start()&&marker.optDouble("position")<=start()+duration())markers.add(marker);
@@ -127,14 +135,15 @@ final class RemoteGrid extends View {
         outline.moveTo(b,top);outline.lineTo(b-head,top);outline.lineTo(b,top+12*density);outline.close();
         paint.setColor(YELLOW);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);canvas.drawPath(outline,paint);paint.setStyle(Paint.Style.FILL);
     }
-    void cursor(Canvas c,double time,int color,float h,int top){
+    void cursor(Canvas c,double time,int color,float h,boolean glowing){
         float at=x(time);if(!Float.isFinite(at)||at<0||at>getWidth())return;
-        boolean glowing=top==HEADER_HEIGHT;float line=(glowing?3:2)*density,y=dp(top);at=Math.max(0,Math.min(getWidth()-line,at));
+        float line=(glowing?3:2)*density,y=dp(HEADER_HEIGHT);at=Math.max(0,Math.min(getWidth()-line,at));
         if(glowing){float trail=Math.min(at,38*density);if(trail>0){paint.setColor(Color.WHITE);paint.setShader(new LinearGradient(at-trail,0,at,0,new int[]{RemoteItemDrawing.alpha(color,0),RemoteItemDrawing.alpha(color,.16f),RemoteItemDrawing.alpha(color,.65f)},new float[]{0,.5f,1},Shader.TileMode.CLAMP));c.drawRect(at-trail,y,at,h,paint);paint.setShader(null);}}
         paint.setColor(RemoteItemDrawing.alpha(color,glowing?.18f:.08f));c.drawRect(at-2*density,y,at+line+2*density,h,paint);
         paint.setColor(color);c.drawRect(at,y,at+line,h,paint);
         if(glowing){paint.setColor(0xccffffff);c.drawRect(at+density,y,at+2*density,h,paint);}
-        paint.setColor(color);Path head=new Path();float center=at+line/2;head.moveTo(center-7*density,y);head.lineTo(center+7*density,y);head.lineTo(center,y+9*density);head.close();c.drawPath(head,paint);
+        paint.setColor(color);Path head=new Path();float center=at+line/2,headTop=y-dp(TICK_HEIGHT);
+        head.moveTo(center-7*density,headTop);head.lineTo(center+7*density,headTop);head.lineTo(center,y);head.close();c.drawPath(head,paint);
     }
     void cancelNeedle(){needleDragging=false;needleCandidate=Double.NaN;needlePreview=Double.NaN;if(getParent()!=null)getParent().requestDisallowInterceptTouchEvent(false);}
     String seekTarget(){String target=RemoteModel.id(app.state,"focusedRegion");if(target.isEmpty())target=RemoteModel.id(app.state,"currentRegion");return RemoteModel.region(app.state,target)!=null?target:RemoteModel.id(region,"id");}
@@ -146,7 +155,7 @@ final class RemoteGrid extends View {
         if(action==MotionEvent.ACTION_DOWN&&canMoveNeedle()){
             double current=Double.isFinite(needlePreview)?needlePreview:app.state.optDouble("editPosition",app.displayPosition());
             boolean ruler=e.getY()>=dp(RULER_TOP)&&e.getY()<dp(HEADER_HEIGHT);
-            boolean head=e.getY()>=dp(RULER_TOP-4)&&e.getY()<=dp(RULER_TOP+16)&&Math.abs(e.getX()-x(current))<=dp(18);
+            boolean head=e.getY()>=dp(RULER_TOP+NUMBER_HEIGHT)&&e.getY()<=dp(HEADER_HEIGHT)&&Math.abs(e.getX()-x(current))<=dp(18);
             if(ruler||head){
                 MotionEvent cancel=MotionEvent.obtain(e);cancel.setAction(MotionEvent.ACTION_CANCEL);gesture.onTouchEvent(cancel);cancel.recycle();
                 needleDragging=true;needleRegion=seekTarget();needleCandidate=seekSeconds(e.getX());

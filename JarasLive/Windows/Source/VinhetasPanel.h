@@ -1,6 +1,9 @@
 #pragma once
+#include "Localization.h"
 #include "Appearance.h"
 #include "VinhetasAudio.h"
+#include "VinhetasPackage.h"
+#include <deque>
 namespace catlive {
 class VinhetasPanel final : public Component, private Timer {
     friend struct VinhetasPanelProbe;
@@ -9,6 +12,35 @@ class VinhetasPanel final : public Component, private Timer {
     struct Preset { String name; unsigned colour=0x626262; std::array<PadData,16> pads; };
     std::function<void()> createTrack;
     std::function<void(String,unsigned,std::function<void(String,unsigned)>)> edit;
+    static File mediaFolder() {
+        return File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("Hook Developer/CatLive/Vinhetas");
+    }
+    static File padSampleDirectory() { return mediaFolder().getChildFile("Pads"); }
+    static uint64_t padSamplesRevision() { return sampleRevision; }
+    static Result deletePadSamples() {
+        if (transferBusy || instances.empty()) return Result::fail("Wait for the current Pads transfer.");
+        const auto folder = padSampleDirectory();
+        if (folder.exists() && !folder.moveToTrash()) return Result::fail("Could not remove the Pads sample folder.");
+        ++padSampleGeneration;
+        auto *owner = *instances.begin();
+        if (owner->revision != globalRevision) owner->loadState(globalState);
+        for (auto *panel : instances) {
+            for (int preset = 0; preset < 6; ++preset) {
+                for (int pad = 0; pad < 16; ++pad) {
+                    auto &data = panel->presets[size_t(preset)].pads[size_t(pad)];
+                    if (data.file.getParentDirectory() != folder) continue;
+                    panel->audio.enqueue({VinhetasAudio::Kind::stopPad, 0, preset, pad});
+                    panel->cache.erase(data.file.getFullPathName());
+                    data.file = File{};
+                    data.sample = nullptr;
+                }
+            }
+            panel->refresh();
+        }
+        owner->save();
+        ++sampleRevision;
+        return Result::ok();
+    }
 
     VinhetasPanel(VinhetasAudio &audio, Appearance &appearance) : audio(audio), appearance(appearance) {
         if(globalState.isVoid())globalState=appearance.value("jaras.vinhetas",var{}).clone();
@@ -21,7 +53,7 @@ class VinhetasPanel final : public Component, private Timer {
         for(int n=0;n<16;++n) {
             auto &pad=pads[(size_t)n];pad.owner=this;pad.index=n;addAndMakeVisible(pad);
             auto &gate=gates[(size_t)n];gate.onClick=[this,n]{current(n).gate=!current(n).gate;if(current(n).gate)this->audio.enqueue({VinhetasAudio::Kind::stopPad,0,selected,n});save();refresh();};addAndMakeVisible(gate);
-            auto &slider=sliders[(size_t)n];slider.setSliderStyle(Slider::LinearHorizontal);slider.setTextBoxStyle(Slider::NoTextBox,false,0,0);slider.setRange(0,2,.001);
+            auto &slider=sliders[(size_t)n];slider.setSliderStyle(Slider::LinearHorizontal);slider.setTextBoxStyle(Slider::NoTextBox,false,0,0);slider.setRange(0,2,.001);slider.setDoubleClickReturnValue(true,1.0);
             slider.onValueChange=[this,n]{current(n).volume=(float)sliders[(size_t)n].getValue();this->audio.enqueue({VinhetasAudio::Kind::volume,0,selected,n,current(n).volume});updateDB(n);};slider.onDragEnd=[this]{save();};addAndMakeVisible(slider);
             dbLabels[(size_t)n].setFont(theme::semiboldFont(10));dbLabels[(size_t)n].setBorderSize(BorderSize<int>(0));addAndMakeVisible(dbLabels[(size_t)n]);
         }
@@ -38,6 +70,37 @@ class VinhetasPanel final : public Component, private Timer {
         select(selected);startTimerHz(20);
     }
     ~VinhetasPanel() override { instances.erase(this);audio.learningMIDI=false; }
+    void transferPackage(bool importing, Component *owner = nullptr) {
+        if(transferBusy)return;
+        chooser=std::make_unique<FileChooser>(importing?"Import Presets":"Export Preset",File::getSpecialLocation(File::userDocumentsDirectory).getChildFile("CatLive-Pads.zipfx"),"*.zipfx",true,false,owner ? owner->getTopLevelComponent() : getTopLevelComponent());
+        SafePointer<VinhetasPanel> safe(this);
+        chooser->launchAsync((importing?FileBrowserComponent::openMode:FileBrowserComponent::saveMode|FileBrowserComponent::warnAboutOverwriting)|FileBrowserComponent::canSelectFiles,[safe,importing](const FileChooser &picker){
+            if(!safe||safe->transferBusy)return;auto file=picker.getResult();if(file==File{})return;
+            if(!importing)file=file.withFileExtension(".zipfx");
+            safe->save();const auto snapshot=globalState.clone();const auto folder=safe->mediaFolder();
+            const auto staging=folder.getChildFile(".import-"+Uuid().toString());
+            transferBusy=true;for(auto *panel:instances)panel->setEnabled(false);
+            Thread::launch([safe,importing,file,snapshot,folder,staging]{
+                var imported;String failure;
+                try {if(importing)imported=vinhetasPackage::prepareImport(file,staging);else vinhetasPackage::exportFile(snapshot,folder,file);}
+                catch(const std::exception &e){failure=String::fromUTF8(e.what());}
+                MessageManager::callAsync([safe,importing,imported,failure,folder,staging,snapshot]()mutable{
+                    Array<File> moved;
+                    if(safe&&failure.isEmpty()&&importing)try{
+                        for(const auto &source:staging.findChildFiles(File::findFiles,false)){
+                            const auto target=folder.getChildFile(source.getFileName());packageZIP::require(source.moveFileTo(target));moved.add(target);
+                        }
+                        packageZIP::require(folder.getChildFile("Vinhetas-before-import.json").replaceWithText(JSON::toString(snapshot)));
+                        const auto saved=safe->appearance.set("jaras.vinhetas",imported);packageZIP::require(saved.wasOk(),saved.getErrorMessage().toRawUTF8());
+                        globalState=imported.clone();++globalRevision;
+                        for(auto *panel:instances){panel->remotePanic();panel->heldNotes.clear();panel->pressedCC.clear();panel->learning=-1;panel->audio.learningMIDI=false;panel->loadState(globalState);panel->refresh();panel->preload();}
+                    }catch(const std::exception &e){for(const auto &file:moved)file.deleteFile();failure=String::fromUTF8(e.what());}
+                    staging.deleteRecursively();transferBusy=false;for(auto *panel:instances)panel->setEnabled(true);
+                    if(safe)AlertWindow::showMessageBoxAsync(failure.isEmpty()?MessageBoxIconType::InfoIcon:MessageBoxIconType::WarningIcon,"Pads",failure.isEmpty()?String::fromUTF8("Transferência concluída."):failure);
+                });
+            });
+        });
+    }
     String setlistBlockMIDIConflict(const var &input) const {
         StringArray names;
         for (const auto &key : {String("padMappings"), String("presetMappings")}) {
@@ -61,15 +124,59 @@ class VinhetasPanel final : public Component, private Timer {
         for (auto *panel : instances) { panel->loadState(globalState); panel->refresh(); }
         return Result::ok();
     }
-    void select(int preset) { selected=jlimit(0,5,preset);refresh();save();preload(); }
+    var remoteSnapshot(bool available) const {
+        auto result = object(); put(result, "selectedPreset", selected); put(result, "available", available);
+        Array<var> banks;
+        for (int p=0; p<6; ++p) {
+            auto bank = object(); const auto &preset=presets[(size_t)p];
+            put(bank,"name",preset.name); put(bank,"color",(int)preset.colour); Array<var> values;
+            for (int n=0; n<16; ++n) {
+                const auto &pad=preset.pads[(size_t)n]; auto value=object();
+                put(value,"name",pad.name);put(value,"color",(int)pad.colour);put(value,"volume",(double)pad.volume);
+                put(value,"gate",pad.gate);put(value,"loaded",pad.sample!=nullptr);put(value,"active",audio.active(p,n));values.add(value);
+            }
+            put(bank,"pads",values);banks.add(bank);
+        }
+        put(result,"presets",banks);Array<var> received;
+        for(const auto &id:remotePresses)received.add(Uuid(text(id)).toDashedString().toUpperCase());
+        put(result,"receivedPresses",received);return result;
+    }
+    bool remoteDown(const ID &id, int preset, int pad) {
+        if(preset<0||preset>=6||pad<0||pad>=16)return false;
+        if(std::find(remotePresses.begin(),remotePresses.end(),id)!=remotePresses.end())return false;
+        remotePresses.push_back(id);if(remotePresses.size()>256)remotePresses.pop_front();
+        if (preset!=selected || remoteHeld.size()>=128 || remoteHeld.count(id)) return false;
+        const auto voice=start(pad);if(!voice)return false;
+        if(current(pad).gate)remoteHeld[id]=voice;
+        repaint();return true;
+    }
+    void remoteUp(const ID &id) {
+        auto held=remoteHeld.find(id);if(held==remoteHeld.end())return;
+        audio.enqueue({VinhetasAudio::Kind::stop,held->second});remoteHeld.erase(held);repaint();
+    }
+    void remoteVolume(int preset,int pad,double volume) {
+        if(transferBusy)return;
+        if(preset<0||preset>=6||pad<0||pad>=16||!std::isfinite(volume)||volume<0||volume>2)return;
+        presets[(size_t)preset].pads[(size_t)pad].volume=(float)volume;
+        audio.enqueue({VinhetasAudio::Kind::volume,0,preset,pad,(float)volume});save();refresh();
+    }
+    void remoteGate(int preset,int pad,bool enabled) {
+        if(transferBusy)return;
+        if(preset<0||preset>=6||pad<0||pad>=16)return;
+        auto &data=presets[(size_t)preset].pads[(size_t)pad];
+        if(enabled&&!data.gate)audio.enqueue({VinhetasAudio::Kind::stopPad,0,preset,pad});
+        data.gate=enabled;save();refresh();
+    }
+    void remotePanic() { if(panic.onClick)panic.onClick();remoteHeld.clear(); }
+    void select(int preset) { if(transferBusy)return;selected=jlimit(0,5,preset);refresh();save();preload(); }
     bool midi(int status,int number,int value,int channel) {
         const int normalized=status==0x80?0x90:status;
         const bool down=status!=0x80&&value>0;
         const int key=(normalized<<16)|(channel<<8)|number;
-        if(learning>=0&&down&&(channelFilter()==0||channelFilter()==channel)) {
+        if(!transferBusy&&learning>=0&&down&&(channelFilter()==0||channelFilter()==channel)) {
             var mapping(new DynamicObject());put(mapping,"status",normalized);put(mapping,"number",number);put(mapping,"channel",channel);
             if(learningPreset)presetMappings[(size_t)learning]=mapping;else padMappings[(size_t)learning]=mapping;
-            learning=-1;audio.learningMIDI=false;save();repaint();return true;
+            learning=-1;audio.learningMIDI=false;save();refresh();return true;
         }
         if(!down) {
             pressedCC.erase(key);
@@ -120,20 +227,26 @@ class VinhetasPanel final : public Component, private Timer {
         }
     };
     struct Fader : Slider {
+        void mouseDoubleClick(const MouseEvent &event) override { Slider::mouseDoubleClick(event); if(onDragEnd)onDragEnd(); }
         void paint(Graphics &g) override {
             const float width=(float)getWidth(),height=(float)getHeight();
-            g.setColour(Colour(0xff808080));g.fillRoundedRectangle(7,(height-4)/2,std::max(0.f,width-14),4,2);
-            g.setColour(Colour(0xffd9d9d9));g.fillEllipse(std::max(0.f,width-14)*(float)getValue()/2,(height-14)/2,14,14);
+            g.setColour(Colours::white.withAlpha(.22f));g.fillRoundedRectangle(6,(height-6)/2,std::max(0.f,width-12),6,3);
+            const float x=6+std::max(0.f,width-12)*(float)getValue()/2;
+            g.setColour(Colour(0xffe0e0e0));g.fillRoundedRectangle(x-6,height/2-9,12,18,2);
+            g.setColour(Colour(0xff555555));g.fillRect(x-.5f,height/2-6,1.f,12.f);
         }
     };
-    struct Pad : Component {
+    struct Pad : Component, DragAndDropTarget, FileDragAndDropTarget {
         VinhetasPanel *owner=nullptr;int index=0;uint64_t held=0;bool pressed=false;
+        bool receiving = false;
         bool isLit() const { return pressed || owner->audio.active(owner->selected,index); }
         void paint(Graphics &g) override {
             const auto &data=owner->current(index);const Colour base(0xff000000|data.colour);const bool lit=isLit();
             g.setColour(lit?base.interpolatedWith(Colours::white,.18f):base.withAlpha(.45f));g.fillRoundedRectangle(getLocalBounds().toFloat(),5);
             if(lit){g.setColour(base.interpolatedWith(Colours::white,.6f));g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1),5,2);}
-            g.setColour(Colours::white);g.setFont(theme::font(11,true));g.drawFittedText(data.name,getLocalBounds().reduced(3),Justification::centred,2);
+            if (receiving) { g.setColour(theme::green); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1), 5, 2); }
+            g.setColour(Colours::white);g.setFont(theme::font(11,true));
+            g.drawFittedText(data.name,getLocalBounds().reduced(3),Justification::centred,2);
         }
         void mouseDown(const MouseEvent &event) override {
             if(event.mods.isPopupMenu()){owner->menu(owner->selected,index);return;}
@@ -142,6 +255,28 @@ class VinhetasPanel final : public Component, private Timer {
             if(token&&owner->current(index).gate)held=token;
         }
         void mouseUp(const MouseEvent &) override { if(held)owner->audio.enqueue({VinhetasAudio::Kind::stop,held});held=0;pressed=false;repaint(); }
+        bool isInterestedInDragSource(const SourceDetails &source) override {
+            return !transferBusy && str(source.description, "type") == "catlive-library-sampler";
+        }
+        void itemDragEnter(const SourceDetails &) override { receiving = true; repaint(); }
+        void itemDragExit(const SourceDetails &) override { receiving = false; repaint(); }
+        void itemDropped(const SourceDetails &source) override {
+            itemDragExit(source);
+            if (isInterestedInDragSource(source)) owner->importAudio(File(str(source.description, "file")), owner->selected, index, AudioOrigin::library);
+        }
+        bool isInterestedInFileDrag(const StringArray &files) override {
+            return !transferBusy && files.size() == 1 && File(files[0]).existsAsFile() &&
+                File(files[0]).hasFileExtension("wav;wave;aif;aiff;flac;mp3;ogg;m4a;aac");
+        }
+        void fileDragEnter(const StringArray &files, int, int) override {
+            receiving = isInterestedInFileDrag(files);
+            repaint();
+        }
+        void fileDragExit(const StringArray &) override { receiving = false; repaint(); }
+        void filesDropped(const StringArray &files, int, int) override {
+            fileDragExit(files);
+            if (isInterestedInFileDrag(files)) owner->importAudio(File(files[0]), owner->selected, index);
+        }
     };
     VinhetasAudio &audio;Appearance &appearance;
     std::array<Preset,6> presets;
@@ -159,6 +294,9 @@ class VinhetasPanel final : public Component, private Timer {
     inline static ThreadPool loaders{2};
     inline static var globalState;
     inline static uint64_t globalRevision=0;
+    inline static std::array<uint64_t, 96> pendingImports{};
+    inline static uint64_t padSampleGeneration = 0;
+    inline static uint64_t sampleRevision = 0;
     uint64_t revision=0;
     std::array<var,16> padMappings;
     std::array<var,6> presetMappings;
@@ -166,8 +304,9 @@ class VinhetasPanel final : public Component, private Timer {
     std::set<String> loading;
     std::set<int> pressedCC;
     std::map<int,std::vector<uint64_t>> heldNotes;
+    std::map<ID,uint64_t> remoteHeld;
+    std::deque<ID> remotePresses;
     int learning=-1;bool learningPreset=false;
-    File mediaFolder() const {return File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("Hook Developer/CatLive/Vinhetas");}
     void loadState(const var &stored) {
         selected=jlimit(0,5,(int)get(stored,"selectedPreset",0));
         channel=jlimit(0,16,(int)get(stored,"midiChannel",0));
@@ -235,21 +374,126 @@ class VinhetasPanel final : public Component, private Timer {
         for(int p=0;p<6;++p){presetButtons[(size_t)p].setButtonText(presets[(size_t)p].name);presetButtons[(size_t)p].setColour(TextButton::buttonColourId,Colour(0xff000000|presets[(size_t)p].colour).withAlpha(p==selected?1.f:.45f));}
         previous.setEnabled(selected>0);next.setEnabled(selected<5);repaint();
     }
+    inline static bool transferBusy=false;
     void save() {
+        if(transferBusy)return;
         var root(new DynamicObject());put(root,"selectedPreset",selected);put(root,"midiChannel",channel);put(root,"colorDefaultsVersion",1);Array<var> list;
         for(auto &preset:presets){var entry(new DynamicObject());put(entry,"name",preset.name);put(entry,"color",(int)preset.colour);Array<var> values;
-            for(auto &pad:preset.pads){var value(new DynamicObject());put(value,"name",pad.name);put(value,"color",(int)pad.colour);put(value,"volume",pad.volume);put(value,"gate",pad.gate);put(value,"audioFile",pad.file==File{}?String{}:pad.file.isAChildOf(mediaFolder())?pad.file.getFileName():pad.file.getFullPathName());values.add(value);}put(entry,"pads",values);list.add(entry);}
+            for(auto &pad:preset.pads){var value(new DynamicObject());put(value,"name",pad.name);put(value,"color",(int)pad.colour);put(value,"volume",pad.volume);put(value,"gate",pad.gate);put(value,"audioFile",pad.file==File{}?String{}:pad.file.isAChildOf(mediaFolder())?pad.file.getRelativePathFrom(mediaFolder()).replaceCharacter('\\','/'):pad.file.getFullPathName());values.add(value);}put(entry,"pads",values);list.add(entry);}
         put(root,"presets",list);Array<var> mappings;for(auto &v:padMappings)mappings.add(v);put(root,"padMappings",mappings);
         Array<var> presetMap;for(auto &v:presetMappings)presetMap.add(v);put(root,"presetMappings",presetMap);
         syncMIDIMappings();globalState=root.clone();revision=++globalRevision;appearance.set("jaras.vinhetas",root);
     }
+    String padMappingLabel(int pad) const {
+        const auto &mapping=padMappings[(size_t)pad];
+        if(!mapping.isObject())return {};
+        return String((int)get(mapping,"status")==0xb0?"CC ":"Note ")+String((int)get(mapping,"number"));
+    }
+    void unlearnPad(int pad) {
+        if(pad<0||pad>=16)return;
+        padMappings[(size_t)pad]=var{};
+        if(!learningPreset&&learning==pad){learning=-1;audio.learningMIDI=false;}
+        save();refresh();
+    }
+    enum class AudioOrigin { file, library };
+    static File padSampleNamed(const String &name) {
+        for (const auto &file : padSampleDirectory().findChildFiles(File::findFiles | File::ignoreHiddenFiles, false))
+            if (file.hasFileExtension("wav;wave;aif;aiff;mp3") &&
+                file.getFileNameWithoutExtension().equalsIgnoreCase(name)) return file;
+        return {};
+    }
+    void importAudio(const File &source, int preset, int pad, AudioOrigin origin = AudioOrigin::file) {
+        if (transferBusy || !source.existsAsFile()) return;
+        const auto &current = presets[size_t(preset)].pads[size_t(pad)];
+        const auto sampleName = source.getFileNameWithoutExtension();
+        const auto previous = current.file;
+        if (previous != File{} && (current.name.equalsIgnoreCase(sampleName) ||
+            (previous.getParentDirectory() == padSampleDirectory() &&
+             previous.getFileNameWithoutExtension().equalsIgnoreCase(sampleName)))) return;
+        const auto slot = size_t(preset * 16 + pad);
+        const auto request = ++pendingImports[slot];
+        const auto folder = mediaFolder();
+        const bool managed = origin == AudioOrigin::file || source.getParentDirectory() == padSampleDirectory();
+        const auto existing = managed ? padSampleNamed(sampleName) : File{};
+        const auto generation = padSampleGeneration;
+        loaders.addJob([safe = SafePointer<VinhetasPanel>(this), source, folder, previous, sampleName, preset, pad, slot, request, existing, managed, generation] {
+            const auto input = existing != File{} ? existing : source;
+            auto failure = VinhetasAudio::importError(input);
+            std::shared_ptr<VinhetasAudio::Sample> sample;
+            File destination;
+            if (failure.isEmpty()) {
+                sample = VinhetasAudio::decode(input);
+                if (!sample || folder.createDirectory().failed()) failure = localization::translate("Could not load the pad audio.");
+                else if (existing == File{}) {
+                    const bool direct = source.hasFileExtension("wav;wave;aiff;aif;mp3");
+                    destination = folder.getChildFile(Uuid().toString() + (direct ? source.getFileExtension() : String(".wav")));
+                    if (direct) {
+                        if (!source.copyFileTo(destination)) failure = localization::translate("Could not load the pad audio.");
+                    } else {
+                        WavAudioFormat format;
+                        std::unique_ptr<OutputStream> stream(destination.createOutputStream());
+                        const auto options = AudioFormatWriterOptions{}.withSampleRate(sample->rate).withNumChannels(2)
+                            .withBitsPerSample(32).withSampleFormat(AudioFormatWriterOptions::SampleFormat::floatingPoint);
+                        auto writer = stream ? format.createWriterFor(stream, options) : nullptr;
+                        if (!writer || !writer->writeFromAudioSampleBuffer(sample->pcm, 0, sample->pcm.getNumSamples()))
+                            failure = localization::translate("Could not load the pad audio.");
+                    }
+                }
+            }
+            MessageManager::callAsync([safe, sample = std::move(sample), destination, failure, previous, sampleName, preset, pad, slot, request, existing, managed, generation] {
+                if (!safe || pendingImports[slot] != request || transferBusy || (managed && generation != padSampleGeneration) || !failure.isEmpty()) {
+                    if (destination != File{}) destination.deleteFile();
+                    if (safe && pendingImports[slot] == request && failure.isNotEmpty())
+                        AlertWindow::showMessageBoxAsync(MessageBoxIconType::WarningIcon, "Pads", failure);
+                    return;
+                }
+                if (safe->revision != globalRevision) safe->loadState(globalState);
+                auto &data = safe->presets[size_t(preset)].pads[size_t(pad)];
+                if (data.file != previous) { destination.deleteFile(); return; }
+                auto file = destination;
+                auto buffer = sample;
+                if (managed) {
+                    file = padSampleNamed(sampleName);
+                    if (file == File{}) {
+                        const auto folder = padSampleDirectory();
+                        file = folder.getChildFile(sampleName + destination.getFileExtension());
+                        if (destination == File{} || folder.createDirectory().failed() || !destination.moveFileTo(file)) {
+                            destination.deleteFile();
+                            AlertWindow::showMessageBoxAsync(MessageBoxIconType::WarningIcon, "Pads", localization::translate("Could not load the pad audio."));
+                            return;
+                        }
+                    } else {
+                        destination.deleteFile();
+                        if (file != existing) buffer.reset();
+                    }
+                    ++sampleRevision;
+                }
+                data.file = file;
+                data.name = sampleName;
+                data.sample = buffer ? safe->audio.retain(buffer) : nullptr;
+                if (data.sample) safe->cache[file.getFullPathName()] = data.sample;
+                safe->save();
+                safe->refresh();
+                if (!data.sample) safe->preload();
+            });
+        });
+    }
     void menu(int preset,int pad) {
-        PopupMenu menu;menu.addItem(1,"Editar");if(pad>=0)menu.addItem(2,"Inserir audio");menu.addItem(3,"Learn MIDI");
+        PopupMenu menu;menu.addItem(1,localization::translate("Editar"));if(pad>=0)menu.addItem(2,"Inserir audio");menu.addItem(3,"Learn MIDI");
+        if (pad >= 0) {
+            const auto mapping = padMappingLabel(pad);
+            if (mapping.isNotEmpty()) menu.addItem(4, "Unlearn " + mapping);
+        }
         menu.showMenuAsync(PopupMenu::Options().withTargetComponent(pad>=0?static_cast<Component*>(&pads[(size_t)pad]):&presetButtons[(size_t)preset]),[safe=SafePointer<VinhetasPanel>(this),preset,pad](int action){
             if(!safe)return;
+            if(action==4&&pad>=0){safe->unlearnPad(pad);return;}
             if(action==3){safe->learning=pad>=0?pad:preset;safe->learningPreset=pad<0;safe->audio.learningMIDI=true;safe->repaint();return;}
             if(action==1&&safe->edit){auto &p=safe->presets[(size_t)preset];safe->edit(pad>=0?p.pads[(size_t)pad].name:p.name,pad>=0?p.pads[(size_t)pad].colour:p.colour,[safe,preset,pad](String name,unsigned colour){if(!safe)return;auto &p=safe->presets[(size_t)preset];if(pad>=0){p.pads[(size_t)pad].name=name;p.pads[(size_t)pad].colour=colour;}else{p.name=name;p.colour=colour;}safe->save();safe->refresh();});}
-            if(action==2&&pad>=0){safe->chooser=std::make_unique<FileChooser>("Inserir audio",File{},"*.wav;*.wave;*.aif;*.aiff;*.mp3");safe->chooser->launchAsync(FileBrowserComponent::openMode|FileBrowserComponent::canSelectFiles,[safe,preset,pad](const FileChooser &chooser){if(!safe)return;const auto file=chooser.getResult();if(!file.existsAsFile())return;auto &data=safe->presets[(size_t)preset].pads[(size_t)pad];const auto folder=safe->mediaFolder();folder.createDirectory();const auto destination=folder.getChildFile(Uuid().toString()+file.getFileExtension());if(!file.hasFileExtension("wav;wave;aiff;aif;mp3")||!file.copyFileTo(destination))return;data.file=destination;data.sample=nullptr;safe->save();safe->refresh();safe->preload();});}
+            if (action == 2 && pad >= 0) {
+                safe->chooser = std::make_unique<FileChooser>("Inserir audio", File{}, "*.wav;*.wave;*.aif;*.aiff;*.mp3");
+                safe->chooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                    [safe, preset, pad](const FileChooser &chooser) { if (safe) safe->importAudio(chooser.getResult(), preset, pad); });
+            }
         });
     }
 };

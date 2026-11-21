@@ -1,4 +1,5 @@
 #pragma once
+#include "Localization.h"
 #include "ModalSheet.h"
 namespace catlive {
 class RecordingProjectStep final : public Component {
@@ -26,7 +27,7 @@ class RecordingProjectStep final : public Component {
         g.setColour(Colours::white); g.setFont(theme::mediumFont(12));
         g.drawText("Quantidade de canais", 20, 14, getWidth()-40, 25, Justification::centredLeft);
         g.setColour(theme::secondary); g.setFont(theme::font(11));
-        g.drawFittedText(String::fromUTF8("Entradas mono sequenciais, todas as pistas armadas,\nsaída Master e monitoramento ligado."),
+        g.drawFittedText(String::fromUTF8("Entradas mono sequenciais, todas as pistas armadas,\nsaída Main e monitoramento ligado."),
                         20, 85, getWidth()-40, 48, Justification::centredLeft, 2, 1.f);
     }
     void resized() override {
@@ -35,7 +36,7 @@ class RecordingProjectStep final : public Component {
     }
   private:
     TextEditor count;
-    TextButton minus{"-"}, plus{"+"}, next{"Continuar"}, cancel{"Cancelar"};
+    TextButton minus{"-"}, plus{"+"}, next{localization::translate("Continuar")}, cancel{localization::translate("Cancelar")};
     std::function<void(int)> completed;
     void adjust(int delta) { count.setText(String(jlimit(1, 128, count.getText().getIntValue()+delta))); }
     void submit() {

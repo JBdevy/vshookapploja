@@ -4,6 +4,7 @@
 #include "RemoteDiscovery.h"
 #include "Appearance.h"
 #include "ProjectSync.h"
+#include "RemoteProjectOpening.h"
 namespace catlive::remote {
 class Host final : private Timer, private AsyncUpdater {
   public:
@@ -11,6 +12,33 @@ class Host final : private Timer, private AsyncUpdater {
         transport.eventsReady = [this] { triggerAsyncUpdate(); };
     }
     ProjectSync sync;
+    ProjectOpening projectOpening;
+    // A newly-created tab has no playable document yet. Continue serving the
+    // outgoing presentation with its correlated loading state during that gap.
+    var projectSnapshot(int panel, var value) {
+        if (projectPresentationRequest != projectOpening.id()) {
+            projectPresentationRequest = projectOpening.id(); projectPresentations.clear();
+        }
+        if (value.isObject()) {
+            if (projectOpening.active()) projectPresentations[panel] = value.clone();
+        }
+        else if (projectOpening.active() && !projectPresentations.empty()) {
+            const auto found = projectPresentations.find(panel);
+            value = (found != projectPresentations.end() ? found->second : projectPresentations.begin()->second).clone();
+        } else return value;
+        if (projectOpening.id().empty()) return value;
+        auto projects = get(value, "projects").clone();
+        if (!projects.isObject()) projects = object();
+        put(projects, "commandID", wireID(projectOpening.id()));
+        put(projects, "commandState", projectOpening.stateName());
+        if (projectOpening.active()) {
+            put(projects, "busy", true); put(projects, "canOpen", false);
+            put(projects, "status", text(projectOpening.status()));
+        }
+        put(projects, "error", text(projectOpening.error()));
+        put(value, "projects", projects);
+        return value;
+    }
     ~Host() override { stop(); }
     std::function<var(int)> presentation;
     std::function<bool(const Command &)> perform;
@@ -48,7 +76,9 @@ class Host final : private Timer, private AsyncUpdater {
         discovery.stop();
         transport.stop();
         cancelPendingUpdate();
+        for(auto &entry:clients)releaseVinhetas(entry.second);
         clients.clear();
+        projectPresentations.clear();
         port = 0;
         advertising = false;
     }
@@ -85,6 +115,7 @@ class Host final : private Timer, private AsyncUpdater {
         for (auto &entry : clients) {
             auto &client = entry.second;
             if (client.mode == (notices ? "notices" : "director")) {
+                releaseVinhetas(client);
                 client.mode.clear();
                 client.ack.reset();
                 client.panel = 0;
@@ -102,6 +133,7 @@ class Host final : private Timer, private AsyncUpdater {
     void receiveCommands() {
         for (const auto &event : transport.events()) {
             if (event.type == Transport::Event::disconnected) {
+                if(auto found=clients.find(event.client);found!=clients.end())releaseVinhetas(found->second);
                 clients.erase(event.client);
                 continue;
             }
@@ -118,6 +150,7 @@ class Host final : private Timer, private AsyncUpdater {
             auto &client = found->second;
             try {
                 if (event.kind == 5) {
+                    releaseVinhetas(client);
                     const auto mode = event.body["mode"], value = event.body["pin"];
                     require(
                         mode.isString() && value.isString() &&
@@ -162,7 +195,14 @@ class Host final : private Timer, private AsyncUpdater {
                     } else {
                         bool accepted = false;
                         try {
-                            accepted = perform && perform(command);
+                            if(command.action=="vinhetasDown"){
+                                if(client.heldVinhetas.size()>=128||client.heldVinhetas.count(command.target))continue;
+                                accepted=perform&&perform(command);
+                                if(accepted)client.heldVinhetas.emplace(command.target,command);
+                            } else if(command.action=="vinhetasUp"){
+                                if(client.heldVinhetas.erase(command.target)==0)continue;
+                                accepted=perform&&perform(command);
+                            } else accepted = perform && perform(command);
                         } catch (const std::exception &) {
                         }
                         if (command.action == "noticeSend" && command.receipt.value_or(false)) {
@@ -202,7 +242,7 @@ class Host final : private Timer, private AsyncUpdater {
                     continue;
                 auto value = at->second.clone();
                 if (client.mode != "director") {
-                    put(value, "projectTabs", var()); put(value, "projects", var());
+                    put(value, "projectTabs", var()); put(value, "projects", var()); put(value,"vinhetas",var());
                 }
                 const auto current = ++sequence;
                 put(value, "sequence", (int64)current);
@@ -221,20 +261,29 @@ class Host final : private Timer, private AsyncUpdater {
   private:
     struct Client {
         String name, mode;
+        std::map<ID,Command> heldVinhetas;
         std::optional<uint64> ack;
         double sentAt = 0;
         int panel = 0, failures = 0;
     };
+    void releaseVinhetas(Client &client) {
+        auto held=std::move(client.heldVinhetas);client.heldVinhetas.clear();
+        for(auto &entry:held){auto command=entry.second;command.action="vinhetasUp";command.pad=-1;command.preset=-1;command.value=0;if(perform)perform(command);}
+    }
     Appearance &preferences;
     String hostName;
     Transport transport;
     Discovery discovery;
     std::map<ID, Client> clients;
+    std::map<int, var> projectPresentations;
+    ID projectPresentationRequest;
     std::deque<double> failedPINs;
     bool advertising = false;
     double lastPublish = 0;
     uint64 sequence = 0;
     void timerCallback() override { update(); }
+    // Dispatch commands as soon as received, without waiting for the 30 Hz
+    // presentation timer. Audio remains owned by its existing render thread.
     void handleAsyncUpdate() override { receiveCommands(); }
     void accessStatus(const ID &id, const Client &client, const String &message = {}) {
         auto status = object();

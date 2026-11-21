@@ -26,10 +26,7 @@ class RemoteTeleprompter extends View {
             drawNotice(c,notice);windowBorder(c,outer);return;
         }
         String imageID=RemoteModel.id(tp,"imageID");if(!preview&&!imageID.isEmpty()){app.remote.requestImage(imageID);Bitmap image=app.remote.images.get(imageID.toLowerCase(Locale.ROOT));if(image!=null){boolean stretch=flag("mediaStretch","",false);float scale=(float)number("mediaScale",100)/100;float w,h;if(stretch){w=getWidth()*scale;h=getHeight()*scale;}else{float fit=Math.min(getWidth()/(float)image.getWidth(),getHeight()/(float)image.getHeight())*scale;w=image.getWidth()*fit;h=image.getHeight()*fit;}c.save();c.clipRect(0,0,getWidth(),getHeight());paint.setColor(Color.WHITE);c.drawBitmap(image,null,new RectF((getWidth()-w)/2,(getHeight()-h)/2,(getWidth()+w)/2,(getHeight()+h)/2),paint);c.restore();}}
-        if(!preview&&flag("clearMode","",false)){
-            if(loopActive(tp))new Decoration("loop",RemoteText.ui("Loop ativo"),dp(24),dp(14),Color.BLACK,false,false).draw(c,new RectF(outer,bottom-dp(24),getWidth()-outer,bottom));
-            return;
-        }
+        if(!preview&&flag("clearMode","",false))return;
         List<Decoration> above=decorations(tp,true),below=decorations(tp,false);
         for(Decoration d:above){d.draw(c,new RectF(outer,top,getWidth()-outer,top+d.height));top+=d.height+dp(3);}
         float reserved=0;for(Decoration d:below)reserved+=d.height+dp(3);
@@ -76,7 +73,6 @@ class RemoteTeleprompter extends View {
         CharSequence styled;final String kind,value;final float height,size;final int tint;final boolean clock,local;
         Decoration(String kind,String value,float height,float size,int tint,boolean clock,boolean local){this.kind=kind;this.value=value;this.height=height;this.size=size;this.tint=tint;this.clock=clock;this.local=local;}
         void draw(Canvas c,RectF area){
-            if(kind.equals("loop")){paint.setColor(0xffffff00);c.drawRect(area,paint);fontFace=bold;drawText(c,value,area,size,Color.BLACK,true,Layout.Alignment.ALIGN_CENTER,1);return;}
             if(kind.equals("clock")){clocks(c,area,clock,local,string("clockPosition","clockPosition","center-top"));return;}
             if(kind.equals("progress")){paint.setColor(0x19ffffff);c.drawRect(area,paint);paint.setColor(tint);c.drawRect(area.left,area.top,area.left+area.width()*Float.parseFloat(value),area.bottom,paint);return;}
             fontFace=family(string(kind.equals("chords")?"chordFontFamily":kind.equals("song")?"songNameFontFamily":"queueNameFontFamily",kind.equals("chords")?"chordFont":"","system"));
@@ -91,7 +87,7 @@ class RemoteTeleprompter extends View {
         List<Decoration> result=new ArrayList<>();String edge=atTop?"top":"bottom",position=string("clockPosition","clockPosition","center-top");
         boolean enabled=flag("clockEnabled","clockEnabled",true),clock=enabled&&position.endsWith(edge),local=flag("localClockEnabled","localClockEnabled",true)&&(enabled?clock:atTop);
         if(clock||local)result.add(new Decoration("clock","",clockHeight(clock,local,position),0,0,clock,local));
-        if(preview){if(!atTop&&loopActive(tp))result.add(new Decoration("loop",RemoteText.ui("Loop ativo"),dp(24),dp(14),Color.BLACK,false,false));return result;}
+        if(preview)return result;
         for(String kind:new String[]{"song","queued","chords"}){
             String prefix=kind.equals("song")?"songName":kind.equals("queued")?"queueName":"chord",old=kind.equals("queued")?"queue":kind.equals("chords")?"chord":"song";
             boolean visible=flag(kind.equals("chords")?"chordsEnabled":prefix+"Enabled",kind.equals("chords")?"chordsEnabled":old+"Enabled",!kind.equals("song"));
@@ -100,12 +96,9 @@ class RemoteTeleprompter extends View {
             fontFace=family(string(prefix+"FontFamily",chord?"chordFont":"","system"));float h=chord?measureHeight(value,getWidth()-dp(18),size)+dp(12):size+dp(3);
             Decoration decoration=new Decoration(kind,value,h,size,color(prefix+"Color",old+"Color",chord?0xfb923c:kind.equals("song")?0x00ff55:0xffea00),false,false);decoration.styled=rich;result.add(decoration);
         }
-        if(loopActive(tp)){
-            if(!atTop)result.add(new Decoration("loop",RemoteText.ui("Loop ativo"),dp(24),dp(14),Color.BLACK,false,false));
-        }else if(flag("progressEnabled","progressEnabled",false)&&string("progressPosition","progressPosition","bottom").equals(edge))result.add(new Decoration("progress",Float.toString((float)Math.max(0,Math.min(1,tp.optDouble("progress")))),dp(5),0,color("progressColor","progressColor",0xffea00),false,false));
+        if(flag("progressEnabled","progressEnabled",false)&&string("progressPosition","progressPosition","bottom").equals(edge))result.add(new Decoration("progress",Float.toString((float)Math.max(0,Math.min(1,tp.optDouble("progress")))),dp(5),0,color("progressColor","progressColor",0xffea00),false,false));
         return result;
     }
-    boolean loopActive(JSONObject tp){return tp.optBoolean("loopActive",app.state!=null&&app.state.optBoolean("loop"));}
     void drawNotice(Canvas c,JSONObject notice){
         if(notice==null||!notice.optBoolean("active")||!notice.optBoolean("window"+index))return;
         String imageID=RemoteModel.id(notice,"imageID");Bitmap image=null;
@@ -132,7 +125,7 @@ class RemoteTeleprompter extends View {
     float localFontSize(){return (float)Math.max(dp(10),Math.min(dp(24),getHeight()/28f)*number("localClockScale",100)/100);}
     float clockHeight(boolean clock,boolean local,String position){return !clock?localFontSize()+dp(10):Math.max(dp(28),timerFontSize()+dp(local&&!position.startsWith("center")?10:18));}
     void clockText(Canvas c,String value,RectF area,float font,int color,boolean border,int borderColor,float borderWidth,boolean timer){
-        if(timer&&app.localTimer.expired(android.os.SystemClock.elapsedRealtime())&&android.os.SystemClock.elapsedRealtime()%1000>=500)color=(color&0x00ffffff)|0x40000000;
+        if(timer&&app.timerRunning&&app.timerValue()<=0&&android.os.SystemClock.elapsedRealtime()%1000>=500)color=(color&0x00ffffff)|0x40000000;
         RectF inside=new RectF(area);inside.inset(dp(timer?10:5),dp(5));
         drawText(c,value,inside,fitClock(value,inside.width(),inside.height(),font),color,true,Layout.Alignment.ALIGN_CENTER,1);
         if(border)stroke(c,area,borderColor,borderWidth);
@@ -143,9 +136,9 @@ class RemoteTeleprompter extends View {
     }
     float localFontForPosition(String position,boolean timer){return timer&&!position.startsWith("center")?timerFontSize():localFontSize();}
     void clocks(Canvas c,RectF area,boolean clock,boolean local,String position){
-        fontFace=Typeface.create("sans-serif",Typeface.BOLD);String timer=app.localTimer.display(android.os.SystemClock.elapsedRealtime()).replace(":"," : "),now=new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date());
+        fontFace=Typeface.create("sans-serif",Typeface.BOLD);double seconds=Math.ceil(app.timerValue());String timer=(seconds<0?"−":"")+RemoteModel.time(Math.abs(seconds)).replace(":"," : "),now=new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date());
         boolean side=!position.startsWith("center"),localRight=string("localClockPosition","","right").equals("right");
-        int timerColor=app.localTimer.expired(android.os.SystemClock.elapsedRealtime())?color("clockExpiredColor","",0xff3131):color("clockColor","clockColor",0x00ff55),localColor=color("localClockColor","localClockColor",0x00ff55);
+        int timerColor=app.timerRunning&&app.timerValue()<=0?color("clockExpiredColor","",0xff3131):color("clockColor","clockColor",0x00ff55),localColor=color("localClockColor","localClockColor",0x00ff55);
         boolean timerBorder=flag("clockBorderEnabled","",true),localBorder=flag("localClockBorderEnabled","",true);
         int timerEdge=border("clockBorderColor","clockColor",0x00ff55,"rgbClockBorderEnabled"),localEdge=border("localClockBorderColor","localClockColor",0x00ff55,"rgbClockBorderEnabled");
         float font=timerFontSize();

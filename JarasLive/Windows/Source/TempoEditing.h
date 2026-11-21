@@ -2,16 +2,23 @@
 #include "Common.h"
 #include "ClipTempo.h"
 namespace catlive::tempoEditing {
+inline double cursorPosition(const jaras::TransportState &state) {
+    return state.playing ? state.position : state.editPosition;
+}
 inline const jaras::TimelineMarker *active(const jaras::Song &song, double position) {
-    const jaras::TimelineMarker *result = nullptr;
-    if (song.markers) for (const auto &marker : *song.markers)
-        if (marker.tempoBPM && marker.position <= position && (!result || marker.position > result->position ||
-            (marker.position == result->position && marker.id > result->id))) result = &marker;
-    return result;
+    return jaras::tempoPlayback::active(song, position);
 }
 inline const jaras::Part *region(const jaras::Song &song, const jaras::TransportState &state) {
     if (!state.playing) {
-        for (const auto &part : song.parts) if (state.regionId == part.id) return &part;
+        for (const auto &part : song.parts) if (state.regionId == part.id) {
+            const jaras::Part *child = nullptr, *first = nullptr;
+            for (const auto &candidate : song.parts) if (candidate.parentRegionID == part.id) {
+                if (!first || candidate.startTime < first->startTime) first = &candidate;
+                if (candidate.startTime <= state.editPosition && state.editPosition < candidate.endTime &&
+                    (!child || candidate.startTime > child->startTime)) child = &candidate;
+            }
+            return child ? child : first ? first : &part;
+        }
         return nullptr;
     }
     const jaras::Part *result = nullptr;
@@ -22,9 +29,13 @@ inline const jaras::Part *region(const jaras::Song &song, const jaras::Transport
     return result;
 }
 inline double position(const jaras::Song &song, const jaras::TransportState &state) {
-    const double at = state.playing ? state.position : state.editPosition;
+    const double at = cursorPosition(state);
     const auto *part = region(song, state);
     return part && (at < part->startTime || at >= part->endTime) ? part->startTime : at;
+}
+inline double referencePosition(const jaras::Song& song,const jaras::TransportState& state) {
+    const auto* part=region(song,state);
+    return part?part->startTime:position(song,state);
 }
 inline double bpm(const jaras::Song &song, double at) {
     const auto *marker = active(song, at);
@@ -52,37 +63,48 @@ inline jaras::TimelineMarker boundary(const jaras::Song &song, double at) {
     marker.tempoUnit = previous ? previous->tempoUnit.value_or(song.beatUnit) : song.beatUnit;
     marker.tempoTimebase = previous ? previous->tempoTimebase : std::optional<std::string>("global");
     marker.tempoReferenceBPM = previous ? previous->tempoReferenceBPM : std::nullopt;
+    marker.tempoPlaybackRate = previous ? jaras::tempoPlayback::rate(song,*previous) : 1.;
     return marker;
 }
 inline std::vector<jaras::TimelineMarker> regionChange(const jaras::Song &song, const jaras::Part &part, double delta) {
     std::vector<jaras::TimelineMarker> targets;
     const double end = jaras::TempoEditMap::tempoEditEnd(song, part);
-    bool hasStart = false, hasEnd = false;
+    bool hasStart = false;
     if (song.markers) for (const auto &marker : *song.markers) if (marker.tempoBPM) {
         if (marker.position >= part.startTime && marker.position < end) {
             targets.push_back(marker);
             hasStart |= std::abs(marker.position - part.startTime) < .000001;
         }
-        hasEnd |= std::abs(marker.position - end) < .000001;
     }
     if (!hasStart) targets.push_back(boundary(song, part.startTime));
     double low = 300, high = 60;
     for (const auto &marker : targets) { low = std::min(low, *marker.tempoBPM); high = std::max(high, *marker.tempoBPM); }
-    delta = jlimit(60 - low, 300 - high, delta);
-    if (std::abs(delta) < .0000001) return {};
+    if (!std::isfinite(delta)) return {};
+    delta = jlimit(60-low, 300-high, delta);
+    if (std::abs(delta) < .000000001) return {};
+    std::sort(targets.begin(), targets.end(), [](const auto& a, const auto& b) {
+        return a.position == b.position ? a.id > b.id : a.position < b.position;
+    });
+    std::unordered_map<ID, std::optional<double>> regionRates;
     for (auto &marker : targets) {
+        const auto previous = marker;
+        if (!marker.regionOwnerID) marker.regionOwnerID = jaras::regionOwnerAt(song, marker.position).value_or(part.id);
         *marker.tempoBPM += delta;
         marker.tempoBeats = marker.tempoBeats.value_or(song.beatsPerBar);
         marker.tempoUnit = marker.tempoUnit.value_or(song.beatUnit);
-    }
-    if (!hasEnd) targets.push_back(boundary(song, end));
-    bool atZero = false;
-    if (song.markers) for (const auto &marker : *song.markers) atZero |= marker.tempoBPM && marker.position == 0;
-    for (const auto &marker : targets) atZero |= marker.position == 0;
-    if (!atZero) {
-        auto initial = boundary(song, 0); initial.tempoBPM = 120; initial.tempoBeats = 4;
-        initial.tempoUnit = 4; initial.tempoReferenceBPM = 120; initial.tempoTimebase = "global";
-        targets.push_back(initial);
+        auto [entry, first] = regionRates.try_emplace(*marker.regionOwnerID);
+        if (first) {
+            const auto prior = jaras::tempoPlayback::rate(song, previous);
+            const bool follows = jaras::tempoPlayback::follows(song, previous);
+            if (follows || previous.regionTempoAnchor.value_or(false))
+                entry->second = follows ? prior * (*marker.tempoBPM / *previous.tempoBPM) : prior;
+        }
+        if (entry->second) {
+            marker.tempoPlaybackRate = entry->second;
+            marker.regionTempoAnchor = first;
+        } else {
+            marker.tempoPlaybackRate = jaras::tempoPlayback::rate(song, previous);
+        }
     }
     return targets;
 }

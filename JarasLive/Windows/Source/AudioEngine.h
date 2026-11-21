@@ -1,4 +1,13 @@
 #pragma once
+#include "../../Core/Audio/StopTransition.hpp"
+#include "../../Core/Transport/SongPluginTempo.hpp"
+#include "../../Core/Loop/MultiLoopMixer.hpp"
+#include "SystemAudioDefaults.h"
+#include "NativeAudioDeviceHost.h"
+#include "../../Core/Audio/RealtimeCommandQueue.hpp"
+#include "../../Core/Audio/PreparedAudioEdits.hpp"
+#include "../../Core/Audio/RealtimeLatestValue.hpp"
+#include "../../Core/Audio/RealtimeBorrowedPointer.hpp"
 #include "VinhetasAudio.h"
 #include "../../Core/Tracks/ItemFade.hpp"
 #include "Common.h"
@@ -14,20 +23,30 @@
 #include "TrackCapture.h"
 #include "TimecodeMIDI.h"
 #include "TransportFadeout.h"
+#include "RealtimeMIDIInput.h"
+#include "MIDIDeviceCompatibility.h"
 #include "AudioCallbackMetrics.h"
+#include "ParallelAudioWork.h"
 namespace catlive {
 class ClipAudio;
 // Prepared readers, buffers and routing live outside the device callback.
-class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallback, private Timer {
+class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallback, private MidiKeyboardState::Listener, private Timer {
   public:
     VinhetasAudio vinhetas;
+    void playLibrarySample(std::shared_ptr<VinhetasAudio::Sample>, float gain);
+    void setLibrarySampleGain(float gain);
+    void stopLibrarySample();
+    bool librarySamplePlaying() const;
+    bool hasRecordingInputs(int first, int count) const;
 
     struct State {
         double position = 0, subPosition = 0;
         bool playing = false, subPlaying = false, loop = false;
+        uint64 promotion = 0;
+        bool followMainClock = false; // automatic Subplay joins a running main head without seeking it
         bool preserveLatency = false; // scheduled musical transition, not a manual seek
         double loopStart = 0, loopEnd = 0;
-        jaras::PlaybackScope scope[2];
+        jaras::PlaybackScope scope[2], exclusiveScope[2];
         int timecodePreferred = -1;
         double end = std::numeric_limits<double>::infinity();
     };
@@ -36,7 +55,14 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     ~AudioEngine() override;
     std::shared_ptr<AudioDeviceManager> deviceHost;
     AudioDeviceManager &devices;
+    SystemAudioDefaults systemDefaults;
     AudioCallbackMetrics callbackMetrics;
+    // -2 idle, -1 waiting for the next note, 0...127 learned note.
+    std::atomic<int> drummerLearnNote{-2};
+    std::shared_ptr<jaras::audio::DrummerPad> drummerVoice(const ID &id, const String &key, int head = 0) const {
+        if (auto *fx = effects(id, head)) return fx->drummerVoice(key);
+        return {};
+    }
     AudioFormatManager formats;
     MidiKeyboardState keyboardState;
     Instrument instrument;
@@ -48,8 +74,9 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     String outputAvailabilityError() const;
     String openDevice();
     void configureDeviceChannels(const BigInteger &inputs, const BigInteger &outputs);
-    void configureMetronome(const var &);
+    void configureMetronome(const var &, std::function<void(String)> completed = {});
     void setEffects(const ID &, const var &);
+    void refreshMIDIArpeggiators(const jaras::Song &, const std::set<ID> &);
     std::shared_ptr<native::vst3::Processor> externalEffect(const ID &, const String &) const;
     void captureExternalEffects(const ID &, var &) const;
     native::stem::Status stemStatus(const ID &,const String &)const;
@@ -62,11 +89,19 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     void refreshStemLatency();
     unsigned exportLatencyFrames()const;
     void setMIDISlot(int, const String &);
+    void setMIDIOutputSlot(int slot, const String &device) { timecodeMIDI.setOutputSlot(slot, midiDeviceCompatibility::resolve(device, false)); }
+    uint64 latestProgramChange(int slot) const {
+        if(slot == -1) { uint64 latest=0;for(const auto &packet:midiProgramChanges)latest=std::max(latest,packet.load());return latest; }
+        return slot>=1 && slot<=6 ? midiProgramChanges[size_t(slot-1)].load() : 0;
+    }
+    std::array<std::atomic<uint64>,6> midiProgramChanges{};
+    std::atomic<uint64> programChangeSerial{0};
     std::atomic<int> keyboardChannel{0}; // 0 = Omni
     std::atomic<bool> metronomeEnabled{false};
     void closeDevice();
     void refreshTiming(const jaras::Song &song);
     void refreshTempo(const jaras::Song &before, const jaras::Song &after);
+    void refreshItemPitch(const jaras::Song &, const ID &);
     void refreshRegionPitch(const jaras::Song &, const ID &);
     struct PreparationControl {
         std::function<void()> checkpoint;
@@ -76,7 +111,13 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     void prepareSong(const jaras::Song &, const File &directory, const var &masterSettings = {},
                      const jaras::Project *project = nullptr, const PreparationControl *control = nullptr);
     bool preparesOffline() const { return offlineMode; }
-    bool hasLiveDevice() const { return attached; }
+    bool hasLiveDevice() const { return attached || externalRenderDriven; }
+    // A native host (or the driver-free callback harness) owns render calls.
+    // Change only before starting or after joining that external callback.
+    void setExternalRenderDriven(bool enabled) {
+        if (attached) throw std::runtime_error("An audio device already owns rendering.");
+        externalRenderDriven = enabled;
+    }
     // Message thread only: swaps a fully prepared, unattached engine's graph.
     // The argument receives the retired graph and must be disposed off the UI.
     void adoptPreparedSong(AudioEngine &, bool preservePlayback = false);
@@ -94,8 +135,15 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     int timecodePreferred(const std::optional<ID>& region) const { return timecodeProgram.preferred(region); }
     void previewMIDIItem(const jaras::Song &,const jaras::AudioClip &);
     void refreshItemTiming(const jaras::Song &, const jaras::AudioClip &);
+    bool refreshItemPresence(const jaras::Song &);
+    bool cacheSplitItems(const jaras::Song &, const std::map<ID, ID> &);
     void setItemControls(const jaras::AudioClip &);
     void setMixer(const jaras::Project &, const jaras::Song &);
+    void setLoopMixer(const std::optional<jaras::MultiLoopPlayback> &);
+    double loopDisplayVolume(const ID &, double) const;
+    bool loopDisplayMute(const ID &, bool) const;
+    bool loopDisplaySolo(const ID &, bool) const;
+    bool refreshTrackRouting(const jaras::Song &);
     void setOffline(bool enabled);
     void extendOfflineDuration(double end) {
         if (attached || !std::isfinite(end) || end < 0)
@@ -123,7 +171,12 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     void startRecording(const File &, int channels = 2, int bits = 24);
     void stopRecording();
     void startTrackRecording(const std::vector<TrackCapture::Target> &, int bits, double bpm);
+    double changeRecordingTargets(const std::vector<TrackCapture::Target> &, const std::set<ID> &, int bits);
     std::vector<TrackCapture::Take> stopTrackRecording();
+    // Control detaches at a completed block. The returned owner may finalize
+    // files on a worker without keeping either the UI or audio callback busy.
+    std::shared_ptr<TrackCapture> detachTrackRecording();
+    void recordingCompleted(uint64 dropped) noexcept { recordingDrops.store(dropped); }
     uint64 recordingOverflows() const { return recordingDrops.load(); }
     uint64 recordedSamples() const { return recordedFrames.load(); }
     void armTrack(const ID &id, bool enabled) {
@@ -143,39 +196,64 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     unsigned presentationLatencyFrames()const{return presentationDelay.load();}
     double takeElapsed();
     float peak() const { return meter.load(std::memory_order_relaxed); }
+    // Registry lookup/handle acquisition belongs to the serialized control/UI
+    // thread, never the callback. Retained handles are safe after graph retirement;
+    // reacquire after a document graph change to follow its new generation.
+    std::shared_ptr<const audio::TrackMeterState> trackMeterState(const ID &id) const {
+        const auto found = trackMeters.find(id);
+        return found == trackMeters.end() ? nullptr : found->second;
+    }
+    std::array<float, 3> takeDynamicsLevels(const ID &id, const String &key) const {
+        std::array<float, 3> result{};
+        for (int head = 0; head < (id.empty() ? 1 : 2); ++head) {
+            if (auto *fx = effects(id, head)) {
+                const auto next = fx->takeDynamicsLevels(key);
+                for (size_t i = 0; i < result.size(); ++i) result[i] = std::max(result[i], next[i]);
+            }
+        }
+        return result;
+    }
     std::pair<float, float> fxLevels(const ID &id) const {
-        if (id.empty())
-            return {masterFXInput.load(), masterFXOutput.load()};
-        for (const auto &bus : buses)
-            if (bus->id == id)
-                return {bus->fxInput.load(), bus->fxOutput.load()};
+        if (id.empty()) return {masterFXInput.load(), masterFXOutput.load()};
+        const auto found = trackMeters.find(id);
+        if (found != trackMeters.end())
+            return {found->second->fxInput.load(), found->second->fxOutput.load()};
         return {};
     }
+    float gainReduction(const ID &id = {}) const {
+        if (id.empty()) return masterGainReduction.load(std::memory_order_relaxed);
+        if (auto state = trackMeterState(id)) return state->gainReduction.load(std::memory_order_relaxed);
+        return -1.f;
+    }
     float trackPeak(const ID &id) const {
-        for (const auto &bus : buses)
-            if (bus->id == id)
-                return bus->peak.load(std::memory_order_relaxed);
-        return 0;
+        const auto found = trackMeters.find(id);
+        return found == trackMeters.end() ? 0 : found->second->peak.load(std::memory_order_relaxed);
     }
     std::array<float, 2> meterLevels(const ID &id = {}) const {
         if (id.empty()) return {masterLevels[0].load(), masterLevels[1].load()};
-        for (const auto &bus : buses) if (bus->id == id)
-            return {bus->levels[0].load(), bus->levels[1].load()};
+        const auto found = trackMeters.find(id);
+        if (found != trackMeters.end())
+            return {found->second->levels[0].load(), found->second->levels[1].load()};
         return {};
     }
-    float heldPeak(const ID &id = {})const {
-        if(id.empty())return masterPeakHold.amplitude();
-        for(const auto &bus:buses)if(bus->id==id)return bus->held.amplitude();
-        return 0;
+    float heldPeak(const ID &id = {}) const {
+        if (id.empty()) return masterPeakHold.amplitude();
+        const auto found = trackMeters.find(id);
+        return found == trackMeters.end() ? 0 : found->second->held.amplitude();
     }
     void clearPeak(const ID &id = {}) {
-        if(id.empty())masterPeakHold.clear();
-        else for(auto &bus:buses)if(bus->id==id){bus->held.clear();break;}
+        if (id.empty()) masterPeakHold.clear();
+        else {
+            const auto found = trackMeters.find(id);
+            if (found != trackMeters.end()) found->second->held.clear();
+        }
     }
     uint64 getUnderruns() const { return underruns.load(); }
     std::set<String> activeMediaPaths() const {
         std::set<String> paths;
         for (const auto &voice : voices) if (voice->source)
+            paths.insert(unicodeCase(voice->source->file.getFullPathName(), false));
+        for (const auto &voice : removedItemVoices) if (voice->source)
             paths.insert(unicodeCase(voice->source->file.getFullPathName(), false));
         for (const auto &source : retiredSources) if (source)
             paths.insert(unicodeCase(source->file.getFullPathName(), false));
@@ -189,14 +267,34 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     }
     var streamDiagnostics() const {
         std::set<const StreamingReader*> unique;
-        uint64 caches = 0, inactive = 0;
+        uint64 caches = 0, inactive = 0, fallbackOpens = 0, transitionOpens = 0;
         for (const auto& voice : voices) if (voice->source) for (const auto& reader : voice->source->readers)
             if (unique.insert(reader.get()).second) {
                 caches += reader->cacheMisses.load();
                 inactive += reader->inactiveMisses.load();
+                fallbackOpens += reader->fallbackOpens.load();
+                transitionOpens += reader->transitionOpens.load();
             }
         auto result = object();
+        put(result,"tempoPreparedStarts",(int64)tempoPreparedStarts.load());
+        put(result,"clipWorkers",parallelClips?(int)parallelClips->helperCount():0);
+        put(result,"parallelClipBlocks",(int64)parallelClipBlocks.load());put(result,"parallelClipTasks",(int64)parallelClipTasks.load());
+        put(result, "nativeDeviceHost", usesNativeAudioDeviceHost(devices));
         put(result, "cacheMisses", (int64)caches); put(result, "inactiveMisses", (int64)inactive);
+        put(result, "fallbackDecoderOpens", (int64)fallbackOpens);
+        put(result, "transitionDecoderOpens", (int64)transitionOpens);
+        uint64 midiDrops=midiInput.droppedCount()+virtualKeyboardInput.droppedCount();
+        uint64 midiUnsupported=midiInput.unsupportedCount()+virtualKeyboardInput.unsupportedCount();
+        for(const auto &slot:midiSlots){midiDrops+=slot.droppedCount();midiUnsupported+=slot.unsupportedCount();}
+        put(result,"midiInputDroppedEvents",(int64)midiDrops);
+        put(result,"midiInputUnsupportedMessages",(int64)midiUnsupported);
+        uint64 midiBuilderOverflows=masterMIDI?masterMIDI->builderOverflows():0;
+        for(const auto& bus:buses) {
+            for(const auto& messages:bus->externalMIDI)midiBuilderOverflows+=messages.overflows();
+            if(bus->midi)midiBuilderOverflows+=bus->midi->builderOverflows();
+        }
+        for(const auto& voice:voices)for(const auto& messages:voice->midiMessages)midiBuilderOverflows+=messages.overflows();
+        put(result,"midiBuilderOverflows",(int64)midiBuilderOverflows);
         put(result, "primedSources", lastPrimedSources);
         put(result, "primeWaitMilliseconds", lastPrimeWaitMilliseconds);
         put(result, "preparingTransport", preparingTransport());
@@ -205,21 +303,26 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
         put(result, "transportRepositions", (int64)transportRepositions);
         put(result, "voiceCount", (int)voices.size()); put(result, "busCount", (int)buses.size());
         int processors = 0;
-        Array<var> trackEffects, itemEffects;
+        Array<var> trackEffects, itemEffects, trackMIDI;
         for (const auto &bus : buses) {
             const auto inserted = get(bus->settings, "inserted");
             if (!list(inserted).isEmpty()) { auto entry=object();put(entry,"track",text(bus->id));put(entry,"effects",inserted);trackEffects.add(entry); }
+            // Bounded MIDI samples make identity/routing regressions observable
+            // without dumping a whole score or walking all of its notes.
+            auto midi=object();Array<var> pitches;
+            for(size_t i=0;i<std::min(size_t(16),bus->externalSequence.notes.size());++i)pitches.add(bus->externalSequence.notes[i].pitch);
+            put(midi,"track",text(bus->id));put(midi,"noteCount",(int64)bus->externalSequence.notes.size());put(midi,"pitches",pitches);trackMIDI.add(midi);
         }
         for (const auto &voice : voices) {
             processors += voice->clipAudio ? 1 : 0;
             const auto inserted = get(voice->fxSettings, "inserted");
             if (!list(inserted).isEmpty()) {auto entry=object();put(entry,"item",text(voice->clipID));put(entry,"effects",inserted);itemEffects.add(entry);}
         }
-        put(result, "clipProcessors", processors); put(result, "trackEffects", trackEffects);
+        put(result, "clipProcessors", processors); put(result, "trackEffects", trackEffects); put(result,"trackMIDI",trackMIDI);
         put(result, "itemEffects", itemEffects); put(result, "masterEffects", get(masterFXSettings,"inserted"));
         return result;
     }
-    double cpu() const { return devices.getCpuUsage(); }
+    double cpu() const { return audioDeviceCpuUsage(devices); }
     void render(float *const *output, int channels, int samples,
                 const float *const *input = nullptr, int inputChannels = 0);
     double sampleRate() const { return rate.load(); }
@@ -257,6 +360,10 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     std::shared_ptr<TransportPreparation> transportPreparation;
     std::shared_ptr<TransportPreparation> queuedPreparation;
     bool asynchronousTransport=false;
+    uint64 publishedPromotion=0;
+    std::array<std::atomic<int>,2> readerHeads{{0,1}};
+    bool publishPromotion(const State &);
+    void promotePlaybackHeads();
     uint64 transportRepositions=0; // Message-thread diagnostics for full head updates.
     uint64 transportSerial=0; // Message-thread writer; carried to the callback.
     std::atomic<uint64> appliedTransportSerial{0};
@@ -268,9 +375,33 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     void timerCallback() override;
     // Unused prepared readers retire with the outgoing graph on its worker.
     std::vector<std::shared_ptr<Source>> retiredSources;
+    enum class MonitorMode { followArm, off, on, lockedOff };
+    static MonitorMode monitorMode(const jaras::Track &track) {
+        if (track.receivesMain()) return MonitorMode::lockedOff;
+        if (!track.inputMonitoring) return MonitorMode::followArm;
+        return *track.inputMonitoring ? MonitorMode::on : MonitorMode::off;
+    }
+    struct Update {
+        bool resetElapsed=false;
+        uint64 transportSerial=0;
+        uint64 notBeforeFrame=0;
+        enum Kind { transport, mixer, item, routing, promotion, preparedEdit } kind = transport;
+        audio::PreparedAudioEdits::Ticket* edit = nullptr;
+        MonitorMode inputMonitoring = MonitorMode::followArm;
+        bool subplayExclusive = false;
+        int midiSlot=0,midiChannel=0;
+        State state;
+        double itemGain=1, itemPan=0, fadeIn=0, fadeOut=0;
+        jaras::FadeCurve fadeInShape, fadeOutShape;
+        bool fxBypassed=false;
+        int index = -1;
+        float volume = 1, pan = 0;
+        bool mute = false, solo = false, mono = false, phase = false;
+    };
     struct Voice {
         ID track, clipID;
         std::optional<double> playbackStart;
+        std::uint32_t regionOwnerIndex=0;
         double start = 0, duration = 0, offset = 0, speed = 1, clipGain = 1, clipPan = 0,
                fadeIn = 0, fadeOut = 0;
         jaras::FadeCurve fadeInShape, fadeOutShape;
@@ -281,7 +412,7 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
         bool midiItem = false, midiInstrument = false;
         MIDIPlayback::Sequence midiSequence;
         std::vector<PlaybackNote> sharedMIDINotes;
-        MidiBuffer midiMessages[2];
+        BoundedMIDIBuffer midiMessages[2]{BoundedMIDIBuffer(false),BoundedMIDIBuffer(false)};
         double midiExpected[2]{-1, -1};
         jaras::PlaybackScope midiScopes[2];
         std::unique_ptr<ClipTempo> midiTiming;
@@ -289,6 +420,9 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
         AudioBuffer<float> processed[2];
         AudioBuffer<float> stemInput[2]{{2,4096},{2,4096}};
         std::unique_ptr<ClipAudio> clipAudio;
+        bool parallelEligible=false,parallelReady=false,parallelOK=false;
+        int parallelHead=0,parallelFrames=0;
+        double parallelLocal=0;
         NativeFX fx[2];
         var fxSettings;
         AutomationProgram automation;
@@ -305,21 +439,26 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     SharedMIDIUpdate sharedMIDISequence(size_t bus, const Voice *replacement = nullptr,
                                        bool ownsReplacement = false) const;
     void replaceSharedMIDI(size_t bus, SharedMIDIUpdate &);
+    const jaras::PlaybackScope& trackScope(const State& state, int head, size_t bus) const {
+        return buses[bus]->subplayExclusive ? state.exclusiveScope[head] : state.scope[head];
+    }
     void mixMIDIVoice(Voice &, int head, double at, float *const *out, int channels,
                       int dest, int count, bool running);
     struct Bus {
         ID id;
+        audio::RealtimeLatestValue<Update> mixerUpdates;
         float volume = 1, pan = 0;
         bool mute = false, solo = false, phase = false;
+        jaras::MultiLoopMixerRule loopRule;
         // Audio-thread scratch state lives with the bus; no fixed track-count arrays.
         bool renderAudible = false, renderRouteAudible = false;
+        bool recordingItemsSuppressed = false;
         int parent = -1;
         std::vector<jaras::OutputPatch> outputs;
         std::vector<int> sends;
-        std::atomic<float> peak{0};
-        meterDisplay::PeakHold held;
-        std::array<std::atomic<float>, 2> levels{};
-        std::atomic<float> fxInput{0}, fxOutput{0};
+        std::map<int, jaras::TrackSendTap> sendTaps;
+        // Allocated during preparation. Rendering never copies/releases this owner.
+        std::shared_ptr<audio::TrackMeterState> meters = std::make_shared<audio::TrackMeterState>();
         AudioBuffer<float> buffer{2, 4096};
         AudioBuffer<float> subBuffer{2, 4096};
         AudioBuffer<float> frozen[2]{{2,4096},{2,4096}};
@@ -329,23 +468,25 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
         AutomationProgram automation;
         var settings;
         std::unique_ptr<ClickProgram> click;
-        bool timecode = false, vinhetasBus = false;
-        std::vector<PlaybackNote> midiNotes;
-        std::vector<MIDIPlayback::Event> externalEvents;
-        MidiBuffer externalMIDI[2];
+        bool timecode = false, vinhetasBus = false, subplayExclusive = false;
+        MIDIPlayback::Sequence externalSequence;
+        BoundedMIDIBuffer externalMIDI[2];
         double externalExpected[2]{-1,-1};
         jaras::PlaybackScope externalScopes[2];
         std::unique_ptr<MIDIPlayback> midi;
         MidiBuffer midiMessages;
+        std::unique_ptr<LiveArpeggiator> liveArpeggiator;
+        bool arpeggiates = false;
         VirtualKeyboardRoute keyboardRoute;
         int midiSlot = 0, midiChannel = 0;
         int inputFirst = 0, inputChannels = 2;
-        bool inputMonitoring = true;
+        MonitorMode inputMonitoring = MonitorMode::followArm;
         std::atomic<bool> armed{false};
         std::atomic<bool> fadeoutSelected{false};
     };
+    struct TrackRoute { int parent=-1; std::vector<jaras::OutputPatch> outputs; };
     struct LatencyPlan {
-        struct Route { int target=-1;native::StereoDelay delay[2]; };
+        struct Route { int target=-1; jaras::TrackSendTap tap = jaras::TrackSendTap::postFader; native::StereoDelay delay[2]; };
         struct Channel {
             unsigned own=0,input=0,output=0;
             native::StereoDelay direct[2],inputDelay[2],master[2],hardware[2],frozen[2];
@@ -360,10 +501,22 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
         AudioBuffer<float> scratch{2,4096},hardwareScratch{2,4096},metronomeBuffer{2,4096};
     };
     std::unique_ptr<LatencyPlan> latencyPlan;
+    struct LatencyEdit {
+        std::unique_ptr<LatencyPlan> next;
+        std::vector<std::pair<native::StereoDelay*,native::StereoDelay*>> retained;
+        bool sameTotal=false;
+        explicit operator bool()const noexcept{return bool(next);}
+    };
+    LatencyEdit prepareLatencyEdit(std::unique_ptr<LatencyPlan>);
     std::unique_ptr<LatencyPlan> makeLatencyPlan(const ID *replacement=nullptr,const NativeFX *prepared=nullptr,
                                                 std::optional<bool> midiTakeActive={},bool admitReady=false,
-                                                bool releaseRemoved=false)const;
+                                                bool releaseRemoved=false, const std::vector<Voice *> *itemVoices=nullptr,
+                                                const std::vector<TrackRoute> *routes=nullptr, const std::vector<int> *order=nullptr)const;
+    // Only explicit playback from Stop; queues, loops and exports retain their attacks.
+    double playbackStartRamp[2]{-1, -1};
+    uint64 playbackStartFrame[2]{};
     bool offlineMode=false;
+    bool offlineRendering=false;
     uint64 stemLatencyFingerprint=0;
     std::atomic<bool> presentationTailing{false};
     std::atomic<unsigned> presentationDelay{0};
@@ -374,10 +527,13 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     uint64_t renderClock=0;
     void resetLatencyHead(int head,double at)noexcept;
     void publishLatency()noexcept;
-    void installLatencyPlan(std::unique_ptr<LatencyPlan> &,bool preservePlayback)noexcept;
+    void installLatencyPlan(LatencyEdit &,bool preservePlayback)noexcept;
     uint64 stemFingerprint(bool admitReady=false,bool releaseRemoved=false)const;
     void activateStemLatency(bool releaseRemoved=true);
     std::vector<std::unique_ptr<Bus>> buses;
+    // Only the control thread traverses/mutates the registry. Each callback bus
+    // already owns its payload; meters do not require traversing DSP objects.
+    std::map<ID, std::shared_ptr<audio::TrackMeterState>> trackMeters;
     std::vector<int> busOrder;
     TransportFadeout transportFadeout;
     std::array<float, 4096> trackFadeoutGains{};
@@ -389,7 +545,6 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     AudioBuffer<float> masterBuffer{2, 4096};
     AudioBuffer<float> readScratch[2]{{2, 131080}, {2, 131080}};
     AudioBuffer<float> liveRecordBuffer{2, 4096};
-    AudioBuffer<float> outputRecordBuffers[4]{{2,4096},{2,4096},{2,4096},{2,4096}};
     AudioBuffer<float> outputRecordScratch{2,4096};
     std::array<std::array<double, 4096>, 2> timelinePositions{};
     std::array<std::array<bool,4096>,2> timelineRunning{};
@@ -398,11 +553,25 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     TimecodeMIDI timecodeMIDI;
     float timecodeGain = 1;
     ClickProgram metronome;
+    ClickProgram::EnableGate metronomeGate;
+    struct MetronomePreparation {
+        ClickProgram::Sample a,b;
+        String error;
+        std::atomic<bool> done{false};
+        std::function<void(String)> completed;
+    };
+    std::shared_ptr<MetronomePreparation> metronomePreparation;
+    void publishPreparedMetronome();
+    jaras::PluginTempoMap pluginTempo;
     var metronomeSettings;
     int metronomeMode = 0, metronomeOutput = 1, metronomeChannels = 2;
     float metronomeGainA = 1, metronomeGainB = 1;
     std::vector<jaras::OutputPatch> masterOutputs{{1, 2}};
     std::vector<std::unique_ptr<Voice>> voices;
+    // Deleted items retain their existing readers/FX for immediate Undo. A full
+    // project/graph replacement retires this cache with its owning engine.
+    std::vector<std::unique_ptr<Voice>> removedItemVoices;
+    std::set<ID> preparedItemIDs;
     std::array<int, 128> outputMapping{};
     std::atomic<double> rate{48000}, position{0}, subPosition{0};
     std::atomic<bool> playing{false}, subPlaying{false};
@@ -411,54 +580,91 @@ class AudioEngine final : public AudioIODeviceCallback, private MidiInputCallbac
     meterDisplay::PeakHold masterPeakHold;
     ID peakProject;
     std::array<std::atomic<float>, 2> masterLevels{};
-    std::atomic<float> masterFXInput{0}, masterFXOutput{0};
-    struct Update {
-        bool resetElapsed=false;
-        uint64 transportSerial=0;
-        enum Kind { transport, mixer, item, routing } kind = transport;
-        bool inputMonitoring=true;
-        int midiSlot=0,midiChannel=0;
-        State state;
-        double itemGain=1, itemPan=0, fadeIn=0, fadeOut=0;
-        jaras::FadeCurve fadeInShape, fadeOutShape;
-        bool fxBypassed=false;
-        int index = -1;
-        float volume = 1, pan = 0;
-        bool mute = false, solo = false, mono = false, phase = false;
-    };
-    AbstractFifo fifo{1024};
-    // Allocate once when constructing the engine, outside the audio callback.
-    // Embedding 1024 transport/mixer commands made nested offline render engines
-    // exceed the Windows thread stack during export/re-render integration tests.
-    std::unique_ptr<Update[]> updates = std::make_unique<Update[]>(1024);
+    std::atomic<float> masterFXInput{0}, masterFXOutput{0}, masterGainReduction{-1};
+    // The control side owns and recycles command blocks. Overflow never makes
+    // the producer consume commands under the device callback lock.
+    audio::RealtimeCommandQueue<Update> updates;
+    audio::RealtimeLatestValue<Update> masterUpdates;
+    audio::PreparedAudioEdits preparedEdits;
     State current;
+    jaras::audio::StopTransition stopTransition;
+    struct ParallelClipJob { Voice *voice=nullptr;AudioFormatReader *reader=nullptr;int head=0,frames=0;double local=0; };
+    std::vector<ParallelClipJob> parallelClipJobs;
+    std::unique_ptr<ParallelAudioWork> parallelClips;
+    std::atomic<uint64> parallelClipBlocks{0},parallelClipTasks{0};
+    int renderQuantum=512;
+    std::atomic<uint64> tempoPreparedStarts{0};
+    void prepareParallelClips();
     float masterVolume = 1, masterPan = 0;
+    jaras::MultiLoopMixerEnvelope loopMixer, loopMixerDisplay;
+    jaras::MultiLoopMixerRule masterLoopRule;
+    std::map<ID, jaras::MultiLoopMixerRule> loopDisplayRules;
+    std::optional<jaras::MultiLoopPlayback> lastLoopMixer;
+    bool loopMixerPublished = false;
     bool masterMute = false, masterMono = false, masterPhase = false, masterSolo = false;
     bool instrumentWasAllowed = false;
     double duration = 0;
     bool attached = false;
+    bool externalRenderDriven = false;
     bool exportCapture = false;
     int exportBus = -1;
     TimeSliceThread recordingThread{"CatLive recording"};
-    std::unique_ptr<AudioFormatWriter::ThreadedWriter> recorder;
-    std::unique_ptr<TrackCapture> trackCapture;
+    std::unique_ptr<BufferedAudioWriter> recorder;
+    audio::RealtimeBorrowedPointer<BufferedAudioWriter> recorderSlot;
+    struct LibrarySampleVoice {
+        std::shared_ptr<VinhetasAudio::Sample> sample;
+        double position = 0;
+        std::atomic<bool> finished{false};
+        std::atomic<float> gain{1.f};
+    };
+    std::unique_ptr<LibrarySampleVoice> librarySample;
+    audio::RealtimeBorrowedPointer<LibrarySampleVoice> librarySampleSlot;
+    std::atomic<bool> librarySampleOutputReady{false};
+    void renderLibrarySample(AudioBuffer<float> &, int samples, double sampleRate);
+    struct RecordingOutput { ID track; std::unique_ptr<NativeFX> fx; };
+    struct RecordingState {
+        std::unique_ptr<TrackCapture> capture;
+        std::vector<RecordingOutput> outputs;
+    };
+    // Control owns this state and prepared FX tickets may retain it. The audio
+    // block borrows a raw pointer; it never acquires/releases shared ownership.
+    std::shared_ptr<RecordingState> recordingSession;
+    audio::RealtimeBorrowedPointer<RecordingState> recordingSlot;
+    std::vector<RecordingOutput> prepareRecordingOutputs(const std::vector<TrackCapture::Target> &);
     std::atomic<uint64> recordedFrames{0};
     std::array<int, 128> inputMapping{};
     std::atomic<bool> recording{false};
     std::atomic<uint64> recordingDrops{0};
-    MidiMessageCollector midiInput;
-    MidiMessageCollector midiSlots[3];
-    MidiBuffer slotMessages[3], keyboardMidi;
-    String midiDevices[3];
+    RealtimeMIDIInput midiInput, midiSlots[6], virtualKeyboardInput;
+    MidiBuffer slotMessages[6], keyboardMidi;
+    String midiDevices[6];
     CriticalSection midiRoutingLock;
     MidiBuffer liveMidi;
     void handleIncomingMidiMessage(MidiInput *, const MidiMessage &) override;
+    void handleNoteOn(MidiKeyboardState *, int, int, float) override;
+    void handleNoteOff(MidiKeyboardState *, int, int, float) override;
     void enqueue(const Update &);
-    void applyUpdates();
+    template<class Work> audio::PreparedAudioEdits::Ticket* enqueuePreparedEdit(Work&& work, uint64 notBeforeFrame=0) {
+        auto* ticket = preparedEdits.prepare(std::forward<Work>(work));
+        Update update; update.kind = Update::preparedEdit; update.edit = ticket;
+        update.notBeforeFrame=notBeforeFrame;
+        try { enqueue(update); }
+        catch (...) { preparedEdits.cancelUnpublished(ticket); throw; }
+        return ticket;
+    }
+    template<class Work> void commitPreparedEdit(Work&& work, uint64 notBeforeFrame=0) {
+        waitPreparedEdit(enqueuePreparedEdit(std::forward<Work>(work),notBeforeFrame));
+    }
+    // Control only. Waits for an audio boundary; never takes the device lock.
+    // A device failure cancels a not-yet-started edit before its stack expires.
+    void waitPreparedEdit(audio::PreparedAudioEdits::Ticket*);
+    void applyUpdates(size_t budget = std::numeric_limits<size_t>::max(),
+                      TrackCapture* capture = nullptr, bool fromCallback = false);
     void mixVoice(Voice &, int head, double at, float *const *, int channels, int dest, int count);
     void audioDeviceIOCallbackWithContext(const float *const *, int, float *const *, int, int,
                                           const AudioIODeviceCallbackContext &) override;
     void audioDeviceAboutToStart(AudioIODevice *) override;
+    bool asioCallbackScheduling = false; // configured before the driver starts callbacks
     void audioDeviceStopped() override;
 };
 } // namespace catlive

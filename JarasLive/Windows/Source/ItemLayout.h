@@ -1,9 +1,36 @@
 #pragma once
 #include "Common.h"
+#include "ClipTempo.h"
 #include "../../Core/Tracks/ItemFade.hpp"
 namespace catlive {
+inline constexpr float timelineItemVerticalInset = 1.f;
+
+inline void drawMixerKnob(Graphics &g, juce::Point<float> center, float radius, double position, bool pan) {
+    auto circle = juce::Rectangle<float>(2 * radius, 2 * radius).withCentre(center);
+    const Colour ink(pan ? 0xffbf80ff : 0xff33ff8c);
+    g.setColour(Colours::black);
+    g.fillEllipse(circle);
+    g.setColour(ink);
+    g.drawEllipse(circle, radius * 0.30f);
+    const auto angle = (135 + jlimit(0., 1., position) * 270) * MathConstants<double>::pi / 180;
+    const float needle = radius * 0.78f;
+    g.drawLine(center.x, center.y, center.x + (float)std::cos(angle) * needle,
+               center.y + (float)std::sin(angle) * needle, radius * 0.40f);
+}
+
+struct ProgramChangeLanes {
+    std::map<ID,int> lanes;int count=1;
+    explicit ProgramChangeLanes(const jaras::Track &track) {
+        std::vector<const jaras::ProgramChangeMarker*> ordered;for(const auto &m:track.programChanges)ordered.push_back(&m);
+        std::stable_sort(ordered.begin(),ordered.end(),[](auto a,auto b){return a->position<b->position;});
+        double start=-std::numeric_limits<double>::infinity();int lane=0;
+        for(auto *m:ordered){if(std::abs(m->position-start)>=.000001){start=m->position;lane=0;}lanes[m->id]=lane++;count=std::max(count,lane);}
+    }
+};
 // ProjectModels.TrackLanes: simultaneous items occupy distinct visual lanes.
 struct ItemLanes {
+    // Match the Mac layout tolerance for sample rounding on import.
+    static constexpr double edgeTolerance = 1.0 / 44100.0;
     std::map<ID, int> lanes;
     struct Placement { int lane = 0, count = 1; };
     std::map<ID, Placement> placements;
@@ -12,17 +39,17 @@ struct ItemLanes {
         std::vector<const jaras::AudioClip*> result;result.reserve(track.clips.size());
         for(const auto &clip:track.clips)result.push_back(&clip);return result;
     }
-    explicit ItemLanes(const jaras::Track &track):ItemLanes(references(track)) {}
-    explicit ItemLanes(std::vector<const jaras::AudioClip*> ordered) {
+    explicit ItemLanes(const jaras::Track &track):ItemLanes(references(track),jaras::isTeleprompterRole(track.role)) {}
+    explicit ItemLanes(std::vector<const jaras::AudioClip*> ordered,bool preserveOrder=false) {
         std::vector<const jaras::AudioClip *> placed, takes;
-        const auto chronological = [](const auto *a, const auto *b) {
-            return a->startTime != b->startTime ? a->startTime < b->startTime : a->id < b->id;
+        const auto chronological = [preserveOrder](const auto *a, const auto *b) {
+            return a->startTime != b->startTime ? a->startTime < b->startTime : !preserveOrder && a->id < b->id;
         };
-        std::sort(ordered.begin(), ordered.end(), chronological);
+        std::stable_sort(ordered.begin(), ordered.end(), chronological);
         std::vector<double> ends;
         for (const auto *clip : ordered) {
             if (clip->recordingLane) { takes.push_back(clip); continue; }
-            auto at = std::find_if(ends.begin(), ends.end(), [&](double end) { return end <= clip->startTime + 1e-9; });
+            auto at = std::find_if(ends.begin(), ends.end(), [&](double end) { return end <= clip->startTime + edgeTolerance; });
             const int lane = (int)(at - ends.begin());
             if (at == ends.end()) ends.push_back(clip->startTime + clip->duration);
             else *at = clip->startTime + clip->duration;
@@ -34,7 +61,7 @@ struct ItemLanes {
         for (const auto *clip : takes) {
             int lane = 0;
             for (const auto *other : placed)
-                if (other->startTime < clip->startTime + clip->duration - 1e-9 && other->startTime + other->duration > clip->startTime + 1e-9)
+                if (other->startTime < clip->startTime + clip->duration - edgeTolerance && other->startTime + other->duration > clip->startTime + edgeTolerance)
                     lane = std::max(lane, lanes.at(other->id) + 1);
             lanes[clip->id] = lane; placed.push_back(clip); count = std::max(count, lane + 1);
         }
@@ -43,7 +70,7 @@ struct ItemLanes {
         for (size_t first=0; first<ordered.size();) {
             size_t last=first+1;
             double end=ordered[first]->startTime+ordered[first]->duration;
-            while(last<ordered.size() && ordered[last]->startTime<end-1e-9) {
+            while(last<ordered.size() && ordered[last]->startTime<end-edgeTolerance) {
                 end=std::max(end,ordered[last]->startTime+ordered[last]->duration);++last;
             }
             std::set<int> used;
@@ -52,6 +79,17 @@ struct ItemLanes {
             for(size_t i=first;i<last;++i)placements.emplace(ordered[i]->id,Placement{compact.at(lanes.at(ordered[i]->id)),(int)used.size()});
             first=last;
         }
+    }
+    // During capture, layout changes only when the growing take crosses the
+    // start of another item. Waveform growth alone does not rebuild track rows.
+    static bool growRecordingClip(jaras::AudioClip &clip, double duration,
+                                  const std::vector<const jaras::AudioClip *> &others) {
+        const double before = clip.startTime + clip.duration;
+        const double after = clip.startTime + duration;
+        clip.duration = duration;
+        return std::any_of(others.begin(), others.end(), [&](const auto *other) {
+            return other->id != clip.id && before <= other->startTime + edgeTolerance && after > other->startTime + edgeTolerance;
+        });
     }
     int lane(const ID &id) const { const auto at = lanes.find(id); return at == lanes.end() ? 0 : at->second; }
     Placement placement(const ID &id) const { const auto at=placements.find(id);return at==placements.end()?Placement{}:at->second; }
@@ -63,25 +101,33 @@ struct ItemLanes {
     }
 };
 // ClipRepetitionBoundaries: show visible source repeats, skipping subpixel seams.
-inline std::vector<float> itemLoopSeams(const jaras::AudioClip &clip, juce::Rectangle<float> bounds, float viewportWidth, double scale) {
+inline std::vector<float> itemLoopSeams(const jaras::AudioClip &clip, juce::Rectangle<float> bounds, float viewportWidth, double scale, const ClipTempo *timing = nullptr) {
     std::vector<float> result;
-    const double length=clip.loopLength.value_or(0),rate=clip.playbackRate;
-    if(length<=0 || rate<=0 || scale<=0 || !std::isfinite(length)) return result;
-    const double interval=length/rate,offset=clip.sourceOffset-clip.loopStart.value_or(0);
-    const double phase=std::fmod(std::fmod(offset,length)+length,length),origin=(length-phase)/rate;
+    const double length=clip.loopLength.value_or(0);
+    if(length<=0 || scale<=0 || !std::isfinite(length)) return result;
     const double lower=std::max(1e-6,(-bounds.getX()-4)/scale),upper=std::min(clip.duration-1e-6,(viewportWidth-bounds.getX()+4)/scale);
-    const double skip=std::max(1.,std::ceil(10/scale/interval)),step=interval*skip;
-    double position=origin+std::ceil(std::max(0.,std::ceil((lower-origin)/interval))/skip)*step;
-    for(;position<=upper;) {
-        result.push_back(bounds.getX()+(float)(position*scale));
-        const double next=position+step;if(next<=position) break;position=next;
-    }
+    const auto append=[&](double start,double end,double source,double rate) {
+        if(rate<=0 || !std::isfinite(rate))return;
+        const double interval=length/rate,offset=source-clip.loopStart.value_or(0);
+        const double phase=std::fmod(std::fmod(offset,length)+length,length),origin=start+(length-phase)/rate;
+        const double from=std::max(lower,start),to=std::min(upper,end);
+        const double skip=std::max(1.,std::ceil(10/scale/interval)),step=interval*skip;
+        double position=origin+std::ceil(std::max(0.,std::ceil((from-origin)/interval))/skip)*step;
+        for(;position<=to;) {
+            const float x=bounds.getX()+(float)(position*scale);
+            if(result.empty() || x-result.back()>=9.999f)result.push_back(x);
+            const double next=position+step;if(next<=position)break;position=next;
+        }
+    };
+    if(timing)for(const auto &span:timing->spans)
+        append(span.start-clip.startTime,span.end-clip.startTime,span.source,span.rate);
+    else append(0,clip.duration,clip.sourceOffset,clip.playbackRate);
     return result;
 }
-inline Path itemOutline(const jaras::AudioClip &clip, juce::Rectangle<float> r, float viewportWidth, double scale) {
+inline Path itemOutline(const jaras::AudioClip &clip, juce::Rectangle<float> r, float viewportWidth, double scale, const ClipTempo *timing = nullptr) {
     Path path;
     const float radius=r.getWidth()<20 ? 0 : 3;
-    const auto seams=itemLoopSeams(clip,r,viewportWidth,scale);
+    const auto seams=itemLoopSeams(clip,r,viewportWidth,scale,timing);
     if(seams.empty()) {path.addRoundedRectangle(r,radius);return path;}
     const float left=r.getX(),right=r.getRight(),top=r.getY(),bottom=r.getBottom(),depth=std::min(5.f,r.getHeight()/3);
     path.startNewSubPath(left+radius,top);path.lineTo(right-radius,top);path.quadraticTo(right,top,right,top+radius);
@@ -93,47 +139,50 @@ inline Path itemOutline(const jaras::AudioClip &clip, juce::Rectangle<float> r, 
 }
 // GridSelectionItem geometry is shared by drawing and hit testing.
 struct ItemHeader {
+    // Same screen density as GridSelectionItem on Apple platforms.
+    static constexpr double pinnedMinimumScale = 23.47981560587109;
+    static constexpr double volumeMinimumScale = 1.065964770560176;
+    static constexpr double fxAndPanMinimumScale = 2.035375406750012;
+    static constexpr float headerScale = 1.1f;
+    static bool pinsAtScale(double pixelsPerSecond) { return pixelsPerSecond >= pinnedMinimumScale; }
     enum Control { none, mute, fx, phase, pan, gain, fadeIn, fadeOut, fadeInCurve, fadeInSCurve, fadeOutCurve, fadeOutSCurve };
     juce::Rectangle<float> item, visible, muteRect, fxRect, phaseRect, panRect, panLabel, gainRect, gainLabel;
     float titleLeft = 0;
     bool editable = false, midi = false;
-    ItemHeader(juce::Rectangle<float> bounds, float viewportWidth, const jaras::Track &track, const jaras::AudioClip &clip, const String &title = {})
+    ItemHeader(juce::Rectangle<float> bounds, float viewportWidth, const jaras::Track &track, const jaras::AudioClip &clip, const String &title = {}, bool hidden = false, double pixelsPerSecond = pinnedMinimumScale, bool selected = false)
         : item(bounds), editable(jaras::fixedTrackName(track.role).empty() || (clip.audioFile && clip.audioFile->path.rfind("Videos/",0)==0)), midi(bool(clip.midi)) {
+        const bool pinned = pinsAtScale(pixelsPerSecond);
         visible = bounds.getIntersection({0, bounds.getY(), viewportWidth, std::min(17.f,bounds.getHeight())});
-        const float x = visible.getX() + 2.6f, y = bounds.getY(), width = visible.getWidth();
+        if (!pinned) visible = {bounds.getX(), bounds.getY(), std::max(0.f, std::min(bounds.getRight(), viewportWidth)-bounds.getX()), std::min(17.f,bounds.getHeight())};
+        const float x = visible.getX() + 2 * headerScale, y = bounds.getY(), width = visible.getWidth();
         titleLeft = visible.getX() + 6;
-        if (!editable) return;
-        if (width < 26.7f) { titleLeft = visible.getRight(); return; }
+        if (!editable || hidden) return;
         float next = x;
         auto append = [&](juce::Rectangle<float>& target, float w, float gap = 1.f) {
             if (next + w + 2 > visible.getRight()) return false;
             target = {next,y,w,std::min(17.f,bounds.getHeight())};
-            next += w + gap; titleLeft = next;
+            next += w + gap; titleLeft = next + 4;
             return true;
         };
+        const auto appendSelectedMute = [&] {
+            const float muteWidth = std::min(17 * headerScale, width - 2 * headerScale - 2);
+            if (selected && muteWidth >= 12.f) append(muteRect, muteWidth);
+        };
+        if (!pinned && pixelsPerSecond < volumeMinimumScale) { appendSelectedMute(); return; }
         const auto readoutFont = theme::semiboldFont(9);
-        const auto labelWidth = [&](const String& label) { return std::ceil(GlyphArrangement::getStringWidth(readoutFont,label)) + 2.f; };
-        const float gainWidth = labelWidth(gainText(clip.gain.value_or(1)));
-        const float panWidth = labelWidth(panText(clip.pan.value_or(0)));
-        const float nameWidth = std::max(24.f, std::ceil(GlyphArrangement::getStringWidth(readoutFont, title.isNotEmpty() ? title : text(clip.name)))) + 3.f;
-        const float gainThreshold = 4.6f + 23.1f + nameWidth + 19.5f + .5f + gainWidth + 1.f;
-        const float fxThreshold = gainThreshold + ((!midi || clip.fxJSON) ? 27.f : 0.f);
-        const float phaseThreshold = fxThreshold + (!midi ? 20.5f : 0.f);
-        const float panThreshold = phaseThreshold + (!midi ? 19.5f + .5f + panWidth + 1.f : 0.f);
-        if (width >= gainThreshold) {
-            append(gainRect,19.5f,.5f);
-            append(gainLabel,gainWidth);
-        } else if (width >= 2.6f + 23.1f + nameWidth + 19.5f + 1.f) {
-            append(gainRect,19.5f);
-        }
-        if (!append(muteRect,22.1f)) return;
-        if (width < fxThreshold) return;
-        if ((!midi || clip.fxJSON) && !append(fxRect,26)) return;
-        if (!midi) {
-            if (width < phaseThreshold || !append(phaseRect,19.5f)) return;
-            if (width < panThreshold || !append(panRect,19.5f,.5f)) return;
-            append(panLabel,labelWidth(panText(clip.pan.value_or(0))));
-        }
+        const float nameWidth = std::max(24.f, std::ceil(GlyphArrangement::getStringWidth(readoutFont, title.isNotEmpty() ? title : text(clip.name))));
+        const float gainThreshold = 34 * headerScale + nameWidth + 12;
+        if (width < gainThreshold) { appendSelectedMute(); return; }
+        append(gainRect,15 * headerScale);
+        append(muteRect,17 * headerScale);
+        if (pixelsPerSecond < fxAndPanMinimumScale || (midi && !clip.fxJSON)) return;
+        const float fxThreshold = gainThreshold + 20 * headerScale + 1;
+        if (width >= fxThreshold && append(fxRect,20 * headerScale) &&
+            !midi && width >= fxThreshold + 15 * headerScale + 1)
+            append(panRect,15 * headerScale);
+    }
+    juce::Rectangle<float> nameRect() const {
+        return {titleLeft, visible.getY(), std::max(0.f, visible.getRight() - titleLeft - 4), visible.getHeight()};
     }
     int resizeSide(Point<float> point) const {
         if (point.y < item.getY() || point.y >= item.getBottom()) return 0;
@@ -201,34 +250,32 @@ struct ItemHeader {
         if (out) return fadeOut;
         return none;
     }
-    void draw(Graphics &g, const jaras::AudioClip &clip) const {
+    void draw(Graphics &g, const jaras::AudioClip &clip, std::optional<double> gainOverride = {}, std::optional<double> panOverride = {}) const {
         g.saveState(); g.reduceClipRegion(visible.getSmallestIntegerContainer());
-        auto button = [&](juce::Rectangle<float> r, String caption, bool active, bool bypass = false) {
+        auto button = [&](juce::Rectangle<float> r, String caption, Colour fill, Colour ink) {
             if (r.isEmpty()) return;
-            g.setColour(bypass ? Colour(0xffff453a) : Colours::white.withAlpha(.10f)); g.fillRect(r);
-            g.setColour(active ? Colour(0xff33ff8c) : Colours::white); g.setFont(theme::semiboldFont(9)); g.drawText(caption,r,Justification::centred);
+            r=r.withSizeKeepingCentre(r.getWidth(),std::min(11.f,r.getHeight()));
+            g.setColour(fill);
+            g.fillRoundedRectangle(r, theme::trackButtonRadius);
+            g.setColour(ink);
+            g.setFont(theme::semiboldFont(5.5f)); g.drawText(caption,r,Justification::centred);
         };
-        button(muteRect,"M",false,clip.muted);
+        button(muteRect,"M",clip.muted ? theme::trackMute : theme::trackButton,Colours::white);
         const bool hasFX = clip.fxJSON && !list(get(JSON::parse(text(*clip.fxJSON)),"inserted")).isEmpty();
-        button(fxRect,"FX",hasFX && !clip.fxBypassed.value_or(false),clip.fxBypassed.value_or(false));
+        const auto fxInk = !hasFX ? Colours::white : clip.fxBypassed.value_or(false) ? theme::trackMute : theme::green;
+        button(fxRect,"FX",theme::trackButton,fxInk);
         if (!phaseRect.isEmpty()) {
             g.setColour(clip.phaseInverted.value_or(false) ? Colours::yellow : Colours::black.withAlpha(.28f)); g.fillRect(phaseRect);
             g.setColour(clip.phaseInverted.value_or(false) ? Colours::black : Colours::white);
-            auto centre=phaseRect.getCentre(); g.drawEllipse(centre.x-4.55f,centre.y-4.55f,9.1f,9.1f,1.2f);
-            g.drawLine(centre.x-5.85f,centre.y+5.85f,centre.x+5.85f,centre.y-5.85f,1.2f);
+            auto centre=phaseRect.getCentre(); g.drawEllipse(centre.x-3.85f,centre.y-3.85f,9.1f,9.1f,1.2f);
+            g.drawLine(centre.x-4.95f,centre.y+4.95f,centre.x+4.95f,centre.y-4.95f,1.2f);
         }
-        auto knob = [&](juce::Rectangle<float> r, double position) {
-            if (r.isEmpty()) return;
-            const auto c=r.getCentre(); g.setColour(Colours::black); g.fillEllipse(c.x-5.85f,c.y-5.85f,11.7f,11.7f);
-            g.setColour(Colours::white); g.drawEllipse(c.x-5.85f,c.y-5.85f,11.7f,11.7f,1.5f);
-            const float angle=(float)((135+jlimit(0.,1.,position)*270)*MathConstants<double>::pi/180);
-            g.setColour(Colour(0xff33ff8c)); g.drawLine(c.x,c.y,c.x+std::cos(angle)*4.55f,c.y+std::sin(angle)*4.55f,2);
-        };
-        knob(panRect,(clip.pan.value_or(0)+1)/2);
-        knob(gainRect,(20*std::log10(std::max(.000001,clip.gain.value_or(1)))+60)/84);
-        g.setColour(Colours::white); g.setFont(theme::semiboldFont(9));
-        g.drawText(panText(clip.pan.value_or(0)),panLabel,Justification::centredLeft);
-        g.drawText(gainText(clip.gain.value_or(1)),gainLabel,Justification::centredLeft);
+        if (!panRect.isEmpty())
+            drawMixerKnob(g, panRect.getCentre(), 4.95f, (panOverride.value_or(clip.pan.value_or(0)) + 1) / 2, true);
+        if (!gainRect.isEmpty()) {
+            const auto gain = gainOverride.value_or(clip.gain.value_or(1));
+            drawMixerKnob(g, gainRect.getCentre(), 4.95f, (20 * std::log10(std::max(.000001, gain)) + 60) / 84, false);
+        }
         g.restoreState();
     }
     void drawFades(Graphics &g, const jaras::AudioClip &clip) const {

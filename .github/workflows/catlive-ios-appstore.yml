@@ -3,6 +3,9 @@ name: CatLive iOS - App Store Connect
 on:
   workflow_call:
     inputs:
+      upload_to_store:
+        type: boolean
+        default: true
       version:
         required: true
         type: string
@@ -258,6 +261,7 @@ jobs:
           if-no-files-found: error
 
       - name: Validar e enviar ao App Store Connect
+        if: inputs.upload_to_store
         env:
           ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}

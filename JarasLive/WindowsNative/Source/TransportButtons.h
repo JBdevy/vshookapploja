@@ -4,6 +4,8 @@
 #include <windowsx.h>
 #include <d2d1.h>
 #include <dwrite_3.h>
+#include "SavePulseComposition.h"
+#include <chrono>
 #include <wrl/client.h>
 #include <algorithm>
 #include <cmath>
@@ -19,14 +21,14 @@ class TransportButtons final {
     struct State {
         RECT rect{};
         float scale = 1, dimming = 0, fontSize = 9;
-        bool active = false, enabled = true, visible = true, blocked = false;
+        bool active = false, enabled = true, visible = true, blocked = false, savePulse = false, recordPulse = false;
         unsigned background = 0xff252525, foreground = 0xffffffff, activeBackground = 0xff6cbd4b, surface = 0xff1d1d1d;
-        unsigned accent = 0;
+        unsigned accent = 0, surfaceBottom = 0, iconForeground = 0;
         // `tooltip` is retained as the native accessibility/window description;
         // CatLive does not create hover tooltip windows.
         std::wstring text, icon, tooltip;
         bool operator==(const State &b) const {
-            return EqualRect(&rect,&b.rect) && scale==b.scale && dimming==b.dimming && fontSize==b.fontSize && blocked==b.blocked && active==b.active && enabled==b.enabled && visible==b.visible && background==b.background && foreground==b.foreground && activeBackground==b.activeBackground && surface==b.surface && accent==b.accent && text==b.text && icon==b.icon && tooltip==b.tooltip;
+            return EqualRect(&rect,&b.rect) && scale==b.scale && dimming==b.dimming && fontSize==b.fontSize && savePulse==b.savePulse && recordPulse==b.recordPulse && blocked==b.blocked && active==b.active && enabled==b.enabled && visible==b.visible && background==b.background && foreground==b.foreground && activeBackground==b.activeBackground && surface==b.surface && surfaceBottom==b.surfaceBottom && iconForeground==b.iconForeground && accent==b.accent && text==b.text && icon==b.icon && tooltip==b.tooltip;
         }
     };
     using Click = std::function<void(bool)>;
@@ -58,6 +60,13 @@ class TransportButtons final {
     void update(size_t index, HWND parent, const State &state, Click click) {
         while(buttons.size()<=index) buttons.push_back(std::make_unique<Button>(*this));
         auto &button=*buttons[index]; button.click=std::move(click);
+        // A plugin may temporarily change the UI thread's DPI context. Native
+        // transport children must always use their parent's coordinate space.
+        struct DPIContext {
+            DPI_AWARENESS_CONTEXT previous = nullptr;
+            explicit DPIContext(HWND owner) { if(owner) previous=SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(owner)); }
+            ~DPIContext() { if(previous) SetThreadDpiAwarenessContext(previous); }
+        } dpi(parent);
         if(button.window && (!IsWindow(button.window)||GetParent(button.window)!=parent)) button.destroy();
         if(!button.window && parent) {
             static const bool registered=[] { WNDCLASSW c{};c.lpfnWndProc=proc;c.hInstance=GetModuleHandleW(nullptr);c.lpszClassName=L"CatLiveTransportButton";c.hCursor=LoadCursorW(nullptr,MAKEINTRESOURCEW(32512));return RegisterClassW(&c)!=0||GetLastError()==ERROR_CLASS_ALREADY_EXISTS;}();
@@ -66,8 +75,13 @@ class TransportButtons final {
             if(!button.window) throw std::runtime_error("Não foi possível criar os controles do transporte.");
         }
         if(!button.window) return;
-        if(!(button.state==state)) {
-            const bool resize=!EqualRect(&button.state.rect,&state.rect);
+        RECT actual{};
+        const bool hasBounds=GetWindowRect(button.window,&actual)!=FALSE;
+        if(hasBounds) MapWindowPoints(HWND_DESKTOP,parent,reinterpret_cast<POINT*>(&actual),2);
+        // The OS can resize child windows on a display/DPI change without
+        // changing our cached State. Repair the actual input rectangle too.
+        const bool resize=!hasBounds || !EqualRect(&actual,&state.rect);
+        if(resize || !(button.state==state)) {
             button.state=state;
             if(resize) {
                 SetWindowPos(button.window,HWND_TOP,state.rect.left,state.rect.top,state.rect.right-state.rect.left,state.rect.bottom-state.rect.top,SWP_NOACTIVATE);
@@ -76,6 +90,7 @@ class TransportButtons final {
             ShowWindow(button.window,state.visible?SW_SHOWNOACTIVATE:SW_HIDE);
             EnableWindow(button.window,state.enabled && !state.blocked);
             SetWindowTextW(button.window,state.tooltip.c_str());
+            updatePulse(button);
             InvalidateRect(button.window,nullptr,FALSE);
         }
     }
@@ -83,16 +98,48 @@ class TransportButtons final {
         for(auto &button:buttons)if(button->window && button->state.visible)
             RedrawWindow(button->window,nullptr,nullptr,RDW_INVALIDATE|RDW_UPDATENOW);
     }
-    void hide() { for(auto &b:buttons) { if(b->window) ShowWindow(b->window,SW_HIDE);b->state.visible=false; } }
+    void hide() { for(auto &b:buttons) { if(b->window) ShowWindow(b->window,SW_HIDE);b->state.visible=false; updatePulse(*b); } }
   private:
     static void check(HRESULT result) { if(FAILED(result)) throw std::runtime_error("Não foi possível inicializar o desenho nativo do transporte."); }
     struct Button {
         explicit Button(TransportButtons &v):owner(v){}
         ~Button(){destroy();}
-        void destroy(){target.Reset();if(window&&IsWindow(window))DestroyWindow(window);window=nullptr;}
+        void destroy(){pulse.reset();target.Reset();if(window&&IsWindow(window)){KillTimer(window,1);KillTimer(window,2);DestroyWindow(window);}window=nullptr;}
         TransportButtons &owner; HWND window=nullptr; State state; Click click;
         bool pressed=false,hover=false; Ptr<ID2D1HwndRenderTarget> target;
+        std::unique_ptr<SavePulseComposition> pulse;
+        bool pulseUnavailable=false, fallbackPulse=false, recordingPulse=false; double pulseStart=0, recordPulseStart=0;
     };
+    static double clock() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+    static void updatePulse(Button &button) {
+        if (!button.window) return;
+        const auto &s = button.state;
+        const bool recording = s.recordPulse && s.visible;
+        if (recording != button.recordingPulse) {
+            button.recordingPulse = recording;
+            if (recording) { button.recordPulseStart = clock(); SetTimer(button.window, 2, 16, nullptr); }
+            else KillTimer(button.window, 2);
+            InvalidateRect(button.window, nullptr, FALSE);
+        }
+        const bool active = s.savePulse && s.visible;
+        if (active && !button.pulse && !button.pulseUnavailable) {
+            try { button.pulse = std::make_unique<SavePulseComposition>(button.window); }
+            catch (...) { button.pulseUnavailable = true; }
+        }
+        if (button.pulse) {
+            unsigned background = 0xff000000;
+            for (int shift : {0, 8, 16}) background |= unsigned(((s.surface >> shift) & 255) * (1.f - s.dimming)) << shift;
+            if (!button.pulse->update(active, s.rect.right - s.rect.left, s.rect.bottom - s.rect.top, background)) {
+                button.pulse.reset(); button.pulseUnavailable = true;
+            }
+        }
+        const bool fallback = active && !button.pulse;
+        if (fallback != button.fallbackPulse) {
+            button.fallbackPulse = fallback;
+            if (fallback) { button.pulseStart = clock(); SetTimer(button.window, 1, 16, nullptr); }
+            else KillTimer(button.window, 1);
+        }
+    }
     Ptr<ID2D1Factory> factory;
     Ptr<IDWriteFactory3> write;
     Ptr<IDWriteFontCollection1> fonts;
@@ -105,6 +152,8 @@ class TransportButtons final {
         if(!b)return DefWindowProcW(h,m,w,l);
         switch(m){
         case WM_ERASEBKGND:return 1;
+        case WM_SIZE:b->target.Reset();InvalidateRect(h,nullptr,FALSE);return 0;
+        case WM_TIMER:if((w==1 && b->fallbackPulse) || (w==2 && b->recordingPulse))InvalidateRect(h,nullptr,FALSE);return 0;
         case WM_PAINT:{PAINTSTRUCT ps{};BeginPaint(h,&ps);b->owner.paint(*b);EndPaint(h,&ps);return 0;}
         case WM_MOUSEMOVE:if(!b->hover){b->hover=true;TRACKMOUSEEVENT t{sizeof(t),TME_LEAVE,h,0};TrackMouseEvent(&t);InvalidateRect(h,nullptr,FALSE);}return 0;
         case WM_MOUSELEAVE:b->hover=false;InvalidateRect(h,nullptr,FALSE);return 0;
@@ -128,9 +177,24 @@ class TransportButtons final {
         auto *t=b.target.Get();t->SetDpi(96.f*scale,96.f*scale);t->BeginDraw();t->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);t->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
         t->Clear(colour(s.surface));
         const float width=r.right/scale,height=r.bottom/scale;
+        if (s.surfaceBottom && s.surfaceBottom != s.surface) {
+            const D2D1_GRADIENT_STOP stops[]{{0.f, colour(s.surface)}, {1.f, colour(s.surfaceBottom)}};
+            Ptr<ID2D1GradientStopCollection> colours;
+            Ptr<ID2D1LinearGradientBrush> gradient;
+            if (SUCCEEDED(t->CreateGradientStopCollection(stops, 2, D2D1_GAMMA_1_0, D2D1_EXTEND_MODE_CLAMP, &colours)) &&
+                SUCCEEDED(t->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(
+                    D2D1::Point2F(0, 0), D2D1::Point2F(0, height)), colours.Get(), &gradient)))
+                t->FillRectangle(D2D1::RectF(0, 0, width, height), gradient.Get());
+        }
         auto bg=colour(s.active?s.activeBackground:s.background);
         if(s.accent){bg=colour(s.accent);bg.a=s.active?1.f:b.pressed?.7f:.45f;}
-        if(!s.enabled&&!s.accent)bg.a*=.35f;
+        if(b.recordingPulse) {
+            const float red = float(.5 + .5 * std::cos((clock()-b.recordPulseStart)*3.141592653589793/.6));
+            const auto grey = colour(0xff454545), armed = colour(s.activeBackground);
+            bg = D2D1::ColorF(grey.r+(armed.r-grey.r)*red, grey.g+(armed.g-grey.g)*red,
+                             grey.b+(armed.b-grey.b)*red, 1.f);
+        }
+        if (!s.enabled && !s.accent && !(s.active && s.icon == L"pause")) bg.a *= .35f;
         Ptr<ID2D1SolidColorBrush> brush;t->CreateSolidColorBrush(bg,&brush);if(!brush){t->EndDraw();return;}
         const auto bounds=D2D1::RoundedRect(D2D1::RectF(.5f,.5f,width-.5f,height-.5f),6,6);
         t->FillRoundedRectangle(bounds,brush.Get());
@@ -170,6 +234,11 @@ class TransportButtons final {
             if(c==e)c=e=snapY(c);
             t->DrawLine(D2D1::Point2F(a,c),D2D1::Point2F(d,e),brush.Get(),stroke,iconStroke.Get());
         };
+        if (s.iconForeground) {
+            auto iconInk = colour(s.iconForeground);
+            if (!s.enabled) iconInk.a *= .35f;
+            brush->SetColor(iconInk);
+        }
         if(s.icon==L"play"){
             Ptr<ID2D1PathGeometry> path;factory->CreatePathGeometry(&path);Ptr<ID2D1GeometrySink> sink;if(path&&SUCCEEDED(path->Open(&sink))){sink->BeginFigure(D2D1::Point2F(2,1),D2D1_FIGURE_BEGIN_FILLED);sink->AddLine(D2D1::Point2F(11,6));sink->AddLine(D2D1::Point2F(2,11));sink->EndFigure(D2D1_FIGURE_END_CLOSED);sink->Close();t->FillGeometry(path.Get(),brush.Get());}
         }else if(s.icon==L"pause"){rect(2,1,4.5f,11);rect(7.5f,1,10,11);}
@@ -200,9 +269,24 @@ class TransportButtons final {
             line(8,0.5f,10,2.5f);line(8,4.5f,10,2.5f);line(4,7.5f,2,9.5f);line(4,11.5f,2,9.5f);
         }
         else if(s.icon==L"metronome") {
-            line(4,1,1,11); line(1,11,11,11); line(11,11,8,1); line(8,1,4,1);
-            line(3,8.5f,9,8.5f); line(6,9,9.5f,.5f);
-            t->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(7.4f,2,10.2f,4.2f),.5f,.5f),brush.Get());
+            Ptr<ID2D1PathGeometry> path; factory->CreatePathGeometry(&path);
+            Ptr<ID2D1GeometrySink> sink;
+            if(path && SUCCEEDED(path->Open(&sink))) {
+                sink->BeginFigure(D2D1::Point2F(3.8f, 4.1f), D2D1_FIGURE_BEGIN_HOLLOW);
+                sink->AddLine(D2D1::Point2F(5.3f, 1.55f));
+                sink->AddQuadraticBezier(D2D1::QuadraticBezierSegment(D2D1::Point2F(6.f, .35f), D2D1::Point2F(6.7f, 1.55f)));
+                sink->AddLine(D2D1::Point2F(10.9f, 9.25f));
+                sink->AddQuadraticBezier(D2D1::QuadraticBezierSegment(D2D1::Point2F(11.75f, 10.95f), D2D1::Point2F(10.1f, 10.95f)));
+                sink->AddLine(D2D1::Point2F(1.9f, 10.95f));
+                sink->AddQuadraticBezier(D2D1::QuadraticBezierSegment(D2D1::Point2F(.25f, 10.95f), D2D1::Point2F(1.1f, 9.25f)));
+                sink->AddLine(D2D1::Point2F(2.55f, 6.65f));
+                sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                sink->Close();
+                t->DrawGeometry(path.Get(), brush.Get(), stroke, iconStroke.Get());
+            }
+            line(1.35f, 4.05f, 6.05f, 8.55f);
+            line(1.65f, 8.55f, 10.35f, 8.55f);
+            line(6.f, 4.15f, 6.f, 6.3f);
         }
         else if(s.icon==L"teleprompter") {
             t->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(1,1,11,10),1,1),brush.Get(),stroke,iconStroke.Get());
@@ -218,8 +302,14 @@ class TransportButtons final {
             line(3,1,3,5);line(3,5,9,5);line(9,5,9,1);line(3,11,3,8);line(3,8,9,8);line(9,8,9,11);
         } else if(s.icon==L"check") {line(1,6,5,10);line(5,10,11,2);}
         t->SetTransform(D2D1::Matrix3x2F::Identity());
+        brush->SetColor(fg);
         if(layout)t->DrawTextLayout(D2D1::Point2F(x+iconSize+gap,0),layout.Get(),brush.Get(),D2D1_DRAW_TEXT_OPTIONS_CLIP);
-        if(s.dimming>0){brush->SetColor(D2D1::ColorF(0,0,0,s.dimming));t->FillRectangle(D2D1::RectF(0,0,width,height),brush.Get());}
+        float dimming=s.dimming;
+        if(b.fallbackPulse) {
+            const float alpha=float(.74+.26*std::cos((clock()-b.pulseStart)*3.141592653589793/.9));
+            dimming=1.f-(1.f-dimming)*alpha;
+        }
+        if(dimming>0){brush->SetColor(D2D1::ColorF(0,0,0,dimming));t->FillRectangle(D2D1::RectF(0,0,width,height),brush.Get());}
         if(t->EndDraw()==D2DERR_RECREATE_TARGET)b.target.Reset();
     }
 };

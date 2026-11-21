@@ -4,12 +4,26 @@
 #include <atomic>
 #include <vector>
 #include <climits>
+#include <cmath>
+#include "../../Core/Audio/PadGateRelease.hpp"
 
 namespace catlive {
 /// Samples are decoded on a worker thread. The audio callback only drains
 /// bounded commands and mixes preallocated voices; repeated triggers overlap.
 class VinhetasAudio {
   public:
+    static constexpr double maximumDuration = 60.0;
+    static bool acceptsDuration(juce::int64 frames, double rate) {
+        return frames > 0 && std::isfinite(rate) && rate > 0 && double(frames) / rate <= maximumDuration;
+    }
+    static juce::String importError(const juce::File &file) {
+        juce::AudioFormatManager formats; formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+        if (!reader) return juce::String::fromUTF8("Não foi possível ler este áudio.");
+        if (!acceptsDuration(reader->lengthInSamples, reader->sampleRate))
+            return juce::String::fromUTF8("Os pads aceitam áudios de até 60 segundos.");
+        return {};
+    }
     struct Sample { juce::AudioBuffer<float> pcm; double rate = 44100; };
     enum class Kind { start, stop, volume, stopPad, panic };
     struct Command { Kind kind{}; uint64_t token = 0; int preset = 0, pad = 0; float gain = 1; const Sample *sample = nullptr; };
@@ -40,12 +54,14 @@ class VinhetasAudio {
             counts[size_t(command.preset * 16 + command.pad)].fetch_add(1, std::memory_order_relaxed);
         commands[w % capacity] = command; write.store(w + 1, std::memory_order_release); return true;
     }
-    static std::shared_ptr<Sample> decode(const juce::File &file) {
+    static std::shared_ptr<Sample> decode(const juce::File &file, double playbackLimit = maximumDuration) {
         juce::AudioFormatManager formats; formats.registerBasicFormats();
         std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
-        if (!reader || reader->lengthInSamples <= 0 || reader->lengthInSamples > INT_MAX) return nullptr;
+        if (!reader || !acceptsDuration(reader->lengthInSamples, reader->sampleRate) || reader->lengthInSamples > INT_MAX) return nullptr;
+        const auto frames = std::min(double(reader->lengthInSamples), std::floor(reader->sampleRate * playbackLimit));
+        if (frames < 1) return nullptr;
         auto sample = std::make_shared<Sample>(); sample->rate = reader->sampleRate;
-        sample->pcm.setSize(2, int(reader->lengthInSamples));
+        sample->pcm.setSize(2, int(frames));
         if (!reader->read(&sample->pcm, 0, sample->pcm.getNumSamples(), 0, true, true)) return nullptr;
         if (reader->numChannels == 1) sample->pcm.copyFrom(1, 0, sample->pcm, 0, 0, sample->pcm.getNumSamples());
         return sample;
@@ -65,6 +81,7 @@ class VinhetasAudio {
         read.store(r, std::memory_order_release);
         for (auto &voice : voices) {
             if (!voice.sample) continue;
+            if (voice.releasing) voice.release.begin(rate);
             const auto &pcm = voice.sample->pcm;
             const double step = voice.sample->rate / rate;
             for (int frame = 0; frame < count; ++frame) {
@@ -72,17 +89,19 @@ class VinhetasAudio {
                 if (first >= pcm.getNumSamples()) { finish(voice); break; }
                 const int next = std::min(first + 1, pcm.getNumSamples() - 1);
                 const float fraction = float(voice.position - first);
+                const float gain = voice.gain * voice.release.next();
                 for (int ch = 0; ch < std::min(2, destination.getNumChannels()); ++ch) {
                     const auto *data = pcm.getReadPointer(ch);
-                    destination.addSample(ch, frame, (data[first] + (data[next] - data[first]) * fraction) * voice.gain);
+                    destination.addSample(ch, frame, (data[first] + (data[next] - data[first]) * fraction) * gain);
                 }
                 voice.position += step;
+                if (voice.release.finished()) { finish(voice); break; }
             }
         }
     }
     bool active(int preset, int pad) const { return counts[size_t(preset * 16 + pad)].load(std::memory_order_relaxed) > 0; }
   private:
-    struct Voice { const Sample *sample = nullptr; uint64_t token = 0; int preset = 0, pad = 0; double position = 0; float gain = 1; };
+    struct Voice { const Sample *sample = nullptr; uint64_t token = 0; int preset = 0, pad = 0; double position = 0; float gain = 1; bool releasing = false; jaras::PadGateRelease release; };
     std::atomic<bool> outputAvailable{false};
     std::array<std::atomic<uint32_t>,22> midiMappings{};
     std::array<Command, capacity> commands{};
@@ -96,9 +115,9 @@ class VinhetasAudio {
     }
     void apply(const Command &command) {
         if (command.preset < 0 || command.preset >= 6 || command.pad < 0 || command.pad >= 16) return;
-        if (command.kind == Kind::stopPad) { for (auto &voice : voices) if (voice.preset == command.preset && voice.pad == command.pad) finish(voice); return; }
+        if (command.kind == Kind::stopPad) { for (auto &voice : voices) if (voice.preset == command.preset && voice.pad == command.pad) voice.releasing = true; return; }
         if (command.kind == Kind::panic) { for (auto &voice : voices) finish(voice); return; }
-        if (command.kind == Kind::stop) { for (auto &voice : voices) if (voice.token == command.token) finish(voice); return; }
+        if (command.kind == Kind::stop) { for (auto &voice : voices) if (voice.token == command.token) voice.releasing = true; return; }
         if (command.kind == Kind::volume) { for (auto &voice : voices) if (voice.preset == command.preset && voice.pad == command.pad) voice.gain = command.gain; return; }
         if (!command.sample) return;
         for (auto &voice : voices) if (!voice.sample) {

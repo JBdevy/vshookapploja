@@ -1,7 +1,9 @@
 #include "ProjectCodec.h"
+#include "ProjectBackups.h"
 #include "MediaPath.h"
 #include "FXSchema.h"
 #include "MarkerEditing.h"
+#include <charconv>
 #include <bcrypt.h>
 #include <stdexcept>
 #include <windows.h>
@@ -45,7 +47,53 @@ struct AES {
     }
 };
 std::string s(const var &v, const char *k) { return utf8(str(v, k)); }
-var merged(const var &original) { return original.isObject() ? original.clone() : object(); }
+var merged(const var &original) {
+    // Encoding replaces each schema child with its own merged object. Copy
+    // this object's fields only: recursively cloning the whole project again
+    // at song, track and item level repeatedly copied every waveform/FX state.
+    // Opaque children stay immutable; canonicalIDs detaches the final result.
+    auto result=object();
+    if(const auto *source=original.getDynamicObject())
+        for(const auto &property:source->getProperties())
+            result.getDynamicObject()->setProperty(property.name,property.value);
+    return result;
+}
+// Millions of cached waveform numbers made the general JSON formatter dominate
+// Save. to_chars emits round-trip-safe doubles without per-number String
+// formatting/allocation. JUCE still owns string escaping and uncommon var types.
+void writeDocumentJSON(OutputStream &out,const var &value) {
+    const auto token=[&](const String &text){out.write(text.toRawUTF8(),text.getNumBytesAsUTF8());};
+    if(value.isBool()){out.writeText((bool)value?"true":"false",false,false,nullptr);return;}
+    if(value.isInt() || value.isInt64()) {
+        char buffer[32];const auto result=std::to_chars(buffer,buffer+sizeof(buffer),(int64)value);
+        if(result.ec==std::errc{}){out.write(buffer,size_t(result.ptr-buffer));return;}
+    }
+    if(value.isDouble() && std::isfinite((double)value)) {
+        char buffer[64];const auto result=std::to_chars(buffer,buffer+sizeof(buffer),(double)value,std::chars_format::general);
+        if(result.ec==std::errc{}) {
+            out.write(buffer,size_t(result.ptr-buffer));
+            if(std::find_if(buffer,result.ptr,[](char c){return c=='.'||c=='e'||c=='E';})==result.ptr)out.writeText(".0",false,false,nullptr);
+            return;
+        }
+    }
+    if(const auto *array=value.getArray()) {
+        out.writeByte('[');bool first=true;
+        for(const auto &item:*array){if(!first)out.writeByte(',');first=false;writeDocumentJSON(out,item);}
+        out.writeByte(']');return;
+    }
+    if(const auto *object=value.getDynamicObject()) {
+        out.writeByte('{');bool first=true;
+        for(const auto &property:object->getProperties()) {
+            if(!first)out.writeByte(',');first=false;
+            token(JSON::toString(var(property.name.toString()),true,17));out.writeByte(':');writeDocumentJSON(out,property.value);
+        }
+        out.writeByte('}');return;
+    }
+    token(JSON::toString(value,true,17));
+}
+String documentJSON(const var &value) {
+    MemoryOutputStream out(1024*1024);writeDocumentJSON(out,value);return out.toUTF8();
+}
 var byId(const var &array, const ID &id) {
     if (auto *values = array.getArray())
         for (const auto &value : *values)
@@ -341,6 +389,13 @@ void canonicalFX(var &fx) {
     // are opaque. In particular, never recurse through externalPlugins.
 }
 void canonicalAutomation(var &automation) {
+    // Write the same defaults that Windows uses at playback, including when
+    // saving an older document for an Apple build that requires these keys.
+    if (automation.isObject()) {
+        if (get(automation, "enabled").isVoid()) put(automation, "enabled", true);
+        if (get(automation, "mode").isVoid()) put(automation, "mode", "trimRead");
+        if (get(automation, "envelopes").isVoid()) put(automation, "envelopes", Array<var>{});
+    }
     identityElements(automation, "envelopes", [](var &envelope) {
         canonicalIDFields(envelope, {"id"});
         identityElements(envelope, "points", [](var &point) { canonicalIDFields(point, {"id"}); });
@@ -352,9 +407,11 @@ void canonicalAutomation(var &automation) {
         });
     });
 }
+void canonicalMapKeys(var &map, bool prefixed);
 void canonicalRouting(var &routing) {
     canonicalIDArray(routing, "receives");
     canonicalIDArray(routing, "transmitters");
+    identityField(routing, "sendTaps", [](var &taps) { canonicalMapKeys(taps, false); });
 }
 void canonicalMapKeys(var &map, bool prefixed) {
     const auto *node = map.getDynamicObject();
@@ -405,6 +462,7 @@ var ProjectCodec::canonicalIDs(const var &input) {
             identityField(track, "fx", canonicalFX); identityField(track, "automation", canonicalAutomation);
             identityElements(track, "clips", [](var &clip) {
                 canonicalIDFields(clip, {"id", "regionOwnerID"});
+                identityElements(clip,"tempoRateReferences",[](var& reference){canonicalIDFields(reference,{"markerID"});});
                 canonicalIDArray(clip, "separatedStemTracks");
                 identityField(clip, "fx", canonicalFX); identityField(clip, "automation", canonicalAutomation);
                 identityField(clip, "midi", [](var &midi) {
@@ -448,14 +506,34 @@ var ProjectCodec::read(const File &file) {
     decode(value);
     return value;
 }
-void ProjectCodec::write(const File &file, const var &input) {
+bool ProjectCodec::isMacMetadata(const File &file) {
+    if (!file.getFileName().startsWith("._")) return false;
+    FileInputStream input(file);
+    return input.openedOk() && input.readIntBigEndian() == 0x00051607;
+}
+void ProjectCodec::write(const File &file, const var &input, bool savingCurrentDocument) {
+    writeDocument(file, input, savingCurrentDocument, false);
+}
+void ProjectCodec::saveWithBackup(const File &file, const var &input, bool savingCurrentDocument) {
+    writeDocument(file, input, savingCurrentDocument, true);
+}
+void ProjectCodec::writeDocument(const File &file, const var &input, bool savingCurrentDocument, bool withBackup) {
+    const bool profiling=SystemStats::getEnvironmentVariable("CATLIVE_PROFILE_SAVE",{})=="1";
+    auto timings=object();auto started=Time::getMillisecondCounterHiRes();
+    const auto record=[&](const char *stage){if(profiling){const auto now=Time::getMillisecondCounterHiRes();put(timings,stage,now-started);started=now;}};
     const auto value = canonicalIDs(input);
+    record("canonicalMilliseconds");
     decode(value);
+    record("validationMilliseconds");
     auto folder = file.getParentDirectory();
     require(folder.createDirectory().wasOk(), "Could not create project folder.");
     for (auto &other : folder.findChildFiles(File::findFiles, false, "*.jl"))
-        require(other == file, "Choose a separate folder for each CatLive project.");
-    auto bytes = seal(JSON::toString(value, true, 17));
+        require(other == file || isMacMetadata(other) || (savingCurrentDocument && file.existsAsFile()), "Choose a separate folder for each CatLive project.");
+    record("folderMilliseconds");
+    const auto plain=documentJSON(value);
+    record("jsonMilliseconds");
+    auto bytes = seal(plain);
+    record("encryptionMilliseconds");
     TemporaryFile tmp(file);
     {
         FileOutputStream out(tmp.getFile());
@@ -464,8 +542,22 @@ void ProjectCodec::write(const File &file, const var &input) {
         out.flush();
         require(out.getStatus().wasOk(), "Could not flush project.");
     }
-    require(tmp.overwriteTargetFileWithTemporary(),
-            "Could not replace project; the previous file was preserved.");
+    record("diskMilliseconds");
+    std::vector<File> previous;
+    File backup;
+    if (withBackup) {
+        previous = projectBackups::files(file);
+        backup = projectBackups::create(file, bytes);
+    }
+    record("backupMilliseconds");
+    if (!tmp.overwriteTargetFileWithTemporary()) {
+        if (backup != File()) backup.deleteFile();
+        require(false, "Could not replace project; the previous file was preserved.");
+    }
+    record("replaceMilliseconds");
+    if (withBackup) projectBackups::prune(previous);
+    record("backupRetentionMilliseconds");
+    if(profiling)file.withFileExtension("save-profile.json").replaceWithText(JSON::toString(timings));
 }
 File ProjectCodec::resolveMedia(const File &directory, const std::string &relative, bool resolveExisting) {
     auto path = text(relative).replaceCharacter('\\', '/');
@@ -482,12 +574,15 @@ jaras::Project ProjectCodec::decode(const var &input) {
     const auto root = canonicalIDs(input);
     require(root.isObject(), "Expected project object.");
     jaras::Project p;
+    optionalJSON(root, "reductionDraft", p.reductionDraftJSON);
     p.id = s(root, "id");
     p.name = s(root, "name");
+    if (get(root, "importedTimeline").isBool()) p.importedTimeline = flag(root, "importedTimeline");
     if (get(root, "projectSyncID").isString()) p.projectSyncID = s(root, "projectSyncID");
     if (get(root, "partialImportIDs").isArray()) { p.partialImportIDs.emplace(); for (auto id : list(get(root, "partialImportIDs"))) p.partialImportIDs->push_back(utf8(id.toString())); }
     if (get(root, "timelineMovementLocked").isBool())
         p.timelineMovementLocked = flag(root, "timelineMovementLocked");
+    if (!get(root, "timelineLockOptions").isVoid()) p.timelineLockOptions = (int)num(root, "timelineLockOptions") & 7;
     p.projectFormatVersion = (int)num(root, "projectFormatVersion", 1);
     require(p.projectFormatVersion == 1, "This project version requires a newer CatLive.");
     p.minimumJarasVersion = s(root, "minimumJarasVersion");
@@ -551,11 +646,19 @@ jaras::Project ProjectCodec::decode(const var &input) {
             t.output = (int)num(rt, "output", 1);
             optionalNum(rt, "color", t.color);
             optionalNum(rt, "phaseInverted", t.phaseInverted);
+            optionalNum(rt, "hiddenMixerComponents", t.hiddenMixerComponents);
             optionalNum(rt, "heightScale", t.heightScale);
+            t.instrumentIcon.reset(); // A saved track without artwork stays unassigned.
+            optionalText(rt, "instrumentIcon", t.instrumentIcon);
             optionalText(rt, "parentTrackID", t.parentTrackID);
             optionalJSON(rt, "automation", t.automationJSON);
             optionalNum(rt, "midiInput", t.midiInput);
             optionalNum(rt, "midiChannel", t.midiChannel);
+            optionalNum(rt, "midiOutput", t.midiOutput);
+            for (const auto &cue : list(get(rt, "chordMarkers")))
+                t.chordMarkers.push_back({utf8(str(cue,"id")),utf8(str(cue,"regionID")),num(cue,"offset"),utf8(str(cue,"name"))});
+            for (const auto &cue : list(get(rt, "programChanges")))
+                t.programChanges.push_back({utf8(str(cue,"id")),num(cue,"position"),(int)num(cue,"program"),(int)num(cue,"channel",1),utf8(str(cue,"name")), !get(cue,"output").isVoid() && !get(cue,"output").isUndefined() ? std::optional<int>((int)num(cue,"output")) : std::nullopt});
             optionalNum(rt, "inputMonitoring", t.inputMonitoring);
             optionalNum(rt, "recordingChannels", t.recordingChannels);
             optionalText(rt, "recordingFormat", t.recordingFormat);
@@ -578,13 +681,22 @@ jaras::Project ProjectCodec::decode(const var &input) {
                 routing.receives.clear();
                 routing.transmitters.clear();
                 auto rawRouting = get(rt, "routing");
+                optionalNum(rawRouting, "mainReceiveSlot", routing.mainReceiveSlot);
+                optionalNum(rawRouting, "mainSendOrder", routing.mainSendOrder);
                 for (auto id : list(get(rawRouting, "receives")))
                     routing.receives.push_back(
                         id.isString() ? std::optional<ID>(utf8(id.toString())) : std::nullopt);
                 for (auto id : list(get(rawRouting, "transmitters")))
                     routing.transmitters.push_back(
                         id.isString() ? std::optional<ID>(utf8(id.toString())) : std::nullopt);
-                t.routing = routing;
+                const auto taps = get(rawRouting, "sendTaps");
+                if (auto *node = taps.getDynamicObject())
+                    for (const auto &entry : node->getProperties()) {
+                        const auto id = utf8(entry.name.toString());
+                        for (const auto point : {jaras::TrackSendTap::preFX, jaras::TrackSendTap::postFX, jaras::TrackSendTap::preFader})
+                            if (entry.value.toString() == jaras::sendTapID(point)) routing.sendTaps[id] = point;
+                    }
+                t.routing = std::move(routing);
             }
             if (get(rt, "patch").isObject())
                 t.patch = patch(get(rt, "patch"));
@@ -631,6 +743,8 @@ jaras::Project ProjectCodec::decode(const var &input) {
                 optionalNum(rc, "pitchSemitones", c.pitchSemitones);
                 optionalNum(rc, "tempoBasePlaybackRate", c.tempoBasePlaybackRate);
                 optionalNum(rc, "renderedTempo", c.renderedTempo);
+                optionalNum(rc, "clickDouble", c.clickDouble);
+                for(const auto& reference:list(get(rc,"tempoRateReferences")))c.tempoRateReferences.push_back({utf8(str(reference,"markerID")),num(reference,"rate",1)});
                 optionalJSON(rc, "automation", c.automationJSON);
                 if (get(rc, "timecode").isObject())
                     c.timecode = timecode(get(rc, "timecode"));
@@ -689,9 +803,13 @@ jaras::Project ProjectCodec::decode(const var &input) {
                 optionalNum(rm, "tempoBeats", m.tempoBeats);
                 optionalNum(rm, "tempoUnit", m.tempoUnit);
                 optionalNum(rm, "tempoReferenceBPM", m.tempoReferenceBPM);
+                optionalNum(rm, "tempoPlaybackRate", m.tempoPlaybackRate);
+                if (get(rm, "regionTempoAnchor").isBool()) m.regionTempoAnchor = flag(rm, "regionTempoAnchor");
                 optionalText(rm, "tempoTimebase", m.tempoTimebase);
                 optionalNum(rm, "section", m.section);
                 optionalNum(rm, "loopSection", m.loopSection);
+                optionalText(rm, "automaticSectionTargetID", m.automaticSectionTargetID);
+                optionalNum(rm, "automaticSectionRepeatCount", m.automaticSectionRepeatCount);
                 optionalText(rm, "unifiedRegionID", m.unifiedRegionID);
                 optionalText(rm, "sourceRegionID", m.sourceRegionID);
                 optionalText(rm, "regionOwnerID", m.regionOwnerID);
@@ -731,6 +849,7 @@ jaras::Project ProjectCodec::decode(const var &input) {
         optionalNum(rs, "automaticSubplaySeconds", state.automaticSubplaySeconds);
         optionalNum(rs, "automaticSubplayBars", state.automaticSubplayBars);
         optionalNum(rs, "automaticSubplayNext", state.automaticSubplayNext);
+        optionalIDs(rs, "subplayExclusiveTrackIDs", state.subplayExclusiveTrackIDs);
         optionalNum(rs, "prepareWithoutPlayback", state.prepareWithoutPlayback);
         optionalNum(rs, "liveEnabled", state.liveEnabled);
         optionalIDs(rs, "playedLiveRegionIDs", state.playedLiveRegionIDs);
@@ -773,7 +892,11 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
     auto root = merged(original);
     put(root, "id", text(p.id));
     put(root, "name", text(p.name));
+    if (p.reductionDraftJSON) put(root, "reductionDraft", JSON::parse(text(*p.reductionDraftJSON)));
+    else root.getDynamicObject()->removeProperty("reductionDraft");
     emit(root, "timelineMovementLocked", p.timelineMovementLocked);
+    emit(root, "timelineLockOptions", p.timelineLockOptions);
+    emit(root, "importedTimeline", p.importedTimeline);
     if (p.projectSyncID) put(root, "projectSyncID", text(*p.projectSyncID));
     else root.getDynamicObject()->removeProperty("projectSyncID");
     if (p.partialImportIDs) { Array<var> ids; for (auto &id : *p.partialImportIDs) ids.add(text(id)); put(root, "partialImportIDs", ids); }
@@ -851,6 +974,19 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
             emitJSON(rt, "stereoLink", t.stereoLinkJSON);
             emit(rt, "midiInput", t.midiInput);
             emit(rt, "midiChannel", t.midiChannel);
+            emit(rt, "midiOutput", t.midiOutput);
+            Array<var> programChanges;
+            for(const auto &cue:t.programChanges) {
+                auto value=object();put(value,"id",text(cue.id));put(value,"position",cue.position);
+                put(value,"program",cue.program);put(value,"channel",cue.channel);put(value,"name",text(cue.name));if(cue.output)put(value,"output",*cue.output);programChanges.add(value);
+            }
+            if(!programChanges.isEmpty())put(rt,"programChanges",programChanges);else remove(rt,"programChanges");
+            Array<var> chordMarkers;
+            for (const auto &cue : t.chordMarkers) {
+                auto value = object(); put(value,"id",text(cue.id)); put(value,"regionID",text(cue.regionID));
+                put(value,"offset",cue.offset); put(value,"name",text(cue.name)); chordMarkers.add(value);
+            }
+            if (!chordMarkers.isEmpty()) put(rt,"chordMarkers",chordMarkers); else remove(rt,"chordMarkers");
             emit(rt, "inputMonitoring", t.inputMonitoring);
             emit(rt, "recordingChannels", t.recordingChannels);
             emit(rt, "recordingFormat", t.recordingFormat);
@@ -880,6 +1016,14 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
                     transmitters.add(id ? var(text(*id)) : var());
                 put(value, "receives", receives);
                 put(value, "transmitters", transmitters);
+                emit(value, "mainReceiveSlot", t.routing->mainReceiveSlot);
+                emit(value, "mainSendOrder", t.routing->mainSendOrder);
+                auto sendTaps = object();
+                for (const auto &target : t.routing->transmitters)
+                    if (target && t.routing->sendTap(*target) != jaras::TrackSendTap::postFader)
+                        put(sendTaps, Identifier(text(*target)), jaras::sendTapID(t.routing->sendTap(*target)));
+                if (!sendTaps.getDynamicObject()->getProperties().isEmpty()) put(value, "sendTaps", sendTaps);
+                else remove(value, "sendTaps");
                 put(rt, "routing", value);
             } else
                 remove(rt, "routing");
@@ -900,8 +1044,13 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
             }
             if (t.parentTrackID)
                 put(rt, "parentTrackID", text(*t.parentTrackID));
+            if (t.hiddenMixerComponents) put(rt, "hiddenMixerComponents", *t.hiddenMixerComponents);
+            else remove(rt, "hiddenMixerComponents");
             if (t.heightScale)
                 put(rt, "heightScale", *t.heightScale);
+            if (t.instrumentIcon)
+                put(rt, "instrumentIcon", text(*t.instrumentIcon));
+            else remove(rt, "instrumentIcon");
             if (t.phaseInverted)
                 put(rt, "phaseInverted", *t.phaseInverted);
             if (t.audioFile)
@@ -933,6 +1082,9 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
                 emit(rc, "pitchSemitones", c.pitchSemitones);
                 emit(rc, "tempoBasePlaybackRate", c.tempoBasePlaybackRate);
                 emit(rc, "renderedTempo", c.renderedTempo);
+                emit(rc, "clickDouble", c.clickDouble);
+                if(c.tempoRateReferences.empty())remove(rc,"tempoRateReferences");
+                else {Array<var> references;for(const auto& r:c.tempoRateReferences){auto value=object();put(value,"markerID",text(r.markerID));put(value,"rate",r.rate);references.add(value);}put(rc,"tempoRateReferences",references);}
                 if (c.midi)
                     put(rc, "midi", midiJSON(*c.midi, get(rc, "midi")));
                 else
@@ -1030,6 +1182,8 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
                 emit(rm, "tempoBeats", m.tempoBeats);
                 emit(rm, "tempoUnit", m.tempoUnit);
                 emit(rm, "tempoReferenceBPM", m.tempoReferenceBPM);
+                emit(rm, "tempoPlaybackRate", m.tempoPlaybackRate);
+                emit(rm, "regionTempoAnchor", m.regionTempoAnchor);
                 emit(rm, "tempoTimebase", m.tempoTimebase);
                 emit(rm, "unifiedRegionID", m.unifiedRegionID);
                 emit(rm, "sourceRegionID", m.sourceRegionID);
@@ -1037,6 +1191,8 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
                 emit(rm, "tempoBPM", m.tempoBPM);
                 emit(rm, "section", m.section);
                 emit(rm, "loopSection", m.loopSection);
+                emit(rm, "automaticSectionTargetID", m.automaticSectionTargetID);
+                emit(rm, "automaticSectionRepeatCount", m.automaticSectionRepeatCount);
                 markers.add(rm);
             }
             put(raw, "markers", markers);
@@ -1068,6 +1224,8 @@ var ProjectCodec::encode(const jaras::Project &p, const var &input) {
         emit(rs, "automaticSubplaySeconds", state.automaticSubplaySeconds);
         emit(rs, "automaticSubplayBars", state.automaticSubplayBars);
         emit(rs, "automaticSubplayNext", state.automaticSubplayNext);
+        if(state.subplayExclusiveTrackIDs) put(rs,"subplayExclusiveTrackIDs",idsJSON(*state.subplayExclusiveTrackIDs));
+        else remove(rs,"subplayExclusiveTrackIDs");
         emit(rs, "liveEnabled", state.liveEnabled);
         if (state.playedLiveRegionIDs)
             put(rs, "playedLiveRegionIDs", idsJSON(*state.playedLiveRegionIDs));

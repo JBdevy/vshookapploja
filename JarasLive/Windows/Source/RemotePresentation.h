@@ -6,11 +6,53 @@
 #include "PlaylistOccurrences.h"
 #include "RegionEditing.h"
 #include "TempoEditing.h"
+#include "RegionPitch.h"
+#include "PartsPresentation.h"
 namespace catlive::remote {
 class Presentation final {
   public:
     Presentation(Session &value, StageState &stageValue) : session(value), stage(stageValue) {}
     std::function<void()> save;
+    std::function<void(bool)> fadeout;
+    ID fadeoutCommand;
+    static std::optional<int> desktopBatteryPercent() {
+        #if JUCE_WINDOWS
+        static double sampledAt = -60000.;
+        static std::optional<int> percent;
+        const double now = Time::getMillisecondCounterHiRes();
+        if (now - sampledAt >= 60000.) {
+            sampledAt = now;
+            SYSTEM_POWER_STATUS status{};
+            percent.reset();
+            if (::GetSystemPowerStatus(&status) && status.BatteryFlag != 255 &&
+                (status.BatteryFlag & 128) == 0 && status.BatteryLifePercent <= 100)
+                percent = int(status.BatteryLifePercent);
+        }
+        return percent;
+        #else
+        return {};
+        #endif
+    }
+    int patchOutputChannels() const {
+        auto* device = session.audio.devices.getCurrentAudioDevice();
+        return device ? std::min(1024, device->getOutputChannelNames().size()) : 0;
+    }
+    static std::vector<jaras::OutputPatch> masterOutputRoutes(const jaras::Project &project) {
+        if (project.masterOutputs) return *project.masterOutputs;
+        std::vector<jaras::OutputPatch> routes{project.masterPatch.value_or(jaras::OutputPatch{1, 2})};
+        if (project.masterSecondaryPatch) routes.push_back(*project.masterSecondaryPatch);
+        return routes;
+    }
+    static var outputRoutes(const std::vector<jaras::OutputPatch> &routes) {
+        Array<var> result;
+        for (const auto &route : routes) {
+            auto value = object();
+            put(value, "firstChannel", route.firstChannel);
+            put(value, "channelCount", route.channelCount);
+            result.add(value);
+        }
+        return result;
+    }
     var snapshot(int panel) {
         const auto &p = session.project();
         const auto *song = session.song();
@@ -19,6 +61,9 @@ class Presentation final {
         put(result, "sequence", (int64)0);
         put(result, "project", wireID(p.id));
         put(result, "projectName", text(p.name));
+        if (const auto battery = desktopBatteryPercent()) put(result, "desktopBatteryPercent", *battery);
+        if (const auto notice = session.liveCapacityWarning(); notice.isNotEmpty()) put(result, "footerInformation", notice);
+        else if(t.automaticSectionNotice) put(result, "footerInformation", text(*t.automaticSectionNotice));
         if (song)
             put(result, "song", wireID(song->id));
         put(result, "songName", song ? text(song->name) : String());
@@ -44,6 +89,7 @@ class Presentation final {
             put(result, "selectedPlaylist", wireID(selected->id));
         if (song) {
             for (const auto &track : song->tracks) {
+                if (!jaras::fixedTrackName(track.role).empty()) continue;
                 auto v = object();
                 put(v, "id", wireID(track.id));
                 put(v, "name", text(track.name));
@@ -53,6 +99,10 @@ class Presentation final {
                 put(v, "mute", track.mute);
                 put(v, "solo", track.solo);
                 put(v, "heightScale", track.heightScale.value_or(1));
+                put(v, "role", text(track.role.id));
+                put(v, "outputRoutes", outputRoutes(track.outputPatches()));
+                if (track.instrumentIcon)
+                    put(v, "instrumentIcon", text(*track.instrumentIcon));
                 if (track.parentTrackID)
                     put(v, "parentTrack", wireID(*track.parentTrackID));
                 if (track.stereoLinkPartner)
@@ -109,6 +159,7 @@ class Presentation final {
                     put(v, "position", marker.position);
                     put(v, "color", (int)marker.color);
                     put(v, "section", marker.section.value_or(false));
+                    put(v, "loopSection", marker.section.value_or(false) && marker.loopSection.value_or(false) && !marker.tempoBPM);
                     markers.add(v);
                 }
         }
@@ -120,8 +171,8 @@ class Presentation final {
         put(result, "markers", markers);
         if (t.regionId) {
             put(result, "currentRegion", wireID(*t.regionId));
-            put(result, "focusedRegion", wireID(session.focusedRegion.value_or(t.playlistEntryId.value_or(*t.regionId))));
         }
+        if (session.focusedRegion) put(result,"focusedRegion",wireID(*session.focusedRegion));
         if (t.queuedRegionId)
             put(result, "queuedRegion", wireID(*t.queuedRegionId));
         if (t.playlistEntryId) put(result,"currentPlaylistEntryId",wireID(*t.playlistEntryId));
@@ -129,8 +180,38 @@ class Presentation final {
         put(result, "position", t.position);
         put(result, "editPosition", t.editPosition);
         put(result, "subPlayPosition", t.subPlay.position);
+        // Preserve the same audible region/trigger used by Parts, including
+        // a queued section whose destination is in another song.
+        auto section = object();
+        put(section, "position", t.playing ? t.position : t.editPosition);
+        if (song) {
+            auto primary = t; if (!t.playing) primary.position = t.editPosition;
+            const auto *part = partsPresentation::region(*song, primary);
+            if (part) {
+                put(section, "currentRegion", wireID(part->id));
+                put(section, "currentEnd", partsPresentation::end(*part, t));
+                if (t.queuedSectionMarkerId)
+                    if (const auto trigger = partsPresentation::trigger(*song, *part, t))
+                        put(section, "nextTrigger", *trigger);
+            }
+            if (t.subPlay.playing) {
+                auto secondary=t;secondary.position=t.subPlay.position;secondary.ignoreNextEnd.reset();secondary.ignoreNextRegionId.reset();
+                if (const auto *part=partsPresentation::region(*song,secondary)) put(section,"secondaryRegion",wireID(part->id));
+                put(section,"secondaryPosition",t.subPlay.position);
+            } else if (t.queuedRegionId) put(section,"secondaryRegion",wireID(*t.queuedRegionId));
+        }
+        if (t.queuedSectionMarkerId) {
+            put(section, "queuedMarker", wireID(*t.queuedSectionMarkerId));
+            put(section, "queueStartedAt", t.sectionQueueStartedAt);
+        }
+        put(result, "sectionPlayback", section);
+
         put(result, "duration", song ? song->duration : 0);
         put(result, "bpm", session.tempoBPM());
+        if (const auto *part = song ? regionPitch::target(*song, session.transport()) : nullptr) {
+            put(result, "pitchRegion", wireID(part->id));
+            put(result, "pitchSemitones", part->pitchSemitones.value_or(0));
+        }
         const auto *tempoRegion = song ? tempoEditing::region(*song, session.transport()) : nullptr;
         const ID songID = song ? song->id : ID{}, regionID = tempoRegion ? tempoRegion->id : ID{};
         if (tempoRevision != session.revision || tempoSong != songID || tempoRegionID != regionID) {
@@ -149,15 +230,20 @@ class Presentation final {
         if (t.loop.end)
             put(result, "loopEnd", *t.loop.end);
         put(result, "masterVolume", p.masterVolume);
+        put(result, "masterColor", int(theme::mixerStripeSurface.getARGB() & 0xffffffu));
+        put(result, "masterPan", p.masterPan);
+        put(result, "patchOutputChannels", patchOutputChannels());
+        put(result, "masterOutputRoutes", outputRoutes(masterOutputRoutes(p)));
         put(result, "masterMute", p.masterMute);
         put(result, "masterSolo", p.masterSolo);
         put(result, "masterMono", p.masterMono);
         put(result, "pendingSave", session.dirty);
-        put(result, "saving", session.busy);
+        put(result, "saving", session.busy || session.isSaving());
         put(result, "message", String());
         put(result, "multiLoopsBypassed", t.multiLoopsBypassed);
         put(result, "setlistLiveEnabled", setlist.liveEnabled.value_or(false));
         put(result, "regionAuto", setlist.autoAdvance);
+        put(result, "regionAutoUntilBlockEnd", setlist.autoUntilBlockEnd);
         put(result, "prepareOnly", setlist.prepareWithoutPlayback.value_or(false));
         put(result, "setlistFontStyle", stage.preferences.fontStyle());
         Array<var> played;
@@ -172,15 +258,26 @@ class Presentation final {
                     auto v = object();
                     put(v, "id", wireID(block.id));
                     put(v, "name", text(block.name));
+                    put(v, "nameColor", (int)(stage.preferences.colour("jaras.setlist.blockTextColor", 0x69ed91).getARGB() & 0xffffff));
                     put(v, "color", (int)block.color);
-                    put(v, "symbol", block.symbol.value_or(true));
+                    put(v, "symbol", (bool)stage.preferences.value("jaras.blocks.symbol", true));
                     if (block.beforeRegionId)
                         put(v, "beforeRegion", wireID(*block.beforeRegionId));
                     blocks.add(v);
                 }
         put(result, "setlistBlocks", blocks);
-        if (timerTarget != stage.target || timerRunning != stage.running ||
+        auto fade = object();
+        if (session.transportFadeoutActive()) put(fade, "runID", wireID(session.transportFadeoutRunID()));
+        put(fade, "duration", session.transportFadeoutDuration());
+        put(fade, "remaining", session.transportFadeoutActive() ? std::clamp(session.transportFadeoutRemaining(), 0., session.transportFadeoutDuration()) : 0.);
+        if (!fadeoutCommand.empty()) put(fade, "lastCommandID", wireID(fadeoutCommand));
+        put(result, "fadeout", fade);
+        put(result, "recording", session.audio.isRecording());
+        put(result, "previewActive", stage.preview);
+        put(result, "previewPage", stage.previewPage);
+        if (timerTarget != stage.target || timerProgressive != stage.progressive || timerRunning != stage.running ||
             timerStarted != stage.started) {
+            timerProgressive = stage.progressive;
             timerTarget = stage.target;
             timerRunning = stage.running;
             timerStarted = stage.started;
@@ -188,6 +285,7 @@ class Presentation final {
         }
         auto timer = object();
         put(timer, "revision", wireID(timerRevision));
+        put(timer, "mode", stage.progressive ? "progressive" : "countdown");
         put(timer, "targetSeconds", stage.target);
         put(timer, "running", stage.running);
         put(timer, "remainingSeconds", stage.seconds());
@@ -207,18 +305,41 @@ class Presentation final {
         if (wireID(c.project) != wireID(session.project().id))
             return false;
         const auto a = c.action;
-        if (a == "timerStart" || a == "timerStop") {
+        if (a == "toggleRecord") { session.toggleRecording(); return true; }
+        if (a == "browseRegion") {
+            if (session.song() && std::any_of(session.song()->parts.begin(), session.song()->parts.end(), [&](const auto& part) { return wireID(part.id) == wireID(c.target); })) {
+                session.focusedRegion = c.target;
+                if (!session.transport().playing) session.command(jaras::CommandKind::selectRegion, c.target);
+            }
+            return true;
+        }
+        if (a == "togglePreview") {
+            stage.preview = !stage.preview;
+            return true;
+        }
+        if (a == "selectPreviewPage") {
+            stage.previewPage = (int)c.value;
+            return true;
+        }
+        if (a == "timerStart" || a == "timerStartProgressive" || a == "timerSetMode" || a == "timerStop") {
             timerCommand = c.id;
             timerRevision = uuid();
+            if (a == "timerSetMode") { stage.setProgressive(c.value == 0); return true; }
             stage.reset();
+            if (a == "timerStartProgressive") { stage.setProgressive(true); stage.start(); }
             if (a == "timerStart") {
+                stage.setProgressive(false);
                 stage.target = (int)c.value;
                 stage.saveTimer();
                 stage.start();
             }
             return true;
         }
-        if (a == "noticeSend") {
+        if (a == "noticeSend" || a == "noticePinStopped") {
+            if (a == "noticePinStopped" && !c.enabled.value_or(false)) {
+                stage.setPinWhenStopped(false);
+                return true;
+            }
             Image image;
             if (c.value >= 0) {
                 MemoryBlock bytes;
@@ -229,7 +350,12 @@ class Presentation final {
             }
             if (c.message.trim().isEmpty() && !image.isValid())
                 return false;
-            stage.sendNotice(c.message, image);
+            if (a == "noticePinStopped") {
+                // Capture the selected draft and image now, independently of later template edits.
+                stage.observe(session.presentationTransport());
+                stage.setPinWhenStopped(true, c.message, image);
+            } else
+                stage.sendNotice(c.message, image);
             return true;
         }
         if (a == "noticeClear") {
@@ -256,9 +382,39 @@ class Presentation final {
         const auto *song = session.song();
         if (session.busy || !song || wireID(c.song) != wireID(song->id))
             return false;
+        if (a == "transportFadeout") {
+            if (fadeoutCommand != c.id && fadeout) { fadeoutCommand = c.id; fadeout(c.enabled.value_or(false)); }
+            return true;
+        }
         const auto track =
             std::find_if(song->tracks.begin(), song->tracks.end(),
                          [&](const auto &v) { return wireID(v.id) == wireID(c.target); });
+        if (a == "setOutputRoutes") {
+            if (!c.target.empty() && (track == song->tracks.end() || !jaras::fixedTrackName(track->role).empty())) return false;
+            const int channels = patchOutputChannels();
+            const auto current = c.target.empty() ? masterOutputRoutes(session.project()) : track->outputPatches();
+            for (const auto &patch : c.outputRoutes) {
+                if (patch.firstChannel == -2 && (track == song->tracks.end() || !track->parentTrackID)) return false;
+                if (patch.firstChannel > 0 && patch.firstChannel + patch.channelCount - 1 > channels &&
+                    std::none_of(current.begin(), current.end(), [&](const auto &route) {
+                        return route.firstChannel == patch.firstChannel && route.channelCount == patch.channelCount;
+                    })) return false;
+            }
+            const ID trackID = c.target.empty() ? ID{} : track->id;
+            session.editTrackSettings([&](jaras::Project &project) {
+                if (trackID.empty()) {
+                    project.masterOutputs = c.outputRoutes;
+                    project.masterPatch.reset();
+                    project.masterSecondaryPatch.reset();
+                } else for (auto &item : project.songs) if (item.id == song->id)
+                    for (auto &candidate : item.tracks) if (candidate.id == trackID) {
+                        candidate.outputs = c.outputRoutes;
+                        candidate.patch.reset();
+                        candidate.secondaryPatch.reset();
+                    }
+            }, true);
+            return true;
+        }
         const jaras::RegionPlaylist *selected=nullptr;
         if(session.project().regionSetlist)for(const auto &entry:session.project().regionSetlist->playlists)
             if(entry.id==session.project().regionSetlist->selectedId && entry.songId==song->id) selected=&entry;
@@ -301,26 +457,36 @@ class Presentation final {
         if (a=="deleteRegion") {
             if(region==song->parts.end() || (selected && selected->isDuplicate(occurrence))) return false;
             const auto sourceID=region->id,songID=song->id;
-            session.edit([&](auto &project){regionEditing::erase(project,songID,{sourceID},true);});return true;
+            session.editTimeline([&](auto &project){regionEditing::erase(project,songID,{sourceID},true);});return true;
         }
         if (a == "save") {
             if (save)
                 save();
             return true;
         }
-        if (a == "pitch" || a == "editRegion") {
+        if (a == "tempo") {
+            session.setTempo(c.value);
+            return true;
+        }
+        if (a == "pitch") {
+            const auto *part = regionPitch::target(*song, session.transport());
+            // A delayed Remote packet must not transpose a previously selected
+            // song after the host has advanced to another region.
+            if (!part || wireID(part->id) != wireID(c.target)) return false;
+            session.setRegionPitch(part->id, (int)c.value,
+                part->pitchTrackIDs.value_or(regionPitch::defaults(*song, false)),
+                part->pitchGroupIDs.value_or(regionPitch::defaults(*song, true)));
+            return true;
+        }
+        if (a == "editRegion") {
             const auto sid = song->id;
             session.edit([&](jaras::Project &p) {
                 for (auto &s : p.songs)
                     if (s.id == sid)
                         for (auto &part : s.parts)
                             if (part.id == target) {
-                                if (a == "pitch")
-                                    part.pitchSemitones = (int)c.value;
-                                else {
-                                    part.name = utf8(c.message.trim());
-                                    part.color = (unsigned)c.value;
-                                }
+                                part.name = utf8(c.message.trim());
+                                part.color = (unsigned)c.value;
                             }
             });
             return true;
@@ -404,7 +570,6 @@ class Presentation final {
             {"masterMono", jaras::CommandKind::masterMono},
             {"selectRegion", jaras::CommandKind::selectRegion},
             {"selectSong", jaras::CommandKind::select},
-            {"tempo", jaras::CommandKind::tempo},
             {"clipGain", jaras::CommandKind::clipGain},
             {"clipMute", jaras::CommandKind::clipMute}};
         const auto found = commands.find(a);
@@ -460,7 +625,7 @@ class Presentation final {
     bool tempoNeedsRender = false;
     ID timerRevision = uuid(), timerCommand, noticeImageID = uuid();
     int timerTarget = -1;
-    bool timerRunning = false;
+    bool timerRunning = false, timerProgressive = false;
     double timerStarted = -1, noticeSent = -1;
     var notices() {
         auto result = object();
@@ -480,6 +645,8 @@ class Presentation final {
         put(result, "message", stage.notice);
         put(result, "active", stage.noticeActive());
         put(result, "pinned", stage.pinned);
+        put(result, "pinWhenStopped", stage.pinWhenStopped);
+        put(result, "stoppedNoticeActive", stage.stoppedNoticeActive);
         put(result, "remaining", jlimit(0, 20, (int)std::ceil(stage.remaining())));
         put(result, "window1", flag(settings, "window1", true));
         put(result, "window2", flag(settings, "window2", true));
@@ -502,7 +669,7 @@ class Presentation final {
         return result;
     }
     var teleprompter(int index) {
-        auto result = StageContent::make(session,stage,index).payload;
+        auto result = StageContent::make(session,stage,index,true).payload;
         const auto settings=stage.settings(index);
         auto style = object();
         for (auto key : {"textColor", "chordColor", "clockColor", "localClockColor", "borderColor",

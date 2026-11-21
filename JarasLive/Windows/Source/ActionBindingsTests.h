@@ -17,6 +17,51 @@ void addActionBindingsTests(const File &directory, Register &&test) {
     const auto require = [](bool okay, const char *message) {
         if (!okay) throw std::runtime_error(message);
     };
+    test("Numbered and selected mixer actions have independent persisted MIDI controls", [&, require] {
+        const auto file = directory.getNonexistentChildFile("track-actions", ".json");
+        Appearance settings(file);
+        auto values = object(), legacy = object(), midi = object();
+        put(legacy, "track", 2);
+        put(legacy, "keyboard", "F8");
+        put(values, "soloTrack", legacy);
+        require(settings.set("catlive.actions", values).wasOk(), "Could not store legacy track mapping");
+        AudioDeviceManager devices;
+        ActionBindings bindings(settings, devices);
+        require(bindings.inputLabel("soloTrack:2", "keyboard") == "F8", "Legacy numbered keyboard mapping was lost");
+        require(bindings.inputLabel("soloTrack:3", "keyboard").isEmpty(), "Unmapped numbered track inherited a key");
+        put(midi, "status", 0x90); put(midi, "channel", 1); put(midi, "number", 60);
+        require(bindings.assign("soloTrack", "midi", midi.clone()), "Selected-track MIDI did not save");
+        put(midi, "number", 61);
+        require(bindings.assign("soloTrack:2", "midi", midi), "Numbered-track MIDI did not save");
+        Appearance reloaded(file);
+        ActionBindings restored(reloaded, devices);
+        std::vector<int> invokedTracks;
+        restored.invoke = [&](const String &id, float, int number) {
+            require(id == "soloTrack", "Wrong action dispatched");
+            invokedTracks.push_back(number);
+        };
+        ActionBindingsTestAccess::receive(restored, MidiMessage::noteOn(1, 60, (uint8)100));
+        ActionBindingsTestAccess::receive(restored, MidiMessage::noteOn(1, 61, (uint8)100));
+        restored.key(KeyPress(KeyPress::F8Key));
+        require(invokedTracks == std::vector<int>{0, 2, 2}, "MIDI or keyboard dispatched to the wrong track target");
+    });
+    test("Region creation exposes Shift R and respects remapping and held keys", [&, require] {
+        const auto file = directory.getNonexistentChildFile("region-action", ".json");
+        Appearance settings(file); AudioDeviceManager devices; ActionBindings bindings(settings, devices);
+        int calls = 0;
+        bindings.invoke = [&](const String &id, float, int) { require(id == "createRegionsFromItems", "Wrong region action"); ++calls; };
+        const auto key = KeyPress::createFromDescription("shift + R");
+        require(bindings.key(key) && calls == 1, "Shift R did not dispatch region creation");
+        bindings.key(key, true); require(calls == 1, "Held Shift R repeated region creation");
+        require(bindings.assign("createRegionsFromItems", "keyboard", "F8"), "Region creation cannot be remapped");
+        // Reassigned defaults stay consumed so Workspace's legacy shortcuts
+        // cannot execute them. Dispatch count, not key consumption, determines
+        // whether region creation ran again.
+        require(bindings.key(key) && calls == 1, "Old shortcut still created a region or escaped to legacy handling");
+        Appearance restored(file); ActionBindings reopened(restored, devices);
+        reopened.invoke = bindings.invoke;
+        require(reopened.key(KeyPress::createFromDescription("F8")) && calls == 2, "Region mapping was not saved");
+    });
     test("Preview supports saved keyboard and MIDI mappings without held repeats", [&, require] {
         auto file=directory.getNonexistentChildFile("preview-action", ".json");
         Appearance settings(file); AudioDeviceManager devices; ActionBindings bindings(settings,devices);
@@ -67,6 +112,45 @@ void addActionBindingsTests(const File &directory, Register &&test) {
         require(called=="playStop","Legacy Play pad is not a toggle");
         Appearance restored(file);ActionBindings reopened(restored,devices);
         require(reopened.inputLabel("playStop","midi")=="Note 60 / Ch 2","Migrated binding did not persist");
+    });
+    test("Save project default shortcut can be remapped and persisted", [&, require] {
+        auto file=directory.getNonexistentChildFile("save-action", ".json");
+        Appearance settings(file);AudioDeviceManager devices;ActionBindings bindings(settings,devices);
+        int calls=0;bindings.invoke=[&](const String &id,float,int){require(id=="saveProject","Wrong save action");++calls;};
+        auto key=KeyPress::createFromDescription("ctrl + S");
+        require(bindings.key(key)&&calls==1,"Default Ctrl S did not save");
+        bindings.key(key,true);require(calls==1,"Held shortcut repeated save");
+        require(bindings.assign("saveProject","keyboard","F8"),"Could not remap Save");
+        bindings.key(key);require(calls==1,"Old shortcut still invoked Save after remapping");
+        Appearance restored(file);ActionBindings reopened(restored,devices);
+        reopened.invoke=bindings.invoke;
+        require(reopened.key(KeyPress::createFromDescription("F8"))&&calls==2,"Saved binding did not reload");
+    });
+    test("Cancel queued section MIDI persists and dispatches once per press", [&, require] {
+        auto file=directory.getNonexistentChildFile("cancel-section-midi", ".json");
+        Appearance settings(file);AudioDeviceManager devices;ActionBindings bindings(settings,devices);
+        auto input=object();put(input,"status",0xb0);put(input,"number",79);put(input,"channel",2);
+        require(bindings.assign("cancelSection","midi",input),"Cancel section is missing from Actions");
+        int count=0;bindings.invoke=[&](const String &id,float,int){require(id=="cancelSection","Cancel mapping dispatched another command");++count;};
+        ActionBindingsTestAccess::receive(bindings,MidiMessage::controllerEvent(2,79,127));
+        ActionBindingsTestAccess::receive(bindings,MidiMessage::controllerEvent(2,79,90));
+        require(count==1,"Held cancel MIDI repeated");
+        ActionBindingsTestAccess::receive(bindings,MidiMessage::controllerEvent(2,79,0));
+        ActionBindingsTestAccess::receive(bindings,MidiMessage::controllerEvent(2,79,127));
+        require(count==2,"Release did not rearm cancel");
+        Appearance restored(file);ActionBindings reopened(restored,devices);
+        require(reopened.midiInput("cancelSection").isObject(),"Cancel section MIDI was not saved");
+    });
+    test("Fullscreen defaults to Ctrl F11 and respects custom shortcuts", [&, require] {
+        Appearance settings(directory.getNonexistentChildFile("fullscreen-actions", ".json")); AudioDeviceManager devices;
+        ActionBindings bindings(settings, devices);
+        int calls = 0; bindings.invoke = [&](const String &id, float, int) { require(id == "toggleFullscreen", "Wrong fullscreen action"); ++calls; };
+        const auto key = KeyPress::createFromDescription("ctrl + F11");
+        require(bindings.key(key) && calls == 1, "Ctrl F11 did not dispatch fullscreen");
+        bindings.key(key, true); require(calls == 1, "Held Ctrl F11 kept toggling fullscreen");
+        require(bindings.assign("toggleFullscreen", "keyboard", "F8"), "Fullscreen cannot be remapped");
+        bindings.key(key); require(calls == 1, "Old fullscreen shortcut remained active after remapping");
+        require(bindings.key(KeyPress::createFromDescription("F8")) && calls == 2, "Custom fullscreen mapping was ignored");
     });
     test("Setlist block MIDI learns candidates, persists globally, transfers conflicts and dispatches once per press", [&, require] {
         const auto file = directory.getChildFile("setlist-block-midi.json");
