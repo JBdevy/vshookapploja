@@ -1,0 +1,323 @@
+{
+  "checkpoint": "5c90dfd2-34c22ccb",
+  "sha256": "34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd",
+  "sources": [
+    "drums",
+    "bass",
+    "other",
+    "vocals",
+    "guitar",
+    "piano"
+  ],
+  "sample_rate": 44100,
+  "window_frames": 343980,
+  "fft": 4096,
+  "hop": 1024,
+  "spectral_frames": 336,
+  "torch": "2.2.2",
+  "precision": "fp32",
+  "conversion": {
+    "coremltools": "9.0",
+    "minimum_ios": "16.0",
+    "io_dtype": "float32",
+    "weights_and_compute": "float32",
+    "deployment": "32 sequential full-context FP32 Core ML stages; exact local temporal convolution tiles with input <=8192 and output <=4096"
+  },
+  "file_pipeline": {
+    "context_frames": 343980,
+    "overlap": 0.25,
+    "shifts": 0,
+    "normalization": "whole-item mono population mean/std",
+    "sources": [
+      "Vocal",
+      "Drum",
+      "Bass",
+      "Guitar",
+      "Other"
+    ],
+    "other": "mixture residual",
+    "memory": "bounded window, independent of duration",
+    "cpu_musical_fixtures_max_relative_rms": 0.000451242,
+    "cpu_peak_rss_bytes": 845447168,
+    "sparse_67_samples": "finite output, exact duration and unity verified; numerical backend variance reported by test",
+    "regression": "Tests/Apple/CatStemOfflineParityTests.mm: parity, duration, finite outputs, reconstruction, DC, cancellation before preprocessing and between model stages, monotonic progress"
+  },
+  "validation_monolithic_conversion_reference": {
+    "silence": {
+      "seconds": 3.059542374998273,
+      "errors": {
+        "spectrum_out": {
+          "maximum_absolute": 0.0,
+          "rms": 0.0,
+          "reference_rms": 0.0,
+          "relative_rms": 0.0
+        },
+        "audio_out": {
+          "maximum_absolute": 0.0,
+          "rms": 0.0,
+          "reference_rms": 0.0,
+          "relative_rms": 0.0
+        },
+        "pcm": {
+          "rms": 0.0,
+          "reference_rms": 0.0,
+          "relative_rms": 0.0,
+          "maximum_absolute": 0.0
+        }
+      }
+    },
+    "noise": {
+      "seconds": 0.7134882499995001,
+      "errors": {
+        "spectrum_out": {
+          "maximum_absolute": 1.650303602218628e-06,
+          "rms": 2.2101835059000807e-08,
+          "reference_rms": 0.021897594907594867,
+          "relative_rms": 1.0093270586230043e-06
+        },
+        "audio_out": {
+          "maximum_absolute": 6.705522537231445e-08,
+          "rms": 5.2494117492413704e-09,
+          "reference_rms": 0.0024722727852568953,
+          "relative_rms": 2.123314134486135e-06
+        },
+        "pcm": {
+          "rms": 2.891446902719684e-08,
+          "reference_rms": 0.03801570577780852,
+          "relative_rms": 7.605927191301947e-07,
+          "maximum_absolute": 3.8743019104003906e-07
+        }
+      }
+    },
+    "tones": {
+      "seconds": 0.7324624160028179,
+      "errors": {
+        "spectrum_out": {
+          "maximum_absolute": 6.937980651855469e-05,
+          "rms": 2.1445665098935354e-07,
+          "reference_rms": 0.03891861072546694,
+          "relative_rms": 5.510388140577197e-06
+        },
+        "audio_out": {
+          "maximum_absolute": 4.6193599700927734e-07,
+          "rms": 1.7223079427923252e-08,
+          "reference_rms": 0.022218071943307587,
+          "relative_rms": 7.751833494765102e-07
+        },
+        "pcm": {
+          "rms": 2.671178542245762e-07,
+          "reference_rms": 0.06381623951588739,
+          "relative_rms": 4.18573479495099e-06,
+          "maximum_absolute": 2.60770320892334e-06
+        }
+      }
+    }
+  },
+  "models": {
+    "CatStemHTDemucs6Offline.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "e634421334375dba5e05ef24e13cbe24b357e0054929d18afc063d2ccd5b201a",
+      "Data/com.apple.CoreML/weights/weight.bin": "074b39a8c027be03e07dc02b73d0382badbaa9ea46e3bfd4675ff69dc33c5643",
+      "Manifest.json": "88b9affd67382a1d57a77e5c8f4d526dcf765420e538f7b002ea49357e7cafa3"
+    },
+    "CatStemHTDemucs6Offline2.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "0a37c2938128706263e30f623cbdfb674ffdb5e05a98fc9738907237400b6d4e",
+      "Data/com.apple.CoreML/weights/weight.bin": "ac17bdf292f8ea9b80cfe705f5abbf26fe22f04ed93b6cd6b55581d3e2b09e9e",
+      "Manifest.json": "1fe6cf59a249bf20f52d0d8f7e32bee49eef4944a16200fbc4270c4e1171aead"
+    },
+    "CatStemHTDemucs6Offline3.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "b80026a5c3e1311f942f5cf630ede5b15622de84eb5495b760e166ef82c9ed49",
+      "Data/com.apple.CoreML/weights/weight.bin": "f4678e17c2ca5300914d89afc461da97000fc638c503d69f1cae7ab68d18c79d",
+      "Manifest.json": "b8f66835c6bbff4c29bff1d35a90831dbf650e4de179e8ea8853f5f7bbe965ad"
+    },
+    "CatStemHTDemucs6Offline4.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "4d9181277187490dab56e88a73f3be0f3dac0ad6de6bd45336d327e6432fe9e7",
+      "Data/com.apple.CoreML/weights/weight.bin": "779a8f20c4c669e69ee85fa474e1ed5c4e9531f3e4b4ceffe67fb4c4a497fbeb",
+      "Manifest.json": "bb2591a258c0f08be371f528d60e8fa8c2ca96bf9698fee0d66a3348f6b4c07a"
+    },
+    "CatStemHTDemucs6Offline5.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "4ccc146fe3ac6eadeb8bf8a5353486b413a866847dbe86eb610f22766d20667a",
+      "Data/com.apple.CoreML/weights/weight.bin": "55fca3564fd7f1de527127985e1601ccc72849d137c7dc619b96cf4cf8df4303",
+      "Manifest.json": "a63ba95e71303fb1855ba3591f77ecbf76b5f9152146e6bba0d9cd80bf8c142e"
+    },
+    "CatStemHTDemucs6Offline6.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "aa0dc7a95095102fedd6ff83784993065880503eb6adddde3028aef2be3b7861",
+      "Data/com.apple.CoreML/weights/weight.bin": "b6bdd63adb96a308feeb1f675a0736e43804345f3734e3683c33ff7b412562e2",
+      "Manifest.json": "6b6c5434f734da8bf85032fa742af8f0336f6ba7eb5a8455ec891ab5512da497"
+    },
+    "CatStemHTDemucs6Offline7.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "55c1ca11c86ebf830e858e50db88165f0fa13db0b66d27678819f857440230d2",
+      "Data/com.apple.CoreML/weights/weight.bin": "8556ce9b87c0757da2acca827b946436f0966c68349ae66f82db50e4f3e43c12",
+      "Manifest.json": "aa5afacd59c0c90aebabe69e4f2d2a968d47b85bd4c6318f90c8647f598f2832"
+    },
+    "CatStemHTDemucs6Offline8.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "46d71bcec167640dc559aba4891fe15a7e888a80e49dbb0497e9b7f2f9af97a2",
+      "Data/com.apple.CoreML/weights/weight.bin": "61dc37a77ac6f89b90699082c65a6d009ee2e93e057353e710824317a93bba9a",
+      "Manifest.json": "89a3a619b81da6c7f73fe948b221f96555a1e71483aea5e88339f547ebeb3f13"
+    },
+    "CatStemHTDemucs6Offline9.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "263f476e25a6a42cdff21fa1de3b8ec62017ac03f70262257a32e6baca22b5c3",
+      "Data/com.apple.CoreML/weights/weight.bin": "331e88a95772c8157884bb84e80426704f265373b5b50ae21488e527173cedd7",
+      "Manifest.json": "a58e9778eb10e50c4cac8699e72e1f22e349487d5d994227afa244525589d097"
+    },
+    "CatStemHTDemucs6Offline10.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "63a79fbc5380d1fd82a763342d5d06bd52cd5fe4ebe8ff4d776547f6a9fc800c",
+      "Data/com.apple.CoreML/weights/weight.bin": "f953eff3905edaca8183cb7a190b4f5a8cf19575e3d0abde528c4b7e086e1b8b",
+      "Manifest.json": "30243a8e05ead0db82c04ff3c9a9034f4965f6f9e017137d80cd3b4237c2bb31"
+    },
+    "CatStemHTDemucs6Offline11.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "f79e927a09fea799484e83de6253390d270100688268f5afc2c2262f136f2df7",
+      "Data/com.apple.CoreML/weights/weight.bin": "9cdeeb30a80a88fccf87a0a47ac437304ac0bcf8375bf5914c081b78b47ab1a9",
+      "Manifest.json": "57041a1f414de467dcf9bf5bad51a526fff1b67ee28011ae18dc8c9a71306c6e"
+    },
+    "CatStemHTDemucs6Offline12.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "ec816c488bce336655b2892095c0451267801dafe1ef6517b5c385d90f3cd2fe",
+      "Data/com.apple.CoreML/weights/weight.bin": "f8263e1f69e7b568cbc3cd1999852d01862c0838ed755691cd940f35a84068b6",
+      "Manifest.json": "da2270e474731a1c78221935e7103db513171f5a16b34e00543d0d8425971a7d"
+    },
+    "CatStemHTDemucs6Offline13.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "f715f041db947479be95b601eca67c5c9a8155e5c1a645df272494b4f4ded2b9",
+      "Data/com.apple.CoreML/weights/weight.bin": "ad5fb73b9390e46251ba5a1da1a06caed20b492db7520a21201b73dd0afca2ab",
+      "Manifest.json": "4d09ee7be44e63d6bbe4663afeac272ef23fc9a39ddf1dbe06a533198d381803"
+    },
+    "CatStemHTDemucs6Offline14.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "befb3b974a9e30d6c80467c2a8dbbfa81b5b679e5e0a4e380fd49d01b842d4dd",
+      "Data/com.apple.CoreML/weights/weight.bin": "fe7b51f15f8c8dad105cdcd1fea092912161d3a77dc44d83f7de12aba7930f2d",
+      "Manifest.json": "93559c1c603842a5be80d833ef8fdb3a46434a2f1d59ec5d542b0acbd2511cc6"
+    },
+    "CatStemHTDemucs6Offline15.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "ffb41d0d00937676efa637cfb5a3612b1fb618ca16e422995cefe190c8c33cbb",
+      "Data/com.apple.CoreML/weights/weight.bin": "3e01c6f20d269c71358b28398347fe5c808cf37b927c11575c2a4341aac54f9e",
+      "Manifest.json": "6d81a8af96685443d541ad05f9d2528725103db3cabe89a1ef0de3a4f83973c1"
+    },
+    "CatStemHTDemucs6Offline16.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "24bff8ccd4992997ee333d9d16454d287d8639dc6d800f7b7e77e511a812fe8d",
+      "Data/com.apple.CoreML/weights/weight.bin": "446c3b51e61bd6d10114033c3494e5cf9a6acd9e11e0ddc745fcaea913c0ba82",
+      "Manifest.json": "e66156d6ce9c5ce6b5fe7f9de3e93f192eef79b5d86b8d53c7b7f5c7c8333ee5"
+    },
+    "CatStemHTDemucs6Offline17.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "42bcf8e07475f56373c09d56b225002f0db763065e7228e0df194ff3046d9ae2",
+      "Data/com.apple.CoreML/weights/weight.bin": "109e5c28cb94d5680c46a02fe0b00b70ce90b318246716edf1fa7739e095f8c8",
+      "Manifest.json": "bdd85539167e7af0103935568196342cd630d52573b09bf8a3811a2e21357405"
+    },
+    "CatStemHTDemucs6Offline18.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "21024f4f30e0f4ee35f35191d780974b0c9861f554533bfb6bb6c72722371710",
+      "Data/com.apple.CoreML/weights/weight.bin": "a348d63c68c049c67f8d68774c785c774381daddcaf9f7a7a798f203c47a52bc",
+      "Manifest.json": "379adb24f4e1a5eed603cd2587af82d09d63e3899fe4a7bf0bb06be4ce626368"
+    },
+    "CatStemHTDemucs6Offline19.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "8cdf3d5199134dac35a231e176140e7587ab8aebadda18a9a09bc2bc39869e1b",
+      "Data/com.apple.CoreML/weights/weight.bin": "508a90f46a6ef8fb9cb461bb9e855bf19045426d0a8bbaff202382405e8c3b13",
+      "Manifest.json": "dbe60e5e52eddba17393c3e6e7bf96f7e29b921431af34e63d1f3b64182cde16"
+    },
+    "CatStemHTDemucs6Offline20.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "53181098b710816d8f311b5babf797323910deca577a876c23ccb1c419dcba86",
+      "Data/com.apple.CoreML/weights/weight.bin": "3297e3d1a15e1e12c7ad762a0d8f1c870fb939f3c68f0d1032199ac42d0df101",
+      "Manifest.json": "574d98d9e524508525efded0252c0bb0841899c51bdbe8d2c8ee011724633d50"
+    },
+    "CatStemHTDemucs6Offline21.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "4d812dc10c0b169cce0d5b64da74a3053d10d4e7bf66332c2560761810985c4d",
+      "Data/com.apple.CoreML/weights/weight.bin": "8f737099748d42223dcc7f2e97a5a8ccc2083b8868ef6080698a8512010e390d",
+      "Manifest.json": "3facddd2c13770195b0b166646c067fb2340b9460f2b9919af56aeed7d7333cb"
+    },
+    "CatStemHTDemucs6Offline22.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "df5815c73b6385e20f73fd0ba0d8c24d7683fa501bb16a5ad6f04bdf5052b9fb",
+      "Data/com.apple.CoreML/weights/weight.bin": "23638f3b47013876a312933aaf42c4f946adb8aecac5d1d53dd505f014251f7f",
+      "Manifest.json": "a75867b6d4cf31f832ea279e777c5ffaf73aad92ba4fab7e71844de56bf40de9"
+    },
+    "CatStemHTDemucs6Offline23.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "b4ee6689a667a69da264f3d341d1b418ea3ed237eaf8579bf6d24b1b9a017b6b",
+      "Data/com.apple.CoreML/weights/weight.bin": "b22296b752e98b7b0b6b22ec4e081f8066da56b08d339d7146c6df25cef0d771",
+      "Manifest.json": "f4b55e8a13c450f78f784fe920e62b7708681b94b50c7a16169c2efd3facda4e"
+    },
+    "CatStemHTDemucs6Offline24.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "2b58386ea9f8021d29d1e9063cad5cb74b4bbb7a0ae6fb3876a512494222de63",
+      "Data/com.apple.CoreML/weights/weight.bin": "36287acdeb4a783050b71ad2c11441e0291abf330ed8fd53d861f9b5c80f9dba",
+      "Manifest.json": "0baff8f1284016c86a850c55c51501490a7fa28d0747e42e1f4f50a5e45c528e"
+    },
+    "CatStemHTDemucs6Offline25.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "b6626f8b65a8de917898590f82d71b44b4fb17d327957ecd53c71de924cd965c",
+      "Data/com.apple.CoreML/weights/weight.bin": "80025aeec6f9db1cf257620288914a1568e3e463f5a1a2591cb4a09437fbacf7",
+      "Manifest.json": "74505b4c8f6885a16e8b42b8a096d02001d44f10ec86594828a14f5997a288b0"
+    },
+    "CatStemHTDemucs6Offline26.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "144ee23de0b4e802ab2785ca180b92a51035b15cdf6207c191c474aaedf62694",
+      "Data/com.apple.CoreML/weights/weight.bin": "5dde17c78c734bf1a8e2dfd0d514207b16bfa75bee69f65158dfb5515aef6ad0",
+      "Manifest.json": "f5537547fd86f3a2526a1ad2cb5988d1364e25cf4bd43b42459034784f7e61c6"
+    },
+    "CatStemHTDemucs6Offline27.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "4f5b46f7cb53946eaae0fedbe5f32a37a4a64d895e4b4df09946c4916d873960",
+      "Data/com.apple.CoreML/weights/weight.bin": "eace429f4d5712c09e54245eebe48e80c18dbf8b1adc4fc00fb78d41ea51e440",
+      "Manifest.json": "b05c612b5e53e60abd7770b44061efade7a2b12c0e9eea4e4d4766cb637b1d54"
+    },
+    "CatStemHTDemucs6Offline28.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "45bf4cbbbb2d78917c48225477ff6ff3210ce222b6b19d6e20fc2369cd7ef4b3",
+      "Data/com.apple.CoreML/weights/weight.bin": "5859512beca4177c35dffc4b1e16ff08729a2cfa95e813413ad873a1a69f24a5",
+      "Manifest.json": "70910a4e60bb87bdbe943b53e5f35626509444d0703043f1bb002e39e234366d"
+    },
+    "CatStemHTDemucs6Offline29.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "30873f6125eb1d347e2c46975dc93fbf3b55319f68a4799357881e087c6ca53e",
+      "Data/com.apple.CoreML/weights/weight.bin": "e2bc059ba30e02acd641e512c8c526c4924ee7b76e4108d5c857232fb97d1990",
+      "Manifest.json": "04c70a0ed413f24d0174db7182f1f429a47a874ab97a4d6c20105981289ee523"
+    },
+    "CatStemHTDemucs6Offline30.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "0e71ad927adfa73030d9c701bb19e4aa1611e9c8968d4db22d0dbd8d97f00f74",
+      "Data/com.apple.CoreML/weights/weight.bin": "42e2caebedb595aad23a77b97263ff0561a347549f57b9081e9eaea43ac10c9e",
+      "Manifest.json": "1420e5c834f371b81eb4b3a8651560d5242e82f566feba4761b25549d68b2915"
+    },
+    "CatStemHTDemucs6Offline31.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "1735c111890480e9bc3f0e5ad7c63b30f55678542f374773107b3d6a3961c966",
+      "Data/com.apple.CoreML/weights/weight.bin": "1151ecb419a447923396d46cd9190581690fe18e9cdcfa76959661eefaa87807",
+      "Manifest.json": "d01a744324e9e589e5d87184f6d499390f6700b9b7338f65d65be7017ebae734"
+    },
+    "CatStemHTDemucs6Offline32.mlpackage": {
+      "Data/com.apple.CoreML/model.mlmodel": "c1b66519f7fcad032a798d664a25286c26384bd2fa8ff411f0dd5e4d9e410df1",
+      "Data/com.apple.CoreML/weights/weight.bin": "d247344437f44754f81552736a7e0195ba326f598a82c506df2934adc79f1527",
+      "Manifest.json": "2e55bd8f7a4f8eb4b5830556721684197882ae70b205d3f63b1d7921dc5c6ccf"
+    }
+  },
+  "physical_ipad_validation": {
+    "device": "iPad (2017), A9, 2 GB",
+    "os": "iPadOS 16.7.16",
+    "compute_units": "cpuOnly",
+    "audio_fixture": "10 seconds, stereo sine mixture with DC, 44100 Hz float32",
+    "reference": "Original unconverted desktop PyTorch checkpoint with desktop file normalization and apply_model arguments",
+    "reserved_project_memory_bytes": 268435456,
+    "elapsed_seconds": 58.68,
+    "peak_rss_bytes": 1098940416,
+    "peak_sampled_footprint_bytes": 1252460560,
+    "minimum_sampled_available_memory_bytes": 267974640,
+    "parity": {
+      "Vocal": {
+        "rms": 7.717476963405682e-09,
+        "relative_rms": 2.3199958444616507e-06,
+        "maximum": 6.831251084804535e-07
+      },
+      "Drum": {
+        "rms": 1.3156077470343957e-08,
+        "relative_rms": 3.967305422201205e-06,
+        "maximum": 1.273583620786667e-07
+      },
+      "Bass": {
+        "rms": 9.35965953942394e-08,
+        "relative_rms": 2.8117537438865528e-05,
+        "maximum": 2.6635825634002686e-06
+      },
+      "Guitar": {
+        "rms": 4.933912564909206e-07,
+        "relative_rms": 1.1425409795428578e-05,
+        "maximum": 6.83218240737915e-06
+      },
+      "sum_maximum": 1.4901161193847656e-08,
+      "frames": 441000,
+      "sample_rate": 44100
+    },
+    "memory_limit_behavior": "Before loading the model, devices with <=3 GiB RAM require 1100 MiB available process memory. Otherwise report insufficient memory; no reduced-quality fallback.",
+    "reproduce": "scripts/build-catstem-device-probe.py, then scripts/catstem/compare-device-output.py",
+    "limits": "Numerical parity is measured on deterministic regression fixtures; outputs are not bit-identical. Synthetic 67-sample extreme-short input reports larger numerical variance. No speed parity is claimed.",
+    "memory_guard_regression": {
+      "reserved_project_memory_bytes": 402653184,
+      "available_bytes_before_guard": 1100594096,
+      "result": "PASS_MEMORY_GUARD; clean failure before Core ML, process remained responsive"
+    }
+  }
+}
