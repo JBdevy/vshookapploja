@@ -3,10 +3,7 @@ package com.hookdeveloper.catlive.remote;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
-import android.view.Gravity;
 import android.view.View;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 
 import static com.hookdeveloper.catlive.remote.RemoteWidgets.*;
 
@@ -37,36 +34,55 @@ final class RemoteBattery {
         return -1;
     }
 
-    static final class Badge extends LinearLayout {
-        private final TextView value;
-        private final View icon;
+    static final class Badge extends View {
+        private final boolean vertical;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private int percent = -1;
 
         Badge(Context context, boolean vertical) {
             super(context);
-            setOrientation(vertical ? VERTICAL : HORIZONTAL);
-            setGravity(Gravity.CENTER);
-            icon = new View(context) {
-                @Override protected void onDraw(Canvas canvas) {
-                    float left = dp(2), top = getHeight() * 0.5f - dp(4);
-                    paint.setColor(percent <= 20 ? RED : SECONDARY);
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(1));
-                    canvas.drawRoundRect(left, top, left + dp(14), top + dp(8), dp(2), dp(2), paint);
-                    paint.setStyle(Paint.Style.FILL);
-                    canvas.drawRoundRect(left + dp(15), top + dp(2.5f), left + dp(17), top + dp(5.5f),
-                        dp(1), dp(1), paint);
-                    if (percent > 0)
-                        canvas.drawRoundRect(left + dp(2), top + dp(2), left + dp(2) + dp(10) * percent / 100f,
-                            top + dp(6), dp(1), dp(1), paint);
-                }
-            };
-            addView(icon, new LayoutParams(dp(22), dp(12)));
-            value = label(context, "", 10, SECONDARY);
-            value.setGravity(Gravity.CENTER);
-            addView(value, new LayoutParams(-2, -2));
+            this.vertical = vertical;
+            paint.setTypeface(RemoteWidgets.bold);
+            paint.setTextSize(dp(10));
             setVisibility(GONE);
+        }
+
+        @Override protected void onMeasure(int widthSpec, int heightSpec) {
+            int width = vertical ? dp(27) : dp(26) + (int)Math.ceil(paint.measureText("100%"));
+            setMeasuredDimension(resolveSize(width, widthSpec), resolveSize(dp(vertical ? 29 : 18), heightSpec));
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            if (percent < 0 || getWidth() == 0 || getHeight() == 0) return;
+            String label = percent + "%";
+            paint.setColor(percent <= 20 ? RED : SECONDARY);
+            float iconWidth = dp(20), iconHeight = dp(10), gap = dp(vertical ? 2 : 4);
+            float textWidth = paint.measureText(label);
+            Paint.FontMetrics font = paint.getFontMetrics();
+            float textHeight = font.descent - font.ascent;
+            float width = vertical ? Math.max(textWidth, iconWidth) : iconWidth + gap + textWidth;
+            float height = vertical ? iconHeight + gap + textHeight : Math.max(iconHeight, textHeight);
+            float scale = Math.min(1f, Math.min(getWidth() / width, getHeight() / height));
+            canvas.save();
+            canvas.translate((getWidth() - width * scale) / 2, (getHeight() - height * scale) / 2);
+            canvas.scale(scale, scale);
+            float x = vertical ? (width - iconWidth) / 2 : 0;
+            float y = vertical ? 0 : (height - iconHeight) / 2;
+            float right = x + iconWidth - dp(3);
+            paint.setStrokeWidth(dp(1));
+            paint.setStyle(Paint.Style.STROKE);
+            canvas.drawRoundRect(x + dp(1), y + dp(1), right, y + iconHeight - dp(1), dp(2), dp(2), paint);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRoundRect(right + dp(1), y + dp(3), x + iconWidth, y + iconHeight - dp(3), dp(1), dp(1), paint);
+            if (percent > 0) {
+                float left = x + dp(3);
+                canvas.drawRoundRect(left, y + dp(3), left + (right - dp(2) - left) * percent / 100f,
+                    y + iconHeight - dp(3), dp(1), dp(1), paint);
+            }
+            float textX = vertical ? (width - textWidth) / 2 : iconWidth + gap;
+            float textY = vertical ? iconHeight + gap : (height - textHeight) / 2;
+            canvas.drawText(label, textX, textY - font.ascent, paint);
+            canvas.restore();
         }
 
         void update(int next) {
@@ -74,10 +90,8 @@ final class RemoteBattery {
             percent = next;
             setVisibility(percent < 0 ? GONE : VISIBLE);
             if (percent < 0) return;
-            value.setText(percent + "%");
-            value.setTextColor(percent <= 20 ? RED : SECONDARY);
             setContentDescription(RemoteText.ui("Desktop battery") + " " + percent + "%");
-            icon.invalidate();
+            invalidate();
         }
     }
 }

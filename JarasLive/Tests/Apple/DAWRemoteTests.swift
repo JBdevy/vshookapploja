@@ -21,6 +21,14 @@ var fixture = DAWRemoteState(project: project, projectName: "Remote native test"
     position: 0, duration: 10, bpm: 120, playing: false, paused: false, subPlaying: false, loop: false,
     masterVolume: 1, masterMute: false, masterSolo: false, masterMono: false,
     pendingSave: false, saving: false, message: "")
+require(fixture.nativeTransportSongName(selectedRegionID: nil) == "—",
+        "The idle native transport must not fall back to the project name")
+require(fixture.nativeTransportSongName(selectedRegionID: regionID) == "Region",
+        "The idle native transport must show the explicitly selected region")
+fixture.playing = true
+require(fixture.nativeTransportSongName(selectedRegionID: nil) == "Region",
+        "The playing native transport must show the audible region")
+fixture.playing = false
 for enabled in [true, false] {
     let command = DAWRemoteCommand(project: project, song: song, action: .transportFadeout, enabled: enabled)
     require(command.valid, "Explicit start/cancel Fadeout command is valid")
@@ -539,6 +547,8 @@ timerClient.testConnect(timerEndpoint)
 waitFor("timer fixture connects with initial timer sample") { timerClient.remoteState?.timer != nil }
 var timerPublications = 0
 let timerObservation = timerClient.$remoteState.dropFirst().sink { _ in timerPublications += 1 }
+// Synthetic snapshots bypass the host battery sampler. Keep that field stable while testing timer ticks.
+timerFixture.desktopBatteryPercent = timerClient.remoteState?.desktopBatteryPercent
 let ticks = (1...100).map { tick -> DAWRemoteState in
     var state = timerFixture; state.timer?.remainingSeconds -= Double(tick) * 0.1; return state
 }
