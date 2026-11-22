@@ -7,6 +7,15 @@ public class RemoteViewTest {
  @After public void close(){controller.pause().stop().destroy();}
  JSONObject state()throws Exception{return new JSONObject(new String(getClass().getResourceAsStream("/remote-state.json").readAllBytes(),StandardCharsets.UTF_8));}
  void connect(String mode)throws Exception{app.entering=true;app.remote.connected=true;app.remote.mode=mode;app.remote.state=state();app.onChanged();app.root.measure(View.MeasureSpec.makeMeasureSpec(393,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(851,View.MeasureSpec.EXACTLY));app.root.layout(0,0,393,851);}
+ @Test public void pauseUsesYellowOnlyWhilePaused()throws Exception{
+  connect("director");
+  for (boolean playing : new boolean[]{false,true}) {
+   app.state.put("playing",playing).put("paused",false);app.refresh();
+   assertEquals(0xff454545,((android.graphics.drawable.GradientDrawable)app.pause.getBackground()).getColors()[0]);
+  }
+  app.state.put("playing",false).put("paused",true);app.refresh();
+  assertEquals(RemoteWidgets.YELLOW,((android.graphics.drawable.GradientDrawable)app.pause.getBackground()).getColors()[0]);
+ }
  @Test public void footerNoticeExpiresDespiteRepeatedStatePackets()throws Exception{
   connect("director");app.state.put("message","Salvo").put("footerInformation","Ignore Next");app.refresh();assertEquals("Salvo",app.information.getText().toString());
   for(int i=0;i<6;i++){Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1));app.refresh();}
@@ -140,7 +149,11 @@ public class RemoteViewTest {
   assertEquals(app.rail.indexOfChild(app.railButtons.get("mixer"))+1,app.rail.indexOfChild(app.railButtons.get("parts")));
   View toolbar=(View)app.rail.getParent().getParent();assertSame(app.column,toolbar.getParent());
   assertEquals(app.column.indexOfChild(toolbar)+1,app.column.indexOfChild(app.transport));
-  assertSame(toolbar,app.railButtons.get("settings").getParent());assertEquals("PREVIEW",app.railButtons.get("preview").getText().toString());
+  assertSame(toolbar,app.railButtons.get("settings").getParent());
+  RemoteWidgets.Button preview=app.railButtons.get("preview");
+  assertEquals("preview",preview.icon);assertEquals("Preview",preview.getContentDescription());assertEquals("",preview.getText().toString());
+  app.state.put("previewActive",false);app.refresh();assertEquals(RemoteWidgets.RED,preview.tint);
+  app.state.put("previewActive",true);app.refresh();assertEquals(RemoteWidgets.GREEN,preview.tint);
   app.choose("tp1");app.railButtons.get("mixer").performClick();assertEquals("grid",app.panel);assertTrue(app.mixerShown);
  }
  @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void manualGridScrollRevealsHeadersAndExtendsFollowPause()throws Exception{

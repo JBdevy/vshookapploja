@@ -443,7 +443,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             play.transportStyle(playing?0xff24f06a:blend(0xff1d1d1d,0xff24f06a,.45f),playing?Color.BLACK:Color.WHITE);
             pause.transportIcon(paused?"play":"pause",RemoteText.ui(paused?"Play":"Pause"),"",
                     paused ? R.drawable.transport_play_on : R.drawable.transport_pause_off);
-            pause.transportStyle(YELLOW, Color.BLACK);
+            pause.transportStyle(paused ? YELLOW : 0xff454545, paused ? Color.BLACK : Color.WHITE);
             pause.setEnabled(playing||paused);
             pause.setAlpha(1f);
             boolean loop = state.optBoolean("loop");
@@ -618,7 +618,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         fadeoutControl.transportStyle(0xffffff00,Color.BLACK);
         pause=new Button(this,"",()->remote.action(state.optBoolean("paused")?"play":"pause"));
         pause.transportIcon("pause",RemoteText.ui("Pause"),"",R.drawable.transport_pause_off);
-        pause.transportStyle(YELLOW,Color.BLACK);
+        pause.transportStyle(0xff454545,Color.WHITE);
         repeat=new Button(this,"",()->remote.action("toggleLoop"));
         repeat.transportIcon("repeat","Repeat","",R.drawable.transport_loop_off);
         repeat.transportStyle(0xff454545,Color.WHITE);
