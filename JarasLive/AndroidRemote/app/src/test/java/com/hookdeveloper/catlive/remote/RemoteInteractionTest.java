@@ -27,8 +27,11 @@ public class RemoteInteractionTest {
  @Test public void hierarchyHandlesNestedAndLastChildrenWithoutRecreatingFaders()throws Exception{
   JSONArray tracks=new JSONArray("[{\"id\":\"A\",\"name\":\"Grupo\"},{\"id\":\"B\",\"name\":\"Subgrupo\",\"parentTrack\":\"A\"},{\"id\":\"C\",\"name\":\"Filho\",\"parentTrack\":\"B\"},{\"id\":\"D\",\"name\":\"Último\",\"parentTrack\":\"A\"}]");app.state.put("tracks",tracks);app.choose("mixer");
   MainActivity.TrackRow b=app.trackRows.get("B"),c=app.trackRows.get("C"),d=app.trackRows.get("D");assertEquals(1,b.groupGuide.depth);assertFalse(b.groupGuide.last);assertEquals(2,c.groupGuide.depth);assertTrue(c.groupGuide.last);assertEquals(1,d.groupGuide.depth);assertTrue(d.groupGuide.last);assertEquals(RemoteWidgets.dp(24),c.groupGuide.getLayoutParams().width);
-  assertEquals(View.VISIBLE,app.trackRows.get("A").folderIcon.getVisibility());assertEquals(View.VISIBLE,b.folderIcon.getVisibility());assertEquals(View.GONE,c.folderIcon.getVisibility());assertEquals("folder.nested",b.folderIcon.key);assertEquals("folder",app.trackRows.get("A").folderIcon.key);assertFalse(b.folderIcon.isClickable());assertFalse(b.folderIcon.isFocusable());assertFalse(b.folderIcon.performClick());
-  Object fader=c.volume;tracks.getJSONObject(2).remove("parentTrack");app.refresh();assertSame(c,app.trackRows.get("C"));assertSame(fader,c.volume);assertEquals(0,c.groupGuide.getLayoutParams().width);assertEquals(View.GONE,b.folderIcon.getVisibility());
+  for (String id : Arrays.asList("A","B","C","D")) {
+   MainActivity.TrackRow row=app.trackRows.get(id);
+   assertSame(row.strip,row.title.getParent());
+  }
+  Object fader=c.volume;tracks.getJSONObject(2).remove("parentTrack");app.refresh();assertSame(c,app.trackRows.get("C"));assertSame(fader,c.volume);assertEquals(0,c.groupGuide.getLayoutParams().width);
  }
  @Test public void cyclicParentMetadataCannotHangHierarchy()throws Exception{JSONArray tracks=new JSONArray("[{\"id\":\"A\",\"parentTrack\":\"B\"},{\"id\":\"B\",\"parentTrack\":\"A\"}]");assertEquals(Arrays.asList("B"),RemoteGroupGuide.ancestors(tracks,"A"));}
 
