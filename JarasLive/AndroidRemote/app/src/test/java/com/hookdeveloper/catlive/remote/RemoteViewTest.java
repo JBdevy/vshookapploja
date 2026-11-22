@@ -140,7 +140,11 @@ public class RemoteViewTest {
   assertEquals(app.rail.indexOfChild(app.railButtons.get("mixer"))+1,app.rail.indexOfChild(app.railButtons.get("parts")));
   View toolbar=(View)app.rail.getParent().getParent();assertSame(app.column,toolbar.getParent());
   assertEquals(app.column.indexOfChild(toolbar)+1,app.column.indexOfChild(app.transport));
-  assertSame(toolbar,app.railButtons.get("settings").getParent());assertEquals("PREVIEW",app.railButtons.get("preview").getText().toString());
+  assertSame(toolbar,app.railButtons.get("settings").getParent());
+  RemoteWidgets.Button preview=app.railButtons.get("preview");
+  assertEquals("preview",preview.icon);assertEquals("Preview",preview.getContentDescription());assertEquals("",preview.getText().toString());
+  app.state.put("previewActive",false);app.refresh();assertEquals(RemoteWidgets.RED,preview.tint);
+  app.state.put("previewActive",true);app.refresh();assertEquals(RemoteWidgets.GREEN,preview.tint);
   app.choose("tp1");app.railButtons.get("mixer").performClick();assertEquals("grid",app.panel);assertTrue(app.mixerShown);
  }
  @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void manualGridScrollRevealsHeadersAndExtendsFollowPause()throws Exception{
