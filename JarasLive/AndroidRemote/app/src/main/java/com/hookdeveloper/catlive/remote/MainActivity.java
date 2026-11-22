@@ -585,7 +585,8 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         LinearLayout horizontal=row(this);horizontal.setGravity(Gravity.TOP);pad(horizontal,6,6);transport.addView(horizontal,new LinearLayout.LayoutParams(-1,dp(82)));
         TrackRow master=new TrackRow(null,0);trackRows.put("master",master);horizontal.addView(master,new LinearLayout.LayoutParams(dp(220),dp(70)));
         LinearLayout middle=column(this);LinearLayout.LayoutParams middleLp=new LinearLayout.LayoutParams(0,-1,1);middleLp.setMargins(dp(8),0,0,0);horizontal.addView(middle,middleLp);
-        LinearLayout display=row(this);display.setBackground(RemoteWidgets.display(5));
+        middle.setBackground(RemoteWidgets.surface(0xff1d1029,0xff0b0710,0xff505050,7));
+        LinearLayout display=row(this);
         tabletInformation=centered("",10,YELLOW,true);
         tabletInformation.setSingleLine();
         tabletInformation.setAutoSizeTextTypeUniformWithConfiguration(7,10,1,android.util.TypedValue.COMPLEX_UNIT_SP);
