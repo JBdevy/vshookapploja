@@ -438,13 +438,17 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         if(play!=null){
             boolean playing=state.optBoolean("playing"), paused=state.optBoolean("paused");
             String playTitle=playing||paused?"Stop":"Play";
-            play.caption=playTitle;
-            if(tabletLayout())play.setText(playTitle);
-            else play.icon(playing||paused?"stop":"play",playTitle);
+            play.transportIcon(playing||paused?"stop":"play", playTitle, playTitle,
+                    playing||paused ? R.drawable.transport_stopall_on : R.drawable.transport_play_off);
             play.transportStyle(playing?0xff24f06a:blend(0xff1d1d1d,0xff24f06a,.45f),playing?Color.BLACK:Color.WHITE);
-            pause.icon(paused?"play":"pause",RemoteText.ui(paused?"Play":"Pause"));
-            pause.transportStyle(0xff454545,RemoteWidgets.tablet||paused?Color.WHITE:YELLOW);
+            pause.transportIcon(paused?"play":"pause",RemoteText.ui(paused?"Play":"Pause"),"",
+                    paused ? R.drawable.transport_play_on : R.drawable.transport_pause_off);
+            pause.transportStyle(YELLOW, Color.BLACK);
             pause.setEnabled(playing||paused);
+            pause.setAlpha(1f);
+            boolean loop = state.optBoolean("loop");
+            repeat.transportIcon("repeat","Repeat","",loop ? R.drawable.transport_loop_on : R.drawable.transport_loop_off);
+            repeat.transportStyle(loop ? YELLOW : 0xff454545, loop ? Color.BLACK : Color.WHITE);
         }
         if(bpm!=null){bpm.setText(String.format(Locale.US,"%s BPM",number(state.optDouble("bpm"))));bpm.setTextColor(state.optBoolean("tempoNeedsRender")?YELLOW:TEXT);}if(pitch!=null)pitch.setText(String.format(Locale.US,tabletLayout()?"%+d st":"Tuner\n%+dst",state.optInt("pitchSemitones")));
         if(save!=null){save.setEnabled(state.optBoolean("pendingSave")&&!state.optBoolean("saving"));if(tabletLayout())save.setText(state.optBoolean("saving")?"Salvando…":state.optBoolean("pendingSave")?"Salvar":"Salvo");}
@@ -478,6 +482,8 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         long now=SystemClock.elapsedRealtime();boolean active=fadeout.active(now);
         if(fadeoutControl!=null){
             fadeoutControl.setEnabled(fadeout.supported&&(active||state.optBoolean("playing")));
+            fadeoutControl.transportIcon("fadeout","Fadeout","Fadeout",
+                    active ? R.drawable.transport_fadeout_on : R.drawable.transport_fadeout_off);
             fadeoutControl.setAlpha(1);
         }
         boolean visible=remote.mode.equals("director")&&active&&!fadeout.run.isEmpty()&&fadeout.value(now)>0;
@@ -539,10 +545,6 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     void updateTabs(){if(remote.mode.equals("observer")){tabs.setVisibility(View.GONE);tabScroll.setVisibility(View.GONE);return;}String signature=panel+RemoteModel.array(state,"projectTabs").toString();if(signature.equals(tabs.getTag()))return;tabs.setTag(signature);tabs.removeAllViews();for(JSONObject t:RemoteModel.list(RemoteModel.array(state,"projectTabs"))){Button b=new Button(this,t.optString("name"),()->remote.action("selectProjectTab",RemoteModel.id(t,"id"),0));b.setOnLongClickListener(v->{menu(v,new String[]{"Fechar aba"},i->remote.action("closeProjectTab",RemoteModel.id(t,"id"),0));return true;});b.setTextSize(13);b.setTextColor(t.optBoolean("selected")?TEXT:0xffa4a4a4);b.setBackgroundColor(t.optBoolean("selected")?0xff333333:0xff191919);if(t.optBoolean("selected")){GradientDrawable fill=new GradientDrawable();fill.setColor(0xff333333);GradientDrawable underline=new GradientDrawable();underline.setColor(GREEN);LayerDrawable layers=new LayerDrawable(new Drawable[]{fill,underline});layers.setLayerGravity(1,Gravity.BOTTOM);layers.setLayerHeight(1,dp(3));b.setBackground(layers);}tabs.addView(b,new LinearLayout.LayoutParams(dp(120),-1));}layoutProjectTabs(tabScroll.getWidth());tabScroll.setVisibility(tabs.getChildCount()>1&&!panel.equals("notices")?View.VISIBLE:View.GONE);}
     void layoutProjectTabs(int available){int count=tabs.getChildCount();if(count==0||available<=0)return;int width=Math.max(dp(120),available/count);for(int i=0;i<count;i++){View tab=tabs.getChildAt(i);LinearLayout.LayoutParams lp=(LinearLayout.LayoutParams)tab.getLayoutParams();int target=width+(width>=dp(120)&&count*dp(120)<=available&&i==count-1?available-width*count:0);if(lp.width!=target||lp.weight!=0){lp.width=target;lp.weight=0;tab.setLayoutParams(lp);}}}
     void tick(){if(!screen.equals("workspace")||state==null)return;refreshFadeout();
-        if(repeat!=null){
-            float alpha=state.optBoolean("loop")&&(SystemClock.uptimeMillis()/550)%2!=0?.55f:1f;
-            if(repeat.getAlpha()!=alpha)repeat.setAlpha(alpha);
-        }
         refreshFooterInformation();updateProjectOpening();if(parts!=null)parts.tick();if(horizontalParts!=null)horizontalParts.tick();if(grid!=null&&panel.equals("grid"))grid.invalidate();if(tp!=null&&panel.startsWith("tp"))tp.invalidate();if(cueText!=null){String text=remote.connected&&remote.mode.equals("observer")?cue.update(state,SystemClock.elapsedRealtime()):"";cueText.setText(text.isEmpty()?"":(cue.armed?"Trecho engatilhado":"Próximo trecho")+"\n"+text+"    "+cue.seconds+" s");cueText.setVisibility(text.isEmpty()?View.GONE:View.VISIBLE);}}
     double displayPosition(){return anchorPosition+(remote.connected&&state!=null&&state.optBoolean("playing")&&!state.optBoolean("paused")?Math.min(.35,(SystemClock.elapsedRealtime()-stateAt)/1000.0):0);}
     double timerValue(){return localTimer.value(SystemClock.elapsedRealtime());}
@@ -610,14 +612,15 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     }
     void addTransportButtons(LinearLayout buttons,boolean tablet){
         play=new Button(this,"Play",()->remote.action(state.optBoolean("playing")||state.optBoolean("paused")?"stop":"play"));
-        if(!tablet)play.icon("play","Play");
+        play.transportIcon("play","Play","Play",R.drawable.transport_play_off);
         fadeoutControl=new Button(this,"Fadeout",this::toggleFadeout);
         fadeoutControl.transportStyle(0xffffff00,Color.BLACK);
         pause=new Button(this,"",()->remote.action(state.optBoolean("paused")?"play":"pause"));
-        pause.icon("pause",RemoteText.ui("Pause"));
+        pause.transportIcon("pause",RemoteText.ui("Pause"),"",R.drawable.transport_pause_off);
+        pause.transportStyle(YELLOW,Color.BLACK);
         repeat=new Button(this,"",()->remote.action("toggleLoop"));
-        repeat.icon("repeat","Repeat");
-        repeat.transportStyle(YELLOW,Color.BLACK);
+        repeat.transportIcon("repeat","Repeat","",R.drawable.transport_loop_off);
+        repeat.transportStyle(0xff454545,Color.WHITE);
         for(Button button:new Button[]{play,fadeoutControl,pause,repeat}){
             button.setTextSize(tablet?11:9);
             if(button==fadeoutControl||(tablet&&button==play))button.setSingleLine(true);
@@ -665,6 +668,17 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
 
             iconView=new RemoteIcons.IconView(MainActivity.this);if(id!=null){addView(iconView,new LinearLayout.LayoutParams(dp(40),-1));}
             refresh();
+        }
+        @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){
+            super.onLayout(changed,left,top,right,bottom);
+            if(id==null)return;
+            View nameRow=(View)title.getParent();
+            int nameTop=strip.getHeight()-strip.getPaddingBottom()-nameRow.getHeight();
+            int blockHeight=controls.getHeight()+line.getHeight();
+            int controlsTop=Math.max(strip.getPaddingTop(),Math.min((strip.getHeight()-blockHeight)/2,nameTop-blockHeight));
+            controls.offsetTopAndBottom(controlsTop-controls.getTop());
+            line.offsetTopAndBottom(controls.getBottom()-line.getTop());
+            nameRow.offsetTopAndBottom(nameTop-nameRow.getTop());
         }
         @Override protected void dispatchDraw(Canvas canvas){
             super.dispatchDraw(canvas);

@@ -105,7 +105,13 @@ final class RemoteGrid extends View {
         if(s.optBoolean("loop")&&!s.isNull("loopStart")&&!s.isNull("loopEnd"))loopArea(canvas,x(s.optDouble("loopStart")),x(s.optDouble("loopEnd")),height);
         cursor(canvas,Double.isFinite(needlePreview)?needlePreview:s.optDouble("editPosition",pos),rgb(s.optLong("editCursorColor",0x69ed91)),height,false);
         if(s.optBoolean("playing"))cursor(canvas,pos,rgb(s.optLong("playCursorColor",0x69ed91)),height,true);
-        if(s.optBoolean("subPlaying"))cursor(canvas,s.optDouble("subPlayPosition"),rgb(s.optLong("subPlayCursorColor",0xffdc52)),height,true);
+        String queuedID=RemoteModel.id(s,"queuedRegion");
+        if(!queuedID.isEmpty()){
+            boolean running=s.optBoolean("subPlaying");
+            JSONObject queued=running?null:RemoteModel.region(s,queuedID);
+            double time=queued==null?s.optDouble("subPlayPosition",Double.NaN):queued.optDouble("start",Double.NaN);
+            if(Double.isFinite(time))cursor(canvas,time,rgb(s.optLong("subPlayCursorColor",0xffdc52)),height,running);
+        }
     }
     void markers(Canvas canvas,JSONObject s,float width,float height){
         List<JSONObject> markers=new ArrayList<>();for(JSONObject marker:RemoteModel.list(RemoteModel.array(s,"markers")))if(!RemoteModel.gridTempoMarker(s,marker)&&marker.optDouble("position")>=start()&&marker.optDouble("position")<=start()+duration())markers.add(marker);

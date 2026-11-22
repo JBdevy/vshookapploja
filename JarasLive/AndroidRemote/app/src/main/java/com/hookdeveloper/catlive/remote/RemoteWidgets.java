@@ -58,11 +58,47 @@ final class RemoteWidgets {
         void trackStyle(int color,boolean on){tint=color;active=on;setTextColor(on?Color.BLACK:Color.WHITE);setPadding(0,0,0,0);setBackground(new InsetDrawable(trackButtonSurface(color,on),dp(3),dp(3),dp(3),dp(3)));invalidate();}
         void solid(int color){setTextColor(Color.BLACK);setBackground(surface(blend(color,Color.WHITE,.10f),blend(color,Color.BLACK,.12f),color,5));}
         void transportStyle(int background,int foreground){tint=foreground;setTextColor(foreground);setBackground(surface(background,background,Color.TRANSPARENT,6));invalidate();}
+        private int transportResource;
+        private Drawable transportArtwork;
+        void transportIcon(String key, String accessible, String label, int resource) {
+            if (transportResource == resource && caption.equals(label)) return;
+            transportResource = resource;
+            transportArtwork = getContext().getDrawable(resource);
+            caption = label;
+            icon(key, accessible);
+        }
+        private void drawTransportArtwork(Canvas c) {
+            final int w = getWidth(), h = getHeight();
+            final boolean horizontal = tablet && !caption.isEmpty();
+            Paint label = getPaint();
+            label.setColor(tint);
+            float size = dp(caption.isEmpty() ? 19 : 14);
+            float x = w / 2f, y = h / 2f;
+            if (!caption.isEmpty()) {
+                String text = RemoteText.ui(caption);
+                Paint paint = new Paint(label);
+                paint.setTextSize(dp(horizontal ? 10 : 9));
+                paint.setTextAlign(Paint.Align.CENTER);
+                float textX = x, baseline = y + dp(12);
+                if (horizontal) {
+                    float textWidth = paint.measureText(text), gap = dp(3);
+                    float factor = Math.min(1f, (w - dp(4)) / Math.max(1f, size + gap + textWidth));
+                    paint.setTextSize(paint.getTextSize() * factor);
+                    size *= factor;
+                    x -= (gap + textWidth * factor) / 2;
+                    textX += (size + gap) / 2;
+                    baseline = y - (paint.ascent() + paint.descent()) / 2;
+                } else y -= dp(6);
+                c.drawText(text, textX, baseline, paint);
+            }
+            transportArtwork.setBounds(Math.round(x-size/2),Math.round(y-size/2),Math.round(x+size/2),Math.round(y+size/2));
+            transportArtwork.draw(c);
+        }
         void icon(String key,String accessible){icon=key;setContentDescription(accessible);setText("");invalidate();}
         void leadingIcon(String key){leadingIcon=key;setPadding(dp(34),dp(4),dp(12),dp(4));}
         void trailingIcon(String key){trailingIcon=key;setPadding(dp(9),dp(4),dp(27),dp(4));setSingleLine(true);setEllipsize(android.text.TextUtils.TruncateAt.END);}
         @Override public void setEnabled(boolean on){super.setEnabled(on);setAlpha(on?1:.35f);}
-        @Override protected void onDraw(Canvas c){if(isPressed()){Paint p=new Paint();p.setColor(0x25ffffff);c.drawRoundRect(0,0,getWidth(),getHeight(),dp(5),dp(5),p);}super.onDraw(c);if(!leadingIcon.isEmpty())drawIcon(c,leadingIcon,dp(17),getHeight()/2f,dp(17),getCurrentTextColor());if(!trailingIcon.isEmpty())drawIcon(c,trailingIcon,getWidth()-dp(14),getHeight()/2f,dp(12),getCurrentTextColor());if(!icon.isEmpty()){float size=dp(caption.isEmpty()?21:14);drawIcon(c,icon,getWidth()/2f,getHeight()/2f-(caption.isEmpty()?0:dp(6)),size,tint);if(!caption.isEmpty()){Paint p=new Paint(3);p.setColor(tint);p.setTypeface(bold);p.setTextSize(dp(9));p.setTextAlign(Paint.Align.CENTER);c.drawText(RemoteText.ui(caption),getWidth()/2f,getHeight()/2f+dp(12),p);}}}
+        @Override protected void onDraw(Canvas c){if(isPressed()){Paint p=new Paint();p.setColor(0x25ffffff);c.drawRoundRect(0,0,getWidth(),getHeight(),dp(5),dp(5),p);}super.onDraw(c);if(transportArtwork!=null){drawTransportArtwork(c);return;}if(!leadingIcon.isEmpty())drawIcon(c,leadingIcon,dp(17),getHeight()/2f,dp(17),getCurrentTextColor());if(!trailingIcon.isEmpty())drawIcon(c,trailingIcon,getWidth()-dp(14),getHeight()/2f,dp(12),getCurrentTextColor());if(!icon.isEmpty()){float size=dp(caption.isEmpty()?21:14);drawIcon(c,icon,getWidth()/2f,getHeight()/2f-(caption.isEmpty()?0:dp(6)),size,tint);if(!caption.isEmpty()){Paint p=new Paint(3);p.setColor(tint);p.setTypeface(bold);p.setTextSize(dp(9));p.setTextAlign(Paint.Align.CENTER);c.drawText(RemoteText.ui(caption),getWidth()/2f,getHeight()/2f+dp(12),p);}}}
         @Override public boolean onTouchEvent(MotionEvent e){boolean r=super.onTouchEvent(e);invalidate();return r;}
     }
     static void drawIcon(Canvas canvas,String key,float cx,float cy,float size,int color){
