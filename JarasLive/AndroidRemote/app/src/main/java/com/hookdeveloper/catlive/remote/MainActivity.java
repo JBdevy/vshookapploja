@@ -200,7 +200,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         return true;
     }
     boolean horizontalToolbar(){return RemoteWidgets.tablet&&remote.mode.equals("director");}
-    Button rail(String key,String title,Runnable run){Button b=new Button(this,"",run);if(key.startsWith("TP"))b.setText(key);else b.icon(key,title);b.style(TOOLBAR_INACTIVE,false);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(tabletLayout()&&remote.mode.equals("director")?34:44),dp(44));if(horizontalToolbar()){lp.width=dp(34);lp.height=dp(32);lp.setMargins(dp(2),0,dp(2),0);}else lp.setMargins(dp(4),dp(4),dp(4),dp(4));rail.addView(b,lp);railButtons.put(key,b);return b;}
+    Button rail(String key,String title,Runnable run){Button b=new Button(this,"",run);if(key.startsWith("TP"))b.setText(key);else b.icon(key,title);b.topToolbar=horizontalToolbar();b.style(TOOLBAR_INACTIVE,false);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(tabletLayout()&&remote.mode.equals("director")?34:44),dp(44));if(horizontalToolbar()){lp.width=dp(34);lp.height=dp(32);lp.setMargins(dp(2),0,dp(2),0);}else lp.setMargins(dp(4),dp(4),dp(4),dp(4));rail.addView(b,lp);railButtons.put(key,b);return b;}
     boolean tabletLayout(){return RemoteWidgets.tablet&&(remote.mode.equals("observer")||getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE);}
     void buildWorkspace(){
         if(state==null)return;mixerAdjustment.dismiss();if(vinhetas!=null){vinhetas.releaseAll();vinhetas=null;}songProgress=null;observerPanes=null;observerHeaderDisplays=null;observerHeaderButtons=null;observerPrompterPane=null;observerListPane=null;current=null;observerQueue=null;tabletInformation=null;nextDisplay=null;queuedDisplay=null;noticeEditor=null;noticeSend=null;noticeRemaining=null;grid=null;tp=null;parts=null;horizontalParts=null;selectionTitle=null;playCaption=null;pauseCaption=null;trackColumn=null;setlistScroll=null;mixerScroll=null;playlistButton=null;auto=null;bypass=null;live=null;save=null;play=null;pause=null;fadeoutControl=null;repeat=null;bpm=null;pitch=null;next=null;queued=null;information=null;screen="workspace";fadeoutCard=null;renderedMode=remote.mode;structure="";mixerStructure="";trackRows.clear();songRows.clear();railButtons.clear();root.removeAllViews();
@@ -438,16 +438,14 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         if(play!=null){
             boolean playing=state.optBoolean("playing"), paused=state.optBoolean("paused");
             String playTitle=playing||paused?"Stop":"Play";
-            play.transportIcon(playing||paused?"stop":"play", playTitle, playTitle,
-                    playing||paused ? R.drawable.transport_stopall_on : R.drawable.transport_play_off);
+            play.transportIcon(playing||paused?"stop":"play", playTitle, playTitle);
             play.transportStyle(playing?0xff24f06a:blend(0xff1d1d1d,0xff24f06a,.45f),playing?Color.BLACK:Color.WHITE);
-            pause.transportIcon(paused?"play":"pause",RemoteText.ui(paused?"Play":"Pause"),"",
-                    paused ? R.drawable.transport_play_on : R.drawable.transport_pause_off);
+            pause.transportIcon(paused?"play":"pause",RemoteText.ui(paused?"Play":"Pause"),"");
             pause.transportStyle(paused ? YELLOW : 0xff454545, paused ? Color.BLACK : Color.WHITE);
             pause.setEnabled(playing||paused);
             pause.setAlpha(1f);
             boolean loop = state.optBoolean("loop");
-            repeat.transportIcon("repeat","Repeat","",loop ? R.drawable.transport_loop_on : R.drawable.transport_loop_off);
+            repeat.transportIcon("repeat","Repeat","");
             repeat.transportStyle(loop ? YELLOW : 0xff454545, loop ? Color.BLACK : Color.WHITE);
         }
         if(bpm!=null){bpm.setText(String.format(Locale.US,"%s BPM",number(state.optDouble("bpm"))));bpm.setTextColor(state.optBoolean("tempoNeedsRender")?YELLOW:TEXT);}if(pitch!=null)pitch.setText(String.format(Locale.US,tabletLayout()?"%+d st":"Tuner\n%+dst",state.optInt("pitchSemitones")));
@@ -482,8 +480,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         long now=SystemClock.elapsedRealtime();boolean active=fadeout.active(now);
         if(fadeoutControl!=null){
             fadeoutControl.setEnabled(fadeout.supported&&(active||state.optBoolean("playing")));
-            fadeoutControl.transportIcon("fadeout","Fadeout","Fadeout",
-                    active ? R.drawable.transport_fadeout_on : R.drawable.transport_fadeout_off);
+            fadeoutControl.transportIcon("fadeout","Fadeout","Fadeout");
             fadeoutControl.setAlpha(1);
         }
         boolean visible=remote.mode.equals("director")&&active&&!fadeout.run.isEmpty()&&fadeout.value(now)>0;
@@ -613,14 +610,14 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     }
     void addTransportButtons(LinearLayout buttons,boolean tablet){
         play=new Button(this,"Play",()->remote.action(state.optBoolean("playing")||state.optBoolean("paused")?"stop":"play"));
-        play.transportIcon("play","Play","Play",R.drawable.transport_play_off);
+        play.transportIcon("play","Play","Play");
         fadeoutControl=new Button(this,"Fadeout",this::toggleFadeout);
         fadeoutControl.transportStyle(0xffffff00,Color.BLACK);
         pause=new Button(this,"",()->remote.action(state.optBoolean("paused")?"play":"pause"));
-        pause.transportIcon("pause",RemoteText.ui("Pause"),"",R.drawable.transport_pause_off);
+        pause.transportIcon("pause",RemoteText.ui("Pause"),"");
         pause.transportStyle(0xff454545,Color.WHITE);
         repeat=new Button(this,"",()->remote.action("toggleLoop"));
-        repeat.transportIcon("repeat","Repeat","",R.drawable.transport_loop_off);
+        repeat.transportIcon("repeat","Repeat","");
         repeat.transportStyle(0xff454545,Color.WHITE);
         for(Button button:new Button[]{play,fadeoutControl,pause,repeat}){
             button.setTextSize(tablet?11:9);
@@ -649,7 +646,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     void space(LinearLayout layout,int h){View v=new View(this);layout.addView(v,new LinearLayout.LayoutParams(1,dp(h)));}
 
     final class TrackRow extends LinearLayout {
-        final String id;final int index;final Paint boundaryPaint=new Paint();LinearLayout strip,controls,line;TextView title,volumeReadout;Fader volume,pan;Button mute,solo,mono;RemoteIcons.IconView iconView;RemoteGroupGuide groupGuide;Icon folderIcon;
+        final String id;final int index;final Paint boundaryPaint=new Paint();LinearLayout strip,controls,line;TextView title,volumeReadout;Fader volume,pan;Button mute,solo,mono;RemoteIcons.IconView iconView;RemoteGroupGuide groupGuide;
         TrackRow(String id,int index){super(MainActivity.this);this.id=id;this.index=index;setOrientation(HORIZONTAL);if(id!=null){groupGuide=new RemoteGroupGuide(MainActivity.this);addView(groupGuide,new LinearLayout.LayoutParams(0,-1));}strip=column(MainActivity.this);strip.setGravity(Gravity.CENTER_VERTICAL);pad(strip,6,id==null?2:3);addView(strip,new LinearLayout.LayoutParams(0,-1,1));
             controls=row(MainActivity.this);controls.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
             if(id==null){mono=new Button(MainActivity.this,"Estéreo",MainActivity.this::confirmMainMono);mono.setTextSize(10);controls.addView(mono,new LinearLayout.LayoutParams(dp(58),dp(28)));}
@@ -665,7 +662,15 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             }
             strip.addView(controls,new LinearLayout.LayoutParams(-1,dp(28)));
             line=row(MainActivity.this);volumeReadout=label(MainActivity.this,"",10,TEXT);volumeReadout.setTypeface(bold);line.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);volume=new Fader(MainActivity.this,false,v->{volumeReadout.setText(v<=0?"−∞":String.format(Locale.US,"%+.1f",20*Math.log10(v)));remote.action("volume",id,v);});volume.selectVolume=MainActivity.this::selectVolume;volume.readout=false;volume.setContentDescription("Volume "+trackName());line.addView(volume,new LinearLayout.LayoutParams(0,dp(23),1));line.addView(volumeReadout,new LinearLayout.LayoutParams(dp(36),dp(23)));strip.addView(line,new LinearLayout.LayoutParams(-1,dp(23)));
-            title=label(MainActivity.this,"",11,TEXT);title.setTypeface(bold);title.setSingleLine();if(id!=null){LinearLayout nameRow=row(MainActivity.this);folderIcon=new Icon(MainActivity.this,"folder",GREEN,14);folderIcon.setClickable(false);folderIcon.setFocusable(false);nameRow.addView(folderIcon,new LinearLayout.LayoutParams(dp(18),dp(18)));nameRow.addView(title,new LinearLayout.LayoutParams(0,dp(18),1));strip.addView(nameRow,new LinearLayout.LayoutParams(-1,dp(18)));}else strip.addView(title,new LinearLayout.LayoutParams(-1,dp(18)));if(id==null){strip.removeView(title);title.setGravity(Gravity.CENTER);strip.addView(title,1,new LinearLayout.LayoutParams(-1,dp(14)));}
+            title=label(MainActivity.this,"",11,TEXT);
+            title.setTypeface(bold);
+            title.setSingleLine();
+            if (id == null) {
+                title.setGravity(Gravity.CENTER);
+                strip.addView(title,1,new LinearLayout.LayoutParams(-1,dp(14)));
+            } else {
+                strip.addView(title,new LinearLayout.LayoutParams(-1,dp(18)));
+            }
 
             iconView=new RemoteIcons.IconView(MainActivity.this);if(id!=null){addView(iconView,new LinearLayout.LayoutParams(dp(40),-1));}
             refresh();
@@ -673,13 +678,12 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){
             super.onLayout(changed,left,top,right,bottom);
             if(id==null)return;
-            View nameRow=(View)title.getParent();
-            int nameTop=strip.getHeight()-strip.getPaddingBottom()-nameRow.getHeight();
+            int nameTop=strip.getHeight()-strip.getPaddingBottom()-title.getHeight();
             int blockHeight=controls.getHeight()+line.getHeight();
             int controlsTop=Math.max(strip.getPaddingTop(),Math.min((strip.getHeight()-blockHeight)/2,nameTop-blockHeight));
             controls.offsetTopAndBottom(controlsTop-controls.getTop());
             line.offsetTopAndBottom(controls.getBottom()-line.getTop());
-            nameRow.offsetTopAndBottom(nameTop-nameRow.getTop());
+            title.offsetTopAndBottom(nameTop-title.getTop());
         }
         @Override protected void dispatchDraw(Canvas canvas){
             super.dispatchDraw(canvas);
@@ -694,7 +698,6 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         String trackName(){JSONObject t=id==null?null:RemoteModel.find(RemoteModel.array(state,"tracks"),id);return t==null?"Master":t.optString("name");}
         void refresh(){JSONObject track=id==null?null:RemoteModel.find(RemoteModel.array(state,"tracks"),id);if(id!=null&&track==null)return;
             int color=rgb(id==null?state.optLong("masterColor",0x414141):track.optLong("color",0x414141));if(track!=null&&track.optBoolean("silenced")){int gray=(Color.red(color)+Color.green(color)+Color.blue(color))/3;color=Color.rgb(gray,gray,gray);}int background=blend(0xff1d1d1d,color,track!=null&&track.optBoolean("emphasized")?.65f:.50f);setBackgroundColor(id==null?background:0xff1d1d1d);strip.setBackgroundColor(background);iconView.setBackgroundColor(background);if(groupGuide!=null)groupGuide.update(RemoteModel.array(state,"tracks"),id);
-            if(folderIcon!=null){boolean folder=false;for(JSONObject child:RemoteModel.list(RemoteModel.array(state,"tracks")))if(!RemoteModel.same(RemoteModel.id(child,"id"),id)&&RemoteModel.same(RemoteModel.id(child,"parentTrack"),id)){folder=true;break;}folderIcon.key=folder&&!RemoteModel.id(track,"parentTrack").isEmpty()?"folder.nested":"folder";int folderWidth=dp(folderIcon.key.equals("folder.nested")?28:18);if(folderIcon.getLayoutParams().width!=folderWidth){folderIcon.getLayoutParams().width=folderWidth;folderIcon.requestLayout();}folderIcon.invalidate();folderIcon.setVisibility(folder?View.VISIBLE:View.GONE);}
             title.setText(id==null?"Master":String.format(Locale.US,"%02d  %s",index,track.optString("name")));iconView.update(id==null?"":track.optString("instrumentIcon",""));title.setTextColor(rgb(id==null?state.optLong("masterNameColor",0xffffff):track.optLong("nameColor",0xffffff)));
             double gain=id==null?state.optDouble("masterVolume",1):track.optDouble("volume",1);volume.update(gain);volumeReadout.setText(volume.value<=0?"−∞":String.format(Locale.US,"%+.1f",20*Math.log10(volume.value)));if(pan!=null){pan.update(id==null?state.optDouble("masterPan",0):track.optDouble("pan"));pan.setEnabled(id!=null||state.has("masterPan"));}
             mute.trackStyle(0xffff3b30,id==null?state.optBoolean("masterMute"):track.optBoolean("mute"));solo.trackStyle(YELLOW,id==null?state.optBoolean("masterSolo"):track.optBoolean("solo"));if(mono!=null){mono.setText(state.optBoolean("masterMono")?"Mono":"Estéreo");mono.style(GREEN,state.optBoolean("masterMono"));}

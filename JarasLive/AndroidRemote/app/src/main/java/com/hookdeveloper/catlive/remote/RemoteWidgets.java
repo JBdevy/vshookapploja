@@ -24,7 +24,7 @@ final class RemoteWidgets {
     private static final Rect controlTile = new Rect();
     private static final RectF controlBounds = new RectF();
     private static Map<String, Integer> controlNames;
-    private static Bitmap controlsOff, controlsOn;
+    private static Bitmap controlsOff, controlsOn, controlsToolbarOff;
 
     private static void loadControlIcons(Context context) {
         if (controlNames != null) return;
@@ -32,19 +32,21 @@ final class RemoteWidgets {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                  context.getAssets().open("controlNames.txt"), StandardCharsets.UTF_8));
              InputStream off = context.getAssets().open("controlsOff.png");
-             InputStream on = context.getAssets().open("controlsOn.png")) {
+             InputStream on = context.getAssets().open("controlsOn.png");
+             InputStream toolbarOff = context.getAssets().open("controlsToolbarOff.png")) {
             for (String name; (name = reader.readLine()) != null; ) {
                 if (!name.isEmpty()) names.put(name, names.size());
             }
             controlsOff = BitmapFactory.decodeStream(off);
             controlsOn = BitmapFactory.decodeStream(on);
+            controlsToolbarOff = BitmapFactory.decodeStream(toolbarOff);
         } catch (IOException exception) {
             android.util.Log.w("CatLive", "Could not load the shared control icons", exception);
         }
         controlNames = names;
     }
 
-    private static boolean drawSharedIcon(Canvas canvas, String key, float x, float y, float size, int tint) {
+    private static boolean drawSharedIcon(Canvas canvas, String key, float x, float y, float size, int tint, boolean toolbar) {
         if (controlNames == null) return false;
         String name = switch (key) {
             case "observer" -> "eye";
@@ -65,7 +67,8 @@ final class RemoteWidgets {
             default -> key;
         };
         Integer index = controlNames.get(name);
-        Bitmap atlas = tint == GREEN || (key.equals("save") && tint == Color.BLACK) ? controlsOn : controlsOff;
+        boolean active = tint == GREEN || (key.equals("save") && tint == Color.BLACK);
+        Bitmap atlas = active ? controlsOn : toolbar && controlsToolbarOff != null ? controlsToolbarOff : controlsOff;
         if (atlas == null || index == null) return false;
         int left = (index % CONTROL_COLUMNS) * CONTROL_TILE;
         int top = (index / CONTROL_COLUMNS) * CONTROL_TILE;
@@ -97,9 +100,11 @@ final class RemoteWidgets {
     static GradientDrawable background(float radius){float b=tablet?.72f:1;return surface(gray(.12f*b),gray(.075f*b),Color.TRANSPARENT,radius);}
     static GradientDrawable display(float radius){float b=tablet?.72f:1;return surface(gray(.08f*b),gray(.05f*b),Color.TRANSPARENT,radius);}
     static class Icon extends View {
-        String key;final int color;final float size;
+        final String key;final int color;final float size;
         Icon(Context c,String key,int color,float size){super(c);this.key=key;this.color=color;this.size=size;setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);}
-        @Override protected void onDraw(Canvas c){if(key.equals("folder.nested")){drawIcon(c,"folder",getWidth()/2f-dp(8),getHeight()/2f,dp(8),color);drawIcon(c,"folder",getWidth()/2f+dp(4),getHeight()/2f,dp(12),color);Paint mark=new Paint(Paint.ANTI_ALIAS_FLAG);mark.setColor(Color.BLACK);mark.setStrokeWidth(dp(1));c.drawLine(getWidth()/2f+dp(1),getHeight()/2f+dp(1),getWidth()/2f+dp(7),getHeight()/2f+dp(1),mark);}else drawIcon(c,key,getWidth()/2f,getHeight()/2f,dp(size),color);}
+        @Override protected void onDraw(Canvas c) {
+            drawIcon(c,key,getWidth()/2f,getHeight()/2f,dp(size),color);
+        }
     }
     static class SongDisplay extends LinearLayout {
         final TextView title,value;
@@ -115,22 +120,21 @@ final class RemoteWidgets {
     static LinearLayout row(Context c){LinearLayout v=new LinearLayout(c);v.setOrientation(LinearLayout.HORIZONTAL);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
     static void pad(View v,int x,int y){v.setPadding(dp(x),dp(y),dp(x),dp(y));}
     static class Button extends TextView {
-        int tint=TEXT;boolean active=false;String icon="",caption="",leadingIcon="",trailingIcon="";
+        int tint=TEXT;boolean active=false,topToolbar=false;String icon="",caption="",leadingIcon="",trailingIcon="";
         Button(Context c,String text,Runnable run){super(c);setText(RemoteText.ui(text));setTextColor(TEXT);setTextSize(13);setTypeface(bold);setGravity(Gravity.CENTER);setIncludeFontPadding(false);setMinHeight(dp(32));setPadding(dp(8),dp(4),dp(8),dp(4));setFocusable(true);setClickable(true);setOnClickListener(v->run.run());setBackground(panel(5));}
         void style(int color,boolean on){tint=color;active=on;setTextColor(color);setBackground(on?surface(blend(0xff282828,color,.35f),blend(0xff1b1b1b,color,.35f),0x3affffff,5):panel(5));invalidate();}
         void trackStyle(int color,boolean on){tint=color;active=on;setTextColor(on?Color.BLACK:Color.WHITE);setPadding(0,0,0,0);setBackground(new InsetDrawable(trackButtonSurface(color,on),dp(3),dp(3),dp(3),dp(3)));invalidate();}
         void solid(int color){setTextColor(Color.BLACK);setBackground(surface(blend(color,Color.WHITE,.10f),blend(color,Color.BLACK,.12f),color,5));}
         void transportStyle(int background,int foreground){tint=foreground;setTextColor(foreground);setBackground(surface(background,background,Color.TRANSPARENT,6));invalidate();}
-        private int transportResource;
-        private Drawable transportArtwork;
-        void transportIcon(String key, String accessible, String label, int resource) {
-            if (transportResource == resource && caption.equals(label)) return;
-            transportResource = resource;
-            transportArtwork = getContext().getDrawable(resource);
+        private boolean transportDrawing;
+        void transportIcon(String key, String accessible, String label) {
+            if (transportDrawing && icon.equals(key) && caption.equals(label) &&
+                    accessible.contentEquals(getContentDescription())) return;
+            transportDrawing = true;
             caption = label;
             icon(key, accessible);
         }
-        private void drawTransportArtwork(Canvas c) {
+        private void drawTransportGlyph(Canvas c) {
             final int w = getWidth(), h = getHeight();
             final boolean horizontal = tablet && !caption.isEmpty();
             Paint label = getPaint();
@@ -154,18 +158,23 @@ final class RemoteWidgets {
                 } else y -= dp(6);
                 c.drawText(text, textX, baseline, paint);
             }
-            transportArtwork.setBounds(Math.round(x-size/2),Math.round(y-size/2),Math.round(x+size/2),Math.round(y+size/2));
-            transportArtwork.draw(c);
+            drawVectorIcon(c, icon, x, y, size, tint);
         }
         void icon(String key,String accessible){icon=key;setContentDescription(accessible);setText("");invalidate();}
         void leadingIcon(String key){leadingIcon=key;setPadding(dp(34),dp(4),dp(12),dp(4));}
         void trailingIcon(String key){trailingIcon=key;setPadding(dp(9),dp(4),dp(27),dp(4));setSingleLine(true);setEllipsize(android.text.TextUtils.TruncateAt.END);}
         @Override public void setEnabled(boolean on){super.setEnabled(on);setAlpha(on?1:.35f);}
-        @Override protected void onDraw(Canvas c){if(isPressed()){Paint p=new Paint();p.setColor(0x25ffffff);c.drawRoundRect(0,0,getWidth(),getHeight(),dp(5),dp(5),p);}super.onDraw(c);if(transportArtwork!=null){drawTransportArtwork(c);return;}if(!leadingIcon.isEmpty())drawIcon(c,leadingIcon,dp(17),getHeight()/2f,dp(17),getCurrentTextColor());if(!trailingIcon.isEmpty())drawIcon(c,trailingIcon,getWidth()-dp(14),getHeight()/2f,dp(12),getCurrentTextColor());if(!icon.isEmpty()){float size=dp(caption.isEmpty()?21:14);drawIcon(c,icon,getWidth()/2f,getHeight()/2f-(caption.isEmpty()?0:dp(6)),size,tint);if(!caption.isEmpty()){Paint p=new Paint(3);p.setColor(tint);p.setTypeface(bold);p.setTextSize(dp(9));p.setTextAlign(Paint.Align.CENTER);c.drawText(RemoteText.ui(caption),getWidth()/2f,getHeight()/2f+dp(12),p);}}}
+        @Override protected void onDraw(Canvas c){if(isPressed()){Paint p=new Paint();p.setColor(0x25ffffff);c.drawRoundRect(0,0,getWidth(),getHeight(),dp(5),dp(5),p);}super.onDraw(c);if(transportDrawing){drawTransportGlyph(c);return;}if(!leadingIcon.isEmpty())drawIcon(c,leadingIcon,dp(17),getHeight()/2f,dp(17),getCurrentTextColor());if(!trailingIcon.isEmpty())drawIcon(c,trailingIcon,getWidth()-dp(14),getHeight()/2f,dp(12),getCurrentTextColor());if(!icon.isEmpty()){float size=dp(caption.isEmpty()?21:14);drawIcon(c,icon,getWidth()/2f,getHeight()/2f-(caption.isEmpty()?0:dp(6)),size,tint,topToolbar);if(!caption.isEmpty()){Paint p=new Paint(3);p.setColor(tint);p.setTypeface(bold);p.setTextSize(dp(9));p.setTextAlign(Paint.Align.CENTER);c.drawText(RemoteText.ui(caption),getWidth()/2f,getHeight()/2f+dp(12),p);}}}
         @Override public boolean onTouchEvent(MotionEvent e){boolean r=super.onTouchEvent(e);invalidate();return r;}
     }
     static void drawIcon(Canvas canvas,String key,float cx,float cy,float size,int color){
-        if (drawSharedIcon(canvas, key, cx, cy, size, color)) return;
+        drawIcon(canvas, key, cx, cy, size, color, false);
+    }
+    private static void drawIcon(Canvas canvas, String key, float cx, float cy, float size, int color, boolean toolbar) {
+        if (!drawSharedIcon(canvas, key, cx, cy, size, color, toolbar))
+            drawVectorIcon(canvas, key, cx, cy, size, color);
+    }
+    private static void drawVectorIcon(Canvas canvas, String key, float cx, float cy, float size, int color) {
         canvas.save();canvas.translate(cx-size/2,cy-size/2);canvas.scale(size/24,size/24);Paint p=new Paint(3);p.setColor(color);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.5f);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
         switch(key){
         case "send":Path plane=new Path();plane.moveTo(2,10);plane.lineTo(22,2);plane.lineTo(15,22);plane.lineTo(11,14);plane.close();p.setStyle(Paint.Style.FILL);canvas.drawPath(plane,p);p.setColor(0xff69ed91);p.setStyle(Paint.Style.STROKE);canvas.drawLine(11,14,18,6,p);break;
@@ -196,6 +205,17 @@ final class RemoteWidgets {
         case "settings":canvas.drawCircle(12,12,4,p);for(int i=0;i<8;i++){double a=i*Math.PI/4;canvas.drawLine(12+(float)Math.cos(a)*8,12+(float)Math.sin(a)*8,12+(float)Math.cos(a)*11,12+(float)Math.sin(a)*11,p);}canvas.drawCircle(12,12,8,p);break;
         case "hide":canvas.drawLine(15,4,7,12,p);canvas.drawLine(7,12,15,20,p);break;
         case "play":p.setStyle(Paint.Style.FILL);Path path=new Path();path.moveTo(6,3);path.lineTo(21,12);path.lineTo(6,21);path.close();canvas.drawPath(path,p);break;
+        case "fadeout":
+            Path fadeout = new Path();
+            fadeout.moveTo(3,3);
+            fadeout.cubicTo(7,3,9,7,11,11);
+            fadeout.cubicTo(14,16,17,19,21,19);
+            canvas.drawPath(fadeout,p);
+            canvas.drawLine(3,8,3,20,p);
+            canvas.drawLine(7,12,7,20,p);
+            canvas.drawLine(11,16,11,20,p);
+            canvas.drawLine(15,19,15,20,p);
+            break;
         case "pause":p.setStyle(Paint.Style.FILL);canvas.drawRoundRect(5,3,10,21,1,1,p);canvas.drawRoundRect(14,3,19,21,1,1,p);break;
         case "stop":p.setStyle(Paint.Style.FILL);canvas.drawRoundRect(4,4,20,20,2,2,p);break;
         case "repeat":canvas.drawRoundRect(3,5,21,19,4,4,p);canvas.drawLine(14,2,19,5,p);canvas.drawLine(14,8,19,5,p);canvas.drawLine(10,16,5,19,p);canvas.drawLine(10,22,5,19,p);break;
