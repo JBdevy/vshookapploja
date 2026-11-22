@@ -5,13 +5,76 @@ import android.graphics.*;
 import android.graphics.drawable.*;
 import android.view.*;
 import android.widget.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
 
 final class RemoteWidgets {
     static final int GREEN=0xff69ed91,TOOLBAR_INACTIVE=0xffc8c8c8,YELLOW=0xffffdc52,RED=0xffff3030,SECONDARY=0xffb9b9b9,TEXT=Color.WHITE,BLUE=0xff409cff;
     static float density=1;static Typeface regular=Typeface.DEFAULT,bold=Typeface.DEFAULT_BOLD;static boolean tablet;
     private static Typeface[] setlistFaces;
+    private static final int CONTROL_TILE = 96, CONTROL_COLUMNS = 8;
+    private static final Paint controlIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private static final Rect controlTile = new Rect();
+    private static final RectF controlBounds = new RectF();
+    private static Map<String, Integer> controlNames;
+    private static Bitmap controlsOff, controlsOn;
+
+    private static void loadControlIcons(Context context) {
+        if (controlNames != null) return;
+        Map<String, Integer> names = new HashMap<>();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                 context.getAssets().open("controlNames.txt"), StandardCharsets.UTF_8));
+             InputStream off = context.getAssets().open("controlsOff.png");
+             InputStream on = context.getAssets().open("controlsOn.png")) {
+            for (String name; (name = reader.readLine()) != null; ) {
+                if (!name.isEmpty()) names.put(name, names.size());
+            }
+            controlsOff = BitmapFactory.decodeStream(off);
+            controlsOn = BitmapFactory.decodeStream(on);
+        } catch (IOException exception) {
+            android.util.Log.w("CatLive", "Could not load the shared control icons", exception);
+        }
+        controlNames = names;
+    }
+
+    private static boolean drawSharedIcon(Canvas canvas, String key, float x, float y, float size, int tint) {
+        if (controlNames == null) return false;
+        String name = switch (key) {
+            case "observer" -> "eye";
+            case "chevron" -> "chevron.right";
+            case "hide" -> "chevron.left";
+            case "menu" -> "line.3.horizontal";
+            case "mixer" -> "slider.horizontal.3";
+            case "setlist", "parts" -> "list.bullet.indent";
+            case "vinhetas" -> "square.grid.3x2.fill";
+            case "folder" -> "folder.fill";
+            case "grid" -> "square.grid.3x3";
+            case "clock" -> "stopwatch";
+            case "notices" -> "text.bubble";
+            case "settings" -> "gearshape";
+            case "stop" -> "stopall";
+            case "repeat" -> "loop";
+            case "computer", "preview" -> "projection";
+            default -> key;
+        };
+        Integer index = controlNames.get(name);
+        Bitmap atlas = tint == GREEN || (key.equals("save") && tint == Color.BLACK) ? controlsOn : controlsOff;
+        if (atlas == null || index == null) return false;
+        int left = (index % CONTROL_COLUMNS) * CONTROL_TILE;
+        int top = (index / CONTROL_COLUMNS) * CONTROL_TILE;
+        controlTile.set(left, top, left + CONTROL_TILE, top + CONTROL_TILE);
+        float halfSize = size / 2;
+        controlBounds.set(x - halfSize, y - halfSize, x + halfSize, y + halfSize);
+        canvas.drawBitmap(atlas, controlTile, controlBounds, controlIconPaint);
+        return true;
+    }
     static Typeface setlistFace(Context context, int style) {
         if (setlistFaces == null) {
             String[] names = {"Inter-Regular", "Inter-Bold", "Inter-BoldItalic", "Inter-ExtraBold",
@@ -23,7 +86,7 @@ final class RemoteWidgets {
         }
         return setlistFaces[style >= 0 && style < setlistFaces.length ? style : 0];
     }
-    static void init(Context c){RemoteText.init(c);density=c.getResources().getDisplayMetrics().density;tablet=c.getResources().getConfiguration().smallestScreenWidthDp>=600;regular=Typeface.createFromAsset(c.getAssets(),"fonts/Inter-Regular.ttf");bold=Typeface.createFromAsset(c.getAssets(),"fonts/Inter-SemiBold.ttf");}
+    static void init(Context c){RemoteText.init(c);density=c.getResources().getDisplayMetrics().density;tablet=c.getResources().getConfiguration().smallestScreenWidthDp>=600;regular=Typeface.createFromAsset(c.getAssets(),"fonts/Inter-Regular.ttf");bold=Typeface.createFromAsset(c.getAssets(),"fonts/Inter-SemiBold.ttf");loadControlIcons(c);}
     static int dp(float v){return Math.round(v*density);}
     static GradientDrawable surface(int top,int bottom,int edge,float radius){GradientDrawable d=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{top,bottom});d.setCornerRadius(dp(radius));d.setStroke(dp(0.5f),edge);return d;}
     static GradientDrawable trackButtonSurface(int color, boolean on) {
@@ -102,6 +165,7 @@ final class RemoteWidgets {
         @Override public boolean onTouchEvent(MotionEvent e){boolean r=super.onTouchEvent(e);invalidate();return r;}
     }
     static void drawIcon(Canvas canvas,String key,float cx,float cy,float size,int color){
+        if (drawSharedIcon(canvas, key, cx, cy, size, color)) return;
         canvas.save();canvas.translate(cx-size/2,cy-size/2);canvas.scale(size/24,size/24);Paint p=new Paint(3);p.setColor(color);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.5f);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
         switch(key){
         case "send":Path plane=new Path();plane.moveTo(2,10);plane.lineTo(22,2);plane.lineTo(15,22);plane.lineTo(11,14);plane.close();p.setStyle(Paint.Style.FILL);canvas.drawPath(plane,p);p.setColor(0xff69ed91);p.setStyle(Paint.Style.STROKE);canvas.drawLine(11,14,18,6,p);break;

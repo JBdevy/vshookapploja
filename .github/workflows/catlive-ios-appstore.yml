@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: catlive-ios-test-package
+  group: catlive-appstore
   cancel-in-progress: false
 
 jobs:
@@ -88,6 +88,86 @@ jobs:
           for name in IOS_TEAM_ID IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD IOS_PROVISION_PROFILE_BASE64 APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8_BASE64; do
             [[ -n "${!name}" ]] || { echo "Secret ausente: $name"; exit 1; }
           done
+
+      - name: Testar modelo de projetos e importação
+        run: |
+          swift test --package-path JarasLive --jobs 2
+          bash JarasLive/scripts/test-ipad-transport-layout.sh
+          bash JarasLive/scripts/test-ipad-standalone-viewport.sh
+          bash JarasLive/scripts/test-ipad-input-catalog.sh
+          bash JarasLive/scripts/test-ipad-output-channels.sh
+          bash JarasLive/scripts/test-ipad-route-recovery.sh
+          bash JarasLive/scripts/test-native-project-tabs.sh
+          bash JarasLive/scripts/test-native-picker-handoff.sh
+          bash JarasLive/scripts/test-control-mappings.sh
+          bash JarasLive/scripts/test-remote-midi-actions.sh
+          bash JarasLive/scripts/test-ipad-setlist-blocks.sh
+          bash JarasLive/scripts/test-empty-track-mixer-selection.sh
+          bash JarasLive/scripts/test-daw-remote.sh
+          bash JarasLive/scripts/test-remote-item-volume.sh
+
+      - name: Verificar alterações no motor de áudio
+        id: audio-changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, re, subprocess, urllib.parse
+          def api(path, *options):
+              return json.loads(subprocess.check_output(['gh', 'api', path, *options], text=True))
+          changed = True
+          try:
+              repo = os.environ['GITHUB_REPOSITORY']
+              pages = api(f'repos/{repo}/releases?per_page=100', '--paginate', '--slurp')
+              previous = []
+              for release in (item for page in pages for item in page):
+                  match = re.fullmatch(r'catlive-app-v[0-9]+\.[0-9]{2}-build([0-9]+)', release['tag_name'])
+                  if match and not release['draft'] and not release['prerelease'] and int(match[1]) < int(os.environ['BUILD_NUMBER']):
+                      previous.append((int(match[1]), release['tag_name']))
+              if previous:
+                  tag = max(previous)[1]
+                  manifest = api(f'repos/{repo}/contents/.github/catlive-app-release.json?ref={urllib.parse.quote(tag)}')
+                  base = json.loads(base64.b64decode(manifest['content']))['source_ref']
+                  assert re.fullmatch(r'[0-9a-f]{40}', base)
+                  current = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+                  comparison = api(f'repos/{repo}/compare/{base}...{current}')
+                  files = comparison['files']
+                  prefixes = ('JarasLive/Apple/Bridge/', 'JarasLive/Core/Audio/', 'JarasLive/Core/Transport/')
+                  exact = {'JarasLive/Apple/Shared/StemAudioPlayback.swift', 'JarasLive/Apple/Shared/AudioDeviceSettings.swift',
+                      'JarasLive/Apple/Shared/NativeEffectsChain.swift', 'JarasLive/Application/Project/AudioFileRead.swift',
+                      'JarasLive/Application/Project/NativeFXSettings.swift', 'JarasLive/Apple/Shared/EQRealTimeAnalysis.swift',
+                      'JarasLive/Tests/Apple/AudioMediaPreparationTests.swift', 'JarasLive/Tests/Apple/EQIntelStabilityTests.swift',
+                      'JarasLive/Tests/Apple/DynamicsStabilityTests.swift', 'JarasLive/Tests/Apple/PlaybackMediaIsolationTests.swift',
+                      'JarasLive/Tests/Apple/MobilePreparedSyncTests.swift', 'JarasLive/Tests/Apple/MobileQueueSyncTests.swift',
+                      'JarasLive/Tests/Apple/MobileRenderClockTests.cpp', 'JarasLive/scripts/test-mobile-queue-sync.sh'}
+                  paths = [f[key] for f in files for key in ('filename', 'previous_filename') if key in f]
+                  # GitHub caps comparison files at 300. Missing/ambiguous history
+                  # must run the tests, including retries after a failed release.
+                  changed = len(files) >= 300 or comparison['status'] not in ('ahead', 'identical') or any(p.startswith(prefixes) or p in exact for p in paths)
+                  print(f'Audio comparison baseline: {tag}')
+          except Exception as error:
+              print(f'::warning::Audio baseline unavailable; running synchronization tests ({type(error).__name__}).')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'changed={str(changed).lower()}\n')
+          PY
+
+      - name: Testar sincronização do áudio quando alterada
+        if: steps.audio-changes.outputs.changed == 'true'
+        run: |
+          export JARAS_TEST_SF2="$RUNNER_TEMP/catlive-native-test.sf2"
+          python3 JarasLive/scripts/generate-test-sf2.py "$JARAS_TEST_SF2"
+          bash JarasLive/scripts/test-mobile-queue-sync.sh
+          bash JarasLive/scripts/test-prepared-clip-audio.sh
+          bash JarasLive/scripts/test-audio.sh Tests/Apple/VinhetasPlaybackTests.swift Tests/Apple/AudioMediaPreparationTests.swift Tests/Apple/AutomationAudioTests.swift Tests/Apple/EQIntelStabilityTests.swift Tests/Apple/DynamicsStabilityTests.swift Tests/Apple/ItemGainOrderTests.swift Tests/Apple/ItemFXContinuityTests.swift Tests/Apple/ItemPitchTransitionTests.swift Tests/Apple/RecordingItemSilenceTests.swift
+          CATLIVE_EXPORT_TEST_SOURCE=Tests/Apple/ItemPluginRenderTests.swift bash JarasLive/scripts/test-offline-plugin-latency.sh
+          bash JarasLive/scripts/test-effects.sh
+          bash JarasLive/scripts/test-fx-refresh-during-editing.sh
+          bash JarasLive/scripts/test-track-height-layout.sh
+          bash JarasLive/scripts/test-instruments.sh
+          bash JarasLive/scripts/test-instrument-behavior.sh
+          CATLIVE_EXPORT_TEST_SOURCE=Tests/Apple/PlaybackMediaIsolationTests.swift bash JarasLive/scripts/test-offline-export.sh
+          bash JarasLive/scripts/test-metronome.sh
+          bash JarasLive/scripts/test-midi-sequence.sh
 
       - name: Preparar assinatura e chave de envio
         env:
