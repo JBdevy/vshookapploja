@@ -127,6 +127,23 @@ final class RemoteWidgets {
         void solid(int color){setTextColor(Color.BLACK);setBackground(surface(blend(color,Color.WHITE,.10f),blend(color,Color.BLACK,.12f),color,5));}
         void transportStyle(int background,int foreground){tint=foreground;setTextColor(foreground);setBackground(surface(background,background,Color.TRANSPARENT,6));invalidate();}
         private boolean transportDrawing;
+        private int saveStatus = -1;
+        void showSaveStatus(boolean pending, boolean saving) {
+            int status = saving ? 2 : pending ? 1 : 0;
+            if (status == saveStatus) return;
+            saveStatus = status;
+            clearAnimation();
+            setEnabled(pending && !saving);
+            transportIcon(pending ? "save" : "check", RemoteText.ui(saving ? "Salvando…" : pending ? "Salvar" : "Salvo"), "");
+            transportStyle(pending ? YELLOW : 0xff454545, pending ? Color.BLACK : TEXT);
+            if (status == 1) {
+                android.view.animation.AlphaAnimation blink = new android.view.animation.AlphaAnimation(1f, .48f);
+                blink.setDuration(1000);
+                blink.setInterpolator(fraction -> fraction < .5f ? 0f : 1f);
+                blink.setRepeatCount(android.view.animation.Animation.INFINITE);
+                startAnimation(blink);
+            }
+        }
         void transportIcon(String key, String accessible, String label) {
             if (transportDrawing && icon.equals(key) && caption.equals(label) &&
                     accessible.contentEquals(getContentDescription())) return;
@@ -197,6 +214,10 @@ final class RemoteWidgets {
         case "folder":p.setStyle(Paint.Style.FILL);Path folder=new Path();folder.moveTo(2,5);folder.lineTo(10,5);folder.lineTo(12,8);folder.lineTo(22,8);folder.lineTo(22,20);folder.lineTo(2,20);folder.close();canvas.drawPath(folder,p);break;
         case "grid":for(int x=3;x<22;x+=7)for(int y=3;y<22;y+=7)canvas.drawRect(x,y,x+4,y+4,p);break;
         case "clock":canvas.drawCircle(12,12,9,p);canvas.drawLine(12,5,12,12,p);canvas.drawLine(12,12,17,15,p);break;
+        case "check":
+            canvas.drawLine(4,12,10,18,p);
+            canvas.drawLine(10,18,20,6,p);
+            break;
         case "save":
             p.setStrokeWidth(2.2f);
             p.setStrokeCap(Paint.Cap.ROUND);

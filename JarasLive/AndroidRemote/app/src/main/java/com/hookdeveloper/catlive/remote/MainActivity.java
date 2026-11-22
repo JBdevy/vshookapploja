@@ -452,8 +452,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         if (save != null) {
             boolean saving = state.optBoolean("saving");
             boolean pending = state.optBoolean("pendingSave");
-            save.setEnabled(pending && !saving);
-            save.icon(pending ? "save" : "check", RemoteText.ui(saving ? "Salvando…" : pending ? "Salvar" : "Salvo"));
+            save.showSaveStatus(pending, saving);
         }
         if(auto!=null)auto.style(state.optBoolean("regionAuto")?GREEN:SECONDARY,state.optBoolean("regionAuto"));if(bypass!=null){bypass.solid(state.optBoolean("multiLoopsBypassed")?YELLOW:RED);live.solid(state.optBoolean("setlistLiveEnabled")?GREEN:RED);}
         if(nextDisplay!=null)nextDisplay.update("Next",displays==null?null:displays.optString("next",null),displayBPM(displays,"nextBPM"));
@@ -465,6 +464,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         updateTabs();
         for (Map.Entry<String, Button> entry : railButtons.entrySet()) {
             String key = entry.getKey();
+            if (key.equals("save")) continue;
             boolean selected = switch (key) {
                 case "mixer" -> tabletLayout() ? panel.equals("grid") && mixerShown : panel.equals("mixer");
                 case "setlist" -> tabletLayout() ? setlistShown : panel.equals("setlist");
@@ -473,7 +473,6 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
                 case "TP1" -> panel.equals("tp1");
                 case "TP2" -> panel.equals("tp2");
                 case "preview" -> state.optBoolean("previewActive");
-                case "save" -> state.optBoolean("saving");
                 default -> key.equals(panel);
             };
             entry.getValue().style(selected ? GREEN : key.equals("preview") ? RED : TOOLBAR_INACTIVE, selected);
@@ -600,7 +599,6 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         LinearLayout actions=row(this);actions.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
         save=new Button(this,"",()->confirm("Deseja salvar este projeto?","","Salvar",()->remote.action("save")));
         save.icon("save",RemoteText.ui("Salvar"));
-        save.style(GREEN,false);
         actions.addView(save,new LinearLayout.LayoutParams(dp(72),dp(28)));
         display.addView(actions,new LinearLayout.LayoutParams(0,dp(28),1));
         middle.addView(display);
