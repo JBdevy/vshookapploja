@@ -77,7 +77,18 @@ public class RemoteVinhetasTest {
   app.state.getJSONArray("regions").getJSONObject(0).put("name","Changed setlist title");app.refresh();
   assertSame("Setlist refresh cannot reconstruct mixer controls",original,app.trackRows.get(id));assertEquals(.25,app.trackRows.get(id).volume.value,0);
  }
- static void doubleTap(View fader,float x,float y){for(int n=0;n<2;n++){long now=android.os.SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,x,y,0),up=MotionEvent.obtain(now,now+10,MotionEvent.ACTION_UP,x,y,0);fader.onTouchEvent(down);fader.onTouchEvent(up);down.recycle();up.recycle();if(n==0)org.robolectric.shadows.ShadowLooper.idleMainLooper(80,java.util.concurrent.TimeUnit.MILLISECONDS);}}
+ static void doubleTap(View fader,float x,float y){
+  long firstDown=android.os.SystemClock.uptimeMillis();
+  for(int tap=0;tap<2;tap++){
+   // Model an 80 ms separation in the input events, independent of
+   // animations and network callbacks on the main looper during CI.
+   long time=firstDown+tap*80;
+   MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);
+   MotionEvent up=MotionEvent.obtain(time,time+10,MotionEvent.ACTION_UP,x,y,0);
+   fader.onTouchEvent(down);fader.onTouchEvent(up);
+   down.recycle();up.recycle();
+  }
+ }
  static View find(View view,Class<?> type){if(type.isInstance(view))return view;if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++){View found=find(group.getChildAt(i),type);if(found!=null)return found;}}return null;}
  static String text(View view){StringBuilder s=new StringBuilder(view instanceof TextView?((TextView)view).getText():"");if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++)s.append('\n').append(text(group.getChildAt(i)));}return s.toString();}
 
