@@ -295,15 +295,42 @@ final class RemoteWidgets {
         }
         @Override protected void onDraw(Canvas canvas){
             float w=getWidth(),h=getHeight(),left=dp(6),right=w-dp(6),y=pan?dp(8):h*(readout?.4f:.5f);
-            paint.setColor(0x38ffffff);canvas.drawRoundRect(left,y-dp(3),right,y+dp(3),dp(3),dp(3),paint);
             float x=thumbX();
+            if(selectVolume!=null) {
+                drawMixerFace(canvas,left,right,x,y);
+            } else {
+                paint.setColor(0x38ffffff);
+                canvas.drawRoundRect(left,y-dp(3),right,y+dp(3),dp(3),dp(3),paint);
+                drawPlainThumb(canvas,x,y);
+            }
+            if(readout){
+                paint.setTypeface(bold);paint.setColor(TEXT);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(dp(pan?7:10));
+                String read=pan?(Math.abs(value)<.005?"Center":String.format(Locale.US,"%s-%d%%",value<0?"L":"R",Math.round(Math.abs(value)*100))):(value==0?"−∞ dB":String.format(Locale.US,"%+.1f dB",20*Math.log10(value)));
+                canvas.drawText(read,w/2,h-dp(2),paint);
+            }
+        }
+        private void drawMixerFace(Canvas canvas,float left,float right,float x,float y){
+            float railRadius=7*density, border=.75f*density;
+            paint.setColor(0xff2d3236);
+            canvas.drawRoundRect(left,y-railRadius,right,y+railRadius,railRadius,railRadius,paint);
+            paint.setColor(0xff242424);
+            canvas.drawRoundRect(left+border,y-railRadius+border,right-border,y+railRadius-border,railRadius-border,railRadius-border,paint);
+
+            boolean selected=isSelected();
+            float top=y-9*density,bottom=y+9*density,radius=2.5f*density,halfWidth=5*density;
+            paint.setShader(new LinearGradient(0,top,0,bottom,selected?0xffffec9c:0xffa0abb5,selected?0xff876413:0xff2c353d,Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(x-halfWidth,top,x+halfWidth,bottom,radius,radius,paint);
+            paint.setShader(new LinearGradient(0,top,0,bottom,selected?YELLOW:0xff78848d,selected?0xffc99622:0xff4a555e,Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(x-halfWidth+border,top+border,x+halfWidth-border,bottom-border,radius-border,radius-border,paint);
+            paint.setShader(null);
+            paint.setColor(selected?0xff42310b:0xffeff4f4);
+            canvas.drawRect(x-.75f*density,y-4.5f*density,x+.75f*density,y+4.5f*density,paint);
+        }
+        private void drawPlainThumb(Canvas canvas,float x,float y){
             int[] colors=isSelected()?new int[]{0xffffec9c,YELLOW,0xffc99622}:new int[]{0xffe3e3e3,0xffe0e0e0,0xffc5c5c5};
             paint.setColor(Color.WHITE);paint.setShader(new LinearGradient(0,y-dp(9),0,y+dp(9),colors,new float[]{0,.5f,1},Shader.TileMode.CLAMP));
             canvas.drawRoundRect(x-dp(6),y-dp(9),x+dp(6),y+dp(9),dp(2),dp(2),paint);paint.setShader(null);
             paint.setColor(isSelected()?0xff42310b:0xff555555);canvas.drawRect(x-dp(.5f),y-dp(6),x+dp(.5f),y+dp(6),paint);
-            paint.setTypeface(bold);paint.setColor(TEXT);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(dp(pan?7:10));
-            String read=pan?(Math.abs(value)<.005?"Center":String.format(Locale.US,"%s-%d%%",value<0?"L":"R",Math.round(Math.abs(value)*100))):(value==0?"−∞ dB":String.format(Locale.US,"%+.1f dB",20*Math.log10(value)));
-            if(readout)canvas.drawText(read,w/2,h-dp(2),paint);
         }
         @Override public boolean onTouchEvent(MotionEvent event){
             if(!isEnabled())return false;
