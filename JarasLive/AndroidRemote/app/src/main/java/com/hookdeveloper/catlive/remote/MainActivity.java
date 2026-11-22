@@ -245,7 +245,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             rail.removeAllViews();rail.setPadding(0,0,0,0);
             for(String key:new String[]{"menu","mixer","parts","vinhetas","TP1","TP2","notices","clock","preview","setlist","grid"}){
                 Button button=railButtons.get(key);if(button==null)continue;
-                if(key.equals("preview")){button.setText("PREVIEW");button.getLayoutParams().width=dp(58);button.getLayoutParams().height=dp(28);}
+                if(key.equals("preview")){button.icon("preview","Preview");button.getLayoutParams().width=dp(58);button.getLayoutParams().height=dp(28);}
                 rail.addView(button);
             }
             LinearLayout toolbar=row(this);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setBackground(RemoteWidgets.panel(0));
@@ -473,7 +473,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
                 case "save" -> state.optBoolean("saving");
                 default -> key.equals(panel);
             };
-            entry.getValue().style(selected ? GREEN : TOOLBAR_INACTIVE, selected);
+            entry.getValue().style(selected ? GREEN : key.equals("preview") ? RED : TOOLBAR_INACTIVE, selected);
         }
         refreshFadeout();
     }

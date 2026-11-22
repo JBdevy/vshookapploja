@@ -51,7 +51,7 @@ final class RemoteWidgets {
             case "chevron" -> "chevron.right";
             case "hide" -> "chevron.left";
             case "menu" -> "line.3.horizontal";
-            case "mixer" -> "slider.horizontal.3";
+            case "mixer" -> "trackMixer";
             case "setlist", "parts" -> "list.bullet.indent";
             case "vinhetas" -> "square.grid.3x2.fill";
             case "folder" -> "folder.fill";
@@ -61,7 +61,7 @@ final class RemoteWidgets {
             case "settings" -> "gearshape";
             case "stop" -> "stopall";
             case "repeat" -> "loop";
-            case "computer", "preview" -> "projection";
+            case "computer" -> "projection";
             default -> key;
         };
         Integer index = controlNames.get(name);
