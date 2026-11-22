@@ -185,7 +185,14 @@ final class RemoteWidgets {
         case "chevron":canvas.drawLine(9,6,15,12,p);canvas.drawLine(15,12,9,18,p);break;
         case "menu":for(int y=5;y<=19;y+=7)canvas.drawLine(3,y,21,y,p);break;
         case "mixer":for(int y=5;y<=19;y+=7){float x=y==12?8:16;canvas.drawLine(2,y,x-3,y,p);canvas.drawLine(x+3,y,22,y,p);canvas.drawRoundRect(x-3,y-2,x+3,y+2,2,2,p);}break;
-        case "setlist":for(int y=5;y<=19;y+=7){canvas.drawCircle(3,y,.8f,p);canvas.drawLine(7,y,21,y,p);}break;
+        case "setlist":
+            for (int y=5;y<=19;y+=7) {
+                p.setStyle(Paint.Style.FILL);
+                canvas.drawCircle(3,y,1.5f,p);
+                p.setStyle(Paint.Style.STROKE);
+                canvas.drawLine(8,y,22,y,p);
+            }
+            break;
         case "vinhetas":p.setStyle(Paint.Style.FILL);for(int x=3;x<=21;x+=6)for(int y=6;y<=18;y+=6)canvas.drawRoundRect(x-1.7f,y-1.7f,x+1.7f,y+1.7f,.5f,.5f,p);break;
         case "folder":p.setStyle(Paint.Style.FILL);Path folder=new Path();folder.moveTo(2,5);folder.lineTo(10,5);folder.lineTo(12,8);folder.lineTo(22,8);folder.lineTo(22,20);folder.lineTo(2,20);folder.close();canvas.drawPath(folder,p);break;
         case "grid":for(int x=3;x<22;x+=7)for(int y=3;y<22;y+=7)canvas.drawRect(x,y,x+4,y+4,p);break;

@@ -449,7 +449,12 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             repeat.transportStyle(loop ? YELLOW : 0xff454545, loop ? Color.BLACK : Color.WHITE);
         }
         if(bpm!=null){bpm.setText(String.format(Locale.US,"%s BPM",number(state.optDouble("bpm"))));bpm.setTextColor(state.optBoolean("tempoNeedsRender")?YELLOW:TEXT);}if(pitch!=null)pitch.setText(String.format(Locale.US,tabletLayout()?"%+d st":"Tuner\n%+dst",state.optInt("pitchSemitones")));
-        if(save!=null){save.setEnabled(state.optBoolean("pendingSave")&&!state.optBoolean("saving"));if(tabletLayout())save.setText(state.optBoolean("saving")?"Salvando…":state.optBoolean("pendingSave")?"Salvar":"Salvo");}
+        if (save != null) {
+            boolean saving = state.optBoolean("saving");
+            boolean pending = state.optBoolean("pendingSave");
+            save.setEnabled(pending && !saving);
+            save.icon(pending ? "save" : "check", RemoteText.ui(saving ? "Salvando…" : pending ? "Salvar" : "Salvo"));
+        }
         if(auto!=null)auto.style(state.optBoolean("regionAuto")?GREEN:SECONDARY,state.optBoolean("regionAuto"));if(bypass!=null){bypass.solid(state.optBoolean("multiLoopsBypassed")?YELLOW:RED);live.solid(state.optBoolean("setlistLiveEnabled")?GREEN:RED);}
         if(nextDisplay!=null)nextDisplay.update("Next",displays==null?null:displays.optString("next",null),displayBPM(displays,"nextBPM"));
         if(queuedDisplay!=null)queuedDisplay.update(state.optBoolean("subPlaying")?"Sub Play":"Queued",RemoteModel.queuedSongName(state),displayBPM(displays,"queuedBPM"));
@@ -593,8 +598,9 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         current.setEllipsize(android.text.TextUtils.TruncateAt.END);
         display.addView(current,new LinearLayout.LayoutParams(0,dp(28),2));
         LinearLayout actions=row(this);actions.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
-        save=new Button(this,"Salvar",()->confirm("Deseja salvar este projeto?","","Salvar",()->remote.action("save")));
-        save.setTextSize(11);save.style(GREEN,false);
+        save=new Button(this,"",()->confirm("Deseja salvar este projeto?","","Salvar",()->remote.action("save")));
+        save.icon("save",RemoteText.ui("Salvar"));
+        save.style(GREEN,false);
         actions.addView(save,new LinearLayout.LayoutParams(dp(72),dp(28)));
         display.addView(actions,new LinearLayout.LayoutParams(0,dp(28),1));
         middle.addView(display);
@@ -606,7 +612,12 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         middle.addView(songProgress, new LinearLayout.LayoutParams(-1, dp(2)));
         space(middle,1);
         middle.addView(controls);
-        Button setlist=new Button(this,"Setlist",()->{setlistShown=!setlistShown;buildWorkspace();});setlist.transportStyle(setlistShown?GREEN:RED,Color.BLACK);LinearLayout.LayoutParams setlistLp=new LinearLayout.LayoutParams(dp(72),dp(28));setlistLp.leftMargin=dp(6);controls.addView(setlist,setlistLp);
+        Button setlist = new Button(this,"",()->{setlistShown=!setlistShown;buildWorkspace();});
+        setlist.transportIcon("setlist","Setlist","");
+        setlist.transportStyle(setlistShown?GREEN:RED,Color.BLACK);
+        LinearLayout.LayoutParams setlistLp = new LinearLayout.LayoutParams(dp(72),dp(28));
+        setlistLp.leftMargin = dp(6);
+        controls.addView(setlist,setlistLp);
     }
     void addTransportButtons(LinearLayout buttons,boolean tablet){
         play=new Button(this,"Play",()->remote.action(state.optBoolean("playing")||state.optBoolean("paused")?"stop":"play"));
