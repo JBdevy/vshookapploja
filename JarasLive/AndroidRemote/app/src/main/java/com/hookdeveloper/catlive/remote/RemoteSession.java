@@ -61,9 +61,16 @@ final class RemoteSession {
     private volatile RemoteCipher cipher;
     private long sequence=0;
     private int subscription=0;
+    private final SharedPreferences settings;
+    private final RemoteMainAudioPlayer mainAudio = new RemoteMainAudioPlayer();
+    private boolean receivesMainAudio;
+    private Boolean mainAudioSubscription;
+    private boolean mainAudioAvailable;
     Listener listener;
     private final Map<String,Long> noticeRequests=new HashMap<>();
     RemoteSession(Context context){
+        settings=context.getSharedPreferences("catlive.remote", Context.MODE_PRIVATE);
+        receivesMainAudio=settings.getBoolean("receiveMainAudio", true);
         nsd=(NsdManager)context.getSystemService(Context.NSD_SERVICE);
         connectivity=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
         WifiManager wifi=(WifiManager)context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -75,7 +82,7 @@ final class RemoteSession {
     void message(String text){main.post(()->{if(listener!=null)listener.onMessage(text);});}
     void resume(){if(closed||(active&&(connected||connecting)))return;active=true;if(selected!=null)connect(selected);else browse();}
     void suspend(){cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;active=false;generation++;disconnectSocket();connected=false;connecting=false;stopDiscovery();changed();}
-    void close(){closed=true;suspend();connectivity.unregisterNetworkCallback(networkCallback);reader.shutdownNow();writer.shutdownNow();images.evictAll();}
+    void close(){closed=true;suspend();mainAudio.close();connectivity.unregisterNetworkCallback(networkCallback);reader.shutdownNow();writer.shutdownNow();images.evictAll();}
     void exit(){cancelBlockFeedback();projectOpening.clear();feedback.clear();confirmedState=null;selected=null;resumeMode="";resumePin="";mode="";state=null;sequence=0;subscription=0;noticeRequests.clear();generation++;disconnectSocket();connected=false;connecting=false;status="";browse();changed();}
     void browse(){
         if(!active||closed)return;stopDiscovery();peers.clear();status="Procurando PCs…";changed();
@@ -134,6 +141,7 @@ final class RemoteSession {
             connection.setSoTimeout(0);
             main.post(()->{if(token!=generation)return;connected=true;connecting=false;peerName=name;status="Conectado";stopDiscovery();changed();});
             while(!connection.isClosed()&&token==generation){byte[] payload=keys.open(RemoteWire.readFrame(in));RemoteCipher.check(payload.length>5&&payload[0]==1&&payload[1]==0x4a&&payload[2]==0x4c&&payload[3]==2);int kind=payload[4]&255;
+                if(kind==10){if(token==generation)mainAudio.enqueue(payload);continue;}
                 if(kind==4){RemoteCipher.check(payload.length>=37);java.nio.ByteBuffer b=java.nio.ByteBuffer.wrap(payload,5,32);String project=new UUID(b.getLong(),b.getLong()).toString(),id=new UUID(b.getLong(),b.getLong()).toString();byte[] bytes=Arrays.copyOfRange(payload,37,payload.length);RemoteCipher.check(bytes.length<=1572864);BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);if(options.outWidth>0&&options.outHeight>0){options.inJustDecodeBounds=false;options.inSampleSize=1;while(Math.max(options.outWidth,options.outHeight)/options.inSampleSize>2048)options.inSampleSize*=2;Bitmap bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);main.post(()->{if(token==generation&&RemoteModel.same(project,RemoteModel.id(state,"project"))&&bitmap!=null){images.put(id.toLowerCase(Locale.ROOT),bitmap);changed();}});}continue;}
                 String json=new String(payload,5,payload.length-5,java.nio.charset.StandardCharsets.UTF_8);
                 if(kind==2){JSONObject value=new JSONObject(json);long seq=value.getLong("sequence");if(seq>sequence){sequence=seq;nextState.set(value);main.post(()->publishNext(token));}sendPacket(3,seq,token);}
@@ -145,22 +153,58 @@ final class RemoteSession {
     }
     private void publishNext(int token){
         if(token!=generation)return;JSONObject value=nextState.getAndSet(null);if(value==null)return;
+        mainAudioAvailable = value.optBoolean("mainAudioAvailable");
+        updateMainAudio();
         if(!RemoteModel.same(RemoteModel.id(value,"project"),RemoteModel.id(state,"project"))){images.evictAll();requestedImages.clear();}
         projectOpening.receive(value);confirmedState=value;state=feedback.receive(receiveBlockFeedback(value),SystemClock.elapsedRealtime());changed();
     }
     private void accessStatus(JSONObject value,int token){
-        if(token!=generation)return;requiresPin=value.optBoolean("requiresPIN");noticesPin=value.optBoolean("noticesRequiresPIN");mode=RemoteModel.id(value,"mode");lastError=value.optString("error","");
+        if(token!=generation)return;
+        String newMode = RemoteModel.id(value,"mode");
+        if (!mode.equals(newMode)) resetMainAudio();
+        requiresPin=value.optBoolean("requiresPIN");noticesPin=value.optBoolean("noticesRequiresPIN");mode=newMode;lastError=value.optString("error","");
         if(!mode.isEmpty()){status="Conectado";if(subscription!=0)subscribe(subscription);}
         else if(!resumeMode.isEmpty()&&lastError.isEmpty())requestAccess(resumeMode,resumePin);
         else if(!lastError.isEmpty()){resumeMode="";resumePin="";}
         changed();
     }
-    private void lost(int token){if(token!=generation||closed)return;cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;connected=false;connecting=false;mode="";status=selected==null?"Desconectado":"Reconectando a "+selected.name+"…";noticeRequests.clear();requestedImages.clear();nextState.set(null);changed();if(active){browse();main.postDelayed(()->{if(token==generation&&selected!=null&&!connected&&!connecting&&active)connect(selected);},2500);}}
-    private synchronized void disconnectSocket(){Socket s=socket;socket=null;if(s!=null)try{s.close();}catch(IOException ignored){}nextState.set(null);}
+    private void lost(int token){if(token!=generation||closed)return;resetMainAudio();cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;connected=false;connecting=false;mode="";status=selected==null?"Desconectado":"Reconectando a "+selected.name+"…";noticeRequests.clear();requestedImages.clear();nextState.set(null);changed();if(active){browse();main.postDelayed(()->{if(token==generation&&selected!=null&&!connected&&!connecting&&active)connect(selected);},2500);}}
+    private synchronized void disconnectSocket(){resetMainAudio();Socket s=socket;socket=null;if(s!=null)try{s.close();}catch(IOException ignored){}nextState.set(null);}
+    boolean receivesMainAudio() { return receivesMainAudio; }
+    void setReceivesMainAudio(boolean enabled) {
+        receivesMainAudio = enabled;
+        settings.edit().putBoolean("receiveMainAudio", enabled).apply();
+        updateMainAudio();
+    }
+    private void updateMainAudio() {
+        if (!active || !connected || !mainAudioAvailable || !(mode.equals("director") || mode.equals("observer"))) {
+            resetMainAudio();
+            return;
+        }
+        if (mainAudioSubscription != null && mainAudioSubscription == receivesMainAudio) return;
+        mainAudioSubscription = receivesMainAudio;
+        mainAudio.setEnabled(receivesMainAudio);
+        sendPacket(9, receivesMainAudio, generation);
+    }
+    private void resetMainAudio() {
+        mainAudioAvailable = false;
+        mainAudioSubscription = null;
+        mainAudio.setEnabled(false);
+    }
     void requestAccess(String mode,String pin){resumeMode=mode;resumePin=pin;try{sendPacket(5,new JSONObject().put("mode",mode).put("pin",pin),generation);}catch(JSONException e){message(e.getMessage());}}
     void subscribe(int panel){subscription=panel;if(state!=null&&!mode.isEmpty())command("remotePanel",null,panel,null,null,null);}
     void action(String action){command(action,null,0,null,null,null);}
     void action(String action,String target,double value){command(action,target,value,null,null,null);}
+    void setOutputRoutes(String project, String song, String track, JSONArray routes) {
+        if (!connected || !mode.equals("director") || routes.length() > 64
+                || !project.equals(RemoteModel.id(state, "project")) || !song.equals(RemoteModel.id(state, "song"))) return;
+        try {
+            JSONObject command = RemoteWire.command(state, "setOutputRoutes", track, 0, null, null, null);
+            if (command != null) sendPacket(1, command.put("outputRoutes", routes), generation);
+        } catch (JSONException error) {
+            message("Não foi possível enviar o comando");
+        }
+    }
     void command(String action,String target,double value,String text,String playlist,Boolean enabled){
         if(!connected||mode.isEmpty()||!RemoteWire.allowed(action,mode,value))return;
         if(RemoteProjectOpening.isOpen(action)&&projectOpening.active())return;

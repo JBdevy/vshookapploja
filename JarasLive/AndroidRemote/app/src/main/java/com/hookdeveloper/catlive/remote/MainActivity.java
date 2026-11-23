@@ -23,6 +23,7 @@ import static com.hookdeveloper.catlive.remote.RemoteWidgets.*;
 
 public final class MainActivity extends Activity implements RemoteSession.Listener {
     RemoteSession remote;
+    private final String tempoTapSource = UUID.randomUUID().toString();
     JSONObject state;JSONObject visibleRegion;final RemoteModel.LayoutCache layout=new RemoteModel.LayoutCache();
     String renderedMode="";String panel="setlist",screen="",structure="",mixerStructure="",project="";
     boolean entering=false;boolean sidebarHidden=false,fullscreen=false,mixerShown=true,setlistShown=true,partsShown=false,horizontalPartsShown=false,vinhetasOpen=false;
@@ -334,8 +335,6 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         current=label(this,"",13,GREEN);current.setTypeface(bold);current.setMaxLines(2);
         display.addView(current,new LinearLayout.LayoutParams(-1,-2));transport.addView(display,new LinearLayout.LayoutParams(-1,-2));
         if(!director){space(transport,6);LinearLayout queueBox=column(this);pad(queueBox,6,6);queueBox.setBackground(surface(0xff1d1d1d,0xff131313,0xff555555,5));TextView caption=label(this,"Fila de espera",10,SECONDARY);caption.setTypeface(bold);queueBox.addView(caption,new LinearLayout.LayoutParams(-1,dp(15)));observerQueue=label(this,"—",13,YELLOW);observerQueue.setTypeface(bold);queueBox.addView(observerQueue,new LinearLayout.LayoutParams(-1,dp(20)));transport.addView(queueBox,new LinearLayout.LayoutParams(-1,-2));space(transport,6);information=centered("",10,GREEN,true);information.setBackground(surface(0xff101010,0xff101010,0xff444444,0));transport.addView(information,new LinearLayout.LayoutParams(-1,dp(25)));if(sidebarHidden&&!horizontalToolbar()){Button restore=new Button(this,"›",()->{sidebarHidden=false;buildWorkspace();});transport.addView(restore,new LinearLayout.LayoutParams(dp(44),dp(25)));}return;}
-        songProgress = new SongProgressView();
-        transport.addView(songProgress, new LinearLayout.LayoutParams(-1, dp(2)));
         LinearLayout buttons=row(this);
         buttons.setBaselineAligned(false);
         addTransportButtons(buttons,false);
@@ -350,11 +349,37 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         tuningLp.leftMargin=dp(6);numbers.addView(tuning,tuningLp);
         Button minus=new Button(this,"−",()->remote.action("tempo",null,Math.max(20,state.optDouble("bpm")-1))),plus=new Button(this,"+",()->remote.action("tempo",null,Math.min(400,state.optDouble("bpm")+1))),down=new Button(this,"−",()->pitch(-1)),up=new Button(this,"+",()->pitch(1));
         for(Button button:new Button[]{minus,plus,down,up}){button.setTextSize(24);button.setTextColor(GREEN);button.setPadding(0,0,0,0);button.setBackgroundColor(Color.TRANSPARENT);}
-        tempo.addView(minus,new LinearLayout.LayoutParams(dp(28),-1));bpm=centered("",15,TEXT,true);bpm.setMaxLines(1);bpm.setAutoSizeTextTypeUniformWithConfiguration(10,15,1,android.util.TypedValue.COMPLEX_UNIT_SP);bpm.setOnClickListener(v->input("BPM",String.format(Locale.US,"%.3f",state.optDouble("bpm")),true,value->{try{double b=Double.parseDouble(value.replace(',','.'));if(b<20||b>400)throw new Exception();remote.action("tempo",null,b);}catch(Exception e){onMessage("BPM entre 20 e 400");}}));tempo.addView(bpm,new LinearLayout.LayoutParams(0,-1,1));tempo.addView(plus,new LinearLayout.LayoutParams(dp(28),-1));
+        tempo.addView(minus,new LinearLayout.LayoutParams(dp(28),-1));bpm=centered("",15,TEXT,true);bpm.setMaxLines(1);bpm.setAutoSizeTextTypeUniformWithConfiguration(10,15,1,android.util.TypedValue.COMPLEX_UNIT_SP);configureTempoField(bpm);tempo.addView(bpm,new LinearLayout.LayoutParams(0,-1,1));tempo.addView(plus,new LinearLayout.LayoutParams(dp(28),-1));
         tuning.addView(down,new LinearLayout.LayoutParams(dp(28),-1));pitch=centered("",12,GREEN,true);tuning.addView(pitch,new LinearLayout.LayoutParams(0,-1,1));tuning.addView(up,new LinearLayout.LayoutParams(dp(28),-1));
         LinearLayout.LayoutParams numbersLayout=new LinearLayout.LayoutParams(-1,dp(32));
         numbersLayout.topMargin=dp(6);
         transport.addView(numbers,numbersLayout);
+        addTransportProgress(transport);
+    }
+    private void addTransportProgress(LinearLayout panel) {
+        songProgress = new SongProgressView();
+        panel.addView(songProgress, new LinearLayout.LayoutParams(-1, dp(4)));
+    }
+    private void configureTempoField(TextView field) {
+        field.setOnClickListener(v -> {
+            if (state != null && !state.optBoolean("playing") && !state.optBoolean("subPlaying") && !state.optBoolean("recording")) {
+                remote.action("tapTempo", tempoTapSource, SystemClock.elapsedRealtimeNanos() / 1_000_000_000.0);
+            }
+        });
+        field.setOnLongClickListener(v -> {
+            if (state == null) return true;
+            input("BPM", String.format(Locale.US, "%.3f", state.optDouble("bpm")), true, value -> {
+                try {
+                    double tempo = Double.parseDouble(value.replace(',', '.'));
+                    if (tempo >= 20 && tempo <= 400) {
+                        remote.action("tempo", null, tempo);
+                        return;
+                    }
+                } catch (NumberFormatException ignored) {}
+                onMessage("BPM entre 20 e 400");
+            });
+            return true;
+        });
     }
     void buildTabletObserverHeader(){
         pad(transport,8,8);LinearLayout header=row(this);header.setGravity(Gravity.TOP);transport.addView(header,new LinearLayout.LayoutParams(-1,-2));
@@ -409,9 +434,9 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     void finishTrackHeightResize(){getPreferences(0).edit().putFloat("trackHeightScale",(float)layout.heightScale).apply();}
     View buildMixer(){LinearLayout all=column(this);
         if(tabletLayout()&&remote.mode.equals("director")){
-            View header=new View(this);
-            header.setBackground(RemoteWidgets.panel(0));
-            all.addView(header,new LinearLayout.LayoutParams(-1,dp(RemoteTimeline.HEADER_HEIGHT)));
+            TrackRow master=new TrackRow(null,0);
+            trackRows.put("master",master);
+            all.addView(master,new LinearLayout.LayoutParams(-1,dp(RemoteTimeline.HEADER_HEIGHT)));
         }else{
             TrackRow master=new TrackRow(null,0);
             trackRows.put("master",master);
@@ -437,9 +462,10 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         if(current!=null)current.setText(name);if(selectionTitle!=null)selectionTitle.setText(state.optBoolean("playing")?"Tocando":"Selecionada");if(playCaption!=null)playCaption.setText(state.optBoolean("playing")||state.optBoolean("paused")?"Stop":"Play");if(pauseCaption!=null)pauseCaption.setText(state.optBoolean("paused")?"Play":"Pause");
         if(play!=null){
             boolean playing=state.optBoolean("playing"), paused=state.optBoolean("paused");
-            String playTitle=playing||paused?"Stop":"Play";
-            play.transportIcon(playing||paused?"stop":"play", playTitle, playTitle);
-            play.transportStyle(playing?0xff24f06a:blend(0xff1d1d1d,0xff24f06a,.45f),playing?Color.BLACK:Color.WHITE);
+            boolean stopping = playing || paused;
+            String playTitle = stopping ? "Stop" : "Play";
+            play.transportIcon(stopping ? "stop" : "play", playTitle, playTitle);
+            play.transportStyle(stopping ? RED : blend(0xff1d1d1d, 0xff24f06a, .45f), Color.WHITE);
             pause.transportIcon(paused?"play":"pause",RemoteText.ui(paused?"Play":"Pause"),"");
             pause.transportStyle(paused ? YELLOW : 0xff454545, paused ? Color.BLACK : Color.WHITE);
             pause.setEnabled(playing||paused);
@@ -584,8 +610,8 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     }
     void buildTabletTransport(){
         LinearLayout horizontal=row(this);horizontal.setGravity(Gravity.TOP);pad(horizontal,6,6);transport.addView(horizontal,new LinearLayout.LayoutParams(-1,dp(82)));
-        TrackRow master=new TrackRow(null,0);trackRows.put("master",master);horizontal.addView(master,new LinearLayout.LayoutParams(dp(220),dp(70)));
-        LinearLayout middle=column(this);LinearLayout.LayoutParams middleLp=new LinearLayout.LayoutParams(0,-1,1);middleLp.setMargins(dp(8),0,0,0);horizontal.addView(middle,middleLp);
+        LinearLayout middle=column(this);
+        horizontal.addView(middle,new LinearLayout.LayoutParams(-1,-1));
         middle.setBackground(RemoteWidgets.surface(0xff10291c,0xff07100b,0xff505050,7));
         LinearLayout display=row(this);
         tabletInformation=centered("",10,YELLOW,true);
@@ -604,15 +630,13 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         middle.addView(display);
 
         LinearLayout controls=row(this);addTransportButtons(controls,true);
-        Button minus=new Button(this,"−",()->remote.action("tempo",null,Math.max(20,state.optDouble("bpm")-1)));controls.addView(minus,new LinearLayout.LayoutParams(dp(22),dp(28)));bpm=label(this,"",12,TEXT);bpm.setGravity(Gravity.CENTER);controls.addView(bpm,new LinearLayout.LayoutParams(dp(66),dp(28)));Button plus=new Button(this,"+",()->remote.action("tempo",null,Math.min(400,state.optDouble("bpm")+1)));controls.addView(plus,new LinearLayout.LayoutParams(dp(22),dp(28)));
+        Button minus=new Button(this,"−",()->remote.action("tempo",null,Math.max(20,state.optDouble("bpm")-1)));controls.addView(minus,new LinearLayout.LayoutParams(dp(22),dp(28)));bpm=label(this,"",12,TEXT);bpm.setGravity(Gravity.CENTER);configureTempoField(bpm);controls.addView(bpm,new LinearLayout.LayoutParams(dp(66),dp(28)));Button plus=new Button(this,"+",()->remote.action("tempo",null,Math.min(400,state.optDouble("bpm")+1)));controls.addView(plus,new LinearLayout.LayoutParams(dp(22),dp(28)));
         Button pitchDown=new Button(this,"−",()->pitch(-1));controls.addView(pitchDown,new LinearLayout.LayoutParams(dp(22),dp(28)));pitch=label(this,"",12,GREEN);pitch.setGravity(Gravity.CENTER);controls.addView(pitch,new LinearLayout.LayoutParams(dp(44),dp(28)));Button pitchUp=new Button(this,"+",()->pitch(1));controls.addView(pitchUp,new LinearLayout.LayoutParams(dp(22),dp(28)));space(middle,2);
-        songProgress = new SongProgressView();
-        middle.addView(songProgress, new LinearLayout.LayoutParams(-1, dp(2)));
-        space(middle,1);
         middle.addView(controls);
+        addTransportProgress(middle);
         Button setlist = new Button(this,"",()->{setlistShown=!setlistShown;buildWorkspace();});
         setlist.transportIcon("setlist","Setlist","");
-        setlist.transportStyle(setlistShown?GREEN:RED,Color.BLACK);
+        setlist.transportStyle(setlistShown ? GREEN : 0xff454545, setlistShown ? Color.BLACK : Color.WHITE);
         LinearLayout.LayoutParams setlistLp = new LinearLayout.LayoutParams(dp(72),dp(28));
         setlistLp.leftMargin = dp(6);
         controls.addView(setlist,setlistLp);
@@ -654,23 +678,147 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     }
     void space(LinearLayout layout,int h){View v=new View(this);layout.addView(v,new LinearLayout.LayoutParams(1,dp(h)));}
 
+    void showOutputPatch(String id) {
+        if (state == null || !remote.mode.equals("director")) return;
+        JSONObject track = id == null ? null : RemoteModel.find(RemoteModel.array(state, "tracks"), id);
+        if (id != null && track == null) return;
+        JSONArray current = id == null ? state.optJSONArray("masterOutputRoutes") : track.optJSONArray("outputRoutes");
+        if (current == null || !state.has("patchOutputChannels")) {
+            onMessage("Update CatLive on the connected computer to edit outputs.");
+            return;
+        }
+        String project = RemoteModel.id(state, "project"), song = RemoteModel.id(state, "song");
+        String trackName = id == null ? "Main" : track.optString("name");
+        int channels = Math.max(0, Math.min(1024, state.optInt("patchOutputChannels")));
+        List<PatchChoice> choices = new ArrayList<>();
+        PatchChoice none = new PatchChoice(-1, 2);
+        choices.add(none);
+        if (track != null && !RemoteModel.id(track, "parentTrack").isEmpty()) choices.add(new PatchChoice(-2, 2));
+        if (track != null) choices.add(new PatchChoice(0, 2));
+        for (int first = 1; first <= channels; first += 2) {
+            if (first < channels) choices.add(new PatchChoice(first, 2));
+            choices.add(new PatchChoice(first, 1));
+            if (first < channels) choices.add(new PatchChoice(first + 1, 1));
+        }
+        List<PatchChoice> routes = new ArrayList<>();
+        for (JSONObject route : RemoteModel.list(current)) {
+            routes.add(new PatchChoice(route.optInt("firstChannel"), route.optInt("channelCount")));
+        }
+
+        closeDialog();
+        Dialog dialog = new RemoteKeyboard.KeyboardDialog(this);
+        activeDialog = dialog;
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout root = column(this);
+        pad(root, 18, 12);
+        root.setBackground(surface(0xff292929, 0xff242424, 0xff525252, 14));
+        LinearLayout title = row(this);
+        TextView name = label(this, "Patch · " + trackName, 16, TEXT);
+        name.setTypeface(bold);
+        title.addView(name, new LinearLayout.LayoutParams(0, dp(36), 1));
+        Button close = new Button(this, "×", dialog::dismiss);
+        title.addView(close, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        root.addView(title);
+        LinearLayout heading = row(this);
+        TextView output = label(this, "Output", 14, TEXT);
+        output.setTypeface(bold);
+        heading.addView(output, new LinearLayout.LayoutParams(0, dp(36), 1));
+        LinearLayout list = column(this);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        Button add = new Button(this, "+", () -> {
+            if (routes.size() >= 64) return;
+            routes.add(none);
+            populateOutputRoutes(list, routes, choices);
+            scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+        });
+        add.setContentDescription(RemoteText.ui("Add output"));
+        heading.addView(add, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        root.addView(heading);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        populateOutputRoutes(list, routes, choices);
+        LinearLayout footer = row(this);
+        footer.setGravity(Gravity.END);
+        Button apply = new Button(this, "Aplicar", () -> {
+            JSONArray updated = new JSONArray();
+            try {
+                for (PatchChoice route : routes) updated.put(new JSONObject()
+                        .put("firstChannel", route.first).put("channelCount", route.count));
+                remote.setOutputRoutes(project, song, id, updated);
+                dialog.dismiss();
+            } catch (JSONException ignored) {}
+        });
+        apply.style(GREEN, true);
+        footer.addView(apply, new LinearLayout.LayoutParams(dp(90), dp(34)));
+        root.addView(footer);
+        dialog.setContentView(root);
+        dialog.setOnDismissListener(v -> { if (activeDialog == dialog) activeDialog = null; });
+        dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        dialog.show();
+        dialog.getWindow().setLayout(Math.min(dp(350), getResources().getDisplayMetrics().widthPixels - dp(24)), dp(300));
+    }
+
+    private void populateOutputRoutes(LinearLayout list, List<PatchChoice> routes, List<PatchChoice> choices) {
+        list.removeAllViews();
+        for (int index = 0; index < routes.size(); ++index) {
+            final int slot = index;
+            PatchChoice current = routes.get(index);
+            LinearLayout line = row(this);
+            Button pick = new Button(this, current.title(), () -> {
+                String[] labels = new String[choices.size()];
+                for (int i = 0; i < labels.length; ++i) labels[i] = RemoteText.ui(choices.get(i).title());
+                new android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                        .setTitle(RemoteText.ui("Output")).setItems(labels, (dialog, selected) -> {
+                            routes.set(slot, choices.get(selected));
+                            populateOutputRoutes(list, routes, choices);
+                        }).show();
+            });
+            line.addView(pick, new LinearLayout.LayoutParams(0, dp(36), 1));
+            Button remove = new Button(this, "⊖", () -> {
+                routes.remove(slot);
+                populateOutputRoutes(list, routes, choices);
+            });
+            remove.setContentDescription(RemoteText.ui("Remove output"));
+            line.addView(remove, new LinearLayout.LayoutParams(dp(34), dp(36)));
+            list.addView(line);
+            space(list, 8);
+        }
+    }
+
+    private static final class PatchChoice {
+        final int first, count;
+        PatchChoice(int first, int count) { this.first = first; this.count = count; }
+        String title() {
+            if (first == -2) return "Main Group";
+            if (first == -1) return "None";
+            if (first == 0) return "Main";
+            return count == 2 ? first + "+" + (first + 1) : Integer.toString(first);
+        }
+    }
+
     final class TrackRow extends LinearLayout {
         final String id;final int index;final Paint boundaryPaint=new Paint();LinearLayout strip,controls,line;TextView title,volumeReadout;Fader volume,pan;Button mute,solo,mono;RemoteIcons.IconView iconView;RemoteGroupGuide groupGuide;
         TrackRow(String id,int index){super(MainActivity.this);this.id=id;this.index=index;setOrientation(HORIZONTAL);if(id!=null){groupGuide=new RemoteGroupGuide(MainActivity.this);addView(groupGuide,new LinearLayout.LayoutParams(0,-1));}strip=column(MainActivity.this);strip.setGravity(Gravity.CENTER_VERTICAL);pad(strip,6,id==null?2:3);addView(strip,new LinearLayout.LayoutParams(0,-1,1));
+            final boolean compactMaster = id == null && tabletLayout();
+            final int buttonHeight = compactMaster ? 24 : 28;
+            final int faderHeight = compactMaster ? 21 : 23;
             controls=row(MainActivity.this);controls.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
-            if(id==null){mono=new Button(MainActivity.this,"Estéreo",MainActivity.this::confirmMainMono);mono.setTextSize(10);controls.addView(mono,new LinearLayout.LayoutParams(dp(58),dp(28)));}
+            if(id==null){mono=new Button(MainActivity.this,"Estéreo",MainActivity.this::confirmMainMono);mono.setTextSize(10);controls.addView(mono,new LinearLayout.LayoutParams(dp(compactMaster ? 50 : 58),dp(buttonHeight)));}
             pan=new PanKnob(MainActivity.this,v->{remote.action("pan",id,v);mixerAdjustment.showPan(id,v);});
             pan.setContentDescription("Pan "+trackName());
             mute=new Button(MainActivity.this,"M",()->remote.action("mute",id,0));
             solo=new Button(MainActivity.this,"S",()->remote.action("solo",id,0));
             for(View control:new View[]{pan,mute,solo}) {
                 if(control instanceof Button)((Button)control).setTextSize(10);
-                LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(control==pan||id==null?28:32),dp(28));
+                LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(compactMaster ? 24 : control==pan||id==null?28:32),dp(buttonHeight));
                 lp.setMargins(dp(3),0,0,0);
                 controls.addView(control,lp);
             }
-            strip.addView(controls,new LinearLayout.LayoutParams(-1,dp(28)));
-            line=row(MainActivity.this);volumeReadout=label(MainActivity.this,"",10,TEXT);volumeReadout.setTypeface(bold);line.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);volume=new Fader(MainActivity.this,false,v->{volumeReadout.setText(v<=0?"−∞":String.format(Locale.US,"%+.1f",20*Math.log10(v)));remote.action("volume",id,v);});volume.selectVolume=MainActivity.this::selectVolume;volume.readout=false;volume.setContentDescription("Volume "+trackName());line.addView(volume,new LinearLayout.LayoutParams(0,dp(23),1));line.addView(volumeReadout,new LinearLayout.LayoutParams(dp(36),dp(23)));strip.addView(line,new LinearLayout.LayoutParams(-1,dp(23)));
+            Button patch = new Button(MainActivity.this, "Patch", () -> showOutputPatch(id));
+            patch.setTextSize(10);
+            controls.addView(patch, new LinearLayout.LayoutParams(dp(compactMaster ? 36 : 42), dp(buttonHeight)));
+            strip.addView(controls,new LinearLayout.LayoutParams(-1,dp(buttonHeight)));
+            line=row(MainActivity.this);volumeReadout=label(MainActivity.this,"",10,TEXT);volumeReadout.setTypeface(bold);line.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);volume=new Fader(MainActivity.this,false,v->{volumeReadout.setText(v<=0?"−∞":String.format(Locale.US,"%+.1f",20*Math.log10(v)));remote.action("volume",id,v);});volume.selectVolume=MainActivity.this::selectVolume;volume.readout=false;volume.setContentDescription("Volume "+trackName());line.addView(volume,new LinearLayout.LayoutParams(0,dp(faderHeight),1));line.addView(volumeReadout,new LinearLayout.LayoutParams(dp(36),dp(faderHeight)));strip.addView(line,new LinearLayout.LayoutParams(-1,dp(faderHeight)));
             title=label(MainActivity.this,"",11,TEXT);
             title.setTypeface(bold);
             title.setSingleLine();
@@ -824,7 +972,22 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         closeDialog();Dialog d=new RemoteKeyboard.KeyboardDialog(this);activeDialog=d;d.requestWindowFeature(Window.FEATURE_NO_TITLE);LinearLayout body=column(this);pad(body,20,20);body.setBackground(RemoteWidgets.panel(16));LinearLayout heading=row(this);TextView name=label(this,"Configurações",17,TEXT);name.setTypeface(bold);heading.addView(name,new LinearLayout.LayoutParams(0,dp(32),1));Button x=new Button(this,"×",d::dismiss);x.setBackgroundColor(Color.TRANSPARENT);heading.addView(x,new LinearLayout.LayoutParams(dp(28),dp(28)));body.addView(heading);space(body,20);
         if(!remote.mode.equals("observer")){LinearLayout tabs=row(this);Button general=new Button(this,"General",()->showSettings(false)),mappings=new Button(this,"Actions",()->showSettings(true));general.style(TEXT,!actions);mappings.style(TEXT,actions);tabs.addView(general,new LinearLayout.LayoutParams(0,dp(32),1));tabs.addView(mappings,new LinearLayout.LayoutParams(0,dp(32),1));body.addView(tabs);space(body,20);}
         if(actions){ScrollView scroll=new ScrollView(this);LinearLayout list=column(this);scroll.addView(list);body.addView(scroll,new LinearLayout.LayoutParams(-1,Math.min(dp(430),(int)(getResources().getDisplayMetrics().heightPixels*.58))));for(String action:RemoteMidi.ACTIONS){LinearLayout card=column(this);pad(card,10,10);card.setBackground(surface(0xff1d1d1d,0xff131313,0x19ffffff,6));card.addView(label(this,RemoteMidi.title(action),14,TEXT));TextView binding=label(this,midi.label(action),12,SECONDARY);card.addView(binding);LinearLayout buttons=row(this);Button learn=new Button(this,"Learn MIDI",()->{midi.learning=action.equals(midi.learning)?null:action;binding.setText(action.equals(midi.learning)?RemoteText.ui("Waiting for MIDI…"):midi.label(action));});buttons.addView(learn,new LinearLayout.LayoutParams(0,dp(34),1));Button clear=new Button(this,"Clear",()->{midi.clear(action);binding.setText("—");});buttons.addView(clear,new LinearLayout.LayoutParams(0,dp(34),1));card.addView(buttons);list.addView(card);space(list,12);}}
-        else{body.addView(label(this,"Language",13,TEXT));space(body,10);body.addView(languageSelector());if(remote.mode.equals("observer")){space(body,15);body.addView(label(this,"Escala do setlist",14,TEXT));Fader slider=new Fader(this,true,value->{getPreferences(0).edit().putFloat("observerScale",(float)(1+(value+1)*.75)).apply();structure="";refreshStructure();});slider.value=(listScale()-1)/.75-1;body.addView(slider,new LinearLayout.LayoutParams(-1,dp(42)));}}
+        else {
+            body.addView(label(this, "Language", 13, TEXT));
+            space(body, 10);
+            body.addView(languageSelector());
+            space(body, 15);
+            body.addView(label(this, "Receive Audio Transmitter", 13, TEXT));
+            LinearLayout audio = row(this);
+            Button enabled = new Button(this, "Enabled", () -> { remote.setReceivesMainAudio(true); showSettings(false); });
+            Button disabled = new Button(this, "Disabled", () -> { remote.setReceivesMainAudio(false); showSettings(false); });
+            enabled.style(TEXT, remote.receivesMainAudio());
+            disabled.style(TEXT, !remote.receivesMainAudio());
+            audio.addView(enabled, new LinearLayout.LayoutParams(0, dp(36), 1));
+            audio.addView(disabled, new LinearLayout.LayoutParams(0, dp(36), 1));
+            body.addView(audio);
+            if(remote.mode.equals("observer")){space(body,15);body.addView(label(this,"Escala do setlist",14,TEXT));Fader slider=new Fader(this,true,value->{getPreferences(0).edit().putFloat("observerScale",(float)(1+(value+1)*.75)).apply();structure="";refreshStructure();});slider.value=(listScale()-1)/.75-1;body.addView(slider,new LinearLayout.LayoutParams(-1,dp(42)));}
+        }
         d.setContentView(body);d.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));d.setOnDismissListener(v->{midi.learning=null;if(activeDialog==d)activeDialog=null;});d.show();d.getWindow().setLayout(Math.min(dp(320),getResources().getDisplayMetrics().widthPixels-dp(24)),-2);
     }
     void midiAction(String action){if(!remote.mode.equals("director"))return;if(action.startsWith("learn:")){onMessage("Mapeamento MIDI salvo");return;}switch(action){case "setlistUp":case "setlistDown":navigateSong(action.endsWith("Up")?-1:1);break;case "partsUp":case "partsDown":navigatePart(action.endsWith("Up")?-1:1);break;case "toggleParts":choose("parts");break;case "playStop":remote.action(state.optBoolean("playing")?"stop":"play");break;case "repeatPlayback":remote.action("toggleLoop");break;case "bypass":remote.action("toggleMultiLoopBypass");break;case "playlistUp":case "playlistDown":List<JSONObject> lists=RemoteModel.list(RemoteModel.array(state,"playlists"));int at=-1;for(int i=0;i<lists.size();i++)if(RemoteModel.same(RemoteModel.id(lists.get(i),"id"),RemoteModel.id(state,"selectedPlaylist")))at=i;at=Math.max(-1,Math.min(lists.size()-1,at+(action.endsWith("Up")?-1:1)));remote.action("selectPlaylist",at<0?null:RemoteModel.id(lists.get(at),"id"),0);break;default:remote.action(action);}}

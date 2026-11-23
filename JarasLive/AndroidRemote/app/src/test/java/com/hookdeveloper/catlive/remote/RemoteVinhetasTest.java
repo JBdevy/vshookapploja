@@ -20,10 +20,13 @@ public class RemoteVinhetasTest {
   item.put("gate",true);app.refresh();pad.onTouchEvent(down);assertTrue(pad.litBanks.contains(0));pad.onTouchEvent(up);assertFalse(pad.litBanks.contains(0));
   down.recycle();up.recycle();
  }
- @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletMasterIsAboveGridWithPanAndNoDuplicateMixerMaster()throws Exception{
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletMasterOccupiesMixerHeaderAndTransportProgressIsAtBottom()throws Exception{
   app.state.put("masterPan",-.5);app.state.getJSONArray("tracks").getJSONObject(0).put("instrumentIcon","piano");app.buildWorkspace();app.refresh();
-  MainActivity.TrackRow master=app.trackRows.get("master");assertNotNull(master);assertTrue(isDescendant(master,app.transport));
-  assertEquals(RemoteWidgets.dp(220),master.getLayoutParams().width);assertNotNull(master.pan);assertEquals(-.5,master.pan.value,0);
+  MainActivity.TrackRow master=app.trackRows.get("master");assertNotNull(master);assertFalse(isDescendant(master,app.transport));
+  LinearLayout mixer = (LinearLayout) app.mixerScroll.getParent();
+  assertSame(master, mixer.getChildAt(0));
+  assertEquals(RemoteWidgets.dp(RemoteTimeline.HEADER_HEIGHT), master.getLayoutParams().height);
+  assertNotNull(master.pan);assertEquals(-.5,master.pan.value,0);
   assertTrue(master.pan instanceof RemoteWidgets.PanKnob);
   assertEquals(master.controls.indexOfChild(master.mute)-1,master.controls.indexOfChild(master.pan));
   assertEquals("",app.repeat.getText().toString());

@@ -7,6 +7,49 @@ public class RemoteViewTest {
  @After public void close(){controller.pause().stop().destroy();}
  JSONObject state()throws Exception{return new JSONObject(new String(getClass().getResourceAsStream("/remote-state.json").readAllBytes(),StandardCharsets.UTF_8));}
  void connect(String mode)throws Exception{app.entering=true;app.remote.connected=true;app.remote.mode=mode;app.remote.state=state();app.onChanged();app.root.measure(View.MeasureSpec.makeMeasureSpec(393,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(851,View.MeasureSpec.EXACTLY));app.root.layout(0,0,393,851);}
+ @Test public void phoneBpmTapsAndLongPressAreIndependent() throws Exception { checkTempoGestures(); }
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land")
+ public void tabletBpmTapsAndLongPressAreIndependent() throws Exception { checkTempoGestures(); }
+ private void checkTempoGestures() throws Exception {
+  connect("director");
+  java.util.List<JSONObject> commands = new java.util.ArrayList<>();
+  app.remote.listener = new RemoteSession.Listener() {
+   public void onChanged() {}
+   public void onMessage(String message) {}
+   public void onLocalCommand(JSONObject command) { commands.add(command); }
+  };
+  app.state.put("playing", false).put("paused", false).put("subPlaying", false).put("recording", false);
+  app.bpm.performClick();
+  Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(500));
+  app.state.put("paused", true);
+  double beforeTap = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000_000.0;
+  app.bpm.performClick();
+  double afterTap = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000_000.0;
+  assertEquals(2, commands.size());
+  assertEquals("tapTempo", commands.get(0).getString("action"));
+  String source = commands.get(0).getString("target");
+  assertEquals(source, java.util.UUID.fromString(source).toString());
+  assertEquals(source, commands.get(1).getString("target"));
+  double timestamp = commands.get(1).getDouble("value");
+  assertTrue(timestamp >= beforeTap && timestamp <= afterTap);
+  assertTrue(timestamp > commands.get(0).getDouble("value"));
+  for (String field : new String[]{"playing", "subPlaying", "recording"}) {
+   app.state.put(field, true);
+   app.bpm.performClick();
+   app.state.put(field, false);
+  }
+  assertTrue(app.bpm.performLongClick());
+  assertTrue(app.activeDialog.isShowing());
+  app.activeDialog.dismiss();
+  assertEquals(2, commands.size());
+  ViewGroup group = (ViewGroup) app.bpm.getParent();
+  int middle = group.indexOfChild(app.bpm);
+  group.getChildAt(middle - 1).performClick();
+  group.getChildAt(middle + 1).performClick();
+  assertEquals(4, commands.size());
+  assertEquals("tempo", commands.get(2).getString("action"));
+  assertEquals("tempo", commands.get(3).getString("action"));
+ }
  @Test public void pauseUsesYellowOnlyWhilePaused()throws Exception{
   connect("director");
   for (boolean playing : new boolean[]{false,true}) {
